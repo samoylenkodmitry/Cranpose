@@ -6,21 +6,24 @@
 
 Cranpose uses the Jetpack Compose model. Composable functions describe the UI.
 Cranpose recomposes the UI when observed state changes. Callbacks handle user actions.
-Cranpose handles the platform window, input, graphics and device services.
+Cranpose owns the platform window. It draws the UI and passes input to it.
+It also provides device services.
 
 ### Map Compose APIs to Rust
 
-- `@Composable fun Screen()` → `#[composable] fn Screen()`.
-- `remember { mutableStateOf(0) }` → `rememberMutableStateOf(|| 0)`.
-- `count.value` → `count.get()` and `count.set(value)`.
-- `Column { ... }` → `Column(modifier, spec, move || { ... })`.
-- `Modifier.padding(16.dp)` → `Modifier::empty().padding(16.0)`.
-- `LazyColumn { items(...) }` → `LazyColumn(modifier, state, spec, move |scope| { ... })`.
-- `LaunchedEffect(key) { ... }` → `LaunchedEffect(key, async move |scope| { ... })`.
-- `DisposableEffect(key)` → `DisposableEffect` with `DisposableEffectResult`.
-- `CompositionLocalProvider` → `CompositionLocalProvider`.
-- `NavHost` → `NavHost` with `rememberNavController`.
-- `collectAsStateWithLifecycle()` → `StateFlowCollect::collectAsStateWithLifecycle()`.
+| Jetpack Compose | Cranpose |
+| --- | --- |
+| `@Composable fun Screen()` | `#[composable] fn Screen()` |
+| `remember { mutableStateOf(0) }` | `rememberMutableStateOf(\|\| 0)` |
+| `count.value` | `count.get()` and `count.set(value)` |
+| `Column { ... }` | `Column(modifier, spec, move \|\| { ... })` |
+| `Modifier.padding(16.dp)` | `Modifier::empty().padding(16.0)` |
+| `LazyColumn { items(...) }` | `LazyColumn(modifier, state, spec, move \|scope\| { ... })` |
+| `LaunchedEffect(key) { ... }` | `LaunchedEffect(key, async move \|scope\| { ... })` |
+| `DisposableEffect(key)` | `DisposableEffect` with `DisposableEffectResult` |
+| `CompositionLocalProvider` | `CompositionLocalProvider` |
+| `NavHost` | `NavHost` with `rememberNavController` |
+| `collectAsStateWithLifecycle()` | `StateFlowCollect::collectAsStateWithLifecycle()` |
 
 Rust closures replace Kotlin lambdas. Specs hold container options.
 Parents pass state to children. Children send actions through callbacks.
@@ -34,13 +37,12 @@ to an Android Compose app. **Native views** adds platform controls to Rust UI.
 
 ### Start with the project template
 
-Install Rust with [rustup](https://rustup.rs/). Cargo creates packages, resolves
-dependencies and runs the compiler. `Cargo.toml` serves the role of a Gradle build
+Install Rust with [rustup](https://rustup.rs/). Cargo creates packages and builds them with their dependencies. `Cargo.toml` serves the role of a Gradle build
 file. A crate is a Rust library or executable.
 
 The [Cranpose plugin for IntelliJ IDEA and RustRover](https://plugins.jetbrains.com/plugin/34594-cranpose)
 includes the [cranpose-showcase project template](https://github.com/samoylenkodmitry/cranpose-showcase).
-Install the plugin, then choose **File → New Project → Cranpose**. Select an empty
+Install the plugin, then choose **File**, **New Project**, **Cranpose**. Select an empty
 directory. The wizard creates the project, opens the source and starts a preview.
 
 For a terminal workflow, choose **Use this template** on GitHub or clone the starter:
@@ -51,15 +53,13 @@ cd my-app
 cargo run --features desktop,renderer-wgpu
 ```
 
-The starter contains shared Rust UI, Android Gradle files, iOS scripts and a web
-build script. Replace the sample screens in `src/screens`. Keep data access in
+The starter holds the shared Rust UI and the build files of each platform: Gradle files for Android, scripts for iOS and a build script for the web. Replace the sample screens in `src/screens`. Keep data access in
 `src/data` and screen models in `src/presentation`.
 
 ### Preview in the IDE
 
 Open a Rust source file, select **Split**, choose a Cargo binary or example, then
-press **Run**. Save an edit to reload the preview. Supported literal edits update
-directly; other supported edits compile and preserve app state. Use **Restart**
+press **Run**. Save an edit to reload the preview. A changed literal updates the preview at once. Other supported edits compile and keep the app's state. Use **Restart**
 after a structural or type change.
 
 For a component preview, enable `cranpose/preview` in the desktop build and add a
@@ -158,10 +158,8 @@ pub fn Counter() {
 }
 ```
 
-`rememberMutableStateOf` retains the count between compositions. The state handle
-implements `Copy`, so each `move` closure receives access to the same count.
-The closure syntax `move || { ... }` corresponds to a Kotlin lambda; `move`
-transfers captured values into the closure.
+`rememberMutableStateOf` retains the count between compositions. The state handle implements `Copy`. Each `move` closure gets a copy of the handle to the same count.
+The closure syntax `move || { ... }` corresponds to a Kotlin lambda. `move` moves the captured values into the closure.
 
 ### Run on desktop
 
@@ -195,15 +193,12 @@ Run the executable from the package directory:
 cargo run
 ```
 
-Cargo builds the library and executable together. `?` returns a launch error to
-`main`; `Ok(())` reports success. Use `cargo run --release` for an optimized build.
+Cargo builds the library and executable together. `?` returns a launch error to `main`. `Ok(())` reports success. Use `cargo run --release` for an optimized build.
 
 ### Run on Android
 
-Use Windows, Linux or macOS with Android Studio, its SDK and NDK, and a JDK supported
-by the project's Android Gradle Plugin. Run the APK on a physical Android device
-or an emulator. Match the ABI: `arm64-v8a` for ARM devices and Apple Silicon
-emulators; `x86_64` for Intel/AMD emulators. An emulator needs hardware virtualization.
+Use Windows, Linux or macOS with Android Studio and its SDK and NDK. The JDK must be one that the project's Android Gradle Plugin supports. Run the APK on a physical Android device
+or an emulator. Match the ABI. ARM devices and Apple Silicon emulators take `arm64-v8a`. Intel and AMD emulators take `x86_64`. An emulator needs hardware virtualization.
 
 The showcase starter includes the host. For an ARM device, run from the starter root:
 
@@ -224,8 +219,7 @@ cranpose::android_main! {
 }
 ```
 
-The macro connects the Android Activity to `Counter`. The macro expands on Android
-targets; the desktop build continues to use `src/main.rs`.
+The macro connects the Android Activity to `Counter`. The macro expands on Android targets only. The desktop build still uses `src/main.rs`.
 
 Install the Android SDK and NDK through Android Studio. Install the Rust targets
 and Cargo's NDK build tool:
@@ -266,8 +260,7 @@ cd android
 ./gradlew :app:installDebug
 ```
 
-The plugin invokes Cargo with `android,renderer-wgpu`, supplies the Cranpose Activity,
-and packages the `.so` for each ABI. Open **My app** from the device launcher.
+The plugin runs Cargo with `android,renderer-wgpu` and supplies the Cranpose Activity. It packages the `.so` of each ABI. Open **My app** from the device launcher.
 
 ### Run on iOS
 
@@ -279,9 +272,7 @@ identity and a provisioning profile.
 The showcase starter provides `./ios/run-sim.sh`. For the manual package above,
 the following steps create a simulator bundle.
 
-The iOS launcher starts UIKit and renders into a Metal surface. The desktop
-`src/main.rs` also serves as the iOS entry point; the target and Cargo feature
-select the host.
+The iOS launcher starts UIKit and renders into a Metal surface. The desktop `src/main.rs` also serves as the iOS entry point. The target and the Cargo feature select the host.
 
 On an Apple Silicon Mac with Xcode and an iOS Simulator runtime:
 
@@ -341,14 +332,11 @@ your Apple development identity and provisioning profile. The
 
 ### Build Apple apps without a Mac
 
-Apple's SDK license allows the SDK only on Apple computers, so macOS and iOS code
-compiles on a Mac. [Cranpose Build](https://github.com/samoylenkodmitry/cranpose-build)
+Apple's SDK license allows the SDK only on Apple computers. The macOS and iOS code compiles on a Mac. [Cranpose Build](https://github.com/samoylenkodmitry/cranpose-build)
 can use a GitHub-hosted macOS runner for that step and bring the package back to a
-Windows or Linux computer. [Standard hosted runners are free for public repositories](https://docs.github.com/en/actions/reference/runners/github-hosted-runners);
-private repositories spend the account's Actions minutes.
+Windows or Linux computer. [Standard hosted runners are free for public repositories](https://docs.github.com/en/actions/reference/runners/github-hosted-runners). A private repository spends the account's Actions minutes.
 
-Install Cranpose Build and the [GitHub CLI](https://cli.github.com), sign in with
-`gh auth login`, and push the project to GitHub with `origin` as its remote. For the
+Install Cranpose Build and the [GitHub CLI](https://cli.github.com). Sign in with `gh auth login`. Push the project to GitHub with `origin` as its remote. For the
 manual package above, add `CranposeBuild.toml` beside `Cargo.toml` so the iOS bundle
 uses the `Info.plist` from **Run on iOS**:
 
@@ -385,7 +373,7 @@ index or files, starts the workflow on that branch and downloads the package int
 
 TestFlight and the App Store need a paid membership. The showcase's
 [TestFlight guide](https://github.com/samoylenkodmitry/cranpose-showcase/blob/main/docs/testflight.md)
-uploads from a workflow, so that path also needs no Mac.
+uploads from a workflow. That path needs no Mac either.
 
 [xtool](https://xtool.sh) installs the `.ipa` on your own iPhone over USB from Linux,
 or from Windows inside WSL. It asks for your Apple account once:
@@ -395,8 +383,7 @@ cranpose-build devices --platform ios
 cranpose-build run --platform ios --on github --device <UDID>
 ```
 
-xtool signs the app for that device under its own bundle ID, so open the app from
-the home screen. The iOS Simulator runs only on a Mac.
+xtool signs the app for that device under its own bundle ID. Open the app from the home screen. The iOS Simulator runs only on a Mac.
 
 ### Run in a browser
 
@@ -466,10 +453,7 @@ to force one.
 canvas ID matches the first argument to `run_web`.
 
 To show the frame rate, turn on the counter in the launcher with
-`AppLauncher::new().with_fps_counter(true)`. The renderer draws it in the top
-right corner, outside the composition, on desktop and on the web. It shows
-frames per second, the frame interval average, p95 and maximum, the work time
-of a frame and recompositions per second. A narrow window shows fewer fields
+`AppLauncher::new().with_fps_counter(true)`. The renderer draws it in the top right corner, outside the composition. The counter works on desktop and on the web. It shows the frames per second and the average, p95 and longest frame interval. It also shows the work time of a frame and the recompositions per second. A narrow window shows fewer fields
 and keeps the frame rate and the work time.
 [Cranpose Markets](https://samoylenkodmitry.github.io/cranpose-markets/)
 ([source](https://github.com/samoylenkodmitry/cranpose-markets)) shows it on
@@ -483,10 +467,7 @@ wasm-opt = ["-O3", "-ocimfs=100", "--all-features"]
 ```
 
 By default wasm-opt folds every function that has one caller into that
-caller. The browser compiles a function whole at its first call, so a page
-compiled large functions with branches its first screen never ran. With the
-limit, the first frame of a heavy page on a Mate 20 X came 110-170 ms sooner,
-and frames after it cost the same.
+caller. The browser compiles a function whole at its first call. A page then compiled large functions whose branches its first screen never ran. With the limit, the first frame of a heavy page on a Mate 20 X came 110-170 ms sooner. The frames after it cost the same.
 
 Build a release page with [cranpose-build](https://github.com/samoylenkodmitry/cranpose-build)
 0.3.0 or later:
@@ -495,17 +476,7 @@ Build a release page with [cranpose-build](https://github.com/samoylenkodmitry/c
 cranpose-build build --platform web --release
 ```
 
-It builds the module with wasm-pack, opens the page in headless Chrome at a
-phone's and a desktop's viewport, on WebGL and on WebGPU where Chrome has it,
-to record the pipelines its first screen draws with, and builds the module
-again with them embedded. The page then builds those pipelines as it starts,
-the set recorded at the size nearest its canvas, and the browser compiles them
-while the page composes its first screen instead of during the first frame. On a Mate 20 X on WebGL this showed the first screen
-of a heavy page about 0.3 s sooner, and on an Apple M5 on WebGPU with no shader
-cached about 0.15 s sooner. The page
-directory, with the HTML page, `pkg/` and the assets, is the `application`
-directory of the build under `dist/cranpose/web/release`. `CHROME` names the Chrome executable when it is
-not in a usual place; without Chrome the build keeps the page it built first.
+It builds the module with wasm-pack and opens the page in headless Chrome. Chrome draws the first screen at a phone's viewport and at a desktop's, on WebGL and on WebGPU where Chrome has it. The build records the pipelines of that first screen. It then builds the module again with those pipelines embedded. As it starts, the page builds the pipelines recorded at the size nearest its canvas. The browser compiles them while the page composes its first screen. The first frame then waits for no compile. On a Mate 20 X on WebGL, the first screen of a heavy page showed about 0.3 s sooner. On an Apple M5 on WebGPU with no shader cached, it showed about 0.15 s sooner. The build writes the page directory to the `application` directory under `dist/cranpose/web/release`. It holds the HTML page, `pkg/` and the assets. `CHROME` names the Chrome executable when it is not in a usual place. Without Chrome, the build keeps the page it built first.
 
 ## Ownership
 
@@ -543,8 +514,8 @@ fn DraftEditor() {
 ```
 
 The composition owns the vector. Both closures own a copy of `drafts`.
-`.with(...)` borrows the vector; `.update(...)` edits the vector in place.
-`.get()` returns a cloned value, so prefer `.with(...)` for collections and large objects.
+`.with(...)` borrows the vector. `.update(...)` edits the vector in place.
+`.get()` returns a clone of the value. Prefer `.with(...)` for collections and large objects.
 
 ### Retain an object
 
@@ -592,8 +563,7 @@ Compose observation. Put observable fields in `MutableState` or `StateFlow`.
 - `Rc` shares ownership on one thread. `Arc` shares ownership across threads.
 
 Callbacks retained by a component require `'static` captures. Capture owned values
-or state handles. `'static` describes independence from stack borrows; the callback
-still drops with its owner. UI state handles belong to the UI thread. Use a flow
+or state handles. `'static` means that the closure borrows nothing from a stack frame. The callback still drops with its owner. UI state handles belong to the UI thread. Use a flow
 for data shared with worker threads, as shown in **Shared app state**.
 
 ## State
@@ -681,8 +651,7 @@ fn RemoteText(url: String) {
 }
 ```
 
-Add an HTTP backend from your package directory. Cargo's target dependency sections
-select the native backend for desktop and mobile, and the browser backend for WebAssembly:
+Add an HTTP backend from your package directory. Cargo's target dependency sections select the backend. Desktop and mobile take the native backend. WebAssembly takes the browser backend:
 
 ```sh
 cargo add cranpose-services --no-default-features --features http-native --target 'cfg(not(target_arch = "wasm32"))'
@@ -691,7 +660,7 @@ cargo add cranpose-services --no-default-features --features web-http --target '
 
 These commands write `[target.'cfg(...)'.dependencies]` sections in `Cargo.toml`.
 `http-native` supplies the native HTTP client. `web-http` uses browser requests.
-The target condition follows the compiled app, so a web build on macOS selects `web-http`.
+The target condition follows the compiled app. A web build on macOS selects `web-http`.
 The launcher provides the selected backend through `local_http_client()`.
 
 For Android, add this permission directly inside `<manifest>` in
@@ -704,11 +673,10 @@ For Android, add this permission directly inside `<manifest>` in
 Use HTTPS URLs. For browser requests to another origin, configure the server's
 `Access-Control-Allow-Origin` response header for your app's origin.
 
-The URL supplies the key and request input. Each role owns a copy.
+The URL is the key and the request's input. Each holds its own copy.
 The coroutine runs on the UI runtime and yields while I/O completes.
 A key change or composition exit cancels it. The coroutine stops at the
-`.await` it waits on. No line after that `.await` runs, so the body needs no
-check of its own. `scope.launch` starts a child coroutine. The effect's
+`.await` it waits on. No line after that `.await` runs. The body needs no check of its own. `scope.launch` starts a child coroutine. The effect's
 cancellation also cancels the child.
 
 ### Move computation to a worker
@@ -832,8 +800,7 @@ impl CounterStore {
 ```
 
 `StateFlow` holds a current value. An update emits when the value differs from the previous value.
-`.update(...)` applies an atomic change. Concurrent writers may cause the update
-closure to run again; keep side effects outside the closure.
+`.update(...)` applies an atomic change. A concurrent writer can make the update closure run again. Keep side effects outside the closure.
 
 ### Collect in a composable
 
@@ -856,7 +823,7 @@ fn DownloadStatus(progress: Handle<StateFlow<u32>>) {
 Create the stable handle in the parent with
 `rememberHandle(|| repository.progress())`. The repository returns a `StateFlow<u32>`.
 `collectAsStateWithLifecycle` collects while the host is at least `Started`.
-`Stopped` pauses collection; a return to `Started` reads the latest value.
+`Stopped` pauses collection. A return to `Started` reads the latest value.
 `collectAsState` collects for the composition's lifetime.
 
 ### Map Kotlin flow concepts
@@ -961,12 +928,11 @@ UI callbacks copy the model's `Handle`.
 `NavHost` provides a store for each back-stack entry. The model survives while the
 entry remains in the stack, including time behind another destination.
 `ViewModelStoreOwner` provides a store for a dialog, screen or other subtree.
-Removal of the owner releases the model; the model's scope cancels its tasks.
+The removal of the owner releases the model. The model's scope cancels its tasks.
 
 Use `viewModel(item_id, factory)` for one model per list item. A row can leave the
 viewport and return to the same model. `ProvideViewModelStore` accepts a store
-with test models. `SavedStateHandle` stores small restorable values; a database
-or file owns persistent documents. `SavedStateHandle::current()` in a model's
+with test models. `SavedStateHandle` stores small values to restore. A database or a file holds persistent documents. `SavedStateHandle::current()` in a model's
 factory gives the back-stack entry's handle: its values come back with a restored
 back stack and go when the entry is popped.
 
@@ -1075,7 +1041,7 @@ fn WorkScreen() {
 }
 ```
 
-The UI updates `goal`; the worker updates `completed`. Each atomic update preserves
+The UI updates `goal`. The worker updates `completed`. Each atomic update preserves
 the other field across concurrent changes. The flow owns the current `WorkState`.
 
 `Arc::clone` creates one worker owner. Composable calls copy `Handle`.
@@ -1092,8 +1058,7 @@ Add the provider types with `cargo add cranpose-core`.
 
 Composition locals correspond to Compose's `LocalDensity`, `LocalLayoutDirection`
 and service providers. `.current()` reads the nearest provider and subscribes the
-composable to changes. The launcher supplies platform values; a subtree can override
-values for a preview or a test.
+composable to changes. The launcher supplies platform values. A subtree can override them for a preview or a test.
 
 ```rust
 use cranpose::prelude::*;
@@ -1252,7 +1217,7 @@ Outside this provider, `UserLabel` reads the default: `Guest`.
 has focus. A stopped host pauses lifecycle-aware collectors.
 
 - **Android:** Activity start, resume, pause, stop and destroy callbacks drive the states.
-- **iOS:** scene activation resumes the host; scene suspension stops the host. Shutdown destroys the host.
+- **iOS:** scene activation resumes the host. Scene suspension stops the host. Shutdown destroys the host.
 - **Desktop:** a visible app with a focused window is resumed. A visible app with focus elsewhere is paused. An occluded or minimized main window stops the host.
 - **Web:** a visible, focused page is resumed. A visible page with focus elsewhere is paused. A hidden tab or minimized browser stops the host.
 
@@ -1305,8 +1270,7 @@ remains visible.
 `LaunchedEffect` cancels composition-owned tasks at the same boundary.
 App focus and visibility can change while the screen remains composed. Use a
 lifecycle effect for focus-sensitive resources and `collectAsStateWithLifecycle`
-for screen data. Persist user edits when the edits occur; process termination can
-skip a final lifecycle callback.
+for screen data. Save user edits when they occur. The end of the process can skip a final lifecycle callback.
 
 ## Navigation
 
@@ -1368,22 +1332,12 @@ fn App() {
 Use `navigate_with` and `NavOptions` to replace part of the stack.
 Use `NavHostWith` to set the transition.
 
-For a destination that shows as a dialog, like Compose's `dialog(route)`, use
-`NavHostWithDialogs(nav, transition, |route| matches!(route, Route::Confirm).then(DialogSpec::default), content)`:
-the dialog shows over the screen beneath it, and the back gesture or a tap
-outside pops it.
+For a destination that shows as a dialog, like Compose's `dialog(route)`, use `NavHostWithDialogs(nav, transition, |route| matches!(route, Route::Confirm).then(DialogSpec::default), content)`. The dialog shows over the screen beneath it. The back gesture or a tap outside pops it.
 
-For a tab bar, switch tabs with
-`navigate_with(tab, NavOptions::new().pop_up_to(start, false).save_state().launch_single_top().restore_state())`:
-the tab you leave keeps its entries, with their view models and saved state,
-and the tab you return to comes back as you left it.
+For a tab bar, switch tabs with `navigate_with(tab, NavOptions::new().pop_up_to(start, false).save_state().launch_single_top().restore_state())`. The tab you leave keeps its entries with their view models and saved state. The tab you return to comes back as you left it.
 
-A screen leaves the composition while another covers it, and its scroll state
-with it. Give a scroller a saved state so it comes back where the user left it:
-`rememberSaveableLazyListState("inbox")` for a `LazyColumn` or `LazyRow`, and
-`rememberSaveableLazyGridState`, `rememberSaveableLazyStaggeredGridState`,
-`rememberSaveablePagerState` and `rememberSaveableScrollState` for the other
-scrollers. Each saves under its key in the entry's saveable scope, also across
+A screen leaves the composition while another covers it. Its scroll state leaves with it. Give a scroller a saved state so it comes back where the user left it:
+`rememberSaveableLazyListState("inbox")` serves a `LazyColumn` or a `LazyRow`. The other scrollers have `rememberSaveableLazyGridState`, `rememberSaveableLazyStaggeredGridState`, `rememberSaveablePagerState` and `rememberSaveableScrollState`. Each saves under its key in the entry's saveable scope, also across
 a restart. A grid comes back to its first visible item with another column
 count.
 
@@ -1422,7 +1376,7 @@ fn FadingLabel(visible: bool) {
 ```
 
 The layer reads `alpha` each frame. The label keeps its layout space.
-Use `AnimatedVisibility` for content entry and exit. Use `AnimatedContent` to switch content with a transition, and `Crossfade` to fade between contents.
+Use `AnimatedVisibility` for content entry and exit. Use `AnimatedContent` to switch content with a transition. Use `Crossfade` to fade between contents.
 Use `spring(...)` for spring motion.
 
 ### Draw custom content
@@ -1534,8 +1488,7 @@ fn SaveStatus(saved: bool) {
 
 Switch content with enter and exit transitions. `transition_spec` receives the
 state that goes and the state that comes. `.using(SizeTransform::default())`
-animates the container's size between them. A running transition moves layers
-only, so nothing recomposes while it runs.
+animates the container's size between them. A running transition moves layers only. Nothing recomposes while it runs.
 
 ```rust
 #[composable]
@@ -1562,10 +1515,7 @@ the way toward another state, as predictive back does.
 #### SharedTransitionLayout
 
 Move an element that two contents of an `AnimatedContent` both show, as
-Compose's `SharedTransitionLayout` and `Modifier.sharedElement` do. While the
-change runs, the element moves and resizes from the box the going content gives
-it to the box the coming content gives it, drawn above both; a seek holds it
-where the gesture is.
+Compose's `SharedTransitionLayout` and `Modifier.sharedElement` do. While the change runs, the element moves and resizes from its box in the going content to its box in the coming content. It draws above both. A seek holds it where the gesture is.
 
 ```rust
 #[composable]
@@ -1585,22 +1535,21 @@ fn Gallery(open: bool) {
 }
 ```
 
-The copy in flight is the coming content's element composed once more, so
-state it remembers starts afresh during the flight.
+The copy in flight is the coming content's element composed once more. The state it remembers starts afresh during the flight.
 
 ### Draw composables on 3D meshes
 
-`Modifier::scene3d` makes a node a 3D scene, seen through a `Camera` that
-looks through the middle of the node's bounds. Each child with
-`Modifier::mesh_surface` has its content drawn on a `Mesh` in that scene:
+`Modifier::scene3d` makes a node a 3D scene. A `Camera` looks at the scene
+through the middle of the node's bounds. Each child with
+`Modifier::mesh_surface` draws its content on a `Mesh` in that scene. The
 content point `(x, y)` shows where the mesh's texture coordinate is
-`(x / width, y / height)`. As a Compose graphics layer, each covers what the
-modifiers after it lay out: a padding before `scene3d` or `mesh_surface` insets
-the scene or the content, and a `size` that the parent cannot hold still gives
-the mesh all of its content. The content stays live: it recomposes, animates and
-takes pointer input where it shows on the mesh, and nearer surfaces hide
-farther ones. Both closures run when the scene is drawn, so a camera or a
-surface that follows a state read in them moves without recomposition.
+`(x / width, y / height)`. Each of the two modifiers covers what the modifiers
+after it lay out, as a Compose graphics layer does. A padding before `scene3d`
+or `mesh_surface` insets the scene or the content. A `size` that the parent
+cannot hold still gives the mesh all of its content. The content stays live.
+It recomposes and takes pointer input where it shows on the mesh. Nearer
+surfaces hide farther ones. Both closures run when the scene is drawn. A camera
+or a surface that follows a state read in them moves without recomposition.
 
 ```rust
 use std::sync::Arc;
@@ -1651,29 +1600,30 @@ fn Globe(spin: MutableState<f32>) {
 ```
 
 A light with `shadows` set casts the shadows of the surfaces with
-`casts_shadow` on every surface of the scene. A light of some `size`, the
-angle it spans, casts soft shadows: sharp where an object meets a surface,
-wider farther from it. So a 3D object in front of flat UI drops its shadow
-on the UI.
+`casts_shadow` on every surface of the scene. A light's `size` is the angle it
+spans. A light with a size casts soft shadows. Such a shadow is sharp where an
+object meets a surface. It grows wider farther from the object. A 3D object in
+front of flat UI drops its shadow on the UI.
 
 A surface's `material` sets how its content meets the light:
 
 - `Material::Lit` is shaded by the angle the light falls at.
-- `Material::Unlit` shows its content as it is, as a screen does, and drops
-  to the light's `ambient` brightness where a shadow falls on it.
-- `Material::Emissive` shows its content at full colour, untouched by light
-  or shadow: fire, a lamp.
-- `Material::Glow` adds its content's colour to what lies behind it and hides
-  nothing: a halo, a flame, a spark.
-- `Material::Glass(Glass::clear(thickness))` shows the scene behind it bent by
-  its curve, with the light's highlight on it and the content over it. Glass
-  shows the surfaces that are not glass behind it; it costs one copy of the
-  pixels around it per frame, and a scene without glass takes none.
+- `Material::Unlit` shows its content as it is, as a screen does. Where a
+  shadow falls on it, it drops to the light's `ambient` brightness.
+- `Material::Emissive` shows its content at full colour. Light and shadow do
+  not change it. A lamp is such a surface.
+- `Material::Glow` adds its content's colour to what lies behind it. It hides
+  nothing. A halo is such a surface.
+- `Material::Glass(Glass::clear(thickness))` shows the scene behind it. Its
+  curve bends that scene. The light's highlight and the content lie over it.
+  Glass shows the surfaces behind it that are not glass. Each frame, it copies
+  the pixels around it once. A scene without glass makes no copy.
 - `Material::Volume(Volume { shader, params })` draws what the app's WGSL
-  `volume` function finds inside the mesh, ray by ray from the camera, at the
-  depth where it finds it: a ray-marched control standing out of a wall, or
-  smoke in a box. The mesh only bounds it, and a volume casts no shadow. Each
-  shader compiles once, in the background, the first time a frame draws it.
+  `volume` function finds inside the mesh. The function follows each ray from
+  the camera. The surface shows what the function finds at the depth where it
+  finds it. A ray-marched control that stands out of a wall is such a volume.
+  The mesh only bounds the volume. A volume casts no shadow. Each shader
+  compiles once in the background, the first time a frame draws it.
 
 ```wgsl
 // A ball of radius 0.4 in the unit cube, in the content's colour.
@@ -1692,18 +1642,23 @@ fn volume(eye: vec3<f32>, direction: vec3<f32>, entry: f32, exit: f32, footprint
 }
 ```
 
-The renderer puts the framework's prelude before the shader. It works in the
-mesh's own coordinates: `entry` and `exit` are where the ray enters the mesh's
-bounds and leaves the mesh, `footprint` is a pixel's width in radians,
-`volume_param(i)` reads `params[i]`, and `volume_content(uv)` the surface's
-content. A shader that does not build logs a warning, and its volumes are left
-out.
+The renderer puts the framework's prelude before the shader. The shader works
+in the mesh's own coordinates:
+
+- `entry` is where the ray enters the mesh's bounds. `exit` is where it leaves
+  the mesh.
+- `footprint` is the width of a pixel in radians.
+- `volume_param(i)` reads `params[i]`.
+- `volume_content(uv)` reads the surface's content.
+
+A shader that does not build logs a warning. Its volumes are left out.
 
 `Material::Shaded(Shaded { shader, params })` colours each point of the
-surface with the app's WGSL `shade` function, from the content there, the
-light and the eye: a reflection, a sheen, a normal of its own. The surface
-casts and takes shadows as a lit one does. Until its shader builds, and if it
-never does, it draws as `Material::Lit`.
+surface with the app's WGSL `shade` function. The function takes the content at
+that point, the light and the eye. A shader can add a reflection or a normal of
+its own. The surface casts and takes shadows as a lit one does. It draws as
+`Material::Lit` until its shader builds. It stays lit if the shader never
+builds.
 
 ```wgsl
 // The content, lit by the angle the light falls at, with a white sheen
@@ -1717,71 +1672,81 @@ fn shade(surface: ShadedSurface) -> vec4<f32> {
 }
 ```
 
-`ShadedSurface` holds, in the mesh's own coordinates: `color`, the content
-there, premultiplied; `position`; `eye`; `normal`, on the side the eye sees;
-`to_eye` and `to_light`, of length one, `to_light` zero without a light;
-`lit`, from 0 in full shadow to 1; and `ambient`. `shaded_param(i)` reads
-`params[i]`. The room's controls use it to mirror the controls tab's studio
-lights.
+`ShadedSurface` holds these fields, in the mesh's own coordinates:
 
-Scene space uses logical pixels with x to the right, y down and z away from
-the viewer. `Mesh::plane`, `Mesh::cuboid` and `Mesh::sphere` build common
-shapes, `Mesh::from_obj` reads a Wavefront OBJ file, and `Mesh::new` takes
+- `color` is the content at the point, premultiplied.
+- `position` is the point.
+- `eye` is where the eye stands.
+- `normal` points to the side the eye sees.
+- `to_eye` and `to_light` have a length of one. `to_light` is zero without a
+  light.
+- `lit` runs from 0 in full shadow to 1.
+- `ambient` is the light's ambient brightness.
+
+`shaded_param(i)` reads `params[i]`. The controls in the desktop demo's Room
+tab use a shaded material to mirror the studio lights of the controls tab.
+
+Scene space uses logical pixels. x points right, y points down and z points
+away from the viewer. `Mesh::plane`, `Mesh::cuboid` and `Mesh::sphere` build
+common shapes. `Mesh::from_obj` reads a Wavefront OBJ file. `Mesh::new` takes
 positions, texture coordinates and triangles. `Mesh::from_sdf` builds the
-surface of a signed distance field sampled on a grid, with the texture wrapped
-around it as around a sphere; build it again with each new field for a shape
-that changes, and the renderer writes the new shape into the GPU buffers of the
-one it replaced. OBJ files point y up; flip them with a transform that scales y
-by -1. A camera that stands one focal length in front of a plane the size of
-the scene shows that plane exactly as a flat screen: put the 2D UI on such a
-plane, and 3D objects in front of it. The desktop demo's Room tab shows a globe
-in front of such a screen, then walks into a room of walls, the globe and an
-imported torus.
+surface of a signed distance field sampled on a grid. It wraps the texture
+around that surface as around a sphere. For a shape that changes, build the
+mesh again with each new field. The renderer writes the new shape into the GPU
+buffers of the mesh it replaced. OBJ files point y up. Flip them with a
+transform that scales y by -1.
+
+A camera one focal length in front of a plane the size of the scene shows that
+plane as a flat screen shows it. Put the 2D UI on such a plane. Put the 3D
+objects in front of it. The desktop demo's Room tab shows a globe in front of
+such a screen. It then walks into a room that holds the globe and an imported
+torus.
 
 #### Place nodes in 3D
 
-Inside a scene, layout places nodes in 3D as it places them on screen: a
+Inside a scene, layout places nodes in 3D as it places them on screen. A
 node's frame is its layout place on the plane z = 0 of its parent's frame. A
-mesh surface's `transform` places its mesh in its node's frame, so surfaces
-laid out in a `Row` stand side by side. `Modifier::transform3d(|| Mat4)` moves,
-turns or scales a node and everything under it in 3D; like the scene's other
-closures, it reads state when the scene is drawn.
+mesh surface's `transform` places its mesh in its node's frame. Surfaces laid
+out in a `Row` then stand side by side. `Modifier::transform3d(|| Mat4)` moves,
+turns or scales a node and its subtree in 3D. Its closure reads state when the
+scene is drawn, as the scene's other closures do.
 
 A mesh surface inside the content of another mesh surface has its frame in
-that content: x and y in the content's pixels, z into the surface, a unit as
-long as a content pixel (`MeshSurface::content_to_scene`). So a control on a
-wall can stand out of the wall, nearer surfaces hide it, and it takes pointer
-input where it shows. One map from these frames to the window serves drawing,
-pointer input and the bounds robot tests find controls by
-(`RenderScene::surface_windows`). Accessibility reads a node's flat layout
-place.
+that content (`MeshSurface::content_to_scene`). x and y run in the content's
+pixels. z points into the surface. A unit is as long as a content pixel. A
+control on a wall can stand out of the wall. Nearer surfaces hide it. It takes
+pointer input where it shows. One map from these frames to the window
+(`RenderScene::surface_windows`) serves drawing and pointer input. Robot tests
+find the bounds of controls through it too. Accessibility reads a node's flat
+layout place.
 
 #### Look through doorways
 
-A `scene3d` inside a scene's space is a doorway: the rect it covers in its
-frame opens into its own space, and cuts a hole in the surface whose content
-holds it. Its camera stands in the doorway's middle looking in, a unit of its
-space to a pixel of the rect (`Camera::doorway`), so a doorway seen straight on
-shows what that camera sees, and from other places the space behind it with
-depth. What lies behind that camera is cut, and the space's own light lights
-its surfaces.
+A `scene3d` inside a scene's space is a doorway. The rect it covers in its
+frame opens into its own space. The doorway cuts a hole in the surface whose
+content holds it. Its camera stands in the doorway's middle and looks in
+(`Camera::doorway`). A unit of its space is a pixel of the rect. A doorway seen
+straight on shows what that camera sees. From other places, it shows the space
+behind it with depth. The renderer cuts what lies behind that camera. The
+space's own light lights its surfaces.
 
 The eye sees through a doorway as far as the doorway shows on screen. Each
-doorway opens on the screen rect it covers within the openings before it; one
-that lies off screen, faces away from the eye or opens on less than a quarter
-of a pixel shows nothing and costs nothing. So doorways inside doorways show as
-deep as they open on screen, up to 255, which the WGPU renderer's 8-bit stencil
-counts. Presses through a doorway reach the surfaces behind it. Glass and glow
-show behind doorways too; shadows fall only in the space the eye stands in. The desktop demo's Room tab
-shows this: the whole demo hangs on the wall to the screen's right, and its own
-Room tab opens a doorway there into a second room.
+doorway opens on the screen rect it covers within the openings before it. A
+doorway off screen shows nothing and costs nothing. The same holds for a
+doorway that faces away from the eye or opens on less than a quarter of a
+pixel. Doorways inside doorways show as deep as they open on screen, up to 255
+deep. The WGPU renderer counts them in an 8-bit stencil. Presses through a
+doorway reach the surfaces behind it. Glass and glow show behind doorways too.
+Shadows fall only in the space the eye stands in. The desktop demo's Room tab
+shows doorways. The whole demo hangs on the wall to the right of the screen.
+Its own Room tab opens a doorway there into a second room.
 
 #### Walk the eye
 
 An `Eye` walks a window's scene among its spaces. `rememberEye(|| pose,
 radius)` keeps one, made at an `EyePose` such as `EyePose::standing(position,
-yaw, pitch)`. Read `eye.scene(focal_length, light)` in the `scene3d` closure,
-and the camera follows the eye without recomposition:
+yaw, pitch)`. Read `eye.scene(focal_length, light)` in the `scene3d` closure.
+The camera then follows the eye without recomposition:
 
 ```rust
 let eye = rememberEye(|| EyePose::standing(Vec3::new(0.0, 0.0, -600.0), 0.0, 0.0), 60.0);
@@ -1797,72 +1762,73 @@ Box(
 );
 ```
 
-`eye.turn(yaw, pitch)` turns the eye, up or down no farther than
+`eye.turn(yaw, pitch)` turns the eye. It turns up or down no farther than
 `PITCH_LIMIT`. `EyePose::walking_axes` gives the level directions ahead and to
-the right, and `eye.walk(step)` moves the eye by `step` in the coordinates of
-the space it stands in. A step through a doorway's rect takes the eye into the
-space behind it, turned into that space's coordinates, and a step back takes it
-out again. A surface with `solid` set stops the eye a ball of `radius`, in the units
-of the space it stands in, short of it, and the eye slides along it, except
-through the holes that doorways cut.
-Each time the renderer places the scene, it leaves the eye the solid surfaces
-and doorways near it, so a wall the app moves stops the eye where it is drawn.
-`eye.place(pose)` puts the eye at `pose` without a walk; the pose's `doorways`,
-the scene nodes of the doorways walked through, name the space it stands in,
-and `EyePose::standing` gives none, the scene's own space.
+the right. `eye.walk(step)` moves the eye by `step` in the coordinates of the
+space it stands in. A step through a doorway's rect takes the eye into the
+space behind it, in that space's coordinates. A step back takes it out again.
+The eye is a ball of `radius`, in the units of the space it stands in. A
+surface with `solid` set stops that ball. The eye then slides along the
+surface. The holes that doorways cut let the eye through.
+Each time the renderer places the scene, it gives the eye the solid surfaces
+and the doorways near it. A wall that the app moves stops the eye where the
+wall is drawn. `eye.place(pose)` puts the eye at `pose` without a walk. The
+pose's `doorways` are the scene nodes of the doorways walked through. They name
+the space the eye stands in. `EyePose::standing` gives no doorways. Its eye
+stands in the scene's own space.
 
-The scene draws from the space the eye stands in: the surfaces around the eye,
-and the spaces it came from through their doorways, cut at each doorway's
-plane. Presses start there too. Each space keeps its own light. Provide the
-eye with `local_eye()` around the scene's content, as above: a scene composed
-behind a doorway reads it and knows the window's eye walks into it, so it
-leaves its own camera standing in the doorway. In the demo's room, open the
-Room tab on the right wall, turn to it with E and walk in with W. The second
-room's Step into the room button opens its walls, and its own right wall holds
-the demo again.
+The scene draws from the space the eye stands in. It draws the surfaces around
+the eye. It also draws the spaces the eye came from through their doorways, cut
+at each doorway's plane. Presses start there too. Each space keeps its own
+light. Provide the eye with `local_eye()` around the scene's content, as above.
+A scene composed behind a doorway reads it. That scene then knows that the
+window's eye walks into it. It leaves its own camera standing in the doorway.
+In the demo's room, open the Room tab on the right wall. Turn to it with E and
+walk in with W. The Step into the room button of the second room opens its
+walls. Its right wall holds the demo again.
 
-The desktop demo's Backrooms tab walks through rooms that never end. Each room
-is a composable. It composes a doorway at each of its doors with the next room
-behind it, two doorways deep. The tab makes the room behind a doorway the window
-scene's room once the eye walks through that doorway. `eye.place` then puts the
-eye at the same pose with no doorways: the room's coordinates stay the same. The
-tab keys the scene by its room, so the eye walks on only after the renderer has
-placed the new scene. One `Shaded` shader colours the walls, floors and ceilings
-of every room; it reads the eye from `ShadedSurface`, so a surface's closure
-need not follow the eye. The entity's writing, a lever and the things in the
-rooms carry live content. Some walls print the tab's own source files in a
-`LazyColumn`, which lays out only the lines on the wall. The tab fetches each
-file the first time a wall shows it.
+The desktop demo's Backrooms tab walks through a maze of rooms with no end.
+Each room is a composable. It composes a doorway at each of its doors with the
+next room behind it, two doorways deep. When the eye walks through a doorway,
+the tab makes the room behind it the room of the window's scene. `eye.place`
+then puts the eye at the same pose with no doorways. The room's coordinates
+stay the same. The tab keys the scene by its room. The eye walks on only after
+the renderer has placed the new scene. One `Shaded` shader colours every wall,
+floor and ceiling of every room. It reads the eye from `ShadedSurface`. A
+surface's closure then does not follow the eye. Live content shows on some
+surfaces: the writing on the walls and the objects in the rooms. Some walls
+print the tab's own source files in a `LazyColumn`, which lays out only the
+lines on the wall. The tab fetches each file the first time a wall shows it.
 
-The tab provides the window's eye through `local_eye()` and what all rooms
-share through a `staticCompositionLocalOf`: the meshes, the journey, the
-camcorder's film and the fetched files. A room behind a doorway takes only its
-place. Motion comes from `rememberInfiniteTransition`: the film's frame, a
-floating eye's bob and a panel's sway. Draw closures read these values, so the
-motion draws each frame and composes nothing. `derivedStateOf` turns the film's
-value, which changes every display frame, into a frame count that changes 24
-times a second. Timed events, such as the television's typing and the
-captions, run in `LaunchedEffect`s with `delay`.
+The tab provides the window's eye through `local_eye()`. It provides what all
+rooms share through a `staticCompositionLocalOf`: the meshes, the state of the
+walk, the film frame and the fetched files. A room behind a doorway takes only
+its place as an argument. `rememberInfiniteTransition` drives the motion of the
+film frame and of the floating objects. Draw closures read these values. The
+motion draws each frame and composes nothing. The film's value changes every
+display frame. `derivedStateOf` turns it into a frame count that changes 24
+times a second. Timed events run in `LaunchedEffect`s with `delay`. The
+television's typing is such an event.
 
 #### Point with a ray
 
-A controller, a hand or a gaze points along a ray from somewhere other than
-the eye. `AppShell::ray_pointer((pointer, scene), ray, kind)` sends a press,
-move or release along `ray`, given in the coordinates of the space the eye
-stands in, into the scene of the node `scene`. The nearest surface the ray
-meets, behind doorways too, takes it at the content point where the ray meets
-it, and `PointerEvent::ray` carries the ray to the content's handlers, so a
-drag goes on along the ray. Each `pointer` number is a pointer of its own. A
-clickable follows the first pointer that pressed it, so a second controller
-that presses and lets go over it does not click it.
+A controller or a gaze points along a ray that does not start at the eye.
+`AppShell::ray_pointer((pointer, scene), ray, kind)` sends a press, a move or a
+release along `ray` into the scene of the node `scene`. `ray` is given in the
+coordinates of the space the eye stands in. The nearest surface that the ray
+meets takes the event at the content point where the ray meets it. Surfaces
+behind doorways count too. `PointerEvent::ray` carries the ray to the content's
+handlers. A drag then goes on along the ray. Each `pointer` number is a pointer
+of its own. A clickable follows the first pointer that pressed it. A second
+controller that presses and lets go over it does not click it.
 
 #### Renderers
 
-The WGPU renderer draws scenes. The pixels renderer draws the surfaces of the
-space the eye stands in, far ones first: a flat mesh's surface in its place,
-and a curved mesh's surface on the plane that touches the mesh at the content's
-middle. It has no depth buffer and no shadows, and draws a scene behind a
-doorway flat on the surface that holds it.
+The WGPU renderer draws scenes in full. The pixels renderer draws the surfaces
+of the space the eye stands in, far ones first. It draws a flat mesh's surface
+in its place. It draws a curved mesh's surface on the plane that touches the
+mesh at the content's middle. It has no depth buffer and no shadows. It draws a
+scene behind a doorway flat on the surface that holds it.
 
 ## Accessibility
 
@@ -1932,8 +1898,7 @@ and choose a static or higher-contrast presentation.
 
 ### Support keyboard and screen readers
 
-Buttons and fields participate in focus traversal. Tab and Shift+Tab move focus;
-Enter and Space activate the focused control. Use the focus manager for an explicit
+Buttons and fields participate in focus traversal. Tab and Shift+Tab move focus. Enter and Space activate the focused control. Use the focus manager for an explicit
 action such as dismissal of the keyboard:
 
 ```rust
@@ -1955,12 +1920,7 @@ fn DoneButton() {
 }
 ```
 
-`Modifier::on_long_press(label, action)` calls `action` when a press rests on
-a control for 400 ms without moving, and offers a screen reader the same
-action under `label`. The press then belongs to the long press, so the control
-does not click when it ends. `FocusWithin(on_change, content)` tells
-`on_change` whether keyboard focus is on a control composed in `content`; Tab
-does not stop on it.
+`Modifier::on_long_press(label, action)` calls `action` when a press rests on a control for 400 ms without moving. It offers a screen reader the same action under `label`. The press then belongs to the long press. The control does not click when it ends. `FocusWithin(on_change, content)` tells `on_change` whether keyboard focus is on a control composed in `content`. Tab does not stop on the `FocusWithin` itself.
 
 ```rust
 use cranpose::prelude::*;
@@ -1978,8 +1938,7 @@ fn PhotoTile(selected: MutableState<bool>, on_open: impl Fn() + 'static) {
 }
 ```
 
-Verify custom controls with TalkBack on Android, VoiceOver on Apple platforms,
-and the target desktop or browser screen reader. The [accessibility guide](accessibility.md)
+Check custom controls with TalkBack on Android and VoiceOver on Apple platforms. On a desktop or in a browser, check them with the screen reader of that target. The [accessibility guide](accessibility.md)
 covers focus groups, canvas controls, announcements and validation tools.
 
 ## Testing
@@ -1996,8 +1955,7 @@ cargo add cranpose-testing --dev
 ```
 
 Cargo runs functions marked `#[test]` in `tests/*.rs`. These files import the app
-library as `my_app`. Keep reusable composables in `src/lib.rs` or library modules;
-keep the platform entry point in `src/main.rs`.
+library as `my_app`. Keep reusable composables in `src/lib.rs` or in library modules. Keep the platform entry point in `src/main.rs`.
 
 | Test scope | API | Example check |
 | --- | --- | --- |
@@ -2033,8 +1991,7 @@ fn increment_button_has_a_label_and_touch_target() {
 }
 ```
 
-`placed_semantics` settles pending composition work, applies the viewport size,
-and returns accessible labels and bounds. `target_bounds()` includes the control's
+`placed_semantics` runs the pending composition work at the viewport size. It returns the accessible labels and bounds. `target_bounds()` includes the control's
 hit area. Run the test by file name:
 
 ```sh
@@ -2043,16 +2000,13 @@ cargo test --test composition
 
 ### Find a node by a test tag
 
-Text changes with copy edits and translations. `Modifier::test_tag` gives a node
-a name for tests, as Compose's `testTag` does; screen readers never receive it.
+Text changes with copy edits and translations. `Modifier::test_tag` gives a node a name for tests, as Compose's `testTag` does. Screen readers never receive it.
 
 ```rust
 Text("Pay now", Modifier::empty().test_tag("checkout"), TextStyle::default());
 ```
 
-`PlacedSemanticsNode::find_by_tag("checkout")` finds the node in
-`placed_semantics`, the headless robot's `find_by_tag("checkout")` clicks or
-measures it, and the desktop robot's `click_by_tag("checkout")` taps it.
+`PlacedSemanticsNode::find_by_tag("checkout")` finds the node in `placed_semantics`. The headless robot's `find_by_tag("checkout")` clicks or measures it. The desktop robot's `click_by_tag("checkout")` taps it.
 
 ### Check a state update
 
@@ -2161,8 +2115,7 @@ cargo test --test composition --test counter
 ### Run a desktop robot
 
 A desktop robot uses the app's window backend and wgpu renderer. Use the desktop
-build tools and GPU driver from **Get started**. Headless desktop mode creates a
-hidden OS window; Linux still needs an X11 or Wayland display server.
+build tools and GPU driver from **Get started**. Headless desktop mode creates a hidden OS window. Linux still needs an X11 or Wayland display server.
 
 Add `robot` to the app's existing `[features]` table in `Cargo.toml`. Add the test
 target as a separate table:
@@ -2178,8 +2131,7 @@ harness = false
 required-features = ["desktop", "renderer-wgpu", "robot"]
 ```
 
-`harness = false` lets Cargo run `main` directly, so the desktop event loop runs
-on the main thread. Create `tests/robots/counter.rs`:
+`harness = false` lets Cargo run `main` directly. The desktop event loop then runs on the main thread. Create `tests/robots/counter.rs`:
 
 ```rust
 use cranpose::{AppLauncher, Robot};
@@ -2217,8 +2169,7 @@ fn main() -> anyhow::Result<()> {
 ```
 
 The driver runs on a separate thread. `wait_for_idle` waits for pending app work.
-The driver closes the app after either result and sends failures to `main`, so
-Cargo reports a nonzero exit code for a failed check.
+The driver closes the app after either result. It sends failures to `main`. Cargo then reports a nonzero exit code for a failed check.
 
 ```sh
 cargo test --test counter_robot --features desktop,renderer-wgpu,robot
@@ -2268,8 +2219,7 @@ robot.pump_frames(3)?;
 save_capture(robot)?;
 ```
 
-Use platform tests for native controls and OS dialogs: Android UI Automator or
-Espresso, and Apple XCTest. Keep pointer, layout and state checks in the Rust suite.
+Test native controls and OS dialogs with the platform's tools. Android has UI Automator and Espresso. Apple has XCTest. Keep pointer, layout and state checks in the Rust suite.
 
 ## App windows
 
@@ -2332,7 +2282,7 @@ inspector to the main window.
 ### Read window geometry
 
 `rememberWindowStateAt(x, y, width, height)` adds an initial position.
-`window.size()` reads content size; `window.position()` reads the outer position.
+`window.size()` reads the content size. `window.position()` reads the outer position.
 The units are logical pixels. A nested composable can read the nearest window:
 
 ```rust
@@ -2361,8 +2311,7 @@ Use `.window_drag_area(on_start, on_end)` for a custom title bar and
 
 With the `desktop-menus` feature of `cranpose`, `Tray` and `MenuBar` describe
 a tray icon and a menu bar from the composition, as Compose Desktop's `Tray`
-and `MenuBar` do. An item's callback runs as an event handler runs, so it may
-write state.
+and `MenuBar` do. An item's callback runs as an event handler runs. It may write state.
 
 ```rust
 use cranpose::prelude::*;
@@ -2385,17 +2334,8 @@ fn Menus(icon: ImageBitmap) {
 }
 ```
 
-- The tray icon shows on macOS, Windows and Linux. On Linux it is a
-  StatusNotifierItem over D-Bus; GNOME shows it with the AppIndicator
-  extension. `TraySpec::on_action` runs on a left click, and the menu then
-  opens on a right click.
-- The menu bar is the macOS menu bar, after the application menu with About,
-  Hide and Quit, and on Windows the window's own menu bar. Linux has no menu
-  bar outside GTK windows, so there the shell draws it at the top of the
-  window, as Compose Desktop does. `WindowMenuBar(menus, content)` draws the
-  same bar above `content` on any desktop: the open menu takes the keyboard
-  focus (arrow keys, Return, Escape), a submenu opens where the pointer rests,
-  and the items' shortcuts run them for keys the content does not take.
+- The tray icon shows on macOS, Windows and Linux. On Linux it is a StatusNotifierItem over D-Bus. GNOME shows it with the AppIndicator extension. `TraySpec::on_action` runs on a left click. The menu then opens on a right click.
+- On macOS, the menu bar is the system menu bar. Its menus follow the application menu with About, Hide and Quit. On Windows, it is the window's own menu bar. Linux has no menu bar outside GTK windows. There the shell draws it at the top of the window, as Compose Desktop does. `WindowMenuBar(menus, content)` draws the same bar above `content` on any desktop. The open menu takes the keyboard focus: the arrow keys, Return and Escape. A submenu opens where the pointer rests. An item's shortcut runs the item for a key that the content does not take.
 - `KeyShortcut`'s `ctrl` is Command on macOS. A check item's mark shows the
   state the app keeps, whatever a click asked for.
 - A robot test chooses an item with `robot.choose_menu_item(&["View", "Refresh"])`
@@ -2408,8 +2348,7 @@ runs a `DesktopIntegration` there:
   `HasDisplayHandle` from `cranpose::raw_window_handle`), the primary window first.
 - `about_to_wait` runs before the event loop waits. Take the events of the
   integration's own sources there.
-- `context.update(|| ...)` writes state as an event handler does, and the app
-  draws the frame the change asks for. `context.waker()` wakes the event loop
+- `context.update(|| ...)` writes state as an event handler does. The app then draws the frame that the change asks for. `context.waker()` wakes the event loop
   from another thread, for a source that does not wake it.
 
 ## Platform services
@@ -2495,10 +2434,10 @@ async fn read_document(content: ContentHandle) -> anyhow::Result<String> {
 ```
 
 For large files, call `open()` and read chunks with `read_chunk()`.
-The framework's readers and sinks read and write on a thread of their own, so a copy of a large file leaves the UI thread free.
+The framework's readers and sinks read and write on a thread of their own. A copy of a large file leaves the UI thread free.
 `copy_content(&*content, &sink, |bytes| ...)` copies one into the other and reports the bytes copied so far.
 Use `rememberSaveDocumentLauncher` for output documents and `rememberOpenFilesLauncher` for multiple files.
-Use `rememberExportFileLauncher` to save a copy of a file the app already has, such as a recording; on iOS the chooser takes the file itself, without a staging copy.
+Use `rememberExportFileLauncher` to save a copy of a file the app already has, such as a recording. On iOS the chooser takes the file itself, with no staging copy.
 [Cranamp's import code](https://github.com/samoylenkodmitry/cranamp/blob/main/src/audio.rs) loads audio through these content APIs.
 
 ### Play media
@@ -2523,12 +2462,12 @@ fn play_track(uri: String) -> Result<(), MediaError> {
 
 Call this from a user action. Use `pause_media`, `seek_media_fraction` and `set_media_volume` for controls.
 An app that plays only WAV files of PCM samples, such as its own recordings, enables `media-wav` in place of `media` and leaves out the other codecs.
-For game sounds, enable `audio`; use `audio-desktop` on desktop.
+For game sounds, enable `audio`. On desktop, enable `audio-desktop`.
 See [Cranamp](https://github.com/samoylenkodmitry/cranamp) for a player app.
 
 ### Show an image from the network
 
-Enable image loading, and an HTTP backend for network images:
+Enable image loading. Network images also need an HTTP backend:
 
 ```sh
 cargo add cranpose --features image-loading
@@ -2536,10 +2475,7 @@ cargo add cranpose-services --features http-native --target 'cfg(not(target_arch
 cargo add cranpose-services --features web-http --target 'cfg(target_arch = "wasm32")'
 ```
 
-`AsyncImage` loads an image while it stays on screen, shows `placeholder`
-until the image is decoded and `error` when it fails, and decodes the image no
-larger than its box in device pixels: a large photo in a thumbnail then holds a
-thumbnail's memory.
+`AsyncImage` loads an image while it stays on screen. It shows `placeholder` until the image is decoded. It shows `error` when the load fails. It decodes the image no larger than its box in device pixels. A large photo in a thumbnail then holds only a thumbnail's memory.
 
 ```rust
 use cranpose::prelude::*;
@@ -2567,13 +2503,7 @@ fn Avatar(url: String) {
 `rememberAsyncImage(request)` returns the load state itself, for a screen that
 draws the image another way. `ImageRequest::max_size` sets the decode size.
 
-The image decodes on a worker thread. All images share one memory cache,
-bounded by the bytes of decoded pixels, and a disk cache in the application's
-cache folder with a size limit; `ImageLoader::new` makes a loader with other
-limits. Requests of one image share one download, and a request whose
-composables all left stops its download. `ImageRequest::new` also takes
-`file://` URLs and file paths, and `ImageRequest::bytes` decodes bytes the app
-holds, such as a picked file.
+The image decodes on a worker thread. All images share one memory cache. The bytes of decoded pixels bound it. They also share a disk cache with a size limit in the application's cache folder. `ImageLoader::new` makes a loader with other limits. The requests of one image share one download. A request stops its download when all its composables have left. `ImageRequest::new` also takes `file://` URLs and file paths. `ImageRequest::bytes` decodes bytes that the app holds, such as a picked file.
 
 ### Use the camera
 
@@ -2686,11 +2616,11 @@ This pattern plays two pulses with a 40-millisecond pause.
 - **Documents:** `rememberOpenFileLauncher`, `rememberSaveDocumentLauncher`, `rememberExportFileLauncher`, `ContentHandle`.
 - **Share:** `local_share_sheet`, `ShareContent`.
 - **Receive shared content:** `rememberIncomingContent`.
-- **Links that open the app:** `rememberOpenedLinks`, and `BindDeepLinks` in `cranpose-navigation`.
+- **Links that open the app:** `rememberOpenedLinks`. `cranpose-navigation` adds `BindDeepLinks`.
 - **Preferences and directories:** `preferences`, `application_directories`.
 - **Notifications:** `local_notifier`.
 - **Camera:** `rememberCameraState`, `rememberCameraFrames`, `capture_camera_still`.
-- **Media and audio:** `open_media`, `play_media`, `audio`. `set_media_metadata` sets the title, artist, album and cover the system media controls show; `observe_media_metadata` follows them.
+- **Media and audio:** `open_media`, `play_media`, `audio`. `set_media_metadata` sets what the system media controls show: the title, the artist, the album and the cover. `observe_media_metadata` follows them.
 - **Haptics:** `default_haptics`, `HapticPattern`.
 - **Lifecycle:** `rememberLifecycleState`, `cranpose::LifecycleEffect`.
 - **Display power:** `cranpose::KeepScreenOn`.
@@ -2806,7 +2736,7 @@ See the [lazy-list guide](lazy_list_doc.md).
 
 ### Show a grid or pages
 
-`LazyVerticalGrid` lays items out in lines of cells. `GridCells::Adaptive` fits as many columns as its minimum width allows, and `GridCells::FixedSize` as many as fit at exactly its width. A span gives an item more columns; a span of the whole line suits a section title:
+`LazyVerticalGrid` lays items out in lines of cells. `GridCells::Adaptive` fits as many columns as its minimum width allows. `GridCells::FixedSize` fits as many as fit at exactly its width. A span gives an item more columns. A section title takes a span of the whole line:
 
 ```rust
 use cranpose::prelude::*;
@@ -2835,7 +2765,7 @@ fn Photos() {
 ```
 
 `LazyVerticalStaggeredGrid` takes the same content for items of their own heights: each goes into the lane that ends first.
-`HorizontalPager` shows one page at a time, and a swipe comes to rest on a page:
+`HorizontalPager` shows one page at a time. A swipe comes to rest on a page:
 
 ```rust
 use cranpose::prelude::*;
@@ -2860,7 +2790,7 @@ fn Onboarding() {
 ```
 
 `pager.animate_scroll_to_page(page)` turns the pages with a spring. `PageSize::Fixed` shows the next page beside the current one.
-`pager.settled_page()` is the page the pager rests on. It changes when a swipe or an animation comes to rest, so a page indicator that reads it recomposes then, not on every frame of the swipe. `target_page()` is the page the pager is on its way to, for a page indicator that moves ahead of the swipe. `is_scroll_in_progress()` says whether a drag, a fling or an animation moves the pager, and `lazy_list_state().is_dragged()` whether a finger drags it; lazy lists, grids and `ScrollState` have it too. `PagerSpec::content_padding` shows the neighbouring pages in the padding at both ends, and `beyond_viewport_page_count` sets how many pages outside the view stay composed.
+`pager.settled_page()` is the page the pager rests on. It changes when a swipe or an animation comes to rest. A page indicator that reads it recomposes only then. `target_page()` is the page the pager is on its way to, for a page indicator that moves ahead of the swipe. `is_scroll_in_progress()` says whether a drag, a fling or an animation moves the pager. `lazy_list_state().is_dragged()` says whether a finger drags it. Lazy lists, grids and `ScrollState` have both too. `PagerSpec::content_padding` shows the neighbouring pages in the padding at both ends. `beyond_viewport_page_count` sets how many pages outside the view stay composed.
 
 ### Adapt to screen size
 
@@ -3498,7 +3428,7 @@ PopupHost(|| {
 });
 ```
 
-`PopupAnchored` follows an anchor rectangle. `PopupDismissable` adds outside-click and back dismissal; `PopupDismissableWhen` also takes visibility state.
+`PopupAnchored` follows an anchor rectangle. `PopupDismissable` closes on a click outside and on back. `PopupDismissableWhen` also takes a visibility state.
 
 #### Dialog
 
@@ -3526,7 +3456,7 @@ PopupHost(move || {
 });
 ```
 
-`DialogWithScrim` adds an explicit scrim color, and `DialogWithFadingScrim` fades it by a value read while the scrim draws. `DialogSpec::with_alignment` places the dialog's surface, at the bottom edge for a sheet. A tap on the dialog's own surface keeps it open. Put dialog state in the parent and clear the state in the dismissal callback.
+`DialogWithScrim` takes a scrim color. `DialogWithFadingScrim` fades the scrim by a value read while the scrim draws. `DialogSpec::with_alignment` places the dialog's surface, at the bottom edge for a sheet. A tap on the dialog's own surface keeps it open. Put dialog state in the parent and clear the state in the dismissal callback.
 
 ### Progress composables
 
@@ -3570,15 +3500,12 @@ Import `cranpose::prelude::*` and `cranpose::widgets::*` at module scope.
 Each example below goes inside a `#[composable]` function.
 
 `BasicTextField` and `SelectionContainer` supply their own selection controls.
-Use these components for a custom editor. Positions use window coordinates;
-the editor supplies hit tests, selection ranges and clipboard actions.
+Use these components for a custom editor. Positions use window coordinates. The editor supplies the hit tests, the selection ranges and the clipboard actions.
 
 #### SelectionLoupe
 
 Show a magnifier above the active text line. Pass `None` after the drag ends.
-The magnifier stays inside its `PopupHost` window. It slides along a side edge,
-sits below the line when the window has more room there than above, and shrinks
-when the window is smaller than the magnifier.
+The magnifier stays inside its `PopupHost` window. It slides along a side edge. It sits below the line when the window has more room there than above. It shrinks when the window is smaller than the magnifier.
 
 ```rust
 SelectionLoupe(Some(LoupeTarget {
@@ -3663,8 +3590,8 @@ fn EditorCaretMenu(
 
 ## Liquid components
 
-Liquid provides an opinionated theme and controls for Apple-style glass interfaces.
-Use Liquid components together for a consistent app surface.
+Liquid provides a theme and controls for glass interfaces in the style of Apple's.
+Use the Liquid components together. They share the theme's colors and glass.
 
 ### Apply a theme
 
@@ -3686,7 +3613,7 @@ fn ThemedScreen() {
 }
 ```
 
-Use `GlassSurface` for containers, `GlassButton` for actions, and `LiquidTabBar` for tabs.
+Use `GlassSurface` for containers. Use `GlassButton` for actions and `LiquidTabBar` for tabs.
 Specs set their appearance. The [showcase widgets](https://github.com/samoylenkodmitry/cranpose-showcase/tree/main/src/widgets) combine these controls into app components.
 
 ### Liquid composables
@@ -3868,9 +3795,7 @@ LiquidToggle(
 
 #### LiquidPullToRefreshBox
 
-Refresh a list by pulling it down from its top. A release past the threshold
-calls `on_refresh`; the app sets `refreshing` while it loads. Screen readers
-cannot pull, so the box offers them an action named by the app.
+Refresh a list by pulling it down from its top. A release past the threshold calls `on_refresh`. The app sets `refreshing` while it loads. Screen readers cannot pull. The box offers them an action named by the app.
 
 ```rust preview=pull_to_refresh
 use cranpose::liquid::prelude::*;
@@ -3898,19 +3823,14 @@ LiquidPullToRefreshBox(
 );
 ```
 
-The box builds on `NestedScroll`: a container gives the scrollers inside it a
-`NestedScrollConnection`, which takes part of each scroll before the scroller
-moves, what the scroller leaves after it moved, and the release velocity
-before it flings. `vertical_scroll`, `horizontal_scroll`, `scrollable` and the
+The box builds on `NestedScroll`. A container gives the scrollers inside it a `NestedScrollConnection`. The connection can take part of each scroll before the scroller moves. It gets what the scroller leaves after it moved. It gets the release velocity before the scroller flings. `vertical_scroll`, `horizontal_scroll`, `scrollable` and the
 lazy lists take part.
 
 #### LiquidModalBottomSheet
 
 Show a sheet over the screen from its bottom edge, as Compose's
 `ModalBottomSheet` does. Compose it while the app's flag is set and clear the
-flag in `on_dismiss`. A sheet taller than half the window opens to half the
-window, and a drag opens it fully; `rememberLiquidSheetState(true)` skips the
-half. A drag down, a tap on the scrim, the back gesture and `state.hide()`
+flag in `on_dismiss`. A sheet taller than half the window opens to half the window. A drag opens it fully. `rememberLiquidSheetState(true)` skips the half. A drag down, a tap on the scrim, the back gesture and `state.hide()`
 slide the sheet out first. A list in the sheet scrolls first and hands the
 sheet the drag it leaves at its top.
 
@@ -3932,8 +3852,7 @@ if open.get() {
 
 #### LiquidTooltipBox
 
-Show a short label above a control while the pointer rests on it, while the
-control has keyboard focus, and for a moment after a long press. A screen
+Show a short label above a control while the pointer rests on it or while the control has keyboard focus. The label also shows for a moment after a long press. A screen
 reader asks for it with the long press action the app names.
 
 ```rust preview=tooltip
@@ -3961,8 +3880,7 @@ LiquidCheckbox(
 );
 ```
 
-`LiquidTriStateCheckbox` adds a partly checked state, for a box over a list
-whose items are partly checked; readers hear "mixed":
+`LiquidTriStateCheckbox` adds a partly checked state. It suits a box over a list whose items are partly checked. Screen readers hear "mixed":
 
 ```rust preview=tri_state_checkbox
 use cranpose::liquid::prelude::*;
@@ -3980,8 +3898,7 @@ LiquidTriStateCheckbox(
 
 #### LiquidRadioButton
 
-Show one option of a group. Put the group in a `selectable_group` container,
-so a screen reader says which of how many each option is.
+Show one option of a group. Put the group in a `selectable_group` container. A screen reader then says the place of each option and the count of options.
 
 ```rust preview=radio_button
 use cranpose::liquid::prelude::*;
@@ -4005,9 +3922,7 @@ Column(
 #### LiquidSnackbarHost
 
 Show brief messages at the bottom of the screen, one at a time from a queue.
-`show` resolves with how the snackbar ended. A snackbar times out after its
-duration; while a screen reader is on, one with an action stays until it is
-used, and readers hear the message as it appears.
+`show` resolves with how the snackbar ended. A snackbar times out after its duration. While a screen reader is on, a snackbar with an action stays until the action is used. Screen readers read the message as it appears.
 
 ```rust preview=snackbar
 use cranpose::liquid::prelude::*;
@@ -4036,8 +3951,7 @@ LiquidSnackbarHost(snackbars, Modifier::empty().fill_max_width());
 
 #### LiquidDatePicker
 
-Pick a day in a month calendar, as Compose's `DatePicker`. The buttons beside
-the month turn it; the picked day is filled and `today` is ringed. The app
+Pick a day in a month calendar, as Compose's `DatePicker`. The buttons beside the month turn it. The picked day is filled. `today` has a ring. The app
 passes today from its clock in its time zone, for example through
 `CalendarDate::from_unix_days`. With the `localization-formatting` feature of
 `cranpose-liquid`, the month, the weekdays, the first day of the week and what a
@@ -4054,10 +3968,7 @@ LiquidDatePicker(picker, today, Modifier::empty().width(320.0));
 #### LiquidTimePicker
 
 Pick a time of day on wheels: hours, minutes and, on a 12-hour clock, the half
-of the day. A wheel rests on whole rows after a drag or a fling, and a screen
-reader adjusts each wheel by name. `rememberLiquidTimePickerState(hour, minute,
-None)` takes the clock of the app's language with the `localization-formatting`
-feature; `Some(true)` asks for 24 hours.
+of the day. A wheel rests on whole rows after a drag or a fling. A screen reader adjusts each wheel by name. `rememberLiquidTimePickerState(hour, minute, None)` takes the clock of the app's language with the `localization-formatting` feature. `Some(true)` asks for 24 hours.
 
 ```rust preview=time_picker
 use cranpose::liquid::prelude::*;
@@ -4282,8 +4193,7 @@ LiquidMenuIconButton(
 
 ## Wear components
 
-Wear provides opinionated controls for round watch screens and Wear OS-style layouts.
-The component library handles curved lists, scale and watch control geometry.
+Wear provides controls for round watch screens and Wear OS layouts. Its lists scale and fade their rows near the round screen's edge. Its scroll indicator curves along that edge.
 
 ### Wear composables
 
@@ -4472,7 +4382,7 @@ path = "src/bin/bindgen.rs"
 required-features = ["bindings"]
 ```
 
-`cdylib` supplies the Android `.so`; `staticlib` supplies the iOS `.a`.
+`cdylib` supplies the Android `.so`. `staticlib` supplies the iOS `.a`.
 The `bindings` feature enables the code generator for host builds.
 Replace `counter-ui/src/lib.rs` with a session factory:
 
@@ -4652,18 +4562,16 @@ See Android's [View-in-Compose lifecycle](https://developer.android.com/develop/
 ### Choose the host boundary
 
 Each language owns its composition. Exchange data and events across the boundary.
-For example, Rust sends `open-details`; Kotlin changes the navigation destination.
+For example, Rust sends `open-details`. Kotlin then changes the navigation destination.
 
-`CranposeView` passes every finger to the embedded composition, so pinch and other
-multi-touch gestures work there. Use native host controls for text input and
+`CranposeView` passes every finger to the embedded composition. Pinch and the other multi-touch gestures work there. Use native host controls for text input and
 accessibility in embedded components.
 Standalone Cranpose apps use the platform input and accessibility bridges.
 
 ### Host the component in UIKit
 
 Build on macOS with Xcode and the iOS SDK. Use an Apple device or iOS Simulator
-for tests. A GitHub macOS runner can build from a Windows or Linux workstation;
-**Get started** contains the workflow.
+for tests. A developer on Windows or Linux can build on a GitHub macOS runner. **Get started** contains the workflow.
 
 Generate Swift bindings for the same library. Follow the [iOS native demo](../apps/native-demo/ios/App.swift).
 Add these imports at file scope. Create the view inside your view controller:
@@ -4913,8 +4821,7 @@ component's bounds. Apply rotation, rounded clips and graphics effects inside
 the platform control.
 
 Replace `VolumeScreen` with this layout. The slider fills the padded column and
-occupies a 56-point row. The Rust state survives the dialog; the native child
-leaves composition while the dialog covers the screen:
+occupies a 56-point row. The Rust state survives the dialog. The native child leaves the composition while the dialog covers the screen:
 
 ```rust
 use cranpose::widgets::{Dialog, DialogSpec, PopupHost};
@@ -4971,23 +4878,17 @@ fn VolumeScreen() {
 ```
 
 Native children draw above Cranpose content. The conditional slot keeps the native
-slider clear of the Cranpose dialog. Dismiss the dialog through the scrim or back
-action; the factory creates a slider with the saved Rust value.
+slider clear of the Cranpose dialog. Dismiss the dialog through the scrim or the back action. The factory then creates a slider with the saved Rust value.
 
 ## Game engines
 
 **Show a game engine's scene in your layout, or draw your interface over a game.**
 
-Cranpose and the engine render with one GPU device, so frames pass between them
-as textures and no pixels go through the CPU. The
-[cranpose-engines](https://github.com/samoylenkodmitry/cranpose-engines)
-repository has the Bevy and Godot crates, examples you can run, and templates
-to start a project from.
+Cranpose and the engine render with one GPU device. Frames pass between them as textures. No pixels go through the CPU. The [cranpose-engines](https://github.com/samoylenkodmitry/cranpose-engines) repository has the Bevy and Godot crates. It also has examples to run and templates for a new project.
 
 ### Show a Bevy scene in a Cranpose app
 
-Ask the window's device for Bevy's features, start Bevy with your scene, and
-show it like any other composable:
+Ask the window's device for Bevy's features. Start Bevy with your scene. Show it like any other composable:
 
 ```rust
 use cranpose::{prelude::*, *};
@@ -5009,14 +4910,12 @@ fn Root() {
 ```
 
 `scene::build(app, target)` adds your systems to Bevy's app and gives its
-camera the `target` Cranpose shows. Bevy runs on a thread of its own, so the
-interface keeps its frame rate when Bevy's frames take longer; in a browser it
-runs inside Cranpose's frame. `bevy.send(|world| ...)` changes Bevy's world
+camera the `target` Cranpose shows. Bevy runs on a thread of its own. The interface keeps its frame rate when Bevy's frames take longer. In a browser, Bevy runs inside Cranpose's frame. `bevy.send(|world| ...)` changes Bevy's world
 from the interface.
 
 ### Draw a HUD over a Bevy game
 
-Add the plugin, and mark the camera the HUD draws over:
+Add the plugin. Mark the camera that the HUD draws over:
 
 ```rust
 use bevy::prelude::*;
@@ -5033,8 +4932,7 @@ fn main() -> AppExit {
 }
 ```
 
-The closure gets Bevy's world once, to share state with the game's systems,
-and returns the HUD's root. `HudInput` tells the game whether the HUD took the
+The closure gets Bevy's world once to share state with the game's systems. It returns the HUD's root. `HudInput` tells the game whether the HUD took the
 pointer or the keys.
 
 ### Draw a HUD over a Godot game
@@ -5055,8 +4953,7 @@ These are the APIs the engine crates build on:
 - `ExternalTexture` shows a texture your renderer drew on that device through
   `ImageBitmap`. Call `frame(number)` with a new number for each new content.
 - `ExternalFrames` takes frames from a renderer on another thread.
-  `writer.begin()` gives a texture to draw into, and `writer.publish(number)`
-  hands it over once the work is submitted. `next_frame()` gives the
+  `writer.begin()` gives a texture to draw into. `writer.publish(number)` hands it over once the work is submitted. `next_frame()` gives the
   composition the newest frame. Neither side waits for the other.
 - `GuestView` draws a composition into a texture on someone else's device,
   for a HUD over your renderer's frame.
@@ -5064,5 +4961,4 @@ These are the APIs the engine crates build on:
 A guest view also builds for `wasm32-unknown-emscripten`, the target of an
 engine's web export such as Godot's. There Cranpose uses no wasm-bindgen and
 draws with wgpu's GL backend on the WebGL2 context the engine made current.
-The target needs a nightly toolchain with `rust-src`; `just check-emscripten`
-type-checks it and `just test-emscripten` runs its own paths in Node.
+The target needs a nightly toolchain with `rust-src`. `just check-emscripten` type-checks it. `just test-emscripten` runs its own paths in Node.
