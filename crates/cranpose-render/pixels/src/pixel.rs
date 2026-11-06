@@ -228,16 +228,28 @@ impl<P: Pixel565> Pixel for P {
         blend_paint_565(self, paint, coverage, diagnostics);
     }
 
-    // A 16-bit pixel blends its bytes in whole numbers, which cost about
-    // what a look-up costs, so it keeps no table.
+    // Out of line, as the bytes' run is.
+    #[inline(never)]
     fn blend_run(
         pixels: &mut [Self],
         paint: Self::Paint,
-        _table: &mut Option<BlendTable>,
+        table: &mut Option<BlendTable>,
         diagnostics: &RenderDiagnostics,
     ) {
+        let Paint565::Over {
+            bytes: [red, green, blue],
+            alpha,
+        } = paint
+        else {
+            for pixel in pixels {
+                blend_paint_565(pixel, paint, 1.0, diagnostics);
+            }
+            return;
+        };
+        let src = [red, green, blue, unit_byte(alpha)];
+        let table = table.get_or_insert_with(BlendTable::default);
         for pixel in pixels {
-            blend_paint_565(pixel, paint, 1.0, diagnostics);
+            table.blend_565(pixel, src);
         }
     }
 
@@ -286,18 +298,46 @@ impl BlendTable {
         diagnostics: &RenderDiagnostics,
     ) {
         let under = *pixel;
-        let known = (0..4).all(|channel| {
-            let byte = usize::from(under[channel]);
-            self.known[channel][byte / 64] & (1 << (byte % 64)) != 0
-        });
-        if known {
-            *pixel = [0, 1, 2, 3].map(|channel| self.bytes[channel][usize::from(under[channel])]);
+        if let Some(over) = self.look_up::<4>(under) {
+            *pixel = over;
             return;
         }
         blend_pixel(pixel, color, blend_mode, diagnostics);
-        for channel in 0..4 {
+        self.keep::<4>(under, *pixel);
+    }
+
+    // `src` over `pixel`, a 16-bit pixel, as `blend_bytes` puts it: over
+    // the bytes its channels stand for, of which it keeps the high bits.
+    fn blend_565<P: Rgb565 + GlyphPixel>(&mut self, pixel: &mut P, src: [u8; 4]) {
+        let under = pixel.to_rgba();
+        if let Some(over) = self.look_up::<3>(under) {
+            *pixel = P::from_rgb(over);
+            return;
+        }
+        pixel.blend_bytes(src);
+        self.keep::<3>(under, pixel.to_rgba());
+    }
+
+    // What the table holds over `under` in its first `CHANNELS` channels,
+    // the rest left as `under` has them; `None` while it misses any.
+    fn look_up<const CHANNELS: usize>(&self, under: [u8; 4]) -> Option<[u8; 4]> {
+        let mut over = under;
+        for channel in 0..CHANNELS {
             let byte = usize::from(under[channel]);
-            self.bytes[channel][byte] = pixel[channel];
+            if self.known[channel][byte / 64] & (1 << (byte % 64)) == 0 {
+                return None;
+            }
+            over[channel] = self.bytes[channel][byte];
+        }
+        Some(over)
+    }
+
+    // Keeps that the paint left `over` over `under` in the first
+    // `CHANNELS` channels.
+    fn keep<const CHANNELS: usize>(&mut self, under: [u8; 4], over: [u8; 4]) {
+        for channel in 0..CHANNELS {
+            let byte = usize::from(under[channel]);
+            self.bytes[channel][byte] = over[channel];
             self.known[channel][byte / 64] |= 1 << (byte % 64);
         }
     }
