@@ -24,6 +24,7 @@ mod lazy_content_padding_test;
 mod lazy_grid_test;
 mod lazy_staggered_grid_test;
 mod lazy_sticky_header_test;
+mod linked_text_test;
 mod long_press_test;
 mod modifier_offset_test;
 mod modifier_reuse_test;

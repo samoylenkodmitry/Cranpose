@@ -72,6 +72,7 @@ runners! {
     robot_desktop_open_urls,
     robot_developer_inspector,
     robot_documentation_home,
+    robot_documentation_links,
     robot_double_click,
     robot_drag_selection,
     robot_draw_only_transition_work,

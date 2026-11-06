@@ -72,6 +72,12 @@ pub(crate) fn resolve_url(base: &str, target: &str) -> String {
     if target.is_empty() || has_scheme(target) {
         return target.to_string();
     }
+    // A fragment alone names a place in the document itself.
+    if target.starts_with('#') {
+        let base = base.trim();
+        let document = base.split_once('#').map_or(base, |(document, _)| document);
+        return format!("{document}{target}");
+    }
     let Some((scheme, host, path)) = split_base(base.trim()) else {
         return target.to_string();
     };
