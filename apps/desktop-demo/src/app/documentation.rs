@@ -1,12 +1,13 @@
-use std::sync::OnceLock;
+use std::{rc::Rc, sync::OnceLock};
 
 use cranpose::liquid::{LiquidTheme, LiquidThemeSpec, SchemeMode};
 use cranpose_animation::{animate_float_as_state_with_initial, tween, Easing};
 use cranpose_core::{
-    mutableStateOf, remember, rememberMutableStateOf, with_key, MutableState, SideEffect,
+    mutableStateOf, remember, rememberMutableStateOf, with_key, CompositionLocalProvider,
+    MutableState, SideEffect,
 };
 use cranpose_foundation::lazy::{LazyListScope, LazyListState};
-use cranpose_services::local_uri_handler;
+use cranpose_services::{local_uri_handler, UriHandler, UriHandlerError, UriHandlerRef};
 use cranpose_ui::{
     composable, rememberScrollableState, text::FontWeight, Alignment, Axis, Box, BoxSpec, Button,
     ButtonSpec, Column, ColumnSpec, LazyColumn, LazyColumnSpec, LinearArrangement, Modifier,
@@ -477,8 +478,46 @@ fn ScrollingHeader(
     );
 }
 
+// Opens the links the guide holds: a link to a heading of the guide moves
+// the reader to it, and any other link opens outside the app.
+struct GuideLinks {
+    state: DocumentationState,
+    outside: UriHandlerRef,
+}
+
+impl UriHandler for GuideLinks {
+    fn open_uri(&self, uri: &str) -> Result<(), UriHandlerError> {
+        let heading = uri
+            .strip_prefix(GUIDE_URL)
+            .and_then(|rest| rest.strip_prefix('#'))
+            .and_then(|anchor| DOCUMENT.with(|document| document.heading(anchor)));
+        let Some(item) = heading else {
+            return self.outside.open_uri(uri);
+        };
+        let position = DOCUMENT.with(|document| document.position(item, 0.0));
+        self.state.animate_to(position, false);
+        Ok(())
+    }
+}
+
 #[composable]
 fn Reader(state: DocumentationState, width: f32, height: f32, compact: bool, header_height: f32) {
+    let outside = local_uri_handler().current();
+    let links: UriHandlerRef =
+        remember(move || Rc::new(GuideLinks { state, outside }) as UriHandlerRef).with(Rc::clone);
+    CompositionLocalProvider([local_uri_handler().provides(links)], move || {
+        ReaderPage(state, width, height, compact, header_height);
+    });
+}
+
+#[composable]
+fn ReaderPage(
+    state: DocumentationState,
+    width: f32,
+    height: f32,
+    compact: bool,
+    header_height: f32,
+) {
     let reader_left = if compact {
         0.0
     } else {

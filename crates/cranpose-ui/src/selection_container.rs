@@ -108,16 +108,7 @@ impl Selectable {
 
     // The text laid out as the renderer draws it: as wide as its content.
     fn layout(&self) -> Rc<PreparedTextLayout> {
-        let width = self.geometry.content_size.get().width;
-        let frame = if width.is_finite() && width > 0.0 {
-            TextFrame {
-                min_width: width,
-                max_width: width,
-                options: self.options,
-            }
-        } else {
-            TextFrame::up_to(None, self.options)
-        };
+        let frame = TextFrame::drawn(self.geometry.content_size.get().width, self.options);
         let text = SharedText {
             text: &self.text,
             style: &self.style,

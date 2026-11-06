@@ -148,7 +148,7 @@ fn scale_down_scales_the_shadow_with_the_font() {
     let mut style = sized(20.0);
     style.span_style.shadow = Some(crate::text::Shadow {
         color: crate::modifier::Color(0.0, 0.0, 0.0, 1.0),
-        offset: crate::modifier::Point::new(8.0, 4.0),
+        offset: Point::new(8.0, 4.0),
         blur_radius: 6.0,
     });
 

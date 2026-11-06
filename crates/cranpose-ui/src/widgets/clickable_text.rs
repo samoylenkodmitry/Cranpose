@@ -5,14 +5,15 @@
 
 #![expect(non_snake_case, reason = "names follow Compose's casing")]
 
-use std::rc::Rc;
+use std::{cell::Cell, rc::Rc};
 
-use cranpose_core::NodeId;
+use cranpose_core::{NodeId, remember};
+use cranpose_ui_graphics::Size;
 
 use crate::{
     modifier::Modifier,
-    text::{AnnotatedString, TextOverflow, TextStyle},
-    widgets::BasicText,
+    text::{AnnotatedString, TextLayoutOptions, TextOverflow, TextStyle, measure},
+    widgets::BasicTextWithOptions,
 };
 
 #[doc(hidden)]
@@ -62,27 +63,28 @@ where
     let text = text.into_shared();
     let text_for_click = Rc::clone(&text);
     let style_for_click = style.clone();
-    let on_click: Rc<dyn Fn(usize)> = Rc::new(on_click);
+    let options = TextLayoutOptions {
+        overflow: TextOverflow::Clip,
+        soft_wrap: true,
+        max_lines: usize::MAX,
+        min_lines: 1,
+    };
+    // The click finds its offset in the text wrapped as the node draws it,
+    // at the width of the node's content.
+    let size = remember(|| Rc::new(Cell::new(Size::default()))).with(Rc::clone);
+    let clickable_modifier = modifier
+        .report_size(Rc::clone(&size))
+        .clickable(move |point| {
+            on_click(measure::offset_in_drawn_text(
+                &text_for_click,
+                &style_for_click,
+                options,
+                size.get().width,
+                point,
+            ));
+        });
 
-    let clickable_modifier = modifier.clickable(move |point| {
-        let offset = crate::text::get_offset_for_position(
-            &text_for_click,
-            &style_for_click,
-            point.x,
-            point.y,
-        );
-        on_click(offset);
-    });
-
-    BasicText(
-        text,
-        clickable_modifier,
-        style,
-        TextOverflow::Clip,
-        true,
-        usize::MAX,
-        1,
-    )
+    BasicTextWithOptions(text, clickable_modifier, style, options)
 }
 
 #[cfg(test)]

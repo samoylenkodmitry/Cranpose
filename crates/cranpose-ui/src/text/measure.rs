@@ -13,7 +13,7 @@ use cranpose_text::{
     CaretDirection, FontExtent, FontFamily, FontFamilyResolver, FontRequest, FontStyle, FontWeight,
     LayoutInput, ParagraphIntrinsics, TextLayout, TextLayouter, paragraph_line_box,
 };
-use cranpose_ui_graphics::{MemoryHeadroom, Size, TextLayoutHandle};
+use cranpose_ui_graphics::{MemoryHeadroom, Point, Size, TextLayoutHandle};
 
 use super::{
     AnnotatedString, LineBox, RenderString, SpanStyle, TextAlign, TextDrawStyle, TextUnit,
@@ -362,6 +362,20 @@ impl TextFrame {
                 .filter(|width| width.is_finite() && *width > 0.0)
                 .unwrap_or(f32::INFINITY),
             ..Self::unbounded(options)
+        }
+    }
+
+    // Exactly `width`, the width of a node's content, which the renderer
+    // draws its text at. A node not laid out yet has no width, and no limit.
+    pub(crate) fn drawn(width: f32, options: TextLayoutOptions) -> Self {
+        if width.is_finite() && width > 0.0 {
+            Self {
+                min_width: width,
+                max_width: width,
+                options,
+            }
+        } else {
+            Self::up_to(None, options)
         }
     }
 }
@@ -830,6 +844,20 @@ pub fn get_offset_for_position(text: &AnnotatedString, style: &TextStyle, x: f32
     )
     .layout
     .offset_for_position(x, y)
+}
+
+// The byte offset nearest `point` of `text` as a node's content `width`
+// wide draws it, in the content's coordinates.
+pub(crate) fn offset_in_drawn_text(
+    text: &AnnotatedString,
+    style: &TextStyle,
+    options: TextLayoutOptions,
+    width: f32,
+    point: Point,
+) -> usize {
+    prepare_borrowed(text, style, TextFrame::drawn(width, options), host_units())
+        .layout
+        .offset_for_position(point.x, point.y)
 }
 
 /// The byte offset of the caret nearest to the point (`x`, `y`) of `text`
