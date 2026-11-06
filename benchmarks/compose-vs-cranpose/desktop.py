@@ -682,16 +682,7 @@ def measure(name, args, work, server, stage, label, earlier, profile, program=No
         mine = tree(app.pid, after, ended - app.started + 1)
         held = memory(mine, stage)
         shutil.copy(out, work / out.name)
-        times = [time for time in frames['times'] if launched <= time < launched + run_s]
-        # The app's first frame. A web view's window shows the blank document
-        # before the page draws: a page counts from the first picture at or
-        # after its first frame's line reached the server.
-        drawn = server.heard_at('PERF first_frame', since)
-        first = 0 if drawn is None else bisect.bisect_left(times, drawn)
-        if len(times) - first < 2:
-            drew = 'no first frame heard' if drawn is None else f'first frame heard at {drawn - launched:.2f} s'
-            raise RuntimeError(f'{name} presented fewer than two frames from its first in its run (window seen at '
-                               f'{frames["capture_start"] - launched:.2f} s, {drew}, {len(times)} pictures)')
+        times, counted = frame_stats(name, frames, launched, run_s, server.heard_at('PERF first_frame', since))
         fps = len(times) / run_s
         if disagrees(fps, earlier):
             shown = stage / f'{label}.png'
@@ -710,35 +701,56 @@ def measure(name, args, work, server, stage, label, earlier, profile, program=No
     # are what the window server renders.
     cores = sum(value for pid, value in spent.items() if pid in mine) / wall + server_cores
     others = sum(value for pid, value in spent.items() if pid not in mine and pid not in server) / wall
-    intervals = sorted((later - earlier) * 1000 for earlier, later in zip(times[first:], times[first + 1:]))
-    link = frames['link']
-    captured = (frames['stopped'] if 'stopped' in frames else launched + args.run) - frames['capture_start']
-    return {'fps': round(fps, 1), 'frames': len(times), 'run_s': round(run_s, 3), 'stopped': 'stopped' in frames,
-            'first_frame_s': round(times[first] - launched, 3),
-            # The times a second the window server composited the display
-            # while the window was counted, which `fps` counts only the ones
-            # that changed the window's picture of: more of them say something
-            # else moved on the display.
-            'composited_fps': round(frames['composited'] / max(captured, 1e-3), 1),
-            # The display the window was on while it was counted: its display
-            # link's ticks a second, the longest gap between two, and why
-            # that is not the state a run is calibrated for.
-            'display_id': frames['display']['id'], 'display_hz': round(link['hz'], 1),
-            'display_gap_ms': round(link['max_gap_ms']),
-            'display_problems': display_problems({'displays': [{**frames['display'], 'main': True}], 'link': link}),
-            # Where FrameCount's capture began: it waits for the window, so a
-            # second before this one saw no window to count.
-            'capture_start_s': round(frames['capture_start'] - launched, 3),
-            # When each frame was presented, in milliseconds since the launch.
-            'frame_ms': [round((time - launched) * 1000, 1) for time in times],
-            'fps_by_second': per_second(times, launched, run_s),
-            'interval_p50_ms': round(percentile(intervals, 0.50), 2),
-            'interval_p99_ms': round(percentile(intervals, 0.99), 2),
-            'cpu_cores': round(cores, 2), 'server_cores': round(server_cores, 2), 'other_cores': round(others, 2),
-            'cpu_ms_per_frame': round(cores * 1000 / fps, 2),
+    return {**counted, 'cpu_cores': round(cores, 2), 'server_cores': round(server_cores, 2),
+            'other_cores': round(others, 2), 'cpu_ms_per_frame': round(cores * 1000 / fps, 2),
             # The run at each interval of `Usage`.
             'samples': run_samples(taken, clock_samples, launched, times),
             **held, **clocked}
+
+
+def frame_stats(name, frames, launched, run_s, drawn):
+    """The pictures FrameCount's `frames` counted in the run of `name`, `run_s`
+    seconds from `launched`, and what they say of it. Every picture of the run
+    counts toward its rate and its seconds. The app's first frame is the first
+    picture that shows more than the window's background (`first_content`). A
+    web view's window also shows the page's own parts before the page draws:
+    a page whose first frame's line reached the server at `drawn` counts from
+    the first picture at or after it as well. Frame intervals count from the
+    first frame."""
+    times = [time for time in frames['times'] if launched <= time < launched + run_s]
+    content = frames.get('first_content')
+    first = len(times) if content is None else bisect.bisect_left(times, max(content, drawn or 0))
+    if len(times) - first < 2:
+        shown = 'no content shown' if content is None else f'content shown at {content - launched:.2f} s'
+        drew = 'no first frame heard' if drawn is None else f'first frame heard at {drawn - launched:.2f} s'
+        raise RuntimeError(f'{name} presented fewer than two frames from its first in its run (window seen at '
+                           f'{frames["capture_start"] - launched:.2f} s, {shown}, {drew}, {len(times)} pictures)')
+    intervals = sorted((later - earlier) * 1000 for earlier, later in zip(times[first:], times[first + 1:]))
+    link = frames['link']
+    captured = launched + run_s - frames['capture_start']
+    return times, {
+        'fps': round(len(times) / run_s, 1), 'frames': len(times), 'run_s': round(run_s, 3),
+        'stopped': 'stopped' in frames,
+        'first_frame_s': round(times[first] - launched, 3),
+        # The times a second the window server composited the display
+        # while the window was counted, which `fps` counts only the ones
+        # that changed the window's picture of: more of them say something
+        # else moved on the display.
+        'composited_fps': round(frames['composited'] / max(captured, 1e-3), 1),
+        # The display the window was on while it was counted: its display
+        # link's ticks a second, the longest gap between two, and why
+        # that is not the state a run is calibrated for.
+        'display_id': frames['display']['id'], 'display_hz': round(link['hz'], 1),
+        'display_gap_ms': round(link['max_gap_ms']),
+        'display_problems': display_problems({'displays': [{**frames['display'], 'main': True}], 'link': link}),
+        # Where FrameCount's capture began: it waits for the window, so a
+        # second before this one saw no window to count.
+        'capture_start_s': round(frames['capture_start'] - launched, 3),
+        # When each frame was presented, in milliseconds since the launch.
+        'frame_ms': [round((time - launched) * 1000, 1) for time in times],
+        'fps_by_second': per_second(times, launched, run_s),
+        'interval_p50_ms': round(percentile(intervals, 0.50), 2),
+        'interval_p99_ms': round(percentile(intervals, 0.99), 2)}
 
 
 def percentile(ordered, share):

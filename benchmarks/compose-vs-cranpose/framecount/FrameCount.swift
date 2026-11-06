@@ -138,6 +138,37 @@ func pixelHash(_ buffer: CVPixelBuffer) -> UInt64 {
     return hash
 }
 
+/// Whether a frame shows more than one color below the window's title bar.
+/// A window shows its background alone, white, black or the page's color,
+/// until the app's first frame reaches it: Flutter's window shows two black
+/// pictures first, Slint's one empty and Dioxus's one of its page's
+/// background (macm3, 2026-11-06). The title bar's 28 points take the top 4
+/// rows at the capture's 1/8 scale; two more rows and two pixels in from the
+/// other edges leave out its shadow and the window's rounded corners. What is
+/// left of them differs from the background by up to 2 levels; a channel
+/// counts as different past 8.
+func showsContent(_ buffer: CVPixelBuffer) -> Bool {
+    let top = 6, margin = 2, tolerance: Int16 = 8
+    CVPixelBufferLockBaseAddress(buffer, .readOnly)
+    defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
+    let width = CVPixelBufferGetWidth(buffer), height = CVPixelBufferGetHeight(buffer)
+    guard let base = CVPixelBufferGetBaseAddress(buffer), width > 2 * margin, height > top + margin else {
+        return false
+    }
+    let rowBytes = CVPixelBufferGetBytesPerRow(buffer)
+    let pixels = base.assumingMemoryBound(to: UInt8.self)
+    let background = pixels + top * rowBytes + margin * 4
+    for row in top..<(height - margin) {
+        for column in margin..<(width - margin) {
+            let pixel = pixels + row * rowBytes + column * 4
+            for channel in 0..<4 where abs(Int16(pixel[channel]) - Int16(background[channel])) > tolerance {
+                return true
+            }
+        }
+    }
+    return false
+}
+
 /// Collects the presentation times of the frames the window server composited
 /// and, when `hashing`, those among them that changed the window's picture.
 ///
@@ -150,13 +181,15 @@ func pixelHash(_ buffer: CVPixelBuffer) -> UInt64 {
 /// and Slint counted 54 to 56 frames a second beside an animating window and
 /// 15 to 25 alone, while a hook on GPUI's Metal layer counted 12 drawables a
 /// second in both). A frame is the app's only when its pixels differ from the
-/// last one's.
+/// last one's. When hashing it also keeps the time of the first frame that
+/// `showsContent`.
 final class Frames: NSObject, SCStreamOutput {
     private let lock = NSLock()
     private let hashing: Bool
     private var times: [Double] = []
     private var changed: [Double] = []
     private var last: UInt64?
+    private var content: Double?
 
     init(hashing: Bool) {
         self.hashing = hashing
@@ -170,14 +203,25 @@ final class Frames: NSObject, SCStreamOutput {
               SCFrameStatus(rawValue: raw) == .complete
         else { return }
         let time = CMSampleBufferGetPresentationTimeStamp(sample).seconds
-        let hash = hashing ? CMSampleBufferGetImageBuffer(sample).map(pixelHash) : nil
+        let buffer = hashing ? CMSampleBufferGetImageBuffer(sample) : nil
+        let hash = buffer.map(pixelHash)
         lock.lock()
         defer { lock.unlock() }
         times.append(time)
-        if let hash, hash != last {
+        if let buffer, let hash, hash != last {
             changed.append(time)
+            if content == nil, showsContent(buffer) {
+                content = time
+            }
         }
         last = hash
+    }
+
+    /// When the window first showed more than its background, once it has.
+    func firstContent() -> Double? {
+        lock.lock()
+        defer { lock.unlock() }
+        return content
     }
 
     /// The frames presented from `start` until `end`, counted from the newest.
@@ -486,6 +530,7 @@ func measure(_ options: Options) async throws -> [String: Any] {
         "link": linkRate(linkTicks, over: captured).merging(["nominal_hz": link?.nominalHz ?? 0]) { $1 },
     ]
     if let stopped { result["stopped"] = stopped }
+    if let content = frames.firstContent() { result["first_content"] = content }
     return result
 }
 
