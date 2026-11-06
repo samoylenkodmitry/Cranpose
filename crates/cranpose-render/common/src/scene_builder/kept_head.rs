@@ -26,11 +26,12 @@ enum KeptNode {
     Inline(Box<InlineNode>),
 }
 
-/// The node a [`KeptHead`] keeps, as its parent's layer holds it.
-#[derive(Clone, Copy)]
+/// The node a [`KeptHead`] keeps, placed where it now lies, as its parent's
+/// layer holds it.
 pub enum KeptNodeRef<'a> {
-    /// The node's own layer, or the wrapper of its outer draws.
-    Layer(&'a LayerNode),
+    /// The node's own layer, or the wrapper of its outer draws, and what the
+    /// node's children lower with.
+    Layer(&'a LayerNode, LowerContext),
     /// The node drawn in its parent's layer.
     Inline(&'a InlineNode),
 }
@@ -50,28 +51,20 @@ impl KeptHead {
         })
     }
 
-    /// The node as its parent's layer holds it.
-    pub fn node(&self) -> KeptNodeRef<'_> {
-        match &self.node {
-            KeptNode::Layer(layer) => KeptNodeRef::Layer(layer),
-            KeptNode::Inline(inline) => KeptNodeRef::Inline(inline),
-        }
-    }
-
     /// Places the head of `node_id`, whose own state did not change since
     /// it lowered, where it now lies under `context`: at `position` in its
     /// parent's content when the parent placed it anew, else where it lay.
     /// Publishes where its layer lies in its window when the node reads it.
-    /// Returns what the node's children lower with. `None` when `context`
-    /// passes down other state than the head lowered with, or the node is
-    /// gone.
+    /// Returns the node, with what its children lower with for a layer.
+    /// `None` when `context` passes down other state than the head lowered
+    /// with, or the node is gone.
     pub fn follow(
         &mut self,
         applier: &MemoryApplier,
         node_id: NodeId,
         context: &LowerContext,
         position: Option<Point>,
-    ) -> Option<LowerContext> {
+    ) -> Option<KeptNodeRef<'_>> {
         if Inherited::of(context) != self.lowered_with {
             return None;
         }
@@ -82,7 +75,7 @@ impl KeptHead {
                 if let Some(position) = position {
                     inline.origin = Point::new(position.x + offset.x, position.y + offset.y);
                 }
-                return Some(*context);
+                return Some(KeptNodeRef::Inline(inline));
             }
         };
         if let Some(position) = position {
@@ -110,7 +103,8 @@ impl KeptHead {
                 );
             })?;
         }
-        Some(outer.beneath_layer(own))
+        let inner = outer.beneath_layer(own);
+        Some(KeptNodeRef::Layer(layer, inner))
     }
 
     /// Lets the node go, as [`recycle_lowered`] lets a lowered node go.

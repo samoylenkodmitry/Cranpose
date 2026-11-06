@@ -603,17 +603,13 @@ impl<'a> LayoutWalk<'a> {
         let Some(mut head) = scene.take_head(at) else {
             return false;
         };
-        let Some(inner) = head.follow(self.applier, child, lower_context, position) else {
-            head.recycle();
-            return false;
-        };
         let index = scene.next_record();
-        match head.node() {
+        match head.follow(self.applier, child, lower_context, position) {
             // A node drawn in its parent's layer has no children.
-            KeptNodeRef::Inline(inline) => {
+            Some(KeptNodeRef::Inline(inline)) => {
                 populate_draws_from_graph(Subtree::Inline(inline), scene, context, &mut None, None);
             }
-            KeptNodeRef::Layer(layer) => {
+            Some(KeptNodeRef::Layer(layer, inner)) => {
                 let old = OldChildren::of(&scene.subtrees, at, child);
                 let mut slot = ChildSlot {
                     walk: self,
@@ -624,6 +620,10 @@ impl<'a> LayoutWalk<'a> {
                 };
                 let slot = old.holds_children(&scene.subtrees).then_some(&mut slot);
                 populate_draws_from_graph(Subtree::Layer(layer), scene, context, &mut None, slot);
+            }
+            None => {
+                head.recycle();
+                return false;
             }
         }
         scene.keep_head(index, head);
