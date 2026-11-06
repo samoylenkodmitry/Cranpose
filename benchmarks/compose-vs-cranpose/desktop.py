@@ -13,7 +13,9 @@ turn, round after round, as `frameworks.py` measures phones, and the run is a
 starts twice: first after what the apps keep between launches is removed, as
 an install leaves them (`APP_STATE`; in the browser, a new Chrome profile),
 from an install of its program that macOS never ran (`fresh_install`), then
-a second time. A leg that fails, or in
+a second time. In the browser, Chrome opens once on no app's page before the
+first round (`warm_chrome`), so no app's leg is Chrome's first launch of the
+run. A leg that fails, or in
 which other processes spent more than `--max-others` cores, is measured again,
 up to three times; an app no attempt measured leaves its leg out. A leg
 whose frame rate is more than 1.5 times off the app's earlier legs is measured
@@ -723,6 +725,20 @@ class App:
             time.sleep(0.1)
 
 
+CHROME_WARM_UP_S = 5.0
+
+
+def warm_chrome(args, server, stage):
+    """Opens Chrome for `CHROME_WARM_UP_S` on a throwaway profile and on no
+    app's page. On macm3 a run's first Chrome launch spent up to a second of
+    its GPU process on Chrome's own drawing before its page's first paint."""
+    chrome = App('chrome-warm-up', args, 0, stage, server, stage)
+    try:
+        time.sleep(CHROME_WARM_UP_S)
+    finally:
+        chrome.end()
+
+
 def disagrees(fps, earlier):
     """Whether `fps` is more than `DISAGREEMENT` times off the median of the
     app's earlier legs' rates."""
@@ -1009,6 +1025,8 @@ def run(args, apps, server, stage):
     built_file = HERE / 'desktop-versions.json'
     built = json.loads(built_file.read_text()) if built_file.exists() else {}
     legs, failures = [], []
+    if args.browser:
+        warm_chrome(args, server, stage)
     for round_index in range(args.rounds):
         idle = idle_others()
         print(f'round {round_index + 1}: the machine idles at {idle:.2f} cores', flush=True)

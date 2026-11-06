@@ -75,6 +75,10 @@ class DesktopRoundsTest(unittest.TestCase):
         measured = []
         self.cleared = []
         self.programs = []
+        self.warmed = []
+
+        def warm_chrome(args, server, stage):
+            self.warmed.append(len(measured))
 
         def install(name, stage, label):
             self.programs.append(f'install {label}')
@@ -105,6 +109,7 @@ class DesktopRoundsTest(unittest.TestCase):
         with patch.object(desktop, 'measure', measure), patch.object(desktop, 'clear_app_state', clear), \
                 patch.object(desktop, 'fresh_install', install), \
                 patch.object(desktop, 'wait_for_program_checks', wait_for_checks), \
+                patch.object(desktop, 'warm_chrome', warm_chrome), \
                 patch.object(desktop, 'idle_others', return_value=idle), \
                 patch.object(desktop.subprocess, 'run', return_value=SimpleNamespace(stdout='Apple M3 Pro')):
             report = desktop.run(args, [app], 'page', Path('stage'))
@@ -162,6 +167,13 @@ class DesktopRoundsTest(unittest.TestCase):
         self.assertEqual(report['scenarios'][0]['extras'], 'tier 16, 1280 x 820 browser window')
         self.assertEqual(report['subjects'][0]['label'], 'Web Chrome 154.0.8037.98')
         self.assertEqual(report['protocol']['starts'], ['first', 'second'])
+
+    def test_no_leg_of_a_browser_run_is_chromes_first_launch_of_the_run(self):
+        with patch.object(desktop.versions, 'chrome_version', return_value='154.0.8037.98'):
+            self.rounds([24.3, 30.0, 24.6, 30.5], rounds=2, browser=Path('dist'), app='web')
+        self.assertEqual(self.warmed, [0], 'Chrome opens once before the first leg, and only then')
+        self.rounds([24.3, 30.0])
+        self.assertEqual(self.warmed, [], 'a native run opens no Chrome of its own')
 
     def test_a_disturbed_leg_stays_in_the_run_marked_and_out_of_the_medians(self):
         measured, scenario = self.rounds([(10.0, 3.0), 24.3, 30.0])
