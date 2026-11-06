@@ -6,6 +6,7 @@ use super::{
     Pixel, Point, Rect, RenderDiagnostics, RowRuns, Target, color_to_rgba, opaque_bytes, paint_row,
     sample_brush_rgba, shape_sdf,
 };
+use crate::pixel::BlendTable;
 
 // A placed shape's rows to paint. Each kind of coverage paints them through
 // its own copy of the loop: the work a kind does once per shape, such as an
@@ -21,6 +22,63 @@ pub(super) struct ShapeRows<'a, 'p, P> {
     // opaque solid colour.
     pub(super) opaque: Option<P>,
     pub(super) diagnostics: &'a RenderDiagnostics,
+}
+
+// One row's colors of a fill by the cell of the dither pattern: the pixel
+// each opaque one leaves, and the paint of each to blend.
+struct DitheredRow<P: Pixel> {
+    colors: [[f32; 4]; 4],
+    cells: [Option<P>; 4],
+    paints: [P::Paint; 4],
+}
+
+impl<P: Pixel> DitheredRow<P> {
+    fn new(colors: [[f32; 4]; 4], blend_mode: BlendMode) -> Self {
+        Self {
+            colors,
+            cells: colors.map(|color| {
+                (blend_mode == BlendMode::SrcOver && color[3] >= 1.0)
+                    .then(|| P::opaque(opaque_bytes(color)))
+            }),
+            paints: colors.map(|color| P::paint(color, blend_mode)),
+        }
+    }
+
+    // Paints `pixels`, the run of a row from column `start`. `table`, given
+    // for a solid brush, keeps what its one paint left over each byte before.
+    fn paint(
+        &self,
+        pixels: &mut [P],
+        start: i32,
+        columns: &DitherAxis,
+        table: Option<&mut Option<BlendTable>>,
+        diagnostics: &RenderDiagnostics,
+    ) {
+        if let [Some(a), Some(b), Some(c), Some(d)] = self.cells
+            && let Some(first) = columns.stepping_cell(start, start + pixels.len() as i32)
+        {
+            let pattern = [a, b, c, d];
+            P::fill_pattern(pixels, [0, 1, 2, 3].map(|step| pattern[(first + step) & 3]));
+            return;
+        }
+        if let Some(table) = table
+            && self.cells[0].is_none()
+            && self.colors[0][3] > 0.0
+        {
+            P::blend_run(pixels, self.paints[0], table, diagnostics);
+            return;
+        }
+        for (px, dst) in (start..).zip(pixels) {
+            let cell = columns.cell(px);
+            match self.cells[cell] {
+                Some(pixel) => *dst = pixel,
+                None if self.colors[cell][3] > 0.0 => {
+                    dst.blend_paint(self.paints[cell], 1.0, diagnostics);
+                }
+                None => {}
+            }
+        }
+    }
 }
 
 impl<P: Pixel> ShapeRows<'_, '_, P> {
@@ -68,6 +126,10 @@ impl<P: Pixel> ShapeRows<'_, '_, P> {
         } = self;
         let brush = BrushSampler::new(&draw.brush, rect);
         let columns = DitherAxis::new(dither_origin.x);
+        // A solid brush paints every pixel alike: one table keeps what it
+        // left over each byte it met before.
+        let solid = brush.is_solid();
+        let mut table = None;
         for py in clip_bounds.min_y..clip_bounds.max_y {
             let center_y = py as f32 + 0.5;
             let row_runs = runs(center_y, clip_bounds.min_x, clip_bounds.max_x);
@@ -80,34 +142,19 @@ impl<P: Pixel> ShapeRows<'_, '_, P> {
                 paint_row(target, py, row_runs, color, draw.blend_mode, diagnostics);
                 continue;
             }
-            let colors = *DitheredLine::row(&brush, x, center_y, dither_origin).colors();
-            let cells = colors.map(|color| {
-                (draw.blend_mode == BlendMode::SrcOver && color[3] >= 1.0)
-                    .then(|| P::opaque(opaque_bytes(color)))
-            });
-            let opaque = match cells {
-                [Some(a), Some(b), Some(c), Some(d)] => Some([a, b, c, d]),
-                _ => None,
-            };
-            let paints = colors.map(|color| P::paint(color, draw.blend_mode));
+            let row = DitheredRow::<P>::new(
+                *DitheredLine::row(&brush, x, center_y, dither_origin).colors(),
+                draw.blend_mode,
+            );
             for (start, end) in row_runs {
-                let pixels = target.row(py, start, end);
-                if let Some(pattern) = opaque
-                    && let Some(first) = columns.stepping_cell(start, end)
-                {
-                    P::fill_pattern(pixels, [0, 1, 2, 3].map(|step| pattern[(first + step) & 3]));
-                    continue;
-                }
-                for (px, dst) in (start..).zip(pixels) {
-                    let cell = columns.cell(px);
-                    match cells[cell] {
-                        Some(pixel) => *dst = pixel,
-                        None if colors[cell][3] > 0.0 => {
-                            dst.blend_paint(paints[cell], 1.0, diagnostics);
-                        }
-                        None => {}
-                    }
-                }
+                let table = solid.then_some(&mut table);
+                row.paint(
+                    target.row(py, start, end),
+                    start,
+                    &columns,
+                    table,
+                    diagnostics,
+                );
             }
         }
     }
