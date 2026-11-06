@@ -829,6 +829,7 @@ path = "tests/integration.rs"
 name = "framebuffer_memory"
 path = "tests/framebuffer_memory/main.rs"
 required-features = ["framebuffer"]
+harness = false
 
 [[bench]]
 name = "framebuffer_frame"
