@@ -10,7 +10,9 @@
 //! small tiles that hold still under a clock that changes every frame. Run
 //! it under `/usr/bin/time -l`
 //! with `FRAMES=0` and `FRAMES=10000` and divide the difference in retired
-//! instructions by 10000.
+//! instructions by 10000. `PICTURE=1` prints a hash of every frame's sprites,
+//! texture uploads and releases, which two builds that show the same frames
+//! print the same.
 
 #![allow(
     clippy::print_stderr,
@@ -18,7 +20,10 @@
     reason = "a benchmark prints its numbers and why it could not run"
 )]
 
-use std::hint::black_box;
+use std::{
+    hash::{DefaultHasher, Hasher},
+    hint::black_box,
+};
 
 use cranpose::{prelude::*, watchos::Application};
 use cranpose_animation::{
@@ -104,10 +109,30 @@ fn main() {
         }
     };
     app.set_active(true);
+    let picture = env_count("PICTURE", 0) != 0;
+    let mut hasher = DefaultHasher::new();
     let mut sprites = 0;
     for frame in 1..=WARMUP_FRAMES + frames {
         app.tick(frame * FRAME_NANOS);
-        sprites = black_box(app.sprites().sprite_count());
+        let shown = app.sprites();
+        sprites = black_box(shown.sprite_count());
+        if picture {
+            for value in shown.sprites() {
+                hasher.write_u32(value.to_bits());
+            }
+            for upload in shown.uploads() {
+                hasher.write_u32(upload.id);
+                hasher.write_u32(upload.width);
+                hasher.write_u32(upload.height);
+                hasher.write(&upload.pixels);
+            }
+            for &release in shown.releases() {
+                hasher.write_u32(release);
+            }
+        }
     }
     println!("rows {rows} frames {frames} sprites {sprites}");
+    if picture {
+        println!("picture {:016x}", hasher.finish());
+    }
 }
