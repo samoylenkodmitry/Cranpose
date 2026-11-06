@@ -172,6 +172,39 @@ class DesktopRoundsTest(unittest.TestCase):
         self.assertEqual([leg['frame_ms'] for leg in scenario['legs']], [[400.0, 416.7, 433.3]] * 2)
 
 
+class FirstFrameTest(unittest.TestCase):
+    """`frame_stats` on what FrameCount reports of a window that shows its
+    background before the app's first frame, as Flutter's, Slint's and
+    Dioxus's do on macm3."""
+
+    LAUNCHED = 100.0
+    # Two pictures of the background 230 ms apart, then the app's frames
+    # 1/60 s apart.
+    SHOWN = [0.30, 0.53] + [0.76 + n / 60 for n in range(6)]
+
+    def frames(self, content):
+        shown = {} if content is None else {'first_content': self.LAUNCHED + content}
+        return {'times': [self.LAUNCHED + time for time in self.SHOWN], 'capture_start': self.LAUNCHED + 0.25,
+                'composited': len(self.SHOWN), 'link': {'hz': 60.0, 'max_gap_ms': 17.0, 'nominal_hz': 60.0},
+                'display': {'id': 1, 'active': True, 'refresh_hz': 60.0, 'scale': 2.0}, **shown}
+
+    def test_a_window_counts_from_its_first_picture_with_content(self):
+        _, leg = desktop.frame_stats('flutter', self.frames(0.76), self.LAUNCHED, 3.0, None)
+        self.assertEqual(leg['first_frame_s'], 0.76)
+        self.assertEqual(leg['interval_p99_ms'], 16.67)
+        # Every picture of the run counts toward its rate and its seconds.
+        self.assertEqual(leg['frames'], 8)
+        self.assertEqual(leg['fps_by_second'], [8, 0, 0])
+
+    def test_a_page_whose_own_parts_show_first_counts_from_its_first_frame_line(self):
+        _, leg = desktop.frame_stats('web', self.frames(0.53), self.LAUNCHED, 3.0, self.LAUNCHED + 0.77)
+        self.assertEqual(leg['first_frame_s'], 0.777)
+
+    def test_a_window_that_shows_nothing_but_its_background_fails_the_leg(self):
+        with self.assertRaisesRegex(RuntimeError, 'no content shown'):
+            desktop.frame_stats('slint', self.frames(None), self.LAUNCHED, 3.0, None)
+
+
 class AppStateTest(unittest.TestCase):
     def test_clearing_removes_the_apps_caches_and_the_profile_and_nothing_else(self):
         with tempfile.TemporaryDirectory() as folder:
