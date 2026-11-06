@@ -1,6 +1,6 @@
 // The guide's links in the Documentation tab. A link to another site opens
 // that site's address. A link to a heading of the guide opens the guide at
-// that heading. That link sits on the second line of its paragraph.
+// that heading. That link sits on a wrapped line of its paragraph.
 
 use std::{cell::RefCell, rc::Rc};
 
@@ -73,19 +73,24 @@ fn scroll_to(robot: &Robot, text: &str) -> (f32, f32, f32, f32) {
     robot_exit::fail(robot, &format!("the reader never showed {text:?}"));
 }
 
-// Clicks along the first line of the paragraph at `bounds` until the app
-// opens a link, and returns what it opened.
+// Clicks across the paragraph at `bounds`, line by line, until the app opens
+// a link, and returns what it opened. The sweep finds a link wherever the
+// paragraph wraps it.
 fn click_first_link(robot: &Robot, bounds: (f32, f32, f32, f32)) -> Option<String> {
-    let (x, y, width, _) = bounds;
+    let (x, y, width, height) = bounds;
     let before = opened(robot).len();
-    let mut along = 4.0;
-    while along < width {
-        robot.click(x + along, y + 8.0).ok();
-        robot.wait_for_idle().ok();
-        if let Some(link) = opened(robot).get(before) {
-            return Some(link.clone());
+    let mut down = 8.0;
+    while down < height {
+        let mut along = 4.0;
+        while along < width {
+            robot.click(x + along, y + down).ok();
+            robot.wait_for_idle().ok();
+            if let Some(link) = opened(robot).get(before) {
+                return Some(link.clone());
+            }
+            along += 8.0;
         }
-        along += 8.0;
+        down += 12.0;
     }
     None
 }
@@ -109,12 +114,8 @@ pub(crate) fn main() {
                 Some(link) => robot_exit::fail(&robot, &format!("rustup opened {link}")),
                 None => robot_exit::fail(&robot, "a click on rustup opened nothing"),
             }
-            // The second line of the paragraph starts with the link.
-            let (x, y, _, _) = scroll_to(&robot, "An iOS build needs macOS");
-            let before = opened(&robot).len();
-            robot.click(x + 100.0, y + 35.0).ok();
-            robot.wait_for_idle().ok();
-            match opened(&robot).get(before) {
+            let paragraph = scroll_to(&robot, "An iOS build needs macOS");
+            match click_first_link(&robot, paragraph) {
                 Some(link) if link == HEADING => println!("  build on GitHub opened {link}"),
                 other => robot_exit::fail(&robot, &format!("build on GitHub opened {other:?}")),
             }
