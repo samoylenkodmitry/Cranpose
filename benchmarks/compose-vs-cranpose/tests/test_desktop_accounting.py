@@ -246,6 +246,25 @@ class FreshInstallTest(unittest.TestCase):
             for path in installs:
                 self.assertEqual(subprocess.run([path]).returncode, 7)
 
+    def test_every_install_gives_the_libraries_beside_its_program_new_code_hashes(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            built = root / 'app'
+            built.mkdir()
+            (root / 'seven.c').write_text('int seven(void) { return 7; }\n')
+            (root / 'main.c').write_text('int seven(void);\nint main(void) { return seven(); }\n')
+            subprocess.run(['cc', '-dynamiclib', '-install_name', '@executable_path/libseven.dylib',
+                            '-o', str(built / 'libseven.dylib'), str(root / 'seven.c')], check=True)
+            subprocess.run(['cc', '-o', str(built / 'main'), str(root / 'main.c'), str(built / 'libseven.dylib')],
+                           check=True)
+            with patch.dict(desktop.APPS, {'stub': [built / 'main']}), \
+                    patch.object(desktop, 'INSTALLED_WITH_DIRECTORY', {'stub'}):
+                installs = [Path(desktop.fresh_install('stub', root, label)) for label in ('a', 'b')]
+            libraries = [built / 'libseven.dylib', *(path.parent / 'libseven.dylib' for path in installs)]
+            self.assertEqual(len({self.signature(path, 'CDHash') for path in libraries}), 3)
+            for path in installs:
+                self.assertEqual(subprocess.run([path]).returncode, 7)
+
 
 if __name__ == '__main__':
     unittest.main()

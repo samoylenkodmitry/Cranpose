@@ -169,11 +169,14 @@ def fresh_install(name, stage, label):
     macm3 a 12 MB program reached its `main` 270 to 280 ms after its launch
     when macOS never ran it, 97 to 100 ms after when it ran a copy of it
     before, 2 to 9 ms after when it ran that file before (24 MB: 380, 140 and
-    9 ms; 3 MB: 214, 80 and 8 ms). The install copies the app's bundle, or its
-    directory where its libraries lie beside it, and signs its program again
-    with a code hash macOS never ran. Without the new signature only the apps
-    rebuilt since an earlier run paid the check of a new program, Cranpose's
-    every night."""
+    9 ms; 3 MB: 214, 80 and 8 ms). It checks a library the same way: a
+    program loading a never-run 12 MB library reached its `main` 312 to 337
+    ms after its launch, 206 to 224 ms with a library it ran before. The
+    install copies the app's bundle, or its directory where its libraries lie
+    beside it, and signs its program and every library in it again with code
+    hashes macOS never ran. Without the new signatures only the apps rebuilt
+    since an earlier run paid the check of new code, Cranpose's every night,
+    and no app paid it for libraries it did not rebuild."""
     executable = Path(str(APPS[name][0]))
     text = str(executable)
     bundle = '.app/Contents/MacOS/' in text
@@ -187,9 +190,37 @@ def fresh_install(name, stage, label):
     target.parent.mkdir(parents=True, exist_ok=True)
     subprocess.run(['ditto', str(installed), str(target)], check=True)
     program = target / executable.relative_to(installed) if installed != executable else target
+    for code in code_files(target):
+        if code != program:
+            sign_anew(code)
     # A bundle's signature covers its program and its resources.
     sign_anew(target if bundle else program)
     return str(program)
+
+
+# Mach-O file types a signature covers: a program, a library and a bundle.
+CODE_FILE_TYPES = {2, 6, 8}
+
+
+def code_files(root):
+    """The programs and libraries at or under `root`, the deepest first: a
+    bundle's signature records the code inside it, so that code is signed
+    before it."""
+    paths = [root] if root.is_file() else [path for path in root.rglob('*') if path.is_file()]
+    return sorted((path for path in paths if not path.is_symlink() and is_code(path)),
+                  key=lambda path: len(path.parts), reverse=True)
+
+
+def is_code(path):
+    """Whether `path` is a 64-bit Mach-O program, library or bundle, or a
+    universal file of them."""
+    with path.open('rb') as file:
+        head = file.read(16)
+    if head[:4] == b'\xcf\xfa\xed\xfe':
+        return int.from_bytes(head[12:16], 'little') in CODE_FILE_TYPES
+    # A universal file lists a few architectures; a Java class file, which
+    # starts the same, has its version there.
+    return head[:4] == b'\xca\xfe\xba\xbe' and 0 < int.from_bytes(head[4:8], 'big') < 16
 
 
 def sign_anew(path):
