@@ -45,23 +45,11 @@ fn shadow_draw() -> ShadowDraw {
 }
 
 fn text_key(draw: TextDraw) -> u64 {
-    let mut scene = RasterScene::new();
-    scene.texts.push(draw);
-    Canonical {
-        scene,
-        item: RenderItem::Text(0),
-    }
-    .key()
+    Canonical::Text(draw).key()
 }
 
 fn shadow_key(draw: ShadowDraw) -> u64 {
-    let mut scene = RasterScene::new();
-    scene.shadows.push(draw);
-    Canonical {
-        scene,
-        item: RenderItem::Shadow(0),
-    }
-    .key()
+    Canonical::Shadow(draw).key()
 }
 
 // Asserts every key differs from every other.
