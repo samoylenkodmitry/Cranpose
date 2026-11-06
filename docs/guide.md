@@ -706,6 +706,215 @@ fn WordCount(text: std::sync::Arc<str>) {
 `Arc<str>` shares the input with the key and worker.
 On web, this API runs on the browser event loop. Use a Web Worker for large computations.
 
+### Write an effect as a Kotlin coroutine
+
+An effect's block is an async closure. It runs as a coroutine on the UI
+thread, as the block of Compose's `LaunchedEffect` does. The coroutine calls
+map one to one:
+
+| Kotlin | Rust |
+| --- | --- |
+| `LaunchedEffect(key) { ... }` | `LaunchedEffect(key, async move \|scope\| { ... })` |
+| `LaunchedEffect(a, b) { ... }` | `LaunchedEffect((a, b), async move \|scope\| { ... })` |
+| `delay(1.seconds)` | `delay(Duration::from_secs(1)).await` |
+| `withFrameNanos { now -> ... }` | `scope.with_frame_nanos(\|now\| ...).await` |
+| `launch { ... }` | `scope.launch(async move { ... })` |
+| `withContext(Dispatchers.Default) { ... }` | `withBlocking(move \|\| ...).await` |
+| `awaitCancellation()` | `std::future::pending::<()>().await` |
+| `try { ... } finally { cleanup() }` | a value whose `Drop` runs the cleanup |
+| `isActive` | `scope.is_active()` |
+| `produceState(initial, key) { value = ... }` | `produceState(initial, key, async move \|scope\| { scope.set(...) })` |
+
+Cancellation stops both at the same place. Kotlin throws a
+`CancellationException` at the suspension point where the coroutine waits.
+Rust drops the future at the `.await` where it waits. In both, no line after
+that point runs. A loop needs no `isActive` check.
+
+#### Repeat with a delay
+
+```kotlin
+var seconds by remember { mutableIntStateOf(0) }
+LaunchedEffect(Unit) {
+    while (true) {
+        delay(1.seconds)
+        seconds++
+    }
+}
+```
+
+```rust
+let seconds = rememberMutableStateOf(|| 0_u32);
+LaunchedEffect((), async move |_| loop {
+    delay(Duration::from_secs(1)).await;
+    seconds.update(|seconds| *seconds += 1);
+});
+```
+
+The loop ends when its call site leaves the composition. The timer that would
+have woken it then wakes nothing.
+
+#### Run once per frame
+
+```kotlin
+var angle by remember { mutableFloatStateOf(0f) }
+LaunchedEffect(Unit) {
+    val start = withFrameNanos { it }
+    while (true) {
+        withFrameNanos { now -> angle = (now - start) / 1e9f * 90f }
+    }
+}
+```
+
+```rust
+let angle = rememberMutableStateOf(|| 0.0_f32);
+LaunchedEffect((), async move |scope| {
+    let start = scope.with_frame_nanos(|now| now).await;
+    loop {
+        scope
+            .with_frame_nanos(|now| angle.set(now.saturating_sub(start) as f32 / 1e9 * 90.0))
+            .await;
+    }
+});
+```
+
+A waiting `with_frame_nanos` asks the window for a frame. A cancelled loop
+asks for none. A state that changes every frame recomposes its readers every
+frame. Read it in a draw closure to redraw without recomposition.
+
+#### Fetch over the network
+
+```kotlin
+var text by remember { mutableStateOf("Loading") }
+LaunchedEffect(url) {
+    text = client.get(url).bodyAsText()
+}
+```
+
+```rust
+let text = rememberMutableStateOf(|| String::from("Loading"));
+let client = local_http_client().current();
+LaunchedEffect(url.clone(), async move |_| {
+    text.set(match client.get_text(&url).await {
+        Ok(body) => body,
+        Err(error) => error.to_string(),
+    });
+});
+```
+
+The native client runs each transfer on a thread of its own. In a browser,
+`fetch` runs the transfer. The UI thread stays free while the request waits.
+
+#### Compute off the UI thread
+
+```kotlin
+var report by remember { mutableStateOf<Report?>(null) }
+LaunchedEffect(json) {
+    report = withContext(Dispatchers.Default) { parseReport(json) }
+}
+```
+
+```rust
+let report = rememberMutableStateOf(|| None::<Report>);
+LaunchedEffect(Arc::clone(&json), async move |_| {
+    report.set(withBlocking(move || parse_report(&json)).await.ok());
+});
+```
+
+`withBlocking` runs the closure on a bounded pool of worker threads. The effect
+resumes with its result. The closure and the result must be `Send`. An
+`Arc<str>` crosses to the worker. An `Rc` does not. A cancelled effect drops
+its wait. A closure that has already started still runs to its end on the
+worker. Its result goes nowhere. A browser page has one thread. There
+`withBlocking` returns `BlockingError::Unsupported` without running the
+closure. Run the work in the effect there, or in a Web Worker.
+
+#### Start child tasks
+
+```kotlin
+LaunchedEffect(Unit) {
+    launch { pollPrices() }
+    launch { pollNews() }
+}
+```
+
+```rust
+LaunchedEffect((), async move |scope| {
+    scope.launch(poll_prices(prices));
+    scope.launch(poll_news(news));
+});
+```
+
+The children run side by side. The effect's cancellation cancels them too.
+
+#### Read the newest argument in a long effect
+
+```kotlin
+@Composable
+fun Reminder(message: String) {
+    val latest by rememberUpdatedState(message)
+    LaunchedEffect(Unit) {
+        delay(3.seconds)
+        show(latest)
+    }
+}
+```
+
+```rust
+#[composable]
+fn Reminder(message: String) {
+    let latest = rememberUpdatedState(message);
+    LaunchedEffect((), async move |_| {
+        delay(Duration::from_secs(3)).await;
+        show(&latest.get());
+    });
+}
+```
+
+The key `()` keeps one effect running across recompositions. `latest` holds the
+newest `message` when the delay ends.
+
+#### Clean up when the effect stops
+
+```kotlin
+LaunchedEffect(Unit) {
+    val session = openCamera()
+    try {
+        awaitCancellation()
+    } finally {
+        session.close()
+    }
+}
+```
+
+```rust
+LaunchedEffect((), async move |_| {
+    let _session = open_camera();
+    std::future::pending::<()>().await;
+});
+```
+
+Rust has no `finally` for a cancelled future. The future drops instead, with
+every value it holds. `_session` closes the camera in its `Drop`. For cleanup
+with no waiting, use `DisposableEffect`, as **Release a resource when its
+screen closes** shows.
+
+#### Produce state from a coroutine
+
+```kotlin
+val text by produceState(initialValue = "Loading", url) {
+    value = client.get(url).bodyAsText()
+}
+```
+
+```rust
+let text = produceState(String::from("Loading"), url.clone(), async move |scope| {
+    scope.set(client.get_text(&url).await.unwrap_or_else(|error| error.to_string()));
+});
+```
+
+`text` is a `State<String>`. A change of `url` cancels the producer and starts a
+new one.
+
 ### Start a task from a button
 
 `rememberCoroutineScope` ties button tasks to the screen's lifetime:
