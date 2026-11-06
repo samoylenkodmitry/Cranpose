@@ -195,7 +195,7 @@ fn fill_pattern_565(pixels: &mut [u16], pattern: [u16; 4]) {
 
 // A 16-bit format: its pixels blend as their bytes would and keep their
 // high bits, and a text paints into them in the format's byte order.
-trait Pixel565: Rgb565 + GlyphPixel + bytemuck::Pod {
+trait Pixel565: Rgb565 + GlyphPixel + bytemuck::Pod + PartialEq {
     fn text_rows_565(pixels: &mut [Self]) -> TextPixelRows<'_>;
 }
 
@@ -248,8 +248,23 @@ impl<P: Pixel565> Pixel for P {
         };
         let src = [red, green, blue, unit_byte(alpha)];
         let table = table.get_or_insert_with(BlendTable::default);
-        for pixel in pixels {
-            table.blend_565(pixel, src);
+        // The paint leaves one pixel over each pixel it meets, and a fill
+        // mostly meets runs of one pixel: a pixel equal to the one before
+        // takes what the paint left over that one.
+        let Some((first, rest)) = pixels.split_first_mut() else {
+            return;
+        };
+        let mut under = *first;
+        table.blend_565(first, src);
+        let mut over = *first;
+        for pixel in rest {
+            if *pixel == under {
+                *pixel = over;
+            } else {
+                under = *pixel;
+                table.blend_565(pixel, src);
+                over = *pixel;
+            }
         }
     }
 
