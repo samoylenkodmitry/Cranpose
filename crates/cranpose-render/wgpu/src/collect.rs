@@ -37,7 +37,7 @@ mod rounded_clip_corners;
 mod space_children;
 use backdrop_space::{detach_flat_backdrop, with_backdrop_in_own_space};
 pub(crate) use history::CollectHistory;
-use kept_contents::{ContentKey, KeptContents, KeptWith};
+use kept_contents::{ContentKey, KeptContents, KeptWith, LightBits};
 pub(crate) use layer_motion::LayerMotion;
 use placement::{Placement, can_draw_in_place, child_needs_surface, child_placement};
 pub(crate) use placement::{
@@ -63,7 +63,16 @@ const ROUNDED_CLIP_AA_MARGIN: f32 = 1.0;
 pub(crate) struct LayerScene {
     pub(crate) scene: CompositorScene,
     pub(crate) children: Vec<ChildLayer>,
-    has_backdrop: bool,
+    summary: SceneSummary,
+}
+
+// What a layer scene and the scenes of its children hold, kept so that no
+// reader walks them: a backdrop that reads what lies beneath it, and a
+// shadow that the walk's light places.
+#[derive(Clone, Copy, Default)]
+struct SceneSummary {
+    backdrop: bool,
+    shadows: bool,
 }
 
 /// The layer scenes of returned packets, kept with their buffers for the
@@ -79,7 +88,7 @@ impl LayerSceneRecycler {
     pub(crate) fn take(&mut self, capacity: SceneCapacityHint) -> Box<LayerScene> {
         match self.scenes.pop() {
             Some(mut scene) => {
-                scene.has_backdrop = false;
+                scene.summary = SceneSummary::default();
                 scene
             }
             None => Box::new(LayerScene::new(
@@ -94,7 +103,7 @@ impl LayerSceneRecycler {
             self.recycle(child.content);
         }
         scene.scene.clear();
-        scene.has_backdrop = false;
+        scene.summary = SceneSummary::default();
         self.scenes.push(scene);
     }
 
@@ -114,23 +123,47 @@ impl LayerScene {
         let mut layer = Self {
             scene,
             children,
-            has_backdrop: false,
+            summary: SceneSummary::default(),
         };
-        layer.refresh_backdrop_summary();
+        layer.refresh_summary();
         layer
     }
 
     pub(crate) fn contains_backdrop(&self) -> bool {
-        self.has_backdrop
+        self.summary.backdrop
     }
 
-    fn refresh_backdrop_summary(&mut self) {
-        self.has_backdrop = self
-            .scene
-            .backdrop_layers
-            .iter()
-            .any(|layer| layer.alpha != 0.0)
-            || self.children.iter().any(ChildLayer::reads_backdrop);
+    // Whether a layer of this content casts an elevation shadow, which the
+    // walk's light places.
+    fn casts_shadows(&self) -> bool {
+        self.summary.shadows
+    }
+
+    // `content_hash` of this content, with `light` when a layer of it casts
+    // a shadow, which the light places: a raster of the content holds only
+    // under the same light.
+    fn raster_hash(&self, content_hash: u64, light: ShadowLight) -> u64 {
+        if self.casts_shadows() {
+            LightBits::of(light).lit_hash(content_hash)
+        } else {
+            content_hash
+        }
+    }
+
+    fn refresh_summary(&mut self) {
+        self.summary = SceneSummary {
+            backdrop: self
+                .scene
+                .backdrop_layers
+                .iter()
+                .any(|layer| layer.alpha != 0.0)
+                || self.children.iter().any(ChildLayer::reads_backdrop),
+            shadows: !self.scene.rrect_shadows.is_empty()
+                || self
+                    .children
+                    .iter()
+                    .any(|child| child.content.casts_shadows()),
+        };
     }
 }
 
@@ -326,7 +359,7 @@ pub(crate) fn collect_root(
     };
     collect_child(root, history, context, &mut out, recycler);
     out.scene.flush_loose();
-    out.refresh_backdrop_summary();
+    out.refresh_summary();
     history.motion.end_frame();
     history.contents.end_collect(recycler);
     out
@@ -457,7 +490,7 @@ fn isolated_child(
         settings: &content_settings,
     };
     let (content, has_pixel_sensitive_subtree, kept) =
-        content_of(layer, history, content_context, recycler);
+        content_of(layer, history, (content_context, content_hash), recycler);
     let transform = layer
         .transform_to_parent
         .then(ProjectiveTransform::translation(
@@ -501,7 +534,7 @@ fn isolated_child(
             backdrop_alpha: local_layer.alpha,
             snap_anchor,
             surface_scale,
-            content_hash,
+            content_hash: content.raster_hash(content_hash, content_settings.light),
             cache_policy: layer.cache_policy,
             in_place,
             content,
@@ -514,38 +547,44 @@ fn isolated_child(
 
 // The content of the isolated `layer`, collected under `context`, with
 // whether it holds pixel-sensitive content: kept from an earlier frame when
-// the layer's subtree did not change since and the walk passes down what it
-// did, else collected now, and kept with what a later collect needs when
-// nothing beneath the layer changed in this update and no backdrop reads
-// what lies under it. A layer in a scene's space collects each frame.
+// the layer's content hash, `content_hash`, and what the walk passes down
+// are as they were (the light only for content that casts shadows), else
+// collected now, and kept with what a later collect needs when nothing
+// beneath the layer changed in this update and no backdrop reads what lies
+// under it. The hash leaves out the layer's own transform, alpha and
+// placement, so a layer that only moves, turns or fades keeps its content.
+// A layer in a scene's space collects each frame.
 fn content_of(
     layer: &LayerNode,
     history: &mut CollectHistory,
-    context: WalkContext<'_>,
+    (context, content_hash): (WalkContext<'_>, u64),
     recycler: &mut LayerSceneRecycler,
 ) -> (Box<LayerScene>, bool, Option<KeptWith>) {
     let settings = context.settings;
-    let key = layer
+    let walk = layer
         .node_id
         .filter(|_| !settings.in_space && !layer.changed_in(settings.update))
-        .map(|node| (node, ContentKey::new(layer.change, &context)));
-    if let Some((node, key)) = key
-        && let Some((content, kept)) = history.contents.take(node, key)
+        .map(|node| (node, ContentKey::new(content_hash, &context)));
+    if let Some((node, walk)) = walk
+        && let Some((content, kept)) = history.contents.take(node, walk)
     {
         history.motion.record_again(&kept.scales);
         return (content, kept.pixel_sensitive, Some(kept));
     }
-    let recorded = history.motion.recorded();
+    let logged = walk.map(|_| history.motion.begin_log());
     let mut content = recycler.take(SceneCapacityHint::default());
     let pixel_sensitive = collect_into(layer, history, context, &mut content, recycler);
     content.scene.flush_loose();
-    content.refresh_backdrop_summary();
-    let kept = key
+    content.refresh_summary();
+    let scales = logged.map(|from| history.motion.end_log(from));
+    let kept = walk
+        .zip(scales)
         .filter(|_| !content.contains_backdrop())
-        .map(|(_, key)| KeptWith {
+        .map(|((_, (key, light)), scales)| KeptWith {
             key,
+            light: content.casts_shadows().then_some(light),
             pixel_sensitive,
-            scales: history.motion.recorded_since(recorded),
+            scales,
         });
     (content, pixel_sensitive, kept)
 }

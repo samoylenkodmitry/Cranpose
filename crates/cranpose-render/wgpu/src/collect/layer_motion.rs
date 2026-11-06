@@ -9,10 +9,12 @@ pub(super) const ANIMATED_RASTER_STEPS_PER_OCTAVE: f32 = 8.0;
 pub(crate) struct LayerMotion {
     previous: HashMap<NodeId, Motion>,
     current: HashMap<NodeId, Motion>,
-    // The scales recorded this frame, in order, so that a layer whose
-    // content a collect takes from an earlier frame records again what its
-    // layers recorded then.
+    // The scales recorded, in order, while a content that a later collect
+    // may take is collected, so that the layer whose content it takes
+    // records again what its layers recorded then.
     log: Vec<(NodeId, Motion)>,
+    // How many such contents are being collected, one inside another.
+    logging: u32,
 }
 
 #[derive(Clone, Copy)]
@@ -50,17 +52,26 @@ impl LayerMotion {
 
     fn record(&mut self, node_id: NodeId, motion: Motion) {
         self.current.insert(node_id, motion);
-        self.log.push((node_id, motion));
+        if self.logging > 0 {
+            self.log.push((node_id, motion));
+        }
     }
 
-    // How many scales this frame recorded so far.
-    pub(super) fn recorded(&self) -> usize {
+    // Starts to log the scales that a content kept for later collects
+    // records, and returns where its scales start in the log.
+    pub(super) fn begin_log(&mut self) -> usize {
+        self.logging += 1;
         self.log.len()
     }
 
-    // The scales this frame recorded since `from` of them.
-    pub(super) fn recorded_since(&self, from: usize) -> Vec<(NodeId, Motion)> {
-        self.log[from..].to_vec()
+    // The scales recorded since the `begin_log` that returned `from`.
+    pub(super) fn end_log(&mut self, from: usize) -> Vec<(NodeId, Motion)> {
+        self.logging -= 1;
+        let scales = self.log[from..].to_vec();
+        if self.logging == 0 {
+            self.log.clear();
+        }
+        scales
     }
 
     // Records again `scales`, which the layers of a content collected in
@@ -74,7 +85,6 @@ impl LayerMotion {
     pub(crate) fn end_frame(&mut self) {
         std::mem::swap(&mut self.previous, &mut self.current);
         self.current.clear();
-        self.log.clear();
     }
 }
 

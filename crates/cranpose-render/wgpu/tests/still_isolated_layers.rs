@@ -13,8 +13,8 @@ use crate::support;
 const FRAME_WIDTH: u32 = 240;
 const FRAME_HEIGHT: u32 = 320;
 const FRAMES: usize = 14;
-// The frames at which the card's own content changes, while the strip below
-// it moves on every frame.
+// The frames at which the card's content changes, while the card turns and
+// the strip below it moves on every frame.
 const CARD_CHANGES: [usize; 2] = [6, 10];
 
 const SHADES: [Color; 3] = [
@@ -29,15 +29,18 @@ struct Inputs {
     version: MutableState<usize>,
 }
 
+// A card that turns every frame, whose content changes at `CARD_CHANGES`.
+// The swatch of a `lifted` card casts an elevation shadow, which the light
+// places: the light moves in the card's space as the card turns.
 #[composable]
-fn Card(version: MutableState<usize>) {
+fn Card(seconds: MutableState<f32>, version: MutableState<usize>, lifted: bool) {
     Box(
         Modifier::empty()
             .fill_max_width()
-            .height(140.0)
-            .padding(16.0)
-            .graphics_layer_block(|layer| {
-                layer.rotation_z = 4.0;
+            .height(110.0)
+            .padding(12.0)
+            .graphics_layer_block(move |layer| {
+                layer.rotation_z = 4.0 + seconds.get() * 30.0;
                 layer.alpha = 0.7;
             })
             .background(Color(0.95, 0.95, 0.90, 1.0))
@@ -57,6 +60,7 @@ fn Card(version: MutableState<usize>) {
                     Box(
                         Modifier::empty()
                             .size_points(120.0, 30.0)
+                            .shadow(if lifted { 6.0 } else { 0.0 })
                             .background(SHADES[shown % SHADES.len()]),
                         BoxSpec::new(),
                         || {},
@@ -87,7 +91,8 @@ fn Screen(seconds: MutableState<f32>, version: MutableState<usize>) {
         Modifier::empty().fill_max_size().padding(8.0),
         ColumnSpec::new().vertical_arrangement(LinearArrangement::spaced_by(12.0)),
         move || {
-            Card(version);
+            Card(seconds, version, false);
+            Card(seconds, version, true);
             Strip(seconds);
         },
     );
@@ -161,7 +166,7 @@ fn a_still_isolated_layer_draws_what_a_renderer_with_no_history_draws() {
     for (frame, drawn) in run.iter().enumerate() {
         assert!(
             drawn.pixels == first_frame(frame).pixels,
-            "frame {frame}: a turned card that holds still while the strip moves, and that \
+            "frame {frame}: cards that turn while the strip moves, and whose content \
              changes at frames {CARD_CHANGES:?}, must draw what a new renderer draws"
         );
     }
