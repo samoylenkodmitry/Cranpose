@@ -532,8 +532,19 @@ fn raster_layer_mapping(
     let transformed_bounds = transform.bounds_for_rect(local_bounds);
     let (scale_x, scale_y) = raster_layer_scale(transformed_bounds, local_bounds);
     let layer_bounds = RasterLayerBounds::from_transformed_bounds(transformed_bounds, local_bounds);
-    let content_bounds =
-        RasterLayerBounds::from_transformed_bounds(transform.bounds_for_rect(node_rect), node_rect);
+    // A layer whose bounds are its node's rect, as an inline node's are,
+    // maps the one rect once. The rects agree in every bit: a zero of
+    // another sign maps to other bits.
+    let same = |a: f32, b: f32| a.to_bits() == b.to_bits();
+    let content_bounds = if same(node_rect.x, local_bounds.x)
+        && same(node_rect.y, local_bounds.y)
+        && same(node_rect.width, local_bounds.width)
+        && same(node_rect.height, local_bounds.height)
+    {
+        layer_bounds
+    } else {
+        RasterLayerBounds::from_transformed_bounds(transform.bounds_for_rect(node_rect), node_rect)
+    };
 
     RasterLayerMapping {
         layer_bounds,
