@@ -435,25 +435,22 @@ impl<'a> LayoutWalk<'a> {
     // pushes again: lowering and recording, and pushing items and comparing
     // them, then each run for all the nodes, whose code a frame would
     // otherwise evict from the cache for every node. Puts its layer into
-    // `layer` and, when it has children, what they lower with into `inner`.
-    // Leaves both empty for a node gone, and for one whose layer holds a 3D
-    // space, which `push` lowers. Out of line, as `Repush::rewrite_subtree`
-    // is.
+    // `layer` and whether it has children into `children`. Leaves the layer
+    // empty for a node gone, and for one whose layer holds a 3D space, which
+    // `push` lowers. Out of line, as `Repush::rewrite_subtree` is.
     #[inline(never)]
     pub(crate) fn lower(
         &self,
         (node, place): (NodeId, NodePlace),
         lower_context: &LowerContext,
-        (layer, inner): (&mut Option<RenderNode>, &mut Option<LowerContext>),
+        (layer, children): (&mut Option<RenderNode>, &mut bool),
     ) {
         lower_node_alone(self.applier, (node, place), lower_context, |lowered| {
             if holds_space(&lowered.node) || Subtree::of_child(&lowered.node).is_none() {
                 recycle_lowered(lowered.node);
                 return;
             }
-            if !lowered.children.is_empty() {
-                *inner = Some(*lowered.child_context);
-            }
+            *children = !lowered.children.is_empty();
             *layer = Some(lowered.node);
         });
     }

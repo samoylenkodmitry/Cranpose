@@ -16,8 +16,8 @@ use cranpose_render_common::{
     graph_scene::RenderDiagnostics,
     layer_shadow::ShadowLight,
     scene_builder::{
-        LowerContext, NodePlace, RecordingStore, release_lowered, root_layer_bounds,
-        visit_kept_node,
+        LowerContext, NodePlace, RecordingStore, lowered_children_context, release_lowered,
+        root_layer_bounds, visit_kept_node,
     },
 };
 
@@ -74,8 +74,7 @@ impl WalkedTargets {
 
 // A node whose subtree an update pushes again: where it lies in the layout
 // tree and in the scene, what it lowers with, whether it lowers as a leaf,
-// and once the update lowered it, its layer and what its children lower
-// with when it has children.
+// and once the update lowered it, its layer and whether it has children.
 pub(crate) struct PushTarget {
     node: NodeId,
     place: NodePlace,
@@ -83,8 +82,8 @@ pub(crate) struct PushTarget {
     record: usize,
     parent: Option<usize>,
     leaf: bool,
+    children: bool,
     layer: Option<RenderNode>,
-    inner: Option<LowerContext>,
 }
 
 // Why a walk to a layer stopped.
@@ -182,6 +181,7 @@ impl InPlaceUpdate<'_> {
         if pushed.is_ok() && replaced == Replaced::Nothing && walk.holds_no_space() {
             if !found_before {
                 walked.updates.clear();
+                walked.updates.reserve_exact(updates.len());
                 walked.updates.extend_from_slice(updates);
             }
         } else {
@@ -258,7 +258,6 @@ impl Repush<'_> {
     fn targets_hold(&mut self, walk: &LayoutWalk<'_>) -> bool {
         self.targets.iter_mut().all(|target| {
             target.leaf = walk.lowers_as_leaf((target.node, target.place));
-            target.inner = None;
             self.scene
                 .subtrees
                 .get(target.record)
@@ -275,6 +274,9 @@ impl Repush<'_> {
         context: &LowerContext,
         (record, parent): (usize, Option<usize>),
     ) {
+        // The targets stay for the next update with the same changes: the
+        // list grows by what it takes, with no room past it.
+        self.targets.reserve_exact(1);
         self.targets.push(PushTarget {
             node,
             place,
@@ -282,8 +284,8 @@ impl Repush<'_> {
             record,
             parent,
             leaf: walk.lowers_as_leaf((node, place)),
+            children: false,
             layer: None,
-            inner: None,
         });
     }
 
@@ -309,7 +311,7 @@ impl Repush<'_> {
                 // The old head goes first: the recordings it holds may take
                 // the node's new draws.
                 self.scene.drop_head(target.record);
-                let lowered = (&mut target.layer, &mut target.inner);
+                let lowered = (&mut target.layer, &mut target.children);
                 walk.lower((target.node, target.place), &target.context, lowered);
             }
         }
@@ -335,7 +337,14 @@ impl Repush<'_> {
             (target.record, target.parent),
             |scene, context| match target.layer.take() {
                 Some(layer) => {
-                    let lowered = (layer, target.inner.as_ref());
+                    // A node with children lowers as a layer.
+                    let inner = match &layer {
+                        RenderNode::Layer(own) if target.children => {
+                            lowered_children_context(own, node, &target.context)
+                        }
+                        _ => None,
+                    };
+                    let lowered = (layer, inner.as_ref());
                     let lowered_with = (&target.context, Some(old));
                     walk.push_lowered((node, place), lowered, (scene, context), lowered_with);
                 }

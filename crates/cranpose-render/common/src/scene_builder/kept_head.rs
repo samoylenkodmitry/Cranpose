@@ -99,16 +99,8 @@ impl KeptHead {
         if let Some(position) = position {
             translate_retained_child(layer, position, offset);
         }
-        // The wrapper of a node's outer draws holds the node's own layer,
-        // which holds its children.
-        let wrapped;
-        let (outer, own) = match layer.wraps {
-            Some(_) => {
-                wrapped = context.beneath_layer(layer);
-                (&wrapped, wrapped_layer(layer, node_id)?)
-            }
-            None => (context, &**layer),
-        };
+        let (wrapped, own) = node_own_layer(layer, node_id, context)?;
+        let outer = wrapped.as_ref().unwrap_or(context);
         if own.has_origin_sinks
             && let Some(parent_abs) = &outer.parent_abs
         {
@@ -141,6 +133,36 @@ impl KeptHead {
             KeptNode::Layer(layer) => RenderNode::Layer(layer),
             KeptNode::Inline(inline) => RenderNode::Inline(inline),
         }
+    }
+}
+
+/// What the children of `node_id` lower with, the node lowered alone into
+/// `layer` under `context`: the state beneath its own layer. `None` when
+/// `layer` wraps the node's outer draws and holds no layer of the node.
+pub fn lowered_children_context(
+    layer: &LayerNode,
+    node_id: NodeId,
+    context: &LowerContext,
+) -> Option<LowerContext> {
+    let (wrapped, own) = node_own_layer(layer, node_id, context)?;
+    Some(wrapped.as_ref().unwrap_or(context).beneath_layer(own))
+}
+
+// The own layer of `node_id` in `layer`, the node lowered alone under
+// `context`, which holds its children: inside the wrapper of the node's
+// outer draws when `layer` is that wrapper, with the state beneath the
+// wrapper.
+fn node_own_layer<'a>(
+    layer: &'a LayerNode,
+    node_id: NodeId,
+    context: &LowerContext,
+) -> Option<(Option<LowerContext>, &'a LayerNode)> {
+    match layer.wraps {
+        Some(_) => Some((
+            Some(context.beneath_layer(layer)),
+            wrapped_layer(layer, node_id)?,
+        )),
+        None => Some((None, layer)),
     }
 }
 
