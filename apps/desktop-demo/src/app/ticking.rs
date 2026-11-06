@@ -15,10 +15,9 @@ pub(crate) fn Ticking(on: bool, tick: impl Fn(f32) + 'static) {
         if !on {
             return;
         }
-        let clock = scope.runtime().frame_clock();
-        let mut last = clock.next_frame().await;
+        let mut last = scope.with_frame_nanos(|now| now).await;
         loop {
-            let now = clock.next_frame().await;
+            let now = scope.with_frame_nanos(|now| now).await;
             tick(seconds_between(last, now).min(LONGEST_STEP_SECONDS));
             last = now;
         }

@@ -152,12 +152,9 @@ pub fn wear_tab() {
     let list = rememberWearScalingListState(CentreAnchor::default());
 
     let tick_state = Rc::clone(&state);
-    LaunchedEffect((), async move |scope| {
-        let clock = scope.runtime().frame_clock();
-        loop {
-            let now = clock.next_frame().await;
-            tick_state.borrow_mut().advance(now, &list);
-        }
+    LaunchedEffect((), async move |scope| loop {
+        let now = scope.with_frame_nanos(|now| now).await;
+        tick_state.borrow_mut().advance(now, &list);
     });
 
     CranposeBox(

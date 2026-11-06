@@ -418,12 +418,9 @@ async fn record_pointer(scope: PointerInputScope) {
 #[composable]
 pub(crate) fn RecordingOverlay() {
     let pulse = rememberMutableStateOf(|| 0u64);
-    cranpose_core::LaunchedEffect((), async move |scope| {
-        let clock = scope.runtime().frame_clock();
-        loop {
-            let now = clock.next_frame().await;
-            pulse.set(now);
-        }
+    cranpose_core::LaunchedEffect((), async move |scope| loop {
+        let now = scope.with_frame_nanos(|now| now).await;
+        pulse.set(now);
     });
     Box(
         Modifier::empty()

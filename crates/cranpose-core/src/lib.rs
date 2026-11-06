@@ -206,9 +206,6 @@ pub use hooks::{
     remember, rememberKeyed, rememberMutableStateOf, rememberMutableStateOfNeverEqual,
     rememberUpdatedState, try_mutableStateOf,
 };
-#[cfg(feature = "internal")]
-#[doc(hidden)]
-pub use hooks::{withFrameMillis, withFrameNanos};
 pub use launched_effect::{
     __launched_effect_impl, CancelToken, LaunchedEffect, LaunchedEffectScope,
 };

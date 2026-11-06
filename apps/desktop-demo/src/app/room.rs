@@ -181,10 +181,9 @@ fn RoomMotion(room: RoomState, shape: RoomShape) {
     let mover = room.clone();
     LaunchedEffect(entered, async move |scope| {
         let target = if entered { 1.0 } else { 0.0 };
-        let clock = scope.runtime().frame_clock();
-        let mut last = clock.next_frame().await;
+        let mut last = scope.with_frame_nanos(|now| now).await;
         while mover.progress.get() != target {
-            let now = clock.next_frame().await;
+            let now = scope.with_frame_nanos(|now| now).await;
             let step = seconds_between(last, now) / TRANSITION_SECONDS;
             last = now;
             mover.progress.update(|progress| {
@@ -204,10 +203,9 @@ fn RoomMotion(room: RoomState, shape: RoomShape) {
         if !moving {
             return;
         }
-        let clock = scope.runtime().frame_clock();
-        let mut last = clock.next_frame().await;
+        let mut last = scope.with_frame_nanos(|now| now).await;
         loop {
-            let now = clock.next_frame().await;
+            let now = scope.with_frame_nanos(|now| now).await;
             let seconds = seconds_between(last, now).min(LONGEST_STEP_SECONDS);
             last = now;
             if !room.walk(seconds) {

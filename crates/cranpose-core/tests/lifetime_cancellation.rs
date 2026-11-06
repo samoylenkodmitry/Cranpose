@@ -214,27 +214,27 @@ fn a_frame_loop_leaves_with_its_call_site_and_asks_for_no_more_frames() {
     let mut composition = Composition::new(MemoryApplier::new());
     let runtime = composition.runtime_handle();
     let dropped = Rc::new(Cell::new(false));
-    let frames = Rc::new(Cell::new(0_u32));
-    let (note, count) = (Rc::clone(&dropped), Rc::clone(&frames));
+    let frames = Rc::new(RefCell::new(Vec::new()));
+    let (note, seen) = (Rc::clone(&dropped), Rc::clone(&frames));
     composition
         .render(Key(1), move || {
-            let (note, count) = (Rc::clone(&note), Rc::clone(&count));
+            let (note, seen) = (Rc::clone(&note), Rc::clone(&seen));
             cranpose_core::LaunchedEffect((), async move |scope| {
                 let _note = DropNote(note);
-                let clock = scope.runtime().frame_clock();
                 loop {
-                    clock.next_frame().await;
-                    count.set(count.get() + 1);
+                    scope
+                        .with_frame_nanos(|nanos| seen.borrow_mut().push(nanos))
+                        .await;
                 }
             });
         })
         .expect("initial composition");
-    for frame in 1..=3 {
+    for frame in [16, 32, 48] {
         runtime.drain_ui();
         runtime.drain_frame_callbacks(frame);
     }
     runtime.drain_ui();
-    assert!(frames.get() >= 2, "the loop saw {} frames", frames.get());
+    assert_eq!(*frames.borrow(), [16, 32, 48], "the loop missed a frame");
     assert!(runtime.has_frame_callbacks(), "the loop waits for a frame");
 
     composition.render(Key(1), || {}).expect("effect removed");
@@ -244,8 +244,11 @@ fn a_frame_loop_leaves_with_its_call_site_and_asks_for_no_more_frames() {
         !runtime.has_frame_callbacks(),
         "the dropped loop still asks for frames"
     );
-    let seen = frames.get();
-    runtime.drain_frame_callbacks(4);
+    runtime.drain_frame_callbacks(64);
     runtime.drain_ui();
-    assert_eq!(frames.get(), seen, "the loop ran a frame after it left");
+    assert_eq!(
+        frames.borrow().len(),
+        3,
+        "the loop ran a frame after it left"
+    );
 }

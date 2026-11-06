@@ -89,6 +89,28 @@ impl LaunchedEffectScope {
         self.runtime.clone()
     }
 
+    /// Waits for the next frame, then calls `on_frame` with the frame time in
+    /// nanoseconds and returns what it returns. Compose's `withFrameNanos`.
+    /// Await it in a loop to run once per frame:
+    ///
+    /// ```ignore
+    /// LaunchedEffect((), async move |scope| loop {
+    ///     scope.with_frame_nanos(|nanos| time.set(nanos)).await;
+    /// });
+    /// ```
+    #[cfg(feature = "internal")]
+    pub async fn with_frame_nanos<R>(&self, on_frame: impl FnOnce(u64) -> R) -> R {
+        on_frame(self.runtime.frame_clock().next_frame().await)
+    }
+
+    /// Waits for the next frame, then calls `on_frame` with the frame time in
+    /// milliseconds and returns what it returns. Compose's `withFrameMillis`.
+    #[cfg(feature = "internal")]
+    pub async fn with_frame_millis<R>(&self, on_frame: impl FnOnce(u64) -> R) -> R {
+        self.with_frame_nanos(|nanos| on_frame(nanos / 1_000_000))
+            .await
+    }
+
     /// Launches `future` on the UI thread as a child of the effect, as
     /// Compose's `launch` inside a `LaunchedEffect` does: the effect's
     /// cancellation cancels it too.
