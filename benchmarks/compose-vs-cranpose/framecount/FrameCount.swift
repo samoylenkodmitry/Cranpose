@@ -15,9 +15,10 @@
 // (`CACurrentMediaTime`, the clock the frames are stamped with), waiting for
 // its window to appear:
 //        open -W -n FrameCount.app --args --pid PID --until T --out FILE.json
-// With `--launched L --slow-fps F --slow-seconds S` as well, the capture ends
-// early, its end written as `stopped`, once the app presented fewer than F
-// frames in each of the last S whole seconds since its launch L.
+// With `--slow-fps F --slow-seconds S` as well, the capture ends early, its
+// end written as `stopped`, once the app presented fewer than F frames in
+// each of the last S whole seconds since its first frame: the first picture
+// that shows more than the window's background.
 // or, for a picture of the window at its full resolution:
 //        open -W -n FrameCount.app --args --pid PID --screenshot FILE.png
 // or, for the state of every display the window server knows and the rate at
@@ -44,7 +45,6 @@ struct Options {
     var pid: pid_t = 0
     var seconds = 5.0
     var until = 0.0
-    var launched = 0.0
     var slowFps = 0.0
     var slowSeconds = 0
     var out = ""
@@ -61,7 +61,6 @@ struct Options {
             case "--pid": pid = pid_t(value) ?? 0
             case "--seconds": seconds = Double(value) ?? 0
             case "--until": until = Double(value) ?? 0
-            case "--launched": launched = Double(value) ?? 0
             case "--slow-fps": slowFps = Double(value) ?? 0
             case "--slow-seconds": slowSeconds = Int(value) ?? 0
             case "--out": out = value
@@ -84,13 +83,15 @@ struct Options {
     }
 
     /// Whether, at `now`, each of the last `slowSeconds` whole seconds since
-    /// the launch held fewer than `slowFps` of the frames `frames` counts
-    /// between two times.
-    func slow(at now: Double, frames: (Double, Double) -> Int) -> Bool {
-        let done = Int(now - launched)
-        guard slowFps > 0, slowSeconds > 0, done >= slowSeconds else { return false }
+    /// the app's first frame at `first` held fewer than `slowFps` of the
+    /// frames `frames` counts between two times. Before its first frame the
+    /// app is still starting, which every run measures whole.
+    func slow(at now: Double, since first: Double?, frames: (Double, Double) -> Int) -> Bool {
+        guard let first, slowFps > 0, slowSeconds > 0 else { return false }
+        let done = Int(now - first)
+        guard done >= slowSeconds else { return false }
         return (done - slowSeconds..<done).allSatisfy { second in
-            let start = launched + Double(second)
+            let start = first + Double(second)
             return Double(frames(start, start + 1)) < slowFps
         }
     }
@@ -106,7 +107,7 @@ enum Failure: Error, CustomStringConvertible {
         switch self {
         case .usage:
             return "usage: FrameCount --pid PID (--seconds S --out FILE.json | --until T --out FILE.json"
-                + " [--launched L --slow-fps F --slow-seconds S] | --screenshot FILE.png)"
+                + " [--slow-fps F --slow-seconds S] | --screenshot FILE.png)"
                 + " | FrameCount --display FILE.json [--link-seconds S]"
                 + " | FrameCount --ambient FILE.json [--seconds S]"
         case .noPermission: return "FrameCount has no Screen Recording permission"
@@ -498,7 +499,7 @@ func measure(_ options: Options) async throws -> [String: Any] {
         let left = end - CACurrentMediaTime()
         try await Task.sleep(nanoseconds: UInt64(max(0, min(0.25, left)) * 1_000_000_000))
         let now = CACurrentMediaTime()
-        if options.slow(at: now, frames: frames.count(from:until:)) {
+        if options.slow(at: now, since: frames.firstContent(), frames: frames.count(from:until:)) {
             stopped = now
             break
         }

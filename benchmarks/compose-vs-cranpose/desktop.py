@@ -21,8 +21,8 @@ is one launch measured from its start for `--run` seconds, the same span for
 every app, with nothing left out: the launch, the first frame and the first
 seconds count as the rest of the run does, and the frames of every second
 are kept. A leg whose app presented fewer than `SLOW_FPS` frames in each of
-`SLOW_SECONDS` seconds in a row ends there, marked `stopped`. A
-disturbed leg stays in the run, marked, out of the medians.
+`SLOW_SECONDS` seconds in a row since its first frame ends there, marked
+`stopped`. A disturbed leg stays in the run, marked, out of the medians.
 
 Before the first leg and after the last, `FrameCount.app` reports the state of
 the main display and how often the window server composites it for a window
@@ -669,7 +669,7 @@ def measure(name, args, work, server, stage, label, earlier, profile, program=No
                           None)
         usage = Usage(app.pid, server_pid, launched)
         out = stage / f'{label}-frames.json'
-        frames = framecount(app.pid, out, '--until', f'{launched + args.run:.3f}', '--launched', f'{launched:.3f}',
+        frames = framecount(app.pid, out, '--until', f'{launched + args.run:.3f}',
                             '--slow-fps', str(SLOW_FPS), '--slow-seconds', str(SLOW_SECONDS), '--out', str(out))
         after, ended = processes(), time.monotonic()
         taken = usage.stop()

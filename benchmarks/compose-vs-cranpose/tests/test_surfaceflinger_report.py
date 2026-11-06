@@ -136,15 +136,15 @@ class DevicePresentCountTest(unittest.TestCase):
 
 class SlowRunTest(unittest.TestCase):
     """`perf_window.sh` ends a run once each of the last five whole seconds
-    since the launch held fewer presents than the threshold."""
+    since its first frame held fewer presents than the threshold."""
 
-    def slow(self, polls, start=100.0):
+    def slow(self, polls):
         source = (BENCHMARK / 'perf_window.sh').read_text()
-        program = re.search(r'awk -v start="\$START" -v fps="\$SLOW_FPS" -v seconds="\$SLOW_SECONDS" ' + r"'(.*?)' " + r'"\$COUNTS"',
+        program = re.search(r'awk -v fps="\$SLOW_FPS" -v seconds="\$SLOW_SECONDS" ' + r"'(.*?)' " + r'"\$COUNTS"',
                             source, re.S).group(1)
         with tempfile.NamedTemporaryFile('w', suffix='.txt', delete=False) as handle:
             handle.write(''.join(f'{at} {total}\n' for at, total in polls))
-        result = subprocess.run(['awk', '-v', f'start={start}', '-v', 'fps=30', '-v', 'seconds=5', program, handle.name],
+        result = subprocess.run(['awk', '-v', 'fps=30', '-v', 'seconds=5', program, handle.name],
                                 capture_output=True, text=True)
         Path(handle.name).unlink()
         return result.returncode == 0
@@ -164,14 +164,26 @@ class SlowRunTest(unittest.TestCase):
         self.assertFalse(self.slow(self.polls([1, 1, 6, 58, 61, 60, 60])))
 
     def test_five_slow_seconds_in_a_row_end_the_run(self):
-        self.assertTrue(self.slow(self.polls([2, 15, 20, 25, 28])))
+        # The first poll, half a second in, finds the first frame.
+        self.assertFalse(self.slow(self.polls([2, 15, 20, 25, 28])))
+        self.assertTrue(self.slow(self.polls([2, 15, 20, 25, 28, 28])))
 
     def test_one_fast_second_among_slow_ones_runs_on(self):
         self.assertFalse(self.slow(self.polls([20, 20, 31, 20, 20])))
         self.assertTrue(self.slow(self.polls([20, 20, 31, 20, 20, 20, 20, 20])))
 
     def test_a_run_younger_than_five_seconds_runs_on(self):
-        self.assertFalse(self.slow(self.polls([0, 0, 0, 0])))
+        self.assertFalse(self.slow(self.polls([2, 2, 2, 2])))
+
+    def test_an_app_that_shows_its_first_frame_late_runs_five_seconds_past_it(self):
+        # Nothing for four and a half seconds, then a slow app: the launch
+        # does not count toward the slow seconds.
+        late = [0, 0, 0, 0, 4, 20, 20, 20, 20]
+        self.assertFalse(self.slow(self.polls(late)))
+        self.assertTrue(self.slow(self.polls(late + [20])))
+
+    def test_an_app_that_shows_nothing_runs_on(self):
+        self.assertFalse(self.slow(self.polls([0] * 8)))
 
 
 if __name__ == '__main__':
