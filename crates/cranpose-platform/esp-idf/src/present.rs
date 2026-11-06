@@ -35,6 +35,12 @@ impl Presenter {
         panel: &mut Panel<'_>,
     ) -> Result<usize, EspError> {
         framebuffer.changed_areas(&mut self.areas);
+        // The panel's IO sends a strip's window commands only once the
+        // transfer before it ended, and the last transfer of a picture runs
+        // on after this returns: the largest area goes last, so that its
+        // transfer is the one nothing waits for.
+        self.areas
+            .sort_unstable_by_key(|area| (area.width * area.height, area.y, area.x));
         let ahead = if panel.is_setting_up() {
             self.draw_ahead(framebuffer, panel)
         } else {
