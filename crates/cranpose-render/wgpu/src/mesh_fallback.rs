@@ -40,7 +40,6 @@ pub(crate) struct MeshVertex {
 
 /// The fallback pipeline. The web's frames build their shape pipelines, or
 /// stand one in, and its build leaves this out.
-#[cfg(not(target_arch = "wasm32"))]
 mod pipeline {
     use std::sync::Arc;
 
@@ -137,7 +136,6 @@ fn fs_mesh(shaded: Shaded) -> @location(0) vec4<f32> {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 pub(crate) use pipeline::mesh_pipeline_job;
 
 /// A record's layer alpha and colour filter, applied as the shape stage's

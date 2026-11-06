@@ -42,7 +42,6 @@ pub(crate) enum InstantTexels {
 
 // The instant pipelines and what their draws bind beside their own. The
 // web builds every pipeline where it draws, and takes none of this.
-#[cfg(not(target_arch = "wasm32"))]
 mod pipelines {
     use std::{borrow::Cow, sync::Arc};
 
@@ -246,7 +245,6 @@ mod pipelines {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 pub(crate) use pipelines::InstantPipelines;
 
 // The built instant pipeline and what its draws bind beside their own.

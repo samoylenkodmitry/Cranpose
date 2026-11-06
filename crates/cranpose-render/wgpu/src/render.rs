@@ -1255,9 +1255,7 @@ impl GpuRenderer {
                 image_pipeline_dst_out: IMAGE_DST_OUT_PIPELINES.map(FixedPipeline::new),
                 glyph_atlas_pipeline: GLYPH_ATLAS_PIPELINES.map(FixedPipeline::new),
                 rrect_shadow_pipeline: RRECT_SHADOW_PIPELINES.map(FixedPipeline::new),
-                #[cfg(not(target_arch = "wasm32"))]
                 mesh_pipelines: MESH_FALLBACK_PIPELINES.map(FixedPipeline::new),
-                #[cfg(not(target_arch = "wasm32"))]
                 instant: crate::instant_triangles::InstantPipelines::new(
                     &device,
                     adapter_backend,
@@ -3667,7 +3665,6 @@ use text_resources::TextResources;
 pub(crate) mod admission_gate;
 mod glyph_atlas;
 mod renderer_pipelines;
-#[cfg(not(target_arch = "wasm32"))]
 use renderer_pipelines::MESH_FALLBACK_PIPELINES;
 use renderer_pipelines::{
     FixedDraw, GLYPH_ATLAS_PIPELINES, IMAGE_DST_OUT_PIPELINES, IMAGE_SRC_OVER_PIPELINES,

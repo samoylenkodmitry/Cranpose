@@ -56,7 +56,6 @@ pub(super) const GLYPH_ATLAS_PIPELINES: [&str; 6] = [
 
 pub(super) const RRECT_SHADOW_PIPELINES: [&str; 2] = ["shadow/rrect", "shadow/rrect/depth"];
 
-#[cfg(not(target_arch = "wasm32"))]
 pub(super) const MESH_FALLBACK_PIPELINES: [&str; 2] = ["mesh/fallback", "mesh/fallback/depth"];
 
 // The shaders of images, glyphs and round rect shadows, whose pipelines
@@ -134,11 +133,9 @@ pub(crate) struct RendererPipelines {
     /// The pipelines shape draws take while their own compile, without and
     /// with a depth buffer (see [`crate::mesh_fallback`]). The web's frames
     /// build their shape pipelines, or stand one in.
-    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) mesh_pipelines: [FixedPipeline; 2],
     // What fixed draws take while their own pipelines compile (see
     // `crate::instant_triangles`); the web builds them where it draws.
-    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) instant: crate::instant_triangles::InstantPipelines,
     pub(crate) image_shader: SharedShader,
     pub(crate) glyph_atlas_shader: SharedShader,
