@@ -39,7 +39,21 @@ fn render(composition: &mut Composition<MemoryApplier>, root: Key, log: &Log, ke
     composition.runtime_handle().drain_ui();
 }
 
-// Drains the runtime until every delay started before has resolved.
+// Drains the runtime until `done` holds, for up to five seconds. A timer can
+// fire well after its deadline: a process with background task policy, as a
+// macOS CI runner starts its jobs, saw a 20 ms delay resolve after more than
+// 100 ms.
+fn wait_until(composition: &Composition<MemoryApplier>, done: impl Fn() -> bool) {
+    let runtime = composition.runtime_handle();
+    let until = Instant::now() + Duration::from_secs(5);
+    while !done() && Instant::now() < until {
+        runtime.drain_ui();
+        std::thread::yield_now();
+    }
+}
+
+// Drains the runtime for a while after the delays started before are due, so
+// that a step which should not run had its chance to.
 fn wait_out_delays(composition: &Composition<MemoryApplier>) {
     let runtime = composition.runtime_handle();
     let until = Instant::now() + WAIT * 5;
@@ -60,6 +74,7 @@ fn a_new_key_stops_the_effect_where_it_awaits() {
     let log = Log::default();
     render(&mut composition, root, &log, Some(0));
     render(&mut composition, root, &log, Some(1));
+    wait_until(&composition, || noted(&log, "1 woke"));
     wait_out_delays(&composition);
 
     assert!(noted(&log, "0 waits") && noted(&log, "1 woke"), "{log:?}");
@@ -88,6 +103,7 @@ fn a_task_an_effect_launched_stops_with_the_effect() {
     let log = Log::default();
     render(&mut composition, root, &log, Some(0));
     render(&mut composition, root, &log, Some(1));
+    wait_until(&composition, || noted(&log, "1 child woke"));
     wait_out_delays(&composition);
 
     assert!(noted(&log, "1 child woke"), "{log:?}");
@@ -112,12 +128,7 @@ fn background_work_reports_to_an_effect_whose_block_has_returned() {
             });
         })
         .expect("render succeeds");
-    let runtime = composition.runtime_handle();
-    let until = Instant::now() + Duration::from_secs(5);
-    while got.get().is_none() && Instant::now() < until {
-        runtime.drain_ui();
-        std::thread::yield_now();
-    }
+    wait_until(&composition, || got.get().is_some());
 
     assert_eq!(got.get(), Some(7));
 }
@@ -161,7 +172,7 @@ fn ticked() -> Ticked {
     composition
         .render(root, move || ticking_effect(&note, &count))
         .expect("render succeeds");
-    wait_out_delays(&composition);
+    wait_until(&composition, || ticks.get() > 0);
     assert!(ticks.get() > 0 && !dropped.get(), "the loop never ran");
     Ticked {
         composition,
