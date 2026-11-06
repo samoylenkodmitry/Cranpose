@@ -465,6 +465,16 @@ impl Rewrite {
             to.passed_down - from.passed_down,
             self.spill.passed_down.len(),
         );
+        // The reach list holds where each spilled item reaches in place of
+        // the old run's, so it still holds after the splice.
+        if self.held == UpdatedReach::Held {
+            let (spill, window) = (&self.spill, self.window);
+            let spilled = spill
+                .order
+                .iter()
+                .map(|&item| spill.item_bounds(item, window));
+            self.reach.splice(from.items.order..to.items.order, spilled);
+        }
         splice_items(scene, (from.items, to.items), &mut self.spill);
         scene
             .subtrees
@@ -498,9 +508,8 @@ impl Rewrite {
         };
         self.records_moved += records.1 as isize - records.0 as isize;
         // The runs copied in place from the scene the walk started from no
-        // longer lie where they did, nor each item where `reach` holds.
+        // longer lie where they did.
         scene.kept.clear();
-        self.held = UpdatedReach::Lost;
         self.replaced = Replaced::Run;
         self.spill.clear();
     }
