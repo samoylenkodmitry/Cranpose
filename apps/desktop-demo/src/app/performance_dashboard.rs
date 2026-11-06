@@ -305,7 +305,7 @@ pub fn PerformanceTab() {
     let state = cranpose_core::rememberMutableStateOf(|| LoadState::Loading);
     let refresh = cranpose_core::rememberMutableStateOf(|| 0u64);
     let client = local_http_client().current();
-    cranpose_core::LaunchedEffect(refresh.get(), move |scope| {
+    cranpose_core::LaunchedEffect(refresh.get(), async move |scope| {
         state.set(LoadState::Loading);
         let client = std::sync::Arc::clone(&client);
         scope.launch_background(
@@ -794,7 +794,7 @@ enum FramesState {
 #[composable]
 fn run_frames(source: FrameSource, file: String) -> MutableState<FramesState> {
     let state = cranpose_core::rememberMutableStateOf(|| FramesState::Loading);
-    cranpose_core::LaunchedEffect(file.clone(), move |scope| {
+    cranpose_core::LaunchedEffect(file.clone(), async move |scope| {
         if file.is_empty() {
             state.set(FramesState::Failed(
                 "The run names no file of its frames.".to_string(),

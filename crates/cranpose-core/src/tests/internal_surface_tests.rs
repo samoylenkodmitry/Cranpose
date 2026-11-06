@@ -117,37 +117,6 @@ fn a_callback_holder_forwards_to_whichever_closure_was_last_stored() {
 }
 
 #[test]
-fn a_ui_task_label_is_taken_by_the_next_task_and_not_the_one_after() {
-    use std::sync::{
-        Arc,
-        atomic::{AtomicU32, Ordering},
-    };
-
-    use crate::runtime::label_next_ui_task;
-
-    let composition = Composition::new(MemoryApplier::new());
-    let runtime = composition.runtime_handle();
-    let order = Arc::new(AtomicU32::new(0));
-
-    label_next_ui_task("labelled");
-    let first = Arc::clone(&order);
-    runtime.post_ui(move || {
-        first.fetch_add(1, Ordering::SeqCst);
-    });
-    let second = Arc::clone(&order);
-    runtime.post_ui(move || {
-        second.fetch_add(10, Ordering::SeqCst);
-    });
-
-    runtime.drain_ui();
-    assert_eq!(
-        order.load(Ordering::SeqCst),
-        11,
-        "a labelled task changed what ran"
-    );
-}
-
-#[test]
 fn a_subcompose_state_takes_a_policy_and_pool_limits_without_disturbing_its_slots() {
     use crate::subcompose::{ContentTypeReusePolicy, SubcomposeState};
 

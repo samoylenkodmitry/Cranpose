@@ -129,7 +129,7 @@ handle, so both closures use the same state.
 | `count.value` | `count.get()`, `count.set(value)`, `count.update(...)` |
 | `Modifier.padding(16.dp)` | `Modifier::empty().padding(16.0)` |
 | `Column { ... }` | `Column(modifier, spec, move || { ... })` |
-| `LaunchedEffect(key)` | `LaunchedEffect` or `LaunchedEffectAsync` |
+| `LaunchedEffect(key) { ... }` | `LaunchedEffect(key, async move \|scope\| { ... })` |
 | `StateFlow.collectAsStateWithLifecycle()` | `StateFlowCollect::collectAsStateWithLifecycle()` |
 | `CompositionLocalProvider` | `CompositionLocalProvider` |
 

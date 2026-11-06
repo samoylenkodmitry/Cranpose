@@ -11,7 +11,7 @@ use std::{
 };
 
 use cranpose::{AppLauncher, WindowConfig, WindowModifierExt};
-use cranpose_core::{delay, rememberMutableStateOf, LaunchedEffectAsync};
+use cranpose_core::{delay, rememberMutableStateOf, LaunchedEffect};
 use cranpose_testing::{
     find_button_exact_in_semantics, find_text_by_prefix_in_semantics, print_semantics_with_bounds,
 };
@@ -118,17 +118,15 @@ fn run_cover() {
 #[composable(no_skip)]
 fn observed_app(progress: Arc<Progress>) {
     let frame_progress = Arc::clone(&progress);
-    LaunchedEffectAsync((), move |scope| {
-        Box::pin(async move {
-            while !frame_progress.enabled.load(Ordering::Acquire) {
-                delay(Duration::from_millis(20)).await;
-            }
-            let clock = scope.runtime().frame_clock();
-            loop {
-                clock.next_perpetual_frame().await;
-                frame_progress.frames.fetch_add(1, Ordering::Relaxed);
-            }
-        })
+    LaunchedEffect((), async move |scope| {
+        while !frame_progress.enabled.load(Ordering::Acquire) {
+            delay(Duration::from_millis(20)).await;
+        }
+        let clock = scope.runtime().frame_clock();
+        loop {
+            clock.next_perpetual_frame().await;
+            frame_progress.frames.fetch_add(1, Ordering::Relaxed);
+        }
     });
     Box(
         Modifier::empty().fill_max_size(),
@@ -143,21 +141,19 @@ fn observed_app(progress: Arc<Progress>) {
 #[composable(no_skip)]
 fn timer_window(progress: Arc<Progress>) {
     let ticks = rememberMutableStateOf(|| 0_u64);
-    LaunchedEffectAsync((), move |_| {
-        Box::pin(async move {
-            loop {
-                delay(Duration::from_millis(100)).await;
-                if !progress.enabled.load(Ordering::Acquire) {
-                    continue;
-                }
-                if progress.pause_timer.load(Ordering::Acquire) {
-                    progress.timer_paused.store(true, Ordering::Release);
-                    break;
-                }
-                let next = progress.timers.fetch_add(1, Ordering::Relaxed) + 1;
-                ticks.set(next);
+    LaunchedEffect((), async move |_| {
+        loop {
+            delay(Duration::from_millis(100)).await;
+            if !progress.enabled.load(Ordering::Acquire) {
+                continue;
             }
-        })
+            if progress.pause_timer.load(Ordering::Acquire) {
+                progress.timer_paused.store(true, Ordering::Release);
+                break;
+            }
+            let next = progress.timers.fetch_add(1, Ordering::Relaxed) + 1;
+            ticks.set(next);
+        }
     });
     Box(
         Modifier::empty()

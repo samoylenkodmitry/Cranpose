@@ -1,6 +1,6 @@
 // Work that runs once a frame while it is on, told how long each frame took.
 
-use cranpose_core::LaunchedEffectAsync;
+use cranpose_core::LaunchedEffect;
 use cranpose_ui::composable;
 
 // The longest step a frame takes, in seconds: a frame that comes late, as
@@ -11,19 +11,17 @@ pub(crate) const LONGEST_STEP_SECONDS: f32 = 0.1;
 // `LONGEST_STEP_SECONDS` long.
 #[composable(no_skip)]
 pub(crate) fn Ticking(on: bool, tick: impl Fn(f32) + 'static) {
-    LaunchedEffectAsync(on, move |scope| {
-        Box::pin(async move {
-            if !on {
-                return;
-            }
-            let clock = scope.runtime().frame_clock();
-            let mut last = clock.next_frame().await;
-            while scope.is_active() {
-                let now = clock.next_frame().await;
-                tick(seconds_between(last, now).min(LONGEST_STEP_SECONDS));
-                last = now;
-            }
-        })
+    LaunchedEffect(on, async move |scope| {
+        if !on {
+            return;
+        }
+        let clock = scope.runtime().frame_clock();
+        let mut last = clock.next_frame().await;
+        loop {
+            let now = clock.next_frame().await;
+            tick(seconds_between(last, now).min(LONGEST_STEP_SECONDS));
+            last = now;
+        }
     });
 }
 

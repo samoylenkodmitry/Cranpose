@@ -35,33 +35,28 @@ pub fn FeedScreen(load: FeedLoad) {
     let list_state = rememberLazyListState();
     let speed = load.speed;
 
-    LaunchedEffectAsync(speed.to_bits(), move |scope| {
-        std::boxed::Box::pin(async move {
-            if speed == 0.0 {
-                return;
+    LaunchedEffect(speed.to_bits(), async move |scope| {
+        if speed == 0.0 {
+            return;
+        }
+        let clock = scope.runtime().frame_clock();
+        let start = clock.next_frame().await;
+        let mut last = start;
+        let mut next_report = 5.0;
+        loop {
+            let now = clock.next_frame().await;
+            let dt = now.saturating_sub(last) as f32 / 1e9;
+            last = now;
+            list_state.dispatch_scroll_delta(-speed * dt);
+            let elapsed = now.saturating_sub(start) as f32 / 1e9;
+            if elapsed >= next_report {
+                next_report += 5.0;
+                log::info!(
+                    "PERF feed t={elapsed:.1} first_visible={}",
+                    list_state.first_visible_item_index_non_reactive()
+                );
             }
-            let clock = scope.runtime().frame_clock();
-            let start = clock.next_frame().await;
-            let mut last = start;
-            let mut next_report = 5.0;
-            while scope.is_active() {
-                let now = clock.next_frame().await;
-                if !scope.is_active() {
-                    break;
-                }
-                let dt = now.saturating_sub(last) as f32 / 1e9;
-                last = now;
-                list_state.dispatch_scroll_delta(-speed * dt);
-                let elapsed = now.saturating_sub(start) as f32 / 1e9;
-                if elapsed >= next_report {
-                    next_report += 5.0;
-                    log::info!(
-                        "PERF feed t={elapsed:.1} first_visible={}",
-                        list_state.first_visible_item_index_non_reactive()
-                    );
-                }
-            }
-        })
+        }
     });
 
     let s = load.scale;

@@ -209,14 +209,14 @@ mod composition_api {
     pub use cranpose_core::{
         BlockingError, BlockingExecutor, BlockingExecutorConfig, BlockingTask, CollectEvents,
         ComputedState, CoroutineScope, DisposableEffect, DisposableEffectResult,
-        DisposableEffectScope, EventStream, LaunchedEffect, LaunchedEffectAsync,
-        LaunchedEffectScope, MovableContent, MutableState, SnapshotStateList, SnapshotStateMap,
-        State, TaskHandle, collectAsState, computedStateOf, delay, derivedStateOf, forget_movable,
-        interval, key, launchBlocking, movable, movableContentOf, mutableStateList,
-        mutableStateListOf, mutableStateMap, mutableStateMapOf, mutableStateOf,
-        mutableStateOfNeverEqual, produceState, remember, rememberCoroutineScope,
-        rememberEventStream, rememberKeyed, rememberMovableContentOf, rememberMutableStateOf,
-        rememberMutableStateOfNeverEqual, rememberUpdatedState, withBlocking,
+        DisposableEffectScope, EventStream, LaunchedEffect, LaunchedEffectScope, MovableContent,
+        MutableState, SnapshotStateList, SnapshotStateMap, State, TaskHandle, collectAsState,
+        computedStateOf, delay, derivedStateOf, forget_movable, interval, key, launchBlocking,
+        movable, movableContentOf, mutableStateList, mutableStateListOf, mutableStateMap,
+        mutableStateMapOf, mutableStateOf, mutableStateOfNeverEqual, produceState, remember,
+        rememberCoroutineScope, rememberEventStream, rememberKeyed, rememberMovableContentOf,
+        rememberMutableStateOf, rememberMutableStateOfNeverEqual, rememberUpdatedState,
+        withBlocking,
     };
 }
 #[cfg(feature = "image-loading")]
@@ -271,8 +271,9 @@ pub fn BundledAssetInstallEffect<K: PartialEq + 'static>(
 ) {
     cranpose_core::__launched_effect_impl(
         caller_location_key().scoped(cranpose_core::location_key!()),
+        std::panic::Location::caller().into(),
         keys,
-        move |scope| {
+        async move |scope| {
             scope.launch_background(
                 move |_token| async move { install_bundled_asset_set(&spec) },
                 on_result,
@@ -323,24 +324,19 @@ pub fn FrameEffect<K: PartialEq + 'static>(
     let on_frame: std::rc::Rc<std::cell::RefCell<dyn FnMut(u64)>> =
         std::rc::Rc::new(std::cell::RefCell::new(on_frame));
     let on_frame = rememberUpdatedState(on_frame);
-    cranpose_core::__launched_effect_async_impl(
+    cranpose_core::__launched_effect_impl(
         caller_location_key().scoped(cranpose_core::location_key!()),
         std::panic::Location::caller().into(),
         (keys, running),
-        move |scope| {
-            Box::pin(async move {
-                if !running {
-                    return;
-                }
-                let clock = scope.runtime().frame_clock();
-                while scope.is_active() {
-                    let now = clock.next_frame().await;
-                    if !scope.is_active() {
-                        break;
-                    }
-                    (on_frame.value().borrow_mut())(now);
-                }
-            })
+        async move |scope| {
+            if !running {
+                return;
+            }
+            let clock = scope.runtime().frame_clock();
+            loop {
+                let now = clock.next_frame().await;
+                (on_frame.value().borrow_mut())(now);
+            }
         },
     );
 }

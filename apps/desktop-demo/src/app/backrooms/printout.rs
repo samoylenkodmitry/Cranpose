@@ -51,7 +51,7 @@ pub(super) fn Printout(sight: Sight, printout: plan::Printout, size: (f32, f32))
     let page = sight.level.shelf.page(printout.file);
     // The wall wants its page once it shows: an effect, as composing only
     // describes what shows.
-    LaunchedEffect(printout.file, move |_| {
+    LaunchedEffect(printout.file, async move |_| {
         if page.get_non_reactive() == Page::Blank {
             page.set(Page::Wanted);
         }

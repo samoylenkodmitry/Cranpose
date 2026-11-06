@@ -32,6 +32,7 @@ use crate::{
     hooks::{mutableStateOfNeverEqual, remember},
     runtime::{RuntimeHandle, TaskHandle, current_runtime_handle},
     state::{MutableState, State},
+    task_site::TaskLabel,
 };
 
 /// Spawns `future` on the current runtime's UI task queue.
@@ -71,19 +72,36 @@ struct CompositionScopeOwner(CoroutineScope);
 
 impl Drop for CompositionScopeOwner {
     fn drop(&mut self) {
-        self.0.inner.closed.set(true);
-        self.0.cancel();
+        self.0.close();
     }
 }
 
 impl CoroutineScope {
+    pub(crate) fn new(runtime: Option<RuntimeHandle>) -> Self {
+        Self {
+            inner: Rc::new(ScopeInner {
+                runtime,
+                tasks: RefCell::new(Vec::new()),
+                closed: Cell::new(false),
+            }),
+        }
+    }
+
     /// Launches `future`, keeping it alive until it finishes or the scope is
     /// cancelled.
     pub fn launch(&self, future: impl Future<Output = ()> + 'static) {
+        self.launch_labelled(Box::pin(future), TaskLabel::Unnamed);
+    }
+
+    pub(crate) fn launch_labelled(
+        &self,
+        future: Pin<Box<dyn Future<Output = ()>>>,
+        label: TaskLabel,
+    ) {
         if self.inner.closed.get() {
             return;
         }
-        let Some(runtime) = self.inner.runtime.clone() else {
+        let Some(runtime) = self.inner.runtime.as_ref() else {
             log::warn!("cranpose: a coroutine scope with no runtime dropped its work");
             return;
         };
@@ -91,9 +109,15 @@ impl CoroutineScope {
             .tasks
             .borrow_mut()
             .retain(|task| !task.is_finished());
-        if let Some(handle) = runtime.spawn_ui(future) {
+        if let Some(handle) = runtime.spawn_labelled(future, label) {
             self.inner.tasks.borrow_mut().push(handle);
         }
+    }
+
+    // Cancels every task and refuses new ones.
+    pub(crate) fn close(&self) {
+        self.inner.closed.set(true);
+        self.cancel();
     }
 
     /// Cancels every task this scope launched.
@@ -114,16 +138,8 @@ impl CoroutineScope {
 #[expect(non_snake_case, reason = "names follow Compose's casing")]
 #[track_caller]
 pub fn rememberCoroutineScope() -> CoroutineScope {
-    remember(|| {
-        CompositionScopeOwner(CoroutineScope {
-            inner: Rc::new(ScopeInner {
-                runtime: current_runtime_handle(),
-                tasks: RefCell::new(Vec::new()),
-                closed: Cell::new(false),
-            }),
-        })
-    })
-    .with(|owner| owner.0.clone())
+    remember(|| CompositionScopeOwner(CoroutineScope::new(current_runtime_handle())))
+        .with(|owner| owner.0.clone())
 }
 
 /// Resolves after `duration` has elapsed.
@@ -578,17 +594,15 @@ where
     T: 'static,
     K: PartialEq + 'static,
 {
-    crate::__launched_effect_async_impl(
+    crate::__launched_effect_impl(
         crate::caller_location_key(),
         std::panic::Location::caller().into(),
         key,
-        move |_scope| {
+        async move |_| {
             let mut on_event = on_event;
-            Box::pin(async move {
-                while let Some(event) = stream.next().await {
-                    on_event(event);
-                }
-            })
+            while let Some(event) = stream.next().await {
+                on_event(event);
+            }
         },
     );
 }
@@ -735,15 +749,16 @@ where
 /// leaves.
 #[expect(non_snake_case, reason = "names follow Compose's casing")]
 #[track_caller]
-pub fn produceState<T, K, F>(initial: T, key: K, producer: F) -> State<T>
+pub fn produceState<T, K, F, Fut>(initial: T, key: K, producer: F) -> State<T>
 where
     T: Clone + 'static,
     K: PartialEq + 'static,
-    F: FnOnce(ProduceScope<T>) -> Pin<Box<dyn Future<Output = ()>>> + 'static,
+    F: FnOnce(ProduceScope<T>) -> Fut + 'static,
+    Fut: Future<Output = ()> + 'static,
 {
     let state = remember(|| mutableStateOfNeverEqual(initial)).with(|state| *state);
     let handle = ProduceScope { state };
-    crate::__launched_effect_async_impl(
+    crate::__launched_effect_impl(
         crate::caller_location_key(),
         std::panic::Location::caller().into(),
         key,

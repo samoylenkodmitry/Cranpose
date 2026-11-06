@@ -11,7 +11,7 @@ use std::{
     time::Duration,
 };
 
-use cranpose_core::{LaunchedEffectAsync, MutableState, delay, mutableStateOf, remember};
+use cranpose_core::{LaunchedEffect, MutableState, delay, mutableStateOf, remember};
 use cranpose_foundation::LiveRegionMode;
 use cranpose_macros::composable;
 use cranpose_services::local_accessibility_state;
@@ -263,13 +263,11 @@ pub fn LiquidSnackbarHost(state: LiquidSnackbarHostState, modifier: Modifier) {
             .duration
             .timeout(reader_on, shown.visuals.action_label.is_some());
         let (host, id) = (state.clone(), shown.id);
-        LaunchedEffectAsync((id, timeout), move |_| {
-            Box::pin(async move {
-                if let Some(timeout) = timeout {
-                    delay(timeout).await;
-                    host.finish(id, SnackbarResult::Dismissed);
-                }
-            })
+        LaunchedEffect((id, timeout), async move |_| {
+            if let Some(timeout) = timeout {
+                delay(timeout).await;
+                host.finish(id, SnackbarResult::Dismissed);
+            }
         });
     }
     AnimatedVisibility(

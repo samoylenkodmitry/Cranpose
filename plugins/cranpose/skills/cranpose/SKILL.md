@@ -78,13 +78,15 @@ them.
 
 ## Effects
 
-`LaunchedEffect` takes a key expression first, like `remember`. The effect
-restarts when the key changes:
+`LaunchedEffect` takes a key expression first, like `remember`, and an async
+closure. The effect restarts when the key changes. The restart cancels the
+running coroutine where it awaits, so no line after that `.await` runs:
 
 ```rust
-LaunchedEffect(request_id.get(), move |scope| {
+LaunchedEffect(request_id.get(), async move |_| {
     state.set(Loading);
-    scope.launch_background(/* ... */);
+    let text = client.get_text(&url).await;
+    state.set(Loaded(text));
 });
 ```
 

@@ -72,23 +72,11 @@ pub(super) fn Printer(shelf: Shelf) {
 #[composable]
 fn PageFetch(page: MutableState<Page>, name: &'static str) {
     let client = local_http_client().current();
-    LaunchedEffect((), move |scope| {
+    LaunchedEffect((), async move |_| {
         let url = repository_file_url(&format!("{DIRECTORY}/{name}"));
-        scope.launch_background(
-            move |_token| async move {
-                client
-                    .get_text(&url)
-                    .await
-                    .map_err(|error| error.to_string())
-            },
-            move |fetched| {
-                page.set(match fetched {
-                    Ok(text) => {
-                        Page::Printed(text.lines().map(|line| line.to_owned().into()).collect())
-                    }
-                    Err(error) => Page::Torn(error.into()),
-                });
-            },
-        );
+        page.set(match client.get_text(&url).await {
+            Ok(text) => Page::Printed(text.lines().map(|line| line.to_owned().into()).collect()),
+            Err(error) => Page::Torn(error.to_string().into()),
+        });
     });
 }

@@ -10,7 +10,7 @@ use cranpose::liquid::prelude::{LiquidTheme, LiquidThemeSpec, LiquidToggle, Sche
 use cranpose_animation::{
     infiniteRepeatable, rememberInfiniteTransition, AnimationSpec, Easing, RepeatMode, StartOffset,
 };
-use cranpose_core::{delay, rememberMutableStateOf, LaunchedEffectAsync, MutableState, State};
+use cranpose_core::{delay, rememberMutableStateOf, LaunchedEffect, MutableState, State};
 use cranpose_ui::{
     composable,
     space::{Mat4, Material, MeshSurface, Vec3},
@@ -109,15 +109,11 @@ pub(super) fn Anomaly(sight: Sight, thing: Thing, middle: Vec3) {
 #[composable]
 fn Watcher(sight: Sight, middle: Vec3) {
     let shut = rememberMutableStateOf(|| false);
-    LaunchedEffectAsync(shut.get(), move |scope| {
-        Box::pin(async move {
-            if shut.get_non_reactive() {
-                delay(BLINK).await;
-                if scope.is_active() {
-                    shut.set(false);
-                }
-            }
-        })
+    LaunchedEffect(shut.get(), async move |_| {
+        if shut.get_non_reactive() {
+            delay(BLINK).await;
+            shut.set(false);
+        }
     });
     let bob = rememberSwing("watcher_bob", (-BOB, BOB), BOB_MILLIS);
     let sphere = Arc::clone(&sight.level.meshes.sphere);
@@ -289,20 +285,15 @@ fn Broadcast(journey: Journey, film: State<f32>) {
     let words = notes::screen(line.get(), &journey);
     let length = words.chars().count();
     let haunts = notes::haunts(line.get());
-    LaunchedEffectAsync(line.get(), move |scope| {
-        Box::pin(async move {
-            letters.set(0);
-            for typed in 1..=length {
-                delay(LETTER).await;
-                if !scope.is_active() {
-                    return;
-                }
-                letters.set(typed);
-            }
-            if haunts {
-                journey.haunt();
-            }
-        })
+    LaunchedEffect(line.get(), async move |_| {
+        letters.set(0);
+        for typed in 1..=length {
+            delay(LETTER).await;
+            letters.set(typed);
+        }
+        if haunts {
+            journey.haunt();
+        }
     });
     Box(
         Modifier::empty()
@@ -376,16 +367,14 @@ fn static_noise(scope: &mut dyn DrawScope, frame: u32) {
 #[composable(no_skip)]
 fn Poltergeist(sight: Sight, middle: Vec3) {
     let on = rememberMutableStateOf(|| 0b01_0110_1001_u32);
-    LaunchedEffectAsync((), move |scope| {
-        Box::pin(async move {
-            let mut flips = 0_u32;
-            while scope.is_active() {
-                delay(FLIP).await;
-                flips = flips.wrapping_add(1);
-                let bit = noise(flips, 7) % SWITCHES;
-                on.update(|on| *on ^= 1 << bit);
-            }
-        })
+    LaunchedEffect((), async move |_| {
+        let mut flips = 0_u32;
+        loop {
+            delay(FLIP).await;
+            flips = flips.wrapping_add(1);
+            let bit = noise(flips, 7) % SWITCHES;
+            on.update(|on| *on ^= 1 << bit);
+        }
     });
     let sway = rememberSwing("poltergeist_sway", (-SWAY, SWAY), SWAY_MILLIS);
     let plane = Arc::clone(&sight.level.meshes.plane);

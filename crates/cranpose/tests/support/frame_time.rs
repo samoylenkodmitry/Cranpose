@@ -3,7 +3,7 @@
 // shows the same picture at the same time.
 
 use cranpose::prelude::*;
-use cranpose_core::{LaunchedEffectAsync, MutableState, rememberMutableStateOf};
+use cranpose_core::{LaunchedEffect, MutableState, rememberMutableStateOf};
 
 // The milliseconds since the first frame, read where a value changes.
 pub(super) type Time = MutableState<u64>;
@@ -12,17 +12,15 @@ pub(super) type Time = MutableState<u64>;
 #[composable]
 pub(super) fn frame_time(on_frame: impl Fn(u64) + 'static) -> Time {
     let time = rememberMutableStateOf(|| 0u64);
-    LaunchedEffectAsync((), move |scope| {
-        Box::pin(async move {
-            let clock = scope.runtime().frame_clock();
-            let start = clock.next_frame().await;
-            loop {
-                let now = clock.next_frame().await;
-                let t = now.saturating_sub(start) / 1_000_000;
-                time.set(t);
-                on_frame(t);
-            }
-        })
+    LaunchedEffect((), async move |scope| {
+        let clock = scope.runtime().frame_clock();
+        let start = clock.next_frame().await;
+        loop {
+            let now = clock.next_frame().await;
+            let t = now.saturating_sub(start) / 1_000_000;
+            time.set(t);
+            on_frame(t);
+        }
     });
     time
 }

@@ -15,7 +15,7 @@ use cranpose::liquid::prelude::{
 };
 use cranpose_core::{
     derivedStateOf, key, remember, rememberMutableStateOf, CompositionLocalProvider,
-    LaunchedEffectAsync, MutableState,
+    LaunchedEffect, MutableState,
 };
 use cranpose_ui::{
     composable, local_eye,
@@ -179,45 +179,41 @@ fn Walls(room: RoomState, (shape, spatial): (RoomShape, bool), meshes: RoomMeshe
 fn RoomMotion(room: RoomState, shape: RoomShape) {
     let entered = room.is_entered();
     let mover = room.clone();
-    LaunchedEffectAsync(entered, move |scope| {
-        Box::pin(async move {
-            let target = if entered { 1.0 } else { 0.0 };
-            let clock = scope.runtime().frame_clock();
-            let mut last = clock.next_frame().await;
-            while scope.is_active() && mover.progress.get() != target {
-                let now = clock.next_frame().await;
-                let step = seconds_between(last, now) / TRANSITION_SECONDS;
-                last = now;
-                mover.progress.update(|progress| {
-                    *progress = if target > *progress {
-                        (*progress + step).min(target)
-                    } else {
-                        (*progress - step).max(target)
-                    };
-                });
-            }
-            if scope.is_active() && !entered {
-                mover.flatten();
-            }
-        })
+    LaunchedEffect(entered, async move |scope| {
+        let target = if entered { 1.0 } else { 0.0 };
+        let clock = scope.runtime().frame_clock();
+        let mut last = clock.next_frame().await;
+        while mover.progress.get() != target {
+            let now = clock.next_frame().await;
+            let step = seconds_between(last, now) / TRANSITION_SECONDS;
+            last = now;
+            mover.progress.update(|progress| {
+                *progress = if target > *progress {
+                    (*progress + step).min(target)
+                } else {
+                    (*progress - step).max(target)
+                };
+            });
+        }
+        if !entered {
+            mover.flatten();
+        }
     });
     let moving = !room.held.get().is_empty();
-    LaunchedEffectAsync((moving, shape), move |scope| {
-        Box::pin(async move {
-            if !moving {
-                return;
+    LaunchedEffect((moving, shape), async move |scope| {
+        if !moving {
+            return;
+        }
+        let clock = scope.runtime().frame_clock();
+        let mut last = clock.next_frame().await;
+        loop {
+            let now = clock.next_frame().await;
+            let seconds = seconds_between(last, now).min(LONGEST_STEP_SECONDS);
+            last = now;
+            if !room.walk(seconds) {
+                break;
             }
-            let clock = scope.runtime().frame_clock();
-            let mut last = clock.next_frame().await;
-            while scope.is_active() {
-                let now = clock.next_frame().await;
-                let seconds = seconds_between(last, now).min(LONGEST_STEP_SECONDS);
-                last = now;
-                if !room.walk(seconds) {
-                    break;
-                }
-            }
-        })
+        }
     });
 }
 

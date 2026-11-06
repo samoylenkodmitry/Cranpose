@@ -3,6 +3,7 @@ mod blocking_work;
 mod callback_parameters;
 mod computed_locals;
 mod computed_state;
+mod effect_cancellation;
 mod effects_and_frames;
 mod global_writes;
 mod kept_constants;

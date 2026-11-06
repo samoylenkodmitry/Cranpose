@@ -46,7 +46,7 @@ pub(crate) fn BackroomsTab() {
     Printer(shelf);
     Walking(walker.clone());
     let focus = walker.focus.clone();
-    LaunchedEffect((), move |_| {
+    LaunchedEffect((), async move |_| {
         if let Err(error) = focus.request_focus() {
             log::warn!("the backrooms could not take focus: {error:?}");
         }
