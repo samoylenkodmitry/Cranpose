@@ -1,11 +1,11 @@
 #!/system/bin/sh
 # One measurement window, run on the device so no adb round trip lands inside it.
-# Usage: perf_window.sh PIDS PACKAGE LAYER END INTERVAL_S GFXINFO(0|1) START SLOW_FPS SLOW_SECONDS
+# Usage: perf_window.sh PIDS PACKAGE LAYER END INTERVAL_S GFXINFO(0|1) SLOW_FPS SLOW_SECONDS
 # END is the run's end on /proc/uptime's clock: the launch plus the run's
-# length, so every run lasts the same from its launch. START is the launch on
-# that clock. A run whose layer presented fewer than SLOW_FPS frames in each
-# of SLOW_SECONDS seconds in a row ends there, with a SLOW line: the rest of
-# it would only repeat that the app is slow.
+# length, so every run lasts the same from its launch. A run whose layer
+# presented fewer than SLOW_FPS frames in each of SLOW_SECONDS seconds in a
+# row since its first frame ends there, with a SLOW line: the rest of it
+# would only repeat that the app is slow.
 # PIDS is one process id, or a comma-separated list for an app that runs in
 # several (a browser): the first is the one that must stay alive.
 # At the end, WHOLE lists every process of PACKAGE (named PACKAGE, or
@@ -27,9 +27,8 @@ LAYER=$3
 END=$4
 INTERVAL=$5
 GFX=$6
-START=$7
-SLOW_FPS=$8
-SLOW_SECONDS=$9
+SLOW_FPS=$7
+SLOW_SECONDS=$8
 # The Mali GPU clock where the kernel exposes it (kHz on the Pixel 9 Pro);
 # the Kirin 980 reports its clocks on the F line instead.
 MALI_CLOCK=/sys/class/misc/mali0/device/cur_freq
@@ -90,15 +89,17 @@ i=0
 read_node() { cat "$1" 2>/dev/null || echo -; }
 before_end() { awk -v now="$(cut -d' ' -f1 /proc/uptime)" -v end="$END" 'BEGIN { exit !(now < end) }'; }
 # Whether, at the newest poll, each of the last SLOW_SECONDS whole seconds
-# since the launch held fewer presents than SLOW_FPS. A second's presents are
-# the count of the newest poll at or before its end less that at or before
-# its start; the launch counts as a poll that found none.
+# since the first frame held fewer presents than SLOW_FPS. The first poll that
+# found a present stands for the first frame. A second's presents are the
+# count of the newest poll at or before its end less that at or before its
+# start. Before the first frame the app is still starting, which every run
+# measures whole.
 slow() {
-  awk -v start="$START" -v fps="$SLOW_FPS" -v seconds="$SLOW_SECONDS" '
+  awk -v fps="$SLOW_FPS" -v seconds="$SLOW_SECONDS" '
     function total_at(t,    i) { for (i = NR; i > 0; i--) if (at[i] <= t) return total[i]; return 0 }
-    { at[NR] = $1; total[NR] = $2 }
+    { at[NR] = $1; total[NR] = $2; if (!started && $2 > 0) { started = 1; start = $1 } }
     END {
-      if (NR == 0) exit 1
+      if (!started) exit 1
       done = int(at[NR] - start)
       if (done < seconds) exit 1
       for (s = done - seconds; s < done; s++)

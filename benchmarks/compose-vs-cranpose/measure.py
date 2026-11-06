@@ -807,7 +807,7 @@ class PageTarget:
 def measure_run(device, app, scenario, args, destination, run_s=None):
     """One cold launch, measured from the start command for `run_s` seconds
     (`args.run` unless given), or until it presented fewer than `SLOW_FPS`
-    frames in each of `SLOW_SECONDS` seconds in a row: every frame the layer presented,
+    frames in each of `SLOW_SECONDS` seconds in a row since its first frame: every frame the layer presented,
     the CPU every process of the app spent since it started, the clocks and
     the memory held at the end. Nothing of the run is left out: its first
     seconds, the launch and the first frames included, count as the rest do.
@@ -825,7 +825,7 @@ def measure_run(device, app, scenario, args, destination, run_s=None):
     layer = target.layer(device)
     output = device.shell('sh', REMOTE_WINDOW, ','.join(map(str, pids)), target.package, layer,
                           f'{launched + run_s:.2f}', str(args.interval), '1' if target.gfx else '0',
-                          f'{launched:.2f}', str(SLOW_FPS), str(SLOW_SECONDS), timeout=run_s + 60)
+                          str(SLOW_FPS), str(SLOW_SECONDS), timeout=run_s + 60)
     (destination / f'{target.name}-{scenario}-{int(time.time())}.txt').write_text(output)
     lines = output.splitlines()
     t1 = float(next(line for line in lines if line.startswith('T1 ')).split()[1])

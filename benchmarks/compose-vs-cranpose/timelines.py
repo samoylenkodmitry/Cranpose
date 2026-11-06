@@ -7,9 +7,11 @@ in each second from a launch."""
 STARTS = ('first', 'second')
 
 # A run whose app presented fewer than SLOW_FPS frames in each of the last
-# SLOW_SECONDS whole seconds since its launch ends there: the rest would only
-# repeat that it is slow. Seconds in a row, not an average, so a slow start
-# that the app then outruns does not end it.
+# SLOW_SECONDS whole seconds since its first frame ends there: the rest would
+# only repeat that it is slow. Seconds in a row, not an average, so a slow
+# start that the app then outruns does not end it. The seconds before the
+# first frame are the launch, which every run measures whole: an app whose
+# first frame comes late is measured from there, not ended before it shows.
 SLOW_FPS = 30
 SLOW_SECONDS = 5
 
