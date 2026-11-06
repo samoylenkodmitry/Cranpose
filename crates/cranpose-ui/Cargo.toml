@@ -98,3 +98,4 @@ path = "tests/integration.rs"
 [[test]]
 name = "allocations"
 path = "tests/allocations/main.rs"
+harness = false

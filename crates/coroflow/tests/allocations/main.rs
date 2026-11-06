@@ -3,6 +3,10 @@ use std::{alloc::System, task::Poll};
 use coroflow::{FlowExt, MutableStateFlow, Turbine, flow};
 use stats_alloc::{INSTRUMENTED_SYSTEM, Region, StatsAlloc};
 
+#[macro_use]
+#[path = "../support/main_thread_test.rs"]
+mod main_thread_test;
+
 #[global_allocator]
 static GLOBAL: &StatsAlloc<System> = &INSTRUMENTED_SYSTEM;
 
@@ -63,8 +67,9 @@ fn flow_block_allocations() {
     );
 }
 
-#[test]
 fn flows_allocate_per_collection_and_never_per_emitted_value() {
     operator_chain_allocations();
     flow_block_allocations();
 }
+
+main_thread_test!(flows_allocate_per_collection_and_never_per_emitted_value);

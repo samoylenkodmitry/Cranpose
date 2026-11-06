@@ -17,6 +17,10 @@ use cranpose_ui::{
 use cranpose_ui_graphics::{Color, Size};
 use stats_alloc::{INSTRUMENTED_SYSTEM, Region, StatsAlloc};
 
+#[macro_use]
+#[path = "../../../coroflow/tests/support/main_thread_test.rs"]
+mod main_thread_test;
+
 #[path = "../support/thread_exit.rs"]
 mod thread_exit;
 
@@ -314,7 +318,6 @@ fn a_thread_that_held_a_composition_frees_its_memory_at_exit() {
 
 /// One test, so no other test's allocations land in these regions: the
 /// counting allocator counts every thread.
-#[test]
 fn layout_and_modifiers_stay_within_their_allocation_budgets() {
     remeasuring_a_row_allocates_nothing();
     a_layout_pass_lends_its_applier_without_rebuilding_it();
@@ -328,3 +331,5 @@ fn layout_and_modifiers_stay_within_their_allocation_budgets() {
     owned_bitmaps_do_not_retain_spare_pixel_capacity();
     a_thread_that_held_a_composition_frees_its_memory_at_exit();
 }
+
+main_thread_test!(layout_and_modifiers_stay_within_their_allocation_budgets);
