@@ -766,7 +766,14 @@ impl ChildSlot<'_> {
                 );
                 continue;
             };
+            // The children pushed anew since the pushes last fit their old
+            // places, and a child that went away, give way to the child's
+            // old subtree, which its pushes then take the places of. A splice
+            // moves the old records after it.
+            let moved = scene.records_moved();
+            let at = scene.rejoin(at);
             let end = scene.subtrees[at].end;
+            let rejoined = scene.records_moved();
             let record = &scene.subtrees[at];
             let mark = walk.marks.marks.get(walk.applier, child);
             let clean = mark == 0;
@@ -807,7 +814,9 @@ impl ChildSlot<'_> {
                     Some(children),
                 );
             }
-            old.cursor = end;
+            let now = scene.records_moved();
+            old.cursor = end.saturating_add_signed(now - rejoined);
+            old.end = old.end.saturating_add_signed(now - moved);
         }
     }
 }

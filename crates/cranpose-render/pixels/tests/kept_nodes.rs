@@ -1,12 +1,16 @@
 // A frame kept by a host and redrawn only in the areas
 // `PixelsRenderer::update_picture` reports stays equal to a full redraw
 // while an update pushes again what it kept of nodes that did not change:
-// boxes and rows that move, a parent that turns, and nodes between and
-// above the nodes that change.
+// boxes and rows that move, a parent that turns, nodes between and above
+// the nodes that change, and children that come and go before children
+// that change.
 
-use cranpose_core::rememberMutableStateOf;
+use cranpose_core::{key, rememberMutableStateOf};
 use cranpose_macros::composable;
-use cranpose_ui::{Box, BoxSpec, Column, ColumnSpec, MemoryHeadroom, Modifier, Text, TextStyle};
+use cranpose_ui::{
+    Box, BoxSpec, Column, ColumnSpec, LazyColumn, LazyColumnSpec, LazyItems, LazyListScope,
+    MemoryHeadroom, Modifier, Text, TextStyle, rememberLazyListState,
+};
 use cranpose_ui_graphics::{Color, GraphicsLayer};
 
 #[path = "support/kept_frames.rs"]
@@ -384,4 +388,59 @@ fn rows_under_a_changing_alpha_draw_right_with_ample_memory() {
 #[test]
 fn rows_under_a_changing_alpha_draw_right_with_little_memory() {
     kept_frames_match_full_redraws_with(1.0, MemoryHeadroom::Tight, FadingLiveRows);
+}
+
+// A list that scrolls 7 pixels a step over rows like `LiveRows`'s: a row
+// leaves at its top and another comes in at its bottom every few steps,
+// while the rows between move and their boxes change.
+#[composable]
+fn ScrollingLiveRows(captured: Step) {
+    let step = rememberMutableStateOf(|| 0u32);
+    *captured.borrow_mut() = Some(step);
+    let list = rememberLazyListState();
+    let scroll = step.value() as f32 * 7.0;
+    list.scroll_to_item((scroll / 24.0) as usize, scroll % 24.0);
+    LazyColumn(
+        Modifier::empty()
+            .offset(4.0, 4.0)
+            .width(130.0)
+            .height(120.0),
+        list,
+        LazyColumnSpec::default(),
+        move |scope| {
+            scope.items(LazyItems::new(40), move |row| LiveRow(row as u32, step));
+        },
+    );
+}
+
+// Rows like `LiveRows`'s in a column, each named by a key: the third leaves
+// on odd steps and comes back on even ones, and the first two leave together
+// every fourth step.
+#[composable]
+fn ComingAndGoingRows(captured: Step) {
+    let step = rememberMutableStateOf(|| 0u32);
+    *captured.borrow_mut() = Some(step);
+    Column(
+        Modifier::empty().offset(4.0, 4.0),
+        ColumnSpec::default(),
+        move || {
+            let n = step.value();
+            for row in 0..6 {
+                let gone = (row == 2 && n % 2 == 1) || (row < 2 && n % 4 == 3);
+                if !gone {
+                    key(row, || LiveRow(row, step));
+                }
+            }
+        },
+    );
+}
+
+#[test]
+fn rows_that_scroll_in_and_out_of_a_list_draw_right() {
+    kept_frames_match_full_redraws_with(1.0, MemoryHeadroom::Ample, ScrollingLiveRows);
+}
+
+#[test]
+fn rows_that_come_and_go_before_changing_rows_draw_right() {
+    kept_frames_match_full_redraws_with(1.0, MemoryHeadroom::Ample, ComingAndGoingRows);
 }

@@ -559,6 +559,24 @@ impl RasterScene {
         }
     }
 
+    // How many records the splices of the rewrite in progress added, less
+    // those they removed; none without one.
+    pub(crate) fn records_moved(&self) -> isize {
+        self.rewrite.as_deref().map_or(0, Rewrite::records_moved)
+    }
+
+    // Readies the rewrite in progress to push the child whose old record is
+    // `at` over its old places, as `Rewrite::rejoin` does. Returns where
+    // that record now lies.
+    pub(crate) fn rejoin(&mut self, at: usize) -> usize {
+        let Some(mut rewrite) = self.rewrite.take() else {
+            return at;
+        };
+        let at = rewrite.rejoin(self, at);
+        self.rewrite = Some(rewrite);
+        at
+    }
+
     // The record `index`, wherever a rewrite put it.
     fn record_mut(&mut self, index: usize) -> Option<&mut SubtreeItems> {
         match self.rewrite.as_deref_mut() {

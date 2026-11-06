@@ -372,7 +372,7 @@ impl Repush<'_> {
             .rewrite
             .take()
             .expect("the rewrite started above");
-        if rewrite.finish(self.scene, record) == Replaced::Run {
+        if rewrite.finish(self.scene) == Replaced::Run {
             self.replaced = Replaced::Run;
         }
         self.scene.hits_changed |= rewrite.replaced_hits();
