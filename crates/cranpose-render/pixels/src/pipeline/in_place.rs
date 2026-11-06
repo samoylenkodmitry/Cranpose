@@ -337,8 +337,9 @@ impl Repush<'_> {
                 }
                 None => {
                     let moved = (node, target.record, ChildPosition::AsBefore);
+                    let update = walk.update_of(node);
                     if !(place == NodePlace::Child
-                        && walk.push_moved(moved, &target.context, (scene, context)))
+                        && walk.push_moved(moved, (update, &target.context), (scene, context)))
                     {
                         walk.push(
                             (node, place),

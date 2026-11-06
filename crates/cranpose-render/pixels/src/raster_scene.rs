@@ -6,7 +6,7 @@ use cranpose_render_common::{
     graph::{HitTestNode, InlineNode, LayerNode, ProjectiveTransform, RenderNode},
     layer_shadow::{ShadowLight, ShadowRRect},
     primitive_emit::ShapeDrawParams,
-    scene_builder::{KeptHead, KeptNodeRef},
+    scene_builder::KeptHead,
 };
 use cranpose_ui::TextStyle;
 use cranpose_ui_graphics::{
@@ -341,14 +341,6 @@ impl<'a> Subtree<'a> {
         }
     }
 
-    // The node a record's head keeps.
-    pub(crate) fn of_kept(node: KeptNodeRef<'a>) -> Self {
-        match node {
-            KeptNodeRef::Layer(layer) => Self::Layer(layer),
-            KeptNodeRef::Inline(inline) => Self::Inline(inline),
-        }
-    }
-
     // The node and the node whose outer draws it wraps.
     pub(crate) fn identity(self) -> (Option<NodeId>, Option<NodeId>) {
         match self {
@@ -660,9 +652,10 @@ impl RasterScene {
     }
 
     // The index of the record that opens next, wherever a rewrite puts it.
+    #[inline]
     pub(crate) fn next_record(&self) -> usize {
         match self.rewrite.as_deref() {
-            Some(rewrite) => rewrite.record_end().0,
+            Some(rewrite) => rewrite.next_record(),
             None => self.subtrees.len(),
         }
     }
