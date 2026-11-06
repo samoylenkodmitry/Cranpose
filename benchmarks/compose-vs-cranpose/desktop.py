@@ -778,6 +778,7 @@ def measure(name, args, work, server, stage, label, earlier, profile, program=No
         log = app.log.read_text(errors='replace')
         if 'PERF first_frame' not in log:
             raise RuntimeError(f'{name} logged no first frame within its {run_s:.0f} s run')
+        server.check_device(since)
         mine = tree(app.pid, after, ended - app.started + 1)
         held = memory(mine, stage)
         shutil.copy(out, work / out.name)

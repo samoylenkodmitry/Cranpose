@@ -77,6 +77,17 @@ class BrowserServerTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'the page failed: PERF error Uncaught RuntimeError.*shader failed'):
             self.server.wait_for('PERF ready', 5, since)
 
+    def test_a_gpu_device_error_since_the_mark_fails_the_run(self):
+        post(self.server, 'PERF console.error: [gpu-device] the WebGL context was lost')
+        since = self.server.mark()
+        self.server.check_device(since)
+        post(self.server, 'PERF ready tier=8')
+        self.server.check_device(since)
+        # wasm-logger's styled arguments, as the console script joins them.
+        post(self.server, 'PERF console.error: %cERROR%c render.rs:1068%c [gpu-device] device lost (Unknown): gone')
+        with self.assertRaisesRegex(RuntimeError, r'the page lost its GPU device: .*device lost \(Unknown\)'):
+            self.server.check_device(since)
+
     def test_a_silent_page_times_out_with_its_last_lines(self):
         since = self.server.mark()
         post(self.server, 'PERF loading')
