@@ -17,7 +17,6 @@ use cranpose_render_common::{
 
 use super::{ContentStyle, RasterTraversalContext, populate_draws_from_graph, scene_light};
 use crate::{
-    damage::merge_areas,
     draw::{ClipBounds, TextRaster},
     rewrite::Rewrite,
     scene::{RasterScene, Subtree},
@@ -112,7 +111,6 @@ impl InPlaceUpdate<'_> {
         };
         let walked = repush.visit(Subtree::Layer(&graph.root), 0, None);
         let held = repush.held;
-        merge_areas(areas);
         walked.ok()?;
         Some(held)
     }

@@ -415,7 +415,6 @@ pub(crate) fn changed_areas(
         window,
         areas,
     );
-    merge_areas(areas);
 }
 
 // Adds to `areas` where the run `old.1` of the scene `old.0` and the run
@@ -452,24 +451,145 @@ fn pixels(area: ClipBounds) -> i64 {
     i64::from(area.max_x - area.min_x) * i64::from(area.max_y - area.min_y)
 }
 
-// Joins `areas` while they are too many to draw one by one, each time the
-// two whose join takes in the fewest pixels that neither covers, so that
-// changes far apart do not draw the still pixels between them again. Out
-// of line: it runs once an update.
-#[inline(never)]
-pub(crate) fn merge_areas(areas: &mut Vec<ClipBounds>) {
-    while areas.len() > MAX_AREAS {
-        let mut cheapest = (0, 1, i64::MAX);
-        for (first, &a) in areas.iter().enumerate() {
-            for (second, &b) in areas.iter().enumerate().skip(first + 1) {
-                let extra = pixels(union(a, b)) - pixels(a) - pixels(b);
-                if extra < cheapest.2 {
-                    cheapest = (first, second, extra);
-                }
+// An area `merge_areas` may join, with its pixel count and the cheapest
+// join of it with an area later in the list.
+#[derive(Clone, Copy)]
+pub(crate) struct Joining {
+    area: ClipBounds,
+    pixels: i64,
+    cheapest: Option<Join>,
+}
+
+// The join of an area with the area at `with`, which takes in `extra`
+// pixels that neither covers.
+#[derive(Clone, Copy)]
+struct Join {
+    extra: i64,
+    with: usize,
+}
+
+impl Joining {
+    fn new(area: ClipBounds) -> Self {
+        Self {
+            area,
+            pixels: pixels(area),
+            cheapest: None,
+        }
+    }
+
+    fn extra(&self, other: &Self) -> i64 {
+        pixels(union(self.area, other.area)) - self.pixels - other.pixels
+    }
+}
+
+// The cheapest join of the area at `index` with a later one; of joins that
+// cost the same, the one with the earliest area.
+fn cheapest_after(list: &[Joining], index: usize) -> Option<Join> {
+    let mut cheapest: Option<Join> = None;
+    for (with, other) in list.iter().enumerate().skip(index + 1) {
+        let extra = list[index].extra(other);
+        if cheapest.is_none_or(|join| extra < join.extra) {
+            cheapest = Some(Join { extra, with });
+        }
+    }
+    cheapest
+}
+
+// Takes the area at `index` out of `list` as `Vec::swap_remove` does, the
+// last area taking its place, and keeps each area's cheapest later join.
+fn take(list: &mut Vec<Joining>, index: usize) -> ClipBounds {
+    let last = list.len() - 1;
+    let taken = list.swap_remove(index).area;
+    for at in 0..list.len() {
+        let with = list[at].cheapest.map(|join| join.with);
+        // A join with the area taken out, a join with the last area from an
+        // area it now precedes, and the moved area's own are found again.
+        let stale = match at.cmp(&index) {
+            std::cmp::Ordering::Less => with == Some(index),
+            std::cmp::Ordering::Equal => true,
+            std::cmp::Ordering::Greater => with == Some(last),
+        };
+        if stale {
+            let cheapest = cheapest_after(list, at);
+            list[at].cheapest = cheapest;
+        } else if at < index && index < last {
+            // The last area moved closer: as cheap as before and earlier.
+            let moved = if with == Some(last) {
+                list[at].cheapest.map(|join| join.extra)
+            } else {
+                Some(list[at].extra(&list[index]))
+            };
+            if let Some(extra) = moved
+                && list[at].cheapest.is_none_or(|join| {
+                    extra < join.extra || extra == join.extra && index <= join.with
+                })
+            {
+                list[at].cheapest = Some(Join { extra, with: index });
             }
         }
-        let (first, second, _) = cheapest;
-        let joined = union(areas.swap_remove(second), areas.swap_remove(first));
-        add_area(areas, joined);
     }
+    taken
+}
+
+// Adds `area` at the end of `list` as `Vec::push` does, and keeps each
+// area's cheapest later join.
+fn push(list: &mut Vec<Joining>, area: ClipBounds) {
+    let added = Joining::new(area);
+    let with = list.len();
+    for joining in list.iter_mut() {
+        let extra = joining.extra(&added);
+        if joining.cheapest.is_none_or(|join| extra < join.extra) {
+            joining.cheapest = Some(Join { extra, with });
+        }
+    }
+    list.push(added);
+}
+
+// `add_area` on `list`.
+fn add(list: &mut Vec<Joining>, mut area: ClipBounds) {
+    if list.last().is_some_and(|last| last.area.holds(area)) {
+        return;
+    }
+    while let Some(index) = list.iter().position(|other| touch(other.area, area)) {
+        area = union(take(list, index), area);
+    }
+    push(list, area);
+}
+
+// Joins `areas` while they are too many to draw one by one, each time the
+// two whose join takes in the fewest pixels that neither covers, so that
+// changes far apart do not draw the still pixels between them again. Of
+// joins that cost the same it takes the first in the order of the list.
+// Each area keeps its cheapest join with a later one in `list`, so a step
+// tries again only the joins its changes touch. Out of line: it runs once
+// an update.
+#[inline(never)]
+pub(crate) fn merge_areas(areas: &mut Vec<ClipBounds>, list: &mut Vec<Joining>) {
+    if areas.len() <= MAX_AREAS {
+        return;
+    }
+    list.clear();
+    list.extend(areas.iter().copied().map(Joining::new));
+    for index in 0..list.len() {
+        let cheapest = cheapest_after(list, index);
+        list[index].cheapest = cheapest;
+    }
+    while list.len() > MAX_AREAS {
+        let mut pick: Option<(usize, Join)> = None;
+        for (index, joining) in list.iter().enumerate() {
+            if let Some(join) = joining.cheapest
+                && pick.is_none_or(|(_, best)| join.extra < best.extra)
+            {
+                pick = Some((index, join));
+            }
+        }
+        let Some((first, join)) = pick else {
+            break;
+        };
+        let joined = union(take(list, join.with), take(list, first));
+        add(list, joined);
+    }
+    areas.clear();
+    areas.extend(list.iter().map(|joining| joining.area));
+    list.clear();
 }

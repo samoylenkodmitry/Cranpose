@@ -64,6 +64,8 @@ pub struct Picture {
     height: u32,
     scale: f32,
     changed: Vec<draw::ClipBounds>,
+    // What joining `changed` keeps of each area while it runs.
+    joining: Vec<damage::Joining>,
     // Where each item of `raster` can draw in the frame, in its order: each
     // strip a host draws passes over the items that miss it.
     reach: Vec<Option<draw::ClipBounds>>,
@@ -201,9 +203,10 @@ impl PixelsRenderer {
                     picture.frame(),
                     &mut picture.changed,
                 );
+                damage::merge_areas(&mut picture.changed, &mut picture.joining);
                 if let Some(mut updated) = updated {
                     picture.changed.append(&mut updated);
-                    damage::merge_areas(&mut picture.changed);
+                    damage::merge_areas(&mut picture.changed, &mut picture.joining);
                 }
                 changed.extend(picture.changed.iter().copied().map(pixel_rect));
             }
@@ -252,7 +255,7 @@ impl PixelsRenderer {
             max_x: i32::try_from(width).unwrap_or(i32::MAX),
             max_y: i32::try_from(height).unwrap_or(i32::MAX),
         };
-        pipeline::InPlaceUpdate {
+        let updated = pipeline::InPlaceUpdate {
             scene: raster,
             reach: &mut picture.reach,
             rewrite: &mut picture.rewrite,
@@ -264,7 +267,9 @@ impl PixelsRenderer {
             &self.text,
             window,
             &mut picture.changed,
-        )
+        );
+        damage::merge_areas(&mut picture.changed, &mut picture.joining);
+        updated
     }
 
     /// Rasterizes the glyphs of the text in `area` of `picture` into the
