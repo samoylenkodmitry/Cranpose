@@ -223,6 +223,38 @@ def is_code(path):
     return head[:4] == b'\xca\xfe\xba\xbe' and 0 < int.from_bytes(head[4:8], 'big') < 16
 
 
+# macOS checks each new program in one queue, behind every program written
+# on the machine. On macm3 the programs of a build held a new 12 MB program
+# 0.7 to 3.1 s before its `main`, against 0.16 to 0.26 s on a quiet machine.
+# A new tiny program that starts within `CHECKED_IN_S` finds the queue empty.
+CHECKED_IN_S = 0.4
+CHECK_QUEUE_WAIT_S = 120.0
+
+
+def wait_for_program_checks(stage):
+    """Starts new tiny programs until macOS checks one at once, for up to
+    `CHECK_QUEUE_WAIT_S`, and the seconds it waited. A first start waits in
+    the queue otherwise, and the round's first app waits behind the build
+    the run began with: in 5 of 12 nightly runs Cranpose's first frame came
+    0.88 to 1.07 s after its launch instead of 0.62 to 0.74 s."""
+    folder = stage / 'probes'
+    stub = folder / 'probe'
+    if not stub.exists():
+        folder.mkdir(parents=True, exist_ok=True)
+        subprocess.run(['cc', '-x', 'c', '-o', str(stub), '-'], input='int main(void) { return 0; }\n', text=True,
+                       check=True)
+    began = time.monotonic()
+    while True:
+        probe = Path(tempfile.mkdtemp(dir=folder)) / 'probe'
+        subprocess.run(['ditto', str(stub), str(probe)], check=True)
+        sign_anew(probe)
+        launched = time.monotonic()
+        subprocess.run([str(probe)], check=True)
+        if time.monotonic() - launched < CHECKED_IN_S or launched - began > CHECK_QUEUE_WAIT_S:
+            return round(time.monotonic() - began, 1)
+        time.sleep(1)
+
+
 def sign_anew(path):
     """Signs the program or bundle at `path` again, ad hoc, with a code hash
     no signature had before, as a new build of the app has. It keeps its name,
@@ -909,12 +941,14 @@ def undisturbed_leg(name, args, server, stage, label, earlier, failures, profile
     when every attempt failed, so one app cannot end the run."""
     legs = []
     for attempt in range(3):
+        checks_waited = None
         if start == STARTS[0]:
             clear_app_state(profile)
             # A page's install is its first visit on a cleared profile: a
             # fresh copy of Chrome itself would put macOS's first-launch
             # check of the browser into the page's start.
             if not args.browser and APPS[name][0] != CHROME:
+                checks_waited = wait_for_program_checks(stage)
                 install[:] = [fresh_install(name, stage, f'{label}-{attempt + 1}')]
         try:
             leg = measure(name, args, args.output, server, stage, f'{label}-{attempt + 1}', earlier, profile,
@@ -925,6 +959,8 @@ def undisturbed_leg(name, args, server, stage, label, earlier, failures, profile
                              'error': str(failure)[:300]})
             continue
         leg['idle_other_cores'] = round(idle, 2)
+        if checks_waited is not None:
+            leg['program_checks_waited_s'] = checks_waited
         leg['disturbed'] = leg['other_cores'] > idle + args.max_others or bool(leg.get('display_problems'))
         legs.append(leg)
         print(f'{label:16} fps {leg["fps"]:6.1f} cpu/f {leg["cpu_ms_per_frame"]} first frame '
