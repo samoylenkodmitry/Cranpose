@@ -372,8 +372,8 @@ impl<'a> LayoutWalk<'a> {
         old: Option<OldChildren>,
     ) {
         // A child an update pushes keeps its node, lowered alone, in its
-        // record for the next updates.
-        let keeps_head = place == NodePlace::Child && self.marks.from_update;
+        // record for the next updates, as `keeps_head` says.
+        let keeps_head = self.keeps_head((node, place));
         let index = scene.next_record();
         let lowered = lower_node_alone(self.applier, (node, place), lower_context, |lowered| {
             let LoweredNode {
@@ -461,11 +461,25 @@ impl<'a> LayoutWalk<'a> {
             }
             None => populate_draws_from_graph(subtree, scene, context, &mut None, None),
         }
-        if place == NodePlace::Child {
+        if self.keeps_head((node, place)) {
             scene.keep_head(index, KeptHead::new(layer, lower_context));
         } else {
             recycle_lowered(layer);
         }
+    }
+
+    // Whether `node` at `place`, which an update lowers, keeps its head for
+    // the next updates: a child whose own state did not change, which a
+    // later update may push again as it was. A node whose own state changed
+    // keeps none: it mostly changes again before an update could push it as
+    // it was, and the recordings its head held would take room meanwhile.
+    fn keeps_head(&self, (node, place): (NodeId, NodePlace)) -> bool {
+        place == NodePlace::Child
+            && self.marks.from_update
+            && matches!(
+                self.marks.update_of(self.applier, node),
+                None | Some(NodeUpdate::Moved)
+            )
     }
 
     // Pushes `subtree`, the layer of `node`, with the children `inner` lowers
@@ -604,6 +618,9 @@ impl<'a> LayoutWalk<'a> {
         lower_context: &LowerContext,
         (scene, context): (&mut RasterScene, &RasterTraversalContext<'_>),
     ) {
+        // The old head goes first: the recordings it holds may take the
+        // node's new draws.
+        scene.drop_head(at);
         let children = OldChildren::of(&scene.subtrees, at, child);
         self.push(
             (child, NodePlace::Child),

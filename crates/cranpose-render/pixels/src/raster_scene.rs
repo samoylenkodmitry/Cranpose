@@ -636,6 +636,13 @@ impl RasterScene {
         true
     }
 
+    // Lets go the head the old record `at` keeps.
+    pub(crate) fn drop_head(&mut self, at: usize) {
+        if let Some(head) = self.take_head(at) {
+            head.recycle();
+        }
+    }
+
     // Takes the head the old record `at` keeps.
     pub(crate) fn take_head(&mut self, at: usize) -> Option<KeptHead> {
         self.subtrees.get_mut(at)?.head.take()

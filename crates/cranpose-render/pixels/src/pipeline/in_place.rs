@@ -302,6 +302,9 @@ impl Repush<'_> {
                 ) {
                     continue;
                 }
+                // The old head goes first: the recordings it holds may take
+                // the node's new draws.
+                self.scene.drop_head(target.record);
                 let lowered = (&mut target.layer, &mut target.inner);
                 walk.lower((target.node, target.place), &target.context, lowered);
             }
