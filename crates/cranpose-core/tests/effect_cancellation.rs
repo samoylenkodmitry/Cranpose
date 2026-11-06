@@ -121,3 +121,82 @@ fn background_work_reports_to_an_effect_whose_block_has_returned() {
 
     assert_eq!(got.get(), Some(7));
 }
+
+// Notes in its cell when the future that holds it is dropped.
+struct DropNote(Rc<std::cell::Cell<bool>>);
+
+impl Drop for DropNote {
+    fn drop(&mut self) {
+        self.0.set(true);
+    }
+}
+
+// An effect that ticks forever, with a note of its future's drop.
+fn ticking_effect(dropped: &Rc<std::cell::Cell<bool>>, ticks: &Rc<std::cell::Cell<u32>>) {
+    let dropped = Rc::clone(dropped);
+    let ticks = Rc::clone(ticks);
+    LaunchedEffect((), async move |_| {
+        let _note = DropNote(dropped);
+        loop {
+            delay(WAIT).await;
+            ticks.set(ticks.get() + 1);
+        }
+    });
+}
+
+// A composition whose looping effect has ticked.
+struct Ticked {
+    composition: Composition<MemoryApplier>,
+    root: Key,
+    dropped: Rc<std::cell::Cell<bool>>,
+    ticks: Rc<std::cell::Cell<u32>>,
+}
+
+fn ticked() -> Ticked {
+    let mut composition = Composition::new(MemoryApplier::new());
+    let root = location_key(file!(), line!(), column!());
+    let dropped = Rc::new(std::cell::Cell::new(false));
+    let ticks = Rc::new(std::cell::Cell::new(0));
+    let (note, count) = (Rc::clone(&dropped), Rc::clone(&ticks));
+    composition
+        .render(root, move || ticking_effect(&note, &count))
+        .expect("render succeeds");
+    wait_out_delays(&composition);
+    assert!(ticks.get() > 0 && !dropped.get(), "the loop never ran");
+    Ticked {
+        composition,
+        root,
+        dropped,
+        ticks,
+    }
+}
+
+#[test]
+fn leaving_the_composition_drops_a_looping_effect_at_once() {
+    let Ticked {
+        mut composition,
+        root,
+        dropped,
+        ticks,
+    } = ticked();
+
+    composition.render(root, || {}).expect("render succeeds");
+
+    assert!(dropped.get(), "the loop's future outlived its call site");
+    let seen = ticks.get();
+    wait_out_delays(&composition);
+    assert_eq!(ticks.get(), seen, "the loop ticked after it left");
+}
+
+#[test]
+fn dropping_the_composition_drops_a_looping_effect() {
+    let Ticked {
+        composition,
+        dropped,
+        ..
+    } = ticked();
+
+    drop(composition);
+
+    assert!(dropped.get(), "the loop's future outlived its composition");
+}
