@@ -128,7 +128,8 @@ impl KeptHead {
         crate::layer_recycling::recycle_to_redraw(self.into_node());
     }
 
-    fn into_node(self) -> RenderNode {
+    /// The lowered node the head keeps.
+    pub fn into_node(self) -> RenderNode {
         match self.node {
             KeptNode::Layer(layer) => RenderNode::Layer(layer),
             KeptNode::Inline(inline) => RenderNode::Inline(inline),

@@ -23,7 +23,7 @@ use crate::{
     draw::{ClipBounds, TextRaster},
     layout_walk::{DirtyMarks, KeptSpace, LayoutWalk, kept_space, names},
     moved_subtrees::MovedSubtrees,
-    pipeline::{self, InPlaceUpdate, UpdatedReach},
+    pipeline::{self, InPlaceUpdate, UpdatedReach, WalkedTargets},
     pixel_rect,
     raster_scene::{RasterScene, SubtreeItems},
     rewrite::Rewrite,
@@ -39,6 +39,9 @@ pub struct Scene {
     // What an update in place pushes each changed subtree again with, and
     // the room for the nodes whose subtrees it pushes again.
     rewrite: Option<Box<Rewrite>>,
+    // The nodes the last update in place pushed again, at the records of
+    // `raster`: a build forgets them.
+    walked: WalkedTargets,
     marks: DirtyMarks,
     scale: f32,
     // The frame the host took the picture in last, which the changes and
@@ -82,6 +85,7 @@ impl Scene {
             raster: None,
             reach: Vec::new(),
             rewrite: None,
+            walked: WalkedTargets::default(),
             marks: DirtyMarks::default(),
             scale: 1.0,
             frame: OPEN_FRAME,
@@ -187,6 +191,7 @@ impl Scene {
     // Builds the scene from `graph`, a render graph a layout tree snapshot
     // gave, which it keeps none of.
     pub(crate) fn rebuild_from_graph(&mut self, graph: &RenderGraph, text: &TextRaster) {
+        self.walked.clear();
         let mut raster = self.storage();
         pipeline::fill_raster_scene(
             &mut raster,
@@ -231,6 +236,7 @@ impl Scene {
             scene: raster,
             reach: &mut self.reach,
             rewrite: &mut self.rewrite,
+            walked: &mut self.walked,
             updates,
         }
         .run_layout(
@@ -259,6 +265,7 @@ impl Scene {
         previous: Option<RasterScene>,
         text: &TextRaster,
     ) {
+        self.walked.clear();
         let mut raster = self.storage();
         let walk = LayoutWalk::new(applier, &self.marks, (&self.spaces, &self.moved));
         let built = pipeline::fill_raster_scene_from_layout(

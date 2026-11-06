@@ -4,6 +4,7 @@
 mod damage;
 mod draw;
 mod growth_trim;
+mod kept_list;
 mod layout_walk;
 mod moved_subtrees;
 mod pipeline;

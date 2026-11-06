@@ -17,6 +17,7 @@ use cranpose_render_common::graph::LayerNode;
 use crate::{
     damage::{ItemReach, add_changed_pair, add_changed_runs, merge_areas},
     draw::ClipBounds,
+    kept_list::push_kept,
     layout_walk::child_record_from,
     pipeline::UpdatedReach,
     raster_scene::{HitLayer, ItemCounts, PassedDown, RasterScene, Subtree, SubtreeItems},
@@ -46,12 +47,35 @@ const KEPT_AREAS: usize = 32;
 
 // A record the rewrite put in place of the old record of its node, and
 // what the old record held: where its subtree's records and draw order
-// ended, and its passed-down entry.
+// ended, and its passed-down entry. The indices take 32 bits, as a
+// record's counts do.
 #[derive(Clone, Copy)]
 struct Opened {
-    end: usize,
-    stop: usize,
-    passed_down: Option<usize>,
+    end: u32,
+    stop: u32,
+    passed_down: Option<u32>,
+}
+
+impl Opened {
+    fn of(old: &SubtreeItems) -> Self {
+        Self {
+            end: old.end as u32,
+            stop: old.stop.get().order as u32,
+            passed_down: old.passed_down.map(|entry| entry as u32),
+        }
+    }
+
+    fn end(self) -> usize {
+        self.end as usize
+    }
+
+    fn stop(self) -> usize {
+        self.stop as usize
+    }
+
+    fn passed_down(self) -> Option<usize> {
+        self.passed_down.map(|entry| entry as usize)
+    }
 }
 
 #[derive(Default)]
@@ -233,11 +257,7 @@ impl Rewrite {
                 && old.identity == subtree.identity()
                 && old.start.get().order == self.next.items.order
             {
-                self.opened.push(Opened {
-                    end: old.end,
-                    stop: old.stop.get().order,
-                    passed_down: old.passed_down,
-                });
+                push_kept(&mut self.opened, Opened::of(old));
                 self.own_items_end = own_items_end(records, index, old.end, old.stop.get().order);
                 let record = &mut records[index];
                 if record.hits.is_some() || hits.is_some() {
@@ -287,7 +307,7 @@ impl Rewrite {
         entries: &mut [PassedDown],
         entry: PassedDown,
     ) -> (usize, bool) {
-        let old = self.opened.last().and_then(|opened| opened.passed_down);
+        let old = self.opened.last().and_then(|opened| opened.passed_down());
         if self.spilled_at.is_none() {
             let index = self.next.passed_down;
             if old == Some(index) {
@@ -311,7 +331,7 @@ impl Rewrite {
             return;
         }
         if let Some(closed) = self.opened.pop() {
-            self.after_old_subtree(records, closed.end);
+            self.after_old_subtree(records, closed.end());
         }
     }
 
@@ -336,11 +356,7 @@ impl Rewrite {
         {
             return None;
         }
-        self.opened.push(Opened {
-            end: old.end,
-            stop: old.stop.get().order,
-            passed_down: old.passed_down,
-        });
+        push_kept(&mut self.opened, Opened::of(old));
         self.next = Places {
             items: child.start.get(),
             records: first_child,
@@ -391,9 +407,9 @@ impl Rewrite {
             self.own_items_end = self.stop.items.order;
             return;
         };
-        self.own_items_end = match records[..open.end].get(end) {
+        self.own_items_end = match records[..open.end()].get(end) {
             Some(next) if next.identity != (None, None) => next.start.get().order,
-            _ => open.stop,
+            _ => open.stop(),
         };
     }
 
@@ -524,8 +540,8 @@ impl Rewrite {
             later.passed_down = later.passed_down.map(|index| shift(index, entries));
         }
         for open in &mut self.opened {
-            open.end = shift(open.end, records);
-            open.stop = shift(open.stop, (removed.order, added.order));
+            open.end = shift(open.end(), records) as u32;
+            open.stop = shift(open.stop(), (removed.order, added.order)) as u32;
         }
         self.stop = Places {
             items: self.stop.items.shifted(removed, added),

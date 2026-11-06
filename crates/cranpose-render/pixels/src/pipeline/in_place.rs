@@ -16,8 +16,8 @@ use cranpose_render_common::{
     graph_scene::RenderDiagnostics,
     layer_shadow::ShadowLight,
     scene_builder::{
-        LowerContext, NodePlace, RecordingStore, lowered_children_context, release_lowered,
-        root_layer_bounds, visit_kept_node,
+        KeptHead, LowerContext, NodePlace, RecordingStore, lowered_children_context,
+        release_lowered, root_layer_bounds, visit_kept_node,
     },
 };
 
@@ -25,6 +25,7 @@ use super::{ContentStyle, RasterTraversalContext};
 use crate::{
     damage::merge_areas,
     draw::{ClipBounds, TextRaster},
+    kept_list::push_kept,
     layout_walk::{ChildPosition, LayoutWalk, OldChildren, child_record_from, names},
     raster_scene::{PassedDown, RasterScene},
     rewrite::{Replaced, Rewrite},
@@ -83,7 +84,7 @@ pub(crate) struct PushTarget {
     parent: Option<usize>,
     leaf: bool,
     children: bool,
-    layer: Option<RenderNode>,
+    layer: Option<KeptHead>,
 }
 
 // Why a walk to a layer stopped.
@@ -113,6 +114,9 @@ pub(crate) struct InPlaceUpdate<'a> {
     pub scene: &'a mut RasterScene,
     pub reach: &'a mut Vec<Option<ClipBounds>>,
     pub rewrite: &'a mut Option<Box<Rewrite>>,
+    // The nodes the last update in place pushed again, at the records of
+    // `scene`.
+    pub walked: &'a mut WalkedTargets,
     pub updates: SceneUpdates<'a>,
 }
 
@@ -135,6 +139,7 @@ impl InPlaceUpdate<'_> {
             scene,
             reach,
             rewrite,
+            walked,
             updates,
         } = self;
         let bounds = root_layer_bounds(walk.applier(), root)?;
@@ -148,7 +153,6 @@ impl InPlaceUpdate<'_> {
         } else {
             UpdatedReach::Lost
         };
-        let mut walked = std::mem::take(&mut scene.walked);
         let found_before = walked.updates == updates && walk.holds_no_space();
         let mut repush = Repush {
             scene,
@@ -187,7 +191,6 @@ impl InPlaceUpdate<'_> {
         } else {
             walked.clear();
         }
-        scene.walked = walked;
         release_lowered();
         merge_areas(areas);
         pushed.ok()?;
@@ -274,19 +277,20 @@ impl Repush<'_> {
         context: &LowerContext,
         (record, parent): (usize, Option<usize>),
     ) {
-        // The targets stay for the next update with the same changes: the
-        // list grows by what it takes, with no room past it.
-        self.targets.reserve_exact(1);
-        self.targets.push(PushTarget {
-            node,
-            place,
-            context: *context,
-            record,
-            parent,
-            leaf: walk.lowers_as_leaf((node, place)),
-            children: false,
-            layer: None,
-        });
+        // The targets stay for the next update with the same changes.
+        push_kept(
+            self.targets,
+            PushTarget {
+                node,
+                place,
+                context: *context,
+                record,
+                parent,
+                leaf: walk.lowers_as_leaf((node, place)),
+                children: false,
+                layer: None,
+            },
+        );
     }
 
     // Lowers every node the visit found changed, then pushes their subtrees
@@ -335,7 +339,7 @@ impl Repush<'_> {
         let old = OldChildren::of(&self.scene.subtrees, target.record, node);
         self.rewrite_subtree(
             (target.record, target.parent),
-            |scene, context| match target.layer.take() {
+            |scene, context| match target.layer.take().map(KeptHead::into_node) {
                 Some(layer) => {
                     // A node with children lowers as a layer.
                     let inner = match &layer {

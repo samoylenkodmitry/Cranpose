@@ -443,15 +443,19 @@ impl<'a> LayoutWalk<'a> {
         &self,
         (node, place): (NodeId, NodePlace),
         lower_context: &LowerContext,
-        (layer, children): (&mut Option<RenderNode>, &mut bool),
+        (layer, children): (&mut Option<KeptHead>, &mut bool),
     ) {
         lower_node_alone(self.applier, (node, place), lower_context, |lowered| {
-            if holds_space(&lowered.node) || Subtree::of_child(&lowered.node).is_none() {
-                recycle_lowered(lowered.node);
-                return;
+            if holds_space(&lowered.node) {
+                return recycle_lowered(lowered.node);
             }
-            *children = !lowered.children.is_empty();
-            *layer = Some(lowered.node);
+            match KeptHead::new(lowered.node, lower_context) {
+                Ok(head) => {
+                    *children = !lowered.children.is_empty();
+                    *layer = Some(head);
+                }
+                Err(draw) => recycle_lowered(draw),
+            }
         });
     }
 
