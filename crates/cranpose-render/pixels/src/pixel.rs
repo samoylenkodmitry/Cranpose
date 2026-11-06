@@ -92,9 +92,9 @@ impl Pixel for [u8; 4] {
         diagnostics: &RenderDiagnostics,
     ) {
         let table = table.get_or_insert_with(BlendTable::default);
-        for pixel in pixels {
+        blend_runs_of_one_pixel(pixels, |pixel| {
             table.blend(pixel, color, blend_mode, diagnostics);
-        }
+        });
     }
 
     // As whole 32-bit words where the pixels are aligned for them, a store a
@@ -248,24 +248,7 @@ impl<P: Pixel565> Pixel for P {
         };
         let src = [red, green, blue, unit_byte(alpha)];
         let table = table.get_or_insert_with(BlendTable::default);
-        // The paint leaves one pixel over each pixel it meets, and a fill
-        // mostly meets runs of one pixel: a pixel equal to the one before
-        // takes what the paint left over that one.
-        let Some((first, rest)) = pixels.split_first_mut() else {
-            return;
-        };
-        let mut under = *first;
-        table.blend_565(first, src);
-        let mut over = *first;
-        for pixel in rest {
-            if *pixel == under {
-                *pixel = over;
-            } else {
-                under = *pixel;
-                table.blend_565(pixel, src);
-                over = *pixel;
-            }
-        }
+        blend_runs_of_one_pixel(pixels, |pixel| table.blend_565(pixel, src));
     }
 
     fn fill(pixels: &mut [Self], value: Self) {
@@ -281,6 +264,28 @@ impl<P: Pixel565> Pixel for P {
 
     fn text_rows(pixels: &mut [Self]) -> TextPixelRows<'_> {
         Self::text_rows_565(pixels)
+    }
+}
+
+// Puts over each pixel of `pixels` what `blend`, one paint, leaves over it.
+// The paint leaves one pixel over each pixel it meets, and a fill mostly
+// meets runs of one pixel: a pixel equal to the one before takes what the
+// paint left over that one, with one compare.
+fn blend_runs_of_one_pixel<P: Copy + PartialEq>(pixels: &mut [P], mut blend: impl FnMut(&mut P)) {
+    let Some((first, rest)) = pixels.split_first_mut() else {
+        return;
+    };
+    let mut under = *first;
+    blend(first);
+    let mut over = *first;
+    for pixel in rest {
+        if *pixel == under {
+            *pixel = over;
+        } else {
+            under = *pixel;
+            blend(pixel);
+            over = *pixel;
+        }
     }
 }
 
