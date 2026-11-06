@@ -21,11 +21,17 @@ struct Slot {
 #[derive(Clone, Copy)]
 pub(crate) struct SlotIndex(u32);
 
-// What the walk keeps, by node. Each node keeps its slot across the updates
-// that push it, so a walk lends what it keeps out of the slot and back into
-// it with no lookup, and an update's sweep runs over the slots in order.
+// What the walk keeps, by node, in a box made when it first keeps one:
+// only the children of a layer drawn on its own surface are kept, and most
+// windows have none.
 #[derive(Default)]
-pub(crate) struct MovedSubtrees {
+pub(crate) struct MovedSubtrees(Option<Box<Slots>>);
+
+// Each node keeps its slot across the updates that push it, so a walk lends
+// what it keeps out of the slot and back into it with no lookup, and an
+// update's sweep runs over the slots in order.
+#[derive(Default)]
+struct Slots {
     slot_of: HashMap<NodeId, u32>,
     // The slots, each free or in use.
     slots: Vec<Option<Slot>>,
@@ -39,7 +45,7 @@ pub(crate) struct MovedSubtrees {
 const UNPUSHED_UPDATES: u8 = 30;
 const TIGHT_UNPUSHED_UPDATES: u8 = 1;
 
-impl MovedSubtrees {
+impl Slots {
     // The slot of `node`, when the walk keeps its subtree.
     fn slot_index(&self, node: NodeId) -> Option<u32> {
         if self.slot_of.is_empty() {
@@ -49,7 +55,7 @@ impl MovedSubtrees {
     }
 
     // Takes the subtree of `node` out, with its slot.
-    pub(crate) fn take(&mut self, node: NodeId) -> Option<(SlotIndex, MovedSubtree)> {
+    fn take(&mut self, node: NodeId) -> Option<(SlotIndex, MovedSubtree)> {
         let at = self.slot_index(node)?;
         let kept = self.slots[at as usize].as_mut()?.kept.take()?;
         Some((SlotIndex(at), kept))
@@ -57,7 +63,7 @@ impl MovedSubtrees {
 
     // Keeps `subtree`, which the update that runs pushed, in the slot `at`
     // it was taken out of, if any.
-    pub(crate) fn keep(&mut self, at: Option<SlotIndex>, subtree: MovedSubtree) {
+    fn keep(&mut self, at: Option<SlotIndex>, subtree: MovedSubtree) {
         let node = subtree.node();
         let at = at.map(|SlotIndex(at)| at).or_else(|| self.slot_index(node));
         if let Some(slot) = at.and_then(|at| self.slots[at as usize].as_mut()) {
@@ -87,7 +93,7 @@ impl MovedSubtrees {
 
     // Lets go the subtree the walk keeps of `node`, which an update changed
     // or holds a node an update changed.
-    pub(crate) fn let_go(&mut self, node: NodeId) {
+    fn let_go(&mut self, node: NodeId) {
         if let Some(at) = self.slot_index(node) {
             self.free_slot(at);
         }
@@ -107,7 +113,7 @@ impl MovedSubtrees {
     // update pushed in the last `UNPUSHED_UPDATES`, or
     // `TIGHT_UNPUSHED_UPDATES` at `headroom` Tight. The marks of the update
     // let go before what it made old.
-    pub(crate) fn begin_update(&mut self, headroom: MemoryHeadroom) {
+    fn begin_update(&mut self, headroom: MemoryHeadroom) {
         if self.slot_of.is_empty() {
             return;
         }
@@ -127,7 +133,7 @@ impl MovedSubtrees {
     }
 
     // Lets everything go.
-    pub(crate) fn clear(&mut self) {
+    fn clear(&mut self) {
         for slot in self.slots.drain(..).flatten() {
             if let Some(kept) = slot.kept {
                 kept.recycle();
@@ -135,5 +141,40 @@ impl MovedSubtrees {
         }
         self.slot_of.clear();
         self.free.clear();
+    }
+}
+
+impl MovedSubtrees {
+    // Takes the subtree of `node` out, with its slot.
+    pub(crate) fn take(&mut self, node: NodeId) -> Option<(SlotIndex, MovedSubtree)> {
+        self.0.as_mut()?.take(node)
+    }
+
+    // Keeps `subtree`, which the update that runs pushed, in the slot `at`
+    // it was taken out of, if any.
+    pub(crate) fn keep(&mut self, at: Option<SlotIndex>, subtree: MovedSubtree) {
+        self.0.get_or_insert_default().keep(at, subtree);
+    }
+
+    // Lets go the subtree the walk keeps of `node`, which an update changed
+    // or holds a node an update changed.
+    pub(crate) fn let_go(&mut self, node: NodeId) {
+        if let Some(slots) = self.0.as_mut() {
+            slots.let_go(node);
+        }
+    }
+
+    // Lets go what no update pushed lately, as `Slots::begin_update` says.
+    pub(crate) fn begin_update(&mut self, headroom: MemoryHeadroom) {
+        if let Some(slots) = self.0.as_mut() {
+            slots.begin_update(headroom);
+        }
+    }
+
+    // Lets everything go.
+    pub(crate) fn clear(&mut self) {
+        if let Some(slots) = self.0.as_mut() {
+            slots.clear();
+        }
     }
 }
