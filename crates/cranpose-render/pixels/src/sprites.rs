@@ -584,10 +584,19 @@ impl Canonical {
 fn rasterize_text(draw: &TextDraw, text: &TextRaster) -> Option<(Rect, Vec<u8>)> {
     let (text, rect) = crate::draw::rasterize_text(draw, text)?;
     let mut pixels = text.pixels;
+    // Most pixels of a text lie outside its glyphs or inside their strokes.
+    // `(c * a + 127) / 255` gives 0 for `a` 0 and `c` for `a` 255, so only
+    // the pixels on a glyph's edge take the division.
     for pixel in pixels.as_chunks_mut::<4>().0 {
-        let alpha = u32::from(pixel[3]);
-        for channel in &mut pixel[..3] {
-            *channel = ((u32::from(*channel) * alpha + 127) / 255) as u8;
+        match pixel[3] {
+            0 => *pixel = [0; 4],
+            255 => {}
+            alpha => {
+                let alpha = u32::from(alpha);
+                for channel in &mut pixel[..3] {
+                    *channel = ((u32::from(*channel) * alpha + 127) / 255) as u8;
+                }
+            }
         }
     }
     Some((rect, pixels))
