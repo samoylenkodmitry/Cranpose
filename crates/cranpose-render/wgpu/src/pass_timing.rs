@@ -69,6 +69,11 @@ struct ReadbackSlot {
     state: Arc<AtomicU8>,
     passes: RefCell<Vec<(u16, u32)>>,
     incomplete: Cell<bool>,
+    // The newest tick the slot's last frame read; None when its readback
+    // was dropped. A sample of the next frame at or below it was not taken:
+    // Metal leaves the sample of a stage that did not run as the last frame
+    // left it, and resets no query.
+    newest_tick: Cell<Option<u64>>,
 }
 
 pub(crate) struct PassTimer {
@@ -119,6 +124,7 @@ impl PassTimer {
                 state: Arc::new(AtomicU8::new(SLOT_FREE)),
                 passes: RefCell::new(Vec::new()),
                 incomplete: Cell::new(false),
+                newest_tick: Cell::new(Some(0)),
             })
             .collect();
         Some(Self {
@@ -198,28 +204,11 @@ impl PassTimer {
             match slot.state.load(Ordering::Acquire) {
                 SLOT_MAPPED => {
                     match slot.buffer.slice(..).get_mapped_range() {
-                        Ok(mapped) => {
-                            let span = (!slot.incomplete.get())
-                                .then(|| {
-                                    accumulate_frame(
-                                        &mut self.totals.borrow_mut(),
-                                        &slot.passes.borrow(),
-                                        &mapped,
-                                        self.period_ns,
-                                    )
-                                })
-                                .flatten();
-                            if let Some(span) = span {
-                                self.span_nanoseconds
-                                    .set(self.span_nanoseconds.get().saturating_add(span));
-                                self.frames_harvested.set(self.frames_harvested.get() + 1);
-                            } else {
-                                self.invalid_frames.set(self.invalid_frames.get() + 1);
-                            }
-                        }
+                        Ok(mapped) => self.harvest_frame(slot, &mapped),
                         Err(error) => {
                             log::debug!("pass timings could not be read: {error}");
                             self.dropped_frames.set(self.dropped_frames.get() + 1);
+                            slot.newest_tick.set(None);
                         }
                     }
                     slot.buffer.unmap();
@@ -228,12 +217,48 @@ impl PassTimer {
                 }
                 SLOT_FAILED => {
                     self.dropped_frames.set(self.dropped_frames.get() + 1);
+                    slot.newest_tick.set(None);
                     slot.passes.borrow_mut().clear();
                     slot.state.store(SLOT_FREE, Ordering::Release);
                 }
                 _ => {}
             }
         }
+    }
+
+    fn harvest_frame(&self, slot: &ReadbackSlot, mapped: &[u8]) {
+        let floor = slot.newest_tick.get();
+        let (span, rejected) = {
+            let passes = slot.passes.borrow();
+            let span = match floor {
+                Some(floor) if !slot.incomplete.get() => accumulate_frame(
+                    &mut self.totals.borrow_mut(),
+                    &passes,
+                    mapped,
+                    floor,
+                    self.period_ns,
+                ),
+                _ => None,
+            };
+            slot.newest_tick.set(newest_tick(&passes, mapped));
+            // The first rejected frame of a print window says why.
+            let first = self.invalid_frames.get() == 0;
+            let rejected = (span.is_none() && first && !slot.incomplete.get())
+                .then(|| rejected_ticks(&self.labels.borrow(), &passes, mapped));
+            (span, rejected)
+        };
+        let Some(span) = span else {
+            self.invalid_frames.set(self.invalid_frames.get() + 1);
+            if let Some(rejected) = rejected {
+                log::warn!(
+                    "[GPU-PASS] a frame's timestamps were rejected, the slot's last frame read up to {floor:?}: {rejected}"
+                );
+            }
+            return;
+        };
+        self.span_nanoseconds
+            .set(self.span_nanoseconds.get().saturating_add(span));
+        self.frames_harvested.set(self.frames_harvested.get() + 1);
     }
 
     pub(crate) fn frame_submitted(&self, queue: &wgpu::Queue) {
@@ -399,17 +424,52 @@ pub(crate) fn begin_timed_render_pass<'encoder>(
     })
 }
 
+fn tick(mapped: &[u8], index: u32) -> Option<u64> {
+    let offset = index as usize * 8;
+    let bytes = mapped.get(offset..offset + 8)?;
+    Some(u64::from_le_bytes(bytes.try_into().expect("8-byte slice")))
+}
+
+// Each pass's label and raw ticks: u64::MAX is a sample the GPU failed to
+// take, and 0 or a tick at or below the slot's last frame one it never took.
+fn rejected_ticks(labels: &[String], passes: &[(u16, u32)], mapped: &[u8]) -> String {
+    passes
+        .iter()
+        .map(|&(label_id, begin_index)| {
+            format!(
+                "{} {:?}..{:?}",
+                labels
+                    .get(usize::from(label_id))
+                    .map_or("?", String::as_str),
+                tick(mapped, begin_index),
+                tick(mapped, begin_index + 1)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+// The newest tick the GPU took in a frame.
+fn newest_tick(passes: &[(u16, u32)], mapped: &[u8]) -> Option<u64> {
+    passes
+        .iter()
+        .flat_map(|&(_, begin_index)| [begin_index, begin_index + 1])
+        .filter_map(|index| tick(mapped, index))
+        .filter(|&value| value != u64::MAX)
+        .max()
+}
+
+// A frame's span, its passes' times added to `totals`; None when a sample
+// is missing, was not taken (at or below `floor`) or failed.
 fn accumulate_frame(
     totals: &mut [LabelTotal],
     passes: &[(u16, u32)],
     mapped: &[u8],
+    floor: u64,
     period_ns: f32,
 ) -> Option<u64> {
     let read_tick = |index: u32| -> Option<u64> {
-        let offset = index as usize * 8;
-        let bytes = mapped.get(offset..offset + 8)?;
-        let value = u64::from_le_bytes(bytes.try_into().expect("8-byte slice"));
-        (value != 0 && value != u64::MAX).then_some(value)
+        tick(mapped, index).filter(|&value| value > floor && value != u64::MAX)
     };
     let mut first_begin = u64::MAX;
     let mut last_end = 0u64;

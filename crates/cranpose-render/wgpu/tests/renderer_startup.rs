@@ -28,7 +28,7 @@ use cranpose_ui_graphics::shader_warm_ups_after;
 #[test]
 fn a_new_renderer_builds_only_the_requested_warm_ups() {
     let (_lock, (created, created_off_frame, requested), _renderer) =
-        support::headless_renderer_parts_configured(|| {
+        support::headless_renderer_parts_configured(support::device::Pipelines::Background, || {
             support::wait_for_background_compiler_idle();
             (
                 pipelines_created(),
