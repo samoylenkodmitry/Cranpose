@@ -82,6 +82,9 @@ impl Pixel for [u8; 4] {
         blend_pixel(self, color, blend_mode, diagnostics);
     }
 
+    // Out of line: inline, the table grew the loop of a fill's rows past
+    // where the compiler inlines the arrays of each row's paints.
+    #[inline(never)]
     fn blend_run(
         pixels: &mut [Self],
         (color, blend_mode): Self::Paint,
