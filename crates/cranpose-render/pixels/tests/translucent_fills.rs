@@ -6,7 +6,7 @@
 use cranpose_app_shell::AppShell;
 use cranpose_core::location_key;
 use cranpose_macros::composable;
-use cranpose_render_pixels::{PixelRect, PixelsRenderer};
+use cranpose_render_pixels::{PixelRect, PixelsRenderer, Rgb565Order};
 use cranpose_ui::{Box, BoxSpec, Modifier};
 use cranpose_ui_graphics::{Brush, Color, Rect};
 
@@ -62,8 +62,7 @@ fn TranslucentOverGradient() {
     );
 }
 
-#[test]
-fn a_translucent_fill_paints_the_bytes_each_pixel_blends_alone() {
+fn shell() -> AppShell<PixelsRenderer> {
     let mut shell = AppShell::new_with_size_and_density(
         PixelsRenderer::new(),
         location_key(file!(), line!(), column!()),
@@ -73,30 +72,73 @@ fn a_translucent_fill_paints_the_bytes_each_pixel_blends_alone() {
         1.0,
     );
     shell.update();
+    shell
+}
+
+// The pixel at `index` of a picture `WIDTH` wide, as an area.
+fn pixel_area(index: usize) -> PixelRect {
+    PixelRect {
+        x: index as u32 % WIDTH,
+        y: index as u32 / WIDTH,
+        width: 1,
+        height: 1,
+    }
+}
+
+// Where two pictures first differ, as (x, y).
+fn first_difference<T: PartialEq>(a: &[T], b: &[T]) -> Option<(u32, u32)> {
+    let pixel = a.iter().zip(b).position(|(a, b)| a != b)?;
+    Some((pixel as u32 % WIDTH, pixel as u32 / WIDTH))
+}
+
+#[test]
+fn a_translucent_fill_paints_the_bytes_each_pixel_blends_alone() {
+    let mut shell = shell();
     let mut whole = vec![0u8; (WIDTH * HEIGHT * 4) as usize];
     let mut by_pixel = vec![0u8; (WIDTH * HEIGHT * 4) as usize];
     shell.primary().with_renderer(|renderer| {
         renderer.draw(&mut whole, WIDTH, HEIGHT);
         renderer.update_picture(WIDTH, HEIGHT, &mut Vec::new());
         for (index, pixel) in by_pixel.as_chunks_mut::<4>().0.iter_mut().enumerate() {
-            let area = PixelRect {
-                x: index as u32 % WIDTH,
-                y: index as u32 / WIDTH,
-                width: 1,
-                height: 1,
-            };
-            renderer.draw_picture_area(area, pixel);
+            renderer.draw_picture_area(pixel_area(index), pixel);
         }
     });
-    let differing = whole
-        .as_chunks::<4>()
-        .0
-        .iter()
-        .zip(by_pixel.as_chunks::<4>().0)
-        .position(|(a, b)| a != b);
     assert_eq!(
-        differing.map(|pixel| (pixel as u32 % WIDTH, pixel as u32 / WIDTH)),
+        first_difference(whole.as_chunks::<4>().0, by_pixel.as_chunks::<4>().0),
         None,
         "the picture drawn whole differs from the one drawn a pixel at a time at (x, y)"
     );
+}
+
+// The same for 16-bit pixels in either byte order, which blend in whole
+// numbers and keep their high bits.
+#[test]
+fn a_translucent_fill_paints_the_16_bit_pixels_each_pixel_blends_alone() {
+    let mut shell = shell();
+    for order in [Rgb565Order::LittleEndian, Rgb565Order::BigEndian] {
+        let mut whole = vec![0u16; (WIDTH * HEIGHT) as usize];
+        let mut by_pixel = vec![0u16; (WIDTH * HEIGHT) as usize];
+        shell.primary().with_renderer(|renderer| {
+            renderer.update_picture(WIDTH, HEIGHT, &mut Vec::new());
+            let frame = PixelRect {
+                x: 0,
+                y: 0,
+                width: WIDTH,
+                height: HEIGHT,
+            };
+            renderer.draw_picture_area_rgb565(frame, &mut whole, order);
+            for (index, pixel) in by_pixel.iter_mut().enumerate() {
+                renderer.draw_picture_area_rgb565(
+                    pixel_area(index),
+                    std::slice::from_mut(pixel),
+                    order,
+                );
+            }
+        });
+        assert_eq!(
+            first_difference(&whole, &by_pixel),
+            None,
+            "{order:?}: the picture drawn whole differs from the one drawn a pixel at a time at (x, y)"
+        );
+    }
 }

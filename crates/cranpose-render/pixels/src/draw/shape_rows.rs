@@ -6,7 +6,6 @@ use super::{
     Pixel, Point, Rect, RenderDiagnostics, RowRuns, Target, color_to_rgba, opaque_bytes, paint_row,
     sample_brush_rgba, shape_sdf,
 };
-use crate::pixel::BlendTable;
 
 // A placed shape's rows to paint. Each kind of coverage paints them through
 // its own copy of the loop: the work a kind does once per shape, such as an
@@ -38,7 +37,7 @@ impl<P: Pixel> ShapeRows<'_, '_, P> {
             }
             None => {
                 let brush = BrushSampler::new(&self.draw.brush, self.rect);
-                if brush.is_solid() && P::GRADIENT == GradientColors::Dithered {
+                if brush.is_solid() {
                     let color = color_to_rgba(brush.color_at(Point::new(0.0, 0.0)));
                     self.blend_solid_rows(color, runs);
                 } else if brush.has_uniform_rows() {
