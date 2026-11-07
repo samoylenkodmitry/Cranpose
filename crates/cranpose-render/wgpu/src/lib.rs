@@ -1,7 +1,7 @@
 #![deny(missing_docs)]
 #![doc = include_str!("../README.md")]
 
-pub use offscreen::COMPOSITION_BYTES_PER_PIXEL;
+pub use offscreen::{COMPOSITION_BYTES_PER_PIXEL, offscreen_render_target_for_tests};
 pub use render::presentable_root_usages;
 mod ablation;
 mod arc_trig_fill;
@@ -108,25 +108,6 @@ pub use render::{
 };
 pub use scene::{HitRegion, Scene};
 pub use shared_shader::{shader_stages_flattened, shader_stages_folded};
-
-#[doc(hidden)]
-pub fn offscreen_render_target_for_tests(
-    device: &wgpu::Device,
-    width: u32,
-    height: u32,
-    label: &str,
-) -> (wgpu::Texture, wgpu::TextureView) {
-    let texture = offscreen::create_2d_texture(
-        device,
-        wgpu::TextureFormat::Rgba8Unorm,
-        width,
-        height,
-        wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-        Some(label),
-    );
-    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-    (texture, view)
-}
 
 pub(crate) fn rect_to_quad(rect: Rect) -> [[f32; 2]; 4] {
     [
