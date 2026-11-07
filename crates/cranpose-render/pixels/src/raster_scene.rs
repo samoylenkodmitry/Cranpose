@@ -405,6 +405,12 @@ impl SubtreeItems {
     pub(crate) fn node(&self) -> Option<NodeId> {
         self.identity.0.or(self.identity.1)
     }
+
+    // The records of the subtree the layer drew into a surface of its own,
+    // its own first; empty for any other record.
+    pub(crate) fn surface(&self) -> &[Self] {
+        self.hits.as_deref().map_or(&[], |hits| &hits.surface)
+    }
 }
 
 pub(crate) struct RasterScene {
@@ -525,6 +531,29 @@ impl RasterScene {
             record.passed_down = Some(at);
         }
         same
+    }
+
+    // Keeps in the open record `index`, of `layer`, which drew its children
+    // into a surface of its own, `records`: the surface's records of the
+    // layer's subtree, which the scene's readers take its children from.
+    pub(crate) fn keep_surface_records(
+        &mut self,
+        index: usize,
+        layer: &LayerNode,
+        mut records: Vec<SubtreeItems>,
+    ) {
+        for record in &mut records {
+            if let Some(head) = record.head.take() {
+                head.recycle();
+            }
+        }
+        self.hits_changed = true;
+        if let Some(record) = self.record_mut(index) {
+            record
+                .hits
+                .get_or_insert_with(|| Box::new(HitLayer::of(layer)))
+                .surface = records.into_boxed_slice();
+        }
     }
 
     /// Closes `record`: the subtree pushed everything since it opened.

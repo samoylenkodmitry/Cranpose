@@ -410,6 +410,12 @@ fn hit_skeleton(
     if let Some(kept) = kept_space(spaces, record.identity) {
         return kept.space.layer().map(|layer| Box::new(layer.clone()));
     }
+    // A layer that drew its children into a surface of its own keeps their
+    // records with its own.
+    let surface = record.surface();
+    if !surface.is_empty() {
+        return hit_skeleton(surface, 0, spaces);
+    }
     let mut children = Vec::new();
     let mut child = index + 1;
     while child < record.end {
@@ -462,13 +468,34 @@ fn visit_node_bounds(
                 to_record.bounds_for_rect(Rect::from_size(record.node_size)),
             );
         }
+        // A layer that drew its children into a surface of its own keeps
+        // their records with its own.
+        let surface = record.surface();
+        let (children, first, end) = match surface.first() {
+            Some(own) => (surface, 1, own.end),
+            None => (records, index + 1, record.end),
+        };
         visit_node_bounds(
-            (records, spaces),
-            (index + 1, record.end),
+            (children, spaces),
+            (first, end),
             (to_record, surfaces),
             visit,
         );
         index = record.end;
+    }
+}
+
+// Visits the node of each of `records`, and of the records a layer that drew
+// its children into a surface of its own keeps of them.
+fn visit_record_nodes(records: &[SubtreeItems], visit: &mut dyn FnMut(NodeId)) {
+    for record in records {
+        if let Some(node) = record.identity.0 {
+            visit(node);
+        }
+        // The surface's records start with the layer's own.
+        if let Some((_, children)) = record.surface().split_first() {
+            visit_record_nodes(children, visit);
+        }
     }
 }
 
@@ -549,13 +576,7 @@ impl RenderScene for Scene {
 
     fn visit_retained_visual_observation_nodes(&self, visit: &mut dyn FnMut(NodeId)) -> bool {
         if let Some(raster) = &self.raster {
-            for node in raster
-                .subtrees
-                .iter()
-                .filter_map(|record| record.identity.0)
-            {
-                visit(node);
-            }
+            visit_record_nodes(&raster.subtrees, visit);
         }
         true
     }

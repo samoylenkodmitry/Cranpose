@@ -653,7 +653,7 @@ pub(crate) fn populate_draws_from_graph(
 /// pixels.
 #[inline(never)]
 fn push_layer_surface(
-    layer: &LayerNode,
+    (layer, record): (&LayerNode, usize),
     scene: &mut RasterScene,
     context: &RasterTraversalContext<'_>,
     transform: &ProjectiveTransform,
@@ -677,7 +677,7 @@ fn push_layer_surface(
         color_filter: context.parent_content_style.color_filter.clone(),
     };
     let mut items = RasterScene::new();
-    let record = items.open_subtree(Subtree::Layer(layer));
+    let surface_record = items.open_subtree(Subtree::Layer(layer));
     push_layer_items(
         layer,
         &mut items,
@@ -699,11 +699,11 @@ fn push_layer_surface(
             surface_root: true,
             in_space: context.in_space,
         },
-        (record.index(), None),
+        (surface_record.index(), None),
         &mut None,
         slot.map(ChildSlot::for_surface),
     );
-    items.close_subtree(record);
+    items.close_subtree(surface_record);
     if let Some(image) = rasterize_surface(
         &items,
         placement.width,
@@ -718,6 +718,11 @@ fn push_layer_surface(
             context.parent_visual_clip,
             context.parent_content_style.alpha,
         );
+    }
+    // The surface's scene goes once the surface rasterizes: the layer's
+    // record keeps the records of its children.
+    if items.subtrees.len() > 1 {
+        scene.keep_surface_records(record, layer, std::mem::take(&mut items.subtrees));
     }
 }
 
@@ -778,7 +783,7 @@ fn push_layer_items(
             );
         }
         if layer.isolation.explicit_offscreen || !scales_and_moves(&transform) {
-            push_layer_surface(layer, scene, context, &transform, slot);
+            push_layer_surface((layer, record), scene, context, &transform, slot);
             return;
         }
     }

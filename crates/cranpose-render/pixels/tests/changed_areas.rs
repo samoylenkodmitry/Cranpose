@@ -17,11 +17,14 @@ use cranpose_ui_graphics::{
 
 #[path = "support/kept_frames.rs"]
 mod kept_frames;
+#[path = "support/turned_parent.rs"]
+mod turned_parent;
 
 use kept_frames::{
     FRAMES, HEIGHT, Step, WIDTH, color, kept_frames_match_full_redraws,
     kept_frames_match_full_redraws_after_unread, shell,
 };
+use turned_parent::turned_parent;
 
 #[composable]
 fn Scenes(captured: Step) {
@@ -281,15 +284,7 @@ fn TurnedParent(captured: Step) {
     let step = rememberMutableStateOf(|| 0u32);
     *captured.borrow_mut() = Some(step);
     Box(
-        Modifier::empty()
-            .offset(80.0, 50.0)
-            .width(80.0)
-            .height(60.0)
-            .graphics_layer(|| GraphicsLayer {
-                rotation_z: 30.0,
-                ..GraphicsLayer::default()
-            })
-            .background(Color::from_rgb_u8(30, 40, 50)),
+        turned_parent(80.0, || 30.0),
         BoxSpec::default(),
         move || {
             let shade = (step.value() % 4) as u8 * 60;
@@ -314,15 +309,7 @@ fn MovingTurnedParent(captured: Step) {
     *captured.borrow_mut() = Some(step);
     let n = step.value();
     Box(
-        Modifier::empty()
-            .offset(60.0 + (n % 5) as f32 * 9.0, 50.0)
-            .width(80.0)
-            .height(60.0)
-            .graphics_layer(|| GraphicsLayer {
-                rotation_z: 30.0,
-                ..GraphicsLayer::default()
-            })
-            .background(Color::from_rgb_u8(30, 40, 50)),
+        turned_parent(60.0 + (n % 5) as f32 * 9.0, || 30.0),
         BoxSpec::default(),
         || {
             Box(
@@ -346,15 +333,7 @@ fn TurningParent(captured: Step) {
     let step = rememberMutableStateOf(|| 0u32);
     *captured.borrow_mut() = Some(step);
     Box(
-        Modifier::empty()
-            .offset(80.0, 50.0)
-            .width(80.0)
-            .height(60.0)
-            .graphics_layer(move || GraphicsLayer {
-                rotation_z: (step.value() % 3) as f32 * 15.0,
-                ..GraphicsLayer::default()
-            })
-            .background(Color::from_rgb_u8(30, 40, 50)),
+        turned_parent(80.0, move || (step.value() % 3) as f32 * 15.0),
         BoxSpec::default(),
         || {
             Box(
