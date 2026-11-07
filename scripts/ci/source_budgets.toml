@@ -4,7 +4,7 @@
 
 [counts]
 too_many_arguments = 10
-private_docs = 13300
+private_docs = 13268
 for_test_fns = 40
 cranpose_env_names = 77
 source_text_checks = 328
@@ -15,7 +15,7 @@ half_state_words = 0
 "cfg-on-robot-app-feature" = 0
 "drain-collect" = 11
 "get-prefix" = 70
-"hashset-of-node-ids" = 16
+"hashset-of-node-ids" = 13
 "manager-helper-util" = 8
 "rc-refcell-in-public-signature" = 2
 "state-holder-rebuilt" = 0
@@ -74,12 +74,12 @@ limit = 1000
 "crates/cranpose-ui-graphics/src/liquid_glass.rs" = 1048
 "crates/cranpose-ui-graphics/src/record.rs" = 2611
 "crates/cranpose-ui-graphics/src/render_effect.rs" = 1161
-"crates/cranpose-ui/src/layout/mod.rs" = 2469
+"crates/cranpose-ui/src/layout/mod.rs" = 2467
 "crates/cranpose-ui/src/modifier/mod.rs" = 1246
 "crates/cranpose-ui/src/modifier/scroll.rs" = 1951
 "crates/cranpose-ui/src/modifier_nodes.rs" = 2901
 "crates/cranpose-ui/src/render_state.rs" = 1324
-"crates/cranpose-ui/src/subcompose_layout.rs" = 1697
+"crates/cranpose-ui/src/subcompose_layout.rs" = 1695
 "crates/cranpose-ui/src/text_field_modifier_node.rs" = 1686
 "crates/cranpose-ui/src/widgets/image.rs" = 1057
 "crates/cranpose-ui/src/widgets/lazy_list.rs" = 1687

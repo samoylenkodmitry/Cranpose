@@ -6,8 +6,10 @@ use cranpose_ui::{ModifierNodeSlices, Point, Rect, Size};
 
 use super::{
     BuildNodeSnapshot, DrawTarget, Level, LowerContext, SnapshotNodeData, assign_layer,
-    modifier_slices_have_origin_sinks, note_layer_lowered, prepare_node_layer, read_node_data,
-    read_placed_node_data, remove_dirty_descendants, slices_hit_something,
+    modifier_slices_have_origin_sinks,
+    node_layer::Children,
+    note_layer_lowered, prepare_node_layer, read_node_data, read_placed_node_data,
+    remove_dirty_descendants, slices_hit_something,
     text_node::{TextNodeParts, drawn_text, refresh_text_node},
     translate_layer::holds_hit_geometry,
     write_node_content, write_node_layer,
@@ -52,22 +54,28 @@ pub(super) fn snapshot_lowers_inline(snapshot: &BuildNodeSnapshot) -> bool {
 pub(super) fn lower_child(
     applier: &MemoryApplier,
     node_id: NodeId,
-    context: LowerContext,
+    context: &LowerContext,
 ) -> Option<RenderNode> {
     read_placed_node_data(applier, node_id, Level::Child, |data| {
         lower_placed_child(applier, node_id, data, context)
     })
 }
 
-fn lower_placed_child(
+pub(super) fn lower_placed_child(
     applier: &MemoryApplier,
     node_id: NodeId,
     data: SnapshotNodeData<'_>,
-    context: LowerContext,
+    context: &LowerContext,
 ) -> RenderNode {
     if !lowers_inline(&data) {
         let mut layer = crate::layer_recycling::layer_box();
-        write_node_layer(applier, node_id, data, context, &mut layer);
+        write_node_layer(
+            applier,
+            node_id,
+            data,
+            (context, Children::Lower),
+            &mut layer,
+        );
         return RenderNode::Layer(layer);
     }
     let mut inline = crate::layer_recycling::inline_box().unwrap_or_default();
@@ -75,7 +83,19 @@ fn lower_placed_child(
     if draws_inline(&inline) {
         return RenderNode::Inline(inline);
     }
-    let layer = layer_from_content(&mut inline, node_id, &data, context);
+    inline_as_layer(inline, node_id, &data, context)
+}
+
+// The layer of the node of `data` around the content written into `inline`,
+// which goes back to the pool. Out of line: most leaves draw inline.
+#[inline(never)]
+fn inline_as_layer(
+    mut inline: Box<InlineNode>,
+    node_id: NodeId,
+    data: &SnapshotNodeData<'_>,
+    context: &LowerContext,
+) -> RenderNode {
+    let layer = layer_from_content(&mut inline, node_id, data, context);
     crate::layer_recycling::recycle_node(RenderNode::Inline(inline));
     RenderNode::Layer(layer)
 }
@@ -86,7 +106,7 @@ fn write_inline(
     inline: &mut InlineNode,
     node_id: NodeId,
     data: &SnapshotNodeData<'_>,
-    context: LowerContext,
+    context: &LowerContext,
 ) {
     let slices = &data.modifier_slices;
     let size = data.layout_state.size();
@@ -97,13 +117,14 @@ fn write_inline(
         size,
         motion_context_animated: inline.motion_context_animated,
         layer: None,
+        store: context.store,
     };
     write_node_content(&mut inline.content, node_id, slices, draws, (0, 0), |_| {});
     inline.note_change();
 }
 
 // Puts `inline` where its node of `data` lies under `context`.
-fn place_inline(inline: &mut InlineNode, data: &SnapshotNodeData<'_>, context: LowerContext) {
+fn place_inline(inline: &mut InlineNode, data: &SnapshotNodeData<'_>, context: &LowerContext) {
     let placement = data.layout_state.position();
     inline.origin = Point::new(
         placement.x + context.parent_content_offset.x,
@@ -129,7 +150,7 @@ fn layer_from_content(
     inline: &mut InlineNode,
     node_id: NodeId,
     data: &SnapshotNodeData<'_>,
-    context: LowerContext,
+    context: &LowerContext,
 ) -> Box<LayerNode> {
     let mut layer = crate::layer_recycling::layer_box();
     std::mem::swap(&mut layer.children, &mut inline.content);
@@ -148,7 +169,7 @@ pub(super) fn update_dirty_inline(
     slot: &mut RenderNode,
     node_id: NodeId,
     kind: NodeUpdate,
-    context: LowerContext,
+    context: &LowerContext,
     dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
 ) -> Option<bool> {
     read_child_data(applier, node_id, |data| {
@@ -196,7 +217,7 @@ pub(super) fn update_dirty_inline(
 fn retext_inline(
     inline: &mut InlineNode,
     data: &SnapshotNodeData<'_>,
-    context: LowerContext,
+    context: &LowerContext,
 ) -> bool {
     let slices = &data.modifier_slices;
     if !slices.draw_commands().is_empty() || !slices.has_text() {
@@ -222,7 +243,7 @@ fn retext_inline(
 pub(super) fn retext_kept_inline(
     applier: &MemoryApplier,
     inline: &mut InlineNode,
-    context: LowerContext,
+    context: &LowerContext,
 ) -> bool {
     read_child_data(applier, inline.node_id, |data| {
         lowers_inline(&data) && retext_inline(inline, &data, context)

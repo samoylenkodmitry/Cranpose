@@ -1,17 +1,30 @@
 //! A changed subtree pushed again over its old items, records and
-//! passed-down entries in the scene that holds them. While the new items
-//! match the old ones in kind and draw order, each takes the old item's
-//! place, and the pair adds the area where the two draw differently. From
-//! the first one that does not match, the subtree pushes into a spill
-//! scene, whose items take the place of the old ones left when the subtree
-//! ends, and what follows moves. A frame mostly pushes a changed subtree as
-//! it pushed it before, so the spill seldom holds anything.
+//! passed-down entries in the scene that holds them. A record takes the
+//! place of the old record of the same node where its old items start; a
+//! node's items take the places of its own old items while they match them
+//! in kind and draw order, and the pair adds the area where the two draw
+//! differently; a child subtree the walk keeps stays in its place. From the
+//! first of these that does not fit, the subtree pushes into a spill scene,
+//! which takes copies of the kept subtrees. The spill's items take the place
+//! of the old ones left before the old record of the next child the walk
+//! finds, or when the subtree ends, and what follows moves. A frame mostly
+//! pushes a changed subtree as it pushed it before, so the spill seldom
+//! holds anything, and a child that comes or goes spills no more than its
+//! own subtree.
+
+use std::ops::Range;
+
+use cranpose_render_common::graph::LayerNode;
 
 use crate::{
-    damage::{ItemReach, add_changed_pair, add_changed_runs},
-    draw::{ClipBounds, RenderItem},
+    damage::{ItemReach, add_changed_pair, add_changed_runs, merge_areas},
+    draw::ClipBounds,
+    kept_list::push_kept,
+    layout_walk::child_record_from,
     pipeline::UpdatedReach,
-    scene::{ItemCounts, PassedDown, RasterScene, SubtreeItems},
+    raster_scene::{
+        HitLayer, ItemCounts, OpenRecord, PassedDown, RasterScene, Subtree, SubtreeItems, as_u32,
+    },
     scene_item::SceneItem,
 };
 
@@ -24,17 +37,100 @@ struct Places {
     passed_down: usize,
 }
 
+// Whether a finished rewrite spliced a run of the scene's lists: the records
+// and entries after it may then lie at other indices.
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum Replaced {
+    #[default]
+    Nothing,
+    Run,
+}
+
+// The room for changed areas a rewrite keeps from one to the next.
+const KEPT_AREAS: usize = 32;
+
+// Whether the rewrite pushes a whole subtree: one whose root and nodes
+// beneath it changed nothing, so it pushes its old records again in their
+// order, each over its old place, and its items over its old items.
+#[derive(Clone, Copy, Default)]
+enum Whole {
+    #[default]
+    Off,
+    // The next record to open is the root of one.
+    Next,
+    // `open` of its records are open, its root's included. `entry` is the
+    // passed-down entry of the old record whose place the innermost took.
+    Open {
+        open: u32,
+        entry: Option<u32>,
+    },
+}
+
+// A record the rewrite put in place of the old record of its node, and
+// what the old record held: where its subtree's records and draw order
+// ended, and its passed-down entry. The indices take 32 bits, as a
+// record's counts do.
+#[derive(Clone, Copy)]
+struct Opened {
+    end: u32,
+    stop: u32,
+    passed_down: Option<u32>,
+}
+
+impl Opened {
+    fn of(old: &SubtreeItems) -> Self {
+        Self {
+            end: as_u32(old.end),
+            stop: as_u32(old.stop.get().order),
+            passed_down: old.passed_down.map(as_u32),
+        }
+    }
+
+    fn end(self) -> usize {
+        self.end as usize
+    }
+
+    fn stop(self) -> usize {
+        self.stop as usize
+    }
+
+    fn passed_down(self) -> Option<usize> {
+        self.passed_down.map(|entry| entry as usize)
+    }
+}
+
 #[derive(Default)]
 pub(crate) struct Rewrite {
+    // While the rewrite pushes in place, `next.items` holds the old scene's
+    // counts before one of its items, as each old record's start does: two
+    // such counts with the same draw order are the same.
     next: Places,
     // Where the old subtree's items, records and entries end.
     stop: Places,
+    // Where the old items the open record may take the places of end: its
+    // own, before its first child subtree, or before the record's old end
+    // after the last.
+    own_items_end: usize,
+    // The records opened in place and not closed yet, the last innermost.
+    // The records inside a whole subtree are not among them.
+    opened: Vec<Opened>,
+    whole: Whole,
+    // Whether the rewrite replaced or let go a record that hit targets read.
+    hits_replaced: bool,
     // Where the subtree's pushes went on in `spill` from, once one did not
     // match the old item in its place.
     spilled_at: Option<Places>,
     spill: RasterScene,
-    // The part of the frame whose changed pixels `areas` takes.
-    window: ClipBounds,
+    // The record of the subtree.
+    record: usize,
+    // How many records the splices so far added, less those they removed:
+    // an old record after them lies that many places on.
+    records_moved: isize,
+    // Whether a splice replaced a run of the scene's lists.
+    replaced: Replaced,
+    // The part of the frame whose changed pixels `areas` takes, absent
+    // while no host reads them.
+    window: Option<ClipBounds>,
     // Whether `reach` holds where each item of the scene reaches.
     held: UpdatedReach,
     reach: Vec<Option<ClipBounds>>,
@@ -43,16 +139,16 @@ pub(crate) struct Rewrite {
 
 impl Rewrite {
     // Starts the rewrite of the subtree whose record in `scene` is
-    // `record`, whose changed pixels in `window` it will add to its areas,
-    // taking `reach`, which holds where each item reaches when `held` says
-    // so.
+    // `record`, whose changed pixels in `window`, if any, it will add to its
+    // areas, taking `reach`, which holds where each item reaches when `held`
+    // says so.
     // `false`, with `reach` left, when the subtree's passed-down entries do
     // not lie in one run.
     pub(crate) fn start(
         &mut self,
         scene: &RasterScene,
         record: usize,
-        window: ClipBounds,
+        window: Option<ClipBounds>,
         reach: &mut Vec<Option<ClipBounds>>,
         held: UpdatedReach,
     ) -> bool {
@@ -61,28 +157,40 @@ impl Rewrite {
         };
         let head = &scene.subtrees[record];
         // A subtree with no entries of its own takes its new ones after the
-        // entries of the records before it, which the walk pushed first.
+        // entries of the records before it, which the walk pushed first: the
+        // records and their entries lie in the order of the walk, so the
+        // last record before it with an entry holds the last of them.
         let first = if extent.passed_down == 0 {
             scene.subtrees[..record]
                 .iter()
-                .filter_map(|before| before.passed_down)
-                .max()
+                .rev()
+                .find_map(|before| before.passed_down)
                 .map_or(0, |last| last + 1)
         } else {
             first
         };
         self.next = Places {
-            items: head.start,
+            items: head.start.get(),
             records: record,
             passed_down: first,
         };
         self.stop = Places {
-            items: head.stop,
+            items: head.stop.get(),
             records: record + extent.records,
             passed_down: first + extent.passed_down,
         };
+        self.own_items_end = self.next.items.order;
+        self.opened.clear();
+        self.whole = Whole::Off;
+        self.hits_replaced = false;
         self.spilled_at = None;
-        self.spill.clear();
+        self.record = record;
+        self.records_moved = 0;
+        self.replaced = Replaced::Nothing;
+        debug_assert!(
+            self.spill.order.is_empty() && self.spill.subtrees.is_empty(),
+            "a rewrite leaves its spill empty when it finishes"
+        );
         self.window = window;
         (self.reach, self.held) = (std::mem::take(reach), held);
         true
@@ -91,18 +199,37 @@ impl Rewrite {
     // How many items of each kind the scene would hold up to where the
     // subtree pushes next, were the spill in place.
     pub(crate) fn counts(&self) -> ItemCounts {
-        match self.spilled_at {
-            Some(at) => self.spill.counts().moved(ItemCounts::default(), at.items),
-            None => self.next.items,
-        }
+        self.here().items
     }
 
-    // How many records the scene would hold up to where the subtree opens
-    // its next one, were the spill in place.
-    pub(crate) fn record_count(&self) -> usize {
+    // Where the subtree opens its next record, were the spill in place.
+    #[inline]
+    pub(crate) fn next_record(&self) -> usize {
         match self.spilled_at {
             Some(at) => at.records + self.spill.subtrees.len(),
             None => self.next.records,
+        }
+    }
+
+    // How many records and items of each kind the scene would hold up to
+    // where the subtree opens its next record, were the spill in place: the
+    // end of a record that closes there.
+    pub(crate) fn record_end(&self) -> (usize, ItemCounts) {
+        let here = self.here();
+        (here.records, here.items)
+    }
+
+    // Where the subtree pushes its next item, opens its next record and
+    // notes its next passed-down entry, were the spill in place.
+    #[inline]
+    fn here(&self) -> Places {
+        match self.spilled_at {
+            Some(at) => Places {
+                items: self.spill.counts().moved(ItemCounts::default(), at.items),
+                records: at.records + self.spill.subtrees.len(),
+                passed_down: at.passed_down + self.spill.passed_down.len(),
+            },
+            None => self.next,
         }
     }
 
@@ -114,19 +241,24 @@ impl Rewrite {
             let at = self.next.items.order;
             let slot = *T::count(&mut self.next.items);
             let (list, order) = T::lists(scene);
-            if at < self.stop.items.order && T::index_of(order[at]) == Some(slot) {
+            if at < self.own_items_end && T::index_of(order[at]) == Some(slot) {
+                // The item moves into its place before the two are compared:
+                // compared first, a large item, as text is, takes one more
+                // copy on its way in.
                 let old = std::mem::replace(&mut list[slot], item);
-                let reach = match self.reach.get_mut(at) {
-                    Some(held) if self.held == UpdatedReach::Held => ItemReach::Replaced(held),
-                    _ => ItemReach::Unknown,
-                };
-                add_changed_pair(
-                    old.as_ref(),
-                    list[slot].as_ref(),
-                    reach,
-                    self.window,
-                    &mut self.areas,
-                );
+                if let Some(window) = self.window {
+                    let reach = match self.reach.get_mut(at) {
+                        Some(held) if self.held == UpdatedReach::Held => ItemReach::Replaced(held),
+                        _ => ItemReach::Unknown,
+                    };
+                    add_changed_pair(
+                        old.as_ref(),
+                        list[slot].as_ref(),
+                        reach,
+                        window,
+                        &mut self.areas,
+                    );
+                }
                 self.next.items.order += 1;
                 *T::count(&mut self.next.items) += 1;
                 return;
@@ -136,32 +268,87 @@ impl Rewrite {
         self.spill.push_item(item);
     }
 
-    // Puts `record` in place of the old record where the subtree opens its
-    // next one, while the old subtree has one there; else into the spill.
-    // Returns where the record would lie, were the spill in place.
+    // Writes the record of `subtree`, with `hits`, its `hit_layer`, over the
+    // old record where the subtree opens its next one, when that one is of
+    // the same node and its items start where the record's do; else into
+    // the spill. Returns where the record would lie, were the spill in
+    // place, and whether its close writes. The old record's box of hit
+    // facts takes the new ones in place.
     pub(crate) fn place_record(
         &mut self,
         records: &mut [SubtreeItems],
-        record: SubtreeItems,
-    ) -> usize {
+        (subtree, hits): (Subtree<'_>, Option<&LayerNode>),
+    ) -> OpenRecord {
         if self.spilled_at.is_none() {
             let index = self.next.records;
-            if index < self.stop.records {
-                records[index] = SubtreeItems {
-                    end: index + 1,
-                    ..record
-                };
+            if let Some(old) = records[..self.stop.records].get(index)
+                && old.identity == subtree.identity()
+                && old.start.get().order == self.next.items.order
+            {
+                match self.whole {
+                    // A record in a whole subtree keeps what it held, save
+                    // its passed-down entry, which its push notes again.
+                    Whole::Open { open, .. } => {
+                        self.whole = Whole::Open {
+                            open: open + 1,
+                            entry: old.passed_down.map(as_u32),
+                        };
+                        self.next.records += 1;
+                        return OpenRecord::InWhole(index);
+                    }
+                    whole => {
+                        push_kept(&mut self.opened, Opened::of(old));
+                        self.own_items_end = match whole {
+                            // A whole subtree takes the places of all its old
+                            // items.
+                            Whole::Next => {
+                                self.whole = Whole::Open {
+                                    open: 1,
+                                    entry: None,
+                                };
+                                old.stop.get().order
+                            }
+                            _ => own_items_end(records, index, old.end, old.stop.get().order),
+                        };
+                    }
+                }
+                let record = &mut records[index];
+                if record.hits.is_some() || hits.is_some() {
+                    let kept = record.hits.take();
+                    self.hits_replaced |= kept.is_some();
+                    record.hits = boxed_hits(kept, hits);
+                }
+                record.transform = subtree.transform_to_parent();
+                record.node_size = subtree.node_size();
+                record.sinks = subtree.has_origin_sinks();
+                // The node's push keeps its new head when it ends.
+                if let Some(stale) = record.head.take() {
+                    stale.recycle();
+                }
+                record.passed_down = None;
+                record.end = index + 1;
+                record.stop = self.next.items.into();
                 self.next.records += 1;
-                return index;
+                return OpenRecord::Writes(index);
             }
             self.spilled_at = Some(self.next);
         }
-        let index = self.record_count();
-        self.spill.subtrees.push(SubtreeItems {
-            end: index + 1,
-            ..record
-        });
-        index
+        self.whole = match self.whole {
+            Whole::Off => Whole::Off,
+            Whole::Next => Whole::Open {
+                open: 1,
+                entry: None,
+            },
+            Whole::Open { open, entry } => Whole::Open {
+                open: open + 1,
+                entry,
+            },
+        };
+        let here = self.here();
+        self.spill
+            .subtrees
+            .push(subtree.record(here.records + 1, here.items, hits));
+        OpenRecord::Writes(here.records)
     }
 
     // The record that lies at `index` were the spill in place.
@@ -176,99 +363,343 @@ impl Rewrite {
         }
     }
 
-    // Puts `entry` in place of the old passed-down entry where the subtree
-    // notes its next one, while the old subtree has one there; else into
-    // the spill. Returns where the entry would lie, were the spill in place.
+    // Puts `entry`, the passed-down entry of the open record, in place of
+    // the old record's, when it had one where the subtree notes its next
+    // one; else into the spill. Returns where the entry would lie, were the
+    // spill in place, and whether it is what the old record passed down,
+    // false beneath the root of a whole subtree.
     pub(crate) fn place_passed_down(
         &mut self,
         entries: &mut [PassedDown],
         entry: PassedDown,
-    ) -> usize {
+    ) -> (usize, bool) {
+        let old = match self.whole {
+            Whole::Open { open, entry: old } if open > 1 => {
+                let index = self.next.passed_down;
+                // No push beneath a whole subtree's root reads whether an
+                // entry stayed the same: its children push from their records.
+                if self.spilled_at.is_none() && old.is_some_and(|old| old as usize == index) {
+                    entries[index] = entry;
+                    self.next.passed_down += 1;
+                    return (index, false);
+                }
+                old.map(|old| old as usize)
+            }
+            _ => self.opened.last().and_then(|opened| opened.passed_down()),
+        };
         if self.spilled_at.is_none() {
             let index = self.next.passed_down;
-            if index < self.stop.passed_down {
+            if old == Some(index) {
+                let same = entries[index] == entry;
                 entries[index] = entry;
                 self.next.passed_down += 1;
-                return index;
+                return (index, same);
             }
             self.spilled_at = Some(self.next);
         }
-        let index = self.passed_down_count();
+        let index = self.here().passed_down;
         self.spill.passed_down.push(entry);
-        index
+        (index, false)
     }
 
-    // How many passed-down entries the scene would hold up to where the
-    // subtree notes its next one, were the spill in place.
-    fn passed_down_count(&self) -> usize {
-        match self.spilled_at {
-            Some(at) => at.passed_down + self.spill.passed_down.len(),
-            None => self.next.passed_down,
+    // Notes that the innermost open record closed: the items its parent
+    // may take the places of go on after the closed record's old subtree,
+    // as far as the parent's next child subtree.
+    pub(crate) fn close_record(&mut self, records: &[SubtreeItems]) {
+        match self.whole {
+            Whole::Open { open, entry } if open > 1 => {
+                self.whole = Whole::Open {
+                    open: open - 1,
+                    entry,
+                };
+                return;
+            }
+            Whole::Open { .. } => self.whole = Whole::Off,
+            Whole::Off | Whole::Next => {}
+        }
+        if self.spilled_at.is_some() {
+            return;
+        }
+        if let Some(closed) = self.opened.pop() {
+            self.after_old_subtree(records, closed.end());
         }
     }
 
-    // Ends the rewrite of the subtree whose record in `scene` is `record`.
-    // When its pushes went on in the spill, or stopped before the old
-    // items' end, what it pushed from there takes the place of the old
-    // items, records and entries left, and the records that hold the
-    // subtree or follow it move by the difference.
-    pub(crate) fn finish(&mut self, scene: &mut RasterScene, record: usize) {
+    // Closes the innermost record of a whole subtree, its root's aside,
+    // while the pushes take the old places: its end and stop stay as they
+    // were. False when the record is the root or the pushes went on in the
+    // spill: its close writes them.
+    #[inline]
+    pub(crate) fn closes_in_whole(&mut self) -> bool {
+        match self.whole {
+            Whole::Open { open, entry } if open > 1 && self.spilled_at.is_none() => {
+                self.whole = Whole::Open {
+                    open: open - 1,
+                    entry,
+                };
+                true
+            }
+            _ => false,
+        }
+    }
+
+    // Makes the next record to open the root of a whole subtree, unless one
+    // is open: its records open in their old order, each over its old place.
+    pub(crate) fn begin_whole(&mut self) {
+        if let Whole::Off = self.whole {
+            self.whole = Whole::Next;
+        }
+    }
+
+    // Opens again, in place, the old record `at` of a node whose record, own
+    // items and passed-down entry stay as they were, and keeps its own items
+    // up to `first_child`, the record of its first child subtree. Returns
+    // the entry. `None`, with nothing changed, when the record does not lie
+    // where the subtree pushes next or its entry does not come next.
+    pub(crate) fn reopen(
+        &mut self,
+        records: &[SubtreeItems],
+        at: usize,
+        first_child: usize,
+    ) -> Option<usize> {
+        let old = records[..self.stop.records].get(at)?;
+        let entry = old.passed_down?;
+        let child = records[..old.end].get(first_child)?;
+        if self.spilled_at.is_some()
+            || self.next.records != at
+            || self.next.items.order != old.start.get().order
+            || self.next.passed_down != entry
+        {
+            return None;
+        }
+        push_kept(&mut self.opened, Opened::of(old));
+        self.next = Places {
+            items: child.start.get(),
+            records: first_child,
+            passed_down: entry + 1,
+        };
+        self.own_items_end = child.start.get().order;
+        Some(entry)
+    }
+
+    // Keeps the old subtree of the record `old`, a child of the open
+    // record: in its place when it lies where the subtree pushes next,
+    // else as a copy in the spill.
+    pub(crate) fn keep(&mut self, scene: &mut RasterScene, old: usize) {
+        let Some((extent, first_entry)) = scene.subtree_span(old) else {
+            return;
+        };
+        let records = &scene.subtrees;
+        let head = &records[old];
+        let entries_fit = extent.passed_down == 0 || first_entry == self.next.passed_down;
+        if self.spilled_at.is_none()
+            && self.next.records == old
+            && self.next.items.order == head.start.get().order
+            && entries_fit
+        {
+            self.next = Places {
+                items: head.stop.get(),
+                records: head.end,
+                passed_down: self.next.passed_down + extent.passed_down,
+            };
+            self.after_old_subtree(records, head.end);
+            return;
+        }
+        if self.spilled_at.is_none() {
+            self.spilled_at = Some(self.next);
+        }
+        let here = self.here();
+        let to = (here.items, here.records, here.passed_down);
+        let (end, stop) = (head.end, head.stop.get());
+        self.spill
+            .copy_subtrees_to(scene, old..end, (stop, first_entry), to);
+    }
+
+    // Sets where the open record's own old items go on after the old
+    // subtree that ended at the record `end`: up to its next child subtree,
+    // or to its old end after the last one.
+    fn after_old_subtree(&mut self, records: &[SubtreeItems], end: usize) {
+        let Some(open) = self.opened.last() else {
+            self.own_items_end = self.stop.items.order;
+            return;
+        };
+        self.own_items_end = match records[..open.end()].get(end) {
+            Some(next) if next.identity != (None, None) => next.start.get().order,
+            _ => open.stop(),
+        };
+    }
+
+    // How many records the splices of the rewrite so far added, less those
+    // they removed.
+    pub(crate) fn records_moved(&self) -> isize {
+        self.records_moved
+    }
+
+    // Whether the subtree pushes next in place of the old record `at`.
+    #[inline]
+    pub(crate) fn pushes_next_at(&self, at: usize) -> bool {
+        self.spilled_at.is_none() && self.next.records == at
+    }
+
+    // Readies the pushes of the next child, whose old record is `at`, to take
+    // the places of its old ones: what the subtree pushed since its pushes
+    // last fit their places takes the place of the old records, items and
+    // entries left before `at`, those of a child that went away included.
+    // Returns where the old record now lies.
+    pub(crate) fn rejoin(&mut self, scene: &mut RasterScene, at: usize) -> usize {
         let from = match self.spilled_at {
-            Some(at) => at,
-            None if self.next == self.stop => return,
+            Some(from) => from,
+            None if self.next.records == at => return at,
             None => self.next,
         };
-        let stop = self.stop;
-        let order = from.items.order..stop.items.order;
-        let reach = (self.reach.get(order.clone())).filter(|_| self.held == UpdatedReach::Held);
-        add_changed_runs(
-            (scene, &scene.order[order]),
-            (&self.spill, &self.spill.order),
-            reach,
-            self.window,
-            &mut self.areas,
-        );
-        let removed = stop.items.since(from.items);
+        self.splice_before(scene, from, at)
+    }
+
+    // What `rejoin` does for a child whose old record does not lie where the
+    // subtree pushes next.
+    fn splice_before(&mut self, scene: &mut RasterScene, from: Places, at: usize) -> usize {
+        let entries = scene.subtrees[from.records..at]
+            .iter()
+            .filter(|record| record.passed_down.is_some())
+            .count();
+        let to = Places {
+            items: scene.subtrees[at].start.get(),
+            records: at,
+            passed_down: from.passed_down + entries,
+        };
+        self.next = self.here();
+        self.replace(scene, from, to);
+        self.spilled_at = None;
+        self.own_items_end = self.next.items.order;
+        self.next.records
+    }
+
+    // Ends the rewrite. When its pushes went on in the spill, or stopped
+    // before the old items' end, what it pushed from there takes the place
+    // of the old items, records and entries left, and the records that hold
+    // the subtree or follow it move by the difference. Says whether a splice
+    // replaced a run.
+    pub(crate) fn finish(&mut self, scene: &mut RasterScene) -> Replaced {
+        let from = match self.spilled_at {
+            Some(at) => at,
+            None if self.next == self.stop => return self.replaced,
+            None => self.next,
+        };
+        self.replace(scene, from, self.stop);
+        self.opened.clear();
+        Replaced::Run
+    }
+
+    // Puts what the subtree pushed into the spill in place of the old items,
+    // records and entries from `from` up to `to`. The records that hold the
+    // subtree, those that follow the run, the open records' old ends and the
+    // old subtree's end move by the difference. Out of line: most rewrites
+    // push the items they pushed before. The splices would take room in the
+    // instruction cache from the code of those rewrites.
+    #[cold]
+    #[inline(never)]
+    fn replace(&mut self, scene: &mut RasterScene, from: Places, to: Places) {
+        if let Some(window) = self.window {
+            let order = from.items.order..to.items.order;
+            let reach = (self.reach.get(order.clone())).filter(|_| self.held == UpdatedReach::Held);
+            add_changed_runs(
+                (scene, &scene.order[order]),
+                (&self.spill, &self.spill.order),
+                reach,
+                window,
+                &mut self.areas,
+            );
+        }
+        self.hits_replaced |= scene.subtrees[from.records..to.records]
+            .iter()
+            .any(|record| record.hits.is_some());
+        let removed = to.items.since(from.items);
         let added = self.spill.counts();
-        let records = (stop.records - from.records, self.spill.subtrees.len());
+        let records = (to.records - from.records, self.spill.subtrees.len());
         let entries = (
-            stop.passed_down - from.passed_down,
+            to.passed_down - from.passed_down,
             self.spill.passed_down.len(),
         );
-        splice_items(scene, (from.items, stop.items), &mut self.spill);
-        scene
-            .subtrees
-            .splice(from.records..stop.records, self.spill.subtrees.drain(..));
-        scene.passed_down.splice(
-            from.passed_down..stop.passed_down,
-            self.spill.passed_down.drain(..),
+        // The reach list holds where each spilled item reaches in place of
+        // the old run's, so it still holds after the splice.
+        if let (UpdatedReach::Held, Some(window)) = (self.held, self.window) {
+            let spill = &self.spill;
+            let spilled = spill
+                .order
+                .iter()
+                .map(|&item| spill.item_bounds(item, window));
+            self.reach.splice(from.items.order..to.items.order, spilled);
+        }
+        splice_items(scene, (from.items, to.items), &mut self.spill);
+        for record in &mut scene.subtrees[from.records..to.records] {
+            if let Some(head) = record.head.take() {
+                head.recycle();
+            }
+        }
+        splice_from(
+            &mut scene.subtrees,
+            from.records..to.records,
+            &mut self.spill.subtrees,
+        );
+        splice_from(
+            &mut scene.passed_down,
+            from.passed_down..to.passed_down,
+            &mut self.spill.passed_down,
         );
         let shift = |index: usize, (removed, added): (usize, usize)| index - removed + added;
+        let record = self.record;
         for holder in &mut scene.subtrees[..record] {
             if holder.end > record {
                 holder.end = shift(holder.end, records);
-                holder.stop = holder.stop.shifted(removed, added);
+                holder.stop = holder.stop.get().shifted(removed, added).into();
             }
         }
         for later in &mut scene.subtrees[from.records + records.1..] {
             later.end = shift(later.end, records);
-            later.start = later.start.shifted(removed, added);
-            later.stop = later.stop.shifted(removed, added);
+            later.start = later.start.get().shifted(removed, added).into();
+            later.stop = later.stop.get().shifted(removed, added).into();
             later.passed_down = later.passed_down.map(|index| shift(index, entries));
         }
+        for open in &mut self.opened {
+            open.end = as_u32(shift(open.end(), records));
+            open.stop = as_u32(shift(open.stop(), (removed.order, added.order)));
+        }
+        self.stop = Places {
+            items: self.stop.items.shifted(removed, added),
+            records: shift(self.stop.records, records),
+            passed_down: shift(self.stop.passed_down, entries),
+        };
+        self.records_moved += records.1 as isize - records.0 as isize;
         // The runs copied in place from the scene the walk started from no
-        // longer lie where they did, nor each item where `reach` holds.
+        // longer lie where they did.
         scene.kept.clear();
-        self.held = UpdatedReach::Lost;
+        self.replaced = Replaced::Run;
         self.spill.clear();
     }
 
-    // Hands back the reach list the rewrite took, whether it still holds
-    // where each item of the scene reaches, and the areas it changed.
+    // Hands back the reach list the rewrite took and whether it still holds
+    // where each item of the scene reaches. Puts the areas it changed,
+    // merged and in reverse order, after those `areas` holds. The room that
+    // a rewrite of many items took for their areas goes. `areas` takes no
+    // more than the merged ones: a canvas drawn again each frame holds what
+    // one drawn once does.
     pub(crate) fn results(
         &mut self,
-    ) -> (Vec<Option<ClipBounds>>, UpdatedReach, &mut Vec<ClipBounds>) {
-        (std::mem::take(&mut self.reach), self.held, &mut self.areas)
+        areas: &mut Vec<ClipBounds>,
+    ) -> (Vec<Option<ClipBounds>>, UpdatedReach) {
+        merge_areas(&mut self.areas);
+        let from = areas.len();
+        areas.append(&mut self.areas);
+        areas[from..].reverse();
+        if self.areas.capacity() > KEPT_AREAS {
+            self.areas = Vec::new();
+        }
+        (std::mem::take(&mut self.reach), self.held)
+    }
+
+    // Whether the rewrite replaced or let go a record that hit targets read.
+    pub(crate) fn replaced_hits(&self) -> bool {
+        self.hits_replaced
     }
 
     // Lets the spill's storage go.
@@ -280,6 +711,34 @@ impl Rewrite {
     pub(crate) fn take_storage(&mut self) -> RasterScene {
         std::mem::take(&mut self.spill)
     }
+
+    // Takes `scene`, emptied, as the spill's storage.
+    pub(crate) fn give_storage(&mut self, scene: RasterScene) {
+        self.spill = scene;
+    }
+}
+
+// What the hit targets beneath `layer` take from it, in `kept`, the box of
+// an old record, when there is one.
+fn boxed_hits(kept: Option<Box<HitLayer>>, layer: Option<&LayerNode>) -> Option<Box<HitLayer>> {
+    match (kept, layer) {
+        (Some(mut kept), Some(layer)) => {
+            kept.take_from(layer);
+            Some(kept)
+        }
+        (_, layer) => layer.map(|layer| Box::new(HitLayer::of(layer))),
+    }
+}
+
+// Where the items that the record `index`, whose old subtree ended at the
+// record `end` and at `stop` in the draw order, may take the places of end:
+// before its first child subtree, or at `stop` when it has none. A draw group of the
+// node's own draws is no child subtree.
+fn own_items_end(records: &[SubtreeItems], index: usize, end: usize, stop: usize) -> usize {
+    let child = child_record_from(records, index + 1, end);
+    records[..end]
+        .get(child)
+        .map_or(stop, |record| record.start.get().order)
 }
 
 // The items of the run `to..old_stop` of `scene` give way to all of
@@ -291,42 +750,48 @@ fn splice_items(
     from: &mut RasterScene,
 ) {
     let (removed, added) = (old_stop.since(to), from.counts());
-    scene
-        .shapes
-        .splice(to.shapes..old_stop.shapes, from.shapes.drain(..));
-    scene
-        .images
-        .splice(to.images..old_stop.images, from.images.drain(..));
-    scene
-        .texts
-        .splice(to.texts..old_stop.texts, from.texts.drain(..));
-    scene
-        .shadows
-        .splice(to.shadows..old_stop.shadows, from.shadows.drain(..));
-    let placed = |item: RenderItem, base: ItemCounts| match item {
-        RenderItem::Shape(index) => RenderItem::Shape(base.shapes + index),
-        RenderItem::Image(index) => RenderItem::Image(base.images + index),
-        RenderItem::Text(index) => RenderItem::Text(base.texts + index),
-        RenderItem::Shadow(index) => RenderItem::Shadow(base.shadows + index),
-    };
-    scene.order.splice(
-        to.order..old_stop.order,
-        from.order.drain(..).map(|item| placed(item, to)),
+    splice_from(
+        &mut scene.shapes,
+        to.shapes..old_stop.shapes,
+        &mut from.shapes,
     );
-    // The items after the run lie after its items in each list.
-    let shift = |index: usize, removed: usize, added: usize| index - removed + added;
-    for item in &mut scene.order[to.order + added.order..] {
-        *item = match *item {
-            RenderItem::Shape(index) => {
-                RenderItem::Shape(shift(index, removed.shapes, added.shapes))
-            }
-            RenderItem::Image(index) => {
-                RenderItem::Image(shift(index, removed.images, added.images))
-            }
-            RenderItem::Text(index) => RenderItem::Text(shift(index, removed.texts, added.texts)),
-            RenderItem::Shadow(index) => {
-                RenderItem::Shadow(shift(index, removed.shadows, added.shadows))
-            }
-        };
+    splice_from(
+        &mut scene.images,
+        to.images..old_stop.images,
+        &mut from.images,
+    );
+    splice_from(&mut scene.texts, to.texts..old_stop.texts, &mut from.texts);
+    splice_from(
+        &mut scene.shadows,
+        to.shadows..old_stop.shadows,
+        &mut from.shadows,
+    );
+    for item in &mut from.order {
+        *item = item.moved(ItemCounts::default(), to);
     }
+    splice_from(&mut scene.order, to.order..old_stop.order, &mut from.order);
+    // The items after the run lie after its items in each list.
+    for item in &mut scene.order[to.order + added.order..] {
+        *item = item.moved(removed, added);
+    }
+}
+
+// Puts the items of `from` in place of the run `run` of `list`, in their
+// order, and empties `from`; the run's items drop. The items that fit swap
+// into the run, then the rest of the run goes, or the rest of `from` comes
+// in after the run. Out of line: a rewrite splices each list with it, and
+// `Vec::splice` would put a copy of its larger code in each place.
+#[inline(never)]
+fn splice_from<T>(list: &mut Vec<T>, run: Range<usize>, from: &mut Vec<T>) {
+    let swapped = run.len().min(from.len());
+    let rest = run.start + swapped;
+    list[run.start..rest].swap_with_slice(&mut from[..swapped]);
+    if from.len() > swapped {
+        let (end, more) = (list.len(), from.len() - swapped);
+        list.extend(from.drain(swapped..));
+        list[run.end..end + more].rotate_right(more);
+    } else {
+        list.drain(rest..run.end);
+    }
+    from.clear();
 }

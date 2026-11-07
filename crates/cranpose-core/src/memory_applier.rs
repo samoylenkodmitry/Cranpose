@@ -747,6 +747,10 @@ impl MemoryApplier {
         }
     }
 
+    // Out of line: ids past the dense range are rare, and the map lookup
+    // inline would grow every caller of `get_ref`.
+    #[cold]
+    #[inline(never)]
     pub(crate) fn high_id_node(&self, id: NodeId) -> Result<&dyn Node, NodeError> {
         self.state
             .high_ids
@@ -755,6 +759,8 @@ impl MemoryApplier {
             .ok_or(NodeError::Missing { id })
     }
 
+    #[cold]
+    #[inline(never)]
     fn high_id_node_mut(&mut self, id: NodeId) -> Result<&mut dyn Node, NodeError> {
         self.state
             .high_ids

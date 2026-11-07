@@ -715,15 +715,13 @@ pub fn top_modal_from_applier(
             let state = subcompose.layout_state();
             if state.is_placed() {
                 let reach = subcompose.semantics_reach();
-                subcompose.with_active_children(|children| {
-                    push_placed(
-                        &mut steps,
-                        node_id,
-                        reach,
-                        state.size(),
-                        children.iter().copied(),
-                    );
-                });
+                push_placed(
+                    &mut steps,
+                    node_id,
+                    reach,
+                    state.size(),
+                    subcompose.active_children().iter().copied(),
+                );
             }
         }
     }

@@ -329,7 +329,7 @@ fn build_layer_node_for_test(
         let mut layer = LayerNode::default();
         write_snapshot_layer(
             snapshot,
-            LowerContext {
+            &LowerContext {
                 inherited_motion_context_animated,
                 ..LowerContext::ROOT
             },
@@ -2463,6 +2463,7 @@ fn appending_empty_draw_commands_preserves_existing_nodes_and_command_identity()
                 size: Size::default(),
                 motion_context_animated: false,
                 layer: None,
+                store: RecordingStore::Command,
             },
             phase,
         );
@@ -3181,7 +3182,7 @@ fn scrolled_lazy_column_item_text_keeps_unspecified_motion_at_rest() {
                     format!(
                         "subcompose#{child_id} placed={} active_children={:?}",
                         node.layout_state().is_placed(),
-                        node.with_active_children(<[NodeId]>::to_vec)
+                        node.active_children().to_vec()
                     )
                 })
             {
@@ -3903,13 +3904,12 @@ fn lay_out_lazy_column(applier: &mut MemoryApplier, root: NodeId) -> Vec<NodeId>
     let node = node
         .downcast_ref::<SubcomposeLayoutNode>()
         .expect("lazy column should be subcompose");
-    node.with_active_children(|children| {
-        read_node_data(applier, root, |data| {
-            assert_eq!(data.children.as_ptr(), children.as_ptr());
-        })
-        .expect("lazy column scene data");
-        children.to_vec()
+    let children = node.active_children();
+    read_node_data(applier, root, |data| {
+        assert_eq!(data.children.as_ptr(), children.as_ptr());
     })
+    .expect("lazy column scene data");
+    children.to_vec()
 }
 
 fn scrolling_rows_column(scroll_state: ScrollState, row_modifier: fn() -> Modifier) {

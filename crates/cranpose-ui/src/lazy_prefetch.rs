@@ -92,7 +92,7 @@ pub fn warm_prefetched_slices(applier: &mut cranpose_core::MemoryApplier) {
                 id,
                 |node| {
                     let _ = node.modifier_slices_snapshot();
-                    node.with_active_children(|children| stack.extend_from_slice(children));
+                    stack.extend_from_slice(&node.active_children());
                 },
             );
         }

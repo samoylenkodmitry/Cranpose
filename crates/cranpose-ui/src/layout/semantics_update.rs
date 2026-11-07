@@ -324,7 +324,7 @@ impl<'a> SemanticsUpdate<'a> {
                     live.push(node_id);
                     subcompose.clear_needs_semantics();
                 }
-                subcompose.with_active_children(|children| child_stack.extend_from_slice(children));
+                child_stack.extend_from_slice(&subcompose.active_children());
                 Some(content_origin)
             }) {
             Ok(visit) => Ok(visit),

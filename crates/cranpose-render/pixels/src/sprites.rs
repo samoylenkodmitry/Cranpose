@@ -29,7 +29,7 @@ use crate::{
         ClipBounds, RenderItem, ShapeCoverage, Target, TextRaster, clip_rect_to_window, draw_item,
         place_shape, snap_delta_for_anchor,
     },
-    scene::{DrawShape, RasterScene, ShadowDraw, TextDraw},
+    raster_scene::{DrawShape, ImageDraw, RasterScene, ShadowDraw, TextDraw},
 };
 
 /// How many numbers make one sprite.
@@ -101,8 +101,6 @@ pub struct TextureUpload {
 /// from frame to frame: compose into the same one every frame.
 #[derive(Default)]
 pub struct SpriteFrame {
-    /// The scene the last frame composed, whose storage the next one reuses.
-    pub(crate) scene: RasterScene,
     sprites: Vec<f32>,
     uploads: Vec<TextureUpload>,
     releases: Vec<u32>,
@@ -430,19 +428,20 @@ fn put_brush(sprite: &mut [f32; SPRITE_FLOATS], brush: &Brush, rect: Rect) -> Op
     Some(())
 }
 
-/// An item moved to its canonical place: shifted by whole pixels so its own
-/// rect starts within the first pixel, with no clip. Two frames that show the
-/// same item at whole-pixel distances share one canonical item.
-struct Canonical {
-    scene: RasterScene,
-    item: RenderItem,
+// An item moved to its canonical place: shifted by whole pixels so its own
+// rect starts within the first pixel, with no clip. Two frames that show the
+// same item at whole-pixel distances share one canonical item.
+enum Canonical {
+    Shape(DrawShape),
+    Image(ImageDraw),
+    Text(TextDraw),
+    Shadow(ShadowDraw),
 }
 
 impl Canonical {
-    /// The canonical item, the whole-pixel shift back to where `item` is,
-    /// and its clip.
+    // The canonical item, the whole-pixel shift back to where `item` is,
+    // and its clip.
     fn of(scene: &RasterScene, item: RenderItem) -> Option<(Self, Point, Option<Rect>)> {
-        let mut canonical = RasterScene::new();
         let (origin, clip) = match item {
             RenderItem::Shape(index) => {
                 let draw = &scene.shapes[index];
@@ -472,91 +471,82 @@ impl Canonical {
             return None;
         }
         let shift = Point::new(whole::floor(origin.x), whole::floor(origin.y));
-        let item = match item {
+        let canonical = match item {
             RenderItem::Shape(index) => {
-                canonical
-                    .shapes
-                    .push(scene.shapes[index].translated(-shift.x, -shift.y));
-                RenderItem::Shape(0)
+                Self::Shape(scene.shapes[index].translated(-shift.x, -shift.y))
             }
             RenderItem::Image(index) => {
-                canonical
-                    .images
-                    .push(scene.images[index].translated(-shift.x, -shift.y));
-                RenderItem::Image(0)
+                Self::Image(scene.images[index].translated(-shift.x, -shift.y))
             }
             RenderItem::Text(index) => {
-                canonical
-                    .texts
-                    .push(scene.texts[index].translated(-shift.x, -shift.y));
-                RenderItem::Text(0)
+                Self::Text(scene.texts[index].translated(-shift.x, -shift.y))
             }
             RenderItem::Shadow(index) => {
-                canonical
-                    .shadows
-                    .push(scene.shadows[index].translated(-shift.x, -shift.y));
-                RenderItem::Shadow(0)
+                Self::Shadow(scene.shadows[index].translated(-shift.x, -shift.y))
             }
         };
-        Some((
-            Self {
-                scene: canonical,
-                item,
-            },
-            shift,
-            clip,
-        ))
+        Some((canonical, shift, clip))
     }
 
-    /// A hash of everything that decides the canonical item's pixels.
+    // A hash of everything that decides the canonical item's pixels.
     fn key(&self) -> u64 {
-        let Self { scene, item } = self;
         let mut hasher = HashWriter(FxHasher::default());
         // A text's and a shadow's fields are hashed as numbers. A shape's and
         // an image's `Debug` forms name every field, positions included; an
         // image's pixels are named by the bitmap's id instead of printed.
-        let _ = match item {
-            RenderItem::Text(_) => {
-                hash_text(&mut hasher.0, &scene.texts[0]);
+        let _ = match self {
+            Self::Text(draw) => {
+                hash_text(&mut hasher.0, draw);
                 Ok(())
             }
-            RenderItem::Shadow(_) => {
-                hash_shadow(&mut hasher.0, &scene.shadows[0]);
+            Self::Shadow(draw) => {
+                hash_shadow(&mut hasher.0, draw);
                 Ok(())
             }
-            RenderItem::Shape(_) => write!(hasher, "shape {:?}", scene.shapes[0]),
-            RenderItem::Image(_) => {
-                let draw = &scene.images[0];
-                write!(
-                    hasher,
-                    "image {} {:?} {:?} {} {:?} {:?} {:?} {:?} {:?}",
-                    draw.image.id(),
-                    draw.rect,
-                    draw.snap_anchor,
-                    draw.alpha,
-                    draw.color_filter,
-                    draw.sampling,
-                    draw.blend_mode,
-                    draw.src_rect,
-                    draw.transform,
-                )
-            }
+            Self::Shape(draw) => write!(hasher, "shape {draw:?}"),
+            Self::Image(draw) => write!(
+                hasher,
+                "image {} {:?} {:?} {} {:?} {:?} {:?} {:?} {:?}",
+                draw.image.id(),
+                draw.rect,
+                draw.snap_anchor,
+                draw.alpha,
+                draw.color_filter,
+                draw.sampling,
+                draw.blend_mode,
+                draw.src_rect,
+                draw.transform,
+            ),
         };
         hasher.0.finish()
     }
 
-    /// Draws the canonical item into a texture of the whole pixels it
-    /// reaches: where the texture sits and its premultiplied pixels.
+    // Draws the canonical item into a texture of the whole pixels it
+    // reaches: where the texture sits and its premultiplied pixels. Only an
+    // item no texture holds yet comes here, so the scene the drawing reads
+    // is made for it alone.
     fn rasterize(
-        &self,
+        self,
         diagnostics: &RenderDiagnostics,
         text: &TextRaster,
     ) -> Option<(Rect, Vec<u8>)> {
-        let Self { scene, item } = self;
-        if let RenderItem::Text(_) = item {
-            return rasterize_text(&scene.texts[0], text);
-        }
-        let reach = scene.item_reach(*item)?;
+        let mut scene = RasterScene::new();
+        let item = match self {
+            Self::Text(draw) => return rasterize_text(&draw, text),
+            Self::Shape(draw) => {
+                scene.shapes.push(draw);
+                RenderItem::Shape(0)
+            }
+            Self::Image(draw) => {
+                scene.images.push(draw);
+                RenderItem::Image(0)
+            }
+            Self::Shadow(draw) => {
+                scene.shadows.push(draw);
+                RenderItem::Shadow(0)
+            }
+        };
+        let reach = scene.item_reach(item)?;
         let window = clip_rect_to_window(
             reach,
             None,
@@ -577,7 +567,7 @@ impl Canonical {
             width,
             height,
         };
-        draw_item(&mut target, scene, *item, diagnostics, text);
+        draw_item(&mut target, &scene, item, diagnostics, text);
         Some((
             Rect {
                 x: window.min_x as f32,
@@ -594,10 +584,15 @@ impl Canonical {
 fn rasterize_text(draw: &TextDraw, text: &TextRaster) -> Option<(Rect, Vec<u8>)> {
     let (text, rect) = crate::draw::rasterize_text(draw, text)?;
     let mut pixels = text.pixels;
+    // `(c * a + 127) / 255` for each channel, in 16-bit lanes with no
+    // division and no branch, so that a vector unit takes several pixels at
+    // once: for every `x` up to 65,152, `x / 255` is
+    // `(x + 1 + (x >> 8)) >> 8`.
     for pixel in pixels.as_chunks_mut::<4>().0 {
-        let alpha = u32::from(pixel[3]);
+        let alpha = u16::from(pixel[3]);
         for channel in &mut pixel[..3] {
-            *channel = ((u32::from(*channel) * alpha + 127) / 255) as u8;
+            let x = u16::from(*channel) * alpha + 127;
+            *channel = ((x + 1 + (x >> 8)) >> 8) as u8;
         }
     }
     Some((rect, pixels))

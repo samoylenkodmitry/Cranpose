@@ -4,27 +4,24 @@
 //! shadow and stacking order, scrolls under a clip, appears and disappears,
 //! and arcs sweep.
 
-use std::{cell::RefCell, rc::Rc};
+use std::rc::Rc;
 
 use cranpose_app_shell::AppShell;
-use cranpose_core::{MutableState, location_key, rememberMutableStateOf};
+use cranpose_core::{location_key, rememberMutableStateOf};
 use cranpose_macros::composable;
-use cranpose_render_pixels::{Picture, PixelRect, PixelsRenderer};
+use cranpose_render_pixels::{PixelRect, PixelsRenderer};
 use cranpose_ui::{Box, BoxSpec, Column, ColumnSpec, Modifier, Text, TextStyle};
 use cranpose_ui_graphics::{
     Brush, Color, ColorFilter, DrawScope, GraphicsLayer, Point, Stroke, StrokeCap, TAU,
 };
 
-const WIDTH: u32 = 240;
-const HEIGHT: u32 = 180;
-const FRAMES: u32 = 24;
+#[path = "support/kept_frames.rs"]
+mod kept_frames;
 
-type Step = Rc<RefCell<Option<MutableState<u32>>>>;
-
-fn color(step: u32, salt: u32) -> Color {
-    let value = (step * 37 + salt * 91) % 255;
-    Color::from_rgb_u8(value as u8, (255 - value) as u8, ((value * 3) % 255) as u8)
-}
+use kept_frames::{
+    FRAMES, HEIGHT, Step, WIDTH, color, kept_frames_match_full_redraws,
+    kept_frames_match_full_redraws_after_unread, shell,
+};
 
 #[composable]
 fn Scenes(captured: Step) {
@@ -277,6 +274,38 @@ fn ClippingParent(captured: Step) {
     );
 }
 
+/// A parent its layer turns, which draws through a surface of its own, over
+/// a child whose colour changes each step.
+#[composable]
+fn TurnedParent(captured: Step) {
+    let step = rememberMutableStateOf(|| 0u32);
+    *captured.borrow_mut() = Some(step);
+    Box(
+        Modifier::empty()
+            .offset(80.0, 50.0)
+            .width(80.0)
+            .height(60.0)
+            .graphics_layer(|| GraphicsLayer {
+                rotation_z: 30.0,
+                ..GraphicsLayer::default()
+            })
+            .background(Color::from_rgb_u8(30, 40, 50)),
+        BoxSpec::default(),
+        move || {
+            let shade = (step.value() % 4) as u8 * 60;
+            Box(
+                Modifier::empty()
+                    .offset(10.0, 10.0)
+                    .width(40.0)
+                    .height(20.0)
+                    .background(Color::from_rgb_u8(200, shade, 40)),
+                BoxSpec::default(),
+                || {},
+            );
+        },
+    );
+}
+
 /// A parent that never changes, translucent, tinted and clipped, over child
 /// layers that change one at a time: one fades, one moves across the
 /// parent's clip, and one stays still over a child of its own that changes
@@ -354,68 +383,6 @@ fn StillParent(captured: Step) {
     );
 }
 
-fn shell(scale: f32, scenes: fn(Step)) -> (AppShell<PixelsRenderer>, Step) {
-    let captured: Step = Rc::default();
-    let content = Rc::clone(&captured);
-    let shell = AppShell::new_with_size_and_density(
-        PixelsRenderer::new(),
-        location_key(file!(), line!(), column!()),
-        move || scenes(Rc::clone(&content)),
-        (WIDTH, HEIGHT),
-        (WIDTH as f32 / scale, HEIGHT as f32 / scale),
-        scale,
-    );
-    (shell, captured)
-}
-
-fn apply(kept: &mut [u8], area: PixelRect, pixels: &[u8]) {
-    let row_bytes = area.width as usize * 4;
-    for (row, source) in pixels.chunks_exact(row_bytes).enumerate() {
-        let start = ((area.y as usize + row) * WIDTH as usize + area.x as usize) * 4;
-        kept[start..start + row_bytes].copy_from_slice(source);
-    }
-}
-
-fn first_difference(kept: &[u8], full: &[u8]) -> Option<(usize, usize)> {
-    let pixel = kept
-        .as_chunks::<4>()
-        .0
-        .iter()
-        .zip(full.as_chunks::<4>().0)
-        .position(|(a, b)| a != b)?;
-    Some((pixel % WIDTH as usize, pixel / WIDTH as usize))
-}
-
-fn kept_frames_match_full_redraws(scale: f32, scenes: fn(Step)) {
-    let (mut shell, captured) = shell(scale, scenes);
-    let mut picture = Picture::default();
-    let mut areas = Vec::new();
-    let mut kept = vec![0u8; (WIDTH * HEIGHT * 4) as usize];
-    let mut full = vec![0u8; (WIDTH * HEIGHT * 4) as usize];
-    let mut area_pixels = Vec::new();
-    for frame in 0..FRAMES {
-        if frame > 0 {
-            let step = (*captured.borrow()).expect("the composition remembered the step");
-            step.set(frame);
-        }
-        shell.update();
-        shell.primary().with_renderer(|renderer| {
-            renderer.update_picture(&mut picture, WIDTH, HEIGHT, scale, &mut areas);
-            for area in &areas {
-                area_pixels.resize(area.width as usize * area.height as usize * 4, 0);
-                renderer.draw_picture_area(&picture, *area, &mut area_pixels);
-                apply(&mut kept, *area, &area_pixels);
-            }
-            renderer.draw_scaled(&mut full, WIDTH, HEIGHT, scale);
-        });
-        assert_eq!(
-            first_difference(&kept, &full),
-            None,
-            "frame {frame} at scale {scale}: the kept frame differs from a full redraw at (x, y); areas {areas:?}"
-        );
-    }
-}
-
 #[test]
 fn kept_frames_match_full_redraws_at_one_pixel_per_point() {
     kept_frames_match_full_redraws(1.0, Scenes);
@@ -431,6 +398,13 @@ fn kept_frames_match_full_redraws_at_two_pixels_per_point() {
     kept_frames_match_full_redraws(2.0, Scenes);
 }
 
+// Updates that no host takes the changes of note no areas: the host's
+// first take draws the whole frame, and the takes after it the areas.
+#[test]
+fn kept_frames_match_full_redraws_after_updates_no_host_took() {
+    kept_frames_match_full_redraws_after_unread(1.5, FRAMES / 2, Scenes);
+}
+
 #[test]
 fn a_parent_alpha_its_layer_alone_reads_reaches_a_child_that_did_not_change() {
     kept_frames_match_full_redraws(1.0, FadingParent);
@@ -444,6 +418,11 @@ fn a_parent_clip_its_layer_alone_reads_reaches_a_child_that_did_not_change() {
 #[test]
 fn layers_that_change_under_a_still_parent_keep_its_alpha_tint_and_clip() {
     kept_frames_match_full_redraws(1.5, StillParent);
+}
+
+#[test]
+fn a_child_that_changes_under_a_turned_parent_redraws_in_its_surface() {
+    kept_frames_match_full_redraws(1.0, TurnedParent);
 }
 
 #[composable]
@@ -487,11 +466,10 @@ fn a_still_frame_changes_nothing_and_a_new_count_changes_only_its_text() {
         (WIDTH, HEIGHT),
         (WIDTH as f32, HEIGHT as f32),
     );
-    let mut picture = Picture::default();
     let mut areas = Vec::new();
     shell.update();
     shell.primary().with_renderer(|renderer| {
-        renderer.update_picture(&mut picture, WIDTH, HEIGHT, 1.0, &mut areas);
+        renderer.update_picture(WIDTH, HEIGHT, &mut areas);
     });
     assert_eq!(
         areas,
@@ -505,7 +483,7 @@ fn a_still_frame_changes_nothing_and_a_new_count_changes_only_its_text() {
 
     shell.update();
     shell.primary().with_renderer(|renderer| {
-        renderer.update_picture(&mut picture, WIDTH, HEIGHT, 1.0, &mut areas);
+        renderer.update_picture(WIDTH, HEIGHT, &mut areas);
     });
     assert!(areas.is_empty(), "a still frame changed {areas:?}");
 
@@ -513,7 +491,7 @@ fn a_still_frame_changes_nothing_and_a_new_count_changes_only_its_text() {
     step.set(7);
     shell.update();
     shell.primary().with_renderer(|renderer| {
-        renderer.update_picture(&mut picture, WIDTH, HEIGHT, 1.0, &mut areas);
+        renderer.update_picture(WIDTH, HEIGHT, &mut areas);
     });
     let changed: u32 = areas.iter().map(|area| area.width * area.height).sum();
     assert!(!areas.is_empty());
@@ -524,6 +502,61 @@ fn a_still_frame_changes_nothing_and_a_new_count_changes_only_its_text() {
     assert!(
         changed < WIDTH * HEIGHT / 10,
         "the count's area is small: {changed} pixels in {areas:?}"
+    );
+}
+
+#[composable]
+fn TwoCounts(captured: Step) {
+    let step = rememberMutableStateOf(|| 0u32);
+    *captured.borrow_mut() = Some(step);
+    Column(
+        Modifier::empty().fill_max_size(),
+        ColumnSpec::default(),
+        move || {
+            Text(
+                format!("{} above", step.value()),
+                Modifier::empty(),
+                TextStyle::default(),
+            );
+            Box(
+                Modifier::empty()
+                    .width(200.0)
+                    .height(60.0)
+                    .background(Color::WHITE),
+                BoxSpec::default(),
+                || {},
+            );
+            Text(
+                format!("{} below", step.value()),
+                Modifier::empty(),
+                TextStyle::default(),
+            );
+        },
+    );
+}
+
+// A host sends the areas in their order, and a panel takes them best in the
+// order the scene draws them, which the walk to the changed nodes found.
+#[test]
+fn the_areas_of_nodes_that_change_together_follow_the_scene_order() {
+    let (mut shell, captured) = shell(1.0, TwoCounts);
+    let mut areas = Vec::new();
+    for _ in 0..2 {
+        shell.update();
+        shell.primary().with_renderer(|renderer| {
+            renderer.update_picture(WIDTH, HEIGHT, &mut areas);
+        });
+    }
+    let step = (*captured.borrow()).expect("the composition remembered the step");
+    step.set(7);
+    shell.update();
+    shell.primary().with_renderer(|renderer| {
+        renderer.update_picture(WIDTH, HEIGHT, &mut areas);
+    });
+    assert_eq!(areas.len(), 2, "one area for each count: {areas:?}");
+    assert!(
+        areas[0].y < 60 && areas[1].y >= 60,
+        "the count above the box comes first: {areas:?}"
     );
 }
 
@@ -565,18 +598,17 @@ fn a_growing_bar_changes_only_the_strip_at_its_end() {
         (WIDTH, HEIGHT),
         (WIDTH as f32, HEIGHT as f32),
     );
-    let mut picture = Picture::default();
     let mut areas = Vec::new();
     shell.update();
     shell.primary().with_renderer(|renderer| {
-        renderer.update_picture(&mut picture, WIDTH, HEIGHT, 1.0, &mut areas);
+        renderer.update_picture(WIDTH, HEIGHT, &mut areas);
     });
 
     let step = (*captured.borrow()).expect("the composition remembered the step");
     step.set(1);
     shell.update();
     shell.primary().with_renderer(|renderer| {
-        renderer.update_picture(&mut picture, WIDTH, HEIGHT, 1.0, &mut areas);
+        renderer.update_picture(WIDTH, HEIGHT, &mut areas);
     });
     // The bar's end moves from x = 60 to 63, and its corners reach 8 in.
     assert_eq!(
@@ -635,18 +667,17 @@ fn many_changes_far_apart_leave_the_still_pixels_between_them() {
         (WIDTH, HEIGHT),
         (WIDTH as f32, HEIGHT as f32),
     );
-    let mut picture = Picture::default();
     let mut areas = Vec::new();
     shell.update();
     shell.primary().with_renderer(|renderer| {
-        renderer.update_picture(&mut picture, WIDTH, HEIGHT, 1.0, &mut areas);
+        renderer.update_picture(WIDTH, HEIGHT, &mut areas);
     });
 
     let step = (*captured.borrow()).expect("the composition remembered the step");
     step.set(1);
     shell.update();
     shell.primary().with_renderer(|renderer| {
-        renderer.update_picture(&mut picture, WIDTH, HEIGHT, 1.0, &mut areas);
+        renderer.update_picture(WIDTH, HEIGHT, &mut areas);
     });
     assert!(
         areas
@@ -707,18 +738,17 @@ fn a_row_added_below_still_content_leaves_that_content() {
         (WIDTH, HEIGHT),
         (WIDTH as f32, HEIGHT as f32),
     );
-    let mut picture = Picture::default();
     let mut areas = Vec::new();
     shell.update();
     shell.primary().with_renderer(|renderer| {
-        renderer.update_picture(&mut picture, WIDTH, HEIGHT, 1.0, &mut areas);
+        renderer.update_picture(WIDTH, HEIGHT, &mut areas);
     });
 
     let step = (*captured.borrow()).expect("the composition remembered the step");
     step.set(1);
     shell.update();
     shell.primary().with_renderer(|renderer| {
-        renderer.update_picture(&mut picture, WIDTH, HEIGHT, 1.0, &mut areas);
+        renderer.update_picture(WIDTH, HEIGHT, &mut areas);
     });
     assert!(
         areas
@@ -818,18 +848,17 @@ fn a_growing_ring_changes_only_the_area_around_its_end() {
         (WIDTH, HEIGHT),
         (WIDTH as f32, HEIGHT as f32),
     );
-    let mut picture = Picture::default();
     let mut areas = Vec::new();
     shell.update();
     shell.primary().with_renderer(|renderer| {
-        renderer.update_picture(&mut picture, WIDTH, HEIGHT, 1.0, &mut areas);
+        renderer.update_picture(WIDTH, HEIGHT, &mut areas);
     });
 
     let step = (*captured.borrow()).expect("the composition remembered the step");
     step.set(1);
     shell.update();
     shell.primary().with_renderer(|renderer| {
-        renderer.update_picture(&mut picture, WIDTH, HEIGHT, 1.0, &mut areas);
+        renderer.update_picture(WIDTH, HEIGHT, &mut areas);
     });
     // The end moves from 23 to 44 degrees past the top, clockwise: the ring
     // and its track left of the top stay.
@@ -878,7 +907,6 @@ fn ScatteredBoxes(captured: Step) {
 #[test]
 fn many_changed_boxes_join_into_the_same_areas_frame_after_frame() {
     let (mut shell, captured) = shell(1.0, ScatteredBoxes);
-    let mut picture = Picture::default();
     let mut areas = Vec::new();
     let mut seen = Vec::new();
     for frame in 0..5 {
@@ -888,7 +916,7 @@ fn many_changed_boxes_join_into_the_same_areas_frame_after_frame() {
         }
         shell.update();
         shell.primary().with_renderer(|renderer| {
-            renderer.update_picture(&mut picture, WIDTH, HEIGHT, 1.0, &mut areas);
+            renderer.update_picture(WIDTH, HEIGHT, &mut areas);
         });
         if frame > 0 {
             seen.push(

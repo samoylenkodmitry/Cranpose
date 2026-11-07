@@ -12,8 +12,8 @@ use cranpose_core::{MemoryApplier, NodeId, collections::map::HashMap};
 use cranpose_ui::{ModifierNodeSlices, Point, Rect, Size};
 
 use super::{
-    DrawTarget, GraphChanges, KeptChild, LowerContext, PlacedGeometry, SnapshotNodeData,
-    TranslateAncestorContext, TranslateGeometry, Wrapping, child_identity,
+    DrawTarget, GraphChanges, KeptChild, LowerContext, NodeLayout, PlacedGeometry, RecordingStore,
+    SnapshotNodeData, TranslateAncestorContext, TranslateGeometry, Wrapping, child_identity,
     children_have_origin_sinks, content_layer_mut, forget_dirty_node, hit_test_from_slices,
     layer_and_node_bounds, layer_identity, lower_child, modifier_slices_have_origin_sinks,
     move_kept_child, outer_draws, placed_child_geometry, placed_transform, read_node_data,
@@ -84,6 +84,7 @@ fn try_translate_scrolled_layer(
             size,
             motion_context_animated: inner.motion_context_animated,
             layer: None,
+            store: RecordingStore::Command,
         };
         let outer = outer_draws(node_id, slices.draw_commands(), outer_count, draws)
             .expect("outer command count is nonzero");
@@ -114,7 +115,7 @@ pub(super) struct TranslatedContainer {
 /// its layer as it is.
 pub(super) fn translated_container(
     container: &mut LayerNode,
-    layout_state: &cranpose_ui::widgets::LayoutState,
+    layout_state: &NodeLayout,
     modifier_slices: &ModifierNodeSlices,
     ancestors: TranslateAncestorContext,
     wrapping: Wrapping,
@@ -455,7 +456,7 @@ fn build_entering_children(
             continue;
         }
         let child_id = &placed.id;
-        let Some(mut lowered) = lower_child(applier, *child_id, context) else {
+        let Some(mut lowered) = lower_child(applier, *child_id, &context) else {
             continue;
         };
         if let RenderNode::Layer(layer) = &mut lowered {
@@ -484,6 +485,7 @@ pub(super) fn write_own_content_around_children(
         size,
         motion_context_animated: container.motion_context_animated,
         layer: container.graphics_layer.get(),
+        store: RecordingStore::Command,
     };
     write_node_content(
         &mut container.children,
@@ -498,7 +500,7 @@ pub(super) fn write_own_content_around_children(
 pub(super) fn apply_translated_container_state(
     container: &mut LayerNode,
     modifier_slices: &ModifierNodeSlices,
-    layout_state: &cranpose_ui::widgets::LayoutState,
+    layout_state: &NodeLayout,
     parent_content_offset: Point,
     geometry: TranslateGeometry,
 ) {
@@ -660,7 +662,7 @@ pub(super) fn translate_layer_from_data(
             &layout_state,
             &container.graphics_layer,
             container.local_bounds,
-            parent_abs,
+            &parent_abs,
         );
         let children = geometry.children_context(container, ancestors);
         match &order {

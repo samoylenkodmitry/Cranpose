@@ -48,7 +48,9 @@ const BARS: usize = 200;
 const FULL_BARS: usize = 64;
 const BAR_BOUND: isize = 4 * 1024;
 // What a canvas that draws again every frame may hold more than one that
-// drew once: a few lists that grew once, not a copy of what it draws.
+// drew once, with little memory left: a few lists that grew once, not a copy
+// of what it draws. With memory to spare it keeps its recording's buffers to
+// record into them again.
 const REDRAW_BOUND: isize = 4 * 1024;
 
 fn run(framebuffer: &mut Framebuffer, frames: Range<u64>, pixels: &mut [u8]) {
@@ -132,9 +134,9 @@ fn left_behind(content: impl Fn() + 'static) -> isize {
 /// A number that changes every frame, as a clock or a sensor reading does, composed in a
 /// `Text` or drawn in a draw scope, leaves no memory behind: the text pools and caches keep
 /// what the screen shows and what recent frames used. Nor does a busier screen, whose list
-/// scrolls and whose panel comes and goes. A canvas drawn again every frame holds what one
-/// drawn once does, and with little memory left one bar more holds about that bar. One
-/// test: the allocator counts every thread's memory.
+/// scrolls and whose panel comes and goes. With little memory left a canvas drawn again every
+/// frame holds what one drawn once does, and one bar more holds about that bar. One test: the
+/// allocator counts every thread's memory.
 fn screens_that_change_every_frame_leave_no_memory_behind() {
     let composed = left_behind(|| ComposedReading(TextStyle::default()));
     let drawn = left_behind(|| DrawnReading(Color::WHITE, DrawTextStyle::default().font_size));
@@ -143,8 +145,8 @@ fn screens_that_change_every_frame_leave_no_memory_behind() {
     assert!(composed < LEFT_BEHIND_BOUND, "composed: {composed} bytes");
     assert!(drawn < LEFT_BEHIND_BOUND, "drawn: {drawn} bytes");
     assert!(busy < LEFT_BEHIND_BOUND, "busy: {busy} bytes");
-    let still = held(|| Bars(false, BARS), MemoryHeadroom::Ample);
-    let moving = held(|| Bars(true, BARS), MemoryHeadroom::Ample);
+    let still = held(|| Bars(false, BARS), MemoryHeadroom::Tight);
+    let moving = held(|| Bars(true, BARS), MemoryHeadroom::Tight);
     println!("held: still bars {still} bytes, moving bars {moving} bytes");
     assert!(
         moving - still < REDRAW_BOUND,

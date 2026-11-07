@@ -1,10 +1,19 @@
 //! The allocations of the layers a scene update replaces, which the layers
-//! built in their place take instead of allocating their own. The update
+//! built in their place take instead of allocating their own. A graph update
 //! frees whatever it did not take when it ends, so nothing is held between
-//! frames.
+//! frames; a walk that lowers nodes alone keeps as many as it asked for,
+//! which the next walk takes.
 
-use crate::graph::{
-    InlineNode, LayerNode, PrimitiveEntry, PrimitiveNode, RenderNode, TextPrimitiveNode,
+use std::rc::Rc;
+
+use cranpose_ui_graphics::CommandRecording;
+
+use crate::{
+    graph::{
+        DrawCommandId, InlineNode, LayerNode, PrimitiveEntry, PrimitiveNode, RenderNode,
+        TextPrimitiveNode,
+    },
+    scene_builder::Redraw,
 };
 
 #[derive(Default)]
@@ -19,15 +28,20 @@ pub(crate) struct Pool {
     /// takes one replaces.
     texts: Vec<Box<TextPrimitiveNode>>,
     lists: Vec<Vec<RenderNode>>,
+    // How many boxes and child lists of each kind were asked for since the
+    // pool was last released or trimmed.
+    asked: Asked,
+}
+
+#[derive(Default)]
+struct Asked {
+    layers: usize,
+    inlines: usize,
+    texts: usize,
+    lists: usize,
 }
 
 impl Pool {
-    fn recycle_layer(&mut self, mut layer: Box<LayerNode>) {
-        self.recycle_children(&mut layer);
-        layer.hit_test = None;
-        self.layers.push(layer);
-    }
-
     fn recycle_children(&mut self, layer: &mut LayerNode) {
         self.recycle_nodes(&mut layer.children);
     }
@@ -39,20 +53,41 @@ impl Pool {
     }
 
     fn recycle_node(&mut self, node: RenderNode) {
+        self.recycle_keeping(node, &mut |_, _| {});
+    }
+
+    // Moves the boxes of `node` and of the nodes beneath it into the pool,
+    // and hands the recording of each draw run among them to `keep`.
+    fn recycle_keeping(
+        &mut self,
+        node: RenderNode,
+        keep: &mut impl FnMut(DrawCommandId, Rc<CommandRecording>),
+    ) {
         match node {
-            RenderNode::Layer(layer) => self.recycle_layer(layer),
-            RenderNode::Inline(inline) => self.recycle_inline(inline),
+            RenderNode::Layer(mut layer) => {
+                while let Some(child) = layer.children.pop() {
+                    self.recycle_keeping(child, keep);
+                }
+                layer.hit_test = None;
+                self.layers.push(layer);
+            }
+            RenderNode::Inline(mut inline) => {
+                while let Some(child) = inline.content.pop() {
+                    self.recycle_keeping(child, keep);
+                }
+                self.inlines.push(inline);
+            }
             RenderNode::Primitive(PrimitiveEntry {
                 node: PrimitiveNode::Text(text),
                 ..
             }) => self.texts.push(text),
-            RenderNode::Primitive(_) | RenderNode::DrawRun(_) => {}
+            RenderNode::DrawRun(run) => {
+                if let Some(id) = run.command {
+                    keep(id, run.recording);
+                }
+            }
+            RenderNode::Primitive(_) => {}
         }
-    }
-
-    fn recycle_inline(&mut self, mut inline: Box<InlineNode>) {
-        self.recycle_nodes(&mut inline.content);
-        self.inlines.push(inline);
     }
 }
 
@@ -101,6 +136,35 @@ pub(crate) fn recycle_node(node: RenderNode) {
     crate::thread_state::with(|state| state.layer_pool.borrow_mut().recycle_node(node));
 }
 
+/// Moves the boxes of `node`, a node
+/// [`lower_node_alone`](crate::scene_builder::lower_node_alone) gave whose
+/// items a renderer took, into the pool the next lowered nodes take theirs
+/// from, and keeps the recordings of its draws for their next draws.
+pub fn recycle_lowered(node: RenderNode) {
+    recycle_lowered_drawing(node, Redraw::AsBefore);
+}
+
+// Moves the boxes of `node`, the kept head of a node that lowers again in
+// this update, into the pool, and keeps the recordings of its draws for its
+// new draws.
+pub(crate) fn recycle_to_redraw(node: RenderNode) {
+    recycle_lowered_drawing(node, Redraw::Now);
+}
+
+// Moves the boxes of `node` into the pool and keeps the recordings of its
+// draws, whose commands draw again as `redraw` says.
+fn recycle_lowered_drawing(node: RenderNode, redraw: Redraw) {
+    crate::thread_state::with(|state| {
+        let mut redrawn = state.redrawn.borrow_mut();
+        state
+            .layer_pool
+            .borrow_mut()
+            .recycle_keeping(node, &mut |id, recording| {
+                redrawn.keep(id, recording, redraw);
+            });
+    });
+}
+
 // Moves the text boxes of `inline`'s content into the pool, before the
 // content is written again in its emptied list.
 pub(crate) fn recycle_content(inline: &mut InlineNode) {
@@ -123,8 +187,12 @@ pub(crate) fn recycle_list(list: Vec<RenderNode>) {
 /// A child list with room for `capacity` children, recycled when the pool
 /// has one; see [`reserve_nodes`].
 pub(crate) fn child_list(capacity: usize) -> Vec<RenderNode> {
-    let mut list = crate::thread_state::with(|state| state.layer_pool.borrow_mut().lists.pop())
-        .unwrap_or_default();
+    let mut list = crate::thread_state::with(|state| {
+        let mut pool = state.layer_pool.borrow_mut();
+        pool.asked.lists += 1;
+        pool.lists.pop()
+    })
+    .unwrap_or_default();
     reserve_nodes(&mut list, capacity);
     list
 }
@@ -142,19 +210,32 @@ pub(crate) fn reserve_nodes(list: &mut Vec<RenderNode>, additional: usize) {
 }
 
 pub(crate) fn layer_box() -> Box<LayerNode> {
-    crate::thread_state::with(|state| state.layer_pool.borrow_mut().layers.pop())
-        .unwrap_or_default()
+    crate::thread_state::with(|state| {
+        let mut pool = state.layer_pool.borrow_mut();
+        pool.asked.layers += 1;
+        pool.layers.pop()
+    })
+    .unwrap_or_default()
 }
 
 // An inline node's box with an empty content list, recycled when the pool
 // has one.
 pub(crate) fn inline_box() -> Option<Box<InlineNode>> {
-    crate::thread_state::with(|state| state.layer_pool.borrow_mut().inlines.pop())
+    crate::thread_state::with(|state| {
+        let mut pool = state.layer_pool.borrow_mut();
+        pool.asked.inlines += 1;
+        pool.inlines.pop()
+    })
 }
 
 /// `text` in a recycled box when the pool has one.
 pub(crate) fn boxed_text(text: TextPrimitiveNode) -> Box<TextPrimitiveNode> {
-    match crate::thread_state::with(|state| state.layer_pool.borrow_mut().texts.pop()) {
+    let recycled = crate::thread_state::with(|state| {
+        let mut pool = state.layer_pool.borrow_mut();
+        pool.asked.texts += 1;
+        pool.texts.pop()
+    });
+    match recycled {
         Some(mut recycled) => {
             *recycled = text;
             recycled
@@ -171,5 +252,20 @@ pub(crate) fn release() {
         pool.inlines.clear();
         pool.texts.clear();
         pool.lists.clear();
+        pool.asked = Asked::default();
+    });
+}
+
+/// Keeps as many boxes and child lists of each kind as the walk that ends
+/// asked for. The next walk asks for about as many. The rest goes. A kept
+/// text box holds the text it drew until a text takes the box.
+pub(crate) fn keep_for_next_walk() {
+    crate::thread_state::with(|state| {
+        let mut pool = state.layer_pool.borrow_mut();
+        let asked = std::mem::take(&mut pool.asked);
+        pool.layers.truncate(asked.layers);
+        pool.inlines.truncate(asked.inlines);
+        pool.texts.truncate(asked.texts);
+        pool.lists.truncate(asked.lists);
     });
 }

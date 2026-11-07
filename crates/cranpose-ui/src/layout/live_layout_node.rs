@@ -37,7 +37,7 @@ impl LiveLayoutNode<'_> {
     pub(super) fn with_children<R>(&self, read: impl FnOnce(&[NodeId]) -> R) -> R {
         match self {
             Self::Layout(node) => read(&node.children),
-            Self::Subcompose(node) => node.with_active_children(read),
+            Self::Subcompose(node) => read(&node.active_children()),
         }
     }
 

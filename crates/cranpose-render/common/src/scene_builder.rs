@@ -19,7 +19,9 @@ use draw_recording::{
     layer_node_capacity,
 };
 pub(crate) use draw_recording::{RecorderKey, RecorderSlot};
-pub use draw_recording::{clear_command_recordings_for_tests, draw_command_nodes_for_tests};
+pub use draw_recording::{
+    RecordingStore, clear_command_recordings_for_tests, draw_command_nodes_for_tests,
+};
 mod graph_changes;
 use graph_changes::GraphChanges;
 mod hit_graph;
@@ -33,15 +35,36 @@ mod text_node;
 mod translate_geometry;
 use text_node::{TextNodeParts, text_node_from_parts, translate_unwrapped};
 use translate_geometry::{KeptChild, TranslateGeometry, move_kept_child, translate_retained_child};
-mod node_layer;
-use node_layer::{
-    AbsOrigin, LayerHead, LowerContext, PlacedGeometry, assign_layer, children_have_origin_sinks,
-    hit_test_from_slices, layer_and_node_bounds, layer_identity, layout_box_to_snapshot,
-    lower_root_into, modifier_slices_have_origin_sinks, outer_draws, placed_child_geometry,
-    placed_transform, prepare_node_layer, read_node_data, read_placed_node_data,
-    slices_hit_something, take_wrapped_layer, write_node_content, write_node_layer,
-    write_snapshot_layer, write_wrapper,
+mod lowered_node;
+pub use lowered_node::{
+    ChildPlacement, LoweredNode, NodePlace, has_children, kept_child_placement, lower_node_alone,
+    release_lowered, release_walk_storage, root_layer_bounds, visit_kept_node,
+    visit_lowered_children,
 };
+
+pub use crate::layer_recycling::recycle_lowered;
+mod kept_head;
+pub use kept_head::{Inherits, KeptHead, KeptNodeRef, OwnLayer, lowered_children_context};
+mod moved_subtree;
+use moved_subtree::Inherited;
+pub use moved_subtree::{MovedSubtree, lower_moved_subtree, placed_child_position};
+mod lower_context;
+pub use lower_context::LowerContext;
+mod node_layer;
+mod node_layout;
+mod redrawn_recordings;
+use node_layout::NodeLayout;
+pub(crate) use redrawn_recordings::{Redraw, RedrawnRecordings};
+mod space_fragment;
+use node_layer::{
+    AbsOrigin, LayerHead, PlacedGeometry, assign_layer, children_context,
+    children_have_origin_sinks, hit_test_from_slices, layer_and_node_bounds, layer_identity,
+    layout_box_to_snapshot, lower_root_into, modifier_slices_have_origin_sinks, outer_draws,
+    placed_child_geometry, placed_transform, prepare_node_layer, read_node_data,
+    read_placed_node_data, slices_hit_something, take_wrapped_layer, write_node_content,
+    write_node_layer, write_snapshot_layer, write_wrapper,
+};
+pub use space_fragment::{SpaceFragment, lower_space_fragment};
 mod translate_layer;
 pub(crate) use translate_layer::TranslateScratch;
 use translate_layer::{
@@ -63,7 +86,7 @@ struct BuildNodeSnapshot {
 }
 
 struct SnapshotNodeData<'a> {
-    layout_state: cranpose_ui::widgets::LayoutState,
+    layout_state: NodeLayout,
     modifier_slices: Rc<ModifierNodeSlices>,
     children: &'a [NodeId],
     window_root: bool,
@@ -166,7 +189,7 @@ pub fn build_graph_from_layout_tree(root: &LayoutBox, _scale: f32) -> RenderGrap
     bump_recording_generation();
     let root_snapshot = layout_box_to_snapshot(root, None);
     let mut graph = RenderGraph::new(LayerNode::default());
-    write_snapshot_layer(root_snapshot, LowerContext::ROOT, &mut graph.root);
+    write_snapshot_layer(root_snapshot, &LowerContext::ROOT, &mut graph.root);
     graph
 }
 
@@ -418,7 +441,7 @@ fn is_drawn(applier: &MemoryApplier, node: NodeId) -> bool {
         }
         let parent_node: &dyn Any = parent_node;
         if let Some(subcompose) = parent_node.downcast_ref::<SubcomposeLayoutNode>()
-            && !subcompose.with_active_children(|children| children.contains(&child))
+            && !subcompose.active_children().contains(&child)
         {
             return false;
         }
@@ -561,7 +584,7 @@ fn move_retained_layer(
     let previous = HitGraphState::of(layer);
     translate_retained_child(layer, placed.position, ancestors.parent_content_offset);
     if layer.has_origin_sinks {
-        publish_retained_window_geometry(applier, layer, ancestors.parent_abs);
+        publish_retained_window_geometry(applier, layer, &ancestors.parent_abs);
     }
     Some(previous.changes_against(&HitGraphState::of(layer)))
 }
@@ -601,6 +624,24 @@ fn update_layer_properties(
     position: Position,
     ancestors: TranslateAncestorContext,
 ) -> Option<GraphChanges> {
+    refresh_layer_properties(
+        applier,
+        container,
+        (level, position),
+        &LowerContext::beneath(ancestors),
+    )
+}
+
+// Takes into `container`, the layer of a node that draws as it drew when it
+// lowered under `context`, the graphics-layer properties the node has now.
+// Returns how the facts that hit testing reads changed. `None`, with the
+// layer as it was, when the layer no longer fits the node's layout.
+fn refresh_layer_properties(
+    applier: &MemoryApplier,
+    container: &mut LayerNode,
+    (level, position): (Level, Position),
+    context: &LowerContext,
+) -> Option<GraphChanges> {
     let node_id = layer_identity(container)?;
     let wrapping = if container.wraps.is_some() {
         Wrapping::Wrapped
@@ -621,7 +662,6 @@ fn update_layer_properties(
         if !retained_layer_matches_layout(target, &data, placement, wrapping, position) {
             return None;
         }
-        let context = LowerContext::beneath(ancestors);
         let previous = HitGraphState::of(target);
         let (head, child_context) = prepare_node_layer(node_id, slices, state, context);
         assign_layer(target, head);
@@ -634,7 +674,7 @@ fn update_layer_properties(
             target.origin_in_parent = Point::default();
         }
         if target.has_origin_sinks
-            && let Some(child_abs) = child_context.parent_abs
+            && let Some(child_abs) = &child_context.parent_abs
         {
             for child in &target.children {
                 if let RenderNode::Layer(child) = child {
@@ -713,7 +753,7 @@ fn publish_content_geometry(
 fn publish_retained_window_geometry(
     applier: &MemoryApplier,
     layer: &LayerNode,
-    parent_abs: AbsOrigin,
+    parent_abs: &AbsOrigin,
 ) {
     if !layer.has_origin_sinks {
         return;
@@ -721,21 +761,35 @@ fn publish_retained_window_geometry(
     let child_abs = parent_abs.children_of(layer);
     if let Some(node_id) = layer.node_id {
         read_node_data(applier, node_id, |data| {
-            data.modifier_slices.publish_window_geometry(
-                Point {
-                    x: parent_abs.content_origin.x + layer.origin_in_parent.x,
-                    y: parent_abs.content_origin.y + layer.origin_in_parent.y,
-                },
-                child_abs.window_transform,
+            publish_layer_window_geometry(
+                &data.modifier_slices,
+                (layer, parent_abs, &child_abs),
                 data.layout_state.size(),
             );
         });
     }
     for child in &layer.children {
         if let RenderNode::Layer(child) = child {
-            publish_retained_window_geometry(applier, child, child_abs);
+            publish_retained_window_geometry(applier, child, &child_abs);
         }
     }
+}
+
+// Publishes where `layer`, of the node of `slices`, `size` big, lies in its
+// window: under `parent_abs`, with its children under `child_abs`.
+fn publish_layer_window_geometry(
+    slices: &ModifierNodeSlices,
+    (layer, parent_abs, child_abs): (&LayerNode, &AbsOrigin, &AbsOrigin),
+    size: Size,
+) {
+    slices.publish_window_geometry(
+        Point {
+            x: parent_abs.content_origin.x + layer.origin_in_parent.x,
+            y: parent_abs.content_origin.y + layer.origin_in_parent.y,
+        },
+        child_abs.window_transform,
+        size,
+    );
 }
 
 /// Notes that the scene update changes a layer that is a scene, a surface or

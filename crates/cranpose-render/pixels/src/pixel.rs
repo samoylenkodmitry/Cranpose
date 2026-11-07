@@ -22,6 +22,35 @@ pub(crate) enum GradientColors {
     Plain,
 }
 
+// Puts over each pixel of `$pixels` what `$blend`, one paint, leaves over
+// the pixel it names `$pixel`. The paint leaves one pixel over each pixel it
+// meets, and a fill mostly meets runs of one pixel: a pixel equal to the one
+// before takes what the paint left over that one, with one compare. A macro:
+// a function that takes the blend as a closure compiles the closure as a
+// call for each pixel on the ESP32, which costs the classic board's busier
+// screen 2K instructions a frame.
+macro_rules! blend_runs_of_one_pixel {
+    ($pixels:expr, |$pixel:ident| $blend:expr) => {
+        if let Some((first, rest)) = $pixels.split_first_mut() {
+            let mut under = *first;
+            {
+                let $pixel = &mut *first;
+                $blend;
+            }
+            let mut over = *first;
+            for $pixel in rest {
+                if *$pixel == under {
+                    *$pixel = over;
+                } else {
+                    under = *$pixel;
+                    $blend;
+                    over = *$pixel;
+                }
+            }
+        }
+    };
+}
+
 pub(crate) trait Pixel: GlyphPixel {
     const GRADIENT: GradientColors;
 
@@ -36,6 +65,17 @@ pub(crate) trait Pixel: GlyphPixel {
 
     // `paint` over the pixel, its alpha scaled by `coverage`.
     fn blend_paint(&mut self, paint: Self::Paint, coverage: f32, diagnostics: &RenderDiagnostics);
+
+    // `paint` over every pixel of `pixels`, which it covers whole. `table`
+    // keeps what the paint left over the bytes it met before, for a format
+    // that blends in floats; every call with the same table takes the same
+    // paint.
+    fn blend_run(
+        pixels: &mut [Self],
+        paint: Self::Paint,
+        table: &mut Option<BlendTable>,
+        diagnostics: &RenderDiagnostics,
+    );
 
     // Paints every pixel of `pixels` with `value`.
     fn fill(pixels: &mut [Self], value: Self);
@@ -69,6 +109,24 @@ impl Pixel for [u8; 4] {
     ) {
         color[3] *= coverage;
         blend_pixel(self, color, blend_mode, diagnostics);
+    }
+
+    // Out of line: inline, the table grew the loop of a fill's rows past
+    // where the compiler inlines the arrays of each row's paints.
+    #[inline(never)]
+    fn blend_run(
+        pixels: &mut [Self],
+        (color, blend_mode): Self::Paint,
+        table: &mut Option<BlendTable>,
+        diagnostics: &RenderDiagnostics,
+    ) {
+        let table = table.get_or_insert_with(BlendTable::default);
+        blend_runs_of_one_pixel!(pixels, |pixel| table.blend(
+            pixel,
+            color,
+            blend_mode,
+            diagnostics
+        ));
     }
 
     // As whole 32-bit words where the pixels are aligned for them, a store a
@@ -169,7 +227,7 @@ fn fill_pattern_565(pixels: &mut [u16], pattern: [u16; 4]) {
 
 // A 16-bit format: its pixels blend as their bytes would and keep their
 // high bits, and a text paints into them in the format's byte order.
-trait Pixel565: Rgb565 + GlyphPixel + bytemuck::Pod {
+trait Pixel565: Rgb565 + GlyphPixel + bytemuck::Pod + PartialEq {
     fn text_rows_565(pixels: &mut [Self]) -> TextPixelRows<'_>;
 }
 
@@ -202,6 +260,29 @@ impl<P: Pixel565> Pixel for P {
         blend_paint_565(self, paint, coverage, diagnostics);
     }
 
+    // Out of line, as the bytes' run is.
+    #[inline(never)]
+    fn blend_run(
+        pixels: &mut [Self],
+        paint: Self::Paint,
+        table: &mut Option<BlendTable>,
+        diagnostics: &RenderDiagnostics,
+    ) {
+        let Paint565::Over {
+            bytes: [red, green, blue],
+            alpha,
+        } = paint
+        else {
+            for pixel in pixels {
+                blend_paint_565(pixel, paint, 1.0, diagnostics);
+            }
+            return;
+        };
+        let src = [red, green, blue, unit_byte(alpha)];
+        let table = table.get_or_insert_with(BlendTable::default);
+        blend_runs_of_one_pixel!(pixels, |pixel| table.blend_565(pixel, src));
+    }
+
     fn fill(pixels: &mut [Self], value: Self) {
         fill_565(bytemuck::cast_slice_mut(pixels), bytemuck::cast(value));
     }
@@ -215,6 +296,97 @@ impl<P: Pixel565> Pixel for P {
 
     fn text_rows(pixels: &mut [Self]) -> TextPixelRows<'_> {
         Self::text_rows_565(pixels)
+    }
+}
+
+// What one paint leaves over each byte of each channel, kept from the first
+// pixel that shows the byte: `blend_pixel` works each channel apart, so a
+// byte under the paint gives one byte, whatever the other channels hold.
+pub(crate) struct BlendTable {
+    bytes: [[u8; 256]; 4],
+    // Bit `byte % 64` of word `byte / 64` of a channel: whether `bytes`
+    // holds what the paint leaves over that byte.
+    known: [[u64; 4]; 4],
+}
+
+impl Default for BlendTable {
+    fn default() -> Self {
+        Self {
+            bytes: [[0; 256]; 4],
+            known: [[0; 4]; 4],
+        }
+    }
+}
+
+impl BlendTable {
+    // `color` over `pixel` under `blend_mode`, as `blend_pixel` puts it.
+    fn blend(
+        &mut self,
+        pixel: &mut [u8; 4],
+        color: [f32; 4],
+        blend_mode: BlendMode,
+        diagnostics: &RenderDiagnostics,
+    ) {
+        let under = *pixel;
+        if let Some(over) = self.look_up(under) {
+            *pixel = over;
+            return;
+        }
+        blend_pixel(pixel, color, blend_mode, diagnostics);
+        self.keep::<4>(under, *pixel);
+    }
+
+    // `src` over `pixel`, a 16-bit pixel, as `blend_bytes` puts it: over
+    // the bytes its channels stand for, of which it keeps the high bits.
+    fn blend_565<P: Rgb565 + GlyphPixel>(&mut self, pixel: &mut P, src: [u8; 4]) {
+        let under = pixel.to_rgba();
+        if let Some(over) = self.look_up_565(under) {
+            *pixel = P::from_rgb(over);
+            return;
+        }
+        pixel.blend_bytes(src);
+        self.keep::<3>(under, pixel.to_rgba());
+    }
+
+    // Whether the table holds what the paint left over `byte` in `channel`.
+    fn knows(&self, channel: usize, byte: u8) -> bool {
+        let byte = usize::from(byte);
+        self.known[channel][byte / 64] & (1 << (byte % 64)) != 0
+    }
+
+    // What the table holds over `under`, `None` while it misses a channel.
+    // All four are tested before any is read, which the bytes' loop runs
+    // fastest with: a test that returned at the first miss cost the paths
+    // screen 3% more.
+    fn look_up(&self, under: [u8; 4]) -> Option<[u8; 4]> {
+        (0..4)
+            .all(|channel| self.knows(channel, under[channel]))
+            .then(|| [0, 1, 2, 3].map(|channel| self.bytes[channel][usize::from(under[channel])]))
+    }
+
+    // What the table holds over the three color channels of `under`, with
+    // its alpha, `None` while it misses one. The 16-bit loop runs fastest
+    // with a test that returns at the first miss: the test of all three
+    // first cost the 16-bit paths screen 44% more.
+    fn look_up_565(&self, under: [u8; 4]) -> Option<[u8; 4]> {
+        let mut over = under;
+        for channel in 0..3 {
+            if !self.knows(channel, under[channel]) {
+                return None;
+            }
+            over[channel] = self.bytes[channel][usize::from(under[channel])];
+        }
+        Some(over)
+    }
+
+    // Keeps that the paint left `over` over `under` in the first
+    // `CHANNELS` channels.
+    fn keep<const CHANNELS: usize>(&mut self, under: [u8; 4], over: [u8; 4]) {
+        for channel in 0..CHANNELS {
+            let byte = usize::from(under[channel]);
+            self.bytes[channel][byte] = over[channel];
+            self.known[channel][byte / 64] |= 1 << (byte % 64);
+        }
     }
 }
 

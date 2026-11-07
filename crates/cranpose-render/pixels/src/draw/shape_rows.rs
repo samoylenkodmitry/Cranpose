@@ -13,7 +13,7 @@ use super::{
 // rows, where the compiler would otherwise hoist it for every shape.
 pub(super) struct ShapeRows<'a, 'p, P> {
     pub(super) target: &'a mut Target<'p, P>,
-    pub(super) draw: &'a crate::scene::DrawShape,
+    pub(super) draw: &'a crate::raster_scene::DrawShape,
     pub(super) rect: Rect,
     pub(super) clip_bounds: ClipBounds,
     pub(super) dither_origin: Point,
@@ -37,7 +37,10 @@ impl<P: Pixel> ShapeRows<'_, '_, P> {
             }
             None => {
                 let brush = BrushSampler::new(&self.draw.brush, self.rect);
-                if brush.has_uniform_rows() {
+                if brush.is_solid() {
+                    let color = color_to_rgba(brush.color_at(Point::new(0.0, 0.0)));
+                    self.blend_solid_rows(color, runs);
+                } else if brush.has_uniform_rows() {
                     self.fill_uniform_rows(runs);
                 } else if brush.has_uniform_columns()
                     && brush.is_opaque()
@@ -47,6 +50,25 @@ impl<P: Pixel> ShapeRows<'_, '_, P> {
                 } else {
                     self.paint(runs, |_| Coverage::of(1.0));
                 }
+            }
+        }
+    }
+
+    // Paints a fill of a solid color that blends: every pixel takes the
+    // one paint, so a table keeps what it left over each byte it met before.
+    // The pixels are those [`Self::fill_uniform_rows`] paints.
+    #[inline(never)]
+    fn blend_solid_rows(self, color: [f32; 4], runs: impl Fn(f32, i32, i32) -> RowRuns) {
+        if color[3] <= 0.0 {
+            return;
+        }
+        let paint = P::paint(color, self.draw.blend_mode);
+        let mut table = None;
+        let bounds = self.clip_bounds;
+        for py in bounds.min_y..bounds.max_y {
+            for (start, end) in runs(py as f32 + 0.5, bounds.min_x, bounds.max_x) {
+                let pixels = self.target.row(py, start, end);
+                P::blend_run(pixels, paint, &mut table, self.diagnostics);
             }
         }
     }

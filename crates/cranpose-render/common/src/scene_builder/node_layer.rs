@@ -6,14 +6,14 @@ use std::{any::Any, borrow::Cow, rc::Rc};
 
 use cranpose_core::{MemoryApplier, NodeId};
 use cranpose_ui::{
-    DrawCommand, LayoutBox, LayoutNode, ModifierNodeSlices, Point, Rect, Size,
+    ActiveChildren, DrawCommand, LayoutBox, LayoutNode, ModifierNodeSlices, Point, Rect, Size,
     SubcomposeLayoutNode, widgets::LayoutState,
 };
 use cranpose_ui_graphics::{CompositingStrategy, DrawPlacement, GraphicsLayer, LayerShape};
 
 use super::{
-    BuildNodeSnapshot, DrawPass, DrawTarget, Level, SnapshotNodeData, TextNodeParts,
-    TranslateAncestorContext, TranslateGeometry, append_draw_nodes, draw_nodes,
+    BuildNodeSnapshot, DrawPass, DrawTarget, Level, LowerContext, NodeLayout, SnapshotNodeData,
+    TextNodeParts, TranslateGeometry, append_draw_nodes, draw_nodes,
     inline_leaf::{lower_child, snapshot_lowers_inline},
     layer_node_capacity,
     layer_shape::{clip_shape, shape_clip},
@@ -28,49 +28,6 @@ use crate::{
         layer_scales_or_rotates, layer_transform_to_parent, layer_transform_to_window,
     },
 };
-
-#[derive(Clone, Copy)]
-pub(super) struct LowerContext {
-    pub(super) inherited_motion_context_animated: bool,
-    pub(super) inherited_translated_content_context: bool,
-    pub(super) parent_abs: Option<AbsOrigin>,
-    pub(super) parent_content_offset: Point,
-}
-
-impl LowerContext {
-    pub(super) const ROOT: Self = Self {
-        inherited_motion_context_animated: false,
-        inherited_translated_content_context: false,
-        parent_abs: Some(AbsOrigin::ROOT),
-        parent_content_offset: Point { x: 0.0, y: 0.0 },
-    };
-
-    // What a child lowers with beneath `ancestors`.
-    pub(super) fn beneath(ancestors: TranslateAncestorContext) -> Self {
-        Self {
-            inherited_motion_context_animated: ancestors.inherited_motion_context_animated,
-            inherited_translated_content_context: ancestors.inherited_translated_content_context,
-            parent_abs: Some(ancestors.parent_abs),
-            parent_content_offset: ancestors.parent_content_offset,
-        }
-    }
-
-    fn for_children(
-        self,
-        slices: &ModifierNodeSlices,
-        content_offset: Point,
-        parent_abs: Option<AbsOrigin>,
-    ) -> Self {
-        Self {
-            inherited_motion_context_animated: self.inherited_motion_context_animated
-                || slices.motion_context_animated(),
-            inherited_translated_content_context: self.inherited_translated_content_context
-                || slices.translated_content_context(),
-            parent_abs,
-            parent_content_offset: content_offset,
-        }
-    }
-}
 
 pub(super) struct LayerHead {
     pub(super) node_id: Option<NodeId>,
@@ -105,7 +62,7 @@ fn node_layer_head(
     slices: &Rc<ModifierNodeSlices>,
     frame: NodeFrame,
     graphics_layer: Option<GraphicsLayer>,
-    context: LowerContext,
+    context: &LowerContext,
 ) -> LayerHead {
     let clip_to_bounds = slices.clip_to_bounds();
     let translated_content_context = slices.translated_content_context();
@@ -312,7 +269,7 @@ fn write_layer_with_outer(
 
 pub(super) fn write_snapshot_layer(
     snapshot: BuildNodeSnapshot,
-    context: LowerContext,
+    context: &LowerContext,
     target: &mut LayerNode,
 ) {
     let BuildNodeSnapshot {
@@ -343,6 +300,7 @@ pub(super) fn write_snapshot_layer(
         size,
         motion_context_animated: head.motion_context_animated,
         layer: None,
+        store: context.store,
     };
     let outer = outer_draws(
         node_id,
@@ -360,7 +318,7 @@ pub(super) fn write_snapshot_layer(
             let draws = DrawTarget { layer, ..draws };
             write_node_content(list, node_id, &slices, draws, (0, children.len()), |list| {
                 for child in children {
-                    list.push(lower_snapshot_child(child, child_context));
+                    list.push(lower_snapshot_child(child, &child_context));
                 }
             });
         },
@@ -370,7 +328,7 @@ pub(super) fn write_snapshot_layer(
 // Lowers `snapshot`, a child in a layout tree snapshot, into the node its
 // parent holds: inline when it needs no layer of its own, as
 // [`super::inline_leaf::lower_child`] lowers a node of the applier.
-fn lower_snapshot_child(snapshot: BuildNodeSnapshot, context: LowerContext) -> RenderNode {
+fn lower_snapshot_child(snapshot: BuildNodeSnapshot, context: &LowerContext) -> RenderNode {
     if !snapshot_lowers_inline(&snapshot) {
         let mut layer = crate::layer_recycling::layer_box();
         write_snapshot_layer(snapshot, context, &mut layer);
@@ -390,6 +348,7 @@ fn lower_snapshot_child(snapshot: BuildNodeSnapshot, context: LowerContext) -> R
         size,
         motion_context_animated,
         layer: None,
+        store: context.store,
     };
     let mut content = Vec::new();
     write_node_content(&mut content, node_id, &slices, draws, (0, 0), |_| {});
@@ -438,7 +397,7 @@ impl AbsOrigin {
         window_transform: ProjectiveTransform::identity(),
     };
 
-    pub(super) fn children_of(self, layer: &LayerNode) -> Self {
+    pub(super) fn children_of(&self, layer: &LayerNode) -> Self {
         let top_left = Point {
             x: self.content_origin.x + layer.origin_in_parent.x,
             y: self.content_origin.y + layer.origin_in_parent.y,
@@ -485,7 +444,13 @@ pub(super) fn lower_root_into(
     target: &mut LayerNode,
 ) -> bool {
     read_placed_node_data(applier, node_id, Level::Root, |data| {
-        write_node_layer(applier, node_id, data, LowerContext::ROOT, target);
+        write_node_layer(
+            applier,
+            node_id,
+            data,
+            (&LowerContext::ROOT, Children::Lower),
+            target,
+        );
     })
     .is_some()
 }
@@ -528,27 +493,42 @@ pub(super) fn read_node_data<R>(
     read: impl FnOnce(SnapshotNodeData<'_>) -> R,
 ) -> Option<R> {
     let node: &dyn Any = applier.get_ref(node_id).ok()?;
-    if let Some(node) = node.downcast_ref::<LayoutNode>() {
-        let z_order = z_ordered_children(applier, node_id, node.children());
-        return Some(read(SnapshotNodeData {
-            layout_state: node.layout_state(),
-            modifier_slices: node.modifier_slices_snapshot(),
-            children: z_order.as_deref().unwrap_or_else(|| node.children()),
-            window_root: node.is_window_root(),
-        }));
-    }
-    let node = node.downcast_ref::<SubcomposeLayoutNode>()?;
-    let layout_state = node.layout_state();
-    let modifier_slices = node.modifier_slices_snapshot();
-    Some(node.with_active_children(|children| {
-        let z_order = z_ordered_children(applier, node_id, children);
-        read(SnapshotNodeData {
-            layout_state,
-            modifier_slices,
-            children: z_order.as_deref().unwrap_or(children),
-            window_root: false,
-        })
+    let active;
+    let (layout_state, modifier_slices, children, window_root) =
+        match node.downcast_ref::<LayoutNode>() {
+            Some(node) => (
+                node.with_layout_state(NodeLayout::of),
+                node.modifier_slices_snapshot(),
+                node.children(),
+                node.is_window_root(),
+            ),
+            None => {
+                let (layout_state, modifier_slices, children) =
+                    subcompose_parts(node.downcast_ref::<SubcomposeLayoutNode>()?);
+                active = children;
+                (layout_state, modifier_slices, &*active, false)
+            }
+        };
+    let z_order = z_ordered_children(applier, node_id, children);
+    Some(read(SnapshotNodeData {
+        layout_state,
+        modifier_slices,
+        children: z_order.as_deref().unwrap_or(children),
+        window_root,
     }))
+}
+
+// The parts of a subcompose node `read_node_data` hands on. Out of line:
+// few nodes are subcompose nodes.
+#[inline(never)]
+fn subcompose_parts(
+    node: &SubcomposeLayoutNode,
+) -> (NodeLayout, Rc<ModifierNodeSlices>, ActiveChildren) {
+    (
+        NodeLayout::of(&node.layout_state()),
+        node.modifier_slices_snapshot(),
+        node.active_children(),
+    )
 }
 
 /// `children` in the order they draw and take taps when a z index moves one
@@ -557,7 +537,7 @@ pub(super) fn read_node_data<R>(
 /// `None` while no `z_index` modifier exists and `parent` placed no child
 /// with a z index: then nothing moves.
 #[inline]
-fn z_ordered_children(
+pub(super) fn z_ordered_children(
     applier: &MemoryApplier,
     parent: NodeId,
     children: &[NodeId],
@@ -648,35 +628,67 @@ pub(super) fn slices_hit_something(slices: &ModifierNodeSlices) -> bool {
     !slices.pointer_inputs().is_empty() || slices.pointer_icon().is_some()
 }
 
+// The window geometry of the node of `slices` and `layout_state` under
+// `context`, when its parent's is known, and what its children lower with.
+fn node_geometry(
+    slices: &ModifierNodeSlices,
+    layout_state: &NodeLayout,
+    (local_bounds, graphics_layer): (Rect, Option<&GraphicsLayer>),
+    context: &LowerContext,
+) -> (Option<TranslateGeometry>, LowerContext) {
+    let geometry = context.parent_abs.as_ref().map(|parent_abs| {
+        TranslateGeometry::new(
+            layout_state,
+            graphics_layer.unwrap_or(&GraphicsLayer::DEFAULT),
+            local_bounds,
+            parent_abs,
+        )
+    });
+    let child_context =
+        context.for_children(slices, layout_state.content_offset(), geometry.as_ref());
+    (geometry, child_context)
+}
+
+// What the children of the node of `slices` and `layout_state` lower with
+// under `context`, for a node kept as it lowered before.
+pub(super) fn children_context(
+    slices: &ModifierNodeSlices,
+    layout_state: &NodeLayout,
+    context: &LowerContext,
+) -> LowerContext {
+    let (local_bounds, _) = layer_and_node_bounds(slices, layout_state.size());
+    let graphics_layer = shaped_graphics_layer(slices, local_bounds);
+    node_geometry(
+        slices,
+        layout_state,
+        (local_bounds, graphics_layer.as_deref()),
+        context,
+    )
+    .1
+}
+
 pub(super) fn prepare_node_layer(
     node_id: NodeId,
     slices: &Rc<ModifierNodeSlices>,
-    layout_state: &LayoutState,
-    context: LowerContext,
+    layout_state: &NodeLayout,
+    context: &LowerContext,
 ) -> (LayerHead, LowerContext) {
     let size = layout_state.size();
     let placement = layout_state.position();
     let (local_bounds, node_bounds) = layer_and_node_bounds(slices, size);
     let graphics_layer = shaped_graphics_layer(slices, local_bounds);
-    let geometry = context.parent_abs.map(|parent_abs| {
-        TranslateGeometry::new(
-            layout_state,
-            graphics_layer.as_deref().unwrap_or(&GraphicsLayer::DEFAULT),
-            local_bounds,
-            parent_abs,
-        )
-    });
+    let (geometry, child_context) = node_geometry(
+        slices,
+        layout_state,
+        (local_bounds, graphics_layer.as_deref()),
+        context,
+    );
     if let Some(geometry) = geometry {
         slices.publish_window_geometry(geometry.top_left, geometry.window_transform, size);
     } else {
         slices.publish_pointer_input_size(size);
     }
     let content_offset = layout_state.content_offset();
-    let child_context = context.for_children(
-        slices,
-        content_offset,
-        geometry.map(TranslateGeometry::child_abs),
-    );
     let head = node_layer_head(
         node_id,
         slices,
@@ -693,14 +705,24 @@ pub(super) fn prepare_node_layer(
     (head, child_context)
 }
 
+// Whether a layer's writer lowers its node's children into the layer, or
+// leaves them to its caller.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Children {
+    Lower,
+    Leave,
+}
+
+// Writes the layer of the node `node_id` of `data` into `target`, and
+// returns what its children lower with.
 #[expect(clippy::print_stderr, reason = "CRANPOSE_SCENE_UPDATE_DIAG asks")]
 pub(super) fn write_node_layer(
     applier: &MemoryApplier,
     node_id: NodeId,
     data: SnapshotNodeData<'_>,
-    context: LowerContext,
+    (context, mode): (&LowerContext, Children),
     target: &mut LayerNode,
-) {
+) -> LowerContext {
     let SnapshotNodeData {
         layout_state,
         modifier_slices: slices,
@@ -720,6 +742,7 @@ pub(super) fn write_node_layer(
         size,
         motion_context_animated: head.motion_context_animated,
         layer: None,
+        store: context.store,
     };
     let outer = outer_draws(
         node_id,
@@ -727,6 +750,10 @@ pub(super) fn write_node_layer(
         slices.outer_draw_command_count(),
         draws,
     );
+    let written = match mode {
+        Children::Lower => children.len(),
+        Children::Leave => 0,
+    };
     write_layer_with_outer(
         target,
         head,
@@ -735,15 +762,19 @@ pub(super) fn write_node_layer(
         context.parent_content_offset,
         |list, layer| {
             let draws = DrawTarget { layer, ..draws };
-            write_node_content(list, node_id, &slices, draws, (0, children.len()), |list| {
+            write_node_content(list, node_id, &slices, draws, (0, written), |list| {
+                if mode == Children::Leave {
+                    return;
+                }
                 for &child_id in children {
-                    if let Some(child) = lower_child(applier, child_id, child_context) {
+                    if let Some(child) = lower_child(applier, child_id, &child_context) {
                         list.push(child);
                     }
                 }
             });
         },
     );
+    child_context
 }
 
 pub(super) struct OuterDraws {

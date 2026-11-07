@@ -135,6 +135,24 @@ impl ShapeRecords {
         self.bodies.capacity().min(self.curves.capacity())
     }
 
+    // The room of the body, curve and source columns.
+    pub(crate) fn capacities(&self) -> [usize; 3] {
+        [
+            self.bodies.capacity(),
+            self.curves.capacity(),
+            self.sources.capacity(),
+        ]
+    }
+
+    // Empty columns with the room `capacities` gives.
+    pub(crate) fn with_capacities([bodies, curves, sources]: [usize; 3]) -> Self {
+        Self {
+            bodies: Vec::with_capacity(bodies),
+            curves: Vec::with_capacity(curves),
+            sources: Vec::with_capacity(sources),
+        }
+    }
+
     pub(crate) fn heap_bytes(&self) -> usize {
         self.bodies.capacity() * size_of::<ShapeRecordBody>()
             + self.curves.capacity() * size_of::<ShapeRecordCurve>()

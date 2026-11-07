@@ -9,17 +9,25 @@ use std::{
 };
 
 use cranpose::{
-    framebuffer::{Framebuffer, PixelRect, Rgb565Order},
+    framebuffer::{Framebuffer, PixelRect, Rgb565Order, TouchPhase},
     prelude::*,
 };
 use cranpose_animation::{
     AnimationSpec, RepeatMode, StartOffset, infiniteRepeatable, rememberInfiniteTransition,
 };
 
+#[path = "support/changing_paths.rs"]
+mod changing_paths;
 #[path = "support/dashboard.rs"]
 mod dashboard;
+#[path = "support/deep_moves.rs"]
+mod deep_moves;
 #[path = "support/frame_time.rs"]
 mod frame_time;
+#[path = "support/long_scroll.rs"]
+mod long_scroll;
+#[path = "support/still_wall.rs"]
+mod still_wall;
 #[path = "support/text_style.rs"]
 mod text_style;
 
@@ -517,23 +525,46 @@ impl KeptFrame {
     }
 }
 
-// A host that keeps its frame and draws only the changed areas shows what a
-// whole redraw shows, every frame of a screen that changes most of itself
-// each frame and gains and loses list rows as it scrolls.
-#[test]
-fn the_dashboard_drawn_by_changed_areas_matches_whole_redraws() {
+// Shows `screen` on a 320 by 480 framebuffer for `frames` frames,
+// `frame_nanos` apart, and checks that a host that keeps its frame and draws
+// only the changed areas shows what a whole redraw shows, every frame.
+fn kept_frames_match_whole_redraws(screen: fn(&'static str), frame_nanos: u64, frames: u64) {
     const WIDTH: u32 = 320;
     const HEIGHT: u32 = 480;
-    let mut framebuffer = Framebuffer::new(WIDTH, HEIGHT, 1.0, SystemTheme::Dark, &[], || {
-        dashboard::Dashboard("Cranpose");
+    let mut framebuffer = Framebuffer::new(WIDTH, HEIGHT, 1.0, SystemTheme::Dark, &[], move || {
+        screen("Cranpose");
     })
     .expect("valid surface");
     framebuffer.set_active(true);
     let mut kept = KeptFrame::new(WIDTH, HEIGHT);
-    for frame in 0..240u64 {
-        framebuffer.tick(frame * 16_666_667);
+    for frame in 0..frames {
+        framebuffer.tick(frame * frame_nanos);
         framebuffer.run_pending_tasks();
         kept.draw_changed_areas(&mut framebuffer, frame);
+    }
+}
+
+// A screen that changes most of itself each frame and gains and loses list
+// rows as it scrolls.
+#[test]
+fn the_dashboard_drawn_by_changed_areas_matches_whole_redraws() {
+    kept_frames_match_whole_redraws(dashboard::Dashboard, 16_666_667, 240);
+}
+
+// Screens whose rows move each frame while they hold still or change: at 60
+// frames a second, and at a frame each 300 ms, as a board draws them, where
+// a list gains and loses rows in most frames and each row moves farther.
+#[test]
+fn screens_of_moving_rows_drawn_by_changed_areas_match_whole_redraws() {
+    let screens: [fn(&'static str); 4] = [
+        changing_paths::ChangingPaths,
+        deep_moves::DeepMoves,
+        long_scroll::LongScroll,
+        still_wall::StillWall,
+    ];
+    for screen in screens {
+        kept_frames_match_whole_redraws(screen, 16_666_667, 90);
+        kept_frames_match_whole_redraws(screen, 300_000_000, 45);
     }
 }
 
@@ -707,4 +738,124 @@ fn the_dashboard_drawn_as_rgb565_keeps_the_high_bits_of_its_bytes() {
             "frame {frame}: {stepped} pixels differ"
         );
     }
+}
+
+// The frames a test steps a framebuffer through, one at a time.
+struct Clock(u64);
+
+impl Clock {
+    fn tick(&mut self, framebuffer: &mut Framebuffer) {
+        self.0 += 1;
+        framebuffer.tick(self.0 * 16_666_667);
+    }
+
+    // A tap at `(x, 10)`, a frame after its press and a frame after its
+    // release.
+    fn tap(&mut self, framebuffer: &mut Framebuffer, x: f32) {
+        for phase in [TouchPhase::Down, TouchPhase::Up] {
+            framebuffer.touch(phase, x, 10.0);
+            self.tick(framebuffer);
+        }
+    }
+}
+
+/// A tap reaches a target where it lies: after it moves, by a composition
+/// and by a layout-phase offset, and while a neighbour draws again each
+/// frame.
+#[test]
+fn taps_reach_a_target_where_it_moved_and_while_a_neighbour_redraws() {
+    let clicks = Rc::new(Cell::new(0u32));
+    let held = Rc::new(Cell::new(None));
+    let (sink, clicked) = (Rc::clone(&held), Rc::clone(&clicks));
+    let mut framebuffer = Framebuffer::new(160, 40, 1.0, SystemTheme::Light, &[], move || {
+        let left = remember(|| mutableStateOf(0.0f32)).with(|left| *left);
+        let shift = remember(|| mutableStateOf(0.0f32)).with(|shift| *shift);
+        sink.set(Some((left, shift)));
+        let pulse = rememberInfiniteTransition("pulse").animateFloat(
+            0.0,
+            1.0,
+            infiniteRepeatable(
+                AnimationSpec::linear(500),
+                RepeatMode::Reverse,
+                StartOffset::default(),
+            ),
+            "pulse",
+        );
+        let clicked = Rc::clone(&clicked);
+        Box(
+            Modifier::empty().fill_max_size(),
+            BoxSpec::default(),
+            move || {
+                Spacer(
+                    Modifier::empty()
+                        .offset(140.0, 0.0)
+                        .width(20.0)
+                        .height(20.0)
+                        .draw_behind(move |scope| {
+                            let rect = Rect {
+                                x: 0.0,
+                                y: 0.0,
+                                width: 20.0 * pulse.value(),
+                                height: 20.0,
+                            };
+                            scope.draw_rect_at(rect, Brush::solid(GREEN));
+                        }),
+                );
+                let clicked = Rc::clone(&clicked);
+                Spacer(
+                    Modifier::empty()
+                        .offset(left.get(), 0.0)
+                        .offset_with(move || Point::new(shift.get(), 0.0))
+                        .width(20.0)
+                        .height(20.0)
+                        .background(RED)
+                        .clickable(move |_| clicked.set(clicked.get() + 1)),
+                );
+            },
+        );
+    })
+    .expect("valid surface");
+    framebuffer.set_active(true);
+    let mut clock = Clock(0);
+    clock.tick(&mut framebuffer);
+    clock.tap(&mut framebuffer, 10.0);
+    assert_eq!(clicks.get(), 1, "a tap on the target");
+    for _ in 0..5 {
+        clock.tap(&mut framebuffer, 150.0);
+    }
+    clock.tap(&mut framebuffer, 10.0);
+    assert_eq!(
+        clicks.get(),
+        2,
+        "a tap on the target while its neighbour redraws"
+    );
+    let (left, shift) = held.get().expect("the screen holds its offsets");
+    left.set(50.0);
+    clock.tick(&mut framebuffer);
+    clock.tap(&mut framebuffer, 10.0);
+    assert_eq!(
+        clicks.get(),
+        2,
+        "a tap where the target lay before it moved"
+    );
+    clock.tap(&mut framebuffer, 60.0);
+    assert_eq!(
+        clicks.get(),
+        3,
+        "a tap where a composition moved the target"
+    );
+    shift.set(40.0);
+    clock.tick(&mut framebuffer);
+    clock.tap(&mut framebuffer, 60.0);
+    assert_eq!(
+        clicks.get(),
+        3,
+        "a tap where the target lay before its offset moved it"
+    );
+    clock.tap(&mut framebuffer, 100.0);
+    assert_eq!(
+        clicks.get(),
+        4,
+        "a tap where a layout-phase offset moved the target"
+    );
 }

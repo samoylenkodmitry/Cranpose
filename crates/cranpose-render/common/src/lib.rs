@@ -75,7 +75,7 @@ mod thread_state;
 #[path = "tests/pointer_slices.rs"]
 mod pointer_slices;
 
-use cranpose_core::{MemoryApplier, collections::map::HashSet};
+use cranpose_core::MemoryApplier;
 use cranpose_foundation::nodes::input::PointerEvent;
 use cranpose_ui::LayoutTree;
 pub use cranpose_ui_graphics::Brush;
@@ -259,13 +259,12 @@ pub trait RenderScene {
         0
     }
 
-    /// Replaces the set with retained visual observation owners, preserving its capacity.
-    /// Returns whether the scene provides this information.
-    fn collect_retained_visual_observation_nodes(
+    /// Visits each node whose draws the scene retains, the owners of its
+    /// visual observations. Returns whether the scene provides them.
+    fn visit_retained_visual_observation_nodes(
         &self,
-        nodes: &mut HashSet<cranpose_core::NodeId>,
+        _visit: &mut dyn FnMut(cranpose_core::NodeId),
     ) -> bool {
-        nodes.clear();
         false
     }
 }

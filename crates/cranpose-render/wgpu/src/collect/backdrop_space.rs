@@ -53,7 +53,7 @@ pub(super) fn with_backdrop_in_own_space(
     detach_flat_backdrop(&mut inner, &mut outer.content.scene);
     outer.content.scene.next_z += 1;
     outer.content.children.push(inner);
-    outer.content.refresh_backdrop_summary();
+    outer.content.refresh_summary();
     outer
 }
 

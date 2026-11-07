@@ -4,7 +4,7 @@ use cranpose_ui_graphics::{ArcGeometry, Brush, CornerRadii, Rect, TAU};
 
 use crate::{
     draw::{ClipBounds, RenderItem, ShapeCoverage, clip_rect_to_window, place_shape},
-    scene::{DrawShape, ImageDraw, Outline, RasterScene, ShadowDraw, TextDraw},
+    raster_scene::{DrawShape, ImageDraw, Outline, RasterScene, ShadowDraw, TextDraw},
     scene_item::ItemRef,
 };
 
@@ -35,9 +35,10 @@ fn solid_fill(shape: &DrawShape) -> bool {
     matches!(shape.brush, Brush::Solid(_)) && matches!(shape.outline, Outline::Fill(_))
 }
 
-/// The placed rects of `old` and `new` and their corners when both are one
-/// solid fill that differs only in where it lies, with the same corners.
-fn moved_fill(old: &DrawShape, new: &DrawShape) -> Option<(Rect, Rect, CornerRadii)> {
+// The placed rects of `old` and `new` and their corners when both are one
+// solid fill that differs only in where it lies, with the same corners,
+// and the rect `new` reaches, before the window cuts it.
+fn moved_fill(old: &DrawShape, new: &DrawShape) -> Option<(Rect, Rect, CornerRadii, Rect)> {
     let DrawShape {
         rect: _,
         snap_anchor: _,
@@ -57,6 +58,8 @@ fn moved_fill(old: &DrawShape, new: &DrawShape) -> Option<(Rect, Rect, CornerRad
     if !alike {
         return None;
     }
+    let placed = place_shape(new)?;
+    let reach = placed.coverage.reach(placed.rect);
     let (
         ShapeCoverage::Fill {
             rect: a,
@@ -66,11 +69,11 @@ fn moved_fill(old: &DrawShape, new: &DrawShape) -> Option<(Rect, Rect, CornerRad
             rect: b,
             radii: new_radii,
         },
-    ) = (place_shape(old)?.coverage, place_shape(new)?.coverage)
+    ) = (place_shape(old)?.coverage, placed.coverage)
     else {
         return None;
     };
-    (old_radii == new_radii).then(|| (a, b, old_radii.unwrap_or_default()))
+    (old_radii == new_radii).then(|| (a, b, old_radii.unwrap_or_default(), reach))
 }
 
 /// A strip along each edge that moved from `a` to `b`, from its old to its
@@ -99,26 +102,24 @@ fn edge_strips(a: Rect, b: Rect, radii: CornerRadii) -> [Option<Rect>; 4] {
     ]
 }
 
-/// Adds the areas where `new` can draw other pixels than `old` when both are
-/// one solid fill that differs only in where it lies, with the same corners:
-/// the strips along its moved edges. Away from them each pixel lies inside
-/// or outside both fills alike. Returns false and adds nothing for any other
-/// pair.
+// Adds the areas where `new` can draw other pixels than `old` when both are
+// one solid fill that differs only in where it lies, with the same corners:
+// the strips along its moved edges. Away from them each pixel lies inside
+// or outside both fills alike. Returns where `new` reaches in `window`.
+// `None`, with nothing added, for any other pair.
 fn add_moved_fill_areas(
     old: &DrawShape,
     new: &DrawShape,
     window: ClipBounds,
     areas: &mut Vec<ClipBounds>,
-) -> bool {
-    let Some((a, b, radii)) = moved_fill(old, new) else {
-        return false;
-    };
+) -> Option<Option<ClipBounds>> {
+    let (a, b, radii, reach) = moved_fill(old, new)?;
     for strip in edge_strips(a, b, radii).into_iter().flatten() {
         if let Some(area) = clip_rect_to_window(strip, old.clip, window) {
             add_area(areas, area);
         }
     }
-    true
+    Some(clip_rect_to_window(reach, new.clip, window))
 }
 
 // The sweeps of `old` and `new`, the shorter first, when both are one arc
@@ -163,7 +164,9 @@ fn swept_sweeps(old: &DrawShape, new: &DrawShape) -> Option<(f32, f32)> {
 // one arc that differs only in its sweep: around the part between their
 // ends, caps included. Away from it a point lies inside or outside both
 // sweeps alike, and its coverage reads only the end it lies near. Returns
-// false and adds nothing for any other pair.
+// false and adds nothing for any other pair. Out of line: few shapes are
+// arcs, and inline it would double the size of `add_changed_pair`.
+#[inline(never)]
 fn add_swept_arc_areas(
     old: &DrawShape,
     new: &DrawShape,
@@ -261,6 +264,17 @@ fn same_item(old: ItemRef<'_>, new: ItemRef<'_>) -> bool {
     }
 }
 
+// Whether the change of a pair narrowed to the areas its moved edges or
+// its swept ends reach.
+enum Narrowing {
+    // It did not: the pair is no moved fill and no swept arc.
+    Not,
+    // A swept arc: where its new item reaches is still to be worked out.
+    Swept,
+    // A moved fill, whose new item reaches `.0` in the window.
+    Moved(Option<ClipBounds>),
+}
+
 // Adds the areas a moved fill or a swept arc changes, when `old` and `new`
 // are such a pair.
 fn add_narrowed_areas(
@@ -268,13 +282,16 @@ fn add_narrowed_areas(
     new: ItemRef<'_>,
     window: ClipBounds,
     areas: &mut Vec<ClipBounds>,
-) -> bool {
-    match (old, new) {
-        (ItemRef::Shape(old), ItemRef::Shape(new)) => {
-            add_moved_fill_areas(old, new, window, areas)
-                || add_swept_arc_areas(old, new, window, areas)
-        }
-        _ => false,
+) -> Narrowing {
+    let (ItemRef::Shape(old), ItemRef::Shape(new)) = (old, new) else {
+        return Narrowing::Not;
+    };
+    if let Some(reach) = add_moved_fill_areas(old, new, window, areas) {
+        Narrowing::Moved(reach)
+    } else if add_swept_arc_areas(old, new, window, areas) {
+        Narrowing::Swept
+    } else {
+        Narrowing::Not
     }
 }
 
@@ -302,7 +319,8 @@ pub(crate) fn add_changed_pair(
         return;
     }
     // A moved fill and a swept arc add only the areas their change reaches.
-    let narrowed = add_narrowed_areas(old, new, window, areas);
+    let narrowing = add_narrowed_areas(old, new, window, areas);
+    let narrowed = !matches!(narrowing, Narrowing::Not);
     if narrowed && !matches!(reach, ItemReach::Replaced(_)) {
         return;
     }
@@ -316,7 +334,11 @@ pub(crate) fn add_changed_pair(
             add_area(areas, area);
         }
     }
-    let new_bounds = new.bounds(window);
+    // A moved fill placed its new item already.
+    let new_bounds = match narrowing {
+        Narrowing::Moved(reach) => reach,
+        Narrowing::Not | Narrowing::Swept => new.bounds(window),
+    };
     if !narrowed && let Some(area) = new_bounds {
         add_area(areas, area);
     }
@@ -448,21 +470,34 @@ pub(crate) fn add_changed_runs(
     }
 }
 
-fn pixels(area: ClipBounds) -> i64 {
-    i64::from(area.max_x - area.min_x) * i64::from(area.max_y - area.min_y)
+// The pixels `area` covers. An area lies in the window, whose pixels a u32
+// counts, and a 64-bit product takes several instructions on the 32-bit
+// cores that merge areas most.
+fn pixels(area: ClipBounds) -> u32 {
+    (area.max_x - area.min_x).unsigned_abs() * (area.max_y - area.min_y).unsigned_abs()
 }
 
 // Joins `areas` while they are too many to draw one by one, each time the
 // two whose join takes in the fewest pixels that neither covers, so that
-// changes far apart do not draw the still pixels between them again. Out
-// of line: it runs once an update.
-#[inline(never)]
+// changes far apart do not draw the still pixels between them again. The
+// count is read in line: an update's few areas need no join.
+#[inline]
 pub(crate) fn merge_areas(areas: &mut Vec<ClipBounds>) {
+    if areas.len() > MAX_AREAS {
+        join_areas(areas);
+    }
+}
+
+#[inline(never)]
+fn join_areas(areas: &mut Vec<ClipBounds>) {
     while areas.len() > MAX_AREAS {
-        let mut cheapest = (0, 1, i64::MAX);
+        let mut cheapest = (0, 1, u32::MAX);
         for (first, &a) in areas.iter().enumerate() {
+            let own = pixels(a);
             for (second, &b) in areas.iter().enumerate().skip(first + 1) {
-                let extra = pixels(union(a, b)) - pixels(a) - pixels(b);
+                // Areas in the list do not touch, so their join covers at
+                // least both.
+                let extra = pixels(union(a, b)).saturating_sub(own + pixels(b));
                 if extra < cheapest.2 {
                     cheapest = (first, second, extra);
                 }
