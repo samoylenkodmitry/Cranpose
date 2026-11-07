@@ -36,6 +36,7 @@ Performance rules:
 
 - Design data-oriented; read the hot path and its allocations per iteration before changing it. Smells: a hash table where a flat array by slot would do, a pointer where an index would do (pack the hottest data in its upper bits), an array of structures a pass reads one field of, an array of bools instead of a bitset, a heap list instead of inline capacity or an arena, a cache with no measured win (delete it; redesign the slow path instead).
 - Benchmark on the slowest shipped device against the last release before merging. Desktop numbers do not count.
+- Amplify every loss you spot: build a bench layout that makes the loss large, then work on it with that layout. Add the layout to the benches and the nightly, so a regression of the same kind shows at once.
 - Keep every test, benchmark and device run as short as physically possible. Alternate A and B, read the result after each pair, and stop as soon as it clearly shows the answer: a difference well past the noise, or clearly no difference. Never run long fixed batches.
 - Benchmarks measure each launch from its start, warm-up included, over the same span for every subject, and keep the fps of every second of the run. Every graph shows those seconds; no data is dropped or hidden, and frameworks are compared on the same full runs. Every report shows each subject's first start after install (its data and caches cleared) and its second start apart, for every framework, case and metric.
 - When moving work between CPU, GPU or threads, measure the unit that bounds that device.
