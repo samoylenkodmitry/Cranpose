@@ -286,38 +286,41 @@ backdrop, sample it; otherwise it draws into a texture of the viewport's
 size and converts that into the image in one more full-screen pass. The
 fork reports the copies and sampling for both.
 
-A WebGL canvas also took the default depth buffer (8.1 MiB at
-1080 x 1975), which no draw uses while the GL backend renders into its
-surface texture and blits that to the canvas. The fork asks for a canvas
-without depth or stencil, unless the frames draw into it (next section).
+A WebGL canvas took the default depth buffer (8.1 MiB at 1080 x 1975),
+which no draw used while the GL backend rendered into its surface texture.
+The frames now draw into the canvas (next section), and its depth and
+stencil buffers serve the passes that draw there.
 
 ### WebGL frames draw into the canvas
 
 A WebGL surface drew each frame into a texture of its own, and present
 blitted it to the canvas upside down: every frame read and wrote the whole
-canvas once more. After `wgpu_hal::gles::draw_into_canvases`, which
-Cranpose's web launcher calls, a surface on an `HtmlCanvasElement` draws
-straight into the canvas's drawing buffer, and present does nothing. The
-buffer then holds the frame upside down, as every GL target does, so the
-surface flips the canvas with the CSS `scale` property, which the browser's
-compositor applies as it shows the canvas; Cranpose reads pointer positions
-from `clientX` and `clientY` against the canvas's rect, which the flip does
-not change. The canvas gets depth and stencil, which a pass drawing into it
-uses in place of its own depth attachment (Cranpose's depth passes clear it
-at the start and drop it at the end). The surface can be copied from and to
-within a frame (`copyTexSubImage2D` and `blitFramebuffer`), but not sampled,
-so a frame whose backdrop reads the page draws into a texture and converts
-it into the canvas, as it would without sampling. The browser hands the
-canvas back cleared after it shows it, so the surface's image has no
-identity and Cranpose draws whole frames, as for a WebGPU canvas. A surface
-configured with an sRGB format keeps its texture, whose present converts
-the colors, and so does a surface on an `OffscreenCanvas`, which CSS cannot
-flip. Without the call a surface draws into its texture, as upstream's
-does.
+canvas once more. In the fork a surface draws straight into its canvas's
+drawing buffer, and present does nothing. The buffer holds the frame upside
+down, as every GL target does, so the surface flips an
+`HtmlCanvasElement` with the CSS `scale` property, which the browser's
+compositor applies as it shows the canvas. The page that shows an
+`OffscreenCanvas` flips that canvas itself. Cranpose reads pointer
+positions from `clientX` and `clientY` against the canvas's rect, which the
+flip does not change. The canvas has depth and stencil, which a pass
+drawing into it uses in place of its own depth attachment (Cranpose's depth
+passes clear it at the start and drop it at the end). A pass into the
+canvas leaves `drawBuffers` alone, which WebGL refuses on the default
+framebuffer. The surface can be copied from and to within a frame
+(`copyTexSubImage2D` and `blitFramebuffer`), but not sampled, so a frame
+whose backdrop reads the page draws into a texture and converts it into the
+canvas, as it would without sampling. The browser hands the canvas back
+cleared after it shows it, so the surface's image has no identity and
+Cranpose draws whole frames, as for a WebGPU canvas. The canvas's buffer
+holds `Rgba8Unorm`, the surface's one format: the sRGB formats, whose
+present converted the colors in one more pass, and `Rgba16Float` went with
+the texture.
 
 On a Mate 20 X (Chrome 156, WebGL) the gauntlet's GPU ran 17-24% fewer
 cycles a second, wrote about 700 MB a second less to memory and settled at
-277-332 MHz against 332-415 MHz, with its frames pixel-identical.
+277-332 MHz against 332-415 MHz, with its frames pixel-identical. Board
+pairs at tier 8 (four, 30 s legs) dropped 35 frames over 25 ms against 52
+at the same frame rate.
 
 ### GL copy and attachment commands are boxed
 

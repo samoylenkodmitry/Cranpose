@@ -107,7 +107,7 @@ pub use self::egl::{Instance, Surface};
 #[cfg(webgl)]
 pub use self::web::AdapterContext;
 #[cfg(webgl)]
-pub use self::web::{Instance, Surface, ask_only_for_used_extensions, draw_into_canvases};
+pub use self::web::{Instance, Surface, ask_only_for_used_extensions};
 
 #[cfg(windows)]
 use self::wgl::AdapterContext;
@@ -491,10 +491,10 @@ pub struct Texture {
 
 impl crate::DynTexture for Texture {}
 impl crate::DynSurfaceTexture for Texture {
-    /// A GL surface draws every frame into its one texture or renderbuffer,
-    /// made at configure, and copies it to the window at present. A web
-    /// surface that draws into its canvas (`web::draw_into_canvases`) gets
-    /// the canvas's buffer, which the browser hands back cleared.
+    /// A native GL surface draws every frame into its one texture or
+    /// renderbuffer, made at configure, and copies it to the window at
+    /// present. A web surface draws into its canvas's buffer, which the
+    /// browser hands back cleared.
     fn image_id(&self) -> Option<u64> {
         match self.inner {
             TextureInner::DefaultRenderbuffer => None,
@@ -970,8 +970,8 @@ struct TextureToTextureCopy {
     copy: crate::TextureCopy,
 }
 
-/// A copy between a texture and the default framebuffer: a web canvas a
-/// surface draws into (`web::draw_into_canvases`).
+/// A copy between a texture and the default framebuffer: the web canvas a
+/// surface draws into (`web::Surface`).
 #[derive(Debug)]
 struct CanvasCopy {
     texture: glow::Texture,

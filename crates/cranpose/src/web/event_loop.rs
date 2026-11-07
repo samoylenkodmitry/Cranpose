@@ -12,7 +12,7 @@ use web_sys::{HtmlCanvasElement, PointerEvent, WheelEvent};
 
 use super::{
     backend_preference::{
-        WebBackendPreference, instance_backends, prepare_webgl, requested_web_backend,
+        WebBackendPreference, instance_backends, limit_webgl_extensions, requested_web_backend,
         required_limits_for_web_backend,
     },
     pipeline_discovery::{GpuTarget, PipelineDiscovery},
@@ -258,7 +258,7 @@ pub async fn run(
     let width = css_width.round() as u32;
     let height = css_height.round() as u32;
     let backend_preference = requested_web_backend(&window);
-    prepare_webgl(settings.gpu_requirements);
+    limit_webgl_extensions(settings.gpu_requirements);
     let mut instance_desc =
         wgpu::InstanceDescriptor::new_with_display_handle(Box::new(BrowserDisplayHandle));
     instance_desc.backends = instance_backends(backend_preference);
