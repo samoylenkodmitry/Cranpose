@@ -377,9 +377,7 @@ impl Rewrite {
         if self.spilled_at.is_none() {
             let index = self.next.passed_down;
             if old == Some(index) {
-                // Inside a whole subtree no child reads whether this is what
-                // its parent passed down: each pushes from its head.
-                let same = !matches!(self.whole, Whole::Open { .. }) && entries[index] == entry;
+                let same = entries[index] == entry;
                 entries[index] = entry;
                 self.next.passed_down += 1;
                 return (index, same);
