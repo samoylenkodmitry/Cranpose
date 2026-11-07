@@ -7,7 +7,7 @@ use cranpose_core::{MemoryApplier, NodeId};
 use cranpose_ui::Point;
 
 use super::{
-    Level, LowerContext, RecordingStore, inline_leaf::lower_placed_child,
+    Level, LowerContext, RecordingStore, inline_leaf::lower_placed_child, placed_child_geometry,
     publish_retained_window_geometry, read_placed_node_data, recycle_lowered,
     translate_retained_child,
 };
@@ -90,9 +90,7 @@ impl MovedSubtree {
 /// layout placed it. `None` when the child is gone or not placed, or is a
 /// window root.
 pub fn placed_child_position(applier: &MemoryApplier, node_id: NodeId) -> Option<Point> {
-    read_placed_node_data(applier, node_id, Level::Child, |data| {
-        data.layout_state.position()
-    })
+    placed_child_geometry(applier, node_id).map(|placed| placed.position)
 }
 
 /// Lowers the placed child `node_id` under `context` with its whole subtree,
