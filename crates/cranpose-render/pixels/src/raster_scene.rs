@@ -3,7 +3,7 @@ use std::{ops::Range, rc::Rc, sync::Arc};
 use cranpose_core::NodeId;
 use cranpose_render_common::{
     glyph_reach::{InkSpread, glyph_part},
-    graph::{HitTestNode, InlineNode, LayerNode, ProjectiveTransform, RenderNode},
+    graph::{InlineNode, LayerNode, ProjectiveTransform, RenderNode},
     layer_shadow::{ShadowLight, ShadowRRect},
     primitive_emit::ShapeDrawParams,
     scene_builder::{KeptHead, KeptNodeRef},
@@ -20,7 +20,9 @@ use crate::{
     scene_item::{ItemRef, SceneItem},
 };
 
+mod hit_layer;
 mod item_counts;
+pub(crate) use hit_layer::HitLayer;
 pub(crate) use item_counts::{ItemCounts, PackedCounts, as_u32};
 
 #[derive(Clone, Debug)]
@@ -333,36 +335,6 @@ impl<'a> Subtree<'a> {
             Self::Layer(layer) => layer.transform_to_parent,
             Self::Inline(inline) => inline.transform_to_parent(),
         }
-    }
-}
-
-// What the hit targets beneath a layer take from it: its bounds, whether
-// it cuts them, and its node's own pointer handling.
-#[derive(Clone)]
-pub(crate) struct HitLayer {
-    pub local_bounds: Rect,
-    pub node_bounds: Option<Rect>,
-    pub clips: bool,
-    pub hit_test: Option<HitTestNode>,
-}
-
-impl HitLayer {
-    // What the hit targets beneath `layer` take from it.
-    pub(crate) fn of(layer: &LayerNode) -> Self {
-        Self {
-            local_bounds: layer.local_bounds,
-            node_bounds: layer.node_bounds,
-            clips: layer.clip_rect().is_some(),
-            hit_test: layer.hit_test.clone(),
-        }
-    }
-
-    // Takes what the hit targets beneath `layer` take from it, in place.
-    pub(crate) fn take_from(&mut self, layer: &LayerNode) {
-        self.local_bounds = layer.local_bounds;
-        self.node_bounds = layer.node_bounds;
-        self.clips = layer.clip_rect().is_some();
-        self.hit_test.clone_from(&layer.hit_test);
     }
 }
 
