@@ -77,9 +77,10 @@ fn shell() -> AppShell<PixelsRenderer> {
 
 // The pixel at `index` of a picture `WIDTH` wide, as an area.
 fn pixel_area(index: usize) -> PixelRect {
+    let index = u32::try_from(index).expect("a test picture's pixel");
     PixelRect {
-        x: index as u32 % WIDTH,
-        y: index as u32 / WIDTH,
+        x: index % WIDTH,
+        y: index / WIDTH,
         width: 1,
         height: 1,
     }
@@ -88,7 +89,8 @@ fn pixel_area(index: usize) -> PixelRect {
 // Where two pictures first differ, as (x, y).
 fn first_difference<T: PartialEq>(a: &[T], b: &[T]) -> Option<(u32, u32)> {
     let pixel = a.iter().zip(b).position(|(a, b)| a != b)?;
-    Some((pixel as u32 % WIDTH, pixel as u32 / WIDTH))
+    let pixel = u32::try_from(pixel).expect("a test picture's pixel");
+    Some((pixel % WIDTH, pixel / WIDTH))
 }
 
 #[test]

@@ -50,7 +50,11 @@ fn ScrolledRows(captured: (Scroll, Reports), sink: Rc<Cell<Rect>>) {
                     Modifier::empty()
                         .height(14.0)
                         .padding(2.0)
-                        .background(Color::from_rgb_u8(30, 40 + row as u8 * 9, 60)),
+                        .background(Color::from_rgb_u8(
+                            30,
+                            40 + u8::try_from(row).expect("twelve rows") * 9,
+                            60,
+                        )),
                     BoxSpec::default(),
                     move || {
                         let sink = Rc::clone(&sink);

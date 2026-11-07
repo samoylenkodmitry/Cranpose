@@ -399,8 +399,8 @@ fn ScrollingLiveRows(captured: Step) {
     let step = rememberMutableStateOf(|| 0u32);
     *captured.borrow_mut() = Some(step);
     let list = rememberLazyListState();
-    let scroll = step.value() as f32 * 7.0;
-    list.scroll_to_item((scroll / 24.0) as usize, scroll % 24.0);
+    let scroll = step.value() * 7;
+    list.scroll_to_item((scroll / 24) as usize, (scroll % 24) as f32);
     LazyColumn(
         Modifier::empty()
             .offset(4.0, 4.0)
@@ -409,7 +409,9 @@ fn ScrollingLiveRows(captured: Step) {
         list,
         LazyColumnSpec::default(),
         move |scope| {
-            scope.items(LazyItems::new(40), move |row| LiveRow(row as u32, step));
+            scope.items(LazyItems::new(40), move |row| {
+                LiveRow(u32::try_from(row).expect("forty rows"), step);
+            });
         },
     );
 }

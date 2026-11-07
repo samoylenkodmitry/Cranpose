@@ -21,7 +21,7 @@ use crate::{
     layout_walk::child_record_from,
     pipeline::UpdatedReach,
     raster_scene::{
-        HitLayer, ItemCounts, OpenRecord, PassedDown, RasterScene, Subtree, SubtreeItems,
+        HitLayer, ItemCounts, OpenRecord, PassedDown, RasterScene, Subtree, SubtreeItems, as_u32,
     },
     scene_item::SceneItem,
 };
@@ -78,9 +78,9 @@ struct Opened {
 impl Opened {
     fn of(old: &SubtreeItems) -> Self {
         Self {
-            end: old.end as u32,
-            stop: old.stop.get().order as u32,
-            passed_down: old.passed_down.map(|entry| entry as u32),
+            end: as_u32(old.end),
+            stop: as_u32(old.stop.get().order),
+            passed_down: old.passed_down.map(as_u32),
         }
     }
 
@@ -289,7 +289,7 @@ impl Rewrite {
                     Whole::Open { open, .. } => {
                         self.whole = Whole::Open {
                             open: open + 1,
-                            entry: old.passed_down.map(|entry| entry as u32),
+                            entry: old.passed_down.map(as_u32),
                         };
                         self.next.records += 1;
                         return OpenRecord::InWhole(index);
@@ -654,8 +654,8 @@ impl Rewrite {
             later.passed_down = later.passed_down.map(|index| shift(index, entries));
         }
         for open in &mut self.opened {
-            open.end = shift(open.end(), records) as u32;
-            open.stop = shift(open.stop(), (removed.order, added.order)) as u32;
+            open.end = as_u32(shift(open.end(), records));
+            open.stop = as_u32(shift(open.stop(), (removed.order, added.order)));
         }
         self.stop = Places {
             items: self.stop.items.shifted(removed, added),

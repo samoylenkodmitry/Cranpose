@@ -397,9 +397,9 @@ fn draw_shadow<P: Pixel>(
     );
     // Rows alike in what their y gives the coverage take the same coverage
     // at every x: a band of columns computes it for the first of them only.
-    let mut covered = [0.0_f32; SHADOW_COLUMNS];
-    for start in (bounds.min_x..bounds.max_x).step_by(SHADOW_COLUMNS) {
-        let end = bounds.max_x.min(start + SHADOW_COLUMNS as i32);
+    let mut covered = [0.0_f32; SHADOW_COLUMNS as usize];
+    for start in (bounds.min_x..bounds.max_x).step_by(usize::from(SHADOW_COLUMNS)) {
+        let end = bounds.max_x.min(start + i32::from(SHADOW_COLUMNS));
         let mut computed = None;
         for py in bounds.min_y..bounds.max_y {
             let center_y = py as f32 + 0.5;
@@ -419,7 +419,7 @@ fn draw_shadow<P: Pixel>(
 }
 
 // The columns of a shadow whose coverage one band of rows shares.
-const SHADOW_COLUMNS: usize = 128;
+const SHADOW_COLUMNS: u16 = 128;
 
 // Paints the runs of row `py` with one color: a fill where it covers them
 // opaquely, else a blend over each pixel.

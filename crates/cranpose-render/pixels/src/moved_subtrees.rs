@@ -7,6 +7,8 @@ use cranpose_core::{NodeId, collections::map::HashMap};
 use cranpose_render_common::scene_builder::MovedSubtree;
 use cranpose_ui_graphics::MemoryHeadroom;
 
+use crate::raster_scene::as_u32;
+
 // What the walk keeps of a node, in its slot.
 struct Slot {
     node: NodeId,
@@ -85,7 +87,7 @@ impl Slots {
             }
             None => {
                 self.slots.push(Some(slot));
-                (self.slots.len() - 1) as u32
+                as_u32(self.slots.len() - 1)
             }
         };
         self.slot_of.insert(node, at);
@@ -127,7 +129,7 @@ impl Slots {
             };
             slot.waited += 1;
             if slot.waited > unpushed + 1 || slot.kept.is_none() {
-                self.free_slot(at as u32);
+                self.free_slot(as_u32(at));
             }
         }
     }

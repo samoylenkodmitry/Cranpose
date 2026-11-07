@@ -21,7 +21,7 @@ use crate::{
 };
 
 mod item_counts;
-pub(crate) use item_counts::{ItemCounts, PackedCounts};
+pub(crate) use item_counts::{ItemCounts, PackedCounts, as_u32};
 
 #[derive(Clone, Debug)]
 pub(crate) struct DrawShape {

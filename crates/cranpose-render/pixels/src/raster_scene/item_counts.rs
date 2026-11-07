@@ -79,6 +79,21 @@ impl From<ItemCounts> for PackedCounts {
             texts,
             shadows,
         } = counts;
-        Self([order, shapes, images, texts, shadows].map(|count| count as u32))
+        Self([order, shapes, images, texts, shadows].map(as_u32))
     }
+}
+
+// `index`, a place in a scene's lists, as the 32 bits a record keeps it in.
+#[inline]
+pub(crate) fn as_u32(index: usize) -> u32 {
+    debug_assert!(
+        u32::try_from(index).is_ok(),
+        "a scene's list outgrew 32 bits"
+    );
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "a scene's lists hold far fewer than 2^32 items, records and entries"
+    )]
+    let index = index as u32;
+    index
 }

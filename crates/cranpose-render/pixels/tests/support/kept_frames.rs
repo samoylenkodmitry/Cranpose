@@ -19,7 +19,8 @@ pub(crate) type Step = Rc<RefCell<Option<MutableState<u32>>>>;
 
 pub(crate) fn color(step: u32, salt: u32) -> Color {
     let value = (step * 37 + salt * 91) % 255;
-    Color::from_rgb_u8(value as u8, (255 - value) as u8, ((value * 3) % 255) as u8)
+    let byte = |channel: u32| u8::try_from(channel).expect("a channel below 256");
+    Color::from_rgb_u8(byte(value), byte(255 - value), byte((value * 3) % 255))
 }
 
 pub(crate) fn shell(scale: f32, scenes: fn(Step)) -> (AppShell<PixelsRenderer>, Step) {
