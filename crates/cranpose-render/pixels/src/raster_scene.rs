@@ -303,6 +303,7 @@ impl<'a> Subtree<'a> {
             identity: self.identity(),
             transform: self.transform_to_parent(),
             node_size: self.node_size(),
+            sinks: self.has_origin_sinks(),
             hits: hits.map(|layer| Box::new(HitLayer::of(layer))),
             passed_down: None,
             end,
@@ -310,6 +311,12 @@ impl<'a> Subtree<'a> {
             stop: counts.into(),
             head: None,
         }
+    }
+
+    // Whether the node's own layer publishes where it lies in its window. A
+    // node drawn in its parent's layer publishes nothing.
+    pub(crate) fn has_origin_sinks(self) -> bool {
+        matches!(self, Self::Layer(layer) if layer.has_origin_sinks)
     }
 
     // The node's placement in its parent's layer.
@@ -360,6 +367,8 @@ pub(crate) struct SubtreeItems {
     pub transform: ProjectiveTransform,
     // The size of the node's own rect, from the layer's origin.
     pub node_size: Size,
+    // Whether the node's own layer publishes where it lies in its window.
+    pub sinks: bool,
     // What the hit targets beneath a layer that cuts them or handles a
     // pointer take from it; `None` for a layer that does neither and for a
     // node drawn in its parent's layer.
@@ -384,6 +393,7 @@ impl SubtreeItems {
             identity: self.identity,
             transform: self.transform,
             node_size: self.node_size,
+            sinks: self.sinks,
             hits: self.hits.clone(),
             passed_down: self.passed_down,
             end: self.end,

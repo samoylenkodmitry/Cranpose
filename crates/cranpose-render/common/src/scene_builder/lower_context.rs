@@ -43,6 +43,16 @@ impl LowerContext {
         }
     }
 
+    /// This context with no place in the window: a subtree whose nodes
+    /// publish no window geometry lowers the same under it, and skips
+    /// working out where each node lies in the window.
+    pub fn without_window_origin(&self) -> Self {
+        Self {
+            parent_abs: None,
+            ..*self
+        }
+    }
+
     // What the children of `layer`, the layer a node lowered under this
     // context and placed since where it now lies, lower with: what
     // `for_children` gives for the node, read from its layer.

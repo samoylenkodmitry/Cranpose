@@ -312,6 +312,7 @@ impl Rewrite {
                 }
                 record.transform = subtree.transform_to_parent();
                 record.node_size = subtree.node_size();
+                record.sinks = subtree.has_origin_sinks();
                 // The node's push keeps its new head when it ends.
                 if let Some(stale) = record.head.take() {
                     stale.recycle();

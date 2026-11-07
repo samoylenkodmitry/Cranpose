@@ -611,6 +611,16 @@ impl<'a> LayoutWalk<'a> {
             Some(NodeUpdate::Layer) => OwnLayer::Changed,
             _ => OwnLayer::AsLowered,
         };
+        // A whole subtree whose nodes publish no window geometry pushes the
+        // same with no place in the window.
+        let lean;
+        let lower_context = match children {
+            HeadChildren::Whole if !holds_sinks(&scene.subtrees, at) => {
+                lean = lower_context.without_window_origin();
+                &lean
+            }
+            _ => lower_context,
+        };
         self.push_head(
             (child, at),
             (position, own_layer, children),
@@ -784,6 +794,14 @@ fn holds_space(node: &RenderNode) -> bool {
                 if inner.node_id == Some(wrapped) && inner.graphics_layer.space.is_some())
         })
     })
+}
+
+// Whether a node of the old subtree at the record `at` publishes where it
+// lies in its window.
+fn holds_sinks(records: &[SubtreeItems], at: usize) -> bool {
+    records[at..records[at].end]
+        .iter()
+        .any(|record| record.sinks)
 }
 
 // What changed of a node that an update pushes from its head.
