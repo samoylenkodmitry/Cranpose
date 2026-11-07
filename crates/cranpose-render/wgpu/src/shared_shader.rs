@@ -210,7 +210,9 @@ impl SharedShader {
         if let Some(built_in) = self.code.built_in
             && self.backend == wgpu::Backend::Gl
         {
-            crate::first_screen_glsl::list(built_in.name, (vertex, fragment), constants);
+            if let Some(list) = crate::first_screen_glsl::listing() {
+                list(built_in.name, (vertex, fragment), constants);
+            }
             if let Some(module) =
                 crate::first_screen_glsl::program(built_in.name, (vertex, fragment), constants)
                     .and_then(|program| {

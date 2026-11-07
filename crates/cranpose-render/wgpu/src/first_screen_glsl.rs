@@ -13,7 +13,6 @@
 
 use std::{
     fmt::Write as _,
-    str::FromStr,
     sync::{Mutex, OnceLock, PoisonError},
 };
 
@@ -42,6 +41,14 @@ static PROGRAMS: OnceLock<Vec<Program>> = OnceLock::new();
 // `None` when no listing runs.
 static LISTED: Mutex<Option<String>> = Mutex::new(None);
 
+// Lists the stages of a pipeline built from a built-in module: its name,
+// its entry points and the pipeline's constants.
+pub(crate) type List = fn(&str, (&str, &str), &[(&str, f64)]);
+
+// What lists a pipeline's stages, set by `list_first_screen_stages`: a page
+// that never lists them carries no listing code.
+static LISTING: OnceLock<List> = OnceLock::new();
+
 struct Program {
     // The program's stages as `stages_line` writes them.
     stages_line: &'static str,
@@ -56,9 +63,9 @@ struct Program {
 pub fn use_first_screen_glsl(file: Vec<u8>) -> Result<(), FirstScreenGlslError> {
     let key = Fields { rest: &file }
         .text()
-        .and_then(|header| header.strip_prefix(HEADER)?.parse::<u64>().ok())
+        .and_then(|header| header.strip_prefix(HEADER))
         .ok_or(FirstScreenGlslError::Malformed)?;
-    if key != SOURCES_KEY {
+    if key != SOURCES_KEY.to_string() {
         return Err(FirstScreenGlslError::OtherShaders);
     }
     if PROGRAMS.get().is_some() {
@@ -84,6 +91,7 @@ pub fn use_first_screen_glsl(file: Vec<u8>) -> Result<(), FirstScreenGlslError> 
 /// the list.
 pub fn list_first_screen_stages() {
     *LISTED.lock().unwrap_or_else(PoisonError::into_inner) = Some(String::new());
+    let _ = LISTING.set(list);
 }
 
 /// The WebGL stages listed since [`list_first_screen_stages`], a line each
@@ -110,9 +118,13 @@ fn stages_line(
     line
 }
 
-// Lists the stages of a pipeline built from the built-in `module` while a
+// What lists the stages of a pipeline built from a built-in module while a
 // listing runs.
-pub(crate) fn list(module: &str, entries: (&str, &str), constants: &[(&str, f64)]) {
+pub(crate) fn listing() -> Option<List> {
+    LISTING.get().copied()
+}
+
+fn list(module: &str, entries: (&str, &str), constants: &[(&str, f64)]) {
     if let Some(listed) = LISTED
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
@@ -146,26 +158,14 @@ struct Fields<'a> {
 impl<'a> Fields<'a> {
     fn text(&mut self) -> Option<&'a str> {
         let colon = self.rest.iter().position(|&byte| byte == b':')?;
-        let length: usize = std::str::from_utf8(&self.rest[..colon])
-            .ok()?
-            .parse()
-            .ok()?;
-        let end = colon.checked_add(1 + length)?;
-        let field = self.rest.get(colon + 1..end)?;
-        self.rest = &self.rest[end..];
+        let length = decimal(&self.rest[..colon])?;
+        let (field, rest) = self.rest[colon + 1..].split_at_checked(length as usize)?;
+        self.rest = rest;
         std::str::from_utf8(field).ok()
     }
 
-    fn number<T: FromStr>(&mut self) -> Option<T> {
-        self.text()?.parse().ok()
-    }
-
-    fn flag(&mut self) -> Option<bool> {
-        match self.text()? {
-            "0" => Some(false),
-            "1" => Some(true),
-            _ => None,
-        }
+    fn number(&mut self) -> Option<u32> {
+        decimal(self.text()?.as_bytes())
     }
 
     fn binding(&mut self) -> Option<naga::ResourceBinding> {
@@ -178,68 +178,74 @@ impl<'a> Fields<'a> {
 
 impl Fields<'static> {
     fn programs(&mut self) -> Option<Vec<Program>> {
-        (0..self.number::<usize>()?)
-            .map(|_| self.program())
-            .collect()
-    }
-
-    fn program(&mut self) -> Option<Program> {
-        let stages_line = self.text()?;
-        let mut names = stages_line.split('|').skip(1);
-        let (vertex, fragment) = (names.next()?, names.next()?);
-        Some(Program {
-            stages_line,
-            stages: [
+        let mut programs = Vec::new();
+        for _ in 0..self.number()? {
+            let stages_line = self.text()?;
+            let mut names = stages_line.split('|').skip(1);
+            let (vertex, fragment) = (names.next()?, names.next()?);
+            let stages = [
                 self.stage(vertex, naga::ShaderStage::Vertex)?,
                 self.stage(fragment, naga::ShaderStage::Fragment)?,
-            ],
-        })
+            ];
+            programs.push(Program {
+                stages_line,
+                stages,
+            });
+        }
+        Some(programs)
     }
 
+    // Each list is kept for as long as the page runs, as the file's text.
     fn stage(
         &mut self,
         entry_point: &'static str,
         stage: naga::ShaderStage,
     ) -> Option<GlslTemplate> {
         let glsl = Vec::leak(vec![self.text()?]);
-        let blocks = self.list(|fields| {
-            Some(GlslBlock {
-                name: fields.text()?,
-                storage: fields.flag()?,
-                binding: fields.binding()?,
-            })
-        })?;
-        let textures = self.list(|fields| {
-            Some(GlslTexture {
-                name: fields.text()?,
-                storage: fields.flag()?,
-                binding: fields.binding()?,
-                sampler: if fields.flag()? {
-                    Some(fields.binding()?)
-                } else {
-                    None
-                },
-            })
-        })?;
-        let varyings = self.list(|fields| Some((fields.text()?, fields.number()?)))?;
+        let mut blocks = Vec::new();
+        for _ in 0..self.number()? {
+            blocks.push(GlslBlock {
+                name: self.text()?,
+                storage: self.number()? != 0,
+                binding: self.binding()?,
+            });
+        }
+        let mut textures = Vec::new();
+        for _ in 0..self.number()? {
+            let (name, storage, binding) = (self.text()?, self.number()? != 0, self.binding()?);
+            let sampler = if self.number()? != 0 {
+                Some(self.binding()?)
+            } else {
+                None
+            };
+            textures.push(GlslTexture {
+                name,
+                storage,
+                binding,
+                sampler,
+            });
+        }
+        let mut varyings = Vec::new();
+        for _ in 0..self.number()? {
+            varyings.push((self.text()?, self.number()?));
+        }
         Some(GlslTemplate {
             entry_point,
             stage,
             glsl,
             macros: &[],
-            blocks,
-            textures,
-            varyings,
+            blocks: blocks.leak(),
+            textures: textures.leak(),
+            varyings: varyings.leak(),
             clip_distance_count: self.number()?,
         })
     }
+}
 
-    // A count, then that many items read by `item`, kept for as long as the
-    // page runs.
-    fn list<T>(&mut self, mut item: impl FnMut(&mut Self) -> Option<T>) -> Option<&'static [T]> {
-        (0..self.number::<usize>()?)
-            .map(|_| item(self))
-            .collect::<Option<Vec<T>>>()
-            .map(|items| &*Vec::leak(items))
-    }
+// A field's decimal digits as a number: the reader's one number parser.
+fn decimal(digits: &[u8]) -> Option<u32> {
+    digits.iter().try_fold(0u32, |number, &digit| {
+        let digit = digit.checked_sub(b'0').filter(|digit| *digit < 10)?;
+        number.checked_mul(10)?.checked_add(u32::from(digit))
+    })
 }

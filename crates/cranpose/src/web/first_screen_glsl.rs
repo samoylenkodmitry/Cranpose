@@ -4,12 +4,14 @@
 //!
 //! The fetch starts as the browser loads the wasm-bindgen glue, which
 //! imports this snippet before it fetches the wasm, so the file comes in
-//! beside the far larger wasm and is there when the renderer starts. A page
-//! that will draw on WebGPU leaves it alone: one asked for WebGPU in its
-//! query (`backend_preference`), or one whose browser gives it a WebGPU
-//! adapter, as `wgpu::util::new_instance_with_webgpu_detection` asks for it.
-//! Chrome on a Mate 20 X (Android 10) has `navigator.gpu` but no adapter.
-//! The snippet sits in `snippets/<crate>/`, two folders below the wasm's.
+//! beside the far larger wasm and is there when the renderer starts. A file
+//! that has not come in by then is left out, so the page never waits for
+//! it. A page that will draw on WebGPU leaves it alone: one asked for WebGPU
+//! in its query (`backend_preference`), or one whose browser gives it a
+//! WebGPU adapter, as `wgpu::util::new_instance_with_webgpu_detection` asks
+//! for it. Chrome on a Mate 20 X (Android 10) has `navigator.gpu` but no
+//! adapter. The snippet sits in `snippets/<crate>/`, two folders below the
+//! wasm's.
 
 use wasm_bindgen::prelude::wasm_bindgen;
 
@@ -19,26 +21,31 @@ const webgl = backend === "gl" ? Promise.resolve(true)
     : backend === "webgpu" ? Promise.resolve(false)
     : navigator.gpu ? navigator.gpu.requestAdapter().then((adapter) => !adapter, () => true)
     : Promise.resolve(true);
-const file = webgl
+let file;
+webgl
     .then((gl) => gl
         ? fetch(new URL("../../first_screen_glsl.txt", import.meta.url))
             .then((response) => (response.ok ? response.arrayBuffer() : null))
         : null)
-    .catch(() => null);
+    .catch(() => null)
+    .then((fetched) => { file = fetched; });
 export function firstScreenGlsl() {
     return file;
 }
 "#)]
 extern "C" {
+    // The file once fetched, `null` where it did not load or the page left it
+    // alone, `undefined` while the fetch runs.
     #[wasm_bindgen(js_name = firstScreenGlsl)]
-    fn fetched() -> js_sys::Promise;
+    fn fetched() -> wasm_bindgen::JsValue;
 }
 
-// Hands the renderer the page's first-screen GLSL once it came in.
-pub(super) async fn take() {
-    let Ok(file) = wasm_bindgen_futures::JsFuture::from(fetched()).await else {
+// Hands the renderer the page's first-screen GLSL where it came in.
+pub(super) fn take() {
+    let file = fetched();
+    if file.is_undefined() {
         return;
-    };
+    }
     if file.is_null() {
         log::warn!("[first-screen-glsl] first_screen_glsl.txt did not load");
         return;
