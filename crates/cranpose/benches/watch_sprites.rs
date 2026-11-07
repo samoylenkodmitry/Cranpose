@@ -5,7 +5,10 @@
 //! texture of every text it shows. `SHADOW=1` lifts each row on an elevation
 //! shadow, whose sprite is a texture too. `SCREEN=paths` replaces the rows
 //! and the bar with a list that scrolls and a card that fades while bars
-//! inside them change every frame. Run it under `/usr/bin/time -l`
+//! inside them change every frame. `SCREEN=moves` shows a list of deep rows
+//! that scrolls while each row holds still, and `SCREEN=wall` a wall of
+//! small tiles that hold still under a clock that changes every frame. Run
+//! it under `/usr/bin/time -l`
 //! with `FRAMES=0` and `FRAMES=10000` and divide the difference in retired
 //! instructions by 10000.
 
@@ -24,6 +27,10 @@ use cranpose_animation::{
 
 #[path = "../tests/support/changing_paths.rs"]
 mod changing_paths;
+#[path = "../tests/support/deep_moves.rs"]
+mod deep_moves;
+#[path = "../tests/support/still_wall.rs"]
+mod still_wall;
 
 const WIDTH: u32 = 198;
 const HEIGHT: u32 = 242;
@@ -82,13 +89,12 @@ fn main() {
     let rows = env_count("ROWS", 12);
     let frames = env_count("FRAMES", 1000) as u64;
     let shadow = env_count("SHADOW", 0) != 0;
-    let paths = std::env::var("SCREEN").is_ok_and(|screen| screen == "paths");
-    let screen = move || {
-        if paths {
-            changing_paths::ChangingPaths("Cranpose");
-        } else {
-            Screen(rows, shadow);
-        }
+    let shown = std::env::var("SCREEN").unwrap_or_default();
+    let screen = move || match shown.as_str() {
+        "paths" => changing_paths::ChangingPaths("Cranpose"),
+        "moves" => deep_moves::DeepMoves("Cranpose"),
+        "wall" => still_wall::StillWall("Cranpose"),
+        _ => Screen(rows, shadow),
     };
     let mut app = match Application::new(WIDTH, HEIGHT, DENSITY, screen) {
         Ok(app) => app,

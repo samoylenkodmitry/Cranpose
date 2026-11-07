@@ -25,6 +25,11 @@
 //! `SCREEN=paths` shows, 320 by 480, rows that scroll and a card that fades
 //! while bars inside them change every frame: each frame changes nodes that
 //! move or fade and hold a change.
+//! `SCREEN=moves` shows, 320 by 480, a list of deep rows with shadows, text
+//! and paths that scrolls by itself while each row holds still: each frame
+//! moves nodes that do not change. `SCREEN=wall` shows, 320 by 480, a wall
+//! of 96 small tiles that hold still under a clock whose text changes every
+//! frame.
 //!
 //! `PIXELS=rgb565` draws 16-bit pixels, high byte first, as the ESP32
 //! boards' displays take them, in place of RGBA bytes.
@@ -58,8 +63,12 @@ use cranpose_animation::{
 mod changing_paths;
 #[path = "../tests/support/dashboard.rs"]
 mod dashboard;
+#[path = "../tests/support/deep_moves.rs"]
+mod deep_moves;
 #[path = "../tests/support/reading.rs"]
 mod reading;
+#[path = "../tests/support/still_wall.rs"]
+mod still_wall;
 
 use reading::{ComposedReading, DrawnReading};
 
@@ -104,12 +113,15 @@ fn bar_reads_in_draw() -> bool {
     std::env::var("BAR").is_ok_and(|bar| bar == "draw")
 }
 
-// What the frames show: `SCREEN=dashboard`, `SCREEN=paths` or the bar.
+// What the frames show: `SCREEN=dashboard`, `paths`, `moves`, `wall` or
+// the bar.
 #[derive(Clone, Copy)]
 enum Shown {
     Bar,
     Dashboard,
     Paths,
+    Moves,
+    Wall,
 }
 
 impl Shown {
@@ -117,6 +129,8 @@ impl Shown {
         match std::env::var("SCREEN").as_deref() {
             Ok("dashboard") => Self::Dashboard,
             Ok("paths") => Self::Paths,
+            Ok("moves") => Self::Moves,
+            Ok("wall") => Self::Wall,
             _ => Self::Bar,
         }
     }
@@ -124,7 +138,7 @@ impl Shown {
     fn height(self) -> u32 {
         match self {
             Self::Bar => HEIGHT,
-            Self::Dashboard | Self::Paths => TALL_HEIGHT,
+            Self::Dashboard | Self::Paths | Self::Moves | Self::Wall => TALL_HEIGHT,
         }
     }
 }
@@ -312,6 +326,8 @@ fn Screen() {
         Shown::Bar => BarScreen(),
         Shown::Dashboard => dashboard::Dashboard("Cranpose"),
         Shown::Paths => changing_paths::ChangingPaths("Cranpose"),
+        Shown::Moves => deep_moves::DeepMoves("Cranpose"),
+        Shown::Wall => still_wall::StillWall("Cranpose"),
     }
 }
 
