@@ -71,6 +71,8 @@ mod changing_paths;
 mod dashboard;
 #[path = "../tests/support/deep_moves.rs"]
 mod deep_moves;
+#[path = "../tests/support/frame_time.rs"]
+mod frame_time;
 #[path = "../tests/support/long_scroll.rs"]
 mod long_scroll;
 #[path = "../tests/support/reading.rs"]
