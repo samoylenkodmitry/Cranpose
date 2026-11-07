@@ -186,7 +186,7 @@ impl SharedShader {
 
     /// The two stages of a pipeline with `constants`, whose entry points are
     /// `vertex` and `fragment`. On a native device each is specialized by
-    /// the constants and folded on its own (see [`crate::shader_fold`]), so
+    /// the constants and folded on its own (see [`cranpose_shader_passes::fold`]), so
     /// the driver compiles only the code they keep; on the web, or where
     /// naga refuses the shader, both share the module, which the device
     /// specializes.
@@ -257,7 +257,7 @@ impl SharedShader {
     ) -> Option<wgpu::ShaderModule> {
         let mut module = self.specialized(stage, entry, constants)?;
         if !cranpose_core::DIAGNOSTICS.no_shader_flatten.equals("1") {
-            match crate::shader_flatten::flatten(&mut module) {
+            match cranpose_shader_passes::flatten(&mut module) {
                 Ok(()) => {
                     naga::compact::compact(&mut module, naga::compact::KeepUnused::No);
                     if let Some(shader) = self.created(module) {
@@ -293,7 +293,7 @@ impl SharedShader {
     }
 
     /// The `stage` of entry point `entry` specialized by `constants` and
-    /// folded (see [`crate::shader_fold`]).
+    /// folded (see [`cranpose_shader_passes::fold`]).
     #[cfg(not(target_arch = "wasm32"))]
     fn specialized(
         &self,
@@ -320,7 +320,7 @@ impl SharedShader {
         })
         .ok()?;
         let mut folded = specialized.into_owned();
-        crate::shader_fold::fold(&mut folded);
+        cranpose_shader_passes::fold(&mut folded);
         Some(folded)
     }
 

@@ -60,10 +60,6 @@ mod scene;
 mod scene_pass;
 mod scissor;
 mod shader_cache;
-#[cfg(not(target_arch = "wasm32"))]
-mod shader_flatten;
-#[cfg(not(target_arch = "wasm32"))]
-mod shader_fold;
 mod shaders;
 mod shape_pipelines;
 mod shared_shader;

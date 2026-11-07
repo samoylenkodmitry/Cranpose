@@ -47,6 +47,10 @@ naga = { version = "30.0.1", features = ["wgsl-in"] }
 web-time = { workspace = true }
 smallvec = "1.16.4"
 
+# Native pipelines take their stages specialized, folded and flattened.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+cranpose-shader-passes = { workspace = true }
+
 # Every target takes Cranpose's fork of wgpu (`wgpu` in the workspace,
 # forks/README.md), whose library is also `wgpu`, with its backends.
 [target.'cfg(all(target_os = "linux", not(target_arch = "wasm32")))'.dependencies]
@@ -56,7 +60,7 @@ wgpu = { workspace = true, features = [
     "vulkan",
     "wgsl",
     # Pipelines take their stages specialized and folded as naga modules
-    # (`shader_fold`).
+    # (`cranpose_shader_passes::fold`).
     "naga-ir",
 ] }
 
@@ -72,7 +76,7 @@ wgpu = { workspace = true, features = [
     "dx12",
     "wgsl",
     # Pipelines take their stages specialized and folded as naga modules
-    # (`shader_fold`).
+    # (`cranpose_shader_passes::fold`).
     "naga-ir",
     "static-dxc",
 ] }
@@ -84,7 +88,7 @@ wgpu = { workspace = true, features = [
     "metal",
     "wgsl",
     # Pipelines take their stages specialized and folded as naga modules
-    # (`shader_fold`).
+    # (`cranpose_shader_passes::fold`).
     "naga-ir",
 ] }
 
@@ -95,7 +99,7 @@ wgpu = { workspace = true, features = [
     "vulkan",
     "wgsl",
     # Pipelines take their stages specialized and folded as naga modules
-    # (`shader_fold`).
+    # (`cranpose_shader_passes::fold`).
     "naga-ir",
 ] }
 
@@ -106,7 +110,7 @@ wgpu = { workspace = true, features = [
     "vulkan",
     "wgsl",
     # Pipelines take their stages specialized and folded as naga modules
-    # (`shader_fold`).
+    # (`cranpose_shader_passes::fold`).
     "naga-ir",
 ] }
 
@@ -117,7 +121,7 @@ wgpu = { workspace = true, features = [
     "metal",
     "wgsl",
     # Pipelines take their stages specialized and folded as naga modules
-    # (`shader_fold`).
+    # (`cranpose_shader_passes::fold`).
     "naga-ir",
 ] }
 

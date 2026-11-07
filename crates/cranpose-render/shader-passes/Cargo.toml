@@ -1,0 +1,18 @@
+[package]
+name = "cranpose-shader-passes"
+version.workspace = true
+rust-version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Folds and flattens naga shader stages before a driver compiles them"
+
+[lints]
+workspace = true
+
+[dependencies]
+naga = "30.0.1"
