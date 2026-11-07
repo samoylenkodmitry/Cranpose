@@ -580,12 +580,16 @@ impl<'a> LayoutWalk<'a> {
     pub(crate) fn push_from_head(
         &self,
         (child, at, position): (NodeId, usize, ChildPosition),
-        (update, lower_context): (Option<NodeUpdate>, &LowerContext),
+        (change, lower_context): (HeadChange, &LowerContext),
         (scene, context): (&mut RasterScene, &RasterTraversalContext<'_>),
     ) -> bool {
         if !self.marks.from_update || self.keeps_space(&scene.subtrees, at) {
             return false;
         }
+        let (update, children) = match change {
+            HeadChange::Nothing => (None, HeadChildren::Whole),
+            HeadChange::Marked(update) => (update, HeadChildren::Records),
+        };
         let position = match (update, position) {
             (None | Some(NodeUpdate::Layer), ChildPosition::AsBefore) => None,
             (None | Some(NodeUpdate::Moved | NodeUpdate::Layer), ChildPosition::Anew(read)) => {
@@ -603,14 +607,35 @@ impl<'a> LayoutWalk<'a> {
             }
             (Some(_), _) => return false,
         };
-        let Some(mut head) = scene.take_head(at) else {
-            return false;
-        };
-        let index = scene.next_record();
         let own_layer = match update {
             Some(NodeUpdate::Layer) => OwnLayer::Changed,
             _ => OwnLayer::AsLowered,
         };
+        self.push_head(
+            (child, at),
+            (position, own_layer, children),
+            lower_context,
+            (scene, context),
+        )
+    }
+
+    // Pushes under `context` the subtree of `child` over its old subtree at
+    // the record `at`, from the head the record keeps, placed at `position`
+    // in its parent's content when the parent placed it anew, with the
+    // layer the child has now when `own_layer` changed, and its children as
+    // `children` says. False, with nothing pushed, when the record keeps no
+    // head or the head does not follow the child.
+    pub(super) fn push_head(
+        &self,
+        (child, at): (NodeId, usize),
+        (position, own_layer, children): (Option<Point>, OwnLayer, HeadChildren),
+        lower_context: &LowerContext,
+        (scene, context): (&mut RasterScene, &RasterTraversalContext<'_>),
+    ) -> bool {
+        let Some(mut head) = scene.take_head(at) else {
+            return false;
+        };
+        let index = scene.next_record();
         match head.follow(self.applier, child, lower_context, (position, own_layer)) {
             // A node drawn in its parent's layer has no children.
             Some(KeptNodeRef::Inline(inline)) => {
@@ -618,12 +643,19 @@ impl<'a> LayoutWalk<'a> {
             }
             Some(KeptNodeRef::Layer(layer, inner)) => {
                 let old = OldChildren::of(&scene.subtrees, at, child);
+                let pushes = match children {
+                    HeadChildren::Records => ChildPushes::Records(old),
+                    HeadChildren::Whole => {
+                        scene.begin_whole();
+                        ChildPushes::Whole(old)
+                    }
+                };
                 let mut slot = ChildSlot {
                     walk: self,
                     owner: child,
                     children: &[],
                     context: &inner,
-                    pushes: ChildPushes::Records(old),
+                    pushes,
                 };
                 let slot = old.holds_children(&scene.subtrees).then_some(&mut slot);
                 populate_draws_from_graph(Subtree::Layer(layer), scene, context, &mut None, slot);
@@ -752,4 +784,33 @@ fn holds_space(node: &RenderNode) -> bool {
                 if inner.node_id == Some(wrapped) && inner.graphics_layer.space.is_some())
         })
     })
+}
+
+// What changed of a node that an update pushes from its head.
+#[derive(Clone, Copy)]
+pub(crate) enum HeadChange {
+    // Neither the node nor a node beneath it: its whole subtree pushes
+    // again in its old order.
+    Nothing,
+    // The node or a node beneath it, with the node's own update, if any.
+    Marked(Option<NodeUpdate>),
+}
+
+impl HeadChange {
+    // What the node with `mark` changed.
+    pub(crate) fn of(mark: u8) -> Self {
+        match mark {
+            0 => Self::Nothing,
+            mark => Self::Marked(decode(mark)),
+        }
+    }
+}
+
+// How the children of a node pushed from its head push.
+#[derive(Clone, Copy)]
+pub(super) enum HeadChildren {
+    // From the heads their records keep, each as its mark says.
+    Records,
+    // Whole, each over its old places in its old order.
+    Whole,
 }

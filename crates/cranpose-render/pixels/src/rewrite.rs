@@ -45,6 +45,23 @@ pub(crate) enum Replaced {
 // The room for changed areas a rewrite keeps from one to the next.
 const KEPT_AREAS: usize = 32;
 
+// Whether the rewrite pushes a whole subtree: one whose root and nodes
+// beneath it changed nothing, so it pushes its old records again in their
+// order, each over its old place, and its items over its old items.
+#[derive(Clone, Copy, Default)]
+enum Whole {
+    #[default]
+    Off,
+    // The next record to open is the root of one.
+    Next,
+    // `open` of its records are open, its root's included. `entry` is the
+    // passed-down entry of the old record whose place the innermost took.
+    Open {
+        open: u32,
+        entry: Option<u32>,
+    },
+}
+
 // A record the rewrite put in place of the old record of its node, and
 // what the old record held: where its subtree's records and draw order
 // ended, and its passed-down entry. The indices take 32 bits, as a
@@ -91,7 +108,9 @@ pub(crate) struct Rewrite {
     // after the last.
     own_items_end: usize,
     // The records opened in place and not closed yet, the last innermost.
+    // The records inside a whole subtree are not among them.
     opened: Vec<Opened>,
+    whole: Whole,
     // Whether the rewrite replaced or let go a record that hit targets read.
     hits_replaced: bool,
     // Where the subtree's pushes went on in `spill` from, once one did not
@@ -158,6 +177,7 @@ impl Rewrite {
         };
         self.own_items_end = self.next.items.order;
         self.opened.clear();
+        self.whole = Whole::Off;
         self.hits_replaced = false;
         self.spilled_at = None;
         self.record = record;
@@ -257,8 +277,29 @@ impl Rewrite {
                 && old.identity == subtree.identity()
                 && old.start.get().order == self.next.items.order
             {
-                push_kept(&mut self.opened, Opened::of(old));
-                self.own_items_end = own_items_end(records, index, old.end, old.stop.get().order);
+                match self.whole {
+                    Whole::Open { open, .. } => {
+                        self.whole = Whole::Open {
+                            open: open + 1,
+                            entry: old.passed_down.map(|entry| entry as u32),
+                        };
+                    }
+                    whole => {
+                        push_kept(&mut self.opened, Opened::of(old));
+                        self.own_items_end = match whole {
+                            // A whole subtree takes the places of all its old
+                            // items.
+                            Whole::Next => {
+                                self.whole = Whole::Open {
+                                    open: 1,
+                                    entry: None,
+                                };
+                                old.stop.get().order
+                            }
+                            _ => own_items_end(records, index, old.end, old.stop.get().order),
+                        };
+                    }
+                }
                 let record = &mut records[index];
                 if record.hits.is_some() || hits.is_some() {
                     let kept = record.hits.take();
@@ -279,6 +320,17 @@ impl Rewrite {
             }
             self.spilled_at = Some(self.next);
         }
+        self.whole = match self.whole {
+            Whole::Off => Whole::Off,
+            Whole::Next => Whole::Open {
+                open: 1,
+                entry: None,
+            },
+            Whole::Open { open, entry } => Whole::Open {
+                open: open + 1,
+                entry,
+            },
+        };
         let here = self.here();
         self.spill
             .subtrees
@@ -307,7 +359,10 @@ impl Rewrite {
         entries: &mut [PassedDown],
         entry: PassedDown,
     ) -> (usize, bool) {
-        let old = self.opened.last().and_then(|opened| opened.passed_down());
+        let old = match self.whole {
+            Whole::Open { open, entry } if open > 1 => entry.map(|entry| entry as usize),
+            _ => self.opened.last().and_then(|opened| opened.passed_down()),
+        };
         if self.spilled_at.is_none() {
             let index = self.next.passed_down;
             if old == Some(index) {
@@ -327,11 +382,30 @@ impl Rewrite {
     // may take the places of go on after the closed record's old subtree,
     // as far as the parent's next child subtree.
     pub(crate) fn close_record(&mut self, records: &[SubtreeItems]) {
+        match self.whole {
+            Whole::Open { open, entry } if open > 1 => {
+                self.whole = Whole::Open {
+                    open: open - 1,
+                    entry,
+                };
+                return;
+            }
+            Whole::Open { .. } => self.whole = Whole::Off,
+            Whole::Off | Whole::Next => {}
+        }
         if self.spilled_at.is_some() {
             return;
         }
         if let Some(closed) = self.opened.pop() {
             self.after_old_subtree(records, closed.end());
+        }
+    }
+
+    // Makes the next record to open the root of a whole subtree, unless one
+    // is open: its records open in their old order, each over its old place.
+    pub(crate) fn begin_whole(&mut self) {
+        if let Whole::Off = self.whole {
+            self.whole = Whole::Next;
         }
     }
 

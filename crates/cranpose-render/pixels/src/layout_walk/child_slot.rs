@@ -1,11 +1,11 @@
 use cranpose_core::NodeId;
 use cranpose_render_common::{
     NodeUpdate,
-    scene_builder::{LowerContext, NodePlace, kept_child_placement},
+    scene_builder::{LowerContext, NodePlace, OwnLayer, kept_child_placement},
 };
 use cranpose_ui_graphics::Point;
 
-use super::{LayoutWalk, OldChildren, decode};
+use super::{HeadChange, HeadChildren, LayoutWalk, OldChildren, decode};
 use crate::{
     pipeline::{RasterTraversalContext, Reuse},
     raster_scene::RasterScene,
@@ -41,6 +41,10 @@ pub(super) enum ChildPushes {
     // for an owner that did not change: its children are those its old
     // record holds.
     Records(OldChildren),
+    // Over their old records, at `OldChildren`, from the heads they keep,
+    // each child's whole subtree in its old order: neither the owner nor a
+    // node beneath it changed.
+    Whole(OldChildren),
     // Anew, into a scene that holds none of their old records.
     Anew,
     // Anew, into the scene of the owner's own surface: a child that did not
@@ -88,6 +92,7 @@ impl ChildSlot<'_> {
         let into_surface = match self.pushes {
             ChildPushes::OverOld(old) => return self.push_over_old(old, scene, context),
             ChildPushes::Records(old) => return self.push_records(old, scene, context),
+            ChildPushes::Whole(old) => return self.push_whole(old, scene, context),
             ChildPushes::Anew => false,
             ChildPushes::IntoSurface => true,
         };
@@ -169,7 +174,7 @@ impl ChildSlot<'_> {
                         || (matches!(update, None | Some(NodeUpdate::Moved | NodeUpdate::Layer))
                             && walk.push_from_head(
                                 (child, at, position),
-                                (update, self.context),
+                                (HeadChange::of(mark), self.context),
                                 (scene, context),
                             ))
                 },
@@ -204,11 +209,45 @@ impl ChildSlot<'_> {
                     (context.same_as_before && mark == 0 && scene.keep_old(at))
                         || walk.push_from_head(
                             (child, at, ChildPosition::AsBefore),
-                            (decode(mark), self.context),
+                            (HeadChange::of(mark), self.context),
                             (scene, context),
                         )
                 },
             );
+        }
+    }
+
+    // Pushes the children's subtrees under `context` over their old ones,
+    // whose records lie at `old`, from the heads the records keep: neither
+    // the owner nor a node beneath it changed, so its children are those
+    // its record holds, each lies where it did, and each pushes its whole
+    // subtree in its old order, over its old places. A child whose head
+    // does not follow it lowers again.
+    fn push_whole(
+        &self,
+        old: OldChildren,
+        scene: &mut RasterScene,
+        context: &RasterTraversalContext<'_>,
+    ) {
+        let walk = self.walk;
+        let whole = (None, OwnLayer::AsLowered, HeadChildren::Whole);
+        let mut at = old.cursor;
+        while at < old.end {
+            let record = &scene.subtrees[at];
+            let Some(child) = record.node() else {
+                break;
+            };
+            let next = record.end;
+            if !walk.push_head((child, at), whole, self.context, (scene, context)) {
+                walk.push(
+                    (child, NodePlace::Child),
+                    self.context,
+                    (scene, context),
+                    &mut None,
+                    None,
+                );
+            }
+            at = next;
         }
     }
 

@@ -587,6 +587,14 @@ impl RasterScene {
         true
     }
 
+    // Makes the next record to open the root of a whole subtree, as
+    // `Rewrite::begin_whole` does. Nothing without a rewrite.
+    pub(crate) fn begin_whole(&mut self) {
+        if let Some(rewrite) = self.rewrite.as_deref_mut() {
+            rewrite.begin_whole();
+        }
+    }
+
     // Lets go the head the old record `at` keeps, before its node lowers
     // again: the new draws record into the recordings the head held.
     pub(crate) fn drop_head(&mut self, at: usize) {
