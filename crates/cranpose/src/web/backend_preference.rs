@@ -23,6 +23,19 @@ pub(super) fn requested_web_backend(window: &web_sys::Window) -> WebBackendPrefe
     WebBackendPreference::Auto
 }
 
+// The instance of a page left to pick its backend: WebGPU where the browser
+// gives it an adapter, WebGL elsewhere.
+pub(super) async fn auto_instance(descriptor: wgpu::InstanceDescriptor) -> wgpu::Instance {
+    #[cfg(cranpose_first_screen_glsl)]
+    {
+        super::first_screen_glsl::auto_instance(descriptor).await
+    }
+    #[cfg(not(cranpose_first_screen_glsl))]
+    {
+        wgpu::util::new_instance_with_webgpu_detection(descriptor).await
+    }
+}
+
 pub(super) fn instance_backends(preference: WebBackendPreference) -> wgpu::Backends {
     match preference {
         WebBackendPreference::Auto => wgpu::Backends::BROWSER_WEBGPU | wgpu::Backends::GL,

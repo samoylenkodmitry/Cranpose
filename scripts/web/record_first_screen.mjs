@@ -31,7 +31,7 @@ if (!site || !page || !out) {
 
 await mkdir(out, { recursive: true });
 
-const TYPES = { ".html": "text/html", ".js": "text/javascript", ".wasm": "application/wasm", ".json": "application/json" };
+const TYPES = { ".html": "text/html", ".js": "text/javascript", ".mjs": "text/javascript", ".wasm": "application/wasm", ".json": "application/json" };
 
 // The viewports a first screen is recorded at: a phone's, with its user
 // agent, and a desktop window's.
