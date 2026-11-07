@@ -44,6 +44,7 @@ cranpose-core = { workspace = true }
 bytemuck = { workspace = true }
 log = "0.4"
 naga = { version = "30.0.1", features = ["wgsl-in"] }
+thiserror = "2.0.21"
 web-time = { workspace = true }
 smallvec = "1.16.4"
 

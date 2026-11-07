@@ -15,9 +15,11 @@ description = "Writes GLSL templates of WGSL shaders for WebGL2 in a build scrip
 workspace = true
 
 [dependencies]
+cranpose-shader-passes = { workspace = true }
+# The framework shaders, the source of the stages written by `cranpose-first-screen-glsl`.
+cranpose-ui-graphics = { workspace = true }
 naga = { version = "30.0.1", features = ["wgsl-in", "glsl-out"] }
 
 [dev-dependencies]
-cranpose-ui-graphics = { workspace = true }
 # The GL backend's template expansion, which the tests run the templates through.
 wgpu-hal = { package = "cranpose-wgpu-hal", path = "../../../forks/wgpu/wgpu-hal" }

@@ -17,11 +17,17 @@ mod idle_pool;
 mod layer_cache;
 mod renderer_impl;
 pub use fast_cores::pin_current_thread_to_fast_cores;
+#[cfg(all(target_arch = "wasm32", feature = "gl-templates"))]
+mod first_screen_glsl;
 mod fixed_pipeline;
 mod frame_graph;
 mod frame_packet;
 mod frontend;
 mod gpu_target;
+#[cfg(all(target_arch = "wasm32", feature = "gl-templates"))]
+pub use first_screen_glsl::{
+    FirstScreenGlslError, first_screen_stages, list_first_screen_stages, use_first_screen_glsl,
+};
 /// The GLSL templates of the built-in shader modules, which `build.rs` wrote.
 #[cfg(all(target_arch = "wasm32", feature = "gl-templates"))]
 mod gl_templates {

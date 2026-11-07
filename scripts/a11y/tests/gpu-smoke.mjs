@@ -5,11 +5,12 @@
 //   and only a real WebGPU device catches those.
 // - gl: WebGL2, which phones without WebGPU use. The GL backend reads a
 //   program's link at its first draw, so a program that fails to link shows
-//   only there.
+//   only there. A release draws its first screen with the exact GLSL beside
+//   its wasm, and a page that cannot take that file says so.
 import assert from "node:assert/strict";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { launchChrome } from "../chrome.mjs";
+import { GPU_FLAGS, launchChrome } from "../chrome.mjs";
 
 const url = process.argv[2];
 const output = process.argv[3];
@@ -22,17 +23,12 @@ assert.ok(url && output, "pass the URL of the packaged web demo and an output di
 // and a lost device under [gpu-device].
 const BACKENDS = {
     webgpu: { name: "WebGPU", selected: "BrowserWebGpu", failure: /WGSL|\[Invalid \w+|WebGPU/ },
-    gl: { name: "WebGL2", selected: "Gl", failure: /did not link|GL_INVALID|WebGL: / },
+    gl: { name: "WebGL2", selected: "Gl", failure: /did not link|GL_INVALID|WebGL: |\[first-screen-glsl\]/ },
 };
 const BACKEND = BACKENDS[backend];
 assert.ok(BACKEND, `the backend is one of ${Object.keys(BACKENDS).join(", ")}`);
 const FAILURE = new RegExp(
     `\\[gpu-device\\]|panicked|exception:|Failed to initialize app|${BACKEND.failure.source}`);
-// Headless Chrome on Linux offers WebGPU only behind these switches: the GPU
-// through Vulkan, or SwiftShader where there is none. macOS uses Metal.
-const PLATFORM_FLAGS = process.platform === "linux"
-    ? ["--enable-unsafe-webgpu", "--enable-features=Vulkan", "--use-angle=vulkan"]
-    : [];
 const WIDTH = 1280;
 const HEIGHT = 1600;
 // Uncaptured GPU errors arrive asynchronously, a few frames after the bad call.
@@ -47,7 +43,7 @@ const MIN_COLORS = 8;
 const FIRST_DRAW_WAIT_MS = 8000;
 
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
-const { cdp, close } = await launchChrome([`--window-size=${WIDTH},${HEIGHT}`, ...PLATFORM_FLAGS], output);
+const { cdp, close } = await launchChrome([`--window-size=${WIDTH},${HEIGHT}`, ...GPU_FLAGS], output);
 const results = [];
 
 async function distinctColors(file) {

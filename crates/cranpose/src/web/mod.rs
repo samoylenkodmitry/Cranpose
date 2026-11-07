@@ -23,6 +23,8 @@ pub(crate) mod device_loss;
 pub(crate) mod drop;
 #[cfg(target_arch = "wasm32")]
 pub(crate) mod event_loop;
+#[cfg(all(target_arch = "wasm32", cranpose_first_screen_glsl))]
+mod first_screen_glsl;
 pub(crate) mod floating_window;
 #[cfg(target_arch = "wasm32")]
 pub(crate) mod frame_host;
