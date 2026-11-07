@@ -14,21 +14,18 @@
 //! out, two animation frames in, and fetches the file where no adapter
 //! came. The page's own detection takes that answer, or asks then where no
 //! frame came yet, so a page asks for one adapter as before
-//! ([`auto_instance`]). The renderer never waits for the file. The snippet
-//! sits in `snippets/<crate>/`, two folders below the wasm's.
+//! ([`auto_instance`]). The renderer waits for a fetch the page started
+//! ([`take`]). The snippet sits in `snippets/<crate>/`, two folders below
+//! the wasm's.
 
 use wasm_bindgen::prelude::wasm_bindgen;
 
 #[wasm_bindgen(inline_js = r#"
 let file;
-let fetching = false;
 function fetchFile() {
-    if (fetching) return;
-    fetching = true;
-    fetch(new URL("../../first_screen_glsl.txt", import.meta.url))
+    file ??= fetch(new URL("../../first_screen_glsl.txt", import.meta.url))
         .then((response) => (response.ok ? response.arrayBuffer() : null))
-        .catch(() => null)
-        .then((fetched) => { file = fetched; });
+        .catch(() => null);
 }
 let adapter;
 export function firstScreenWebGpu() {
@@ -52,18 +49,27 @@ extern "C" {
     #[wasm_bindgen(js_name = firstScreenWebGpu)]
     fn webgpu_adapter() -> js_sys::Promise;
 
-    // The file once fetched, `null` where it did not load, `undefined` while
-    // the fetch runs or where the page did not start one.
+    // The fetch of the file, which ends in `null` where it did not load, or
+    // `undefined` where the page started none.
     #[wasm_bindgen(js_name = firstScreenGlsl)]
     fn fetched() -> wasm_bindgen::JsValue;
 }
 
-// Hands the renderer the page's first-screen GLSL where it came in.
-pub(super) fn take() {
-    let file = fetched();
-    if file.is_undefined() {
+// Hands the renderer the page's first-screen GLSL where the page fetches
+// it, once it came in: a page that fetched it always builds its first screen
+// from it, so Chrome's program cache, keyed by the GLSL, serves its next
+// start too. Taken only where the file came in by then, a Mate 20 X's
+// second start, whose wasm came from the cache sooner, compiled the
+// templates its first start had not: its first content came 450 ms later
+// in 3 of 6 pairs.
+pub(super) async fn take() {
+    let fetch = fetched();
+    if fetch.is_undefined() {
         return;
     }
+    let file = wasm_bindgen_futures::JsFuture::from(js_sys::Promise::from(fetch))
+        .await
+        .unwrap_or(wasm_bindgen::JsValue::NULL);
     if file.is_null() {
         log::warn!("[first-screen-glsl] first_screen_glsl.txt did not load");
         return;

@@ -119,7 +119,7 @@ impl PipelineDiscovery {
         self.install(renderer);
         if self.target.borrow().backend == wgpu::Backend::Gl {
             #[cfg(cranpose_first_screen_glsl)]
-            super::first_screen_glsl::take();
+            super::first_screen_glsl::take().await;
             renderer.build_first_screen_pipelines(
                 FIRST_SCREEN_PIPELINES,
                 self.target.borrow().surface_size,
