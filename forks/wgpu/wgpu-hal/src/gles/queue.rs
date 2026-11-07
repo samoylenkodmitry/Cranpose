@@ -114,10 +114,7 @@ impl super::Queue {
         sample_count: u32,
     ) {
         match view.inner {
-            super::TextureInner::Renderbuffer { raw, ref storage } => {
-                if let Some(storage) = storage {
-                    unsafe { storage.give(gl, raw) };
-                }
+            super::TextureInner::Renderbuffer { raw } => {
                 unsafe {
                     gl.framebuffer_renderbuffer(
                         fbo_target,

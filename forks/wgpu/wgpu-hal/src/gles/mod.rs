@@ -118,7 +118,7 @@ use alloc::{boxed::Box, string::String, string::ToString as _, sync::Arc, vec::V
 use core::{
     fmt,
     ops::Range,
-    sync::atomic::{AtomicBool, AtomicU32, AtomicU8, AtomicUsize, Ordering},
+    sync::atomic::{AtomicU32, AtomicU8, AtomicUsize},
 };
 use parking_lot::Mutex;
 
@@ -431,9 +431,6 @@ impl crate::DynBuffer for Buffer {}
 pub enum TextureInner {
     Renderbuffer {
         raw: glow::Renderbuffer,
-        /// The storage the first pass to attach `raw` gives it; none for a
-        /// renderbuffer that has its storage already, as a window's has.
-        storage: Option<Arc<RenderbufferStorage>>,
     },
     DefaultRenderbuffer,
     Texture {
@@ -456,54 +453,6 @@ pub enum TextureInner {
     ExternalNativeFramebuffer {
         inner: glow::NativeFramebuffer,
     },
-}
-
-/// A renderbuffer's storage, given when a pass first attaches it rather
-/// than when it is made (Cranpose fork). A depth buffer that only passes into
-/// a web canvas use, which take the canvas's own, then takes no memory.
-#[derive(Debug)]
-pub struct RenderbufferStorage {
-    samples: u32,
-    internal: u32,
-    width: i32,
-    height: i32,
-    given: AtomicBool,
-}
-
-impl RenderbufferStorage {
-    fn new(samples: u32, internal: u32, width: u32, height: u32) -> Self {
-        Self {
-            samples,
-            internal,
-            width: width as i32,
-            height: height as i32,
-            given: AtomicBool::new(false),
-        }
-    }
-
-    /// Gives `raw` its storage, once.
-    unsafe fn give(&self, gl: &glow::Context, raw: glow::Renderbuffer) {
-        if self.given.swap(true, Ordering::Relaxed) {
-            return;
-        }
-        unsafe { gl.bind_renderbuffer(glow::RENDERBUFFER, Some(raw)) };
-        if self.samples > 1 {
-            unsafe {
-                gl.renderbuffer_storage_multisample(
-                    glow::RENDERBUFFER,
-                    self.samples as i32,
-                    self.internal,
-                    self.width,
-                    self.height,
-                )
-            };
-        } else {
-            unsafe {
-                gl.renderbuffer_storage(glow::RENDERBUFFER, self.internal, self.width, self.height)
-            };
-        }
-        unsafe { gl.bind_renderbuffer(glow::RENDERBUFFER, None) };
-    }
 }
 
 #[cfg(send_sync)]
