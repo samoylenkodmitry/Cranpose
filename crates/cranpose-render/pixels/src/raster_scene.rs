@@ -638,6 +638,21 @@ impl RasterScene {
         true
     }
 
+    // Whether the rewrite in progress pushes next in place of the old
+    // record `at`.
+    #[inline]
+    pub(crate) fn pushes_in_place_at(&self, at: usize) -> bool {
+        self.rewrite
+            .as_deref()
+            .is_some_and(|rewrite| rewrite.pushes_next_at(at))
+    }
+
+    // Gives `head` back to the old record `at` it came from, whose node
+    // pushed over it in place.
+    pub(crate) fn return_head(&mut self, at: usize, head: KeptHead) {
+        self.subtrees[at].head = Some(head);
+    }
+
     // Makes the next record to open the root of a whole subtree, as
     // `Rewrite::begin_whole` does. Nothing without a rewrite.
     pub(crate) fn begin_whole(&mut self) {

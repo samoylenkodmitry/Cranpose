@@ -646,36 +646,90 @@ impl<'a> LayoutWalk<'a> {
             return false;
         };
         let index = scene.next_record();
-        match head.follow(self.applier, child, lower_context, (position, own_layer)) {
-            // A node drawn in its parent's layer has no children.
-            Some(KeptNodeRef::Inline(inline)) => {
-                populate_draws_from_graph(Subtree::Inline(inline), scene, context, &mut None, None);
-            }
-            Some(KeptNodeRef::Layer(layer, inner)) => {
-                let old = OldChildren::of(&scene.subtrees, at, child);
-                let pushes = match children {
-                    HeadChildren::Records => ChildPushes::Records(old),
-                    HeadChildren::Whole => {
-                        scene.begin_whole();
-                        ChildPushes::Whole(old)
-                    }
-                };
-                let mut slot = ChildSlot {
-                    walk: self,
-                    owner: child,
-                    children: &[],
-                    context: &inner,
-                    pushes,
-                };
-                let slot = old.holds_children(&scene.subtrees).then_some(&mut slot);
-                populate_draws_from_graph(Subtree::Layer(layer), scene, context, &mut None, slot);
-            }
-            None => {
-                head.recycle();
-                return false;
-            }
-        }
+        let Some(node) = head.follow(self.applier, child, lower_context, (position, own_layer))
+        else {
+            head.recycle();
+            return false;
+        };
+        self.push_followed((child, at), (node, children), (scene, context));
         scene.keep_head(index, head);
+        true
+    }
+
+    // Pushes under `context` the node of `child` that its head followed,
+    // over its old subtree at the record `at`: a node drawn in its parent's
+    // layer, which has no children, or a layer whose children push as
+    // `children` says. In line in both callers: each passes `children` as
+    // it knows it, and a call would cost each node pushed.
+    #[inline(always)]
+    fn push_followed(
+        &self,
+        (child, at): (NodeId, usize),
+        (node, children): (KeptNodeRef<'_>, HeadChildren),
+        (scene, context): (&mut RasterScene, &RasterTraversalContext<'_>),
+    ) {
+        let (layer, inner) = match node {
+            KeptNodeRef::Inline(inline) => {
+                return populate_draws_from_graph(
+                    Subtree::Inline(inline),
+                    scene,
+                    context,
+                    &mut None,
+                    None,
+                );
+            }
+            KeptNodeRef::Layer(layer, inner) => (layer, inner),
+        };
+        let old = OldChildren::of(&scene.subtrees, at, child);
+        let pushes = match children {
+            HeadChildren::Records => ChildPushes::Records(old),
+            HeadChildren::Whole => {
+                scene.begin_whole();
+                ChildPushes::Whole(old)
+            }
+            HeadChildren::InWhole => ChildPushes::Whole(old),
+        };
+        let mut slot = ChildSlot {
+            walk: self,
+            owner: child,
+            children: &[],
+            context: &inner,
+            pushes,
+        };
+        let slot = old.holds_children(&scene.subtrees).then_some(&mut slot);
+        populate_draws_from_graph(Subtree::Layer(layer), scene, context, &mut None, slot);
+    }
+
+    // Pushes under `context` the subtree of `child`, a child of a whole
+    // subtree, over its old subtree at the record `at`, from the head the
+    // record keeps: the child lies where it did and nothing at or beneath
+    // it changed. While the rewrite pushes in place at `at`, the head goes
+    // back to that record; else the child pushes as `push_head` pushes it.
+    // False, with nothing pushed, as for `push_head`.
+    pub(super) fn push_whole_head(
+        &self,
+        (child, at): (NodeId, usize),
+        lower_context: &LowerContext,
+        (scene, context): (&mut RasterScene, &RasterTraversalContext<'_>),
+    ) -> bool {
+        let in_whole = (None, OwnLayer::AsLowered, HeadChildren::InWhole);
+        if !scene.pushes_in_place_at(at) {
+            return self.push_head((child, at), in_whole, lower_context, (scene, context));
+        }
+        let Some(mut head) = scene.take_head(at) else {
+            return false;
+        };
+        let Some(node) = head.follow(
+            self.applier,
+            child,
+            lower_context,
+            (None, OwnLayer::AsLowered),
+        ) else {
+            head.recycle();
+            return false;
+        };
+        self.push_followed((child, at), (node, HeadChildren::InWhole), (scene, context));
+        scene.return_head(at, head);
         true
     }
 
@@ -831,4 +885,7 @@ pub(super) enum HeadChildren {
     Records,
     // Whole, each over its old places in its old order.
     Whole,
+    // Whole, as the children of a node inside a whole subtree, whose
+    // record opened in it.
+    InWhole,
 }

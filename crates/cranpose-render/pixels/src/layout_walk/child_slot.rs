@@ -1,11 +1,11 @@
 use cranpose_core::NodeId;
 use cranpose_render_common::{
     NodeUpdate,
-    scene_builder::{LowerContext, NodePlace, OwnLayer, kept_child_placement},
+    scene_builder::{LowerContext, NodePlace, kept_child_placement},
 };
 use cranpose_ui_graphics::Point;
 
-use super::{HeadChange, HeadChildren, LayoutWalk, OldChildren, decode};
+use super::{HeadChange, LayoutWalk, OldChildren, decode};
 use crate::{
     pipeline::{RasterTraversalContext, Reuse},
     raster_scene::RasterScene,
@@ -230,7 +230,6 @@ impl ChildSlot<'_> {
         context: &RasterTraversalContext<'_>,
     ) {
         let walk = self.walk;
-        let whole = (None, OwnLayer::AsLowered, HeadChildren::Whole);
         let mut at = old.cursor;
         while at < old.end {
             let record = &scene.subtrees[at];
@@ -238,7 +237,7 @@ impl ChildSlot<'_> {
                 break;
             };
             let next = record.end;
-            if !walk.push_head((child, at), whole, self.context, (scene, context)) {
+            if !walk.push_whole_head((child, at), self.context, (scene, context)) {
                 walk.push(
                     (child, NodePlace::Child),
                     self.context,
