@@ -94,5 +94,5 @@ limit = 1000
 "crates/cranpose/src/native_window.rs" = 1052
 "crates/cranpose/src/robot.rs" = 1905
 "crates/cranpose/src/web/accessibility.rs" = 1256
-"crates/cranpose/src/web/event_loop.rs" = 1103
+"crates/cranpose/src/web/event_loop.rs" = 1101
 "xtask/src/main.rs" = 3777
