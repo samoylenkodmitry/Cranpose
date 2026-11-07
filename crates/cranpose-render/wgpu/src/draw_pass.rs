@@ -35,12 +35,14 @@ use op_items::{OpItems, Texts, merge_items, segment_viewport_rect};
 mod op_bounds;
 pub(crate) use op_bounds::{op_draw_bounds, op_is_visible_in_rect};
 mod interiors_first;
+mod mixed_turns;
 mod pass_buffers;
 mod pass_scratch;
 mod segment_run;
 mod target_space;
 pub(crate) use interiors_first::lays_interiors_first;
 use interiors_first::takes_depth;
+use mixed_turns::turns_mixed;
 use pass_buffers::PassBuffers;
 pub(crate) use pass_scratch::PassScratch;
 use segment_run::{ArenaClip, SegmentBinding, SegmentRun};
@@ -728,22 +730,6 @@ pub(crate) struct RunCalls<'a> {
     pub(crate) meshes: Option<(crate::mesh_fallback::RunMeshes<'a>, PassDepth)>,
 }
 
-/// Changes between flat and turned segments a pass takes before its shapes
-/// draw with the pipeline that tells them apart per record: below it, a draw
-/// per change costs less than the flag test every fragment pays there.
-const MIXED_TURN_CHANGES: usize = 8;
-
-/// Whether the flat and turned segments of a pass alternate at least
-/// `MIXED_TURN_CHANGES` times, as a grid of cells tilted by turns does when
-/// some cells are not tilted.
-fn turns_mixed(segments: &[PassSegment<'_>]) -> bool {
-    segments
-        .windows(2)
-        .filter(|pair| pair[0].transform.is_identity() != pair[1].transform.is_identity())
-        .count()
-        >= MIXED_TURN_CHANGES
-}
-
 /// The commands a pass's batches draw ranges of.
 #[derive(Clone, Copy)]
 struct PassCmds<'a> {
@@ -821,6 +807,7 @@ struct PassPrep<'a, 's, C> {
     /// its binding's, or the slot of a member whose run may reach past it.
     /// A run that takes another closes the chunk first.
     chunk_scissor: Option<TargetRect>,
+    clip_scissor: crate::render::clip_scissor::Last,
 }
 
 impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
@@ -853,6 +840,7 @@ impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
             chunk_slot: None,
             chunk_clip: None,
             chunk_scissor: None,
+            clip_scissor: Default::default(),
         }
     }
 
@@ -1390,8 +1378,10 @@ impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
     /// cannot. A member's rect clip goes to the shader instead, so the clips
     /// of members leave their records one batch, and a member's run that
     /// may reach past its slot takes a chunk scissored to the slot.
-    fn arena_clip(&self, draw: &RunDraw, bounds: Rect, run: &SegmentRun<'s, '_>) -> ArenaClip {
-        let clip = crate::render::clip_scissor(&draw.placement, run.segment.scale, run.viewport);
+    fn arena_clip(&mut self, draw: &RunDraw, bounds: Rect, run: &SegmentRun<'s, '_>) -> ArenaClip {
+        let clip = self
+            .clip_scissor
+            .arena(&draw.placement, run.segment.scale, &run.viewport);
         let Some(slot) = run.slot else {
             return ArenaClip {
                 paint: clip,
@@ -1443,7 +1433,7 @@ impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
                 let batch = renderer.prepare_store_run(
                     self.recorder,
                     draw,
-                    space,
+                    (space, &mut self.clip_scissor),
                     &window,
                     (self.depth, self.depth_keys.as_mut()),
                     (&mut self.arena_draws, &mut self.pipelines),

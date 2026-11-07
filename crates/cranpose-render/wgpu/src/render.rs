@@ -2914,7 +2914,7 @@ impl GpuRenderer {
         &mut self,
         recorder: &mut C,
         run: &RunDraw,
-        space: DrawSpace,
+        (space, clip_scissors): (DrawSpace, &mut clip_scissor::Last),
         window: &std::ops::Range<u32>,
         (depth, mut depth_keys): (PassDepth, Option<&mut PipelineDemand>),
         (draws, pipelines): (&mut Vec<RunDrawCall>, &mut PipelineDemand),
@@ -2923,7 +2923,7 @@ impl GpuRenderer {
         let placement = &run.placement;
         let ablation = self.ablation.shape;
         let turns = ShapeTurns::of(viewport.transform, false);
-        let scissor = clip_scissor(placement, root_scale, viewport);
+        let scissor = clip_scissors.stored(placement, root_scale, &viewport);
         let clip = SegmentClip::of(placement, scissor.is_some());
         let start = draws.len();
         self.run_store.stored_run_draws(
@@ -3589,7 +3589,6 @@ pub(crate) mod clip_scissor;
 mod glyph_draws;
 mod pipeline_builds;
 mod stage_telemetry;
-pub(crate) use clip_scissor::clip_scissor;
 pub(crate) use glyph_draws::{
     GlyphDrawCmd, GlyphInstance, GlyphInstances, TurnedGlyphs, defer_retained_glyph_runs,
     group_glyph_kinds,
