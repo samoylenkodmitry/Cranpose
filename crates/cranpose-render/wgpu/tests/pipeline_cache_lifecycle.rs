@@ -2,11 +2,7 @@ use std::{
     ffi::{OsStr, OsString},
     fs,
     path::{Path, PathBuf},
-    sync::{
-        OnceLock,
-        atomic::{AtomicBool, AtomicU64, Ordering},
-    },
-    thread::ThreadId,
+    sync::atomic::{AtomicBool, AtomicU64, Ordering},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -741,13 +737,15 @@ fn a_relaunch_draws_cached_glass_with_its_own_pipelines() {
     );
 }
 
-static DRAW_THREAD: OnceLock<ThreadId> = OnceLock::new();
-static DELAYED_ON_DRAW: AtomicBool = AtomicBool::new(false);
+static BLUR_DELAYED: AtomicBool = AtomicBool::new(false);
 static PIPELINES_AFTER_DELAY: AtomicU64 = AtomicU64::new(0);
 
-struct DemandCompileDelay;
+// Holds the thread that built the first blur pipeline for 2.1 s, past the
+// first-screen window, before the pipeline lands, and counts the pipelines
+// built after it.
+struct SlowBlurCompile;
 
-impl log::Log for DemandCompileDelay {
+impl log::Log for SlowBlurCompile {
     fn enabled(&self, metadata: &log::Metadata) -> bool {
         metadata.level() <= log::Level::Debug
             && metadata.target().starts_with("cranpose_render_wgpu")
@@ -758,21 +756,16 @@ impl log::Log for DemandCompileDelay {
             return;
         }
         let message = record.args().to_string();
-        let pipeline_log =
-            message.starts_with("[gpu-pipeline]") || message.starts_with("[pipeline-create]");
-        let on_draw_thread = DRAW_THREAD
-            .get()
-            .is_some_and(|draw_thread| *draw_thread == std::thread::current().id());
-        if !pipeline_log || !on_draw_thread {
+        if !message.starts_with("[gpu-pipeline]") && !message.starts_with("[pipeline-create]") {
             return;
         }
-        if DELAYED_ON_DRAW.load(Ordering::Acquire) {
+        if BLUR_DELAYED.load(Ordering::Acquire) {
             PIPELINES_AFTER_DELAY.fetch_add(1, Ordering::Relaxed);
             return;
         }
         if !message.starts_with("[gpu-pipeline]")
             || !message.contains("effect/blur")
-            || DELAYED_ON_DRAW.swap(true, Ordering::AcqRel)
+            || BLUR_DELAYED.swap(true, Ordering::AcqRel)
         {
             return;
         }
@@ -782,19 +775,19 @@ impl log::Log for DemandCompileDelay {
     fn flush(&self) {}
 }
 
-static DEMAND_COMPILE_DELAY: DemandCompileDelay = DemandCompileDelay;
+static SLOW_BLUR_COMPILE: SlowBlurCompile = SlowBlurCompile;
 
+// A first screen whose blur compiled slowly, past the first-screen window,
+// still records the pipelines it drew with after the blur landed: the next
+// launch builds them before its first scene and draws the same pixels.
 #[test]
-fn a_demand_compile_wait_keeps_later_first_screen_pipelines() {
-    const PHASE: &str = "CRANPOSE_CACHE_DEMAND_WAIT_PHASE";
-    const PIXELS: &str = "CRANPOSE_CACHE_DEMAND_WAIT_PIXELS";
+fn a_slow_first_screen_compile_keeps_the_pipelines_built_after_it() {
+    const PHASE: &str = "CRANPOSE_CACHE_SLOW_COMPILE_PHASE";
+    const PIXELS: &str = "CRANPOSE_CACHE_SLOW_COMPILE_PIXELS";
 
     if let Ok(phase) = std::env::var(PHASE) {
         if phase == "first" {
-            DRAW_THREAD
-                .set(std::thread::current().id())
-                .expect("record the draw thread before installing the logger");
-            log::set_logger(&DEMAND_COMPILE_DELAY).expect("install the demand-delay logger");
+            log::set_logger(&SLOW_BLUR_COMPILE).expect("install the slow-compile logger");
             log::set_max_level(log::LevelFilter::Debug);
         }
         let _lock = support::gpu_test_lock();
@@ -814,14 +807,28 @@ fn a_demand_compile_wait_keeps_later_first_screen_pipelines() {
 
         match phase.as_str() {
             "first" => {
-                let frame = capture_frosted_page(&mut renderer);
+                use support::glass_page::{FRAME_HEIGHT, FRAME_WIDTH};
+                let frame = support::capture_graph_settled(
+                    &mut renderer,
+                    &frosted_page(),
+                    FRAME_WIDTH,
+                    FRAME_HEIGHT,
+                );
+                assert!(
+                    renderer
+                        .last_frame_stats()
+                        .expect("frosted frame statistics")
+                        .blur_passes
+                        > 0,
+                    "the settled pane must blur"
+                );
                 assert!(
                     frame.pixels.iter().any(|pixel| *pixel != 0),
                     "the frosted first screen must produce visible pixels"
                 );
                 assert!(
-                    DELAYED_ON_DRAW.load(Ordering::Acquire),
-                    "the fixed pipeline delay did not run on the draw thread"
+                    BLUR_DELAYED.load(Ordering::Acquire),
+                    "the blur pipeline was never built"
                 );
                 assert!(
                     PIPELINES_AFTER_DELAY.load(Ordering::Acquire) > 0,
@@ -857,7 +864,7 @@ fn a_demand_compile_wait_keeps_later_first_screen_pipelines() {
     let pixels = cache.with_extension("first-screen.rgba");
     for phase in ["first", "reopened"] {
         let output = cache_process(
-            "pipeline_cache_lifecycle::a_demand_compile_wait_keeps_later_first_screen_pipelines",
+            "pipeline_cache_lifecycle::a_slow_first_screen_compile_keeps_the_pipelines_built_after_it",
             &cache,
             &[(PHASE, OsStr::new(phase)), (PIXELS, pixels.as_os_str())],
         );
