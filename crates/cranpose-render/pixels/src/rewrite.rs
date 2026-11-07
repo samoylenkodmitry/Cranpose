@@ -12,6 +12,8 @@
 //! holds anything, and a child that comes or goes spills no more than its
 //! own subtree.
 
+use std::ops::Range;
+
 use cranpose_render_common::graph::LayerNode;
 
 use crate::{
@@ -629,15 +631,20 @@ impl Rewrite {
             self.reach.splice(from.items.order..to.items.order, spilled);
         }
         splice_items(scene, (from.items, to.items), &mut self.spill);
-        let removed_records = scene
-            .subtrees
-            .splice(from.records..to.records, self.spill.subtrees.drain(..));
-        for head in removed_records.filter_map(|record| record.head) {
-            head.recycle();
+        for record in &mut scene.subtrees[from.records..to.records] {
+            if let Some(head) = record.head.take() {
+                head.recycle();
+            }
         }
-        scene.passed_down.splice(
+        splice_from(
+            &mut scene.subtrees,
+            from.records..to.records,
+            &mut self.spill.subtrees,
+        );
+        splice_from(
+            &mut scene.passed_down,
             from.passed_down..to.passed_down,
-            self.spill.passed_down.drain(..),
+            &mut self.spill.passed_down,
         );
         let shift = |index: usize, (removed, added): (usize, usize)| index - removed + added;
         let record = self.record;
@@ -743,26 +750,48 @@ fn splice_items(
     from: &mut RasterScene,
 ) {
     let (removed, added) = (old_stop.since(to), from.counts());
-    scene
-        .shapes
-        .splice(to.shapes..old_stop.shapes, from.shapes.drain(..));
-    scene
-        .images
-        .splice(to.images..old_stop.images, from.images.drain(..));
-    scene
-        .texts
-        .splice(to.texts..old_stop.texts, from.texts.drain(..));
-    scene
-        .shadows
-        .splice(to.shadows..old_stop.shadows, from.shadows.drain(..));
-    scene.order.splice(
-        to.order..old_stop.order,
-        from.order
-            .drain(..)
-            .map(|item| item.moved(ItemCounts::default(), to)),
+    splice_from(
+        &mut scene.shapes,
+        to.shapes..old_stop.shapes,
+        &mut from.shapes,
     );
+    splice_from(
+        &mut scene.images,
+        to.images..old_stop.images,
+        &mut from.images,
+    );
+    splice_from(&mut scene.texts, to.texts..old_stop.texts, &mut from.texts);
+    splice_from(
+        &mut scene.shadows,
+        to.shadows..old_stop.shadows,
+        &mut from.shadows,
+    );
+    for item in &mut from.order {
+        *item = item.moved(ItemCounts::default(), to);
+    }
+    splice_from(&mut scene.order, to.order..old_stop.order, &mut from.order);
     // The items after the run lie after its items in each list.
     for item in &mut scene.order[to.order + added.order..] {
         *item = item.moved(removed, added);
     }
+}
+
+// Puts the items of `from` in place of the run `run` of `list`, in their
+// order, and empties `from`; the run's items drop. The items that fit swap
+// into the run, then the rest of the run goes, or the rest of `from` comes
+// in after the run. Out of line: a rewrite splices each list with it, and
+// `Vec::splice` would put a copy of its larger code in each place.
+#[inline(never)]
+fn splice_from<T>(list: &mut Vec<T>, run: Range<usize>, from: &mut Vec<T>) {
+    let swapped = run.len().min(from.len());
+    let rest = run.start + swapped;
+    list[run.start..rest].swap_with_slice(&mut from[..swapped]);
+    if from.len() > swapped {
+        let (end, more) = (list.len(), from.len() - swapped);
+        list.extend(from.drain(swapped..));
+        list[run.end..end + more].rotate_right(more);
+    } else {
+        list.drain(rest..run.end);
+    }
+    from.clear();
 }
