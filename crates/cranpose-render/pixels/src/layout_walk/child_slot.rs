@@ -140,6 +140,12 @@ impl ChildSlot<'_> {
                     &mut None,
                     None,
                 );
+                // A gap that closed while the child pushed moved the old
+                // records the cursor holds.
+                let (old, moved) = &mut cursor;
+                let now = scene.records_moved();
+                old.follow((*moved, now));
+                *moved = now;
                 continue;
             };
             self.push_found(
@@ -231,13 +237,14 @@ impl ChildSlot<'_> {
     ) {
         let walk = self.walk;
         let whole = (None, OwnLayer::AsLowered, HeadChildren::Whole);
+        let (mut old, mut moved) = (old, scene.records_moved());
         let mut at = old.cursor;
         while at < old.end {
             let record = &scene.subtrees[at];
             let Some(child) = record.node() else {
                 break;
             };
-            let next = record.end;
+            old.cursor = record.end;
             if !walk.push_head((child, at), whole, self.context, (scene, context)) {
                 walk.push(
                     (child, NodePlace::Child),
@@ -247,7 +254,12 @@ impl ChildSlot<'_> {
                     None,
                 );
             }
-            at = next;
+            // A gap that closed while the child pushed moved the old
+            // records after it.
+            let now = scene.records_moved();
+            old.follow((moved, now));
+            moved = now;
+            at = old.cursor;
         }
     }
 

@@ -514,6 +514,13 @@ impl RasterScene {
     pub(crate) fn open_subtree(&mut self, subtree: Subtree<'_>) -> OpenRecord {
         let hits = subtree.hit_layer();
         self.hits_changed |= hits.is_some();
+        if let Some(mut rewrite) = self.rewrite.take_if(|rewrite| rewrite.displaced()) {
+            let record = rewrite.place_record_across(self, (subtree, hits));
+            self.rewrite = Some(rewrite);
+            if let Some(record) = record {
+                return record;
+            }
+        }
         if let Some(rewrite) = self.rewrite.as_deref_mut() {
             return rewrite.place_record(&mut self.subtrees, (subtree, hits));
         }
@@ -529,8 +536,21 @@ impl RasterScene {
     pub(crate) fn note_passed_down(
         &mut self,
         index: usize,
-        passed_down: PassedDown,
+        mut passed_down: PassedDown,
     ) -> Option<bool> {
+        if let Some(mut rewrite) = self.rewrite.take_if(|rewrite| rewrite.displaced()) {
+            let placed = rewrite.place_passed_down_across(self, passed_down);
+            self.rewrite = Some(rewrite);
+            match placed {
+                Ok((at, same)) => {
+                    if let Some(record) = self.record_mut(index) {
+                        record.passed_down = Some(at);
+                    }
+                    return Some(same);
+                }
+                Err(entry) => passed_down = entry,
+            }
+        }
         let (at, same) = match self.rewrite.as_deref_mut() {
             Some(rewrite) => {
                 let (at, same) = rewrite.place_passed_down(&mut self.passed_down, passed_down);
@@ -589,6 +609,7 @@ impl RasterScene {
 
     // How many records the splices of the rewrite in progress added, less
     // those they removed; none without one.
+    #[inline]
     pub(crate) fn records_moved(&self) -> isize {
         self.rewrite.as_deref().map_or(0, Rewrite::records_moved)
     }

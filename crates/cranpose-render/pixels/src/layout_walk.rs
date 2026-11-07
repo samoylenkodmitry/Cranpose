@@ -219,6 +219,13 @@ impl OldChildren {
         self.end = self.end.saturating_add_signed(now - moved);
     }
 
+    // Moves the cursor and the end with the old records, which the splices
+    // since the cursor was read moved `now - moved` places on.
+    pub(crate) fn follow(&mut self, (moved, now): (isize, isize)) {
+        self.cursor = self.cursor.saturating_add_signed(now - moved);
+        self.end = self.end.saturating_add_signed(now - moved);
+    }
+
     // Whether a child subtree's record lies at the cursor: past the last
     // child lie only the node's own draws.
     pub(crate) fn holds_children(self, records: &[SubtreeItems]) -> bool {
