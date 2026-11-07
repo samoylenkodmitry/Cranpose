@@ -37,7 +37,7 @@ impl<T> LazyGpuResource<T> {
         self.value.get_or_init(|| {
             let started = Instant::now();
             let value = create();
-            log::info!(
+            log::debug!(
                 "[gpu-pipeline] {:?} {} ready in {:.1} ms",
                 backend,
                 self.label,

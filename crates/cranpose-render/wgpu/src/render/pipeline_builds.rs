@@ -15,7 +15,7 @@ pub(crate) fn create_render_pipeline_logged<'a>(
 pub(crate) fn build_pipeline_logged<T>(tag: &str, build: impl FnOnce() -> T) -> T {
     let started = Instant::now();
     let pipeline = build();
-    log::info!(
+    log::debug!(
         "[pipeline-create] {tag} {:.1}ms on {}",
         instant_ms(started, Instant::now()),
         std::thread::current().name().unwrap_or("unnamed thread"),

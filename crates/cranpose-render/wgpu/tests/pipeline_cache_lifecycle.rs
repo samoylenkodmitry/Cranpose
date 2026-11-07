@@ -749,7 +749,8 @@ struct DemandCompileDelay;
 
 impl log::Log for DemandCompileDelay {
     fn enabled(&self, metadata: &log::Metadata) -> bool {
-        metadata.level() <= log::Level::Info
+        metadata.level() <= log::Level::Debug
+            && metadata.target().starts_with("cranpose_render_wgpu")
     }
 
     fn log(&self, record: &log::Record) {
@@ -794,7 +795,7 @@ fn a_demand_compile_wait_keeps_later_first_screen_pipelines() {
                 .set(std::thread::current().id())
                 .expect("record the draw thread before installing the logger");
             log::set_logger(&DEMAND_COMPILE_DELAY).expect("install the demand-delay logger");
-            log::set_max_level(log::LevelFilter::Info);
+            log::set_max_level(log::LevelFilter::Debug);
         }
         let _lock = support::gpu_test_lock();
         let cache = PathBuf::from(std::env::var_os(CACHE_FILE).expect("cache file"));
