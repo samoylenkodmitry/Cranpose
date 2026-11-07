@@ -12,6 +12,7 @@ use crate::{
         CachePolicy, DrawCommandId, DrawRunNode, IsolationReasons, PrimitivePhase, RenderNode,
     },
     style_shared::recording_for_placement_reusing,
+    thread_state::RenderThreadState,
 };
 
 pub(crate) struct RecorderSlot {
@@ -41,6 +42,7 @@ pub fn clear_command_recordings_for_tests() {
 
 pub(super) fn bump_recording_generation() {
     crate::thread_state::with(|state| {
+        state.command_store.set(Some(&OwnRecordings));
         let generation = state.recording_generation.get().wrapping_add(1);
         state.recording_generation.set(generation);
         if generation.is_multiple_of(512) {
@@ -56,52 +58,90 @@ pub(super) fn bump_recording_generation() {
 /// the command again in place: first one whose shape columns no reader
 /// shares either, then the oldest of three, whose recording takes new
 /// columns with the room the old ones had. A new one when none is free.
-pub(super) fn acquire_storage(id: DrawCommandId) -> Rc<CommandRecording> {
-    crate::thread_state::with(|state| {
-        let mut map = state.command_recordings.borrow_mut();
-        let Some(slot) = map.get_mut(&RecorderKey::from(id)) else {
-            return Rc::default();
-        };
-        let free = |handle: &Option<Rc<CommandRecording>>| {
-            handle.as_ref().is_some_and(|recording| {
-                Rc::strong_count(recording) == 1 && Rc::weak_count(recording) == 0
-            })
-        };
-        let unshared = slot.handles.iter().position(|handle| {
-            free(handle)
-                && handle
-                    .as_ref()
-                    .is_some_and(|recording| !recording.shares_shapes())
-        });
-        let at = unshared.or_else(|| {
-            (slot.handles.iter().all(Option::is_some) && free(&slot.handles[2])).then_some(2)
-        });
-        at.and_then(|at| slot.handles[at].take())
-            .unwrap_or_default()
-    })
+fn acquire_storage(state: &RenderThreadState, id: DrawCommandId) -> Rc<CommandRecording> {
+    let mut map = state.command_recordings.borrow_mut();
+    let Some(slot) = map.get_mut(&RecorderKey::from(id)) else {
+        return Rc::default();
+    };
+    let free = |handle: &Option<Rc<CommandRecording>>| {
+        handle.as_ref().is_some_and(|recording| {
+            Rc::strong_count(recording) == 1 && Rc::weak_count(recording) == 0
+        })
+    };
+    let unshared = slot.handles.iter().position(|handle| {
+        free(handle)
+            && handle
+                .as_ref()
+                .is_some_and(|recording| !recording.shares_shapes())
+    });
+    let at = unshared.or_else(|| {
+        (slot.handles.iter().all(Option::is_some) && free(&slot.handles[2])).then_some(2)
+    });
+    at.and_then(|at| slot.handles[at].take())
+        .unwrap_or_default()
 }
 
 /// Keeps `recording`, the command `id` drew this frame, as the newest of
 /// the command's three, and hands it back for the frame's scene.
-pub(super) fn publish_recording(
+fn publish_recording(
+    state: &RenderThreadState,
     id: DrawCommandId,
     recording: Rc<CommandRecording>,
 ) -> Rc<CommandRecording> {
-    crate::thread_state::with(|state| {
-        let mut map = state.command_recordings.borrow_mut();
-        let generation = state.recording_generation.get();
-        let slot = map
-            .entry(RecorderKey::from(id))
-            .or_insert_with(|| RecorderSlot {
-                generation,
-                handles: [None, None, None],
-            });
-        slot.generation = generation;
-        slot.handles[2] = slot.handles[1].take();
-        slot.handles[1] = slot.handles[0].take();
-        slot.handles[0] = Some(Rc::clone(&recording));
-        recording
-    })
+    let mut map = state.command_recordings.borrow_mut();
+    let generation = state.recording_generation.get();
+    let slot = map
+        .entry(RecorderKey::from(id))
+        .or_insert_with(|| RecorderSlot {
+            generation,
+            handles: [None, None, None],
+        });
+    slot.generation = generation;
+    slot.handles[2] = slot.handles[1].take();
+    slot.handles[1] = slot.handles[0].take();
+    slot.handles[0] = Some(Rc::clone(&recording));
+    recording
+}
+
+// The buffers of `RecordingStore::Command`, behind a trait object that a
+// graph's build or update installs in the thread's state as it begins,
+// through `bump_recording_generation`: a renderer that builds no graph
+// links none of their code.
+pub(crate) trait CommandStore {
+    // A recording for the command `id` to record into.
+    fn acquire(&self, state: &RenderThreadState, id: DrawCommandId) -> Rc<CommandRecording>;
+
+    // What the scene holds of `recording`, which the command `id` made.
+    fn publish(
+        &self,
+        state: &RenderThreadState,
+        id: DrawCommandId,
+        recording: Rc<CommandRecording>,
+    ) -> Rc<CommandRecording>;
+}
+
+struct OwnRecordings;
+
+impl CommandStore for OwnRecordings {
+    fn acquire(&self, state: &RenderThreadState, id: DrawCommandId) -> Rc<CommandRecording> {
+        acquire_storage(state, id)
+    }
+
+    fn publish(
+        &self,
+        state: &RenderThreadState,
+        id: DrawCommandId,
+        recording: Rc<CommandRecording>,
+    ) -> Rc<CommandRecording> {
+        publish_recording(state, id, recording)
+    }
+}
+
+fn command_store(state: &RenderThreadState) -> &'static dyn CommandStore {
+    state
+        .command_store
+        .get()
+        .expect("a graph's build or update installs the command store before it lowers")
 }
 
 /// Where the recordings of a node's draw commands keep their buffers for
@@ -387,7 +427,9 @@ pub(super) fn append_draw_nodes(
             let store = draws.store;
             let Some((recording, segments)) =
                 recording_for_placement_reusing(command, placement, size, || match store {
-                    RecordingStore::Command => acquire_storage(id),
+                    RecordingStore::Command => {
+                        crate::thread_state::with(|state| command_store(state).acquire(state, id))
+                    }
                     RecordingStore::Redrawn => {
                         crate::thread_state::with(|state| state.redrawn.borrow_mut().acquire(id))
                     }
@@ -396,7 +438,12 @@ pub(super) fn append_draw_nodes(
                 continue;
             };
             match store {
-                RecordingStore::Command => (publish_recording(id, recording), segments),
+                RecordingStore::Command => (
+                    crate::thread_state::with(|state| {
+                        command_store(state).publish(state, id, recording)
+                    }),
+                    segments,
+                ),
                 RecordingStore::Redrawn => (recording, segments),
             }
         };

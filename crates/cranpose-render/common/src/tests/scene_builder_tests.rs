@@ -324,6 +324,7 @@ fn build_layer_node_for_test(
     snapshot: BuildNodeSnapshot,
     inherited_motion_context_animated: bool,
 ) -> LayerNode {
+    bump_recording_generation();
     let app_context = cranpose_ui::AppContext::new();
     app_context.enter(|| {
         let mut layer = LayerNode::default();
@@ -2439,6 +2440,7 @@ fn update_graph_from_applier_reports_hit_dirty_for_moved_clickable_layer() {
 
 #[test]
 fn appending_empty_draw_commands_preserves_existing_nodes_and_command_identity() {
+    bump_recording_generation();
     let empty: cranpose_ui::DrawCommandFn = Rc::new(|_: &mut DrawScopeDefault| {});
     let commands = [
         DrawCommand::Behind(Rc::clone(&empty)),

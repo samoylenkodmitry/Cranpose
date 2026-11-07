@@ -14,11 +14,11 @@ mod dirty_walk;
 pub(crate) use dirty_walk::{DirtyAncestry, RetainedPath};
 use dirty_walk::{update_along_retained_path, walk_dirty_layers};
 mod draw_recording;
+pub(crate) use draw_recording::{CommandStore, RecorderKey, RecorderSlot};
 use draw_recording::{
     DrawPass, DrawTarget, append_draw_nodes, bump_recording_generation, draw_nodes,
     layer_node_capacity,
 };
-pub(crate) use draw_recording::{RecorderKey, RecorderSlot};
 pub use draw_recording::{
     RecordingStore, clear_command_recordings_for_tests, draw_command_nodes_for_tests,
 };

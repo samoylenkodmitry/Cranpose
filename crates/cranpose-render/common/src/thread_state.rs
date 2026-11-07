@@ -7,7 +7,7 @@ use crate::{
     NodeUpdate,
     layer_recycling::Pool,
     scene_builder::{
-        HitGraphState, RecorderKey, RecorderSlot, RedrawnRecordings, TranslateScratch,
+        CommandStore, HitGraphState, RecorderKey, RecorderSlot, RedrawnRecordings, TranslateScratch,
     },
 };
 
@@ -22,6 +22,9 @@ pub(crate) struct RenderThreadState {
     pub(crate) dirty_node_scratch: Cell<Option<NodeMap<cranpose_core::NodeId, NodeUpdate>>>,
     pub(crate) command_recordings: RefCell<FxHashMap<RecorderKey, RecorderSlot>>,
     pub(crate) recording_generation: Cell<u64>,
+    // The buffers of `RecordingStore::Command`, which a graph's build or
+    // update installs as it begins.
+    pub(crate) command_store: Cell<Option<&'static dyn CommandStore>>,
     pub(crate) redrawn: RefCell<RedrawnRecordings>,
     /// Whether a scene update or build changed a layer in 3D since the
     /// window's scenes last published where their layers show and their
@@ -40,6 +43,7 @@ impl RenderThreadState {
             dirty_node_scratch: Cell::new(None),
             command_recordings: RefCell::new(FxHashMap::default()),
             recording_generation: Cell::new(0),
+            command_store: Cell::new(None),
             redrawn: RefCell::new(RedrawnRecordings::default()),
             space_changed: Cell::new(false),
             #[cfg(test)]
