@@ -28,6 +28,7 @@ members = [
     "crates/cranpose-render/pixels",
     "crates/cranpose-render/wgpu",
     "crates/cranpose-render/gl-templates",
+    "crates/cranpose-render/shader-passes",
     "apps/desktop-demo",
     "apps/desktop-demo-platform",
     "crates/cranpose-audio",
@@ -107,6 +108,7 @@ cranpose-render-common = { path = "crates/cranpose-render/common", version = "0.
 cranpose-render-pixels = { path = "crates/cranpose-render/pixels", version = "0.20.0" }
 cranpose-render-wgpu = { path = "crates/cranpose-render/wgpu", version = "0.20.0" }
 cranpose-gl-templates = { path = "crates/cranpose-render/gl-templates", version = "0.20.0" }
+cranpose-shader-passes = { path = "crates/cranpose-render/shader-passes", version = "0.20.0" }
 cranpose-runtime-std = { path = "crates/cranpose-runtime-std", version = "0.20.0" }
 cranpose-services = { path = "crates/cranpose-services", version = "0.20.0", default-features = false }
 cranpose-storekit = { path = "crates/cranpose-storekit", version = "0.20.0", default-features = false }

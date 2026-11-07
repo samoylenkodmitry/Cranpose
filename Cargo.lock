@@ -1581,6 +1581,7 @@ dependencies = [
  "cranpose-liquid",
  "cranpose-macros",
  "cranpose-render-common",
+ "cranpose-shader-passes",
  "cranpose-text",
  "cranpose-ui",
  "cranpose-ui-graphics",
@@ -1635,6 +1636,13 @@ dependencies = [
  "web-time",
  "webbrowser",
  "webpki-root-certs",
+]
+
+[[package]]
+name = "cranpose-shader-passes"
+version = "0.20.0"
+dependencies = [
+ "naga",
 ]
 
 [[package]]
