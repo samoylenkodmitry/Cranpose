@@ -22,8 +22,10 @@ use crate::{
 
 mod hit_layer;
 mod item_counts;
+mod passed_down;
 pub(crate) use hit_layer::HitLayer;
 pub(crate) use item_counts::{ItemCounts, PackedCounts, as_u32};
+pub(crate) use passed_down::PassedDown;
 
 #[derive(Clone, Debug)]
 pub(crate) struct DrawShape {
@@ -217,32 +219,6 @@ pub(crate) struct SubtreeExtent {
     pub records: usize,
     pub items: ItemCounts,
     pub passed_down: usize,
-}
-
-/// What a layer passes down to the walks of its child layers.
-#[derive(Clone, PartialEq)]
-pub(crate) struct PassedDown {
-    pub transform: ProjectiveTransform,
-    pub alpha: f32,
-    pub color_filter: Option<ColorFilter>,
-    pub clip: Option<Rect>,
-    pub snap_anchor: Option<Point>,
-    pub translated: bool,
-}
-
-impl PassedDown {
-    // What a window's root passes down at `scale`: its map to device pixels,
-    // and no style, clip or snap anchor.
-    pub(crate) fn root(scale: f32) -> Self {
-        Self {
-            transform: ProjectiveTransform::uniform_scale(scale),
-            alpha: 1.0,
-            color_filter: None,
-            clip: None,
-            snap_anchor: None,
-            translated: false,
-        }
-    }
 }
 
 // A node of the graph a scene keeps a record of: a layer with its subtree,
