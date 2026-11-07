@@ -2,45 +2,45 @@
 //! which a build with first-screen records fetches from beside its wasm
 //! (`first_screen_glsl.txt`, see `cranpose_render_wgpu::use_first_screen_glsl`).
 //!
-//! The fetch starts as the browser loads the wasm-bindgen glue, which
-//! imports this snippet before it fetches the wasm, so the file comes in
-//! beside the far larger wasm and is there when the renderer starts. A file
-//! that has not come in by then is left out, so the page never waits for
-//! it. A page that will draw on WebGPU leaves it alone: one asked for WebGPU
-//! in its query (`backend_preference`), or one whose browser gives it a
-//! WebGPU adapter, which the page then draws with ([`auto_instance`]).
-//! Chrome on a Mate 20 X (Android 10) has `navigator.gpu` but no adapter.
-//! The snippet sits in `snippets/<crate>/`, two folders below the wasm's.
+//! A page that will draw on WebGL starts the fetch as the browser loads the
+//! wasm-bindgen glue, which imports this snippet before it fetches the
+//! wasm, so the file comes in beside the far larger wasm: one asked for
+//! WebGL in its query (`backend_preference`), or one whose browser has no
+//! `navigator.gpu`. Where the browser has `navigator.gpu`, only an adapter
+//! request tells, and asking for one as the glue loaded put Chrome's first
+//! frame on a Mate 20 X (Android 10, `navigator.gpu` but no adapter) 29 ms
+//! later, the median of 8 starts. Such a page starts the fetch once its own
+//! detection found no adapter ([`auto_instance`]), which main makes at the
+//! same moment. A page that will draw on WebGPU leaves the file alone. The
+//! renderer takes the file if it came in by the time it starts and never
+//! waits for it. The snippet sits in `snippets/<crate>/`, two folders below
+//! the wasm's.
 
 use wasm_bindgen::prelude::wasm_bindgen;
 
 #[wasm_bindgen(inline_js = r#"
-const backend = new URLSearchParams(location.search).get("backend");
-const webgpu = backend === "webgpu" ? Promise.resolve(true)
-    : backend === "gl" || !navigator.gpu ? Promise.resolve(false)
-    : navigator.gpu.requestAdapter().then((adapter) => !!adapter, () => false);
 let file;
-webgpu
-    .then((found) => found
-        ? null
-        : fetch(new URL("../../first_screen_glsl.txt", import.meta.url))
-            .then((response) => (response.ok ? response.arrayBuffer() : null)))
-    .catch(() => null)
-    .then((fetched) => { file = fetched; });
-export function firstScreenWebGpu() {
-    return webgpu;
+let fetching = false;
+export function fetchFirstScreenGlsl() {
+    if (fetching) return;
+    fetching = true;
+    fetch(new URL("../../first_screen_glsl.txt", import.meta.url))
+        .then((response) => (response.ok ? response.arrayBuffer() : null))
+        .catch(() => null)
+        .then((fetched) => { file = fetched; });
 }
+const backend = new URLSearchParams(location.search).get("backend");
+if (backend === "gl" || (backend !== "webgpu" && !navigator.gpu)) fetchFirstScreenGlsl();
 export function firstScreenGlsl() {
     return file;
 }
 "#)]
 extern "C" {
-    // Whether the browser gave the snippet a WebGPU adapter.
-    #[wasm_bindgen(js_name = firstScreenWebGpu)]
-    fn webgpu_adapter() -> js_sys::Promise;
+    #[wasm_bindgen(js_name = fetchFirstScreenGlsl)]
+    fn fetch_file();
 
-    // The file once fetched, `null` where it did not load or the page left it
-    // alone, `undefined` while the fetch runs.
+    // The file once fetched, `null` where it did not load, `undefined` while
+    // the fetch runs or where the page did not start one.
     #[wasm_bindgen(js_name = firstScreenGlsl)]
     fn fetched() -> wasm_bindgen::JsValue;
 }
@@ -61,17 +61,13 @@ pub(super) fn take() {
     }
 }
 
-// A page left to pick its backend draws on WebGPU where the browser gives it
-// an adapter. The snippet asked for one as the glue loaded, so the page does
-// not ask again, as `wgpu::util::new_instance_with_webgpu_detection` would:
-// on Chrome on an M3 Pro a second early request cost the page about 1 ms of
-// CPU a frame.
+// The instance of a page left to pick its backend, as
+// `wgpu::util::new_instance_with_webgpu_detection` makes it: one that finds
+// no WebGPU adapter draws on WebGL, and starts fetching the file then.
 pub(super) async fn auto_instance(mut descriptor: wgpu::InstanceDescriptor) -> wgpu::Instance {
-    let found = wasm_bindgen_futures::JsFuture::from(webgpu_adapter())
-        .await
-        .is_ok_and(|found| found.is_truthy());
-    if !found {
+    if !wgpu::util::is_browser_webgpu_supported().await {
         descriptor.backends.remove(wgpu::Backends::BROWSER_WEBGPU);
+        fetch_file();
     }
     wgpu::Instance::new(descriptor)
 }
