@@ -115,7 +115,7 @@ impl KeptWith {
 }
 
 struct Kept {
-    with: KeptWith,
+    with: Box<KeptWith>,
     content: Box<LayerScene>,
 }
 
@@ -137,7 +137,7 @@ impl KeptContents {
         &mut self,
         node: NodeId,
         walk: (ContentKey, LightBits),
-    ) -> Option<(Box<LayerScene>, KeptWith)> {
+    ) -> Option<(Box<LayerScene>, Box<KeptWith>)> {
         self.next_walks.insert(node, walk);
         let copies = self.kept.get_mut(&node)?;
         let at = copies.iter().position(|kept| kept.with.fits(walk))?;

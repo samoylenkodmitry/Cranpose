@@ -192,7 +192,8 @@ pub(crate) struct ChildLayer {
     pub(crate) content: Box<LayerScene>,
     // What a later collect needs to take `content` again, when its layer's
     // subtree stays as it is.
-    pub(crate) kept: Option<KeptWith>,
+    // Boxed: a child moves with each push and pop, and few carry one.
+    pub(crate) kept: Option<Box<KeptWith>>,
     /// For a mesh surface in a scene: the mesh its surface is drawn on in
     /// the scene's 3D pass, in place of a composite.
     pub(crate) mesh: Option<Arc<MeshChild>>,
@@ -559,7 +560,7 @@ fn content_of(
     history: &mut CollectHistory,
     (context, content_hash): (WalkContext<'_>, u64),
     recycler: &mut LayerSceneRecycler,
-) -> (Box<LayerScene>, bool, Option<KeptWith>) {
+) -> (Box<LayerScene>, bool, Option<Box<KeptWith>>) {
     let settings = context.settings;
     let walk = layer
         .node_id
@@ -580,11 +581,13 @@ fn content_of(
     let kept = walk
         .zip(scales)
         .filter(|_| !content.contains_backdrop())
-        .map(|((_, (key, light)), scales)| KeptWith {
-            key,
-            light: content.casts_shadows().then_some(light),
-            pixel_sensitive,
-            scales,
+        .map(|((_, (key, light)), scales)| {
+            Box::new(KeptWith {
+                key,
+                light: content.casts_shadows().then_some(light),
+                pixel_sensitive,
+                scales,
+            })
         });
     (content, pixel_sensitive, kept)
 }
