@@ -37,6 +37,19 @@ impl Inherited {
             store: context.store,
         }
     }
+
+    // A context that passes this down, with no place in the window and no
+    // content offset: what the children of a node kept as it lowered take
+    // from above it.
+    pub(super) fn lean_context(self) -> LowerContext {
+        LowerContext {
+            inherited_motion_context_animated: self.motion_context_animated,
+            inherited_translated_content_context: self.translated_content_context,
+            parent_abs: None,
+            parent_content_offset: Point::default(),
+            store: self.store,
+        }
+    }
 }
 
 impl MovedSubtree {

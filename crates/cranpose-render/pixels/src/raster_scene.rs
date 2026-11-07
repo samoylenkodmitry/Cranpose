@@ -16,6 +16,7 @@ use cranpose_ui_graphics::{
 
 use crate::{
     draw::RenderItem,
+    layout_walk::unlink_subtree,
     rewrite::Rewrite,
     scene_item::{ItemRef, SceneItem},
 };
@@ -662,11 +663,33 @@ impl RasterScene {
     }
 
     // Lets go the head the old record `at` keeps, before its node lowers
-    // again: the new draws record into the recordings the head held.
+    // again: the new draws record into the recordings the head held. The
+    // children it kept linked take their heads back.
     pub(crate) fn drop_head(&mut self, at: usize) {
-        if let Some(head) = self.take_head(at) {
+        if let Some(mut head) = self.take_head(at) {
+            if let Some(node) = self.subtrees[at].node().filter(|_| head.holds_subtree()) {
+                unlink_subtree(&mut self.subtrees, (at, node), &mut head);
+            }
             head.recycle_to_redraw();
         }
+    }
+
+    // Gives the children of `node`, whose old record is `at`, their heads
+    // back when the head of `at` keeps them linked: a node beneath changed.
+    pub(crate) fn unlink_head(&mut self, at: usize, node: NodeId) {
+        let Some(head) = self
+            .subtrees
+            .get_mut(at)
+            .and_then(|record| record.head.as_mut())
+        else {
+            return;
+        };
+        if !head.holds_subtree() {
+            return;
+        }
+        let mut head = self.subtrees[at].head.take().expect("the head is there");
+        unlink_subtree(&mut self.subtrees, (at, node), &mut head);
+        self.subtrees[at].head = Some(head);
     }
 
     // Lets go every head the records keep, before a build lowers the

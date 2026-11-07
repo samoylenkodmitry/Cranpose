@@ -219,6 +219,8 @@ impl Repush<'_> {
             self.defer(walk, (node, place), context, (record, parent));
             return Ok(());
         }
+        // A node beneath it changed, which a target pushes again.
+        self.scene.unlink_head(record, node);
         // A node that wraps its outer draws holds its children in its own
         // layer inside the wrapper.
         let own = OldChildren::own_record(&self.scene.subtrees, record, node);

@@ -565,6 +565,8 @@ impl<'a> LayoutWalk<'a> {
         let Some(first) = first_child_of_kept(&scene.subtrees, at, child) else {
             return false;
         };
+        // A node beneath it changed.
+        scene.unlink_head(at, child);
         let pushed = visit_kept_node(
             self.applier,
             (child, NodePlace::Child),
@@ -672,6 +674,24 @@ impl<'a> LayoutWalk<'a> {
         let Some(mut head) = scene.take_head(at) else {
             return false;
         };
+        match children {
+            // A node beneath changed: each child takes its head back.
+            HeadChildren::Records if head.holds_subtree() => {
+                unlink_subtree(&mut scene.subtrees, (at, child), &mut head);
+            }
+            // Nothing in the subtree changed: the heads of its nodes link
+            // into the subtree it pushes again, as a retained graph pushes,
+            // while nothing in it changes and none of its nodes publishes
+            // where it lies in the window.
+            HeadChildren::Whole
+                if !head.holds_subtree()
+                    && !lower_context.has_window_origin()
+                    && links(&scene.subtrees, at, child) =>
+            {
+                link_subtree(&mut scene.subtrees, (at, child), &mut head);
+            }
+            _ => {}
+        }
         let index = scene.next_record();
         let Some(node) = head.follow(self.applier, child, lower_context, (position, own_layer))
         else {
@@ -706,6 +726,18 @@ impl<'a> LayoutWalk<'a> {
                 );
             }
             KeptNodeRef::Layer(layer, inner) => (layer, inner),
+            KeptNodeRef::Subtree(layer) => {
+                if let HeadChildren::Whole = children {
+                    scene.begin_whole();
+                }
+                return populate_draws_from_graph(
+                    Subtree::Layer(layer),
+                    scene,
+                    context,
+                    &mut None,
+                    None,
+                );
+            }
         };
         let old = OldChildren::of(&scene.subtrees, at, child);
         let pushes = match children {
@@ -875,6 +907,80 @@ fn holds_space(node: &RenderNode) -> bool {
                 if inner.node_id == Some(wrapped) && inner.graphics_layer.space.is_some())
         })
     })
+}
+
+// Whether each child subtree beneath the old record `at` of `node` keeps a
+// head, its own children's heads linked or linkable as well, so they link
+// into the subtree of the head of `at`.
+fn links(records: &[SubtreeItems], at: usize, node: NodeId) -> bool {
+    let OldChildren { mut cursor, end } = OldChildren::of(records, at, node);
+    while let Some(record) = records[..end].get(cursor) {
+        let Some(child) = record.node() else {
+            break;
+        };
+        match &record.head {
+            Some(head) if head.holds_subtree() => {}
+            Some(_) if links(records, cursor, child) => {}
+            _ => return false,
+        }
+        cursor = record.end;
+    }
+    true
+}
+
+// Links into `head`, the head of `node` taken from its old record `at`, the
+// heads of the child subtrees beneath it, each with its own children linked.
+fn link_subtree(records: &mut [SubtreeItems], (at, node): (usize, NodeId), head: &mut KeptHead) {
+    let OldChildren { mut cursor, end } = OldChildren::of(records, at, node);
+    let mut count = 0;
+    let mut child = cursor;
+    while let Some(record) = records[..end]
+        .get(child)
+        .filter(|record| record.node().is_some())
+    {
+        count += 1;
+        child = record.end;
+    }
+    head.link_children(
+        node,
+        (
+            count,
+            std::iter::from_fn(|| {
+                let record = records[..end].get(cursor)?;
+                let (child, next) = (record.node()?, record.end);
+                let mut child_head = records[cursor].head.take()?;
+                if !child_head.holds_subtree() {
+                    link_subtree(records, (cursor, child), &mut child_head);
+                }
+                cursor = next;
+                Some(child_head.into_node())
+            }),
+        ),
+    );
+}
+
+// Gives each child subtree beneath the old record `at` of `node` its head
+// back out of `head`, which kept the subtree linked, its own children's
+// heads as well.
+pub(crate) fn unlink_subtree(
+    records: &mut [SubtreeItems],
+    (at, node): (usize, NodeId),
+    head: &mut KeptHead,
+) {
+    let OldChildren { mut cursor, end } = OldChildren::of(records, at, node);
+    head.unlink_children(node, |mut child_head| {
+        let Some((child, next)) = records[..end]
+            .get(cursor)
+            .and_then(|record| Some((record.node()?, record.end)))
+        else {
+            return child_head.recycle();
+        };
+        unlink_subtree(records, (cursor, child), &mut child_head);
+        if let Some(stale) = records[cursor].head.replace(child_head) {
+            stale.recycle();
+        }
+        cursor = next;
+    });
 }
 
 // Whether a node of the old subtree at the record `at` publishes where it
