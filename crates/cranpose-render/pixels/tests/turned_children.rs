@@ -153,8 +153,8 @@ impl Turned {
         self.shell.update();
     }
 
-    fn pixel(&self, (x, y): (f32, f32)) -> [u8; 4] {
-        let at = (y as usize * WIDTH as usize + x as usize) * 4;
+    fn pixel(&self, (x, y): (usize, usize)) -> [u8; 4] {
+        let at = (y * WIDTH as usize + x) * 4;
         self.image[at..at + 4].try_into().expect("RGBA pixel")
     }
 }
@@ -214,7 +214,9 @@ fn a_child_of_a_turned_parent_gives_a_reader_its_turned_bounds() {
 #[test]
 fn a_child_of_a_turned_parent_redraws_its_draw_state_after_a_prune() {
     let mut turned = Turned::new();
-    let child = in_window(30.0, 20.0);
+    // The pixel at the child's center, which `in_window(30.0, 20.0)` puts at
+    // (116.3, 66.3).
+    let child = (116, 66);
     for count in 1..=PRUNED_AFTER {
         States::set(&turned.states.count, count);
         turned.frame();
