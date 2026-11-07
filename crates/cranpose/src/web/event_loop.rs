@@ -12,7 +12,7 @@ use web_sys::{HtmlCanvasElement, PointerEvent, WheelEvent};
 
 use super::{
     backend_preference::{
-        WebBackendPreference, instance_backends, limit_webgl_extensions, requested_web_backend,
+        WebBackendPreference, instance_backends, prepare_webgl, requested_web_backend,
         required_limits_for_web_backend,
     },
     pipeline_discovery::{GpuTarget, PipelineDiscovery},
@@ -258,7 +258,7 @@ pub async fn run(
     let width = css_width.round() as u32;
     let height = css_height.round() as u32;
     let backend_preference = requested_web_backend(&window);
-    limit_webgl_extensions(settings.gpu_requirements);
+    prepare_webgl(settings.gpu_requirements);
     let mut instance_desc =
         wgpu::InstanceDescriptor::new_with_display_handle(Box::new(BrowserDisplayHandle));
     instance_desc.backends = instance_backends(backend_preference);
@@ -486,8 +486,7 @@ pub async fn run(
         let wheel_canvas = canvas.clone();
         let request_frame = Rc::clone(&request_frame);
         let closure = Closure::wrap(Box::new(move |event: WheelEvent| {
-            let x = event.offset_x() as f64;
-            let y = event.offset_y() as f64;
+            let (x, y) = super::pointer::canvas_position(&wheel_canvas, &event);
             let logical = platform.borrow().pointer_position(x, y);
 
             let wheel = super::wheel::wheel_scroll_from_dom(

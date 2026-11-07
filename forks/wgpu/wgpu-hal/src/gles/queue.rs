@@ -758,6 +758,95 @@ impl super::Queue {
                     };
                 }
             }
+            C::CopyCanvasToTexture(ref op) => {
+                let super::CanvasCopy {
+                    texture,
+                    target,
+                    ref copy,
+                } = **op;
+                // The default framebuffer is the canvas, read from its back
+                // buffer, which holds the frame drawn so far.
+                unsafe { gl.bind_framebuffer(glow::READ_FRAMEBUFFER, None) };
+                unsafe { gl.bind_texture(target, Some(texture)) };
+                if is_layered_target(target) {
+                    unsafe {
+                        gl.copy_tex_sub_image_3d(
+                            target,
+                            copy.dst_base.mip_level as i32,
+                            copy.dst_base.origin.x as i32,
+                            copy.dst_base.origin.y as i32,
+                            get_z_offset(target, &copy.dst_base) as i32,
+                            copy.src_base.origin.x as i32,
+                            copy.src_base.origin.y as i32,
+                            copy.size.width as i32,
+                            copy.size.height as i32,
+                        )
+                    };
+                } else {
+                    unsafe {
+                        gl.copy_tex_sub_image_2d(
+                            get_2d_target(target, copy.dst_base.array_layer),
+                            copy.dst_base.mip_level as i32,
+                            copy.dst_base.origin.x as i32,
+                            copy.dst_base.origin.y as i32,
+                            copy.src_base.origin.x as i32,
+                            copy.src_base.origin.y as i32,
+                            copy.size.width as i32,
+                            copy.size.height as i32,
+                        )
+                    };
+                }
+            }
+            C::CopyTextureToCanvas(ref op) => {
+                let super::CanvasCopy {
+                    texture,
+                    target,
+                    ref copy,
+                } = **op;
+                unsafe { gl.bind_framebuffer(glow::READ_FRAMEBUFFER, Some(self.copy_fbo)) };
+                if is_layered_target(target) {
+                    unsafe {
+                        gl.framebuffer_texture_layer(
+                            glow::READ_FRAMEBUFFER,
+                            glow::COLOR_ATTACHMENT0,
+                            Some(texture),
+                            copy.src_base.mip_level as i32,
+                            copy.src_base.array_layer as i32,
+                        )
+                    };
+                } else {
+                    unsafe {
+                        gl.framebuffer_texture_2d(
+                            glow::READ_FRAMEBUFFER,
+                            glow::COLOR_ATTACHMENT0,
+                            target,
+                            Some(texture),
+                            copy.src_base.mip_level as i32,
+                        )
+                    };
+                }
+                unsafe { gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, None) };
+                // A blit is clipped by the scissor test; a copy is not.
+                unsafe { gl.disable(glow::SCISSOR_TEST) };
+                let [src_x, src_y] = [copy.src_base.origin.x, copy.src_base.origin.y].map(|v| v as i32);
+                let [dst_x, dst_y] = [copy.dst_base.origin.x, copy.dst_base.origin.y].map(|v| v as i32);
+                let [width, height] = [copy.size.width, copy.size.height].map(|v| v as i32);
+                // Both hold the frame the same way up: no flip.
+                unsafe {
+                    gl.blit_framebuffer(
+                        src_x,
+                        src_y,
+                        src_x + width,
+                        src_y + height,
+                        dst_x,
+                        dst_y,
+                        dst_x + width,
+                        dst_y + height,
+                        glow::COLOR_BUFFER_BIT,
+                        glow::NEAREST,
+                    )
+                };
+            }
             C::CopyBufferToTexture(ref op) => {
                 let super::BufferToTextureCopy {
                     ref src,

@@ -1382,12 +1382,18 @@ impl crate::Adapter for super::Adapter {
                 current_extent: None,
                 // A WebGL surface's image is a texture of its own, which the
                 // queue blits to the canvas at present: it can be copied and
-                // sampled like any other.
+                // sampled like any other. A surface that draws into its
+                // canvas (`web::draw_into_canvases`) can be copied but not
+                // sampled.
                 #[cfg(webgl)]
                 usage: wgt::TextureUses::COLOR_TARGET
                     | wgt::TextureUses::COPY_SRC
                     | wgt::TextureUses::COPY_DST
-                    | wgt::TextureUses::RESOURCE,
+                    | if surface.draws_into_canvas {
+                        wgt::TextureUses::empty()
+                    } else {
+                        wgt::TextureUses::RESOURCE
+                    },
                 #[cfg(not(webgl))]
                 usage: wgt::TextureUses::COLOR_TARGET,
             })

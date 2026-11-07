@@ -107,7 +107,7 @@ pub use self::egl::{Instance, Surface};
 #[cfg(webgl)]
 pub use self::web::AdapterContext;
 #[cfg(webgl)]
-pub use self::web::{Instance, Surface, ask_only_for_used_extensions};
+pub use self::web::{Instance, Surface, ask_only_for_used_extensions, draw_into_canvases};
 
 #[cfg(windows)]
 use self::wgl::AdapterContext;
@@ -492,9 +492,14 @@ pub struct Texture {
 impl crate::DynTexture for Texture {}
 impl crate::DynSurfaceTexture for Texture {
     /// A GL surface draws every frame into its one texture or renderbuffer,
-    /// made at configure, and copies it to the window at present.
+    /// made at configure, and copies it to the window at present. A web
+    /// surface that draws into its canvas (`web::draw_into_canvases`) gets
+    /// the canvas's buffer, which the browser hands back cleared.
     fn image_id(&self) -> Option<u64> {
-        Some(0)
+        match self.inner {
+            TextureInner::DefaultRenderbuffer => None,
+            _ => Some(0),
+        }
     }
 }
 
@@ -965,6 +970,15 @@ struct TextureToTextureCopy {
     copy: crate::TextureCopy,
 }
 
+/// A copy between a texture and the default framebuffer: a web canvas a
+/// surface draws into (`web::draw_into_canvases`).
+#[derive(Debug)]
+struct CanvasCopy {
+    texture: glow::Texture,
+    target: BindTarget,
+    copy: crate::TextureCopy,
+}
+
 #[derive(Debug)]
 struct BufferToTextureCopy {
     src: Buffer,
@@ -1049,6 +1063,8 @@ enum Command {
     #[cfg(webgl)]
     CopyExternalImageToTexture(Box<ExternalImageToTextureCopy>),
     CopyTextureToTexture(Box<TextureToTextureCopy>),
+    CopyCanvasToTexture(Box<CanvasCopy>),
+    CopyTextureToCanvas(Box<CanvasCopy>),
     CopyBufferToTexture(Box<BufferToTextureCopy>),
     CopyTextureToBuffer(Box<TextureToBufferCopy>),
     SetIndexBuffer(glow::Buffer),

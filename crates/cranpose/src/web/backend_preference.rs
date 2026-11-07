@@ -44,14 +44,17 @@ pub(super) fn instance_backends(preference: WebBackendPreference) -> wgpu::Backe
     }
 }
 
-// Cranpose's renderer needs no WebGL extension beyond the ones `glow` itself
-// uses, and each one a page enables can wait for the browser's GPU process
-// (forks/README.md). Code that renders with Cranpose's device, such as a game
-// engine, says what it needs, and then gets every one.
-pub(super) fn limit_webgl_extensions(requirements: crate::GpuRequirements) {
+// Sets up WebGL before the page's surface exists (forks/README.md). Cranpose's
+// renderer needs no WebGL extension beyond the ones `glow` itself uses, and
+// each one a page enables can wait for the browser's GPU process. Code that
+// renders with Cranpose's device, such as a game engine, says what it needs,
+// and then gets every one. Every frame draws straight into the canvas, which
+// spares a copy of the whole canvas each frame.
+pub(super) fn prepare_webgl(requirements: crate::GpuRequirements) {
     if requirements == crate::GpuRequirements::default() {
         wgpu::hal::gles::ask_only_for_used_extensions();
     }
+    wgpu::hal::gles::draw_into_canvases();
 }
 
 pub(super) fn required_limits_for_web_backend(

@@ -82,6 +82,33 @@ fn bound_method(target: &JsValue, name: &str) -> Option<js_sys::Function> {
         .map(|method| method.bind0(target))
 }
 
+/// Whether surfaces made from now on draw into their canvas; see
+/// [`draw_into_canvases`].
+static DRAWS_INTO_CANVASES: AtomicBool = AtomicBool::new(false);
+
+/// Makes the surfaces made from now on on an `HtmlCanvasElement` draw each
+/// frame straight into the canvas's own drawing buffer, which the browser
+/// shows (Cranpose fork). By default a surface draws into a texture of its
+/// own and present copies it to the canvas, which reads and writes the whole
+/// canvas every frame: on a Mate 20 X (Chrome, WebGL) Cranpose's gauntlet ran
+/// its GPU 17-24% fewer cycles a second without that copy and wrote about
+/// 700 MB a second less to memory.
+///
+/// The canvas's buffer then holds each frame upside down, as every target of
+/// this backend does, so the surface flips the canvas with the CSS `scale`
+/// property, which the browser's compositor applies as it shows the canvas.
+/// A pointer position read from the canvas through `offsetX` and `offsetY`
+/// flips with it; `clientX` and `clientY` against the canvas's bounding rect
+/// do not. The canvas gets depth and stencil buffers, which a pass drawing
+/// into it uses in place of its own depth attachment, cleared as that
+/// attachment asks; the canvas has one of each, so passes that draw into it
+/// share them. The canvas can be copied from and to within a frame, but not
+/// sampled. A surface configured with an sRGB format keeps its texture,
+/// whose copy converts the colors.
+pub fn draw_into_canvases() {
+    DRAWS_INTO_CANVASES.store(true, Ordering::Relaxed);
+}
+
 /// A wrapper around a [`glow::Context`] to provide a fake `lock()` api that makes it compatible
 /// with the `AdapterContext` API from the EGL implementation.
 #[derive(Debug)]
@@ -113,9 +140,12 @@ impl Instance {
         &self,
         canvas: web_sys::HtmlCanvasElement,
     ) -> Result<Surface, crate::InstanceError> {
-        let result =
-            canvas.get_context_with_context_options("webgl2", &Self::create_context_options());
-        self.create_surface_from_context(Canvas::Canvas(canvas), result)
+        let draws_into_canvas = DRAWS_INTO_CANVASES.load(Ordering::Relaxed);
+        let result = canvas.get_context_with_context_options(
+            "webgl2",
+            &Self::create_context_options(draws_into_canvas),
+        );
+        self.create_surface_from_context(Canvas::Canvas(canvas), result, draws_into_canvas)
     }
 
     pub fn create_surface_from_offscreen_canvas(
@@ -123,8 +153,8 @@ impl Instance {
         canvas: web_sys::OffscreenCanvas,
     ) -> Result<Surface, crate::InstanceError> {
         let result =
-            canvas.get_context_with_context_options("webgl2", &Self::create_context_options());
-        self.create_surface_from_context(Canvas::Offscreen(canvas), result)
+            canvas.get_context_with_context_options("webgl2", &Self::create_context_options(false));
+        self.create_surface_from_context(Canvas::Offscreen(canvas), result, false)
     }
 
     /// Common portion of public `create_surface_from_*` functions.
@@ -135,6 +165,7 @@ impl Instance {
         &self,
         canvas: Canvas,
         context_result: Result<Option<js_sys::Object>, JsValue>,
+        draws_into_canvas: bool,
     ) -> Result<Surface, crate::InstanceError> {
         let context_object: js_sys::Object = match context_result {
             Ok(Some(context)) => context,
@@ -172,15 +203,21 @@ impl Instance {
             swapchain: RwLock::new(None),
             texture: Mutex::new(None),
             presentable: true,
+            draws_into_canvas,
         })
     }
 
-    /// The canvas's own buffers only receive the surface texture at
-    /// present, so they need no multisampling, depth or stencil.
-    fn create_context_options() -> js_sys::Object {
+    /// The canvas's own buffers need no multisampling. They need depth and
+    /// stencil only when frames draw into them (see [`draw_into_canvases`]);
+    /// else they only receive the surface texture at present.
+    fn create_context_options(draws_into_canvas: bool) -> js_sys::Object {
         let context_options = js_sys::Object::new();
-        for option in ["antialias", "depth", "stencil"] {
-            js_sys::Reflect::set(&context_options, &option.into(), &JsValue::FALSE)
+        for (option, value) in [
+            ("antialias", false),
+            ("depth", draws_into_canvas),
+            ("stencil", draws_into_canvas),
+        ] {
+            js_sys::Reflect::set(&context_options, &option.into(), &JsValue::from_bool(value))
                 .expect("Cannot create context options");
         }
         context_options
@@ -304,6 +341,9 @@ pub struct Surface {
     texture: Mutex<Option<glow::Texture>>,
     pub(super) presentable: bool,
     srgb_present_program: Mutex<Option<glow::Program>>,
+    // Whether a configuration without an sRGB format draws into the canvas
+    // (see `draw_into_canvases`).
+    pub(super) draws_into_canvas: bool,
 }
 
 impl Clone for Surface {
@@ -315,6 +355,7 @@ impl Clone for Surface {
             texture: Mutex::new(*self.texture.lock()),
             presentable: self.presentable,
             srgb_present_program: Mutex::new(*self.srgb_present_program.lock()),
+            draws_into_canvas: self.draws_into_canvas,
         }
     }
 }
@@ -335,8 +376,18 @@ pub struct Swapchain {
     pub(crate) extent: wgt::Extent3d,
     // pub(crate) channel: f::ChannelType,
     pub(super) format: wgt::TextureFormat,
-    pub(super) framebuffer: glow::Framebuffer,
+    pub(super) target: SwapchainTarget,
     pub(super) format_desc: TextureFormatDesc,
+}
+
+/// Where a configured surface's frames are drawn.
+#[derive(Clone, Debug)]
+pub(super) enum SwapchainTarget {
+    /// The canvas's own drawing buffer (see [`draw_into_canvases`]).
+    Canvas,
+    /// The surface's texture, attached to `framebuffer`, which present
+    /// copies to the canvas.
+    Texture { framebuffer: glow::Framebuffer },
 }
 
 impl Surface {
@@ -350,6 +401,11 @@ impl Surface {
         let swapchain = swapchain.as_ref().ok_or(crate::SurfaceError::Other(
             "need to configure surface before presenting",
         ))?;
+        let framebuffer = match swapchain.target {
+            // The frame is in the canvas already.
+            SwapchainTarget::Canvas => return Ok(()),
+            SwapchainTarget::Texture { framebuffer } => framebuffer,
+        };
 
         if swapchain.format.is_srgb() {
             // Important to set the viewport since we don't know in what state the user left it.
@@ -374,7 +430,7 @@ impl Surface {
             unsafe { gl.draw_buffers(&[glow::BACK]) };
             unsafe { gl.draw_arrays(glow::TRIANGLES, 0, 3) };
         } else {
-            unsafe { gl.bind_framebuffer(glow::READ_FRAMEBUFFER, Some(swapchain.framebuffer)) };
+            unsafe { gl.bind_framebuffer(glow::READ_FRAMEBUFFER, Some(framebuffer)) };
             unsafe { gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, None) };
             // Note the Y-flipping here. GL's presentation is not flipped,
             // but main rendering is. Therefore, we Y-flip the output positions
@@ -418,6 +474,17 @@ impl Surface {
         program
     }
 
+    /// Shows the canvas's buffer upside down, as a surface that draws into
+    /// it holds each frame, or as it is.
+    fn flip_canvas(&self, flipped: bool) {
+        if let Canvas::Canvas(ref canvas) = self.canvas {
+            if let Ok(style) = js_sys::Reflect::get(canvas, &JsValue::from_str("style")) {
+                let scale = JsValue::from_str(if flipped { "1 -1" } else { "" });
+                let _ = js_sys::Reflect::set(&style, &JsValue::from_str("scale"), &scale);
+            }
+        }
+    }
+
     pub fn supports_srgb(&self) -> bool {
         // present.frag takes care of handling srgb conversion
         true
@@ -447,9 +514,29 @@ impl crate::Surface for Surface {
 
         {
             let mut swapchain = self.swapchain.write();
-            if let Some(swapchain) = swapchain.take() {
+            if let Some(Swapchain {
+                target: SwapchainTarget::Texture { framebuffer },
+                ..
+            }) = swapchain.take()
+            {
                 // delete all frame buffers already allocated
-                unsafe { gl.delete_framebuffer(swapchain.framebuffer) };
+                unsafe { gl.delete_framebuffer(framebuffer) };
+            }
+        }
+        if self.draws_into_canvas {
+            let into_canvas = !config.format.is_srgb();
+            self.flip_canvas(into_canvas);
+            if into_canvas {
+                if let Some(texture) = self.texture.lock().take() {
+                    unsafe { gl.delete_texture(texture) };
+                }
+                *self.swapchain.write() = Some(Swapchain {
+                    extent: config.extent,
+                    format: config.format,
+                    format_desc: device.shared.describe_texture_format(config.format),
+                    target: SwapchainTarget::Canvas,
+                });
+                return Ok(());
             }
         }
         {
@@ -517,7 +604,7 @@ impl crate::Surface for Surface {
                 // channel: config.format.base_format().1,
                 format: config.format,
                 format_desc: desc,
-                framebuffer,
+                target: SwapchainTarget::Texture { framebuffer },
             });
         }
 
@@ -528,8 +615,12 @@ impl crate::Surface for Surface {
         let gl = device.shared.context.lock();
         {
             let mut swapchain = self.swapchain.write();
-            if let Some(swapchain) = swapchain.take() {
-                unsafe { gl.delete_framebuffer(swapchain.framebuffer) };
+            if let Some(Swapchain {
+                target: SwapchainTarget::Texture { framebuffer },
+                ..
+            }) = swapchain.take()
+            {
+                unsafe { gl.delete_framebuffer(framebuffer) };
             }
         }
         if let Some(renderbuffer) = self.texture.lock().take() {
@@ -544,11 +635,15 @@ impl crate::Surface for Surface {
     ) -> Result<crate::AcquiredSurfaceTexture<super::Api>, crate::SurfaceError> {
         let swapchain = self.swapchain.read();
         let sc = swapchain.as_ref().unwrap();
-        let texture = super::Texture {
-            inner: super::TextureInner::Texture {
+        let inner = match sc.target {
+            SwapchainTarget::Canvas => super::TextureInner::DefaultRenderbuffer,
+            SwapchainTarget::Texture { .. } => super::TextureInner::Texture {
                 raw: self.texture.lock().unwrap(),
                 target: glow::TEXTURE_2D,
             },
+        };
+        let texture = super::Texture {
+            inner,
             drop_guard: None,
             array_layer_count: 1,
             mip_level_count: 1,

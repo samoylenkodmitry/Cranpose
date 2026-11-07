@@ -87,6 +87,20 @@ pub(crate) fn web_pointer_source(event: &PointerEvent) -> PointerSource {
     }
 }
 
+// Where `event` happened on `canvas`, in CSS pixels from the top left corner
+// it shows. `offsetX` and `offsetY` count in the canvas's own coordinates,
+// which CSS flips for a WebGL canvas drawn upside down (forks/README.md).
+pub(super) fn canvas_position(
+    canvas: &HtmlCanvasElement,
+    event: &web_sys::MouseEvent,
+) -> (f64, f64) {
+    let rect = canvas.get_bounding_client_rect();
+    (
+        f64::from(event.client_x()) - rect.left(),
+        f64::from(event.client_y()) - rect.top(),
+    )
+}
+
 // The shell's id of a finger after the first one. The shell keeps id 0 for
 // the primary pointer.
 fn secondary_id(event: &PointerEvent) -> Option<PointerId> {
@@ -98,10 +112,8 @@ impl Pointers {
         let pointers = self.clone();
         let closure = Closure::wrap(Box::new(move |event: PointerEvent| {
             event.prevent_default();
-            let at = pointers
-                .platform
-                .borrow()
-                .pointer_position(f64::from(event.offset_x()), f64::from(event.offset_y()));
+            let (x, y) = canvas_position(&pointers.canvas, &event);
+            let at = pointers.platform.borrow().pointer_position(x, y);
             if let Ok(mut app) = pointers.app.try_borrow_mut() {
                 app.set_pointer_source(web_pointer_source(&event));
                 app.set_modifiers(super::web_modifiers(&event));
