@@ -95,7 +95,7 @@ impl Fields {
         self.0.push_str(text);
     }
 
-    fn number(&mut self, number: impl ToString) {
+    fn number(&mut self, number: impl ToString + Copy) {
         self.text(&number.to_string());
     }
 
