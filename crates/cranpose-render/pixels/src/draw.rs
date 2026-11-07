@@ -405,9 +405,7 @@ fn draw_shadow<P: Pixel>(
             let center_y = py as f32 + 0.5;
             let key = shadow.row_key(center_y);
             if computed != Some(key) {
-                for (slot, px) in covered.iter_mut().zip(start..end) {
-                    *slot = shadow.coverage(px as f32 + 0.5, center_y);
-                }
+                shadow.row_coverage(start..end, center_y, &mut covered);
                 computed = Some(key);
             }
             for (dst, &coverage) in target.row(py, start, end).iter_mut().zip(&covered) {

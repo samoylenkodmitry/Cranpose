@@ -286,7 +286,7 @@ fn round_shadow(
 }
 
 #[test]
-fn rows_with_one_key_take_one_coverage() {
+fn rows_and_columns_alike_take_one_coverage() {
     let cases = [
         // A card's round rect with the caster's hole.
         round_shadow(
@@ -326,6 +326,17 @@ fn rows_with_one_key_take_one_coverage() {
     let mut shared = 0;
     for (case, shadow) in cases.iter().enumerate() {
         let rows: Vec<f32> = (-3..60).map(|row| row as f32 + 0.5).collect();
+        for &y in &rows {
+            let mut row = vec![0.0_f32; 143];
+            shadow.row_coverage(-3..140, y, &mut row);
+            for (column, coverage) in (-3..140).zip(&row) {
+                assert_eq!(
+                    coverage.to_bits(),
+                    shadow.coverage(column as f32 + 0.5, y).to_bits(),
+                    "case {case}: the row at {y} differs at column {column}"
+                );
+            }
+        }
         let coverage_of = |y: f32| -> Vec<u32> {
             (-3..140)
                 .map(|column| shadow.coverage(column as f32 + 0.5, y).to_bits())
