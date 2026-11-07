@@ -549,17 +549,20 @@ impl RasterScene {
     // Writes the end and stop of the record `index`, which closes.
     #[inline(never)]
     fn write_close(&mut self, index: usize) {
-        let (end, stop) = match self.rewrite.as_deref() {
-            Some(rewrite) => rewrite.record_end(),
-            None => (self.subtrees.len(), self.counts()),
+        let Some(rewrite) = self.rewrite.as_deref_mut() else {
+            let (end, stop) = (self.subtrees.len(), self.counts());
+            if let Some(record) = self.subtrees.get_mut(index) {
+                record.end = end;
+                record.stop = stop.into();
+            }
+            return;
         };
-        if let Some(record) = self.record_mut(index) {
+        let (end, stop) = rewrite.record_end();
+        if let Some(record) = rewrite.record_mut(&mut self.subtrees, index) {
             record.end = end;
             record.stop = stop.into();
         }
-        if let Some(rewrite) = self.rewrite.as_deref_mut() {
-            rewrite.close_record(&self.subtrees);
-        }
+        rewrite.close_record(&self.subtrees);
     }
 
     // How many records the splices of the rewrite in progress added, less
