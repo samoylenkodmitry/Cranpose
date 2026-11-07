@@ -30,8 +30,11 @@ pub(crate) use child_slot::{ChildPosition, ChildSlot};
 
 // The mark of a node above a dirty node.
 const ABOVE_DIRTY: u8 = 1;
-// A dirty node's update sits in the bits above the first.
-const UPDATE_SHIFT: u8 = 1;
+// The mark of a node above a node whose content changed: nodes and
+// modifiers beneath it may be new.
+const ABOVE_CONTENT: u8 = 1 << 1;
+// A dirty node's update sits in the bits above these two.
+const UPDATE_SHIFT: u8 = 2;
 
 // The marks a scene update leaves on the layout nodes: each dirty node's
 // update, and on each node above one, that it is.
@@ -56,17 +59,40 @@ impl DirtyMarks {
     ) -> bool {
         self.marks.reset(applier);
         self.from_update = true;
+        // Content updates mark first: the nodes above them take both marks,
+        // so the walks up from the other updates stop where one mark stops
+        // them. The merged marks do not depend on the order, and a content
+        // update moves no layer.
+        let content = |update: &&(NodeId, NodeUpdate)| update.1 == NodeUpdate::Content;
+        self.mark_above::<{ ABOVE_DIRTY | ABOVE_CONTENT }>(
+            applier,
+            updates.iter().filter(content),
+            moved,
+        );
+        self.mark_above::<ABOVE_DIRTY>(applier, updates.iter().filter(|u| !content(u)), moved)
+    }
+
+    // Marks the nodes of `updates` with their updates, merged with the
+    // marks they have, and the nodes above them with `ABOVE`. Lets go the
+    // subtrees `moved` keeps of each node it marks. Returns whether an
+    // update may move a layer with no layout pass.
+    fn mark_above<'u, const ABOVE: u8>(
+        &mut self,
+        applier: &MemoryApplier,
+        updates: impl Iterator<Item = &'u (NodeId, NodeUpdate)>,
+        moved: &mut MovedSubtrees,
+    ) -> bool {
         let mut moves = false;
         for &(node, update) in updates {
             moves |= !matches!(update, NodeUpdate::Content | NodeUpdate::Draws);
             moved.let_go(node);
             let merge = |mark| {
                 let merged = decode(mark).map_or(update, |before| before.merge(update));
-                (mark & ABOVE_DIRTY) | (encode(merged) << UPDATE_SHIFT)
+                (mark & (ABOVE_DIRTY | ABOVE_CONTENT)) | (encode(merged) << UPDATE_SHIFT)
             };
             let above = |node| moved.let_go(node);
             self.marks
-                .update_with_ancestors(applier, node, merge, (ABOVE_DIRTY, above));
+                .update_with_ancestors(applier, node, merge, (ABOVE, above));
         }
         moves
     }
@@ -586,10 +612,7 @@ impl<'a> LayoutWalk<'a> {
         if !self.marks.from_update || self.keeps_space(&scene.subtrees, at) {
             return false;
         }
-        let (update, children) = match change {
-            HeadChange::Whole(update) => (update, HeadChildren::Whole),
-            HeadChange::Beneath(update) => (update, HeadChildren::Records),
-        };
+        let update = change.update;
         let position = match (update, position) {
             (None | Some(NodeUpdate::Layer), ChildPosition::AsBefore) => None,
             (None | Some(NodeUpdate::Moved | NodeUpdate::Layer), ChildPosition::Anew(read)) => {
@@ -611,19 +634,23 @@ impl<'a> LayoutWalk<'a> {
             Some(NodeUpdate::Layer) => OwnLayer::Changed,
             _ => OwnLayer::AsLowered,
         };
-        // A whole subtree whose nodes publish no window geometry pushes the
-        // same with no place in the window.
+        // A subtree whose nodes publish no window geometry pushes the same
+        // with no place in the window, while its nodes are those of its old
+        // subtree: a node's modifiers, which say whether it publishes, change
+        // only with new content.
         let lean;
-        let lower_context = match children {
-            HeadChildren::Whole if !holds_sinks(&scene.subtrees, at) => {
-                lean = lower_context.without_window_origin();
-                &lean
-            }
-            _ => lower_context,
+        let lower_context = if change.keeps_nodes()
+            && lower_context.has_window_origin()
+            && !holds_sinks(&scene.subtrees, at)
+        {
+            lean = lower_context.without_window_origin();
+            &lean
+        } else {
+            lower_context
         };
         self.push_head(
             (child, at),
-            (position, own_layer, children),
+            (position, own_layer, change.children()),
             lower_context,
             (scene, context),
         )
@@ -858,25 +885,37 @@ fn holds_sinks(records: &[SubtreeItems], at: usize) -> bool {
         .any(|record| record.sinks)
 }
 
-// What changed of a node that an update pushes from its head: its own
-// update, if any, and whether a node beneath it changed.
+// What changed of a node that an update pushes from its head, as its mark
+// says: its own update, if any, and what changed beneath it.
 #[derive(Clone, Copy)]
-pub(crate) enum HeadChange {
-    // No node beneath it: its whole subtree pushes again in its old order.
-    Whole(Option<NodeUpdate>),
-    // A node beneath it.
-    Beneath(Option<NodeUpdate>),
+pub(crate) struct HeadChange {
+    update: Option<NodeUpdate>,
+    // The bits of the mark that say what changed beneath the node.
+    beneath: u8,
 }
 
 impl HeadChange {
     // What the node with `mark` changed.
     pub(crate) fn of(mark: u8) -> Self {
-        let update = decode(mark);
-        if mark & ABOVE_DIRTY == 0 {
-            Self::Whole(update)
-        } else {
-            Self::Beneath(update)
+        Self {
+            update: decode(mark),
+            beneath: mark & (ABOVE_DIRTY | ABOVE_CONTENT),
         }
+    }
+
+    // How its children push: whole while no node beneath it changed.
+    fn children(self) -> HeadChildren {
+        if self.beneath & ABOVE_DIRTY == 0 {
+            HeadChildren::Whole
+        } else {
+            HeadChildren::Records
+        }
+    }
+
+    // Whether no node beneath it took new content: the nodes beneath it and
+    // their modifiers are those of its old subtree.
+    fn keeps_nodes(self) -> bool {
+        self.beneath & ABOVE_CONTENT == 0
     }
 }
 

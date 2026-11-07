@@ -43,6 +43,12 @@ impl LowerContext {
         }
     }
 
+    /// Whether the context knows where the parent lies in the window: a
+    /// context made by [`LowerContext::without_window_origin`] does not.
+    pub fn has_window_origin(&self) -> bool {
+        self.parent_abs.is_some()
+    }
+
     /// This context with no place in the window: a subtree whose nodes
     /// publish no window geometry lowers the same under it, and skips
     /// working out where each node lies in the window.

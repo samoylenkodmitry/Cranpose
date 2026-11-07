@@ -2,7 +2,8 @@
 // its window. The rows change nothing while the column scrolls, so an
 // update pushes their subtrees again from what it kept of them. The
 // reported rect after each scroll step must equal the one a window built
-// anew reports.
+// anew reports, also when the node starts to report while the column
+// scrolls: its new modifiers lie beneath rows that only moved.
 
 use std::{
     cell::{Cell, RefCell},
@@ -10,7 +11,7 @@ use std::{
 };
 
 use cranpose_app_shell::AppShell;
-use cranpose_core::{location_key, remember};
+use cranpose_core::{MutableState, location_key, remember, rememberMutableStateOf};
 use cranpose_macros::composable;
 use cranpose_render_common::{RenderScene, Renderer};
 use cranpose_render_pixels::PixelsRenderer;
@@ -23,15 +24,19 @@ const ROWS: usize = 12;
 const STEPS: u32 = 16;
 
 type Scroll = Rc<RefCell<Option<ScrollState>>>;
+type Reports = Rc<RefCell<Option<MutableState<bool>>>>;
 
 // A column that scrolls over rows of nested boxes. The row at `REPORTING`
-// holds, two boxes deep, a box that reports its window rect into `sink`.
+// holds, two boxes deep, a box that reports its window rect into `sink`
+// while the state `reports` captures is true.
 const REPORTING: usize = 6;
 
 #[composable]
-fn ScrolledRows(captured: Scroll, sink: Rc<Cell<Rect>>) {
+fn ScrolledRows(captured: (Scroll, Reports), sink: Rc<Cell<Rect>>) {
     let scroll = remember(|| ScrollState::new(0.0)).with(|state| *state);
-    *captured.borrow_mut() = Some(scroll);
+    let reports = rememberMutableStateOf(|| false);
+    *captured.0.borrow_mut() = Some(scroll);
+    *captured.1.borrow_mut() = Some(reports);
     Column(
         Modifier::empty()
             .padding(5.0)
@@ -53,7 +58,7 @@ fn ScrolledRows(captured: Scroll, sink: Rc<Cell<Rect>>) {
                             Modifier::empty().padding(1.0),
                             BoxSpec::default(),
                             move || {
-                                let reporter = if row == REPORTING {
+                                let reporter = if row == REPORTING && reports.value() {
                                     Modifier::empty().report_window_rect(Rc::clone(&sink))
                                 } else {
                                     Modifier::empty()
@@ -68,14 +73,19 @@ fn ScrolledRows(captured: Scroll, sink: Rc<Cell<Rect>>) {
     );
 }
 
-fn shell(sink: &Rc<Cell<Rect>>) -> (AppShell<PixelsRenderer>, Scroll) {
-    let captured: Scroll = Rc::default();
-    let content = Rc::clone(&captured);
+fn shell(sink: &Rc<Cell<Rect>>) -> (AppShell<PixelsRenderer>, (Scroll, Reports)) {
+    let captured: (Scroll, Reports) = Default::default();
+    let content = (Rc::clone(&captured.0), Rc::clone(&captured.1));
     let sink = Rc::clone(sink);
     let shell = AppShell::new_with_size_and_density(
         PixelsRenderer::new(),
         location_key(file!(), line!(), column!()),
-        move || ScrolledRows(Rc::clone(&content), Rc::clone(&sink)),
+        move || {
+            ScrolledRows(
+                (Rc::clone(&content.0), Rc::clone(&content.1)),
+                Rc::clone(&sink),
+            )
+        },
         (WIDTH, HEIGHT),
         (WIDTH as f32, HEIGHT as f32),
         1.0,
@@ -83,23 +93,27 @@ fn shell(sink: &Rc<Cell<Rect>>) -> (AppShell<PixelsRenderer>, Scroll) {
     (shell, captured)
 }
 
-#[test]
-fn a_node_in_a_scrolled_row_that_holds_still_reports_where_it_lies_now() {
+// Scrolls a window kept across updates and one built anew at each step, the
+// node reporting from step `reports_from` on, and checks after each step
+// that both report the same window rect. Returns the rects reported.
+fn scroll_both(reports_from: u32) -> Vec<Rect> {
     let (kept_sink, fresh_sink) = (Rc::default(), Rc::default());
-    let (mut kept, kept_scroll) = shell(&kept_sink);
-    let (mut fresh, fresh_scroll) = shell(&fresh_sink);
+    let (mut kept, kept_states) = shell(&kept_sink);
+    let (mut fresh, fresh_states) = shell(&fresh_sink);
     let mut pixels = vec![0u8; (WIDTH * HEIGHT * 4) as usize];
-    let scroll_to = |captured: &Scroll, step: u32| {
-        let scroll = (*captured.borrow()).expect("the composition remembered the scroll state");
+    let step_to = |(scroll, reports): &(Scroll, Reports), step: u32| {
+        let scroll = (*scroll.borrow()).expect("the composition remembered the scroll state");
         scroll.scroll_to(step as f32 * 3.0);
+        let reports = (*reports.borrow()).expect("the composition remembered the reports state");
+        reports.set(step >= reports_from);
     };
-    let mut first = None;
+    let mut reported = Vec::new();
     for step in 0..STEPS {
-        scroll_to(&kept_scroll, step);
+        step_to(&kept_states, step);
         kept.update();
         kept.primary()
             .with_renderer(|renderer| renderer.draw(&mut pixels, WIDTH, HEIGHT));
-        scroll_to(&fresh_scroll, step);
+        step_to(&fresh_states, step);
         fresh
             .primary()
             .with_renderer(|renderer| renderer.scene_mut().clear());
@@ -110,12 +124,34 @@ fn a_node_in_a_scrolled_row_that_holds_still_reports_where_it_lies_now() {
             fresh_sink.get(),
             "step {step}: the node reports another window rect than a window built anew"
         );
-        first.get_or_insert_with(|| fresh_sink.get());
+        reported.push(fresh_sink.get());
     }
-    let scrolled = first.map(|first| first.y - fresh_sink.get().y);
+    reported
+}
+
+#[test]
+fn a_node_in_a_scrolled_row_that_holds_still_reports_where_it_lies_now() {
+    let reported = scroll_both(0);
+    let scrolled = reported[0].y - reported[reported.len() - 1].y;
     assert_eq!(
         scrolled,
-        Some((STEPS - 1) as f32 * 3.0),
+        (STEPS - 1) as f32 * 3.0,
         "the reported rect moves up by the whole scroll"
+    );
+}
+
+#[test]
+fn a_node_that_starts_to_report_while_its_row_scrolls_reports_where_it_lies() {
+    let reports_from = STEPS / 2;
+    let reported = scroll_both(reports_from);
+    assert_eq!(
+        reported[0],
+        Rect::default(),
+        "the node reports nothing at first"
+    );
+    assert_ne!(
+        reported[reports_from as usize],
+        Rect::default(),
+        "the node reports from the step its modifier came in"
     );
 }
