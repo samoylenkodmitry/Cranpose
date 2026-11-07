@@ -263,7 +263,9 @@ pub async fn run(
         wgpu::InstanceDescriptor::new_with_display_handle(Box::new(BrowserDisplayHandle));
     instance_desc.backends = instance_backends(backend_preference);
     let instance = match backend_preference {
-        WebBackendPreference::Auto => super::backend_preference::auto_instance(instance_desc).await,
+        WebBackendPreference::Auto => {
+            wgpu::util::new_instance_with_webgpu_detection(instance_desc).await
+        }
         WebBackendPreference::WebGpu | WebBackendPreference::Gl => {
             wgpu::Instance::new(instance_desc)
         }
