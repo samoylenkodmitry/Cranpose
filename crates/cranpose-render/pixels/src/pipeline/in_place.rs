@@ -220,7 +220,7 @@ impl Repush<'_> {
         // A node that wraps its outer draws holds its children in its own
         // layer inside the wrapper.
         let own = OldChildren::own_record(&self.scene.subtrees, record, node);
-        let Some(passed) = self.scene.subtrees[own].passed_down else {
+        let Some(passed) = self.scene.subtrees[own].passed_down_at() else {
             self.defer(walk, (node, place), context, (record, parent));
             return Ok(());
         };

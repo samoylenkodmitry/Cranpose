@@ -292,6 +292,7 @@ impl<'a> Subtree<'a> {
             sinks: self.has_origin_sinks(),
             hits: hits.map(|layer| Box::new(HitLayer::of(layer))),
             passed_down: None,
+            surface: None,
             end,
             start: counts.into(),
             stop: counts.into(),
@@ -347,9 +348,15 @@ pub(crate) struct SubtreeItems {
     // pointer take from it; `None` for a layer that does neither and for a
     // node drawn in its parent's layer.
     pub hits: Option<Box<HitLayer>>,
-    /// Where [`RasterScene::passed_down`] holds what the layer passed to its
-    /// child layers, when it has any.
-    pub passed_down: Option<usize>,
+    // Where [`RasterScene::passed_down`] holds what the layer passed to its
+    // child layers, when it has any: 32 bits, so that with `surface` it
+    // takes the 16 bytes of a `usize` index.
+    pub passed_down: Option<u32>,
+    // The records of the subtree a layer drew into a surface of its own,
+    // its own first: the scene holds none of its children's records, and
+    // its readers take them from here. Boxed twice: a record keeps one
+    // pointer.
+    pub surface: Option<Box<Box<[Self]>>>,
     /// The index of the first record after the subtree's, its descendants'
     /// included.
     pub end: usize,
@@ -370,6 +377,10 @@ impl SubtreeItems {
             sinks: self.sinks,
             hits: self.hits.clone(),
             passed_down: self.passed_down,
+            surface: self
+                .surface
+                .as_ref()
+                .map(|records| Box::new(records.iter().map(Self::copied).collect())),
             end: self.end,
             start: self.start,
             stop: self.stop,
@@ -386,7 +397,12 @@ impl SubtreeItems {
     // The records of the subtree the layer drew into a surface of its own,
     // its own first; empty for any other record.
     pub(crate) fn surface(&self) -> &[Self] {
-        self.hits.as_deref().map_or(&[], |hits| &hits.surface)
+        self.surface.as_deref().map_or(&[], |records| records)
+    }
+
+    // Where the scene holds what the layer passed to its child layers.
+    pub(crate) fn passed_down_at(&self) -> Option<usize> {
+        self.passed_down.map(|at| at as usize)
     }
 }
 
@@ -505,20 +521,15 @@ impl RasterScene {
             }
         };
         if let Some(record) = self.record_mut(index) {
-            record.passed_down = Some(at);
+            record.passed_down = Some(as_u32(at));
         }
         same
     }
 
-    // Keeps in the open record `index`, of `layer`, which drew its children
+    // Keeps in the open record `index`, of a layer that drew its children
     // into a surface of its own, `records`: the surface's records of the
     // layer's subtree, which the scene's readers take its children from.
-    pub(crate) fn keep_surface_records(
-        &mut self,
-        index: usize,
-        layer: &LayerNode,
-        mut records: Vec<SubtreeItems>,
-    ) {
+    pub(crate) fn keep_surface_records(&mut self, index: usize, mut records: Vec<SubtreeItems>) {
         for record in &mut records {
             if let Some(head) = record.head.take() {
                 head.recycle();
@@ -528,10 +539,7 @@ impl RasterScene {
         let sinks = records.iter().any(|record| record.sinks);
         if let Some(record) = self.record_mut(index) {
             record.sinks |= sinks;
-            record
-                .hits
-                .get_or_insert_with(|| Box::new(HitLayer::of(layer)))
-                .surface = records.into_boxed_slice();
+            record.surface = Some(Box::new(records.into_boxed_slice()));
         }
     }
 
@@ -745,11 +753,11 @@ impl RasterScene {
                 record.stop = record.stop.get().moved(from, to).into();
             }
             record.passed_down = record
-                .passed_down
+                .passed_down_at()
                 .and_then(|at| old.passed_down.get(at))
                 .map(|copied| {
                     passed_down.push(copied.clone());
-                    passed_down.len() - 1
+                    as_u32(passed_down.len() - 1)
                 });
         }
     }
@@ -793,8 +801,9 @@ impl RasterScene {
                 start: record.start.get().moved(from, to_items).into(),
                 stop: record.stop.get().moved(from, to_items).into(),
                 passed_down: record
-                    .passed_down
-                    .map(|at| moved(at, first_entry, to_entries)),
+                    .passed_down_at()
+                    .map(|at| as_u32(moved(at, first_entry, to_entries))),
+                surface: record.surface.take(),
                 head: record.head.take(),
                 ..record.copied()
             });
@@ -836,7 +845,7 @@ impl RasterScene {
         let head = self.subtrees.get(record)?;
         let records = self.subtrees.get(record..head.end)?;
         let (mut first, mut last, mut count) = (None, None, 0);
-        for at in records.iter().filter_map(|record| record.passed_down) {
+        for at in records.iter().filter_map(SubtreeItems::passed_down_at) {
             first.get_or_insert(at);
             last = Some(at);
             count += 1;

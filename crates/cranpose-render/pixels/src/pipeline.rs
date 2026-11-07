@@ -623,7 +623,7 @@ pub(crate) fn populate_draws_from_graph(
         && let Some(record) = reuse.old.subtrees.get(index)
     {
         reuse.cursor = index + 1;
-        before = Some((record.end, record.passed_down));
+        before = Some((record.end, record.passed_down_at()));
     }
     flush_copies(reuse, scene);
     let record = scene.open_subtree(subtree);
@@ -722,7 +722,7 @@ fn push_layer_surface(
     // The surface's scene goes once the surface rasterizes: the layer's
     // record keeps the records of its children.
     if items.subtrees.len() > 1 {
-        scene.keep_surface_records(record, layer, std::mem::take(&mut items.subtrees));
+        scene.keep_surface_records(record, std::mem::take(&mut items.subtrees));
     }
 }
 

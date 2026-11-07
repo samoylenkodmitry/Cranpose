@@ -82,7 +82,7 @@ impl Opened {
         Self {
             end: as_u32(old.end),
             stop: as_u32(old.stop.get().order),
-            passed_down: old.passed_down.map(as_u32),
+            passed_down: old.passed_down,
         }
     }
 
@@ -164,7 +164,7 @@ impl Rewrite {
             scene.subtrees[..record]
                 .iter()
                 .rev()
-                .find_map(|before| before.passed_down)
+                .find_map(SubtreeItems::passed_down_at)
                 .map_or(0, |last| last + 1)
         } else {
             first
@@ -291,7 +291,7 @@ impl Rewrite {
                     Whole::Open { open, .. } => {
                         self.whole = Whole::Open {
                             open: open + 1,
-                            entry: old.passed_down.map(as_u32),
+                            entry: old.passed_down,
                         };
                         self.next.records += 1;
                         return OpenRecord::InWhole(index);
@@ -326,6 +326,11 @@ impl Rewrite {
                     stale.recycle();
                 }
                 record.passed_down = None;
+                // A layer drawn through a surface keeps its new records as
+                // its push ends.
+                if record.surface.is_some() {
+                    record.surface = None;
+                }
                 record.end = index + 1;
                 record.stop = self.next.items.into();
                 self.next.records += 1;
@@ -463,7 +468,7 @@ impl Rewrite {
         first_child: usize,
     ) -> Option<usize> {
         let old = records[..self.stop.records].get(at)?;
-        let entry = old.passed_down?;
+        let entry = old.passed_down_at()?;
         let child = records[..old.end].get(first_child)?;
         if self.spilled_at.is_some()
             || self.next.records != at
@@ -658,7 +663,9 @@ impl Rewrite {
             later.end = shift(later.end, records);
             later.start = later.start.get().shifted(removed, added).into();
             later.stop = later.stop.get().shifted(removed, added).into();
-            later.passed_down = later.passed_down.map(|index| shift(index, entries));
+            later.passed_down = later
+                .passed_down
+                .map(|index| as_u32(shift(index as usize, entries)));
         }
         for open in &mut self.opened {
             open.end = as_u32(shift(open.end(), records));
