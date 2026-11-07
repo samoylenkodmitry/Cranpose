@@ -21,7 +21,7 @@ use cranpose_ui_graphics::Point;
 use crate::{
     moved_subtrees::MovedSubtrees,
     pipeline::{ContentStyle, RasterTraversalContext, Reuse, populate_draws_from_graph},
-    raster_scene::{RasterScene, Subtree, SubtreeItems},
+    raster_scene::{OpenRecord, RasterScene, Subtree, SubtreeItems},
 };
 
 mod child_slot;
@@ -561,7 +561,7 @@ impl<'a> LayoutWalk<'a> {
                     pushes: ChildPushes::OverOld(OldChildren::of(&scene.subtrees, at, child)),
                 };
                 slot.push_children(scene, &context.kept_beneath((&passed, &style)), &mut None);
-                scene.close_subtree(at);
+                scene.close_subtree(OpenRecord::Writes(at));
                 true
             },
         );

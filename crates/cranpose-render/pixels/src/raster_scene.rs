@@ -358,6 +358,23 @@ impl HitLayer {
     }
 }
 
+// A record the scene opened, by where it lies: one that opened in its old
+// place inside a subtree that moves whole closes with nothing to write
+// while the pushes keep the old places; any other writes its end and stop.
+#[derive(Clone, Copy)]
+pub(crate) enum OpenRecord {
+    Writes(usize),
+    InWhole(usize),
+}
+
+impl OpenRecord {
+    pub(crate) fn index(self) -> usize {
+        match self {
+            Self::Writes(index) | Self::InWhole(index) => index,
+        }
+    }
+}
+
 /// The items a layer's subtree pushed into a scene, in a run of each list,
 /// so the next scene can copy them when nothing they depend on changed.
 pub(crate) struct SubtreeItems {
@@ -492,9 +509,9 @@ impl RasterScene {
         }
     }
 
-    /// Opens the record of `subtree`, whose items come next, and returns its
-    /// index for [`Self::close_subtree`].
-    pub(crate) fn open_subtree(&mut self, subtree: Subtree<'_>) -> usize {
+    /// Opens the record of `subtree`, whose items come next, and returns it
+    /// for [`Self::close_subtree`].
+    pub(crate) fn open_subtree(&mut self, subtree: Subtree<'_>) -> OpenRecord {
         let hits = subtree.hit_layer();
         self.hits_changed |= hits.is_some();
         if let Some(rewrite) = self.rewrite.as_deref_mut() {
@@ -503,7 +520,7 @@ impl RasterScene {
         let index = self.subtrees.len();
         let counts = self.counts();
         self.subtrees.push(subtree.record(index + 1, counts, hits));
-        index
+        OpenRecord::Writes(index)
     }
 
     // Notes in the record `index` what its layer passes down. While a
@@ -530,19 +547,24 @@ impl RasterScene {
         same
     }
 
-    /// Closes the record `index`: the subtree pushed everything since it
-    /// opened.
+    /// Closes `record`: the subtree pushed everything since it opened.
     #[inline]
-    pub(crate) fn close_subtree(&mut self, index: usize) {
-        // In line: most records of a subtree that moves whole close so,
-        // with nothing to write, and a call would cost each of them.
-        if self
-            .rewrite
-            .as_deref_mut()
-            .is_some_and(Rewrite::closes_in_whole)
-        {
-            return;
-        }
+    pub(crate) fn close_subtree(&mut self, record: OpenRecord) {
+        let index = match record {
+            // In line: most records of a subtree that moves whole close so,
+            // with nothing to write, and a call would cost each of them.
+            OpenRecord::InWhole(index) => {
+                if self
+                    .rewrite
+                    .as_deref_mut()
+                    .is_some_and(Rewrite::closes_in_whole)
+                {
+                    return;
+                }
+                index
+            }
+            OpenRecord::Writes(index) => index,
+        };
         self.write_close(index);
     }
 

@@ -20,7 +20,9 @@ use crate::{
     kept_list::push_kept,
     layout_walk::child_record_from,
     pipeline::UpdatedReach,
-    raster_scene::{HitLayer, ItemCounts, PassedDown, RasterScene, Subtree, SubtreeItems},
+    raster_scene::{
+        HitLayer, ItemCounts, OpenRecord, PassedDown, RasterScene, Subtree, SubtreeItems,
+    },
     scene_item::SceneItem,
 };
 
@@ -268,12 +270,13 @@ impl Rewrite {
     // old record where the subtree opens its next one, when that one is of
     // the same node and its items start where the record's do; else into
     // the spill. Returns where the record would lie, were the spill in
-    // place. The old record's box of hit facts takes the new ones in place.
+    // place, and whether its close writes. The old record's box of hit
+    // facts takes the new ones in place.
     pub(crate) fn place_record(
         &mut self,
         records: &mut [SubtreeItems],
         (subtree, hits): (Subtree<'_>, Option<&LayerNode>),
-    ) -> usize {
+    ) -> OpenRecord {
         if self.spilled_at.is_none() {
             let index = self.next.records;
             if let Some(old) = records[..self.stop.records].get(index)
@@ -289,7 +292,7 @@ impl Rewrite {
                             entry: old.passed_down.map(|entry| entry as u32),
                         };
                         self.next.records += 1;
-                        return index;
+                        return OpenRecord::InWhole(index);
                     }
                     whole => {
                         push_kept(&mut self.opened, Opened::of(old));
@@ -324,7 +327,7 @@ impl Rewrite {
                 record.end = index + 1;
                 record.stop = self.next.items.into();
                 self.next.records += 1;
-                return index;
+                return OpenRecord::Writes(index);
             }
             self.spilled_at = Some(self.next);
         }
@@ -343,7 +346,7 @@ impl Rewrite {
         self.spill
             .subtrees
             .push(subtree.record(here.records + 1, here.items, hits));
-        here.records
+        OpenRecord::Writes(here.records)
     }
 
     // The record that lies at `index` were the spill in place.

@@ -632,7 +632,10 @@ pub(crate) fn populate_draws_from_graph(
             layer,
             scene,
             context,
-            (record, before.and_then(|(_, passed_down)| passed_down)),
+            (
+                record.index(),
+                before.and_then(|(_, passed_down)| passed_down),
+            ),
             reuse,
             slot,
         ),
@@ -696,7 +699,7 @@ fn push_layer_surface(
             surface_root: true,
             in_space: context.in_space,
         },
-        (record, None),
+        (record.index(), None),
         &mut None,
         slot.map(ChildSlot::for_surface),
     );
