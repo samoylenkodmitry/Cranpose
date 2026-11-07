@@ -532,7 +532,10 @@ impl RasterScene {
 
     /// Closes the record `index`: the subtree pushed everything since it
     /// opened.
+    #[inline]
     pub(crate) fn close_subtree(&mut self, index: usize) {
+        // In line: most records of a subtree that moves whole close so,
+        // with nothing to write, and a call would cost each of them.
         if self
             .rewrite
             .as_deref_mut()
@@ -540,6 +543,12 @@ impl RasterScene {
         {
             return;
         }
+        self.write_close(index);
+    }
+
+    // Writes the end and stop of the record `index`, which closes.
+    #[inline(never)]
+    fn write_close(&mut self, index: usize) {
         let (end, stop) = match self.rewrite.as_deref() {
             Some(rewrite) => rewrite.record_end(),
             None => (self.subtrees.len(), self.counts()),

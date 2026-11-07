@@ -413,6 +413,7 @@ impl Rewrite {
     // while the pushes take the old places: its end and stop stay as they
     // were. False when the record is the root or the pushes went on in the
     // spill: its close writes them.
+    #[inline]
     pub(crate) fn closes_in_whole(&mut self) -> bool {
         match self.whole {
             Whole::Open { open, entry } if open > 1 && self.spilled_at.is_none() => {
