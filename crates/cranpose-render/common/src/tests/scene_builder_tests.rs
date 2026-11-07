@@ -2463,7 +2463,7 @@ fn appending_empty_draw_commands_preserves_existing_nodes_and_command_identity()
                 size: Size::default(),
                 motion_context_animated: false,
                 layer: None,
-                store: RecordingStore::Command,
+                store: RecordingStore::Command.buffers(),
             },
             phase,
         );

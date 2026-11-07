@@ -6,7 +6,7 @@ use cranpose_core::{MemoryApplier, NodeId, NodeMarks, collections::map::HashMap}
 use cranpose_ui::Point;
 
 use super::{
-    AbsOrigin, GraphChanges, Level, LowerContext, RecordingStore, TranslateAncestorContext,
+    AbsOrigin, GraphChanges, Level, LowerContext, OWN_RECORDINGS, TranslateAncestorContext,
     children_have_origin_sinks, inline_leaf::fold_kept_leaf, layer_identity, node_layer::Children,
     note_space_change, read_placed_node_data, rebuild_tracking_hits, release_for_rebuild,
     remove_dirty_descendants, try_update_retained_layer, update_dirty_inline, write_node_layer,
@@ -500,7 +500,7 @@ impl ParentPass {
             inherited_translated_content_context: self.translated_content_context,
             parent_abs: Some(self.children),
             parent_content_offset: self.content_offset,
-            store: RecordingStore::Command,
+            store: OWN_RECORDINGS,
         }
     }
 }
