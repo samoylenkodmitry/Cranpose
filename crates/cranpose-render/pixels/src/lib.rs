@@ -196,15 +196,17 @@ impl PixelsRenderer {
             width: area.width,
             height: area.height,
         };
+        let reach = self.scene.reach();
         // Updates leave where items reach unmeasured until a host takes
         // their changes: a host that draws an area before it does has the
-        // area measure it. One call draws either way, so that the draw
-        // inlines here as each format's only caller.
-        let mut measured = Vec::new();
-        let mut reach = self.scene.reach();
+        // area measure it.
         if reach.len() != raster.order.len() {
-            raster.reach_into(target.window(), &mut measured);
-            reach = &measured;
+            return draw::draw_raster_window_measured(
+                &mut target,
+                raster,
+                self.scene.diagnostics(),
+                &self.text,
+            );
         }
         draw::draw_raster_window(
             &mut target,
