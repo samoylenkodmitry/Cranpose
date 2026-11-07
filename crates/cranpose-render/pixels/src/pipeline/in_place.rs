@@ -12,11 +12,10 @@
 use cranpose_core::NodeId;
 use cranpose_render_common::{
     NodeUpdate, SceneUpdates,
-    graph::RenderNode,
     graph_scene::RenderDiagnostics,
     layer_shadow::ShadowLight,
     scene_builder::{
-        KeptHead, LowerContext, NodePlace, RecordingStore, lowered_children_context,
+        KeptHead, KeptNodeRef, LowerContext, NodePlace, RecordingStore, lowered_children_context,
         release_lowered, root_layer_bounds, visit_kept_node,
     },
 };
@@ -75,7 +74,7 @@ impl WalkedTargets {
 
 // A node whose subtree an update pushes again: where it lies in the layout
 // tree and in the scene, what it lowers with, whether it lowers as a leaf,
-// and once the update lowered it, its layer and whether it has children.
+// and once the update lowered it, its layer.
 pub(crate) struct PushTarget {
     node: NodeId,
     place: NodePlace,
@@ -83,7 +82,6 @@ pub(crate) struct PushTarget {
     record: usize,
     parent: Option<usize>,
     leaf: bool,
-    children: bool,
     layer: Option<KeptHead>,
 }
 
@@ -287,7 +285,6 @@ impl Repush<'_> {
                 record,
                 parent,
                 leaf: walk.lowers_as_leaf((node, place)),
-                children: false,
                 layer: None,
             },
         );
@@ -315,8 +312,11 @@ impl Repush<'_> {
                 // The old head goes first: the recordings it holds may take
                 // the node's new draws.
                 self.scene.drop_head(target.record);
-                let lowered = (&mut target.layer, &mut target.children);
-                walk.lower((target.node, target.place), &target.context, lowered);
+                walk.lower(
+                    (target.node, target.place),
+                    &target.context,
+                    &mut target.layer,
+                );
             }
         }
         let pushed = targets
@@ -339,18 +339,17 @@ impl Repush<'_> {
         let old = OldChildren::of(&self.scene.subtrees, target.record, node);
         self.rewrite_subtree(
             (target.record, target.parent),
-            |scene, context| match target.layer.take().map(KeptHead::into_node) {
-                Some(layer) => {
+            |scene, context| match target.layer.take() {
+                Some(head) => {
                     // A node with children lowers as a layer.
-                    let inner = match &layer {
-                        RenderNode::Layer(own) if target.children => {
+                    let inner = match head.as_node() {
+                        KeptNodeRef::Layer(own) if head.has_children() => {
                             lowered_children_context(own, node, &target.context)
                         }
                         _ => None,
                     };
-                    let lowered = (layer, inner.as_ref());
-                    let lowered_with = (&target.context, Some(old));
-                    walk.push_lowered((node, place), lowered, (scene, context), lowered_with);
+                    let lowered = (head, inner.as_ref());
+                    walk.push_lowered((node, place), lowered, (scene, context), Some(old));
                 }
                 None => {
                     let moved = (node, target.record, ChildPosition::AsBefore);

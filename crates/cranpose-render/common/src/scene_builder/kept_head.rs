@@ -18,6 +18,8 @@ use crate::graph::{InlineNode, LayerNode, RenderNode};
 pub struct KeptHead {
     node: KeptNode,
     lowered_with: Inherited,
+    // Whether the node has layout children, which its layer leaves out.
+    has_children: bool,
 }
 
 // The node a head keeps, boxed: a record that keeps one holds a pointer.
@@ -48,20 +50,24 @@ pub enum Inherits {
     AsLowered,
 }
 
-/// The node a [`KeptHead`] keeps, placed where it now lies, as its parent's
-/// layer holds it.
+/// The node a [`KeptHead`] keeps, as its parent's layer holds it.
+#[derive(Clone, Copy)]
 pub enum KeptNodeRef<'a> {
-    /// The node's own layer, or the wrapper of its outer draws, and what the
-    /// node's children lower with.
-    Layer(&'a LayerNode, LowerContext),
+    /// The node's own layer, or the wrapper of its outer draws.
+    Layer(&'a LayerNode),
     /// The node drawn in its parent's layer.
     Inline(&'a InlineNode),
 }
 
 impl KeptHead {
-    /// Keeps `node`, which a node lowered alone under `context`. Hands back
-    /// a draw, which no node lowers to alone.
-    pub fn new(node: RenderNode, context: &LowerContext) -> Result<Self, RenderNode> {
+    /// Keeps `node`, which a node with the layout children `children`
+    /// lowered alone under `context`. Hands back a draw, which no node
+    /// lowers to alone.
+    pub fn new(
+        node: RenderNode,
+        context: &LowerContext,
+        children: &[NodeId],
+    ) -> Result<Self, RenderNode> {
         let node = match node {
             RenderNode::Layer(layer) => KeptNode::Layer(layer),
             RenderNode::Inline(inline) => KeptNode::Inline(inline),
@@ -70,6 +76,7 @@ impl KeptHead {
         Ok(Self {
             node,
             lowered_with: Inherited::of(context),
+            has_children: !children.is_empty(),
         })
     }
 
@@ -78,8 +85,8 @@ impl KeptHead {
     /// parent's content when the parent placed it anew, else where it lay.
     /// Takes the graphics-layer properties the node has now when `own_layer`
     /// changed. Publishes where its layer lies in its window when the node
-    /// reads it. Returns the node, with what its children lower with for a
-    /// layer. `None` when `context` passes down other state than the head
+    /// reads it. Returns the node placed where it now lies, with what its
+    /// children lower with for a layer with children. `None` when `context` passes down other state than the head
     /// lowered with, the node is gone, or a node with a new layer no longer
     /// fits its kept one or draws in its parent's layer.
     #[expect(clippy::inline_always, reason = "out of line: scrolls 2% slower")]
@@ -90,7 +97,7 @@ impl KeptHead {
         node_id: NodeId,
         context: &LowerContext,
         (position, own_layer, inherits): (Option<Point>, OwnLayer, Inherits),
-    ) -> Option<KeptNodeRef<'_>> {
+    ) -> Option<(KeptNodeRef<'_>, Option<LowerContext>)> {
         debug_assert!(
             inherits == Inherits::Check || Inherited::of(context) == self.lowered_with,
             "a node beneath a kept layer inherits what it lowered with"
@@ -111,7 +118,7 @@ impl KeptHead {
                 if let Some(position) = position {
                     inline.origin = Point::new(position.x + offset.x, position.y + offset.y);
                 }
-                return Some(KeptNodeRef::Inline(inline));
+                return Some((KeptNodeRef::Inline(inline), None));
             }
         };
         if let Some(position) = position {
@@ -131,8 +138,8 @@ impl KeptHead {
                 );
             })?;
         }
-        let inner = outer.beneath_layer(own);
-        Some(KeptNodeRef::Layer(layer, inner))
+        let inner = self.has_children.then(|| outer.beneath_layer(own));
+        Some((KeptNodeRef::Layer(layer), inner))
     }
 
     /// Lets the node go, as [`recycle_lowered`] lets a lowered node go.
@@ -146,8 +153,21 @@ impl KeptHead {
         crate::layer_recycling::recycle_to_redraw(self.into_node());
     }
 
-    /// The lowered node the head keeps.
-    pub fn into_node(self) -> RenderNode {
+    /// Whether the node has layout children.
+    pub fn has_children(&self) -> bool {
+        self.has_children
+    }
+
+    /// The node the head keeps.
+    pub fn as_node(&self) -> KeptNodeRef<'_> {
+        match &self.node {
+            KeptNode::Layer(layer) => KeptNodeRef::Layer(layer),
+            KeptNode::Inline(inline) => KeptNodeRef::Inline(inline),
+        }
+    }
+
+    // The lowered node the head keeps.
+    fn into_node(self) -> RenderNode {
         match self.node {
             KeptNode::Layer(layer) => RenderNode::Layer(layer),
             KeptNode::Inline(inline) => RenderNode::Inline(inline),

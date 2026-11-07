@@ -1,7 +1,7 @@
 use cranpose_core::NodeId;
 use cranpose_render_common::{
     NodeUpdate,
-    scene_builder::{LowerContext, NodePlace, kept_child_placement},
+    scene_builder::{LowerContext, NodePlace, kept_child_placement, visit_lowered_children},
 };
 use cranpose_ui_graphics::Point;
 
@@ -50,6 +50,11 @@ pub(super) enum ChildPushes {
     // Anew, into the scene of the owner's own surface: a child that did not
     // change pushes the subtree the walk keeps for it, lowered once.
     IntoSurface,
+    // As `Anew`, the children read from the owner's layout: a slot of a
+    // kept head holds none of them.
+    Layout,
+    // As `IntoSurface`, the children read from the owner's layout.
+    LayoutIntoSurface,
 }
 
 impl ChildPushes {
@@ -67,7 +72,15 @@ impl ChildSlot<'_> {
     // Pushes the children anew, into the scene of the owner's own surface,
     // which holds none of their old records.
     pub(crate) fn for_surface(&mut self) -> &mut Self {
-        self.pushes = ChildPushes::IntoSurface;
+        self.pushes = match self.pushes {
+            ChildPushes::OverOld(_) | ChildPushes::Anew | ChildPushes::IntoSurface => {
+                ChildPushes::IntoSurface
+            }
+            ChildPushes::Records(_)
+            | ChildPushes::Whole(_)
+            | ChildPushes::Layout
+            | ChildPushes::LayoutIntoSurface => ChildPushes::LayoutIntoSurface,
+        };
         self
     }
 
@@ -88,15 +101,36 @@ impl ChildSlot<'_> {
         context: &RasterTraversalContext<'_>,
         reuse: &mut Option<Reuse<'_>>,
     ) {
+        match self.pushes {
+            ChildPushes::OverOld(old) => self.push_over_old(old, scene, context),
+            ChildPushes::Records(old) => self.push_records(old, scene, context),
+            ChildPushes::Whole(old) => self.push_whole(old, scene, context),
+            ChildPushes::Anew | ChildPushes::IntoSurface => {
+                self.push_anew(self.children, (scene, context), reuse);
+            }
+            ChildPushes::Layout | ChildPushes::LayoutIntoSurface => {
+                visit_lowered_children(self.walk.applier, self.owner, |children| {
+                    self.push_anew(children, (scene, context), reuse);
+                });
+            }
+        }
+    }
+
+    // Pushes `children` anew under `context`, into the scene of the owner's
+    // own surface when the slot pushes there, copying from `reuse`'s scene
+    // those whose nodes did not change and that lie where they did.
+    fn push_anew(
+        &self,
+        children: &[NodeId],
+        (scene, context): (&mut RasterScene, &RasterTraversalContext<'_>),
+        reuse: &mut Option<Reuse<'_>>,
+    ) {
         let walk = self.walk;
-        let into_surface = match self.pushes {
-            ChildPushes::OverOld(old) => return self.push_over_old(old, scene, context),
-            ChildPushes::Records(old) => return self.push_records(old, scene, context),
-            ChildPushes::Whole(old) => return self.push_whole(old, scene, context),
-            ChildPushes::Anew => false,
-            ChildPushes::IntoSurface => true,
-        };
-        for &child in self.children {
+        let into_surface = matches!(
+            self.pushes,
+            ChildPushes::IntoSurface | ChildPushes::LayoutIntoSurface
+        );
+        for &child in children {
             if let Some(kept) = reuse.as_mut()
                 && walk.is_clean(child)
                 && let Some(placement) = kept_child_placement(walk.applier, child, self.context)

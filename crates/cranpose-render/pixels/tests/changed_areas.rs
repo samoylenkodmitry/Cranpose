@@ -306,6 +306,70 @@ fn TurnedParent(captured: Step) {
     );
 }
 
+// A parent turned by its layer, which draws through a surface, moves each
+// frame over a child that does not change.
+#[composable]
+fn MovingTurnedParent(captured: Step) {
+    let step = rememberMutableStateOf(|| 0u32);
+    *captured.borrow_mut() = Some(step);
+    let n = step.value();
+    Box(
+        Modifier::empty()
+            .offset(60.0 + (n % 5) as f32 * 9.0, 50.0)
+            .width(80.0)
+            .height(60.0)
+            .graphics_layer(|| GraphicsLayer {
+                rotation_z: 30.0,
+                ..GraphicsLayer::default()
+            })
+            .background(Color::from_rgb_u8(30, 40, 50)),
+        BoxSpec::default(),
+        || {
+            Box(
+                Modifier::empty()
+                    .offset(10.0, 10.0)
+                    .width(40.0)
+                    .height(20.0)
+                    .background(Color::from_rgb_u8(200, 120, 40)),
+                BoxSpec::default(),
+                || {},
+            );
+        },
+    );
+}
+
+// A parent whose layer turns each frame over a child that does not change:
+// from straight to turned, which draws through a surface, further, and
+// back to straight.
+#[composable]
+fn TurningParent(captured: Step) {
+    let step = rememberMutableStateOf(|| 0u32);
+    *captured.borrow_mut() = Some(step);
+    Box(
+        Modifier::empty()
+            .offset(80.0, 50.0)
+            .width(80.0)
+            .height(60.0)
+            .graphics_layer(move || GraphicsLayer {
+                rotation_z: (step.value() % 3) as f32 * 15.0,
+                ..GraphicsLayer::default()
+            })
+            .background(Color::from_rgb_u8(30, 40, 50)),
+        BoxSpec::default(),
+        || {
+            Box(
+                Modifier::empty()
+                    .offset(10.0, 10.0)
+                    .width(40.0)
+                    .height(20.0)
+                    .background(Color::from_rgb_u8(200, 120, 40)),
+                BoxSpec::default(),
+                || {},
+            );
+        },
+    );
+}
+
 /// A parent that never changes, translucent, tinted and clipped, over child
 /// layers that change one at a time: one fades, one moves across the
 /// parent's clip, and one stays still over a child of its own that changes
@@ -423,6 +487,16 @@ fn layers_that_change_under_a_still_parent_keep_its_alpha_tint_and_clip() {
 #[test]
 fn a_child_that_changes_under_a_turned_parent_redraws_in_its_surface() {
     kept_frames_match_full_redraws(1.0, TurnedParent);
+}
+
+#[test]
+fn a_turned_parent_that_moves_keeps_the_child_in_its_surface() {
+    kept_frames_match_full_redraws(1.0, MovingTurnedParent);
+}
+
+#[test]
+fn a_parent_that_turns_draws_its_child_in_and_out_of_its_surface() {
+    kept_frames_match_full_redraws(1.0, TurningParent);
 }
 
 #[composable]

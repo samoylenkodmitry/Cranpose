@@ -6,7 +6,7 @@ use cranpose_render_common::{
     graph::{HitTestNode, InlineNode, LayerNode, ProjectiveTransform, RenderNode},
     layer_shadow::{ShadowLight, ShadowRRect},
     primitive_emit::ShapeDrawParams,
-    scene_builder::KeptHead,
+    scene_builder::{KeptHead, KeptNodeRef},
 };
 use cranpose_ui::TextStyle;
 use cranpose_ui_graphics::{
@@ -258,6 +258,14 @@ impl<'a> Subtree<'a> {
             RenderNode::Layer(layer) => Some(Self::Layer(layer)),
             RenderNode::Inline(inline) => Some(Self::Inline(inline)),
             RenderNode::Primitive(_) | RenderNode::DrawRun(_) => None,
+        }
+    }
+
+    // The node a kept head keeps.
+    pub(crate) fn of_kept(node: KeptNodeRef<'a>) -> Self {
+        match node {
+            KeptNodeRef::Layer(layer) => Self::Layer(layer),
+            KeptNodeRef::Inline(inline) => Self::Inline(inline),
         }
     }
 

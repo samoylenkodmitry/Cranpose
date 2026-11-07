@@ -443,7 +443,7 @@ impl<'a> LayoutWalk<'a> {
                 let slot = (!children.is_empty()).then_some(&mut slot);
                 populate_draws_from_graph(subtree, scene, context, reuse, slot);
             }
-            match KeptHead::new(lowered, lower_context) {
+            match KeptHead::new(lowered, lower_context, children) {
                 Ok(head) if keeps_head && pushed => scene.keep_head(index, head),
                 Ok(head) => head.recycle(),
                 Err(draw) => recycle_lowered(draw),
@@ -465,55 +465,50 @@ impl<'a> LayoutWalk<'a> {
     // pushes again: lowering and recording, and pushing items and comparing
     // them, then each run for all the nodes, whose code a frame would
     // otherwise evict from the cache for every node. Puts its layer into
-    // `layer` and whether it has children into `children`. Leaves the layer
-    // empty for a node gone, and for one whose layer holds a 3D space, which
-    // `push` lowers. Out of line, as `Repush::rewrite_subtree` is.
+    // `layer`. Leaves the layer empty for a node gone, and for one whose
+    // layer holds a 3D space, which `push` lowers. Out of line, as
+    // `Repush::rewrite_subtree` is.
     #[inline(never)]
     pub(crate) fn lower(
         &self,
         (node, place): (NodeId, NodePlace),
         lower_context: &LowerContext,
-        (layer, children): (&mut Option<KeptHead>, &mut bool),
+        layer: &mut Option<KeptHead>,
     ) {
         lower_node_alone(self.applier, (node, place), lower_context, |lowered| {
             if holds_space(&lowered.node) {
                 return recycle_lowered(lowered.node);
             }
-            match KeptHead::new(lowered.node, lower_context) {
-                Ok(head) => {
-                    *children = !lowered.children.is_empty();
-                    *layer = Some(head);
-                }
+            match KeptHead::new(lowered.node, lower_context, lowered.children) {
+                Ok(head) => *layer = Some(head),
                 Err(draw) => recycle_lowered(draw),
             }
         });
     }
 
-    // Pushes under `context` the subtree of `node`, whose `layer` `lower`
+    // Pushes under `context` the subtree of `node`, whose `head` `lower`
     // gave with what its children lower with, `inner`, for a node with
     // children: over its old subtree, whose children's old records are
     // `old`, while a rewrite pushes the subtree it is in again.
     pub(crate) fn push_lowered(
         &self,
         (node, place): (NodeId, NodePlace),
-        (layer, inner): (RenderNode, Option<&LowerContext>),
+        (head, inner): (KeptHead, Option<&LowerContext>),
         (scene, context): (&mut RasterScene, &RasterTraversalContext<'_>),
-        (lower_context, old): (&LowerContext, Option<OldChildren>),
+        old: Option<OldChildren>,
     ) {
         let index = scene.next_record();
-        let Some(subtree) = Subtree::of_child(&layer) else {
-            return recycle_lowered(layer);
-        };
+        let subtree = Subtree::of_kept(head.as_node());
         match inner {
             Some(inner) => {
                 self.push_lowered_children((node, subtree), inner, (scene, context), old);
             }
             None => populate_draws_from_graph(subtree, scene, context, &mut None, None),
         }
-        match KeptHead::new(layer, lower_context) {
-            Ok(head) if self.keeps_head(place) => scene.keep_head(index, head),
-            Ok(head) => head.recycle(),
-            Err(draw) => recycle_lowered(draw),
+        if self.keeps_head(place) {
+            scene.keep_head(index, head);
+        } else {
+            head.recycle();
         }
     }
 
@@ -673,7 +668,7 @@ impl<'a> LayoutWalk<'a> {
             return false;
         };
         let index = scene.next_record();
-        let Some(node) = head.follow(
+        let Some((node, inner)) = head.follow(
             self.applier,
             child,
             lower_context,
@@ -682,7 +677,7 @@ impl<'a> LayoutWalk<'a> {
             head.recycle();
             return false;
         };
-        self.push_followed((child, at), (node, children), (scene, context));
+        self.push_followed((child, at), (node, inner, children), (scene, context));
         scene.keep_head(index, head);
         true
     }
@@ -697,23 +692,18 @@ impl<'a> LayoutWalk<'a> {
     fn push_followed(
         &self,
         (child, at): (NodeId, usize),
-        (node, children): (KeptNodeRef<'_>, HeadChildren),
+        (node, inner, children): (KeptNodeRef<'_>, Option<LowerContext>, HeadChildren),
         (scene, context): (&mut RasterScene, &RasterTraversalContext<'_>),
     ) {
-        let (layer, inner) = match node {
-            KeptNodeRef::Inline(inline) => {
-                return populate_draws_from_graph(
-                    Subtree::Inline(inline),
-                    scene,
-                    context,
-                    &mut None,
-                    None,
-                );
-            }
-            KeptNodeRef::Layer(layer, inner) => (layer, inner),
+        let (KeptNodeRef::Layer(layer), Some(inner)) = (node, inner) else {
+            let node = Subtree::of_kept(node);
+            return populate_draws_from_graph(node, scene, context, &mut None, None);
         };
         let old = OldChildren::of(&scene.subtrees, at, child);
         let pushes = match children {
+            // A layer whose old record holds none of its children's records
+            // drew them into the scene of its own surface.
+            _ if !old.holds_children(&scene.subtrees) => ChildPushes::Layout,
             HeadChildren::Records => ChildPushes::Records(old),
             HeadChildren::Whole => {
                 scene.begin_whole();
@@ -728,8 +718,13 @@ impl<'a> LayoutWalk<'a> {
             context: &inner,
             pushes,
         };
-        let slot = old.holds_children(&scene.subtrees).then_some(&mut slot);
-        populate_draws_from_graph(Subtree::Layer(layer), scene, context, &mut None, slot);
+        populate_draws_from_graph(
+            Subtree::Layer(layer),
+            scene,
+            context,
+            &mut None,
+            Some(&mut slot),
+        );
     }
 
     // Pushes under `context` the subtree of `child`, a child of a whole
@@ -751,7 +746,7 @@ impl<'a> LayoutWalk<'a> {
         let Some(mut head) = scene.take_head(at) else {
             return false;
         };
-        let Some(node) = head.follow(
+        let Some((node, inner)) = head.follow(
             self.applier,
             child,
             lower_context,
@@ -760,7 +755,11 @@ impl<'a> LayoutWalk<'a> {
             head.recycle();
             return false;
         };
-        self.push_followed((child, at), (node, HeadChildren::InWhole), (scene, context));
+        self.push_followed(
+            (child, at),
+            (node, inner, HeadChildren::InWhole),
+            (scene, context),
+        );
         scene.return_head(at, head);
         true
     }
