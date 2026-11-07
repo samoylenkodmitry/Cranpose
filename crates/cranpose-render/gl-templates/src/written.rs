@@ -41,6 +41,18 @@ pub(crate) struct Written {
     pub(crate) clip_distance_count: u32,
 }
 
+// `glsl` without the indentation and the blank lines of its lines, which a
+// GLSL compiler skips: the indentation was a tenth of the bytes of the
+// templates a page embeds.
+pub(crate) fn compact(glsl: &str) -> String {
+    let mut out = String::with_capacity(glsl.len());
+    for line in glsl.lines().map(str::trim).filter(|line| !line.is_empty()) {
+        out.push_str(line);
+        out.push('\n');
+    }
+    out
+}
+
 // `entry_point` of `module` as GLSL ES 3.00 for WebGL, its `main`, with the
 // blocks, textures and varyings it names. Errors on immediates, which the GL
 // backend binds only for code it wrote itself.

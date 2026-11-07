@@ -6,9 +6,9 @@ use crate::Template;
 /// holds the module's templates as `wgpu::hal::GlslTemplate`s, for a crate
 /// that depends on `wgpu`. It imports `wgpu`'s `hal` and `naga` once and names
 /// every type through them. Each piece of GLSL the templates share is written
-/// once.
+/// once, without the indentation and the blank lines of its lines.
 pub fn rust_source(modules: &[(&str, Vec<Template>)]) -> String {
-    let mut pool: BTreeMap<&str, usize> = BTreeMap::new();
+    let mut pool: BTreeMap<String, usize> = BTreeMap::new();
     let mut pieces_out = String::new();
     let mut statics = String::new();
     for (name, templates) in modules {
@@ -23,9 +23,9 @@ pub fn rust_source(modules: &[(&str, Vec<Template>)]) -> String {
                 "hal::GlslTemplate {{ entry_point: {:?}, stage: naga::ShaderStage::{:?}, glsl: &[",
                 template.entry_point, template.stage
             );
-            for piece in pieces(&generated.glsl) {
+            for piece in pieces(&generated.glsl).map(crate::written::compact) {
                 let next = pool.len();
-                let index = *pool.entry(piece).or_insert_with(|| {
+                let index = *pool.entry(piece).or_insert_with_key(|piece| {
                     let _ = writeln!(pieces_out, "const P{next}: &str = {piece:?};");
                     next
                 });

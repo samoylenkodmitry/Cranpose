@@ -9,8 +9,8 @@ use naga::{Module, back::PipelineConstants, valid};
 use crate::Generated;
 
 // The `naga_stage` entry point `entry_point` of the validated `module` with
-// `constants` applied, folded and flattened, as GLSL for WebGL2. A stage the
-// flatten pass refuses stays folded.
+// `constants` applied, folded and flattened, as GLSL for WebGL2 without
+// indentation or blank lines. A stage the flatten pass refuses stays folded.
 pub(crate) fn exact(
     (module, info): (&Module, &valid::ModuleInfo),
     entry_point: &str,
@@ -38,7 +38,7 @@ pub(crate) fn exact(
     let info = crate::generate::validate(&stage)?;
     let written = crate::written::write(&stage, &info, entry_point, naga_stage)?;
     Ok(Generated {
-        glsl: written.glsl,
+        glsl: crate::written::compact(&written.glsl),
         macros: Vec::new(),
         blocks: written.blocks,
         textures: written.textures,
