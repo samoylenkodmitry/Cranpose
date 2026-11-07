@@ -491,10 +491,15 @@ pub struct Texture {
 
 impl crate::DynTexture for Texture {}
 impl crate::DynSurfaceTexture for Texture {
-    /// A GL surface draws every frame into its one texture or renderbuffer,
-    /// made at configure, and copies it to the window at present.
+    /// A native GL surface draws every frame into its one texture or
+    /// renderbuffer, made at configure, and copies it to the window at
+    /// present. A web surface draws into its canvas's buffer, which the
+    /// browser hands back cleared.
     fn image_id(&self) -> Option<u64> {
-        Some(0)
+        match self.inner {
+            TextureInner::DefaultRenderbuffer => None,
+            _ => Some(0),
+        }
     }
 }
 
@@ -965,6 +970,15 @@ struct TextureToTextureCopy {
     copy: crate::TextureCopy,
 }
 
+/// A copy between a texture and the default framebuffer: the web canvas a
+/// surface draws into (`web::Surface`).
+#[derive(Debug)]
+struct CanvasCopy {
+    texture: glow::Texture,
+    target: BindTarget,
+    copy: crate::TextureCopy,
+}
+
 #[derive(Debug)]
 struct BufferToTextureCopy {
     src: Buffer,
@@ -1049,6 +1063,8 @@ enum Command {
     #[cfg(webgl)]
     CopyExternalImageToTexture(Box<ExternalImageToTextureCopy>),
     CopyTextureToTexture(Box<TextureToTextureCopy>),
+    CopyCanvasToTexture(Box<CanvasCopy>),
+    CopyTextureToCanvas(Box<CanvasCopy>),
     CopyBufferToTexture(Box<BufferToTextureCopy>),
     CopyTextureToBuffer(Box<TextureToBufferCopy>),
     SetIndexBuffer(glow::Buffer),

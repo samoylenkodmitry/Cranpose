@@ -6,10 +6,14 @@
 // - gl: WebGL2, which phones without WebGPU use. The GL backend reads a
 //   program's link at its first draw, so a program that fails to link shows
 //   only there. A release draws its first screen with the exact GLSL beside
-//   its wasm, and a page that cannot take that file says so.
+//   its wasm, and a page that cannot take that file says so. Its frames go
+//   straight into the canvas, upside down, and CSS flips the canvas: the
+//   default page must look as it does on WebGPU, where Chrome offers that.
+// On both, a press where the page shows a button must reach that button.
 import assert from "node:assert/strict";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { ENABLE_MIRROR } from "../cdp.mjs";
 import { GPU_FLAGS, launchChrome } from "../chrome.mjs";
 
 const url = process.argv[2];
@@ -149,6 +153,97 @@ async function deviceLoss() {
     for (const error of new Set(errors.map(error => error.split("\n")[0]))) console.log("     " + error);
 }
 
+// Opens `query` on `pageBackend` and waits until it runs and drew.
+async function open(query, pageBackend) {
+    const page = new URL(url);
+    page.search = query;
+    page.searchParams.set("backend", pageBackend);
+    await cdp.send("Page.navigate", { url: page.href });
+    await cdp.until(`location.href === ${JSON.stringify(page.href)}
+        && window.__cranposeAppState?.phase === 'running'`);
+    await pause(SETTLE_MS);
+}
+
+async function leave() {
+    await cdp.send("Page.navigate", { url: "about:blank" });
+    await cdp.until("location.href === 'about:blank'");
+    await pause(LEAVE_MS);
+}
+
+// The page's screenshot as the mean color of each cell of a coarse grid.
+async function cells() {
+    const { data } = await cdp.send("Page.captureScreenshot", {
+        format: "png",
+        clip: { x: 0, y: 0, width: WIDTH, height: HEIGHT, scale: 0.25 },
+    });
+    return cdp.evaluate(`(async () => {
+        const image = new Image();
+        image.src = 'data:image/png;base64,${data}';
+        await image.decode();
+        const context = new OffscreenCanvas(16, 20).getContext('2d');
+        context.drawImage(image, 0, 0, 16, 20);
+        return [...context.getImageData(0, 0, 16, 20).data];
+    })()`);
+}
+
+// The default page drawn on WebGL against the same page on WebGPU: the mean
+// difference of their coarse pictures, and of the WebGL one turned upside
+// down. A frame left upside down is far from WebGPU's and close to it turned.
+async function sameAsWebGpu() {
+    const start = cdp.logs.length;
+    const errors = [];
+    await open("", "gl");
+    const gl = await cells();
+    const adapter = await cdp.evaluate("navigator.gpu?.requestAdapter().then(adapter => !!adapter) ?? false");
+    await leave();
+    if (!adapter) {
+        console.log("skip (orientation) Chrome offers no WebGPU adapter to compare with");
+        return;
+    }
+    await open("", "webgpu");
+    const webgpu = await cells();
+    await leave();
+    const rowBytes = 16 * 4;
+    const turned = gl.map((_, index) => gl[(19 - Math.floor(index / rowBytes)) * rowBytes + (index % rowBytes)]);
+    const difference = picture => picture.reduce((sum, value, index) => sum + Math.abs(value - webgpu[index]), 0) / picture.length;
+    const [upright, upsideDown] = [difference(gl), difference(turned)];
+    if (!(upright < 8 && upright * 2 < upsideDown)) {
+        errors.push(`WebGL's default page differs from WebGPU's by ${upright.toFixed(1)} a channel, and by ${upsideDown.toFixed(1)} turned upside down`);
+    }
+    results.push({ page: "(orientation)", errors, console: cdp.logs.slice(start) });
+    console.log(`${errors.length ? "FAIL" : "ok  "} (orientation) difference ${upright.toFixed(1)}, upside down ${upsideDown.toFixed(1)}`);
+    for (const error of errors) console.log("     " + error);
+}
+
+// A press at the middle of the counter page's Increment button, where the
+// page shows it, counts once.
+async function pressCounts() {
+    const start = cdp.logs.length;
+    const errors = [];
+    await open("tab=counter", backend);
+    await cdp.until(ENABLE_MIRROR);
+    const increment = `document.querySelector('[data-cranpose-node][aria-label="Increment"]')`;
+    const count = `Number(document.querySelector('[data-cranpose-accessibility]').textContent.match(/Counter: (-?\\d+)/)[1])`;
+    await cdp.until(`!!${increment}`);
+    const [x, y, before] = await cdp.evaluate(`(() => {
+        const rect = ${increment}.getBoundingClientRect();
+        return [rect.left + rect.width / 2, rect.top + rect.height / 2, ${count}];
+    })()`);
+    for (const type of ["mouseMoved", "mousePressed", "mouseReleased"]) {
+        await cdp.send("Input.dispatchMouseEvent", { type, x, y, button: "left", clickCount: 1 });
+    }
+    try {
+        await cdp.until(`${count} === ${before + 1}`);
+    } catch {
+        errors.push(`a press on Increment at ${Math.round(x)}, ${Math.round(y)} left the count at ${await cdp.evaluate(count)}, from ${before}`);
+    }
+    await leave();
+    errors.push(...cdp.logs.slice(start).filter(line => FAILURE.test(line)));
+    results.push({ page: "(press)", errors, console: cdp.logs.slice(start) });
+    console.log(`${errors.length ? "FAIL" : "ok  "} (press)`);
+    for (const error of new Set(errors.map(error => error.split("\n")[0]))) console.log("     " + error);
+}
+
 // Prints each distinct error once in full, with the pages that showed it.
 function printErrors() {
     const pages = new Map();
@@ -181,6 +276,8 @@ try {
     })()`));
     assert.ok(pages, "the default page did not start, so the demo's page list is unknown");
     for (const [index, query] of pages.entries()) await visit(query, index + 1);
+    await pressCounts();
+    if (backend === "gl") await sameAsWebGpu();
     await deviceLoss();
     const failed = results.filter(result => result.errors.length);
     printErrors();

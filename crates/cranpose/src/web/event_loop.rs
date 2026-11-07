@@ -486,8 +486,7 @@ pub async fn run(
         let wheel_canvas = canvas.clone();
         let request_frame = Rc::clone(&request_frame);
         let closure = Closure::wrap(Box::new(move |event: WheelEvent| {
-            let x = event.offset_x() as f64;
-            let y = event.offset_y() as f64;
+            let (x, y) = super::pointer::canvas_position(&wheel_canvas, &event);
             let logical = platform.borrow().pointer_position(x, y);
 
             let wheel = super::wheel::wheel_scroll_from_dom(

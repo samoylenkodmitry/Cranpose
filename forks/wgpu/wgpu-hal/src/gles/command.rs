@@ -406,21 +406,38 @@ impl crate::CommandEncoder for super::CommandEncoder {
     ) where
         T: Iterator<Item = crate::TextureCopy>,
     {
-        let (src_raw, src_target) = src.inner.as_native();
-        let (dst_raw, dst_target) = dst.inner.as_native();
         for mut copy in regions {
             copy.clamp_size_to_virtual(&src.copy_size, &dst.copy_size);
-            self.cmd_buffer
-                .commands
-                .push(C::CopyTextureToTexture(Box::new(
-                    super::TextureToTextureCopy {
+            let command = match (&src.inner, &dst.inner) {
+                (super::TextureInner::DefaultRenderbuffer, _) => {
+                    let (texture, target) = dst.inner.as_native();
+                    C::CopyCanvasToTexture(Box::new(super::CanvasCopy {
+                        texture,
+                        target,
+                        copy,
+                    }))
+                }
+                (_, super::TextureInner::DefaultRenderbuffer) => {
+                    let (texture, target) = src.inner.as_native();
+                    C::CopyTextureToCanvas(Box::new(super::CanvasCopy {
+                        texture,
+                        target,
+                        copy,
+                    }))
+                }
+                _ => {
+                    let (src_raw, src_target) = src.inner.as_native();
+                    let (dst_raw, dst_target) = dst.inner.as_native();
+                    C::CopyTextureToTexture(Box::new(super::TextureToTextureCopy {
                         src: src_raw,
                         src_target,
                         dst: dst_raw,
                         dst_target,
                         copy,
-                    },
-                )))
+                    }))
+                }
+            };
+            self.cmd_buffer.commands.push(command);
         }
     }
 
@@ -567,11 +584,20 @@ impl crate::CommandEncoder for super::CommandEncoder {
             .filter(|at| at.is_some())
             .and_then(|at| at.as_ref().map(|at| &at.target.view.inner))
         {
-            // default framebuffer (provided externally)
+            // default framebuffer (provided externally, or a web canvas a
+            // surface draws into, whose own depth and stencil the pass uses)
             Some(&super::TextureInner::DefaultRenderbuffer) => {
                 self.cmd_buffer
                     .commands
                     .push(C::ResetFramebuffer { is_default: true });
+                if let Some(ref dsat) = desc.depth_stencil_attachment {
+                    if dsat.depth_ops.contains(crate::AttachmentOps::STORE_DISCARD) {
+                        self.state.invalidate_attachments.push(glow::DEPTH);
+                    }
+                    if dsat.stencil_ops.contains(crate::AttachmentOps::STORE_DISCARD) {
+                        self.state.invalidate_attachments.push(glow::STENCIL);
+                    }
+                }
             }
             _ => {
                 // set the framebuffer
@@ -668,7 +694,16 @@ impl crate::CommandEncoder for super::CommandEncoder {
             depth: 0.0..1.0,
         });
 
-        if !rendering_to_external_framebuffer {
+        // The default framebuffer draws into its back buffer, which
+        // `drawBuffers` cannot name as a color attachment.
+        let rendering_to_default_framebuffer = matches!(
+            desc.color_attachments
+                .first()
+                .and_then(|at| at.as_ref())
+                .map(|at| &at.target.view.inner),
+            Some(super::TextureInner::DefaultRenderbuffer)
+        );
+        if !rendering_to_external_framebuffer && !rendering_to_default_framebuffer {
             // set the draw buffers and states
             self.cmd_buffer
                 .commands

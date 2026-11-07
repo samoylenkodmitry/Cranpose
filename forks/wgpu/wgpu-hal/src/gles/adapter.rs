@@ -1350,25 +1350,33 @@ impl crate::Adapter for super::Adapter {
                 format,
                 color_spaces: wgt::SurfaceColorSpaces::SRGB,
             };
-            let mut formats = vec![
-                format_caps(wgt::TextureFormat::Rgba8Unorm),
-                #[cfg(native)]
-                format_caps(wgt::TextureFormat::Bgra8Unorm),
-            ];
-            if surface.supports_srgb() {
-                formats.extend([
-                    format_caps(wgt::TextureFormat::Rgba8UnormSrgb),
+            // A web surface draws into its canvas's buffer, which holds
+            // `Rgba8Unorm` (see `web::Surface`).
+            #[cfg(webgl)]
+            let formats = vec![format_caps(wgt::TextureFormat::Rgba8Unorm)];
+            #[cfg(not(webgl))]
+            let formats = {
+                let mut formats = vec![
+                    format_caps(wgt::TextureFormat::Rgba8Unorm),
                     #[cfg(native)]
-                    format_caps(wgt::TextureFormat::Bgra8UnormSrgb),
-                ])
-            }
-            if self
-                .shared
-                .private_caps
-                .contains(super::PrivateCapabilities::COLOR_BUFFER_HALF_FLOAT)
-            {
-                formats.push(format_caps(wgt::TextureFormat::Rgba16Float))
-            }
+                    format_caps(wgt::TextureFormat::Bgra8Unorm),
+                ];
+                if surface.supports_srgb() {
+                    formats.extend([
+                        format_caps(wgt::TextureFormat::Rgba8UnormSrgb),
+                        #[cfg(native)]
+                        format_caps(wgt::TextureFormat::Bgra8UnormSrgb),
+                    ])
+                }
+                if self
+                    .shared
+                    .private_caps
+                    .contains(super::PrivateCapabilities::COLOR_BUFFER_HALF_FLOAT)
+                {
+                    formats.push(format_caps(wgt::TextureFormat::Rgba16Float))
+                }
+                formats
+            };
 
             Some(crate::SurfaceCapabilities {
                 formats,
@@ -1380,14 +1388,12 @@ impl crate::Adapter for super::Adapter {
                 composite_alpha_modes: vec![wgt::CompositeAlphaMode::Opaque], //TODO
                 maximum_frame_latency: 2..=2, //TODO, unused currently
                 current_extent: None,
-                // A WebGL surface's image is a texture of its own, which the
-                // queue blits to the canvas at present: it can be copied and
-                // sampled like any other.
+                // A WebGL surface's image is its canvas's buffer: it can be
+                // copied but not sampled.
                 #[cfg(webgl)]
                 usage: wgt::TextureUses::COLOR_TARGET
                     | wgt::TextureUses::COPY_SRC
-                    | wgt::TextureUses::COPY_DST
-                    | wgt::TextureUses::RESOURCE,
+                    | wgt::TextureUses::COPY_DST,
                 #[cfg(not(webgl))]
                 usage: wgt::TextureUses::COLOR_TARGET,
             })
