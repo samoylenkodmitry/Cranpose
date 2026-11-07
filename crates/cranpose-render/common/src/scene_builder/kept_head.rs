@@ -36,15 +36,15 @@ pub enum OwnLayer {
     Changed,
 }
 
-// Whether a kept node checks the state its context passes down against the
-// state it lowered with.
+/// Whether a kept node checks the state its context passes down against the
+/// state it lowered with.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Inherits {
-    // The context may pass down other state: the node checks it.
+    /// The context may pass down other state: the node checks it.
     Check,
-    // The node lies beneath a node that kept its layer and the state it
-    // lowered with, and nothing between them changed: the context passes
-    // down what the node lowered with.
+    /// The node lies beneath a node that kept its layer and the state it
+    /// lowered with, and nothing between them changed: the context passes
+    /// down what the node lowered with.
     AsLowered,
 }
 
