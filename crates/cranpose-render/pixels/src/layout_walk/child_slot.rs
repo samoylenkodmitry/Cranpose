@@ -31,6 +31,18 @@ pub(crate) enum ChildPosition {
     Anew(Option<Point>),
 }
 
+// Whether a child takes its old places, so the rewrite stands at its old
+// record first: a child kept, or pushed through, in place does. A child that
+// pushes again pushes where the rewrite stands, into the spill when its old
+// record lies apart. The old records before it then give way once, when a
+// later child takes its old places or the rewrite ends, and the records and
+// items after them move no more than once.
+#[derive(Clone, Copy)]
+enum Places {
+    Old,
+    New,
+}
+
 // How a slot pushes its children.
 #[derive(Clone, Copy)]
 pub(super) enum ChildPushes {
@@ -142,31 +154,36 @@ impl ChildSlot<'_> {
                 );
                 continue;
             };
+            let record = &scene.subtrees[found];
+            let mark = walk.marks.marks.get(walk.applier, child);
+            let clean = mark == 0;
+            let update = decode(mark);
+            let kept = update.is_none();
+            // A child whose owner placed it as before lies where it did.
+            let placement = (kept && context.same_as_before && !placed_as_before)
+                .then(|| kept_child_placement(walk.applier, child, self.context))
+                .flatten();
+            let lies_as_before = context.same_as_before
+                && (placed_as_before
+                    || placement.is_some_and(|placement| {
+                        (placement.identity, placement.transform)
+                            == (record.identity, record.transform)
+                    }));
+            let position = if placed_as_before {
+                ChildPosition::AsBefore
+            } else {
+                ChildPosition::Anew(placement.map(|placement| placement.position))
+            };
+            let places = if kept && lies_as_before {
+                Places::Old
+            } else {
+                Places::New
+            };
             self.push_found(
-                (child, found),
+                (child, found, places),
                 &mut cursor,
                 (scene, context),
                 |scene, at| {
-                    let record = &scene.subtrees[at];
-                    let mark = walk.marks.marks.get(walk.applier, child);
-                    let clean = mark == 0;
-                    let update = decode(mark);
-                    let kept = update.is_none();
-                    // A child whose owner placed it as before lies where it did.
-                    let placement = (kept && context.same_as_before && !placed_as_before)
-                        .then(|| kept_child_placement(walk.applier, child, self.context))
-                        .flatten();
-                    let lies_as_before = context.same_as_before
-                        && (placed_as_before
-                            || placement.is_some_and(|placement| {
-                                (placement.identity, placement.transform)
-                                    == (record.identity, record.transform)
-                            }));
-                    let position = if placed_as_before {
-                        ChildPosition::AsBefore
-                    } else {
-                        ChildPosition::Anew(placement.map(|placement| placement.position))
-                    };
                     (clean && lies_as_before && scene.keep_old(at))
                         || (kept
                             && lies_as_before
@@ -200,12 +217,17 @@ impl ChildSlot<'_> {
             let Some(child) = scene.subtrees[found].node() else {
                 break;
             };
+            let mark = walk.marks.marks.get(walk.applier, child);
+            let places = if context.same_as_before && mark == 0 {
+                Places::Old
+            } else {
+                Places::New
+            };
             self.push_found(
-                (child, found),
+                (child, found, places),
                 &mut cursor,
                 (scene, context),
                 |scene, at| {
-                    let mark = walk.marks.marks.get(walk.applier, child);
                     (context.same_as_before && mark == 0 && scene.keep_old(at))
                         || walk.push_from_head(
                             (child, at, ChildPosition::AsBefore),
@@ -253,19 +275,23 @@ impl ChildSlot<'_> {
 
     // Pushes `child`, whose old record the walk found at `found` among the
     // old children `cursor` holds, with how far the splices had moved the
-    // old records when it read them: the children pushed anew since the
-    // pushes last fit their old places, and a child that went away, give
-    // way to the child's old subtree, then `push` pushes it from what the
-    // scene keeps of it, given where its old record now lies, or it lowers
-    // again. Moves the cursor past it.
+    // old records when it read them: for a child that takes its old
+    // `places`, the children pushed anew since the pushes last fit their
+    // old places, and a child that went away, give way to the child's old
+    // subtree first. Then `push` pushes it from what the scene keeps of it,
+    // given where its old record now lies, or it lowers again. Moves the
+    // cursor past it.
     fn push_found(
         &self,
-        (child, found): (NodeId, usize),
+        (child, found, places): (NodeId, usize, Places),
         cursor: &mut (OldChildren, isize),
         (scene, context): (&mut RasterScene, &RasterTraversalContext<'_>),
         push: impl FnOnce(&mut RasterScene, usize) -> bool,
     ) {
-        let at = scene.rejoin(found);
+        let at = match places {
+            Places::Old => scene.rejoin(found),
+            Places::New => found,
+        };
         let end = scene.subtrees[at].end;
         if !push(scene, at) {
             self.walk
