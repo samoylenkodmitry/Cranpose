@@ -884,6 +884,7 @@ impl crate::Surface for Surface {
         let texture = super::Texture {
             inner: super::TextureInner::Renderbuffer {
                 raw: sc.renderbuffer,
+                storage: None,
             },
             drop_guard: None,
             array_layer_count: 1,

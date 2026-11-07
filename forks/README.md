@@ -316,6 +316,12 @@ holds `Rgba8Unorm`, the surface's one format: the sRGB formats, whose
 present converted the colors in one more pass, and `Rgba16Float` went with
 the texture.
 
+A renderbuffer takes its storage when a pass first attaches it, not when it
+is made. Cranpose's depth buffer for the frame's own pass is such a
+renderbuffer, and a pass into the canvas uses the canvas's depth in its
+place, so it takes no memory: about 10 MB at the Mate's 1081 x 2402 and 22
+MB at the Galaxy Tab S7+'s 1848 x 2960.
+
 On a Mate 20 X (Chrome 156, WebGL) the gauntlet's GPU ran 17-24% fewer
 cycles a second, wrote about 700 MB a second less to memory and settled at
 277-332 MHz against 332-415 MHz, with its frames pixel-identical. Board

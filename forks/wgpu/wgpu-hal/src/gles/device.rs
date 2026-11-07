@@ -243,6 +243,7 @@ impl super::Device {
         super::Texture {
             inner: super::TextureInner::Renderbuffer {
                 raw: glow::NativeRenderbuffer(name),
+                storage: None,
             },
             drop_guard: crate::DropGuard::from_option(drop_callback),
             mip_level_count: desc.mip_level_count,
@@ -1128,26 +1129,6 @@ impl crate::Device for super::Device {
         {
             let raw = unsafe { gl.create_renderbuffer().unwrap() };
             unsafe { gl.bind_renderbuffer(glow::RENDERBUFFER, Some(raw)) };
-            if desc.sample_count > 1 {
-                unsafe {
-                    gl.renderbuffer_storage_multisample(
-                        glow::RENDERBUFFER,
-                        desc.sample_count as i32,
-                        format_desc.internal,
-                        desc.size.width as i32,
-                        desc.size.height as i32,
-                    )
-                };
-            } else {
-                unsafe {
-                    gl.renderbuffer_storage(
-                        glow::RENDERBUFFER,
-                        format_desc.internal,
-                        desc.size.width as i32,
-                        desc.size.height as i32,
-                    )
-                };
-            }
 
             #[cfg(native)]
             if let Some(label) = desc.label {
@@ -1162,7 +1143,15 @@ impl crate::Device for super::Device {
             }
 
             unsafe { gl.bind_renderbuffer(glow::RENDERBUFFER, None) };
-            super::TextureInner::Renderbuffer { raw }
+            super::TextureInner::Renderbuffer {
+                raw,
+                storage: Some(Arc::new(super::RenderbufferStorage::new(
+                    desc.sample_count,
+                    format_desc.internal,
+                    desc.size.width,
+                    desc.size.height,
+                ))),
+            }
         } else {
             let raw = unsafe { gl.create_texture().unwrap() };
             let target = super::Texture::get_info_from_desc(desc);
