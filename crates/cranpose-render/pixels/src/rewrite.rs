@@ -278,11 +278,15 @@ impl Rewrite {
                 && old.start.get().order == self.next.items.order
             {
                 match self.whole {
+                    // A record in a whole subtree keeps what it held, save
+                    // its passed-down entry, which its push notes again.
                     Whole::Open { open, .. } => {
                         self.whole = Whole::Open {
                             open: open + 1,
                             entry: old.passed_down.map(|entry| entry as u32),
                         };
+                        self.next.records += 1;
+                        return index;
                     }
                     whole => {
                         push_kept(&mut self.opened, Opened::of(old));
@@ -398,6 +402,23 @@ impl Rewrite {
         }
         if let Some(closed) = self.opened.pop() {
             self.after_old_subtree(records, closed.end());
+        }
+    }
+
+    // Closes the innermost record of a whole subtree, its root's aside,
+    // while the pushes take the old places: its end and stop stay as they
+    // were. False when the record is the root or the pushes went on in the
+    // spill: its close writes them.
+    pub(crate) fn closes_in_whole(&mut self) -> bool {
+        match self.whole {
+            Whole::Open { open, entry } if open > 1 && self.spilled_at.is_none() => {
+                self.whole = Whole::Open {
+                    open: open - 1,
+                    entry,
+                };
+                true
+            }
+            _ => false,
         }
     }
 

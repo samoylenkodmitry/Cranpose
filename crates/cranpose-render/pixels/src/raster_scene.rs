@@ -523,6 +523,13 @@ impl RasterScene {
     /// Closes the record `index`: the subtree pushed everything since it
     /// opened.
     pub(crate) fn close_subtree(&mut self, index: usize) {
+        if self
+            .rewrite
+            .as_deref_mut()
+            .is_some_and(Rewrite::closes_in_whole)
+        {
+            return;
+        }
         let (end, stop) = match self.rewrite.as_deref() {
             Some(rewrite) => rewrite.record_end(),
             None => (self.subtrees.len(), self.counts()),
