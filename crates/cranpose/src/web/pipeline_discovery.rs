@@ -47,10 +47,12 @@ use cranpose_render_wgpu::WgpuRenderer;
 const FIRST_SCREEN_PIPELINES: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/first_screen_pipelines.bin"));
 
-/// The global a recording run sets before the page loads, and the global
-/// the page then leaves its first screen's pipelines in.
+/// The global a recording run sets before the page loads, and the globals
+/// the page then leaves its first screen's pipelines and WebGL stages in.
 const RECORD_REQUEST: &str = "__cranposeRecordFirstScreen";
 const RECORDED: &str = "__cranposeFirstScreenPipelines";
+#[cfg(not(cranpose_first_screen_glsl))]
+const RECORDED_STAGES: &str = "__cranposeFirstScreenStages";
 
 /// What the renderer draws with.
 pub(crate) struct GpuTarget {
@@ -97,6 +99,12 @@ impl PipelineDiscovery {
     pub(crate) fn new(target: GpuTarget) -> Self {
         let recording = js_sys::Reflect::get(&js_sys::global(), &RECORD_REQUEST.into())
             .is_ok_and(|requested| requested.is_truthy());
+        // A recording run opens the build without records, so a build with
+        // them carries no listing (`first_screen_glsl`).
+        #[cfg(not(cranpose_first_screen_glsl))]
+        if recording {
+            cranpose_render_wgpu::list_first_screen_stages();
+        }
         Self {
             target: RefCell::new(target),
             stage: Rc::new(RefCell::new(Stage::Cold)),
@@ -110,6 +118,8 @@ impl PipelineDiscovery {
     pub(crate) async fn start(&self, renderer: &mut WgpuRenderer) {
         self.install(renderer);
         if self.target.borrow().backend == wgpu::Backend::Gl {
+            #[cfg(cranpose_first_screen_glsl)]
+            super::first_screen_glsl::take().await;
             renderer.build_first_screen_pipelines(
                 FIRST_SCREEN_PIPELINES,
                 self.target.borrow().surface_size,
@@ -195,7 +205,8 @@ impl PipelineDiscovery {
     }
 
     /// In a recording run, leaves the first screen's pipelines in
-    /// [`RECORDED`] once the first screen ended.
+    /// [`RECORDED`] and its WebGL stages in `RECORDED_STAGES` once the
+    /// first screen ended.
     fn leave_recorded(&self, renderer: &WgpuRenderer) {
         if !self.recording.get() {
             return;
@@ -204,8 +215,16 @@ impl PipelineDiscovery {
             return;
         };
         self.recording.set(false);
+        let global = js_sys::global();
+        // Left before the pipelines, which the recording run waits for.
+        #[cfg(not(cranpose_first_screen_glsl))]
+        let _ = js_sys::Reflect::set(
+            &global,
+            &RECORDED_STAGES.into(),
+            &cranpose_render_wgpu::first_screen_stages().into(),
+        );
         let records = js_sys::Uint8Array::from(records.as_slice());
-        if js_sys::Reflect::set(&js_sys::global(), &RECORDED.into(), &records).is_err() {
+        if js_sys::Reflect::set(&global, &RECORDED.into(), &records).is_err() {
             log::warn!(
                 "[pipeline-records] the first screen's pipelines could not be left in {RECORDED}"
             );

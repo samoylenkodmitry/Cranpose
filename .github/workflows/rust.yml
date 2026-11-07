@@ -381,6 +381,12 @@ jobs:
       - name: Package the web demo for a check in a browser
         if: ${{ !cancelled() && steps.provision.conclusion == 'success' && steps.changes.outputs.docs_only != 'true' && steps.memo.outputs.passed != 'true' }}
         run: apps/desktop-demo/package-web.sh "$RUNNER_TEMP/web-demo"
+      - name: Check the web demo ships its first screen
+        if: ${{ !cancelled() && steps.provision.conclusion == 'success' && steps.changes.outputs.docs_only != 'true' && steps.memo.outputs.passed != 'true' }}
+        # A release records its first screen in headless Chrome and ships the
+        # exact GLSL of its WebGL stages beside its wasm (build-web.sh), so the
+        # WebGL2 check below draws with it.
+        run: ls "$RUNNER_TEMP"/web-demo/assets/*/first_screen_glsl.txt
       - name: Keep the web demo three days
         if: ${{ !cancelled() && steps.provision.conclusion == 'success' && steps.changes.outputs.docs_only != 'true' && steps.memo.outputs.passed != 'true' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

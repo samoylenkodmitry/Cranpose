@@ -1400,6 +1400,7 @@ dependencies = [
 name = "cranpose-gl-templates"
 version = "0.20.0"
 dependencies = [
+ "cranpose-shader-passes",
  "cranpose-ui-graphics",
  "cranpose-wgpu-hal",
  "naga",
@@ -1594,6 +1595,7 @@ dependencies = [
  "rustix",
  "smallvec",
  "stats_alloc",
+ "thiserror 2.0.21",
  "web-time",
 ]
 

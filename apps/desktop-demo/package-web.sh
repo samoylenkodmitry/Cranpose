@@ -7,6 +7,9 @@ PACKAGE_DIR="${2:-$SCRIPT_DIR/pkg}"
 INDEX_HTML="${3:-$SCRIPT_DIR/index.html}"
 MODULE_FILE="$PACKAGE_DIR/desktop_app.js"
 WASM_FILE="$PACKAGE_DIR/desktop_app_bg.wasm"
+# The exact GLSL of the first screen's WebGL stages, which a release built
+# with first-screen records fetches beside its wasm.
+GLSL_FILE="$PACKAGE_DIR/first_screen_glsl.txt"
 # The page's icons: the source drawing, and the 180 pixel picture iOS takes for
 # a home screen shortcut, the same one the iOS app shows.
 FAVICON_FILE="$SCRIPT_DIR/assets/icon/icon.svg"
@@ -46,7 +49,8 @@ snippet_hash="$(
         done
     fi | sha256
 )"
-bundle_hash="$(printf '%s%s%s' "$module_hash" "$wasm_hash" "$snippet_hash" | sha256)"
+glsl_hash="$(if [ -f "$GLSL_FILE" ]; then sha256 "$GLSL_FILE"; fi)"
+bundle_hash="$(printf '%s%s%s%s' "$module_hash" "$wasm_hash" "$snippet_hash" "$glsl_hash" | sha256)"
 bundle_relative="assets/$bundle_hash"
 bundle_dir="$OUTPUT_DIR/$bundle_relative"
 
@@ -58,6 +62,9 @@ cp "$MODULE_FILE" "$bundle_dir/desktop_app.js"
 cp "$WASM_FILE" "$bundle_dir/desktop_app_bg.wasm"
 if [ -d "$PACKAGE_DIR/snippets" ]; then
     cp -R "$PACKAGE_DIR/snippets" "$bundle_dir/snippets"
+fi
+if [ -f "$GLSL_FILE" ]; then
+    cp "$GLSL_FILE" "$bundle_dir/first_screen_glsl.txt"
 fi
 touch "$OUTPUT_DIR/.nojekyll"
 

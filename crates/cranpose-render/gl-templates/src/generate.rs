@@ -21,8 +21,10 @@ use std::{collections::BTreeMap, fmt::Write as _};
 
 use naga::{
     Arena, BinaryOperator, Block, Expression, Function, Handle, Literal, MathFunction, Module,
-    Scalar, ScalarKind, Span, Statement, TypeInner, UnaryOperator, back::glsl, valid,
+    Scalar, ScalarKind, Span, Statement, TypeInner, UnaryOperator, valid,
 };
+
+use crate::written::{BlockBinding, TextureBinding};
 
 /// The literal each pipeline constant is written as before it becomes its
 /// macro: this plus the constant's index, ten digits long.
@@ -82,32 +84,6 @@ pub fn module_templates(source: &str) -> Result<Vec<Template>, String> {
         .collect()
 }
 
-/// A uniform or storage block, by the name the template gives it.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub struct BlockBinding {
-    /// The block's name in the GLSL.
-    pub name: String,
-    /// Whether the block is a storage block instead of a uniform block.
-    pub storage: bool,
-    /// The WGSL group and binding of the block.
-    pub binding: naga::ResourceBinding,
-}
-
-/// A texture, by the name the template gives it, with the sampler GLSL ES
-/// combines it with.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub struct TextureBinding {
-    /// The texture's name in the GLSL.
-    pub name: String,
-    /// Whether the texture is a storage texture instead of a sampled one.
-    pub storage: bool,
-    /// The WGSL group and binding of the texture.
-    pub binding: naga::ResourceBinding,
-    /// The WGSL group and binding of the sampler combined with the texture, or `None`
-    /// when no sampler is.
-    pub sampler: Option<naga::ResourceBinding>,
-}
-
 /// A template as the build script writes it into the renderer.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Generated {
@@ -151,28 +127,18 @@ pub fn generate(
     rewrite(&mut module, &analysis, &reach, &markers, &mut definitions);
     let macros = macros(&module)?;
     mark_constants(&mut module).map_err(|error| format!("{entry_point}: {error}"))?;
-    let (written, reflection) = write_glsl(&module, &info, entry_point, naga_stage)?;
-    if !reflection.immediates_items.is_empty() {
-        return Err(format!("{entry_point}: immediates are not templated"));
-    }
-    let (blocks, textures) = bindings(&module, &reflection);
-    let mut varyings: Vec<(String, u32)> = reflection
-        .varying
-        .iter()
-        .map(|(name, location)| (name.clone(), location.location))
-        .collect();
-    varyings.sort();
+    let written = crate::written::write(&module, &info, entry_point, naga_stage)?;
     Ok(Generated {
-        glsl: finish(&written, &texts, &macros, &definitions)?,
+        glsl: finish(&written.glsl, &texts, &macros, &definitions)?,
         macros: macros
             .iter()
             .filter(|constant| constant.settable)
             .map(|constant| (constant.name.clone(), constant.kind))
             .collect(),
-        blocks,
-        textures,
-        varyings,
-        clip_distance_count: reflection.clip_distance_count,
+        blocks: written.blocks,
+        textures: written.textures,
+        varyings: written.varyings,
+        clip_distance_count: written.clip_distance_count,
     })
 }
 
@@ -277,93 +243,7 @@ fn rewrite(
     }
 }
 
-/// `module` as GLSL ES 3.00 for WebGL with `entry_point` its `main`, as the
-/// GL backend's naga options write it, and what the writer tells of it.
-fn write_glsl(
-    module: &Module,
-    info: &valid::ModuleInfo,
-    entry_point: &str,
-    naga_stage: naga::ShaderStage,
-) -> Result<(String, glsl::ReflectionInfo), String> {
-    let options = glsl::Options {
-        version: glsl::Version::Embedded {
-            version: 300,
-            is_webgl: true,
-        },
-        writer_flags: glsl::WriterFlags::ADJUST_COORDINATE_SPACE,
-        binding_map: Default::default(),
-        zero_initialize_workgroup_memory: true,
-    };
-    let pipeline_options = glsl::PipelineOptions {
-        shader_stage: naga_stage,
-        entry_point: entry_point.to_string(),
-        multiview: None,
-    };
-    let unchecked = naga::proc::BoundsCheckPolicy::Unchecked;
-    let policies = naga::proc::BoundsCheckPolicies {
-        index: unchecked,
-        buffer: unchecked,
-        image_load: unchecked,
-        binding_array: unchecked,
-    };
-    let mut written = String::new();
-    let reflection = glsl::Writer::new(
-        &mut written,
-        module,
-        info,
-        &options,
-        &pipeline_options,
-        policies,
-    )
-    .and_then(|mut writer| writer.write())
-    .map_err(|error| format!("{entry_point}: {error}"))?;
-    Ok((written, reflection))
-}
-
-/// The blocks and textures the written GLSL names, in a stable order.
-fn bindings(
-    module: &Module,
-    reflection: &glsl::ReflectionInfo,
-) -> (Vec<BlockBinding>, Vec<TextureBinding>) {
-    let binding = |handle: Handle<naga::GlobalVariable>| module.global_variables[handle].binding;
-    let mut blocks: Vec<BlockBinding> = reflection
-        .uniforms
-        .iter()
-        .filter_map(|(handle, name)| {
-            Some(BlockBinding {
-                name: name.clone(),
-                storage: matches!(
-                    module.global_variables[*handle].space,
-                    naga::AddressSpace::Storage { .. }
-                ),
-                binding: binding(*handle)?,
-            })
-        })
-        .collect();
-    blocks.sort();
-    let mut textures: Vec<TextureBinding> = reflection
-        .texture_mapping
-        .iter()
-        .filter_map(|(name, mapping)| {
-            Some(TextureBinding {
-                name: name.clone(),
-                storage: matches!(
-                    module.types[module.global_variables[mapping.texture].ty].inner,
-                    TypeInner::Image {
-                        class: naga::ImageClass::Storage { .. },
-                        ..
-                    }
-                ),
-                binding: binding(mapping.texture)?,
-                sampler: mapping.sampler.and_then(binding),
-            })
-        })
-        .collect();
-    textures.sort();
-    (blocks, textures)
-}
-
-fn validate(module: &Module) -> Result<valid::ModuleInfo, String> {
+pub(crate) fn validate(module: &Module) -> Result<valid::ModuleInfo, String> {
     valid::Validator::new(valid::ValidationFlags::all(), valid::Capabilities::all())
         .validate(module)
         .map_err(|error| format!("{error:?}"))

@@ -1,15 +1,33 @@
 import { spawn } from "node:child_process";
-import { closeSync, mkdtempSync, openSync, readFileSync, rmSync } from "node:fs";
+import { closeSync, existsSync, mkdtempSync, openSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { Cdp } from "./cdp.mjs";
 
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 
+// Headless Chrome on Linux offers WebGPU only behind these switches: the GPU
+// through Vulkan, or SwiftShader where there is none. macOS uses Metal.
+export const GPU_FLAGS = process.platform === "linux"
+    ? ["--enable-unsafe-webgpu", "--enable-features=Vulkan", "--use-angle=vulkan"]
+    : [];
+
+// The Chrome to start, as scripts/a11y/web_robot.py finds it: CHROME, else
+// Chromium or Chrome on the PATH, else Chrome's place on a Mac.
+function chromePath() {
+    if (process.env.CHROME) return process.env.CHROME;
+    const directories = (process.env.PATH ?? "").split(delimiter).filter(Boolean);
+    for (const name of ["chromium", "google-chrome"]) {
+        const found = directories.map(directory => join(directory, name)).find(path => existsSync(path));
+        if (found) return found;
+    }
+    return "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+}
+
 // Starts headless Chrome on a fresh profile with `flags` and connects to its page.
 // Chrome's own stderr goes to `output`/chrome.log when an output directory is given.
 export async function launchChrome(flags, output) {
-    const chrome = process.env.CHROME ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+    const chrome = chromePath();
     let port = Number(process.env.A11Y_DEBUG_PORT ?? 0);
     const profile = mkdtempSync(join(tmpdir(), "a11y-chrome-"));
     const browserLog = output ? openSync(join(output, "chrome.log"), "w") : null;

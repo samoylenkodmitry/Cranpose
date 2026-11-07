@@ -40,6 +40,25 @@ pub(crate) fn create_2d_texture(
     })
 }
 
+#[doc(hidden)]
+pub fn offscreen_render_target_for_tests(
+    device: &wgpu::Device,
+    width: u32,
+    height: u32,
+    label: &str,
+) -> (wgpu::Texture, wgpu::TextureView) {
+    let texture = create_2d_texture(
+        device,
+        wgpu::TextureFormat::Rgba8Unorm,
+        width,
+        height,
+        wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        Some(label),
+    );
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    (texture, view)
+}
+
 pub(crate) struct OffscreenTarget {
     pub view: wgpu::TextureView,
     pub width: u32,

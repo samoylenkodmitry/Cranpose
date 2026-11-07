@@ -13,11 +13,18 @@
 //! GL backend of Cranpose's `wgpu` works out the `#if`s from its constants
 //! and hands the browser the code they keep, as naga's pruning would
 //! (`wgpu::hal::GlslTemplate`).
+//!
+//! A page whose first screen was recorded also fetches the exact GLSL of
+//! the stages that screen compiles ([`first_screen_glsl`]): each specialized
+//! by its pipeline's constants, folded and flattened.
 
+mod exact;
+mod first_screen;
 mod generate;
 mod rust_source;
+mod written;
 
-pub use generate::{
-    BlockBinding, Generated, MacroKind, Template, TextureBinding, generate, module_templates,
-};
+pub use first_screen::first_screen_glsl;
+pub use generate::{Generated, MacroKind, Template, generate, module_templates};
 pub use rust_source::rust_source;
+pub use written::{BlockBinding, TextureBinding};
