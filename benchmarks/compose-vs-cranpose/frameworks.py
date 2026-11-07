@@ -15,9 +15,9 @@ per start the per-app medians.
 `--install DIR` first installs each app's `APP.apk` from DIR, as the
 nightly hands over the builds macm3 made. `--browser DIR` measures the pages
 `build_apps.sh browser DIR` built instead, each open in Chrome on the phone at
-`--tier`, and writes a run of kind `browser`.
+each of `--tiers`, one scenario a tier, and writes a run of kind `browser`.
 Usage: frameworks.py --serial SERIAL --output DIR [--apps compose,cranpose,...]
-                     [--install DIR | --browser DIR --tier N] [--main COMMIT]
+                     [--install DIR | --browser DIR --tiers N,N] [--main COMMIT]
 """
 
 import argparse
@@ -37,6 +37,42 @@ import versions
 DEFAULT_APPS = 'compose,cranpose,views,flutter,rn,nativescript,lynx,maui,avalonia,egui,slint,web'
 
 
+def measure_scenario(device, name, extras, targets, args):
+    """Measures every app of `targets` (app to target) on one scenario: its
+    record in the run."""
+    # An app whose first launch fails leaves its legs out and the run goes
+    # on: a page can fail where the browser lacks what its framework needs.
+    legs, failures, running = [], [], list(targets)
+    for round_index in range(args.rounds):
+        for app in list(running if round_index % 2 == 0 else running[::-1]):
+            target = targets[app]
+            for start in STARTS:
+                try:
+                    if start == STARTS[0]:
+                        target.reset(device)
+                    run = measure_run(device, target, name, args, args.output)
+                except (RuntimeError, ValueError) as failure:
+                    print(f'{app:10} {start:6} failed: {failure}', flush=True)
+                    # Kept, so the dashboard shows why the app has no frames.
+                    failures.append({'subject': app, 'round': round_index, 'start': start,
+                                     'error': str(failure)[:300]})
+                    if round_index == 0:
+                        running.remove(app)
+                    break
+                legs.append(leg_record(run, app, len(legs), start))
+                print(f'{app:10} {start:6} fps {run["fps"]:5.1f} cpu/f {figure(run["cpu_ms_per_frame"], "6.1f")} '
+                      f'frames {run["frames"]:4d} first frame {figure(run["first_frame_s"], "4.1f")} s '
+                      f'run {run["run_s"]:4.1f} s{" stopped, slow" if run["stopped"] else ""}', flush=True)
+    return {
+        'scenario': name,
+        'extras': extras,
+        'legs': legs,
+        'failures': failures,
+        'starts': {start: {'summary': summarize(legs, list(targets), [*DECIDING, *REPORTED], start), 'verdicts': {}}
+                   for start in STARTS},
+    }
+
+
 def measure_frameworks(args):
     """Runs the whole comparison: the caller holds the device lock."""
     args.load, args.screenshots = 'heavy', False
@@ -47,9 +83,13 @@ def measure_frameworks(args):
     if args.browser:
         server = BrowserServer(args.browser)
         device.reverse(server.port)
-        targets = {app: PageTarget(server, app, args.tier) for app in apps}
+        # The first tier keeps the scenario's name, so its series goes on;
+        # each heavier tier is a scenario of its own.
+        loads = [(args.scenario if index == 0 else f'{args.scenario}-tier-{tier}', f'tier {tier}, in Chrome',
+                  {app: PageTarget(server, app, tier) for app in apps}) for index, tier in enumerate(args.tiers)]
     else:
-        targets = {app: AppTarget(app) for app in apps}
+        loads = [(args.scenario, (HEAVY.get(args.scenario, '') + ' ' + args.extra).strip(),
+                  {app: AppTarget(app) for app in apps})]
         for app in apps:
             if args.install and (apk := args.install / f'{app}.apk').exists():
                 device.install(app, apk)
@@ -66,29 +106,7 @@ def measure_frameworks(args):
         webview = device.shell('dumpsys', 'package', 'com.google.android.webview')
         if match := re.search(r'versionName=(\S+)', webview):
             built['web'] = f'WebView {match.group(1)}, {built.get("web") or versions.version("web", "android")}'
-    # An app whose first launch fails leaves its legs out and the run goes
-    # on: a page can fail where the browser lacks what its framework needs.
-    legs, failures, running = [], [], list(apps)
-    for round_index in range(args.rounds):
-        for app in list(running if round_index % 2 == 0 else running[::-1]):
-            target = targets[app]
-            for start in STARTS:
-                try:
-                    if start == STARTS[0]:
-                        target.reset(device)
-                    run = measure_run(device, target, args.scenario, args, args.output)
-                except (RuntimeError, ValueError) as failure:
-                    print(f'{app:10} {start:6} failed: {failure}', flush=True)
-                    # Kept, so the dashboard shows why the app has no frames.
-                    failures.append({'subject': app, 'round': round_index, 'start': start,
-                                     'error': str(failure)[:300]})
-                    if round_index == 0:
-                        running.remove(app)
-                    break
-                legs.append(leg_record(run, app, len(legs), start))
-                print(f'{app:10} {start:6} fps {run["fps"]:5.1f} cpu/f {figure(run["cpu_ms_per_frame"], "6.1f")} '
-                      f'frames {run["frames"]:4d} first frame {figure(run["first_frame_s"], "4.1f")} s '
-                      f'run {run["run_s"]:4.1f} s{" stopped, slow" if run["stopped"] else ""}', flush=True)
+    scenarios = [measure_scenario(device, name, extras, targets, args) for name, extras, targets in loads]
     identity = {key: device.shell('getprop', key).strip() for key in
                 ['ro.product.model', 'ro.build.version.release', 'ro.hardware']}
     if args.browser:
@@ -107,15 +125,7 @@ def measure_frameworks(args):
         'device': identity,
         'subjects': subjects,
         'protocol': {'run_s': args.run, 'starts': list(STARTS), 'rounds': args.rounds, **slow_rule()},
-        'scenarios': [{
-            'scenario': args.scenario,
-            'extras': f'tier {args.tier}, in Chrome' if args.browser else (
-                HEAVY.get(args.scenario, '') + ' ' + args.extra).strip(),
-            'legs': legs,
-            'failures': failures,
-            'starts': {start: {'summary': summarize(legs, apps, [*DECIDING, *REPORTED], start), 'verdicts': {}}
-                       for start in STARTS},
-        }],
+        'scenarios': scenarios,
         'duration_s': round(time.monotonic() - args.started),
     }
 
@@ -137,9 +147,10 @@ def main():
     parser.add_argument('--install', type=Path, help='folder of APP.apk builds to install first')
     parser.add_argument('--browser', type=Path, metavar='DIR',
                         help='folder of pages `build_apps.sh browser` built, to open in Chrome')
-    parser.add_argument('--tier', type=int, default=8,
-                        help="the gauntlet's tier in Chrome on the phone: the lightest at which no app reaches "
-                             "60 fps and the heaviest still draw 5 (README)")
+    parser.add_argument('--tiers', type=lambda tiers: [int(tier) for tier in tiers.split(',')], default='8,10',
+                        help="the gauntlet's tiers in Chrome on the phone, one scenario each: first the lightest at "
+                             "which no app reaches 60 fps and the heaviest still draw 5, then heavier ones that "
+                             "make Cranpose's losses large (README)")
     parser.add_argument('--main', help="the commit the Cranpose app was built at, recorded with the run")
     parser.add_argument('--release', help='the release tag `cranpose-release` was built at')
     args = parser.parse_args()
@@ -149,11 +160,12 @@ def main():
     with device_lock(args.serial):
         run = measure_frameworks(args)
     (args.output / 'frameworks.json').write_text(json.dumps(run, indent=1))
-    for start, judged in run['scenarios'][0]['starts'].items():
-        for app, values in judged['summary'].items():
-            print(f'{app:10} {start:6} ' + (f'fps {values["fps"]:5.1f} '
-                                            f'cpu/f {figure(values.get("cpu_ms_per_frame"), "6.1f")}'
-                                            if values else 'no legs'))
+    for scenario in run['scenarios']:
+        for start, judged in scenario['starts'].items():
+            for app, values in judged['summary'].items():
+                print(f'{scenario["scenario"]} {app:10} {start:6} ' + (
+                    f'fps {values["fps"]:5.1f} cpu/f {figure(values.get("cpu_ms_per_frame"), "6.1f")}'
+                    if values else 'no legs'))
     print('DURATION', run['duration_s'], 's')
 
 
