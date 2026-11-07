@@ -1,4 +1,4 @@
-use std::{borrow::Cow, sync::Arc};
+use std::{borrow::Cow, hash::Hasher, sync::Arc};
 
 use cranpose_core::NodeId;
 use cranpose_render_common::{
@@ -14,7 +14,7 @@ use cranpose_render_common::{
     space::SeenDoor,
 };
 use cranpose_ui_graphics::{
-    BlendMode, CompositingStrategy, GraphicsLayer, Point, Rect, RenderEffect,
+    BlendMode, CompositingStrategy, FxHasher, GraphicsLayer, Point, Rect, RenderEffect,
     space::{Camera, Light, MeshSurface},
 };
 
@@ -27,8 +27,6 @@ use crate::{
 };
 
 mod backdrop_space;
-mod history;
-mod kept_contents;
 mod layer_motion;
 mod placement;
 mod push_content;
@@ -36,8 +34,6 @@ mod rigid_snap;
 mod rounded_clip_corners;
 mod space_children;
 use backdrop_space::{detach_flat_backdrop, with_backdrop_in_own_space};
-pub(crate) use history::CollectHistory;
-use kept_contents::{ContentKey, KeptContents, KeptWith, LightBits};
 pub(crate) use layer_motion::LayerMotion;
 use placement::{Placement, can_draw_in_place, child_needs_surface, child_placement};
 pub(crate) use placement::{
@@ -133,21 +129,28 @@ impl LayerScene {
         self.summary.backdrop
     }
 
-    // Whether a layer of this content casts an elevation shadow, which the
-    // walk's light places.
-    fn casts_shadows(&self) -> bool {
-        self.summary.shadows
-    }
-
     // `content_hash` of this content, with `light` when a layer of it casts
     // a shadow, which the light places: a raster of the content holds only
     // under the same light.
     fn raster_hash(&self, content_hash: u64, light: ShadowLight) -> u64 {
-        if self.casts_shadows() {
-            LightBits::of(light).lit_hash(content_hash)
-        } else {
-            content_hash
+        if !self.summary.shadows {
+            return content_hash;
         }
+        // Every field of the light is named here, so that a new one has to
+        // be hashed on purpose.
+        let ShadowLight {
+            x,
+            y,
+            z,
+            radius,
+            pixels_per_unit,
+        } = light;
+        let mut hasher = FxHasher::default();
+        hasher.write_u64(content_hash);
+        for bits in [x, y, z, radius, pixels_per_unit].map(f32::to_bits) {
+            hasher.write_u32(bits);
+        }
+        hasher.finish()
     }
 
     fn refresh_summary(&mut self) {
@@ -162,7 +165,7 @@ impl LayerScene {
                 || self
                     .children
                     .iter()
-                    .any(|child| child.content.casts_shadows()),
+                    .any(|child| child.content.summary.shadows),
         };
     }
 }
@@ -190,10 +193,6 @@ pub(crate) struct ChildLayer {
     pub(crate) cache_policy: CachePolicy,
     pub(crate) in_place: bool,
     pub(crate) content: Box<LayerScene>,
-    // What a later collect needs to take `content` again, when its layer's
-    // subtree stays as it is.
-    // Boxed: a child moves with each push and pop, and few carry one.
-    pub(crate) kept: Option<Box<KeptWith>>,
     /// For a mesh surface in a scene: the mesh its surface is drawn on in
     /// the scene's 3D pass, in place of a composite.
     pub(crate) mesh: Option<Arc<MeshChild>>,
@@ -332,7 +331,7 @@ fn rounding_within(layer_clip: Option<Rect>, context: &WalkContext<'_>) -> Optio
 pub(crate) fn collect_root(
     root: &LayerNode,
     update: u64,
-    history: &mut CollectHistory,
+    motion: &mut LayerMotion,
     capacity: SceneCapacityHint,
     root_scale: f32,
     recycler: &mut LayerSceneRecycler,
@@ -358,11 +357,10 @@ pub(crate) fn collect_root(
         translated: false,
         settings: &settings,
     };
-    collect_child(root, history, context, &mut out, recycler);
+    collect_child(root, motion, context, &mut out, recycler);
     out.scene.flush_loose();
     out.refresh_summary();
-    history.motion.end_frame();
-    history.contents.end_collect(recycler);
+    motion.end_frame();
     out
 }
 
@@ -374,7 +372,7 @@ pub(crate) fn collect_overlay(
     collect_root(
         root,
         0,
-        &mut CollectHistory::default(),
+        &mut LayerMotion::default(),
         SceneCapacityHint::default(),
         root_scale,
         recycler,
@@ -450,7 +448,7 @@ fn content_key(layer: &LayerNode, update: u64) -> u64 {
 
 fn isolated_child(
     layer: &LayerNode,
-    history: &mut CollectHistory,
+    motion: &mut LayerMotion,
     context: WalkContext<'_>,
     mesh: Option<Arc<MeshChild>>,
     parent_scene: &mut CompositorScene,
@@ -460,9 +458,7 @@ fn isolated_child(
     let content_hash = content_key(layer, context.settings.update);
     let nominal_scale = layer_uniform_scale(&layer.graphics_layer);
     let retained_scale = if layer.cache_policy == CachePolicy::Auto {
-        history
-            .motion
-            .retained_scale(layer.node_id, nominal_scale, content_hash)
+        motion.retained_scale(layer.node_id, nominal_scale, content_hash)
     } else {
         nominal_scale
     };
@@ -490,8 +486,11 @@ fn isolated_child(
         translated: context.translated || layer.translated_content_context,
         settings: &content_settings,
     };
-    let (content, has_pixel_sensitive_subtree, kept) =
-        content_of(layer, history, (content_context, content_hash), recycler);
+    let mut content = recycler.take(SceneCapacityHint::default());
+    let has_pixel_sensitive_subtree =
+        collect_into(layer, motion, content_context, &mut content, recycler);
+    content.scene.flush_loose();
+    content.refresh_summary();
     let transform = layer
         .transform_to_parent
         .then(ProjectiveTransform::translation(
@@ -516,9 +515,7 @@ fn isolated_child(
     } else {
         nominal_scale
     };
-    history
-        .motion
-        .record_scale(layer.node_id, surface_scale, content_hash);
+    motion.record_scale(layer.node_id, surface_scale, content_hash);
     let in_place = mesh.is_none() && can_draw_in_place(layer, transform, surface_scale, &content);
     (
         ChildLayer {
@@ -539,62 +536,15 @@ fn isolated_child(
             cache_policy: layer.cache_policy,
             in_place,
             content,
-            kept,
             mesh,
         },
         has_pixel_sensitive_subtree,
     )
 }
 
-// The content of the isolated `layer`, collected under `context`, with
-// whether it holds pixel-sensitive content: kept from an earlier frame when
-// the layer's content hash, `content_hash`, and what the walk passes down
-// are as they were (the light only for content that casts shadows), else
-// collected now, and kept with what a later collect needs when nothing
-// beneath the layer changed in this update and no backdrop reads what lies
-// under it. The hash leaves out the layer's own transform, alpha and
-// placement, so a layer that only moves, turns or fades keeps its content.
-// A layer in a scene's space collects each frame.
-fn content_of(
-    layer: &LayerNode,
-    history: &mut CollectHistory,
-    (context, content_hash): (WalkContext<'_>, u64),
-    recycler: &mut LayerSceneRecycler,
-) -> (Box<LayerScene>, bool, Option<Box<KeptWith>>) {
-    let settings = context.settings;
-    let walk = layer
-        .node_id
-        .filter(|_| !settings.in_space && !layer.changed_in(settings.update))
-        .map(|node| (node, ContentKey::new(content_hash, &context)));
-    if let Some((node, walk)) = walk
-        && let Some((content, kept)) = history.contents.take(node, walk)
-    {
-        history.motion.record_again(&kept.scales);
-        return (content, kept.pixel_sensitive, Some(kept));
-    }
-    let logged = walk.map(|_| history.motion.begin_log());
-    let mut content = recycler.take(SceneCapacityHint::default());
-    let pixel_sensitive = collect_into(layer, history, context, &mut content, recycler);
-    content.scene.flush_loose();
-    content.refresh_summary();
-    let scales = logged.map(|from| history.motion.end_log(from));
-    let kept = walk
-        .zip(scales)
-        .filter(|_| !content.contains_backdrop())
-        .map(|((_, (key, light)), scales)| {
-            Box::new(KeptWith {
-                key,
-                light: content.casts_shadows().then_some(light),
-                pixel_sensitive,
-                scales,
-            })
-        });
-    (content, pixel_sensitive, kept)
-}
-
 fn collect_into(
     layer: &LayerNode,
-    history: &mut CollectHistory,
+    motion: &mut LayerMotion,
     context: WalkContext<'_>,
     out: &mut LayerScene,
     recycler: &mut LayerSceneRecycler,
@@ -642,13 +592,13 @@ fn collect_into(
         settings: context.settings,
     };
     if context.settings.in_space || layer.graphics_layer.space.is_some() {
-        return collect_space_children(layer, history, (child_context, &content), out, recycler);
+        return collect_space_children(layer, motion, (child_context, &content), out, recycler);
     }
     let mut has_pixel_sensitive_subtree = false;
     for_each_in_draw_order(&layer.children, |child| {
         has_pixel_sensitive_subtree |= match child {
             RenderNode::Layer(child_layer) => {
-                collect_child(child_layer, history, child_context, out, recycler)
+                collect_child(child_layer, motion, child_context, out, recycler)
             }
             RenderNode::Inline(inline) => collect_inline(inline, child_context, out),
             RenderNode::Primitive(_) | RenderNode::DrawRun(_) => {
@@ -682,7 +632,7 @@ fn boundary_anchor(
 
 fn collect_child(
     child: &LayerNode,
-    history: &mut CollectHistory,
+    motion: &mut LayerMotion,
     context: WalkContext<'_>,
     out: &mut LayerScene,
     recycler: &mut LayerSceneRecycler,
@@ -698,7 +648,7 @@ fn collect_child(
         Placement::Direct(translation) => (translation, None),
         Placement::DirectRounded(translation, radius) => (translation, Some(radius)),
         Placement::Isolated => {
-            return collect_isolated_child(child, history, context, None, out, recycler);
+            return collect_isolated_child(child, motion, context, None, out, recycler);
         }
     };
     let child_offset = Point::new(
@@ -751,7 +701,7 @@ fn collect_child(
     if child.backdrop().is_some() {
         push_backdrop_layer(child, child_offset, child_context, &mut out.scene);
     }
-    collect_into(child, history, child_context, out, recycler)
+    collect_into(child, motion, child_context, out, recycler)
 }
 
 // Collects `inline`, a node drawn in its parent's layer, under `context`,
@@ -827,7 +777,7 @@ fn push_direct_layer_shadow(
 #[inline(never)]
 fn collect_isolated_child(
     child: &LayerNode,
-    history: &mut CollectHistory,
+    motion: &mut LayerMotion,
     context: WalkContext<'_>,
     mesh: Option<Arc<MeshChild>>,
     out: &mut LayerScene,
@@ -856,7 +806,7 @@ fn collect_isolated_child(
         context.settings.light,
     );
     let (isolated, has_pixel_sensitive_subtree) =
-        isolated_child(child, history, context, mesh, &mut out.scene, recycler);
+        isolated_child(child, motion, context, mesh, &mut out.scene, recycler);
     let mut isolated = with_backdrop_in_own_space(isolated, recycler);
     assign_shadow_anchor(&mut out.scene, shadows_before, isolated.snap_anchor);
     detach_flat_backdrop(&mut isolated, &mut out.scene);

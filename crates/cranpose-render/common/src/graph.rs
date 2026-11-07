@@ -605,12 +605,6 @@ impl LayerNode {
     pub fn content_churns(&self, update: u64) -> bool {
         self.content_changes.run >= 2 && self.content_changes.last_update == update
     }
-
-    /// Whether scene update `update` changed what this layer or a layer
-    /// beneath it draws.
-    pub fn changed_in(&self, update: u64) -> bool {
-        self.content_changes.run > 0 && self.content_changes.last_update == update
-    }
 }
 
 /// A child of a layer in the render graph.

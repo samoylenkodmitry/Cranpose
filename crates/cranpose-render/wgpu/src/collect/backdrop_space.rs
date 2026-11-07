@@ -37,7 +37,6 @@ pub(super) fn with_backdrop_in_own_space(
         cache_policy: child.cache_policy,
         in_place: false,
         content,
-        kept: None,
         mesh: child.mesh.take(),
     };
     let mut inner = ChildLayer {

@@ -9,16 +9,10 @@ pub(super) const ANIMATED_RASTER_STEPS_PER_OCTAVE: f32 = 8.0;
 pub(crate) struct LayerMotion {
     previous: HashMap<NodeId, Motion>,
     current: HashMap<NodeId, Motion>,
-    // The scales recorded, in order, while a content that a later collect
-    // may take is collected, so that the layer whose content it takes
-    // records again what its layers recorded then.
-    log: Vec<(NodeId, Motion)>,
-    // How many such contents are being collected, one inside another.
-    logging: u32,
 }
 
 #[derive(Clone, Copy)]
-pub(super) struct Motion {
+struct Motion {
     content_hash: u64,
     raster: f32,
 }
@@ -41,45 +35,13 @@ impl LayerMotion {
         let Some(node_id) = node_id else {
             return;
         };
-        self.record(
+        self.current.insert(
             node_id,
             Motion {
                 content_hash,
                 raster,
             },
         );
-    }
-
-    fn record(&mut self, node_id: NodeId, motion: Motion) {
-        self.current.insert(node_id, motion);
-        if self.logging > 0 {
-            self.log.push((node_id, motion));
-        }
-    }
-
-    // Starts to log the scales that a content kept for later collects
-    // records, and returns where its scales start in the log.
-    pub(super) fn begin_log(&mut self) -> usize {
-        self.logging += 1;
-        self.log.len()
-    }
-
-    // The scales recorded since the `begin_log` that returned `from`.
-    pub(super) fn end_log(&mut self, from: usize) -> Vec<(NodeId, Motion)> {
-        self.logging -= 1;
-        let scales = self.log[from..].to_vec();
-        if self.logging == 0 {
-            self.log.clear();
-        }
-        scales
-    }
-
-    // Records again `scales`, which the layers of a content collected in
-    // an earlier frame recorded then.
-    pub(super) fn record_again(&mut self, scales: &[(NodeId, Motion)]) {
-        for &(node_id, motion) in scales {
-            self.record(node_id, motion);
-        }
     }
 
     pub(crate) fn end_frame(&mut self) {

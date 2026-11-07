@@ -6,7 +6,7 @@ use cranpose_render_common::{
 use web_time::Instant;
 
 use crate::{
-    collect::{CollectHistory, LayerSceneRecycler, collect_overlay, collect_root},
+    collect::{LayerMotion, LayerSceneRecycler, collect_overlay, collect_root},
     frame_packet::{FramePacket, FrameSceneStorage, MAX_FRAMES_IN_FLIGHT, RenderReturns},
     render::{frame_clear_color, instant_ms, should_log_wgpu_render_stage},
     scene::{Scene, SceneCapacityHint},
@@ -27,7 +27,7 @@ pub(crate) struct RendererFrontend {
     pub(crate) root_scene_capacity: SceneCapacityHint,
     scene_recyclers: [LayerSceneRecycler; MAX_FRAMES_IN_FLIGHT],
     returned_scenes: usize,
-    pub(crate) history: CollectHistory,
+    pub(crate) layer_motion: LayerMotion,
     pub(crate) frame_sequence: u64,
     pub(crate) transparent_background: bool,
     // Whether the app held still since the last packet; the next one says so.
@@ -77,7 +77,7 @@ impl RendererFrontend {
             root_scene_capacity: SceneCapacityHint::default(),
             scene_recyclers: std::array::from_fn(|_| LayerSceneRecycler::default()),
             returned_scenes: 0,
-            history: CollectHistory::default(),
+            layer_motion: LayerMotion::default(),
             frame_sequence: 0,
             transparent_background: false,
             held_still: false,
@@ -147,7 +147,7 @@ impl RendererFrontend {
         let root = collect_root(
             &graph.root,
             graph.update,
-            &mut self.history,
+            &mut self.layer_motion,
             self.root_scene_capacity,
             root_scale,
             recycler,
@@ -237,7 +237,7 @@ impl RendererFrontend {
             if let Some(overlay) = frame.overlay {
                 recycler.recycle(overlay);
             }
-            self.history.contents.keep_from(frame.root, recycler);
+            recycler.recycle(frame.root);
             recycler.returned_packet();
             self.returned_scenes += 1;
         }

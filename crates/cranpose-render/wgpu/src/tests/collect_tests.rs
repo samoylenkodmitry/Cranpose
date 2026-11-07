@@ -135,7 +135,7 @@ fn deferred_draws_keep_their_order_after_interleaved_children() {
         let collected = collect_root(
             &layer(children),
             0,
-            &mut CollectHistory::default(),
+            &mut LayerMotion::default(),
             SceneCapacityHint::default(),
             1.0,
             &mut LayerSceneRecycler::default(),
@@ -223,7 +223,7 @@ fn isolated_layers_snap_their_own_text_and_translating_text_descendants() {
             };
             let (child, _) = isolated_child(
                 &layer,
-                &mut CollectHistory::default(),
+                &mut LayerMotion::default(),
                 WalkContext {
                     offset: Point::new(0.3, 0.7),
                     visual_clip: None,
@@ -482,7 +482,7 @@ fn shapes_of_a_rounded_layer_drawn_in_place_take_its_radius_and_nothing_else_doe
     let scene = collect_root(
         &parent,
         0,
-        &mut CollectHistory::default(),
+        &mut LayerMotion::default(),
         SceneCapacityHint::default(),
         1.0,
         &mut LayerSceneRecycler::default(),
@@ -633,7 +633,7 @@ fn collected(layer: LayerNode) -> ChildLayer {
     let mut scene = collect_root(
         &root,
         0,
-        &mut CollectHistory::default(),
+        &mut LayerMotion::default(),
         SceneCapacityHint::default(),
         1.0,
         &mut LayerSceneRecycler::default(),
@@ -857,7 +857,7 @@ fn a_detached_backdrop_keeps_its_original_capture_reach_and_paint_order() {
     let collected = collect_root(
         &root,
         0,
-        &mut CollectHistory::default(),
+        &mut LayerMotion::default(),
         SceneCapacityHint::default(),
         1.0,
         &mut LayerSceneRecycler::default(),
@@ -891,7 +891,7 @@ fn draw_ops_under_clip(child: LayerNode) -> usize {
     collect_root(
         &root,
         0,
-        &mut CollectHistory::default(),
+        &mut LayerMotion::default(),
         SceneCapacityHint::default(),
         1.0,
         &mut LayerSceneRecycler::default(),
@@ -968,7 +968,7 @@ fn a_plain_texts_draw_carries_its_nodes_style() {
     let scene = collect_root(
         &root,
         0,
-        &mut CollectHistory::default(),
+        &mut LayerMotion::default(),
         SceneCapacityHint::default(),
         1.0,
         &mut LayerSceneRecycler::default(),
