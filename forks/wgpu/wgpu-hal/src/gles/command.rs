@@ -694,7 +694,16 @@ impl crate::CommandEncoder for super::CommandEncoder {
             depth: 0.0..1.0,
         });
 
-        if !rendering_to_external_framebuffer {
+        // The default framebuffer draws into its back buffer, which
+        // `drawBuffers` cannot name as a color attachment.
+        let rendering_to_default_framebuffer = matches!(
+            desc.color_attachments
+                .first()
+                .and_then(|at| at.as_ref())
+                .map(|at| &at.target.view.inner),
+            Some(super::TextureInner::DefaultRenderbuffer)
+        );
+        if !rendering_to_external_framebuffer && !rendering_to_default_framebuffer {
             // set the draw buffers and states
             self.cmd_buffer
                 .commands
