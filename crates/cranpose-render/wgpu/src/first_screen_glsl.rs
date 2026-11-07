@@ -1,12 +1,12 @@
 //! The exact GLSL of the WebGL stages a page's first screen compiles, which
-//! a page built with `CRANPOSE_FIRST_SCREEN_GLSL=1` fetches beside its wasm
+//! a page built with first-screen records fetches beside its wasm
 //! (`first_screen_glsl.txt`, written by `cranpose-first-screen-glsl` of
 //! `cranpose-gl-templates`, whose `first_screen_glsl` tells the format). A
 //! pipeline whose module, entry points and constants match a program of the
 //! file compiles the program's GLSL, specialized, folded and flattened at
 //! build time, instead of its stages' templates. On a Mate 20 X a shape
 //! program's compile and link took 36-38 ms that way against 53-56 ms from
-//! its templates, and the gauntlet's first content came 110 ms sooner.
+//! its templates, and the gauntlet's first content came about 90 ms sooner.
 //!
 //! A recording run lists the stages its first screen compiles for the tool
 //! (see [`list_first_screen_stages`]).

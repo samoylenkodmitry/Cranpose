@@ -1,8 +1,8 @@
 //! `cranpose-first-screen-glsl STAGES OUT` writes OUT, the exact GLSL of the
 //! WebGL stages listed in STAGES by a recording run of a page's first screen
-//! (`scripts/web/record_first_screen.mjs`). A page built with
-//! `CRANPOSE_FIRST_SCREEN_GLSL=1` fetches OUT from beside its wasm as
-//! `first_screen_glsl.txt`.
+//! (`scripts/web/record_first_screen.mjs`). A page built with first-screen
+//! records (`CRANPOSE_FIRST_SCREEN_PIPELINES`) fetches OUT from beside its
+//! wasm as `first_screen_glsl.txt`.
 
 #![allow(clippy::print_stderr, reason = "a command-line tool prints its errors")]
 
