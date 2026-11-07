@@ -364,7 +364,8 @@ pub(crate) struct SubtreeItems {
     pub transform: ProjectiveTransform,
     // The size of the node's own rect, from the layer's origin.
     pub node_size: Size,
-    // Whether the node's own layer publishes where it lies in its window.
+    // Whether the node's own layer publishes where it lies in its window,
+    // or a node of the surface it draws its children into does.
     pub sinks: bool,
     // What the hit targets beneath a layer that cuts them or handles a
     // pointer take from it; `None` for a layer that does neither and for a
@@ -548,7 +549,9 @@ impl RasterScene {
             }
         }
         self.hits_changed = true;
+        let sinks = records.iter().any(|record| record.sinks);
         if let Some(record) = self.record_mut(index) {
+            record.sinks |= sinks;
             record
                 .hits
                 .get_or_insert_with(|| Box::new(HitLayer::of(layer)))
