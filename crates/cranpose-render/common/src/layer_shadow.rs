@@ -215,13 +215,68 @@ impl ShadowRRect {
         );
         shadow_falloff(self.distance_correction * (1.0 - offset))
     }
+
+    /// What a row of pixels whose centres lie at `y` gives
+    /// [`Self::coverage`] besides x: two rows with equal keys take equal
+    /// coverage at every x, so a raster computes a row once for the rows
+    /// alike that follow it.
+    pub fn row_key(&self, y: f32) -> ShadowRowKey {
+        let bounds = self.bounds;
+        let bottom_edge = bounds.y + bounds.height;
+        let umbra = self.umbra_inset;
+        let top = bounds.y + umbra - y;
+        let bottom = y - (bottom_edge - umbra);
+        let hole = match (self.hole, self.hole_rect()) {
+            (Some(hole), Some(rect)) => {
+                let dy = overhang(rect.y, rect.height, hole.radius, y);
+                // Along the hole's upright sides, which x the hole holds
+                // does not depend on how far in the row lies.
+                if dy < 0.0 {
+                    HoleRow::Straight
+                } else {
+                    HoleRow::Curved(dy.to_bits())
+                }
+            }
+            _ => HoleRow::None,
+        };
+        ShadowRowKey {
+            inside: !(y < bounds.y || y >= bottom_edge),
+            across: top.max(bottom).max(0.0).to_bits(),
+            upper: top > bottom,
+            hole,
+        }
+    }
+}
+
+/// What a row of a [`ShadowRRect`] passes to its coverage besides x.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ShadowRowKey {
+    inside: bool,
+    // The row's distance out from the umbra toward the nearer horizontal
+    // edge, by its bits, and whether that edge is the top one.
+    across: u32,
+    upper: bool,
+    hole: HoleRow,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum HoleRow {
+    None,
+    Straight,
+    // How far the row lies past the hole's straight sides, by its bits.
+    Curved(u32),
+}
+
+// How far `at` lies past the straight part of a side `length` long from
+// `start`, whose ends round at `radius`: negative within it.
+fn overhang(start: f32, length: f32, radius: f32, at: f32) -> f32 {
+    let half = 0.5 * length;
+    (at - start - half).abs() - (half - radius)
 }
 
 fn rounded_rect_contains(rect: Rect, radius: f32, x: f32, y: f32) -> bool {
-    let half_width = 0.5 * rect.width;
-    let half_height = 0.5 * rect.height;
-    let dx = (x - rect.x - half_width).abs() - (half_width - radius);
-    let dy = (y - rect.y - half_height).abs() - (half_height - radius);
+    let dx = overhang(rect.x, rect.width, radius, x);
+    let dy = overhang(rect.y, rect.height, radius, y);
     let outside = (dx.max(0.0).powi(2) + dy.max(0.0).powi(2)).sqrt();
     outside + dx.max(dy).min(0.0) - radius < 0.0
 }
