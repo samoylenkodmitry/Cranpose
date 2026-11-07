@@ -288,9 +288,9 @@ impl<'a> LayoutWalk<'a> {
         self.marks.is_clean(self.applier, node)
     }
 
-    // The update `node` itself takes, when it changed.
-    pub(crate) fn update_of(&self, node: NodeId) -> Option<NodeUpdate> {
-        self.marks.update_of(self.applier, node)
+    // What changed of `node` and beneath it, for a push from its head.
+    pub(crate) fn head_change(&self, node: NodeId) -> HeadChange {
+        HeadChange::of(self.marks.marks.get(self.applier, node))
     }
 
     // Whether `node` itself changed.
@@ -587,8 +587,8 @@ impl<'a> LayoutWalk<'a> {
             return false;
         }
         let (update, children) = match change {
-            HeadChange::Nothing => (None, HeadChildren::Whole),
-            HeadChange::Marked(update) => (update, HeadChildren::Records),
+            HeadChange::Whole(update) => (update, HeadChildren::Whole),
+            HeadChange::Beneath(update) => (update, HeadChildren::Records),
         };
         let position = match (update, position) {
             (None | Some(NodeUpdate::Layer), ChildPosition::AsBefore) => None,
@@ -858,22 +858,24 @@ fn holds_sinks(records: &[SubtreeItems], at: usize) -> bool {
         .any(|record| record.sinks)
 }
 
-// What changed of a node that an update pushes from its head.
+// What changed of a node that an update pushes from its head: its own
+// update, if any, and whether a node beneath it changed.
 #[derive(Clone, Copy)]
 pub(crate) enum HeadChange {
-    // Neither the node nor a node beneath it: its whole subtree pushes
-    // again in its old order.
-    Nothing,
-    // The node or a node beneath it, with the node's own update, if any.
-    Marked(Option<NodeUpdate>),
+    // No node beneath it: its whole subtree pushes again in its old order.
+    Whole(Option<NodeUpdate>),
+    // A node beneath it.
+    Beneath(Option<NodeUpdate>),
 }
 
 impl HeadChange {
     // What the node with `mark` changed.
     pub(crate) fn of(mark: u8) -> Self {
-        match mark {
-            0 => Self::Nothing,
-            mark => Self::Marked(decode(mark)),
+        let update = decode(mark);
+        if mark & ABOVE_DIRTY == 0 {
+            Self::Whole(update)
+        } else {
+            Self::Beneath(update)
         }
     }
 }

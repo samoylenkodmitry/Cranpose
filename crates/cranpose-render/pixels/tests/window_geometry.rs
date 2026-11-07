@@ -110,7 +110,7 @@ fn a_node_in_a_scrolled_row_that_holds_still_reports_where_it_lies_now() {
             fresh_sink.get(),
             "step {step}: the node reports another window rect than a window built anew"
         );
-        first.get_or_insert(fresh_sink.get());
+        first.get_or_insert_with(|| fresh_sink.get());
     }
     let scrolled = first.map(|first| first.y - fresh_sink.get().y);
     assert_eq!(

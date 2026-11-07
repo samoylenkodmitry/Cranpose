@@ -26,7 +26,7 @@ use crate::{
     damage::merge_areas,
     draw::{ClipBounds, TextRaster},
     kept_list::push_kept,
-    layout_walk::{ChildPosition, HeadChange, LayoutWalk, OldChildren, child_record_from, names},
+    layout_walk::{ChildPosition, LayoutWalk, OldChildren, child_record_from, names},
     raster_scene::{PassedDown, RasterScene},
     rewrite::{Replaced, Rewrite},
 };
@@ -354,11 +354,10 @@ impl Repush<'_> {
                 }
                 None => {
                     let moved = (node, target.record, ChildPosition::AsBefore);
-                    let update = walk.update_of(node);
                     if !(place == NodePlace::Child
                         && walk.push_from_head(
                             moved,
-                            (HeadChange::Marked(update), &target.context),
+                            (walk.head_change(node), &target.context),
                             (scene, context),
                         ))
                     {

@@ -364,14 +364,25 @@ impl Rewrite {
     // Puts `entry`, the passed-down entry of the open record, in place of
     // the old record's, when it had one where the subtree notes its next
     // one; else into the spill. Returns where the entry would lie, were the
-    // spill in place, and whether it is what the old record passed down.
+    // spill in place, and whether it is what the old record passed down,
+    // false beneath the root of a whole subtree.
     pub(crate) fn place_passed_down(
         &mut self,
         entries: &mut [PassedDown],
         entry: PassedDown,
     ) -> (usize, bool) {
         let old = match self.whole {
-            Whole::Open { open, entry } if open > 1 => entry.map(|entry| entry as usize),
+            Whole::Open { open, entry: old } if open > 1 => {
+                let index = self.next.passed_down;
+                // No push beneath a whole subtree's root reads whether an
+                // entry stayed the same: its children push from their records.
+                if self.spilled_at.is_none() && old.is_some_and(|old| old as usize == index) {
+                    entries[index] = entry;
+                    self.next.passed_down += 1;
+                    return (index, false);
+                }
+                old.map(|old| old as usize)
+            }
             _ => self.opened.last().and_then(|opened| opened.passed_down()),
         };
         if self.spilled_at.is_none() {
