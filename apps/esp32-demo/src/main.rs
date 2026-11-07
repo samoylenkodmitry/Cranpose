@@ -10,6 +10,9 @@ mod changing_paths;
 #[cfg(feature = "dashboard")]
 #[path = "../../../crates/cranpose/tests/support/dashboard.rs"]
 mod dashboard;
+#[cfg(all(feature = "screens-in-turn", not(feature = "e32r35t")))]
+#[path = "../../../crates/cranpose/tests/support/deep_moves.rs"]
+mod deep_moves;
 #[cfg(any(
     not(any(feature = "dashboard", feature = "changing-paths")),
     feature = "screens-in-turn"
@@ -24,6 +27,9 @@ mod demo;
 mod frame_time;
 #[cfg(feature = "screens-in-turn")]
 mod in_turn;
+#[cfg(all(feature = "screens-in-turn", not(feature = "e32r35t")))]
+#[path = "../../../crates/cranpose/tests/support/still_wall.rs"]
+mod still_wall;
 #[cfg(any(
     feature = "dashboard",
     feature = "changing-paths",
