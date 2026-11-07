@@ -1,7 +1,10 @@
 use cranpose_ui_graphics::{Brush, Color, DrawPrimitive, Point, ShapeRecorder};
 
 use super::{held_draws::held_cells, *};
-use crate::scene::{Placement, ShadowDraw};
+use crate::{
+    scene::{Placement, ShadowDraw},
+    scissor::target_rects_overlap,
+};
 
 #[test]
 fn shadow_run_items_preserve_geometry_culling_and_first_run_window() {

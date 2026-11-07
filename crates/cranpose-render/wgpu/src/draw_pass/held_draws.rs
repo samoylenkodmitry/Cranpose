@@ -1,5 +1,7 @@
-use super::target_rects_overlap;
-use crate::render::{TargetRect, ViewportUniformParams};
+use crate::{
+    render::{TargetRect, ViewportUniformParams},
+    scissor::target_rects_overlap,
+};
 
 /// Most glyph and image draws held back at once; past this they draw, so a
 /// long stretch of shapes checks each against a bounded list.

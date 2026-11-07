@@ -21,7 +21,7 @@ use crate::{
     rrect_shadow::{ShadowInstance, append_shadow_instances},
     run_store::RunDrawCall,
     scene::{CompositorScene, DrawOp, RRectShadowDraw, RunDraw, TextDraw},
-    scissor::{intersect_scissors, scissor_in_target},
+    scissor::{intersect_scissors, intersect_target_rects, scissor_in_target, target_rect_within},
     shape_pipelines::PipelineDemand,
 };
 
@@ -35,12 +35,14 @@ use op_items::{OpItems, Texts, merge_items, segment_viewport_rect};
 mod op_bounds;
 pub(crate) use op_bounds::{op_draw_bounds, op_is_visible_in_rect};
 mod interiors_first;
+mod mixed_turns;
 mod pass_buffers;
 mod pass_scratch;
 mod segment_run;
 mod target_space;
 pub(crate) use interiors_first::lays_interiors_first;
 use interiors_first::takes_depth;
+use mixed_turns::turns_mixed;
 use pass_buffers::PassBuffers;
 pub(crate) use pass_scratch::PassScratch;
 use segment_run::{ArenaClip, SegmentBinding, SegmentRun};
@@ -251,7 +253,7 @@ fn stage_scissor(
     stage: RunStage,
 ) -> Option<TargetRect> {
     match (stage, clip) {
-        (RunStage::Paint, Some(clip)) => crate::render::intersect_target_rects(scissor, clip),
+        (RunStage::Paint, Some(clip)) => intersect_target_rects(scissor, clip),
         _ => Some(scissor),
     }
 }
@@ -728,22 +730,6 @@ pub(crate) struct RunCalls<'a> {
     pub(crate) meshes: Option<(crate::mesh_fallback::RunMeshes<'a>, PassDepth)>,
 }
 
-/// Changes between flat and turned segments a pass takes before its shapes
-/// draw with the pipeline that tells them apart per record: below it, a draw
-/// per change costs less than the flag test every fragment pays there.
-const MIXED_TURN_CHANGES: usize = 8;
-
-/// Whether the flat and turned segments of a pass alternate at least
-/// `MIXED_TURN_CHANGES` times, as a grid of cells tilted by turns does when
-/// some cells are not tilted.
-fn turns_mixed(segments: &[PassSegment<'_>]) -> bool {
-    segments
-        .windows(2)
-        .filter(|pair| pair[0].transform.is_identity() != pair[1].transform.is_identity())
-        .count()
-        >= MIXED_TURN_CHANGES
-}
-
 /// The commands a pass's batches draw ranges of.
 #[derive(Clone, Copy)]
 struct PassCmds<'a> {
@@ -767,10 +753,6 @@ fn group_glyph_batches(batches: &[Batch<'_>], scratch: &mut PassScratch) {
             crate::render::group_glyph_kinds(&mut cmds[..shared], &mut scratch.glyph_moved);
         }
     }
-}
-
-pub(crate) fn target_rects_overlap(a: TargetRect, b: TargetRect) -> bool {
-    a.0 < b.0 + b.2 && b.0 < a.0 + a.2 && a.1 < b.1 + b.3 && b.1 < a.1 + a.3
 }
 
 /// Turns the segments of one pass into batches, one item run at a time.
@@ -825,6 +807,7 @@ struct PassPrep<'a, 's, C> {
     /// its binding's, or the slot of a member whose run may reach past it.
     /// A run that takes another closes the chunk first.
     chunk_scissor: Option<TargetRect>,
+    clip_scissor: crate::render::clip_scissor::Last,
 }
 
 impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
@@ -857,6 +840,7 @@ impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
             chunk_slot: None,
             chunk_clip: None,
             chunk_scissor: None,
+            clip_scissor: Default::default(),
         }
     }
 
@@ -1394,8 +1378,10 @@ impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
     /// cannot. A member's rect clip goes to the shader instead, so the clips
     /// of members leave their records one batch, and a member's run that
     /// may reach past its slot takes a chunk scissored to the slot.
-    fn arena_clip(&self, draw: &RunDraw, bounds: Rect, run: &SegmentRun<'s, '_>) -> ArenaClip {
-        let clip = crate::render::clip_scissor(&draw.placement, run.segment.scale, run.viewport);
+    fn arena_clip(&mut self, draw: &RunDraw, bounds: Rect, run: &SegmentRun<'s, '_>) -> ArenaClip {
+        let clip = self
+            .clip_scissor
+            .arena(&draw.placement, run.segment.scale, &run.viewport);
         let Some(slot) = run.slot else {
             return ArenaClip {
                 paint: clip,
@@ -1407,14 +1393,14 @@ impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
         let reach = self
             .run_target_bounds(bounds, run)
             .and_then(|reach| match clip {
-                Some(clip) => crate::render::intersect_target_rects(reach, clip),
+                Some(clip) => intersect_target_rects(reach, clip),
                 None => Some(reach),
             });
         ArenaClip {
             paint,
             tested: crate::render::SegmentClip::of(&draw.placement, paint.is_some()),
             chunk: reach
-                .is_some_and(|reach| !crate::render::target_rect_within(reach, slot))
+                .is_some_and(|reach| !target_rect_within(reach, slot))
                 .then_some(slot),
         }
     }
@@ -1447,7 +1433,7 @@ impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
                 let batch = renderer.prepare_store_run(
                     self.recorder,
                     draw,
-                    space,
+                    (space, &mut self.clip_scissor),
                     &window,
                     (self.depth, self.depth_keys.as_mut()),
                     (&mut self.arena_draws, &mut self.pipelines),

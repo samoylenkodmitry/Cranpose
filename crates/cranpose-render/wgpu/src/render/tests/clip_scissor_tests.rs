@@ -1,9 +1,10 @@
 use cranpose_ui_graphics::{Point, Rect};
 
 use super::*;
+use crate::geometry::SegmentTransform;
 
-fn placement(clip: Option<Rect>) -> crate::scene::Placement {
-    crate::scene::Placement {
+fn placement(clip: Option<Rect>) -> Placement {
+    Placement {
         offset: Point::new(0.0, 0.0),
         snap_anchor: None,
         clip,
@@ -120,10 +121,93 @@ fn a_turned_or_unclipped_run_takes_no_scissor() {
 }
 
 #[test]
-fn target_rects_intersect_to_the_pixels_both_keep() {
-    assert_eq!(
-        intersect_target_rects((0, 0, 10, 10), (5, 2, 10, 4)),
-        Some((5, 2, 5, 4))
-    );
-    assert_eq!(intersect_target_rects((0, 0, 4, 4), (4, 0, 4, 4)), None);
+fn a_kept_scissor_serves_only_a_run_with_every_input_the_same() {
+    struct Run {
+        x: f32,
+        snapped: bool,
+        scale: f32,
+        offset: [f32; 2],
+        extent: (u32, u32),
+    }
+    let base = || Run {
+        x: 2.51,
+        snapped: false,
+        scale: 1.0,
+        offset: [0.0, 0.0],
+        extent: (64, 48),
+    };
+    // Each run changes one input of the one before, and with it the pixels
+    // kept, so a key that leaves the input out hands back the wrong scissor.
+    let runs = [
+        base(),
+        base(),
+        Run {
+            snapped: true,
+            ..base()
+        },
+        base(),
+        Run { x: 2.49, ..base() },
+        Run {
+            x: 2.49,
+            scale: 1.7,
+            ..base()
+        },
+        Run {
+            x: 2.49,
+            scale: 1.7,
+            offset: [-1.0, 0.0],
+            ..base()
+        },
+        Run {
+            x: 2.49,
+            scale: 1.7,
+            offset: [-1.0, -1.0],
+            ..base()
+        },
+        Run {
+            x: 2.49,
+            scale: 1.7,
+            offset: [-1.0, -1.0],
+            extent: (6, 48),
+            ..base()
+        },
+        Run {
+            x: 2.49,
+            scale: 1.7,
+            offset: [-1.0, -1.0],
+            extent: (6, 8),
+            ..base()
+        },
+    ];
+    let mut last = Last::default();
+    let mut previous = None;
+    for (index, run) in runs.iter().enumerate() {
+        let mut placement = placement(Some(Rect {
+            x: run.x,
+            y: 1.3,
+            width: 7.6,
+            height: 5.2,
+        }));
+        placement.snap_anchor = run
+            .snapped
+            .then(|| crate::scene::SnapAnchor::rigid(Point::new(0.0, 0.0)));
+        let viewport = ViewportUniformParams {
+            width: run.extent.0,
+            height: run.extent.1,
+            ..viewport(run.offset, SegmentTransform::IDENTITY)
+        };
+        let fresh = clip_scissor(&placement, run.scale, viewport);
+        if index != 1 {
+            assert_ne!(fresh, previous, "run {index} keeps other pixels");
+        }
+        assert_eq!(
+            last.arena(&placement, run.scale, &viewport),
+            fresh,
+            "run {index}"
+        );
+        previous = fresh;
+    }
+    let unclipped = placement(None);
+    let viewport = viewport([0.0, 0.0], SegmentTransform::IDENTITY);
+    assert_eq!(last.arena(&unclipped, 1.0, &viewport), None);
 }
