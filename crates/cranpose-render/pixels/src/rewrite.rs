@@ -231,30 +231,30 @@ impl Rewrite {
 
     // Pushes `item` in place of the old item where the subtree pushes next,
     // when that one is of its kind, adding the areas the two draw
-    // differently; else, and from then on, into the spill. Inline in its one
-    // caller, `RasterScene::push_item`: a call would copy a text item, which
-    // is large, once more on its way into the list.
-    #[inline(always)]
+    // differently; else, and from then on, into the spill.
     pub(crate) fn place<T: SceneItem>(&mut self, scene: &mut RasterScene, item: T) {
         if self.spilled_at.is_none() {
             let at = self.next.items.order;
             let slot = *T::count(&mut self.next.items);
             let (list, order) = T::lists(scene);
             if at < self.own_items_end && T::index_of(order[at]) == Some(slot) {
+                // The item moves into its place before the two are compared:
+                // compared first, a large item, as text is, takes one more
+                // copy on its way in.
+                let old = std::mem::replace(&mut list[slot], item);
                 if let Some(window) = self.window {
                     let reach = match self.reach.get_mut(at) {
                         Some(held) if self.held == UpdatedReach::Held => ItemReach::Replaced(held),
                         _ => ItemReach::Unknown,
                     };
                     add_changed_pair(
+                        old.as_ref(),
                         list[slot].as_ref(),
-                        item.as_ref(),
                         reach,
                         window,
                         &mut self.areas,
                     );
                 }
-                list[slot] = item;
                 self.next.items.order += 1;
                 *T::count(&mut self.next.items) += 1;
                 return;
