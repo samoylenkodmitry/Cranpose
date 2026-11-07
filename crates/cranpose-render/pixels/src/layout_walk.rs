@@ -269,10 +269,6 @@ impl OldChildren {
     }
 }
 
-// What a window's root lowers with. A constant, so the scene links only
-// the recording store it names.
-pub(crate) const ROOT_CONTEXT: LowerContext = LowerContext::root(RecordingStore::Redrawn);
-
 // A subtree whose layer holds a 3D space, which the scene keeps whole, and
 // whether the scene published where its surfaces show since the walk
 // lowered it.
@@ -371,7 +367,7 @@ impl<'a> LayoutWalk<'a> {
         root: NodeId,
         push: impl FnOnce(&RenderNode, Option<&mut ChildSlot<'_>>),
     ) -> bool {
-        let context = ROOT_CONTEXT;
+        let context = LowerContext::root(RecordingStore::Redrawn);
         let mut push = Some(push);
         let lowered =
             lower_node_alone(self.applier, (root, NodePlace::Root), &context, |lowered| {

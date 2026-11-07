@@ -7,7 +7,7 @@ use cranpose_core::{MemoryApplier, NodeId};
 use cranpose_ui::Point;
 
 use super::{
-    Level, LowerContext, inline_leaf::lower_placed_child, placed_child_geometry,
+    Level, LowerContext, RecordingStore, inline_leaf::lower_placed_child, placed_child_geometry,
     publish_retained_window_geometry, read_placed_node_data, recycle_lowered,
     translate_retained_child,
 };
@@ -26,6 +26,7 @@ pub struct MovedSubtree {
 pub(super) struct Inherited {
     motion_context_animated: bool,
     translated_content_context: bool,
+    store: RecordingStore,
 }
 
 impl Inherited {
@@ -33,6 +34,7 @@ impl Inherited {
         Self {
             motion_context_animated: context.inherited_motion_context_animated,
             translated_content_context: context.inherited_translated_content_context,
+            store: context.store,
         }
     }
 }

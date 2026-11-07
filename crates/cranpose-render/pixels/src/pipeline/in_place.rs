@@ -15,8 +15,8 @@ use cranpose_render_common::{
     graph_scene::RenderDiagnostics,
     layer_shadow::ShadowLight,
     scene_builder::{
-        KeptHead, KeptNodeRef, LowerContext, NodePlace, lowered_children_context, release_lowered,
-        root_layer_bounds, visit_kept_node,
+        KeptHead, KeptNodeRef, LowerContext, NodePlace, RecordingStore, lowered_children_context,
+        release_lowered, root_layer_bounds, visit_kept_node,
     },
 };
 
@@ -171,7 +171,7 @@ impl InPlaceUpdate<'_> {
             Ok(())
         } else {
             repush.targets.clear();
-            let context = crate::layout_walk::ROOT_CONTEXT;
+            let context = LowerContext::root(RecordingStore::Redrawn);
             repush.visit_node(walk, (root, NodePlace::Root), &context, (0, None))
         };
         let pushed = found.and_then(|()| repush.push_targets(walk));

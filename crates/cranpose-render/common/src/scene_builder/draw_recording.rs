@@ -120,47 +120,6 @@ pub enum RecordingStore {
     Redrawn,
 }
 
-impl RecordingStore {
-    pub(super) const fn buffers(self) -> StoreBuffers {
-        match self {
-            Self::Command => StoreBuffers::Command(OWN_RECORDINGS),
-            Self::Redrawn => StoreBuffers::Redrawn,
-        }
-    }
-}
-
-// The buffers of a recording store, as a lowering context holds them. The
-// command store's are a trait object: a renderer whose root context is a
-// constant of the other store links none of their code.
-#[derive(Clone, Copy)]
-pub(super) enum StoreBuffers {
-    Command(&'static dyn RecordingBuffers),
-    Redrawn,
-}
-
-// What the command store keeps for its commands to record into.
-pub(super) trait RecordingBuffers {
-    // A recording for the command `id` to record into.
-    fn acquire(&self, id: DrawCommandId) -> Rc<CommandRecording>;
-
-    // What the scene holds of `recording`, which the command `id` made.
-    fn publish(&self, id: DrawCommandId, recording: Rc<CommandRecording>) -> Rc<CommandRecording>;
-}
-
-pub(super) const OWN_RECORDINGS: &dyn RecordingBuffers = &OwnRecordings;
-
-struct OwnRecordings;
-
-impl RecordingBuffers for OwnRecordings {
-    fn acquire(&self, id: DrawCommandId) -> Rc<CommandRecording> {
-        acquire_storage(id)
-    }
-
-    fn publish(&self, id: DrawCommandId, recording: Rc<CommandRecording>) -> Rc<CommandRecording> {
-        publish_recording(id, recording)
-    }
-}
-
 pub(super) enum DrawPass<'a> {
     Record(DrawPlacement),
     OverlayFrom(std::slice::Iter<'a, RenderNode>),
@@ -214,7 +173,7 @@ pub(super) struct DrawTarget<'a> {
     pub(super) size: Size,
     pub(super) motion_context_animated: bool,
     pub(super) layer: Option<&'a GraphicsLayer>,
-    pub(super) store: StoreBuffers,
+    pub(super) store: RecordingStore,
 }
 
 /// Writes the part of one draw command's recording that a draw pass draws,
@@ -428,8 +387,8 @@ pub(super) fn append_draw_nodes(
             let store = draws.store;
             let Some((recording, segments)) =
                 recording_for_placement_reusing(command, placement, size, || match store {
-                    StoreBuffers::Command(buffers) => buffers.acquire(id),
-                    StoreBuffers::Redrawn => {
+                    RecordingStore::Command => acquire_storage(id),
+                    RecordingStore::Redrawn => {
                         crate::thread_state::with(|state| state.redrawn.borrow_mut().acquire(id))
                     }
                 })
@@ -437,8 +396,8 @@ pub(super) fn append_draw_nodes(
                 continue;
             };
             match store {
-                StoreBuffers::Command(buffers) => (buffers.publish(id, recording), segments),
-                StoreBuffers::Redrawn => (recording, segments),
+                RecordingStore::Command => (publish_recording(id, recording), segments),
+                RecordingStore::Redrawn => (recording, segments),
             }
         };
         let grouped = shared.summary().has_groups
@@ -471,7 +430,7 @@ pub fn draw_command_nodes_for_tests(
         size,
         motion_context_animated: false,
         layer: None,
-        store: StoreBuffers::Command(OWN_RECORDINGS),
+        store: RecordingStore::Command,
     };
     draw_nodes(node_id, commands, 0, placement, draws, phase)
 }

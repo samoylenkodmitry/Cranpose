@@ -2,10 +2,7 @@
 
 use cranpose_ui::{ModifierNodeSlices, Point};
 
-use super::{
-    AbsOrigin, OWN_RECORDINGS, RecordingStore, StoreBuffers, TranslateAncestorContext,
-    TranslateGeometry,
-};
+use super::{AbsOrigin, RecordingStore, TranslateAncestorContext, TranslateGeometry};
 use crate::graph::LayerNode;
 
 /// What a layout node lowers with from the nodes above it: where its
@@ -17,7 +14,7 @@ pub struct LowerContext {
     pub(super) inherited_translated_content_context: bool,
     pub(super) parent_abs: Option<AbsOrigin>,
     pub(super) parent_content_offset: Point,
-    pub(super) store: StoreBuffers,
+    pub(super) store: RecordingStore,
 }
 
 impl LowerContext {
@@ -31,7 +28,7 @@ impl LowerContext {
             inherited_translated_content_context: false,
             parent_abs: Some(AbsOrigin::ROOT),
             parent_content_offset: Point { x: 0.0, y: 0.0 },
-            store: store.buffers(),
+            store,
         }
     }
 
@@ -42,7 +39,7 @@ impl LowerContext {
             inherited_translated_content_context: ancestors.inherited_translated_content_context,
             parent_abs: Some(ancestors.parent_abs),
             parent_content_offset: ancestors.parent_content_offset,
-            store: StoreBuffers::Command(OWN_RECORDINGS),
+            store: RecordingStore::Command,
         }
     }
 
