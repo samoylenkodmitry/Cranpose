@@ -21,7 +21,7 @@ use crate::{
     rrect_shadow::{ShadowInstance, append_shadow_instances},
     run_store::RunDrawCall,
     scene::{CompositorScene, DrawOp, RRectShadowDraw, RunDraw, TextDraw},
-    scissor::{intersect_scissors, scissor_in_target},
+    scissor::{intersect_scissors, intersect_target_rects, scissor_in_target, target_rect_within},
     shape_pipelines::PipelineDemand,
 };
 
@@ -251,7 +251,7 @@ fn stage_scissor(
     stage: RunStage,
 ) -> Option<TargetRect> {
     match (stage, clip) {
-        (RunStage::Paint, Some(clip)) => crate::render::intersect_target_rects(scissor, clip),
+        (RunStage::Paint, Some(clip)) => intersect_target_rects(scissor, clip),
         _ => Some(scissor),
     }
 }
@@ -767,10 +767,6 @@ fn group_glyph_batches(batches: &[Batch<'_>], scratch: &mut PassScratch) {
             crate::render::group_glyph_kinds(&mut cmds[..shared], &mut scratch.glyph_moved);
         }
     }
-}
-
-pub(crate) fn target_rects_overlap(a: TargetRect, b: TargetRect) -> bool {
-    a.0 < b.0 + b.2 && b.0 < a.0 + a.2 && a.1 < b.1 + b.3 && b.1 < a.1 + a.3
 }
 
 /// Turns the segments of one pass into batches, one item run at a time.
@@ -1407,14 +1403,14 @@ impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
         let reach = self
             .run_target_bounds(bounds, run)
             .and_then(|reach| match clip {
-                Some(clip) => crate::render::intersect_target_rects(reach, clip),
+                Some(clip) => intersect_target_rects(reach, clip),
                 None => Some(reach),
             });
         ArenaClip {
             paint,
             tested: crate::render::SegmentClip::of(&draw.placement, paint.is_some()),
             chunk: reach
-                .is_some_and(|reach| !crate::render::target_rect_within(reach, slot))
+                .is_some_and(|reach| !target_rect_within(reach, slot))
                 .then_some(slot),
         }
     }

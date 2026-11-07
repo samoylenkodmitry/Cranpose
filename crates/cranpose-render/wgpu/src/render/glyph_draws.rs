@@ -6,13 +6,13 @@ use cranpose_ui_graphics::Rect;
 use super::{
     CachedGpuTextGlyphRun, GlyphRunQuads, TargetRect, ViewportUniformParams,
     cached_text_glyph_instance, cached_text_glyph_quad_is_visible_in_viewport, confined_scissor,
-    target_rect_within,
 };
 use crate::{
     frame_graph::{BufferUpload, UploadAllocatorSpec},
     geometry::{SegmentTransform, canonicalize_device_coordinate},
     idle_pool::FrameScratch,
     instant_triangles::InstantGlyphs,
+    scissor::{target_rect_within, target_rects_overlap},
 };
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -636,8 +636,7 @@ pub(crate) fn movable_glyph_kind<T>(
         draws.iter().enumerate().all(|(index, draw)| {
             kind(draw) != Some(moved)
                 || draws[index + 1..].iter().all(|later| {
-                    kind(later) == Some(moved)
-                        || !crate::draw_pass::target_rects_overlap(bounds(draw), bounds(later))
+                    kind(later) == Some(moved) || !target_rects_overlap(bounds(draw), bounds(later))
                 })
         })
     })
@@ -661,10 +660,9 @@ pub(crate) fn defer_retained_glyph_runs(
     }
     let deferrable = cmds.iter().enumerate().all(|(index, cmd)| {
         !retained(cmd)
-            || cmds[index + 1..].iter().all(|later| {
-                retained(later)
-                    || !crate::draw_pass::target_rects_overlap(cmd.bounds(), later.bounds())
-            })
+            || cmds[index + 1..]
+                .iter()
+                .all(|later| retained(later) || !target_rects_overlap(cmd.bounds(), later.bounds()))
     });
     if !deferrable {
         return 0;

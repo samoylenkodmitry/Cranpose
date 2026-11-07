@@ -51,6 +51,7 @@ use crate::{
     rrect_shadow::{SHADOW_QUAD_CORNERS, ShadowInstance},
     run_store::{ArenaBinding, PlacementData, RunBufferMode, RunDrawCall, RunStore, StoredTables},
     scene::{ImageDraw, RunDraw, ShadowDraw, SnapAnchor, TextDraw},
+    scissor::intersect_target_rects,
     shape_pipelines::{PipelineDemand, ShapePipelineFactory, ShapePipelines},
     shared_shader::SharedShader,
 };
@@ -67,71 +68,6 @@ const MAX_TEXTURE_CACHE_ITEMS: usize = 256;
 type DeviceRect4 = (f32, f32, f32, f32);
 /// A rect of whole target pixels: x, y, width, height.
 pub(crate) type TargetRect = (u32, u32, u32, u32);
-
-/// The target pixels a clipped shape variant keeps of `placement`'s records
-/// under `viewport`, as a scissor that stands in for its clip test: every
-/// pixel whose centre, moved by the viewport's offset, lies inside the
-/// device clip, inclusive of its edges, as the shader compares them. `None`
-/// without a clip or under a turn, where the variant tests the clip itself.
-/// An empty clip keeps an empty scissor.
-pub(crate) fn clip_scissor(
-    placement: &crate::scene::Placement,
-    root_scale: f32,
-    viewport: ViewportUniformParams,
-) -> Option<TargetRect> {
-    if !viewport.transform.is_identity() {
-        return None;
-    }
-    let [x, y, width, height] = placement.device_clip(root_scale)?;
-    let columns = kept_pixels(x, x + width, viewport.offset[0], viewport.width);
-    let rows = kept_pixels(y, y + height, viewport.offset[1], viewport.height);
-    Some((
-        columns.start,
-        rows.start,
-        columns.end - columns.start,
-        rows.end - rows.start,
-    ))
-}
-
-/// The pixels along one axis whose centre, moved by `offset`, lies within
-/// `low..=high`, within `0..extent`: stepped with the shader's own float
-/// sums so the edges fall where its comparisons put them.
-fn kept_pixels(low: f32, high: f32, offset: f32, extent: u32) -> std::ops::Range<u32> {
-    let centre = |pixel: u32| pixel as f32 + 0.5 + offset;
-    let guess = |edge: f32| (edge - offset - 0.5).ceil().clamp(0.0, extent as f32) as u32;
-    let mut start = guess(low);
-    while start > 0 && centre(start - 1) >= low {
-        start -= 1;
-    }
-    while start < extent && centre(start) < low {
-        start += 1;
-    }
-    let mut end = guess(high).max(start);
-    while end > start && centre(end - 1) > high {
-        end -= 1;
-    }
-    while end < extent && centre(end) <= high {
-        end += 1;
-    }
-    start..end
-}
-
-/// The pixels both scissors keep, `None` when they share none.
-pub(crate) fn intersect_target_rects(a: TargetRect, b: TargetRect) -> Option<TargetRect> {
-    let left = a.0.max(b.0);
-    let top = a.1.max(b.1);
-    let right = (a.0 + a.2).min(b.0 + b.2);
-    let bottom = (a.1 + a.3).min(b.1 + b.3);
-    (right > left && bottom > top).then(|| (left, top, right - left, bottom - top))
-}
-
-/// Whether `inner` lies within `outer`.
-pub(crate) fn target_rect_within(inner: TargetRect, outer: TargetRect) -> bool {
-    inner.0 >= outer.0
-        && inner.1 >= outer.1
-        && inner.0 + inner.2 <= outer.0 + outer.2
-        && inner.1 + inner.3 <= outer.1 + outer.3
-}
 
 /// The scissor that keeps a draw under `scissor`, or under none, within
 /// `slot`: empty when they share no pixel.
@@ -3649,9 +3585,11 @@ fn window_draws(draws: &mut Vec<RunDrawCall>, start: usize, window: &std::ops::R
     draws.truncate(kept);
 }
 
+pub(crate) mod clip_scissor;
 mod glyph_draws;
 mod pipeline_builds;
 mod stage_telemetry;
+pub(crate) use clip_scissor::clip_scissor;
 pub(crate) use glyph_draws::{
     GlyphDrawCmd, GlyphInstance, GlyphInstances, TurnedGlyphs, defer_retained_glyph_runs,
     group_glyph_kinds,
@@ -3743,7 +3681,3 @@ mod retained_glyph_tests;
 #[cfg(test)]
 #[path = "tests/frame_clear_tests.rs"]
 mod frame_clear_tests;
-
-#[cfg(test)]
-#[path = "tests/render_clip_scissor_tests.rs"]
-mod clip_scissor_tests;

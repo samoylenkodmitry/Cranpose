@@ -1,9 +1,10 @@
 use cranpose_ui_graphics::{Point, Rect};
 
 use super::*;
+use crate::geometry::SegmentTransform;
 
-fn placement(clip: Option<Rect>) -> crate::scene::Placement {
-    crate::scene::Placement {
+fn placement(clip: Option<Rect>) -> Placement {
+    Placement {
         offset: Point::new(0.0, 0.0),
         snap_anchor: None,
         clip,
@@ -117,13 +118,4 @@ fn a_turned_or_unclipped_run_takes_no_scissor() {
         ),
         None
     );
-}
-
-#[test]
-fn target_rects_intersect_to_the_pixels_both_keep() {
-    assert_eq!(
-        intersect_target_rects((0, 0, 10, 10), (5, 2, 10, 4)),
-        Some((5, 2, 5, 4))
-    );
-    assert_eq!(intersect_target_rects((0, 0, 4, 4), (4, 0, 4, 4)), None);
 }

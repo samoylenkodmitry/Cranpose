@@ -1,5 +1,7 @@
 use cranpose_ui_graphics::TileMode;
 
+use crate::render::TargetRect;
+
 pub(crate) fn scissor_in_target(
     scissor: (f32, f32, f32, f32),
     target_size: (u32, u32),
@@ -32,14 +34,29 @@ pub(crate) fn intersect_scissors(
     match (a, b) {
         (None, None) => Some(None),
         (Some(rect), None) | (None, Some(rect)) => Some(Some(rect)),
-        (Some((ax, ay, aw, ah)), Some((bx, by, bw, bh))) => {
-            let left = ax.max(bx);
-            let top = ay.max(by);
-            let right = (ax + aw).min(bx + bw);
-            let bottom = (ay + ah).min(by + bh);
-            (right > left && bottom > top).then(|| Some((left, top, right - left, bottom - top)))
-        }
+        (Some(a), Some(b)) => intersect_target_rects(a, b).map(Some),
     }
+}
+
+/// The pixels both scissors keep, `None` when they share none.
+pub(crate) fn intersect_target_rects(a: TargetRect, b: TargetRect) -> Option<TargetRect> {
+    let left = a.0.max(b.0);
+    let top = a.1.max(b.1);
+    let right = (a.0 + a.2).min(b.0 + b.2);
+    let bottom = (a.1 + a.3).min(b.1 + b.3);
+    (right > left && bottom > top).then(|| (left, top, right - left, bottom - top))
+}
+
+/// Whether `inner` lies within `outer`.
+pub(crate) fn target_rect_within(inner: TargetRect, outer: TargetRect) -> bool {
+    inner.0 >= outer.0
+        && inner.1 >= outer.1
+        && inner.0 + inner.2 <= outer.0 + outer.2
+        && inner.1 + inner.3 <= outer.1 + outer.3
+}
+
+pub(crate) fn target_rects_overlap(a: TargetRect, b: TargetRect) -> bool {
+    a.0 < b.0 + b.2 && b.0 < a.0 + a.2 && a.1 < b.1 + b.3 && b.1 < a.1 + a.3
 }
 
 pub(crate) fn scaled_scissor(
@@ -129,3 +146,7 @@ pub(crate) fn widened_scissor(
     );
     Some((left, top, right - left, bottom - top))
 }
+
+#[cfg(test)]
+#[path = "tests/scissor_tests.rs"]
+mod tests;
