@@ -10,10 +10,10 @@ use cranpose_render_common::{
     NodeUpdate, SceneUpdates,
     graph::RenderNode,
     scene_builder::{
-        KeptHead, KeptNodeRef, LowerContext, LoweredNode, NodePlace, OwnLayer, RecordingStore,
-        SpaceFragment, has_children, lower_moved_subtree, lower_node_alone, lower_space_fragment,
-        placed_child_position, recycle_lowered, release_lowered, visit_kept_node,
-        visit_lowered_children,
+        Inherits, KeptHead, KeptNodeRef, LowerContext, LoweredNode, NodePlace, OwnLayer,
+        RecordingStore, SpaceFragment, has_children, lower_moved_subtree, lower_node_alone,
+        lower_space_fragment, placed_child_position, recycle_lowered, release_lowered,
+        visit_kept_node, visit_lowered_children,
     },
 };
 use cranpose_ui_graphics::Point;
@@ -650,7 +650,7 @@ impl<'a> LayoutWalk<'a> {
         };
         self.push_head(
             (child, at),
-            (position, own_layer, change.children()),
+            (position, own_layer, change.children(own_layer)),
             lower_context,
             (scene, context),
         )
@@ -673,8 +673,12 @@ impl<'a> LayoutWalk<'a> {
             return false;
         };
         let index = scene.next_record();
-        let Some(node) = head.follow(self.applier, child, lower_context, (position, own_layer))
-        else {
+        let Some(node) = head.follow(
+            self.applier,
+            child,
+            lower_context,
+            (position, own_layer, Inherits::Check),
+        ) else {
             head.recycle();
             return false;
         };
@@ -688,6 +692,7 @@ impl<'a> LayoutWalk<'a> {
     // layer, which has no children, or a layer whose children push as
     // `children` says. In line in both callers: each passes `children` as
     // it knows it, and a call would cost each node pushed.
+    #[expect(clippy::inline_always, reason = "out of line: scrolls 1.6% slower")]
     #[inline(always)]
     fn push_followed(
         &self,
@@ -750,7 +755,7 @@ impl<'a> LayoutWalk<'a> {
             self.applier,
             child,
             lower_context,
-            (None, OwnLayer::AsLowered),
+            (None, OwnLayer::AsLowered, Inherits::AsLowered),
         ) else {
             head.recycle();
             return false;
@@ -903,9 +908,11 @@ impl HeadChange {
         }
     }
 
-    // How its children push: whole while no node beneath it changed.
-    fn children(self) -> HeadChildren {
-        if self.beneath & ABOVE_DIRTY == 0 {
+    // How its children push, the node's own layer `own_layer`: whole while
+    // neither the layer nor a node beneath it changed, so the state the
+    // node passes down is what its children lowered with.
+    fn children(self, own_layer: OwnLayer) -> HeadChildren {
+        if self.beneath & ABOVE_DIRTY == 0 && own_layer == OwnLayer::AsLowered {
             HeadChildren::Whole
         } else {
             HeadChildren::Records
@@ -924,7 +931,8 @@ impl HeadChange {
 pub(super) enum HeadChildren {
     // From the heads their records keep, each as its mark says.
     Records,
-    // Whole, each over its old places in its old order.
+    // Whole, each over its old places in its old order, with the state
+    // they lowered with.
     Whole,
     // Whole, as the children of a node inside a whole subtree, whose
     // record opened in it.

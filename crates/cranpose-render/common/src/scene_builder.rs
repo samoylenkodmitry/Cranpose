@@ -44,7 +44,7 @@ pub use lowered_node::{
 
 pub use crate::layer_recycling::recycle_lowered;
 mod kept_head;
-pub use kept_head::{KeptHead, KeptNodeRef, OwnLayer, lowered_children_context};
+pub use kept_head::{Inherits, KeptHead, KeptNodeRef, OwnLayer, lowered_children_context};
 mod moved_subtree;
 use moved_subtree::Inherited;
 pub use moved_subtree::{MovedSubtree, lower_moved_subtree, placed_child_position};

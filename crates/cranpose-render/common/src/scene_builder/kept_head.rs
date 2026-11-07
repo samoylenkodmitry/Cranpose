@@ -36,6 +36,18 @@ pub enum OwnLayer {
     Changed,
 }
 
+// Whether a kept node checks the state its context passes down against the
+// state it lowered with.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Inherits {
+    // The context may pass down other state: the node checks it.
+    Check,
+    // The node lies beneath a node that kept its layer and the state it
+    // lowered with, and nothing between them changed: the context passes
+    // down what the node lowered with.
+    AsLowered,
+}
+
 /// The node a [`KeptHead`] keeps, placed where it now lies, as its parent's
 /// layer holds it.
 pub enum KeptNodeRef<'a> {
@@ -70,15 +82,20 @@ impl KeptHead {
     /// layer. `None` when `context` passes down other state than the head
     /// lowered with, the node is gone, or a node with a new layer no longer
     /// fits its kept one or draws in its parent's layer.
+    #[expect(clippy::inline_always, reason = "out of line: scrolls 2% slower")]
     #[inline(always)]
     pub fn follow(
         &mut self,
         applier: &MemoryApplier,
         node_id: NodeId,
         context: &LowerContext,
-        (position, own_layer): (Option<Point>, OwnLayer),
+        (position, own_layer, inherits): (Option<Point>, OwnLayer, Inherits),
     ) -> Option<KeptNodeRef<'_>> {
-        if Inherited::of(context) != self.lowered_with {
+        debug_assert!(
+            inherits == Inherits::Check || Inherited::of(context) == self.lowered_with,
+            "a node beneath a kept layer inherits what it lowered with"
+        );
+        if inherits == Inherits::Check && Inherited::of(context) != self.lowered_with {
             return None;
         }
         if own_layer == OwnLayer::Changed {

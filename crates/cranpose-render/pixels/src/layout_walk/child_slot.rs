@@ -38,12 +38,12 @@ pub(super) enum ChildPushes {
     // owner over its old subtree.
     OverOld(OldChildren),
     // Over their old records, at `OldChildren`, from the heads they keep,
-    // for an owner that did not change: its children are those its old
-    // record holds.
+    // for an owner that drew as it drew, with its layer as it lowered or
+    // new: its children are those its old record holds.
     Records(OldChildren),
     // Over their old records, at `OldChildren`, from the heads they keep,
     // each child's whole subtree in its old order: neither the owner nor a
-    // node beneath it changed.
+    // node beneath it changed, so each has the state it lowered with.
     Whole(OldChildren),
     // Anew, into a scene that holds none of their old records.
     Anew,
