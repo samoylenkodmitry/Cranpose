@@ -140,7 +140,7 @@ impl<'s, 't> HitCollector<'s, 't> {
 
     /// Leaves a layer [`HitCollector::enter`] entered, once the layers
     /// beneath it are walked.
-    pub fn leave(&mut self, entered: HitParent) {
+    pub fn leave(&mut self, entered: &HitParent) {
         self.walk
             .pop_layer(entered.pointer_input, entered.pushed_clip);
     }

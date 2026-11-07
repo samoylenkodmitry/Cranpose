@@ -503,7 +503,7 @@ fn collect_record_hits(
         collect_record_hits(walk, (records, base), child, spaces, &entered, holds);
         child = records[child].end;
     }
-    walk.leave(entered);
+    walk.leave(&entered);
 }
 
 // Visits the node of each record from `index` on, before `end`, and their
