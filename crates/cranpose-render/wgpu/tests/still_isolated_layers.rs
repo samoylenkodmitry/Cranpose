@@ -30,10 +30,8 @@ struct Inputs {
 }
 
 // A card that turns every frame, whose content changes at `CARD_CHANGES`.
-// The swatch of a `lifted` card casts an elevation shadow, which the light
-// places: the light moves in the card's space as the card turns.
 #[composable]
-fn Card(seconds: MutableState<f32>, version: MutableState<usize>, lifted: bool) {
+fn Card(seconds: MutableState<f32>, version: MutableState<usize>) {
     Box(
         Modifier::empty()
             .fill_max_width()
@@ -60,7 +58,6 @@ fn Card(seconds: MutableState<f32>, version: MutableState<usize>, lifted: bool) 
                     Box(
                         Modifier::empty()
                             .size_points(120.0, 30.0)
-                            .shadow(if lifted { 6.0 } else { 0.0 })
                             .background(SHADES[shown % SHADES.len()]),
                         BoxSpec::new(),
                         || {},
@@ -91,8 +88,7 @@ fn Screen(seconds: MutableState<f32>, version: MutableState<usize>) {
         Modifier::empty().fill_max_size().padding(8.0),
         ColumnSpec::new().vertical_arrangement(LinearArrangement::spaced_by(12.0)),
         move || {
-            Card(seconds, version, false);
-            Card(seconds, version, true);
+            Card(seconds, version);
             Strip(seconds);
         },
     );

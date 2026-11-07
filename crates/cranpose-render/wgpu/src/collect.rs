@@ -1,4 +1,4 @@
-use std::{borrow::Cow, hash::Hasher, sync::Arc};
+use std::{borrow::Cow, sync::Arc};
 
 use cranpose_core::NodeId;
 use cranpose_render_common::{
@@ -14,7 +14,7 @@ use cranpose_render_common::{
     space::SeenDoor,
 };
 use cranpose_ui_graphics::{
-    BlendMode, CompositingStrategy, FxHasher, GraphicsLayer, Point, Rect, RenderEffect,
+    BlendMode, CompositingStrategy, GraphicsLayer, Point, Rect, RenderEffect,
     space::{Camera, Light, MeshSurface},
 };
 
@@ -59,16 +59,7 @@ const ROUNDED_CLIP_AA_MARGIN: f32 = 1.0;
 pub(crate) struct LayerScene {
     pub(crate) scene: CompositorScene,
     pub(crate) children: Vec<ChildLayer>,
-    summary: SceneSummary,
-}
-
-// What a layer scene and the scenes of its children hold, kept so that no
-// reader walks them: a backdrop that reads what lies beneath it, and a
-// shadow that the walk's light places.
-#[derive(Clone, Copy, Default)]
-struct SceneSummary {
-    backdrop: bool,
-    shadows: bool,
+    has_backdrop: bool,
 }
 
 /// The layer scenes of returned packets, kept with their buffers for the
@@ -84,7 +75,7 @@ impl LayerSceneRecycler {
     pub(crate) fn take(&mut self, capacity: SceneCapacityHint) -> Box<LayerScene> {
         match self.scenes.pop() {
             Some(mut scene) => {
-                scene.summary = SceneSummary::default();
+                scene.has_backdrop = false;
                 scene
             }
             None => Box::new(LayerScene::new(
@@ -99,7 +90,7 @@ impl LayerSceneRecycler {
             self.recycle(child.content);
         }
         scene.scene.clear();
-        scene.summary = SceneSummary::default();
+        scene.has_backdrop = false;
         self.scenes.push(scene);
     }
 
@@ -119,54 +110,23 @@ impl LayerScene {
         let mut layer = Self {
             scene,
             children,
-            summary: SceneSummary::default(),
+            has_backdrop: false,
         };
-        layer.refresh_summary();
+        layer.refresh_backdrop_summary();
         layer
     }
 
     pub(crate) fn contains_backdrop(&self) -> bool {
-        self.summary.backdrop
+        self.has_backdrop
     }
 
-    // `content_hash` of this content, with `light` when a layer of it casts
-    // a shadow, which the light places: a raster of the content holds only
-    // under the same light.
-    fn raster_hash(&self, content_hash: u64, light: ShadowLight) -> u64 {
-        if !self.summary.shadows {
-            return content_hash;
-        }
-        // Every field of the light is named here, so that a new one has to
-        // be hashed on purpose.
-        let ShadowLight {
-            x,
-            y,
-            z,
-            radius,
-            pixels_per_unit,
-        } = light;
-        let mut hasher = FxHasher::default();
-        hasher.write_u64(content_hash);
-        for bits in [x, y, z, radius, pixels_per_unit].map(f32::to_bits) {
-            hasher.write_u32(bits);
-        }
-        hasher.finish()
-    }
-
-    fn refresh_summary(&mut self) {
-        self.summary = SceneSummary {
-            backdrop: self
-                .scene
-                .backdrop_layers
-                .iter()
-                .any(|layer| layer.alpha != 0.0)
-                || self.children.iter().any(ChildLayer::reads_backdrop),
-            shadows: !self.scene.rrect_shadows.is_empty()
-                || self
-                    .children
-                    .iter()
-                    .any(|child| child.content.summary.shadows),
-        };
+    fn refresh_backdrop_summary(&mut self) {
+        self.has_backdrop = self
+            .scene
+            .backdrop_layers
+            .iter()
+            .any(|layer| layer.alpha != 0.0)
+            || self.children.iter().any(ChildLayer::reads_backdrop);
     }
 }
 
@@ -359,7 +319,7 @@ pub(crate) fn collect_root(
     };
     collect_child(root, motion, context, &mut out, recycler);
     out.scene.flush_loose();
-    out.refresh_summary();
+    out.refresh_backdrop_summary();
     motion.end_frame();
     out
 }
@@ -490,7 +450,7 @@ fn isolated_child(
     let has_pixel_sensitive_subtree =
         collect_into(layer, motion, content_context, &mut content, recycler);
     content.scene.flush_loose();
-    content.refresh_summary();
+    content.refresh_backdrop_summary();
     let transform = layer
         .transform_to_parent
         .then(ProjectiveTransform::translation(
@@ -532,7 +492,7 @@ fn isolated_child(
             backdrop_alpha: local_layer.alpha,
             snap_anchor,
             surface_scale,
-            content_hash: content.raster_hash(content_hash, content_settings.light),
+            content_hash,
             cache_policy: layer.cache_policy,
             in_place,
             content,
