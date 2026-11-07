@@ -1,29 +1,37 @@
-// node record_first_screen.mjs SITE PAGE OUT [PHONE_QUERY [DESKTOP_QUERY]]
+// node record_first_screen.mjs SITE PAGE OUT_DIR [PHONE_QUERY [DESKTOP_QUERY]]
 //
 // Records the pipelines a Cranpose web app's first screen draws with, for
 // its next build to embed (CRANPOSE_FIRST_SCREEN_PIPELINES): serves the
 // built site in SITE, opens SITE/PAGE in headless Chrome at a phone's and a
 // desktop's viewport, on WebGL and on the backend the page picks itself,
-// and writes each run's first screen to OUT, one set after another. A run
-// that recorded what an earlier one did, as one on a Chrome without WebGPU
-// does, adds nothing. PHONE_QUERY and DESKTOP_QUERY, as `name=value&...`,
-// join PAGE's query at each viewport, for a page that a phone and a desktop
-// open with different ones. As it starts, the page builds the set of its
-// backend recorded at the size nearest its own, so the browser compiles
-// them while the page composes its first screen. Chrome's own output of
-// the last run goes to chrome.log beside OUT.
+// and writes each run's first screen to OUT_DIR/first_screen_pipelines.bin,
+// one set after another. A run that recorded what an earlier one did, as
+// one on a Chrome without WebGPU does, adds nothing. PHONE_QUERY and
+// DESKTOP_QUERY, as `name=value&...`, join PAGE's query at each viewport,
+// for a page that a phone and a desktop open with different ones. As it
+// starts, the page builds the set of its backend recorded at the size
+// nearest its own, so the browser compiles them while the page composes its
+// first screen.
+//
+// The WebGL stages the runs built their pipelines with go to
+// OUT_DIR/first_screen_stages.txt, a line each, from which
+// `cranpose-first-screen-glsl` writes the exact GLSL the page fetches
+// beside its wasm. Chrome's own output of the last run goes to
+// OUT_DIR/chrome.log.
 import { createServer } from "node:http";
-import { readFile, writeFile } from "node:fs/promises";
-import { dirname, extname, join, normalize } from "node:path";
-import { launchChrome } from "../a11y/chrome.mjs";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { extname, join, normalize } from "node:path";
+import { GPU_FLAGS, launchChrome } from "../a11y/chrome.mjs";
 
 const [site, page, out, phoneQuery = "", desktopQuery = ""] = process.argv.slice(2);
 if (!site || !page || !out) {
-    console.error("usage: node record_first_screen.mjs SITE PAGE OUT [PHONE_QUERY [DESKTOP_QUERY]]");
+    console.error("usage: node record_first_screen.mjs SITE PAGE OUT_DIR [PHONE_QUERY [DESKTOP_QUERY]]");
     process.exit(2);
 }
 
-const TYPES = { ".html": "text/html", ".js": "text/javascript", ".wasm": "application/wasm", ".json": "application/json" };
+await mkdir(out, { recursive: true });
+
+const TYPES = { ".html": "text/html", ".js": "text/javascript", ".mjs": "text/javascript", ".wasm": "application/wasm", ".json": "application/json" };
 
 // The viewports a first screen is recorded at: a phone's, with its user
 // agent, and a desktop window's.
@@ -54,6 +62,7 @@ const server = createServer(async (request, response) => {
 });
 await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
 const sets = [];
+const stages = new Set();
 try {
     const pageUrl = new URL(page, `http://127.0.0.1:${server.address().port}/`);
     const urls = viewport => {
@@ -64,7 +73,7 @@ try {
         return [[viewport, gl], [viewport, own]];
     };
     for (const [viewport, url] of VIEWPORTS.flatMap(urls)) {
-        const { cdp, close } = await launchChrome([`--window-size=${viewport.width},${viewport.height}`], dirname(out));
+        const { cdp, close } = await launchChrome([`--window-size=${viewport.width},${viewport.height}`, ...GPU_FLAGS], out);
         try {
             const { userAgent, query, ...metrics } = viewport;
             await cdp.send("Emulation.setDeviceMetricsOverride", metrics);
@@ -75,7 +84,9 @@ try {
             const set = Buffer.from(await cdp.evaluate("Array.from(globalThis.__cranposeFirstScreenPipelines)"));
             const recorded = sets.some(earlier => earlier.equals(set));
             if (!recorded) sets.push(set);
-            console.log(`${viewport.width}x${viewport.height} ${url.search || "(own backend)"}: ${set.length} bytes${recorded ? ", recorded already" : ""}`);
+            const listed = (await cdp.evaluate("globalThis.__cranposeFirstScreenStages ?? ''")).split("\n").filter(Boolean);
+            listed.forEach(stage => stages.add(stage));
+            console.log(`${viewport.width}x${viewport.height} ${url.search || "(own backend)"}: ${set.length} bytes${recorded ? ", recorded already" : ""}, ${listed.length} WebGL stages`);
         } finally {
             await close();
         }
@@ -83,4 +94,5 @@ try {
 } finally {
     server.close();
 }
-await writeFile(out, Buffer.concat(sets));
+await writeFile(join(out, "first_screen_pipelines.bin"), Buffer.concat(sets));
+await writeFile(join(out, "first_screen_stages.txt"), [...stages].sort().join("\n") + "\n");

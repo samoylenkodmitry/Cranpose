@@ -145,22 +145,30 @@ else
     fi
 fi
 
+# The first-screen GLSL of an earlier build does not belong to this one.
+rm -f "$SCRIPT_DIR/pkg/first_screen_glsl.txt"
+
 # A release records the pipelines its first screen draws with in headless
 # Chrome and builds again embedding them, so the page builds them as it
-# starts (scripts/web/record_first_screen.mjs). CRANPOSE_WEB_RECORD_FIRST_SCREEN=0
-# skips it; a recording that fails leaves the first build.
+# starts (scripts/web/record_first_screen.mjs). Beside its wasm it puts the
+# exact GLSL of the WebGL stages they were built with, which a page on WebGL
+# fetches as it loads (cranpose-first-screen-glsl).
+# CRANPOSE_WEB_RECORD_FIRST_SCREEN=0 skips it; a recording that fails leaves
+# the first build.
 if [ "${RELEASE_BUILT:-0}" = "1" ] && [ "${CRANPOSE_WEB_RECORD_FIRST_SCREEN:-1}" != "0" ]; then
-    RECORDS="$PLATFORM_DIR/target/first_screen_pipelines.bin"
-    mkdir -p "$(dirname "$RECORDS")"
+    RECORDED="$PLATFORM_DIR/target/first-screen"
     # The page starts only from a packaged site, whose asset-manifest.json
     # names the bundle.
     RECORD_DIR="$(mktemp -d "${TMPDIR:-/tmp}/first-screen.XXXXXX")"
     trap 'rm -rf "$RECORD_DIR"' EXIT
     echo "Recording the first screen's pipelines..."
     if "$SCRIPT_DIR/package-web.sh" "$RECORD_DIR/site" >/dev/null \
-        && node "$SCRIPT_DIR/../../scripts/web/record_first_screen.mjs" "$RECORD_DIR/site" index.html "$RECORDS"; then
+        && node "$SCRIPT_DIR/../../scripts/web/record_first_screen.mjs" "$RECORD_DIR/site" index.html "$RECORDED"; then
         echo "Building WASM module with them..."
-        CRANPOSE_FIRST_SCREEN_PIPELINES="$RECORDS" build_release
+        CRANPOSE_FIRST_SCREEN_PIPELINES="$RECORDED/first_screen_pipelines.bin" build_release
+        cargo run -q --manifest-path "$SCRIPT_DIR/../../Cargo.toml" -p cranpose-gl-templates \
+            --bin cranpose-first-screen-glsl -- \
+            "$RECORDED/first_screen_stages.txt" "$SCRIPT_DIR/pkg/first_screen_glsl.txt"
     else
         echo "Warning: recording the first screen failed; the page builds its pipelines in its first frame"
     fi

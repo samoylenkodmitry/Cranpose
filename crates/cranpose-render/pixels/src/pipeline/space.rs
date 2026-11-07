@@ -47,25 +47,22 @@ pub(super) fn seen_surfaces<'a>(
     layer: &'a LayerNode,
     transform: &ProjectiveTransform,
 ) -> Option<Vec<(&'a LayerNode, ProjectiveTransform)>> {
-    use cranpose_render_common::space::{EyeView, SpaceTree, node_size};
+    use cranpose_render_common::space::{EyeView, SpaceTree};
     let tree = SpaceTree::of(layer)?;
-    let view = EyeView::of(&tree, node_size(layer));
-    let rect = layer.node_rect();
-    let to_device = ProjectiveTransform::translation(rect.x, rect.y).then(*transform);
+    // The scene fills its layer's bounds.
+    let bounds = layer.local_bounds;
+    let view = EyeView::of(&tree, bounds.size());
+    let to_device = ProjectiveTransform::translation(bounds.x, bounds.y).then(*transform);
     let mut surfaces: Vec<(f32, &'a LayerNode, ProjectiveTransform)> = view
         .surfaces
         .iter()
         .filter(|seen| seen.seen == 0)
         .filter_map(|seen| {
-            let content = seen
-                .surface
-                .content_transform(&view.camera, view.size, seen.size)?;
             let parent = seen
                 .layer
                 .transform_to_parent
                 .inverse()?
-                .then(content)
-                .then(to_device);
+                .then(view.content_to_window(seen, to_device)?);
             let (low, high) = seen.surface.mesh.bounds();
             let middle = seen.surface.transform.transform_point(low.lerp(high, 0.5));
             let depth = view.camera.view.transform_point(middle).z;

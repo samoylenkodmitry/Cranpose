@@ -78,7 +78,16 @@ type Parsed = Option<(naga::Module, naga::valid::ModuleInfo)>;
 pub(crate) struct ShaderCode {
     wgsl: fn() -> Cow<'static, str>,
     #[cfg(all(target_arch = "wasm32", feature = "gl-templates"))]
-    glsl: &'static [wgpu::hal::GlslTemplate],
+    built_in: Option<BuiltIn>,
+}
+
+// A built-in module's name among the framework shaders, and the templates
+// the build script wrote of it (`crate::gl_templates`).
+#[cfg(all(target_arch = "wasm32", feature = "gl-templates"))]
+#[derive(Clone, Copy)]
+pub(crate) struct BuiltIn {
+    pub(crate) name: &'static str,
+    pub(crate) glsl: &'static [wgpu::hal::GlslTemplate],
 }
 
 impl ShaderCode {
@@ -87,18 +96,17 @@ impl ShaderCode {
         Self {
             wgsl,
             #[cfg(all(target_arch = "wasm32", feature = "gl-templates"))]
-            glsl: &[],
+            built_in: None,
         }
     }
 
-    /// A built-in module: its WGSL, and the templates the build script
-    /// wrote of it (`crate::gl_templates`).
+    /// A built-in module: its WGSL, its name and its templates.
     #[cfg(all(target_arch = "wasm32", feature = "gl-templates"))]
-    pub(crate) const fn built_in(
-        wgsl: fn() -> Cow<'static, str>,
-        glsl: &'static [wgpu::hal::GlslTemplate],
-    ) -> Self {
-        Self { wgsl, glsl }
+    pub(crate) const fn built_in(wgsl: fn() -> Cow<'static, str>, built_in: BuiltIn) -> Self {
+        Self {
+            wgsl,
+            built_in: Some(built_in),
+        }
     }
 
     /// The module of the templates, on a WebGL device.
@@ -109,10 +117,8 @@ impl ShaderCode {
         backend: wgpu::Backend,
         label: &str,
     ) -> Option<wgpu::ShaderModule> {
-        if backend != wgpu::Backend::Gl || self.glsl.is_empty() {
-            return None;
-        }
-        device.create_shader_module_glsl_templates(Some(label), self.glsl)
+        let built_in = self.built_in.filter(|_| backend == wgpu::Backend::Gl)?;
+        device.create_shader_module_glsl_templates(Some(label), built_in.glsl)
     }
 
     fn wgsl_module(&self, device: &wgpu::Device, label: &str) -> wgpu::ShaderModule {
@@ -186,12 +192,13 @@ impl SharedShader {
 
     /// The two stages of a pipeline with `constants`, whose entry points are
     /// `vertex` and `fragment`. On a native device each is specialized by
-    /// the constants and folded on its own (see [`crate::shader_fold`]), so
-    /// the driver compiles only the code they keep; on the web, or where
-    /// naga refuses the shader, both share the module, which the device
-    /// specializes.
+    /// the constants and folded on its own (see [`cranpose_shader_passes::fold`]), so
+    /// the driver compiles only the code they keep; on WebGL a program of the
+    /// page's first-screen GLSL holds both alike (`crate::first_screen_glsl`).
+    /// Elsewhere, or where naga refuses the shader, both share the module,
+    /// which the device specializes.
     #[cfg_attr(
-        target_arch = "wasm32",
+        all(target_arch = "wasm32", not(feature = "gl-templates")),
         expect(unused_variables, reason = "the web specializes the shared module")
     )]
     pub(crate) fn stages<'c>(
@@ -199,6 +206,27 @@ impl SharedShader {
         (vertex, fragment): (&str, &str),
         constants: &'c [(&'c str, f64)],
     ) -> Stages<'c> {
+        #[cfg(all(target_arch = "wasm32", feature = "gl-templates"))]
+        if let Some(built_in) = self.code.built_in
+            && self.backend == wgpu::Backend::Gl
+        {
+            if let Some(list) = crate::first_screen_glsl::listing() {
+                list(built_in.name, (vertex, fragment), constants);
+            }
+            if let Some(module) =
+                crate::first_screen_glsl::program(built_in.name, (vertex, fragment), constants)
+                    .and_then(|program| {
+                        self.device
+                            .create_shader_module_glsl_templates(Some(self.label), program)
+                    })
+            {
+                return Stages {
+                    vertex: module.clone(),
+                    fragment: module,
+                    constants: &[],
+                };
+            }
+        }
         #[cfg(not(target_arch = "wasm32"))]
         if !constants.is_empty()
             && !cranpose_core::DIAGNOSTICS.no_shader_fold.equals("1")
@@ -257,7 +285,7 @@ impl SharedShader {
     ) -> Option<wgpu::ShaderModule> {
         let mut module = self.specialized(stage, entry, constants)?;
         if !cranpose_core::DIAGNOSTICS.no_shader_flatten.equals("1") {
-            match crate::shader_flatten::flatten(&mut module) {
+            match cranpose_shader_passes::flatten(&mut module) {
                 Ok(()) => {
                     naga::compact::compact(&mut module, naga::compact::KeepUnused::No);
                     if let Some(shader) = self.created(module) {
@@ -293,7 +321,7 @@ impl SharedShader {
     }
 
     /// The `stage` of entry point `entry` specialized by `constants` and
-    /// folded (see [`crate::shader_fold`]).
+    /// folded (see [`cranpose_shader_passes::fold`]).
     #[cfg(not(target_arch = "wasm32"))]
     fn specialized(
         &self,
@@ -320,7 +348,7 @@ impl SharedShader {
         })
         .ok()?;
         let mut folded = specialized.into_owned();
-        crate::shader_fold::fold(&mut folded);
+        cranpose_shader_passes::fold(&mut folded);
         Some(folded)
     }
 

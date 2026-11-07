@@ -136,7 +136,7 @@ impl LockedRenderer {
 
     pub(crate) fn compiling_in_background_beside_locked() -> Result<Self, String> {
         Ok(with_app_context(
-            create_background_compiling_renderer()?,
+            compiling_renderer(device::Pipelines::Background)?,
             None,
         ))
     }
@@ -223,7 +223,7 @@ pub(crate) fn headless_renderer() -> Result<LockedRenderer, String> {
 pub(crate) fn headless_renderer_compiling_in_background() -> Result<LockedRenderer, String> {
     let lock = lock_gpu_test();
     Ok(with_app_context(
-        create_background_compiling_renderer()?,
+        compiling_renderer(device::Pipelines::Background)?,
         Some(lock),
     ))
 }
@@ -231,7 +231,7 @@ pub(crate) fn headless_renderer_compiling_in_background() -> Result<LockedRender
 pub(crate) fn headless_renderer_parts_compiling_in_background()
 -> Result<(MutexGuard<'static, ()>, WgpuRenderer), String> {
     let lock = lock_gpu_test();
-    Ok((lock, create_background_compiling_renderer()?))
+    Ok((lock, compiling_renderer(device::Pipelines::Background)?))
 }
 
 pub(crate) fn headless_renderer_with_display_format(
@@ -252,8 +252,12 @@ pub(crate) fn headless_renderer_configured(
     backends: wgpu::Backends,
 ) -> Result<LockedRenderer, String> {
     let lock = lock_gpu_test();
-    let renderer =
-        create_headless_renderer_configured(wgpu::TextureFormat::Bgra8UnormSrgb, limits, backends)?;
+    let renderer = create_headless_renderer_configured(
+        wgpu::TextureFormat::Bgra8UnormSrgb,
+        limits,
+        backends,
+        device::Pipelines::Inline,
+    )?;
     Ok(with_app_context(renderer, Some(lock)))
 }
 
@@ -339,11 +343,12 @@ pub(crate) fn headless_renderer_parts_with_display_format(
 }
 
 pub(crate) fn headless_renderer_parts_configured<T>(
+    pipelines: device::Pipelines,
     configure: impl FnOnce() -> T,
 ) -> Result<(MutexGuard<'static, ()>, T, WgpuRenderer), String> {
     let lock = lock_gpu_test();
     let configured = configure();
-    let renderer = create_background_compiling_renderer()?;
+    let renderer = compiling_renderer(pipelines)?;
     Ok((lock, configured, renderer))
 }
 
@@ -383,19 +388,13 @@ pub(crate) fn headless_renderer_beside_locked() -> Result<WgpuRenderer, String> 
     Ok(renderer)
 }
 
-fn create_background_compiling_renderer() -> Result<WgpuRenderer, String> {
-    let device = device::HeadlessDevice::request(
-        wgpu::Backends::all(),
-        wgpu::Limits::default(),
-        "Background Compiling Test Device",
-    )?;
-    let mut renderer = WgpuRenderer::new(&[TEST_FONT]);
-    device.attach(
-        &mut renderer,
+fn compiling_renderer(pipelines: device::Pipelines) -> Result<WgpuRenderer, String> {
+    create_headless_renderer_configured(
         wgpu::TextureFormat::Bgra8UnormSrgb,
-        device::Pipelines::Background,
-    );
-    Ok(renderer)
+        wgpu::Limits::default(),
+        wgpu::Backends::all(),
+        pipelines,
+    )
 }
 
 fn create_headless_renderer() -> Result<WgpuRenderer, String> {
@@ -412,18 +411,24 @@ fn create_headless_renderer_with_format_and_limits(
     surface_format: wgpu::TextureFormat,
     limits: wgpu::Limits,
 ) -> Result<WgpuRenderer, String> {
-    create_headless_renderer_configured(surface_format, limits, wgpu::Backends::all())
+    create_headless_renderer_configured(
+        surface_format,
+        limits,
+        wgpu::Backends::all(),
+        device::Pipelines::Inline,
+    )
 }
 
 fn create_headless_renderer_configured(
     surface_format: wgpu::TextureFormat,
     limits: wgpu::Limits,
     backends: wgpu::Backends,
+    pipelines: device::Pipelines,
 ) -> Result<WgpuRenderer, String> {
     let device =
         device::HeadlessDevice::request(backends, limits, "Shared Render Contract Test Device")?;
     let mut renderer = WgpuRenderer::new(&[TEST_FONT]);
-    device.attach(&mut renderer, surface_format, device::Pipelines::Inline);
+    device.attach(&mut renderer, surface_format, pipelines);
     Ok(renderer)
 }
 

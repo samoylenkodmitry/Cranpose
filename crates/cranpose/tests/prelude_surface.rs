@@ -69,7 +69,7 @@ fn effects_and_key_scope_compose_from_the_prelude_alone() {
     run_test_composition(move || {
         let effect_ran = std::rc::Rc::clone(&effect_ran);
         key("scoped", || {
-            LaunchedEffect((), move |_scope| {
+            LaunchedEffect((), async move |_scope| {
                 effect_ran.set(effect_ran.get() + 1);
             });
         });

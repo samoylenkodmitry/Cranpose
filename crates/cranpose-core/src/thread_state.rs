@@ -155,7 +155,6 @@ pub(crate) struct RuntimeThreadState {
     pub(crate) active_runtimes: RefCell<Vec<RuntimeHandle>>,
     pub(crate) last_runtime: RefCell<Option<RuntimeHandle>>,
     pub(crate) registered_runtimes: RefCell<FixedHashMap<RuntimeId, RuntimeHandle>>,
-    pub(crate) next_task_label: RefCell<Option<String>>,
     pub(crate) state_owners: RefCell<Vec<Vec<Rc<StateHandleLease>>>>,
     pub(crate) state_teardown_depth: Cell<usize>,
     pub(crate) deferred_state_releases: RefCell<Vec<DeferredStateRelease>>,
@@ -202,7 +201,6 @@ impl RuntimeThreadState {
             active_runtimes: RefCell::new(Vec::new()),
             last_runtime: RefCell::new(None),
             registered_runtimes: RefCell::new(fixed_hash_map()),
-            next_task_label: RefCell::new(None),
             state_owners: RefCell::new(Vec::new()),
             state_teardown_depth: Cell::new(0),
             deferred_state_releases: RefCell::new(Vec::new()),
@@ -238,7 +236,6 @@ impl RuntimeThreadState {
             active_runtimes,
             last_runtime,
             registered_runtimes,
-            next_task_label,
             state_owners,
             state_teardown_depth,
             deferred_state_releases,
@@ -266,7 +263,6 @@ impl RuntimeThreadState {
         swap_values(active_runtimes, &other.active_runtimes);
         swap_values(last_runtime, &other.last_runtime);
         swap_values(registered_runtimes, &other.registered_runtimes);
-        swap_values(next_task_label, &other.next_task_label);
         swap_values(state_owners, &other.state_owners);
         state_teardown_depth.swap(&other.state_teardown_depth);
         swap_values(deferred_state_releases, &other.deferred_state_releases);

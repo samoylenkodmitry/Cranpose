@@ -83,7 +83,7 @@ pub(crate) fn xkcd_tab() {
     let http_client = local_http_client().current();
     let uri_handler = local_uri_handler().current();
 
-    cranpose_core::LaunchedEffect(request_id.get(), move |scope| {
+    cranpose_core::LaunchedEffect(request_id.get(), async move |scope| {
         let _request_id = request_id.get();
         state.set(XkcdState::Loading);
         let client = std::sync::Arc::clone(&http_client);

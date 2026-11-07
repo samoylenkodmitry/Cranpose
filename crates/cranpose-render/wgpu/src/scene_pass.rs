@@ -13,7 +13,7 @@ use std::{
 use bytemuck::{Pod, Zeroable};
 use cranpose_ui_graphics::{
     Rect,
-    space::{Light, Mat4, Material, Mesh, Shaded, Vec3, Volume},
+    space::{Light, Mat4, Material, Mesh, MeshSurface, Shaded, Vec3, Volume},
 };
 
 use crate::{
@@ -53,7 +53,7 @@ struct SceneVertex {
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 pub(crate) struct SceneSurfaceUniforms {
-    clip_from_model: [[f32; 4]; 4],
+    pub(crate) clip_from_model: [[f32; 4]; 4],
     scene_from_model: [[f32; 4]; 4],
     light_clip_from_model: [[f32; 4]; 4],
     clip_from_scene: [[f32; 4]; 4],
@@ -1124,13 +1124,12 @@ pub(crate) fn surface_page_bounds(
     Some(bounds)
 }
 
-/// How far from the eye a surface placed by `transform` is, along the
-/// camera's view, for drawing the scene's surfaces far to near.
-pub(crate) fn view_depth(scene: &SceneDraw, transform: &Mat4) -> f32 {
-    transform
-        .then(&scene.camera.view)
-        .transform_point(Vec3::ZERO)
-        .z
+// How far `surface`'s bounds reach along the view: drawn far to near, writing follows its wall.
+pub(crate) fn view_depth(scene: &SceneDraw, surface: &MeshSurface) -> f32 {
+    let (low, high) = surface.mesh.bounds();
+    let row = surface.transform.then(&scene.camera.view).rows()[2];
+    let far = |at: f32, low: f32, high: f32| (at * low).max(at * high);
+    row[3] + far(row[0], low.x, high.x) + far(row[1], low.y, high.y) + far(row[2], low.z, high.z)
 }
 
 /// The pixels of `page` the scene and the clip above a surface leave, as a

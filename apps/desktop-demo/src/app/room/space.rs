@@ -11,9 +11,10 @@ use cranpose_ui::{
     PointerInputScope, Size,
 };
 
+use crate::app::walk_keys::WalkKeys;
+
 pub(super) const FIELD_OF_VIEW: f32 = FRAC_PI_3;
 pub(super) const TRANSITION_SECONDS: f32 = 0.9;
-pub(super) const LONGEST_STEP_SECONDS: f32 = 0.1;
 const DEPTH_PER_WIDTH: f32 = 1.6;
 const STANDING_DEPTH_SHARE: f32 = 0.2;
 const WALK_SPEED: f32 = 900.0;
@@ -22,13 +23,6 @@ const LOOK_PER_PIXEL: f32 = 0.005;
 /// How close the eye comes to a wall it walks into.
 const EYE_RADIUS: f32 = 60.0;
 const DOWN: Vec3 = Vec3::new(0.0, 1.0, 0.0);
-
-const FORWARD: u8 = 1;
-const BACK: u8 = 1 << 1;
-const LEFT: u8 = 1 << 2;
-const RIGHT: u8 = 1 << 3;
-const TURN_LEFT: u8 = 1 << 4;
-const TURN_RIGHT: u8 = 1 << 5;
 
 /// A face of the room.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -167,7 +161,7 @@ pub(super) struct RoomState {
     pub(super) scene_node: Rc<Cell<Option<NodeId>>>,
     /// Where the eye stood before it stepped into a room behind a doorway.
     came_from: MutableState<Option<EyePose>>,
-    pub(super) held: MutableState<u8>,
+    pub(super) held: MutableState<WalkKeys>,
     pub(super) focus: FocusRequester,
     /// Whether the ball of fire flies and the shape shifts.
     pub(super) motion: MutableState<bool>,
@@ -186,7 +180,7 @@ pub(super) fn rememberRoomState(window_eye: Option<Eye>) -> RoomState {
             .unwrap_or_else(|| Eye::new(EyePose::standing(Vec3::ZERO, 0.0, 0.0), EYE_RADIUS)),
         scene_node: Rc::default(),
         came_from: mutableStateOf(None),
-        held: mutableStateOf(0),
+        held: mutableStateOf(WalkKeys::default()),
         focus: FocusRequester::new(),
         motion: mutableStateOf(true),
     })
@@ -264,7 +258,7 @@ impl RoomState {
                 .place(EyePose::standing(shape.standing_eye(), 0.0, 0.0));
         }
         self.entered.set(false);
-        self.held.set(0);
+        self.held.set(WalkKeys::default());
     }
 
     /// Back to the flat screen, once the walk back has ended.
@@ -334,29 +328,16 @@ impl RoomState {
         if !self.entered.get() {
             return false;
         }
-        let pressed = event.type_() == KeyEventType::KeyDown;
-        let bit = match event.key() {
-            Key::Escape => {
-                if pressed {
-                    self.focus.request_focus().ok();
-                }
-                return true;
+        if event.key() == Key::Escape {
+            if event.type_() == KeyEventType::KeyDown {
+                self.focus.request_focus().ok();
             }
-            Key::W | Key::DirectionUp => FORWARD,
-            Key::S | Key::DirectionDown => BACK,
-            Key::A => LEFT,
-            Key::D => RIGHT,
-            Key::Q | Key::DirectionLeft => TURN_LEFT,
-            Key::E | Key::DirectionRight => TURN_RIGHT,
-            _ => return false,
+            return true;
+        }
+        let Some(held) = self.held.get().after(event) else {
+            return false;
         };
-        self.held.update(|held| {
-            if pressed {
-                *held |= bit;
-            } else {
-                *held &= !bit;
-            }
-        });
+        self.held.set(held);
         true
     }
 
@@ -365,18 +346,13 @@ impl RoomState {
     /// the room behind it.
     pub(super) fn walk(&self, seconds: f32) -> bool {
         let held = self.held.get();
-        if held == 0 {
+        if held.is_empty() {
             return false;
         }
-        let axis = |positive: u8, negative: u8| {
-            f32::from(u8::from(held & positive != 0)) - f32::from(u8::from(held & negative != 0))
-        };
-        self.eye
-            .turn(axis(TURN_RIGHT, TURN_LEFT) * TURN_SPEED * seconds, 0.0);
+        self.eye.turn(held.turn() * TURN_SPEED * seconds, 0.0);
         let (ahead, right) = self.eye.pose().walking_axes();
-        self.eye.walk(
-            (ahead * axis(FORWARD, BACK) + right * axis(RIGHT, LEFT)) * (WALK_SPEED * seconds),
-        );
+        self.eye
+            .walk((ahead * held.ahead() + right * held.right()) * (WALK_SPEED * seconds));
         true
     }
 

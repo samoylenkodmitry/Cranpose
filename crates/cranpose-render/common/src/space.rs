@@ -5,9 +5,14 @@
 //! the parent's layout, turned into 3D on the parent's plane. A mesh surface
 //! places its mesh in that frame and its children's frames in its content; a
 //! 3D transform moves the frames beneath it; a scene opens a space of its
-//! own, behind a doorway at its node's rect. The window's eye stands in one
-//! of these spaces and sees the others through the doorways that show on
+//! own, behind a doorway at its layer's bounds. The window's eye stands in
+//! one of these spaces and sees the others through the doorways that show on
 //! screen, as deep as they show.
+//!
+//! A scene and a mesh surface each cover their layer's bounds, as a Compose
+//! graphics layer covers the coordinator after it: a modifier before them,
+//! as a padding or a size the parent does not hold, moves or sizes them
+//! apart from their node.
 
 use std::sync::Arc;
 
@@ -28,6 +33,12 @@ const BACK_THROUGH_DOORWAY: f32 = 1.0e-4;
 /// The smallest area, in logical pixels, a doorway's opening on screen
 /// takes for the eye to see through it.
 const SMALLEST_OPENING: f32 = 0.25;
+
+/// How near the eye a doorway still opens, as a fraction of the distance of
+/// the camera's near plane: a renderer shows the part of a doorway between
+/// this depth and the near plane on the near plane, so an eye that steps
+/// into a doorway keeps seeing through it.
+pub const DOORWAY_NEAR: f32 = 1.0 / 1024.0;
 
 /// A space a scene opens.
 pub struct Cell<'a> {
@@ -56,8 +67,9 @@ pub struct Placed<'a> {
     pub surface: MeshSurface,
     /// Its space.
     pub cell: usize,
-    /// The size of its content.
-    pub size: Size,
+    /// The rect of its content in its layer: the layer's bounds, which the
+    /// mesh's texture spans.
+    pub content: Rect,
 }
 
 /// The surface whose content a layer lies flat in, by its index, and the
@@ -79,7 +91,7 @@ pub struct SpaceTree<'a> {
 pub struct EyeView<'a> {
     /// The eye's camera.
     pub camera: Camera,
-    /// The window scene node's size, which the camera fills.
+    /// The size of the window scene's layer bounds, which the camera fills.
     pub size: Size,
     /// The space the eye stands in, by its number in the tree.
     pub cell: usize,
@@ -130,8 +142,8 @@ pub struct SeenSurface<'a> {
     pub layer: &'a LayerNode,
     /// The surface, its mesh placed in the eye's space.
     pub surface: MeshSurface,
-    /// The size of its content.
-    pub size: Size,
+    /// The rect of its content in its layer, as [`Placed::content`].
+    pub content: Rect,
     /// The seen space it lies in, by its number among [`EyeView::seen`].
     pub seen: usize,
 }
@@ -207,7 +219,7 @@ impl<'a> SpaceTree<'a> {
                 to_parent: Mat4::IDENTITY,
             },
             Some((parent, frame, host)) => {
-                let rect = layer.node_rect();
+                let rect = layer.local_bounds;
                 Cell {
                     layer,
                     scene,
@@ -262,21 +274,24 @@ impl<'a> SpaceTree<'a> {
     /// Places the mesh surface `layer` draws its content on in `frame`, in
     /// space `cell`, and the frames of its children in its content.
     fn surface(&mut self, layer: &'a LayerNode, surface: &MeshSurface, frame: &Mat4, cell: usize) {
-        let size = node_size(layer);
+        let content = layer.local_bounds;
         let placed = surface.placed_by(frame);
-        let content = placed.content_to_scene(size);
+        let to_scene = placed.content_to_scene(content.size());
         let index = self.surfaces.len();
         self.surfaces.push(Placed {
             layer,
             surface: placed,
             cell,
-            size,
+            content,
         });
-        if let Some(content) = content {
+        if let Some(to_scene) = to_scene {
+            // The children lie in the layer, whose content starts at the
+            // corner of its bounds.
+            let to_content = ProjectiveTransform::translation(-content.x, -content.y);
             self.children(
                 layer,
-                &content,
-                (cell, Some((index, ProjectiveTransform::identity()))),
+                &embed(to_content).then(&to_scene),
+                (cell, Some((index, to_content))),
             );
         }
     }
@@ -328,7 +343,7 @@ impl<'a> EyeView<'a> {
             view.surfaces.push(SeenSurface {
                 layer: placed.layer,
                 surface: placed.surface.placed_by(&view.seen[seen].to_eye),
-                size: placed.size,
+                content: placed.content,
                 seen,
             });
         }
@@ -429,13 +444,13 @@ impl<'a> EyeView<'a> {
     }
 
     /// The bounds on screen of the unit square `quad` places in the eye's
-    /// space, of its part in front of the camera's near plane; `None` when
-    /// it lies wholly behind.
+    /// space, of its part deeper than [`DOORWAY_NEAR`] of the camera's near
+    /// plane; `None` when it lies wholly nearer.
     fn opening(&self, quad: &Mat4) -> Option<Rect> {
         let to_camera = quad.then(&self.camera.view);
         let corners = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]
             .map(|(u, v)| to_camera.transform_point(Vec3::new(u, v, 0.0)));
-        let near = self.camera.near();
+        let near = self.camera.near() * DOORWAY_NEAR;
         let (mut low, mut high) = (
             (f32::INFINITY, f32::INFINITY),
             (f32::NEG_INFINITY, f32::NEG_INFINITY),
@@ -516,7 +531,7 @@ impl<'a> EyeView<'a> {
             world.add_solid(
                 (space, Arc::clone(&placed.surface.mesh)),
                 placed.surface.transform.then(&to_base),
-                (placed.size, holes),
+                (placed.content.size(), holes),
             );
         }
     }
@@ -565,18 +580,9 @@ pub fn scene_of(layer: &LayerNode) -> Option<&Scene3d> {
     }
 }
 
-/// The node size of a layer.
-pub fn node_size(layer: &LayerNode) -> Size {
-    let rect = layer.node_rect();
-    Size {
-        width: rect.width,
-        height: rect.height,
-    }
-}
-
 /// Visits the space tree of each scene the window shows from `layer` down,
-/// what its eye sees of it, and the map from the scene node's own
-/// coordinates, its top left at the origin, to the window, given
+/// what its eye sees of it, and the map from the scene's own coordinates,
+/// the top left of its layer's bounds at the origin, to the window, given
 /// `to_window` for `layer`.
 pub fn for_each_window_eye(
     layer: &LayerNode,
@@ -587,8 +593,8 @@ pub fn for_each_window_eye(
         let Some(tree) = SpaceTree::of(scene_layer) else {
             return;
         };
-        let view = EyeView::of(&tree, node_size(scene_layer));
-        let rect = scene_layer.node_rect();
+        let rect = scene_layer.local_bounds;
+        let view = EyeView::of(&tree, rect.size());
         visit(
             &tree,
             &view,
@@ -598,17 +604,22 @@ pub fn for_each_window_eye(
 }
 
 impl EyeView<'_> {
-    /// The map from the content of seen surface `seen` to the window, as the
-    /// eye shows it, given `to_window` for the scene node's own coordinates;
+    /// The map from the layer of seen surface `seen` to the window, as the
+    /// eye shows it, given `to_window` for the scene's own coordinates;
     /// `None` for a surface whose mesh carries no texture plane.
     pub fn content_to_window(
         &self,
         seen: &SeenSurface<'_>,
         to_window: ProjectiveTransform,
     ) -> Option<ProjectiveTransform> {
+        let content = seen.content;
         seen.surface
-            .content_transform(&self.camera, self.size, seen.size)
-            .map(|content| content.then(to_window))
+            .content_transform(&self.camera, self.size, content.size())
+            .map(|shown| {
+                ProjectiveTransform::translation(-content.x, -content.y)
+                    .then(shown)
+                    .then(to_window)
+            })
     }
 }
 

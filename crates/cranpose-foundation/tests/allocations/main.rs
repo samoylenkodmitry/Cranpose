@@ -12,6 +12,10 @@ use cranpose_foundation::{
 };
 use stats_alloc::{INSTRUMENTED_SYSTEM, Region, StatsAlloc};
 
+#[macro_use]
+#[path = "../../../coroflow/tests/support/main_thread_test.rs"]
+mod main_thread_test;
+
 #[global_allocator]
 static GLOBAL: &StatsAlloc<System> = &INSTRUMENTED_SYSTEM;
 
@@ -166,12 +170,13 @@ fn invalidations_taken_after_every_update_allocate_nothing() {
 
 /// One test, so no other test's allocations land in these regions: the
 /// counting allocator counts every thread.
-#[test]
 fn updates_stay_within_their_allocation_budgets() {
     a_chain_whose_element_changes_content_in_place_updates_without_allocating();
     invalidations_taken_after_every_update_allocate_nothing();
     text_field_edits_copy_the_text_once_and_reads_copy_nothing();
 }
+
+main_thread_test!(updates_stay_within_their_allocation_budgets);
 
 const TEXT_BYTES: usize = 64 * 1024;
 

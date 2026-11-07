@@ -311,19 +311,32 @@ def app_log(device, app):
     return device.adb('logcat', '-d', '-s', 'PerfCompare:I', *APPS[app].get('log_tags', []))
 
 
-def app_layer(device, app):
-    """The app's buffer layer: the window's `package/activity#N`, without a
-    handle prefix, or the layer named with the app's `layer` prefix when it
-    draws into a SurfaceView. Newer Android lists each layer as
-    `RequestedLayerState{name ...}` and gives the window's buffers to its
-    `VRI-package/activity#N` layer."""
-    package = APPS[app]['package']
-    prefix = APPS[app].get('layer')
-    layers = []
+def focused_window(device):
+    """The package of the window with the input focus, or the window's own
+    name when no package owns it; None when no window has the focus."""
+    match = re.search(r'mCurrentFocus=Window\{\S+ u\d+ ([^/}]+)', device.shell('dumpsys', 'window'))
+    return match.group(1) if match else None
+
+
+def layer_names(device):
+    """SurfaceFlinger's layers by name. Newer Android lists each layer as
+    `RequestedLayerState{name ...}`."""
     for line in device.shell('dumpsys', 'SurfaceFlinger', '--list').splitlines():
         name = line.strip()
         if name.startswith(LAYER_STATE):
             name = name[len(LAYER_STATE):].split(' parentId=')[0]
+        yield name
+
+
+def app_layer(device, app):
+    """The app's buffer layer: the window's `package/activity#N`, without a
+    handle prefix, or the layer named with the app's `layer` prefix when it
+    draws into a SurfaceView. Newer Android gives the window's buffers to
+    its `VRI-package/activity#N` layer."""
+    package = APPS[app]['package']
+    prefix = APPS[app].get('layer')
+    layers = []
+    for name in layer_names(device):
         if prefix:
             found = name.startswith(f'{prefix}{package}/')
         else:
@@ -654,26 +667,50 @@ class AppTarget:
 
 CHROME = 'com.android.chrome'
 # Chrome composites a page into a surface of its own; the window's layer only
-# holds the toolbar.
-CHROME_LAYER = 'com.android.chrome/ChromeChildSurface#0'
+# holds the toolbar. Older Android names it `#0`. Newer Android numbers each
+# layer, as the Galaxy Tab S7+ names the page's `ChromeChildSurface#64743`.
+CHROME_LAYER_PREFIX = 'com.android.chrome/ChromeChildSurface#'
+CHROME_LAYER_TIMEOUT_S = 10
 # How long a page gets to download, compile and draw its first frame.
 PAGE_TIMEOUT_S = 120
 # The buttons Chrome's first run shows after its data is cleared, each tapped
 # when it is on the screen: the sign-in screen's "Stay signed out", which
-# accepts the terms. A tab's address bar shows that the run has ended.
-CHROME_WELCOME = ('com.android.chrome:id/signin_fre_dismiss_button',)
+# accepts the terms, and the notification prompt's "No thanks". A tab's
+# address bar shows that the run has ended.
+CHROME_WELCOME = (
+    'com.android.chrome:id/signin_fre_dismiss_button',
+    'com.android.chrome:id/negative_button',
+)
 CHROME_READY = 'com.android.chrome:id/url_bar'
+# The search engine chooser that Chrome shows after the sign-in screen in
+# some regions, as on the Galaxy Tab S7+: its first engine is tapped, then
+# its "Set as default" button.
+CHROME_CHOOSER = 'com.android.chrome:id/chooser_title'
+CHROME_CHOOSER_SET = 'com.android.chrome:id/button_primary'
 WELCOME_TIMEOUT_S = 40
 
 
-def view_center(screen, resource_id):
-    """The middle of the view with `resource_id` in a `Device.screen` dump."""
-    found = re.search(rf'resource-id="{re.escape(resource_id)}"[^>]*?bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"',
-                      screen)
+def bounds_center(screen, view):
+    """The middle of the first view in a `Device.screen` dump whose
+    attributes before its bounds match the pattern `view`."""
+    found = re.search(view + r'[^>]*?bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', screen)
     if not found:
         return None
     left, top, right, bottom = map(int, found.groups())
     return (left + right) // 2, (top + bottom) // 2
+
+
+def view_center(screen, resource_id):
+    """The middle of the view with `resource_id` in a `Device.screen` dump."""
+    return bounds_center(screen, rf'resource-id="{re.escape(resource_id)}"')
+
+
+def first_choice(screen):
+    """The middle of the first engine Chrome's search engine chooser lists
+    in a `Device.screen` dump: the first clickable view with text after its
+    title."""
+    after = screen.split(f'resource-id="{CHROME_CHOOSER}"', 1)[-1]
+    return bounds_center(after, r'text="[^"]+"[^>]*?clickable="true"')
 
 
 def reset_chrome(device):
@@ -693,10 +730,13 @@ def reset_chrome(device):
         if f'resource-id="{CHROME_READY}"' in screen:
             device.shell('am', 'force-stop', CHROME)
             return
-        for button in CHROME_WELCOME:
-            if center := view_center(screen, button):
+        if f'resource-id="{CHROME_CHOOSER}"' in screen:
+            taps = [first_choice(screen), view_center(screen, CHROME_CHOOSER_SET)]
+        else:
+            taps = [next(filter(None, (view_center(screen, button) for button in CHROME_WELCOME)), None)]
+        if all(taps):
+            for center in taps:
                 device.shell('input', 'tap', *map(str, center))
-                break
         time.sleep(1.0)
     shown = sorted(set(re.findall(r'resource-id="(com\.android\.chrome:id/[\w.]+)"', device.screen())))
     raise RuntimeError(f"Chrome's first run did not reach a tab; on the screen: {', '.join(shown)[:300]}")
@@ -726,9 +766,11 @@ class PageTarget:
         # The page downloads, compiles and draws inside the run.
         return start_times(out, started), self.pids(device)
 
-    def drew(self):
-        """Whether the page logged its first frame since its launch."""
-        return self.server.wait_for('PERF first_frame', 0, self.mark)
+    def check_page(self):
+        """Raises when the page logged no first frame since its launch, or a
+        GPU device error."""
+        self.server.wait_for('PERF first_frame', 0, self.mark)
+        self.server.check_device(self.mark)
 
     def pids(self, device):
         """Chrome's processes, the browser's own first; the zygote that
@@ -743,7 +785,14 @@ class PageTarget:
         return [found.pop(CHROME), *found.values()]
 
     def layer(self, device):
-        return CHROME_LAYER
+        """The page's layer, once the launched tab shows it. The page
+        presents no frame before it does."""
+        deadline = time.monotonic() + CHROME_LAYER_TIMEOUT_S
+        while time.monotonic() < deadline:
+            if name := next((name for name in layer_names(device) if name.startswith(CHROME_LAYER_PREFIX)), None):
+                return name
+            time.sleep(0.2)
+        raise RuntimeError(f'no {CHROME_LAYER_PREFIX} layer showed')
 
     def memory(self, device, pids):
         """What every one of Chrome's processes holds, summed."""
@@ -754,7 +803,8 @@ class PageTarget:
         return total
 
     def log(self, device):
-        return '\n'.join(self.server.heard)
+        """What the page said since its launch."""
+        return '\n'.join(line for _, line in self.server.heard[self.mark:])
 
     def reset(self, device):
         """Leaves Chrome as its install did, for the page's first visit."""
@@ -767,7 +817,7 @@ class PageTarget:
 def measure_run(device, app, scenario, args, destination, run_s=None):
     """One cold launch, measured from the start command for `run_s` seconds
     (`args.run` unless given), or until it presented fewer than `SLOW_FPS`
-    frames in each of `SLOW_SECONDS` seconds in a row: every frame the layer presented,
+    frames in each of `SLOW_SECONDS` seconds in a row since its first frame: every frame the layer presented,
     the CPU every process of the app spent since it started, the clocks and
     the memory held at the end. Nothing of the run is left out: its first
     seconds, the launch and the first frames included, count as the rest do.
@@ -785,18 +835,19 @@ def measure_run(device, app, scenario, args, destination, run_s=None):
     layer = target.layer(device)
     output = device.shell('sh', REMOTE_WINDOW, ','.join(map(str, pids)), target.package, layer,
                           f'{launched + run_s:.2f}', str(args.interval), '1' if target.gfx else '0',
-                          f'{launched:.2f}', str(SLOW_FPS), str(SLOW_SECONDS), timeout=run_s + 60)
+                          str(SLOW_FPS), str(SLOW_SECONDS), timeout=run_s + 60)
     (destination / f'{target.name}-{scenario}-{int(time.time())}.txt').write_text(output)
     lines = output.splitlines()
-    if any(line.strip() == 'STAT' for line in lines):
-        raise RuntimeError(f'{target.package} exited during the run')
     t1 = float(next(line for line in lines if line.startswith('T1 ')).split()[1])
     whole_index = next(i for i, line in enumerate(lines) if line == 'WHOLE')
     whole_cpu, whole_threads = parse_snap(lines[whole_index + 1:])
     if str(pids[0]) not in device.shell('pidof', target.package, check=False).split():
-        raise RuntimeError(f'{target.package} restarted or died during the run')
+        raise RuntimeError(f'{target.package} exited or restarted during the run')
+    focused = focused_window(device)
+    if focused != target.package:
+        raise RuntimeError(f'{focused or "no window"} had the focus at the end of the run, not {target.package}')
     if isinstance(target, PageTarget):
-        target.drew()
+        target.check_page()
     elapsed = t1 - launched
     frames, calibration, vsync_ms, poll_gaps = presents(output)
     # /proc/uptime counts suspended time and SurfaceFlinger's monotonic clock

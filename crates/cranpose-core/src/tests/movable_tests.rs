@@ -98,7 +98,7 @@ fn movable_content() {
         probe.node.set(Some(node));
     });
     let runs = Rc::clone(&probe);
-    LaunchedEffect((), move |scope| {
+    LaunchedEffect((), async move |scope| {
         runs.launched_runs.set(runs.launched_runs.get() + 1);
         runs.launched.borrow_mut().push(scope);
     });

@@ -58,18 +58,13 @@ pub fn TopBar(title: &'static str) {
 #[composable]
 pub fn rememberFrameSeconds() -> MutableState<f32> {
     let seconds = rememberMutableStateOf(|| 0.0f32);
-    LaunchedEffectAsync((), move |scope| {
-        std::boxed::Box::pin(async move {
-            let clock = scope.runtime().frame_clock();
-            let start = clock.next_frame().await;
-            while scope.is_active() {
-                let now = clock.next_frame().await;
-                if !scope.is_active() {
-                    break;
-                }
-                seconds.set(now.saturating_sub(start) as f32 / 1e9);
-            }
-        })
+    LaunchedEffect((), async move |scope| {
+        let clock = scope.runtime().frame_clock();
+        let start = clock.next_frame().await;
+        loop {
+            let now = clock.next_frame().await;
+            seconds.set(now.saturating_sub(start) as f32 / 1e9);
+        }
     });
     seconds
 }

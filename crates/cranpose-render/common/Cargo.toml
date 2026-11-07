@@ -54,6 +54,8 @@ path = "tests/integration.rs"
 [[test]]
 name = "allocations"
 path = "tests/allocations/main.rs"
+required-features = ["embedded-default-font"]
+harness = false
 
 [[bench]]
 name = "canvas_recording"

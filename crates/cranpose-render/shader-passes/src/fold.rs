@@ -323,7 +323,7 @@ fn fold_function(module: &Module, function: &mut Function) {
 
 /// Folds `module`, whose overrides are constants already. Compaction then
 /// drops what no entry point reaches any more.
-pub(crate) fn fold(module: &mut Module) {
+pub fn fold(module: &mut Module) {
     // Folding reads only the module's constants: its functions and entry
     // points step out of it meanwhile.
     let mut functions = std::mem::take(&mut module.functions);

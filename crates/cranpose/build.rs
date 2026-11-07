@@ -5,6 +5,7 @@
 
 fn main() {
     println!("cargo::rerun-if-changed=build.rs");
+    println!("cargo::rustc-check-cfg=cfg(cranpose_first_screen_glsl)");
     first_screen_pipelines();
     println!("cargo::rerun-if-changed=examples/localization/locales");
     println!("cargo::rerun-if-env-changed=CARGO_NDK_ANDROID_PLATFORM");
@@ -39,6 +40,11 @@ fn first_screen_pipelines() {
         }
         None => Vec::new(),
     };
+    // A page with records also fetches the exact GLSL of its first screen's
+    // WebGL stages from beside its wasm (`src/web/first_screen_glsl.rs`).
+    if !records.is_empty() {
+        println!("cargo::rustc-cfg=cranpose_first_screen_glsl");
+    }
     if let Err(error) = std::fs::write(
         std::path::Path::new(&out).join("first_screen_pipelines.bin"),
         records,

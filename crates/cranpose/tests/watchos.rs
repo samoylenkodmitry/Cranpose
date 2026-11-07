@@ -484,11 +484,9 @@ fn a_delay_wakes_a_resting_host_and_its_change_shows() {
     const GREEN: [u8; 4] = [0, 255, 0, 255];
     let mut app = Application::new(40, 30, 1.0, || {
         let done = rememberMutableStateOf(|| false);
-        LaunchedEffectAsync((), move |_| {
-            Box::pin(async move {
-                delay(Duration::from_millis(20)).await;
-                done.set(true);
-            })
+        LaunchedEffect((), async move |_| {
+            delay(Duration::from_millis(20)).await;
+            done.set(true);
         });
         let color = if done.get() {
             Color(0.0, 1.0, 0.0, 1.0)

@@ -2,7 +2,7 @@ use crate::{robot_exit, robot_launch};
 
 use std::time::Duration;
 
-use cranpose_testing::find_text_center;
+use cranpose_testing::{find_button_exact_in_semantics, find_text_center};
 
 pub(crate) fn main() {
     println!("=== Robot Async Tab Bug Test ===");
@@ -20,10 +20,10 @@ pub(crate) fn main() {
 
             println!("\n--- Step 1: Switch to Async Runtime Tab ---");
 
-            let semantics = robot.get_semantics().expect("the robot reads the semantics tree");
-            let async_tab_pos = semantics
-                .iter()
-                .find_map(|root| find_text_center(root, "Async Runtime"));
+            // The tab bar scrolls the tab into view when the window is too
+            // narrow to show it.
+            let async_tab_pos = find_button_exact_in_semantics(&robot, "Async Runtime")
+                .map(|(x, y, width, height)| (x + width * 0.5, y + height * 0.5));
 
             if let Some((x, y)) = async_tab_pos {
                 println!("Found Async Runtime tab at ({x}, {y})");
@@ -55,10 +55,10 @@ pub(crate) fn main() {
 
             println!("\n--- Step 2: Switch back to Counter App Tab ---");
 
-            let semantics = robot.get_semantics().expect("the robot reads the semantics tree");
-            let counter_tab_pos = semantics
-                .iter()
-                .find_map(|root| find_text_center(root, "Counter App"));
+            // The tab bar scrolls the tab into view when the window is too
+            // narrow to show it.
+            let counter_tab_pos = find_button_exact_in_semantics(&robot, "Counter App")
+                .map(|(x, y, width, height)| (x + width * 0.5, y + height * 0.5));
 
             if let Some((x, y)) = counter_tab_pos {
                 println!("Found Counter App tab at ({x}, {y})");

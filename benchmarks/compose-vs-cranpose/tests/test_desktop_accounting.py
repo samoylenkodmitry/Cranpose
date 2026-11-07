@@ -1,4 +1,5 @@
 import importlib.util
+import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -74,9 +75,18 @@ class DesktopRoundsTest(unittest.TestCase):
         measured = []
         self.cleared = []
         self.programs = []
+        self.warmed = []
+
+        def warm_chrome(args, server, stage):
+            self.warmed.append(len(measured))
 
         def install(name, stage, label):
+            self.programs.append(f'install {label}')
             return f'installs/{label}/{name}'
+
+        def wait_for_checks(stage):
+            self.programs.append('wait')
+            return 2.5
 
         def measure(name, args, work, page, stage, label, earlier, profile, program=None):
             measured.append(label)
@@ -98,6 +108,8 @@ class DesktopRoundsTest(unittest.TestCase):
                                release=None, tier=16, run=3.0, browser=browser)
         with patch.object(desktop, 'measure', measure), patch.object(desktop, 'clear_app_state', clear), \
                 patch.object(desktop, 'fresh_install', install), \
+                patch.object(desktop, 'wait_for_program_checks', wait_for_checks), \
+                patch.object(desktop, 'warm_chrome', warm_chrome), \
                 patch.object(desktop, 'idle_others', return_value=idle), \
                 patch.object(desktop.subprocess, 'run', return_value=SimpleNamespace(stdout='Apple M3 Pro')):
             report = desktop.run(args, [app], 'page', Path('stage'))
@@ -113,10 +125,14 @@ class DesktopRoundsTest(unittest.TestCase):
         self.assertEqual(scenario['starts']['second']['summary']['fyne']['fps'], 30.25)
 
     def test_each_first_start_runs_a_fresh_install_and_the_second_start_runs_the_same(self):
-        self.rounds([24.3, 30.0, 24.6, 30.5], rounds=2)
-        self.assertEqual(self.programs, ['installs/fyne-1-first-1/fyne', 'installs/fyne-1-first-1/fyne',
-                                         'installs/fyne-2-first-1/fyne', 'installs/fyne-2-first-1/fyne'],
-                         'macOS checks a program the first time it runs, as after an install')
+        _, scenario = self.rounds([24.3, 30.0, 24.6, 30.5], rounds=2)
+        self.assertEqual(self.programs, ['wait', 'install fyne-1-first-1', 'installs/fyne-1-first-1/fyne',
+                                         'installs/fyne-1-first-1/fyne',
+                                         'wait', 'install fyne-2-first-1', 'installs/fyne-2-first-1/fyne',
+                                         'installs/fyne-2-first-1/fyne'],
+                         'macOS checks a program the first time it runs, as after an install, once the '
+                         'checks queued before it are done')
+        self.assertEqual([leg.get('program_checks_waited_s') for leg in scenario['legs']], [2.5, None] * 2)
 
     def test_a_leg_far_off_the_earlier_ones_of_its_start_is_measured_once_more_and_the_median_decides(self):
         measured, scenario = self.rounds([24.3, 30.0, 60.1, 24.6, 30.5], rounds=2)
@@ -152,6 +168,13 @@ class DesktopRoundsTest(unittest.TestCase):
         self.assertEqual(report['subjects'][0]['label'], 'Web Chrome 154.0.8037.98')
         self.assertEqual(report['protocol']['starts'], ['first', 'second'])
 
+    def test_no_leg_of_a_browser_run_is_chromes_first_launch_of_the_run(self):
+        with patch.object(desktop.versions, 'chrome_version', return_value='154.0.8037.98'):
+            self.rounds([24.3, 30.0, 24.6, 30.5], rounds=2, browser=Path('dist'), app='web')
+        self.assertEqual(self.warmed, [0], 'Chrome opens once before the first leg, and only then')
+        self.rounds([24.3, 30.0])
+        self.assertEqual(self.warmed, [], 'a native run opens no Chrome of its own')
+
     def test_a_disturbed_leg_stays_in_the_run_marked_and_out_of_the_medians(self):
         measured, scenario = self.rounds([(10.0, 3.0), 24.3, 30.0])
         self.assertEqual(measured, ['fyne-1-first-1', 'fyne-1-first-2', 'fyne-1-second-1'])
@@ -172,6 +195,39 @@ class DesktopRoundsTest(unittest.TestCase):
         self.assertEqual([leg['frame_ms'] for leg in scenario['legs']], [[400.0, 416.7, 433.3]] * 2)
 
 
+class FirstFrameTest(unittest.TestCase):
+    """`frame_stats` on what FrameCount reports of a window that shows its
+    background before the app's first frame, as Flutter's, Slint's and
+    Dioxus's do on macm3."""
+
+    LAUNCHED = 100.0
+    # Two pictures of the background 230 ms apart, then the app's frames
+    # 1/60 s apart.
+    SHOWN = [0.30, 0.53] + [0.76 + n / 60 for n in range(6)]
+
+    def frames(self, content):
+        shown = {} if content is None else {'first_content': self.LAUNCHED + content}
+        return {'times': [self.LAUNCHED + time for time in self.SHOWN], 'capture_start': self.LAUNCHED + 0.25,
+                'composited': len(self.SHOWN), 'link': {'hz': 60.0, 'max_gap_ms': 17.0, 'nominal_hz': 60.0},
+                'display': {'id': 1, 'active': True, 'refresh_hz': 60.0, 'scale': 2.0}, **shown}
+
+    def test_a_window_counts_from_its_first_picture_with_content(self):
+        _, leg = desktop.frame_stats('flutter', self.frames(0.76), self.LAUNCHED, 3.0, None)
+        self.assertEqual(leg['first_frame_s'], 0.76)
+        self.assertEqual(leg['interval_p99_ms'], 16.67)
+        # Every picture of the run counts toward its rate and its seconds.
+        self.assertEqual(leg['frames'], 8)
+        self.assertEqual(leg['fps_by_second'], [8, 0, 0])
+
+    def test_a_page_whose_own_parts_show_first_counts_from_its_first_frame_line(self):
+        _, leg = desktop.frame_stats('web', self.frames(0.53), self.LAUNCHED, 3.0, self.LAUNCHED + 0.77)
+        self.assertEqual(leg['first_frame_s'], 0.777)
+
+    def test_a_window_that_shows_nothing_but_its_background_fails_the_leg(self):
+        with self.assertRaisesRegex(RuntimeError, 'no content shown'):
+            desktop.frame_stats('slint', self.frames(None), self.LAUNCHED, 3.0, None)
+
+
 class AppStateTest(unittest.TestCase):
     def test_clearing_removes_the_apps_caches_and_the_profile_and_nothing_else(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -188,6 +244,63 @@ class AppStateTest(unittest.TestCase):
                 desktop.clear_app_state(root / 'profile')
             left = sorted(str(path.relative_to(root)) for path in root.rglob('*') if path.is_file())
             self.assertEqual(left, ['cache/dev.other/kept', 'support/Code/kept'])
+
+
+@unittest.skipUnless(sys.platform == 'darwin', 'macOS signs programs with codesign')
+class FreshInstallTest(unittest.TestCase):
+    @staticmethod
+    def signature(path, field):
+        details = subprocess.run(['codesign', '-dv', '--verbose=3', str(path)], capture_output=True, text=True,
+                                 check=True).stderr
+        return next(line for line in details.splitlines() if line.startswith(f'{field}='))
+
+    def test_every_install_runs_its_program_under_its_name_with_a_code_hash_no_earlier_install_had(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / 'main.c').write_text('int main(void) { return 7; }\n')
+            built = root / 'perf-compare-stub'
+            subprocess.run(['cc', '-o', str(built), str(root / 'main.c')], check=True)
+            with patch.dict(desktop.APPS, {'stub': [built]}):
+                installs = [desktop.fresh_install('stub', root, label) for label in ('a', 'b')]
+            programs = [built, *installs]
+            self.assertEqual(len({self.signature(path, 'CDHash') for path in programs}), 3)
+            self.assertEqual(len({self.signature(path, 'Identifier') for path in programs}), 1)
+            for path in installs:
+                self.assertEqual(subprocess.run([path]).returncode, 7)
+
+    def test_every_install_gives_the_libraries_beside_its_program_new_code_hashes(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            built = root / 'app'
+            built.mkdir()
+            (root / 'seven.c').write_text('int seven(void) { return 7; }\n')
+            (root / 'main.c').write_text('int seven(void);\nint main(void) { return seven(); }\n')
+            subprocess.run(['cc', '-dynamiclib', '-install_name', '@executable_path/libseven.dylib',
+                            '-o', str(built / 'libseven.dylib'), str(root / 'seven.c')], check=True)
+            subprocess.run(['cc', '-o', str(built / 'main'), str(root / 'main.c'), str(built / 'libseven.dylib')],
+                           check=True)
+            with patch.dict(desktop.APPS, {'stub': [built / 'main']}), \
+                    patch.object(desktop, 'INSTALLED_WITH_DIRECTORY', {'stub'}):
+                installs = [Path(desktop.fresh_install('stub', root, label)) for label in ('a', 'b')]
+            libraries = [built / 'libseven.dylib', *(path.parent / 'libseven.dylib' for path in installs)]
+            self.assertEqual(len({self.signature(path, 'CDHash') for path in libraries}), 3)
+            for path in installs:
+                self.assertEqual(subprocess.run([path]).returncode, 7)
+
+    def test_a_first_start_waits_while_new_programs_start_slower_than_a_checked_one(self):
+        with tempfile.TemporaryDirectory() as folder:
+            stage = Path(folder)
+            with patch.multiple(desktop, CHECKED_IN_S=0.0, CHECK_QUEUE_WAIT_S=1.5):
+                waited = desktop.wait_for_program_checks(stage)
+            self.assertGreaterEqual(waited, 1.5)
+            self.assertGreater(len(list((stage / 'probes').glob('*/probe'))), 1)
+
+    def test_a_first_start_goes_on_once_a_new_program_starts_as_a_checked_one(self):
+        with tempfile.TemporaryDirectory() as folder:
+            stage = Path(folder)
+            with patch.multiple(desktop, CHECKED_IN_S=60.0, CHECK_QUEUE_WAIT_S=120.0):
+                desktop.wait_for_program_checks(stage)
+            self.assertEqual(len(list((stage / 'probes').glob('*/probe'))), 1)
 
 
 if __name__ == '__main__':

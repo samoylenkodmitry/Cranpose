@@ -98,24 +98,19 @@ pub fn GauntletScreen(load: GauntletLoad) {
     .with(|shared| shared.clone());
 
     let freeze = load.freeze;
-    LaunchedEffectAsync(freeze, move |scope| {
-        std::boxed::Box::pin(async move {
-            let clock = scope.runtime().frame_clock();
-            let mut index = 0u32;
-            while scope.is_active() {
-                clock.next_frame().await;
-                if !scope.is_active() {
-                    break;
-                }
-                index += 1;
-                frame.set(index);
-                list_state.dispatch_scroll_delta(-SCROLL_PER_FRAME);
-                if freeze > 0 && index >= freeze {
-                    log::info!("PERF frozen frame={index}");
-                    break;
-                }
+    LaunchedEffect(freeze, async move |scope| {
+        let clock = scope.runtime().frame_clock();
+        let mut index = 0u32;
+        loop {
+            clock.next_frame().await;
+            index += 1;
+            frame.set(index);
+            list_state.dispatch_scroll_delta(-SCROLL_PER_FRAME);
+            if freeze > 0 && index >= freeze {
+                log::info!("PERF frozen frame={index}");
+                break;
             }
-        })
+        }
     });
 
     // Only this box reads the frame while composing; its content is one

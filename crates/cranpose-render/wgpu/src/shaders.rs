@@ -11,8 +11,13 @@ pub(crate) const SHADER: &str = wgsl::SHAPE_WGSL;
 macro_rules! built_in {
     ($($name:ident = $wgsl:ident;)+) => {$(
         #[cfg(all(target_arch = "wasm32", feature = "gl-templates"))]
-        pub(crate) const $name: ShaderCode =
-            ShaderCode::built_in(|| Cow::Borrowed(wgsl::$wgsl), crate::gl_templates::$name);
+        pub(crate) const $name: ShaderCode = ShaderCode::built_in(
+            || Cow::Borrowed(wgsl::$wgsl),
+            crate::shared_shader::BuiltIn {
+                name: stringify!($name),
+                glsl: crate::gl_templates::$name,
+            },
+        );
         #[cfg(not(all(target_arch = "wasm32", feature = "gl-templates")))]
         pub(crate) const $name: ShaderCode = ShaderCode::wgsl(|| Cow::Borrowed(wgsl::$wgsl));
     )+};

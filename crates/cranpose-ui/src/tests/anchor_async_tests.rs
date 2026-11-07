@@ -1,6 +1,6 @@
 use cranpose_core::{
-    __launched_effect_async_impl as launched_effect_async_impl, Composition, MemoryApplier,
-    MutableState, Node, NodeError, TaskSite, location_key,
+    __launched_effect_impl as launched_effect_async_impl, Composition, MemoryApplier, MutableState,
+    Node, NodeError, TaskSite, location_key,
 };
 use cranpose_macros::composable;
 
@@ -52,43 +52,41 @@ fn async_runtime_demo(animation: MutableState<AnimationState>, stats: MutableSta
             location_key(file!(), line!(), column!()),
             TaskSite::new(file!(), line!()),
             (),
-            move |scope| {
+            async move |scope| {
                 let animation = animation_state;
                 let stats = stats_state;
-                Box::pin(async move {
-                    let clock = scope.runtime().frame_clock();
-                    let mut last_time: Option<u64> = None;
-                    while scope.is_active() {
-                        let nanos = clock.next_frame().await;
-                        if !scope.is_active() {
-                            break;
-                        }
-                        if let Some(previous) = last_time {
-                            let mut delta_nanos = nanos.saturating_sub(previous);
-                            if delta_nanos == 0 {
-                                delta_nanos = 16_666_667;
-                            }
-                            let dt_ms = delta_nanos as f32 / 1_000_000.0;
-                            stats.update(|state| {
-                                state.frames = state.frames.wrapping_add(1);
-                                state.last_frame_ms = dt_ms;
-                            });
-                            animation.update(|anim| {
-                                let next = anim.progress + 0.1 * anim.direction * (dt_ms / 600.0);
-                                if next >= 1.0 {
-                                    anim.progress = 1.0;
-                                    anim.direction = -1.0;
-                                } else if next <= 0.0 {
-                                    anim.progress = 0.0;
-                                    anim.direction = 1.0;
-                                } else {
-                                    anim.progress = next;
-                                }
-                            });
-                        }
-                        last_time = Some(nanos);
+                let clock = scope.runtime().frame_clock();
+                let mut last_time: Option<u64> = None;
+                while scope.is_active() {
+                    let nanos = clock.next_frame().await;
+                    if !scope.is_active() {
+                        break;
                     }
-                })
+                    if let Some(previous) = last_time {
+                        let mut delta_nanos = nanos.saturating_sub(previous);
+                        if delta_nanos == 0 {
+                            delta_nanos = 16_666_667;
+                        }
+                        let dt_ms = delta_nanos as f32 / 1_000_000.0;
+                        stats.update(|state| {
+                            state.frames = state.frames.wrapping_add(1);
+                            state.last_frame_ms = dt_ms;
+                        });
+                        animation.update(|anim| {
+                            let next = anim.progress + 0.1 * anim.direction * (dt_ms / 600.0);
+                            if next >= 1.0 {
+                                anim.progress = 1.0;
+                                anim.direction = -1.0;
+                            } else if next <= 0.0 {
+                                anim.progress = 0.0;
+                                anim.direction = 1.0;
+                            } else {
+                                anim.progress = next;
+                            }
+                        });
+                    }
+                    last_time = Some(nanos);
+                }
             },
         );
     }

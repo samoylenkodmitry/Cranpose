@@ -6,10 +6,10 @@ use std::{
 use cranpose_core::{MutableState, remember, rememberMutableStateOf};
 use cranpose_macros::composable;
 use cranpose_ui::{
-    Color, Modifier, Size,
+    Alignment, Color, Modifier, Size,
     space::{
-        Camera, EyePose, Glass, Light, Mat4, Material, Mesh, MeshSurface, Scene3d, Shaded, Vec3,
-        Volume,
+        Camera, EyePose, Glass, Light, Mat4, Material, Mesh, MeshSurface, NEAR_PLANE, Scene3d,
+        Shaded, Vec3, Volume,
     },
     widgets::{Box, BoxSpec, Row, RowSpec},
 };
@@ -204,21 +204,65 @@ fn red_blue_wall(plane: &Arc<Mesh>, transform: Mat4) {
     Row(
         surface(plane, transform, (Material::Unlit, false)),
         RowSpec::default(),
-        || {
-            for color in [Color(1.0, 0.0, 0.0, 1.0), Color(0.0, 0.0, 1.0, 1.0)] {
-                Box(
+        red_blue_halves,
+    );
+}
+
+// A red square on the left, a blue one on the right.
+fn red_blue_halves() {
+    for color in [Color(1.0, 0.0, 0.0, 1.0), Color(0.0, 0.0, 1.0, 1.0)] {
+        Box(
+            Modifier::empty()
+                .size(Size {
+                    width: 128.0,
+                    height: 128.0,
+                })
+                .background(color),
+            BoxSpec::default(),
+            || {},
+        );
+    }
+}
+
+// The wall of `HeldWallScene`.
+const HELD_WALL: Vec3 = Vec3::new(0.0, 0.0, 300.0);
+const HELD_WALL_SIDE: (f32, f32) = (400.0, 200.0);
+
+// A red and blue wall whose node a parent narrower than its content holds:
+// it lays out its content at its own size, past the parent's width.
+#[composable]
+fn HeldWallScene() {
+    let (plane, _) = meshes();
+    Scene(0.0, move || {
+        let plane = Arc::clone(&plane);
+        Box(
+            Modifier::empty().size(Size {
+                width: 64.0,
+                height: 64.0,
+            }),
+            BoxSpec::default(),
+            move || {
+                let plane = Arc::clone(&plane);
+                Row(
                     Modifier::empty()
+                        .wrap_content_size(Alignment::TOP_START, true)
                         .size(Size {
-                            width: 128.0,
+                            width: 256.0,
                             height: 128.0,
                         })
-                        .background(color),
-                    BoxSpec::default(),
-                    || {},
+                        .mesh_surface(move || MeshSurface {
+                            mesh: Arc::clone(&plane),
+                            transform: panel(HELD_WALL_SIDE, HELD_WALL),
+                            material: Material::Unlit,
+                            casts_shadow: false,
+                            solid: true,
+                        }),
+                    RowSpec::default(),
+                    red_blue_halves,
                 );
-            }
-        },
-    );
+            },
+        );
+    });
 }
 
 #[test]
@@ -341,6 +385,64 @@ fn a_mesh_surface_past_the_surface_budget_draws_its_content_at_a_lower_scale() {
     assert!(
         wall[1] > 240 && wall[0] < 16 && wall[2] < 16,
         "the wall shows its green content: {wall:?}"
+    );
+}
+
+#[test]
+fn a_surface_its_parent_holds_narrower_shows_all_of_its_content() {
+    let Some(frame) = capture(HeldWallScene) else {
+        return;
+    };
+    let quarter = Vec3::new(HELD_WALL_SIDE.0 * 0.25, 0.0, 0.0);
+    let left = pixel_at(&frame, HELD_WALL - quarter);
+    let right = pixel_at(&frame, HELD_WALL + quarter);
+    assert!(
+        left[0] > 240 && left[2] < 16,
+        "the wall's left half shows its red content: {left:?}"
+    );
+    assert!(
+        right[2] > 240 && right[0] < 16,
+        "the wall's right half shows its blue content, past the parent's width: {right:?}"
+    );
+}
+
+// A blue wall, turned so its left edge comes toward the eye, and on it,
+// one unit nearer the eye, a translucent red panel inside its outline.
+const DECAL_WALL: Vec3 = Vec3::new(0.0, 0.0, 300.0);
+
+fn turned_panel(side: (f32, f32), at: Vec3) -> Mat4 {
+    Mat4::translation(Vec3::new(-0.5, -0.5, 0.0))
+        .then(&Mat4::scaling(Vec3::new(side.0, side.1, 1.0)))
+        .then(&Mat4::rotation_y(0.5))
+        .then(&Mat4::translation(at))
+}
+
+#[composable]
+fn DecalScene() {
+    let (plane, _) = meshes();
+    Scene(0.0, move || {
+        Surface(
+            Arc::clone(&plane),
+            turned_panel((400.0, 300.0), DECAL_WALL),
+            (Material::Unlit, false, Color(0.0, 0.0, 1.0, 1.0)),
+        );
+        Surface(
+            Arc::clone(&plane),
+            turned_panel((320.0, 220.0), DECAL_WALL - Vec3::new(0.0, 0.0, 1.0)),
+            (Material::Unlit, false, Color(1.0, 0.0, 0.0, 0.5)),
+        );
+    });
+}
+
+#[test]
+fn a_translucent_surface_on_another_shows_it_through_from_any_side() {
+    let Some(frame) = capture(DecalScene) else {
+        return;
+    };
+    let middle = pixel_at(&frame, DECAL_WALL - Vec3::new(0.0, 0.0, 1.0));
+    assert!(
+        middle[0] > 100 && middle[2] > 100,
+        "the red panel shows the blue wall through it, not the black behind the wall: {middle:?}"
     );
 }
 
@@ -544,6 +646,46 @@ fn a_shaded_surface_takes_its_colour_from_its_shader() {
     assert!(
         shadowed[0] > 240 && shadowed[2] < 40,
         "in the ball's shadow the light does not reach the wall: {shadowed:?}"
+    );
+}
+
+// Green where the eye the surface holds lies within a unit of the point
+// its values 1 to 3 give, red elsewhere.
+const EYE_WGSL: &str = r"
+fn shade(surface: ShadedSurface) -> vec4<f32> {
+    let expected = vec3<f32>(shaded_param(1u), shaded_param(2u), shaded_param(3u));
+    let near = length(surface.eye - expected) < 1.0;
+    return select(vec4<f32>(1.0, 0.0, 0.0, 1.0), vec4<f32>(0.0, 1.0, 0.0, 1.0), near);
+}
+";
+
+// The wall of `ShadedScene`, whose shader expects the camera's eye in the
+// wall's mesh.
+#[composable]
+fn EyeScene() {
+    static SHADER: OnceLock<Arc<str>> = OnceLock::new();
+    let wall = panel((2000.0, 1500.0), Vec3::new(0.0, 0.0, 600.0));
+    let eye = wall
+        .inverse()
+        .expect("the wall spans space")
+        .transform_point(camera().eye());
+    let mut params = [0.0; Shaded::PARAMS];
+    params[1..4].copy_from_slice(&eye.to_array());
+    ShadedScene(Material::Shaded(Shaded {
+        shader: Arc::clone(SHADER.get_or_init(|| Arc::from(EYE_WGSL))),
+        params,
+    }));
+}
+
+#[test]
+fn a_shaded_surface_knows_where_the_eye_stands_in_its_mesh() {
+    let Some(frame) = capture(EyeScene) else {
+        return;
+    };
+    let wall = pixel_at(&frame, Vec3::new(-400.0, 300.0, 600.0));
+    assert!(
+        wall[1] > 200 && wall[0] < 40,
+        "the wall's shader reads the camera's eye in the wall's mesh: {wall:?}"
     );
 }
 
@@ -1051,6 +1193,36 @@ fn an_eye_that_walks_through_a_doorway_sees_the_space_behind_it_and_the_room_bac
     assert!(
         beside[2] < 40,
         "beside the doorway the wall of the room the eye left does not show: {beside:?}"
+    );
+}
+
+#[test]
+fn an_eye_nearer_to_a_doorway_than_the_near_plane_sees_through_it() {
+    let Some((_lock, mut shell)) = support::app_shell_for(
+        WalkScene,
+        FRAME_WIDTH,
+        FRAME_HEIGHT,
+        wgpu::TextureFormat::Rgba8Unorm,
+        |_| {},
+    ) else {
+        return;
+    };
+    support::warm_shell_frame(&mut shell, FRAME_WIDTH, FRAME_HEIGHT);
+    let eye = WALKER.with(|slot| slot.borrow().clone().expect("the scene composed"));
+    // The eye stops in the doorway's middle, closer to the wall at 600 than
+    // the camera's near plane, a sixty-fourth of its focal length, lies.
+    let close = Vec3::new(0.0, 0.0, 600.0 - FOCAL_LENGTH * NEAR_PLANE * 0.5);
+    eye.walk(close - WALK_START);
+    support::update_and_capture(&mut shell, FRAME_WIDTH, FRAME_HEIGHT);
+    let (_, frame) = support::update_and_capture(&mut shell, FRAME_WIDTH, FRAME_HEIGHT);
+    let front = pixel_seen(
+        &frame,
+        walker(close, Vec3::new(0.0, 0.0, 1.0)),
+        Vec3::new(0.0, 0.0, 1720.0),
+    );
+    assert!(
+        front[0] > 200 && front[1] < 40,
+        "the doorway nearer than the near plane shows the red ball behind it: {front:?}"
     );
 }
 

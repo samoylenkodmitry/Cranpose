@@ -6,6 +6,7 @@ import plistlib
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -154,6 +155,19 @@ class SmokeTest(unittest.TestCase):
         with self.assertRaises(subprocess.CalledProcessError):
             self.run_smoke({'fail': {'install': BAD_BUNDLE}}, {})
         self.assertEqual(len(self.calls('create')), 1)
+
+    def test_sets_left_by_sessions_that_ended_before_their_cleanup_are_shut_down_and_removed(self):
+        left = self.sets / 'cranpose-watch-left'
+        running = self.sets / 'cranpose-watch-running'
+        for scratch in (left, running):
+            (scratch / 'DEVICE').mkdir(parents=True)
+        hour_ago = time.time() - smoke.STALE_SET_SECONDS - 1
+        os.utime(left, (hour_ago, hour_ago))
+        self.run_smoke({})
+        self.assertEqual(self.calls('shutdown')[0], str(left))
+        self.assertEqual(self.calls('delete')[0], str(left))
+        self.assertNotIn(str(running), self.calls('shutdown') + self.calls('delete'))
+        self.assertEqual(list(self.sets.iterdir()), [running])
 
     def test_an_app_that_exits_is_not_repeated(self):
         with self.assertRaisesRegex(RuntimeError, 'App exited after launch'):

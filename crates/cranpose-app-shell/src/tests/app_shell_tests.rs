@@ -6,7 +6,7 @@ use std::{
 };
 
 use cranpose_core::{
-    __launched_effect_async_impl as launched_effect_async_impl, CompositionLocal,
+    __launched_effect_impl as launched_effect_async_impl, CompositionLocal,
     CompositionLocalProvider, MutableState, TaskSite, compositionLocalOf, location_key,
     rememberMutableStateOf,
 };
@@ -496,21 +496,16 @@ fn AppShellAnimatedLazyItem() {
                     location_key(file!(), line!(), column!()),
                     TaskSite::new(file!(), line!()),
                     current_run_token,
-                    move |scope| {
+                    async move |scope| {
                         let pulse = pulse_for_effect;
-                        Box::pin(async move {
-                            if current_run_token == 0 {
-                                return;
-                            }
-                            let clock = scope.runtime().frame_clock();
-                            while scope.is_active() {
-                                let _ = clock.next_frame().await;
-                                if !scope.is_active() {
-                                    break;
-                                }
-                                pulse.set_value(pulse.get_non_reactive().wrapping_add(1));
-                            }
-                        })
+                        if current_run_token == 0 {
+                            return;
+                        }
+                        let clock = scope.runtime().frame_clock();
+                        loop {
+                            let _ = clock.next_frame().await;
+                            pulse.set_value(pulse.get_non_reactive().wrapping_add(1));
+                        }
                     },
                 );
                 cranpose_core::SideEffect(move || {
@@ -1840,32 +1835,27 @@ fn tabbed_progress_content() {
         location_key(file!(), line!(), column!()),
         TaskSite::new(file!(), line!()),
         (),
-        move |scope| {
+        async move |scope| {
             let progress = progress_effect;
             let active_tab = active_effect;
-            Box::pin(async move {
-                let clock = scope.runtime().frame_clock();
-                let mut phase: u32 = 0;
-                while scope.is_active() {
-                    let _ = clock.next_frame().await;
-                    if !scope.is_active() {
-                        break;
+            let clock = scope.runtime().frame_clock();
+            let mut phase: u32 = 0;
+            loop {
+                let _ = clock.next_frame().await;
+                match phase % 3 {
+                    0 => {
+                        progress.set_value(0.0);
+                        active_tab.set_value(1);
                     }
-                    match phase % 3 {
-                        0 => {
-                            progress.set_value(0.0);
-                            active_tab.set_value(1);
-                        }
-                        1 => {
-                            progress.set_value(0.85);
-                        }
-                        _ => {
-                            active_tab.set_value(0);
-                        }
+                    1 => {
+                        progress.set_value(0.85);
                     }
-                    phase = phase.wrapping_add(1);
+                    _ => {
+                        active_tab.set_value(0);
+                    }
                 }
-            })
+                phase = phase.wrapping_add(1);
+            }
         },
     );
 
@@ -1915,13 +1905,11 @@ fn one_shot_frame_request_content() {
         location_key(file!(), line!(), column!()),
         TaskSite::new(file!(), line!()),
         (),
-        move |scope| {
+        async move |scope| {
             let phase = phase_state;
-            Box::pin(async move {
-                let clock = scope.runtime().frame_clock();
-                let _ = clock.next_frame().await;
-                phase.set_value(1);
-            })
+            let clock = scope.runtime().frame_clock();
+            let _ = clock.next_frame().await;
+            phase.set_value(1);
         },
     );
 
@@ -1942,13 +1930,11 @@ fn silent_frame_loop_content() {
         location_key(file!(), line!(), column!()),
         TaskSite::new(file!(), line!()),
         (),
-        move |scope| {
-            Box::pin(async move {
-                let clock = scope.runtime().frame_clock();
-                while scope.is_active() {
-                    let _ = clock.next_frame().await;
-                }
-            })
+        async move |scope| {
+            let clock = scope.runtime().frame_clock();
+            loop {
+                let _ = clock.next_frame().await;
+            }
         },
     );
 
@@ -1963,20 +1949,15 @@ fn continuous_frame_request_tab() {
         location_key(file!(), line!(), column!()),
         TaskSite::new(file!(), line!()),
         (),
-        move |scope| {
+        async move |scope| {
             let tick = tick_state;
-            Box::pin(async move {
-                let clock = scope.runtime().frame_clock();
-                while scope.is_active() {
-                    let _ = clock.next_frame().await;
-                    if !scope.is_active() {
-                        break;
-                    }
-                    APP_SHELL_CONTINUOUS_FRAME_COUNT
-                        .with(|count| count.set(count.get().saturating_add(1)));
-                    tick.update(|value| *value = value.wrapping_add(1));
-                }
-            })
+            let clock = scope.runtime().frame_clock();
+            loop {
+                let _ = clock.next_frame().await;
+                APP_SHELL_CONTINUOUS_FRAME_COUNT
+                    .with(|count| count.set(count.get().saturating_add(1)));
+                tick.update(|value| *value = value.wrapping_add(1));
+            }
         },
     );
 
@@ -2013,14 +1994,12 @@ fn frame_time_recorder_content() {
         location_key(file!(), line!(), column!()),
         TaskSite::new(file!(), line!()),
         (),
-        move |scope| {
-            Box::pin(async move {
-                let clock = scope.runtime().frame_clock();
-                let first = clock.next_frame().await;
-                APP_SHELL_FRAME_TIME_RECORDS.with(|records| records.borrow_mut().push(first));
-                let second = clock.next_frame().await;
-                APP_SHELL_FRAME_TIME_RECORDS.with(|records| records.borrow_mut().push(second));
-            })
+        async move |scope| {
+            let clock = scope.runtime().frame_clock();
+            let first = clock.next_frame().await;
+            APP_SHELL_FRAME_TIME_RECORDS.with(|records| records.borrow_mut().push(first));
+            let second = clock.next_frame().await;
+            APP_SHELL_FRAME_TIME_RECORDS.with(|records| records.borrow_mut().push(second));
         },
     );
 
@@ -7360,14 +7339,12 @@ fn app_shell_effect_test_tab() {
         location_key(file!(), line!(), column!()),
         TaskSite::new(file!(), line!()),
         request_key,
-        move |_scope| {
+        async move |_scope| {
             let status = status;
-            Box::pin(async move {
-                if request_key == 0 {
-                    return;
-                }
-                status.set_value(format!("Request {request_key}"));
-            })
+            if request_key == 0 {
+                return;
+            }
+            status.set_value(format!("Request {request_key}"));
         },
     );
 
@@ -11564,12 +11541,10 @@ fn a_task_woken_between_frames_runs_when_the_loop_wakes_and_its_change_waits_for
                 location_key(file!(), line!(), column!()),
                 TaskSite::new(file!(), line!()),
                 (),
-                move |_| {
-                    Box::pin(async move {
-                        gate.opened().await;
-                        resumed.set(true);
-                        ticks.set_value(1);
-                    })
+                async move |_| {
+                    gate.opened().await;
+                    resumed.set(true);
+                    ticks.set_value(1);
                 },
             );
             Text(

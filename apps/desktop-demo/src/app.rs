@@ -23,6 +23,7 @@ use cranpose_ui::{
 };
 
 mod animations;
+mod backrooms;
 pub mod chrome_tabs;
 pub(crate) mod controls_ui;
 mod demo_tab;
@@ -60,9 +61,11 @@ mod shaders;
 mod source_view;
 mod tab_content;
 mod text_showcase;
+mod ticking;
 pub mod tool_windows;
 mod tv;
 mod url_resolve;
+mod walk_keys;
 pub mod wear;
 mod web_fetch;
 mod webview;
@@ -136,11 +139,7 @@ impl StartupSelection {
                 initial_tab: Some(DemoTab::Shaders),
                 initial_shader_section,
             },
-            (Some(tab), Some(_)) => Self {
-                initial_tab: Some(tab),
-                initial_shader_section: None,
-            },
-            (Some(tab), None) => Self {
+            (Some(tab), _) => Self {
                 initial_tab: Some(tab),
                 initial_shader_section: None,
             },
@@ -1489,7 +1488,7 @@ pub(crate) fn AsyncRuntimeEngine(
     let running = is_running.get();
     let reset_key = reset_signal.get();
 
-    LaunchedEffect((reset_key,), move |_scope| {
+    LaunchedEffect((reset_key,), async move |_scope| {
         if last_reset.get() != reset_key {
             last_reset.set(reset_key);
             animation.set(AnimationState::default());
@@ -1548,7 +1547,7 @@ fn counter_app() {
     };
     let wave_state = animateFloatAsState(target_wave, AnimationType::default(), "wave");
     let fetch_key = fetch_request.get();
-    LaunchedEffect(fetch_key, move |_scope| {
+    LaunchedEffect(fetch_key, async move |_scope| {
         if fetch_key == 0 {
             return;
         }

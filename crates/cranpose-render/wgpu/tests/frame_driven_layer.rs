@@ -1,5 +1,5 @@
 use cranpose_app_shell::AppShell;
-use cranpose_core::{LaunchedEffectAsync, location_key, rememberMutableStateOf};
+use cranpose_core::{LaunchedEffect, location_key, rememberMutableStateOf};
 use cranpose_ui::{Box, BoxSpec, Color, Modifier, composable};
 
 use crate::support;
@@ -11,17 +11,15 @@ const SIZE: u32 = 64;
 #[composable]
 fn FrameDrivenLayer() {
     let seconds = rememberMutableStateOf(|| 0.0f32);
-    LaunchedEffectAsync((), move |scope| {
-        Box::pin(async move {
-            let clock = scope.runtime().frame_clock();
-            while scope.is_active() {
-                let now = clock.next_frame().await;
-                if !scope.is_active() {
-                    break;
-                }
-                seconds.set(now as f32 / 1e6);
+    LaunchedEffect((), async move |scope| {
+        let clock = scope.runtime().frame_clock();
+        while scope.is_active() {
+            let now = clock.next_frame().await;
+            if !scope.is_active() {
+                break;
             }
-        })
+            seconds.set(now as f32 / 1e6);
+        }
     });
     Box(
         Modifier::empty()

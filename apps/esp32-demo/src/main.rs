@@ -25,11 +25,27 @@ mod deep_moves;
     feature = "screens-in-turn"
 ))]
 mod demo;
+#[cfg(any(
+    feature = "dashboard",
+    feature = "changing-paths",
+    feature = "deep-moves",
+    all(feature = "screens-in-turn", not(feature = "e32r35t"))
+))]
+#[path = "../../../crates/cranpose/tests/support/frame_time.rs"]
+mod frame_time;
 #[cfg(feature = "screens-in-turn")]
 mod in_turn;
 #[cfg(all(feature = "screens-in-turn", not(feature = "e32r35t")))]
 #[path = "../../../crates/cranpose/tests/support/still_wall.rs"]
 mod still_wall;
+#[cfg(any(
+    feature = "dashboard",
+    feature = "changing-paths",
+    feature = "deep-moves",
+    all(feature = "screens-in-turn", not(feature = "e32r35t"))
+))]
+#[path = "../../../crates/cranpose/tests/support/text_style.rs"]
+mod text_style;
 
 use cranpose::prelude::*;
 use cranpose_platform_esp_idf::{DisplayConfig, RunError, run};

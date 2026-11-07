@@ -63,13 +63,13 @@ The `cranpose` features an app chooses:
 
 The other crates are internal: `cranpose-macros` (reached through `cranpose`),
 `cranpose-assets`, `cranpose-runtime-std`, `cranpose-app-shell`,
-`cranpose-localization`, `cranpose-storekit`, `cranpose-gl-templates`, the
-`cranpose-render-*` and `cranpose-platform-*` crates and the font data crates.
-So are the features that other features turn on (`desktop-shell`,
-`native-windows`, `media-backend`) and `cranpose-core`'s `internal`,
-`inspection` and `test-helpers`. Their API follows the rule above as well,
-because the public crates depend on them. An app that needs one of them is
-missing a public API; report that as a bug.
+`cranpose-localization`, `cranpose-storekit`, `cranpose-gl-templates`,
+`cranpose-shader-passes`, the `cranpose-render-*` and `cranpose-platform-*`
+crates and the font data crates. So are the features that other features turn
+on (`desktop-shell`, `native-windows`, `media-backend`) and `cranpose-core`'s
+`internal`, `inspection` and `test-helpers`. Their API follows the rule above
+as well, because the public crates depend on them. An app that needs one of
+them is missing a public API; report that as a bug.
 
 ## Workflow
 

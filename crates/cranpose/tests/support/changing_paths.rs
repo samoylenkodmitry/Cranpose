@@ -9,13 +9,10 @@
 
 use cranpose::prelude::*;
 
-#[path = "frame_time.rs"]
-mod frame_time;
-#[path = "text_style.rs"]
-mod text_style;
-
-use frame_time::{Time, frame_time};
-use text_style::text_style as style;
+use super::{
+    frame_time::{Time, frame_time},
+    text_style::text_style as style,
+};
 
 const ROWS: usize = 40;
 // The rows of the card that fades, after the list's rows.

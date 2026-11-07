@@ -15,9 +15,10 @@
 // (`CACurrentMediaTime`, the clock the frames are stamped with), waiting for
 // its window to appear:
 //        open -W -n FrameCount.app --args --pid PID --until T --out FILE.json
-// With `--launched L --slow-fps F --slow-seconds S` as well, the capture ends
-// early, its end written as `stopped`, once the app presented fewer than F
-// frames in each of the last S whole seconds since its launch L.
+// With `--slow-fps F --slow-seconds S` as well, the capture ends early, its
+// end written as `stopped`, once the app presented fewer than F frames in
+// each of the last S whole seconds since its first frame: the first picture
+// that shows more than the window's background.
 // or, for a picture of the window at its full resolution:
 //        open -W -n FrameCount.app --args --pid PID --screenshot FILE.png
 // or, for the state of every display the window server knows and the rate at
@@ -44,7 +45,6 @@ struct Options {
     var pid: pid_t = 0
     var seconds = 5.0
     var until = 0.0
-    var launched = 0.0
     var slowFps = 0.0
     var slowSeconds = 0
     var out = ""
@@ -61,7 +61,6 @@ struct Options {
             case "--pid": pid = pid_t(value) ?? 0
             case "--seconds": seconds = Double(value) ?? 0
             case "--until": until = Double(value) ?? 0
-            case "--launched": launched = Double(value) ?? 0
             case "--slow-fps": slowFps = Double(value) ?? 0
             case "--slow-seconds": slowSeconds = Int(value) ?? 0
             case "--out": out = value
@@ -84,13 +83,15 @@ struct Options {
     }
 
     /// Whether, at `now`, each of the last `slowSeconds` whole seconds since
-    /// the launch held fewer than `slowFps` of the frames `frames` counts
-    /// between two times.
-    func slow(at now: Double, frames: (Double, Double) -> Int) -> Bool {
-        let done = Int(now - launched)
-        guard slowFps > 0, slowSeconds > 0, done >= slowSeconds else { return false }
+    /// the app's first frame at `first` held fewer than `slowFps` of the
+    /// frames `frames` counts between two times. Before its first frame the
+    /// app is still starting, which every run measures whole.
+    func slow(at now: Double, since first: Double?, frames: (Double, Double) -> Int) -> Bool {
+        guard let first, slowFps > 0, slowSeconds > 0 else { return false }
+        let done = Int(now - first)
+        guard done >= slowSeconds else { return false }
         return (done - slowSeconds..<done).allSatisfy { second in
-            let start = launched + Double(second)
+            let start = first + Double(second)
             return Double(frames(start, start + 1)) < slowFps
         }
     }
@@ -106,7 +107,7 @@ enum Failure: Error, CustomStringConvertible {
         switch self {
         case .usage:
             return "usage: FrameCount --pid PID (--seconds S --out FILE.json | --until T --out FILE.json"
-                + " [--launched L --slow-fps F --slow-seconds S] | --screenshot FILE.png)"
+                + " [--slow-fps F --slow-seconds S] | --screenshot FILE.png)"
                 + " | FrameCount --display FILE.json [--link-seconds S]"
                 + " | FrameCount --ambient FILE.json [--seconds S]"
         case .noPermission: return "FrameCount has no Screen Recording permission"
@@ -138,6 +139,37 @@ func pixelHash(_ buffer: CVPixelBuffer) -> UInt64 {
     return hash
 }
 
+/// Whether a frame shows more than one color below the window's title bar.
+/// A window shows its background alone, white, black or the page's color,
+/// until the app's first frame reaches it: Flutter's window shows two black
+/// pictures first, Slint's one empty and Dioxus's one of its page's
+/// background (macm3, 2026-11-06). The title bar's 28 points take the top 4
+/// rows at the capture's 1/8 scale; two more rows and two pixels in from the
+/// other edges leave out its shadow and the window's rounded corners. What is
+/// left of them differs from the background by up to 2 levels; a channel
+/// counts as different past 8.
+func showsContent(_ buffer: CVPixelBuffer) -> Bool {
+    let top = 6, margin = 2, tolerance: Int16 = 8
+    CVPixelBufferLockBaseAddress(buffer, .readOnly)
+    defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
+    let width = CVPixelBufferGetWidth(buffer), height = CVPixelBufferGetHeight(buffer)
+    guard let base = CVPixelBufferGetBaseAddress(buffer), width > 2 * margin, height > top + margin else {
+        return false
+    }
+    let rowBytes = CVPixelBufferGetBytesPerRow(buffer)
+    let pixels = base.assumingMemoryBound(to: UInt8.self)
+    let background = pixels + top * rowBytes + margin * 4
+    for row in top..<(height - margin) {
+        for column in margin..<(width - margin) {
+            let pixel = pixels + row * rowBytes + column * 4
+            for channel in 0..<4 where abs(Int16(pixel[channel]) - Int16(background[channel])) > tolerance {
+                return true
+            }
+        }
+    }
+    return false
+}
+
 /// Collects the presentation times of the frames the window server composited
 /// and, when `hashing`, those among them that changed the window's picture.
 ///
@@ -150,13 +182,15 @@ func pixelHash(_ buffer: CVPixelBuffer) -> UInt64 {
 /// and Slint counted 54 to 56 frames a second beside an animating window and
 /// 15 to 25 alone, while a hook on GPUI's Metal layer counted 12 drawables a
 /// second in both). A frame is the app's only when its pixels differ from the
-/// last one's.
+/// last one's. When hashing it also keeps the time of the first frame that
+/// `showsContent`.
 final class Frames: NSObject, SCStreamOutput {
     private let lock = NSLock()
     private let hashing: Bool
     private var times: [Double] = []
     private var changed: [Double] = []
     private var last: UInt64?
+    private var content: Double?
 
     init(hashing: Bool) {
         self.hashing = hashing
@@ -170,14 +204,25 @@ final class Frames: NSObject, SCStreamOutput {
               SCFrameStatus(rawValue: raw) == .complete
         else { return }
         let time = CMSampleBufferGetPresentationTimeStamp(sample).seconds
-        let hash = hashing ? CMSampleBufferGetImageBuffer(sample).map(pixelHash) : nil
+        let buffer = hashing ? CMSampleBufferGetImageBuffer(sample) : nil
+        let hash = buffer.map(pixelHash)
         lock.lock()
         defer { lock.unlock() }
         times.append(time)
-        if let hash, hash != last {
+        if let buffer, let hash, hash != last {
             changed.append(time)
+            if content == nil, showsContent(buffer) {
+                content = time
+            }
         }
         last = hash
+    }
+
+    /// When the window first showed more than its background, once it has.
+    func firstContent() -> Double? {
+        lock.lock()
+        defer { lock.unlock() }
+        return content
     }
 
     /// The frames presented from `start` until `end`, counted from the newest.
@@ -454,7 +499,7 @@ func measure(_ options: Options) async throws -> [String: Any] {
         let left = end - CACurrentMediaTime()
         try await Task.sleep(nanoseconds: UInt64(max(0, min(0.25, left)) * 1_000_000_000))
         let now = CACurrentMediaTime()
-        if options.slow(at: now, frames: frames.count(from:until:)) {
+        if options.slow(at: now, since: frames.firstContent(), frames: frames.count(from:until:)) {
             stopped = now
             break
         }
@@ -486,6 +531,7 @@ func measure(_ options: Options) async throws -> [String: Any] {
         "link": linkRate(linkTicks, over: captured).merging(["nominal_hz": link?.nominalHz ?? 0]) { $1 },
     ]
     if let stopped { result["stopped"] = stopped }
+    if let content = frames.firstContent() { result["first_content"] = content }
     return result
 }
 

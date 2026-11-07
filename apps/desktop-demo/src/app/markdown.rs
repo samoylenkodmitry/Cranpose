@@ -531,7 +531,7 @@ pub fn markdown_viewer_tab() {
     let request_counter = cranpose_core::rememberMutableStateOf(|| 0u64);
     let http_client = local_http_client().current();
 
-    cranpose_core::LaunchedEffect(request_counter.get(), move |scope| {
+    cranpose_core::LaunchedEffect(request_counter.get(), async move |scope| {
         let tick = request_counter.get();
         if tick == 0 {
             return;
@@ -1036,7 +1036,7 @@ fn MarkdownImage(url: String, alt: String) {
     let http_client = local_http_client().current();
 
     let effect_url = url.clone();
-    cranpose_core::LaunchedEffect(url, move |scope| {
+    cranpose_core::LaunchedEffect(url, async move |scope| {
         if let Some(bitmap) = cached_image(&effect_url) {
             state.set(ImageState::Ready(bitmap));
             return;

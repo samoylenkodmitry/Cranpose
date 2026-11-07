@@ -875,3 +875,94 @@ fn a_growing_ring_changes_only_the_area_around_its_end() {
         "the area around the end is small: {changed} pixels in {areas:?}"
     );
 }
+
+// 132 boxes that touch no other, in a grid of 12 columns and 11 rows, with
+// sizes that repeat; two in three change each frame.
+#[composable]
+fn ScatteredBoxes(captured: Step) {
+    let step = rememberMutableStateOf(|| 0u32);
+    *captured.borrow_mut() = Some(step);
+    Box(
+        Modifier::empty().fill_max_size(),
+        BoxSpec::default(),
+        move || {
+            for index in 0..132u32 {
+                cranpose_core::with_key(&index, || {
+                    let (column, row) = (index % 12, index / 12);
+                    Box(
+                        Modifier::empty()
+                            .offset(4.0 + column as f32 * 19.0, 4.0 + row as f32 * 15.0)
+                            .width(6.0 + (index * 7 % 9) as f32)
+                            .height(4.0 + (index * 5 % 7) as f32)
+                            .background(color((2 * step.value() + index) / 3, index)),
+                        BoxSpec::default(),
+                        || {},
+                    );
+                });
+            }
+        },
+    );
+}
+
+#[test]
+fn many_changed_boxes_join_into_the_same_areas_frame_after_frame() {
+    let (mut shell, captured) = shell(1.0, ScatteredBoxes);
+    let mut areas = Vec::new();
+    let mut seen = Vec::new();
+    for frame in 0..5 {
+        if frame > 0 {
+            let step = (*captured.borrow()).expect("the composition remembered the step");
+            step.set(frame);
+        }
+        shell.update();
+        shell.primary().with_renderer(|renderer| {
+            renderer.update_picture(WIDTH, HEIGHT, &mut areas);
+        });
+        if frame > 0 {
+            seen.push(
+                areas
+                    .iter()
+                    .map(|area| (area.x, area.y, area.width, area.height))
+                    .collect::<Vec<_>>(),
+            );
+        }
+    }
+    // The areas as the greedy join of the two areas that add the fewest
+    // still pixels gives them, in the order it leaves them: the pattern
+    // repeats every three frames.
+    let first = vec![
+        (194, 4, 33, 160),
+        (80, 94, 84, 7),
+        (80, 34, 33, 54),
+        (137, 109, 33, 54),
+        (80, 109, 33, 53),
+        (137, 4, 33, 85),
+        (23, 34, 33, 127),
+        (23, 4, 90, 22),
+    ];
+    let expected = vec![
+        first.clone(),
+        vec![
+            (4, 4, 12, 159),
+            (42, 4, 31, 160),
+            (156, 4, 28, 21),
+            (99, 4, 31, 51),
+            (213, 4, 14, 158),
+            (156, 139, 28, 22),
+            (156, 34, 31, 96),
+            (99, 64, 31, 96),
+        ],
+        vec![
+            (118, 139, 32, 24),
+            (118, 4, 29, 6),
+            (137, 19, 13, 113),
+            (118, 19, 12, 115),
+            (61, 4, 32, 160),
+            (175, 4, 32, 81),
+            (4, 4, 32, 159),
+            (175, 94, 32, 70),
+        ],
+        first,
+    ];
+    assert_eq!(seen, expected);
+}

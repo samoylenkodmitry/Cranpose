@@ -88,3 +88,18 @@ fn an_empty_target_stays_empty() {
     assert_eq!(resolve_url(DOC, ""), "");
     assert_eq!(resolve_url(DOC, "   "), "");
 }
+
+#[test]
+fn a_fragment_names_a_place_in_the_document_itself() {
+    assert_eq!(
+        resolve_url(
+            "https://github.com/owner/repo/blob/main/docs/guide.md",
+            "#run-on-ios"
+        ),
+        "https://github.com/owner/repo/blob/main/docs/guide.md#run-on-ios"
+    );
+    assert_eq!(
+        resolve_url("https://example.com/docs/post.md#top", "#end"),
+        "https://example.com/docs/post.md#end"
+    );
+}

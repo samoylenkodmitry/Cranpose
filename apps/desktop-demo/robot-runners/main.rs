@@ -21,6 +21,7 @@ mod output_paths;
 mod perf_contract;
 mod perf_presentation_probe;
 mod perf_robot_stats;
+mod pointer_drag;
 mod presented_window_geometry_contract;
 mod regression_robot_support;
 mod robot_exit;
@@ -71,6 +72,7 @@ runners! {
     robot_desktop_open_urls,
     robot_developer_inspector,
     robot_documentation_home,
+    robot_documentation_links,
     robot_double_click,
     robot_drag_selection,
     robot_draw_only_transition_work,
@@ -200,6 +202,7 @@ runners! {
     robot_renderer_micro_contract,
     robot_renderer_pixel_precision,
     robot_request_exit,
+    robot_backrooms_walk,
     robot_room_walk,
     robot_rotated_glass_shape,
     robot_scroll_bug,

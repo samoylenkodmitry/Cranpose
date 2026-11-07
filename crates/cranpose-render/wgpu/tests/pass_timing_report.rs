@@ -89,21 +89,50 @@ fn the_report_stays_empty_until_the_toggle_arms_timing() {
     }
 }
 
-#[test]
-fn a_rendered_scene_attributes_gpu_time_to_its_pass_labels() {
+// The report after 32 captured frames with timing armed, compiling
+// pipelines as `pipelines` says; None when the adapter cannot time passes.
+fn timed_report(
+    pipelines: support::device::Pipelines,
+) -> Option<cranpose_render_wgpu::GpuPassTimingReport> {
     if !adapter_can_time_passes() {
         eprintln!("adapter lacks TIMESTAMP_QUERY; skipping pass-timing report test");
-        return;
+        return None;
     }
     let (_lock, _toggle, renderer) =
-        support::headless_renderer_parts_configured(TimingToggle::set).expect("headless renderer");
+        support::headless_renderer_parts_configured(pipelines, TimingToggle::set)
+            .expect("headless renderer");
     let mut harness = Harness::new(renderer);
+    (0..32).map(|_| harness.frame()).last()
+}
 
-    let report = (0..32)
-        .map(|_| harness.frame())
-        .last()
-        .expect("32 captured frames");
+#[test]
+fn a_frame_drawn_while_pipelines_compile_is_timed_whole_or_rejected_whole() {
+    // A pass whose draws wait for a pipeline may leave a sample untaken,
+    // as the slot's last frame left it.
+    let Some(report) = timed_report(support::device::Pipelines::Background) else {
+        return;
+    };
+    assert!(
+        report.frames + report.invalid_frames >= 28,
+        "query readback must keep up with captured frames: {report:?}"
+    );
+    assert_eq!(report.dropped_frames, 0, "{report:?}");
+    for entry in &report.entries {
+        assert_eq!(
+            entry.passes,
+            u64::from(report.frames),
+            "a rejected frame adds none of its passes: {report:?}"
+        );
+    }
+}
 
+#[test]
+fn a_rendered_scene_attributes_gpu_time_to_its_pass_labels() {
+    // Pipelines compile where first needed, so every frame's passes draw:
+    // Metal takes no end sample of a pass whose draws wait for a pipeline.
+    let Some(report) = timed_report(support::device::Pipelines::Inline) else {
+        return;
+    };
     assert!(
         report.frames >= 28,
         "query readback must keep up with captured frames: {report:?}"

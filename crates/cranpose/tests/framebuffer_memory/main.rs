@@ -2,6 +2,8 @@
 //! microcontroller has a hundred kilobytes or so free: what frames leave
 //! behind runs it out of memory.
 
+#![allow(clippy::print_stdout, reason = "a test prints what it measured")]
+
 use std::{alloc::System, ops::Range};
 
 use cranpose::{MemoryHeadroom, SystemTheme, framebuffer::Framebuffer, prelude::*};
@@ -9,6 +11,10 @@ use cranpose_animation::{
     AnimationSpec, RepeatMode, StartOffset, infiniteRepeatable, rememberInfiniteTransition,
 };
 use stats_alloc::{INSTRUMENTED_SYSTEM, Region, StatsAlloc};
+
+#[macro_use]
+#[path = "../../../coroflow/tests/support/main_thread_test.rs"]
+mod main_thread_test;
 
 #[path = "../support/reading.rs"]
 mod reading;
@@ -131,7 +137,6 @@ fn left_behind(content: impl Fn() + 'static) -> isize {
 /// scrolls and whose panel comes and goes. With little memory left a canvas drawn again every
 /// frame holds what one drawn once does, and one bar more holds about that bar. One test: the
 /// allocator counts every thread's memory.
-#[test]
 fn screens_that_change_every_frame_leave_no_memory_behind() {
     let composed = left_behind(|| ComposedReading(TextStyle::default()));
     let drawn = left_behind(|| DrawnReading(Color::WHITE, DrawTextStyle::default().font_size));
@@ -157,3 +162,5 @@ fn screens_that_change_every_frame_leave_no_memory_behind() {
         past_full - full
     );
 }
+
+main_thread_test!(screens_that_change_every_frame_leave_no_memory_behind);

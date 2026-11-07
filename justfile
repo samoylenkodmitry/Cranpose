@@ -452,11 +452,12 @@ _size-ceiling path max what:
     fi
     echo "size budget: the {{what}} is $size bytes, within {{max}}"
 
-# The web demo's wasm after `just web`: 13.25 MiB, the size of 2026-10-29
-# (13,784,385 bytes) and about 0.8%. The text engine of #1961 added 800 KB:
-# HarfRust shapes every script on the web and read-fonts reads every outline
-# format, in place of ttf-parser's 125 KB.
-web-size-budget: (_size-ceiling "apps/desktop-demo/pkg/desktop_app_bg.wasm" "13893632" "web demo wasm")
+# The web demo's wasm after `just web`: 13.3 MiB. It was 13.25 MiB, the size
+# of 2026-10-29 (13,784,385 bytes) and about 0.8%; the Backrooms tab of #2118
+# took the demo to about 13,923,000 bytes with its rooms, shader and HUD. The
+# text engine of #1961 added 800 KB: HarfRust shapes every script on the web
+# and read-fonts reads every outline format, in place of ttf-parser's 125 KB.
+web-size-budget: (_size-ceiling "apps/desktop-demo/pkg/desktop_app_bg.wasm" "13946061" "web demo wasm")
 
 # The ESP32-S3 app image after `just esp32-build`: 3.3 MiB, the image of
 # 2026-10-29 (3,366,944 bytes) and about 2.4%. The text engine of #1961 added
@@ -584,11 +585,7 @@ test-ide:
     cargo test --profile ci -p cranpose-core --features inspection
     cargo test --release -p cranpose-core --features inspection --test integration recomposition_inspection
     cargo test --profile ci -p cranpose-macros preview_tests::
-    cargo test --profile ci -p cranpose --no-default-features --features desktop,preview embed::tests::
-    cargo test --profile ci -p cranpose --no-default-features --features desktop,preview inspection::tests::
-    cargo test --profile ci -p cranpose --no-default-features --features desktop,preview --test integration recomposition_inspection
-    cargo test --profile ci -p cranpose --no-default-features --features desktop,preview preview::tests::
-    cargo test --profile ci -p cranpose --no-default-features --features desktop,preview desktop_launcher_uses_embed_endpoint_before_event_loop
+    cargo test --profile ci -p cranpose --no-default-features --features desktop,preview -- embed::tests:: inspection::tests:: recomposition_inspection preview::tests:: desktop_launcher_uses_embed_endpoint_before_event_loop
 
 test-features: test-watchos test-localization
     cargo test --profile ci -p cranpose-core --features std-hash
@@ -674,8 +671,11 @@ test-shell-helpers: _benchmark-python ci-contract-gates
     python3 benchmarks/compose-vs-cranpose/tests/test_desktop_accounting.py
     python3 benchmarks/compose-vs-cranpose/tests/test_display_state.py
     python3 benchmarks/compose-vs-cranpose/tests/test_adb_recovery.py
+    python3 benchmarks/compose-vs-cranpose/tests/test_chrome_first_run.py
     python3 benchmarks/compose-vs-cranpose/tests/test_browser_server.py
+    python3 benchmarks/compose-vs-cranpose/tests/test_browser_tiers.py
     python3 benchmarks/compose-vs-cranpose/tests/test_starts.py
+    python3 benchmarks/compose-vs-cranpose/tests/test_release_tree.py
     {{benchmark_python}} benchmarks/compose-vs-cranpose/tests/test_parity_compare.py
     python3 scripts/perf/publish_test.py
     python3 scripts/perf/nightly_test.py
@@ -1293,7 +1293,7 @@ _disk-guard:
 # all seven on every pull request.
 
 # What a pull request is gated on. Run this before pushing.
-ci: fmt-check typos versions twin-matrix-check check-forks test clippy clippy-release clippy-optional-backends clippy-svg clippy-hyphenation clippy-robot clippy-no-atomic64 clippy-wasm doc budgets complexity-gate duplication-gate source-budgets deny shear public-api-diff test-robot-discovery test-shell-helpers test-host-lock test-ci-filters test-features test-property bench-smoke test-ci-gate-reachability test-layout platform-contracts test-robot-suite-partition test-android-accessibility-contract
+ci: fmt-check typos versions twin-matrix-check check-forks test clippy clippy-release clippy-optional-backends clippy-svg clippy-hyphenation clippy-robot clippy-no-atomic64 clippy-wasm doc budgets complexity-gate duplication-gate source-budgets deny shear public-api-diff test-robot-discovery test-shell-helpers test-host-lock test-ci-filters test-features test-property bench-smoke test-ci-gate-reachability test-layout platform-contracts test-robot-suite-partition test-android-accessibility-contract test-ide
 
 # Needs a Linux box with the X11 stack, an Android SDK and (on macOS) Xcode.
 
@@ -1331,7 +1331,7 @@ perf-frameworks serial output apks:
     python3 scripts/perf/frameworks_phone.py --serial {{serial}} --output {{output}} --apks {{apks}}
 
 # The apps that target the browser, open in Chrome on the phone: the pages in
-# `pages` (from `build_apps.sh browser`), at the browser's tier on the phone.
+# `pages` (from `build_apps.sh browser`), at the browser's tiers on the phone.
 perf-browser serial output pages:
     python3 benchmarks/compose-vs-cranpose/frameworks.py --serial {{serial}} --output {{output}} --browser {{pages}} --main "$(git rev-parse HEAD)"
 

@@ -4,249 +4,82 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::{
     future::Future,
-    pin::Pin,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
 };
 
-use crate::{Key, RuntimeHandle, TaskHandle, effect_key::EffectKey, with_current_composer};
-
-trait EffectKeySlot {
-    fn key(&self) -> &Option<EffectKey>;
-    fn key_mut(&mut self) -> &mut Option<EffectKey>;
-
-    fn should_run<K: PartialEq + 'static>(&self, keys: &K) -> bool {
-        self.key()
-            .as_ref()
-            .is_none_or(|current| !current.holds(keys))
-    }
-
-    fn set_key(&mut self, key: EffectKey) {
-        *self.key_mut() = Some(key);
-    }
-}
+use crate::{
+    CoroutineScope, Key, Owned, RuntimeHandle, TaskSite, effect_key::EffectKey,
+    task_site::TaskLabel, with_current_composer,
+};
 
 #[derive(Default)]
 struct LaunchedEffectState {
     key: Option<EffectKey>,
-    cancel: Option<LaunchedEffectCancellation>,
-}
-
-struct LaunchedEffectCancellation {
-    #[cfg(not(target_arch = "wasm32"))]
-    runtime: RuntimeHandle,
-    active: Arc<AtomicBool>,
-    #[cfg(not(target_arch = "wasm32"))]
-    continuations: Rc<RefCell<Vec<u64>>>,
-}
-
-/// Where an effect was written, carried onto the task it spawns.
-///
-/// A leak report that can only say "one task is still queued" names nothing:
-/// every run prints the same number and no run says which effect it was. This
-/// is what turns that count into a place to look, and it stays a pair of plain
-/// fields so carrying it costs nothing until a task is actually spawned.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct TaskSite {
-    /// The path of the source file, as `file!()` gives it.
-    pub file: &'static str,
-    /// The line number in `file`, counted from 1.
-    pub line: u32,
-}
-
-impl TaskSite {
-    /// The site a macro captured with `file!()` and `line!()`.
-    pub const fn new(file: &'static str, line: u32) -> Self {
-        Self { file, line }
-    }
-}
-
-impl Default for TaskSite {
-    fn default() -> Self {
-        Self::new("unknown", 0)
-    }
-}
-
-impl std::fmt::Display for TaskSite {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(formatter, "{}:{}", self.file, self.line)
-    }
-}
-
-impl From<&'static std::panic::Location<'static>> for TaskSite {
-    fn from(location: &'static std::panic::Location<'static>) -> Self {
-        Self::new(location.file(), location.line())
-    }
-}
-
-#[derive(Default)]
-struct LaunchedEffectAsyncState {
-    key: Option<EffectKey>,
-    cancel: Option<LaunchedEffectCancellation>,
-    task: Option<TaskHandle>,
-    site: TaskSite,
-}
-
-impl EffectKeySlot for LaunchedEffectState {
-    fn key(&self) -> &Option<EffectKey> {
-        &self.key
-    }
-
-    fn key_mut(&mut self) -> &mut Option<EffectKey> {
-        &mut self.key
-    }
+    scope: Option<LaunchedEffectScope>,
 }
 
 impl LaunchedEffectState {
-    fn launch(
-        &mut self,
-        runtime: RuntimeHandle,
-        effect: impl FnOnce(LaunchedEffectScope) + 'static,
-    ) {
-        self.cancel_current();
-        let active = Arc::new(AtomicBool::new(true));
-        #[cfg(not(target_arch = "wasm32"))]
-        let continuations = Rc::new(RefCell::new(Vec::new()));
-        self.cancel = Some(LaunchedEffectCancellation {
-            #[cfg(not(target_arch = "wasm32"))]
-            runtime: runtime.clone(),
-            active: Arc::clone(&active),
-            #[cfg(not(target_arch = "wasm32"))]
-            continuations: Rc::clone(&continuations),
-        });
-        let scope = LaunchedEffectScope {
-            active: Arc::clone(&active),
-            runtime: runtime.clone(),
-            #[cfg(not(target_arch = "wasm32"))]
-            continuations,
-        };
-        runtime.enqueue_ui_task(Box::new(move || effect(scope)));
-    }
-
-    fn cancel_current(&mut self) {
-        if let Some(cancel) = self.cancel.take() {
-            cancel.cancel();
-        }
-    }
-}
-
-impl LaunchedEffectCancellation {
-    fn cancel(&self) {
-        self.active.store(false, Ordering::SeqCst);
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            let mut pending = self.continuations.borrow_mut();
-            for id in pending.drain(..) {
-                self.runtime.cancel_ui_cont(id);
-            }
-        }
-    }
-}
-
-impl EffectKeySlot for LaunchedEffectAsyncState {
-    fn key(&self) -> &Option<EffectKey> {
-        &self.key
-    }
-
-    fn key_mut(&mut self) -> &mut Option<EffectKey> {
-        &mut self.key
-    }
-}
-
-impl LaunchedEffectAsyncState {
-    fn set_site(&mut self, site: TaskSite) {
-        self.site = site;
-    }
-
-    fn launch(
-        &mut self,
-        runtime: RuntimeHandle,
-        mk_future: impl FnOnce(LaunchedEffectScope) -> Pin<Box<dyn Future<Output = ()>>> + 'static,
-    ) {
-        self.cancel_current();
-        let active = Arc::new(AtomicBool::new(true));
-        #[cfg(not(target_arch = "wasm32"))]
-        let continuations = Rc::new(RefCell::new(Vec::new()));
-        self.cancel = Some(LaunchedEffectCancellation {
-            #[cfg(not(target_arch = "wasm32"))]
-            runtime: runtime.clone(),
-            active: Arc::clone(&active),
-            #[cfg(not(target_arch = "wasm32"))]
-            continuations: Rc::clone(&continuations),
-        });
-        let scope = LaunchedEffectScope {
-            active: Arc::clone(&active),
-            runtime: runtime.clone(),
-            #[cfg(not(target_arch = "wasm32"))]
-            continuations,
-        };
-        let future = mk_future(scope.clone());
-        let active_flag = Arc::clone(&scope.active);
-        crate::label_next_ui_task(self.site.to_string());
-        match runtime.spawn_ui(async move {
-            future.await;
-            active_flag.store(false, Ordering::SeqCst);
-        }) {
-            Some(handle) => {
-                self.task = Some(handle);
-            }
-            None => {
-                active.store(false, Ordering::SeqCst);
-                self.cancel = None;
-            }
-        }
-    }
-
-    fn cancel_current(&mut self) {
-        if let Some(handle) = self.task.take() {
-            handle.cancel();
-        }
-        if let Some(cancel) = self.cancel.take() {
-            cancel.cancel();
-        }
+    fn should_run<K: PartialEq + 'static>(&self, keys: &K) -> bool {
+        self.key.as_ref().is_none_or(|current| !current.holds(keys))
     }
 }
 
 impl Drop for LaunchedEffectState {
     fn drop(&mut self) {
-        self.cancel_current();
+        if let Some(scope) = self.scope.take() {
+            scope.cancel();
+        }
     }
 }
 
-impl Drop for LaunchedEffectAsyncState {
-    fn drop(&mut self) {
-        self.cancel_current();
-    }
-}
-
-/// The scope a [`LaunchedEffect`] receives. It reports whether the effect is still active and
-/// queues follow-up work on the UI thread.
+/// The scope a [`LaunchedEffect`] receives: the effect's coroutine scope.
+///
+/// The effect is cancelled when its keys change or its call site leaves the
+/// composition. The cancellation drops the effect's future where it waits.
+/// No line after that `.await` runs. The cancellation also cancels every task
+/// the scope launched.
 #[derive(Clone)]
 pub struct LaunchedEffectScope {
     active: Arc<AtomicBool>,
     runtime: RuntimeHandle,
+    coroutines: CoroutineScope,
     #[cfg(not(target_arch = "wasm32"))]
     continuations: Rc<RefCell<Vec<u64>>>,
 }
 
 impl LaunchedEffectScope {
-    #[cfg(not(target_arch = "wasm32"))]
-    fn track_continuation(&self, id: u64) {
-        self.continuations.borrow_mut().push(id);
+    fn new(runtime: RuntimeHandle) -> Self {
+        Self {
+            active: Arc::new(AtomicBool::new(true)),
+            coroutines: CoroutineScope::new(Some(runtime.clone())),
+            runtime,
+            #[cfg(not(target_arch = "wasm32"))]
+            continuations: Rc::default(),
+        }
+    }
+
+    fn cancel(&self) {
+        self.active.store(false, Ordering::SeqCst);
+        self.coroutines.close();
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let pending = std::mem::take(&mut *self.continuations.borrow_mut());
+            for id in pending {
+                self.runtime.cancel_ui_cont(id);
+            }
+        }
     }
 
     #[cfg(not(target_arch = "wasm32"))]
     fn release_continuation(&self, id: u64) {
-        let mut continuations = self.continuations.borrow_mut();
-        if let Some(index) = continuations.iter().position(|entry| *entry == id) {
-            continuations.remove(index);
-        }
+        self.continuations.borrow_mut().retain(|entry| *entry != id);
     }
 
-    /// Returns `true` until the effect is cancelled, which happens when its keys change or its call
-    /// site leaves the composition.
+    /// Returns `true` until the effect is cancelled. The effect is cancelled
+    /// when its keys change or its call site leaves the composition.
     pub fn is_active(&self) -> bool {
         self.active.load(Ordering::SeqCst)
     }
@@ -256,45 +89,41 @@ impl LaunchedEffectScope {
         self.runtime.clone()
     }
 
-    /// Runs a follow-up `LaunchedEffect` task on the UI thread.
+    /// Waits for the next frame, then calls `on_frame` with the frame time in
+    /// nanoseconds and returns what it returns. Compose's `withFrameNanos`.
+    /// Await it in a loop to run once per frame:
     ///
-    /// The provided closure executes on the runtime thread and may freely
-    /// capture `Rc`/`RefCell` state. This must only be called from the UI
-    /// thread, typically inside another effect callback.
-    pub fn launch(&self, task: impl FnOnce(Self) + 'static) {
-        if !self.is_active() {
-            return;
-        }
-        let scope = self.clone();
-        self.runtime.enqueue_ui_task(Box::new(move || {
-            if scope.is_active() {
-                task(scope);
-            }
-        }));
+    /// ```ignore
+    /// LaunchedEffect((), async move |scope| loop {
+    ///     scope.with_frame_nanos(|nanos| time.set(nanos)).await;
+    /// });
+    /// ```
+    #[cfg(feature = "internal")]
+    pub async fn with_frame_nanos<R>(&self, on_frame: impl FnOnce(u64) -> R) -> R {
+        on_frame(self.runtime.frame_clock().next_frame().await)
     }
 
-    /// Posts UI-only work that will execute on the runtime thread.
-    ///
-    /// The closure never crosses threads, so it may capture non-`Send` values.
-    /// Callers must invoke this from the UI thread.
-    pub fn post_ui(&self, task: impl FnOnce() + 'static) {
-        if !self.is_active() {
-            return;
-        }
-        let active = Arc::clone(&self.active);
-        self.runtime.enqueue_ui_task(Box::new(move || {
-            if active.load(Ordering::SeqCst) {
-                task();
-            }
-        }));
+    /// Waits for the next frame, then calls `on_frame` with the frame time in
+    /// milliseconds and returns what it returns. Compose's `withFrameMillis`.
+    #[cfg(feature = "internal")]
+    pub async fn with_frame_millis<R>(&self, on_frame: impl FnOnce(u64) -> R) -> R {
+        self.with_frame_nanos(|nanos| on_frame(nanos / 1_000_000))
+            .await
+    }
+
+    /// Launches `future` on the UI thread as a child of the effect, as
+    /// Compose's `launch` inside a `LaunchedEffect` does: the effect's
+    /// cancellation cancels it too.
+    pub fn launch(&self, future: impl Future<Output = ()> + 'static) {
+        self.coroutines.launch(future);
     }
 
     /// Runs background work and delivers results to the UI.
     ///
-    /// On native targets, `work` runs on a worker thread and its future is
-    /// driven to completion there. On WASM, `work` runs as a task on the
-    /// browser event loop. The `on_ui` continuation always runs on the runtime
-    /// thread, so it may capture `Rc`/`RefCell` state safely.
+    /// On native targets, `work` runs on a worker thread. Its future runs to
+    /// completion there. The `on_ui` continuation runs on the runtime thread.
+    /// It may capture `Rc` and `RefCell` state. It does not run once the
+    /// effect is cancelled.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn launch_background<T, Work, Ui, Fut>(&self, work: Work, on_ui: Ui)
     where
@@ -309,13 +138,11 @@ impl LaunchedEffectScope {
         let dispatcher = self.runtime.dispatcher();
         let active_for_thread = Arc::clone(&self.active);
         let continuation_scope = self.clone();
-        let continuation_active = Arc::clone(&self.active);
         let id_cell = Rc::new(Cell::new(0));
         let id_for_closure = Rc::clone(&id_cell);
         let continuation = move |value: T| {
-            let id = id_for_closure.get();
-            continuation_scope.release_continuation(id);
-            if continuation_active.load(Ordering::SeqCst) {
+            continuation_scope.release_continuation(id_for_closure.get());
+            if continuation_scope.is_active() {
                 on_ui(value);
             }
         };
@@ -324,7 +151,7 @@ impl LaunchedEffectScope {
             return;
         };
         id_cell.set(cont_id);
-        self.track_continuation(cont_id);
+        self.continuations.borrow_mut().push(cont_id);
 
         std::thread::spawn(move || {
             let token = CancelToken::new(Arc::clone(&active_for_thread));
@@ -338,11 +165,9 @@ impl LaunchedEffectScope {
 
     /// Runs background work and delivers results to the UI.
     ///
-    /// On native targets, `work` runs on a worker thread and its future is
-    /// driven to completion there. On the web, `work` runs as a task on the
-    /// browser event loop, and under Emscripten as a task of the runtime. The
-    /// `on_ui` continuation always runs on the runtime thread, so it may
-    /// capture `Rc`/`RefCell` state safely.
+    /// On the web, `work` runs as a child task of the effect on the runtime
+    /// thread. The `on_ui` continuation runs on the same thread. It does not
+    /// run once the effect is cancelled.
     #[cfg(target_arch = "wasm32")]
     pub fn launch_background<T, Work, Ui, Fut>(&self, work: Work, on_ui: Ui)
     where
@@ -354,26 +179,13 @@ impl LaunchedEffectScope {
         if !self.is_active() {
             return;
         }
-        let active_for_task = Arc::clone(&self.active);
-        let scope = self.clone();
-        let task = async move {
-            let token = CancelToken::new(Arc::clone(&active_for_task));
+        let token = CancelToken::new(Arc::clone(&self.active));
+        self.launch(async move {
             let value = work(token.clone()).await;
-            if token.is_cancelled() {
-                return;
+            if token.is_active() {
+                on_ui(value);
             }
-            scope.post_ui(move || {
-                if token.is_active() {
-                    on_ui(value);
-                }
-            });
-        };
-        #[cfg(target_os = "unknown")]
-        wasm_bindgen_futures::spawn_local(task);
-        #[cfg(target_os = "emscripten")]
-        if self.runtime.spawn_ui(task).is_none() {
-            log::warn!("cranpose: background work launched without a runtime");
-        }
+        });
     }
 }
 
@@ -403,83 +215,77 @@ impl CancelToken {
     }
 }
 
+// Cancels the effect that `state` runs, if any. Opens the scope of the next.
+// The old scope is cancelled outside the slot's borrow. Its cancellation
+// drops its futures and what they hold.
+fn restart(state: Owned<LaunchedEffectState>, runtime: RuntimeHandle) -> LaunchedEffectScope {
+    let scope = LaunchedEffectScope::new(runtime);
+    let previous = state.update(|state| state.scope.replace(scope.clone()));
+    if let Some(previous) = previous {
+        previous.cancel();
+    }
+    scope
+}
+
 /// Implements [`LaunchedEffect`] for a call site that has already computed its group key. Call
 /// `LaunchedEffect` instead.
+///
+/// `site` is where the effect was written. It travels onto the task the effect
+/// spawns. A task that the runtime still holds then names the effect that
+/// started it.
 #[doc(hidden)]
-pub fn __launched_effect_impl<K, F>(group_key: Key, keys: K, effect: F)
+pub fn __launched_effect_impl<K, F, Fut>(group_key: Key, site: TaskSite, keys: K, block: F)
 where
     K: PartialEq + 'static,
-    F: FnOnce(LaunchedEffectScope) + 'static,
+    F: FnOnce(LaunchedEffectScope) -> Fut + 'static,
+    Fut: Future<Output = ()> + 'static,
 {
     with_current_composer(|composer| {
         let state = composer.remember_effect::<LaunchedEffectState>(group_key);
         if state.with(|state| state.should_run(&keys)) {
             let key = EffectKey::new(keys);
-            state.update(|state| state.set_key(key));
+            state.update(|state| state.key = Some(key));
             let runtime = composer.runtime_handle();
-            let mut effect_opt = Some(effect);
             composer.register_side_effect(move || {
-                if let Some(effect) = effect_opt.take() {
-                    state.update(|state| state.launch(runtime.clone(), effect));
-                }
+                let scope = restart(state, runtime);
+                let future = Box::pin(block(scope.clone()));
+                scope
+                    .coroutines
+                    .launch_labelled(future, TaskLabel::Site(site));
             });
         }
     });
 }
 
-/// Runs `effect` when this call site first enters composition, and again
-/// whenever `keys` no longer equals the value it ran with last time.
+/// Runs `block` as a coroutine when this call site first enters composition,
+/// as Jetpack Compose's `LaunchedEffect` does. It runs `block` again whenever
+/// `keys` no longer equals the value of the last run.
 ///
-/// `keys` may be a tuple to depend on more than one value, matching Jetpack
-/// Compose's `LaunchedEffect(vararg keys)`.
+/// ```ignore
+/// LaunchedEffect(line, async move |_| {
+///     for typed in 1..=length {
+///         delay(LETTER).await;
+///         letters.set(typed);
+///     }
+/// });
+/// ```
+///
+/// A change of `keys` cancels the running coroutine. The call site leaving the
+/// composition cancels it too. The coroutine stops where it awaits. No line
+/// after that `.await` runs. `keys` may be a tuple to depend on more than one
+/// value, as Compose's `LaunchedEffect(vararg keys)` does.
 #[expect(non_snake_case, reason = "names follow Compose's casing")]
 #[track_caller]
-pub fn LaunchedEffect<K, F>(keys: K, effect: F)
+pub fn LaunchedEffect<K, F, Fut>(keys: K, block: F)
 where
     K: PartialEq + 'static,
-    F: FnOnce(LaunchedEffectScope) + 'static,
+    F: FnOnce(LaunchedEffectScope) -> Fut + 'static,
+    Fut: Future<Output = ()> + 'static,
 {
-    __launched_effect_impl(crate::caller_location_key(), keys, effect);
-}
-
-/// `site` is where the effect was written. It travels onto the task the effect
-/// spawns, so a task the runtime is still holding says which effect started it.
-pub fn __launched_effect_async_impl<K, F>(group_key: Key, site: TaskSite, keys: K, mk_future: F)
-where
-    K: PartialEq + 'static,
-    F: FnOnce(LaunchedEffectScope) -> Pin<Box<dyn Future<Output = ()>>> + 'static,
-{
-    with_current_composer(|composer| {
-        let state = composer.remember_effect::<LaunchedEffectAsyncState>(group_key);
-        if state.with(|state| state.should_run(&keys)) {
-            let key = EffectKey::new(keys);
-            state.update(|state| {
-                state.set_key(key);
-                state.set_site(site);
-            });
-            let runtime = composer.runtime_handle();
-            let mut mk_future_opt = Some(mk_future);
-            composer.register_side_effect(move || {
-                if let Some(mk_future) = mk_future_opt.take() {
-                    state.update(|state| {
-                        state.launch(runtime.clone(), mk_future);
-                    });
-                }
-            });
-        }
-    });
-}
-
-/// Like [`LaunchedEffect`], but `mk_future` builds the future to drive rather
-/// than receiving a scope to call back into synchronously.
-#[expect(non_snake_case, reason = "names follow Compose's casing")]
-#[track_caller]
-pub fn LaunchedEffectAsync<K, F>(keys: K, mk_future: F)
-where
-    K: PartialEq + 'static,
-    F: FnOnce(LaunchedEffectScope) -> Pin<Box<dyn Future<Output = ()>>> + 'static,
-{
-    let caller = std::panic::Location::caller();
-    let group_key = crate::location_key(caller.file(), caller.line(), caller.column());
-    __launched_effect_async_impl(group_key, TaskSite::from(caller), keys, mk_future);
+    __launched_effect_impl(
+        crate::caller_location_key(),
+        std::panic::Location::caller().into(),
+        keys,
+        block,
+    );
 }

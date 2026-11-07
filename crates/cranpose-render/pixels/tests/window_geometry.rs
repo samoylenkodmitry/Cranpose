@@ -84,7 +84,7 @@ fn shell(sink: &Rc<Cell<Rect>>) -> (AppShell<PixelsRenderer>, (Scroll, Reports))
             ScrolledRows(
                 (Rc::clone(&content.0), Rc::clone(&content.1)),
                 Rc::clone(&sink),
-            )
+            );
         },
         (WIDTH, HEIGHT),
         (WIDTH as f32, HEIGHT as f32),

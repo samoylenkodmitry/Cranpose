@@ -110,17 +110,21 @@ wasm_page() {
 # Cranpose's page, built as every Cranpose web app's release is: built once,
 # opened in headless Chrome to record the pipelines its first screen draws
 # with, and built again embedding them, so the page builds them as it starts
-# (scripts/web/record_first_screen.mjs). It records each viewport at the load
-# the gauntlet opens there: tier 8 on a phone (frameworks.py) and 16 in a
-# desktop window (the nightly's desktop.py --browser). A recording that fails
-# leaves the first build.
+# (scripts/web/record_first_screen.mjs), with the exact GLSL of the WebGL
+# stages they were built with beside its wasm (cranpose-first-screen-glsl).
+# It records each viewport at the load the gauntlet opens there: tier 8 on a
+# phone (frameworks.py) and 16 in a desktop window (the nightly's desktop.py
+# --browser). A recording that fails leaves the first build.
 cranpose_page() {
     wasm_page cranpose cranpose-app "$@"
-    local records=$here/cranpose-app/target/first_screen_pipelines.bin
+    local recorded=$here/cranpose-app/target/first-screen
     local node
     node=$(command -v node || echo /opt/homebrew/bin/node)
-    if "$node" "$here/../../scripts/web/record_first_screen.mjs" "$here/browser-dist" cranpose/index.html "$records" tier=8 tier=16; then
-        CRANPOSE_FIRST_SCREEN_PIPELINES=$records wasm_page cranpose cranpose-app "$@"
+    if "$node" "$here/../../scripts/web/record_first_screen.mjs" "$here/browser-dist" cranpose/index.html "$recorded" tier=8 tier=16; then
+        CRANPOSE_FIRST_SCREEN_PIPELINES=$recorded/first_screen_pipelines.bin wasm_page cranpose cranpose-app "$@"
+        cargo run -q --manifest-path "$here/../../Cargo.toml" -p cranpose-gl-templates \
+            --bin cranpose-first-screen-glsl -- \
+            "$recorded/first_screen_stages.txt" "$here/browser-dist/cranpose/pkg/first_screen_glsl.txt"
     else
         echo "cranpose-web: recording its first screen failed; the page builds its pipelines in its first frame" >&2
     fi
@@ -328,6 +332,10 @@ release)
         git -C "$here" worktree prune
         git -C "$here" worktree add -q --force --detach "$tree" "$tag"
     fi
+    # The tree belongs to the checkout of the runner that made it. Another
+    # runner's checkout may not have fetched the tag yet, so the tree takes
+    # the tag from this checkout.
+    git -C "$tree" fetch -q "$(git -C "$here" rev-parse --show-toplevel)" "+refs/tags/$tag:refs/tags/$tag"
     # Forced: the last build rewrote cranpose-app/Cargo.lock in this tree, and a
     # new release that differs in it would refuse the checkout.
     git -C "$tree" checkout -q -f --detach "$tag"

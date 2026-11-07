@@ -91,12 +91,12 @@ impl Rect {
 
     /// Creates a rectangle of `size` with its top-left corner at the origin.
     pub fn from_size(size: Size) -> Self {
-        Self {
-            x: 0.0,
-            y: 0.0,
-            width: size.width,
-            height: size.height,
-        }
+        Self::from_origin_size(Point::ZERO, size)
+    }
+
+    /// The rectangle's width and height, as Compose's `Rect.size`.
+    pub fn size(&self) -> Size {
+        Size::new(self.width, self.height)
     }
 
     /// Returns the rectangle moved by `dx` horizontally and `dy` vertically.
@@ -1300,10 +1300,7 @@ impl<'a> DrawScopeDefault<'a> {
         let inner = insets.inset_rect(self.size);
         let mut recording = CommandRecording::default();
         let mut scope = DrawScopeDefault::with_storage(
-            Size {
-                width: inner.width,
-                height: inner.height,
-            },
+            inner.size(),
             self.text_measurer.clone(),
             &mut recording,
         );

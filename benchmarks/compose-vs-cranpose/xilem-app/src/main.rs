@@ -452,7 +452,11 @@ fn card_footer(card: usize, s: f32) -> impl WidgetView<App> + use<> {
 }
 
 /// Levels nested inside one another, each a row of three labels above the
-/// next level. A level holds the next, so the views are boxed.
+/// next level. A level holds the next, so the views are boxed. Each level
+/// takes the column's width through its own `expand_width`: a column that
+/// fills its children's width lays each child out twice, so nested levels
+/// would take 2^depth layouts (Masonry 0.4's `Flex` says so beside that
+/// second layout), and the 80 levels of tier 16 never finish.
 fn level(cluster: usize, remaining: usize, s: f32) -> Box<AnyWidgetView<App>> {
     let chips = (0..3)
         .map(|chip| {
@@ -478,7 +482,7 @@ fn level(cluster: usize, remaining: usize, s: f32) -> Box<AnyWidgetView<App>> {
                 inner,
             ))
             .gap(px(s))
-            .cross_axis_alignment(CrossAxisAlignment::Fill),
+            .cross_axis_alignment(CrossAxisAlignment::Start),
         )
         .expand_width()
         .padding(Padding {

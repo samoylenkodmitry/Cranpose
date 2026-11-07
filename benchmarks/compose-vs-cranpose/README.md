@@ -407,7 +407,7 @@ release (`cranpose-release`, once a release draws the gauntlet) and main.
    `just perf-frameworks` installs
    macm3's Android builds beside Cranpose's release and main and runs
    `frameworks.py`. `just perf-browser` then opens macm3's browser builds in
-   Chrome on the phone at tier 8.
+   Chrome on the phone at tier 8, then at tier 10 (below).
 
 Each run names the version of every framework it measured: the pins
 `versions.py` reads, the Flutter SDK and .NET MAUI workload `build_apps.sh`
@@ -771,6 +771,14 @@ shader for gradients does not compile on the Mate's GPU driver, and its page
 stops at start. Raising a browser's tier starts a new series. The Cranpose
 column above ran on WebGL2, before the page took WebGPU where the browser has
 it.
+
+**The heavier tier.** The phone's run measures tier 10 too, as the scenario
+`gauntlet-tier-10`. At tier 8 Cranpose's page draws about 56 fps with about 4
+frames over 25 ms in 20 s. At tier 10 the page settles in one of two states:
+about 55 fps with a few such frames and the GPU at about 480 MHz, or about
+48 fps with over 100 of them and the GPU at about 380 MHz (2026-11-07, 20 s
+legs). The second state is a loss to fix, issue #2059. The card shows each
+night which state the page took.
 
 ## Findings
 

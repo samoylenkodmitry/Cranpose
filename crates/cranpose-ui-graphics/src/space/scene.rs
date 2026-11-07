@@ -201,7 +201,7 @@ impl Light {
 /// children's mesh surfaces through.
 ///
 /// A scene inside another scene's space is a doorway into a space of its
-/// own: the rect its node takes in its frame opens onto that space, which
+/// own: the rect its layer covers in its frame opens onto that space, which
 /// lies behind it, placed so the doorway stands where the inner scene's
 /// camera stands (see [`Camera::doorway`]). The window's eye sees through
 /// doorways from the space it stands in, as deep as they show on screen,
@@ -282,12 +282,12 @@ pub enum Material {
 ///
 /// and returns the colour, premultiplied. `ShadedSurface` holds, in the
 /// mesh's own coordinates: `color`, the content's colour there,
-/// premultiplied; `position`; `normal`, of length one, on the side the eye
-/// sees; `to_eye` and `to_light`, of length one, toward the eye and toward
-/// the light, which is zero without a light; `lit`, how much of the light
-/// reaches the point, from 0 in full shadow to 1; and `ambient`, the
-/// light's ambient share, 1 without a light. `shaded_param(index)` reads
-/// `params[index]`. The renderer puts
+/// premultiplied; `position`; `eye`; `normal`, of length one, on the side
+/// the eye sees; `to_eye` and `to_light`, of length one, toward the eye
+/// and toward the light, which is zero without a light; `lit`, how much of
+/// the light reaches the point, from 0 in full shadow to 1; and `ambient`,
+/// the light's ambient share, 1 without a light. `shaded_param(index)`
+/// reads `params[index]`. The renderer puts
 /// [`MESH_SHADED_PRELUDE_WGSL`](crate::framework_shaders::MESH_SHADED_PRELUDE_WGSL),
 /// which declares them, before it.
 #[derive(Clone, Debug)]

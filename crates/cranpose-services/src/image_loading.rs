@@ -20,7 +20,7 @@ use std::{
 };
 
 use cranpose_core::{
-    LaunchedEffectAsync, State, collections::map::HashMap, mutableStateOf, rememberKeyed,
+    LaunchedEffect, State, collections::map::HashMap, mutableStateOf, rememberKeyed,
 };
 use cranpose_macros::composable;
 use cranpose_ui_graphics::ImageBitmap;
@@ -341,18 +341,16 @@ pub fn rememberAsyncImage(request: ImageRequest) -> State<ImageLoadState> {
         mutableStateOf(cached.map_or(ImageLoadState::Loading, ImageLoadState::Ready))
     });
     let client = crate::http::local_http_client().current();
-    LaunchedEffectAsync(request.clone(), move |_| {
-        Box::pin(async move {
-            if let Some(bitmap) = loader.cached(&request) {
-                state.set(ImageLoadState::Ready(bitmap));
-                return;
-            }
-            state.set(ImageLoadState::Loading);
-            state.set(match loader.load(client, &request).await {
-                Ok(bitmap) => ImageLoadState::Ready(bitmap),
-                Err(error) => ImageLoadState::Failed(error),
-            });
-        })
+    LaunchedEffect(request.clone(), async move |_| {
+        if let Some(bitmap) = loader.cached(&request) {
+            state.set(ImageLoadState::Ready(bitmap));
+            return;
+        }
+        state.set(ImageLoadState::Loading);
+        state.set(match loader.load(client, &request).await {
+            Ok(bitmap) => ImageLoadState::Ready(bitmap),
+            Err(error) => ImageLoadState::Failed(error),
+        });
     });
     state.as_state()
 }

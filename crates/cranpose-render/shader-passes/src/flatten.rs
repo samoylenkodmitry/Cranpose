@@ -133,11 +133,11 @@ macro_rules! operands {
 
 /// What keeps a stage in its folded form.
 #[derive(Debug)]
-pub(crate) struct Unsupported(pub(crate) &'static str);
+pub struct Unsupported(pub &'static str);
 
 /// Flattens every entry point of `module`. On an error the module is left
 /// part flattened: the caller builds the stage again without flattening.
-pub(crate) fn flatten(module: &mut Module) -> Result<(), Unsupported> {
+pub fn flatten(module: &mut Module) -> Result<(), Unsupported> {
     rebuild_entry_points(module, |module, function| {
         let mut current = inline_and_split(module, function)?;
         // Each rebuild folds what the last one made constant, and a branch
@@ -807,7 +807,7 @@ fn is_statement_result(expression: &Expression) -> bool {
 /// The boolean the constants give the source expression `handle`, if any.
 fn decided_bool(frame: &Frame, handle: Handle<Expression>) -> Option<bool> {
     match frame.decided[handle.index()] {
-        Some(crate::shader_fold::Value::Bool(value)) => Some(value),
+        Some(crate::fold::Value::Bool(value)) => Some(value),
         _ => None,
     }
 }
@@ -839,7 +839,7 @@ fn undecided_side(
 struct Frame<'f> {
     source: &'f Function,
     /// By source expression: the value its constants give it.
-    decided: Vec<Option<crate::shader_fold::Value>>,
+    decided: Vec<Option<crate::fold::Value>>,
     /// By source expression: its copy.
     copies: Vec<Option<Handle<Expression>>>,
     /// By source local: its copy, made on first use.
@@ -858,7 +858,7 @@ struct Inlined {
 impl<'f> Frame<'f> {
     fn new(
         source: &'f Function,
-        decided: Vec<Option<crate::shader_fold::Value>>,
+        decided: Vec<Option<crate::fold::Value>>,
         inlined: Option<Inlined>,
     ) -> Self {
         Self {
@@ -887,7 +887,7 @@ struct Builder<'m> {
     /// and taken out while it is being inlined.
     callee_bodies: Vec<Option<Block>>,
     /// By function: what its constants decide in it, kept as its body is.
-    callee_decided: Vec<Option<Vec<Option<crate::shader_fold::Value>>>>,
+    callee_decided: Vec<Option<Vec<Option<crate::fold::Value>>>>,
 }
 
 impl<'m> Builder<'m> {
@@ -915,7 +915,7 @@ impl<'m> Builder<'m> {
             callee_bodies: vec![None; module.functions.len()],
             callee_decided: vec![None; module.functions.len()],
         };
-        let mut frame = Frame::new(source, crate::shader_fold::decided(module, source), None);
+        let mut frame = Frame::new(source, crate::fold::decided(module, source), None);
         builder.out.body = builder.block(&mut frame, &source.body)?;
         Ok(builder.out)
     }
@@ -1588,7 +1588,7 @@ impl<'m> Builder<'m> {
         let leaves_loop = returns_before_end(&callee_body);
         let decided = self.callee_decided[function.index()]
             .take()
-            .unwrap_or_else(|| crate::shader_fold::decided(self.module, callee));
+            .unwrap_or_else(|| crate::fold::decided(self.module, callee));
         let mut inner = Frame::new(
             callee,
             decided,

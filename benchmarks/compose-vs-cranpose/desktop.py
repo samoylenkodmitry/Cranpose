@@ -12,7 +12,10 @@ turn, round after round, as `frameworks.py` measures phones, and the run is a
 `frameworks` run `scripts/perf/publish.py` publishes. In a round each app
 starts twice: first after what the apps keep between launches is removed, as
 an install leaves them (`APP_STATE`; in the browser, a new Chrome profile),
-then a second time. A leg that fails, or in
+from an install of its program that macOS never ran (`fresh_install`), then
+a second time. In the browser, Chrome opens once on no app's page before the
+first round (`warm_chrome`), so no app's leg is Chrome's first launch of the
+run. A leg that fails, or in
 which other processes spent more than `--max-others` cores, is measured again,
 up to three times; an app no attempt measured leaves its leg out. A leg
 whose frame rate is more than 1.5 times off the app's earlier legs is measured
@@ -21,8 +24,8 @@ is one launch measured from its start for `--run` seconds, the same span for
 every app, with nothing left out: the launch, the first frame and the first
 seconds count as the rest of the run does, and the frames of every second
 are kept. A leg whose app presented fewer than `SLOW_FPS` frames in each of
-`SLOW_SECONDS` seconds in a row ends there, marked `stopped`. A
-disturbed leg stays in the run, marked, out of the medians.
+`SLOW_SECONDS` seconds in a row since its first frame ends there, marked
+`stopped`. A disturbed leg stays in the run, marked, out of the medians.
 
 Before the first leg and after the last, `FrameCount.app` reports the state of
 the main display and how often the window server composites it for a window
@@ -50,14 +53,13 @@ a removable volume, and the checkout may be on one.
 """
 
 import argparse
+import bisect
 import ctypes
 import hashlib
-import http.server
 import json
 import os
 import shutil
 import signal
-import socketserver
 import statistics
 import subprocess
 import sys
@@ -164,16 +166,23 @@ INSTALLED_WITH_DIRECTORY = {'avalonia'}
 
 
 def fresh_install(name, stage, label):
-    """`name`'s program copied where no launch has run it, as installing the
-    app leaves it, and the path to launch. macOS checks a program file the
-    first time it runs: 190 to 320 ms before a fresh copy of the 10 MB
-    Cranpose bench reached its `main` on macm3, 12 ms after. Without a copy
-    only the apps rebuilt since an earlier run paid it, Cranpose's every
-    night. The app's bundle, or its directory where its libraries lie beside
-    it, is copied whole."""
+    """`name`'s program installed as an install of a new build leaves it, and
+    the path to launch. macOS checks a program the first time it runs: on
+    macm3 a 12 MB program reached its `main` 270 to 280 ms after its launch
+    when macOS never ran it, 97 to 100 ms after when it ran a copy of it
+    before, 2 to 9 ms after when it ran that file before (24 MB: 380, 140 and
+    9 ms; 3 MB: 214, 80 and 8 ms). It checks a library the same way: a
+    program loading a never-run 12 MB library reached its `main` 312 to 337
+    ms after its launch, 206 to 224 ms with a library it ran before. The
+    install copies the app's bundle, or its directory where its libraries lie
+    beside it, and signs its program and every library in it again with code
+    hashes macOS never ran. Without the new signatures only the apps rebuilt
+    since an earlier run paid the check of new code, Cranpose's every night,
+    and no app paid it for libraries it did not rebuild."""
     executable = Path(str(APPS[name][0]))
     text = str(executable)
-    if '.app/Contents/MacOS/' in text:
+    bundle = '.app/Contents/MacOS/' in text
+    if bundle:
         installed = Path(text.split('.app/Contents/MacOS/')[0] + '.app')
     elif name in INSTALLED_WITH_DIRECTORY:
         installed = executable.parent
@@ -182,26 +191,88 @@ def fresh_install(name, stage, label):
     target = stage / 'installs' / label / installed.name
     target.parent.mkdir(parents=True, exist_ok=True)
     subprocess.run(['ditto', str(installed), str(target)], check=True)
-    return str(target / executable.relative_to(installed)) if installed != executable else str(target)
+    program = target / executable.relative_to(installed) if installed != executable else target
+    for code in code_files(target):
+        if code != program:
+            sign_anew(code)
+    # A bundle's signature covers its program and its resources.
+    sign_anew(target if bundle else program)
+    return str(program)
 
 
-class Page(http.server.SimpleHTTPRequestHandler):
-    """Serves the web page, and the Roboto files under `fonts/` beside it."""
+# Mach-O file types a signature covers: a program, a library and a bundle.
+CODE_FILE_TYPES = {2, 6, 8}
 
-    def translate_path(self, path):
-        if path.startswith('/fonts/'):
-            return str(FONTS / Path(path).name)
-        return str(HERE / 'web-app/www' / path.split('?')[0].lstrip('/'))
 
-    def log_message(self, *_):
-        pass
+def code_files(root):
+    """The programs and libraries at or under `root`, the deepest first: a
+    bundle's signature records the code inside it, so that code is signed
+    before it."""
+    paths = [root] if root.is_file() else [path for path in root.rglob('*') if path.is_file()]
+    return sorted((path for path in paths if not path.is_symlink() and is_code(path)),
+                  key=lambda path: len(path.parts), reverse=True)
+
+
+def is_code(path):
+    """Whether `path` is a 64-bit Mach-O program, library or bundle, or a
+    universal file of them."""
+    with path.open('rb') as file:
+        head = file.read(16)
+    if head[:4] == b'\xcf\xfa\xed\xfe':
+        return int.from_bytes(head[12:16], 'little') in CODE_FILE_TYPES
+    # A universal file lists a few architectures; a Java class file, which
+    # starts the same, has its version there.
+    return head[:4] == b'\xca\xfe\xba\xbe' and 0 < int.from_bytes(head[4:8], 'big') < 16
+
+
+# macOS checks each new program in one queue, behind every program written
+# on the machine. On macm3 the programs of a build held a new 12 MB program
+# 0.7 to 3.1 s before its `main`, against 0.16 to 0.26 s on a quiet machine.
+# A new tiny program that starts within `CHECKED_IN_S` finds the queue empty.
+CHECKED_IN_S = 0.4
+CHECK_QUEUE_WAIT_S = 120.0
+
+
+def wait_for_program_checks(stage):
+    """Starts new tiny programs until macOS checks one at once, for up to
+    `CHECK_QUEUE_WAIT_S`, and the seconds it waited. A first start waits in
+    the queue otherwise, and the round's first app waits behind the build
+    the run began with: in 5 of 12 nightly runs Cranpose's first frame came
+    0.88 to 1.07 s after its launch instead of 0.62 to 0.74 s."""
+    folder = stage / 'probes'
+    stub = folder / 'probe'
+    if not stub.exists():
+        folder.mkdir(parents=True, exist_ok=True)
+        subprocess.run(['cc', '-x', 'c', '-o', str(stub), '-'], input='int main(void) { return 0; }\n', text=True,
+                       check=True)
+    began = time.monotonic()
+    while True:
+        probe = Path(tempfile.mkdtemp(dir=folder)) / 'probe'
+        subprocess.run(['ditto', str(stub), str(probe)], check=True)
+        sign_anew(probe)
+        launched = time.monotonic()
+        subprocess.run([str(probe)], check=True)
+        if time.monotonic() - launched < CHECKED_IN_S or launched - began > CHECK_QUEUE_WAIT_S:
+            return round(time.monotonic() - began, 1)
+        time.sleep(1)
+
+
+def sign_anew(path):
+    """Signs the program or bundle at `path` again, ad hoc, with a code hash
+    no signature had before, as a new build of the app has. It keeps its name,
+    its entitlements and its runtime flags: its designated requirement, which
+    its name satisfies, also names a random code hash."""
+    details = subprocess.run(['codesign', '-dv', str(path)], capture_output=True, text=True, check=True).stderr
+    name = next(line.split('=', 1)[1] for line in details.splitlines() if line.startswith('Identifier='))
+    requirement = f'designated => identifier "{name}" or cdhash H"{os.urandom(20).hex()}"'
+    subprocess.run(['codesign', '--force', '--sign', '-', '--identifier', name, f'-r={requirement}',
+                    '--preserve-metadata=entitlements,flags,runtime', str(path)], check=True, capture_output=True)
 
 
 def serve_page():
-    """Serves the web page on a free local port for the whole run."""
-    server = socketserver.ThreadingTCPServer(('127.0.0.1', 0), Page)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-    return f'http://127.0.0.1:{server.server_address[1]}/index.html'
+    """Serves the web page, and the Roboto files under `fonts/` beside it, on
+    a free local port for the whole run."""
+    return BrowserServer(HERE / 'web-app/www', isolate=False, aliases={'/fonts/': FONTS})
 
 
 # The services a WKWebView runs its page in. launchd starts them, outside the
@@ -573,14 +644,15 @@ class App:
     no window from outside the login session, and an app it starts comes to
     the front."""
 
-    def __init__(self, name, args, freeze, work, page, stage, label=None, profile=None, program=None):
+    def __init__(self, name, args, freeze, work, server, stage, label=None, profile=None, program=None):
         tier = args.tier
         self.name = name
         self.work = work
         self.log = stage / f'{label or name}.log'
         profile = profile or stage / f'chrome-profile-{label or name}'
         # In the browser every app is the same Chrome, opened on its own page.
-        template, page = (CHROME_APP, f'{page}/{name}/index.html') if args.browser else (APPS[name], page)
+        template, page = (CHROME_APP, f'{server.base}/{name}/index.html') if args.browser else \
+            (APPS[name], f'{server.base}/index.html')
         values = {'tier': tier, 'freeze': freeze, 'page': page, 'profile': profile}
         command = [str(part).format(**values) for part in template]
         if program:
@@ -653,6 +725,20 @@ class App:
             time.sleep(0.1)
 
 
+CHROME_WARM_UP_S = 5.0
+
+
+def warm_chrome(args, server, stage):
+    """Opens Chrome for `CHROME_WARM_UP_S` on a throwaway profile and on no
+    app's page. On macm3 a run's first Chrome launch spent up to a second of
+    its GPU process on Chrome's own drawing before its page's first paint."""
+    chrome = App('chrome-warm-up', args, 0, stage, server, stage)
+    try:
+        time.sleep(CHROME_WARM_UP_S)
+    finally:
+        chrome.end()
+
+
 def disagrees(fps, earlier):
     """Whether `fps` is more than `DISAGREEMENT` times off the median of the
     app's earlier legs' rates."""
@@ -662,7 +748,7 @@ def disagrees(fps, earlier):
     return max(fps, reference) > DISAGREEMENT * min(fps, reference)
 
 
-def measure(name, args, work, page, stage, label, earlier, profile, program=None):
+def measure(name, args, work, server, stage, label, earlier, profile, program=None):
     """One launch, measured from its start for `--run` seconds: every frame
     its window presented in each second, the CPU the app and every process it
     started spent, the clocks the chip ran at and the memory the app held at
@@ -673,29 +759,30 @@ def measure(name, args, work, page, stage, label, earlier, profile, program=None
     # Every process's CPU before the launch: the app's processes start at
     # zero, so what they hold at the end is the run's.
     before = processes()
+    since = server.mark()
     launched = time.monotonic()
-    app = App(name, args, 0, work, page, stage, label, profile, program)
+    app = App(name, args, 0, work, server, stage, label, profile, program)
     try:
         clocks = Clocks()
         server_pid = next((pid for pid, (_, _, _, command) in before.items() if command.endswith(WINDOW_SERVER)),
                           None)
         usage = Usage(app.pid, server_pid, launched)
         out = stage / f'{label}-frames.json'
-        frames = framecount(app.pid, out, '--until', f'{launched + args.run:.3f}', '--launched', f'{launched:.3f}',
+        frames = framecount(app.pid, out, '--until', f'{launched + args.run:.3f}',
                             '--slow-fps', str(SLOW_FPS), '--slow-seconds', str(SLOW_SECONDS), '--out', str(out))
         after, ended = processes(), time.monotonic()
         taken = usage.stop()
         clocked, clock_samples = clocks.stop()
         # A slow run ends where FrameCount stopped it.
         run_s = frames['stopped'] - launched if 'stopped' in frames else args.run
-        if 'PERF first_frame' not in app.log.read_text(errors='replace'):
+        log = app.log.read_text(errors='replace')
+        if 'PERF first_frame' not in log:
             raise RuntimeError(f'{name} logged no first frame within its {run_s:.0f} s run')
+        server.check_device(since)
         mine = tree(app.pid, after, ended - app.started + 1)
         held = memory(mine, stage)
         shutil.copy(out, work / out.name)
-        times = [time for time in frames['times'] if launched <= time < launched + run_s]
-        if len(times) < 2:
-            raise RuntimeError(f'{name} presented fewer than two frames in its run')
+        times, counted = frame_stats(name, frames, launched, run_s, server.heard_at('PERF first_frame', since))
         fps = len(times) / run_s
         if disagrees(fps, earlier):
             shown = stage / f'{label}.png'
@@ -714,44 +801,65 @@ def measure(name, args, work, page, stage, label, earlier, profile, program=None
     # are what the window server renders.
     cores = sum(value for pid, value in spent.items() if pid in mine) / wall + server_cores
     others = sum(value for pid, value in spent.items() if pid not in mine and pid not in server) / wall
-    intervals = sorted((later - earlier) * 1000 for earlier, later in zip(times, times[1:]))
-    link = frames['link']
-    captured = (frames['stopped'] if 'stopped' in frames else launched + args.run) - frames['capture_start']
-    return {'fps': round(fps, 1), 'frames': len(times), 'run_s': round(run_s, 3), 'stopped': 'stopped' in frames,
-            'first_frame_s': round(times[0] - launched, 3),
-            # The times a second the window server composited the display
-            # while the window was counted, which `fps` counts only the ones
-            # that changed the window's picture of: more of them say something
-            # else moved on the display.
-            'composited_fps': round(frames['composited'] / max(captured, 1e-3), 1),
-            # The display the window was on while it was counted: its display
-            # link's ticks a second, the longest gap between two, and why
-            # that is not the state a run is calibrated for.
-            'display_id': frames['display']['id'], 'display_hz': round(link['hz'], 1),
-            'display_gap_ms': round(link['max_gap_ms']),
-            'display_problems': display_problems({'displays': [{**frames['display'], 'main': True}], 'link': link}),
-            # Where FrameCount's capture began: it waits for the window, so a
-            # second before this one saw no window to count.
-            'capture_start_s': round(frames['capture_start'] - launched, 3),
-            # When each frame was presented, in milliseconds since the launch.
-            'frame_ms': [round((time - launched) * 1000, 1) for time in times],
-            'fps_by_second': per_second(times, launched, run_s),
-            'interval_p50_ms': round(percentile(intervals, 0.50), 2),
-            'interval_p99_ms': round(percentile(intervals, 0.99), 2),
-            'cpu_cores': round(cores, 2), 'server_cores': round(server_cores, 2), 'other_cores': round(others, 2),
-            'cpu_ms_per_frame': round(cores * 1000 / fps, 2),
+    return {**counted, 'cpu_cores': round(cores, 2), 'server_cores': round(server_cores, 2),
+            'other_cores': round(others, 2), 'cpu_ms_per_frame': round(cores * 1000 / fps, 2),
             # The run at each interval of `Usage`.
             'samples': run_samples(taken, clock_samples, launched, times),
             **held, **clocked}
+
+
+def frame_stats(name, frames, launched, run_s, drawn):
+    """The pictures FrameCount's `frames` counted in the run of `name`, `run_s`
+    seconds from `launched`, and what they say of it. Every picture of the run
+    counts toward its rate and its seconds. The app's first frame is the first
+    picture that shows more than the window's background (`first_content`). A
+    web view's window also shows the page's own parts before the page draws:
+    a page whose first frame's line reached the server at `drawn` counts from
+    the first picture at or after it as well. Frame intervals count from the
+    first frame."""
+    times = [time for time in frames['times'] if launched <= time < launched + run_s]
+    content = frames.get('first_content')
+    first = len(times) if content is None else bisect.bisect_left(times, max(content, drawn or 0))
+    if len(times) - first < 2:
+        shown = 'no content shown' if content is None else f'content shown at {content - launched:.2f} s'
+        drew = 'no first frame heard' if drawn is None else f'first frame heard at {drawn - launched:.2f} s'
+        raise RuntimeError(f'{name} presented fewer than two frames from its first in its run (window seen at '
+                           f'{frames["capture_start"] - launched:.2f} s, {shown}, {drew}, {len(times)} pictures)')
+    intervals = sorted((later - earlier) * 1000 for earlier, later in zip(times[first:], times[first + 1:]))
+    link = frames['link']
+    captured = launched + run_s - frames['capture_start']
+    return times, {
+        'fps': round(len(times) / run_s, 1), 'frames': len(times), 'run_s': round(run_s, 3),
+        'stopped': 'stopped' in frames,
+        'first_frame_s': round(times[first] - launched, 3),
+        # The times a second the window server composited the display
+        # while the window was counted, which `fps` counts only the ones
+        # that changed the window's picture of: more of them say something
+        # else moved on the display.
+        'composited_fps': round(frames['composited'] / max(captured, 1e-3), 1),
+        # The display the window was on while it was counted: its display
+        # link's ticks a second, the longest gap between two, and why
+        # that is not the state a run is calibrated for.
+        'display_id': frames['display']['id'], 'display_hz': round(link['hz'], 1),
+        'display_gap_ms': round(link['max_gap_ms']),
+        'display_problems': display_problems({'displays': [{**frames['display'], 'main': True}], 'link': link}),
+        # Where FrameCount's capture began: it waits for the window, so a
+        # second before this one saw no window to count.
+        'capture_start_s': round(frames['capture_start'] - launched, 3),
+        # When each frame was presented, in milliseconds since the launch.
+        'frame_ms': [round((time - launched) * 1000, 1) for time in times],
+        'fps_by_second': per_second(times, launched, run_s),
+        'interval_p50_ms': round(percentile(intervals, 0.50), 2),
+        'interval_p99_ms': round(percentile(intervals, 0.99), 2)}
 
 
 def percentile(ordered, share):
     return ordered[min(len(ordered) - 1, int(share * len(ordered)))] if ordered else 0.0
 
 
-def picture(name, args, work, page, stage):
+def picture(name, args, work, server, stage):
     """The window frozen on frame `args.freeze`."""
-    app = App(name, args, args.freeze, work, page, stage)
+    app = App(name, args, args.freeze, work, server, stage)
     try:
         wait_for(app.log, 'PERF frozen', args.timeout)
         time.sleep(0.5)
@@ -803,7 +911,7 @@ def main():
     args.output.mkdir(parents=True, exist_ok=True)
     current_framecount()
     started = time.monotonic()
-    page = BrowserServer(args.browser).base if args.browser else serve_page()
+    server = BrowserServer(args.browser) if args.browser else serve_page()
     with tempfile.TemporaryDirectory(prefix='gauntlet-') as folder:
         stage = Path(folder)
         shutil.copytree(FONTS, stage / 'fonts')
@@ -811,7 +919,7 @@ def main():
         began, problems = observe_display(stage, 'start')
         if problems:
             sys.exit(refusal(problems))
-        report = run(args, apps, page, stage)
+        report = run(args, apps, server, stage)
         ended, problems = observe_display(stage, 'end')
     # The display the apps' windows opened on, as the run began and ended: the
     # rest of the run's numbers mean little without it.
@@ -838,7 +946,7 @@ def idle_others(span_s=IDLE_SPAN_S):
     return sum(max(0.0, cpu - before[pid][1]) for pid, (_, cpu, _, _) in after.items() if pid in before) / wall
 
 
-def undisturbed_leg(name, args, page, stage, label, earlier, failures, profile, start, idle, install):
+def undisturbed_leg(name, args, server, stage, label, earlier, failures, profile, start, idle, install):
     """A leg of `start`, measured again, up to three times, while other
     processes spend more than `--max-others` cores above the machine's `idle`
     load in it or it fails. Every
@@ -850,12 +958,17 @@ def undisturbed_leg(name, args, page, stage, label, earlier, failures, profile, 
     when every attempt failed, so one app cannot end the run."""
     legs = []
     for attempt in range(3):
+        checks_waited = None
         if start == STARTS[0]:
             clear_app_state(profile)
-            if not args.browser:
+            # A page's install is its first visit on a cleared profile: a
+            # fresh copy of Chrome itself would put macOS's first-launch
+            # check of the browser into the page's start.
+            if not args.browser and APPS[name][0] != CHROME:
+                checks_waited = wait_for_program_checks(stage)
                 install[:] = [fresh_install(name, stage, f'{label}-{attempt + 1}')]
         try:
-            leg = measure(name, args, args.output, page, stage, f'{label}-{attempt + 1}', earlier, profile,
+            leg = measure(name, args, args.output, server, stage, f'{label}-{attempt + 1}', earlier, profile,
                           install[0] if install else None)
         except (RuntimeError, subprocess.SubprocessError) as failure:
             print(f'{label:16} failed: {failure}', flush=True)
@@ -863,6 +976,8 @@ def undisturbed_leg(name, args, page, stage, label, earlier, failures, profile, 
                              'error': str(failure)[:300]})
             continue
         leg['idle_other_cores'] = round(idle, 2)
+        if checks_waited is not None:
+            leg['program_checks_waited_s'] = checks_waited
         leg['disturbed'] = leg['other_cores'] > idle + args.max_others or bool(leg.get('display_problems'))
         legs.append(leg)
         print(f'{label:16} fps {leg["fps"]:6.1f} cpu/f {leg["cpu_ms_per_frame"]} first frame '
@@ -883,13 +998,13 @@ def summarize(legs, apps, start):
             for name in apps}
 
 
-def run(args, apps, page, stage):
+def run(args, apps, server, stage):
     """The pictures and their comparison, or the measured rounds."""
     if args.parity:
         # Pillow, which comparing pictures needs and measuring does not.
         from PIL import Image
         from parity import compare_pair
-        pictures = {name: picture(name, args, args.output, page, stage) for name in apps}
+        pictures = {name: picture(name, args, args.output, server, stage) for name in apps}
         # Compose's picture is the one the others are held to.
         reference = next((name for name in ('compose', 'web') if name in apps), apps[0])
         results = {}
@@ -911,6 +1026,8 @@ def run(args, apps, page, stage):
     built_file = HERE / 'desktop-versions.json'
     built = json.loads(built_file.read_text()) if built_file.exists() else {}
     legs, failures = [], []
+    if args.browser:
+        warm_chrome(args, server, stage)
     for round_index in range(args.rounds):
         idle = idle_others()
         print(f'round {round_index + 1}: the machine idles at {idle:.2f} cores', flush=True)
@@ -924,7 +1041,7 @@ def run(args, apps, page, stage):
                 earlier = [leg['fps'] for leg in legs
                            if leg['subject'] == name and leg['start'] == start and not leg['disturbed']]
                 label = f'{name}-{round_index + 1}-{start}'
-                measured = undisturbed_leg(name, args, page, stage, label, earlier, failures, profile, start,
+                measured = undisturbed_leg(name, args, server, stage, label, earlier, failures, profile, start,
                                            idle, install)
                 if not measured:
                     # No second start without a first one.
@@ -934,7 +1051,7 @@ def run(args, apps, page, stage):
                 if kept and disagrees(kept[-1]['fps'], earlier):
                     print(f'{name}: {kept[-1]["fps"]} fps disagrees with its earlier legs; measuring once more',
                           flush=True)
-                    again = undisturbed_leg(name, args, page, stage, f'{label}-again', earlier, failures,
+                    again = undisturbed_leg(name, args, server, stage, f'{label}-again', earlier, failures,
                                             profile, start, idle, install)
                     legs += [{'subject': name, 'round': round_index, 'start': start, **leg} for leg in again]
     chip = subprocess.run(['sysctl', '-n', 'machdep.cpu.brand_string'], capture_output=True, text=True,

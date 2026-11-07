@@ -1,6 +1,8 @@
 use std::time::Duration;
 
-use crate::{output_paths, robot_controls_grid, robot_exit, robot_launch, robot_shot};
+use crate::{
+    output_paths, pointer_drag, robot_controls_grid, robot_exit, robot_launch, robot_shot,
+};
 
 use cranpose::{PointerButton, Robot, SemanticElement};
 use cranpose_testing::{click_button_in_semantics, find_text_in_semantics, screenshot_pixel};
@@ -398,20 +400,9 @@ fn button(robot: &Robot, label: &str) -> (f32, f32, f32, f32) {
     }
 }
 
-/// Drags the mouse with `button` held from `from` to `to` in ten steps.
+/// Drags the mouse with `button` held from `from` to `to`, then settles.
 fn drag(robot: &Robot, button: PointerButton, from: (f32, f32), to: (f32, f32)) {
-    let mut steps = (1..=10).map(|step| {
-        let t = step as f32 / 10.0;
-        (from.0 + (to.0 - from.0) * t, from.1 + (to.1 - from.1) * t)
-    });
-    let dragged = robot
-        .move_to(from.0, from.1)
-        .and_then(|()| robot.mouse_button_down(button))
-        .and_then(|()| steps.try_for_each(|(x, y)| robot.move_to(x, y)))
-        .and_then(|()| robot.mouse_button_up(button));
-    if let Err(err) = dragged {
-        robot_exit::fail(robot, &format!("{button:?} drag across the floor: {err}"));
-    }
+    pointer_drag::drag(robot, button, from, to);
     robot_shot::settle(robot, 400);
 }
 

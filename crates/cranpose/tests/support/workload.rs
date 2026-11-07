@@ -9,25 +9,23 @@
 use std::time::Duration;
 
 use cranpose::prelude::*;
-use cranpose_core::{LaunchedEffectAsync, MutableState, rememberMutableStateOf};
+use cranpose_core::{LaunchedEffect, MutableState, rememberMutableStateOf};
 
 /// A state that counts the `period`s of frame time since its first frame.
 #[composable]
 fn ticker(period: Duration) -> MutableState<u32> {
     let count = rememberMutableStateOf(|| 0u32);
-    LaunchedEffectAsync(period, move |scope| {
-        Box::pin(async move {
-            let clock = scope.runtime().frame_clock();
-            let start = clock.next_frame().await;
-            let period = period.as_nanos().max(1);
-            loop {
-                let now = clock.next_frame().await;
-                let ticks = (u128::from(now.saturating_sub(start)) / period) as u32;
-                if ticks != count.get() {
-                    count.set(ticks);
-                }
+    LaunchedEffect(period, async move |scope| {
+        let clock = scope.runtime().frame_clock();
+        let start = clock.next_frame().await;
+        let period = period.as_nanos().max(1);
+        loop {
+            let now = clock.next_frame().await;
+            let ticks = (u128::from(now.saturating_sub(start)) / period) as u32;
+            if ticks != count.get() {
+                count.set(ticks);
             }
-        })
+        }
     });
     count
 }
@@ -47,18 +45,16 @@ fn Reading(label: &'static str, period: Duration, style: TextStyle) {
 #[composable]
 fn ScrollingRows(style: TextStyle) {
     let state = rememberLazyListState();
-    LaunchedEffectAsync((), move |scope| {
-        Box::pin(async move {
-            let clock = scope.runtime().frame_clock();
-            loop {
-                clock.next_frame().await;
-                if state.can_scroll_forward() {
-                    state.dispatch_scroll_delta(-2.0);
-                } else {
-                    state.scroll_to_item(0, 0.0);
-                }
+    LaunchedEffect((), async move |scope| {
+        let clock = scope.runtime().frame_clock();
+        loop {
+            clock.next_frame().await;
+            if state.can_scroll_forward() {
+                state.dispatch_scroll_delta(-2.0);
+            } else {
+                state.scroll_to_item(0, 0.0);
             }
-        })
+        }
     });
     LazyColumn(
         Modifier::empty().fill_max_width().height(44.0),

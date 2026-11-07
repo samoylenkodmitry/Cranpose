@@ -50,16 +50,14 @@ const SCREENS: &[(&str, Shown)] = &[
 #[composable]
 pub fn Screens() {
     let index = cranpose_core::rememberMutableStateOf(|| 0usize);
-    cranpose_core::LaunchedEffectAsync((), move |_| {
-        std::boxed::Box::pin(async move {
-            log::info!("screen {}", SCREENS[0].0);
-            loop {
-                cranpose_core::delay(SHOWN).await;
-                let next = (index.get() + 1) % SCREENS.len();
-                log::info!("screen {}", SCREENS[next].0);
-                index.set(next);
-            }
-        })
+    cranpose_core::LaunchedEffect((), async move |_| {
+        log::info!("screen {}", SCREENS[0].0);
+        loop {
+            cranpose_core::delay(SHOWN).await;
+            let next = (index.get() + 1) % SCREENS.len();
+            log::info!("screen {}", SCREENS[next].0);
+            index.set(next);
+        }
     });
     match SCREENS[index.get()].1 {
         Shown::Demo(line) => demo::Screen(line),

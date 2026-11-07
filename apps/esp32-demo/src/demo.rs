@@ -145,13 +145,11 @@ fn StatusLine(line: Line) {
 #[composable]
 fn Seconds(style: TextStyle) {
     let seconds = cranpose_core::rememberMutableStateOf(|| 0u32);
-    cranpose_core::LaunchedEffectAsync((), move |_| {
-        std::boxed::Box::pin(async move {
-            loop {
-                cranpose_core::delay(Duration::from_secs(1)).await;
-                seconds.set(seconds.get() + 1);
-            }
-        })
+    cranpose_core::LaunchedEffect((), async move |_| {
+        loop {
+            cranpose_core::delay(Duration::from_secs(1)).await;
+            seconds.set(seconds.get() + 1);
+        }
     });
     Text(
         format!("Running for {} s", seconds.get()),

@@ -256,7 +256,7 @@ fn unescape(literal: &str) -> String {
 }
 
 #[test]
-fn the_written_source_puts_each_template_together_from_its_pieces() {
+fn the_written_source_puts_each_template_together_from_its_pieces_without_indentation() {
     let modules: Vec<(&str, Vec<Template>)> = wgsl::MODULES
         .iter()
         .take(2)
@@ -288,7 +288,15 @@ fn the_written_source_puts_each_template_together_from_its_pieces() {
             .filter(|name| !name.is_empty())
             .map(|name| pieces[name].as_str())
             .collect();
-        assert_eq!(glsl, template.generated.glsl, "{}", template.entry_point);
+        let compact: String = template
+            .generated
+            .glsl
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .map(|line| format!("{line}\n"))
+            .collect();
+        assert_eq!(glsl, compact, "{}", template.entry_point);
     }
 }
 

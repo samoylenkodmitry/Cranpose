@@ -15,13 +15,10 @@ use cranpose::prelude::*;
 use cranpose_animation::{Easing, animateFloatAsState, tween};
 use cranpose_core::derivedStateOf;
 
-#[path = "frame_time.rs"]
-mod frame_time;
-#[path = "text_style.rs"]
-mod text_style;
-
-use frame_time::{Time, frame_time};
-use text_style::text_style as style;
+use super::{
+    frame_time::{Time, frame_time},
+    text_style::text_style as style,
+};
 
 // The values the screen shows at `t` milliseconds after its first frame.
 pub(crate) mod timeline {

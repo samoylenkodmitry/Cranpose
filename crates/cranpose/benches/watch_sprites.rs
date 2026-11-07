@@ -34,8 +34,12 @@ use cranpose_animation::{
 mod changing_paths;
 #[path = "../tests/support/deep_moves.rs"]
 mod deep_moves;
+#[path = "../tests/support/frame_time.rs"]
+mod frame_time;
 #[path = "../tests/support/still_wall.rs"]
 mod still_wall;
+#[path = "../tests/support/text_style.rs"]
+mod text_style;
 
 const WIDTH: u32 = 198;
 const HEIGHT: u32 = 242;

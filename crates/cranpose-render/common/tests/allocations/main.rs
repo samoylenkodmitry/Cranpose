@@ -1,5 +1,4 @@
 #![allow(clippy::print_stdout, reason = "a test prints what it measured")]
-#![cfg(feature = "embedded-default-font")]
 
 use std::{alloc::System, cell::RefCell, rc::Rc};
 
@@ -18,6 +17,10 @@ use cranpose_ui::{
     widgets::{Box, BoxSpec, Column, ColumnSpec},
 };
 use stats_alloc::{INSTRUMENTED_SYSTEM, Region, StatsAlloc};
+
+#[macro_use]
+#[path = "../../../../coroflow/tests/support/main_thread_test.rs"]
+mod main_thread_test;
 
 #[global_allocator]
 static GLOBAL: &StatsAlloc<System> = &INSTRUMENTED_SYSTEM;
@@ -230,10 +233,11 @@ fn a_row_scrolling_in_reuses_the_row_that_scrolled_out() {
 
 /// One test, so no other test's allocations land in these regions: the
 /// counting allocator counts every thread.
-#[test]
 fn scene_rebuilds_stay_within_their_allocation_budgets() {
     rebuilding_a_cell_reuses_the_cell_it_replaces();
     rebuilding_the_graph_reuses_the_graph_it_replaces();
     updating_one_cell_reuses_the_dirty_node_map();
     a_row_scrolling_in_reuses_the_row_that_scrolled_out();
 }
+
+main_thread_test!(scene_rebuilds_stay_within_their_allocation_budgets);

@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use cranpose_core::{LaunchedEffectAsync, NodeId, mutableStateOf, remember, rememberKeyed};
+use cranpose_core::{LaunchedEffect, NodeId, mutableStateOf, remember, rememberKeyed};
 use cranpose_foundation::text::{
     InputTransformation, OutputTransformation, TextFieldLineLimits, TextFieldState,
     previous_grapheme_boundary,
@@ -114,13 +114,11 @@ pub fn BasicSecureTextField(
             }
         },
     );
-    LaunchedEffectAsync(shown_character, move |_| {
-        Box::pin(async move {
-            if shown_character.is_some() {
-                cranpose_core::delay(REVEAL_DURATION).await;
-                revealed.set(None);
-            }
-        })
+    LaunchedEffect(shown_character, async move |_| {
+        if shown_character.is_some() {
+            cranpose_core::delay(REVEAL_DURATION).await;
+            revealed.set(None);
+        }
     });
     TextFieldNode(
         state,

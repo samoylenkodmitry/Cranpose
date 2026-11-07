@@ -18,6 +18,8 @@ pub struct SourceLocation {
 impl SourceLocation {
     /// Body executions after the initial composition for this composable instance.
     /// Returns `None` unless a debug preview enabled recomposition tracking.
+    /// A `#[composable(no_skip)]` function runs in its caller's scope, as
+    /// Compose's inline composables do, so it has no count either.
     pub fn recompositions(&self) -> Option<u64> {
         #[cfg(all(feature = "inspection", debug_assertions))]
         return self
@@ -177,7 +179,8 @@ impl Drop for SourceScope {
     }
 }
 
-/// Used by the composable macro; compiles to an empty guard without inspection.
+/// Used by the composable macro for a composable with a scope of its own;
+/// compiles to an empty guard without inspection.
 #[doc(hidden)]
 #[inline]
 pub fn __source_scope(
@@ -185,6 +188,42 @@ pub fn __source_scope(
     file: &'static str,
     line: u32,
     manifest_dir: &'static str,
+) -> SourceScope {
+    enter_source(name, file, line, manifest_dir, Composes::InOwnScope)
+}
+
+/// Used by the composable macro for a composable that composes in its
+/// caller's scope; compiles to an empty guard without inspection.
+#[doc(hidden)]
+#[inline]
+pub fn __inline_source_scope(
+    name: &'static str,
+    file: &'static str,
+    line: u32,
+    manifest_dir: &'static str,
+) -> SourceScope {
+    enter_source(name, file, line, manifest_dir, Composes::InCallerScope)
+}
+
+// A body in its caller's scope runs with the caller's, as Compose's inline
+// composables do, so it counts nothing.
+#[derive(Clone, Copy)]
+enum Composes {
+    InOwnScope,
+    InCallerScope,
+}
+
+#[inline]
+fn enter_source(
+    name: &'static str,
+    file: &'static str,
+    line: u32,
+    manifest_dir: &'static str,
+    #[cfg_attr(
+        not(all(feature = "inspection", debug_assertions)),
+        expect(unused_variables, reason = "only debug inspection builds count bodies")
+    )]
+    composes: Composes,
 ) -> SourceScope {
     #[cfg(feature = "inspection")]
     let depth = crate::thread_state::runtimes(|state| {
@@ -196,7 +235,10 @@ pub fn __source_scope(
             line,
             manifest_dir,
             #[cfg(debug_assertions)]
-            recompositions: record_composition(name, file, line, manifest_dir),
+            recompositions: match composes {
+                Composes::InOwnScope => record_composition(name, file, line, manifest_dir),
+                Composes::InCallerScope => None,
+            },
         });
         depth
     });

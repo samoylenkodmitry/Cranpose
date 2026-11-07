@@ -14,8 +14,9 @@ use cranpose_ui::{
 
 use super::{
     space::{RoomShape, RoomState},
-    text_style, Ticking,
+    text_style,
 };
+use crate::app::ticking::Ticking;
 
 const BLOB_CONTENT: Size = Size {
     width: 512.0,

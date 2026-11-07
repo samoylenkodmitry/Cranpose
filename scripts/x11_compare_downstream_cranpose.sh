@@ -187,6 +187,7 @@ cranpose_patch_args() {
         "cranpose-render-wgpu:crates/cranpose-render/wgpu"
         "cranpose-runtime-std:crates/cranpose-runtime-std"
         "cranpose-services:crates/cranpose-services"
+        "cranpose-shader-passes:crates/cranpose-render/shader-passes"
         "cranpose-testing:crates/cranpose-testing"
         "cranpose-ui:crates/cranpose-ui"
         "cranpose-ui-graphics:crates/cranpose-ui-graphics"

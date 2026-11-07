@@ -22,6 +22,7 @@ use crate::{
     collections::map::HashMap,
     platform::{RuntimeScheduler, SchedulerRef},
     state::MutationPolicy,
+    task_site::TaskLabel,
     thread_state,
 };
 
@@ -243,18 +244,10 @@ struct RuntimeInner {
 }
 
 struct TaskEntry {
-    label: String,
+    label: TaskLabel,
     future: Option<Pin<Box<dyn Future<Output = ()> + 'static>>>,
     runnable: Arc<AtomicBool>,
     waker: Waker,
-}
-
-/// Names the next task that `spawn_ui` creates on this thread, for `live_ui_task_labels` and leak
-/// reports. A task with no label is called `unnamed`.
-pub fn label_next_ui_task(label: impl Into<String>) {
-    thread_state::watch_thread_exit();
-    let label = label.into();
-    thread_state::runtimes(|state| *state.next_task_label.borrow_mut() = Some(label));
 }
 
 impl RuntimeInner {
@@ -428,9 +421,7 @@ impl RuntimeInner {
         self.schedule();
     }
 
-    fn spawn_ui_task(&self, future: Pin<Box<dyn Future<Output = ()> + 'static>>) -> u64 {
-        let label = thread_state::runtimes(|state| state.next_task_label.borrow_mut().take())
-            .unwrap_or_else(|| "unnamed".to_string());
+    fn spawn_ui_task(&self, future: Pin<Box<dyn Future<Output = ()>>>, label: TaskLabel) -> u64 {
         let runnable = Arc::new(AtomicBool::new(true));
         self.task_woken.store(true, Ordering::Release);
         let waker = RuntimeTaskWaker::new(self, Arc::clone(&runnable)).into_waker();
@@ -1113,7 +1104,7 @@ impl RuntimeHandle {
                     .tasks
                     .borrow()
                     .iter()
-                    .map(|(id, entry)| (id, entry.label.clone()))
+                    .map(|(id, entry)| (id, entry.label.to_string()))
                     .collect()
             })
             .unwrap_or_default()
@@ -1152,12 +1143,19 @@ impl RuntimeHandle {
     where
         F: Future<Output = ()> + 'static,
     {
-        self.inner.upgrade().map(|inner| {
-            let id = inner.spawn_ui_task(Box::pin(fut));
-            TaskHandle {
-                id,
-                runtime: self.clone(),
-            }
+        self.spawn_labelled(Box::pin(fut), TaskLabel::Unnamed)
+    }
+
+    pub(crate) fn spawn_labelled(
+        &self,
+        future: Pin<Box<dyn Future<Output = ()>>>,
+        label: TaskLabel,
+    ) -> Option<TaskHandle> {
+        let inner = self.inner.upgrade()?;
+        let id = inner.spawn_ui_task(future, label);
+        Some(TaskHandle {
+            id,
+            runtime: self.clone(),
         })
     }
 

@@ -45,8 +45,14 @@ fn short_ref() -> &'static str {
     }
 }
 
+// The raw text of the file at `path` in the repository, at the commit the
+// app was built from.
+pub(crate) fn repository_file_url(path: &str) -> String {
+    format!("{REPOSITORY}/{}/{path}", source_ref())
+}
+
 fn source_url(tab: DemoTab) -> String {
-    format!("{REPOSITORY}/{}/{}", source_ref(), source_path(tab))
+    repository_file_url(source_path(tab))
 }
 
 #[derive(Clone, PartialEq)]
@@ -111,7 +117,7 @@ pub(crate) fn SourcePanel(tab: DemoTab) {
     let http_client = local_http_client().current();
     let list_state = rememberLazyListState();
 
-    cranpose_core::LaunchedEffect(tab, move |scope| {
+    cranpose_core::LaunchedEffect(tab, async move |scope| {
         state.set(SourceState::Loading);
         let client = std::sync::Arc::clone(&http_client);
         let url = source_url(tab);

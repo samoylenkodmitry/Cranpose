@@ -8,13 +8,7 @@
 
 use cranpose::prelude::*;
 
-#[path = "frame_time.rs"]
-mod frame_time;
-#[path = "text_style.rs"]
-mod text_style;
-
-use frame_time::frame_time;
-use text_style::text_style as style;
+use super::{frame_time::frame_time, text_style::text_style as style};
 
 const ROWS: usize = 40;
 const ROW_HEIGHT: f32 = 44.0;

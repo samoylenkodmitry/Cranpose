@@ -7,13 +7,13 @@ use crate::{
 
 // A line's text, the end of its visible text, the end of the text it draws,
 // before the hard break that ends it, which draws nothing, its indent and
-// the width its text may take, the paragraph's past the indent.
+// the width the paragraph's lines wrap at.
 pub(crate) struct LineText {
     pub(crate) range: Range<usize>,
     pub(crate) visible: usize,
     pub(crate) drawn: usize,
     pub(crate) indent: f32,
-    pub(crate) room: f32,
+    pub(crate) width: f32,
 }
 
 // How far down a layout's lines reach, in layout pixels and, exactly, in
@@ -53,9 +53,23 @@ pub(crate) fn before_hard_break(text: &str, start: usize, end: usize) -> usize {
 
 // The indent of the line starting at `offset`.
 pub(crate) fn indent(input: &LayoutInput<'_>, offset: usize) -> f32 {
-    if starts_paragraph(input.text, offset) {
-        input.lengths.first_line_indent
+    let lengths = &input.lengths;
+    paragraph_indent(
+        input.text,
+        offset,
+        lengths.first_line_indent,
+        lengths.rest_line_indent,
+    )
+}
+
+// The indent of the line of `text` starting at `offset`: `first` where a
+// paragraph starts, else `rest`. Out of line, so that the breaker and the
+// layouter share one copy of the test.
+#[inline(never)]
+pub(crate) fn paragraph_indent(text: &str, offset: usize, first: f32, rest: f32) -> f32 {
+    if starts_paragraph(text, offset) {
+        first
     } else {
-        input.lengths.rest_line_indent
+        rest
     }
 }

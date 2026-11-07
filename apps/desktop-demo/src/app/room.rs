@@ -15,7 +15,7 @@ use cranpose::liquid::prelude::{
 };
 use cranpose_core::{
     derivedStateOf, key, remember, rememberMutableStateOf, CompositionLocalProvider,
-    LaunchedEffectAsync, MutableState,
+    LaunchedEffect, MutableState,
 };
 use cranpose_ui::{
     composable, local_eye,
@@ -26,10 +26,12 @@ use cranpose_ui::{
     TextStyle,
 };
 
-use self::space::{
-    rememberRoomState, RoomShape, RoomState, Wall, LONGEST_STEP_SECONDS, TRANSITION_SECONDS,
+use self::space::{rememberRoomState, RoomShape, RoomState, Wall, TRANSITION_SECONDS};
+use super::{
+    text_showcase::TextShowcaseTab,
+    ticking::{seconds_between, Ticking, LONGEST_STEP_SECONDS},
+    NestedDemoApp,
 };
-use super::{text_showcase::TextShowcaseTab, NestedDemoApp};
 
 const TILE: f32 = 160.0;
 const TORUS_OBJ: &str = include_str!("../../assets/torus.obj");
@@ -177,45 +179,39 @@ fn Walls(room: RoomState, (shape, spatial): (RoomShape, bool), meshes: RoomMeshe
 fn RoomMotion(room: RoomState, shape: RoomShape) {
     let entered = room.is_entered();
     let mover = room.clone();
-    LaunchedEffectAsync(entered, move |scope| {
-        Box::pin(async move {
-            let target = if entered { 1.0 } else { 0.0 };
-            let clock = scope.runtime().frame_clock();
-            let mut last = clock.next_frame().await;
-            while scope.is_active() && mover.progress.get() != target {
-                let now = clock.next_frame().await;
-                let step = seconds_between(last, now) / TRANSITION_SECONDS;
-                last = now;
-                mover.progress.update(|progress| {
-                    *progress = if target > *progress {
-                        (*progress + step).min(target)
-                    } else {
-                        (*progress - step).max(target)
-                    };
-                });
-            }
-            if scope.is_active() && !entered {
-                mover.flatten();
-            }
-        })
+    LaunchedEffect(entered, async move |scope| {
+        let target = if entered { 1.0 } else { 0.0 };
+        let mut last = scope.with_frame_nanos(|now| now).await;
+        while mover.progress.get() != target {
+            let now = scope.with_frame_nanos(|now| now).await;
+            let step = seconds_between(last, now) / TRANSITION_SECONDS;
+            last = now;
+            mover.progress.update(|progress| {
+                *progress = if target > *progress {
+                    (*progress + step).min(target)
+                } else {
+                    (*progress - step).max(target)
+                };
+            });
+        }
+        if !entered {
+            mover.flatten();
+        }
     });
-    let moving = room.held.get() != 0;
-    LaunchedEffectAsync((moving, shape), move |scope| {
-        Box::pin(async move {
-            if !moving {
-                return;
+    let moving = !room.held.get().is_empty();
+    LaunchedEffect((moving, shape), async move |scope| {
+        if !moving {
+            return;
+        }
+        let mut last = scope.with_frame_nanos(|now| now).await;
+        loop {
+            let now = scope.with_frame_nanos(|now| now).await;
+            let seconds = seconds_between(last, now).min(LONGEST_STEP_SECONDS);
+            last = now;
+            if !room.walk(seconds) {
+                break;
             }
-            let clock = scope.runtime().frame_clock();
-            let mut last = clock.next_frame().await;
-            while scope.is_active() {
-                let now = clock.next_frame().await;
-                let seconds = seconds_between(last, now).min(LONGEST_STEP_SECONDS);
-                last = now;
-                if !room.walk(seconds) {
-                    break;
-                }
-            }
-        })
+        }
     });
 }
 
@@ -276,26 +272,6 @@ fn Globe(shape: RoomShape, mesh: Arc<Mesh>) {
         BoxSpec::default(),
         move || GlobeFace(spinning),
     );
-}
-
-/// Runs `tick` with the seconds each frame took while `on`, a step at most
-/// [`LONGEST_STEP_SECONDS`] long.
-#[composable(no_skip)]
-fn Ticking(on: bool, tick: impl Fn(f32) + 'static) {
-    LaunchedEffectAsync(on, move |scope| {
-        Box::pin(async move {
-            if !on {
-                return;
-            }
-            let clock = scope.runtime().frame_clock();
-            let mut last = clock.next_frame().await;
-            while scope.is_active() {
-                let now = clock.next_frame().await;
-                tick(seconds_between(last, now).min(LONGEST_STEP_SECONDS));
-                last = now;
-            }
-        })
-    });
 }
 
 #[composable(no_skip)]
@@ -723,8 +699,4 @@ fn Ceiling() {
         BoxSpec::default(),
         || {},
     );
-}
-
-fn seconds_between(earlier_nanos: u64, later_nanos: u64) -> f32 {
-    later_nanos.saturating_sub(earlier_nanos) as f32 * 1.0e-9
 }
