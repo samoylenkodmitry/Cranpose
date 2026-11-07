@@ -231,7 +231,10 @@ impl Rewrite {
 
     // Pushes `item` in place of the old item where the subtree pushes next,
     // when that one is of its kind, adding the areas the two draw
-    // differently; else, and from then on, into the spill.
+    // differently; else, and from then on, into the spill. Inline in its one
+    // caller, `RasterScene::push_item`: a call would copy a text item, which
+    // is large, once more on its way into the list.
+    #[inline(always)]
     pub(crate) fn place<T: SceneItem>(&mut self, scene: &mut RasterScene, item: T) {
         if self.spilled_at.is_none() {
             let at = self.next.items.order;
