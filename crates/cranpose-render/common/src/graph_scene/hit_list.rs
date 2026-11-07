@@ -8,7 +8,10 @@ use cranpose_ui_graphics::{Rect, space::Ray};
 use super::{
     HitClip, HitGeometry, HitRegion, HitRegionInit, HitStorage, HitTargetSpec, RenderDiagnostics,
 };
-use crate::graph::{LayerNode, ProjectiveTransform};
+use crate::{
+    graph::{LayerNode, ProjectiveTransform},
+    hit_graph::HitCollector,
+};
 
 #[derive(Default)]
 struct HitBuffers {
@@ -57,6 +60,21 @@ impl HitList {
             },
             None,
         );
+    }
+
+    /// Collects the targets that `walk` enters, in draw order, in place of
+    /// the ones held, keeping their storage: for a renderer that holds its
+    /// layers in a form of its own.
+    pub fn collect_walking(
+        &mut self,
+        diagnostics: &Rc<RenderDiagnostics>,
+        walk: impl FnOnce(&mut HitCollector<'_, '_>),
+    ) {
+        self.clear();
+        walk(&mut HitCollector::new(&mut HitTargets {
+            list: self,
+            diagnostics,
+        }));
     }
 
     /// The targets in draw order, the last drawn at the end.

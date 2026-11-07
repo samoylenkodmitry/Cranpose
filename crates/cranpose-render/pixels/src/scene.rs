@@ -12,8 +12,9 @@ use cranpose_core::{MemoryApplier, NodeId, collections::map::HashMap};
 pub use cranpose_render_common::graph_scene::HitRegion;
 use cranpose_render_common::{
     RenderScene, SceneUpdates,
-    graph::{LayerNode, ProjectiveTransform, RenderGraph, RenderNode},
+    graph::{ProjectiveTransform, RenderGraph},
     graph_scene::{HitList, RenderDiagnostics},
+    hit_graph::{FlatHitLayer, HitCollector, HitParent},
     scene_builder::release_walk_storage,
 };
 use cranpose_ui_graphics::Rect;
@@ -366,13 +367,17 @@ impl Scene {
         if self.hits.borrow().is_stale() {
             let mut list = self.hits.borrow_mut();
             let spaces = self.spaces.borrow();
-            let skeleton = self
-                .raster
-                .as_ref()
-                .filter(|raster| !raster.subtrees.is_empty())
-                .and_then(|raster| hit_skeleton(&raster.subtrees, 0, &spaces));
-            match skeleton {
-                Some(root) => list.collect(&root, &self.diagnostics),
+            match self.raster.as_ref() {
+                Some(raster) => list.collect_walking(&self.diagnostics, |walk| {
+                    let mut holds = Vec::new();
+                    collect_hits(
+                        walk,
+                        &raster.subtrees,
+                        &spaces,
+                        &HitParent::root(),
+                        &mut holds,
+                    );
+                }),
                 None => list.clear(),
             }
         }
@@ -395,54 +400,110 @@ impl Drop for Scene {
     }
 }
 
-// The layers of the subtree of the record `index` that hold hit targets or
-// cut the ones beneath them, as layers the graph's hit walk reads: their
-// node, placement, bounds, clip and handlers. `None` when the subtree holds
-// no target.
-fn hit_skeleton(
+// Collects into `walk` the hit targets of the subtree of `records`' first
+// record, under `parent`. `holds` takes, past its end, whether the subtree
+// of each record holds a target, and gives that room back.
+fn collect_hits(
+    walk: &mut HitCollector<'_, '_>,
     records: &[SubtreeItems],
+    spaces: &[KeptSpace],
+    parent: &HitParent,
+    holds: &mut Vec<bool>,
+) {
+    if records.is_empty() {
+        return;
+    }
+    let base = holds.len();
+    mark_hit_holders(records, spaces, holds);
+    collect_record_hits(walk, (records, base), 0, spaces, parent, holds);
+    holds.truncate(base);
+}
+
+// Appends to `holds`, for each of `records`, whether its subtree holds a
+// hit target.
+fn mark_hit_holders(records: &[SubtreeItems], spaces: &[KeptSpace], holds: &mut Vec<bool>) {
+    let base = holds.len();
+    holds.resize(base + records.len(), false);
+    for index in (0..records.len()).rev() {
+        let record = &records[index];
+        let surface = record.surface();
+        let held = if let Some(kept) = kept_space(spaces, record.identity) {
+            kept.space
+                .layer()
+                .is_some_and(|layer| layer.has_hit_targets)
+        } else if !surface.is_empty() {
+            mark_hit_holders(surface, spaces, holds);
+            let held = holds[base + records.len()];
+            holds.truncate(base + records.len());
+            held
+        } else {
+            let mut held = record
+                .hits
+                .as_ref()
+                .is_some_and(|hits| hits.hit_test.is_some());
+            let mut child = index + 1;
+            while !held && child < record.end {
+                held = holds[base + child];
+                child = records[child].end;
+            }
+            held
+        };
+        holds[base + index] = held;
+    }
+}
+
+// Collects into `walk` the hit targets of the subtree of the record `index`
+// of `records`, whose marks start at `base` in `holds`, under `parent`.
+fn collect_record_hits(
+    walk: &mut HitCollector<'_, '_>,
+    (records, base): (&[SubtreeItems], usize),
     index: usize,
     spaces: &[KeptSpace],
-) -> Option<Box<LayerNode>> {
+    parent: &HitParent,
+    holds: &mut Vec<bool>,
+) {
+    if !holds[base + index] {
+        return;
+    }
     let record = &records[index];
     // A 3D subtree takes input through its scene's eye, which its layers
     // tell.
     if let Some(kept) = kept_space(spaces, record.identity) {
-        return kept.space.layer().map(|layer| Box::new(layer.clone()));
+        if let Some(layer) = kept.space.layer() {
+            walk.visit(layer, parent);
+        }
+        return;
     }
     // A layer that drew its children into a surface of its own keeps their
     // records with its own.
     let surface = record.surface();
     if !surface.is_empty() {
-        return hit_skeleton(surface, 0, spaces);
-    }
-    let mut children = Vec::new();
-    let mut child = index + 1;
-    while child < record.end {
-        if let Some(layer) = hit_skeleton(records, child, spaces) {
-            children.push(RenderNode::Layer(layer));
-        }
-        child = records[child].end;
+        collect_hits(walk, surface, spaces, parent, holds);
+        return;
     }
     let hits = record.hits.as_deref();
-    let handles = hits.is_some_and(|hits| hits.hit_test.is_some());
-    if children.is_empty() && !handles {
-        return None;
+    let local_bounds = hits.map_or_else(
+        || Rect::from_size(record.node_size),
+        |hits| hits.local_bounds,
+    );
+    let layer = FlatHitLayer {
+        node_id: record.identity.0,
+        transform_to_parent: record.transform,
+        node_rect: hits
+            .and_then(|hits| hits.node_bounds)
+            .unwrap_or(local_bounds),
+        clip: hits.filter(|hits| hits.clips).map(|_| local_bounds),
+        hit_test: hits.and_then(|hits| hits.hit_test.as_ref()),
+    };
+    let Some(entered) = walk.enter(&layer, parent) else {
+        return;
+    };
+    let mut child = index + 1;
+    while child < record.end {
+        collect_record_hits(walk, (records, base), child, spaces, &entered, holds);
+        child = records[child].end;
     }
-    let mut layer = Box::<LayerNode>::default();
-    layer.node_id = record.identity.0;
-    layer.wraps = record.identity.1;
-    layer.transform_to_parent = record.transform;
-    layer.local_bounds = Rect::from_size(record.node_size);
-    if let Some(hits) = hits {
-        layer.local_bounds = hits.local_bounds;
-        layer.node_bounds = hits.node_bounds;
-        layer.clip_to_bounds = hits.clips;
-        layer.hit_test.clone_from(&hits.hit_test);
-    }
-    layer.has_hit_targets = true;
-    layer.children = children;
-    Some(layer)
+    walk.leave(entered);
 }
 
 // Visits the node of each record from `index` on, before `end`, and their

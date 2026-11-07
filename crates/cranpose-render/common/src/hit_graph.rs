@@ -72,19 +72,89 @@ pub fn collect_hits_from_graph<S: HitGraphSink>(
     if !layer.has_hit_targets {
         return;
     }
-    let mut walk = HitWalk {
-        sink,
-        hit_clips: Vec::new(),
-        pointer_input_ancestors: Vec::new(),
-        capture_path: SmallVec::new(),
-        surface: None,
-    };
-    walk.visit(
+    HitWalk::new(sink).visit(
         layer,
         parent_transform,
         parent_hit_clip,
         &ParentSpace::default(),
     );
+}
+
+/// What a hit walk reads of a layer outside any 3D scene, for a renderer
+/// that holds its layers in a form of its own: its node, its placement in
+/// its parent, its node's rect, the rect that cuts the targets beneath it
+/// and its node's hit test.
+pub struct FlatHitLayer<'a> {
+    /// The layer's node.
+    pub node_id: Option<NodeId>,
+    /// The layer's placement in its parent.
+    pub transform_to_parent: ProjectiveTransform,
+    /// The node's own rect in the layer.
+    pub node_rect: Rect,
+    /// The rect in the layer that cuts the targets beneath it.
+    pub clip: Option<Rect>,
+    /// The node's hit test.
+    pub hit_test: Option<&'a HitTestNode>,
+}
+
+/// What the layers beneath a layer that a [`HitCollector`] entered lie
+/// in: the map to the window and the clips above them.
+pub struct HitParent {
+    transform: ProjectiveTransform,
+    hit_clip: Option<Rect>,
+    pushed_clip: bool,
+    pointer_input: bool,
+}
+
+impl HitParent {
+    /// What a window's root layer lies in.
+    pub fn root() -> Self {
+        Self {
+            transform: ProjectiveTransform::identity(),
+            hit_clip: None,
+            pushed_clip: false,
+            pointer_input: false,
+        }
+    }
+}
+
+/// A walk that collects a window's hit targets from layers its renderer
+/// holds in a form of its own, entered in draw order.
+pub struct HitCollector<'s, 't> {
+    walk: HitWalk<'s, HitTargets<'t>>,
+}
+
+impl<'s, 't> HitCollector<'s, 't> {
+    pub(crate) fn new(sink: &'s mut HitTargets<'t>) -> Self {
+        Self {
+            walk: HitWalk::new(sink),
+        }
+    }
+
+    /// Enters `layer` beneath `parent`: collects its node's target and
+    /// gives what the layers beneath it lie in. `None` when nothing beneath
+    /// it takes input.
+    pub fn enter(&mut self, layer: &FlatHitLayer<'_>, parent: &HitParent) -> Option<HitParent> {
+        self.walk.enter_flat(layer, parent)
+    }
+
+    /// Leaves a layer [`HitCollector::enter`] entered, once the layers
+    /// beneath it are walked.
+    pub fn leave(&mut self, entered: HitParent) {
+        self.walk
+            .pop_layer(entered.pointer_input, entered.pushed_clip);
+    }
+
+    /// Collects the targets of `layer` beneath `parent` and of the layers
+    /// beneath it, which may show 3D scenes.
+    pub fn visit(&mut self, layer: &LayerNode, parent: &HitParent) {
+        self.walk.visit(
+            layer,
+            parent.transform,
+            parent.hit_clip,
+            &ParentSpace::default(),
+        );
+    }
 }
 
 struct HitWalk<'s, S> {
@@ -121,7 +191,17 @@ struct ParentSpace {
     unseen: bool,
 }
 
-impl<S: HitGraphSink> HitWalk<'_, S> {
+impl<'s, S: HitGraphSink> HitWalk<'s, S> {
+    fn new(sink: &'s mut S) -> Self {
+        Self {
+            sink,
+            hit_clips: Vec::new(),
+            pointer_input_ancestors: Vec::new(),
+            capture_path: SmallVec::new(),
+            surface: None,
+        }
+    }
+
     fn visit(
         &mut self,
         layer: &LayerNode,
@@ -137,29 +217,18 @@ impl<S: HitGraphSink> HitWalk<'_, S> {
             return;
         };
         let transform = layer.transform_to_parent.then(parent_transform);
-        // The node's handlers sit on its own rect; its clip, at its layer's
-        // bounds, cuts them as it cuts what the layer holds.
-        let node_rect = layer.node_rect();
-        let transformed_quad = hit_quad(&transform, node_rect);
-        let transformed_rect = quad_bounds(transformed_quad);
-
         // Inside a scene the camera's pick decides where the surfaces'
         // content takes input, whatever their flat stand-ins show: an eye
         // behind a wall still sees what lies through its doorway.
         let in_scene = space.scene.is_some();
-        if !in_scene && (transformed_rect.width <= 0.0 || transformed_rect.height <= 0.0) {
+        let Some(placed) = Placed::of(&transform, layer.node_rect(), in_scene) else {
             return;
-        }
-        let world_to_local = match transform.inverse() {
-            Some(inverse) => inverse,
-            None if in_scene => ProjectiveTransform::identity(),
-            None => return,
         };
 
         let (entered, content, content_clip) = self.enter_content(layer, (space, doorway));
         let behind_doorway = space.behind_doorway || doorway;
         let Some((hit_clip_bounds, pushed_clip)) =
-            self.push_window_clip(layer, &transform, (parent_hit_clip, in_scene))
+            self.push_window_clip(layer.clip_rect(), &transform, (parent_hit_clip, in_scene))
         else {
             self.leave(entered, content_clip.pushed);
             return;
@@ -170,26 +239,13 @@ impl<S: HitGraphSink> HitWalk<'_, S> {
             &layer.hit_test,
             self.hides_targets(unseen, behind_doorway),
         ) {
-            let geometry = PlacedNode {
-                rect: transformed_rect,
-                quad: transformed_quad,
-                local_bounds: node_rect,
-                world_to_local,
-                hit_clip_bounds,
-                content,
-                content_clip: content_clip.bounds,
-            };
-            self.push_node(node_id, hit, geometry);
+            self.push_node(
+                node_id,
+                hit,
+                placed.node(hit_clip_bounds, (content, content_clip.bounds)),
+            );
         }
-
-        let pointer_input_ancestor = layer
-            .hit_test
-            .as_ref()
-            .filter(|hit| !hit.handlers.pointer_inputs().is_empty())
-            .and(layer.node_id);
-        if let Some(node_id) = pointer_input_ancestor {
-            self.pointer_input_ancestors.push(node_id);
-        }
+        let pointer_input = self.push_pointer_input(layer.node_id, layer.hit_test.as_ref());
 
         let children_space = ParentSpace {
             content,
@@ -204,14 +260,50 @@ impl<S: HitGraphSink> HitWalk<'_, S> {
             }
         }
 
-        if pointer_input_ancestor.is_some() {
+        self.pop_layer(pointer_input, pushed_clip);
+        self.leave(entered, content_clip.pushed);
+    }
+
+    // Enters `layer`, a layer outside any 3D scene, under `parent`: pushes
+    // its node's target and its clip, and gives what its children lie in.
+    // `None` when nothing of its subtree takes input, as `visit` finds.
+    fn enter_flat(&mut self, layer: &FlatHitLayer<'_>, parent: &HitParent) -> Option<HitParent> {
+        let transform = layer.transform_to_parent.then(parent.transform);
+        let placed = Placed::of(&transform, layer.node_rect, false)?;
+        let (hit_clip, pushed_clip) =
+            self.push_window_clip(layer.clip, &transform, (parent.hit_clip, false))?;
+        if let (Some(node_id), Some(hit)) = (layer.node_id, layer.hit_test) {
+            self.push_node(node_id, hit, placed.node(hit_clip, (None, None)));
+        }
+        let pointer_input = self.push_pointer_input(layer.node_id, layer.hit_test);
+        Some(HitParent {
+            transform,
+            hit_clip,
+            pushed_clip,
+            pointer_input,
+        })
+    }
+
+    // Notes `node`, whose layer holds `hit`, as a pointer-input ancestor of
+    // the targets beneath it while its subtree is walked; whether it did.
+    fn push_pointer_input(&mut self, node: Option<NodeId>, hit: Option<&HitTestNode>) -> bool {
+        let pointer_input = hit
+            .filter(|hit| !hit.handlers.pointer_inputs().is_empty())
+            .and(node);
+        if let Some(node_id) = pointer_input {
+            self.pointer_input_ancestors.push(node_id);
+        }
+        pointer_input.is_some()
+    }
+
+    // Leaves a layer whose subtree the walk is done with.
+    fn pop_layer(&mut self, pointer_input: bool, pushed_clip: bool) {
+        if pointer_input {
             let _ = self.pointer_input_ancestors.pop();
         }
-
         if pushed_clip {
             let _ = self.hit_clips.pop();
         }
-        self.leave(entered, content_clip.pushed);
     }
 
     /// Records a node's hit target with its ancestors' clips and, inside a
@@ -236,10 +328,10 @@ impl<S: HitGraphSink> HitWalk<'_, S> {
             node_id,
             &self.capture_path,
             HitGeometry {
-                rect: node.rect,
-                quad: node.quad,
-                local_bounds: node.local_bounds,
-                world_to_local: node.world_to_local,
+                rect: node.placed.rect,
+                quad: node.placed.quad,
+                local_bounds: node.placed.local_bounds,
+                world_to_local: node.placed.world_to_local,
                 hit_clip_bounds: node.hit_clip_bounds,
                 hit_clips: &self.hit_clips,
                 surface,
@@ -370,18 +462,18 @@ impl<S: HitGraphSink> HitWalk<'_, S> {
         (entered, content, content_clip)
     }
 
-    /// Pushes `layer`'s clip in the window, which `transform` maps the layer
+    /// Pushes a layer's `clip` in the window, which `transform` maps the layer
     /// to: the clip bounds that cut its subtree and whether it pushed one;
     /// `None` when the clip leaves nothing. Inside a scene a layer's clip
     /// cuts in its surface's content instead, not on the window, where a
     /// surface behind the eye shows nothing.
     fn push_window_clip(
         &mut self,
-        layer: &LayerNode,
+        clip: Option<Rect>,
         transform: &ProjectiveTransform,
         (parent_hit_clip, in_scene): (Option<Rect>, bool),
     ) -> Option<(Option<Rect>, bool)> {
-        let Some(local_clip) = layer.clip_rect().filter(|_| !in_scene) else {
+        let Some(local_clip) = clip.filter(|_| !in_scene) else {
             return Some((parent_hit_clip, false));
         };
         let quad = hit_quad(transform, local_clip);
@@ -431,13 +523,56 @@ impl<S: HitGraphSink> HitWalk<'_, S> {
     }
 }
 
-/// Where a node's own rect lies: in the window, and inside a surface, on
-/// the surface's content.
-struct PlacedNode {
+// Where a layer's node rect lies in the window, and the map back to the
+// layer.
+struct Placed {
     rect: Rect,
     quad: [[f32; 2]; 4],
     local_bounds: Rect,
     world_to_local: ProjectiveTransform,
+}
+
+impl Placed {
+    // `rect` placed by `transform`; `None` when nothing beneath it takes
+    // input: outside a scene, a rect that covers no area or a transform
+    // with no inverse.
+    fn of(transform: &ProjectiveTransform, rect: Rect, in_scene: bool) -> Option<Self> {
+        let quad = hit_quad(transform, rect);
+        let bounds = quad_bounds(quad);
+        if !in_scene && (bounds.width <= 0.0 || bounds.height <= 0.0) {
+            return None;
+        }
+        let world_to_local = match transform.inverse() {
+            Some(inverse) => inverse,
+            None if in_scene => ProjectiveTransform::identity(),
+            None => return None,
+        };
+        Some(Self {
+            rect: bounds,
+            quad,
+            local_bounds: rect,
+            world_to_local,
+        })
+    }
+
+    fn node(
+        self,
+        hit_clip_bounds: Option<Rect>,
+        (content, content_clip): (Option<ProjectiveTransform>, Option<Rect>),
+    ) -> PlacedNode {
+        PlacedNode {
+            placed: self,
+            hit_clip_bounds,
+            content,
+            content_clip,
+        }
+    }
+}
+
+/// Where a node's own rect lies: in the window, and inside a surface, on
+/// the surface's content.
+struct PlacedNode {
+    placed: Placed,
     hit_clip_bounds: Option<Rect>,
     content: Option<ProjectiveTransform>,
     content_clip: Option<Rect>,
