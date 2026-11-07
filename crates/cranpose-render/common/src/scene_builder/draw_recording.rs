@@ -121,17 +121,24 @@ pub enum RecordingStore {
 }
 
 impl RecordingStore {
-    // The buffers of the store. A context made in a constant names one
-    // store, so a renderer links the code of that store alone.
-    pub(super) const fn buffers(self) -> &'static dyn RecordingBuffers {
+    pub(super) const fn buffers(self) -> StoreBuffers {
         match self {
-            Self::Command => OWN_RECORDINGS,
-            Self::Redrawn => &LastRecordings,
+            Self::Command => StoreBuffers::Command(OWN_RECORDINGS),
+            Self::Redrawn => StoreBuffers::Redrawn,
         }
     }
 }
 
-// What a recording store keeps for its commands to record into.
+// The buffers of a recording store, as a lowering context holds them. The
+// command store's are a trait object: a renderer whose root context is a
+// constant of the other store links none of their code.
+#[derive(Clone, Copy)]
+pub(super) enum StoreBuffers {
+    Command(&'static dyn RecordingBuffers),
+    Redrawn,
+}
+
+// What the command store keeps for its commands to record into.
 pub(super) trait RecordingBuffers {
     // A recording for the command `id` to record into.
     fn acquire(&self, id: DrawCommandId) -> Rc<CommandRecording>;
@@ -140,7 +147,6 @@ pub(super) trait RecordingBuffers {
     fn publish(&self, id: DrawCommandId, recording: Rc<CommandRecording>) -> Rc<CommandRecording>;
 }
 
-// The buffers of `RecordingStore::Command`.
 pub(super) const OWN_RECORDINGS: &dyn RecordingBuffers = &OwnRecordings;
 
 struct OwnRecordings;
@@ -152,19 +158,6 @@ impl RecordingBuffers for OwnRecordings {
 
     fn publish(&self, id: DrawCommandId, recording: Rc<CommandRecording>) -> Rc<CommandRecording> {
         publish_recording(id, recording)
-    }
-}
-
-// The buffers of `RecordingStore::Redrawn`.
-struct LastRecordings;
-
-impl RecordingBuffers for LastRecordings {
-    fn acquire(&self, id: DrawCommandId) -> Rc<CommandRecording> {
-        crate::thread_state::with(|state| state.redrawn.borrow_mut().acquire(id))
-    }
-
-    fn publish(&self, _id: DrawCommandId, recording: Rc<CommandRecording>) -> Rc<CommandRecording> {
-        recording
     }
 }
 
@@ -221,7 +214,7 @@ pub(super) struct DrawTarget<'a> {
     pub(super) size: Size,
     pub(super) motion_context_animated: bool,
     pub(super) layer: Option<&'a GraphicsLayer>,
-    pub(super) store: &'static dyn RecordingBuffers,
+    pub(super) store: StoreBuffers,
 }
 
 /// Writes the part of one draw command's recording that a draw pass draws,
@@ -434,11 +427,19 @@ pub(super) fn append_draw_nodes(
         } else {
             let store = draws.store;
             let Some((recording, segments)) =
-                recording_for_placement_reusing(command, placement, size, || store.acquire(id))
+                recording_for_placement_reusing(command, placement, size, || match store {
+                    StoreBuffers::Command(buffers) => buffers.acquire(id),
+                    StoreBuffers::Redrawn => {
+                        crate::thread_state::with(|state| state.redrawn.borrow_mut().acquire(id))
+                    }
+                })
             else {
                 continue;
             };
-            (store.publish(id, recording), segments)
+            match store {
+                StoreBuffers::Command(buffers) => (buffers.publish(id, recording), segments),
+                StoreBuffers::Redrawn => (recording, segments),
+            }
         };
         let grouped = shared.summary().has_groups
             && shared
@@ -470,7 +471,7 @@ pub fn draw_command_nodes_for_tests(
         size,
         motion_context_animated: false,
         layer: None,
-        store: OWN_RECORDINGS,
+        store: StoreBuffers::Command(OWN_RECORDINGS),
     };
     draw_nodes(node_id, commands, 0, placement, draws, phase)
 }

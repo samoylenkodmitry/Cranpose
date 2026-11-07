@@ -15,7 +15,7 @@ pub(crate) use dirty_walk::{DirtyAncestry, RetainedPath};
 use dirty_walk::{update_along_retained_path, walk_dirty_layers};
 mod draw_recording;
 use draw_recording::{
-    DrawPass, DrawTarget, OWN_RECORDINGS, RecordingBuffers, append_draw_nodes,
+    DrawPass, DrawTarget, OWN_RECORDINGS, StoreBuffers, append_draw_nodes,
     bump_recording_generation, draw_nodes, layer_node_capacity,
 };
 pub(crate) use draw_recording::{RecorderKey, RecorderSlot};

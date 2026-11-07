@@ -13,12 +13,12 @@ use cranpose_ui::{ModifierNodeSlices, Point, Rect, Size};
 
 use super::{
     DrawTarget, GraphChanges, KeptChild, LowerContext, NodeLayout, OWN_RECORDINGS, PlacedGeometry,
-    SnapshotNodeData, TranslateAncestorContext, TranslateGeometry, Wrapping, child_identity,
-    children_have_origin_sinks, content_layer_mut, forget_dirty_node, hit_test_from_slices,
-    layer_and_node_bounds, layer_identity, lower_child, modifier_slices_have_origin_sinks,
-    move_kept_child, outer_draws, placed_child_geometry, placed_transform, read_node_data,
-    shaped_graphics_layer, take_wrapped_layer, text_node, translate_bail, translate_unwrapped,
-    write_node_content, write_wrapper,
+    SnapshotNodeData, StoreBuffers, TranslateAncestorContext, TranslateGeometry, Wrapping,
+    child_identity, children_have_origin_sinks, content_layer_mut, forget_dirty_node,
+    hit_test_from_slices, layer_and_node_bounds, layer_identity, lower_child,
+    modifier_slices_have_origin_sinks, move_kept_child, outer_draws, placed_child_geometry,
+    placed_transform, read_node_data, shaped_graphics_layer, take_wrapped_layer, text_node,
+    translate_bail, translate_unwrapped, write_node_content, write_wrapper,
 };
 use crate::{
     NodeUpdate,
@@ -84,7 +84,7 @@ fn try_translate_scrolled_layer(
             size,
             motion_context_animated: inner.motion_context_animated,
             layer: None,
-            store: OWN_RECORDINGS,
+            store: StoreBuffers::Command(OWN_RECORDINGS),
         };
         let outer = outer_draws(node_id, slices.draw_commands(), outer_count, draws)
             .expect("outer command count is nonzero");
@@ -485,7 +485,7 @@ pub(super) fn write_own_content_around_children(
         size,
         motion_context_animated: container.motion_context_animated,
         layer: container.graphics_layer.get(),
-        store: OWN_RECORDINGS,
+        store: StoreBuffers::Command(OWN_RECORDINGS),
     };
     write_node_content(
         &mut container.children,
