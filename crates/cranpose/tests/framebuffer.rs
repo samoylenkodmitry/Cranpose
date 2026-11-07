@@ -16,8 +16,16 @@ use cranpose_animation::{
     AnimationSpec, RepeatMode, StartOffset, infiniteRepeatable, rememberInfiniteTransition,
 };
 
+#[path = "support/changing_paths.rs"]
+mod changing_paths;
 #[path = "support/dashboard.rs"]
 mod dashboard;
+#[path = "support/deep_moves.rs"]
+mod deep_moves;
+#[path = "support/long_scroll.rs"]
+mod long_scroll;
+#[path = "support/still_wall.rs"]
+mod still_wall;
 
 const RED: Color = Color(1.0, 0.0, 0.0, 1.0);
 const GREEN: Color = Color(0.0, 1.0, 0.0, 1.0);
@@ -519,23 +527,46 @@ impl KeptFrame {
     }
 }
 
-// A host that keeps its frame and draws only the changed areas shows what a
-// whole redraw shows, every frame of a screen that changes most of itself
-// each frame and gains and loses list rows as it scrolls.
-#[test]
-fn the_dashboard_drawn_by_changed_areas_matches_whole_redraws() {
+// Shows `screen` on a 320 by 480 framebuffer for `frames` frames,
+// `frame_nanos` apart, and checks that a host that keeps its frame and draws
+// only the changed areas shows what a whole redraw shows, every frame.
+fn kept_frames_match_whole_redraws(screen: fn(&'static str), frame_nanos: u64, frames: u64) {
     const WIDTH: u32 = 320;
     const HEIGHT: u32 = 480;
-    let mut framebuffer = Framebuffer::new(WIDTH, HEIGHT, 1.0, SystemTheme::Dark, &[], || {
-        dashboard::Dashboard("Cranpose");
+    let mut framebuffer = Framebuffer::new(WIDTH, HEIGHT, 1.0, SystemTheme::Dark, &[], move || {
+        screen("Cranpose");
     })
     .expect("valid surface");
     framebuffer.set_active(true);
     let mut kept = KeptFrame::new(WIDTH, HEIGHT);
-    for frame in 0..240u64 {
-        framebuffer.tick(frame * 16_666_667);
+    for frame in 0..frames {
+        framebuffer.tick(frame * frame_nanos);
         framebuffer.run_pending_tasks();
         kept.draw_changed_areas(&mut framebuffer, frame);
+    }
+}
+
+// A screen that changes most of itself each frame and gains and loses list
+// rows as it scrolls.
+#[test]
+fn the_dashboard_drawn_by_changed_areas_matches_whole_redraws() {
+    kept_frames_match_whole_redraws(dashboard::Dashboard, 16_666_667, 240);
+}
+
+// Screens whose rows move each frame while they hold still or change: at 60
+// frames a second, and at a frame each 300 ms, as a board draws them, where
+// a list gains and loses rows in most frames and each row moves farther.
+#[test]
+fn screens_of_moving_rows_drawn_by_changed_areas_match_whole_redraws() {
+    let screens: [fn(&'static str); 4] = [
+        changing_paths::ChangingPaths,
+        deep_moves::DeepMoves,
+        long_scroll::LongScroll,
+        still_wall::StillWall,
+    ];
+    for screen in screens {
+        kept_frames_match_whole_redraws(screen, 16_666_667, 90);
+        kept_frames_match_whole_redraws(screen, 300_000_000, 45);
     }
 }
 
