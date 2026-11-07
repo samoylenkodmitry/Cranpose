@@ -133,7 +133,8 @@ pub(crate) fn main() -> ExitCode {
                          the {PIPELINES_ALLOWED_ON_TOUCH} a touch may build. The bar was resting \
                          and settled first, so every one of these ran the backend's shader \
                          compiler inside the frame that drew the touch, and a person waits \
-                         through all of them. Read the [pipeline-create] lines: a run of them \
+                         through all of them. Run it again with RUST_LOG=cranpose_render_wgpu=debug \
+                         and read the [pipeline-create] lines: a run of them \
                          differing only in `overrides=` is one pipeline per material."
                     ),
                 );
