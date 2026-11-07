@@ -70,6 +70,7 @@ impl KeptHead {
     /// layer. `None` when `context` passes down other state than the head
     /// lowered with, the node is gone, or a node with a new layer no longer
     /// fits its kept one or draws in its parent's layer.
+    #[inline(always)]
     pub fn follow(
         &mut self,
         applier: &MemoryApplier,

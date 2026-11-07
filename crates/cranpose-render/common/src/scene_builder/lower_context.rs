@@ -56,6 +56,7 @@ impl LowerContext {
     // What the children of `layer`, the layer a node lowered under this
     // context and placed since where it now lies, lower with: what
     // `for_children` gives for the node, read from its layer.
+    #[inline]
     pub(super) fn beneath_layer(&self, layer: &LayerNode) -> Self {
         Self {
             inherited_motion_context_animated: layer.motion_context_animated,
