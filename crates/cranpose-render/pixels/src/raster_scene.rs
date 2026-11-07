@@ -20,6 +20,9 @@ use crate::{
     scene_item::{ItemRef, SceneItem},
 };
 
+mod item_counts;
+pub(crate) use item_counts::{ItemCounts, PackedCounts};
+
 #[derive(Clone, Debug)]
 pub(crate) struct DrawShape {
     pub rect: Rect,
@@ -201,88 +204,6 @@ impl ShadowDraw {
             clip: None,
             ..*self
         }
-    }
-}
-
-/// How many items of each kind a scene holds where a run of its items starts
-/// or stops.
-#[derive(Clone, Copy, Default, PartialEq, Eq)]
-pub(crate) struct ItemCounts {
-    pub order: usize,
-    pub shapes: usize,
-    pub images: usize,
-    pub texts: usize,
-    pub shadows: usize,
-}
-
-impl ItemCounts {
-    /// How many items of each kind lie from `start` up to `self`.
-    pub(crate) fn since(self, start: Self) -> Self {
-        Self {
-            order: self.order - start.order,
-            shapes: self.shapes - start.shapes,
-            images: self.images - start.images,
-            texts: self.texts - start.texts,
-            shadows: self.shadows - start.shadows,
-        }
-    }
-
-    // The counts after a run of `removed` items before them gave way to a
-    // run of `added`.
-    pub(crate) fn shifted(self, removed: Self, added: Self) -> Self {
-        Self {
-            order: self.order - removed.order + added.order,
-            shapes: self.shapes - removed.shapes + added.shapes,
-            images: self.images - removed.images + added.images,
-            texts: self.texts - removed.texts + added.texts,
-            shadows: self.shadows - removed.shadows + added.shadows,
-        }
-    }
-
-    /// The counts of a run copied from where `from` began in one scene to
-    /// where `to` begins in another.
-    pub(crate) fn moved(self, from: Self, to: Self) -> Self {
-        Self {
-            order: to.order + self.order.saturating_sub(from.order),
-            shapes: to.shapes + self.shapes.saturating_sub(from.shapes),
-            images: to.images + self.images.saturating_sub(from.images),
-            texts: to.texts + self.texts.saturating_sub(from.texts),
-            shadows: to.shadows + self.shadows.saturating_sub(from.shadows),
-        }
-    }
-}
-
-// Item counts as a record keeps them: a scene holds fewer than 2^32 items,
-// so each count takes half the room of a `usize` on 64-bit targets.
-#[derive(Clone, Copy, Default, PartialEq, Eq)]
-pub(crate) struct PackedCounts([u32; 5]);
-
-impl PackedCounts {
-    // The counts as the scene works with them.
-    #[inline]
-    pub(crate) fn get(self) -> ItemCounts {
-        let [order, shapes, images, texts, shadows] = self.0.map(|count| count as usize);
-        ItemCounts {
-            order,
-            shapes,
-            images,
-            texts,
-            shadows,
-        }
-    }
-}
-
-impl From<ItemCounts> for PackedCounts {
-    #[inline]
-    fn from(counts: ItemCounts) -> Self {
-        let ItemCounts {
-            order,
-            shapes,
-            images,
-            texts,
-            shadows,
-        } = counts;
-        Self([order, shapes, images, texts, shadows].map(|count| count as u32))
     }
 }
 
