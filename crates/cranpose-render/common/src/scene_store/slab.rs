@@ -3,6 +3,7 @@
 
 use std::ops::{Index, IndexMut};
 
+#[derive(Clone)]
 pub(crate) struct Slab<T> {
     entries: Vec<Option<T>>,
     free: Vec<u32>,

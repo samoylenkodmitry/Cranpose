@@ -1,6 +1,6 @@
 use std::{any::Any, rc::Rc};
 
-use cranpose_core::{MemoryApplier, NodeId, collections::map::HashMap};
+use cranpose_core::{MemoryApplier, NodeId, RecordId, collections::map::HashMap};
 use cranpose_ui::{LayoutBox, ModifierNodeSlices, Point, Rect, Size, SubcomposeLayoutNode};
 use cranpose_ui_graphics::GraphicsLayer;
 
@@ -8,6 +8,7 @@ use crate::{
     NodeUpdate, SceneUpdates,
     graph::{LayerNode, ProjectiveTransform, RenderGraph, RenderNode},
     layer_transform::layer_transform_to_parent,
+    scene_store::{Item, LayerRef, RecordFlags, RecordKind, SceneStore},
 };
 
 mod dirty_walk;
@@ -15,7 +16,7 @@ pub(crate) use dirty_walk::{DirtyAncestry, RetainedPath};
 use dirty_walk::{update_along_retained_path, walk_dirty_layers};
 mod draw_recording;
 use draw_recording::{
-    DrawPass, DrawTarget, append_draw_nodes, bump_recording_generation, draw_nodes,
+    DrawPass, DrawTarget, NodeCommands, append_draw_nodes, bump_recording_generation, draw_nodes,
     layer_node_capacity,
 };
 pub(crate) use draw_recording::{RecorderKey, RecorderSlot};
@@ -27,25 +28,28 @@ pub(crate) use hit_graph::HitGraphState;
 use hit_graph::rebuild_tracking_hits;
 mod inline_leaf;
 use inline_leaf::{lower_child, update_dirty_inline};
+mod item_lists;
 mod layer_shape;
 use layer_shape::shaped_graphics_layer;
 mod text_node;
 mod translate_geometry;
 use text_node::{TextNodeParts, text_node_from_parts, translate_unwrapped};
 use translate_geometry::{KeptChild, TranslateGeometry, move_kept_child, translate_retained_child};
+mod node_data;
+use node_data::{PlacedGeometry, placed_child_geometry, read_node_data, read_placed_node_data};
 mod node_layer;
 use node_layer::{
-    AbsOrigin, LayerHead, LowerContext, PlacedGeometry, assign_layer, children_have_origin_sinks,
+    AbsOrigin, HeadKind, LayerHead, LowerContext, add_child_origin_sinks, assign_layer,
     hit_test_from_slices, layer_and_node_bounds, layer_identity, layout_box_to_snapshot,
-    lower_root_into, modifier_slices_have_origin_sinks, outer_draws, placed_child_geometry,
-    placed_transform, prepare_node_layer, read_node_data, read_placed_node_data,
-    slices_hit_something, take_wrapped_layer, write_node_content, write_node_layer,
-    write_snapshot_layer, write_wrapper,
+    lower_root_into, modifier_slices_have_origin_sinks, outer_commands, outer_draws,
+    placed_transform, prepare_node_layer, refresh_hit_targets, root_record, set_bounds,
+    set_origin_sinks, slices_hit_something, take_wrapped_layer, write_node_content,
+    write_node_layer, write_snapshot_layer, write_wrapper,
 };
 mod translate_layer;
 pub(crate) use translate_layer::TranslateScratch;
 use translate_layer::{
-    TranslatedContainer, translate_tracking_hits, translated_container,
+    TranslatedContainer, remove_own_draws, translate_tracking_hits, translated_container,
     write_own_content_around_children,
 };
 
@@ -55,8 +59,6 @@ struct BuildNodeSnapshot {
     placement: Point,
     size: Size,
     content_offset: Point,
-    /// The node's modifier slices, shared: its draw commands, handlers and
-    /// text are read from them rather than copied out.
     slices: Rc<ModifierNodeSlices>,
     graphics_layer: Option<GraphicsLayer>,
     children: Vec<Self>,
@@ -166,7 +168,10 @@ pub fn build_graph_from_layout_tree(root: &LayoutBox, _scale: f32) -> RenderGrap
     bump_recording_generation();
     let root_snapshot = layout_box_to_snapshot(root, None);
     let mut graph = RenderGraph::new(LayerNode::default());
-    write_snapshot_layer(root_snapshot, LowerContext::ROOT, &mut graph.root);
+    graph.store.begin_update();
+    let record = root_record(&mut graph.store, root_snapshot.node_id);
+    write_snapshot_layer(&mut graph.store, root_snapshot, LowerContext::ROOT, record);
+    graph.refresh_from_store();
     graph
 }
 
@@ -179,7 +184,11 @@ pub fn build_graph_from_applier(
 ) -> Option<RenderGraph> {
     bump_recording_generation();
     let mut graph = RenderGraph::new(LayerNode::default());
-    lower_root_into(applier, root, &mut graph.root).then_some(graph)
+    graph.store.begin_update();
+    lower_root_into(applier, &mut graph.store, root).then(|| {
+        graph.refresh_from_store();
+        graph
+    })
 }
 
 /// Builds `root`'s graph again, its layers taking the allocations of
@@ -190,19 +199,22 @@ pub fn rebuild_graph_from_applier(
     scale: f32,
     previous: Option<RenderGraph>,
 ) -> Option<RenderGraph> {
-    let graph = match previous {
+    match previous {
         Some(mut graph) => {
-            release_for_rebuild(&mut graph.root);
+            graph.store.begin_update();
+            if let Some(record) = graph.store.root() {
+                release_for_rebuild(&mut graph.store, record);
+            }
             bump_recording_generation();
             graph.retained_path = None;
             graph.update += 1;
-            graph.root.note_content_change(graph.update);
-            lower_root_into(applier, root, &mut graph.root).then_some(graph)
+            lower_root_into(applier, &mut graph.store, root).then(|| {
+                graph.refresh_from_store();
+                graph
+            })
         }
         None => build_graph_from_applier(applier, root, scale),
-    };
-    crate::layer_recycling::release();
-    graph
+    }
 }
 
 /// Applies `updates` to `graph` in place. Returns `false` when the update could not be applied
@@ -226,7 +238,9 @@ pub fn update_graph_from_applier_report(
     _scale: f32,
 ) -> GraphUpdateReport {
     let report = update_graph_from_applier_report_inner(applier, graph, updates);
-    crate::layer_recycling::release();
+    if !updates.is_empty() && report.applied() {
+        graph.refresh_from_store();
+    }
     if let GraphUpdate::NeedsRebuild(reason) = report.update
         && cranpose_core::DIAGNOSTICS.scene_update_diag.is_set()
     {
@@ -238,8 +252,6 @@ pub fn update_graph_from_applier_report(
     report
 }
 
-/// Puts into `dirty` each dirty node with the update it needs, the updates
-/// of a node named more than once merged.
 // Returns a move when a node's layer change merged into new content: its
 // layer is lowered again, which keeps no record of where it lay.
 fn dirty_node_updates(
@@ -280,6 +292,7 @@ fn update_graph_from_applier_report_inner(
     }
     bump_recording_generation();
     graph.update += 1;
+    graph.store.begin_update();
     let update = graph.update;
 
     if cranpose_core::DIAGNOSTICS.scene_update_diag.is_set() {
@@ -297,26 +310,33 @@ fn update_graph_from_applier_report_inner(
     report
 }
 
-/// Updates `graph` for `remaining_dirty_nodes`, removing each node it
-/// updates from the map.
 fn update_dirty_nodes(
     applier: &MemoryApplier,
     graph: &mut RenderGraph,
     remaining_dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
     update: u64,
 ) -> GraphUpdateReport {
-    if let Some(root_id) = layer_identity(&graph.root)
+    let RenderGraph {
+        store,
+        retained_path,
+        dirty_ancestry,
+        ..
+    } = graph;
+    let Some(root) = store.root() else {
+        return GraphUpdateReport::needs_rebuild(GraphRebuildReason::RootLayerUnavailable);
+    };
+    if let Some(root_id) = layer_identity(store.layer(root))
         && let Some(kind) = remaining_dirty_nodes.remove(&root_id)
     {
         if let Some(mut changes) = try_update_retained_layer(
             applier,
-            &mut graph.root,
+            store,
+            root,
             remaining_dirty_nodes,
             kind,
             Level::Root,
             TranslateAncestorContext {
                 inherited_motion_context_animated: false,
-                update,
                 inherited_translated_content_context: false,
                 parent_content_offset: Point::default(),
                 parent_abs: AbsOrigin::ROOT,
@@ -325,8 +345,14 @@ fn update_dirty_nodes(
             if remaining_dirty_nodes.is_empty() {
                 return GraphUpdateReport::patched(changes);
             }
-            let walked = walk_dirty_layers(applier, graph, remaining_dirty_nodes, update)
-                .map(|(report, _)| report);
+            let walked = walk_dirty_layers(
+                applier,
+                store,
+                dirty_ancestry,
+                remaining_dirty_nodes,
+                update,
+            )
+            .map(|(report, _)| report);
             changes |= walked.map_or(GraphChanges::HitsAndMoves, |report| report.changes);
             return GraphUpdateReport {
                 update: classify_walk(applier, walked.is_some(), remaining_dirty_nodes),
@@ -334,30 +360,25 @@ fn update_dirty_nodes(
             };
         }
 
-        let Some(hit_graph_dirty) = rebuild_tracking_hits(&mut graph.root, |root| {
-            release_for_rebuild(root);
-            lower_root_into(applier, root_id, root)
+        let Some(hit_graph_dirty) = rebuild_tracking_hits(store, root, |store, root| {
+            release_for_rebuild(store, root);
+            lower_root_into(applier, store, root_id)
         }) else {
             return GraphUpdateReport::needs_rebuild(GraphRebuildReason::RootLayerUnavailable);
         };
-        graph.root.note_content_change(update);
+        store.note_content_change(root);
 
         return GraphUpdateReport::patched(GraphChanges::hits(hit_graph_dirty));
     }
 
     // An update that does not go along the retained path may move the
     // layers on it, so only one that does keeps it.
-    if let Some(path) = graph.retained_path.take()
-        && let Some(report) = update_along_retained_path(
-            applier,
-            &mut graph.root,
-            &path,
-            remaining_dirty_nodes,
-            update,
-        )
+    if let Some(path) = retained_path.take()
+        && let Some(report) =
+            update_along_retained_path(applier, store, &path, remaining_dirty_nodes, update)
     {
         if report.is_some() {
-            graph.retained_path = Some(RetainedPath { update, ..path });
+            *retained_path = Some(RetainedPath { update, ..path });
         }
         return match report {
             Some(report) => GraphUpdateReport::patched(report.changes),
@@ -365,11 +386,16 @@ fn update_dirty_nodes(
         };
     }
 
-    let Some((report, path)) = walk_dirty_layers(applier, graph, remaining_dirty_nodes, update)
-    else {
+    let Some((report, path)) = walk_dirty_layers(
+        applier,
+        store,
+        dirty_ancestry,
+        remaining_dirty_nodes,
+        update,
+    ) else {
         return GraphUpdateReport::needs_rebuild(GraphRebuildReason::DirtyLayerUnavailable);
     };
-    graph.retained_path = path;
+    *retained_path = path;
 
     match classify_walk(applier, true, remaining_dirty_nodes) {
         GraphUpdate::Patched => GraphUpdateReport::patched(report.changes),
@@ -377,8 +403,6 @@ fn update_dirty_nodes(
     }
 }
 
-/// The update a walk made. A dirty node the walk did not find needs the whole
-/// scene built again, unless no layer draws it.
 fn classify_walk(
     applier: &MemoryApplier,
     walked: bool,
@@ -397,10 +421,6 @@ fn classify_walk(
     }
 }
 
-/// Whether the scene draws `node`: each subcompose node above it draws the
-/// slot `node` is in. A slot a lazy list keeps for reuse, or composes before
-/// it shows it, stays in the applier's tree without being drawn, and its
-/// nodes still change.
 fn is_drawn(applier: &MemoryApplier, node: NodeId) -> bool {
     let mut child = node;
     let mut current = node;
@@ -438,8 +458,6 @@ fn translate_bail(reason: &str) -> bool {
 #[derive(Clone, Copy)]
 struct TranslateAncestorContext {
     inherited_motion_context_animated: bool,
-    /// The scene update in progress.
-    update: u64,
     inherited_translated_content_context: bool,
     parent_content_offset: Point,
     parent_abs: AbsOrigin,
@@ -470,7 +488,8 @@ enum Wrapping {
 
 fn try_update_retained_layer(
     applier: &MemoryApplier,
-    layer: &mut LayerNode,
+    store: &mut SceneStore,
+    layer: RecordId,
     dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
     kind: NodeUpdate,
     level: Level,
@@ -478,108 +497,117 @@ fn try_update_retained_layer(
 ) -> Option<GraphChanges> {
     match kind {
         NodeUpdate::Moved if level == Level::Child => {
-            move_retained_layer(applier, layer, ancestors)
-                .or_else(|| translate_tracking_hits(applier, layer, dirty_nodes, ancestors))
+            move_retained_layer(applier, store, layer, ancestors)
+                .or_else(|| translate_tracking_hits(applier, store, layer, dirty_nodes, ancestors))
         }
-        NodeUpdate::Draws if redraw_retained_layer(applier, layer, level, ancestors) => {
+        NodeUpdate::Draws if redraw_retained_layer(applier, store, layer, level, ancestors) => {
             Some(GraphChanges::default())
         }
         // A translate keeps the layer's graphics layer: one that changed is
         // lowered again.
         NodeUpdate::Content | NodeUpdate::Draws | NodeUpdate::Moved => {
-            translate_tracking_hits(applier, layer, dirty_nodes, ancestors)
+            translate_tracking_hits(applier, store, layer, dirty_nodes, ancestors)
         }
         NodeUpdate::Layer => {
-            update_layer_properties(applier, layer, level, Position::Kept, ancestors)
+            update_layer_properties(applier, store, layer, level, Position::Kept, ancestors)
         }
         NodeUpdate::MovedLayer => {
-            update_layer_properties(applier, layer, level, Position::Moved, ancestors)
+            update_layer_properties(applier, store, layer, level, Position::Moved, ancestors)
         }
     }
 }
 
-/// Records the own draws of the node of `container` again around the child
-/// layers it keeps, for a node whose draws read state that changed while its
-/// layout, modifiers and children stayed. False when the layer no longer
-/// fits the node: the content update then takes it.
 fn redraw_retained_layer(
     applier: &MemoryApplier,
-    container: &mut LayerNode,
+    store: &mut SceneStore,
+    container: RecordId,
     level: Level,
     ancestors: TranslateAncestorContext,
 ) -> bool {
+    let layer = store.layer(container);
     // The wrapper of a node's outer draws is written with its layer.
-    if container.wraps.is_some() {
+    if layer.kind() == RecordKind::Wrapper {
         return false;
     }
-    let Some(node_id) = container.node_id else {
+    let Some(node_id) = layer.node_id() else {
         return false;
     };
     read_placed_node_data(applier, node_id, level, |data| {
-        let placement = container.origin_in_parent;
+        let layer = store.layer(container);
+        let placement = layer.origin_in_parent();
         let kept = Position::Kept;
-        if !retained_layer_matches_layout(container, &data, placement, Wrapping::Bare, kept) {
+        if !retained_layer_matches_layout(layer, &data, placement, Wrapping::Bare, kept) {
             return false;
         }
-        let Ok(plan) = translated_container(
+        if translated_container(
+            store,
             container,
             &data.layout_state,
             &data.modifier_slices,
             ancestors,
             Wrapping::Bare,
-        ) else {
+        )
+        .is_err()
+        {
             return false;
-        };
-        container.node_bounds = plan.node_bounds;
-        crate::layer_recycling::recycle_primitives(container);
+        }
+        remove_own_draws(store, container);
+        let mut list = item_lists::take();
+        list.extend_from_slice(store.items(container));
         write_own_content_around_children(
+            store,
             container,
+            &mut list,
             node_id,
             &data.modifier_slices,
             data.layout_state.size(),
         );
-        container.refresh_child_facts();
-        container.note_content_change(ancestors.update);
+        store.set_items(container, &list);
+        item_lists::give(list);
+        refresh_hit_targets(store, container);
+        store.note_content_change(container);
         true
     })
     .unwrap_or(false)
 }
 
-/// Moves the layer of a node that only moved in its parent, keeping what it
-/// drew, and returns whether hit geometry changed. A subtree that publishes
-/// window origins publishes them again from where it now lies. `None` when
-/// the layer cannot keep its content: its size changed.
 fn move_retained_layer(
     applier: &MemoryApplier,
-    layer: &mut LayerNode,
+    store: &mut SceneStore,
+    layer: RecordId,
     ancestors: TranslateAncestorContext,
 ) -> Option<GraphChanges> {
-    let placed = placed_child_geometry(applier, layer_identity(layer)?)?;
-    if Rect::from_size(placed.size) != layer.node_rect() {
+    let placed = placed_child_geometry(applier, layer_identity(store.layer(layer))?)?;
+    if Rect::from_size(placed.size) != store.layer(layer).node_rect() {
         return None;
     }
-    let previous = HitGraphState::of(layer);
-    translate_retained_child(layer, placed.position, ancestors.parent_content_offset);
-    if layer.has_origin_sinks {
-        publish_retained_window_geometry(applier, layer, ancestors.parent_abs);
+    let previous = HitGraphState::of(store.layer(layer));
+    translate_retained_child(
+        store,
+        layer,
+        placed.position,
+        ancestors.parent_content_offset,
+    );
+    let moved = store.layer(layer);
+    if moved.has_origin_sinks() {
+        publish_retained_window_geometry(applier, moved, ancestors.parent_abs);
     }
-    Some(previous.changes_against(&HitGraphState::of(layer)))
+    Some(previous.changes_against(&HitGraphState::of(moved)))
 }
 
-fn content_layer_mut(container: &mut LayerNode) -> Option<&mut LayerNode> {
-    let Some(node_id) = container.wraps else {
+fn content_layer(store: &SceneStore, container: RecordId) -> Option<RecordId> {
+    let layer = store.layer(container);
+    let Some(node_id) = layer.wraps() else {
         return Some(container);
     };
-    container.children.iter_mut().find_map(|child| match child {
-        RenderNode::Layer(layer) if layer.node_id == Some(node_id) => Some(&mut **layer),
-        _ => None,
-    })
+    layer
+        .children()
+        .find(|child| child.kind() == RecordKind::Layer && child.node_id() == Some(node_id))
+        .map(LayerRef::id)
 }
 
-/// Whether `layer` still fits its node's layout, so new layer properties
-/// can update it in place: at `placement`, unless the node moved.
 fn retained_layer_matches_layout(
-    layer: &LayerNode,
+    layer: LayerRef<'_>,
     data: &SnapshotNodeData<'_>,
     placement: Point,
     wrapping: Wrapping,
@@ -589,20 +617,22 @@ fn retained_layer_matches_layout(
     let slices = &data.modifier_slices;
     (position == Position::Moved || state.position() == placement)
         && Rect::from_size(state.size()) == layer.node_rect()
-        && slices.layer_bounds(state.size()) == layer.local_bounds
-        && state.content_offset() == layer.content_offset
+        && slices.layer_bounds(state.size()) == layer.local_bounds()
+        && state.content_offset() == layer.content_offset()
         && (slices.outer_draw_command_count() > 0) == (wrapping == Wrapping::Wrapped)
 }
 
 fn update_layer_properties(
     applier: &MemoryApplier,
-    container: &mut LayerNode,
+    store: &mut SceneStore,
+    container: RecordId,
     level: Level,
     position: Position,
     ancestors: TranslateAncestorContext,
 ) -> Option<GraphChanges> {
-    let node_id = layer_identity(container)?;
-    let wrapping = if container.wraps.is_some() {
+    let layer = store.layer(container);
+    let node_id = layer_identity(layer)?;
+    let wrapping = if layer.kind() == RecordKind::Wrapper {
         Wrapping::Wrapped
     } else {
         Wrapping::Bare
@@ -613,49 +643,61 @@ fn update_layer_properties(
     if position == Position::Moved && wrapped {
         return None;
     }
-    let placement = container.origin_in_parent;
+    let placement = layer.origin_in_parent();
     let changes = read_placed_node_data(applier, node_id, level, |data| {
-        let target = content_layer_mut(container)?;
+        let target = content_layer(store, container)?;
         let slices = &data.modifier_slices;
         let state = &data.layout_state;
-        if !retained_layer_matches_layout(target, &data, placement, wrapping, position) {
+        if !retained_layer_matches_layout(store.layer(target), &data, placement, wrapping, position)
+        {
             return None;
         }
         let context = LowerContext::beneath(ancestors);
-        let previous = HitGraphState::of(target);
+        let previous = HitGraphState::of(store.layer(target));
         let (head, child_context) = prepare_node_layer(node_id, slices, state, context);
-        assign_layer(target, head);
+        assign_layer(store, target, head);
         if wrapped {
-            target.transform_to_parent = layer_transform_to_parent(
-                target.local_bounds,
+            let layer = store.layer(target);
+            let transform = layer_transform_to_parent(
+                layer.local_bounds(),
                 Point::default(),
-                &target.graphics_layer,
+                layer.graphics_layer(),
             );
-            target.origin_in_parent = Point::default();
+            store.set_placement(target, Point::default(), transform);
         }
-        if target.has_origin_sinks
+        let layer = store.layer(target);
+        if layer.has_origin_sinks()
             && let Some(child_abs) = child_context.parent_abs
         {
-            for child in &target.children {
-                if let RenderNode::Layer(child) = child {
-                    publish_retained_window_geometry(applier, child, child_abs);
-                }
+            for child in layer.children() {
+                publish_retained_window_geometry(applier, child, child_abs);
             }
         }
-        Some(previous.changes_against(&HitGraphState::of(target)))
+        Some(previous.changes_against(&HitGraphState::of(layer)))
     })??;
     if wrapped {
-        container.refresh_child_facts();
-        container.has_origin_sinks = children_have_origin_sinks(&container.children);
-        container.forget_own_raster_cache_hashes();
+        refresh_hit_targets(store, container);
+        let sinks = store
+            .layer(container)
+            .children()
+            .any(LayerRef::has_origin_sinks);
+        let flags = store
+            .layer(container)
+            .flags()
+            .without(RecordFlags::HAS_ORIGIN_SINKS);
+        store.set_flags(
+            container,
+            if sinks {
+                flags.with(RecordFlags::HAS_ORIGIN_SINKS)
+            } else {
+                flags
+            },
+        );
+        store.note_content_change(container);
     }
     Some(changes)
 }
 
-/// After a scene build or update that changed a layer in 3D, publishes
-/// where the window's scenes show the layers on their surfaces that publish
-/// window origins, as the eye sees them, and leaves each scene's eye the
-/// world it walks in. A flat window asks nothing of its layers.
 pub(crate) fn publish_space(applier: &MemoryApplier, graph: &RenderGraph) {
     if !crate::thread_state::with(|state| state.space_changed.replace(false)) {
         return;
@@ -683,9 +725,6 @@ fn publish_space_now(applier: &MemoryApplier, graph: &RenderGraph) {
     });
 }
 
-/// Publishes the window geometry of `layer`, whose local space `to_window`
-/// maps to the window, and of the layers on it that publish window origins,
-/// as far as the next layer in 3D.
 fn publish_content_geometry(
     applier: &MemoryApplier,
     layer: &LayerNode,
@@ -712,91 +751,89 @@ fn publish_content_geometry(
 
 fn publish_retained_window_geometry(
     applier: &MemoryApplier,
-    layer: &LayerNode,
+    layer: LayerRef<'_>,
     parent_abs: AbsOrigin,
 ) {
-    if !layer.has_origin_sinks {
+    if !layer.has_origin_sinks() {
         return;
     }
     let child_abs = parent_abs.children_of(layer);
-    if let Some(node_id) = layer.node_id {
+    if let Some(node_id) = layer.node_id() {
+        let origin = layer.origin_in_parent();
         read_node_data(applier, node_id, |data| {
             data.modifier_slices.publish_window_geometry(
                 Point {
-                    x: parent_abs.content_origin.x + layer.origin_in_parent.x,
-                    y: parent_abs.content_origin.y + layer.origin_in_parent.y,
+                    x: parent_abs.content_origin.x + origin.x,
+                    y: parent_abs.content_origin.y + origin.y,
                 },
                 child_abs.window_transform,
                 data.layout_state.size(),
             );
         });
     }
-    for child in &layer.children {
-        if let RenderNode::Layer(child) = child {
-            publish_retained_window_geometry(applier, child, child_abs);
-        }
+    for child in layer.children() {
+        publish_retained_window_geometry(applier, child, child_abs);
     }
 }
 
-/// Notes that the scene update changes a layer that is a scene, a surface or
-/// a 3D transform, or lies beneath one: the window's scenes publish where
-/// their layers show and their eyes' worlds again.
 #[cold]
 #[inline(never)]
 fn note_space_change() {
     crate::thread_state::with(|state| state.space_changed.set(true));
 }
 
-fn release_for_rebuild(layer: &mut LayerNode) {
-    layer.hit_test = None;
-    crate::layer_recycling::recycle_children(layer);
+fn release_for_rebuild(store: &mut SceneStore, record: RecordId) {
+    store.clear_items(record);
+    store.edit_props(record, |props| props.hit_test = None);
 }
 
-/// Takes `layer`'s node and every node beneath it out of `dirty_nodes`.
-fn forget_dirty_subtree(layer: &LayerNode, dirty_nodes: &mut HashMap<NodeId, NodeUpdate>) {
-    if let Some(node_id) = layer_identity(layer) {
+fn forget_dirty_subtree(
+    store: &SceneStore,
+    record: RecordId,
+    dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
+) {
+    if let Some(node_id) = layer_identity(store.layer(record)) {
         dirty_nodes.remove(&node_id);
     }
-    remove_dirty_descendants(layer, dirty_nodes);
+    remove_dirty_descendants(store, record, dirty_nodes);
 }
 
-// Takes the node of `node`, a child of a layer, and every node beneath it
+// Takes the node of `item`, an item of a record, and every node beneath it
 // out of `dirty_nodes`.
-fn forget_dirty_node(node: &RenderNode, dirty_nodes: &mut HashMap<NodeId, NodeUpdate>) {
-    match node {
-        RenderNode::Layer(layer) => forget_dirty_subtree(layer, dirty_nodes),
-        RenderNode::Inline(inline) => {
-            dirty_nodes.remove(&inline.node_id);
-        }
-        RenderNode::Primitive(_) | RenderNode::DrawRun(_) => {}
+fn forget_dirty_node(
+    store: &SceneStore,
+    item: Item,
+    dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
+) {
+    if let Some(record) = item.as_child() {
+        forget_dirty_subtree(store, record, dirty_nodes);
     }
 }
 
-fn remove_dirty_descendants(layer: &LayerNode, dirty_nodes: &mut HashMap<NodeId, NodeUpdate>) {
-    for child in &layer.children {
-        match child {
-            RenderNode::Layer(child_layer) => {
-                if let Some(node_id) = child_layer.node_id {
-                    dirty_nodes.remove(&node_id);
-                }
-                remove_dirty_descendants(child_layer, dirty_nodes);
-            }
-            RenderNode::Inline(inline) => {
-                dirty_nodes.remove(&inline.node_id);
-            }
-            RenderNode::Primitive(_) | RenderNode::DrawRun(_) => {}
+fn remove_dirty_descendants(
+    store: &SceneStore,
+    record: RecordId,
+    dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
+) {
+    for child in store.layer(record).children() {
+        if let Some(node_id) = child.node_id() {
+            dirty_nodes.remove(&node_id);
         }
+        remove_dirty_descendants(store, child.id(), dirty_nodes);
     }
 }
 
-// The node a child of a layer draws: a child layer's or an inline node's,
-// `None` for the layer's own draws.
-fn child_identity(node: &RenderNode) -> Option<NodeId> {
-    match node {
-        RenderNode::Layer(layer) => layer_identity(layer),
-        RenderNode::Inline(inline) => Some(inline.node_id),
-        RenderNode::Primitive(_) | RenderNode::DrawRun(_) => None,
-    }
+// The node an item of a record draws: a child record's, `None` for the
+// record's own draws and draw groups.
+fn child_identity(store: &SceneStore, item: Item) -> Option<NodeId> {
+    item.as_child()
+        .and_then(|child| layer_identity(store.layer(child)))
+}
+
+fn translation_of(transform: ProjectiveTransform) -> Option<Point> {
+    let [[a, b, x], [c, d, y], [p, q, w]] = transform.matrix();
+    (a == 1.0 && b == 0.0 && c == 0.0 && d == 1.0 && p == 0.0 && q == 0.0 && w == 1.0)
+        .then(|| Point::new(x, y))
 }
 
 #[cfg(test)]

@@ -1,11 +1,11 @@
 // Leaf nodes that draw in their parent's layer: which nodes lower so, how
 // they lower, and how a scene update brings one to its node's state.
 
-use cranpose_core::{MemoryApplier, NodeId, collections::map::HashMap};
+use cranpose_core::{MemoryApplier, NodeId, RecordId, collections::map::HashMap};
 use cranpose_ui::{ModifierNodeSlices, Point, Rect, Size};
 
 use super::{
-    BuildNodeSnapshot, DrawTarget, Level, LowerContext, SnapshotNodeData, assign_layer,
+    BuildNodeSnapshot, DrawTarget, Level, LowerContext, SnapshotNodeData, assign_layer, item_lists,
     modifier_slices_have_origin_sinks, note_layer_lowered, prepare_node_layer, read_node_data,
     read_placed_node_data, remove_dirty_descendants, slices_hit_something,
     text_node::{TextNodeParts, drawn_text, refresh_text_node},
@@ -14,7 +14,8 @@ use super::{
 };
 use crate::{
     NodeUpdate,
-    graph::{InlineNode, LayerNode, RenderNode},
+    graph::ProjectiveTransform,
+    scene_store::{Item, ItemKind, RecordFlags, RecordKind, RecordSeed, SceneStore},
 };
 
 // Whether a node with `slices`, `size` and no children draws in its
@@ -47,114 +48,149 @@ pub(super) fn snapshot_lowers_inline(snapshot: &BuildNodeSnapshot) -> bool {
         && slices_lower_inline(&snapshot.slices, snapshot.size)
 }
 
-// Lowers the placed child `node_id` into the node its parent holds: inline
+// Lowers the placed child `node_id` into a record under `parent`: a leaf
 // when it needs no layer of its own, else its layer.
 pub(super) fn lower_child(
     applier: &MemoryApplier,
+    store: &mut SceneStore,
+    parent: RecordId,
     node_id: NodeId,
     context: LowerContext,
-) -> Option<RenderNode> {
+) -> Option<Item> {
     read_placed_node_data(applier, node_id, Level::Child, |data| {
-        lower_placed_child(applier, node_id, data, context)
+        let record = store.insert(RecordSeed {
+            kind: RecordKind::Layer,
+            node: Some(node_id),
+            parent: Some(parent),
+        });
+        write_placed_child(applier, store, record, node_id, data, context);
+        Item::child(record)
     })
 }
 
-fn lower_placed_child(
+// Writes the placed child `node_id` of `data` into `record`, whose items
+// are empty: as a leaf when it needs no layer of its own, else its layer.
+fn write_placed_child(
     applier: &MemoryApplier,
+    store: &mut SceneStore,
+    record: RecordId,
     node_id: NodeId,
     data: SnapshotNodeData<'_>,
     context: LowerContext,
-) -> RenderNode {
+) {
     if !lowers_inline(&data) {
-        let mut layer = crate::layer_recycling::layer_box();
-        write_node_layer(applier, node_id, data, context, &mut layer);
-        return RenderNode::Layer(layer);
+        write_node_layer(applier, store, node_id, data, context, record);
+        return;
     }
-    let mut inline = crate::layer_recycling::inline_box().unwrap_or_default();
-    write_inline(&mut inline, node_id, &data, context);
-    if draws_inline(&inline) {
-        return RenderNode::Inline(inline);
+    write_inline(store, record, node_id, &data, context);
+    if !draws_inline(store, record) {
+        layer_from_content(store, record, node_id, &data, context);
     }
-    let layer = layer_from_content(&mut inline, node_id, &data, context);
-    crate::layer_recycling::recycle_node(RenderNode::Inline(inline));
-    RenderNode::Layer(layer)
 }
 
 // Writes the node `node_id` of `data`, placed under `context`, into
-// `inline`, whose content list is empty.
+// `record` as a leaf; its items are empty.
 fn write_inline(
-    inline: &mut InlineNode,
+    store: &mut SceneStore,
+    record: RecordId,
     node_id: NodeId,
     data: &SnapshotNodeData<'_>,
     context: LowerContext,
 ) {
     let slices = &data.modifier_slices;
     let size = data.layout_state.size();
-    place_inline(inline, data, context);
-    inline.node_id = node_id;
-    inline.size = size;
+    store.set_kind(record, RecordKind::Leaf, Some(node_id));
+    store.set_props(record, None);
+    store.set_content_offset(record, data.layout_state.content_offset());
+    store.set_size(record, size.width, size.height);
+    place_inline(store, record, data, context);
     let draws = DrawTarget {
         size,
-        motion_context_animated: inline.motion_context_animated,
+        motion_context_animated: store.layer(record).motion_context_animated(),
         layer: None,
     };
-    write_node_content(&mut inline.content, node_id, slices, draws, (0, 0), |_| {});
-    inline.note_change();
-}
-
-// Puts `inline` where its node of `data` lies under `context`.
-fn place_inline(inline: &mut InlineNode, data: &SnapshotNodeData<'_>, context: LowerContext) {
-    let placement = data.layout_state.position();
-    inline.origin = Point::new(
-        placement.x + context.parent_content_offset.x,
-        placement.y + context.parent_content_offset.y,
+    let mut list = item_lists::take();
+    write_node_content(
+        store,
+        record,
+        &mut list,
+        node_id,
+        slices,
+        draws,
+        (0, 0),
+        |_, _| {},
     );
-    inline.motion_context_animated =
+    store.set_items(record, &list);
+    item_lists::give(list);
+    store.note_content_change(record);
+}
+
+// Puts `record`, the leaf of the node of `data`, where the node lies under
+// `context`.
+fn place_inline(
+    store: &mut SceneStore,
+    record: RecordId,
+    data: &SnapshotNodeData<'_>,
+    context: LowerContext,
+) {
+    let placement = data.layout_state.position();
+    let offset = context.parent_content_offset;
+    store.set_placement(
+        record,
+        placement,
+        ProjectiveTransform::translation(placement.x + offset.x, placement.y + offset.y),
+    );
+    let animated =
         context.inherited_motion_context_animated || data.modifier_slices.motion_context_animated();
+    store.set_flags(
+        record,
+        if animated {
+            RecordFlags::MOTION_ANIMATED
+        } else {
+            RecordFlags::default()
+        },
+    );
+    store.note_place_change(record);
 }
 
-// Whether the content just written into `inline` draws in its parent's
-// layer: a transform or clip in its draws groups some of them into a layer,
-// which only a layer of the node's own holds.
-fn draws_inline(inline: &InlineNode) -> bool {
-    inline
-        .content
+// Whether the content just written into `record` draws in its parent's
+// layer: a transform or clip in its draws groups some of them into a
+// record, which only a layer of the node's own holds.
+fn draws_inline(store: &SceneStore, record: RecordId) -> bool {
+    store
+        .items(record)
         .iter()
-        .all(|node| !matches!(node, RenderNode::Layer(_)))
+        .all(|item| item.kind() != ItemKind::Child)
 }
 
-// The layer of the node of `data` around the content written into
-// `inline`, which it takes.
+// Makes `record`, which holds the content of the node of `data`, the
+// node's layer.
 fn layer_from_content(
-    inline: &mut InlineNode,
+    store: &mut SceneStore,
+    record: RecordId,
     node_id: NodeId,
     data: &SnapshotNodeData<'_>,
     context: LowerContext,
-) -> Box<LayerNode> {
-    let mut layer = crate::layer_recycling::layer_box();
-    std::mem::swap(&mut layer.children, &mut inline.content);
+) {
     let (head, _) = prepare_node_layer(node_id, &data.modifier_slices, &data.layout_state, context);
-    assign_layer(&mut layer, head);
-    layer
+    assign_layer(store, record, head);
 }
 
-// Updates `slot`, the inline node of the dirty node `node_id`, for the
-// change `kind` under `context`: in place while the node draws inline, else
-// as its new layer. Returns whether hit geometry changed: only a node that
+// Updates `record`, the leaf of the dirty node `node_id`, for the change
+// `kind` under `context`: in place while the node draws inline, else as
+// its new layer. Returns whether hit geometry changed: only a node that
 // takes a layer with a hit target changes it. `None` when the node's data
 // is gone.
 pub(super) fn update_dirty_inline(
     applier: &MemoryApplier,
-    slot: &mut RenderNode,
+    store: &mut SceneStore,
+    record: RecordId,
     node_id: NodeId,
     kind: NodeUpdate,
     context: LowerContext,
     dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
 ) -> Option<bool> {
     read_child_data(applier, node_id, |data| {
-        let RenderNode::Inline(inline) = slot else {
-            unreachable!("the slot holds an inline node");
-        };
         if lowers_inline(&data) {
             // Without a layer the node's layer properties draw nothing:
             // a node that kept its size only moves.
@@ -162,39 +198,35 @@ pub(super) fn update_dirty_inline(
                 kind,
                 NodeUpdate::Moved | NodeUpdate::Layer | NodeUpdate::MovedLayer
             );
-            if moved && inline.size == data.layout_state.size() {
-                place_inline(inline, &data, context);
+            if moved && store.layer(record).size() == data.layout_state.size() {
+                place_inline(store, record, &data, context);
                 return false;
             }
-            if retext_inline(inline, &data, context) {
+            if retext_inline(store, record, &data, context) {
                 return false;
             }
             note_layer_lowered();
-            crate::layer_recycling::recycle_content(inline);
-            write_inline(inline, node_id, &data, context);
-            if draws_inline(inline) {
-                return false;
+            store.clear_items(record);
+            write_inline(store, record, node_id, &data, context);
+            if !draws_inline(store, record) {
+                layer_from_content(store, record, node_id, &data, context);
             }
-            let layer = layer_from_content(inline, node_id, &data, context);
-            crate::layer_recycling::recycle_node(std::mem::replace(slot, RenderNode::Layer(layer)));
             return false;
         }
         note_layer_lowered();
-        let lowered = lower_placed_child(applier, node_id, data, context);
-        crate::layer_recycling::recycle_node(std::mem::replace(slot, lowered));
-        let RenderNode::Layer(layer) = slot else {
-            unreachable!("a node that does not lower inline lowers as a layer");
-        };
-        remove_dirty_descendants(layer, dirty_nodes);
-        holds_hit_geometry(layer)
+        store.clear_items(record);
+        write_placed_child(applier, store, record, node_id, data, context);
+        remove_dirty_descendants(store, record, dirty_nodes);
+        holds_hit_geometry(store.layer(record))
     })
 }
 
 // Writes the text of the node of `data`, a label that drew its text and
-// nothing else, into the text `inline` drew, placed under `context`: a text
-// and style that stay keep their paint. False when either drew more.
+// nothing else, into the text `record` drew, placed under `context`: a
+// text and style that stay keep their paint. False when either drew more.
 fn retext_inline(
-    inline: &mut InlineNode,
+    store: &mut SceneStore,
+    record: RecordId,
     data: &SnapshotNodeData<'_>,
     context: LowerContext,
 ) -> bool {
@@ -203,29 +235,36 @@ fn retext_inline(
         return false;
     }
     let size = data.layout_state.size();
-    let Some(text) = drawn_text(&mut inline.content) else {
+    let Some(node_id) = store.layer(record).owner() else {
         return false;
     };
-    if !refresh_text_node(text, &TextNodeParts::of(inline.node_id, slices, size)) {
+    let Some(text) = drawn_text(store, record) else {
+        return false;
+    };
+    if !refresh_text_node(text, &TextNodeParts::of(node_id, slices, size)) {
         return false;
     }
-    place_inline(inline, data, context);
-    inline.size = size;
-    inline.note_change();
+    place_inline(store, record, data, context);
+    store.set_size(record, size.width, size.height);
+    store.note_content_change(record);
     true
 }
 
-// Writes the text of the inline node in `slot`, a label a translated
-// container keeps for a content change, where it now lies under `context`.
-// False when it no longer draws its text alone inline, which leaves it to
-// the walk beneath the container.
+// Writes the text of `record`, the leaf of a label a translated container
+// keeps for a content change, where it now lies under `context`. False
+// when it no longer draws its text alone inline, which leaves it to the
+// walk beneath the container.
 pub(super) fn retext_kept_inline(
     applier: &MemoryApplier,
-    inline: &mut InlineNode,
+    store: &mut SceneStore,
+    record: RecordId,
     context: LowerContext,
 ) -> bool {
-    read_child_data(applier, inline.node_id, |data| {
-        lowers_inline(&data) && retext_inline(inline, &data, context)
+    let Some(node_id) = store.layer(record).owner() else {
+        return false;
+    };
+    read_child_data(applier, node_id, |data| {
+        lowers_inline(&data) && retext_inline(store, record, &data, context)
     })
     .unwrap_or(false)
 }
@@ -244,8 +283,8 @@ fn read_child_data<R>(
     })?
 }
 
-// Turns `slot`, the layer of a dirty node a scene update kept, into the
-// node drawn in its parent's layer, placed in a parent whose content is
+// Turns `record`, the layer of a dirty node a scene update kept, into the
+// leaf drawn in its parent's layer, placed in a parent whose content is
 // offset by `parent_content_offset`, once the node lowers inline, as a fresh
 // build lowers it: a leaf whose graphics layer, clip or pointer handling
 // went away. Every other layer keeps its layer after a check of its own
@@ -253,53 +292,59 @@ fn read_child_data<R>(
 #[inline]
 pub(super) fn fold_kept_leaf(
     applier: &MemoryApplier,
-    slot: &mut RenderNode,
+    store: &mut SceneStore,
+    record: RecordId,
     parent_content_offset: Point,
 ) {
-    if let RenderNode::Layer(layer) = slot
-        && layer.graphics_layer.get().is_none()
-        && layer.node_id.is_some()
-        && layer.wraps.is_none()
-        && !layer.clip_to_bounds
-        && layer.hit_test.is_none()
-        && !layer.has_origin_sinks
-        && !layer.translated_content_context
-        && layer.node_bounds.is_none()
-        && layer.draw_phase.is_none()
-        && !layer
-            .children
-            .iter()
-            .any(|child| matches!(child, RenderNode::Layer(_) | RenderNode::Inline(_)))
+    let layer = store.layer(record);
+    if layer.kind() == RecordKind::Layer
+        && layer.props().is_none()
+        && layer.node_id().is_some()
+        && !layer.clip_to_bounds()
+        && !layer.has_origin_sinks()
+        && !layer.translated_content_context()
+        && layer.children().next().is_none()
     {
-        fold_leaf_layer(applier, slot, parent_content_offset);
+        fold_leaf_layer(applier, store, record, parent_content_offset);
     }
 }
 
-// Turns `slot`, a leaf's layer without properties, into the node drawn in
+// Turns `record`, a leaf's layer without properties, into the leaf drawn in
 // its parent's layer when its node lowers inline. A leaf's own draws
-// without a group draw alike in either node, so the content moves over as
-// it is.
+// without a group draw alike in either record, so the content stays as it
+// is.
 #[inline(never)]
-fn fold_leaf_layer(applier: &MemoryApplier, slot: &mut RenderNode, parent_content_offset: Point) {
-    let RenderNode::Layer(layer) = slot else {
-        return;
-    };
-    let Some(node_id) = layer.node_id else {
+fn fold_leaf_layer(
+    applier: &MemoryApplier,
+    store: &mut SceneStore,
+    record: RecordId,
+    parent_content_offset: Point,
+) {
+    let layer = store.layer(record);
+    let Some(node_id) = layer.node_id() else {
         return;
     };
     if !read_child_data(applier, node_id, |data| lowers_inline(&data)).unwrap_or(false) {
         return;
     }
-    let mut inline = crate::layer_recycling::inline_box().unwrap_or_default();
-    inline.node_id = node_id;
-    inline.origin = Point::new(
-        layer.origin_in_parent.x + parent_content_offset.x,
-        layer.origin_in_parent.y + parent_content_offset.y,
+    let origin = layer.origin_in_parent();
+    let animated = layer.motion_context_animated();
+    store.set_kind(record, RecordKind::Leaf, Some(node_id));
+    store.set_placement(
+        record,
+        origin,
+        ProjectiveTransform::translation(
+            origin.x + parent_content_offset.x,
+            origin.y + parent_content_offset.y,
+        ),
     );
-    let rect = layer.node_rect();
-    inline.size = Size::new(rect.width, rect.height);
-    inline.motion_context_animated = layer.motion_context_animated;
-    std::mem::swap(&mut inline.content, &mut layer.children);
-    inline.note_change();
-    crate::layer_recycling::recycle_node(std::mem::replace(slot, RenderNode::Inline(inline)));
+    store.set_flags(
+        record,
+        if animated {
+            RecordFlags::MOTION_ANIMATED
+        } else {
+            RecordFlags::default()
+        },
+    );
+    store.note_content_change(record);
 }

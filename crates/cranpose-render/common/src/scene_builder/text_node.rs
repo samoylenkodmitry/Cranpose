@@ -1,6 +1,6 @@
 use std::{rc::Rc, sync::Arc};
 
-use cranpose_core::{MemoryApplier, NodeId, collections::map::HashMap};
+use cranpose_core::{MemoryApplier, NodeId, RecordId, collections::map::HashMap};
 use cranpose_ui::{
     ModifierNodeSlices, PreparedTextLayout, Rect, Size, TextLayoutOptions, TextOverflow,
     TextPanResolver,
@@ -8,15 +8,14 @@ use cranpose_ui::{
 
 use super::{
     SnapshotNodeData, TranslateAncestorContext, TranslateGeometry, TranslatedContainer, Wrapping,
-    hit_test_from_slices, modifier_slices_have_origin_sinks, read_node_data, translate_bail,
+    hit_test_from_slices, read_node_data, refresh_hit_targets, set_origin_sinks, translate_bail,
     translate_layer::{apply_translated_container_state, translate_layer_from_data},
     translated_container,
 };
 use crate::{
     NodeUpdate,
-    graph::{
-        LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, RenderNode, TextPrimitiveNode,
-    },
+    graph::TextPrimitiveNode,
+    scene_store::{Item, ItemKind, RecordKind, SceneStore},
     text_paint::{TextPaint, TextPaintCache},
 };
 
@@ -49,18 +48,20 @@ impl TextNodeParts {
 // it is, any other layer the full update.
 pub(super) fn translate_unwrapped(
     applier: &MemoryApplier,
-    container: &mut LayerNode,
+    store: &mut SceneStore,
+    container: RecordId,
     dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
     ancestors: TranslateAncestorContext,
     data: SnapshotNodeData<'_>,
 ) -> bool {
-    if draws_text_alone(container)
-        && let Some(done) = translate_leaf_text(container, &data, ancestors)
+    if draws_text_alone(store, container)
+        && let Some(done) = translate_leaf_text(store, container, &data, ancestors)
     {
         return done;
     }
     translate_layer_from_data(
         applier,
+        store,
         container,
         dirty_nodes,
         ancestors,
@@ -75,86 +76,85 @@ pub(super) fn translate_unwrapped(
 // recording nothing. `None` for any other layer, which the full update
 // takes.
 pub(super) fn translate_leaf_text(
-    container: &mut LayerNode,
+    store: &mut SceneStore,
+    container: RecordId,
     data: &SnapshotNodeData<'_>,
     ancestors: TranslateAncestorContext,
 ) -> Option<bool> {
     let slices = &data.modifier_slices;
     let leaf = data.children.is_empty() && !data.window_root && slices.draw_commands().is_empty();
-    if !leaf || !slices.has_text() || drawn_text(&mut container.children).is_none() {
+    if !leaf || !slices.has_text() || drawn_text(store, container).is_none() {
         return None;
     }
     let layout_state = &data.layout_state;
-    let TranslatedContainer {
-        node_id,
-        node_bounds,
-    } = match translated_container(container, layout_state, slices, ancestors, Wrapping::Bare) {
+    let TranslatedContainer { node_id } = match translated_container(
+        store,
+        container,
+        layout_state,
+        slices,
+        ancestors,
+        Wrapping::Bare,
+    ) {
         Ok(plan) => plan,
         Err(reason) => return Some(translate_bail(reason)),
     };
     let parts = TextNodeParts::of(node_id, slices, layout_state.size());
-    if !refresh_text_node(drawn_text(&mut container.children)?, &parts) {
+    if !refresh_text_node(drawn_text(store, container)?, &parts) {
         return None;
     }
-    container.node_bounds = node_bounds;
+    let layer = store.layer(container);
     let geometry = TranslateGeometry::new(
         layout_state,
-        &container.graphics_layer,
-        container.local_bounds,
+        layer.graphics_layer(),
+        layer.local_bounds(),
         ancestors.parent_abs,
     );
     let offset = ancestors.parent_content_offset;
-    apply_translated_container_state(container, slices, layout_state, offset, geometry);
-    container.hit_test = hit_test_from_slices(slices);
-    container.has_origin_sinks = modifier_slices_have_origin_sinks(slices);
-    container.refresh_child_facts();
-    container.note_content_change(ancestors.update);
+    apply_translated_container_state(store, container, slices, layout_state, offset, geometry);
+    let hit_test = hit_test_from_slices(slices);
+    store.edit_props(container, |props| props.hit_test = hit_test);
+    set_origin_sinks(store, container, slices);
+    refresh_hit_targets(store, container);
+    store.note_content_change(container);
     Some(true)
 }
 
 // Writes the text of the node of `layer`, a label a translated container
-// keeps among its `children` for a content change, where the label lies.
-// `None` when the label no longer draws text alone, which leaves it to the
-// walk beneath the container.
+// keeps for a content change, where the label lies. `None` when the label
+// no longer draws text alone, which leaves it to the walk beneath the
+// container.
 pub(super) fn retext_kept_leaf(
     applier: &MemoryApplier,
-    layer: &mut LayerNode,
+    store: &mut SceneStore,
+    layer: RecordId,
     children: TranslateAncestorContext,
 ) -> Option<bool> {
-    let node_id = layer.node_id?;
+    let node_id = store.layer(layer).node_id()?;
     read_node_data(applier, node_id, |data| {
-        translate_leaf_text(layer, &data, children)
+        translate_leaf_text(store, layer, &data, children)
     })
     .flatten()
 }
 
 // Whether `layer` drew its node's text and nothing else.
-pub(super) fn draws_text_alone(layer: &LayerNode) -> bool {
-    layer.wraps.is_none() && text_alone(&layer.children)
+pub(super) fn draws_text_alone(store: &SceneStore, layer: RecordId) -> bool {
+    store.layer(layer).kind() != RecordKind::Wrapper && text_alone(store.items(layer))
 }
 
-// Whether `nodes`, what a node drew, are its text and nothing else.
-pub(super) fn text_alone(nodes: &[RenderNode]) -> bool {
-    matches!(
-        nodes,
-        [RenderNode::Primitive(PrimitiveEntry {
-            phase: PrimitivePhase::BeforeChildren,
-            node: PrimitiveNode::Text(_),
-        })]
-    )
+// Whether `items`, what a node drew, are its text and nothing else.
+pub(super) fn text_alone(items: &[Item]) -> bool {
+    matches!(items, [item] if item.kind() == ItemKind::Text)
 }
 
-// The text in `nodes`, what a node drew, when it drew that and nothing else.
-pub(super) fn drawn_text(nodes: &mut [RenderNode]) -> Option<&mut TextPrimitiveNode> {
-    match nodes {
-        [
-            RenderNode::Primitive(PrimitiveEntry {
-                phase: PrimitivePhase::BeforeChildren,
-                node: PrimitiveNode::Text(drawn),
-            }),
-        ] => Some(drawn),
-        _ => None,
-    }
+// The text `record` drew, when it drew that and nothing else.
+pub(super) fn drawn_text(
+    store: &mut SceneStore,
+    record: RecordId,
+) -> Option<&mut TextPrimitiveNode> {
+    let [item] = *store.items(record) else {
+        return None;
+    };
+    (item.kind() == ItemKind::Text).then(|| store.text_mut(item))
 }
 
 pub(super) fn text_node_from_parts(parts: &TextNodeParts) -> Option<TextPrimitiveNode> {

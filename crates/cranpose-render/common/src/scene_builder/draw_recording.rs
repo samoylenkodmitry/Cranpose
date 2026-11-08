@@ -1,16 +1,17 @@
 use std::{borrow::Cow, ops::Range, rc::Rc};
 
-use cranpose_core::NodeId;
+use cranpose_core::{NodeId, RecordId};
 use cranpose_ui::{DrawCommand, Point, Rect, Size};
 use cranpose_ui_graphics::{
     CommandRecording, CompositingStrategy, DrawGroup, DrawPlacement, GraphicsLayer, RecordLane,
 };
 
-use super::{LayerHead, assign_layer};
+use super::{HeadKind, LayerHead, assign_layer, item_lists, translation_of};
 use crate::{
     graph::{
         CachePolicy, DrawCommandId, DrawRunNode, IsolationReasons, PrimitivePhase, RenderNode,
     },
+    scene_store::{Item, ItemRef, RecordKind, RecordSeed, SceneStore},
     style_shared::recording_for_placement_reusing,
 };
 
@@ -52,10 +53,6 @@ pub(super) fn bump_recording_generation() {
     });
 }
 
-/// A recording of the command `id` that no reader holds any more, to draw
-/// the command again in place: first one whose shape columns no reader
-/// shares either, then the oldest of three, whose recording takes new
-/// columns with the room the old ones had. A new one when none is free.
 pub(super) fn acquire_storage(id: DrawCommandId) -> Rc<CommandRecording> {
     crate::thread_state::with(|state| {
         let mut map = state.command_recordings.borrow_mut();
@@ -81,8 +78,6 @@ pub(super) fn acquire_storage(id: DrawCommandId) -> Rc<CommandRecording> {
     })
 }
 
-/// Keeps `recording`, the command `id` drew this frame, as the newest of
-/// the command's three, and hands it back for the frame's scene.
 pub(super) fn publish_recording(
     id: DrawCommandId,
     recording: Rc<CommandRecording>,
@@ -106,7 +101,7 @@ pub(super) fn publish_recording(
 
 pub(super) enum DrawPass<'a> {
     Record(DrawPlacement),
-    OverlayFrom(std::slice::Iter<'a, RenderNode>),
+    OverlayFrom(std::slice::Iter<'a, Item>),
     OverlayFromOutput(usize),
 }
 
@@ -120,38 +115,36 @@ impl DrawPass<'_> {
 
     fn take_recording(
         &mut self,
+        store: &SceneStore,
         command: &DrawCommand,
-        output: &[RenderNode],
+        output: &[Item],
     ) -> Option<Rc<CommandRecording>> {
         if matches!(command, DrawCommand::Overlay(_)) {
             return None;
         }
-        let node = match self {
+        let item = match self {
             Self::Record(_) => return None,
-            Self::OverlayFrom(nodes) => nodes.next().expect("each behind command has a draw run"),
+            Self::OverlayFrom(items) => *items.next().expect("each behind command has a draw run"),
             Self::OverlayFromOutput(index) => {
-                let node = &output[*index];
+                let item = output[*index];
                 *index += 1;
-                node
+                item
             }
         };
         // A command whose draws a group places is a layer that starts
         // with the run before its first group.
-        let run = match node {
-            RenderNode::DrawRun(run) => run,
-            RenderNode::Layer(layer) => match layer.children.first() {
-                Some(RenderNode::DrawRun(run)) => run,
+        let run = match ItemRef::of(store, item) {
+            ItemRef::Run(run) => run,
+            ItemRef::Layer(group) => match group.items().next() {
+                Some(ItemRef::Run(run)) => run,
                 _ => return None,
             },
-            RenderNode::Primitive(_) | RenderNode::Inline(_) => return None,
+            ItemRef::Draw(_) | ItemRef::Text(_) | ItemRef::Leaf(_) => return None,
         };
         matches!(command, DrawCommand::WithContent(_)).then(|| Rc::clone(&run.recording))
     }
 }
 
-/// Where a node's draw commands draw: the scope size, and what the layers
-/// of their groups take from the node: its motion context and the paint of
-/// its graphics layer, which the node's own draws take.
 #[derive(Clone, Copy)]
 pub(super) struct DrawTarget<'a> {
     pub(super) size: Size,
@@ -159,16 +152,11 @@ pub(super) struct DrawTarget<'a> {
     pub(super) layer: Option<&'a GraphicsLayer>,
 }
 
-/// Writes the part of one draw command's recording that a draw pass draws,
-/// turning each group its draws open into a layer that the group places.
 pub(super) struct GroupedDraws<'a> {
     id: DrawCommandId,
     phase: PrimitivePhase,
     recording: &'a Rc<CommandRecording>,
     motion_context_animated: bool,
-    /// The paint of the node's graphics layer that its own draws take, when
-    /// it paints them: the group layers take it as well, as the group's
-    /// draws are the node's own, where the node's child layers do not.
     paint: Option<GraphicsLayer>,
 }
 
@@ -192,73 +180,93 @@ impl<'a> GroupedDraws<'a> {
         }
     }
 
-    /// One layer that holds the draws of `segments` in the parent's own
-    /// draws, the groups among them as layers. It starts with the run
-    /// before the first group, even an empty one, where the overlay pass of
-    /// a with-content command finds the recording.
-    fn wrapper(&self, segments: Range<u32>, size: Size) -> RenderNode {
+    fn wrapper(
+        &self,
+        store: &mut SceneStore,
+        parent: RecordId,
+        segments: Range<u32>,
+        size: Size,
+    ) -> Item {
         let first_group = self
             .recording
             .segments_in(&segments)
             .position(|segment| segment.lane == RecordLane::GroupStart)
             .map_or(segments.end, |offset| segments.start + offset as u32);
-        let mut wrapper = crate::layer_recycling::layer_box();
-        wrapper.children.push(self.run(segments.start..first_group));
-        self.write(&mut wrapper.children, first_group, segments.end);
+        let wrapper = self.group_record(store, parent);
+        let mut list = item_lists::take();
+        list.push(store.add_run(self.run(segments.start..first_group)));
+        self.write(store, wrapper, &mut list, first_group, segments.end);
+        store.set_items(wrapper, &list);
+        item_lists::give(list);
         assign_layer(
-            &mut wrapper,
+            store,
+            wrapper,
             self.head(&DrawGroup::plain(Rect::from_size(size))),
         );
-        RenderNode::Layer(wrapper)
+        Item::child(wrapper)
     }
 
-    /// Writes the segments from `position` into `list` up to the end of the
-    /// group open at `position` or up to `end`, and returns the position
-    /// after what it wrote.
-    fn write(&self, list: &mut Vec<RenderNode>, mut position: u32, end: u32) -> u32 {
+    fn group_record(&self, store: &mut SceneStore, parent: RecordId) -> RecordId {
+        let record = store.insert(RecordSeed {
+            kind: RecordKind::DrawGroup,
+            node: Some(self.id.node_id),
+            parent: Some(parent),
+        });
+        store.set_content_offset(record, Point::default());
+        record
+    }
+
+    fn write(
+        &self,
+        store: &mut SceneStore,
+        parent: RecordId,
+        list: &mut Vec<Item>,
+        mut position: u32,
+        end: u32,
+    ) -> u32 {
         let segments = self.recording.segments();
         let mut run_start = position;
         while position < end {
             let segment = segments[position as usize];
             match segment.lane {
                 RecordLane::GroupStart => {
-                    self.push_run(list, run_start..position);
-                    let mut layer = crate::layer_recycling::layer_box();
-                    position = self.write(&mut layer.children, position + 1, end);
+                    self.push_run(store, list, run_start..position);
+                    let record = self.group_record(store, parent);
+                    let mut nested = item_lists::take();
+                    position = self.write(store, record, &mut nested, position + 1, end);
+                    store.set_items(record, &nested);
+                    item_lists::give(nested);
                     let group = self.recording.groups()[segment.start as usize];
-                    assign_layer(&mut layer, self.head(&group));
-                    list.push(RenderNode::Layer(layer));
+                    assign_layer(store, record, self.head(&group));
+                    list.push(Item::child(record));
                     run_start = position;
                 }
                 RecordLane::GroupEnd => {
-                    self.push_run(list, run_start..position);
+                    self.push_run(store, list, run_start..position);
                     return position + 1;
                 }
                 RecordLane::Shapes | RecordLane::Others | RecordLane::Content => position += 1,
             }
         }
-        self.push_run(list, run_start..end);
+        self.push_run(store, list, run_start..end);
         end
     }
 
-    fn run(&self, segments: Range<u32>) -> RenderNode {
-        RenderNode::DrawRun(DrawRunNode::for_command_shared(
+    fn run(&self, segments: Range<u32>) -> DrawRunNode {
+        DrawRunNode::for_command_shared(
             self.phase,
             Some(self.id),
             Rc::clone(self.recording),
             segments,
-        ))
+        )
     }
 
-    fn push_run(&self, list: &mut Vec<RenderNode>, segments: Range<u32>) {
+    fn push_run(&self, store: &mut SceneStore, list: &mut Vec<Item>, segments: Range<u32>) {
         if !segments.is_empty() {
-            list.push(self.run(segments));
+            list.push(store.add_run(self.run(segments)));
         }
     }
 
-    /// The graphics layer of a group's layer: the group's scale and turn,
-    /// and the node's paint. An isolated group takes the alpha as it
-    /// composites, so the mask it ends with keeps its own.
     fn group_layer(&self, group: &DrawGroup) -> Option<GraphicsLayer> {
         if self.paint.is_none() && !group.scales_or_turns() {
             return None;
@@ -284,17 +292,20 @@ impl<'a> GroupedDraws<'a> {
             width: (bounds.x + bounds.width).max(0.0),
             height: (bounds.y + bounds.height).max(0.0),
         });
+        let transform_to_parent = group.transform_to_parent();
         LayerHead {
-            node_id: None,
-            wraps: None,
+            kind: HeadKind::Group {
+                node: self.id.node_id,
+                phase: self.phase,
+            },
             local_bounds: bounds,
             node_bounds,
-            transform_to_parent: group.transform_to_parent(),
+            transform_to_parent,
             content_offset: Point::default(),
             motion_context_animated: self.motion_context_animated,
             translated_content_context: false,
             translated_content_offset: Point::default(),
-            origin_in_parent: Point::default(),
+            origin_in_parent: translation_of(transform_to_parent).unwrap_or_default(),
             graphics_layer: self.group_layer(group),
             clip_to_bounds: group.clip,
             hit_test: None,
@@ -306,7 +317,6 @@ impl<'a> GroupedDraws<'a> {
                 ..IsolationReasons::default()
             },
             cache_policy: CachePolicy::None,
-            draw_phase: Some(self.phase),
         }
     }
 }
@@ -325,45 +335,52 @@ pub(super) fn layer_node_capacity(
             .count()
 }
 
+#[derive(Clone, Copy)]
+pub(super) struct NodeCommands<'a> {
+    pub(super) node_id: NodeId,
+    pub(super) commands: &'a [DrawCommand],
+    pub(super) first_index: usize,
+}
+
 pub(super) fn draw_nodes(
-    node_id: NodeId,
-    commands: &[DrawCommand],
-    first_command_index: usize,
+    store: &mut SceneStore,
+    parent: RecordId,
+    commands: NodeCommands<'_>,
     placement: DrawPlacement,
     draws: DrawTarget,
     phase: PrimitivePhase,
-) -> Vec<RenderNode> {
-    let mut nodes = crate::layer_recycling::child_list(commands.len());
+) -> Vec<Item> {
+    let mut items = item_lists::take();
     append_draw_nodes(
-        &mut nodes,
-        node_id,
+        store,
+        parent,
+        &mut items,
         commands,
-        first_command_index,
         DrawPass::Record(placement),
         draws,
         phase,
     );
-    nodes
+    items
 }
 
 pub(super) fn append_draw_nodes(
-    nodes: &mut Vec<RenderNode>,
-    node_id: NodeId,
-    commands: &[DrawCommand],
-    first_command_index: usize,
+    store: &mut SceneStore,
+    parent: RecordId,
+    items: &mut Vec<Item>,
+    commands: NodeCommands<'_>,
     mut pass: DrawPass<'_>,
     draws: DrawTarget,
     phase: PrimitivePhase,
 ) {
     let size = draws.size;
     let placement = pass.placement();
-    for (command_index, command) in commands.iter().enumerate() {
+    for (command_index, command) in commands.commands.iter().enumerate() {
         let id = DrawCommandId {
-            node_id,
-            command_index: (first_command_index + command_index) as u32,
+            node_id: commands.node_id,
+            command_index: (commands.first_index + command_index) as u32,
             placement,
         };
-        let (shared, segments) = if let Some(shared) = pass.take_recording(command, nodes) {
+        let (shared, segments) = if let Some(shared) = pass.take_recording(store, command, items) {
             let segments = shared.content_split(DrawPlacement::Overlay);
             (shared, segments)
         } else {
@@ -378,10 +395,10 @@ pub(super) fn append_draw_nodes(
             && shared
                 .segments_in(&segments)
                 .any(|segment| segment.lane == RecordLane::GroupStart);
-        nodes.push(if grouped {
-            GroupedDraws::new(id, phase, &shared, draws).wrapper(segments, size)
+        items.push(if grouped {
+            GroupedDraws::new(id, phase, &shared, draws).wrapper(store, parent, segments, size)
         } else {
-            RenderNode::DrawRun(DrawRunNode::for_command_shared(
+            store.add_run(DrawRunNode::for_command_shared(
                 phase,
                 Some(id),
                 shared,
@@ -405,5 +422,21 @@ pub fn draw_command_nodes_for_tests(
         motion_context_animated: false,
         layer: None,
     };
-    draw_nodes(node_id, commands, 0, placement, draws, phase)
+    let mut store = SceneStore::new();
+    store.begin_update();
+    let root = store.insert(RecordSeed {
+        kind: RecordKind::Layer,
+        node: Some(node_id),
+        parent: None,
+    });
+    let commands = NodeCommands {
+        node_id,
+        commands,
+        first_index: 0,
+    };
+    let items = draw_nodes(&mut store, root, commands, placement, draws, phase);
+    store.set_items(root, &items);
+    item_lists::give(items);
+    store.finish_update();
+    crate::scene_store::export(&store, 0).children
 }

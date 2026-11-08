@@ -5,24 +5,17 @@ use cranpose_ui_graphics::FxHashMap;
 
 use crate::{
     NodeUpdate,
-    layer_recycling::Pool,
     scene_builder::{HitGraphState, RecorderKey, RecorderSlot, TranslateScratch},
+    scene_store::Item,
 };
 
 pub(crate) struct RenderThreadState {
-    pub(crate) layer_pool: RefCell<Pool>,
+    pub(crate) item_lists: RefCell<Vec<Vec<Item>>>,
     pub(crate) translate_scratch: RefCell<TranslateScratch>,
-    /// The hit geometry a subtree had before its rebuild, kept from one
-    /// rebuild to the next so no frame allocates it.
     pub(crate) hit_geometry_scratch: Cell<Vec<HitGraphState>>,
-    /// The dirty nodes of a scene update, kept empty between updates so no
-    /// frame makes or allocates the map.
     pub(crate) dirty_node_scratch: Cell<Option<NodeMap<cranpose_core::NodeId, NodeUpdate>>>,
     pub(crate) command_recordings: RefCell<FxHashMap<RecorderKey, RecorderSlot>>,
     pub(crate) recording_generation: Cell<u64>,
-    /// Whether a scene update or build changed a layer in 3D since the
-    /// window's scenes last published where their layers show and their
-    /// eyes' worlds.
     pub(crate) space_changed: Cell<bool>,
     #[cfg(test)]
     pub(crate) lowered_layer_count: Cell<usize>,
@@ -31,7 +24,7 @@ pub(crate) struct RenderThreadState {
 impl RenderThreadState {
     fn new() -> Self {
         Self {
-            layer_pool: RefCell::new(Pool::default()),
+            item_lists: RefCell::new(Vec::new()),
             translate_scratch: RefCell::new(TranslateScratch::default()),
             hit_geometry_scratch: Cell::new(Vec::new()),
             dirty_node_scratch: Cell::new(None),

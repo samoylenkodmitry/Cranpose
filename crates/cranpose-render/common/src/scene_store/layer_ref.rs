@@ -40,7 +40,7 @@ pub enum ItemRef<'a> {
 
 /// What a record was at one scene update: equal values mean the record, or
 /// the part of it they were taken of, did not change in between.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct RecordChange {
     record: RecordRef,
     update: SceneUpdate,
@@ -100,7 +100,8 @@ impl<'a> LayerRef<'a> {
         self.store.props(self.id)
     }
 
-    fn flags(self) -> RecordFlags {
+    /// The record's flags.
+    pub fn flags(self) -> RecordFlags {
         self.store.tree[self.id.index()].flags
     }
 

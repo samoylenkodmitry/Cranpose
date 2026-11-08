@@ -1,6 +1,6 @@
 // How a scene update brings a retained layer to its node's new layout in
-// place: the layer keeps the child layers that stay, moves them, and builds
-// only the children that enter.
+// place: the layer keeps the child records that stay, moves them, and
+// builds only the children that enter.
 
 use std::{
     borrow::Cow,
@@ -8,70 +8,66 @@ use std::{
     rc::Rc,
 };
 
-use cranpose_core::{MemoryApplier, NodeId, collections::map::HashMap};
+use cranpose_core::{MemoryApplier, NodeId, RecordId, collections::map::HashMap};
 use cranpose_ui::{ModifierNodeSlices, Point, Rect, Size};
 
 use super::{
     DrawTarget, GraphChanges, KeptChild, LowerContext, PlacedGeometry, SnapshotNodeData,
-    TranslateAncestorContext, TranslateGeometry, Wrapping, child_identity,
-    children_have_origin_sinks, content_layer_mut, forget_dirty_node, hit_test_from_slices,
-    layer_and_node_bounds, layer_identity, lower_child, modifier_slices_have_origin_sinks,
-    move_kept_child, outer_draws, placed_child_geometry, placed_transform, read_node_data,
+    TranslateAncestorContext, TranslateGeometry, Wrapping, child_identity, content_layer,
+    forget_dirty_node, hit_test_from_slices, item_lists, layer_and_node_bounds, layer_identity,
+    lower_child, move_kept_child, outer_commands, outer_draws, placed_child_geometry,
+    placed_transform, read_node_data, refresh_hit_targets, set_bounds, set_origin_sinks,
     shaped_graphics_layer, take_wrapped_layer, text_node, translate_bail, translate_unwrapped,
     write_node_content, write_wrapper,
 };
 use crate::{
     NodeUpdate,
-    graph::{LayerNode, RenderNode},
+    graph::LayerProperties,
+    scene_store::{Item, LayerRef, RecordKind, SceneStore},
 };
 
-/// [`try_translate_scrolled_layer`], returning whether hit geometry may
-/// have changed: a layer that neither held nor holds a hit target and lies
-/// in no 3D space leaves the hit graph as it was, as
-/// [`rebuild_tracking_hits`] would find. `None` when the layer cannot be
-/// translated.
 pub(super) fn translate_tracking_hits(
     applier: &MemoryApplier,
-    layer: &mut LayerNode,
+    store: &mut SceneStore,
+    layer: RecordId,
     dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
     ancestors: TranslateAncestorContext,
 ) -> Option<GraphChanges> {
-    let held = holds_hit_geometry(layer);
-    try_translate_scrolled_layer(applier, layer, dirty_nodes, ancestors)
-        .then(|| GraphChanges::hits(held || holds_hit_geometry(layer)))
+    let held = holds_hit_geometry(store.layer(layer));
+    try_translate_scrolled_layer(applier, store, layer, dirty_nodes, ancestors)
+        .then(|| GraphChanges::hits(held || holds_hit_geometry(store.layer(layer))))
 }
 
-/// Whether the hit graph reads `layer`: it is a hit target, holds one or is
-/// a 3D space, the states [`HitGraphState::dirty_against`] compares.
-pub(super) fn holds_hit_geometry(layer: &LayerNode) -> bool {
-    layer.hit_test.is_some() || layer.has_hit_targets || layer.graphics_layer.space.is_some()
+pub(super) fn holds_hit_geometry(layer: LayerRef<'_>) -> bool {
+    layer.hit_test().is_some() || layer.has_hit_targets() || layer.graphics_layer().space.is_some()
 }
 
 fn try_translate_scrolled_layer(
     applier: &MemoryApplier,
-    container: &mut LayerNode,
+    store: &mut SceneStore,
+    container: RecordId,
     dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
     ancestors: TranslateAncestorContext,
 ) -> bool {
-    let Some(node_id) = layer_identity(container) else {
+    let Some(node_id) = layer_identity(store.layer(container)) else {
         return translate_bail("no node id");
     };
     read_node_data(applier, node_id, |data| {
-        if container.wraps.is_none() {
-            return translate_unwrapped(applier, container, dirty_nodes, ancestors, data);
+        if store.layer(container).kind() != RecordKind::Wrapper {
+            return translate_unwrapped(applier, store, container, dirty_nodes, ancestors, data);
         }
-        let outer_count = data.modifier_slices.outer_draw_command_count();
-        if outer_count == 0 {
+        let slices = Rc::clone(&data.modifier_slices);
+        let Some(commands) = outer_commands(node_id, &slices) else {
             return translate_bail("outer draws removed");
-        }
+        };
         let size = data.layout_state.size();
         let placement = data.layout_state.position();
-        let slices = Rc::clone(&data.modifier_slices);
-        let Some(inner) = content_layer_mut(container) else {
+        let Some(inner) = content_layer(store, container) else {
             return translate_bail("wrapped layer missing");
         };
         if !translate_layer_from_data(
             applier,
+            store,
             inner,
             dirty_nodes,
             ancestors,
@@ -82,38 +78,33 @@ fn try_translate_scrolled_layer(
         }
         let draws = DrawTarget {
             size,
-            motion_context_animated: inner.motion_context_animated,
+            motion_context_animated: store.layer(inner).motion_context_animated(),
             layer: None,
         };
-        let outer = outer_draws(node_id, slices.draw_commands(), outer_count, draws)
-            .expect("outer command count is nonzero");
-        let layer =
-            take_wrapped_layer(container, node_id).expect("the wrapped layer was found above");
+        let layer = take_wrapped_layer(store, container, node_id)
+            .expect("the wrapped layer was found above");
+        let outer = outer_draws(store, container, commands, draws);
         write_wrapper(
+            store,
             container,
             layer,
             placement,
             outer,
             ancestors.parent_content_offset,
         );
-        container.note_content_change(ancestors.update);
+        store.note_content_change(container);
         true
     })
     .unwrap_or_else(|| translate_bail("container snapshot read failed"))
 }
 
-/// The node of a container that keeps its children, and its node bounds at
-/// its current size.
 pub(super) struct TranslatedContainer {
     pub(super) node_id: NodeId,
-    pub(super) node_bounds: Option<Rect>,
 }
 
-/// Checks that `container` can keep its children and brings its bounds and
-/// graphics layer to its current size: a container that kept its size keeps
-/// its layer as it is.
 pub(super) fn translated_container(
-    container: &mut LayerNode,
+    store: &mut SceneStore,
+    container: RecordId,
     layout_state: &cranpose_ui::widgets::LayoutState,
     modifier_slices: &ModifierNodeSlices,
     ancestors: TranslateAncestorContext,
@@ -122,7 +113,8 @@ pub(super) fn translated_container(
     if cranpose_core::DIAGNOSTICS.disable_scroll_translate.is_set() {
         return Err("fast path disabled by ablation switch");
     }
-    let Some(node_id) = container.node_id else {
+    let layer = store.layer(container);
+    let Some(node_id) = layer.node_id() else {
         return Err("no node id");
     };
     if !layout_state.is_placed() {
@@ -132,88 +124,63 @@ pub(super) fn translated_container(
     if (outer_count > 0 && wrapping == Wrapping::Bare)
         || (ancestors.inherited_motion_context_animated
             || modifier_slices.motion_context_animated())
-            != container.motion_context_animated
-        || modifier_slices.translated_content_context() != container.translated_content_context
+            != layer.motion_context_animated()
+        || modifier_slices.translated_content_context() != layer.translated_content_context()
     {
         return Err("container outer draws or translated context changed");
     }
-    let clip_to_bounds = modifier_slices.clip_to_bounds();
-    if clip_to_bounds != container.clip_to_bounds {
+    if modifier_slices.clip_to_bounds() != layer.clip_to_bounds() {
         return Err("container clip changed");
     }
     // A resized container keeps its children: only its bounds and the clip
     // shaped to them follow its size. Any other change to its graphics layer
     // may change what its children inherit.
-    if !container
-        .graphics_layer
-        .reads_as(shaped_graphics_layer(modifier_slices, container.local_bounds).as_deref())
-    {
+    let current = shaped_graphics_layer(modifier_slices, layer.local_bounds());
+    let kept_layer = match layer.props() {
+        Some(props) => props.graphics_layer.reads_as(current.as_deref()),
+        None => LayerProperties::default().reads_as(current.as_deref()),
+    };
+    if !kept_layer {
         return Err("container graphics layer changed");
     }
     let (local_bounds, node_bounds) = layer_and_node_bounds(modifier_slices, layout_state.size());
-    if local_bounds != container.local_bounds {
-        container.local_bounds = local_bounds;
-        container
-            .graphics_layer
-            .replace(shaped_graphics_layer(modifier_slices, local_bounds).map(Cow::into_owned));
+    if local_bounds != layer.local_bounds() {
+        let resized = shaped_graphics_layer(modifier_slices, local_bounds).map(Cow::into_owned);
+        store.edit_props(container, |props| props.graphics_layer.replace(resized));
     }
-    Ok(TranslatedContainer {
-        node_id,
-        node_bounds,
-    })
+    set_bounds(store, container, local_bounds, node_bounds);
+    Ok(TranslatedContainer { node_id })
 }
 
-/// What a scroll step reconciles a container's children in, kept between
-/// steps so a step allocates nothing of its own. Every list is empty
-/// between steps, so it holds no layer.
 #[derive(Default)]
 pub(crate) struct TranslateScratch {
-    /// The placed children, in their new order.
     placed_fresh: Vec<PlacedChild>,
-    /// The ids of the container's previous children, in their order.
     old_ids: Vec<NodeId>,
     old_index_by_id: HashMap<NodeId, usize>,
-    /// The container's previous children by their index, until each is
-    /// kept or recycled.
-    retained: Vec<Option<RenderNode>>,
-    /// The previous children that stay, in their new order; `None` where a
-    /// child enters.
-    kept: Vec<Option<RenderNode>>,
-    /// The children built for the step, in their new order.
-    entering: Vec<(NodeId, RenderNode)>,
+    retained: Vec<Option<Item>>,
+    kept: Vec<Option<Item>>,
+    entering: Vec<(NodeId, Item)>,
 }
 
-/// A placed child of a container a scroll step translates.
 pub(super) struct PlacedChild {
     pub(super) id: NodeId,
     pub(super) geometry: PlacedGeometry,
-    /// The child's index among the container's previous children; `None`
-    /// for a child that enters.
     old_index: Option<usize>,
     pub(super) kept: KeptChild,
 }
 
-/// How a translated container's placed children stand to its previous ones.
 enum ChildOrder {
-    /// The kept children lie together and in their order, at `kept` among
-    /// the previous children, and the entering ones come before or after
-    /// them: `entering_before` of the placed children, then the kept ones,
-    /// then the rest. A scroll leaves its children so, and so do unchanged
-    /// children.
     Shifted {
         kept: Range<usize>,
         entering_before: usize,
     },
-    /// The kept children changed their order, or children enter between
-    /// them.
     Mixed,
 }
 
-/// Fills `scratch` with `container`'s placed children, each with its index
-/// among the previous ones, and returns how they stand to those.
 fn translated_children(
     applier: &MemoryApplier,
-    container: &LayerNode,
+    store: &SceneStore,
+    container: RecordId,
     dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
     fresh_children: &[NodeId],
     scratch: &mut TranslateScratch,
@@ -231,12 +198,12 @@ fn translated_children(
             kept: KeptChild::Left,
         });
     }
-    let children_unchanged = container.children.len() == placed_fresh.len()
-        && container
-            .children
+    let children = store.items(container);
+    let children_unchanged = children.len() == placed_fresh.len()
+        && children
             .iter()
             .zip(placed_fresh.iter())
-            .all(|(child, placed)| child_identity(child) == Some(placed.id));
+            .all(|(&child, placed)| child_identity(store, child) == Some(placed.id));
     let order = if children_unchanged {
         for (index, placed) in placed_fresh.iter_mut().enumerate() {
             placed.old_index = Some(index);
@@ -249,8 +216,8 @@ fn translated_children(
         let old_ids = &mut scratch.old_ids;
         old_ids.clear();
         let (mut lowest, mut highest) = (NodeId(usize::MAX), NodeId(0));
-        for child in &container.children {
-            let Some(id) = child_identity(child) else {
+        for &child in children {
+            let Some(id) = child_identity(store, child) else {
                 return Err("child without node id");
             };
             lowest = lowest.min(id);
@@ -264,24 +231,11 @@ fn translated_children(
             &mut scratch.old_index_by_id,
         )
     };
-    check_retained_children(container, dirty_nodes, placed_fresh).map(|()| order)
+    check_retained_children(store, container, dirty_nodes, placed_fresh).map(|()| order)
 }
 
-/// The searches of the previous children a match makes before it maps them:
-/// a search reads each id once, a map hashes each of them in.
 const MATCH_SEARCHES: usize = 16;
 
-/// Notes each placed child's index among the previous children `old_ids`,
-/// whose ids lie in `old_id_range`.
-/// Children that kept their order match in turn, as a scroll that brings
-/// rows in at one end and lets them go at the other leaves them; a child
-/// past a gap is searched for, and the match continues after it. A child
-/// whose id lies outside the range enters without a search: a node made
-/// since the previous children takes an id past all of theirs. Once the
-/// order is mixed past [`MATCH_SEARCHES`] searches, `old_index_by_id` maps
-/// the previous children for the rest. An id is a node's, so it is once
-/// among the previous children. Returns how the placed children stand to
-/// the previous ones.
 fn match_old_children(
     old_ids: &[NodeId],
     old_id_range: RangeInclusive<NodeId>,
@@ -335,30 +289,28 @@ fn match_old_children(
     }
 }
 
-/// Checks that every child kept as it is still fits its layer, and notes
-/// which children keep their layers. A moved child that no longer fits is
-/// drawn again: it becomes a content update. A moved child that fits leaves
-/// the dirty set, which this step settles.
 fn check_retained_children(
-    container: &LayerNode,
+    store: &SceneStore,
+    container: RecordId,
     dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
     placed_fresh: &mut [PlacedChild],
 ) -> Result<(), &'static str> {
+    let children = store.items(container);
     for placed in placed_fresh {
         let Some(old_index) = placed.old_index else {
             continue;
         };
-        let child = &container.children[old_index];
-        let (node_rect, text_alone) = match child {
-            RenderNode::Layer(layer) => (layer.node_rect(), text_node::draws_text_alone(layer)),
-            RenderNode::Inline(inline) => {
-                (inline.node_rect(), text_node::text_alone(&inline.content))
-            }
-            RenderNode::Primitive(_) | RenderNode::DrawRun(_) => {
-                return Err("retained child slot is not a node");
+        let Some(child) = children[old_index].as_child() else {
+            return Err("retained child slot is not a node");
+        };
+        let layer = store.layer(child);
+        let text_alone = match layer.kind() {
+            RecordKind::Leaf => text_node::text_alone(store.items(child)),
+            RecordKind::Layer | RecordKind::Wrapper | RecordKind::DrawGroup => {
+                text_node::draws_text_alone(store, child)
             }
         };
-        let fits = Rect::from_size(placed.geometry.size) == node_rect;
+        let fits = Rect::from_size(placed.geometry.size) == layer.node_rect();
         placed.kept = match dirty_nodes.get_mut(&placed.id) {
             None if !fits => return Err("child resized"),
             None => KeptChild::Moved,
@@ -380,15 +332,9 @@ fn check_retained_children(
     Ok(())
 }
 
-/// Moves `container`'s previous children that stay into `scratch.kept`, in
-/// their new order, and the subtrees of those that leave into the layer
-/// pool, so the entering children are built in their allocations.
-/// Recycles the children that leave `container`. Their nodes leave the
-/// dirty set with them: nothing remains to update for a node the scene no
-/// longer shows, and one left dirty would go unmatched and rebuild the whole
-/// scene.
-fn recycle_leaving_children(
-    container: &mut LayerNode,
+fn remove_leaving_children(
+    store: &mut SceneStore,
+    container: RecordId,
     scratch: &mut TranslateScratch,
     dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
 ) {
@@ -399,12 +345,10 @@ fn recycle_leaving_children(
         ..
     } = scratch;
     retained.clear();
-    retained.extend(
-        container
-            .children
-            .drain(..)
-            .map(|child| child_identity(&child).is_some().then_some(child)),
-    );
+    for &child in store.items(container) {
+        retained.push(Some(child));
+    }
+    store.set_items(container, &[]);
     kept.clear();
     kept.extend(
         placed_fresh
@@ -412,37 +356,38 @@ fn recycle_leaving_children(
             .map(|placed| placed.old_index.and_then(|index| retained[index].take())),
     );
     for leaving in retained.drain(..).flatten() {
-        forget_dirty_node(&leaving, dirty_nodes);
-        crate::layer_recycling::recycle_node(leaving);
+        forget_dirty_node(store, leaving, dirty_nodes);
+        store.remove_item(leaving);
     }
 }
 
-/// Recycles the children that leave `container` around the `kept` ones,
-/// which stay where they lie, already in their new order. Their nodes
-/// leave the dirty set with them, as in [`recycle_leaving_children`].
-fn recycle_children_around(
-    container: &mut LayerNode,
+fn remove_children_around(
+    store: &mut SceneStore,
+    container: RecordId,
     kept: Range<usize>,
+    list: &mut Vec<Item>,
     dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
 ) {
-    let mut recycle = |leaving: RenderNode| {
-        forget_dirty_node(&leaving, dirty_nodes);
-        crate::layer_recycling::recycle_node(leaving);
-    };
-    // Most steps keep every child.
-    if kept.end < container.children.len() {
-        container.children.drain(kept.end..).for_each(&mut recycle);
+    let mut leaving = item_lists::take();
+    for (index, &child) in store.items(container).iter().enumerate() {
+        if kept.contains(&index) {
+            list.push(child);
+        } else {
+            leaving.push(child);
+        }
     }
-    if kept.start > 0 {
-        container.children.drain(..kept.start).for_each(recycle);
+    store.set_items(container, &[]);
+    for &child in &leaving {
+        forget_dirty_node(store, child, dirty_nodes);
+        store.remove_item(child);
     }
+    item_lists::give(leaving);
 }
 
-/// Builds the children that enter `container`. They are built from the
-/// applier's current state, so their nodes leave the dirty set: the walk
-/// beneath would otherwise build each of them a second time.
 fn build_entering_children(
     applier: &MemoryApplier,
+    store: &mut SceneStore,
+    container: RecordId,
     scratch: &mut TranslateScratch,
     dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
     children: TranslateAncestorContext,
@@ -454,22 +399,18 @@ fn build_entering_children(
         if placed.old_index.is_some() {
             continue;
         }
-        let child_id = &placed.id;
-        let Some(mut lowered) = lower_child(applier, *child_id, context) else {
+        let Some(lowered) = lower_child(applier, store, container, placed.id, context) else {
             continue;
         };
-        if let RenderNode::Layer(layer) = &mut lowered {
-            layer.note_content_change(children.update);
-        }
-        forget_dirty_node(&lowered, dirty_nodes);
-        entering.push((*child_id, lowered));
+        forget_dirty_node(store, lowered, dirty_nodes);
+        entering.push((placed.id, lowered));
     }
 }
 
-/// Records `container`'s own draws and text around the child layers its list
-/// holds, in the order [`write_node_content`] writes a layer.
 pub(super) fn write_own_content_around_children(
-    container: &mut LayerNode,
+    store: &mut SceneStore,
+    container: RecordId,
+    list: &mut Vec<Item>,
     node_id: NodeId,
     modifier_slices: &ModifierNodeSlices,
     size: Size,
@@ -479,52 +420,94 @@ pub(super) fn write_own_content_around_children(
     {
         return;
     }
-    let kept = container.children.len();
+    let kept = list.len();
+    let motion_context_animated = store.layer(container).motion_context_animated();
+    // The draws take the container's paint while they are written beneath it.
+    let graphics_layer = store
+        .props_mut(container)
+        .map(|props| std::mem::take(&mut props.graphics_layer))
+        .unwrap_or_default();
     let draws = DrawTarget {
         size,
-        motion_context_animated: container.motion_context_animated,
-        layer: container.graphics_layer.get(),
+        motion_context_animated,
+        layer: graphics_layer.get(),
     };
     write_node_content(
-        &mut container.children,
+        store,
+        container,
+        list,
         node_id,
         modifier_slices,
         draws,
         (kept, 0),
-        |_| {},
+        |_, _| {},
     );
+    if let Some(props) = store.props_mut(container) {
+        props.graphics_layer = graphics_layer;
+    }
+}
+
+pub(super) fn remove_own_draws(store: &mut SceneStore, container: RecordId) {
+    let is_child = |item: &Item| {
+        item.as_child()
+            .is_some_and(|child| store.layer(child).kind() != RecordKind::DrawGroup)
+    };
+    let items = store.items(container);
+    let first = items.iter().position(is_child).unwrap_or(items.len());
+    let end = items
+        .iter()
+        .rposition(is_child)
+        .map_or(first, |last| last + 1);
+    // A container that draws nothing of its own has nothing to remove.
+    if first == 0 && end == items.len() {
+        return;
+    }
+    let mut list = item_lists::take();
+    list.extend_from_slice(items);
+    store.set_items(container, &list[first..end]);
+    for &own in list[..first].iter().chain(&list[end..]) {
+        store.remove_item(own);
+    }
+    item_lists::give(list);
 }
 
 pub(super) fn apply_translated_container_state(
-    container: &mut LayerNode,
+    store: &mut SceneStore,
+    container: RecordId,
     modifier_slices: &ModifierNodeSlices,
     layout_state: &cranpose_ui::widgets::LayoutState,
     parent_content_offset: Point,
     geometry: TranslateGeometry,
 ) {
-    container.transform_to_parent = placed_transform(
-        container.local_bounds,
-        layout_state.position(),
-        container.graphics_layer.get(),
+    let layer = store.layer(container);
+    let position = layout_state.position();
+    let transform = placed_transform(
+        layer.local_bounds(),
+        position,
+        layer.props().and_then(|props| props.graphics_layer.get()),
         parent_content_offset,
     );
-    container.content_offset = geometry.content_offset;
-    if container.translated_content_context {
-        container.translated_content_offset = modifier_slices
+    let translated = layer.translated_content_context();
+    store.set_content_offset(container, geometry.content_offset);
+    store.set_placement(container, position, transform);
+    if translated {
+        let offset = modifier_slices
             .translated_content_offset()
             .unwrap_or(geometry.content_offset);
+        store.edit_props(container, |props| props.translated_content_offset = offset);
     }
     modifier_slices.publish_window_geometry(
         geometry.top_left,
         geometry.window_transform,
         layout_state.size(),
     );
-    container.origin_in_parent = layout_state.position();
+    store.note_place_change(container);
 }
 
 fn reconcile_translated_children(
     applier: &MemoryApplier,
-    container: &mut LayerNode,
+    store: &mut SceneStore,
+    list: &mut Vec<Item>,
     dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
     scratch: &mut TranslateScratch,
     order: ChildOrder,
@@ -536,7 +519,8 @@ fn reconcile_translated_children(
     {
         reconcile_shifted_children(
             applier,
-            container,
+            store,
+            list,
             dirty_nodes,
             scratch,
             entering_before,
@@ -546,22 +530,21 @@ fn reconcile_translated_children(
     }
     let mut entering = scratch.entering.drain(..).peekable();
     for (placed, kept) in scratch.placed_fresh.iter().zip(scratch.kept.drain(..)) {
-        if let Some(mut node) = kept {
-            move_kept_child(applier, &mut node, placed, children, dirty_nodes);
-            container.children.push(node);
+        if let Some(child) = kept {
+            if let Some(record) = child.as_child() {
+                move_kept_child(applier, store, record, placed, children, dirty_nodes);
+            }
+            list.push(child);
         } else if let Some((_, lowered)) = entering.next_if(|(id, _)| *id == placed.id) {
-            forget_dirty_node(&lowered, dirty_nodes);
-            container.children.push(lowered);
+            list.push(lowered);
         }
     }
 }
 
-/// Moves the kept children, which lie in `container` in their new order, to
-/// their placements, and puts the entering children before and after them:
-/// those of the first `entering_before` placed children before.
 fn reconcile_shifted_children(
     applier: &MemoryApplier,
-    container: &mut LayerNode,
+    store: &mut SceneStore,
+    list: &mut Vec<Item>,
     dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
     scratch: &mut TranslateScratch,
     entering_before: usize,
@@ -572,12 +555,10 @@ fn reconcile_shifted_children(
         entering,
         ..
     } = scratch;
-    for (child, placed) in container
-        .children
-        .iter_mut()
-        .zip(&placed_fresh[entering_before..])
-    {
-        move_kept_child(applier, child, placed, children, dirty_nodes);
+    for (&child, placed) in list.iter().zip(&placed_fresh[entering_before..]) {
+        if let Some(record) = child.as_child() {
+            move_kept_child(applier, store, record, placed, children, dirty_nodes);
+        }
     }
     if entering.is_empty() {
         return;
@@ -589,20 +570,12 @@ fn reconcile_shifted_children(
         .iter()
         .filter(|placed| built.next_if(|(id, _)| *id == placed.id).is_some())
         .count();
-    for (_, lowered) in entering.iter() {
-        forget_dirty_node(lowered, dirty_nodes);
-    }
-    let node = |(_, lowered): (NodeId, RenderNode)| lowered;
     if built_before > 0 {
-        container
-            .children
-            .splice(0..0, entering.drain(..built_before).map(node));
+        list.splice(0..0, entering.drain(..built_before).map(|(_, item)| item));
     }
-    container.children.extend(entering.drain(..).map(node));
+    list.extend(entering.drain(..).map(|(_, item)| item));
 }
 
-/// Runs `f` on the thread's translate scratch where it lies, or on a new one
-/// while another translate holds it.
 fn with_translate_scratch<R>(f: impl FnOnce(&mut TranslateScratch) -> R) -> R {
     crate::thread_state::with(|state| match state.translate_scratch.try_borrow_mut() {
         Ok(mut scratch) => f(&mut scratch),
@@ -612,14 +585,14 @@ fn with_translate_scratch<R>(f: impl FnOnce(&mut TranslateScratch) -> R) -> R {
 
 pub(super) fn translate_layer_from_data(
     applier: &MemoryApplier,
-    container: &mut LayerNode,
+    store: &mut SceneStore,
+    container: RecordId,
     dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
     ancestors: TranslateAncestorContext,
     data: SnapshotNodeData<'_>,
     wrapping: Wrapping,
 ) -> bool {
     let TranslateAncestorContext {
-        update,
         parent_content_offset,
         parent_abs,
         ..
@@ -635,63 +608,99 @@ pub(super) fn translate_layer_from_data(
     } else {
         layout_state
     };
-    let container_plan = match translated_container(
+    let node_id = match translated_container(
+        store,
         container,
         &layout_state,
         &modifier_slices,
         ancestors,
         wrapping,
     ) {
-        Ok(plan) => plan,
+        Ok(plan) => plan.node_id,
         Err(reason) => return translate_bail(reason),
     };
-    let TranslatedContainer {
-        node_id,
-        node_bounds,
-    } = container_plan;
-    container.node_bounds = node_bounds;
     // The container's own draws and text are recorded again around the
     // children it keeps: an unchanged draw reuses its recording, while
     // building the container anew lowered every child layer beneath it too.
-    crate::layer_recycling::recycle_primitives(container);
+    remove_own_draws(store, container);
+    let mut list = item_lists::take();
     let translated = with_translate_scratch(|scratch| {
-        let order = translated_children(applier, container, dirty_nodes, fresh_children, scratch)?;
+        let order = translated_children(
+            applier,
+            store,
+            container,
+            dirty_nodes,
+            fresh_children,
+            scratch,
+        )?;
+        let layer = store.layer(container);
         let geometry = TranslateGeometry::new(
             &layout_state,
-            &container.graphics_layer,
-            container.local_bounds,
+            layer.graphics_layer(),
+            layer.local_bounds(),
             parent_abs,
         );
-        let children = geometry.children_context(container, ancestors);
+        let children = geometry.children_context(layer, ancestors);
         match &order {
             ChildOrder::Shifted { kept, .. } => {
-                recycle_children_around(container, kept.clone(), dirty_nodes);
+                remove_children_around(store, container, kept.clone(), &mut list, dirty_nodes);
             }
-            ChildOrder::Mixed => recycle_leaving_children(container, scratch, dirty_nodes),
+            ChildOrder::Mixed => remove_leaving_children(store, container, scratch, dirty_nodes),
         }
-        build_entering_children(applier, scratch, dirty_nodes, children);
-
+        // The children are placed against the container's new content offset.
+        store.set_content_offset(container, geometry.content_offset);
+        build_entering_children(applier, store, container, scratch, dirty_nodes, children);
         apply_translated_container_state(
+            store,
             container,
             &modifier_slices,
             &layout_state,
             parent_content_offset,
             geometry,
         );
-
-        reconcile_translated_children(applier, container, dirty_nodes, scratch, order, children);
+        reconcile_translated_children(
+            applier,
+            store,
+            &mut list,
+            dirty_nodes,
+            scratch,
+            order,
+            children,
+        );
         Ok(())
     });
     if let Err(reason) = translated {
+        item_lists::give(list);
         return translate_bail(reason);
     }
-    write_own_content_around_children(container, node_id, &modifier_slices, layout_state.size());
-    container.hit_test = hit_test_from_slices(&modifier_slices);
-
-    container.has_origin_sinks = modifier_slices_have_origin_sinks(&modifier_slices)
-        || children_have_origin_sinks(&container.children);
-    container.refresh_child_facts();
-    container.note_content_change(update);
-
+    finish_translated_container(
+        store,
+        container,
+        list,
+        node_id,
+        &modifier_slices,
+        layout_state.size(),
+    );
     true
+}
+
+// Writes the items of `container` a translate step kept and built in
+// `list`, around its own draws and text, and brings its handlers and facts
+// up to date.
+fn finish_translated_container(
+    store: &mut SceneStore,
+    container: RecordId,
+    mut list: Vec<Item>,
+    node_id: NodeId,
+    modifier_slices: &Rc<ModifierNodeSlices>,
+    size: Size,
+) {
+    write_own_content_around_children(store, container, &mut list, node_id, modifier_slices, size);
+    store.set_items(container, &list);
+    item_lists::give(list);
+    let hit_test = hit_test_from_slices(modifier_slices);
+    store.edit_props(container, |props| props.hit_test = hit_test);
+    set_origin_sinks(store, container, modifier_slices);
+    refresh_hit_targets(store, container);
+    store.note_content_change(container);
 }

@@ -336,6 +336,10 @@ impl LayerChange {
         static LAST: AtomicU32 = AtomicU32::new(0);
         Self(LAST.fetch_add(1, Ordering::Relaxed).wrapping_add(1))
     }
+
+    pub(crate) fn numbered(number: u32) -> Self {
+        Self(number)
+    }
 }
 
 impl Default for LayerChange {
@@ -353,16 +357,8 @@ pub struct ContentChanges {
 }
 
 impl ContentChanges {
-    fn note(&mut self, update: u64) {
-        if self.run > 0 && self.last_update == update {
-            return;
-        }
-        self.run = if self.run > 0 && self.last_update + 1 == update {
-            self.run + 1
-        } else {
-            1
-        };
-        self.last_update = update;
+    pub(crate) fn numbered(last_update: u64, run: u32) -> Self {
+        Self { last_update, run }
     }
 }
 
@@ -437,16 +433,6 @@ impl LayerNode {
                 &self.children,
                 inflate_rect(self.local_bounds, CONTAINED_DRAW_SLACK),
             )
-    }
-
-    pub(crate) fn refresh_child_facts(&mut self) {
-        self.has_hit_targets = self.hit_test.is_some()
-            || self.children.iter().any(|child| match child {
-                RenderNode::Layer(child_layer) => child_layer.has_hit_targets,
-                RenderNode::Primitive(_) | RenderNode::DrawRun(_) | RenderNode::Inline(_) => false,
-            });
-        self.contained.set(None);
-        self.space.set(None);
     }
 
     /// Whether this layer or a layer beneath it is a scene, a mesh surface
@@ -569,21 +555,10 @@ impl LayerNode {
         }
     }
 
-    pub(crate) fn forget_own_raster_cache_hashes(&mut self) {
+    fn forget_own_raster_cache_hashes(&mut self) {
         self.cache_hashes.set(None);
         self.change = LayerChange::next();
         self.own_change = LayerChange::next();
-    }
-
-    pub(crate) fn note_descendant_change(&mut self, update: u64) {
-        self.cache_hashes.set(None);
-        self.change = LayerChange::next();
-        self.content_changes.note(update);
-    }
-
-    pub(crate) fn note_content_change(&mut self, update: u64) {
-        self.forget_own_raster_cache_hashes();
-        self.content_changes.note(update);
     }
 
     /// Whether what this layer draws changed in scene update `update` and in
@@ -765,6 +740,8 @@ pub struct RenderGraph {
     pub root: LayerNode,
     /// How many scene updates the graph took: the number of the latest.
     pub update: u64,
+    // The records the scene builder writes; the root is exported from them.
+    pub(crate) store: crate::scene_store::SceneStore,
     pub(crate) retained_path: Option<crate::scene_builder::RetainedPath>,
     // The marks of the last walk to the graph's dirty layers.
     pub(crate) dirty_ancestry: crate::scene_builder::DirtyAncestry,
@@ -776,9 +753,16 @@ impl RenderGraph {
         Self {
             root,
             update: 0,
+            store: crate::scene_store::SceneStore::new(),
             retained_path: None,
             dirty_ancestry: crate::scene_builder::DirtyAncestry::default(),
         }
+    }
+
+    // Works out the facts of the update in progress and exports the root.
+    pub(crate) fn refresh_from_store(&mut self) {
+        self.store.finish_update();
+        self.root = crate::scene_store::export(&self.store, self.update);
     }
 
     /// Number of nodes in the graph. A layer counts once and each primitive of a draw run counts on

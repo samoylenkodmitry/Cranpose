@@ -85,11 +85,4 @@ impl InlineNode {
         self.content_hash.set(Some(hash));
         hash
     }
-
-    // Takes a new change number after the node's content or place changed.
-    pub(crate) fn note_change(&mut self) {
-        self.change = LayerChange::next();
-        self.contained.set(None);
-        self.content_hash.set(None);
-    }
 }

@@ -14,6 +14,7 @@ use super::{
 use crate::graph::{DrawPrimitiveNode, DrawRunNode, ProjectiveTransform, TextPrimitiveNode};
 
 /// The scene a renderer draws and the hit targets come from.
+#[derive(Clone)]
 pub struct SceneStore {
     id: StoreId,
     pub(super) tree: Vec<TreeRecord>,
@@ -357,9 +358,12 @@ impl SceneStore {
         let offset = self.parent_content_offset(index);
         match self.tree[index].kind {
             RecordKind::Leaf => Point::new(x + offset.x, y + offset.y),
-            RecordKind::Layer | RecordKind::Wrapper | RecordKind::DrawGroup => {
+            RecordKind::Layer | RecordKind::Wrapper => {
                 Point::new(x + 0.0 + offset.x, y + 0.0 + offset.y)
             }
+            // A draw group lies in its node's own space, where the content
+            // offset does not move it.
+            RecordKind::DrawGroup => Point::new(x, y),
         }
     }
 
@@ -381,26 +385,20 @@ impl SceneStore {
         }
     }
 
-    /// Places `id` at `origin_in_parent` in a parent whose content is offset
-    /// by `parent_content_offset`, by `transform`: a transform that only
-    /// moves the record there takes no entry of its own.
+    /// Places `id` at `origin_in_parent` in its parent's content by
+    /// `transform`: a transform that only moves the record there, past the
+    /// parent's content offset, takes no entry of its own. The parent's
+    /// content offset is set before.
     pub fn set_placement(
         &mut self,
         id: RecordId,
         origin_in_parent: Point,
         transform: ProjectiveTransform,
-        parent_content_offset: Point,
     ) {
         let index = id.index();
-        let (x, y) = (origin_in_parent.x, origin_in_parent.y);
-        let (dx, dy) = (parent_content_offset.x, parent_content_offset.y);
-        let placed = match self.tree[index].kind {
-            RecordKind::Leaf => ProjectiveTransform::translation(x + dx, y + dy),
-            RecordKind::Layer | RecordKind::Wrapper | RecordKind::DrawGroup => {
-                ProjectiveTransform::translation(x + 0.0 + dx, y + 0.0 + dy)
-            }
-        };
-        self.geo[index].placement = [x, y];
+        self.geo[index].placement = [origin_in_parent.x, origin_in_parent.y];
+        let origin = self.origin(id);
+        let placed = ProjectiveTransform::translation(origin.x, origin.y);
         if same_bits(transform, placed) {
             if let Some(old) = self.tree[index].transform.take() {
                 self.transforms.remove(old.index());
@@ -465,6 +463,26 @@ impl SceneStore {
             .map(|props| &mut self.props[props.index()])
     }
 
+    /// Changes the properties of `id` with `edit`, starting from defaults
+    /// when it has none; properties left at their defaults go.
+    pub fn edit_props(&mut self, id: RecordId, edit: impl FnOnce(&mut LayerProps)) {
+        let index = id.index();
+        let entry = match self.warm[index].props {
+            Some(entry) => entry,
+            None => {
+                let entry = PropsId::from_index(self.props.insert(LayerProps::default()));
+                self.warm[index].props = Some(entry);
+                entry
+            }
+        };
+        let props = &mut self.props[entry.index()];
+        edit(props);
+        if props.is_default() {
+            self.props.remove(entry.index());
+            self.warm[index].props = None;
+        }
+    }
+
     /// Notes that the update in progress changed what `id` draws: its own
     /// draws, properties or children. Its ancestors take the update as their
     /// subtree's.
@@ -502,7 +520,9 @@ impl SceneStore {
             tree.reach_state = ReachState::Stale;
             current = tree.parent;
             if let Some(props) = self.warm[index].props {
-                self.props[props.index()].cache_hashes.set(None);
+                let props = &mut self.props[props.index()];
+                props.cache_hashes.set(None);
+                props.content_run.note(update);
             }
         }
     }

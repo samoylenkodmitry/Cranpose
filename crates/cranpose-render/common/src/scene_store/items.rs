@@ -91,7 +91,7 @@ impl ItemSpan {
 // The store's items. A span takes room of the power of two at or above its
 // length, so it grows in place up to that room; a freed span's room goes to
 // the next span of its size class.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(crate) struct ItemPool {
     items: Vec<Item>,
     free: Vec<Vec<u32>>,

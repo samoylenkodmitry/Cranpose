@@ -3,6 +3,7 @@
 
 mod content_hash;
 mod facts;
+mod graph_export;
 mod items;
 mod layer_props;
 mod layer_ref;
@@ -10,6 +11,7 @@ mod records;
 mod slab;
 mod store;
 
+pub(crate) use graph_export::export;
 pub(crate) use items::ItemPool;
 pub use items::{Item, ItemKind, ItemSpan};
 pub use layer_props::LayerProps;

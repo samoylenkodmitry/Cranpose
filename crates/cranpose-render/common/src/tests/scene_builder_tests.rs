@@ -326,26 +326,27 @@ fn build_layer_node_for_test(
 ) -> LayerNode {
     let app_context = cranpose_ui::AppContext::new();
     app_context.enter(|| {
-        let mut layer = LayerNode::default();
+        let mut store = SceneStore::new();
+        store.begin_update();
+        let root = root_record(&mut store, snapshot.node_id);
         write_snapshot_layer(
+            &mut store,
             snapshot,
             LowerContext {
                 inherited_motion_context_animated,
                 ..LowerContext::ROOT
             },
-            &mut layer,
+            root,
         );
-        layer
+        store.finish_update();
+        crate::scene_store::export(&store, 0)
     })
 }
 
-/// The slices a modifier resolves to, shared the way a laid-out node shares
-/// its own.
 fn slices_of(modifier: Modifier) -> Rc<ModifierNodeSlices> {
     Rc::new(cranpose_ui::collect_slices_from_modifier(&modifier))
 }
 
-/// Slices that draw a white rect behind the node's content.
 fn draws_a_rect() -> Rc<ModifierNodeSlices> {
     slices_of(Modifier::empty().draw_behind(|scope| {
         scope.draw_rect_at(
@@ -360,8 +361,6 @@ fn draws_a_rect() -> Rc<ModifierNodeSlices> {
     }))
 }
 
-/// Lays `content` out and returns the slices of the first node `is_target`
-/// picks, with the composition that owns the node's state.
 fn laid_out_slices(
     content: impl Fn() + 'static,
     is_target: impl Fn(&ModifierNodeSlices) -> bool,
@@ -399,7 +398,6 @@ fn laid_out_slices(
     (composition, slices)
 }
 
-/// Slices of a laid-out text node showing `text` measured at `width`.
 fn text_slices(
     text: &'static str,
     style: TextStyle,
@@ -419,8 +417,6 @@ fn text_slices(
     )
 }
 
-/// Slices of a laid-out vertical scroll container, which puts its content in
-/// a translated-content context.
 fn scroll_container_slices() -> (cranpose_ui::TestComposition, Rc<ModifierNodeSlices>) {
     laid_out_slices(
         || {
@@ -1269,10 +1265,15 @@ fn scene_build_publishes_live_translated_window_rect_without_layout_tree() {
 
 #[test]
 fn update_graph_from_applier_reports_failed_dirty_child_rebuild() {
-    let mut graph = RenderGraph::new(build_layer_node_for_test(
-        snapshot_with_translation(0.0),
-        false,
-    ));
+    let snapshot = snapshot_with_translation(0.0);
+    let mut graph = cranpose_ui::AppContext::new().enter(|| {
+        let mut graph = RenderGraph::new(LayerNode::default());
+        graph.store.begin_update();
+        let root = root_record(&mut graph.store, snapshot.node_id);
+        write_snapshot_layer(&mut graph.store, snapshot, LowerContext::ROOT, root);
+        graph.refresh_from_store();
+        graph
+    });
     let applier = MemoryApplier::new();
 
     let report = update_graph_from_applier_report(
@@ -1749,9 +1750,6 @@ fn assert_shadowed_scroll_reuses_children(wrapped_root: bool) {
     assert_dirty_hash_road_matches_full_walk(&graph);
 }
 
-/// The nodes whose content changed since they were last drawn, as the shell
-/// adds them to a frame's dirty set: a node reused for another item reports
-/// its own change, not only its parent's.
 fn take_redraw_nodes(applier: &mut MemoryApplier, node: NodeId, out: &mut Vec<NodeId>) {
     let mut children = smallvec::SmallVec::<[NodeId; 8]>::new();
     let Ok(entry) = cranpose_core::Applier::get_mut(applier, node) else {
@@ -2445,19 +2443,24 @@ fn appending_empty_draw_commands_preserves_existing_nodes_and_command_identity()
         DrawCommand::WithContent(Rc::clone(&empty)),
         DrawCommand::Overlay(empty),
     ];
-    let mut nodes = vec![RenderNode::DrawRun(DrawRunNode::new(
-        PrimitivePhase::BeforeChildren,
-        Vec::new(),
-    ))];
+    let mut store = SceneStore::new();
+    store.begin_update();
+    let root = root_record(&mut store, NodeId(42));
+    let mut items =
+        vec![store.add_run(DrawRunNode::new(PrimitivePhase::BeforeChildren, Vec::new()))];
     for (placement, phase) in [
         (DrawPlacement::Behind, PrimitivePhase::BeforeChildren),
         (DrawPlacement::Overlay, PrimitivePhase::AfterChildren),
     ] {
         append_draw_nodes(
-            &mut nodes,
-            NodeId(42),
-            &commands,
-            3,
+            &mut store,
+            root,
+            &mut items,
+            NodeCommands {
+                node_id: NodeId(42),
+                commands: &commands,
+                first_index: 3,
+            },
             DrawPass::Record(placement),
             DrawTarget {
                 size: Size::default(),
@@ -2467,12 +2470,10 @@ fn appending_empty_draw_commands_preserves_existing_nodes_and_command_identity()
             phase,
         );
     }
-    let actual: Vec<_> = nodes
+    let actual: Vec<_> = items
         .iter()
-        .map(|node| {
-            let RenderNode::DrawRun(run) = node else {
-                panic!("expected a draw run");
-            };
+        .map(|&item| {
+            let run = store.run(item);
             assert!(run.is_empty());
             (
                 run.phase,
@@ -3748,7 +3749,7 @@ fn window_root_subtree_leaves_the_parent_scene_and_starts_its_own() {
         let mut labels = Vec::new();
         collect_text_labels(&graph.root, &mut labels);
         assert_eq!(labels, vec!["inside".to_string()]);
-        assert_eq!(layer_identity(&graph.root), Some(window_node));
+        assert_eq!(graph.root.node_id.or(graph.root.wraps), Some(window_node));
         assert_eq!(
             graph.root.local_bounds,
             Rect {
@@ -4294,9 +4295,6 @@ fn a_dirty_child_that_starts_publishing_window_origins_marks_its_ancestors() {
 
 type Holder<T> = Rc<RefCell<Option<T>>>;
 
-/// A text three boxes down, the outermost box padded by a state, and what
-/// the composition hands back: the label and padding states, and the ids of
-/// the padded box and the text.
 fn nested_label_composition(
     label: Holder<cranpose_core::MutableState<String>>,
     padding: Holder<cranpose_core::MutableState<f32>>,

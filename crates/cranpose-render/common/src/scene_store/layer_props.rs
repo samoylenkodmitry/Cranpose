@@ -34,6 +34,19 @@ pub struct LayerProps {
     pub(crate) content_run: ContentRun,
 }
 
+impl LayerProps {
+    // Whether every property reads as its default, so the record needs no
+    // entry. The content run goes with the entry.
+    pub(crate) fn is_default(&self) -> bool {
+        self.layer_bounds.is_none()
+            && self.graphics_layer.get().is_none()
+            && self.translated_content_offset == Point::default()
+            && self.hit_test.is_none()
+            && !self.isolation.has_any()
+            && self.cache_policy == CachePolicy::None
+    }
+}
+
 // The last scene update that changed what a record draws, and how many
 // updates in a row up to it did.
 #[derive(Clone, Copy, Debug, Default)]
@@ -57,5 +70,14 @@ impl ContentRun {
 
     pub(crate) fn churns(self, update: SceneUpdate) -> bool {
         self.run >= 2 && self.last == update
+    }
+
+    // The last update and the run, the last update counted as `now_number`
+    // counts `now`.
+    pub(crate) fn numbered(self, now: SceneUpdate, now_number: u64) -> (u64, u32) {
+        (
+            now_number.wrapping_sub(u64::from(now.since(self.last))),
+            self.run,
+        )
     }
 }
