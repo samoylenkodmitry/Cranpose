@@ -18,8 +18,9 @@ pub struct WallTier {
     pub tile_height: f32,
 }
 
-/// The tiers, 1 to 16: each holds about 1.4 times the tiles of the one before.
-pub const WALL_TIERS: [WallTier; 16] = [
+/// The tiers, 1 to 20: each holds about 1.2 to 1.4 times the tiles of the one
+/// before.
+pub const WALL_TIERS: [WallTier; 20] = [
     WallTier {
         tile_width: 64.0,
         tile_height: 40.0,
@@ -84,9 +85,25 @@ pub const WALL_TIERS: [WallTier; 16] = [
         tile_width: 6.0,
         tile_height: 4.0,
     },
+    WallTier {
+        tile_width: 5.0,
+        tile_height: 4.0,
+    },
+    WallTier {
+        tile_width: 5.0,
+        tile_height: 3.0,
+    },
+    WallTier {
+        tile_width: 4.0,
+        tile_height: 3.0,
+    },
+    WallTier {
+        tile_width: 3.0,
+        tile_height: 3.0,
+    },
 ];
 
-/// Tier `1..=16`; anything else is clamped into that range.
+/// Tier `1..=20`; anything else is clamped into that range.
 pub fn wall_tier(tier: usize) -> WallTier {
     WALL_TIERS[tier.clamp(1, WALL_TIERS.len()) - 1]
 }
