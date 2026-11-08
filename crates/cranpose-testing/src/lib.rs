@@ -13,6 +13,8 @@ pub mod robot_assertions;
     reason = "a robot run reports each step on the terminal"
 )]
 pub mod robot_helpers;
+#[cfg(feature = "desktop-robot")]
+mod tab_row;
 /// Composition tests without a window: `ComposeTestRule` composes content,
 /// runs frames and reads the placed semantics.
 pub mod testing;
@@ -31,6 +33,8 @@ pub use robot_assertions::assert_robot_fps_over;
 pub use robot_assertions::{Bounds, SemanticElementLike};
 #[cfg(feature = "desktop-robot")]
 pub use robot_helpers::*;
+#[cfg(feature = "desktop-robot")]
+pub use tab_row::{TabAxis, bounds_span, detect_tab_axis};
 pub use testing::*;
 
 /// The testing API in one import.
