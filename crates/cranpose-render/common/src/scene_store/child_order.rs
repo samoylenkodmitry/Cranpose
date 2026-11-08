@@ -7,7 +7,7 @@ use super::Item;
 // where among them.
 #[derive(Clone, Default)]
 pub(crate) struct ChildOrder {
-    rows: Vec<(u64, u32)>,
+    rows: Vec<(u64, usize)>,
     stamp: u64,
 }
 
@@ -23,7 +23,7 @@ impl ChildOrder {
                 if row >= self.rows.len() {
                     self.rows.resize(row + 1, (0, 0));
                 }
-                self.rows[row] = (stamp, position as u32);
+                self.rows[row] = (stamp, position);
             }
         }
         let mut last = None;

@@ -38,7 +38,6 @@ impl PixelBox {
     // `None` when it touches none.
     fn of(rect: Rect, scale: f32, (width, height): (u32, u32)) -> Option<Self> {
         let margin = 2.0 + BLUR_PIXEL_SLACK * (1.0 - scale).max(0.0);
-        let pixel = |value: f32, most: u32| value.clamp(0.0, most as f32) as u16;
         let x0 = pixel((rect.x * scale - margin).floor(), width);
         let y0 = pixel((rect.y * scale - margin).floor(), height);
         let x1 = pixel(((rect.x + rect.width) * scale + margin).ceil(), width);
@@ -62,6 +61,16 @@ impl PixelBox {
             height: f32::from(self.y1 - self.y0),
         }
     }
+}
+
+// The pixel `value` lies at in a window `most` pixels long, clamped to it.
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "the value is clamped to 0..=most, and a window is under 65,536 pixels long"
+)]
+fn pixel(value: f32, most: u32) -> u16 {
+    value.clamp(0.0, most.min(u32::from(u16::MAX)) as f32) as u16
 }
 
 // How the target drew a record's subtree.

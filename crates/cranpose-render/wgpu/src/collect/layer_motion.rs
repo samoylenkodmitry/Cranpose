@@ -47,13 +47,12 @@ impl LayerMotion {
         );
     }
 
-    // Keeps the scales of the layers of `store` a culled walk left out.
-    pub(super) fn keep_unwalked(&mut self, store: &SceneStore) {
-        for (&node_id, &motion) in &self.previous {
-            if store.resolve(motion.record).is_some() {
-                self.current.entry(node_id).or_insert(motion);
-            }
-        }
+    // Ends a frame whose walk left layers of `store` out: their scales stay
+    // while their records stand.
+    pub(super) fn end_culled_frame(&mut self, store: &SceneStore) {
+        self.previous
+            .retain(|_, motion| store.resolve(motion.record).is_some());
+        self.previous.extend(self.current.drain());
     }
 
     pub(crate) fn end_frame(&mut self) {

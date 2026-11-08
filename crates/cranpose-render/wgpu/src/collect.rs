@@ -443,10 +443,10 @@ pub(crate) fn collect_root(
     collect_child(root, motion, context, &mut out, recycler);
     out.scene.flush_loose();
     out.refresh_backdrop_summary();
-    if cull.is_some() {
-        motion.keep_unwalked(root.store());
+    match cull {
+        Some(_) => motion.end_culled_frame(root.store()),
+        None => motion.end_frame(),
     }
-    motion.end_frame();
     out
 }
 
