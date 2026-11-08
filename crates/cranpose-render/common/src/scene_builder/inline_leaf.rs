@@ -5,7 +5,7 @@ use cranpose_core::{MemoryApplier, NodeId, RecordId, collections::map::HashMap};
 use cranpose_ui::{ModifierNodeSlices, Point, Rect, Size};
 
 use super::{
-    BuildNodeSnapshot, DrawTarget, Level, LowerContext, SnapshotNodeData, assign_layer, item_lists,
+    DrawTarget, Level, LowerContext, SnapshotNodeData, assign_layer, item_lists,
     modifier_slices_have_origin_sinks, note_layer_lowered, prepare_node_layer, read_node_data,
     read_placed_node_data, remove_dirty_descendants, slices_hit_something,
     text_node::{TextNodeParts, drawn_text, refresh_text_node},
@@ -38,14 +38,6 @@ pub(super) fn lowers_inline(data: &SnapshotNodeData<'_>) -> bool {
     data.children.is_empty()
         && !data.window_root
         && slices_lower_inline(&data.modifier_slices, data.layout_state.size())
-}
-
-// Whether `snapshot`, a child in a layout tree snapshot, draws in its
-// parent's layer.
-pub(super) fn snapshot_lowers_inline(snapshot: &BuildNodeSnapshot) -> bool {
-    snapshot.graphics_layer.is_none()
-        && snapshot.children.is_empty()
-        && slices_lower_inline(&snapshot.slices, snapshot.size)
 }
 
 // Lowers the placed child `node_id` into a record under `parent`: a leaf

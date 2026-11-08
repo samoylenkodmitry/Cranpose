@@ -13,8 +13,8 @@ use cranpose_render_common::{
     scene_store::{ItemRef, LayerRef},
 };
 use cranpose_ui::{
-    Box, BoxSpec, Color, LayoutTree, LazyColumn, LazyColumnSpec, LazyItems, LazyListScope,
-    LazyListState, Modifier, Size, composable, rememberLazyListState,
+    Box, BoxSpec, Color, LazyColumn, LazyColumnSpec, LazyItems, LazyListScope, LazyListState,
+    Modifier, Size, composable, rememberLazyListState,
 };
 use stats_alloc::{INSTRUMENTED_SYSTEM, Region, StatsAlloc};
 
@@ -43,12 +43,6 @@ impl Renderer for GraphRenderer {
 
     fn scene_mut(&mut self) -> &mut Scene {
         &mut self.scene
-    }
-
-    fn rebuild_scene(&mut self, tree: &LayoutTree, _: Size) -> Result<(), ()> {
-        self.rebuilds += 1;
-        self.scene.build_from_layout_tree(tree.root());
-        Ok(())
     }
 
     fn rebuild_scene_from_applier(

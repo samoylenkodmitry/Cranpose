@@ -19,11 +19,10 @@ mod text_draws;
 
 pub use cranpose_render_common::rgb565::Rgb565Order;
 use cranpose_render_common::{
-    RenderScene, Renderer, SceneUpdates,
+    Renderer, SceneUpdates,
     rgb565::{Rgb565Be, Rgb565Le},
     text_fonts::TextFonts,
 };
-use cranpose_ui::LayoutTree;
 use cranpose_ui_graphics::{MemoryHeadroom, Size};
 pub use draw::draw_scene;
 use pixel::Pixel;
@@ -412,16 +411,6 @@ impl Renderer for PixelsRenderer {
 
     fn scene_mut(&mut self) -> &mut Self::Scene {
         &mut self.scene
-    }
-
-    fn rebuild_scene(
-        &mut self,
-        layout_tree: &LayoutTree,
-        _viewport: Size,
-    ) -> Result<(), Self::Error> {
-        self.scene.clear();
-        pipeline::render_layout_tree(layout_tree.root(), &mut self.scene);
-        Ok(())
     }
 
     fn rebuild_scene_from_applier(

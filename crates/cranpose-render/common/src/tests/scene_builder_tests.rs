@@ -1,17 +1,21 @@
-use std::{borrow::Cow, cell::RefCell, rc::Rc};
+use std::{cell::RefCell, rc::Rc};
 
-use cranpose_foundation::lazy::{LazyListScope, LazyListState, rememberLazyListState};
+use cranpose_foundation::{
+    PointerEvent, PointerEventKind,
+    lazy::{LazyListScope, LazyListState, rememberLazyListState},
+};
 use cranpose_ui::{
-    Color, Column, ColumnSpec, DrawCommand, LayoutEngine, LayoutNode, LazyColumn, LazyColumnSpec,
-    LinearArrangement, Modifier, Point, Rect, RoundedCornerShape, ScrollState, Size, Spacer, Text,
-    TextLayoutOptions, TextOptions, TextOverflow, TextStyle, TextWithOptions,
+    Color, Column, ColumnSpec, DrawCommand, LayoutBox, LayoutEngine, LayoutNode, LayoutTree,
+    LazyColumn, LazyColumnSpec, LinearArrangement, Modifier, Point, Rect, RoundedCornerShape,
+    ScrollState, Size, Spacer, Text, TextLayoutOptions, TextOptions, TextOverflow, TextStyle,
+    TextWithOptions,
     text::{AnnotatedString, BaselineShift, SpanStyle, TextAlign, TextDirection, TextMotion},
 };
 use cranpose_ui_graphics::{
     Brush, DrawPlacement, DrawPrimitive, DrawScopeDefault, GraphicsLayer, LayerShape, RenderEffect,
 };
 
-use super::{layer_shape::shape_clip, node_layer::isolation_reasons, text_node::TEXT_CLIP_PAD, *};
+use super::{node_layer::root_record, text_node::TEXT_CLIP_PAD, *};
 use crate::{
     graph::{DrawRunNode, PrimitivePhase, TextPrimitiveNode},
     scene_store::ItemRef,
@@ -300,330 +304,6 @@ fn first_run(layer: LayerRef<'_>) -> &DrawRunNode {
             _ => None,
         })
         .expect("expected draw run")
-}
-
-fn build_layer_node_for_test(
-    snapshot: BuildNodeSnapshot,
-    inherited_motion_context_animated: bool,
-) -> SceneStore {
-    let app_context = cranpose_ui::AppContext::new();
-    app_context.enter(|| {
-        let mut store = SceneStore::new();
-        store.begin_update();
-        let root = root_record(&mut store, snapshot.node_id);
-        write_snapshot_layer(
-            &mut store,
-            snapshot,
-            LowerContext {
-                inherited_motion_context_animated,
-                ..LowerContext::ROOT
-            },
-            root,
-        );
-        store.finish_update();
-        store
-    })
-}
-
-fn slices_of(modifier: Modifier) -> Rc<ModifierNodeSlices> {
-    Rc::new(cranpose_ui::collect_slices_from_modifier(&modifier))
-}
-
-fn draws_a_rect() -> Rc<ModifierNodeSlices> {
-    slices_of(Modifier::empty().draw_behind(|scope| {
-        scope.draw_rect_at(
-            Rect {
-                x: 3.0,
-                y: 4.0,
-                width: 20.0,
-                height: 8.0,
-            },
-            Brush::solid(Color::WHITE),
-        );
-    }))
-}
-
-fn laid_out_slices(
-    content: impl Fn() + 'static,
-    is_target: impl Fn(&ModifierNodeSlices) -> bool,
-) -> (cranpose_ui::TestComposition, Rc<ModifierNodeSlices>) {
-    fn find(
-        node: &LayoutBox,
-        is_target: &dyn Fn(&ModifierNodeSlices) -> bool,
-    ) -> Option<Rc<ModifierNodeSlices>> {
-        if is_target(&node.node_data.modifier_slices) {
-            return Some(Rc::clone(&node.node_data.modifier_slices));
-        }
-        node.children
-            .iter()
-            .find_map(|child| find(child, is_target))
-    }
-
-    let mut composition = cranpose_ui::run_test_composition(content);
-    let root = composition.root().expect("composition root");
-    let handle = composition.runtime_handle();
-    let slices = {
-        let mut applier = composition.applier_mut();
-        applier.set_runtime_handle(handle);
-        let layout = applier
-            .compute_layout(
-                root,
-                Size {
-                    width: 400.0,
-                    height: 400.0,
-                },
-            )
-            .expect("layout");
-        applier.clear_runtime_handle();
-        find(layout.root(), &is_target).expect("a laid-out node the test targets")
-    };
-    (composition, slices)
-}
-
-fn text_slices(
-    text: &'static str,
-    style: TextStyle,
-    options: TextLayoutOptions,
-    width: f32,
-) -> (cranpose_ui::TestComposition, Rc<ModifierNodeSlices>) {
-    laid_out_slices(
-        move || {
-            cranpose_ui::BasicTextWithOptions(
-                text,
-                Modifier::empty().width(width),
-                style.clone(),
-                options,
-            );
-        },
-        move |slices| slices.text_content().as_deref() == Some(text),
-    )
-}
-
-fn scroll_container_slices() -> (cranpose_ui::TestComposition, Rc<ModifierNodeSlices>) {
-    laid_out_slices(
-        || {
-            let state = cranpose_core::remember(|| ScrollState::new(0.0)).with(|state| *state);
-            Column(
-                Modifier::empty().vertical_scroll(state, false),
-                ColumnSpec::default(),
-                || {},
-            );
-        },
-        ModifierNodeSlices::translated_content_context,
-    )
-}
-
-fn snapshot_with_translation(tx: f32) -> BuildNodeSnapshot {
-    let child = BuildNodeSnapshot {
-        node_id: NodeId(2),
-        placement: Point { x: 11.0, y: 7.0 },
-        size: Size {
-            width: 40.0,
-            height: 20.0,
-        },
-        slices: draws_a_rect(),
-        ..Default::default()
-    };
-
-    BuildNodeSnapshot {
-        node_id: NodeId(1),
-        size: Size {
-            width: 80.0,
-            height: 50.0,
-        },
-        graphics_layer: Some(GraphicsLayer {
-            translation_x: tx,
-            ..GraphicsLayer::default()
-        }),
-        children: vec![child],
-        ..Default::default()
-    }
-}
-
-#[test]
-fn parent_translation_changes_layer_transform_but_not_child_local_geometry() {
-    let static_graph = build_layer_node_for_test(snapshot_with_translation(0.0), false);
-    let moved_graph = build_layer_node_for_test(snapshot_with_translation(23.5), false);
-
-    let (static_graph, moved_graph) = (root_of(&static_graph), root_of(&moved_graph));
-    let static_run = first_run(child_at(static_graph, 0));
-    let static_draw = static_run.primitives().next().expect("a recorded draw");
-    let moved_run = first_run(child_at(moved_graph, 0));
-    let moved_draw = moved_run.primitives().next().expect("a recorded draw");
-
-    assert_ne!(
-        static_graph.transform_to_parent(),
-        moved_graph.transform_to_parent(),
-        "parent transform should encode translation"
-    );
-    assert_eq!(
-        static_draw, moved_draw,
-        "child local primitive geometry must stay stable under parent translation"
-    );
-}
-
-#[test]
-fn stored_content_hash_ignores_parent_translation() {
-    let static_graph = build_layer_node_for_test(snapshot_with_translation(0.0), false);
-    let moved_graph = build_layer_node_for_test(snapshot_with_translation(23.5), false);
-
-    assert_eq!(
-        root_of(&static_graph).target_content_hash(),
-        root_of(&moved_graph).target_content_hash(),
-        "parent rigid motion must not invalidate the subtree content hash"
-    );
-}
-
-#[test]
-fn parent_content_offset_is_encoded_in_child_transform() {
-    let child = BuildNodeSnapshot {
-        node_id: NodeId(2),
-        placement: Point { x: 11.0, y: 7.0 },
-        size: Size {
-            width: 40.0,
-            height: 20.0,
-        },
-        ..Default::default()
-    };
-
-    let parent = BuildNodeSnapshot {
-        node_id: NodeId(1),
-        size: Size {
-            width: 80.0,
-            height: 50.0,
-        },
-        content_offset: Point { x: 13.0, y: -9.0 },
-        children: vec![child],
-        ..Default::default()
-    };
-
-    let graph = build_layer_node_for_test(parent, false);
-
-    let top_left = child_at(root_of(&graph), 0)
-        .transform_to_parent()
-        .map_point(Point::default());
-    assert_eq!(top_left, Point { x: 24.0, y: -2.0 });
-}
-
-#[test]
-fn translated_content_offset_changes_visual_position_and_full_surface_hash() {
-    fn parent_with_offset(offset: Point, scroll: &Rc<ModifierNodeSlices>) -> BuildNodeSnapshot {
-        let child = BuildNodeSnapshot {
-            node_id: NodeId(2),
-            placement: Point { x: 11.0, y: 7.0 },
-            size: Size {
-                width: 40.0,
-                height: 20.0,
-            },
-            slices: draws_a_rect(),
-            ..Default::default()
-        };
-
-        BuildNodeSnapshot {
-            node_id: NodeId(1),
-            size: Size {
-                width: 80.0,
-                height: 50.0,
-            },
-            content_offset: offset,
-            slices: Rc::clone(scroll),
-            children: vec![child],
-            ..Default::default()
-        }
-    }
-
-    let (_composition, scroll) = scroll_container_slices();
-    let base = build_layer_node_for_test(
-        parent_with_offset(Point { x: 0.0, y: -18.0 }, &scroll),
-        true,
-    );
-    let moved = build_layer_node_for_test(
-        parent_with_offset(Point { x: 0.0, y: -32.0 }, &scroll),
-        true,
-    );
-    let rested = build_layer_node_for_test(
-        parent_with_offset(Point { x: 0.0, y: -18.0 }, &scroll),
-        false,
-    );
-
-    let (base, moved, rested) = (root_of(&base), root_of(&moved), root_of(&rested));
-    assert_ne!(
-        child_at(base, 0)
-            .transform_to_parent()
-            .map_point(Point::default()),
-        child_at(moved, 0)
-            .transform_to_parent()
-            .map_point(Point::default()),
-        "scroll offset still has to move child content visually"
-    );
-    assert_eq!(
-        base.motion_source_content_hash(),
-        moved.motion_source_content_hash(),
-        "the source content identity stays stable when only the scroll offset changes"
-    );
-    assert_ne!(
-        base.target_content_hash(),
-        moved.target_content_hash(),
-        "a full-surface cache of the scroll viewport must include the scroll offset"
-    );
-    assert_ne!(
-        base.target_content_hash(),
-        rested.target_content_hash(),
-        "full-surface cache keys must include active scroll motion policy"
-    );
-}
-
-#[test]
-fn rounded_clip_to_bounds_records_shape_clip_without_runtime_shader() {
-    let mut layer = Some(Cow::Owned(GraphicsLayer::default()));
-    shape_clip(
-        &mut layer,
-        Some(RoundedCornerShape::new(4.0, 8.0, 12.0, 16.0)),
-        Rect {
-            x: 0.0,
-            y: 0.0,
-            width: 100.0,
-            height: 40.0,
-        },
-    );
-    let layer = layer.expect("rounded clip properties").into_owned();
-
-    assert!(layer.clip);
-    assert!(layer.render_effect.is_none());
-    let LayerShape::Rounded(shape) = layer.shape else {
-        panic!("rounded clip must be recorded as layer shape");
-    };
-    assert_eq!(shape, RoundedCornerShape::new(4.0, 8.0, 12.0, 16.0));
-    assert!(isolation_reasons(&layer).shape_clip);
-}
-
-#[test]
-fn rounded_clip_to_bounds_keeps_existing_effect_inside_mask() {
-    let existing = RenderEffect::blur(3.0);
-    let mut layer = Some(Cow::Owned(GraphicsLayer {
-        render_effect: Some(existing.clone()),
-        ..GraphicsLayer::default()
-    }));
-    shape_clip(
-        &mut layer,
-        Some(RoundedCornerShape::uniform(10.0)),
-        Rect {
-            x: 0.0,
-            y: 0.0,
-            width: 100.0,
-            height: 40.0,
-        },
-    );
-    let layer = layer.expect("rounded clip properties").into_owned();
-
-    let Some(RenderEffect::Chain { first, second }) = layer.render_effect else {
-        panic!("existing effect should chain into rounded clip mask");
-    };
-    assert_eq!(*first, existing);
-    assert!(
-        matches!(*second, RenderEffect::Shader { .. }),
-        "rounded mask must be the outer effect"
-    );
 }
 
 #[test]
@@ -1211,29 +891,6 @@ fn scene_build_publishes_live_translated_window_rect_without_layout_tree() {
 }
 
 #[test]
-fn update_graph_from_applier_reports_failed_dirty_child_rebuild() {
-    let snapshot = snapshot_with_translation(0.0);
-    let mut graph = Built {
-        store: build_layer_node_for_test(snapshot, false),
-        walk: WalkMemory::default(),
-    };
-    let applier = MemoryApplier::new();
-
-    let report =
-        graph.update_from_applier(&applier, NodeId(1), &[(NodeId(2), NodeUpdate::Content)]);
-
-    assert_eq!(
-        report,
-        GraphUpdateReport {
-            update: GraphUpdate::NeedsRebuild(GraphRebuildReason::DirtyLayerUnavailable),
-            hit_graph_dirty: true,
-            layers_moved: true,
-        },
-        "dirty child graph updates must not report success when the replacement cannot be rebuilt"
-    );
-}
-
-#[test]
 fn scrolled_list_under_a_composited_layer_keeps_the_hashes_a_full_walk_leaves() {
     let scroll_holder: Rc<RefCell<Option<ScrollState>>> = Rc::new(RefCell::new(None));
     let scroll_holder_for_comp = Rc::clone(&scroll_holder);
@@ -1662,13 +1319,10 @@ fn assert_shadowed_scroll_reuses_children(wrapped_root: bool) {
         let layer = find_layer_by_node_id(graph_root, row).expect("clickable row");
         let hit = layer.hit_test().expect("row hit target");
         assert_eq!(hit.handlers.pointer_inputs().len(), 1);
-        for kind in [
-            cranpose_foundation::PointerEventKind::Down,
-            cranpose_foundation::PointerEventKind::Up,
-        ] {
+        for kind in [PointerEventKind::Down, PointerEventKind::Up] {
             let position = Point { x: 10.0, y: 10.0 };
             hit.handlers.pointer_inputs()[0](
-                cranpose_foundation::PointerEvent::new(kind, position, position).with_buttons(
+                PointerEvent::new(kind, position, position).with_buttons(
                     cranpose_foundation::PointerButtons::new()
                         .with(cranpose_foundation::PointerButton::Primary),
                 ),
@@ -2423,577 +2077,6 @@ fn appending_empty_draw_commands_preserves_existing_nodes_and_command_identity()
 }
 
 #[test]
-fn overlay_draw_commands_are_tagged_after_children() {
-    let child = BuildNodeSnapshot {
-        node_id: NodeId(2),
-        placement: Point { x: 4.0, y: 5.0 },
-        size: Size {
-            width: 20.0,
-            height: 10.0,
-        },
-        ..Default::default()
-    };
-    let draws = slices_of(Modifier::empty().draw_with_content(|scope| {
-        scope.draw_rect_at(
-            Rect {
-                x: 1.0,
-                y: 2.0,
-                width: 8.0,
-                height: 6.0,
-            },
-            Brush::solid(Color::WHITE),
-        );
-        scope.draw_content();
-        scope.draw_rect_at(
-            Rect {
-                x: 3.0,
-                y: 1.0,
-                width: 5.0,
-                height: 4.0,
-            },
-            Brush::solid(Color::BLACK),
-        );
-    }));
-
-    let parent = BuildNodeSnapshot {
-        node_id: NodeId(1),
-        size: Size {
-            width: 80.0,
-            height: 50.0,
-        },
-        slices: draws,
-        children: vec![child],
-        ..Default::default()
-    };
-
-    let graph = build_layer_node_for_test(parent, false);
-    let items: Vec<ItemRef<'_>> = root_of(&graph).items().collect();
-    let [
-        ItemRef::Run(behind),
-        ItemRef::Layer(_) | ItemRef::Leaf(_),
-        ItemRef::Run(overlay),
-    ] = items.as_slice()
-    else {
-        panic!("expected a run before the child node and one after it");
-    };
-
-    assert_eq!(behind.phase, PrimitivePhase::BeforeChildren);
-    assert_eq!(overlay.phase, PrimitivePhase::AfterChildren);
-}
-
-#[test]
-fn command_recordings_reuse_buffers_across_rebuilds() {
-    let draws = draws_a_rect();
-    let snapshot = || BuildNodeSnapshot {
-        node_id: NodeId(7001),
-        size: Size {
-            width: 40.0,
-            height: 20.0,
-        },
-        slices: Rc::clone(&draws),
-        ..Default::default()
-    };
-    fn run_of(store: &SceneStore) -> &DrawRunNode {
-        first_run(root_of(store))
-    }
-
-    let graph_a = build_layer_node_for_test(snapshot(), false);
-    let ptr_a = run_of(&graph_a).recording.shapes().bodies().as_ptr();
-
-    let graph_b = build_layer_node_for_test(snapshot(), false);
-    let ptr_b = run_of(&graph_b).recording.shapes().bodies().as_ptr();
-    assert_ne!(
-        ptr_a, ptr_b,
-        "a buffer a live graph shares must never be recorded into"
-    );
-    assert_eq!(
-        run_of(&graph_a).recording,
-        run_of(&graph_b).recording,
-        "re-recording must reproduce the recording"
-    );
-
-    drop(graph_a);
-    let graph_c = build_layer_node_for_test(snapshot(), false);
-    assert_eq!(
-        run_of(&graph_c).recording.shapes().bodies().as_ptr(),
-        ptr_a,
-        "the released buffer must be reused for the next recording"
-    );
-
-    let held = std::rc::Rc::clone(&run_of(&graph_c).recording);
-    drop(graph_c);
-    let graph_d = build_layer_node_for_test(snapshot(), false);
-    let ptr_d = run_of(&graph_d).recording.shapes().bodies().as_ptr();
-    assert_ne!(ptr_d, held.shapes().bodies().as_ptr());
-    assert_ne!(ptr_d, run_of(&graph_b).recording.shapes().bodies().as_ptr());
-}
-
-#[test]
-fn stored_content_hash_changes_when_child_transform_changes() {
-    let child = BuildNodeSnapshot {
-        node_id: NodeId(2),
-        placement: Point { x: 4.0, y: 5.0 },
-        size: Size {
-            width: 20.0,
-            height: 10.0,
-        },
-        ..Default::default()
-    };
-    let mut moved_child = child.clone();
-    moved_child.placement.x += 7.0;
-
-    let parent = BuildNodeSnapshot {
-        node_id: NodeId(1),
-        size: Size {
-            width: 80.0,
-            height: 50.0,
-        },
-        children: vec![child],
-        ..Default::default()
-    };
-    let moved_parent = BuildNodeSnapshot {
-        children: vec![moved_child],
-        ..parent.clone()
-    };
-
-    let static_graph = build_layer_node_for_test(parent, false);
-    let moved_graph = build_layer_node_for_test(moved_parent, false);
-
-    assert_ne!(
-        root_of(&static_graph).target_content_hash(),
-        root_of(&moved_graph).target_content_hash(),
-        "moving a child within the parent must invalidate the parent subtree hash"
-    );
-}
-
-#[test]
-fn stored_effect_hash_tracks_local_effect_only() {
-    let base = BuildNodeSnapshot {
-        node_id: NodeId(1),
-        size: Size {
-            width: 80.0,
-            height: 50.0,
-        },
-        ..Default::default()
-    };
-    let mut effected = base.clone();
-    effected.graphics_layer = Some(GraphicsLayer {
-        render_effect: Some(RenderEffect::blur(6.0)),
-        ..GraphicsLayer::default()
-    });
-
-    let base_graph = build_layer_node_for_test(base, false);
-    let effected_graph = build_layer_node_for_test(effected, false);
-
-    let (base_graph, effected_graph) = (root_of(&base_graph), root_of(&effected_graph));
-    assert_eq!(
-        base_graph.target_content_hash(),
-        effected_graph.target_content_hash(),
-        "post-processing effect parameters belong to the effect hash, not the content hash"
-    );
-    assert_ne!(base_graph.effect_hash(), effected_graph.effect_hash());
-}
-
-#[test]
-fn text_node_preserves_rtl_alignment_and_baseline_shift() {
-    let mut text_style = TextStyle::default();
-    text_style.paragraph_style.text_align = TextAlign::Start;
-    text_style.paragraph_style.text_direction = TextDirection::Rtl;
-    text_style.span_style.baseline_shift = Some(BaselineShift::SUPERSCRIPT);
-    let options = TextLayoutOptions {
-        overflow: TextOverflow::Clip,
-        ..Default::default()
-    };
-
-    let (_composition, text) = text_slices("rtl", text_style, options, 180.0);
-    let snapshot = BuildNodeSnapshot {
-        node_id: NodeId(1),
-        size: Size {
-            width: 180.0,
-            height: 48.0,
-        },
-        slices: text,
-        ..Default::default()
-    };
-
-    let graph = build_layer_node_for_test(snapshot, false);
-    let text = first_text_primitive(&graph);
-
-    assert!(
-        text.rect.x + text.layout.line_left(0) > 0.0,
-        "RTL start alignment should shift the line within the available width"
-    );
-    assert_eq!(
-        text.clip, None,
-        "a text that fits its box draws uncut, its superscript glyphs above the box too"
-    );
-}
-
-#[test]
-fn text_node_alignment_obeys_physical_and_relative_edges() {
-    for direction in [TextDirection::Ltr, TextDirection::Rtl] {
-        for (alignment, ltr, rtl) in [
-            (TextAlign::Left, 0.0, 0.0),
-            (TextAlign::Right, 1.0, 1.0),
-            (TextAlign::Center, 0.5, 0.5),
-            (TextAlign::Start, 0.0, 1.0),
-            (TextAlign::End, 1.0, 0.0),
-            (TextAlign::Justify, 0.0, 1.0),
-            (TextAlign::Unspecified, 0.0, 1.0),
-        ] {
-            let mut style = TextStyle::default();
-            style.paragraph_style.text_align = alignment;
-            style.paragraph_style.text_direction = direction;
-            let (_composition, slices) =
-                text_slices("hello", style, TextLayoutOptions::default(), 180.0);
-            let graph = build_layer_node_for_test(
-                BuildNodeSnapshot {
-                    node_id: NodeId(1),
-                    size: Size {
-                        width: 180.0,
-                        height: 48.0,
-                    },
-                    slices,
-                    ..Default::default()
-                },
-                false,
-            );
-            let text = first_text_primitive(&graph);
-            let fraction = if direction == TextDirection::Rtl {
-                rtl
-            } else {
-                ltr
-            };
-            let line_width = text.layout.line_right(0) - text.layout.line_left(0);
-            let expected = (180.0 - line_width) * fraction;
-            let left = text.rect.x + text.layout.line_left(0);
-            assert!(
-                (left - expected).abs() < 0.001,
-                "{alignment:?}, {direction:?}: expected the line at x={expected}, got {left}"
-            );
-        }
-    }
-}
-
-fn first_text_primitive(store: &SceneStore) -> &TextPrimitiveNode {
-    let Some(ItemRef::Text(text)) = root_of(store).items().next() else {
-        panic!("expected text primitive");
-    };
-    text
-}
-
-// A text in a node of a fixed width lays out as wide as the node, and one
-// that fits it draws uncut, as Compose cuts a text only when its layout
-// overflows the box: a slant or a stroke past its glyphs' advances shows.
-#[test]
-fn a_text_that_fits_its_box_lays_out_as_wide_and_draws_uncut() {
-    let options = TextLayoutOptions {
-        overflow: TextOverflow::Clip,
-        ..Default::default()
-    };
-    let (_composition, text) = text_slices("short", TextStyle::default(), options, 320.0);
-    let snapshot = BuildNodeSnapshot {
-        node_id: NodeId(1),
-        size: Size {
-            width: 320.0,
-            height: 48.0,
-        },
-        slices: text,
-        ..Default::default()
-    };
-
-    let graph = build_layer_node_for_test(snapshot, false);
-    let text = first_text_primitive(&graph);
-
-    assert_eq!(
-        text.rect.width,
-        text.layout.width(),
-        "a text in a node of a fixed width lays out as wide as the node"
-    );
-    assert_eq!(text.clip, None, "a text that fits its box draws uncut");
-}
-
-// A text whose line overflows its box is cut at the box, with the clip
-// padding around it.
-#[test]
-fn an_overflowing_text_is_cut_at_its_box_with_the_clip_padding() {
-    let options = TextLayoutOptions {
-        overflow: TextOverflow::Clip,
-        soft_wrap: false,
-        max_lines: 1,
-        ..Default::default()
-    };
-    let (_composition, text) = text_slices(
-        "a line far too long for its box",
-        TextStyle::default(),
-        options,
-        60.0,
-    );
-    let snapshot = BuildNodeSnapshot {
-        node_id: NodeId(1),
-        size: Size {
-            width: 60.0,
-            height: 48.0,
-        },
-        slices: text,
-        ..Default::default()
-    };
-
-    let graph = build_layer_node_for_test(snapshot, false);
-    let text = first_text_primitive(&graph);
-    let clip = text.clip.expect("an overflowing text is cut");
-
-    assert_eq!(
-        clip.width, 62.0,
-        "the clip holds the box and the clip padding"
-    );
-}
-
-#[test]
-fn text_field_pan_shifts_glyphs_and_clips_to_field_bounds() {
-    const LINE: &str = "a very long single line of text that cannot fit";
-    let field_width = 80.0_f32;
-    let (_text_composition, text) = text_slices(
-        LINE,
-        TextStyle::default(),
-        TextLayoutOptions::default(),
-        field_width,
-    );
-    let (_field_composition, field) = laid_out_slices(
-        move || {
-            let state = cranpose_core::remember(|| cranpose_ui::TextFieldState::new(LINE))
-                .with(|state| *state);
-            cranpose_ui::BasicTextFieldWithOptions(
-                state,
-                Modifier::empty().width(field_width),
-                cranpose_ui::BasicTextFieldOptions {
-                    line_limits: cranpose_foundation::text::TextFieldLineLimits::SingleLine,
-                    ..cranpose_ui::BasicTextFieldOptions::default()
-                },
-            );
-        },
-        |slices| slices.text_pan_resolver().is_some(),
-    );
-    let make_snapshot = |slices: Rc<ModifierNodeSlices>| BuildNodeSnapshot {
-        node_id: NodeId(1),
-        size: Size {
-            width: field_width,
-            height: 24.0,
-        },
-        slices,
-        ..Default::default()
-    };
-
-    // A field draws its caret and selection around its text.
-    let text_node = |snapshot: BuildNodeSnapshot| {
-        let graph = build_layer_node_for_test(snapshot, false);
-        root_of(&graph)
-            .items()
-            .find_map(|item| match item {
-                ItemRef::Text(text) => Some(text.clone()),
-                _ => None,
-            })
-            .expect("a text primitive")
-    };
-
-    let unpanned = text_node(make_snapshot(text));
-    let panned = text_node(make_snapshot(Rc::clone(&field)));
-    let pan_offset = field.text_pan_resolver().expect("a single-line field pans")(field_width);
-
-    assert!(
-        pan_offset > 0.0,
-        "a caret at the end of a line longer than the field pans it"
-    );
-    assert_eq!(
-        panned.rect.x, -pan_offset,
-        "text glyphs must shift left by the pan offset"
-    );
-    assert!(
-        panned.rect.width > field_width,
-        "panned single-line text must draw its whole line, not the field's width, got {}",
-        panned.rect.width
-    );
-    assert!(
-        unpanned.rect.width <= field_width,
-        "text that does not pan draws within the field, got {}",
-        unpanned.rect.width
-    );
-    let clip = panned
-        .clip
-        .expect("panned text field must clip to field bounds");
-    assert!(
-        clip.x + clip.width <= field_width + TEXT_CLIP_PAD + f32::EPSILON,
-        "clip must not extend past the field bounds, got {clip:?}"
-    );
-}
-
-#[test]
-fn translated_content_context_preserves_descendant_text_motion_when_unspecified() {
-    let (_text_composition, text) = text_slices(
-        "scrolling",
-        TextStyle::default(),
-        TextLayoutOptions::default(),
-        120.0,
-    );
-    let child = BuildNodeSnapshot {
-        node_id: NodeId(2),
-        placement: Point { x: 11.0, y: 7.0 },
-        size: Size {
-            width: 120.0,
-            height: 32.0,
-        },
-        slices: text,
-        ..Default::default()
-    };
-    let (_scroll_composition, scroll) = scroll_container_slices();
-    let parent = BuildNodeSnapshot {
-        node_id: NodeId(1),
-        size: Size {
-            width: 160.0,
-            height: 64.0,
-        },
-        content_offset: Point { x: 0.0, y: -18.5 },
-        slices: scroll,
-        children: vec![child],
-        ..Default::default()
-    };
-
-    let graph = build_layer_node_for_test(parent, false);
-    let child = child_at(root_of(&graph), 0);
-    let Some(ItemRef::Text(text)) = child.items().next() else {
-        panic!("expected text primitive");
-    };
-
-    assert_eq!(text.text_style.paragraph_style.text_motion, None);
-    assert!(!child.motion_context_animated());
-}
-
-#[test]
-fn content_offset_without_translated_context_keeps_descendant_text_unspecified() {
-    let (_text_composition, text) = text_slices(
-        "scrolling",
-        TextStyle::default(),
-        TextLayoutOptions::default(),
-        120.0,
-    );
-    let child = BuildNodeSnapshot {
-        node_id: NodeId(2),
-        placement: Point { x: 11.0, y: 7.0 },
-        size: Size {
-            width: 120.0,
-            height: 32.0,
-        },
-        slices: text,
-        ..Default::default()
-    };
-    let parent = BuildNodeSnapshot {
-        node_id: NodeId(1),
-        size: Size {
-            width: 160.0,
-            height: 64.0,
-        },
-        content_offset: Point { x: 0.0, y: -18.0 },
-        children: vec![child],
-        ..Default::default()
-    };
-
-    let graph = build_layer_node_for_test(parent, false);
-    let child = child_at(root_of(&graph), 0);
-    let Some(ItemRef::Text(text)) = child.items().next() else {
-        panic!("expected text primitive");
-    };
-
-    assert_eq!(
-        text.text_style.paragraph_style.text_motion, None,
-        "content_offset alone must not force text onto the translated-content motion path"
-    );
-    assert!(!child.motion_context_animated());
-}
-
-#[test]
-fn translated_content_context_preserves_effectful_text_motion_when_unspecified() {
-    let shadow_style = TextStyle::from_span_style(SpanStyle {
-        shadow: Some(cranpose_ui::text::Shadow {
-            color: Color::BLACK,
-            offset: Point::new(1.0, 2.0),
-            blur_radius: 3.0,
-        }),
-        ..SpanStyle::default()
-    });
-    let (_text_composition, text) =
-        text_slices("shadow", shadow_style, TextLayoutOptions::default(), 120.0);
-    let child = BuildNodeSnapshot {
-        node_id: NodeId(2),
-        placement: Point { x: 11.0, y: 7.0 },
-        size: Size {
-            width: 120.0,
-            height: 32.0,
-        },
-        slices: text,
-        ..Default::default()
-    };
-    let (_scroll_composition, scroll) = scroll_container_slices();
-    let parent = BuildNodeSnapshot {
-        node_id: NodeId(1),
-        size: Size {
-            width: 160.0,
-            height: 64.0,
-        },
-        content_offset: Point { x: 0.0, y: -18.5 },
-        slices: scroll,
-        children: vec![child],
-        ..Default::default()
-    };
-
-    let graph = build_layer_node_for_test(parent, false);
-    let child = child_at(root_of(&graph), 0);
-    let Some(ItemRef::Text(text)) = child.items().next() else {
-        panic!("expected text primitive");
-    };
-
-    assert_eq!(text.text_style.paragraph_style.text_motion, None);
-}
-
-#[test]
-fn animated_motion_marker_preserves_descendant_text_motion_when_unspecified() {
-    let (_text_composition, text) = text_slices(
-        "lazy",
-        TextStyle::default(),
-        TextLayoutOptions::default(),
-        120.0,
-    );
-    let child = BuildNodeSnapshot {
-        node_id: NodeId(2),
-        placement: Point { x: 11.0, y: 7.0 },
-        size: Size {
-            width: 120.0,
-            height: 32.0,
-        },
-        slices: text,
-        ..Default::default()
-    };
-    let parent = BuildNodeSnapshot {
-        node_id: NodeId(1),
-        size: Size {
-            width: 160.0,
-            height: 64.0,
-        },
-        children: vec![child],
-        ..Default::default()
-    };
-
-    let graph = build_layer_node_for_test(parent, true);
-    let child = child_at(root_of(&graph), 0);
-    let Some(ItemRef::Text(text)) = child.items().next() else {
-        panic!("expected text primitive");
-    };
-
-    assert_eq!(text.text_style.paragraph_style.text_motion, None);
-    assert!(root_of(&graph).motion_context_animated());
-    assert!(child.motion_context_animated());
-}
-
-#[test]
 fn lazy_column_item_text_keeps_unspecified_motion_at_origin() {
     let mut composition = cranpose_ui::run_test_composition(|| {
         let list_state = rememberLazyListState();
@@ -3226,50 +2309,6 @@ fn scrolled_lazy_column_uses_visible_item_offset_as_snap_anchor_offset() {
     );
 }
 
-#[test]
-fn explicit_static_text_motion_is_preserved_under_scrolling_context() {
-    let static_style = TextStyle::from_paragraph_style(cranpose_ui::text::ParagraphStyle {
-        text_motion: Some(TextMotion::Static),
-        ..Default::default()
-    });
-    let (_text_composition, text) =
-        text_slices("static", static_style, TextLayoutOptions::default(), 120.0);
-    let child = BuildNodeSnapshot {
-        node_id: NodeId(2),
-        placement: Point { x: 11.0, y: 7.0 },
-        size: Size {
-            width: 120.0,
-            height: 32.0,
-        },
-        slices: text,
-        ..Default::default()
-    };
-    let (_scroll_composition, scroll) = scroll_container_slices();
-    let parent = BuildNodeSnapshot {
-        node_id: NodeId(1),
-        size: Size {
-            width: 160.0,
-            height: 64.0,
-        },
-        content_offset: Point { x: 0.0, y: -18.5 },
-        slices: scroll,
-        children: vec![child],
-        ..Default::default()
-    };
-
-    let graph = build_layer_node_for_test(parent, false);
-    let child = child_at(root_of(&graph), 0);
-    let Some(ItemRef::Text(text)) = child.items().next() else {
-        panic!("expected text primitive");
-    };
-
-    assert_eq!(
-        text.text_style.paragraph_style.text_motion,
-        Some(TextMotion::Static),
-        "explicit text motion must win over inherited scrolling motion context"
-    );
-}
-
 const WRAPPING_BODY: &str = "fed back картица scored fp32 износ once paper fed Vision dropped \
      fed widest the strip mask prompt mask threshold Vision on датум instance mask износ Apple";
 
@@ -3396,20 +2435,14 @@ struct PaintedParagraph {
     measured: Vec<String>,
     rewrapped_at_available_width: Vec<String>,
     painted_from_applier: Vec<String>,
-    painted_from_layout_tree: Vec<String>,
 }
 
 impl PaintedParagraph {
     fn assert_paints_measured_lines(&self, context: &str) {
-        for (graph, painted) in [
-            ("applier graph", &self.painted_from_applier),
-            ("layout tree graph", &self.painted_from_layout_tree),
-        ] {
-            assert_eq!(
-                painted, &self.measured,
-                "{context}: the {graph} must paint the lines layout measured"
-            );
-        }
+        assert_eq!(
+            self.painted_from_applier, self.measured,
+            "{context}: the scene must paint the lines layout measured"
+        );
     }
 }
 
@@ -3472,14 +2505,6 @@ fn paint_body(
             find_text_primitive(root, &|text| text.node_id == body_id).expect("painted paragraph");
         layout_lines(&painted.layout, painted.text.text())
     };
-    let mut from_layout_tree = SceneStore::new();
-    write_layout_tree(
-        &mut from_layout_tree,
-        &mut WalkMemory::default(),
-        layout.root(),
-    );
-    let painted_from_layout_tree = painted_text(root_of(&from_layout_tree));
-
     let graph = built(&applier, root).expect("render graph");
     applier.clear_runtime_handle();
     let prepare_at = |width: f32| {
@@ -3496,7 +2521,6 @@ fn paint_body(
         measured: prepare_at(text_width),
         rewrapped_at_available_width: prepare_at(AVAILABLE_WIDTH),
         painted_from_applier: painted_text(graph.root_layer().expect("a scene")),
-        painted_from_layout_tree,
     }
 }
 
@@ -3950,7 +2974,7 @@ fn a_field_rebuilt_under_a_scrolled_translated_column_publishes_its_window_origi
         .with_node::<LayoutNode, _>(field, |node| {
             if let Some(sink) = node.modifier_slices_snapshot().text_window() {
                 sink.set(cranpose_ui_graphics::WindowCoordinates {
-                    size: cranpose_ui_graphics::Size::default(),
+                    size: Size::default(),
                     local_to_window: ProjectiveTransform::translation(stale.x, stale.y),
                 });
             }
@@ -4378,4 +3402,639 @@ fn the_same_dirty_nodes_frame_after_frame_update_as_a_fresh_scene_does() {
         );
         assert_dirty_hash_road_matches_full_walk(&graph);
     }
+}
+
+const WINDOW: Size = Size {
+    width: 400.0,
+    height: 400.0,
+};
+
+// A composition laid out in `WINDOW`, with the layout tree and the scene
+// built from it.
+struct Composed {
+    composition: cranpose_ui::TestComposition,
+    layout: LayoutTree,
+    scene: Built,
+}
+
+impl Composed {
+    fn new(content: impl FnMut() + 'static) -> Self {
+        let mut composition = cranpose_ui::run_test_composition(content);
+        let (layout, scene) = Self::lay_out(&mut composition);
+        Self {
+            composition,
+            layout,
+            scene,
+        }
+    }
+
+    // Lays `composition` out and builds its scene from scratch.
+    fn lay_out(composition: &mut cranpose_ui::TestComposition) -> (LayoutTree, Built) {
+        let root = composition.root().expect("a composition root");
+        composition.with_runtime_applier(|applier| {
+            let layout = applier.compute_layout(root, WINDOW).expect("layout");
+            (layout, built(applier, root).expect("a scene"))
+        })
+    }
+
+    fn root(&self) -> LayerRef<'_> {
+        self.scene.root_layer().expect("a scene")
+    }
+
+    // The slices of the first laid-out node that `is_target` picks.
+    fn slices(&self, is_target: impl Fn(&ModifierNodeSlices) -> bool) -> Rc<ModifierNodeSlices> {
+        fn find(
+            node: &LayoutBox,
+            is_target: &dyn Fn(&ModifierNodeSlices) -> bool,
+        ) -> Option<Rc<ModifierNodeSlices>> {
+            if is_target(&node.node_data.modifier_slices) {
+                return Some(Rc::clone(&node.node_data.modifier_slices));
+            }
+            node.children
+                .iter()
+                .find_map(|child| find(child, is_target))
+        }
+
+        find(self.layout.root(), &is_target).expect("a laid-out node the test targets")
+    }
+
+    // Turns the wheel over the scroll container to scroll its content up by
+    // `distance`, which starts its scroll motion, and builds the scene again.
+    fn wheel(&mut self, distance: f32) {
+        let scroll = self.slices(ModifierNodeSlices::translated_content_context);
+        let handler = scroll
+            .pointer_inputs()
+            .first()
+            .cloned()
+            .expect("the scroll container takes the wheel");
+        let event = PointerEvent::new(PointerEventKind::Scroll, Point::default(), Point::default())
+            .with_scroll_delta(Point::new(0.0, -distance));
+        self.composition.with_app_context(|| handler(event.clone()));
+        assert!(event.is_consumed(), "the wheel scrolls the container");
+        (self.layout, self.scene) = Self::lay_out(&mut self.composition);
+    }
+}
+
+fn draws_a_rect(modifier: Modifier) -> Modifier {
+    modifier.draw_behind(|scope| {
+        scope.draw_rect_at(
+            Rect {
+                x: 3.0,
+                y: 4.0,
+                width: 20.0,
+                height: 8.0,
+            },
+            Brush::solid(Color::WHITE),
+        );
+    })
+}
+
+// A box of 80 by 50 holding `content`, its own look set by `modifier`.
+fn parent_box(modifier: Modifier, content: impl Fn() + Clone + 'static) -> Composed {
+    Composed::new(move || {
+        cranpose_ui::Box(
+            modifier.clone().size_points(80.0, 50.0),
+            cranpose_ui::BoxSpec::default(),
+            content.clone(),
+        );
+    })
+}
+
+// A child of 40 by 20 at (x, y) that draws a rect.
+fn child_box(x: f32, y: f32) {
+    cranpose_ui::Box(
+        draws_a_rect(Modifier::empty().offset(x, y).size_points(40.0, 20.0)),
+        cranpose_ui::BoxSpec::default(),
+        || {},
+    );
+}
+
+// A parent moved by its graphics layer by `translation_x`, over a child at
+// (11, 7) that draws a rect.
+fn translated_parent(translation_x: f32) -> Composed {
+    parent_box(
+        Modifier::empty().graphics_layer(move || GraphicsLayer {
+            translation_x,
+            ..GraphicsLayer::default()
+        }),
+        || child_box(11.0, 7.0),
+    )
+}
+
+#[test]
+fn parent_translation_changes_layer_transform_but_not_child_local_geometry() {
+    let (still, moved) = (translated_parent(0.0), translated_parent(23.5));
+    let (still, moved) = (still.root(), moved.root());
+    let still_draw = first_run(child_at(still, 0)).primitives().next();
+    let moved_draw = first_run(child_at(moved, 0)).primitives().next();
+
+    assert_ne!(
+        still.transform_to_parent(),
+        moved.transform_to_parent(),
+        "parent transform should encode translation"
+    );
+    assert!(still_draw.is_some(), "the child records its rect");
+    assert_eq!(
+        still_draw, moved_draw,
+        "child local primitive geometry must stay stable under parent translation"
+    );
+}
+
+#[test]
+fn stored_content_hash_ignores_parent_translation() {
+    assert_eq!(
+        translated_parent(0.0).root().target_content_hash(),
+        translated_parent(23.5).root().target_content_hash(),
+        "parent rigid motion must not invalidate the subtree content hash"
+    );
+}
+
+#[test]
+fn parent_content_offset_is_encoded_in_child_transform() {
+    let child = Rc::new(std::cell::Cell::new(None));
+    let composed = parent_box(Modifier::empty().padding_each(13.0, 9.0, 0.0, 0.0), {
+        let child = Rc::clone(&child);
+        move || {
+            child.set(Some(cranpose_ui::Box(
+                draws_a_rect(Modifier::empty().offset(11.0, 7.0).size_points(40.0, 20.0)),
+                cranpose_ui::BoxSpec::default(),
+                || {},
+            )));
+        }
+    });
+
+    let child = child.get().expect("the child composed");
+    let top_left = find_node_transform(composed.root(), child)
+        .expect("the child is in the scene")
+        .map_point(Point::default());
+    assert_eq!(top_left, Point { x: 24.0, y: 16.0 });
+}
+
+// A column of 160 by 64 scrolled by `offset`, holding `content` above a tall
+// spacer.
+fn scroll_column(offset: f32, content: impl Fn() + Clone + 'static) -> Composed {
+    Composed::new(move || {
+        let state = cranpose_core::remember(|| ScrollState::new(offset)).with(|state| *state);
+        Column(
+            Modifier::empty()
+                .size_points(160.0, 64.0)
+                .vertical_scroll(state, false),
+            ColumnSpec::default(),
+            content.clone(),
+        );
+    })
+}
+
+// A text labelled `label` in `style`, 120 by 32 at (11, 7).
+fn placed_text(label: &'static str, style: TextStyle) -> impl Fn() + Clone + 'static {
+    move || {
+        Text(
+            label,
+            Modifier::empty().offset(11.0, 7.0).size_points(120.0, 32.0),
+            style.clone(),
+        );
+        Spacer(Modifier::empty().height(400.0));
+    }
+}
+
+#[test]
+fn translated_content_offset_changes_visual_position_and_full_surface_hash() {
+    let row = || {
+        child_box(11.0, 7.0);
+        Spacer(Modifier::empty().height(400.0));
+    };
+    let mut base = scroll_column(0.0, row);
+    base.wheel(18.0);
+    let mut moved = scroll_column(0.0, row);
+    moved.wheel(32.0);
+    let rested = scroll_column(18.0, row);
+
+    let (base, moved, rested) = (base.root(), moved.root(), rested.root());
+    assert_eq!(
+        find_translated_content_offset(base),
+        find_translated_content_offset(rested),
+        "the wheel scrolls as far as the rested column"
+    );
+    assert_ne!(
+        child_at(base, 0).transform_to_parent(),
+        child_at(moved, 0).transform_to_parent(),
+        "scroll offset still has to move child content visually"
+    );
+    assert_eq!(
+        base.motion_source_content_hash(),
+        moved.motion_source_content_hash(),
+        "the source content identity stays stable when only the scroll offset changes"
+    );
+    assert_ne!(
+        base.target_content_hash(),
+        moved.target_content_hash(),
+        "a full-surface cache of the scroll viewport must include the scroll offset"
+    );
+    assert_ne!(
+        base.target_content_hash(),
+        rested.target_content_hash(),
+        "full-surface cache keys must include active scroll motion policy"
+    );
+}
+
+#[test]
+fn update_graph_from_applier_reports_failed_dirty_child_rebuild() {
+    let mut composed = translated_parent(0.0);
+    let root = composed.composition.root().expect("a composition root");
+    let child = child_at(composed.root(), 0)
+        .node_id()
+        .expect("the child is a node");
+
+    let report = composed.scene.update_from_applier(
+        &MemoryApplier::new(),
+        root,
+        &[(child, NodeUpdate::Content)],
+    );
+
+    assert_eq!(
+        report,
+        GraphUpdateReport {
+            update: GraphUpdate::NeedsRebuild(GraphRebuildReason::DirtyLayerUnavailable),
+            hit_graph_dirty: true,
+            layers_moved: true,
+        },
+        "dirty child graph updates must not report success when the replacement cannot be rebuilt"
+    );
+}
+
+#[test]
+fn overlay_draw_commands_are_tagged_after_children() {
+    let composed = parent_box(
+        Modifier::empty().draw_with_content(|scope| {
+            scope.draw_rect_at(
+                Rect {
+                    x: 1.0,
+                    y: 2.0,
+                    width: 8.0,
+                    height: 6.0,
+                },
+                Brush::solid(Color::WHITE),
+            );
+            scope.draw_content();
+            scope.draw_rect_at(
+                Rect {
+                    x: 3.0,
+                    y: 1.0,
+                    width: 5.0,
+                    height: 4.0,
+                },
+                Brush::solid(Color::BLACK),
+            );
+        }),
+        || child_box(4.0, 5.0),
+    );
+
+    let items: Vec<ItemRef<'_>> = composed.root().items().collect();
+    let [
+        ItemRef::Run(behind),
+        ItemRef::Layer(_) | ItemRef::Leaf(_),
+        ItemRef::Run(overlay),
+    ] = items.as_slice()
+    else {
+        panic!("expected a run before the child node and one after it");
+    };
+
+    assert_eq!(behind.phase, PrimitivePhase::BeforeChildren);
+    assert_eq!(overlay.phase, PrimitivePhase::AfterChildren);
+}
+
+#[test]
+fn a_second_build_records_the_same_draws_and_leaves_the_live_scene_unchanged() {
+    let mut composed = parent_box(draws_a_rect(Modifier::empty()), || {});
+    let recorded = (*first_run(composed.root()).recording).clone();
+
+    let root = composed.composition.root().expect("a composition root");
+    let again = built(&composed.composition.applier_mut(), root).expect("a scene");
+
+    assert_eq!(
+        *first_run(again.root_layer().expect("a scene")).recording,
+        recorded,
+        "re-recording must reproduce the recording"
+    );
+    assert_eq!(
+        *first_run(composed.root()).recording,
+        recorded,
+        "a recording a live scene holds must never be recorded into"
+    );
+}
+
+#[test]
+fn stored_content_hash_changes_when_child_transform_changes() {
+    let at = |x: f32| parent_box(Modifier::empty(), move || child_box(x, 5.0));
+
+    assert_ne!(
+        at(4.0).root().target_content_hash(),
+        at(11.0).root().target_content_hash(),
+        "moving a child within the parent must invalidate the parent subtree hash"
+    );
+}
+
+#[test]
+fn stored_effect_hash_tracks_local_effect_only() {
+    let base = parent_box(Modifier::empty(), || {});
+    let blurred = parent_box(
+        Modifier::empty().graphics_layer(|| GraphicsLayer {
+            render_effect: Some(RenderEffect::blur(6.0)),
+            ..GraphicsLayer::default()
+        }),
+        || {},
+    );
+
+    let (base, blurred) = (base.root(), blurred.root());
+    assert_eq!(
+        base.target_content_hash(),
+        blurred.target_content_hash(),
+        "post-processing effect parameters belong to the effect hash, not the content hash"
+    );
+    assert_ne!(base.effect_hash(), blurred.effect_hash());
+}
+
+// The first text drawn in `layer` or below it, with the record that draws it.
+fn first_text(layer: LayerRef<'_>) -> Option<(LayerRef<'_>, &TextPrimitiveNode)> {
+    layer.items().find_map(|item| match item {
+        ItemRef::Text(text) => Some((layer, text)),
+        ItemRef::Layer(child) | ItemRef::Leaf(child) => first_text(child),
+        ItemRef::Draw(_) | ItemRef::Run(_) => None,
+    })
+}
+
+// The text that `text` lays out with `style` and `options` in a box of
+// `width` by 48.
+fn text_in_box(
+    text: &'static str,
+    style: TextStyle,
+    options: TextLayoutOptions,
+    width: f32,
+) -> TextPrimitiveNode {
+    let composed = Composed::new(move || {
+        cranpose_ui::BasicTextWithOptions(
+            text,
+            Modifier::empty().size_points(width, 48.0),
+            style.clone(),
+            options,
+        );
+    });
+    let (_, text) = first_text(composed.root()).expect("a text");
+    text.clone()
+}
+
+#[test]
+fn text_node_preserves_rtl_alignment_and_baseline_shift() {
+    let mut style = TextStyle::default();
+    style.paragraph_style.text_align = TextAlign::Start;
+    style.paragraph_style.text_direction = TextDirection::Rtl;
+    style.span_style.baseline_shift = Some(BaselineShift::SUPERSCRIPT);
+    let options = TextLayoutOptions {
+        overflow: TextOverflow::Clip,
+        ..Default::default()
+    };
+
+    let text = text_in_box("rtl", style, options, 180.0);
+
+    assert!(
+        text.rect.x + text.layout.line_left(0) > 0.0,
+        "RTL start alignment should shift the line within the available width"
+    );
+    assert_eq!(
+        text.clip, None,
+        "a text that fits its box draws uncut, its superscript glyphs above the box too"
+    );
+}
+
+#[test]
+fn text_node_alignment_obeys_physical_and_relative_edges() {
+    for direction in [TextDirection::Ltr, TextDirection::Rtl] {
+        for (alignment, ltr, rtl) in [
+            (TextAlign::Left, 0.0, 0.0),
+            (TextAlign::Right, 1.0, 1.0),
+            (TextAlign::Center, 0.5, 0.5),
+            (TextAlign::Start, 0.0, 1.0),
+            (TextAlign::End, 1.0, 0.0),
+            (TextAlign::Justify, 0.0, 1.0),
+            (TextAlign::Unspecified, 0.0, 1.0),
+        ] {
+            let mut style = TextStyle::default();
+            style.paragraph_style.text_align = alignment;
+            style.paragraph_style.text_direction = direction;
+            let text = text_in_box("hello", style, TextLayoutOptions::default(), 180.0);
+            let fraction = if direction == TextDirection::Rtl {
+                rtl
+            } else {
+                ltr
+            };
+            let line_width = text.layout.line_right(0) - text.layout.line_left(0);
+            let expected = (180.0 - line_width) * fraction;
+            let left = text.rect.x + text.layout.line_left(0);
+            assert!(
+                (left - expected).abs() < 0.001,
+                "{alignment:?}, {direction:?}: expected the line at x={expected}, got {left}"
+            );
+        }
+    }
+}
+
+// A text in a node of a fixed width lays out as wide as the node, and one
+// that fits it draws uncut, as Compose cuts a text only when its layout
+// overflows the box: a slant or a stroke past its glyphs' advances shows.
+#[test]
+fn a_text_that_fits_its_box_lays_out_as_wide_and_draws_uncut() {
+    let options = TextLayoutOptions {
+        overflow: TextOverflow::Clip,
+        ..Default::default()
+    };
+    let text = text_in_box("short", TextStyle::default(), options, 320.0);
+
+    assert_eq!(
+        text.rect.width,
+        text.layout.width(),
+        "a text in a node of a fixed width lays out as wide as the node"
+    );
+    assert_eq!(text.clip, None, "a text that fits its box draws uncut");
+}
+
+// A text whose line overflows its box is cut at the box, with the clip
+// padding around it.
+#[test]
+fn an_overflowing_text_is_cut_at_its_box_with_the_clip_padding() {
+    let options = TextLayoutOptions {
+        overflow: TextOverflow::Clip,
+        soft_wrap: false,
+        max_lines: 1,
+        ..Default::default()
+    };
+    let text = text_in_box(
+        "a line far too long for its box",
+        TextStyle::default(),
+        options,
+        60.0,
+    );
+    let clip = text.clip.expect("an overflowing text is cut");
+
+    assert_eq!(
+        clip.width, 62.0,
+        "the clip holds the box and the clip padding"
+    );
+}
+
+#[test]
+fn text_field_pan_shifts_glyphs_and_clips_to_field_bounds() {
+    const LINE: &str = "a very long single line of text that cannot fit";
+    let field_width = 80.0_f32;
+    let unpanned = text_in_box(
+        LINE,
+        TextStyle::default(),
+        TextLayoutOptions::default(),
+        field_width,
+    );
+    let field = Composed::new(move || {
+        let state =
+            cranpose_core::remember(|| cranpose_ui::TextFieldState::new(LINE)).with(|state| *state);
+        cranpose_ui::BasicTextFieldWithOptions(
+            state,
+            Modifier::empty().width(field_width),
+            cranpose_ui::BasicTextFieldOptions {
+                line_limits: cranpose_foundation::text::TextFieldLineLimits::SingleLine,
+                ..cranpose_ui::BasicTextFieldOptions::default()
+            },
+        );
+    });
+    let (_, panned) = first_text(field.root()).expect("the field draws its text");
+    let pan_offset = field
+        .slices(|slices| slices.text_pan_resolver().is_some())
+        .text_pan_resolver()
+        .expect("a single-line field pans")(field_width);
+
+    assert!(
+        pan_offset > 0.0,
+        "a caret at the end of a line longer than the field pans it"
+    );
+    assert_eq!(
+        panned.rect.x, -pan_offset,
+        "text glyphs must shift left by the pan offset"
+    );
+    assert!(
+        panned.rect.width > field_width,
+        "panned single-line text must draw its whole line, not the field's width, got {}",
+        panned.rect.width
+    );
+    assert!(
+        unpanned.rect.width <= field_width,
+        "text that does not pan draws within the field, got {}",
+        unpanned.rect.width
+    );
+    let clip = panned
+        .clip
+        .expect("panned text field must clip to field bounds");
+    assert!(
+        clip.x + clip.width <= field_width + TEXT_CLIP_PAD + f32::EPSILON,
+        "clip must not extend past the field bounds, got {clip:?}"
+    );
+}
+
+// The motion of the text in `composed` and whether the record drawing it
+// moves with an animated motion context.
+fn text_motion(composed: &Composed) -> (Option<TextMotion>, bool) {
+    let (owner, text) = first_text(composed.root()).expect("a text");
+    (
+        text.text_style.paragraph_style.text_motion,
+        owner.motion_context_animated(),
+    )
+}
+
+#[test]
+fn translated_content_context_preserves_descendant_text_motion_when_unspecified() {
+    let composed = scroll_column(18.5, placed_text("scrolling", TextStyle::default()));
+
+    assert_eq!(text_motion(&composed), (None, false));
+}
+
+#[test]
+fn content_offset_without_translated_context_keeps_descendant_text_unspecified() {
+    let composed = parent_box(
+        Modifier::empty().padding_each(0.0, 18.0, 0.0, 0.0),
+        placed_text("offset", TextStyle::default()),
+    );
+
+    assert_eq!(
+        text_motion(&composed),
+        (None, false),
+        "content_offset alone must not force text onto the translated-content motion path"
+    );
+}
+
+#[test]
+fn translated_content_context_preserves_effectful_text_motion_when_unspecified() {
+    let shadow_style = TextStyle::from_span_style(SpanStyle {
+        shadow: Some(cranpose_ui::text::Shadow {
+            color: Color::BLACK,
+            offset: Point::new(1.0, 2.0),
+            blur_radius: 3.0,
+        }),
+        ..SpanStyle::default()
+    });
+    let composed = scroll_column(18.5, placed_text("shadow", shadow_style));
+
+    assert_eq!(text_motion(&composed).0, None);
+}
+
+#[test]
+fn animated_motion_marker_preserves_descendant_text_motion_when_unspecified() {
+    let mut composed = scroll_column(0.0, placed_text("lazy", TextStyle::default()));
+    composed.wheel(18.0);
+
+    assert_eq!(text_motion(&composed), (None, true));
+    assert!(composed.root().motion_context_animated());
+}
+
+#[test]
+fn explicit_static_text_motion_is_preserved_under_scrolling_context() {
+    let static_style = TextStyle::from_paragraph_style(cranpose_ui::text::ParagraphStyle {
+        text_motion: Some(TextMotion::Static),
+        ..Default::default()
+    });
+    let mut composed = scroll_column(0.0, placed_text("static", static_style));
+    composed.wheel(18.0);
+
+    assert_eq!(
+        text_motion(&composed).0,
+        Some(TextMotion::Static),
+        "explicit text motion must win over inherited scrolling motion context"
+    );
+}
+
+#[test]
+fn rounded_clip_to_bounds_keeps_existing_effect_inside_mask() {
+    let existing = RenderEffect::blur(3.0);
+    let composed = Composed::new({
+        let existing = existing.clone();
+        move || {
+            let existing = existing.clone();
+            cranpose_ui::Box(
+                Modifier::empty()
+                    .size_points(100.0, 40.0)
+                    .graphics_layer(move || GraphicsLayer {
+                        render_effect: Some(existing.clone()),
+                        ..GraphicsLayer::default()
+                    })
+                    .rounded_corner_shape(RoundedCornerShape::uniform(10.0))
+                    .clip_to_bounds(),
+                cranpose_ui::BoxSpec::default(),
+                || {},
+            );
+        }
+    });
+
+    let Some(RenderEffect::Chain { first, second }) = composed.root().effect() else {
+        panic!("existing effect should chain into rounded clip mask");
+    };
+    assert_eq!(**first, existing);
+    assert!(
+        matches!(**second, RenderEffect::Shader { .. }),
+        "rounded mask must be the outer effect"
+    );
 }

@@ -44,15 +44,6 @@ impl Renderer for HitRenderer {
         &mut self.scene
     }
 
-    fn rebuild_scene(
-        &mut self,
-        layout_tree: &cranpose_ui::LayoutTree,
-        _viewport: Size,
-    ) -> Result<(), Self::Error> {
-        self.scene.build_from_layout_tree(layout_tree.root());
-        Ok(())
-    }
-
     fn rebuild_scene_from_applier(
         &mut self,
         applier: &mut cranpose_core::MemoryApplier,

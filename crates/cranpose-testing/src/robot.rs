@@ -506,15 +506,6 @@ impl Renderer for TestRenderer {
         &mut self.scene
     }
 
-    fn rebuild_scene(
-        &mut self,
-        layout_tree: &LayoutTree,
-        _viewport: Size,
-    ) -> Result<(), Self::Error> {
-        self.scene.build_from_layout_tree(layout_tree.root());
-        Ok(())
-    }
-
     fn rebuild_scene_from_applier(
         &mut self,
         applier: &mut MemoryApplier,

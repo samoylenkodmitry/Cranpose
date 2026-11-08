@@ -111,14 +111,6 @@ impl Renderer for CheckingRenderer {
         &mut self.scene
     }
 
-    fn rebuild_scene(
-        &mut self,
-        layout_tree: &cranpose_ui::LayoutTree,
-        _viewport: Size,
-    ) -> Result<(), Self::Error> {
-        self.rebuild(|scene| scene.build_from_layout_tree(layout_tree.root()))
-    }
-
     fn rebuild_scene_from_applier(
         &mut self,
         applier: &mut MemoryApplier,

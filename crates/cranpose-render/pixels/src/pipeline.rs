@@ -13,14 +13,14 @@ use cranpose_render_common::{
     text_decoration::{visit_text_backgrounds, visit_text_lines},
     text_raster::GlyphInk,
 };
-use cranpose_ui::{LayoutBox, text::TextStyle};
+use cranpose_ui::text::TextStyle;
 use cranpose_ui_graphics::{
     BlendMode, Color, ColorFilter, GraphicsLayer, Point, Rect, RenderEffect, TransformOrigin,
 };
 
 use crate::{
     draw::TextRaster,
-    scene::{ItemCounts, PassedDown, RasterScene, Scene, Subtree, TextDraw},
+    scene::{ItemCounts, PassedDown, RasterScene, Subtree, TextDraw},
     style::{apply_layer_to_brush, apply_layer_to_color, compose_color_filters},
     surface::{SurfacePlacement, rasterize_surface, scales_and_moves},
 };
@@ -172,10 +172,6 @@ fn report_unsupported_effects(layer: &GraphicsLayer, diagnostics: &RenderDiagnos
             "Pixels renderer does not support render/backdrop effects or non-SrcOver layer blend modes; falling back to base layer rendering"
         );
     }
-}
-
-pub(crate) fn render_layout_tree(root: &LayoutBox, scene: &mut Scene) {
-    scene.build_from_layout_tree(root);
 }
 
 fn resolve_text_color_without_gradient_fallback(text_style: &TextStyle, default: Color) -> Color {

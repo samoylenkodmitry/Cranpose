@@ -691,14 +691,6 @@ macro_rules! renderer_scene_accessors {
 
 macro_rules! renderer_noop_rebuild {
     () => {
-        fn rebuild_scene(
-            &mut self,
-            _layout_tree: &LayoutTree,
-            _viewport: Size,
-        ) -> Result<(), Self::Error> {
-            Ok(())
-        }
-
         fn rebuild_scene_from_applier(
             &mut self,
             _applier: &mut cranpose_core::MemoryApplier,
@@ -1399,16 +1391,6 @@ impl Renderer for RecordingRenderer {
 
     renderer_scene_accessors!();
 
-    fn rebuild_scene(
-        &mut self,
-        layout_tree: &LayoutTree,
-        _viewport: Size,
-    ) -> Result<(), Self::Error> {
-        let renderer = HeadlessRenderer::new();
-        self.last_scene = Some(renderer.render(layout_tree));
-        Ok(())
-    }
-
     fn rebuild_scene_from_applier(
         &mut self,
         applier: &mut MemoryApplier,
@@ -1449,15 +1431,6 @@ impl Renderer for CountingRenderer {
     type Error = ();
 
     renderer_scene_accessors!();
-
-    fn rebuild_scene(
-        &mut self,
-        _layout_tree: &LayoutTree,
-        _viewport: Size,
-    ) -> Result<(), Self::Error> {
-        self.rebuilds.set(self.rebuilds.get() + 1);
-        Ok(())
-    }
 
     fn rebuild_scene_from_applier(
         &mut self,
@@ -1617,14 +1590,6 @@ impl Renderer for ScopedUpdateCountingRenderer {
 
     renderer_scene_accessors!();
 
-    fn rebuild_scene(
-        &mut self,
-        layout_tree: &LayoutTree,
-        _viewport: Size,
-    ) -> Result<(), Self::Error> {
-        self.rebuild(|scene| scene.build_from_layout_tree(layout_tree.root()))
-    }
-
     fn rebuild_scene_from_applier(
         &mut self,
         applier: &mut MemoryApplier,
@@ -1672,15 +1637,6 @@ impl Renderer for HitGraphRenderer {
     fn note_pointer_held(&mut self) {
         self.pointer_held_frames
             .set(self.pointer_held_frames.get() + 1);
-    }
-
-    // The shell lowers its scenes from the applier.
-    fn rebuild_scene(
-        &mut self,
-        _layout_tree: &LayoutTree,
-        _viewport: Size,
-    ) -> Result<(), Self::Error> {
-        Ok(())
     }
 
     fn rebuild_scene_from_applier(

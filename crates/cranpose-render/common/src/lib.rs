@@ -76,7 +76,6 @@ mod pointer_slices;
 
 use cranpose_core::{MemoryApplier, collections::map::HashSet};
 use cranpose_foundation::nodes::input::PointerEvent;
-use cranpose_ui::LayoutTree;
 pub use cranpose_ui_graphics::Brush;
 use cranpose_ui_graphics::Size;
 
@@ -305,13 +304,6 @@ pub trait Renderer {
     /// Mutable access to the scene.
     fn scene_mut(&mut self) -> &mut Self::Scene;
 
-    /// Rebuilds the scene from `layout_tree` for a viewport of the given size.
-    fn rebuild_scene(
-        &mut self,
-        layout_tree: &LayoutTree,
-        viewport: Size,
-    ) -> Result<(), Self::Error>;
-
     /// Rebuilds the scene by traversing the LayoutNode tree directly via Applier.
     ///
     /// This is the new architecture that eliminates per-frame LayoutTree reconstruction.
@@ -350,7 +342,7 @@ pub trait Renderer {
 
     /// Draw a development overlay (e.g., FPS counter) on top of the scene.
     ///
-    /// This is called after rebuild_scene when dev options are enabled.
+    /// This is called after the scene is built when dev options are enabled.
     /// The text, laid out in `overlay`, is drawn directly by the renderer
     /// without affecting composition.
     ///

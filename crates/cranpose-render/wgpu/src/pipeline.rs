@@ -20,10 +20,7 @@ use cranpose_ui::TextOverflow;
 use cranpose_ui::measure_text;
 #[cfg(test)]
 use cranpose_ui::prepare_text_layout;
-use cranpose_ui::{
-    LayoutBox,
-    text::{TextDrawStyle, TextStyle, shared_plain_render_string},
-};
+use cranpose_ui::text::{TextDrawStyle, TextStyle, shared_plain_render_string};
 use cranpose_ui_graphics::{
     BlendMode, Color, DrawPrimitive, GraphicsLayer, LayerShape, Point, Recorded, Rect,
     RenderEffect, RoundedCornerShape, RuntimeShader, ShapeRecorder, TileMode,
@@ -31,7 +28,7 @@ use cranpose_ui_graphics::{
 
 use crate::scene::{
     ClipRounding, CompositorScene, ContentContext, DrawnText, EffectLayer, ImageDraw, Placement,
-    RRectShadowDraw, RunDraw, Scene, ShadowDraw, SnapAnchor, TextDraw,
+    RRectShadowDraw, RunDraw, ShadowDraw, SnapAnchor, TextDraw,
 };
 
 mod style;
@@ -86,10 +83,6 @@ pub(crate) fn push_layer_shadow(
             snap_anchor: None,
         });
     }
-}
-
-pub(crate) fn render_layout_tree(root: &LayoutBox, scene: &mut Scene) {
-    scene.build_from_layout_tree(root);
 }
 
 fn tile_mode_to_shader_uniform(tile_mode: TileMode) -> f32 {

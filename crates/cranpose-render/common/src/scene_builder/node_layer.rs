@@ -5,23 +5,21 @@
 use std::{borrow::Cow, rc::Rc};
 
 use cranpose_core::{MemoryApplier, NodeId, RecordId};
-use cranpose_ui::{LayoutBox, ModifierNodeSlices, Point, Rect, Size, widgets::LayoutState};
+use cranpose_ui::{ModifierNodeSlices, Point, Rect, Size, widgets::LayoutState};
 use cranpose_ui_graphics::{CompositingStrategy, DrawPlacement, GraphicsLayer, LayerShape};
 
 use super::{
-    BuildNodeSnapshot, DrawPass, DrawTarget, Level, NodeCommands, SnapshotNodeData, TextNodeParts,
+    DrawPass, DrawTarget, Level, NodeCommands, SnapshotNodeData, TextNodeParts,
     TranslateAncestorContext, TranslateGeometry, append_draw_nodes, draw_nodes,
-    inline_leaf::{lower_child, snapshot_lowers_inline},
-    item_lists, layer_node_capacity,
-    layer_shape::{clip_shape, shape_clip},
-    note_space_change, read_placed_node_data, shaped_graphics_layer, text_node_from_parts,
+    inline_leaf::lower_child, item_lists, layer_node_capacity, note_space_change,
+    read_placed_node_data, shaped_graphics_layer, text_node_from_parts,
 };
 use crate::{
     graph::{CachePolicy, HitTestNode, IsolationReasons, PrimitivePhase, ProjectiveTransform},
     layer_transform::{
         layer_scales_or_rotates, layer_transform_to_parent, layer_transform_to_window,
     },
-    scene_store::{Item, ItemKind, LayerRef, RecordFlags, RecordKind, RecordSeed, SceneStore},
+    scene_store::{Item, LayerRef, RecordFlags, RecordKind, RecordSeed, SceneStore},
 };
 
 #[derive(Clone, Copy)]
@@ -409,143 +407,6 @@ fn write_layer_with_outer(
     );
 }
 
-pub(super) fn write_snapshot_layer(
-    store: &mut SceneStore,
-    snapshot: BuildNodeSnapshot,
-    context: LowerContext,
-    target: RecordId,
-) {
-    let BuildNodeSnapshot {
-        node_id,
-        placement,
-        size,
-        content_offset,
-        slices,
-        graphics_layer,
-        children,
-    } = snapshot;
-    let (local_bounds, node_bounds) = layer_and_node_bounds(&slices, size);
-    let child_context = context.for_children(&slices, content_offset, None);
-    let head = node_layer_head(
-        node_id,
-        &slices,
-        NodeFrame {
-            local_bounds,
-            node_bounds,
-            placement,
-            content_offset,
-            translated_content_offset: content_offset,
-        },
-        graphics_layer,
-        context,
-    );
-    let draws = DrawTarget {
-        size,
-        motion_context_animated: head.motion_context_animated,
-        layer: None,
-    };
-    let outer = outer_commands(node_id, &slices).map(|commands| (commands, draws));
-    let parent_content_offset = context.parent_content_offset;
-    write_layer_with_outer(
-        store,
-        target,
-        head,
-        outer,
-        parent_content_offset,
-        |store, record, list, layer| {
-            let draws = DrawTarget { layer, ..draws };
-            let written = (0, children.len());
-            write_node_content(
-                store,
-                record,
-                list,
-                &slices,
-                draws,
-                written,
-                |store, list| {
-                    for child in children {
-                        list.push(lower_snapshot_child(store, record, child, child_context));
-                    }
-                },
-            );
-        },
-    );
-}
-
-// Lowers `snapshot`, a child in a layout tree snapshot, into a record under
-// `parent`: a leaf when it needs no layer of its own, as
-// [`super::inline_leaf::lower_child`] lowers a node of the applier.
-fn lower_snapshot_child(
-    store: &mut SceneStore,
-    parent: RecordId,
-    snapshot: BuildNodeSnapshot,
-    context: LowerContext,
-) -> Item {
-    let record = store.insert(RecordSeed {
-        kind: RecordKind::Layer,
-        node: Some(snapshot.node_id),
-        parent: Some(parent),
-    });
-    if !snapshot_lowers_inline(&snapshot) {
-        write_snapshot_layer(store, snapshot, context, record);
-        return Item::child(record);
-    }
-    let BuildNodeSnapshot {
-        node_id,
-        placement,
-        size,
-        content_offset,
-        slices,
-        ..
-    } = snapshot;
-    let motion_context_animated =
-        context.inherited_motion_context_animated || slices.motion_context_animated();
-    let draws = DrawTarget {
-        size,
-        motion_context_animated,
-        layer: None,
-    };
-    store.set_kind(record, RecordKind::Leaf, Some(node_id));
-    store.set_content_offset(record, content_offset);
-    let mut list = item_lists::take();
-    write_node_content(store, record, &mut list, &slices, draws, (0, 0), |_, _| {});
-    store.set_items(record, &list);
-    item_lists::give(list);
-    if store
-        .items(record)
-        .iter()
-        .any(|item| item.kind() == ItemKind::Child)
-    {
-        let (local_bounds, node_bounds) = layer_and_node_bounds(&slices, size);
-        let frame = NodeFrame {
-            local_bounds,
-            node_bounds,
-            placement,
-            content_offset,
-            translated_content_offset: content_offset,
-        };
-        assign_layer(
-            store,
-            record,
-            node_layer_head(node_id, &slices, frame, None, context),
-        );
-        return Item::child(record);
-    }
-    store.set_size(record, size.width, size.height);
-    let offset = context.parent_content_offset;
-    store.set_placement(
-        record,
-        placement,
-        ProjectiveTransform::translation(placement.x + offset.x, placement.y + offset.y),
-    );
-    store.set_flags(
-        record,
-        flag_if(motion_context_animated, RecordFlags::MOTION_ANIMATED),
-    );
-    store.note_content_change(record);
-    Item::child(record)
-}
-
 #[derive(Clone, Copy)]
 pub(super) struct AbsOrigin {
     pub(super) content_origin: Point,
@@ -849,70 +710,6 @@ pub(super) fn take_wrapped_layer(
 
 pub(super) fn layer_identity(layer: LayerRef<'_>) -> Option<NodeId> {
     layer.node_id().or_else(|| layer.wraps())
-}
-
-pub(super) fn layout_box_to_snapshot(
-    node: &LayoutBox,
-    parent: Option<&LayoutBox>,
-) -> BuildNodeSnapshot {
-    let placement = parent
-        .map(|parent_box| Point {
-            x: node.rect.x - parent_box.rect.x - parent_box.content_offset.x,
-            y: node.rect.y - parent_box.rect.y - parent_box.content_offset.y,
-        })
-        .unwrap_or_default();
-    let mut children = Vec::with_capacity(node.children.len());
-    if node
-        .children
-        .iter()
-        .any(|child| child.node_data.z_index != 0.0)
-    {
-        let mut ordered: Vec<&LayoutBox> = node.children.iter().collect();
-        // Stable: equal z indices keep the composition order.
-        ordered.sort_by(|a, b| a.node_data.z_index.total_cmp(&b.node_data.z_index));
-        children.extend(
-            ordered
-                .into_iter()
-                .map(|child| layout_box_to_snapshot(child, Some(node))),
-        );
-    } else {
-        children.extend(
-            node.children
-                .iter()
-                .map(|child| layout_box_to_snapshot(child, Some(node))),
-        );
-    }
-    let mut graphics_layer = node.node_data.modifier_slices.graphics_layer();
-    let has_graphics_layer = graphics_layer.is_some();
-    shape_clip(
-        &mut graphics_layer,
-        clip_shape(&node.node_data.modifier_slices),
-        Rect {
-            x: 0.0,
-            y: 0.0,
-            width: node.rect.width,
-            height: node.rect.height,
-        },
-    );
-    let has_graphics_layer = has_graphics_layer
-        || graphics_layer
-            .as_ref()
-            .is_some_and(|layer| layer.render_effect.is_some());
-
-    BuildNodeSnapshot {
-        node_id: node.node_id,
-        placement,
-        size: Size {
-            width: node.rect.width,
-            height: node.rect.height,
-        },
-        content_offset: node.content_offset,
-        slices: Rc::clone(&node.node_data.modifier_slices),
-        graphics_layer: graphics_layer
-            .filter(|_| has_graphics_layer)
-            .map(Cow::into_owned),
-        children,
-    }
 }
 
 pub(super) fn modifier_slices_have_origin_sinks(slices: &ModifierNodeSlices) -> bool {

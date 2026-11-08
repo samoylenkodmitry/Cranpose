@@ -9,7 +9,7 @@ use cranpose_core::{
     collections::map::{HashMap, HashSet},
 };
 use cranpose_foundation::{MINIMUM_TOUCH_TARGET_SIZE, PointerEvent, PointerEventKind};
-use cranpose_ui::{LayoutBox, LayoutNode, ModifierNodeSlices, SubcomposeLayoutNode};
+use cranpose_ui::{LayoutNode, ModifierNodeSlices, SubcomposeLayoutNode};
 use cranpose_ui_graphics::{Point, PointerIcon, Rect, RoundedCornerShape, space::Ray};
 
 use crate::{
@@ -647,14 +647,6 @@ impl Scene {
         edit(&mut self.store);
         self.store.finish_update();
         self.walk = WalkMemory::default();
-        self.hits.get_mut().stale = true;
-        self.layer_moves += 1;
-    }
-
-    /// Writes the layout box tree rooted at `root` in place of the scene's
-    /// records. The hit targets follow it.
-    pub fn build_from_layout_tree(&mut self, root: &LayoutBox) {
-        crate::scene_builder::write_layout_tree(&mut self.store, &mut self.walk, root);
         self.hits.get_mut().stale = true;
         self.layer_moves += 1;
     }

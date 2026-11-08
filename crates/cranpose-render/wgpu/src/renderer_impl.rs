@@ -1,9 +1,8 @@
 use cranpose_core::{MemoryApplier, NodeId};
-use cranpose_render_common::{RenderScene, Renderer, graph::LayerNode, text_fonts::TextFonts};
-use cranpose_ui::LayoutTree;
+use cranpose_render_common::{Renderer, graph::LayerNode, text_fonts::TextFonts};
 use cranpose_ui_graphics::Size;
 
-use crate::{PresentBackend, Scene, WgpuRenderer, WgpuRendererError, pipeline};
+use crate::{PresentBackend, Scene, WgpuRenderer, WgpuRendererError};
 
 /// Gives `app_context` the fonts its text lays out with.
 fn install_text_fonts(app_context: &cranpose_ui::AppContext, fonts: &TextFonts) {
@@ -46,17 +45,6 @@ impl Renderer for WgpuRenderer {
 
     fn scene_mut(&mut self) -> &mut Self::Scene {
         &mut self.frontend.scene
-    }
-
-    fn rebuild_scene(
-        &mut self,
-        layout_tree: &LayoutTree,
-        _viewport: Size,
-    ) -> Result<(), Self::Error> {
-        self.frontend.scene.clear();
-        self.frontend.clear_fps_overlay();
-        pipeline::render_layout_tree(layout_tree.root(), &mut self.frontend.scene);
-        Ok(())
     }
 
     fn rebuild_scene_from_applier(

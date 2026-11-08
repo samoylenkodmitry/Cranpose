@@ -1,8 +1,7 @@
 use std::{any::Any, rc::Rc};
 
 use cranpose_core::{MemoryApplier, NodeId, RecordId, collections::map::HashMap};
-use cranpose_ui::{LayoutBox, ModifierNodeSlices, Point, Rect, Size, SubcomposeLayoutNode};
-use cranpose_ui_graphics::GraphicsLayer;
+use cranpose_ui::{ModifierNodeSlices, Point, Rect, SubcomposeLayoutNode};
 
 use crate::{
     NodeUpdate, SceneUpdates,
@@ -40,11 +39,10 @@ use node_data::{PlacedGeometry, placed_child_geometry, read_node_data, read_plac
 mod node_layer;
 use node_layer::{
     AbsOrigin, HeadKind, LayerHead, LowerContext, add_child_origin_sinks, assign_layer,
-    hit_test_from_slices, layer_and_node_bounds, layer_identity, layout_box_to_snapshot,
-    lower_root_into, modifier_slices_have_origin_sinks, outer_commands, outer_draws,
-    placed_transform, prepare_node_layer, refresh_hit_targets, root_record, set_bounds,
-    set_origin_sinks, slices_hit_something, take_wrapped_layer, write_node_content,
-    write_node_layer, write_snapshot_layer, write_wrapper,
+    hit_test_from_slices, layer_and_node_bounds, layer_identity, lower_root_into,
+    modifier_slices_have_origin_sinks, outer_commands, outer_draws, placed_transform,
+    prepare_node_layer, refresh_hit_targets, set_bounds, set_origin_sinks, slices_hit_something,
+    take_wrapped_layer, write_node_content, write_node_layer, write_wrapper,
 };
 mod translate_layer;
 pub(crate) use translate_layer::TranslateScratch;
@@ -52,17 +50,6 @@ use translate_layer::{
     TranslatedContainer, remove_own_draws, translate_tracking_hits, translated_container,
     write_own_content_around_children,
 };
-
-#[derive(Clone, Default)]
-struct BuildNodeSnapshot {
-    node_id: NodeId,
-    placement: Point,
-    size: Size,
-    content_offset: Point,
-    slices: Rc<ModifierNodeSlices>,
-    graphics_layer: Option<GraphicsLayer>,
-    children: Vec<Self>,
-}
 
 struct SnapshotNodeData<'a> {
     layout_state: cranpose_ui::widgets::LayoutState,
@@ -169,19 +156,6 @@ fn lowered_layer_count() -> usize {
 pub(crate) struct WalkMemory {
     retained_path: Option<RetainedPath>,
     dirty_ancestry: DirtyAncestry,
-}
-
-// Writes the layout box tree rooted at `root` into `store` in place of what
-// it held.
-pub(crate) fn write_layout_tree(store: &mut SceneStore, walk: &mut WalkMemory, root: &LayoutBox) {
-    bump_recording_generation();
-    let root_snapshot = layout_box_to_snapshot(root, None);
-    store.begin_update();
-    store.clear();
-    *walk = WalkMemory::default();
-    let record = root_record(store, root_snapshot.node_id);
-    write_snapshot_layer(store, root_snapshot, LowerContext::ROOT, record);
-    store.finish_update();
 }
 
 /// Builds the records of the layout tree below `root`, read from `applier`.

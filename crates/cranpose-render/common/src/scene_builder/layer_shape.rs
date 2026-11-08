@@ -8,7 +8,7 @@ use cranpose_ui_graphics::{
 const ROUNDED_CLIP_EDGE_FEATHER: f32 = 1.0;
 
 /// The graphics layer of a node with `slices` and bounds `local_bounds`:
-/// the chain's own, its clip shaped as [`shape_clip`] shapes it. Lent by
+/// the chain's own, its clip rounded to the chain's corner shape when it clips to its bounds. Lent by
 /// the slices unless the shaping changes it, and returned straight from
 /// them when nothing shapes it: a layer kept in a local first is copied out.
 #[inline]
@@ -31,20 +31,6 @@ fn rounded_graphics_layer(
     let mut graphics_layer = slices.graphics_layer();
     round_clip(&mut graphics_layer, corners, local_bounds);
     graphics_layer
-}
-
-/// Shapes the clip of `graphics_layer`, a layer's own, to `corner_shape`, the
-/// shape of a layer that clips to its bounds `local_bounds`. In place: the
-/// layer moved in and out of a call is hundreds of bytes copied each way,
-/// and a lent layer is copied only when the shaping changes it.
-pub(super) fn shape_clip(
-    graphics_layer: &mut Option<Cow<'_, GraphicsLayer>>,
-    corner_shape: Option<RoundedCornerShape>,
-    local_bounds: Rect,
-) {
-    if let Some(corners) = clip_corners(corner_shape, local_bounds) {
-        round_clip(graphics_layer, corners, local_bounds);
-    }
 }
 
 /// `corner_shape`, the shape a layer that clips to its bounds `local_bounds`
