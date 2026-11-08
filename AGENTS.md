@@ -35,6 +35,7 @@ Code rules (lints and gates check the rest; follow their errors):
 Performance rules:
 
 - Design data-oriented; read the hot path and its allocations per iteration before changing it. Smells: a hash table where a flat array by slot would do, a pointer where an index would do (pack the hottest data in its upper bits), an array of structures a pass reads one field of, an array of bools instead of a bitset, a heap list instead of inline capacity or an arena, a cache with no measured win (delete it; redesign the slow path instead).
+- Do not allocate on hot paths.
 - Benchmark on the slowest shipped device against the last release before merging. Desktop numbers do not count.
 - Amplify every loss you spot: build a bench layout that makes the loss large, then work on it with that layout. Add the layout to the benches and the nightly, so a regression of the same kind shows at once.
 - Keep every test, benchmark and device run as short as physically possible. Alternate A and B, read the result after each pair, and stop as soon as it clearly shows the answer: a difference well past the noise, or clearly no difference. Never run long fixed batches.
