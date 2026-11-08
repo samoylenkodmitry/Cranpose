@@ -517,37 +517,39 @@ fn layer_raster_mapping(
     } else {
         parent_content_style.under(&layer.graphics_layer)
     };
-    // A layer whose bounds are its node's rect maps the one rect once. The
-    // rects agree in every bit: a zero of another sign maps to other bits.
-    let node_rect = layer.node_rect();
     let bounds = layer.local_bounds;
+    let mut mapping = raster_layer_mapping(bounds, transform, content_style);
+    // A node's rect that differs from its layer's bounds in some bit maps on
+    // its own: a zero of another sign maps to other bits.
+    let node_rect = layer.node_rect();
     let same = |a: f32, b: f32| a.to_bits() == b.to_bits();
-    let own_node_rect = (!(same(node_rect.x, bounds.x)
+    if !(same(node_rect.x, bounds.x)
         && same(node_rect.y, bounds.y)
         && same(node_rect.width, bounds.width)
-        && same(node_rect.height, bounds.height)))
-    .then_some(node_rect);
-    raster_layer_mapping(bounds, own_node_rect, transform, content_style)
+        && same(node_rect.height, bounds.height))
+    {
+        mapping.content_bounds = RasterLayerBounds::from_transformed_bounds(
+            transform.bounds_for_rect(node_rect),
+            node_rect,
+        );
+    }
+    mapping
 }
 
-// `node_rect` is `None` where the node's rect is `local_bounds` itself, as an
-// inline node's is.
+// The mapping of a node whose rect is `local_bounds`, as an inline node's
+// is: its draws map as its layer does.
 fn raster_layer_mapping(
     local_bounds: Rect,
-    node_rect: Option<Rect>,
     transform: &ProjectiveTransform,
     content_style: ContentStyle,
 ) -> RasterLayerMapping {
     let transformed_bounds = transform.bounds_for_rect(local_bounds);
     let (scale_x, scale_y) = raster_layer_scale(transformed_bounds, local_bounds);
     let layer_bounds = RasterLayerBounds::from_transformed_bounds(transformed_bounds, local_bounds);
-    let content_bounds = node_rect.map_or(layer_bounds, |rect| {
-        RasterLayerBounds::from_transformed_bounds(transform.bounds_for_rect(rect), rect)
-    });
 
     RasterLayerMapping {
         layer_bounds,
-        content_bounds,
+        content_bounds: layer_bounds,
         transformed_bounds,
         content_style,
         scale_x,
@@ -864,7 +866,7 @@ fn push_inline_items(
     let transform = inline.transform_to_parent().then(*context.parent_transform);
     let node_rect = inline.node_rect();
     let content_style = context.parent_content_style.under(&GraphicsLayer::DEFAULT);
-    let mapping = raster_layer_mapping(node_rect, None, &transform, content_style);
+    let mapping = raster_layer_mapping(node_rect, &transform, content_style);
     if mapping.transformed_bounds.width <= 0.0 || mapping.transformed_bounds.height <= 0.0 {
         return;
     }

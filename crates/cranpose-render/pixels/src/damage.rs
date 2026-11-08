@@ -59,7 +59,6 @@ fn moved_fill(old: &DrawShape, new: &DrawShape) -> Option<(Rect, Rect, CornerRad
         return None;
     }
     let placed = place_shape(new)?;
-    let reach = placed.coverage.reach(placed.rect);
     let (
         ShapeCoverage::Fill {
             rect: a,
@@ -73,7 +72,8 @@ fn moved_fill(old: &DrawShape, new: &DrawShape) -> Option<(Rect, Rect, CornerRad
     else {
         return None;
     };
-    (old_radii == new_radii).then(|| (a, b, old_radii.unwrap_or_default(), reach))
+    // A fill reaches its own rect.
+    (old_radii == new_radii).then(|| (a, b, old_radii.unwrap_or_default(), placed.rect))
 }
 
 /// A strip along each edge that moved from `a` to `b`, from its old to its
