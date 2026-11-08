@@ -36,10 +36,13 @@ import {
   tickers,
   widthFraction,
 } from '../../shared-ts/data.js';
+import { wall } from './wall.js';
 
 interface Launch {
   tier: number;
   freeze: number;
+  /** The screen: the gauntlet unless it is `wall`. */
+  scenario?: string;
 }
 
 /** The Android app's plugin: what `am start` asked, and `PERF` lines under the other apps' log tag. */
@@ -78,7 +81,11 @@ function host(): { launch: Promise<Launch>; log(message: string): void } {
   }
   const query = new URLSearchParams(location.search);
   return {
-    launch: Promise.resolve({ tier: Number(query.get('tier') ?? 5), freeze: Number(query.get('freeze') ?? 0) }),
+    launch: Promise.resolve({
+      tier: Number(query.get('tier') ?? 5),
+      freeze: Number(query.get('freeze') ?? 0),
+      scenario: query.get('scenario') ?? undefined,
+    }),
     log: (message) => console.log(message),
   };
 }
@@ -321,6 +328,11 @@ interface Row {
 async function main() {
   const { launch: launched, log } = host();
   const launch = await launched;
+  // The still wall in the gauntlet's place, when the launch asks for it.
+  if (launch.scenario === 'wall') {
+    wall(launch.tier, launch.freeze, log);
+    return;
+  }
   const tier = gauntletTier(launch.tier);
   document.documentElement.style.setProperty('--s', String(tier.scale));
 

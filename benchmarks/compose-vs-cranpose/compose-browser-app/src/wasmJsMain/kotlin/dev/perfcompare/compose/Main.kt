@@ -32,8 +32,9 @@ import org.khronos.webgl.get
 import org.w3c.fetch.Response
 
 // What `shared-compose` asks of the page: Roboto from the files beside it, the
-// `PERF` lines on the console, and the avatars as Skia images. The tier and
-// the freeze frame come from the query string, `?tier=12&freeze=120`.
+// `PERF` lines on the console, and the avatars as Skia images. The tier, the
+// freeze frame and the screen come from the query string,
+// `?tier=12&freeze=120&scenario=wall`.
 
 /** The Roboto files every app loads, set before the first composition. */
 internal var Roboto: FontFamily = FontFamily.Default
@@ -59,11 +60,14 @@ fun avatarBitmap(index: Int): ImageBitmap {
     return bitmap.asComposeImageBitmap()
 }
 
-/** A query parameter as a number. */
-private fun query(name: String, fallback: Int): Int =
+/** A query parameter's text. */
+private fun query(name: String): String? =
     window.location.search.trimStart('?').split('&')
         .firstOrNull { it.startsWith("$name=") }
-        ?.substringAfter('=')?.toIntOrNull() ?: fallback
+        ?.substringAfter('=')
+
+/** A query parameter as a number. */
+private fun query(name: String, fallback: Int): Int = query(name)?.toIntOrNull() ?: fallback
 
 /** The bytes of [file], fetched from beside the page. */
 private suspend fun fetchBytes(file: String): ByteArray {
@@ -80,13 +84,15 @@ fun main() {
             Font("Roboto", fetchBytes("fonts/Roboto-Regular.ttf"), FontWeight.Normal),
             Font("Roboto", fetchBytes("fonts/Roboto-Bold.ttf"), FontWeight.Bold),
         )
-        val load = GauntletLoad(tier = query("tier", 5), freeze = query("freeze", 0))
+        val tier = query("tier", 5)
+        val freeze = query("freeze", 0)
+        val wall = query("scenario") == "wall"
         var firstFrameLogged = false
         ComposeViewport(document.body!!) {
             Column(
                 Modifier
                     .fillMaxSize()
-                    .background(Color(0xFFEEF0F5))
+                    .background(if (wall) WALL_BACKGROUND else Color(0xFFEEF0F5))
                     .drawBehind {
                         if (!firstFrameLogged) {
                             firstFrameLogged = true
@@ -94,8 +100,8 @@ fun main() {
                         }
                     },
             ) {
-                TopBar("Gauntlet")
-                GauntletScreen(load)
+                TopBar(if (wall) "Still wall" else "Gauntlet")
+                if (wall) WallScreen(WallLoad(tier, freeze)) else GauntletScreen(GauntletLoad(tier, freeze))
             }
         }
     }

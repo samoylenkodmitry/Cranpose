@@ -23,6 +23,8 @@ use iced::{
 };
 use perf_data::*;
 
+mod wall;
+
 /// Blocks of five card rows and a cluster: no measurement window reaches the end.
 const ROWS: usize = 2000 * (CARD_ROWS_PER_CLUSTER + 1);
 /// How far the list scrolls each frame, in logical pixels.
@@ -757,6 +759,9 @@ impl canvas::Program<Message> for Layers<'_> {
 /// Runs the gauntlet in a window of `size` that the page or the desktop
 /// gives it.
 pub fn run(load: Launch, size: Size) -> iced::Result {
+    if load.scenario == Scenario::Wall {
+        return wall::run(load, size);
+    }
     let mut application = iced::application(
         move || Gauntlet::new(load, size),
         Gauntlet::update,

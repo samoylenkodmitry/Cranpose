@@ -13,6 +13,7 @@ use std::cell::Cell;
 use cranpose::prelude::*;
 pub use screens::{
     gauntlet::{GauntletLoad, GauntletScreen},
+    wall::{WallLoad, WallScreen},
     workspace::{FRAME_OBSERVER, WorkspaceFrame, WorkspaceMode},
 };
 
@@ -28,6 +29,7 @@ pub enum Scenario {
     DeepLayer,
     Workspace,
     Gauntlet,
+    Wall,
 }
 
 impl Scenario {
@@ -42,6 +44,7 @@ impl Scenario {
             "deep_layer" => Self::DeepLayer,
             "workspace" => Self::Workspace,
             "gauntlet" => Self::Gauntlet,
+            "wall" => Self::Wall,
             _ => Self::Feed,
         }
     }
@@ -59,6 +62,7 @@ impl Scenario {
             Self::Workspace => "Cranpose · trading workspace",
             // Both apps title it alike: the two pictures are compared.
             Self::Gauntlet => "Gauntlet",
+            Self::Wall => "Still wall",
         }
     }
 }
@@ -111,7 +115,7 @@ pub fn run_desktop() -> Result<(), cranpose::LaunchError> {
 #[cfg(any(target_os = "android", feature = "desktop"))]
 fn launcher() -> AppLauncher {
     let (width, height) = match launch_args().string("scenario") {
-        Some("workspace" | "gauntlet") => perf_data::DESKTOP_WINDOW,
+        Some("workspace" | "gauntlet" | "wall") => perf_data::DESKTOP_WINDOW,
         _ => (360, 748),
     };
     AppLauncher::new()
@@ -136,6 +140,7 @@ struct Launch {
     chips: usize,
     workspace: screens::workspace::WorkspaceMode,
     gauntlet: screens::gauntlet::GauntletLoad,
+    wall: screens::wall::WallLoad,
     still: bool,
 }
 
@@ -172,6 +177,10 @@ impl Launch {
                 args.string("mode").unwrap_or("quotes"),
             ),
             gauntlet: screens::gauntlet::GauntletLoad {
+                tier: count("tier", 5),
+                freeze: u32::try_from(count("freeze", 0)).unwrap_or(u32::MAX),
+            },
+            wall: screens::wall::WallLoad {
                 tier: count("tier", 5),
                 freeze: u32::try_from(count("freeze", 0)).unwrap_or(u32::MAX),
             },
@@ -225,6 +234,7 @@ pub fn PerfCompareApp() {
                     screens::workspace::WorkspaceFrame(launch.workspace, launch.still)
                 }
                 Scenario::Gauntlet => screens::gauntlet::GauntletScreen(launch.gauntlet),
+                Scenario::Wall => screens::wall::WallScreen(launch.wall),
             }
         },
     );

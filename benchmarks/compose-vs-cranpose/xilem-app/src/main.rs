@@ -14,6 +14,7 @@
 //! has laid it out. Xilem has no wrapping row, no box that clips, scrolls
 //! or turns about its centre, and no canvas: `widgets` adds them.
 
+mod wall;
 mod widgets;
 
 use std::collections::HashMap;
@@ -76,13 +77,26 @@ fn styled<T: Into<String>>(content: T, size: f32, bold: bool) -> Label {
 }
 
 /// One line of text in Roboto at `size`.
-fn text<T: Into<String>>(
+fn text<State: 'static, T: Into<String>>(
     content: T,
     size: f32,
     color: Color,
     bold: bool,
-) -> impl WidgetView<App> + use<T> {
+) -> impl WidgetView<State> + use<State, T> {
     styled(content, size, bold).color(color)
+}
+
+/// The bar across the window's top, titled `title`.
+fn top_bar<State: 'static>(title: &'static str) -> impl WidgetView<State> + use<State> {
+    sized_box(hold(
+        text(title, 20.0, Color::WHITE, true),
+        Hold::Align(UnitPoint::LEFT),
+        ignore_height,
+    ))
+    .expand_width()
+    .height(px(56.0))
+    .padding(Padding::horizontal(16.0))
+    .background_color(TOP_BAR)
 }
 
 /// Wrapped text cut after `lines` lines.
@@ -168,15 +182,7 @@ fn app_logic(app: &mut App) -> impl WidgetView<App> + use<> {
     .cross_axis_alignment(CrossAxisAlignment::Fill);
     flex_col((
         frame_clock(App::advance),
-        sized_box(hold(
-            text("Gauntlet", 20.0, Color::WHITE, true),
-            Hold::Align(UnitPoint::LEFT),
-            ignore_height,
-        ))
-        .expand_width()
-        .height(px(56.0))
-        .padding(Padding::horizontal(16.0))
-        .background_color(TOP_BAR),
+        top_bar("Gauntlet"),
         sized_box(content)
             .width(px((width as f32 * width_fraction(app.frame)).round()))
             .flex(1.0),
@@ -578,21 +584,32 @@ fn layer_cells(layer: usize, rows: usize) -> impl WidgetView<App> + use<> {
 
 fn main() {
     perf_data::log_to_stdout();
-    let s = desktop_gauntlet().tier.scale;
-    let app = App {
-        frame: 0,
-        frozen: false,
-        anchor: ListAnchor {
-            row: 0,
-            top: 8.0 * s,
-        },
-        heights: HashMap::new(),
-    };
+    match perf_data::launch().scenario {
+        Scenario::Gauntlet => {
+            let s = desktop_gauntlet().tier.scale;
+            let app = App {
+                frame: 0,
+                frozen: false,
+                anchor: ListAnchor {
+                    row: 0,
+                    top: 8.0 * s,
+                },
+                heights: HashMap::new(),
+            };
+            run(app, app_logic);
+        }
+        Scenario::Wall => run(wall::Wall::new(), wall::wall_logic),
+    }
+}
+
+/// Runs `logic` over `state` in the desktop window, in the Roboto files
+/// every desktop app loads.
+fn run<State: 'static, View: WidgetView<State>>(state: State, logic: fn(&mut State) -> View) {
     let (width, height) = DESKTOP_WINDOW;
-    let window = WindowOptions::new("Gauntlet")
+    let window = WindowOptions::new(perf_data::launch().scenario.title())
         .with_initial_inner_size(LogicalSize::new(f64::from(width), f64::from(height)))
         .with_resizable(false);
-    let mut xilem = Xilem::new_simple(app, app_logic, window);
+    let mut xilem = Xilem::new_simple(state, logic, window);
     for file in ["Roboto-Regular.ttf", "Roboto-Bold.ttf"] {
         match std::fs::read(font_path(file)) {
             Ok(bytes) => xilem = xilem.with_font(Blob::from(bytes)),

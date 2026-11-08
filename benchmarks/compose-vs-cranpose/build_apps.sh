@@ -349,6 +349,13 @@ release)
     step "cranpose $tag"
     mkdir -p "$cache/targets/cranpose-release"
     (cd "$app" && CARGO_TARGET_DIR="$cache/targets/cranpose-release" cargo build --release)
+    # The desktop screens the release's app knows, which desktop.py runs it on.
+    {
+        echo gauntlet
+        if grep -q '"wall" => Self::Wall' "$app/src/lib.rs"; then
+            echo wall
+        fi
+    } > "$cache/targets/cranpose-release/screens.txt"
     ln -sfn "$cache/targets/cranpose-release" "$here/cranpose-app/target-release"
     ;;
 *)

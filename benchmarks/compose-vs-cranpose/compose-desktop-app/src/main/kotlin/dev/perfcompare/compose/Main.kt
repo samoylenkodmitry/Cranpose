@@ -25,8 +25,9 @@ import org.jetbrains.skia.ColorAlphaType
 import org.jetbrains.skia.ImageInfo
 
 // What `shared-compose` asks of the desktop app, and the window `desktop.py`
-// measures: 1280 x 820 points of content, the tier in `PERF_TIER`, the frame
-// to freeze on in `PERF_FREEZE` and the Roboto files in `PERF_FONTS`.
+// measures: 1280 x 820 points of content, the screen in `PERF_SCENARIO`
+// (`gauntlet` or `wall`), the tier in `PERF_TIER`, the frame to freeze on in
+// `PERF_FREEZE` and the Roboto files in `PERF_FONTS`.
 
 private val environment: Map<String, String> = System.getenv()
 private val fonts = File(environment["PERF_FONTS"] ?: "fonts")
@@ -60,13 +61,13 @@ fun avatarBitmap(index: Int): ImageBitmap {
 }
 
 fun main() = application {
-    val load = GauntletLoad(
-        tier = environment["PERF_TIER"]?.toIntOrNull() ?: 5,
-        freeze = environment["PERF_FREEZE"]?.toIntOrNull() ?: 0,
-    )
+    val tier = environment["PERF_TIER"]?.toIntOrNull() ?: 5
+    val freeze = environment["PERF_FREEZE"]?.toIntOrNull() ?: 0
+    val wall = environment["PERF_SCENARIO"] == "wall"
+    val title = if (wall) "Still wall" else "Gauntlet"
     var firstFrameLogged = false
     val state = rememberWindowState(size = DpSize(1280.dp, 820.dp))
-    Window(onCloseRequest = ::exitApplication, state = state, title = "Gauntlet", resizable = false) {
+    Window(onCloseRequest = ::exitApplication, state = state, title = title, resizable = false) {
         LaunchedEffect(Unit) {
             // The window's size counts its title bar: it grows by the
             // window's insets, so the content is 1280 x 820.
@@ -76,7 +77,7 @@ fun main() = application {
         Column(
             Modifier
                 .fillMaxSize()
-                .background(Color(0xFFEEF0F5))
+                .background(if (wall) WALL_BACKGROUND else Color(0xFFEEF0F5))
                 .drawBehind {
                     if (!firstFrameLogged) {
                         firstFrameLogged = true
@@ -84,8 +85,8 @@ fun main() = application {
                     }
                 },
         ) {
-            TopBar("Gauntlet")
-            GauntletScreen(load)
+            TopBar(title)
+            if (wall) WallScreen(WallLoad(tier, freeze)) else GauntletScreen(GauntletLoad(tier, freeze))
         }
     }
 }

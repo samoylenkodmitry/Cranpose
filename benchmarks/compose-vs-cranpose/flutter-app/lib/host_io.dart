@@ -19,15 +19,20 @@ void perf(String line) {
   }
 }
 
-/// The tier and the freeze frame: `am start`'s arguments on Android, on a
-/// desktop `PERF_TIER` and `PERF_FREEZE`, which `desktop.py` sets.
-(int, int) launchOf(List<String> args) {
+/// The tier, the freeze frame and the screen: `am start`'s arguments on
+/// Android, on a desktop `PERF_TIER`, `PERF_FREEZE` and `PERF_SCENARIO`, which
+/// `desktop.py` sets.
+(int, int, String) launchOf(List<String> args) {
   int number(String? text, int fallback) => int.tryParse(text ?? '') ?? fallback;
   final environment = Platform.environment;
   if (Platform.isAndroid) {
-    return (number(args.elementAtOrNull(0), 5), number(args.elementAtOrNull(1), 0));
+    return (number(args.elementAtOrNull(0), 5), number(args.elementAtOrNull(1), 0), args.elementAtOrNull(2) ?? 'gauntlet');
   }
-  return (number(environment['PERF_TIER'], 5), number(environment['PERF_FREEZE'], 0));
+  return (
+    number(environment['PERF_TIER'], 5),
+    number(environment['PERF_FREEZE'], 0),
+    environment['PERF_SCENARIO'] ?? 'gauntlet',
+  );
 }
 
 /// A Roboto file: the device's own on Android, elsewhere the one in the

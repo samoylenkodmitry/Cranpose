@@ -3,8 +3,8 @@
 // app lays out itself, as Fyne's custom widgets do. Fyne's layouts size
 // objects without asking for a width first, so the app wraps paragraphs and
 // places the cards and rows by hand. The benchmark's README describes it;
-// `desktop.py` runs it with the tier in `PERF_TIER` and the Roboto files in
-// `PERF_FONTS`.
+// `desktop.py` runs it with the screen in `PERF_SCENARIO` (`wall.go` draws the
+// still wall), the tier in `PERF_TIER` and the Roboto files in `PERF_FONTS`.
 //
 // Every frame advances a frame index and everything follows from it, never
 // from wall time. A Fyne animation, which the driver ticks once per frame it
@@ -66,10 +66,11 @@ var (
 
 func palette(index int) color.NRGBA { return rgb(paletteRGB[index%8]) }
 
-// launch is what `desktop.py` asked of the gauntlet.
+// launch is what `desktop.py` asked of the app.
 type launch struct {
 	tier, freeze int
 	fonts        string
+	wall         bool
 }
 
 func readLaunch() launch {
@@ -83,7 +84,7 @@ func readLaunch() launch {
 	if fonts == "" {
 		fonts = "fonts"
 	}
-	return launch{number("PERF_TIER", 5), number("PERF_FREEZE", 0), fonts}
+	return launch{number("PERF_TIER", 5), number("PERF_FREEZE", 0), fonts, os.Getenv("PERF_SCENARIO") == "wall"}
 }
 
 // robotoTheme draws every text in the Roboto files every desktop app loads.
@@ -780,12 +781,9 @@ func (sc *screen) recycle(row int) {
 	}
 }
 
-// layout places the whole screen on the frame: the top bar, then the ticker
-// strip and the list in a column whose width follows the frame.
-func (sc *screen) layout(topBar *canvas.Rectangle, heading *canvas.Text, clip fyne.CanvasObject) {
-	place(topBar, 0, 0, windowWidth, 56)
-	headingSize := measure("Gauntlet", style{20, true})
-	place(heading, 16, (56-headingSize.Height)/2, headingSize.Width, headingSize.Height)
+// layout places the screen below the top bar on the frame: the ticker strip
+// and the list in a column whose width follows the frame.
+func (sc *screen) layout(clip fyne.CanvasObject) {
 	width := float32(int(windowWidth*widthFraction(sc.frame) + 0.5))
 	panelHeight := sc.placePanel(width)
 	place(sc.panel, 0, 56, width, panelHeight)
@@ -814,13 +812,13 @@ func main() {
 		return fyne.NewStaticResource(file, bytes)
 	}
 	a.Settings().SetTheme(robotoTheme{theme.LightTheme(), read("Roboto-Regular.ttf"), read("Roboto-Bold.ttf")})
-	w := a.NewWindow("Gauntlet")
-	w.SetPadded(false)
-	w.SetFixedSize(true)
-	w.Resize(fyne.NewSize(windowWidth, windowHeight))
+	if l.wall {
+		runWall(a, l)
+		return
+	}
+	w := newWindow(a, "Gauntlet")
 	sc := newScreen()
-	topBar := canvas.NewRectangle(rgb(0x1E2A4A))
-	heading := newText("Gauntlet", white, style{20, true})
+	topBar, heading := newTopBar("Gauntlet")
 	// The panels stack over the list and show only over it, as every app
 	// clips them.
 	clip := container.NewScroll(sc.area)
@@ -828,21 +826,47 @@ func main() {
 	background := canvas.NewRectangle(rgb(0xEEF0F5))
 	place(background, 0, 0, windowWidth, windowHeight)
 	w.SetContent(container.NewWithoutLayout(background, topBar, heading, sc.panel, clip))
-	sc.layout(topBar, heading, clip)
+	sc.layout(clip)
+	animate(l, &sc.frame, func() { sc.layout(clip) })
+	w.ShowAndRun()
+}
+
+// newWindow is the fixed window every desktop app opens, titled `title`.
+func newWindow(a fyne.App, title string) fyne.Window {
+	w := a.NewWindow(title)
+	w.SetPadded(false)
+	w.SetFixedSize(true)
+	w.Resize(fyne.NewSize(windowWidth, windowHeight))
+	return w
+}
+
+// newTopBar is the bar across the window's top and its title, placed.
+func newTopBar(title string) (*canvas.Rectangle, *canvas.Text) {
+	topBar := canvas.NewRectangle(rgb(0x1E2A4A))
+	place(topBar, 0, 0, windowWidth, 56)
+	s := style{20, true}
+	heading := newText(title, white, s)
+	size := measure(title, s)
+	place(heading, 16, (56-size.Height)/2, size.Width, size.Height)
+	return topBar, heading
+}
+
+// animate advances `frame` once per frame Fyne draws and calls `onFrame`
+// after each step, up to the launch's freeze frame.
+func animate(l launch, frame *int, onFrame func()) {
 	ticks := fyne.NewAnimation(time.Hour, func(float32) {
-		if sc.launch.freeze > 0 && sc.frame >= sc.launch.freeze {
+		if l.freeze > 0 && *frame >= l.freeze {
 			return
 		}
-		if sc.frame == 0 {
+		if *frame == 0 {
 			fmt.Println("PERF first_frame")
 		}
-		sc.frame++
-		sc.layout(topBar, heading, clip)
-		if sc.launch.freeze > 0 && sc.frame >= sc.launch.freeze {
-			fmt.Printf("PERF frozen frame=%d\n", sc.frame)
+		*frame++
+		onFrame()
+		if l.freeze > 0 && *frame >= l.freeze {
+			fmt.Printf("PERF frozen frame=%d\n", *frame)
 		}
 	})
 	ticks.RepeatCount = fyne.AnimationRepeatForever
 	ticks.Start()
-	w.ShowAndRun()
 }

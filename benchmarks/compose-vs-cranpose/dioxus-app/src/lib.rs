@@ -16,6 +16,8 @@ use std::{collections::HashMap, fmt::Write, sync::OnceLock};
 use dioxus::prelude::*;
 use perf_data::*;
 
+mod wall;
+
 const FOOTER_LABELS: [&str; 3] = ["likes", "replies", "shares"];
 /// Sends a tick on each animation frame of the page and waits for the app's
 /// answer, so the frame index advances once per frame the page draws.
@@ -56,9 +58,9 @@ fn colors() -> &'static Colors {
     })
 }
 
-/// The tier's scale, as CSS lengths take it.
+/// The gauntlet tier's scale, as CSS lengths take it.
 fn scale() -> f64 {
-    f64::from(desktop_gauntlet().tier.scale)
+    f64::from(gauntlet_tier(perf_data::launch().tier).scale)
 }
 
 /// Avatar `index` as a BMP: 32-bit pixels, rows top down.
@@ -103,11 +105,12 @@ fn advance(frame: u32) {
     }
 }
 
-#[component]
-fn App() -> Element {
-    use_future(|| async {
+/// Advances `FRAME` on each animation frame of the page, after `advance`
+/// moves what follows the frame, up to the launch's freeze frame.
+fn use_frames(advance: fn(u32)) {
+    use_future(move || async move {
         let mut frames = document::eval(FRAMES);
-        let freeze = desktop_gauntlet().launch.freeze;
+        let freeze = perf_data::launch().freeze;
         loop {
             if frames.recv::<u32>().await.is_err() {
                 return;
@@ -127,6 +130,20 @@ fn App() -> Element {
             }
         }
     });
+}
+
+/// The screen the launch asks for.
+#[component]
+fn App() -> Element {
+    match perf_data::launch().scenario {
+        Scenario::Gauntlet => rsx! { GauntletApp {} },
+        Scenario::Wall => rsx! { wall::WallApp {} },
+    }
+}
+
+#[component]
+fn GauntletApp() -> Element {
+    use_frames(advance);
     let palette = &colors().palette;
     rsx! {
         // Sparkline fills: one vertical gradient per palette color.
@@ -521,7 +538,7 @@ mod platform {
     pub fn run() {
         let (width, height) = DESKTOP_WINDOW;
         let window = WindowBuilder::new()
-            .with_title("Gauntlet")
+            .with_title(perf_data::launch().scenario.title())
             .with_inner_size(LogicalSize::new(f64::from(width), f64::from(height)))
             .with_resizable(false);
         let config = Config::new()

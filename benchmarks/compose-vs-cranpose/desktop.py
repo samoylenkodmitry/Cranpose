@@ -2,9 +2,12 @@
 """Measures the gauntlet's desktop apps on a Mac, from outside every app.
 
 Each app runs alone in a 1280 x 820 window (`perf-data`'s `DESKTOP_WINDOW`),
-with the tier in `PERF_TIER`, the frame to freeze on in `PERF_FREEZE` and the
-Roboto files in `PERF_FONTS`; Cranpose takes them as `--tier=N` arguments and
-the web page in its address. `FrameCount.app` counts the frames the app's
+with the screen in `PERF_SCENARIO` (the gauntlet or the still wall), the tier
+in `PERF_TIER`, the frame to freeze on in `PERF_FREEZE` and the Roboto files
+in `PERF_FONTS`; Cranpose takes them as `--scenario=NAME --tier=N` arguments
+and the web page in its address. Each `--scenario NAME[:TIER]` is measured in
+turn, at its own tier or else at `--tier`, into one report: the gauntlet
+alone when none is given. `FrameCount.app` counts the frames the app's
 window presents, the way SurfaceFlinger counts a phone app's, `ps` counts
 the CPU time of the app and every process it started, `footprint` the memory
 they hold and `macmon` the clocks the chip ran at. The apps are measured in
@@ -36,6 +39,7 @@ when its display link does not tick at its rate. `fps` counts the frames that
 changed the window's picture; `composited_fps` counts every composite.
 
   python3 desktop.py --output results/desktop --tier 12
+  python3 desktop.py --output results/desktop --scenario gauntlet:16 --scenario wall:20
   python3 desktop.py --output results/desktop-parity --parity --tier 5
   python3 desktop.py --output results/browser --browser DIST --tier 6
 
@@ -125,6 +129,13 @@ def clear_app_state(profile):
 # more, so the median of the three decides, and the window's picture is kept.
 DISAGREEMENT = 1.5
 
+# The screens every app draws.
+SCREENS = ('gauntlet', 'wall')
+
+# The screens the release's app knows, one name a line, which `build_apps.sh
+# release` writes beside it.
+RELEASE_SCREENS = HERE / 'cranpose-app/target-release/screens.txt'
+
 # What each app's legs are summarized by.
 SUMMARY = ('fps', 'first_frame_s', 'cpu_ms_per_frame', 'cpu_cores', 'server_cores', 'other_cores', 'ram_mb', 'gpu_ram_mb', 'cpu_mhz',
            'gpu_mhz')
@@ -132,16 +143,17 @@ SUMMARY = ('fps', 'first_frame_s', 'cpu_ms_per_frame', 'cpu_cores', 'server_core
 # Chrome, the engine Electron apps ship, in an app window of its own profile.
 # Its title bar is part of the window size it is given.
 CHROME_APP = [CHROME, '--user-data-dir={profile}', '--no-first-run', '--no-default-browser-check',
-              '--enable-logging=stderr', '--window-size=1280,852', '--app={page}?tier={tier}&freeze={freeze}']
+              '--enable-logging=stderr', '--window-size=1280,852',
+              '--app={page}?tier={tier}&freeze={freeze}&scenario={scenario}']
 
-# Each app's command: `{tier}`, `{freeze}`, `{page}` and `{profile}` are
-# filled in for the run.
+# Each app's command: `{scenario}`, `{tier}`, `{freeze}`, `{page}` and
+# `{profile}` are filled in for the run.
 APPS = {
     'cranpose': [HERE / 'cranpose-app/target/release/perf-compare',
-                 '--scenario=gauntlet', '--tier={tier}', '--freeze={freeze}'],
+                 '--scenario={scenario}', '--tier={tier}', '--freeze={freeze}'],
     # The latest release's, which `build_apps.sh release TAG` links in.
     'cranpose-release': [HERE / 'cranpose-app/target-release/release/perf-compare',
-                         '--scenario=gauntlet', '--tier={tier}', '--freeze={freeze}'],
+                         '--scenario={scenario}', '--tier={tier}', '--freeze={freeze}'],
     'egui': [HERE / 'egui-app/target/release/perf-compare-egui'],
     'slint': [HERE / 'slint-app/target/release/perf-compare-slint'],
     'iced': [HERE / 'iced-app/target/release/perf-compare-iced'],
@@ -653,11 +665,12 @@ class App:
         # In the browser every app is the same Chrome, opened on its own page.
         template, page = (CHROME_APP, f'{server.base}/{name}/index.html') if args.browser else \
             (APPS[name], f'{server.base}/index.html')
-        values = {'tier': tier, 'freeze': freeze, 'page': page, 'profile': profile}
+        values = {'scenario': args.scenario, 'tier': tier, 'freeze': freeze, 'page': page, 'profile': profile}
         command = [str(part).format(**values) for part in template]
         if program:
             command[0] = program
-        variables = {'PERF_TIER': str(tier), 'PERF_FREEZE': str(freeze), 'PERF_FONTS': str(stage / 'fonts')}
+        variables = {'PERF_SCENARIO': args.scenario, 'PERF_TIER': str(tier), 'PERF_FREEZE': str(freeze),
+                     'PERF_FONTS': str(stage / 'fonts')}
         executable, arguments = command[0], command[1:]
         self.log.write_text('')
         self.started = time.monotonic()
@@ -760,6 +773,7 @@ def measure(name, args, work, server, stage, label, earlier, profile, program=No
     # zero, so what they hold at the end is the run's.
     before = processes()
     since = server.mark()
+    work.mkdir(parents=True, exist_ok=True)
     launched = time.monotonic()
     app = App(name, args, 0, work, server, stage, label, profile, program)
     try:
@@ -880,6 +894,9 @@ def main():
     parser.add_argument('--browser', type=Path, metavar='DIST',
                         help='run the apps `build_apps.sh browser DIST` built, in Chrome')
     parser.add_argument('--release', help='the release tag `cranpose-release` was built at')
+    parser.add_argument('--scenario', type=screen, action='append', metavar='NAME[:TIER]',
+                        help='a screen every app shows, the gauntlet or the still wall, at TIER or else '
+                             '--tier; given again, the run measures each in turn')
     parser.add_argument('--tier', type=int, default=12)
     parser.add_argument('--rounds', type=int, default=1,
                         help="rounds, in each of which every app starts after the apps' state is removed, "
@@ -898,6 +915,9 @@ def main():
     parser.add_argument('--tile', type=int, default=48)
     parser.add_argument('--tile-delta', type=float, default=12.0)
     args = parser.parse_args()
+    args.screens = [(name, tier or args.tier) for name, tier in args.scenario or [('gauntlet', None)]]
+    # The parity pictures and Chrome's warm-up show the first screen.
+    args.scenario, args.tier = args.screens[0]
     if args.browser:
         built = [name for name in versions.BROWSER_APPS if (args.browser / name / 'index.html').exists()]
         apps = args.apps.split(',') if args.apps else built
@@ -926,7 +946,8 @@ def main():
     report['display'] = {'start': began, 'end': ended}
     report['duration_s'] = round(time.monotonic() - started)
     (args.output / 'report.json').write_text(json.dumps(report, indent=1))
-    print(json.dumps(report['scenarios'][0]['starts'] if 'scenarios' in report else report['changed_pct']))
+    print(json.dumps([scenario['starts'] for scenario in report['scenarios']]
+                     if 'scenarios' in report else report['changed_pct']))
     if problems:
         # The report is kept to look at; the failing exit keeps it from being published.
         sys.exit(refusal(problems) + ' by the end of the run')
@@ -1004,6 +1025,7 @@ def run(args, apps, server, stage):
         # Pillow, which comparing pictures needs and measuring does not.
         from PIL import Image
         from parity import compare_pair
+        apps = [name for name in apps if shows(name, args)]
         pictures = {name: picture(name, args, args.output, server, stage) for name in apps}
         # Compose's picture is the one the others are held to.
         reference = next((name for name in ('compose', 'web') if name in apps), apps[0])
@@ -1025,9 +1047,63 @@ def run(args, apps, server, stage):
     # among them.
     built_file = HERE / 'desktop-versions.json'
     built = json.loads(built_file.read_text()) if built_file.exists() else {}
-    legs, failures = [], []
     if args.browser:
         warm_chrome(args, server, stage)
+    width, height = DESKTOP_WINDOW
+    window = f'{width} x {height} {"browser " if args.browser else ""}window'
+    scenarios = [measure_screen(screen_args(args, screen), apps, server, stage, window) for screen in args.screens]
+    chip = subprocess.run(['sysctl', '-n', 'machdep.cpu.brand_string'], capture_output=True, text=True,
+                          check=True).stdout.strip()
+    platform = 'browser' if args.browser else 'desktop'
+    if args.browser:
+        chip = f'{chip} · Chrome {versions.chrome_version().split(".")[0]}'
+    return {
+        'kind': platform if args.browser else 'frameworks',
+        'started_at': started_at,
+        'main': args.main,
+        'device': {'ro.product.model': chip},
+        'subjects': [versions.subject(name, platform, built, args.release) for name in apps],
+        'protocol': {'run_s': args.run, 'starts': list(STARTS), 'rounds': args.rounds,
+                     'max_other_cores': args.max_others, **slow_rule()},
+        'scenarios': scenarios,
+    }
+
+
+def screen_args(args, screen):
+    """`args` for the apps of one screen: its scenario and tier, and a
+    folder of its own in `--output` for its legs' files."""
+    name, tier = screen
+    return argparse.Namespace(**{**vars(args), 'scenario': name, 'tier': tier, 'output': args.output / name})
+
+
+def screen(text):
+    """`--scenario`'s `NAME` or `NAME:TIER`."""
+    name, _, tier = text.partition(':')
+    if name not in SCREENS:
+        raise argparse.ArgumentTypeError(f'{name} is none of {", ".join(SCREENS)}')
+    if tier and not tier.isdigit():
+        raise argparse.ArgumentTypeError(f'{tier} is no tier')
+    return name, int(tier) if tier else None
+
+
+def shows(name, args):
+    """Whether app `name` draws the screen `args` names. Every app does,
+    except `cranpose-release` on a screen its release's app does not know: it
+    would draw another screen under that screen's name."""
+    if name != 'cranpose-release':
+        return True
+    known = RELEASE_SCREENS.read_text().split() if RELEASE_SCREENS.exists() else ['gauntlet']
+    return args.scenario in known
+
+
+def measure_screen(args, apps, server, stage, window):
+    """The rounds of every app that draws the screen `args` names: the run's
+    entry for that screen."""
+    skipped = [name for name in apps if not shows(name, args)]
+    if skipped:
+        print(f'{args.scenario}: not drawn by {", ".join(skipped)}', flush=True)
+    apps = [name for name in apps if name not in skipped]
+    legs, failures = [], []
     for round_index in range(args.rounds):
         idle = idle_others()
         print(f'round {round_index + 1}: the machine idles at {idle:.2f} cores', flush=True)
@@ -1054,26 +1130,8 @@ def run(args, apps, server, stage):
                     again = undisturbed_leg(name, args, server, stage, f'{label}-again', earlier, failures,
                                             profile, start, idle, install)
                     legs += [{'subject': name, 'round': round_index, 'start': start, **leg} for leg in again]
-    chip = subprocess.run(['sysctl', '-n', 'machdep.cpu.brand_string'], capture_output=True, text=True,
-                          check=True).stdout.strip()
-    width, height = DESKTOP_WINDOW
-    platform = 'browser' if args.browser else 'desktop'
-    if args.browser:
-        chip = f'{chip} · Chrome {versions.chrome_version().split(".")[0]}'
-    return {
-        'kind': platform if args.browser else 'frameworks',
-        'started_at': started_at,
-        'main': args.main,
-        'device': {'ro.product.model': chip},
-        'subjects': [versions.subject(name, platform, built, args.release) for name in apps],
-        'protocol': {'run_s': args.run, 'starts': list(STARTS), 'rounds': args.rounds,
-                     'max_other_cores': args.max_others, **slow_rule()},
-        'scenarios': [{'scenario': 'gauntlet',
-                       'extras': f'tier {args.tier}, {width} x {height} {"browser " if args.browser else ""}window',
-                       'legs': legs, 'failures': failures,
-                       'starts': {start: {'summary': summarize(legs, apps, start), 'verdicts': {}}
-                                  for start in STARTS}}],
-    }
+    return {'scenario': args.scenario, 'extras': f'tier {args.tier}, {window}', 'legs': legs, 'failures': failures,
+            'starts': {start: {'summary': summarize(legs, apps, start), 'verdicts': {}} for start in STARTS}}
 
 
 if __name__ == '__main__':

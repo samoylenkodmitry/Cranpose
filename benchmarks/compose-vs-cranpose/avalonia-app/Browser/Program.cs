@@ -5,7 +5,8 @@ using Avalonia.Platform;
 
 namespace PerfAvalonia;
 
-/// <summary>The gauntlet in a page, launched by its query string: `?tier=12&amp;freeze=120`.</summary>
+/// <summary>The gauntlet or the still wall in a page, launched by its query string:
+/// `?tier=12&amp;freeze=120&amp;scenario=wall`.</summary>
 static class Program
 {
     static async Task Main()
@@ -13,6 +14,7 @@ static class Program
         var query = JSHost.GlobalThis.GetPropertyAsJSObject("location")?.GetPropertyAsString("search") ?? "";
         Launch.Tier = Value(query, "tier", 5);
         Launch.Freeze = Value(query, "freeze", 0);
+        Launch.Wall = query.TrimStart('?').Split('&').Contains("scenario=wall");
         Launch.Log = Console.WriteLine;
         Launch.ReadFont = file =>
         {

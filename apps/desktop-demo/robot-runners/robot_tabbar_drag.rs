@@ -29,14 +29,9 @@ pub(crate) fn main() {
                 TabAxis::Vertical => span_y > root.3 - 40.0,
             };
 
-            let find_tab = |tabs: &TabBounds, label: &str| {
-                tabs.iter()
-                    .find(|(name, _)| name == label)
-                    .map(|(_, bounds)| *bounds)
-            };
-
-            let lazy_before = find_tab(&tabs_before, "Lazy List");
-            let counter_before = find_tab(&tabs_before, "Counter App");
+            let lazy_before = cranpose_testing::tab_bounds(&tabs_before, "Lazy List");
+            // The drag starts on a tab inside the window.
+            let start = cranpose_testing::last_reachable_tab(&tabs_before, root, axis, 40.0).cloned();
             let before_axis = lazy_before.map(|(x, y, _, _)| match axis {
                 TabAxis::Horizontal => x,
                 TabAxis::Vertical => y,
@@ -52,16 +47,16 @@ pub(crate) fn main() {
                 before_axis
             );
 
-            if lazy_before.is_none() || counter_before.is_none() {
+            if lazy_before.is_none() || start.is_none() {
                 println!("  ✗ Could not find 'Lazy List' tab");
                 std::process::exit(1);
             }
 
-            if let Some((x, y, w, h)) = counter_before {
+            if let Some((label, (x, y, w, h))) = start {
                 let start_x = x + w / 2.0;
                 let start_y = y + h / 2.0;
 
-                println!("  Starting drag from 'Counter App' at ({start_x:.1}, {start_y:.1})");
+                println!("  Starting drag from '{label}' at ({start_x:.1}, {start_y:.1})");
 
                 let _ = robot.mouse_move(start_x, start_y);
                 std::thread::sleep(Duration::from_millis(50));
@@ -99,12 +94,12 @@ pub(crate) fn main() {
                     println!("  Tabs fit without overflow; skipping drag assertion");
                 }
             } else {
-                println!("  ✗ Could not find 'Counter App' tab to start drag");
+                println!("  ✗ Could not find a tab inside the window to start drag");
                 std::process::exit(1);
             }
 
             let tabs_after = collect_tab_bounds(&robot, &tab_labels);
-            let lazy_after = find_tab(&tabs_after, "Lazy List");
+            let lazy_after = cranpose_testing::tab_bounds(&tabs_after, "Lazy List");
             let after_axis = lazy_after.map(|(x, y, _, _)| match axis {
                 TabAxis::Horizontal => x,
                 TabAxis::Vertical => y,
@@ -149,4 +144,3 @@ pub(crate) fn main() {
             app::combined_app_with_initial_tab(Some(app::DemoTab::Counter));
         });
 }
-type TabBounds = Vec<(String, (f32, f32, f32, f32))>;

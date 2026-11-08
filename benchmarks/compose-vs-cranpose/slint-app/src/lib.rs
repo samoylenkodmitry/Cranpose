@@ -5,9 +5,11 @@
 use std::{fmt::Write, rc::Rc};
 
 use perf_data::{
-    AVATAR_COUNT, AVATAR_SIZE, CARD_ROWS_PER_CLUSTER, CHIP_BACKGROUND_RGB, GAUNTLET_SPARK_POINTS,
-    GRADIENT_END_RGB, GauntletRow, Launch, PALETTE_RGB, POST_COUNT, Post, avatar_rgba,
-    gauntlet_row, gauntlet_tier, posts, spark_value, tickers,
+    AVATAR_COUNT, AVATAR_SIZE, CARD_ROWS_PER_CLUSTER, CHIP_BACKGROUND_RGB, FrameIndex,
+    GAUNTLET_SPARK_POINTS, GRADIENT_END_RGB, GauntletRow, Launch, PALETTE_RGB, POST_COUNT, Post,
+    Scenario, WALL_CLOCK_HEIGHT, avatar_rgba, gauntlet_row, gauntlet_tier, posts, spark_value,
+    tickers, wall_clock, wall_dot_rgb, wall_dot_size, wall_fill_rgb, wall_grid, wall_label,
+    wall_padding, wall_text_size, wall_tier, wall_value,
 };
 use slint::{
     Color, ComponentHandle, Image, Model, ModelRc, ModelTracker, PlatformError, RenderingState,
@@ -119,6 +121,9 @@ fn spark_path(card: i32, frame: i32, width: f32, height: f32, area: bool) -> Sha
 /// Shows the gauntlet, in a window of `size` where the platform has
 /// windows, and advances its frame after every frame drawn.
 pub fn run(launch: Launch, size: Option<slint::LogicalSize>) -> Result<(), PlatformError> {
+    if launch.scenario == Scenario::Wall {
+        return run_wall(launch, size);
+    }
     let tier = gauntlet_tier(launch.tier);
     let window = GauntletWindow::new()?;
     if let Some(size) = size {
@@ -187,6 +192,56 @@ pub fn run(launch: Launch, size: Option<slint::LogicalSize>) -> Result<(), Platf
             }
             clock.set_frame(frame + 1);
             window.set_scroll(-((frame + 1) as f32) * SCROLL_PER_FRAME);
+        })
+        .map_err(|error| PlatformError::Other(format!("no rendering notifier: {error}")))?;
+    window.run()
+}
+
+/// Shows the still wall: the tiles that fit the window as a model made once,
+/// and after every frame drawn the next frame's clock.
+fn run_wall(launch: Launch, size: Option<slint::LogicalSize>) -> Result<(), PlatformError> {
+    let tier = wall_tier(launch.tier);
+    let window = WallWindow::new()?;
+    let size = size.unwrap_or_else(|| {
+        window
+            .window()
+            .size()
+            .to_logical(window.window().scale_factor())
+    });
+    window.window().set_size(size);
+    let (columns, rows) = wall_grid(tier, size.width, size.height - 56.0 - WALL_CLOCK_HEIGHT);
+    let tiles: Vec<WallTile> = (0..columns * rows)
+        .map(|index| WallTile {
+            label: wall_label(index).into(),
+            value: wall_value(index).into(),
+            fill: color(wall_fill_rgb(index)),
+            dot: color(wall_dot_rgb(index)),
+        })
+        .collect();
+    let (label_size, value_size) = wall_text_size(tier.tile_height);
+    window.set_tiles(ModelRc::new(VecModel::from(tiles)));
+    window.set_columns(columns as i32);
+    window.set_tile_width(tier.tile_width);
+    window.set_tile_height(tier.tile_height);
+    window.set_label_size(label_size);
+    window.set_value_size(value_size);
+    window.set_dot(wall_dot_size(tier.tile_height));
+    window.set_pad(wall_padding(tier.tile_height));
+    window.global::<WallClock>().set_text(wall_clock(0).into());
+    let weak = window.as_weak();
+    let mut frame = FrameIndex::new(launch.freeze);
+    window
+        .window()
+        .set_rendering_notifier(move |state, _| {
+            if !matches!(state, RenderingState::AfterRendering) {
+                return;
+            }
+            let Some(window) = weak.upgrade() else { return };
+            if frame.advance() {
+                let clock = window.global::<WallClock>();
+                clock.set_frame(frame.get() as i32);
+                clock.set_text(wall_clock(frame.get()).into());
+            }
         })
         .map_err(|error| PlatformError::Other(format!("no rendering notifier: {error}")))?;
     window.run()

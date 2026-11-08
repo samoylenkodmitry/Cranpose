@@ -18,7 +18,7 @@ crate-type = ["cdylib", "rlib"]
 # iced's default wgpu renderer, with the canvas for sparklines and the tilted
 # badge, images for avatars, and its text API to measure the badge. In a
 # browser wgpu falls back to WebGL where the browser has no WebGPU.
-iced = { version = "0.14", features = ["canvas", "image", "advanced", "webgl"] }
+iced = { version = "0.14", features = ["canvas", "image", "advanced", "webgl", "lazy"] }
 log = "0.4"
 perf-data = { path = "../perf-data" }
 

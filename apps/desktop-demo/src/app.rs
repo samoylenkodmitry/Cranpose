@@ -24,6 +24,7 @@ use cranpose_ui::{
 
 mod animations;
 mod backrooms;
+mod bench_tab;
 pub mod chrome_tabs;
 pub(crate) mod controls_ui;
 mod demo_tab;
@@ -34,7 +35,6 @@ mod documentation;
 pub mod flame_window;
 mod floating_input;
 mod floating_windows;
-mod gauntlet_tab;
 mod glass_feed;
 mod glass_tiles;
 mod guide_previews;

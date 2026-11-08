@@ -65,15 +65,11 @@ pub(crate) fn main() {
                 TabAxis::Vertical => span_y > root.3 - 40.0,
             };
 
-            let find_tab = |tabs: &TabBounds, label: &str| {
-                tabs.iter()
-                    .find(|(name, _)| name == label)
-                    .map(|(_, bounds)| *bounds)
-            };
-
+            // The drags start on a tab inside the window.
+            let start = cranpose_testing::last_reachable_tab(&initial_tabs, root, axis, 40.0);
             println!("\n--- Test 2: Drag Tabs Row (Should Scroll) ---");
             if overflow {
-                if let Some((x, y, w, h)) = find_tab(&initial_tabs, "Counter App") {
+                if let Some((_, (x, y, w, h))) = start {
                     let start_x = x + w / 2.0;
                     let start_y = y + h / 2.0;
                     let (end_x, end_y) = match axis {
@@ -89,7 +85,7 @@ pub(crate) fn main() {
                     }
                     std::thread::sleep(Duration::from_millis(500));
                 } else {
-                    println!("✗ Could not find 'Counter App' tab for drag start");
+                    println!("✗ Could not find a tab inside the window for drag start");
                     std::process::exit(1);
                 }
             } else {
@@ -140,7 +136,7 @@ pub(crate) fn main() {
 
             std::thread::sleep(Duration::from_millis(300));
             if overflow {
-                if let Some((x, y, w, h)) = find_tab(&after_drag_tabs, "Counter App") {
+                if let Some((x, y, w, h)) = start.and_then(|(label, _)| cranpose_testing::tab_bounds(&after_drag_tabs, label)) {
                     let start_x = x + w / 2.0;
                     let start_y = y + h / 2.0;
                     let (end_x, end_y) = match axis {
@@ -198,4 +194,3 @@ pub(crate) fn main() {
             app::combined_app_with_initial_tab(Some(app::DemoTab::Counter));
         });
 }
-type TabBounds = Vec<(String, (f32, f32, f32, f32))>;

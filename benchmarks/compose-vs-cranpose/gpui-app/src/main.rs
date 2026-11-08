@@ -19,6 +19,8 @@ use gpui::{
 };
 use perf_data::*;
 
+mod wall;
+
 /// Blocks of five card rows and a cluster: no measurement window reaches the end.
 const ROWS: usize = 2000 * (CARD_ROWS_PER_CLUSTER + 1);
 /// How far the list scrolls each frame, in logical pixels.
@@ -888,6 +890,10 @@ fn main() {
         };
         if let Err(error) = cx.text_system().add_fonts(fonts) {
             log::warn!("fonts not added: {error}");
+        }
+        if load.scenario == Scenario::Wall {
+            wall::open(load, cx);
+            return;
         }
         let (width, height) = perf_data::DESKTOP_WINDOW;
         let bounds = Bounds::centered(None, size(px(width as f32), px(height as f32)), cx);
