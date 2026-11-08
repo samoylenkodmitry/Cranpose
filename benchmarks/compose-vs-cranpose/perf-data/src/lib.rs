@@ -514,6 +514,22 @@ impl Scenario {
             _ => Self::Gauntlet,
         }
     }
+
+    /// The name `from_name` reads.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Gauntlet => "gauntlet",
+            Self::Wall => "wall",
+        }
+    }
+
+    /// The title of the screen's window and top bar.
+    pub fn title(self) -> &'static str {
+        match self {
+            Self::Gauntlet => "Gauntlet",
+            Self::Wall => "Still wall",
+        }
+    }
 }
 
 /// What `am start` asked of the gauntlet in an app without its own

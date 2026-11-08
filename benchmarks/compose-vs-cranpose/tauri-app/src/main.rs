@@ -1,5 +1,5 @@
-//! The gauntlet in Tauri: the page `web-app` draws, in a Tauri window on the
-//! system's WKWebView, the engine Safari runs. `desktop.py` serves the page,
+//! The gauntlet and the still wall in Tauri: the page `web-app` draws, in a
+//! Tauri window on the system's WKWebView, the engine Safari runs. `desktop.py` serves the page,
 //! as it does for Chrome, and passes its address as `--page=URL`. The page
 //! asks the app what `desktop.py` asked of it (`launch`) and writes its
 //! `PERF` lines through it (`log`), on standard output where `desktop.py`
@@ -8,11 +8,12 @@
 use serde::Serialize;
 use tauri::WebviewUrl;
 
-/// What `desktop.py` asked of the gauntlet, as the page reads it.
+/// What `desktop.py` asked of the page, as the page reads it.
 #[derive(Serialize)]
 struct Launch {
     tier: usize,
     freeze: u32,
+    scenario: &'static str,
 }
 
 #[tauri::command]
@@ -21,6 +22,7 @@ fn launch() -> Launch {
     Launch {
         tier: launch.tier,
         freeze: launch.freeze,
+        scenario: launch.scenario.name(),
     }
 }
 
@@ -37,12 +39,13 @@ fn main() {
         std::process::exit(2);
     };
     let (width, height) = perf_data::DESKTOP_WINDOW;
+    let title = perf_data::Launch::from_env().scenario.title();
     let result = tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![launch, log])
         .setup(move |app| {
             let url = WebviewUrl::External(page.parse()?);
             tauri::WebviewWindowBuilder::new(app, "gauntlet", url)
-                .title("Gauntlet")
+                .title(title)
                 .inner_size(f64::from(width), f64::from(height))
                 .resizable(false)
                 .build()?;
