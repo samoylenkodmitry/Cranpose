@@ -13,7 +13,7 @@ use cranpose_ui_graphics::{
 
 use super::{layer_shape::shape_clip, node_layer::isolation_reasons, text_node::TEXT_CLIP_PAD, *};
 use crate::graph::{
-    DrawRunNode, InlineNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, RenderNode,
+    DrawRunNode, InlineNode, LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, RenderNode,
     TextPrimitiveNode,
 };
 
@@ -340,7 +340,7 @@ fn build_layer_node_for_test(
             root,
         );
         store.finish_update();
-        crate::scene_store::export(&store, 0)
+        crate::scene_store::export(&store)
     })
 }
 

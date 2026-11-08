@@ -6,6 +6,7 @@ use std::{
     hash::{Hash, Hasher},
 };
 
+use cranpose_core::SceneUpdate;
 use cranpose_ui_graphics::FxHasher;
 
 use super::{ItemRef, LayerRef, RecordKind, SceneStore};
@@ -14,7 +15,8 @@ use crate::graph::{
     PrimitivePhase, RenderNode,
 };
 
-pub(crate) fn export(store: &SceneStore, update: u64) -> LayerNode {
+pub(crate) fn export(store: &SceneStore) -> LayerNode {
+    let update = u64::from(store.update().since(SceneUpdate::default()));
     store
         .root_layer()
         .map(|root| export_layer(root, update))

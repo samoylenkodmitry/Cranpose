@@ -23,4 +23,4 @@ pub(crate) use records::{
 };
 pub use records::{ReachState, RecordFlags, RecordKind};
 pub(crate) use slab::Slab;
-pub use store::{RecordSeed, SceneStore};
+pub use store::{RecordSeed, SceneStore, SceneVersion};

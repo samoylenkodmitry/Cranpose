@@ -729,8 +729,6 @@ impl DrawRunNode {
 /// The scene as a tree of layers that a renderer draws.
 #[derive(Clone)]
 pub struct RenderGraph {
-    /// How many scene updates the graph took: the number of the latest.
-    pub update: u64,
     // The records the scene builder writes; the root is exported from them.
     pub(crate) store: crate::scene_store::SceneStore,
     pub(crate) retained_path: Option<crate::scene_builder::RetainedPath>,
@@ -743,7 +741,15 @@ impl RenderGraph {
     pub fn new(root: &LayerNode) -> Self {
         Self {
             store: crate::scene_store::SceneStore::from_layer(root),
-            update: 0,
+            retained_path: None,
+            dirty_ancestry: crate::scene_builder::DirtyAncestry::default(),
+        }
+    }
+
+    // A graph with no records, for the scene builder to write.
+    pub(crate) fn empty() -> Self {
+        Self {
+            store: crate::scene_store::SceneStore::new(),
             retained_path: None,
             dirty_ancestry: crate::scene_builder::DirtyAncestry::default(),
         }
@@ -762,7 +768,7 @@ impl RenderGraph {
     /// The layer tree the graph's records describe, for tests and tools
     /// that read a scene as a tree.
     pub fn root(&self) -> LayerNode {
-        crate::scene_store::export(&self.store, self.update)
+        crate::scene_store::export(&self.store)
     }
 
     /// Number of records and draws in the graph: each record counts once

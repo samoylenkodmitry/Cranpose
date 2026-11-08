@@ -358,11 +358,11 @@ pub trait Renderer {
     /// Default implementation does nothing.
     fn draw_dev_overlay(&mut self, _overlay: &cranpose_ui::PreparedTextLayout, _viewport: Size) {}
 
-    /// Replaces the developer inspector graph outside the application scene.
+    /// Replaces the developer inspector layer drawn over the application scene.
     ///
     /// Passing `None` removes the inspector. Its primitives must not participate
     /// in application hit testing, layout, or accessibility.
-    fn set_inspector_overlay(&mut self, _graph: Option<graph::RenderGraph>) {}
+    fn set_inspector_overlay(&mut self, _overlay: Option<graph::LayerNode>) {}
 
     /// Tells the renderer that its app held still between the last frame and the next one: the
     /// shell asked the platform for no frame and no update. A renderer that compares frames to

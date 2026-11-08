@@ -2,7 +2,9 @@
 //! root through the layers above them, or along the way the last update
 //! took.
 
-use cranpose_core::{MemoryApplier, NodeId, NodeMarks, RecordId, collections::map::HashMap};
+use cranpose_core::{
+    MemoryApplier, NodeId, NodeMarks, RecordId, SceneUpdate, collections::map::HashMap,
+};
 use cranpose_ui::Point;
 
 use super::{
@@ -53,9 +55,9 @@ pub(super) fn walk_dirty_layers(
     store: &mut SceneStore,
     ancestry: &mut DirtyAncestry,
     dirty: &mut HashMap<NodeId, NodeUpdate>,
-    update: u64,
 ) -> Option<(ReplaceDirtyLayersReport, Option<RetainedPath>)> {
     let root = store.root()?;
+    let update = store.update();
     let root_layer = store.layer(root);
     let inherited = root_layer.translated_content_context();
     let root_children = AbsOrigin::ROOT.children_of(root_layer);
@@ -95,7 +97,7 @@ pub(crate) struct DirtyAncestry {
     marks: NodeMarks,
     // How many dirty nodes the marks hold.
     nodes: usize,
-    update: u64,
+    update: SceneUpdate,
 }
 
 impl DirtyAncestry {
@@ -103,8 +105,13 @@ impl DirtyAncestry {
     // unless the update before marked the same nodes: as many, each marked
     // dirty.
     #[inline]
-    fn mark(&mut self, applier: &MemoryApplier, dirty: &HashMap<NodeId, NodeUpdate>, update: u64) {
-        let kept = self.update + 1 == update
+    fn mark(
+        &mut self,
+        applier: &MemoryApplier,
+        dirty: &HashMap<NodeId, NodeUpdate>,
+        update: SceneUpdate,
+    ) {
+        let kept = self.update.next() == update
             && self.nodes == dirty.len()
             && dirty
                 .keys()
@@ -140,12 +147,17 @@ pub(crate) struct RetainedPath {
     pub(super) node: NodeId,
     pub(super) steps: Vec<(usize, Option<NodeId>)>,
     pub(super) pass: ParentPass,
-    pub(super) update: u64,
+    pub(super) update: SceneUpdate,
     pub(super) in_space: bool,
 }
 
 impl RetainedPath {
-    fn to(root: LayerRef<'_>, walk: &DirtyWalk<'_>, node: NodeId, update: u64) -> Option<Self> {
+    fn to(
+        root: LayerRef<'_>,
+        walk: &DirtyWalk<'_>,
+        node: NodeId,
+        update: SceneUpdate,
+    ) -> Option<Self> {
         let mut steps = Vec::new();
         let pass = path_steps(
             root,
@@ -218,10 +230,12 @@ pub(super) fn update_along_retained_path(
     store: &mut SceneStore,
     path: &RetainedPath,
     dirty: &mut HashMap<NodeId, NodeUpdate>,
-    update: u64,
 ) -> Option<Option<ReplaceDirtyLayersReport>> {
     let root = store.root()?;
-    if dirty.len() != 1 || path.update + 1 != update || !leads_to(store.layer(root), &path.steps) {
+    if dirty.len() != 1
+        || path.update.next() != store.update()
+        || !leads_to(store.layer(root), &path.steps)
+    {
         return None;
     }
     let kind = dirty.remove(&path.node)?;

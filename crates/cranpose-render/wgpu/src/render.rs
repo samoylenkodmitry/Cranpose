@@ -8,7 +8,7 @@ use std::{
 
 use bytemuck::{Pod, Zeroable};
 use cranpose_core::collections::{bounded_lru::BoundedLruCache, map::HashMap};
-use cranpose_render_common::{geometry::blur_reach, graph::quad_bounds};
+use cranpose_render_common::{geometry::blur_reach, graph::quad_bounds, scene_store::SceneVersion};
 use cranpose_ui_graphics::{
     BlendMode, FRAGMENT_KIND_ARC, ImageSampling, Point, RecordLane, Rect, RenderHash, TileMode,
 };
@@ -954,7 +954,7 @@ pub(crate) struct GpuRenderer {
     /// How many requested shader warm-ups this renderer has queued.
     shader_warm_ups_queued: usize,
     // The scene update of the frame drawn last.
-    drawn_scene_update: Option<u64>,
+    drawn_scene_update: Option<SceneVersion>,
 }
 
 /// What a frame clears to before it draws: nothing for a transparent

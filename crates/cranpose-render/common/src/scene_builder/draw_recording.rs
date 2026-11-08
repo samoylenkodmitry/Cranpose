@@ -438,5 +438,5 @@ pub fn draw_command_nodes_for_tests(
     store.set_items(root, &items);
     item_lists::give(items);
     store.finish_update();
-    crate::scene_store::export(&store, 0).children
+    crate::scene_store::export(&store).children
 }

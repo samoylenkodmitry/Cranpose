@@ -19,10 +19,10 @@ fn assert_inspector(renderer: &WgpuRenderer) {
 #[test]
 fn inspector_survives_fps_overlay_refresh_and_clearing() {
     let mut renderer = WgpuRenderer::new(&[]);
-    renderer.set_inspector_overlay(Some(RenderGraph::new(&LayerNode {
+    renderer.set_inspector_overlay(Some(LayerNode {
         node_id: Some(NodeId(123)),
         ..Default::default()
-    })));
+    }));
     assert_inspector(&renderer);
     let overlay = test_support::prepared_text("60 FPS");
     renderer.draw_dev_overlay(&overlay, Size::new(800.0, 600.0));

@@ -1,8 +1,8 @@
 use super::*;
 
-// The inspector's graph at `viewport`, its text laid out in an app context
+// The inspector's layer at `viewport`, its text laid out in an app context
 // as a frame lays it out.
-fn built(state: &mut InspectorState, viewport: Size) -> RenderGraph {
+fn built(state: &mut InspectorState, viewport: Size) -> LayerNode {
     cranpose_ui::AppContext::new().enter(|| build(state, viewport, Rect::from_size(viewport)))
 }
 
@@ -43,8 +43,8 @@ fn every_mode_has_a_distinct_graph_and_only_mode_has_opaque_background() {
         mode: InspectorMode::Accessibility,
         ..Default::default()
     };
-    let graph = built(&mut state, viewport);
-    let RenderNode::Primitive(entry) = &graph.root().children[0] else {
+    let layer = built(&mut state, viewport);
+    let RenderNode::Primitive(entry) = &layer.children[0] else {
         panic!("opaque background")
     };
     let PrimitiveNode::Draw(draw) = &entry.node else {

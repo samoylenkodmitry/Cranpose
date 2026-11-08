@@ -14,7 +14,7 @@ use cranpose_core::{MutableState, NodeId, location_key};
 use cranpose_liquid::{Glass, GlassSurface};
 use cranpose_render_common::{
     Renderer,
-    graph::{DrawCommandId, DrawRunNode, PrimitivePhase, RenderGraph, RenderNode},
+    graph::{DrawCommandId, DrawRunNode, LayerNode, PrimitivePhase, RenderGraph, RenderNode},
 };
 use cranpose_render_wgpu::{FrameDamage, RenderStatsSnapshot, WgpuRenderer};
 use cranpose_ui::{
@@ -1345,10 +1345,11 @@ fn page_with_dot(dot: Color) -> RenderGraph {
     )
 }
 
-fn overlay_graph() -> RenderGraph {
-    support::page_graph(
-        WIDTH,
-        HEIGHT,
+fn overlay_layer() -> LayerNode {
+    support::layer_node(
+        None,
+        WIDTH as f32,
+        HEIGHT as f32,
         vec![support::solid_rect(OVERLAY, Color(0.9, 0.9, 0.2, 1.0))],
     )
 }
@@ -1359,7 +1360,7 @@ fn overlay_graph() -> RenderGraph {
 fn overlay_frame(
     renderer: &mut support::LockedRenderer,
     images: &[Image; 2],
-    overlay: Option<RenderGraph>,
+    overlay: Option<LayerNode>,
     dot: Color,
 ) -> (FrameDamage, Vec<u8>, Vec<u8>) {
     renderer.set_inspector_overlay(overlay);
@@ -1401,9 +1402,9 @@ fn an_overlay_appearing_and_going() {
     let overlay = around(rect_array(OVERLAY), 8.0);
     let dot = around(rect_array(DOT), 8.0);
     let frames = [
-        (Some(overlay_graph()), red, overlay, "overlay shown"),
+        (Some(overlay_layer()), red, overlay, "overlay shown"),
         (
-            Some(overlay_graph()),
+            Some(overlay_layer()),
             Color::WHITE,
             dot,
             "page changed under it",

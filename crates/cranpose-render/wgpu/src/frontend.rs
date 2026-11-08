@@ -1,7 +1,9 @@
 use std::rc::Weak;
 
 use cranpose_render_common::{
-    dev_overlay::DevOverlayKey, graph::RenderGraph, text_fonts::TextFonts,
+    dev_overlay::DevOverlayKey,
+    graph::{LayerNode, RenderGraph, RenderNode},
+    text_fonts::TextFonts,
 };
 use web_time::Instant;
 
@@ -22,8 +24,8 @@ pub(crate) struct RendererFrontend {
     pub(crate) root_scale: f32,
     pub(crate) dev_overlay_cache: Option<DevOverlayKey>,
     pub(crate) dev_overlay_graph: Option<RenderGraph>,
-    pub(crate) fps_overlay_graph: Option<RenderGraph>,
-    pub(crate) inspector_overlay_graph: Option<RenderGraph>,
+    pub(crate) fps_overlay: Option<LayerNode>,
+    pub(crate) inspector_overlay: Option<LayerNode>,
     pub(crate) root_scene_capacity: SceneCapacityHint,
     scene_recyclers: [LayerSceneRecycler; MAX_FRAMES_IN_FLIGHT],
     returned_scenes: usize,
@@ -34,33 +36,34 @@ pub(crate) struct RendererFrontend {
     pub(crate) held_still: bool,
     // Whether a pointer is held for the next packet's frame.
     pub(crate) pointer_held: bool,
-    // The packet a surface did not show yet, kept by `keep_packet` with the
-    // scene update it was built from, for the frame drawn next.
-    kept_packet: Option<(u64, FramePacket)>,
+    // The packet a surface did not show yet, kept by `keep_packet` for the
+    // frame drawn next.
+    kept_packet: Option<FramePacket>,
 }
 
 impl RendererFrontend {
     pub(crate) fn refresh_dev_overlay(&mut self) {
-        if let Some((_, packet)) = self.kept_packet.take() {
+        if let Some(packet) = self.kept_packet.take() {
             self.recycle(packet);
         }
-        self.dev_overlay_graph = self.fps_overlay_graph.clone();
-        if let Some(inspector) = &self.inspector_overlay_graph {
-            let mut root = self
-                .dev_overlay_graph
-                .take()
-                .map(|graph| graph.root())
-                .unwrap_or_default();
-            root.children
-                .push(cranpose_render_common::graph::RenderNode::Layer(Box::new(
-                    inspector.root(),
-                )));
-            self.dev_overlay_graph = Some(RenderGraph::new(&root));
+        let Some(inspector) = self.inspector_overlay.take() else {
+            self.dev_overlay_graph = self.fps_overlay.as_ref().map(RenderGraph::new);
+            return;
+        };
+        // The inspector draws over the frame counter, as the last child of
+        // its root: it moves in for the write and back out after.
+        let had_fps = self.fps_overlay.is_some();
+        let mut root = self.fps_overlay.take().unwrap_or_default();
+        root.children.push(RenderNode::Layer(Box::new(inspector)));
+        self.dev_overlay_graph = Some(RenderGraph::new(&root));
+        if let Some(RenderNode::Layer(inspector)) = root.children.pop() {
+            self.inspector_overlay = Some(*inspector);
         }
+        self.fps_overlay = had_fps.then_some(root);
     }
 
     pub(crate) fn clear_fps_overlay(&mut self) {
-        self.fps_overlay_graph = None;
+        self.fps_overlay = None;
         self.dev_overlay_cache = None;
         self.refresh_dev_overlay();
     }
@@ -72,8 +75,8 @@ impl RendererFrontend {
             root_scale: 1.0,
             dev_overlay_cache: None,
             dev_overlay_graph: None,
-            fps_overlay_graph: None,
-            inspector_overlay_graph: None,
+            fps_overlay: None,
+            inspector_overlay: None,
             root_scene_capacity: SceneCapacityHint::default(),
             scene_recyclers: std::array::from_fn(|_| LayerSceneRecycler::default()),
             returned_scenes: 0,
@@ -172,7 +175,7 @@ impl RendererFrontend {
             clear: frame_clear_color(self.transparent_background),
             held_still: std::mem::take(&mut self.held_still),
             pointer_held: std::mem::take(&mut self.pointer_held),
-            scene_update: graph.update,
+            scene_update: graph.store().version(),
         };
         let after_build = Instant::now();
         if let Some(total_ms) = should_log_wgpu_render_stage(build_start, after_build) {
@@ -194,9 +197,9 @@ impl RendererFrontend {
         renderer_epoch: u64,
         surface_epoch: u64,
     ) -> Option<FramePacket> {
-        let update = self.scene.graph.as_ref()?.update;
-        if let Some((built_at, packet)) = self.kept_packet.take() {
-            if built_at == update
+        let version = self.scene.graph.as_ref()?.store().version();
+        if let Some(packet) = self.kept_packet.take() {
+            if packet.scene_update == version
                 && packet.viewport == (width, height)
                 && (packet.renderer_epoch, packet.surface_epoch) == (renderer_epoch, surface_epoch)
                 && packet.root_scale.to_bits() == self.root_scale.to_bits()
@@ -211,8 +214,7 @@ impl RendererFrontend {
 
     // Keeps `packet`, which no surface showed yet, for the next `take_packet`.
     pub(crate) fn keep_packet(&mut self, packet: FramePacket) {
-        let update = self.scene.graph.as_ref().map_or(0, |graph| graph.update);
-        self.kept_packet = Some((update, packet));
+        self.kept_packet = Some(packet);
     }
 
     // Gives the scene of a packet nothing drew back to the recyclers.

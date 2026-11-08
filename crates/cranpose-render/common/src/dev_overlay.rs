@@ -5,7 +5,7 @@ use cranpose_ui_graphics::{Brush, Color, CornerRadii, DrawPrimitive, Rect, Size}
 
 use crate::graph::{
     DrawPrimitiveNode, LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase,
-    ProjectiveTransform, RenderGraph, RenderNode, TextPrimitiveNode,
+    ProjectiveTransform, RenderNode, TextPrimitiveNode,
 };
 
 /// Cache key for the last-built overlay; rebuilding only on change keeps the
@@ -31,13 +31,13 @@ impl DevOverlayKey {
     }
 }
 
-/// Build the dev-overlay graph: a translucent pill with the stats text, laid
-/// out in `overlay`, in the top-right corner.
-pub fn build_dev_overlay_graph(
+/// Build the dev-overlay layer: a translucent pill with the stats text, laid
+/// out in `overlay`, in the top-right corner of `viewport`.
+pub fn build_dev_overlay_layer(
     overlay: &cranpose_ui::PreparedTextLayout,
     viewport: Size,
     node_id: cranpose_core::NodeId,
-) -> RenderGraph {
+) -> LayerNode {
     let padding = 8.0;
     let Size {
         width: text_width,
@@ -96,9 +96,9 @@ pub fn build_dev_overlay_graph(
         ],
         ..Default::default()
     };
-    RenderGraph::new(&LayerNode {
+    LayerNode {
         local_bounds: Rect::from_size(viewport),
         children: vec![RenderNode::Layer(Box::new(overlay_layer))],
         ..Default::default()
-    })
+    }
 }

@@ -35,6 +35,13 @@ pub struct SceneStore {
     update: SceneUpdate,
 }
 
+/// One state of one store: what it held after one of its updates.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SceneVersion {
+    store: StoreId,
+    update: SceneUpdate,
+}
+
 /// What a new record starts as.
 #[derive(Clone, Copy, Debug)]
 pub struct RecordSeed {
@@ -87,6 +94,14 @@ impl SceneStore {
     /// The store's identity among the renderers' stores.
     pub fn id(&self) -> StoreId {
         self.id
+    }
+
+    /// The store's identity and latest update.
+    pub fn version(&self) -> SceneVersion {
+        SceneVersion {
+            store: self.id,
+            update: self.update,
+        }
     }
 
     /// The root record, `None` before the first build.

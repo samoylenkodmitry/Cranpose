@@ -6,7 +6,7 @@ use cranpose_ui_graphics::GraphicsLayer;
 
 use crate::{
     NodeUpdate, SceneUpdates,
-    graph::{LayerNode, ProjectiveTransform, RenderGraph},
+    graph::{ProjectiveTransform, RenderGraph},
     layer_transform::layer_transform_to_parent,
     scene_store::{Item, LayerRef, RecordFlags, RecordKind, SceneStore},
 };
@@ -167,7 +167,7 @@ fn lowered_layer_count() -> usize {
 pub fn build_graph_from_layout_tree(root: &LayoutBox, _scale: f32) -> RenderGraph {
     bump_recording_generation();
     let root_snapshot = layout_box_to_snapshot(root, None);
-    let mut graph = RenderGraph::new(&LayerNode::default());
+    let mut graph = RenderGraph::empty();
     graph.store.begin_update();
     let record = root_record(&mut graph.store, root_snapshot.node_id);
     write_snapshot_layer(&mut graph.store, root_snapshot, LowerContext::ROOT, record);
@@ -183,7 +183,7 @@ pub fn build_graph_from_applier(
     _scale: f32,
 ) -> Option<RenderGraph> {
     bump_recording_generation();
-    let mut graph = RenderGraph::new(&LayerNode::default());
+    let mut graph = RenderGraph::empty();
     graph.store.begin_update();
     lower_root_into(applier, &mut graph.store, root).then(|| {
         graph.refresh_from_store();
@@ -207,7 +207,6 @@ pub fn rebuild_graph_from_applier(
             }
             bump_recording_generation();
             graph.retained_path = None;
-            graph.update += 1;
             lower_root_into(applier, &mut graph.store, root).then(|| {
                 if let Some(record) = graph.store.root() {
                     graph.store.note_content_change(record);
@@ -294,9 +293,7 @@ fn update_graph_from_applier_report_inner(
         return GraphUpdateReport::patched(GraphChanges::default());
     }
     bump_recording_generation();
-    graph.update += 1;
     graph.store.begin_update();
-    let update = graph.update;
 
     if cranpose_core::DIAGNOSTICS.scene_update_diag.is_set() {
         eprintln!("[scene-update-diag] dirty={updates:?}");
@@ -306,7 +303,7 @@ fn update_graph_from_applier_report_inner(
     let mut remaining_dirty_nodes =
         crate::thread_state::with(|state| state.dirty_node_scratch.take()).unwrap_or_default();
     let merged = dirty_node_updates(updates, &mut remaining_dirty_nodes);
-    let mut report = update_dirty_nodes(applier, graph, &mut remaining_dirty_nodes, update);
+    let mut report = update_dirty_nodes(applier, graph, &mut remaining_dirty_nodes);
     report.layers_moved |= merged.contains(GraphChanges::Moves);
     remaining_dirty_nodes.clear();
     crate::thread_state::with(|state| state.dirty_node_scratch.set(Some(remaining_dirty_nodes)));
@@ -317,13 +314,11 @@ fn update_dirty_nodes(
     applier: &MemoryApplier,
     graph: &mut RenderGraph,
     remaining_dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
-    update: u64,
 ) -> GraphUpdateReport {
     let RenderGraph {
         store,
         retained_path,
         dirty_ancestry,
-        ..
     } = graph;
     let Some(root) = store.root() else {
         return GraphUpdateReport::needs_rebuild(GraphRebuildReason::RootLayerUnavailable);
@@ -348,14 +343,8 @@ fn update_dirty_nodes(
             if remaining_dirty_nodes.is_empty() {
                 return GraphUpdateReport::patched(changes);
             }
-            let walked = walk_dirty_layers(
-                applier,
-                store,
-                dirty_ancestry,
-                remaining_dirty_nodes,
-                update,
-            )
-            .map(|(report, _)| report);
+            let walked = walk_dirty_layers(applier, store, dirty_ancestry, remaining_dirty_nodes)
+                .map(|(report, _)| report);
             changes |= walked.map_or(GraphChanges::HitsAndMoves, |report| report.changes);
             return GraphUpdateReport {
                 update: classify_walk(applier, walked.is_some(), remaining_dirty_nodes),
@@ -378,10 +367,13 @@ fn update_dirty_nodes(
     // layers on it, so only one that does keeps it.
     if let Some(path) = retained_path.take()
         && let Some(report) =
-            update_along_retained_path(applier, store, &path, remaining_dirty_nodes, update)
+            update_along_retained_path(applier, store, &path, remaining_dirty_nodes)
     {
         if report.is_some() {
-            *retained_path = Some(RetainedPath { update, ..path });
+            *retained_path = Some(RetainedPath {
+                update: store.update(),
+                ..path
+            });
         }
         return match report {
             Some(report) => GraphUpdateReport::patched(report.changes),
@@ -389,13 +381,9 @@ fn update_dirty_nodes(
         };
     }
 
-    let Some((report, path)) = walk_dirty_layers(
-        applier,
-        store,
-        dirty_ancestry,
-        remaining_dirty_nodes,
-        update,
-    ) else {
+    let Some((report, path)) =
+        walk_dirty_layers(applier, store, dirty_ancestry, remaining_dirty_nodes)
+    else {
         return GraphUpdateReport::needs_rebuild(GraphRebuildReason::DirtyLayerUnavailable);
     };
     *retained_path = path;

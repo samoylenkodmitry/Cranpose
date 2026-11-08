@@ -57,6 +57,7 @@ mod held_images;
 mod in_place_layers;
 mod initial_present_contract;
 mod instant_draws;
+mod kept_frames;
 mod layer_effect_cache;
 mod line_coverage;
 mod liquid_control_tone;

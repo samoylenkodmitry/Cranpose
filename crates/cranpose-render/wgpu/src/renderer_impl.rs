@@ -1,5 +1,5 @@
 use cranpose_core::{MemoryApplier, NodeId};
-use cranpose_render_common::{RenderScene, Renderer, graph::RenderGraph, text_fonts::TextFonts};
+use cranpose_render_common::{RenderScene, Renderer, graph::LayerNode, text_fonts::TextFonts};
 use cranpose_ui::LayoutTree;
 use cranpose_ui_graphics::Size;
 
@@ -95,8 +95,8 @@ impl Renderer for WgpuRenderer {
         {
             return;
         }
-        self.frontend.fps_overlay_graph = Some(
-            cranpose_render_common::dev_overlay::build_dev_overlay_graph(
+        self.frontend.fps_overlay = Some(
+            cranpose_render_common::dev_overlay::build_dev_overlay_layer(
                 overlay,
                 viewport,
                 DEV_OVERLAY_NODE_ID,
@@ -126,8 +126,8 @@ impl Renderer for WgpuRenderer {
             .build_while_idle(&renderer.device, &renderer.queue)
     }
 
-    fn set_inspector_overlay(&mut self, graph: Option<RenderGraph>) {
-        self.frontend.inspector_overlay_graph = graph;
+    fn set_inspector_overlay(&mut self, overlay: Option<LayerNode>) {
+        self.frontend.inspector_overlay = overlay;
         self.frontend.refresh_dev_overlay();
     }
 

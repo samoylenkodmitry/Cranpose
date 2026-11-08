@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use cranpose_core::NodeId;
 use cranpose_render_common::graph::{
-    DrawPrimitiveNode, LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, RenderGraph,
-    RenderNode, TextPrimitiveNode,
+    DrawPrimitiveNode, LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, RenderNode,
+    TextPrimitiveNode,
 };
 use cranpose_ui::{TextLayoutOptions, TextOverflow, TextStyle};
 use cranpose_ui_graphics::{Brush, Color, CornerRadii, DrawPrimitive, Point, Rect, Size, Stroke};
@@ -140,18 +140,18 @@ impl Canvas {
         state.controls.push(InspectorControl { action, bounds });
     }
 
-    fn finish(self) -> RenderGraph {
-        RenderGraph::new(&LayerNode {
+    fn finish(self) -> LayerNode {
+        LayerNode {
             local_bounds: self.viewport,
             children: self.children,
             ..Default::default()
-        })
+        }
     }
 }
 
 /// The inspector over a window of `viewport`, its controls inside `area`.
 #[inline(never)]
-pub(super) fn build(state: &mut InspectorState, viewport: Size, area: Rect) -> RenderGraph {
+pub(super) fn build(state: &mut InspectorState, viewport: Size, area: Rect) -> LayerNode {
     state.controls.clear();
     let mut canvas = Canvas {
         children: Vec::new(),

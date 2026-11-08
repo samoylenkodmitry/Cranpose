@@ -1,3 +1,5 @@
+use cranpose_render_common::scene_store::SceneVersion;
+
 use crate::{
     collect::{ChildLayer, LayerScene},
     scene::{
@@ -66,13 +68,13 @@ pub(crate) struct FramePacket {
     pub(crate) pointer_held: bool,
     // The scene update the packet was collected from: a frame drawn from the
     // update the frame before drew shows nothing new of the app's.
-    pub(crate) scene_update: u64,
+    pub(crate) scene_update: SceneVersion,
 }
 
 impl FramePacket {
     // How the packet's scene moved since the frame that drew `drawn`, the
     // scene update before.
-    pub(crate) fn scene_motion(&self, drawn: Option<u64>) -> SceneMotion {
+    pub(crate) fn scene_motion(&self, drawn: Option<SceneVersion>) -> SceneMotion {
         if self.pointer_held {
             SceneMotion::Held
         } else if drawn == Some(self.scene_update) {

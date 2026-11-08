@@ -136,14 +136,14 @@ fn subpixel_scene(edge_x: f32, alpha: f32) -> RenderGraph {
     })
 }
 
-fn inspector_glass(cache_policy: CachePolicy) -> RenderGraph {
+fn inspector_glass(cache_policy: CachePolicy) -> LayerNode {
     let bounds = Rect {
         x: 16.0,
         y: 12.0,
         width: 56.0,
         height: 48.0,
     };
-    RenderGraph::new(&LayerNode {
+    LayerNode {
         local_bounds: CONTENT,
         children: vec![RenderNode::Layer(Box::new(LayerNode {
             node_id: Some(NodeId(71)),
@@ -158,7 +158,7 @@ fn inspector_glass(cache_policy: CachePolicy) -> RenderGraph {
             ..LayerNode::default()
         }))],
         ..LayerNode::default()
-    })
+    }
 }
 
 fn painted_page(color: Color) -> RenderGraph {
