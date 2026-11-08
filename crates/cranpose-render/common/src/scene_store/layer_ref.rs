@@ -6,7 +6,7 @@ use cranpose_core::{NodeId, RecordId, RecordRef, SceneUpdate, StoreId};
 use cranpose_ui::{GraphicsLayer, Point, Rect, RenderEffect, Size};
 use cranpose_ui_graphics::{BlendMode, ColorFilter, DrawPrimitive};
 
-use super::{Item, ItemKind, LayerProps, RecordFlags, RecordKind, SceneStore};
+use super::{Extent, Item, ItemKind, LayerProps, Reach, RecordFlags, RecordKind, SceneStore};
 use crate::{
     graph::{
         CachePolicy, DrawPrimitiveNode, DrawRunNode, HitTestNode, IsolationReasons, PrimitivePhase,
@@ -212,6 +212,21 @@ impl<'a> LayerRef<'a> {
     /// or a 3D transform.
     pub fn has_space(self) -> bool {
         self.flags().contains(RecordFlags::HAS_SPACE)
+    }
+
+    /// Where the record's subtree draws, in its own space: what its items
+    /// draw and its children's extents, within its clip. A change beneath
+    /// the record since [`SceneStore::refresh_reach`] leaves it unknown.
+    pub fn reach(self) -> Reach {
+        if self.flags().contains(RecordFlags::REACH_STALE) {
+            return Reach::Unknown;
+        }
+        self.store.reach(self.id.index())
+    }
+
+    /// What the record draws in its parent's space.
+    pub fn extent(self) -> Extent {
+        super::reach::extent(self)
     }
 
     /// Whether everything the record's subtree draws lies within its local

@@ -15,6 +15,7 @@ mod multilingual_text;
 mod recording_reuse;
 mod scaling_list_scene;
 mod scene_journal;
+mod scene_reach;
 mod size_updates;
 mod space_frames;
 mod surface_layer_bounds;

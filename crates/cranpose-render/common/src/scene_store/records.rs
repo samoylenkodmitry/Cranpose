@@ -25,19 +25,13 @@ pub enum RecordKind {
     Leaf,
 }
 
-/// Whether a record's reach is known.
+// Which reach a record's rect stands for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
-pub enum ReachState {
-    /// The subtree draws nothing.
+pub(crate) enum ReachState {
     Empty,
-    /// The subtree draws within the record's reach.
     Finite,
-    /// The subtree may draw anywhere: paint whose bounds are not known, or a
-    /// projection that reaches the eye plane.
     Unknown,
-    /// A change beneath the record left its reach to be worked out again.
-    Stale,
 }
 
 /// Facts about a record that its walks branch on.
@@ -80,12 +74,18 @@ impl RecordFlags {
     pub const HAS_LAYER_BOUNDS: Self = Self(1 << 10);
     // The update changed what the record's facts follow from.
     pub(crate) const FACTS_STALE: Self = Self(1 << 11);
+    // A change beneath the record left its reach to be worked out again.
+    pub(crate) const REACH_STALE: Self = Self(1 << 12);
     // The facts the store works out at the end of an update.
     pub(crate) const FACTS: Self =
         Self(Self::HAS_HIT_TARGETS.0 | Self::HAS_SPACE.0 | Self::CONTAINED.0);
     // The flags the store keeps itself, which `SceneStore::set_flags` leaves.
     pub(crate) const STORE_KEPT: Self = Self(
-        Self::FACTS.0 | Self::HAS_GRAPHICS_LAYER.0 | Self::HAS_LAYER_BOUNDS.0 | Self::FACTS_STALE.0,
+        Self::FACTS.0
+            | Self::HAS_GRAPHICS_LAYER.0
+            | Self::HAS_LAYER_BOUNDS.0
+            | Self::FACTS_STALE.0
+            | Self::REACH_STALE.0,
     );
 
     /// Whether every flag of `other` is set.

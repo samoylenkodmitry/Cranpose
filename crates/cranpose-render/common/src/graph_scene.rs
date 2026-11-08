@@ -621,6 +621,12 @@ impl Scene {
         &self.store
     }
 
+    /// Works out the reach of the records a change left stale; see
+    /// [`SceneStore::refresh_reach`].
+    pub fn refresh_reach(&mut self) {
+        self.store.refresh_reach();
+    }
+
     /// The root record, `None` while the scene is empty.
     pub fn root_layer(&self) -> Option<LayerRef<'_>> {
         self.store.root_layer()

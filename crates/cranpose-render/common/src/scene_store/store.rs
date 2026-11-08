@@ -9,7 +9,7 @@ use cranpose_ui::{GraphicsLayer, Point, Rect};
 
 use super::{
     GeoRecord, GraphicsLayerId, Item, ItemKind, ItemPool, ItemRef, ItemSpan, Journal,
-    JournalCursor, JournalEntry, JournalRead, LayerProps, LayerRef, PropsId, ReachState,
+    JournalCursor, JournalEntry, JournalRead, LayerProps, LayerRef, PropsId, Reach, ReachState,
     RecordEvent, RecordEvents, RecordFlags, RecordKind, Slab, TransformId, TreeRecord, WarmRecord,
 };
 use crate::graph::{
@@ -177,6 +177,25 @@ impl SceneStore {
         super::facts::refresh(self);
     }
 
+    // The reach of the record at `index`.
+    pub(super) fn reach(&self, index: usize) -> Reach {
+        match self.tree[index].reach_state {
+            ReachState::Empty => Reach::Empty,
+            ReachState::Finite => Reach::Finite(self.geo[index].reach),
+            ReachState::Unknown => Reach::Unknown,
+        }
+    }
+
+    pub(super) fn set_reach(&mut self, index: usize, reach: Reach) {
+        let (state, rect) = match reach {
+            Reach::Empty => (ReachState::Empty, Rect::default()),
+            Reach::Finite(rect) => (ReachState::Finite, rect),
+            Reach::Unknown => (ReachState::Unknown, Rect::default()),
+        };
+        self.tree[index].reach_state = state;
+        self.geo[index].reach = rect;
+    }
+
     // Leaves the facts of the record at `index` to be worked out at the end
     // of the update.
     pub(super) fn stale(&mut self, index: usize) {
@@ -185,6 +204,29 @@ impl SceneStore {
             *flags = flags.with(RecordFlags::FACTS_STALE);
             self.facts_stale
                 .push(RecordId::from_index(index).expect("a row is a record"));
+        }
+        self.reach_stale(index);
+    }
+
+    // Leaves the reach of the record at `index` and of its ancestors to be
+    // worked out again, stopping at the first that waits for it already.
+    fn reach_stale(&mut self, index: usize) {
+        let mut current = Some(index);
+        while let Some(index) = current {
+            let flags = &mut self.tree[index].flags;
+            if flags.contains(RecordFlags::REACH_STALE) {
+                break;
+            }
+            *flags = flags.with(RecordFlags::REACH_STALE);
+            current = self.tree[index].parent.map(RecordId::index);
+        }
+    }
+
+    /// Works out the reach of every record whose reach a change beneath it
+    /// left to be worked out again, as [`LayerRef::reach`] reads it.
+    pub fn refresh_reach(&mut self) {
+        if let Some(root) = self.root {
+            super::reach::refresh(self, root);
         }
     }
 
@@ -306,7 +348,7 @@ impl SceneStore {
             parent: seed.parent,
             items: ItemSpan::default(),
             kind: seed.kind,
-            reach_state: ReachState::Stale,
+            reach_state: ReachState::Empty,
             flags: RecordFlags::default(),
             content_rev: update,
             place_rev: update,
@@ -810,7 +852,6 @@ impl SceneStore {
         let tree = &mut self.tree[index];
         tree.content_rev = update;
         tree.subtree_rev = update;
-        tree.reach_state = ReachState::Stale;
         let parent = tree.parent;
         if let Some(props) = self.warm[index].props {
             self.props[props.index()].cache_hashes.set(None);
@@ -830,8 +871,8 @@ impl SceneStore {
     }
 
     // Raises the subtree revision of `from` and its ancestors to the update
-    // in progress, and leaves their reach and hashes to be worked out again,
-    // stopping at the first ancestor that holds the update already.
+    // in progress, and leaves their hashes to be worked out again, stopping
+    // at the first ancestor that holds the update already.
     fn note_subtree_change(&mut self, from: Option<RecordId>) {
         let update = self.update;
         let mut current = from;
@@ -842,7 +883,6 @@ impl SceneStore {
                 break;
             }
             tree.subtree_rev = update;
-            tree.reach_state = ReachState::Stale;
             current = tree.parent;
             if let Some(props) = self.warm[index].props {
                 let props = &mut self.props[props.index()];
@@ -881,15 +921,21 @@ fn facts_inputs(props: &LayerProps) -> (bool, bool, Option<[u32; 4]>) {
     )
 }
 
-// What of a graphics layer its record's facts and its parent's follow from:
-// a clip, a shadow, an effect or a space, which a layer that only moves
-// leaves alone.
-fn layer_facts_inputs(layer: &GraphicsLayer) -> (bool, bool, bool, bool, bool) {
+// What of a graphics layer its record's facts and reach and its parent's
+// follow from: a clip, a shadow, how far an effect or a backdrop reaches past
+// the layer, or a space, which a layer that only moves leaves alone.
+fn layer_facts_inputs(layer: &GraphicsLayer) -> (bool, bool, Option<u32>, Option<u32>, bool) {
     (
         layer.clip,
         layer.shadow_elevation > 0.0,
-        layer.render_effect.is_some(),
-        layer.backdrop_effect.is_some(),
+        layer
+            .render_effect
+            .as_ref()
+            .map(|effect| (effect.input_padding() + effect.output_padding()).to_bits()),
+        layer
+            .backdrop_effect
+            .as_ref()
+            .map(|backdrop| backdrop.output_padding().to_bits()),
         layer.space.is_some(),
     )
 }

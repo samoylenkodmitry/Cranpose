@@ -8,6 +8,7 @@ mod items;
 mod journal;
 mod layer_props;
 mod layer_ref;
+mod reach;
 mod records;
 mod slab;
 mod spec;
@@ -19,9 +20,10 @@ use journal::Journal;
 pub use journal::{JournalCursor, JournalEntry, JournalRead, RecordEvent, RecordEvents};
 pub use layer_props::LayerProps;
 pub use layer_ref::{ItemRef, LayerRef, RecordChange};
+pub use reach::{Extent, Reach, ShadowCaster};
 pub(crate) use records::{
-    GeoRecord, GraphicsLayerId, PropsId, TransformId, TreeRecord, WarmRecord,
+    GeoRecord, GraphicsLayerId, PropsId, ReachState, TransformId, TreeRecord, WarmRecord,
 };
-pub use records::{ReachState, RecordFlags, RecordKind};
+pub use records::{RecordFlags, RecordKind};
 pub(crate) use slab::Slab;
 pub use store::{RecordSeed, SceneStore, SceneVersion};
