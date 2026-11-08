@@ -5,7 +5,7 @@ use std::{
 
 use cranpose_core::NodeId;
 use cranpose_ui::{
-    GraphicsLayer, ModifierNodeSlices, Point, Rect, TextOverflow, TextStyle,
+    GraphicsLayer, ModifierNodeSlices, Point, Rect, Size, TextOverflow, TextStyle,
     text::{AnnotatedString, RenderString},
 };
 pub use cranpose_ui_graphics::transform::{FrontPolygon, ProjectiveTransform, quad_bounds};
@@ -240,14 +240,15 @@ pub struct LayerNode {
     /// address the node through this id because the node's layer has none of the
     /// outer draws and the wrapper has no node id of its own.
     pub wraps: Option<NodeId>,
+    /// The node's size. Its rect, `(0, 0, size)`, is where its pointer
+    /// handlers are and where its draws and children are placed from.
+    pub size: Size,
     /// The bounds of the node's layer, where its clip cuts, its transforms
-    /// pivot and an offscreen pass draws it.
-    pub local_bounds: Rect,
-    /// The node's own rect, `(0, 0, size)`, where its pointer handlers are,
-    /// when it differs from `local_bounds`: a clip or graphics layer that
-    /// wraps a coordinator a later padding or offset moves bounds the layer
-    /// there instead, as in Compose. `None` when the two agree.
-    pub node_bounds: Option<Rect>,
+    /// pivot and an offscreen pass draws it, when they differ from the
+    /// node's rect: a clip or graphics layer that wraps a coordinator a later
+    /// padding or offset moves bounds the layer there, as in Compose. `None`
+    /// when the layer bounds are the node's rect.
+    pub layer_bounds: Option<Rect>,
     /// Maps the layer's local space to its parent's content space, with the placement, the graphics
     /// layer transform and the parent's content offset applied.
     pub transform_to_parent: ProjectiveTransform,
@@ -269,7 +270,7 @@ pub struct LayerNode {
     pub origin_in_parent: Point,
     /// The graphics layer properties; they read as defaults when none were set.
     pub graphics_layer: LayerProperties,
-    /// Whether the layer cuts its content to `local_bounds`.
+    /// Whether the layer cuts its content to its layer bounds.
     pub clip_to_bounds: bool,
     /// Pointer handling of the node, or `None` when the node has none.
     pub hit_test: Option<HitTestNode>,
@@ -296,13 +297,8 @@ impl Default for LayerNode {
         Self {
             node_id: None,
             wraps: None,
-            local_bounds: Rect {
-                x: 0.0,
-                y: 0.0,
-                width: 0.0,
-                height: 0.0,
-            },
-            node_bounds: None,
+            size: Size::default(),
+            layer_bounds: None,
             transform_to_parent: ProjectiveTransform::identity(),
             content_offset: Point::default(),
             motion_context_animated: false,

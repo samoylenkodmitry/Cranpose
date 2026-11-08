@@ -8,7 +8,7 @@ use cranpose_render_common::{
 };
 use cranpose_render_wgpu::CapturedFrame;
 use cranpose_ui_graphics::{
-    BlendMode, Brush, Color, DrawPrimitive, GraphicsLayer, Rect, ShadowPrimitive,
+    BlendMode, Brush, Color, DrawPrimitive, GraphicsLayer, Rect, ShadowPrimitive, Size,
 };
 use support::{ReferenceEdge, region_pixels, solid_rect};
 
@@ -77,7 +77,7 @@ fn disjoint_inner_shadow_graph(recorded: bool, include_shadow: bool) -> LayerNod
         }
     }
     let clipped_layer = LayerNode {
-        local_bounds: rect(0.0, 0.0, 40.0, FRAME as f32),
+        size: Size::new(40.0, FRAME as f32),
         transform_to_parent: ProjectiveTransform::identity(),
         graphics_layer: GraphicsLayer {
             clip: true,
@@ -123,13 +123,13 @@ fn clipped_offscreen_shadow_graph(recorded: bool) -> LayerNode {
         })
     };
     let child = LayerNode {
-        local_bounds: rect(0.0, 0.0, 20.0, 20.0),
+        size: Size::new(20.0, 20.0),
         transform_to_parent: ProjectiveTransform::translation(52.0, 25.0),
         children: vec![draw],
         ..LayerNode::default()
     };
     let clipped_parent = LayerNode {
-        local_bounds: rect(0.0, 0.0, 50.0, FRAME as f32),
+        size: Size::new(50.0, FRAME as f32),
         graphics_layer: GraphicsLayer {
             clip: true,
             ..GraphicsLayer::default()

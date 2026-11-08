@@ -43,7 +43,8 @@ fn graph_for(record: fn(&mut DrawScopeDefault), clip: Option<Rect>) -> LayerNode
         ))],
     };
     LayerNode {
-        local_bounds: bounds,
+        size: bounds.size(),
+        layer_bounds: Some(bounds),
         children,
         ..LayerNode::default()
     }

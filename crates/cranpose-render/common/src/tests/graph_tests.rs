@@ -11,7 +11,8 @@ fn root_of(store: &SceneStore) -> LayerRef<'_> {
 
 fn test_layer(local_bounds: Rect, children: Vec<RenderNode>) -> LayerNode {
     LayerNode {
-        local_bounds,
+        size: local_bounds.size(),
+        layer_bounds: Some(local_bounds),
         children,
         ..Default::default()
     }
@@ -199,12 +200,7 @@ fn contained_run(rect: Rect) -> RenderNode {
 
 fn bounded(width: f32, height: f32, children: Vec<RenderNode>) -> LayerNode {
     LayerNode {
-        local_bounds: Rect {
-            x: 0.0,
-            y: 0.0,
-            width,
-            height,
-        },
+        size: Size::new(width, height),
         children,
         ..Default::default()
     }
@@ -313,7 +309,7 @@ fn a_node_rect_starts_at_its_origin_and_its_layer_bounds_may_lie_apart() {
         height: 10.0,
     };
     let split = SceneStore::from_layer(&LayerNode {
-        node_bounds: Some(node),
+        size: node.size(),
         ..test_layer(layer_bounds, Vec::new())
     });
     assert_eq!(root_of(&split).node_rect(), node);

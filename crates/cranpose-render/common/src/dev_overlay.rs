@@ -48,12 +48,7 @@ pub fn build_dev_overlay_layer(
 
     let overlay_layer = LayerNode {
         node_id: Some(node_id),
-        local_bounds: Rect {
-            x: 0.0,
-            y: 0.0,
-            width: text_width + padding,
-            height: text_height + padding / 2.0,
-        },
+        size: Size::new(text_width + padding, text_height + padding / 2.0),
         transform_to_parent: ProjectiveTransform::translation(x, y),
         children: vec![
             RenderNode::Primitive(PrimitiveEntry {
@@ -97,7 +92,7 @@ pub fn build_dev_overlay_layer(
         ..Default::default()
     };
     LayerNode {
-        local_bounds: Rect::from_size(viewport),
+        size: viewport,
         children: vec![RenderNode::Layer(Box::new(overlay_layer))],
         ..Default::default()
     }

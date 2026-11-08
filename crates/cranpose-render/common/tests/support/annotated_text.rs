@@ -51,7 +51,8 @@ pub(crate) fn text_graph(
         )
     });
     LayerNode {
-        local_bounds: viewport,
+        size: viewport.size(),
+        layer_bounds: Some(viewport),
         children: vec![RenderNode::Primitive(PrimitiveEntry {
             phase: PrimitivePhase::AfterChildren,
             node: PrimitiveNode::Text(Box::new(TextPrimitiveNode {

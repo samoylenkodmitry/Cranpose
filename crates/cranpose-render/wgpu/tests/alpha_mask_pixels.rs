@@ -44,7 +44,8 @@ fn graph(
     };
     let rgba = ImageBitmap::from_rgba8(16, 16, image.rgba8_pixels().into_owned()).expect("rgba");
     let images = LayerNode {
-        local_bounds: bounds,
+        size: bounds.size(),
+        layer_bounds: Some(bounds),
         transform_to_parent: if transformed {
             ProjectiveTransform::from_rect_to_quad(
                 bounds,
@@ -69,7 +70,8 @@ fn graph(
         ..LayerNode::default()
     };
     LayerNode {
-        local_bounds: bounds,
+        size: bounds.size(),
+        layer_bounds: Some(bounds),
         children: vec![
             RenderNode::DrawRun(DrawRunNode::new(
                 PrimitivePhase::BeforeChildren,

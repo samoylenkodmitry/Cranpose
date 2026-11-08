@@ -23,8 +23,7 @@ pub(super) fn write_layer(
     };
     let record = store.insert(RecordSeed { kind, node, parent });
     store.set_content_offset(record, layer.content_offset);
-    let size = layer.node_bounds.unwrap_or(layer.local_bounds);
-    store.set_size(record, size.width, size.height);
+    store.set_size(record, layer.size.width, layer.size.height);
     let origin = match kind {
         RecordKind::DrawGroup => layer
             .transform_to_parent
@@ -33,10 +32,10 @@ pub(super) fn write_layer(
         RecordKind::Layer | RecordKind::Wrapper | RecordKind::Leaf => layer.origin_in_parent,
     };
     store.set_placement(record, origin, layer.transform_to_parent);
-    let node_rect = cranpose_ui::Rect::from_size(cranpose_ui::Size::new(size.width, size.height));
+    let node_rect = cranpose_ui::Rect::from_size(layer.size);
     store.set_graphics_layer(record, layer.graphics_layer.get().cloned());
     store.edit_props(record, |props| {
-        props.layer_bounds = (layer.local_bounds != node_rect).then_some(layer.local_bounds);
+        props.layer_bounds = layer.layer_bounds.filter(|bounds| *bounds != node_rect);
         props.translated_content_offset = layer.translated_content_offset;
         props.hit_test.clone_from(&layer.hit_test);
         props.isolation = layer.isolation;

@@ -818,13 +818,14 @@ fn raised_lens_reads_the_page_outside_the_lifted_surface() {
             Color::BLACK,
         ),
     ];
+    let surface_bounds = Rect {
+        x: 8.0,
+        y: 16.0,
+        width: 144.0,
+        height: 64.0,
+    };
     let mut surface = shared_test_support::layer_node(
-        Rect {
-            x: 8.0,
-            y: 16.0,
-            width: 144.0,
-            height: 64.0,
-        },
+        surface_bounds,
         ProjectiveTransform::identity(),
         GraphicsLayer {
             scale_x: 1.04,
@@ -834,10 +835,10 @@ fn raised_lens_reads_the_page_outside_the_lifted_surface() {
         content,
     );
     surface.transform_to_parent = ProjectiveTransform::from_rect_to_quad(
-        surface.local_bounds,
+        surface_bounds,
         cranpose_render_common::layer_transform::apply_layer_to_quad(
-            surface.local_bounds,
-            surface.local_bounds,
+            surface_bounds,
+            surface_bounds,
             &surface.graphics_layer,
         ),
     );
@@ -928,7 +929,7 @@ fn touch_glow_scene(density: f32, pressed: bool) -> LayerNode {
             ),
     );
     root.children = vec![
-        support::solid_rect(root.local_bounds, Color(0.4, 0.4, 0.4, 1.0)),
+        support::solid_rect(Rect::from_size(root.size), Color(0.4, 0.4, 0.4, 1.0)),
         surface,
     ];
     root

@@ -84,15 +84,11 @@ fn backdrop_graph(enabled: bool) -> LayerNode {
         ..Default::default()
     }
     .into();
-    graph(vec![RenderNode::Layer(Box::new(outer))])
+    page(vec![RenderNode::Layer(Box::new(outer))])
 }
 
 fn page(children: Vec<RenderNode>) -> LayerNode {
     support::layer_node(None, WIDTH as f32, HEIGHT as f32, children)
-}
-
-fn graph(children: Vec<RenderNode>) -> LayerNode {
-    page(children)
 }
 
 #[test]
@@ -105,7 +101,7 @@ fn returned_packet_storage_reuses_both_slots_after_topology_shrinks() {
         }
     };
 
-    let next_graph = graph(vec![layer(
+    let next_graph = page(vec![layer(
         9_302,
         Color::from_rgb_u8(25, 180, 230),
         Rect {

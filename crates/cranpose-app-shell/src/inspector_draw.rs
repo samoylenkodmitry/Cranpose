@@ -142,7 +142,7 @@ impl Canvas {
 
     fn finish(self) -> LayerNode {
         LayerNode {
-            local_bounds: self.viewport,
+            size: self.viewport.size(),
             children: self.children,
             ..Default::default()
         }

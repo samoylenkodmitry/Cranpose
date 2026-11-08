@@ -38,7 +38,7 @@ fn run_node(primitives: Vec<DrawPrimitive>) -> RenderNode {
 
 fn root(size: u32, children: Vec<RenderNode>) -> LayerNode {
     LayerNode {
-        local_bounds: bounds(size),
+        size: Size::new(size as f32, size as f32),
         children,
         ..LayerNode::default()
     }

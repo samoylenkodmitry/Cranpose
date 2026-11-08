@@ -46,12 +46,7 @@ pub(crate) fn layer_node(
 ) -> LayerNode {
     LayerNode {
         node_id,
-        local_bounds: Rect {
-            x: 0.0,
-            y: 0.0,
-            width,
-            height,
-        },
+        size: Size::new(width, height),
         children,
         ..Default::default()
     }
@@ -869,7 +864,8 @@ pub(crate) fn page_graph(width: u32, height: u32, children: Vec<RenderNode>) -> 
 
 pub(crate) fn shader_probe_graph(bounds: Rect, shader: RuntimeShader) -> LayerNode {
     LayerNode {
-        local_bounds: bounds,
+        size: bounds.size(),
+        layer_bounds: Some(bounds),
         graphics_layer: cranpose_ui_graphics::GraphicsLayer {
             render_effect: Some(RenderEffect::runtime_shader(shader)),
             ..Default::default()
@@ -901,19 +897,15 @@ pub(crate) mod clip_band {
         children: Vec<RenderNode>,
     ) -> LayerNode {
         let child = LayerNode {
-            local_bounds: CHILD,
+            size: CHILD.size(),
+            layer_bounds: Some(CHILD),
             transform_to_parent: layer_transform_to_parent(CHILD, placement, &layer),
             graphics_layer: layer.into(),
             children,
             ..Default::default()
         };
         let band = LayerNode {
-            local_bounds: Rect {
-                x: 0.0,
-                y: 0.0,
-                width: FRAME as f32,
-                height: FRAME as f32 - CLIP_TOP as f32,
-            },
+            size: Size::new(FRAME as f32, FRAME as f32 - CLIP_TOP as f32),
             transform_to_parent: ProjectiveTransform::translation(0.0, CLIP_TOP as f32),
             graphics_layer: GraphicsLayer {
                 clip: true,
@@ -1526,7 +1518,8 @@ pub(crate) fn contract_layer(
 ) -> LayerNode {
     LayerNode {
         node_id,
-        local_bounds,
+        size: local_bounds.size(),
+        layer_bounds: Some(local_bounds),
         transform_to_parent,
         cache_policy,
         children,

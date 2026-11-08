@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use cranpose_ui::{Modifier, ModifierNodeSlices, collect_slices_from_modifier};
+use cranpose_ui::{Modifier, ModifierNodeSlices, Size, collect_slices_from_modifier};
 
 use super::*;
 use crate::{
@@ -70,12 +70,7 @@ fn collect_into(layer: &LayerNode, to_window: ProjectiveTransform, sink: &mut Te
 fn test_layer(node_id: NodeId, transform_to_parent: ProjectiveTransform) -> LayerNode {
     LayerNode {
         node_id: Some(node_id),
-        local_bounds: Rect {
-            x: 0.0,
-            y: 0.0,
-            width: 30.0,
-            height: 18.0,
-        },
+        size: Size::new(30.0, 18.0),
         transform_to_parent,
         clip_to_bounds: true,
         hit_test: Some(HitTestNode {
@@ -228,8 +223,8 @@ fn a_node_takes_hits_on_its_own_rect_where_its_layer_is_bounded_elsewhere() {
         height: 18.0,
     };
     let layer = LayerNode {
-        local_bounds: clip,
-        node_bounds: Some(node),
+        size: node.size(),
+        layer_bounds: Some(clip),
         ..test_layer(NodeId(3), ProjectiveTransform::identity())
     };
     let hits = hits_of(&layer);

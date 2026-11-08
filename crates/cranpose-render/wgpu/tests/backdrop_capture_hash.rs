@@ -9,7 +9,7 @@ use cranpose_render_common::{
 use cranpose_render_wgpu::CapturedFrame;
 use cranpose_ui_graphics::{
     Brush, Color, DrawPlacement, DrawPrimitive, GraphicsLayer, LayerShape, Rect, RenderEffect,
-    RoundedCornerShape,
+    RoundedCornerShape, Size,
 };
 
 use crate::support;
@@ -32,7 +32,8 @@ fn blur_backdrop(x: f32, y: f32, width: f32, height: f32) -> LayerNode {
     };
     LayerNode {
         node_id: Some(NodeId(20)),
-        local_bounds: bounds,
+        size: bounds.size(),
+        layer_bounds: Some(bounds),
         transform_to_parent: ProjectiveTransform::translation(x, y),
         graphics_layer: GraphicsLayer {
             backdrop_effect: Some(RenderEffect::blur(2.0)),
@@ -49,12 +50,7 @@ fn rounded_clip_scene(clip_x: f32) -> LayerNode {
     let backdrop = blur_backdrop(16.0, 12.0, 12.0, 64.0);
     let clipped = LayerNode {
         node_id: Some(NodeId(21)),
-        local_bounds: Rect {
-            x: 0.0,
-            y: 0.0,
-            width: 32.0,
-            height: 32.0,
-        },
+        size: Size::new(32.0, 32.0),
         transform_to_parent: ProjectiveTransform::translation(clip_x, 10.0),
         graphics_layer: GraphicsLayer {
             clip: true,
@@ -64,7 +60,8 @@ fn rounded_clip_scene(clip_x: f32) -> LayerNode {
         .into(),
         children: vec![RenderNode::Layer(Box::new(LayerNode {
             node_id: Some(NodeId(22)),
-            local_bounds: CONTENT,
+            size: CONTENT.size(),
+            layer_bounds: Some(CONTENT),
             transform_to_parent: ProjectiveTransform::translation(-clip_x, -10.0),
             children: vec![RenderNode::DrawRun(DrawRunNode::for_command(
                 PrimitivePhase::BeforeChildren,
@@ -84,7 +81,8 @@ fn rounded_clip_scene(clip_x: f32) -> LayerNode {
         ..LayerNode::default()
     };
     LayerNode {
-        local_bounds: CONTENT,
+        size: CONTENT.size(),
+        layer_bounds: Some(CONTENT),
         children: vec![
             support::solid_rect(CONTENT, Color::BLACK),
             RenderNode::Layer(Box::new(clipped)),
@@ -117,14 +115,16 @@ fn subpixel_scene(edge_x: f32, alpha: f32) -> LayerNode {
     );
     let moving_layer = LayerNode {
         node_id: Some(NodeId(21)),
-        local_bounds: moving_rect,
+        size: moving_rect.size(),
+        layer_bounds: Some(moving_rect),
         transform_to_parent: ProjectiveTransform::translation(edge_x, 32.0),
         children: vec![RenderNode::DrawRun(moving_run)],
         ..LayerNode::default()
     };
 
     LayerNode {
-        local_bounds: CONTENT,
+        size: CONTENT.size(),
+        layer_bounds: Some(CONTENT),
         children: vec![
             support::solid_rect(CONTENT, Color::BLACK),
             RenderNode::Layer(Box::new(moving_layer)),
@@ -142,10 +142,12 @@ fn inspector_glass(cache_policy: CachePolicy) -> LayerNode {
         height: 48.0,
     };
     LayerNode {
-        local_bounds: CONTENT,
+        size: CONTENT.size(),
+        layer_bounds: Some(CONTENT),
         children: vec![RenderNode::Layer(Box::new(LayerNode {
             node_id: Some(NodeId(71)),
-            local_bounds: bounds,
+            size: bounds.size(),
+            layer_bounds: Some(bounds),
             graphics_layer: GraphicsLayer {
                 backdrop_effect: Some(RenderEffect::blur(6.0)),
                 ..GraphicsLayer::default()
@@ -161,7 +163,8 @@ fn inspector_glass(cache_policy: CachePolicy) -> LayerNode {
 
 fn painted_page(color: Color) -> LayerNode {
     LayerNode {
-        local_bounds: CONTENT,
+        size: CONTENT.size(),
+        layer_bounds: Some(CONTENT),
         children: vec![support::solid_rect(CONTENT, color)],
         ..LayerNode::default()
     }
@@ -182,7 +185,8 @@ fn nested_backdrop_scene(
     };
     let backdrop = LayerNode {
         node_id: Some(NodeId(42)),
-        local_bounds: backdrop_bounds,
+        size: backdrop_bounds.size(),
+        layer_bounds: Some(backdrop_bounds),
         transform_to_parent: ProjectiveTransform::translation(4.0, 4.0),
         graphics_layer: GraphicsLayer {
             backdrop_effect: Some(RenderEffect::blur(6.0)),
@@ -198,12 +202,7 @@ fn nested_backdrop_scene(
     };
     let nested = LayerNode {
         node_id: Some(NodeId(43)),
-        local_bounds: Rect {
-            x: 0.0,
-            y: 0.0,
-            width: 40.0,
-            height: 28.0,
-        },
+        size: Size::new(40.0, 28.0),
         transform_to_parent: ProjectiveTransform::translation(4.0, 4.0),
         graphics_layer: GraphicsLayer {
             alpha: 0.5,
@@ -221,7 +220,8 @@ fn nested_backdrop_scene(
     };
     let composite = LayerNode {
         node_id: Some(NodeId(44)),
-        local_bounds: composite_bounds,
+        size: composite_bounds.size(),
+        layer_bounds: Some(composite_bounds),
         transform_to_parent: ProjectiveTransform::translation(7.0, 6.0),
         graphics_layer: GraphicsLayer {
             alpha: 0.5,
@@ -240,7 +240,8 @@ fn nested_backdrop_scene(
     };
     let parent = LayerNode {
         node_id: Some(NodeId(41)),
-        local_bounds: parent_bounds,
+        size: parent_bounds.size(),
+        layer_bounds: Some(parent_bounds),
         transform_to_parent: ProjectiveTransform::uniform_scale(2.0)
             .then(ProjectiveTransform::translation(20.0, 8.0)),
         children: vec![
@@ -252,7 +253,8 @@ fn nested_backdrop_scene(
     };
     LayerNode {
         node_id: Some(NodeId(40)),
-        local_bounds: CONTENT,
+        size: CONTENT.size(),
+        layer_bounds: Some(CONTENT),
         children: vec![
             support::solid_rect(CONTENT, root_color),
             RenderNode::Layer(Box::new(parent)),

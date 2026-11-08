@@ -834,7 +834,8 @@ fn describe(layer: LayerRef<'_>) -> LayerNode {
         .collect();
     LayerNode {
         node_id: layer.node_id(),
-        local_bounds: layer.local_bounds(),
+        size: layer.node_rect().size(),
+        layer_bounds: Some(layer.local_bounds()),
         transform_to_parent: layer.transform_to_parent(),
         content_offset: layer.content_offset(),
         graphics_layer: layer.graphics_layer().clone().into(),

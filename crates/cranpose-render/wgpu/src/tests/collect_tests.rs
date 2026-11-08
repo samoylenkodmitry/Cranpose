@@ -2,7 +2,7 @@ use cranpose_render_common::{
     graph::{DrawRunNode, LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, RenderNode},
     scene_store::SceneStore,
 };
-use cranpose_ui_graphics::{DrawPrimitive, LayerShape, RoundedCornerShape};
+use cranpose_ui_graphics::{DrawPrimitive, LayerShape, RoundedCornerShape, Size};
 
 use super::{
     layer_motion::{ANIMATED_RASTER_STEPS_PER_OCTAVE, animated_raster_scale},
@@ -135,7 +135,7 @@ fn deferred_draws_keep_their_order_after_interleaved_children() {
     let before = PrimitivePhase::BeforeChildren;
     let after = PrimitivePhase::AfterChildren;
     let layer = |children| LayerNode {
-        local_bounds: rect(0.0, 0.0, 20.0, 20.0),
+        size: Size::new(20.0, 20.0),
         children,
         ..Default::default()
     };
@@ -241,7 +241,7 @@ fn isolated_layers_snap_their_own_text_and_translating_text_descendants() {
             (drawn_node(snap_test_text()), false, true),
             (
                 RenderNode::Layer(Box::new(LayerNode {
-                    local_bounds: rect(0.0, 0.0, 60.0, 20.0),
+                    size: Size::new(60.0, 20.0),
                     transform_to_parent: ProjectiveTransform::translation(2.5, 3.5),
                     children: vec![drawn_node(snap_test_text())],
                     ..Default::default()
@@ -253,7 +253,7 @@ fn isolated_layers_snap_their_own_text_and_translating_text_descendants() {
             (drawn_node(snap_test_rect()), true, true),
         ] {
             let layer = LayerNode {
-                local_bounds: rect(0.0, 0.0, 100.0, 60.0),
+                size: Size::new(100.0, 60.0),
                 children: vec![node],
                 ..Default::default()
             };
@@ -300,7 +300,7 @@ fn content_touching_the_edge_between_corners_is_admitted() {
 
 fn rounded_layer(radius: f32, content: RenderNode) -> LayerNode {
     LayerNode {
-        local_bounds: rect(0.0, 0.0, 200.0, 100.0),
+        size: Size::new(200.0, 100.0),
         graphics_layer: GraphicsLayer {
             clip: true,
             shape: LayerShape::Rounded(RoundedCornerShape::uniform(radius)),
@@ -405,7 +405,7 @@ fn a_rounded_layer_whose_text_enters_a_corner_isolates() {
 
 fn child_at(x: f32, y: f32, width: f32, height: f32, content: RenderNode) -> RenderNode {
     RenderNode::Layer(Box::new(LayerNode {
-        local_bounds: rect(0.0, 0.0, width, height),
+        size: Size::new(width, height),
         transform_to_parent: ProjectiveTransform::translation(x, y),
         children: vec![content],
         ..Default::default()
@@ -453,7 +453,7 @@ fn a_rounded_layer_its_parent_clip_holds_draws_in_place_whatever_the_float_sums(
     // clip, but the panel clip met with the bar's rect sums its width an
     // ulp away from the bar's own.
     let bar = LayerNode {
-        local_bounds: rect(0.0, 0.0, 218.33333, 4.0),
+        size: Size::new(218.33333, 4.0),
         graphics_layer: GraphicsLayer {
             clip: true,
             shape: LayerShape::Rounded(RoundedCornerShape::uniform(2.0)),
@@ -504,7 +504,7 @@ fn a_rounded_layer_its_parent_clip_holds_draws_in_place_whatever_the_float_sums(
 #[test]
 fn shapes_of_a_rounded_layer_drawn_in_place_take_its_radius_and_nothing_else_does() {
     let mut parent = LayerNode {
-        local_bounds: rect(0.0, 0.0, 400.0, 300.0),
+        size: Size::new(400.0, 300.0),
         ..Default::default()
     };
     parent
@@ -651,7 +651,7 @@ fn turned_layer(
     children: Vec<RenderNode>,
 ) -> LayerNode {
     LayerNode {
-        local_bounds: rect(0.0, 0.0, 60.0, 40.0),
+        size: Size::new(60.0, 40.0),
         transform_to_parent: transform,
         graphics_layer: graphics_layer.into(),
         children,
@@ -662,7 +662,7 @@ fn turned_layer(
 /// The isolated child `layer` collects into under an unturned root.
 fn collected(layer: LayerNode) -> ChildLayer {
     let root = LayerNode {
-        local_bounds: rect(0.0, 0.0, 200.0, 200.0),
+        size: Size::new(200.0, 200.0),
         children: vec![RenderNode::Layer(Box::new(layer))],
         ..Default::default()
     };
@@ -884,7 +884,7 @@ fn a_detached_backdrop_keeps_its_original_capture_reach_and_paint_order() {
     layer.graphics_layer.alpha = 1.0;
     layer.graphics_layer.render_effect = Some(RenderEffect::blur(1.0));
     let root = LayerNode {
-        local_bounds: rect(0.0, 0.0, 100.0, 100.0),
+        size: Size::new(100.0, 100.0),
         clip_to_bounds: true,
         children: vec![RenderNode::Layer(Box::new(layer))],
         ..Default::default()
@@ -917,7 +917,7 @@ fn a_detached_backdrop_keeps_its_original_capture_reach_and_paint_order() {
 /// The draw ops a root clipped to 100×100 collects around `child`.
 fn draw_ops_under_clip(child: LayerNode) -> usize {
     let root = LayerNode {
-        local_bounds: rect(0.0, 0.0, 100.0, 100.0),
+        size: Size::new(100.0, 100.0),
         clip_to_bounds: true,
         children: vec![RenderNode::Layer(Box::new(child))],
         ..Default::default()
@@ -939,7 +939,8 @@ const ROW: Rect = rect(0.0, 0.0, 100.0, 40.0);
 // A row of bounds `ROW` at `y` that fills `fill`.
 fn row_at(y: f32, fill: Rect, shadow_elevation: f32) -> LayerNode {
     LayerNode {
-        local_bounds: ROW,
+        size: ROW.size(),
+        layer_bounds: Some(ROW),
         transform_to_parent: ProjectiveTransform::translation(0.0, y),
         graphics_layer: GraphicsLayer {
             shadow_elevation,
@@ -987,7 +988,7 @@ fn text_root(style: cranpose_ui::TextStyle) -> (LayerNode, Arc<cranpose_ui::Text
         paint: Default::default(),
     });
     let root = LayerNode {
-        local_bounds: rect(0.0, 0.0, 100.0, 100.0),
+        size: Size::new(100.0, 100.0),
         children: vec![RenderNode::Primitive(PrimitiveEntry {
             phase: PrimitivePhase::BeforeChildren,
             node: PrimitiveNode::Text(Box::new(text)),

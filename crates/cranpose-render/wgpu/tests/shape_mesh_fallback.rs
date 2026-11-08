@@ -26,12 +26,13 @@ fn graph(record: impl FnOnce(&mut DrawScopeDefault)) -> LayerNode {
     record(&mut scope);
     LayerNode {
         cache_policy: CachePolicy::None,
-        local_bounds: Rect {
+        size: Size::new(183.0, 171.0),
+        layer_bounds: Some(Rect {
             x: 11.25,
             y: 7.5,
             width: 183.0,
             height: 171.0,
-        },
+        }),
         clip_to_bounds: true,
         children: vec![RenderNode::DrawRun(DrawRunNode::new(
             PrimitivePhase::BeforeChildren,

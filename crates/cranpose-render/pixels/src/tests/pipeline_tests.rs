@@ -9,7 +9,7 @@ use cranpose_render_common::{
 };
 use cranpose_ui::TextLayoutOptions;
 use cranpose_ui_graphics::{
-    CornerRadii, DrawPrimitive, ImageBitmap, ImageSampling, LayerShape, RoundedCornerShape,
+    CornerRadii, DrawPrimitive, ImageBitmap, ImageSampling, LayerShape, RoundedCornerShape, Size,
 };
 
 use super::{draw_child::push_shadow_primitive, *};
@@ -59,12 +59,7 @@ fn push_text_style_draws_for_test(
 fn snapped_text_leaf_root(animated: bool, translated_content_context: bool) -> LayerNode {
     let text_leaf = LayerNode {
         node_id: Some(NodeId(77)),
-        local_bounds: Rect {
-            x: 0.0,
-            y: 0.0,
-            width: 48.0,
-            height: 24.0,
-        },
+        size: Size::new(48.0, 24.0),
         transform_to_parent: ProjectiveTransform::translation(14.25, 16.5),
         motion_context_animated: animated,
         translated_content_context,
@@ -139,12 +134,7 @@ fn snapped_text_leaf_root(animated: bool, translated_content_context: bool) -> L
     };
 
     LayerNode {
-        local_bounds: Rect {
-            x: 0.0,
-            y: 0.0,
-            width: 96.0,
-            height: 64.0,
-        },
+        size: Size::new(96.0, 64.0),
         children: vec![RenderNode::Layer(Box::new(text_leaf))],
         ..Default::default()
     }
@@ -223,19 +213,9 @@ fn a_layer_shadow_draws_skias_ambient_then_spot_pass() {
 #[test]
 fn build_raster_scene_uses_graph_transform_to_parent() {
     let graph = LayerNode {
-        local_bounds: Rect {
-            x: 0.0,
-            y: 0.0,
-            width: 64.0,
-            height: 48.0,
-        },
+        size: Size::new(64.0, 48.0),
         children: vec![RenderNode::Layer(Box::new(LayerNode {
-            local_bounds: Rect {
-                x: 0.0,
-                y: 0.0,
-                width: 24.0,
-                height: 18.0,
-            },
+            size: Size::new(24.0, 18.0),
             transform_to_parent: ProjectiveTransform::translation(17.0, 11.0),
             children: vec![RenderNode::Primitive(PrimitiveEntry {
                 phase: PrimitivePhase::BeforeChildren,
@@ -332,12 +312,7 @@ fn rested_translated_content_text_leaf_snaps_for_crisp_scroll_rest() {
 
 fn clipped_layer(placement: Point, children: Vec<RenderNode>) -> LayerNode {
     LayerNode {
-        local_bounds: Rect {
-            x: 0.0,
-            y: 0.0,
-            width: 120.0,
-            height: 120.0,
-        },
+        size: Size::new(120.0, 120.0),
         transform_to_parent: ProjectiveTransform::translation(placement.x, placement.y),
         clip_to_bounds: true,
         children,
@@ -366,7 +341,7 @@ fn red_fill() -> RenderNode {
 
 fn shapes_in_list(child: LayerNode) -> usize {
     let mut list = clipped_layer(Point::new(0.0, 80.0), vec![]);
-    list.local_bounds.width = 200.0;
+    list.size.width = 200.0;
     list.children.push(RenderNode::Layer(Box::new(child)));
     build_raster_scene_for_test(&list).shapes.len()
 }

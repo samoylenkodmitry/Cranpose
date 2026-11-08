@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use cranpose_ui::{
-    TextLayoutOptions,
+    Size, TextLayoutOptions,
     text::{TextDecoration, TextMotion},
 };
 
@@ -253,12 +253,7 @@ fn clip_to_bounds_clips_shadow_and_content() {
 fn a_described_layer_with_a_click_handler_is_the_scenes_one_hit_target() {
     let layer = cranpose_render_common::graph::LayerNode {
         node_id: Some(NodeId(7)),
-        local_bounds: Rect {
-            x: 0.0,
-            y: 0.0,
-            width: 40.0,
-            height: 24.0,
-        },
+        size: Size::new(40.0, 24.0),
         transform_to_parent: cranpose_render_common::graph::ProjectiveTransform::translation(
             12.0, 8.0,
         ),

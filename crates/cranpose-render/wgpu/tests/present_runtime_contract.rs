@@ -57,7 +57,8 @@ fn shadowed_child_graph() -> LayerNode {
         Some(NodeId(7_701)),
         vec![support::drop_shadow(bounds, Color::BLACK, 6.0)],
     );
-    child.local_bounds = bounds;
+    child.size = bounds.size();
+    child.layer_bounds = Some(bounds);
     test_layer(
         Some(NodeId(7_702)),
         vec![RenderNode::Layer(Box::new(child))],

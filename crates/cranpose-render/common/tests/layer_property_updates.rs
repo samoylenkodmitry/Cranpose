@@ -50,10 +50,6 @@ where
     parent_id.set(Some(parent));
 }
 
-fn fresh_graph(composition: &mut TestComposition, root: NodeId) -> Scene {
-    crate::scene_probe::fresh_graph(composition, root)
-}
-
 fn apply_updates(composition: &mut TestComposition, graph: &mut Scene, updates: SceneUpdates<'_>) {
     let root = composition.root().expect("root");
     let runtime = composition.runtime_handle();
@@ -219,7 +215,7 @@ fn layer_only_update_keeps_outer_draw_and_child_canvas_recordings() {
         "a layer-only update must retain both outer draw phases and child Canvas recordings"
     );
     assert_eq!(children.len(), 2);
-    let fresh = fresh_graph(&mut composition, root);
+    let fresh = crate::scene_probe::fresh_graph(&mut composition, root);
     assert_eq!(
         graph_output_owned(graph.root_layer().expect("a scene")),
         graph_output_owned(fresh.root_layer().expect("a scene")),
@@ -270,7 +266,7 @@ fn parent_layer_update_republishes_child_text_viewport_geometry() {
     );
     let after = sink.get();
     assert_ne!(after, before, "the child's viewport moves with its parent");
-    let fresh = fresh_graph(&mut composition, root);
+    let fresh = crate::scene_probe::fresh_graph(&mut composition, root);
     assert_eq!(
         sink.get(),
         after,
@@ -348,7 +344,7 @@ fn parent_layer_and_child_content_dirt_are_both_applied() {
         old_transform,
         "the parent's layer dirt is applied"
     );
-    let fresh = fresh_graph(&mut composition, root);
+    let fresh = crate::scene_probe::fresh_graph(&mut composition, root);
     let actual = graph_output_owned(graph.root_layer().expect("a scene"));
     let expected = graph_output_owned(fresh.root_layer().expect("a scene"));
     assert_eq!(actual, expected, "child content survives parent layer dirt");
@@ -423,7 +419,7 @@ fn parent_content_and_child_layer_dirt_match_a_fresh_rebuild() {
         old_transform,
         "parent content rebuilding must not lose the child's layer change"
     );
-    let fresh = fresh_graph(&mut composition, root);
+    let fresh = crate::scene_probe::fresh_graph(&mut composition, root);
     let actual = graph_output_owned(graph.root_layer().expect("a scene"));
     let expected = graph_output_owned(fresh.root_layer().expect("a scene"));
     assert_eq!(

@@ -98,7 +98,7 @@ fn scene(side: f32, columns: usize, rows: usize) -> Vec<DrawPrimitive> {
 fn layer_root(node_id: Option<cranpose_core::NodeId>, children: Vec<RenderNode>) -> LayerNode {
     LayerNode {
         node_id,
-        local_bounds: full(SIDE as f32),
+        size: Size::new(SIDE as f32, SIDE as f32),
         children,
         translated_content_context: true,
         ..LayerNode::default()

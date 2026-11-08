@@ -5,7 +5,7 @@ use cranpose_render_common::graph::{
 };
 use cranpose_ui_graphics::{
     ArcRecordArgs, BlendMode, Brush, Color, CommandRecording, DrawPlacement, DrawScope,
-    DrawScopeDefault, Point, Rect, Size, normalized_band,
+    DrawScopeDefault, Point, Size, normalized_band,
 };
 
 use crate::support;
@@ -41,12 +41,7 @@ fn recording_graph(recording: CommandRecording, side: u32) -> LayerNode {
     let segments = recording.all_segments();
     LayerNode {
         node_id: Some(support::STORED_RUN_NODE),
-        local_bounds: Rect {
-            x: 0.0,
-            y: 0.0,
-            width: side as f32,
-            height: side as f32,
-        },
+        size: Size::new(side as f32, side as f32),
         children: vec![RenderNode::DrawRun(DrawRunNode::for_command_shared(
             PrimitivePhase::BeforeChildren,
             Some(DrawCommandId {

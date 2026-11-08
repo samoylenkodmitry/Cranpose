@@ -366,7 +366,7 @@ fn build_fixture(width: u32, height: u32, children: Vec<RenderNode>) -> RenderFi
         width,
         height,
         store: SceneStore::from_layer(&graph_layer(
-            bounds,
+            bounds.size(),
             ProjectiveTransform::identity(),
             with_background(bounds, children),
         )),
@@ -425,7 +425,7 @@ fn build_translated_fixture_with_context(
         height: height as f32,
     };
     let subtree = graph_layer(
-        subtree_bounds,
+        subtree_bounds.size(),
         ProjectiveTransform::translation(translation.x, translation.y),
         subtree_children,
     );
@@ -436,7 +436,7 @@ fn build_translated_fixture_with_context(
         width,
         height,
         store: SceneStore::from_layer(&graph_layer(
-            bounds,
+            bounds.size(),
             ProjectiveTransform::identity(),
             with_background(bounds, vec![RenderNode::Layer(Box::new(subtree))]),
         )),
@@ -450,12 +450,12 @@ fn build_translated_fixture_with_context(
 }
 
 fn graph_layer(
-    local_bounds: Rect,
+    size: Size,
     transform_to_parent: ProjectiveTransform,
     children: Vec<RenderNode>,
 ) -> LayerNode {
     LayerNode {
-        local_bounds,
+        size,
         transform_to_parent,
         children,
         ..Default::default()

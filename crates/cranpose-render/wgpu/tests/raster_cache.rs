@@ -57,7 +57,7 @@ fn live_backdrop_graph(color: Color, policy: CachePolicy, nested: bool) -> Layer
         let mut glass = support::contract_layer(
             Some(NodeId(80_002)),
             CachePolicy::None,
-            card.local_bounds,
+            Rect::from_size(card.size),
             ProjectiveTransform::identity(),
             Vec::new(),
         );
@@ -786,7 +786,7 @@ fn scaled_shader_graph(
         Vec::new()
     } else {
         vec![
-            painted_rect(shaded.local_bounds, Color(0.2, 0.6, 0.9, 0.7)),
+            painted_rect(Rect::from_size(shaded.size), Color(0.2, 0.6, 0.9, 0.7)),
             painted_rect(
                 Rect {
                     x: 7.25,

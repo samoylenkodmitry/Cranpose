@@ -6,7 +6,7 @@ use cranpose_render_common::{
     text_fonts::TextFonts,
 };
 use cranpose_ui::{Brush, text::TextMotion};
-use cranpose_ui_graphics::Color;
+use cranpose_ui_graphics::{Color, Size};
 
 use super::*;
 use crate::{
@@ -286,12 +286,7 @@ fn multiline_text_renders_second_line_pixels() {
 fn draw_scene_renders_graph_backed_scene_without_flat_primitives() {
     let mut scene = Scene::new();
     scene.describe(&LayerNode {
-        local_bounds: Rect {
-            x: 0.0,
-            y: 0.0,
-            width: 16.0,
-            height: 16.0,
-        },
+        size: Size::new(16.0, 16.0),
         children: vec![RenderNode::Primitive(PrimitiveEntry {
             phase: PrimitivePhase::BeforeChildren,
             node: PrimitiveNode::Draw(Box::new(DrawPrimitiveNode {
