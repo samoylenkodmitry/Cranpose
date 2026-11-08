@@ -48,6 +48,7 @@ pub mod rgb565;
 pub mod scene_builder;
 /// Which mesh surface of a 3D scene a window point shows.
 pub mod scene_pick;
+pub mod scene_store;
 pub mod shape_sdf;
 /// Where a window's scenes put their 3D layers: frames, spaces, doorways
 /// and what the eye sees.
