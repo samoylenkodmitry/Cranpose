@@ -26,11 +26,8 @@ const INK: Color32 = rgb(WALL_INK_RGB);
 
 /// The still wall's state: its frame and the tiles' text, laid out once.
 pub struct Wall {
-    load: Launch,
     tier: WallTier,
-    frame: u32,
-    frozen: bool,
-    first_frame_logged: bool,
+    frame: FrameIndex,
     // The tiles across and down that the text below was laid out for.
     grid: (usize, usize),
     // Each tile's label and value.
@@ -41,11 +38,8 @@ impl Wall {
     pub fn new(ctx: &egui::Context, load: Launch) -> Self {
         ctx.set_fonts(roboto());
         Self {
-            load,
             tier: wall_tier(load.tier),
-            frame: 0,
-            frozen: false,
-            first_frame_logged: false,
+            frame: FrameIndex::new(load.freeze),
             grid: (0, 0),
             text: Vec::new(),
         }
@@ -85,7 +79,7 @@ impl Wall {
 
     fn clock(&self, ui: &Ui, rect: Rect) {
         let job = LayoutJob::simple_singleline(
-            wall_clock(self.frame),
+            wall_clock(self.frame.get()),
             FontId::new(WALL_CLOCK_TEXT, FontFamily::Proportional),
             INK,
         );
@@ -121,7 +115,7 @@ impl Wall {
             painter.circle_filled(center, dot / 2.0, rgb(wall_dot_rgb(index)));
             painter.galley(pos2(inner.min.x + dot * 1.5, line), value.clone(), INK);
         }
-        let cursor = tile_rect(wall_cursor(self.frame, self.text.len()));
+        let cursor = tile_rect(wall_cursor(self.frame.get(), self.text.len()));
         painter.rect_stroke(
             cursor,
             corner,
@@ -133,9 +127,7 @@ impl Wall {
 
 impl eframe::App for Wall {
     fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
-        if !self.frozen {
-            self.frame += 1;
-        }
+        let more = self.frame.advance();
         let screen = ui.max_rect();
         ui.painter().rect_filled(screen, 0.0, BACKGROUND);
         let bar = Self::top_bar(ui, screen);
@@ -147,17 +139,7 @@ impl eframe::App for Wall {
             self.lay_out_tiles(ui, grid);
         }
         self.wall(ui, area);
-        if !self.first_frame_logged {
-            self.first_frame_logged = true;
-            log::info!("PERF first_frame");
-        }
-        if self.frozen {
-            return;
-        }
-        if self.load.freeze > 0 && self.frame >= self.load.freeze {
-            self.frozen = true;
-            log::info!("PERF frozen frame={}", self.frame);
-        } else {
+        if more {
             ui.ctx().request_repaint();
         }
     }

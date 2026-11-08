@@ -5,7 +5,9 @@
 
 use std::{ops::Range, path::PathBuf, sync::OnceLock};
 
+pub mod frame_index;
 pub mod wall;
+pub use frame_index::FrameIndex;
 pub use wall::*;
 
 pub const POST_COUNT: usize = 5000;
