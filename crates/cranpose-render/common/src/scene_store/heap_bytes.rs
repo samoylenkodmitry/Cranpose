@@ -41,7 +41,14 @@ pub(super) fn store_heap_bytes(store: &SceneStore) -> usize {
                         .sum::<usize>()
             })
             .sum::<usize>();
-    rows + store.items.heap_bytes() + store.transforms.heap_bytes() + props + draws + texts + runs
+    let marks = store.marks.heap_bytes() + size_of_val(store.mark_scratch.as_slice());
+    rows + store.items.heap_bytes()
+        + marks
+        + store.transforms.heap_bytes()
+        + props
+        + draws
+        + texts
+        + runs
 }
 
 fn draw_primitive_heap_bytes(primitive: &DrawPrimitive) -> usize {

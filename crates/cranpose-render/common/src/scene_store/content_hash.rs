@@ -24,6 +24,17 @@ pub(super) fn motion_source_content_hash(layer: LayerRef<'_>) -> u64 {
     finish_hash(|state| hash_content(layer, state, false))
 }
 
+// A hash of what an own draw of a record draws; `None` for a child.
+pub(super) fn own_draw_print(item: ItemRef<'_>) -> Option<u64> {
+    let print = match item {
+        ItemRef::Draw(draw) => finish_hash(|state| hash_draw(draw, state)),
+        ItemRef::Text(text) => finish_hash(|state| hash_text(text, state)),
+        ItemRef::Run(run) => finish_hash(|state| hash_run(run, state)),
+        ItemRef::Layer(_) | ItemRef::Leaf(_) => return None,
+    };
+    Some(print)
+}
+
 fn hash_content<H: Hasher>(layer: LayerRef<'_>, state: &mut H, with_translated_offset: bool) {
     layer.local_bounds().render_hash().hash(state);
     let translated = layer.translated_content_context();

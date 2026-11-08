@@ -48,34 +48,44 @@ impl DrawOwners {
         store: &mut SceneStore,
         changes: &mut Vec<DrawOwnerChange>,
     ) -> bool {
-        let JournalRead::Changes(entries) = store.read_journal(&mut self.cursor) else {
-            return false;
-        };
+        let Self {
+            cursor,
+            joined_in_update,
+        } = self;
         let first = changes.len();
-        for update in entries.chunk_by(|a, b| a.update == b.update) {
-            self.joined_in_update.clear();
-            self.joined_in_update.extend(
-                update
-                    .iter()
-                    .filter(|entry| entry.event.joins())
-                    .filter_map(drawn_node),
-            );
-            self.joined_in_update.sort_unstable();
-            self.joined_in_update.dedup();
-            changes.extend(
-                update
-                    .iter()
-                    .filter(|entry| entry.event.leaves())
-                    .filter_map(drawn_node)
-                    .filter(|node| self.joined_in_update.binary_search(node).is_err())
-                    .map(DrawOwnerChange::Left),
-            );
-            changes.extend(
-                self.joined_in_update
-                    .iter()
-                    .copied()
-                    .map(DrawOwnerChange::Joined),
-            );
+        let known = store.read_journal(cursor, |_, read| {
+            let JournalRead::Changes(entries) = read else {
+                return false;
+            };
+            for update in entries.chunk_by(|a, b| a.update == b.update) {
+                joined_in_update.clear();
+                joined_in_update.extend(
+                    update
+                        .iter()
+                        .filter(|entry| entry.event.joins())
+                        .filter_map(drawn_node),
+                );
+                joined_in_update.sort_unstable();
+                joined_in_update.dedup();
+                changes.extend(
+                    update
+                        .iter()
+                        .filter(|entry| entry.event.leaves())
+                        .filter_map(drawn_node)
+                        .filter(|node| joined_in_update.binary_search(node).is_err())
+                        .map(DrawOwnerChange::Left),
+                );
+                changes.extend(
+                    joined_in_update
+                        .iter()
+                        .copied()
+                        .map(DrawOwnerChange::Joined),
+                );
+            }
+            true
+        });
+        if !known {
+            return false;
         }
         // The latest change of each node stands.
         let read = &mut changes[first..];

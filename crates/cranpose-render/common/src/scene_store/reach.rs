@@ -3,9 +3,11 @@
 
 use cranpose_core::RecordId;
 use cranpose_ui::Rect;
-use cranpose_ui_graphics::{expand_rect, primitive_coverage_rect};
+use cranpose_ui_graphics::{
+    DrawPrimitive, RecordLane, ShadowPrimitive, expand_rect, primitive_coverage_rect,
+};
 
-use super::{ItemRef, LayerRef, RecordFlags, SceneStore};
+use super::{ItemRef, LayerRef, RecordFlags, SceneStore, own_marks};
 use crate::graph::{DrawPrimitiveNode, DrawRunNode};
 
 /// Where a record's subtree draws, in one space.
@@ -110,57 +112,95 @@ pub(super) fn refresh(store: &mut SceneStore, id: RecordId) {
             refresh(store, child);
         }
     }
-    let reach = items_reach(LayerRef::new(store, id));
+    let layer = LayerRef::new(store, id);
+    let clip = layer.visual_clip_rect();
+    let own = own_marks::reach(store.marks.span(store.warm[index].own_marks));
+    let children = layer
+        .children()
+        .map(|child| {
+            let extent = child.extent();
+            match extent.caster {
+                Some(_) => Reach::Unknown,
+                None => extent.reach,
+            }
+        })
+        .fold(Reach::Empty, Reach::union);
+    let reach = own.union(children).within(clip);
     store.set_reach(index, reach);
+    store.warm[index].own_reach = own.within(clip);
     let flags = &mut store.tree[index].flags;
     *flags = flags.without(RecordFlags::REACH_STALE);
 }
 
-// The reach of what `layer`'s items draw, within its clip.
-fn items_reach(layer: LayerRef<'_>) -> Reach {
-    let clip = layer.visual_clip_rect();
-    let mut reach = Reach::Empty;
-    for item in layer.items() {
-        reach = reach.union(match item {
-            ItemRef::Draw(draw) => draw_reach(draw),
-            ItemRef::Text(text) => Reach::of(text.draw_bounds()),
-            ItemRef::Run(run) => run_reach(run),
-            ItemRef::Layer(child) | ItemRef::Leaf(child) => {
-                let extent = child.extent();
-                match extent.caster {
-                    Some(_) => Reach::Unknown,
-                    None => extent.reach,
-                }
-            }
-        });
-        if reach == Reach::Unknown && clip.is_none() {
-            break;
-        }
+// Where an own draw of a record draws, in the record's space; `None` for a
+// child.
+pub(super) fn own_draw_reach(item: ItemRef<'_>) -> Option<Reach> {
+    match item {
+        ItemRef::Draw(draw) => Some(draw_reach(draw)),
+        ItemRef::Text(text) => Some(Reach::of(text.draw_bounds())),
+        ItemRef::Run(run) => Some(run_reach(run)),
+        ItemRef::Layer(_) | ItemRef::Leaf(_) => None,
     }
-    reach.within(clip)
 }
 
 fn draw_reach(draw: &DrawPrimitiveNode) -> Reach {
-    Reach::of(primitive_coverage_rect(&draw.primitive)).within(draw.clip)
+    primitive_reach(&draw.primitive).within(draw.clip)
 }
 
 fn run_reach(run: &DrawRunNode) -> Reach {
-    if run.summary.has_shadow {
-        return Reach::Unknown;
+    let reach = run.recording.bounds().map_or(Reach::Empty, Reach::Finite);
+    if !run.summary.has_shadow {
+        return reach;
     }
-    run.recording.bounds().map_or(Reach::Empty, Reach::Finite)
+    let recording = &*run.recording;
+    recording
+        .segments_in(&run.segments)
+        .filter(|segment| segment.lane == RecordLane::Others)
+        .flat_map(|segment| &recording.others()[segment.range()])
+        .fold(reach, |reach, primitive| {
+            reach.union(primitive_reach(primitive))
+        })
 }
+
+// Where `primitive` draws. A shadow's blur reaches past its shape by at most
+// its radius and [`BLUR_PIXEL_SLACK`] pixels; at a raster scale under one,
+// a renderer adds the pixels the logical units here leave out.
+fn primitive_reach(primitive: &DrawPrimitive) -> Reach {
+    match primitive {
+        DrawPrimitive::Blend { primitive, .. } => primitive_reach(primitive),
+        DrawPrimitive::Shadow(ShadowPrimitive::Drop {
+            shape, blur_radius, ..
+        }) => primitive_reach(shape)
+            .mapped(|rect| expand_rect(rect, blur_radius.max(0.0) + BLUR_PIXEL_SLACK)),
+        DrawPrimitive::Shadow(ShadowPrimitive::Inner { clip_rect, .. }) => {
+            Reach::Finite(*clip_rect)
+        }
+        primitive => Reach::of(primitive_coverage_rect(primitive)),
+    }
+}
+
+/// The most device pixels a blur reaches past its radius: the scratch
+/// block's rounding and the taps' tail.
+pub const BLUR_PIXEL_SLACK: f32 = 17.0;
 
 // The extent of `layer` in its parent's space.
 pub(super) fn extent(layer: LayerRef<'_>) -> Extent {
-    let graphics_layer = layer.graphics_layer();
     let to_parent = layer.transform_to_parent();
-    let effect = layer.effect().map_or(0.0, |effect| {
+    let Some(graphics_layer) = layer.store().graphics_layer(layer.id()) else {
+        return Extent {
+            reach: layer.reach().mapped(|rect| to_parent.bounds_for_rect(rect)),
+            caster: None,
+        };
+    };
+    let effect = graphics_layer.render_effect.as_ref().map_or(0.0, |effect| {
         effect.input_padding() + effect.output_padding()
     });
-    let backdrop = layer.backdrop().map_or(Reach::Empty, |backdrop| {
-        Reach::Finite(expand_rect(layer.local_bounds(), backdrop.output_padding()))
-    });
+    let backdrop = graphics_layer
+        .backdrop_effect
+        .as_ref()
+        .map_or(Reach::Empty, |backdrop| {
+            Reach::Finite(expand_rect(layer.local_bounds(), backdrop.output_padding()))
+        });
     let space = graphics_layer.space.is_some();
     let reach = if space {
         Reach::Unknown

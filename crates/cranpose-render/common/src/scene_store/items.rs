@@ -65,22 +65,16 @@ impl Item {
     }
 }
 
-/// A record's items: `len` of them from `start` in the store's items.
+// A record's entries in a pool: `len` of them from `start`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct ItemSpan {
-    pub(crate) start: u32,
-    pub(crate) len: u32,
+pub(crate) struct Span {
+    start: u32,
+    len: u32,
 }
 
-impl ItemSpan {
-    /// How many items the span holds.
-    pub fn len(self) -> usize {
+impl Span {
+    pub(crate) fn len(self) -> usize {
         self.len as usize
-    }
-
-    /// Whether the span holds no item.
-    pub fn is_empty(self) -> bool {
-        self.len == 0
     }
 
     fn range(self) -> std::ops::Range<usize> {
@@ -88,40 +82,50 @@ impl ItemSpan {
     }
 }
 
-// The store's items. A span takes room of the power of two at or above its
-// length, so it grows in place up to that room; a freed span's room goes to
-// the next span of its size class.
-#[derive(Clone, Default)]
-pub(crate) struct ItemPool {
-    items: Vec<Item>,
+// Entries of the store's records, each record's in one span. A span takes
+// room of the power of two at or above its length, so it grows in place up
+// to that room; a freed span's room goes to the next span of its size class.
+#[derive(Clone)]
+pub(crate) struct SpanPool<T> {
+    items: Vec<T>,
     free: Vec<Vec<u32>>,
+}
+
+impl<T> Default for SpanPool<T> {
+    fn default() -> Self {
+        Self {
+            items: Vec::new(),
+            free: Vec::new(),
+        }
+    }
 }
 
 fn class_of(len: u32) -> usize {
     len.next_power_of_two().trailing_zeros() as usize
 }
 
-impl ItemPool {
-    pub(crate) fn span(&self, span: ItemSpan) -> &[Item] {
+impl<T: Copy> SpanPool<T> {
+    pub(crate) fn span(&self, span: Span) -> &[T] {
         &self.items[span.range()]
     }
 
     // Writes `items` into `span`'s room when they fit it, else into new
     // room, giving the old back.
-    pub(crate) fn write(&mut self, span: ItemSpan, items: &[Item]) -> ItemSpan {
-        let len = u32::try_from(items.len()).expect("a record holds fewer than 2^32 items");
-        let span = if len == 0 {
+    pub(crate) fn write(&mut self, span: Span, items: &[T]) -> Span {
+        let Some(&first) = items.first() else {
             self.free_span(span);
-            ItemSpan::default()
-        } else if span.len > 0 && class_of(span.len) == class_of(len) {
-            ItemSpan {
+            return Span::default();
+        };
+        let len = u32::try_from(items.len()).expect("a record holds fewer than 2^32 entries");
+        let span = if span.len > 0 && class_of(span.len) == class_of(len) {
+            Span {
                 start: span.start,
                 len,
             }
         } else {
             self.free_span(span);
-            ItemSpan {
-                start: self.take_room(len),
+            Span {
+                start: self.take_room(len, first),
                 len,
             }
         };
@@ -129,7 +133,7 @@ impl ItemPool {
         span
     }
 
-    pub(crate) fn free_span(&mut self, span: ItemSpan) {
+    pub(crate) fn free_span(&mut self, span: Span) {
         if span.len == 0 {
             return;
         }
@@ -140,20 +144,20 @@ impl ItemPool {
         self.free[class].push(span.start);
     }
 
-    fn take_room(&mut self, len: u32) -> u32 {
+    // Room for `len` entries, new room filled with `filler`.
+    fn take_room(&mut self, len: u32, filler: T) -> u32 {
         let class = class_of(len);
         if let Some(start) = self.free.get_mut(class).and_then(Vec::pop) {
             return start;
         }
         let start = u32::try_from(self.items.len()).expect("fewer than 2^32 items");
         let room = 1usize << class;
-        self.items
-            .resize(self.items.len() + room, Item::new(ItemKind::Draw, 0));
+        self.items.resize(self.items.len() + room, filler);
         start
     }
 
     pub(crate) fn heap_bytes(&self) -> usize {
-        self.items.capacity() * size_of::<Item>()
+        self.items.capacity() * size_of::<T>()
             + self.free.capacity() * size_of::<Vec<u32>>()
             + self
                 .free

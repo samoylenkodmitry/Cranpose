@@ -6,7 +6,8 @@ use std::num::NonZeroU32;
 use cranpose_core::{NodeId, RecordId, SceneUpdate};
 use cranpose_ui::Rect;
 
-use super::ItemSpan;
+use super::{Reach, Span};
+use crate::graph::ProjectiveTransform;
 
 /// What a record draws for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -76,6 +77,14 @@ impl RecordFlags {
     pub(crate) const FACTS_STALE: Self = Self(1 << 11);
     // A change beneath the record left its reach to be worked out again.
     pub(crate) const REACH_STALE: Self = Self(1 << 12);
+    // The update in progress made the record.
+    pub(crate) const INSERTED: Self = Self(1 << 13);
+    // The update in progress may have changed the record's own draws, which
+    // its end compares with what they were.
+    pub(crate) const REDRAW_PENDING: Self = Self(1 << 14);
+    // An update changed the record's own draws while no reader followed
+    // redraws: its marks wait.
+    pub(crate) const MARKS_STALE: Self = Self(1 << 15);
     // The facts the store works out at the end of an update.
     pub(crate) const FACTS: Self =
         Self(Self::HAS_HIT_TARGETS.0 | Self::HAS_SPACE.0 | Self::CONTAINED.0);
@@ -85,7 +94,10 @@ impl RecordFlags {
             | Self::HAS_GRAPHICS_LAYER.0
             | Self::HAS_LAYER_BOUNDS.0
             | Self::FACTS_STALE.0
-            | Self::REACH_STALE.0,
+            | Self::REACH_STALE.0
+            | Self::INSERTED.0
+            | Self::REDRAW_PENDING.0
+            | Self::MARKS_STALE.0,
     );
 
     /// Whether every flag of `other` is set.
@@ -115,7 +127,7 @@ impl RecordFlags {
 #[repr(C, align(32))]
 pub(crate) struct TreeRecord {
     pub(crate) parent: Option<RecordId>,
-    pub(crate) items: ItemSpan,
+    pub(crate) items: Span,
     pub(crate) kind: RecordKind,
     pub(crate) reach_state: ReachState,
     pub(crate) flags: RecordFlags,
@@ -138,6 +150,10 @@ pub(crate) struct WarmRecord {
     pub(crate) node: Option<NodeId>,
     pub(crate) props: Option<PropsId>,
     pub(crate) content_offset: [f32; 2],
+    // The marks of the record's own draws as an update last left them.
+    pub(crate) own_marks: Span,
+    // Where the record's own draws reach, beside its children's.
+    pub(crate) own_reach: Reach,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -191,3 +207,12 @@ const _: () = assert!(
     size_of::<GeoRecord>() == 32,
     "a geometry record fills half a cache line"
 );
+
+// Whether two transforms hold the same numbers, bit for bit.
+pub(super) fn same_bits(a: ProjectiveTransform, b: ProjectiveTransform) -> bool {
+    a.matrix()
+        .iter()
+        .flatten()
+        .zip(b.matrix().iter().flatten())
+        .all(|(a, b)| a.to_bits() == b.to_bits())
+}

@@ -23,7 +23,7 @@ fn collect_layer(
     let layer = store.root_layer().expect("the store holds the layer");
     collect_root(
         layer,
-        store.update(),
+        (store.update(), false),
         motion,
         capacity,
         root_scale,
@@ -127,6 +127,7 @@ fn walk_settings() -> WalkSettings {
         wants_pixel_sensitive: false,
         update: SceneUpdate::default(),
         in_space: false,
+        records_shown: false,
     }
 }
 

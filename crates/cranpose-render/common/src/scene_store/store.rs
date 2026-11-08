@@ -8,9 +8,11 @@ use cranpose_core::{NodeId, RecordId, RecordRef, SceneUpdate, StoreId, collectio
 use cranpose_ui::{GraphicsLayer, Point, Rect};
 
 use super::{
-    GeoRecord, GraphicsLayerId, Item, ItemKind, ItemPool, ItemRef, ItemSpan, Journal,
-    JournalCursor, JournalEntry, JournalRead, LayerProps, LayerRef, PropsId, Reach, ReachState,
-    RecordEvent, RecordEvents, RecordFlags, RecordKind, Slab, TransformId, TreeRecord, WarmRecord,
+    ChildOrder, GeoRecord, GraphicsLayerId, Item, ItemKind, ItemRef, Journal, JournalCursor,
+    JournalEntry, JournalRead, LayerProps, LayerRef, PropsId, Reach, ReachState, RecordEvent,
+    RecordEvents, RecordFlags, RecordKind, Slab, Span, SpanPool, TransformId, TreeRecord,
+    WarmRecord,
+    own_marks::{self, OwnMark},
 };
 use crate::graph::{
     DrawPrimitiveNode, DrawRunNode, LayerNode, ProjectiveTransform, TextPrimitiveNode,
@@ -25,7 +27,8 @@ pub struct SceneStore {
     pub(super) warm: Vec<WarmRecord>,
     pub(super) generations: Vec<u32>,
     pub(super) free_rows: Vec<u32>,
-    pub(super) items: ItemPool,
+    pub(super) items: SpanPool<Item>,
+    pub(super) marks: SpanPool<OwnMark>,
     pub(super) props: Slab<LayerProps>,
     pub(super) graphics_layers: Slab<GraphicsLayer>,
     pub(super) transforms: Slab<ProjectiveTransform>,
@@ -37,6 +40,15 @@ pub struct SceneStore {
     journal: Journal,
     // The records whose facts the update in progress may have changed.
     pub(super) facts_stale: Vec<RecordId>,
+    // The records whose own draws the update in progress may have changed,
+    // which its end compares with what they drew before.
+    pub(super) redrawn: Vec<RecordRef>,
+    // The records whose marks wait for a reader that follows redraws.
+    pub(super) marks_stale: Vec<RecordRef>,
+    order: ChildOrder,
+    // The marks of the own draws of the record whose end of update is
+    // being worked out.
+    pub(super) mark_scratch: Vec<OwnMark>,
 }
 
 /// One state of one store: what it held after one of its updates.
@@ -57,11 +69,6 @@ pub struct RecordSeed {
     /// The record that holds it, `None` for the root.
     pub parent: Option<RecordId>,
 }
-
-// How many journal entries a record row and a store keep past the slowest
-// reader: a reader further behind rebuilds what it follows from the store.
-const JOURNAL_ROWS_KEPT: usize = 4;
-const JOURNAL_ENTRIES_KEPT: usize = 256;
 
 fn next_store_id() -> StoreId {
     static NEXT: AtomicU16 = AtomicU16::new(1);
@@ -88,7 +95,8 @@ impl SceneStore {
             warm: Vec::new(),
             generations: Vec::new(),
             free_rows: Vec::new(),
-            items: ItemPool::default(),
+            items: SpanPool::default(),
+            marks: SpanPool::default(),
             props: Slab::default(),
             graphics_layers: Slab::default(),
             transforms: Slab::default(),
@@ -99,6 +107,10 @@ impl SceneStore {
             update: SceneUpdate::default(),
             journal: Journal::default(),
             facts_stale: Vec::new(),
+            redrawn: Vec::new(),
+            marks_stale: Vec::new(),
+            order: ChildOrder::default(),
+            mark_scratch: Vec::new(),
         }
     }
 
@@ -127,8 +139,7 @@ impl SceneStore {
 
     /// Starts a scene update and returns its number.
     pub fn begin_update(&mut self) -> SceneUpdate {
-        self.journal
-            .trim(JOURNAL_ROWS_KEPT * self.tree.len() + JOURNAL_ENTRIES_KEPT);
+        self.journal.trim(self.tree.len());
         self.update = self.update.next();
         self.update
     }
@@ -136,7 +147,9 @@ impl SceneStore {
     /// Starts following the `events` of the store's records: the reader's
     /// first read reports the changes after now.
     pub fn open_journal(&mut self, events: RecordEvents) -> JournalCursor {
-        self.journal.open(self.id, events)
+        let cursor = self.journal.open(self.id, events);
+        self.mark_for_redraws();
+        cursor
     }
 
     /// Stops following the changes of the store's records.
@@ -144,15 +157,41 @@ impl SceneStore {
         self.journal.close(cursor);
     }
 
-    /// The changes of the store's records since the reader's last read. A
-    /// reader of another store starts following this one, and learns that
-    /// its changes are lost.
-    pub fn read_journal(&mut self, cursor: &mut JournalCursor) -> JournalRead<'_> {
-        self.journal.read(self.id, cursor)
+    /// Makes the reader of `cursor` follow `events` from the next update
+    /// on.
+    pub fn follow_journal(&mut self, cursor: &mut JournalCursor, events: RecordEvents) {
+        self.journal.follow(self.id, cursor, events);
+        self.mark_for_redraws();
+    }
+
+    // Whether a reader follows where the update in progress redraws.
+    pub(super) fn follows_redrawn_reach(&self) -> bool {
+        self.journal.wants_redrawn_reach(self.update)
+    }
+
+    // Works out the marks that wait once a reader follows where records
+    // redraw, so it compares the next redraws with the store as it is now.
+    fn mark_for_redraws(&mut self) {
+        if self.follows_redrawn_reach() {
+            own_marks::refresh_stale(self);
+        }
+    }
+
+    /// Hands `read` the store and the changes of its records since the
+    /// reader's last read, then marks them read. A reader of another store
+    /// starts following this one, and learns that its changes are lost.
+    pub fn read_journal<R>(
+        &mut self,
+        cursor: &mut JournalCursor,
+        read: impl FnOnce(&Self, JournalRead<'_>) -> R,
+    ) -> R {
+        let result = read(self, self.journal.changes(self.id, cursor));
+        self.journal.mark_read(self.id, cursor);
+        result
     }
 
     // Logs `event` for `id` as the record is now, when a reader follows it.
-    fn log(&mut self, event: RecordEvent, id: RecordId) {
+    pub(super) fn log(&mut self, event: RecordEvent, id: RecordId) {
         if !self.journal.wants(event, self.update) {
             return;
         }
@@ -165,7 +204,10 @@ impl SceneStore {
                 id,
                 generation: self.generations[index],
             },
-            parent: self.tree[index].parent,
+            parent: self.tree[index].parent.map(|parent| RecordRef {
+                id: parent,
+                generation: self.generations[parent.index()],
+            }),
             node: self.warm[index].node,
         });
     }
@@ -175,6 +217,20 @@ impl SceneStore {
     /// within its bounds. Readers read the store after it.
     pub fn finish_update(&mut self) {
         super::facts::refresh(self);
+        own_marks::settle(self);
+    }
+
+    // Leaves the own draws of the record at `index` to be compared with what
+    // they were at the end of the update.
+    fn redraw_pending(&mut self, index: usize) {
+        let flags = &mut self.tree[index].flags;
+        if !flags.contains(RecordFlags::REDRAW_PENDING) {
+            *flags = flags.with(RecordFlags::REDRAW_PENDING);
+            self.redrawn.push(RecordRef {
+                id: RecordId::from_index(index).expect("a row is a record"),
+                generation: self.generations[index],
+            });
+        }
     }
 
     // The reach of the record at `index`.
@@ -225,6 +281,7 @@ impl SceneStore {
     /// Works out the reach of every record whose reach a change beneath it
     /// left to be worked out again, as [`LayerRef::reach`] reads it.
     pub fn refresh_reach(&mut self) {
+        own_marks::refresh_stale(self);
         if let Some(root) = self.root {
             super::reach::refresh(self, root);
         }
@@ -247,11 +304,11 @@ impl SceneStore {
     }
 
     /// Writes `root` and the tree beneath it as records in place of what the
-    /// store held, in a new update.
+    /// store held, in a new update. Records of the same kind and node at the
+    /// same place stay, so the update changes only what differs.
     pub fn describe(&mut self, root: &LayerNode) {
         self.begin_update();
-        self.clear();
-        super::spec::write_layer(self, None, root);
+        super::spec::write_root(self, root);
         self.finish_update();
     }
 
@@ -327,6 +384,7 @@ impl SceneStore {
         self.generations.clear();
         self.free_rows.clear();
         self.items.clear();
+        self.marks.clear();
         self.props.clear();
         self.graphics_layers.clear();
         self.transforms.clear();
@@ -336,6 +394,8 @@ impl SceneStore {
         self.root = None;
         self.journal.clear(self.update);
         self.facts_stale.clear();
+        self.redrawn.clear();
+        self.marks_stale.clear();
     }
 
     /// Makes a record from `seed`, changed in the update in progress, with no
@@ -346,7 +406,7 @@ impl SceneStore {
         let update = self.update;
         let tree = TreeRecord {
             parent: seed.parent,
-            items: ItemSpan::default(),
+            items: Span::default(),
             kind: seed.kind,
             reach_state: ReachState::Empty,
             flags: RecordFlags::default(),
@@ -359,6 +419,8 @@ impl SceneStore {
             node: seed.node,
             props: None,
             content_offset: [0.0; 2],
+            own_marks: Span::default(),
+            own_reach: Reach::Empty,
         };
         let id = match self.free_rows.pop() {
             Some(row) => {
@@ -381,6 +443,9 @@ impl SceneStore {
             None => self.root = Some(id),
         }
         self.stale_with_parent(id.index());
+        let flags = &mut self.tree[id.index()].flags;
+        *flags = flags.with(RecordFlags::INSERTED);
+        self.redraw_pending(id.index());
         self.log(RecordEvent::Inserted, id);
         id
     }
@@ -402,6 +467,7 @@ impl SceneStore {
             self.remove_item(item);
         }
         self.items.free_span(span);
+        self.marks.free_span(self.warm[index].own_marks);
         self.drop_props(index);
         // A freed row keeps no facts to work out.
         self.tree[index].flags = self.tree[index].flags.without(RecordFlags::FACTS_STALE);
@@ -456,9 +522,18 @@ impl SceneStore {
     }
 
     /// Replaces the items of `id` with `items`. The draws and children no
-    /// longer among them stay in the store: the caller removes them.
+    /// longer among them stay in the store: the caller removes them. A
+    /// caller that changes the record's own draws notes it with
+    /// [`Self::note_content_change`].
     pub fn set_items(&mut self, id: RecordId, items: &[Item]) {
         let index = id.index();
+        if self.journal.wants(RecordEvent::Changed, self.update)
+            && self
+                .order
+                .reorders(self.items.span(self.tree[index].items), items)
+        {
+            self.log(RecordEvent::Changed, id);
+        }
         self.tree[index].items = self.items.write(self.tree[index].items, items);
         self.stale(index);
     }
@@ -564,6 +639,7 @@ impl SceneStore {
         if self.warm[index].content_offset.map(f32::to_bits) != offset.map(f32::to_bits) {
             self.warm[index].content_offset = offset;
             self.stale(index);
+            self.moved(index);
         }
     }
 
@@ -635,7 +711,7 @@ impl SceneStore {
         let moved = self.geo[index].placement.map(f32::to_bits) != placement.map(f32::to_bits);
         self.geo[index].placement = placement;
         let origin = self.placed_origin(index);
-        let places_only = same_bits(
+        let places_only = super::records::same_bits(
             transform,
             ProjectiveTransform::translation(origin.x, origin.y),
         );
@@ -643,12 +719,16 @@ impl SceneStore {
         // An entry holds a transform that does more than place the record.
         let unchanged = !moved
             && match entry {
-                Some(entry) => !places_only && same_bits(self.transforms[entry.index()], transform),
+                Some(entry) => {
+                    !places_only
+                        && super::records::same_bits(self.transforms[entry.index()], transform)
+                }
                 None => places_only,
             };
         if unchanged {
             return;
         }
+        self.moved(index);
         if let Some(parent) = self.tree[index].parent {
             self.stale(parent.index());
         }
@@ -688,7 +768,7 @@ impl SceneStore {
             self.remove_item(item);
         }
         self.items.free_span(span);
-        self.tree[index].items = ItemSpan::default();
+        self.tree[index].items = Span::default();
         self.stale(index);
     }
 
@@ -768,7 +848,7 @@ impl SceneStore {
         match (slot, layer) {
             (Some(slot), Some(layer)) => {
                 let current = &self.graphics_layers[slot.index()];
-                if layer_facts_inputs(current) != layer_facts_inputs(&layer) {
+                if super::facts::layer_inputs(current) != super::facts::layer_inputs(&layer) {
                     self.stale_with_parent(id.index());
                 }
                 self.graphics_layers[slot.index()] = layer;
@@ -810,9 +890,9 @@ impl SceneStore {
             }
         };
         let props = &mut self.props[entry.index()];
-        let before = facts_inputs(props);
+        let before = super::facts::props_inputs(props);
         edit(props);
-        let after = facts_inputs(props);
+        let after = super::facts::props_inputs(props);
         if props.is_default() {
             self.props.remove(entry.index());
             self.warm[index].props = None;
@@ -829,9 +909,7 @@ impl SceneStore {
     pub fn note_content_change(&mut self, id: RecordId) {
         let update = self.update;
         let index = id.index();
-        if self.tree[index].content_rev != update {
-            self.log(RecordEvent::Changed, id);
-        }
+        self.redraw_pending(index);
         self.stale(index);
         self.tree[index].content_rev = update;
         if let Some(props) = self.warm[index].props {
@@ -859,15 +937,26 @@ impl SceneStore {
         self.note_subtree_change(parent);
     }
 
-    /// Notes that the update in progress moved `id` in its parent: the
-    /// parent's content changed, while the subtree of `id` holds.
+    /// Notes that the update in progress may have moved `id` in its parent,
+    /// or its content within it: when it did, the parent's content changed,
+    /// while the subtree of `id` holds.
     pub fn note_place_change(&mut self, id: RecordId) {
         let index = id.index();
-        if self.tree[index].place_rev != self.update {
-            self.log(RecordEvent::Moved, id);
+        if self.tree[index].place_rev == self.update {
+            self.note_subtree_change(self.tree[index].parent);
         }
-        self.tree[index].place_rev = self.update;
-        self.note_subtree_change(self.tree[index].parent);
+    }
+
+    // Notes that the update in progress moved the record at `index`, or its
+    // content within it.
+    fn moved(&mut self, index: usize) {
+        if self.tree[index].place_rev != self.update {
+            self.tree[index].place_rev = self.update;
+            self.log(
+                RecordEvent::Moved,
+                RecordId::from_index(index).expect("a row is a record"),
+            );
+        }
     }
 
     // Raises the subtree revision of `from` and its ancestors to the update
@@ -906,45 +995,4 @@ impl SceneStore {
     pub fn place_rev(&self, id: RecordId) -> SceneUpdate {
         self.tree[id.index()].place_rev
     }
-}
-
-// What of a record's properties its facts and its parent's follow from:
-// whether it handles pointers, whether it draws offscreen, which clips it,
-// and where its layer bounds lie.
-fn facts_inputs(props: &LayerProps) -> (bool, bool, Option<[u32; 4]>) {
-    (
-        props.hit_test.is_some(),
-        props.isolation.group_opacity || props.isolation.explicit_offscreen,
-        props
-            .layer_bounds
-            .map(|bounds| [bounds.x, bounds.y, bounds.width, bounds.height].map(f32::to_bits)),
-    )
-}
-
-// What of a graphics layer its record's facts and reach and its parent's
-// follow from: a clip, a shadow, how far an effect or a backdrop reaches past
-// the layer, or a space, which a layer that only moves leaves alone.
-fn layer_facts_inputs(layer: &GraphicsLayer) -> (bool, bool, Option<u32>, Option<u32>, bool) {
-    (
-        layer.clip,
-        layer.shadow_elevation > 0.0,
-        layer
-            .render_effect
-            .as_ref()
-            .map(|effect| (effect.input_padding() + effect.output_padding()).to_bits()),
-        layer
-            .backdrop_effect
-            .as_ref()
-            .map(|backdrop| backdrop.output_padding().to_bits()),
-        layer.space.is_some(),
-    )
-}
-
-// Whether two transforms hold the same numbers, bit for bit.
-fn same_bits(a: ProjectiveTransform, b: ProjectiveTransform) -> bool {
-    a.matrix()
-        .iter()
-        .flatten()
-        .zip(b.matrix().iter().flatten())
-        .all(|(a, b)| a.to_bits() == b.to_bits())
 }

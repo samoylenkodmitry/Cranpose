@@ -69,6 +69,7 @@ mod shader_cache;
 mod shaders;
 mod shape_pipelines;
 mod shared_shader;
+mod target_state;
 #[cfg(test)]
 mod test_support;
 mod text_system;
@@ -621,11 +622,10 @@ impl WgpuRenderer {
         let packet = self
             .frontend
             .build_frame_packet_with_scale(
-                width,
-                height,
-                root_scale,
+                (width, height, root_scale),
                 self.renderer_epoch,
                 self.surface_epoch,
+                frontend::PacketFor::Capture,
             )
             .ok_or_else(|| WgpuRendererError::Wgpu("scene graph is missing".to_string()))?;
         let mut returns = RenderReturns::default();

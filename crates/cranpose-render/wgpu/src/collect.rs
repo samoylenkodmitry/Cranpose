@@ -31,6 +31,7 @@ mod layer_motion;
 mod push_content;
 mod rigid_snap;
 mod rounded_clip_corners;
+mod shown;
 mod space_children;
 use backdrop_space::{detach_flat_backdrop, with_backdrop_in_own_space};
 pub(crate) use layer_motion::LayerMotion;
@@ -43,6 +44,8 @@ use rigid_snap::{
 use rounded_clip_corners::{
     content_admits_rounded_clip, content_takes_rounded_clip, rounded_clip_for_layer,
 };
+pub(crate) use shown::{ShownArea, ShownRecord};
+use shown::{record_drawn, record_hidden};
 use space_children::collect_space_children;
 
 const AFFINE_TOLERANCE: f32 = 1e-4;
@@ -55,6 +58,9 @@ pub(crate) struct LayerScene {
     pub(crate) scene: CompositorScene,
     pub(crate) children: Vec<ChildLayer>,
     has_backdrop: bool,
+    // How a window's walk drew each record it drew in place, when the scene
+    // is a window's root.
+    pub(crate) shown: Vec<ShownRecord>,
 }
 
 /// The layer scenes of returned packets, kept with their buffers for the
@@ -86,6 +92,7 @@ impl LayerSceneRecycler {
         }
         scene.scene.clear();
         scene.has_backdrop = false;
+        scene.shown.clear();
         self.scenes.push(scene);
     }
 
@@ -106,6 +113,7 @@ impl LayerScene {
             scene,
             children,
             has_backdrop: false,
+            shown: Vec::new(),
         };
         layer.refresh_backdrop_summary();
         layer
@@ -230,6 +238,9 @@ struct WalkSettings {
     /// layers there that are scenes, surfaces or 3D transforms: the walk
     /// leaves them out.
     in_space: bool,
+    // Whether the walk records how it draws each record in place: a window's
+    // walk of its root does.
+    records_shown: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -248,6 +259,11 @@ impl RasterScale {
         }
         let (Self::Exact(parent) | Self::Minimum(parent)) = self;
         Self::Minimum(parent * nominal.min(retained).min(1.0))
+    }
+
+    fn nominal(self) -> f32 {
+        let (Self::Exact(scale) | Self::Minimum(scale)) = self;
+        scale
     }
 
     fn shadow_reach(self, radius: f32) -> f32 {
@@ -433,7 +449,7 @@ fn rounding_within(layer_clip: Option<Rect>, context: &WalkContext<'_>) -> Optio
 
 pub(crate) fn collect_root(
     root: LayerRef<'_>,
-    update: SceneUpdate,
+    (update, records_shown): (SceneUpdate, bool),
     motion: &mut LayerMotion,
     capacity: SceneCapacityHint,
     root_scale: f32,
@@ -451,6 +467,7 @@ pub(crate) fn collect_root(
         wants_pixel_sensitive: false,
         update,
         in_space: false,
+        records_shown,
     };
     let context = WalkContext {
         offset: Point::default(),
@@ -469,12 +486,12 @@ pub(crate) fn collect_root(
 
 pub(crate) fn collect_overlay(
     root: LayerRef<'_>,
-    root_scale: f32,
+    (root_scale, records_shown): (f32, bool),
     recycler: &mut LayerSceneRecycler,
 ) -> Box<LayerScene> {
     collect_root(
         root,
-        root.store().update(),
+        (root.store().update(), records_shown),
         &mut LayerMotion::default(),
         SceneCapacityHint::default(),
         root_scale,
@@ -582,6 +599,7 @@ fn isolated_child(
             || (!context.translated && context.snap_anchor.is_none()),
         update: context.settings.update,
         in_space: context.settings.in_space || mesh.is_some(),
+        records_shown: false,
     };
     let content_context = WalkContext {
         offset: Point::default(),
@@ -745,6 +763,7 @@ fn collect_child(
 ) -> bool {
     let composite = layer_composite_params(child.graphics_layer());
     if composite.is_some_and(|(alpha, blend)| alpha == 0.0 && blend == BlendMode::SrcOver) {
+        record_hidden(child, &context, out);
         return context.settings.wants_pixel_sensitive && layer_has_pixel_sensitive_subtree(child);
     }
     // A rounded clip draws in place inside another one too: the outer one
@@ -765,6 +784,7 @@ fn collect_child(
         .local_bounds()
         .translate(child_offset.x, child_offset.y);
     if clipped_away(child, child_bounds, context.visual_clip) {
+        record_hidden(child, &context, out);
         return context.settings.wants_pixel_sensitive && layer_has_pixel_sensitive_subtree(child);
     }
     let child_anchor = context.snap_anchor.or_else(|| {
@@ -778,6 +798,7 @@ fn collect_child(
             })
             .flatten()
     });
+    let shadows_from = out.scene.rrect_shadows.len();
     if layer_casts_shadow(child.graphics_layer()) {
         push_direct_layer_shadow(
             child,
@@ -787,6 +808,7 @@ fn collect_child(
             &mut out.scene,
         );
     }
+    record_drawn(child, &context, (false, shadows_from), out);
     let (visual_clip, rounding) = match radius {
         Some(radius) => {
             let clip = child
@@ -824,9 +846,16 @@ fn collect_inline(inline: LayerRef<'_>, context: WalkContext<'_>, out: &mut Laye
         .visual_clip
         .is_some_and(|clip| inline.draws_within_bounds() && outside_clip(bounds, clip))
     {
+        record_hidden(inline, &context, out);
         return context.settings.wants_pixel_sensitive
             && inline.items().any(node_is_pixel_sensitive);
     }
+    record_drawn(
+        inline,
+        &context,
+        (false, out.scene.rrect_shadows.len()),
+        out,
+    );
     let translated = context.translated;
     let rigid = || rigid_snap_anchor(bounds, &GraphicsLayer::DEFAULT);
     let inherited = context
@@ -918,6 +947,7 @@ fn collect_isolated_child(
     detach_flat_backdrop(&mut isolated, &mut out.scene);
     out.children.push(isolated);
     out.scene.next_z += 1;
+    record_drawn(child, &context, (true, shadows_before), out);
     direct_translation(child.transform_to_parent()).is_some() && has_pixel_sensitive_subtree
 }
 

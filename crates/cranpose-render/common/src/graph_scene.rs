@@ -18,7 +18,7 @@ use crate::{
     graph::{LayerNode, ProjectiveTransform},
     scene_builder::WalkMemory,
     scene_pick::ScenePick,
-    scene_store::{LayerRef, SceneStore},
+    scene_store::{JournalCursor, JournalRead, LayerRef, RecordEvents, SceneStore},
 };
 
 /// Counters and once-only warnings that a scene collects while it dispatches pointer events.
@@ -619,6 +619,28 @@ impl Scene {
     /// The records the scene draws.
     pub fn store(&self) -> &SceneStore {
         &self.store
+    }
+
+    /// Starts following the `events` of the scene's records; see
+    /// [`SceneStore::open_journal`].
+    pub fn open_journal(&mut self, events: RecordEvents) -> JournalCursor {
+        self.store.open_journal(events)
+    }
+
+    /// Makes the reader of `cursor` follow `events` from the next update
+    /// on; see [`SceneStore::follow_journal`].
+    pub fn follow_journal(&mut self, cursor: &mut JournalCursor, events: RecordEvents) {
+        self.store.follow_journal(cursor, events);
+    }
+
+    /// Hands `read` the scene's records and their changes since the reader's
+    /// last read; see [`SceneStore::read_journal`].
+    pub fn read_journal<R>(
+        &mut self,
+        cursor: &mut JournalCursor,
+        read: impl FnOnce(&SceneStore, JournalRead<'_>) -> R,
+    ) -> R {
+        self.store.read_journal(cursor, read)
     }
 
     /// Works out the reach of the records a change left stale; see

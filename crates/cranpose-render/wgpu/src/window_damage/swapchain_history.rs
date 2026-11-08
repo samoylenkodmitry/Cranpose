@@ -1,25 +1,24 @@
-use super::{Damage, DamageRects, FrameWindow, KeptWindow, PresentedImage, WindowDamage};
+use super::{
+    Capture, Damage, FrameDamages, FrameWindow, Held, PresentedImage, Since,
+    captures::{collect, widen},
+    settle,
+};
 
-/// The frames back a kept swapchain image can be drawn again from, and the
-/// images the history follows.
-const IMAGE_HISTORY: usize = 8;
+/// The images of a swapchain the history follows.
+const IMAGES: usize = 8;
 
-/// The frames a swapchain's images hold and each frame's damage against the
-/// frame before: a frame drawn into an image that holds an older frame draws
-/// the union of the damages since that frame.
+/// The frames a swapchain's images hold: a frame drawn into an image that
+/// holds an older frame draws the union of the damages since that frame.
 #[derive(Default)]
 pub(crate) struct SwapchainHistory {
     surface_epoch: u64,
-    frame: u64,
     /// By image index, the frame the image holds.
-    held: [Option<u64>; IMAGE_HISTORY],
-    /// By frame modulo [`IMAGE_HISTORY`], the frame and its damage.
-    damages: [Option<(u64, Damage)>; IMAGE_HISTORY],
-    /// The summary of the frame presented last.
-    pub(crate) kept: KeptWindow,
-    // Whether the surface shows the frame `kept` summarizes: the frame
-    // presented last drew into an image the history follows.
-    shows_kept: bool,
+    held: [Option<Held>; IMAGES],
+    /// The frame presented last, when it went into an image the history
+    /// follows and holds.
+    presented: Option<Held>,
+    // What the backdrops of the frame in progress read and write.
+    captures: Vec<Capture>,
 }
 
 impl SwapchainHistory {
@@ -34,8 +33,8 @@ impl SwapchainHistory {
 
     // Forgets what the images hold.
     pub(crate) fn forget(&mut self) {
-        self.held = [None; IMAGE_HISTORY];
-        self.kept.forget();
+        self.held = [None; IMAGES];
+        self.presented = None;
     }
 
     /// Forgets what `image` holds: a frame the history does not follow
@@ -44,49 +43,63 @@ impl SwapchainHistory {
         if let Some(held) = self.held.get_mut(image.index as usize) {
             *held = None;
         }
-        self.shows_kept = false;
+        self.presented = None;
     }
 
     // Whether `frame` draws what the surface shows: the frame presented last
-    // on the frame's surface, into an image the history follows, with no
-    // item changed since. Such a frame needs no image and no present.
-    pub(crate) fn shows(&self, frame: &FrameWindow<'_>, damage: &mut WindowDamage) -> bool {
-        self.shows_kept
-            && frame.packet.surface_epoch == self.surface_epoch
-            && damage.shows(frame, &self.kept)
+    // on the frame's surface, into an image the history follows, with
+    // nothing changed since. Such a frame needs no image and no present.
+    pub(crate) fn shows(&self, frame: &FrameWindow<'_>, damages: &FrameDamages) -> bool {
+        frame.packet.surface_epoch == self.surface_epoch
+            && matches!(
+                damages.since(self.presented, frame).damage,
+                Damage::Part(changed) if changed.is_empty()
+            )
     }
 
-    /// The pixels that differ between the frame the kept `image` holds and a
-    /// frame of `damage`, none when none does; `None` unless the image holds
-    /// a frame whose damages since are all known.
-    pub(crate) fn changed_since(
+    /// What `frame` changes against the frame presented last.
+    pub(crate) fn presented_damage(
         &self,
-        image: PresentedImage,
-        damage: Damage,
-    ) -> Option<DamageRects> {
-        let held = self.held.get(image.index as usize).copied().flatten()?;
-        let Damage::Part(mut union) = damage else {
-            return None;
-        };
-        for frame in held + 1..=self.frame {
-            let entry = self.damages[(frame % IMAGE_HISTORY as u64) as usize];
-            let (_, Damage::Part(part)) = entry.filter(|(at, _)| *at == frame)? else {
-                return None;
-            };
-            for rect in part.as_slice() {
-                union.add(*rect);
-            }
-        }
-        Some(union)
+        frame: &FrameWindow<'_>,
+        damages: &FrameDamages,
+    ) -> Since {
+        damages.since(self.presented, frame)
     }
 
-    /// Ends a frame of `damage`: `image` holds it when it was `drawn` whole.
-    pub(crate) fn record(&mut self, image: PresentedImage, damage: Damage, drawn: bool) {
-        self.frame += 1;
-        self.shows_kept = true;
-        self.damages[(self.frame % IMAGE_HISTORY as u64) as usize] = Some((self.frame, damage));
-        if let Some(held) = self.held.get_mut(image.index as usize) {
-            *held = drawn.then_some(self.frame);
+    /// What `frame` changes in `image`: the union of the damages since the
+    /// frame the image holds, grown by what the frame's backdrops read and
+    /// write, as a backdrop over a pixel an earlier frame changed changes
+    /// what it writes.
+    pub(crate) fn changed_since(
+        &mut self,
+        image: PresentedImage,
+        frame: &FrameWindow<'_>,
+        damages: &FrameDamages,
+    ) -> Damage {
+        let held = self.held.get(image.index as usize).copied().flatten();
+        let damage = damages.since(held, frame).damage;
+        let Damage::Part(mut rects) = damage else {
+            return damage;
+        };
+        if rects.is_empty() || !frame.packet.root.contains_backdrop() {
+            return damage;
         }
+        self.captures.clear();
+        let place = (frame.packet.root_scale, frame.viewport);
+        if !collect(&frame.packet.root, place, &mut self.captures) {
+            return Damage::Full;
+        }
+        widen(&self.captures, &mut rects);
+        settle(rects, frame.viewport)
+    }
+
+    /// Ends the frame `held` drawn into `image`: the image holds it when it
+    /// was `drawn` whole.
+    pub(crate) fn record(&mut self, image: PresentedImage, held: Held, drawn: bool) {
+        let held = drawn.then_some(held);
+        if let Some(slot) = self.held.get_mut(image.index as usize) {
+            *slot = held;
+        }
+        self.presented = held;
     }
 }

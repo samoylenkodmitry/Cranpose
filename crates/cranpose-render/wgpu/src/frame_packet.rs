@@ -2,10 +2,12 @@ use cranpose_render_common::scene_store::SceneVersion;
 
 use crate::{
     collect::{ChildLayer, LayerScene},
+    frame::PacketDamage,
     scene::{
         BackdropLayer, CompositorScene, DrawOp, EffectLayer, ImageDraw, RunDraw, ShadowDraw,
         TextDraw,
     },
+    target_state::TargetDrawn,
 };
 
 pub(crate) const MAX_FRAMES_IN_FLIGHT: usize = 2;
@@ -61,14 +63,16 @@ pub(crate) struct FramePacket {
     pub(crate) root: Box<LayerScene>,
     pub(crate) overlay: Option<Box<LayerScene>>,
     pub(crate) clear: wgpu::Color,
-    // Whether the app held still, asking for no frame, between the frame
-    // before and this one.
-    pub(crate) held_still: bool,
     // Whether a pointer was held on the app's controls for this frame.
     pub(crate) pointer_held: bool,
     // The scene update the packet was collected from: a frame drawn from the
     // update the frame before drew shows nothing new of the app's.
     pub(crate) scene_update: SceneVersion,
+    // What the frame changes against the packet before it.
+    pub(crate) damage: PacketDamage,
+    // Whether the frame was one to skip working out what it changes, while
+    // frames keep changing most of the window.
+    pub(crate) skipped: bool,
 }
 
 impl FramePacket {
@@ -82,6 +86,15 @@ impl FramePacket {
         } else {
             SceneMotion::Moving
         }
+    }
+
+    // Whether a backdrop of the packet reads the page beneath it.
+    pub(crate) fn reads_page(&self) -> bool {
+        self.root.contains_backdrop()
+            || self
+                .overlay
+                .as_ref()
+                .is_some_and(|overlay| overlay.contains_backdrop())
     }
 }
 
@@ -124,6 +137,9 @@ pub(crate) struct RenderReturns {
     pub(crate) scene: Option<FrameSceneStorage>,
     pub(crate) frame_id: u64,
     pub(crate) outcome: PresentOutcome,
+    // How the frame went into a target that keeps its frames; `None` for a
+    // frame drawn into a texture that keeps none.
+    pub(crate) target: Option<TargetDrawn>,
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) timings: PresentTimings,
 }

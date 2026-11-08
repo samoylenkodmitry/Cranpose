@@ -14,7 +14,7 @@ use cranpose_render_common::{
 };
 use cranpose_ui_graphics::{
     BlendMode, Color, FrontPolygon, MAX_SUBSTRATES, Point, Rect, RenderEffect, RenderHash,
-    RuntimeShader, ShaderPlaceholder, ShaderTarget, SubstrateSpec, TileMode,
+    RuntimeShader, ShaderPlaceholder, ShaderTarget, SubstrateSpec, TileMode, expand_rect,
 };
 use smallvec::SmallVec;
 
@@ -5307,18 +5307,6 @@ fn child_surface_rect(child: &ChildLayer, scale: f32) -> Option<Rect> {
     (rect.width > 0.0 && rect.height > 0.0).then_some(rect)
 }
 
-fn expand_rect(rect: Rect, padding: f32) -> Rect {
-    if padding <= 0.0 {
-        return rect;
-    }
-    Rect {
-        x: rect.x - padding,
-        y: rect.y - padding,
-        width: rect.width + padding * 2.0,
-        height: rect.height + padding * 2.0,
-    }
-}
-
 fn surface_pixels(rect: Rect, scale: f32) -> u64 {
     let width = (rect.width * scale).ceil().max(0.0) as u64;
     let height = (rect.height * scale).ceil().max(0.0) as u64;
@@ -5468,8 +5456,9 @@ mod scene_surfaces;
 mod window_damage;
 
 pub(crate) use window_damage::{
-    ClearedImages, Damage, DamageRects, FrameWindow, ImageContent, KeptWindow, MAX_DAMAGE_RECTS,
-    PresentedImage, Repaint, Summaries, SwapchainHistory, WindowDamage,
+    COPY_HOLD_OFF, Capture, ClearedImages, Damage, DamageRects, FrameDamages, FrameWindow, Held,
+    ImageContent, MAX_DAMAGE_RECTS, PacketDamage, PresentedImage, Repaint, Since, SwapchainHistory,
+    collect_captures, settle, widen,
 };
 
 #[cfg(test)]

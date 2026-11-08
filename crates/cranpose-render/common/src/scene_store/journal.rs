@@ -1,17 +1,17 @@
 // The changes of a store's records, kept until every reader that follows
 // them has read them.
 
-use cranpose_core::{NodeId, RecordId, RecordRef, SceneUpdate, StoreId};
+use cranpose_core::{NodeId, RecordRef, SceneUpdate, StoreId};
 
-use super::RecordKind;
+use super::{Reach, RecordKind};
 
 /// What an update did to a record.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum RecordEvent {
     /// The record was made, drawing for its node.
     Inserted,
-    /// What the record itself draws changed: its draws, properties or
-    /// children.
+    /// The record's properties changed, or the order of the children it
+    /// keeps: all it draws may change.
     Changed,
     /// The record moved in its parent.
     Moved,
@@ -23,11 +23,22 @@ pub enum RecordEvent {
     /// The record started drawing for the node the entry names, or as the
     /// kind the entry names.
     Claimed,
+    /// What the record draws of its own, beside its children, changed
+    /// within the reach, in the record's space.
+    Redrawn(Reach),
 }
 
 impl RecordEvent {
     const fn bit(self) -> u8 {
-        1 << self as u8
+        1 << match self {
+            Self::Inserted => 0,
+            Self::Changed => 1,
+            Self::Moved => 2,
+            Self::Removed => 3,
+            Self::Released => 4,
+            Self::Claimed => 5,
+            Self::Redrawn(_) => 6,
+        }
     }
 
     /// Whether the entry's node draws through the record from now on.
@@ -40,6 +51,14 @@ impl RecordEvent {
         matches!(self, Self::Removed | Self::Released)
     }
 }
+
+// How many entries a record row and a store keep past the slowest reader:
+// a reader further behind rebuilds what it follows from the store.
+const ROWS_KEPT: usize = 4;
+const ENTRIES_KEPT: usize = 256;
+
+// The bit of a set of changes that asks for the reach of each redraw.
+const REDRAWN_REACH: u8 = 1 << 7;
 
 /// The kinds of change a journal reader follows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -58,6 +77,11 @@ impl RecordEvents {
             | RecordEvent::Claimed.bit(),
     );
 
+    /// Every change, each [`RecordEvent::Redrawn`] with an unknown reach:
+    /// for a reader that does not work out where its records redraw for a
+    /// while, so the store spends nothing on it.
+    pub const ALL_WITHOUT_REACH: Self = Self(!REDRAWN_REACH);
+
     /// Whether the set holds `event`.
     pub fn contains(self, event: RecordEvent) -> bool {
         self.0 & event.bit() != 0
@@ -65,7 +89,7 @@ impl RecordEvents {
 }
 
 /// One change to one record.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct JournalEntry {
     /// The update that made the change.
     pub update: SceneUpdate,
@@ -76,7 +100,7 @@ pub struct JournalEntry {
     /// The record, with the generation its row had in the change.
     pub record: RecordRef,
     /// The record that held it.
-    pub parent: Option<RecordId>,
+    pub parent: Option<RecordRef>,
     /// The layout node the record draws for in the change.
     pub node: Option<NodeId>,
 }
@@ -127,6 +151,12 @@ impl Journal {
         self.wanted & event.bit() != 0 && self.cleared != Some(update)
     }
 
+    // Whether an open reader follows where the records `update` redraws
+    // changed.
+    pub(super) fn wants_redrawn_reach(&self, update: SceneUpdate) -> bool {
+        self.wanted & REDRAWN_REACH != 0 && self.wants(RecordEvent::Redrawn(Reach::Empty), update)
+    }
+
     pub(super) fn log(&mut self, entry: JournalEntry) {
         self.entries.push(entry);
     }
@@ -138,9 +168,10 @@ impl Journal {
         self.cleared = Some(update);
     }
 
-    // Drops the entries every reader has read, and the oldest beyond
-    // `keep`, whose readers lose them.
-    pub(super) fn trim(&mut self, keep: usize) {
+    // Drops the entries every reader has read, and the oldest beyond what a
+    // store of `rows` record rows keeps, whose readers lose them.
+    pub(super) fn trim(&mut self, rows: usize) {
+        let keep = ROWS_KEPT * rows + ENTRIES_KEPT;
         let read = self.readers.iter().flatten().map(|&(next, _)| next).min();
         let read = read.map_or(self.entries.len(), |next| {
             usize::try_from(next.saturating_sub(self.start)).unwrap_or(usize::MAX)
@@ -172,6 +203,24 @@ impl Journal {
         }
     }
 
+    // Makes the reader of `cursor` follow `events`; a reader of another
+    // store follows them once its next read opens it here.
+    pub(super) fn follow(
+        &mut self,
+        store: StoreId,
+        cursor: &mut JournalCursor,
+        events: RecordEvents,
+    ) {
+        cursor.events = events;
+        if cursor.store != store {
+            return;
+        }
+        if let Some(Some((_, followed))) = self.readers.get_mut(cursor.slot) {
+            *followed = events;
+        }
+        self.refresh_wanted();
+    }
+
     pub(super) fn close(&mut self, cursor: &JournalCursor) {
         if let Some(reader) = self.readers.get_mut(cursor.slot) {
             *reader = None;
@@ -187,21 +236,22 @@ impl Journal {
             .fold(0, |wanted, &(_, events)| wanted | events.0);
     }
 
-    pub(super) fn read(&mut self, store: StoreId, cursor: &mut JournalCursor) -> JournalRead<'_> {
-        if cursor.store != store {
-            *cursor = self.open(store, cursor.events);
-            return JournalRead::Lost;
-        }
-        let end = self.end();
-        let Some(Some((next, events))) = self.readers.get(cursor.slot).copied() else {
-            *cursor = self.open(store, cursor.events);
+    pub(super) fn changes(&self, store: StoreId, cursor: &JournalCursor) -> JournalRead<'_> {
+        let Some(Some((next, _))) = self.readers.get(cursor.slot).copied() else {
             return JournalRead::Lost;
         };
-        self.readers[cursor.slot] = Some((end, events));
-        if next < self.start {
+        if cursor.store != store || next < self.start {
             return JournalRead::Lost;
         }
         let first = usize::try_from(next - self.start).unwrap_or(usize::MAX);
         JournalRead::Changes(&self.entries[first.min(self.entries.len())..])
+    }
+
+    pub(super) fn mark_read(&mut self, store: StoreId, cursor: &mut JournalCursor) {
+        let end = self.end();
+        match self.readers.get_mut(cursor.slot) {
+            Some(Some((next, _))) if cursor.store == store => *next = end,
+            _ => *cursor = self.open(store, cursor.events),
+        }
     }
 }

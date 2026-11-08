@@ -224,6 +224,16 @@ impl<'a> LayerRef<'a> {
         self.store.reach(self.id.index())
     }
 
+    /// Where the record's own draws reach, beside its children's, in its
+    /// own space and within its clip. A change beneath the record since
+    /// [`SceneStore::refresh_reach`] leaves it unknown.
+    pub fn own_reach(self) -> Reach {
+        if self.flags().contains(RecordFlags::REACH_STALE) {
+            return Reach::Unknown;
+        }
+        self.store.warm[self.id.index()].own_reach
+    }
+
     /// What the record draws in its parent's space.
     pub fn extent(self) -> Extent {
         super::reach::extent(self)

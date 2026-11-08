@@ -1,9 +1,9 @@
 // Facts about a record's subtree that its walks branch on, worked out at the
 // end of each scene update for the records it changed.
 
-use cranpose_ui::Rect;
+use cranpose_ui::{GraphicsLayer, Rect};
 
-use super::{ItemRef, LayerRef, RecordFlags, SceneStore};
+use super::{ItemRef, LayerProps, LayerRef, RecordFlags, SceneStore};
 use crate::graph::{CONTAINED_DRAW_SLACK, inflate_rect, rect_within};
 
 // Works out the facts of the records whose inputs the update changed, and
@@ -80,4 +80,36 @@ fn items_draw_within(layer: LayerRef<'_>, bounds: Rect) -> bool {
                 )
         }
     })
+}
+
+// What of a record's properties its facts and its parent's follow from:
+// whether it handles pointers, whether it draws offscreen, which clips it,
+// and where its layer bounds lie.
+pub(super) fn props_inputs(props: &LayerProps) -> (bool, bool, Option<[u32; 4]>) {
+    (
+        props.hit_test.is_some(),
+        props.isolation.group_opacity || props.isolation.explicit_offscreen,
+        props
+            .layer_bounds
+            .map(|bounds| [bounds.x, bounds.y, bounds.width, bounds.height].map(f32::to_bits)),
+    )
+}
+
+// What of a graphics layer its record's facts and reach and its parent's
+// follow from: a clip, a shadow, how far an effect or a backdrop reaches past
+// the layer, or a space, which a layer that only moves leaves alone.
+pub(super) fn layer_inputs(layer: &GraphicsLayer) -> (bool, bool, Option<u32>, Option<u32>, bool) {
+    (
+        layer.clip,
+        layer.shadow_elevation > 0.0,
+        layer
+            .render_effect
+            .as_ref()
+            .map(|effect| (effect.input_padding() + effect.output_padding()).to_bits()),
+        layer
+            .backdrop_effect
+            .as_ref()
+            .map(|backdrop| backdrop.output_padding().to_bits()),
+        layer.space.is_some(),
+    )
 }

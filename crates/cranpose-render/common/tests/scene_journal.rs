@@ -1,7 +1,12 @@
 use cranpose_core::NodeId;
-use cranpose_render_common::scene_store::{
-    JournalCursor, JournalRead, RecordEvent, RecordEvents, RecordKind, RecordSeed, SceneStore,
+use cranpose_render_common::{
+    graph::{DrawRunNode, LayerNode, PrimitivePhase, RenderNode},
+    scene_store::{
+        JournalCursor, JournalRead, Reach, RecordEvent, RecordEvents, RecordKind, RecordSeed,
+        SceneStore,
+    },
 };
+use cranpose_ui_graphics::{Brush, Color, DrawPrimitive, Rect, Size};
 
 // A store holding a root layer.
 fn rooted_store() -> SceneStore {
@@ -35,7 +40,7 @@ fn events(
     store: &mut SceneStore,
     cursor: &mut JournalCursor,
 ) -> Option<Vec<(RecordEvent, NodeId)>> {
-    match store.read_journal(cursor) {
+    store.read_journal(cursor, |_, read| match read {
         JournalRead::Changes(entries) => Some(
             entries
                 .iter()
@@ -43,7 +48,7 @@ fn events(
                 .collect(),
         ),
         JournalRead::Lost => None,
-    }
+    })
 }
 
 #[test]
@@ -106,4 +111,77 @@ fn a_reader_of_another_store_follows_this_one() {
         events(&mut second, &mut cursor).map(|events| events.len()),
         Some(2)
     );
+}
+
+const DOT: Rect = Rect {
+    x: 40.0,
+    y: 30.0,
+    width: 8.0,
+    height: 8.0,
+};
+
+// A page of node 1 that paints its whole box and then a dot of `dot`.
+fn page(dot: Color) -> LayerNode {
+    let run = |rect, color| {
+        RenderNode::DrawRun(DrawRunNode::new(
+            PrimitivePhase::BeforeChildren,
+            vec![DrawPrimitive::Rect {
+                rect,
+                brush: Brush::solid(color),
+                stroke: None,
+            }],
+        ))
+    };
+    let size = Size::new(200.0, 100.0);
+    LayerNode {
+        node_id: Some(NodeId(1)),
+        size,
+        children: vec![run(Rect::from_size(size), Color::BLACK), run(DOT, dot)],
+        ..Default::default()
+    }
+}
+
+#[test]
+fn a_page_described_again_reports_only_the_draw_that_changed() {
+    let mut store = SceneStore::new();
+    store.describe(&page(Color::RED));
+    let mut cursor = store.open_journal(RecordEvents::ALL);
+
+    store.describe(&page(Color::WHITE));
+    assert_eq!(
+        events(&mut store, &mut cursor),
+        Some(vec![(RecordEvent::Redrawn(Reach::Finite(DOT)), NodeId(1))]),
+        "the page redrew the dot alone"
+    );
+
+    store.describe(&page(Color::WHITE));
+    assert_eq!(
+        events(&mut store, &mut cursor),
+        Some(Vec::new()),
+        "the same page changes nothing"
+    );
+}
+
+#[test]
+fn a_reader_that_follows_reaches_again_learns_each_redraw_after() {
+    let mut store = SceneStore::new();
+    store.describe(&page(Color::RED));
+    let mut cursor = store.open_journal(RecordEvents::ALL_WITHOUT_REACH);
+
+    store.describe(&page(Color::WHITE));
+    assert_eq!(
+        events(&mut store, &mut cursor),
+        Some(vec![(RecordEvent::Redrawn(Reach::Unknown), NodeId(1))]),
+        "a reader without reaches learns that the page redrew"
+    );
+
+    store.follow_journal(&mut cursor, RecordEvents::ALL);
+    for (colour, label) in [(Color::RED, "back to red"), (Color::WHITE, "white again")] {
+        store.describe(&page(colour));
+        assert_eq!(
+            events(&mut store, &mut cursor),
+            Some(vec![(RecordEvent::Redrawn(Reach::Finite(DOT)), NodeId(1))]),
+            "{label}: the page redrew the dot"
+        );
+    }
 }

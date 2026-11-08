@@ -949,8 +949,11 @@ fn assert_spinner_repaints_only_itself_over(scene: Scene, keeper: Keeper) {
         let stats = frame.stats;
         let label = format!("{scene:?} {keeper:?} frame {step}: {stats:?}");
         support::assert_same_bytes(&label, WIDTH, &frame.kept, &frame.direct);
-        if step < whole_frames {
+        // The first frame draws whole: the target holds no frame before.
+        if step == 0 {
             whole_draws = stats.draw_calls;
+        }
+        if step < whole_frames {
             continue;
         }
         assert!(
@@ -1001,8 +1004,11 @@ fn two_small_animations_far_apart_repaint_only_their_areas() {
             let stats = frame.stats;
             let label = format!("{keeper:?} frame {step}: {stats:?}");
             support::assert_same_bytes(&label, WIDTH, &frame.kept, &frame.direct);
-            if step < start {
+            // The first frame draws whole: the target holds no frame before.
+            if step == 0 {
                 whole_draws = stats.draw_calls;
+            }
+            if step < start {
                 continue;
             }
             assert!(

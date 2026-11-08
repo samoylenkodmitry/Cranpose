@@ -45,7 +45,7 @@ fn root_builds_packet_with_frame_scalars() {
     assert!(packet.overlay.is_none());
 
     let next = frontend
-        .build_frame_packet_with_scale(320, 240, 1.0, 0, 0)
+        .build_frame_packet_with_scale((320, 240, 1.0), 0, 0, PacketFor::Capture)
         .expect("second frame collects too");
     assert_eq!(next.frame_id, 2, "frame sequence must be monotone");
     assert_eq!(next.root_scale, 1.0, "explicit scale must win");
