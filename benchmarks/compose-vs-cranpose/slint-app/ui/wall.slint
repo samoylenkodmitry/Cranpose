@@ -1,0 +1,106 @@
+// The still wall in Slint (`../README.md`): a window of tiles that never
+// change, under a clock line whose text changes every frame, with a cursor
+// outline that rests on another tile every frame.
+//
+// In Slint's declarative idiom the tiles come from a Rust model, made once,
+// each placed by its index. The clock's text and the cursor are the only
+// bindings on the frame, so a frame re-evaluates those two and nothing else.
+
+export struct WallTile {
+    label: string,
+    value: string,
+    fill: color,
+    dot: color,
+}
+
+export global WallClock {
+    in-out property <int> frame;
+    in-out property <string> text;
+}
+
+export component WallWindow inherits Window {
+    in property <[WallTile]> tiles;
+    in property <int> columns;
+    in property <length> tile-width;
+    in property <length> tile-height;
+    in property <length> label-size;
+    in property <length> value-size;
+    in property <length> dot;
+    in property <length> pad;
+    // The tile the cursor rests on: 37 tiles further each frame.
+    property <int> cursor: Math.mod(WallClock.frame * 37, max(tiles.length, 1));
+    title: "Still wall";
+    background: #0F1220;
+    default-font-family: "Roboto";
+    VerticalLayout {
+        Rectangle {
+            height: 56px;
+            background: #1E2A4A;
+            Text {
+                x: 16px;
+                height: parent.height;
+                text: "Still wall";
+                font-size: 20px;
+                font-weight: 700;
+                color: white;
+                vertical-alignment: center;
+            }
+        }
+        Rectangle {
+            height: 24px;
+            Text {
+                x: 8px;
+                height: parent.height;
+                text: WallClock.text;
+                font-size: 14px;
+                color: white;
+                vertical-alignment: center;
+            }
+        }
+        Rectangle {
+            for tile[index] in tiles: Rectangle {
+                x: 1px + Math.mod(index, columns) * (tile-width + 1px);
+                y: 1px + floor(index / columns) * (tile-height + 1px);
+                width: tile-width;
+                height: tile-height;
+                background: tile.fill;
+                border-radius: 2px;
+                clip: true;
+                label := Text {
+                    x: pad;
+                    y: pad;
+                    text: tile.label;
+                    font-size: label-size;
+                    font-weight: 700;
+                    color: white;
+                    wrap: no-wrap;
+                }
+                Rectangle {
+                    x: pad;
+                    y: pad + label.preferred-height + (value.preferred-height - dot) / 2;
+                    width: dot;
+                    height: dot;
+                    border-radius: dot / 2;
+                    background: tile.dot;
+                }
+                value := Text {
+                    x: pad + dot * 1.5;
+                    y: pad + label.preferred-height;
+                    text: tile.value;
+                    font-size: value-size;
+                    color: white;
+                    wrap: no-wrap;
+                }
+            }
+            Rectangle {
+                x: 1px + Math.mod(cursor, columns) * (tile-width + 1px);
+                y: 1px + floor(cursor / columns) * (tile-height + 1px);
+                width: tile-width;
+                height: tile-height;
+                border-width: 2px;
+                border-color: white;
+                border-radius: 2px;
+            }
+        }
+    }
+}
