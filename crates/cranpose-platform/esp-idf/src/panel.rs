@@ -142,13 +142,17 @@ const RESET_PULSE: Duration = Duration::from_millis(10);
 const RESET_RECOVERY: Duration = Duration::from_millis(120);
 /// Colour transfers that the panel IO queues before a draw call waits.
 const TRANSFER_QUEUE_DEPTH: usize = 10;
+// The byte order of the 16-bit pixels that the renderer draws for every
+// panel. The boards' panels read the high byte first. QEMU's panel reads the
+// low byte first, so its draw swaps the bytes of each update. With one order
+// an image links one copy of the drawing code.
+pub(crate) const PIXEL_ORDER: Rgb565Order = Rgb565Order::BigEndian;
 
 /// A display that [`run`](crate::run) draws on.
 pub struct Panel<'d> {
     device: Device<'d>,
     width: u32,
     height: u32,
-    format: Rgb565Order,
     column_alignment: u32,
     row_alignment: u32,
     backlight: Option<BacklightSwitch<'d>>,
@@ -371,8 +375,6 @@ impl<'d> Panel<'d> {
             device: Device::Driver(handle),
             width,
             height,
-            // QEMU's virtual panel reads the low byte first.
-            format: Rgb565Order::LittleEndian,
             column_alignment: 1,
             row_alignment: 1,
             backlight: None,
@@ -473,7 +475,6 @@ impl<'d> Panel<'d> {
             device: Device::Dcs(dcs),
             width: controller.width,
             height: controller.height,
-            format: Rgb565Order::BigEndian,
             column_alignment: controller.column_alignment.max(1),
             row_alignment: controller.row_alignment.max(1),
             backlight,
@@ -488,11 +489,6 @@ impl<'d> Panel<'d> {
     /// Returns the panel height in pixels.
     pub fn height(&self) -> u32 {
         self.height
-    }
-
-    /// Returns the byte order of the 16-bit pixels the panel reads.
-    pub(crate) fn format(&self) -> Rgb565Order {
-        self.format
     }
 
     /// Returns the rows of a strip of `rows` rows or fewer that keep a strip
@@ -545,23 +541,30 @@ impl<'d> Panel<'d> {
     pub(crate) fn draw_rect(
         &mut self,
         area: PixelRect,
-        pixels: &PixelBuffer,
+        pixels: &mut PixelBuffer,
     ) -> Result<(), EspError> {
         let len = area.width as usize * area.height as usize;
         if len > pixels.len {
             return Err(invalid_size());
         }
         match &mut self.device {
-            Device::Driver(handle) => esp!(unsafe {
-                sys::esp_lcd_panel_draw_bitmap(
-                    *handle,
-                    area.x as i32,
-                    area.y as i32,
-                    (area.x + area.width) as i32,
-                    (area.y + area.height) as i32,
-                    pixels.pixels.as_ptr().cast(),
-                )
-            }),
+            Device::Driver(handle) => {
+                // QEMU's panel, the only driver panel, reads the low byte
+                // first.
+                for pixel in &mut pixels.as_mut_slice()[..len] {
+                    *pixel = pixel.swap_bytes();
+                }
+                esp!(unsafe {
+                    sys::esp_lcd_panel_draw_bitmap(
+                        *handle,
+                        area.x as i32,
+                        area.y as i32,
+                        (area.x + area.width) as i32,
+                        (area.y + area.height) as i32,
+                        pixels.pixels.as_ptr().cast(),
+                    )
+                })
+            }
             Device::Dcs(dcs) => dcs.draw(area, &pixels.as_slice()[..len]),
         }
     }

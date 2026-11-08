@@ -1,7 +1,7 @@
 use cranpose::framebuffer::{Framebuffer, PixelRect, SurfaceError};
 use esp_idf_svc::sys::EspError;
 
-use crate::panel::{Panel, PixelBuffer};
+use crate::panel::{PIXEL_ORDER, Panel, PixelBuffer};
 
 pub(crate) struct Presenter {
     areas: Vec<PixelRect>,
@@ -54,7 +54,7 @@ impl Presenter {
                         let first = strip_area.y as usize * panel.width() as usize;
                         drawn.copy_from_slice(&picture.as_slice()[first..first + pixels]);
                     }
-                    None => framebuffer.draw_area_rgb565(strip_area, drawn, panel.format()),
+                    None => framebuffer.draw_area_rgb565(strip_area, drawn, PIXEL_ORDER),
                 }
                 panel.draw_rect(strip_area, strip)?;
                 self.next_strip = (self.next_strip + 1) % self.strips.len();
@@ -99,7 +99,7 @@ impl Presenter {
             framebuffer.draw_area_rgb565(
                 strip_area,
                 &mut picture.as_mut_slice()[first..first + pixels],
-                panel.format(),
+                PIXEL_ORDER,
             );
         }
         Some(picture)
