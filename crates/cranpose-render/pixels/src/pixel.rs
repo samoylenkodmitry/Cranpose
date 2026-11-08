@@ -22,6 +22,35 @@ pub(crate) enum GradientColors {
     Plain,
 }
 
+// Puts over each pixel of `$pixels` what `$blend`, one paint, leaves over
+// the pixel it names `$pixel`. The paint leaves one pixel over each pixel it
+// meets, and a fill mostly meets runs of one pixel: a pixel equal to the one
+// before takes what the paint left over that one, with one compare. A macro:
+// a function that takes the blend as a closure compiles the closure as a
+// call for each pixel on the ESP32, which costs the classic board's busier
+// screen 2K instructions a frame.
+macro_rules! blend_runs_of_one_pixel {
+    ($pixels:expr, |$pixel:ident| $blend:expr) => {
+        if let Some((first, rest)) = $pixels.split_first_mut() {
+            let mut under = *first;
+            {
+                let $pixel = &mut *first;
+                $blend;
+            }
+            let mut over = *first;
+            for $pixel in rest {
+                if *$pixel == under {
+                    *$pixel = over;
+                } else {
+                    under = *$pixel;
+                    $blend;
+                    over = *$pixel;
+                }
+            }
+        }
+    };
+}
+
 pub(crate) trait Pixel: GlyphPixel {
     const GRADIENT: GradientColors;
 
@@ -92,9 +121,12 @@ impl Pixel for [u8; 4] {
         diagnostics: &RenderDiagnostics,
     ) {
         let table = table.get_or_insert_with(BlendTable::default);
-        for pixel in pixels {
-            table.blend(pixel, color, blend_mode, diagnostics);
-        }
+        blend_runs_of_one_pixel!(pixels, |pixel| table.blend(
+            pixel,
+            color,
+            blend_mode,
+            diagnostics
+        ));
     }
 
     // As whole 32-bit words where the pixels are aligned for them, a store a
@@ -195,7 +227,7 @@ fn fill_pattern_565(pixels: &mut [u16], pattern: [u16; 4]) {
 
 // A 16-bit format: its pixels blend as their bytes would and keep their
 // high bits, and a text paints into them in the format's byte order.
-trait Pixel565: Rgb565 + GlyphPixel + bytemuck::Pod {
+trait Pixel565: Rgb565 + GlyphPixel + bytemuck::Pod + PartialEq {
     fn text_rows_565(pixels: &mut [Self]) -> TextPixelRows<'_>;
 }
 
@@ -248,9 +280,7 @@ impl<P: Pixel565> Pixel for P {
         };
         let src = [red, green, blue, unit_byte(alpha)];
         let table = table.get_or_insert_with(BlendTable::default);
-        for pixel in pixels {
-            table.blend_565(pixel, src);
-        }
+        blend_runs_of_one_pixel!(pixels, |pixel| table.blend_565(pixel, src));
     }
 
     fn fill(pixels: &mut [Self], value: Self) {
