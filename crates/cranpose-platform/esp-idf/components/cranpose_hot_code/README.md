@@ -145,7 +145,7 @@ per-frame work:
 ```sh
 scripts/esp32/cache/setup.sh    # once: QEMU with plugins, and the cache plugin
 just esp32-sim-profiles   # the five screens, their QEMUs at once
-python3 scripts/esp32/hot_code.py 125 crates/cranpose-platform/esp-idf/components/cranpose_hot_code/esp32s3.ld \
+python3 scripts/esp32/hot_code.py 124.6 crates/cranpose-platform/esp-idf/components/cranpose_hot_code/esp32s3.ld \
   --board "apps/esp32-demo in QEMU's ESP32-S3, by cache misses" \
   --profile target/esp32/sim-demo.elf target/esp32/sim-demo.log \
   --profile target/esp32/sim-drawn.elf target/esp32/sim-drawn.log \
@@ -163,7 +163,7 @@ python3 scripts/esp32/hot_code.py 0 /dev/null \
   --profile target/esp32/profile-es3c35p-dashboard.elf target/esp32/profile-es3c35p-dashboard.log
 
 for mode in demo drawn composed workload; do just esp32-profile e32r35t $mode; done
-python3 scripts/esp32/hot_code.py 64 crates/cranpose-platform/esp-idf/components/cranpose_hot_code/esp32.ld \
+python3 scripts/esp32/hot_code.py 62 crates/cranpose-platform/esp-idf/components/cranpose_hot_code/esp32.ld \
   --board "apps/esp32-demo on the E32R35T" \
   --profile target/esp32/profile-e32r35t-demo.elf target/esp32/profile-e32r35t-demo.log \
   --profile target/esp32/profile-e32r35t-drawn.elf target/esp32/profile-e32r35t-drawn.log \
@@ -176,6 +176,11 @@ python3 scripts/esp32/hot_code.py 0 /dev/null \
   --profile target/esp32/profile-e32r35t-composed.elf target/esp32/profile-e32r35t-composed.log \
   --profile target/esp32/profile-e32r35t-workload.elf target/esp32/profile-e32r35t-workload.log
 ```
+
+The budgets count the functions' code without their literals. A list
+whose literals take more room than the last list's takes heap, so a budget
+shrinks until the section is no larger than it was: 62 KB on the E32R35T
+and 124.6 KB on the ES3C35P keep the sections of the lists before.
 
 A budget of 0 leaves every sampled function to the order file, the ones of
 the IRAM list too, which stay in IRAM. The E32R35T's busier screen joins the
