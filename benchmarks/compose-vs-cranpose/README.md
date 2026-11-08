@@ -47,7 +47,7 @@ model with every comparison because frame capacity varies by device.
 | `deep_layer` | `deep`, with every level in a static rotated graphics layer. | 40 levels × 6 chips | Relayout under nested layers |
 | `workspace` | GPUI trading workspace: quote subscriptions, watchlist, chart, order book, trades and statistics. | 200 symbols, 16 hidden subscriptions | Text updates, clipping, scrolling and hover |
 | `gauntlet` | Every stage at once (below). Advances a frame index each frame, never wall time. | tier 5 | Composition, layout, intrinsics, text, images, paths, shadows, layers |
-| `wall` | The still wall (below): thousands of tiles that never change, a clock line whose text changes and a cursor outline that moves. Desktop apps only. | tier 16 | What a frame costs when almost nothing on the screen changes |
+| `wall` | The still wall (below): thousands of tiles that never change, a clock line whose text changes and a cursor outline that moves. Desktop apps only. | tier 20 | What a frame costs when almost nothing on the screen changes |
 
 Knobs:
 
@@ -227,7 +227,8 @@ frameworks draw differently, by design:
 ### Still wall
 
 One screen where almost nothing changes, heavy enough that no framework
-holds 60 fps on the Mac it runs on. Each frame changes two small things on
+holds 60 fps on the Mac it runs on: at tier 20 on macm3 the fastest holds
+about 30 fps. Each frame changes two small things on
 a screen of thousands of nodes, so a framework that pays for the whole
 screen each frame shows that cost, and one that pays only for what changed
 does not. `desktop.py --scenario wall` measures it; `perf-data/src/wall.rs`
