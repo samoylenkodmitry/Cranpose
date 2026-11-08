@@ -250,7 +250,9 @@ the cursor moves in a graphics layer. egui paints every tile each frame from
 text it laid out once. iced builds the wall `lazy` on its grid. GPUI renders
 the tiles as a view of their own, embedded `cached`. Flutter builds the tiles
 once inside a `RepaintBoundary`. Slint makes the tiles from a model once and
-binds only the clock and the cursor to the frame.
+binds only the clock and the cursor to the frame. The web page builds the
+tiles' elements once in a CSS grid and moves the cursor by a transform in a
+layer of its own.
 
 | Tier | Tile (points) | Grid | Tiles |
 | --- | --- | --- | --- |
