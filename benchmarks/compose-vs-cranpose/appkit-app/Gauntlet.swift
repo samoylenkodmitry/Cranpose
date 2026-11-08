@@ -7,8 +7,10 @@
 // differently; bars, avatars, shadows, sparklines and the tilting badge are
 // layer properties and shape paths, which the GPU composites. The list keeps
 // only the rows on screen and recycles the rows that scroll off, as
-// NSTableView does. The benchmark's README describes it; `desktop.py` runs it
-// with the tier in `PERF_TIER` and the Roboto files in `PERF_FONTS`.
+// NSTableView does. The still wall is a layer for each tile, its dot and its
+// two texts. The benchmark's README describes them; `desktop.py` runs it with
+// the screen in `PERF_SCENARIO`, the tier in `PERF_TIER` and the Roboto files
+// in `PERF_FONTS`.
 //
 // Every frame advances a frame index and everything follows from it, never
 // from wall time. The window's display link advances it once per frame of the
@@ -25,6 +27,7 @@ enum Launch {
     static let tier = Int(environment["PERF_TIER"] ?? "") ?? 5
     static let freeze = Int(environment["PERF_FREEZE"] ?? "") ?? 0
     static let fonts = environment["PERF_FONTS"] ?? "fonts"
+    static let wall = environment["PERF_SCENARIO"] == "wall"
     /// The window every desktop app opens for the gauntlet, in points.
     static let window = CGSize(width: 1280, height: 820)
 }
@@ -798,29 +801,20 @@ final class LayerStack: Box {
     }
 }
 
-/// The window's root: the top bar, then the ticker strip and the list in a
-/// column whose width follows the frame.
-final class GauntletView: Box {
-    let model: Model
+/// A window's root under a titled top bar: the display link advances the
+/// frame once per frame of the display and asks it for a layout.
+class RootView: Box {
     let topBar = Box()
     let heading: TextLayer = stillLayer(TextLayer())
-    let panel: TickerPanel
-    let list: ListView
-    let stack: LayerStack
     private var link: CADisplayLink?
 
-    init() {
-        let model = Model()
-        self.model = model
-        panel = TickerPanel(tickers: model.tickers, s: model.tier.scale, styles: model.styles)
-        list = ListView(model: model)
-        stack = LayerStack(tier: model.tier)
+    init(title: String, background: NSColor) {
         super.init(frame: CGRect(origin: .zero, size: Launch.window))
-        fill(NSColor(rgb: 0xEEF0F5))
+        fill(background)
         topBar.fill(NSColor(rgb: 0x1E2A4A))
-        heading.set("Gauntlet", TextStyle(20, .white, bold: true))
+        heading.set(title, TextStyle(20, .white, bold: true))
         topBar.add([heading])
-        for view in [topBar, panel, list, stack] { addSubview(view) }
+        addSubview(topBar)
     }
 
     required init?(coder: NSCoder) { nil }
@@ -843,11 +837,36 @@ final class GauntletView: Box {
 
     override func layout() {
         super.layout()
-        let frame = Clock.frame
         topBar.frame = CGRect(x: 0, y: 0, width: bounds.width, height: 56)
         let headingSize = heading.size(within: .greatestFiniteMagnitude)
         heading.place(CGRect(x: 16, y: (56 - headingSize.height) / 2, width: headingSize.width,
                              height: headingSize.height))
+    }
+}
+
+/// The gauntlet's root: the top bar, then the ticker strip and the list in a
+/// column whose width follows the frame.
+final class GauntletView: RootView {
+    let model: Model
+    let panel: TickerPanel
+    let list: ListView
+    let stack: LayerStack
+
+    init() {
+        let model = Model()
+        self.model = model
+        panel = TickerPanel(tickers: model.tickers, s: model.tier.scale, styles: model.styles)
+        list = ListView(model: model)
+        stack = LayerStack(tier: model.tier)
+        super.init(title: "Gauntlet", background: NSColor(rgb: 0xEEF0F5))
+        for view in [panel, list, stack] { addSubview(view) }
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    override func layout() {
+        super.layout()
+        let frame = Clock.frame
         let width = (bounds.width * PerfData.widthFraction(frame)).rounded()
         let panelHeight = panel.place(width: width, frame: frame, styles: model.styles)
         panel.frame = CGRect(x: 0, y: 56, width: width, height: panelHeight)
@@ -859,15 +878,85 @@ final class GauntletView: Box {
     }
 }
 
+/// The still wall's root: the top bar, the clock line, and a layer for each
+/// tile, its dot and its texts, made once; a frame sets the clock's text and
+/// moves the cursor's layer.
+final class WallView: RootView {
+    let clockLine: TextLayer = stillLayer(TextLayer())
+    let clockStyle = TextStyle(WallData.clockText, .white)
+    let wall = Box()
+    let cursor = stillLayer()
+    let tier = WallData.tier(Launch.tier)
+    let columns: Int
+    let tiles: Int
+
+    init() {
+        let grid = WallData.windowGrid(tier, Launch.window)
+        columns = grid.columns
+        tiles = grid.columns * grid.rows
+        super.init(title: "Still wall", background: NSColor(rgb: WallData.backgroundRGB))
+        let height = tier.tileHeight
+        let labelStyle = TextStyle(WallData.labelSize(height), .white, bold: true)
+        let valueStyle = TextStyle(WallData.valueSize(height), .white)
+        let (padding, dot) = (WallData.padding(height), WallData.dotSize(height))
+        var layers: [CALayer] = []
+        layers.reserveCapacity(tiles + 1)
+        for index in 0..<tiles {
+            let tile = stillLayer()
+            tile.frame = CGRect(origin: WallData.origin(index, columns, tier),
+                                size: CGSize(width: tier.tileWidth, height: height))
+            tile.backgroundColor = NSColor(rgb: WallData.fillRGB(index)).cgColor
+            tile.cornerRadius = WallData.corner
+            tile.masksToBounds = true
+            let label: TextLayer = stillLayer(TextLayer())
+            label.set(WallData.label(index), labelStyle)
+            let labelSize = label.size(within: .greatestFiniteMagnitude)
+            label.place(CGRect(origin: CGPoint(x: padding, y: padding), size: labelSize))
+            let value: TextLayer = stillLayer(TextLayer())
+            value.set(WallData.value(index), valueStyle)
+            let valueSize = value.size(within: .greatestFiniteMagnitude)
+            let line = padding + labelSize.height
+            value.place(CGRect(origin: CGPoint(x: padding + dot * 1.5, y: line), size: valueSize))
+            let spot = stillLayer()
+            spot.frame = CGRect(x: padding, y: line + (valueSize.height - dot) / 2, width: dot, height: dot)
+            spot.cornerRadius = dot / 2
+            spot.backgroundColor = NSColor(rgb: WallData.dotRGB(index)).cgColor
+            for sublayer in [label, spot, value] { tile.addSublayer(sublayer) }
+            layers.append(tile)
+        }
+        cursor.borderColor = NSColor.white.cgColor
+        cursor.borderWidth = WallData.cursorWidth
+        cursor.cornerRadius = WallData.corner
+        layers.append(cursor)
+        wall.add(layers)
+        layer?.addSublayer(clockLine)
+        addSubview(wall)
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    override func layout() {
+        super.layout()
+        clockLine.set(WallData.clock(Clock.frame), clockStyle)
+        let clockSize = clockLine.size(within: .greatestFiniteMagnitude)
+        clockLine.place(CGRect(x: 8, y: 56 + (WallData.clockHeight - clockSize.height) / 2,
+                               width: clockSize.width, height: clockSize.height))
+        let top = 56 + WallData.clockHeight
+        wall.frame = CGRect(x: 0, y: top, width: bounds.width, height: bounds.height - top)
+        cursor.frame = CGRect(origin: WallData.origin(WallData.cursor(Clock.frame, tiles), columns, tier),
+                              size: CGSize(width: tier.tileWidth, height: tier.tileHeight))
+    }
+}
+
 final class AppDelegate: NSObject, NSApplicationDelegate {
     var window: NSWindow?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         backingScale = NSScreen.main?.backingScaleFactor ?? 2
-        let root = GauntletView()
+        let root: RootView = Launch.wall ? WallView() : GauntletView()
         let window = NSWindow(contentRect: CGRect(origin: .zero, size: Launch.window),
                               styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
-        window.title = "Gauntlet"
+        window.title = Launch.wall ? "Still wall" : "Gauntlet"
         window.contentView = root
         window.center()
         window.makeKeyAndOrderFront(nil)

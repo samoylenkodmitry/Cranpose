@@ -1,7 +1,8 @@
 // The gauntlet in SwiftUI: the screen `compose-app/.../Gauntlet.kt` and
 // `cranpose-app/src/screens/gauntlet.rs` draw, element for element, in
-// SwiftUI's own idiom. The benchmark's README describes it; `desktop.py` runs
-// it with the tier in `PERF_TIER` and the Roboto files in `PERF_FONTS`.
+// SwiftUI's own idiom, and the still wall. The benchmark's README describes
+// them; `desktop.py` runs it with the screen in `PERF_SCENARIO`, the tier in
+// `PERF_TIER` and the Roboto files in `PERF_FONTS`.
 //
 // Every frame advances a frame index and everything follows from it, never
 // from wall time. A display link advances it once per frame of the display;
@@ -19,6 +20,7 @@ enum Launch {
     static let tier = Int(environment["PERF_TIER"] ?? "") ?? 5
     static let freeze = Int(environment["PERF_FREEZE"] ?? "") ?? 0
     static let fonts = environment["PERF_FONTS"] ?? "fonts"
+    static let wall = environment["PERF_SCENARIO"] == "wall"
     /// The window every desktop app opens for the gauntlet, in points.
     static let window = CGSize(width: 1280, height: 820)
 }
@@ -481,10 +483,7 @@ struct GauntletView: View {
     var body: some View {
         let s = model.tier.scale
         VStack(alignment: .leading, spacing: 0) {
-            Text("Gauntlet").font(roboto(20, 1, bold: true)).foregroundStyle(.white)
-                .padding(.horizontal, 16)
-                .frame(maxWidth: .infinity, minHeight: 56, maxHeight: 56, alignment: .leading)
-                .background(Color(rgb: 0x1E2A4A))
+            TopBar(title: "Gauntlet")
             WidthFollowsFrame(clock: clock) {
                 VStack(spacing: 0) {
                     FlowLayout(spacing: 4 * s) {
@@ -511,10 +510,116 @@ struct GauntletView: View {
     }
 }
 
+/// The bar across the window's top.
+struct TopBar: View {
+    let title: String
+
+    var body: some View {
+        Text(title).font(roboto(20, 1, bold: true)).foregroundStyle(.white)
+            .padding(.horizontal, 16)
+            .frame(maxWidth: .infinity, minHeight: 56, maxHeight: 56, alignment: .leading)
+            .background(Color(rgb: 0x1E2A4A))
+    }
+}
+
+/// The still wall: its tiles read nothing the clock changes, so SwiftUI
+/// evaluates them once; the clock's text and the cursor's offset read the
+/// frame.
+struct WallView: View {
+    let clock: Clock
+    let tier = WallData.tier(Launch.tier)
+
+    var body: some View {
+        let (columns, rows) = WallData.windowGrid(tier, Launch.window)
+        VStack(alignment: .leading, spacing: 0) {
+            TopBar(title: "Still wall")
+            WallClock(clock: clock)
+            ZStack(alignment: .topLeading) {
+                WallTiles(columns: columns, rows: rows, tier: tier)
+                WallCursor(clock: clock, columns: columns, tiles: columns * rows, tier: tier)
+            }
+        }
+        .frame(width: Launch.window.width, height: Launch.window.height, alignment: .topLeading)
+        .background(Color(rgb: WallData.backgroundRGB))
+    }
+}
+
+/// The line above the wall: the frame's number, new each frame.
+struct WallClock: View {
+    let clock: Clock
+
+    var body: some View {
+        Text(WallData.clock(clock.frame)).font(roboto(WallData.clockText, 1)).foregroundStyle(.white)
+            .padding(.horizontal, 8)
+            .frame(maxWidth: .infinity, minHeight: WallData.clockHeight, maxHeight: WallData.clockHeight,
+                   alignment: .leading)
+    }
+}
+
+/// The tiles, `columns` by `rows` of them.
+struct WallTiles: View {
+    let columns: Int
+    let rows: Int
+    let tier: WallData.Tier
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: WallData.gap) {
+            ForEach(0..<rows, id: \.self) { row in
+                HStack(spacing: WallData.gap) {
+                    ForEach(0..<columns, id: \.self) { column in
+                        WallTile(index: row * columns + column, tier: tier)
+                    }
+                }
+            }
+        }
+        .padding(WallData.gap)
+    }
+}
+
+/// One tile: its label over a dot and its value, on its fill.
+struct WallTile: View {
+    let index: Int
+    let tier: WallData.Tier
+
+    var body: some View {
+        let height = tier.tileHeight
+        let dot = WallData.dotSize(height)
+        VStack(alignment: .leading, spacing: 0) {
+            Text(WallData.label(index)).font(roboto(WallData.labelSize(height), 1, bold: true)).fixedSize()
+            HStack(spacing: dot * 0.5) {
+                Circle().fill(Color(rgb: WallData.dotRGB(index))).frame(width: dot, height: dot)
+                Text(WallData.value(index)).font(roboto(WallData.valueSize(height), 1)).fixedSize()
+            }
+        }
+        .foregroundStyle(.white)
+        .padding(WallData.padding(height))
+        .frame(width: tier.tileWidth, height: height, alignment: .topLeading)
+        .background(Color(rgb: WallData.fillRGB(index)), in: RoundedRectangle(cornerRadius: WallData.corner))
+        .clipped()
+    }
+}
+
+/// The cursor's outline over the tile `WallData.cursor` names for the frame.
+struct WallCursor: View {
+    let clock: Clock
+    let columns: Int
+    let tiles: Int
+    let tier: WallData.Tier
+
+    var body: some View {
+        let origin = WallData.origin(WallData.cursor(clock.frame, tiles), columns, tier)
+        RoundedRectangle(cornerRadius: WallData.corner)
+            .strokeBorder(.white, lineWidth: WallData.cursorWidth)
+            .frame(width: tier.tileWidth, height: tier.tileHeight)
+            .offset(x: origin.x, y: origin.y)
+    }
+}
+
 @main
 struct GauntletApp: App {
     @State private var clock = Clock()
-    private let model: Model
+    /// The gauntlet's data; none for the wall.
+    private let model: Model?
 
     init() {
         // Roboto is no macOS system font: the app registers the files every
@@ -523,12 +628,19 @@ struct GauntletApp: App {
             let url = URL(fileURLWithPath: Launch.fonts).appendingPathComponent(file)
             CTFontManagerRegisterFontsForURL(url as CFURL, .process, nil)
         }
-        model = Model()
+        model = Launch.wall ? nil : Model()
     }
 
     var body: some Scene {
-        Window("Gauntlet", id: "gauntlet") {
-            GauntletView(model: model, clock: clock).onAppear { clock.start() }
+        Window(Launch.wall ? "Still wall" : "Gauntlet", id: "gauntlet") {
+            Group {
+                if let model {
+                    GauntletView(model: model, clock: clock)
+                } else {
+                    WallView(clock: clock)
+                }
+            }
+            .onAppear { clock.start() }
         }
         .windowResizability(.contentSize)
     }
