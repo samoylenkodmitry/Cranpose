@@ -13,6 +13,7 @@ use std::cell::Cell;
 use cranpose::prelude::*;
 pub use screens::{
     gauntlet::{GauntletLoad, GauntletScreen},
+    wall::{WallLoad, WallScreen},
     workspace::{FRAME_OBSERVER, WorkspaceFrame, WorkspaceMode},
 };
 

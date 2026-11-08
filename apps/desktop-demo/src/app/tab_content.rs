@@ -6,15 +6,31 @@ use cranpose_ui::{
 };
 
 use super::{
-    animations::AnimationsTab, async_runtime_example, backrooms::BackroomsTab,
+    animations::AnimationsTab,
+    async_runtime_example,
+    backrooms::BackroomsTab,
+    bench_tab::{BenchScreen, BenchTab},
     composition_local_example, counter_app, documentation, file_picker_tab,
-    floating_windows::FloatingWindowsTab, gauntlet_tab, glass_feed::GlassFeedTab,
-    glass_tiles::GlassTilesTab, images::images_tab, interactive_anim::InteractiveAnimTab,
-    lazy_list_example, liquid_ui::LiquidUiTab, markdown_viewer_tab, mineswapper2,
-    modifier_showcase_tab, performance_dashboard, recomposition_lab::RecompositionLabTab,
-    recursive_layout_example, room, rotary::rotary_tab, shader_rect::ShaderRectTab,
-    shaders::ShadersTab, source_view::SourcePanel, text_input_example,
-    text_showcase::TextShowcaseTab, wear, web_fetch::web_fetch_example, webview, xkcd::xkcd_tab,
+    floating_windows::FloatingWindowsTab,
+    glass_feed::GlassFeedTab,
+    glass_tiles::GlassTilesTab,
+    images::images_tab,
+    interactive_anim::InteractiveAnimTab,
+    lazy_list_example,
+    liquid_ui::LiquidUiTab,
+    markdown_viewer_tab, mineswapper2, modifier_showcase_tab, performance_dashboard,
+    recomposition_lab::RecompositionLabTab,
+    recursive_layout_example, room,
+    rotary::rotary_tab,
+    shader_rect::ShaderRectTab,
+    shaders::ShadersTab,
+    source_view::SourcePanel,
+    text_input_example,
+    text_showcase::TextShowcaseTab,
+    wear,
+    web_fetch::web_fetch_example,
+    webview,
+    xkcd::xkcd_tab,
     ControlsUiTab, DemoTab, HackerNewsTab, StartupSelection, WszTab, WszTabState, DEMO_TAB_INFO,
 };
 
@@ -71,6 +87,7 @@ pub(super) fn tab_requires_scroll(tab: DemoTab) -> bool {
         DemoTab::HackerNews
             | DemoTab::Performance
             | DemoTab::Gauntlet
+            | DemoTab::StillWall
             | DemoTab::Animations
             | DemoTab::RecompositionLab
             | DemoTab::WebView
@@ -115,6 +132,7 @@ pub(super) fn render_active_tab(
         DemoTab::HackerNews
         | DemoTab::Performance
         | DemoTab::Gauntlet
+        | DemoTab::StillWall
         | DemoTab::Images
         | DemoTab::Text
         | DemoTab::Wsz
@@ -137,7 +155,8 @@ fn render_showcase_tab(active: DemoTab, startup: StartupSelection, wsz_tab_state
     match active {
         DemoTab::HackerNews => HackerNewsTab(),
         DemoTab::Performance => performance_dashboard::PerformanceTab(),
-        DemoTab::Gauntlet => gauntlet_tab::GauntletTab(),
+        DemoTab::Gauntlet => BenchTab(BenchScreen::Gauntlet),
+        DemoTab::StillWall => BenchTab(BenchScreen::StillWall),
         DemoTab::Images => images_tab(),
         DemoTab::Text => TextShowcaseTab(),
         DemoTab::Wsz => WszTab(wsz_tab_state),
