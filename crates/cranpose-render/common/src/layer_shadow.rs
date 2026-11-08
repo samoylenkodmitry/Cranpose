@@ -3,6 +3,8 @@
 //! and hand the caster to Skia's `SkShadowUtils`, which draws an ambient and a
 //! spot shadow. The constants below are theirs.
 
+use std::ops::Range;
+
 use cranpose_ui_graphics::{Color, CornerRadii, GraphicsLayer, Rect, RoundedCornerShape};
 
 use crate::layer_transform::layer_uniform_scale;
@@ -191,37 +193,141 @@ impl ShadowRRect {
         if x < bounds.x || y < bounds.y || x >= right_edge || y >= bottom_edge {
             return 0.0;
         }
-        if let (Some(hole), Some(rect)) = (self.hole, self.hole_rect())
-            && rounded_rect_contains(rect, hole.radius, x, y)
-        {
+        if self.hole_holds(x, y) {
             return 0.0;
         }
+        let (along, from_left) = self.along(x);
+        let (across, from_top) = self.across(y);
+        self.falloff((along, from_left), (across, from_top))
+    }
+
+    /// [`Self::coverage`] at the centres of the pixels `columns` of the row
+    /// whose centres lie at `y`, into `out`: columns alike in what their x
+    /// gives the coverage, as the umbra's middle is, compute it once.
+    pub fn row_coverage(&self, columns: Range<i32>, y: f32, out: &mut [f32]) {
+        let bounds = self.bounds;
+        let right_edge = bounds.x + bounds.width;
+        let bottom_edge = bounds.y + bounds.height;
+        let row_inside = !(y < bounds.y || y >= bottom_edge);
+        let across = self.across(y);
+        let mut last: Option<((u32, bool), f32)> = None;
+        for (slot, column) in out.iter_mut().zip(columns) {
+            let x = column as f32 + 0.5;
+            if !row_inside || x < bounds.x || x >= right_edge || self.hole_holds(x, y) {
+                *slot = 0.0;
+                continue;
+            }
+            let (along, from_left) = self.along(x);
+            let key = (along.to_bits(), from_left);
+            *slot = match last {
+                Some((seen, coverage)) if seen == key => coverage,
+                _ => {
+                    let coverage = self.falloff((along, from_left), across);
+                    last = Some((key, coverage));
+                    coverage
+                }
+            };
+        }
+    }
+
+    // Whether the hole holds the point `x`, `y`.
+    fn hole_holds(&self, x: f32, y: f32) -> bool {
+        match (self.hole, self.hole_rect()) {
+            (Some(hole), Some(rect)) => rounded_rect_contains(rect, hole.radius, x, y),
+            _ => false,
+        }
+    }
+
+    // How far `x` lies out from the umbra toward the nearer upright edge,
+    // at least 0, and whether that edge is the left one.
+    fn along(&self, x: f32) -> (f32, bool) {
         let umbra = self.umbra_inset;
-        let left = bounds.x + umbra - x;
-        let right = x - (right_edge - umbra);
-        let top = bounds.y + umbra - y;
-        let bottom = y - (bottom_edge - umbra);
-        let corner = match (left > right, top > bottom) {
+        let left = self.bounds.x + umbra - x;
+        let right = x - (self.bounds.x + self.bounds.width - umbra);
+        (left.max(right).max(0.0), left > right)
+    }
+
+    // How far `y` lies out from the umbra toward the nearer horizontal
+    // edge, at least 0, and whether that edge is the top one.
+    fn across(&self, y: f32) -> (f32, bool) {
+        let umbra = self.umbra_inset;
+        let top = self.bounds.y + umbra - y;
+        let bottom = y - (self.bounds.y + self.bounds.height - umbra);
+        (top.max(bottom).max(0.0), top > bottom)
+    }
+
+    // The falloff at a point `along` and `across` out from the umbra, in the
+    // corner on the sides they say.
+    fn falloff(&self, (along, from_left): (f32, bool), (across, from_top): (f32, bool)) -> f32 {
+        let corner = match (from_left, from_top) {
             (true, true) => 0,
             (false, true) => 1,
             (false, false) => 2,
             (true, false) => 3,
         };
-        let offset = fan_offset(
-            left.max(right).max(0.0),
-            top.max(bottom).max(0.0),
-            umbra,
-            self.radii[corner],
-        );
+        let offset = fan_offset(along, across, self.umbra_inset, self.radii[corner]);
         shadow_falloff(self.distance_correction * (1.0 - offset))
+    }
+
+    /// What a row of pixels whose centres lie at `y` gives
+    /// [`Self::coverage`] besides x: two rows with equal keys take equal
+    /// coverage at every x, so a raster computes a row once for the rows
+    /// alike that follow it.
+    pub fn row_key(&self, y: f32) -> ShadowRowKey {
+        let bounds = self.bounds;
+        let bottom_edge = bounds.y + bounds.height;
+        let (across, upper) = self.across(y);
+        let hole = match (self.hole, self.hole_rect()) {
+            (Some(hole), Some(rect)) => {
+                let dy = overhang(rect.y, rect.height, hole.radius, y);
+                // Along the hole's upright sides, which x the hole holds
+                // does not depend on how far in the row lies.
+                if dy < 0.0 {
+                    HoleRow::Straight
+                } else {
+                    HoleRow::Curved(dy.to_bits())
+                }
+            }
+            _ => HoleRow::None,
+        };
+        ShadowRowKey {
+            inside: !(y < bounds.y || y >= bottom_edge),
+            across: across.to_bits(),
+            upper,
+            hole,
+        }
     }
 }
 
+/// What a row of a [`ShadowRRect`] passes to its coverage besides x.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ShadowRowKey {
+    inside: bool,
+    // The row's distance out from the umbra toward the nearer horizontal
+    // edge, by its bits, and whether that edge is the top one.
+    across: u32,
+    upper: bool,
+    hole: HoleRow,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum HoleRow {
+    None,
+    Straight,
+    // How far the row lies past the hole's straight sides, by its bits.
+    Curved(u32),
+}
+
+// How far `at` lies past the straight part of a side `length` long from
+// `start`, whose ends round at `radius`: negative within it.
+fn overhang(start: f32, length: f32, radius: f32, at: f32) -> f32 {
+    let half = 0.5 * length;
+    (at - start - half).abs() - (half - radius)
+}
+
 fn rounded_rect_contains(rect: Rect, radius: f32, x: f32, y: f32) -> bool {
-    let half_width = 0.5 * rect.width;
-    let half_height = 0.5 * rect.height;
-    let dx = (x - rect.x - half_width).abs() - (half_width - radius);
-    let dy = (y - rect.y - half_height).abs() - (half_height - radius);
+    let dx = overhang(rect.x, rect.width, radius, x);
+    let dy = overhang(rect.y, rect.height, radius, y);
     let outside = (dx.max(0.0).powi(2) + dy.max(0.0).powi(2)).sqrt();
     outside + dx.max(dy).min(0.0) - radius < 0.0
 }
