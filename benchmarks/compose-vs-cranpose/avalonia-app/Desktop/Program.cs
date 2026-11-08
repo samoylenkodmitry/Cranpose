@@ -10,6 +10,7 @@ static class Program
     {
         Launch.Tier = Variable("PERF_TIER", 5);
         Launch.Freeze = Variable("PERF_FREEZE", 0);
+        Launch.Wall = Environment.GetEnvironmentVariable("PERF_SCENARIO") == "wall";
         Launch.Log = Console.WriteLine;
         AppBuilder.Configure<App>().UsePlatformDetect().StartWithClassicDesktopLifetime(args);
     }

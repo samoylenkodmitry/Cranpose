@@ -23,6 +23,7 @@
 		<PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.3" />
 		<Compile Include="../App.cs" Link="App.cs" />
 		<Compile Include="../Gauntlet.cs" Link="Gauntlet.cs" />
+		<Compile Include="../Wall.cs" Link="Wall.cs" />
 		<Compile Include="../../shared-cs/PerfData.cs" Link="PerfData.cs" />
 		<!-- A page has no files to read: Roboto travels in the assembly. -->
 		<AvaloniaResource Include="../../fonts/Roboto-Regular.ttf" Link="Fonts/Roboto-Regular.ttf" />

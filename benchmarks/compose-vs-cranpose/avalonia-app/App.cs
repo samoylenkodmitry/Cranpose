@@ -17,6 +17,12 @@ public static class Launch
     /// <summary>Stop on this frame and hold still, for picture comparisons; 0 runs on.</summary>
     public static int Freeze { get; set; }
 
+    /// <summary>Whether the screen is the still wall in place of the gauntlet.</summary>
+    public static bool Wall { get; set; }
+
+    /// <summary>The screen asked for.</summary>
+    public static Control Screen() => Wall ? new WallView(Tier, Freeze) : new GauntletView(Tier, Freeze);
+
     /// <summary>Writes a `PERF` line where `measure.py` reads it.</summary>
     public static Action<string> Log { get; set; } = _ => { };
 
@@ -44,21 +50,21 @@ public sealed class App : Avalonia.Application
     {
         if (ApplicationLifetime is IActivityApplicationLifetime activity)
         {
-            activity.MainViewFactory = () => new GauntletView(Launch.Tier, Launch.Freeze);
+            activity.MainViewFactory = Launch.Screen;
         }
         else if (ApplicationLifetime is ISingleViewApplicationLifetime page)
         {
-            page.MainView = new GauntletView(Launch.Tier, Launch.Freeze);
+            page.MainView = Launch.Screen();
         }
         else if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
             desktop.MainWindow = new Window
             {
-                Title = "Gauntlet",
+                Title = Launch.Wall ? "Still wall" : "Gauntlet",
                 Width = DesktopWidth,
                 Height = DesktopHeight,
                 CanResize = false,
-                Content = new GauntletView(Launch.Tier, Launch.Freeze),
+                Content = Launch.Screen(),
             };
         }
         base.OnFrameworkInitializationCompleted();

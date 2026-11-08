@@ -84,6 +84,15 @@ public sealed class Look(double s)
         return text;
     }
 
+    /// <summary>The bar across the window's top, titled `title`.</summary>
+    public static Border TopBar(string title)
+    {
+        var text = new Look(1).Text(20, Brushes.White, bold: true);
+        text.Text = title;
+        text.VerticalAlignment = VerticalAlignment.Center;
+        return new Border { Background = Brush(0xFF1E2A4A), Padding = new Thickness(16, 0), Child = text };
+    }
+
     public static Border Rounded(IBrush? background, double radius, Thickness padding, Control child) => new()
     {
         Background = background,
@@ -135,16 +144,7 @@ public sealed class GauntletView : Grid
         Background = new ImmutableSolidColorBrush(Color.FromUInt32(0xFFEEF0F5));
         RowDefinitions = new RowDefinitions("56,*");
 
-        var title = new Look(1).Text(20, Brushes.White, bold: true);
-        title.Text = "Gauntlet";
-        title.VerticalAlignment = VerticalAlignment.Center;
-        var topBar = new Border
-        {
-            Background = new ImmutableSolidColorBrush(Color.FromUInt32(0xFF1E2A4A)),
-            Padding = new Thickness(16, 0),
-            Child = title,
-        };
-        Children.Add(topBar);
+        Children.Add(Look.TopBar("Gauntlet"));
 
         var tiles = new WrapPanel { ItemSpacing = 4 * s, LineSpacing = 4 * s };
         var quotes = Tickers(tier.Tickers);
