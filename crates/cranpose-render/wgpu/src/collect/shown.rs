@@ -6,7 +6,7 @@ use cranpose_render_common::scene_store::{LayerRef, Reach};
 use cranpose_ui_graphics::{Point, Rect};
 
 use super::{LayerScene, WalkContext};
-use crate::{rrect_shadow::rrect_shadow_bounds, scene::CompositorScene};
+use crate::{rrect_shadow::rrect_shadow_bounds, scene::CompositorScene, target_state::Visit};
 
 // How a walk drew a record's subtree, in the space of the walk's root.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -31,6 +31,22 @@ pub(crate) struct ShownRecord {
     // Where the origin of the record's space lies in the walk root's, when
     // the walk drew the record in place and only moved its space there.
     pub(crate) origin: Option<Point>,
+}
+
+// The walk context of `layer`'s subtree as the walk's cull takes it;
+// `None` when the walk leaves `layer` out.
+pub(super) fn culled<'s>(layer: LayerRef<'_>, context: WalkContext<'s>) -> Option<WalkContext<'s>> {
+    let Some(cull) = context.cull else {
+        return Some(context);
+    };
+    match cull.visit(layer.store().record_ref(layer.id())) {
+        Visit::Skip => None,
+        Visit::Walk => Some(context),
+        Visit::WalkAll => Some(WalkContext {
+            cull: None,
+            ..context
+        }),
+    }
 }
 
 // Records that the walk drew nothing of `layer`.

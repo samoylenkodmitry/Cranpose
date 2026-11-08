@@ -69,6 +69,7 @@ pub(super) fn collect_space_children(
     };
     let context = WalkContext {
         settings: &settings,
+        cull: None,
         ..context
     };
     let mut has_pixel_sensitive_subtree = false;

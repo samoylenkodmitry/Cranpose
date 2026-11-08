@@ -2,7 +2,7 @@ use cranpose_render_common::scene_store::SceneVersion;
 
 use crate::{
     collect::{ChildLayer, LayerScene},
-    frame::PacketDamage,
+    frame::{DamageRects, PacketDamage},
     scene::{
         BackdropLayer, CompositorScene, DrawOp, EffectLayer, ImageDraw, RunDraw, ShadowDraw,
         TextDraw,
@@ -36,6 +36,9 @@ pub enum CancelReason {
     /// suspect device. One cancel per poisoning; the gate clears as it
     /// fires, so the next packet renders (see `DeviceErrorSentry`).
     DeviceError,
+    /// The packet holds the draws of a part of the window, and the image it
+    /// went into needs more: the next packet holds every draw.
+    NeedsWhole,
 }
 
 /// What the present stage did with a packet. `NotRun` is the `Default` so a
@@ -73,6 +76,9 @@ pub(crate) struct FramePacket {
     // Whether the frame was one to skip working out what it changes, while
     // frames keep changing most of the window.
     pub(crate) skipped: bool,
+    // The window rects the packet holds every draw within; `None` when it
+    // holds every draw of the scene.
+    pub(crate) culled: Option<DamageRects>,
 }
 
 impl FramePacket {
@@ -140,6 +146,9 @@ pub(crate) struct RenderReturns {
     // How the frame went into a target that keeps its frames; `None` for a
     // frame drawn into a texture that keeps none.
     pub(crate) target: Option<TargetDrawn>,
+    // The oldest packet the window's next frame finds in its target; `None`
+    // when a target holds none known.
+    pub(crate) held: Option<u64>,
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) timings: PresentTimings,
 }

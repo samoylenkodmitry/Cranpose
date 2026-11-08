@@ -1790,12 +1790,7 @@ impl GpuRenderer {
         output: FrameOutput<'_>,
     ) -> Result<(), String> {
         let (width, height) = viewport;
-        let FrameOutput {
-            mode: output_mode,
-            view: output_view,
-            image,
-            ..
-        } = output;
+        let (output_mode, output_view, image) = (output.mode, output.view, output.image);
         self.frame_damages.note(packet.frame_id, packet.damage);
         let cancel_reason = if packet.renderer_epoch != self.renderer_epoch {
             Some(CancelReason::RendererEpoch)
@@ -1833,8 +1828,14 @@ impl GpuRenderer {
             (width, height),
             (surface_epoch, image),
         );
+        if !admits(plan.as_ref(), &packet) {
+            if let Some(composition) = frame_root.into_composition() {
+                self.composition_target = Some(composition);
+            }
+            return Self::cancel_packet(packet, CancelReason::NeedsWhole, returns);
+        }
         returns.target = plan.map(|plan| plan.drawn(&packet, &frame_root));
-        let repaint = self.count_damage(plan, (width, height));
+        let repaint = count_damage(plan, (width, height), &self.frame_stats);
         let root = frame_root.target();
         let screenshot_bind_group = output_view.and_then(|_| {
             matches!(output_mode, OutputMode::Screenshot).then(|| {
@@ -1861,7 +1862,7 @@ impl GpuRenderer {
         self.record_pool_sizes(&submit.executor);
         self.effect_renderer
             .merge_and_reset_debug_counters(&self.frame_stats);
-        self.keep_window(plan, &submitted);
+        returns.held = self.keep_window(plan, &submitted);
         let result = submitted.map(drop);
         submit.executor.reset_upload_allocators();
         self.close_frame_stats(submit);
@@ -2107,47 +2108,28 @@ impl GpuRenderer {
         }
     }
 
-    /// Counts what a frame of `plan` changes and draws of a page of
-    /// `viewport` in the frame's stats, and returns what it draws.
-    fn count_damage(&self, plan: Option<FrameDamagePlan>, viewport: (u32, u32)) -> Repaint {
-        self.frame_stats
-            .damage
-            .set(plan.map_or(gpu_stats::FrameDamage::Untracked, |plan| {
-                plan.damage.stats()
-            }));
-        let repaint = plan.map_or(Repaint::Whole, |plan| plan.repaint);
-        self.frame_stats
-            .repainted_pixels
-            .set(repaint.pixels(viewport));
-        repaint
-    }
-
-    /// Keeps the summary of the frame of `plan` just drawn into its target
-    /// when it was drawn whole, with no stand-in. A frame that draws nothing
-    /// into a presentable image submits nothing, and is drawn all the same.
-    fn keep_window(&mut self, plan: Option<FrameDamagePlan>, submitted: &Result<bool, String>) {
-        let Some(plan) = plan else {
-            return;
-        };
+    /// Keeps the frame of `plan` just drawn into its target when it was
+    /// drawn whole, with no stand-in. A frame that draws nothing into a
+    /// presentable image submits nothing, and is drawn all the same.
+    fn keep_window(
+        &mut self,
+        plan: Option<FrameDamagePlan>,
+        submitted: &Result<bool, String>,
+    ) -> Option<u64> {
+        let plan = plan?;
         let drawn = match submitted {
             Ok(submitted) => *submitted || plan.repaint == Repaint::Nothing,
             Err(_) => false,
         } && !self.frame_stats.drew_stand_in();
-        let held = drawn.then_some(plan.held);
-        match plan.keeper {
-            Keeper::Composition => {
-                if let Some(composition) = self.composition_target.as_mut() {
-                    composition.kept = held;
-                }
-            }
-            Keeper::Image(image) => self.swapchain.record(image, plan.held, drawn),
-            Keeper::Cleared { keeping } => {
-                self.cleared.kept = held;
-                if keeping && let Some(composition) = self.composition_target.as_mut() {
-                    self.cleared.hand_over(&mut composition.kept);
-                }
-            }
-        }
+        let keepers = Keepers {
+            composition: self
+                .composition_target
+                .as_mut()
+                .map(|target| &mut target.kept),
+            swapchain: &mut self.swapchain,
+            cleared: &mut self.cleared,
+        };
+        plan.keep(drawn.then_some(plan.held), keepers)
     }
 
     /// Lets go of the copy of the last frame the renderer keeps for a
@@ -3599,7 +3581,7 @@ mod damage_plan;
 mod frame_history;
 mod frame_submit;
 mod frame_uploads;
-use damage_plan::{FrameDamagePlan, Keeper};
+use damage_plan::{FrameDamagePlan, Keeper, Keepers, admits, count_damage};
 use frame_history::FrameHistory;
 pub use frame_history::frames_presented;
 pub(crate) use frame_submit::FrameSubmit;

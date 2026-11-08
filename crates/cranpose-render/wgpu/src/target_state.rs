@@ -125,6 +125,52 @@ impl Shown {
     }
 }
 
+// How a culled walk takes a record.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum Visit {
+    // It leaves the record out: it lies outside the region, as it did.
+    Skip,
+    // It walks the record, culling beneath it.
+    Walk,
+    // It walks all the record's subtree: the subtree moved or is new.
+    WalkAll,
+}
+
+// What a window's walk leaves out: the records that did not change and lie
+// outside a region, as the target last drew them.
+pub(crate) struct Cull<'a> {
+    region: DamageRects,
+    shown: &'a [Shown],
+    marks: &'a [(u32, Visit)],
+    stamp: u32,
+}
+
+impl Cull<'_> {
+    // How the walk takes `record`.
+    pub(crate) fn visit(&self, record: RecordRef) -> Visit {
+        let row = record.id.index();
+        if let Some(&(stamp, visit)) = self.marks.get(row)
+            && stamp == self.stamp
+        {
+            return visit;
+        }
+        let Some(shown) = self
+            .shown
+            .get(row)
+            .filter(|shown| shown.generation == record.generation)
+        else {
+            return Visit::Walk;
+        };
+        match shown.area {
+            Area::Drawn(pixels) | Area::Composite(pixels) if !self.region.meets(pixels.rect()) => {
+                Visit::Skip
+            }
+            Area::Hidden => Visit::Skip,
+            Area::Drawn(_) | Area::Composite(_) | Area::Unknown => Visit::Walk,
+        }
+    }
+}
+
 // What of a record a change reaches.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Scope {
@@ -190,6 +236,13 @@ pub(crate) struct TargetState {
     // The records the frame's changes leave and what of each they reach,
     // whose new areas the frame adds after its collect.
     changed: Vec<(RecordRef, Scope)>,
+    // The damage of the old areas, and whether one is not known, which each
+    // end of the frame starts from.
+    begun: (DamageRects, bool),
+    // By row, the frame that marked the record and how a culled walk of
+    // that frame takes it.
+    marks: Vec<(u32, Visit)>,
+    stamp: u32,
     path: Vec<RecordId>,
     captures: Vec<Capture>,
     // While frames keep changing most of the window, the frames left to
@@ -306,6 +359,54 @@ impl TargetState {
             }
         });
         self.cursor = Some(cursor);
+        self.begun = (self.damage, self.whole);
+    }
+
+    // The damage of the areas the frame before drew the changed records in;
+    // `None` when the frame works out no damage or one of them is not
+    // known.
+    pub(crate) fn begun(&self) -> Option<DamageRects> {
+        let known = self.recording && !self.unknown_before && self.lost_root.is_none();
+        (known && !self.begun.1).then_some(self.begun.0)
+    }
+
+    // What a walk of the frame leaves out of `region` of the records of
+    // `store`: it walks every changed record and its ancestors, and all of
+    // a moved or new record's subtree.
+    pub(crate) fn cull(&mut self, store: &SceneStore, region: DamageRects) -> Cull<'_> {
+        self.stamp = self.stamp.wrapping_add(1).max(1);
+        for at in 0..self.changed.len() {
+            let (record, scope) = self.changed[at];
+            let Some(id) = store.resolve(record) else {
+                continue;
+            };
+            let visit = match scope {
+                Scope::Subtree => Visit::WalkAll,
+                Scope::Own(_) => Visit::Walk,
+            };
+            let mut next = self.mark(id.index(), visit).then_some(id);
+            while let Some(parent) = next.and_then(|id| store.parent(id)) {
+                next = self.mark(parent.index(), Visit::Walk).then_some(parent);
+            }
+        }
+        Cull {
+            region,
+            shown: &self.shown,
+            marks: &self.marks,
+            stamp: self.stamp,
+        }
+    }
+
+    // Marks the record at `row` for the frame's walk to take as `visit` at
+    // least; returns whether the frame marked it first now.
+    fn mark(&mut self, row: usize, visit: Visit) -> bool {
+        if row >= self.marks.len() {
+            self.marks.resize(row + 1, (0, Visit::Skip));
+        }
+        let mark = &mut self.marks[row];
+        let first = mark.0 != self.stamp;
+        *mark = (self.stamp, if first { visit } else { mark.1.max(visit) });
+        first
     }
 
     // Puts the area the frame before drew the record of `entry` in into the
@@ -390,6 +491,7 @@ impl TargetState {
         let Some(setting) = self.setting else {
             return Damage::Full;
         };
+        (self.damage, self.whole) = self.begun;
         let shown = root.as_deref_mut().map(|root| root.shown.drain(..));
         for shown in shown.into_iter().flatten() {
             let row = shown.record.id.index();

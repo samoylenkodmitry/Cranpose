@@ -58,7 +58,8 @@ impl ClearedImages {
 
     /// What `frame`, drawn into the composition target that keeps the frame
     /// before for these images, changes there; a frame whose draws cover
-    /// less than [`COPY_COVERAGE`] windows costs less drawn whole.
+    /// less than [`COPY_COVERAGE`] windows costs less drawn whole, unless its
+    /// packet holds the draws of a part of the window only.
     pub(crate) fn copied_damage(
         &self,
         damages: &FrameDamages,
@@ -67,7 +68,7 @@ impl ClearedImages {
     ) -> Since {
         let since = damages.since(kept, frame);
         match since.damage {
-            Damage::Part(_) if covers_less(frame) => Since {
+            Damage::Part(_) if frame.packet.culled.is_none() && covers_less(frame) => Since {
                 damage: Damage::Full,
                 ..since
             },

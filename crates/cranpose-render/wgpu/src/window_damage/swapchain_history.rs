@@ -14,6 +14,8 @@ pub(crate) struct SwapchainHistory {
     surface_epoch: u64,
     /// By image index, the frame the image holds.
     held: [Option<Held>; IMAGES],
+    // By image index, a bit for each image the surface handed out.
+    seen: u8,
     /// The frame presented last, when it went into an image the history
     /// follows and holds.
     presented: Option<Held>,
@@ -34,16 +36,37 @@ impl SwapchainHistory {
     // Forgets what the images hold.
     pub(crate) fn forget(&mut self) {
         self.held = [None; IMAGES];
+        self.seen = 0;
         self.presented = None;
+    }
+
+    // The oldest frame the images the surface handed out hold; `None`
+    // while one of them holds none known.
+    pub(crate) fn oldest(&self) -> Option<u64> {
+        let mut oldest = None;
+        for (index, held) in self.held.iter().enumerate() {
+            if self.seen & (1 << index) != 0 {
+                let frame = held.as_ref()?.frame();
+                oldest = Some(oldest.map_or(frame, |oldest: u64| oldest.min(frame)));
+            }
+        }
+        oldest
     }
 
     /// Forgets what `image` holds: a frame the history does not follow
     /// draws into it.
     pub(crate) fn drop_image(&mut self, image: PresentedImage) {
+        self.see(image);
         if let Some(held) = self.held.get_mut(image.index as usize) {
             *held = None;
         }
         self.presented = None;
+    }
+
+    fn see(&mut self, image: PresentedImage) {
+        if let Some(bit) = 1u8.checked_shl(image.index) {
+            self.seen |= bit;
+        }
     }
 
     // Whether `frame` draws what the surface shows: the frame presented last
@@ -96,6 +119,7 @@ impl SwapchainHistory {
     /// Ends the frame `held` drawn into `image`: the image holds it when it
     /// was `drawn` whole.
     pub(crate) fn record(&mut self, image: PresentedImage, held: Held, drawn: bool) {
+        self.see(image);
         let held = drawn.then_some(held);
         if let Some(slot) = self.held.get_mut(image.index as usize) {
             *slot = held;

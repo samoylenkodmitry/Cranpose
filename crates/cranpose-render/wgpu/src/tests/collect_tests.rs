@@ -24,6 +24,7 @@ fn collect_layer(
     collect_root(
         layer,
         (store.update(), false),
+        None,
         motion,
         capacity,
         root_scale,
@@ -60,7 +61,15 @@ fn raster_scale(
     } else {
         scale
     };
-    motion.record_scale(node_id, raster, content_hash);
+    let store = SceneStore::from_layer(&LayerNode {
+        node_id,
+        ..Default::default()
+    });
+    motion.record_scale(
+        store.root_layer().expect("the store holds the layer"),
+        raster,
+        content_hash,
+    );
     raster
 }
 
@@ -269,6 +278,7 @@ fn isolated_layers_snap_their_own_text_and_translating_text_descendants() {
                     snap_anchor: None,
                     translated,
                     settings: &walk_settings(),
+                    cull: None,
                 },
                 None,
                 &mut CompositorScene::new(),
@@ -472,6 +482,7 @@ fn a_rounded_layer_its_parent_clip_holds_draws_in_place_whatever_the_float_sums(
         snap_anchor: None,
         translated: false,
         settings: &walk_settings(),
+        cull: None,
     };
     assert!(matches!(
         placement_of(&bar, panel.settings.raster_scale),

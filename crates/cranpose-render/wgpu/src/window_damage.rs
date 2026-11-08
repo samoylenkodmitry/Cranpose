@@ -56,6 +56,20 @@ pub(crate) enum Damage {
 }
 
 impl Damage {
+    // The pixels either damage changes, in a window of `viewport`.
+    pub(crate) fn union(self, other: Self, viewport: (u32, u32)) -> Self {
+        match (self, other) {
+            (Self::Part(mut rects), Self::Part(more)) => {
+                for rect in more.as_slice() {
+                    rects.add(*rect);
+                }
+                settle(rects, viewport)
+            }
+            (Self::Full, _) | (_, Self::Full) => Self::Full,
+            (Self::Skipped, _) | (_, Self::Skipped) => Self::Skipped,
+        }
+    }
+
     /// What of the page a frame with this damage draws.
     pub(crate) fn repaint(self) -> Repaint {
         match self {
@@ -94,6 +108,16 @@ pub(crate) enum Repaint {
 }
 
 impl Repaint {
+    // Whether every pixel the frame draws lies in one of the rects of
+    // `region`.
+    pub(crate) fn within(self, region: &DamageRects) -> bool {
+        match self {
+            Self::Whole => false,
+            Self::Window(rects) => region.covers(&rects),
+            Self::Nothing => true,
+        }
+    }
+
     /// The pixels the frame draws of a page of `viewport`.
     pub(crate) fn pixels(self, (width, height): (u32, u32)) -> u64 {
         match self {
@@ -159,6 +183,21 @@ impl DamageRects {
     /// Whether one rect holds all of `rect`.
     pub(crate) fn holds(&self, rect: DeviceRect) -> bool {
         self.as_slice().iter().any(|part| holds(*part, rect))
+    }
+
+    // Whether the rects together hold every pixel of `rects`: the rects
+    // share no pixel, so their parts of a rect add up to all of it only
+    // when they cover it.
+    pub(crate) fn covers(&self, rects: &Self) -> bool {
+        rects.as_slice().iter().all(|rect| {
+            let covered: f32 = self
+                .as_slice()
+                .iter()
+                .filter_map(|part| part.intersect(*rect))
+                .map(|part| part.width * part.height)
+                .sum();
+            covered >= rect.width * rect.height
+        })
     }
 
     /// Adds `rect`, grown out to whole pixels. It merges with every rect it
@@ -280,6 +319,13 @@ pub(crate) struct FrameWindow<'a> {
     pub(crate) setting: u64,
 }
 
+impl Held {
+    // The packet of the frame held.
+    pub(crate) fn frame(self) -> u64 {
+        self.frame
+    }
+}
+
 impl FrameWindow<'_> {
     /// The frame as a target holds it once drawn.
     pub(crate) fn held(&self) -> Held {
@@ -364,8 +410,22 @@ impl FrameDamages {
         else {
             return changed(Damage::Full);
         };
+        match self.union_back(frame.packet.frame_id, held.frame) {
+            Ok(union) => changed(Damage::Part(union)),
+            Err(since) => since,
+        }
+    }
+
+    // The union of the damages of the packets from `at` back to the one
+    // after `held`; what a target that holds `held` takes from them when
+    // one of them is not a part of the window.
+    pub(crate) fn union_back(&self, at: u64, held: u64) -> Result<DamageRects, Since> {
+        let unknown = |baseline| Since {
+            damage: Damage::Full,
+            baseline,
+        };
         // A frame that changed nothing against the one before is that one.
-        let mut held_frame = held.frame;
+        let mut held_frame = held;
         for _ in 0..HISTORY {
             match self.noted(held_frame) {
                 Some(PacketDamage {
@@ -376,29 +436,26 @@ impl FrameDamages {
             }
         }
         let mut union = DamageRects::default();
-        let mut at = frame.packet.frame_id;
+        let mut at = at;
         for _ in 0..=HISTORY {
-            if at == held_frame || at == held.frame {
-                return changed(Damage::Part(union));
+            if at == held_frame || at == held {
+                return Ok(union);
             }
             let Some(packet) = self.noted(at) else {
-                return changed(Damage::Full);
+                return Err(unknown(false));
             };
             let Some(since) = packet.since else {
-                return Since {
-                    damage: Damage::Full,
-                    baseline: true,
-                };
+                return Err(unknown(true));
             };
             let Damage::Part(part) = packet.damage else {
-                return changed(Damage::Full);
+                return Err(unknown(false));
             };
             for rect in part.as_slice() {
                 union.add(*rect);
             }
             at = since;
         }
-        changed(Damage::Full)
+        Err(unknown(false))
     }
 }
 

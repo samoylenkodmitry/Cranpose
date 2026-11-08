@@ -3,10 +3,19 @@
 
 use super::FrameRoot;
 use crate::{
-    frame::{Damage, Held, PresentedImage, Repaint},
+    frame::{ClearedImages, Damage, Held, PresentedImage, Repaint, SwapchainHistory},
     frame_packet::FramePacket,
+    gpu_stats::{FrameDamage, FrameStats},
     target_state::TargetDrawn,
 };
+
+// The targets a window frame keeps its pixels in.
+pub(super) struct Keepers<'a> {
+    // The frame the composition target holds, when the renderer has one.
+    pub(super) composition: Option<&'a mut Option<Held>>,
+    pub(super) swapchain: &'a mut SwapchainHistory,
+    pub(super) cleared: &'a mut ClearedImages,
+}
 
 /// The kept frame a frame's damage is measured against.
 #[derive(Clone, Copy)]
@@ -35,6 +44,36 @@ pub(super) struct FrameDamagePlan {
 }
 
 impl FrameDamagePlan {
+    // Keeps the frame of the plan in its target, `held` when it drew there
+    // whole of the scene; returns the oldest packet the window's next frame
+    // finds in its target, `None` when a target holds none known.
+    pub(super) fn keep(self, held: Option<Held>, keepers: Keepers<'_>) -> Option<u64> {
+        let Keepers {
+            composition,
+            swapchain,
+            cleared,
+        } = keepers;
+        match self.keeper {
+            Keeper::Composition => {
+                let kept = composition?;
+                *kept = held;
+                held.map(Held::frame)
+            }
+            Keeper::Image(image) => {
+                swapchain.record(image, self.held, held.is_some());
+                swapchain.oldest()
+            }
+            Keeper::Cleared { keeping } => {
+                cleared.kept = held;
+                let kept = composition?;
+                if keeping {
+                    cleared.hand_over(kept);
+                }
+                cleared.copied.then_some(*kept).flatten().map(Held::frame)
+            }
+        }
+    }
+
     // How `packet` went into the target the plan draws it into, through
     // `root`.
     pub(super) fn drawn(self, packet: &FramePacket, root: &FrameRoot) -> TargetDrawn {
@@ -52,4 +91,26 @@ impl FrameDamagePlan {
                 ),
         }
     }
+}
+
+// Whether `plan` draws only where `packet` holds every draw.
+pub(super) fn admits(plan: Option<&FrameDamagePlan>, packet: &FramePacket) -> bool {
+    packet
+        .culled
+        .is_none_or(|region| plan.is_some_and(|plan| plan.repaint.within(&region)))
+}
+
+// Counts what a frame of `plan` changes and draws of a page of `viewport`
+// in `stats`, and returns what it draws.
+pub(super) fn count_damage(
+    plan: Option<FrameDamagePlan>,
+    viewport: (u32, u32),
+    stats: &FrameStats,
+) -> Repaint {
+    stats
+        .damage
+        .set(plan.map_or(FrameDamage::Untracked, |plan| plan.damage.stats()));
+    let repaint = plan.map_or(Repaint::Whole, |plan| plan.repaint);
+    stats.repainted_pixels.set(repaint.pixels(viewport));
+    repaint
 }

@@ -102,6 +102,7 @@ pub(crate) fn encode_present_outcome(outcome: PresentOutcome, frame_id: u64) -> 
         PresentOutcome::Cancelled(CancelReason::SurfaceUnavailable) => 5,
         PresentOutcome::Cancelled(CancelReason::DeviceError) => 6,
         PresentOutcome::Unchanged => 7,
+        PresentOutcome::Cancelled(CancelReason::NeedsWhole) => 8,
     };
     (frame_id << 8) | code
 }

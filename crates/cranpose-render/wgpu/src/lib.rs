@@ -74,6 +74,7 @@ mod target_state;
 mod test_support;
 mod text_system;
 mod thread_state;
+mod window_packets;
 
 use std::sync::Arc;
 
@@ -508,6 +509,7 @@ impl WgpuRenderer {
     pub fn release_kept_copy(&mut self) {
         if let PresentBackend::Sync(sync) = &mut self.backend {
             sync.renderer.release_kept_copy();
+            self.frontend.forget_held();
         }
     }
 
@@ -523,21 +525,19 @@ impl WgpuRenderer {
             renderer: gpu_renderer,
             submit,
         } = self.backend.sync_mut()?;
-        let packet = self
-            .frontend
-            .take_packet(width, height, self.renderer_epoch, self.surface_epoch)
-            .ok_or_else(|| WgpuRendererError::Wgpu("scene graph is missing".to_string()))?;
-        let mut returns = RenderReturns::default();
-        let result = gpu_renderer.render(
-            submit,
-            (width, height),
-            packet,
-            self.surface_epoch,
-            &mut returns,
+        let (epochs, output) = (
+            (self.renderer_epoch, self.surface_epoch),
             FrameOutput::display(texture, view, image),
         );
-        self.frontend.apply_returns(returns);
-        result.map_err(WgpuRendererError::Wgpu)
+        let draw = |packet, returns: &mut RenderReturns| {
+            gpu_renderer.render(submit, (width, height), packet, epochs.1, returns, output)
+        };
+        let result = self
+            .frontend
+            .draw_window((width, height), epochs, image, draw);
+        result
+            .ok_or_else(|| WgpuRendererError::Wgpu("scene graph is missing".to_string()))?
+            .map_err(WgpuRendererError::Wgpu)
     }
 
     /// Whether the surface already shows the current scene at `width` by

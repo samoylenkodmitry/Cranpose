@@ -2,7 +2,6 @@ use std::{borrow::Cow, sync::Arc};
 
 use cranpose_core::{NodeId, SceneUpdate};
 use cranpose_render_common::{
-    geometry::{blur_reach, blur_reach_for_minimum_scale},
     graph::{CachePolicy, ProjectiveTransform},
     layer_composition::{
         layer_composite_params, layer_requires_isolation, local_content_layer_for,
@@ -24,11 +23,13 @@ use crate::{
         BackdropLayer, ClipRounding, CompositorScene, ContentContext, LayerRoundedClip, RunDraw,
         SceneCapacityHint, SnapAnchor, clip_holds,
     },
+    target_state::Cull,
 };
 
 mod backdrop_space;
 mod layer_motion;
 mod push_content;
+mod raster_scale;
 mod rigid_snap;
 mod rounded_clip_corners;
 mod shown;
@@ -37,6 +38,7 @@ use backdrop_space::{detach_flat_backdrop, with_backdrop_in_own_space};
 pub(crate) use layer_motion::LayerMotion;
 use push_content::{assign_shadow_anchor, push_content};
 pub(crate) use push_content::{assign_snap_anchor_since, scene_counts};
+use raster_scale::RasterScale;
 use rigid_snap::{
     layer_has_pixel_sensitive_subtree, node_is_pixel_sensitive, primitive_is_drawn,
     primitive_is_pixel_sensitive, rigid_snap_anchor,
@@ -45,11 +47,10 @@ use rounded_clip_corners::{
     content_admits_rounded_clip, content_takes_rounded_clip, rounded_clip_for_layer,
 };
 pub(crate) use shown::{ShownArea, ShownRecord};
-use shown::{record_drawn, record_hidden};
+use shown::{culled, record_drawn, record_hidden};
 use space_children::collect_space_children;
 
 const AFFINE_TOLERANCE: f32 = 1e-4;
-const ROUNDED_CLIP_AA_MARGIN: f32 = 1.0;
 
 /// One isolated layer's content in that layer's own coordinate space: the flat
 /// z-ordered ops, the isolated children composited at their z, and the
@@ -218,6 +219,9 @@ struct WalkContext<'s> {
     snap_anchor: Option<SnapAnchor>,
     translated: bool,
     settings: &'s WalkSettings,
+    // What a window's walk leaves out of the subtree; `None` when it walks
+    // all of it.
+    cull: Option<&'s Cull<'s>>,
 }
 
 /// What one walk keeps for every layer it collects in place. An isolated
@@ -241,49 +245,6 @@ struct WalkSettings {
     // Whether the walk records how it draws each record in place: a window's
     // walk of its root does.
     records_shown: bool,
-}
-
-#[derive(Clone, Copy)]
-enum RasterScale {
-    Exact(f32),
-    Minimum(f32),
-}
-
-impl RasterScale {
-    fn within(self, nominal: f32, retained: f32) -> Self {
-        if nominal == 1.0 && retained == 1.0 {
-            return self;
-        }
-        if !nominal.is_finite() || nominal <= 0.0 || !retained.is_finite() || retained <= 0.0 {
-            return Self::Minimum(0.0);
-        }
-        let (Self::Exact(parent) | Self::Minimum(parent)) = self;
-        Self::Minimum(parent * nominal.min(retained).min(1.0))
-    }
-
-    fn nominal(self) -> f32 {
-        let (Self::Exact(scale) | Self::Minimum(scale)) = self;
-        scale
-    }
-
-    fn shadow_reach(self, radius: f32) -> f32 {
-        match self {
-            Self::Exact(scale) => blur_reach(radius, scale),
-            Self::Minimum(scale) => blur_reach_for_minimum_scale(radius, scale),
-        }
-    }
-
-    fn aa_margin(self) -> f32 {
-        let scale = match self {
-            Self::Exact(scale) if !scale.is_finite() || scale <= 0.0 => 1.0,
-            Self::Exact(scale) | Self::Minimum(scale) => scale,
-        };
-        if scale.is_finite() && scale > 0.0 {
-            ROUNDED_CLIP_AA_MARGIN.max(1.0 / scale)
-        } else {
-            f32::INFINITY
-        }
-    }
 }
 
 pub(crate) fn direct_translation(transform: ProjectiveTransform) -> Option<Point> {
@@ -450,6 +411,7 @@ fn rounding_within(layer_clip: Option<Rect>, context: &WalkContext<'_>) -> Optio
 pub(crate) fn collect_root(
     root: LayerRef<'_>,
     (update, records_shown): (SceneUpdate, bool),
+    cull: Option<&Cull<'_>>,
     motion: &mut LayerMotion,
     capacity: SceneCapacityHint,
     root_scale: f32,
@@ -476,10 +438,14 @@ pub(crate) fn collect_root(
         snap_anchor: None,
         translated: false,
         settings: &settings,
+        cull,
     };
     collect_child(root, motion, context, &mut out, recycler);
     out.scene.flush_loose();
     out.refresh_backdrop_summary();
+    if cull.is_some() {
+        motion.keep_unwalked(root.store());
+    }
     motion.end_frame();
     out
 }
@@ -492,6 +458,7 @@ pub(crate) fn collect_overlay(
     collect_root(
         root,
         (root.store().update(), records_shown),
+        None,
         &mut LayerMotion::default(),
         SceneCapacityHint::default(),
         root_scale,
@@ -608,6 +575,7 @@ fn isolated_child(
         snap_anchor: None,
         translated: context.translated || layer.translated_content_context(),
         settings: &content_settings,
+        cull: None,
     };
     let mut content = recycler.take(SceneCapacityHint::default());
     let has_pixel_sensitive_subtree =
@@ -639,7 +607,7 @@ fn isolated_child(
     } else {
         nominal_scale
     };
-    motion.record_scale(layer.node_id(), surface_scale, content_hash);
+    motion.record_scale(layer, surface_scale, content_hash);
     let in_place = mesh.is_none() && can_draw_in_place(layer, transform, surface_scale, &content);
     (
         ChildLayer {
@@ -714,6 +682,7 @@ fn collect_into(
         snap_anchor: translated_anchor,
         translated,
         settings: context.settings,
+        cull: context.cull,
     };
     if context.settings.in_space || layer.graphics_layer().space.is_some() {
         return collect_space_children(layer, motion, (child_context, &content), out, recycler);
@@ -761,6 +730,9 @@ fn collect_child(
     out: &mut LayerScene,
     recycler: &mut LayerSceneRecycler,
 ) -> bool {
+    let Some(context) = culled(child, context) else {
+        return false;
+    };
     let composite = layer_composite_params(child.graphics_layer());
     if composite.is_some_and(|(alpha, blend)| alpha == 0.0 && blend == BlendMode::SrcOver) {
         record_hidden(child, &context, out);
@@ -839,6 +811,9 @@ fn collect_child(
 // snap anchor a child layer that only moves would give it. Returns whether
 // it draws pixel-sensitive content, when the walk wants to know.
 fn collect_inline(inline: LayerRef<'_>, context: WalkContext<'_>, out: &mut LayerScene) -> bool {
+    let Some(context) = culled(inline, context) else {
+        return false;
+    };
     let origin = inline.origin();
     let offset = Point::new(context.offset.x + origin.x, context.offset.y + origin.y);
     let bounds = inline.node_rect().translate(offset.x, offset.y);
