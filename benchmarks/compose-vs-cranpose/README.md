@@ -253,7 +253,13 @@ the tiles as a view of their own, embedded `cached`. Flutter builds the tiles
 once inside a `RepaintBoundary`. Slint makes the tiles from a model once and
 binds only the clock and the cursor to the frame. The web page builds the
 tiles' elements once in a CSS grid and moves the cursor by a transform in a
-layer of its own.
+layer of its own; Tauri shows that page in WKWebView, and Dioxus renders the
+same grid from a tiles component that reads no signal. Xilem memoizes the
+tiles on the grid. SwiftUI's tiles read nothing the clock changes, so it
+evaluates them once. AppKit makes a Core Animation layer for each tile, its
+dot and its texts once. Avalonia and Fyne place the tiles' controls and
+canvas objects once. In every app a frame changes the clock's text and the
+cursor's place, nothing else.
 
 | Tier | Tile (points) | Grid | Tiles |
 | --- | --- | --- | --- |

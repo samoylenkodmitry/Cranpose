@@ -119,13 +119,15 @@ class DesktopRoundsTest(unittest.TestCase):
         return measured, report['scenarios'][0] if browser is None and len(screens) == 1 else report
 
     def test_each_screen_measures_the_apps_that_draw_it_in_a_folder_of_its_own(self):
-        _, report = self.rounds([24.3, 30.0, 24.6, 30.5, 20.0, 22.0], apps=['egui', 'fyne'],
-                                screens=[('gauntlet', 16), ('wall', 20)])
+        drawn = {'gauntlet': {'desktop': None, 'browser': None}, 'wall': {'desktop': {'egui'}, 'browser': None}}
+        with patch.dict(desktop.SCREEN_APPS, drawn):
+            _, report = self.rounds([24.3, 30.0, 24.6, 30.5, 20.0, 22.0], apps=['egui', 'fyne'],
+                                    screens=[('gauntlet', 16), ('wall', 20)])
         gauntlet, wall = report['scenarios']
         self.assertEqual((gauntlet['scenario'], wall['scenario']), ('gauntlet', 'wall'))
         self.assertEqual({leg['subject'] for leg in gauntlet['legs']}, {'egui', 'fyne'})
         self.assertEqual({leg['subject'] for leg in wall['legs']}, {'egui'},
-                         'Fyne draws no wall: under its name it would show the gauntlet')
+                         'an app that draws no wall would show another screen under its name')
         self.assertEqual(self.screens, [('gauntlet', 16, Path('results/gauntlet'))] * 4
                          + [('wall', 20, Path('results/wall'))] * 2)
         self.assertTrue(wall['extras'].startswith('tier 20, '))

@@ -133,8 +133,7 @@ DISAGREEMENT = 1.5
 # for every app.
 SCREEN_APPS = {
     'gauntlet': {'desktop': None, 'browser': None},
-    'wall': {'desktop': {'cranpose', 'cranpose-release', 'egui', 'iced', 'gpui', 'slint', 'flutter', 'compose', 'web'},
-             'browser': {'cranpose', 'egui', 'iced', 'slint', 'flutter', 'web'}},
+    'wall': {'desktop': None, 'browser': {'cranpose', 'egui', 'iced', 'slint', 'flutter', 'web'}},
 }
 
 # The screens the release's app knows, one name a line, which `build_apps.sh
@@ -1030,6 +1029,7 @@ def run(args, apps, server, stage):
         # Pillow, which comparing pictures needs and measuring does not.
         from PIL import Image
         from parity import compare_pair
+        apps = [name for name in apps if shows(name, args)]
         pictures = {name: picture(name, args, args.output, server, stage) for name in apps}
         # Compose's picture is the one the others are held to.
         reference = next((name for name in ('compose', 'web') if name in apps), apps[0])
