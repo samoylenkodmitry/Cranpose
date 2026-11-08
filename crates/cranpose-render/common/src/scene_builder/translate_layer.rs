@@ -402,6 +402,9 @@ fn build_entering_children(
         let Some(lowered) = lower_child(applier, store, container, placed.id, context) else {
             continue;
         };
+        if let Some(record) = lowered.as_child() {
+            store.note_content_change(record);
+        }
         forget_dirty_node(store, lowered, dirty_nodes);
         entering.push((placed.id, lowered));
     }

@@ -221,7 +221,7 @@ pub(super) fn assign_layer(store: &mut SceneStore, record: RecordId, head: Layer
         );
     store.set_flags(record, flags);
     refresh_hit_targets(store, record);
-    store.note_content_change(record);
+    store.note_property_change(record);
 }
 
 pub(super) fn refresh_hit_targets(store: &mut SceneStore, record: RecordId) {

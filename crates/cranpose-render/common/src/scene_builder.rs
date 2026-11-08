@@ -209,6 +209,9 @@ pub fn rebuild_graph_from_applier(
             graph.retained_path = None;
             graph.update += 1;
             lower_root_into(applier, &mut graph.store, root).then(|| {
+                if let Some(record) = graph.store.root() {
+                    graph.store.note_content_change(record);
+                }
                 graph.refresh_from_store();
                 graph
             })
@@ -693,7 +696,7 @@ fn update_layer_properties(
                 flags
             },
         );
-        store.note_content_change(container);
+        store.note_property_change(container);
     }
     Some(changes)
 }

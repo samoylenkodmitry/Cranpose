@@ -496,6 +496,23 @@ impl SceneStore {
         self.note_subtree_change(Some(id));
     }
 
+    /// Notes that the update in progress changed the properties of `id`
+    /// without changing what it draws: its hashes go, while a raster cache
+    /// keyed on its content does not count the update as a content change.
+    pub fn note_property_change(&mut self, id: RecordId) {
+        let update = self.update;
+        let index = id.index();
+        let tree = &mut self.tree[index];
+        tree.content_rev = update;
+        tree.subtree_rev = update;
+        tree.reach_state = ReachState::Stale;
+        let parent = tree.parent;
+        if let Some(props) = self.warm[index].props {
+            self.props[props.index()].cache_hashes.set(None);
+        }
+        self.note_subtree_change(parent);
+    }
+
     /// Notes that the update in progress moved `id` in its parent: the
     /// parent's content changed, while the subtree of `id` holds.
     pub fn note_place_change(&mut self, id: RecordId) {
