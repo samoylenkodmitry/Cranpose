@@ -518,28 +518,25 @@ fn layer_raster_mapping(
         parent_content_style.under(&layer.graphics_layer)
     };
     let bounds = layer.local_bounds;
-    let mut mapping = raster_layer_mapping(bounds, transform, content_style);
     // A node's rect that differs from its layer's bounds in some bit maps on
     // its own: a zero of another sign maps to other bits.
     let node_rect = layer.node_rect();
     let same = |a: f32, b: f32| a.to_bits() == b.to_bits();
-    if !(same(node_rect.x, bounds.x)
+    let content_bounds = (!(same(node_rect.x, bounds.x)
         && same(node_rect.y, bounds.y)
         && same(node_rect.width, bounds.width)
-        && same(node_rect.height, bounds.height))
-    {
-        mapping.content_bounds = RasterLayerBounds::from_transformed_bounds(
-            transform.bounds_for_rect(node_rect),
-            node_rect,
-        );
-    }
-    mapping
+        && same(node_rect.height, bounds.height)))
+    .then(|| {
+        RasterLayerBounds::from_transformed_bounds(transform.bounds_for_rect(node_rect), node_rect)
+    });
+    raster_layer_mapping(bounds, content_bounds, transform, content_style)
 }
 
-// The mapping of a node whose rect is `local_bounds`, as an inline node's
-// is: its draws map as its layer does.
+// `content_bounds` is `None` where the node's draws map as its layer does,
+// as an inline node's do.
 fn raster_layer_mapping(
     local_bounds: Rect,
+    content_bounds: Option<RasterLayerBounds>,
     transform: &ProjectiveTransform,
     content_style: ContentStyle,
 ) -> RasterLayerMapping {
@@ -549,7 +546,7 @@ fn raster_layer_mapping(
 
     RasterLayerMapping {
         layer_bounds,
-        content_bounds: layer_bounds,
+        content_bounds: content_bounds.unwrap_or(layer_bounds),
         transformed_bounds,
         content_style,
         scale_x,
@@ -866,7 +863,7 @@ fn push_inline_items(
     let transform = inline.transform_to_parent().then(*context.parent_transform);
     let node_rect = inline.node_rect();
     let content_style = context.parent_content_style.under(&GraphicsLayer::DEFAULT);
-    let mapping = raster_layer_mapping(node_rect, &transform, content_style);
+    let mapping = raster_layer_mapping(node_rect, None, &transform, content_style);
     if mapping.transformed_bounds.width <= 0.0 || mapping.transformed_bounds.height <= 0.0 {
         return;
     }
