@@ -25,9 +25,7 @@ mod text;
 
 use image::{blit_image_between_pixels, draw_image, image_rect};
 use reach::text_bounds;
-use row_runs::{
-    INK_REACH, NO_RUN, RoundedFill, RowRuns, arc_row_runs, line_row_runs, stroke_row_runs,
-};
+use row_runs::{INK_REACH, LineRows, NO_RUN, RoundedFill, RowRuns, arc_row_runs, stroke_row_runs};
 use shape_rows::{Coverage, ShapeRows};
 pub(crate) use text::rasterize_text;
 use text::{draw_text, is_static_text, rasterize_text_part, text_raster_rect};
@@ -512,8 +510,9 @@ fn draw_shape<P: Pixel>(
     match &coverage {
         ShapeCoverage::Line(line) => {
             let frame = line.frame();
+            let rows = LineRows::new(line, &frame);
             paint.paint(
-                |y, min_x, max_x| line_row_runs(line, &frame, y, min_x, max_x),
+                |y, min_x, max_x| rows.runs(y, min_x, max_x),
                 |point| Coverage::of(line.coverage_in(&frame, point)),
             );
         }
