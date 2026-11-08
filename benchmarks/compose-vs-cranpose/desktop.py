@@ -129,12 +129,8 @@ def clear_app_state(profile):
 # more, so the median of the three decides, and the window's picture is kept.
 DISAGREEMENT = 1.5
 
-# The apps that draw each screen, on the desktop and in the browser; None
-# for every app.
-SCREEN_APPS = {
-    'gauntlet': {'desktop': None, 'browser': None},
-    'wall': {'desktop': None, 'browser': {'cranpose', 'egui', 'iced', 'slint', 'flutter', 'web'}},
-}
+# The screens every app draws.
+SCREENS = ('gauntlet', 'wall')
 
 # The screens the release's app knows, one name a line, which `build_apps.sh
 # release` writes beside it.
@@ -1083,23 +1079,21 @@ def screen_args(args, screen):
 def screen(text):
     """`--scenario`'s `NAME` or `NAME:TIER`."""
     name, _, tier = text.partition(':')
-    if name not in SCREEN_APPS:
-        raise argparse.ArgumentTypeError(f'{name} is none of {", ".join(SCREEN_APPS)}')
+    if name not in SCREENS:
+        raise argparse.ArgumentTypeError(f'{name} is none of {", ".join(SCREENS)}')
     if tier and not tier.isdigit():
         raise argparse.ArgumentTypeError(f'{tier} is no tier')
     return name, int(tier) if tier else None
 
 
 def shows(name, args):
-    """Whether app `name` draws the screen `args` names: `SCREEN_APPS`, and
-    for `cranpose-release` the screens its release's app knows. An app that
-    does not draws another screen under that screen's name."""
-    if name == 'cranpose-release':
-        known = RELEASE_SCREENS.read_text().split() if RELEASE_SCREENS.exists() else ['gauntlet']
-        if args.scenario not in known:
-            return False
-    drawn = SCREEN_APPS[args.scenario]['browser' if args.browser else 'desktop']
-    return drawn is None or name in drawn
+    """Whether app `name` draws the screen `args` names. Every app does,
+    except `cranpose-release` on a screen its release's app does not know: it
+    would draw another screen under that screen's name."""
+    if name != 'cranpose-release':
+        return True
+    known = RELEASE_SCREENS.read_text().split() if RELEASE_SCREENS.exists() else ['gauntlet']
+    return args.scenario in known
 
 
 def measure_screen(args, apps, server, stage, window):

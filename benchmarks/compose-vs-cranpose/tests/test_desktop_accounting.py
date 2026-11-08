@@ -119,15 +119,15 @@ class DesktopRoundsTest(unittest.TestCase):
         return measured, report['scenarios'][0] if browser is None and len(screens) == 1 else report
 
     def test_each_screen_measures_the_apps_that_draw_it_in_a_folder_of_its_own(self):
-        drawn = {'gauntlet': {'desktop': None, 'browser': None}, 'wall': {'desktop': {'egui'}, 'browser': None}}
-        with patch.dict(desktop.SCREEN_APPS, drawn):
-            _, report = self.rounds([24.3, 30.0, 24.6, 30.5, 20.0, 22.0], apps=['egui', 'fyne'],
-                                    screens=[('gauntlet', 16), ('wall', 20)])
+        with tempfile.TemporaryDirectory() as folder:
+            with patch.object(desktop, 'RELEASE_SCREENS', Path(folder) / 'screens.txt'):
+                _, report = self.rounds([24.3, 30.0, 24.6, 30.5, 20.0, 22.0], apps=['egui', 'cranpose-release'],
+                                        screens=[('gauntlet', 16), ('wall', 20)])
         gauntlet, wall = report['scenarios']
         self.assertEqual((gauntlet['scenario'], wall['scenario']), ('gauntlet', 'wall'))
-        self.assertEqual({leg['subject'] for leg in gauntlet['legs']}, {'egui', 'fyne'})
+        self.assertEqual({leg['subject'] for leg in gauntlet['legs']}, {'egui', 'cranpose-release'})
         self.assertEqual({leg['subject'] for leg in wall['legs']}, {'egui'},
-                         'an app that draws no wall would show another screen under its name')
+                         'a release that knows no wall would show another screen under its name')
         self.assertEqual(self.screens, [('gauntlet', 16, Path('results/gauntlet'))] * 4
                          + [('wall', 20, Path('results/wall'))] * 2)
         self.assertTrue(wall['extras'].startswith('tier 20, '))
