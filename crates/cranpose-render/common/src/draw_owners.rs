@@ -4,7 +4,9 @@
 
 use cranpose_core::NodeId;
 
-use crate::scene_store::{JournalCursor, JournalEntry, JournalRead, RecordKind, SceneStore};
+use crate::scene_store::{
+    JournalCursor, JournalEntry, JournalRead, RecordEvents, RecordKind, SceneStore,
+};
 
 /// A layout node a scene started or stopped drawing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -33,7 +35,7 @@ pub(crate) struct DrawOwners {
 impl DrawOwners {
     pub(crate) fn new(store: &mut SceneStore) -> Self {
         Self {
-            cursor: store.open_journal(),
+            cursor: store.open_journal(RecordEvents::OWNERS),
             joined_in_update: Vec::new(),
         }
     }

@@ -120,6 +120,9 @@ impl<'a> LayerRef<'a> {
     /// The bounds of the layer, where its clip cuts, its transforms pivot and
     /// an offscreen pass draws it.
     pub fn local_bounds(self) -> Rect {
+        if !self.flags().contains(RecordFlags::HAS_LAYER_BOUNDS) {
+            return self.node_rect();
+        }
         self.props()
             .and_then(|props| props.layer_bounds)
             .unwrap_or_else(|| self.node_rect())

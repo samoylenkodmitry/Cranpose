@@ -10,7 +10,7 @@ use cranpose_ui::{GraphicsLayer, Point, Rect};
 use super::{
     GeoRecord, GraphicsLayerId, Item, ItemKind, ItemPool, ItemRef, ItemSpan, Journal,
     JournalCursor, JournalEntry, JournalRead, LayerProps, LayerRef, PropsId, ReachState,
-    RecordEvent, RecordFlags, RecordKind, Slab, TransformId, TreeRecord, WarmRecord,
+    RecordEvent, RecordEvents, RecordFlags, RecordKind, Slab, TransformId, TreeRecord, WarmRecord,
 };
 use crate::graph::{
     DrawPrimitiveNode, DrawRunNode, LayerNode, ProjectiveTransform, TextPrimitiveNode,
@@ -35,6 +35,8 @@ pub struct SceneStore {
     root: Option<RecordId>,
     update: SceneUpdate,
     journal: Journal,
+    // The records whose facts the update in progress may have changed.
+    pub(super) facts_stale: Vec<RecordId>,
 }
 
 /// One state of one store: what it held after one of its updates.
@@ -96,6 +98,7 @@ impl SceneStore {
             root: None,
             update: SceneUpdate::default(),
             journal: Journal::default(),
+            facts_stale: Vec::new(),
         }
     }
 
@@ -130,10 +133,10 @@ impl SceneStore {
         self.update
     }
 
-    /// Starts following the changes of the store's records: the reader's
+    /// Starts following the `events` of the store's records: the reader's
     /// first read reports the changes after now.
-    pub fn open_journal(&mut self) -> JournalCursor {
-        self.journal.open(self.id)
+    pub fn open_journal(&mut self, events: RecordEvents) -> JournalCursor {
+        self.journal.open(self.id, events)
     }
 
     /// Stops following the changes of the store's records.
@@ -148,8 +151,11 @@ impl SceneStore {
         self.journal.read(self.id, cursor)
     }
 
-    // Logs `event` for `id` as the record is now.
+    // Logs `event` for `id` as the record is now, when a reader follows it.
     fn log(&mut self, event: RecordEvent, id: RecordId) {
+        if !self.journal.wants(event, self.update) {
+            return;
+        }
         let index = id.index();
         self.journal.log(JournalEntry {
             update: self.update,
@@ -168,10 +174,26 @@ impl SceneStore {
     /// changed: whether a subtree handles pointers, holds a space or draws
     /// within its bounds. Readers read the store after it.
     pub fn finish_update(&mut self) {
-        if let Some(root) = self.root
-            && self.tree[root.index()].subtree_rev == self.update
-        {
-            super::facts::refresh(self, root);
+        super::facts::refresh(self);
+    }
+
+    // Leaves the facts of the record at `index` to be worked out at the end
+    // of the update.
+    pub(super) fn stale(&mut self, index: usize) {
+        let flags = &mut self.tree[index].flags;
+        if !flags.contains(RecordFlags::FACTS_STALE) {
+            *flags = flags.with(RecordFlags::FACTS_STALE);
+            self.facts_stale
+                .push(RecordId::from_index(index).expect("a row is a record"));
+        }
+    }
+
+    // Leaves the facts of the record at `index` and of its parent, which
+    // reads what the record draws, to be worked out at the end of the update.
+    fn stale_with_parent(&mut self, index: usize) {
+        self.stale(index);
+        if let Some(parent) = self.tree[index].parent {
+            self.stale(parent.index());
         }
     }
 
@@ -271,6 +293,7 @@ impl SceneStore {
         self.runs.clear();
         self.root = None;
         self.journal.clear(self.update);
+        self.facts_stale.clear();
     }
 
     /// Makes a record from `seed`, changed in the update in progress, with no
@@ -315,6 +338,7 @@ impl SceneStore {
             Some(parent) => self.note_subtree_change(Some(parent)),
             None => self.root = Some(id),
         }
+        self.stale_with_parent(id.index());
         self.log(RecordEvent::Inserted, id);
         id
     }
@@ -323,13 +347,22 @@ impl SceneStore {
     pub fn remove_subtree(&mut self, id: RecordId) {
         self.log(RecordEvent::Removed, id);
         let index = id.index();
+        if let Some(parent) = self.tree[index].parent
+            && !self.tree[parent.index()]
+                .flags
+                .contains(RecordFlags::FACTS_STALE)
+        {
+            self.stale(parent.index());
+        }
         let span = self.tree[index].items;
         for position in 0..span.len() {
             let item = self.items.span(span)[position];
             self.remove_item(item);
         }
         self.items.free_span(span);
-        self.clear_props(id);
+        self.drop_props(index);
+        // A freed row keeps no facts to work out.
+        self.tree[index].flags = self.tree[index].flags.without(RecordFlags::FACTS_STALE);
         if let Some(transform) = self.tree[index].transform.take() {
             self.transforms.remove(transform.index());
         }
@@ -385,6 +418,7 @@ impl SceneStore {
     pub fn set_items(&mut self, id: RecordId, items: &[Item]) {
         let index = id.index();
         self.tree[index].items = self.items.write(self.tree[index].items, items);
+        self.stale(index);
     }
 
     /// Adds a draw primitive for an item.
@@ -449,7 +483,15 @@ impl SceneStore {
 
     /// Sets the flags of `id`.
     pub fn set_flags(&mut self, id: RecordId, flags: RecordFlags) {
-        self.tree[id.index()].flags = flags;
+        let index = id.index();
+        let current = self.tree[index].flags;
+        let flags = flags
+            .without(RecordFlags::STORE_KEPT)
+            .with(current.only(RecordFlags::STORE_KEPT));
+        if flags != current {
+            self.tree[index].flags = flags;
+            self.stale_with_parent(index);
+        }
     }
 
     /// The size of the node rect of `id`.
@@ -459,7 +501,12 @@ impl SceneStore {
 
     /// Sets the node rect size of `id`.
     pub fn set_size(&mut self, id: RecordId, width: f32, height: f32) {
-        self.geo[id.index()].size = [width, height];
+        let index = id.index();
+        let size = [width, height];
+        if self.geo[index].size.map(f32::to_bits) != size.map(f32::to_bits) {
+            self.geo[index].size = size;
+            self.stale_with_parent(index);
+        }
     }
 
     /// The offset of the content box of `id` from its origin.
@@ -470,7 +517,12 @@ impl SceneStore {
 
     /// Sets the offset of the content box of `id`.
     pub fn set_content_offset(&mut self, id: RecordId, offset: Point) {
-        self.warm[id.index()].content_offset = [offset.x, offset.y];
+        let index = id.index();
+        let offset = [offset.x, offset.y];
+        if self.warm[index].content_offset.map(f32::to_bits) != offset.map(f32::to_bits) {
+            self.warm[index].content_offset = offset;
+            self.stale(index);
+        }
     }
 
     /// Where layout placed `id` in its parent's content, before the
@@ -537,18 +589,35 @@ impl SceneStore {
         transform: ProjectiveTransform,
     ) {
         let index = id.index();
-        self.geo[index].placement = [origin_in_parent.x, origin_in_parent.y];
+        let placement = [origin_in_parent.x, origin_in_parent.y];
+        let moved = self.geo[index].placement.map(f32::to_bits) != placement.map(f32::to_bits);
+        self.geo[index].placement = placement;
         let origin = self.placed_origin(index);
-        let placed = ProjectiveTransform::translation(origin.x, origin.y);
-        if same_bits(transform, placed) {
-            if let Some(old) = self.tree[index].transform.take() {
-                self.transforms.remove(old.index());
-            }
+        let places_only = same_bits(
+            transform,
+            ProjectiveTransform::translation(origin.x, origin.y),
+        );
+        let entry = self.tree[index].transform;
+        // An entry holds a transform that does more than place the record.
+        let unchanged = !moved
+            && match entry {
+                Some(entry) => !places_only && same_bits(self.transforms[entry.index()], transform),
+                None => places_only,
+            };
+        if unchanged {
             return;
         }
-        match self.tree[index].transform {
-            Some(old) => self.transforms[old.index()] = transform,
-            None => {
+        if let Some(parent) = self.tree[index].parent {
+            self.stale(parent.index());
+        }
+        match (places_only, entry) {
+            (true, Some(old)) => {
+                self.tree[index].transform = None;
+                self.transforms.remove(old.index());
+            }
+            (true, None) => {}
+            (false, Some(old)) => self.transforms[old.index()] = transform,
+            (false, None) => {
                 let entry = TransformId::from_index(self.transforms.insert(transform));
                 self.tree[index].transform = Some(entry);
             }
@@ -564,6 +633,7 @@ impl SceneStore {
         self.log(RecordEvent::Released, id);
         self.tree[index].kind = kind;
         self.warm[index].node = node;
+        self.stale_with_parent(index);
         self.log(RecordEvent::Claimed, id);
     }
 
@@ -577,6 +647,7 @@ impl SceneStore {
         }
         self.items.free_span(span);
         self.tree[index].items = ItemSpan::default();
+        self.stale(index);
     }
 
     /// The properties of `id`, when it has any.
@@ -588,7 +659,15 @@ impl SceneStore {
 
     /// Removes the properties of `id`.
     pub fn clear_props(&mut self, id: RecordId) {
-        let Some(entry) = self.warm[id.index()].props.take() else {
+        let index = id.index();
+        if self.warm[index].props.is_some() {
+            self.drop_props(index);
+            self.stale_with_parent(index);
+        }
+    }
+
+    fn drop_props(&mut self, index: usize) {
+        let Some(entry) = self.warm[index].props.take() else {
             return;
         };
         if let Some(slot) = self
@@ -598,10 +677,43 @@ impl SceneStore {
         {
             self.graphics_layers.remove(slot.index());
         }
+        self.tree[index].flags = self.tree[index]
+            .flags
+            .without(RecordFlags::HAS_GRAPHICS_LAYER | RecordFlags::HAS_LAYER_BOUNDS);
+    }
+
+    // Sets the flags that tell what the properties of the record at `index`
+    // hold, from them.
+    fn sync_props_flags(&mut self, index: usize) {
+        let (layer, bounds) = self.warm[index]
+            .props
+            .map(|entry| &self.props[entry.index()])
+            .map_or((false, false), |props| {
+                (props.graphics_layer.is_some(), props.layer_bounds.is_some())
+            });
+        let flags = self.tree[index]
+            .flags
+            .without(RecordFlags::HAS_GRAPHICS_LAYER | RecordFlags::HAS_LAYER_BOUNDS);
+        let flags = if layer {
+            flags.with(RecordFlags::HAS_GRAPHICS_LAYER)
+        } else {
+            flags
+        };
+        self.tree[index].flags = if bounds {
+            flags.with(RecordFlags::HAS_LAYER_BOUNDS)
+        } else {
+            flags
+        };
     }
 
     /// The graphics layer set on `id`, `None` when it reads as the default.
     pub fn graphics_layer(&self, id: RecordId) -> Option<&GraphicsLayer> {
+        if !self.tree[id.index()]
+            .flags
+            .contains(RecordFlags::HAS_GRAPHICS_LAYER)
+        {
+            return None;
+        }
         self.props(id)
             .and_then(|props| props.graphics_layer)
             .map(|slot| &self.graphics_layers[slot.index()])
@@ -612,14 +724,22 @@ impl SceneStore {
     pub fn set_graphics_layer(&mut self, id: RecordId, layer: Option<GraphicsLayer>) {
         let slot = self.props(id).and_then(|props| props.graphics_layer);
         match (slot, layer) {
-            (Some(slot), Some(layer)) => self.graphics_layers[slot.index()] = layer,
+            (Some(slot), Some(layer)) => {
+                let current = &self.graphics_layers[slot.index()];
+                if layer_facts_inputs(current) != layer_facts_inputs(&layer) {
+                    self.stale_with_parent(id.index());
+                }
+                self.graphics_layers[slot.index()] = layer;
+            }
             (Some(slot), None) => {
                 self.graphics_layers.remove(slot.index());
                 self.edit_props(id, |props| props.graphics_layer = None);
+                self.stale_with_parent(id.index());
             }
             (None, Some(layer)) => {
                 let slot = GraphicsLayerId::from_index(self.graphics_layers.insert(layer));
                 self.edit_props(id, |props| props.graphics_layer = Some(slot));
+                self.stale_with_parent(id.index());
             }
             (None, None) => {}
         }
@@ -630,6 +750,8 @@ impl SceneStore {
     pub(crate) fn take_graphics_layer(&mut self, id: RecordId) -> Option<GraphicsLayer> {
         let entry = self.warm[id.index()].props?;
         let slot = self.props[entry.index()].graphics_layer.take()?;
+        self.sync_props_flags(id.index());
+        self.stale_with_parent(id.index());
         self.graphics_layers.remove(slot.index())
     }
 
@@ -646,10 +768,16 @@ impl SceneStore {
             }
         };
         let props = &mut self.props[entry.index()];
+        let before = facts_inputs(props);
         edit(props);
+        let after = facts_inputs(props);
         if props.is_default() {
             self.props.remove(entry.index());
             self.warm[index].props = None;
+        }
+        self.sync_props_flags(index);
+        if before != after {
+            self.stale_with_parent(index);
         }
     }
 
@@ -662,6 +790,7 @@ impl SceneStore {
         if self.tree[index].content_rev != update {
             self.log(RecordEvent::Changed, id);
         }
+        self.stale(index);
         self.tree[index].content_rev = update;
         if let Some(props) = self.warm[index].props {
             self.props[props.index()].content_run.note(update);
@@ -737,6 +866,32 @@ impl SceneStore {
     pub fn place_rev(&self, id: RecordId) -> SceneUpdate {
         self.tree[id.index()].place_rev
     }
+}
+
+// What of a record's properties its facts and its parent's follow from:
+// whether it handles pointers, whether it draws offscreen, which clips it,
+// and where its layer bounds lie.
+fn facts_inputs(props: &LayerProps) -> (bool, bool, Option<[u32; 4]>) {
+    (
+        props.hit_test.is_some(),
+        props.isolation.group_opacity || props.isolation.explicit_offscreen,
+        props
+            .layer_bounds
+            .map(|bounds| [bounds.x, bounds.y, bounds.width, bounds.height].map(f32::to_bits)),
+    )
+}
+
+// What of a graphics layer its record's facts and its parent's follow from:
+// a clip, a shadow, an effect or a space, which a layer that only moves
+// leaves alone.
+fn layer_facts_inputs(layer: &GraphicsLayer) -> (bool, bool, bool, bool, bool) {
+    (
+        layer.clip,
+        layer.shadow_elevation > 0.0,
+        layer.render_effect.is_some(),
+        layer.backdrop_effect.is_some(),
+        layer.space.is_some(),
+    )
 }
 
 // Whether two transforms hold the same numbers, bit for bit.

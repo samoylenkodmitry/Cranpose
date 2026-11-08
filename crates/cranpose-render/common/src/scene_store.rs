@@ -16,7 +16,7 @@ mod store;
 pub(crate) use items::ItemPool;
 pub use items::{Item, ItemKind, ItemSpan};
 use journal::Journal;
-pub use journal::{JournalCursor, JournalEntry, JournalRead, RecordEvent};
+pub use journal::{JournalCursor, JournalEntry, JournalRead, RecordEvent, RecordEvents};
 pub use layer_props::LayerProps;
 pub use layer_ref::{ItemRef, LayerRef, RecordChange};
 pub(crate) use records::{

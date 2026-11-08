@@ -1,6 +1,6 @@
 use cranpose_core::NodeId;
 use cranpose_render_common::scene_store::{
-    JournalCursor, JournalRead, RecordEvent, RecordKind, RecordSeed, SceneStore,
+    JournalCursor, JournalRead, RecordEvent, RecordEvents, RecordKind, RecordSeed, SceneStore,
 };
 
 // A store holding a root layer.
@@ -49,7 +49,7 @@ fn events(
 #[test]
 fn a_reader_reads_each_change_once() {
     let mut store = rooted_store();
-    let mut cursor = store.open_journal();
+    let mut cursor = store.open_journal(RecordEvents::ALL);
 
     add_and_remove(&mut store, NodeId(2));
 
@@ -66,8 +66,8 @@ fn a_reader_reads_each_change_once() {
 #[test]
 fn a_reader_further_behind_than_the_journal_keeps_loses_the_changes() {
     let mut store = rooted_store();
-    let mut behind = store.open_journal();
-    let mut current = store.open_journal();
+    let mut behind = store.open_journal(RecordEvents::ALL);
+    let mut current = store.open_journal(RecordEvents::ALL);
 
     for node in 2..400 {
         add_and_remove(&mut store, NodeId(node));
@@ -86,7 +86,7 @@ fn a_reader_further_behind_than_the_journal_keeps_loses_the_changes() {
 #[test]
 fn a_cleared_store_loses_the_changes() {
     let mut store = rooted_store();
-    let mut cursor = store.open_journal();
+    let mut cursor = store.open_journal(RecordEvents::ALL);
 
     add_and_remove(&mut store, NodeId(2));
     store.clear();
@@ -98,7 +98,7 @@ fn a_cleared_store_loses_the_changes() {
 fn a_reader_of_another_store_follows_this_one() {
     let mut first = rooted_store();
     let mut second = rooted_store();
-    let mut cursor = first.open_journal();
+    let mut cursor = first.open_journal(RecordEvents::ALL);
 
     assert_eq!(events(&mut second, &mut cursor), None);
     add_and_remove(&mut second, NodeId(2));

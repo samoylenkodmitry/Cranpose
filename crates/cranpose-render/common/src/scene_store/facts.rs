@@ -1,26 +1,35 @@
 // Facts about a record's subtree that its walks branch on, worked out at the
 // end of each scene update for the records it changed.
 
-use cranpose_core::RecordId;
 use cranpose_ui::Rect;
 
 use super::{ItemRef, LayerRef, RecordFlags, SceneStore};
 use crate::graph::{CONTAINED_DRAW_SLACK, inflate_rect, rect_within};
 
-// Works out the facts of `id` and of every record beneath it that the
-// update in progress changed.
-pub(super) fn refresh(store: &mut SceneStore, id: RecordId) {
-    let update = store.update();
-    let span = store.tree[id.index()].items;
-    for position in 0..span.len() {
-        let item = store.items.span(span)[position];
-        if let Some(child) = item.as_child()
-            && store.tree[child.index()].subtree_rev == update
+// Works out the facts of the records whose inputs the update changed, and
+// of each ancestor whose facts follow from a changed one.
+pub(super) fn refresh(store: &mut SceneStore) {
+    while let Some(id) = store.facts_stale.pop() {
+        let index = id.index();
+        let flags = store.tree[index].flags;
+        if !flags.contains(RecordFlags::FACTS_STALE) {
+            continue;
+        }
+        let facts = work_out(LayerRef::new(store, id));
+        store.tree[index].flags = flags
+            .without(RecordFlags::FACTS | RecordFlags::FACTS_STALE)
+            .with(facts);
+        if facts != flags.only(RecordFlags::FACTS)
+            && let Some(parent) = store.tree[index].parent
         {
-            refresh(store, child);
+            store.stale(parent.index());
         }
     }
-    let layer = LayerRef::new(store, id);
+}
+
+// The facts of `layer`, from its own properties and items and its
+// children's facts.
+fn work_out(layer: LayerRef<'_>) -> RecordFlags {
     let mut hit_targets = layer.hit_test().is_some();
     let mut space = layer.graphics_layer().space.is_some();
     for child in layer.children() {
@@ -32,18 +41,14 @@ pub(super) fn refresh(store: &mut SceneStore, id: RecordId) {
             layer,
             inflate_rect(layer.local_bounds(), CONTAINED_DRAW_SLACK),
         );
-    let flags = &mut store.tree[id.index()].flags;
-    *flags = flags
-        .without(RecordFlags::HAS_HIT_TARGETS | RecordFlags::HAS_SPACE | RecordFlags::CONTAINED);
-    if hit_targets {
-        *flags = flags.with(RecordFlags::HAS_HIT_TARGETS);
-    }
-    if space {
-        *flags = flags.with(RecordFlags::HAS_SPACE);
-    }
-    if contained {
-        *flags = flags.with(RecordFlags::CONTAINED);
-    }
+    [
+        (hit_targets, RecordFlags::HAS_HIT_TARGETS),
+        (space, RecordFlags::HAS_SPACE),
+        (contained, RecordFlags::CONTAINED),
+    ]
+    .into_iter()
+    .filter(|(on, _)| *on)
+    .fold(RecordFlags::default(), |facts, (_, flag)| facts.with(flag))
 }
 
 // Whether the items of `layer` put nothing outside `bounds` of it.

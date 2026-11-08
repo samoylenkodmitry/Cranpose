@@ -74,6 +74,19 @@ impl RecordFlags {
     /// The record draws its draws after its children: a draw group of the
     /// draws after the children.
     pub const AFTER_CHILDREN: Self = Self(1 << 8);
+    /// The record has a graphics layer of its own.
+    pub const HAS_GRAPHICS_LAYER: Self = Self(1 << 9);
+    /// The record's layer bounds differ from its node rect.
+    pub const HAS_LAYER_BOUNDS: Self = Self(1 << 10);
+    // The update changed what the record's facts follow from.
+    pub(crate) const FACTS_STALE: Self = Self(1 << 11);
+    // The facts the store works out at the end of an update.
+    pub(crate) const FACTS: Self =
+        Self(Self::HAS_HIT_TARGETS.0 | Self::HAS_SPACE.0 | Self::CONTAINED.0);
+    // The flags the store keeps itself, which `SceneStore::set_flags` leaves.
+    pub(crate) const STORE_KEPT: Self = Self(
+        Self::FACTS.0 | Self::HAS_GRAPHICS_LAYER.0 | Self::HAS_LAYER_BOUNDS.0 | Self::FACTS_STALE.0,
+    );
 
     /// Whether every flag of `other` is set.
     pub fn contains(self, other: Self) -> bool {
@@ -84,6 +97,11 @@ impl RecordFlags {
     #[must_use]
     pub fn with(self, other: Self) -> Self {
         Self(self.0 | other.0)
+    }
+
+    // These flags of those of `other`.
+    pub(crate) fn only(self, other: Self) -> Self {
+        Self(self.0 & other.0)
     }
 
     /// These flags with those of `other` cleared.
