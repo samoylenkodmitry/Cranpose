@@ -644,7 +644,7 @@ impl ShapeCoverage {
     /// arc's `rect` is the disc around its whole circle.
     // Inline in its callers, which the classic ESP32 keeps in IRAM: as a
     // call of its own, it lands in flash.
-    #[inline(always)]
+    #[inline]
     pub(crate) fn reach(&self, rect: Rect) -> Rect {
         match self {
             Self::Trapezoid(trapezoid) => expand_rect(trapezoid.bounds(), 0.5),
