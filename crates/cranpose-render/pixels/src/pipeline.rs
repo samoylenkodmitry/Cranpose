@@ -524,6 +524,9 @@ fn layer_raster_mapping(
     )
 }
 
+// Inline in its callers, which the classic ESP32 keeps in IRAM: as a call
+// of its own, it lands in flash, which the board then reads for every layer.
+#[inline(always)]
 fn raster_layer_mapping(
     (local_bounds, node_rect): (Rect, Rect),
     transform: &ProjectiveTransform,

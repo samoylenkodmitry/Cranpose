@@ -642,6 +642,9 @@ impl ShapeCoverage {
     /// The pixels it can cover: a slice's own box, which its edges reach
     /// half a pixel past, an arc's band, otherwise the shape's `rect`. An
     /// arc's `rect` is the disc around its whole circle.
+    // Inline in its callers, which the classic ESP32 keeps in IRAM: as a
+    // call of its own, it lands in flash.
+    #[inline(always)]
     pub(crate) fn reach(&self, rect: Rect) -> Rect {
         match self {
             Self::Trapezoid(trapezoid) => expand_rect(trapezoid.bounds(), 0.5),
