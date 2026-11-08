@@ -670,17 +670,21 @@ pub struct Gauntlet {
 static LAUNCH: OnceLock<Launch> = OnceLock::new();
 
 /// Fixes the launch where the environment cannot carry it, as a page's query
-/// string does; before the first [`desktop_gauntlet`].
+/// string does; before the first [`launch`].
 pub fn set_launch(launch: Launch) {
     let _ = LAUNCH.set(launch);
 }
 
-/// The desktop gauntlet's data, made on first use from `PERF_TIER`, or the
-/// launch [`set_launch`] fixed.
+/// The launch [`set_launch`] fixed, or else the one in the environment.
+pub fn launch() -> Launch {
+    *LAUNCH.get_or_init(Launch::from_env)
+}
+
+/// The desktop gauntlet's data, made on first use from the [`launch`].
 pub fn desktop_gauntlet() -> &'static Gauntlet {
     static GAUNTLET: OnceLock<Gauntlet> = OnceLock::new();
     GAUNTLET.get_or_init(|| {
-        let launch = LAUNCH.get().copied().unwrap_or_else(Launch::from_env);
+        let launch = launch();
         let tier = gauntlet_tier(launch.tier);
         Gauntlet {
             launch,
