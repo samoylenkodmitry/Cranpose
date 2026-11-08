@@ -47,7 +47,7 @@ model with every comparison because frame capacity varies by device.
 | `deep_layer` | `deep`, with every level in a static rotated graphics layer. | 40 levels × 6 chips | Relayout under nested layers |
 | `workspace` | GPUI trading workspace: quote subscriptions, watchlist, chart, order book, trades and statistics. | 200 symbols, 16 hidden subscriptions | Text updates, clipping, scrolling and hover |
 | `gauntlet` | Every stage at once (below). Advances a frame index each frame, never wall time. | tier 5 | Composition, layout, intrinsics, text, images, paths, shadows, layers |
-| `wall` | The still wall (below): thousands of tiles that never change, a clock line whose text changes and a cursor outline that moves. Desktop apps only. | tier 20 | What a frame costs when almost nothing on the screen changes |
+| `wall` | The still wall (below): thousands of tiles that never change, a clock line whose text changes and a cursor outline that moves. Desktop and browser apps. | tier 20 | What a frame costs when almost nothing on the screen changes |
 
 Knobs:
 
@@ -449,14 +449,16 @@ release (`cranpose-release`, once a release draws the gauntlet) and main.
 1. On macm3, `versions.py bump` moves each framework's pin to its latest
    stable release, `build_apps.sh` builds every desktop app, every Android
    app but Cranpose's, and the release's desktop app, and `desktop.py`
-   measures the desktop apps at tier 16. A moved pin that does not build is
+   measures the desktop apps on the gauntlet at tier 16, then on the still
+   wall at tier 20, the apps that draw it. A moved pin that does not build is
    put back. The run goes to the dashboard, and the pins that moved and
    built go to the pull request `perf/framework-versions`. `build_apps.sh`
    keeps each app's last build with a stamp of the files, pin and
    toolchains it read, so a night builds again only the apps that moved and
    Cranpose's.
    `build_apps.sh browser` also builds the apps that target the browser, and
-   `desktop.py --browser` measures them in Chrome at tier 16 (below).
+   `desktop.py --browser` measures them in Chrome on the same two screens
+   (below).
 2. On the Mac the Mate 20 X is attached to, `scripts/perf/nightly.py`
    compares the latest release with main on the gauntlet, and
    `just perf-frameworks` installs

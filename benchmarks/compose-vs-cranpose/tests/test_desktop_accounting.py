@@ -68,11 +68,13 @@ class DesktopRoundsTest(unittest.TestCase):
     `FrameCount`'s rates, with the apps' state cleared by a stand-in that
     notes each clearing."""
 
-    def rounds(self, rates, rounds=1, browser=None, app='fyne', idle=0.5):
+    def rounds(self, rates, rounds=1, browser=None, app='fyne', idle=0.5, apps=None, screens=(('gauntlet', 16),)):
         """A rate is a leg, or a (rate, cores other processes spent) pair; a
         `RuntimeError` is an attempt that failed. Each round measures the
-        app's first start, then its second."""
+        app's first start, then its second. With several `screens` the whole
+        report comes back."""
         measured = []
+        self.screens = []
         self.cleared = []
         self.programs = []
         self.warmed = []
@@ -90,6 +92,7 @@ class DesktopRoundsTest(unittest.TestCase):
 
         def measure(name, args, work, page, stage, label, earlier, profile, program=None):
             measured.append(label)
+            self.screens.append((args.scenario, args.tier, work))
             self.programs.append(program)
             rate = rates[len(measured) - 1]
             if isinstance(rate, Exception):
@@ -105,15 +108,38 @@ class DesktopRoundsTest(unittest.TestCase):
             self.cleared.append((len(measured), profile.name))
 
         args = SimpleNamespace(parity=False, output=Path('results'), rounds=rounds, max_others=1.5, main=None,
-                               release=None, tier=16, run=3.0, browser=browser)
+                               release=None, tier=16, run=3.0, browser=browser, screens=list(screens))
         with patch.object(desktop, 'measure', measure), patch.object(desktop, 'clear_app_state', clear), \
                 patch.object(desktop, 'fresh_install', install), \
                 patch.object(desktop, 'wait_for_program_checks', wait_for_checks), \
                 patch.object(desktop, 'warm_chrome', warm_chrome), \
                 patch.object(desktop, 'idle_others', return_value=idle), \
                 patch.object(desktop.subprocess, 'run', return_value=SimpleNamespace(stdout='Apple M3 Pro')):
-            report = desktop.run(args, [app], 'page', Path('stage'))
-        return measured, report['scenarios'][0] if browser is None else report
+            report = desktop.run(args, apps or [app], 'page', Path('stage'))
+        return measured, report['scenarios'][0] if browser is None and len(screens) == 1 else report
+
+    def test_each_screen_measures_the_apps_that_draw_it_in_a_folder_of_its_own(self):
+        _, report = self.rounds([24.3, 30.0, 24.6, 30.5, 20.0, 22.0], apps=['egui', 'fyne'],
+                                screens=[('gauntlet', 16), ('wall', 20)])
+        gauntlet, wall = report['scenarios']
+        self.assertEqual((gauntlet['scenario'], wall['scenario']), ('gauntlet', 'wall'))
+        self.assertEqual({leg['subject'] for leg in gauntlet['legs']}, {'egui', 'fyne'})
+        self.assertEqual({leg['subject'] for leg in wall['legs']}, {'egui'},
+                         'Fyne draws no wall: under its name it would show the gauntlet')
+        self.assertEqual(self.screens, [('gauntlet', 16, Path('results/gauntlet'))] * 4
+                         + [('wall', 20, Path('results/wall'))] * 2)
+        self.assertTrue(wall['extras'].startswith('tier 20, '))
+
+    def test_the_release_draws_only_the_screens_its_release_knows(self):
+        screens = [('gauntlet', 16), ('wall', 20)]
+        with tempfile.TemporaryDirectory() as folder:
+            known = Path(folder) / 'screens.txt'
+            with patch.object(desktop, 'RELEASE_SCREENS', known):
+                _, report = self.rounds([24.3, 30.0], apps=['cranpose-release'], screens=screens)
+                self.assertEqual(report['scenarios'][1]['legs'], [], 'a release that wrote no screens has the gauntlet alone')
+                known.write_text('gauntlet\nwall\n')
+                _, report = self.rounds([24.3, 30.0, 20.0, 22.0], apps=['cranpose-release'], screens=screens)
+                self.assertEqual(len(report['scenarios'][1]['legs']), 2)
 
     def test_each_round_clears_the_apps_state_before_the_first_start_and_keeps_it_for_the_second(self):
         measured, scenario = self.rounds([24.3, 30.0, 24.6, 30.5], rounds=2)
