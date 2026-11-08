@@ -48,7 +48,7 @@ impl FramePacingMode {
 ///
 /// These are rendered directly by the renderer (not via composition)
 /// to avoid affecting performance measurements.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct DevOptions {
     /// Show FPS counter overlay
     pub fps_counter: bool,
@@ -72,6 +72,9 @@ where
     /// The FPS counter and other overlays are rendered directly by the renderer
     /// (not via composition) to avoid affecting performance measurements.
     pub fn set_dev_options(&mut self, options: DevOptions) {
+        if self.app.dev_options == options {
+            return;
+        }
         self.app.dev_options = options;
         self.invalidate_dev_overlay_text();
         self.app.app_context.enter(request_render_invalidation);

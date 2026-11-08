@@ -254,18 +254,17 @@ where
     R: Renderer,
     R::Error: Debug,
 {
-    /// Turns semantics tracking on or off. Turning it on forces a layout pass and marks every
-    /// surface dirty. Turning it off drops the cached semantics trees.
+    /// Turns semantics tracking on or off. A surface builds its semantics
+    /// tree from the laid-out nodes when it is first asked for it, so turning
+    /// tracking on lays out and draws nothing again. Turning it off drops the
+    /// cached semantics trees.
     pub fn set_semantics_enabled(&mut self, enabled: bool) {
         if self.app.semantics_enabled == enabled {
             return;
         }
         self.app.semantics_enabled = enabled;
         self.app.semantics_snapshot_revision = self.app.semantics_snapshot_revision.wrapping_add(1);
-        if enabled {
-            self.app.request_forced_layout_pass();
-            self.mark_all_dirty();
-        } else {
+        if !enabled {
             for surface in &mut self.surfaces {
                 surface.semantics_tree = None;
             }
