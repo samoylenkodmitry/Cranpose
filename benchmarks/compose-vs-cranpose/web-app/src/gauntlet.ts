@@ -36,6 +36,7 @@ import {
   tickers,
   widthFraction,
 } from '../../shared-ts/data.js';
+import { wall } from './wall.js';
 
 interface Launch {
   tier: number;
@@ -321,6 +322,12 @@ interface Row {
 async function main() {
   const { launch: launched, log } = host();
   const launch = await launched;
+  // A desktop browser shows the still wall in its place when the page's
+  // address asks for it.
+  if (new URLSearchParams(location.search).get('scenario') === 'wall') {
+    wall(launch.tier, launch.freeze, log);
+    return;
+  }
   const tier = gauntletTier(launch.tier);
   document.documentElement.style.setProperty('--s', String(tier.scale));
 

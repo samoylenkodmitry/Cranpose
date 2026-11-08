@@ -389,3 +389,73 @@ body {
   width: 0;
   height: 0;
 }
+
+/* The still wall (`src/wall.ts`): its tiles in a grid of the tier's size, the
+   clock line above it and the cursor in a layer of its own. */
+body.still-wall {
+  background: #0F1220;
+  color: white;
+}
+
+.wall-clock {
+  flex: none;
+  height: 24px;
+  padding: 0 8px;
+  display: flex;
+  align-items: center;
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.wall {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  box-sizing: border-box;
+  padding: 1px;
+  display: grid;
+  grid-template-columns: repeat(var(--columns, 1), var(--width));
+  grid-auto-rows: var(--height);
+  gap: 1px;
+  align-content: start;
+  line-height: 1.4;
+}
+
+.wall-tile {
+  box-sizing: border-box;
+  padding: var(--pad);
+  border-radius: 2px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.wall-label {
+  font-size: var(--label);
+  font-weight: 700;
+}
+
+.wall-row {
+  display: flex;
+  align-items: center;
+  gap: calc(var(--dot) * 0.5);
+  font-size: var(--value);
+}
+
+.wall-dot {
+  flex: none;
+  width: var(--dot);
+  height: var(--dot);
+  border-radius: 50%;
+}
+
+.wall-cursor {
+  position: absolute;
+  left: 0;
+  top: 0;
+  box-sizing: border-box;
+  width: var(--width);
+  height: var(--height);
+  border: solid white;
+  border-radius: 2px;
+  will-change: transform;
+}
