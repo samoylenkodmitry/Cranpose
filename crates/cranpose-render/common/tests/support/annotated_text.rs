@@ -3,8 +3,7 @@ use std::sync::Arc;
 use cranpose_core::NodeId;
 use cranpose_render_common::{
     graph::{
-        LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, RenderGraph, RenderNode,
-        TextPrimitiveNode,
+        LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, RenderNode, TextPrimitiveNode,
     },
     text_fonts::TextFonts,
 };
@@ -41,7 +40,7 @@ pub(crate) fn text_graph(
     style: TextStyle,
     text_rect: Rect,
     viewport: Rect,
-) -> RenderGraph {
+) -> LayerNode {
     let prepared = cranpose_ui::AppContext::new().enter(|| {
         cranpose_ui::text::set_text_fonts(TextFonts::from_fonts_or_default(&[]).resolver());
         cranpose_ui::text::prepare_text_layout(
@@ -51,7 +50,7 @@ pub(crate) fn text_graph(
             Some(text_rect.width),
         )
     });
-    RenderGraph::new(&LayerNode {
+    LayerNode {
         local_bounds: viewport,
         children: vec![RenderNode::Primitive(PrimitiveEntry {
             phase: PrimitivePhase::AfterChildren,
@@ -69,5 +68,5 @@ pub(crate) fn text_graph(
             })),
         })],
         ..Default::default()
-    })
+    }
 }

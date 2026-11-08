@@ -7,7 +7,7 @@
 
 use std::time::Duration;
 
-use cranpose_render_common::graph::{RenderGraph, RenderNode};
+use cranpose_render_common::graph::{LayerNode, RenderNode};
 use cranpose_render_wgpu::pipelines_created;
 use cranpose_ui_graphics::{
     Brush, Color, CornerRadii, DrawPrimitive, Rect, Stroke, StrokeCap, StrokeJoin,
@@ -37,7 +37,7 @@ fn rect(x: f32, y: f32, width: f32, height: f32) -> Rect {
 }
 
 /// A rounded card with a border and a label beside a plain bar.
-fn screen() -> RenderGraph {
+fn screen() -> LayerNode {
     let card = |stroke: Option<Stroke>, color: Color| {
         support::draw_node(
             DrawPrimitive::RoundRect {
@@ -68,7 +68,7 @@ fn screen() -> RenderGraph {
 
 /// A screen of one gradient bar, which draws with none of [`screen`]'s
 /// pipelines but the plain page's.
-fn gradient_screen(width: u32, height: u32) -> RenderGraph {
+fn gradient_screen(width: u32, height: u32) -> LayerNode {
     let bar = support::brush_rect(
         rect(0.0, 0.0, width as f32, 12.0),
         Brush::linear_gradient(vec![Color::WHITE, Color(0.2, 0.5, 0.9, 1.0)]),

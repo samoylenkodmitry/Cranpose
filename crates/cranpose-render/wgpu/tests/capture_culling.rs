@@ -1,8 +1,8 @@
 use cranpose_core::NodeId;
 use cranpose_render_common::{
     graph::{
-        PrimitiveEntry, PrimitiveNode, PrimitivePhase, ProjectiveTransform, RenderGraph,
-        RenderNode, TextPrimitiveNode,
+        LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, ProjectiveTransform, RenderNode,
+        TextPrimitiveNode,
     },
     image_compare::image_difference_stats,
 };
@@ -127,7 +127,7 @@ fn passthrough_glass() -> RenderNode {
     passthrough_glass_at(GLASS)
 }
 
-fn page(with_glass: bool) -> RenderGraph {
+fn page(with_glass: bool) -> LayerNode {
     let mut children = straddling_page();
     if with_glass {
         children.push(passthrough_glass());
@@ -135,7 +135,7 @@ fn page(with_glass: bool) -> RenderGraph {
     support::page_graph(FRAME_WIDTH, FRAME_HEIGHT, children)
 }
 
-fn capture(renderer: &mut support::LockedRenderer, graph: RenderGraph) -> CapturedFrame {
+fn capture(renderer: &mut support::LockedRenderer, graph: LayerNode) -> CapturedFrame {
     support::capture_graph(renderer, graph, FRAME_WIDTH, FRAME_HEIGHT)
 }
 
@@ -260,7 +260,7 @@ fn passthrough_glass_at(bounds: Rect) -> RenderNode {
 
 /// Two glasses that do not overlap share one stage; a stripe drawn between
 /// them in z reaches under the later one and must show through it.
-fn staged_page(with_glasses: bool) -> RenderGraph {
+fn staged_page(with_glasses: bool) -> LayerNode {
     let mut children = vec![solid_rect(
         rect(0.0, 0.0, FRAME_WIDTH as f32, FRAME_HEIGHT as f32),
         Color::from_rgb_u8(24, 28, 40),
@@ -434,7 +434,7 @@ fn a_later_glass_of_a_stage_shows_what_was_drawn_after_the_earlier_glass() {
 /// The stripes of `staged_page` drawn before any glass, so every capture
 /// finds them on the page, plus a vertical stripe through each glass so a
 /// capture shifted along either axis reads differently.
-fn glazed_page(with_glasses: bool) -> RenderGraph {
+fn glazed_page(with_glasses: bool) -> LayerNode {
     let mut children = vec![
         solid_rect(
             rect(0.0, 0.0, FRAME_WIDTH as f32, FRAME_HEIGHT as f32),
@@ -470,7 +470,7 @@ fn a_capture_adds_no_shape_fill_of_its_own() {
         eprintln!("skipping (headless WGPU init failed)");
         return;
     };
-    let fill = |renderer: &mut support::LockedRenderer, graph: RenderGraph| {
+    let fill = |renderer: &mut support::LockedRenderer, graph: LayerNode| {
         capture(renderer, graph);
         renderer
             .last_frame_stats()
@@ -503,7 +503,7 @@ fn a_glass_is_shaded_once_over_its_visible_pixels() {
     );
 }
 
-fn passes_and_copies(renderer: &mut support::LockedRenderer, graph: RenderGraph) -> (u32, u32) {
+fn passes_and_copies(renderer: &mut support::LockedRenderer, graph: LayerNode) -> (u32, u32) {
     capture(renderer, graph);
     let stats = renderer.last_frame_stats().expect("frame stats");
     (stats.pass_count, stats.copy_count)
@@ -606,7 +606,7 @@ fn drop_shadow(shape: Rect, alpha: f32, blur_radius: f32) -> RenderNode {
 
 /// A blurred shadow drawn in z between two glasses of one stage, lying under
 /// the later glass and clear of the earlier one.
-fn shadowed_stage_page(with_glasses: bool) -> RenderGraph {
+fn shadowed_stage_page(with_glasses: bool) -> LayerNode {
     let mut children = vec![solid_rect(
         rect(0.0, 0.0, FRAME_WIDTH as f32, FRAME_HEIGHT as f32),
         Color::from_rgb_u8(200, 200, 210),
@@ -669,7 +669,7 @@ const CONTENT: Rect = Rect {
 /// under a second glass of the same stage, then that glass: the stripe makes
 /// the page settle under the second glass, and the content and shadow over
 /// the first must wait for its composite.
-fn covered_glass_page() -> RenderGraph {
+fn covered_glass_page() -> LayerNode {
     support::page_graph(
         FRAME_WIDTH,
         FRAME_HEIGHT,

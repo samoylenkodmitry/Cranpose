@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use cranpose_render_common::graph::{
-    DrawCommandId, DrawRunNode, LayerNode, PrimitivePhase, RenderGraph, RenderNode,
+    DrawCommandId, DrawRunNode, LayerNode, PrimitivePhase, RenderNode,
 };
 use cranpose_ui_graphics::{
     ArcRecordArgs, BlendMode, Brush, Color, CommandRecording, DrawPlacement, DrawScope,
@@ -14,7 +14,7 @@ const SIDE: u32 = 256;
 const COLUMNS: usize = 16;
 const RECORDS: usize = COLUMNS * COLUMNS;
 
-fn rotating_arcs(angle: f32, color: Color) -> RenderGraph {
+fn rotating_arcs(angle: f32, color: Color) -> LayerNode {
     let mut scope_recording = CommandRecording::default();
     let mut scope =
         DrawScopeDefault::new(Size::new(SIDE as f32, SIDE as f32), &mut scope_recording);
@@ -36,10 +36,10 @@ fn rotating_arcs(angle: f32, color: Color) -> RenderGraph {
     recording_graph(scope_recording, SIDE)
 }
 
-fn recording_graph(recording: CommandRecording, side: u32) -> RenderGraph {
+fn recording_graph(recording: CommandRecording, side: u32) -> LayerNode {
     let recording = Rc::new(recording);
     let segments = recording.all_segments();
-    RenderGraph::new(&LayerNode {
+    LayerNode {
         node_id: Some(support::STORED_RUN_NODE),
         local_bounds: Rect {
             x: 0.0,
@@ -58,10 +58,10 @@ fn recording_graph(recording: CommandRecording, side: u32) -> RenderGraph {
             segments,
         ))],
         ..LayerNode::default()
-    })
+    }
 }
 
-fn large_arc_run(count: usize, phase: usize, scope_recorded: bool) -> RenderGraph {
+fn large_arc_run(count: usize, phase: usize, scope_recorded: bool) -> LayerNode {
     const COLUMNS: usize = 104;
     const CELL: f32 = 5.0;
     let mut scope_recording = CommandRecording::default();

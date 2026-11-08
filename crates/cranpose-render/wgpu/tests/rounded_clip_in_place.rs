@@ -1,7 +1,7 @@
 use cranpose_core::NodeId;
 use cranpose_render_common::graph::{
-    CachePolicy, DrawRunNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, ProjectiveTransform,
-    RenderGraph, RenderNode, TextPrimitiveNode,
+    CachePolicy, DrawRunNode, LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase,
+    ProjectiveTransform, RenderNode, TextPrimitiveNode,
 };
 use cranpose_ui::{
     TextLayoutOptions,
@@ -57,12 +57,7 @@ fn rounded(radius: f32, offscreen: bool) -> GraphicsLayer {
 }
 
 /// The page under `layer`, placed at `at`.
-fn on_page(
-    bounds: Rect,
-    at: Point,
-    layer: GraphicsLayer,
-    children: Vec<RenderNode>,
-) -> RenderGraph {
+fn on_page(bounds: Rect, at: Point, layer: GraphicsLayer, children: Vec<RenderNode>) -> LayerNode {
     page_graph(
         WIDTH,
         HEIGHT,
@@ -79,7 +74,7 @@ fn on_page(
 }
 
 /// The rounded layer over `children`, drawn in place or `offscreen`.
-fn clipped(children: Vec<RenderNode>, offscreen: bool) -> RenderGraph {
+fn clipped(children: Vec<RenderNode>, offscreen: bool) -> LayerNode {
     on_page(CLIP, AT, rounded(RADIUS, offscreen), children)
 }
 
@@ -91,12 +86,12 @@ fn both_ways(children: Vec<RenderNode>) -> Option<([Vec<u8>; 2], [u32; 2])> {
 
 /// Renders the graph `scene` builds drawn in place, then with its rounded
 /// layer offscreen, and returns the two frames and their isolated counts.
-fn both_graphs(scene: impl Fn(bool) -> RenderGraph) -> Option<([Vec<u8>; 2], [u32; 2])> {
+fn both_graphs(scene: impl Fn(bool) -> LayerNode) -> Option<([Vec<u8>; 2], [u32; 2])> {
     both_graphs_with_scale(scene, 1.0, WIDTH, HEIGHT)
 }
 
 fn both_graphs_with_scale(
-    scene: impl Fn(bool) -> RenderGraph,
+    scene: impl Fn(bool) -> LayerNode,
     root_scale: f32,
     width: u32,
     height: u32,
@@ -112,7 +107,13 @@ fn both_graphs_with_scale(
     let mut isolated = [0, 0];
     for (index, offscreen) in [false, true].into_iter().enumerate() {
         let captured = support::capture_settled(&mut renderer, |renderer| {
-            support::capture_graph_with_scale(renderer, scene(offscreen), width, height, root_scale)
+            support::capture_graph_with_scale(
+                renderer,
+                &scene(offscreen),
+                width,
+                height,
+                root_scale,
+            )
         });
         isolated[index] = renderer
             .last_frame_stats()
@@ -125,13 +126,13 @@ fn both_graphs_with_scale(
 
 fn capture_graph_settled_with_scale(
     renderer: &mut support::LockedRenderer,
-    graph: RenderGraph,
+    graph: &LayerNode,
     width: u32,
     height: u32,
     root_scale: f32,
 ) -> cranpose_render_wgpu::CapturedFrame {
     support::capture_settled(renderer, |renderer| {
-        support::capture_graph_with_scale(renderer, graph.clone(), width, height, root_scale)
+        support::capture_graph_with_scale(renderer, graph, width, height, root_scale)
     })
 }
 
@@ -235,7 +236,7 @@ fn photo_over(rect: Rect, sampling: ImageSampling) -> RenderNode {
 // A card: the rounded clip over a fill that reaches its corners, holding an
 // avatar at `at` under a rounded clip of its own, drawn in place or
 // through a surface when `offscreen`.
-fn card_with_avatar(at: Point, offscreen: bool) -> RenderGraph {
+fn card_with_avatar(at: Point, offscreen: bool) -> LayerNode {
     let avatar = Rect {
         x: 0.0,
         y: 0.0,
@@ -349,7 +350,7 @@ fn an_image_filling_a_rounded_clip_draws_in_place_as_its_surface_would() {
 
 /// The workspace port's bid/ask bar in miniature: a rounded clip at a
 /// fractional place inside a panel that clips, `panel_width` wide.
-fn in_panel(panel_width: f32, offscreen: bool) -> RenderGraph {
+fn in_panel(panel_width: f32, offscreen: bool) -> LayerNode {
     let bar = Rect {
         x: 0.0,
         y: 0.0,
@@ -453,7 +454,7 @@ fn a_rounded_bar_a_panel_cuts_draws_in_place_as_its_surface_would() {
 /// `in_panel`'s panel, 60 wide so it cuts the bar, inside a layer turned by
 /// 12 degrees about the page's origin and moved right, drawn in place or
 /// `offscreen`.
-fn turned_panel(offscreen: bool) -> RenderGraph {
+fn turned_panel(offscreen: bool) -> LayerNode {
     let (sin, cos) = 12f32.to_radians().sin_cos();
     let turn = ProjectiveTransform::from_homogeneous([
         [cos, -sin, 30.0],
@@ -466,7 +467,7 @@ fn turned_panel(offscreen: bool) -> RenderGraph {
         width: WIDTH as f32,
         height: HEIGHT as f32,
     };
-    let mut page = in_panel(60.0, false).root();
+    let mut page = in_panel(60.0, false);
     let content = std::mem::take(&mut page.children);
     page.children = vec![RenderNode::Layer(Box::new(
         shared_test_support::layer_node(
@@ -483,7 +484,7 @@ fn turned_panel(offscreen: bool) -> RenderGraph {
             content,
         ),
     ))];
-    RenderGraph::new(&page)
+    page
 }
 
 #[test]
@@ -732,11 +733,11 @@ fn non_full_bleed_fill_admits_a_clear_shadow_without_a_rounded_surface() {
     }
 }
 
-fn blank_page() -> RenderGraph {
+fn blank_page() -> LayerNode {
     page_graph(WIDTH, HEIGHT, vec![page_background()])
 }
 
-fn nested_scaled_shadow(scale: f32, offscreen_card: bool) -> RenderGraph {
+fn nested_scaled_shadow(scale: f32, offscreen_card: bool) -> LayerNode {
     let mut card = shared_test_support::layer_node(
         CLIP,
         ProjectiveTransform::identity(),
@@ -783,11 +784,11 @@ fn nested_animated_surface_keeps_clear_shadow_out_of_rounded_corners() {
             return;
         }
     };
-    let page = capture_graph_settled_with_scale(&mut renderer, blank_page(), WIDTH, HEIGHT, 1.0);
+    let page = capture_graph_settled_with_scale(&mut renderer, &blank_page(), WIDTH, HEIGHT, 1.0);
     for scale in [1.0, 0.75, 0.62] {
         let actual = support::capture_graph_with_scale(
             &mut renderer,
-            nested_scaled_shadow(scale, false),
+            &nested_scaled_shadow(scale, false),
             WIDTH,
             HEIGHT,
             1.0,
@@ -798,7 +799,7 @@ fn nested_animated_surface_keeps_clear_shadow_out_of_rounded_corners() {
             .isolated_layer_renders;
         let reference = support::capture_graph_with_scale(
             &mut reference_renderer,
-            nested_scaled_shadow(scale, true),
+            &nested_scaled_shadow(scale, true),
             WIDTH,
             HEIGHT,
             1.0,
@@ -944,9 +945,15 @@ fn alpha_isolated_full_clip_child_respects_rounded_ancestor_corners() {
             alpha: 0.5,
             ..GraphicsLayer::default()
         },
-        vec![solid_rect(bounds, Color(0.1, 0.7, 0.2, 1.0))],
+        vec![RenderNode::DrawRun(DrawRunNode::new(
+            PrimitivePhase::BeforeChildren,
+            vec![DrawPrimitive::Rect {
+                rect: bounds,
+                brush: Brush::solid(Color(0.1, 0.7, 0.2, 1.0)),
+                stroke: None,
+            }],
+        ))],
     );
-    child.contained.set(Some(true));
     assert_corner_matches_rounded_surface(
         RenderNode::Layer(Box::new(child)),
         "alpha-isolated full-clip child",
@@ -1096,11 +1103,11 @@ fn a_shadow_at_an_arbitrary_fractional_phase_stays_inside_the_rounded_clip() {
         }
     };
     let page =
-        capture_graph_settled_with_scale(&mut renderer, blank_page(), width, height, root_scale);
+        capture_graph_settled_with_scale(&mut renderer, &blank_page(), width, height, root_scale);
     let card = |children| on_page(CLIP, at, rounded(RADIUS, false), children);
     let fill = capture_graph_settled_with_scale(
         &mut renderer,
-        card(vec![solid_rect(CLIP, Color(0.85, 0.15, 0.2, 1.0))]),
+        &card(vec![solid_rect(CLIP, Color(0.85, 0.15, 0.2, 1.0))]),
         width,
         height,
         root_scale,
@@ -1108,7 +1115,7 @@ fn a_shadow_at_an_arbitrary_fractional_phase_stays_inside_the_rounded_clip() {
     for inner in [false, true] {
         let actual = capture_graph_settled_with_scale(
             &mut renderer,
-            card(centered_shadow_children(inner, true, 1, true)),
+            &card(centered_shadow_children(inner, true, 1, true)),
             width,
             height,
             root_scale,
@@ -1147,14 +1154,13 @@ fn a_shadow_at_an_arbitrary_fractional_phase_stays_inside_the_rounded_clip() {
     }
 }
 
-fn backdrop_over_rounded_fill(radius: f32) -> RenderGraph {
+fn backdrop_over_rounded_fill(radius: f32) -> LayerNode {
     let mut page = on_page(
         CLIP,
         AT,
         rounded(radius, false),
         vec![solid_rect(CLIP, Color(0.85, 0.15, 0.2, 1.0))],
-    )
-    .root();
+    );
     let mut backdrop = shared_test_support::layer_node(
         CLIP,
         ProjectiveTransform::translation(AT.x, AT.y),
@@ -1167,7 +1173,7 @@ fn backdrop_over_rounded_fill(radius: f32) -> RenderGraph {
     );
     backdrop.node_id = Some(NodeId(901));
     page.children.push(RenderNode::Layer(Box::new(backdrop)));
-    RenderGraph::new(&page)
+    page
 }
 
 #[test]

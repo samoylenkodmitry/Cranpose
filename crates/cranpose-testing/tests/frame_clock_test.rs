@@ -6,7 +6,7 @@ use std::{
 
 use cranpose_app_shell::AppShell;
 use cranpose_core::{LaunchedEffect, MutableState, location_key, remember, rememberMutableStateOf};
-use cranpose_render_common::graph::{LayerNode, PrimitiveNode, RenderNode};
+use cranpose_render_common::scene_store::{ItemRef, LayerRef};
 use cranpose_testing::robot::TestRenderer;
 use cranpose_ui::{
     BasicTextFieldOptions, BasicTextFieldWithOptions, FocusRequester, Modifier, SemanticsNode,
@@ -183,23 +183,16 @@ fn first_zero_timestamp_and_exact_manual_frames_remain_available() {
     assert_eq!(visible_text(&mut shell), "Frames 4; input 0");
 }
 
-fn contains_caret(layer: &LayerNode) -> bool {
-    nodes_contain_caret(&layer.children)
-}
-
-fn nodes_contain_caret(nodes: &[RenderNode]) -> bool {
+fn contains_caret(layer: LayerRef<'_>) -> bool {
     let is_caret = |primitive: &DrawPrimitive| {
         matches!(primitive,
         DrawPrimitive::Rect { brush: Brush::Solid(color), .. } if *color == Color::GREEN)
     };
-    nodes.iter().any(|node| match node {
-        RenderNode::Layer(child) => contains_caret(child),
-        RenderNode::Inline(inline) => nodes_contain_caret(&inline.content),
-        RenderNode::DrawRun(run) => run.primitives().any(|primitive| is_caret(&primitive)),
-        RenderNode::Primitive(entry) => match &entry.node {
-            PrimitiveNode::Draw(draw) => is_caret(&draw.primitive),
-            PrimitiveNode::Text(_) => false,
-        },
+    layer.items().any(|item| match item {
+        ItemRef::Layer(child) | ItemRef::Leaf(child) => contains_caret(child),
+        ItemRef::Run(run) => run.primitives().any(|primitive| is_caret(&primitive)),
+        ItemRef::Draw(draw) => is_caret(&draw.primitive),
+        ItemRef::Text(_) => false,
     })
 }
 
@@ -234,7 +227,7 @@ fn wall_time_cursor_blink_renders_without_an_animation_callback() {
         shell.update_without_frame();
     }
     assert!(contains_caret(
-        &shell.scene().graph.as_ref().expect("field scene").root()
+        shell.scene().root_layer().expect("field scene")
     ));
     let deadline = shell.next_event_time().expect("next cursor transition");
     std::thread::sleep(
@@ -244,7 +237,7 @@ fn wall_time_cursor_blink_renders_without_an_animation_callback() {
         shell.update_without_frame();
     }
     assert!(
-        !contains_caret(&shell.scene().graph.as_ref().expect("field scene").root()),
+        !contains_caret(shell.scene().root_layer().expect("field scene")),
         "the caret must disappear at its wall-time deadline without a display callback"
     );
 }

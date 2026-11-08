@@ -8,7 +8,6 @@ use cranpose_render_common::primitive_emit::resolve_clip;
 use cranpose_render_common::{
     Brush,
     graph::TextPrimitiveNode,
-    hit_graph::collect_hits_from_graph,
     layer_shadow::{ShadowLight, layer_shadow_geometry},
     layer_transform::{apply_layer_to_rect, layer_uniform_scale},
     primitive_emit::{
@@ -90,20 +89,7 @@ pub(crate) fn push_layer_shadow(
 }
 
 pub(crate) fn render_layout_tree(root: &LayoutBox, scene: &mut Scene) {
-    render_layout_tree_with_scale(root, scene, 1.0);
-}
-
-pub(crate) fn render_layout_tree_with_scale(root: &LayoutBox, scene: &mut Scene, scale: f32) {
-    let graph = cranpose_render_common::scene_builder::build_graph_from_layout_tree(root, scale);
-    if let Some(root) = graph.store().root_layer() {
-        collect_hits_from_graph(
-            root,
-            cranpose_render_common::graph::ProjectiveTransform::identity(),
-            scene,
-            None,
-        );
-    }
-    scene.replace_graph(graph);
+    scene.build_from_layout_tree(root);
 }
 
 fn tile_mode_to_shader_uniform(tile_mode: TileMode) -> f32 {

@@ -5,7 +5,7 @@
 
 use cranpose_render_common::{
     Renderer,
-    graph::{DrawRunNode, PrimitivePhase, ProjectiveTransform, RenderGraph, RenderNode},
+    graph::{DrawRunNode, LayerNode, PrimitivePhase, ProjectiveTransform, RenderNode},
 };
 use cranpose_ui_graphics::{
     Brush, Color, DrawPrimitive, DrawScope, DrawScopeDefault, GraphicsLayer, LineGeometry, Point,
@@ -78,8 +78,8 @@ fn background() -> DrawPrimitive {
     }
 }
 
-fn frame_of(children: Vec<RenderNode>) -> RenderGraph {
-    RenderGraph::new(&shared_test_support::layer_node(
+fn frame_of(children: Vec<RenderNode>) -> LayerNode {
+    shared_test_support::layer_node(
         Rect {
             x: 0.0,
             y: 0.0,
@@ -89,11 +89,11 @@ fn frame_of(children: Vec<RenderNode>) -> RenderGraph {
         ProjectiveTransform::identity(),
         GraphicsLayer::default(),
         children,
-    ))
+    )
 }
 
 /// The line as a draw scope records it, in one run with its background.
-fn recorded(start: Point, end: Point, stroke: Stroke) -> RenderGraph {
+fn recorded(start: Point, end: Point, stroke: Stroke) -> LayerNode {
     let mut recording = cranpose_ui_graphics::CommandRecording::default();
     let mut scope = DrawScopeDefault::new(Size::new(FRAME as f32, FRAME as f32), &mut recording);
     scope.draw_rect(Brush::solid(Color::BLACK));
@@ -105,7 +105,7 @@ fn recorded(start: Point, end: Point, stroke: Stroke) -> RenderGraph {
 }
 
 /// The line as a loose primitive node beside its background.
-fn loose(start: Point, end: Point, stroke: Stroke) -> RenderGraph {
+fn loose(start: Point, end: Point, stroke: Stroke) -> LayerNode {
     let line = LineGeometry::new(start, end, stroke);
     frame_of(vec![
         support::draw_node(background(), None),
@@ -125,11 +125,11 @@ fn loose(start: Point, end: Point, stroke: Stroke) -> RenderGraph {
 fn check(
     renderer: &mut support::LockedRenderer,
     path: &str,
-    graph: RenderGraph,
+    graph: &LayerNode,
     case: &str,
     line: LineGeometry,
 ) {
-    renderer.scene_mut().graph = Some(graph);
+    renderer.scene_mut().describe(graph);
     let captured = renderer
         .capture_frame_with_scale(FRAME, FRAME, 1.0)
         .unwrap_or_else(|err| panic!("capture failed: {err:?}"));
@@ -176,14 +176,14 @@ fn a_gpu_line_covers_each_pixel_as_its_geometry_says() {
         check(
             &mut renderer,
             "recorded",
-            recorded(start, end, stroke),
+            &recorded(start, end, stroke),
             case,
             line,
         );
         check(
             &mut renderer,
             "loose",
-            loose(start, end, stroke),
+            &loose(start, end, stroke),
             case,
             line,
         );
@@ -204,7 +204,7 @@ fn a_butt_capped_segment_of_no_length_draws_nothing() {
         recorded(point, point, stroke(8.0, StrokeCap::Butt)),
         loose(point, point, stroke(8.0, StrokeCap::Butt)),
     ] {
-        renderer.scene_mut().graph = Some(graph);
+        renderer.scene_mut().describe(&graph);
         let captured = renderer
             .capture_frame_with_scale(FRAME, FRAME, 1.0)
             .unwrap_or_else(|err| panic!("capture failed: {err:?}"));
@@ -265,6 +265,6 @@ fn a_line_in_a_turned_layer_covers_the_pixels_of_the_turned_line() {
             RenderNode::Layer(Box::new(turned_layer)),
         ]);
         let turned = LineGeometry::new(quarter_turned(start), quarter_turned(end), stroke);
-        check(&mut renderer, "turned", graph, case, turned);
+        check(&mut renderer, "turned", &graph, case, turned);
     }
 }

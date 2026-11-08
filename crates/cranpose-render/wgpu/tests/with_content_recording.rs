@@ -4,7 +4,7 @@ use cranpose_app_shell::AppShell;
 use cranpose_core::{MutableState, location_key, rememberMutableStateOf};
 use cranpose_render_common::{
     Renderer,
-    graph::{DrawRunNode, PrimitivePhase, RenderGraph, RenderNode},
+    graph::{DrawRunNode, LayerNode, PrimitivePhase, RenderNode},
 };
 use cranpose_render_wgpu::{CapturedFrame, WgpuRenderer};
 use cranpose_ui::{
@@ -92,8 +92,8 @@ fn draw_layer(color: Color, rect: Rect) -> RenderNode {
     )))
 }
 
-fn explicitly_ordered_graph(before: Color, after: Color) -> RenderGraph {
-    RenderGraph::new(&support::layer_node(
+fn explicitly_ordered_graph(before: Color, after: Color) -> LayerNode {
+    support::layer_node(
         None,
         WIDTH as f32,
         HEIGHT as f32,
@@ -126,7 +126,7 @@ fn explicitly_ordered_graph(before: Color, after: Color) -> RenderGraph {
                 },
             ),
         ],
-    ))
+    )
 }
 
 fn settled_capture(shell: &mut AppShell<WgpuRenderer>) -> CapturedFrame {
@@ -142,13 +142,11 @@ fn settled_capture(shell: &mut AppShell<WgpuRenderer>) -> CapturedFrame {
     })
 }
 
-fn capture_reference_graph(
-    shell: &mut AppShell<WgpuRenderer>,
-    graph: RenderGraph,
-) -> CapturedFrame {
-    let original = shell.renderer().scene_mut().graph.replace(graph);
+fn capture_reference_graph(shell: &mut AppShell<WgpuRenderer>, graph: &LayerNode) -> CapturedFrame {
+    let original = shell.renderer().scene().store().clone();
+    shell.renderer().scene_mut().describe(graph);
     let captured = settled_capture(shell);
-    shell.renderer().scene_mut().graph = original;
+    shell.renderer().scene_mut().replace_store(original);
     captured
 }
 
@@ -180,7 +178,7 @@ fn with_content_matches_ordered_translucent_draws_before_and_after_child_content
     let initial = settled_capture(&mut shell);
     let initial_expected = capture_reference_graph(
         &mut shell,
-        explicitly_ordered_graph(BEFORE_INITIAL, AFTER_INITIAL),
+        &explicitly_ordered_graph(BEFORE_INITIAL, AFTER_INITIAL),
     );
     support::assert_same_bytes(
         "initial WithContent vs explicit background/child/foreground",
@@ -208,7 +206,7 @@ fn with_content_matches_ordered_translucent_draws_before_and_after_child_content
     let updated = settled_capture(&mut shell);
     let updated_expected = capture_reference_graph(
         &mut shell,
-        explicitly_ordered_graph(BEFORE_UPDATED, AFTER_UPDATED),
+        &explicitly_ordered_graph(BEFORE_UPDATED, AFTER_UPDATED),
     );
     support::assert_same_bytes(
         "updated WithContent vs explicit background/child/foreground",

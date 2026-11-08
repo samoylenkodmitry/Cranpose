@@ -4,12 +4,12 @@
 
 use std::sync::atomic::{AtomicU16, Ordering};
 
-use cranpose_core::{NodeId, RecordId, RecordRef, SceneUpdate, StoreId};
+use cranpose_core::{NodeId, RecordId, RecordRef, SceneUpdate, StoreId, collections::map::HashSet};
 use cranpose_ui::{GraphicsLayer, Point, Rect};
 
 use super::{
-    GeoRecord, GraphicsLayerId, Item, ItemKind, ItemPool, ItemSpan, LayerProps, LayerRef, PropsId,
-    ReachState, RecordFlags, RecordKind, Slab, TransformId, TreeRecord, WarmRecord,
+    GeoRecord, GraphicsLayerId, Item, ItemKind, ItemPool, ItemRef, ItemSpan, LayerProps, LayerRef,
+    PropsId, ReachState, RecordFlags, RecordKind, Slab, TransformId, TreeRecord, WarmRecord,
 };
 use crate::graph::{
     DrawPrimitiveNode, DrawRunNode, LayerNode, ProjectiveTransform, TextPrimitiveNode,
@@ -134,10 +134,52 @@ impl SceneStore {
     /// A store that holds `root` and the tree beneath it as records.
     pub fn from_layer(root: &LayerNode) -> Self {
         let mut store = Self::new();
-        store.begin_update();
-        super::spec::write_layer(&mut store, None, root);
-        store.finish_update();
+        store.describe(root);
         store
+    }
+
+    /// Writes `root` and the tree beneath it as records in place of what the
+    /// store held, in a new update.
+    pub fn describe(&mut self, root: &LayerNode) {
+        self.begin_update();
+        self.clear();
+        super::spec::write_layer(self, None, root);
+        self.finish_update();
+    }
+
+    /// Replaces `nodes` with the layout nodes whose draws the store holds,
+    /// keeping its capacity.
+    pub fn collect_visual_observation_nodes(&self, nodes: &mut HashSet<NodeId>) {
+        fn collect(layer: LayerRef<'_>, nodes: &mut HashSet<NodeId>) {
+            if let Some(node_id) = layer.node_id() {
+                nodes.insert(node_id);
+            }
+            for item in layer.items() {
+                match item {
+                    ItemRef::Run(run) => {
+                        if let Some(command) = run.command {
+                            nodes.insert(command.node_id);
+                        }
+                    }
+                    ItemRef::Layer(child) | ItemRef::Leaf(child) => collect(child, nodes),
+                    ItemRef::Draw(_) | ItemRef::Text(_) => {}
+                }
+            }
+        }
+
+        nodes.clear();
+        if let Some(root) = self.root_layer() {
+            collect(root, nodes);
+        }
+    }
+
+    // Forgets the hashes the records keep, so that they are worked out again
+    // when asked for.
+    #[cfg(test)]
+    pub(crate) fn forget_hashes(&self) {
+        for props in self.props.values() {
+            props.cache_hashes.set(None);
+        }
     }
 
     /// The record `id` as its readers see it.
@@ -513,9 +555,9 @@ impl SceneStore {
             .map(|slot| &self.graphics_layers[slot.index()])
     }
 
-    // Sets the graphics layer of `id`; `None` reads as the default. A record
-    // that keeps one keeps its slot.
-    pub(crate) fn set_graphics_layer(&mut self, id: RecordId, layer: Option<GraphicsLayer>) {
+    /// Sets the graphics layer of `id`; `None` reads as the default. A record
+    /// that keeps one keeps its slot.
+    pub fn set_graphics_layer(&mut self, id: RecordId, layer: Option<GraphicsLayer>) {
         let slot = self.props(id).and_then(|props| props.graphics_layer);
         match (slot, layer) {
             (Some(slot), Some(layer)) => self.graphics_layers[slot.index()] = layer,

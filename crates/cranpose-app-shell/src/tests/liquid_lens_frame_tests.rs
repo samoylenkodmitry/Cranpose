@@ -1,7 +1,7 @@
 use cranpose_liquid::prelude::{
     LiquidSegmentedControl, LiquidSlider, LiquidTheme, LiquidThemeSpec, LiquidToggle,
 };
-use cranpose_render_common::graph::{LayerNode, RenderNode};
+use cranpose_render_common::scene_store::LayerRef;
 
 use super::*;
 
@@ -46,22 +46,20 @@ fn LensHost(control: LensControl) {
 }
 
 fn lens_layers(shell: &AppShell<ScopedUpdateCountingRenderer>) -> Vec<GraphicsLayer> {
-    fn collect(layer: &LayerNode, out: &mut Vec<GraphicsLayer>) {
-        if layer.graphics_layer.backdrop_effect.is_some() {
+    fn collect(layer: LayerRef<'_>, out: &mut Vec<GraphicsLayer>) {
+        if layer.backdrop().is_some() {
             out.push(GraphicsLayer {
                 translation_x: 0.0,
-                ..(*layer.graphics_layer).clone()
+                ..layer.graphics_layer().clone()
             });
         }
-        for child in &layer.children {
-            if let RenderNode::Layer(child) = child {
-                collect(child, out);
-            }
+        for child in layer.children() {
+            collect(child, out);
         }
     }
     let mut layers = Vec::new();
-    if let Some(graph) = shell.surfaces[0].renderer.scene().graph.as_ref() {
-        collect(&graph.root(), &mut layers);
+    if let Some(root) = shell.surfaces[0].renderer.scene().root_layer() {
+        collect(root, &mut layers);
     }
     layers
 }
@@ -151,15 +149,6 @@ fn a_released_slider_streams_native_inertia_then_stops_requesting_frames() {
         run_until_idle(&mut host, &mut clock, "slider rest");
         let rest = drawn_picture(&host.shell);
         let origin = clock;
-        let scene = host.shell.surfaces[0].renderer.scene_mut();
-        let graph = scene.graph.take().expect("slider scene");
-        collect_graph_hits(
-            &graph.root(),
-            cranpose_render_common::graph::ProjectiveTransform::identity(),
-            scene,
-            None,
-        );
-        scene.replace_graph(graph);
         host.shell.set_cursor_at_event_time(
             150.0,
             16.0,

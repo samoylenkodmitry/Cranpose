@@ -71,13 +71,4 @@ impl ContentRun {
     pub(crate) fn churns(self, update: SceneUpdate) -> bool {
         self.run >= 2 && self.last == update
     }
-
-    // The last update and the run, the last update counted as `now_number`
-    // counts `now`.
-    pub(crate) fn numbered(self, now: SceneUpdate, now_number: u64) -> (u64, u32) {
-        (
-            now_number.wrapping_sub(u64::from(now.since(self.last))),
-            self.run,
-        )
-    }
 }

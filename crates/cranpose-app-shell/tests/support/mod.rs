@@ -8,11 +8,9 @@ use cranpose_app_shell::AppShell;
 use cranpose_core::{MemoryApplier, NodeId, location_key};
 use cranpose_render_common::{
     Renderer, SceneUpdates,
-    graph::{LayerNode, PrimitiveNode, RenderGraph, RenderNode},
     graph_scene::Scene,
-    scene_builder::{
-        build_graph_from_applier, build_graph_from_layout_tree, update_graph_from_applier,
-    },
+    scene_builder::build_from_applier,
+    scene_store::{ItemRef, LayerRef, SceneStore},
 };
 use cranpose_ui_graphics::Size;
 
@@ -47,44 +45,58 @@ pub(crate) fn checking_shell(
     (shell, checks)
 }
 
-pub(crate) fn scene_signature(layer: &LayerNode, out: &mut Vec<String>) {
+pub(crate) fn scene_signature(layer: LayerRef<'_>, out: &mut Vec<String>) {
     out.push(format!(
         "layer {:?} {:?} {:?}",
-        layer.node_id, layer.local_bounds, layer.transform_to_parent
+        layer.node_id(),
+        layer.local_bounds(),
+        layer.transform_to_parent()
     ));
-    nodes_signature(&layer.children, out);
+    items_signature(layer, out);
 }
 
-fn nodes_signature(nodes: &[RenderNode], out: &mut Vec<String>) {
-    for child in nodes {
-        match child {
-            RenderNode::Layer(child) => scene_signature(child, out),
-            RenderNode::Inline(inline) => {
+fn items_signature(layer: LayerRef<'_>, out: &mut Vec<String>) {
+    for item in layer.items() {
+        match item {
+            ItemRef::Layer(child) => scene_signature(child, out),
+            ItemRef::Leaf(leaf) => {
                 out.push(format!(
                     "inline {:?} {:?} {:?}",
-                    inline.node_id, inline.origin, inline.size
+                    leaf.node_id(),
+                    leaf.origin(),
+                    leaf.size()
                 ));
-                nodes_signature(&inline.content, out);
+                items_signature(leaf, out);
             }
-            RenderNode::Primitive(primitive) => match &primitive.node {
-                PrimitiveNode::Draw(draw) => out.push(format!("draw {:?}", draw.primitive)),
-                PrimitiveNode::Text(text) => {
-                    out.push(format!("text {} {:?}", text.text.text(), text.rect));
-                }
-            },
-            RenderNode::DrawRun(run) => {
+            ItemRef::Draw(draw) => out.push(format!("draw {:?}", draw.primitive)),
+            ItemRef::Text(text) => {
+                out.push(format!("text {} {:?}", text.text.text(), text.rect));
+            }
+            ItemRef::Run(run) => {
                 out.push(format!("run {:?}", run.primitives().collect::<Vec<_>>()));
             }
         }
     }
 }
 
-fn signature_of(graph: Option<&LayerNode>) -> Option<Vec<String>> {
-    graph.map(|root| {
+fn signature_of(root: Option<LayerRef<'_>>) -> Option<Vec<String>> {
+    root.map(|root| {
         let mut out = Vec::new();
         scene_signature(root, &mut out);
         out
     })
+}
+
+impl CheckingRenderer {
+    // Builds the scene again with `rebuild` and counts the rebuild.
+    fn rebuild(
+        &mut self,
+        rebuild: impl FnOnce(&mut Scene),
+    ) -> Result<(), std::convert::Infallible> {
+        self.rebuilds.set(self.rebuilds.get() + 1);
+        rebuild(&mut self.scene);
+        Ok(())
+    }
 }
 
 impl Renderer for CheckingRenderer {
@@ -104,10 +116,7 @@ impl Renderer for CheckingRenderer {
         layout_tree: &cranpose_ui::LayoutTree,
         _viewport: Size,
     ) -> Result<(), Self::Error> {
-        self.rebuilds.set(self.rebuilds.get() + 1);
-        let graph = build_graph_from_layout_tree(layout_tree.root(), 1.0);
-        self.scene.replace_graph(graph);
-        Ok(())
+        self.rebuild(|scene| scene.build_from_layout_tree(layout_tree.root()))
     }
 
     fn rebuild_scene_from_applier(
@@ -116,33 +125,27 @@ impl Renderer for CheckingRenderer {
         root: NodeId,
         _viewport: Size,
     ) -> Result<(), Self::Error> {
-        self.rebuilds.set(self.rebuilds.get() + 1);
-        if let Some(graph) = build_graph_from_applier(applier, root, 1.0) {
-            self.scene.replace_graph(graph);
-        }
-        Ok(())
+        self.rebuild(|scene| scene.rebuild_from_applier(applier, root))
     }
 
     fn update_scene_from_applier(
         &mut self,
         applier: &mut MemoryApplier,
         root: NodeId,
-        viewport: Size,
+        _viewport: Size,
         updates: SceneUpdates<'_>,
     ) -> Result<(), Self::Error> {
-        let updated = self
-            .scene
-            .graph
-            .as_mut()
-            .is_some_and(|graph| update_graph_from_applier(applier, graph, updates, 1.0));
-        if !updated {
-            return self.rebuild_scene_from_applier(applier, root, viewport);
+        if updates.is_empty() {
+            return Ok(());
+        }
+        if !self.scene.update_from_applier(applier, root, updates) {
+            return self.rebuild(|_| {});
         }
         if let Some(mismatches) = &self.mismatches {
-            let fresh = build_graph_from_applier(applier, root, 1.0);
-            let fresh = fresh.map(|graph| graph.root());
-            let retained = self.scene.graph.as_ref().map(RenderGraph::root);
-            if signature_of(fresh.as_ref()) != signature_of(retained.as_ref()) {
+            let fresh = build_from_applier(applier, root);
+            if signature_of(fresh.as_ref().and_then(SceneStore::root_layer))
+                != signature_of(self.scene.root_layer())
+            {
                 mismatches.set(mismatches.get() + 1);
             }
         }

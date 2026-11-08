@@ -4,9 +4,7 @@ use std::{cell::RefCell, rc::Rc};
 
 use cranpose_core::{MemoryApplier, MutableState, NodeId};
 use cranpose_foundation::lazy::{LazyItems, LazyListScope, rememberLazyListState};
-use cranpose_render_common::scene_builder::{
-    build_graph_from_applier, update_graph_from_applier_report,
-};
+use cranpose_render_common::graph_scene::Scene;
 use cranpose_ui::{
     LayoutEngine, LinearArrangement, Modifier, PaddingValues, Size, Text, TextStyle,
     widgets::{LazyColumn, LazyColumnSpec},
@@ -105,14 +103,16 @@ fn dropping_leading_keyed_lazy_rows_one_at_a_time_repaints_the_survivors() {
         let mut applier = composition.applier_mut();
         applier.set_runtime_handle(handle.clone());
         applier.compute_layout(root, VIEWPORT).expect("layout");
-        let graph = build_graph_from_applier(&applier, root, 1.0).expect("render graph");
+        let mut graph = Scene::new();
+        graph.rebuild_from_applier(&applier, root);
+        assert!(graph.root_layer().is_some(), "render graph");
         applier.clear_runtime_handle();
         graph
     };
     let _ = scoped_scene_nodes(&mut composition.applier_mut(), root);
 
     let mut painted = Vec::new();
-    painted_text(&graph.root(), &mut painted);
+    painted_text(graph.root_layer().expect("a scene"), &mut painted);
     assert_eq!(
         painted,
         vec![
@@ -142,9 +142,9 @@ fn dropping_leading_keyed_lazy_rows_one_at_a_time_repaints_the_survivors() {
                 "dropping row {} told the scene phase nothing had moved",
                 count - 1
             );
-            if !update_graph_from_applier_report(
+            graph.update_from_applier(
                 &applier,
-                &mut graph,
+                root,
                 &dirty
                     .iter()
                     .map(|&id| (id, cranpose_render_common::NodeUpdate::Content))
@@ -154,18 +154,12 @@ fn dropping_leading_keyed_lazy_rows_one_at_a_time_repaints_the_survivors() {
                             .map(|&id| (id, cranpose_render_common::NodeUpdate::Moved)),
                     )
                     .collect::<Vec<_>>(),
-                1.0,
-            )
-            .applied()
-            {
-                graph =
-                    build_graph_from_applier(&applier, root, 1.0).expect("rebuilt render graph");
-            }
+            );
             applier.clear_runtime_handle();
         }
 
         let mut painted = Vec::new();
-        painted_text(&graph.root(), &mut painted);
+        painted_text(graph.root_layer().expect("a scene"), &mut painted);
         let mut expected = vec!["Header".to_string()];
         expected.extend((count..3).map(|body| format!("Body {body}")));
         assert_eq!(

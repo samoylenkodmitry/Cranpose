@@ -6,10 +6,10 @@ use std::{
 use cranpose_core::{MutableState, NodeId};
 use cranpose_render_common::{
     SceneUpdates,
-    graph::{LayerNode, PrimitiveNode, ProjectiveTransform, RenderGraph, RenderNode},
-    scene_builder::{
-        build_graph_from_applier, clear_command_recordings_for_tests, update_graph_from_applier,
-    },
+    graph::ProjectiveTransform,
+    graph_scene::Scene,
+    scene_builder::clear_command_recordings_for_tests,
+    scene_store::{ItemRef, LayerRef},
 };
 use cranpose_ui::{
     Box, BoxSpec, Brush, Canvas, Color, GraphicsLayer, Modifier, Size, TestComposition, Text,
@@ -22,11 +22,11 @@ const VIEWPORT: Size = Size::new(240.0, 180.0);
 type Rectangles = Vec<(Option<NodeId>, Rect, Color)>;
 type Texts = Vec<(NodeId, Rect, String)>;
 
-fn initial_graph(composition: &mut TestComposition, root: NodeId) -> RenderGraph {
+fn initial_graph(composition: &mut TestComposition, root: NodeId) -> Scene {
     crate::scene_probe::initial_graph(composition, root, VIEWPORT)
 }
 
-fn initial_root_graph(composition: &mut TestComposition) -> (NodeId, RenderGraph) {
+fn initial_root_graph(composition: &mut TestComposition) -> (NodeId, Scene) {
     let root = composition.root().expect("root");
     let graph = initial_graph(composition, root);
     (root, graph)
@@ -50,53 +50,32 @@ where
     parent_id.set(Some(parent));
 }
 
-fn fresh_graph(composition: &mut TestComposition, root: NodeId) -> RenderGraph {
-    let runtime = composition.runtime_handle();
-    let mut applier = composition.applier_mut();
-    applier.set_runtime_handle(runtime);
-    let graph = build_graph_from_applier(&applier, root, 1.0).expect("fresh scene graph");
-    applier.clear_runtime_handle();
-    graph
+fn fresh_graph(composition: &mut TestComposition, root: NodeId) -> Scene {
+    crate::scene_probe::fresh_graph(composition, root)
 }
 
-fn apply_updates(
-    composition: &mut TestComposition,
-    graph: &mut RenderGraph,
-    updates: SceneUpdates<'_>,
-) {
+fn apply_updates(composition: &mut TestComposition, graph: &mut Scene, updates: SceneUpdates<'_>) {
+    let root = composition.root().expect("root");
     let runtime = composition.runtime_handle();
     let mut applier = composition.applier_mut();
     applier.set_runtime_handle(runtime);
-    assert!(update_graph_from_applier(&applier, graph, updates, 1.0));
+    assert!(graph.update_from_applier(&applier, root, updates));
     applier.clear_runtime_handle();
 }
 
 fn graph_output(
-    layer: &LayerNode,
+    layer: LayerRef<'_>,
     parent_transform: ProjectiveTransform,
     rectangles: &mut Rectangles,
     texts: &mut Texts,
 ) {
-    let transform = layer.transform_to_parent.then(parent_transform);
-    nodes_output(&layer.children, transform, rectangles, texts);
-}
-
-fn nodes_output(
-    nodes: &[RenderNode],
-    transform: ProjectiveTransform,
-    rectangles: &mut Rectangles,
-    texts: &mut Texts,
-) {
-    for child in nodes {
-        match child {
-            RenderNode::Layer(child) => graph_output(child, transform, rectangles, texts),
-            RenderNode::Inline(inline) => nodes_output(
-                &inline.content,
-                inline.transform_to_parent().then(transform),
-                rectangles,
-                texts,
-            ),
-            RenderNode::DrawRun(run) => {
+    let transform = layer.transform_to_parent().then(parent_transform);
+    for item in layer.items() {
+        match item {
+            ItemRef::Layer(child) | ItemRef::Leaf(child) => {
+                graph_output(child, transform, rectangles, texts);
+            }
+            ItemRef::Run(run) => {
                 let owner = run.command.map(|command| command.node_id);
                 rectangles.extend(run.primitives().filter_map(|primitive| match primitive {
                     DrawPrimitive::Rect {
@@ -107,28 +86,26 @@ fn nodes_output(
                     _ => None,
                 }));
             }
-            RenderNode::Primitive(entry) => match &entry.node {
-                PrimitiveNode::Draw(draw) => {
-                    if let DrawPrimitive::Rect {
-                        rect,
-                        brush: Brush::Solid(color),
-                        ..
-                    } = &draw.primitive
-                    {
-                        rectangles.push((None, transform.bounds_for_rect(*rect), *color));
-                    }
+            ItemRef::Draw(draw) => {
+                if let DrawPrimitive::Rect {
+                    rect,
+                    brush: Brush::Solid(color),
+                    ..
+                } = &draw.primitive
+                {
+                    rectangles.push((None, transform.bounds_for_rect(*rect), *color));
                 }
-                PrimitiveNode::Text(text) => texts.push((
-                    text.node_id,
-                    transform.bounds_for_rect(text.rect),
-                    text.text.text().to_owned(),
-                )),
-            },
+            }
+            ItemRef::Text(text) => texts.push((
+                text.node_id,
+                transform.bounds_for_rect(text.rect),
+                text.text.text().to_owned(),
+            )),
         }
     }
 }
 
-fn graph_output_owned(layer: &LayerNode) -> (Rectangles, Texts) {
+fn graph_output_owned(layer: LayerRef<'_>) -> (Rectangles, Texts) {
     let mut rectangles = Vec::new();
     let mut texts = Vec::new();
     graph_output(
@@ -140,14 +117,14 @@ fn graph_output_owned(layer: &LayerNode) -> (Rectangles, Texts) {
     (rectangles, texts)
 }
 
-fn layer_for(layer: &LayerNode, node_id: NodeId) -> Option<&LayerNode> {
-    if layer.node_id == Some(node_id) || layer.wraps == Some(node_id) {
+fn layer_for(layer: LayerRef<'_>, node_id: NodeId) -> Option<LayerRef<'_>> {
+    if layer.node_id() == Some(node_id) || layer.wraps() == Some(node_id) {
         return Some(layer);
     }
-    layer.children.iter().find_map(|child| match child {
-        RenderNode::Layer(child) => layer_for(child, node_id),
-        RenderNode::Primitive(_) | RenderNode::DrawRun(_) | RenderNode::Inline(_) => None,
-    })
+    layer
+        .children()
+        .filter(|child| child.kind() != cranpose_render_common::scene_store::RecordKind::Leaf)
+        .find_map(|child| layer_for(child, node_id))
 }
 
 #[test]
@@ -244,8 +221,8 @@ fn layer_only_update_keeps_outer_draw_and_child_canvas_recordings() {
     assert_eq!(children.len(), 2);
     let fresh = fresh_graph(&mut composition, root);
     assert_eq!(
-        graph_output_owned(&graph.root()),
-        graph_output_owned(&fresh.root()),
+        graph_output_owned(graph.root_layer().expect("a scene")),
+        graph_output_owned(fresh.root_layer().expect("a scene")),
         "patched output including transforms matches fresh lowering"
     );
 }
@@ -282,9 +259,9 @@ fn parent_layer_update_republishes_child_text_viewport_geometry() {
     let parent = parent_id.get().expect("parent Box");
     let sink = window_rect.borrow().expect("Text reports its window rect");
     let before = sink.get();
-    let before_transform = layer_for(&graph.root(), parent)
+    let before_transform = layer_for(graph.root_layer().expect("a scene"), parent)
         .expect("parent layer")
-        .transform_to_parent;
+        .transform_to_parent();
     rotation.set(90.0);
     apply_updates(
         &mut composition,
@@ -300,22 +277,22 @@ fn parent_layer_update_republishes_child_text_viewport_geometry() {
         "fresh lowering publishes the same window rect"
     );
     assert_ne!(
-        layer_for(&graph.root(), parent)
+        layer_for(graph.root_layer().expect("a scene"), parent)
             .expect("updated parent layer")
-            .transform_to_parent,
+            .transform_to_parent(),
         before_transform
     );
     assert_eq!(
-        layer_for(&graph.root(), parent)
+        layer_for(graph.root_layer().expect("a scene"), parent)
             .expect("updated parent layer")
-            .transform_to_parent,
-        layer_for(&fresh.root(), parent)
+            .transform_to_parent(),
+        layer_for(fresh.root_layer().expect("a scene"), parent)
             .expect("fresh parent layer")
-            .transform_to_parent
+            .transform_to_parent()
     );
     assert_eq!(
-        graph_output_owned(&graph.root()),
-        graph_output_owned(&fresh.root()),
+        graph_output_owned(graph.root_layer().expect("a scene")),
+        graph_output_owned(fresh.root_layer().expect("a scene")),
         "child text and viewport match fresh lowering"
     );
 }
@@ -351,9 +328,9 @@ fn parent_layer_and_child_content_dirt_are_both_applied() {
     let (root, mut graph) = initial_root_graph(&mut composition);
     let parent = parent_id.get().expect("parent Box id");
     let child = child_id.get().expect("Canvas id");
-    let old_transform = layer_for(&graph.root(), parent)
+    let old_transform = layer_for(graph.root_layer().expect("a scene"), parent)
         .expect("parent layer")
-        .transform_to_parent;
+        .transform_to_parent();
     rotation.set(43.0);
     color.set(Color::GREEN);
     apply_updates(
@@ -365,15 +342,15 @@ fn parent_layer_and_child_content_dirt_are_both_applied() {
         ],
     );
     assert_ne!(
-        layer_for(&graph.root(), parent)
+        layer_for(graph.root_layer().expect("a scene"), parent)
             .expect("updated parent layer")
-            .transform_to_parent,
+            .transform_to_parent(),
         old_transform,
         "the parent's layer dirt is applied"
     );
     let fresh = fresh_graph(&mut composition, root);
-    let actual = graph_output_owned(&graph.root());
-    let expected = graph_output_owned(&fresh.root());
+    let actual = graph_output_owned(graph.root_layer().expect("a scene"));
+    let expected = graph_output_owned(fresh.root_layer().expect("a scene"));
     assert_eq!(actual, expected, "child content survives parent layer dirt");
     assert!(
         actual.0.iter().any(|(_, _, drawn)| *drawn == Color::GREEN),
@@ -426,9 +403,9 @@ fn parent_content_and_child_layer_dirt_match_a_fresh_rebuild() {
     let (root, mut graph) = initial_root_graph(&mut composition);
     let parent = parent_id.get().expect("parent Box id");
     let child = child_id.get().expect("child Box id");
-    let old_transform = layer_for(&graph.root(), child)
+    let old_transform = layer_for(graph.root_layer().expect("a scene"), child)
         .expect("child graphics layer")
-        .transform_to_parent;
+        .transform_to_parent();
     parent_color.set(Color::BLUE);
     child_rotation.set(61.0);
     apply_updates(
@@ -440,15 +417,15 @@ fn parent_content_and_child_layer_dirt_match_a_fresh_rebuild() {
         ],
     );
     assert_ne!(
-        layer_for(&graph.root(), child)
+        layer_for(graph.root_layer().expect("a scene"), child)
             .expect("updated child layer")
-            .transform_to_parent,
+            .transform_to_parent(),
         old_transform,
         "parent content rebuilding must not lose the child's layer change"
     );
     let fresh = fresh_graph(&mut composition, root);
-    let actual = graph_output_owned(&graph.root());
-    let expected = graph_output_owned(&fresh.root());
+    let actual = graph_output_owned(graph.root_layer().expect("a scene"));
+    let expected = graph_output_owned(fresh.root_layer().expect("a scene"));
     assert_eq!(
         actual, expected,
         "content-dirty parent matches a fresh graph"

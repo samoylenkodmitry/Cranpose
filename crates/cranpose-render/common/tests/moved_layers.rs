@@ -9,8 +9,10 @@ use std::{
 
 use cranpose_core::{MutableState, NodeId};
 use cranpose_render_common::{
-    graph::{LayerNode, PrimitiveNode, ProjectiveTransform, RenderGraph, RenderNode},
-    scene_builder::{build_graph_from_applier, clear_command_recordings_for_tests},
+    graph::ProjectiveTransform,
+    graph_scene::Scene,
+    scene_builder::clear_command_recordings_for_tests,
+    scene_store::{ItemRef, LayerRef},
 };
 use cranpose_ui::{
     Box, BoxSpec, Brush, Canvas, Color, Column, ColumnSpec, GraphicsLayer, LayoutEngine, Modifier,
@@ -91,10 +93,12 @@ fn moving_column(probe: Rc<RefCell<Probe>>, draws: Rc<Cell<usize>>) -> TestCompo
     })
 }
 
-fn initial_graph(composition: &mut TestComposition, root: NodeId) -> RenderGraph {
+fn initial_graph(composition: &mut TestComposition, root: NodeId) -> Scene {
     crate::scene_probe::with_applier(composition, |applier| {
         applier.compute_layout(root, VIEWPORT).expect("layout");
-        let graph = build_graph_from_applier(applier, root, 1.0).expect("initial graph");
+        let mut graph = Scene::new();
+        graph.rebuild_from_applier(applier, root);
+        assert!(graph.root_layer().is_some(), "initial graph");
         let _ = cranpose_ui::take_geometry_scene_nodes();
         let _ = cranpose_ui::take_draw_repass_nodes();
         let _ = applier.take_structural_change_parents_attached_to(root);
@@ -102,36 +106,17 @@ fn initial_graph(composition: &mut TestComposition, root: NodeId) -> RenderGraph
     })
 }
 
-fn update_frame(
-    composition: &mut TestComposition,
-    root: NodeId,
-    graph: &mut RenderGraph,
-) -> Vec<NodeId> {
+fn update_frame(composition: &mut TestComposition, root: NodeId, graph: &mut Scene) -> Vec<NodeId> {
     crate::scene_probe::update_scene(composition, root, VIEWPORT, graph)
 }
 
 /// Every solid rectangle and text the graph paints, in window space.
-fn painted(layer: &LayerNode, parent: ProjectiveTransform, out: &mut Vec<(Rect, String)>) {
-    let transform = layer.transform_to_parent.then(parent);
-    painted_nodes(&layer.children, transform, out);
-}
-
-fn painted_nodes(
-    nodes: &[RenderNode],
-    transform: ProjectiveTransform,
-    out: &mut Vec<(Rect, String)>,
-) {
-    for child in nodes {
-        match child {
-            RenderNode::Layer(child) => painted(child, transform, out),
-            RenderNode::Inline(inline) => {
-                painted_nodes(
-                    &inline.content,
-                    inline.transform_to_parent().then(transform),
-                    out,
-                );
-            }
-            RenderNode::DrawRun(run) => {
+fn painted(layer: LayerRef<'_>, parent: ProjectiveTransform, out: &mut Vec<(Rect, String)>) {
+    let transform = layer.transform_to_parent().then(parent);
+    for item in layer.items() {
+        match item {
+            ItemRef::Layer(child) | ItemRef::Leaf(child) => painted(child, transform, out),
+            ItemRef::Run(run) => {
                 out.extend(run.primitives().filter_map(|primitive| match primitive {
                     DrawPrimitive::Rect {
                         rect,
@@ -141,31 +126,33 @@ fn painted_nodes(
                     _ => None,
                 }));
             }
-            RenderNode::Primitive(entry) => match &entry.node {
-                PrimitiveNode::Draw(draw) => {
-                    if let DrawPrimitive::Rect {
-                        rect,
-                        brush: Brush::Solid(color),
-                        ..
-                    } = &draw.primitive
-                    {
-                        out.push((transform.bounds_for_rect(*rect), format!("{color:?}")));
-                    }
+            ItemRef::Draw(draw) => {
+                if let DrawPrimitive::Rect {
+                    rect,
+                    brush: Brush::Solid(color),
+                    ..
+                } = &draw.primitive
+                {
+                    out.push((transform.bounds_for_rect(*rect), format!("{color:?}")));
                 }
-                PrimitiveNode::Text(text) => {
-                    out.push((
-                        transform.bounds_for_rect(text.rect),
-                        text.text.text().to_owned(),
-                    ));
-                }
-            },
+            }
+            ItemRef::Text(text) => {
+                out.push((
+                    transform.bounds_for_rect(text.rect),
+                    text.text.text().to_owned(),
+                ));
+            }
         }
     }
 }
 
-fn painted_output(graph: &RenderGraph) -> Vec<(Rect, String)> {
+fn painted_output(graph: &Scene) -> Vec<(Rect, String)> {
     let mut out = Vec::new();
-    painted(&graph.root(), ProjectiveTransform::identity(), &mut out);
+    painted(
+        graph.root_layer().expect("a scene"),
+        ProjectiveTransform::identity(),
+        &mut out,
+    );
     out
 }
 

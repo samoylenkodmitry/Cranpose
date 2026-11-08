@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use cranpose_render_common::{
     Renderer,
-    graph::{ProjectiveTransform, RenderGraph},
+    graph::{LayerNode, ProjectiveTransform},
 };
 use cranpose_render_wgpu::WgpuRenderer;
 use cranpose_ui::AppContext;
@@ -40,7 +40,7 @@ fn downlevel_uniform_renderer() -> Result<(WgpuRenderer, Arc<wgpu::Device>), Str
     Ok((renderer, device))
 }
 
-fn many_shapes_graph(shape_count: usize, width: f32, height: f32) -> RenderGraph {
+fn many_shapes_graph(shape_count: usize, width: f32, height: f32) -> LayerNode {
     let columns = 32usize;
     let cell = width / columns as f32;
     let children = (0..shape_count)
@@ -63,7 +63,7 @@ fn many_shapes_graph(shape_count: usize, width: f32, height: f32) -> RenderGraph
             )
         })
         .collect();
-    RenderGraph::new(&shared_test_support::layer_node(
+    shared_test_support::layer_node(
         Rect {
             x: 0.0,
             y: 0.0,
@@ -73,7 +73,7 @@ fn many_shapes_graph(shape_count: usize, width: f32, height: f32) -> RenderGraph
         ProjectiveTransform::identity(),
         GraphicsLayer::default(),
         children,
-    ))
+    )
 }
 
 #[test]
@@ -90,7 +90,9 @@ fn renderer_survives_downlevel_uniform_binding_limit() {
     let error_scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
     let app_context = AppContext::new();
     renderer.attach_app_context_services(&app_context);
-    renderer.scene_mut().graph = Some(many_shapes_graph(300, 256.0, 256.0));
+    renderer
+        .scene_mut()
+        .describe(&many_shapes_graph(300, 256.0, 256.0));
     let frame = app_context.enter(|| renderer.capture_frame(256, 256));
     let validation = pollster::block_on(error_scope.pop());
 

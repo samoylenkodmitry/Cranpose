@@ -6,8 +6,10 @@
 use std::cell::Cell;
 
 use cranpose_core::MutableState;
-use cranpose_render_common::graph::{
-    LayerNode, PrimitiveNode, ProjectiveTransform, RenderGraph, RenderNode,
+use cranpose_render_common::{
+    graph::ProjectiveTransform,
+    graph_scene::Scene,
+    scene_store::{ItemRef, LayerRef},
 };
 use cranpose_ui::{
     Box, BoxSpec, Color, Column, ColumnSpec, Modifier, Size, Text, TextStyle, run_test_composition,
@@ -22,21 +24,21 @@ const FILL: Color = Color(0.3, 0.5, 0.9, 1.0);
 // Each node the scene draws, whether it draws through a layer of its own or
 // in its parent's, where it lands in the window, and each rectangle and text
 // it paints there.
-fn picture(graph: &RenderGraph) -> Vec<String> {
-    fn nodes(children: &[RenderNode], transform: ProjectiveTransform, out: &mut Vec<String>) {
-        for child in children {
-            match child {
-                RenderNode::Layer(layer) => walk_layer(layer, transform, out),
-                RenderNode::Inline(inline) => {
-                    let transform = inline.transform_to_parent().then(transform);
+fn picture(graph: &Scene) -> Vec<String> {
+    fn items(layer: LayerRef<'_>, transform: ProjectiveTransform, out: &mut Vec<String>) {
+        for item in layer.items() {
+            match item {
+                ItemRef::Layer(layer) => walk_layer(layer, transform, out),
+                ItemRef::Leaf(leaf) => {
+                    let transform = leaf.transform_to_parent().then(transform);
                     out.push(format!(
                         "inline {:?} at {:?}",
-                        inline.node_id,
-                        transform.bounds_for_rect(inline.node_rect())
+                        leaf.node_id(),
+                        transform.bounds_for_rect(leaf.node_rect())
                     ));
-                    nodes(&inline.content, transform, out);
+                    items(leaf, transform, out);
                 }
-                RenderNode::DrawRun(run) => {
+                ItemRef::Run(run) => {
                     for primitive in run.primitives() {
                         if let DrawPrimitive::Rect { rect, brush, .. } = primitive {
                             out.push(format!(
@@ -46,47 +48,47 @@ fn picture(graph: &RenderGraph) -> Vec<String> {
                         }
                     }
                 }
-                RenderNode::Primitive(entry) => {
-                    if let PrimitiveNode::Text(text) = &entry.node {
-                        out.push(format!(
-                            "text {} at {:?}",
-                            text.text.text(),
-                            transform.bounds_for_rect(text.rect)
-                        ));
-                    }
+                ItemRef::Text(text) => {
+                    out.push(format!(
+                        "text {} at {:?}",
+                        text.text.text(),
+                        transform.bounds_for_rect(text.rect)
+                    ));
                 }
+                ItemRef::Draw(_) => {}
             }
         }
     }
-    fn walk_layer(layer: &LayerNode, parent: ProjectiveTransform, out: &mut Vec<String>) {
-        let transform = layer.transform_to_parent.then(parent);
+    fn walk_layer(layer: LayerRef<'_>, parent: ProjectiveTransform, out: &mut Vec<String>) {
+        let transform = layer.transform_to_parent().then(parent);
         out.push(format!(
             "layer {:?} at {:?} alpha {}",
-            layer.node_id,
+            layer.node_id(),
             transform.bounds_for_rect(layer.node_rect()),
             layer.opacity()
         ));
-        nodes(&layer.children, transform, out);
+        items(layer, transform, out);
     }
     let mut out = Vec::new();
-    walk_layer(&graph.root(), ProjectiveTransform::identity(), &mut out);
+    walk_layer(
+        graph.root_layer().expect("a scene"),
+        ProjectiveTransform::identity(),
+        &mut out,
+    );
     out
 }
 
 // Whether the scene draws `text` through a layer of its own.
-fn text_has_layer(graph: &RenderGraph, text: &str) -> bool {
-    fn search(children: &[RenderNode], text: &str, in_layer: bool) -> Option<bool> {
-        children.iter().find_map(|child| match child {
-            RenderNode::Layer(layer) => search(&layer.children, text, layer.node_id.is_some()),
-            RenderNode::Inline(inline) => search(&inline.content, text, false),
-            RenderNode::Primitive(entry) => match &entry.node {
-                PrimitiveNode::Text(drawn) if drawn.text.text() == text => Some(in_layer),
-                _ => None,
-            },
-            RenderNode::DrawRun(_) => None,
+fn text_has_layer(graph: &Scene, text: &str) -> bool {
+    fn search(layer: LayerRef<'_>, text: &str, in_layer: bool) -> Option<bool> {
+        layer.items().find_map(|item| match item {
+            ItemRef::Layer(layer) => search(layer, text, layer.node_id().is_some()),
+            ItemRef::Leaf(leaf) => search(leaf, text, false),
+            ItemRef::Text(drawn) if drawn.text.text() == text => Some(in_layer),
+            ItemRef::Text(_) | ItemRef::Draw(_) | ItemRef::Run(_) => None,
         })
     }
-    search(&graph.root().children, text, true).expect("the text draws")
+    search(graph.root_layer().expect("a scene"), text, true).expect("the text draws")
 }
 
 #[test]
@@ -199,17 +201,14 @@ fn a_cached_layer_misses_when_a_leaf_it_draws_changes_its_text() {
     });
     let root = composition.root().expect("root");
     let mut graph = initial_graph(&mut composition, root, VIEWPORT);
-    let cached = |graph: &RenderGraph| {
-        fn find(layer: &LayerNode) -> Option<&LayerNode> {
-            if layer.isolation.explicit_offscreen {
+    let cached = |graph: &Scene| {
+        fn find(layer: LayerRef<'_>) -> Option<LayerRef<'_>> {
+            if layer.isolation().explicit_offscreen {
                 return Some(layer);
             }
-            layer.children.iter().find_map(|child| match child {
-                RenderNode::Layer(child) => find(child),
-                _ => None,
-            })
+            layer.children().find_map(find)
         }
-        find(&graph.root())
+        find(graph.root_layer().expect("a scene"))
             .expect("the offscreen column")
             .target_content_hash()
     };

@@ -1,7 +1,7 @@
 use cranpose_core::NodeId;
 use cranpose_render_common::{
     Renderer,
-    graph::{ProjectiveTransform, RenderGraph, RenderNode},
+    graph::{LayerNode, ProjectiveTransform, RenderNode},
     image_compare::image_difference_stats,
 };
 use cranpose_render_wgpu::CapturedFrame;
@@ -71,7 +71,7 @@ fn glass_layer(index: usize, effect: RenderEffect) -> RenderNode {
     )))
 }
 
-fn glasses_page(count: usize, effect: impl Fn() -> RenderEffect) -> RenderGraph {
+fn glasses_page(count: usize, effect: impl Fn() -> RenderEffect) -> LayerNode {
     let mut children = striped_page();
     for index in 0..count {
         children.push(glass_layer(index, effect()));
@@ -79,7 +79,7 @@ fn glasses_page(count: usize, effect: impl Fn() -> RenderEffect) -> RenderGraph 
     support::page_graph(FRAME_WIDTH, FRAME_HEIGHT, children)
 }
 
-fn capture(renderer: &mut support::LockedRenderer, graph: RenderGraph) -> CapturedFrame {
+fn capture(renderer: &mut support::LockedRenderer, graph: LayerNode) -> CapturedFrame {
     support::capture_graph(renderer, graph, FRAME_WIDTH, FRAME_HEIGHT)
 }
 
@@ -737,12 +737,12 @@ fn an_empty_shader_child_drawn_in_the_final_pass_matches_its_surface_resolve() {
                 Vec::new(),
             ),
         )));
-        RenderGraph::new(&shared_test_support::layer_node(
+        shared_test_support::layer_node(
             rect(0.0, 0.0, FRAME_WIDTH as f32, FRAME_HEIGHT as f32),
             ProjectiveTransform::identity(),
             GraphicsLayer::default(),
             children,
-        ))
+        )
     };
     let tail = capture(&mut renderer, child(glass_shader()));
     let tail_stats = renderer.last_frame_stats().expect("tail stats");
@@ -781,7 +781,7 @@ fn band_shader() -> RenderEffect {
 /// `card_count` blurred glass cards over the page, optionally over a
 /// page-wide empty shader child spanning the glass row that their captures
 /// read.
-fn cards_over_band(card_count: usize, band: bool) -> RenderGraph {
+fn cards_over_band(card_count: usize, band: bool) -> LayerNode {
     let bounds = rect(0.0, 0.0, FRAME_WIDTH as f32, BAND_HEIGHT);
     let mut children = striped_page();
     if band {
@@ -800,12 +800,12 @@ fn cards_over_band(card_count: usize, band: bool) -> RenderGraph {
     for index in 0..card_count {
         children.push(glass_layer(index, RenderEffect::blur(BLUR_RADIUS)));
     }
-    RenderGraph::new(&shared_test_support::layer_node(
+    shared_test_support::layer_node(
         rect(0.0, 0.0, FRAME_WIDTH as f32, FRAME_HEIGHT as f32),
         ProjectiveTransform::identity(),
         GraphicsLayer::default(),
         children,
-    ))
+    )
 }
 
 /// Surface resolves and shader pixels the band adds on top of the cards
@@ -885,7 +885,7 @@ fn button_layer(x: f32, y: f32, effect: RenderEffect) -> RenderNode {
 
 /// One shader glass with two shader glass buttons over it, whose captures
 /// read the glass.
-fn glass_with_buttons(batched: bool) -> RenderGraph {
+fn glass_with_buttons(batched: bool) -> LayerNode {
     let effect = |effect: RenderEffect| if batched { effect } else { unbatched(effect) };
     let mut children = striped_page();
     children.push(glass_layer(0, effect(glass_shader())));
@@ -896,12 +896,12 @@ fn glass_with_buttons(batched: bool) -> RenderGraph {
             effect(button_shader()),
         ));
     }
-    RenderGraph::new(&shared_test_support::layer_node(
+    shared_test_support::layer_node(
         rect(0.0, 0.0, FRAME_WIDTH as f32, FRAME_HEIGHT as f32),
         ProjectiveTransform::identity(),
         GraphicsLayer::default(),
         children,
-    ))
+    )
 }
 
 /// A glass that captures above it read is shaded once into a texture the
@@ -934,7 +934,7 @@ fn a_glass_read_by_captures_above_it_is_shaded_once() {
     );
 }
 
-fn stacked_cached_glasses(first_blur: f32, identified: bool) -> RenderGraph {
+fn stacked_cached_glasses(first_blur: f32, identified: bool) -> LayerNode {
     let mut children = striped_page();
     for (index, radius) in [first_blur, 2.0].into_iter().enumerate() {
         let mut node = glass_layer(0, RenderEffect::blur(radius));
@@ -953,7 +953,7 @@ fn animated_substrate_scene(
     stacked: bool,
     isolated: bool,
     identified: bool,
-) -> RenderGraph {
+) -> LayerNode {
     let mut shader = RuntimeShader::new(&format!(
         r"{RUNTIME_SHADER_PRELUDE_WGSL}
 @fragment
@@ -998,7 +998,7 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {{
     support::page_graph(FRAME_WIDTH, FRAME_HEIGHT, children)
 }
 
-fn glass_content_mask_scene(with_material: bool) -> RenderGraph {
+fn glass_content_mask_scene(with_material: bool) -> LayerNode {
     let RenderEffect::Shader { mut shader } = glass_shader() else {
         panic!("glass shader fixture");
     };
@@ -1127,7 +1127,7 @@ fn a_cached_backdrop_tracks_the_effect_of_the_glass_beneath_it() {
     assert_eq!(difference.differing_pixels, 0, "{difference:?}");
 }
 
-fn independent_cached_glasses(identified: bool) -> RenderGraph {
+fn independent_cached_glasses(identified: bool) -> LayerNode {
     let mut children = support::striped_page(1104, 720);
     for index in 0..9 {
         let mut layer = shared_test_support::layer_node(
@@ -1150,10 +1150,7 @@ fn independent_cached_glasses(identified: bool) -> RenderGraph {
     support::page_graph(1104, 720, children)
 }
 
-fn identified_glasses_with(
-    present: &[usize],
-    effect: impl Fn(usize) -> RenderEffect,
-) -> RenderGraph {
+fn identified_glasses_with(present: &[usize], effect: impl Fn(usize) -> RenderEffect) -> LayerNode {
     let mut children = support::striped_page(1104, 720);
     for index in present {
         let mut layer = shared_test_support::layer_node(
@@ -1176,7 +1173,7 @@ fn identified_glasses_with(
     support::page_graph(1104, 720, children)
 }
 
-fn identified_glasses(present: &[usize]) -> RenderGraph {
+fn identified_glasses(present: &[usize]) -> LayerNode {
     identified_glasses_with(present, |_| RenderEffect::blur(12.0))
 }
 
@@ -1196,11 +1193,11 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     RenderEffect::runtime_shader(shader)
 }
 
-fn layout_probe_glasses(present: &[usize]) -> RenderGraph {
+fn layout_probe_glasses(present: &[usize]) -> LayerNode {
     identified_glasses_with(present, |_| layout_probe())
 }
 
-fn mixed_substrate_glasses(changed: &[usize]) -> RenderGraph {
+fn mixed_substrate_glasses(changed: &[usize]) -> LayerNode {
     identified_glasses_with(&ALL_NINE, |index| {
         let specs = [
             SubstrateSpec::Average { block: 4 },
@@ -1237,11 +1234,11 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
 struct NeighbourHarness {
     cached: support::LockedRenderer,
     reference: cranpose_render_wgpu::WgpuRenderer,
-    graph: fn(&[usize]) -> RenderGraph,
+    graph: fn(&[usize]) -> LayerNode,
 }
 
 impl NeighbourHarness {
-    fn new(graph: fn(&[usize]) -> RenderGraph) -> Option<Self> {
+    fn new(graph: fn(&[usize]) -> LayerNode) -> Option<Self> {
         let cached = support::headless_renderer().ok()?;
         let reference = support::headless_renderer_beside_locked().ok()?;
         Some(Self {
@@ -1267,7 +1264,7 @@ impl NeighbourHarness {
         let stats = self.cached.last_frame_stats().expect("frame stats");
         let misses = stats.layer_cache_misses;
         cranpose_core::debug_toggles::set_debug_toggle("CRANPOSE_NO_BACKDROP_CACHE", Some("1"));
-        self.reference.scene_mut().graph = Some((self.graph)(present));
+        self.reference.scene_mut().describe(&(self.graph)(present));
         let reference = self
             .reference
             .capture_frame_with_scale(1104, 720, 1.0)
@@ -1360,7 +1357,7 @@ fn a_shader_reading_its_place_in_the_atlas_is_re_rendered_when_a_neighbour_moves
     );
 }
 
-fn two_atlas_stage(marked: bool) -> RenderGraph {
+fn two_atlas_stage(marked: bool) -> LayerNode {
     let mut children = support::striped_page(4200, 2100);
     children.push(RenderNode::Layer(Box::new(
         shared_test_support::layer_node(
@@ -1425,7 +1422,7 @@ fn a_stage_spanning_two_atlases_allocates_only_the_atlas_its_misses_land_in() {
         partial.transient_texture_bytes
     );
     cranpose_core::debug_toggles::set_debug_toggle("CRANPOSE_NO_BACKDROP_CACHE", Some("1"));
-    reference.scene_mut().graph = Some(two_atlas_stage(true));
+    reference.scene_mut().describe(&two_atlas_stage(true));
     let expected = reference
         .capture_frame_with_scale(4200, 2100, 1.0)
         .expect("reference capture");

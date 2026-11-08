@@ -6,7 +6,7 @@
 
 use cranpose_render_common::{
     Renderer,
-    graph::{DrawRunNode, PrimitivePhase, ProjectiveTransform, RenderGraph, RenderNode},
+    graph::{DrawRunNode, LayerNode, PrimitivePhase, ProjectiveTransform, RenderNode},
     layer_transform::layer_transform_to_parent,
 };
 use cranpose_ui_graphics::{Color, DrawScope, DrawScopeDefault, GraphicsLayer, Point, Rect, Size};
@@ -31,7 +31,7 @@ fn rect(x: f32, y: f32, width: f32, height: f32) -> Rect {
 /// A page with a label, and a tilted, translucent card holding a swatch and
 /// a label of its own: the card draws in a pass of its own, which the page's
 /// pass then composites.
-fn page_with_tilted_card() -> RenderGraph {
+fn page_with_tilted_card() -> LayerNode {
     let frame = Rect::from_size(Size::new(WIDTH as f32, HEIGHT as f32));
     let card = shared_test_support::layer_node(
         rect(70.0, 20.0, 80.0, 60.0),
@@ -53,12 +53,12 @@ fn page_with_tilted_card() -> RenderGraph {
         support::text_node(7, "Page", rect(6.0, 62.0, 60.0, 24.0), 16.0),
         RenderNode::Layer(Box::new(card)),
     ];
-    RenderGraph::new(&shared_test_support::layer_node(
+    shared_test_support::layer_node(
         frame,
         ProjectiveTransform::identity(),
         GraphicsLayer::default(),
         nodes,
-    ))
+    )
 }
 
 /// Solid, gradient and stroked shapes, each kind with a pipeline of its own.
@@ -75,7 +75,7 @@ fn shapes() -> RenderNode {
 /// The shapes on the page, and again in a layer at half opacity turned by
 /// `degrees` about its centre: projected from its target while turned,
 /// blitted one to one at zero.
-fn turned(degrees: f32) -> RenderGraph {
+fn turned(degrees: f32) -> LayerNode {
     let bounds = Rect::from_size(Size::new(WIDTH as f32, HEIGHT as f32));
     let turn = GraphicsLayer {
         alpha: 0.5,
@@ -101,7 +101,7 @@ fn turned(degrees: f32) -> RenderGraph {
 
 /// What a renderer that builds each pipeline where it is first needed draws
 /// for `graph`, after `before`.
-fn built_where_needed(before: Option<&RenderGraph>, graph: &RenderGraph) -> Vec<u8> {
+fn built_where_needed(before: Option<&LayerNode>, graph: &LayerNode) -> Vec<u8> {
     let mut reference = LockedRenderer::beside_locked().expect("reference renderer");
     if let Some(before) = before {
         support::capture_graph(&mut reference, before.clone(), WIDTH, HEIGHT);
@@ -112,7 +112,7 @@ fn built_where_needed(before: Option<&RenderGraph>, graph: &RenderGraph) -> Vec<
 /// Draws `before`, if any, and then `graph` until its pipelines landed,
 /// asserting the first frame found them still compiling and asked for the
 /// frames after it; the frame once they landed.
-fn landed(before: Option<&RenderGraph>, graph: &RenderGraph) -> Vec<u8> {
+fn landed(before: Option<&LayerNode>, graph: &LayerNode) -> Vec<u8> {
     let mut renderer = support::headless_renderer_compiling_in_background().expect("GPU required");
     let first = before.unwrap_or(graph);
     support::capture_graph(&mut renderer, first.clone(), WIDTH, HEIGHT);
@@ -125,7 +125,7 @@ fn landed(before: Option<&RenderGraph>, graph: &RenderGraph) -> Vec<u8> {
         renderer.needs_frame_warmup(),
         "a frame drawn without its pipelines asks for the frames after it"
     );
-    support::capture_graph_settled(&mut renderer, &graph.clone(), WIDTH, HEIGHT).pixels
+    support::capture_graph_settled(&mut renderer, graph, WIDTH, HEIGHT).pixels
 }
 
 #[test]

@@ -7,7 +7,7 @@ use std::{
 };
 
 use cranpose_core::debug_toggles::{debug_toggle_os, set_debug_toggle_os};
-use cranpose_render_common::{Renderer, graph::RenderGraph};
+use cranpose_render_common::{Renderer, graph::LayerNode};
 use cranpose_render_wgpu::{CapturedFrame, pipelines_created, pipelines_created_off_frame};
 use cranpose_ui_graphics::{
     Brush, Color, CornerRadii, DrawPrimitive, LiquidGlassRect, LiquidGlassSpec, Rect, RenderEffect,
@@ -111,7 +111,7 @@ fn caching_renderer() -> Option<support::LockedRenderer> {
         eprintln!("pipeline cache lifecycle requires PIPELINE_CACHE support");
         return None;
     }
-    renderer.scene_mut().graph = Some(RenderGraph::new(&support::layer_node(
+    renderer.scene_mut().describe(&support::layer_node(
         None,
         16.0,
         16.0,
@@ -128,7 +128,7 @@ fn caching_renderer() -> Option<support::LockedRenderer> {
             },
             None,
         )],
-    )));
+    ));
     Some(renderer)
 }
 
@@ -181,12 +181,12 @@ fn dropping_a_renderer_stops_writing_its_previous_pipeline_cache() {
     assert!(original.pixels.as_chunks::<4>().0.contains(&[255; 4]));
     wait_for_cache(&previous_cache);
 
-    let graph = renderer.scene_mut().graph.take();
+    let store = renderer.scene().store().clone();
     drop(renderer);
     fs::remove_file(&previous_cache).expect("remove retired renderer's cache file");
     let replacement_cache = files.select("replacement.bin");
     let mut renderer = support::LockedRenderer::beside_locked().expect("replacement GPU required");
-    renderer.scene_mut().graph = graph;
+    renderer.scene_mut().replace_store(store);
     let replacement = renderer.capture_frame(16, 16).expect("replacement frame");
     assert_eq!(replacement.pixels, original.pixels);
     wait_for_cache(&replacement_cache);
@@ -200,14 +200,14 @@ fn dropping_a_renderer_stops_writing_its_previous_pipeline_cache() {
 /// A white square beside a stroked rounded one, so a frame draws with more
 /// than one shape pipeline, one of them not among those a launch with no
 /// record builds for every screen.
-fn squares() -> RenderGraph {
+fn squares() -> LayerNode {
     let square = |x: f32| Rect {
         x,
         y: 0.0,
         width: 8.0,
         height: 8.0,
     };
-    RenderGraph::new(&support::layer_node(
+    support::layer_node(
         None,
         16.0,
         16.0,
@@ -230,7 +230,7 @@ fn squares() -> RenderGraph {
                 None,
             ),
         ],
-    ))
+    )
 }
 
 /// What `renderer`'s first frame waited for (see [`support::capture_waits`]);
@@ -371,7 +371,7 @@ fn a_cache_file_without_pipeline_records_keeps_its_first_screen_shapes() {
 }
 
 /// A striped page under one glass pane.
-fn glass_page() -> RenderGraph {
+fn glass_page() -> LayerNode {
     panes_page([support::glass_page::glass_shader()])
 }
 
@@ -393,16 +393,16 @@ fn glass_of(spec: &LiquidGlassSpec) -> RenderEffect {
 }
 
 /// What `renderer` waited for while drawing `page`.
-fn frame_waits_of(renderer: &mut support::LockedRenderer, page: RenderGraph) -> u64 {
+fn frame_waits_of(renderer: &mut support::LockedRenderer, page: LayerNode) -> u64 {
     use support::glass_page::{FRAME_HEIGHT, FRAME_WIDTH};
     support::capture_waits(renderer, page, FRAME_WIDTH, FRAME_HEIGHT).1
 }
 
 /// Draws `page` until it draws without a placeholder, so the launch
 /// records the pipelines it draws with.
-fn draw_settled(renderer: &mut support::LockedRenderer, page: RenderGraph) {
+fn draw_settled(renderer: &mut support::LockedRenderer, page: &LayerNode) {
     use support::glass_page::{FRAME_HEIGHT, FRAME_WIDTH};
-    support::capture_graph_settled(renderer, &page, FRAME_WIDTH, FRAME_HEIGHT);
+    support::capture_graph_settled(renderer, page, FRAME_WIDTH, FRAME_HEIGHT);
 }
 
 /// After an update the compiled pipelines are gone, but the glass the last
@@ -416,7 +416,7 @@ fn an_updated_build_draws_its_first_glass_with_pipelines_built_before_it() {
                 frame_waits_of(previous, glass_page()) > 0,
                 "a fresh first screen waits for its glass"
             );
-            draw_settled(previous, glass_page());
+            draw_settled(previous, &glass_page());
         },
         |bytes| bytes[0] ^= 0xff,
         |updated| {
@@ -432,7 +432,7 @@ fn an_updated_build_draws_its_first_glass_with_pipelines_built_before_it() {
 
 /// A striped page under one frosted pane: its blur and the composite that
 /// places it draw with fixed pipelines.
-fn frosted_page() -> RenderGraph {
+fn frosted_page() -> LayerNode {
     panes_page([RenderEffect::blur(8.0)])
 }
 
@@ -470,7 +470,7 @@ fn an_updated_build_draws_its_first_frosted_pane_with_pipelines_built_before_it(
                 frosted_frame_waits(previous) > 0,
                 "a fresh first screen waits for its blur"
             );
-            draw_settled(previous, frosted_page());
+            draw_settled(previous, &frosted_page());
         },
         |bytes| bytes[0] ^= 0xff,
         |updated| {
@@ -494,7 +494,7 @@ fn relaunch_after_a_later_screen(
         |previous| {
             first_frame_waits(previous);
             std::thread::sleep(Duration::from_millis(2100));
-            draw_settled(previous, frosted_page());
+            draw_settled(previous, &frosted_page());
         },
         change,
         check,
@@ -613,7 +613,7 @@ fn a_prepared_update_leaves_this_builds_cache() {
     let cache = files.select("prepared-update.bin");
     let mut previous =
         support::LockedRenderer::compiling_in_background_beside_locked().expect("GPU required");
-    draw_settled(&mut previous, glass_page());
+    draw_settled(&mut previous, &glass_page());
     drop(previous);
     wait_for_cache(&cache);
     let this_build = fs::read(&cache).expect("this build's cache");
@@ -637,7 +637,7 @@ fn a_prepared_update_leaves_this_builds_cache() {
 fn shipped_cache(cache: &Path) -> Vec<u8> {
     let mut writer =
         support::LockedRenderer::compiling_in_background_beside_locked().expect("GPU required");
-    draw_settled(&mut writer, glass_page());
+    draw_settled(&mut writer, &glass_page());
     drop(writer);
     wait_for_cache(cache);
     let shipped = fs::read(cache).expect("the shipped cache");
@@ -714,7 +714,7 @@ fn a_relaunch_draws_cached_glass_with_its_own_pipelines() {
     };
     let page = || panes_page([support::glass_page::glass_shader(), glass_of(&frosted)]);
     relaunch_after_drawing(
-        |previous| draw_settled(previous, page()),
+        |previous| draw_settled(previous, &page()),
         |_| {},
         |relaunch| {
             if !relaunch
@@ -914,12 +914,9 @@ fn warm_up_lists_follow_presented_frames_across_process_restarts() {
                 );
             }
             "empty-screen" => {
-                renderer.scene_mut().graph = Some(RenderGraph::new(&support::layer_node(
-                    None,
-                    16.0,
-                    16.0,
-                    Vec::new(),
-                )));
+                renderer
+                    .scene_mut()
+                    .describe(&support::layer_node(None, 16.0, 16.0, Vec::new()));
                 renderer.capture_frame(16, 16).expect("empty screen");
                 wait_for_warm_ups();
             }

@@ -7,9 +7,7 @@ use std::{
 
 use cranpose_render_common::{
     Renderer,
-    graph::{
-        CachePolicy, DrawCommandId, DrawRunNode, LayerNode, PrimitivePhase, RenderGraph, RenderNode,
-    },
+    graph::{CachePolicy, DrawCommandId, DrawRunNode, LayerNode, PrimitivePhase, RenderNode},
 };
 use cranpose_render_wgpu::pipelines_created;
 use cranpose_ui_graphics::{
@@ -19,7 +17,7 @@ use support::SIZE;
 
 use crate::support;
 
-fn graph(stored: bool, phase: f32) -> RenderGraph {
+fn graph(stored: bool, phase: f32) -> LayerNode {
     let bounds = Rect {
         x: 11.25,
         y: 7.5,
@@ -53,7 +51,7 @@ fn graph(stored: bool, phase: f32) -> RenderGraph {
         command_index: 0,
         placement: DrawPlacement::Behind,
     });
-    RenderGraph::new(&LayerNode {
+    LayerNode {
         cache_policy: CachePolicy::None,
         local_bounds: bounds,
         clip_to_bounds: true,
@@ -64,11 +62,11 @@ fn graph(stored: bool, phase: f32) -> RenderGraph {
             segments,
         ))],
         ..LayerNode::default()
-    })
+    }
 }
 
-fn capture(renderer: &mut support::LockedRenderer, graph: &RenderGraph) -> Vec<u8> {
-    renderer.scene_mut().graph = Some(graph.clone());
+fn capture(renderer: &mut support::LockedRenderer, graph: &LayerNode) -> Vec<u8> {
+    renderer.scene_mut().describe(&graph);
     renderer
         .capture_frame_with_scale(SIZE, SIZE, 1.25)
         .expect("capture")

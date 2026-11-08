@@ -1,7 +1,7 @@
 use cranpose_core::NodeId;
 use cranpose_render_common::{
     Renderer,
-    graph::{CachePolicy, ProjectiveTransform, RenderGraph},
+    graph::{CachePolicy, LayerNode, ProjectiveTransform},
 };
 use cranpose_render_wgpu::CapturedFrame;
 use cranpose_ui_graphics::{Color, Rect, Size};
@@ -11,7 +11,7 @@ use crate::support;
 const FRAME_WIDTH: u32 = 128;
 const FRAME_HEIGHT: u32 = 96;
 
-fn shadowed_root_graph(cache_policy: CachePolicy) -> RenderGraph {
+fn shadowed_root_graph(cache_policy: CachePolicy) -> LayerNode {
     let card = Rect {
         x: 24.0,
         y: 20.0,
@@ -24,7 +24,7 @@ fn shadowed_root_graph(cache_policy: CachePolicy) -> RenderGraph {
         width: FRAME_WIDTH as f32,
         height: FRAME_HEIGHT as f32,
     };
-    let root = support::contract_layer(
+    support::contract_layer(
         Some(NodeId(4_100)),
         cache_policy,
         bounds,
@@ -33,8 +33,7 @@ fn shadowed_root_graph(cache_policy: CachePolicy) -> RenderGraph {
             support::drop_shadow(card, Color::BLACK, 4.0),
             support::solid_rect(card, Color(0.9, 0.2, 0.15, 1.0)),
         ],
-    );
-    RenderGraph::new(&root)
+    )
 }
 
 fn rgba(frame: &CapturedFrame, x: u32, y: u32) -> [u8; 4] {
@@ -59,7 +58,9 @@ fn surface_packet_root_renders_from_packet_source() {
         }
     };
 
-    renderer.scene_mut().graph = Some(shadowed_root_graph(CachePolicy::None));
+    renderer
+        .scene_mut()
+        .describe(&shadowed_root_graph(CachePolicy::None));
     let frame = renderer
         .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
         .expect("surface packet frame should render");
@@ -88,13 +89,17 @@ fn surface_packet_unchanged_root_reuses_its_cached_shadow() {
         }
     };
 
-    renderer.scene_mut().graph = Some(shadowed_root_graph(CachePolicy::Auto));
+    renderer
+        .scene_mut()
+        .describe(&shadowed_root_graph(CachePolicy::Auto));
     let first = renderer
         .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
         .expect("first surface frame should render");
     let first_stats = renderer.last_frame_stats().expect("first frame stats");
 
-    renderer.scene_mut().graph = Some(shadowed_root_graph(CachePolicy::Auto));
+    renderer
+        .scene_mut()
+        .describe(&shadowed_root_graph(CachePolicy::Auto));
     let second = renderer
         .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
         .expect("second surface frame should render");
@@ -132,7 +137,7 @@ fn dev_overlay_packet_renders_over_both_root_kinds() {
     };
 
     let direct_graph = || {
-        RenderGraph::new(&support::contract_layer(
+        support::contract_layer(
             Some(NodeId(4_200)),
             CachePolicy::None,
             Rect {
@@ -151,14 +156,14 @@ fn dev_overlay_packet_renders_over_both_root_kinds() {
                 },
                 Color(0.1, 0.1, 0.1, 1.0),
             )],
-        ))
+        )
     };
-    renderer.scene_mut().graph = Some(direct_graph());
+    renderer.scene_mut().describe(&direct_graph());
     let plain = renderer
         .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
         .expect("direct frame should render");
 
-    renderer.scene_mut().graph = Some(direct_graph());
+    renderer.scene_mut().describe(&direct_graph());
     renderer.draw_dev_overlay(&support::prepared_text("FPS 60.0"), viewport);
     let with_overlay = renderer
         .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
@@ -168,7 +173,9 @@ fn dev_overlay_packet_renders_over_both_root_kinds() {
         "the packet-carried dev overlay must draw over a direct root"
     );
 
-    renderer.scene_mut().graph = Some(shadowed_root_graph(CachePolicy::None));
+    renderer
+        .scene_mut()
+        .describe(&shadowed_root_graph(CachePolicy::None));
     renderer.draw_dev_overlay(&support::prepared_text("FPS 60.0"), viewport);
     renderer
         .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)

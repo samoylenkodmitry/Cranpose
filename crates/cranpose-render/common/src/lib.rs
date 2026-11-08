@@ -18,12 +18,11 @@ pub mod geometry;
 /// Glyph masks and the cache renderers keep them in.
 pub mod glyph_mask;
 pub mod glyph_reach;
-/// The render graph: the layers and primitives that a scene builds for a renderer to draw.
+/// The draws a scene holds and the layer tree that describes a scene built by hand.
 pub mod graph;
-mod graph_hash;
-/// The retained scene: the render graph together with the hit targets built from it.
+/// The retained scene: its records together with the hit targets built from them.
 pub mod graph_scene;
-/// Collecting hit targets from a render graph.
+/// Collecting hit targets from a scene's records.
 pub mod hit_graph;
 /// Pixel comparison and resampling of RGBA images, for renderer tests.
 pub mod image_compare;

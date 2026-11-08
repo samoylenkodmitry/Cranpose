@@ -15,6 +15,10 @@ use cranpose_foundation::{
     lazy::{LazyListScope, LazyListState, rememberLazyListState},
 };
 use cranpose_macros::composable;
+use cranpose_render_common::{
+    graph_scene,
+    scene_store::{ItemRef, LayerRef},
+};
 use cranpose_ui::{
     Alignment, BlendMode, Box, BoxSpec, Brush, Button, ButtonSpec, Color, Column, ColumnSpec,
     CornerRadii, HeadlessRenderer, IntrinsicSize, LazyColumn, LazyColumnSpec, LinearArrangement,
@@ -1152,12 +1156,10 @@ fn app_shell_scene_rebuilds_after_backdrop_effect_state_change() {
 
     shell.update();
     let initial_radii = graph_backdrop_blur_radii(
-        &shell
+        shell
             .scene()
-            .graph
-            .as_ref()
-            .expect("initial graph should be built")
-            .root(),
+            .root_layer()
+            .expect("initial graph should be built"),
     );
     assert_eq!(initial_radii, vec![0.0]);
 
@@ -1168,12 +1170,10 @@ fn app_shell_scene_rebuilds_after_backdrop_effect_state_change() {
     shell.update();
 
     let updated_radii = graph_backdrop_blur_radii(
-        &shell
+        shell
             .scene()
-            .graph
-            .as_ref()
-            .expect("updated graph should be built")
-            .root(),
+            .root_layer()
+            .expect("updated graph should be built"),
     );
     assert_eq!(updated_radii, vec![18.0]);
 }
@@ -1478,31 +1478,20 @@ impl Renderer for CountingRenderer {
 
 pub(super) type PaintedRects = Vec<(Rect, f32)>;
 
-pub(super) fn painted_rects(root: &cranpose_render_common::graph::LayerNode) -> PaintedRects {
+pub(super) fn painted_rects(root: LayerRef<'_>) -> PaintedRects {
     fn collect(
-        layer: &cranpose_render_common::graph::LayerNode,
+        layer: LayerRef<'_>,
         (parent, parent_alpha): (cranpose_render_common::graph::ProjectiveTransform, f32),
         out: &mut PaintedRects,
     ) {
-        let transform = layer.transform_to_parent.then(parent);
-        let alpha = parent_alpha * layer.graphics_layer.get().map_or(1.0, |layer| layer.alpha);
-        collect_nodes(&layer.children, (transform, alpha), out);
-    }
-    fn collect_nodes(
-        nodes: &[cranpose_render_common::graph::RenderNode],
-        (transform, alpha): (cranpose_render_common::graph::ProjectiveTransform, f32),
-        out: &mut PaintedRects,
-    ) {
-        for child in nodes {
-            match child {
-                cranpose_render_common::graph::RenderNode::Layer(child) => {
+        let transform = layer.transform_to_parent().then(parent);
+        let alpha = parent_alpha * layer.opacity();
+        for item in layer.items() {
+            match item {
+                ItemRef::Layer(child) | ItemRef::Leaf(child) => {
                     collect(child, (transform, alpha), out);
                 }
-                cranpose_render_common::graph::RenderNode::Inline(inline) => {
-                    let transform = inline.transform_to_parent().then(transform);
-                    collect_nodes(&inline.content, (transform, alpha), out);
-                }
-                cranpose_render_common::graph::RenderNode::DrawRun(run) => {
+                ItemRef::Run(run) => {
                     out.extend(run.primitives().filter_map(|primitive| match primitive {
                         DrawPrimitive::Rect { rect, .. } => {
                             Some((transform.bounds_for_rect(rect), alpha))
@@ -1510,7 +1499,7 @@ pub(super) fn painted_rects(root: &cranpose_render_common::graph::LayerNode) -> 
                         _ => None,
                     }));
                 }
-                cranpose_render_common::graph::RenderNode::Primitive(_) => {}
+                ItemRef::Draw(_) | ItemRef::Text(_) => {}
             }
         }
     }
@@ -1530,13 +1519,11 @@ pub(super) fn retained_and_fresh_painted_rects(
     shell: &mut AppShell<ScopedUpdateCountingRenderer>,
 ) -> (PaintedRects, PaintedRects) {
     let retained = painted_rects(
-        &shell.surfaces[0]
+        shell.surfaces[0]
             .renderer
             .scene()
-            .graph
-            .as_ref()
-            .expect("the frame keeps a graph")
-            .root(),
+            .root_layer()
+            .expect("the frame keeps a graph"),
     );
     let root = shell.surfaces[0]
         .root_node(&shell.app)
@@ -1545,18 +1532,20 @@ pub(super) fn retained_and_fresh_painted_rects(
         .app
         .app_context
         .enter(|| {
-            cranpose_render_common::scene_builder::build_graph_from_applier(
+            cranpose_render_common::scene_builder::build_from_applier(
                 &shell.app.composition.applier_mut(),
                 root,
-                1.0,
             )
         })
         .expect("a fresh graph");
-    (retained, painted_rects(&fresh.root()))
+    (
+        retained,
+        painted_rects(fresh.root_layer().expect("a scene")),
+    )
 }
 
 pub(super) struct ScopedUpdateCountingRenderer {
-    scene: cranpose_render_common::graph_scene::Scene,
+    scene: graph_scene::Scene,
     rebuilds: Rc<Cell<usize>>,
     updates: Rc<Cell<usize>>,
     visual_updates: Rc<Cell<usize>>,
@@ -1579,7 +1568,7 @@ impl ScopedUpdateCountingRenderer {
         last_dirty_nodes: Rc<RefCell<Vec<NodeId>>>,
     ) -> Self {
         Self {
-            scene: cranpose_render_common::graph_scene::Scene::default(),
+            scene: graph_scene::Scene::default(),
             rebuilds,
             updates,
             visual_updates,
@@ -1609,25 +1598,21 @@ impl ScopedUpdateCountingRenderer {
             })
             .collect();
         *self.last_dirty_nodes.borrow_mut() = dirty_nodes;
-        let updated = self.scene.graph.as_mut().is_some_and(|graph| {
-            cranpose_render_common::scene_builder::update_graph_from_applier(
-                applier, graph, updates, 1.0,
-            )
-        });
-        if !updated {
+        if !updates.is_empty() && !self.scene.update_from_applier(applier, root, updates) {
             self.rebuilds.set(self.rebuilds.get() + 1);
-            self.scene.clear();
-            if let Some(graph) =
-                cranpose_render_common::scene_builder::build_graph_from_applier(applier, root, 1.0)
-            {
-                self.scene.replace_graph(graph);
-            }
         }
+    }
+
+    // Builds the scene again with `rebuild` and counts the rebuild.
+    fn rebuild(&mut self, rebuild: impl FnOnce(&mut graph_scene::Scene)) -> Result<(), ()> {
+        self.rebuilds.set(self.rebuilds.get() + 1);
+        rebuild(&mut self.scene);
+        Ok(())
     }
 }
 
 impl Renderer for ScopedUpdateCountingRenderer {
-    type Scene = cranpose_render_common::graph_scene::Scene;
+    type Scene = graph_scene::Scene;
     type Error = ();
 
     renderer_scene_accessors!();
@@ -1637,14 +1622,7 @@ impl Renderer for ScopedUpdateCountingRenderer {
         layout_tree: &LayoutTree,
         _viewport: Size,
     ) -> Result<(), Self::Error> {
-        self.rebuilds.set(self.rebuilds.get() + 1);
-        self.scene.clear();
-        let graph = cranpose_render_common::scene_builder::build_graph_from_layout_tree(
-            layout_tree.root(),
-            1.0,
-        );
-        self.scene.replace_graph(graph);
-        Ok(())
+        self.rebuild(|scene| scene.build_from_layout_tree(layout_tree.root()))
     }
 
     fn rebuild_scene_from_applier(
@@ -1653,14 +1631,7 @@ impl Renderer for ScopedUpdateCountingRenderer {
         root: NodeId,
         _viewport: Size,
     ) -> Result<(), Self::Error> {
-        self.rebuilds.set(self.rebuilds.get() + 1);
-        self.scene.clear();
-        if let Some(graph) =
-            cranpose_render_common::scene_builder::build_graph_from_applier(applier, root, 1.0)
-        {
-            self.scene.replace_graph(graph);
-        }
-        Ok(())
+        self.rebuild(|scene| scene.rebuild_from_applier(applier, root))
     }
 
     fn update_scene_from_applier(
@@ -1688,29 +1659,12 @@ impl Renderer for ScopedUpdateCountingRenderer {
 
 #[derive(Default)]
 pub(super) struct HitGraphRenderer {
-    scene: cranpose_render_common::graph_scene::Scene,
+    scene: graph_scene::Scene,
     pointer_held_frames: Rc<Cell<u32>>,
 }
 
-fn collect_graph_hits(
-    layer: &cranpose_render_common::graph::LayerNode,
-    parent_transform: cranpose_render_common::graph::ProjectiveTransform,
-    scene: &mut cranpose_render_common::graph_scene::Scene,
-    parent_hit_clip: Option<Rect>,
-) {
-    let store = cranpose_render_common::scene_store::SceneStore::from_layer(layer);
-    if let Some(root) = store.root_layer() {
-        cranpose_render_common::hit_graph::collect_hits_from_graph(
-            root,
-            parent_transform,
-            scene,
-            parent_hit_clip,
-        );
-    }
-}
-
 impl Renderer for HitGraphRenderer {
-    type Scene = cranpose_render_common::graph_scene::Scene;
+    type Scene = graph_scene::Scene;
     type Error = ();
 
     renderer_scene_accessors!();
@@ -1720,23 +1674,12 @@ impl Renderer for HitGraphRenderer {
             .set(self.pointer_held_frames.get() + 1);
     }
 
+    // The shell lowers its scenes from the applier.
     fn rebuild_scene(
         &mut self,
-        layout_tree: &LayoutTree,
+        _layout_tree: &LayoutTree,
         _viewport: Size,
     ) -> Result<(), Self::Error> {
-        self.scene.clear();
-        let graph = cranpose_render_common::scene_builder::build_graph_from_layout_tree(
-            layout_tree.root(),
-            1.0,
-        );
-        collect_graph_hits(
-            &graph.root(),
-            cranpose_render_common::graph::ProjectiveTransform::identity(),
-            &mut self.scene,
-            None,
-        );
-        self.scene.replace_graph(graph);
         Ok(())
     }
 
@@ -1746,18 +1689,7 @@ impl Renderer for HitGraphRenderer {
         root: NodeId,
         _viewport: Size,
     ) -> Result<(), Self::Error> {
-        self.scene.clear();
-        if let Some(graph) =
-            cranpose_render_common::scene_builder::build_graph_from_applier(applier, root, 1.0)
-        {
-            collect_graph_hits(
-                &graph.root(),
-                cranpose_render_common::graph::ProjectiveTransform::identity(),
-                &mut self.scene,
-                None,
-            );
-            self.scene.replace_graph(graph);
-        }
+        self.scene.rebuild_from_applier(applier, root);
         Ok(())
     }
 }
@@ -1806,15 +1738,13 @@ fn app_shell_backdrop_radius_content() {
     );
 }
 
-fn graph_backdrop_blur_radii(layer: &cranpose_render_common::graph::LayerNode) -> Vec<f32> {
-    fn collect(layer: &cranpose_render_common::graph::LayerNode, out: &mut Vec<f32>) {
-        if let Some(RenderEffect::Blur { radius_x, .. }) = &layer.graphics_layer.backdrop_effect {
+fn graph_backdrop_blur_radii(layer: LayerRef<'_>) -> Vec<f32> {
+    fn collect(layer: LayerRef<'_>, out: &mut Vec<f32>) {
+        if let Some(RenderEffect::Blur { radius_x, .. }) = layer.backdrop() {
             out.push(*radius_x);
         }
-        for child in &layer.children {
-            if let cranpose_render_common::graph::RenderNode::Layer(child_layer) = child {
-                collect(child_layer, out);
-            }
+        for child in layer.children() {
+            collect(child, out);
         }
     }
 
@@ -4282,49 +4212,23 @@ fn keyed_page_switch_app(tab: MutableState<i32>, width_state: MutableState<f32>)
     });
 }
 
-fn graph_layer_contains_rect_color(
-    layer: &cranpose_render_common::graph::LayerNode,
-    color: Color,
-) -> bool {
-    nodes_contain_rect_color(&layer.children, color)
-}
-
-fn nodes_contain_rect_color(
-    nodes: &[cranpose_render_common::graph::RenderNode],
-    color: Color,
-) -> bool {
-    for child in nodes {
-        match child {
-            cranpose_render_common::graph::RenderNode::Primitive(entry) => {
-                if let cranpose_render_common::graph::PrimitiveNode::Draw(draw) = &entry.node
-                    && let DrawPrimitive::Rect { brush, .. } = &draw.primitive
-                    && *brush == Brush::solid(color)
-                {
-                    return true;
-                }
-            }
-            cranpose_render_common::graph::RenderNode::DrawRun(run) => {
-                for primitive in run.primitives() {
-                    if let DrawPrimitive::Rect { brush, .. } = &primitive
-                        && *brush == Brush::solid(color)
-                    {
-                        return true;
-                    }
-                }
-            }
-            cranpose_render_common::graph::RenderNode::Layer(inner) => {
-                if graph_layer_contains_rect_color(inner, color) {
-                    return true;
-                }
-            }
-            cranpose_render_common::graph::RenderNode::Inline(inline) => {
-                if nodes_contain_rect_color(&inline.content, color) {
-                    return true;
-                }
-            }
+fn graph_layer_contains_rect_color(layer: LayerRef<'_>, color: Color) -> bool {
+    layer.items().any(|item| match item {
+        ItemRef::Draw(draw) => matches!(
+            &draw.primitive,
+            DrawPrimitive::Rect { brush, .. } if *brush == Brush::solid(color)
+        ),
+        ItemRef::Run(run) => run.primitives().any(|primitive| {
+            matches!(
+                &primitive,
+                DrawPrimitive::Rect { brush, .. } if *brush == Brush::solid(color)
+            )
+        }),
+        ItemRef::Layer(inner) | ItemRef::Leaf(inner) => {
+            graph_layer_contains_rect_color(inner, color)
         }
-    }
-    false
+        ItemRef::Text(_) => false,
+    })
 }
 
 #[test]
@@ -4360,13 +4264,11 @@ fn keyed_subtree_swap_with_pending_scoped_repass_evicts_stale_layers() {
     shell.update();
     assert!(
         graph_layer_contains_rect_color(
-            &shell
+            shell
                 .renderer()
                 .scene()
-                .graph
-                .as_ref()
-                .expect("initial graph")
-                .root(),
+                .root_layer()
+                .expect("initial graph"),
             KEYED_PAGE_A_COLOR,
         ),
         "page A must be in the graph after the initial frame"
@@ -4407,14 +4309,13 @@ fn keyed_subtree_swap_with_pending_scoped_repass_evicts_stale_layers() {
          parent joins the dirty set instead of forcing a full rebuild)"
     );
     assert_eq!(updates.get(), 1, "the swap frame must run a scoped update");
-    let graph = shell
+    let root = shell
         .renderer()
         .scene()
-        .graph
-        .as_ref()
+        .root_layer()
         .expect("graph after keyed swap");
     assert!(
-        !graph_layer_contains_rect_color(&graph.root(), KEYED_PAGE_A_COLOR),
+        !graph_layer_contains_rect_color(root, KEYED_PAGE_A_COLOR),
         "page A's layers must be evicted from the graph on the swap frame \
          (cross-tab ghost: stale layers kept compositing on the presented path)"
     );
@@ -5770,12 +5671,8 @@ fn a_horizontal_scroll_inside_a_lazy_item_still_moves_when_its_measurement_is_ca
     );
 }
 
-fn graph_scene_solid_rect_y(
-    scene: &cranpose_render_common::graph_scene::Scene,
-    color: Color,
-) -> Option<f32> {
-    let graph = scene.graph.as_ref()?;
-    solid_rect_y_in_layer(&graph.root(), 0.0, color)
+fn graph_scene_solid_rect_y(scene: &graph_scene::Scene, color: Color) -> Option<f32> {
+    solid_rect_y_in_layer(scene.root_layer()?, 0.0, color)
 }
 
 fn solid_brush_matches(brush: &Brush, color: Color) -> bool {
@@ -5784,66 +5681,32 @@ fn solid_brush_matches(brush: &Brush, color: Color) -> bool {
         && (c.2 - color.2).abs() < 0.01)
 }
 
-fn solid_rect_y_in_layer(
-    layer: &cranpose_render_common::graph::LayerNode,
-    offset_y: f32,
-    color: Color,
-) -> Option<f32> {
+fn solid_rect_y_in_layer(layer: LayerRef<'_>, offset_y: f32, color: Color) -> Option<f32> {
     let base = offset_y
         + layer
-            .transform_to_parent
+            .transform_to_parent()
             .map_point(Point { x: 0.0, y: 0.0 })
             .y
-        + layer.content_offset.y;
-    solid_rect_y_in(&layer.children, base, color)
+        + layer.content_offset().y;
+    solid_rect_y_in(layer, base, color)
 }
 
-fn solid_rect_y_in(
-    nodes: &[cranpose_render_common::graph::RenderNode],
-    base: f32,
-    color: Color,
-) -> Option<f32> {
-    for child in nodes {
-        match child {
-            cranpose_render_common::graph::RenderNode::Layer(child_layer) => {
-                if let Some(y) = solid_rect_y_in_layer(child_layer, base, color) {
-                    return Some(y);
-                }
-            }
-            cranpose_render_common::graph::RenderNode::Inline(inline) => {
-                if let Some(y) = solid_rect_y_in(&inline.content, base + inline.origin.y, color) {
-                    return Some(y);
-                }
-            }
-            cranpose_render_common::graph::RenderNode::Primitive(entry) => {
-                if let cranpose_render_common::graph::PrimitiveNode::Draw(draw) = &entry.node {
-                    match &draw.primitive {
-                        DrawPrimitive::Rect { rect, brush, .. }
-                        | DrawPrimitive::RoundRect { rect, brush, .. }
-                            if solid_brush_matches(brush, color) =>
-                        {
-                            return Some(base + rect.y);
-                        }
-                        _ => {}
-                    }
-                }
-            }
-            cranpose_render_common::graph::RenderNode::DrawRun(run) => {
-                for primitive in run.primitives() {
-                    match &primitive {
-                        DrawPrimitive::Rect { rect, brush, .. }
-                        | DrawPrimitive::RoundRect { rect, brush, .. }
-                            if solid_brush_matches(brush, color) =>
-                        {
-                            return Some(base + rect.y);
-                        }
-                        _ => {}
-                    }
-                }
-            }
+fn solid_rect_y_in(layer: LayerRef<'_>, base: f32, color: Color) -> Option<f32> {
+    let rect_y = |primitive: &DrawPrimitive| match primitive {
+        DrawPrimitive::Rect { rect, brush, .. } | DrawPrimitive::RoundRect { rect, brush, .. }
+            if solid_brush_matches(brush, color) =>
+        {
+            Some(base + rect.y)
         }
-    }
-    None
+        _ => None,
+    };
+    layer.items().find_map(|item| match item {
+        ItemRef::Layer(child) => solid_rect_y_in_layer(child, base, color),
+        ItemRef::Leaf(leaf) => solid_rect_y_in(leaf, base + leaf.origin().y, color),
+        ItemRef::Draw(draw) => rect_y(&draw.primitive),
+        ItemRef::Run(run) => run.primitives().find_map(|primitive| rect_y(&primitive)),
+        ItemRef::Text(_) => None,
+    })
 }
 
 #[test]
@@ -5978,56 +5841,27 @@ fn a_nested_lazy_list_moves_in_the_scene_when_the_row_above_grows() {
     );
 }
 
-fn graph_scene_text_y(
-    scene: &cranpose_render_common::graph_scene::Scene,
-    needle: &str,
-) -> Option<f32> {
-    fn walk(
-        layer: &cranpose_render_common::graph::LayerNode,
-        offset_y: f32,
-        needle: &str,
-    ) -> Option<f32> {
+fn graph_scene_text_y(scene: &graph_scene::Scene, needle: &str) -> Option<f32> {
+    fn walk(layer: LayerRef<'_>, offset_y: f32, needle: &str) -> Option<f32> {
         let base = offset_y
             + layer
-                .transform_to_parent
+                .transform_to_parent()
                 .map_point(Point { x: 0.0, y: 0.0 })
                 .y
-            + layer.content_offset.y;
-        walk_nodes(&layer.children, base, needle)
+            + layer.content_offset().y;
+        walk_items(layer, base, needle)
     }
 
-    fn walk_nodes(
-        nodes: &[cranpose_render_common::graph::RenderNode],
-        base: f32,
-        needle: &str,
-    ) -> Option<f32> {
-        for child in nodes {
-            match child {
-                cranpose_render_common::graph::RenderNode::Layer(child_layer) => {
-                    if let Some(y) = walk(child_layer, base, needle) {
-                        return Some(y);
-                    }
-                }
-                cranpose_render_common::graph::RenderNode::Inline(inline) => {
-                    if let Some(y) = walk_nodes(&inline.content, base + inline.origin.y, needle) {
-                        return Some(y);
-                    }
-                }
-                cranpose_render_common::graph::RenderNode::Primitive(entry) => {
-                    if let cranpose_render_common::graph::PrimitiveNode::Text(text) = &entry.node
-                        && text.text.text() == needle
-                    {
-                        return Some(base + text.rect.y);
-                    }
-                }
-                cranpose_render_common::graph::RenderNode::DrawRun(_) => {}
-            }
-        }
-        None
+    fn walk_items(layer: LayerRef<'_>, base: f32, needle: &str) -> Option<f32> {
+        layer.items().find_map(|item| match item {
+            ItemRef::Layer(child) => walk(child, base, needle),
+            ItemRef::Leaf(leaf) => walk_items(leaf, base + leaf.origin().y, needle),
+            ItemRef::Text(text) if text.text.text() == needle => Some(base + text.rect.y),
+            ItemRef::Text(_) | ItemRef::Draw(_) | ItemRef::Run(_) => None,
+        })
     }
 
-    let graph = scene.graph.as_ref()?;
-    walk(&graph.root(), 0.0, needle)
+    walk(scene.root_layer()?, 0.0, needle)
 }
 
 #[test]
@@ -6087,29 +5921,20 @@ fn sibling_moved_by_another_rows_growth_reaches_the_scoped_scene_update() {
     );
 }
 
-fn graph_scene_text_values(scene: &cranpose_render_common::graph_scene::Scene) -> Vec<String> {
-    fn collect(nodes: &[cranpose_render_common::graph::RenderNode], out: &mut Vec<String>) {
-        for child in nodes {
-            match child {
-                cranpose_render_common::graph::RenderNode::Layer(child_layer) => {
-                    collect(&child_layer.children, out);
-                }
-                cranpose_render_common::graph::RenderNode::Inline(inline) => {
-                    collect(&inline.content, out);
-                }
-                cranpose_render_common::graph::RenderNode::Primitive(entry) => {
-                    if let cranpose_render_common::graph::PrimitiveNode::Text(text) = &entry.node {
-                        out.push(text.text.text().to_owned());
-                    }
-                }
-                cranpose_render_common::graph::RenderNode::DrawRun(_) => {}
+fn graph_scene_text_values(scene: &graph_scene::Scene) -> Vec<String> {
+    fn collect(layer: LayerRef<'_>, out: &mut Vec<String>) {
+        for item in layer.items() {
+            match item {
+                ItemRef::Layer(child) | ItemRef::Leaf(child) => collect(child, out),
+                ItemRef::Text(text) => out.push(text.text.text().to_owned()),
+                ItemRef::Draw(_) | ItemRef::Run(_) => {}
             }
         }
     }
 
     let mut values = Vec::new();
-    if let Some(graph) = &scene.graph {
-        collect(&graph.root().children, &mut values);
+    if let Some(root) = scene.root_layer() {
+        collect(root, &mut values);
     }
     values
 }
@@ -8746,49 +8571,38 @@ fn app_shell_pressable_canvas_content() {
     );
 }
 
-fn graph_rect_colors(graph: &cranpose_render_common::graph::RenderGraph) -> Vec<Color> {
-    fn collect_node(node: &cranpose_render_common::graph::RenderNode, out: &mut Vec<Color>) {
-        match node {
-            cranpose_render_common::graph::RenderNode::Primitive(entry) => {
-                if let cranpose_render_common::graph::PrimitiveNode::Draw(draw) = &entry.node
-                    && let DrawPrimitive::Rect {
-                        brush: Brush::Solid(color),
-                        ..
-                    } = &draw.primitive
-                {
-                    out.push(*color);
-                }
-            }
-            cranpose_render_common::graph::RenderNode::DrawRun(run) => {
-                for primitive in run.primitives() {
+fn graph_rect_colors(scene: &graph_scene::Scene) -> Vec<Color> {
+    fn collect(layer: LayerRef<'_>, out: &mut Vec<Color>) {
+        for item in layer.items() {
+            match item {
+                ItemRef::Draw(draw) => {
                     if let DrawPrimitive::Rect {
                         brush: Brush::Solid(color),
                         ..
-                    } = &primitive
+                    } = &draw.primitive
                     {
                         out.push(*color);
                     }
                 }
-            }
-            cranpose_render_common::graph::RenderNode::Layer(layer) => {
-                collect_layer(layer, out);
-            }
-            cranpose_render_common::graph::RenderNode::Inline(inline) => {
-                for child in &inline.content {
-                    collect_node(child, out);
+                ItemRef::Run(run) => {
+                    for primitive in run.primitives() {
+                        if let DrawPrimitive::Rect {
+                            brush: Brush::Solid(color),
+                            ..
+                        } = &primitive
+                        {
+                            out.push(*color);
+                        }
+                    }
                 }
+                ItemRef::Layer(child) | ItemRef::Leaf(child) => collect(child, out),
+                ItemRef::Text(_) => {}
             }
-        }
-    }
-
-    fn collect_layer(layer: &cranpose_render_common::graph::LayerNode, out: &mut Vec<Color>) {
-        for child in &layer.children {
-            collect_node(child, out);
         }
     }
 
     let mut colors = Vec::new();
-    collect_layer(&graph.root(), &mut colors);
+    collect(scene.root_layer().expect("a scene"), &mut colors);
     colors
 }
 
@@ -8803,14 +8617,7 @@ fn canvas_pressed_state_draws_on_pointer_down_before_release() {
     );
 
     shell.update();
-    let colors = graph_rect_colors(
-        shell.surfaces[0]
-            .renderer
-            .scene
-            .graph
-            .as_ref()
-            .expect("initial graph"),
-    );
+    let colors = graph_rect_colors(shell.surfaces[0].renderer.scene());
     assert!(
         colors.contains(&PRESSABLE_CANVAS_NORMAL_COLOR),
         "canvas should draw the normal color before any press: {colors:?}"
@@ -8831,14 +8638,7 @@ fn canvas_pressed_state_draws_on_pointer_down_before_release() {
     );
     shell.update();
 
-    let colors = graph_rect_colors(
-        shell.surfaces[0]
-            .renderer
-            .scene
-            .graph
-            .as_ref()
-            .expect("pressed graph"),
-    );
+    let colors = graph_rect_colors(shell.surfaces[0].renderer.scene());
     assert!(
         colors.contains(&PRESSABLE_CANVAS_PRESSED_COLOR),
         "canvas must draw the pressed color after pointer down, before release: {colors:?}"
@@ -8850,14 +8650,7 @@ fn canvas_pressed_state_draws_on_pointer_down_before_release() {
     );
     shell.update();
 
-    let colors = graph_rect_colors(
-        shell.surfaces[0]
-            .renderer
-            .scene
-            .graph
-            .as_ref()
-            .expect("released graph"),
-    );
+    let colors = graph_rect_colors(shell.surfaces[0].renderer.scene());
     assert!(
         colors.contains(&PRESSABLE_CANVAS_NORMAL_COLOR),
         "canvas should draw the normal color again after release: {colors:?}"

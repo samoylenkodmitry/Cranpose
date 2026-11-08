@@ -6,10 +6,9 @@ use cranpose_core::NodeId;
 use cranpose_foundation::lazy::LazyItems;
 use cranpose_render_common::{
     HitTestTarget, RenderScene,
-    graph::{LayerNode, ProjectiveTransform, RenderNode},
     graph_scene::Scene,
-    hit_graph::collect_hits_from_graph,
-    scene_builder::build_graph_from_applier,
+    scene_builder::build_from_applier,
+    scene_store::{LayerRef, SceneStore},
 };
 use cranpose_ui::{
     Color, LayoutEngine, Modifier, PaddingValues, Size, Text,
@@ -37,12 +36,9 @@ fn colors() -> WearColors {
     }
 }
 
-fn ramp_layers(layer: &LayerNode, out: &mut Vec<(f32, f32, f32)>) {
-    for child in &layer.children {
-        let RenderNode::Layer(child) = child else {
-            continue;
-        };
-        let graphics_layer = &child.graphics_layer;
+fn ramp_layers(layer: LayerRef<'_>, out: &mut Vec<(f32, f32, f32)>) {
+    for child in layer.children() {
+        let graphics_layer = child.graphics_layer();
         if graphics_layer.alpha < 1.0 || graphics_layer.scale != 1.0 {
             out.push((
                 graphics_layer.alpha,
@@ -54,7 +50,7 @@ fn ramp_layers(layer: &LayerNode, out: &mut Vec<(f32, f32, f32)>) {
     }
 }
 
-fn scaling_list_scene() -> LayerNode {
+fn scaling_list_scene() -> SceneStore {
     let mut composition = cranpose_ui::run_test_composition(|| {
         let state = rememberWearScalingListState(CentreAnchor::default());
         WearScalingLazyColumn(
@@ -90,16 +86,16 @@ fn scaling_list_scene() -> LayerNode {
             },
         )
         .expect("layout");
-    let graph = build_graph_from_applier(&applier, root, 1.0).expect("render graph");
+    let graph = build_from_applier(&applier, root).expect("render graph");
     applier.clear_runtime_handle();
-    graph.root()
+    graph
 }
 
 #[test]
 fn every_row_of_a_scaling_list_reaches_the_scene_as_text() {
-    let root = scaling_list_scene();
+    let store = scaling_list_scene();
     let mut painted = Vec::new();
-    painted_text(&root, &mut painted);
+    painted_text(store.root_layer().expect("a scene"), &mut painted);
     assert_eq!(
         painted,
         ROWS.iter().map(ToString::to_string).collect::<Vec<_>>(),
@@ -109,9 +105,9 @@ fn every_row_of_a_scaling_list_reaches_the_scene_as_text() {
 
 #[test]
 fn a_scaling_list_hands_the_scene_the_ramp_it_measured() {
-    let root = scaling_list_scene();
+    let store = scaling_list_scene();
     let mut ramp = Vec::new();
-    ramp_layers(&root, &mut ramp);
+    ramp_layers(store.root_layer().expect("a scene"), &mut ramp);
     assert!(
         !ramp.is_empty(),
         "a six-row list on a 454pt watch has rows off the centre line for the ramp to take"
@@ -176,23 +172,15 @@ fn tappable_list_scene(count: usize) -> (Scene, Vec<NodeId>, Rc<RefCell<Vec<usiz
             },
         )
         .expect("layout");
-    let graph = build_graph_from_applier(&applier, root, 1.0).expect("render graph");
-    applier.clear_runtime_handle();
-
     let mut scene = Scene::default();
-    collect_hits_from_graph(
-        graph.store().root_layer().expect("a root record"),
-        ProjectiveTransform::identity(),
-        &mut scene,
-        None,
-    );
+    scene.rebuild_from_applier(&applier, root);
+    applier.clear_runtime_handle();
     let ids = scene
         .hit_targets()
         .iter()
         .filter(|hit| (hit.local_bounds.height - TAP_ROW).abs() < f32::EPSILON)
         .map(|hit| hit.node_id)
         .collect();
-    scene.replace_graph(graph);
     (scene, ids, tapped)
 }
 

@@ -1,6 +1,7 @@
 use cranpose_render_common::{
-    graph::{LayerNode, PrimitiveNode, RenderNode, TextPrimitiveNode},
-    scene_builder::build_graph_from_applier,
+    graph::TextPrimitiveNode,
+    scene_builder::build_from_applier,
+    scene_store::{ItemRef, LayerRef},
 };
 use cranpose_testing::ComposeTestRule;
 use cranpose_ui::{LayoutBox, LayoutEngine, Size};
@@ -24,34 +25,14 @@ fn find_box<'a>(node: &'a LayoutBox, needle: &str) -> Option<&'a LayoutBox> {
         .find_map(|child| find_box(child, needle))
 }
 
-fn find_painted<'a>(layer: &'a LayerNode, needle: &str) -> Option<&'a TextPrimitiveNode> {
-    find_painted_in(&layer.children, needle)
-}
-
-fn find_painted_in<'a>(nodes: &'a [RenderNode], needle: &str) -> Option<&'a TextPrimitiveNode> {
-    for child in nodes {
-        match child {
-            RenderNode::Primitive(primitive) => {
-                if let PrimitiveNode::Text(text) = &primitive.node {
-                    if squashed(text.text.text()).starts_with(&squashed(needle)) {
-                        return Some(text);
-                    }
-                }
-            }
-            RenderNode::Layer(child_layer) => {
-                if let Some(found) = find_painted(child_layer, needle) {
-                    return Some(found);
-                }
-            }
-            RenderNode::Inline(inline) => {
-                if let Some(found) = find_painted_in(&inline.content, needle) {
-                    return Some(found);
-                }
-            }
-            RenderNode::DrawRun(_) => {}
+fn find_painted<'a>(layer: LayerRef<'a>, needle: &str) -> Option<&'a TextPrimitiveNode> {
+    layer.items().find_map(|item| match item {
+        ItemRef::Text(text) if squashed(text.text.text()).starts_with(&squashed(needle)) => {
+            Some(text)
         }
-    }
-    None
+        ItemRef::Layer(child) | ItemRef::Leaf(child) => find_painted(child, needle),
+        ItemRef::Text(_) | ItemRef::Draw(_) | ItemRef::Run(_) => None,
+    })
 }
 
 #[test]
@@ -86,12 +67,12 @@ fn repro_screen_paragraphs_paint_the_height_they_measured() {
                 .height
         })
         .collect();
-    let graph = build_graph_from_applier(&applier, root, 1.0).expect("render graph");
+    let graph = build_from_applier(&applier, root).expect("render graph");
     applier.clear_runtime_handle();
-    let painted_root = graph.root();
+    let painted_root = graph.root_layer().expect("a scene");
 
     for (needle, measured_height) in PARAGRAPHS.iter().zip(measured) {
-        let painted = find_painted(&painted_root, needle)
+        let painted = find_painted(painted_root, needle)
             .unwrap_or_else(|| panic!("painted paragraph for {needle:?}"));
         assert!(
             measured_height > 40.0,

@@ -7,7 +7,7 @@ use cranpose_core::NodeId;
 use cranpose_render_common::{
     Renderer,
     graph::{
-        DrawCommandId, DrawRunNode, PrimitivePhase, ProjectiveTransform, RenderGraph, RenderNode,
+        DrawCommandId, DrawRunNode, LayerNode, PrimitivePhase, ProjectiveTransform, RenderNode,
     },
 };
 use cranpose_ui_graphics::{
@@ -54,7 +54,7 @@ fn layer(alpha: f32, children: Vec<RenderNode>) -> RenderNode {
     )))
 }
 
-fn frame_of(children: Vec<RenderNode>) -> RenderGraph {
+fn frame_of(children: Vec<RenderNode>) -> LayerNode {
     let mut nodes = vec![fill(
         rect(0.0, 0.0, FRAME as f32, FRAME as f32),
         Color::from_rgb_u8(20, 24, 40),
@@ -62,12 +62,12 @@ fn frame_of(children: Vec<RenderNode>) -> RenderGraph {
         None,
     )];
     nodes.extend(children);
-    RenderGraph::new(&shared_test_support::layer_node(
+    shared_test_support::layer_node(
         rect(0.0, 0.0, FRAME as f32, FRAME as f32),
         ProjectiveTransform::identity(),
         GraphicsLayer::default(),
         nodes,
-    ))
+    )
 }
 
 /// Levels nested like replies in a thread, each inset from the last, with
@@ -125,7 +125,7 @@ struct Capture {
 }
 
 /// Captures `graph` with the pre-pass and then without it.
-fn capture_both_ways(graph: impl Fn() -> RenderGraph) -> Option<(Capture, Capture)> {
+fn capture_both_ways(graph: impl Fn() -> LayerNode) -> Option<(Capture, Capture)> {
     let mut renderer = match support::headless_renderer() {
         Ok(renderer) => renderer,
         Err(err) => {
@@ -134,7 +134,7 @@ fn capture_both_ways(graph: impl Fn() -> RenderGraph) -> Option<(Capture, Captur
         }
     };
     let capture = |renderer: &mut support::LockedRenderer| {
-        renderer.scene_mut().graph = Some(graph());
+        renderer.scene_mut().describe(&graph());
         let frame = renderer
             .capture_frame(FRAME, FRAME)
             .expect("capture should succeed");
@@ -180,7 +180,7 @@ fn nested_opaque_fills_draw_the_same_pixels_with_their_interiors_laid_down_first
 
 /// What `renderer` draws of the nested levels, and its statistics.
 fn capture_levels(renderer: &mut support::LockedRenderer) -> Capture {
-    renderer.scene_mut().graph = Some(frame_of(nested_levels()));
+    renderer.scene_mut().describe(&frame_of(nested_levels()));
     let frame = renderer
         .capture_frame(FRAME, FRAME)
         .expect("capture should succeed");
@@ -351,7 +351,7 @@ fn a_fill_under_layer_alpha_hides_nothing_beneath_it() {
 /// A half-transparent layer turned by `degrees` (a projective composite
 /// when turned, a blit when not) between two opaque fills, translucent
 /// within, so only the pass compositing it can take a depth buffer.
-fn layer_between_opaque_fills(degrees: f32) -> RenderGraph {
+fn layer_between_opaque_fills(degrees: f32) -> LayerNode {
     let frame = rect(0.0, 0.0, FRAME as f32, FRAME as f32);
     frame_of(vec![
         fill(
@@ -438,12 +438,12 @@ fn a_pass_of_small_shapes_alone_lays_no_interiors_down() {
                 )
             })
             .collect();
-        RenderGraph::new(&shared_test_support::layer_node(
+        shared_test_support::layer_node(
             rect(0.0, 0.0, FRAME as f32, FRAME as f32),
             ProjectiveTransform::identity(),
             GraphicsLayer::default(),
             dots,
-        ))
+        )
     };
     let Some((with, without)) = capture_both_ways(graph) else {
         return;
@@ -553,12 +553,12 @@ fn turned_levels(level: usize) -> RenderNode {
 #[test]
 fn turned_opaque_fills_lay_their_interiors_down_and_draw_the_same_pixels() {
     let alone = || {
-        RenderGraph::new(&shared_test_support::layer_node(
+        shared_test_support::layer_node(
             rect(0.0, 0.0, FRAME as f32, FRAME as f32),
             ProjectiveTransform::identity(),
             GraphicsLayer::default(),
             vec![turned_levels(0)],
-        ))
+        )
     };
     let Some((alone, _)) = capture_both_ways(alone) else {
         return;
@@ -581,7 +581,7 @@ fn turned_opaque_fills_lay_their_interiors_down_and_draw_the_same_pixels() {
 /// Cells in rows, every other one turned a little in place, or only the
 /// flat ones when `turned` is false: enough changes between flat and turned
 /// for the pass to draw both with the pipeline telling them apart.
-fn alternating_cells(turned: bool) -> RenderGraph {
+fn alternating_cells(turned: bool) -> LayerNode {
     let palette = [
         Color::from_rgb_u8(230, 80, 60),
         Color::from_rgb_u8(60, 170, 90),
@@ -626,7 +626,7 @@ fn turned_cells_among_flat_ones_add_no_draws_and_leave_the_flat_pixels_alone() {
         }
     };
     let mut capture = |turned: bool| {
-        renderer.scene_mut().graph = Some(alternating_cells(turned));
+        renderer.scene_mut().describe(&alternating_cells(turned));
         let frame = renderer
             .capture_frame(FRAME, FRAME)
             .expect("capture should succeed");
@@ -655,13 +655,13 @@ fn turned_cells_among_flat_ones_add_no_draws_and_leave_the_flat_pixels_alone() {
     }
 }
 
-fn cleared_page(draw: impl Fn(&mut DrawScopeDefault, f32)) -> RenderGraph {
+fn cleared_page(draw: impl Fn(&mut DrawScopeDefault, f32)) -> LayerNode {
     let size = FRAME as f32;
     let mut recording = cranpose_ui_graphics::CommandRecording::default();
     let mut scope = DrawScopeDefault::new(Size::new(size, size), &mut recording);
     scope.draw_rect(Brush::solid(Color::from_rgb_u8(20, 24, 40)));
     draw(&mut scope, size);
-    RenderGraph::new(&shared_test_support::layer_node(
+    shared_test_support::layer_node(
         rect(0.0, 0.0, size, size),
         ProjectiveTransform::identity(),
         GraphicsLayer::default(),
@@ -674,10 +674,10 @@ fn cleared_page(draw: impl Fn(&mut DrawScopeDefault, f32)) -> RenderGraph {
             }),
             scope.into_primitives(),
         ))],
-    ))
+    )
 }
 
-fn assert_cleared_without_depth(graph: impl Fn() -> RenderGraph) {
+fn assert_cleared_without_depth(graph: impl Fn() -> LayerNode) {
     let Some((with, without)) = capture_both_ways(graph) else {
         return;
     };

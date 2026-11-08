@@ -1,7 +1,7 @@
 // The frame a renderer collects to tell whether a surface shows its scene,
 // and keeps for the next draw.
 
-use cranpose_render_common::{Renderer, graph::RenderGraph};
+use cranpose_render_common::{Renderer, graph::LayerNode};
 use cranpose_ui_graphics::{Color, Rect};
 
 use crate::support;
@@ -9,7 +9,7 @@ use crate::support;
 const WIDTH: u32 = 64;
 const HEIGHT: u32 = 48;
 
-fn page(color: Color) -> RenderGraph {
+fn page(color: Color) -> LayerNode {
     support::page_graph(
         WIDTH,
         HEIGHT,
@@ -58,18 +58,18 @@ fn a_replaced_scene_draws_itself_and_not_the_frame_kept_for_the_one_before() {
         support::read_texture(&device, &queue, &texture)
     };
 
-    renderer.scene_mut().graph = Some(page(Color::RED));
+    renderer.scene_mut().describe(&page(Color::RED));
     let red = drawn(&mut renderer);
-    renderer.scene_mut().graph = Some(page(Color::BLUE));
+    renderer.scene_mut().describe(&page(Color::BLUE));
     let blue = drawn(&mut renderer);
     assert_ne!(red, blue, "the two pages draw apart");
 
-    renderer.scene_mut().graph = Some(page(Color::RED));
+    renderer.scene_mut().describe(&page(Color::RED));
     assert!(
         !renderer.shows_scene(WIDTH, HEIGHT),
         "the surface shows the blue page"
     );
-    renderer.scene_mut().graph = Some(page(Color::BLUE));
+    renderer.scene_mut().describe(&page(Color::BLUE));
     assert_eq!(
         drawn(&mut renderer),
         blue,

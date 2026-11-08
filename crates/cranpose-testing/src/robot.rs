@@ -25,8 +25,7 @@
 use cranpose_app_shell::AppShell;
 use cranpose_core::{MemoryApplier, NodeId, location_key};
 use cranpose_render_common::{
-    RenderScene, Renderer, SceneUpdates, graph::RenderGraph, graph_scene::Scene,
-    text_fonts::TextFonts,
+    RenderScene, Renderer, SceneUpdates, graph_scene::Scene, text_fonts::TextFonts,
 };
 use cranpose_ui::LayoutTree;
 use cranpose_ui_graphics::{Point, Rect, Size};
@@ -487,18 +486,6 @@ impl TestRenderer {
             fonts: Some(fonts),
         }
     }
-
-    fn install_graph(&mut self, graph: RenderGraph) {
-        if let Some(root) = graph.store().root_layer() {
-            cranpose_render_common::hit_graph::collect_hits_from_graph(
-                root,
-                cranpose_render_common::graph::ProjectiveTransform::identity(),
-                &mut self.scene,
-                None,
-            );
-        }
-        self.scene.replace_graph(graph);
-    }
 }
 
 impl Renderer for TestRenderer {
@@ -524,13 +511,7 @@ impl Renderer for TestRenderer {
         layout_tree: &LayoutTree,
         _viewport: Size,
     ) -> Result<(), Self::Error> {
-        self.scene.clear();
-        self.install_graph(
-            cranpose_render_common::scene_builder::build_graph_from_layout_tree(
-                layout_tree.root(),
-                1.0,
-            ),
-        );
+        self.scene.build_from_layout_tree(layout_tree.root());
         Ok(())
     }
 

@@ -1,4 +1,4 @@
-use cranpose_render_common::graph::RenderGraph;
+use cranpose_render_common::graph::LayerNode;
 use cranpose_ui_graphics::{DrawScopeDefault, Size};
 use support::{LockedRenderer, SIZE, record_mixed_scene};
 
@@ -6,7 +6,7 @@ use crate::support;
 
 const TOGGLE: &str = "CRANPOSE_ABLATE";
 
-fn graph_of(record: fn(&mut DrawScopeDefault)) -> RenderGraph {
+fn graph_of(record: fn(&mut DrawScopeDefault)) -> LayerNode {
     let mut recording = cranpose_ui_graphics::CommandRecording::default();
     let mut scope = DrawScopeDefault::new(Size::new(SIZE as f32, SIZE as f32), &mut recording);
     record(&mut scope);
@@ -15,7 +15,7 @@ fn graph_of(record: fn(&mut DrawScopeDefault)) -> RenderGraph {
 
 fn capture_under(
     renderer: &mut LockedRenderer,
-    graph: &RenderGraph,
+    graph: &LayerNode,
     switch: Option<&str>,
 ) -> Vec<u8> {
     cranpose_core::debug_toggles::set_debug_toggle(TOGGLE, switch);

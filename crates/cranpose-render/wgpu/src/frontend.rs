@@ -2,7 +2,8 @@ use std::rc::Weak;
 
 use cranpose_render_common::{
     dev_overlay::DevOverlayKey,
-    graph::{LayerNode, RenderGraph, RenderNode},
+    graph::{LayerNode, RenderNode},
+    scene_store::SceneStore,
     text_fonts::TextFonts,
 };
 use web_time::Instant;
@@ -23,7 +24,8 @@ pub(crate) struct RendererFrontend {
     pub(crate) app_context: Option<Weak<cranpose_ui::AppContext>>,
     pub(crate) root_scale: f32,
     pub(crate) dev_overlay_cache: Option<DevOverlayKey>,
-    pub(crate) dev_overlay_graph: Option<RenderGraph>,
+    // The overlays' records; empty while no overlay shows.
+    pub(crate) dev_overlay: SceneStore,
     pub(crate) fps_overlay: Option<LayerNode>,
     pub(crate) inspector_overlay: Option<LayerNode>,
     pub(crate) root_scene_capacity: SceneCapacityHint,
@@ -47,7 +49,10 @@ impl RendererFrontend {
             self.recycle(packet);
         }
         let Some(inspector) = self.inspector_overlay.take() else {
-            self.dev_overlay_graph = self.fps_overlay.as_ref().map(RenderGraph::new);
+            match &self.fps_overlay {
+                Some(fps) => self.dev_overlay.describe(fps),
+                None => self.dev_overlay.clear(),
+            }
             return;
         };
         // The inspector draws over the frame counter, as the last child of
@@ -55,7 +60,7 @@ impl RendererFrontend {
         let had_fps = self.fps_overlay.is_some();
         let mut root = self.fps_overlay.take().unwrap_or_default();
         root.children.push(RenderNode::Layer(Box::new(inspector)));
-        self.dev_overlay_graph = Some(RenderGraph::new(&root));
+        self.dev_overlay.describe(&root);
         if let Some(RenderNode::Layer(inspector)) = root.children.pop() {
             self.inspector_overlay = Some(*inspector);
         }
@@ -74,7 +79,7 @@ impl RendererFrontend {
             app_context: None,
             root_scale: 1.0,
             dev_overlay_cache: None,
-            dev_overlay_graph: None,
+            dev_overlay: SceneStore::new(),
             fps_overlay: None,
             inspector_overlay: None,
             root_scene_capacity: SceneCapacityHint::default(),
@@ -113,7 +118,7 @@ impl RendererFrontend {
         renderer_epoch: u64,
         surface_epoch: u64,
     ) -> Option<FramePacket> {
-        self.scene.graph.as_ref()?;
+        self.scene.root_layer()?;
         let app_context = self.app_context.as_ref().and_then(Weak::upgrade);
         match app_context {
             Some(app_context) => app_context.enter(|| {
@@ -144,12 +149,13 @@ impl RendererFrontend {
         surface_epoch: u64,
     ) -> Option<FramePacket> {
         let build_start = Instant::now();
-        let graph = self.scene.graph.as_ref()?;
+        let store = self.scene.store();
+        let root_layer = store.root_layer()?;
         self.returned_scenes = self.returned_scenes.saturating_sub(1);
         let recycler = &mut self.scene_recyclers[self.returned_scenes];
         let root = collect_root(
-            graph.store().root_layer()?,
-            graph.store().update(),
+            root_layer,
+            store.update(),
             &mut self.layer_motion,
             self.root_scene_capacity,
             root_scale,
@@ -158,9 +164,8 @@ impl RendererFrontend {
         self.root_scene_capacity = root.scene.capacity_hint();
         let after_root_collect = Instant::now();
         let overlay = self
-            .dev_overlay_graph
-            .as_ref()
-            .and_then(|overlay| overlay.store().root_layer())
+            .dev_overlay
+            .root_layer()
             .map(|overlay| collect_overlay(overlay, root_scale, recycler));
         recycler.clear();
         self.frame_sequence = self.frame_sequence.wrapping_add(1);
@@ -175,7 +180,7 @@ impl RendererFrontend {
             clear: frame_clear_color(self.transparent_background),
             held_still: std::mem::take(&mut self.held_still),
             pointer_held: std::mem::take(&mut self.pointer_held),
-            scene_update: graph.store().version(),
+            scene_update: store.version(),
         };
         let after_build = Instant::now();
         if let Some(total_ms) = should_log_wgpu_render_stage(build_start, after_build) {
@@ -197,7 +202,8 @@ impl RendererFrontend {
         renderer_epoch: u64,
         surface_epoch: u64,
     ) -> Option<FramePacket> {
-        let version = self.scene.graph.as_ref()?.store().version();
+        self.scene.root_layer()?;
+        let version = self.scene.store().version();
         if let Some(packet) = self.kept_packet.take() {
             if packet.scene_update == version
                 && packet.viewport == (width, height)

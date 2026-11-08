@@ -3,7 +3,7 @@ use cranpose_render_common::{
     geometry::blur_reach_px,
     graph::{
         DrawPrimitiveNode, DrawRunNode, LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase,
-        ProjectiveTransform, RenderGraph, RenderNode,
+        ProjectiveTransform, RenderNode,
     },
 };
 use cranpose_render_wgpu::CapturedFrame;
@@ -41,7 +41,7 @@ fn caster() -> DrawPrimitive {
     }
 }
 
-fn disjoint_inner_shadow_graph(recorded: bool, include_shadow: bool) -> RenderGraph {
+fn disjoint_inner_shadow_graph(recorded: bool, include_shadow: bool) -> LayerNode {
     let mut content = Vec::new();
     if include_shadow {
         let shape = |bounds, color| {
@@ -97,7 +97,7 @@ fn disjoint_inner_shadow_graph(recorded: bool, include_shadow: bool) -> RenderGr
     )
 }
 
-fn clipped_offscreen_shadow_graph(recorded: bool) -> RenderGraph {
+fn clipped_offscreen_shadow_graph(recorded: bool) -> LayerNode {
     let shadow = DrawPrimitive::Shadow(ShadowPrimitive::Drop {
         shape: Box::new(DrawPrimitive::Rect {
             rect: rect(0.0, 0.0, 20.0, 20.0),
@@ -316,7 +316,7 @@ fn changing_shadow_casters_and_cutouts_preserves_the_painted_region() {
 
 /// A page with one black drop shadow of `CASTER` and no caster drawn over
 /// it, so the whole blurred shape shows; `cutout` clears the shape itself.
-fn page(radius: Option<f32>, cutout: bool) -> RenderGraph {
+fn page(radius: Option<f32>, cutout: bool) -> LayerNode {
     let mut children = vec![solid_rect(
         rect(0.0, 0.0, FRAME as f32, FRAME as f32),
         BACKGROUND,
@@ -488,7 +488,9 @@ fn a_shadow_surface_ends_where_its_kernel_does() {
         eprintln!("skipping (headless WGPU init failed)");
         return;
     };
-    renderer.scene_mut().graph = Some(page(Some(WIDE_RADIUS), false));
+    renderer
+        .scene_mut()
+        .describe(&page(Some(WIDE_RADIUS), false));
     let stats = renderer
         .render_current_scene_to_texture(FRAME, FRAME)
         .expect("render should succeed");

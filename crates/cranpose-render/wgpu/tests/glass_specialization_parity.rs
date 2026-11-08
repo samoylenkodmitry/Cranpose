@@ -1,10 +1,10 @@
 use cranpose_app_shell::AppShell;
-use cranpose_core::location_key;
+use cranpose_core::{RecordId, location_key};
 use cranpose_liquid::prelude::*;
 use cranpose_macros::composable;
 use cranpose_render_common::{
     Renderer,
-    graph::{LayerNode, RenderGraph, RenderNode},
+    scene_store::{LayerRef, SceneStore},
 };
 use cranpose_render_wgpu::{CapturedFrame, RenderStatsSnapshot, WgpuRenderer};
 use cranpose_ui::{
@@ -461,15 +461,10 @@ fn a_floating_button_draws_the_same_with_its_general_and_its_own_pipelines() {
         &general.pixels,
         &settled.pixels,
     );
-    let graph = shell
-        .renderer()
-        .scene_mut()
-        .graph
-        .as_mut()
-        .expect("button graph");
-    let mut root = graph.root();
-    assert!(expand_content_masks(&mut root) > 0);
-    *graph = RenderGraph::new(&root);
+    shell.renderer().scene_mut().edit_store(|store| {
+        let root = store.root().expect("button scene");
+        assert!(expand_content_masks(store, root) > 0);
+    });
     let (expanded, _) = capture_card_frame(&mut shell).expect("expanded mask capture");
     support::assert_same_bytes(
         "the content mask ends at its silhouette even when the material casts a wide shadow",
@@ -479,20 +474,24 @@ fn a_floating_button_draws_the_same_with_its_general_and_its_own_pipelines() {
     );
 }
 
-fn expand_content_masks(layer: &mut LayerNode) -> usize {
+fn expand_content_masks(store: &mut SceneStore, record: RecordId) -> usize {
     let mut expanded = 0;
-    if let Some(RenderEffect::Shader { shader }) = &mut layer.graphics_layer.render_effect
+    let mut layer = store.graphics_layer(record).cloned();
+    if let Some(RenderEffect::Shader { shader }) = layer
+        .as_mut()
+        .and_then(|layer| layer.render_effect.as_mut())
         && shader.uniforms().get(112).is_some_and(|mask| *mask > 0.5)
     {
         let shader = std::sync::Arc::make_mut(shader);
         shader.set_output_support(None);
         shader.set_output_padding(64.0);
+        store.set_graphics_layer(record, layer);
+        store.note_property_change(record);
         expanded += 1;
     }
-    for child in &mut layer.children {
-        if let RenderNode::Layer(child) = child {
-            expanded += expand_content_masks(child);
-        }
+    let children: Vec<RecordId> = store.layer(record).children().map(LayerRef::id).collect();
+    for child in children {
+        expanded += expand_content_masks(store, child);
     }
     expanded
 }

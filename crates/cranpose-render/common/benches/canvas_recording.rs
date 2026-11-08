@@ -3,11 +3,9 @@
 use std::{alloc::System, cell::Cell, hint::black_box, rc::Rc, sync::Arc, time::Instant};
 
 use cranpose_render_common::{
-    graph::{DrawRunNode, LayerNode, ProjectiveTransform, RenderGraph, RenderNode},
-    scene_builder::{
-        build_graph_from_applier, clear_command_recordings_for_tests, rebuild_graph_from_applier,
-        update_graph_from_applier_report,
-    },
+    graph::{DrawRunNode, ProjectiveTransform},
+    graph_scene::Scene,
+    scene_builder::clear_command_recordings_for_tests,
     scene_store::{ItemRef, LayerRef},
 };
 use cranpose_ui::{Box, BoxSpec, Canvas, LayoutEngine, Modifier, Size, run_test_composition};
@@ -24,16 +22,11 @@ static GLOBAL: &StatsAlloc<System> = &INSTRUMENTED_SYSTEM;
 const WARMUP: usize = 32;
 const FRAMES: usize = 240;
 
-fn canvas_run(layer: &LayerNode) -> Option<&DrawRunNode> {
-    nodes_canvas_run(&layer.children)
-}
-
-fn nodes_canvas_run(nodes: &[RenderNode]) -> Option<&DrawRunNode> {
-    nodes.iter().find_map(|child| match child {
-        RenderNode::Layer(layer) => canvas_run(layer),
-        RenderNode::Inline(inline) => nodes_canvas_run(&inline.content),
-        RenderNode::DrawRun(run) => Some(run),
-        RenderNode::Primitive(_) => None,
+fn canvas_run(layer: LayerRef<'_>) -> Option<&DrawRunNode> {
+    layer.items().find_map(|item| match item {
+        ItemRef::Layer(child) | ItemRef::Leaf(child) => canvas_run(child),
+        ItemRef::Run(run) => Some(run),
+        ItemRef::Draw(_) | ItemRef::Text(_) => None,
     })
 }
 
@@ -85,19 +78,17 @@ fn run_case(arcs: usize, readers: usize) {
     applier
         .compute_layout(root, Size::new(256.0, 256.0))
         .expect("Canvas layout");
-    let mut graph = build_graph_from_applier(&applier, root, 1.0).expect("Canvas graph");
-    let initial_fingerprint = canvas_run(&graph.root())
+    let mut graph = Scene::new();
+    graph.rebuild_from_applier(&applier, root);
+    let initial_fingerprint = canvas_run(graph.root_layer().expect("a scene"))
         .expect("initial Canvas")
         .recording
         .fingerprint();
     let mut retained: [Option<Arc<ShapeRecorder>>; 4] = std::array::from_fn(|_| None);
-    let mut frame = |tick: usize, graph: &mut RenderGraph| {
+    let mut frame = |tick: usize, graph: &mut Scene| {
         angle.set(tick as f32 * 0.005);
-        let previous = std::mem::replace(graph, RenderGraph::new(&LayerNode::default()));
-        *graph =
-            rebuild_graph_from_applier(&applier, root, 1.0, Some(previous)).expect("redraw Canvas");
-        let graph_root = graph.root();
-        let run = canvas_run(&graph_root).expect("recorded Canvas");
+        graph.rebuild_from_applier(&applier, root);
+        let run = canvas_run(graph.root_layer().expect("a scene")).expect("recorded Canvas");
         assert_eq!(run.recording.len(), arcs);
         if readers != 0 {
             retained[tick % readers] = Some(Arc::clone(run.recording.shape_recorder()));
@@ -114,7 +105,7 @@ fn run_case(arcs: usize, readers: usize) {
     }
     let elapsed = started.elapsed().as_nanos();
     let stats = region.change();
-    let fingerprint = canvas_run(&graph.root())
+    let fingerprint = canvas_run(graph.root_layer().expect("a scene"))
         .expect("last Canvas")
         .recording
         .fingerprint();
@@ -281,9 +272,9 @@ fn run_inset_recording_benchmark(arcs: usize) {
 }
 
 // The runs `graph` records for the node `node_id`, in draw order.
-fn runs_for_node(graph: &RenderGraph, node_id: cranpose_core::NodeId) -> Vec<&DrawRunNode> {
+fn runs_for_node(graph: &Scene, node_id: cranpose_core::NodeId) -> Vec<&DrawRunNode> {
     let mut runs = Vec::new();
-    if let Some(root) = graph.store().root_layer() {
+    if let Some(root) = graph.root_layer() {
         collect_runs_for_node(root, node_id, &mut runs);
     }
     runs
@@ -358,7 +349,8 @@ fn run_with_content_case(arcs: usize) {
     applier
         .compute_layout(root, Size::new(256.0, 256.0))
         .expect("with-content layout");
-    let mut graph = build_graph_from_applier(&applier, root, 1.0).expect("with-content graph");
+    let mut graph = Scene::new();
+    graph.rebuild_from_applier(&applier, root);
     let initial_runs = runs_for_node(&graph, parent);
     assert_eq!(
         initial_runs.len(),
@@ -386,16 +378,14 @@ fn run_with_content_case(arcs: usize) {
         }) if color == Color::RED
     ));
 
-    let update = |tick: usize, graph: &mut RenderGraph| {
+    let update = |tick: usize, graph: &mut Scene| {
         angle.set(tick as f32 * 0.005);
         assert!(
-            update_graph_from_applier_report(
+            graph.update_from_applier(
                 &applier,
-                graph,
-                &[(parent, cranpose_render_common::NodeUpdate::Content)],
-                1.0,
-            )
-            .applied(),
+                root,
+                &[(parent, cranpose_render_common::NodeUpdate::Content)]
+            ),
             "content update is applied"
         );
     };
@@ -466,17 +456,16 @@ struct PropertyModeResult {
     transform_points: [u32; 4],
 }
 
-fn rotation_bits(layer: &LayerNode, expected: f32) -> Option<u32> {
-    if layer.graphics_layer.rotation_z == expected {
-        return Some(layer.graphics_layer.rotation_z.to_bits());
+fn rotation_bits(layer: LayerRef<'_>, expected: f32) -> Option<u32> {
+    if layer.graphics_layer().rotation_z == expected {
+        return Some(layer.graphics_layer().rotation_z.to_bits());
     }
-    layer.children.iter().find_map(|child| match child {
-        RenderNode::Layer(layer) => rotation_bits(layer, expected),
-        RenderNode::Primitive(_) | RenderNode::DrawRun(_) | RenderNode::Inline(_) => None,
-    })
+    layer
+        .children()
+        .find_map(|child| rotation_bits(child, expected))
 }
 
-fn transform_points(layer: &LayerNode, node_id: cranpose_core::NodeId) -> Option<[u32; 4]> {
+fn transform_points(layer: LayerRef<'_>, node_id: cranpose_core::NodeId) -> Option<[u32; 4]> {
     let points = |transform: ProjectiveTransform| {
         let origin = transform.map_point(Point::default());
         let far_corner = transform.map_point(Point::new(256.0, 256.0));
@@ -487,26 +476,22 @@ fn transform_points(layer: &LayerNode, node_id: cranpose_core::NodeId) -> Option
             far_corner.y.to_bits(),
         ]
     };
-    if layer.node_id == Some(node_id) {
-        return Some(points(layer.transform_to_parent));
+    if layer.node_id() == Some(node_id) {
+        return Some(points(layer.transform_to_parent()));
     }
-    layer.children.iter().find_map(|child| match child {
-        RenderNode::Layer(layer) => transform_points(layer, node_id),
-        RenderNode::Inline(inline) => {
-            (inline.node_id == node_id).then(|| points(inline.transform_to_parent()))
-        }
-        RenderNode::Primitive(_) | RenderNode::DrawRun(_) => None,
-    })
+    layer
+        .children()
+        .find_map(|child| transform_points(child, node_id))
 }
 
 fn run_property_mode(
     arcs: usize,
     layers_only: bool,
-    applier: &cranpose_core::MemoryApplier,
+    (applier, root): (&cranpose_core::MemoryApplier, cranpose_core::NodeId),
     canvas_node: cranpose_core::NodeId,
     angle: &Cell<f32>,
     draw_calls: &Cell<usize>,
-    graph: &mut RenderGraph,
+    graph: &mut Scene,
 ) -> PropertyModeResult {
     let mut update = |tick: usize| {
         let angle_value = 0.125 + tick as f32 * 0.37;
@@ -517,7 +502,7 @@ fn run_property_mode(
             &[(canvas_node, cranpose_render_common::NodeUpdate::Content)]
         };
         assert!(
-            update_graph_from_applier_report(applier, graph, updates, 1.0).applied(),
+            graph.update_from_applier(applier, root, updates),
             "scoped property benchmark update must be applied"
         );
     };
@@ -533,13 +518,12 @@ fn run_property_mode(
     let elapsed_ns = started.elapsed().as_nanos();
     let stats = region.change();
     let callbacks = draw_calls.get() - callbacks_before;
-    let graph_root = graph.root();
-    let run = canvas_run(&graph_root).expect("property-updated Canvas");
+    let run = canvas_run(graph.root_layer().expect("a scene")).expect("property-updated Canvas");
     assert_eq!(run.recording.len(), arcs);
     let expected_rotation = 0.125 + (WARMUP + FRAMES - 1) as f32 * 0.37;
-    let rotation_bits = rotation_bits(&graph.root(), expected_rotation)
+    let rotation_bits = rotation_bits(graph.root_layer().expect("a scene"), expected_rotation)
         .expect("graphics-layer rotation reaches the retained scene");
-    let transform_points = transform_points(&graph.root(), canvas_node)
+    let transform_points = transform_points(graph.root_layer().expect("a scene"), canvas_node)
         .expect("Canvas node transform reaches the retained scene");
     PropertyModeResult {
         elapsed_ns,
@@ -588,17 +572,19 @@ fn run_property_case(arcs: usize, layers_first: bool) {
     applier
         .compute_layout(composition_root, Size::new(256.0, 256.0))
         .expect("Canvas layout");
-    let initial = build_graph_from_applier(&applier, composition_root, 1.0).expect("Canvas graph");
-    let initial_transform =
-        transform_points(&initial.root(), canvas_node).expect("initial Canvas node transform");
-    let mut content_graph = initial.clone();
+    let mut initial = Scene::new();
+    initial.rebuild_from_applier(&applier, composition_root);
+    let initial_transform = transform_points(initial.root_layer().expect("a scene"), canvas_node)
+        .expect("initial Canvas node transform");
+    let mut content_graph = Scene::new();
+    content_graph.replace_store(initial.store().clone());
     let mut layer_graph = initial;
     let initial_calls = draw_calls.get();
-    let measure = |layers_only, graph: &mut RenderGraph| {
+    let measure = |layers_only, graph: &mut Scene| {
         run_property_mode(
             arcs,
             layers_only,
-            &applier,
+            (&applier, composition_root),
             canvas_node,
             &angle,
             &draw_calls,

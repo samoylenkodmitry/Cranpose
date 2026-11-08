@@ -18,7 +18,10 @@ fn shared_render_cases_build_non_empty_graphs() {
             assert!(fixture.width > 0);
             assert!(fixture.height > 0);
             assert!(
-                !fixture.graph.root().children.is_empty(),
+                fixture
+                    .store
+                    .root_layer()
+                    .is_some_and(|root| root.item_count() > 0),
                 "shared render case {} should emit at least one render node",
                 case.name()
             );

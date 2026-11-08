@@ -81,7 +81,6 @@ fn test_layer(node_id: NodeId, transform_to_parent: ProjectiveTransform) -> Laye
         hit_test: Some(HitTestNode {
             handlers: handlers(clickable()),
         }),
-        has_hit_targets: true,
         ..Default::default()
     }
 }

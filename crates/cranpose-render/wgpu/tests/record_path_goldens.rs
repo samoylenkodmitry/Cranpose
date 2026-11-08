@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use cranpose_render_common::{
     Renderer,
-    graph::{DrawRunNode, LayerNode, PrimitivePhase, ProjectiveTransform, RenderGraph, RenderNode},
+    graph::{DrawRunNode, LayerNode, PrimitivePhase, ProjectiveTransform, RenderNode},
 };
 use cranpose_ui_graphics::{
     BlendMode, Brush, Color, ColorFilter, CommandRecording, CompositingStrategy, CornerRadii,
@@ -36,12 +36,12 @@ fn run_node(primitives: Vec<DrawPrimitive>) -> RenderNode {
     RenderNode::DrawRun(DrawRunNode::new(PrimitivePhase::BeforeChildren, primitives))
 }
 
-fn root(size: u32, children: Vec<RenderNode>) -> RenderGraph {
-    RenderGraph::new(&LayerNode {
+fn root(size: u32, children: Vec<RenderNode>) -> LayerNode {
+    LayerNode {
         local_bounds: bounds(size),
         children,
         ..LayerNode::default()
-    })
+    }
 }
 
 fn layer(
@@ -58,14 +58,14 @@ fn layer(
     )
 }
 
-fn arena_run() -> RenderGraph {
+fn arena_run() -> LayerNode {
     let mut recording = CommandRecording::default();
     let mut scope = scope(SIZE, &mut recording);
     record_mixed_scene(&mut scope);
     root(SIZE, vec![run_node(scope.into_primitives())])
 }
 
-fn clipped_primitives() -> RenderGraph {
+fn clipped_primitives() -> LayerNode {
     let mut recording = CommandRecording::default();
     let mut scope = scope(SIZE, &mut recording);
     record_solid_scene(&mut scope);
@@ -99,7 +99,7 @@ fn thin_bars(color: Color) -> Vec<RenderNode> {
         .collect()
 }
 
-fn translated_thin_shapes() -> RenderGraph {
+fn translated_thin_shapes() -> LayerNode {
     let mut leaf = layer(
         Rect {
             x: 0.0,
@@ -161,7 +161,7 @@ fn translated_thin_shapes() -> RenderGraph {
     )
 }
 
-fn painted_layers() -> RenderGraph {
+fn painted_layers() -> LayerNode {
     let content = |tint: Color| {
         let mut recording = CommandRecording::default();
         let mut scope = scope(96, &mut recording);
@@ -249,7 +249,7 @@ fn painted_layers() -> RenderGraph {
     )
 }
 
-fn blend_modes() -> RenderGraph {
+fn blend_modes() -> LayerNode {
     let mut recording = CommandRecording::default();
     let mut scope = scope(SIZE, &mut recording);
     scope.draw_rect_at(
@@ -292,7 +292,7 @@ fn blend_modes() -> RenderGraph {
     root(SIZE, vec![run_node(scope.into_primitives())])
 }
 
-fn shadows() -> RenderGraph {
+fn shadows() -> LayerNode {
     let card = |rect: Rect| DrawPrimitive::RoundRect {
         rect,
         brush: Brush::solid(Color(0.0, 0.0, 0.0, 0.55)),
@@ -358,13 +358,13 @@ fn shadows() -> RenderGraph {
 
 fn capture(
     renderer: &mut support::LockedRenderer,
-    graph: &RenderGraph,
+    graph: &LayerNode,
     size: u32,
     scale: f32,
 ) -> Vec<u8> {
     let mut last = Vec::new();
     for _ in 0..2 {
-        renderer.scene_mut().graph = Some(graph.clone());
+        renderer.scene_mut().describe(graph);
         let captured = renderer
             .capture_frame_with_scale(size, size, scale)
             .unwrap_or_else(|err| panic!("capture failed: {err:?}"));
@@ -374,7 +374,7 @@ fn capture(
     last
 }
 
-fn check(name: &str, graph: RenderGraph, size: u32, scale: f32) {
+fn check(name: &str, graph: &LayerNode, size: u32, scale: f32) {
     let mut renderer = match support::headless_renderer() {
         Ok(renderer) => renderer,
         Err(err) => {
@@ -382,7 +382,7 @@ fn check(name: &str, graph: RenderGraph, size: u32, scale: f32) {
             return;
         }
     };
-    let pixels = capture(&mut renderer, &graph, size, scale);
+    let pixels = capture(&mut renderer, graph, size, scale);
     if let Some(directory) = std::env::var_os("CRANPOSE_RECORD_CAPTURE_DIR") {
         let directory = PathBuf::from(directory);
         std::fs::create_dir_all(&directory).expect("capture output directory");
@@ -403,37 +403,42 @@ fn check(name: &str, graph: RenderGraph, size: u32, scale: f32) {
 
 #[test]
 fn arena_run_matches_the_golden() {
-    check("arena_run", arena_run(), SIZE, 1.0);
+    check("arena_run", &arena_run(), SIZE, 1.0);
 }
 
 #[test]
 fn clipped_primitives_match_the_golden() {
-    check("clipped_primitives", clipped_primitives(), SIZE, 1.0);
+    check("clipped_primitives", &clipped_primitives(), SIZE, 1.0);
 }
 
 #[test]
 fn translated_thin_shapes_match_the_golden() {
-    check("translated_thin_shapes", translated_thin_shapes(), 128, 1.0);
+    check(
+        "translated_thin_shapes",
+        &translated_thin_shapes(),
+        128,
+        1.0,
+    );
 }
 
 #[test]
 fn painted_layers_match_the_golden() {
-    check("painted_layers", painted_layers(), SIZE, 1.0);
+    check("painted_layers", &painted_layers(), SIZE, 1.0);
 }
 
 #[test]
 fn blend_modes_match_the_golden() {
-    check("blend_modes", blend_modes(), SIZE, 1.0);
+    check("blend_modes", &blend_modes(), SIZE, 1.0);
 }
 
 #[test]
 fn shadows_match_the_golden() {
-    check("shadows", shadows(), SIZE, 1.0);
+    check("shadows", &shadows(), SIZE, 1.0);
 }
 
 #[test]
 fn arena_run_at_a_fractional_root_scale_matches_the_golden() {
-    check("arena_run_scaled", arena_run(), SIZE, 130.0 / 96.0);
+    check("arena_run_scaled", &arena_run(), SIZE, 130.0 / 96.0);
 }
 
 /// A sweep gradient starts at 3 o'clock and turns clockwise, as Compose's.

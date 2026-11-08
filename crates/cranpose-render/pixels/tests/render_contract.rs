@@ -44,7 +44,7 @@ fn pixels_renderer_matches_shared_render_contracts() {
         let mut frames = Vec::new();
         for fixture in case.fixtures() {
             let mut scene = Scene::new();
-            scene.graph = Some(fixture.graph);
+            scene.replace_store(fixture.store);
             let mut frame = vec![0u8; (fixture.width * fixture.height * 4) as usize];
             app_context.enter(|| draw_scene(&mut frame, fixture.width, fixture.height, &scene));
             frames.push(RenderedFrame {
@@ -68,7 +68,7 @@ fn pixels_renderer_matches_shared_stroke_and_arc_contracts() {
         let mut frames = Vec::new();
         for fixture in case.fixtures() {
             let mut scene = Scene::new();
-            scene.graph = Some(fixture.graph);
+            scene.replace_store(fixture.store);
             let mut frame = vec![0u8; (fixture.width * fixture.height * 4) as usize];
             app_context.enter(|| draw_scene(&mut frame, fixture.width, fixture.height, &scene));
             frames.push(RenderedFrame {

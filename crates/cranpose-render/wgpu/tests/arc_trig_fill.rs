@@ -1,6 +1,6 @@
 use cranpose_core::NodeId;
 use cranpose_render_common::graph::{
-    DrawCommandId, DrawRunNode, PrimitivePhase, ProjectiveTransform, RenderGraph, RenderNode,
+    DrawCommandId, DrawRunNode, LayerNode, PrimitivePhase, ProjectiveTransform, RenderNode,
 };
 use cranpose_ui_graphics::{
     Brush, Color, CompositingStrategy, CornerRadii, DrawPlacement, DrawScope, DrawScopeDefault,
@@ -95,7 +95,7 @@ fn run(center: Point, count: usize, frame: Frame, command: Option<DrawCommandId>
     ))
 }
 
-fn scene(frame: Frame) -> RenderGraph {
+fn scene(frame: Frame) -> LayerNode {
     let stored = run(
         Point::new(SIZE * 0.5, SIZE * 0.3),
         80,
@@ -126,12 +126,12 @@ fn scene(frame: Frame) -> RenderGraph {
         frame,
         None,
     );
-    RenderGraph::new(&shared_test_support::layer_node(
+    shared_test_support::layer_node(
         rect(0.0, 0.0, SIZE, SIZE),
         ProjectiveTransform::identity(),
         GraphicsLayer::default(),
         vec![stored, offscreen, in_frame],
-    ))
+    )
 }
 
 fn frames_without(flags: wgpu::DownlevelFlags, frames: &[Frame]) -> Option<Vec<Vec<u8>>> {

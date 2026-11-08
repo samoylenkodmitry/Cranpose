@@ -2,7 +2,7 @@ use cranpose_core::NodeId;
 use cranpose_render_common::{
     Renderer,
     graph::{
-        DrawPrimitiveNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, RenderGraph, RenderNode,
+        DrawPrimitiveNode, LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, RenderNode,
     },
 };
 use cranpose_render_wgpu::{CancelReason, PresentOutcome};
@@ -27,8 +27,8 @@ fn solid_rect(rect: Rect, color: Color) -> RenderNode {
     })
 }
 
-fn direct_graph() -> RenderGraph {
-    RenderGraph::new(&support::layer_node(
+fn direct_graph() -> LayerNode {
+    support::layer_node(
         Some(NodeId(9_400)),
         WIDTH as f32,
         HEIGHT as f32,
@@ -41,7 +41,7 @@ fn direct_graph() -> RenderGraph {
             },
             Color(0.2, 0.7, 0.3, 1.0),
         )],
-    ))
+    )
 }
 
 fn target_view(
@@ -94,7 +94,7 @@ fn screenshot_reports_canceled_render_and_recovers() {
             return;
         }
     };
-    renderer.scene_mut().graph = Some(direct_graph());
+    renderer.scene_mut().describe(&direct_graph());
     let before = renderer
         .capture_frame(WIDTH, HEIGHT)
         .expect("clean capture");
@@ -127,7 +127,7 @@ fn uncaptured_device_error_poisons_one_frame_then_recovers() {
             return;
         }
     };
-    renderer.scene_mut().graph = Some(direct_graph());
+    renderer.scene_mut().describe(&direct_graph());
     let (texture, view) = target_view(&renderer, WIDTH, HEIGHT);
 
     let packet = renderer

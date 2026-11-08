@@ -6,9 +6,7 @@ use std::{
 
 use cranpose_core::{MemoryApplier, NodeId};
 use cranpose_foundation::{PointerEvent, PointerEventKind};
-use cranpose_render_common::{
-    HitTestTarget, RenderScene, graph_scene::Scene, scene_builder::build_graph_from_applier,
-};
+use cranpose_render_common::{HitTestTarget, RenderScene, graph_scene::Scene};
 use cranpose_ui::{
     LayoutEngine, Modifier, Point, Rect, Size,
     space::{Camera, Mat4, Material, Mesh, MeshSurface, Scene3d, Vec3},
@@ -104,16 +102,10 @@ fn probe() -> Probe {
     let mut applier = composition.applier_mut();
     applier.set_runtime_handle(handle);
     applier.compute_layout(root, VIEWPORT).expect("layout");
-    let graph = build_graph_from_applier(&applier, root, 1.0).expect("render graph");
-    applier.clear_runtime_handle();
     let mut scene = Scene::default();
-    cranpose_render_common::hit_graph::collect_hits_from_graph(
-        graph.store().root_layer().expect("a root record"),
-        cranpose_render_common::graph::ProjectiveTransform::identity(),
-        &mut scene,
-        None,
-    );
-    scene.replace_graph(graph);
+    scene.rebuild_from_applier(&applier, root);
+    applier.clear_runtime_handle();
+    assert!(scene.root_layer().is_some(), "render graph");
     let targets = scene.hit_targets();
     let mut panels = targets
         .iter()

@@ -13,13 +13,14 @@ use cranpose_ui_graphics::{
 };
 
 use super::{
-    FOREGROUND_COLOR, RenderFixture, assert_pixel_matches_background, build_fixture,
-    is_background_like,
+    BACKGROUND_COLOR, FOREGROUND_COLOR, RenderFixture, assert_pixel_matches_background,
+    build_fixture_with, is_background_like,
 };
 use crate::{
-    graph::{PrimitivePhase, RenderGraph, RenderNode},
+    graph::PrimitivePhase,
     image_compare::{pixel_difference, sample_pixel},
-    scene_builder::{build_graph_from_applier, draw_command_nodes_for_tests},
+    scene_builder::{WalkMemory, draw_command_items, rebuild_from_applier},
+    scene_store::SceneStore,
 };
 
 const CELL: f32 = 60.0;
@@ -158,21 +159,25 @@ pub(super) fn draw_groups_fixture() -> RenderFixture {
         DrawCommand::Overlay(Rc::new(plain_overlay)),
         DrawCommand::Overlay(Rc::new(grouped_overlay)),
     ];
-    let mut nodes: Vec<RenderNode> = draw_command_nodes_for_tests(
-        NodeId(1),
-        &behind,
-        DrawPlacement::Behind,
-        size,
-        PrimitivePhase::BeforeChildren,
-    );
-    nodes.extend(draw_command_nodes_for_tests(
-        NodeId(1),
-        &overlay,
-        DrawPlacement::Overlay,
-        size,
-        PrimitivePhase::AfterChildren,
-    ));
-    build_fixture(WIDTH, HEIGHT, nodes)
+    build_fixture_with(WIDTH, HEIGHT, |store, root| {
+        let mut items = draw_command_items(
+            store,
+            root,
+            (NodeId(1), size),
+            &behind,
+            DrawPlacement::Behind,
+            PrimitivePhase::BeforeChildren,
+        );
+        items.extend(draw_command_items(
+            store,
+            root,
+            (NodeId(1), size),
+            &overlay,
+            DrawPlacement::Overlay,
+            PrimitivePhase::AfterChildren,
+        ));
+        items
+    })
 }
 
 fn ink_rows(pixels: &[u8], index: u32, background: [u8; 4]) -> u32 {
@@ -262,19 +267,26 @@ fn painted_draws(scope: &mut dyn DrawScope) {
 }
 
 pub(super) fn painted_groups_fixture() -> RenderFixture {
-    let mut composition = run_test_composition(|| {
+    let size = Size::new(PAINTED_WIDTH as f32, PAINTED_HEIGHT as f32);
+    let mut composition = run_test_composition(move || {
         Box(
-            Modifier::empty()
-                .size(Size::new(PAINTED_WIDTH as f32, PAINTED_HEIGHT as f32))
-                .graphics_layer(|| GraphicsLayer {
-                    alpha: 0.5,
-                    compositing_strategy: CompositingStrategy::ModulateAlpha,
-                    color_filter: Some(ColorFilter::Modulate(Color(1.0, 0.2, 0.2, 1.0))),
-                    ..GraphicsLayer::default()
-                })
-                .draw_behind(painted_draws),
+            Modifier::empty().size(size).background(BACKGROUND_COLOR),
             BoxSpec::default(),
-            || {},
+            move || {
+                Box(
+                    Modifier::empty()
+                        .size(size)
+                        .graphics_layer(|| GraphicsLayer {
+                            alpha: 0.5,
+                            compositing_strategy: CompositingStrategy::ModulateAlpha,
+                            color_filter: Some(ColorFilter::Modulate(Color(1.0, 0.2, 0.2, 1.0))),
+                            ..GraphicsLayer::default()
+                        })
+                        .draw_behind(painted_draws),
+                    BoxSpec::default(),
+                    || {},
+                );
+            },
         );
     });
     let root = composition.root().expect("the composition has a root");
@@ -282,16 +294,20 @@ pub(super) fn painted_groups_fixture() -> RenderFixture {
     let mut applier = composition.applier_mut();
     applier.set_runtime_handle(runtime);
     applier
-        .compute_layout(root, Size::new(PAINTED_WIDTH as f32, PAINTED_HEIGHT as f32))
+        .compute_layout(root, size)
         .expect("the composition lays out");
-    let node = build_graph_from_applier(&applier, root, 1.0).expect("the composition draws");
+    let mut store = SceneStore::new();
+    assert!(
+        rebuild_from_applier(&applier, root, &mut store, &mut WalkMemory::default()),
+        "the composition draws"
+    );
     applier.clear_runtime_handle();
-    let mut fixture = build_fixture(PAINTED_WIDTH, PAINTED_HEIGHT, Vec::new());
-    let node_root = node.root();
-    let mut root = fixture.graph.root();
-    root.children.push(RenderNode::Layer(Box::new(node_root)));
-    fixture.graph = RenderGraph::new(&root);
-    fixture
+    RenderFixture {
+        width: PAINTED_WIDTH,
+        height: PAINTED_HEIGHT,
+        store,
+        normalized_rect: None,
+    }
 }
 
 pub(super) fn assert_painted_groups_frame(pixels: &[u8], width: u32, height: u32) {

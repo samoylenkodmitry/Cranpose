@@ -1,5 +1,5 @@
 use cranpose_core::NodeId;
-use cranpose_render_common::{Renderer, graph::RenderNode};
+use cranpose_render_common::{Renderer, scene_store::ItemRef};
 use cranpose_ui_graphics::{GraphicsLayer, Size};
 
 use super::*;
@@ -22,33 +22,24 @@ fn dev_overlay_is_recorded_outside_app_graph() {
     );
 
     assert!(
-        renderer
-            .frontend
-            .scene
-            .graph
-            .as_ref()
-            .is_none_or(|graph| graph.root().children.iter().all(|child| {
-                !matches!(
-                    child,
-                    RenderNode::Layer(layer) if layer.node_id == Some(NodeId(usize::MAX))
-                )
-            })),
+        renderer.frontend.scene.root_layer().is_none_or(|root| root
+            .children()
+            .all(|layer| layer.node_id() != Some(NodeId(usize::MAX)))),
         "dev overlay must not be mixed into the app scene graph"
     );
 
-    let graph = renderer
+    let root = renderer
         .frontend
-        .dev_overlay_graph
-        .as_ref()
+        .dev_overlay
+        .root_layer()
         .expect("overlay graph");
-    let root = graph.root();
-    let Some(RenderNode::Layer(overlay)) = root.children.last() else {
+    let Some(ItemRef::Layer(overlay)) = root.items().next_back() else {
         panic!("dev overlay should be the final top-level layer");
     };
 
-    assert_eq!(overlay.node_id, Some(NodeId(usize::MAX)));
+    assert_eq!(overlay.node_id(), Some(NodeId(usize::MAX)));
     assert_eq!(
-        overlay.graphics_layer.compositing_strategy,
+        overlay.graphics_layer().compositing_strategy,
         GraphicsLayer::default().compositing_strategy,
         "dev overlay should not allocate an offscreen surface"
     );

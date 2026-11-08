@@ -4,7 +4,7 @@
 //! at half opacity and the projective blit of a turned one.
 
 use cranpose_render_common::{
-    graph::{DrawRunNode, PrimitivePhase, ProjectiveTransform, RenderGraph, RenderNode},
+    graph::{DrawRunNode, LayerNode, PrimitivePhase, ProjectiveTransform, RenderNode},
     layer_transform::layer_transform_to_parent,
 };
 use cranpose_ui_graphics::{DrawScope, DrawScopeDefault, GraphicsLayer, Point, Rect, Size};
@@ -28,7 +28,7 @@ fn shapes() -> RenderNode {
 
 /// The shapes on the page, again in a layer at half opacity, and again in
 /// that layer turned about its centre.
-fn scene() -> RenderGraph {
+fn scene() -> LayerNode {
     let bounds = Rect::from_size(Size::new(SIZE as f32, SIZE as f32));
     let faded = GraphicsLayer {
         alpha: 0.5,

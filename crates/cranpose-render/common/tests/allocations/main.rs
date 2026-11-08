@@ -4,14 +4,7 @@ use std::{alloc::System, cell::RefCell, rc::Rc};
 
 use cranpose_core::{MemoryApplier, NodeId};
 use cranpose_foundation::lazy::{LazyListScope, LazyListState, rememberLazyListState};
-use cranpose_render_common::{
-    NodeUpdate,
-    graph::{LayerNode, RenderGraph},
-    scene_builder::{
-        build_graph_from_applier, rebuild_graph_from_applier, update_graph_from_applier,
-    },
-    scene_store::LayerRef,
-};
+use cranpose_render_common::{NodeUpdate, graph_scene::Scene, scene_store::LayerRef};
 use cranpose_ui::{
     Color, GraphicsLayer, LayoutEngine, LazyColumn, LazyColumnSpec, Modifier, Size, Text,
     TextStyle,
@@ -30,9 +23,8 @@ const PASSES: usize = 10;
 
 /// The ids of the records directly under the root of `graph`, the cells
 /// of the column.
-fn cell_ids(graph: &RenderGraph) -> Vec<NodeId> {
+fn cell_ids(graph: &Scene) -> Vec<NodeId> {
     graph
-        .store()
         .root_layer()
         .into_iter()
         .flat_map(LayerRef::children)
@@ -44,7 +36,7 @@ fn cell_ids(graph: &RenderGraph) -> Vec<NodeId> {
 /// tilted, filled and labelled cells, like the cells of the grid benchmark.
 fn allocations_per_pass(
     cells: usize,
-    mut pass: impl FnMut(&mut MemoryApplier, NodeId, &mut RenderGraph),
+    mut pass: impl FnMut(&mut MemoryApplier, NodeId, &mut Scene),
 ) -> usize {
     let mut composition = cranpose_ui::run_test_composition(move || {
         Column(Modifier::empty(), ColumnSpec::default(), move || {
@@ -78,7 +70,9 @@ fn allocations_per_pass(
     applier
         .compute_layout(root, Size::new(400.0, 4000.0))
         .expect("layout");
-    let mut graph = build_graph_from_applier(&applier, root, 1.0).expect("render graph");
+    let mut graph = Scene::new();
+    graph.rebuild_from_applier(&applier, root);
+    assert!(graph.root_layer().is_some(), "render graph");
     assert_eq!(cell_ids(&graph).len(), cells, "every cell is a layer");
     pass(&mut applier, root, &mut graph);
     pass(&mut applier, root, &mut graph);
@@ -93,7 +87,7 @@ fn allocations_per_pass(
 
 /// Allocations per cell of `pass`, past what a pass costs whatever the
 /// number of cells.
-fn allocations_per_cell(mut pass: impl FnMut(&mut MemoryApplier, NodeId, &mut RenderGraph)) -> f64 {
+fn allocations_per_cell(mut pass: impl FnMut(&mut MemoryApplier, NodeId, &mut Scene)) -> f64 {
     let few = allocations_per_pass(10, &mut pass);
     let many = allocations_per_pass(110, &mut pass);
     (many - few) as f64 / 100.0
@@ -102,13 +96,13 @@ fn allocations_per_cell(mut pass: impl FnMut(&mut MemoryApplier, NodeId, &mut Re
 /// Rebuilding a layer takes the allocations of the layer it replaces, so a
 /// cell rebuilt with the same content allocates nothing of its own.
 fn rebuilding_a_cell_reuses_the_cell_it_replaces() {
-    let per_cell = allocations_per_cell(|applier, _, graph| {
+    let per_cell = allocations_per_cell(|applier, root, graph| {
         let dirty: Vec<_> = cell_ids(graph)
             .into_iter()
             .map(|id| (id, NodeUpdate::Content))
             .collect();
         assert!(
-            update_graph_from_applier(applier, graph, &dirty, 1.0),
+            graph.update_from_applier(applier, root, &dirty),
             "the cells rebuild in place"
         );
     });
@@ -120,9 +114,7 @@ fn rebuilding_a_cell_reuses_the_cell_it_replaces() {
 /// replaces.
 fn rebuilding_the_graph_reuses_the_graph_it_replaces() {
     let per_cell = allocations_per_cell(|applier, root, graph| {
-        let previous = std::mem::replace(graph, RenderGraph::new(&LayerNode::default()));
-        *graph =
-            rebuild_graph_from_applier(applier, root, 1.0, Some(previous)).expect("render graph");
+        graph.rebuild_from_applier(applier, root);
     });
     println!("allocations per cell of a rebuilt graph: {per_cell}");
     assert!(
@@ -134,10 +126,10 @@ fn rebuilding_the_graph_reuses_the_graph_it_replaces() {
 /// A scene update keeps the map of its dirty nodes from the update before:
 /// updating one cell allocates what the cell's rebuild allocates alone.
 fn updating_one_cell_reuses_the_dirty_node_map() {
-    let allocations = allocations_per_pass(10, |applier, _, graph| {
+    let allocations = allocations_per_pass(10, |applier, root, graph| {
         let dirty = [(cell_ids(graph)[0], NodeUpdate::Content)];
         assert!(
-            update_graph_from_applier(applier, graph, &dirty, 1.0),
+            graph.update_from_applier(applier, root, &dirty),
             "the cell rebuilds in place"
         );
     });
@@ -188,7 +180,9 @@ fn scroll_step_allocations() -> usize {
     let mut applier = composition.applier_mut();
     applier.set_runtime_handle(handle);
     applier.compute_layout(root, viewport).expect("layout");
-    let mut graph = build_graph_from_applier(&applier, root, 1.0).expect("render graph");
+    let mut graph = Scene::new();
+    graph.rebuild_from_applier(&applier, root);
+    assert!(graph.root_layer().is_some(), "render graph");
     let _ = applier.take_structural_change_parents_attached_to(root);
     applier.clear_runtime_handle();
     drop(applier);
@@ -207,7 +201,7 @@ fn scroll_step_allocations() -> usize {
         let updates: Vec<_> = dirty.iter().map(|&id| (id, NodeUpdate::Content)).collect();
         let region = Region::new(GLOBAL);
         assert!(
-            update_graph_from_applier(&applier, &mut graph, &updates, 1.0),
+            graph.update_from_applier(&applier, root, &updates),
             "the scroll updates the scene in place"
         );
         let allocations = region.change().allocations;

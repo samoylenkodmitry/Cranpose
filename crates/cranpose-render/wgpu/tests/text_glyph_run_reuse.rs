@@ -4,7 +4,7 @@
 
 use cranpose_render_common::{
     Renderer,
-    graph::{PrimitiveNode, ProjectiveTransform, RenderGraph, RenderNode},
+    graph::{LayerNode, PrimitiveNode, ProjectiveTransform, RenderNode},
 };
 use cranpose_ui_graphics::{Color, GraphicsLayer, Rect, Size};
 
@@ -16,16 +16,16 @@ use crate::{
 const WIDTH: u32 = 220;
 const HEIGHT: u32 = 40;
 
-fn page(texts: Vec<RenderNode>) -> RenderGraph {
+fn page(texts: Vec<RenderNode>) -> LayerNode {
     let frame = Rect::from_size(Size::new(WIDTH as f32, HEIGHT as f32));
     let mut children = vec![support::solid_rect(frame, Color::BLACK)];
     children.extend(texts);
-    RenderGraph::new(&shared_test_support::layer_node(
+    shared_test_support::layer_node(
         frame,
         ProjectiveTransform::identity(),
         GraphicsLayer::default(),
         children,
-    ))
+    )
 }
 
 fn text_rect(width: f32) -> Rect {
@@ -38,7 +38,7 @@ fn text_rect(width: f32) -> Rect {
 }
 
 /// `count` distinct labels in a grid of 2 by 2 point cells.
-fn many_texts_frame(count: usize) -> RenderGraph {
+fn many_texts_frame(count: usize) -> LayerNode {
     let columns = WIDTH as usize / 2;
     page(
         (0..count)
@@ -55,8 +55,8 @@ fn many_texts_frame(count: usize) -> RenderGraph {
     )
 }
 
-fn runs_collected(renderer: &mut support::LockedRenderer, graph: RenderGraph) -> u32 {
-    renderer.scene_mut().graph = Some(graph);
+fn runs_collected(renderer: &mut support::LockedRenderer, graph: &LayerNode) -> u32 {
+    renderer.scene_mut().describe(graph);
     renderer
         .capture_frame_with_scale(WIDTH, HEIGHT, 1.0)
         .expect("frame renders");
@@ -76,7 +76,7 @@ fn a_text_drawn_again_in_a_narrower_rect_reuses_its_glyph_run() {
         }
     };
     let mut draw = |text: RenderNode| {
-        renderer.scene_mut().graph = Some(page(vec![text]));
+        renderer.scene_mut().describe(&page(vec![text]));
         let pixels = renderer
             .capture_frame_with_scale(WIDTH, HEIGHT, 1.0)
             .expect("frame renders")
@@ -118,10 +118,10 @@ fn a_frame_of_more_texts_than_the_cache_floor_keeps_every_run_for_the_next() {
     // More texts than the cache's floor of 1,024 runs: the first frame
     // lays every run out, then sizes the cache to hold them.
     let frame = many_texts_frame(1_600);
-    let first = runs_collected(&mut renderer, frame.clone());
+    let first = runs_collected(&mut renderer, &frame);
     assert!(first > 1_024, "the first frame lays out its runs: {first}");
-    let second = runs_collected(&mut renderer, frame.clone());
-    let third = runs_collected(&mut renderer, frame);
+    let second = runs_collected(&mut renderer, &frame);
+    let third = runs_collected(&mut renderer, &frame);
     assert_eq!(
         (second, third),
         (0, 0),

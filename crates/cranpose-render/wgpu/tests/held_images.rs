@@ -5,7 +5,7 @@
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use cranpose_render_common::graph::{DrawRunNode, PrimitivePhase, RenderGraph, RenderNode};
+use cranpose_render_common::graph::{DrawRunNode, PrimitivePhase, RenderNode};
 use cranpose_render_wgpu::{CapturedFrame, RenderStatsSnapshot};
 use cranpose_ui::{
     Alignment, ContentScale, Image,
@@ -217,7 +217,7 @@ fn an_image_of_another_blend_mode_draws_after_the_held_image_below_it() {
         sampling: ImageSampling::Nearest,
         src_rect: None,
     };
-    let graph = RenderGraph::new(&support::layer_node(
+    let graph = support::layer_node(
         None,
         SIZE as f32,
         SIZE as f32,
@@ -241,7 +241,7 @@ fn an_image_of_another_blend_mode_draws_after_the_held_image_below_it() {
                 },
             ],
         ))],
-    ));
+    );
     for interiors_first in [true, false] {
         let Ok(mut renderer) = support::headless_renderer() else {
             return;

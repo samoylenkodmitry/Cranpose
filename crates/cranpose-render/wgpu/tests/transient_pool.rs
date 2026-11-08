@@ -1,8 +1,8 @@
 use cranpose_render_common::{
     Renderer,
     graph::{
-        DrawPrimitiveNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, ProjectiveTransform,
-        RenderGraph, RenderNode,
+        DrawPrimitiveNode, LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase,
+        ProjectiveTransform, RenderNode,
     },
 };
 use cranpose_ui_graphics::{
@@ -71,7 +71,7 @@ fn drop_shadow(caster: Rect, blur_radius: f32) -> RenderNode {
     })
 }
 
-fn stale_page() -> RenderGraph {
+fn stale_page() -> LayerNode {
     let mut children = support::striped_page(FRAME_WIDTH, FRAME_HEIGHT);
     for index in 0..STALE_SHADOWS {
         let width = 10.0 + index as f32 * 7.0;
@@ -84,7 +84,7 @@ fn stale_page() -> RenderGraph {
     support::page_graph(FRAME_WIDTH, FRAME_HEIGHT, children)
 }
 
-fn glass_page_over(band: Option<Color>) -> RenderGraph {
+fn glass_page_over(band: Option<Color>) -> LayerNode {
     let mut children = support::striped_page(FRAME_WIDTH, FRAME_HEIGHT);
     if let Some(color) = band {
         children.push(solid_rect(
@@ -103,7 +103,7 @@ fn glass_page_over(band: Option<Color>) -> RenderGraph {
     support::page_graph(FRAME_WIDTH, FRAME_HEIGHT, children)
 }
 
-fn glass_page() -> RenderGraph {
+fn glass_page() -> LayerNode {
     glass_page_over(None)
 }
 
@@ -129,7 +129,7 @@ fn retained_texture_stats_count_the_offscreen_pool_once() {
 
 /// The glasses scrolled up by `offset`, so the frame's top edge clips their
 /// captures more the further they go.
-fn scrolled_glass_page(offset: f32) -> RenderGraph {
+fn scrolled_glass_page(offset: f32) -> LayerNode {
     let mut children = support::striped_page(FRAME_WIDTH, FRAME_HEIGHT);
     for index in 0..3 {
         children.push(glass_layer_at(index, GLASS_TOP - offset));
@@ -145,11 +145,11 @@ fn a_repeated_frame_of_glasses_creates_no_transient_textures() {
         eprintln!("skipping (headless WGPU init failed)");
         return;
     };
-    renderer.scene_mut().graph = Some(stale_page());
+    renderer.scene_mut().describe(&stale_page());
     renderer
         .render_current_scene_to_texture(FRAME_WIDTH, FRAME_HEIGHT)
         .expect("render should succeed");
-    renderer.scene_mut().graph = Some(glass_page());
+    renderer.scene_mut().describe(&glass_page());
     let first = renderer
         .render_current_scene_to_texture(FRAME_WIDTH, FRAME_HEIGHT)
         .expect("render should succeed");
@@ -176,7 +176,7 @@ fn a_frame_through_reused_transients_matches_a_renderer_that_never_pooled() {
         eprintln!("skipping (headless WGPU init failed)");
         return;
     };
-    renderer.scene_mut().graph = Some(stale_page());
+    renderer.scene_mut().describe(&stale_page());
     renderer
         .render_current_scene_to_texture(FRAME_WIDTH, FRAME_HEIGHT)
         .expect("render should succeed");
@@ -193,7 +193,7 @@ fn a_frame_through_reused_transients_matches_a_renderer_that_never_pooled() {
         "the band frame must resolve through reused transients for this to test reuse: {stats:?}"
     );
     let mut fresh = support::headless_renderer_beside_locked().expect("second headless renderer");
-    fresh.scene_mut().graph = Some(glass_page_over(Some(BAND)));
+    fresh.scene_mut().describe(&glass_page_over(Some(BAND)));
     let reference = fresh
         .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
         .expect("capture should succeed");
@@ -211,12 +211,12 @@ fn glasses_scrolling_back_and_forth_under_the_top_edge_create_no_textures() {
         eprintln!("skipping (headless WGPU init failed)");
         return;
     };
-    renderer.scene_mut().graph = Some(stale_page());
+    renderer.scene_mut().describe(&stale_page());
     renderer
         .render_current_scene_to_texture(FRAME_WIDTH, FRAME_HEIGHT)
         .expect("render should succeed");
     let mut render = |offset: f32| {
-        renderer.scene_mut().graph = Some(scrolled_glass_page(offset));
+        renderer.scene_mut().describe(&scrolled_glass_page(offset));
         renderer
             .render_current_scene_to_texture(FRAME_WIDTH, FRAME_HEIGHT)
             .expect("render should succeed")
@@ -268,7 +268,7 @@ fn a_new_scrolled_size_matches_fresh_then_reuses_its_exact_textures() {
         "the first clipped frame exceeded its allocation budget: {stats:?}"
     );
     let mut fresh = support::headless_renderer_beside_locked().expect("second headless renderer");
-    fresh.scene_mut().graph = Some(scrolled_glass_page(offset));
+    fresh.scene_mut().describe(&scrolled_glass_page(offset));
     let reference = fresh
         .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
         .expect("capture should succeed");

@@ -1,4 +1,4 @@
-use cranpose_render_common::graph::{ProjectiveTransform, RenderGraph, RenderNode};
+use cranpose_render_common::graph::{LayerNode, ProjectiveTransform, RenderNode};
 use cranpose_ui_graphics::{
     BlendMode, Color, GraphicsLayer, RUNTIME_SHADER_PRELUDE_WGSL, Rect, RenderEffect,
     RuntimeShader, ShaderTarget, ShaderWarmUp, request_shader_warm_ups,
@@ -42,7 +42,7 @@ fn override_probe(tag: &str) -> RuntimeShader {
     shader
 }
 
-fn page_draw(shader: RuntimeShader) -> RenderGraph {
+fn page_draw(shader: RuntimeShader) -> LayerNode {
     let layer = shared_test_support::layer_node(
         BOUNDS,
         ProjectiveTransform::identity(),
@@ -62,7 +62,7 @@ fn page_draw(shader: RuntimeShader) -> RenderGraph {
     )
 }
 
-fn layer_draw(shader: RuntimeShader) -> RenderGraph {
+fn layer_draw(shader: RuntimeShader) -> LayerNode {
     let layer = shared_test_support::layer_node(
         BOUNDS,
         ProjectiveTransform::identity(),
@@ -101,7 +101,7 @@ fn prime(renderer: &mut support::LockedRenderer) {
 /// happened. Specialized shape pipelines, which the child rect inside a
 /// layer would ask for, compile inside the frame off Vulkan, so the count
 /// is only about the shader's pipeline once shape variants are off.
-fn frame_waits_for(renderer: &mut support::LockedRenderer, graph: RenderGraph) -> u64 {
+fn frame_waits_for(renderer: &mut support::LockedRenderer, graph: LayerNode) -> u64 {
     let (stats, waits) = support::capture_waits(renderer, graph, WIDTH, HEIGHT);
     assert!(
         stats.shader_pixels > 0 || stats.effect_applies > 0 || stats.placeholder_draws > 0,

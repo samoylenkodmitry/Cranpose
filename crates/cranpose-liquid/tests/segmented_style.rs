@@ -2,7 +2,8 @@ use std::rc::Rc;
 
 use cranpose_liquid::prelude::*;
 use cranpose_render_common::{
-    graph::{LayerNode, PrimitiveNode, RenderNode, TextPrimitiveNode},
+    graph::TextPrimitiveNode,
+    scene_store::{ItemRef, LayerRef},
     text_fonts::TextFonts,
 };
 use cranpose_testing::create_headless_robot_test_with_fonts;
@@ -14,28 +15,25 @@ const WIDTH: f32 = 300.0;
 /// The text primitive showing `label`, and the color filter of the nearest
 /// layer above it that has one.
 fn find_label<'a>(
-    layer: &'a LayerNode,
+    layer: LayerRef<'a>,
     label: &str,
     filter: Option<&'a ColorFilter>,
 ) -> Option<(&'a TextPrimitiveNode, Option<&'a ColorFilter>)> {
-    find_label_in(&layer.children, label, layer.color_filter().or(filter))
+    find_label_in(layer, label, layer.color_filter().or(filter))
 }
 
-// The text primitive showing `label` among `nodes`, under `filter`. A node
-// drawn in its parent's layer has no filter of its own.
+// The text primitive showing `label` among the items of `layer`, under
+// `filter`. A node drawn in its parent's layer has no filter of its own.
 fn find_label_in<'a>(
-    nodes: &'a [RenderNode],
+    layer: LayerRef<'a>,
     label: &str,
     filter: Option<&'a ColorFilter>,
 ) -> Option<(&'a TextPrimitiveNode, Option<&'a ColorFilter>)> {
-    nodes.iter().find_map(|node| match node {
-        RenderNode::Primitive(entry) => match &entry.node {
-            PrimitiveNode::Text(text) if text.text.text() == label => Some((text.as_ref(), filter)),
-            _ => None,
-        },
-        RenderNode::Layer(layer) => find_label(layer, label, filter),
-        RenderNode::Inline(inline) => find_label_in(&inline.content, label, filter),
-        RenderNode::DrawRun(_) => None,
+    layer.items().find_map(|item| match item {
+        ItemRef::Text(text) if text.text.text() == label => Some((text, filter)),
+        ItemRef::Layer(layer) => find_label(layer, label, filter),
+        ItemRef::Leaf(leaf) => find_label_in(leaf, label, filter),
+        ItemRef::Text(_) | ItemRef::Draw(_) | ItemRef::Run(_) => None,
     })
 }
 
@@ -116,17 +114,11 @@ fn a_provided_style_sets_the_height_and_the_label_colors() {
         center.y
     );
     let colors = LiquidColors::light(Color::from_rgb_u8(0, 122, 255));
-    let root = robot
-        .shell_mut()
-        .scene()
-        .graph
-        .as_ref()
-        .expect("a scene")
-        .root();
-    let (chosen, filter) = find_label(&root, "One", None).expect("the chosen label");
+    let root = robot.shell_mut().scene().root_layer().expect("a scene");
+    let (chosen, filter) = find_label(root, "One", None).expect("the chosen label");
     assert_eq!(label_color(chosen), Some(colors.on_accent));
     assert_eq!(filter, None, "a resting lens recolors no label");
-    let (other, _) = find_label(&root, "Two", None).expect("the other label");
+    let (other, _) = find_label(root, "Two", None).expect("the other label");
     assert_eq!(label_color(other), Some(colors.label));
 }
 
@@ -135,14 +127,8 @@ fn a_held_lens_gives_the_chosen_label_the_color_of_the_others() {
     let mut robot = robot(accent);
     hold_the_first_segment(&mut robot);
     let colors = LiquidColors::light(Color::from_rgb_u8(0, 122, 255));
-    let root = robot
-        .shell_mut()
-        .scene()
-        .graph
-        .as_ref()
-        .expect("a scene")
-        .root();
-    let (_, filter) = find_label(&root, "One", None).expect("the chosen label");
+    let root = robot.shell_mut().scene().root_layer().expect("a scene");
+    let (_, filter) = find_label(root, "One", None).expect("the chosen label");
     let Some(ColorFilter::Tint(held)) = filter else {
         panic!("a held lens left the chosen label in {filter:?}");
     };
@@ -157,14 +143,8 @@ fn a_held_lens_gives_the_chosen_label_the_color_of_the_others() {
 
     robot.mouse_up();
     advance_frames(&mut robot, 40);
-    let root = robot
-        .shell_mut()
-        .scene()
-        .graph
-        .as_ref()
-        .expect("a scene")
-        .root();
-    let (chosen, filter) = find_label(&root, "One", None).expect("the chosen label");
+    let root = robot.shell_mut().scene().root_layer().expect("a scene");
+    let (chosen, filter) = find_label(root, "One", None).expect("the chosen label");
     assert_eq!(filter, None, "the lens came to rest");
     assert_eq!(label_color(chosen), Some(colors.on_accent));
 }
@@ -174,15 +154,9 @@ fn the_system_style_draws_every_label_alike_without_a_filter() {
     let mut robot = robot(|colors, typography| LiquidSegmentedStyle::system(&colors, &typography));
     hold_the_first_segment(&mut robot);
     let colors = LiquidColors::light(Color::from_rgb_u8(0, 122, 255));
-    let root = robot
-        .shell_mut()
-        .scene()
-        .graph
-        .as_ref()
-        .expect("a scene")
-        .root();
+    let root = robot.shell_mut().scene().root_layer().expect("a scene");
     for label in ["One", "Two"] {
-        let (text, filter) = find_label(&root, label, None).expect("a label");
+        let (text, filter) = find_label(root, label, None).expect("a label");
         assert_eq!(label_color(text), Some(colors.label));
         assert_eq!(filter, None, "{label} gained a filter");
     }

@@ -126,7 +126,7 @@ fn stored_runs_changed_every_frame_draw_their_own_tables_while_earlier_frames_ar
                     &mut renderer,
                     WIDTH,
                     HEIGHT,
-                    support::stored_run_graph(WIDTH, HEIGHT, colors),
+                    &support::stored_run_graph(WIDTH, HEIGHT, colors),
                 )
             })
             .collect();

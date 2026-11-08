@@ -1,6 +1,13 @@
+use cranpose_core::collections::map::HashSet;
 use cranpose_ui_graphics::{Brush, Color, DrawPlacement, DrawPrimitive};
 
 use super::*;
+use crate::scene_store::{LayerRef, SceneStore};
+
+// The root record of `store`.
+fn root_of(store: &SceneStore) -> LayerRef<'_> {
+    store.root_layer().expect("the store holds the layer")
+}
 
 fn test_layer(local_bounds: Rect, children: Vec<RenderNode>) -> LayerNode {
     LayerNode {
@@ -116,60 +123,20 @@ fn retained_visual_observation_nodes_collect_layers_and_command_owners() {
 
     root.node_id = Some(NodeId(5));
 
-    let mut graph = RenderGraph::new(&root);
+    let mut store = SceneStore::from_layer(&root);
     let mut nodes = HashSet::from_iter([NodeId(999)]);
-    graph.collect_retained_visual_observation_nodes(&mut nodes);
+    store.collect_visual_observation_nodes(&mut nodes);
     assert_eq!(
         nodes,
         HashSet::from_iter([NodeId(5), NodeId(9), NodeId(13), NodeId(17)])
     );
     let capacity = nodes.capacity();
-    let mut root = graph.root();
     root.children.clear();
     root.node_id = Some(NodeId(23));
-    graph = RenderGraph::new(&root);
-    graph.collect_retained_visual_observation_nodes(&mut nodes);
+    store.describe(&root);
+    store.collect_visual_observation_nodes(&mut nodes);
     assert_eq!(nodes, HashSet::from_iter([NodeId(23)]));
     assert_eq!(nodes.capacity(), capacity);
-}
-
-#[test]
-fn render_graph_new_recomputes_manual_layer_hashes() {
-    let primitive = PrimitiveEntry {
-        phase: PrimitivePhase::BeforeChildren,
-        node: PrimitiveNode::Draw(Box::new(DrawPrimitiveNode {
-            primitive: DrawPrimitive::Rect {
-                rect: Rect {
-                    x: 1.0,
-                    y: 2.0,
-                    width: 8.0,
-                    height: 6.0,
-                },
-                brush: Brush::solid(Color::WHITE),
-                stroke: None,
-            },
-            clip: None,
-        })),
-    };
-    let mut root = test_layer(
-        Rect {
-            x: 0.0,
-            y: 0.0,
-            width: 20.0,
-            height: 20.0,
-        },
-        vec![RenderNode::Primitive(primitive)],
-    );
-    root.graphics_layer.render_effect = Some(RenderEffect::blur(3.0));
-    let mut expected = root.clone();
-    expected.forget_raster_cache_hashes();
-
-    let graph = RenderGraph::new(&root);
-    assert_eq!(
-        graph.root().target_content_hash(),
-        expected.target_content_hash()
-    );
-    assert_eq!(graph.root().effect_hash(), expected.effect_hash());
 }
 
 #[test]
@@ -201,25 +168,21 @@ fn motion_source_content_hash_ignores_translated_content_offset() {
     );
     base.translated_content_context = true;
     base.translated_content_offset = Point::new(0.0, -24.0);
-    base.forget_raster_cache_hashes();
 
     let mut moved = base.clone();
     moved.translated_content_offset = Point::new(0.0, -72.0);
-    moved.forget_raster_cache_hashes();
 
-    assert_ne!(base.target_content_hash(), moved.target_content_hash());
-    assert_eq!(
-        base.motion_source_content_hash(),
-        moved.motion_source_content_hash()
+    let (base, moved) = (
+        SceneStore::from_layer(&base),
+        SceneStore::from_layer(&moved),
     );
-}
-
-#[test]
-fn render_nodes_stay_small_enough_to_walk_densely() {
-    assert!(
-        size_of::<RenderNode>() <= 48,
-        "a layer's children are walked every frame; keep large payloads boxed, got {} bytes",
-        size_of::<RenderNode>()
+    assert_ne!(
+        root_of(&base).target_content_hash(),
+        root_of(&moved).target_content_hash()
+    );
+    assert_eq!(
+        root_of(&base).motion_source_content_hash(),
+        root_of(&moved).motion_source_content_hash()
     );
 }
 
@@ -248,11 +211,25 @@ fn bounded(width: f32, height: f32, children: Vec<RenderNode>) -> LayerNode {
 }
 
 fn inner(x: f32, y: f32, draws_within_bounds: bool) -> RenderNode {
+    let reach = if draws_within_bounds { 20.0 } else { 40.0 };
     RenderNode::Layer(Box::new(LayerNode {
         transform_to_parent: ProjectiveTransform::translation(x, y),
-        contained: Some(draws_within_bounds).into(),
-        ..bounded(20.0, 20.0, Vec::new())
+        ..bounded(
+            20.0,
+            20.0,
+            vec![contained_run(Rect {
+                x: 0.0,
+                y: 0.0,
+                width: reach,
+                height: reach,
+            })],
+        )
     }))
+}
+
+// Whether the scene of `layer` draws within the layer's bounds.
+fn draws_within_bounds(layer: &LayerNode) -> bool {
+    root_of(&SceneStore::from_layer(layer)).draws_within_bounds()
 }
 
 #[test]
@@ -263,50 +240,41 @@ fn content_inside_the_bounds_draws_within_them() {
         width,
         height,
     };
+    let run = |area| bounded(50.0, 50.0, vec![contained_run(area)]);
+    assert!(draws_within_bounds(&run(rect(0.0, 0.0, 50.0, 50.0))));
     assert!(
-        bounded(50.0, 50.0, vec![contained_run(rect(0.0, 0.0, 50.0, 50.0))])
-            .content_draws_within_bounds()
-    );
-    assert!(
-        bounded(50.0, 50.0, vec![contained_run(rect(-0.5, 0.0, 50.0, 50.5))])
-            .content_draws_within_bounds(),
+        draws_within_bounds(&run(rect(-0.5, 0.0, 50.0, 50.5))),
         "antialiasing slack"
     );
+    assert!(!draws_within_bounds(&run(rect(0.0, 0.0, 60.0, 50.0))));
+    let child = |child| bounded(50.0, 50.0, vec![child]);
+    assert!(draws_within_bounds(&child(inner(10.0, 10.0, true))));
     assert!(
-        !bounded(50.0, 50.0, vec![contained_run(rect(0.0, 0.0, 60.0, 50.0))])
-            .content_draws_within_bounds()
-    );
-    assert!(bounded(50.0, 50.0, vec![inner(10.0, 10.0, true)]).content_draws_within_bounds());
-    assert!(
-        !bounded(50.0, 50.0, vec![inner(40.0, 10.0, true)]).content_draws_within_bounds(),
+        !draws_within_bounds(&child(inner(40.0, 10.0, true))),
         "a child placed partly outside"
     );
     assert!(
-        !bounded(50.0, 50.0, vec![inner(10.0, 10.0, false)]).content_draws_within_bounds(),
-        "a child that may draw anywhere"
+        !draws_within_bounds(&child(inner(10.0, 10.0, false))),
+        "a child that draws past its bounds"
     );
 }
 
 #[test]
 fn a_clip_or_a_shadow_decides_containment_whatever_the_content() {
     let overflowing = inner(40.0, 40.0, false);
-    assert!(
-        LayerNode {
-            clip_to_bounds: true,
-            ..bounded(50.0, 50.0, vec![overflowing])
-        }
-        .content_draws_within_bounds()
-    );
-    let shadowed = RenderNode::Layer(Box::new(LayerNode {
-        graphics_layer: GraphicsLayer {
-            shadow_elevation: 6.0,
-            ..Default::default()
-        }
-        .into(),
-        contained: Some(true).into(),
-        ..bounded(20.0, 20.0, Vec::new())
+    assert!(draws_within_bounds(&LayerNode {
+        clip_to_bounds: true,
+        ..bounded(50.0, 50.0, vec![overflowing])
     }));
-    assert!(!bounded(50.0, 50.0, vec![shadowed]).content_draws_within_bounds());
+    let RenderNode::Layer(mut shadowed) = inner(10.0, 10.0, true) else {
+        unreachable!("inner makes a layer");
+    };
+    shadowed.graphics_layer.shadow_elevation = 6.0;
+    assert!(!draws_within_bounds(&bounded(
+        50.0,
+        50.0,
+        vec![RenderNode::Layer(shadowed)]
+    )));
 }
 
 #[test]
@@ -317,20 +285,21 @@ fn a_group_opacity_layer_cuts_its_drawing_at_its_bounds_but_not_its_hits() {
         width: 20.0,
         height: 10.0,
     };
-    let layer = LayerNode {
+    let layer = SceneStore::from_layer(&LayerNode {
         isolation: IsolationReasons {
             group_opacity: true,
             ..Default::default()
         },
         ..test_layer(bounds, Vec::new())
-    };
-    assert_eq!(layer.clip_rect(), None);
-    assert_eq!(layer.visual_clip_rect(), Some(bounds));
-    assert_eq!(test_layer(bounds, Vec::new()).visual_clip_rect(), None);
+    });
+    assert_eq!(root_of(&layer).clip_rect(), None);
+    assert_eq!(root_of(&layer).visual_clip_rect(), Some(bounds));
+    let plain = SceneStore::from_layer(&test_layer(bounds, Vec::new()));
+    assert_eq!(root_of(&plain).visual_clip_rect(), None);
 }
 
 #[test]
-fn a_node_rect_is_its_own_rect_or_else_its_layer_bounds() {
+fn a_node_rect_starts_at_its_origin_and_its_layer_bounds_may_lie_apart() {
     let layer_bounds = Rect {
         x: 4.0,
         y: 4.0,
@@ -343,15 +312,12 @@ fn a_node_rect_is_its_own_rect_or_else_its_layer_bounds() {
         width: 20.0,
         height: 10.0,
     };
-    assert_eq!(
-        test_layer(layer_bounds, Vec::new()).node_rect(),
-        layer_bounds
-    );
-    let split = LayerNode {
+    let split = SceneStore::from_layer(&LayerNode {
         node_bounds: Some(node),
         ..test_layer(layer_bounds, Vec::new())
-    };
-    assert_eq!(split.node_rect(), node);
+    });
+    assert_eq!(root_of(&split).node_rect(), node);
+    assert_eq!(root_of(&split).local_bounds(), layer_bounds);
 }
 
 #[test]

@@ -2,46 +2,34 @@ use std::{cell::Cell, rc::Rc};
 
 use cranpose_core::NodeId;
 use cranpose_render_common::{
-    graph::{LayerNode, RenderGraph, RenderNode},
-    scene_builder::{
-        build_graph_from_applier, clear_command_recordings_for_tests, rebuild_graph_from_applier,
-    },
+    graph_scene::Scene,
+    scene_builder::clear_command_recordings_for_tests,
+    scene_store::{ItemRef, LayerRef},
 };
 use cranpose_ui::{
     Brush, Canvas, Color, LayoutEngine, Modifier, Size, TestComposition, run_test_composition,
 };
 use cranpose_ui_graphics::{CommandRecording, DrawPrimitive};
 
-fn canvas_graph(
-    composition: &mut TestComposition,
-    root: NodeId,
-    previous: Option<RenderGraph>,
-) -> RenderGraph {
+fn canvas_graph(composition: &mut TestComposition, root: NodeId, previous: Option<Scene>) -> Scene {
     let handle = composition.runtime_handle();
     let mut applier = composition.applier_mut();
     applier.set_runtime_handle(handle);
     applier
         .compute_layout(root, Size::new(64.0, 64.0))
         .expect("layout");
-    let graph = match previous {
-        Some(previous) => rebuild_graph_from_applier(&applier, root, 1.0, Some(previous)),
-        None => build_graph_from_applier(&applier, root, 1.0),
-    }
-    .expect("render graph");
+    let mut scene = previous.unwrap_or_default();
+    scene.rebuild_from_applier(&applier, root);
+    assert!(scene.root_layer().is_some(), "a scene");
     applier.clear_runtime_handle();
-    graph
+    scene
 }
 
-fn retained_recording(layer: &LayerNode) -> Option<CommandRecording> {
-    nodes_recording(&layer.children)
-}
-
-fn nodes_recording(nodes: &[RenderNode]) -> Option<CommandRecording> {
-    nodes.iter().find_map(|child| match child {
-        RenderNode::DrawRun(run) => Some(run.recording.as_ref().clone()),
-        RenderNode::Layer(child) => retained_recording(child),
-        RenderNode::Inline(inline) => nodes_recording(&inline.content),
-        RenderNode::Primitive(_) => None,
+fn retained_recording(layer: LayerRef<'_>) -> Option<CommandRecording> {
+    layer.items().find_map(|item| match item {
+        ItemRef::Run(run) => Some(run.recording.as_ref().clone()),
+        ItemRef::Layer(child) | ItemRef::Leaf(child) => retained_recording(child),
+        ItemRef::Draw(_) | ItemRef::Text(_) => None,
     })
 }
 
@@ -88,14 +76,14 @@ fn canvas_rebuilds_keep_each_retained_frame_and_paint_the_new_state() {
             value.set(index);
             graph = canvas_graph(&mut composition, root, Some(graph));
         }
-        let mut colors = Vec::new();
-        crate::scene_probe::painted_solid_rect_colors(&graph.root(), &mut colors);
+        let colors = crate::scene_probe::solid_rect_colors(&graph);
         assert_eq!(
             colors,
             vec![expected_color],
             "frame {index} paints its state"
         );
-        let recording = retained_recording(&graph.root()).expect("canvas recording");
+        let recording =
+            retained_recording(graph.root_layer().expect("a scene")).expect("canvas recording");
         retained.push((recording, expected_color));
     }
 
@@ -109,7 +97,6 @@ fn canvas_rebuilds_keep_each_retained_frame_and_paint_the_new_state() {
 
     value.set(0);
     let final_graph = canvas_graph(&mut composition, root, Some(graph));
-    let mut colors = Vec::new();
-    crate::scene_probe::painted_solid_rect_colors(&final_graph.root(), &mut colors);
+    let colors = crate::scene_probe::solid_rect_colors(&final_graph);
     assert_eq!(colors, vec![Color::RED]);
 }

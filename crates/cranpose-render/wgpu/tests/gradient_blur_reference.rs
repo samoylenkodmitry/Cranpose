@@ -1,4 +1,4 @@
-use cranpose_render_common::graph::{ProjectiveTransform, RenderGraph, RenderNode};
+use cranpose_render_common::graph::{LayerNode, ProjectiveTransform, RenderNode};
 use cranpose_ui_graphics::{
     GradientBlurDirection, GraphicsLayer, LayerShape, RUNTIME_SHADER_PRELUDE_WGSL, Rect,
     RenderEffect, RoundedCornerShape, RuntimeShader, gradient_blur_effect,
@@ -9,7 +9,7 @@ use crate::{shared_test_support, support};
 const FRAME: u32 = 192;
 const REFERENCE: &str = include_str!("fixtures/gradient_blur_reference.wgsl");
 
-fn page(effect: RenderEffect) -> RenderGraph {
+fn page(effect: RenderEffect) -> LayerNode {
     let mut children = support::striped_page(FRAME, FRAME);
     children.push(RenderNode::Layer(Box::new(
         shared_test_support::layer_node(

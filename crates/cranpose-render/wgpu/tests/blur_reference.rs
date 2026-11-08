@@ -1,4 +1,4 @@
-use cranpose_render_common::graph::{ProjectiveTransform, RenderGraph, RenderNode};
+use cranpose_render_common::graph::{LayerNode, ProjectiveTransform, RenderNode};
 use cranpose_ui_graphics::{Color, GraphicsLayer, Rect, RenderEffect};
 use support::{ReferenceEdge, region_pixels, solid_rect};
 
@@ -25,7 +25,7 @@ fn rect(x: f32, y: f32, width: f32, height: f32) -> Rect {
 
 /// Bars and blocks of distinct colors under the glass, so every tap of the
 /// kernel meets an edge somewhere.
-fn page(blur: Option<f32>) -> RenderGraph {
+fn page(blur: Option<f32>) -> LayerNode {
     let mut children = vec![
         solid_rect(
             rect(0.0, 0.0, FRAME as f32, FRAME as f32),
@@ -80,9 +80,15 @@ fn worst_kernel_deviation(radius: f32, density: f32) -> Option<KernelDeviation> 
         return None;
     };
     let frame = (FRAME as f32 * density) as u32;
-    let plain = support::capture_graph_with_scale(&mut renderer, page(None), frame, frame, density);
-    let blurred =
-        support::capture_graph_with_scale(&mut renderer, page(Some(radius)), frame, frame, density);
+    let plain =
+        support::capture_graph_with_scale(&mut renderer, &page(None), frame, frame, density);
+    let blurred = support::capture_graph_with_scale(
+        &mut renderer,
+        &page(Some(radius)),
+        frame,
+        frame,
+        density,
+    );
     let plain_values: Vec<f32> = plain.pixels.iter().map(|value| f32::from(*value)).collect();
     let expected = support::reference_blur(
         &plain_values,

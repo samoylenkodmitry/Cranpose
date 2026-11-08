@@ -2,8 +2,8 @@ use cranpose_core::NodeId;
 use cranpose_render_common::{
     Renderer,
     graph::{
-        CachePolicy, DrawPrimitiveNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase,
-        ProjectiveTransform, RenderGraph, RenderNode, TextPrimitiveNode,
+        CachePolicy, DrawPrimitiveNode, LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase,
+        ProjectiveTransform, RenderNode, TextPrimitiveNode,
     },
     image_compare::{image_difference_stats, normalize_rgba_region, sample_pixel},
 };
@@ -92,7 +92,7 @@ fn isolated_backdrop_shader_preserves_fractional_edge_coverage() {
             },
             vec![RenderNode::Layer(Box::new(glass))],
         );
-        renderer.scene_mut().graph = Some(RenderGraph::new(&layer(
+        renderer.scene_mut().describe(&layer(
             frame_rect(),
             ProjectiveTransform::identity(),
             GraphicsLayer::default(),
@@ -100,7 +100,7 @@ fn isolated_backdrop_shader_preserves_fractional_edge_coverage() {
                 solid_rect(frame_rect(), Color::BLACK),
                 RenderNode::Layer(Box::new(scaled)),
             ],
-        )));
+        ));
         captures.push(capture_logical_frame_with_scale(
             &mut renderer,
             FRAME_WIDTH,
@@ -133,7 +133,7 @@ fn subtree_alpha_capture_preserves_group_opacity_and_uses_bounded_surface() {
         }
     };
 
-    renderer.scene_mut().graph = Some(alpha_fixture());
+    renderer.scene_mut().describe(&alpha_fixture());
     let frame = renderer
         .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
         .expect("alpha capture should succeed");
@@ -178,7 +178,7 @@ fn offscreen_alpha_layer_preserves_dstout_cutout_over_underlay() {
         }
     };
 
-    renderer.scene_mut().graph = Some(dstout_alpha_fixture());
+    renderer.scene_mut().describe(&dstout_alpha_fixture());
     let frame = renderer
         .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
         .expect("DstOut alpha capture should succeed");
@@ -215,7 +215,9 @@ fn repeated_gradient_dstout_alpha_layer_reveals_underlay() {
         }
     };
 
-    renderer.scene_mut().graph = Some(gradient_dstout_alpha_fixture());
+    renderer
+        .scene_mut()
+        .describe(&gradient_dstout_alpha_fixture());
     for _ in 0..3 {
         let frame = renderer
             .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
@@ -252,7 +254,7 @@ fn root_composite_respects_root_scale_on_presented_surface() {
         }
     };
 
-    renderer.scene_mut().graph = Some(root_scale_fixture());
+    renderer.scene_mut().describe(&root_scale_fixture());
     let frame = renderer
         .capture_frame_with_scale(FRAME_WIDTH, FRAME_HEIGHT, ROOT_SCALE_TEST_SCALE)
         .expect("root-scale capture should succeed");
@@ -282,10 +284,12 @@ fn full_logical_root_capture_respects_explicit_root_scale() {
     let logical_width = 96;
     let logical_height = 72;
     let root_scale = 2.0;
-    renderer.scene_mut().graph = Some(full_logical_root_scale_fixture(
-        logical_width as f32,
-        logical_height as f32,
-    ));
+    renderer
+        .scene_mut()
+        .describe(&full_logical_root_scale_fixture(
+            logical_width as f32,
+            logical_height as f32,
+        ));
     let frame =
         capture_logical_frame_with_scale(&mut renderer, logical_width, logical_height, root_scale);
 
@@ -311,7 +315,7 @@ fn translation_only_layers_render_without_nested_offscreens() {
         }
     };
 
-    renderer.scene_mut().graph = Some(translation_only_fixture());
+    renderer.scene_mut().describe(&translation_only_fixture());
     let frame = renderer
         .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
         .expect("translation-only capture should succeed");
@@ -349,9 +353,11 @@ fn translation_only_wrapper_with_text_collapses_into_root_target() {
         }
     };
 
-    renderer.scene_mut().graph = Some(translation_only_wrapper_with_text_fixture(Point::new(
-        12.0, 14.0,
-    )));
+    renderer
+        .scene_mut()
+        .describe(&translation_only_wrapper_with_text_fixture(Point::new(
+            12.0, 14.0,
+        )));
     let frame = renderer
         .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
         .expect("wrapper text capture should succeed");
@@ -391,7 +397,11 @@ fn translated_text_wrapper_with_text_stays_on_direct_path_under_fractional_motio
     };
 
     let base_translation = Point::new(12.0, 14.0);
-    renderer.scene_mut().graph = Some(translation_only_wrapper_with_text_fixture(base_translation));
+    renderer
+        .scene_mut()
+        .describe(&translation_only_wrapper_with_text_fixture(
+            base_translation,
+        ));
     let base_frame = renderer
         .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
         .expect("translated text-wrapper base capture should succeed");
@@ -400,9 +410,11 @@ fn translated_text_wrapper_with_text_stays_on_direct_path_under_fractional_motio
         .expect("translated text-wrapper base frame stats");
 
     let moved_translation = Point::new(12.35, 14.65);
-    renderer.scene_mut().graph = Some(translation_only_wrapper_with_text_fixture(
-        moved_translation,
-    ));
+    renderer
+        .scene_mut()
+        .describe(&translation_only_wrapper_with_text_fixture(
+            moved_translation,
+        ));
     let moved_frame = renderer
         .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
         .expect("translated text-wrapper moved capture should succeed");
@@ -462,7 +474,7 @@ fn translated_text_wrapper_moves_its_raster_by_whole_pixels_under_fractional_mot
     let base_translation = Point::new(12.0, 14.0);
     let mut base_graph = translation_only_wrapper_with_plain_text_only_fixture(base_translation);
     mark_translated_text_wrapper(&mut base_graph);
-    renderer.scene_mut().graph = Some(base_graph);
+    renderer.scene_mut().describe(&base_graph);
     let base_frame = renderer
         .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
         .expect("translated text base capture should succeed");
@@ -471,7 +483,7 @@ fn translated_text_wrapper_moves_its_raster_by_whole_pixels_under_fractional_mot
     let mut horizontal_graph =
         translation_only_wrapper_with_plain_text_only_fixture(horizontal_translation);
     mark_translated_text_wrapper(&mut horizontal_graph);
-    renderer.scene_mut().graph = Some(horizontal_graph);
+    renderer.scene_mut().describe(&horizontal_graph);
     let horizontal_frame = renderer
         .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
         .expect("translated text horizontal capture should succeed");
@@ -480,7 +492,7 @@ fn translated_text_wrapper_moves_its_raster_by_whole_pixels_under_fractional_mot
     let mut vertical_graph =
         translation_only_wrapper_with_plain_text_only_fixture(vertical_translation);
     mark_translated_text_wrapper(&mut vertical_graph);
-    renderer.scene_mut().graph = Some(vertical_graph);
+    renderer.scene_mut().describe(&vertical_graph);
     let vertical_frame = renderer
         .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
         .expect("translated text vertical capture should succeed");
@@ -522,7 +534,7 @@ fn translated_thin_shape_wrapper_stays_rigid_on_the_direct_path_under_fractional
     let base_translation = Point::new(12.0, 14.0);
     let mut base_graph = translation_only_wrapper_with_thin_shapes_fixture(base_translation);
     mark_translated_shape_wrapper(&mut base_graph);
-    renderer.scene_mut().graph = Some(base_graph);
+    renderer.scene_mut().describe(&base_graph);
     let base_frame = renderer
         .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
         .expect("translated thin-shape base capture should succeed");
@@ -534,7 +546,7 @@ fn translated_thin_shape_wrapper_stays_rigid_on_the_direct_path_under_fractional
     let mut horizontal_graph =
         translation_only_wrapper_with_thin_shapes_fixture(horizontal_translation);
     mark_translated_shape_wrapper(&mut horizontal_graph);
-    renderer.scene_mut().graph = Some(horizontal_graph);
+    renderer.scene_mut().describe(&horizontal_graph);
     let horizontal_frame = renderer
         .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
         .expect("translated thin-shape horizontal capture should succeed");
@@ -546,7 +558,7 @@ fn translated_thin_shape_wrapper_stays_rigid_on_the_direct_path_under_fractional
     let mut vertical_graph =
         translation_only_wrapper_with_thin_shapes_fixture(vertical_translation);
     mark_translated_shape_wrapper(&mut vertical_graph);
-    renderer.scene_mut().graph = Some(vertical_graph);
+    renderer.scene_mut().describe(&vertical_graph);
     let vertical_frame = renderer
         .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
         .expect("translated thin-shape vertical capture should succeed");
@@ -611,7 +623,7 @@ fn translated_gradient_wrapper_keeps_its_dither_under_fractional_motion() {
     .map(|translation| {
         let mut graph = translation_only_wrapper_with_gradient_fixture(translation);
         mark_translated_shape_wrapper(&mut graph);
-        renderer.scene_mut().graph = Some(graph);
+        renderer.scene_mut().describe(&graph);
         let frame = renderer
             .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
             .expect("translated gradient capture should succeed");
@@ -691,12 +703,16 @@ fn scaled_child_compare_size() -> (u32, u32) {
 }
 
 fn capture_scaled_child_region(renderer: &mut WgpuRenderer, translation: Point) -> Vec<u8> {
-    renderer.scene_mut().graph = Some(scaled_child_fixture(translation));
+    renderer
+        .scene_mut()
+        .describe(&scaled_child_fixture(translation));
     capture_scaled_region(renderer, translation)
 }
 
 fn capture_scaled_reference_region(renderer: &mut WgpuRenderer, translation: Point) -> Vec<u8> {
-    renderer.scene_mut().graph = Some(scaled_reference_fixture(translation));
+    renderer
+        .scene_mut()
+        .describe(&scaled_reference_fixture(translation));
     capture_scaled_region(renderer, translation)
 }
 
@@ -734,7 +750,7 @@ fn assert_scaled_child_matches_reference(label: &str, composited: &[u8], referen
     );
 }
 
-fn scaled_child_fixture(translation: Point) -> RenderGraph {
+fn scaled_child_fixture(translation: Point) -> LayerNode {
     let bounds = Rect {
         x: 0.0,
         y: 0.0,
@@ -770,7 +786,7 @@ fn scaled_child_fixture(translation: Point) -> RenderGraph {
     ])
 }
 
-fn scaled_reference_fixture(translation: Point) -> RenderGraph {
+fn scaled_reference_fixture(translation: Point) -> LayerNode {
     let inset = SCALED_CHILD_SIZE * 0.5 * (1.0 - SCALED_CHILD_SCALE);
     let rect = Rect {
         x: translation.x + inset,
@@ -816,9 +832,11 @@ fn translation_only_wrapper_with_underlined_text_stays_on_direct_path() {
     };
 
     let translation = Point::new(12.0, 14.0);
-    renderer.scene_mut().graph = Some(translation_only_wrapper_with_underlined_text_fixture(
-        translation,
-    ));
+    renderer
+        .scene_mut()
+        .describe(&translation_only_wrapper_with_underlined_text_fixture(
+            translation,
+        ));
     let frame = renderer
         .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
         .expect("underlined text wrapper capture should succeed");
@@ -881,7 +899,7 @@ fn translated_content_wrapper_with_decorated_shadow_text_stays_on_the_direct_pat
     };
 
     let translation = Point::new(12.0, 14.0);
-    let mut root = translation_only_wrapper_with_decorated_shadow_text_fixture(translation).root();
+    let mut root = translation_only_wrapper_with_decorated_shadow_text_fixture(translation);
     let Some(RenderNode::Layer(wrapper)) = root.children.get_mut(1) else {
         panic!("expected decorated text wrapper layer");
     };
@@ -890,7 +908,7 @@ fn translated_content_wrapper_with_decorated_shadow_text_stays_on_the_direct_pat
         panic!("expected decorated text leaf layer");
     };
     text_leaf.translated_content_context = true;
-    renderer.scene_mut().graph = Some(RenderGraph::new(&root));
+    renderer.scene_mut().describe(&root);
     let frame = renderer
         .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
         .expect("decorated text wrapper capture should succeed");
@@ -963,7 +981,9 @@ fn repeated_translated_drop_shadow_layers_stay_on_direct_path() {
     };
 
     const CARD_COUNT: usize = 8;
-    renderer.scene_mut().graph = Some(repeated_drop_shadow_layers_fixture(CARD_COUNT));
+    renderer
+        .scene_mut()
+        .describe(&repeated_drop_shadow_layers_fixture(CARD_COUNT));
     let frame = renderer
         .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
         .expect("repeated drop-shadow capture should succeed");
@@ -1014,7 +1034,9 @@ fn shadow_blur_composite_render_submits_one_frame_command_buffer() {
         }
     };
 
-    renderer.scene_mut().graph = Some(repeated_drop_shadow_layers_fixture(4));
+    renderer
+        .scene_mut()
+        .describe(&repeated_drop_shadow_layers_fixture(4));
     let stats = renderer
         .render_current_scene_to_texture(FRAME_WIDTH, FRAME_HEIGHT)
         .expect("shadow render should succeed");
@@ -1045,7 +1067,7 @@ fn translated_multispan_showcase_text_stays_exact_at_fractional_root_scale() {
     let mut base_graph =
         translation_only_wrapper_with_multispan_showcase_text_fixture(base_translation);
     mark_translated_text_wrapper(&mut base_graph);
-    renderer.scene_mut().graph = Some(base_graph);
+    renderer.scene_mut().describe(&base_graph);
     let base_frame = capture_logical_frame_with_scale(
         &mut renderer,
         MULTISPAN_FRAME_WIDTH,
@@ -1057,7 +1079,7 @@ fn translated_multispan_showcase_text_stays_exact_at_fractional_root_scale() {
     let mut moved_graph =
         translation_only_wrapper_with_multispan_showcase_text_fixture(moved_translation);
     mark_translated_text_wrapper(&mut moved_graph);
-    renderer.scene_mut().graph = Some(moved_graph);
+    renderer.scene_mut().describe(&moved_graph);
     let moved_frame = capture_logical_frame_with_scale(
         &mut renderer,
         MULTISPAN_FRAME_WIDTH,
@@ -1104,7 +1126,7 @@ fn translated_showcase_card_surface_stays_exact_at_fractional_root_scale() {
     let base_translation = Point::new(12.4, 14.4);
     let mut base_graph = translation_only_wrapper_with_showcase_card_fixture(base_translation);
     mark_translated_text_wrapper(&mut base_graph);
-    renderer.scene_mut().graph = Some(base_graph);
+    renderer.scene_mut().describe(&base_graph);
     let base_frame = capture_logical_frame_with_scale(
         &mut renderer,
         MULTISPAN_FRAME_WIDTH,
@@ -1115,7 +1137,7 @@ fn translated_showcase_card_surface_stays_exact_at_fractional_root_scale() {
     let moved_translation = Point::new(12.4, 13.4);
     let mut moved_graph = translation_only_wrapper_with_showcase_card_fixture(moved_translation);
     mark_translated_text_wrapper(&mut moved_graph);
-    renderer.scene_mut().graph = Some(moved_graph);
+    renderer.scene_mut().describe(&moved_graph);
     let moved_frame = capture_logical_frame_with_scale(
         &mut renderer,
         MULTISPAN_FRAME_WIDTH,
@@ -1164,7 +1186,9 @@ fn static_alpha_surface_keeps_nested_text_and_icon_crisp_at_fractional_offset() 
     };
 
     let base_translation = Point::new(20.0, 18.0);
-    renderer.scene_mut().graph = Some(alpha_icon_text_surface_fixture(base_translation));
+    renderer
+        .scene_mut()
+        .describe(&alpha_icon_text_surface_fixture(base_translation));
     let base_frame = renderer
         .capture_frame(150, 86)
         .expect("base alpha surface capture should succeed");
@@ -1175,7 +1199,9 @@ fn static_alpha_surface_keeps_nested_text_and_icon_crisp_at_fractional_offset() 
     );
 
     let fractional_translation = Point::new(20.4, 18.4);
-    renderer.scene_mut().graph = Some(alpha_icon_text_surface_fixture(fractional_translation));
+    renderer
+        .scene_mut()
+        .describe(&alpha_icon_text_surface_fixture(fractional_translation));
     let fractional_frame = renderer
         .capture_frame(150, 86)
         .expect("fractional alpha surface capture should succeed");
@@ -1210,7 +1236,7 @@ fn translated_multispan_showcase_text_with_padding_stays_exact_at_fractional_roo
     let mut base_graph =
         translation_only_wrapper_with_padded_multispan_showcase_text_fixture(base_translation);
     mark_translated_text_wrapper(&mut base_graph);
-    renderer.scene_mut().graph = Some(base_graph);
+    renderer.scene_mut().describe(&base_graph);
     let base_frame = capture_logical_frame_with_scale(
         &mut renderer,
         MULTISPAN_FRAME_WIDTH,
@@ -1223,7 +1249,7 @@ fn translated_multispan_showcase_text_with_padding_stays_exact_at_fractional_roo
     let mut moved_graph =
         translation_only_wrapper_with_padded_multispan_showcase_text_fixture(moved_translation);
     mark_translated_text_wrapper(&mut moved_graph);
-    renderer.scene_mut().graph = Some(moved_graph);
+    renderer.scene_mut().describe(&moved_graph);
     let moved_frame = capture_logical_frame_with_scale(
         &mut renderer,
         MULTISPAN_FRAME_WIDTH,
@@ -1274,12 +1300,12 @@ fn bounded_blur_capture_stays_inside_layer_bounds() {
         }
     };
 
-    renderer.scene_mut().graph = Some(unblurred_fixture());
+    renderer.scene_mut().describe(&unblurred_fixture());
     let baseline = renderer
         .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
         .expect("unblurred baseline capture should succeed");
 
-    renderer.scene_mut().graph = Some(blur_fixture());
+    renderer.scene_mut().describe(&blur_fixture());
     let frame = renderer
         .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
         .expect("blur capture should succeed");
@@ -1327,7 +1353,7 @@ fn bounded_backdrop_capture_only_filters_local_snapshot() {
         }
     };
 
-    renderer.scene_mut().graph = Some(backdrop_fixture());
+    renderer.scene_mut().describe(&backdrop_fixture());
     let frame = renderer
         .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
         .expect("backdrop capture should succeed");
@@ -1405,7 +1431,7 @@ fn a_magnifying_layers_backdrop_stays_registered_with_the_world_behind_it() {
         )))],
     );
 
-    renderer.scene_mut().graph = Some(RenderGraph::new(&layer(
+    renderer.scene_mut().describe(&layer(
         Rect {
             x: 0.0,
             y: 0.0,
@@ -1435,7 +1461,7 @@ fn a_magnifying_layers_backdrop_stays_registered_with_the_world_behind_it() {
             ),
             RenderNode::Layer(Box::new(magnified)),
         ],
-    )));
+    ));
 
     let frame = renderer
         .capture_frame_with_scale(FRAME_WIDTH, FRAME_HEIGHT, root_scale)
@@ -1512,7 +1538,7 @@ fn scaled_sibling_backdrop_sees_prior_backdrop_output() {
         vec![],
     );
 
-    renderer.scene_mut().graph = Some(RenderGraph::new(&layer(
+    renderer.scene_mut().describe(&layer(
         logical_root,
         ProjectiveTransform::identity(),
         GraphicsLayer::default(),
@@ -1538,7 +1564,7 @@ fn scaled_sibling_backdrop_sees_prior_backdrop_output() {
             RenderNode::Layer(Box::new(strong_blur)),
             RenderNode::Layer(Box::new(weak_blur)),
         ],
-    )));
+    ));
 
     let frame = renderer
         .capture_frame_with_scale(FRAME_WIDTH, FRAME_HEIGHT, root_scale)
@@ -1568,12 +1594,16 @@ fn nested_backdrop_blur_radius_changes_rendered_pixels() {
         }
     };
 
-    renderer.scene_mut().graph = Some(nested_backdrop_effect_fixture(0.0));
+    renderer
+        .scene_mut()
+        .describe(&nested_backdrop_effect_fixture(0.0));
     let base_frame = renderer
         .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
         .expect("nested backdrop base capture should succeed");
 
-    renderer.scene_mut().graph = Some(nested_backdrop_effect_fixture(18.0));
+    renderer
+        .scene_mut()
+        .describe(&nested_backdrop_effect_fixture(18.0));
     let blurred_frame = renderer
         .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
         .expect("nested backdrop blurred capture should succeed");
@@ -1636,7 +1666,9 @@ fn static_glass_stays_intact_when_non_overlapping_content_animates() {
         }
     };
 
-    renderer.scene_mut().graph = Some(spatial_backdrop_cache_fixture(Color::RED));
+    renderer
+        .scene_mut()
+        .describe(&spatial_backdrop_cache_fixture(Color::RED));
     let warmup_frame = renderer
         .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
         .expect("backdrop cache warmup should succeed");
@@ -1644,7 +1676,9 @@ fn static_glass_stays_intact_when_non_overlapping_content_animates() {
         .last_frame_stats()
         .expect("backdrop warmup frame stats");
 
-    renderer.scene_mut().graph = Some(spatial_backdrop_cache_fixture(Color::BLUE));
+    renderer
+        .scene_mut()
+        .describe(&spatial_backdrop_cache_fixture(Color::BLUE));
     let animated_frame = renderer
         .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
         .expect("non-overlapping animation frame should succeed");
@@ -1709,7 +1743,9 @@ fn translated_backdrop_capture_preserves_local_picture_under_rigid_motion() {
     };
 
     let base_translation = Point::new(14.3, 18.6);
-    renderer.scene_mut().graph = Some(translated_backdrop_fixture(base_translation));
+    renderer
+        .scene_mut()
+        .describe(&translated_backdrop_fixture(base_translation));
     let base_frame = renderer
         .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
         .expect("translated backdrop base capture should succeed");
@@ -1718,7 +1754,9 @@ fn translated_backdrop_capture_preserves_local_picture_under_rigid_motion() {
         .expect("translated backdrop base frame stats");
 
     let moved_translation = Point::new(36.4, 30.1);
-    renderer.scene_mut().graph = Some(translated_backdrop_fixture(moved_translation));
+    renderer
+        .scene_mut()
+        .describe(&translated_backdrop_fixture(moved_translation));
     let moved_frame = renderer
         .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
         .expect("translated backdrop moved capture should succeed");
@@ -1782,7 +1820,7 @@ fn translated_backdrop_capture_preserves_local_picture_under_rigid_motion() {
     }
 }
 
-fn alpha_fixture() -> RenderGraph {
+fn alpha_fixture() -> LayerNode {
     let alpha_layer = layer(
         Rect {
             x: 0.0,
@@ -1823,7 +1861,7 @@ fn alpha_fixture() -> RenderGraph {
     ])
 }
 
-fn dstout_alpha_fixture() -> RenderGraph {
+fn dstout_alpha_fixture() -> LayerNode {
     let top_layer = layer(
         Rect {
             x: 0.0,
@@ -1871,7 +1909,7 @@ fn dstout_alpha_fixture() -> RenderGraph {
     ])
 }
 
-fn gradient_dstout_alpha_fixture() -> RenderGraph {
+fn gradient_dstout_alpha_fixture() -> LayerNode {
     let top_layer = layer(
         Rect {
             x: 0.0,
@@ -1956,7 +1994,7 @@ fn gradient_dstout_alpha_fixture() -> RenderGraph {
     ])
 }
 
-fn blur_fixture() -> RenderGraph {
+fn blur_fixture() -> LayerNode {
     let blur_layer = layer(
         Rect {
             x: 0.0,
@@ -1986,7 +2024,7 @@ fn blur_fixture() -> RenderGraph {
     ])
 }
 
-fn unblurred_fixture() -> RenderGraph {
+fn unblurred_fixture() -> LayerNode {
     let plain_layer = layer(
         Rect {
             x: 0.0,
@@ -2013,7 +2051,7 @@ fn unblurred_fixture() -> RenderGraph {
     ])
 }
 
-fn backdrop_fixture() -> RenderGraph {
+fn backdrop_fixture() -> LayerNode {
     let backdrop_layer = layer(
         Rect {
             x: 0.0,
@@ -2052,7 +2090,7 @@ fn backdrop_fixture() -> RenderGraph {
     ])
 }
 
-fn spatial_backdrop_cache_fixture(animated_color: Color) -> RenderGraph {
+fn spatial_backdrop_cache_fixture(animated_color: Color) -> LayerNode {
     let backdrop_layer = layer(
         Rect {
             x: 0.0,
@@ -2083,7 +2121,7 @@ fn spatial_backdrop_cache_fixture(animated_color: Color) -> RenderGraph {
     ])
 }
 
-fn nested_backdrop_effect_fixture(child_blur_radius: f32) -> RenderGraph {
+fn nested_backdrop_effect_fixture(child_blur_radius: f32) -> LayerNode {
     let child = layer(
         Rect {
             x: 0.0,
@@ -2147,7 +2185,7 @@ fn nested_backdrop_effect_fixture(child_blur_radius: f32) -> RenderGraph {
     ])
 }
 
-fn translated_backdrop_fixture(translation: Point) -> RenderGraph {
+fn translated_backdrop_fixture(translation: Point) -> LayerNode {
     let backdrop_layer = layer(
         Rect {
             x: 0.0,
@@ -2208,7 +2246,7 @@ fn translated_backdrop_fixture(translation: Point) -> RenderGraph {
     ])
 }
 
-fn opaque_row_with_glass_fixture(animated_color: Color) -> RenderGraph {
+fn opaque_row_with_glass_fixture(animated_color: Color) -> LayerNode {
     let glass_bounds = Rect {
         x: 0.0,
         y: 0.0,
@@ -2294,7 +2332,7 @@ fn a_resting_glass_pane_washes_its_backdrop_with_the_resting_tint() {
         vec![],
     );
 
-    renderer.scene_mut().graph = Some(RenderGraph::new(&layer(
+    renderer.scene_mut().describe(&layer(
         Rect {
             x: 0.0,
             y: 0.0,
@@ -2315,7 +2353,7 @@ fn a_resting_glass_pane_washes_its_backdrop_with_the_resting_tint() {
             ),
             RenderNode::Layer(Box::new(glass)),
         ],
-    )));
+    ));
 
     let frame = renderer
         .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
@@ -2381,7 +2419,7 @@ fn a_resting_glass_pane_transmits_the_blurred_backdrop() {
         vec![],
     );
 
-    renderer.scene_mut().graph = Some(RenderGraph::new(&layer(
+    renderer.scene_mut().describe(&layer(
         Rect {
             x: 0.0,
             y: 0.0,
@@ -2403,7 +2441,7 @@ fn a_resting_glass_pane_transmits_the_blurred_backdrop() {
             solid_rect(star, Color::WHITE),
             RenderNode::Layer(Box::new(glass)),
         ],
-    )));
+    ));
 
     let frame = renderer
         .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
@@ -2475,7 +2513,9 @@ fn a_cutout_drop_shadow_keeps_its_penumbra_outside_and_none_inside() {
         })),
     });
 
-    renderer.scene_mut().graph = Some(graph(vec![solid_rect(frame_rect(), Color::WHITE), shadow]));
+    renderer
+        .scene_mut()
+        .describe(&graph(vec![solid_rect(frame_rect(), Color::WHITE), shadow]));
 
     let frame = renderer
         .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
@@ -2525,13 +2565,17 @@ fn a_draw_outside_a_glass_row_leaves_the_row_and_its_glass_intact() {
         }
     };
 
-    renderer.scene_mut().graph = Some(opaque_row_with_glass_fixture(Color::RED));
+    renderer
+        .scene_mut()
+        .describe(&opaque_row_with_glass_fixture(Color::RED));
     renderer
         .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
         .expect("row warmup should succeed");
     let warm_stats = renderer.last_frame_stats().expect("row warmup frame stats");
 
-    renderer.scene_mut().graph = Some(opaque_row_with_glass_fixture(Color::GREEN));
+    renderer
+        .scene_mut()
+        .describe(&opaque_row_with_glass_fixture(Color::GREEN));
     let animated = renderer
         .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
         .expect("row animation frame should succeed");
@@ -2561,7 +2605,7 @@ fn a_draw_outside_a_glass_row_leaves_the_row_and_its_glass_intact() {
     );
 }
 
-fn see_through_row_fixture(page: RenderNode, row_y: f32) -> RenderGraph {
+fn see_through_row_fixture(page: RenderNode, row_y: f32) -> LayerNode {
     let glass_bounds = Rect {
         x: 0.0,
         y: 0.0,
@@ -2599,9 +2643,9 @@ fn see_through_row_fixture(page: RenderNode, row_y: f32) -> RenderGraph {
     row.isolation.shape_clip = true;
     row.cache_policy = CachePolicy::Auto;
 
-    let mut root = graph(vec![page, RenderNode::Layer(Box::new(row))]).root();
+    let mut root = graph(vec![page, RenderNode::Layer(Box::new(row))]);
     root.graphics_layer.shadow_elevation = 4.0;
-    RenderGraph::new(&root)
+    root
 }
 
 fn solid_page() -> RenderNode {
@@ -2620,12 +2664,16 @@ fn a_glass_row_over_a_solid_page_composes_correctly_where_it_moves() {
         }
     };
 
-    renderer.scene_mut().graph = Some(see_through_row_fixture(solid_page(), 20.0));
+    renderer
+        .scene_mut()
+        .describe(&see_through_row_fixture(solid_page(), 20.0));
     renderer
         .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
         .expect("row warmup should succeed");
 
-    renderer.scene_mut().graph = Some(see_through_row_fixture(solid_page(), 44.0));
+    renderer
+        .scene_mut()
+        .describe(&see_through_row_fixture(solid_page(), 44.0));
     let moved = renderer
         .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
         .expect("moved row frame should succeed");
@@ -2644,31 +2692,31 @@ fn a_glass_row_over_a_solid_page_composes_correctly_where_it_moves() {
     );
 }
 
-fn graph(children: Vec<RenderNode>) -> RenderGraph {
-    RenderGraph::new(&layer(
+fn graph(children: Vec<RenderNode>) -> LayerNode {
+    layer(
         frame_rect(),
         ProjectiveTransform::identity(),
         GraphicsLayer::default(),
         children,
-    ))
+    )
 }
 
-fn root_scale_fixture() -> RenderGraph {
+fn root_scale_fixture() -> LayerNode {
     let logical_root = Rect {
         x: 0.0,
         y: 0.0,
         width: FRAME_WIDTH as f32 / ROOT_SCALE_TEST_SCALE,
         height: FRAME_HEIGHT as f32 / ROOT_SCALE_TEST_SCALE,
     };
-    RenderGraph::new(&layer(
+    layer(
         logical_root,
         ProjectiveTransform::identity(),
         GraphicsLayer::default(),
         vec![solid_rect(logical_root, Color::RED)],
-    ))
+    )
 }
 
-fn full_logical_root_scale_fixture(logical_width: f32, logical_height: f32) -> RenderGraph {
+fn full_logical_root_scale_fixture(logical_width: f32, logical_height: f32) -> LayerNode {
     let logical_root = Rect {
         x: 0.0,
         y: 0.0,
@@ -2681,7 +2729,7 @@ fn full_logical_root_scale_fixture(logical_width: f32, logical_height: f32) -> R
         width: logical_width * 0.5,
         height: logical_height * 0.5,
     };
-    RenderGraph::new(&layer(
+    layer(
         logical_root,
         ProjectiveTransform::identity(),
         GraphicsLayer::default(),
@@ -2689,10 +2737,10 @@ fn full_logical_root_scale_fixture(logical_width: f32, logical_height: f32) -> R
             solid_rect(logical_root, Color::RED),
             solid_rect(lower_right, Color::BLUE),
         ],
-    ))
+    )
 }
 
-fn translation_only_fixture() -> RenderGraph {
+fn translation_only_fixture() -> LayerNode {
     let inner = layer(
         Rect {
             x: 0.0,
@@ -2730,7 +2778,7 @@ fn translation_only_fixture() -> RenderGraph {
     ])
 }
 
-fn translation_only_wrapper_with_text_fixture(wrapper_translation: Point) -> RenderGraph {
+fn translation_only_wrapper_with_text_fixture(wrapper_translation: Point) -> LayerNode {
     translation_only_wrapper_with_text_style_fixture(
         wrapper_translation,
         TextStyle::from_span_style(SpanStyle {
@@ -2740,9 +2788,7 @@ fn translation_only_wrapper_with_text_fixture(wrapper_translation: Point) -> Ren
     )
 }
 
-fn translation_only_wrapper_with_plain_text_only_fixture(
-    wrapper_translation: Point,
-) -> RenderGraph {
+fn translation_only_wrapper_with_plain_text_only_fixture(wrapper_translation: Point) -> LayerNode {
     let text_leaf = layer(
         Rect {
             x: 0.0,
@@ -2794,9 +2840,7 @@ fn translation_only_wrapper_with_plain_text_only_fixture(
     ])
 }
 
-fn translation_only_wrapper_with_underlined_text_fixture(
-    wrapper_translation: Point,
-) -> RenderGraph {
+fn translation_only_wrapper_with_underlined_text_fixture(wrapper_translation: Point) -> LayerNode {
     translation_only_wrapper_with_text_style_fixture(
         wrapper_translation,
         TextStyle::from_span_style(SpanStyle {
@@ -2807,7 +2851,7 @@ fn translation_only_wrapper_with_underlined_text_fixture(
     )
 }
 
-fn translation_only_wrapper_with_gradient_fixture(wrapper_translation: Point) -> RenderGraph {
+fn translation_only_wrapper_with_gradient_fixture(wrapper_translation: Point) -> LayerNode {
     let gradient_leaf = layer(
         Rect {
             x: 0.0,
@@ -2848,7 +2892,7 @@ fn translation_only_wrapper_with_gradient_fixture(wrapper_translation: Point) ->
     ])
 }
 
-fn translation_only_wrapper_with_thin_shapes_fixture(wrapper_translation: Point) -> RenderGraph {
+fn translation_only_wrapper_with_thin_shapes_fixture(wrapper_translation: Point) -> LayerNode {
     let shape_leaf = layer(
         Rect {
             x: 0.0,
@@ -2917,7 +2961,7 @@ fn translation_only_wrapper_with_thin_shapes_fixture(wrapper_translation: Point)
 
 fn translation_only_wrapper_with_decorated_shadow_text_fixture(
     wrapper_translation: Point,
-) -> RenderGraph {
+) -> LayerNode {
     translation_only_wrapper_with_text_style_fixture(
         wrapper_translation,
         TextStyle::from_span_style(SpanStyle {
@@ -2935,7 +2979,7 @@ fn translation_only_wrapper_with_decorated_shadow_text_fixture(
     )
 }
 
-fn repeated_drop_shadow_layers_fixture(card_count: usize) -> RenderGraph {
+fn repeated_drop_shadow_layers_fixture(card_count: usize) -> LayerNode {
     let columns = 4usize;
     let card_width = 22.0;
     let card_height = 14.0;
@@ -2965,7 +3009,7 @@ fn shadowed_card_layer(
     card_width: f32,
     card_height: f32,
     index: usize,
-) -> cranpose_render_common::graph::LayerNode {
+) -> LayerNode {
     let card_rect = Rect {
         x: 0.0,
         y: 0.0,
@@ -3013,7 +3057,7 @@ fn shadowed_card_layer(
 fn translation_only_wrapper_with_text_style_fixture(
     wrapper_translation: Point,
     text_style: TextStyle,
-) -> RenderGraph {
+) -> LayerNode {
     let text_leaf = layer(
         Rect {
             x: 0.0,
@@ -3105,7 +3149,7 @@ fn showcase_multispan_text() -> AnnotatedString {
 
 fn translation_only_wrapper_with_multispan_showcase_text_fixture(
     wrapper_translation: Point,
-) -> RenderGraph {
+) -> LayerNode {
     let text_leaf = layer(
         Rect {
             x: 0.0,
@@ -3154,7 +3198,7 @@ fn translation_only_wrapper_with_multispan_showcase_text_fixture(
         height: FRAME_HEIGHT as f32,
     };
 
-    RenderGraph::new(&layer(
+    layer(
         frame_rect,
         ProjectiveTransform::identity(),
         GraphicsLayer::default(),
@@ -3162,10 +3206,10 @@ fn translation_only_wrapper_with_multispan_showcase_text_fixture(
             solid_rect(frame_rect, Color::BLACK),
             RenderNode::Layer(Box::new(wrapper)),
         ],
-    ))
+    )
 }
 
-fn showcase_card_wrapper(wrapper_translation: Point) -> cranpose_render_common::graph::LayerNode {
+fn showcase_card_wrapper(wrapper_translation: Point) -> LayerNode {
     let text_leaf = layer(
         Rect {
             x: 0.0,
@@ -3230,7 +3274,7 @@ fn showcase_card_wrapper(wrapper_translation: Point) -> cranpose_render_common::
     )
 }
 
-fn translation_only_wrapper_with_showcase_card_fixture(wrapper_translation: Point) -> RenderGraph {
+fn translation_only_wrapper_with_showcase_card_fixture(wrapper_translation: Point) -> LayerNode {
     let wrapper = showcase_card_wrapper(wrapper_translation);
     let frame_rect = Rect {
         x: 0.0,
@@ -3239,7 +3283,7 @@ fn translation_only_wrapper_with_showcase_card_fixture(wrapper_translation: Poin
         height: FRAME_HEIGHT as f32,
     };
 
-    RenderGraph::new(&layer(
+    layer(
         frame_rect,
         ProjectiveTransform::identity(),
         GraphicsLayer::default(),
@@ -3247,12 +3291,12 @@ fn translation_only_wrapper_with_showcase_card_fixture(wrapper_translation: Poin
             solid_rect(frame_rect, Color::BLACK),
             RenderNode::Layer(Box::new(wrapper)),
         ],
-    ))
+    )
 }
 
 fn translation_only_wrapper_with_padded_multispan_showcase_text_fixture(
     wrapper_translation: Point,
-) -> RenderGraph {
+) -> LayerNode {
     let text_leaf = layer(
         Rect {
             x: 0.0,
@@ -3301,7 +3345,7 @@ fn translation_only_wrapper_with_padded_multispan_showcase_text_fixture(
         height: FRAME_HEIGHT as f32,
     };
 
-    RenderGraph::new(&layer(
+    layer(
         frame_rect,
         ProjectiveTransform::identity(),
         GraphicsLayer::default(),
@@ -3309,10 +3353,10 @@ fn translation_only_wrapper_with_padded_multispan_showcase_text_fixture(
             solid_rect(frame_rect, Color::BLACK),
             RenderNode::Layer(Box::new(wrapper)),
         ],
-    ))
+    )
 }
 
-fn gradient_stroke_text_fixture() -> RenderGraph {
+fn gradient_stroke_text_fixture() -> LayerNode {
     let text_leaf = layer(
         Rect {
             x: 0.0,
@@ -3379,7 +3423,7 @@ fn crisp_icon_bitmap() -> ImageBitmap {
     ImageBitmap::from_rgba8(SIZE, SIZE, pixels).expect("valid crisp icon")
 }
 
-fn alpha_icon_text_surface_fixture(translation: Point) -> RenderGraph {
+fn alpha_icon_text_surface_fixture(translation: Point) -> LayerNode {
     let icon = crisp_icon_bitmap();
     let icon_leaf = layer(
         Rect {
@@ -3461,7 +3505,7 @@ fn alpha_icon_text_surface_fixture(translation: Point) -> RenderGraph {
         ],
     );
 
-    RenderGraph::new(&layer(
+    layer(
         Rect {
             x: 0.0,
             y: 0.0,
@@ -3489,7 +3533,7 @@ fn alpha_icon_text_surface_fixture(translation: Point) -> RenderGraph {
             }),
             RenderNode::Layer(Box::new(alpha_surface)),
         ],
-    ))
+    )
 }
 
 #[test]
@@ -3504,7 +3548,9 @@ fn gradient_stroke_text_effect_renders_colored_material() {
         }
     };
 
-    renderer.scene_mut().graph = Some(gradient_stroke_text_fixture());
+    renderer
+        .scene_mut()
+        .describe(&gradient_stroke_text_fixture());
     let frame = renderer
         .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
         .expect("gradient stroke capture should succeed");
@@ -3559,7 +3605,7 @@ fn layer(
     transform_to_parent: ProjectiveTransform,
     graphics_layer: GraphicsLayer,
     children: Vec<RenderNode>,
-) -> cranpose_render_common::graph::LayerNode {
+) -> LayerNode {
     shared_test_support::layer_node(local_bounds, transform_to_parent, graphics_layer, children)
 }
 
@@ -3610,8 +3656,8 @@ fn frame_rect() -> Rect {
     }
 }
 
-fn mark_translated_text_wrapper(graph: &mut RenderGraph) {
-    let mut root = graph.root();
+fn mark_translated_text_wrapper(graph: &mut LayerNode) {
+    let root = graph;
     let Some(RenderNode::Layer(wrapper)) = root.children.get_mut(1) else {
         panic!("expected translated text wrapper layer");
     };
@@ -3622,11 +3668,10 @@ fn mark_translated_text_wrapper(graph: &mut RenderGraph) {
     };
     text_leaf.translated_content_context = true;
     text_leaf.motion_context_animated = true;
-    *graph = RenderGraph::new(&root);
 }
 
-fn mark_translated_shape_wrapper(graph: &mut RenderGraph) {
-    let mut root = graph.root();
+fn mark_translated_shape_wrapper(graph: &mut LayerNode) {
+    let root = graph;
     let Some(RenderNode::Layer(wrapper)) = root.children.get_mut(1) else {
         panic!("expected translated thin-shape wrapper layer");
     };
@@ -3637,7 +3682,6 @@ fn mark_translated_shape_wrapper(graph: &mut RenderGraph) {
     };
     shape_leaf.translated_content_context = true;
     shape_leaf.motion_context_animated = true;
-    *graph = RenderGraph::new(&root);
 }
 
 fn normalize_translated_backdrop_region(frame: &CapturedFrame, translation: Point) -> Vec<u8> {

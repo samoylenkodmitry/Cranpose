@@ -5,7 +5,7 @@
 // within the tier's approximations.
 
 use cranpose_render_common::{
-    graph::{DrawRunNode, PrimitivePhase, ProjectiveTransform, RenderGraph, RenderNode},
+    graph::{DrawRunNode, LayerNode, PrimitivePhase, ProjectiveTransform, RenderNode},
     layer_transform::layer_transform_to_parent,
 };
 use cranpose_render_wgpu::RenderStatsSnapshot;
@@ -46,16 +46,16 @@ fn rect(x: f32, y: f32, width: f32, height: f32) -> Rect {
 
 // An opaque page holding `children`: its fill gives a pass interiors to lay
 // down first.
-fn page(children: Vec<RenderNode>) -> RenderGraph {
+fn page(children: Vec<RenderNode>) -> LayerNode {
     let frame = Rect::from_size(Size::new(WIDTH as f32, HEIGHT as f32));
     let mut nodes = vec![support::solid_rect(frame, Color(0.1, 0.12, 0.2, 1.0))];
     nodes.extend(children);
-    RenderGraph::new(&shared_test_support::layer_node(
+    shared_test_support::layer_node(
         frame,
         ProjectiveTransform::identity(),
         GraphicsLayer::default(),
         nodes,
-    ))
+    )
 }
 
 // A colour image and an alpha mask, side by side, scaled up three times.
@@ -116,7 +116,7 @@ fn card(bounds: Rect, graphics: GraphicsLayer, label: &str) -> RenderNode {
 
 // What a launch's later screens bring: images, a label turned in place, a
 // card casting an elevation shadow, a translucent card and a tilted one.
-fn new_content() -> RenderGraph {
+fn new_content() -> LayerNode {
     page(vec![
         images(),
         layer(
@@ -162,7 +162,7 @@ fn new_content() -> RenderGraph {
 
 fn capture(
     renderer: &mut support::LockedRenderer,
-    graph: &RenderGraph,
+    graph: &LayerNode,
 ) -> (Vec<u8>, RenderStatsSnapshot) {
     let frame = support::capture_graph(renderer, graph.clone(), WIDTH, HEIGHT);
     let stats = renderer.last_frame_stats().expect("frame statistics");
@@ -202,7 +202,7 @@ fn assert_stood_in(first: (&[u8], RenderStatsSnapshot), landed: &[u8], shadows: 
 // pipelines landed.
 fn first_and_landed(
     before: impl FnOnce(&mut support::LockedRenderer),
-    graph: &RenderGraph,
+    graph: &LayerNode,
 ) -> ((Vec<u8>, RenderStatsSnapshot), Vec<u8>) {
     let mut renderer = support::headless_renderer_compiling_in_background().expect("GPU required");
     before(&mut renderer);

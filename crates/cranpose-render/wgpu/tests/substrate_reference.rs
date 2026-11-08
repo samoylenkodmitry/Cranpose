@@ -1,4 +1,4 @@
-use cranpose_render_common::graph::{ProjectiveTransform, RenderGraph, RenderNode};
+use cranpose_render_common::graph::{LayerNode, ProjectiveTransform, RenderNode};
 use cranpose_render_wgpu::CapturedFrame;
 use cranpose_ui_graphics::{
     GradientBlurDirection, GraphicsLayer, Rect, RenderEffect, SubstrateSpec, gradient_blur_effect,
@@ -107,13 +107,13 @@ fn effect_layer(bounds: Rect, effect: RenderEffect) -> RenderNode {
     )))
 }
 
-fn page(layer: Option<RenderNode>) -> RenderGraph {
+fn page(layer: Option<RenderNode>) -> LayerNode {
     let mut children = support::striped_page(FRAME_WIDTH, FRAME_HEIGHT);
     children.extend(layer);
     support::page_graph(FRAME_WIDTH, FRAME_HEIGHT, children)
 }
 
-fn capture(renderer: &mut support::LockedRenderer, graph: RenderGraph) -> CapturedFrame {
+fn capture(renderer: &mut support::LockedRenderer, graph: LayerNode) -> CapturedFrame {
     support::capture_graph(renderer, graph, FRAME_WIDTH, FRAME_HEIGHT)
 }
 

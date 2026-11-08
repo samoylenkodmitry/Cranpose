@@ -6,7 +6,7 @@ use std::{
 use cranpose_core::NodeId;
 use cranpose_render_common::{
     Renderer,
-    graph::{CachePolicy, LayerNode, ProjectiveTransform, RenderGraph, RenderNode},
+    graph::{CachePolicy, LayerNode, ProjectiveTransform, RenderNode},
 };
 use cranpose_render_wgpu::{CancelReason, GpuTarget, PresentOutcome, PublishOutcome, WgpuRenderer};
 use cranpose_ui_graphics::{Color, Rect};
@@ -31,8 +31,8 @@ fn test_layer(node_id: Option<NodeId>, children: Vec<RenderNode>) -> LayerNode {
     )
 }
 
-fn direct_graph() -> RenderGraph {
-    RenderGraph::new(&test_layer(
+fn direct_graph() -> LayerNode {
+    test_layer(
         Some(NodeId(7_700)),
         vec![support::solid_rect(
             Rect {
@@ -43,10 +43,10 @@ fn direct_graph() -> RenderGraph {
             },
             Color(0.2, 0.7, 0.3, 1.0),
         )],
-    ))
+    )
 }
 
-fn shadowed_child_graph() -> RenderGraph {
+fn shadowed_child_graph() -> LayerNode {
     let bounds = Rect {
         x: 24.0,
         y: 20.0,
@@ -58,10 +58,10 @@ fn shadowed_child_graph() -> RenderGraph {
         vec![support::drop_shadow(bounds, Color::BLACK, 6.0)],
     );
     child.local_bounds = bounds;
-    RenderGraph::new(&test_layer(
+    test_layer(
         Some(NodeId(7_702)),
         vec![RenderNode::Layer(Box::new(child))],
-    ))
+    )
 }
 
 fn surface_config(width: u32, height: u32) -> wgpu::SurfaceConfiguration {
@@ -152,7 +152,7 @@ fn a_surface_never_sits_configured_with_nothing_presented_to_it() {
         "the placeholder must not be counted as a real content frame"
     );
 
-    renderer.scene_mut().graph = Some(direct_graph());
+    renderer.scene_mut().describe(&direct_graph());
     assert_eq!(
         renderer.publish_frame(WIDTH, HEIGHT),
         PublishOutcome::Published
@@ -179,7 +179,7 @@ fn depth_one_credit_gates_publish_before_lowering() {
     runtime.pump();
     ack.try_recv().expect("attach must ack after the pump");
 
-    renderer.scene_mut().graph = Some(direct_graph());
+    renderer.scene_mut().describe(&direct_graph());
     assert!(renderer.has_frame_credit());
     assert_eq!(
         renderer.publish_frame(WIDTH, HEIGHT),
@@ -244,7 +244,7 @@ fn a_returned_frame_frees_a_credit_it_reports_until_drained() {
     runtime.pump();
     ack.try_recv().expect("attach must ack after the pump");
 
-    renderer.scene_mut().graph = Some(direct_graph());
+    renderer.scene_mut().describe(&direct_graph());
     assert!(!renderer.frame_credit_returned(), "nothing published yet");
     for _ in 0..2 {
         assert_eq!(
@@ -284,7 +284,7 @@ fn reconfigure_cancels_waiting_packet_before_ack() {
         .expect("inline runtime must accept controls");
     runtime.pump();
     ack.try_recv().expect("attach must ack after the pump");
-    renderer.scene_mut().graph = Some(direct_graph());
+    renderer.scene_mut().describe(&direct_graph());
 
     assert_eq!(
         renderer.publish_frame(WIDTH, HEIGHT),
@@ -329,7 +329,7 @@ fn drop_surface_cancels_waiting_packet_with_buffers_returned() {
         .expect("inline runtime must accept controls");
     runtime.pump();
     ack.try_recv().expect("attach must ack after the pump");
-    renderer.scene_mut().graph = Some(direct_graph());
+    renderer.scene_mut().describe(&direct_graph());
 
     assert_eq!(
         renderer.publish_frame(WIDTH, HEIGHT),
@@ -379,7 +379,7 @@ fn needs_frame_warmup_reads_present_thread_atomic() {
         "before any frame the snapshot must read false"
     );
 
-    renderer.scene_mut().graph = Some(shadowed_child_graph());
+    renderer.scene_mut().describe(&shadowed_child_graph());
     assert_eq!(
         renderer.publish_frame(WIDTH, HEIGHT),
         PublishOutcome::Published
@@ -444,7 +444,7 @@ fn real_thread_runtime_smoke() {
             None,
         )
         .expect("present thread must spawn");
-    renderer.scene_mut().graph = Some(direct_graph());
+    renderer.scene_mut().describe(&direct_graph());
 
     assert_eq!(
         renderer.publish_frame(WIDTH, HEIGHT),
@@ -537,7 +537,7 @@ fn a_present_observer_sees_only_surface_presents_and_leaves_with_the_runtime() {
             })),
         )
         .expect("present thread must spawn");
-    renderer.scene_mut().graph = Some(direct_graph());
+    renderer.scene_mut().describe(&direct_graph());
     assert!(renderer.present_attach_offscreen_for_tests(WIDTH, HEIGHT));
     assert_eq!(
         renderer.publish_frame(WIDTH, HEIGHT),
@@ -624,7 +624,7 @@ fn queued_packets_keep_complete_pixels_while_the_producer_changes_the_scene() {
             } else {
                 Color::BLUE
             };
-            producer.scene_mut().graph = Some(RenderGraph::new(&test_layer(
+            producer.scene_mut().describe(&test_layer(
                 Some(NodeId(7_703)),
                 vec![
                     support::solid_rect(
@@ -646,7 +646,7 @@ fn queued_packets_keep_complete_pixels_while_the_producer_changes_the_scene() {
                         color,
                     ),
                 ],
-            )));
+            ));
             let expected = producer.capture_frame(WIDTH, HEIGHT).expect("serial frame");
             assert!(expected.pixels.as_chunks::<4>().0.iter().any(|pixel| {
                 if index % 2 == 0 {

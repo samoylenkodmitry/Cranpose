@@ -3,7 +3,7 @@
 //! pixels, as its renderer starts, while the first screen composes: its
 //! first frame finds them built.
 
-use cranpose_render_common::graph::{ProjectiveTransform, RenderGraph, RenderNode};
+use cranpose_render_common::graph::{LayerNode, ProjectiveTransform, RenderNode};
 use cranpose_ui_graphics::{Color, GraphicsLayer, Rect, Size};
 
 use crate::{shared_test_support, support};
@@ -12,20 +12,20 @@ const WIDTH: u32 = 160;
 const HEIGHT: u32 = 48;
 
 /// A cleared page with `children` on it.
-fn page(children: Vec<RenderNode>) -> RenderGraph {
+fn page(children: Vec<RenderNode>) -> LayerNode {
     let frame = Rect::from_size(Size::new(WIDTH as f32, HEIGHT as f32));
     let mut nodes = vec![support::solid_rect(frame, Color::BLACK)];
     nodes.extend(children);
-    RenderGraph::new(&shared_test_support::layer_node(
+    shared_test_support::layer_node(
         frame,
         ProjectiveTransform::identity(),
         GraphicsLayer::default(),
         nodes,
-    ))
+    )
 }
 
 /// A card and a label beside it.
-fn card_and_label() -> RenderGraph {
+fn card_and_label() -> LayerNode {
     page(vec![
         support::solid_rect(
             Rect {
@@ -56,12 +56,12 @@ fn a_launch_with_no_record_finds_its_rect_and_text_pipelines_built() {
         return;
     };
     // A frame of an empty page builds what every capture draws with.
-    let empty = RenderGraph::new(&shared_test_support::layer_node(
+    let empty = shared_test_support::layer_node(
         Rect::from_size(Size::new(WIDTH as f32, HEIGHT as f32)),
         ProjectiveTransform::identity(),
         GraphicsLayer::default(),
         Vec::new(),
-    ));
+    );
     support::capture_graph(&mut renderer, empty, WIDTH, HEIGHT);
     support::wait_for_background_compiler_idle();
     let built = cranpose_render_wgpu::pipelines_created();

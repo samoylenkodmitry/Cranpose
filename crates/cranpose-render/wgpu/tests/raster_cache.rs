@@ -3,7 +3,7 @@ use cranpose_render_common::{
     Renderer,
     graph::{
         CachePolicy, DrawPrimitiveNode, LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase,
-        ProjectiveTransform, RenderGraph, RenderNode, TextPrimitiveNode,
+        ProjectiveTransform, RenderNode, TextPrimitiveNode,
     },
 };
 use cranpose_ui::{TextLayoutOptions, TextStyle, text::SpanStyle};
@@ -43,7 +43,7 @@ fn painted_rect(rect: Rect, color: Color) -> RenderNode {
     })
 }
 
-fn live_backdrop_graph(color: Color, policy: CachePolicy, nested: bool) -> RenderGraph {
+fn live_backdrop_graph(color: Color, policy: CachePolicy, nested: bool) -> LayerNode {
     let bounds = Rect {
         x: 0.0,
         y: 0.0,
@@ -66,7 +66,7 @@ fn live_backdrop_graph(color: Color, policy: CachePolicy, nested: bool) -> Rende
     } else {
         card.graphics_layer.backdrop_effect = Some(RenderEffect::blur(6.0));
     }
-    RenderGraph::new(&support::contract_layer(
+    support::contract_layer(
         Some(NodeId(80_000)),
         CachePolicy::None,
         bounds,
@@ -75,7 +75,7 @@ fn live_backdrop_graph(color: Color, policy: CachePolicy, nested: bool) -> Rende
             painted_rect(bounds, color),
             RenderNode::Layer(Box::new(card)),
         ],
-    ))
+    )
 }
 
 fn verify_live_backdrop_content_cache(nested: bool) {
@@ -84,13 +84,18 @@ fn verify_live_backdrop_content_cache(nested: bool) {
     };
     let mut fresh = support::headless_renderer_beside_locked().expect("reference renderer");
     for _ in 0..6 {
-        renderer.scene_mut().graph =
-            Some(live_backdrop_graph(Color::BLACK, CachePolicy::Auto, nested));
+        renderer.scene_mut().describe(&live_backdrop_graph(
+            Color::BLACK,
+            CachePolicy::Auto,
+            nested,
+        ));
         renderer.capture_frame(128, 160).expect("warm glass");
     }
     support::wait_for_background_compiler_idle();
     for color in [Color::WHITE, Color(0.2, 0.7, 0.4, 1.0), Color::BLACK] {
-        renderer.scene_mut().graph = Some(live_backdrop_graph(color, CachePolicy::Auto, nested));
+        renderer
+            .scene_mut()
+            .describe(&live_backdrop_graph(color, CachePolicy::Auto, nested));
         let frame = renderer.capture_frame(128, 160).expect("changed backdrop");
         let stats = renderer.last_frame_stats().expect("frame stats");
         if nested {
@@ -104,7 +109,9 @@ fn verify_live_backdrop_content_cache(nested: bool) {
                 "unchanged foreground must be retained"
             );
         }
-        fresh.scene_mut().graph = Some(live_backdrop_graph(color, CachePolicy::None, nested));
+        fresh
+            .scene_mut()
+            .describe(&live_backdrop_graph(color, CachePolicy::None, nested));
         let reference = fresh.capture_frame(128, 160).expect("uncached reference");
         if !nested {
             let fresh_stats = fresh.last_frame_stats().expect("uncached frame stats");
@@ -127,7 +134,7 @@ fn a_nested_backdrop_keeps_its_container_content_live() {
     verify_live_backdrop_content_cache(true);
 }
 
-fn large_backdrops(radius: f32) -> RenderGraph {
+fn large_backdrops(radius: f32) -> LayerNode {
     let bounds = Rect {
         x: 0.0,
         y: 0.0,
@@ -170,13 +177,13 @@ fn large_backdrops(radius: f32) -> RenderGraph {
         }
         children.push(RenderNode::Layer(Box::new(layer)));
     }
-    RenderGraph::new(&support::contract_layer(
+    support::contract_layer(
         Some(NodeId(90_000)),
         CachePolicy::None,
         bounds,
         ProjectiveTransform::identity(),
         children,
-    ))
+    )
 }
 
 #[test]
@@ -187,7 +194,7 @@ fn a_changing_large_backdrop_does_not_starve_the_still_backdrop_after_it() {
     let mut fresh = support::headless_renderer_beside_locked().expect("reference renderer");
     for step in 0..8 {
         let radius = 4.0 + step as f32;
-        renderer.scene_mut().graph = Some(large_backdrops(radius));
+        renderer.scene_mut().describe(&large_backdrops(radius));
         let frame = renderer.capture_frame(520, 700).expect("glass frame");
         let stats = renderer.last_frame_stats().expect("frame stats");
         if step >= 2 {
@@ -196,7 +203,7 @@ fn a_changing_large_backdrop_does_not_starve_the_still_backdrop_after_it() {
                 "only the changing first pane may blur: {stats:?}"
             );
         }
-        fresh.scene_mut().graph = Some(large_backdrops(radius));
+        fresh.scene_mut().describe(&large_backdrops(radius));
         cranpose_core::debug_toggles::set_debug_toggle("CRANPOSE_NO_BACKDROP_CACHE", Some("1"));
         let reference = fresh.capture_frame(520, 700).expect("uncached frame");
         cranpose_core::debug_toggles::set_debug_toggle("CRANPOSE_NO_BACKDROP_CACHE", None);
@@ -204,7 +211,7 @@ fn a_changing_large_backdrop_does_not_starve_the_still_backdrop_after_it() {
     }
 }
 
-fn scrolling_fill_graph(y: f32, mode: usize, phase: usize) -> RenderGraph {
+fn scrolling_fill_graph(y: f32, mode: usize, phase: usize) -> LayerNode {
     use cranpose_render_common::graph::{DrawCommandId, DrawRunNode};
     use cranpose_ui_graphics::DrawPrimitive;
     let bounds = Rect {
@@ -291,13 +298,13 @@ fn scrolling_fill_graph(y: f32, mode: usize, phase: usize) -> RenderGraph {
     );
     pane.graphics_layer.backdrop_effect = Some(RenderEffect::blur(6.0));
     children.push(RenderNode::Layer(Box::new(pane)));
-    RenderGraph::new(&support::contract_layer(
+    support::contract_layer(
         Some(NodeId(91_000)),
         CachePolicy::None,
         bounds,
         ProjectiveTransform::identity(),
         children,
-    ))
+    )
 }
 #[test]
 fn moving_glass_reuses_only_unchanged_clipped_solid_pixels() {
@@ -308,7 +315,9 @@ fn moving_glass_reuses_only_unchanged_clipped_solid_pixels() {
             for step in 0..12 {
                 let y = 60.0 + step as f32 / scale;
                 let phase = step / 4;
-                renderer.scene_mut().graph = Some(scrolling_fill_graph(y, mode, phase));
+                renderer
+                    .scene_mut()
+                    .describe(&scrolling_fill_graph(y, mode, phase));
                 let width = (200.0 * scale) as u32;
                 let height = (240.0 * scale) as u32;
                 let actual = renderer
@@ -321,7 +330,9 @@ fn moving_glass_reuses_only_unchanged_clipped_solid_pixels() {
                         "scale={scale} step={step}"
                     );
                 }
-                fresh.scene_mut().graph = Some(scrolling_fill_graph(y, mode, phase));
+                fresh
+                    .scene_mut()
+                    .describe(&scrolling_fill_graph(y, mode, phase));
                 cranpose_core::debug_toggles::set_debug_toggle(
                     "CRANPOSE_NO_BACKDROP_CACHE",
                     Some("1"),
@@ -341,13 +352,13 @@ fn moving_glass_reuses_only_unchanged_clipped_solid_pixels() {
     }
 }
 
-fn scroll_like_graph(offsets: &[f32]) -> RenderGraph {
+fn scroll_like_graph(offsets: &[f32]) -> LayerNode {
     let children = offsets
         .iter()
         .enumerate()
         .map(|(index, y)| RenderNode::Layer(Box::new(card_layer(NodeId(index + 1), *y))))
         .collect();
-    RenderGraph::new(&support::contract_layer(
+    support::contract_layer(
         Some(NodeId(10_000)),
         CachePolicy::None,
         Rect {
@@ -358,11 +369,11 @@ fn scroll_like_graph(offsets: &[f32]) -> RenderGraph {
         },
         ProjectiveTransform::identity(),
         children,
-    ))
+    )
 }
 
-fn text_scroll_like_graph(y: f32) -> RenderGraph {
-    RenderGraph::new(&support::contract_layer(
+fn text_scroll_like_graph(y: f32) -> LayerNode {
+    support::contract_layer(
         Some(NodeId(20_000)),
         CachePolicy::None,
         Rect {
@@ -378,11 +389,11 @@ fn text_scroll_like_graph(y: f32) -> RenderGraph {
             y,
             "Markdown text row cache reuse",
         )))],
-    ))
+    )
 }
 
-fn repeated_text_graph() -> RenderGraph {
-    RenderGraph::new(&support::contract_layer(
+fn repeated_text_graph() -> LayerNode {
+    support::contract_layer(
         Some(NodeId(20_001)),
         CachePolicy::None,
         Rect {
@@ -406,7 +417,7 @@ fn repeated_text_graph() -> RenderGraph {
                 "Repeated markdown heading",
             ))),
         ],
-    ))
+    )
 }
 
 fn text_layer(node_id: NodeId, x: f32, y: f32, text_value: &str) -> LayerNode {
@@ -455,13 +466,17 @@ fn capture_frame_reuses_cached_child_layers_during_rigid_scroll() {
         }
     };
 
-    renderer.scene_mut().graph = Some(scroll_like_graph(&[8.0, 44.0, 80.0, 116.0]));
+    renderer
+        .scene_mut()
+        .describe(&scroll_like_graph(&[8.0, 44.0, 80.0, 116.0]));
     renderer
         .capture_frame(160, 180)
         .expect("first capture should succeed");
     let first_stats = renderer.last_frame_stats().expect("first frame stats");
 
-    renderer.scene_mut().graph = Some(scroll_like_graph(&[15.25, 51.25, 87.25, 123.25]));
+    renderer
+        .scene_mut()
+        .describe(&scroll_like_graph(&[15.25, 51.25, 87.25, 123.25]));
     renderer
         .capture_frame(160, 180)
         .expect("second capture should succeed");
@@ -497,13 +512,13 @@ fn static_text_glyph_atlas_reuses_raster_under_scroll_translation() {
         }
     };
 
-    renderer.scene_mut().graph = Some(text_scroll_like_graph(20.0));
+    renderer.scene_mut().describe(&text_scroll_like_graph(20.0));
     renderer
         .capture_frame(320, 140)
         .expect("first text capture should succeed");
     let first_stats = renderer.last_frame_stats().expect("first frame stats");
 
-    renderer.scene_mut().graph = Some(text_scroll_like_graph(54.0));
+    renderer.scene_mut().describe(&text_scroll_like_graph(54.0));
     renderer
         .capture_frame(320, 140)
         .expect("translated text capture should succeed");
@@ -540,7 +555,7 @@ fn text_glyph_atlas_reuses_identical_content_across_node_ids() {
         }
     };
 
-    renderer.scene_mut().graph = Some(repeated_text_graph());
+    renderer.scene_mut().describe(&repeated_text_graph());
     renderer
         .capture_frame(360, 160)
         .expect("repeated text capture should succeed");
@@ -603,7 +618,7 @@ fn shaded_runtime_shader_layer(node_id: NodeId, time: f32) -> LayerNode {
     shaded
 }
 
-fn shader_inside_cached_container_graph(time: f32) -> RenderGraph {
+fn shader_inside_cached_container_graph(time: f32) -> LayerNode {
     let shaded = shaded_runtime_shader_layer(NodeId(30_001), time);
 
     let mut container = support::contract_layer(
@@ -621,7 +636,7 @@ fn shader_inside_cached_container_graph(time: f32) -> RenderGraph {
     container.clip_to_bounds = true;
     container.isolation.shape_clip = true;
 
-    RenderGraph::new(&support::contract_layer(
+    support::contract_layer(
         Some(NodeId(30_002)),
         CachePolicy::None,
         Rect {
@@ -632,12 +647,12 @@ fn shader_inside_cached_container_graph(time: f32) -> RenderGraph {
         },
         ProjectiveTransform::identity(),
         vec![RenderNode::Layer(Box::new(container))],
-    ))
+    )
 }
 
-fn shader_layer_graph(time: f32) -> RenderGraph {
+fn shader_layer_graph(time: f32) -> LayerNode {
     let shaded = shaded_runtime_shader_layer(NodeId(30_101), time);
-    RenderGraph::new(&support::contract_layer(
+    support::contract_layer(
         Some(NodeId(30_102)),
         CachePolicy::None,
         Rect {
@@ -648,7 +663,7 @@ fn shader_layer_graph(time: f32) -> RenderGraph {
         },
         ProjectiveTransform::identity(),
         vec![RenderNode::Layer(Box::new(shaded))],
-    ))
+    )
 }
 
 #[test]
@@ -663,15 +678,15 @@ fn a_runtime_shader_layer_with_stable_uniforms_is_served_from_the_layer_cache() 
         }
     };
 
-    renderer.scene_mut().graph = Some(shader_layer_graph(0.25));
+    renderer.scene_mut().describe(&shader_layer_graph(0.25));
     let first = renderer
         .capture_frame(128, 96)
         .expect("first shader capture should succeed");
-    renderer.scene_mut().graph = Some(shader_layer_graph(0.25));
+    renderer.scene_mut().describe(&shader_layer_graph(0.25));
     renderer
         .capture_frame(128, 96)
         .expect("the second sighting admits the layer into the cache");
-    renderer.scene_mut().graph = Some(shader_layer_graph(0.25));
+    renderer.scene_mut().describe(&shader_layer_graph(0.25));
     let second = renderer
         .capture_frame(128, 96)
         .expect("second shader capture should succeed");
@@ -684,7 +699,7 @@ fn a_runtime_shader_layer_with_stable_uniforms_is_served_from_the_layer_cache() 
          the cache key, so a repeated frame must not re-run it: {stats:?}"
     );
 
-    renderer.scene_mut().graph = Some(shader_layer_graph(0.75));
+    renderer.scene_mut().describe(&shader_layer_graph(0.75));
     let third = renderer
         .capture_frame(128, 96)
         .expect("third shader capture should succeed");
@@ -717,12 +732,16 @@ fn an_animated_shader_keeps_animating_inside_a_cacheable_container() {
         }
     };
 
-    renderer.scene_mut().graph = Some(shader_inside_cached_container_graph(0.0));
+    renderer
+        .scene_mut()
+        .describe(&shader_inside_cached_container_graph(0.0));
     let first = renderer
         .capture_frame(128, 96)
         .expect("first shader capture should succeed");
 
-    renderer.scene_mut().graph = Some(shader_inside_cached_container_graph(1.0));
+    renderer
+        .scene_mut()
+        .describe(&shader_inside_cached_container_graph(1.0));
     let second = renderer
         .capture_frame(128, 96)
         .expect("second shader capture should succeed");
@@ -756,7 +775,7 @@ fn scaled_shader_graph(
     coordinates: ShaderCoordinates,
     empty: bool,
     declared: bool,
-) -> RenderGraph {
+) -> LayerNode {
     let mut shaded = shaded_runtime_shader_layer(NodeId(30_201), 0.25);
     shaded.cache_policy = CachePolicy::None;
     shaded.graphics_layer.scale_x = scale;
@@ -829,7 +848,7 @@ fn child_shader_compositing_preserves_coordinates_at_the_display_scale() {
     for density in [1.0, 1.5, 3.0] {
         let width = (180.0 * density) as u32;
         let height = (140.0 * density) as u32;
-        renderer.scene_mut().graph = Some(scaled_shader_graph(
+        renderer.scene_mut().describe(&scaled_shader_graph(
             1.0,
             false,
             ShaderCoordinates::Uv,
@@ -851,13 +870,23 @@ fn child_shader_compositing_preserves_coordinates_at_the_display_scale() {
             (ShaderCoordinates::FragmentArgument, true),
         ] {
             for scale in [1.0, 0.85, 1.03, 1.25, 2.0] {
-                renderer.scene_mut().graph =
-                    Some(scaled_shader_graph(scale, true, coordinates, empty, true));
+                renderer.scene_mut().describe(&scaled_shader_graph(
+                    scale,
+                    true,
+                    coordinates,
+                    empty,
+                    true,
+                ));
                 let expected = renderer
                     .capture_frame_with_scale(width, height, density)
                     .expect("separate shader pass");
-                renderer.scene_mut().graph =
-                    Some(scaled_shader_graph(scale, false, coordinates, empty, true));
+                renderer.scene_mut().describe(&scaled_shader_graph(
+                    scale,
+                    false,
+                    coordinates,
+                    empty,
+                    true,
+                ));
                 let actual = renderer
                     .capture_frame_with_scale(width, height, density)
                     .expect("shader composite");
@@ -888,7 +917,7 @@ fn uv_only_child_shaders_need_no_opt_in_to_avoid_extra_surface_passes() {
         let height = (140.0 * density) as u32;
         for empty in [false, true] {
             for scale in [1.0, 0.85, 1.25] {
-                renderer.scene_mut().graph = Some(scaled_shader_graph(
+                renderer.scene_mut().describe(&scaled_shader_graph(
                     scale,
                     false,
                     ShaderCoordinates::Uv,
@@ -902,7 +931,7 @@ fn uv_only_child_shaders_need_no_opt_in_to_avoid_extra_surface_passes() {
                     .capture_frame_with_scale(width, height, density)
                     .expect("declared shader");
                 let expected_stats = renderer.last_frame_stats().expect("declared stats");
-                renderer.scene_mut().graph = Some(scaled_shader_graph(
+                renderer.scene_mut().describe(&scaled_shader_graph(
                     scale,
                     false,
                     ShaderCoordinates::Uv,
@@ -929,7 +958,7 @@ fn uv_only_child_shaders_need_no_opt_in_to_avoid_extra_surface_passes() {
     }
 }
 
-fn clipped_text_graph(y: f32) -> RenderGraph {
+fn clipped_text_graph(y: f32) -> LayerNode {
     let mut layer = text_layer(NodeId(77), 16.25, y, "Cached short label");
     let RenderNode::Primitive(PrimitiveEntry {
         node: PrimitiveNode::Text(text),
@@ -947,7 +976,7 @@ fn clipped_text_graph(y: f32) -> RenderGraph {
     support::page_graph(320, 140, vec![RenderNode::Layer(Box::new(layer))])
 }
 
-fn nested_shadow_graph(padded: bool, scale: f32, shader: bool) -> RenderGraph {
+fn nested_shadow_graph(padded: bool, scale: f32, shader: bool) -> LayerNode {
     let caster = Rect {
         x: 0.0,
         y: 0.0,
@@ -1034,12 +1063,16 @@ fn transformed_and_shaded_layers_preserve_descendant_shadow_extents() {
             for shader in [false, true] {
                 let width = (180.0 * density) as u32;
                 let height = (140.0 * density) as u32;
-                renderer.scene_mut().graph = Some(nested_shadow_graph(true, scale, shader));
+                renderer
+                    .scene_mut()
+                    .describe(&nested_shadow_graph(true, scale, shader));
                 let reference = renderer
                     .capture_frame_with_scale(width, height, density)
                     .expect("padded reference");
                 let reference_stats = renderer.last_frame_stats().expect("reference stats");
-                renderer.scene_mut().graph = Some(nested_shadow_graph(false, scale, shader));
+                renderer
+                    .scene_mut()
+                    .describe(&nested_shadow_graph(false, scale, shader));
                 let actual = renderer
                     .capture_frame_with_scale(width, height, density)
                     .expect("interaction shadow");
@@ -1068,7 +1101,7 @@ fn retained_short_text_matches_fresh_clipped_pixels_after_translation() {
             let mut fresh = support::headless_renderer_beside_locked().expect("reference renderer");
             let context = cranpose_ui::AppContext::new();
             fresh.attach_app_context_services(&context);
-            fresh.scene_mut().graph = Some(clipped_text_graph(y));
+            fresh.scene_mut().describe(&clipped_text_graph(y));
             let expected = context
                 .enter(|| fresh.capture_frame_with_scale(width, height, scale))
                 .expect("reference pixels");
@@ -1080,7 +1113,7 @@ fn retained_short_text_matches_fresh_clipped_pixels_after_translation() {
                     .iter()
                     .any(|pixel| pixel[0] > 128)
             );
-            renderer.scene_mut().graph = Some(clipped_text_graph(y));
+            renderer.scene_mut().describe(&clipped_text_graph(y));
             for _ in 0..2 {
                 let actual = renderer
                     .capture_frame_with_scale(width, height, scale)

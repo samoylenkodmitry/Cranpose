@@ -31,38 +31,22 @@ fn LayerPropertyCanvas() {
     LAYER_CANVAS_STATE.with(|slot| *slot.borrow_mut() = Some((rotation, color, node_id)));
 }
 
-fn canvas_layer_position(
-    layer: &cranpose_render_common::graph::LayerNode,
-    node_id: NodeId,
-) -> Option<Point> {
-    if layer.node_id == Some(node_id) {
-        return Some(layer.transform_to_parent.map_point(Point::default()));
+fn canvas_layer_position(layer: LayerRef<'_>, node_id: NodeId) -> Option<Point> {
+    if layer.node_id() == Some(node_id) {
+        return Some(layer.transform_to_parent().map_point(Point::default()));
     }
-    layer.children.iter().find_map(|child| match child {
-        cranpose_render_common::graph::RenderNode::Layer(child) => {
-            canvas_layer_position(child, node_id)
-        }
-        cranpose_render_common::graph::RenderNode::Inline(inline) => (inline.node_id == node_id)
-            .then(|| inline.transform_to_parent().map_point(Point::default())),
-        cranpose_render_common::graph::RenderNode::Primitive(_)
-        | cranpose_render_common::graph::RenderNode::DrawRun(_) => None,
-    })
+    layer
+        .children()
+        .find_map(|child| canvas_layer_position(child, node_id))
 }
 
-fn canvas_rect_colors(
-    nodes: &[cranpose_render_common::graph::RenderNode],
-    node_id: NodeId,
-    colors: &mut Vec<Color>,
-) {
-    for child in nodes {
-        match child {
-            cranpose_render_common::graph::RenderNode::Layer(child) => {
-                canvas_rect_colors(&child.children, node_id, colors);
+fn canvas_rect_colors(layer: LayerRef<'_>, node_id: NodeId, colors: &mut Vec<Color>) {
+    for item in layer.items() {
+        match item {
+            ItemRef::Layer(child) | ItemRef::Leaf(child) => {
+                canvas_rect_colors(child, node_id, colors);
             }
-            cranpose_render_common::graph::RenderNode::Inline(inline) => {
-                canvas_rect_colors(&inline.content, node_id, colors);
-            }
-            cranpose_render_common::graph::RenderNode::DrawRun(run)
+            ItemRef::Run(run)
                 if run
                     .command
                     .is_some_and(|command| command.node_id == node_id) =>
@@ -75,8 +59,7 @@ fn canvas_rect_colors(
                     _ => None,
                 }));
             }
-            cranpose_render_common::graph::RenderNode::Primitive(_)
-            | cranpose_render_common::graph::RenderNode::DrawRun(_) => {}
+            ItemRef::Run(_) | ItemRef::Draw(_) | ItemRef::Text(_) => {}
         }
     }
 }
@@ -85,16 +68,15 @@ fn canvas_output(
     shell: &AppShell<ScopedUpdateCountingRenderer>,
     node_id: NodeId,
 ) -> (Point, Vec<Color>) {
-    let graph = shell.surfaces[0]
+    let root = shell.surfaces[0]
         .renderer
         .scene()
-        .graph
-        .as_ref()
+        .root_layer()
         .expect("the initial frame builds a graph");
-    let position = canvas_layer_position(&graph.root(), node_id)
-        .expect("Canvas remains in the retained graph");
+    let position =
+        canvas_layer_position(root, node_id).expect("Canvas remains in the retained graph");
     let mut colors = Vec::new();
-    canvas_rect_colors(&graph.root().children, node_id, &mut colors);
+    canvas_rect_colors(root, node_id, &mut colors);
     (position, colors)
 }
 

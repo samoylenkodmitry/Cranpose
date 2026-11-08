@@ -5,7 +5,7 @@
 
 use cranpose_render_common::{
     Renderer,
-    graph::{CachePolicy, DrawRunNode, LayerNode, PrimitivePhase, RenderGraph, RenderNode},
+    graph::{CachePolicy, DrawRunNode, LayerNode, PrimitivePhase, RenderNode},
 };
 use cranpose_render_wgpu::RenderStatsSnapshot;
 use cranpose_ui_graphics::{
@@ -20,11 +20,11 @@ const ROOT_SCALE: f32 = 1.25;
 
 /// A clipped layer, smaller than the frame, whose draw run holds the shapes
 /// `record` draws: the clip cuts some of them.
-fn graph(record: impl FnOnce(&mut DrawScopeDefault)) -> RenderGraph {
+fn graph(record: impl FnOnce(&mut DrawScopeDefault)) -> LayerNode {
     let mut recording = cranpose_ui_graphics::CommandRecording::default();
     let mut scope = DrawScopeDefault::new(Size::new(SIZE as f32, SIZE as f32), &mut recording);
     record(&mut scope);
-    RenderGraph::new(&LayerNode {
+    LayerNode {
         cache_policy: CachePolicy::None,
         local_bounds: Rect {
             x: 11.25,
@@ -38,7 +38,7 @@ fn graph(record: impl FnOnce(&mut DrawScopeDefault)) -> RenderGraph {
             scope.into_primitives(),
         ))],
         ..LayerNode::default()
-    })
+    }
 }
 
 /// Solid arcs, discs, rounded rects and strokes, with lines of every cap
@@ -97,7 +97,7 @@ fn many_shapes(scope: &mut DrawScopeDefault) {
 /// The first frame of `graph` on a renderer that has built what every
 /// screen draws with, but none of the graph's own shape pipelines, with its
 /// statistics, and the frame once those landed.
-fn first_and_landed(graph: &RenderGraph) -> (Vec<u8>, RenderStatsSnapshot, Vec<u8>) {
+fn first_and_landed(graph: &LayerNode) -> (Vec<u8>, RenderStatsSnapshot, Vec<u8>) {
     let mut renderer = support::headless_renderer_compiling_in_background().expect("GPU required");
     // The fallback pipelines and those of every screen build while an app
     // composes its first screen.
@@ -105,7 +105,7 @@ fn first_and_landed(graph: &RenderGraph) -> (Vec<u8>, RenderStatsSnapshot, Vec<u
     let first = capture(&mut renderer, graph);
     let stats = renderer.last_frame_stats().expect("frame statistics");
     let landed = support::capture_settled(&mut renderer, |renderer| {
-        renderer.scene_mut().graph = Some(graph.clone());
+        renderer.scene_mut().describe(graph);
         renderer
             .capture_frame_with_scale(SIZE, SIZE, ROOT_SCALE)
             .expect("capture")
@@ -113,8 +113,8 @@ fn first_and_landed(graph: &RenderGraph) -> (Vec<u8>, RenderStatsSnapshot, Vec<u
     (first, stats, landed.pixels)
 }
 
-fn capture(renderer: &mut support::LockedRenderer, graph: &RenderGraph) -> Vec<u8> {
-    renderer.scene_mut().graph = Some(graph.clone());
+fn capture(renderer: &mut support::LockedRenderer, graph: &LayerNode) -> Vec<u8> {
+    renderer.scene_mut().describe(graph);
     renderer
         .capture_frame_with_scale(SIZE, SIZE, ROOT_SCALE)
         .expect("capture")

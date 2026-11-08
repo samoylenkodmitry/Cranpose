@@ -250,7 +250,7 @@ fn clip_to_bounds_clips_shadow_and_content() {
 }
 
 #[test]
-fn collect_hits_from_graph_only_populates_hit_regions() {
+fn a_described_layer_with_a_click_handler_is_the_scenes_one_hit_target() {
     let layer = cranpose_render_common::graph::LayerNode {
         node_id: Some(NodeId(7)),
         local_bounds: Rect {
@@ -267,21 +267,12 @@ fn collect_hits_from_graph_only_populates_hit_regions() {
                 &cranpose_ui::Modifier::empty().clickable(|_point| {}),
             )),
         }),
-        has_hit_targets: true,
         ..Default::default()
     };
     let mut scene = crate::scene::Scene::new();
-
-    let store = cranpose_render_common::scene_store::SceneStore::from_layer(&layer);
-    collect_hits_from_graph(
-        store.root_layer().expect("the store holds the layer"),
-        cranpose_render_common::graph::ProjectiveTransform::identity(),
-        &mut scene,
-        None,
-    );
+    scene.describe(&layer);
 
     assert_eq!(scene.hit_targets().len(), 1);
-    assert!(scene.graph.is_none());
 }
 
 #[test]

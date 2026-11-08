@@ -1,5 +1,5 @@
 use cranpose_render_common::{
-    graph::{CachePolicy, LayerNode, ProjectiveTransform, RenderGraph, RenderNode},
+    graph::{CachePolicy, LayerNode, ProjectiveTransform, RenderNode},
     layer_transform::layer_transform_to_parent,
 };
 use cranpose_render_wgpu::{CapturedFrame, RenderStatsSnapshot};
@@ -109,7 +109,7 @@ fn projected_transform(
     ])
 }
 
-fn graph(bounds: Rect, transform: ProjectiveTransform) -> RenderGraph {
+fn graph(bounds: Rect, transform: ProjectiveTransform) -> LayerNode {
     let painted = [
         (26.0, 25.0, 2.4, Color(0.95, 0.12, 0.72, 1.0)),
         (30.1, 25.0, 3.1, Color(0.15, 0.82, 0.92, 1.0)),
@@ -137,7 +137,7 @@ fn graph(bounds: Rect, transform: ProjectiveTransform) -> RenderGraph {
         children: painted,
         ..LayerNode::default()
     };
-    RenderGraph::new(&LayerNode {
+    LayerNode {
         local_bounds: Rect {
             x: 0.0,
             y: 0.0,
@@ -146,7 +146,7 @@ fn graph(bounds: Rect, transform: ProjectiveTransform) -> RenderGraph {
         },
         children: vec![RenderNode::Layer(Box::new(child))],
         ..LayerNode::default()
-    })
+    }
 }
 
 #[test]
@@ -308,7 +308,7 @@ fn capture_scaled_backdrop(
     page.push(RenderNode::Layer(Box::new(group)));
     let frame = support::capture_graph(
         renderer,
-        RenderGraph::new(&LayerNode {
+        LayerNode {
             local_bounds: Rect {
                 x: 0.0,
                 y: 0.0,
@@ -317,7 +317,7 @@ fn capture_scaled_backdrop(
             },
             children: page,
             ..LayerNode::default()
-        }),
+        },
         FRAME,
         FRAME,
     );
@@ -369,7 +369,7 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
         cache_policy: CachePolicy::None,
         ..LayerNode::default()
     };
-    let graph = RenderGraph::new(&LayerNode {
+    let graph = LayerNode {
         local_bounds: Rect {
             x: 0.0,
             y: 0.0,
@@ -398,7 +398,7 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
             RenderNode::Layer(Box::new(pane)),
         ],
         ..LayerNode::default()
-    });
+    };
     let frame = support::capture_graph(&mut renderer, graph, FRAME, FRAME);
     let pixel_x = 9usize;
     let pixel_y = 9usize;

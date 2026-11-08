@@ -1,9 +1,6 @@
 use cranpose_core::NodeId;
 use cranpose_macros::composable;
-use cranpose_render_common::{
-    RenderScene, graph::ProjectiveTransform, graph_scene::Scene,
-    hit_graph::collect_hits_from_graph, scene_builder::build_graph_from_applier,
-};
+use cranpose_render_common::{RenderScene, graph_scene::Scene};
 use cranpose_testing::ComposeTestRule;
 use cranpose_ui::*;
 
@@ -19,10 +16,8 @@ fn scene_for(rule: &mut ComposeTestRule) -> Scene {
     applier
         .compute_layout(root, VIEWPORT)
         .expect("layout succeeds");
-    let graph = build_graph_from_applier(&applier, root, 1.0).expect("scene graph");
-    if let Some(root) = graph.store().root_layer() {
-        collect_hits_from_graph(root, ProjectiveTransform::identity(), &mut scene, None);
-    }
+    scene.rebuild_from_applier(&applier, root);
+    assert!(scene.root_layer().is_some(), "scene graph");
     scene
 }
 

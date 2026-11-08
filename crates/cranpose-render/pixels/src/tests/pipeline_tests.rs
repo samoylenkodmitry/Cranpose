@@ -2,9 +2,10 @@ use cranpose_core::NodeId;
 use cranpose_render_common::{
     graph::{
         DrawPrimitiveNode, LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase,
-        ProjectiveTransform, RenderGraph, RenderNode,
+        ProjectiveTransform, RenderNode,
     },
     layer_shadow::layer_shadow_geometry,
+    scene_store::SceneStore,
 };
 use cranpose_ui::TextLayoutOptions;
 use cranpose_ui_graphics::{
@@ -19,10 +20,11 @@ fn with_test_app_context<R>(block: impl FnOnce() -> R) -> R {
     app_context.enter(block)
 }
 
-fn build_raster_scene_for_test(graph: &RenderGraph) -> RasterScene {
+fn build_raster_scene_for_test(graph: &LayerNode) -> RasterScene {
     let diagnostics = RenderDiagnostics::new();
     let text = TextRaster::new(Default::default());
-    with_test_app_context(|| build_raster_scene(graph, &diagnostics, 1.0, &text))
+    let store = SceneStore::from_layer(graph);
+    with_test_app_context(|| build_raster_scene(&store, &diagnostics, 1.0, &text))
 }
 
 fn push_text_style_draws_for_test(
@@ -54,7 +56,7 @@ fn push_text_style_draws_for_test(
     with_test_app_context(|| push_text_style_draws(scene, &node, placement));
 }
 
-fn snapped_text_leaf_root(animated: bool, translated_content_context: bool) -> RenderGraph {
+fn snapped_text_leaf_root(animated: bool, translated_content_context: bool) -> LayerNode {
     let text_leaf = LayerNode {
         node_id: Some(NodeId(77)),
         local_bounds: Rect {
@@ -136,7 +138,7 @@ fn snapped_text_leaf_root(animated: bool, translated_content_context: bool) -> R
         ..Default::default()
     };
 
-    RenderGraph::new(&LayerNode {
+    LayerNode {
         local_bounds: Rect {
             x: 0.0,
             y: 0.0,
@@ -145,7 +147,7 @@ fn snapped_text_leaf_root(animated: bool, translated_content_context: bool) -> R
         },
         children: vec![RenderNode::Layer(Box::new(text_leaf))],
         ..Default::default()
-    })
+    }
 }
 
 #[test]
@@ -220,7 +222,7 @@ fn a_layer_shadow_draws_skias_ambient_then_spot_pass() {
 
 #[test]
 fn build_raster_scene_uses_graph_transform_to_parent() {
-    let graph = RenderGraph::new(&LayerNode {
+    let graph = LayerNode {
         local_bounds: Rect {
             x: 0.0,
             y: 0.0,
@@ -254,7 +256,7 @@ fn build_raster_scene_uses_graph_transform_to_parent() {
             ..Default::default()
         }))],
         ..Default::default()
-    });
+    };
 
     let scene = build_raster_scene_for_test(&graph);
     let [shape] = scene.shapes.as_slice() else {
@@ -366,9 +368,7 @@ fn shapes_in_list(child: LayerNode) -> usize {
     let mut list = clipped_layer(Point::new(0.0, 80.0), vec![]);
     list.local_bounds.width = 200.0;
     list.children.push(RenderNode::Layer(Box::new(child)));
-    build_raster_scene_for_test(&RenderGraph::new(&list))
-        .shapes
-        .len()
+    build_raster_scene_for_test(&list).shapes.len()
 }
 
 #[test]

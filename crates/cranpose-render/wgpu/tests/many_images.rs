@@ -5,7 +5,7 @@
 
 use cranpose_render_common::{
     Renderer,
-    graph::{DrawRunNode, PrimitivePhase, ProjectiveTransform, RenderGraph, RenderNode},
+    graph::{DrawRunNode, LayerNode, PrimitivePhase, ProjectiveTransform, RenderNode},
 };
 use cranpose_ui_graphics::{
     Brush, Color, DrawPrimitive, GraphicsLayer, ImageBitmap, ImageSampling, Rect, Size,
@@ -28,7 +28,7 @@ fn colour(index: u32) -> [u8; 4] {
     ]
 }
 
-fn frame() -> RenderGraph {
+fn frame() -> LayerNode {
     let mut primitives = vec![DrawPrimitive::Rect {
         rect: Rect::from_size(Size::new(FRAME as f32, FRAME as f32)),
         brush: Brush::solid(Color::BLACK),
@@ -50,7 +50,7 @@ fn frame() -> RenderGraph {
             src_rect: None,
         }
     }));
-    RenderGraph::new(&shared_test_support::layer_node(
+    shared_test_support::layer_node(
         Rect::from_size(Size::new(FRAME as f32, FRAME as f32)),
         ProjectiveTransform::identity(),
         GraphicsLayer::default(),
@@ -58,7 +58,7 @@ fn frame() -> RenderGraph {
             PrimitivePhase::BeforeChildren,
             primitives,
         ))],
-    ))
+    )
 }
 
 #[test]
@@ -72,7 +72,7 @@ fn a_frame_of_more_images_than_the_cache_holds_draws_them_all() {
     };
     // New images every frame, as an animated mask makes them.
     for round in 0..3 {
-        renderer.scene_mut().graph = Some(frame());
+        renderer.scene_mut().describe(&frame());
         let pixels = renderer
             .capture_frame_with_scale(FRAME, FRAME, 1.0)
             .unwrap_or_else(|err| panic!("frame {round} failed: {err:?}"))

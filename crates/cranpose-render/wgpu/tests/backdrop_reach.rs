@@ -1,4 +1,4 @@
-use cranpose_render_common::graph::{ProjectiveTransform, RenderGraph, RenderNode};
+use cranpose_render_common::graph::{LayerNode, ProjectiveTransform, RenderNode};
 use cranpose_ui_graphics::{Color, GraphicsLayer, Rect, RenderEffect};
 
 use crate::support;
@@ -35,7 +35,7 @@ fn grey(value: u8) -> Color {
 /// Dark chrome fills the frame; a clipped light band covers its lower part
 /// and holds one blurred control along its top edge, the way a list holds a
 /// nav bar under the tab strip above the list.
-fn page() -> RenderGraph {
+fn page() -> LayerNode {
     let chrome = support::solid_rect(
         Rect {
             x: 0.0,
@@ -52,7 +52,7 @@ fn page() -> RenderGraph {
         height: FRAME as f32 - BAND_TOP,
     };
     let control = support::layer_node(None, CONTROL.width, CONTROL.height, vec![]);
-    let control = cranpose_render_common::graph::LayerNode {
+    let control = LayerNode {
         graphics_layer: GraphicsLayer {
             backdrop_effect: Some(RenderEffect::blur(BLUR_RADIUS)),
             ..GraphicsLayer::default()
@@ -60,7 +60,7 @@ fn page() -> RenderGraph {
         .into(),
         ..control
     };
-    let band = cranpose_render_common::graph::LayerNode {
+    let band = LayerNode {
         transform_to_parent: ProjectiveTransform::translation(0.0, BAND_TOP),
         graphics_layer: GraphicsLayer {
             clip: true,

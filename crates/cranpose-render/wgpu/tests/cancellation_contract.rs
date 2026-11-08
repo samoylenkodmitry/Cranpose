@@ -1,7 +1,7 @@
 use cranpose_core::NodeId;
 use cranpose_render_common::{
     Renderer,
-    graph::{CachePolicy, LayerNode, ProjectiveTransform, RenderGraph, RenderNode},
+    graph::{CachePolicy, LayerNode, ProjectiveTransform, RenderNode},
 };
 use cranpose_render_wgpu::{CancelReason, PresentOutcome};
 use cranpose_ui_graphics::{Color, Rect};
@@ -26,8 +26,8 @@ fn test_layer(node_id: Option<NodeId>, children: Vec<RenderNode>) -> LayerNode {
     )
 }
 
-fn direct_graph() -> RenderGraph {
-    RenderGraph::new(&test_layer(
+fn direct_graph() -> LayerNode {
+    test_layer(
         Some(NodeId(7_100)),
         vec![support::solid_rect(
             Rect {
@@ -38,10 +38,10 @@ fn direct_graph() -> RenderGraph {
             },
             Color(0.2, 0.7, 0.3, 1.0),
         )],
-    ))
+    )
 }
 
-fn nested_isolated_graph() -> RenderGraph {
+fn nested_isolated_graph() -> LayerNode {
     let mut child = support::contract_layer(
         Some(NodeId(7_101)),
         CachePolicy::None,
@@ -63,10 +63,10 @@ fn nested_isolated_graph() -> RenderGraph {
         )],
     );
     child.graphics_layer.alpha = 0.5;
-    RenderGraph::new(&test_layer(
+    test_layer(
         Some(NodeId(7_100)),
         vec![RenderNode::Layer(Box::new(child))],
-    ))
+    )
 }
 
 fn target_view(
@@ -95,7 +95,7 @@ fn renderer_replacement_cancels_in_flight_packet() {
             return;
         }
     };
-    renderer.scene_mut().graph = Some(direct_graph());
+    renderer.scene_mut().describe(&direct_graph());
 
     let packet = renderer
         .build_frame_packet_for_tests(WIDTH, HEIGHT)
@@ -134,7 +134,7 @@ fn surface_reconfigure_cancels_waiting_packet() {
             return;
         }
     };
-    renderer.scene_mut().graph = Some(direct_graph());
+    renderer.scene_mut().describe(&direct_graph());
 
     let packet = renderer
         .build_frame_packet_for_tests(WIDTH, HEIGHT)
@@ -160,8 +160,8 @@ fn surface_reconfigure_cancels_waiting_packet() {
     assert_eq!(outcome, PresentOutcome::Presented);
 }
 
-fn cancel_at_different_viewport(renderer: &mut support::LockedRenderer, graph: RenderGraph) {
-    renderer.scene_mut().graph = Some(graph);
+fn cancel_at_different_viewport(renderer: &mut support::LockedRenderer, graph: &LayerNode) {
+    renderer.scene_mut().describe(graph);
     let packet = renderer
         .build_frame_packet_for_tests(WIDTH, HEIGHT)
         .expect("graph must lower into a packet");
@@ -181,7 +181,7 @@ fn viewport_mismatch_cancels_packet() {
             return;
         }
     };
-    cancel_at_different_viewport(&mut renderer, direct_graph());
+    cancel_at_different_viewport(&mut renderer, &direct_graph());
 }
 
 #[test]
@@ -196,7 +196,7 @@ fn cancelled_nested_scene_renders_the_same_on_the_next_frame() {
     let reference =
         support::present_and_read(&mut renderer, WIDTH, HEIGHT, nested_isolated_graph());
 
-    cancel_at_different_viewport(&mut renderer, nested_isolated_graph());
+    cancel_at_different_viewport(&mut renderer, &nested_isolated_graph());
 
     let after_cancel =
         support::present_and_read(&mut renderer, WIDTH, HEIGHT, nested_isolated_graph());
@@ -212,7 +212,7 @@ fn cancelled_nested_scene_renders_the_same_on_the_next_frame() {
 /// cancelled packet carrying new tables for a retained command leaves the
 /// store at its last upload, and the next presented packet draws the new
 /// tables, not what the store held.
-fn stored_run_graph(count: usize, color: Color) -> RenderGraph {
+fn stored_run_graph(count: usize, color: Color) -> LayerNode {
     support::stored_run_graph(WIDTH, HEIGHT, &vec![color; count])
 }
 
@@ -230,7 +230,7 @@ fn a_cancelled_packet_leaves_the_run_store_at_its_last_upload() {
     let first =
         support::present_and_read(&mut renderer, WIDTH, HEIGHT, stored_run_graph(96, green));
 
-    cancel_at_different_viewport(&mut renderer, stored_run_graph(96, red));
+    cancel_at_different_viewport(&mut renderer, &stored_run_graph(96, red));
 
     let after_cancel =
         support::present_and_read(&mut renderer, WIDTH, HEIGHT, stored_run_graph(96, red));

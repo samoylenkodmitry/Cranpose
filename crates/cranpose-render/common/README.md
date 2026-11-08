@@ -5,13 +5,14 @@ Cranpose backends. Backend authors implement `Renderer` and `RenderScene`.
 App developers select a renderer through
 [`cranpose`](https://docs.rs/cranpose/latest/cranpose/).
 
-Create a graph from a root layer and inspect its node count:
+Describe a scene as a tree of layers and read the records it holds:
 
 ```rust
-use cranpose_render_common::graph::{LayerNode, RenderGraph};
+use cranpose_render_common::{graph::LayerNode, graph_scene::Scene};
 
-let graph = RenderGraph::new(&LayerNode::default());
-assert_eq!(graph.node_count(), 1);
+let mut scene = Scene::new();
+scene.describe(&LayerNode::default());
+assert_eq!(scene.store().node_count(), 1);
 ```
 
 The `Renderer` contract accepts a `LayoutTree` or a `MemoryApplier` root and a

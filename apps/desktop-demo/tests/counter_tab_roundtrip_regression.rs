@@ -4,17 +4,11 @@ use cranpose_animation::{animateFloatAsState, tween, Easing};
 use cranpose_app_shell::AppShell;
 use cranpose_core::{location_key, MutableState};
 use cranpose_macros::composable;
-use cranpose_render_common::{
-    graph::{LayerNode, ProjectiveTransform, RenderNode},
-    graph_scene::Scene,
-    hit_graph::collect_hits_from_graph,
-    RenderScene, Renderer,
-};
+use cranpose_render_common::{graph_scene::Scene, scene_store::LayerRef, Renderer};
 use cranpose_ui::{
     Button, ButtonSpec, LayoutTree, Modifier, SemanticsAction, SemanticsNode, SemanticsRole, Size,
     Text, TextStyle,
 };
-use cranpose_ui_graphics::Rect;
 use desktop_app::app::{
     combined_app, combined_app_with_initial_tab, DemoTab, TEST_ACTIVE_TAB_STATE,
     TEST_COUNTER_APP_COUNTER_STATE, TEST_LAZY_LIST_STATE, TEST_RECURSIVE_LAYOUT_DEPTH_STATE,
@@ -26,18 +20,6 @@ use crate::tab_switch_regression_support;
 #[derive(Default)]
 struct HitGraphRenderer {
     scene: Scene,
-}
-
-fn collect_graph_hits(layer: &LayerNode, scene: &mut Scene, parent_hit_clip: Option<Rect>) {
-    let store = cranpose_render_common::scene_store::SceneStore::from_layer(layer);
-    if let Some(root) = store.root_layer() {
-        collect_hits_from_graph(
-            root,
-            ProjectiveTransform::identity(),
-            scene,
-            parent_hit_clip,
-        );
-    }
 }
 
 impl Renderer for HitGraphRenderer {
@@ -57,13 +39,7 @@ impl Renderer for HitGraphRenderer {
         layout_tree: &LayoutTree,
         _viewport: Size,
     ) -> Result<(), Self::Error> {
-        self.scene.clear();
-        let graph = cranpose_render_common::scene_builder::build_graph_from_layout_tree(
-            layout_tree.root(),
-            1.0,
-        );
-        collect_graph_hits(&graph.root(), &mut self.scene, None);
-        self.scene.replace_graph(graph);
+        self.scene.build_from_layout_tree(layout_tree.root());
         Ok(())
     }
 
@@ -73,28 +49,16 @@ impl Renderer for HitGraphRenderer {
         root: cranpose_core::NodeId,
         _viewport: Size,
     ) -> Result<(), Self::Error> {
-        self.scene.clear();
-        if let Some(graph) =
-            cranpose_render_common::scene_builder::build_graph_from_applier(applier, root, 1.0)
-        {
-            collect_graph_hits(&graph.root(), &mut self.scene, None);
-            self.scene.replace_graph(graph);
-        }
+        self.scene.rebuild_from_applier(applier, root);
         Ok(())
     }
 }
 
-fn max_layer_translation_y(layer: &LayerNode) -> f32 {
-    layer.children.iter().fold(
-        layer.graphics_layer.translation_y.abs(),
-        |max_value, child| {
-            let child_value = match child {
-                RenderNode::Layer(child_layer) => max_layer_translation_y(child_layer),
-                RenderNode::Primitive(_) | RenderNode::DrawRun(_) | RenderNode::Inline(_) => 0.0,
-            };
-            max_value.max(child_value)
-        },
-    )
+fn max_layer_translation_y(layer: LayerRef<'_>) -> f32 {
+    layer
+        .children()
+        .map(max_layer_translation_y)
+        .fold(layer.graphics_layer().translation_y.abs(), f32::max)
 }
 
 #[composable]
@@ -160,9 +124,8 @@ fn animate_float_as_state_returned_value_updates_parent_graphics_layer_after_cli
         shell.update_after_exact_interval(Duration::from_millis(16));
         let translation = shell
             .scene()
-            .graph
-            .as_ref()
-            .map(|graph| max_layer_translation_y(&graph.root()))
+            .root_layer()
+            .map(max_layer_translation_y)
             .expect("graph available after returned animation frame");
         last_translation = translation;
         if translation > 1.0 && translation < 31.0 {
@@ -656,7 +619,10 @@ fn every_tab_can_render_after_its_predecessor_is_disposed() {
             shell.update_after_exact_interval(Duration::from_millis(16));
         }
         assert!(shell.layout_tree().is_some(), "{tab:?} has no layout");
-        assert!(shell.scene().graph.is_some(), "{tab:?} has no render graph");
+        assert!(
+            shell.scene().root_layer().is_some(),
+            "{tab:?} has no render graph"
+        );
         shell.set_cursor(200.0, 300.0);
         shell.pointer_scrolled(0.0, 120.0);
     }

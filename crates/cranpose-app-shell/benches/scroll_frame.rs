@@ -9,11 +9,8 @@ use cranpose_app_shell::AppShell;
 use cranpose_core::{MemoryApplier, NodeId, location_key};
 use cranpose_render_common::{
     NodeUpdate, Renderer, SceneUpdates,
-    graph::{LayerNode, RenderNode},
     graph_scene::Scene,
-    scene_builder::{
-        build_graph_from_applier, build_graph_from_layout_tree, update_graph_from_applier,
-    },
+    scene_store::{ItemRef, LayerRef},
 };
 use cranpose_ui::{
     Box, BoxSpec, Color, LayoutTree, LazyColumn, LazyColumnSpec, LazyItems, LazyListScope,
@@ -50,8 +47,7 @@ impl Renderer for GraphRenderer {
 
     fn rebuild_scene(&mut self, tree: &LayoutTree, _: Size) -> Result<(), ()> {
         self.rebuilds += 1;
-        self.scene
-            .replace_graph(build_graph_from_layout_tree(tree.root(), 1.0));
+        self.scene.build_from_layout_tree(tree.root());
         Ok(())
     }
 
@@ -62,16 +58,15 @@ impl Renderer for GraphRenderer {
         _: Size,
     ) -> Result<(), ()> {
         self.rebuilds += 1;
-        let graph = build_graph_from_applier(applier, root, 1.0).ok_or(())?;
-        self.scene.replace_graph(graph);
-        Ok(())
+        self.scene.rebuild_from_applier(applier, root);
+        self.scene.root_layer().map(|_| ()).ok_or(())
     }
 
     fn update_scene_from_applier(
         &mut self,
         applier: &mut MemoryApplier,
         root: NodeId,
-        viewport: Size,
+        _: Size,
         updates: SceneUpdates<'_>,
     ) -> Result<(), ()> {
         self.updates += 1;
@@ -79,15 +74,10 @@ impl Renderer for GraphRenderer {
             .iter()
             .filter(|&&(_, update)| update != NodeUpdate::Moved)
             .count();
-        let updated = self
-            .scene
-            .graph
-            .as_mut()
-            .is_some_and(|graph| update_graph_from_applier(applier, graph, updates, 1.0));
-        if !updated {
-            self.rebuild_scene_from_applier(applier, root, viewport)?;
+        if !self.scene.update_from_applier(applier, root, updates) {
+            self.rebuilds += 1;
         }
-        Ok(())
+        self.scene.root_layer().map(|_| ()).ok_or(())
     }
 }
 
@@ -119,42 +109,40 @@ fn ScrollContent(capture: Rc<RefCell<Option<LazyListState>>>, roots: usize) {
     );
 }
 
-fn hash_layer(layer: &LayerNode, hash: &mut DefaultHasher) {
+fn hash_layer(layer: LayerRef<'_>, hash: &mut DefaultHasher) {
     hash.write(
         format!(
             "{:?}{:?}{:?}{:?}{:?}{:?}",
-            layer.local_bounds,
-            layer.transform_to_parent,
-            layer.content_offset,
-            layer.translated_content_offset,
-            layer.origin_in_parent,
-            layer.clip_to_bounds,
+            layer.local_bounds(),
+            layer.transform_to_parent(),
+            layer.content_offset(),
+            layer.translated_content_offset(),
+            layer.origin_in_parent(),
+            layer.clip_to_bounds(),
         )
         .as_bytes(),
     );
-    hash_nodes(&layer.children, hash);
+    hash_items(layer, hash);
 }
 
-fn hash_nodes(nodes: &[RenderNode], hash: &mut DefaultHasher) {
-    for child in nodes {
-        match child {
-            RenderNode::Layer(child) => hash_layer(child, hash),
-            RenderNode::Inline(inline) => {
-                hash.write(format!("{:?}{:?}", inline.origin, inline.size).as_bytes());
-                hash_nodes(&inline.content, hash);
+fn hash_items(layer: LayerRef<'_>, hash: &mut DefaultHasher) {
+    for item in layer.items() {
+        match item {
+            ItemRef::Layer(child) => hash_layer(child, hash),
+            ItemRef::Leaf(leaf) => {
+                hash.write(format!("{:?}{:?}", leaf.origin(), leaf.size()).as_bytes());
+                hash_items(leaf, hash);
             }
-            RenderNode::DrawRun(run) => hash.write_u64(run.recording.fingerprint()),
-            RenderNode::Primitive(primitive) => hash.write(format!("{primitive:?}").as_bytes()),
+            ItemRef::Run(run) => hash.write_u64(run.recording.fingerprint()),
+            ItemRef::Draw(draw) => hash.write(format!("{draw:?}").as_bytes()),
+            ItemRef::Text(text) => hash.write(format!("{text:?}").as_bytes()),
         }
     }
 }
 
 fn fingerprint(shell: &AppShell<GraphRenderer>) -> u64 {
     let mut hash = DefaultHasher::new();
-    hash_layer(
-        &shell.scene().graph.as_ref().expect("scene graph").root(),
-        &mut hash,
-    );
+    hash_layer(shell.scene().root_layer().expect("scene graph"), &mut hash);
     hash.finish()
 }
 

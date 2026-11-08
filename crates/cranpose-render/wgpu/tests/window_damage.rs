@@ -14,7 +14,7 @@ use cranpose_core::{MutableState, NodeId, location_key};
 use cranpose_liquid::{Glass, GlassSurface};
 use cranpose_render_common::{
     Renderer,
-    graph::{DrawCommandId, DrawRunNode, LayerNode, PrimitivePhase, RenderGraph, RenderNode},
+    graph::{DrawCommandId, DrawRunNode, LayerNode, PrimitivePhase, RenderNode},
 };
 use cranpose_render_wgpu::{FrameDamage, RenderStatsSnapshot, WgpuRenderer};
 use cranpose_ui::{
@@ -1314,7 +1314,7 @@ fn rect_array(rect: Rect) -> [f32; 4] {
     [rect.x, rect.y, rect.width, rect.height]
 }
 
-fn page_with_dot(dot: Color) -> RenderGraph {
+fn page_with_dot(dot: Color) -> LayerNode {
     support::page_graph(
         WIDTH,
         HEIGHT,
@@ -1364,7 +1364,7 @@ fn overlay_frame(
     dot: Color,
 ) -> (FrameDamage, Vec<u8>, Vec<u8>) {
     renderer.set_inspector_overlay(overlay);
-    renderer.scene_mut().graph = Some(page_with_dot(dot));
+    renderer.scene_mut().describe(&page_with_dot(dot));
     let [composed, direct] = images.each_ref().map(|image| {
         renderer
             .display_into(&image.texture, &image.view)

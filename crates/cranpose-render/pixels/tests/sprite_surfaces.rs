@@ -36,7 +36,7 @@ fn a_turned_draw_group_reaches_the_sprite_compositor_as_a_texture() {
         .pop()
         .expect("the draw groups case has a fixture");
     let mut renderer = PixelsRenderer::new();
-    renderer.scene_mut().graph = Some(fixture.graph);
+    renderer.scene_mut().replace_store(fixture.store);
     let mut frame = SpriteFrame::default();
     app_context.enter(|| {
         renderer.compose_sprites(&mut frame, fixture.width, fixture.height, 1.0);

@@ -1,7 +1,7 @@
 use cranpose_core::NodeId;
 use cranpose_render_common::{
     Renderer,
-    graph::{DrawRunNode, PrimitivePhase, ProjectiveTransform, RenderGraph, RenderNode},
+    graph::{DrawRunNode, LayerNode, PrimitivePhase, ProjectiveTransform, RenderNode},
 };
 use cranpose_ui_graphics::{
     Brush, Color, CompositingStrategy, DrawScope, DrawScopeDefault, GraphicsLayer, Size,
@@ -13,7 +13,7 @@ const COLUMNS: u32 = 16;
 const ROWS: u32 = 20;
 const TILE: u32 = 16;
 
-fn tiles(rows: u32, ink: [u8; 3]) -> RenderGraph {
+fn tiles(rows: u32, ink: [u8; 3]) -> LayerNode {
     let children = (0..COLUMNS * rows)
         .map(|index| {
             let mut draw_recording = cranpose_ui_graphics::CommandRecording::default();
@@ -41,12 +41,12 @@ fn tiles(rows: u32, ink: [u8; 3]) -> RenderGraph {
             RenderNode::Layer(Box::new(layer))
         })
         .collect();
-    RenderGraph::new(&support::layer_node(
+    support::layer_node(
         Some(NodeId(0)),
         (COLUMNS * TILE) as f32,
         (rows * TILE) as f32,
         children,
-    ))
+    )
 }
 
 #[test]
@@ -57,7 +57,7 @@ fn every_viewport_survives_first_frame_growth_and_buffer_reuse() {
         (1, [224, 32, 96]),
         (ROWS * 2, [64, 224, 96]),
     ] {
-        renderer.scene_mut().graph = Some(tiles(rows, ink));
+        renderer.scene_mut().describe(&tiles(rows, ink));
         let frame = renderer
             .capture_frame(COLUMNS * TILE, rows * TILE)
             .expect("first frame after changing the grid");

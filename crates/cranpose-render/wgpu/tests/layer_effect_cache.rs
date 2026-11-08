@@ -1,6 +1,6 @@
 use cranpose_core::NodeId;
 use cranpose_render_common::{
-    graph::{CachePolicy, ProjectiveTransform, RenderGraph, RenderNode},
+    graph::{CachePolicy, LayerNode, ProjectiveTransform, RenderNode},
     raster_cache::LAYER_RASTER_CACHE_KIND_LABELS,
 };
 use cranpose_ui_graphics::{Color, GraphicsLayer, Rect, RenderEffect};
@@ -26,7 +26,7 @@ fn effect_kind() -> usize {
 
 /// The striped page with a blurred layer over `BAR` whose content is one
 /// still rectangle.
-fn blurred_layer_page() -> RenderGraph {
+fn blurred_layer_page() -> LayerNode {
     let mut page = support::striped_page(WIDTH, HEIGHT);
     let mut layer = shared_test_support::layer_node(
         BAR,

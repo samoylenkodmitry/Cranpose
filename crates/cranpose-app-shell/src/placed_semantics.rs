@@ -47,7 +47,7 @@ use cranpose_render_common::{
     graph::{HitTestNode, ProjectiveTransform},
     graph_scene::HitGeometry,
     hit_graph::{HitGraphSink, collect_hits_from_graph},
-    scene_builder::build_graph_from_applier,
+    scene_builder::build_from_applier,
 };
 use cranpose_ui::{
     LayoutBox, LayoutEngine, LayoutTree, Rect, SemanticsAction, SemanticsNode, SemanticsRole,
@@ -196,11 +196,11 @@ pub fn placed_semantics_from_applier(
     index_layout_bounds(layout.root(), &mut layout_bounds);
 
     let mut touch_bounds = HashMap::default();
-    if let Some(graph) = build_graph_from_applier(applier, root, 1.0) {
+    if let Some(store) = build_from_applier(applier, root) {
         let mut sink = TouchBoundsSink {
             bounds: &mut touch_bounds,
         };
-        if let Some(root) = graph.store().root_layer() {
+        if let Some(root) = store.root_layer() {
             collect_hits_from_graph(root, ProjectiveTransform::identity(), &mut sink, None);
         }
     }

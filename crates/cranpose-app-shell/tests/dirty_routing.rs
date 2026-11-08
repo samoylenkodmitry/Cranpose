@@ -3,9 +3,7 @@ use std::{cell::RefCell, rc::Rc};
 use cranpose_app_shell::{AppShell, RootId};
 use cranpose_core::{MutableState, NodeId, location_key, rememberMutableStateOf};
 use cranpose_macros::composable;
-use cranpose_render_common::{
-    RenderScene, Renderer, graph, graph_scene::Scene, hit_graph::collect_hits_from_graph,
-};
+use cranpose_render_common::{RenderScene, Renderer, graph_scene::Scene};
 use cranpose_ui::{Box, BoxSpec, Modifier, WindowRootDescriptor, WindowRootEntry};
 use cranpose_ui_graphics::Size;
 
@@ -51,20 +49,7 @@ impl Renderer for HitRenderer {
         layout_tree: &cranpose_ui::LayoutTree,
         _viewport: Size,
     ) -> Result<(), Self::Error> {
-        self.scene.clear();
-        let graph = cranpose_render_common::scene_builder::build_graph_from_layout_tree(
-            layout_tree.root(),
-            1.0,
-        );
-        if let Some(root) = graph.store().root_layer() {
-            collect_hits_from_graph(
-                root,
-                graph::ProjectiveTransform::identity(),
-                &mut self.scene,
-                None,
-            );
-        }
-        self.scene.replace_graph(graph);
+        self.scene.build_from_layout_tree(layout_tree.root());
         Ok(())
     }
 
@@ -74,20 +59,7 @@ impl Renderer for HitRenderer {
         root: NodeId,
         _viewport: Size,
     ) -> Result<(), Self::Error> {
-        self.scene.clear();
-        if let Some(graph) =
-            cranpose_render_common::scene_builder::build_graph_from_applier(applier, root, 1.0)
-        {
-            if let Some(root) = graph.store().root_layer() {
-                collect_hits_from_graph(
-                    root,
-                    graph::ProjectiveTransform::identity(),
-                    &mut self.scene,
-                    None,
-                );
-            }
-            self.scene.replace_graph(graph);
-        }
+        self.scene.rebuild_from_applier(applier, root);
         Ok(())
     }
 }

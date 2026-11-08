@@ -1,6 +1,6 @@
 use cranpose_render_common::{
     Renderer,
-    graph::{DrawRunNode, PrimitivePhase, ProjectiveTransform, RenderGraph, RenderNode},
+    graph::{DrawRunNode, LayerNode, PrimitivePhase, ProjectiveTransform, RenderNode},
     image_compare::image_difference_stats,
 };
 use cranpose_render_wgpu::CapturedFrame;
@@ -65,7 +65,7 @@ fn arc_band() -> RenderNode {
     )
 }
 
-fn frame_of(children: Vec<RenderNode>) -> RenderGraph {
+fn frame_of(children: Vec<RenderNode>) -> LayerNode {
     let mut nodes = vec![support::draw_node(
         DrawPrimitive::Rect {
             rect: rect(0.0, 0.0, FRAME as f32, FRAME as f32),
@@ -75,23 +75,23 @@ fn frame_of(children: Vec<RenderNode>) -> RenderGraph {
         None,
     )];
     nodes.extend(children);
-    RenderGraph::new(&shared_test_support::layer_node(
+    shared_test_support::layer_node(
         rect(0.0, 0.0, FRAME as f32, FRAME as f32),
         ProjectiveTransform::identity(),
         GraphicsLayer::default(),
         nodes,
-    ))
+    )
 }
 
-fn capture(renderer: &mut support::LockedRenderer, graph: RenderGraph) -> CapturedFrame {
-    renderer.scene_mut().graph = Some(graph);
+fn capture(renderer: &mut support::LockedRenderer, graph: &LayerNode) -> CapturedFrame {
+    renderer.scene_mut().describe(graph);
     renderer
         .capture_frame(FRAME, FRAME)
         .expect("capture should succeed")
 }
 
 fn background_fill_pixels(renderer: &mut support::LockedRenderer) -> u64 {
-    capture(renderer, frame_of(Vec::new()));
+    capture(renderer, &frame_of(Vec::new()));
     renderer
         .last_frame_stats()
         .expect("stats")
@@ -109,7 +109,7 @@ fn a_stroked_circle_rasterizes_its_band_not_its_disc() {
         }
     };
     let background = background_fill_pixels(&mut renderer);
-    capture(&mut renderer, frame_of(vec![ring(None)]));
+    capture(&mut renderer, &frame_of(vec![ring(None)]));
     let stats = renderer.last_frame_stats().expect("stats");
     let ring_pixels = stats.shape_fill_pixels - background;
     assert!(
@@ -129,7 +129,7 @@ fn an_arc_band_rasterizes_its_sector_not_its_disc() {
         }
     };
     let background = background_fill_pixels(&mut renderer);
-    capture(&mut renderer, frame_of(vec![arc_band()]));
+    capture(&mut renderer, &frame_of(vec![arc_band()]));
     let stats = renderer.last_frame_stats().expect("stats");
     let sector_pixels = stats.shape_fill_pixels - background;
     assert!(
@@ -150,11 +150,11 @@ fn a_banded_ring_matches_the_ring_drawn_in_clipped_halves() {
             return;
         }
     };
-    let whole = capture(&mut renderer, frame_of(vec![ring(None)]));
+    let whole = capture(&mut renderer, &frame_of(vec![ring(None)]));
     let half = FRAME as f32 / 2.0;
     let halves = capture(
         &mut renderer,
-        frame_of(vec![
+        &frame_of(vec![
             ring(Some(rect(0.0, 0.0, half, FRAME as f32))),
             ring(Some(rect(half, 0.0, half, FRAME as f32))),
         ]),
@@ -195,8 +195,8 @@ fn a_translucent_quad_sharing_a_draw_with_a_wide_ring_blends_once() {
             None,
         )
     };
-    let with_ring = capture(&mut renderer, frame_of(vec![ring(None), veil()]));
-    let alone = capture(&mut renderer, frame_of(vec![veil()]));
+    let with_ring = capture(&mut renderer, &frame_of(vec![ring(None), veil()]));
+    let alone = capture(&mut renderer, &frame_of(vec![veil()]));
     let mut differing = 0u32;
     for y in 0..FRAME {
         for x in 0..FRAME {
@@ -273,7 +273,7 @@ fn short_arc_quads_preserve_the_pixels_of_full_disc_rasterization() {
     ]
     .map(|limits| {
         let mut renderer = support::headless_renderer_with_limits(limits).expect("arc parity GPU");
-        renderer.scene_mut().graph = Some(graph.clone());
+        renderer.scene_mut().describe(&graph);
         [0.5, 1.0, 2.75].map(|scale| {
             let side = (FRAME as f32 * scale) as u32;
             renderer
@@ -316,7 +316,7 @@ fn a_rect_recorded_after_a_banded_ring_covers_it() {
         },
         None,
     );
-    let frame = capture(&mut renderer, frame_of(vec![ring(None), cover]));
+    let frame = capture(&mut renderer, &frame_of(vec![ring(None), cover]));
     let on_ring = pixel(&frame, (CENTER + RADIUS) as u32, CENTER as u32);
     assert!(
         on_ring[0] > 150 && on_ring[1] < 100,

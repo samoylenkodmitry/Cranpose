@@ -1,6 +1,6 @@
 use cranpose_render_common::{
     Renderer,
-    graph::{CachePolicy, ProjectiveTransform, RenderGraph, RenderNode},
+    graph::{CachePolicy, LayerNode, ProjectiveTransform, RenderNode},
 };
 use cranpose_render_wgpu::RenderStatsSnapshot;
 use cranpose_ui_graphics::{
@@ -133,7 +133,7 @@ fn ring(index: usize, angle: f32) -> RenderNode {
     RenderNode::Layer(Box::new(layer))
 }
 
-fn arena(frame: usize) -> RenderGraph {
+fn arena(frame: usize) -> LayerNode {
     let mut children = vec![support::draw_node(
         DrawPrimitive::Rect {
             rect: rect(0.0, 0.0, ARENA as f32, ARENA as f32),
@@ -146,22 +146,22 @@ fn arena(frame: usize) -> RenderGraph {
         let speed = if index % 2 == 0 { 0.01 } else { -0.008 };
         children.push(ring(index, frame as f32 * speed * (index + 1) as f32));
     }
-    RenderGraph::new(&shared_test_support::layer_node(
+    shared_test_support::layer_node(
         rect(0.0, 0.0, ARENA as f32, ARENA as f32),
         ProjectiveTransform::identity(),
         GraphicsLayer::default(),
         children,
-    ))
+    )
 }
 
 fn third_frame_stats(
     renderer: &mut support::LockedRenderer,
     width: u32,
     height: u32,
-    graph: impl Fn(usize) -> RenderGraph,
+    graph: impl Fn(usize) -> LayerNode,
 ) -> RenderStatsSnapshot {
     for frame in 0..FRAMES {
-        renderer.scene_mut().graph = Some(graph(frame));
+        renderer.scene_mut().describe(&graph(frame));
         renderer
             .capture_frame(width, height)
             .expect("capture should succeed");

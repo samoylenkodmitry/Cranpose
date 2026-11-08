@@ -9,13 +9,15 @@ use cranpose_core::{
     collections::map::{HashMap, HashSet},
 };
 use cranpose_foundation::{MINIMUM_TOUCH_TARGET_SIZE, PointerEvent, PointerEventKind};
-use cranpose_ui::{LayoutNode, ModifierNodeSlices, SubcomposeLayoutNode};
+use cranpose_ui::{LayoutBox, LayoutNode, ModifierNodeSlices, SubcomposeLayoutNode};
 use cranpose_ui_graphics::{Point, PointerIcon, Rect, RoundedCornerShape, space::Ray};
 
 use crate::{
     HitTestTarget, RenderScene, SceneUpdates,
-    graph::{ProjectiveTransform, RenderGraph},
+    graph::{LayerNode, ProjectiveTransform},
+    scene_builder::WalkMemory,
     scene_pick::ScenePick,
+    scene_store::{LayerRef, SceneStore},
 };
 
 /// Counters and once-only warnings that a scene collects while it dispatches pointer events.
@@ -494,7 +496,7 @@ struct HitBuffers {
     capture_path: Vec<NodeId>,
 }
 
-// The hit targets of a scene's graph in draw order, the last drawn at the
+// The hit targets of a scene's records in draw order, the last drawn at the
 // end, and the storage the next collection of them reuses.
 #[derive(Default)]
 struct HitList {
@@ -504,7 +506,7 @@ struct HitList {
     next_z: usize,
     // Where in `hits` the target of each node lies.
     node_index: HashMap<NodeId, usize>,
-    // The graph changed a target since the list was collected: the next
+    // The records changed a target since the list was collected: the next
     // query collects it again.
     stale: bool,
 }
@@ -565,13 +567,13 @@ impl HitTargets<'_> {
     }
 }
 
-/// The retained render graph of a window together with the hit targets built from it.
+/// The records a window draws together with the hit targets built from them.
 pub struct Scene {
-    /// The retained render graph, or `None` before the first build.
-    pub graph: Option<RenderGraph>,
-    // Collected from the graph when a query first needs them after it
+    store: SceneStore,
+    walk: WalkMemory,
+    // Collected from the store when a query first needs them after it
     // changed: a frame that moves a target and takes no pointer input does
-    // not walk the graph for targets.
+    // not walk the store for targets.
     hits: RefCell<HitList>,
     diagnostics: Rc<RenderDiagnostics>,
     // The updates that moved a layer with no layout pass, and the rebuilds,
@@ -594,10 +596,11 @@ pub struct HitStorage {
 }
 
 impl Scene {
-    /// Creates an empty scene with no graph and no hit targets.
+    /// Creates an empty scene with no records and no hit targets.
     pub fn new() -> Self {
         Self {
-            graph: None,
+            store: SceneStore::new(),
+            walk: WalkMemory::default(),
             hits: RefCell::default(),
             diagnostics: Rc::new(RenderDiagnostics::new()),
             layer_moves: 0,
@@ -609,33 +612,76 @@ impl Scene {
         self.diagnostics.as_ref()
     }
 
-    /// Rebuilds the retained graph from the applier, reusing storage from the
-    /// previous graph. The hit targets follow the new graph.
-    pub fn rebuild_from_applier(&mut self, applier: &MemoryApplier, root: NodeId) {
-        let previous = self.graph.take();
-        self.hits.get_mut().stale = true;
-        self.layer_moves += 1;
-        let Some(graph) =
-            crate::scene_builder::rebuild_graph_from_applier(applier, root, 1.0, previous)
-        else {
-            return;
-        };
-        crate::scene_builder::publish_space(applier, &graph);
-        self.graph = Some(graph);
+    /// The records the scene draws.
+    pub fn store(&self) -> &SceneStore {
+        &self.store
     }
 
-    // The hit targets, collected from the graph first when it changed since
+    /// The root record, `None` while the scene is empty.
+    pub fn root_layer(&self) -> Option<LayerRef<'_>> {
+        self.store.root_layer()
+    }
+
+    /// Writes the layer tree `root` describes in place of the scene's
+    /// records. The hit targets follow it.
+    pub fn describe(&mut self, root: &LayerNode) {
+        self.store.describe(root);
+        self.walk = WalkMemory::default();
+        self.hits.get_mut().stale = true;
+        self.layer_moves += 1;
+    }
+
+    /// Puts `store` in place of the scene's records. The hit targets follow
+    /// it.
+    pub fn replace_store(&mut self, store: SceneStore) {
+        self.store = store;
+        self.walk = WalkMemory::default();
+        self.hits.get_mut().stale = true;
+        self.layer_moves += 1;
+    }
+
+    /// Runs `edit` on the scene's records in a new update. The hit targets
+    /// follow them.
+    pub fn edit_store(&mut self, edit: impl FnOnce(&mut SceneStore)) {
+        self.store.begin_update();
+        edit(&mut self.store);
+        self.store.finish_update();
+        self.walk = WalkMemory::default();
+        self.hits.get_mut().stale = true;
+        self.layer_moves += 1;
+    }
+
+    /// Writes the layout box tree rooted at `root` in place of the scene's
+    /// records. The hit targets follow it.
+    pub fn build_from_layout_tree(&mut self, root: &LayoutBox) {
+        crate::scene_builder::write_layout_tree(&mut self.store, &mut self.walk, root);
+        self.hits.get_mut().stale = true;
+        self.layer_moves += 1;
+    }
+
+    /// Lowers the layout tree below `root` again from the applier, its records
+    /// reusing the scene's storage. The hit targets follow it.
+    pub fn rebuild_from_applier(&mut self, applier: &MemoryApplier, root: NodeId) {
+        self.hits.get_mut().stale = true;
+        self.layer_moves += 1;
+        if crate::scene_builder::rebuild_from_applier(
+            applier,
+            root,
+            &mut self.store,
+            &mut self.walk,
+        ) {
+            crate::scene_builder::publish_space(applier, &self.store);
+        }
+    }
+
+    // The hit targets, collected from the records first when they changed since
     // they were.
     fn fresh_hits(&self) -> Ref<'_, HitList> {
         if self.hits.borrow().stale {
             let mut list = self.hits.borrow_mut();
             list.clear();
             list.stale = false;
-            if let Some(root) = self
-                .graph
-                .as_ref()
-                .and_then(|graph| graph.store.root_layer())
-            {
+            if let Some(root) = self.store.root_layer() {
                 crate::hit_graph::collect_hits_from_graph(
                     root,
                     ProjectiveTransform::identity(),
@@ -666,35 +712,35 @@ impl Scene {
         }
     }
 
-    /// Applies content and layer-property changes to the retained graph.
-    /// Empty updates or an unavailable scoped update rebuild the scene.
-    /// The hit targets follow the graph when the update changed a hit target
-    /// or the geometry above one: each updated layer compares its hit state,
-    /// and the layers beneath one built again, before and after.
+    /// Applies content and layer-property changes to the scene's records
+    /// in place and returns `true`, or rebuilds the scene and returns
+    /// `false`: for empty updates, an empty scene or an update that cannot
+    /// be applied in place. The hit targets follow the records when the
+    /// update changed a hit target or the geometry above one: each updated
+    /// layer compares its hit state, and the layers beneath one built again,
+    /// before and after.
     pub fn update_from_applier(
         &mut self,
         applier: &MemoryApplier,
         root: NodeId,
         updates: SceneUpdates<'_>,
-    ) {
-        let report = if updates.is_empty() {
-            None
-        } else {
-            self.graph.as_mut().map(|graph| {
-                crate::scene_builder::update_graph_from_applier_report(applier, graph, updates, 1.0)
-            })
-        };
-        let Some(report) = report.filter(|report| report.applied()) else {
+    ) -> bool {
+        let report = crate::scene_builder::update_from_applier(
+            applier,
+            &mut self.store,
+            &mut self.walk,
+            updates,
+        );
+        if updates.is_empty() || !report.applied() {
             self.rebuild_from_applier(applier, root);
-            return;
-        };
-        if let Some(graph) = &self.graph {
-            crate::scene_builder::publish_space(applier, graph);
+            return false;
         }
+        crate::scene_builder::publish_space(applier, &self.store);
         if report.hit_graph_dirty {
             self.hits.get_mut().stale = true;
         }
         self.layer_moves += u64::from(report.layers_moved);
+        true
     }
 
     // Adds an interactive target in draw order, ignoring targets that neither
@@ -720,11 +766,6 @@ impl Scene {
         list.clear();
         list.stale = false;
     }
-
-    /// Replaces the retained render graph and leaves the hit targets as they are.
-    pub fn replace_graph(&mut self, graph: RenderGraph) {
-        self.graph = Some(graph);
-    }
 }
 
 impl Default for Scene {
@@ -737,7 +778,8 @@ impl RenderScene for Scene {
     type HitTarget = HitRegion;
 
     fn clear(&mut self) {
-        self.graph = None;
+        self.store.clear();
+        self.walk = WalkMemory::default();
         self.clear_hits();
     }
 
@@ -796,11 +838,7 @@ impl RenderScene for Scene {
     }
 
     fn surface_windows(&self, visit: &mut dyn FnMut(NodeId, ProjectiveTransform)) {
-        let Some(root_layer) = self
-            .graph
-            .as_ref()
-            .and_then(|graph| graph.store.root_layer())
-        else {
+        let Some(root_layer) = self.store.root_layer() else {
             return;
         };
         let root = ProjectiveTransform::identity();
@@ -826,11 +864,7 @@ impl RenderScene for Scene {
     }
 
     fn node_window_bounds(&self, visit: &mut dyn FnMut(NodeId, Rect)) {
-        let Some(root) = self
-            .graph
-            .as_ref()
-            .and_then(|graph| graph.store.root_layer())
-        else {
+        let Some(root) = self.store.root_layer() else {
             return;
         };
         let mut surfaces = HashMap::default();
@@ -850,11 +884,7 @@ impl RenderScene for Scene {
     }
 
     fn collect_retained_visual_observation_nodes(&self, nodes: &mut HashSet<NodeId>) -> bool {
-        if let Some(graph) = &self.graph {
-            graph.collect_retained_visual_observation_nodes(nodes);
-        } else {
-            nodes.clear();
-        }
+        self.store.collect_visual_observation_nodes(nodes);
         true
     }
 }

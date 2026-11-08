@@ -19,7 +19,7 @@ use cranpose_render_common::{
     Renderer,
     graph::{
         CachePolicy, DrawCommandId, DrawPrimitiveNode, DrawRunNode, LayerNode, PrimitiveEntry,
-        PrimitiveNode, PrimitivePhase, ProjectiveTransform, RenderGraph, RenderNode,
+        PrimitiveNode, PrimitivePhase, ProjectiveTransform, RenderNode,
     },
     text_fonts::DEFAULT_FONT_BYTES,
 };
@@ -445,7 +445,7 @@ pub(crate) mod page {
 pub(crate) mod graph {
     pub(crate) use cranpose_render_common::{
         Renderer,
-        graph::{RenderGraph, RenderNode},
+        graph::{LayerNode, RenderNode},
     };
     pub(crate) use cranpose_ui_graphics::{
         Brush, Color, CornerRadii, DrawScope, DrawScopeDefault, Point, Rect, Stroke, TileMode,
@@ -454,10 +454,10 @@ pub(crate) mod graph {
     pub(crate) use super::draw_run_graph;
 }
 
-pub(crate) fn draw_run_graph(size: u32, scope: DrawScopeDefault<'_>) -> RenderGraph {
+pub(crate) fn draw_run_graph(size: u32, scope: DrawScopeDefault<'_>) -> LayerNode {
     use cranpose_render_common::graph::{DrawRunNode, PrimitivePhase};
     use cranpose_ui_graphics::DrawScope;
-    RenderGraph::new(&layer_node(
+    layer_node(
         None,
         size as f32,
         size as f32,
@@ -465,7 +465,7 @@ pub(crate) fn draw_run_graph(size: u32, scope: DrawScopeDefault<'_>) -> RenderGr
             PrimitivePhase::BeforeChildren,
             scope.into_primitives(),
         ))],
-    ))
+    )
 }
 
 pub(crate) fn read_texture(
@@ -783,12 +783,12 @@ pub(crate) fn describe_differing(differing: &[(usize, usize, [u8; 4], [u8; 4])])
 
 pub(crate) fn stable_capture(
     renderer: &mut LockedRenderer,
-    graph: &RenderGraph,
+    graph: &LayerNode,
     size: u32,
 ) -> Vec<u8> {
     let mut passes = Vec::new();
     for _ in 0..3 {
-        renderer.scene_mut().graph = Some(graph.clone());
+        renderer.scene_mut().describe(graph);
         let captured = renderer
             .capture_frame(size, size)
             .unwrap_or_else(|err| panic!("capture failed: {err:?}"));
@@ -863,12 +863,12 @@ pub(crate) fn substrate_probe(spec: SubstrateSpec, read: SubstrateProbeRead) -> 
     RenderEffect::runtime_shader(shader)
 }
 
-pub(crate) fn page_graph(width: u32, height: u32, children: Vec<RenderNode>) -> RenderGraph {
-    RenderGraph::new(&layer_node(None, width as f32, height as f32, children))
+pub(crate) fn page_graph(width: u32, height: u32, children: Vec<RenderNode>) -> LayerNode {
+    layer_node(None, width as f32, height as f32, children)
 }
 
-pub(crate) fn shader_probe_graph(bounds: Rect, shader: RuntimeShader) -> RenderGraph {
-    RenderGraph::new(&LayerNode {
+pub(crate) fn shader_probe_graph(bounds: Rect, shader: RuntimeShader) -> LayerNode {
+    LayerNode {
         local_bounds: bounds,
         graphics_layer: cranpose_ui_graphics::GraphicsLayer {
             render_effect: Some(RenderEffect::runtime_shader(shader)),
@@ -877,7 +877,7 @@ pub(crate) fn shader_probe_graph(bounds: Rect, shader: RuntimeShader) -> RenderG
         .into(),
         children: vec![solid_rect(bounds, Color::WHITE)],
         ..Default::default()
-    })
+    }
 }
 
 pub(crate) mod clip_band {
@@ -899,7 +899,7 @@ pub(crate) mod clip_band {
         layer: GraphicsLayer,
         placement: Point,
         children: Vec<RenderNode>,
-    ) -> RenderGraph {
+    ) -> LayerNode {
         let child = LayerNode {
             local_bounds: CHILD,
             transform_to_parent: layer_transform_to_parent(CHILD, placement, &layer),
@@ -945,16 +945,16 @@ pub(crate) mod clip_band {
 
 pub(crate) fn capture_graph(
     renderer: &mut LockedRenderer,
-    graph: RenderGraph,
+    graph: LayerNode,
     width: u32,
     height: u32,
 ) -> CapturedFrame {
-    capture_graph_with_scale(renderer, graph, width, height, 1.0)
+    capture_graph_with_scale(renderer, &graph, width, height, 1.0)
 }
 
 pub(crate) fn capture_waits(
     renderer: &mut LockedRenderer,
-    graph: RenderGraph,
+    graph: LayerNode,
     width: u32,
     height: u32,
 ) -> (RenderStatsSnapshot, u64) {
@@ -964,7 +964,7 @@ pub(crate) fn capture_waits(
 
 pub(crate) fn capture_with_waits(
     renderer: &mut LockedRenderer,
-    graph: RenderGraph,
+    graph: LayerNode,
     width: u32,
     height: u32,
 ) -> (CapturedFrame, RenderStatsSnapshot, u64) {
@@ -981,7 +981,7 @@ pub(crate) fn capture_with_waits(
 
 pub(crate) fn capture_drawn(
     renderer: &mut LockedRenderer,
-    graph: &RenderGraph,
+    graph: &LayerNode,
     width: u32,
     height: u32,
 ) -> (CapturedFrame, RenderStatsSnapshot) {
@@ -1002,12 +1002,12 @@ pub(crate) fn capture_drawn(
 
 pub(crate) fn capture_graph_with_scale(
     renderer: &mut LockedRenderer,
-    graph: RenderGraph,
+    graph: &LayerNode,
     width: u32,
     height: u32,
     root_scale: f32,
 ) -> CapturedFrame {
-    renderer.scene_mut().graph = Some(graph);
+    renderer.scene_mut().describe(graph);
     renderer
         .capture_frame_with_scale(width, height, root_scale)
         .expect("capture should succeed")
@@ -1081,7 +1081,7 @@ pub(crate) fn settle<T>(mut frame: impl FnMut() -> (RenderStatsSnapshot, T)) -> 
 
 pub(crate) fn capture_graph_settled(
     renderer: &mut LockedRenderer,
-    graph: &RenderGraph,
+    graph: &LayerNode,
     width: u32,
     height: u32,
 ) -> CapturedFrame {
@@ -1090,9 +1090,9 @@ pub(crate) fn capture_graph_settled(
     })
 }
 
-pub(crate) fn settled_capture(renderer: &mut LockedRenderer, graph: &RenderGraph) -> Vec<u8> {
+pub(crate) fn settled_capture(renderer: &mut LockedRenderer, graph: &LayerNode) -> Vec<u8> {
     stable_settled_capture(renderer, |renderer| {
-        renderer.scene_mut().graph = Some(graph.clone());
+        renderer.scene_mut().describe(graph);
         let captured = renderer
             .capture_frame(SIZE, SIZE)
             .unwrap_or_else(|err| panic!("capture failed: {err:?}"));
@@ -1545,7 +1545,7 @@ pub(crate) fn stored_run_rect(index: usize) -> Rect {
     }
 }
 
-pub(crate) fn stored_run_graph(width: u32, height: u32, colors: &[Color]) -> RenderGraph {
+pub(crate) fn stored_run_graph(width: u32, height: u32, colors: &[Color]) -> LayerNode {
     stored_run_graph_of(width, height, colors.iter().copied().map(Brush::solid))
 }
 
@@ -1553,7 +1553,7 @@ pub(crate) fn stored_run_graph_of(
     width: u32,
     height: u32,
     brushes: impl IntoIterator<Item = Brush>,
-) -> RenderGraph {
+) -> LayerNode {
     stored_runs_graph_of(width, height, [brushes.into_iter().collect()])
 }
 
@@ -1561,7 +1561,7 @@ pub(crate) fn stored_runs_graph_of<const RUNS: usize>(
     width: u32,
     height: u32,
     runs: [Vec<Brush>; RUNS],
-) -> RenderGraph {
+) -> LayerNode {
     let mut first_record = 0;
     let commands = runs
         .into_iter()
@@ -1589,7 +1589,7 @@ pub(crate) fn stored_runs_graph_of<const RUNS: usize>(
             ))
         })
         .collect();
-    RenderGraph::new(&contract_layer(
+    contract_layer(
         Some(STORED_RUN_NODE),
         CachePolicy::None,
         Rect {
@@ -1600,16 +1600,16 @@ pub(crate) fn stored_runs_graph_of<const RUNS: usize>(
         },
         ProjectiveTransform::identity(),
         commands,
-    ))
+    )
 }
 
 pub(crate) fn present_and_read(
     renderer: &mut LockedRenderer,
     width: u32,
     height: u32,
-    graph: RenderGraph,
+    graph: LayerNode,
 ) -> Vec<u8> {
-    let texture = present(renderer, width, height, graph);
+    let texture = present(renderer, width, height, &graph);
     read_presented(renderer, &texture)
 }
 
@@ -1617,9 +1617,9 @@ pub(crate) fn present(
     renderer: &mut LockedRenderer,
     width: u32,
     height: u32,
-    graph: RenderGraph,
+    graph: &LayerNode,
 ) -> wgpu::Texture {
-    renderer.scene_mut().graph = Some(graph);
+    renderer.scene_mut().describe(graph);
     let packet = renderer
         .build_frame_packet_for_tests(width, height)
         .expect("the graph must lower into a packet");
@@ -1724,7 +1724,7 @@ pub(crate) mod glass_page {
     pub(crate) const GLASS_RADIUS: f32 = 12.0;
     pub(crate) const BLUR_RADIUS: f32 = 6.0;
 
-    pub(crate) fn panes_page(effects: impl IntoIterator<Item = RenderEffect>) -> RenderGraph {
+    pub(crate) fn panes_page(effects: impl IntoIterator<Item = RenderEffect>) -> LayerNode {
         let mut children = striped_page(FRAME_WIDTH, FRAME_HEIGHT);
         for (index, effect) in effects.into_iter().enumerate() {
             children.push(RenderNode::Layer(Box::new(

@@ -6,7 +6,7 @@ use cranpose_ui_graphics::GraphicsLayer;
 
 use crate::{
     NodeUpdate, SceneUpdates,
-    graph::{ProjectiveTransform, RenderGraph},
+    graph::ProjectiveTransform,
     layer_transform::layer_transform_to_parent,
     scene_store::{Item, LayerRef, RecordFlags, RecordKind, SceneStore},
 };
@@ -15,12 +15,12 @@ mod dirty_walk;
 pub(crate) use dirty_walk::{DirtyAncestry, RetainedPath};
 use dirty_walk::{update_along_retained_path, walk_dirty_layers};
 mod draw_recording;
+pub use draw_recording::clear_command_recordings_for_tests;
 use draw_recording::{
     DrawPass, DrawTarget, NodeCommands, append_draw_nodes, bump_recording_generation, draw_nodes,
     layer_node_capacity,
 };
-pub(crate) use draw_recording::{RecorderKey, RecorderSlot};
-pub use draw_recording::{clear_command_recordings_for_tests, draw_command_nodes_for_tests};
+pub(crate) use draw_recording::{RecorderKey, RecorderSlot, draw_command_items};
 mod graph_changes;
 use graph_changes::GraphChanges;
 mod hit_graph;
@@ -163,85 +163,72 @@ fn lowered_layer_count() -> usize {
     crate::thread_state::with(|state| state.lowered_layer_count.get())
 }
 
-/// Builds the render graph of the layout box tree rooted at `root`.
-pub fn build_graph_from_layout_tree(root: &LayoutBox, _scale: f32) -> RenderGraph {
+// What the dirty walk keeps of one update for the next: the path to the
+// layer it updated last and the marks of the nodes it walked through.
+#[derive(Default)]
+pub(crate) struct WalkMemory {
+    retained_path: Option<RetainedPath>,
+    dirty_ancestry: DirtyAncestry,
+}
+
+// Writes the layout box tree rooted at `root` into `store` in place of what
+// it held.
+pub(crate) fn write_layout_tree(store: &mut SceneStore, walk: &mut WalkMemory, root: &LayoutBox) {
     bump_recording_generation();
     let root_snapshot = layout_box_to_snapshot(root, None);
-    let mut graph = RenderGraph::empty();
-    graph.store.begin_update();
-    let record = root_record(&mut graph.store, root_snapshot.node_id);
-    write_snapshot_layer(&mut graph.store, root_snapshot, LowerContext::ROOT, record);
-    graph.refresh_from_store();
-    graph
+    store.begin_update();
+    store.clear();
+    *walk = WalkMemory::default();
+    let record = root_record(store, root_snapshot.node_id);
+    write_snapshot_layer(store, root_snapshot, LowerContext::ROOT, record);
+    store.finish_update();
 }
 
-/// Builds the render graph of the layout tree below `root` by reading nodes from `applier`.
+/// Builds the records of the layout tree below `root`, read from `applier`.
 /// Returns `None` when `root` cannot be lowered to a layer.
-pub fn build_graph_from_applier(
-    applier: &MemoryApplier,
-    root: NodeId,
-    _scale: f32,
-) -> Option<RenderGraph> {
-    bump_recording_generation();
-    let mut graph = RenderGraph::empty();
-    graph.store.begin_update();
-    lower_root_into(applier, &mut graph.store, root).then(|| {
-        graph.refresh_from_store();
-        graph
-    })
+pub fn build_from_applier(applier: &MemoryApplier, root: NodeId) -> Option<SceneStore> {
+    let mut store = SceneStore::new();
+    rebuild_from_applier(applier, root, &mut store, &mut WalkMemory::default()).then_some(store)
 }
 
-/// Builds `root`'s graph again, its layers taking the allocations of
-/// `previous`, the graph it replaces.
-pub fn rebuild_graph_from_applier(
+// Lowers the layout tree below `root` into `store` again, its records reusing
+// the store's rows and arenas. Returns `false` and leaves the store empty
+// when `root` cannot be lowered to a layer.
+pub(crate) fn rebuild_from_applier(
     applier: &MemoryApplier,
     root: NodeId,
-    scale: f32,
-    previous: Option<RenderGraph>,
-) -> Option<RenderGraph> {
-    match previous {
-        Some(mut graph) => {
-            graph.store.begin_update();
-            if let Some(record) = graph.store.root() {
-                release_for_rebuild(&mut graph.store, record);
-            }
-            bump_recording_generation();
-            graph.retained_path = None;
-            lower_root_into(applier, &mut graph.store, root).then(|| {
-                if let Some(record) = graph.store.root() {
-                    graph.store.note_content_change(record);
-                }
-                graph.refresh_from_store();
-                graph
-            })
-        }
-        None => build_graph_from_applier(applier, root, scale),
-    }
-}
-
-/// Applies `updates` to `graph` in place. Returns `false` when the update could not be applied
-/// and the graph must be built again.
-pub fn update_graph_from_applier(
-    applier: &MemoryApplier,
-    graph: &mut RenderGraph,
-    updates: SceneUpdates<'_>,
-    scale: f32,
+    store: &mut SceneStore,
+    walk: &mut WalkMemory,
 ) -> bool {
-    update_graph_from_applier_report(applier, graph, updates, scale).applied()
+    store.begin_update();
+    if let Some(record) = store.root() {
+        release_for_rebuild(store, record);
+    }
+    bump_recording_generation();
+    walk.retained_path = None;
+    if !lower_root_into(applier, store, root) {
+        store.clear();
+        return false;
+    }
+    if let Some(record) = store.root() {
+        store.note_content_change(record);
+    }
+    store.finish_update();
+    true
 }
 
-/// Like `update_graph_from_applier`, and also reports whether the hit targets must be collected
-/// again or why the graph must be rebuilt.
+// Applies `updates` to `store` in place, and reports whether the hit targets
+// must be collected again or why the store must be built again.
 #[expect(clippy::print_stderr, reason = "CRANPOSE_SCENE_UPDATE_DIAG asks")]
-pub fn update_graph_from_applier_report(
+pub(crate) fn update_from_applier(
     applier: &MemoryApplier,
-    graph: &mut RenderGraph,
+    store: &mut SceneStore,
+    walk: &mut WalkMemory,
     updates: SceneUpdates<'_>,
-    _scale: f32,
 ) -> GraphUpdateReport {
-    let report = update_graph_from_applier_report_inner(applier, graph, updates);
+    let report = update_from_applier_inner(applier, store, walk, updates);
     if !updates.is_empty() && report.applied() {
-        graph.refresh_from_store();
+        store.finish_update();
     }
     if let GraphUpdate::NeedsRebuild(reason) = report.update
         && cranpose_core::DIAGNOSTICS.scene_update_diag.is_set()
@@ -284,16 +271,17 @@ fn changes_layer(update: NodeUpdate) -> bool {
 }
 
 #[expect(clippy::print_stderr, reason = "CRANPOSE_SCENE_UPDATE_DIAG asks")]
-fn update_graph_from_applier_report_inner(
+fn update_from_applier_inner(
     applier: &MemoryApplier,
-    graph: &mut RenderGraph,
+    store: &mut SceneStore,
+    walk: &mut WalkMemory,
     updates: SceneUpdates<'_>,
 ) -> GraphUpdateReport {
     if updates.is_empty() {
         return GraphUpdateReport::patched(GraphChanges::default());
     }
     bump_recording_generation();
-    graph.store.begin_update();
+    store.begin_update();
 
     if cranpose_core::DIAGNOSTICS.scene_update_diag.is_set() {
         eprintln!("[scene-update-diag] dirty={updates:?}");
@@ -303,7 +291,7 @@ fn update_graph_from_applier_report_inner(
     let mut remaining_dirty_nodes =
         crate::thread_state::with(|state| state.dirty_node_scratch.take()).unwrap_or_default();
     let merged = dirty_node_updates(updates, &mut remaining_dirty_nodes);
-    let mut report = update_dirty_nodes(applier, graph, &mut remaining_dirty_nodes);
+    let mut report = update_dirty_nodes(applier, store, walk, &mut remaining_dirty_nodes);
     report.layers_moved |= merged.contains(GraphChanges::Moves);
     remaining_dirty_nodes.clear();
     crate::thread_state::with(|state| state.dirty_node_scratch.set(Some(remaining_dirty_nodes)));
@@ -312,14 +300,14 @@ fn update_graph_from_applier_report_inner(
 
 fn update_dirty_nodes(
     applier: &MemoryApplier,
-    graph: &mut RenderGraph,
+    store: &mut SceneStore,
+    walk: &mut WalkMemory,
     remaining_dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
 ) -> GraphUpdateReport {
-    let RenderGraph {
-        store,
+    let WalkMemory {
         retained_path,
         dirty_ancestry,
-    } = graph;
+    } = walk;
     let Some(root) = store.root() else {
         return GraphUpdateReport::needs_rebuild(GraphRebuildReason::RootLayerUnavailable);
     };
@@ -688,17 +676,17 @@ fn update_layer_properties(
     Some(changes)
 }
 
-pub(crate) fn publish_space(applier: &MemoryApplier, graph: &RenderGraph) {
+pub(crate) fn publish_space(applier: &MemoryApplier, store: &SceneStore) {
     if !crate::thread_state::with(|state| state.space_changed.replace(false)) {
         return;
     }
-    publish_space_now(applier, graph);
+    publish_space_now(applier, store);
 }
 
 #[cold]
 #[inline(never)]
-fn publish_space_now(applier: &MemoryApplier, graph: &RenderGraph) {
-    let Some(root_layer) = graph.store.root_layer() else {
+fn publish_space_now(applier: &MemoryApplier, store: &SceneStore) {
+    let Some(root_layer) = store.root_layer() else {
         return;
     };
     let root = ProjectiveTransform::identity();

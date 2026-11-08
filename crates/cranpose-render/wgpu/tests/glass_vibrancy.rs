@@ -1,6 +1,10 @@
 use cranpose_render_common::{
     Renderer,
-    graph::{IsolationReasons, ProjectiveTransform, RenderGraph, RenderNode},
+    graph::{
+        IsolationReasons, LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase,
+        ProjectiveTransform, RenderNode,
+    },
+    scene_store::{ItemRef, LayerRef},
 };
 use cranpose_ui_graphics::{
     BlendMode, Color, CompositingStrategy, GraphicsLayer, Rect, RenderEffect, RuntimeShader,
@@ -24,7 +28,7 @@ fn effect(mask: bool, selected: bool, dark: bool) -> RenderEffect {
     RenderEffect::runtime_shader(shader)
 }
 
-fn scene(selected: bool, dark: bool) -> RenderGraph {
+fn scene(selected: bool, dark: bool) -> LayerNode {
     let background = if dark {
         Color(0.2, 0.32, 0.1, 1.0)
     } else {
@@ -33,7 +37,7 @@ fn scene(selected: bool, dark: bool) -> RenderGraph {
     source_scene(selected, dark, background)
 }
 
-fn source_scene(selected: bool, dark: bool, background: Color) -> RenderGraph {
+fn source_scene(selected: bool, dark: bool, background: Color) -> LayerNode {
     let bounds = Rect {
         x: 0.0,
         y: 0.0,
@@ -92,7 +96,7 @@ fn source_scene(selected: bool, dark: bool, background: Color) -> RenderGraph {
         explicit_offscreen: true,
         ..Default::default()
     };
-    RenderGraph::new(&shared_test_support::layer_node(
+    shared_test_support::layer_node(
         bounds,
         ProjectiveTransform::identity(),
         GraphicsLayer::default(),
@@ -100,7 +104,7 @@ fn source_scene(selected: bool, dark: bool, background: Color) -> RenderGraph {
             support::solid_rect(bounds, background),
             RenderNode::Layer(Box::new(ink)),
         ],
-    ))
+    )
 }
 
 #[test]
@@ -108,7 +112,7 @@ fn vibrant_ink_uses_the_backdrop_only_within_the_content_mask() {
     let mut renderer = support::headless_renderer().expect("GPU vibrancy test must run");
     for selected in [false, true] {
         let graph = scene(selected, false);
-        renderer.scene_mut().graph = Some(graph);
+        renderer.scene_mut().describe(&graph);
         let frame = renderer.capture_frame(64, 48).expect("vibrancy capture");
         for (x, y, expected) in [
             (4, 4, [179, 245, 212, 255]),
@@ -167,7 +171,7 @@ fn content_test_frame(
             RenderNode::Layer(Box::new(layer)),
         ],
     );
-    renderer.scene_mut().graph = Some(RenderGraph::new(&root));
+    renderer.scene_mut().describe(&root);
     renderer
         .capture_frame(1206, 360)
         .expect("the renderer captures a frame")
@@ -347,15 +351,17 @@ fn optical_projection_preserves_the_native_capsule_and_unmagnified_source() {
             ),
         )],
     );
-    renderer.scene_mut().graph = Some(RenderGraph::new(&shared_test_support::layer_node(
-        bounds,
-        ProjectiveTransform::uniform_scale(3.0),
-        GraphicsLayer::default(),
-        vec![
-            support::solid_rect(bounds, Color::BLACK),
-            RenderNode::Layer(Box::new(layer)),
-        ],
-    )));
+    renderer
+        .scene_mut()
+        .describe(&shared_test_support::layer_node(
+            bounds,
+            ProjectiveTransform::uniform_scale(3.0),
+            GraphicsLayer::default(),
+            vec![
+                support::solid_rect(bounds, Color::BLACK),
+                RenderNode::Layer(Box::new(layer)),
+            ],
+        ));
     let frame = renderer.capture_frame(1206, 360).unwrap();
     let mut tested = 0;
     for (local_x, local_y, inside) in [
@@ -389,7 +395,7 @@ fn optical_projection_preserves_the_native_capsule_and_unmagnified_source() {
 fn dark_vibrancy_matches_native_color_matrices() {
     let mut renderer = support::headless_renderer().expect("dark vibrancy requires GPU");
     for selected in [false, true] {
-        renderer.scene_mut().graph = Some(scene(selected, true));
+        renderer.scene_mut().describe(&scene(selected, true));
         let frame = renderer
             .capture_frame(64, 48)
             .expect("dark vibrancy capture");
@@ -428,7 +434,9 @@ fn ink_polarity_follows_the_glass_when_its_tone_reverses() {
     for (foreground_is_light, background, expected) in
         [(true, Color::WHITE, 26), (false, Color::BLACK, 242)]
     {
-        renderer.scene_mut().graph = Some(source_scene(false, foreground_is_light, background));
+        renderer
+            .scene_mut()
+            .describe(&source_scene(false, foreground_is_light, background));
         let frame = renderer
             .capture_frame(64, 48)
             .expect("adaptive ink capture");
@@ -754,60 +762,100 @@ fn replace_pane_input(renderer: &mut cranpose_render_wgpu::WgpuRenderer, backdro
         })),
     });
     let lens = extract_lens(
-        &renderer
-            .scene_mut()
-            .graph
-            .as_ref()
-            .expect("the scene has a graph")
-            .root(),
-        ProjectiveTransform::identity(),
+        renderer
+            .scene()
+            .root_layer()
+            .expect("the scene has records"),
     )
     .expect("composed raised lens");
-    renderer.scene_mut().graph = Some(RenderGraph::new(&shared_test_support::layer_node(
-        bounds,
-        ProjectiveTransform::identity(),
-        GraphicsLayer::default(),
-        vec![primitive, RenderNode::Layer(Box::new(lens))],
-    )));
+    renderer
+        .scene_mut()
+        .describe(&shared_test_support::layer_node(
+            bounds,
+            ProjectiveTransform::identity(),
+            GraphicsLayer::default(),
+            vec![primitive, RenderNode::Layer(Box::new(lens))],
+        ));
 }
 
-fn extract_lens(
-    layer: &cranpose_render_common::graph::LayerNode,
-    parent: ProjectiveTransform,
-) -> Option<cranpose_render_common::graph::LayerNode> {
-    let mut foreground = extract_lens_stage(layer, parent, 3.0)?;
-    let mut background = extract_lens_stage(layer, parent, 2.0)?;
-    assert_eq!(
-        foreground.transform_to_parent,
-        background.transform_to_parent
-    );
-    foreground.graphics_layer.backdrop_effect = Some(
+// The lens of `root`'s scene as a description to draw on a page of its own:
+// its foreground stage, mapped to the window, with the background stage's
+// backdrop effect before its own.
+fn extract_lens(root: LayerRef<'_>) -> Option<LayerNode> {
+    let (foreground, transform) = lens_stage(root, ProjectiveTransform::identity(), 3.0)?;
+    let (background, background_transform) =
+        lens_stage(root, ProjectiveTransform::identity(), 2.0)?;
+    assert_eq!(transform, background_transform);
+    let mut lens = describe(foreground);
+    lens.transform_to_parent = transform;
+    lens.graphics_layer.backdrop_effect = Some(
         background
-            .graphics_layer
-            .backdrop_effect
-            .take()
+            .backdrop()
             .expect("background lens effect")
+            .clone()
             .then(
                 foreground
-                    .graphics_layer
-                    .backdrop_effect
-                    .take()
-                    .expect("foreground lens effect"),
+                    .backdrop()
+                    .expect("foreground lens effect")
+                    .clone(),
             ),
     );
-    Some(foreground)
+    Some(lens)
 }
 
-fn extract_lens_stage(
-    layer: &cranpose_render_common::graph::LayerNode,
+// A description of `layer` and the records beneath it.
+fn describe(layer: LayerRef<'_>) -> LayerNode {
+    let mut after_children = false;
+    let children = layer
+        .items()
+        .map(|item| {
+            let phase = if after_children {
+                PrimitivePhase::AfterChildren
+            } else {
+                PrimitivePhase::BeforeChildren
+            };
+            match item {
+                ItemRef::Draw(draw) => RenderNode::Primitive(PrimitiveEntry {
+                    phase,
+                    node: PrimitiveNode::Draw(Box::new(draw.clone())),
+                }),
+                ItemRef::Text(text) => RenderNode::Primitive(PrimitiveEntry {
+                    phase,
+                    node: PrimitiveNode::Text(Box::new(text.clone())),
+                }),
+                ItemRef::Run(run) => RenderNode::DrawRun(run.clone()),
+                ItemRef::Layer(child) => {
+                    after_children |= child.draw_phase().is_none();
+                    RenderNode::Layer(Box::new(describe(child)))
+                }
+                ItemRef::Leaf(_) => panic!("a lens draws no leaf"),
+            }
+        })
+        .collect();
+    LayerNode {
+        node_id: layer.node_id(),
+        local_bounds: layer.local_bounds(),
+        transform_to_parent: layer.transform_to_parent(),
+        content_offset: layer.content_offset(),
+        graphics_layer: layer.graphics_layer().clone().into(),
+        clip_to_bounds: layer.clip_to_bounds(),
+        isolation: layer.isolation(),
+        draw_phase: layer.draw_phase(),
+        cache_policy: layer.cache_policy(),
+        children,
+        ..LayerNode::default()
+    }
+}
+
+// The record of lens stage `stage` beneath `layer` and its map to the window.
+fn lens_stage(
+    layer: LayerRef<'_>,
     parent: ProjectiveTransform,
     stage: f32,
-) -> Option<cranpose_render_common::graph::LayerNode> {
-    let transform = layer.transform_to_parent.then(parent);
+) -> Option<(LayerRef<'_>, ProjectiveTransform)> {
+    let transform = layer.transform_to_parent().then(parent);
     if layer
-        .graphics_layer
-        .backdrop_effect
-        .as_ref()
+        .backdrop()
         .and_then(terminal_effect_shader)
         .is_some_and(|shader| {
             shader.uniforms().len() > 147
@@ -815,14 +863,17 @@ fn extract_lens_stage(
                 && shader.uniforms()[147] == stage
         })
     {
-        let mut lens = layer.clone();
-        lens.transform_to_parent = transform;
-        return Some(lens);
+        return Some((layer, transform));
     }
-    layer.children.iter().find_map(|child| match child {
-        RenderNode::Layer(child) => extract_lens_stage(child, transform, stage),
-        _ => None,
-    })
+    layer
+        .children()
+        .find_map(|child| lens_stage(child, transform, stage))
+}
+
+// The shader of the foreground stage of the lens beneath `root`.
+fn foreground_lens_shader(root: LayerRef<'_>) -> &RuntimeShader {
+    let (lens, _) = lens_stage(root, ProjectiveTransform::identity(), 3.0).expect("a lens");
+    terminal_effect_shader(lens.backdrop().expect("a lens backdrop")).expect("a lens shader")
 }
 
 fn terminal_effect_shader(effect: &RenderEffect) -> Option<&RuntimeShader> {
@@ -833,28 +884,20 @@ fn terminal_effect_shader(effect: &RenderEffect) -> Option<&RuntimeShader> {
     }
 }
 
-fn rendered_lens_bounds(
-    layer: &cranpose_render_common::graph::LayerNode,
-    parent: ProjectiveTransform,
-) -> Option<Rect> {
+fn rendered_lens_bounds(layer: LayerRef<'_>, parent: ProjectiveTransform) -> Option<Rect> {
     rendered_glass_bounds(layer, parent, 2.0)
 }
 
 fn rendered_glass_bounds(
-    layer: &cranpose_render_common::graph::LayerNode,
+    layer: LayerRef<'_>,
     parent: ProjectiveTransform,
     mode: f32,
 ) -> Option<Rect> {
-    let transform = layer.transform_to_parent.then(parent);
-    if let Some(shader) = layer
-        .graphics_layer
-        .backdrop_effect
-        .as_ref()
-        .and_then(terminal_effect_shader)
-    {
+    let transform = layer.transform_to_parent().then(parent);
+    if let Some(shader) = layer.backdrop().and_then(terminal_effect_shader) {
         let u = shader.uniforms();
         if u.len() > 130 && u[130] == mode && mode == 1.0 {
-            return Some(transform.bounds_for_rect(layer.local_bounds));
+            return Some(transform.bounds_for_rect(layer.local_bounds()));
         }
         if u.len() > 147 && u[130] == mode && u[147] == 3.0 {
             let projection = if u.len() > 169 && u[168] > 0.0 && u[169] > 0.0 {
@@ -870,10 +913,9 @@ fn rendered_glass_bounds(
             }));
         }
     }
-    layer.children.iter().find_map(|child| match child {
-        RenderNode::Layer(child) => rendered_glass_bounds(child, transform, mode),
-        _ => None,
-    })
+    layer
+        .children()
+        .find_map(|child| rendered_glass_bounds(child, transform, mode))
 }
 
 #[test]
@@ -883,15 +925,8 @@ fn composed_contact_keeps_refraction_and_shape_at_the_same_native_progress() {
         assert!(shell.pointer_pressed_at_event_time(shell.exact_pointer_event_time(None)));
         for frame in 1..=15 {
             shell.update_after_exact_interval(std::time::Duration::from_nanos(16_666_667));
-            let lens = extract_lens(
-                &shell.renderer().scene_mut().graph.as_ref().unwrap().root(),
-                ProjectiveTransform::identity(),
-            )
-            .unwrap();
-            let shader =
-                terminal_effect_shader(lens.graphics_layer.backdrop_effect.as_ref().unwrap())
-                    .unwrap();
-            let u = shader.uniforms();
+            let renderer = shell.renderer();
+            let u = foreground_lens_shader(renderer.scene().root_layer().unwrap()).uniforms();
             let shape_progress = ((u[4] - 95.0) / 16.0).clamp(0.0, 1.0);
             let refraction_progress =
                 u[cranpose_ui_graphics::GLASS_EDGE_REFRACTION_REACH_UNIFORM] / 9.0;
@@ -925,9 +960,12 @@ fn composed_contact_geometry_reaches_the_native_early_keyframes() {
                 let capture = shell.renderer().capture_frame(1206, 360).unwrap();
                 save_optical_capture(&root, &format!("contact-{frame:02}"), &capture);
             }
-            let graph = shell.renderer().scene_mut().graph.as_ref().unwrap().clone();
-            let bounds = rendered_lens_bounds(&graph.root(), ProjectiveTransform::identity())
-                .expect("rendered lens must be present");
+            let renderer = shell.renderer();
+            let bounds = rendered_lens_bounds(
+                renderer.scene().root_layer().unwrap(),
+                ProjectiveTransform::identity(),
+            )
+            .expect("rendered lens must be present");
             if let Some((_, width, height)) = [
                 (3, 101.815, 60.315),
                 (6, 109.544, 67.306),
@@ -956,12 +994,8 @@ fn composed_release_keeps_the_native_contact_clock_after_selection_commits() {
         assert!(shell.pointer_released_at_event_time(shell.exact_pointer_event_time(None)));
         for frame in 1..=12 {
             shell.update_after_exact_interval(std::time::Duration::from_nanos(16_666_667));
-            let graph = shell.renderer().scene_mut().graph.as_ref().unwrap().clone();
-            let lens = extract_lens(&graph.root(), ProjectiveTransform::identity()).unwrap();
-            let shader =
-                terminal_effect_shader(lens.graphics_layer.backdrop_effect.as_ref().unwrap())
-                    .unwrap();
-            let u = shader.uniforms();
+            let renderer = shell.renderer();
+            let u = foreground_lens_shader(renderer.scene().root_layer().unwrap()).uniforms();
             let progress = (u[4] + u[5] - 149.0) / 32.0;
             if let Ok(root) = std::env::var("CRANPOSE_OPTICAL_DEBUG") {
                 let capture = shell.renderer().capture_frame(1206, 360).unwrap();
@@ -1042,11 +1076,11 @@ fn replay_tab_drag(trace: &str, mut inspect: impl FnMut(usize, f64, Rect, Rect, 
                 frame_time = nanos;
                 let (lens, pane) = {
                     let renderer = shell.renderer();
-                    let graph = renderer.scene_mut().graph.as_ref().expect("rendered scene");
+                    let root = renderer.scene().root_layer().expect("rendered scene");
                     (
-                        rendered_lens_bounds(&graph.root(), ProjectiveTransform::identity())
+                        rendered_lens_bounds(root, ProjectiveTransform::identity())
                             .expect("lens bounds"),
-                        rendered_glass_bounds(&graph.root(), ProjectiveTransform::identity(), 1.0)
+                        rendered_glass_bounds(root, ProjectiveTransform::identity(), 1.0)
                             .expect("pane bounds"),
                     )
                 };

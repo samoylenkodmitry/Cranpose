@@ -90,7 +90,7 @@ impl Renderer for WgpuRenderer {
         const DEV_OVERLAY_NODE_ID: NodeId = NodeId(usize::MAX);
         let key =
             cranpose_render_common::dev_overlay::DevOverlayKey::new(overlay.text.text(), viewport);
-        if self.frontend.dev_overlay_graph.is_some()
+        if self.frontend.dev_overlay.root().is_some()
             && self.frontend.dev_overlay_cache.as_ref() == Some(&key)
         {
             return;

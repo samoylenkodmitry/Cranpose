@@ -4,7 +4,7 @@ use cranpose_liquid::prelude::*;
 use cranpose_macros::composable;
 use cranpose_render_common::{
     Renderer,
-    graph::{ProjectiveTransform, RenderGraph, RenderNode},
+    graph::{LayerNode, ProjectiveTransform, RenderNode},
 };
 use cranpose_render_wgpu::CapturedFrame;
 use cranpose_ui::{
@@ -33,7 +33,7 @@ const PANE: Rect = Rect {
     height: 64.0,
 };
 
-fn regular_capsule_glass_scene() -> RenderGraph {
+fn regular_capsule_glass_scene() -> LayerNode {
     let mut tail = RuntimeShader::new(cranpose_ui_graphics::LIQUID_GLASS_WGSL);
     tail.set_float2(0, 0.0, 0.0);
     tail.set_float(6, -1.0);
@@ -54,7 +54,7 @@ fn regular_capsule_glass_scene() -> RenderGraph {
         },
         vec![],
     );
-    RenderGraph::new(&shared_test_support::layer_node(
+    shared_test_support::layer_node(
         Rect {
             x: 0.0,
             y: 0.0,
@@ -75,7 +75,7 @@ fn regular_capsule_glass_scene() -> RenderGraph {
             ),
             RenderNode::Layer(Box::new(glass)),
         ],
-    ))
+    )
 }
 
 fn luma(frame: &CapturedFrame, x: i32, y: i32) -> i32 {
@@ -204,7 +204,9 @@ fn a_capsule_rim_reads_as_a_continuous_line_around_its_cap() {
         }
     };
 
-    renderer.scene_mut().graph = Some(regular_capsule_glass_scene());
+    renderer
+        .scene_mut()
+        .describe(&regular_capsule_glass_scene());
     let frame = renderer
         .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
         .expect("rim continuity capture should succeed");

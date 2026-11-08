@@ -3,7 +3,8 @@
 
 use cranpose_core::MutableState;
 use cranpose_render_common::{
-    graph::{LayerNode, PrimitiveNode, RenderGraph, RenderNode},
+    graph_scene::Scene,
+    scene_store::{ItemRef, LayerRef},
     text_paint::TextPaint,
 };
 use cranpose_ui::{
@@ -15,9 +16,9 @@ use crate::scene_probe::{fresh_graph, initial_graph, painted_text, update_scene}
 
 const VIEWPORT: Size = Size::new(240.0, 120.0);
 
-fn painted(graph: &RenderGraph) -> Vec<String> {
+fn painted(scene: &Scene) -> Vec<String> {
     let mut out = Vec::new();
-    painted_text(&graph.root(), &mut out);
+    painted_text(scene.root_layer().expect("a scene"), &mut out);
     out
 }
 
@@ -58,34 +59,27 @@ fn a_text_that_changes_only_its_string_draws_each_new_string() {
     }
 }
 
-fn text_paints(layer: &LayerNode, out: &mut Vec<(String, TextPaint)>) {
-    nodes_text_paints(&layer.children, out);
-}
-
-fn nodes_text_paints(nodes: &[RenderNode], out: &mut Vec<(String, TextPaint)>) {
-    for child in nodes {
-        match child {
-            RenderNode::Layer(child) => text_paints(child, out),
-            RenderNode::Inline(inline) => nodes_text_paints(&inline.content, out),
-            RenderNode::Primitive(entry) => {
-                if let PrimitiveNode::Text(text) = &entry.node {
-                    assert_eq!(
-                        text.paint().style_hash,
-                        text.text_style.render_hash(),
-                        "{} paints under its own style's hash",
-                        text.text.text()
-                    );
-                    out.push((text.text.text().to_owned(), *text.paint()));
-                }
+fn text_paints(layer: LayerRef<'_>, out: &mut Vec<(String, TextPaint)>) {
+    for item in layer.items() {
+        match item {
+            ItemRef::Layer(child) | ItemRef::Leaf(child) => text_paints(child, out),
+            ItemRef::Text(text) => {
+                assert_eq!(
+                    text.paint().style_hash,
+                    text.text_style.render_hash(),
+                    "{} paints under its own style's hash",
+                    text.text.text()
+                );
+                out.push((text.text.text().to_owned(), *text.paint()));
             }
-            RenderNode::DrawRun(_) => {}
+            ItemRef::Draw(_) | ItemRef::Run(_) => {}
         }
     }
 }
 
-fn painted_with_paint(graph: &RenderGraph) -> Vec<(String, TextPaint)> {
+fn painted_with_paint(scene: &Scene) -> Vec<(String, TextPaint)> {
     let mut out = Vec::new();
-    text_paints(&graph.root(), &mut out);
+    text_paints(scene.root_layer().expect("a scene"), &mut out);
     out
 }
 

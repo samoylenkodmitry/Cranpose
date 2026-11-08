@@ -136,16 +136,17 @@ impl PixelsRenderer {
         scale: f32,
         previous: Option<&scene::RasterScene>,
     ) {
-        match self.scene.graph.as_ref() {
-            Some(graph) => pipeline::fill_raster_scene(
+        if self.scene.root_layer().is_some() {
+            pipeline::fill_raster_scene(
                 raster,
-                graph,
+                self.scene.store(),
                 self.scene.diagnostics(),
                 scale,
                 previous,
                 &self.text,
-            ),
-            None => raster.clear(),
+            );
+        } else {
+            raster.clear();
         }
     }
 
@@ -239,8 +240,7 @@ impl PixelsRenderer {
         scale: f32,
     ) -> Option<pipeline::UpdatedReach> {
         picture.changed.clear();
-        let (Some(raster), Some(graph)) = (picture.raster.as_mut(), self.scene.graph.as_ref())
-        else {
+        let (Some(raster), Some(_)) = (picture.raster.as_mut(), self.scene.root_layer()) else {
             return None;
         };
         if (picture.width, picture.height, picture.scale) != (width, height, scale) {
@@ -258,7 +258,7 @@ impl PixelsRenderer {
             rewrite: &mut picture.rewrite,
         }
         .run(
-            graph,
+            self.scene.store(),
             self.scene.diagnostics(),
             scale,
             &self.text,

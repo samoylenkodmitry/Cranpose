@@ -2,10 +2,7 @@
 
 use std::{alloc::System, hint::black_box, time::Instant};
 
-use cranpose_render_common::{
-    graph::{LayerNode, RenderGraph},
-    scene_builder::{build_graph_from_applier, rebuild_graph_from_applier},
-};
+use cranpose_render_common::graph_scene::Scene;
 use cranpose_ui::{
     Color, GraphicsLayer, LayoutEngine, Modifier, Size, Text, TextStyle,
     widgets::{Box, BoxSpec, Column, ColumnSpec},
@@ -58,12 +55,12 @@ fn main() {
         .compute_layout(root, Size::new(400.0, cells as f32 * 24.0))
         .expect("layout");
     let region = Region::new(GLOBAL);
-    let mut graph = build_graph_from_applier(&applier, root, 1.0).expect("scene");
+    let mut graph = Scene::new();
+    graph.rebuild_from_applier(&applier, root);
+    assert!(graph.root_layer().is_some(), "scene");
     let creation = region.change();
-    let rebuild = |graph: &mut RenderGraph| {
-        let previous = std::mem::replace(graph, RenderGraph::new(&LayerNode::default()));
-        *graph =
-            rebuild_graph_from_applier(&applier, root, 1.0, Some(previous)).expect("rebuilt scene");
+    let rebuild = |graph: &mut Scene| {
+        graph.rebuild_from_applier(&applier, root);
         black_box(&*graph);
     };
     for _ in 0..10 {
@@ -78,8 +75,8 @@ fn main() {
     let updates = region.change();
     println!(
         "cells={cells} explicit_stride={explicit_stride} nodes={} graph_heap_bytes={} retained_scene_bytes={} creation_allocations={} rebuild_allocations={} rebuild_allocated_bytes={} rebuild_us={:.3}",
-        graph.node_count(),
-        graph.heap_bytes(),
+        graph.store().node_count(),
+        graph.store().heap_bytes(),
         creation.bytes_allocated as isize - creation.bytes_deallocated as isize,
         creation.allocations,
         updates.allocations as f64 / passes as f64,

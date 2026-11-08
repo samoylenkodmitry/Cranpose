@@ -1,7 +1,7 @@
 use cranpose_core::NodeId;
 use cranpose_render_common::{
     Renderer,
-    graph::{CachePolicy, LayerNode, ProjectiveTransform, RenderGraph, RenderNode},
+    graph::{CachePolicy, LayerNode, ProjectiveTransform, RenderNode},
 };
 use cranpose_ui_graphics::{Color, GraphicsLayer, Rect, RenderEffect};
 
@@ -28,7 +28,7 @@ fn layer(node_id: usize, color: Color, rect: Rect) -> RenderNode {
     RenderNode::Layer(Box::new(layer))
 }
 
-fn backdrop_graph(enabled: bool) -> RenderGraph {
+fn backdrop_graph(enabled: bool) -> LayerNode {
     let bounds = Rect {
         x: 0.0,
         y: 0.0,
@@ -91,8 +91,8 @@ fn page(children: Vec<RenderNode>) -> LayerNode {
     support::layer_node(None, WIDTH as f32, HEIGHT as f32, children)
 }
 
-fn graph(children: Vec<RenderNode>) -> RenderGraph {
-    RenderGraph::new(&page(children))
+fn graph(children: Vec<RenderNode>) -> LayerNode {
+    page(children)
 }
 
 #[test]
@@ -154,12 +154,12 @@ fn returned_packet_storage_reuses_both_slots_after_topology_shrinks() {
     }
     .into();
     let stale_root = page(vec![RenderNode::Layer(Box::new(shadowed))]);
-    renderer.scene_mut().graph = Some(RenderGraph::new(&stale_root));
+    renderer.scene_mut().describe(&stale_root);
     renderer.set_inspector_overlay(Some(stale_root.clone()));
     let older_packet = renderer
         .build_frame_packet_for_tests(WIDTH, HEIGHT)
         .expect("first shadowed root and overlay packet builds");
-    renderer.scene_mut().graph = Some(RenderGraph::new(&stale_root));
+    renderer.scene_mut().describe(&stale_root);
     renderer.set_inspector_overlay(Some(stale_root));
     let newer_packet = renderer
         .build_frame_packet_for_tests(WIDTH, HEIGHT)
@@ -168,7 +168,7 @@ fn returned_packet_storage_reuses_both_slots_after_topology_shrinks() {
     renderer.return_held_packet_for_tests(newer_packet);
 
     renderer.set_inspector_overlay(None);
-    renderer.scene_mut().graph = Some(next_graph.clone());
+    renderer.scene_mut().describe(&next_graph);
     let first_small = renderer
         .build_frame_packet_for_tests(WIDTH, HEIGHT)
         .expect("first small packet builds from a returned slot");

@@ -3,8 +3,8 @@
 
 use cranpose_core::key;
 use cranpose_render_common::{
-    graph::{LayerNode, RenderNode},
-    scene_builder::build_graph_from_applier,
+    scene_builder::build_from_applier,
+    scene_store::{ItemRef, LayerRef},
 };
 use cranpose_ui::Layout;
 use cranpose_ui_layout::{
@@ -187,43 +187,44 @@ fn PeekBox() {
 /// window positions carried by the layers' transforms and offsets: what a
 /// frame puts on screen, and nothing a scoped update may legitimately leave
 /// different from a rebuild (cache hashes, recording identities).
-fn scene_picture(layer: &LayerNode, depth: usize, out: &mut Vec<String>) {
+fn scene_picture(layer: LayerRef<'_>, depth: usize, out: &mut Vec<String>) {
     out.push(format!(
         "{depth} layer {:?} wraps {:?} bounds {:?} node {:?} transform {:?} content {:?} \
          origin {:?} clip {} shadow {:?} graphics {:?} translated {} {:?}",
-        layer.node_id,
-        layer.wraps,
-        layer.local_bounds,
-        layer.node_bounds,
-        layer.transform_to_parent,
-        layer.content_offset,
-        layer.origin_in_parent,
-        layer.clip_to_bounds,
+        layer.node_id(),
+        layer.wraps(),
+        layer.local_bounds(),
+        layer.node_bounds(),
+        layer.transform_to_parent(),
+        layer.content_offset(),
+        layer.origin_in_parent(),
+        layer.clip_to_bounds(),
         layer.shadow_clip(),
-        layer.graphics_layer,
-        layer.translated_content_context,
-        layer.translated_content_offset,
+        layer.graphics_layer(),
+        layer.translated_content_context(),
+        layer.translated_content_offset(),
     ));
-    picture_nodes(&layer.children, depth, out);
+    picture_items(layer, depth, out);
 }
 
-fn picture_nodes(nodes: &[RenderNode], depth: usize, out: &mut Vec<String>) {
-    for child in nodes {
-        match child {
-            RenderNode::Layer(child) => scene_picture(child, depth + 1, out),
-            RenderNode::Inline(inline) => {
+fn picture_items(layer: LayerRef<'_>, depth: usize, out: &mut Vec<String>) {
+    for item in layer.items() {
+        match item {
+            ItemRef::Layer(child) => scene_picture(child, depth + 1, out),
+            ItemRef::Leaf(leaf) => {
                 out.push(format!(
                     "{} inline {:?} origin {:?} size {:?} motion {}",
                     depth + 1,
-                    inline.node_id,
-                    inline.origin,
-                    inline.size,
-                    inline.motion_context_animated,
+                    leaf.node_id(),
+                    leaf.origin(),
+                    leaf.size(),
+                    leaf.motion_context_animated(),
                 ));
-                picture_nodes(&inline.content, depth + 1, out);
+                picture_items(leaf, depth + 1, out);
             }
-            RenderNode::Primitive(entry) => out.push(format!("{depth} primitive {entry:?}")),
-            RenderNode::DrawRun(run) => {
+            ItemRef::Draw(draw) => out.push(format!("{depth} draw {draw:?}")),
+            ItemRef::Text(text) => out.push(format!("{depth} text {text:?}")),
+            ItemRef::Run(run) => {
                 for primitive in run.primitives() {
                     out.push(format!("{depth} run {:?} {primitive:?}", run.phase));
                 }
@@ -233,14 +234,13 @@ fn picture_nodes(nodes: &[RenderNode], depth: usize, out: &mut Vec<String>) {
 }
 
 fn drawn_picture(shell: &AppShell<ScopedUpdateCountingRenderer>) -> Vec<String> {
-    let graph = shell.surfaces[0]
+    let root = shell.surfaces[0]
         .renderer
         .scene()
-        .graph
-        .as_ref()
+        .root_layer()
         .expect("the frame should have built a scene");
     let mut picture = Vec::new();
-    scene_picture(&graph.root(), 0, &mut picture);
+    scene_picture(root, 0, &mut picture);
     picture
 }
 
@@ -249,10 +249,10 @@ fn rebuilt_picture(shell: &mut AppShell<ScopedUpdateCountingRenderer>) -> Vec<St
     let graph = shell
         .app
         .app_context
-        .enter(|| build_graph_from_applier(&shell.app.composition.applier_mut(), root, 1.0))
+        .enter(|| build_from_applier(&shell.app.composition.applier_mut(), root))
         .expect("a whole-scene rebuild should lower the root");
     let mut picture = Vec::new();
-    scene_picture(&graph.root(), 0, &mut picture);
+    scene_picture(graph.root_layer().expect("a scene"), 0, &mut picture);
     picture
 }
 

@@ -3,7 +3,7 @@ use std::rc::Rc;
 use cranpose_core::NodeId;
 use cranpose_render_common::graph::{
     DrawRunNode, LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, ProjectiveTransform,
-    RenderGraph, RenderNode, TextPrimitiveNode,
+    RenderNode, TextPrimitiveNode,
 };
 use cranpose_ui::{
     TextLayoutOptions,
@@ -20,6 +20,15 @@ const LOGICAL_HEIGHT: u32 = 64;
 const ROOT_SCALE: f32 = 1.25;
 const PIXEL_WIDTH: u32 = 120;
 const PIXEL_HEIGHT: u32 = 80;
+
+// A text that fills the wrapper it draws in, so the wrapper draws within
+// its bounds.
+const WRAPPED_TEXT: Rect = Rect {
+    x: 0.0,
+    y: 0.0,
+    width: 20.0,
+    height: 22.0,
+};
 
 fn hidden_text(clip: Option<Rect>) -> RenderNode {
     hidden_text_at(
@@ -196,7 +205,6 @@ fn replace_clipped_out_descendant(root: &mut LayerNode, descendant: RenderNode) 
         GraphicsLayer::default(),
         vec![descendant],
     );
-    child.contained.set(Some(true));
     outer.children = vec![visible_content(), RenderNode::Layer(Box::new(child))];
 }
 
@@ -220,13 +228,7 @@ fn replace_with_direct_translation(root: &mut LayerNode, descendant: RenderNode)
 
 fn capture(renderer: &mut support::LockedRenderer, root: &LayerNode) -> Vec<u8> {
     support::capture_settled(renderer, |renderer| {
-        support::capture_graph_with_scale(
-            renderer,
-            RenderGraph::new(&root.clone()),
-            PIXEL_WIDTH,
-            PIXEL_HEIGHT,
-            ROOT_SCALE,
-        )
+        support::capture_graph_with_scale(renderer, root, PIXEL_WIDTH, PIXEL_HEIGHT, ROOT_SCALE)
     })
     .pixels
 }
@@ -324,7 +326,7 @@ fn nested_empty_clip_text_keeps_fractional_isolated_pixels_rigid_after_graph_edi
         },
         ProjectiveTransform::identity(),
         GraphicsLayer::default(),
-        vec![hidden_text(None)],
+        vec![hidden_text_at(WRAPPED_TEXT, None)],
     );
     replace_clipped_out_descendant(&mut clipped_page, RenderNode::Layer(Box::new(wrapper)));
     let clipped_nested = capture(&mut renderer, &clipped_page);

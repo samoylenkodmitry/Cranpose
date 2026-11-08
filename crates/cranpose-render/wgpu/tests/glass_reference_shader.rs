@@ -1,5 +1,5 @@
 use cranpose_liquid::{Glass, GlassDynamics, GlassMorph, LiquidColors, LiquidShape};
-use cranpose_render_common::graph::{ProjectiveTransform, RenderGraph, RenderNode};
+use cranpose_render_common::graph::{LayerNode, ProjectiveTransform, RenderNode};
 use cranpose_render_wgpu::CapturedFrame;
 use cranpose_ui_graphics::{
     Brush, Color, GLASS_ACTIVITY_UNIFORM, GLASS_ADAPTIVE_FROST_UNIFORM,
@@ -134,7 +134,7 @@ fn backdrop() -> Vec<RenderNode> {
     children
 }
 
-fn cards(source: &str, alpha: f32, with_content: bool) -> RenderGraph {
+fn cards(source: &str, alpha: f32, with_content: bool) -> LayerNode {
     let colors = LiquidColors::dark(Color::from_rgb_u8(120, 140, 255));
     let mut children = backdrop();
     for (node, shape, density) in [
@@ -164,7 +164,7 @@ fn cards(source: &str, alpha: f32, with_content: bool) -> RenderGraph {
     support::page_graph(FRAME_WIDTH, FRAME_HEIGHT, children)
 }
 
-fn lenses(source: &str) -> RenderGraph {
+fn lenses(source: &str) -> LayerNode {
     let colors = LiquidColors::dark(Color::from_rgb_u8(120, 140, 255));
     let mut children = backdrop();
     let small = rect(20.0, 20.0, 160.0, 90.0);
@@ -194,11 +194,11 @@ fn lenses(source: &str) -> RenderGraph {
     support::page_graph(FRAME_WIDTH, FRAME_HEIGHT, children)
 }
 
-fn variants(source: &str) -> RenderGraph {
+fn variants(source: &str) -> LayerNode {
     variants_with_dispersion(source, 1.0)
 }
 
-fn variants_with_dispersion(source: &str, dispersion: f32) -> RenderGraph {
+fn variants_with_dispersion(source: &str, dispersion: f32) -> LayerNode {
     let colors = LiquidColors::dark(Color::from_rgb_u8(120, 140, 255));
     let mut children = backdrop();
     let lens = rect(24.0, 20.0, 200.0, 90.0);
@@ -294,7 +294,7 @@ fn frosted_card(
     activity: f32,
     source: &str,
     substrates: Option<Vec<SubstrateSpec>>,
-) -> RenderGraph {
+) -> LayerNode {
     frosted_card_with_depth(frost, activity, source, substrates, 0.58)
 }
 
@@ -304,7 +304,7 @@ fn frosted_card_with_depth(
     source: &str,
     substrates: Option<Vec<SubstrateSpec>>,
     depth: f32,
-) -> RenderGraph {
+) -> LayerNode {
     let colors = LiquidColors::dark(Color::from_rgb_u8(120, 140, 255));
     let mut children = backdrop();
     let node = rect(24.0, 20.0, 300.0, 200.0);
@@ -337,28 +337,22 @@ fn frosted_card_with_depth(
 
 fn capture(
     renderer: &mut support::LockedRenderer,
-    graph: RenderGraph,
+    graph: &LayerNode,
     root_scale: f32,
 ) -> CapturedFrame {
     support::capture_settled(renderer, |renderer| {
-        support::capture_graph_with_scale(
-            renderer,
-            graph.clone(),
-            FRAME_WIDTH,
-            FRAME_HEIGHT,
-            root_scale,
-        )
+        support::capture_graph_with_scale(renderer, graph, FRAME_WIDTH, FRAME_HEIGHT, root_scale)
     })
 }
 
 fn assert_matches_reference(
     renderer: &mut support::LockedRenderer,
     label: &str,
-    graph: impl Fn(&str) -> RenderGraph,
+    graph: impl Fn(&str) -> LayerNode,
     root_scale: f32,
 ) {
-    let frozen = capture(renderer, graph(reference_wgsl()), root_scale);
-    let current = capture(renderer, graph(LIQUID_GLASS_WGSL), root_scale);
+    let frozen = capture(renderer, &graph(reference_wgsl()), root_scale);
+    let current = capture(renderer, &graph(LIQUID_GLASS_WGSL), root_scale);
     // A step of rounding is not a picture change: drivers compile the two
     // shaders' equal arithmetic in different orders, and one channel of one
     // pixel came out a step apart on Intel and NVIDIA (#859). A lens lands in
@@ -468,7 +462,7 @@ fn changing_light_direction_preserves_reference_pixels() {
             graph,
             1.5,
         );
-        let frame = capture(&mut renderer, graph(LIQUID_GLASS_WGSL), 1.5);
+        let frame = capture(&mut renderer, &graph(LIQUID_GLASS_WGSL), 1.5);
         if let Some(previous) = previous {
             assert!(
                 frame.pixels != previous,
@@ -590,11 +584,11 @@ fn a_lens_variant_and_a_resting_card_match_the_reference_shader() {
 fn assert_rest_agrees_and_activity_differs(
     renderer: &mut support::LockedRenderer,
     claim: &str,
-    rest: (RenderGraph, RenderGraph),
-    active: (RenderGraph, RenderGraph),
+    rest: (LayerNode, LayerNode),
+    active: (LayerNode, LayerNode),
 ) {
-    let resting = capture(renderer, rest.0, 1.0);
-    let other = capture(renderer, rest.1, 1.0);
+    let resting = capture(renderer, &rest.0, 1.0);
+    let other = capture(renderer, &rest.1, 1.0);
     let differing = support::differing_pixels(FRAME_WIDTH, &resting.pixels, &other.pixels);
     assert!(
         differing.is_empty(),
@@ -605,8 +599,8 @@ fn assert_rest_agrees_and_activity_differs(
         support::distinct_colors(&resting.pixels) > 64,
         "the resting render is too flat to prove anything"
     );
-    let active_a = capture(renderer, active.0, 1.0);
-    let active_b = capture(renderer, active.1, 1.0);
+    let active_a = capture(renderer, &active.0, 1.0);
+    let active_b = capture(renderer, &active.1, 1.0);
     assert!(
         !support::differing_pixels(FRAME_WIDTH, &active_a.pixels, &active_b.pixels).is_empty(),
         "an active glass runs the block and reads its substrate, so the same comparison must \
@@ -674,16 +668,16 @@ fn a_forced_dispersion_fold_renders_the_dispersive_card_as_its_dispersion_zero_t
     };
     const SWITCH: &str = "CRANPOSE_ABLATE";
     let dispersive = || variants_with_dispersion(LIQUID_GLASS_WGSL, 1.0);
-    let base = capture(&mut renderer, dispersive(), 1.0);
+    let base = capture(&mut renderer, &dispersive(), 1.0);
     cranpose_core::debug_toggles::set_debug_toggle(SWITCH, Some("glass_dispersion"));
-    let forced = capture(&mut renderer, dispersive(), 1.0);
+    let forced = capture(&mut renderer, &dispersive(), 1.0);
     cranpose_core::debug_toggles::set_debug_toggle(SWITCH, None);
     let twin = capture(
         &mut renderer,
-        variants_with_dispersion(LIQUID_GLASS_WGSL, 0.0),
+        &variants_with_dispersion(LIQUID_GLASS_WGSL, 0.0),
         1.0,
     );
-    let restored = capture(&mut renderer, dispersive(), 1.0);
+    let restored = capture(&mut renderer, &dispersive(), 1.0);
 
     let removed = support::differing_pixels(FRAME_WIDTH, &base.pixels, &forced.pixels);
     assert!(

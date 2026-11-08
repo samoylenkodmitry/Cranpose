@@ -8,8 +8,8 @@ fn frontend() -> RendererFrontend {
     RendererFrontend::new(WgpuTextSystem::from_fonts(&[]).fonts().clone())
 }
 
-fn graph() -> RenderGraph {
-    RenderGraph::new(&layer_node(
+fn graph() -> LayerNode {
+    layer_node(
         Rect {
             x: 0.0,
             y: 0.0,
@@ -19,7 +19,7 @@ fn graph() -> RenderGraph {
         ProjectiveTransform::default(),
         GraphicsLayer::default(),
         vec![],
-    ))
+    )
 }
 
 #[test]
@@ -32,7 +32,7 @@ fn build_without_graph_produces_no_packet() {
 #[test]
 fn root_builds_packet_with_frame_scalars() {
     let mut frontend = frontend();
-    frontend.scene.graph = Some(graph());
+    frontend.scene.describe(&graph());
     frontend.root_scale = 2.0;
 
     let packet = frontend
@@ -54,8 +54,8 @@ fn root_builds_packet_with_frame_scalars() {
 #[test]
 fn dev_overlay_collects_into_packet() {
     let mut frontend = frontend();
-    frontend.scene.graph = Some(graph());
-    frontend.dev_overlay_graph = Some(graph());
+    frontend.scene.describe(&graph());
+    frontend.dev_overlay.describe(&graph());
 
     let packet = frontend
         .build_frame_packet(320, 240, 0, 0)
@@ -70,7 +70,7 @@ fn dev_overlay_collects_into_packet() {
 #[test]
 fn apply_returns_seeds_the_next_collect_capacity() {
     let mut frontend = frontend();
-    frontend.scene.graph = Some(graph());
+    frontend.scene.describe(&graph());
     let packet = frontend
         .build_frame_packet(320, 240, 0, 0)
         .expect("a graph collects into a packet");

@@ -10,9 +10,8 @@
 //! them.
 
 use cranpose_render_common::{
-    graph::{ProjectiveTransform, RenderGraph},
-    graph_scene::RenderDiagnostics,
-    layer_shadow::ShadowLight,
+    graph::ProjectiveTransform, graph_scene::RenderDiagnostics, layer_shadow::ShadowLight,
+    scene_store::SceneStore,
 };
 
 use super::{ContentStyle, RasterTraversalContext, populate_draws_from_graph, scene_light};
@@ -71,7 +70,7 @@ pub(crate) struct InPlaceUpdate<'a> {
 impl InPlaceUpdate<'_> {
     pub(crate) fn run(
         self,
-        graph: &RenderGraph,
+        store: &SceneStore,
         diagnostics: &RenderDiagnostics,
         scale: f32,
         text: &TextRaster,
@@ -84,7 +83,7 @@ impl InPlaceUpdate<'_> {
             rewrite,
         } = self;
         areas.clear();
-        let light = scene_light(graph, scale);
+        let light = scene_light(store, scale);
         if scene.start != Some((scale, light)) {
             return None;
         }
@@ -105,7 +104,7 @@ impl InPlaceUpdate<'_> {
             scale,
             text,
         };
-        let root = graph.store().root_layer()?;
+        let root = store.root_layer()?;
         let walked = repush.visit(Subtree::Layer(root), 0, None);
         let held = repush.held;
         merge_areas(areas);

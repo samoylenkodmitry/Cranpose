@@ -226,8 +226,9 @@ pub(crate) fn draw_scene_scaled(
     text: &TextRaster,
     scale: f32,
 ) {
-    if let Some(graph) = scene.graph.as_ref() {
-        let raster_scene = pipeline::build_raster_scene(graph, scene.diagnostics(), scale, text);
+    if scene.root_layer().is_some() {
+        let raster_scene =
+            pipeline::build_raster_scene(scene.store(), scene.diagnostics(), scale, text);
         draw_raster_scene(
             frame,
             width,

@@ -4,7 +4,7 @@
 
 use cranpose_render_common::{
     Renderer,
-    graph::{DrawRunNode, PrimitivePhase, ProjectiveTransform, RenderGraph, RenderNode},
+    graph::{DrawRunNode, LayerNode, PrimitivePhase, ProjectiveTransform, RenderNode},
 };
 use cranpose_ui_graphics::{
     Brush, Color, DrawPrimitive, DrawScope, DrawScopeDefault, DrawStyle, GraphicsLayer, Path,
@@ -72,8 +72,8 @@ fn paths() -> Vec<(&'static str, Path)> {
     ]
 }
 
-fn frame_of(primitives: Vec<DrawPrimitive>, size: f32) -> RenderGraph {
-    RenderGraph::new(&shared_test_support::layer_node(
+fn frame_of(primitives: Vec<DrawPrimitive>, size: f32) -> LayerNode {
+    shared_test_support::layer_node(
         Rect::from_size(Size::new(size, size)),
         ProjectiveTransform::identity(),
         GraphicsLayer::default(),
@@ -81,7 +81,7 @@ fn frame_of(primitives: Vec<DrawPrimitive>, size: f32) -> RenderGraph {
             PrimitivePhase::BeforeChildren,
             primitives,
         ))],
-    ))
+    )
 }
 
 /// The path filled white over black by a draw scope `size` units square.
@@ -113,8 +113,8 @@ fn scaled(slice: Trapezoid, scale: f32) -> Trapezoid {
     }
 }
 
-fn capture(renderer: &mut support::LockedRenderer, graph: RenderGraph, scale: f32) -> Vec<u8> {
-    renderer.scene_mut().graph = Some(graph);
+fn capture(renderer: &mut support::LockedRenderer, graph: &LayerNode, scale: f32) -> Vec<u8> {
+    renderer.scene_mut().describe(graph);
     renderer
         .capture_frame_with_scale(FRAME, FRAME, scale)
         .unwrap_or_else(|err| panic!("capture failed: {err:?}"))
@@ -144,7 +144,7 @@ fn a_gpu_path_fill_covers_each_pixel_as_its_slices_say() {
                 .map(|slice| scaled(slice, scale))
                 .collect();
             assert!(!slices.is_empty(), "{name} at {scale}: the fill slices");
-            let pixels = capture(&mut renderer, frame_of(primitives, size), scale);
+            let pixels = capture(&mut renderer, &frame_of(primitives, size), scale);
             let mut drawn = 0;
             for y in 0..FRAME {
                 for x in 0..FRAME {
@@ -195,7 +195,7 @@ fn a_gpu_path_fill_matches_the_mask_the_cpu_rasterizes() {
         let size = FRAME as f32;
         let pixels = capture(
             &mut renderer,
-            frame_of(filled(&path, Brush::solid(Color::WHITE), size), size),
+            &frame_of(filled(&path, Brush::solid(Color::WHITE), size), size),
             1.0,
         );
         let mask = path.to_vector_path(PathFillRule::NonZero).coverage_mask(
@@ -249,11 +249,11 @@ fn a_path_fill_resolves_its_brush_against_its_scope() {
     let mut recording = cranpose_ui_graphics::CommandRecording::default();
     let mut scope = DrawScopeDefault::new(Size::new(size, size), &mut recording);
     scope.draw_rect(gradient());
-    let reference = capture(&mut renderer, frame_of(scope.into_primitives(), size), 1.0);
+    let reference = capture(&mut renderer, &frame_of(scope.into_primitives(), size), 1.0);
     let lower_half = polygon([(0.0, 32.0), (size, 32.0), (size, size), (0.0, size)]);
     let drawn = capture(
         &mut renderer,
-        frame_of(filled(&lower_half, gradient(), size), size),
+        &frame_of(filled(&lower_half, gradient(), size), size),
         1.0,
     );
     for y in 33..FRAME {
@@ -288,7 +288,7 @@ fn a_slice_holds_its_gradient_s_last_colour_past_the_last_stop() {
     let band = polygon([(8.0, 16.0), (56.0, 16.0), (56.0, 47.8), (8.0, 47.8)]);
     let pixels = capture(
         &mut renderer,
-        frame_of(filled(&band, gradient, size), size),
+        &frame_of(filled(&band, gradient, size), size),
         1.0,
     );
     for y in 17..47 {

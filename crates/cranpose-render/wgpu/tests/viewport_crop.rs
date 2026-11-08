@@ -1,5 +1,5 @@
 use cranpose_render_common::{
-    graph::{ProjectiveTransform, RenderGraph, RenderNode},
+    graph::{LayerNode, ProjectiveTransform, RenderNode},
     image_compare::image_difference_stats,
 };
 use cranpose_ui_graphics::{
@@ -64,7 +64,7 @@ fn glass_layer(
 /// button inside it, at `card` in a frame of `width` x `height` whose
 /// background blocks start at `origin`, so the same pixels land under the
 /// card wherever the frame's edge falls.
-fn scene(width: u32, height: u32, origin: Point, card: Point) -> RenderGraph {
+fn scene(width: u32, height: u32, origin: Point, card: Point) -> LayerNode {
     let block = |x: f32, y: f32, color: Color| {
         solid_rect(rect(origin.x + x, origin.y + y, 200.0, 150.0), color)
     };

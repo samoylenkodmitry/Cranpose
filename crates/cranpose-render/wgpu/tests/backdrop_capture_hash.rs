@@ -3,7 +3,7 @@ use cranpose_render_common::{
     Renderer,
     graph::{
         CachePolicy, DrawCommandId, DrawRunNode, LayerNode, PrimitivePhase, ProjectiveTransform,
-        RenderGraph, RenderNode,
+        RenderNode,
     },
 };
 use cranpose_render_wgpu::CapturedFrame;
@@ -30,7 +30,7 @@ fn blur_backdrop(x: f32, y: f32, width: f32, height: f32) -> LayerNode {
         width,
         height,
     };
-    let mut backdrop = LayerNode {
+    LayerNode {
         node_id: Some(NodeId(20)),
         local_bounds: bounds,
         transform_to_parent: ProjectiveTransform::translation(x, y),
@@ -42,12 +42,10 @@ fn blur_backdrop(x: f32, y: f32, width: f32, height: f32) -> LayerNode {
         cache_policy: CachePolicy::Auto,
         children: vec![support::solid_rect(bounds, Color(0.10, 0.25, 0.95, 0.55))],
         ..LayerNode::default()
-    };
-    backdrop.forget_raster_cache_hashes();
-    backdrop
+    }
 }
 
-fn rounded_clip_scene(clip_x: f32) -> RenderGraph {
+fn rounded_clip_scene(clip_x: f32) -> LayerNode {
     let backdrop = blur_backdrop(16.0, 12.0, 12.0, 64.0);
     let clipped = LayerNode {
         node_id: Some(NodeId(21)),
@@ -85,7 +83,7 @@ fn rounded_clip_scene(clip_x: f32) -> RenderGraph {
         }))],
         ..LayerNode::default()
     };
-    RenderGraph::new(&LayerNode {
+    LayerNode {
         local_bounds: CONTENT,
         children: vec![
             support::solid_rect(CONTENT, Color::BLACK),
@@ -93,10 +91,10 @@ fn rounded_clip_scene(clip_x: f32) -> RenderGraph {
             RenderNode::Layer(Box::new(backdrop)),
         ],
         ..LayerNode::default()
-    })
+    }
 }
 
-fn subpixel_scene(edge_x: f32, alpha: f32) -> RenderGraph {
+fn subpixel_scene(edge_x: f32, alpha: f32) -> LayerNode {
     let backdrop = blur_backdrop(28.0, 12.0, 72.0, 64.0);
     let moving_rect = Rect {
         x: 0.0,
@@ -125,7 +123,7 @@ fn subpixel_scene(edge_x: f32, alpha: f32) -> RenderGraph {
         ..LayerNode::default()
     };
 
-    RenderGraph::new(&LayerNode {
+    LayerNode {
         local_bounds: CONTENT,
         children: vec![
             support::solid_rect(CONTENT, Color::BLACK),
@@ -133,7 +131,7 @@ fn subpixel_scene(edge_x: f32, alpha: f32) -> RenderGraph {
             RenderNode::Layer(Box::new(backdrop)),
         ],
         ..LayerNode::default()
-    })
+    }
 }
 
 fn inspector_glass(cache_policy: CachePolicy) -> LayerNode {
@@ -161,12 +159,12 @@ fn inspector_glass(cache_policy: CachePolicy) -> LayerNode {
     }
 }
 
-fn painted_page(color: Color) -> RenderGraph {
-    RenderGraph::new(&LayerNode {
+fn painted_page(color: Color) -> LayerNode {
+    LayerNode {
         local_bounds: CONTENT,
         children: vec![support::solid_rect(CONTENT, color)],
         ..LayerNode::default()
-    })
+    }
 }
 
 fn nested_backdrop_scene(
@@ -175,7 +173,7 @@ fn nested_backdrop_scene(
     root_color: Color,
     composite_cache: CachePolicy,
     backdrop_cache: CachePolicy,
-) -> RenderGraph {
+) -> LayerNode {
     let backdrop_bounds = Rect {
         x: 0.0,
         y: 0.0,
@@ -252,7 +250,7 @@ fn nested_backdrop_scene(
         ],
         ..LayerNode::default()
     };
-    RenderGraph::new(&LayerNode {
+    LayerNode {
         node_id: Some(NodeId(40)),
         local_bounds: CONTENT,
         children: vec![
@@ -260,7 +258,7 @@ fn nested_backdrop_scene(
             RenderNode::Layer(Box::new(parent)),
         ],
         ..LayerNode::default()
-    })
+    }
 }
 
 fn verify_nested_backdrop_page_provenance(composite_cache: CachePolicy) {
@@ -285,17 +283,17 @@ fn verify_nested_backdrop_page_provenance(composite_cache: CachePolicy) {
     };
     let mut warm = capture(
         &mut cached,
-        scene(Color::BLACK, Color::RED, Color::RED, CachePolicy::Auto),
+        &scene(Color::BLACK, Color::RED, Color::RED, CachePolicy::Auto),
     );
     for _ in 1..3 {
         warm = capture(
             &mut cached,
-            scene(Color::BLACK, Color::RED, Color::RED, CachePolicy::Auto),
+            &scene(Color::BLACK, Color::RED, Color::RED, CachePolicy::Auto),
         );
     }
     let ancestor_changed = capture(
         &mut cached,
-        scene(Color::BLACK, Color::RED, Color::BLUE, CachePolicy::Auto),
+        &scene(Color::BLACK, Color::RED, Color::BLUE, CachePolicy::Auto),
     );
     support::assert_same_bytes(
         "unrelated ancestor pixels do not change the nested backdrop",
@@ -306,11 +304,11 @@ fn verify_nested_backdrop_page_provenance(composite_cache: CachePolicy) {
 
     let page_changed = capture(
         &mut cached,
-        scene(Color::BLUE, Color::RED, Color::BLUE, CachePolicy::Auto),
+        &scene(Color::BLUE, Color::RED, Color::BLUE, CachePolicy::Auto),
     );
     let page_reference = capture(
         &mut fresh,
-        scene(Color::BLUE, Color::RED, Color::BLUE, CachePolicy::None),
+        &scene(Color::BLUE, Color::RED, Color::BLUE, CachePolicy::None),
     );
     let page_pixels = support::region_pixels(&page_changed, backdrop_region);
     let page_reference_pixels = support::region_pixels(&page_reference, backdrop_region);
@@ -327,11 +325,11 @@ fn verify_nested_backdrop_page_provenance(composite_cache: CachePolicy) {
 
     let composite_changed = capture(
         &mut cached,
-        scene(Color::BLUE, Color::GREEN, Color::BLUE, CachePolicy::Auto),
+        &scene(Color::BLUE, Color::GREEN, Color::BLUE, CachePolicy::Auto),
     );
     let composite_reference = capture(
         &mut fresh,
-        scene(Color::BLUE, Color::GREEN, Color::BLUE, CachePolicy::None),
+        &scene(Color::BLUE, Color::GREEN, Color::BLUE, CachePolicy::None),
     );
     let composite_pixels = support::region_pixels(&composite_changed, backdrop_region);
     let composite_reference_pixels = support::region_pixels(&composite_reference, backdrop_region);
@@ -347,8 +345,8 @@ fn verify_nested_backdrop_page_provenance(composite_cache: CachePolicy) {
     );
 }
 
-fn capture(renderer: &mut support::LockedRenderer, graph: RenderGraph) -> CapturedFrame {
-    renderer.scene_mut().graph = Some(graph);
+fn capture(renderer: &mut support::LockedRenderer, graph: &LayerNode) -> CapturedFrame {
+    renderer.scene_mut().describe(graph);
     renderer
         .capture_frame(WIDTH, HEIGHT)
         .expect("backdrop fixture capture should succeed")
@@ -366,10 +364,10 @@ fn renderer() -> Option<support::LockedRenderer> {
 
 fn warm_cached_backdrop(
     renderer: &mut support::LockedRenderer,
-    scene: impl Fn() -> RenderGraph,
+    scene: impl Fn() -> LayerNode,
 ) -> CapturedFrame {
-    let warm = capture(renderer, scene());
-    let replay = capture(renderer, scene());
+    let warm = capture(renderer, &scene());
+    let replay = capture(renderer, &scene());
     let replay_stats = renderer.last_frame_stats().expect("replayed frame stats");
     assert!(
         replay_stats.layer_cache_hits > 0,
@@ -385,9 +383,9 @@ fn rounded_clip_motion_past_the_capture_edge_updates_its_backdrop() {
         return;
     };
     let warm = warm_cached_backdrop(&mut renderer, || rounded_clip_scene(12.0));
-    let moved = capture(&mut renderer, rounded_clip_scene(11.0));
+    let moved = capture(&mut renderer, &rounded_clip_scene(11.0));
     cranpose_core::debug_toggles::set_debug_toggle("CRANPOSE_NO_BACKDROP_CACHE", Some("1"));
-    let uncached = capture(&mut renderer, rounded_clip_scene(11.0));
+    let uncached = capture(&mut renderer, &rounded_clip_scene(11.0));
     cranpose_core::debug_toggles::set_debug_toggle("CRANPOSE_NO_BACKDROP_CACHE", None);
 
     let backdrop = Rect {
@@ -414,10 +412,10 @@ fn assert_unanchored_motion_updates_backdrop(alpha: f32) {
         return;
     };
     let warm = warm_cached_backdrop(&mut renderer, || subpixel_scene(52.001, alpha));
-    let moved = capture(&mut renderer, subpixel_scene(52.030, alpha));
+    let moved = capture(&mut renderer, &subpixel_scene(52.030, alpha));
 
     cranpose_core::debug_toggles::set_debug_toggle("CRANPOSE_NO_BACKDROP_CACHE", Some("1"));
-    let uncached = capture(&mut renderer, subpixel_scene(52.030, alpha));
+    let uncached = capture(&mut renderer, &subpixel_scene(52.030, alpha));
     cranpose_core::debug_toggles::set_debug_toggle("CRANPOSE_NO_BACKDROP_CACHE", None);
     assert_ne!(
         warm.pixels, uncached.pixels,
@@ -447,15 +445,15 @@ fn overlay_backdrop_tracks_the_root_page_after_cache_warmup() {
         return;
     };
     cached.set_inspector_overlay(Some(inspector_glass(CachePolicy::Auto)));
-    let warm = capture(&mut cached, painted_page(Color::RED));
-    let _ = capture(&mut cached, painted_page(Color::RED));
-    let updated = capture(&mut cached, painted_page(Color::BLUE));
+    let warm = capture(&mut cached, &painted_page(Color::RED));
+    let _ = capture(&mut cached, &painted_page(Color::RED));
+    let updated = capture(&mut cached, &painted_page(Color::BLUE));
 
     cached.set_inspector_overlay(None);
-    let plain_blue = capture(&mut cached, painted_page(Color::BLUE));
+    let plain_blue = capture(&mut cached, &painted_page(Color::BLUE));
     let mut fresh = support::LockedRenderer::beside_locked().expect("reference renderer");
     fresh.set_inspector_overlay(Some(inspector_glass(CachePolicy::None)));
-    let reference = capture(&mut fresh, painted_page(Color::BLUE));
+    let reference = capture(&mut fresh, &painted_page(Color::BLUE));
     let overlay_bounds = Rect {
         x: 16.0,
         y: 12.0,

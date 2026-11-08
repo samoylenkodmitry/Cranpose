@@ -76,7 +76,7 @@ mod thread_state;
 
 use std::sync::Arc;
 
-use cranpose_render_common::{graph::RenderGraph, text_fonts::TextFonts};
+use cranpose_render_common::text_fonts::TextFonts;
 use cranpose_ui_graphics::Rect;
 pub use frame_packet::PresentTimings;
 pub use text_system::WgpuTextSystem;
@@ -979,18 +979,8 @@ impl WgpuRenderer {
             .sync_gpu_renderer()
             .map(GpuRenderer::debug_cpu_allocation_stats)
             .unwrap_or_default();
-        stats.scene_graph_node_count = self
-            .frontend
-            .scene
-            .graph
-            .as_ref()
-            .map_or(0, RenderGraph::node_count);
-        stats.scene_graph_heap_bytes = self
-            .frontend
-            .scene
-            .graph
-            .as_ref()
-            .map_or(0, RenderGraph::heap_bytes);
+        stats.scene_graph_node_count = self.frontend.scene.store().node_count();
+        stats.scene_graph_heap_bytes = self.frontend.scene.store().heap_bytes();
         stats.scene_hits = self.frontend.scene.hit_storage();
         stats
     }

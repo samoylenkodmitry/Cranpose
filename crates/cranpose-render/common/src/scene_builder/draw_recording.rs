@@ -8,9 +8,7 @@ use cranpose_ui_graphics::{
 
 use super::{HeadKind, LayerHead, assign_layer, item_lists};
 use crate::{
-    graph::{
-        CachePolicy, DrawCommandId, DrawRunNode, IsolationReasons, PrimitivePhase, RenderNode,
-    },
+    graph::{CachePolicy, DrawCommandId, DrawRunNode, IsolationReasons, PrimitivePhase},
     scene_store::{Item, ItemRef, RecordKind, RecordSeed, SceneStore},
     style_shared::recording_for_placement_reusing,
 };
@@ -408,35 +406,27 @@ pub(super) fn append_draw_nodes(
     }
 }
 
-#[doc(hidden)]
-pub fn draw_command_nodes_for_tests(
-    node_id: NodeId,
+// Lowers `commands`, the draw commands of node `node_id` of size `size`,
+// into items of `record` that paint in `phase`, as the scene builder lowers
+// a node's draws: runs, and layers for the draws a `DrawScope` groups.
+pub(crate) fn draw_command_items(
+    store: &mut SceneStore,
+    record: RecordId,
+    (node_id, size): (NodeId, Size),
     commands: &[DrawCommand],
     placement: DrawPlacement,
-    size: Size,
     phase: PrimitivePhase,
-) -> Vec<RenderNode> {
+) -> Vec<Item> {
     bump_recording_generation();
     let draws = DrawTarget {
         size,
         motion_context_animated: false,
         layer: None,
     };
-    let mut store = SceneStore::new();
-    store.begin_update();
-    let root = store.insert(RecordSeed {
-        kind: RecordKind::Layer,
-        node: Some(node_id),
-        parent: None,
-    });
     let commands = NodeCommands {
         node_id,
         commands,
         first_index: 0,
     };
-    let items = draw_nodes(&mut store, root, commands, placement, draws, phase);
-    store.set_items(root, &items);
-    item_lists::give(items);
-    store.finish_update();
-    crate::scene_store::export(&store).children
+    draw_nodes(store, record, commands, placement, draws, phase)
 }

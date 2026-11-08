@@ -1,5 +1,5 @@
 use cranpose_render_common::graph::{
-    DrawRunNode, LayerNode, PrimitivePhase, ProjectiveTransform, RenderGraph, RenderNode,
+    DrawRunNode, LayerNode, PrimitivePhase, ProjectiveTransform, RenderNode,
 };
 use cranpose_ui_graphics::{
     BlendMode, Brush, Color, ColorFilter, DrawPrimitive, ImageBitmap, ImageSampling, Rect,
@@ -13,7 +13,7 @@ fn graph(
     filter: Option<ColorFilter>,
     blend_mode: BlendMode,
     transformed: bool,
-) -> RenderGraph {
+) -> LayerNode {
     let bounds = Rect {
         x: 0.0,
         y: 0.0,
@@ -68,7 +68,7 @@ fn graph(
         ))],
         ..LayerNode::default()
     };
-    RenderGraph::new(&LayerNode {
+    LayerNode {
         local_bounds: bounds,
         children: vec![
             RenderNode::DrawRun(DrawRunNode::new(
@@ -82,7 +82,7 @@ fn graph(
             RenderNode::Layer(Box::new(images)),
         ],
         ..LayerNode::default()
-    })
+    }
 }
 
 #[test]

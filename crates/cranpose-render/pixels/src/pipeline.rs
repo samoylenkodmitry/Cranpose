@@ -3,14 +3,13 @@ use std::{ops::Range, sync::Arc};
 use cranpose_core::NodeId;
 use cranpose_render_common::{
     Brush,
-    graph::{ProjectiveTransform, RenderGraph, TextPrimitiveNode},
+    graph::{ProjectiveTransform, TextPrimitiveNode},
     graph_scene::RenderDiagnostics,
-    hit_graph::collect_hits_from_graph,
     layer_composition::folded_layer_alpha,
     layer_shadow::ShadowLight,
     layer_transform::{apply_layer_affine_to_rect, apply_layer_to_rect, layer_uniform_scale},
     primitive_emit::resolve_clip,
-    scene_store::{ItemRef, LayerRef},
+    scene_store::{ItemRef, LayerRef, SceneStore},
     text_decoration::{visit_text_backgrounds, visit_text_lines},
     text_raster::GlyphInk,
 };
@@ -176,11 +175,7 @@ fn report_unsupported_effects(layer: &GraphicsLayer, diagnostics: &RenderDiagnos
 }
 
 pub(crate) fn render_layout_tree(root: &LayoutBox, scene: &mut Scene) {
-    let graph = cranpose_render_common::scene_builder::build_graph_from_layout_tree(root, 1.0);
-    if let Some(root) = graph.store().root_layer() {
-        collect_hits_from_graph(root, ProjectiveTransform::identity(), scene, None);
-    }
-    scene.replace_graph(graph);
+    scene.build_from_layout_tree(root);
 }
 
 fn resolve_text_color_without_gradient_fallback(text_style: &TextStyle, default: Color) -> Color {
@@ -304,13 +299,13 @@ fn push_text_style_draws(
 }
 
 pub(crate) fn build_raster_scene(
-    graph: &RenderGraph,
+    store: &SceneStore,
     diagnostics: &RenderDiagnostics,
     scale: f32,
     text: &TextRaster,
 ) -> RasterScene {
     let mut scene = RasterScene::new();
-    fill_raster_scene(&mut scene, graph, diagnostics, scale, None, text);
+    fill_raster_scene(&mut scene, store, diagnostics, scale, None, text);
     scene
 }
 
@@ -326,9 +321,8 @@ pub(crate) use in_place::{InPlaceUpdate, UpdatedReach};
 use layer_shadow::push_layer_shadow;
 use space::{push_seen_surfaces, seen_surfaces};
 
-fn scene_light(graph: &RenderGraph, scale: f32) -> ShadowLight {
-    let bounds = graph
-        .store()
+fn scene_light(store: &SceneStore, scale: f32) -> ShadowLight {
+    let bounds = store
         .root_layer()
         .map(LayerRef::local_bounds)
         .unwrap_or_default();
@@ -337,21 +331,21 @@ fn scene_light(graph: &RenderGraph, scale: f32) -> ShadowLight {
 
 pub(crate) fn fill_raster_scene(
     scene: &mut RasterScene,
-    graph: &RenderGraph,
+    store: &SceneStore,
     diagnostics: &RenderDiagnostics,
     scale: f32,
     previous: Option<&RasterScene>,
     text: &TextRaster,
 ) {
     scene.clear();
-    let light = scene_light(graph, scale);
+    let light = scene_light(store, scale);
     scene.start = Some((scale, light));
     let mut reuse = previous.map(|old| Reuse {
         old,
         cursor: 0,
         pending: None,
     });
-    let Some(root) = graph.store().root_layer() else {
+    let Some(root) = store.root_layer() else {
         return;
     };
     populate_draws_from_graph(

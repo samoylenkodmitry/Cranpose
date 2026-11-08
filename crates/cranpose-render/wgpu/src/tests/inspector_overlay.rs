@@ -5,15 +5,14 @@ use cranpose_ui_graphics::Size;
 use super::*;
 
 fn assert_inspector(renderer: &WgpuRenderer) {
-    let graph = renderer
-        .frontend
-        .dev_overlay_graph
-        .as_ref()
-        .expect("overlay");
+    let overlay = renderer.frontend.dev_overlay.root_layer().expect("overlay");
     assert!(
-        matches!(graph.root().children.last(), Some(RenderNode::Layer(layer)) if layer.node_id == Some(NodeId(123)))
+        overlay
+            .children()
+            .next_back()
+            .is_some_and(|layer| layer.node_id() == Some(NodeId(123)))
     );
-    assert!(renderer.frontend.scene.graph.is_none());
+    assert!(renderer.frontend.scene.root_layer().is_none());
 }
 
 #[test]
@@ -30,5 +29,5 @@ fn inspector_survives_fps_overlay_refresh_and_clearing() {
     renderer.frontend.clear_fps_overlay();
     assert_inspector(&renderer);
     renderer.set_inspector_overlay(None);
-    assert!(renderer.frontend.dev_overlay_graph.is_none());
+    assert!(renderer.frontend.dev_overlay.root().is_none());
 }

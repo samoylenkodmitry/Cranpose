@@ -1,5 +1,5 @@
 use cranpose_core::NodeId;
-use cranpose_render_common::{Renderer, graph::RenderGraph};
+use cranpose_render_common::{Renderer, graph::LayerNode};
 use cranpose_ui_graphics::{Color, Rect};
 
 use crate::support;
@@ -8,14 +8,14 @@ const WIDTH: u32 = 128;
 const HEIGHT: u32 = 96;
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
-fn frame_graph(index: usize) -> RenderGraph {
+fn frame_graph(index: usize) -> LayerNode {
     let bounds = Rect {
         x: 0.0,
         y: 0.0,
         width: WIDTH as f32,
         height: HEIGHT as f32,
     };
-    RenderGraph::new(&support::layer_node(
+    support::layer_node(
         Some(NodeId(71)),
         WIDTH as f32,
         HEIGHT as f32,
@@ -35,7 +35,7 @@ fn frame_graph(index: usize) -> RenderGraph {
                 },
             ),
         ],
-    ))
+    )
 }
 
 #[test]
@@ -58,7 +58,7 @@ fn queued_surface_images_keep_their_own_complete_frame_after_image_reuse() {
     let images: Vec<_> = (0..3).map(|_| target()).collect();
     let mut snapshots = Vec::new();
     for index in 0..9 {
-        renderer.scene_mut().graph = Some(frame_graph(index));
+        renderer.scene_mut().describe(&frame_graph(index));
         let (texture, view) = &images[index % images.len()];
         renderer
             .render(texture, view, WIDTH, HEIGHT)
@@ -75,7 +75,7 @@ fn queued_surface_images_keep_their_own_complete_frame_after_image_reuse() {
     }
     for (index, snapshot) in snapshots.iter().enumerate() {
         let presented = support::read_texture(&device, &queue, snapshot);
-        renderer.scene_mut().graph = Some(frame_graph(index));
+        renderer.scene_mut().describe(&frame_graph(index));
         let expected = renderer.capture_frame(WIDTH, HEIGHT).expect("serial frame");
         assert!(expected.pixels.as_chunks::<4>().0.iter().any(|pixel| {
             if index.is_multiple_of(2) {

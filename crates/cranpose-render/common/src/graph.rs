@@ -1,23 +1,18 @@
 use std::{
-    cell::Cell,
     ops::{Deref, DerefMut, Range},
     rc::Rc,
-    sync::atomic::{AtomicU32, Ordering},
 };
 
-use cranpose_core::{NodeId, collections::map::HashSet};
+use cranpose_core::NodeId;
 use cranpose_ui::{
-    GraphicsLayer, ModifierNodeSlices, Point, Rect, RenderEffect, TextOverflow, TextStyle,
+    GraphicsLayer, ModifierNodeSlices, Point, Rect, TextOverflow, TextStyle,
     text::{AnnotatedString, RenderString},
 };
 pub use cranpose_ui_graphics::transform::{FrontPolygon, ProjectiveTransform, quad_bounds};
-use cranpose_ui_graphics::{
-    BlendMode, ColorFilter, CommandRecording, DrawPlacement, DrawPrimitive, RecordingSummary,
-};
+use cranpose_ui_graphics::{CommandRecording, DrawPlacement, DrawPrimitive, RecordingSummary};
 
 use crate::{
     glyph_reach::glyph_bounds,
-    raster_cache::LayerRasterCacheHashes,
     text_paint::{TextPaint, TextPaintCache},
 };
 
@@ -278,20 +273,11 @@ pub struct LayerNode {
     pub clip_to_bounds: bool,
     /// Pointer handling of the node, or `None` when the node has none.
     pub hit_test: Option<HitTestNode>,
-    /// Whether this layer or a layer beneath it has a hit test node. Scene building keeps it
-    /// current.
-    pub has_hit_targets: bool,
-    /// [`Self::has_space`], worked out the first time a walk asks and
-    /// forgotten when the layer or its children change.
-    pub space: Cell<Option<bool>>,
     /// Whether this subtree publishes live window origins (a text field's
     /// popup anchor, a scroll container's viewport rect). Those sinks are
     /// written during a full lowering, so the scroll fast path may translate
     /// a retained subtree in place only when this is false.
     pub has_origin_sinks: bool,
-    /// [`Self::draws_within_bounds`], worked out the first time a renderer
-    /// asks and forgotten when the layer's children change.
-    pub contained: Cell<Option<bool>>,
     /// The reasons this layer is drawn through its own offscreen buffer.
     pub isolation: IsolationReasons,
     /// Set on a layer that holds part of one draw command's draws, those a
@@ -301,58 +287,8 @@ pub struct LayerNode {
     pub draw_phase: Option<PrimitivePhase>,
     /// Whether a renderer may keep this layer's pixels between frames.
     pub cache_policy: CachePolicy,
-    /// The raster cache hashes, computed the first time a renderer asks and
-    /// kept until the layer or a layer beneath it changes.
-    pub cache_hashes: Cell<Option<LayerRasterCacheHashes>>,
-    /// The scene updates that changed what the layer draws.
-    pub content_changes: ContentChanges,
-    /// The number the layer took when it or a layer beneath it last changed.
-    pub change: LayerChange,
-    /// The number the layer took when it last changed itself: its own
-    /// properties, draws or list of children. A change beneath it leaves
-    /// this number, so a renderer that kept the layer's own items knows they
-    /// hold.
-    pub own_change: LayerChange,
     /// Content in draw order: primitives, draw runs and child layers.
     pub children: Vec<RenderNode>,
-}
-
-/// A number a layer takes when it is made and whenever it or a layer beneath
-/// it changes, as its raster cache hashes are forgotten: a renderer that
-/// kept what it built from a subtree knows from an equal number that nothing
-/// in it changed since, save the subtree's placement in its parent.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct LayerChange(u32);
-
-impl LayerChange {
-    fn next() -> Self {
-        static LAST: AtomicU32 = AtomicU32::new(0);
-        Self(LAST.fetch_add(1, Ordering::Relaxed).wrapping_add(1))
-    }
-
-    pub(crate) fn numbered(number: u32) -> Self {
-        Self(number)
-    }
-}
-
-impl Default for LayerChange {
-    fn default() -> Self {
-        Self::next()
-    }
-}
-
-/// The last scene update that changed what a layer draws, and how many
-/// updates in a row up to it did.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct ContentChanges {
-    last_update: u64,
-    run: u32,
-}
-
-impl ContentChanges {
-    pub(crate) fn numbered(last_update: u64, run: u32) -> Self {
-        Self { last_update, run }
-    }
 }
 
 impl Default for LayerNode {
@@ -376,17 +312,10 @@ impl Default for LayerNode {
             graphics_layer: LayerProperties::default(),
             clip_to_bounds: false,
             hit_test: None,
-            has_hit_targets: false,
-            space: Cell::new(None),
             has_origin_sinks: false,
-            contained: Cell::new(None),
             isolation: IsolationReasons::default(),
             draw_phase: None,
             cache_policy: CachePolicy::None,
-            cache_hashes: Cell::new(None),
-            content_changes: ContentChanges::default(),
-            change: LayerChange::default(),
-            own_change: LayerChange::default(),
             children: Vec::new(),
         }
     }
@@ -395,172 +324,6 @@ impl Default for LayerNode {
 /// How far past its bounds a layer that draws within them may still put
 /// pixels: glyph and edge antialiasing.
 pub const CONTAINED_DRAW_SLACK: f32 = 1.0;
-
-impl LayerNode {
-    /// Every string this layer and the layers below it paint, in draw order.
-    pub fn painted_text(&self) -> Vec<String> {
-        let mut out = Vec::new();
-        collect_painted_text(&self.children, &mut out);
-        out
-    }
-
-    /// Whether everything this layer and its subtree draw lies within its
-    /// `local_bounds`, give or take [`CONTAINED_DRAW_SLACK`], so a renderer
-    /// may skip the whole subtree where those bounds are clipped away.
-    /// Worked out at the first call after a change and kept until the next.
-    pub fn draws_within_bounds(&self) -> bool {
-        if let Some(contained) = self.contained.get() {
-            return contained;
-        }
-        let contained = self.content_draws_within_bounds();
-        self.contained.set(Some(contained));
-        contained
-    }
-
-    /// Whether this layer's content, as [`LayerNode::draws_within_bounds`]
-    /// describes it, stays within its bounds: it clips to them, or its draws,
-    /// its texts and its children placed where they are all fit inside.
-    pub fn content_draws_within_bounds(&self) -> bool {
-        self.visual_clip_rect().is_some()
-            || nodes_draw_within(
-                &self.children,
-                inflate_rect(self.local_bounds, CONTAINED_DRAW_SLACK),
-            )
-    }
-
-    /// Whether this layer or a layer beneath it is a scene, a mesh surface
-    /// or a 3D transform, so a walk for what lies in 3D skips the subtrees
-    /// without one.
-    pub fn has_space(&self) -> bool {
-        if let Some(known) = self.space.get() {
-            return known;
-        }
-        let found = self.graphics_layer.space.is_some()
-            || self.children.iter().any(|child| match child {
-                RenderNode::Layer(child_layer) => child_layer.has_space(),
-                RenderNode::Primitive(_) | RenderNode::DrawRun(_) | RenderNode::Inline(_) => false,
-            });
-        self.space.set(Some(found));
-        found
-    }
-
-    fn draws_within_parent(&self, bounds: Rect) -> bool {
-        self.draws_within_bounds()
-            && self.graphics_layer.shadow_elevation <= 0.0
-            && self.effect().is_none()
-            && self.backdrop().is_none()
-            && rect_within(
-                self.transform_to_parent
-                    .bounds_for_rect(inflate_rect(self.local_bounds, CONTAINED_DRAW_SLACK)),
-                bounds,
-            )
-    }
-
-    /// The node's own rect, where its pointer handlers are.
-    pub fn node_rect(&self) -> Rect {
-        self.node_bounds.unwrap_or(self.local_bounds)
-    }
-
-    /// The rectangle that cuts the layer's content and pointer hits: its bounds when the layer
-    /// clips to bounds or its graphics layer clips, otherwise `None`.
-    pub fn clip_rect(&self) -> Option<Rect> {
-        (self.clip_to_bounds || self.graphics_layer.clip).then_some(self.local_bounds)
-    }
-
-    /// Where the layer's own shadow is cut: its bounds when it clips its
-    /// content to them. A graphics-layer clip leaves the shadow whole.
-    pub fn shadow_clip(&self) -> Option<Rect> {
-        self.clip_to_bounds.then_some(self.local_bounds)
-    }
-
-    /// Where the layer's drawing is cut: its clip or, when it composites
-    /// through an offscreen buffer for its alpha or by request, its bounds,
-    /// as Compose's layer-sized buffer cuts it. Hit testing takes only
-    /// [`Self::clip_rect`]: alpha hides nothing from a finger.
-    #[inline]
-    pub fn visual_clip_rect(&self) -> Option<Rect> {
-        self.clip_rect().or_else(|| {
-            (self.isolation.group_opacity || self.isolation.explicit_offscreen)
-                .then_some(self.local_bounds)
-        })
-    }
-
-    /// The render effect applied to the layer's content, if any.
-    pub fn effect(&self) -> Option<&RenderEffect> {
-        self.graphics_layer.render_effect.as_ref()
-    }
-
-    /// The effect applied to what lies behind the layer, if any.
-    pub fn backdrop(&self) -> Option<&RenderEffect> {
-        self.graphics_layer.backdrop_effect.as_ref()
-    }
-
-    /// Alpha of the layer from 0.0 (transparent) to 1.0 (opaque).
-    pub fn opacity(&self) -> f32 {
-        self.graphics_layer.alpha
-    }
-
-    /// How the layer composites onto what lies beneath it.
-    pub fn blend_mode(&self) -> BlendMode {
-        self.graphics_layer.blend_mode
-    }
-
-    /// The color filter applied to the layer's content, if any.
-    pub fn color_filter(&self) -> Option<&ColorFilter> {
-        self.graphics_layer.color_filter.as_ref()
-    }
-
-    /// Hash of everything the layer draws into its target: bounds, clip, alpha, children and their
-    /// placement. Equal hashes mean cached pixels are still valid. Computed on first use.
-    pub fn target_content_hash(&self) -> u64 {
-        self.raster_cache_hashes().target_content
-    }
-
-    /// Hash of the layer's content like `target_content_hash`, except that the translated content
-    /// offset is left out, so the hash stays equal while the content only moves.
-    pub fn motion_source_content_hash(&self) -> u64 {
-        crate::graph_hash::layer_motion_source_content_hash(self)
-    }
-
-    /// Hash of the layer's render effect, for keying cached effect output.
-    pub fn effect_hash(&self) -> u64 {
-        self.raster_cache_hashes().effect
-    }
-
-    fn raster_cache_hashes(&self) -> LayerRasterCacheHashes {
-        if let Some(hashes) = self.cache_hashes.get() {
-            return hashes;
-        }
-        let hashes = crate::graph_hash::layer_raster_cache_hashes(self);
-        self.cache_hashes.set(Some(hashes));
-        hashes
-    }
-
-    /// Forgets the raster cache hashes of this layer and every layer beneath
-    /// it, after a change the scene builder did not make: they are computed
-    /// again when asked for.
-    pub fn forget_raster_cache_hashes(&mut self) {
-        self.forget_own_raster_cache_hashes();
-        for child in &mut self.children {
-            if let RenderNode::Layer(child) = child {
-                child.forget_raster_cache_hashes();
-            }
-        }
-    }
-
-    fn forget_own_raster_cache_hashes(&mut self) {
-        self.cache_hashes.set(None);
-        self.change = LayerChange::next();
-        self.own_change = LayerChange::next();
-    }
-
-    /// Whether what this layer draws changed in scene update `update` and in
-    /// the one before it. A raster cache keyed on its content would miss
-    /// again on the next frame, so a renderer neither hashes nor caches it.
-    pub fn content_churns(&self, update: u64) -> bool {
-        self.content_changes.run >= 2 && self.content_changes.last_update == update
-    }
-}
 
 /// A child of a layer in the render graph.
 #[derive(Clone)]
@@ -724,125 +487,6 @@ impl DrawRunNode {
                 .bounds()
                 .is_none_or(|drawn| rect_within(drawn, bounds))
     }
-}
-
-/// The scene as a tree of layers that a renderer draws.
-#[derive(Clone)]
-pub struct RenderGraph {
-    // The records the scene builder writes; the root is exported from them.
-    pub(crate) store: crate::scene_store::SceneStore,
-    pub(crate) retained_path: Option<crate::scene_builder::RetainedPath>,
-    // The marks of the last walk to the graph's dirty layers.
-    pub(crate) dirty_ancestry: crate::scene_builder::DirtyAncestry,
-}
-
-impl RenderGraph {
-    /// Creates a graph around `root` at update zero.
-    pub fn new(root: &LayerNode) -> Self {
-        Self {
-            store: crate::scene_store::SceneStore::from_layer(root),
-            retained_path: None,
-            dirty_ancestry: crate::scene_builder::DirtyAncestry::default(),
-        }
-    }
-
-    // A graph with no records, for the scene builder to write.
-    pub(crate) fn empty() -> Self {
-        Self {
-            store: crate::scene_store::SceneStore::new(),
-            retained_path: None,
-            dirty_ancestry: crate::scene_builder::DirtyAncestry::default(),
-        }
-    }
-
-    /// The records the graph's layers are written in.
-    pub fn store(&self) -> &crate::scene_store::SceneStore {
-        &self.store
-    }
-
-    // Works out the facts of the update in progress and exports the root.
-    pub(crate) fn refresh_from_store(&mut self) {
-        self.store.finish_update();
-    }
-
-    /// The layer tree the graph's records describe, for tests and tools
-    /// that read a scene as a tree.
-    pub fn root(&self) -> LayerNode {
-        crate::scene_store::export(&self.store)
-    }
-
-    /// Number of records and draws in the graph: each record counts once
-    /// and each primitive of a draw run counts on its own.
-    pub fn node_count(&self) -> usize {
-        self.store.node_count()
-    }
-
-    /// Estimated heap memory held by the graph's records, in bytes, for
-    /// memory reports.
-    pub fn heap_bytes(&self) -> usize {
-        self.store.heap_bytes()
-    }
-
-    /// Replaces the set with the graph's visual observation owners, retaining its capacity.
-    pub fn collect_retained_visual_observation_nodes(&self, nodes: &mut HashSet<NodeId>) {
-        fn collect(layer: crate::scene_store::LayerRef<'_>, nodes: &mut HashSet<NodeId>) {
-            if let Some(node_id) = layer.node_id() {
-                nodes.insert(node_id);
-            }
-            for item in layer.items() {
-                match item {
-                    crate::scene_store::ItemRef::Run(run) => {
-                        if let Some(command) = run.command {
-                            nodes.insert(command.node_id);
-                        }
-                    }
-                    crate::scene_store::ItemRef::Layer(child)
-                    | crate::scene_store::ItemRef::Leaf(child) => collect(child, nodes),
-                    crate::scene_store::ItemRef::Draw(_) | crate::scene_store::ItemRef::Text(_) => {
-                    }
-                }
-            }
-        }
-
-        nodes.clear();
-        if let Some(root) = self.store.root_layer() {
-            collect(root, nodes);
-        }
-    }
-}
-
-fn collect_painted_text(nodes: &[RenderNode], out: &mut Vec<String>) {
-    for child in nodes {
-        match child {
-            RenderNode::Primitive(primitive) => {
-                if let PrimitiveNode::Text(text) = &primitive.node {
-                    out.push(text.text.text().to_owned());
-                }
-            }
-            RenderNode::Layer(child) => collect_painted_text(&child.children, out),
-            RenderNode::Inline(inline) => collect_painted_text(&inline.content, out),
-            RenderNode::DrawRun(run) => {
-                for primitive in run.primitives() {
-                    if let DrawPrimitive::Text(text) = primitive {
-                        out.push(text.text.to_string());
-                    }
-                }
-            }
-        }
-    }
-}
-
-// Whether `nodes`, a layer's children, put nothing outside `bounds` of it.
-fn nodes_draw_within(nodes: &[RenderNode], bounds: Rect) -> bool {
-    nodes.iter().all(|child| match child {
-        RenderNode::DrawRun(run) => run.draws_within(bounds),
-        RenderNode::Primitive(entry) => match &entry.node {
-            PrimitiveNode::Text(text) => text.draws_within(bounds),
-            PrimitiveNode::Draw(_) => false,
-        },
-        RenderNode::Layer(layer) => layer.draws_within_parent(bounds),
-        RenderNode::Inline(inline) => inline.draws_within_parent(bounds),
-    })
 }
 
 pub(crate) fn inflate_rect(rect: Rect, by: f32) -> Rect {

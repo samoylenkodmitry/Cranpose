@@ -5,7 +5,7 @@
 
 use cranpose_render_common::{
     Renderer,
-    graph::{ProjectiveTransform, RenderGraph, RenderNode},
+    graph::{LayerNode, ProjectiveTransform, RenderNode},
 };
 use cranpose_render_wgpu::CapturedFrame;
 use cranpose_ui_graphics::{
@@ -43,7 +43,7 @@ fn shader(tag: &str, placeholder: Option<ShaderPlaceholder>) -> RuntimeShader {
 }
 
 /// A white page with a pane drawn by `layer` over `content`.
-fn page(layer: GraphicsLayer, content: Vec<RenderNode>) -> RenderGraph {
+fn page(layer: GraphicsLayer, content: Vec<RenderNode>) -> LayerNode {
     let bounds = Rect {
         x: 0.0,
         y: 0.0,
@@ -64,7 +64,7 @@ fn page_with(
     transform: ProjectiveTransform,
     layer: GraphicsLayer,
     content: Vec<RenderNode>,
-) -> RenderGraph {
+) -> LayerNode {
     let full = Rect {
         x: 0.0,
         y: 0.0,
@@ -82,7 +82,7 @@ fn page_with(
     )
 }
 
-fn backdrop_page(shader: RuntimeShader) -> RenderGraph {
+fn backdrop_page(shader: RuntimeShader) -> LayerNode {
     page(
         GraphicsLayer {
             backdrop_effect: Some(RenderEffect::runtime_shader(shader)),
@@ -93,12 +93,12 @@ fn backdrop_page(shader: RuntimeShader) -> RenderGraph {
 }
 
 /// A green square drawn as the pane's content, through `effect`.
-fn effect_page(effect: Option<RenderEffect>) -> RenderGraph {
+fn effect_page(effect: Option<RenderEffect>) -> LayerNode {
     effect_page_with(GraphicsLayer::default(), effect)
 }
 
 /// [`effect_page`] on a pane `layer` describes.
-fn effect_page_with(layer: GraphicsLayer, effect: Option<RenderEffect>) -> RenderGraph {
+fn effect_page_with(layer: GraphicsLayer, effect: Option<RenderEffect>) -> LayerNode {
     let square = support::solid_rect(
         Rect {
             x: 0.0,
@@ -118,18 +118,18 @@ fn effect_page_with(layer: GraphicsLayer, effect: Option<RenderEffect>) -> Rende
 }
 
 /// What an app's renderer draws for `graph` once every pipeline is built.
-fn settled(graph: RenderGraph) -> CapturedFrame {
+fn settled(graph: LayerNode) -> CapturedFrame {
     let mut reference = support::LockedRenderer::beside_locked().expect("reference renderer");
     support::capture_graph(&mut reference, graph, SIZE, SIZE)
 }
 
 /// An empty page, for a renderer's own first frame.
-fn empty_page() -> RenderGraph {
+fn empty_page() -> LayerNode {
     support::page_graph(SIZE, SIZE, Vec::new())
 }
 
 /// The white page alone.
-fn white_page() -> RenderGraph {
+fn white_page() -> LayerNode {
     support::page_graph(
         SIZE,
         SIZE,
@@ -147,7 +147,7 @@ fn white_page() -> RenderGraph {
 
 /// The first frame of `graph` on a renderer whose pipelines compile in the
 /// background, asserted to have drawn one placeholder, and that renderer.
-fn first_frame(graph: &RenderGraph) -> (support::LockedRenderer, CapturedFrame) {
+fn first_frame(graph: &LayerNode) -> (support::LockedRenderer, CapturedFrame) {
     let mut renderer = support::headless_renderer_compiling_in_background().expect("GPU required");
     // The pipelines every screen draws with land first, so only the
     // effect waits: the page's fill, and the pane's composite, which the
@@ -169,8 +169,8 @@ fn first_frame(graph: &RenderGraph) -> (support::LockedRenderer, CapturedFrame) 
 
 /// Captures `graph` until the effect draws, then asserts that frame is the
 /// settled picture and that the renderer stops asking for frames.
-fn assert_lands(renderer: &mut support::LockedRenderer, graph: RenderGraph) {
-    let (drawn, _) = support::capture_drawn(renderer, &graph, SIZE, SIZE);
+fn assert_lands(renderer: &mut support::LockedRenderer, graph: &LayerNode) {
+    let (drawn, _) = support::capture_drawn(renderer, graph, SIZE, SIZE);
     support::assert_same_bytes(
         "the frame after the pipeline lands",
         SIZE,
@@ -215,7 +215,7 @@ fn a_backdrop_fills_its_shape_with_its_placeholder_until_its_pipeline_lands() {
         outside(&without_pane),
         "the placeholder stays inside its shape"
     );
-    assert_lands(&mut renderer, graph);
+    assert_lands(&mut renderer, &graph);
 }
 
 #[test]
@@ -223,7 +223,7 @@ fn a_backdrop_without_a_placeholder_leaves_its_shape_to_what_is_beneath() {
     let graph = backdrop_page(shader("bare backdrop", None));
     let (mut renderer, first) = first_frame(&graph);
     assert_eq!(pane_colors(&first), [[255, 255, 255, 255]]);
-    assert_lands(&mut renderer, graph);
+    assert_lands(&mut renderer, &graph);
 }
 
 #[test]
@@ -237,7 +237,7 @@ fn a_layer_effect_leaves_the_content_as_it_is_until_its_pipeline_lands() {
         &first.pixels,
         &settled(effect_page(None)).pixels,
     );
-    assert_lands(&mut renderer, graph);
+    assert_lands(&mut renderer, &graph);
 }
 
 /// A layer drawn only by a shader no other test draws, with the red
@@ -253,10 +253,10 @@ fn shader_only(tag: &str) -> GraphicsLayer {
 
 /// Asserts `graph`'s first frame shows the red placeholder over the pane,
 /// and that the shader lands.
-fn assert_placeholder_then_lands(graph: RenderGraph) {
+fn assert_placeholder_then_lands(graph: LayerNode) {
     let (mut renderer, first) = first_frame(&graph);
     assert_eq!(pane_colors(&first), [[255, 0, 0, 255]]);
-    assert_lands(&mut renderer, graph);
+    assert_lands(&mut renderer, &graph);
 }
 
 #[test]
@@ -296,7 +296,7 @@ fn a_placeholder_with_a_shape_fills_only_that_rounded_rectangle() {
     let graph = backdrop_page(shader("shaped placeholder", Some(MIDDLE)));
     let (mut renderer, first) = first_frame(&graph);
     assert_in_middle(&first, [255, 0, 0, 255]);
-    assert_lands(&mut renderer, graph);
+    assert_lands(&mut renderer, &graph);
 }
 
 /// A glass that masks its layer's content keeps the content in its shape
@@ -307,7 +307,7 @@ fn a_layer_effect_with_a_shaped_placeholder_keeps_the_content_in_that_shape() {
     let graph = effect_page(Some(effect));
     let (mut renderer, first) = first_frame(&graph);
     assert_in_middle(&first, [0, 255, 0, 255]);
-    assert_lands(&mut renderer, graph);
+    assert_lands(&mut renderer, &graph);
 }
 
 #[test]
@@ -341,7 +341,7 @@ fn a_shadow_is_left_out_until_its_blur_lands() {
         &first.pixels,
         &settled(page(GraphicsLayer::default(), vec![square()])).pixels,
     );
-    assert_lands(&mut renderer, graph);
+    assert_lands(&mut renderer, &graph);
 }
 
 /// A frame that drew placeholders is not the final picture while their

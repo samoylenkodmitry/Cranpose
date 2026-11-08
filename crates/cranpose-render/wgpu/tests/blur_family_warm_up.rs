@@ -1,4 +1,4 @@
-use cranpose_render_common::graph::{ProjectiveTransform, RenderGraph, RenderNode};
+use cranpose_render_common::graph::{LayerNode, ProjectiveTransform, RenderNode};
 use cranpose_ui_graphics::{Color, GraphicsLayer, Rect, RenderEffect};
 
 use crate::{shared_test_support, support};
@@ -15,7 +15,7 @@ const GLASS: Rect = Rect {
     height: 80.0,
 };
 
-fn blurred_page(radius: f32) -> RenderGraph {
+fn blurred_page(radius: f32) -> LayerNode {
     let full = Rect {
         x: 0.0,
         y: 0.0,

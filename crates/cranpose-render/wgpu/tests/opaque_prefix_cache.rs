@@ -2,7 +2,7 @@ use cranpose_core::NodeId;
 use cranpose_render_common::{
     Renderer,
     graph::{
-        DrawCommandId, DrawRunNode, PrimitivePhase, ProjectiveTransform, RenderGraph, RenderNode,
+        DrawCommandId, DrawRunNode, LayerNode, PrimitivePhase, ProjectiveTransform, RenderNode,
     },
 };
 use cranpose_render_wgpu::{RenderStatsSnapshot, WgpuRenderer};
@@ -178,7 +178,7 @@ fn primitives(spec: Spec, phase: u32) -> Vec<cranpose_ui_graphics::DrawPrimitive
     scope.into_primitives()
 }
 
-fn graph(spec: Spec, phase: u32) -> RenderGraph {
+fn graph(spec: Spec, phase: u32) -> LayerNode {
     let run = DrawRunNode::for_command(
         PrimitivePhase::BeforeChildren,
         Some(DrawCommandId {
@@ -273,14 +273,14 @@ impl Pair {
     ) -> (RenderStatsSnapshot, RenderStatsSnapshot) {
         let cached = support::capture_graph_with_scale(
             &mut self.cached,
-            graph(spec, phase),
+            &graph(spec, phase),
             FRAME_WIDTH,
             FRAME_HEIGHT,
             scale,
         );
         let cached_stats = self.cached.last_frame_stats().expect("stats");
         cranpose_core::debug_toggles::set_debug_toggle(NO_FILL_CACHE, Some("1"));
-        self.reference.scene_mut().graph = Some(graph(spec, phase));
+        self.reference.scene_mut().describe(&graph(spec, phase));
         let reference = self
             .reference
             .capture_frame_with_scale(FRAME_WIDTH, FRAME_HEIGHT, scale)

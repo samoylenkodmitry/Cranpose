@@ -1,15 +1,15 @@
-//! What a built render graph actually paints, for tests that need to compare
-//! the scene against the tree it was built from.
+//! What a built scene actually paints, for tests that need to compare the
+//! scene against the tree it was built from.
 
 use cranpose_core::{MemoryApplier, NodeId};
 use cranpose_render_common::{
-    graph::{LayerNode, PrimitiveNode, RenderGraph, RenderNode},
-    scene_builder::{build_graph_from_applier, update_graph_from_applier},
+    graph_scene::Scene,
+    scene_store::{ItemRef, LayerRef},
 };
 use cranpose_ui::{LayoutEngine, Size, TestComposition};
 use cranpose_ui_graphics::{Brush, Color, DrawPrimitive};
 
-pub(crate) fn painted_text(layer: &LayerNode, out: &mut Vec<String>) {
+pub(crate) fn painted_text(layer: LayerRef<'_>, out: &mut Vec<String>) {
     out.extend(layer.painted_text());
 }
 
@@ -17,16 +17,18 @@ pub(crate) fn initial_graph(
     composition: &mut TestComposition,
     root: NodeId,
     viewport: Size,
-) -> RenderGraph {
+) -> Scene {
     let runtime = composition.runtime_handle();
     let mut applier = composition.applier_mut();
     applier.set_runtime_handle(runtime);
     applier
         .compute_layout(root, viewport)
         .expect("composition lays out");
-    let graph = build_graph_from_applier(&applier, root, 1.0).expect("initial scene graph");
+    let mut scene = Scene::new();
+    scene.rebuild_from_applier(&applier, root);
+    assert!(scene.root_layer().is_some(), "initial scene");
     applier.clear_runtime_handle();
-    graph
+    scene
 }
 
 pub(crate) fn with_applier<R>(
@@ -45,7 +47,7 @@ pub(crate) fn update_scene(
     composition: &mut TestComposition,
     root: NodeId,
     viewport: Size,
-    graph: &mut RenderGraph,
+    scene: &mut Scene,
 ) -> Vec<NodeId> {
     while composition.process_invalid_scopes().expect("recompose") {}
     with_applier(composition, |applier| {
@@ -60,9 +62,9 @@ pub(crate) fn update_scene(
         let mut layers = Vec::new();
         cranpose_ui::take_layer_property_repass_nodes_into(&mut layers);
         assert!(
-            update_graph_from_applier(
+            scene.update_from_applier(
                 applier,
-                graph,
+                root,
                 &content
                     .iter()
                     .map(|&id| (id, cranpose_render_common::NodeUpdate::Content))
@@ -77,7 +79,6 @@ pub(crate) fn update_scene(
                             .map(|&id| (id, cranpose_render_common::NodeUpdate::Moved))
                     )
                     .collect::<Vec<_>>(),
-                1.0,
             ),
             "the scoped update applies"
         );
@@ -85,22 +86,29 @@ pub(crate) fn update_scene(
     })
 }
 
-pub(crate) fn fresh_graph(composition: &mut TestComposition, root: NodeId) -> RenderGraph {
+pub(crate) fn fresh_graph(composition: &mut TestComposition, root: NodeId) -> Scene {
     with_applier(composition, |applier| {
-        build_graph_from_applier(applier, root, 1.0).expect("fresh graph")
+        let mut scene = Scene::new();
+        scene.rebuild_from_applier(applier, root);
+        assert!(scene.root_layer().is_some(), "fresh scene");
+        scene
     })
 }
 
-pub(crate) fn painted_solid_rect_colors(layer: &LayerNode, colors: &mut Vec<Color>) {
-    nodes_solid_rect_colors(&layer.children, colors);
+// Every solid rectangle color `scene` paints, in draw order.
+pub(crate) fn solid_rect_colors(scene: &Scene) -> Vec<Color> {
+    let mut colors = Vec::new();
+    painted_solid_rect_colors(scene.root_layer().expect("a scene"), &mut colors);
+    colors
 }
 
-fn nodes_solid_rect_colors(nodes: &[RenderNode], colors: &mut Vec<Color>) {
-    for child in nodes {
-        match child {
-            RenderNode::Layer(child) => painted_solid_rect_colors(child, colors),
-            RenderNode::Inline(inline) => nodes_solid_rect_colors(&inline.content, colors),
-            RenderNode::DrawRun(run) => {
+pub(crate) fn painted_solid_rect_colors(layer: LayerRef<'_>, colors: &mut Vec<Color>) {
+    for item in layer.items() {
+        match item {
+            ItemRef::Layer(child) | ItemRef::Leaf(child) => {
+                painted_solid_rect_colors(child, colors);
+            }
+            ItemRef::Run(run) => {
                 for primitive in run.primitives() {
                     if let DrawPrimitive::Rect {
                         brush: Brush::Solid(color),
@@ -111,16 +119,16 @@ fn nodes_solid_rect_colors(nodes: &[RenderNode], colors: &mut Vec<Color>) {
                     }
                 }
             }
-            RenderNode::Primitive(entry) => {
-                if let PrimitiveNode::Draw(draw) = &entry.node
-                    && let DrawPrimitive::Rect {
-                        brush: Brush::Solid(color),
-                        ..
-                    } = &draw.primitive
+            ItemRef::Draw(draw) => {
+                if let DrawPrimitive::Rect {
+                    brush: Brush::Solid(color),
+                    ..
+                } = &draw.primitive
                 {
                     colors.push(*color);
                 }
             }
+            ItemRef::Text(_) => {}
         }
     }
 }
