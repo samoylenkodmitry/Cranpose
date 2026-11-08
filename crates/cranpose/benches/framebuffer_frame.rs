@@ -40,6 +40,10 @@
 //! board with little heap left does: lazy lists keep only the items they
 //! show, and the renderer keeps less between frames.
 //!
+//! `FRAME_MS=300` steps the frame clock 300 ms a frame in place of a 60 Hz
+//! frame, as a board that draws a screen at about three frames a second
+//! does: a screen that moves by time moves farther each frame.
+//!
 //! `PICTURE=file.ppm` with `REDRAW=all` saves the last frame's RGBA picture,
 //! to look at what a screen shows: without it each area lands at the start of
 //! the pixels, as a board's strip buffer takes it.
@@ -390,8 +394,12 @@ fn run_frames(
     from: u64,
     to: u64,
 ) {
+    let step = std::env::var("FRAME_MS")
+        .ok()
+        .and_then(|ms| ms.parse::<u64>().ok())
+        .map_or(FRAME_NANOS, |ms| ms * 1_000_000);
     for frame in from..to {
-        if framebuffer.tick(frame * FRAME_NANOS) {
+        if framebuffer.tick(frame * step) {
             drawing.draw(framebuffer, areas, pixels);
         }
         framebuffer.run_pending_tasks();
