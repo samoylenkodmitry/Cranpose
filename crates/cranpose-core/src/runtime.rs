@@ -31,6 +31,7 @@ mod scope_runtime;
 mod state_arena;
 mod state_owners;
 mod task_slots;
+mod ui_task;
 
 pub use debug_stats::RuntimeDebugStats;
 pub(crate) use scope_runtime::ScopeRuntime;
@@ -38,6 +39,7 @@ pub(crate) use state_arena::{DerivedRefresh, StateArena};
 pub use state_arena::{StateArenaDebugStats, StateId};
 pub(crate) use state_owners::collecting_states;
 use state_owners::hand_to_current_owner;
+use ui_task::UiTask;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FrameCallbackKind {
@@ -188,7 +190,7 @@ struct RuntimeInner {
     last_frame_time_nanos: Cell<Option<u64>>,
     ui_dispatcher: UiDispatcherRef,
     ui_rx: RefCell<mpsc::Receiver<UiMessage>>,
-    local_tasks: RefCell<VecDeque<Box<dyn FnOnce() + 'static>>>,
+    local_tasks: RefCell<VecDeque<UiTask>>,
     ui_conts: RefCell<UiContinuationMap>,
     next_cont_id: Cell<u64>,
     ui_thread_id: ThreadId,
@@ -380,7 +382,7 @@ impl RuntimeInner {
             .any(|entry| entry.kind == FrameCallbackKind::Transient)
     }
 
-    fn enqueue_ui_task(&self, task: Box<dyn FnOnce() + 'static>) {
+    fn enqueue_ui_task(&self, task: UiTask) {
         self.local_tasks.borrow_mut().push_back(task);
         self.schedule();
     }
@@ -539,7 +541,7 @@ impl RuntimeInner {
                 return ran;
             };
             ran = true;
-            task();
+            task.run();
         }
     }
 
@@ -1084,20 +1086,6 @@ impl RuntimeHandle {
     pub(crate) fn enqueue_node_update(&self, command: Command) {
         if let Some(inner) = self.inner.upgrade() {
             inner.enqueue_update(command);
-        }
-    }
-
-    /// Schedules work that must run on the runtime thread.
-    ///
-    /// The closure executes on the UI thread immediately when the runtime
-    /// drains its local queue, so it may capture `Rc`/`RefCell` values. Calling
-    /// this from any other thread is a logic error and will panic in debug
-    /// builds via the inner assertion.
-    pub fn enqueue_ui_task(&self, task: Box<dyn FnOnce() + 'static>) {
-        if let Some(inner) = self.inner.upgrade() {
-            inner.enqueue_ui_task(task);
-        } else {
-            task();
         }
     }
 

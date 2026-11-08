@@ -50,9 +50,9 @@ impl DrawObservationScope {
 // without a runtime takes the thread's current one.
 pub(super) fn new_draw_observer(runtime: Option<RuntimeHandle>) -> SnapshotStateObserver {
     let observer = SnapshotStateObserver::new(move |callback| match &runtime {
-        Some(runtime) => runtime.enqueue_ui_task(callback),
+        Some(runtime) => runtime.enqueue_shared_ui_task(callback),
         None => match current_runtime_handle() {
-            Some(runtime) => runtime.enqueue_ui_task(callback),
+            Some(runtime) => runtime.enqueue_shared_ui_task(callback),
             None => callback(),
         },
     });

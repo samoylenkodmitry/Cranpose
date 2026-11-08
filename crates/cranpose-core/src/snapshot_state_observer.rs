@@ -14,7 +14,7 @@ use crate::{
     state::{ObjectId, StateObject},
 };
 
-type Executor = dyn Fn(Box<dyn FnOnce() + 'static>) + 'static;
+type Executor = dyn Fn(Rc<dyn Fn() + 'static>) + 'static;
 
 trait ScopeChangedCallback: Fn(&dyn Any) + Any {}
 
@@ -54,9 +54,14 @@ pub struct SnapshotStateObserverDebugStats {
 
 impl SnapshotStateObserver {
     /// Create a new observer that schedules callbacks using `on_changed_executor`.
-    pub fn new(on_changed_executor: impl Fn(Box<dyn FnOnce() + 'static>) + 'static) -> Self {
+    /// The executor runs the task it is given, now or later; the observer
+    /// keeps that task and hands it over again, so scheduling it allocates
+    /// nothing.
+    pub fn new(on_changed_executor: impl Fn(Rc<dyn Fn() + 'static>) + 'static) -> Self {
         Self {
-            inner: Rc::new(SnapshotStateObserverInner::new(on_changed_executor)),
+            inner: Rc::new_cyclic(|weak| {
+                SnapshotStateObserverInner::new(on_changed_executor, Weak::clone(weak))
+            }),
         }
     }
 
@@ -133,6 +138,11 @@ struct SnapshotStateObserverInner {
     read_dispatcher: ReadObserver,
     read_snapshot: RefCell<Option<Rc<TransparentObserverMutableSnapshot>>>,
     apply_handle: RefCell<Option<crate::snapshot_v2::ObserverHandle>>,
+    // The scopes whose states changed, which the flush task notifies, and
+    // that task, with whether it is queued.
+    pending: RefCell<Vec<Rc<RefCell<ScopeEntry>>>>,
+    flush: Rc<dyn Fn() + 'static>,
+    flush_queued: Cell<bool>,
     next_entry_id: Cell<usize>,
     /// One `Rc` per type of callback that captures nothing: see
     /// [`SnapshotStateObserverInner::capture_free_callback`].
@@ -165,7 +175,10 @@ where
 impl SnapshotStateObserverInner {
     const MIN_RETAINED_SCOPE_CAPACITY: usize = 256;
 
-    fn new(on_changed_executor: impl Fn(Box<dyn FnOnce() + 'static>) + 'static) -> Self {
+    fn new(
+        on_changed_executor: impl Fn(Rc<dyn Fn() + 'static>) + 'static,
+        weak_self: Weak<Self>,
+    ) -> Self {
         let pause_count = Rc::new(Cell::new(0));
         let active_read_targets = Rc::new(RefCell::new(ReadObservationStack::default()));
         let dispatcher_pause_count = Rc::clone(&pause_count);
@@ -190,6 +203,13 @@ impl SnapshotStateObserverInner {
             read_dispatcher,
             read_snapshot: RefCell::new(None),
             apply_handle: RefCell::new(None),
+            pending: RefCell::new(Vec::new()),
+            flush: Rc::new(move || {
+                if let Some(inner) = weak_self.upgrade() {
+                    inner.notify_pending();
+                }
+            }),
+            flush_queued: Cell::new(false),
             next_entry_id: Cell::new(0),
             capture_free_callbacks: RefCell::new(SmallVec::new()),
         }
@@ -462,39 +482,48 @@ impl SnapshotStateObserverInner {
         // a scope twice.
         let several = modified.len() > 1;
         let mut seen_scope_ids: HashSet<usize> = HashSet::default();
-        let mut to_notify: Vec<Rc<RefCell<ScopeEntry>>> = Vec::new();
         {
             let observed_to_scopes = self.observed_to_scopes.borrow();
             let indexed_scopes = self.indexed_scopes.borrow();
+            let mut pending = self.pending.borrow_mut();
             for state in modified {
                 if let Some(scope_ids) = observed_to_scopes.get(&state.object_id()) {
                     let mut ordered_scope_ids: SmallVec<[usize; 8]> =
                         scope_ids.iter().copied().collect();
                     ordered_scope_ids.sort_unstable();
-                    to_notify.reserve(ordered_scope_ids.len());
+                    pending.reserve(ordered_scope_ids.len());
                     for scope_id in ordered_scope_ids {
                         if (!several || seen_scope_ids.insert(scope_id))
                             && let Some(entry) = indexed_scopes.get(&scope_id)
                         {
-                            to_notify.push(Rc::clone(entry));
+                            pending.push(Rc::clone(entry));
                         }
                     }
                 }
             }
-        }
-
-        if to_notify.is_empty() {
-            return;
-        }
-
-        // One task notifies every scope in turn, as one task a scope would.
-        (self.executor)(Box::new(move || {
-            for entry in to_notify {
-                if let Ok(entry) = entry.try_borrow() {
-                    entry.notify();
-                }
+            if pending.is_empty() || self.flush_queued.get() {
+                return;
             }
-        }));
+        }
+        // One task notifies every scope in turn, as one task a scope would.
+        self.flush_queued.set(true);
+        (self.executor)(Rc::clone(&self.flush));
+    }
+
+    // Notifies the scopes whose states changed since the flush task was
+    // queued. The list keeps its storage for the next change.
+    fn notify_pending(&self) {
+        self.flush_queued.set(false);
+        let mut batch = std::mem::take(&mut *self.pending.borrow_mut());
+        for entry in batch.drain(..) {
+            if let Ok(entry) = entry.try_borrow() {
+                entry.notify();
+            }
+        }
+        let mut pending = self.pending.borrow_mut();
+        if pending.is_empty() {
+            *pending = batch;
+        }
     }
 
     fn replace_observed_ids(&self, entry: &Rc<RefCell<ScopeEntry>>, collected: &mut ObservedIds) {
