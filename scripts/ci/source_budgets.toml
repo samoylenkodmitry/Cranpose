@@ -4,7 +4,7 @@
 
 [counts]
 too_many_arguments = 10
-private_docs = 12701
+private_docs = 12694
 for_test_fns = 39
 cranpose_env_names = 77
 source_text_checks = 328
@@ -15,7 +15,7 @@ half_state_words = 0
 "cfg-on-robot-app-feature" = 0
 "drain-collect" = 10
 "get-prefix" = 70
-"hashset-of-node-ids" = 16
+"hashset-of-node-ids" = 15
 "manager-helper-util" = 8
 "rc-refcell-in-public-signature" = 2
 "state-holder-rebuilt" = 0

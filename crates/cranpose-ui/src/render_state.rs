@@ -28,7 +28,7 @@ use draw_observation::new_draw_observer;
 pub(crate) use draw_observation::{
     DrawObservationScope, clear_draw_observations_for_node, observe_draw_reads,
 };
-pub use draw_observation::{prune_draw_observations_to_nodes, request_current_draw_redraw};
+pub use draw_observation::{request_current_draw_redraw, retire_draw_observations};
 pub use geometry_scene_nodes::{GeometrySceneNodes, MovedSceneNode};
 use noted_scene_nodes::NotedSceneNodes;
 

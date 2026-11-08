@@ -3957,59 +3957,6 @@ fn draw_state_reads_schedule_draw_repass_without_composition_read() {
 }
 
 #[test]
-fn stale_draw_observations_are_pruned_once_per_interval() {
-    let _guard = test_guard();
-    let root_key = location_key(file!(), line!(), column!());
-    let state_holder: Rc<RefCell<Option<MutableState<f32>>>> = Rc::new(RefCell::new(None));
-    let state_holder_for_app = Rc::clone(&state_holder);
-    let mut shell = AppShell::new(
-        ScopedUpdateCountingRenderer::with_visual_updates(
-            Rc::new(Cell::new(0)),
-            Rc::new(Cell::new(0)),
-            Rc::new(Cell::new(0)),
-            Rc::new(RefCell::new(Vec::new())),
-        ),
-        root_key,
-        move || {
-            let width_state = rememberMutableStateOf(|| 24.0f32);
-            *state_holder_for_app.borrow_mut() = Some(width_state);
-            draw_observed_width_app(width_state);
-        },
-    );
-    shell.update();
-    let width_state = state_holder
-        .borrow()
-        .as_ref()
-        .copied()
-        .expect("width state should be captured");
-
-    shell.app.rebuilt_frames_since_observation_prune = 0;
-    shell.surfaces[0]
-        .retained_visual_nodes
-        .insert(NodeId(usize::MAX));
-    width_state.set(60.0);
-    shell.update();
-    assert!(
-        shell.surfaces[0]
-            .retained_visual_nodes
-            .contains(&NodeId(usize::MAX)),
-        "a redrawn frame before the interval does not walk the graph"
-    );
-
-    shell.app.rebuilt_frames_since_observation_prune = shell_frame::OBSERVATION_PRUNE_INTERVAL - 1;
-    width_state.set(120.0);
-    shell.update();
-    assert!(
-        !shell.surfaces[0]
-            .retained_visual_nodes
-            .contains(&NodeId(usize::MAX)),
-        "the frame that reaches the interval collects the graph's nodes again"
-    );
-    assert!(!shell.surfaces[0].retained_visual_nodes.is_empty());
-    assert_eq!(shell.app.rebuilt_frames_since_observation_prune, 0);
-}
-
-#[test]
 fn draw_only_repass_uses_scoped_renderer_update() {
     let _guard = test_guard();
     let root_key = location_key(file!(), line!(), column!());
@@ -11419,4 +11366,169 @@ fn a_platform_answering_the_font_scale_the_shell_shows_recomposes_nothing() {
     shell.set_font_scale_curve(cranpose_ui::FontScaleCurve::from_samples(1.0, &plain_table));
     shell.update();
     assert_eq!(compositions.get(), settled);
+}
+
+// A lazy list of 100 rows, 240 by 120: the first row draws a bar as wide as
+// `width`, the others a line of text. A text above it shows `tick`.
+fn observed_row_list(states: Rc<RefCell<Option<ObservedRowStates>>>) -> impl FnMut() + 'static {
+    move || {
+        let list = rememberLazyListState();
+        let width = rememberMutableStateOf(|| 24.0f32);
+        let tick = rememberMutableStateOf(|| 0u32);
+        *states.borrow_mut() = Some(ObservedRowStates { list, width, tick });
+        Column(Modifier::empty(), ColumnSpec::default(), move || {
+            Text(
+                format!("tick {}", tick.get()),
+                Modifier::empty(),
+                TextStyle::default(),
+            );
+            LazyColumn(
+                Modifier::empty().size_points(240.0, 120.0),
+                list,
+                LazyColumnSpec::default(),
+                move |scope| {
+                    scope.items(100, move |index| {
+                        if index == 0 {
+                            draw_observed_width_app(width);
+                        } else {
+                            Text(
+                                format!("row {index}"),
+                                Modifier::empty().height(40.0),
+                                TextStyle::default(),
+                            );
+                        }
+                    });
+                },
+            );
+        });
+    }
+}
+
+#[derive(Clone, Copy)]
+struct ObservedRowStates {
+    list: LazyListState,
+    width: MutableState<f32>,
+    tick: MutableState<u32>,
+}
+
+// A renderer that hands its scene a store built from scratch on every
+// update, so its scene cannot tell which nodes it stopped drawing.
+struct RebuildingRenderer {
+    scene: graph_scene::Scene,
+    rebuilds: Rc<Cell<usize>>,
+}
+
+impl Renderer for RebuildingRenderer {
+    type Scene = graph_scene::Scene;
+    type Error = ();
+
+    renderer_scene_accessors!();
+
+    fn rebuild_scene_from_applier(
+        &mut self,
+        applier: &mut MemoryApplier,
+        root: NodeId,
+        _viewport: Size,
+    ) -> Result<(), Self::Error> {
+        self.rebuilds.set(self.rebuilds.get() + 1);
+        let store =
+            cranpose_render_common::scene_builder::build_from_applier(applier, root).ok_or(())?;
+        self.scene.replace_store(store);
+        Ok(())
+    }
+}
+
+// A lazy-list row scrolled out of the list keeps no draw observation while
+// the list keeps its node for reuse: a state only its draw read asks for no
+// redraw once the scene no longer draws it.
+#[test]
+fn a_row_scrolled_away_asks_for_no_redraw_of_what_it_read() {
+    let _guard = test_guard();
+    let root_key = location_key(file!(), line!(), column!());
+    let states = Rc::new(RefCell::new(None));
+    let rebuilds = Rc::new(Cell::new(0));
+    let updates = Rc::new(Cell::new(0));
+    let visual_updates = Rc::new(Cell::new(0));
+    let mut shell = AppShell::new(
+        ScopedUpdateCountingRenderer::with_visual_updates(
+            Rc::clone(&rebuilds),
+            Rc::clone(&updates),
+            Rc::clone(&visual_updates),
+            Rc::new(RefCell::new(Vec::new())),
+        ),
+        root_key,
+        observed_row_list(Rc::clone(&states)),
+    );
+    shell.update();
+    let ObservedRowStates { list, width, .. } = states.borrow().expect("the app's states");
+    width.set(48.0);
+    shell.update();
+    assert_eq!(
+        visual_updates.get(),
+        1,
+        "a drawn row redraws for what its draw read"
+    );
+
+    list.scroll_to_item(60, 0.0);
+    for _ in 0..4 {
+        shell.update();
+    }
+    rebuilds.set(0);
+    updates.set(0);
+    visual_updates.set(0);
+    width.set(96.0);
+    shell.update();
+
+    assert_eq!(
+        (rebuilds.get(), updates.get(), visual_updates.get()),
+        (0, 0, 0),
+        "a row no scene draws asks for no redraw"
+    );
+}
+
+// A scene handed a store built from scratch cannot tell which nodes it
+// stopped drawing: the observations of a row scrolled away stay until a full
+// prune, which comes `OBSERVATION_PRUNE_INTERVAL` frames after.
+#[test]
+fn a_scene_built_from_scratch_retires_observations_in_a_full_prune() {
+    let _guard = test_guard();
+    let root_key = location_key(file!(), line!(), column!());
+    let states = Rc::new(RefCell::new(None));
+    let rebuilds = Rc::new(Cell::new(0));
+    let mut shell = AppShell::new(
+        RebuildingRenderer {
+            scene: graph_scene::Scene::new(),
+            rebuilds: Rc::clone(&rebuilds),
+        },
+        root_key,
+        observed_row_list(Rc::clone(&states)),
+    );
+    shell.update();
+    let ObservedRowStates { list, width, tick } = states.borrow().expect("the app's states");
+    list.scroll_to_item(60, 0.0);
+    for _ in 0..4 {
+        shell.update();
+    }
+    rebuilds.set(0);
+    width.set(48.0);
+    shell.update();
+    assert_eq!(
+        rebuilds.get(),
+        1,
+        "the row scrolled away keeps its observation until a full prune"
+    );
+
+    for frame in 1..=shell_frame::draw_observations::OBSERVATION_PRUNE_INTERVAL {
+        tick.set(frame);
+        shell.update();
+    }
+    rebuilds.set(0);
+    width.set(96.0);
+    shell.update();
+
+    assert_eq!(
+        rebuilds.get(),
+        0,
+        "the full prune retired the row's observation"
+    );
 }

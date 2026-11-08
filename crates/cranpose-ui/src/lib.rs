@@ -282,14 +282,14 @@ pub use render_state::{
     has_pending_layer_property_repasses, has_pending_layout_repasses, has_pending_measure_repasses,
     peek_focus_invalidation, peek_layout_invalidation, peek_pointer_invalidation,
     peek_render_invalidation, pending_layout_repass_nodes_snapshot,
-    pending_measure_repass_nodes_snapshot, prune_draw_observations_to_nodes,
-    request_current_draw_redraw, request_focus_invalidation, request_layout_invalidation,
-    request_pointer_invalidation, request_render_invalidation, schedule_draw_repass,
-    schedule_layout_repass, schedule_measure_repass, schedule_z_order_change,
-    take_draw_repass_nodes, take_draw_repass_nodes_into, take_focus_invalidation,
-    take_geometry_scene_nodes, take_geometry_scene_nodes_into,
-    take_layer_property_repass_nodes_into, take_layout_invalidation, take_layout_repass_nodes,
-    take_measure_repass_nodes, take_pointer_invalidation, take_render_invalidation,
+    pending_measure_repass_nodes_snapshot, request_current_draw_redraw, request_focus_invalidation,
+    request_layout_invalidation, request_pointer_invalidation, request_render_invalidation,
+    retire_draw_observations, schedule_draw_repass, schedule_layout_repass,
+    schedule_measure_repass, schedule_z_order_change, take_draw_repass_nodes,
+    take_draw_repass_nodes_into, take_focus_invalidation, take_geometry_scene_nodes,
+    take_geometry_scene_nodes_into, take_layer_property_repass_nodes_into,
+    take_layout_invalidation, take_layout_repass_nodes, take_measure_repass_nodes,
+    take_pointer_invalidation, take_render_invalidation,
 };
 pub use renderer::{HeadlessRenderer, PaintLayer, RecordedRenderScene, RenderOp};
 pub use safe_area::{WindowInsets, local_ime_insets, local_safe_area_insets, window_insets};

@@ -14,6 +14,7 @@ use cranpose_ui_graphics::{Point, PointerIcon, Rect, RoundedCornerShape, space::
 
 use crate::{
     HitTestTarget, RenderScene, SceneUpdates,
+    draw_owners::DrawOwners,
     graph::{LayerNode, ProjectiveTransform},
     scene_builder::WalkMemory,
     scene_pick::ScenePick,
@@ -579,6 +580,7 @@ pub struct Scene {
     // The updates that moved a layer with no layout pass, and the rebuilds,
     // which may have.
     layer_moves: u64,
+    draw_owners: DrawOwners,
 }
 
 /// How many hit targets a [`Scene`] holds and has room for, and the same for
@@ -598,8 +600,10 @@ pub struct HitStorage {
 impl Scene {
     /// Creates an empty scene with no records and no hit targets.
     pub fn new() -> Self {
+        let mut store = SceneStore::new();
         Self {
-            store: SceneStore::new(),
+            draw_owners: DrawOwners::new(&mut store),
+            store,
             walk: WalkMemory::default(),
             hits: RefCell::default(),
             diagnostics: Rc::new(RenderDiagnostics::new()),
@@ -878,6 +882,10 @@ impl RenderScene for Scene {
     fn collect_retained_visual_observation_nodes(&self, nodes: &mut HashSet<NodeId>) -> bool {
         self.store.collect_visual_observation_nodes(nodes);
         true
+    }
+
+    fn read_draw_owner_changes(&mut self, changes: &mut Vec<crate::DrawOwnerChange>) -> bool {
+        self.draw_owners.read(&mut self.store, changes)
     }
 }
 

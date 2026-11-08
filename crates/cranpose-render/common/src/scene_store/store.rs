@@ -8,8 +8,9 @@ use cranpose_core::{NodeId, RecordId, RecordRef, SceneUpdate, StoreId, collectio
 use cranpose_ui::{GraphicsLayer, Point, Rect};
 
 use super::{
-    GeoRecord, GraphicsLayerId, Item, ItemKind, ItemPool, ItemRef, ItemSpan, LayerProps, LayerRef,
-    PropsId, ReachState, RecordFlags, RecordKind, Slab, TransformId, TreeRecord, WarmRecord,
+    GeoRecord, GraphicsLayerId, Item, ItemKind, ItemPool, ItemRef, ItemSpan, Journal,
+    JournalCursor, JournalEntry, JournalRead, LayerProps, LayerRef, PropsId, ReachState,
+    RecordEvent, RecordFlags, RecordKind, Slab, TransformId, TreeRecord, WarmRecord,
 };
 use crate::graph::{
     DrawPrimitiveNode, DrawRunNode, LayerNode, ProjectiveTransform, TextPrimitiveNode,
@@ -33,6 +34,7 @@ pub struct SceneStore {
     pub(super) runs: Slab<DrawRunNode>,
     root: Option<RecordId>,
     update: SceneUpdate,
+    journal: Journal,
 }
 
 /// One state of one store: what it held after one of its updates.
@@ -53,6 +55,11 @@ pub struct RecordSeed {
     /// The record that holds it, `None` for the root.
     pub parent: Option<RecordId>,
 }
+
+// How many journal entries a record row and a store keep past the slowest
+// reader: a reader further behind rebuilds what it follows from the store.
+const JOURNAL_ROWS_KEPT: usize = 4;
+const JOURNAL_ENTRIES_KEPT: usize = 256;
 
 fn next_store_id() -> StoreId {
     static NEXT: AtomicU16 = AtomicU16::new(1);
@@ -88,6 +95,7 @@ impl SceneStore {
             runs: Slab::default(),
             root: None,
             update: SceneUpdate::default(),
+            journal: Journal::default(),
         }
     }
 
@@ -116,8 +124,44 @@ impl SceneStore {
 
     /// Starts a scene update and returns its number.
     pub fn begin_update(&mut self) -> SceneUpdate {
+        self.journal
+            .trim(JOURNAL_ROWS_KEPT * self.tree.len() + JOURNAL_ENTRIES_KEPT);
         self.update = self.update.next();
         self.update
+    }
+
+    /// Starts following the changes of the store's records: the reader's
+    /// first read reports the changes after now.
+    pub fn open_journal(&mut self) -> JournalCursor {
+        self.journal.open(self.id)
+    }
+
+    /// Stops following the changes of the store's records.
+    pub fn close_journal(&mut self, cursor: &JournalCursor) {
+        self.journal.close(cursor);
+    }
+
+    /// The changes of the store's records since the reader's last read. A
+    /// reader of another store starts following this one, and learns that
+    /// its changes are lost.
+    pub fn read_journal(&mut self, cursor: &mut JournalCursor) -> JournalRead<'_> {
+        self.journal.read(self.id, cursor)
+    }
+
+    // Logs `event` for `id` as the record is now.
+    fn log(&mut self, event: RecordEvent, id: RecordId) {
+        let index = id.index();
+        self.journal.log(JournalEntry {
+            update: self.update,
+            event,
+            kind: self.tree[index].kind,
+            record: RecordRef {
+                id,
+                generation: self.generations[index],
+            },
+            parent: self.tree[index].parent,
+            node: self.warm[index].node,
+        });
     }
 
     /// Works out what the walks read of the records the update in progress
@@ -226,6 +270,7 @@ impl SceneStore {
         self.texts.clear();
         self.runs.clear();
         self.root = None;
+        self.journal.clear(self.update);
     }
 
     /// Makes a record from `seed`, changed in the update in progress, with no
@@ -270,11 +315,13 @@ impl SceneStore {
             Some(parent) => self.note_subtree_change(Some(parent)),
             None => self.root = Some(id),
         }
+        self.log(RecordEvent::Inserted, id);
         id
     }
 
     /// Removes `id`, its draws, its properties and every record beneath it.
     pub fn remove_subtree(&mut self, id: RecordId) {
+        self.log(RecordEvent::Removed, id);
         let index = id.index();
         let span = self.tree[index].items;
         for position in 0..span.len() {
@@ -511,8 +558,13 @@ impl SceneStore {
     /// Sets what `id` draws for and the layout node it draws for.
     pub fn set_kind(&mut self, id: RecordId, kind: RecordKind, node: Option<NodeId>) {
         let index = id.index();
+        if self.tree[index].kind == kind && self.warm[index].node == node {
+            return;
+        }
+        self.log(RecordEvent::Released, id);
         self.tree[index].kind = kind;
         self.warm[index].node = node;
+        self.log(RecordEvent::Claimed, id);
     }
 
     /// Removes every item of `id`: its draws and the records beneath it.
@@ -607,6 +659,9 @@ impl SceneStore {
     pub fn note_content_change(&mut self, id: RecordId) {
         let update = self.update;
         let index = id.index();
+        if self.tree[index].content_rev != update {
+            self.log(RecordEvent::Changed, id);
+        }
         self.tree[index].content_rev = update;
         if let Some(props) = self.warm[index].props {
             self.props[props.index()].content_run.note(update);
@@ -620,6 +675,9 @@ impl SceneStore {
     pub fn note_property_change(&mut self, id: RecordId) {
         let update = self.update;
         let index = id.index();
+        if self.tree[index].content_rev != update {
+            self.log(RecordEvent::Changed, id);
+        }
         let tree = &mut self.tree[index];
         tree.content_rev = update;
         tree.subtree_rev = update;
@@ -635,6 +693,9 @@ impl SceneStore {
     /// parent's content changed, while the subtree of `id` holds.
     pub fn note_place_change(&mut self, id: RecordId) {
         let index = id.index();
+        if self.tree[index].place_rev != self.update {
+            self.log(RecordEvent::Moved, id);
+        }
         self.tree[index].place_rev = self.update;
         self.note_subtree_change(self.tree[index].parent);
     }

@@ -5,6 +5,8 @@
 pub mod byte_blend;
 /// Debug switches read from environment variables, with programmatic overrides.
 pub mod dev_overlay;
+mod draw_owners;
+pub use draw_owners::DrawOwnerChange;
 
 /// The frame background every renderer clears to (linear values; sRGB
 /// surfaces display this as rgb(75, 75, 86)). One definition so backends
@@ -264,6 +266,14 @@ pub trait RenderScene {
         nodes: &mut HashSet<cranpose_core::NodeId>,
     ) -> bool {
         nodes.clear();
+        false
+    }
+
+    /// Adds to `changes` the layout nodes the scene started or stopped drawing since the last
+    /// call, one change a node, as the scene's latest update left it. Returns whether the scene
+    /// can tell: a scene handed a store built from scratch since cannot, and the caller asks for
+    /// every node it draws instead.
+    fn read_draw_owner_changes(&mut self, _changes: &mut Vec<DrawOwnerChange>) -> bool {
         false
     }
 }
