@@ -11,7 +11,7 @@ use perf_data::*;
 use xilem::{
     Color, Vec2, WidgetView,
     core::memoize,
-    masonry::properties::types::UnitPoint,
+    masonry::properties::types::{Length, UnitPoint},
     style::{Padding, Style as _},
     view::{
         CrossAxisAlignment, FlexExt as _, ZStackExt as _, flex_col, flex_row, label, sized_box,
@@ -20,7 +20,7 @@ use xilem::{
 };
 
 use super::{
-    px, rgb, text, top_bar,
+    LINE, px, rgb, text, top_bar,
     widgets::{Hold, frame_clock, hold, ignore_height},
 };
 
@@ -115,30 +115,49 @@ fn tiles(columns: usize, rows: usize, width: f32, height: f32) -> impl WidgetVie
     .padding(f64::from(WALL_GAP))
 }
 
-/// One tile: its label over a dot and its value, on its fill.
+/// One tile: its label over a dot and its value, on its fill. Each part
+/// sits at its own offset in the tile, its lines 1.4 em tall as the other
+/// apps set them.
 fn tile_view(index: usize, width: f32, height: f32) -> impl WidgetView<Wall> + use<> {
     let (label_size, value_size) = wall_text_size(height);
-    let dot = wall_dot_size(height);
+    let dot = f64::from(wall_dot_size(height));
+    let padding = f64::from(wall_padding(height));
+    let label_line = f64::from(label_size) * LINE;
+    let value_line = f64::from(value_size) * LINE;
+    let at = |x: f64, y: f64| Hold::Turn {
+        offset: Vec2::new(x, y),
+        radians: 0.0,
+    };
     hold(
         sized_box(
-            flex_col((
-                text(wall_label(index), label_size, INK, true),
-                flex_row((
+            zstack((
+                hold(
+                    text(wall_label(index), label_size, INK, true),
+                    at(padding, padding),
+                    ignore_height,
+                )
+                .alignment(UnitPoint::TOP_LEFT),
+                hold(
                     sized_box(label(""))
-                        .width(px(dot))
-                        .height(px(dot))
-                        .corner_radius(f64::from(dot / 2.0))
+                        .width(Length::px(dot))
+                        .height(Length::px(dot))
+                        .corner_radius(dot / 2.0)
                         .background_color(rgb(wall_dot_rgb(index))),
+                    at(padding, padding + label_line + (value_line - dot) / 2.0),
+                    ignore_height,
+                )
+                .alignment(UnitPoint::TOP_LEFT),
+                hold(
                     text(wall_value(index), value_size, INK, false),
-                ))
-                .gap(px(dot * 0.5)),
+                    at(padding + dot * 1.5, padding + label_line),
+                    ignore_height,
+                )
+                .alignment(UnitPoint::TOP_LEFT),
             ))
-            .gap(px(0.0))
-            .cross_axis_alignment(CrossAxisAlignment::Start),
+            .alignment(UnitPoint::TOP_LEFT),
         )
         .width(px(width))
         .height(px(height))
-        .padding(f64::from(wall_padding(height)))
         .corner_radius(f64::from(WALL_CORNER))
         .background_color(rgb(wall_fill_rgb(index))),
         Hold::Clamp {
