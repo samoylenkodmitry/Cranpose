@@ -45,7 +45,7 @@ pub struct SceneStore {
     pub(super) redrawn: Vec<RecordRef>,
     // The records whose marks wait for a reader that follows redraws.
     pub(super) marks_stale: Vec<RecordRef>,
-    order: ChildOrder,
+    pub(super) order: ChildOrder,
     // The marks of the own draws of the record whose end of update is
     // being worked out.
     pub(super) mark_scratch: Vec<OwnMark>,
@@ -217,6 +217,7 @@ impl SceneStore {
     /// within its bounds. Readers read the store after it.
     pub fn finish_update(&mut self) {
         super::facts::refresh(self);
+        super::child_order::settle(self);
         own_marks::settle(self);
     }
 
@@ -527,12 +528,10 @@ impl SceneStore {
     /// [`Self::note_content_change`].
     pub fn set_items(&mut self, id: RecordId, items: &[Item]) {
         let index = id.index();
-        if self.journal.wants(RecordEvent::Changed, self.update)
-            && self
-                .order
-                .reorders(self.items.span(self.tree[index].items), items)
-        {
-            self.log(RecordEvent::Changed, id);
+        if self.journal.wants(RecordEvent::Changed, self.update) {
+            let record = self.record_ref(id);
+            let old = self.items.span(self.tree[index].items);
+            self.order.note(record, old);
         }
         self.tree[index].items = self.items.write(self.tree[index].items, items);
         self.stale(index);

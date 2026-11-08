@@ -1,4 +1,6 @@
-use cranpose_core::NodeId;
+use std::{cell::RefCell, rc::Rc};
+
+use cranpose_core::{MutableState, NodeId};
 use cranpose_render_common::{
     graph::{DrawRunNode, LayerNode, PrimitivePhase, RenderNode},
     scene_store::{
@@ -6,7 +8,10 @@ use cranpose_render_common::{
         SceneStore,
     },
 };
+use cranpose_ui::{BoxSpec, Modifier};
 use cranpose_ui_graphics::{Brush, Color, DrawPrimitive, Rect, Size};
+
+use crate::scene_probe::{initial_graph, update_scene};
 
 // A store holding a root layer.
 fn rooted_store() -> SceneStore {
@@ -184,4 +189,52 @@ fn a_reader_that_follows_reaches_again_learns_each_redraw_after() {
             "{label}: the page redrew the dot"
         );
     }
+}
+
+// A box of two keyed squares, painted in the order `swapped` gives.
+fn keyed_squares(swapped: Rc<RefCell<Option<MutableState<bool>>>>) -> cranpose_ui::TestComposition {
+    cranpose_ui::run_test_composition(move || {
+        let state = cranpose_core::rememberMutableStateOf(|| false);
+        *swapped.borrow_mut() = Some(state);
+        cranpose_ui::Box(
+            Modifier::empty().size(Size::new(100.0, 100.0)),
+            BoxSpec::default(),
+            move || {
+                let colours = [(1, Color::RED), (2, Color::BLUE)];
+                let order = if state.get() { [1, 0] } else { [0, 1] };
+                for at in order {
+                    let (key, colour) = colours[at];
+                    cranpose_core::key(key, || {
+                        cranpose_ui::Box(
+                            Modifier::empty()
+                                .size(Size::new(40.0, 40.0))
+                                .background(colour),
+                            BoxSpec::default(),
+                            || {},
+                        );
+                    });
+                }
+            },
+        );
+    })
+}
+
+#[test]
+fn a_box_whose_children_swap_places_reports_its_subtree_changed() {
+    let swapped = Rc::default();
+    let mut composition = keyed_squares(Rc::clone(&swapped));
+    let root = composition.root().expect("a root");
+    let viewport = Size::new(120.0, 120.0);
+    let mut scene = initial_graph(&mut composition, root, viewport);
+    let mut cursor = scene.open_journal(RecordEvents::ALL);
+
+    swapped.borrow().expect("the order").set(true);
+    update_scene(&mut composition, root, viewport, &mut scene);
+    let changed = scene.read_journal(&mut cursor, |_, read| match read {
+        JournalRead::Changes(entries) => entries
+            .iter()
+            .any(|entry| entry.event == RecordEvent::Changed && entry.node == Some(root)),
+        JournalRead::Lost => false,
+    });
+    assert!(changed, "the box draws its children in another order");
 }
