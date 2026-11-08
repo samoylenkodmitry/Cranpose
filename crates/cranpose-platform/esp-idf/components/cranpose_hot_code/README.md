@@ -38,7 +38,7 @@ in the cache.
   (125 KB of functions, 132 KB with their literals) is that much less internal heap:
   the demo has 102 KB of it free with the section and 230 KB without. With
   PSRAM, the heap takes larger blocks from PSRAM.
-- Classic ESP32: the section takes 67 KB of IRAM, which the heap otherwise
+- Classic ESP32: the section takes 68 KB of IRAM, which the heap otherwise
   only lends to 32-bit allocations.
 
 `CONFIG_CRANPOSE_HOT_CODE_IN_IRAM` (on by default, under "Cranpose" in
@@ -163,7 +163,7 @@ python3 scripts/esp32/hot_code.py 0 /dev/null \
   --profile target/esp32/profile-es3c35p-dashboard.elf target/esp32/profile-es3c35p-dashboard.log
 
 for mode in demo drawn composed workload; do just esp32-profile e32r35t $mode; done
-python3 scripts/esp32/hot_code.py 62 crates/cranpose-platform/esp-idf/components/cranpose_hot_code/esp32.ld \
+python3 scripts/esp32/hot_code.py 64 crates/cranpose-platform/esp-idf/components/cranpose_hot_code/esp32.ld \
   --board "apps/esp32-demo on the E32R35T" \
   --profile target/esp32/profile-e32r35t-demo.elf target/esp32/profile-e32r35t-demo.log \
   --profile target/esp32/profile-e32r35t-drawn.elf target/esp32/profile-e32r35t-drawn.log \
@@ -177,10 +177,11 @@ python3 scripts/esp32/hot_code.py 0 /dev/null \
   --profile target/esp32/profile-e32r35t-workload.elf target/esp32/profile-e32r35t-workload.log
 ```
 
-The budgets count the functions' code without their literals. A list
-whose literals take more room than the last list's takes heap, so a budget
-shrinks until the section is no larger than it was: 62 KB on the E32R35T
-and 124.6 KB on the ES3C35P keep the sections of the lists before.
+The budgets count the functions' code without their literals. On the
+ES3C35P a list whose literals take more room than the last list's takes
+internal heap, so its budget shrinks until the section is no larger than it
+was: 124.6 KB. The classic ESP32 lends the IRAM the section leaves only to
+32-bit allocations, which Cranpose never makes, so its budget stays 64 KB.
 
 A budget of 0 leaves every sampled function to the order file, the ones of
 the IRAM list too, which stay in IRAM. The E32R35T's busier screen joins the
