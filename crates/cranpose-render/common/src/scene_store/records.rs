@@ -4,7 +4,7 @@
 use std::num::NonZeroU32;
 
 use cranpose_core::{NodeId, RecordId, SceneUpdate};
-use cranpose_ui::{Point, Rect};
+use cranpose_ui::Rect;
 
 use super::ItemSpan;
 
@@ -43,6 +43,14 @@ pub enum ReachState {
 /// Facts about a record that its walks branch on.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct RecordFlags(u16);
+
+impl std::ops::BitOr for RecordFlags {
+    type Output = Self;
+
+    fn bitor(self, other: Self) -> Self {
+        Self(self.0 | other.0)
+    }
+}
 
 impl RecordFlags {
     /// The record cuts its content to its layer bounds.
@@ -109,7 +117,7 @@ pub(crate) struct GeoRecord {
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct WarmRecord {
-    pub(crate) node: NodeId,
+    pub(crate) node: Option<NodeId>,
     pub(crate) props: Option<PropsId>,
     pub(crate) content_offset: [f32; 2],
 }

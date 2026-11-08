@@ -102,7 +102,7 @@ fn class_of(len: u32) -> usize {
 }
 
 impl ItemPool {
-    pub(crate) fn get(&self, span: ItemSpan) -> &[Item] {
+    pub(crate) fn span(&self, span: ItemSpan) -> &[Item] {
         &self.items[span.range()]
     }
 

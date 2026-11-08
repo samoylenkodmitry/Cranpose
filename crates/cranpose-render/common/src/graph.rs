@@ -147,7 +147,7 @@ impl TextPrimitiveNode {
             .then(|| glyph_bounds(self.rect, &self.layout, paint.spread))
     }
 
-    fn draws_within(&self, bounds: Rect) -> bool {
+    pub(crate) fn draws_within(&self, bounds: Rect) -> bool {
         self.draw_bounds()
             .is_some_and(|drawn| rect_within(drawn, bounds))
     }
@@ -190,8 +190,6 @@ impl LayerProperties {
         self.0.as_deref()
     }
 
-    /// Whether these properties read as `value`, `None` for the defaults:
-    /// a node without a layer compares nothing.
     #[inline]
     pub(crate) fn reads_as(&self, value: Option<&GraphicsLayer>) -> bool {
         match (self.get(), value) {
@@ -334,7 +332,6 @@ pub struct LayerNode {
 pub struct LayerChange(u32);
 
 impl LayerChange {
-    /// A number no layer took in the last 2^32 changes.
     fn next() -> Self {
         static LAST: AtomicU32 = AtomicU32::new(0);
         Self(LAST.fetch_add(1, Ordering::Relaxed).wrapping_add(1))
@@ -468,9 +465,6 @@ impl LayerNode {
         found
     }
 
-    /// Whether this layer, drawn as a child, puts nothing outside `bounds`:
-    /// it draws within its own bounds, casts no shadow, applies no effect,
-    /// and its bounds placed in its parent lie inside.
     fn draws_within_parent(&self, bounds: Rect) -> bool {
         self.draws_within_bounds()
             && self.graphics_layer.shadow_elevation <= 0.0
@@ -575,25 +569,18 @@ impl LayerNode {
         }
     }
 
-    /// Forgets this layer's own raster cache hashes and takes new change
-    /// numbers: a property its hash covers changed.
     pub(crate) fn forget_own_raster_cache_hashes(&mut self) {
         self.cache_hashes.set(None);
         self.change = LayerChange::next();
         self.own_change = LayerChange::next();
     }
 
-    /// Records that scene update `update` changed a layer beneath this one,
-    /// which it holds in its place: the hashes and the subtree's change
-    /// number go, the layer's own number stays.
     pub(crate) fn note_descendant_change(&mut self, update: u64) {
         self.cache_hashes.set(None);
         self.change = LayerChange::next();
         self.content_changes.note(update);
     }
 
-    /// Records that scene update `update` changed what this layer draws, and
-    /// forgets its hashes.
     pub(crate) fn note_content_change(&mut self, update: u64) {
         self.forget_own_raster_cache_hashes();
         self.content_changes.note(update);
@@ -760,6 +747,15 @@ impl DrawRunNode {
     pub fn is_empty(&self) -> bool {
         self.recording.is_empty_in(&self.segments)
     }
+
+    // Whether the run puts nothing outside `bounds` of its layer.
+    pub(crate) fn draws_within(&self, bounds: Rect) -> bool {
+        !self.summary.has_shadow
+            && self
+                .recording
+                .bounds()
+                .is_none_or(|drawn| rect_within(drawn, bounds))
+    }
 }
 
 /// The scene as a tree of layers that a renderer draws.
@@ -769,8 +765,6 @@ pub struct RenderGraph {
     pub root: LayerNode,
     /// How many scene updates the graph took: the number of the latest.
     pub update: u64,
-    /// The way to the layer the last scene updates changed alone, for the
-    /// next update that changes it alone.
     pub(crate) retained_path: Option<crate::scene_builder::RetainedPath>,
     // The marks of the last walk to the graph's dirty layers.
     pub(crate) dirty_ancestry: crate::scene_builder::DirtyAncestry,
@@ -861,13 +855,7 @@ fn collect_painted_text(nodes: &[RenderNode], out: &mut Vec<String>) {
 // Whether `nodes`, a layer's children, put nothing outside `bounds` of it.
 fn nodes_draw_within(nodes: &[RenderNode], bounds: Rect) -> bool {
     nodes.iter().all(|child| match child {
-        RenderNode::DrawRun(run) => {
-            !run.summary.has_shadow
-                && run
-                    .recording
-                    .bounds()
-                    .is_none_or(|drawn| rect_within(drawn, bounds))
-        }
+        RenderNode::DrawRun(run) => run.draws_within(bounds),
         RenderNode::Primitive(entry) => match &entry.node {
             PrimitiveNode::Text(text) => text.draws_within(bounds),
             PrimitiveNode::Draw(_) => false,
@@ -877,7 +865,7 @@ fn nodes_draw_within(nodes: &[RenderNode], bounds: Rect) -> bool {
     })
 }
 
-fn inflate_rect(rect: Rect, by: f32) -> Rect {
+pub(crate) fn inflate_rect(rect: Rect, by: f32) -> Rect {
     Rect {
         x: rect.x - by,
         y: rect.y - by,
@@ -886,7 +874,7 @@ fn inflate_rect(rect: Rect, by: f32) -> Rect {
     }
 }
 
-fn rect_within(inner: Rect, outer: Rect) -> bool {
+pub(crate) fn rect_within(inner: Rect, outer: Rect) -> bool {
     inner.x >= outer.x
         && inner.y >= outer.y
         && inner.x + inner.width <= outer.x + outer.width

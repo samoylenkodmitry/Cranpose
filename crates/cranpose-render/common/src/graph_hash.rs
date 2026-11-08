@@ -1,13 +1,13 @@
 use std::hash::{Hash, Hasher};
 
 use cranpose_ui_graphics::{
-    BlendMode, ColorFilter, FxHasher, Point, Rect, RenderEffect, RenderHash,
+    BlendMode, ColorFilter, FxHasher, GraphicsLayer, Point, Rect, RenderEffect, RenderHash,
 };
 
 use crate::{
     graph::{
-        InlineNode, LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, ProjectiveTransform,
-        RenderNode,
+        DrawPrimitiveNode, DrawRunNode, InlineNode, LayerNode, PrimitiveEntry, PrimitiveNode,
+        PrimitivePhase, ProjectiveTransform, RenderNode, TextPrimitiveNode,
     },
     layer_composition::{layer_composite_params, local_content_layer_for},
     raster_cache::LayerRasterCacheHashes,
@@ -34,7 +34,7 @@ pub(crate) fn layer_motion_source_content_hash(layer: &LayerNode) -> u64 {
     finish_hash(|state| hash_layer_content(layer, state, false))
 }
 
-fn finish_hash(write: impl FnOnce(&mut FxHasher)) -> u64 {
+pub(crate) fn finish_hash(write: impl FnOnce(&mut FxHasher)) -> u64 {
     let mut hasher = FxHasher::default();
     write(&mut hasher);
     hasher.finish()
@@ -84,9 +84,7 @@ fn hash_child<H: Hasher>(
                 PrimitivePhase::BeforeChildren => 0u8.hash(state),
                 PrimitivePhase::AfterChildren => 1u8.hash(state),
             }
-            run.recording.fingerprint().hash(state);
-            run.segments.start.hash(state);
-            run.segments.end.hash(state);
+            hash_run(run, state);
         }
         RenderNode::Layer(child_layer) => {
             1u8.hash(state);
@@ -120,33 +118,33 @@ fn hash_child_layer_contribution<H: Hasher>(
     hash_projective_transform(transform, state);
     layer.translated_content_context.hash(state);
     hash_optional_rect(layer.shadow_clip(), state);
-    hash_child_shadow_state(layer, state);
-    layer.graphics_layer.clip.hash(state);
-    hash_optional_render_effect_to(layer.effect(), state);
-    hash_optional_render_effect_to(layer.backdrop(), state);
-    let (composite_alpha, blend_mode) =
-        layer_composite_params(&layer.graphics_layer).unwrap_or((1.0, BlendMode::SrcOver));
-    hash_f32_bits(composite_alpha, state);
-    blend_mode.hash(state);
+    hash_child_composite(&layer.graphics_layer, state);
     layer.target_content_hash().hash(state);
 }
 
-fn hash_child_shadow_state<H: Hasher>(layer: &LayerNode, state: &mut H) {
-    hash_f32_bits(layer.graphics_layer.shadow_elevation, state);
-    layer
-        .graphics_layer
-        .ambient_shadow_color
-        .render_hash()
-        .hash(state);
-    layer
-        .graphics_layer
-        .spot_shadow_color
-        .render_hash()
-        .hash(state);
-    hash_f32_bits(layer.graphics_layer.scale, state);
-    hash_f32_bits(layer.graphics_layer.scale_x, state);
-    hash_f32_bits(layer.graphics_layer.scale_y, state);
-    layer.graphics_layer.shape.render_hash().hash(state);
+// What a child layer's graphics layer adds to its parent's pixels: its
+// shadow, clip, effects and how it composites.
+pub(crate) fn hash_child_composite<H: Hasher>(layer: &GraphicsLayer, state: &mut H) {
+    hash_f32_bits(layer.shadow_elevation, state);
+    layer.ambient_shadow_color.render_hash().hash(state);
+    layer.spot_shadow_color.render_hash().hash(state);
+    hash_f32_bits(layer.scale, state);
+    hash_f32_bits(layer.scale_x, state);
+    hash_f32_bits(layer.scale_y, state);
+    layer.shape.render_hash().hash(state);
+    layer.clip.hash(state);
+    hash_optional_render_effect_to(layer.render_effect.as_ref(), state);
+    hash_optional_render_effect_to(layer.backdrop_effect.as_ref(), state);
+    let (composite_alpha, blend_mode) =
+        layer_composite_params(layer).unwrap_or((1.0, BlendMode::SrcOver));
+    hash_f32_bits(composite_alpha, state);
+    blend_mode.hash(state);
+}
+
+pub(crate) fn hash_run<H: Hasher>(run: &DrawRunNode, state: &mut H) {
+    run.recording.fingerprint().hash(state);
+    run.segments.start.hash(state);
+    run.segments.end.hash(state);
 }
 
 fn hash_primitive_entry<H: Hasher>(primitive: &PrimitiveEntry, state: &mut H) {
@@ -157,23 +155,31 @@ fn hash_primitive_entry<H: Hasher>(primitive: &PrimitiveEntry, state: &mut H) {
     match &primitive.node {
         PrimitiveNode::Draw(draw) => {
             0u8.hash(state);
-            hash_optional_rect(draw.clip, state);
-            draw.primitive.render_hash().hash(state);
+            hash_draw(draw, state);
         }
         PrimitiveNode::Text(text) => {
             1u8.hash(state);
-            text.rect.render_hash().hash(state);
-            text.text.render_hash().hash(state);
-            text.text_style.render_hash().hash(state);
-            hash_f32_bits(text.font_size, state);
-            text.overflow.hash(state);
-            text.layout.id().hash(state);
-            hash_optional_rect(text.clip, state);
+            hash_text(text, state);
         }
     }
 }
 
-fn hash_projective_transform<H: Hasher>(transform: ProjectiveTransform, state: &mut H) {
+pub(crate) fn hash_draw<H: Hasher>(draw: &DrawPrimitiveNode, state: &mut H) {
+    hash_optional_rect(draw.clip, state);
+    draw.primitive.render_hash().hash(state);
+}
+
+pub(crate) fn hash_text<H: Hasher>(text: &TextPrimitiveNode, state: &mut H) {
+    text.rect.render_hash().hash(state);
+    text.text.render_hash().hash(state);
+    text.text_style.render_hash().hash(state);
+    hash_f32_bits(text.font_size, state);
+    text.overflow.hash(state);
+    text.layout.id().hash(state);
+    hash_optional_rect(text.clip, state);
+}
+
+pub(crate) fn hash_projective_transform<H: Hasher>(transform: ProjectiveTransform, state: &mut H) {
     for row in transform.matrix() {
         for value in row {
             hash_f32_bits(value, state);
@@ -181,7 +187,7 @@ fn hash_projective_transform<H: Hasher>(transform: ProjectiveTransform, state: &
     }
 }
 
-fn hash_optional_render_effect(effect: Option<&RenderEffect>) -> u64 {
+pub(crate) fn hash_optional_render_effect(effect: Option<&RenderEffect>) -> u64 {
     finish_hash(|state| hash_optional_render_effect_to(effect, state))
 }
 
@@ -195,7 +201,7 @@ fn hash_optional_render_effect_to<H: Hasher>(effect: Option<&RenderEffect>, stat
     }
 }
 
-fn hash_optional_color_filter<H: Hasher>(filter: Option<&ColorFilter>, state: &mut H) {
+pub(crate) fn hash_optional_color_filter<H: Hasher>(filter: Option<&ColorFilter>, state: &mut H) {
     match filter {
         Some(filter) => {
             1u8.hash(state);
@@ -205,7 +211,7 @@ fn hash_optional_color_filter<H: Hasher>(filter: Option<&ColorFilter>, state: &m
     }
 }
 
-fn hash_optional_rect<H: Hasher>(rect: Option<Rect>, state: &mut H) {
+pub(crate) fn hash_optional_rect<H: Hasher>(rect: Option<Rect>, state: &mut H) {
     match rect {
         Some(rect) => {
             1u8.hash(state);
@@ -215,11 +221,11 @@ fn hash_optional_rect<H: Hasher>(rect: Option<Rect>, state: &mut H) {
     }
 }
 
-fn hash_point<H: Hasher>(point: Point, state: &mut H) {
+pub(crate) fn hash_point<H: Hasher>(point: Point, state: &mut H) {
     hash_f32_bits(point.x, state);
     hash_f32_bits(point.y, state);
 }
 
-fn hash_f32_bits<H: Hasher>(value: f32, state: &mut H) {
+pub(crate) fn hash_f32_bits<H: Hasher>(value: f32, state: &mut H) {
     value.to_bits().hash(state);
 }

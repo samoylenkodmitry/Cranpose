@@ -8,20 +8,20 @@ use cranpose_core::{NodeId, RecordId, RecordRef, SceneUpdate, StoreId};
 use cranpose_ui::{Point, Rect};
 
 use super::{
-    GeoRecord, Item, ItemKind, ItemPool, ItemSpan, LayerProps, PropsId, ReachState, RecordFlags,
-    RecordKind, Slab, TransformId, TreeRecord, WarmRecord,
+    GeoRecord, Item, ItemKind, ItemPool, ItemSpan, LayerProps, LayerRef, PropsId, ReachState,
+    RecordFlags, RecordKind, Slab, TransformId, TreeRecord, WarmRecord,
 };
 use crate::graph::{DrawPrimitiveNode, DrawRunNode, ProjectiveTransform, TextPrimitiveNode};
 
 /// The scene a renderer draws and the hit targets come from.
 pub struct SceneStore {
     id: StoreId,
-    tree: Vec<TreeRecord>,
-    geo: Vec<GeoRecord>,
-    warm: Vec<WarmRecord>,
+    pub(super) tree: Vec<TreeRecord>,
+    pub(super) geo: Vec<GeoRecord>,
+    pub(super) warm: Vec<WarmRecord>,
     generations: Vec<u32>,
     free_rows: Vec<u32>,
-    items: ItemPool,
+    pub(super) items: ItemPool,
     props: Slab<LayerProps>,
     transforms: Slab<ProjectiveTransform>,
     draws: Slab<DrawPrimitiveNode>,
@@ -36,8 +36,9 @@ pub struct SceneStore {
 pub struct RecordSeed {
     /// What the record draws for.
     pub kind: RecordKind,
-    /// The layout node the record draws for.
-    pub node: NodeId,
+    /// The layout node the record draws for, `None` for an overlay that
+    /// draws for none.
+    pub node: Option<NodeId>,
     /// The record that holds it, `None` for the root.
     pub parent: Option<RecordId>,
 }
@@ -99,6 +100,27 @@ impl SceneStore {
         self.update
     }
 
+    /// Works out what the walks read of the records the update in progress
+    /// changed: whether a subtree handles pointers, holds a space or draws
+    /// within its bounds. Readers read the store after it.
+    pub fn finish_update(&mut self) {
+        if let Some(root) = self.root
+            && self.tree[root.index()].subtree_rev == self.update
+        {
+            super::facts::refresh(self, root);
+        }
+    }
+
+    /// The record `id` as its readers see it.
+    pub fn layer(&self, id: RecordId) -> LayerRef<'_> {
+        LayerRef::new(self, id)
+    }
+
+    /// The root record as its readers see it.
+    pub fn root_layer(&self) -> Option<LayerRef<'_>> {
+        self.root.map(|root| self.layer(root))
+    }
+
     /// How many records the store holds.
     pub fn record_count(&self) -> usize {
         self.tree.len() - self.free_rows.len()
@@ -121,7 +143,9 @@ impl SceneStore {
     }
 
     /// Makes a record from `seed`, changed in the update in progress, with no
-    /// items, at the origin of its parent and of zero size.
+    /// items, at the origin of its parent and of zero size. Its ancestors
+    /// take the update as their subtree's; the caller adds it to its
+    /// parent's items.
     pub fn insert(&mut self, seed: RecordSeed) -> RecordId {
         let update = self.update;
         let tree = TreeRecord {
@@ -156,8 +180,9 @@ impl SceneStore {
                 RecordId::from_index(self.tree.len() - 1).expect("fewer than 2^32 records")
             }
         };
-        if seed.parent.is_none() {
-            self.root = Some(id);
+        match seed.parent {
+            Some(parent) => self.note_subtree_change(Some(parent)),
+            None => self.root = Some(id),
         }
         id
     }
@@ -167,7 +192,7 @@ impl SceneStore {
         let index = id.index();
         let span = self.tree[index].items;
         for position in 0..span.len() {
-            let item = self.items.get(span)[position];
+            let item = self.items.span(span)[position];
             self.remove_item(item);
         }
         self.items.free_span(span);
@@ -185,8 +210,8 @@ impl SceneStore {
         }
     }
 
-    // Removes what `item` holds: a child record's subtree or a draw.
-    fn remove_item(&mut self, item: Item) {
+    /// Removes what `item` holds: a child record's subtree or a draw.
+    pub fn remove_item(&mut self, item: Item) {
         match item.kind() {
             ItemKind::Child => {
                 if let Some(child) = item.as_child() {
@@ -221,7 +246,7 @@ impl SceneStore {
 
     /// The items of `id` in draw order.
     pub fn items(&self, id: RecordId) -> &[Item] {
-        self.items.get(self.tree[id.index()].items)
+        self.items.span(self.tree[id.index()].items)
     }
 
     /// Replaces the items of `id` with `items`. The draws and children no
@@ -244,13 +269,6 @@ impl SceneStore {
     /// Adds a draw run for an item.
     pub fn add_run(&mut self, run: DrawRunNode) -> Item {
         Item::new(ItemKind::Run, self.runs.insert(run))
-    }
-
-    /// Removes the draw `item` holds; a child item stays.
-    pub fn remove_draw(&mut self, item: Item) {
-        if item.kind() != ItemKind::Child {
-            self.remove_item(item);
-        }
     }
 
     /// The draw primitive of a draw item.
@@ -279,7 +297,7 @@ impl SceneStore {
     }
 
     /// The layout node `id` draws for.
-    pub fn node(&self, id: RecordId) -> NodeId {
+    pub fn node(&self, id: RecordId) -> Option<NodeId> {
         self.warm[id.index()].node
     }
 
@@ -324,41 +342,97 @@ impl SceneStore {
         self.warm[id.index()].content_offset = [offset.x, offset.y];
     }
 
-    /// The transform from `id` to its parent's content.
-    pub fn transform_to_parent(&self, id: RecordId) -> ProjectiveTransform {
+    /// Where layout placed `id` in its parent's content, before the
+    /// parent's content offset.
+    pub fn origin_in_parent(&self, id: RecordId) -> Point {
+        let [x, y] = self.geo[id.index()].placement;
+        Point::new(x, y)
+    }
+
+    /// The top left of `id` in its parent's layer: its placement and the
+    /// parent's content offset.
+    pub fn origin(&self, id: RecordId) -> Point {
         let index = id.index();
-        match self.tree[index].transform {
-            Some(transform) => self.transforms[transform.index()],
-            None => {
-                let [x, y] = self.geo[index].placement;
-                ProjectiveTransform::translation(x, y)
+        let [x, y] = self.geo[index].placement;
+        let offset = self.parent_content_offset(index);
+        match self.tree[index].kind {
+            RecordKind::Leaf => Point::new(x + offset.x, y + offset.y),
+            RecordKind::Layer | RecordKind::Wrapper | RecordKind::DrawGroup => {
+                Point::new(x + 0.0 + offset.x, y + 0.0 + offset.y)
             }
         }
     }
 
-    /// Sets the transform from `id` to its parent's content: a translation
-    /// stays in the record, anything more takes an entry of its own.
-    pub fn set_transform_to_parent(&mut self, id: RecordId, transform: ProjectiveTransform) {
-        let index = id.index();
-        match translation_of(transform) {
-            Some(translation) => {
-                if let Some(old) = self.tree[index].transform.take() {
-                    self.transforms.remove(old.index());
-                }
-                self.geo[index].placement = [translation.x, translation.y];
-            }
+    fn parent_content_offset(&self, index: usize) -> Point {
+        self.tree[index]
+            .parent
+            .map(|parent| self.content_offset(parent))
+            .unwrap_or_default()
+    }
+
+    /// The transform from `id` to its parent's content.
+    pub fn transform_to_parent(&self, id: RecordId) -> ProjectiveTransform {
+        match self.tree[id.index()].transform {
+            Some(transform) => self.transforms[transform.index()],
             None => {
-                let [[_, _, x], [_, _, y], _] = transform.matrix();
-                self.geo[index].placement = [x, y];
-                match self.tree[index].transform {
-                    Some(old) => self.transforms[old.index()] = transform,
-                    None => {
-                        let entry = TransformId::from_index(self.transforms.insert(transform));
-                        self.tree[index].transform = Some(entry);
-                    }
-                }
+                let origin = self.origin(id);
+                ProjectiveTransform::translation(origin.x, origin.y)
             }
         }
+    }
+
+    /// Places `id` at `origin_in_parent` in a parent whose content is offset
+    /// by `parent_content_offset`, by `transform`: a transform that only
+    /// moves the record there takes no entry of its own.
+    pub fn set_placement(
+        &mut self,
+        id: RecordId,
+        origin_in_parent: Point,
+        transform: ProjectiveTransform,
+        parent_content_offset: Point,
+    ) {
+        let index = id.index();
+        let (x, y) = (origin_in_parent.x, origin_in_parent.y);
+        let (dx, dy) = (parent_content_offset.x, parent_content_offset.y);
+        let placed = match self.tree[index].kind {
+            RecordKind::Leaf => ProjectiveTransform::translation(x + dx, y + dy),
+            RecordKind::Layer | RecordKind::Wrapper | RecordKind::DrawGroup => {
+                ProjectiveTransform::translation(x + 0.0 + dx, y + 0.0 + dy)
+            }
+        };
+        self.geo[index].placement = [x, y];
+        if same_bits(transform, placed) {
+            if let Some(old) = self.tree[index].transform.take() {
+                self.transforms.remove(old.index());
+            }
+            return;
+        }
+        match self.tree[index].transform {
+            Some(old) => self.transforms[old.index()] = transform,
+            None => {
+                let entry = TransformId::from_index(self.transforms.insert(transform));
+                self.tree[index].transform = Some(entry);
+            }
+        }
+    }
+
+    /// Sets what `id` draws for and the layout node it draws for.
+    pub fn set_kind(&mut self, id: RecordId, kind: RecordKind, node: Option<NodeId>) {
+        let index = id.index();
+        self.tree[index].kind = kind;
+        self.warm[index].node = node;
+    }
+
+    /// Removes every item of `id`: its draws and the records beneath it.
+    pub fn clear_items(&mut self, id: RecordId) {
+        let index = id.index();
+        let span = self.tree[index].items;
+        for position in 0..span.len() {
+            let item = self.items.span(span)[position];
+            self.remove_item(item);
+        }
+        self.items.free_span(span);
+        self.tree[index].items = ItemSpan::default();
     }
 
     /// The properties of `id`, when it has any.
@@ -391,38 +465,45 @@ impl SceneStore {
             .map(|props| &mut self.props[props.index()])
     }
 
-    /// Notes that update `update` changed what `id` draws: its own draws,
-    /// properties or children. Its ancestors take the update as their
+    /// Notes that the update in progress changed what `id` draws: its own
+    /// draws, properties or children. Its ancestors take the update as their
     /// subtree's.
     pub fn note_content_change(&mut self, id: RecordId) {
         let update = self.update;
-        self.tree[id.index()].content_rev = update;
-        self.tree[id.index()].reach_state = ReachState::Stale;
-        self.note_subtree_change(id);
+        let index = id.index();
+        self.tree[index].content_rev = update;
+        if let Some(props) = self.warm[index].props {
+            self.props[props.index()].content_run.note(update);
+        }
+        self.note_subtree_change(Some(id));
     }
 
-    /// Notes that the update in progress moved `id` in its parent.
+    /// Notes that the update in progress moved `id` in its parent: the
+    /// parent's content changed, while the subtree of `id` holds.
     pub fn note_place_change(&mut self, id: RecordId) {
-        let update = self.update;
-        self.tree[id.index()].place_rev = update;
-        self.note_subtree_change(id);
+        let index = id.index();
+        self.tree[index].place_rev = self.update;
+        self.note_subtree_change(self.tree[index].parent);
     }
 
-    // Raises the subtree revision of `id` and its ancestors to the update in
-    // progress, stopping at the first ancestor that holds it already.
-    fn note_subtree_change(&mut self, id: RecordId) {
+    // Raises the subtree revision of `from` and its ancestors to the update
+    // in progress, and leaves their reach and hashes to be worked out again,
+    // stopping at the first ancestor that holds the update already.
+    fn note_subtree_change(&mut self, from: Option<RecordId>) {
         let update = self.update;
-        let mut current = Some(id);
+        let mut current = from;
         while let Some(record) = current {
-            let tree = &mut self.tree[record.index()];
-            if tree.subtree_rev == update && record != id {
+            let index = record.index();
+            let tree = &mut self.tree[index];
+            if tree.subtree_rev == update {
                 break;
             }
             tree.subtree_rev = update;
-            if record != id {
-                tree.reach_state = ReachState::Stale;
-            }
+            tree.reach_state = ReachState::Stale;
             current = tree.parent;
+            if let Some(props) = self.warm[index].props {
+                self.props[props.index()].cache_hashes.set(None);
+            }
         }
     }
 
@@ -442,9 +523,11 @@ impl SceneStore {
     }
 }
 
-// The translation of a transform that only moves.
-fn translation_of(transform: ProjectiveTransform) -> Option<Point> {
-    let [[a, b, x], [c, d, y], [p, q, w]] = transform.matrix();
-    (a == 1.0 && b == 0.0 && c == 0.0 && d == 1.0 && p == 0.0 && q == 0.0 && w == 1.0)
-        .then(|| Point::new(x, y))
+// Whether two transforms hold the same numbers, bit for bit.
+fn same_bits(a: ProjectiveTransform, b: ProjectiveTransform) -> bool {
+    a.matrix()
+        .iter()
+        .flatten()
+        .zip(b.matrix().iter().flatten())
+        .all(|(a, b)| a.to_bits() == b.to_bits())
 }
