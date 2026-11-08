@@ -47,6 +47,7 @@ model with every comparison because frame capacity varies by device.
 | `deep_layer` | `deep`, with every level in a static rotated graphics layer. | 40 levels × 6 chips | Relayout under nested layers |
 | `workspace` | GPUI trading workspace: quote subscriptions, watchlist, chart, order book, trades and statistics. | 200 symbols, 16 hidden subscriptions | Text updates, clipping, scrolling and hover |
 | `gauntlet` | Every stage at once (below). Advances a frame index each frame, never wall time. | tier 5 | Composition, layout, intrinsics, text, images, paths, shadows, layers |
+| `wall` | The still wall (below): thousands of tiles that never change, a clock line whose text changes and a cursor outline that moves. Desktop apps only. | tier 16 | What a frame costs when almost nothing on the screen changes |
 
 Knobs:
 
@@ -222,6 +223,57 @@ frameworks draw differently, by design:
 - egui filters textures in linear light, so the striped avatars average
   lighter, and puts each glyph on a whole pixel.
 - Views, MAUI and the web page put lines of text a pixel apart.
+
+### Still wall
+
+One screen where almost nothing changes, heavy enough that no framework
+holds 60 fps on the Mac it runs on. Each frame changes two small things on
+a screen of thousands of nodes, so a framework that pays for the whole
+screen each frame shows that cost, and one that pays only for what changed
+does not. `desktop.py --scenario wall` measures it; `perf-data/src/wall.rs`
+holds its data, and `shared-kotlin`, `flutter-app/lib/wall.dart` and
+`slint-app/ui/wall.slint` follow it bit for bit.
+
+- A top bar, 56 points tall, titled "Still wall".
+- A clock line, 24 points tall: `frame k` in six digits, new each frame.
+- The wall under it: tiles of the tier's size, 1 point apart and from the
+  edges, as many as fit in its 1280 x 740 points. Each tile has a fill with
+  2-point corners, its index in five bold digits at 0.30 of its height, then
+  a dot at 0.22 of its height and three digits at 0.26, which its index mixes.
+  Its padding is 0.06 of its height. Its text stays on one line.
+- A cursor: a 2-point white outline over tile `(k * 37) mod tiles`.
+
+Each framework builds the wall in its own idiom for still content. Cranpose
+and Compose call the wall with arguments that never change, so no tile
+composes again; the clock is the one composable that reads the frame, and
+the cursor moves in a graphics layer. egui paints every tile each frame from
+text it laid out once. iced builds the wall `lazy` on its grid. GPUI renders
+the tiles as a view of their own, embedded `cached`. Flutter builds the tiles
+once inside a `RepaintBoundary`. Slint makes the tiles from a model once and
+binds only the clock and the cursor to the frame.
+
+| Tier | Tile (points) | Grid | Tiles |
+| --- | --- | --- | --- |
+| 1 | 64 x 40 | 19 x 18 | 342 |
+| 2 | 54 x 34 | 23 x 21 | 483 |
+| 3 | 46 x 29 | 27 x 24 | 648 |
+| 4 | 40 x 25 | 31 x 28 | 868 |
+| 5 | 34 x 21 | 36 x 33 | 1,188 |
+| 6 | 30 x 18 | 41 x 38 | 1,558 |
+| 7 | 26 x 16 | 47 x 43 | 2,021 |
+| 8 | 22 x 14 | 55 x 49 | 2,695 |
+| 9 | 19 x 12 | 63 x 56 | 3,528 |
+| 10 | 16 x 10 | 75 x 67 | 5,025 |
+| 11 | 14 x 9 | 85 x 73 | 6,205 |
+| 12 | 12 x 8 | 98 x 82 | 8,036 |
+| 13 | 10 x 7 | 116 x 92 | 10,672 |
+| 14 | 8 x 6 | 142 x 105 | 14,910 |
+| 15 | 7 x 5 | 159 x 123 | 19,557 |
+| 16 | 6 x 4 | 182 x 147 | 26,754 |
+| 17 | 5 x 4 | 213 x 147 | 31,311 |
+| 18 | 5 x 3 | 213 x 184 | 39,192 |
+| 19 | 4 x 3 | 255 x 184 | 46,920 |
+| 20 | 3 x 3 | 319 x 184 | 58,696 |
 
 ## Parity rules
 

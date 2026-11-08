@@ -15,6 +15,7 @@ import 'package:flutter/widgets.dart';
 
 import 'data.dart';
 import 'host.dart';
+import 'wall.dart';
 
 const _ink = Color(0xFF111827);
 const _body = Color(0xFF374151);
@@ -49,11 +50,6 @@ class GauntletLoad {
   final int freeze;
 
   const GauntletLoad(this.tier, this.freeze);
-
-  factory GauntletLoad.parse(List<String> args) {
-    final (tier, freeze) = launchOf(args);
-    return GauntletLoad(gauntletTier(tier), freeze);
-  }
 }
 
 Future<void> main(List<String> args) async {
@@ -61,10 +57,16 @@ Future<void> main(List<String> args) async {
   final fonts = FontLoader(_roboto)
     ..addFont(robotoFont('Roboto-Regular.ttf'))
     ..addFont(robotoFont('Roboto-Bold.ttf'));
-  final avatars = Future.wait(List.generate(avatarCount, _avatar));
-  await fonts.load();
-  final load = GauntletLoad.parse(args);
-  runApp(GauntletApp(load, posts(), await avatars));
+  final (tier, freeze, scenario) = launchOf(args);
+  if (scenario == 'wall') {
+    await fonts.load();
+    runApp(Screen('Still wall', wallBackground, Wall(wallTier(tier), freeze)));
+  } else {
+    final avatars = Future.wait(List.generate(avatarCount, _avatar));
+    await fonts.load();
+    final load = GauntletLoad(gauntletTier(tier), freeze);
+    runApp(Screen('Gauntlet', const Color(0xFFEEF0F5), Gauntlet(load, posts(), await avatars)));
+  }
   if (logsFirstFrame) {
     WidgetsBinding.instance.addPostFrameCallback((_) => perf('PERF first_frame'));
   }
@@ -81,12 +83,13 @@ Future<ui.Image> _avatar(int index) {
 TextStyle _text(double size, Color color, {bool bold = false}) => TextStyle(
     fontSize: size, color: color, fontWeight: bold ? FontWeight.bold : FontWeight.normal);
 
-class GauntletApp extends StatelessWidget {
-  final GauntletLoad load;
-  final List<Post> posts;
-  final List<ui.Image> avatars;
+/// A screen under the top bar titled [title], on [background].
+class Screen extends StatelessWidget {
+  final String title;
+  final Color background;
+  final Widget body;
 
-  const GauntletApp(this.load, this.posts, this.avatars, {super.key});
+  const Screen(this.title, this.background, this.body, {super.key});
 
   @override
   Widget build(BuildContext context) {
@@ -102,7 +105,7 @@ class GauntletApp extends StatelessWidget {
         textHeightBehavior:
             const TextHeightBehavior(applyHeightToFirstAscent: false, applyHeightToLastDescent: false),
         child: ColoredBox(
-          color: const Color(0xFFEEF0F5),
+          color: background,
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
@@ -111,9 +114,9 @@ class GauntletApp extends StatelessWidget {
                 color: const Color(0xFF1E2A4A),
                 padding: const EdgeInsets.symmetric(horizontal: 16),
                 alignment: Alignment.centerLeft,
-                child: Text('Gauntlet', style: _text(20, _white, bold: true)),
+                child: Text(title, style: _text(20, _white, bold: true)),
               ),
-              Expanded(child: Gauntlet(load, posts, avatars)),
+              Expanded(child: body),
             ],
           ),
         ),
