@@ -34,14 +34,13 @@ pub(crate) fn main() {
                 return;
             }
 
-            let find_tab = |tabs: &TabBounds, label: &str| {
-                tabs.iter()
-                    .find(|(name, _)| name == label)
-                    .map(|(_, bounds)| *bounds)
+            // The drag starts on a tab inside the window.
+            let Some((target_label, target)) = cranpose_testing::last_reachable_tab(&tabs_before, root, axis, 40.0)
+            else {
+                eprintln!("✗ Could not locate a tab inside the window");
+                std::process::exit(1);
             };
-
-            let target_label = "Counter App";
-            let target_before = find_tab(&tabs_before, target_label);
+            let target_before = Some(*target);
             let before_axis = target_before.map(|(x, y, _, _)| match axis {
                 TabAxis::Horizontal => x,
                 TabAxis::Vertical => y,
@@ -88,7 +87,7 @@ pub(crate) fn main() {
             std::thread::sleep(Duration::from_millis(60));
             let tabs_after_drag = collect_tab_bounds(&robot, &tab_labels);
             let after_drag_axis =
-                find_tab(&tabs_after_drag, target_label).map(|(x, y, _, _)| match axis {
+                cranpose_testing::tab_bounds(&tabs_after_drag, target_label).map(|(x, y, _, _)| match axis {
                     TabAxis::Horizontal => x,
                     TabAxis::Vertical => y,
                 });
@@ -96,7 +95,7 @@ pub(crate) fn main() {
             std::thread::sleep(Duration::from_millis(200));
             let tabs_after_fling = collect_tab_bounds(&robot, &tab_labels);
             let after_fling_axis =
-                find_tab(&tabs_after_fling, target_label).map(|(x, y, _, _)| match axis {
+                cranpose_testing::tab_bounds(&tabs_after_fling, target_label).map(|(x, y, _, _)| match axis {
                     TabAxis::Horizontal => x,
                     TabAxis::Vertical => y,
                 });
@@ -139,4 +138,3 @@ pub(crate) fn main() {
             app::combined_app_with_initial_tab(Some(app::DemoTab::Counter));
         });
 }
-type TabBounds = Vec<(String, (f32, f32, f32, f32))>;

@@ -141,7 +141,9 @@ fn tile_view(index: usize, width: f32, height: f32) -> impl WidgetView<Wall> + u
         .padding(f64::from(wall_padding(height)))
         .corner_radius(f64::from(WALL_CORNER))
         .background_color(rgb(wall_fill_rgb(index))),
-        Hold::Clip,
+        Hold::Clamp {
+            max: f64::from(height),
+        },
         ignore_height,
     )
 }

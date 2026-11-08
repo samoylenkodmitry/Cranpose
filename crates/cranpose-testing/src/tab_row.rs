@@ -44,3 +44,24 @@ pub fn detect_tab_axis(bounds: &[LabeledRect]) -> Option<TabAxis> {
         Some(TabAxis::Vertical)
     }
 }
+
+/// The bounds of the tab labelled `label` among `tabs`.
+pub fn tab_bounds(tabs: &[LabeledRect], label: &str) -> Option<RectBounds> {
+    tabs.iter()
+        .find(|(name, _)| name == label)
+        .map(|(_, bounds)| *bounds)
+}
+
+/// The last of `tabs` whose centre lies `margin` or more inside `root`'s
+/// far edge along `axis`: a tab that a press can reach to start a drag.
+pub fn last_reachable_tab(
+    tabs: &[LabeledRect],
+    root: RectBounds,
+    axis: TabAxis,
+    margin: f32,
+) -> Option<&LabeledRect> {
+    tabs.iter().rev().find(|(_, (x, y, w, h))| match axis {
+        TabAxis::Horizontal => x + w / 2.0 <= root.2 - margin,
+        TabAxis::Vertical => y + h / 2.0 <= root.3 - margin,
+    })
+}

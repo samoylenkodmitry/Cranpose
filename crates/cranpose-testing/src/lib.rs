@@ -34,7 +34,7 @@ pub use robot_assertions::{Bounds, SemanticElementLike};
 #[cfg(feature = "desktop-robot")]
 pub use robot_helpers::*;
 #[cfg(feature = "desktop-robot")]
-pub use tab_row::{TabAxis, bounds_span, detect_tab_axis};
+pub use tab_row::{TabAxis, bounds_span, detect_tab_axis, last_reachable_tab, tab_bounds};
 pub use testing::*;
 
 /// The testing API in one import.
