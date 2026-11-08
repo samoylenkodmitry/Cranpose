@@ -25,9 +25,7 @@ mod text;
 
 use image::{blit_image_between_pixels, draw_image, image_rect};
 use reach::text_bounds;
-use row_runs::{
-    INK_REACH, NO_RUN, RoundedFill, RowRuns, arc_row_runs, line_row_runs, stroke_row_runs,
-};
+use row_runs::{INK_REACH, LineRows, NO_RUN, RoundedFill, RowRuns, arc_row_runs, stroke_row_runs};
 use shape_rows::{Coverage, ShapeRows};
 pub(crate) use text::rasterize_text;
 use text::{draw_text, is_static_text, rasterize_text_part, text_raster_rect};
@@ -368,18 +366,31 @@ fn draw_shadow<P: Pixel>(
         ],
         BlendMode::SrcOver,
     );
-    for py in bounds.min_y..bounds.max_y {
-        let center_y = py as f32 + 0.5;
-        let row = target.row(py, bounds.min_x, bounds.max_x);
-        for (px, dst) in (bounds.min_x..).zip(row) {
-            let coverage = shadow.coverage(px as f32 + 0.5, center_y);
-            if coverage <= 0.0 {
-                continue;
+    // Rows alike in what their y gives the coverage take the same coverage
+    // at every x: a band of columns computes it for the first of them only.
+    let mut covered = [0.0_f32; SHADOW_COLUMNS];
+    for start in (bounds.min_x..bounds.max_x).step_by(SHADOW_COLUMNS) {
+        let end = bounds.max_x.min(start + SHADOW_COLUMNS as i32);
+        let mut computed = None;
+        for py in bounds.min_y..bounds.max_y {
+            let center_y = py as f32 + 0.5;
+            let key = shadow.row_key(center_y);
+            if computed != Some(key) {
+                shadow.row_coverage(start..end, center_y, &mut covered);
+                computed = Some(key);
             }
-            dst.blend_paint(paint, coverage, diagnostics);
+            for (dst, &coverage) in target.row(py, start, end).iter_mut().zip(&covered) {
+                if coverage <= 0.0 {
+                    continue;
+                }
+                dst.blend_paint(paint, coverage, diagnostics);
+            }
         }
     }
 }
+
+// The columns of a shadow whose coverage one band of rows shares.
+const SHADOW_COLUMNS: usize = 128;
 
 // Paints the runs of row `py` with one color: a fill where it covers them
 // opaquely, else a blend over each pixel.
@@ -499,8 +510,9 @@ fn draw_shape<P: Pixel>(
     match &coverage {
         ShapeCoverage::Line(line) => {
             let frame = line.frame();
+            let rows = LineRows::new(line, &frame);
             paint.paint(
-                |y, min_x, max_x| line_row_runs(line, &frame, y, min_x, max_x),
+                |y, min_x, max_x| rows.runs(y, min_x, max_x),
                 |point| Coverage::of(line.coverage_in(&frame, point)),
             );
         }

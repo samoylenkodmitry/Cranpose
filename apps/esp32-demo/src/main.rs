@@ -10,11 +10,18 @@ mod changing_paths;
 #[cfg(feature = "dashboard")]
 #[path = "../../../crates/cranpose/tests/support/dashboard.rs"]
 mod dashboard;
-#[cfg(all(feature = "screens-in-turn", not(feature = "e32r35t")))]
+#[cfg(any(
+    feature = "deep-moves",
+    all(feature = "screens-in-turn", not(feature = "e32r35t"))
+))]
 #[path = "../../../crates/cranpose/tests/support/deep_moves.rs"]
 mod deep_moves;
 #[cfg(any(
-    not(any(feature = "dashboard", feature = "changing-paths")),
+    not(any(
+        feature = "dashboard",
+        feature = "changing-paths",
+        feature = "deep-moves"
+    )),
     feature = "screens-in-turn"
 ))]
 mod demo;
@@ -44,7 +51,11 @@ use cranpose_platform_esp_idf::{DisplayConfig, RunError, run};
 static FONTS: &[&[u8]] = &[include_bytes!("../assets/NotoSans-Latin.ttf")];
 
 #[cfg(all(
-    any(feature = "dashboard", feature = "changing-paths"),
+    any(
+        feature = "dashboard",
+        feature = "changing-paths",
+        feature = "deep-moves"
+    ),
     any(
         feature = "text-drawn",
         feature = "text-composed",
@@ -52,15 +63,18 @@ static FONTS: &[&[u8]] = &[include_bytes!("../assets/NotoSans-Latin.ttf")];
     )
 ))]
 compile_error!(
-    "dashboard and changing-paths replace the demo's screen, which the other benchmark features change"
+    "dashboard, changing-paths and deep-moves replace the demo's screen, which the other benchmark features change"
 );
 
 #[cfg(all(
-    feature = "dashboard",
-    feature = "changing-paths",
+    any(
+        all(feature = "dashboard", feature = "changing-paths"),
+        all(feature = "dashboard", feature = "deep-moves"),
+        all(feature = "changing-paths", feature = "deep-moves")
+    ),
     not(feature = "screens-in-turn")
 ))]
-compile_error!("dashboard and changing-paths each replace the demo's screen: pick one");
+compile_error!("dashboard, changing-paths and deep-moves each replace the demo's screen: pick one");
 
 #[cfg(all(
     feature = "screens-in-turn",
@@ -74,9 +88,9 @@ compile_error!(
     "screens-in-turn shows every line in turn: drop text-drawn, text-composed and workload"
 );
 
-// The screen: the demo's own, with the `dashboard` or `changing-paths`
-// feature that screen of the benchmarks, or with `screens-in-turn` each of
-// them in turn.
+// The screen: the demo's own, with the `dashboard`, `changing-paths` or
+// `deep-moves` feature that screen of the benchmarks, or with
+// `screens-in-turn` each of them in turn.
 #[composable]
 fn Screen() {
     #[cfg(feature = "screens-in-turn")]
@@ -85,9 +99,12 @@ fn Screen() {
     dashboard::Dashboard(board::TITLE);
     #[cfg(all(feature = "changing-paths", not(feature = "screens-in-turn")))]
     changing_paths::ChangingPaths(board::TITLE);
+    #[cfg(all(feature = "deep-moves", not(feature = "screens-in-turn")))]
+    deep_moves::DeepMoves(board::TITLE);
     #[cfg(not(any(
         feature = "dashboard",
         feature = "changing-paths",
+        feature = "deep-moves",
         feature = "screens-in-turn"
     )))]
     demo::Screen(demo::LINE);

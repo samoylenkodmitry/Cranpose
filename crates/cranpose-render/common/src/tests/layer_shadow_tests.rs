@@ -264,3 +264,96 @@ fn a_light_seen_from_a_moved_and_scaled_space_keeps_its_place() {
     assert_close(local.radius, 400.0, "radius");
     assert_close(local.pixels_per_unit, 2.0, "pixels per unit");
 }
+
+fn round_shadow(
+    bounds: [f32; 4],
+    radii: [f32; 4],
+    umbra: f32,
+    hole: Option<ShadowHole>,
+) -> ShadowRRect {
+    ShadowRRect {
+        bounds: Rect {
+            x: bounds[0],
+            y: bounds[1],
+            width: bounds[2],
+            height: bounds[3],
+        },
+        radii,
+        umbra_inset: umbra,
+        distance_correction: umbra / 4.0,
+        hole,
+    }
+}
+
+#[test]
+fn rows_and_columns_alike_take_one_coverage() {
+    let cases = [
+        // A card's round rect with the caster's hole.
+        round_shadow(
+            [0.3, 0.7, 120.0, 40.0],
+            [8.0; 4],
+            6.0,
+            Some(ShadowHole {
+                inset: 6.0,
+                radius: 0.0,
+            }),
+        ),
+        // A circle, whose hole rounds.
+        round_shadow(
+            [1.0, 2.0, 40.0, 40.0],
+            [20.0; 4],
+            20.0,
+            Some(ShadowHole {
+                inset: 4.0,
+                radius: 16.0,
+            }),
+        ),
+        // Corners of four radii, no hole.
+        round_shadow([0.0, 0.0, 90.0, 33.0], [2.0, 12.0, 4.0, 20.0], 6.0, None),
+        // An umbra shallower than its corners.
+        round_shadow(
+            [0.5, 0.25, 64.0, 48.0],
+            [10.0; 4],
+            3.0,
+            Some(ShadowHole {
+                inset: 10.0,
+                radius: 0.0,
+            }),
+        ),
+    ];
+    // A circle has no straight band, so its rows share no key; the others
+    // share most of theirs.
+    let mut shared = 0;
+    for (case, shadow) in cases.iter().enumerate() {
+        let rows: Vec<f32> = (-3..60).map(|row| row as f32 + 0.5).collect();
+        for &y in &rows {
+            let mut row = vec![0.0_f32; 143];
+            shadow.row_coverage(-3..140, y, &mut row);
+            for (column, coverage) in (-3..140).zip(&row) {
+                assert_eq!(
+                    coverage.to_bits(),
+                    shadow.coverage(column as f32 + 0.5, y).to_bits(),
+                    "case {case}: the row at {y} differs at column {column}"
+                );
+            }
+        }
+        let coverage_of = |y: f32| -> Vec<u32> {
+            (-3..140)
+                .map(|column| shadow.coverage(column as f32 + 0.5, y).to_bits())
+                .collect()
+        };
+        for (index, &first) in rows.iter().enumerate() {
+            for &second in &rows[index + 1..] {
+                if shadow.row_key(first) == shadow.row_key(second) {
+                    shared += 1;
+                    assert_eq!(
+                        coverage_of(first),
+                        coverage_of(second),
+                        "case {case}: rows {first} and {second} share a key but not their coverage"
+                    );
+                }
+            }
+        }
+    }
+    assert!(shared > 400, "only {shared} pairs of rows share a key");
+}

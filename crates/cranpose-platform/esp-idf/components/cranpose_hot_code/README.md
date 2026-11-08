@@ -38,7 +38,7 @@ in the cache.
   (125 KB of functions, 132 KB with their literals) is that much less internal heap:
   the demo has 102 KB of it free with the section and 230 KB without. With
   PSRAM, the heap takes larger blocks from PSRAM.
-- Classic ESP32: the section takes 67 KB of IRAM, which the heap otherwise
+- Classic ESP32: the section takes 68 KB of IRAM, which the heap otherwise
   only lends to 32-bit allocations.
 
 `CONFIG_CRANPOSE_HOT_CODE_IN_IRAM` (on by default, under "Cranpose" in
@@ -57,11 +57,10 @@ which crate hashes and back-references are wildcards
 build and any app. A pattern that matches nothing costs nothing; a function
 renamed since the profile runs from the cache again.
 
-The renderer draws 16-bit pixels in the byte order of the panel, with one
-function for each order: QEMU's panel takes the low byte first and the
-boards' panels the high byte. Each build links both, and a function that
-QEMU ran for the low byte first goes into the list as its twin for the high
-byte first, the one the boards run.
+The renderer draws 16-bit pixels high byte first for every panel, as the
+boards' panels read them. QEMU's panel reads the low byte first, so its draw
+swaps the bytes of each update. QEMU and the boards run the same drawing
+functions, and an image links one copy of them.
 
 The profiles come from the demo: as it is, whose frames draw its bar again;
 with a line of text that changes every frame, drawn by a draw scope
@@ -146,7 +145,7 @@ per-frame work:
 ```sh
 scripts/esp32/cache/setup.sh    # once: QEMU with plugins, and the cache plugin
 just esp32-sim-profiles   # the five screens, their QEMUs at once
-python3 scripts/esp32/hot_code.py 125 crates/cranpose-platform/esp-idf/components/cranpose_hot_code/esp32s3.ld \
+python3 scripts/esp32/hot_code.py 124.6 crates/cranpose-platform/esp-idf/components/cranpose_hot_code/esp32s3.ld \
   --board "apps/esp32-demo in QEMU's ESP32-S3, by cache misses" \
   --profile target/esp32/sim-demo.elf target/esp32/sim-demo.log \
   --profile target/esp32/sim-drawn.elf target/esp32/sim-drawn.log \
@@ -177,6 +176,12 @@ python3 scripts/esp32/hot_code.py 0 /dev/null \
   --profile target/esp32/profile-e32r35t-composed.elf target/esp32/profile-e32r35t-composed.log \
   --profile target/esp32/profile-e32r35t-workload.elf target/esp32/profile-e32r35t-workload.log
 ```
+
+The budgets count the functions' code without their literals. On the
+ES3C35P a list whose literals take more room than the last list's takes
+internal heap, so its budget shrinks until the section is no larger than it
+was: 124.6 KB. The classic ESP32 lends the IRAM the section leaves only to
+32-bit allocations, which Cranpose never makes, so its budget stays 64 KB.
 
 A budget of 0 leaves every sampled function to the order file, the ones of
 the IRAM list too, which stay in IRAM. The E32R35T's busier screen joins the

@@ -33,6 +33,9 @@ dashboard = []
 # a card that fades while bars inside them change every frame, so each frame
 # changes nodes that move or fade and hold a change.
 changing-paths = []
+# For profiles: in place of the demo's screen, the deep rows with shadows,
+# text and paths that scroll by themselves while each row holds still.
+deep-moves = []
 # For board A/Bs: the demo's four screens, then the changing paths, the deep
 # moves and the still wall (not on the E32R35T, which runs out of memory on
 # the paths) one after another, six seconds each, with the dashboard last when `dashboard` is on too, and frame

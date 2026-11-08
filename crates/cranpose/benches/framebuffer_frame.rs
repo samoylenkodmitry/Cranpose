@@ -29,7 +29,9 @@
 //! and paths that scrolls by itself while each row holds still: each frame
 //! moves nodes that do not change. `SCREEN=wall` shows, 320 by 480, a wall
 //! of 96 small tiles that hold still under a clock whose text changes every
-//! frame.
+//! frame. `SCREEN=scroll` shows, 320 by 480, a short viewport over a long
+//! column of sixty rows that scrolls by itself: each frame moves every row
+//! while the viewport shows a few.
 //!
 //! `PIXELS=rgb565` draws 16-bit pixels, high byte first, as the ESP32
 //! boards' displays take them, in place of RGBA bytes.
@@ -37,6 +39,10 @@
 //! `MEMORY=tight` reports a heap almost full before the first frame, as a
 //! board with little heap left does: lazy lists keep only the items they
 //! show, and the renderer keeps less between frames.
+//!
+//! `FRAME_MS=300` steps the frame clock 300 ms a frame in place of a 60 Hz
+//! frame, as a board that draws a screen at about three frames a second
+//! does: a screen that moves by time moves farther each frame.
 //!
 //! `PICTURE=file.ppm` with `REDRAW=all` saves the last frame's RGBA picture,
 //! to look at what a screen shows: without it each area lands at the start of
@@ -67,6 +73,8 @@ mod dashboard;
 mod deep_moves;
 #[path = "../tests/support/frame_time.rs"]
 mod frame_time;
+#[path = "../tests/support/long_scroll.rs"]
+mod long_scroll;
 #[path = "../tests/support/reading.rs"]
 mod reading;
 #[path = "../tests/support/still_wall.rs"]
@@ -117,8 +125,8 @@ fn bar_reads_in_draw() -> bool {
     std::env::var("BAR").is_ok_and(|bar| bar == "draw")
 }
 
-// What the frames show: `SCREEN=dashboard`, `paths`, `moves`, `wall` or
-// the bar.
+// What the frames show: `SCREEN=dashboard`, `paths`, `moves`, `wall`,
+// `scroll` or the bar.
 #[derive(Clone, Copy)]
 enum Shown {
     Bar,
@@ -126,6 +134,7 @@ enum Shown {
     Paths,
     Moves,
     Wall,
+    Scroll,
 }
 
 impl Shown {
@@ -135,6 +144,7 @@ impl Shown {
             Ok("paths") => Self::Paths,
             Ok("moves") => Self::Moves,
             Ok("wall") => Self::Wall,
+            Ok("scroll") => Self::Scroll,
             _ => Self::Bar,
         }
     }
@@ -142,7 +152,7 @@ impl Shown {
     fn height(self) -> u32 {
         match self {
             Self::Bar => HEIGHT,
-            Self::Dashboard | Self::Paths | Self::Moves | Self::Wall => TALL_HEIGHT,
+            Self::Dashboard | Self::Paths | Self::Moves | Self::Wall | Self::Scroll => TALL_HEIGHT,
         }
     }
 }
@@ -338,6 +348,7 @@ fn Screen() {
         Shown::Paths => changing_paths::ChangingPaths("Cranpose"),
         Shown::Moves => deep_moves::DeepMoves("Cranpose"),
         Shown::Wall => still_wall::StillWall("Cranpose"),
+        Shown::Scroll => long_scroll::LongScroll("Cranpose"),
     }
 }
 
@@ -383,8 +394,12 @@ fn run_frames(
     from: u64,
     to: u64,
 ) {
+    let step = std::env::var("FRAME_MS")
+        .ok()
+        .and_then(|ms| ms.parse::<u64>().ok())
+        .map_or(FRAME_NANOS, |ms| ms * 1_000_000);
     for frame in from..to {
-        if framebuffer.tick(frame * FRAME_NANOS) {
+        if framebuffer.tick(frame * step) {
             drawing.draw(framebuffer, areas, pixels);
         }
         framebuffer.run_pending_tasks();
