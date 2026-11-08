@@ -69,7 +69,7 @@ fn picture(graph: &RenderGraph) -> Vec<String> {
         nodes(&layer.children, transform, out);
     }
     let mut out = Vec::new();
-    walk_layer(&graph.root, ProjectiveTransform::identity(), &mut out);
+    walk_layer(&graph.root(), ProjectiveTransform::identity(), &mut out);
     out
 }
 
@@ -86,7 +86,7 @@ fn text_has_layer(graph: &RenderGraph, text: &str) -> bool {
             RenderNode::DrawRun(_) => None,
         })
     }
-    search(&graph.root.children, text, true).expect("the text draws")
+    search(&graph.root().children, text, true).expect("the text draws")
 }
 
 #[test]
@@ -209,7 +209,7 @@ fn a_cached_layer_misses_when_a_leaf_it_draws_changes_its_text() {
                 _ => None,
             })
         }
-        find(&graph.root)
+        find(&graph.root())
             .expect("the offscreen column")
             .target_content_hash()
     };

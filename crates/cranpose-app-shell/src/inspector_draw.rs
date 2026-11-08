@@ -141,7 +141,7 @@ impl Canvas {
     }
 
     fn finish(self) -> RenderGraph {
-        RenderGraph::new(LayerNode {
+        RenderGraph::new(&LayerNode {
             local_bounds: self.viewport,
             children: self.children,
             ..Default::default()

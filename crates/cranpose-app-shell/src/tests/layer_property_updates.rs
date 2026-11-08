@@ -91,10 +91,10 @@ fn canvas_output(
         .graph
         .as_ref()
         .expect("the initial frame builds a graph");
-    let position =
-        canvas_layer_position(&graph.root, node_id).expect("Canvas remains in the retained graph");
+    let position = canvas_layer_position(&graph.root(), node_id)
+        .expect("Canvas remains in the retained graph");
     let mut colors = Vec::new();
-    canvas_rect_colors(&graph.root.children, node_id, &mut colors);
+    canvas_rect_colors(&graph.root().children, node_id, &mut colors);
     (position, colors)
 }
 

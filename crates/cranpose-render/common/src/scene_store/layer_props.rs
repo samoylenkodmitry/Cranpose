@@ -7,8 +7,9 @@ use std::cell::Cell;
 use cranpose_core::SceneUpdate;
 use cranpose_ui::{Point, Rect};
 
+use super::GraphicsLayerId;
 use crate::{
-    graph::{CachePolicy, HitTestNode, IsolationReasons, LayerProperties},
+    graph::{CachePolicy, HitTestNode, IsolationReasons},
     raster_cache::LayerRasterCacheHashes,
 };
 
@@ -19,8 +20,7 @@ pub struct LayerProps {
     /// The bounds of the layer, where its clip cuts, its transforms pivot and
     /// an offscreen pass draws it, when they differ from the node rect.
     pub layer_bounds: Option<Rect>,
-    /// The graphics layer properties; they read as defaults when none were set.
-    pub graphics_layer: LayerProperties,
+    pub(crate) graphics_layer: Option<GraphicsLayerId>,
     /// Translation of the content when the record moves its content as one
     /// translated block.
     pub translated_content_offset: Point,
@@ -39,7 +39,7 @@ impl LayerProps {
     // entry. The content run goes with the entry.
     pub(crate) fn is_default(&self) -> bool {
         self.layer_bounds.is_none()
-            && self.graphics_layer.get().is_none()
+            && self.graphics_layer.is_none()
             && self.translated_content_offset == Point::default()
             && self.hit_test.is_none()
             && !self.isolation.has_any()

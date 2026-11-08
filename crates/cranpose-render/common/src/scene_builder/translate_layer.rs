@@ -22,7 +22,7 @@ use super::{
 };
 use crate::{
     NodeUpdate,
-    graph::LayerProperties,
+    graph::graphics_layers_read_alike,
     scene_store::{Item, LayerRef, RecordKind, SceneStore},
 };
 
@@ -136,17 +136,13 @@ pub(super) fn translated_container(
     // shaped to them follow its size. Any other change to its graphics layer
     // may change what its children inherit.
     let current = shaped_graphics_layer(modifier_slices, layer.local_bounds());
-    let kept_layer = match layer.props() {
-        Some(props) => props.graphics_layer.reads_as(current.as_deref()),
-        None => LayerProperties::default().reads_as(current.as_deref()),
-    };
-    if !kept_layer {
+    if !graphics_layers_read_alike(store.graphics_layer(container), current.as_deref()) {
         return Err("container graphics layer changed");
     }
     let (local_bounds, node_bounds) = layer_and_node_bounds(modifier_slices, layout_state.size());
     if local_bounds != layer.local_bounds() {
         let resized = shaped_graphics_layer(modifier_slices, local_bounds).map(Cow::into_owned);
-        store.edit_props(container, |props| props.graphics_layer.replace(resized));
+        store.set_graphics_layer(container, resized);
     }
     set_bounds(store, container, local_bounds, node_bounds);
     Ok(TranslatedContainer { node_id })
@@ -414,7 +410,6 @@ pub(super) fn write_own_content_around_children(
     store: &mut SceneStore,
     container: RecordId,
     list: &mut Vec<Item>,
-    node_id: NodeId,
     modifier_slices: &ModifierNodeSlices,
     size: Size,
 ) {
@@ -426,27 +421,23 @@ pub(super) fn write_own_content_around_children(
     let kept = list.len();
     let motion_context_animated = store.layer(container).motion_context_animated();
     // The draws take the container's paint while they are written beneath it.
-    let graphics_layer = store
-        .props_mut(container)
-        .map(|props| std::mem::take(&mut props.graphics_layer))
-        .unwrap_or_default();
+    let graphics_layer = store.take_graphics_layer(container);
     let draws = DrawTarget {
         size,
         motion_context_animated,
-        layer: graphics_layer.get(),
+        layer: graphics_layer.as_ref(),
     };
     write_node_content(
         store,
         container,
         list,
-        node_id,
         modifier_slices,
         draws,
         (kept, 0),
         |_, _| {},
     );
-    if let Some(props) = store.props_mut(container) {
-        props.graphics_layer = graphics_layer;
+    if graphics_layer.is_some() {
+        store.set_graphics_layer(container, graphics_layer);
     }
 }
 
@@ -487,7 +478,7 @@ pub(super) fn apply_translated_container_state(
     let transform = placed_transform(
         layer.local_bounds(),
         position,
-        layer.props().and_then(|props| props.graphics_layer.get()),
+        store.graphics_layer(container),
         parent_content_offset,
     );
     let translated = layer.translated_content_context();
@@ -611,7 +602,7 @@ pub(super) fn translate_layer_from_data(
     } else {
         layout_state
     };
-    let node_id = match translated_container(
+    if let Err(reason) = translated_container(
         store,
         container,
         &layout_state,
@@ -619,9 +610,8 @@ pub(super) fn translate_layer_from_data(
         ancestors,
         wrapping,
     ) {
-        Ok(plan) => plan.node_id,
-        Err(reason) => return translate_bail(reason),
-    };
+        return translate_bail(reason);
+    }
     // The container's own draws and text are recorded again around the
     // children it keeps: an unchanged draw reuses its recording, while
     // building the container anew lowered every child layer beneath it too.
@@ -680,7 +670,6 @@ pub(super) fn translate_layer_from_data(
         store,
         container,
         list,
-        node_id,
         &modifier_slices,
         layout_state.size(),
     );
@@ -694,11 +683,10 @@ fn finish_translated_container(
     store: &mut SceneStore,
     container: RecordId,
     mut list: Vec<Item>,
-    node_id: NodeId,
     modifier_slices: &Rc<ModifierNodeSlices>,
     size: Size,
 ) {
-    write_own_content_around_children(store, container, &mut list, node_id, modifier_slices, size);
+    write_own_content_around_children(store, container, &mut list, modifier_slices, size);
     store.set_items(container, &list);
     item_lists::give(list);
     let hit_test = hit_test_from_slices(modifier_slices);

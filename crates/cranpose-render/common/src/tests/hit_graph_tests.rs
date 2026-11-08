@@ -3,7 +3,10 @@ use std::rc::Rc;
 use cranpose_ui::{Modifier, ModifierNodeSlices, collect_slices_from_modifier};
 
 use super::*;
-use crate::graph::HitTestNode;
+use crate::{
+    graph::{HitTestNode, LayerNode, RenderNode},
+    scene_store::SceneStore,
+};
 
 type RecordedHit = (
     NodeId,
@@ -47,19 +50,21 @@ fn clickable() -> Modifier {
     Modifier::empty().clickable(|_point| {})
 }
 
-/// Gives the layer a pointer input besides its click handler, which makes it
-/// capture the pointer for its descendants.
 fn capture_pointer(layer: &mut LayerNode) {
     layer.hit_test.as_mut().expect("hit test").handlers =
         handlers(clickable().pointer_input((), |_scope| async {}));
 }
 
-/// The hits of `layer`'s graph, with the layer placed in the window as it is
-/// and no clip above it.
 fn hits_of(layer: &LayerNode) -> Vec<RecordedHit> {
     let mut sink = TestSink::default();
-    collect_hits_from_graph(layer, ProjectiveTransform::identity(), &mut sink, None);
+    collect_into(layer, ProjectiveTransform::identity(), &mut sink);
     sink.hits
+}
+
+fn collect_into(layer: &LayerNode, to_window: ProjectiveTransform, sink: &mut TestSink) {
+    let store = SceneStore::from_layer(layer);
+    let root = store.root_layer().expect("the store holds the layer");
+    collect_hits_from_graph(root, to_window, sink, None);
 }
 
 fn test_layer(node_id: NodeId, transform_to_parent: ProjectiveTransform) -> LayerNode {
@@ -175,8 +180,8 @@ fn capture_paths_do_not_leak_between_siblings_or_traversals() {
         identity,
     ))));
     let mut sink = TestSink::default();
-    collect_hits_from_graph(&root, identity, &mut sink, None);
-    collect_hits_from_graph(&test_layer(NodeId(14), identity), identity, &mut sink, None);
+    collect_into(&root, identity, &mut sink);
+    collect_into(&test_layer(NodeId(14), identity), identity, &mut sink);
     let mut expected: Vec<Vec<_>> = (1..=12)
         .map(|node_id| (1..=node_id).rev().map(NodeId).collect())
         .collect();

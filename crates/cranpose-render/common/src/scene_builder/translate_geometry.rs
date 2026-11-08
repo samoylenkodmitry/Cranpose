@@ -80,11 +80,10 @@ pub(super) fn translate_retained_child(
     position: Point,
     content_offset: Point,
 ) {
-    let props = store.layer(layer);
     let transform = placed_transform(
-        props.local_bounds(),
+        store.layer(layer).local_bounds(),
         position,
-        props.props().and_then(|props| props.graphics_layer.get()),
+        store.graphics_layer(layer),
         content_offset,
     );
     store.set_placement(layer, position, transform);

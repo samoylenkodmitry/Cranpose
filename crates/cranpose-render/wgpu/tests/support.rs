@@ -457,7 +457,7 @@ pub(crate) mod graph {
 pub(crate) fn draw_run_graph(size: u32, scope: DrawScopeDefault<'_>) -> RenderGraph {
     use cranpose_render_common::graph::{DrawRunNode, PrimitivePhase};
     use cranpose_ui_graphics::DrawScope;
-    RenderGraph::new(layer_node(
+    RenderGraph::new(&layer_node(
         None,
         size as f32,
         size as f32,
@@ -864,11 +864,11 @@ pub(crate) fn substrate_probe(spec: SubstrateSpec, read: SubstrateProbeRead) -> 
 }
 
 pub(crate) fn page_graph(width: u32, height: u32, children: Vec<RenderNode>) -> RenderGraph {
-    RenderGraph::new(layer_node(None, width as f32, height as f32, children))
+    RenderGraph::new(&layer_node(None, width as f32, height as f32, children))
 }
 
 pub(crate) fn shader_probe_graph(bounds: Rect, shader: RuntimeShader) -> RenderGraph {
-    RenderGraph::new(LayerNode {
+    RenderGraph::new(&LayerNode {
         local_bounds: bounds,
         graphics_layer: cranpose_ui_graphics::GraphicsLayer {
             render_effect: Some(RenderEffect::runtime_shader(shader)),
@@ -1589,7 +1589,7 @@ pub(crate) fn stored_runs_graph_of<const RUNS: usize>(
             ))
         })
         .collect();
-    RenderGraph::new(contract_layer(
+    RenderGraph::new(&contract_layer(
         Some(STORED_RUN_NODE),
         CachePolicy::None,
         Rect {

@@ -53,7 +53,7 @@ fn nodes_geometry(nodes: &[RenderNode], out: &mut Vec<String>) {
 
 fn painted(graph: &RenderGraph) -> Vec<String> {
     let mut out = Vec::new();
-    geometry(&graph.root, &mut out);
+    geometry(&graph.root(), &mut out);
     out
 }
 
@@ -105,7 +105,7 @@ fn texts_that_outlive_a_large_teardown_paint_as_before() {
     let root = composition.root().expect("root");
     let mut graph = initial_graph(&mut composition, root, VIEWPORT);
     let before = painted(&graph);
-    assert_eq!(graph.root.painted_text(), LABELS);
+    assert_eq!(graph.root().painted_text(), LABELS);
     let (selected, deep) = controls.get().expect("controls");
 
     for round in 1..=2 {
@@ -117,7 +117,7 @@ fn texts_that_outlive_a_large_teardown_paint_as_before() {
         update_scene(&mut composition, root, VIEWPORT, &mut graph);
 
         assert_eq!(
-            graph.root.painted_text(),
+            graph.root().painted_text(),
             LABELS,
             "round {round}: the labels paint after the teardown"
         );

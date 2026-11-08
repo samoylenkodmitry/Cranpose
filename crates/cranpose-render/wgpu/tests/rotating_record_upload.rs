@@ -39,7 +39,7 @@ fn rotating_arcs(angle: f32, color: Color) -> RenderGraph {
 fn recording_graph(recording: CommandRecording, side: u32) -> RenderGraph {
     let recording = Rc::new(recording);
     let segments = recording.all_segments();
-    RenderGraph::new(LayerNode {
+    RenderGraph::new(&LayerNode {
         node_id: Some(support::STORED_RUN_NODE),
         local_bounds: Rect {
             x: 0.0,

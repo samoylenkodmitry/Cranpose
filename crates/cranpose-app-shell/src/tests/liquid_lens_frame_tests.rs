@@ -61,7 +61,7 @@ fn lens_layers(shell: &AppShell<ScopedUpdateCountingRenderer>) -> Vec<GraphicsLa
     }
     let mut layers = Vec::new();
     if let Some(graph) = shell.surfaces[0].renderer.scene().graph.as_ref() {
-        collect(&graph.root, &mut layers);
+        collect(&graph.root(), &mut layers);
     }
     layers
 }
@@ -154,7 +154,7 @@ fn a_released_slider_streams_native_inertia_then_stops_requesting_frames() {
         let scene = host.shell.surfaces[0].renderer.scene_mut();
         let graph = scene.graph.take().expect("slider scene");
         collect_graph_hits(
-            &graph.root,
+            &graph.root(),
             cranpose_render_common::graph::ProjectiveTransform::identity(),
             scene,
             None,

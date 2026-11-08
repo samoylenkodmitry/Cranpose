@@ -1,15 +1,13 @@
-use cranpose_render_common::graph::{LayerNode, ProjectiveTransform};
+use cranpose_render_common::{graph::ProjectiveTransform, scene_store::LayerRef};
 use cranpose_ui_graphics::Rect;
 
 use super::{ContentStyle, RasterTraversalContext, populate_draws_from_graph};
 use crate::scene::{RasterScene, Subtree};
 
-/// Draws `surfaces`, which the eye of a scene sees, each placed by its
-/// parent map, with the scene layer's content style and clip.
 #[cold]
 #[inline(never)]
 pub(super) fn push_seen_surfaces(
-    surfaces: Vec<(&LayerNode, ProjectiveTransform)>,
+    surfaces: Vec<(LayerRef<'_>, ProjectiveTransform)>,
     scene: &mut RasterScene,
     context: &RasterTraversalContext<'_>,
     (content_style, visual_clip): (&ContentStyle, Option<Rect>),
@@ -36,30 +34,26 @@ pub(super) fn push_seen_surfaces(
     }
 }
 
-/// The surfaces the eye of the scene `layer` shows sees in the space it
-/// stands in, far ones first, each with the map its layer's parent would
-/// take for the layer to land where the camera shows it, given `transform`
-/// from `layer` to device pixels; `None` when `layer` shows no scene.
 #[cold]
 #[inline(never)]
 pub(super) fn seen_surfaces<'a>(
-    layer: &'a LayerNode,
+    layer: LayerRef<'a>,
     transform: &ProjectiveTransform,
-) -> Option<Vec<(&'a LayerNode, ProjectiveTransform)>> {
+) -> Option<Vec<(LayerRef<'a>, ProjectiveTransform)>> {
     use cranpose_render_common::space::{EyeView, SpaceTree};
     let tree = SpaceTree::of(layer)?;
     // The scene fills its layer's bounds.
-    let bounds = layer.local_bounds;
+    let bounds = layer.local_bounds();
     let view = EyeView::of(&tree, bounds.size());
     let to_device = ProjectiveTransform::translation(bounds.x, bounds.y).then(*transform);
-    let mut surfaces: Vec<(f32, &'a LayerNode, ProjectiveTransform)> = view
+    let mut surfaces: Vec<(f32, LayerRef<'a>, ProjectiveTransform)> = view
         .surfaces
         .iter()
         .filter(|seen| seen.seen == 0)
         .filter_map(|seen| {
             let parent = seen
                 .layer
-                .transform_to_parent
+                .transform_to_parent()
                 .inverse()?
                 .then(view.content_to_window(seen, to_device)?);
             let (low, high) = seen.surface.mesh.bounds();

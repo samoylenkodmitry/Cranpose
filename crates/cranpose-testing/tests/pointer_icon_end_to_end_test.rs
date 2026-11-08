@@ -1,6 +1,3 @@
-//! `Modifier::pointer_icon` from the composable that declares it to the hit
-//! region the shell reads the cursor off.
-
 use cranpose_core::NodeId;
 use cranpose_macros::composable;
 use cranpose_render_common::{
@@ -23,12 +20,9 @@ fn scene_for(rule: &mut ComposeTestRule) -> Scene {
         .compute_layout(root, VIEWPORT)
         .expect("layout succeeds");
     let graph = build_graph_from_applier(&applier, root, 1.0).expect("scene graph");
-    collect_hits_from_graph(
-        &graph.root,
-        ProjectiveTransform::identity(),
-        &mut scene,
-        None,
-    );
+    if let Some(root) = graph.store().root_layer() {
+        collect_hits_from_graph(root, ProjectiveTransform::identity(), &mut scene, None);
+    }
     scene
 }
 

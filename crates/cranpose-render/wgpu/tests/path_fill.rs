@@ -73,7 +73,7 @@ fn paths() -> Vec<(&'static str, Path)> {
 }
 
 fn frame_of(primitives: Vec<DrawPrimitive>, size: f32) -> RenderGraph {
-    RenderGraph::new(shared_test_support::layer_node(
+    RenderGraph::new(&shared_test_support::layer_node(
         Rect::from_size(Size::new(size, size)),
         ProjectiveTransform::identity(),
         GraphicsLayer::default(),

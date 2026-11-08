@@ -8,6 +8,7 @@ use cranpose_render_common::{
         build_graph_from_applier, clear_command_recordings_for_tests, rebuild_graph_from_applier,
         update_graph_from_applier_report,
     },
+    scene_store::{ItemRef, LayerRef},
 };
 use cranpose_ui::{Box, BoxSpec, Canvas, LayoutEngine, Modifier, Size, run_test_composition};
 use cranpose_ui_graphics::{
@@ -85,17 +86,18 @@ fn run_case(arcs: usize, readers: usize) {
         .compute_layout(root, Size::new(256.0, 256.0))
         .expect("Canvas layout");
     let mut graph = build_graph_from_applier(&applier, root, 1.0).expect("Canvas graph");
-    let initial_fingerprint = canvas_run(&graph.root)
+    let initial_fingerprint = canvas_run(&graph.root())
         .expect("initial Canvas")
         .recording
         .fingerprint();
     let mut retained: [Option<Arc<ShapeRecorder>>; 4] = std::array::from_fn(|_| None);
     let mut frame = |tick: usize, graph: &mut RenderGraph| {
         angle.set(tick as f32 * 0.005);
-        let previous = std::mem::replace(graph, RenderGraph::new(LayerNode::default()));
+        let previous = std::mem::replace(graph, RenderGraph::new(&LayerNode::default()));
         *graph =
             rebuild_graph_from_applier(&applier, root, 1.0, Some(previous)).expect("redraw Canvas");
-        let run = canvas_run(&graph.root).expect("recorded Canvas");
+        let graph_root = graph.root();
+        let run = canvas_run(&graph_root).expect("recorded Canvas");
         assert_eq!(run.recording.len(), arcs);
         if readers != 0 {
             retained[tick % readers] = Some(Arc::clone(run.recording.shape_recorder()));
@@ -112,7 +114,7 @@ fn run_case(arcs: usize, readers: usize) {
     }
     let elapsed = started.elapsed().as_nanos();
     let stats = region.change();
-    let fingerprint = canvas_run(&graph.root)
+    let fingerprint = canvas_run(&graph.root())
         .expect("last Canvas")
         .recording
         .fingerprint();
@@ -278,19 +280,29 @@ fn run_inset_recording_benchmark(arcs: usize) {
     }
 }
 
+// The runs `graph` records for the node `node_id`, in draw order.
+fn runs_for_node(graph: &RenderGraph, node_id: cranpose_core::NodeId) -> Vec<&DrawRunNode> {
+    let mut runs = Vec::new();
+    if let Some(root) = graph.store().root_layer() {
+        collect_runs_for_node(root, node_id, &mut runs);
+    }
+    runs
+}
+
 fn collect_runs_for_node<'a>(
-    nodes: &'a [RenderNode],
+    layer: LayerRef<'a>,
     node_id: cranpose_core::NodeId,
     runs: &mut Vec<&'a DrawRunNode>,
 ) {
-    for child in nodes {
-        match child {
-            RenderNode::Layer(child) => collect_runs_for_node(&child.children, node_id, runs),
-            RenderNode::Inline(inline) => collect_runs_for_node(&inline.content, node_id, runs),
-            RenderNode::DrawRun(run) if run.command.is_some_and(|id| id.node_id == node_id) => {
+    for item in layer.items() {
+        match item {
+            ItemRef::Layer(child) | ItemRef::Leaf(child) => {
+                collect_runs_for_node(child, node_id, runs);
+            }
+            ItemRef::Run(run) if run.command.is_some_and(|id| id.node_id == node_id) => {
                 runs.push(run);
             }
-            RenderNode::DrawRun(_) | RenderNode::Primitive(_) => {}
+            ItemRef::Run(_) | ItemRef::Draw(_) | ItemRef::Text(_) => {}
         }
     }
 }
@@ -347,11 +359,7 @@ fn run_with_content_case(arcs: usize) {
         .compute_layout(root, Size::new(256.0, 256.0))
         .expect("with-content layout");
     let mut graph = build_graph_from_applier(&applier, root, 1.0).expect("with-content graph");
-    let initial_runs = {
-        let mut runs = Vec::new();
-        collect_runs_for_node(&graph.root.children, parent, &mut runs);
-        runs
-    };
+    let initial_runs = runs_for_node(&graph, parent);
     assert_eq!(
         initial_runs.len(),
         2,
@@ -364,8 +372,7 @@ fn run_with_content_case(arcs: usize) {
     );
     let initial_fingerprint = initial_runs[0].recording.fingerprint();
     assert_eq!(initial_runs[1].recording.fingerprint(), initial_fingerprint);
-    let mut content_runs = Vec::new();
-    collect_runs_for_node(&graph.root.children, content, &mut content_runs);
+    let content_runs = runs_for_node(&graph, content);
     assert_eq!(
         content_runs.len(),
         1,
@@ -404,8 +411,7 @@ fn run_with_content_case(arcs: usize) {
     let elapsed_ns = started.elapsed().as_nanos();
     let stats = region.change();
     let callbacks = callback_calls.get() - callbacks_before;
-    let mut runs = Vec::new();
-    collect_runs_for_node(&graph.root.children, parent, &mut runs);
+    let runs = runs_for_node(&graph, parent);
     assert_eq!(runs.len(), 2);
     let behind = runs
         .iter()
@@ -527,12 +533,13 @@ fn run_property_mode(
     let elapsed_ns = started.elapsed().as_nanos();
     let stats = region.change();
     let callbacks = draw_calls.get() - callbacks_before;
-    let run = canvas_run(&graph.root).expect("property-updated Canvas");
+    let graph_root = graph.root();
+    let run = canvas_run(&graph_root).expect("property-updated Canvas");
     assert_eq!(run.recording.len(), arcs);
     let expected_rotation = 0.125 + (WARMUP + FRAMES - 1) as f32 * 0.37;
-    let rotation_bits = rotation_bits(&graph.root, expected_rotation)
+    let rotation_bits = rotation_bits(&graph.root(), expected_rotation)
         .expect("graphics-layer rotation reaches the retained scene");
-    let transform_points = transform_points(&graph.root, canvas_node)
+    let transform_points = transform_points(&graph.root(), canvas_node)
         .expect("Canvas node transform reaches the retained scene");
     PropertyModeResult {
         elapsed_ns,
@@ -583,7 +590,7 @@ fn run_property_case(arcs: usize, layers_first: bool) {
         .expect("Canvas layout");
     let initial = build_graph_from_applier(&applier, composition_root, 1.0).expect("Canvas graph");
     let initial_transform =
-        transform_points(&initial.root, canvas_node).expect("initial Canvas node transform");
+        transform_points(&initial.root(), canvas_node).expect("initial Canvas node transform");
     let mut content_graph = initial.clone();
     let mut layer_graph = initial;
     let initial_calls = draw_calls.get();

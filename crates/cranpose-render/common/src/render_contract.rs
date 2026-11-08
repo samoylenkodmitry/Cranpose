@@ -364,7 +364,7 @@ fn build_fixture(width: u32, height: u32, children: Vec<RenderNode>) -> RenderFi
     RenderFixture {
         width,
         height,
-        graph: RenderGraph::new(graph_layer(
+        graph: RenderGraph::new(&graph_layer(
             bounds,
             ProjectiveTransform::identity(),
             with_background(bounds, children),
@@ -415,7 +415,7 @@ fn build_translated_fixture_with_context(
     RenderFixture {
         width,
         height,
-        graph: RenderGraph::new(graph_layer(
+        graph: RenderGraph::new(&graph_layer(
             bounds,
             ProjectiveTransform::identity(),
             with_background(bounds, vec![RenderNode::Layer(Box::new(subtree))]),

@@ -240,7 +240,7 @@ fn drawn_picture(shell: &AppShell<ScopedUpdateCountingRenderer>) -> Vec<String> 
         .as_ref()
         .expect("the frame should have built a scene");
     let mut picture = Vec::new();
-    scene_picture(&graph.root, 0, &mut picture);
+    scene_picture(&graph.root(), 0, &mut picture);
     picture
 }
 
@@ -252,7 +252,7 @@ fn rebuilt_picture(shell: &mut AppShell<ScopedUpdateCountingRenderer>) -> Vec<St
         .enter(|| build_graph_from_applier(&shell.app.composition.applier_mut(), root, 1.0))
         .expect("a whole-scene rebuild should lower the root");
     let mut picture = Vec::new();
-    scene_picture(&graph.root, 0, &mut picture);
+    scene_picture(&graph.root(), 0, &mut picture);
     picture
 }
 

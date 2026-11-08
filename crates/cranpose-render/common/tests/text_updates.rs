@@ -17,7 +17,7 @@ const VIEWPORT: Size = Size::new(240.0, 120.0);
 
 fn painted(graph: &RenderGraph) -> Vec<String> {
     let mut out = Vec::new();
-    painted_text(&graph.root, &mut out);
+    painted_text(&graph.root(), &mut out);
     out
 }
 
@@ -85,7 +85,7 @@ fn nodes_text_paints(nodes: &[RenderNode], out: &mut Vec<(String, TextPaint)>) {
 
 fn painted_with_paint(graph: &RenderGraph) -> Vec<(String, TextPaint)> {
     let mut out = Vec::new();
-    text_paints(&graph.root, &mut out);
+    text_paints(&graph.root(), &mut out);
     out
 }
 

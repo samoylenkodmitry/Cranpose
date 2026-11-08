@@ -146,7 +146,7 @@ fn arena(frame: usize) -> RenderGraph {
         let speed = if index % 2 == 0 { 0.01 } else { -0.008 };
         children.push(ring(index, frame as f32 * speed * (index + 1) as f32));
     }
-    RenderGraph::new(shared_test_support::layer_node(
+    RenderGraph::new(&shared_test_support::layer_node(
         rect(0.0, 0.0, ARENA as f32, ARENA as f32),
         ProjectiveTransform::identity(),
         GraphicsLayer::default(),

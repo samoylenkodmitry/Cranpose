@@ -100,7 +100,7 @@ fn write_inline(
     let slices = &data.modifier_slices;
     let size = data.layout_state.size();
     store.set_kind(record, RecordKind::Leaf, Some(node_id));
-    store.set_props(record, None);
+    store.clear_props(record);
     store.set_content_offset(record, data.layout_state.content_offset());
     store.set_size(record, size.width, size.height);
     place_inline(store, record, data, context);
@@ -110,16 +110,7 @@ fn write_inline(
         layer: None,
     };
     let mut list = item_lists::take();
-    write_node_content(
-        store,
-        record,
-        &mut list,
-        node_id,
-        slices,
-        draws,
-        (0, 0),
-        |_, _| {},
-    );
+    write_node_content(store, record, &mut list, slices, draws, (0, 0), |_, _| {});
     store.set_items(record, &list);
     item_lists::give(list);
     store.note_content_change(record);

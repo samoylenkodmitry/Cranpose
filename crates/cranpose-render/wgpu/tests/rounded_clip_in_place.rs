@@ -466,9 +466,9 @@ fn turned_panel(offscreen: bool) -> RenderGraph {
         width: WIDTH as f32,
         height: HEIGHT as f32,
     };
-    let mut page = in_panel(60.0, false);
-    let content = std::mem::take(&mut page.root.children);
-    page.root.children = vec![RenderNode::Layer(Box::new(
+    let mut page = in_panel(60.0, false).root();
+    let content = std::mem::take(&mut page.children);
+    page.children = vec![RenderNode::Layer(Box::new(
         shared_test_support::layer_node(
             bounds,
             turn,
@@ -483,7 +483,7 @@ fn turned_panel(offscreen: bool) -> RenderGraph {
             content,
         ),
     ))];
-    page
+    RenderGraph::new(&page)
 }
 
 #[test]
@@ -1148,12 +1148,13 @@ fn a_shadow_at_an_arbitrary_fractional_phase_stays_inside_the_rounded_clip() {
 }
 
 fn backdrop_over_rounded_fill(radius: f32) -> RenderGraph {
-    let mut graph = on_page(
+    let mut page = on_page(
         CLIP,
         AT,
         rounded(radius, false),
         vec![solid_rect(CLIP, Color(0.85, 0.15, 0.2, 1.0))],
-    );
+    )
+    .root();
     let mut backdrop = shared_test_support::layer_node(
         CLIP,
         ProjectiveTransform::translation(AT.x, AT.y),
@@ -1165,11 +1166,8 @@ fn backdrop_over_rounded_fill(radius: f32) -> RenderGraph {
         Vec::new(),
     );
     backdrop.node_id = Some(NodeId(901));
-    graph
-        .root
-        .children
-        .push(RenderNode::Layer(Box::new(backdrop)));
-    graph
+    page.children.push(RenderNode::Layer(Box::new(backdrop)));
+    RenderGraph::new(&page)
 }
 
 #[test]

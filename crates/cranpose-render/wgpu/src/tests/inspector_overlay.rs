@@ -11,7 +11,7 @@ fn assert_inspector(renderer: &WgpuRenderer) {
         .as_ref()
         .expect("overlay");
     assert!(
-        matches!(graph.root.children.last(), Some(RenderNode::Layer(layer)) if layer.node_id == Some(NodeId(123)))
+        matches!(graph.root().children.last(), Some(RenderNode::Layer(layer)) if layer.node_id == Some(NodeId(123)))
     );
     assert!(renderer.frontend.scene.graph.is_none());
 }
@@ -19,7 +19,7 @@ fn assert_inspector(renderer: &WgpuRenderer) {
 #[test]
 fn inspector_survives_fps_overlay_refresh_and_clearing() {
     let mut renderer = WgpuRenderer::new(&[]);
-    renderer.set_inspector_overlay(Some(RenderGraph::new(LayerNode {
+    renderer.set_inspector_overlay(Some(RenderGraph::new(&LayerNode {
         node_id: Some(NodeId(123)),
         ..Default::default()
     })));

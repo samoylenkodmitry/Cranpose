@@ -39,6 +39,14 @@ impl<T> Slab<T> {
             .push(u32::try_from(index).expect("fewer than 2^32 entries"));
         Some(value)
     }
+    pub(crate) fn values(&self) -> impl Iterator<Item = &T> {
+        self.entries.iter().flatten()
+    }
+
+    pub(crate) fn heap_bytes(&self) -> usize {
+        self.entries.capacity() * size_of::<Option<T>>() + self.free.capacity() * size_of::<u32>()
+    }
+
     pub(crate) fn clear(&mut self) {
         self.entries.clear();
         self.free.clear();

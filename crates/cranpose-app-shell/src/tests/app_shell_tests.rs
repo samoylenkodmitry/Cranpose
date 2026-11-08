@@ -1157,7 +1157,7 @@ fn app_shell_scene_rebuilds_after_backdrop_effect_state_change() {
             .graph
             .as_ref()
             .expect("initial graph should be built")
-            .root,
+            .root(),
     );
     assert_eq!(initial_radii, vec![0.0]);
 
@@ -1173,7 +1173,7 @@ fn app_shell_scene_rebuilds_after_backdrop_effect_state_change() {
             .graph
             .as_ref()
             .expect("updated graph should be built")
-            .root,
+            .root(),
     );
     assert_eq!(updated_radii, vec![18.0]);
 }
@@ -1476,10 +1476,8 @@ impl Renderer for CountingRenderer {
     }
 }
 
-/// The window rect and the opacity of each solid rectangle a scene paints.
 pub(super) type PaintedRects = Vec<(Rect, f32)>;
 
-/// The window rect and the opacity of every solid rectangle `root` paints.
 pub(super) fn painted_rects(root: &cranpose_render_common::graph::LayerNode) -> PaintedRects {
     fn collect(
         layer: &cranpose_render_common::graph::LayerNode,
@@ -1528,8 +1526,6 @@ pub(super) fn painted_rects(root: &cranpose_render_common::graph::LayerNode) -> 
     out
 }
 
-/// The [`painted_rects`] of the scene `shell` keeps for its primary surface,
-/// and of a scene built afresh from the same tree.
 pub(super) fn retained_and_fresh_painted_rects(
     shell: &mut AppShell<ScopedUpdateCountingRenderer>,
 ) -> (PaintedRects, PaintedRects) {
@@ -1540,7 +1536,7 @@ pub(super) fn retained_and_fresh_painted_rects(
             .graph
             .as_ref()
             .expect("the frame keeps a graph")
-            .root,
+            .root(),
     );
     let root = shell.surfaces[0]
         .root_node(&shell.app)
@@ -1556,7 +1552,7 @@ pub(super) fn retained_and_fresh_painted_rects(
             )
         })
         .expect("a fresh graph");
-    (retained, painted_rects(&fresh.root))
+    (retained, painted_rects(&fresh.root()))
 }
 
 pub(super) struct ScopedUpdateCountingRenderer {
@@ -1702,12 +1698,15 @@ fn collect_graph_hits(
     scene: &mut cranpose_render_common::graph_scene::Scene,
     parent_hit_clip: Option<Rect>,
 ) {
-    cranpose_render_common::hit_graph::collect_hits_from_graph(
-        layer,
-        parent_transform,
-        scene,
-        parent_hit_clip,
-    );
+    let store = cranpose_render_common::scene_store::SceneStore::from_layer(layer);
+    if let Some(root) = store.root_layer() {
+        cranpose_render_common::hit_graph::collect_hits_from_graph(
+            root,
+            parent_transform,
+            scene,
+            parent_hit_clip,
+        );
+    }
 }
 
 impl Renderer for HitGraphRenderer {
@@ -1732,7 +1731,7 @@ impl Renderer for HitGraphRenderer {
             1.0,
         );
         collect_graph_hits(
-            &graph.root,
+            &graph.root(),
             cranpose_render_common::graph::ProjectiveTransform::identity(),
             &mut self.scene,
             None,
@@ -1752,7 +1751,7 @@ impl Renderer for HitGraphRenderer {
             cranpose_render_common::scene_builder::build_graph_from_applier(applier, root, 1.0)
         {
             collect_graph_hits(
-                &graph.root,
+                &graph.root(),
                 cranpose_render_common::graph::ProjectiveTransform::identity(),
                 &mut self.scene,
                 None,
@@ -4367,7 +4366,7 @@ fn keyed_subtree_swap_with_pending_scoped_repass_evicts_stale_layers() {
                 .graph
                 .as_ref()
                 .expect("initial graph")
-                .root,
+                .root(),
             KEYED_PAGE_A_COLOR,
         ),
         "page A must be in the graph after the initial frame"
@@ -4415,7 +4414,7 @@ fn keyed_subtree_swap_with_pending_scoped_repass_evicts_stale_layers() {
         .as_ref()
         .expect("graph after keyed swap");
     assert!(
-        !graph_layer_contains_rect_color(&graph.root, KEYED_PAGE_A_COLOR),
+        !graph_layer_contains_rect_color(&graph.root(), KEYED_PAGE_A_COLOR),
         "page A's layers must be evicted from the graph on the swap frame \
          (cross-tab ghost: stale layers kept compositing on the presented path)"
     );
@@ -5776,7 +5775,7 @@ fn graph_scene_solid_rect_y(
     color: Color,
 ) -> Option<f32> {
     let graph = scene.graph.as_ref()?;
-    solid_rect_y_in_layer(&graph.root, 0.0, color)
+    solid_rect_y_in_layer(&graph.root(), 0.0, color)
 }
 
 fn solid_brush_matches(brush: &Brush, color: Color) -> bool {
@@ -6028,7 +6027,7 @@ fn graph_scene_text_y(
     }
 
     let graph = scene.graph.as_ref()?;
-    walk(&graph.root, 0.0, needle)
+    walk(&graph.root(), 0.0, needle)
 }
 
 #[test]
@@ -6110,7 +6109,7 @@ fn graph_scene_text_values(scene: &cranpose_render_common::graph_scene::Scene) -
 
     let mut values = Vec::new();
     if let Some(graph) = &scene.graph {
-        collect(&graph.root.children, &mut values);
+        collect(&graph.root().children, &mut values);
     }
     values
 }
@@ -8789,7 +8788,7 @@ fn graph_rect_colors(graph: &cranpose_render_common::graph::RenderGraph) -> Vec<
     }
 
     let mut colors = Vec::new();
-    collect_layer(&graph.root, &mut colors);
+    collect_layer(&graph.root(), &mut colors);
     colors
 }
 
@@ -11448,8 +11447,6 @@ fn a_finger_beside_a_small_control_in_a_scroll_container_presses_it_unless_a_sib
     assert_eq!(small_presses.get(), 1);
 }
 
-/// A shell over a lazy list scrolled fast enough that a frame left the next
-/// item beyond its viewport for an idle prefetch.
 fn shell_with_deferred_lazy_items() -> (AppShell<TestRenderer>, LazyListState) {
     APP_SHELL_LAZY_LIST_STATE.with(|slot| slot.borrow_mut().take());
     let root_key = location_key(file!(), line!(), column!());
@@ -11595,8 +11592,6 @@ fn a_task_woken_between_frames_runs_when_the_loop_wakes_and_its_change_waits_for
     assert_eq!(written.get().map(|ticks| ticks.get_non_reactive()), Some(1));
 }
 
-/// A future a test opens by hand, from any thread: it wakes the task that
-/// awaits it as a timer would, at a moment the test chooses.
 #[derive(Clone, Default)]
 struct Gate(Arc<Mutex<(bool, Option<std::task::Waker>)>>);
 

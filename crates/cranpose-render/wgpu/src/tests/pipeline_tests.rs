@@ -272,8 +272,9 @@ fn collect_hits_from_graph_only_populates_hit_regions() {
     };
     let mut scene = crate::scene::Scene::new();
 
+    let store = cranpose_render_common::scene_store::SceneStore::from_layer(&layer);
     collect_hits_from_graph(
-        &layer,
+        store.root_layer().expect("the store holds the layer"),
         cranpose_render_common::graph::ProjectiveTransform::identity(),
         &mut scene,
         None,

@@ -8,7 +8,7 @@ use cranpose_app_shell::AppShell;
 use cranpose_core::{MemoryApplier, NodeId, location_key};
 use cranpose_render_common::{
     Renderer, SceneUpdates,
-    graph::{LayerNode, PrimitiveNode, RenderNode},
+    graph::{LayerNode, PrimitiveNode, RenderGraph, RenderNode},
     graph_scene::Scene,
     scene_builder::{
         build_graph_from_applier, build_graph_from_layout_tree, update_graph_from_applier,
@@ -140,10 +140,9 @@ impl Renderer for CheckingRenderer {
         }
         if let Some(mismatches) = &self.mismatches {
             let fresh = build_graph_from_applier(applier, root, 1.0);
-            let retained = self.scene.graph.as_ref();
-            if signature_of(fresh.as_ref().map(|graph| &graph.root))
-                != signature_of(retained.map(|graph| &graph.root))
-            {
+            let fresh = fresh.map(|graph| graph.root());
+            let retained = self.scene.graph.as_ref().map(RenderGraph::root);
+            if signature_of(fresh.as_ref()) != signature_of(retained.as_ref()) {
                 mismatches.set(mismatches.get() + 1);
             }
         }

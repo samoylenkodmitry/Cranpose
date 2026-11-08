@@ -116,11 +116,17 @@ fn a_provided_style_sets_the_height_and_the_label_colors() {
         center.y
     );
     let colors = LiquidColors::light(Color::from_rgb_u8(0, 122, 255));
-    let graph = robot.shell_mut().scene().graph.as_ref().expect("a scene");
-    let (chosen, filter) = find_label(&graph.root, "One", None).expect("the chosen label");
+    let root = robot
+        .shell_mut()
+        .scene()
+        .graph
+        .as_ref()
+        .expect("a scene")
+        .root();
+    let (chosen, filter) = find_label(&root, "One", None).expect("the chosen label");
     assert_eq!(label_color(chosen), Some(colors.on_accent));
     assert_eq!(filter, None, "a resting lens recolors no label");
-    let (other, _) = find_label(&graph.root, "Two", None).expect("the other label");
+    let (other, _) = find_label(&root, "Two", None).expect("the other label");
     assert_eq!(label_color(other), Some(colors.label));
 }
 
@@ -129,8 +135,14 @@ fn a_held_lens_gives_the_chosen_label_the_color_of_the_others() {
     let mut robot = robot(accent);
     hold_the_first_segment(&mut robot);
     let colors = LiquidColors::light(Color::from_rgb_u8(0, 122, 255));
-    let graph = robot.shell_mut().scene().graph.as_ref().expect("a scene");
-    let (_, filter) = find_label(&graph.root, "One", None).expect("the chosen label");
+    let root = robot
+        .shell_mut()
+        .scene()
+        .graph
+        .as_ref()
+        .expect("a scene")
+        .root();
+    let (_, filter) = find_label(&root, "One", None).expect("the chosen label");
     let Some(ColorFilter::Tint(held)) = filter else {
         panic!("a held lens left the chosen label in {filter:?}");
     };
@@ -145,8 +157,14 @@ fn a_held_lens_gives_the_chosen_label_the_color_of_the_others() {
 
     robot.mouse_up();
     advance_frames(&mut robot, 40);
-    let graph = robot.shell_mut().scene().graph.as_ref().expect("a scene");
-    let (chosen, filter) = find_label(&graph.root, "One", None).expect("the chosen label");
+    let root = robot
+        .shell_mut()
+        .scene()
+        .graph
+        .as_ref()
+        .expect("a scene")
+        .root();
+    let (chosen, filter) = find_label(&root, "One", None).expect("the chosen label");
     assert_eq!(filter, None, "the lens came to rest");
     assert_eq!(label_color(chosen), Some(colors.on_accent));
 }
@@ -156,9 +174,15 @@ fn the_system_style_draws_every_label_alike_without_a_filter() {
     let mut robot = robot(|colors, typography| LiquidSegmentedStyle::system(&colors, &typography));
     hold_the_first_segment(&mut robot);
     let colors = LiquidColors::light(Color::from_rgb_u8(0, 122, 255));
-    let graph = robot.shell_mut().scene().graph.as_ref().expect("a scene");
+    let root = robot
+        .shell_mut()
+        .scene()
+        .graph
+        .as_ref()
+        .expect("a scene")
+        .root();
     for label in ["One", "Two"] {
-        let (text, filter) = find_label(&graph.root, label, None).expect("a label");
+        let (text, filter) = find_label(&root, label, None).expect("a label");
         assert_eq!(label_color(text), Some(colors.label));
         assert_eq!(filter, None, "{label} gained a filter");
     }

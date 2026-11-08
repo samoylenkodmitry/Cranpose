@@ -128,6 +128,9 @@ pub(crate) struct PropsId(NonZeroU32);
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct TransformId(NonZeroU32);
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct GraphicsLayerId(NonZeroU32);
+
 macro_rules! slot_id {
     ($name:ident) => {
         impl $name {
@@ -149,6 +152,7 @@ macro_rules! slot_id {
 
 slot_id!(PropsId);
 slot_id!(TransformId);
+slot_id!(GraphicsLayerId);
 
 impl GeoRecord {
     pub(crate) fn node_rect(&self) -> Rect {
@@ -161,5 +165,11 @@ impl GeoRecord {
     }
 }
 
-const _: () = assert!(size_of::<TreeRecord>() == 32);
-const _: () = assert!(size_of::<GeoRecord>() == 32);
+const _: () = assert!(
+    size_of::<TreeRecord>() == 32,
+    "a tree record fills half a cache line"
+);
+const _: () = assert!(
+    size_of::<GeoRecord>() == 32,
+    "a geometry record fills half a cache line"
+);

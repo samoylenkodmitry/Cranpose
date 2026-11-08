@@ -66,7 +66,7 @@ fn live_backdrop_graph(color: Color, policy: CachePolicy, nested: bool) -> Rende
     } else {
         card.graphics_layer.backdrop_effect = Some(RenderEffect::blur(6.0));
     }
-    RenderGraph::new(support::contract_layer(
+    RenderGraph::new(&support::contract_layer(
         Some(NodeId(80_000)),
         CachePolicy::None,
         bounds,
@@ -170,7 +170,7 @@ fn large_backdrops(radius: f32) -> RenderGraph {
         }
         children.push(RenderNode::Layer(Box::new(layer)));
     }
-    RenderGraph::new(support::contract_layer(
+    RenderGraph::new(&support::contract_layer(
         Some(NodeId(90_000)),
         CachePolicy::None,
         bounds,
@@ -291,7 +291,7 @@ fn scrolling_fill_graph(y: f32, mode: usize, phase: usize) -> RenderGraph {
     );
     pane.graphics_layer.backdrop_effect = Some(RenderEffect::blur(6.0));
     children.push(RenderNode::Layer(Box::new(pane)));
-    RenderGraph::new(support::contract_layer(
+    RenderGraph::new(&support::contract_layer(
         Some(NodeId(91_000)),
         CachePolicy::None,
         bounds,
@@ -347,7 +347,7 @@ fn scroll_like_graph(offsets: &[f32]) -> RenderGraph {
         .enumerate()
         .map(|(index, y)| RenderNode::Layer(Box::new(card_layer(NodeId(index + 1), *y))))
         .collect();
-    RenderGraph::new(support::contract_layer(
+    RenderGraph::new(&support::contract_layer(
         Some(NodeId(10_000)),
         CachePolicy::None,
         Rect {
@@ -362,7 +362,7 @@ fn scroll_like_graph(offsets: &[f32]) -> RenderGraph {
 }
 
 fn text_scroll_like_graph(y: f32) -> RenderGraph {
-    RenderGraph::new(support::contract_layer(
+    RenderGraph::new(&support::contract_layer(
         Some(NodeId(20_000)),
         CachePolicy::None,
         Rect {
@@ -382,7 +382,7 @@ fn text_scroll_like_graph(y: f32) -> RenderGraph {
 }
 
 fn repeated_text_graph() -> RenderGraph {
-    RenderGraph::new(support::contract_layer(
+    RenderGraph::new(&support::contract_layer(
         Some(NodeId(20_001)),
         CachePolicy::None,
         Rect {
@@ -621,7 +621,7 @@ fn shader_inside_cached_container_graph(time: f32) -> RenderGraph {
     container.clip_to_bounds = true;
     container.isolation.shape_clip = true;
 
-    RenderGraph::new(support::contract_layer(
+    RenderGraph::new(&support::contract_layer(
         Some(NodeId(30_002)),
         CachePolicy::None,
         Rect {
@@ -637,7 +637,7 @@ fn shader_inside_cached_container_graph(time: f32) -> RenderGraph {
 
 fn shader_layer_graph(time: f32) -> RenderGraph {
     let shaded = shaded_runtime_shader_layer(NodeId(30_101), time);
-    RenderGraph::new(support::contract_layer(
+    RenderGraph::new(&support::contract_layer(
         Some(NodeId(30_102)),
         CachePolicy::None,
         Rect {

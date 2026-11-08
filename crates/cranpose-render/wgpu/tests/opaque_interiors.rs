@@ -62,7 +62,7 @@ fn frame_of(children: Vec<RenderNode>) -> RenderGraph {
         None,
     )];
     nodes.extend(children);
-    RenderGraph::new(shared_test_support::layer_node(
+    RenderGraph::new(&shared_test_support::layer_node(
         rect(0.0, 0.0, FRAME as f32, FRAME as f32),
         ProjectiveTransform::identity(),
         GraphicsLayer::default(),
@@ -438,7 +438,7 @@ fn a_pass_of_small_shapes_alone_lays_no_interiors_down() {
                 )
             })
             .collect();
-        RenderGraph::new(shared_test_support::layer_node(
+        RenderGraph::new(&shared_test_support::layer_node(
             rect(0.0, 0.0, FRAME as f32, FRAME as f32),
             ProjectiveTransform::identity(),
             GraphicsLayer::default(),
@@ -553,7 +553,7 @@ fn turned_levels(level: usize) -> RenderNode {
 #[test]
 fn turned_opaque_fills_lay_their_interiors_down_and_draw_the_same_pixels() {
     let alone = || {
-        RenderGraph::new(shared_test_support::layer_node(
+        RenderGraph::new(&shared_test_support::layer_node(
             rect(0.0, 0.0, FRAME as f32, FRAME as f32),
             ProjectiveTransform::identity(),
             GraphicsLayer::default(),
@@ -661,7 +661,7 @@ fn cleared_page(draw: impl Fn(&mut DrawScopeDefault, f32)) -> RenderGraph {
     let mut scope = DrawScopeDefault::new(Size::new(size, size), &mut recording);
     scope.draw_rect(Brush::solid(Color::from_rgb_u8(20, 24, 40)));
     draw(&mut scope, size);
-    RenderGraph::new(shared_test_support::layer_node(
+    RenderGraph::new(&shared_test_support::layer_node(
         rect(0.0, 0.0, size, size),
         ProjectiveTransform::identity(),
         GraphicsLayer::default(),

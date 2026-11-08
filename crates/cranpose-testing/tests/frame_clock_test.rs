@@ -234,7 +234,7 @@ fn wall_time_cursor_blink_renders_without_an_animation_callback() {
         shell.update_without_frame();
     }
     assert!(contains_caret(
-        &shell.scene().graph.as_ref().expect("field scene").root
+        &shell.scene().graph.as_ref().expect("field scene").root()
     ));
     let deadline = shell.next_event_time().expect("next cursor transition");
     std::thread::sleep(
@@ -244,7 +244,7 @@ fn wall_time_cursor_blink_renders_without_an_animation_callback() {
         shell.update_without_frame();
     }
     assert!(
-        !contains_caret(&shell.scene().graph.as_ref().expect("field scene").root),
+        !contains_caret(&shell.scene().graph.as_ref().expect("field scene").root()),
         "the caret must disappear at its wall-time deadline without a display callback"
     );
 }

@@ -6,7 +6,7 @@ use cranpose_ui_graphics::GraphicsLayer;
 
 use crate::{
     NodeUpdate, SceneUpdates,
-    graph::{LayerNode, ProjectiveTransform, RenderGraph, RenderNode},
+    graph::{LayerNode, ProjectiveTransform, RenderGraph},
     layer_transform::layer_transform_to_parent,
     scene_store::{Item, LayerRef, RecordFlags, RecordKind, SceneStore},
 };
@@ -167,7 +167,7 @@ fn lowered_layer_count() -> usize {
 pub fn build_graph_from_layout_tree(root: &LayoutBox, _scale: f32) -> RenderGraph {
     bump_recording_generation();
     let root_snapshot = layout_box_to_snapshot(root, None);
-    let mut graph = RenderGraph::new(LayerNode::default());
+    let mut graph = RenderGraph::new(&LayerNode::default());
     graph.store.begin_update();
     let record = root_record(&mut graph.store, root_snapshot.node_id);
     write_snapshot_layer(&mut graph.store, root_snapshot, LowerContext::ROOT, record);
@@ -183,7 +183,7 @@ pub fn build_graph_from_applier(
     _scale: f32,
 ) -> Option<RenderGraph> {
     bump_recording_generation();
-    let mut graph = RenderGraph::new(LayerNode::default());
+    let mut graph = RenderGraph::new(&LayerNode::default());
     graph.store.begin_update();
     lower_root_into(applier, &mut graph.store, root).then(|| {
         graph.refresh_from_store();
@@ -561,7 +561,6 @@ fn redraw_retained_layer(
             store,
             container,
             &mut list,
-            node_id,
             &data.modifier_slices,
             data.layout_state.size(),
         );
@@ -711,15 +710,18 @@ pub(crate) fn publish_space(applier: &MemoryApplier, graph: &RenderGraph) {
 #[cold]
 #[inline(never)]
 fn publish_space_now(applier: &MemoryApplier, graph: &RenderGraph) {
+    let Some(root_layer) = graph.store.root_layer() else {
+        return;
+    };
     let root = ProjectiveTransform::identity();
-    crate::space::for_each_window_eye(&graph.root, root, &mut |tree, view, to_window| {
+    crate::space::for_each_window_eye(root_layer, root, &mut |tree, view, to_window| {
         if let Some(eye) = &tree.cells[0].scene.eye {
             eye.world.rebuild(|world| view.build_world(tree, world));
         }
         for seen in view
             .surfaces
             .iter()
-            .filter(|seen| seen.layer.has_origin_sinks)
+            .filter(|seen| seen.layer.has_origin_sinks())
         {
             if let Some(content) = view.content_to_window(seen, to_window) {
                 publish_content_geometry(applier, seen.layer, content);
@@ -730,10 +732,10 @@ fn publish_space_now(applier: &MemoryApplier, graph: &RenderGraph) {
 
 fn publish_content_geometry(
     applier: &MemoryApplier,
-    layer: &LayerNode,
+    layer: LayerRef<'_>,
     to_window: ProjectiveTransform,
 ) {
-    if let Some(node_id) = layer.node_id {
+    if let Some(node_id) = layer.node_id() {
         read_node_data(applier, node_id, |data| {
             data.modifier_slices.publish_window_geometry(
                 Point::default(),
@@ -742,12 +744,9 @@ fn publish_content_geometry(
             );
         });
     }
-    for child in &layer.children {
-        if let RenderNode::Layer(child) = child
-            && child.has_origin_sinks
-            && child.graphics_layer.space.is_none()
-        {
-            publish_content_geometry(applier, child, child.transform_to_parent.then(to_window));
+    for child in layer.children() {
+        if child.has_origin_sinks() && child.graphics_layer().space.is_none() {
+            publish_content_geometry(applier, child, child.transform_to_parent().then(to_window));
         }
     }
 }
@@ -831,12 +830,6 @@ fn remove_dirty_descendants(
 fn child_identity(store: &SceneStore, item: Item) -> Option<NodeId> {
     item.as_child()
         .and_then(|child| layer_identity(store.layer(child)))
-}
-
-fn translation_of(transform: ProjectiveTransform) -> Option<Point> {
-    let [[a, b, x], [c, d, y], [p, q, w]] = transform.matrix();
-    (a == 1.0 && b == 0.0 && c == 0.0 && d == 1.0 && p == 0.0 && q == 0.0 && w == 1.0)
-        .then(|| Point::new(x, y))
 }
 
 #[cfg(test)]

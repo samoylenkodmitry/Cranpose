@@ -28,7 +28,7 @@ fn solid_rect(rect: Rect, color: Color) -> RenderNode {
 }
 
 fn direct_graph() -> RenderGraph {
-    RenderGraph::new(support::layer_node(
+    RenderGraph::new(&support::layer_node(
         Some(NodeId(9_400)),
         WIDTH as f32,
         HEIGHT as f32,

@@ -89,13 +89,13 @@ fn canvas_rebuilds_keep_each_retained_frame_and_paint_the_new_state() {
             graph = canvas_graph(&mut composition, root, Some(graph));
         }
         let mut colors = Vec::new();
-        crate::scene_probe::painted_solid_rect_colors(&graph.root, &mut colors);
+        crate::scene_probe::painted_solid_rect_colors(&graph.root(), &mut colors);
         assert_eq!(
             colors,
             vec![expected_color],
             "frame {index} paints its state"
         );
-        let recording = retained_recording(&graph.root).expect("canvas recording");
+        let recording = retained_recording(&graph.root()).expect("canvas recording");
         retained.push((recording, expected_color));
     }
 
@@ -110,6 +110,6 @@ fn canvas_rebuilds_keep_each_retained_frame_and_paint_the_new_state() {
     value.set(0);
     let final_graph = canvas_graph(&mut composition, root, Some(graph));
     let mut colors = Vec::new();
-    crate::scene_probe::painted_solid_rect_colors(&final_graph.root, &mut colors);
+    crate::scene_probe::painted_solid_rect_colors(&final_graph.root(), &mut colors);
     assert_eq!(colors, vec![Color::RED]);
 }

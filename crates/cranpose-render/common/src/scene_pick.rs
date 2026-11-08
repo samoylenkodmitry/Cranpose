@@ -7,13 +7,11 @@ use cranpose_ui_graphics::{
 };
 
 use crate::{
-    graph::{LayerNode, ProjectiveTransform},
+    graph::ProjectiveTransform,
+    scene_store::{LayerRef, RecordKind},
     space::{EyeView, SpaceTree},
 };
 
-/// How much past a doorway a ray that goes through it looks for what lies
-/// beyond, against its distance: the surface the doorway lies on is not
-/// beyond it.
 const PAST_DOORWAY: f32 = 1.0e-4;
 
 /// Finds which mesh surface of a scene a window point, or any ray, shows,
@@ -21,7 +19,6 @@ const PAST_DOORWAY: f32 = 1.0e-4;
 /// the ray in the space the window's eye stands in, or behind a doorway the
 /// ray meets first, in the spaces the eye sees.
 pub struct ScenePick {
-    /// The node of the scene the window shows.
     scene: Option<NodeId>,
     camera: Camera,
     size: Size,
@@ -29,23 +26,17 @@ pub struct ScenePick {
     scene_to_window: ProjectiveTransform,
     surfaces: Vec<PickSurface>,
     seen: Vec<PickSpace>,
-    /// The scene nodes of every space of the scene, seen or not.
     scenes: Vec<NodeId>,
-    /// The scene nodes of the spaces the eye sees.
     seen_scenes: Vec<NodeId>,
-    /// The last window point picked, and what it met.
     last: Cell<Option<LastPick>>,
 }
 
-/// A space the eye sees, as the pick goes into it: the seen space whose
-/// doorway it shows through, and the map onto that doorway's unit square.
 struct PickSpace {
     through: Option<usize>,
     to_door: Mat4,
 }
 
 impl PickSpace {
-    /// How far along `ray` it passes through the doorway, if it does.
     fn meet(&self, ray: Ray) -> Option<f32> {
         let origin = self.to_door.transform_point(ray.origin);
         let direction = self.to_door.transform_vector(ray.direction);
@@ -59,7 +50,6 @@ impl PickSpace {
     }
 }
 
-/// A window point and the surface it met, if any, with where.
 type LastPick = (Point, Option<(usize, SurfaceHit)>);
 
 struct PickSurface {
@@ -68,10 +58,7 @@ struct PickSurface {
     // The rect of its content in its layer, which the mesh's texture
     // spans. The pick's content points lie in the layer.
     content: Rect,
-    /// The seen space the surface lies in.
     seen: usize,
-    /// The triangle the last ray that met this surface met, on whose plane
-    /// a drag that leaves the mesh goes on.
     held: Cell<Option<u32>>,
 }
 
@@ -94,19 +81,19 @@ impl ScenePick {
     /// The pick of the scene that `layer` shows, with `to_window` mapping
     /// the layer to the window; `None` when the layer shows no scene. Its
     /// surfaces are those the window's eye sees.
-    pub fn of(layer: &LayerNode, to_window: ProjectiveTransform) -> Option<Self> {
+    pub fn of(layer: LayerRef<'_>, to_window: ProjectiveTransform) -> Option<Self> {
         // A hit walk asks every layer: one that opens no scene stops here,
         // before any transform work.
         let tree = SpaceTree::of(layer)?;
         // The scene fills its layer's bounds.
-        let bounds = layer.local_bounds;
+        let bounds = layer.local_bounds();
         let to_window = ProjectiveTransform::translation(bounds.x, bounds.y).then(to_window);
         let window_to_scene = to_window.inverse()?;
         let view = EyeView::of(&tree, bounds.size());
         let seen_scenes = view
             .seen
             .iter()
-            .filter_map(|seen| tree.cells[seen.cell].layer.node_id)
+            .filter_map(|seen| tree.cells[seen.cell].layer.node_id())
             .collect();
         let seen = view
             .seen
@@ -123,7 +110,7 @@ impl ScenePick {
             .surfaces
             .into_iter()
             .map(|seen| PickSurface {
-                node_id: seen.layer.node_id,
+                node_id: seen.layer.node_id(),
                 surface: seen.surface,
                 content: seen.content,
                 seen: seen.seen,
@@ -131,7 +118,7 @@ impl ScenePick {
             })
             .collect();
         Some(Self {
-            scene: layer.node_id,
+            scene: layer.node_id(),
             camera: view.camera,
             size: view.size,
             window_to_scene,
@@ -141,7 +128,7 @@ impl ScenePick {
             scenes: tree
                 .cells
                 .iter()
-                .filter_map(|cell| cell.layer.node_id)
+                .filter_map(|cell| cell.layer.node_id())
                 .collect(),
             seen_scenes,
             last: Cell::new(None),
@@ -155,23 +142,23 @@ impl ScenePick {
 
     /// Whether `layer` shows one of this scene's spaces, a scene behind one
     /// of its doorways, whose surfaces this pick finds.
-    pub fn holds_scene(&self, layer: &LayerNode) -> bool {
+    pub fn holds_scene(&self, layer: LayerRef<'_>) -> bool {
         layer
-            .node_id
+            .node_id()
             .is_some_and(|node_id| self.scenes.contains(&node_id))
     }
 
     /// Whether the eye sees the space of the scene `layer` shows, through
     /// the doorways before it.
-    pub fn sees_scene(&self, layer: &LayerNode) -> bool {
+    pub fn sees_scene(&self, layer: LayerRef<'_>) -> bool {
         layer
-            .node_id
+            .node_id()
             .is_some_and(|node_id| self.seen_scenes.contains(&node_id))
     }
 
     /// The index among the scene's surfaces of the surface layer `layer`.
-    pub fn index_of(&self, layer: &LayerNode) -> Option<usize> {
-        let node_id = layer.node_id?;
+    pub fn index_of(&self, layer: LayerRef<'_>) -> Option<usize> {
+        let node_id = layer.node_id()?;
         self.surfaces
             .iter()
             .position(|surface| surface.node_id == Some(node_id))
@@ -250,10 +237,6 @@ impl ScenePick {
         nearest
     }
 
-    /// The nearest surface of seen space `seen` that `ray` meets past
-    /// `beyond`; where it first passes through the doorway of a space seen
-    /// through this one, the nearest surface on the doorway's other side,
-    /// or this space's own where that side shows none.
     fn nearest_in(&self, ray: Ray, seen: usize, beyond: f32) -> Option<(usize, SurfaceHit)> {
         let surface = self
             .surfaces
@@ -291,15 +274,12 @@ impl ScenePick {
 
 /// The mesh surface layer a child of a scene layer is, or holds as the
 /// wrapper of its outer draws.
-pub fn surface_layer(child: &LayerNode) -> Option<&LayerNode> {
-    let layer = match child.wraps {
+pub fn surface_layer(child: LayerRef<'_>) -> Option<LayerRef<'_>> {
+    let layer = match child.wraps() {
         None => child,
-        Some(node_id) => child.children.iter().find_map(|inner| match inner {
-            crate::graph::RenderNode::Layer(inner) if inner.node_id == Some(node_id) => {
-                Some(&**inner)
-            }
-            _ => None,
-        })?,
+        Some(node_id) => child
+            .children()
+            .find(|inner| inner.kind() == RecordKind::Layer && inner.node_id() == Some(node_id))?,
     };
-    cranpose_ui_graphics::layer_transform::layer_surface(&layer.graphics_layer).map(|_| layer)
+    cranpose_ui_graphics::layer_transform::layer_surface(layer.graphics_layer()).map(|_| layer)
 }

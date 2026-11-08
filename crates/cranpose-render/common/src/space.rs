@@ -22,16 +22,10 @@ use cranpose_ui_graphics::{
     space::{Camera, EyeWorld, LayerSpace, Light, Mat4, MeshSurface, Scene3d, Vec3},
 };
 
-use crate::graph::{LayerNode, ProjectiveTransform, RenderNode};
+use crate::{graph::ProjectiveTransform, scene_store::LayerRef};
 
-/// How far past a doorway's plane, against its distance from the eye's
-/// space's origin, the cut lies for a space seen back through the doorway,
-/// so the surface the doorway opens in, which lies on the plane, shows a
-/// hole.
 const BACK_THROUGH_DOORWAY: f32 = 1.0e-4;
 
-/// The smallest area, in logical pixels, a doorway's opening on screen
-/// takes for the eye to see through it.
 const SMALLEST_OPENING: f32 = 0.25;
 
 /// How near the eye a doorway still opens, as a fraction of the distance of
@@ -43,7 +37,7 @@ pub const DOORWAY_NEAR: f32 = 1.0 / 1024.0;
 /// A space a scene opens.
 pub struct Cell<'a> {
     /// The scene's layer.
-    pub layer: &'a LayerNode,
+    pub layer: LayerRef<'a>,
     /// The scene.
     pub scene: &'a Scene3d,
     /// The space its doorway lies in; `None` for the window's scene.
@@ -62,7 +56,7 @@ pub struct Cell<'a> {
 /// A mesh surface placed in its space.
 pub struct Placed<'a> {
     /// The surface's layer.
-    pub layer: &'a LayerNode,
+    pub layer: LayerRef<'a>,
     /// The surface, its mesh placed in its space.
     pub surface: MeshSurface,
     /// Its space.
@@ -72,8 +66,6 @@ pub struct Placed<'a> {
     pub content: Rect,
 }
 
-/// The surface whose content a layer lies flat in, by its index, and the
-/// map from the layer into that content.
 type Host = (usize, ProjectiveTransform);
 
 /// The spaces of a window's scene and the scenes behind its doorways, and
@@ -139,7 +131,7 @@ pub struct SeenDoor {
 /// A surface the eye sees.
 pub struct SeenSurface<'a> {
     /// The surface's layer.
-    pub layer: &'a LayerNode,
+    pub layer: LayerRef<'a>,
     /// The surface, its mesh placed in the eye's space.
     pub surface: MeshSurface,
     /// The rect of its content in its layer, as [`Placed::content`].
@@ -151,7 +143,7 @@ pub struct SeenSurface<'a> {
 impl<'a> SpaceTree<'a> {
     /// The spaces and surfaces of the scene `scene_layer` shows; `None`
     /// when it shows none.
-    pub fn of(scene_layer: &'a LayerNode) -> Option<Self> {
+    pub fn of(scene_layer: LayerRef<'a>) -> Option<Self> {
         let scene = scene_of(scene_layer)?;
         let mut tree = Self {
             cells: Vec::new(),
@@ -162,12 +154,12 @@ impl<'a> SpaceTree<'a> {
     }
 
     /// Whether `layer` is one of the tree's scenes.
-    pub fn holds_scene(&self, layer: &LayerNode) -> bool {
-        layer.node_id.is_some()
+    pub fn holds_scene(&self, layer: LayerRef<'_>) -> bool {
+        layer.node_id().is_some()
             && self
                 .cells
                 .iter()
-                .any(|cell| cell.layer.node_id == layer.node_id)
+                .any(|cell| cell.layer.node_id() == layer.node_id())
     }
 
     /// The space an eye that walked through the doorways of the scene nodes
@@ -176,7 +168,7 @@ impl<'a> SpaceTree<'a> {
         let mut cell = 0;
         for &node in path {
             let next = self.cells.iter().position(|inner| {
-                inner.parent == Some(cell) && inner.layer.node_id == Some(NodeId(node))
+                inner.parent == Some(cell) && inner.layer.node_id() == Some(NodeId(node))
             });
             match next {
                 Some(next) => cell = next,
@@ -198,13 +190,9 @@ impl<'a> SpaceTree<'a> {
         transform
     }
 
-    /// Opens the space the scene `layer` shows: `place` holds the space its
-    /// doorway lies in, the frame of `layer` there, and the surface whose
-    /// content holds the doorway with the map from `layer` into that
-    /// content.
     fn open(
         &mut self,
-        layer: &'a LayerNode,
+        layer: LayerRef<'a>,
         scene: &'a Scene3d,
         place: Option<(usize, Mat4, Option<Host>)>,
     ) {
@@ -219,7 +207,7 @@ impl<'a> SpaceTree<'a> {
                 to_parent: Mat4::IDENTITY,
             },
             Some((parent, frame, host)) => {
-                let rect = layer.local_bounds;
+                let rect = layer.local_bounds();
                 Cell {
                     layer,
                     scene,
@@ -237,26 +225,16 @@ impl<'a> SpaceTree<'a> {
         self.children(layer, &Mat4::IDENTITY, (index, None));
     }
 
-    /// Visits the children of `layer`, whose frame `frame` maps it into
-    /// space `cell`; `host` holds the surface whose content `layer` lies flat
-    /// in, with the map from `layer` into that content.
-    fn children(
-        &mut self,
-        layer: &'a LayerNode,
-        frame: &Mat4,
-        (cell, host): (usize, Option<Host>),
-    ) {
-        for child in &layer.children {
-            let RenderNode::Layer(child) = child else {
-                continue;
-            };
+    fn children(&mut self, layer: LayerRef<'a>, frame: &Mat4, (cell, host): (usize, Option<Host>)) {
+        for child in layer.children() {
             if !child.has_space() {
                 continue;
             }
-            let child_frame = embed(child.transform_to_parent).then(frame);
-            let child_host = host
-                .map(|(surface, to_content)| (surface, child.transform_to_parent.then(to_content)));
-            match child.graphics_layer.space.as_deref() {
+            let to_parent = child.transform_to_parent();
+            let child_frame = embed(to_parent).then(frame);
+            let child_host =
+                host.map(|(surface, to_content)| (surface, to_parent.then(to_content)));
+            match child.graphics_layer().space.as_deref() {
                 Some(LayerSpace::Scene(scene)) => {
                     self.open(child, scene, Some((cell, child_frame, child_host)));
                 }
@@ -271,10 +249,8 @@ impl<'a> SpaceTree<'a> {
         }
     }
 
-    /// Places the mesh surface `layer` draws its content on in `frame`, in
-    /// space `cell`, and the frames of its children in its content.
-    fn surface(&mut self, layer: &'a LayerNode, surface: &MeshSurface, frame: &Mat4, cell: usize) {
-        let content = layer.local_bounds;
+    fn surface(&mut self, layer: LayerRef<'a>, surface: &MeshSurface, frame: &Mat4, cell: usize) {
+        let content = layer.local_bounds();
         let placed = surface.placed_by(frame);
         let to_scene = placed.content_to_scene(content.size());
         let index = self.surfaces.len();
@@ -297,13 +273,9 @@ impl<'a> SpaceTree<'a> {
     }
 }
 
-/// What the doorway between a space and the next one an eye looks into
-/// opens onto.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Through {
-    /// A space behind a doorway in the space the eye looks from.
     Inward,
-    /// The space the doorway of the space the eye looks from lies in.
     Outward,
 }
 
@@ -350,8 +322,6 @@ impl<'a> EyeView<'a> {
         view
     }
 
-    /// Looks through the doorways of seen space `seen`, other than the one
-    /// into the space `came_from`, within `opening`.
     fn look_through(
         &mut self,
         tree: &SpaceTree<'a>,
@@ -387,9 +357,6 @@ impl<'a> EyeView<'a> {
         }
     }
 
-    /// Sees space `cell`, which `to_eye` maps into the eye's, through the
-    /// doorway `quad` spans, from seen space `seen`, within `opening`; then
-    /// looks on through its doorways.
     fn through(
         &mut self,
         tree: &SpaceTree<'a>,
@@ -443,9 +410,6 @@ impl<'a> EyeView<'a> {
         self.look_through(tree, (index, Some(self.seen[seen].cell)), shown);
     }
 
-    /// The bounds on screen of the unit square `quad` places in the eye's
-    /// space, of its part deeper than [`DOORWAY_NEAR`] of the camera's near
-    /// plane; `None` when it lies wholly nearer.
     fn opening(&self, quad: &Mat4) -> Option<Rect> {
         let to_camera = quad.then(&self.camera.view);
         let corners = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]
@@ -487,7 +451,7 @@ impl<'a> EyeView<'a> {
     /// space it stands in, the spaces one doorway from it, their solid
     /// surfaces and the doorways between them, in the eye's space.
     pub fn build_world(&self, tree: &SpaceTree<'_>, world: &mut EyeWorld) {
-        if let Some(window_scene) = tree.cells[0].layer.node_id {
+        if let Some(window_scene) = tree.cells[0].layer.node_id() {
             world.set_window_scene(window_scene.0);
         }
         let walked = tree.walked_to(self.cell);
@@ -503,7 +467,7 @@ impl<'a> EyeView<'a> {
             spaces.push((outer, index, from_parent));
         }
         for (inner, space) in tree.cells.iter().enumerate() {
-            let (Some(cell), Some(node)) = (space.parent, space.layer.node_id) else {
+            let (Some(cell), Some(node)) = (space.parent, space.layer.node_id()) else {
                 continue;
             };
             if cell != self.cell {
@@ -538,13 +502,11 @@ impl<'a> EyeView<'a> {
 }
 
 impl SpaceTree<'_> {
-    /// The scene nodes of the doorways from the window's scene to space
-    /// `cell`, outermost first.
     fn walked_to(&self, cell: usize) -> Arc<[usize]> {
         let mut path = Vec::new();
         let mut at = cell;
         while let Some(parent) = self.cells[at].parent {
-            if let Some(node) = self.cells[at].layer.node_id {
+            if let Some(node) = self.cells[at].layer.node_id() {
                 path.push(node.0);
             }
             at = parent;
@@ -554,8 +516,6 @@ impl SpaceTree<'_> {
     }
 }
 
-/// The plane through `point` square to the unit `normal`, moved `margin`
-/// back along it: positive where `normal` points.
 fn plane(normal: Vec3, point: Vec3, margin: f32) -> [f32; 4] {
     [normal.x, normal.y, normal.z, -normal.dot(point) - margin]
 }
@@ -573,8 +533,8 @@ pub fn embed(transform: ProjectiveTransform) -> Mat4 {
 }
 
 /// The scene a layer shows, or `None`.
-pub fn scene_of(layer: &LayerNode) -> Option<&Scene3d> {
-    match layer.graphics_layer.space.as_deref()? {
+pub fn scene_of(layer: LayerRef<'_>) -> Option<&Scene3d> {
+    match layer.graphics_layer().space.as_deref()? {
         LayerSpace::Scene(scene) => Some(scene),
         LayerSpace::Surface(_) | LayerSpace::Transform(_) => None,
     }
@@ -585,7 +545,7 @@ pub fn scene_of(layer: &LayerNode) -> Option<&Scene3d> {
 /// the top left of its layer's bounds at the origin, to the window, given
 /// `to_window` for `layer`.
 pub fn for_each_window_eye(
-    layer: &LayerNode,
+    layer: LayerRef<'_>,
     to_window: ProjectiveTransform,
     visit: &mut impl FnMut(&SpaceTree<'_>, &EyeView<'_>, ProjectiveTransform),
 ) {
@@ -593,7 +553,7 @@ pub fn for_each_window_eye(
         let Some(tree) = SpaceTree::of(scene_layer) else {
             return;
         };
-        let rect = scene_layer.local_bounds;
+        let rect = scene_layer.local_bounds();
         let view = EyeView::of(&tree, rect.size());
         visit(
             &tree,
@@ -627,19 +587,17 @@ impl EyeView<'_> {
 /// shows a scene outside every other scene's space, with the map from its
 /// local space into the window, given `to_window` for `layer`.
 pub fn for_each_window_scene<'a>(
-    layer: &'a LayerNode,
+    layer: LayerRef<'a>,
     to_window: ProjectiveTransform,
-    visit: &mut impl FnMut(&'a LayerNode, ProjectiveTransform),
+    visit: &mut impl FnMut(LayerRef<'a>, ProjectiveTransform),
 ) {
     if scene_of(layer).is_some() {
         visit(layer, to_window);
         return;
     }
-    for child in &layer.children {
-        if let RenderNode::Layer(child) = child
-            && child.has_space()
-        {
-            for_each_window_scene(child, child.transform_to_parent.then(to_window), visit);
+    for child in layer.children() {
+        if child.has_space() {
+            for_each_window_scene(child, child.transform_to_parent().then(to_window), visit);
         }
     }
 }

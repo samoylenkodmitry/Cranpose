@@ -27,7 +27,7 @@ fn test_layer(node_id: Option<NodeId>, children: Vec<RenderNode>) -> LayerNode {
 }
 
 fn direct_graph() -> RenderGraph {
-    RenderGraph::new(test_layer(
+    RenderGraph::new(&test_layer(
         Some(NodeId(7_100)),
         vec![support::solid_rect(
             Rect {
@@ -63,7 +63,7 @@ fn nested_isolated_graph() -> RenderGraph {
         )],
     );
     child.graphics_layer.alpha = 0.5;
-    RenderGraph::new(test_layer(
+    RenderGraph::new(&test_layer(
         Some(NodeId(7_100)),
         vec![RenderNode::Layer(Box::new(child))],
     ))

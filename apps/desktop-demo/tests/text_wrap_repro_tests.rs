@@ -88,9 +88,10 @@ fn repro_screen_paragraphs_paint_the_height_they_measured() {
         .collect();
     let graph = build_graph_from_applier(&applier, root, 1.0).expect("render graph");
     applier.clear_runtime_handle();
+    let painted_root = graph.root();
 
     for (needle, measured_height) in PARAGRAPHS.iter().zip(measured) {
-        let painted = find_painted(&graph.root, needle)
+        let painted = find_painted(&painted_root, needle)
             .unwrap_or_else(|| panic!("painted paragraph for {needle:?}"));
         assert!(
             measured_height > 40.0,

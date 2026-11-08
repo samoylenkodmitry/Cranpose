@@ -16,7 +16,7 @@ fn page(children: Vec<RenderNode>) -> RenderGraph {
     let frame = Rect::from_size(Size::new(WIDTH as f32, HEIGHT as f32));
     let mut nodes = vec![support::solid_rect(frame, Color::BLACK)];
     nodes.extend(children);
-    RenderGraph::new(shared_test_support::layer_node(
+    RenderGraph::new(&shared_test_support::layer_node(
         frame,
         ProjectiveTransform::identity(),
         GraphicsLayer::default(),
@@ -56,7 +56,7 @@ fn a_launch_with_no_record_finds_its_rect_and_text_pipelines_built() {
         return;
     };
     // A frame of an empty page builds what every capture draws with.
-    let empty = RenderGraph::new(shared_test_support::layer_node(
+    let empty = RenderGraph::new(&shared_test_support::layer_node(
         Rect::from_size(Size::new(WIDTH as f32, HEIGHT as f32)),
         ProjectiveTransform::identity(),
         GraphicsLayer::default(),

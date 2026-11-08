@@ -136,7 +136,7 @@ fn snapped_text_leaf_root(animated: bool, translated_content_context: bool) -> R
         ..Default::default()
     };
 
-    RenderGraph::new(LayerNode {
+    RenderGraph::new(&LayerNode {
         local_bounds: Rect {
             x: 0.0,
             y: 0.0,
@@ -220,7 +220,7 @@ fn a_layer_shadow_draws_skias_ambient_then_spot_pass() {
 
 #[test]
 fn build_raster_scene_uses_graph_transform_to_parent() {
-    let graph = RenderGraph::new(LayerNode {
+    let graph = RenderGraph::new(&LayerNode {
         local_bounds: Rect {
             x: 0.0,
             y: 0.0,
@@ -366,7 +366,7 @@ fn shapes_in_list(child: LayerNode) -> usize {
     let mut list = clipped_layer(Point::new(0.0, 80.0), vec![]);
     list.local_bounds.width = 200.0;
     list.children.push(RenderNode::Layer(Box::new(child)));
-    build_raster_scene_for_test(&RenderGraph::new(list))
+    build_raster_scene_for_test(&RenderGraph::new(&list))
         .shapes
         .len()
 }

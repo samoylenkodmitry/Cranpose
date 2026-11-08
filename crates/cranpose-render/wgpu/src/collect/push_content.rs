@@ -2,8 +2,9 @@
 // the layer's content context.
 
 use cranpose_render_common::{
-    graph::{DrawRunNode, PrimitiveEntry, PrimitiveNode, RenderNode},
+    graph::{DrawPrimitiveNode, DrawRunNode, TextPrimitiveNode},
     primitive_emit::{PrimitiveClipSpace, resolve_primitive_clip},
+    scene_store::ItemRef,
 };
 use cranpose_ui_graphics::{Point, RecordLane};
 
@@ -15,15 +16,16 @@ use crate::{
     },
 };
 
-pub(super) fn push_content(out: &mut LayerScene, node: &RenderNode, content: &ContentContext<'_>) {
+pub(super) fn push_content(out: &mut LayerScene, node: ItemRef<'_>, content: &ContentContext<'_>) {
     match node {
-        RenderNode::Primitive(entry) => push_primitive(out, entry, content),
-        RenderNode::DrawRun(run) => push_draw_run(out, run, content),
-        RenderNode::Layer(_) | RenderNode::Inline(_) => {}
+        ItemRef::Draw(draw) => push_draw(out, draw, content),
+        ItemRef::Text(text) => push_text(out, text, content),
+        ItemRef::Run(run) => push_draw_run(out, run, content),
+        ItemRef::Layer(_) | ItemRef::Leaf(_) => {}
     }
 }
 
-fn push_primitive(out: &mut LayerScene, entry: &PrimitiveEntry, content: &ContentContext<'_>) {
+fn push_draw(out: &mut LayerScene, draw: &DrawPrimitiveNode, content: &ContentContext<'_>) {
     let ContentContext {
         layer_bounds,
         local_layer,
@@ -32,56 +34,60 @@ fn push_primitive(out: &mut LayerScene, entry: &PrimitiveEntry, content: &Conten
         anchor: snap_anchor,
         ..
     } = *content;
-    match &entry.node {
-        PrimitiveNode::Draw(draw) => {
-            let counts = scene_counts(&out.scene);
-            let clip = resolve_primitive_clip(
-                draw.clip,
-                layer_bounds,
-                local_layer,
-                visual_clip,
-                PrimitiveClipSpace::Local,
-            );
-            if clip.is_some_and(|clip| clip.is_empty()) {
-                return;
-            }
-            push_draw_primitive(
-                &draw.primitive,
-                &ContentContext {
-                    visual_clip: clip,
-                    rounding: rounding.filter(|_| clip == visual_clip),
-                    ..*content
-                },
-                &mut out.scene,
-                None,
-            );
-            assign_snap_anchor_since(&mut out.scene, counts, snap_anchor);
-        }
-        PrimitiveNode::Text(text) => {
-            let text_rect = text.rect.translate(layer_bounds.x, layer_bounds.y);
-            let text_clip = resolve_primitive_clip(
-                text.clip,
-                layer_bounds,
-                local_layer,
-                visual_clip,
-                PrimitiveClipSpace::Local,
-            );
-            if text_clip.is_some_and(|clip| clip.is_empty()) {
-                return;
-            }
-            push_text_style_draws(
-                &mut out.scene,
-                text,
-                TextPlacement {
-                    bounds: layer_bounds,
-                    text_rect,
-                    layer: local_layer,
-                    clip: text_clip,
-                    snap_anchor,
-                },
-            );
-        }
+    let counts = scene_counts(&out.scene);
+    let clip = resolve_primitive_clip(
+        draw.clip,
+        layer_bounds,
+        local_layer,
+        visual_clip,
+        PrimitiveClipSpace::Local,
+    );
+    if clip.is_some_and(|clip| clip.is_empty()) {
+        return;
     }
+    push_draw_primitive(
+        &draw.primitive,
+        &ContentContext {
+            visual_clip: clip,
+            rounding: rounding.filter(|_| clip == visual_clip),
+            ..*content
+        },
+        &mut out.scene,
+        None,
+    );
+    assign_snap_anchor_since(&mut out.scene, counts, snap_anchor);
+}
+
+fn push_text(out: &mut LayerScene, text: &TextPrimitiveNode, content: &ContentContext<'_>) {
+    let ContentContext {
+        layer_bounds,
+        local_layer,
+        visual_clip,
+        anchor: snap_anchor,
+        ..
+    } = *content;
+    let text_rect = text.rect.translate(layer_bounds.x, layer_bounds.y);
+    let text_clip = resolve_primitive_clip(
+        text.clip,
+        layer_bounds,
+        local_layer,
+        visual_clip,
+        PrimitiveClipSpace::Local,
+    );
+    if text_clip.is_some_and(|clip| clip.is_empty()) {
+        return;
+    }
+    push_text_style_draws(
+        &mut out.scene,
+        text,
+        TextPlacement {
+            bounds: layer_bounds,
+            text_rect,
+            layer: local_layer,
+            clip: text_clip,
+            snap_anchor,
+        },
+    );
 }
 
 /// Places a recorded run: every maximal stretch of shape segments becomes

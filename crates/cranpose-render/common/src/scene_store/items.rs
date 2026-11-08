@@ -152,6 +152,16 @@ impl ItemPool {
         start
     }
 
+    pub(crate) fn heap_bytes(&self) -> usize {
+        self.items.capacity() * size_of::<Item>()
+            + self.free.capacity() * size_of::<Vec<u32>>()
+            + self
+                .free
+                .iter()
+                .map(|class| class.capacity() * size_of::<u32>())
+                .sum::<usize>()
+    }
+
     pub(crate) fn clear(&mut self) {
         self.items.clear();
         self.free.iter_mut().for_each(Vec::clear);

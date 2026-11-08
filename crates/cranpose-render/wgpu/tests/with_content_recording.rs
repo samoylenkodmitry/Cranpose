@@ -93,7 +93,7 @@ fn draw_layer(color: Color, rect: Rect) -> RenderNode {
 }
 
 fn explicitly_ordered_graph(before: Color, after: Color) -> RenderGraph {
-    RenderGraph::new(support::layer_node(
+    RenderGraph::new(&support::layer_node(
         None,
         WIDTH as f32,
         HEIGHT as f32,

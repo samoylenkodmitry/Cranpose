@@ -271,6 +271,17 @@ impl ProjectiveTransform {
         self.matrix
     }
 
+    /// The translation this transform moves by, when it does nothing else.
+    pub fn as_translation(self) -> Option<Point> {
+        let [[a, b, x], [c, d, y], [p, q, w]] = self.matrix;
+        // `abs() <= 0.0` holds for exactly the values that equal zero, both
+        // signs, as an exact compare with the identity's entries would.
+        [a - 1.0, b, c, d - 1.0, p, q, w - 1.0]
+            .iter()
+            .all(|entry| entry.abs() <= 0.0)
+            .then_some(Point { x, y })
+    }
+
     /// Maps a position into destination coordinates.
     pub fn map_point(&self, point: Point) -> Point {
         let x = point.x;
@@ -403,9 +414,6 @@ impl ProjectiveTransform {
         }
     }
 
-    /// [`Self::bounds_for_rect`] for a transform that skews, turns or has a
-    /// perspective, kept out of line: a rectangle that stays a rectangle
-    /// pays for one check.
     #[inline(never)]
     fn turned_bounds_for_rect(&self, rect: Rect) -> Rect {
         let [_, _, [px, py, w]] = self.matrix;

@@ -4,7 +4,7 @@ use cranpose_liquid::prelude::*;
 use cranpose_macros::composable;
 use cranpose_render_common::{
     Renderer,
-    graph::{LayerNode, RenderNode},
+    graph::{LayerNode, RenderGraph, RenderNode},
 };
 use cranpose_render_wgpu::{CapturedFrame, RenderStatsSnapshot, WgpuRenderer};
 use cranpose_ui::{
@@ -467,7 +467,9 @@ fn a_floating_button_draws_the_same_with_its_general_and_its_own_pipelines() {
         .graph
         .as_mut()
         .expect("button graph");
-    assert!(expand_content_masks(&mut graph.root) > 0);
+    let mut root = graph.root();
+    assert!(expand_content_masks(&mut root) > 0);
+    *graph = RenderGraph::new(&root);
     let (expanded, _) = capture_card_frame(&mut shell).expect("expanded mask capture");
     support::assert_same_bytes(
         "the content mask ends at its silhouette even when the material casts a wide shadow",

@@ -53,9 +53,6 @@ const GPU_TEXT_BRUSH_EFFECT_FIRST_STOP_SLOT: usize = 8;
 pub(crate) const GPU_TEXT_BRUSH_EFFECT_SHADER: &str =
     cranpose_ui_graphics::framework_shaders::GPU_TEXT_BRUSH_EFFECT_WGSL;
 
-/// `layer`'s elevation shadow over `transformed_bounds`, cut to `clip`: its
-/// ambient and spot passes as Skia draws them, each a round rect shadow the
-/// pass draws straight into its target.
 pub(crate) fn layer_casts_shadow(layer: &GraphicsLayer) -> bool {
     layer.shadow_elevation > 0.0
 }
@@ -98,12 +95,14 @@ pub(crate) fn render_layout_tree(root: &LayoutBox, scene: &mut Scene) {
 
 pub(crate) fn render_layout_tree_with_scale(root: &LayoutBox, scene: &mut Scene, scale: f32) {
     let graph = cranpose_render_common::scene_builder::build_graph_from_layout_tree(root, scale);
-    collect_hits_from_graph(
-        &graph.root,
-        cranpose_render_common::graph::ProjectiveTransform::identity(),
-        scene,
-        None,
-    );
+    if let Some(root) = graph.store().root_layer() {
+        collect_hits_from_graph(
+            root,
+            cranpose_render_common::graph::ProjectiveTransform::identity(),
+            scene,
+            None,
+        );
+    }
     scene.replace_graph(graph);
 }
 
@@ -522,7 +521,6 @@ fn text_for_gpu_mask_batch(
 trait TextStyleDrawSink {
     fn current_z(&mut self) -> usize;
 
-    /// A decoration shape in scene space, painted already.
     fn push_shape(
         &mut self,
         primitive: DrawPrimitive,
@@ -836,9 +834,6 @@ pub(crate) struct TextPlacement<'a> {
     pub(crate) snap_anchor: Option<SnapAnchor>,
 }
 
-/// Pushes a text's draws: its glyphs in the paint's colour when the paint
-/// is plain, without reading the style, and every draw its style asks for
-/// otherwise; each anchored to the placement's snap anchor.
 pub(crate) fn push_text_style_draws(
     scene: &mut CompositorScene,
     node: &TextPrimitiveNode,
@@ -879,10 +874,6 @@ pub(crate) fn estimate_text_style_draw_bounds(
 
 const DRAW_PRIMITIVE_TEXT_NODE_ID: NodeId = NodeId(0);
 
-/// The primitive with the layer's paint folded into its brushes, for a
-/// shape that joins the layer's loose run; `None` for text, images,
-/// shadows, content and group markers, which take their own paths. The layer's affine
-/// part is identity for anything drawn direct, so only the paint applies.
 fn loose_shape(primitive: &DrawPrimitive, layer: &GraphicsLayer) -> Option<DrawPrimitive> {
     let painted = |brush: &Brush| resolve_layer_brush(brush, layer).into_brush();
     Some(match primitive {
@@ -1071,9 +1062,6 @@ pub(crate) fn push_draw_primitive(
     );
 }
 
-/// Records a shadow primitive's caster or cutout into `recorder` in the
-/// layer's record space, painted by the layer, under `blend_mode`; false
-/// when the primitive is not a shape.
 fn record_shadow_caster(
     recorder: &mut Arc<ShapeRecorder>,
     primitive: &DrawPrimitive,

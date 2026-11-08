@@ -286,7 +286,7 @@ fn multiline_text_renders_second_line_pixels() {
 #[test]
 fn draw_scene_renders_graph_backed_scene_without_flat_primitives() {
     let mut scene = Scene::new();
-    scene.graph = Some(RenderGraph::new(LayerNode {
+    scene.graph = Some(RenderGraph::new(&LayerNode {
         local_bounds: Rect {
             x: 0.0,
             y: 0.0,

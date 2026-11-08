@@ -152,7 +152,7 @@ fn hash_nodes(nodes: &[RenderNode], hash: &mut DefaultHasher) {
 fn fingerprint(shell: &AppShell<GraphRenderer>) -> u64 {
     let mut hash = DefaultHasher::new();
     hash_layer(
-        &shell.scene().graph.as_ref().expect("scene graph").root,
+        &shell.scene().graph.as_ref().expect("scene graph").root(),
         &mut hash,
     );
     hash.finish()

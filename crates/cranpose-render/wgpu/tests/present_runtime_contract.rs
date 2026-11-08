@@ -32,7 +32,7 @@ fn test_layer(node_id: Option<NodeId>, children: Vec<RenderNode>) -> LayerNode {
 }
 
 fn direct_graph() -> RenderGraph {
-    RenderGraph::new(test_layer(
+    RenderGraph::new(&test_layer(
         Some(NodeId(7_700)),
         vec![support::solid_rect(
             Rect {
@@ -58,7 +58,7 @@ fn shadowed_child_graph() -> RenderGraph {
         vec![support::drop_shadow(bounds, Color::BLACK, 6.0)],
     );
     child.local_bounds = bounds;
-    RenderGraph::new(test_layer(
+    RenderGraph::new(&test_layer(
         Some(NodeId(7_702)),
         vec![RenderNode::Layer(Box::new(child))],
     ))
@@ -624,7 +624,7 @@ fn queued_packets_keep_complete_pixels_while_the_producer_changes_the_scene() {
             } else {
                 Color::BLUE
             };
-            producer.scene_mut().graph = Some(RenderGraph::new(test_layer(
+            producer.scene_mut().graph = Some(RenderGraph::new(&test_layer(
                 Some(NodeId(7_703)),
                 vec![
                     support::solid_rect(

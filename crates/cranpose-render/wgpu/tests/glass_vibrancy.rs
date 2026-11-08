@@ -92,7 +92,7 @@ fn source_scene(selected: bool, dark: bool, background: Color) -> RenderGraph {
         explicit_offscreen: true,
         ..Default::default()
     };
-    RenderGraph::new(shared_test_support::layer_node(
+    RenderGraph::new(&shared_test_support::layer_node(
         bounds,
         ProjectiveTransform::identity(),
         GraphicsLayer::default(),
@@ -167,7 +167,7 @@ fn content_test_frame(
             RenderNode::Layer(Box::new(layer)),
         ],
     );
-    renderer.scene_mut().graph = Some(RenderGraph::new(root));
+    renderer.scene_mut().graph = Some(RenderGraph::new(&root));
     renderer
         .capture_frame(1206, 360)
         .expect("the renderer captures a frame")
@@ -347,7 +347,7 @@ fn optical_projection_preserves_the_native_capsule_and_unmagnified_source() {
             ),
         )],
     );
-    renderer.scene_mut().graph = Some(RenderGraph::new(shared_test_support::layer_node(
+    renderer.scene_mut().graph = Some(RenderGraph::new(&shared_test_support::layer_node(
         bounds,
         ProjectiveTransform::uniform_scale(3.0),
         GraphicsLayer::default(),
@@ -759,11 +759,11 @@ fn replace_pane_input(renderer: &mut cranpose_render_wgpu::WgpuRenderer, backdro
             .graph
             .as_ref()
             .expect("the scene has a graph")
-            .root,
+            .root(),
         ProjectiveTransform::identity(),
     )
     .expect("composed raised lens");
-    renderer.scene_mut().graph = Some(RenderGraph::new(shared_test_support::layer_node(
+    renderer.scene_mut().graph = Some(RenderGraph::new(&shared_test_support::layer_node(
         bounds,
         ProjectiveTransform::identity(),
         GraphicsLayer::default(),
@@ -884,7 +884,7 @@ fn composed_contact_keeps_refraction_and_shape_at_the_same_native_progress() {
         for frame in 1..=15 {
             shell.update_after_exact_interval(std::time::Duration::from_nanos(16_666_667));
             let lens = extract_lens(
-                &shell.renderer().scene_mut().graph.as_ref().unwrap().root,
+                &shell.renderer().scene_mut().graph.as_ref().unwrap().root(),
                 ProjectiveTransform::identity(),
             )
             .unwrap();
@@ -926,7 +926,7 @@ fn composed_contact_geometry_reaches_the_native_early_keyframes() {
                 save_optical_capture(&root, &format!("contact-{frame:02}"), &capture);
             }
             let graph = shell.renderer().scene_mut().graph.as_ref().unwrap().clone();
-            let bounds = rendered_lens_bounds(&graph.root, ProjectiveTransform::identity())
+            let bounds = rendered_lens_bounds(&graph.root(), ProjectiveTransform::identity())
                 .expect("rendered lens must be present");
             if let Some((_, width, height)) = [
                 (3, 101.815, 60.315),
@@ -957,7 +957,7 @@ fn composed_release_keeps_the_native_contact_clock_after_selection_commits() {
         for frame in 1..=12 {
             shell.update_after_exact_interval(std::time::Duration::from_nanos(16_666_667));
             let graph = shell.renderer().scene_mut().graph.as_ref().unwrap().clone();
-            let lens = extract_lens(&graph.root, ProjectiveTransform::identity()).unwrap();
+            let lens = extract_lens(&graph.root(), ProjectiveTransform::identity()).unwrap();
             let shader =
                 terminal_effect_shader(lens.graphics_layer.backdrop_effect.as_ref().unwrap())
                     .unwrap();
@@ -1044,9 +1044,9 @@ fn replay_tab_drag(trace: &str, mut inspect: impl FnMut(usize, f64, Rect, Rect, 
                     let renderer = shell.renderer();
                     let graph = renderer.scene_mut().graph.as_ref().expect("rendered scene");
                     (
-                        rendered_lens_bounds(&graph.root, ProjectiveTransform::identity())
+                        rendered_lens_bounds(&graph.root(), ProjectiveTransform::identity())
                             .expect("lens bounds"),
-                        rendered_glass_bounds(&graph.root, ProjectiveTransform::identity(), 1.0)
+                        rendered_glass_bounds(&graph.root(), ProjectiveTransform::identity(), 1.0)
                             .expect("pane bounds"),
                     )
                 };

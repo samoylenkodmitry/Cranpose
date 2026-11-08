@@ -88,7 +88,7 @@ fn backdrop_graph(enabled: bool) -> RenderGraph {
 }
 
 fn graph(children: Vec<RenderNode>) -> RenderGraph {
-    RenderGraph::new(support::layer_node(
+    RenderGraph::new(&support::layer_node(
         None,
         WIDTH as f32,
         HEIGHT as f32,

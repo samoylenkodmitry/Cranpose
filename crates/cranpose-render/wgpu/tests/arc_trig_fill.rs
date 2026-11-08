@@ -126,7 +126,7 @@ fn scene(frame: Frame) -> RenderGraph {
         frame,
         None,
     );
-    RenderGraph::new(shared_test_support::layer_node(
+    RenderGraph::new(&shared_test_support::layer_node(
         rect(0.0, 0.0, SIZE, SIZE),
         ProjectiveTransform::identity(),
         GraphicsLayer::default(),

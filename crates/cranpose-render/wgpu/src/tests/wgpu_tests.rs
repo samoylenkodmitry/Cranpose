@@ -27,7 +27,7 @@ fn dev_overlay_is_recorded_outside_app_graph() {
             .scene
             .graph
             .as_ref()
-            .is_none_or(|graph| graph.root.children.iter().all(|child| {
+            .is_none_or(|graph| graph.root().children.iter().all(|child| {
                 !matches!(
                     child,
                     RenderNode::Layer(layer) if layer.node_id == Some(NodeId(usize::MAX))
@@ -41,7 +41,8 @@ fn dev_overlay_is_recorded_outside_app_graph() {
         .dev_overlay_graph
         .as_ref()
         .expect("overlay graph");
-    let Some(RenderNode::Layer(overlay)) = graph.root.children.last() else {
+    let root = graph.root();
+    let Some(RenderNode::Layer(overlay)) = root.children.last() else {
         panic!("dev overlay should be the final top-level layer");
     };
 

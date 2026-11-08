@@ -68,7 +68,7 @@ fn graph(
         ))],
         ..LayerNode::default()
     };
-    RenderGraph::new(LayerNode {
+    RenderGraph::new(&LayerNode {
         local_bounds: bounds,
         children: vec![
             RenderNode::DrawRun(DrawRunNode::new(

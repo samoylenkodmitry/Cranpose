@@ -63,7 +63,7 @@ fn many_shapes_graph(shape_count: usize, width: f32, height: f32) -> RenderGraph
             )
         })
         .collect();
-    RenderGraph::new(shared_test_support::layer_node(
+    RenderGraph::new(&shared_test_support::layer_node(
         Rect {
             x: 0.0,
             y: 0.0,

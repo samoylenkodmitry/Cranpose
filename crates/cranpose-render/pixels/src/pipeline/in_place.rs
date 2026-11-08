@@ -10,7 +10,7 @@
 //! them.
 
 use cranpose_render_common::{
-    graph::{ProjectiveTransform, RenderGraph, for_each_in_draw_order},
+    graph::{ProjectiveTransform, RenderGraph},
     graph_scene::RenderDiagnostics,
     layer_shadow::ShadowLight,
 };
@@ -69,11 +69,6 @@ pub(crate) struct InPlaceUpdate<'a> {
 }
 
 impl InPlaceUpdate<'_> {
-    /// Brings the scene, the one `graph` gave last at `scale`, up to `graph`
-    /// and puts into `areas` the parts of `window` it changed. `None` when
-    /// the scale, the light or the root layer changed, with the scene as it
-    /// was, or when a subtree's records lie apart, with the areas the layers
-    /// it updated before changed: the caller builds the scene again.
     pub(crate) fn run(
         self,
         graph: &RenderGraph,
@@ -110,7 +105,8 @@ impl InPlaceUpdate<'_> {
             scale,
             text,
         };
-        let walked = repush.visit(Subtree::Layer(&graph.root), 0, None);
+        let root = graph.store().root_layer()?;
+        let walked = repush.visit(Subtree::Layer(root), 0, None);
         let held = repush.held;
         merge_areas(areas);
         walked.ok()?;
@@ -119,8 +115,6 @@ impl InPlaceUpdate<'_> {
 }
 
 impl Repush<'_> {
-    /// Walks `subtree`, whose old record is `record` and whose parent passed
-    /// down what the scene holds at `parent`, the root's start for `None`.
     fn visit(
         &mut self,
         subtree: Subtree<'_>,
@@ -141,7 +135,7 @@ impl Repush<'_> {
         };
         // A layer that changed itself, moved, or drew its subtree without
         // records of its children, as a surface or nothing, pushes it all.
-        if old.own_change != layer.own_change || !placed_as_before || old.end == record + 1 {
+        if old.own_change != layer.own_change() || !placed_as_before || old.end == record + 1 {
             return self.push_again(subtree, record, parent);
         }
         let Some(passed) = old.passed_down else {
@@ -149,7 +143,7 @@ impl Repush<'_> {
         };
         let mut next = record + 1;
         let mut walked = Ok(());
-        for_each_in_draw_order(&layer.children, |child| {
+        for child in layer.items() {
             if walked.is_ok()
                 && let Some(child) = Subtree::of_child(child)
             {
@@ -160,7 +154,7 @@ impl Repush<'_> {
                     .get(next)
                     .map_or(usize::MAX, |at| at.end);
             }
-        });
+        }
         match walked {
             Err(Stop::Rebuild) => Err(Stop::Rebuild),
             // A child pushed again with more or fewer records moved where
@@ -172,9 +166,6 @@ impl Repush<'_> {
         }
     }
 
-    /// Pushes `subtree` again over its old subtree, whose record is
-    /// `record`, as the full walk would, from what its parent passed down in
-    /// the scene, and adds the areas it changes.
     fn push_again(
         &mut self,
         subtree: Subtree<'_>,

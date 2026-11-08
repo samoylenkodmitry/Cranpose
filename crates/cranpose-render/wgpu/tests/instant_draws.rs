@@ -50,7 +50,7 @@ fn page(children: Vec<RenderNode>) -> RenderGraph {
     let frame = Rect::from_size(Size::new(WIDTH as f32, HEIGHT as f32));
     let mut nodes = vec![support::solid_rect(frame, Color(0.1, 0.12, 0.2, 1.0))];
     nodes.extend(children);
-    RenderGraph::new(shared_test_support::layer_node(
+    RenderGraph::new(&shared_test_support::layer_node(
         frame,
         ProjectiveTransform::identity(),
         GraphicsLayer::default(),

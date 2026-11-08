@@ -56,12 +56,14 @@ impl Renderer for HitRenderer {
             layout_tree.root(),
             1.0,
         );
-        collect_hits_from_graph(
-            &graph.root,
-            graph::ProjectiveTransform::identity(),
-            &mut self.scene,
-            None,
-        );
+        if let Some(root) = graph.store().root_layer() {
+            collect_hits_from_graph(
+                root,
+                graph::ProjectiveTransform::identity(),
+                &mut self.scene,
+                None,
+            );
+        }
         self.scene.replace_graph(graph);
         Ok(())
     }
@@ -76,12 +78,14 @@ impl Renderer for HitRenderer {
         if let Some(graph) =
             cranpose_render_common::scene_builder::build_graph_from_applier(applier, root, 1.0)
         {
-            collect_hits_from_graph(
-                &graph.root,
-                graph::ProjectiveTransform::identity(),
-                &mut self.scene,
-                None,
-            );
+            if let Some(root) = graph.store().root_layer() {
+                collect_hits_from_graph(
+                    root,
+                    graph::ProjectiveTransform::identity(),
+                    &mut self.scene,
+                    None,
+                );
+            }
             self.scene.replace_graph(graph);
         }
         Ok(())

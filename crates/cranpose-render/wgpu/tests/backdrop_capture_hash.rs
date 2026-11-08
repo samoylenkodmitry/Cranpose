@@ -85,7 +85,7 @@ fn rounded_clip_scene(clip_x: f32) -> RenderGraph {
         }))],
         ..LayerNode::default()
     };
-    RenderGraph::new(LayerNode {
+    RenderGraph::new(&LayerNode {
         local_bounds: CONTENT,
         children: vec![
             support::solid_rect(CONTENT, Color::BLACK),
@@ -125,7 +125,7 @@ fn subpixel_scene(edge_x: f32, alpha: f32) -> RenderGraph {
         ..LayerNode::default()
     };
 
-    RenderGraph::new(LayerNode {
+    RenderGraph::new(&LayerNode {
         local_bounds: CONTENT,
         children: vec![
             support::solid_rect(CONTENT, Color::BLACK),
@@ -143,7 +143,7 @@ fn inspector_glass(cache_policy: CachePolicy) -> RenderGraph {
         width: 56.0,
         height: 48.0,
     };
-    RenderGraph::new(LayerNode {
+    RenderGraph::new(&LayerNode {
         local_bounds: CONTENT,
         children: vec![RenderNode::Layer(Box::new(LayerNode {
             node_id: Some(NodeId(71)),
@@ -162,7 +162,7 @@ fn inspector_glass(cache_policy: CachePolicy) -> RenderGraph {
 }
 
 fn painted_page(color: Color) -> RenderGraph {
-    RenderGraph::new(LayerNode {
+    RenderGraph::new(&LayerNode {
         local_bounds: CONTENT,
         children: vec![support::solid_rect(CONTENT, color)],
         ..LayerNode::default()
@@ -252,7 +252,7 @@ fn nested_backdrop_scene(
         ],
         ..LayerNode::default()
     };
-    RenderGraph::new(LayerNode {
+    RenderGraph::new(&LayerNode {
         node_id: Some(NodeId(40)),
         local_bounds: CONTENT,
         children: vec![

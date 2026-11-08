@@ -5,13 +5,15 @@
 use std::sync::atomic::{AtomicU16, Ordering};
 
 use cranpose_core::{NodeId, RecordId, RecordRef, SceneUpdate, StoreId};
-use cranpose_ui::{Point, Rect};
+use cranpose_ui::{GraphicsLayer, Point, Rect};
 
 use super::{
-    GeoRecord, Item, ItemKind, ItemPool, ItemSpan, LayerProps, LayerRef, PropsId, ReachState,
-    RecordFlags, RecordKind, Slab, TransformId, TreeRecord, WarmRecord,
+    GeoRecord, GraphicsLayerId, Item, ItemKind, ItemPool, ItemSpan, LayerProps, LayerRef, PropsId,
+    ReachState, RecordFlags, RecordKind, Slab, TransformId, TreeRecord, WarmRecord,
 };
-use crate::graph::{DrawPrimitiveNode, DrawRunNode, ProjectiveTransform, TextPrimitiveNode};
+use crate::graph::{
+    DrawPrimitiveNode, DrawRunNode, LayerNode, ProjectiveTransform, TextPrimitiveNode,
+};
 
 /// The scene a renderer draws and the hit targets come from.
 #[derive(Clone)]
@@ -20,14 +22,15 @@ pub struct SceneStore {
     pub(super) tree: Vec<TreeRecord>,
     pub(super) geo: Vec<GeoRecord>,
     pub(super) warm: Vec<WarmRecord>,
-    generations: Vec<u32>,
-    free_rows: Vec<u32>,
+    pub(super) generations: Vec<u32>,
+    pub(super) free_rows: Vec<u32>,
     pub(super) items: ItemPool,
-    props: Slab<LayerProps>,
-    transforms: Slab<ProjectiveTransform>,
-    draws: Slab<DrawPrimitiveNode>,
-    texts: Slab<TextPrimitiveNode>,
-    runs: Slab<DrawRunNode>,
+    pub(super) props: Slab<LayerProps>,
+    pub(super) graphics_layers: Slab<GraphicsLayer>,
+    pub(super) transforms: Slab<ProjectiveTransform>,
+    pub(super) draws: Slab<DrawPrimitiveNode>,
+    pub(super) texts: Slab<TextPrimitiveNode>,
+    pub(super) runs: Slab<DrawRunNode>,
     root: Option<RecordId>,
     update: SceneUpdate,
 }
@@ -71,6 +74,7 @@ impl SceneStore {
             free_rows: Vec::new(),
             items: ItemPool::default(),
             props: Slab::default(),
+            graphics_layers: Slab::default(),
             transforms: Slab::default(),
             draws: Slab::default(),
             texts: Slab::default(),
@@ -112,6 +116,15 @@ impl SceneStore {
         }
     }
 
+    /// A store that holds `root` and the tree beneath it as records.
+    pub fn from_layer(root: &LayerNode) -> Self {
+        let mut store = Self::new();
+        store.begin_update();
+        super::spec::write_layer(&mut store, None, root);
+        store.finish_update();
+        store
+    }
+
     /// The record `id` as its readers see it.
     pub fn layer(&self, id: RecordId) -> LayerRef<'_> {
         LayerRef::new(self, id)
@@ -120,6 +133,20 @@ impl SceneStore {
     /// The root record as its readers see it.
     pub fn root_layer(&self) -> Option<LayerRef<'_>> {
         self.root.map(|root| self.layer(root))
+    }
+
+    /// Estimated heap memory the store holds, in bytes, for memory reports.
+    pub fn heap_bytes(&self) -> usize {
+        super::heap_bytes::store_heap_bytes(self)
+    }
+
+    /// How many records and draws the store holds: each record counts once,
+    /// each primitive of a draw run on its own.
+    pub fn node_count(&self) -> usize {
+        self.record_count()
+            + self.draws.values().count()
+            + self.texts.values().count()
+            + self.runs.values().map(DrawRunNode::len).sum::<usize>()
     }
 
     /// How many records the store holds.
@@ -136,6 +163,7 @@ impl SceneStore {
         self.free_rows.clear();
         self.items.clear();
         self.props.clear();
+        self.graphics_layers.clear();
         self.transforms.clear();
         self.draws.clear();
         self.texts.clear();
@@ -197,9 +225,7 @@ impl SceneStore {
             self.remove_item(item);
         }
         self.items.free_span(span);
-        if let Some(props) = self.warm[index].props.take() {
-            self.props.remove(props.index());
-        }
+        self.clear_props(id);
         if let Some(transform) = self.tree[index].transform.take() {
             self.transforms.remove(transform.index());
         }
@@ -354,6 +380,17 @@ impl SceneStore {
     /// parent's content offset.
     pub fn origin(&self, id: RecordId) -> Point {
         let index = id.index();
+        match self.tree[index].transform {
+            Some(transform) => self.transforms[transform.index()]
+                .as_translation()
+                .unwrap_or_else(|| self.placed_origin(index)),
+            None => self.placed_origin(index),
+        }
+    }
+
+    // Where the placement of the record at `index` puts it in its parent's
+    // layer, past the parent's content offset.
+    fn placed_origin(&self, index: usize) -> Point {
         let [x, y] = self.geo[index].placement;
         let offset = self.parent_content_offset(index);
         match self.tree[index].kind {
@@ -379,7 +416,7 @@ impl SceneStore {
         match self.tree[id.index()].transform {
             Some(transform) => self.transforms[transform.index()],
             None => {
-                let origin = self.origin(id);
+                let origin = self.placed_origin(id.index());
                 ProjectiveTransform::translation(origin.x, origin.y)
             }
         }
@@ -397,7 +434,7 @@ impl SceneStore {
     ) {
         let index = id.index();
         self.geo[index].placement = [origin_in_parent.x, origin_in_parent.y];
-        let origin = self.origin(id);
+        let origin = self.placed_origin(index);
         let placed = ProjectiveTransform::translation(origin.x, origin.y);
         if same_bits(transform, placed) {
             if let Some(old) = self.tree[index].transform.take() {
@@ -440,27 +477,51 @@ impl SceneStore {
             .map(|props| &self.props[props.index()])
     }
 
-    /// Sets the properties of `id`; `None` removes them.
-    pub fn set_props(&mut self, id: RecordId, props: Option<LayerProps>) {
-        let index = id.index();
-        match (self.warm[index].props, props) {
-            (Some(entry), Some(props)) => self.props[entry.index()] = props,
-            (Some(entry), None) => {
-                self.props.remove(entry.index());
-                self.warm[index].props = None;
+    /// Removes the properties of `id`.
+    pub fn clear_props(&mut self, id: RecordId) {
+        let Some(entry) = self.warm[id.index()].props.take() else {
+            return;
+        };
+        if let Some(slot) = self
+            .props
+            .remove(entry.index())
+            .and_then(|props| props.graphics_layer)
+        {
+            self.graphics_layers.remove(slot.index());
+        }
+    }
+
+    /// The graphics layer set on `id`, `None` when it reads as the default.
+    pub fn graphics_layer(&self, id: RecordId) -> Option<&GraphicsLayer> {
+        self.props(id)
+            .and_then(|props| props.graphics_layer)
+            .map(|slot| &self.graphics_layers[slot.index()])
+    }
+
+    // Sets the graphics layer of `id`; `None` reads as the default. A record
+    // that keeps one keeps its slot.
+    pub(crate) fn set_graphics_layer(&mut self, id: RecordId, layer: Option<GraphicsLayer>) {
+        let slot = self.props(id).and_then(|props| props.graphics_layer);
+        match (slot, layer) {
+            (Some(slot), Some(layer)) => self.graphics_layers[slot.index()] = layer,
+            (Some(slot), None) => {
+                self.graphics_layers.remove(slot.index());
+                self.edit_props(id, |props| props.graphics_layer = None);
             }
-            (None, Some(props)) => {
-                self.warm[index].props = Some(PropsId::from_index(self.props.insert(props)));
+            (None, Some(layer)) => {
+                let slot = GraphicsLayerId::from_index(self.graphics_layers.insert(layer));
+                self.edit_props(id, |props| props.graphics_layer = Some(slot));
             }
             (None, None) => {}
         }
     }
 
-    /// The properties of `id` to change in place, when it has any.
-    pub fn props_mut(&mut self, id: RecordId) -> Option<&mut LayerProps> {
-        self.warm[id.index()]
-            .props
-            .map(|props| &mut self.props[props.index()])
+    // Takes the graphics layer of `id` out, leaving its other properties: it
+    // reads as the default until `set_graphics_layer` puts it back.
+    pub(crate) fn take_graphics_layer(&mut self, id: RecordId) -> Option<GraphicsLayer> {
+        let entry = self.warm[id.index()].props?;
+        let slot = self.props[entry.index()].graphics_layer.take()?;
+        self.graphics_layers.remove(slot.index())
     }
 
     /// Changes the properties of `id` with `edit`, starting from defaults

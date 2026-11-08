@@ -15,7 +15,7 @@ fn frame_graph(index: usize) -> RenderGraph {
         width: WIDTH as f32,
         height: HEIGHT as f32,
     };
-    RenderGraph::new(support::layer_node(
+    RenderGraph::new(&support::layer_node(
         Some(NodeId(71)),
         WIDTH as f32,
         HEIGHT as f32,

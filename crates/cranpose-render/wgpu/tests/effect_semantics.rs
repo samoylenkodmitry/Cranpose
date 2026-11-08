@@ -92,7 +92,7 @@ fn isolated_backdrop_shader_preserves_fractional_edge_coverage() {
             },
             vec![RenderNode::Layer(Box::new(glass))],
         );
-        renderer.scene_mut().graph = Some(RenderGraph::new(layer(
+        renderer.scene_mut().graph = Some(RenderGraph::new(&layer(
             frame_rect(),
             ProjectiveTransform::identity(),
             GraphicsLayer::default(),
@@ -764,12 +764,10 @@ fn scaled_child_fixture(translation: Point) -> RenderGraph {
         )],
     );
     child.cache_policy = CachePolicy::Auto;
-    let mut graph = graph(vec![
+    graph(vec![
         solid_rect(frame_rect(), Color(0.96, 0.93, 0.9, 1.0)),
         RenderNode::Layer(Box::new(child)),
-    ]);
-    graph.root.forget_raster_cache_hashes();
-    graph
+    ])
 }
 
 fn scaled_reference_fixture(translation: Point) -> RenderGraph {
@@ -883,8 +881,8 @@ fn translated_content_wrapper_with_decorated_shadow_text_stays_on_the_direct_pat
     };
 
     let translation = Point::new(12.0, 14.0);
-    let mut graph = translation_only_wrapper_with_decorated_shadow_text_fixture(translation);
-    let Some(RenderNode::Layer(wrapper)) = graph.root.children.get_mut(1) else {
+    let mut root = translation_only_wrapper_with_decorated_shadow_text_fixture(translation).root();
+    let Some(RenderNode::Layer(wrapper)) = root.children.get_mut(1) else {
         panic!("expected decorated text wrapper layer");
     };
     wrapper.translated_content_context = true;
@@ -892,7 +890,7 @@ fn translated_content_wrapper_with_decorated_shadow_text_stays_on_the_direct_pat
         panic!("expected decorated text leaf layer");
     };
     text_leaf.translated_content_context = true;
-    renderer.scene_mut().graph = Some(graph);
+    renderer.scene_mut().graph = Some(RenderGraph::new(&root));
     let frame = renderer
         .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
         .expect("decorated text wrapper capture should succeed");
@@ -1407,7 +1405,7 @@ fn a_magnifying_layers_backdrop_stays_registered_with_the_world_behind_it() {
         )))],
     );
 
-    renderer.scene_mut().graph = Some(RenderGraph::new(layer(
+    renderer.scene_mut().graph = Some(RenderGraph::new(&layer(
         Rect {
             x: 0.0,
             y: 0.0,
@@ -1514,7 +1512,7 @@ fn scaled_sibling_backdrop_sees_prior_backdrop_output() {
         vec![],
     );
 
-    renderer.scene_mut().graph = Some(RenderGraph::new(layer(
+    renderer.scene_mut().graph = Some(RenderGraph::new(&layer(
         logical_root,
         ProjectiveTransform::identity(),
         GraphicsLayer::default(),
@@ -2248,7 +2246,7 @@ fn opaque_row_with_glass_fixture(animated_color: Color) -> RenderGraph {
     row.isolation.shape_clip = true;
     row.cache_policy = CachePolicy::Auto;
 
-    let mut graph = graph(vec![
+    graph(vec![
         solid_rect(frame_rect(), Color::BLACK),
         RenderNode::Layer(Box::new(row)),
         solid_rect(
@@ -2260,9 +2258,7 @@ fn opaque_row_with_glass_fixture(animated_color: Color) -> RenderGraph {
             },
             animated_color,
         ),
-    ]);
-    graph.root.forget_raster_cache_hashes();
-    graph
+    ])
 }
 
 #[test]
@@ -2298,7 +2294,7 @@ fn a_resting_glass_pane_washes_its_backdrop_with_the_resting_tint() {
         vec![],
     );
 
-    renderer.scene_mut().graph = Some(RenderGraph::new(layer(
+    renderer.scene_mut().graph = Some(RenderGraph::new(&layer(
         Rect {
             x: 0.0,
             y: 0.0,
@@ -2385,7 +2381,7 @@ fn a_resting_glass_pane_transmits_the_blurred_backdrop() {
         vec![],
     );
 
-    renderer.scene_mut().graph = Some(RenderGraph::new(layer(
+    renderer.scene_mut().graph = Some(RenderGraph::new(&layer(
         Rect {
             x: 0.0,
             y: 0.0,
@@ -2603,10 +2599,9 @@ fn see_through_row_fixture(page: RenderNode, row_y: f32) -> RenderGraph {
     row.isolation.shape_clip = true;
     row.cache_policy = CachePolicy::Auto;
 
-    let mut graph = graph(vec![page, RenderNode::Layer(Box::new(row))]);
-    graph.root.graphics_layer.shadow_elevation = 4.0;
-    graph.root.forget_raster_cache_hashes();
-    graph
+    let mut root = graph(vec![page, RenderNode::Layer(Box::new(row))]).root();
+    root.graphics_layer.shadow_elevation = 4.0;
+    RenderGraph::new(&root)
 }
 
 fn solid_page() -> RenderNode {
@@ -2650,7 +2645,7 @@ fn a_glass_row_over_a_solid_page_composes_correctly_where_it_moves() {
 }
 
 fn graph(children: Vec<RenderNode>) -> RenderGraph {
-    RenderGraph::new(layer(
+    RenderGraph::new(&layer(
         frame_rect(),
         ProjectiveTransform::identity(),
         GraphicsLayer::default(),
@@ -2665,7 +2660,7 @@ fn root_scale_fixture() -> RenderGraph {
         width: FRAME_WIDTH as f32 / ROOT_SCALE_TEST_SCALE,
         height: FRAME_HEIGHT as f32 / ROOT_SCALE_TEST_SCALE,
     };
-    RenderGraph::new(layer(
+    RenderGraph::new(&layer(
         logical_root,
         ProjectiveTransform::identity(),
         GraphicsLayer::default(),
@@ -2686,7 +2681,7 @@ fn full_logical_root_scale_fixture(logical_width: f32, logical_height: f32) -> R
         width: logical_width * 0.5,
         height: logical_height * 0.5,
     };
-    RenderGraph::new(layer(
+    RenderGraph::new(&layer(
         logical_root,
         ProjectiveTransform::identity(),
         GraphicsLayer::default(),
@@ -3159,7 +3154,7 @@ fn translation_only_wrapper_with_multispan_showcase_text_fixture(
         height: FRAME_HEIGHT as f32,
     };
 
-    RenderGraph::new(layer(
+    RenderGraph::new(&layer(
         frame_rect,
         ProjectiveTransform::identity(),
         GraphicsLayer::default(),
@@ -3244,7 +3239,7 @@ fn translation_only_wrapper_with_showcase_card_fixture(wrapper_translation: Poin
         height: FRAME_HEIGHT as f32,
     };
 
-    RenderGraph::new(layer(
+    RenderGraph::new(&layer(
         frame_rect,
         ProjectiveTransform::identity(),
         GraphicsLayer::default(),
@@ -3306,7 +3301,7 @@ fn translation_only_wrapper_with_padded_multispan_showcase_text_fixture(
         height: FRAME_HEIGHT as f32,
     };
 
-    RenderGraph::new(layer(
+    RenderGraph::new(&layer(
         frame_rect,
         ProjectiveTransform::identity(),
         GraphicsLayer::default(),
@@ -3466,7 +3461,7 @@ fn alpha_icon_text_surface_fixture(translation: Point) -> RenderGraph {
         ],
     );
 
-    RenderGraph::new(layer(
+    RenderGraph::new(&layer(
         Rect {
             x: 0.0,
             y: 0.0,
@@ -3616,7 +3611,8 @@ fn frame_rect() -> Rect {
 }
 
 fn mark_translated_text_wrapper(graph: &mut RenderGraph) {
-    let Some(RenderNode::Layer(wrapper)) = graph.root.children.get_mut(1) else {
+    let mut root = graph.root();
+    let Some(RenderNode::Layer(wrapper)) = root.children.get_mut(1) else {
         panic!("expected translated text wrapper layer");
     };
     wrapper.translated_content_context = true;
@@ -3626,10 +3622,12 @@ fn mark_translated_text_wrapper(graph: &mut RenderGraph) {
     };
     text_leaf.translated_content_context = true;
     text_leaf.motion_context_animated = true;
+    *graph = RenderGraph::new(&root);
 }
 
 fn mark_translated_shape_wrapper(graph: &mut RenderGraph) {
-    let Some(RenderNode::Layer(wrapper)) = graph.root.children.get_mut(1) else {
+    let mut root = graph.root();
+    let Some(RenderNode::Layer(wrapper)) = root.children.get_mut(1) else {
         panic!("expected translated thin-shape wrapper layer");
     };
     wrapper.translated_content_context = true;
@@ -3639,6 +3637,7 @@ fn mark_translated_shape_wrapper(graph: &mut RenderGraph) {
     };
     shape_leaf.translated_content_context = true;
     shape_leaf.motion_context_animated = true;
+    *graph = RenderGraph::new(&root);
 }
 
 fn normalize_translated_backdrop_region(frame: &CapturedFrame, translation: Point) -> Vec<u8> {

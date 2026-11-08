@@ -10,7 +10,7 @@ Create a graph from a root layer and inspect its node count:
 ```rust
 use cranpose_render_common::graph::{LayerNode, RenderGraph};
 
-let graph = RenderGraph::new(LayerNode::default());
+let graph = RenderGraph::new(&LayerNode::default());
 assert_eq!(graph.node_count(), 1);
 ```
 

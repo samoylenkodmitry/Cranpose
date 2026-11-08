@@ -41,14 +41,12 @@ fn tiles(rows: u32, ink: [u8; 3]) -> RenderGraph {
             RenderNode::Layer(Box::new(layer))
         })
         .collect();
-    let mut graph = RenderGraph::new(support::layer_node(
+    RenderGraph::new(&support::layer_node(
         Some(NodeId(0)),
         (COLUMNS * TILE) as f32,
         (rows * TILE) as f32,
         children,
-    ));
-    graph.root.forget_raster_cache_hashes();
-    graph
+    ))
 }
 
 #[test]

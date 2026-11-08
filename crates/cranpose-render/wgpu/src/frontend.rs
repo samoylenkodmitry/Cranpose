@@ -46,16 +46,16 @@ impl RendererFrontend {
         }
         self.dev_overlay_graph = self.fps_overlay_graph.clone();
         if let Some(inspector) = &self.inspector_overlay_graph {
-            let graph = self.dev_overlay_graph.get_or_insert_with(|| {
-                RenderGraph::new(cranpose_render_common::graph::LayerNode::default())
-            });
-            graph
-                .root
-                .children
+            let mut root = self
+                .dev_overlay_graph
+                .take()
+                .map(|graph| graph.root())
+                .unwrap_or_default();
+            root.children
                 .push(cranpose_render_common::graph::RenderNode::Layer(Box::new(
-                    inspector.root.clone(),
+                    inspector.root(),
                 )));
-            graph.root.forget_raster_cache_hashes();
+            self.dev_overlay_graph = Some(RenderGraph::new(&root));
         }
     }
 
@@ -145,8 +145,8 @@ impl RendererFrontend {
         self.returned_scenes = self.returned_scenes.saturating_sub(1);
         let recycler = &mut self.scene_recyclers[self.returned_scenes];
         let root = collect_root(
-            &graph.root,
-            graph.update,
+            graph.store().root_layer()?,
+            graph.store().update(),
             &mut self.layer_motion,
             self.root_scene_capacity,
             root_scale,
@@ -157,7 +157,8 @@ impl RendererFrontend {
         let overlay = self
             .dev_overlay_graph
             .as_ref()
-            .map(|overlay| collect_overlay(&overlay.root, root_scale, recycler));
+            .and_then(|overlay| overlay.store().root_layer())
+            .map(|overlay| collect_overlay(overlay, root_scale, recycler));
         recycler.clear();
         self.frame_sequence = self.frame_sequence.wrapping_add(1);
         let packet = FramePacket {

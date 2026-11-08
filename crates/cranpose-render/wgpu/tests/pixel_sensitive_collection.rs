@@ -2,8 +2,8 @@ use std::rc::Rc;
 
 use cranpose_core::NodeId;
 use cranpose_render_common::graph::{
-    DrawRunNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, ProjectiveTransform, RenderGraph,
-    RenderNode, TextPrimitiveNode,
+    DrawRunNode, LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, ProjectiveTransform,
+    RenderGraph, RenderNode, TextPrimitiveNode,
 };
 use cranpose_ui::{
     TextLayoutOptions,
@@ -86,7 +86,7 @@ fn sensitive_text_run() -> RenderNode {
     ))
 }
 
-fn graph_with_direct_clipped_text() -> RenderGraph {
+fn page_with_direct_clipped_text() -> LayerNode {
     let wrapper = shared_test_support::layer_node(
         Rect {
             x: 0.0,
@@ -117,9 +117,10 @@ fn graph_with_direct_clipped_text() -> RenderGraph {
         },
         vec![visible_content(), RenderNode::Layer(Box::new(wrapper))],
     );
-    support::page_graph(
-        LOGICAL_WIDTH,
-        LOGICAL_HEIGHT,
+    support::layer_node(
+        None,
+        LOGICAL_WIDTH as f32,
+        LOGICAL_HEIGHT as f32,
         vec![
             support::solid_rect(
                 Rect {
@@ -135,20 +136,20 @@ fn graph_with_direct_clipped_text() -> RenderGraph {
     )
 }
 
-fn replace_hidden_descendant(graph: &mut RenderGraph, descendant: RenderNode) {
+fn replace_hidden_descendant(root: &mut LayerNode, descendant: RenderNode) {
     replace_hidden_descendant_with_transform(
-        graph,
+        root,
         descendant,
         ProjectiveTransform::translation(1.35, 2.25),
     );
 }
 
 fn replace_hidden_descendant_with_transform(
-    graph: &mut RenderGraph,
+    root: &mut LayerNode,
     descendant: RenderNode,
     transform: ProjectiveTransform,
 ) {
-    let Some(RenderNode::Layer(outer)) = graph.root.children.get_mut(1) else {
+    let Some(RenderNode::Layer(outer)) = root.children.get_mut(1) else {
         panic!("expected the isolated outer layer");
     };
     let empty_clip = shared_test_support::layer_node(
@@ -179,8 +180,8 @@ fn replace_hidden_descendant_with_transform(
     outer.children = vec![visible_content(), RenderNode::Layer(Box::new(wrapper))];
 }
 
-fn replace_clipped_out_descendant(graph: &mut RenderGraph, descendant: RenderNode) {
-    let Some(RenderNode::Layer(outer)) = graph.root.children.get_mut(1) else {
+fn replace_clipped_out_descendant(root: &mut LayerNode, descendant: RenderNode) {
+    let Some(RenderNode::Layer(outer)) = root.children.get_mut(1) else {
         panic!("expected the isolated outer layer");
     };
     outer.graphics_layer.clip = true;
@@ -199,8 +200,8 @@ fn replace_clipped_out_descendant(graph: &mut RenderGraph, descendant: RenderNod
     outer.children = vec![visible_content(), RenderNode::Layer(Box::new(child))];
 }
 
-fn replace_with_direct_translation(graph: &mut RenderGraph, descendant: RenderNode) {
-    let Some(RenderNode::Layer(outer)) = graph.root.children.get_mut(1) else {
+fn replace_with_direct_translation(root: &mut LayerNode, descendant: RenderNode) {
+    let Some(RenderNode::Layer(outer)) = root.children.get_mut(1) else {
         panic!("expected the isolated outer layer");
     };
     let wrapper = shared_test_support::layer_node(
@@ -217,11 +218,11 @@ fn replace_with_direct_translation(graph: &mut RenderGraph, descendant: RenderNo
     outer.children = vec![visible_content(), RenderNode::Layer(Box::new(wrapper))];
 }
 
-fn capture(renderer: &mut support::LockedRenderer, graph: &RenderGraph) -> Vec<u8> {
+fn capture(renderer: &mut support::LockedRenderer, root: &LayerNode) -> Vec<u8> {
     support::capture_settled(renderer, |renderer| {
         support::capture_graph_with_scale(
             renderer,
-            graph.clone(),
+            RenderGraph::new(&root.clone()),
             PIXEL_WIDTH,
             PIXEL_HEIGHT,
             ROOT_SCALE,
@@ -240,11 +241,11 @@ fn nested_empty_clip_text_keeps_fractional_isolated_pixels_rigid_after_graph_edi
         }
     };
 
-    let mut graph = graph_with_direct_clipped_text();
-    let direct_reference = capture(&mut renderer, &graph);
+    let mut page = page_with_direct_clipped_text();
+    let direct_reference = capture(&mut renderer, &page);
 
-    replace_hidden_descendant(&mut graph, hidden_text(None));
-    let nested = capture(&mut renderer, &graph);
+    replace_hidden_descendant(&mut page, hidden_text(None));
+    let nested = capture(&mut renderer, &page);
     support::assert_same_bytes(
         "text below a direct-translation empty clip",
         PIXEL_WIDTH,
@@ -253,7 +254,7 @@ fn nested_empty_clip_text_keeps_fractional_isolated_pixels_rigid_after_graph_edi
     );
 
     replace_hidden_descendant(
-        &mut graph,
+        &mut page,
         support::solid_rect(
             Rect {
                 x: 4.0,
@@ -264,7 +265,7 @@ fn nested_empty_clip_text_keeps_fractional_isolated_pixels_rigid_after_graph_edi
             Color::BLACK,
         ),
     );
-    let nested_shape_only = capture(&mut renderer, &graph);
+    let nested_shape_only = capture(&mut renderer, &page);
     assert!(
         nested_shape_only != nested,
         "removing the pixel-sensitive descendant must visibly remove the rigid snap phase"
@@ -272,10 +273,10 @@ fn nested_empty_clip_text_keeps_fractional_isolated_pixels_rigid_after_graph_edi
 
     let non_direct =
         ProjectiveTransform::uniform_scale(1.15).then(ProjectiveTransform::translation(1.35, 2.25));
-    replace_hidden_descendant_with_transform(&mut graph, hidden_text(None), non_direct);
-    let non_direct_text = capture(&mut renderer, &graph);
+    replace_hidden_descendant_with_transform(&mut page, hidden_text(None), non_direct);
+    let non_direct_text = capture(&mut renderer, &page);
     replace_hidden_descendant_with_transform(
-        &mut graph,
+        &mut page,
         support::solid_rect(
             Rect {
                 x: 4.0,
@@ -287,7 +288,7 @@ fn nested_empty_clip_text_keeps_fractional_isolated_pixels_rigid_after_graph_edi
         ),
         non_direct,
     );
-    let non_direct_shape = capture(&mut renderer, &graph);
+    let non_direct_shape = capture(&mut renderer, &page);
     support::assert_same_bytes(
         "non-direct transform blocks pixel sensitivity",
         PIXEL_WIDTH,
@@ -295,8 +296,8 @@ fn nested_empty_clip_text_keeps_fractional_isolated_pixels_rigid_after_graph_edi
         &non_direct_shape,
     );
 
-    let mut clipped_graph = graph_with_direct_clipped_text();
-    let Some(RenderNode::Layer(outer)) = clipped_graph.root.children.get_mut(1) else {
+    let mut clipped_page = page_with_direct_clipped_text();
+    let Some(RenderNode::Layer(outer)) = clipped_page.children.get_mut(1) else {
         panic!("expected the isolated outer layer");
     };
     outer.graphics_layer.clip = true;
@@ -312,7 +313,7 @@ fn nested_empty_clip_text_keeps_fractional_isolated_pixels_rigid_after_graph_edi
             None,
         ),
     ];
-    let clipped_direct_reference = capture(&mut renderer, &clipped_graph);
+    let clipped_direct_reference = capture(&mut renderer, &clipped_page);
 
     let wrapper = shared_test_support::layer_node(
         Rect {
@@ -325,8 +326,8 @@ fn nested_empty_clip_text_keeps_fractional_isolated_pixels_rigid_after_graph_edi
         GraphicsLayer::default(),
         vec![hidden_text(None)],
     );
-    replace_clipped_out_descendant(&mut clipped_graph, RenderNode::Layer(Box::new(wrapper)));
-    let clipped_nested = capture(&mut renderer, &clipped_graph);
+    replace_clipped_out_descendant(&mut clipped_page, RenderNode::Layer(Box::new(wrapper)));
+    let clipped_nested = capture(&mut renderer, &clipped_page);
     support::assert_same_bytes(
         "pixel-sensitive text in a layer culled by its parent clip",
         PIXEL_WIDTH,
@@ -334,15 +335,15 @@ fn nested_empty_clip_text_keeps_fractional_isolated_pixels_rigid_after_graph_edi
         &clipped_direct_reference,
     );
 
-    let mut run_graph = graph_with_direct_clipped_text();
-    let Some(RenderNode::Layer(outer)) = run_graph.root.children.get_mut(1) else {
+    let mut run_page = page_with_direct_clipped_text();
+    let Some(RenderNode::Layer(outer)) = run_page.children.get_mut(1) else {
         panic!("expected the isolated outer layer");
     };
     outer.children = vec![visible_content(), sensitive_text_run()];
-    let direct_run = capture(&mut renderer, &run_graph);
+    let direct_run = capture(&mut renderer, &run_page);
 
-    replace_with_direct_translation(&mut run_graph, sensitive_text_run());
-    let nested_run = capture(&mut renderer, &run_graph);
+    replace_with_direct_translation(&mut run_page, sensitive_text_run());
+    let nested_run = capture(&mut renderer, &run_page);
     support::assert_same_bytes(
         "recorded text run below a direct-translation layer",
         PIXEL_WIDTH,
@@ -351,9 +352,9 @@ fn nested_empty_clip_text_keeps_fractional_isolated_pixels_rigid_after_graph_edi
     );
 }
 
-fn graph_with_nested_isolated(descendant: RenderNode) -> RenderGraph {
-    let mut graph = graph_with_direct_clipped_text();
-    let Some(RenderNode::Layer(outer)) = graph.root.children.get_mut(1) else {
+fn page_with_nested_isolated(descendant: RenderNode) -> LayerNode {
+    let mut root = page_with_direct_clipped_text();
+    let Some(RenderNode::Layer(outer)) = root.children.get_mut(1) else {
         panic!("expected the isolated outer layer");
     };
     // The outer layer's content walks translated, so the inner isolated
@@ -388,7 +389,7 @@ fn graph_with_nested_isolated(descendant: RenderNode) -> RenderGraph {
         vec![RenderNode::Layer(Box::new(empty_clip))],
     );
     outer.children = vec![visible_content(), RenderNode::Layer(Box::new(inner))];
-    graph
+    root
 }
 
 #[test]
@@ -401,13 +402,10 @@ fn text_hidden_in_a_nested_isolated_layer_keeps_the_outer_layer_rigid() {
         }
     };
 
-    let with_text = capture(
-        &mut renderer,
-        &graph_with_nested_isolated(hidden_text(None)),
-    );
+    let with_text = capture(&mut renderer, &page_with_nested_isolated(hidden_text(None)));
     let with_shape = capture(
         &mut renderer,
-        &graph_with_nested_isolated(support::solid_rect(
+        &page_with_nested_isolated(support::solid_rect(
             Rect {
                 x: 4.0,
                 y: 4.0,

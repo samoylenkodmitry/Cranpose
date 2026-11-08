@@ -51,7 +51,7 @@ pub(crate) fn text_graph(
             Some(text_rect.width),
         )
     });
-    RenderGraph::new(LayerNode {
+    RenderGraph::new(&LayerNode {
         local_bounds: viewport,
         children: vec![RenderNode::Primitive(PrimitiveEntry {
             phase: PrimitivePhase::AfterChildren,

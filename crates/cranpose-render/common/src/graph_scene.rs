@@ -83,9 +83,6 @@ pub struct SurfaceTarget {
     pub outer_clips: Vec<HitClip>,
 }
 
-/// How many parts a target's rect splits into along each side for its
-/// bounds in the window: on a curved surface the corners alone miss the
-/// bulge between them.
 const WINDOW_BOUNDS_STEPS: u16 = 2;
 
 impl SurfaceTarget {
@@ -200,13 +197,10 @@ pub struct HitRegion {
     pub hit_clip_bounds: Option<Rect>,
     /// Clips of the ancestors that cut this target, as transformed quads in window space.
     pub hit_clips: Vec<HitClip>,
-    /// For a target on a mesh surface, where it lies on the surface; shared,
-    /// as few targets are and clones of a target hold the same.
     surface: Option<Rc<SurfaceRegion>>,
     diagnostics: Rc<RenderDiagnostics>,
 }
 
-/// A hit target's place on a mesh surface's content.
 struct SurfaceRegion {
     target: Rc<SurfaceTarget>,
     content_to_local: ProjectiveTransform,
@@ -215,8 +209,6 @@ struct SurfaceRegion {
 }
 
 impl SurfaceRegion {
-    /// The local point the window point shows on the target, when the
-    /// target's surface is the nearest there and no clip cuts the point.
     fn local_point(&self, window: Point) -> Option<Point> {
         let target = &self.target;
         if target
@@ -232,9 +224,6 @@ impl SurfaceRegion {
         self.local_in(target.pick.content_point(window, target.index)?)
     }
 
-    /// The local point `ray`, in the space the scene's eye stands in, meets
-    /// on the target, when the target's surface is the nearest along it and
-    /// no clip within the surface cuts the point.
     fn local_point_along(&self, ray: Ray) -> Option<Point> {
         let (index, hit) = self.target.pick.nearest_along(ray)?;
         (index == self.target.index)
@@ -242,8 +231,6 @@ impl SurfaceRegion {
             .flatten()
     }
 
-    /// The local point of content point `content`, unless a clip within
-    /// the surface cuts it.
     fn local_in(&self, content: Point) -> Option<Point> {
         if self
             .clip_bounds
@@ -258,8 +245,6 @@ impl SurfaceRegion {
         self.content_to_local.map_point_in_front(content)
     }
 
-    /// The local point under the window point, or along the event's ray,
-    /// for a gesture the target holds, which may leave the surface.
     fn drag_point(&self, event: &PointerEvent) -> Option<Point> {
         let target = &self.target;
         let content = match event.ray {
@@ -403,10 +388,6 @@ impl HitRegion {
         }
     }
 
-    /// The squared distance from the point to this target when the point lies
-    /// inside the target grown to the minimum touch size and the target takes
-    /// input. None when the target is large enough on its own, when the point
-    /// is outside its reach, or when a clip cuts the point off.
     fn reach_distance(&self, x: f32, y: f32) -> Option<f32> {
         if self.handlers.pointer_inputs().is_empty() || self.surface.is_some() {
             return None;
@@ -546,15 +527,12 @@ impl HitList {
     }
 }
 
-/// The hit targets of a [`Scene`], borrowed apart from its graph, so a walk
-/// of the graph pushes targets while it reads the graph in place.
 pub(crate) struct HitTargets<'a> {
     list: &'a mut HitList,
     diagnostics: &'a Rc<RenderDiagnostics>,
 }
 
 impl HitTargets<'_> {
-    /// Adds an interactive target in draw order (see [`Scene::push_hit`]).
     pub(crate) fn push(
         &mut self,
         node_id: NodeId,
@@ -653,9 +631,13 @@ impl Scene {
             let mut list = self.hits.borrow_mut();
             list.clear();
             list.stale = false;
-            if let Some(graph) = &self.graph {
+            if let Some(root) = self
+                .graph
+                .as_ref()
+                .and_then(|graph| graph.store.root_layer())
+            {
                 crate::hit_graph::collect_hits_from_graph(
-                    &graph.root,
+                    root,
                     ProjectiveTransform::identity(),
                     &mut HitTargets {
                         list: &mut list,
@@ -814,15 +796,20 @@ impl RenderScene for Scene {
     }
 
     fn surface_windows(&self, visit: &mut dyn FnMut(NodeId, ProjectiveTransform)) {
-        let Some(graph) = &self.graph else {
+        let Some(root_layer) = self
+            .graph
+            .as_ref()
+            .and_then(|graph| graph.store.root_layer())
+        else {
             return;
         };
         let root = ProjectiveTransform::identity();
-        crate::space::for_each_window_eye(&graph.root, root, &mut |_, view, to_window| {
+        crate::space::for_each_window_eye(root_layer, root, &mut |_, view, to_window| {
             for seen in &view.surfaces {
-                if let (Some(node_id), Some(content)) =
-                    (seen.layer.node_id, view.content_to_window(seen, to_window))
-                {
+                if let (Some(node_id), Some(content)) = (
+                    seen.layer.node_id(),
+                    view.content_to_window(seen, to_window),
+                ) {
                     visit(node_id, content);
                 }
             }
@@ -839,7 +826,11 @@ impl RenderScene for Scene {
     }
 
     fn node_window_bounds(&self, visit: &mut dyn FnMut(NodeId, Rect)) {
-        let Some(graph) = &self.graph else {
+        let Some(root) = self
+            .graph
+            .as_ref()
+            .and_then(|graph| graph.store.root_layer())
+        else {
             return;
         };
         let mut surfaces = HashMap::default();
@@ -847,7 +838,7 @@ impl RenderScene for Scene {
             surfaces.insert(node_id, content);
         });
         crate::node_window_bounds::for_each_node_window_bounds(
-            &graph.root,
+            root,
             ProjectiveTransform::identity(),
             &surfaces,
             visit,

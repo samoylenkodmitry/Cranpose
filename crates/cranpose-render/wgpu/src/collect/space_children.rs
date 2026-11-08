@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use cranpose_render_common::{
-    graph::{LayerNode, RenderNode, for_each_in_draw_order},
+    scene_store::{ItemRef, LayerRef},
     space::{EyeView, SpaceTree},
 };
 
@@ -18,12 +18,12 @@ use crate::scene::ContentContext;
 /// The scene `layer` shows to the window, as the eye of the scene sees it,
 /// with `context` the walk of its children; `None` when it shows none.
 fn window_scene<'a>(
-    layer: &'a LayerNode,
+    layer: LayerRef<'a>,
     context: &WalkContext<'_>,
 ) -> Option<(Arc<SceneDraw>, EyeView<'a>)> {
     let tree = SpaceTree::of(layer)?;
     // The scene fills its layer's bounds.
-    let bounds = layer.local_bounds;
+    let bounds = layer.local_bounds();
     let view = EyeView::of(&tree, bounds.size());
     let scene = SceneDraw {
         camera: view.camera,
@@ -51,7 +51,7 @@ fn window_scene<'a>(
 #[cold]
 #[inline(never)]
 pub(super) fn collect_space_children(
-    layer: &LayerNode,
+    layer: LayerRef<'_>,
     motion: &mut LayerMotion,
     (context, content): (WalkContext<'_>, &ContentContext<'_>),
     out: &mut LayerScene,
@@ -72,22 +72,22 @@ pub(super) fn collect_space_children(
         ..context
     };
     let mut has_pixel_sensitive_subtree = false;
-    for_each_in_draw_order(&layer.children, |child| {
+    for child in layer.items() {
         has_pixel_sensitive_subtree |= match child {
-            RenderNode::Layer(child_layer) => {
+            ItemRef::Layer(child_layer) => {
                 if let Some((draw, view)) = pending.take_if(|_| child_layer.has_space()) {
                     collect_seen_surfaces(&draw, view, motion, context, out, recycler);
                 }
-                !(in_space && child_layer.graphics_layer.space.is_some())
+                !(in_space && child_layer.graphics_layer().space.is_some())
                     && collect_child(child_layer, motion, context, out, recycler)
             }
-            RenderNode::Inline(inline) => collect_inline(inline, context, out),
-            RenderNode::Primitive(_) | RenderNode::DrawRun(_) => {
+            ItemRef::Leaf(inline) => collect_inline(inline, context, out),
+            ItemRef::Draw(_) | ItemRef::Text(_) | ItemRef::Run(_) => {
                 push_content(out, child, content);
                 context.settings.wants_pixel_sensitive && node_is_pixel_sensitive(child)
             }
         };
-    });
+    }
     has_pixel_sensitive_subtree
 }
 

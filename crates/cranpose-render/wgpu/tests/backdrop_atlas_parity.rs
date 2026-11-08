@@ -737,7 +737,7 @@ fn an_empty_shader_child_drawn_in_the_final_pass_matches_its_surface_resolve() {
                 Vec::new(),
             ),
         )));
-        RenderGraph::new(shared_test_support::layer_node(
+        RenderGraph::new(&shared_test_support::layer_node(
             rect(0.0, 0.0, FRAME_WIDTH as f32, FRAME_HEIGHT as f32),
             ProjectiveTransform::identity(),
             GraphicsLayer::default(),
@@ -800,7 +800,7 @@ fn cards_over_band(card_count: usize, band: bool) -> RenderGraph {
     for index in 0..card_count {
         children.push(glass_layer(index, RenderEffect::blur(BLUR_RADIUS)));
     }
-    RenderGraph::new(shared_test_support::layer_node(
+    RenderGraph::new(&shared_test_support::layer_node(
         rect(0.0, 0.0, FRAME_WIDTH as f32, FRAME_HEIGHT as f32),
         ProjectiveTransform::identity(),
         GraphicsLayer::default(),
@@ -896,7 +896,7 @@ fn glass_with_buttons(batched: bool) -> RenderGraph {
             effect(button_shader()),
         ));
     }
-    RenderGraph::new(shared_test_support::layer_node(
+    RenderGraph::new(&shared_test_support::layer_node(
         rect(0.0, 0.0, FRAME_WIDTH as f32, FRAME_HEIGHT as f32),
         ProjectiveTransform::identity(),
         GraphicsLayer::default(),

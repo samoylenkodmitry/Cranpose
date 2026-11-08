@@ -21,11 +21,11 @@ pub(crate) fn export(store: &SceneStore, update: u64) -> LayerNode {
         .unwrap_or_default()
 }
 
-fn layer_change(layer: LayerRef<'_>, change: super::RecordChange) -> LayerChange {
+fn layer_change(change: super::RecordChange) -> LayerChange {
     let mut hasher = FxHasher::default();
-    layer.store().id().hash(&mut hasher);
     change.hash(&mut hasher);
-    LayerChange::numbered(hasher.finish() as u32)
+    let [a, b, c, d, ..] = hasher.finish().to_le_bytes();
+    LayerChange::numbered(u32::from_le_bytes([a, b, c, d]))
 }
 
 fn export_layer(layer: LayerRef<'_>, update: u64) -> LayerNode {
@@ -49,9 +49,7 @@ fn export_layer(layer: LayerRef<'_>, update: u64) -> LayerNode {
             RecordKind::DrawGroup => cranpose_ui::Point::default(),
             RecordKind::Layer | RecordKind::Wrapper | RecordKind::Leaf => layer.origin_in_parent(),
         },
-        graphics_layer: props
-            .map(|props| props.graphics_layer.clone())
-            .unwrap_or_default(),
+        graphics_layer: store.graphics_layer(layer.id()).cloned().into(),
         clip_to_bounds: layer.clip_to_bounds(),
         hit_test: layer.hit_test().cloned(),
         has_hit_targets: layer.has_hit_targets(),
@@ -63,8 +61,8 @@ fn export_layer(layer: LayerRef<'_>, update: u64) -> LayerNode {
         cache_policy: layer.cache_policy(),
         cache_hashes: Cell::new(None),
         content_changes,
-        change: layer_change(layer, layer.change()),
-        own_change: layer_change(layer, layer.own_change()),
+        change: layer_change(layer.change()),
+        own_change: layer_change(layer.own_change()),
         children: export_items(layer, update),
     }
 }
@@ -99,7 +97,7 @@ fn export_items(layer: LayerRef<'_>, update: u64) -> Vec<RenderNode> {
                 inline.origin = leaf.origin();
                 inline.size = leaf.size();
                 inline.motion_context_animated = leaf.motion_context_animated();
-                inline.change = layer_change(leaf, leaf.change());
+                inline.change = layer_change(leaf.change());
                 inline.content = export_items(leaf, update);
                 RenderNode::Inline(inline)
             }

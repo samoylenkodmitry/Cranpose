@@ -217,7 +217,7 @@ fn an_image_of_another_blend_mode_draws_after_the_held_image_below_it() {
         sampling: ImageSampling::Nearest,
         src_rect: None,
     };
-    let graph = RenderGraph::new(support::layer_node(
+    let graph = RenderGraph::new(&support::layer_node(
         None,
         SIZE as f32,
         SIZE as f32,

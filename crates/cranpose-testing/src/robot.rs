@@ -32,7 +32,6 @@ use cranpose_ui::LayoutTree;
 use cranpose_ui_graphics::{Point, Rect, Size};
 
 const HEADLESS_IDLE_UPDATE_LIMIT: u32 = 100;
-/// Two seconds of 60 Hz frames: longer than any finite animation a screen runs.
 const HEADLESS_MOTION_FRAME_LIMIT: u32 = 120;
 const FRAME_NANOS: u64 = 16_666_667;
 
@@ -297,7 +296,6 @@ where
         self.shell.scene()
     }
 
-    /// The box a tap on the element tagged `tag` has to hit.
     fn tagged_bounds(&mut self, tag: &str) -> Option<Rect> {
         let placed = crate::placed_semantics::placed_semantics_from_shell(&mut self.shell)?;
         placed
@@ -306,7 +304,6 @@ where
     }
 }
 
-/// A query for finding UI elements.
 #[derive(Clone, Debug)]
 enum FinderQuery {
     Text(String),
@@ -430,7 +427,6 @@ where
     }
 }
 
-/// Extract all text content from a layout tree.
 fn extract_text_from_layout(layout: &LayoutTree) -> Vec<String> {
     fn collect_text(node: &cranpose_ui::LayoutBox, results: &mut Vec<String>) {
         if let Some(text) = node.node_data.modifier_slices().text_content() {
@@ -446,7 +442,6 @@ fn extract_text_from_layout(layout: &LayoutTree) -> Vec<String> {
     results
 }
 
-/// Extract all rectangles with optional text from a layout tree.
 fn extract_rects_from_layout(layout: &LayoutTree) -> Vec<(Rect, Option<String>)> {
     fn collect_rects(node: &cranpose_ui::LayoutBox, results: &mut Vec<(Rect, Option<String>)>) {
         let text = node
@@ -494,12 +489,14 @@ impl TestRenderer {
     }
 
     fn install_graph(&mut self, graph: RenderGraph) {
-        cranpose_render_common::hit_graph::collect_hits_from_graph(
-            &graph.root,
-            cranpose_render_common::graph::ProjectiveTransform::identity(),
-            &mut self.scene,
-            None,
-        );
+        if let Some(root) = graph.store().root_layer() {
+            cranpose_render_common::hit_graph::collect_hits_from_graph(
+                root,
+                cranpose_render_common::graph::ProjectiveTransform::identity(),
+                &mut self.scene,
+                None,
+            );
+        }
         self.scene.replace_graph(graph);
     }
 }

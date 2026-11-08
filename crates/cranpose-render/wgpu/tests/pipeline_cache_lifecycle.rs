@@ -111,7 +111,7 @@ fn caching_renderer() -> Option<support::LockedRenderer> {
         eprintln!("pipeline cache lifecycle requires PIPELINE_CACHE support");
         return None;
     }
-    renderer.scene_mut().graph = Some(RenderGraph::new(support::layer_node(
+    renderer.scene_mut().graph = Some(RenderGraph::new(&support::layer_node(
         None,
         16.0,
         16.0,
@@ -207,7 +207,7 @@ fn squares() -> RenderGraph {
         width: 8.0,
         height: 8.0,
     };
-    RenderGraph::new(support::layer_node(
+    RenderGraph::new(&support::layer_node(
         None,
         16.0,
         16.0,
@@ -914,7 +914,7 @@ fn warm_up_lists_follow_presented_frames_across_process_restarts() {
                 );
             }
             "empty-screen" => {
-                renderer.scene_mut().graph = Some(RenderGraph::new(support::layer_node(
+                renderer.scene_mut().graph = Some(RenderGraph::new(&support::layer_node(
                     None,
                     16.0,
                     16.0,

@@ -41,9 +41,15 @@ fn multilingual_tab_labels_fit_their_text_area() {
         });
     });
     robot.wait_for_idle();
-    let graph = robot.shell_mut().scene().graph.as_ref().expect("tab scene");
+    let root = robot
+        .shell_mut()
+        .scene()
+        .graph
+        .as_ref()
+        .expect("tab scene")
+        .root();
     for label in ["Settings", "الإعدادات", "सेटिंग्स"] {
-        let text = find_text(&graph.root.children, label).expect("visible tab label");
+        let text = find_text(&root.children, label).expect("visible tab label");
         let height = text.layout.height();
         assert!(
             height <= text.rect.height + 0.01,

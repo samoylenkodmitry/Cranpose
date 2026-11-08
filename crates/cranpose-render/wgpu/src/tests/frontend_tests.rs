@@ -9,7 +9,7 @@ fn frontend() -> RendererFrontend {
 }
 
 fn graph() -> RenderGraph {
-    RenderGraph::new(layer_node(
+    RenderGraph::new(&layer_node(
         Rect {
             x: 0.0,
             y: 0.0,

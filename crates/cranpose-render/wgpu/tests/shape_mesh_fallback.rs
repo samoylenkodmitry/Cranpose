@@ -24,7 +24,7 @@ fn graph(record: impl FnOnce(&mut DrawScopeDefault)) -> RenderGraph {
     let mut recording = cranpose_ui_graphics::CommandRecording::default();
     let mut scope = DrawScopeDefault::new(Size::new(SIZE as f32, SIZE as f32), &mut recording);
     record(&mut scope);
-    RenderGraph::new(LayerNode {
+    RenderGraph::new(&LayerNode {
         cache_policy: CachePolicy::None,
         local_bounds: Rect {
             x: 11.25,

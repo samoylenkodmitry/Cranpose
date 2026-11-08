@@ -244,8 +244,8 @@ fn layer_only_update_keeps_outer_draw_and_child_canvas_recordings() {
     assert_eq!(children.len(), 2);
     let fresh = fresh_graph(&mut composition, root);
     assert_eq!(
-        graph_output_owned(&graph.root),
-        graph_output_owned(&fresh.root),
+        graph_output_owned(&graph.root()),
+        graph_output_owned(&fresh.root()),
         "patched output including transforms matches fresh lowering"
     );
 }
@@ -282,7 +282,7 @@ fn parent_layer_update_republishes_child_text_viewport_geometry() {
     let parent = parent_id.get().expect("parent Box");
     let sink = window_rect.borrow().expect("Text reports its window rect");
     let before = sink.get();
-    let before_transform = layer_for(&graph.root, parent)
+    let before_transform = layer_for(&graph.root(), parent)
         .expect("parent layer")
         .transform_to_parent;
     rotation.set(90.0);
@@ -300,22 +300,22 @@ fn parent_layer_update_republishes_child_text_viewport_geometry() {
         "fresh lowering publishes the same window rect"
     );
     assert_ne!(
-        layer_for(&graph.root, parent)
+        layer_for(&graph.root(), parent)
             .expect("updated parent layer")
             .transform_to_parent,
         before_transform
     );
     assert_eq!(
-        layer_for(&graph.root, parent)
+        layer_for(&graph.root(), parent)
             .expect("updated parent layer")
             .transform_to_parent,
-        layer_for(&fresh.root, parent)
+        layer_for(&fresh.root(), parent)
             .expect("fresh parent layer")
             .transform_to_parent
     );
     assert_eq!(
-        graph_output_owned(&graph.root),
-        graph_output_owned(&fresh.root),
+        graph_output_owned(&graph.root()),
+        graph_output_owned(&fresh.root()),
         "child text and viewport match fresh lowering"
     );
 }
@@ -351,7 +351,7 @@ fn parent_layer_and_child_content_dirt_are_both_applied() {
     let (root, mut graph) = initial_root_graph(&mut composition);
     let parent = parent_id.get().expect("parent Box id");
     let child = child_id.get().expect("Canvas id");
-    let old_transform = layer_for(&graph.root, parent)
+    let old_transform = layer_for(&graph.root(), parent)
         .expect("parent layer")
         .transform_to_parent;
     rotation.set(43.0);
@@ -365,15 +365,15 @@ fn parent_layer_and_child_content_dirt_are_both_applied() {
         ],
     );
     assert_ne!(
-        layer_for(&graph.root, parent)
+        layer_for(&graph.root(), parent)
             .expect("updated parent layer")
             .transform_to_parent,
         old_transform,
         "the parent's layer dirt is applied"
     );
     let fresh = fresh_graph(&mut composition, root);
-    let actual = graph_output_owned(&graph.root);
-    let expected = graph_output_owned(&fresh.root);
+    let actual = graph_output_owned(&graph.root());
+    let expected = graph_output_owned(&fresh.root());
     assert_eq!(actual, expected, "child content survives parent layer dirt");
     assert!(
         actual.0.iter().any(|(_, _, drawn)| *drawn == Color::GREEN),
@@ -426,7 +426,7 @@ fn parent_content_and_child_layer_dirt_match_a_fresh_rebuild() {
     let (root, mut graph) = initial_root_graph(&mut composition);
     let parent = parent_id.get().expect("parent Box id");
     let child = child_id.get().expect("child Box id");
-    let old_transform = layer_for(&graph.root, child)
+    let old_transform = layer_for(&graph.root(), child)
         .expect("child graphics layer")
         .transform_to_parent;
     parent_color.set(Color::BLUE);
@@ -440,15 +440,15 @@ fn parent_content_and_child_layer_dirt_match_a_fresh_rebuild() {
         ],
     );
     assert_ne!(
-        layer_for(&graph.root, child)
+        layer_for(&graph.root(), child)
             .expect("updated child layer")
             .transform_to_parent,
         old_transform,
         "parent content rebuilding must not lose the child's layer change"
     );
     let fresh = fresh_graph(&mut composition, root);
-    let actual = graph_output_owned(&graph.root);
-    let expected = graph_output_owned(&fresh.root);
+    let actual = graph_output_owned(&graph.root());
+    let expected = graph_output_owned(&fresh.root());
     assert_eq!(
         actual, expected,
         "content-dirty parent matches a fresh graph"

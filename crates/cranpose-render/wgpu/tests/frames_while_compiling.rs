@@ -53,7 +53,7 @@ fn page_with_tilted_card() -> RenderGraph {
         support::text_node(7, "Page", rect(6.0, 62.0, 60.0, 24.0), 16.0),
         RenderNode::Layer(Box::new(card)),
     ];
-    RenderGraph::new(shared_test_support::layer_node(
+    RenderGraph::new(&shared_test_support::layer_node(
         frame,
         ProjectiveTransform::identity(),
         GraphicsLayer::default(),

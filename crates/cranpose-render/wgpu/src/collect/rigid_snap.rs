@@ -1,8 +1,8 @@
 // Which content snaps to the pixel grid as one rigid block, and where.
 
 use cranpose_render_common::{
-    graph::{LayerNode, PrimitiveNode, RenderNode},
     layer_transform::apply_layer_affine_to_rect,
+    scene_store::{ItemRef, LayerRef},
 };
 use cranpose_ui_graphics::{DrawPrimitive, GraphicsLayer, Point, Rect};
 
@@ -38,21 +38,19 @@ pub(super) fn primitive_is_drawn(primitive: &DrawPrimitive) -> bool {
     !matches!(primitive, DrawPrimitive::Content | DrawPrimitive::Shadow(_))
 }
 
-pub(super) fn layer_has_pixel_sensitive_subtree(layer: &LayerNode) -> bool {
-    layer.children.iter().any(node_is_pixel_sensitive)
+pub(super) fn layer_has_pixel_sensitive_subtree(layer: LayerRef<'_>) -> bool {
+    layer.items().any(node_is_pixel_sensitive)
 }
 
-pub(super) fn node_is_pixel_sensitive(node: &RenderNode) -> bool {
+pub(super) fn node_is_pixel_sensitive(node: ItemRef<'_>) -> bool {
     match node {
-        RenderNode::Primitive(entry) => match &entry.node {
-            PrimitiveNode::Text(_) => true,
-            PrimitiveNode::Draw(draw) => primitive_is_pixel_sensitive(&draw.primitive),
-        },
-        RenderNode::DrawRun(run) => run.summary.has_text || run.summary.has_pixel_sensitive,
-        RenderNode::Layer(child) => {
-            direct_translation(child.transform_to_parent).is_some()
+        ItemRef::Text(_) => true,
+        ItemRef::Draw(draw) => primitive_is_pixel_sensitive(&draw.primitive),
+        ItemRef::Run(run) => run.summary.has_text || run.summary.has_pixel_sensitive,
+        ItemRef::Layer(child) => {
+            direct_translation(child.transform_to_parent()).is_some()
                 && layer_has_pixel_sensitive_subtree(child)
         }
-        RenderNode::Inline(inline) => inline.content.iter().any(node_is_pixel_sensitive),
+        ItemRef::Leaf(leaf) => leaf.items().any(node_is_pixel_sensitive),
     }
 }

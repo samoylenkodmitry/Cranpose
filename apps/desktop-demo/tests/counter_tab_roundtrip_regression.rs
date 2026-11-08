@@ -29,12 +29,15 @@ struct HitGraphRenderer {
 }
 
 fn collect_graph_hits(layer: &LayerNode, scene: &mut Scene, parent_hit_clip: Option<Rect>) {
-    collect_hits_from_graph(
-        layer,
-        ProjectiveTransform::identity(),
-        scene,
-        parent_hit_clip,
-    );
+    let store = cranpose_render_common::scene_store::SceneStore::from_layer(layer);
+    if let Some(root) = store.root_layer() {
+        collect_hits_from_graph(
+            root,
+            ProjectiveTransform::identity(),
+            scene,
+            parent_hit_clip,
+        );
+    }
 }
 
 impl Renderer for HitGraphRenderer {
@@ -59,7 +62,7 @@ impl Renderer for HitGraphRenderer {
             layout_tree.root(),
             1.0,
         );
-        collect_graph_hits(&graph.root, &mut self.scene, None);
+        collect_graph_hits(&graph.root(), &mut self.scene, None);
         self.scene.replace_graph(graph);
         Ok(())
     }
@@ -74,7 +77,7 @@ impl Renderer for HitGraphRenderer {
         if let Some(graph) =
             cranpose_render_common::scene_builder::build_graph_from_applier(applier, root, 1.0)
         {
-            collect_graph_hits(&graph.root, &mut self.scene, None);
+            collect_graph_hits(&graph.root(), &mut self.scene, None);
             self.scene.replace_graph(graph);
         }
         Ok(())
@@ -159,7 +162,7 @@ fn animate_float_as_state_returned_value_updates_parent_graphics_layer_after_cli
             .scene()
             .graph
             .as_ref()
-            .map(|graph| max_layer_translation_y(&graph.root))
+            .map(|graph| max_layer_translation_y(&graph.root()))
             .expect("graph available after returned animation frame");
         last_translation = translation;
         if translation > 1.0 && translation < 31.0 {

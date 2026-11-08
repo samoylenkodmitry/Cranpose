@@ -6,10 +6,11 @@ use cranpose_core::{MemoryApplier, NodeId};
 use cranpose_foundation::lazy::{LazyListScope, LazyListState, rememberLazyListState};
 use cranpose_render_common::{
     NodeUpdate,
-    graph::{LayerNode, RenderGraph, RenderNode},
+    graph::{LayerNode, RenderGraph},
     scene_builder::{
         build_graph_from_applier, rebuild_graph_from_applier, update_graph_from_applier,
     },
+    scene_store::LayerRef,
 };
 use cranpose_ui::{
     Color, GraphicsLayer, LayoutEngine, LazyColumn, LazyColumnSpec, Modifier, Size, Text,
@@ -27,16 +28,15 @@ static GLOBAL: &StatsAlloc<System> = &INSTRUMENTED_SYSTEM;
 
 const PASSES: usize = 10;
 
-/// The ids of the layers directly under `layer`, the cells of the column.
-fn cell_ids(layer: &LayerNode) -> Vec<NodeId> {
-    layer
-        .children
-        .iter()
-        .filter_map(|child| match child {
-            RenderNode::Layer(cell) => cell.node_id.or(cell.wraps),
-            RenderNode::Inline(cell) => Some(cell.node_id),
-            RenderNode::Primitive(_) | RenderNode::DrawRun(_) => None,
-        })
+/// The ids of the records directly under the root of `graph`, the cells
+/// of the column.
+fn cell_ids(graph: &RenderGraph) -> Vec<NodeId> {
+    graph
+        .store()
+        .root_layer()
+        .into_iter()
+        .flat_map(LayerRef::children)
+        .filter_map(LayerRef::owner)
         .collect()
 }
 
@@ -79,7 +79,7 @@ fn allocations_per_pass(
         .compute_layout(root, Size::new(400.0, 4000.0))
         .expect("layout");
     let mut graph = build_graph_from_applier(&applier, root, 1.0).expect("render graph");
-    assert_eq!(cell_ids(&graph.root).len(), cells, "every cell is a layer");
+    assert_eq!(cell_ids(&graph).len(), cells, "every cell is a layer");
     pass(&mut applier, root, &mut graph);
     pass(&mut applier, root, &mut graph);
     let region = Region::new(GLOBAL);
@@ -103,7 +103,7 @@ fn allocations_per_cell(mut pass: impl FnMut(&mut MemoryApplier, NodeId, &mut Re
 /// cell rebuilt with the same content allocates nothing of its own.
 fn rebuilding_a_cell_reuses_the_cell_it_replaces() {
     let per_cell = allocations_per_cell(|applier, _, graph| {
-        let dirty: Vec<_> = cell_ids(&graph.root)
+        let dirty: Vec<_> = cell_ids(graph)
             .into_iter()
             .map(|id| (id, NodeUpdate::Content))
             .collect();
@@ -120,7 +120,7 @@ fn rebuilding_a_cell_reuses_the_cell_it_replaces() {
 /// replaces.
 fn rebuilding_the_graph_reuses_the_graph_it_replaces() {
     let per_cell = allocations_per_cell(|applier, root, graph| {
-        let previous = std::mem::replace(graph, RenderGraph::new(LayerNode::default()));
+        let previous = std::mem::replace(graph, RenderGraph::new(&LayerNode::default()));
         *graph =
             rebuild_graph_from_applier(applier, root, 1.0, Some(previous)).expect("render graph");
     });
@@ -135,7 +135,7 @@ fn rebuilding_the_graph_reuses_the_graph_it_replaces() {
 /// updating one cell allocates what the cell's rebuild allocates alone.
 fn updating_one_cell_reuses_the_dirty_node_map() {
     let allocations = allocations_per_pass(10, |applier, _, graph| {
-        let dirty = [(cell_ids(&graph.root)[0], NodeUpdate::Content)];
+        let dirty = [(cell_ids(graph)[0], NodeUpdate::Content)];
         assert!(
             update_graph_from_applier(applier, graph, &dirty, 1.0),
             "the cell rebuilds in place"

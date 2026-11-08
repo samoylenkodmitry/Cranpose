@@ -42,7 +42,7 @@ fn graph_for(record: fn(&mut DrawScopeDefault), clip: Option<Rect>) -> RenderGra
             primitives,
         ))],
     };
-    RenderGraph::new(LayerNode {
+    RenderGraph::new(&LayerNode {
         local_bounds: bounds,
         children,
         ..LayerNode::default()

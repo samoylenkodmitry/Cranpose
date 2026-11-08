@@ -112,7 +112,7 @@ fn dropping_leading_keyed_lazy_rows_one_at_a_time_repaints_the_survivors() {
     let _ = scoped_scene_nodes(&mut composition.applier_mut(), root);
 
     let mut painted = Vec::new();
-    painted_text(&graph.root, &mut painted);
+    painted_text(&graph.root(), &mut painted);
     assert_eq!(
         painted,
         vec![
@@ -165,7 +165,7 @@ fn dropping_leading_keyed_lazy_rows_one_at_a_time_repaints_the_survivors() {
         }
 
         let mut painted = Vec::new();
-        painted_text(&graph.root, &mut painted);
+        painted_text(&graph.root(), &mut painted);
         let mut expected = vec!["Header".to_string()];
         expected.extend((count..3).map(|body| format!("Body {body}")));
         assert_eq!(

@@ -183,7 +183,7 @@ pub(super) fn assign_layer(store: &mut SceneStore, record: RecordId, head: Layer
     let (record_kind, node) = kind.record();
     if store.node(record) != Some(node) {
         // A record that draws for another node starts a new run of changes.
-        store.set_props(record, None);
+        store.clear_props(record);
     }
     store.set_kind(record, record_kind, Some(node));
     store.set_content_offset(record, content_offset);
@@ -193,9 +193,9 @@ pub(super) fn assign_layer(store: &mut SceneStore, record: RecordId, head: Layer
     let space = graphics_layer
         .as_ref()
         .is_some_and(|layer| layer.space.is_some());
+    store.set_graphics_layer(record, graphics_layer);
     store.edit_props(record, |props| {
         props.layer_bounds = node_bounds.map(|_| local_bounds);
-        props.graphics_layer.replace(graphics_layer);
         props.translated_content_offset = translated_content_offset;
         props.hit_test = hit_test;
         props.isolation = isolation;
@@ -312,12 +312,14 @@ pub(super) fn write_node_content(
     store: &mut SceneStore,
     record: RecordId,
     list: &mut Vec<Item>,
-    node_id: NodeId,
     slices: &ModifierNodeSlices,
     draws: DrawTarget,
     (kept, written): (usize, usize),
     write_children: impl FnOnce(&mut SceneStore, &mut Vec<Item>),
 ) {
+    let node_id = store
+        .node(record)
+        .expect("a node's content is written into a record of that node");
     let size = draws.size;
     let outer_count = slices.outer_draw_command_count();
     let commands = NodeCommands {
@@ -457,7 +459,6 @@ pub(super) fn write_snapshot_layer(
                 store,
                 record,
                 list,
-                node_id,
                 &slices,
                 draws,
                 written,
@@ -507,16 +508,7 @@ fn lower_snapshot_child(
     store.set_kind(record, RecordKind::Leaf, Some(node_id));
     store.set_content_offset(record, content_offset);
     let mut list = item_lists::take();
-    write_node_content(
-        store,
-        record,
-        &mut list,
-        node_id,
-        &slices,
-        draws,
-        (0, 0),
-        |_, _| {},
-    );
+    write_node_content(store, record, &mut list, &slices, draws, (0, 0), |_, _| {});
     store.set_items(record, &list);
     item_lists::give(list);
     if store
@@ -721,7 +713,6 @@ pub(super) fn write_node_layer(
                 store,
                 record,
                 list,
-                node_id,
                 &slices,
                 draws,
                 written,
@@ -744,10 +735,10 @@ pub(super) struct OuterDraws {
     overlay: Vec<Item>,
 }
 
-pub(super) fn outer_commands<'a>(
+pub(super) fn outer_commands(
     node_id: NodeId,
-    slices: &'a ModifierNodeSlices,
-) -> Option<NodeCommands<'a>> {
+    slices: &ModifierNodeSlices,
+) -> Option<NodeCommands<'_>> {
     let count = slices.outer_draw_command_count();
     (count > 0).then(|| NodeCommands {
         node_id,
@@ -857,7 +848,7 @@ pub(super) fn take_wrapped_layer(
 }
 
 pub(super) fn layer_identity(layer: LayerRef<'_>) -> Option<NodeId> {
-    layer.node_id().or(layer.wraps())
+    layer.node_id().or_else(|| layer.wraps())
 }
 
 pub(super) fn layout_box_to_snapshot(

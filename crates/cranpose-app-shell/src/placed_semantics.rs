@@ -200,12 +200,9 @@ pub fn placed_semantics_from_applier(
         let mut sink = TouchBoundsSink {
             bounds: &mut touch_bounds,
         };
-        collect_hits_from_graph(
-            &graph.root,
-            ProjectiveTransform::identity(),
-            &mut sink,
-            None,
-        );
+        if let Some(root) = graph.store().root_layer() {
+            collect_hits_from_graph(root, ProjectiveTransform::identity(), &mut sink, None);
+        }
     }
 
     join(semantics.root(), &layout_bounds, &touch_bounds).map(Some)
@@ -241,9 +238,6 @@ impl HitGraphSink for TouchBoundsSink<'_> {
     }
 }
 
-/// Gives a row and everything inside it the place of the row, so that two
-/// rows with one name, and the controls inside them, are apart. A list inside
-/// a row keeps the places it gave its own rows.
 pub(crate) fn place_row(row: &mut PlacedSemanticsNode, position: usize) {
     if row.list_position.is_some() {
         return;

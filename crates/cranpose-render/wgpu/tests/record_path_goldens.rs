@@ -37,7 +37,7 @@ fn run_node(primitives: Vec<DrawPrimitive>) -> RenderNode {
 }
 
 fn root(size: u32, children: Vec<RenderNode>) -> RenderGraph {
-    RenderGraph::new(LayerNode {
+    RenderGraph::new(&LayerNode {
         local_bounds: bounds(size),
         children,
         ..LayerNode::default()

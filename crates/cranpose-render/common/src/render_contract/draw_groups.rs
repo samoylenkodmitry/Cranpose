@@ -175,7 +175,6 @@ pub(super) fn draw_groups_fixture() -> RenderFixture {
     build_fixture(WIDTH, HEIGHT, nodes)
 }
 
-/// The rows of the cell at `index` that hold anything but the background.
 fn ink_rows(pixels: &[u8], index: u32, background: [u8; 4]) -> u32 {
     let columns = index * CELL as u32..(index + 1) * CELL as u32;
     (0..HEIGHT)
@@ -246,9 +245,6 @@ pub(super) fn assert_draw_groups_frame(pixels: &[u8], width: u32, height: u32) {
 const PAINTED_WIDTH: u32 = 120;
 const PAINTED_HEIGHT: u32 = 30;
 
-/// Squares of the foreground, plain and in groups, in a node whose
-/// graphics layer modulates alpha and filters colour. Every square must take
-/// the node's paint as its plain one does.
 fn painted_draws(scope: &mut dyn DrawScope) {
     let square = |x: f32| Rect {
         x,
@@ -291,14 +287,10 @@ pub(super) fn painted_groups_fixture() -> RenderFixture {
     let node = build_graph_from_applier(&applier, root, 1.0).expect("the composition draws");
     applier.clear_runtime_handle();
     let mut fixture = build_fixture(PAINTED_WIDTH, PAINTED_HEIGHT, Vec::new());
-    let RenderGraph {
-        root: node_root, ..
-    } = node;
-    fixture
-        .graph
-        .root
-        .children
-        .push(RenderNode::Layer(Box::new(node_root)));
+    let node_root = node.root();
+    let mut root = fixture.graph.root();
+    root.children.push(RenderNode::Layer(Box::new(node_root)));
+    fixture.graph = RenderGraph::new(&root);
     fixture
 }
 

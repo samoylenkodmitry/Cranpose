@@ -102,7 +102,7 @@ fn assert_callback_once_per_update(outer_wrapper: bool, around: Around) {
     let mut graph = initial_graph(&mut composition, root);
     assert_eq!(calls.get(), 1, "initial scene records with-content once");
     let mut colors = Vec::new();
-    crate::scene_probe::painted_solid_rect_colors(&graph.root, &mut colors);
+    crate::scene_probe::painted_solid_rect_colors(&graph.root(), &mut colors);
     assert_eq!(colors, [Color::BLUE, Color::RED, Color::WHITE]);
 
     before.set(Color(0.0, 1.0, 1.0, 1.0));
@@ -119,7 +119,7 @@ fn assert_callback_once_per_update(outer_wrapper: bool, around: Around) {
     assert!(report.applied(), "content update applies to retained graph");
     assert_eq!(calls.get(), 2, "one content update records once");
     colors.clear();
-    crate::scene_probe::painted_solid_rect_colors(&graph.root, &mut colors);
+    crate::scene_probe::painted_solid_rect_colors(&graph.root(), &mut colors);
     assert_eq!(
         colors,
         [Color(0.0, 1.0, 1.0, 1.0), Color::RED, Color::GREEN]
@@ -138,7 +138,7 @@ fn assert_callback_once_per_update(outer_wrapper: bool, around: Around) {
     assert!(report.applied(), "draw update applies to retained graph");
     assert_eq!(calls.get(), 3, "one draw update records once");
     colors.clear();
-    crate::scene_probe::painted_solid_rect_colors(&graph.root, &mut colors);
+    crate::scene_probe::painted_solid_rect_colors(&graph.root(), &mut colors);
     assert_eq!(
         colors,
         [Color(0.5, 0.5, 1.0, 1.0), Color::RED, Color::BLACK]
@@ -150,7 +150,7 @@ fn assert_callback_once_per_update(outer_wrapper: bool, around: Around) {
         .expect("full scene update rebuilds graph");
     assert_eq!(calls.get(), 4, "one full rebuild records once");
     colors.clear();
-    crate::scene_probe::painted_solid_rect_colors(&graph.root, &mut colors);
+    crate::scene_probe::painted_solid_rect_colors(&graph.root(), &mut colors);
     assert_eq!(
         colors,
         [
@@ -261,7 +261,7 @@ fn nested_scene_build_does_not_replace_parent_with_content_recording() {
     assert_eq!(parent_calls.get(), 1, "parent command runs once");
     assert_eq!(nested_calls.get(), 1, "nested scene was built once");
     let mut colors = Vec::new();
-    crate::scene_probe::painted_solid_rect_colors(&graph.root, &mut colors);
+    crate::scene_probe::painted_solid_rect_colors(&graph.root(), &mut colors);
     assert_eq!(colors, [Color::BLUE, Color::RED, Color::WHITE]);
 
     parent_before.set(Color(0.0, 1.0, 1.0, 1.0));
@@ -277,7 +277,7 @@ fn nested_scene_build_does_not_replace_parent_with_content_recording() {
     assert_eq!(parent_calls.get(), 2, "parent command runs once on rebuild");
     assert_eq!(nested_calls.get(), 2, "nested scene rebuilds once");
     colors.clear();
-    crate::scene_probe::painted_solid_rect_colors(&graph.root, &mut colors);
+    crate::scene_probe::painted_solid_rect_colors(&graph.root(), &mut colors);
     assert_eq!(
         colors,
         [Color(0.0, 1.0, 1.0, 1.0), Color::RED, Color::GREEN]

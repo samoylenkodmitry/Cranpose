@@ -34,7 +34,7 @@ fn shadowed_root_graph(cache_policy: CachePolicy) -> RenderGraph {
             support::solid_rect(card, Color(0.9, 0.2, 0.15, 1.0)),
         ],
     );
-    RenderGraph::new(root)
+    RenderGraph::new(&root)
 }
 
 fn rgba(frame: &CapturedFrame, x: u32, y: u32) -> [u8; 4] {
@@ -132,7 +132,7 @@ fn dev_overlay_packet_renders_over_both_root_kinds() {
     };
 
     let direct_graph = || {
-        RenderGraph::new(support::contract_layer(
+        RenderGraph::new(&support::contract_layer(
             Some(NodeId(4_200)),
             CachePolicy::None,
             Rect {

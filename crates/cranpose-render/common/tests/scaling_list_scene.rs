@@ -92,7 +92,7 @@ fn scaling_list_scene() -> LayerNode {
         .expect("layout");
     let graph = build_graph_from_applier(&applier, root, 1.0).expect("render graph");
     applier.clear_runtime_handle();
-    graph.root
+    graph.root()
 }
 
 #[test]
@@ -181,7 +181,7 @@ fn tappable_list_scene(count: usize) -> (Scene, Vec<NodeId>, Rc<RefCell<Vec<usiz
 
     let mut scene = Scene::default();
     collect_hits_from_graph(
-        &graph.root,
+        graph.store().root_layer().expect("a root record"),
         ProjectiveTransform::identity(),
         &mut scene,
         None,

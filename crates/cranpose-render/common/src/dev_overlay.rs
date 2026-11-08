@@ -96,7 +96,7 @@ pub fn build_dev_overlay_graph(
         ],
         ..Default::default()
     };
-    RenderGraph::new(LayerNode {
+    RenderGraph::new(&LayerNode {
         local_bounds: Rect::from_size(viewport),
         children: vec![RenderNode::Layer(Box::new(overlay_layer))],
         ..Default::default()

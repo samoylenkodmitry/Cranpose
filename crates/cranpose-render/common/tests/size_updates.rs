@@ -58,7 +58,7 @@ fn drawn_nodes(
 
 fn drawn_rects(graph: &RenderGraph) -> Vec<(Rect, DrawPrimitive)> {
     let mut out = Vec::new();
-    drawn(&graph.root, ProjectiveTransform::identity(), &mut out);
+    drawn(&graph.root(), ProjectiveTransform::identity(), &mut out);
     out
 }
 
@@ -168,7 +168,7 @@ fn nodes_texts(nodes: &[RenderNode], transform: ProjectiveTransform, out: &mut V
 
 fn drawn_texts(graph: &RenderGraph) -> Vec<DrawnText> {
     let mut out = Vec::new();
-    texts(&graph.root, ProjectiveTransform::identity(), &mut out);
+    texts(&graph.root(), ProjectiveTransform::identity(), &mut out);
     out
 }
 

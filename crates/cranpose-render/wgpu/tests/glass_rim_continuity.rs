@@ -54,7 +54,7 @@ fn regular_capsule_glass_scene() -> RenderGraph {
         },
         vec![],
     );
-    RenderGraph::new(shared_test_support::layer_node(
+    RenderGraph::new(&shared_test_support::layer_node(
         Rect {
             x: 0.0,
             y: 0.0,

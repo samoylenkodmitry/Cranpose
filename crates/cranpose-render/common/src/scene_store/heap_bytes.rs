@@ -1,64 +1,47 @@
-// Estimates of the heap memory a render graph holds, for memory reports.
+// Estimates of the heap memory a scene store holds, for memory reports.
 
 use std::mem::size_of;
 
 use cranpose_ui::text::AnnotatedString;
-use cranpose_ui_graphics::{DrawPrimitive, GraphicsLayer, ShadowPrimitive};
+use cranpose_ui_graphics::{DrawPrimitive, ShadowPrimitive};
 
-use super::{
-    DrawPrimitiveNode, InlineNode, LayerNode, PrimitiveEntry, PrimitiveNode, RenderNode,
-    TextPrimitiveNode,
-};
+use super::{GeoRecord, SceneStore, TreeRecord, WarmRecord};
 
-pub(super) fn layer_heap_bytes(layer: &LayerNode) -> usize {
-    size_of::<RenderNode>() * layer.children.capacity()
-        + layer
-            .graphics_layer
-            .0
-            .as_ref()
-            .map_or(0, |_| size_of::<GraphicsLayer>())
-        + layer
-            .children
-            .iter()
-            .map(render_node_heap_bytes)
-            .sum::<usize>()
-}
-
-fn render_node_heap_bytes(node: &RenderNode) -> usize {
-    match node {
-        RenderNode::Primitive(entry) => primitive_entry_heap_bytes(entry),
-        RenderNode::DrawRun(run) => {
-            run.recording.pod_heap_bytes()
-                + size_of_val(run.recording.others())
-                + run
-                    .recording
-                    .others()
-                    .iter()
-                    .map(draw_primitive_heap_bytes)
-                    .sum::<usize>()
-        }
-        RenderNode::Layer(layer) => size_of::<LayerNode>() + layer_heap_bytes(layer),
-        RenderNode::Inline(inline) => {
-            size_of::<InlineNode>()
-                + size_of::<RenderNode>() * inline.content.capacity()
-                + inline
-                    .content
-                    .iter()
-                    .map(render_node_heap_bytes)
-                    .sum::<usize>()
-        }
-    }
-}
-
-fn primitive_entry_heap_bytes(entry: &PrimitiveEntry) -> usize {
-    match &entry.node {
-        PrimitiveNode::Draw(draw) => {
-            size_of::<DrawPrimitiveNode>() + draw_primitive_heap_bytes(&draw.primitive)
-        }
-        PrimitiveNode::Text(text) => {
-            size_of::<TextPrimitiveNode>() + annotated_string_heap_bytes(&text.text)
-        }
-    }
+pub(super) fn store_heap_bytes(store: &SceneStore) -> usize {
+    let rows = store.tree.capacity() * size_of::<TreeRecord>()
+        + store.geo.capacity() * size_of::<GeoRecord>()
+        + store.warm.capacity() * size_of::<WarmRecord>()
+        + store.generations.capacity() * size_of::<u32>()
+        + store.free_rows.capacity() * size_of::<u32>();
+    let props = store.props.heap_bytes() + store.graphics_layers.heap_bytes();
+    let draws = store.draws.heap_bytes()
+        + store
+            .draws
+            .values()
+            .map(|draw| draw_primitive_heap_bytes(&draw.primitive))
+            .sum::<usize>();
+    let texts = store.texts.heap_bytes()
+        + store
+            .texts
+            .values()
+            .map(|text| annotated_string_heap_bytes(&text.text))
+            .sum::<usize>();
+    let runs = store.runs.heap_bytes()
+        + store
+            .runs
+            .values()
+            .map(|run| {
+                run.recording.pod_heap_bytes()
+                    + size_of_val(run.recording.others())
+                    + run
+                        .recording
+                        .others()
+                        .iter()
+                        .map(draw_primitive_heap_bytes)
+                        .sum::<usize>()
+            })
+            .sum::<usize>();
+    rows + store.items.heap_bytes() + store.transforms.heap_bytes() + props + draws + texts + runs
 }
 
 fn draw_primitive_heap_bytes(primitive: &DrawPrimitive) -> usize {

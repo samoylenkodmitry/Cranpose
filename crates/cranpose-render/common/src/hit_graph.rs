@@ -5,12 +5,13 @@ use cranpose_ui_graphics::{Rect, layer_transform::layer_surface};
 use smallvec::SmallVec;
 
 use crate::{
-    graph::{HitTestNode, LayerNode, ProjectiveTransform, RenderNode, quad_bounds},
+    graph::{HitTestNode, ProjectiveTransform, quad_bounds},
     graph_scene::{
         HitClip, HitGeometry, HitTargetSpec, HitTargets, Scene, SurfaceGeometry, SurfaceTarget,
     },
     primitive_emit::resolve_clip,
     scene_pick::ScenePick,
+    scene_store::LayerRef,
 };
 
 /// Receives the hit targets that `collect_hits_from_graph` finds in a render graph.
@@ -50,8 +51,6 @@ impl HitGraphSink for HitTargets<'_> {
     }
 }
 
-/// What a graph's hit test node pushes as a target: its handlers, with no
-/// shape of its own.
 fn hit_spec(hit: &HitTestNode) -> HitTargetSpec<'_> {
     HitTargetSpec {
         shape: None,
@@ -64,12 +63,12 @@ fn hit_spec(hit: &HitTestNode) -> HitTargetSpec<'_> {
 /// the parent layer's space to the window, and `parent_hit_clip` is the clip bounds that the
 /// layers above impose.
 pub fn collect_hits_from_graph<S: HitGraphSink>(
-    layer: &LayerNode,
+    layer: LayerRef<'_>,
     parent_transform: ProjectiveTransform,
     sink: &mut S,
     parent_hit_clip: Option<Rect>,
 ) {
-    if !layer.has_hit_targets {
+    if !layer.has_hit_targets() {
         return;
     }
     let mut walk = HitWalk {
@@ -92,8 +91,6 @@ struct HitWalk<'s, S> {
     hit_clips: Vec<HitClip>,
     pointer_input_ancestors: Vec<NodeId>,
     capture_path: SmallVec<[NodeId; 8]>,
-    /// The mesh surface the walk is inside, and the clips cutting its
-    /// content, in content space.
     surface: Option<SurfaceWalk>,
 }
 
@@ -102,41 +99,32 @@ struct SurfaceWalk {
     clips: Vec<HitClip>,
 }
 
-/// What a layer's parent places it in: the scene above it, with the clip
-/// bounds and the number of window clips that cut the scene's surfaces, and
-/// inside a mesh surface, the map from the parent to the surface's content
-/// with the content clip above. A surface that joins the scene from inside
-/// another's content is cut only where the scene's surfaces are.
 #[derive(Default)]
 struct ParentSpace {
     scene: Option<Rc<ScenePick>>,
     scene_clips: (Option<Rect>, usize),
     content: Option<ProjectiveTransform>,
     content_clip: Option<Rect>,
-    /// Whether the layer lies in a space behind a doorway, where only the
-    /// content of its mesh surfaces shows and takes input.
     behind_doorway: bool,
-    /// Whether the layer lies on a surface the eye does not see, whose
-    /// content takes no input.
     unseen: bool,
 }
 
 impl<S: HitGraphSink> HitWalk<'_, S> {
     fn visit(
         &mut self,
-        layer: &LayerNode,
+        layer: LayerRef<'_>,
         parent_transform: ProjectiveTransform,
         parent_hit_clip: Option<Rect>,
         space: &ParentSpace,
     ) {
-        if !layer.has_hit_targets {
+        if !layer.has_hit_targets() {
             return;
         }
         // Behind a doorway the eye does not see through, nothing takes input.
         let Some((doorway, unseen)) = Self::seen(layer, space) else {
             return;
         };
-        let transform = layer.transform_to_parent.then(parent_transform);
+        let transform = layer.transform_to_parent().then(parent_transform);
         // The node's handlers sit on its own rect; its clip, at its layer's
         // bounds, cuts them as it cuts what the layer holds.
         let node_rect = layer.node_rect();
@@ -166,8 +154,8 @@ impl<S: HitGraphSink> HitWalk<'_, S> {
         };
 
         if let (Some(node_id), Some(hit), false) = (
-            layer.node_id,
-            &layer.hit_test,
+            layer.node_id(),
+            layer.hit_test(),
             self.hides_targets(unseen, behind_doorway),
         ) {
             let geometry = PlacedNode {
@@ -183,10 +171,9 @@ impl<S: HitGraphSink> HitWalk<'_, S> {
         }
 
         let pointer_input_ancestor = layer
-            .hit_test
-            .as_ref()
+            .hit_test()
             .filter(|hit| !hit.handlers.pointer_inputs().is_empty())
-            .and(layer.node_id);
+            .and_then(|_| layer.node_id());
         if let Some(node_id) = pointer_input_ancestor {
             self.pointer_input_ancestors.push(node_id);
         }
@@ -198,10 +185,8 @@ impl<S: HitGraphSink> HitWalk<'_, S> {
             unseen,
             ..self.children_scene(layer, (transform, hit_clip_bounds), space)
         };
-        for child in &layer.children {
-            if let RenderNode::Layer(child_layer) = child {
-                self.visit(child_layer, transform, hit_clip_bounds, &children_space);
-            }
+        for child_layer in layer.children() {
+            self.visit(child_layer, transform, hit_clip_bounds, &children_space);
         }
 
         if pointer_input_ancestor.is_some() {
@@ -214,8 +199,6 @@ impl<S: HitGraphSink> HitWalk<'_, S> {
         self.leave(entered, content_clip.pushed);
     }
 
-    /// Records a node's hit target with its ancestors' clips and, inside a
-    /// surface, where it lies on the surface's content.
     fn push_node(&mut self, node_id: NodeId, hit: &HitTestNode, node: PlacedNode) {
         self.capture_path.clear();
         self.capture_path.push(node_id);
@@ -248,13 +231,9 @@ impl<S: HitGraphSink> HitWalk<'_, S> {
         );
     }
 
-    /// The scene above `layer`'s children: the one `layer` shows, cut by the
-    /// clips above them, or the one above `layer`, which also finds the
-    /// surfaces of a scene `layer` shows through one of its portals; the
-    /// content fields stay empty.
     fn children_scene(
         &self,
-        layer: &LayerNode,
+        layer: LayerRef<'_>,
         (transform, hit_clip_bounds): (ProjectiveTransform, Option<Rect>),
         space: &ParentSpace,
     ) -> ParentSpace {
@@ -262,7 +241,7 @@ impl<S: HitGraphSink> HitWalk<'_, S> {
             .scene
             .as_ref()
             .is_some_and(|scene| scene.holds_scene(layer));
-        let shown = match (layer.wraps, through_portal) {
+        let shown = match (layer.wraps(), through_portal) {
             (None, false) => ScenePick::of(layer, transform).map(Rc::new),
             _ => None,
         };
@@ -277,12 +256,9 @@ impl<S: HitGraphSink> HitWalk<'_, S> {
         }
     }
 
-    /// Starts the surface `layer` is, when the scene above draws it, cut by
-    /// the clips that cut the scene's surfaces; returns the surface walk it
-    /// replaces.
     fn enter_surface(
         &mut self,
-        layer: &LayerNode,
+        layer: LayerRef<'_>,
         space: &ParentSpace,
     ) -> Option<Option<SurfaceWalk>> {
         let pick = space.scene.as_ref()?;
@@ -300,47 +276,32 @@ impl<S: HitGraphSink> HitWalk<'_, S> {
         }))
     }
 
-    /// Whether `layer` shows a scene behind a doorway of the scene above;
-    /// `None` when the eye does not see through that doorway.
-    fn doorway(layer: &LayerNode, space: &ParentSpace) -> Option<bool> {
+    fn doorway(layer: LayerRef<'_>, space: &ParentSpace) -> Option<bool> {
         let Some(pick) = space.scene.as_ref().filter(|pick| pick.holds_scene(layer)) else {
             return Some(false);
         };
         pick.sees_scene(layer).then_some(true)
     }
 
-    /// Whether `layer` shows a scene behind a doorway of the scene above,
-    /// and whether it lies on a surface the eye does not see, whose content
-    /// takes no input but for what the eye sees through a doorway in it;
-    /// `None` when the eye does not see through the doorway `layer` is.
-    fn seen(layer: &LayerNode, space: &ParentSpace) -> Option<(bool, bool)> {
+    fn seen(layer: LayerRef<'_>, space: &ParentSpace) -> Option<(bool, bool)> {
         let doorway = Self::doorway(layer, space)?;
         let unseen = !doorway && (space.unseen || Self::unseen_surface(layer, space));
         Some((doorway, unseen))
     }
 
-    /// Whether a layer pushes no hit target: it lies on a surface the eye
-    /// does not see, or behind a doorway outside any surface's content.
     fn hides_targets(&self, unseen: bool, behind_doorway: bool) -> bool {
         unseen || (behind_doorway && self.surface.is_none())
     }
 
-    /// Whether `layer` is a mesh surface of the scene above that the eye
-    /// does not see: it lies in a space the eye does not see.
-    fn unseen_surface(layer: &LayerNode, space: &ParentSpace) -> bool {
+    fn unseen_surface(layer: LayerRef<'_>, space: &ParentSpace) -> bool {
         space.scene.as_ref().is_some_and(|pick| {
-            layer_surface(&layer.graphics_layer).is_some() && pick.index_of(layer).is_none()
+            layer_surface(layer.graphics_layer()).is_some() && pick.index_of(layer).is_none()
         })
     }
 
-    /// Starts the surface `layer` is, if the scene above draws it, or sets
-    /// aside the surface the walk is inside for a `doorway` into a space of
-    /// its own, and returns the surface walk it replaces, the map from
-    /// `layer` to the content of the surface the walk is inside, and the
-    /// content clip that cuts `layer`'s subtree.
     fn enter_content(
         &mut self,
-        layer: &LayerNode,
+        layer: LayerRef<'_>,
         (space, doorway): (&ParentSpace, bool),
     ) -> (
         Option<Option<SurfaceWalk>>,
@@ -362,7 +323,7 @@ impl<S: HitGraphSink> HitWalk<'_, S> {
             None => (
                 space
                     .content
-                    .map(|parent| layer.transform_to_parent.then(parent)),
+                    .map(|parent| layer.transform_to_parent().then(parent)),
                 space.content_clip,
             ),
         };
@@ -370,14 +331,9 @@ impl<S: HitGraphSink> HitWalk<'_, S> {
         (entered, content, content_clip)
     }
 
-    /// Pushes `layer`'s clip in the window, which `transform` maps the layer
-    /// to: the clip bounds that cut its subtree and whether it pushed one;
-    /// `None` when the clip leaves nothing. Inside a scene a layer's clip
-    /// cuts in its surface's content instead, not on the window, where a
-    /// surface behind the eye shows nothing.
     fn push_window_clip(
         &mut self,
-        layer: &LayerNode,
+        layer: LayerRef<'_>,
         transform: &ProjectiveTransform,
         (parent_hit_clip, in_scene): (Option<Rect>, bool),
     ) -> Option<(Option<Rect>, bool)> {
@@ -394,11 +350,9 @@ impl<S: HitGraphSink> HitWalk<'_, S> {
         Some((resolved, true))
     }
 
-    /// Pushes `layer`'s clip in its surface's content space, when the walk
-    /// is inside a surface.
     fn push_content_clip(
         &mut self,
-        layer: &LayerNode,
+        layer: LayerRef<'_>,
         content: Option<ProjectiveTransform>,
         parent_clip: Option<Rect>,
     ) -> ContentClip {
@@ -431,8 +385,6 @@ impl<S: HitGraphSink> HitWalk<'_, S> {
     }
 }
 
-/// Where a node's own rect lies: in the window, and inside a surface, on
-/// the surface's content.
 struct PlacedNode {
     rect: Rect,
     quad: [[f32; 2]; 4],

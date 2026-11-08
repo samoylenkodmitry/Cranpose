@@ -116,7 +116,7 @@ fn retained_visual_observation_nodes_collect_layers_and_command_owners() {
 
     root.node_id = Some(NodeId(5));
 
-    let mut graph = RenderGraph::new(root);
+    let mut graph = RenderGraph::new(&root);
     let mut nodes = HashSet::from_iter([NodeId(999)]);
     graph.collect_retained_visual_observation_nodes(&mut nodes);
     assert_eq!(
@@ -124,8 +124,10 @@ fn retained_visual_observation_nodes_collect_layers_and_command_owners() {
         HashSet::from_iter([NodeId(5), NodeId(9), NodeId(13), NodeId(17)])
     );
     let capacity = nodes.capacity();
-    graph.root.children.clear();
-    graph.root.node_id = Some(NodeId(23));
+    let mut root = graph.root();
+    root.children.clear();
+    root.node_id = Some(NodeId(23));
+    graph = RenderGraph::new(&root);
     graph.collect_retained_visual_observation_nodes(&mut nodes);
     assert_eq!(nodes, HashSet::from_iter([NodeId(23)]));
     assert_eq!(nodes.capacity(), capacity);
@@ -162,12 +164,12 @@ fn render_graph_new_recomputes_manual_layer_hashes() {
     let mut expected = root.clone();
     expected.forget_raster_cache_hashes();
 
-    let graph = RenderGraph::new(root);
+    let graph = RenderGraph::new(&root);
     assert_eq!(
-        graph.root.target_content_hash(),
+        graph.root().target_content_hash(),
         expected.target_content_hash()
     );
-    assert_eq!(graph.root.effect_hash(), expected.effect_hash());
+    assert_eq!(graph.root().effect_hash(), expected.effect_hash());
 }
 
 #[test]

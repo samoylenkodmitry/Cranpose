@@ -75,7 +75,7 @@ fn frame_of(children: Vec<RenderNode>) -> RenderGraph {
         None,
     )];
     nodes.extend(children);
-    RenderGraph::new(shared_test_support::layer_node(
+    RenderGraph::new(&shared_test_support::layer_node(
         rect(0.0, 0.0, FRAME as f32, FRAME as f32),
         ProjectiveTransform::identity(),
         GraphicsLayer::default(),

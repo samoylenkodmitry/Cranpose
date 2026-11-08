@@ -79,7 +79,7 @@ fn background() -> DrawPrimitive {
 }
 
 fn frame_of(children: Vec<RenderNode>) -> RenderGraph {
-    RenderGraph::new(shared_test_support::layer_node(
+    RenderGraph::new(&shared_test_support::layer_node(
         Rect {
             x: 0.0,
             y: 0.0,

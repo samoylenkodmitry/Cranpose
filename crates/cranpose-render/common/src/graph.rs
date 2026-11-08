@@ -21,8 +21,6 @@ use crate::{
     text_paint::{TextPaint, TextPaintCache},
 };
 
-mod heap_bytes;
-use heap_bytes::layer_heap_bytes;
 mod inline_node;
 pub use inline_node::InlineNode;
 
@@ -189,23 +187,18 @@ impl LayerProperties {
     pub fn get(&self) -> Option<&GraphicsLayer> {
         self.0.as_deref()
     }
+}
 
-    #[inline]
-    pub(crate) fn reads_as(&self, value: Option<&GraphicsLayer>) -> bool {
-        match (self.get(), value) {
-            (None, None) => true,
-            (stored, value) => {
-                stored.unwrap_or(&GraphicsLayer::DEFAULT)
-                    == value.unwrap_or(&GraphicsLayer::DEFAULT)
-            }
-        }
-    }
-
-    pub(crate) fn replace(&mut self, value: Option<GraphicsLayer>) {
-        match (&mut self.0, value) {
-            (Some(current), Some(value)) => **current = value,
-            (storage, value) => *storage = value.map(Box::new),
-        }
+// Whether graphics layers `a` and `b` read alike, `None` reading as the
+// default.
+#[inline]
+pub(crate) fn graphics_layers_read_alike(
+    a: Option<&GraphicsLayer>,
+    b: Option<&GraphicsLayer>,
+) -> bool {
+    match (a, b) {
+        (None, None) => true,
+        (a, b) => a.unwrap_or(&GraphicsLayer::DEFAULT) == b.unwrap_or(&GraphicsLayer::DEFAULT),
     }
 }
 
@@ -237,7 +230,7 @@ impl From<Option<GraphicsLayer>> for LayerProperties {
 
 impl PartialEq for LayerProperties {
     fn eq(&self, other: &Self) -> bool {
-        self.reads_as(other.get())
+        graphics_layers_read_alike(self.get(), other.get())
     }
 }
 
@@ -736,8 +729,6 @@ impl DrawRunNode {
 /// The scene as a tree of layers that a renderer draws.
 #[derive(Clone)]
 pub struct RenderGraph {
-    /// The top layer; every other node of the graph is beneath it.
-    pub root: LayerNode,
     /// How many scene updates the graph took: the number of the latest.
     pub update: u64,
     // The records the scene builder writes; the root is exported from them.
@@ -749,69 +740,68 @@ pub struct RenderGraph {
 
 impl RenderGraph {
     /// Creates a graph around `root` at update zero.
-    pub fn new(root: LayerNode) -> Self {
+    pub fn new(root: &LayerNode) -> Self {
         Self {
-            root,
+            store: crate::scene_store::SceneStore::from_layer(root),
             update: 0,
-            store: crate::scene_store::SceneStore::new(),
             retained_path: None,
             dirty_ancestry: crate::scene_builder::DirtyAncestry::default(),
         }
     }
 
+    /// The records the graph's layers are written in.
+    pub fn store(&self) -> &crate::scene_store::SceneStore {
+        &self.store
+    }
+
     // Works out the facts of the update in progress and exports the root.
     pub(crate) fn refresh_from_store(&mut self) {
         self.store.finish_update();
-        self.root = crate::scene_store::export(&self.store, self.update);
     }
 
-    /// Number of nodes in the graph. A layer counts once and each primitive of a draw run counts on
-    /// its own.
+    /// The layer tree the graph's records describe, for tests and tools
+    /// that read a scene as a tree.
+    pub fn root(&self) -> LayerNode {
+        crate::scene_store::export(&self.store, self.update)
+    }
+
+    /// Number of records and draws in the graph: each record counts once
+    /// and each primitive of a draw run counts on its own.
     pub fn node_count(&self) -> usize {
-        fn count_nodes(nodes: &[RenderNode]) -> usize {
-            nodes
-                .iter()
-                .map(|child| match child {
-                    RenderNode::Primitive(_) => 1,
-                    RenderNode::DrawRun(run) => run.len(),
-                    RenderNode::Layer(child_layer) => 1 + count_nodes(&child_layer.children),
-                    RenderNode::Inline(inline) => 1 + count_nodes(&inline.content),
-                })
-                .sum::<usize>()
-        }
-
-        1 + count_nodes(&self.root.children)
+        self.store.node_count()
     }
 
-    /// Estimated heap memory held beneath the root layer, in bytes, for memory reports.
+    /// Estimated heap memory held by the graph's records, in bytes, for
+    /// memory reports.
     pub fn heap_bytes(&self) -> usize {
-        layer_heap_bytes(&self.root)
+        self.store.heap_bytes()
     }
 
     /// Replaces the set with the graph's visual observation owners, retaining its capacity.
     pub fn collect_retained_visual_observation_nodes(&self, nodes: &mut HashSet<NodeId>) {
-        fn collect(layer: &LayerNode, nodes: &mut HashSet<NodeId>) {
-            if let Some(node_id) = layer.node_id {
+        fn collect(layer: crate::scene_store::LayerRef<'_>, nodes: &mut HashSet<NodeId>) {
+            if let Some(node_id) = layer.node_id() {
                 nodes.insert(node_id);
             }
-            for child in &layer.children {
-                match child {
-                    RenderNode::DrawRun(run) => {
+            for item in layer.items() {
+                match item {
+                    crate::scene_store::ItemRef::Run(run) => {
                         if let Some(command) = run.command {
                             nodes.insert(command.node_id);
                         }
                     }
-                    RenderNode::Layer(child) => collect(child, nodes),
-                    RenderNode::Inline(inline) => {
-                        nodes.insert(inline.node_id);
+                    crate::scene_store::ItemRef::Layer(child)
+                    | crate::scene_store::ItemRef::Leaf(child) => collect(child, nodes),
+                    crate::scene_store::ItemRef::Draw(_) | crate::scene_store::ItemRef::Text(_) => {
                     }
-                    RenderNode::Primitive(_) => {}
                 }
             }
         }
 
         nodes.clear();
-        collect(&self.root, nodes);
+        if let Some(root) = self.store.root_layer() {
+            collect(root, nodes);
+        }
     }
 }
 

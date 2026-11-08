@@ -165,7 +165,7 @@ fn painted_nodes(
 
 fn painted_output(graph: &RenderGraph) -> Vec<(Rect, String)> {
     let mut out = Vec::new();
-    painted(&graph.root, ProjectiveTransform::identity(), &mut out);
+    painted(&graph.root(), ProjectiveTransform::identity(), &mut out);
     out
 }
 

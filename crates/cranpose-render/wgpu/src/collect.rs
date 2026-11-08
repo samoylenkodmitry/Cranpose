@@ -1,18 +1,16 @@
 use std::{borrow::Cow, sync::Arc};
 
-use cranpose_core::NodeId;
+use cranpose_core::{NodeId, SceneUpdate};
 use cranpose_render_common::{
     geometry::{blur_reach, blur_reach_for_minimum_scale},
-    graph::{
-        CachePolicy, InlineNode, LayerNode, PrimitiveNode, ProjectiveTransform, RenderNode,
-        for_each_in_draw_order,
-    },
+    graph::{CachePolicy, ProjectiveTransform},
     layer_composition::{
         layer_composite_params, layer_requires_isolation, local_content_layer_for,
     },
     layer_shadow::ShadowLight,
     layer_transform::layer_uniform_scale,
     primitive_emit::resolve_clip,
+    scene_store::{ItemRef, LayerRef},
     space::SeenDoor,
 };
 use cranpose_ui_graphics::{
@@ -227,7 +225,7 @@ struct WalkSettings {
     wants_pixel_sensitive: bool,
     /// The graph's latest scene update, which tells an isolated layer whose
     /// content changes every frame from one a raster cache can keep.
-    update: u64,
+    update: SceneUpdate,
     /// Whether the walk lies in a scene's space, whose scene collects the
     /// layers there that are scenes, surfaces or 3D transforms: the walk
     /// leaves them out.
@@ -296,12 +294,13 @@ pub(crate) fn uniform_scale_translation(transform: ProjectiveTransform) -> Optio
 
 /// Whether the layer's own composition needs its content on a separate
 /// texture, before any rounded clip or transform is considered.
-fn child_needs_surface(layer: &LayerNode) -> bool {
-    let graphics = &layer.graphics_layer;
-    layer.isolation.explicit_offscreen
-        || layer.isolation.effect
-        || layer.isolation.blend_mode
-        || layer.isolation.group_opacity
+fn child_needs_surface(layer: LayerRef<'_>) -> bool {
+    let graphics = layer.graphics_layer();
+    let isolation = layer.isolation();
+    isolation.explicit_offscreen
+        || isolation.effect
+        || isolation.blend_mode
+        || isolation.group_opacity
         || graphics.compositing_strategy == CompositingStrategy::Offscreen
         || layer_requires_isolation(graphics)
 }
@@ -341,7 +340,7 @@ pub(crate) fn in_place_content_scale(scale: f32, raster_scale: f32) -> Option<f3
 /// moves it, nothing else about it needs a surface, and its content draws
 /// the same under a transform.
 fn can_draw_in_place(
-    layer: &LayerNode,
+    layer: LayerRef<'_>,
     transform: ProjectiveTransform,
     raster_scale: f32,
     content: &LayerScene,
@@ -401,8 +400,8 @@ enum Placement {
     Isolated,
 }
 
-fn child_placement(layer: &LayerNode, raster_scale: RasterScale) -> Placement {
-    let Some(translation) = direct_translation(layer.transform_to_parent) else {
+fn child_placement(layer: LayerRef<'_>, raster_scale: RasterScale) -> Placement {
+    let Some(translation) = direct_translation(layer.transform_to_parent()) else {
         return Placement::Isolated;
     };
     if child_needs_surface(layer) {
@@ -433,8 +432,8 @@ fn rounding_within(layer_clip: Option<Rect>, context: &WalkContext<'_>) -> Optio
 }
 
 pub(crate) fn collect_root(
-    root: &LayerNode,
-    update: u64,
+    root: LayerRef<'_>,
+    update: SceneUpdate,
     motion: &mut LayerMotion,
     capacity: SceneCapacityHint,
     root_scale: f32,
@@ -444,8 +443,8 @@ pub(crate) fn collect_root(
     let settings = WalkSettings {
         raster_scale: RasterScale::Exact(root_scale),
         light: ShadowLight::for_window(
-            root.local_bounds.width,
-            root.local_bounds.height,
+            root.local_bounds().width,
+            root.local_bounds().height,
             1.0,
             root_scale,
         ),
@@ -469,13 +468,13 @@ pub(crate) fn collect_root(
 }
 
 pub(crate) fn collect_overlay(
-    root: &LayerNode,
+    root: LayerRef<'_>,
     root_scale: f32,
     recycler: &mut LayerSceneRecycler,
 ) -> Box<LayerScene> {
     collect_root(
         root,
-        0,
+        root.store().update(),
         &mut LayerMotion::default(),
         SceneCapacityHint::default(),
         root_scale,
@@ -485,7 +484,7 @@ pub(crate) fn collect_overlay(
 
 #[inline(never)]
 fn push_backdrop_layer(
-    layer: &LayerNode,
+    layer: LayerRef<'_>,
     offset: Point,
     context: WalkContext<'_>,
     scene: &mut CompositorScene,
@@ -493,8 +492,8 @@ fn push_backdrop_layer(
     let Some(effect) = layer.backdrop() else {
         return;
     };
-    let local_layer = local_content_layer_for(&layer.graphics_layer);
-    let rect = layer.local_bounds.translate(offset.x, offset.y);
+    let local_layer = local_content_layer_for(layer.graphics_layer());
+    let rect = layer.local_bounds().translate(offset.x, offset.y);
     let clip = resolve_clip(
         context.visual_clip,
         layer
@@ -509,7 +508,7 @@ fn push_backdrop_layer(
         .snap_anchor
         .or_else(|| rigid_snap_anchor(rect, &local_layer));
     scene.push_backdrop_layer(BackdropLayer {
-        node_id: layer.node_id,
+        node_id: layer.node_id(),
         alpha: local_layer.alpha,
         rect,
         clip,
@@ -523,15 +522,15 @@ fn push_backdrop_layer(
 
 /// The walk's light seen from `layer`'s own space, which an isolated
 /// layer's content is collected in.
-fn light_in_layer(layer: &LayerNode, context: &WalkContext<'_>) -> ShadowLight {
+fn light_in_layer(layer: LayerRef<'_>, context: &WalkContext<'_>) -> ShadowLight {
     let to_parent = layer
-        .transform_to_parent
+        .transform_to_parent()
         .then(ProjectiveTransform::translation(
             context.offset.x,
             context.offset.y,
         ));
     let scale = uniform_scale_translation(to_parent).map_or_else(
-        || layer_uniform_scale(&layer.graphics_layer),
+        || layer_uniform_scale(layer.graphics_layer()),
         |(scale, _)| scale,
     );
     let origin = to_parent.map_point(Point::default());
@@ -542,27 +541,28 @@ fn light_in_layer(layer: &LayerNode, context: &WalkContext<'_>) -> ShadowLight {
 /// `update` and in the one before gets a key of this update alone instead
 /// of a hash of its content: the content is new, so the cache treats it as
 /// it treats content that changes, without the hashing.
-fn content_key(layer: &LayerNode, update: u64) -> u64 {
+fn content_key(layer: LayerRef<'_>, update: SceneUpdate) -> u64 {
     const CHURN_SALT: u64 = 0x6a09_e667_f3bc_c909;
     if layer.content_churns(update) {
-        return update.wrapping_mul(0x9e37_79b9_7f4a_7c15) ^ CHURN_SALT;
+        let number = u64::from(update.since(SceneUpdate::default()));
+        return number.wrapping_mul(0x9e37_79b9_7f4a_7c15) ^ CHURN_SALT;
     }
     layer.target_content_hash()
 }
 
 fn isolated_child(
-    layer: &LayerNode,
+    layer: LayerRef<'_>,
     motion: &mut LayerMotion,
     context: WalkContext<'_>,
     mesh: Option<Arc<MeshChild>>,
     parent_scene: &mut CompositorScene,
     recycler: &mut LayerSceneRecycler,
 ) -> (ChildLayer, bool) {
-    let local_layer = local_content_layer_for(&layer.graphics_layer);
+    let local_layer = local_content_layer_for(layer.graphics_layer());
     let content_hash = content_key(layer, context.settings.update);
-    let nominal_scale = layer_uniform_scale(&layer.graphics_layer);
-    let retained_scale = if layer.cache_policy == CachePolicy::Auto {
-        motion.retained_scale(layer.node_id, nominal_scale, content_hash)
+    let nominal_scale = layer_uniform_scale(layer.graphics_layer());
+    let retained_scale = if layer.cache_policy() == CachePolicy::Auto {
+        motion.retained_scale(layer.node_id(), nominal_scale, content_hash)
     } else {
         nominal_scale
     };
@@ -570,7 +570,8 @@ fn isolated_child(
         .settings
         .raster_scale
         .within(nominal_scale, retained_scale);
-    if layer.backdrop().is_some() && uniform_scale_translation(layer.transform_to_parent).is_none()
+    if layer.backdrop().is_some()
+        && uniform_scale_translation(layer.transform_to_parent()).is_none()
     {
         raster_scale = raster_scale.within(nominal_scale, retained_scale);
     }
@@ -587,7 +588,7 @@ fn isolated_child(
         visual_clip: None,
         rounding: None,
         snap_anchor: None,
-        translated: context.translated || layer.translated_content_context,
+        translated: context.translated || layer.translated_content_context(),
         settings: &content_settings,
     };
     let mut content = recycler.take(SceneCapacityHint::default());
@@ -596,48 +597,49 @@ fn isolated_child(
     content.scene.flush_loose();
     content.refresh_backdrop_summary();
     let transform = layer
-        .transform_to_parent
+        .transform_to_parent()
         .then(ProjectiveTransform::translation(
             context.offset.x,
             context.offset.y,
         ));
-    let parent_bounds = transform.bounds_for_rect(layer.local_bounds);
+    let parent_bounds = transform.bounds_for_rect(layer.local_bounds());
     let rigid = context.translated || has_pixel_sensitive_subtree;
     let snap_anchor = context.snap_anchor.or_else(|| {
         rigid
             .then(|| rigid_snap_anchor(parent_bounds, &local_layer))
             .flatten()
     });
-    let alpha = if layer.graphics_layer.compositing_strategy == CompositingStrategy::ModulateAlpha {
+    let alpha = if layer.graphics_layer().compositing_strategy == CompositingStrategy::ModulateAlpha
+    {
         1.0
     } else {
-        GraphicsLayer::composite_alpha_8bit(layer.graphics_layer.alpha)
+        GraphicsLayer::composite_alpha_8bit(layer.graphics_layer().alpha)
     };
-    let cacheable = layer.cache_policy == CachePolicy::Auto && !content.contains_backdrop();
+    let cacheable = layer.cache_policy() == CachePolicy::Auto && !content.contains_backdrop();
     let surface_scale = if cacheable {
         retained_scale
     } else {
         nominal_scale
     };
-    motion.record_scale(layer.node_id, surface_scale, content_hash);
+    motion.record_scale(layer.node_id(), surface_scale, content_hash);
     let in_place = mesh.is_none() && can_draw_in_place(layer, transform, surface_scale, &content);
     (
         ChildLayer {
             z_index: parent_scene.next_z(),
-            node_id: layer.node_id,
-            local_bounds: layer.local_bounds,
+            node_id: layer.node_id(),
+            local_bounds: layer.local_bounds(),
             transform,
             clip: context.visual_clip,
             rounded_clip: rounded_clip_for_layer(layer),
             alpha,
-            blend_mode: layer.graphics_layer.blend_mode,
+            blend_mode: layer.graphics_layer().blend_mode,
             effect: layer.effect().cloned(),
             backdrop: layer.backdrop().cloned(),
             backdrop_alpha: local_layer.alpha,
             snap_anchor,
             surface_scale,
             content_hash,
-            cache_policy: layer.cache_policy,
+            cache_policy: layer.cache_policy(),
             in_place,
             content,
             mesh,
@@ -647,15 +649,15 @@ fn isolated_child(
 }
 
 fn collect_into(
-    layer: &LayerNode,
+    layer: LayerRef<'_>,
     motion: &mut LayerMotion,
     context: WalkContext<'_>,
     out: &mut LayerScene,
     recycler: &mut LayerSceneRecycler,
 ) -> bool {
-    let local_layer = local_content_layer_for(&layer.graphics_layer);
+    let local_layer = local_content_layer_for(layer.graphics_layer());
     let layer_bounds = layer
-        .local_bounds
+        .local_bounds()
         .translate(context.offset.x, context.offset.y);
     let layer_clip = layer
         .visual_clip_rect()
@@ -665,12 +667,12 @@ fn collect_into(
         return context.settings.wants_pixel_sensitive && layer_has_pixel_sensitive_subtree(layer);
     }
     let rounding = rounding_within(layer_clip, &context);
-    let translated = context.translated || layer.translated_content_context;
-    let allow_rigid_snap = translated || !layer.motion_context_animated;
+    let translated = context.translated || layer.translated_content_context();
+    let allow_rigid_snap = translated || !layer.motion_context_animated();
     let boundary_anchor = boundary_anchor(layer, &context, (layer_bounds, &local_layer));
     let translated_anchor = context.snap_anchor.or(boundary_anchor);
     let layer_anchor = translated_anchor.or_else(|| {
-        (allow_rigid_snap && content_needs_rigid_snap(&layer.children, translated))
+        (allow_rigid_snap && content_needs_rigid_snap(layer, translated))
             .then(|| rigid_snap_anchor(layer_bounds, &local_layer))
             .flatten()
     });
@@ -685,7 +687,7 @@ fn collect_into(
         visual_clip,
         rounding,
         anchor: layer_anchor,
-        motion_context_animated: layer.motion_context_animated || translated,
+        motion_context_animated: layer.motion_context_animated() || translated,
     };
     let child_context = WalkContext {
         offset: context.offset,
@@ -695,22 +697,22 @@ fn collect_into(
         translated,
         settings: context.settings,
     };
-    if context.settings.in_space || layer.graphics_layer.space.is_some() {
+    if context.settings.in_space || layer.graphics_layer().space.is_some() {
         return collect_space_children(layer, motion, (child_context, &content), out, recycler);
     }
     let mut has_pixel_sensitive_subtree = false;
-    for_each_in_draw_order(&layer.children, |child| {
+    for child in layer.items() {
         has_pixel_sensitive_subtree |= match child {
-            RenderNode::Layer(child_layer) => {
+            ItemRef::Layer(child_layer) => {
                 collect_child(child_layer, motion, child_context, out, recycler)
             }
-            RenderNode::Inline(inline) => collect_inline(inline, child_context, out),
-            RenderNode::Primitive(_) | RenderNode::DrawRun(_) => {
+            ItemRef::Leaf(inline) => collect_inline(inline, child_context, out),
+            ItemRef::Draw(_) | ItemRef::Text(_) | ItemRef::Run(_) => {
                 push_content(out, child, &content);
                 context.settings.wants_pixel_sensitive && node_is_pixel_sensitive(child)
             }
         };
-    });
+    }
     has_pixel_sensitive_subtree
 }
 
@@ -718,30 +720,30 @@ fn collect_into(
 /// block, outside any such block, snaps that content to; `None` for any
 /// other layer. The local layer is read only for such a layer.
 fn boundary_anchor(
-    layer: &LayerNode,
+    layer: LayerRef<'_>,
     context: &WalkContext<'_>,
     (layer_bounds, local_layer): (Rect, &Cow<'_, GraphicsLayer>),
 ) -> Option<SnapAnchor> {
-    if context.translated || !layer.translated_content_context {
+    if context.translated || !layer.translated_content_context() {
         return None;
     }
     rigid_snap_anchor(
         layer_bounds.translate(
-            layer.translated_content_offset.x,
-            layer.translated_content_offset.y,
+            layer.translated_content_offset().x,
+            layer.translated_content_offset().y,
         ),
         local_layer,
     )
 }
 
 fn collect_child(
-    child: &LayerNode,
+    child: LayerRef<'_>,
     motion: &mut LayerMotion,
     context: WalkContext<'_>,
     out: &mut LayerScene,
     recycler: &mut LayerSceneRecycler,
 ) -> bool {
-    let composite = layer_composite_params(&child.graphics_layer);
+    let composite = layer_composite_params(child.graphics_layer());
     if composite.is_some_and(|(alpha, blend)| alpha == 0.0 && blend == BlendMode::SrcOver) {
         return context.settings.wants_pixel_sensitive && layer_has_pixel_sensitive_subtree(child);
     }
@@ -759,7 +761,9 @@ fn collect_child(
         context.offset.x + translation.x,
         context.offset.y + translation.y,
     );
-    let child_bounds = child.local_bounds.translate(child_offset.x, child_offset.y);
+    let child_bounds = child
+        .local_bounds()
+        .translate(child_offset.x, child_offset.y);
     if clipped_away(child, child_bounds, context.visual_clip) {
         return context.settings.wants_pixel_sensitive && layer_has_pixel_sensitive_subtree(child);
     }
@@ -769,12 +773,12 @@ fn collect_child(
             .then(|| {
                 rigid_snap_anchor(
                     child_bounds,
-                    &local_content_layer_for(&child.graphics_layer),
+                    &local_content_layer_for(child.graphics_layer()),
                 )
             })
             .flatten()
     });
-    if layer_casts_shadow(&child.graphics_layer) {
+    if layer_casts_shadow(child.graphics_layer()) {
         push_direct_layer_shadow(
             child,
             (child_offset, child_bounds),
@@ -812,18 +816,16 @@ fn collect_child(
 // the walk of its parent's children: its content takes the place, clip and
 // snap anchor a child layer that only moves would give it. Returns whether
 // it draws pixel-sensitive content, when the walk wants to know.
-fn collect_inline(inline: &InlineNode, context: WalkContext<'_>, out: &mut LayerScene) -> bool {
-    let offset = Point::new(
-        context.offset.x + inline.origin.x,
-        context.offset.y + inline.origin.y,
-    );
+fn collect_inline(inline: LayerRef<'_>, context: WalkContext<'_>, out: &mut LayerScene) -> bool {
+    let origin = inline.origin();
+    let offset = Point::new(context.offset.x + origin.x, context.offset.y + origin.y);
     let bounds = inline.node_rect().translate(offset.x, offset.y);
     if context
         .visual_clip
         .is_some_and(|clip| inline.draws_within_bounds() && outside_clip(bounds, clip))
     {
         return context.settings.wants_pixel_sensitive
-            && inline.content.iter().any(node_is_pixel_sensitive);
+            && inline.items().any(node_is_pixel_sensitive);
     }
     let translated = context.translated;
     let rigid = || rigid_snap_anchor(bounds, &GraphicsLayer::DEFAULT);
@@ -831,8 +833,8 @@ fn collect_inline(inline: &InlineNode, context: WalkContext<'_>, out: &mut Layer
         .snap_anchor
         .or_else(|| translated.then(rigid).flatten());
     let anchor = inherited.or_else(|| {
-        ((translated || !inline.motion_context_animated)
-            && content_needs_rigid_snap(&inline.content, translated))
+        ((translated || !inline.motion_context_animated())
+            && content_needs_rigid_snap(inline, translated))
         .then(rigid)
         .flatten()
     });
@@ -842,19 +844,19 @@ fn collect_inline(inline: &InlineNode, context: WalkContext<'_>, out: &mut Layer
         visual_clip: context.visual_clip,
         rounding: context.rounding,
         anchor,
-        motion_context_animated: inline.motion_context_animated || translated,
+        motion_context_animated: inline.motion_context_animated() || translated,
     };
     let mut pixel_sensitive = false;
-    for_each_in_draw_order(&inline.content, |node| {
+    for node in inline.items() {
         push_content(out, node, &content);
         pixel_sensitive |= context.settings.wants_pixel_sensitive && node_is_pixel_sensitive(node);
-    });
+    }
     pixel_sensitive
 }
 
 #[inline(never)]
 fn push_direct_layer_shadow(
-    child: &LayerNode,
+    child: LayerRef<'_>,
     (child_offset, child_bounds): (Point, Rect),
     child_anchor: Option<SnapAnchor>,
     context: &WalkContext<'_>,
@@ -869,7 +871,7 @@ fn push_direct_layer_shadow(
     let shadows_before = scene.rrect_shadows.len();
     push_layer_shadow(
         scene,
-        &child.graphics_layer,
+        child.graphics_layer(),
         child_bounds,
         child_bounds,
         shadow_clip,
@@ -880,7 +882,7 @@ fn push_direct_layer_shadow(
 
 #[inline(never)]
 fn collect_isolated_child(
-    child: &LayerNode,
+    child: LayerRef<'_>,
     motion: &mut LayerMotion,
     context: WalkContext<'_>,
     mesh: Option<Arc<MeshChild>>,
@@ -888,12 +890,12 @@ fn collect_isolated_child(
     recycler: &mut LayerSceneRecycler,
 ) -> bool {
     let transform = child
-        .transform_to_parent
+        .transform_to_parent()
         .then(ProjectiveTransform::translation(
             context.offset.x,
             context.offset.y,
         ));
-    let child_bounds = transform.bounds_for_rect(child.local_bounds);
+    let child_bounds = transform.bounds_for_rect(child.local_bounds());
     let shadow_clip = resolve_clip(
         context.visual_clip,
         child
@@ -903,8 +905,8 @@ fn collect_isolated_child(
     let shadows_before = out.scene.rrect_shadows.len();
     push_layer_shadow(
         &mut out.scene,
-        &child.graphics_layer,
-        child.local_bounds,
+        child.graphics_layer(),
+        child.local_bounds(),
         child_bounds,
         shadow_clip,
         context.settings.light,
@@ -916,16 +918,16 @@ fn collect_isolated_child(
     detach_flat_backdrop(&mut isolated, &mut out.scene);
     out.children.push(isolated);
     out.scene.next_z += 1;
-    direct_translation(child.transform_to_parent).is_some() && has_pixel_sensitive_subtree
+    direct_translation(child.transform_to_parent()).is_some() && has_pixel_sensitive_subtree
 }
 
 /// Whether nothing `child`, placed at `bounds`, draws can show inside
 /// `clip`: its subtree draws within its bounds, it casts no shadow, and those
 /// bounds miss the clip.
-fn clipped_away(child: &LayerNode, bounds: Rect, clip: Option<Rect>) -> bool {
+fn clipped_away(child: LayerRef<'_>, bounds: Rect, clip: Option<Rect>) -> bool {
     clip.is_some_and(|clip| {
         child.draws_within_bounds()
-            && child.graphics_layer.shadow_elevation <= 0.0
+            && child.graphics_layer().shadow_elevation <= 0.0
             && outside_clip(bounds, clip)
     })
 }
@@ -944,21 +946,19 @@ fn outside_clip(bounds: Rect, clip: Rect) -> bool {
     .is_none()
 }
 
-fn content_needs_rigid_snap(children: &[RenderNode], translated: bool) -> bool {
-    children.iter().any(|child| match child {
-        RenderNode::Primitive(entry) => match &entry.node {
-            PrimitiveNode::Text(_) => true,
-            PrimitiveNode::Draw(draw) => {
-                primitive_is_pixel_sensitive(&draw.primitive)
-                    || (translated && primitive_is_drawn(&draw.primitive))
-            }
-        },
-        RenderNode::DrawRun(run) => {
+fn content_needs_rigid_snap(layer: LayerRef<'_>, translated: bool) -> bool {
+    layer.items().any(|child| match child {
+        ItemRef::Text(_) => true,
+        ItemRef::Draw(draw) => {
+            primitive_is_pixel_sensitive(&draw.primitive)
+                || (translated && primitive_is_drawn(&draw.primitive))
+        }
+        ItemRef::Run(run) => {
             run.summary.has_text
                 || run.summary.has_pixel_sensitive
                 || (translated && run.summary.has_non_shadow)
         }
-        RenderNode::Layer(_) | RenderNode::Inline(_) => false,
+        ItemRef::Layer(_) | ItemRef::Leaf(_) => false,
     })
 }
 

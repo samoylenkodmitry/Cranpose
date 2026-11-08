@@ -137,7 +137,7 @@ fn graph(bounds: Rect, transform: ProjectiveTransform) -> RenderGraph {
         children: painted,
         ..LayerNode::default()
     };
-    RenderGraph::new(LayerNode {
+    RenderGraph::new(&LayerNode {
         local_bounds: Rect {
             x: 0.0,
             y: 0.0,
@@ -308,7 +308,7 @@ fn capture_scaled_backdrop(
     page.push(RenderNode::Layer(Box::new(group)));
     let frame = support::capture_graph(
         renderer,
-        RenderGraph::new(LayerNode {
+        RenderGraph::new(&LayerNode {
             local_bounds: Rect {
                 x: 0.0,
                 y: 0.0,
@@ -369,7 +369,7 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
         cache_policy: CachePolicy::None,
         ..LayerNode::default()
     };
-    let graph = RenderGraph::new(LayerNode {
+    let graph = RenderGraph::new(&LayerNode {
         local_bounds: Rect {
             x: 0.0,
             y: 0.0,

@@ -1,6 +1,7 @@
 use cranpose_render_common::{
-    graph::{DrawRunNode, InlineNode, LayerNode, PrimitiveNode, RenderNode},
+    graph::DrawRunNode,
     primitive_emit::resolve_clip,
+    scene_store::{ItemRef, LayerRef},
 };
 use cranpose_ui_graphics::{
     DrawPrimitive, LayerShape, Point, RecordLane, Rect, RenderEffect, ShadowPrimitive, expand_rect,
@@ -10,14 +11,16 @@ use cranpose_ui_graphics::{
 use super::{AFFINE_TOLERANCE, RasterScale, child_needs_surface, direct_translation};
 use crate::scene::LayerRoundedClip;
 
-pub(super) fn rounded_clip_for_layer(layer: &LayerNode) -> Option<LayerRoundedClip> {
-    if !layer.graphics_layer.clip {
+pub(super) fn rounded_clip_for_layer(layer: LayerRef<'_>) -> Option<LayerRoundedClip> {
+    let graphics_layer = layer.graphics_layer();
+    if !graphics_layer.clip {
         return None;
     }
-    let LayerShape::Rounded(shape) = layer.graphics_layer.shape else {
+    let LayerShape::Rounded(shape) = graphics_layer.shape else {
         return None;
     };
-    let radii = shape.resolve(layer.local_bounds.width, layer.local_bounds.height);
+    let bounds = layer.local_bounds();
+    let radii = shape.resolve(bounds.width, bounds.height);
     let radii = [
         radii.top_left,
         radii.top_right,
@@ -28,7 +31,7 @@ pub(super) fn rounded_clip_for_layer(layer: &LayerNode) -> Option<LayerRoundedCl
         return None;
     }
     Some(LayerRoundedClip {
-        rect: layer.local_bounds,
+        rect: bounds,
         radii,
     })
 }
@@ -117,7 +120,7 @@ impl RoundedClipCorners {
 }
 
 pub(super) fn content_admits_rounded_clip(
-    layer: &LayerNode,
+    layer: LayerRef<'_>,
     clip: LayerRoundedClip,
     raster_scale: RasterScale,
 ) -> bool {
@@ -126,7 +129,7 @@ pub(super) fn content_admits_rounded_clip(
 }
 
 fn layer_admits_corners(
-    layer: &LayerNode,
+    layer: LayerRef<'_>,
     offset: Point,
     clip: Option<Rect>,
     corners: &RoundedClipCorners,
@@ -137,11 +140,11 @@ fn layer_admits_corners(
             .visual_clip_rect()
             .map(|rect| rect.translate(offset.x, offset.y)),
     );
-    nodes_admit_corners(&layer.children, offset, inherited_clip, corners)
+    nodes_admit_corners(layer, offset, inherited_clip, corners)
 }
 
 fn nodes_admit_corners(
-    nodes: &[RenderNode],
+    layer: LayerRef<'_>,
     offset: Point,
     inherited_clip: Option<Rect>,
     corners: &RoundedClipCorners,
@@ -158,37 +161,35 @@ fn nodes_admit_corners(
         };
         visible.is_none_or(|visible| corners.admits(expand_rect(visible, corners.aa_margin)))
     };
-    nodes
-        .iter()
+    layer
+        .items()
         .all(|child| node_admits_corners(child, offset, inherited_clip, corners, &check))
 }
 
 fn node_admits_corners(
-    node: &RenderNode,
+    node: ItemRef<'_>,
     offset: Point,
     inherited_clip: Option<Rect>,
     corners: &RoundedClipCorners,
     check: &impl Fn(Rect, Option<Rect>) -> bool,
 ) -> bool {
     match node {
-        RenderNode::Primitive(entry) => match &entry.node {
-            PrimitiveNode::Draw(draw) => {
-                primitive_stays_clear(&draw.primitive, corners.raster_scale, |rect| {
-                    check(rect, draw.clip)
-                })
-            }
-            PrimitiveNode::Text(text) => text.draw_bounds().is_some_and(|rect| check(rect, None)),
-        },
-        RenderNode::DrawRun(run) => {
+        ItemRef::Draw(draw) => {
+            primitive_stays_clear(&draw.primitive, corners.raster_scale, |rect| {
+                check(rect, draw.clip)
+            })
+        }
+        ItemRef::Text(text) => text.draw_bounds().is_some_and(|rect| check(rect, None)),
+        ItemRef::Run(run) => {
             run.coverage_rects().all(|rect| check(rect, None))
                 && (!run.summary.has_shadow
                     || run_others_stay_clear(run, corners.raster_scale, |rect| check(rect, None)))
         }
-        RenderNode::Layer(child) => {
-            if child.graphics_layer.shadow_elevation > 0.0 {
+        ItemRef::Layer(child) => {
+            if child.graphics_layer().shadow_elevation > 0.0 {
                 return false;
             }
-            let Some(translation) = direct_translation(child.transform_to_parent) else {
+            let Some(translation) = direct_translation(child.transform_to_parent()) else {
                 return child_stays_clear(child, offset, corners);
             };
             // A child whose bounds stay clear holds content that stays clear.
@@ -199,11 +200,12 @@ fn node_admits_corners(
             let child_offset = Point::new(offset.x + translation.x, offset.y + translation.y);
             layer_admits_corners(child, child_offset, inherited_clip, corners)
         }
-        RenderNode::Inline(inline) => {
+        ItemRef::Leaf(inline) => {
+            let origin = inline.origin();
             inline_stays_clear(inline, offset, corners)
                 || nodes_admit_corners(
-                    &inline.content,
-                    Point::new(offset.x + inline.origin.x, offset.y + inline.origin.y),
+                    inline,
+                    Point::new(offset.x + origin.x, offset.y + origin.y),
                     inherited_clip,
                     corners,
                 )
@@ -218,7 +220,7 @@ fn node_admits_corners(
 /// composite and anything under a clip of its own stay out of the corners,
 /// which the rect clip alone then leaves whole.
 pub(super) fn content_takes_rounded_clip(
-    layer: &LayerNode,
+    layer: LayerRef<'_>,
     clip: LayerRoundedClip,
     raster_scale: RasterScale,
 ) -> Option<f32> {
@@ -230,55 +232,50 @@ pub(super) fn content_takes_rounded_clip(
     (uniform
         && layer.visual_clip_rect() == Some(clip.rect)
         && nodes_take_corners(
-            &layer.children,
+            layer,
             Point::default(),
             &RoundedClipCorners::of(clip, raster_scale),
         ))
     .then_some(radius)
 }
 
-fn nodes_take_corners(nodes: &[RenderNode], offset: Point, corners: &RoundedClipCorners) -> bool {
-    nodes.iter().all(|node| match node {
-        RenderNode::Primitive(entry) => match &entry.node {
-            PrimitiveNode::Draw(draw)
-                if draw.clip.is_none() && takes_rounded_clip(&draw.primitive) =>
-            {
-                true
-            }
-            PrimitiveNode::Draw(draw) => {
-                primitive_stays_clear(&draw.primitive, corners.raster_scale, |rect| {
-                    stays_clear(rect, offset, corners)
-                })
-            }
-            PrimitiveNode::Text(text) => text
-                .draw_bounds()
-                .is_some_and(|rect| stays_clear(rect, offset, corners)),
-        },
-        RenderNode::DrawRun(run) => run_takes_corners(run, offset, corners),
-        RenderNode::Layer(child) => child_takes_corners(child, offset, corners),
-        RenderNode::Inline(inline) => {
+fn nodes_take_corners(layer: LayerRef<'_>, offset: Point, corners: &RoundedClipCorners) -> bool {
+    layer.items().all(|node| match node {
+        ItemRef::Draw(draw) if draw.clip.is_none() && takes_rounded_clip(&draw.primitive) => true,
+        ItemRef::Draw(draw) => {
+            primitive_stays_clear(&draw.primitive, corners.raster_scale, |rect| {
+                stays_clear(rect, offset, corners)
+            })
+        }
+        ItemRef::Text(text) => text
+            .draw_bounds()
+            .is_some_and(|rect| stays_clear(rect, offset, corners)),
+        ItemRef::Run(run) => run_takes_corners(run, offset, corners),
+        ItemRef::Layer(child) => child_takes_corners(child, offset, corners),
+        ItemRef::Leaf(inline) => {
+            let origin = inline.origin();
             inline_stays_clear(inline, offset, corners)
                 || nodes_take_corners(
-                    &inline.content,
-                    Point::new(offset.x + inline.origin.x, offset.y + inline.origin.y),
+                    inline,
+                    Point::new(offset.x + origin.x, offset.y + origin.y),
                     corners,
                 )
         }
     })
 }
 
-fn child_takes_corners(child: &LayerNode, offset: Point, corners: &RoundedClipCorners) -> bool {
+fn child_takes_corners(child: LayerRef<'_>, offset: Point, corners: &RoundedClipCorners) -> bool {
     // A child whose bounds stay clear holds content that stays clear.
     if child_stays_clear(child, offset, corners) {
         return true;
     }
     let plain = child.visual_clip_rect().is_none()
         && rounded_clip_for_layer(child).is_none()
-        && child.graphics_layer.shadow_elevation <= 0.0
+        && child.graphics_layer().shadow_elevation <= 0.0
         && !child_needs_surface(child);
-    match direct_translation(child.transform_to_parent) {
+    match direct_translation(child.transform_to_parent()) {
         Some(translation) if plain => nodes_take_corners(
-            &child.children,
+            child,
             Point::new(offset.x + translation.x, offset.y + translation.y),
             corners,
         ),
@@ -289,29 +286,30 @@ fn child_takes_corners(child: &LayerNode, offset: Point, corners: &RoundedClipCo
 // Whether everything `inline`, a node drawn in the layer at `offset`, puts
 // down stays clear of the corners: it draws within its rect, and that rect
 // does.
-fn inline_stays_clear(inline: &InlineNode, offset: Point, corners: &RoundedClipCorners) -> bool {
+fn inline_stays_clear(inline: LayerRef<'_>, offset: Point, corners: &RoundedClipCorners) -> bool {
+    let origin = inline.origin();
     inline.draws_within_bounds()
         && stays_clear(
             expand_rect(
                 inline.node_rect(),
                 cranpose_render_common::graph::CONTAINED_DRAW_SLACK,
             )
-            .translate(inline.origin.x, inline.origin.y),
+            .translate(origin.x, origin.y),
             offset,
             corners,
         )
 }
 
-fn child_stays_clear(child: &LayerNode, offset: Point, corners: &RoundedClipCorners) -> bool {
-    if !child.draws_within_bounds() || child.graphics_layer.shadow_elevation > 0.0 {
+fn child_stays_clear(child: LayerRef<'_>, offset: Point, corners: &RoundedClipCorners) -> bool {
+    if !child.draws_within_bounds() || child.graphics_layer().shadow_elevation > 0.0 {
         return false;
     }
     let padding = cranpose_render_common::graph::CONTAINED_DRAW_SLACK
         + child.effect().map_or(0.0, RenderEffect::output_padding);
     stays_clear(
         child
-            .transform_to_parent
-            .bounds_for_rect(expand_rect(child.local_bounds, padding)),
+            .transform_to_parent()
+            .bounds_for_rect(expand_rect(child.local_bounds(), padding)),
         offset,
         corners,
     )

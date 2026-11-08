@@ -44,7 +44,7 @@ fn every_mode_has_a_distinct_graph_and_only_mode_has_opaque_background() {
         ..Default::default()
     };
     let graph = built(&mut state, viewport);
-    let RenderNode::Primitive(entry) = &graph.root.children[0] else {
+    let RenderNode::Primitive(entry) = &graph.root().children[0] else {
         panic!("opaque background")
     };
     let PrimitiveNode::Draw(draw) = &entry.node else {

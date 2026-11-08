@@ -6,7 +6,7 @@ use cranpose_ui_graphics::{
     CommandRecording, CompositingStrategy, DrawGroup, DrawPlacement, GraphicsLayer, RecordLane,
 };
 
-use super::{HeadKind, LayerHead, assign_layer, item_lists, translation_of};
+use super::{HeadKind, LayerHead, assign_layer, item_lists};
 use crate::{
     graph::{
         CachePolicy, DrawCommandId, DrawRunNode, IsolationReasons, PrimitivePhase, RenderNode,
@@ -305,7 +305,7 @@ impl<'a> GroupedDraws<'a> {
             motion_context_animated: self.motion_context_animated,
             translated_content_context: false,
             translated_content_offset: Point::default(),
-            origin_in_parent: translation_of(transform_to_parent).unwrap_or_default(),
+            origin_in_parent: transform_to_parent.as_translation().unwrap_or_default(),
             graphics_layer: self.group_layer(group),
             clip_to_bounds: group.clip,
             hit_test: None,

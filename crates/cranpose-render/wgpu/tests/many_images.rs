@@ -50,7 +50,7 @@ fn frame() -> RenderGraph {
             src_rect: None,
         }
     }));
-    RenderGraph::new(shared_test_support::layer_node(
+    RenderGraph::new(&shared_test_support::layer_node(
         Rect::from_size(Size::new(FRAME as f32, FRAME as f32)),
         ProjectiveTransform::identity(),
         GraphicsLayer::default(),

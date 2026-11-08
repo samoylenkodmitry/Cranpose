@@ -95,24 +95,32 @@ fn scene(side: f32, columns: usize, rows: usize) -> Vec<DrawPrimitive> {
     primitives
 }
 
-fn layer(node_id: Option<cranpose_core::NodeId>, children: Vec<RenderNode>) -> RenderGraph {
-    RenderGraph::new(LayerNode {
+fn layer_root(node_id: Option<cranpose_core::NodeId>, children: Vec<RenderNode>) -> LayerNode {
+    LayerNode {
         node_id,
         local_bounds: full(SIDE as f32),
         children,
         translated_content_context: true,
         ..LayerNode::default()
-    })
+    }
 }
 
-fn arena_graph(primitives: Vec<DrawPrimitive>) -> RenderGraph {
-    layer(
+fn layer(node_id: Option<cranpose_core::NodeId>, children: Vec<RenderNode>) -> RenderGraph {
+    RenderGraph::new(&layer_root(node_id, children))
+}
+
+fn arena_root(primitives: Vec<DrawPrimitive>) -> LayerNode {
+    layer_root(
         None,
         vec![RenderNode::DrawRun(DrawRunNode::new(
             PrimitivePhase::BeforeChildren,
             primitives,
         ))],
     )
+}
+
+fn arena_graph(primitives: Vec<DrawPrimitive>) -> RenderGraph {
+    RenderGraph::new(&arena_root(primitives))
 }
 
 fn clipped_graph(primitives: Vec<DrawPrimitive>, clip: Rect) -> RenderGraph {
@@ -282,9 +290,9 @@ fn scaled_vertex_gradients_shade_as_the_fragment_gradient() {
 
 #[test]
 fn unaligned_gradient_geometry_keeps_fragment_sampling() {
-    let mut graph = arena_graph(scene(SIDE as f32, 4, 3));
-    graph.root.translated_content_context = false;
-    assert_shades_as_the_fragment_gradient("unaligned", graph, 1.0, (false, 0));
+    let mut root = arena_root(scene(SIDE as f32, 4, 3));
+    root.translated_content_context = false;
+    assert_shades_as_the_fragment_gradient("unaligned", RenderGraph::new(&root), 1.0, (false, 0));
 }
 
 #[test]

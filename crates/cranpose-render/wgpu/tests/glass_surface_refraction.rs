@@ -1,6 +1,6 @@
 use cranpose_render_common::{
     Renderer,
-    graph::{ProjectiveTransform, RenderGraph, RenderNode},
+    graph::{LayerNode, ProjectiveTransform, RenderGraph, RenderNode},
 };
 use cranpose_ui_graphics::{
     Color, GraphicsLayer, Rect, RenderEffect, RuntimeShader, liquid_glass_runtime_effect,
@@ -311,7 +311,7 @@ fn assert_native_spectral_profile(
             ..bounds
         }
     };
-    renderer.scene_mut().graph = Some(RenderGraph::new(shared_test_support::layer_node(
+    renderer.scene_mut().graph = Some(RenderGraph::new(&shared_test_support::layer_node(
         bounds,
         ProjectiveTransform::identity(),
         GraphicsLayer::default(),
@@ -416,7 +416,7 @@ fn native_vertical_spectral_step_preserves_directional_sample_spacing() {
     }
 }
 
-fn striped_surface(normal: bool, specialized: bool) -> RenderGraph {
+fn striped_surface(normal: bool, specialized: bool) -> LayerNode {
     let viewport = Rect {
         x: 0.0,
         y: 0.0,
@@ -475,20 +475,20 @@ fn striped_surface(normal: bool, specialized: bool) -> RenderGraph {
             vec![],
         ),
     )));
-    RenderGraph::new(shared_test_support::layer_node(
+    shared_test_support::layer_node(
         viewport,
         ProjectiveTransform::identity(),
         GraphicsLayer::default(),
         children,
-    ))
+    )
 }
 
 #[test]
 fn resting_blur_crossfades_one_kernel_and_keeps_foreground_sharp() {
     let mut renderer = support::headless_renderer().expect("resting blur requires GPU");
     let frames = [0.0, 0.25, 0.5, 1.0].map(|opacity| {
-        let mut graph = striped_surface(false, false);
-        let RenderNode::Layer(layer) = graph.root.children.last_mut().unwrap() else {
+        let mut root = striped_surface(false, false);
+        let RenderNode::Layer(layer) = root.children.last_mut().unwrap() else {
             panic!("expected glass layer");
         };
         let Some(RenderEffect::Shader { shader }) = &layer.graphics_layer.backdrop_effect else {
@@ -504,7 +504,7 @@ fn resting_blur_crossfades_one_kernel_and_keeps_foreground_sharp() {
             opacity,
         );
         layer.graphics_layer.backdrop_effect = Some(liquid_glass_runtime_effect(shader));
-        graph.root.children.push(support::solid_rect(
+        root.children.push(support::solid_rect(
             Rect {
                 x: 70.0,
                 y: 40.0,
@@ -513,7 +513,7 @@ fn resting_blur_crossfades_one_kernel_and_keeps_foreground_sharp() {
             },
             Color::BLUE,
         ));
-        renderer.scene_mut().graph = Some(graph);
+        renderer.scene_mut().graph = Some(RenderGraph::new(&root));
         renderer
             .capture_frame(160, 96)
             .expect("resting blur capture")
@@ -551,7 +551,7 @@ fn resting_blur_crossfades_one_kernel_and_keeps_foreground_sharp() {
 fn straight_surface_edges_preserve_tangential_background_positions() {
     let mut renderer = support::headless_renderer().expect("GPU surface refraction test must run");
     for normal in [false, true] {
-        renderer.scene_mut().graph = Some(striped_surface(normal, true));
+        renderer.scene_mut().graph = Some(RenderGraph::new(&striped_surface(normal, true)));
         let frame = renderer.capture_frame(160, 96).expect("surface capture");
         let mut changed = 0;
         for y in [21, 23, 73, 75] {
@@ -590,11 +590,11 @@ fn straight_surface_edges_preserve_tangential_background_positions() {
 #[test]
 fn surface_refraction_specialization_preserves_pixels() {
     let mut renderer = support::headless_renderer().expect("GPU surface refraction test must run");
-    renderer.scene_mut().graph = Some(striped_surface(true, false));
+    renderer.scene_mut().graph = Some(RenderGraph::new(&striped_surface(true, false)));
     let general = renderer
         .capture_frame(160, 96)
         .expect("general surface capture");
-    renderer.scene_mut().graph = Some(striped_surface(true, true));
+    renderer.scene_mut().graph = Some(RenderGraph::new(&striped_surface(true, true)));
     let specialized = renderer
         .capture_frame(160, 96)
         .expect("specialized surface capture");
@@ -637,11 +637,11 @@ fn resting_edge_lens_matches_its_explicit_optical_stages() {
         (0.0, 1.0, (1.0, 1.0), 7.25, (0.25, 0.75), 0.85, false),
         (0.0, 1.0, (1.0, 1.0), 7.25, (0.25, 0.75), 1.25, true),
     ] {
-        let mut graph = striped_surface(false, false);
+        let mut root = striped_surface(false, false);
         if transparent {
-            graph.root.children.drain(4..8);
+            root.children.drain(4..8);
         }
-        let RenderNode::Layer(layer) = graph.root.children.last_mut().expect("lens") else {
+        let RenderNode::Layer(layer) = root.children.last_mut().expect("lens") else {
             panic!("lens must be a layer");
         };
         layer.transform_to_parent = ProjectiveTransform::uniform_scale(scale)
@@ -673,12 +673,12 @@ fn resting_edge_lens_matches_its_explicit_optical_stages() {
         let mut frames = Vec::new();
         let mut passes = Vec::new();
         for effect in [explicit, automatic] {
-            let mut graph = graph.clone();
-            let RenderNode::Layer(layer) = graph.root.children.last_mut().expect("lens") else {
+            let mut root = root.clone();
+            let RenderNode::Layer(layer) = root.children.last_mut().expect("lens") else {
                 panic!("lens must be a layer");
             };
             layer.graphics_layer.backdrop_effect = Some(effect);
-            renderer.scene_mut().graph = Some(graph);
+            renderer.scene_mut().graph = Some(RenderGraph::new(&root));
             frames.push(renderer.capture_frame(160, 96).expect("lens capture"));
             passes.push(renderer.last_frame_stats().expect("frame stats").pass_count);
         }
@@ -695,9 +695,9 @@ fn resting_edge_lens_matches_its_explicit_optical_stages() {
     }
 }
 
-fn exterior_lens(reach: f32, specialized: bool, recolor: bool) -> RenderGraph {
-    let mut graph = striped_surface(false, specialized);
-    let children = &mut graph.root.children;
+fn exterior_lens(reach: f32, specialized: bool, recolor: bool) -> LayerNode {
+    let mut root = striped_surface(false, specialized);
+    let children = &mut root.children;
     let RenderNode::Layer(lens) = children.last_mut().expect("lens") else {
         panic!("lens must be a layer");
     };
@@ -745,15 +745,15 @@ fn exterior_lens(reach: f32, specialized: bool, recolor: bool) -> RenderGraph {
         Color::BLACK,
     );
     children.insert(children.len() - 1, ink);
-    graph
+    root
 }
 
 #[test]
 fn raised_edge_lens_refracts_exterior_without_warping_face_ink() {
     let mut renderer = support::headless_renderer().expect("GPU edge lens test must run");
-    renderer.scene_mut().graph = Some(exterior_lens(0.0, true, false));
+    renderer.scene_mut().graph = Some(RenderGraph::new(&exterior_lens(0.0, true, false)));
     let flat = renderer.capture_frame(160, 96).expect("flat face capture");
-    renderer.scene_mut().graph = Some(exterior_lens(20.0, true, false));
+    renderer.scene_mut().graph = Some(RenderGraph::new(&exterior_lens(20.0, true, false)));
     let raised = renderer
         .capture_frame(160, 96)
         .expect("raised lens capture");
@@ -773,7 +773,7 @@ fn raised_edge_lens_refracts_exterior_without_warping_face_ink() {
             );
         }
     }
-    renderer.scene_mut().graph = Some(exterior_lens(20.0, false, false));
+    renderer.scene_mut().graph = Some(RenderGraph::new(&exterior_lens(20.0, false, false)));
     let general = renderer
         .capture_frame(160, 96)
         .expect("general lens capture");
@@ -782,8 +782,30 @@ fn raised_edge_lens_refracts_exterior_without_warping_face_ink() {
 
 #[test]
 fn raised_lens_reads_the_page_outside_the_lifted_surface() {
-    let mut graph = exterior_lens(20.0, true, false);
-    let content = graph.root.children.drain(20..22).collect();
+    let mut root = exterior_lens(20.0, true, false);
+    root.children.drain(20..22);
+    // The lifted surface draws the face and ink 8 right of and 16 below the
+    // page's, so its face starts under the lens's top rim.
+    let content = vec![
+        support::solid_rect(
+            Rect {
+                x: 16.0,
+                y: 32.0,
+                width: 144.0,
+                height: 64.0,
+            },
+            Color(0.1, 0.1, 0.8, 1.0),
+        ),
+        support::solid_rect(
+            Rect {
+                x: 68.0,
+                y: 66.0,
+                width: 40.0,
+                height: 4.0,
+            },
+            Color::BLACK,
+        ),
+    ];
     let mut surface = shared_test_support::layer_node(
         Rect {
             x: 8.0,
@@ -807,12 +829,10 @@ fn raised_lens_reads_the_page_outside_the_lifted_surface() {
             &surface.graphics_layer,
         ),
     );
-    graph
-        .root
-        .children
+    root.children
         .insert(20, RenderNode::Layer(Box::new(surface)));
     let mut renderer = support::headless_renderer().expect("GPU lifted surface test must run");
-    renderer.scene_mut().graph = Some(RenderGraph::new(graph.root));
+    renderer.scene_mut().graph = Some(RenderGraph::new(&root));
     let frame = renderer
         .capture_frame(160, 96)
         .expect("lifted surface capture");
@@ -826,9 +846,9 @@ fn raised_lens_reads_the_page_outside_the_lifted_surface() {
 #[test]
 fn face_ink_recolor_preserves_the_exterior_rainbow() {
     let mut renderer = support::headless_renderer().expect("GPU edge color test must run");
-    renderer.scene_mut().graph = Some(exterior_lens(20.0, true, false));
+    renderer.scene_mut().graph = Some(RenderGraph::new(&exterior_lens(20.0, true, false)));
     let plain = renderer.capture_frame(160, 96).expect("plain lens capture");
-    renderer.scene_mut().graph = Some(exterior_lens(20.0, true, true));
+    renderer.scene_mut().graph = Some(RenderGraph::new(&exterior_lens(20.0, true, true)));
     let accent = renderer
         .capture_frame(160, 96)
         .expect("accent lens capture");
@@ -862,10 +882,10 @@ fn exterior_pixels(
     exterior
 }
 
-fn touch_glow_scene(density: f32, pressed: bool) -> RenderGraph {
+fn touch_glow_scene(density: f32, pressed: bool) -> LayerNode {
     use cranpose_liquid::{Glass, GlassDynamics, LiquidColors};
-    let mut graph = striped_surface(true, true);
-    let mut surface = graph.root.children.pop().expect("glass surface");
+    let mut root = striped_surface(true, true);
+    let mut surface = root.children.pop().expect("glass surface");
     let RenderNode::Layer(layer) = &mut surface else {
         panic!("glass surface must be a layer");
     };
@@ -891,11 +911,11 @@ fn touch_glow_scene(density: f32, pressed: bool) -> RenderGraph {
                 },
             ),
     );
-    graph.root.children = vec![
-        support::solid_rect(graph.root.local_bounds, Color(0.4, 0.4, 0.4, 1.0)),
+    root.children = vec![
+        support::solid_rect(root.local_bounds, Color(0.4, 0.4, 0.4, 1.0)),
         surface,
     ];
-    graph
+    root
 }
 
 #[test]
@@ -905,7 +925,8 @@ fn cover_glass_touch_coordinates_and_radius_follow_display_density() {
         renderer.set_root_scale(scale as f32);
         let frames: Vec<_> = [false, true]
             .map(|pressed| {
-                renderer.scene_mut().graph = Some(touch_glow_scene(scale as f32, pressed));
+                renderer.scene_mut().graph =
+                    Some(RenderGraph::new(&touch_glow_scene(scale as f32, pressed)));
                 renderer
                     .capture_frame(160 * scale, 96 * scale)
                     .expect("touch glow capture")
@@ -927,8 +948,8 @@ fn cover_glass_touch_coordinates_and_radius_follow_display_density() {
 #[test]
 fn changing_glass_modes_keeps_specialized_and_general_pixels_equal() {
     let mut renderer = support::headless_renderer().expect("glass mode parity requires GPU");
-    let mut graph = striped_surface(false, false);
-    let RenderNode::Layer(layer) = graph.root.children.last().expect("glass layer") else {
+    let mut root = striped_surface(false, false);
+    let RenderNode::Layer(layer) = root.children.last().expect("glass layer") else {
         panic!("expected glass layer");
     };
     let Some(RenderEffect::Shader { shader }) = &layer.graphics_layer.backdrop_effect else {
@@ -952,12 +973,11 @@ fn changing_glass_modes_keeps_specialized_and_general_pixels_equal() {
             general.clear_override(name);
         }
         let captures = [general, specialized.clone()].map(|shader| {
-            let RenderNode::Layer(layer) = graph.root.children.last_mut().expect("glass layer")
-            else {
+            let RenderNode::Layer(layer) = root.children.last_mut().expect("glass layer") else {
                 panic!("expected glass layer");
             };
             layer.graphics_layer.backdrop_effect = Some(RenderEffect::runtime_shader(shader));
-            support::capture_graph_settled(&mut renderer, &graph.clone(), 160, 96)
+            support::capture_graph_settled(&mut renderer, &RenderGraph::new(&root.clone()), 160, 96)
         });
         support::assert_bytes_within(
             &format!("refraction mode {mode}, content mask {mask}"),

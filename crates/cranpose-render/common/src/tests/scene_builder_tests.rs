@@ -13,7 +13,8 @@ use cranpose_ui_graphics::{
 
 use super::{layer_shape::shape_clip, node_layer::isolation_reasons, text_node::TEXT_CLIP_PAD, *};
 use crate::graph::{
-    DrawRunNode, InlineNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, TextPrimitiveNode,
+    DrawRunNode, InlineNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, RenderNode,
+    TextPrimitiveNode,
 };
 
 // Each of `ids` with the update that records it again.
@@ -64,7 +65,7 @@ fn scene_snapshot_preserves_children_beyond_inline_capacity_in_order() {
     .expect("root scene data");
     let graph = build_graph_from_applier(&applier, root, 1.0).expect("graph");
     let mut labels = Vec::new();
-    collect_text_labels(&graph.root, &mut labels);
+    collect_text_labels(&graph.root(), &mut labels);
     assert_eq!(
         labels,
         (0..12)
@@ -671,7 +672,8 @@ fn rounded_corners_clip_to_bounds_builds_graph_shape_clip_from_modifier_chain() 
     let graph = build_graph_from_applier(&applier, root, 1.0).expect("rounded clip graph");
     applier.clear_runtime_handle();
 
-    let rounded_layer = find_layer_by_node_id(&graph.root, root).expect("rounded layer");
+    let graph_root = graph.root();
+    let rounded_layer = find_layer_by_node_id(&graph_root, root).expect("rounded layer");
     assert!(rounded_layer.graphics_layer.clip);
     assert!(matches!(
         rounded_layer.graphics_layer.shape,
@@ -680,7 +682,7 @@ fn rounded_corners_clip_to_bounds_builds_graph_shape_clip_from_modifier_chain() 
     assert!(rounded_layer.graphics_layer.render_effect.is_none());
     assert!(rounded_layer.isolation.shape_clip);
     assert!(
-        !graph_has_runtime_shader_effect(&graph.root),
+        !graph_has_runtime_shader_effect(&graph.root()),
         "simple rounded_corners().clip_to_bounds() must not become a runtime shader effect"
     );
 }
@@ -755,7 +757,8 @@ fn a_draw_before_the_graphics_layer_wraps_the_clipped_layer_in_the_parents_space
     let graph = build_graph_from_applier(&applier, root, 1.0).expect("graph");
     applier.clear_runtime_handle();
     let card_id = card_id.borrow().expect("card id");
-    let (wrapper, card) = wrapper_and_card(&graph.root, card_id);
+    let graph_root = graph.root();
+    let (wrapper, card) = wrapper_and_card(&graph_root, card_id);
 
     assert_eq!(wrapper.node_id, None);
     assert!(!wrapper.graphics_layer.clip);
@@ -835,7 +838,8 @@ fn a_dirty_wrapped_node_is_rebuilt_as_one_wrapper() {
     ));
     applier.clear_runtime_handle();
 
-    let (wrapper, card) = wrapper_and_card(&graph.root, card_id);
+    let graph_root = graph.root();
+    let (wrapper, card) = wrapper_and_card(&graph_root, card_id);
     assert_eq!(
         wrapper.transform_to_parent.map_point(Point::default()),
         Point { x: 20.0, y: 30.0 }
@@ -848,7 +852,7 @@ fn a_dirty_wrapped_node_is_rebuilt_as_one_wrapper() {
         "rebuilding the wrapped node must replace its wrapper, not nest a second one"
     );
     let mut labels = Vec::new();
-    collect_text_labels(&graph.root, &mut labels);
+    collect_text_labels(&graph.root(), &mut labels);
     assert_eq!(labels, vec!["after".to_string()]);
 }
 
@@ -890,7 +894,7 @@ fn update_graph_from_applier_replaces_dirty_child_layer() {
     let child_id = child_id_holder
         .borrow()
         .expect("text child id should be captured");
-    let initial_transform = find_node_transform(&graph.root, child_id).expect("text child");
+    let initial_transform = find_node_transform(&graph.root(), child_id).expect("text child");
     applier.clear_runtime_handle();
     drop(applier);
 
@@ -926,7 +930,7 @@ fn update_graph_from_applier_replaces_dirty_child_layer() {
     applier.clear_runtime_handle();
 
     let mut labels = Vec::new();
-    collect_text_labels(&graph.root, &mut labels);
+    collect_text_labels(&graph.root(), &mut labels);
     assert!(
         labels.iter().any(|label| label == "after"),
         "updated graph should contain refreshed child text, got {labels:?}"
@@ -940,7 +944,7 @@ fn update_graph_from_applier_replaces_dirty_child_layer() {
         "sibling content should remain present, got {labels:?}"
     );
     assert_eq!(
-        find_node_transform(&graph.root, child_id).expect("updated text child"),
+        find_node_transform(&graph.root(), child_id).expect("updated text child"),
         initial_transform,
         "draw-only child replacement must preserve the retained parent placement transform"
     );
@@ -977,9 +981,9 @@ fn assert_same_cache_hash_state(dirty_road: &LayerNode, full_road: &LayerNode, p
 }
 
 fn assert_dirty_hash_road_matches_full_walk(graph: &RenderGraph) {
-    let mut full_road = graph.root.clone();
+    let mut full_road = graph.root();
     full_road.forget_raster_cache_hashes();
-    assert_same_cache_hash_state(&graph.root, &full_road, "root");
+    assert_same_cache_hash_state(&graph.root(), &full_road, "root");
 }
 
 #[test]
@@ -1042,7 +1046,6 @@ fn dirty_update_leaves_the_hashes_a_full_walk_leaves() {
         .compute_layout(root, viewport)
         .expect("initial layout");
     let mut graph = build_graph_from_applier(&applier, root, 1.0).expect("initial graph");
-    graph.root.forget_raster_cache_hashes();
     applier.clear_runtime_handle();
     drop(applier);
     assert_dirty_hash_road_matches_full_walk(&graph);
@@ -1133,7 +1136,6 @@ fn dirty_update_with_a_new_row_leaves_the_hashes_a_full_walk_leaves() {
         .compute_layout(root, viewport)
         .expect("initial layout");
     let mut graph = build_graph_from_applier(&applier, root, 1.0).expect("initial graph");
-    graph.root.forget_raster_cache_hashes();
     applier.clear_runtime_handle();
     drop(applier);
 
@@ -1168,7 +1170,7 @@ fn dirty_update_with_a_new_row_leaves_the_hashes_a_full_walk_leaves() {
         report.update
     );
     let mut labels = Vec::new();
-    collect_text_labels(&graph.root, &mut labels);
+    collect_text_labels(&graph.root(), &mut labels);
     assert!(
         labels.iter().any(|label| label == "row 2"),
         "the new row must be in the patched graph, got {labels:?}"
@@ -1267,7 +1269,7 @@ fn scene_build_publishes_live_translated_window_rect_without_layout_tree() {
 fn update_graph_from_applier_reports_failed_dirty_child_rebuild() {
     let snapshot = snapshot_with_translation(0.0);
     let mut graph = cranpose_ui::AppContext::new().enter(|| {
-        let mut graph = RenderGraph::new(LayerNode::default());
+        let mut graph = RenderGraph::new(&LayerNode::default());
         graph.store.begin_update();
         let root = root_record(&mut graph.store, snapshot.node_id);
         write_snapshot_layer(&mut graph.store, snapshot, LowerContext::ROOT, root);
@@ -1383,9 +1385,8 @@ fn update_graph_from_applier_refreshes_scroll_content_offset() {
         .compute_layout(root, viewport)
         .expect("initial scroll layout");
     let mut graph = build_graph_from_applier(&applier, root, 1.0).expect("initial graph");
-    graph.root.forget_raster_cache_hashes();
     let initial_target_top =
-        find_text_top(&graph.root, "scroll target").expect("initial target text");
+        find_text_top(&graph.root(), "scroll target").expect("initial target text");
     applier.clear_runtime_handle();
     drop(applier);
 
@@ -1418,7 +1419,7 @@ fn update_graph_from_applier_refreshes_scroll_content_offset() {
         report.update
     );
     let updated_target_top =
-        find_text_top(&graph.root, "scroll target").expect("updated target text");
+        find_text_top(&graph.root(), "scroll target").expect("updated target text");
     assert!(
         updated_target_top < initial_target_top - consumed_scroll * 0.75,
         "partial graph update must refresh scroll content offset: initial_y={initial_target_top} updated_y={updated_target_top} dirty_nodes={dirty_nodes:?}"
@@ -1443,7 +1444,7 @@ fn an_overmarked_ancestor_chain_still_translates_instead_of_relowering() {
 
     let (root, mut graph) = initial_scrolled_graph(&mut composition);
     let viewport = scroll_viewport();
-    let initial_row_top = find_text_top(&graph.root, "row 3").expect("initial row text");
+    let initial_row_top = find_text_top(&graph.root(), "row 3").expect("initial row text");
 
     let scroll_state = scroll_holder
         .borrow()
@@ -1453,8 +1454,8 @@ fn an_overmarked_ancestor_chain_still_translates_instead_of_relowering() {
     let consumed_scroll = scroll_state.dispatch_raw_delta(96.0);
     assert!(consumed_scroll > 0.0, "test scroll must be consumed");
     let mut dirty_nodes = cranpose_ui::pending_layout_repass_nodes_snapshot();
-    dirty_nodes.push(graph.root.node_id.expect("root id"));
-    let mut cursor = &graph.root;
+    dirty_nodes.push(graph.root().node_id.expect("root id"));
+    let mut cursor = &graph.root();
     while let Some(RenderNode::Layer(child)) = cursor
         .children
         .iter()
@@ -1490,7 +1491,7 @@ fn an_overmarked_ancestor_chain_still_translates_instead_of_relowering() {
         "an over-marked ancestor chain over a pure scroll must still \
          translate; {lowered} layers were rebuilt (dirty={dirty_nodes:?})"
     );
-    let updated_row_top = find_text_top(&graph.root, "row 3").expect("updated row text");
+    let updated_row_top = find_text_top(&graph.root(), "row 3").expect("updated row text");
     assert!(
         updated_row_top < initial_row_top - consumed_scroll * 0.75,
         "the translation must land through the chain: initial_y={initial_row_top} updated_y={updated_row_top}"
@@ -1512,7 +1513,9 @@ fn a_scrolled_container_translates_clean_children_instead_of_relowering() {
     let (root, mut graph) = initial_scrolled_graph(&mut composition);
     let viewport = scroll_viewport();
     let initial_row_tops: Vec<_> = (0..12)
-        .map(|index| find_text_top(&graph.root, &format!("row {index}")).expect("initial row text"))
+        .map(|index| {
+            find_text_top(&graph.root(), &format!("row {index}")).expect("initial row text")
+        })
         .collect();
 
     let scroll_state = scroll_holder
@@ -1551,7 +1554,7 @@ fn a_scrolled_container_translates_clean_children_instead_of_relowering() {
          subtrees, not re-lower them; {lowered} layers were rebuilt"
     );
     for (index, initial_row_top) in initial_row_tops.into_iter().enumerate() {
-        let updated_row_top = find_text_top(&graph.root, &format!("row {index}"))
+        let updated_row_top = find_text_top(&graph.root(), &format!("row {index}"))
             .expect("every retained row survives scrolling");
         assert!(
             (updated_row_top - (initial_row_top - consumed_scroll)).abs() < 0.01,
@@ -1645,17 +1648,13 @@ fn assert_shadowed_scroll_reuses_children(wrapped_root: bool) {
 
     let (root, mut graph) = initial_scrolled_graph(&mut composition);
     let viewport = scroll_viewport();
-    let initial_row_top = find_text_top(&graph.root, "row 3").expect("row text");
+    let initial_row_top = find_text_top(&graph.root(), "row 3").expect("row text");
 
-    let scroll_state = scroll_holder
-        .borrow()
-        .as_ref()
-        .copied()
-        .expect("scroll state should be captured");
+    let scroll_state = (*scroll_holder.borrow()).expect("scroll state should be captured");
     let consumed_scroll = scroll_state.dispatch_raw_delta(96.0);
     shadow_radius.set(11.0);
     let mut dirty_nodes = cranpose_ui::pending_layout_repass_nodes_snapshot();
-    let row_ids: Vec<_> = find_layer_by_node_id(&graph.root, root)
+    let row_ids: Vec<_> = find_layer_by_node_id(&graph.root(), root)
         .expect("scroll layer")
         .children
         .iter()
@@ -1682,9 +1681,9 @@ fn assert_shadowed_scroll_reuses_children(wrapped_root: bool) {
         0,
         "rows wrapped in their outer shadow must translate like plain rows"
     );
-    let updated_row_top = find_text_top(&graph.root, "row 3").expect("row text");
+    let updated_row_top = find_text_top(&graph.root(), "row 3").expect("row text");
     assert!(updated_row_top < initial_row_top - consumed_scroll * 0.75);
-    let wrappers = find_layer_by_node_id(&graph.root, root)
+    let wrappers = find_layer_by_node_id(&graph.root(), root)
         .expect("scroll layer")
         .children
         .iter()
@@ -1695,8 +1694,8 @@ fn assert_shadowed_scroll_reuses_children(wrapped_root: bool) {
     let fresh = build_graph_from_applier(&applier, root, 1.0).expect("fresh graph");
     applier.clear_runtime_handle();
     assert_eq!(
-        crate::graph_hash::layer_raster_cache_hashes(&graph.root),
-        crate::graph_hash::layer_raster_cache_hashes(&fresh.root),
+        crate::graph_hash::layer_raster_cache_hashes(&graph.root()),
+        crate::graph_hash::layer_raster_cache_hashes(&fresh.root()),
         "changed outer shadows and retained child positions must match a fresh build"
     );
 
@@ -1718,10 +1717,11 @@ fn assert_shadowed_scroll_reuses_children(wrapped_root: bool) {
     dirty.push(first_text.get().expect("first text node"));
     let report = update_graph_from_applier_report(&applier, &mut graph, &content(&dirty), 1.0);
     assert!(report.applied());
-    assert!(find_text_top(&graph.root, "changed row").is_some());
-    assert!(find_text_top(&graph.root, "row 0").is_none());
+    let graph_root = graph.root();
+    assert!(find_text_top(&graph_root, "changed row").is_some());
+    assert!(find_text_top(&graph_root, "row 0").is_none());
     for row in row_ids {
-        let layer = find_layer_by_node_id(&graph.root, row).expect("clickable row");
+        let layer = find_layer_by_node_id(&graph_root, row).expect("clickable row");
         let hit = layer.hit_test.as_ref().expect("row hit target");
         assert_eq!(hit.handlers.pointer_inputs().len(), 1);
         for kind in [
@@ -1744,8 +1744,8 @@ fn assert_shadowed_scroll_reuses_children(wrapped_root: bool) {
     let fresh = build_graph_from_applier(&applier, root, 1.0).expect("fresh changed graph");
     applier.clear_runtime_handle();
     assert_eq!(
-        collect_text_tops(&graph.root),
-        collect_text_tops(&fresh.root)
+        collect_text_tops(&graph.root()),
+        collect_text_tops(&fresh.root())
     );
     assert_dirty_hash_road_matches_full_walk(&graph);
 }
@@ -1814,9 +1814,8 @@ fn a_sliding_lazy_window_lowers_only_the_entering_rows() {
         .compute_layout(root, viewport)
         .expect("initial lazy layout");
     let mut graph = build_graph_from_applier(&applier, root, 1.0).expect("initial graph");
-    graph.root.forget_raster_cache_hashes();
     let _ = applier.take_structural_change_parents_attached_to(root);
-    let initial_row_top = find_text_top(&graph.root, "row 4").expect("initial row text");
+    let initial_row_top = find_text_top(&graph.root(), "row 4").expect("initial row text");
     applier.clear_runtime_handle();
     drop(applier);
 
@@ -1859,11 +1858,11 @@ fn a_sliding_lazy_window_lowers_only_the_entering_rows() {
          {lowered} layers were rebuilt (dirty={dirty_nodes:?})"
     );
     assert_eq!(
-        collect_text_tops(&graph.root),
-        collect_text_tops(&fresh.root),
+        collect_text_tops(&graph.root()),
+        collect_text_tops(&fresh.root()),
         "rows crossed the window boundary: the patched scene must show what a fresh build shows"
     );
-    let updated_row_top = find_text_top(&graph.root, "row 4").expect("updated row text");
+    let updated_row_top = find_text_top(&graph.root(), "row 4").expect("updated row text");
     assert!(
         updated_row_top < initial_row_top - 60.0,
         "the retained rows must move with the scroll: \
@@ -1969,7 +1968,6 @@ fn a_lazy_jump_of_any_distance_patches_to_what_a_fresh_build_shows() {
             .compute_layout(root, viewport)
             .expect("initial lazy layout");
         let mut graph = build_graph_from_applier(&applier, root, 1.0).expect("initial graph");
-        graph.root.forget_raster_cache_hashes();
         let _ = applier.take_structural_change_parents_attached_to(root);
         applier.clear_runtime_handle();
         drop(applier);
@@ -2005,16 +2003,16 @@ fn a_lazy_jump_of_any_distance_patches_to_what_a_fresh_build_shows() {
         let fresh = build_graph_from_applier(&applier, root, 1.0).expect("fresh comparison graph");
         applier.clear_runtime_handle();
 
-        let patched_texts = collect_text_tops(&graph.root);
-        let fresh_texts = collect_text_tops(&fresh.root);
+        let patched_texts = collect_text_tops(&graph.root());
+        let fresh_texts = collect_text_tops(&fresh.root());
         assert_eq!(
             patched_texts, fresh_texts,
             "delta {delta}: the patched scene must show exactly what a \
              fresh build shows (dirty={dirty_nodes:?})"
         );
         assert_eq!(
-            collect_layer_origins(&graph.root),
-            collect_layer_origins(&fresh.root),
+            collect_layer_origins(&graph.root()),
+            collect_layer_origins(&fresh.root()),
             "delta {delta}: patched layers must sit where a fresh build places them"
         );
     }
@@ -2081,7 +2079,7 @@ fn update_graph_from_applier_keeps_parent_content_offset_for_dirty_scroll_child(
     let child_id = child_id_holder
         .borrow()
         .expect("text child id should be captured");
-    let scrolled_transform = find_node_transform(&graph.root, child_id).expect("scrolled child");
+    let scrolled_transform = find_node_transform(&graph.root(), child_id).expect("scrolled child");
     applier.clear_runtime_handle();
     drop(applier);
 
@@ -2117,13 +2115,13 @@ fn update_graph_from_applier_keeps_parent_content_offset_for_dirty_scroll_child(
         "dirty child graph update should apply, got {:?}",
         report.update
     );
-    let updated = find_node_transform(&graph.root, child_id).expect("updated child");
+    let updated = find_node_transform(&graph.root(), child_id).expect("updated child");
     assert_eq!(
         updated, scrolled_transform,
         "dirty child replacement inside a scrolled parent must keep the parent's content-offset transform"
     );
     let mut labels = Vec::new();
-    collect_text_labels(&graph.root, &mut labels);
+    collect_text_labels(&graph.root(), &mut labels);
     assert!(
         labels.iter().any(|label| label == "scrolled child after"),
         "updated graph should contain refreshed text, got {labels:?}"
@@ -2238,9 +2236,9 @@ fn dirty_scrolled_overlay_graphics_layer_stays_aligned_with_underlay() {
         .borrow()
         .expect("overlay id should be captured");
     let scrolled_underlay_origin =
-        find_layer_origin(&graph.root, underlay_id).expect("underlay origin");
+        find_layer_origin(&graph.root(), underlay_id).expect("underlay origin");
     let scrolled_overlay_origin =
-        find_layer_origin(&graph.root, overlay_id).expect("overlay origin");
+        find_layer_origin(&graph.root(), overlay_id).expect("overlay origin");
     assert_eq!(scrolled_underlay_origin, scrolled_overlay_origin);
 
     let alpha = alpha_holder
@@ -2267,9 +2265,9 @@ fn dirty_scrolled_overlay_graphics_layer_stays_aligned_with_underlay() {
         report.update
     );
     let updated_underlay_origin =
-        find_layer_origin(&graph.root, underlay_id).expect("updated underlay origin");
+        find_layer_origin(&graph.root(), underlay_id).expect("updated underlay origin");
     let updated_overlay_origin =
-        find_layer_origin(&graph.root, overlay_id).expect("updated overlay origin");
+        find_layer_origin(&graph.root(), overlay_id).expect("updated overlay origin");
     assert_eq!(
         updated_underlay_origin, scrolled_underlay_origin,
         "stable underlay must keep its scrolled origin"
@@ -2319,7 +2317,7 @@ fn update_graph_from_applier_refreshes_dirty_graphics_layer_transform() {
     let node_id = node_id_holder
         .borrow()
         .expect("graphics layer node id should be captured");
-    let initial_origin = find_layer_by_node_id(&graph.root, node_id)
+    let initial_origin = find_layer_by_node_id(&graph.root(), node_id)
         .expect("initial graphics layer")
         .transform_to_parent
         .map_point(Point::default());
@@ -2353,7 +2351,7 @@ fn update_graph_from_applier_refreshes_dirty_graphics_layer_transform() {
     );
     applier.clear_runtime_handle();
 
-    let updated_origin = find_layer_by_node_id(&graph.root, node_id)
+    let updated_origin = find_layer_by_node_id(&graph.root(), node_id)
         .expect("updated graphics layer")
         .transform_to_parent
         .map_point(Point::default());
@@ -3126,7 +3124,7 @@ fn lazy_column_item_text_keeps_unspecified_motion_at_origin() {
     let graph = build_graph_from_applier(&applier, root, 1.0).expect("lazy column graph");
     applier.clear_runtime_handle();
 
-    assert_eq!(find_text_motion(&graph.root, "LazyMotion"), Some(None));
+    assert_eq!(find_text_motion(&graph.root(), "LazyMotion"), Some(None));
 }
 
 #[test]
@@ -3200,9 +3198,9 @@ fn scrolled_lazy_column_item_text_keeps_unspecified_motion_at_rest() {
         "lazy list should move away from origin before graph building, observed first_index={first_index}"
     );
     let mut labels = Vec::new();
-    collect_text_labels(&graph.root, &mut labels);
+    collect_text_labels(&graph.root(), &mut labels);
     assert_eq!(
-        find_text_motion(&graph.root, &format!("LazyMotion {first_index}")),
+        find_text_motion(&graph.root(), &format!("LazyMotion {first_index}")),
         Some(None),
         "graph labels after scroll: {labels:?}, active_children={active_children:?}, child_debug={child_debug:?}"
     );
@@ -3248,7 +3246,7 @@ fn scrolled_lazy_column_render_graph_holds_only_viewport_rows() {
         .map(|item| item.index)
         .collect();
     let mut labels = Vec::new();
-    collect_text_labels(&graph.root, &mut labels);
+    collect_text_labels(&graph.root(), &mut labels);
 
     assert_eq!(
         visible_indices,
@@ -3312,7 +3310,7 @@ fn scrolled_lazy_column_uses_visible_item_offset_as_snap_anchor_offset() {
         .first()
         .expect("lazy layout should expose visible item info")
         .offset;
-    let snap_offset = find_translated_content_offset(&graph.root)
+    let snap_offset = find_translated_content_offset(&graph.root())
         .expect("lazy list graph should include translated content context");
 
     assert!(
@@ -3460,7 +3458,7 @@ fn wrapped_paragraph_paints_the_height_it_measured() {
         fn squashed(value: &str) -> String {
             value.chars().filter(|c| !c.is_whitespace()).collect()
         }
-        let painted = find_text_primitive(&graph.root, &|text| {
+        let painted = find_text_primitive(&graph.root(), &|text| {
             squashed(text.text.text()) == squashed(BODY)
         })
         .expect("painted paragraph");
@@ -3576,7 +3574,7 @@ fn paint_body(
     let body_box = find_text_box(layout.root(), WRAPPING_BODY).expect("measured paragraph box");
     let body_id = body_box.node_id;
     let painted_text = |graph: &RenderGraph| {
-        let painted = find_text_primitive(&graph.root, &|text| text.node_id == body_id)
+        let painted = find_text_primitive(&graph.root(), &|text| text.node_id == body_id)
             .expect("painted paragraph");
         layout_lines(&painted.layout, painted.text.text())
     };
@@ -3727,9 +3725,9 @@ fn with_window_root_scene(check: impl FnOnce(&mut MemoryApplier, NodeId, NodeId)
 
 fn window_scene_starts_at_the_origin(graph: &RenderGraph, why: &str) {
     assert_eq!(
-        graph.root.transform_to_parent,
+        graph.root().transform_to_parent,
         layer_transform_to_parent(
-            graph.root.local_bounds,
+            graph.root().local_bounds,
             Point::default(),
             &GraphicsLayer::default()
         ),
@@ -3742,16 +3740,17 @@ fn window_root_subtree_leaves_the_parent_scene_and_starts_its_own() {
     with_window_root_scene(|applier, root, window_node| {
         let primary = build_graph_from_applier(applier, root, 1.0).expect("primary graph");
         let mut labels = Vec::new();
-        collect_text_labels(&primary.root, &mut labels);
+        collect_text_labels(&primary.root(), &mut labels);
         assert_eq!(labels, vec!["outside".to_string()]);
 
         let graph = build_graph_from_applier(applier, window_node, 1.0).expect("window graph");
+        let graph_root = graph.root();
         let mut labels = Vec::new();
-        collect_text_labels(&graph.root, &mut labels);
+        collect_text_labels(&graph_root, &mut labels);
         assert_eq!(labels, vec!["inside".to_string()]);
-        assert_eq!(graph.root.node_id.or(graph.root.wraps), Some(window_node));
+        assert_eq!(graph_root.node_id.or(graph_root.wraps), Some(window_node));
         assert_eq!(
-            graph.root.local_bounds,
+            graph_root.local_bounds,
             Rect {
                 x: 0.0,
                 y: 0.0,
@@ -3798,7 +3797,7 @@ fn a_patched_parent_leaves_a_window_root_child_out_of_its_scene() {
              child for one of its own leaves the scoped update no choice but to rebuild"
         );
         let mut labels = Vec::new();
-        collect_text_labels(&graph.root, &mut labels);
+        collect_text_labels(&graph.root(), &mut labels);
         assert_eq!(
             labels,
             vec!["outside".to_string()],
@@ -3856,7 +3855,7 @@ fn a_child_that_leaves_for_a_window_leaves_its_parent_s_scene_with_it() {
     applier.clear_runtime_handle();
     drop(applier);
     let mut labels = Vec::new();
-    collect_text_labels(&graph.root, &mut labels);
+    collect_text_labels(&graph.root(), &mut labels);
     assert_eq!(
         labels,
         vec!["outside".to_string(), "inside".to_string()],
@@ -3882,7 +3881,7 @@ fn a_child_that_leaves_for_a_window_leaves_its_parent_s_scene_with_it() {
         "a parent whose child left for a window of its own is patched in place"
     );
     let mut labels = Vec::new();
-    collect_text_labels(&graph.root, &mut labels);
+    collect_text_labels(&graph.root(), &mut labels);
     assert_eq!(
         labels,
         vec!["outside".to_string()],
@@ -3963,8 +3962,7 @@ fn initial_scrolled_graph(composition: &mut cranpose_ui::TestComposition) -> (No
     applier
         .compute_layout(root, scroll_viewport())
         .expect("initial scroll layout");
-    let mut graph = build_graph_from_applier(&applier, root, 1.0).expect("initial graph");
-    graph.root.forget_raster_cache_hashes();
+    let graph = build_graph_from_applier(&applier, root, 1.0).expect("initial graph");
     applier.clear_runtime_handle();
     (root, graph)
 }
@@ -4109,8 +4107,8 @@ fn rebuilt_text_nodes_share_their_layouts_render_text_and_style() {
     applier.clear_runtime_handle();
 
     let (mut before, mut after) = (Vec::new(), Vec::new());
-    collect_text_nodes(&first.root, &mut before);
-    collect_text_nodes(&second.root, &mut after);
+    collect_text_nodes(&first.root(), &mut before);
+    collect_text_nodes(&second.root(), &mut after);
     assert_eq!(before.len(), 1);
     assert_eq!(before[0].render_text.text(), "shared once");
     assert!(
@@ -4185,13 +4183,13 @@ fn built_layers_know_whether_their_content_stays_inside() {
     let inside = inside_holder.borrow().expect("inside column");
     let spilling = outside_holder.borrow().expect("spilling column");
     assert!(
-        find_layer_by_node_id(&graph.root, inside)
+        find_layer_by_node_id(&graph.root(), inside)
             .expect("inside layer")
             .draws_within_bounds(),
         "a background and a text inside the column stay inside it"
     );
     assert!(
-        !find_layer_by_node_id(&graph.root, spilling)
+        !find_layer_by_node_id(&graph.root(), spilling)
             .expect("spilling layer")
             .draws_within_bounds(),
         "a child offset past the column's edge draws past it"
@@ -4250,7 +4248,7 @@ fn a_dirty_child_that_starts_publishing_window_origins_marks_its_ancestors() {
     let (outer, inner) = *ids.borrow();
     let (outer, inner) = (outer.expect("outer id"), inner.expect("inner id"));
     assert!(
-        !find_layer_by_node_id(&graph.root, outer)
+        !find_layer_by_node_id(&graph.root(), outer)
             .expect("outer layer")
             .has_origin_sinks
     );
@@ -4280,13 +4278,13 @@ fn a_dirty_child_that_starts_publishing_window_origins_marks_its_ancestors() {
     applier.clear_runtime_handle();
 
     assert!(
-        find_layer_by_node_id(&fresh.root, outer)
+        find_layer_by_node_id(&fresh.root(), outer)
             .expect("fresh outer layer")
             .has_origin_sinks,
         "a full build marks the field's ancestors"
     );
     assert!(
-        find_layer_by_node_id(&graph.root, outer)
+        find_layer_by_node_id(&graph.root(), outer)
             .expect("patched outer layer")
             .has_origin_sinks,
         "the patched graph marks them too, or a later scroll skips republishing the field's origin"
@@ -4409,12 +4407,12 @@ fn a_node_changed_alone_frame_after_frame_updates_as_a_walk_from_the_root_does()
         drop(applier);
 
         let (mut updated_labels, mut fresh_labels) = (Vec::new(), Vec::new());
-        collect_text_labels(&graph.root, &mut updated_labels);
-        collect_text_labels(&fresh.root, &mut fresh_labels);
+        collect_text_labels(&graph.root(), &mut updated_labels);
+        collect_text_labels(&fresh.root(), &mut fresh_labels);
         assert_eq!(updated_labels, fresh_labels, "frame {text}/{pad}");
         assert_eq!(
-            find_layer_origin(&graph.root, leaf),
-            find_layer_origin(&fresh.root, leaf),
+            find_layer_origin(&graph.root(), leaf),
+            find_layer_origin(&fresh.root(), leaf),
             "frame {text}/{pad}: the text sits where a fresh scene puts it"
         );
         assert_dirty_hash_road_matches_full_walk(&graph);
@@ -4477,12 +4475,12 @@ fn the_same_dirty_nodes_frame_after_frame_update_as_a_fresh_scene_does() {
         drop(applier);
 
         let (mut updated_labels, mut fresh_labels) = (Vec::new(), Vec::new());
-        collect_text_labels(&graph.root, &mut updated_labels);
-        collect_text_labels(&fresh.root, &mut fresh_labels);
+        collect_text_labels(&graph.root(), &mut updated_labels);
+        collect_text_labels(&fresh.root(), &mut fresh_labels);
         assert_eq!(updated_labels, fresh_labels, "frame {text}/{pad}");
         assert_eq!(
-            find_layer_origin(&graph.root, leaf),
-            find_layer_origin(&fresh.root, leaf),
+            find_layer_origin(&graph.root(), leaf),
+            find_layer_origin(&fresh.root(), leaf),
             "frame {text}/{pad}: the text sits where a fresh scene puts it"
         );
         assert_dirty_hash_road_matches_full_walk(&graph);

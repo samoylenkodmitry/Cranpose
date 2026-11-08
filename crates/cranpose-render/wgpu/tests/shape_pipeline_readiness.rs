@@ -53,7 +53,7 @@ fn graph(stored: bool, phase: f32) -> RenderGraph {
         command_index: 0,
         placement: DrawPlacement::Behind,
     });
-    RenderGraph::new(LayerNode {
+    RenderGraph::new(&LayerNode {
         cache_policy: CachePolicy::None,
         local_bounds: bounds,
         clip_to_bounds: true,

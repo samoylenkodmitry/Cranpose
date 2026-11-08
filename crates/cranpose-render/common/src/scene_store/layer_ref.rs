@@ -2,7 +2,7 @@
 // hit testing walks and the inspector shows, under the names a layer of the
 // render graph had.
 
-use cranpose_core::{NodeId, RecordId, RecordRef, SceneUpdate};
+use cranpose_core::{NodeId, RecordId, RecordRef, SceneUpdate, StoreId};
 use cranpose_ui::{GraphicsLayer, Point, Rect, RenderEffect, Size};
 use cranpose_ui_graphics::{BlendMode, ColorFilter};
 
@@ -42,6 +42,7 @@ pub enum ItemRef<'a> {
 /// the part of it they were taken of, did not change in between.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct RecordChange {
+    store: StoreId,
     record: RecordRef,
     update: SceneUpdate,
 }
@@ -178,10 +179,9 @@ impl<'a> LayerRef<'a> {
 
     /// The graphics layer properties; defaults when none were set.
     pub fn graphics_layer(self) -> &'a GraphicsLayer {
-        match self.props() {
-            Some(props) => &props.graphics_layer,
-            None => &GraphicsLayer::DEFAULT,
-        }
+        self.store
+            .graphics_layer(self.id)
+            .unwrap_or(&GraphicsLayer::DEFAULT)
     }
 
     /// Whether the record cuts its content to its local bounds.
@@ -341,6 +341,7 @@ impl<'a> LayerRef<'a> {
 
     fn change_at(self, update: SceneUpdate) -> RecordChange {
         RecordChange {
+            store: self.store.id(),
             record: self.store.record_ref(self.id),
             update,
         }
