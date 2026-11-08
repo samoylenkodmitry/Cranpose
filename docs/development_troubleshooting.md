@@ -13,6 +13,7 @@
 - Bash `read` collapses empty tab-separated fields; use structured data or an explicit sentinel for optional fields.
 - Use `/bin/ls` or `rg --files` when shell aliases produce a suspiciously empty directory listing.
 - Use `rg` for working-tree searches because untracked files are absent from `git grep` by default.
+- A commit refused by a hook leaves its changes staged; save them with `git diff HEAD`, as `git diff` shows only unstaged changes.
 - First-time cruft-pack collection does not establish that unreachable objects are disposable; inspect stashes and reflogs before repository maintenance.
 
 ## Builds and CI
