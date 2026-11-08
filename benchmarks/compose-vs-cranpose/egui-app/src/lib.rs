@@ -22,6 +22,10 @@ use eframe::egui::{
 };
 use perf_data::*;
 
+mod wall;
+
+pub use wall::Wall;
+
 /// Blocks of five card rows and a cluster: no measurement window reaches the end.
 const ROWS: usize = 2000 * (CARD_ROWS_PER_CLUSTER + 1);
 /// How far the list scrolls each frame, in points (dp).
@@ -879,13 +883,21 @@ impl eframe::App for Gauntlet {
     }
 }
 
-/// Runs the gauntlet in eframe's window with `options`.
+/// The screen `load` asks for.
+fn screen(ctx: &egui::Context, load: Launch) -> Box<dyn eframe::App> {
+    match load.scenario {
+        Scenario::Gauntlet => Box::new(Gauntlet::new(ctx, load)),
+        Scenario::Wall => Box::new(Wall::new(ctx, load)),
+    }
+}
+
+/// Runs the screen `load` asks for in eframe's window with `options`.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn run(options: eframe::NativeOptions, load: Launch) {
     let result = eframe::run_native(
         "Gauntlet",
         options,
-        Box::new(move |creation| Ok(Box::new(Gauntlet::new(&creation.egui_ctx, load)))),
+        Box::new(move |creation| Ok(screen(&creation.egui_ctx, load))),
     );
     if let Err(error) = result {
         log::error!("eframe stopped: {error}");
@@ -917,7 +929,7 @@ fn android_main(app: winit::platform::android::activity::AndroidApp) {
 mod web {
     use wasm_bindgen::{JsCast as _, JsValue, prelude::wasm_bindgen};
 
-    use super::{Gauntlet, Launch};
+    use super::{Launch, screen};
 
     #[wasm_bindgen]
     pub async fn run_gauntlet(canvas_id: &str, query: &str) -> Result<(), JsValue> {
@@ -932,7 +944,7 @@ mod web {
             .start(
                 canvas,
                 eframe::WebOptions::default(),
-                Box::new(move |creation| Ok(Box::new(Gauntlet::new(&creation.egui_ctx, load)))),
+                Box::new(move |creation| Ok(screen(&creation.egui_ctx, load))),
             )
             .await
     }

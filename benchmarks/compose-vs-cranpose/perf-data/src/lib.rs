@@ -5,6 +5,9 @@
 
 use std::{ops::Range, path::PathBuf, sync::OnceLock};
 
+pub mod wall;
+pub use wall::*;
+
 pub const POST_COUNT: usize = 5000;
 pub const BAR_COUNT: usize = 24;
 
@@ -493,24 +496,52 @@ pub const GAUNTLET_TIERS: [GauntletTier; 16] = [
 /// The window every desktop app opens for the gauntlet, in logical points.
 pub const DESKTOP_WINDOW: (u32, u32) = (1280, 820);
 
+/// The screen a launch shows: the gauntlet, or the still wall of [`wall`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Scenario {
+    #[default]
+    Gauntlet,
+    Wall,
+}
+
+impl Scenario {
+    /// The scenario `name` names; the gauntlet for any other name.
+    pub fn from_name(name: &str) -> Self {
+        match name {
+            "wall" => Self::Wall,
+            _ => Self::Gauntlet,
+        }
+    }
+}
+
 /// What `am start` asked of the gauntlet in an app without its own
-/// activity code: the launch activity writes `tier freeze` to a file. On a
-/// desktop, `desktop.py` sets `PERF_TIER` and `PERF_FREEZE`.
+/// activity code: the launch activity writes `tier freeze scenario` to a
+/// file. On a desktop, `desktop.py` sets `PERF_TIER`, `PERF_FREEZE` and
+/// `PERF_SCENARIO`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Launch {
     /// Load tier, 1 to 16.
     pub tier: usize,
     /// Stop on this frame and hold still, for picture comparisons; 0 runs on.
     pub freeze: u32,
+    /// The screen to show.
+    pub scenario: Scenario,
 }
 
 impl Launch {
-    /// `tier freeze`; the defaults (tier 5, no freeze) for anything missing.
+    /// `tier freeze scenario`; the defaults (tier 5, no freeze, the
+    /// gauntlet) for anything missing.
     pub fn parse(text: &str) -> Self {
-        let mut fields = text.split_whitespace().map(str::parse::<u32>);
-        let tier = fields.next().and_then(Result::ok).unwrap_or(5) as usize;
-        let freeze = fields.next().and_then(Result::ok).unwrap_or(0);
-        Self { tier, freeze }
+        let mut fields = text.split_whitespace();
+        let mut number = || fields.next().and_then(|field| field.parse::<u32>().ok());
+        let tier = number().unwrap_or(5) as usize;
+        let freeze = number().unwrap_or(0);
+        let scenario = fields.next().map(Scenario::from_name).unwrap_or_default();
+        Self {
+            tier,
+            freeze,
+            scenario,
+        }
     }
 
     /// The launch the launch activity wrote to `launch.txt` in the app's
@@ -520,23 +551,27 @@ impl Launch {
         Self::parse(text.as_deref().unwrap_or_default())
     }
 
-    /// The launch a page's query string asks for: `?tier=12&freeze=120`, the
-    /// defaults for anything missing.
+    /// The launch a page's query string asks for:
+    /// `?tier=12&freeze=120&scenario=wall`, the defaults for anything missing.
     pub fn from_query(query: &str) -> Self {
-        let value = |name: &str| {
+        let text = |name: &str| {
             query
                 .trim_start_matches('?')
                 .split('&')
                 .find_map(|pair| pair.strip_prefix(name)?.strip_prefix('='))
-                .and_then(|value| value.parse::<u32>().ok())
         };
+        let value = |name: &str| text(name).and_then(|value| value.parse::<u32>().ok());
         Self {
             tier: value("tier").unwrap_or(5) as usize,
             freeze: value("freeze").unwrap_or(0),
+            scenario: text("scenario")
+                .map(Scenario::from_name)
+                .unwrap_or_default(),
         }
     }
 
-    /// The launch `desktop.py` asked for in `PERF_TIER` and `PERF_FREEZE`.
+    /// The launch `desktop.py` asked for in `PERF_TIER`, `PERF_FREEZE` and
+    /// `PERF_SCENARIO`.
     pub fn from_env() -> Self {
         let var = |name: &str, default: u32| {
             std::env::var(name)
@@ -547,6 +582,9 @@ impl Launch {
         Self {
             tier: var("PERF_TIER", 5) as usize,
             freeze: var("PERF_FREEZE", 0),
+            scenario: std::env::var("PERF_SCENARIO")
+                .map(|name| Scenario::from_name(&name))
+                .unwrap_or_default(),
         }
     }
 }

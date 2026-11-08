@@ -2,9 +2,10 @@
 """Measures the gauntlet's desktop apps on a Mac, from outside every app.
 
 Each app runs alone in a 1280 x 820 window (`perf-data`'s `DESKTOP_WINDOW`),
-with the tier in `PERF_TIER`, the frame to freeze on in `PERF_FREEZE` and the
-Roboto files in `PERF_FONTS`; Cranpose takes them as `--tier=N` arguments and
-the web page in its address. `FrameCount.app` counts the frames the app's
+with the screen in `PERF_SCENARIO` (the gauntlet, or the still wall with
+`--scenario wall`), the tier in `PERF_TIER`, the frame to freeze on in
+`PERF_FREEZE` and the Roboto files in `PERF_FONTS`; Cranpose takes them as
+`--scenario=NAME --tier=N` arguments and the web page in its address. `FrameCount.app` counts the frames the app's
 window presents, the way SurfaceFlinger counts a phone app's, `ps` counts
 the CPU time of the app and every process it started, `footprint` the memory
 they hold and `macmon` the clocks the chip ran at. The apps are measured in
@@ -36,6 +37,7 @@ when its display link does not tick at its rate. `fps` counts the frames that
 changed the window's picture; `composited_fps` counts every composite.
 
   python3 desktop.py --output results/desktop --tier 12
+  python3 desktop.py --output results/desktop-wall --scenario wall --tier 16
   python3 desktop.py --output results/desktop-parity --parity --tier 5
   python3 desktop.py --output results/browser --browser DIST --tier 6
 
@@ -132,16 +134,17 @@ SUMMARY = ('fps', 'first_frame_s', 'cpu_ms_per_frame', 'cpu_cores', 'server_core
 # Chrome, the engine Electron apps ship, in an app window of its own profile.
 # Its title bar is part of the window size it is given.
 CHROME_APP = [CHROME, '--user-data-dir={profile}', '--no-first-run', '--no-default-browser-check',
-              '--enable-logging=stderr', '--window-size=1280,852', '--app={page}?tier={tier}&freeze={freeze}']
+              '--enable-logging=stderr', '--window-size=1280,852',
+              '--app={page}?tier={tier}&freeze={freeze}&scenario={scenario}']
 
-# Each app's command: `{tier}`, `{freeze}`, `{page}` and `{profile}` are
-# filled in for the run.
+# Each app's command: `{scenario}`, `{tier}`, `{freeze}`, `{page}` and
+# `{profile}` are filled in for the run.
 APPS = {
     'cranpose': [HERE / 'cranpose-app/target/release/perf-compare',
-                 '--scenario=gauntlet', '--tier={tier}', '--freeze={freeze}'],
+                 '--scenario={scenario}', '--tier={tier}', '--freeze={freeze}'],
     # The latest release's, which `build_apps.sh release TAG` links in.
     'cranpose-release': [HERE / 'cranpose-app/target-release/release/perf-compare',
-                         '--scenario=gauntlet', '--tier={tier}', '--freeze={freeze}'],
+                         '--scenario={scenario}', '--tier={tier}', '--freeze={freeze}'],
     'egui': [HERE / 'egui-app/target/release/perf-compare-egui'],
     'slint': [HERE / 'slint-app/target/release/perf-compare-slint'],
     'iced': [HERE / 'iced-app/target/release/perf-compare-iced'],
@@ -653,11 +656,12 @@ class App:
         # In the browser every app is the same Chrome, opened on its own page.
         template, page = (CHROME_APP, f'{server.base}/{name}/index.html') if args.browser else \
             (APPS[name], f'{server.base}/index.html')
-        values = {'tier': tier, 'freeze': freeze, 'page': page, 'profile': profile}
+        values = {'scenario': args.scenario, 'tier': tier, 'freeze': freeze, 'page': page, 'profile': profile}
         command = [str(part).format(**values) for part in template]
         if program:
             command[0] = program
-        variables = {'PERF_TIER': str(tier), 'PERF_FREEZE': str(freeze), 'PERF_FONTS': str(stage / 'fonts')}
+        variables = {'PERF_SCENARIO': args.scenario, 'PERF_TIER': str(tier), 'PERF_FREEZE': str(freeze),
+                     'PERF_FONTS': str(stage / 'fonts')}
         executable, arguments = command[0], command[1:]
         self.log.write_text('')
         self.started = time.monotonic()
@@ -880,6 +884,8 @@ def main():
     parser.add_argument('--browser', type=Path, metavar='DIST',
                         help='run the apps `build_apps.sh browser DIST` built, in Chrome')
     parser.add_argument('--release', help='the release tag `cranpose-release` was built at')
+    parser.add_argument('--scenario', choices=['gauntlet', 'wall'], default='gauntlet',
+                        help='the screen every app shows: the gauntlet or the still wall')
     parser.add_argument('--tier', type=int, default=12)
     parser.add_argument('--rounds', type=int, default=1,
                         help="rounds, in each of which every app starts after the apps' state is removed, "
@@ -1068,7 +1074,7 @@ def run(args, apps, server, stage):
         'subjects': [versions.subject(name, platform, built, args.release) for name in apps],
         'protocol': {'run_s': args.run, 'starts': list(STARTS), 'rounds': args.rounds,
                      'max_other_cores': args.max_others, **slow_rule()},
-        'scenarios': [{'scenario': 'gauntlet',
+        'scenarios': [{'scenario': args.scenario,
                        'extras': f'tier {args.tier}, {width} x {height} {"browser " if args.browser else ""}window',
                        'legs': legs, 'failures': failures,
                        'starts': {start: {'summary': summarize(legs, apps, start), 'verdicts': {}}
