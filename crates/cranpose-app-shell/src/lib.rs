@@ -841,27 +841,6 @@ where
         }
     }
 
-    /// Set development options for debugging and performance monitoring.
-    ///
-    /// The FPS counter and other overlays are rendered directly by the renderer
-    /// (not via composition) to avoid affecting performance measurements.
-    pub fn set_dev_options(&mut self, options: DevOptions) {
-        self.app.dev_options = options;
-        self.invalidate_dev_overlay_text();
-        self.app.app_context.enter(request_render_invalidation);
-        self.mark_all_dirty();
-    }
-
-    /// Get a reference to the current dev options.
-    pub fn dev_options(&self) -> &DevOptions {
-        &self.app.dev_options
-    }
-
-    /// Returns the frame pacing mode set in the dev options.
-    pub fn frame_pacing_mode(&self) -> FramePacingMode {
-        self.app.dev_options.frame_pacing_mode
-    }
-
     /// Returns the presented-frame cadence in frames per second, as the dev overlay shows it.
     pub fn current_fps(&self) -> f32 {
         self.app.fps_monitor.current_fps()
@@ -900,18 +879,6 @@ where
         let started = self.app.start_time + std::time::Duration::from_nanos(frame_started_nanos);
         let finished = self.app.start_time + std::time::Duration::from_nanos(frame_finished_nanos);
         self.record_presented_frame(started, finished);
-    }
-
-    /// Sets the frame pacing mode and redraws the dev overlay. Platforms read the mode back with
-    /// `frame_pacing_mode`.
-    pub fn set_frame_pacing_mode(&mut self, mode: FramePacingMode) {
-        if self.app.dev_options.frame_pacing_mode == mode {
-            return;
-        }
-        self.app.dev_options.frame_pacing_mode = mode;
-        self.invalidate_dev_overlay_text();
-        self.app.app_context.enter(request_render_invalidation);
-        self.mark_all_dirty();
     }
 
     /// Where the dev overlay draws the control for `mode`, in logical pixels.

@@ -1,3 +1,8 @@
+use cranpose_render_common::Renderer;
+use cranpose_ui::request_render_invalidation;
+
+use crate::AppShell;
+
 /// How the shell paces its frames against the display.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum FramePacingMode {
@@ -55,4 +60,43 @@ pub struct DevOptions {
     pub frame_pacing_controls: bool,
     /// How the shell paces its frames.
     pub frame_pacing_mode: FramePacingMode,
+}
+
+#[expect(clippy::multiple_inherent_impl, reason = "one file per shell concern")]
+impl<R: Renderer> AppShell<R>
+where
+    R::Error: std::fmt::Debug,
+{
+    /// Set development options for debugging and performance monitoring.
+    ///
+    /// The FPS counter and other overlays are rendered directly by the renderer
+    /// (not via composition) to avoid affecting performance measurements.
+    pub fn set_dev_options(&mut self, options: DevOptions) {
+        self.app.dev_options = options;
+        self.invalidate_dev_overlay_text();
+        self.app.app_context.enter(request_render_invalidation);
+        self.mark_all_dirty();
+    }
+
+    /// Get a reference to the current dev options.
+    pub fn dev_options(&self) -> &DevOptions {
+        &self.app.dev_options
+    }
+
+    /// Returns the frame pacing mode set in the dev options.
+    pub fn frame_pacing_mode(&self) -> FramePacingMode {
+        self.app.dev_options.frame_pacing_mode
+    }
+
+    /// Sets the frame pacing mode and redraws the dev overlay. Platforms read the mode back with
+    /// `frame_pacing_mode`.
+    pub fn set_frame_pacing_mode(&mut self, mode: FramePacingMode) {
+        if self.app.dev_options.frame_pacing_mode == mode {
+            return;
+        }
+        self.app.dev_options.frame_pacing_mode = mode;
+        self.invalidate_dev_overlay_text();
+        self.app.app_context.enter(request_render_invalidation);
+        self.mark_all_dirty();
+    }
 }
