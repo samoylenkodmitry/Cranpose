@@ -57,11 +57,10 @@ which crate hashes and back-references are wildcards
 build and any app. A pattern that matches nothing costs nothing; a function
 renamed since the profile runs from the cache again.
 
-The renderer draws 16-bit pixels in the byte order of the panel, with one
-function for each order: QEMU's panel takes the low byte first and the
-boards' panels the high byte. Each build links both, and a function that
-QEMU ran for the low byte first goes into the list as its twin for the high
-byte first, the one the boards run.
+The renderer draws 16-bit pixels high byte first for every panel, as the
+boards' panels read them. QEMU's panel reads the low byte first, so its draw
+swaps the bytes of each update. QEMU and the boards run the same drawing
+functions, and an image links one copy of them.
 
 The profiles come from the demo: as it is, whose frames draw its bar again;
 with a line of text that changes every frame, drawn by a draw scope
