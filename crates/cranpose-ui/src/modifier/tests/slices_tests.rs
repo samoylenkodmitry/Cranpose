@@ -280,20 +280,21 @@ fn a_texts_slices_read_its_string_style_and_options_from_its_layout() {
         max_lines: 2,
         ..Default::default()
     };
-    let text = Rc::new(crate::text::AnnotatedString::from("Shared"));
+    let text = crate::text::AnnotatedString::from("Shared");
     let modifier = Modifier::with_element(crate::text_modifier_node::TextModifierElement::new(
-        Rc::clone(&text),
+        text.clone(),
         style.clone(),
         options,
         crate::density::Density::new(2.0, 1.0),
     ));
     let slices = collect_slices_from_modifier(&modifier);
     assert_eq!(slices.text_content().as_deref(), Some("Shared"));
-    assert!(Rc::ptr_eq(
-        &slices
+    assert!(std::sync::Arc::ptr_eq(
+        slices
             .annotated_text()
-            .expect("a text node's slices hold its text"),
-        &text
+            .expect("a text node's slices hold its text")
+            .render_string(),
+        text.render_string()
     ));
     assert_eq!(slices.text_style().as_deref(), Some(&style));
     assert_eq!(slices.text_layout_options(), Some(options.normalized()));

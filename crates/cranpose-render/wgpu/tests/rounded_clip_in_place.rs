@@ -867,11 +867,8 @@ fn text_shadow_node() -> RenderNode {
         shadow: Some(shadow),
         ..SpanStyle::default()
     };
-    let annotated = AnnotatedString {
-        text: "Shadow".to_owned(),
-        ..AnnotatedString::default()
-    };
-    let render_text = std::sync::Arc::new(annotated.render_string());
+    let annotated = AnnotatedString::from("Shadow");
+    let render_text = std::sync::Arc::clone(annotated.render_string());
     RenderNode::Primitive(PrimitiveEntry {
         phase: PrimitivePhase::BeforeChildren,
         node: PrimitiveNode::Text(Box::new(support::with_layout(TextPrimitiveNode {
@@ -882,7 +879,7 @@ fn text_shadow_node() -> RenderNode {
                 width: 56.0,
                 height: 20.0,
             },
-            text: std::rc::Rc::new(annotated),
+            text: annotated,
             render_text,
             text_style: std::sync::Arc::new(TextStyle::from_span_style(style)),
             font_size: 18.0,

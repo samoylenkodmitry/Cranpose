@@ -121,7 +121,7 @@ fn nodes_output(
                 PrimitiveNode::Text(text) => texts.push((
                     text.node_id,
                     transform.bounds_for_rect(text.rect),
-                    text.text.text.clone(),
+                    text.text.text().to_owned(),
                 )),
             },
         }

@@ -185,7 +185,7 @@ pub(super) fn role_from_modifier_slices(modifier_slices: &ModifierNodeSlices) ->
     modifier_slices
         .annotated_text()
         .map_or(SemanticsRole::Layout, |text| SemanticsRole::Text {
-            value: SemanticsText(Rc::clone(&text)),
+            value: SemanticsText(text.clone()),
         })
 }
 

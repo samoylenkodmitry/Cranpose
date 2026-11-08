@@ -6,8 +6,8 @@ use cranpose_core::location_key;
 use cranpose_ui::{
     Box, BoxSpec, Color, Modifier, Text, TextStyle,
     text::{
-        AnnotatedString, LineHeightAlignment, LineHeightStyle, LineHeightTrim, RangeStyle,
-        SpanStyle, TextMotion, TextUnit,
+        AnnotatedString, LineHeightAlignment, LineHeightStyle, LineHeightTrim, SpanStyle,
+        TextMotion, TextUnit,
     },
 };
 use cranpose_ui_graphics::Rect;
@@ -20,13 +20,16 @@ fn translating_cached_gradient_text_matches_a_fresh_render_at_its_new_position()
         let graph = |x| {
             let mut text = AnnotatedString::from("HH");
             if annotated {
-                text.span_styles.push(RangeStyle {
-                    range: 1..2,
-                    item: SpanStyle {
-                        font_size: TextUnit::Sp(30.0),
-                        ..Default::default()
-                    },
-                });
+                text = AnnotatedString::builder()
+                    .append_annotated(&text)
+                    .add_style(
+                        SpanStyle {
+                            font_size: TextUnit::Sp(30.0),
+                            ..Default::default()
+                        },
+                        1..2,
+                    )
+                    .to_annotated_string();
             }
             let style = TextStyle::from_span_style(SpanStyle {
                 font_size: TextUnit::Sp(20.0),
@@ -103,14 +106,14 @@ fn assert_clipped_paragraph_pixels(color_stops: usize, shadow_on_span: bool) {
             return;
         }
     };
-    let mut text = AnnotatedString::from("H\nH\nH\nH\nH\nH\nH\nH\nH\nH");
-    text.span_styles.push(RangeStyle {
-        range: 0..1,
-        item: SpanStyle {
-            font_size: TextUnit::Sp(40.0),
-            ..Default::default()
-        },
-    });
+    let large = SpanStyle {
+        font_size: TextUnit::Sp(40.0),
+        ..Default::default()
+    };
+    let text = AnnotatedString::builder()
+        .append("H\nH\nH\nH\nH\nH\nH\nH\nH\nH")
+        .add_style(large, 0..1)
+        .to_annotated_string();
     for height_and_trim in [
         None,
         Some((14.0, LineHeightTrim::None)),
@@ -153,20 +156,19 @@ fn assert_clipped_paragraph_pixels(color_stops: usize, shadow_on_span: bool) {
                 });
             }
             let graph = |y, height| {
-                let mut styled_text = text.clone();
+                let mut styled_text = AnnotatedString::builder().append_annotated(&text);
                 if shadowed_stroke && shadow_on_span {
-                    styled_text.span_styles.push(RangeStyle {
-                        range: 0..styled_text.text.len(),
-                        item: SpanStyle {
-                            shadow: Some(cranpose_ui::text::Shadow {
-                                color: Color::WHITE,
-                                offset: cranpose_ui_graphics::Point::new(-3.25, 5.75),
-                                blur_radius: 4.0,
-                            }),
-                            ..Default::default()
-                        },
-                    });
+                    let shadow = SpanStyle {
+                        shadow: Some(cranpose_ui::text::Shadow {
+                            color: Color::WHITE,
+                            offset: cranpose_ui_graphics::Point::new(-3.25, 5.75),
+                            blur_radius: 4.0,
+                        }),
+                        ..Default::default()
+                    };
+                    styled_text = styled_text.add_style(shadow, 0..text.len());
                 }
+                let styled_text = styled_text.to_annotated_string();
                 annotated_fixture::text_graph(
                     styled_text,
                     style.clone(),

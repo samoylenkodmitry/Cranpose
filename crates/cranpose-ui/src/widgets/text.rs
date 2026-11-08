@@ -20,18 +20,18 @@ use crate::{
 /// Text produced by a callback that runs each time the text composes, so state read in the callback
 /// recomposes the text.
 #[derive(Clone)]
-pub struct DynamicTextSource(Rc<dyn Fn() -> Rc<crate::text::AnnotatedString>>);
+pub struct DynamicTextSource(Rc<dyn Fn() -> crate::text::AnnotatedString>);
 
 impl DynamicTextSource {
     /// Creates a source whose text `resolver` returns.
     pub fn new<F>(resolver: F) -> Self
     where
-        F: Fn() -> Rc<crate::text::AnnotatedString> + 'static,
+        F: Fn() -> crate::text::AnnotatedString + 'static,
     {
         Self(Rc::new(resolver))
     }
 
-    fn resolve(&self) -> Rc<crate::text::AnnotatedString> {
+    fn resolve(&self) -> crate::text::AnnotatedString {
         (self.0)()
     }
 }
@@ -46,15 +46,15 @@ impl PartialEq for DynamicTextSource {
 #[derive(Clone, PartialEq)]
 pub enum TextSource {
     /// A fixed text.
-    Static(Rc<crate::text::AnnotatedString>),
+    Static(crate::text::AnnotatedString),
     /// A text produced by a callback each time the widget composes.
     Dynamic(DynamicTextSource),
 }
 
 impl TextSource {
-    fn resolve(&self) -> Rc<crate::text::AnnotatedString> {
+    fn resolve(&self) -> crate::text::AnnotatedString {
         match self {
-            Self::Static(text) => Rc::clone(text),
+            Self::Static(text) => text.clone(),
             Self::Dynamic(dynamic) => dynamic.resolve(),
         }
     }
@@ -67,23 +67,17 @@ pub trait IntoTextSource {
 
 impl IntoTextSource for String {
     fn into_text_source(self) -> TextSource {
-        TextSource::Static(Rc::new(crate::text::AnnotatedString::from(self)))
+        TextSource::Static(crate::text::AnnotatedString::from(self))
     }
 }
 
 impl IntoTextSource for &str {
     fn into_text_source(self) -> TextSource {
-        TextSource::Static(Rc::new(crate::text::AnnotatedString::from(self)))
+        TextSource::Static(crate::text::AnnotatedString::from(self))
     }
 }
 
 impl IntoTextSource for crate::text::AnnotatedString {
-    fn into_text_source(self) -> TextSource {
-        TextSource::Static(Rc::new(self))
-    }
-}
-
-impl IntoTextSource for Rc<crate::text::AnnotatedString> {
     fn into_text_source(self) -> TextSource {
         TextSource::Static(self)
     }
@@ -96,9 +90,7 @@ where
     fn into_text_source(self) -> TextSource {
         let state = self;
         TextSource::Dynamic(DynamicTextSource::new(move || {
-            Rc::new(crate::text::AnnotatedString::from(
-                state.value().to_string(),
-            ))
+            crate::text::AnnotatedString::from(state.value().to_string())
         }))
     }
 }
@@ -110,9 +102,7 @@ where
     fn into_text_source(self) -> TextSource {
         let state = self;
         TextSource::Dynamic(DynamicTextSource::new(move || {
-            Rc::new(crate::text::AnnotatedString::from(
-                state.value().to_string(),
-            ))
+            crate::text::AnnotatedString::from(state.value().to_string())
         }))
     }
 }
@@ -123,7 +113,7 @@ where
 {
     fn into_text_source(self) -> TextSource {
         TextSource::Dynamic(DynamicTextSource::new(move || {
-            Rc::new(crate::text::AnnotatedString::from(self()))
+            crate::text::AnnotatedString::from(self())
         }))
     }
 }
@@ -149,7 +139,7 @@ fn compose_basic_text_group(
     let modifier = match crate::widgets::local_selection_registrar().current() {
         Some(registrar) => modifier.then(crate::widgets::selection_container::selectable_text(
             registrar,
-            Rc::clone(&current),
+            current.clone(),
             Arc::clone(&style),
             options,
         )),

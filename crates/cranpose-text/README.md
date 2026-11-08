@@ -19,6 +19,6 @@ let style = TextStyle {
     ..TextStyle::default()
 };
 let text = AnnotatedString::new("Hello".to_owned());
-assert_eq!(text.text, "Hello");
+assert_eq!(text.text(), "Hello");
 let _ = style;
 ```

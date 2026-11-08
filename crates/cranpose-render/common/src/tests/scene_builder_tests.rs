@@ -145,7 +145,7 @@ fn find_text_motion(layer: &LayerNode, label: &str) -> Option<Option<TextMotion>
     fn search(nodes: &[RenderNode], label: &str) -> Option<Option<TextMotion>> {
         nodes.iter().find_map(|child| match child {
             RenderNode::Primitive(primitive) => match &primitive.node {
-                PrimitiveNode::Text(text) if text.text.text == label => {
+                PrimitiveNode::Text(text) if text.text.text() == label => {
                     Some(text.text_style.paragraph_style.text_motion)
                 }
                 _ => None,
@@ -165,7 +165,7 @@ fn collect_text_labels(layer: &LayerNode, labels: &mut Vec<String>) {
             match child {
                 RenderNode::Primitive(primitive) => {
                     if let PrimitiveNode::Text(text) = &primitive.node {
-                        labels.push(text.text.text.clone());
+                        labels.push(text.text.text().to_owned());
                     }
                 }
                 RenderNode::Layer(child_layer) => collect(&child_layer.children, labels),
@@ -186,7 +186,7 @@ fn find_text_top(layer: &LayerNode, label: &str) -> Option<f32> {
                     let PrimitiveNode::Text(text) = &primitive.node else {
                         continue;
                     };
-                    if text.text.text == label {
+                    if text.text.text() == label {
                         let quad = transform.map_rect(text.rect);
                         let top = quad
                             .iter()
@@ -1900,7 +1900,7 @@ fn collect_text_tops(layer: &LayerNode) -> std::collections::BTreeMap<String, i6
                             .map(|point| point[1])
                             .fold(f32::INFINITY, f32::min);
                         if top.is_finite() {
-                            out.insert(text.text.text.clone(), (top * 10.0).round() as i64);
+                            out.insert(text.text.text().to_owned(), (top * 10.0).round() as i64);
                         }
                     }
                 }
@@ -3460,7 +3460,7 @@ fn wrapped_paragraph_paints_the_height_it_measured() {
             value.chars().filter(|c| !c.is_whitespace()).collect()
         }
         let painted = find_text_primitive(&graph.root, &|text| {
-            squashed(&text.text.text) == squashed(BODY)
+            squashed(text.text.text()) == squashed(BODY)
         })
         .expect("painted paragraph");
 
@@ -3577,7 +3577,7 @@ fn paint_body(
     let painted_text = |graph: &RenderGraph| {
         let painted = find_text_primitive(&graph.root, &|text| text.node_id == body_id)
             .expect("painted paragraph");
-        layout_lines(&painted.layout, &painted.text.text)
+        layout_lines(&painted.layout, painted.text.text())
     };
     let painted_from_layout_tree = painted_text(&build_graph_from_layout_tree(layout.root(), 1.0));
 

@@ -7,7 +7,7 @@ use super::*;
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(in crate::app) struct Table {
     pub alignments: Vec<pulldown_cmark::Alignment>,
-    pub rows: Vec<Vec<Rc<AnnotatedString>>>,
+    pub rows: Vec<Vec<AnnotatedString>>,
 }
 
 #[composable]
@@ -54,7 +54,7 @@ pub(super) fn MarkdownTable(table: Rc<Table>, appearance: MarkdownAppearance) {
                                                 _ => TextAlign::Start,
                                             };
                                             render_text_block_aligned(
-                                                Rc::clone(cell),
+                                                cell.clone(),
                                                 appearance,
                                                 alignment,
                                             );

@@ -149,7 +149,7 @@ pub fn DisableSelection(content: impl FnOnce()) {
 #[composable]
 pub(crate) fn selectable_text(
     registrar: SelectionRegistrar,
-    text: Rc<AnnotatedString>,
+    text: AnnotatedString,
     style: Arc<TextStyle>,
     options: TextLayoutOptions,
 ) -> Modifier {

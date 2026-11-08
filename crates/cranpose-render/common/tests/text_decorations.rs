@@ -46,7 +46,7 @@ fn lines(prepared: &PreparedTextLayout, style: &TextStyle) -> Vec<Rect> {
     let mut rects = Vec::new();
     visit_text_lines(
         &prepared.layout,
-        prepared.text.as_ref().into(),
+        (&prepared.text).into(),
         style,
         Color::WHITE,
         |rect, _| rects.push(rect),
@@ -113,7 +113,7 @@ fn decorations_and_backgrounds_of_mixed_directions_stay_within_their_line() {
     let mut backgrounds = Vec::new();
     visit_text_backgrounds(
         &prepared.layout,
-        prepared.text.as_ref().into(),
+        (&prepared.text).into(),
         &style,
         |rect, _| backgrounds.push(rect),
     );

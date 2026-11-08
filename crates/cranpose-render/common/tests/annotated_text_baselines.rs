@@ -13,8 +13,8 @@ use cranpose_text::CaretDirection;
 use cranpose_ui::{
     PreparedTextLayout,
     text::{
-        AnnotatedString, LineHeightAlignment, LineHeightStyle, LineHeightTrim, RangeStyle,
-        SpanStyle, TextLayoutOptions, TextStyle, TextUnit,
+        AnnotatedString, LineHeightAlignment, LineHeightStyle, LineHeightTrim, SpanStyle,
+        TextLayoutOptions, TextStyle, TextUnit,
     },
 };
 use cranpose_ui_graphics::{Color, ImageBitmap, Rect};
@@ -53,13 +53,16 @@ fn line_width(prepared: &PreparedTextLayout) -> f32 {
 #[test]
 fn cropped_shadowed_strokes_keep_the_full_paragraphs_visible_pixels() {
     let mut text = AnnotatedString::from("H\nH\nH\nH\nH\nH\nH\nH\nH\nH");
-    text.span_styles.push(RangeStyle {
-        range: 0..1,
-        item: SpanStyle {
-            font_size: TextUnit::Sp(40.0),
-            ..Default::default()
-        },
-    });
+    text = AnnotatedString::builder()
+        .append_annotated(&text)
+        .add_style(
+            SpanStyle {
+                font_size: TextUnit::Sp(40.0),
+                ..Default::default()
+            },
+            0..1,
+        )
+        .to_annotated_string();
     let mut base = style(10.0);
     base.span_style.brush = Some(cranpose_ui_graphics::Brush::linear_gradient(vec![
         Color::WHITE,
@@ -181,7 +184,7 @@ fn explicit_line_heights_draw_each_line_on_its_layout_baseline() {
 #[test]
 fn wrapped_lines_and_span_updates_report_the_drawn_height() {
     let base = style(10.0);
-    let mut text = mixed_text("HH HH");
+    let text = mixed_text("HH HH");
     let width = line_width(&prepare(&mixed_text("HH"), &base, None)) + 0.1;
     let first = prepare(&text, &base, Some(width));
     assert_eq!(first.layout.line_count(), 2);
@@ -196,7 +199,13 @@ fn wrapped_lines_and_span_updates_report_the_drawn_height() {
         first.metrics().height,
         large.metrics().height + small.metrics().height,
     );
-    text.span_styles[1].item.font_size = TextUnit::Sp(30.0);
+    let mut index = 0;
+    let text = text.map_span_styles(|span| {
+        if index == 1 {
+            span.font_size = TextUnit::Sp(30.0);
+        }
+        index += 1;
+    });
     let updated = prepare(&text, &base, None);
     assert_close(
         updated.metrics().height,
@@ -215,14 +224,17 @@ fn mixed_text(value: &str) -> AnnotatedString {
         (2..value.len(), 10.0, Color(0.0, 0.0, 1.0, 1.0)),
     ] {
         if !range.is_empty() {
-            text.span_styles.push(RangeStyle {
-                range,
-                item: SpanStyle {
-                    font_size: TextUnit::Sp(font_size),
-                    color: Some(color),
-                    ..Default::default()
-                },
-            });
+            text = AnnotatedString::builder()
+                .append_annotated(&text)
+                .add_style(
+                    SpanStyle {
+                        font_size: TextUnit::Sp(font_size),
+                        color: Some(color),
+                        ..Default::default()
+                    },
+                    range,
+                )
+                .to_annotated_string();
         }
     }
     text
@@ -238,7 +250,7 @@ fn render(prepared: &PreparedTextLayout) -> (ImageBitmap, Vec<(AtlasGlyph, Glyph
     };
     let request = TextRasterRequest::new(
         &prepared.layout,
-        &*prepared.text,
+        &prepared.text,
         rect,
         &prepared.visual_style,
         Color::WHITE,

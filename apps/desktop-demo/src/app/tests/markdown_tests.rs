@@ -22,9 +22,9 @@ fn heading_produces_bold_block() {
     let MarkdownBlock::Text(annotated) = &blocks[0] else {
         panic!("expected Text block");
     };
-    assert!(annotated.text.contains("Hello World"));
+    assert!(annotated.text().contains("Hello World"));
     let has_bold = annotated
-        .span_styles
+        .span_styles()
         .iter()
         .any(|s| s.item.font_weight == Some(FontWeight::BOLD));
     assert!(has_bold, "H1 should produce bold span style");
@@ -38,7 +38,7 @@ fn bold_inline_produces_bold_span() {
         panic!("expected Text block");
     };
     let has_bold = annotated
-        .span_styles
+        .span_styles()
         .iter()
         .any(|s| s.item.font_weight == Some(FontWeight::BOLD));
     assert!(has_bold, "**bold** should produce a bold span");
@@ -52,7 +52,7 @@ fn italic_inline_produces_italic_span() {
         panic!("expected Text block");
     };
     let has_italic = annotated
-        .span_styles
+        .span_styles()
         .iter()
         .any(|s| s.item.font_style == Some(FontStyle::Italic));
     assert!(has_italic, "*italic* should produce an italic span");
@@ -105,7 +105,7 @@ fn plain_paragraphs_do_not_emit_empty_span_styles() {
         panic!("expected Text block");
     };
     assert!(
-        annotated.span_styles.is_empty(),
+        annotated.span_styles().is_empty(),
         "unstyled markdown should not force styled-text rendering"
     );
 }
@@ -118,7 +118,7 @@ fn list_item_paragraph_keeps_bullet_and_text_in_same_block() {
         panic!("expected Text block");
     };
     assert!(
-        annotated.text.starts_with("• Time complexity:"),
+        annotated.text().starts_with("• Time complexity:"),
         "bullet and text must stay in the same block"
     );
 }
@@ -139,7 +139,7 @@ fn list_items_do_not_emit_bullet_only_blocks() {
         .collect();
     assert_eq!(text_blocks.len(), 2, "expected one block per list item");
     assert!(
-        text_blocks.iter().all(|item| item.text.trim() != "•"),
+        text_blocks.iter().all(|item| item.text().trim() != "•"),
         "renderer emitted bullet-only block"
     );
 }
@@ -152,10 +152,10 @@ fn link_stores_url_link_annotation() {
         panic!("expected Text block");
     };
     assert!(
-        !annotated.link_annotations.is_empty(),
+        annotated.has_link_annotations(0, annotated.len()),
         "link should produce a LinkAnnotation"
     );
-    let url_anns = annotated.get_link_annotations(0, annotated.text.len());
+    let url_anns = annotated.get_link_annotations(0, annotated.text().len());
     assert_eq!(url_anns.len(), 1);
     assert!(
         matches!(&url_anns[0].item, LinkAnnotation::Url(url) if url == "https://example.com"),
@@ -169,9 +169,9 @@ fn link_annotation_covers_only_link_text() {
     let MarkdownBlock::Text(annotated) = &blocks[0] else {
         panic!("expected Text block");
     };
-    let start = annotated.text.find("link").expect("link text present");
+    let start = annotated.text().find("link").expect("link text present");
     let end = start + "link".len();
-    let ann = &annotated.link_annotations[0];
+    let ann = &annotated.get_link_annotations(0, annotated.len())[0];
     assert_eq!(
         ann.range,
         start..end,
@@ -280,9 +280,7 @@ fn scroll_target_for_fraction_handles_non_scrollable_model() {
 #[test]
 fn split_large_markdown_blocks_preserves_text_content() {
     let long = "a".repeat(MAX_MARKDOWN_BLOCK_BYTES * 2 + 100);
-    let input = vec![MarkdownBlock::Text(Rc::new(AnnotatedString::from(
-        long.as_str(),
-    )))];
+    let input = vec![MarkdownBlock::Text(AnnotatedString::from(long.as_str()))];
     let split = split_large_markdown_blocks(input);
     assert!(
         split.len() >= 2,
@@ -294,10 +292,10 @@ fn split_large_markdown_blocks_preserves_text_content() {
             continue;
         };
         assert!(
-            annotated.text.len() <= MAX_MARKDOWN_BLOCK_BYTES,
+            annotated.text().len() <= MAX_MARKDOWN_BLOCK_BYTES,
             "chunk exceeded max block size"
         );
-        joined.push_str(&annotated.text);
+        joined.push_str(annotated.text());
     }
     assert_eq!(joined, long, "splitting must preserve full text");
 }
@@ -316,7 +314,7 @@ fn split_large_markdown_blocks_preserves_links() {
             MarkdownBlock::Text(annotated)
             | MarkdownBlock::Example {
                 code: annotated, ..
-            } => Some(annotated.link_annotations.len()),
+            } => Some(annotated.get_link_annotations(0, annotated.len()).len()),
             MarkdownBlock::Image { .. } => None,
             MarkdownBlock::Rule | MarkdownBlock::Table(_) => None,
         })
@@ -343,7 +341,7 @@ fn markdown_scroll_stress_fixture_exercises_many_rendered_blocks() {
             MarkdownBlock::Text(annotated)
             | MarkdownBlock::Example {
                 code: annotated, ..
-            } => !annotated.link_annotations.is_empty(),
+            } => annotated.has_link_annotations(0, annotated.len()),
             MarkdownBlock::Image { .. } => false,
             MarkdownBlock::Rule | MarkdownBlock::Table(_) => false,
         }),
@@ -363,7 +361,7 @@ fn markdown_code_blocks_drop_fence_terminator_newlines() {
             MarkdownBlock::Text(annotated)
             | MarkdownBlock::Example {
                 code: annotated, ..
-            } => Some(annotated.text.as_str()),
+            } => Some(annotated.text()),
             MarkdownBlock::Image { .. } => None,
             MarkdownBlock::Rule | MarkdownBlock::Table(_) => None,
         })
@@ -394,9 +392,9 @@ fn profile_large_markdown_from_file() {
     for block in &blocks {
         if let MarkdownBlock::Text(annotated) = block {
             text_block_count += 1;
-            if annotated.text.len() > max_block_bytes {
-                max_block_bytes = annotated.text.len();
-                max_block_preview = annotated.text.chars().take(120).collect();
+            if annotated.text().len() > max_block_bytes {
+                max_block_bytes = annotated.text().len();
+                max_block_preview = annotated.text().chars().take(120).collect();
             }
         }
     }
@@ -424,9 +422,9 @@ fn an_image_becomes_its_own_block_instead_of_placeholder_text() {
     for block in &blocks {
         if let MarkdownBlock::Text(annotated) = block {
             assert!(
-                !annotated.text.contains("[image:"),
+                !annotated.text().contains("[image:"),
                 "the placeholder text survived: {:?}",
-                annotated.text
+                annotated.text()
             );
         }
     }
@@ -468,7 +466,7 @@ fn a_root_relative_link_resolves_against_the_document_url() {
         "https://raw.githubusercontent.com/owner/repo/refs/heads/master/notes/post.md",
     );
     let has_absolute_link = blocks.iter().any(|block| match block {
-        MarkdownBlock::Text(annotated) | MarkdownBlock::Example { code: annotated, .. } => annotated.link_annotations.iter().any(|span| {
+        MarkdownBlock::Text(annotated) | MarkdownBlock::Example { code: annotated, .. } => annotated.get_link_annotations(0, annotated.len()).iter().any(|span| {
             matches!(&span.item, LinkAnnotation::Url(url)
                 if url == "https://raw.githubusercontent.com/owner/repo/refs/heads/master/leetcode/")
         }),
@@ -485,11 +483,11 @@ fn an_image_with_an_empty_url_is_dropped() {
         .any(|block| matches!(block, MarkdownBlock::Image { .. })));
 }
 
-fn code_block_text(markdown: &str) -> Rc<AnnotatedString> {
+fn code_block_text(markdown: &str) -> AnnotatedString {
     markdown_to_blocks(markdown, "")
         .into_iter()
         .find_map(|block| match block {
-            MarkdownBlock::Text(annotated) if annotated.text.contains("fn ") => Some(annotated),
+            MarkdownBlock::Text(annotated) if annotated.text().contains("fn ") => Some(annotated),
             _ => None,
         })
         .expect("a code block")
@@ -502,16 +500,16 @@ fn a_rust_fence_colours_its_keywords() {
 fn main() {}
 ```",
     );
-    assert_eq!(annotated.text, "fn main() {}");
+    assert_eq!(annotated.text(), "fn main() {}");
     let coloured = annotated
-        .span_styles
+        .span_styles()
         .iter()
         .filter(|span| span.item.color.is_some())
         .count();
     assert!(
         coloured > 0,
         "expected coloured spans in a rust fence: {:?}",
-        annotated.span_styles
+        annotated.span_styles()
     );
 }
 
@@ -520,12 +518,12 @@ fn a_kotlin_fence_is_coloured() {
     let annotated = markdown_to_blocks("```kotlin\nfun main() { val x = \"hi\" }\n```", "")
         .into_iter()
         .find_map(|block| match block {
-            MarkdownBlock::Text(annotated) if annotated.text.contains("fun ") => Some(annotated),
+            MarkdownBlock::Text(annotated) if annotated.text().contains("fun ") => Some(annotated),
             _ => None,
         })
         .expect("a kotlin code block");
     let coloured = annotated
-        .span_styles
+        .span_styles()
         .iter()
         .filter(|span| span.item.color.is_some())
         .count();
@@ -542,9 +540,9 @@ fn an_unfenced_code_block_keeps_its_text_uncoloured() {
 fn main() {}
 ```",
     );
-    assert_eq!(annotated.text, "fn main() {}");
+    assert_eq!(annotated.text(), "fn main() {}");
     let coloured = annotated
-        .span_styles
+        .span_styles()
         .iter()
         .filter(|span| span.item.color.is_some())
         .count();
@@ -558,9 +556,9 @@ fn a_fence_preserves_its_code_exactly() {
     let annotated = markdown_to_blocks(&markdown, "")
         .into_iter()
         .find_map(|block| match block {
-            MarkdownBlock::Text(annotated) if annotated.text.contains("let") => Some(annotated),
+            MarkdownBlock::Text(annotated) if annotated.text().contains("let") => Some(annotated),
             _ => None,
         })
         .expect("a code block");
-    assert_eq!(annotated.text, code);
+    assert_eq!(annotated.text(), code);
 }

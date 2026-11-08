@@ -172,7 +172,7 @@ impl PartialEq<&str> for SliceTextRef<'_, str> {
 }
 
 struct FieldText {
-    content: Rc<crate::text::AnnotatedString>,
+    content: crate::text::AnnotatedString,
     style: TextStyle,
     layout: TextFieldLayoutHandle,
     pan: Option<TextPanResolver>,
@@ -470,11 +470,11 @@ impl ModifierNodeSlices {
     /// Returns the plain text the node shows, or `None` when the node shows no text.
     pub fn text_content(&self) -> Option<SliceTextRef<'_, str>> {
         self.annotated_text()
-            .map(|text| text.map(|text| text.text.as_str()))
+            .map(|text| text.map(crate::text::AnnotatedString::text))
     }
 
     /// Returns the text the node shows with its span styles, or `None` when the node shows no text.
-    pub fn annotated_text(&self) -> Option<SliceTextRef<'_, Rc<crate::text::AnnotatedString>>> {
+    pub fn annotated_text(&self) -> Option<SliceTextRef<'_, crate::text::AnnotatedString>> {
         Some(SliceTextRef(match self.text.as_ref()? {
             SliceText::Text(layout) => TextBorrow::Layout(layout.annotated_text()),
             SliceText::Field(field) => TextBorrow::Field(&field.content),

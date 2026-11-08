@@ -30,7 +30,7 @@ fn find_label_in<'a>(
 ) -> Option<(&'a TextPrimitiveNode, Option<&'a ColorFilter>)> {
     nodes.iter().find_map(|node| match node {
         RenderNode::Primitive(entry) => match &entry.node {
-            PrimitiveNode::Text(text) if text.text.text == label => Some((text.as_ref(), filter)),
+            PrimitiveNode::Text(text) if text.text.text() == label => Some((text.as_ref(), filter)),
             _ => None,
         },
         RenderNode::Layer(layer) => find_label(layer, label, filter),

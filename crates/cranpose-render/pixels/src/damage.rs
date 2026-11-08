@@ -1,4 +1,4 @@
-use std::{rc::Rc, sync::Arc};
+use std::sync::Arc;
 
 use cranpose_ui_graphics::{ArcGeometry, Brush, CornerRadii, Rect, TAU};
 
@@ -204,7 +204,7 @@ fn same_text(old: &TextDraw, new: &TextDraw) -> bool {
     } = old;
     *rect == new.rect
         && *snap_anchor == new.snap_anchor
-        && (Rc::ptr_eq(text, &new.text) || **text == *new.text)
+        && (Arc::ptr_eq(text, &new.text) || **text == *new.text)
         && *layout == new.layout
         && *ink == new.ink
         && (Arc::ptr_eq(text_style, &new.text_style) || **text_style == *new.text_style)

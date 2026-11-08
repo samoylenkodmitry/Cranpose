@@ -1,4 +1,4 @@
-use std::{ops::Range, rc::Rc, sync::Arc};
+use std::{ops::Range, sync::Arc};
 
 use cranpose_core::NodeId;
 pub use cranpose_render_common::graph_scene::{HitRegion, Scene};
@@ -115,7 +115,7 @@ impl DrawShape {
 pub(crate) struct TextDraw {
     pub rect: Rect,
     pub snap_anchor: Option<Point>,
-    pub text: Rc<cranpose_ui::text::AnnotatedString>,
+    pub text: Arc<cranpose_ui::text::RenderString>,
     // The lines and glyphs, from `rect`'s top left corner.
     pub layout: cranpose_text::TextLayout,
     // Whether the glyphs paint or only their shadows.
@@ -157,7 +157,7 @@ impl TextDraw {
     // The part of `rect`, where the text draws from its top left corner,
     // in which its glyphs and their shadows draw.
     pub(crate) fn glyph_reach(&self, rect: Rect) -> Rect {
-        let spread = InkSpread::of_text(&self.text_style, &self.text.span_styles, &self.layout);
+        let spread = InkSpread::of_text(&self.text_style, self.text.span_styles(), &self.layout);
         glyph_part(rect, &self.layout, self.scale, spread)
     }
 

@@ -1,4 +1,4 @@
-use std::{fmt, ops::Deref, rc::Rc};
+use std::{fmt, ops::Deref};
 
 use super::AnnotatedString;
 use crate::widgets::text::{IntoTextSource, TextSource};
@@ -10,7 +10,7 @@ pub struct SharedText(Storage);
 #[derive(Clone, Debug)]
 enum Storage {
     Static(&'static str),
-    Annotated(Rc<AnnotatedString>),
+    Annotated(AnnotatedString),
 }
 
 impl SharedText {
@@ -18,7 +18,7 @@ impl SharedText {
     pub fn as_str(&self) -> &str {
         match &self.0 {
             Storage::Static(text) => text,
-            Storage::Annotated(text) => &text.text,
+            Storage::Annotated(text) => text.text(),
         }
     }
 }
@@ -27,14 +27,15 @@ impl PartialEq for SharedText {
     fn eq(&self, other: &Self) -> bool {
         match (&self.0, &other.0) {
             (Storage::Static(a), Storage::Static(b)) => a == b,
-            (Storage::Annotated(a), Storage::Annotated(b)) => Rc::ptr_eq(a, b) || a == b,
+            (Storage::Annotated(a), Storage::Annotated(b)) => a == b,
             (Storage::Static(plain), Storage::Annotated(annotated))
             | (Storage::Annotated(annotated), Storage::Static(plain)) => {
-                *plain == annotated.text
-                    && annotated.span_styles.is_empty()
-                    && annotated.paragraph_styles.is_empty()
-                    && annotated.string_annotations.is_empty()
-                    && annotated.link_annotations.is_empty()
+                let content = annotated.render_string();
+                *plain == content.text()
+                    && content.span_styles().is_empty()
+                    && content.paragraph_styles().is_empty()
+                    && content.string_annotations().is_empty()
+                    && content.links().is_empty()
             }
         }
     }
@@ -42,7 +43,7 @@ impl PartialEq for SharedText {
 
 impl From<String> for SharedText {
     fn from(value: String) -> Self {
-        Self(Storage::Annotated(Rc::new(AnnotatedString::from(value))))
+        Self(Storage::Annotated(AnnotatedString::from(value)))
     }
 }
 
@@ -52,8 +53,8 @@ impl From<&'static str> for SharedText {
     }
 }
 
-impl From<Rc<AnnotatedString>> for SharedText {
-    fn from(value: Rc<AnnotatedString>) -> Self {
+impl From<AnnotatedString> for SharedText {
+    fn from(value: AnnotatedString) -> Self {
         Self(Storage::Annotated(value))
     }
 }
@@ -62,10 +63,7 @@ impl From<SharedText> for String {
     fn from(value: SharedText) -> Self {
         match value.0 {
             Storage::Static(text) => text.to_owned(),
-            Storage::Annotated(shared) => match Rc::try_unwrap(shared) {
-                Ok(annotated) => annotated.text,
-                Err(shared) => shared.text.clone(),
-            },
+            Storage::Annotated(annotated) => annotated.text().to_owned(),
         }
     }
 }

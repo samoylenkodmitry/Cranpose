@@ -26,8 +26,8 @@ fn words() -> AnnotatedString {
 
 // The link of the word at byte `offset`.
 fn link_at(text: &AnnotatedString, offset: usize) -> Option<String> {
-    text.link_annotations
-        .iter()
+    text.get_link_annotations(offset, offset + 1)
+        .into_iter()
         .find(|link| link.range.contains(&offset))
         .and_then(|link| match &link.item {
             LinkAnnotation::Url(url) => Some(url.clone()),
@@ -59,7 +59,7 @@ fn a_click_on_a_link_on_a_wrapped_line_opens_that_link() {
         );
     });
     let bounds = robot
-        .find_by_text(&text.text)
+        .find_by_text(text.text())
         .bounds()
         .expect("the paragraph shows");
     // The start of the last line.
@@ -67,7 +67,7 @@ fn a_click_on_a_link_on_a_wrapped_line_opens_that_link() {
     let style = TextStyle::default();
     let (wrapped, unwrapped) = robot.shell_mut().app_context().enter(|| {
         (
-            offset_for_position_wrapped(&text.text, &style, Some(bounds.width), x, y),
+            offset_for_position_wrapped(text.text(), &style, Some(bounds.width), x, y),
             get_offset_for_position(&text, &style, x, y),
         )
     });

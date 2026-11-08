@@ -1472,7 +1472,7 @@ impl Renderer for CountingRenderer {
     fn draw_dev_overlay(&mut self, overlay: &cranpose_ui::PreparedTextLayout, _viewport: Size) {
         self.overlay_texts
             .borrow_mut()
-            .push(overlay.text.text.clone());
+            .push(overlay.text.text().to_owned());
     }
 }
 
@@ -6016,7 +6016,7 @@ fn graph_scene_text_y(
                 }
                 cranpose_render_common::graph::RenderNode::Primitive(entry) => {
                     if let cranpose_render_common::graph::PrimitiveNode::Text(text) = &entry.node
-                        && text.text.text == needle
+                        && text.text.text() == needle
                     {
                         return Some(base + text.rect.y);
                     }
@@ -6100,7 +6100,7 @@ fn graph_scene_text_values(scene: &cranpose_render_common::graph_scene::Scene) -
                 }
                 cranpose_render_common::graph::RenderNode::Primitive(entry) => {
                     if let cranpose_render_common::graph::PrimitiveNode::Text(text) = &entry.node {
-                        out.push(text.text.text.clone());
+                        out.push(text.text.text().to_owned());
                     }
                 }
                 cranpose_render_common::graph::RenderNode::DrawRun(_) => {}

@@ -1,4 +1,4 @@
-use std::{rc::Rc, sync::Arc};
+use std::sync::Arc;
 
 use cranpose_core::NodeId;
 use cranpose_render_common::graph::{
@@ -98,7 +98,7 @@ impl Canvas {
                 node_id: id,
                 rect,
                 render_text: prepared.render_text(),
-                text: Rc::clone(&prepared.text),
+                text: prepared.text.clone(),
                 layout: prepared.layout.clone(),
                 text_style: Arc::clone(&prepared.visual_style),
                 font_size,

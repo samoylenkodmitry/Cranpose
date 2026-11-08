@@ -93,7 +93,7 @@ pub struct TextPrimitiveNode {
     pub rect: Rect,
     /// Shared so the renderer can hand the same allocation to every draw it
     /// emits for this node instead of deep-copying the string once per emit.
-    pub text: Rc<AnnotatedString>,
+    pub text: AnnotatedString,
     /// `text` as the renderer's draws carry it across threads, shared with
     /// the prepared layout it came from so no frame converts it again.
     pub render_text: std::sync::Arc<RenderString>,
@@ -842,7 +842,7 @@ fn collect_painted_text(nodes: &[RenderNode], out: &mut Vec<String>) {
         match child {
             RenderNode::Primitive(primitive) => {
                 if let PrimitiveNode::Text(text) = &primitive.node {
-                    out.push(text.text.text.clone());
+                    out.push(text.text.text().to_owned());
                 }
             }
             RenderNode::Layer(child) => collect_painted_text(&child.children, out),

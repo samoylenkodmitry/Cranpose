@@ -33,7 +33,7 @@ fn find_painted_in<'a>(nodes: &'a [RenderNode], needle: &str) -> Option<&'a Text
         match child {
             RenderNode::Primitive(primitive) => {
                 if let PrimitiveNode::Text(text) = &primitive.node {
-                    if squashed(&text.text.text).starts_with(&squashed(needle)) {
+                    if squashed(text.text.text()).starts_with(&squashed(needle)) {
                         return Some(text);
                     }
                 }

@@ -10,14 +10,14 @@ use crate::text::AnnotatedString;
 /// A field's text as shown. Layout, drawing and hit tests work in offsets
 /// of the shown text; editing works in offsets of the text.
 pub(crate) struct FieldPresentation {
-    pub(crate) shown: Rc<AnnotatedString>,
+    pub(crate) shown: AnnotatedString,
     /// `None` shows the text as it is.
     mapping: Option<OffsetMapping>,
 }
 
 impl FieldPresentation {
     pub(crate) fn text(&self) -> &str {
-        &self.shown.text
+        self.shown.text()
     }
 
     /// Where an offset of the text is shown.
@@ -25,7 +25,7 @@ impl FieldPresentation {
         self.mapping
             .as_ref()
             .map_or(offset, |mapping| mapping.to_shown(offset))
-            .min(self.shown.text.len())
+            .min(self.shown.text().len())
     }
 
     /// The offset of the text a shown offset stands for.
@@ -78,13 +78,13 @@ impl PresentationCache {
         let transformation = self.transformation.borrow();
         let presentation = Rc::new(state.with_text(|text| match transformation.as_ref() {
             None => FieldPresentation {
-                shown: Rc::new(AnnotatedString::from(text)),
+                shown: AnnotatedString::from(text),
                 mapping: None,
             },
             Some(transformation) => {
                 let shown = transformation.apply(text);
                 FieldPresentation {
-                    shown: Rc::new(AnnotatedString::from(shown.text)),
+                    shown: AnnotatedString::from(shown.text),
                     mapping: Some(shown.mapping),
                 }
             }

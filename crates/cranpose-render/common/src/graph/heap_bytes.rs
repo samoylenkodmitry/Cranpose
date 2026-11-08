@@ -97,24 +97,24 @@ fn shadow_primitive_heap_bytes(shadow: &ShadowPrimitive) -> usize {
 }
 
 fn annotated_string_heap_bytes(text: &AnnotatedString) -> usize {
-    text.text.capacity()
-        + text.span_styles.capacity() * size_of::<usize>() * 2
-        + text.paragraph_styles.capacity() * size_of::<usize>() * 2
-        + text.string_annotations.capacity() * size_of::<usize>() * 2
-        + text.link_annotations.capacity() * size_of::<usize>() * 2
-        + text
-            .string_annotations
+    let content = text.render_string();
+    let ranges = content.span_styles().len()
+        + content.paragraph_styles().len()
+        + content.string_annotations().len()
+        + content.links().len();
+    content.len()
+        + ranges * size_of::<usize>() * 2
+        + content
+            .string_annotations()
             .iter()
-            .map(|annotation| {
-                annotation.item.tag.capacity() + annotation.item.annotation.capacity()
-            })
+            .map(|annotation| annotation.item.tag.len() + annotation.item.annotation.len())
             .sum::<usize>()
-        + text
-            .link_annotations
+        + content
+            .links()
             .iter()
-            .map(|annotation| match &annotation.item {
-                cranpose_ui::text::LinkAnnotation::Url(url) => url.capacity(),
-                cranpose_ui::text::LinkAnnotation::Clickable { tag, .. } => tag.capacity(),
+            .map(|link| match &link.item {
+                cranpose_ui::text::LinkKey::Url(url) => url.len(),
+                cranpose_ui::text::LinkKey::Clickable(tag) => tag.len(),
             })
             .sum::<usize>()
 }

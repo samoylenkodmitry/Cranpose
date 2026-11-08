@@ -1,4 +1,4 @@
-use std::{ops::Range, rc::Rc, sync::Arc};
+use std::{ops::Range, sync::Arc};
 
 use cranpose_core::NodeId;
 use cranpose_render_common::{
@@ -257,7 +257,7 @@ fn push_text_style_draws(
     placement: TextPlacement<'_>,
 ) {
     let (rect, node_layer, text_clip) = (placement.bounds, placement.layer, placement.clip);
-    let (text, text_style, layout) = (&node.text, &node.text_style, &node.layout);
+    let (text, text_style, layout) = (&node.render_text, &node.text_style, &node.layout);
     let text_rect = placement.text_rect;
     let transformed_text_rect = apply_layer_to_rect(text_rect, rect, node_layer);
     // A line or a box of the text, in layout pixels, where the node draws it.
@@ -265,7 +265,7 @@ fn push_text_style_draws(
         apply_layer_to_rect(part.translate(text_rect.x, text_rect.y), rect, node_layer)
     };
 
-    visit_text_backgrounds(layout, text.as_ref().into(), text_style, |part, brush| {
+    visit_text_backgrounds(layout, (&**text).into(), text_style, |part, brush| {
         scene.push_shape(
             placed(part),
             apply_layer_to_brush(brush.clone(), node_layer),
@@ -305,7 +305,7 @@ fn push_text_style_draws(
         scene.push_text(TextDraw {
             rect: apply_layer_to_rect(shadow_rect, rect, node_layer),
             snap_anchor: None,
-            text: Rc::clone(text),
+            text: Arc::clone(text),
             layout: layout.clone(),
             color: Color::TRANSPARENT,
             text_style: Arc::new(shadow_text_style),
@@ -319,7 +319,7 @@ fn push_text_style_draws(
     scene.push_text(TextDraw {
         rect: transformed_text_rect,
         snap_anchor: None,
-        text: Rc::clone(text),
+        text: Arc::clone(text),
         layout: layout.clone(),
         color: transformed_text_color,
         text_style: transformed_text_style,
@@ -331,7 +331,7 @@ fn push_text_style_draws(
 
     visit_text_lines(
         layout,
-        text.as_ref().into(),
+        (&**text).into(),
         text_style,
         text_color,
         |part, brush| {

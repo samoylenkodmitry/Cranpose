@@ -1,4 +1,4 @@
-use std::{ops::Range, rc::Rc};
+use std::{ops::Range, rc::Rc, sync::Arc};
 
 use crate::{ParagraphStyle, SpanStyle};
 
@@ -96,29 +96,39 @@ pub enum LinkKey {
 /// link identity — never the link handlers, which live UI-side only.
 ///
 /// Unlike `AnnotatedString` this is plain owned data (`Send + Sync`), so a
-/// lowered scene that carries it can cross threads.
+/// lowered scene that carries it can cross threads. An `AnnotatedString`
+/// keeps its content in one of these, which the renderer shares.
 ///
 /// Built once and never changed, it hashes itself when built: renderers key
 /// caches by [`RenderString::render_hash`] every frame.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct RenderString {
     text: String,
-    span_styles: Vec<RangeStyle<SpanStyle>>,
-    paragraph_styles: Vec<RangeStyle<ParagraphStyle>>,
-    string_annotations: Vec<RangeStyle<StringAnnotation>>,
-    links: Vec<RangeStyle<LinkKey>>,
+    span_styles: Box<[RangeStyle<SpanStyle>]>,
+    // Paragraph styles, string annotations and links, which most text lacks.
+    extras: Option<Box<RenderExtras>>,
     hash: u64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+struct RenderExtras {
+    paragraph_styles: Box<[RangeStyle<ParagraphStyle>]>,
+    string_annotations: Box<[RangeStyle<StringAnnotation>]>,
+    links: Box<[RangeStyle<LinkKey>]>,
 }
 
 impl Default for RenderString {
     fn default() -> Self {
-        Self::from_parts(
-            String::new(),
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-        )
+        Self::plain(String::new())
+    }
+}
+
+impl PartialEq for RenderString {
+    fn eq(&self, other: &Self) -> bool {
+        self.hash == other.hash
+            && self.text == other.text
+            && self.span_styles == other.span_styles
+            && self.extras == other.extras
     }
 }
 
@@ -139,12 +149,30 @@ impl RenderString {
         links: Vec<RangeStyle<LinkKey>>,
     ) -> Self {
         let hash = render_hash_impl(&text, &span_styles, &paragraph_styles);
+        let extras =
+            (!paragraph_styles.is_empty() || !string_annotations.is_empty() || !links.is_empty())
+                .then(|| {
+                    Box::new(RenderExtras {
+                        paragraph_styles: paragraph_styles.into_boxed_slice(),
+                        string_annotations: string_annotations.into_boxed_slice(),
+                        links: links.into_boxed_slice(),
+                    })
+                });
         Self {
             text,
-            span_styles,
-            paragraph_styles,
-            string_annotations,
-            links,
+            span_styles: span_styles.into_boxed_slice(),
+            extras,
+            hash,
+        }
+    }
+
+    // `text` with no styles, annotations or links.
+    fn plain(text: String) -> Self {
+        let hash = render_hash_impl(&text, &[], &[]);
+        Self {
+            text,
+            span_styles: Box::default(),
+            extras: None,
             hash,
         }
     }
@@ -161,18 +189,22 @@ impl RenderString {
 
     /// Paragraph styles with the byte ranges they cover.
     pub fn paragraph_styles(&self) -> &[RangeStyle<ParagraphStyle>] {
-        &self.paragraph_styles
+        self.extras
+            .as_deref()
+            .map_or(&[], |extras| &extras.paragraph_styles)
     }
 
     /// Tag and value annotations with the byte ranges they cover.
     pub fn string_annotations(&self) -> &[RangeStyle<StringAnnotation>] {
-        &self.string_annotations
+        self.extras
+            .as_deref()
+            .map_or(&[], |extras| &extras.string_annotations)
     }
 
     /// Link ranges by identity (tag/url): enough to hash and to key caches,
     /// never enough to invoke a link.
     pub fn links(&self) -> &[RangeStyle<LinkKey>] {
-        &self.links
+        self.extras.as_deref().map_or(&[], |extras| &extras.links)
     }
 
     /// Length of the text in bytes.
@@ -186,22 +218,19 @@ impl RenderString {
     }
 
     /// Returns a sorted list of unique byte indices where styles change.
-    ///
-    /// Mirrors [`AnnotatedString::span_boundaries`].
     pub fn span_boundaries(&self) -> SpanBoundaries {
         span_boundaries_impl(&self.text, &self.span_styles)
     }
 
-    /// Mirrors [`AnnotatedString::render_hash`]: hashes the exact same fields
-    /// with the exact same formula, so a cache keyed by either stays keyed by
-    /// the same distinctions.
+    /// Hash of the text and of the span and paragraph styles, as renderers
+    /// use it to key caches.
     pub fn render_hash(&self) -> u64 {
         self.hash
     }
 
     /// Returns a new `RenderString` containing a substring of the original
     /// text and any styles that overlap with the new range, with indices
-    /// adjusted. Mirrors [`AnnotatedString::subsequence`].
+    /// adjusted.
     pub fn subsequence(&self, range: Range<usize>) -> Self {
         let start = range.start.min(self.text.len());
         let end = range.end.max(start).min(self.text.len());
@@ -212,11 +241,25 @@ impl RenderString {
         Self::from_parts(
             self.text[start..end].to_string(),
             clip_range_styles(&self.span_styles, start, end),
-            clip_range_styles(&self.paragraph_styles, start, end),
-            clip_range_styles(&self.string_annotations, start, end),
-            clip_range_styles(&self.links, start, end),
+            clip_range_styles(self.paragraph_styles(), start, end),
+            clip_range_styles(self.string_annotations(), start, end),
+            clip_range_styles(self.links(), start, end),
         )
     }
+}
+
+// Compose's `intersect`: whether two ranges share a character, or one is
+// empty and the other contains it.
+fn intersect(a: &Range<usize>, b: &Range<usize>) -> bool {
+    a.start.max(b.start) < a.end.min(b.end) || contains(a, b) || contains(b, a)
+}
+
+// Compose's `contains`: whether `base` holds `target`; equal ends count only
+// when both ranges are empty or both are not.
+fn contains(base: &Range<usize>, target: &Range<usize>) -> bool {
+    base.start <= target.start
+        && target.end <= base.end
+        && (base.end != target.end || (target.start == target.end) == (base.start == base.end))
 }
 
 fn clip_range_styles<T: Clone>(
@@ -278,23 +321,62 @@ fn render_hash_impl(
     hasher.finish()
 }
 
-/// The basic data structure of text with multiple styles.
+// What a clickable link calls when it is clicked.
+type LinkHandler = Rc<dyn Fn()>;
+
+// The content every empty string shares, so an empty string allocates
+// nothing.
+static EMPTY: std::sync::LazyLock<Arc<RenderString>> =
+    std::sync::LazyLock::new(|| Arc::new(RenderString::plain(String::new())));
+
+/// The basic data structure of text with multiple styles: Compose's
+/// `AnnotatedString`. Its content, the text, styles, annotations and link
+/// identities, is shared with every layout and draw made from it, so a clone
+/// copies no text. The handlers of its clickable links stay with it.
 ///
-/// To construct an `AnnotatedString` you can use `AnnotatedString::builder()`.
-#[derive(Debug, Clone, PartialEq, Default)]
+/// To construct an `AnnotatedString` with styles you can use
+/// `AnnotatedString::builder()`.
+#[derive(Clone)]
 pub struct AnnotatedString {
-    /// The characters.
-    pub text: String,
-    /// Character styles with the byte ranges they cover.
-    pub span_styles: Vec<RangeStyle<SpanStyle>>,
-    /// Paragraph styles with the byte ranges they cover.
-    pub paragraph_styles: Vec<RangeStyle<ParagraphStyle>>,
-    /// Arbitrary tag+value annotations. Used for e.g. clickable link URLs.
-    /// Mirrors JC `AnnotatedString.getStringAnnotations(tag, start, end)`.
-    pub string_annotations: Vec<RangeStyle<StringAnnotation>>,
-    /// Link annotations — URLs and clickable actions.
-    /// Mirrors JC `AnnotatedString.getLinkAnnotations(start, end)`.
-    pub link_annotations: Vec<RangeStyle<LinkAnnotation>>,
+    content: Arc<RenderString>,
+    // The handler of each clickable link of `content`, in the links' order;
+    // `None` when it has none.
+    handlers: Option<Rc<[LinkHandler]>>,
+}
+
+impl Default for AnnotatedString {
+    fn default() -> Self {
+        Self {
+            content: Arc::clone(&EMPTY),
+            handlers: None,
+        }
+    }
+}
+
+impl std::fmt::Debug for AnnotatedString {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AnnotatedString")
+            .field("content", &self.content)
+            .field(
+                "handlers",
+                &self.handlers.as_ref().map_or(0, |handlers| handlers.len()),
+            )
+            .finish()
+    }
+}
+
+impl PartialEq for AnnotatedString {
+    fn eq(&self, other: &Self) -> bool {
+        let same_handlers = match (&self.handlers, &other.handlers) {
+            (None, None) => true,
+            (Some(a), Some(b)) => {
+                a.len() == b.len() && a.iter().zip(b.iter()).all(|(a, b)| Rc::ptr_eq(a, b))
+            }
+            _ => false,
+        };
+        (Arc::ptr_eq(&self.content, &other.content) || *self.content == *other.content)
+            && same_handlers
+    }
 }
 
 /// A style applied to a range of an `AnnotatedString`.
@@ -309,12 +391,21 @@ pub struct RangeStyle<T> {
 impl AnnotatedString {
     /// Creates a string holding `text` with no styles and no annotations.
     pub fn new(text: String) -> Self {
+        if text.is_empty() {
+            return Self::default();
+        }
         Self {
-            text,
-            span_styles: vec![],
-            paragraph_styles: vec![],
-            string_annotations: vec![],
-            link_annotations: vec![],
+            content: Arc::new(RenderString::plain(text)),
+            handlers: None,
+        }
+    }
+
+    // The string of `content`'s links, with `handlers` for its clickable
+    // ones in their order.
+    fn of_parts(content: RenderString, handlers: Vec<LinkHandler>) -> Self {
+        Self {
+            content: Arc::new(content),
+            handlers: (!handlers.is_empty()).then(|| Rc::from(handlers)),
         }
     }
 
@@ -323,42 +414,55 @@ impl AnnotatedString {
         Builder::new()
     }
 
+    /// The characters.
+    pub fn text(&self) -> &str {
+        &self.content.text
+    }
+
+    /// Character styles with the byte ranges they cover.
+    pub fn span_styles(&self) -> &[RangeStyle<SpanStyle>] {
+        &self.content.span_styles
+    }
+
+    /// Paragraph styles with the byte ranges they cover.
+    pub fn paragraph_styles(&self) -> &[RangeStyle<ParagraphStyle>] {
+        self.content.paragraph_styles()
+    }
+
+    /// Tag and value annotations with the byte ranges they cover.
+    pub fn string_annotations(&self) -> &[RangeStyle<StringAnnotation>] {
+        self.content.string_annotations()
+    }
+
+    /// Whether a link annotation covers part of `[start, end)`.
+    ///
+    /// JC parity: `AnnotatedString.hasLinkAnnotations(start, end)`
+    pub fn has_link_annotations(&self, start: usize, end: usize) -> bool {
+        self.content
+            .links()
+            .iter()
+            .any(|link| intersect(&link.range, &(start..end)))
+    }
+
     /// Length of the text in bytes.
     pub fn len(&self) -> usize {
-        self.text.len()
+        self.content.text.len()
     }
 
     /// Returns true when the text is empty.
     pub fn is_empty(&self) -> bool {
-        self.text.is_empty()
+        self.content.text.is_empty()
     }
 
     /// Returns a sorted list of unique byte indices where styles change.
     pub fn span_boundaries(&self) -> SpanBoundaries {
-        span_boundaries_impl(&self.text, &self.span_styles)
+        self.content.span_boundaries()
     }
 
-    /// Returns the [`RenderString`] view of this string: everything rendering
-    /// reads (content, styles, link identity), nothing it must not touch
-    /// (link handlers). A clone-conversion — memoize at the call site when
-    /// the same `AnnotatedString` lowers every frame.
-    pub fn render_string(&self) -> RenderString {
-        RenderString::from_parts(
-            self.text.clone(),
-            self.span_styles.clone(),
-            self.paragraph_styles.clone(),
-            self.string_annotations.clone(),
-            self.link_annotations
-                .iter()
-                .map(|link| RangeStyle {
-                    item: match &link.item {
-                        LinkAnnotation::Url(url) => LinkKey::Url(url.clone()),
-                        LinkAnnotation::Clickable { tag, .. } => LinkKey::Clickable(tag.clone()),
-                    },
-                    range: link.range.clone(),
-                })
-                .collect(),
-        )
+    /// The content as rendering reads it (text, styles, link identity), never
+    /// the link handlers. Shared: every clone of this string holds the same.
+    pub fn render_string(&self) -> &Arc<RenderString> {
+        &self.content
     }
 
     /// Hash of the span styles' ranges and the attributes that change how
@@ -366,9 +470,10 @@ impl AnnotatedString {
     /// alike, whatever their spans' colors, backgrounds or decorations.
     pub fn span_measurement_hash(&self) -> u64 {
         use std::hash::Hasher;
+        let spans = self.span_styles();
         let mut hasher = cranpose_ui_graphics::FxHasher::default();
-        hasher.write_usize(self.span_styles.len());
-        for span in &self.span_styles {
+        hasher.write_usize(spans.len());
+        for span in spans {
             hasher.write_usize(span.range.start);
             hasher.write_usize(span.range.end);
             crate::style::hash_span_measurement(&span.item, &mut hasher);
@@ -378,78 +483,37 @@ impl AnnotatedString {
 
     /// Hash of the text and of the span and paragraph styles, as renderers use it to key caches.
     pub fn render_hash(&self) -> u64 {
-        render_hash_impl(&self.text, &self.span_styles, &self.paragraph_styles)
+        self.content.hash
+    }
+
+    /// This string with `map` applied to each of its span styles: the same
+    /// text, ranges, annotations and links.
+    pub fn map_span_styles(&self, mut map: impl FnMut(&mut SpanStyle)) -> Self {
+        let mut content = RenderString::clone(&self.content);
+        for span in &mut content.span_styles {
+            map(&mut span.item);
+        }
+        content.hash = render_hash_impl(
+            &content.text,
+            &content.span_styles,
+            content.paragraph_styles(),
+        );
+        Self {
+            content: Arc::new(content),
+            handlers: self.handlers.clone(),
+        }
     }
 
     /// Returns a new `AnnotatedString` containing a substring of the original text
     /// and any styles that overlap with the new range, with indices adjusted.
     pub fn subsequence(&self, range: Range<usize>) -> Self {
+        let range = clamp_subsequence_range(self.text(), range);
         if range.is_empty() {
-            return Self::new(String::new());
+            return Self::default();
         }
-
-        let start = range.start.min(self.text.len());
-        let end = range.end.max(start).min(self.text.len());
-
-        if start == end {
-            return Self::new(String::new());
-        }
-
-        let mut new_spans = Vec::new();
-        for span in &self.span_styles {
-            let intersection_start = span.range.start.max(start);
-            let intersection_end = span.range.end.min(end);
-            if intersection_start < intersection_end {
-                new_spans.push(RangeStyle {
-                    item: span.item.clone(),
-                    range: (intersection_start - start)..(intersection_end - start),
-                });
-            }
-        }
-
-        let mut new_paragraphs = Vec::new();
-        for span in &self.paragraph_styles {
-            let intersection_start = span.range.start.max(start);
-            let intersection_end = span.range.end.min(end);
-            if intersection_start < intersection_end {
-                new_paragraphs.push(RangeStyle {
-                    item: span.item.clone(),
-                    range: (intersection_start - start)..(intersection_end - start),
-                });
-            }
-        }
-
-        let mut new_string_annotations = Vec::new();
-        for ann in &self.string_annotations {
-            let intersection_start = ann.range.start.max(start);
-            let intersection_end = ann.range.end.min(end);
-            if intersection_start < intersection_end {
-                new_string_annotations.push(RangeStyle {
-                    item: ann.item.clone(),
-                    range: (intersection_start - start)..(intersection_end - start),
-                });
-            }
-        }
-
-        let mut new_link_annotations = Vec::new();
-        for ann in &self.link_annotations {
-            let intersection_start = ann.range.start.max(start);
-            let intersection_end = ann.range.end.min(end);
-            if intersection_start < intersection_end {
-                new_link_annotations.push(RangeStyle {
-                    item: ann.item.clone(),
-                    range: (intersection_start - start)..(intersection_end - start),
-                });
-            }
-        }
-
-        Self {
-            text: self.text[start..end].to_string(),
-            span_styles: new_spans,
-            paragraph_styles: new_paragraphs,
-            string_annotations: new_string_annotations,
-            link_annotations: new_link_annotations,
-        }
+        Builder::new()
+            .append_annotated_subsequence(self, range)
+            .to_annotated_string()
     }
 
     /// Returns all string annotations with the given `tag` whose range overlaps `[start, end)`.
@@ -461,9 +525,9 @@ impl AnnotatedString {
         start: usize,
         end: usize,
     ) -> Vec<&RangeStyle<StringAnnotation>> {
-        self.string_annotations
+        self.string_annotations()
             .iter()
-            .filter(|ann| ann.item.tag == tag && ann.range.start < end && ann.range.end > start)
+            .filter(|ann| ann.item.tag == tag && intersect(&ann.range, &(start..end)))
             .collect()
     }
 
@@ -474,11 +538,27 @@ impl AnnotatedString {
         &self,
         start: usize,
         end: usize,
-    ) -> Vec<&RangeStyle<LinkAnnotation>> {
-        self.link_annotations
-            .iter()
-            .filter(|ann| ann.range.start < end && ann.range.end > start)
+    ) -> Vec<RangeStyle<LinkAnnotation>> {
+        self.link_annotations()
+            .filter(|ann| intersect(&ann.range, &(start..end)))
             .collect()
+    }
+
+    // Every link annotation in order, each clickable one with its handler.
+    fn link_annotations(&self) -> impl Iterator<Item = RangeStyle<LinkAnnotation>> + '_ {
+        let mut handlers = self.handlers.iter().flat_map(|handlers| handlers.iter());
+        self.content.links().iter().map(move |link| RangeStyle {
+            item: match &link.item {
+                LinkKey::Url(url) => LinkAnnotation::Url(url.clone()),
+                LinkKey::Clickable(tag) => LinkAnnotation::Clickable {
+                    tag: tag.clone(),
+                    handler: Rc::clone(
+                        handlers.next().expect("a clickable link holds its handler"),
+                    ),
+                },
+            },
+            range: link.range.clone(),
+        })
     }
 }
 
@@ -544,20 +624,15 @@ fn clamp_subsequence_range(text: &str, range: Range<usize>) -> Range<usize> {
     start..end
 }
 
-/// The ranges a builder collected, in a vector that keeps no room past
-/// them: a string outlives its builder, and a span style is 296 bytes, so
-/// the room growth left for four took 1,184 bytes for a string of one or
-/// two spans.
+// The ranges a builder collected, each from its start to its end.
 fn finished_ranges<T>(ranges: Vec<MutableRange<T>>) -> Vec<RangeStyle<T>> {
-    let mut finished: Vec<RangeStyle<T>> = ranges
+    ranges
         .into_iter()
         .map(|range| RangeStyle {
             item: range.item,
             range: range.start..range.end,
         })
-        .collect();
-    finished.shrink_to_fit();
-    finished
+        .collect()
 }
 
 fn append_clipped_ranges<T: Clone>(
@@ -593,7 +668,7 @@ impl Builder {
 
     /// Appends the text of `annotated` together with its styles and annotations.
     pub fn append_annotated(self, annotated: &AnnotatedString) -> Self {
-        self.append_annotated_subsequence(annotated, 0..annotated.text.len())
+        self.append_annotated_subsequence(annotated, 0..annotated.len())
     }
 
     /// Appends the bytes of `annotated` in `range` with the styles and annotations that overlap
@@ -603,40 +678,45 @@ impl Builder {
         annotated: &AnnotatedString,
         range: Range<usize>,
     ) -> Self {
-        let range = clamp_subsequence_range(annotated.text.as_str(), range);
+        let range = clamp_subsequence_range(annotated.text(), range);
         if range.is_empty() {
             return self;
         }
 
-        debug_assert!(annotated.text.is_char_boundary(range.start));
-        debug_assert!(annotated.text.is_char_boundary(range.end));
+        debug_assert!(annotated.text().is_char_boundary(range.start));
+        debug_assert!(annotated.text().is_char_boundary(range.end));
 
         let target_offset = self.text.len();
-        self.text.push_str(&annotated.text[range.clone()]);
+        self.text.push_str(&annotated.text()[range.clone()]);
         append_clipped_ranges(
             &mut self.span_styles,
-            &annotated.span_styles,
+            annotated.span_styles(),
             range.clone(),
             target_offset,
         );
         append_clipped_ranges(
             &mut self.paragraph_styles,
-            &annotated.paragraph_styles,
+            annotated.paragraph_styles(),
             range.clone(),
             target_offset,
         );
         append_clipped_ranges(
             &mut self.string_annotations,
-            &annotated.string_annotations,
+            annotated.string_annotations(),
             range.clone(),
             target_offset,
         );
-        append_clipped_ranges(
-            &mut self.link_annotations,
-            &annotated.link_annotations,
-            range,
-            target_offset,
-        );
+        for link in annotated.link_annotations() {
+            let start = link.range.start.max(range.start);
+            let end = link.range.end.min(range.end);
+            if start < end {
+                self.link_annotations.push(MutableRange {
+                    item: link.item,
+                    start: start - range.start + target_offset,
+                    end: end - range.start + target_offset,
+                });
+            }
+        }
         self
     }
 
@@ -770,13 +850,42 @@ impl Builder {
             }
         }
 
-        AnnotatedString {
-            text: self.text,
-            span_styles: finished_ranges(self.span_styles),
-            paragraph_styles: finished_ranges(self.paragraph_styles),
-            string_annotations: finished_ranges(self.string_annotations),
-            link_annotations: finished_ranges(self.link_annotations),
-        }
+        let mut handlers = Vec::new();
+        let links = self
+            .link_annotations
+            .into_iter()
+            .map(|link| RangeStyle {
+                item: match link.item {
+                    LinkAnnotation::Url(url) => LinkKey::Url(url),
+                    LinkAnnotation::Clickable { tag, handler } => {
+                        handlers.push(handler);
+                        LinkKey::Clickable(tag)
+                    }
+                },
+                range: link.start..link.end,
+            })
+            .collect();
+        AnnotatedString::of_parts(
+            RenderString::from_parts(
+                self.text,
+                finished_ranges(self.span_styles),
+                finished_ranges(self.paragraph_styles),
+                finished_ranges(self.string_annotations),
+                links,
+            ),
+            handlers,
+        )
+    }
+
+    /// Applies `style` to the bytes of the text in `range`, as Compose's
+    /// `addStyle(style, start, end)`.
+    pub fn add_style(mut self, style: SpanStyle, range: Range<usize>) -> Self {
+        self.span_styles.push(MutableRange {
+            item: style,
+            start: range.start,
+            end: range.end,
+        });
+        self
     }
 }
 

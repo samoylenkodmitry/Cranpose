@@ -36,7 +36,7 @@ fn push_text_style_draws_for_test(
     let node = TextPrimitiveNode {
         node_id: NodeId(1),
         rect,
-        text: Rc::clone(&prepared.text),
+        text: prepared.text.clone(),
         render_text: prepared.render_text(),
         layout: prepared.layout.clone(),
         text_style: Arc::new(text_style.clone()),

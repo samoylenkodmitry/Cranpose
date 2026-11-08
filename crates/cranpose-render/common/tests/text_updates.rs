@@ -73,9 +73,9 @@ fn nodes_text_paints(nodes: &[RenderNode], out: &mut Vec<(String, TextPaint)>) {
                         text.paint().style_hash,
                         text.text_style.render_hash(),
                         "{} paints under its own style's hash",
-                        text.text.text
+                        text.text.text()
                     );
-                    out.push((text.text.text.clone(), *text.paint()));
+                    out.push((text.text.text().to_owned(), *text.paint()));
                 }
             }
             RenderNode::DrawRun(_) => {}

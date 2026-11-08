@@ -46,7 +46,7 @@ pub struct TextMetrics {
 #[derive(Clone, Debug)]
 pub struct PreparedTextLayout {
     /// The text that was laid out.
-    pub text: Rc<AnnotatedString>,
+    pub text: AnnotatedString,
     /// The style the text draws in, shared with every render node drawn
     /// from this layout.
     pub visual_style: Arc<TextStyle>,
@@ -56,10 +56,6 @@ pub struct PreparedTextLayout {
     // which its metrics follow from with its layout.
     max_width: f32,
     min_lines: u32,
-    /// `text` as a renderer draws it, and its
-    /// [`RenderString::render_hash`](crate::text::RenderString::render_hash),
-    /// converted on first use: see [`PreparedTextLayout::render_text`].
-    pub render_text: OnceCell<(Arc<RenderString>, PackedU64)>,
     pub(crate) visual_style_hash: OnceCell<PackedU64>,
     // The layout as a draw scope carries it, made on first use.
     layout_handle: OnceCell<TextLayoutHandle>,
@@ -69,7 +65,7 @@ impl PreparedTextLayout {
     // The prepared layout of `text` in `style` laid out as `layout`, `max_width`
     // the widest it could be.
     fn new(
-        text: Rc<AnnotatedString>,
+        text: AnnotatedString,
         style: Arc<TextStyle>,
         layout: TextLayout,
         (max_width, min_lines): (f32, usize),
@@ -80,7 +76,6 @@ impl PreparedTextLayout {
             text,
             visual_style: style,
             layout,
-            render_text: OnceCell::new(),
             visual_style_hash: OnceCell::new(),
             layout_handle: OnceCell::new(),
         }
@@ -176,10 +171,9 @@ impl PreparedTextLayout {
     ) -> Rc<Self> {
         let mut aligned = Self {
             min_lines: self.min_lines,
-            render_text: self.render_text.clone(),
             visual_style_hash: self.visual_style_hash.clone(),
             ..Self::new(
-                Rc::clone(&self.text),
+                self.text.clone(),
                 Arc::clone(&self.visual_style),
                 self.layout.clone(),
                 (self.max_width, 0),
@@ -218,33 +212,17 @@ impl PreparedTextLayout {
         held
     }
 
-    /// The display text as a renderer draws it. Converted once for the layout
-    /// and shared after, so every frame and scene rebuild drawing this layout
-    /// hands over the same allocation.
+    /// The display text as a renderer draws it: the text's own content, so
+    /// every frame and scene rebuild drawing this layout hands over the same
+    /// allocation.
     pub fn render_text(&self) -> Arc<RenderString> {
-        if let Some((converted, _)) = self.render_text.get() {
-            return Arc::clone(converted);
-        }
-        self.convert_render_text().0
+        Arc::clone(self.text.render_string())
     }
 
     /// [`RenderString::render_hash`](crate::text::RenderString::render_hash)
-    /// of [`PreparedTextLayout::render_text`], kept beside it so that reading
-    /// it never loads the string.
+    /// of [`PreparedTextLayout::render_text`].
     pub fn render_text_hash(&self) -> u64 {
-        if let Some((_, hash)) = self.render_text.get() {
-            return hash.get();
-        }
-        self.convert_render_text().1
-    }
-
-    fn convert_render_text(&self) -> (Arc<RenderString>, u64) {
-        let converted = Arc::new(self.text.render_string());
-        let hash = converted.render_hash();
-        let _ = self
-            .render_text
-            .set((Arc::clone(&converted), PackedU64::new(hash)));
-        (converted, hash)
+        self.text.render_hash()
     }
 
     /// [`TextStyle::render_hash`] of `visual_style`, hashed once for the
@@ -292,7 +270,7 @@ enum LayoutSource<'a> {
 
 // A text and style a node holds, and the style's render hash.
 pub(crate) struct SharedText<'a> {
-    pub(crate) text: &'a Rc<AnnotatedString>,
+    pub(crate) text: &'a AnnotatedString,
     pub(crate) style: &'a Arc<TextStyle>,
     pub(crate) style_hash: u64,
 }
@@ -312,12 +290,10 @@ impl LayoutSource<'_> {
         }
     }
 
-    fn shared(&self) -> (Rc<AnnotatedString>, Arc<TextStyle>) {
+    fn shared(&self) -> (AnnotatedString, Arc<TextStyle>) {
         match self {
-            Self::Borrowed { text, style } => {
-                (Rc::new((*text).clone()), Arc::new((*style).clone()))
-            }
-            Self::Shared { text, .. } => (Rc::clone(text.text), Arc::clone(text.style)),
+            Self::Borrowed { text, style } => ((*text).clone(), Arc::new((*style).clone())),
+            Self::Shared { text, .. } => (text.text.clone(), Arc::clone(text.style)),
         }
     }
 
@@ -457,7 +433,7 @@ impl TextService {
     // the glyphs of `shaped` when given.
     fn lay_out(
         &self,
-        text: Rc<AnnotatedString>,
+        text: AnnotatedString,
         style: Arc<TextStyle>,
         frame: TextFrame,
         (units, shaped): (TextUnits, Option<&TextLayout>),
@@ -477,7 +453,7 @@ impl TextService {
     #[inline(never)]
     fn lay_out_scaled_down(
         &self,
-        text: Rc<AnnotatedString>,
+        text: AnnotatedString,
         style: Arc<TextStyle>,
         frame: TextFrame,
         (units, shaped): (TextUnits, Option<&TextLayout>),
@@ -540,7 +516,7 @@ impl TextService {
         let fonts = self.fonts.borrow();
         let spans = paragraph.spans(&fonts);
         let input = LayoutInput {
-            text: &text.text,
+            text: text.text(),
             spans: &spans,
             paragraph: &style.paragraph_style,
             lengths: paragraph.lengths,
@@ -577,7 +553,7 @@ impl TextService {
         let fonts = self.fonts.borrow();
         let spans = paragraph.spans(&fonts);
         let input = LayoutInput {
-            text: &text.text,
+            text: text.text(),
             spans: &spans,
             paragraph: &style.paragraph_style,
             lengths: paragraph.lengths,
@@ -677,25 +653,23 @@ fn default_fonts() -> FontFamilyResolver {
 // shadows and strokes `factor` of what they say, as its glyphs are. A text
 // whose spans scale nothing keeps its own string.
 fn scaled_drawing(
-    text: &Rc<AnnotatedString>,
+    text: &AnnotatedString,
     style: &TextStyle,
     factor: f32,
-) -> (Rc<AnnotatedString>, Arc<TextStyle>) {
+) -> (AnnotatedString, Arc<TextStyle>) {
     let mut scaled_style = style.clone();
     scaled_style.span_style.font_size =
         TextUnit::Sp(style.resolve_font_size(DEFAULT_FONT_SIZE_SP) * factor);
     scale_span_drawing(&mut scaled_style.span_style, factor);
-    let text = if text.span_styles.is_empty() {
-        Rc::clone(text)
+    let text = if text.span_styles().is_empty() {
+        text.clone()
     } else {
-        let mut scaled = AnnotatedString::clone(text);
-        for span in &mut scaled.span_styles {
-            if let TextUnit::Sp(size) = span.item.font_size {
-                span.item.font_size = TextUnit::Sp(size * factor);
+        text.map_span_styles(|span| {
+            if let TextUnit::Sp(size) = span.font_size {
+                span.font_size = TextUnit::Sp(size * factor);
             }
-            scale_span_drawing(&mut span.item, factor);
-        }
-        Rc::new(scaled)
+            scale_span_drawing(span, factor);
+        })
     };
     (text, Arc::new(scaled_style))
 }
@@ -923,7 +897,7 @@ pub fn wrapped_line_ranges(
     (0..layout.line_count())
         .map(|line| {
             let (start, end) = (layout.line_start(line), layout.line_end(line));
-            let line_text = text.text.get(start..end).unwrap_or_default();
+            let line_text = text.text().get(start..end).unwrap_or_default();
             let without_break = line_text.trim_end_matches(['\n', '\r', '\u{2028}', '\u{2029}']);
             start..start + without_break.len()
         })

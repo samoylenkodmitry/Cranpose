@@ -400,26 +400,24 @@ fn CardHeader(post: Rc<Post>, avatar: Option<ImageBitmap>, s: f32) {
 }
 
 /// `by Ada Lovelace · #rust`: the author bold, the tag in its color.
-fn subtitle(post: &Post) -> Rc<AnnotatedString> {
+fn subtitle(post: &Post) -> AnnotatedString {
     let (tag, color) = &post.tags[0];
-    Rc::new(
-        AnnotatedString::builder()
-            .append("by ")
-            .push_style(SpanStyle {
-                font_weight: Some(FontWeight::BOLD),
-                ..Default::default()
-            })
-            .append(&post.author)
-            .pop()
-            .append(" · ")
-            .push_style(SpanStyle {
-                color: Some(GRADIENT_END[*color]),
-                ..Default::default()
-            })
-            .append(tag)
-            .pop()
-            .to_annotated_string(),
-    )
+    AnnotatedString::builder()
+        .append("by ")
+        .push_style(SpanStyle {
+            font_weight: Some(FontWeight::BOLD),
+            ..Default::default()
+        })
+        .append(&post.author)
+        .pop()
+        .append(" · ")
+        .push_style(SpanStyle {
+            color: Some(GRADIENT_END[*color]),
+            ..Default::default()
+        })
+        .append(tag)
+        .pop()
+        .to_annotated_string()
 }
 
 #[composable]

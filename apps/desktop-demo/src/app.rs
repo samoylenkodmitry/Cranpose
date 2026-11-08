@@ -1,7 +1,4 @@
-use std::{
-    cell::{Cell, RefCell},
-    rc::Rc,
-};
+use std::cell::{Cell, RefCell};
 
 use cranpose_animation::{
     animateFloatAsState, infiniteRepeatable, rememberInfiniteTransition, AnimationSpec,
@@ -222,36 +219,35 @@ fn fallback_demo_random_u32() -> u32 {
     })
 }
 
-fn cached_recursive_static_text(value: &'static str) -> Rc<cranpose_ui::text::AnnotatedString> {
+fn cached_recursive_static_text(value: &'static str) -> cranpose_ui::text::AnnotatedString {
     thread_local! {
-        static TEXTS: RefCell<cranpose_core::collections::map::HashMap<&'static str, Rc<cranpose_ui::text::AnnotatedString>>> =
+        static TEXTS: RefCell<cranpose_core::collections::map::HashMap<&'static str, cranpose_ui::text::AnnotatedString>> =
             RefCell::new(cranpose_core::collections::map::HashMap::default());
     }
 
     TEXTS.with(|texts| {
         let mut texts = texts.borrow_mut();
-        Rc::clone(
-            texts
-                .entry(value)
-                .or_insert_with(|| Rc::new(cranpose_ui::text::AnnotatedString::from(value))),
-        )
+        texts
+            .entry(value)
+            .or_insert_with(|| cranpose_ui::text::AnnotatedString::from(value))
+            .clone()
     })
 }
 
-fn cached_current_depth_text(depth: usize) -> Rc<cranpose_ui::text::AnnotatedString> {
+fn cached_current_depth_text(depth: usize) -> cranpose_ui::text::AnnotatedString {
     thread_local! {
-        static TEXTS: RefCell<Vec<Rc<cranpose_ui::text::AnnotatedString>>> = const { RefCell::new(Vec::new()) };
+        static TEXTS: RefCell<Vec<cranpose_ui::text::AnnotatedString>> = const { RefCell::new(Vec::new()) };
     }
 
     TEXTS.with(|texts| {
         let mut texts = texts.borrow_mut();
         while texts.len() <= depth {
             let next_depth = texts.len();
-            texts.push(Rc::new(cranpose_ui::text::AnnotatedString::from(format!(
+            texts.push(cranpose_ui::text::AnnotatedString::from(format!(
                 "Current depth: {next_depth}"
-            ))));
+            )));
         }
-        Rc::clone(&texts[depth])
+        texts[depth].clone()
     })
 }
 

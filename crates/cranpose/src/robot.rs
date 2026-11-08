@@ -1174,7 +1174,7 @@ impl Robot {
     ) -> Result<cranpose_ui::text::TextMetrics, String> {
         self.tx
             .send(RobotCommand::MeasureText {
-                text: text.text.clone(),
+                text: text.text().to_owned(),
                 style: Box::new(style.clone()),
             })
             .map_err(|e| format!("Failed to send measure_text command: {e}"))?;

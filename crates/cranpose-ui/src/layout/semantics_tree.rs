@@ -1,5 +1,3 @@
-use std::rc::Rc;
-
 use cranpose_core::NodeId;
 use cranpose_foundation::{SemanticsCustomAction, SemanticsWidgetRole};
 
@@ -36,12 +34,12 @@ pub enum SemanticsAction {
 /// A text node's text in the semantics tree, shared with the node's modifier
 /// slices rather than copied out of them.
 #[derive(Clone, Debug)]
-pub struct SemanticsText(pub(super) Rc<crate::text::AnnotatedString>);
+pub struct SemanticsText(pub(super) crate::text::AnnotatedString);
 
 impl SemanticsText {
     /// The text the node shows.
     pub fn as_str(&self) -> &str {
-        &self.0.text
+        self.0.text()
     }
 }
 
@@ -55,7 +53,7 @@ impl Eq for SemanticsText {}
 
 impl From<&str> for SemanticsText {
     fn from(text: &str) -> Self {
-        Self(Rc::new(crate::text::AnnotatedString::from(text)))
+        Self(crate::text::AnnotatedString::from(text))
     }
 }
 

@@ -73,7 +73,7 @@ fn text_node(
     TextPrimitiveNode {
         node_id,
         rect: Rect::EMPTY,
-        text: Rc::new(text.clone()),
+        text: text.clone(),
         render_text: prepared.render_text(),
         layout: prepared.layout.clone(),
         text_style: Arc::new(text_style.clone()),

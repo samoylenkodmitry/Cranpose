@@ -50,7 +50,7 @@ fn picture(graph: &RenderGraph) -> Vec<String> {
                     if let PrimitiveNode::Text(text) = &entry.node {
                         out.push(format!(
                             "text {} at {:?}",
-                            text.text.text,
+                            text.text.text(),
                             transform.bounds_for_rect(text.rect)
                         ));
                     }
@@ -80,7 +80,7 @@ fn text_has_layer(graph: &RenderGraph, text: &str) -> bool {
             RenderNode::Layer(layer) => search(&layer.children, text, layer.node_id.is_some()),
             RenderNode::Inline(inline) => search(&inline.content, text, false),
             RenderNode::Primitive(entry) => match &entry.node {
-                PrimitiveNode::Text(drawn) if drawn.text.text == text => Some(in_layer),
+                PrimitiveNode::Text(drawn) if drawn.text.text() == text => Some(in_layer),
                 _ => None,
             },
             RenderNode::DrawRun(_) => None,

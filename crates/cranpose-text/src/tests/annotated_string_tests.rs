@@ -22,12 +22,12 @@ fn test_builder_span() {
         .pop()
         .to_annotated_string();
 
-    assert_eq!(annotated.text, "Hello World!");
-    assert_eq!(annotated.span_styles.len(), 2);
-    assert_eq!(annotated.span_styles[0].range, 6..12);
-    assert_eq!(annotated.span_styles[0].item, span1);
-    assert_eq!(annotated.span_styles[1].range, 11..12);
-    assert_eq!(annotated.span_styles[1].item, span2);
+    assert_eq!(annotated.text(), "Hello World!");
+    assert_eq!(annotated.span_styles().len(), 2);
+    assert_eq!(annotated.span_styles()[0].range, 6..12);
+    assert_eq!(annotated.span_styles()[0].item, span1);
+    assert_eq!(annotated.span_styles()[1].range, 11..12);
+    assert_eq!(annotated.span_styles()[1].item, span2);
 }
 
 #[test]
@@ -41,9 +41,9 @@ fn with_link_url_roundtrips() {
         .append(".")
         .to_annotated_string();
 
-    assert_eq!(annotated.text, "Visit Android Developers.");
-    assert_eq!(annotated.link_annotations.len(), 1);
-    let ann = &annotated.link_annotations[0];
+    assert_eq!(annotated.text(), "Visit Android Developers.");
+    assert_eq!(annotated.get_link_annotations(0, annotated.len()).len(), 1);
+    let ann = &annotated.get_link_annotations(0, annotated.len())[0];
     assert_eq!(ann.range, 6..24);
     assert_eq!(ann.item, LinkAnnotation::Url(url.into()));
 }
@@ -64,8 +64,8 @@ fn with_link_clickable_calls_handler() {
         )
         .to_annotated_string();
 
-    assert_eq!(annotated.link_annotations.len(), 1);
-    let ann = &annotated.link_annotations[0];
+    assert_eq!(annotated.get_link_annotations(0, annotated.len()).len(), 1);
+    let ann = &annotated.get_link_annotations(0, annotated.len())[0];
     if let LinkAnnotation::Clickable { handler, .. } = &ann.item {
         handler();
     }
@@ -83,8 +83,8 @@ fn with_link_subsequence_trims_range() {
         .to_annotated_string();
 
     let sub = annotated.subsequence(4..8);
-    assert_eq!(sub.link_annotations.len(), 1);
-    assert_eq!(sub.link_annotations[0].range, 0..4);
+    assert_eq!(sub.get_link_annotations(0, sub.len()).len(), 1);
+    assert_eq!(sub.get_link_annotations(0, sub.len())[0].range, 0..4);
 }
 
 #[test]
@@ -107,11 +107,11 @@ fn append_annotated_preserves_ranges_with_existing_prefix() {
         .append_annotated(&annotated)
         .to_annotated_string();
 
-    assert_eq!(combined.text, "Prefix Hello World!");
-    assert_eq!(combined.span_styles.len(), 1);
-    assert_eq!(combined.span_styles[0].range, 13..18);
-    assert_eq!(combined.string_annotations.len(), 1);
-    assert_eq!(combined.string_annotations[0].range, 18..19);
+    assert_eq!(combined.text(), "Prefix Hello World!");
+    assert_eq!(combined.span_styles().len(), 1);
+    assert_eq!(combined.span_styles()[0].range, 13..18);
+    assert_eq!(combined.string_annotations().len(), 1);
+    assert_eq!(combined.string_annotations()[0].range, 18..19);
 }
 
 #[test]
@@ -134,11 +134,11 @@ fn append_annotated_subsequence_clips_ranges_to_slice() {
         .append_annotated_subsequence(&annotated, 7..18)
         .to_annotated_string();
 
-    assert_eq!(slice.text, "-> Styled Link");
-    assert_eq!(slice.span_styles.len(), 1);
-    assert_eq!(slice.span_styles[0].range, 3..9);
-    assert_eq!(slice.link_annotations.len(), 1);
-    assert_eq!(slice.link_annotations[0].range, 9..14);
+    assert_eq!(slice.text(), "-> Styled Link");
+    assert_eq!(slice.span_styles().len(), 1);
+    assert_eq!(slice.span_styles()[0].range, 3..9);
+    assert_eq!(slice.get_link_annotations(0, slice.len()).len(), 1);
+    assert_eq!(slice.get_link_annotations(0, slice.len())[0].range, 9..14);
 }
 
 #[test]
@@ -172,7 +172,7 @@ fn a_render_string_keeps_the_hash_its_content_has() {
     let render = annotated.render_string();
     assert_eq!(render.render_hash(), annotated.render_hash());
     assert_eq!(render.text(), "plain red");
-    assert_eq!(render.span_styles(), annotated.span_styles.as_slice());
+    assert_eq!(render.span_styles(), annotated.span_styles());
     let tail = render.subsequence(6..9);
     assert_eq!(tail.text(), "red");
     assert_eq!(
@@ -193,11 +193,13 @@ fn span_boundaries_are_sorted_unique_character_offsets_held_inline_for_few_spans
         item: SpanStyle::default(),
         range,
     };
-    let text = AnnotatedString {
-        text: "héllo world".to_string(),
-        span_styles: vec![span(6..12), span(2..40), span(2..3)],
-        ..Default::default()
-    };
+    let text = [span(6..12), span(2..40), span(2..3)]
+        .into_iter()
+        .fold(
+            AnnotatedString::builder().append("héllo world"),
+            |builder, span| builder.add_style(span.item, span.range),
+        )
+        .to_annotated_string();
 
     let boundaries = text.span_boundaries();
 

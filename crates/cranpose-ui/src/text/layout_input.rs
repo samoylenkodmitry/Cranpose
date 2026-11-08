@@ -190,9 +190,9 @@ fn stretches<'a>(
     base: ShapingStyle<'a>,
     units: TextUnits,
 ) -> SmallVec<[Stretch<'a>; 1]> {
-    if text.span_styles.is_empty() {
+    if text.span_styles().is_empty() {
         return SmallVec::from_buf([Stretch {
-            text: 0..text.text.len(),
+            text: 0..text.text().len(),
             style: base,
         }]);
     }
@@ -212,7 +212,7 @@ fn spanned_stretches<'a>(
     for edges in text.span_boundaries().windows(2) {
         let range = edges[0]..edges[1];
         let style = text
-            .span_styles
+            .span_styles()
             .iter()
             .filter(|span| span.range.start <= range.start && range.end <= span.range.end)
             .fold(base, |style, span| style.over(&span.item, units));

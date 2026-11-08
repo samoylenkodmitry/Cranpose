@@ -43,7 +43,7 @@ fn nodes_geometry(nodes: &[RenderNode], out: &mut Vec<String>) {
             }
             RenderNode::Primitive(entry) => {
                 if let PrimitiveNode::Text(text) = &entry.node {
-                    out.push(format!("text {:?} at {:?}", text.text.text, text.rect));
+                    out.push(format!("text {:?} at {:?}", text.text.text(), text.rect));
                 }
             }
             RenderNode::DrawRun(_) => {}

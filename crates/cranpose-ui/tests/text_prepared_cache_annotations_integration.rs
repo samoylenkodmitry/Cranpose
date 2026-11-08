@@ -40,7 +40,7 @@ fn prepared_cache_keeps_string_annotation_values_for_equal_text_and_style() {
         let prepared = prepare(&second);
 
         assert_eq!(
-            prepared.text.string_annotations[0].item.annotation,
+            prepared.text.string_annotations()[0].item.annotation,
             "second payload"
         );
     });
@@ -62,7 +62,7 @@ fn prepared_cache_keeps_url_identity_for_equal_text_and_style() {
         let prepared = prepare(&second);
 
         assert!(matches!(
-            &prepared.text.link_annotations[0].item,
+            &prepared.text.get_link_annotations(0, prepared.text.len())[0].item,
             LinkAnnotation::Url(url) if url == "https://example.invalid/second"
         ));
     });
@@ -97,7 +97,10 @@ fn prepared_cache_keeps_click_handler_for_equal_link_tag() {
 
         let _ = prepare(&first);
         let prepared = prepare(&second);
-        if let Some(link) = prepared.text.link_annotations.first()
+        if let Some(link) = prepared
+            .text
+            .get_link_annotations(0, prepared.text.len())
+            .first()
             && let LinkAnnotation::Clickable { handler, .. } = &link.item
         {
             handler();

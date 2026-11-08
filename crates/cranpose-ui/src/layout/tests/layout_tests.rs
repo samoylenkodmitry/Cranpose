@@ -3459,7 +3459,7 @@ fn semantics_text_is_shared_with_the_text_nodes_slices() -> Result<(), NodeError
         let value = text_role(tree.root()).expect("a text role");
         assert_eq!(value.as_str(), "shared", "{path}");
         assert!(
-            Rc::ptr_eq(&value.0, &slices_text),
+            std::sync::Arc::ptr_eq(value.0.render_string(), slices_text.render_string()),
             "the {path} semantics share the slices' text instead of copying it"
         );
     }

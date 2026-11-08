@@ -18,7 +18,7 @@ fn in_app<R: Send + 'static>(test: impl FnOnce() -> R + Send + 'static) -> R {
 
 fn text_node(text: &str, style: TextStyle, options: TextLayoutOptions) -> TextModifierNode {
     TextModifierNode::new(
-        Rc::new(AnnotatedString::from(text)),
+        AnnotatedString::from(text),
         style,
         options,
         Density::new(1.0, 1.0),
@@ -39,7 +39,7 @@ fn sized(font_size: f32) -> TextStyle {
 type Lines = Vec<(String, f32, f32)>;
 
 fn lines(layout: &crate::text::PreparedTextLayout) -> Lines {
-    let text = &layout.text.text;
+    let text = &layout.text.text();
     (0..layout.layout.line_count())
         .map(|line| {
             (
@@ -64,13 +64,9 @@ fn hash_matches_for_equal_elements() {
         ..Default::default()
     };
     let options = TextLayoutOptions::default();
-    let text = Rc::new(AnnotatedString::from("Hash me"));
-    let element_a = TextModifierElement::new(
-        Rc::clone(&text),
-        style.clone(),
-        options,
-        Density::new(1.0, 1.0),
-    );
+    let text = AnnotatedString::from("Hash me");
+    let element_a =
+        TextModifierElement::new(text.clone(), style.clone(), options, Density::new(1.0, 1.0));
     let element_b = TextModifierElement::new(text, style, options, Density::new(1.0, 1.0));
 
     assert_eq!(element_a, element_b);
@@ -172,7 +168,7 @@ fn a_new_system_font_scale_lays_the_text_out_again() {
 #[test]
 fn semantics_uses_source_text_for_scaled_overflow() {
     let node = TextModifierNode::new(
-        Rc::new(AnnotatedString::from("Save Cranpose WebP")),
+        AnnotatedString::from("Save Cranpose WebP"),
         TextStyle::default(),
         TextLayoutOptions {
             overflow: crate::text::TextOverflow::ScaleDown {
@@ -253,7 +249,7 @@ fn a_node_measured_at_one_width_after_another_lays_out_as_a_fresh_node() {
 fn a_text_node_never_makes_its_subtree_modal_or_hidden() {
     use cranpose_foundation::SemanticsNode as _;
     let node = TextModifierNode::new(
-        Rc::new(AnnotatedString::from("Label")),
+        AnnotatedString::from("Label"),
         TextStyle::default(),
         TextLayoutOptions::default(),
         Density::new(1.0, 1.0),
@@ -264,9 +260,9 @@ fn a_text_node_never_makes_its_subtree_modal_or_hidden() {
 #[test]
 fn a_text_laid_out_as_written_shares_its_string_and_style_with_its_layout() {
     let (whole_shares, wrapped_shares, wrapped_lines, style_shared) = in_app(|| {
-        let source = Rc::new(AnnotatedString::from("cell 123"));
+        let source = AnnotatedString::from("cell 123");
         let node = TextModifierNode::new(
-            Rc::clone(&source),
+            source.clone(),
             TextStyle::default(),
             TextLayoutOptions::default(),
             Density::new(1.0, 1.0),
@@ -279,8 +275,8 @@ fn a_text_laid_out_as_written_shares_its_string_and_style_with_its_layout() {
         let whole = layout_at(200.0);
         let wrapped = layout_at(50.0);
         (
-            Rc::ptr_eq(&whole.text, &source),
-            Rc::ptr_eq(&wrapped.text, &source),
+            Arc::ptr_eq(whole.text.render_string(), source.render_string()),
+            Arc::ptr_eq(wrapped.text.render_string(), source.render_string()),
             wrapped.layout.line_count(),
             Arc::ptr_eq(&whole.visual_style, &wrapped.visual_style),
         )
@@ -294,10 +290,10 @@ fn a_text_laid_out_as_written_shares_its_string_and_style_with_its_layout() {
 #[test]
 fn an_update_to_an_equal_style_keeps_the_layout_and_a_new_style_lays_out_again() {
     let (equal, kept, differs, font_size) = in_app(|| {
-        let text = Rc::new(AnnotatedString::from("cell 123"));
+        let text = AnnotatedString::from("cell 123");
         let element = |style: TextStyle| {
             TextModifierElement::new(
-                Rc::clone(&text),
+                text.clone(),
                 style,
                 TextLayoutOptions::default(),
                 Density::new(1.0, 1.0),
@@ -340,7 +336,7 @@ fn a_text_changed_in_place_gives_no_hold_until_it_measures_unchanged() {
     let holds = in_app(|| {
         let element = |text: &str| {
             TextModifierElement::new(
-                Rc::new(AnnotatedString::from(text)),
+                AnnotatedString::from(text),
                 TextStyle::default(),
                 TextLayoutOptions::default(),
                 Density::new(1.0, 1.0),

@@ -34,17 +34,14 @@ fn hidden_text(clip: Option<Rect>) -> RenderNode {
 }
 
 fn hidden_text_at(rect: Rect, clip: Option<Rect>) -> RenderNode {
-    let annotated = AnnotatedString {
-        text: "M".to_owned(),
-        ..AnnotatedString::default()
-    };
+    let annotated = AnnotatedString::from("M");
     RenderNode::Primitive(PrimitiveEntry {
         phase: PrimitivePhase::BeforeChildren,
         node: PrimitiveNode::Text(Box::new(support::with_layout(TextPrimitiveNode {
             node_id: NodeId(51_001),
             rect,
-            render_text: std::sync::Arc::new(annotated.render_string()),
-            text: Rc::new(annotated),
+            render_text: std::sync::Arc::clone(annotated.render_string()),
+            text: annotated,
             text_style: std::sync::Arc::new(TextStyle::from_span_style(SpanStyle {
                 color: Some(Color::BLACK),
                 font_size: TextUnit::Sp(18.0),

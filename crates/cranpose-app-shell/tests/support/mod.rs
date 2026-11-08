@@ -69,7 +69,7 @@ fn nodes_signature(nodes: &[RenderNode], out: &mut Vec<String>) {
             RenderNode::Primitive(primitive) => match &primitive.node {
                 PrimitiveNode::Draw(draw) => out.push(format!("draw {:?}", draw.primitive)),
                 PrimitiveNode::Text(text) => {
-                    out.push(format!("text {} {:?}", text.text.text, text.rect));
+                    out.push(format!("text {} {:?}", text.text.text(), text.rect));
                 }
             },
             RenderNode::DrawRun(run) => {

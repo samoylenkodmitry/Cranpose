@@ -72,13 +72,13 @@ fn an_annotated_string_carries_the_annotations_pushed_into_it() {
         .pop()
         .to_annotated_string();
 
-    let found = annotated.get_string_annotations("tag", 0, annotated.text.len());
+    let found = annotated.get_string_annotations("tag", 0, annotated.text().len());
     assert_eq!(found.len(), 1, "the string annotation was not recorded");
     assert_eq!(found[0].item.annotation, "payload");
 
     assert!(
         annotated
-            .get_string_annotations("other", 0, annotated.text.len())
+            .get_string_annotations("other", 0, annotated.text().len())
             .is_empty()
     );
 }
@@ -91,10 +91,10 @@ fn an_annotated_string_carries_the_links_pushed_into_it() {
         .pop()
         .to_annotated_string();
 
-    let links = annotated.get_link_annotations(0, annotated.text.len());
+    let links = annotated.get_link_annotations(0, annotated.text().len());
     assert_eq!(links.len(), 1, "the link was not recorded");
     assert_eq!(links[0].range.start, 0);
-    assert_eq!(links[0].range.end, annotated.text.len());
+    assert_eq!(links[0].range.end, annotated.text().len());
 }
 
 #[test]
@@ -106,13 +106,13 @@ fn an_annotated_string_carries_paragraph_styles_over_the_range_they_cover() {
         .to_annotated_string();
 
     assert_eq!(
-        annotated.paragraph_styles.len(),
+        annotated.paragraph_styles().len(),
         1,
         "the paragraph style was not recorded"
     );
-    assert_eq!(annotated.paragraph_styles[0].range.start, 0);
+    assert_eq!(annotated.paragraph_styles()[0].range.start, 0);
     assert_eq!(
-        annotated.paragraph_styles[0].range.end,
-        annotated.text.len()
+        annotated.paragraph_styles()[0].range.end,
+        annotated.text().len()
     );
 }

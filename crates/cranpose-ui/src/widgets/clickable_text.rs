@@ -16,23 +16,6 @@ use crate::{
     widgets::BasicTextWithOptions,
 };
 
-#[doc(hidden)]
-pub trait IntoSharedAnnotatedString {
-    fn into_shared(self) -> Rc<AnnotatedString>;
-}
-
-impl IntoSharedAnnotatedString for AnnotatedString {
-    fn into_shared(self) -> Rc<AnnotatedString> {
-        Rc::new(self)
-    }
-}
-
-impl IntoSharedAnnotatedString for Rc<AnnotatedString> {
-    fn into_shared(self) -> Rc<AnnotatedString> {
-        self
-    }
-}
-
 /// Displays annotated text and calls `on_click` with the byte offset under the pointer.
 /// Use [`LinkedText`](crate::LinkedText) for URL and custom-action annotations.
 ///
@@ -51,17 +34,14 @@ impl IntoSharedAnnotatedString for Rc<AnnotatedString> {
 ///     );
 /// }
 /// ```
-pub fn ClickableText<T>(
-    text: T,
+pub fn ClickableText(
+    text: impl Into<AnnotatedString>,
     modifier: Modifier,
     style: TextStyle,
     on_click: impl Fn(usize) + 'static,
-) -> NodeId
-where
-    T: IntoSharedAnnotatedString,
-{
-    let text = text.into_shared();
-    let text_for_click = Rc::clone(&text);
+) -> NodeId {
+    let text = text.into();
+    let text_for_click = text.clone();
     let style_for_click = style.clone();
     let options = TextLayoutOptions {
         overflow: TextOverflow::Clip,

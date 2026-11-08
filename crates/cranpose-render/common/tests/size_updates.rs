@@ -153,7 +153,7 @@ fn nodes_texts(nodes: &[RenderNode], transform: ProjectiveTransform, out: &mut V
             RenderNode::Primitive(entry) => {
                 if let PrimitiveNode::Text(text) = &entry.node {
                     out.push((
-                        text.text.text.clone(),
+                        text.text.text().to_owned(),
                         transform.bounds_for_rect(text.rect),
                         text.clip.map(|clip| transform.bounds_for_rect(clip)),
                         text.layout.width(),

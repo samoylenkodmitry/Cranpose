@@ -525,7 +525,7 @@ fn text_lowers_into_the_layer_translated_block_the_scope_measured() {
             height: 18.0,
         }
     );
-    assert_eq!(params[0].text.text, "SCORE");
+    assert_eq!(params[0].text.text(), "SCORE");
     assert_eq!(params[0].font_size, 12.0);
     assert_eq!(params[0].scale, 1.0);
     assert_eq!(params[0].color, Color::WHITE);

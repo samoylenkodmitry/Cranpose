@@ -9,7 +9,7 @@ use cranpose_ui::Modifier;
 fn find_text<'a>(nodes: &'a [RenderNode], label: &str) -> Option<&'a TextPrimitiveNode> {
     nodes.iter().find_map(|node| match node {
         RenderNode::Primitive(entry) => match &entry.node {
-            PrimitiveNode::Text(text) if text.text.text == label => Some(text.as_ref()),
+            PrimitiveNode::Text(text) if text.text.text() == label => Some(text.as_ref()),
             _ => None,
         },
         RenderNode::Layer(layer) => find_text(&layer.children, label),

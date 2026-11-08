@@ -178,7 +178,7 @@ pub(crate) fn push_draw_primitive(
             self.scene.push_text(TextDraw {
                 rect: params.rect,
                 snap_anchor: None,
-                text: params.text,
+                text: std::sync::Arc::clone(params.text.render_string()),
                 layout: params.layout,
                 ink: GlyphInk::Painted,
                 color: params.color,

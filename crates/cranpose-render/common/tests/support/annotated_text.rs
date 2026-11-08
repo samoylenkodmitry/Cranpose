@@ -1,4 +1,4 @@
-use std::{rc::Rc, sync::Arc};
+use std::sync::Arc;
 
 use cranpose_core::NodeId;
 use cranpose_render_common::{
@@ -8,7 +8,7 @@ use cranpose_render_common::{
     },
     text_fonts::TextFonts,
 };
-use cranpose_ui::text::{AnnotatedString, RangeStyle, SpanStyle, TextStyle, TextUnit};
+use cranpose_ui::text::{AnnotatedString, SpanStyle, TextStyle, TextUnit};
 use cranpose_ui_graphics::{Color, Rect};
 
 pub(crate) fn mixed_size_pairs() -> AnnotatedString {
@@ -19,14 +19,17 @@ pub(crate) fn mixed_size_pairs() -> AnnotatedString {
         (3..4, 10.0, Color::RED),
         (4..5, 30.0, Color::GREEN),
     ] {
-        text.span_styles.push(RangeStyle {
-            range,
-            item: SpanStyle {
-                font_size: TextUnit::Sp(size),
-                color: Some(color),
-                ..Default::default()
-            },
-        });
+        text = AnnotatedString::builder()
+            .append_annotated(&text)
+            .add_style(
+                SpanStyle {
+                    font_size: TextUnit::Sp(size),
+                    color: Some(color),
+                    ..Default::default()
+                },
+                range,
+            )
+            .to_annotated_string();
     }
     text
 }
@@ -57,7 +60,7 @@ pub(crate) fn text_graph(
                 rect: text_rect,
                 render_text: prepared.render_text(),
                 layout: prepared.layout.clone(),
-                text: Rc::new(text),
+                text,
                 font_size: style.resolve_font_size(10.0),
                 text_style: Arc::new(style),
                 overflow: cranpose_ui::TextLayoutOptions::default().overflow,

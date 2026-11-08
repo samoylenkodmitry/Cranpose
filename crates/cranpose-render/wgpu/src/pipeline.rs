@@ -406,42 +406,36 @@ fn gpu_text_effect_for_style(
 fn text_for_gpu_mask(
     text: &cranpose_ui::text::AnnotatedString,
 ) -> cranpose_ui::text::AnnotatedString {
-    if text.span_styles.is_empty() {
+    if text.span_styles().is_empty() {
         return text.clone();
     }
 
-    let mut mask_text = text.clone();
-    for span in &mut mask_text.span_styles {
-        span.item.color = None;
-        span.item.brush = None;
-        span.item.alpha = None;
-        span.item.draw_style = None;
-        span.item.shadow = None;
-    }
-    mask_text
+    text.map_span_styles(|span| {
+        span.color = None;
+        span.brush = None;
+        span.alpha = None;
+        span.draw_style = None;
+        span.shadow = None;
+    })
 }
 
 fn text_with_layer_transformed_span_paint(
     text: &cranpose_ui::text::AnnotatedString,
     content_layer: &GraphicsLayer,
 ) -> cranpose_ui::text::AnnotatedString {
-    if text.span_styles.is_empty() {
+    if text.span_styles().is_empty() {
         return text.clone();
     }
 
-    let mut transformed_text = text.clone();
-    for span in &mut transformed_text.span_styles {
-        span.item.color = span
-            .item
+    text.map_span_styles(|span| {
+        span.color = span
             .color
             .map(|color| apply_layer_to_color(color, content_layer));
-        span.item.brush = span
-            .item
+        span.brush = span
             .brush
-            .clone()
+            .take()
             .map(|brush| apply_layer_to_brush(brush, content_layer));
-    }
-    transformed_text
+    })
 }
 
 fn merged_span_style_for_range(
@@ -451,7 +445,7 @@ fn merged_span_style_for_range(
     end: usize,
 ) -> cranpose_ui::text::SpanStyle {
     let mut merged_style = base_span_style.clone();
-    for span in &text.span_styles {
+    for span in text.span_styles() {
         if span.range.start <= start && span.range.end >= end {
             merged_style = merged_style.merge(&span.item);
         }
@@ -472,7 +466,7 @@ fn gpu_text_material_batches_for_text(
         if start == end {
             continue;
         }
-        let Some(range_text) = text.text.get(start..end) else {
+        let Some(range_text) = text.text().get(start..end) else {
             continue;
         };
         if !range_text.chars().any(|ch| ch != '\n' && ch != '\r') {
@@ -510,21 +504,19 @@ fn text_for_gpu_mask_batch(
     text: &cranpose_ui::text::AnnotatedString,
     visible_ranges: &[Range<usize>],
 ) -> cranpose_ui::text::AnnotatedString {
-    let mut mask_text = text_for_gpu_mask(text);
     let visible_style = cranpose_ui::text::SpanStyle {
         color: Some(Color::WHITE),
         ..Default::default()
     };
-    for range in visible_ranges {
-        if range.start >= range.end {
-            continue;
-        }
-        mask_text.span_styles.push(cranpose_ui::text::RangeStyle {
-            item: visible_style.clone(),
-            range: range.clone(),
-        });
-    }
-    mask_text
+    visible_ranges
+        .iter()
+        .filter(|range| range.start < range.end)
+        .fold(
+            cranpose_ui::text::AnnotatedString::builder()
+                .append_annotated(&text_for_gpu_mask(text)),
+            |builder, range| builder.add_style(visible_style.clone(), range.clone()),
+        )
+        .to_annotated_string()
 }
 
 trait TextStyleDrawSink {
@@ -636,7 +628,7 @@ fn push_span_gpu_text_material_draws<S: TextStyleDrawSink>(
     transformed_text_style: &TextStyle,
     fallback_color: Color,
 ) -> bool {
-    let text = &*node.text;
+    let text = &node.text;
     let text_scale = layer_uniform_scale(placement.layer);
     let transformed_span_text = text_with_layer_transformed_span_paint(text, placement.layer);
     let material_batches = gpu_text_material_batches_for_text(
@@ -741,7 +733,7 @@ fn emit_text_style_draws<S: TextStyleDrawSink>(
         shadow_text_style.span_style.color = Some(shadow_color);
         let blur_radius = shadow.blur_radius.max(0.0) * text_scale;
         let shadow_style_hash = shadow_text_style.render_hash();
-        let shadow_text = Arc::new(text_for_gpu_mask(text).render_string());
+        let shadow_text = Arc::clone(text_for_gpu_mask(text).render_string());
         sink.push_shadow_text(
             TextDraw {
                 node_id,
@@ -1046,7 +1038,7 @@ pub(crate) fn push_draw_primitive(
         }
 
         fn push_text(&mut self, params: TextDrawParams) {
-            let render_text = shared_plain_render_string(&params.text.text);
+            let render_text = shared_plain_render_string(params.text.text());
             self.scene.push_text(TextDraw {
                 node_id: DRAW_PRIMITIVE_TEXT_NODE_ID,
                 rect: params.rect,
