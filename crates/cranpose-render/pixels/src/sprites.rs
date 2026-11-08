@@ -594,10 +594,15 @@ impl Canonical {
 fn rasterize_text(draw: &TextDraw, text: &TextRaster) -> Option<(Rect, Vec<u8>)> {
     let (text, rect) = crate::draw::rasterize_text(draw, text)?;
     let mut pixels = text.pixels;
+    // `(c * a + 127) / 255` for each channel, in 16-bit lanes with no
+    // division and no branch, so that a vector unit takes several pixels at
+    // once: for every `x` up to 65,152, `x / 255` is
+    // `(x + 1 + (x >> 8)) >> 8`.
     for pixel in pixels.as_chunks_mut::<4>().0 {
-        let alpha = u32::from(pixel[3]);
+        let alpha = u16::from(pixel[3]);
         for channel in &mut pixel[..3] {
-            *channel = ((u32::from(*channel) * alpha + 127) / 255) as u8;
+            let x = u16::from(*channel) * alpha + 127;
+            *channel = ((x + 1 + (x >> 8)) >> 8) as u8;
         }
     }
     Some((rect, pixels))
