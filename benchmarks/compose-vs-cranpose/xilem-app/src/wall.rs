@@ -70,9 +70,10 @@ pub(crate) fn wall_logic(wall: &mut Wall) -> impl WidgetView<Wall> + use<> {
         .height(px(WALL_CLOCK_HEIGHT))
         .padding(Padding::horizontal(8.0)),
         zstack((
-            memoize((columns, rows), move |&(columns, rows)| {
-                tiles(columns, rows, tile_width, tile_height)
-            }),
+            memoize(
+                (columns, rows, tile_width, tile_height),
+                |&(columns, rows, width, height)| tiles(columns, rows, width, height),
+            ),
             hold(
                 cursor,
                 Hold::Turn {
