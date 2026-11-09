@@ -7,7 +7,7 @@ use cranpose_render_common::{
     graph::ProjectiveTransform,
     layer_shadow::{ShadowLight, ShadowRRect},
     primitive_emit::ShapeDrawParams,
-    scene_store::{ItemRef as RecordItem, LayerRef, Placement, RecordChange, RecordKind},
+    scene_store::{ItemRef as RecordItem, LayerRef, Placement, RecordChanges, RecordKind},
 };
 use cranpose_ui::TextStyle;
 use cranpose_ui_graphics::{
@@ -295,22 +295,11 @@ impl<'a> Subtree<'a> {
         }
     }
 
-    // What the subtree was at its last change, its placement left out.
-    pub(crate) fn change(self) -> RecordChange {
+    // What the subtree and its node were at their last changes.
+    #[inline]
+    pub(crate) fn changes(self) -> RecordChanges {
         match self {
-            Self::Layer(layer) | Self::Inline(layer) => layer.change(),
-        }
-    }
-
-    // What the subtree and the node itself were at their last changes: a
-    // change beneath the node changes the first alone.
-    pub(crate) fn changes(self) -> (RecordChange, RecordChange) {
-        match self {
-            Self::Layer(layer) => layer.changes(),
-            Self::Inline(leaf) => {
-                let change = leaf.change();
-                (change, change)
-            }
+            Self::Layer(layer) | Self::Inline(layer) => layer.changes(),
         }
     }
 
@@ -334,11 +323,9 @@ impl<'a> Subtree<'a> {
 pub(crate) struct SubtreeItems {
     /// The layer's node and the node whose outer draws it wraps.
     pub identity: (Option<NodeId>, Option<NodeId>),
-    /// The layer's change number, which covers its subtree, when it pushed
-    /// the items.
-    pub change: RecordChange,
-    /// The layer's own change number, which a change beneath it leaves.
-    pub own_change: RecordChange,
+    /// The layer's change numbers when it pushed the items: its subtree's
+    /// and its own, which a change beneath it leaves.
+    pub changes: RecordChanges,
     /// The layer's placement in its parent, which the number leaves out.
     pub placement: Placement,
     /// Where [`RasterScene::passed_down`] holds what the layer passed to its
@@ -428,11 +415,9 @@ impl RasterScene {
 
     pub(crate) fn open_subtree(&mut self, subtree: Subtree<'_>) -> usize {
         let counts = self.counts();
-        let (change, own_change) = subtree.changes();
         let record = SubtreeItems {
             identity: subtree.identity(),
-            change,
-            own_change,
+            changes: subtree.changes(),
             placement: subtree.placement(),
             passed_down: None,
             end: 0,

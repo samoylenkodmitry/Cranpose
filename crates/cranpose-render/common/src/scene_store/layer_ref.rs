@@ -43,13 +43,31 @@ pub enum ItemRef<'a> {
     Shape(ShapeRef<'a>),
 }
 
-/// What a record was at one scene update: equal values mean the record, or
-/// the part of it they were taken of, did not change in between.
+/// What a record and its subtree were at their last changes, their
+/// placement in the parent left out: two values taken of one record agree
+/// where nothing changed in between.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct RecordChange {
+pub struct RecordChanges {
     store: StoreId,
     record: RecordRef,
-    update: SceneUpdate,
+    subtree: SceneUpdate,
+    own: SceneUpdate,
+}
+
+impl RecordChanges {
+    /// Whether nothing in the record's subtree changed between `self` and
+    /// `other`.
+    #[inline]
+    pub fn same_subtree(self, other: Self) -> bool {
+        (self.store, self.record, self.subtree) == (other.store, other.record, other.subtree)
+    }
+
+    /// Whether the record itself, its properties, draws and items, did not
+    /// change between `self` and `other`, whatever changed beneath it.
+    #[inline]
+    pub fn same_own(self, other: Self) -> bool {
+        (self.store, self.record, self.own) == (other.store, other.record, other.own)
+    }
 }
 
 impl<'a> LayerRef<'a> {
@@ -459,32 +477,16 @@ impl<'a> LayerRef<'a> {
             .is_some_and(|props| props.content_run.churns(update))
     }
 
-    /// What the record and its subtree were at their last change; their
-    /// placement in the parent left out.
-    pub fn change(self) -> RecordChange {
-        self.change_at(self.store.subtree_rev(self.id))
-    }
-
-    /// What the record itself was at its last change: its properties, draws
-    /// and items.
-    pub fn own_change(self) -> RecordChange {
-        self.change_at(self.store.content_rev(self.id))
-    }
-
-    /// [`Self::change`] and [`Self::own_change`] from one read of the
-    /// record.
+    /// What the record and its subtree were at their last changes.
     #[inline]
-    pub fn changes(self) -> (RecordChange, RecordChange) {
+    pub fn changes(self) -> RecordChanges {
         let row = &self.store.tree[self.id.index()];
         let (subtree, own) = (row.subtree_rev, row.content_rev);
-        (self.change_at(subtree), self.change_at(own))
-    }
-
-    fn change_at(self, update: SceneUpdate) -> RecordChange {
-        RecordChange {
+        RecordChanges {
             store: self.store.id(),
             record: self.store.record_ref(self.id),
-            update,
+            subtree,
+            own,
         }
     }
 

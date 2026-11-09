@@ -125,7 +125,8 @@ impl Repush<'_> {
             return Err(Stop::OtherLayer);
         }
         // A subtree that holds no change pushes again only when it moved.
-        if old.change == subtree.change() {
+        let changes = subtree.changes();
+        if old.changes.same_subtree(changes) {
             if subtree.placed_at(&old.placement) {
                 return Ok(());
             }
@@ -137,7 +138,7 @@ impl Repush<'_> {
         };
         // A layer that changed itself, drew its subtree without records of
         // its children, as a surface or nothing, or moved pushes it all.
-        if old.own_change != layer.own_change()
+        if !old.changes.same_own(changes)
             || old.end == record + 1
             || !subtree.placed_at(&old.placement)
         {

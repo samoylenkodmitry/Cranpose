@@ -544,7 +544,7 @@ fn populate_draws_from_graph(
     {
         // The layer's number covers its subtree, save its placement.
         if context.same_as_before
-            && record.change == subtree.change()
+            && record.changes.same_subtree(subtree.changes())
             && subtree.placed_at(&record.placement)
         {
             let (end, stop) = (record.end, record.stop);

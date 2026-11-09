@@ -31,7 +31,7 @@ pub(crate) use items::{ItemLists, Span, SpanPool};
 use journal::Journal;
 pub use journal::{JournalCursor, JournalEntry, JournalRead, RecordEvent, RecordEvents};
 pub use layer_props::LayerProps;
-pub use layer_ref::{ItemRef, LayerRef, RecordChange};
+pub use layer_ref::{ItemRef, LayerRef, RecordChanges};
 pub use leaf_write::Leaf;
 pub use placement::Placement;
 pub use reach::{BLUR_PIXEL_SLACK, Extent, Reach, ShadowCaster};
