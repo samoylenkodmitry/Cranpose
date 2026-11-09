@@ -128,6 +128,11 @@ impl Hash for OffsetElement {
 
 impl ModifierNodeElement for OffsetElement {
     type Node = OffsetNode;
+    const FROM_NODE: Option<fn(&OffsetNode) -> Self> = Some(|node| Self {
+        x: node.x,
+        y: node.y,
+        rtl_aware: node.rtl_aware,
+    });
 
     fn create(&self) -> Self::Node {
         OffsetNode::new(self.x, self.y, self.rtl_aware)
@@ -244,6 +249,10 @@ impl Hash for FractionalOffsetElement {
 
 impl ModifierNodeElement for FractionalOffsetElement {
     type Node = FractionalOffsetNode;
+    const FROM_NODE: Option<fn(&FractionalOffsetNode) -> Self> = Some(|node| Self {
+        x_fraction: node.x_fraction,
+        y_fraction: node.y_fraction,
+    });
 
     fn create(&self) -> Self::Node {
         FractionalOffsetNode::new(self.x_fraction, self.y_fraction)

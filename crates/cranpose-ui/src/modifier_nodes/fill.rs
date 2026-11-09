@@ -227,6 +227,10 @@ impl Hash for FillElement {
 
 impl ModifierNodeElement for FillElement {
     type Node = FillNode;
+    const FROM_NODE: Option<fn(&FillNode) -> Self> = Some(|node| Self {
+        direction: node.direction,
+        fraction: node.fraction,
+    });
 
     fn create(&self) -> Self::Node {
         FillNode::new(self.direction, self.fraction)

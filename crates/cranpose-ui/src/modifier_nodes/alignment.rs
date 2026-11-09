@@ -137,6 +137,12 @@ impl Hash for AlignmentElement {
 
 impl ModifierNodeElement for AlignmentElement {
     type Node = AlignmentNode;
+    const FROM_NODE: Option<fn(&AlignmentNode) -> Self> = Some(|node| Self {
+        box_alignment: node.box_alignment,
+        column_alignment: node.column_alignment,
+        row_alignment: node.row_alignment,
+        row_baseline: node.row_baseline,
+    });
 
     fn create(&self) -> Self::Node {
         AlignmentNode::new(

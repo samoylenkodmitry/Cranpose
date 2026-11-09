@@ -1,5 +1,5 @@
-// A node's chain keeps the padding, size and background of its modifier,
-// and a text's string and style, in their nodes alone. As the modifier
+// A node's chain keeps the padding, size, fill, offset, clip and background
+// of its modifier, and a text's string and style, in their nodes alone. As the modifier
 // reorders, repeats, drops and changes them, and the text changes, the
 // nodes lay out and show what a fresh composition of the same state shows,
 // and the node gives back a modifier equal to the one set.
@@ -28,7 +28,15 @@ fn modifier(variant: usize) -> Modifier {
         2 => base.padding(8.0).size_points(40.0, 20.0).background(BLUE),
         3 => base.background(RED).padding(4.0),
         4 => base.padding(4.0).padding(4.0).size_points(10.0, 10.0),
-        _ => base.padding(6.0).rounded_corners(3.0).background(BLUE),
+        5 => base.padding(6.0).rounded_corners(3.0).background(BLUE),
+        6 => base
+            .fill_max_width_fraction(0.5)
+            .offset(3.0, 4.0)
+            .height(30.0),
+        _ => base
+            .offset(5.0, 1.0)
+            .fill_max_width_fraction(0.25)
+            .clip_to_bounds(),
     }
 }
 
@@ -69,7 +77,7 @@ fn a_chain_holding_elements_in_its_nodes_follows_every_change_of_its_modifier() 
     });
     layout_composition(&mut composition, VIEWPORT);
     let variant = state.get().expect("variant state");
-    for value in [1, 2, 3, 4, 5, 0, 4, 2] {
+    for value in [1, 2, 3, 4, 5, 6, 7, 6, 0, 4, 2] {
         variant.set(value);
         while composition.process_invalid_scopes().expect("recompose") {}
         let layout = layout_composition(&mut composition, VIEWPORT);

@@ -176,6 +176,10 @@ impl Hash for IntrinsicSizeElement {
 
 impl ModifierNodeElement for IntrinsicSizeElement {
     type Node = IntrinsicSizeNode;
+    const FROM_NODE: Option<fn(&IntrinsicSizeNode) -> Self> = Some(|node| Self {
+        axis: node.axis,
+        size: node.size,
+    });
 
     fn create(&self) -> Self::Node {
         IntrinsicSizeNode::new(self.axis, self.size)

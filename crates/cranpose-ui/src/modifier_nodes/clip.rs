@@ -41,6 +41,7 @@ impl ClipToBoundsElement {
 
 impl ModifierNodeElement for ClipToBoundsElement {
     type Node = ClipToBoundsNode;
+    const FROM_NODE: Option<fn(&ClipToBoundsNode) -> Self> = Some(|_| Self);
 
     fn create(&self) -> Self::Node {
         ClipToBoundsNode::new()

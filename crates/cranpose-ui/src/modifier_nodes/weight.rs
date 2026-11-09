@@ -68,6 +68,10 @@ impl Hash for WeightElement {
 
 impl ModifierNodeElement for WeightElement {
     type Node = WeightNode;
+    const FROM_NODE: Option<fn(&WeightNode) -> Self> = Some(|node| Self {
+        weight: node.weight,
+        fill: node.fill,
+    });
 
     fn create(&self) -> Self::Node {
         WeightNode::new(self.weight, self.fill)
