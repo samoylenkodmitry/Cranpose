@@ -26,10 +26,6 @@ impl<T> TakenList<T> {
         self.items.push(item);
     }
 
-    pub(super) fn is_empty(&self) -> bool {
-        self.items.is_empty()
-    }
-
     // Moves the items into `output`, dropping what `output` held.
     pub(super) fn take_into(&mut self, output: &mut Vec<T>) {
         output.clear();

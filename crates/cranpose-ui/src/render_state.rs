@@ -6,7 +6,7 @@ use std::{
     sync::Arc,
 };
 
-use cranpose_core::{MemoryApplier, NodeId, PackedU64, RuntimeHandle, SnapshotStateObserver};
+use cranpose_core::{MemoryApplier, NodeId, RuntimeHandle, SnapshotStateObserver};
 
 pub(crate) type ModifierChainTraceCallback =
     dyn Fn(&[crate::modifier::ModifierChainInspectorNode]) + Send + Sync + 'static;
@@ -462,39 +462,23 @@ impl AppContext {
             .take_into(&mut output.moved);
     }
 
-    /// Notes that the layout pass changed `node_id`'s geometry. A node
-    /// whose layout state is at hand notes it with
-    /// [`Self::note_geometry_scene_node`] instead, once a take.
-    pub(crate) fn record_geometry_scene_node(&self, node_id: NodeId) {
-        self.state.geometry_scene_nodes.borrow_mut().push(node_id);
-    }
-
-    /// Notes that the layout pass changed `node_id`'s geometry. `noted_in`
-    /// is the node's own record of the take it was last noted in.
-    pub(crate) fn note_geometry_scene_node(&self, node_id: NodeId, noted_in: &mut PackedU64) {
-        self.state
-            .geometry_scene_nodes
-            .borrow_mut()
-            .note(node_id, noted_in);
+    /// Notes that the layout pass changed `node_id`'s geometry, once a
+    /// take.
+    pub(crate) fn note_geometry_scene_node(&self, node_id: NodeId) {
+        self.state.geometry_scene_nodes.borrow_mut().note(node_id);
     }
 
     /// Notes that the layout pass moved `node_id`, which `placer` placed, and
     /// changed nothing else of it, so the scene can keep what it drew for the
-    /// node. `noted_in` is the node's own record of the take it was last
-    /// noted in.
-    pub(crate) fn record_moved_scene_node(
-        &self,
-        node_id: NodeId,
-        placer: Option<NodeId>,
-        noted_in: &mut PackedU64,
-    ) {
-        self.state.moved_scene_nodes.borrow_mut().note(
-            MovedSceneNode {
+    /// node, once a take.
+    pub(crate) fn record_moved_scene_node(&self, node_id: NodeId, placer: Option<NodeId>) {
+        self.state
+            .moved_scene_nodes
+            .borrow_mut()
+            .note(MovedSceneNode {
                 node: node_id,
                 placer,
-            },
-            noted_in,
-        );
+            });
     }
 
     /// The placement bookkeeping of this context's running layout pass.
@@ -1127,7 +1111,7 @@ pub(crate) fn take_modifier_slice_repass_nodes() -> Vec<NodeId> {
 }
 
 pub(crate) fn record_geometry_scene_node(node_id: NodeId) {
-    require_current_app_context("render state access").record_geometry_scene_node(node_id);
+    require_current_app_context("render state access").note_geometry_scene_node(node_id);
 }
 
 /// Takes the nodes whose geometry the last layout pass actually changed.
