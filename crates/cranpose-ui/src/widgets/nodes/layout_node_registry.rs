@@ -23,10 +23,11 @@ pub(super) struct LayoutNodeRegistryDebugStats {
 }
 
 // The parent of each registered node by node id: ids come from a counter,
-// so the pages hold the nodes of a screen side by side. The modifier locals
-// sit apart, for the few chains that hold any.
+// so the pages hold the nodes of a screen side by side. A page of 16 parents
+// and a directory of 32 pages hold a small screen in half a kilobyte. The
+// modifier locals sit apart, for the few chains that hold any.
 pub(crate) struct LayoutNodeRegistryState {
-    parents: RefCell<IdPages<Option<PackedNodeId>>>,
+    parents: RefCell<IdPages<Option<PackedNodeId>, 16, 32>>,
     locals: RefCell<HashMap<NodeId, ModifierLocalsHandle>>,
 }
 
