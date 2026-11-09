@@ -4,12 +4,11 @@
 
 use std::rc::Rc;
 
-use cranpose_ui_layout::{AlignmentLines, ChildPlacer, Constraints, FlexParentData, ParentData};
+use cranpose_ui_layout::{AlignmentLines, Constraints, FlexParentData, ParentData, PlaceTarget};
 
 use super::{
     LayoutChildMeasureState,
     core::{Measurable, Placeable},
-    layout_child_measure_state::LayoutChildFrame,
     read_cell,
 };
 use crate::{
@@ -18,33 +17,27 @@ use crate::{
 };
 
 pub(super) struct LayoutChildMeasurable {
-    frame: Rc<LayoutChildFrame>,
-    // The place of the child's record in the frame.
-    slot: u32,
+    state: Rc<LayoutChildMeasureState>,
 }
 
 impl LayoutChildMeasurable {
-    pub(super) fn new(frame: Rc<LayoutChildFrame>, slot: u32) -> Self {
-        Self { frame, slot }
-    }
-
-    // Runs `read` on the child's record, which a pass leaves where it is.
-    fn record<R>(&self, read: impl FnOnce(&LayoutChildMeasureState) -> R) -> R {
-        read(&self.frame.records()[self.slot as usize])
+    pub(super) fn new(state: Rc<LayoutChildMeasureState>) -> Self {
+        Self { state }
     }
 
     // Runs `read` on the parent data of the record's bind, while the record
     // is bound to a pass.
     fn read_parent_data<R>(&self, read: impl FnOnce(&ParentData) -> R) -> Option<R> {
-        if self.frame.builder.borrow().is_none() {
+        if self.state.frame.builder.borrow().is_none() {
             return None;
         }
-        Some(self.record(|state| read_cell(&state.parent_data, |data| data.read(read))))
+        Some(read_cell(&self.state.parent_data, |data| data.read(read)))
     }
 
     // How many state reads the pass that binds the child has kept.
     fn reads_seen(&self) -> usize {
-        self.frame
+        self.state
+            .frame
             .builder
             .borrow()
             .as_ref()
@@ -57,10 +50,8 @@ impl LayoutChildMeasurable {
         constraints: Constraints,
         extent: fn(Size) -> f32,
     ) -> f32 {
-        let frame = &*self.frame;
-        let records = frame.records();
-        let state = &records[self.slot as usize];
-        if frame.measures() {
+        let state = &self.state;
+        if state.frame.measures() {
             state.read_intrinsics.set(true);
         }
         let parts = read_cell(&state.parts, Clone::clone);
@@ -74,10 +65,10 @@ impl LayoutChildMeasurable {
             return value;
         }
         let seen = self.reads_seen();
-        let value = match state.layout_intrinsic(frame, kind) {
+        let value = match state.layout_intrinsic(kind) {
             Some(value) => value,
             None => state
-                .measure_cached(frame, constraints)
+                .measure_cached(constraints)
                 .map_or(0.0, |node| extent(node.size_for_parent())),
         };
         // A value that read a state holds only while the state does: the
@@ -94,22 +85,18 @@ impl LayoutChildMeasurable {
 
 impl Measurable for LayoutChildMeasurable {
     fn measured_hold(&self) -> Option<(Size, cranpose_ui_layout::ConstraintsHold)> {
-        self.record(|state| {
-            read_cell(&state.measured, |measured| {
-                let measured = measured.as_ref()?;
-                let hold = read_cell(&state.parts, |parts| {
-                    parts.as_ref()?.cache().hold_of(measured)
-                })?;
-                Some((measured.size_for_parent(), hold))
-            })
+        read_cell(&self.state.measured, |measured| {
+            let measured = measured.as_ref()?;
+            let hold = read_cell(&self.state.parts, |parts| {
+                parts.as_ref()?.cache().hold_of(measured)
+            })?;
+            Some((measured.size_for_parent(), hold))
         })
     }
 
     fn measure(&self, constraints: Constraints) -> Placeable {
-        let frame = &*self.frame;
-        let records = frame.records();
-        let state = &records[self.slot as usize];
-        let measured = state.measure_cached(frame, constraints);
+        let state = &self.state;
+        let measured = state.measure_cached(constraints);
         let (measured_size, size_for_parent) = measured.as_ref().map_or(
             (
                 Size {
@@ -123,7 +110,7 @@ impl Measurable for LayoutChildMeasurable {
             ),
             |measured| (measured.size, measured.size_for_parent()),
         );
-        state.with_pass_layout_state(frame, |layout_state, context| {
+        state.with_pass_layout_state(|layout_state, context| {
             layout_state.set_size(Some(state.node_id), measured_size, context);
         });
         let alignment_lines = measured
@@ -133,12 +120,11 @@ impl Measurable for LayoutChildMeasurable {
             });
         state.measured.set(measured);
 
-        Placeable::with_placer(
+        Placeable::with_place_target(
             size_for_parent.width,
             size_for_parent.height,
             state.node_id,
-            Rc::clone(&self.frame) as Rc<dyn ChildPlacer>,
-            self.slot,
+            Rc::clone(&self.state) as Rc<dyn PlaceTarget>,
         )
         .with_alignment_lines(alignment_lines)
     }

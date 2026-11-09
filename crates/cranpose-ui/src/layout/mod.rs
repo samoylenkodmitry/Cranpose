@@ -32,7 +32,7 @@ use cranpose_foundation::{
     InvalidationKind, ModifierNodeContext, SemanticsConfiguration, SemanticsWidgetRole,
 };
 use cranpose_ui_graphics::ProjectiveTransform;
-use cranpose_ui_layout::{AlignmentLines, Constraints, MeasurePolicy};
+use cranpose_ui_layout::{AlignmentLines, Constraints, MeasurePolicy, PlaceTarget};
 pub(crate) use frame_layout_arena::FrameLayoutArena;
 use frame_layout_arena::VecPools;
 use layout_child_measure_state::{
@@ -1491,7 +1491,7 @@ impl LayoutBuilderState {
         );
 
         if let Some(err) = runtime_state.take_child_error() {
-            for child_state in runtime_state.child_states().iter() {
+            for child_state in runtime_state.child_states() {
                 child_state.measured.take();
             }
             if runtime_state.take_moved_coordinators() {
@@ -1580,12 +1580,11 @@ impl LayoutBuilderState {
         let runtime_state = parts.runtime_state().borrow();
         let value = if chain.uses_chain {
             let scope = crate::density::DensityMeasureScope::new(chain.density);
-            let records = runtime_state.child_states();
             let frame = CoordinatorFrame::new(
                 &runtime_state.measure_policy,
                 &scope,
                 runtime_state.child_measurables(),
-                &records,
+                runtime_state.child_states(),
                 &mut pools.placements,
                 &mut pools.placement_indices,
             );
@@ -1711,8 +1710,8 @@ impl LayoutBuilderState {
         child_id: NodeId,
     ) -> Result<ChildChange, NodeError> {
         let runtime_state = runtime_state.borrow();
-        let records = runtime_state.child_states();
-        let Some((offset, state)) = records
+        let Some((offset, state)) = runtime_state
+            .child_states()
             .get(*next_state..)
             .unwrap_or_default()
             .iter()
@@ -1950,6 +1949,21 @@ fn policy_intrinsic(
         IntrinsicKind::MaxWidth(height) => policy.max_intrinsic_width(measurables, height),
         IntrinsicKind::MinHeight(width) => policy.min_intrinsic_height(measurables, width),
         IntrinsicKind::MaxHeight(width) => policy.max_intrinsic_height(measurables, width),
+    }
+}
+
+impl PlaceTarget for LayoutChildMeasureState {
+    fn place(&self, x: f32, y: f32) {
+        let internal_offset = read_cell(&self.measured, |measured| {
+            measured
+                .as_ref()
+                .map(|measured| measured.offset)
+                .unwrap_or_default()
+        });
+        self.place_retained(Point {
+            x: x + internal_offset.x,
+            y: y + internal_offset.y,
+        });
     }
 }
 
