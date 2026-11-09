@@ -8,6 +8,7 @@ pub(crate) mod grid;
 mod layout_child_measurable;
 mod layout_child_measure_state;
 mod layout_node_data;
+mod layout_runtime_state;
 mod live_layout_node;
 mod measure_telemetry;
 mod measured_spare;
@@ -35,9 +36,10 @@ use cranpose_ui_layout::{AlignmentLines, Constraints, MeasurePolicy, PlaceTarget
 pub(crate) use frame_layout_arena::FrameLayoutArena;
 use frame_layout_arena::VecPools;
 use layout_child_measure_state::{
-    ChildPass, LayoutChildMeasureState, LayoutChildren, inherited_alignment_lines, read_cell,
+    ChildPass, LayoutChildMeasureState, inherited_alignment_lines, read_cell,
 };
 use layout_node_data::{role_from_modifier_slices, snapshot_node_data};
+pub(crate) use layout_runtime_state::LayoutRuntimeState;
 use live_layout_node::{LiveLayoutNode, read_live_layout_node};
 use measured_spare::MeasuredSpare;
 use placed_root_measurements::PlacedRootMeasurements;
@@ -51,7 +53,7 @@ use web_time::Instant;
 #[cfg(test)]
 use self::core::{HorizontalAlignment, VerticalAlignment};
 use self::{
-    coordinator_chain::{CoordinatorChain, CoordinatorFrame},
+    coordinator_chain::CoordinatorFrame,
     core::Measurable,
     measure_telemetry::{
         LayoutStages, layout_measure_telemetry_threshold_ms, log_layout_measure_telemetry,
@@ -1947,46 +1949,6 @@ fn policy_intrinsic(
         IntrinsicKind::MaxWidth(height) => policy.max_intrinsic_width(measurables, height),
         IntrinsicKind::MinHeight(width) => policy.min_intrinsic_height(measurables, width),
         IntrinsicKind::MaxHeight(width) => policy.max_intrinsic_height(measurables, width),
-    }
-}
-
-pub(crate) struct LayoutRuntimeState {
-    /// `None` until the node first binds a child: most nodes are leaves.
-    children: Option<Box<LayoutChildren>>,
-    coordinator_chain: CoordinatorChain,
-    measure_policy: Rc<dyn MeasurePolicy>,
-}
-
-impl LayoutRuntimeState {
-    pub(crate) fn new(measure_policy: Rc<dyn MeasurePolicy>) -> Self {
-        Self {
-            children: None,
-            coordinator_chain: CoordinatorChain::default(),
-            measure_policy,
-        }
-    }
-
-    fn bind_node(&mut self, node: &LayoutNode) -> ModifierChainInputs {
-        if !Rc::ptr_eq(&self.measure_policy, &node.measure_policy) {
-            self.measure_policy = Rc::clone(&node.measure_policy);
-        }
-        self.coordinator_chain.sync(node)
-    }
-
-    // Notes that a measure placed the node's coordinators, and says whether
-    // one of them moved since the scene last heard of the node. A node
-    // without layout modifiers moves only with its size, which the node
-    // reports itself.
-    fn take_moved_coordinators(&self) -> bool {
-        self.coordinator_chain.take_moved()
-    }
-
-    pub(crate) fn placed_coordinator_rect(
-        &self,
-        ordinal: usize,
-        node_size: Size,
-    ) -> Option<GeometryRect> {
-        self.coordinator_chain.placed_rect(ordinal, node_size)
     }
 }
 
