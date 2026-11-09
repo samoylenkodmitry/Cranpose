@@ -271,6 +271,7 @@ pub(crate) fn uniform_scale_translation(transform: ProjectiveTransform) -> Optio
 
 /// Whether the layer's own composition needs its content on a separate
 /// texture, before any rounded clip or transform is considered.
+#[inline]
 fn child_needs_surface(layer: LayerRef<'_>) -> bool {
     let graphics = layer.graphics_layer();
     let isolation = layer.isolation();
@@ -687,13 +688,14 @@ fn collect_into(
     if context.settings.in_space || layer.graphics_layer().space.is_some() {
         return collect_space_children(layer, motion, (child_context, &content), out, recycler);
     }
+    let content_offset = layer.content_offset();
     let mut has_pixel_sensitive_subtree = false;
     for child in layer.items() {
         has_pixel_sensitive_subtree |= match child {
             ItemRef::Layer(child_layer) => {
                 collect_child(child_layer, motion, child_context, out, recycler)
             }
-            ItemRef::Leaf(inline) => collect_inline(inline, child_context, out),
+            ItemRef::Leaf(inline) => collect_inline(inline, content_offset, child_context, out),
             ItemRef::Draw(_) | ItemRef::Text(_) | ItemRef::Run(_) => {
                 push_content(out, child, &content);
                 context.settings.wants_pixel_sensitive && node_is_pixel_sensitive(child)
@@ -808,11 +810,13 @@ fn collect_child(
 }
 
 // Collects `inline`, a node drawn in its parent's layer, under `context`,
-// the walk of its parent's children: its content takes the place, clip and
-// snap anchor a child layer that only moves would give it. Returns whether
-// it draws pixel-sensitive content, when the walk wants to know.
+// the walk of its parent's children, whose content `parent_content_offset`
+// offsets: its content takes the place, clip and snap anchor a child layer
+// that only moves would give it. Returns whether it draws pixel-sensitive
+// content, when the walk wants to know.
 fn collect_inline(
     inline: LayerRef<'_>,
+    parent_content_offset: Point,
     mut context: WalkContext<'_>,
     out: &mut LayerScene,
 ) -> bool {
@@ -820,7 +824,12 @@ fn collect_inline(
         return false;
     };
     context.cull = cull;
-    let origin = inline.origin();
+    // A translation alone places a leaf, past its parent's content offset.
+    let placement = inline.origin_in_parent();
+    let origin = Point::new(
+        placement.x + parent_content_offset.x,
+        placement.y + parent_content_offset.y,
+    );
     let offset = Point::new(context.offset.x + origin.x, context.offset.y + origin.y);
     let bounds = inline.node_rect().translate(offset.x, offset.y);
     if context
@@ -958,7 +967,7 @@ fn outside_clip(bounds: Rect, clip: Rect) -> bool {
 }
 
 fn content_needs_rigid_snap(layer: LayerRef<'_>, translated: bool) -> bool {
-    layer.items().any(|child| match child {
+    layer.own_draws().any(|child| match child {
         ItemRef::Text(_) => true,
         ItemRef::Draw(draw) => {
             primitive_is_pixel_sensitive(&draw.primitive)

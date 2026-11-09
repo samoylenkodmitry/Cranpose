@@ -689,7 +689,7 @@ impl SceneStore {
 
     /// The top left of `id` in its parent's layer: its placement and the
     /// parent's content offset.
-    #[inline]
+    #[inline(always)]
     pub fn origin(&self, id: RecordId) -> Point {
         let index = id.index();
         match self.tree[index].transform {
@@ -702,7 +702,7 @@ impl SceneStore {
 
     // Where the placement of the record at `index` puts it in its parent's
     // layer, past the parent's content offset.
-    #[inline]
+    #[inline(always)]
     fn placed_origin(&self, index: usize) -> Point {
         let [x, y] = self.geo[index].placement;
         let offset = self.parent_content_offset(index);
@@ -717,7 +717,7 @@ impl SceneStore {
         }
     }
 
-    #[inline]
+    #[inline(always)]
     fn parent_content_offset(&self, index: usize) -> Point {
         self.tree[index]
             .parent
@@ -726,7 +726,7 @@ impl SceneStore {
     }
 
     /// The transform from `id` to its parent's content.
-    #[inline]
+    #[inline(always)]
     pub fn transform_to_parent(&self, id: RecordId) -> ProjectiveTransform {
         match self.tree[id.index()].transform {
             Some(transform) => self.transforms[transform.index()],

@@ -44,9 +44,14 @@ pub(super) fn culled<'s>(
     layer: LayerRef<'_>,
     cull: Option<&'s Cull<'s>>,
 ) -> Option<Option<&'s Cull<'s>>> {
-    let Some(cull) = cull else {
-        return Some(None);
-    };
+    match cull {
+        Some(cull) => visit(layer, cull),
+        None => Some(None),
+    }
+}
+
+#[inline(never)]
+fn visit<'s>(layer: LayerRef<'_>, cull: &'s Cull<'s>) -> Option<Option<&'s Cull<'s>>> {
     match cull.visit(layer.store().record_ref(layer.id())) {
         Visit::Skip => None,
         Visit::Walk => Some(Some(cull)),

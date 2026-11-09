@@ -72,6 +72,7 @@ pub(super) fn collect_space_children(
         cull: None,
         ..context
     };
+    let content_offset = layer.content_offset();
     let mut has_pixel_sensitive_subtree = false;
     for child in layer.items() {
         has_pixel_sensitive_subtree |= match child {
@@ -82,7 +83,7 @@ pub(super) fn collect_space_children(
                 !(in_space && child_layer.graphics_layer().space.is_some())
                     && collect_child(child_layer, motion, context, out, recycler)
             }
-            ItemRef::Leaf(inline) => collect_inline(inline, context, out),
+            ItemRef::Leaf(inline) => collect_inline(inline, content_offset, context, out),
             ItemRef::Draw(_) | ItemRef::Text(_) | ItemRef::Run(_) => {
                 push_content(out, child, content);
                 context.settings.wants_pixel_sensitive && node_is_pixel_sensitive(child)

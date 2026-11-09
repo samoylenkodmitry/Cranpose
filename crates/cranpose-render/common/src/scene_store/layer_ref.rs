@@ -131,7 +131,7 @@ impl<'a> LayerRef<'a> {
 
     /// The bounds of the layer, where its clip cuts, its transforms pivot and
     /// an offscreen pass draws it.
-    #[inline]
+    #[inline(always)]
     pub fn local_bounds(self) -> Rect {
         if !self.flags().contains(RecordFlags::HAS_LAYER_BOUNDS) {
             return self.node_rect();
@@ -303,7 +303,7 @@ impl<'a> LayerRef<'a> {
 
     /// The rectangle that cuts the content and pointer hits: the local
     /// bounds when the record clips to them or its graphics layer clips.
-    #[inline]
+    #[inline(always)]
     pub fn clip_rect(self) -> Option<Rect> {
         (self.clip_to_bounds() || self.graphics_layer().clip).then(|| self.local_bounds())
     }
@@ -317,12 +317,14 @@ impl<'a> LayerRef<'a> {
 
     /// Where the record's drawing is cut: its clip or, when it composites
     /// through an offscreen buffer for its alpha or by request, its bounds.
-    #[inline]
+    #[inline(always)]
     pub fn visual_clip_rect(self) -> Option<Rect> {
-        self.clip_rect().or_else(|| {
-            let isolation = self.isolation();
-            (isolation.group_opacity || isolation.explicit_offscreen).then(|| self.local_bounds())
-        })
+        let clip = self.clip_rect();
+        if clip.is_some() {
+            return clip;
+        }
+        let isolation = self.isolation();
+        (isolation.group_opacity || isolation.explicit_offscreen).then(|| self.local_bounds())
     }
 
     /// The render effect applied to the record's content.
@@ -423,6 +425,17 @@ impl<'a> LayerRef<'a> {
             .map(move |item| ItemRef::of(store, *item))
     }
 
+    /// The record's own draws in draw order: its items without its children.
+    #[inline]
+    pub fn own_draws(self) -> impl Iterator<Item = ItemRef<'a>> + 'a {
+        let store = self.store;
+        store
+            .items(self.id)
+            .iter()
+            .filter(|item| item.kind() != ItemKind::Child)
+            .map(move |item| ItemRef::of(store, *item))
+    }
+
     /// Every string the record and the records beneath it paint, in draw
     /// order.
     pub fn painted_text(self) -> Vec<String> {
@@ -460,7 +473,7 @@ impl<'a> LayerRef<'a> {
 }
 
 impl<'a> ItemRef<'a> {
-    #[inline]
+    #[inline(always)]
     pub(crate) fn of(store: &'a SceneStore, item: Item) -> Self {
         match item.kind() {
             ItemKind::Child => {

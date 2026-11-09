@@ -4,18 +4,27 @@ use cranpose_render_common::{
     scene_store::{ItemRef, LayerRef},
 };
 use cranpose_ui_graphics::{
-    DrawPrimitive, LayerShape, Point, RecordLane, Rect, RenderEffect, ShadowPrimitive, expand_rect,
-    primitive_coverage_rect,
+    DrawPrimitive, GraphicsLayer, LayerShape, Point, RecordLane, Rect, RenderEffect,
+    ShadowPrimitive, expand_rect, primitive_coverage_rect,
 };
 
 use super::{AFFINE_TOLERANCE, RasterScale, child_needs_surface, direct_translation};
 use crate::scene::LayerRoundedClip;
 
+#[inline]
 pub(super) fn rounded_clip_for_layer(layer: LayerRef<'_>) -> Option<LayerRoundedClip> {
     let graphics_layer = layer.graphics_layer();
     if !graphics_layer.clip {
         return None;
     }
+    rounded_clip_of(layer, graphics_layer)
+}
+
+#[inline(never)]
+fn rounded_clip_of(
+    layer: LayerRef<'_>,
+    graphics_layer: &GraphicsLayer,
+) -> Option<LayerRoundedClip> {
     let LayerShape::Rounded(shape) = graphics_layer.shape else {
         return None;
     };
