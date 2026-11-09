@@ -725,11 +725,7 @@ fn padded_field_rects(selection: TextRange) -> Vec<cranpose_ui_graphics::Rect> {
         .flat_map(|command| {
             let mut recording = cranpose_ui_graphics::CommandRecording::default();
             let mut scope = crate::draw::command_draw_scope(size, &mut recording);
-            match command {
-                crate::draw::DrawCommand::Behind(draw)
-                | crate::draw::DrawCommand::WithContent(draw)
-                | crate::draw::DrawCommand::Overlay(draw) => draw(&mut scope),
-            }
+            command.draw(&mut scope);
             scope.into_primitives()
         })
         .filter_map(|primitive| match primitive {

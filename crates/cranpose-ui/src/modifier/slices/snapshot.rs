@@ -282,24 +282,14 @@ impl Backgrounds {
                 precedes_layer,
                 corner_shape,
             } = slot;
-            let draw_cmd = Rc::new(move |scope: &mut cranpose_ui_graphics::DrawScopeDefault| {
-                use cranpose_ui_graphics::{CornerRadii, DrawScope as _};
-
-                use crate::modifier::Brush;
-
-                let rect = coordinator.rect(scope.size());
-                let brush = Brush::solid(color);
-                if let Some(shape) = corner_shape {
-                    let radii: CornerRadii = shape.resolve(rect.width, rect.height);
-                    scope.draw_round_rect_at(rect, brush, radii);
-                } else {
-                    scope.draw_rect_at(rect, brush);
-                }
-            });
             slices.insert_background_draw(
                 insert_index,
                 precedes_layer,
-                DrawCommand::Behind(draw_cmd),
+                DrawCommand::Background(crate::BackgroundDraw::new(
+                    color,
+                    corner_shape,
+                    coordinator,
+                )),
             );
         }
     }
@@ -423,6 +413,8 @@ fn placed_draw_command(command: DrawCommand, site: &DrawSite) -> DrawCommand {
         DrawCommand::Behind(draw) => DrawCommand::Behind(place(draw)),
         DrawCommand::WithContent(draw) => DrawCommand::WithContent(place(draw)),
         DrawCommand::Overlay(draw) => DrawCommand::Overlay(place(draw)),
+        // A background sits in its own coordinator's rect already.
+        background @ DrawCommand::Background(_) => background,
     }
 }
 

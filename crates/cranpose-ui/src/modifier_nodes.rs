@@ -1111,22 +1111,17 @@ fn observe_draw_command(
         DrawCommand::Overlay(draw) => DrawCommand::Overlay(Rc::new(move |scope| {
             crate::render_state::observe_draw_reads(observation, || draw(scope));
         })),
+        // A background reads no state.
+        background @ DrawCommand::Background(_) => background,
     }
 }
 
-fn draw_command_tag(cmd: &DrawCommand) -> u8 {
-    match cmd {
-        DrawCommand::Behind(_) => 0,
-        DrawCommand::WithContent(_) => 1,
-        DrawCommand::Overlay(_) => 2,
-    }
-}
-
-fn draw_command_closure_identity(cmd: &DrawCommand) -> *const () {
+fn draw_command_closure_identity(cmd: &DrawCommand) -> Option<*const ()> {
     match cmd {
         DrawCommand::Behind(f) | DrawCommand::WithContent(f) | DrawCommand::Overlay(f) => {
-            Rc::as_ptr(f) as *const ()
+            Some(Rc::as_ptr(f) as *const ())
         }
+        DrawCommand::Background(_) => None,
     }
 }
 
@@ -1163,10 +1158,7 @@ impl PartialEq for DrawCommandElement {
         self.commands
             .iter()
             .zip(other.commands.iter())
-            .all(|(a, b)| {
-                draw_command_tag(a) == draw_command_tag(b)
-                    && draw_command_closure_identity(a) == draw_command_closure_identity(b)
-            })
+            .all(|(a, b)| a.same_as(b))
     }
 }
 
@@ -1177,8 +1169,8 @@ impl Hash for DrawCommandElement {
         "draw_commands".hash(state);
         self.commands.len().hash(state);
         for command in &self.commands {
-            draw_command_tag(command).hash(state);
-            (draw_command_closure_identity(command) as usize).hash(state);
+            std::mem::discriminant(command).hash(state);
+            draw_command_closure_identity(command).hash(state);
         }
     }
 }

@@ -21,13 +21,13 @@ fn with_test_runtime<T>(f: impl FnOnce() -> T) -> T {
 }
 
 fn record(
-    func: &crate::draw::DrawCommandFn,
+    command: &crate::DrawCommand,
     size: crate::modifier::Size,
 ) -> Vec<cranpose_ui_graphics::DrawPrimitive> {
     use cranpose_ui_graphics::DrawScope as _;
     let mut recording = cranpose_ui_graphics::CommandRecording::default();
     let mut scope = crate::draw::command_draw_scope(size, &mut recording);
-    func(&mut scope);
+    command.draw(&mut scope);
     scope.into_primitives()
 }
 
@@ -150,7 +150,7 @@ fn cursor_x_position_matches_text_width() {
         let primitives = draw_commands
             .iter()
             .find_map(|command| match command {
-                crate::DrawCommand::Overlay(func) => Some(record(func, size)),
+                crate::DrawCommand::Overlay(_) => Some(record(command, size)),
                 _ => None,
             })
             .expect("Expected Overlay draw command for cursor");
@@ -194,7 +194,7 @@ fn cursor_at_start_for_empty_text() {
             .draw_commands()
             .iter()
             .find_map(|command| match command {
-                crate::DrawCommand::Overlay(func) => Some(record(func, size)),
+                crate::DrawCommand::Overlay(_) => Some(record(command, size)),
                 _ => None,
             })
             .expect("Expected Overlay");
@@ -235,11 +235,7 @@ fn selection_draw_command_created_when_selected() {
             height: 40.0,
         };
 
-        let primitives = match &draw_commands[0] {
-            crate::DrawCommand::Behind(func) => record(func, size),
-            crate::DrawCommand::Overlay(func) => record(func, size),
-            crate::DrawCommand::WithContent(func) => record(func, size),
-        };
+        let primitives = record(&draw_commands[0], size);
 
         assert!(!primitives.is_empty(), "Expected selection primitive");
 
@@ -279,8 +275,9 @@ fn cursor_y_position_at_zero_without_padding() {
 
         let cursor_cmd = slices.draw_commands().last().unwrap();
         let primitives = match cursor_cmd {
-            crate::DrawCommand::Overlay(func) => record(func, size),
-            crate::DrawCommand::WithContent(func) => record(func, size),
+            crate::DrawCommand::Overlay(_) | crate::DrawCommand::WithContent(_) => {
+                record(cursor_cmd, size)
+            }
             _ => panic!("Expected Overlay for cursor"),
         };
 
@@ -383,11 +380,7 @@ fn run_field_draw(
     assert!(!draw_commands.is_empty(), "expected draw commands");
     draw_commands
         .iter()
-        .flat_map(|command| match command {
-            crate::DrawCommand::Behind(func) => record(func, size),
-            crate::DrawCommand::Overlay(func) => record(func, size),
-            crate::DrawCommand::WithContent(func) => record(func, size),
-        })
+        .flat_map(|command| record(command, size))
         .collect()
 }
 

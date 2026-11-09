@@ -3,7 +3,6 @@ use cranpose_ui_graphics::{DrawPrimitive, DrawScope as _, Rect};
 
 use super::*;
 use crate::{
-    draw::DrawCommand,
     layout::{
         core::Alignment,
         policies::{BoxMeasurePolicy, LeafMeasurePolicy},
@@ -55,11 +54,7 @@ fn child_drawn_rects(modifier: Modifier, content: Size) -> Vec<Rect> {
                 .flat_map(|command| {
                     let mut recording = cranpose_ui_graphics::CommandRecording::default();
                     let mut scope = crate::draw::command_draw_scope(size, &mut recording);
-                    match command {
-                        DrawCommand::Behind(draw)
-                        | DrawCommand::WithContent(draw)
-                        | DrawCommand::Overlay(draw) => draw(&mut scope),
-                    }
+                    command.draw(&mut scope);
                     scope.into_primitives()
                 })
                 .filter_map(|primitive| match primitive {

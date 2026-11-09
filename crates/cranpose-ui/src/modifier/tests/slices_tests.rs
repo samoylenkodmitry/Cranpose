@@ -42,11 +42,7 @@ fn recorded(command: &DrawCommand, size: Size) -> Vec<DrawPrimitive> {
     use cranpose_ui_graphics::DrawScope as _;
     let mut recording = cranpose_ui_graphics::CommandRecording::default();
     let mut scope = crate::draw::command_draw_scope(size, &mut recording);
-    match command {
-        DrawCommand::Behind(draw) | DrawCommand::WithContent(draw) | DrawCommand::Overlay(draw) => {
-            draw(&mut scope);
-        }
-    }
+    command.draw(&mut scope);
     scope.into_primitives()
 }
 

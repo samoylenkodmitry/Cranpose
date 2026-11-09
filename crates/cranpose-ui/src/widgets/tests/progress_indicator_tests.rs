@@ -164,14 +164,9 @@ fn circular_progress_indicator_animates_transition() {
         commands
             .iter()
             .flat_map(|(command, size)| {
-                let func = match command {
-                    crate::DrawCommand::Behind(func) => func,
-                    crate::DrawCommand::Overlay(func) => func,
-                    crate::DrawCommand::WithContent(func) => func,
-                };
                 let mut recording = cranpose_ui_graphics::CommandRecording::default();
                 let mut scope = crate::draw::command_draw_scope(*size, &mut recording);
-                func(&mut scope);
+                command.draw(&mut scope);
                 scope.into_primitives()
             })
             .collect::<Vec<_>>()

@@ -464,16 +464,23 @@ fn glass_material_applies_blur_tint_and_shape() {
 
     let commands = slices.draw_commands();
     assert_eq!(commands.len(), 1);
-    let DrawCommand::Behind(draw) = &commands[0] else {
-        panic!("glass_material tint should render behind content");
-    };
-    let primitives = run_draw(
-        draw,
+    assert!(
+        matches!(
+            commands[0],
+            DrawCommand::Behind(_) | DrawCommand::Background(_)
+        ),
+        "glass_material tint should render behind content"
+    );
+    let mut recording = cranpose_ui_graphics::CommandRecording::default();
+    let mut scope = crate::draw::command_draw_scope(
         Size {
             width: 100.0,
             height: 64.0,
         },
+        &mut recording,
     );
+    commands[0].draw(&mut scope);
+    let primitives = cranpose_ui_graphics::DrawScope::into_primitives(scope);
     let [DrawPrimitive::RoundRect { brush, .. }] = primitives.as_slice() else {
         panic!("glass_material tint should respect the rounded shape");
     };

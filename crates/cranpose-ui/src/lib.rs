@@ -35,6 +35,7 @@ pub use ui_strings::UiString;
 /// Screen reader announcements for events that have no control on screen.
 pub mod announce;
 mod arrow_focus;
+mod background_draw;
 pub mod bring_into_view;
 mod bring_into_view_spec;
 pub mod clipboard_session;
@@ -113,6 +114,7 @@ pub mod zoom;
 pub use announce::{Announcement, Announcer, announce, drain_announcements, local_announcer};
 #[doc(hidden)]
 pub use arrow_focus::arrow_focus_target;
+pub use background_draw::BackgroundDraw;
 pub use bring_into_view::{
     BringIntoViewResponder, local_bring_into_view_responder, scroll_delta_to_reveal,
 };

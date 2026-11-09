@@ -198,7 +198,7 @@ impl HeadlessRenderer {
 
 enum PendingOverlay<'a> {
     Recorded(std::vec::IntoIter<DrawPrimitive>),
-    Command(&'a crate::draw::DrawCommandFn),
+    Command(&'a ModifierDrawCommand),
 }
 
 fn evaluate_modifier(
@@ -224,20 +224,20 @@ fn collect_primitives_from_commands(
     let mut overlay = Vec::new();
     for command in commands {
         match command {
-            ModifierDrawCommand::Behind(func) => {
+            ModifierDrawCommand::Behind(_) | ModifierDrawCommand::Background(_) => {
                 append_primitives(
                     &mut behind,
                     node_id,
                     rect,
                     PaintLayer::Behind,
-                    record(func, size),
+                    record(command, size),
                 );
             }
-            ModifierDrawCommand::Overlay(func) => {
-                overlay.push(PendingOverlay::Command(func));
+            ModifierDrawCommand::Overlay(_) => {
+                overlay.push(PendingOverlay::Command(command));
             }
-            ModifierDrawCommand::WithContent(func) => {
-                let primitives = record(func, size);
+            ModifierDrawCommand::WithContent(_) => {
+                let primitives = record(command, size);
                 let last_content = primitives
                     .iter()
                     .rposition(|primitive| matches!(primitive, DrawPrimitive::Content));
@@ -261,11 +261,11 @@ fn collect_primitives_from_commands(
     (behind, overlay)
 }
 
-fn record(func: &crate::draw::DrawCommandFn, size: Size) -> Vec<DrawPrimitive> {
+fn record(command: &ModifierDrawCommand, size: Size) -> Vec<DrawPrimitive> {
     use cranpose_ui_graphics::DrawScope as _;
     let mut recording = cranpose_ui_graphics::CommandRecording::default();
     let mut scope = crate::draw::command_draw_scope(size, &mut recording);
-    func(&mut scope);
+    command.draw(&mut scope);
     scope.into_primitives()
 }
 
@@ -282,7 +282,7 @@ fn append_overlay(
     for part in pending {
         let primitives = match part {
             PendingOverlay::Recorded(primitives) => primitives,
-            PendingOverlay::Command(func) => record(func, size).into_iter(),
+            PendingOverlay::Command(command) => record(command, size).into_iter(),
         };
         append_primitives(operations, node_id, rect, PaintLayer::Overlay, primitives);
     }
