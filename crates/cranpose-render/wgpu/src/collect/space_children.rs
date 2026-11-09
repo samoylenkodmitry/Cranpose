@@ -84,7 +84,7 @@ pub(super) fn collect_space_children(
                     && collect_child(child_layer, motion, context, out, recycler)
             }
             ItemRef::Leaf(inline) => collect_inline(inline, content_offset, context, out),
-            ItemRef::Draw(_) | ItemRef::Text(_) | ItemRef::Run(_) => {
+            ItemRef::Draw(_) | ItemRef::Text(_) | ItemRef::Run(_) | ItemRef::Shape(_) => {
                 push_content(out, child, content);
                 context.settings.wants_pixel_sensitive && node_is_pixel_sensitive(child)
             }

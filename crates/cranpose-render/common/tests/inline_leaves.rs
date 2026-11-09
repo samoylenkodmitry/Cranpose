@@ -38,16 +38,8 @@ fn picture(graph: &Scene) -> Vec<String> {
                     ));
                     items(leaf, transform, out);
                 }
-                ItemRef::Run(run) => {
-                    for primitive in run.primitives() {
-                        if let DrawPrimitive::Rect { rect, brush, .. } = primitive {
-                            out.push(format!(
-                                "rect {:?} {brush:?}",
-                                transform.bounds_for_rect(rect)
-                            ));
-                        }
-                    }
-                }
+                ItemRef::Run(run) => rect_lines(run.primitives(), transform, out),
+                ItemRef::Shape(shape) => rect_lines(shape.primitives(), transform, out),
                 ItemRef::Text(text) => {
                     out.push(format!(
                         "text {} at {:?}",
@@ -56,6 +48,20 @@ fn picture(graph: &Scene) -> Vec<String> {
                     ));
                 }
                 ItemRef::Draw(_) => {}
+            }
+        }
+    }
+    fn rect_lines(
+        primitives: impl Iterator<Item = DrawPrimitive>,
+        transform: ProjectiveTransform,
+        out: &mut Vec<String>,
+    ) {
+        for primitive in primitives {
+            if let DrawPrimitive::Rect { rect, brush, .. } = primitive {
+                out.push(format!(
+                    "rect {:?} {brush:?}",
+                    transform.bounds_for_rect(rect)
+                ));
             }
         }
     }
@@ -85,7 +91,7 @@ fn text_has_layer(graph: &Scene, text: &str) -> bool {
             ItemRef::Layer(layer) => search(layer, text, layer.node_id().is_some()),
             ItemRef::Leaf(leaf) => search(leaf, text, false),
             ItemRef::Text(drawn) if drawn.text.text() == text => Some(in_layer),
-            ItemRef::Text(_) | ItemRef::Draw(_) | ItemRef::Run(_) => None,
+            ItemRef::Text(_) | ItemRef::Draw(_) | ItemRef::Run(_) | ItemRef::Shape(_) => None,
         })
     }
     search(graph.root_layer().expect("a scene"), text, true).expect("the text draws")

@@ -686,7 +686,7 @@ fn collect_into(
                 collect_child(child_layer, motion, child_context, out, recycler)
             }
             ItemRef::Leaf(inline) => collect_inline(inline, content_offset, child_context, out),
-            ItemRef::Draw(_) | ItemRef::Text(_) | ItemRef::Run(_) => {
+            ItemRef::Draw(_) | ItemRef::Text(_) | ItemRef::Run(_) | ItemRef::Shape(_) => {
                 push_content(out, child, &content);
                 context.settings.wants_pixel_sensitive && node_is_pixel_sensitive(child)
             }
@@ -968,6 +968,7 @@ fn content_needs_rigid_snap(layer: LayerRef<'_>, translated: bool) -> bool {
                 || run.summary.has_pixel_sensitive
                 || (translated && run.summary.has_non_shadow)
         }
+        ItemRef::Shape(shape) => translated && shape.shape_count() > 0,
         ItemRef::Layer(_) | ItemRef::Leaf(_) => false,
     })
 }

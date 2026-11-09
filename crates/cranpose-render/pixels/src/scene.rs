@@ -271,7 +271,10 @@ impl<'a> Subtree<'a> {
         match child {
             RecordItem::Layer(layer) => Some(Self::Layer(layer)),
             RecordItem::Leaf(leaf) => Some(Self::Inline(leaf)),
-            RecordItem::Draw(_) | RecordItem::Text(_) | RecordItem::Run(_) => None,
+            RecordItem::Draw(_)
+            | RecordItem::Text(_)
+            | RecordItem::Run(_)
+            | RecordItem::Shape(_) => None,
         }
     }
 

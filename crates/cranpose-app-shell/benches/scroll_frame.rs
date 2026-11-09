@@ -128,6 +128,7 @@ fn hash_items(layer: LayerRef<'_>, hash: &mut DefaultHasher) {
                 hash_items(leaf, hash);
             }
             ItemRef::Run(run) => hash.write_u64(run.recording.fingerprint()),
+            ItemRef::Shape(shape) => hash.write_u64(shape.print()),
             ItemRef::Draw(draw) => hash.write(format!("{draw:?}").as_bytes()),
             ItemRef::Text(text) => hash.write(format!("{text:?}").as_bytes()),
         }

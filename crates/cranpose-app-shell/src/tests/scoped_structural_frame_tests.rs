@@ -229,6 +229,11 @@ fn picture_items(layer: LayerRef<'_>, depth: usize, out: &mut Vec<String>) {
                     out.push(format!("{depth} run {:?} {primitive:?}", run.phase));
                 }
             }
+            ItemRef::Shape(shape) => {
+                for primitive in shape.primitives() {
+                    out.push(format!("{depth} shapes {primitive:?}"));
+                }
+            }
         }
     }
 }

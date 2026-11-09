@@ -11,7 +11,7 @@ fn find_text<'a>(layer: LayerRef<'a>, label: &str) -> Option<&'a TextPrimitiveNo
     layer.items().find_map(|item| match item {
         ItemRef::Text(text) if text.text.text() == label => Some(text),
         ItemRef::Layer(child) | ItemRef::Leaf(child) => find_text(child, label),
-        ItemRef::Text(_) | ItemRef::Draw(_) | ItemRef::Run(_) => None,
+        ItemRef::Text(_) | ItemRef::Draw(_) | ItemRef::Run(_) | ItemRef::Shape(_) => None,
     })
 }
 

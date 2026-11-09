@@ -66,37 +66,38 @@ fn graph_output(
 ) {
     let transform = layer.transform_to_parent().then(parent_transform);
     for item in layer.items() {
-        match item {
+        let (owner, primitives): (_, Vec<DrawPrimitive>) = match item {
             ItemRef::Layer(child) | ItemRef::Leaf(child) => {
                 graph_output(child, transform, rectangles, texts);
+                continue;
             }
-            ItemRef::Run(run) => {
-                let owner = run.command.map(|command| command.node_id);
-                rectangles.extend(run.primitives().filter_map(|primitive| match primitive {
+            ItemRef::Run(run) => (
+                run.command.map(|command| command.node_id),
+                run.primitives().collect(),
+            ),
+            ItemRef::Shape(shape) => (layer.owner(), shape.primitives().collect()),
+            ItemRef::Draw(draw) => (None, vec![draw.primitive.clone()]),
+            ItemRef::Text(text) => {
+                texts.push((
+                    text.node_id,
+                    transform.bounds_for_rect(text.rect),
+                    text.text.text().to_owned(),
+                ));
+                continue;
+            }
+        };
+        rectangles.extend(
+            primitives
+                .into_iter()
+                .filter_map(|primitive| match primitive {
                     DrawPrimitive::Rect {
                         rect,
                         brush: Brush::Solid(color),
                         ..
                     } => Some((owner, transform.bounds_for_rect(rect), color)),
                     _ => None,
-                }));
-            }
-            ItemRef::Draw(draw) => {
-                if let DrawPrimitive::Rect {
-                    rect,
-                    brush: Brush::Solid(color),
-                    ..
-                } = &draw.primitive
-                {
-                    rectangles.push((None, transform.bounds_for_rect(*rect), *color));
-                }
-            }
-            ItemRef::Text(text) => texts.push((
-                text.node_id,
-                transform.bounds_for_rect(text.rect),
-                text.text.text().to_owned(),
-            )),
-        }
+                }),
+        );
     }
 }
 

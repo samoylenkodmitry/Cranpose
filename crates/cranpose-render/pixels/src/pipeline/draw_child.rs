@@ -31,29 +31,40 @@ pub(super) fn render_draw_child(
     match child {
         ItemRef::Draw(draw) => render_graph_draw(scene, draw, context),
         ItemRef::Text(text) => render_graph_text_item(scene, text, context),
-        ItemRef::Run(run) => render_graph_draw_run(scene, run, context),
+        ItemRef::Run(run) => {
+            let rect = context.layer_bounds.raster_rect();
+            run.for_each_primitive(|primitive| {
+                push_run_primitive(scene, &primitive, rect, context);
+            });
+        }
+        ItemRef::Shape(shape) => {
+            let rect = context.layer_bounds.raster_rect();
+            for primitive in shape.primitives() {
+                push_run_primitive(scene, &primitive, rect, context);
+            }
+        }
         ItemRef::Layer(_) | ItemRef::Leaf(_) => {}
     }
     scene.snap_anchor = None;
 }
 
-fn render_graph_draw_run(
+// Pushes a primitive of a draw run or a shape item, which the layer's
+// visual clip cuts.
+fn push_run_primitive(
     scene: &mut RasterScene,
-    run: &cranpose_render_common::graph::DrawRunNode,
+    primitive: &DrawPrimitive,
+    rect: Rect,
     context: PrimitiveRenderContext<'_>,
 ) {
-    let rect = context.layer_bounds.raster_rect();
-    run.for_each_primitive(|primitive| {
-        push_draw_primitive(
-            &primitive,
-            rect,
-            context.node_layer,
-            context.visual_clip,
-            scene,
-            None,
-            context.motion_context_animated || context.content_offset_translation,
-        );
-    });
+    push_draw_primitive(
+        primitive,
+        rect,
+        context.node_layer,
+        context.visual_clip,
+        scene,
+        None,
+        context.motion_context_animated || context.content_offset_translation,
+    );
 }
 
 fn render_graph_draw(

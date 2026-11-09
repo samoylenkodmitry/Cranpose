@@ -205,7 +205,11 @@ fn path_steps(
                 steps.push((index, Some(node)));
                 return Some(ParentPass::of(parent, parent_children, translated));
             }
-            ItemRef::Leaf(_) | ItemRef::Draw(_) | ItemRef::Text(_) | ItemRef::Run(_) => continue,
+            ItemRef::Leaf(_)
+            | ItemRef::Draw(_)
+            | ItemRef::Text(_)
+            | ItemRef::Run(_)
+            | ItemRef::Shape(_) => continue,
         };
         let identity = layer_identity(layer);
         if identity == Some(node) {
@@ -265,7 +269,9 @@ fn leads_to(mut layer: LayerRef<'_>, steps: &[(usize, Option<NodeId>)]) -> bool 
     }
     match layer.items().nth(last) {
         Some(ItemRef::Layer(child) | ItemRef::Leaf(child)) => layer_identity(child) == identity,
-        Some(ItemRef::Draw(_) | ItemRef::Text(_) | ItemRef::Run(_)) | None => false,
+        Some(ItemRef::Draw(_) | ItemRef::Text(_) | ItemRef::Run(_) | ItemRef::Shape(_)) | None => {
+            false
+        }
     }
 }
 

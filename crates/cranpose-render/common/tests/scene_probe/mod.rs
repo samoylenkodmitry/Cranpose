@@ -104,31 +104,26 @@ pub(crate) fn solid_rect_colors(scene: &Scene) -> Vec<Color> {
 
 pub(crate) fn painted_solid_rect_colors(layer: LayerRef<'_>, colors: &mut Vec<Color>) {
     for item in layer.items() {
-        match item {
+        let primitives: Vec<DrawPrimitive> = match item {
             ItemRef::Layer(child) | ItemRef::Leaf(child) => {
                 painted_solid_rect_colors(child, colors);
+                continue;
             }
-            ItemRef::Run(run) => {
-                for primitive in run.primitives() {
-                    if let DrawPrimitive::Rect {
+            ItemRef::Run(run) => run.primitives().collect(),
+            ItemRef::Shape(shape) => shape.primitives().collect(),
+            ItemRef::Draw(draw) => vec![draw.primitive.clone()],
+            ItemRef::Text(_) => continue,
+        };
+        colors.extend(
+            primitives
+                .into_iter()
+                .filter_map(|primitive| match primitive {
+                    DrawPrimitive::Rect {
                         brush: Brush::Solid(color),
                         ..
-                    } = primitive
-                    {
-                        colors.push(color);
-                    }
-                }
-            }
-            ItemRef::Draw(draw) => {
-                if let DrawPrimitive::Rect {
-                    brush: Brush::Solid(color),
-                    ..
-                } = &draw.primitive
-                {
-                    colors.push(*color);
-                }
-            }
-            ItemRef::Text(_) => {}
-        }
+                    } => Some(color),
+                    _ => None,
+                }),
+        );
     }
 }

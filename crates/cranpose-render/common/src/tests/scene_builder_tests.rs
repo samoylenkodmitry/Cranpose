@@ -187,7 +187,7 @@ fn find_text_motion(layer: LayerRef<'_>, label: &str) -> Option<Option<TextMotio
             Some(text.text_style.paragraph_style.text_motion)
         }
         ItemRef::Layer(child) | ItemRef::Leaf(child) => find_text_motion(child, label),
-        ItemRef::Text(_) | ItemRef::Draw(_) | ItemRef::Run(_) => None,
+        ItemRef::Text(_) | ItemRef::Draw(_) | ItemRef::Run(_) | ItemRef::Shape(_) => None,
     })
 }
 
@@ -196,7 +196,7 @@ fn collect_text_labels(layer: LayerRef<'_>, labels: &mut Vec<String>) {
         match item {
             ItemRef::Text(text) => labels.push(text.text.text().to_owned()),
             ItemRef::Layer(child) | ItemRef::Leaf(child) => collect_text_labels(child, labels),
-            ItemRef::Draw(_) | ItemRef::Run(_) => {}
+            ItemRef::Draw(_) | ItemRef::Run(_) | ItemRef::Shape(_) => {}
         }
     }
 }
@@ -215,7 +215,7 @@ fn find_text_top(layer: LayerRef<'_>, label: &str) -> Option<f32> {
             ItemRef::Layer(child) | ItemRef::Leaf(child) => {
                 search(child, label, child.transform_to_parent().then(transform))
             }
-            ItemRef::Text(_) | ItemRef::Draw(_) | ItemRef::Run(_) => None,
+            ItemRef::Text(_) | ItemRef::Draw(_) | ItemRef::Run(_) | ItemRef::Shape(_) => None,
         })
     }
 
@@ -244,7 +244,7 @@ fn find_inline_by_node_id(layer: LayerRef<'_>, node_id: NodeId) -> Option<LayerR
     layer.items().find_map(|item| match item {
         ItemRef::Layer(child) => find_inline_by_node_id(child, node_id),
         ItemRef::Leaf(leaf) => (leaf.node_id() == Some(node_id)).then_some(leaf),
-        ItemRef::Text(_) | ItemRef::Draw(_) | ItemRef::Run(_) => None,
+        ItemRef::Text(_) | ItemRef::Draw(_) | ItemRef::Run(_) | ItemRef::Shape(_) => None,
     })
 }
 
@@ -445,12 +445,13 @@ fn a_draw_before_the_graphics_layer_wraps_the_clipped_layer_in_the_parents_space
     let shadow_is_outer = match shadow {
         ItemRef::Run(run) => run.summary.has_shadow && !run.summary.has_non_shadow,
         ItemRef::Draw(draw) => matches!(draw.primitive, DrawPrimitive::Shadow(_)),
-        ItemRef::Layer(_) | ItemRef::Leaf(_) | ItemRef::Text(_) => false,
+        ItemRef::Layer(_) | ItemRef::Leaf(_) | ItemRef::Text(_) | ItemRef::Shape(_) => false,
     };
     assert!(shadow_is_outer, "the outer draw is the shadow alone");
     assert!(
         card.items().any(|item| match item {
             ItemRef::Run(run) => run.summary.has_non_shadow,
+            ItemRef::Shape(shape) => shape.shape_count() > 0,
             ItemRef::Draw(draw) => !matches!(draw.primitive, DrawPrimitive::Shadow(_)),
             ItemRef::Layer(_) | ItemRef::Leaf(_) | ItemRef::Text(_) => false,
         }),
@@ -1496,7 +1497,7 @@ fn collect_text_tops(layer: LayerRef<'_>) -> std::collections::BTreeMap<String, 
                 ItemRef::Layer(child) | ItemRef::Leaf(child) => {
                     walk(child, child.transform_to_parent().then(transform), out);
                 }
-                ItemRef::Draw(_) | ItemRef::Run(_) => {}
+                ItemRef::Draw(_) | ItemRef::Run(_) | ItemRef::Shape(_) => {}
             }
         }
     }
@@ -2333,7 +2334,7 @@ fn find_text_primitive(
     layer.items().find_map(|item| match item {
         ItemRef::Text(text) if matches(text) => Some(text.clone()),
         ItemRef::Layer(child) | ItemRef::Leaf(child) => find_text_primitive(child, matches),
-        ItemRef::Text(_) | ItemRef::Draw(_) | ItemRef::Run(_) => None,
+        ItemRef::Text(_) | ItemRef::Draw(_) | ItemRef::Run(_) | ItemRef::Shape(_) => None,
     })
 }
 
@@ -3001,7 +3002,7 @@ fn collect_text_nodes(layer: LayerRef<'_>, texts: &mut Vec<TextPrimitiveNode>) {
         match item {
             ItemRef::Text(text) => texts.push(text.clone()),
             ItemRef::Layer(child) | ItemRef::Leaf(child) => collect_text_nodes(child, texts),
-            ItemRef::Draw(_) | ItemRef::Run(_) => {}
+            ItemRef::Draw(_) | ItemRef::Run(_) | ItemRef::Shape(_) => {}
         }
     }
 }
@@ -3759,7 +3760,7 @@ fn first_text(layer: LayerRef<'_>) -> Option<(LayerRef<'_>, &TextPrimitiveNode)>
     layer.items().find_map(|item| match item {
         ItemRef::Text(text) => Some((layer, text)),
         ItemRef::Layer(child) | ItemRef::Leaf(child) => first_text(child),
-        ItemRef::Draw(_) | ItemRef::Run(_) => None,
+        ItemRef::Draw(_) | ItemRef::Run(_) | ItemRef::Shape(_) => None,
     })
 }
 

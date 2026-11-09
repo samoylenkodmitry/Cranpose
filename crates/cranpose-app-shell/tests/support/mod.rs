@@ -75,6 +75,12 @@ fn items_signature(layer: LayerRef<'_>, out: &mut Vec<String>) {
             ItemRef::Run(run) => {
                 out.push(format!("run {:?}", run.primitives().collect::<Vec<_>>()));
             }
+            ItemRef::Shape(shape) => {
+                out.push(format!(
+                    "shapes {:?}",
+                    shape.primitives().collect::<Vec<_>>()
+                ));
+            }
         }
     }
 }

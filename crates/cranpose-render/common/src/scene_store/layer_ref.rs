@@ -6,7 +6,9 @@ use cranpose_core::{NodeId, RecordId, RecordRef, SceneUpdate, StoreId};
 use cranpose_ui::{GraphicsLayer, Point, Rect, RenderEffect, Size};
 use cranpose_ui_graphics::{BlendMode, ColorFilter, CompositingStrategy, DrawPrimitive};
 
-use super::{Extent, Item, ItemKind, LayerProps, Reach, RecordFlags, RecordKind, SceneStore};
+use super::{
+    Extent, Item, ItemKind, LayerProps, Reach, RecordFlags, RecordKind, SceneStore, ShapeRef,
+};
 use crate::{
     graph::{
         CachePolicy, DrawPrimitiveNode, DrawRunNode, HitTestNode, IsolationReasons, PrimitivePhase,
@@ -36,6 +38,8 @@ pub enum ItemRef<'a> {
     Text(&'a TextPrimitiveNode),
     /// A run of one draw command's primitives.
     Run(&'a DrawRunNode),
+    /// Shapes the store keeps in a chunk it shares among shape items.
+    Shape(ShapeRef<'a>),
 }
 
 /// What a record was at one scene update: equal values mean the record, or
@@ -491,7 +495,7 @@ impl<'a> LayerRef<'a> {
                         }
                     }
                     ItemRef::Layer(child) | ItemRef::Leaf(child) => collect(child, out),
-                    ItemRef::Draw(_) => {}
+                    ItemRef::Draw(_) | ItemRef::Shape(_) => {}
                 }
             }
         }
@@ -535,6 +539,7 @@ impl<'a> ItemRef<'a> {
             ItemKind::Draw => Self::Draw(store.draw(item)),
             ItemKind::Text => Self::Text(store.text(item)),
             ItemKind::Run => Self::Run(store.run(item)),
+            ItemKind::Shape => Self::Shape(store.shapes(item)),
         }
     }
 }

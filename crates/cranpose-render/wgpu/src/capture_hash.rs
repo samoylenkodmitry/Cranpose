@@ -586,9 +586,10 @@ pub(crate) fn hash_run_item_with_clip<H: Hasher>(
     state: &mut H,
 ) {
     let tables = run.tables();
-    tables.fingerprint().hash(state);
-    run.segments.start.hash(state);
-    run.segments.end.hash(state);
+    match run.print {
+        Some(print) => print.hash(state),
+        None => (tables.fingerprint(), run.segments.start, run.segments.end).hash(state),
+    }
     let placement = &run.placement;
     let snap = placement
         .snap_anchor

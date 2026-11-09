@@ -13,8 +13,8 @@ use cranpose_ui::{GraphicsLayer, Point, Rect};
 use super::{
     ChildOrder, Facts, GeoRecord, HashCache, Item, ItemKind, ItemLists, ItemRef, Journal,
     JournalCursor, JournalEntry, JournalRead, LayerProps, LayerRef, Reach, ReachState, RecordEvent,
-    RecordEvents, RecordFlags, RecordKind, RecordNode, Slab, Span, SpanPool, TransformId,
-    TreeRecord, WarmRecord,
+    RecordEvents, RecordFlags, RecordKind, RecordNode, ShapeChunks, ShapeRun, Slab, Span, SpanPool,
+    TransformId, TreeRecord, WarmRecord,
     own_marks::{self, OwnMark},
     recordings::Recordings,
 };
@@ -39,6 +39,8 @@ pub struct SceneStore {
     pub(super) draws: Slab<DrawPrimitiveNode>,
     pub(super) texts: Slab<TextPrimitiveNode>,
     pub(super) runs: Slab<DrawRunNode>,
+    pub(super) shape_runs: Slab<ShapeRun>,
+    pub(super) shape_chunks: ShapeChunks,
     pub(super) hashes: HashCache,
     pub(super) facts: Facts,
     pub(crate) lists: ItemLists,
@@ -110,6 +112,8 @@ impl SceneStore {
             draws: Slab::default(),
             texts: Slab::default(),
             runs: Slab::default(),
+            shape_runs: Slab::default(),
+            shape_chunks: ShapeChunks::default(),
             hashes: HashCache::default(),
             facts: Facts::default(),
             lists: ItemLists::default(),
@@ -362,7 +366,7 @@ impl SceneStore {
                         }
                     }
                     ItemRef::Layer(child) | ItemRef::Leaf(child) => collect(child, nodes),
-                    ItemRef::Draw(_) | ItemRef::Text(_) => {}
+                    ItemRef::Draw(_) | ItemRef::Text(_) | ItemRef::Shape(_) => {}
                 }
             }
         }
@@ -403,6 +407,7 @@ impl SceneStore {
             + self.draws.values().count()
             + self.texts.values().count()
             + self.runs.values().map(DrawRunNode::len).sum::<usize>()
+            + self.shape_item_count()
     }
 
     /// How many records the store holds.
@@ -425,6 +430,7 @@ impl SceneStore {
         self.draws.clear();
         self.texts.clear();
         self.runs.clear();
+        self.clear_shapes();
         self.hashes.clear();
         self.facts.clear();
         self.root = None;
@@ -536,6 +542,7 @@ impl SceneStore {
                 }
                 self.runs.remove(item.index());
             }
+            ItemKind::Shape => self.remove_shapes(item.index()),
         }
     }
 

@@ -31,7 +31,7 @@ fn find_painted<'a>(layer: LayerRef<'a>, needle: &str) -> Option<&'a TextPrimiti
             Some(text)
         }
         ItemRef::Layer(child) | ItemRef::Leaf(child) => find_painted(child, needle),
-        ItemRef::Text(_) | ItemRef::Draw(_) | ItemRef::Run(_) => None,
+        ItemRef::Text(_) | ItemRef::Draw(_) | ItemRef::Run(_) | ItemRef::Shape(_) => None,
     })
 }
 

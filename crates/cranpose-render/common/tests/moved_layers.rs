@@ -113,35 +113,34 @@ fn update_frame(composition: &mut TestComposition, root: NodeId, graph: &mut Sce
 fn painted(layer: LayerRef<'_>, parent: ProjectiveTransform, out: &mut Vec<(Rect, String)>) {
     let transform = layer.transform_to_parent().then(parent);
     for item in layer.items() {
-        match item {
-            ItemRef::Layer(child) | ItemRef::Leaf(child) => painted(child, transform, out),
-            ItemRef::Run(run) => {
-                out.extend(run.primitives().filter_map(|primitive| match primitive {
+        let primitives: Vec<DrawPrimitive> = match item {
+            ItemRef::Layer(child) | ItemRef::Leaf(child) => {
+                painted(child, transform, out);
+                continue;
+            }
+            ItemRef::Run(run) => run.primitives().collect(),
+            ItemRef::Shape(shape) => shape.primitives().collect(),
+            ItemRef::Draw(draw) => vec![draw.primitive.clone()],
+            ItemRef::Text(text) => {
+                out.push((
+                    transform.bounds_for_rect(text.rect),
+                    text.text.text().to_owned(),
+                ));
+                continue;
+            }
+        };
+        out.extend(
+            primitives
+                .into_iter()
+                .filter_map(|primitive| match primitive {
                     DrawPrimitive::Rect {
                         rect,
                         brush: Brush::Solid(color),
                         ..
                     } => Some((transform.bounds_for_rect(rect), format!("{color:?}"))),
                     _ => None,
-                }));
-            }
-            ItemRef::Draw(draw) => {
-                if let DrawPrimitive::Rect {
-                    rect,
-                    brush: Brush::Solid(color),
-                    ..
-                } = &draw.primitive
-                {
-                    out.push((transform.bounds_for_rect(*rect), format!("{color:?}")));
-                }
-            }
-            ItemRef::Text(text) => {
-                out.push((
-                    transform.bounds_for_rect(text.rect),
-                    text.text.text().to_owned(),
-                ));
-            }
-        }
+                }),
+        );
     }
 }
 

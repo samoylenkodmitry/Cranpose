@@ -138,6 +138,7 @@ pub(super) fn own_draw_reach(item: ItemRef<'_>) -> Option<Reach> {
         ItemRef::Draw(draw) => Some(draw_reach(draw)),
         ItemRef::Text(text) => Some(Reach::of(text.draw_bounds())),
         ItemRef::Run(run) => Some(run_reach(run)),
+        ItemRef::Shape(shape) => Some(shape.coverage().map_or(Reach::Empty, Reach::Finite)),
         ItemRef::Layer(_) | ItemRef::Leaf(_) => None,
     }
 }

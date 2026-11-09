@@ -28,7 +28,7 @@ fn retained_recording(layer: LayerRef<'_>) -> Option<CommandRecording> {
     layer.items().find_map(|item| match item {
         ItemRef::Run(run) => Some(run.recording.as_ref().clone()),
         ItemRef::Layer(child) | ItemRef::Leaf(child) => retained_recording(child),
-        ItemRef::Draw(_) | ItemRef::Text(_) => None,
+        ItemRef::Draw(_) | ItemRef::Text(_) | ItemRef::Shape(_) => None,
     })
 }
 

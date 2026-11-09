@@ -13,10 +13,14 @@ pub(super) fn draws_nothing(content: &LayerScene) -> bool {
         && content.scene.effect_layers.is_empty()
 }
 
+// Whether the child puts nothing on its parent's surface. A mesh surface
+// does whatever its content draws: its material refracts or occludes what
+// lies behind it.
 pub(super) fn composites_nothing(child: &ChildLayer) -> bool {
     child.blend_mode == BlendMode::SrcOver
         && (child.alpha == 0.0
-            || (draws_nothing(&child.content)
+            || (child.mesh.is_none()
+                && draws_nothing(&child.content)
                 && child
                     .effect
                     .as_ref()

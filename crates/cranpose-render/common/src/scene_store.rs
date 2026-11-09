@@ -17,6 +17,7 @@ mod reach;
 mod record_props;
 mod recordings;
 mod records;
+mod shape_chunks;
 mod slab;
 mod spec;
 mod store;
@@ -37,5 +38,7 @@ pub(crate) use records::{
     WarmRecord,
 };
 pub use records::{RecordFlags, RecordKind};
+use shape_chunks::ShapeChunks;
+pub use shape_chunks::{ShapeRef, ShapeRun};
 pub(crate) use slab::Slab;
 pub use store::{RecordSeed, SceneStore, SceneVersion};

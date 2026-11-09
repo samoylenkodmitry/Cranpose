@@ -824,6 +824,12 @@ fn describe(layer: LayerRef<'_>) -> LayerNode {
                     node: PrimitiveNode::Text(Box::new(text.clone())),
                 }),
                 ItemRef::Run(run) => RenderNode::DrawRun(run.clone()),
+                ItemRef::Shape(shape) => {
+                    RenderNode::DrawRun(cranpose_render_common::graph::DrawRunNode::new(
+                        phase,
+                        shape.primitives().collect(),
+                    ))
+                }
                 ItemRef::Layer(child) => {
                     after_children |= child.draw_phase().is_none();
                     RenderNode::Layer(Box::new(describe(child)))

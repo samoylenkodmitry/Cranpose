@@ -59,7 +59,7 @@ fn canvas_rect_colors(layer: LayerRef<'_>, node_id: NodeId, colors: &mut Vec<Col
                     _ => None,
                 }));
             }
-            ItemRef::Run(_) | ItemRef::Draw(_) | ItemRef::Text(_) => {}
+            ItemRef::Run(_) | ItemRef::Shape(_) | ItemRef::Draw(_) | ItemRef::Text(_) => {}
         }
     }
 }

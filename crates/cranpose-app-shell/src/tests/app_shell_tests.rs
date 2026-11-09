@@ -1452,6 +1452,16 @@ impl Renderer for CountingRenderer {
 pub(super) type PaintedRects = Vec<(Rect, f32)>;
 
 pub(super) fn painted_rects(root: LayerRef<'_>) -> PaintedRects {
+    fn push_rects(
+        primitives: impl Iterator<Item = DrawPrimitive>,
+        (transform, alpha): (cranpose_render_common::graph::ProjectiveTransform, f32),
+        out: &mut PaintedRects,
+    ) {
+        out.extend(primitives.filter_map(|primitive| match primitive {
+            DrawPrimitive::Rect { rect, .. } => Some((transform.bounds_for_rect(rect), alpha)),
+            _ => None,
+        }));
+    }
     fn collect(
         layer: LayerRef<'_>,
         (parent, parent_alpha): (cranpose_render_common::graph::ProjectiveTransform, f32),
@@ -1464,14 +1474,8 @@ pub(super) fn painted_rects(root: LayerRef<'_>) -> PaintedRects {
                 ItemRef::Layer(child) | ItemRef::Leaf(child) => {
                     collect(child, (transform, alpha), out);
                 }
-                ItemRef::Run(run) => {
-                    out.extend(run.primitives().filter_map(|primitive| match primitive {
-                        DrawPrimitive::Rect { rect, .. } => {
-                            Some((transform.bounds_for_rect(rect), alpha))
-                        }
-                        _ => None,
-                    }));
-                }
+                ItemRef::Run(run) => push_rects(run.primitives(), (transform, alpha), out),
+                ItemRef::Shape(shape) => push_rects(shape.primitives(), (transform, alpha), out),
                 ItemRef::Draw(_) | ItemRef::Text(_) => {}
             }
         }
@@ -4127,6 +4131,12 @@ fn graph_layer_contains_rect_color(layer: LayerRef<'_>, color: Color) -> bool {
                 DrawPrimitive::Rect { brush, .. } if *brush == Brush::solid(color)
             )
         }),
+        ItemRef::Shape(shape) => shape.primitives().any(|primitive| {
+            matches!(
+                &primitive,
+                DrawPrimitive::Rect { brush, .. } if *brush == Brush::solid(color)
+            )
+        }),
         ItemRef::Layer(inner) | ItemRef::Leaf(inner) => {
             graph_layer_contains_rect_color(inner, color)
         }
@@ -5608,6 +5618,7 @@ fn solid_rect_y_in(layer: LayerRef<'_>, base: f32, color: Color) -> Option<f32> 
         ItemRef::Leaf(leaf) => solid_rect_y_in(leaf, base + leaf.origin().y, color),
         ItemRef::Draw(draw) => rect_y(&draw.primitive),
         ItemRef::Run(run) => run.primitives().find_map(|primitive| rect_y(&primitive)),
+        ItemRef::Shape(shape) => shape.primitives().find_map(|primitive| rect_y(&primitive)),
         ItemRef::Text(_) => None,
     })
 }
@@ -5760,7 +5771,7 @@ fn graph_scene_text_y(scene: &graph_scene::Scene, needle: &str) -> Option<f32> {
             ItemRef::Layer(child) => walk(child, base, needle),
             ItemRef::Leaf(leaf) => walk_items(leaf, base + leaf.origin().y, needle),
             ItemRef::Text(text) if text.text.text() == needle => Some(base + text.rect.y),
-            ItemRef::Text(_) | ItemRef::Draw(_) | ItemRef::Run(_) => None,
+            ItemRef::Text(_) | ItemRef::Draw(_) | ItemRef::Run(_) | ItemRef::Shape(_) => None,
         })
     }
 
@@ -5830,7 +5841,7 @@ fn graph_scene_text_values(scene: &graph_scene::Scene) -> Vec<String> {
             match item {
                 ItemRef::Layer(child) | ItemRef::Leaf(child) => collect(child, out),
                 ItemRef::Text(text) => out.push(text.text.text().to_owned()),
-                ItemRef::Draw(_) | ItemRef::Run(_) => {}
+                ItemRef::Draw(_) | ItemRef::Run(_) | ItemRef::Shape(_) => {}
             }
         }
     }
@@ -8474,6 +8485,16 @@ fn app_shell_pressable_canvas_content() {
     );
 }
 
+fn push_solid_rect_colors(primitives: impl Iterator<Item = DrawPrimitive>, out: &mut Vec<Color>) {
+    out.extend(primitives.filter_map(|primitive| match primitive {
+        DrawPrimitive::Rect {
+            brush: Brush::Solid(color),
+            ..
+        } => Some(color),
+        _ => None,
+    }));
+}
+
 fn graph_rect_colors(scene: &graph_scene::Scene) -> Vec<Color> {
     fn collect(layer: LayerRef<'_>, out: &mut Vec<Color>) {
         for item in layer.items() {
@@ -8487,17 +8508,8 @@ fn graph_rect_colors(scene: &graph_scene::Scene) -> Vec<Color> {
                         out.push(*color);
                     }
                 }
-                ItemRef::Run(run) => {
-                    for primitive in run.primitives() {
-                        if let DrawPrimitive::Rect {
-                            brush: Brush::Solid(color),
-                            ..
-                        } = &primitive
-                        {
-                            out.push(*color);
-                        }
-                    }
-                }
+                ItemRef::Run(run) => push_solid_rect_colors(run.primitives(), out),
+                ItemRef::Shape(shape) => push_solid_rect_colors(shape.primitives(), out),
                 ItemRef::Layer(child) | ItemRef::Leaf(child) => collect(child, out),
                 ItemRef::Text(_) => {}
             }

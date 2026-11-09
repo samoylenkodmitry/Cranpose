@@ -20,6 +20,8 @@ pub enum ItemKind {
     Text,
     /// A run of one draw command's primitives.
     Run,
+    /// Shapes the store keeps in a chunk it shares among shape items.
+    Shape,
 }
 
 const KIND_BITS: u32 = 3;
@@ -32,6 +34,7 @@ impl Item {
             ItemKind::Draw => 2,
             ItemKind::Text => 3,
             ItemKind::Run => 4,
+            ItemKind::Shape => 5,
         };
         let index = u32::try_from(index)
             .ok()
@@ -50,7 +53,8 @@ impl Item {
             1 => ItemKind::Child,
             2 => ItemKind::Draw,
             3 => ItemKind::Text,
-            _ => ItemKind::Run,
+            4 => ItemKind::Run,
+            _ => ItemKind::Shape,
         }
     }
 

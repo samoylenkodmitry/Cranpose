@@ -194,6 +194,7 @@ fn node_admits_corners(
                 && (!run.summary.has_shadow
                     || run_others_stay_clear(run, corners.raster_scale, |rect| check(rect, None)))
         }
+        ItemRef::Shape(shape) => shape.coverage().is_none_or(|rect| check(rect, None)),
         ItemRef::Layer(child) => {
             if child.graphics_layer().shadow_elevation > 0.0 {
                 return false;
@@ -260,6 +261,8 @@ fn nodes_take_corners(layer: LayerRef<'_>, offset: Point, corners: &RoundedClipC
             .draw_bounds()
             .is_some_and(|rect| stays_clear(rect, offset, corners)),
         ItemRef::Run(run) => run_takes_corners(run, offset, corners),
+        // Shapes take the rounded clip on the GPU.
+        ItemRef::Shape(_) => true,
         ItemRef::Layer(child) => child_takes_corners(child, offset, corners),
         ItemRef::Leaf(inline) => {
             let origin = inline.origin();

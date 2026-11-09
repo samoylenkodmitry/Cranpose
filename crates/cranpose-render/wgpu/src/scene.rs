@@ -8,6 +8,7 @@ use cranpose_render_common::{
     glyph_reach::{InkSpread, glyph_part},
     graph::DrawCommandId,
     layer_shadow::ShadowRRect,
+    scene_store::ShapeRef,
     text_paint::TextPaint,
     text_raster::TextRasterRequest,
 };
@@ -192,6 +193,10 @@ impl Placement {
 #[derive(Clone)]
 pub(crate) struct RunDraw {
     pub recorder: Arc<ShapeRecorder>,
+    /// A hash of the run's own records, for a run of a recorder that holds
+    /// other items' records too: the recorder's fingerprint changes with
+    /// theirs. `None` keys the run by the fingerprint and its segments.
+    pub print: Option<u64>,
     pub command: Option<DrawCommandId>,
     pub segments: Range<u32>,
     pub records: u32,
@@ -218,6 +223,22 @@ impl RunDraw {
         )
     }
 
+    // A run of the shapes of a shape item, in the chunk the store shares
+    // among its shape items.
+    pub(crate) fn of_shapes(shape: ShapeRef<'_>, placement: Placement) -> Self {
+        Self {
+            print: Some(shape.print()),
+            ..Self::with_bounds_and_records(
+                Arc::clone(shape.recorder()),
+                None,
+                shape.segments(),
+                shape.shape_count(),
+                shape.coverage(),
+                placement,
+            )
+        }
+    }
+
     fn with_bounds_and_records(
         recorder: Arc<ShapeRecorder>,
         command: Option<DrawCommandId>,
@@ -237,6 +258,7 @@ impl RunDraw {
         );
         Self {
             recorder,
+            print: None,
             command,
             segments,
             records,

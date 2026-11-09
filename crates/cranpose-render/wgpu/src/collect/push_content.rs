@@ -4,7 +4,7 @@
 use cranpose_render_common::{
     graph::{DrawPrimitiveNode, DrawRunNode, TextPrimitiveNode},
     primitive_emit::{PrimitiveClipSpace, resolve_primitive_clip},
-    scene_store::ItemRef,
+    scene_store::{ItemRef, ShapeRef},
 };
 use cranpose_ui_graphics::{Point, RecordLane};
 
@@ -21,6 +21,7 @@ pub(super) fn push_content(out: &mut LayerScene, node: ItemRef<'_>, content: &Co
         ItemRef::Draw(draw) => push_draw(out, draw, content),
         ItemRef::Text(text) => push_text(out, text, content),
         ItemRef::Run(run) => push_draw_run(out, run, content),
+        ItemRef::Shape(shape) => push_shapes(out, shape, content),
         ItemRef::Layer(_) | ItemRef::Leaf(_) => {}
     }
 }
@@ -94,25 +95,40 @@ fn push_text(out: &mut LayerScene, text: &TextPrimitiveNode, content: &ContentCo
 /// one run draw under the layer's placement, and the primitives of the
 /// other lane (text, images, shadows) take their own item paths between
 /// them, in the order the command drew.
-fn push_draw_run(out: &mut LayerScene, run: &DrawRunNode, content: &ContentContext<'_>) {
-    if !run.summary.has_shapes && !run.summary.has_others {
-        return;
-    }
+// Where a run of the layer's content draws: at the layer's origin, painted
+// by its layer and cut by its visual clip.
+fn run_placement(content: &ContentContext<'_>) -> RunPlacement {
     let ContentContext {
         layer_bounds,
         local_layer,
         visual_clip,
         rounding,
-        anchor: snap_anchor,
+        anchor,
         ..
     } = *content;
-    let placement = RunPlacement::painted(
+    RunPlacement::painted(
         Point::new(layer_bounds.x, layer_bounds.y),
-        snap_anchor,
+        anchor,
         visual_clip,
         local_layer,
     )
-    .with_rounding(rounding);
+    .with_rounding(rounding)
+}
+
+// Places a shape item: its shapes draw as one run of the chunk they sit in.
+fn push_shapes(out: &mut LayerScene, shape: ShapeRef<'_>, content: &ContentContext<'_>) {
+    if shape.shape_count() > 0 {
+        out.scene
+            .push_run(RunDraw::of_shapes(shape, run_placement(content)));
+    }
+}
+
+fn push_draw_run(out: &mut LayerScene, run: &DrawRunNode, content: &ContentContext<'_>) {
+    if !run.summary.has_shapes && !run.summary.has_others {
+        return;
+    }
+    let snap_anchor = content.anchor;
+    let placement = run_placement(content);
     let recording = &*run.recording;
     // A run of shapes alone draws as one run, read without its segments.
     if run.summary.shapes_only() {

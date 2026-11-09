@@ -35,6 +35,9 @@ fn drawn(layer: LayerRef<'_>, parent: ProjectiveTransform, out: &mut Vec<(Rect, 
         match item {
             ItemRef::Layer(child) | ItemRef::Leaf(child) => drawn(child, transform, out),
             ItemRef::Run(run) => run.primitives().for_each(|primitive| push(out, primitive)),
+            ItemRef::Shape(shape) => shape
+                .primitives()
+                .for_each(|primitive| push(out, primitive)),
             ItemRef::Draw(draw) => push(out, draw.primitive.clone()),
             ItemRef::Text(_) => {}
         }
@@ -135,7 +138,7 @@ fn texts(layer: LayerRef<'_>, parent: ProjectiveTransform, out: &mut Vec<DrawnTe
                 text.layout.width(),
                 *text.paint(),
             )),
-            ItemRef::Draw(_) | ItemRef::Run(_) => {}
+            ItemRef::Draw(_) | ItemRef::Run(_) | ItemRef::Shape(_) => {}
         }
     }
 }

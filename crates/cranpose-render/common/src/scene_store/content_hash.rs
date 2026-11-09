@@ -30,6 +30,7 @@ pub(super) fn own_draw_print(item: ItemRef<'_>) -> Option<u64> {
         ItemRef::Draw(draw) => finish_hash(|state| hash_draw(draw, state)),
         ItemRef::Text(text) => finish_hash(|state| hash_text(text, state)),
         ItemRef::Run(run) => finish_hash(|state| hash_run(run, state)),
+        ItemRef::Shape(shape) => shape.print(),
         ItemRef::Layer(_) | ItemRef::Leaf(_) => return None,
     };
     Some(print)
@@ -69,6 +70,10 @@ fn hash_items<H: Hasher>(layer: LayerRef<'_>, translated_offset: Option<Point>, 
             ItemRef::Run(run) => {
                 2u8.hash(state);
                 hash_run(run, state);
+            }
+            ItemRef::Shape(shape) => {
+                5u8.hash(state);
+                shape.print().hash(state);
             }
             ItemRef::Layer(child) => {
                 3u8.hash(state);

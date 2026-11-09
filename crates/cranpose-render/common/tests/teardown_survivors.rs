@@ -52,7 +52,7 @@ fn items_geometry(layer: LayerRef<'_>, out: &mut Vec<String>) {
             ItemRef::Text(text) => {
                 out.push(format!("text {:?} at {:?}", text.text.text(), text.rect));
             }
-            ItemRef::Draw(_) | ItemRef::Run(_) => {}
+            ItemRef::Draw(_) | ItemRef::Run(_) | ItemRef::Shape(_) => {}
         }
     }
 }

@@ -72,7 +72,7 @@ fn text_paints(layer: LayerRef<'_>, out: &mut Vec<(String, TextPaint)>) {
                 );
                 out.push((text.text.text().to_owned(), *text.paint()));
             }
-            ItemRef::Draw(_) | ItemRef::Run(_) => {}
+            ItemRef::Draw(_) | ItemRef::Run(_) | ItemRef::Shape(_) => {}
         }
     }
 }

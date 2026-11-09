@@ -65,23 +65,24 @@ fn spaced_canvas(
 // `to_root` maps `layer`'s into.
 fn painted(layer: LayerRef<'_>, to_root: ProjectiveTransform, out: &mut Vec<Rect>) {
     for item in layer.items() {
-        match item {
+        let primitives: Vec<DrawPrimitive> = match item {
             ItemRef::Layer(child) | ItemRef::Leaf(child) => {
                 painted(child, child.transform_to_parent().then(to_root), out);
+                continue;
             }
-            ItemRef::Run(run) => {
-                out.extend(run.primitives().filter_map(|primitive| match primitive {
+            ItemRef::Run(run) => run.primitives().collect(),
+            ItemRef::Shape(shape) => shape.primitives().collect(),
+            ItemRef::Draw(draw) => vec![draw.primitive.clone()],
+            ItemRef::Text(_) => continue,
+        };
+        out.extend(
+            primitives
+                .into_iter()
+                .filter_map(|primitive| match primitive {
                     DrawPrimitive::Rect { rect, .. } => Some(to_root.bounds_for_rect(rect)),
                     _ => None,
-                }));
-            }
-            ItemRef::Draw(draw) => {
-                if let DrawPrimitive::Rect { rect, .. } = &draw.primitive {
-                    out.push(to_root.bounds_for_rect(*rect));
-                }
-            }
-            ItemRef::Text(_) => {}
-        }
+                }),
+        );
     }
 }
 

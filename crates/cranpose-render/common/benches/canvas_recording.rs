@@ -25,7 +25,7 @@ fn canvas_run(layer: LayerRef<'_>) -> Option<&DrawRunNode> {
     layer.items().find_map(|item| match item {
         ItemRef::Layer(child) | ItemRef::Leaf(child) => canvas_run(child),
         ItemRef::Run(run) => Some(run),
-        ItemRef::Draw(_) | ItemRef::Text(_) => None,
+        ItemRef::Draw(_) | ItemRef::Text(_) | ItemRef::Shape(_) => None,
     })
 }
 
@@ -291,7 +291,7 @@ fn collect_runs_for_node<'a>(
             ItemRef::Run(run) if run.command.is_some_and(|id| id.node_id == node_id) => {
                 runs.push(run);
             }
-            ItemRef::Run(_) | ItemRef::Draw(_) | ItemRef::Text(_) => {}
+            ItemRef::Run(_) | ItemRef::Shape(_) | ItemRef::Draw(_) | ItemRef::Text(_) => {}
         }
     }
 }

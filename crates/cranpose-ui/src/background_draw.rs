@@ -1,6 +1,8 @@
 //! What a background modifier draws, kept as plain data.
 
-use cranpose_ui_graphics::{CornerRadii, DrawScope, Rect, RoundedCornerShape, Size};
+use cranpose_ui_graphics::{
+    BlendMode, CornerRadii, DrawScope, Rect, RoundedCornerShape, ShapeRecorder, Size,
+};
 
 use crate::modifier::{Brush, Color, CoordinatorRect};
 
@@ -48,6 +50,20 @@ impl BackgroundDraw {
         match self.shape_in(scope.size()) {
             (rect, Some(radii)) => scope.draw_round_rect_at(rect, brush, radii),
             (rect, None) => scope.draw_rect_at(rect, brush),
+        }
+    }
+
+    /// Records the background of a node of `size` into `recorder`, the
+    /// shape [`Self::draw`] records into a draw scope.
+    pub fn record(&self, size: Size, recorder: &mut ShapeRecorder) {
+        let brush = Brush::solid(self.color);
+        match self.shape_in(size) {
+            (rect, Some(radii)) => {
+                recorder.push_round_rect(rect, &brush, radii, None, BlendMode::SrcOver);
+            }
+            (rect, None) => {
+                recorder.push_rect(rect, &brush, None, BlendMode::SrcOver);
+            }
         }
     }
 

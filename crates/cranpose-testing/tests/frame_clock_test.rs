@@ -191,6 +191,7 @@ fn contains_caret(layer: LayerRef<'_>) -> bool {
     layer.items().any(|item| match item {
         ItemRef::Layer(child) | ItemRef::Leaf(child) => contains_caret(child),
         ItemRef::Run(run) => run.primitives().any(|primitive| is_caret(&primitive)),
+        ItemRef::Shape(shape) => shape.primitives().any(|primitive| is_caret(&primitive)),
         ItemRef::Draw(draw) => is_caret(&draw.primitive),
         ItemRef::Text(_) => false,
     })

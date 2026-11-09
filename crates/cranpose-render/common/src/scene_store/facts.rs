@@ -168,6 +168,9 @@ fn items_draw_within(layer: LayerRef<'_>, bounds: Rect) -> bool {
         ItemRef::Draw(_) => false,
         ItemRef::Text(text) => text.draws_within(bounds),
         ItemRef::Run(run) => run.draws_within(bounds),
+        ItemRef::Shape(shape) => shape
+            .coverage()
+            .is_none_or(|covered| rect_within(covered, bounds)),
         ItemRef::Layer(child) => {
             let graphics_layer = child.graphics_layer();
             graphics_layer.shadow_elevation <= 0.0

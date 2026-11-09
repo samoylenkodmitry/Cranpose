@@ -53,7 +53,9 @@ impl DrawPass<'_> {
                 Some(ItemRef::Run(run)) => run,
                 _ => return None,
             },
-            ItemRef::Draw(_) | ItemRef::Text(_) | ItemRef::Leaf(_) => return None,
+            ItemRef::Draw(_) | ItemRef::Text(_) | ItemRef::Leaf(_) | ItemRef::Shape(_) => {
+                return None;
+            }
         };
         matches!(command, DrawCommand::WithContent(_)).then(|| Rc::clone(&run.recording))
     }
@@ -311,6 +313,14 @@ pub(super) fn append_draw_nodes(
             let segments = shared.content_split(DrawPlacement::Overlay);
             (shared, segments)
         } else {
+            // A background takes shapes in the store's chunks, behind the
+            // node's content alone.
+            if let DrawCommand::Background(background) = command {
+                if placement == DrawPlacement::Behind {
+                    items.push(store.add_shapes(|recorder| background.record(size, recorder)));
+                }
+                continue;
+            }
             let Some((recording, segments)) =
                 recording_for_placement_reusing(command, placement, size, || {
                     store.recordings.acquire(id)

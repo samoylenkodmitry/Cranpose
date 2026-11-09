@@ -20,6 +20,7 @@ mod band_ring;
 mod draw_groups;
 mod materialize;
 mod record_tables;
+mod shape_spans;
 
 use band_ring::{BandRing, vertex_pixels};
 use draw_groups::DrawGroups;
@@ -1840,8 +1841,7 @@ impl CommandRecording {
             .sum()
     }
 
-    /// The rect every recorded shape's pixels lie within; `None` when no
-    /// shape was recorded.
+    /// Where every recorded shape's pixels lie; `None` when none was recorded.
     pub fn shape_bounds(&self) -> Option<Rect> {
         self.shapes.bounds()
     }
@@ -1951,7 +1951,7 @@ impl CommandRecording {
 
     /// Iterates over the segments in the index range `segments`.
     pub fn segments_in(&self, segments: &Range<u32>) -> std::slice::Iter<'_, RecordSegment> {
-        self.shapes.tables.segments[segments.start as usize..segments.end as usize].iter()
+        self.shapes.segments_in(segments)
     }
 
     /// The summary of the entries inside `segments` only.

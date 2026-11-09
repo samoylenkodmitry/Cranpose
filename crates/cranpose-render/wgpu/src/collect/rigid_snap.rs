@@ -47,6 +47,7 @@ pub(super) fn node_is_pixel_sensitive(node: ItemRef<'_>) -> bool {
         ItemRef::Text(_) => true,
         ItemRef::Draw(draw) => primitive_is_pixel_sensitive(&draw.primitive),
         ItemRef::Run(run) => run.summary.has_text || run.summary.has_pixel_sensitive,
+        ItemRef::Shape(_) => false,
         ItemRef::Layer(child) => {
             direct_translation(child.transform_to_parent()).is_some()
                 && layer_has_pixel_sensitive_subtree(child)
