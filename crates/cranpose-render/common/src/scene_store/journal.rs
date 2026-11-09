@@ -1,10 +1,11 @@
 // The changes of a store's records, kept until every reader that follows
 // them has read them.
 
-use cranpose_core::{NodeId, RecordRef, SceneUpdate, StoreId};
+use cranpose_core::{
+    NodeId, RecordRef, SceneUpdate, StoreId, collections::recent_peak::RecentPeak,
+};
 
 use super::{Reach, RecordKind};
-use crate::recent_peak::RecentPeak;
 
 /// What an update did to a record.
 #[derive(Clone, Copy, Debug, PartialEq)]

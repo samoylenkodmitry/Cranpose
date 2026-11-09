@@ -1,13 +1,12 @@
 use std::{borrow::Cow, sync::Arc};
 
-use cranpose_core::{NodeId, SceneUpdate};
+use cranpose_core::{NodeId, SceneUpdate, collections::recent_peak::RecentPeak};
 use cranpose_render_common::{
     graph::{CachePolicy, ProjectiveTransform},
     layer_composition::{layer_composite_params, local_content_layer_for},
     layer_shadow::ShadowLight,
     layer_transform::layer_uniform_scale,
     primitive_emit::resolve_clip,
-    recent_peak::RecentPeak,
     scene_store::{ItemRef, LayerRef},
     space::SeenDoor,
 };

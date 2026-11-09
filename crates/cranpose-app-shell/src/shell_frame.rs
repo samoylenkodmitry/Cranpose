@@ -659,6 +659,16 @@ where
     surface.structural_scene_nodes = dirt.structural_parents;
     surface.scene_updates = dirt.scene_updates;
     surface.scoped_layout_scene_nodes = dirt.layout_dirty_nodes;
+    surface.list_room.trim(
+        [
+            &mut surface.scoped_layout_scene_nodes,
+            &mut surface.scoped_moved_scene_nodes,
+            &mut surface.scoped_draw_nodes,
+            &mut surface.scoped_layer_property_nodes,
+            &mut surface.structural_scene_nodes,
+        ],
+        &mut surface.scene_updates,
+    );
     SurfaceFrame {
         result: FrameUpdateResult {
             visual_changed: true,

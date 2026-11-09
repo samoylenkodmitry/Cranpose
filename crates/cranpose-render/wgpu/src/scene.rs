@@ -2,13 +2,12 @@
 
 use std::{ops::Range, sync::Arc};
 
-use cranpose_core::NodeId;
+use cranpose_core::{NodeId, collections::recent_peak::RecentPeak};
 pub use cranpose_render_common::graph_scene::{HitRegion, Scene};
 use cranpose_render_common::{
     glyph_reach::{InkSpread, glyph_part},
     graph::DrawCommandId,
     layer_shadow::ShadowRRect,
-    recent_peak::RecentPeak,
     text_paint::TextPaint,
     text_raster::TextRasterRequest,
 };

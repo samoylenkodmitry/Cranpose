@@ -1,11 +1,10 @@
 use std::cell::{Cell, RefCell};
 
-use cranpose_core::collections::map::HashMap as NodeMap;
+use cranpose_core::collections::{map::HashMap as NodeMap, recent_peak::RecentPeak};
 use cranpose_ui_graphics::FxHashMap;
 
 use crate::{
     NodeUpdate,
-    recent_peak::RecentPeak,
     scene_builder::{HitGraphState, RecorderKey, RecorderSlot, TranslateScratch},
 };
 

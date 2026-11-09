@@ -1,7 +1,7 @@
 // The frame's arena tables: the per-pass chunks small runs are copied
 // into, in generations a copied arena keeps and a mapped arena cycles.
 
-use cranpose_render_common::recent_peak::RecentPeak;
+use cranpose_core::collections::recent_peak::RecentPeak;
 
 use super::*;
 

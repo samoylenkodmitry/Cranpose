@@ -12,6 +12,8 @@
 
 use std::{cell::RefCell, fmt::Debug, rc::Rc};
 
+mod list_room;
+
 use cranpose_core::{MemoryApplier, NodeId, collections::map::HashSet};
 use cranpose_foundation::{
     PointerButton, PointerButtons, PointerId, PointerSource, RotaryScrollEvent,
@@ -85,6 +87,7 @@ pub struct RootSurface<R: Renderer> {
     pub(crate) scoped_layer_property_nodes: Vec<NodeId>,
     pub(crate) structural_scene_nodes: Vec<NodeId>,
     pub(crate) scene_updates: Vec<(NodeId, NodeUpdate)>,
+    pub(crate) list_room: list_room::ListRoom,
     /// The nodes the retained redraw walk has yet to visit, empty between
     /// frames; kept for its storage.
     pub(crate) redraw_walk: Vec<NodeId>,
@@ -136,6 +139,7 @@ impl<R: Renderer> RootSurface<R> {
             scoped_layer_property_nodes: Vec::new(),
             structural_scene_nodes: Vec::new(),
             scene_updates: Vec::new(),
+            list_room: list_room::ListRoom::default(),
             redraw_walk: Vec::new(),
             retained_visual_nodes: HashSet::default(),
             is_dirty: true,
