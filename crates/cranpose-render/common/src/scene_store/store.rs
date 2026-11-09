@@ -243,7 +243,7 @@ impl SceneStore {
     // Leaves the own draws of the record at `index` to be compared with what
     // they were at the end of the update. While no reader follows where
     // records redraw, the record's marks wait at once.
-    #[inline(always)]
+    #[inline]
     pub(super) fn redraw_pending(&mut self, index: usize) {
         if !self.follows_redrawn_reach() {
             own_marks::lose(self, index);
@@ -739,7 +739,7 @@ impl SceneStore {
 
     /// The top left of `id` in its parent's layer: its placement and the
     /// parent's content offset.
-    #[inline(always)]
+    #[inline]
     pub fn origin(&self, id: RecordId) -> Point {
         let index = id.index();
         match self.tree[index].transform {
@@ -752,7 +752,7 @@ impl SceneStore {
 
     // Where the placement of the record at `index` puts it in its parent's
     // layer, past the parent's content offset.
-    #[inline(always)]
+    #[inline]
     fn placed_origin(&self, index: usize) -> Point {
         let [x, y] = self.geo[index].placement;
         let offset = self.parent_content_offset(index);
@@ -767,7 +767,7 @@ impl SceneStore {
         }
     }
 
-    #[inline(always)]
+    #[inline]
     fn parent_content_offset(&self, index: usize) -> Point {
         self.tree[index]
             .parent
@@ -776,7 +776,7 @@ impl SceneStore {
     }
 
     /// The transform from `id` to its parent's content.
-    #[inline(always)]
+    #[inline]
     pub fn transform_to_parent(&self, id: RecordId) -> ProjectiveTransform {
         match self.tree[id.index()].transform {
             Some(transform) => self.transforms[transform.index()],

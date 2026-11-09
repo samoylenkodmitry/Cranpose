@@ -131,7 +131,7 @@ impl<'a> LayerRef<'a> {
 
     /// The bounds of the layer, where its clip cuts, its transforms pivot and
     /// an offscreen pass draws it.
-    #[inline(always)]
+    #[inline]
     pub fn local_bounds(self) -> Rect {
         if !self.flags().contains(RecordFlags::HAS_LAYER_BOUNDS) {
             return self.node_rect();
@@ -329,7 +329,7 @@ impl<'a> LayerRef<'a> {
 
     /// The rectangle that cuts the content and pointer hits: the local
     /// bounds when the record clips to them or its graphics layer clips.
-    #[inline(always)]
+    #[inline]
     pub fn clip_rect(self) -> Option<Rect> {
         (self.clip_to_bounds() || self.graphics_layer().clip).then(|| self.local_bounds())
     }
@@ -343,7 +343,7 @@ impl<'a> LayerRef<'a> {
 
     /// Where the record's drawing is cut: its clip or, when it composites
     /// through an offscreen buffer for its alpha or by request, its bounds.
-    #[inline(always)]
+    #[inline]
     pub fn visual_clip_rect(self) -> Option<Rect> {
         let clip = self.clip_rect();
         if clip.is_some() {
@@ -501,7 +501,7 @@ impl<'a> LayerRef<'a> {
 }
 
 impl<'a> ItemRef<'a> {
-    #[inline(always)]
+    #[inline]
     pub(crate) fn of(store: &'a SceneStore, item: Item) -> Self {
         match item.kind() {
             ItemKind::Child => {

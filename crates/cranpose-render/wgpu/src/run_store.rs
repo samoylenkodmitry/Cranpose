@@ -376,7 +376,7 @@ impl TableUpdate<'_> {
         match table {
             BODY_BUFFER => bytemuck::cast_slice(self.tables.shapes.bodies()),
             CURVE_BUFFER => bytemuck::cast_slice(self.tables.shapes.curves()),
-            BRUSH_BUFFER => bytemuck::cast_slice(&self.tables.brushes()),
+            BRUSH_BUFFER => bytemuck::cast_slice(self.tables.brushes()),
             _ => bytemuck::cast_slice(self.painted_stops),
         }
     }
@@ -387,7 +387,7 @@ impl TableUpdate<'_> {
         let previous: &[u8] = match table {
             BODY_BUFFER => bytemuck::cast_slice(self.previous.shapes.bodies()),
             CURVE_BUFFER => bytemuck::cast_slice(self.previous.shapes.curves()),
-            BRUSH_BUFFER => bytemuck::cast_slice(&self.previous.brushes()),
+            BRUSH_BUFFER => bytemuck::cast_slice(self.previous.brushes()),
             _ if self.stops_changed => &[],
             _ => self.bytes(table),
         };
@@ -1238,7 +1238,7 @@ impl RunStore {
                         std::mem::replace(&mut entry.recorder, Arc::clone(&run.recorder));
                     let previous = previous_recorder.tables();
                     let stops_changed = entry.paint != paint || previous.stops() != tables.stops();
-                    painted_stops(&tables.stops(), &run.placement, scratch_stops);
+                    painted_stops(tables.stops(), &run.placement, scratch_stops);
                     let update = TableUpdate {
                         previous,
                         tables,
@@ -1258,7 +1258,7 @@ impl RunStore {
                 (entry, stats)
             }
             Entry::Vacant(slot) => {
-                painted_stops(&tables.stops(), &run.placement, scratch_stops);
+                painted_stops(tables.stops(), &run.placement, scratch_stops);
                 let update = TableUpdate {
                     previous: tables,
                     tables,

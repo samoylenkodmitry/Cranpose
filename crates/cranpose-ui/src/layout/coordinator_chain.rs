@@ -220,7 +220,7 @@ impl CoordinatorChain {
         let revision = node.modifier_chain().revision();
         if let Some(synced) = self.synced
             && synced.revision.get() == revision
-            && synced.scale == density.density()
+            && synced.scale.to_bits() == density.density().to_bits()
         {
             return synced.inputs(density);
         }

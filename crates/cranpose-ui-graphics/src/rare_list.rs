@@ -1,7 +1,13 @@
 // A list few values fill, kept in a box that a value holds only once an
 // item joins: an empty list takes one word, where a `Vec` takes three.
 #[derive(Clone, Debug)]
-pub(crate) struct RareList<T>(Option<Box<Vec<T>>>);
+pub(crate) struct RareList<T>(
+    #[expect(
+        clippy::box_collection,
+        reason = "one word, where a vector takes three"
+    )]
+    Option<Box<Vec<T>>>,
+);
 
 impl<T> Default for RareList<T> {
     fn default() -> Self {

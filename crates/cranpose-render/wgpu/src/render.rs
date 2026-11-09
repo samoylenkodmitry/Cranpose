@@ -1557,8 +1557,8 @@ impl GpuRenderer {
         let records = crate::mesh_fallback::MeshRecords {
             bodies: tables.shapes.bodies(),
             curves: tables.shapes.curves(),
-            brushes: &tables.brushes(),
-            stops: &tables.stops(),
+            brushes: tables.brushes(),
+            stops: tables.stops(),
         };
         let placement = PlacementData::of(
             &run.placement,

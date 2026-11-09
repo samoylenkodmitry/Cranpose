@@ -595,7 +595,7 @@ fn holds(bytes: &[u8], table: &[u8]) -> bool {
 
 fn painted_stop_bytes(run: &RunDraw) -> Vec<u8> {
     let mut painted = Vec::new();
-    painted_stops(&run.tables().stops(), &run.placement, &mut painted);
+    painted_stops(run.tables().stops(), &run.placement, &mut painted);
     bytemuck::cast_slice(&painted).to_vec()
 }
 
@@ -705,7 +705,7 @@ fn stored_runs_changed_while_earlier_frames_are_in_flight_keep_each_frames_table
                         bytemuck::cast_slice::<_, u8>(tables.shapes.bodies()),
                     ),
                     ("curves", bytemuck::cast_slice(tables.shapes.curves())),
-                    ("brushes", bytemuck::cast_slice(&tables.brushes())),
+                    ("brushes", bytemuck::cast_slice(tables.brushes())),
                     ("stops", &painted_stop_bytes(run)[..]),
                 ] {
                     assert!(

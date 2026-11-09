@@ -42,6 +42,7 @@ fn draws_alike_after_small_frames(renderer: Result<support::LockedRenderer, Stri
         support::capture_graph(&mut renderer, rects(1), WIDTH, HEIGHT);
     }
     let again = support::capture_graph(&mut renderer, rects(MANY), WIDTH, HEIGHT);
+    drop(renderer);
     assert!(
         first.pixels == again.pixels,
         "the large frame after small ones draws as the first one did"

@@ -174,6 +174,10 @@ pub struct ModifierNodeChain {
     // capabilities and the union of its own and those of every node after
     // it. `None` otherwise, when the entries are the order and keep the
     // unions: most chains delegate nowhere, and the list sits out of line.
+    #[expect(
+        clippy::box_collection,
+        reason = "one word in every chain, where a vector takes three"
+    )]
     delegated_order: Option<Box<Vec<(NodePath, NodeCapabilities, NodeCapabilities)>>>,
     /// Whether the chain's nodes are attached. A node that joins an attached
     /// chain attaches as it joins; one that joins a detached chain waits for

@@ -81,6 +81,10 @@ struct NodeCacheState {
     spare: Option<Rc<MeasuredNode>>,
     // The intrinsic sizes a parent read, `None` until one reads any: most
     // nodes never answer one.
+    #[expect(
+        clippy::box_collection,
+        reason = "one word in every cache, where a vector takes three"
+    )]
     intrinsics: Option<Box<Vec<(IntrinsicKind, f32)>>>,
     /// Whether a parent read intrinsic sizes since the cache was cleared.
     intrinsics_read: bool,
