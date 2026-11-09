@@ -153,11 +153,18 @@ impl TextPreparedLayoutOwner {
             source.style = Arc::clone(style);
         }
         let replaced = std::mem::replace(&mut source.text, text.clone());
-        crate::thread_state::with(|state| state.retired_strings.borrow_mut().retire(replaced));
         source.options = options;
         source.admission = CacheAdmission::Changed;
         drop(source);
-        self.cache.borrow_mut().clear();
+        let mut cache = self.cache.borrow_mut();
+        let retired = crate::render_state::current_app_context().map(|context| {
+            let layouts = cache.drain(..).map(|entry| entry.layout);
+            context.text.retire(replaced, layouts);
+        });
+        if retired.is_none() {
+            cache.clear();
+        }
+        drop(cache);
         self.changed.set(true);
     }
 

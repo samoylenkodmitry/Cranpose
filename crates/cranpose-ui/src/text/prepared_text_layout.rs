@@ -4,7 +4,11 @@ use cranpose_core::PackedU64;
 use cranpose_text::TextLayout;
 use cranpose_ui_graphics::{Size, TextLayoutHandle};
 
-use super::{AnnotatedString, RenderString, TextAlign, measure::TextMetrics, style::TextStyle};
+use super::{
+    AnnotatedString, RenderString, TextAlign,
+    measure::{TextFrame, TextMetrics},
+    style::TextStyle,
+};
 use crate::text_layout_result::TextLayoutResult;
 
 /// A text laid out between two widths: its glyphs and lines, which every
@@ -46,6 +50,23 @@ impl PreparedTextLayout {
             visual_style_hash: OnceCell::new(),
             layout_handle: OnceCell::new(),
         }
+    }
+
+    // Takes `text` in `style`, which its layout holds laid out already, in
+    // place of what it held.
+    pub(super) fn retext(
+        &mut self,
+        text: &AnnotatedString,
+        style: Arc<TextStyle>,
+        frame: TextFrame,
+    ) {
+        let min_lines = frame.options.normalized().min_lines;
+        self.max_width = frame.max_width;
+        self.min_lines = u32::try_from(min_lines).unwrap_or(u32::MAX);
+        self.text = Arc::clone(text.render_string());
+        self.visual_style = style;
+        self.visual_style_hash = OnceCell::new();
+        self.layout_handle = OnceCell::new();
     }
 
     /// The paragraph's width, within the widths it was laid out between, and

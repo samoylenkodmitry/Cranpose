@@ -225,10 +225,12 @@ fn a_row_scrolling_in_reuses_the_row_that_scrolled_out() {
     );
 }
 
-// Allocations a frame of `texts` texts that all change each frame, as a
-// ticker's do, through four words: composition, the layout an app runs
+// Allocations a frame of `texts` texts that all change each frame:
+// through four words, as a ticker's do, or to a new number, as a
+// counter's do, when `numbers`: numbers of five digits, as a counter shows
+// between the steps that lengthen it. Composition, the layout an app runs
 // while no screen reader is connected and the scene update together.
-fn ticker_frame_allocations(texts: usize) -> usize {
+fn ticker_frame_allocations(texts: usize, numbers: bool) -> usize {
     const WORDS: [&str; 4] = ["alpha", "bravo", "charlie", "delta"];
     const FRAME_LAYOUT: MeasureLayoutOptions = MeasureLayoutOptions {
         collect_semantics: false,
@@ -241,11 +243,20 @@ fn ticker_frame_allocations(texts: usize) -> usize {
         *holder.borrow_mut() = Some(tick);
         Column(Modifier::empty(), ColumnSpec::default(), move || {
             for index in 0..texts {
-                Text(
-                    WORDS[(tick.get() + index) % WORDS.len()],
-                    Modifier::empty(),
-                    TextStyle::default(),
-                );
+                let style = TextStyle::default();
+                if numbers {
+                    Text(
+                        format!("{}", 10_000 + tick.get() * 1000 + index),
+                        Modifier::empty(),
+                        style,
+                    );
+                } else {
+                    Text(
+                        WORDS[(tick.get() + index) % WORDS.len()],
+                        Modifier::empty(),
+                        style,
+                    );
+                }
             }
         });
     });
@@ -286,17 +297,20 @@ fn ticker_frame_allocations(texts: usize) -> usize {
     region.change().allocations / PASSES
 }
 
-// A fixed text that shows another string each frame takes the room of the
-// string it showed before: it allocates nothing of its own.
-fn a_text_changing_each_frame_reuses_its_string() {
-    let few = ticker_frame_allocations(10);
-    let many = ticker_frame_allocations(110);
-    let per_text = many.saturating_sub(few) as f64 / 100.0;
-    println!("allocations per changing text a frame: {per_text}");
-    assert!(
-        per_text <= 0.1,
-        "{per_text} allocations per changing text a frame"
-    );
+// A fixed text that shows another string each frame takes the room of a
+// string and a layout it gave up before: it allocates nothing of its own.
+// A counter's text allocates the string the app formats.
+fn a_text_changing_each_frame_reuses_its_string_and_layout() {
+    for (numbers, own) in [(false, 0.0), (true, 1.0)] {
+        let few = ticker_frame_allocations(10, numbers);
+        let many = ticker_frame_allocations(110, numbers);
+        let per_text = many.saturating_sub(few) as f64 / 100.0;
+        println!("allocations per changing text a frame, numbers {numbers}: {per_text}");
+        assert!(
+            per_text <= own + 0.1,
+            "{per_text} allocations per changing text a frame, numbers {numbers}"
+        );
+    }
 }
 
 /// One test, so no other test's allocations land in these regions: the
@@ -306,7 +320,7 @@ fn scene_rebuilds_stay_within_their_allocation_budgets() {
     rebuilding_the_graph_reuses_the_graph_it_replaces();
     updating_one_cell_reuses_the_dirty_node_map();
     a_row_scrolling_in_reuses_the_row_that_scrolled_out();
-    a_text_changing_each_frame_reuses_its_string();
+    a_text_changing_each_frame_reuses_its_string_and_layout();
 }
 
 main_thread_test!(scene_rebuilds_stay_within_their_allocation_budgets);

@@ -8,6 +8,7 @@ mod layout_input;
 pub mod measure;
 mod prepared_text_layout;
 pub(crate) mod recent_values;
+mod retired_layouts;
 pub(crate) mod shared_plain_text;
 mod shared_text;
 #[cfg(any(test, feature = "test-helpers"))]

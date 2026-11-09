@@ -380,6 +380,13 @@ impl TextLayout {
         self.id = next_id();
     }
 
+    /// Whether another layout, a copy or one aligned at other widths, holds
+    /// this layout's lines and glyphs: [`crate::TextLayouter::layout_into`]
+    /// then lays text out into new storage.
+    pub fn shares_lines(&self) -> bool {
+        Arc::strong_count(&self.body) > 1
+    }
+
     // The body, which the layouter reads glyphs shaped before from.
     pub(crate) fn body(&self) -> &LayoutBody {
         &self.body

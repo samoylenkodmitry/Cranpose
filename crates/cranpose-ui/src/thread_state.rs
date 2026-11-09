@@ -83,8 +83,6 @@ pub(crate) struct UiThreadState {
     pub(crate) localized_text_styles: RefCell<crate::localization::LocalizedTextStyles>,
     pub(crate) drawn_text_styles: RefCell<DrawnTextStyles>,
     pub(crate) shared_plain_texts: RefCell<cranpose_ui_graphics::ContentPool<SharedPlainText>>,
-    // The strings texts stopped showing, whose room the next fixed texts take.
-    pub(crate) retired_strings: RefCell<cranpose_text::RetiredStrings>,
     // Each icon's path data parsed once, for every icon that draws it.
     pub(crate) icon_paths: RefCell<IconPaths>,
     pub(crate) pending_announcements: RefCell<Vec<Announcement>>,
@@ -117,7 +115,6 @@ impl UiThreadState {
             localized_text_styles: RefCell::new(crate::localization::LocalizedTextStyles::new()),
             drawn_text_styles: RefCell::new(DrawnTextStyles::new()),
             shared_plain_texts: RefCell::new(cranpose_ui_graphics::ContentPool::new()),
-            retired_strings: RefCell::new(cranpose_text::RetiredStrings::new()),
             icon_paths: RefCell::new(Vec::new()),
             pending_announcements: RefCell::new(Vec::new()),
             unhandled_key_handlers: RefCell::new(Vec::new()),

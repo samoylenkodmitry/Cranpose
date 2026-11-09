@@ -59,6 +59,9 @@ pub struct TextLayouter {
     // The glyphs of the text being laid out, which keep their storage from
     // one text to the next; a layout takes them once they are all placed.
     glyphs: ShapedGlyphs,
+    // The glyphs of the layout laid out into last, whose storage its text
+    // takes when it fits.
+    spare_glyphs: LaidGlyphs,
     // The faces intrinsic widths are measured in, which keep their storage
     // from one text to the next.
     faces: SmallVec<[Typeface; 1]>,
@@ -140,6 +143,7 @@ impl TextLayouter {
         layout: &mut TextLayout,
     ) {
         layout.refill((input.min_width, input.max_width), |body| {
+            self.spare_glyphs = std::mem::take(&mut body.glyphs);
             body.clear();
             self.shape(input, resolver, None, &mut body.faces);
             let width = self.fill(input, resolver, None, body);
@@ -371,7 +375,8 @@ impl TextLayouter {
     ) {
         // A relayout that added no glyphs keeps those it took.
         if layout.glyphs.len() != self.glyphs.len() {
-            layout.glyphs = LaidGlyphs::new(&self.glyphs);
+            layout.glyphs =
+                LaidGlyphs::new_in(&self.glyphs, std::mem::take(&mut self.spare_glyphs));
         }
         self.keep_glyph_room();
         // Each missing line adds a line's advance, whole pixels, as Compose's

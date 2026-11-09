@@ -8,7 +8,7 @@ use std::{
 use cranpose_core::collections::pass_aged::{IDLE_PASSES, PassAgedCache};
 use cranpose_text::{
     CaretDirection, FontExtent, FontFamily, FontFamilyResolver, FontRequest, FontStyle, FontWeight,
-    LayoutInput, ParagraphIntrinsics, TextLayout, TextLayouter, paragraph_line_box,
+    LayoutInput, ParagraphIntrinsics, RetiredStrings, TextLayout, TextLayouter, paragraph_line_box,
 };
 use cranpose_ui_graphics::{MemoryHeadroom, Point};
 
@@ -18,6 +18,7 @@ use super::{
     layout_cache::{CacheAdmission, Cached, LayoutCache},
     layout_input::{DEFAULT_FONT_SIZE_SP, ParagraphSpans, TextUnits},
     layout_options::{TextLayoutOptions, TextOverflow},
+    retired_layouts::RetiredLayouts,
     style::TextStyle,
     text_key::TextKey,
 };
@@ -154,6 +155,8 @@ pub(crate) struct TextService {
     layouter: RefCell<TextLayouter>,
     layouts: RefCell<LayoutCache>,
     intrinsics: RefCell<PassAgedCache<TextKey, ParagraphIntrinsics>>,
+    retired: RefCell<RetiredLayouts>,
+    retired_strings: RefCell<RetiredStrings>,
 }
 
 impl TextService {
@@ -167,6 +170,8 @@ impl TextService {
             intrinsics: RefCell::new(PassAgedCache::with_capacity_at_least_one(
                 TEXT_INTRINSICS_CACHE_CAPACITY,
             )),
+            retired: RefCell::default(),
+            retired_strings: RefCell::default(),
         }
     }
 
@@ -206,14 +211,60 @@ impl TextService {
             Some((key, Cached::Missed(miss))) => Some((key, miss)),
             None => None,
         };
-        let (text, style) = source.shared();
-        let prepared = Rc::new(self.lay_out(text, style, frame, (units, source.shaped())));
+        let prepared = self
+            .lay_out_retired(&source, frame, units)
+            .unwrap_or_else(|| {
+                let (text, style) = source.shared();
+                Rc::new(self.lay_out(text, style, frame, (units, source.shaped())))
+            });
         if let Some((key, miss)) = missed {
             self.layouts
                 .borrow_mut()
                 .keep(key, &prepared, (miss, admission));
         }
         prepared
+    }
+
+    // Keeps `text` and `layouts`, what a text that changed gave up, for the
+    // next changed texts.
+    pub(crate) fn retire(
+        &self,
+        text: AnnotatedString,
+        layouts: impl IntoIterator<Item = Rc<PreparedTextLayout>>,
+    ) {
+        self.retired_strings.borrow_mut().retire(text);
+        let mut retired = self.retired.borrow_mut();
+        layouts
+            .into_iter()
+            .for_each(|layout| retired.retire(layout));
+    }
+
+    // A plain string of `text`, in the room of a retired one nothing holds.
+    pub(crate) fn plain_text(&self, text: &str) -> AnnotatedString {
+        self.retired_strings.borrow_mut().plain(text)
+    }
+
+    // `source` laid out in the allocation of a retired layout nothing holds
+    // and in its lines' storage; `None` when no retired layout is free, or
+    // `source` takes glyphs shaped before or sizes itself down.
+    fn lay_out_retired(
+        &self,
+        source: &LayoutSource<'_>,
+        frame: TextFrame,
+        units: TextUnits,
+    ) -> Option<Rc<PreparedTextLayout>> {
+        let scales = frame.options.overflow.scale_down_min_font_size_sp();
+        if source.shaped().is_some() || scales.is_some() {
+            return None;
+        }
+        let mut spare = self.retired.borrow_mut().take()?;
+        let slot = Rc::get_mut(&mut spare)?;
+        let (text, style) = source.shared();
+        self.with_input(&text, &style, frame, units, |layouter, input, fonts| {
+            layouter.layout_into(input, fonts, &mut slot.layout);
+        });
+        slot.retext(&text, style, frame);
+        Some(spare)
     }
 
     // Lays `text` out in `style`, auto-sizing it when its options ask, with
@@ -299,6 +350,28 @@ impl TextService {
         frame: TextFrame,
         (units, shaped): (TextUnits, Option<&TextLayout>),
     ) -> TextLayout {
+        self.with_input(
+            text,
+            style,
+            frame,
+            units,
+            |layouter, input, fonts| match shaped {
+                Some(shaped) => layouter.relayout(input, fonts, shaped),
+                None => layouter.layout(input, fonts),
+            },
+        )
+    }
+
+    // Runs `lay_out` on the layouter with the input of `text` in `style` in
+    // `frame`, with sizes in `units`.
+    fn with_input<R>(
+        &self,
+        text: &AnnotatedString,
+        style: &TextStyle,
+        frame: TextFrame,
+        units: TextUnits,
+        lay_out: impl FnOnce(&mut TextLayouter, &LayoutInput<'_>, &FontFamilyResolver) -> R,
+    ) -> R {
         let paragraph = ParagraphSpans::new(text, style, units);
         let fonts = self.fonts.borrow();
         let spans = paragraph.spans(&fonts);
@@ -311,11 +384,7 @@ impl TextService {
             max_width: frame.max_width,
             options: frame.options,
         };
-        let mut layouter = self.layouter.borrow_mut();
-        match shaped {
-            Some(shaped) => layouter.relayout(&input, &fonts, shaped),
-            None => layouter.layout(&input, &fonts),
-        }
+        lay_out(&mut self.layouter.borrow_mut(), &input, &fonts)
     }
 
     // The intrinsic widths of `text` in `style`, with sizes in `units`.
@@ -336,19 +405,10 @@ impl TextService {
         {
             return found;
         }
-        let paragraph = ParagraphSpans::new(text, style, units);
-        let fonts = self.fonts.borrow();
-        let spans = paragraph.spans(&fonts);
-        let input = LayoutInput {
-            text: text.text(),
-            spans: &spans,
-            paragraph: &style.paragraph_style,
-            lengths: paragraph.lengths,
-            min_width: 0.0,
-            max_width: f32::INFINITY,
-            options: TextLayoutOptions::default(),
-        };
-        let found = self.layouter.borrow_mut().intrinsics(&input, &fonts);
+        let frame = TextFrame::unbounded(TextLayoutOptions::default());
+        let found = self.with_input(text, style, frame, units, |layouter, input, fonts| {
+            layouter.intrinsics(input, fonts)
+        });
         if let Some(key) = key {
             self.intrinsics.borrow_mut().push(key, found);
         }
@@ -405,6 +465,8 @@ impl TextService {
         };
         self.layouts.borrow_mut().begin_pass(idle_passes, headroom);
         self.intrinsics.borrow_mut().begin_pass(idle_passes, drop);
+        self.retired.borrow_mut().begin_pass();
+        self.retired_strings.borrow_mut().begin_pass();
         self.layouter.borrow_mut().set_memory_headroom(headroom);
     }
 

@@ -218,9 +218,8 @@ impl StaticTextModifier<'_> {
     // The element of the text's node.
     fn element(&self) -> TextModifierElement {
         let text = match self.text {
-            StaticText::Plain(text) => {
-                crate::thread_state::with(|state| state.retired_strings.borrow_mut().plain(text))
-            }
+            StaticText::Plain(text) => crate::render_state::current_app_context()
+                .map_or_else(|| text.into(), |context| context.text.plain_text(text)),
             StaticText::Annotated(text) => text.clone(),
         };
         TextModifierElement::with_shared_style(

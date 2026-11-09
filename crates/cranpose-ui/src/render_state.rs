@@ -64,7 +64,7 @@ pub struct AppContext {
     draw_observer: SnapshotStateObserver,
     // What each node's last measure read: a change measures the node again.
     pub(crate) measure_reads: Rc<cranpose_core::internal::NodeReads>,
-    text: crate::text::measure::TextService,
+    pub(crate) text: crate::text::measure::TextService,
     layout_frame_arena: RefCell<crate::layout::FrameLayoutArena>,
     /// The host the next layout pass lends its applier to; `None` while a
     /// pass has it.
