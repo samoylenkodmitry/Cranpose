@@ -57,8 +57,6 @@ pub struct ModifierChainHandle {
     /// every pass. The resolved modifiers, which only a subcompose node's
     /// measure and on-request readers take, are worked out when read.
     parent_data: SharedParentData,
-    capabilities: NodeCapabilities,
-    aggregate_child_capabilities: NodeCapabilities,
     /// `None` until the chain first provides or reads a modifier local, as
     /// most chains never do.
     modifier_locals: Option<ModifierLocalsHandle>,
@@ -146,8 +144,6 @@ impl ModifierChainHandle {
             layout_direction: crate::LayoutDirection::Ltr,
             pending_invalidations: None,
             parent_data: SharedParentData::default(),
-            capabilities: NodeCapabilities::default(),
-            aggregate_child_capabilities: NodeCapabilities::default(),
             modifier_locals: None,
             debug_logging: false,
             revision: PackedU64::new(next_revision()),
@@ -255,7 +251,8 @@ impl ModifierChainHandle {
     ) -> bool {
         // A chain that reads modifier locals syncs them on every update.
         if self
-            .capabilities
+            .chain
+            .capabilities()
             .contains(NodeCapabilities::MODIFIER_LOCALS)
         {
             return false;
@@ -294,8 +291,6 @@ impl ModifierChainHandle {
         if self.layout_direction.is_rtl() {
             self.update_offset_direction();
         }
-        self.capabilities = self.chain.capabilities();
-        self.aggregate_child_capabilities = self.chain.head().aggregate_child_capabilities();
         let modifier_local_invalidations = self.sync_modifier_locals(resolver);
 
         if !context.invalidations().is_empty() {
@@ -419,20 +414,20 @@ impl ModifierChainHandle {
 
     /// Returns the aggregated capability mask for the reconciled chain.
     pub fn capabilities(&self) -> NodeCapabilities {
-        self.capabilities
+        self.chain.capabilities()
     }
 
     /// Returns the aggregate child capability mask rooted at the sentinel head.
     pub fn aggregate_child_capabilities(&self) -> NodeCapabilities {
-        self.aggregate_child_capabilities
+        self.chain.head().aggregate_child_capabilities()
     }
 
     pub fn has_layout_nodes(&self) -> bool {
-        self.capabilities.contains(NodeCapabilities::LAYOUT)
+        self.capabilities().contains(NodeCapabilities::LAYOUT)
     }
 
     pub fn has_draw_nodes(&self) -> bool {
-        self.capabilities.contains(NodeCapabilities::DRAW)
+        self.capabilities().contains(NodeCapabilities::DRAW)
     }
 
     /// The padding, layout properties and offset of the chain, worked out

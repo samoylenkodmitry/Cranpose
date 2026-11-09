@@ -852,16 +852,16 @@ pub fn measure_layout_with_options(
     let (layout_tree, semantics) = {
         let mut applier_ref = applier_host.borrow_typed();
         let layout_tree = if options.build_layout_tree {
-            Some(build_layout_tree(&mut applier_ref, &measured)?)
+            Some(build_layout_tree(&mut applier_ref, root, &measured)?)
         } else {
             None
         };
         let semantics = if options.collect_semantics {
             let semantics_tree = if let Some(layout_tree) = layout_tree.as_ref() {
-                clear_semantics_dirty_flags(&mut applier_ref, &measured)?;
+                clear_semantics_dirty_flags(&mut applier_ref, root, &measured)?;
                 build_semantics_tree_from_layout_tree(layout_tree)
             } else {
-                build_semantics_tree_from_live_nodes(&mut applier_ref, &measured)?
+                build_semantics_tree_from_live_nodes(&mut applier_ref, root, &measured)?
             };
             Some(semantics_tree)
         } else {
@@ -1107,7 +1107,6 @@ impl LayoutBuilderState {
             None => (
                 "fallback",
                 Rc::new(MeasuredNode::new(
-                    node_id,
                     Size::default(),
                     Point { x: 0.0, y: 0.0 },
                     Point::default(),
@@ -1153,6 +1152,7 @@ impl LayoutBuilderState {
         cached: &Rc<MeasuredNode>,
     ) -> Result<Option<Rc<MeasuredNode>>, NodeError> {
         let kept = self.remeasure_changed_children(
+            node_id,
             cached,
             false,
             |child_id| self.subcompose_child_change(child_id),
@@ -1412,7 +1412,11 @@ impl LayoutBuilderState {
                 });
             }
 
-            children.push(MeasuredChild::new(child, policy_position));
+            children.push(MeasuredChild::new(
+                placement.node_id,
+                child,
+                policy_position,
+            ));
         }
         drop(applier);
 
@@ -1420,19 +1424,13 @@ impl LayoutBuilderState {
         node_handle.recycle_placement_scratch(placements);
 
         Ok(Some(
-            MeasuredNode::new(
-                node_id,
-                Size { width, height },
-                offset,
-                Point::default(),
-                children,
-            )
-            .with_alignment_lines(
-                alignment_lines
-                    .with_overrides(explicit_lines.translated(padding.top))
-                    .translated(offset.y),
-            )
-            .into_rc(spare),
+            MeasuredNode::new(Size { width, height }, offset, Point::default(), children)
+                .with_alignment_lines(
+                    alignment_lines
+                        .with_overrides(explicit_lines.translated(padding.top))
+                        .translated(offset.y),
+                )
+                .into_rc(spare),
         ))
     }
 
@@ -1453,7 +1451,7 @@ impl LayoutBuilderState {
                 Ok(LayoutNodeVisit::Cached(measured)) => return Ok(Some(measured)),
                 Ok(LayoutNodeVisit::Keep(node)) => {
                     drop(applier);
-                    if let Some(kept) = self.keep_measurement(constraints, node)? {
+                    if let Some(kept) = self.keep_measurement(node_id, constraints, node)? {
                         return Ok(Some(kept));
                     }
                     keep = false;
@@ -1511,7 +1509,6 @@ impl LayoutBuilderState {
             &mut children,
         );
         let measured = MeasuredNode::new(
-            node_id,
             measurement.size,
             measurement.offset,
             measurement.content_offset,
@@ -1627,6 +1624,7 @@ impl LayoutBuilderState {
     #[inline(never)]
     fn keep_measurement(
         self: &Rc<Self>,
+        node_id: NodeId,
         constraints: Constraints,
         node: KeptNode,
     ) -> Result<Option<Rc<MeasuredNode>>, NodeError> {
@@ -1637,6 +1635,7 @@ impl LayoutBuilderState {
         } = node;
         let mut next_state = 0;
         let kept = self.remeasure_changed_children(
+            node_id,
             &measured,
             ignores_child_sizes,
             |child_id| self.layout_child_change(parts.runtime_state(), &mut next_state, child_id),
@@ -1667,6 +1666,7 @@ impl LayoutBuilderState {
     /// its parent.
     fn remeasure_changed_children(
         self: &Rc<Self>,
+        node_id: NodeId,
         cached: &Rc<MeasuredNode>,
         ignores_child_sizes: bool,
         mut change: impl FnMut(NodeId) -> Result<ChildChange, NodeError>,
@@ -1689,7 +1689,7 @@ impl LayoutBuilderState {
                 resized = true;
             }
             if child.placed {
-                self.place_where_it_was(cached.node_id, previous.node_id);
+                self.place_where_it_was(node_id, previous.node_id);
             }
         }
         Ok(Some(KeptChildren {
@@ -1812,7 +1812,6 @@ impl LayoutBuilderState {
 
 #[derive(Debug, Clone)]
 pub(crate) struct MeasuredNode {
-    node_id: NodeId,
     size: Size,
     offset: Point,
     content_offset: Point,
@@ -1822,15 +1821,8 @@ pub(crate) struct MeasuredNode {
 }
 
 impl MeasuredNode {
-    fn new(
-        node_id: NodeId,
-        size: Size,
-        offset: Point,
-        content_offset: Point,
-        children: Vec<MeasuredChild>,
-    ) -> Self {
+    fn new(size: Size, offset: Point, content_offset: Point, children: Vec<MeasuredChild>) -> Self {
         Self {
-            node_id,
             size,
             offset,
             content_offset,
@@ -1896,9 +1888,9 @@ struct MeasuredChild {
 }
 
 impl MeasuredChild {
-    fn new(measured: &MeasuredNode, offset: Point) -> Self {
+    fn new(node_id: NodeId, measured: &MeasuredNode, offset: Point) -> Self {
         Self {
-            node_id: measured.node_id,
+            node_id,
             offset,
             for_parent: ForParent::of(measured),
         }
@@ -1972,7 +1964,7 @@ impl PlaceTarget for LayoutChildMeasureState {
 fn visit_child<R>(
     applier: &mut MemoryApplier,
     child: &MeasuredChild,
-    visit: impl FnOnce(&mut MemoryApplier, &MeasuredNode) -> R,
+    visit: impl FnOnce(&mut MemoryApplier, NodeId, &MeasuredNode) -> R,
 ) -> R {
     let held = applier.get_mut(child.node_id).ok().and_then(|node| {
         let any = node.as_any_mut();
@@ -1983,11 +1975,11 @@ fn visit_child<R>(
             .and_then(|subcompose| subcompose.cache().held_measurement())
     });
     match held {
-        Some(held) => visit(applier, &held),
+        Some(held) => visit(applier, child.node_id, &held),
         None => visit(
             applier,
+            child.node_id,
             &MeasuredNode::new(
-                child.node_id,
                 Size::default(),
                 Point::default(),
                 Point::default(),
@@ -1999,15 +1991,16 @@ fn visit_child<R>(
 
 fn clear_semantics_dirty_flags(
     applier: &mut MemoryApplier,
+    node_id: NodeId,
     node: &MeasuredNode,
 ) -> Result<(), NodeError> {
-    match applier.with_node::<LayoutNode, _>(node.node_id, |layout| {
+    match applier.with_node::<LayoutNode, _>(node_id, |layout| {
         layout.clear_needs_semantics();
     }) {
         Ok(()) => {}
         Err(NodeError::Missing { .. }) => {}
         Err(NodeError::TypeMismatch { .. }) => {
-            match applier.with_node::<SubcomposeLayoutNode, _>(node.node_id, |subcompose| {
+            match applier.with_node::<SubcomposeLayoutNode, _>(node_id, |subcompose| {
                 subcompose.clear_needs_semantics();
             }) {
                 Ok(()) | Err(NodeError::Missing { .. } | NodeError::TypeMismatch { .. }) => {}
@@ -2026,10 +2019,11 @@ fn clear_semantics_dirty_flags(
 
 fn build_semantics_tree_from_live_nodes(
     applier: &mut MemoryApplier,
+    node_id: NodeId,
     node: &MeasuredNode,
 ) -> Result<SemanticsTree, NodeError> {
     Ok(SemanticsTree::new(build_semantics_node_from_live_nodes(
-        applier, node, None,
+        applier, node_id, node, None,
     )?))
 }
 
@@ -2096,11 +2090,12 @@ fn semantics_node_from_parts(
 #[inline(never)]
 fn build_semantics_node_from_live_nodes(
     applier: &mut MemoryApplier,
+    node_id: NodeId,
     node: &MeasuredNode,
     origin: Option<Point>,
 ) -> Result<SemanticsNode, NodeError> {
     let (role, config, (bounds, content), placement) =
-        match applier.with_node::<LayoutNode, _>(node.node_id, |layout| {
+        match applier.with_node::<LayoutNode, _>(node_id, |layout| {
             let role = role_from_modifier_slices(&layout.modifier_slices_snapshot());
             let config = layout.semantics_configuration();
             layout.clear_needs_semantics();
@@ -2114,7 +2109,7 @@ fn build_semantics_node_from_live_nodes(
         }) {
             Ok(data) => data,
             Err(NodeError::TypeMismatch { .. } | NodeError::Missing { .. }) => {
-                match applier.with_node::<SubcomposeLayoutNode, _>(node.node_id, |subcompose| {
+                match applier.with_node::<SubcomposeLayoutNode, _>(node_id, |subcompose| {
                     subcompose.clear_needs_semantics();
                     let state = subcompose.layout_state();
                     (
@@ -2145,16 +2140,16 @@ fn build_semantics_node_from_live_nodes(
 
     let mut children = Vec::with_capacity(node.children.len());
     for child in &node.children {
-        children.push(visit_child(applier, child, |applier, child| {
-            build_semantics_node_from_live_nodes(applier, child, Some(content))
+        children.push(visit_child(applier, child, |applier, child_id, child| {
+            build_semantics_node_from_live_nodes(applier, child_id, child, Some(content))
         })?);
     }
 
     Ok(SemanticsNode {
         placement,
         ..semantics_node_from_parts(
-            node.node_id,
-            applier.node_generation(node.node_id),
+            node_id,
+            applier.node_generation(node_id),
             role,
             config,
             children,
@@ -2204,10 +2199,12 @@ fn record_layout_box_allocation_stats(
 
 fn build_layout_tree(
     applier: &mut MemoryApplier,
+    node_id: NodeId,
     node: &MeasuredNode,
 ) -> Result<LayoutTree, NodeError> {
     fn place(
         applier: &mut MemoryApplier,
+        node_id: NodeId,
         node: &MeasuredNode,
         origin: Point,
         parent_transform: ProjectiveTransform,
@@ -2223,7 +2220,7 @@ fn build_layout_tree(
             height: node.size.height,
         };
         let (data, window_transform) =
-            snapshot_node_data(applier, node.node_id, top_left, node.size, parent_transform)?;
+            snapshot_node_data(applier, node_id, top_left, node.size, parent_transform)?;
         let mut children = Vec::with_capacity(node.children.len());
         for child in &node.children {
             if crate::modifier::is_window_root(applier, child.node_id) {
@@ -2233,18 +2230,19 @@ fn build_layout_tree(
                 x: top_left.x + child.offset.x,
                 y: top_left.y + child.offset.y,
             };
-            children.push(visit_child(applier, child, |applier, child| {
-                place(applier, child, child_origin, window_transform)
+            children.push(visit_child(applier, child, |applier, child_id, child| {
+                place(applier, child_id, child, child_origin, window_transform)
             })?);
         }
         Ok(LayoutBox {
-            node_generation: applier.node_generation(node.node_id),
-            ..LayoutBox::new(node.node_id, rect, node.content_offset, data, children)
+            node_generation: applier.node_generation(node_id),
+            ..LayoutBox::new(node_id, rect, node.content_offset, data, children)
         })
     }
 
     Ok(LayoutTree::new(place(
         applier,
+        node_id,
         node,
         Point { x: 0.0, y: 0.0 },
         ProjectiveTransform::identity(),

@@ -545,6 +545,7 @@ impl LayoutRuntimeState {
                 child_state.place_at(position, placement.z_index);
             }
             measured_children.push(MeasuredChild::new(
+                child_state.node_id,
                 &measured,
                 Point {
                     x: content_offset.x + base_position.x,
