@@ -1988,43 +1988,6 @@ impl LayoutRuntimeState {
     ) -> Option<GeometryRect> {
         self.coordinator_chain.placed_rect(ordinal, node_size)
     }
-
-    #[cfg(test)]
-    pub(crate) fn debug_stats(&self) -> LayoutRuntimeDebugStats {
-        LayoutRuntimeDebugStats {
-            child_ids: self
-                .children
-                .as_ref()
-                .map(|children| children.ids.clone())
-                .unwrap_or_default(),
-            child_state_ptrs: self
-                .child_states()
-                .iter()
-                .map(|state| Rc::as_ptr(state) as *const () as usize)
-                .collect(),
-            child_measurable_ptrs: self
-                .child_measurables()
-                .iter()
-                .map(|measurable| {
-                    measurable.as_ref() as *const dyn Measurable as *const () as usize
-                })
-                .collect(),
-            child_measurable_count: self.child_measurables().len(),
-            coordinator_node_ptrs: self.coordinator_chain.debug_ptrs(),
-            coordinator_node_count: self.coordinator_chain.debug_ptrs().len(),
-        }
-    }
-}
-
-#[cfg(test)]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct LayoutRuntimeDebugStats {
-    pub(crate) child_ids: Vec<NodeId>,
-    pub(crate) child_state_ptrs: Vec<usize>,
-    pub(crate) child_measurable_ptrs: Vec<usize>,
-    pub(crate) child_measurable_count: usize,
-    pub(crate) coordinator_node_ptrs: Vec<usize>,
-    pub(crate) coordinator_node_count: usize,
 }
 
 impl PlaceTarget for LayoutChildMeasureState {

@@ -12,8 +12,6 @@ use cranpose_foundation::{
 use cranpose_ui_layout::MeasurePolicy;
 
 use super::layout_invalidation_diag::log_layout_invalidation_dispatch;
-#[cfg(test)]
-use crate::layout::LayoutRuntimeDebugStats;
 use crate::{
     layout::LayoutRuntimeState,
     modifier::{
@@ -760,11 +758,6 @@ impl LayoutNode {
 
     pub(crate) fn layout_runtime_state(&self) -> &RefCell<LayoutRuntimeState> {
         self.parts.runtime_state()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn layout_runtime_debug_stats(&self) -> LayoutRuntimeDebugStats {
-        self.parts.runtime_state().borrow().debug_stats()
     }
 }
 impl Clone for LayoutNode {

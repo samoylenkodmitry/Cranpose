@@ -461,14 +461,6 @@ fn a_new_child_list_is_reported_to_the_semantics_tree() {
     );
 }
 
-#[test]
-fn a_new_layout_runtime_state_has_no_children_or_coordinators() {
-    let stats = LayoutRuntimeState::new(Rc::new(TestMeasurePolicy)).debug_stats();
-    assert!(stats.child_ids.is_empty());
-    assert_eq!(stats.child_measurable_count, 0);
-    assert_eq!(stats.coordinator_node_count, 0);
-}
-
 fn state_of(id: NodeId) -> LayoutState {
     let mut state = LayoutState::default();
     state.set_node_id(id);

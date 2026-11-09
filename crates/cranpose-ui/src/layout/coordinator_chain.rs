@@ -161,11 +161,6 @@ impl CoordinatorNode {
     ) -> bool {
         self.modifier_index == modifier_index && Rc::ptr_eq(&self.node, node)
     }
-
-    #[cfg(test)]
-    fn ptr(&self) -> usize {
-        Rc::as_ptr(&self.node) as *const () as usize
-    }
 }
 
 #[derive(Default)]
@@ -476,10 +471,5 @@ impl CoordinatorChain {
             .get(index)
             .map(|node| node.accumulated_offset.get())
             .unwrap_or_default()
-    }
-
-    #[cfg(test)]
-    pub(super) fn debug_ptrs(&self) -> Vec<usize> {
-        self.nodes.iter().map(CoordinatorNode::ptr).collect()
     }
 }
