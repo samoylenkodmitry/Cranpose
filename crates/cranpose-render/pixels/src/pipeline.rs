@@ -565,14 +565,13 @@ fn populate_draws_from_graph(
     // The end of the layer's old record and where the old scene holds what
     // the layer passed down then.
     let mut before = None;
-    let head = subtree.head();
     if let Some(reuse) = reuse.as_mut()
-        && let Some(index) = reuse.find(head.identity)
+        && let Some(index) = reuse.find(subtree.identity())
         && let Some(record) = reuse.old.subtrees.get(index)
     {
         // The layer's number covers its subtree, save its placement.
         if context.same_as_before
-            && record.changes.same_subtree(head.changes)
+            && record.changes.same_subtree(subtree.changes())
             && subtree.placed_at(&record.placement)
         {
             let (end, stop) = (record.end, record.stop);
@@ -584,7 +583,7 @@ fn populate_draws_from_graph(
         before = Some((record.end, record.passed_down));
     }
     flush_copies(reuse, scene);
-    let record = scene.open_subtree(subtree, head);
+    let record = scene.open_subtree(subtree);
     match subtree {
         Subtree::Layer(layer) => push_layer_items(
             layer,
@@ -628,8 +627,7 @@ fn push_layer_surface(
         color_filter: context.parent_content_style.color_filter.clone(),
     };
     let mut items = RasterScene::new();
-    let subtree = Subtree::Layer(layer);
-    let record = items.open_subtree(subtree, subtree.head());
+    let record = items.open_subtree(Subtree::Layer(layer));
     push_layer_items(
         layer,
         &mut items,

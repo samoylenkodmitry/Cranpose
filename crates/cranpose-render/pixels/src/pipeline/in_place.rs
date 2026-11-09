@@ -120,12 +120,12 @@ impl Repush<'_> {
         parent: Option<usize>,
     ) -> Result<(), Stop> {
         let old = self.scene.subtrees.get(record).ok_or(Stop::OtherLayer)?;
-        let head = subtree.head();
-        if old.identity != head.identity {
+        if old.identity != subtree.identity() {
             return Err(Stop::OtherLayer);
         }
         // A subtree that holds no change pushes again only when it moved.
-        if old.changes.same_subtree(head.changes) {
+        let changes = subtree.changes();
+        if old.changes.same_subtree(changes) {
             if subtree.placed_at(&old.placement) {
                 return Ok(());
             }
@@ -137,7 +137,7 @@ impl Repush<'_> {
         };
         // A layer that changed itself, drew its subtree without records of
         // its children, as a surface or nothing, or moved pushes it all.
-        if !old.changes.same_own(head.changes)
+        if !old.changes.same_own(changes)
             || old.end == record + 1
             || !subtree.placed_at(&old.placement)
         {

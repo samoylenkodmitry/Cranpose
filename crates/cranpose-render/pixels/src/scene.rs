@@ -304,16 +304,6 @@ impl<'a> Subtree<'a> {
         }
     }
 
-    // The subtree's identity and change numbers, read once for a walk that
-    // compares them with an old record and writes them into a new one.
-    #[inline]
-    pub(crate) fn head(self) -> SubtreeHead {
-        SubtreeHead {
-            identity: self.identity(),
-            changes: self.changes(),
-        }
-    }
-
     // The node's placement in its parent's layer.
     pub(crate) fn placement(self) -> Placement {
         match self {
@@ -328,15 +318,6 @@ impl<'a> Subtree<'a> {
             Self::Layer(layer) | Self::Inline(layer) => layer.placed_at(placement),
         }
     }
-}
-
-// What the record of a subtree keeps of it before its placement: the node
-// it draws for, the node whose outer draws it wraps, and its change
-// numbers.
-#[derive(Clone, Copy)]
-pub(crate) struct SubtreeHead {
-    pub identity: (Option<NodeId>, Option<NodeId>),
-    pub changes: RecordChanges,
 }
 
 #[derive(Clone, Copy)]
@@ -434,11 +415,11 @@ impl RasterScene {
         }
     }
 
-    pub(crate) fn open_subtree(&mut self, subtree: Subtree<'_>, head: SubtreeHead) -> usize {
+    pub(crate) fn open_subtree(&mut self, subtree: Subtree<'_>) -> usize {
         let counts = self.counts();
         let record = SubtreeItems {
-            identity: head.identity,
-            changes: head.changes,
+            identity: subtree.identity(),
+            changes: subtree.changes(),
             placement: subtree.placement(),
             passed_down: None,
             end: 0,
