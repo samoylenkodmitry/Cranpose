@@ -854,11 +854,17 @@ impl SceneStore {
         let index = id.index();
         self.redraw_pending(index);
         self.stale(index);
-        self.tree[index].content_rev = update;
-        if let Some(props) = self.warm[index].props {
+        let tree = &mut self.tree[index];
+        tree.content_rev = update;
+        let (flags, raise) = (tree.flags, tree.subtree_rev != update);
+        if flags.contains(RecordFlags::HAS_PROPS)
+            && let Some(props) = self.warm[index].props
+        {
             self.props[props.index()].content_run.note(update);
         }
-        self.note_subtree_change(Some(id));
+        if raise {
+            self.raise_subtree_revs(id);
+        }
     }
 
     /// Notes that the update in progress changed the properties of `id`
@@ -925,8 +931,11 @@ impl SceneStore {
             }
             tree.subtree_rev = update;
             current = tree.parent;
+            let flags = tree.flags;
             self.hashes.forget(index);
-            if let Some(props) = self.warm[index].props {
+            if flags.contains(RecordFlags::HAS_PROPS)
+                && let Some(props) = self.warm[index].props
+            {
                 self.props[props.index()].content_run.note(update);
             }
         }
