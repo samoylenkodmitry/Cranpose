@@ -444,8 +444,6 @@ fn glass_material_applies_blur_tint_and_shape() {
     let modifier = Modifier::empty().glass_material(GlassMaterial::new(Dp(18.0), tint, shape));
     let slices = collect_slices_from_modifier(&modifier);
 
-    assert_eq!(slices.corner_shape(), Some(shape));
-
     let layer = slices
         .graphics_layer()
         .expect("glass_material should install a graphics layer")
@@ -1611,13 +1609,18 @@ fn rounded_alpha_mask_identity_is_noop() {
 }
 
 #[test]
-fn rounded_corners_records_corner_shape_without_background() {
+fn rounded_corners_round_only_a_clip_to_bounds() {
     let _app_context = crate::render_state::app_context_test_scope();
     let shape = RoundedCornerShape::new(4.0, 8.0, 12.0, 16.0);
-    let modifier = Modifier::empty().rounded_corner_shape(shape);
-    let slices = collect_slices_from_modifier(&modifier);
+    let clipped = collect_slices_from_modifier(
+        &Modifier::empty()
+            .rounded_corner_shape(shape)
+            .clip_to_bounds(),
+    );
+    assert_eq!(clipped.clip_shape(), Some(shape));
 
-    assert_eq!(slices.corner_shape(), Some(shape));
+    let unclipped = collect_slices_from_modifier(&Modifier::empty().rounded_corner_shape(shape));
+    assert_eq!(unclipped.clip_shape(), None);
 }
 
 #[test]

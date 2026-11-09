@@ -273,7 +273,7 @@ impl Backgrounds {
     /// Inserts every background at its place, the last first so the places
     /// of those before it still hold.
     fn insert_into(self, slices: &mut ModifierNodeSlices) {
-        slices.corner_shape = self.last_shape;
+        slices.set_corner_shape(self.last_shape);
         for slot in self.slots.into_iter().rev() {
             let BackgroundSlot {
                 color,

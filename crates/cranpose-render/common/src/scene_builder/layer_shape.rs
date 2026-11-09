@@ -16,7 +16,7 @@ pub(super) fn shaped_graphics_layer(
     slices: &ModifierNodeSlices,
     local_bounds: Rect,
 ) -> Option<Cow<'_, GraphicsLayer>> {
-    match clip_corners(clip_shape(slices), local_bounds) {
+    match clip_corners(slices.clip_shape(), local_bounds) {
         None => slices.graphics_layer(),
         Some(corners) => rounded_graphics_layer(slices, corners, local_bounds),
     }
@@ -69,10 +69,4 @@ fn round_clip(
         properties.shape = LayerShape::Rounded(corner_shape);
         properties.clip = true;
     }
-}
-
-// The corner shape the layer of a node with `slices` rounds its clip with:
-// `None` when it does not clip to its bounds.
-pub(super) fn clip_shape(slices: &ModifierNodeSlices) -> Option<RoundedCornerShape> {
-    slices.corner_shape().filter(|_| slices.clip_to_bounds())
 }

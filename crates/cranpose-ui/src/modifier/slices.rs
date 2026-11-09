@@ -28,7 +28,6 @@ pub struct ModifierNodeSlices {
     layer: Option<Box<LayerSlices>>,
     text: Option<SliceText>,
     text_coordinator: Option<CoordinatorRect>,
-    corner_shape: Option<RoundedCornerShape>,
     /// Boxed for the same reason: inline they took 150 bytes of every
     /// node's slices, and on the gauntlet's 5,600 nodes none sets them but the
     /// 44 animated layers' resolvers.
@@ -49,6 +48,8 @@ struct LayerSlices {
     // Boxed again: a clip without a layer is common, and a layer takes 240
     // bytes.
     graphics_layer: Option<Box<GraphicsLayer>>,
+    // The chain's last corner shape, which rounds the clip.
+    corner_shape: Option<RoundedCornerShape>,
 }
 
 fn publish_pointer_input_size(rare: &RareSlices, size: Size) {
@@ -340,6 +341,7 @@ impl ModifierNodeSlices {
                 clip_to_bounds: false,
                 coordinator: None,
                 graphics_layer: None,
+                corner_shape: None,
             })
         })
     }
@@ -608,9 +610,22 @@ impl ModifierNodeSlices {
                 .is_some_and(|rare| rare.graphics_layer_resolver.is_some())
     }
 
-    /// Returns the rounded corner shape the chain sets, or `None` when it sets none.
-    pub fn corner_shape(&self) -> Option<RoundedCornerShape> {
-        self.corner_shape
+    /// The rounded corner shape the chain's clip to bounds cuts with: the
+    /// chain's last corner shape. `None` when the chain does not clip to
+    /// its bounds or sets no corner shape.
+    pub fn clip_shape(&self) -> Option<RoundedCornerShape> {
+        self.layer
+            .as_deref()
+            .filter(|layer| layer.clip_to_bounds)
+            .and_then(|layer| layer.corner_shape)
+    }
+
+    // Takes `shape`, the chain's last corner shape, for the clip of the
+    // chain's layer; a chain with no clip or layer reads none.
+    fn set_corner_shape(&mut self, shape: Option<RoundedCornerShape>) {
+        if let Some(layer) = self.layer.as_deref_mut() {
+            layer.corner_shape = shape;
+        }
     }
 
     /// Records the layer's coordinator when this is the chain's outermost
@@ -706,7 +721,6 @@ impl ModifierNodeSlices {
             && self.layer.is_none()
             && self.text.is_none()
             && self.text_coordinator.is_none()
-            && self.corner_shape.is_none()
             && self.rare.as_deref().is_none_or(RareSlices::is_empty)
     }
 
@@ -716,7 +730,6 @@ impl ModifierNodeSlices {
         self.layer = None;
         self.text = None;
         self.text_coordinator = None;
-        self.corner_shape = None;
         if let Some(rare) = self.rare.as_deref_mut() {
             rare.clear();
         }
@@ -759,7 +772,7 @@ impl fmt::Debug for ModifierNodeSlices {
                     .rare()
                     .is_some_and(|rare| rare.graphics_layer_resolver.is_some()),
             )
-            .field("corner_shape", &self.corner_shape)
+            .field("clip_shape", &self.clip_shape())
             .finish()
     }
 }
