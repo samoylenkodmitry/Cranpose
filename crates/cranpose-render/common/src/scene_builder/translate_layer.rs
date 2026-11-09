@@ -298,7 +298,7 @@ fn check_retained_children(
             return Err("retained child slot is not a node");
         };
         let layer = store.layer(child);
-        let text_alone = match layer.kind() {
+        let text_alone = || match layer.kind() {
             RecordKind::Leaf => text_node::text_alone(store.items(child)),
             RecordKind::Layer | RecordKind::Wrapper | RecordKind::DrawGroup => {
                 text_node::draws_text_alone(store, child)
@@ -319,7 +319,7 @@ fn check_retained_children(
             // The child moves with the others; the walk beneath the container
             // then gives it its new layer properties or draws where it now lies.
             Some(NodeUpdate::Layer | NodeUpdate::Draws) if fits => KeptChild::Moved,
-            Some(NodeUpdate::Content) if text_alone => KeptChild::Retexted,
+            Some(NodeUpdate::Content) if text_alone() => KeptChild::Retexted,
             Some(_) => KeptChild::Left,
         };
     }
@@ -330,33 +330,34 @@ fn check_retained_children(
 // draws surround, those own draws, and the children that leave. The
 // container holds them all until the step writes its new items.
 pub(super) struct ItemParts {
-    pub(super) children: Vec<Item>,
-    own: Vec<Item>,
-    gone: Vec<Item>,
+    // The container's items before the step, then the children that leave.
+    items: Vec<Item>,
+    // Where the children lie among the items before the step.
+    children: Range<usize>,
 }
 
 impl ItemParts {
     // Parts the items of `container`; a draw group counts as an own draw.
     pub(super) fn of(store: &mut SceneStore, container: RecordId) -> Self {
-        let mut parts = Self {
-            children: store.lists.take(),
-            own: store.lists.take(),
-            gone: store.lists.take(),
-        };
+        let mut items = store.lists.take();
+        items.extend_from_slice(store.items(container));
         let is_child = |item: &Item| {
             item.as_child()
                 .is_some_and(|child| store.layer(child).kind() != RecordKind::DrawGroup)
         };
-        let items = store.items(container);
         let first = items.iter().position(is_child).unwrap_or(items.len());
         let end = items
             .iter()
             .rposition(is_child)
             .map_or(first, |last| last + 1);
-        parts.children.extend_from_slice(&items[first..end]);
-        parts.own.extend_from_slice(&items[..first]);
-        parts.own.extend_from_slice(&items[end..]);
-        parts
+        Self {
+            items,
+            children: first..end,
+        }
+    }
+
+    pub(super) fn children(&self) -> &[Item] {
+        &self.items[self.children.clone()]
     }
 
     // Keeps the children in `kept`, in order, in `list`; the others leave.
@@ -367,12 +368,13 @@ impl ItemParts {
         list: &mut Vec<Item>,
         dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
     ) {
-        for (index, &child) in self.children.iter().enumerate() {
+        for (index, position) in self.children.clone().enumerate() {
+            let child = self.items[position];
             if kept.contains(&index) {
                 list.push(child);
             } else {
                 forget_dirty_node(store, child, dirty_nodes);
-                self.gone.push(child);
+                self.items.push(child);
             }
         }
     }
@@ -392,7 +394,7 @@ impl ItemParts {
             ..
         } = scratch;
         retained.clear();
-        retained.extend(self.children.iter().copied().map(Some));
+        retained.extend(self.children().iter().copied().map(Some));
         kept.clear();
         kept.extend(
             placed_fresh
@@ -401,23 +403,23 @@ impl ItemParts {
         );
         for leaving in retained.drain(..).flatten() {
             forget_dirty_node(store, leaving, dirty_nodes);
-            self.gone.push(leaving);
+            self.items.push(leaving);
         }
     }
 
     // Removes the own draws and the children that left, once the container
     // holds its new items.
     pub(super) fn remove(self, store: &mut SceneStore) {
-        for &item in self.own.iter().chain(&self.gone) {
+        let (before, rest) = self.items.split_at(self.children.start);
+        let after = &rest[self.children.len()..];
+        for &item in before.iter().chain(after) {
             store.remove_item(item);
         }
         self.give_back(store);
     }
 
     pub(super) fn give_back(self, store: &mut SceneStore) {
-        store.lists.give(self.children);
-        store.lists.give(self.own);
-        store.lists.give(self.gone);
+        store.lists.give(self.items);
     }
 }
 
@@ -632,7 +634,7 @@ pub(super) fn translate_layer_from_data(
         let order = translated_children(
             applier,
             store,
-            &parts.children,
+            parts.children(),
             dirty_nodes,
             fresh_children,
             scratch,
@@ -703,7 +705,7 @@ fn finish_translated_container(
     store.set_items(container, &list);
     store.lists.give(list);
     let hit_test = hit_test_from_slices(modifier_slices);
-    store.edit_props(container, |props| props.hit_test = hit_test);
+    store.set_hit_test(container, hit_test);
     set_origin_sinks(store, container, modifier_slices);
     store.note_content_change(container);
 }

@@ -87,7 +87,6 @@ pub(super) fn translate_retained_child(
         content_offset,
     );
     store.set_placement(layer, position, transform);
-    store.note_place_change(layer);
 }
 
 // What a translated container does with the layer of a previous child it
@@ -121,10 +120,7 @@ pub(super) fn move_kept_child(
     let position = placed.geometry.position;
     match (placed.kept, store.layer(record).kind()) {
         (KeptChild::Left, _) => {}
-        (KeptChild::Moved, RecordKind::Leaf) => {
-            let flags = store.flags(record);
-            store.place_leaf(record, position, flags);
-        }
+        (KeptChild::Moved, RecordKind::Leaf) => store.move_leaf(record, position),
         (KeptChild::Moved, _) => {
             translate_retained_child(store, record, position, children.parent_content_offset);
             if store.layer(record).has_origin_sinks() {

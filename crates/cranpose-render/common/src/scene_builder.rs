@@ -505,7 +505,7 @@ fn redraw_retained_layer(
         }
         let parts = ItemParts::of(store, container);
         let mut list = store.lists.take();
-        list.extend_from_slice(&parts.children);
+        list.extend_from_slice(parts.children());
         write_own_content_around_children(
             store,
             container,
@@ -539,6 +539,7 @@ fn move_retained_layer(
         placed.position,
         ancestors.parent_content_offset,
     );
+    store.note_place_change(layer);
     let moved = store.layer(layer);
     if moved.has_origin_sinks() {
         publish_retained_window_geometry(applier, moved, ancestors.parent_abs);
@@ -718,7 +719,7 @@ fn note_space_change() {
 
 fn release_for_rebuild(store: &mut SceneStore, record: RecordId) {
     store.clear_items(record);
-    store.edit_props(record, |props| props.hit_test = None);
+    store.set_hit_test(record, None);
 }
 
 fn forget_dirty_subtree(

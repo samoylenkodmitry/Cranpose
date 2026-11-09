@@ -244,9 +244,7 @@ pub(super) fn set_bounds(
 ) {
     let size = node_bounds.unwrap_or(local_bounds);
     store.set_size(record, size.width, size.height);
-    store.edit_props(record, |props| {
-        props.layer_bounds = node_bounds.map(|_| local_bounds);
-    });
+    store.set_layer_bounds(record, node_bounds.map(|_| local_bounds));
 }
 
 pub(super) fn placed_transform(

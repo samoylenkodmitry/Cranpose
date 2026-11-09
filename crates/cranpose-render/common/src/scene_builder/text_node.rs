@@ -112,7 +112,7 @@ pub(super) fn translate_leaf_text(
     let offset = ancestors.parent_content_offset;
     apply_translated_container_state(store, container, slices, layout_state, offset, geometry);
     let hit_test = hit_test_from_slices(slices);
-    store.edit_props(container, |props| props.hit_test = hit_test);
+    store.set_hit_test(container, hit_test);
     set_origin_sinks(store, container, slices);
     store.note_content_change(container);
     Some(true)

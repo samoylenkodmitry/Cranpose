@@ -81,7 +81,8 @@ fn write_placed_child(
 }
 
 // Writes the node `node_id` of `data`, placed under `context`, into
-// `record` as a leaf; its items are empty.
+// `record` as a leaf. The items `record` held stay in the store: the caller
+// removes them.
 fn write_inline(
     store: &mut SceneStore,
     record: RecordId,
@@ -191,8 +192,13 @@ pub(super) fn update_dirty_inline(
                 return false;
             }
             note_layer_lowered();
-            store.clear_items(record);
+            let mut old = store.lists.take();
+            old.extend_from_slice(store.items(record));
             write_inline(store, record, node_id, &data, context);
+            for &item in &old {
+                store.remove_item(item);
+            }
+            store.lists.give(old);
             if !draws_inline(store, record) {
                 layer_from_content(store, record, node_id, &data, context);
             }

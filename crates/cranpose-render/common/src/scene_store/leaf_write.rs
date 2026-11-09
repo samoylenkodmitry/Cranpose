@@ -47,7 +47,9 @@ impl SceneStore {
         self.warm[index].content_offset = offset;
         let reflagged = self.write_leaf_flags(index, leaf.flags);
         let moved = self.place_leaf_row(index, leaf.origin_in_parent) || shifted;
-        self.set_items(id, leaf.items);
+        // The content change noted below leaves the leaf's containment and
+        // reach to be worked out again.
+        self.replace_items(id, leaf.items);
         if moved {
             self.moved(index);
         }
@@ -81,6 +83,17 @@ impl SceneStore {
             if moved {
                 self.note_subtree_change(Some(parent));
             }
+        }
+    }
+
+    /// Moves `id`, a leaf, to `origin_in_parent` by a translation alone,
+    /// among the items of a parent whose content the update in progress
+    /// changes: the caller notes that change with
+    /// [`Self::note_content_change`] of the parent.
+    pub fn move_leaf(&mut self, id: RecordId, origin_in_parent: Point) {
+        let index = id.index();
+        if self.place_leaf_row(index, origin_in_parent) {
+            self.moved(index);
         }
     }
 

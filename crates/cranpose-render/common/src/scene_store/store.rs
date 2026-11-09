@@ -535,6 +535,13 @@ impl SceneStore {
     /// caller that changes the record's own draws notes it with
     /// [`Self::note_content_change`].
     pub fn set_items(&mut self, id: RecordId, items: &[Item]) {
+        self.replace_items(id, items);
+        self.stale(id.index());
+    }
+
+    // Replaces the items of `id` with `items` and logs the change, leaving
+    // its containment and reach to the caller.
+    pub(super) fn replace_items(&mut self, id: RecordId, items: &[Item]) {
         let index = id.index();
         let old = self.items.span(self.tree[index].items);
         if !super::facts::same_children(old, items) {
@@ -548,7 +555,6 @@ impl SceneStore {
             self.order.note(record, old);
         }
         self.tree[index].items = self.items.write(self.tree[index].items, items);
-        self.stale(index);
         // A reader that learns only whether the update changed anything
         // learns it from the first write of other items.
         if changed {

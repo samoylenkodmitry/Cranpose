@@ -2,9 +2,10 @@
 // layer, pointer handling, layer bounds and what else `LayerProps` holds.
 
 use cranpose_core::RecordId;
-use cranpose_ui::GraphicsLayer;
+use cranpose_ui::{GraphicsLayer, Rect};
 
 use super::{GraphicsLayerId, LayerProps, PropsId, RecordFlags, SceneStore};
+use crate::graph::HitTestNode;
 
 #[expect(clippy::multiple_inherent_impl, reason = "one file per concern")]
 impl SceneStore {
@@ -116,6 +117,23 @@ impl SceneStore {
                 self.stale_with_parent(index);
             }
             (None, None) => {}
+        }
+    }
+
+    /// Sets the layer bounds of `id`: `None` when they are its node rect.
+    pub fn set_layer_bounds(&mut self, id: RecordId, bounds: Option<Rect>) {
+        let bits = |bounds: Option<Rect>| {
+            bounds.map(|bounds| [bounds.x, bounds.y, bounds.width, bounds.height].map(f32::to_bits))
+        };
+        if bits(self.props(id).and_then(|props| props.layer_bounds)) != bits(bounds) {
+            self.edit_props(id, |props| props.layer_bounds = bounds);
+        }
+    }
+
+    /// Sets the pointer handling of `id`: `None` when it has none.
+    pub fn set_hit_test(&mut self, id: RecordId, hit_test: Option<HitTestNode>) {
+        if hit_test.is_some() || self.props(id).is_some_and(|props| props.hit_test.is_some()) {
+            self.edit_props(id, |props| props.hit_test = hit_test);
         }
     }
 
