@@ -4,12 +4,7 @@ use cranpose_ui_graphics::Size as GeometrySize;
 use cranpose_ui_layout::{Constraints, Measurable, MeasureResult, MeasureScope};
 
 use super::*;
-use crate::{
-    MovedSceneNode,
-    widgets::nodes::layout_node_registry::{
-        MIN_RETAINED_LAYOUT_NODE_REGISTRY_CAPACITY, layout_node_registry_stats,
-    },
-};
+use crate::{MovedSceneNode, widgets::nodes::layout_node_registry::layout_node_registry_stats};
 
 /// The node that places the nodes of these tests.
 const PLACER: Option<NodeId> = Some(NodeId(3));
@@ -139,7 +134,7 @@ fn an_equal_modifier_leaves_the_chain_and_its_slices_as_they_were() {
 }
 
 #[test]
-fn layout_node_registry_retains_warm_capacity_after_large_cleanup() {
+fn layout_node_registry_frees_its_room_after_large_cleanup() {
     let _app_context = crate::render_state::app_context_test_scope();
     let app_context = AppContext::new_with_density(1.0, None);
     app_context.enter(|| {
@@ -157,15 +152,7 @@ fn layout_node_registry_retains_warm_capacity_after_large_cleanup() {
 
         let stats = layout_node_registry_stats();
         assert_eq!(stats.len, 0);
-        assert!(
-            (MIN_RETAINED_LAYOUT_NODE_REGISTRY_CAPACITY
-                ..=MIN_RETAINED_LAYOUT_NODE_REGISTRY_CAPACITY.saturating_mul(2))
-                .contains(&stats.capacity),
-            "registry warm capacity {} fell outside expected retained range {}..={}",
-            stats.capacity,
-            MIN_RETAINED_LAYOUT_NODE_REGISTRY_CAPACITY,
-            MIN_RETAINED_LAYOUT_NODE_REGISTRY_CAPACITY.saturating_mul(2),
-        );
+        assert_eq!(stats.capacity, 0, "an emptied registry keeps no room");
     });
 }
 

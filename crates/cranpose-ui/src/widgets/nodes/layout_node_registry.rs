@@ -4,15 +4,13 @@
 
 use std::cell::RefCell;
 
-use cranpose_core::{NodeId, collections::map::HashMap};
+use cranpose_core::{NodeId, collections::id_pages::IdPages};
 use cranpose_foundation::NodeCapabilities;
 
 use super::LayoutNode;
 use crate::modifier::{
     ModifierLocalSource, ModifierLocalToken, ModifierLocalsHandle, ResolvedModifierLocal,
 };
-
-pub(super) const MIN_RETAINED_LAYOUT_NODE_REGISTRY_CAPACITY: usize = 128;
 
 #[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -27,47 +25,32 @@ struct LayoutNodeRegistryEntry {
     modifier_locals: Option<ModifierLocalsHandle>,
 }
 
+// The entries by node id: ids come from a counter, so the pages hold the
+// nodes of a screen side by side.
 pub(crate) struct LayoutNodeRegistryState {
-    entries: RefCell<HashMap<NodeId, LayoutNodeRegistryEntry>>,
+    entries: RefCell<IdPages<Option<LayoutNodeRegistryEntry>>>,
 }
 
 impl LayoutNodeRegistryState {
     pub(crate) fn new() -> Self {
         Self {
-            entries: RefCell::new(HashMap::default()),
+            entries: RefCell::default(),
         }
     }
 
     fn register(&self, id: NodeId, node: &LayoutNode) {
-        self.entries.borrow_mut().insert(
-            id,
-            LayoutNodeRegistryEntry {
-                parent: node.parent(),
-                modifier_child_capabilities: node.modifier_child_capabilities(),
-                modifier_locals: node.modifier_locals_handle(),
-            },
-        );
+        let entry = LayoutNodeRegistryEntry {
+            parent: node.parent(),
+            modifier_child_capabilities: node.modifier_child_capabilities(),
+            modifier_locals: node.modifier_locals_handle(),
+        };
+        self.entries
+            .borrow_mut()
+            .update(id.0, |slot| *slot = Some(entry));
     }
 
     fn unregister(&self, id: NodeId) {
-        let mut entries = self.entries.borrow_mut();
-        entries.remove(&id);
-        let should_shrink = (entries.len() <= MIN_RETAINED_LAYOUT_NODE_REGISTRY_CAPACITY
-            && entries.capacity() > MIN_RETAINED_LAYOUT_NODE_REGISTRY_CAPACITY)
-            || entries.capacity()
-                > entries
-                    .len()
-                    .max(MIN_RETAINED_LAYOUT_NODE_REGISTRY_CAPACITY)
-                    .saturating_mul(4);
-        if should_shrink {
-            let retained = entries
-                .len()
-                .max(MIN_RETAINED_LAYOUT_NODE_REGISTRY_CAPACITY);
-            let mut rebuilt = HashMap::default();
-            rebuilt.reserve(retained);
-            rebuilt.extend(entries.drain());
-            *entries = rebuilt;
-        }
+        self.entries.borrow_mut().update(id.0, |slot| *slot = None);
     }
 
     pub(super) fn update_entry(
@@ -77,7 +60,12 @@ impl LayoutNodeRegistryState {
         modifier_child_capabilities: NodeCapabilities,
         modifier_locals: Option<ModifierLocalsHandle>,
     ) {
-        if let Some(entry) = self.entries.borrow_mut().get_mut(&id) {
+        if let Some(entry) = self
+            .entries
+            .borrow_mut()
+            .entry_mut(id.0)
+            .and_then(Option::as_mut)
+        {
             entry.parent = parent;
             entry.modifier_child_capabilities = modifier_child_capabilities;
             entry.modifier_locals = modifier_locals;
@@ -88,7 +76,7 @@ impl LayoutNodeRegistryState {
     fn stats(&self) -> LayoutNodeRegistryDebugStats {
         let entries = self.entries.borrow();
         LayoutNodeRegistryDebugStats {
-            len: entries.len(),
+            len: entries.occupied(),
             capacity: entries.capacity(),
         }
     }
@@ -102,7 +90,7 @@ impl LayoutNodeRegistryState {
         while let Some(parent_id) = current {
             let (next_parent, resolved) = {
                 let entries = self.entries.borrow();
-                if let Some(entry) = entries.get(&parent_id) {
+                if let Some(entry) = entries.entry(parent_id.0).and_then(Option::as_ref) {
                     let resolved = entry
                         .modifier_child_capabilities
                         .contains(NodeCapabilities::MODIFIER_LOCALS)

@@ -2,21 +2,18 @@
 //! how many times that id's storage was recycled.
 //!
 //! Stable ids come from a counter, so live ids cluster and retire roughly in
-//! the order they were made. A two-level radix table indexes them: a lookup
-//! reads two arrays, where a hash map hashed the id and probed its groups. A
-//! page is freed once none of its ids has a slot or a generation, and one
-//! spare page waits for the next range the counter reaches.
+//! the order they were made, which [`IdPages`] holds: a page is freed once
+//! none of its ids has a slot or a generation.
 
-use crate::NodeId;
+use crate::{
+    NodeId,
+    collections::id_pages::{IdPages, Vacant},
+};
 
-const PAGE_BITS: usize = 7;
-const PAGE_LEN: usize = 1 << PAGE_BITS;
-const DIRECTORY_BITS: usize = 7;
-const DIRECTORY_LEN: usize = 1 << DIRECTORY_BITS;
-const NO_SLOT: u32 = u32::MAX;
 // The bit of a generation that says the id's node is virtual, set while the
 // id has a slot: a walk up the tree finds it with the slot it looks up.
 const VIRTUAL: u32 = 1 << 31;
+const NO_SLOT: u32 = u32::MAX;
 
 #[derive(Clone, Copy)]
 struct Entry {
@@ -33,68 +30,28 @@ impl Entry {
     fn has_slot(self) -> bool {
         self.slot != NO_SLOT
     }
+}
 
-    fn is_empty(self) -> bool {
+impl Vacant for Entry {
+    fn vacant() -> Self {
+        Self::EMPTY
+    }
+
+    fn is_vacant(&self) -> bool {
         !self.has_slot() && self.generation == 0
     }
 }
 
-struct Page {
-    entries: [Entry; PAGE_LEN],
-    occupied: usize,
-}
-
-impl Page {
-    fn new() -> Box<Self> {
-        Box::new(Self {
-            entries: [Entry::EMPTY; PAGE_LEN],
-            occupied: 0,
-        })
-    }
-}
-
-struct Directory {
-    pages: [Option<Box<Page>>; DIRECTORY_LEN],
-    occupied: usize,
-}
-
-impl Directory {
-    fn new() -> Box<Self> {
-        Box::new(Self {
-            pages: std::array::from_fn(|_| None),
-            occupied: 0,
-        })
-    }
-}
-
-/// The directory, page and entry an id lives at.
-#[inline]
-fn split(id: NodeId) -> (usize, usize, usize) {
-    (
-        id.0 >> (PAGE_BITS + DIRECTORY_BITS),
-        (id.0 >> PAGE_BITS) & (DIRECTORY_LEN - 1),
-        id.0 & (PAGE_LEN - 1),
-    )
-}
-
 #[derive(Default)]
 pub(crate) struct StableIndex {
-    directories: Vec<Option<Box<Directory>>>,
+    entries: IdPages<Entry>,
     live: usize,
-    occupied: usize,
-    pages: usize,
-    spare: Option<Box<Page>>,
 }
 
 impl StableIndex {
     #[inline]
     fn entry(&self, id: NodeId) -> Entry {
-        let (directory, page, entry) = split(id);
-        self.directories
-            .get(directory)
-            .and_then(Option::as_deref)
-            .and_then(|directory| directory.pages[page].as_deref())
-            .map_or(Entry::EMPTY, |page| page.entries[entry])
+        self.entries.entry(id.0).copied().unwrap_or(Entry::EMPTY)
     }
 
     /// The dense storage slot `id`'s node sits in.
@@ -152,32 +109,8 @@ impl StableIndex {
 
     /// Forgets the generations of ids without a node for which `keep` says no.
     pub(crate) fn retain_retired(&mut self, keep: impl Fn(NodeId) -> bool) {
-        for directory_index in 0..self.directories.len() {
-            let Some(directory) = self.directories[directory_index].as_deref_mut() else {
-                continue;
-            };
-            for page_index in 0..DIRECTORY_LEN {
-                let Some(page) = directory.pages[page_index].as_deref_mut() else {
-                    continue;
-                };
-                let base =
-                    (directory_index << (PAGE_BITS + DIRECTORY_BITS)) | (page_index << PAGE_BITS);
-                for (offset, entry) in page.entries.iter_mut().enumerate() {
-                    if entry.has_slot() || entry.is_empty() || keep(NodeId(base | offset)) {
-                        continue;
-                    }
-                    *entry = Entry::EMPTY;
-                    page.occupied -= 1;
-                    self.occupied -= 1;
-                }
-                if page.occupied == 0 {
-                    free_page(directory, page_index, &mut self.pages, &mut self.spare);
-                }
-            }
-            if directory.occupied == 0 {
-                self.directories[directory_index] = None;
-            }
-        }
+        self.entries
+            .retain(|id, entry| entry.has_slot() || keep(NodeId(id)));
     }
 
     /// Ids with a node in dense storage.
@@ -187,61 +120,24 @@ impl StableIndex {
 
     /// Ids with a node or a generation.
     pub(crate) fn occupied(&self) -> usize {
-        self.occupied
+        self.entries.occupied()
     }
 
     /// Ids the allocated pages can hold.
     pub(crate) fn capacity(&self) -> usize {
-        self.pages * PAGE_LEN
+        self.entries.capacity()
     }
 
-    /// Changes `id`'s entry, allocating its page if it has none and freeing
-    /// the page once it empties.
+    /// Changes `id`'s entry and counts the ids with a node.
     fn update(&mut self, id: NodeId, change: impl FnOnce(&mut Entry)) {
-        let (directory_index, page_index, entry_index) = split(id);
-        if self.directories.len() <= directory_index {
-            self.directories.resize_with(directory_index + 1, || None);
-        }
-        let directory = self.directories[directory_index].get_or_insert_with(Directory::new);
-        if directory.pages[page_index].is_none() {
-            directory.pages[page_index] = Some(self.spare.take().unwrap_or_else(Page::new));
-            directory.occupied += 1;
-            self.pages += 1;
-        }
-        let Some(page) = directory.pages[page_index].as_deref_mut() else {
-            return;
-        };
-        let entry = &mut page.entries[entry_index];
-        let before = *entry;
-        change(entry);
-        let after = *entry;
-        self.live += usize::from(after.has_slot());
-        self.live -= usize::from(before.has_slot());
-        let filled = usize::from(!after.is_empty());
-        let emptied = usize::from(!before.is_empty());
-        page.occupied = page.occupied + filled - emptied;
-        self.occupied = self.occupied + filled - emptied;
-        if page.occupied == 0 {
-            free_page(directory, page_index, &mut self.pages, &mut self.spare);
-            if directory.occupied == 0 {
-                self.directories[directory_index] = None;
-            }
-        }
-    }
-}
-
-/// Frees an empty page, keeping it as the spare when there is none.
-fn free_page(
-    directory: &mut Directory,
-    page_index: usize,
-    pages: &mut usize,
-    spare: &mut Option<Box<Page>>,
-) {
-    let freed = directory.pages[page_index].take();
-    directory.occupied -= 1;
-    *pages -= 1;
-    if spare.is_none() {
-        *spare = freed;
+        let mut had_slot = false;
+        let mut has_slot = false;
+        self.entries.update(id.0, |entry| {
+            had_slot = entry.has_slot();
+            change(entry);
+            has_slot = entry.has_slot();
+        });
+        self.live = self.live + usize::from(has_slot) - usize::from(had_slot);
     }
 }
 
