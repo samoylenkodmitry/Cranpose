@@ -571,14 +571,25 @@ impl TextModifierElement {
             density,
         }
     }
+
+    // Whether the element shows `text` in `style` with `options` on `density`.
+    fn shows(
+        &self,
+        text: &AnnotatedString,
+        style: &Arc<TextStyle>,
+        options: TextLayoutOptions,
+        density: Density,
+    ) -> bool {
+        self.text == *text
+            && (Arc::ptr_eq(&self.style, style) || self.style == *style)
+            && self.options == options
+            && self.density == density
+    }
 }
 
 impl PartialEq for TextModifierElement {
     fn eq(&self, other: &Self) -> bool {
-        self.text == other.text
-            && (Arc::ptr_eq(&self.style, &other.style) || self.style == other.style)
-            && self.options == other.options
-            && self.density == other.density
+        self.shows(&other.text, &other.style, other.options, other.density)
     }
 }
 
@@ -635,6 +646,11 @@ impl ModifierNodeElement for TextModifierElement {
     fn update(&self, node: &mut Self::Node) {
         node.density = self.density;
         node.layout.update(&self.text, &self.style, self.options);
+    }
+
+    fn equals_node(&self, node: &TextModifierNode) -> bool {
+        let source = node.layout.source.borrow();
+        self.shows(&source.text, &source.style, source.options, node.density)
     }
 
     fn capabilities(&self) -> NodeCapabilities {

@@ -283,11 +283,9 @@ where
     }
 
     fn equals_node(&self, node: &dyn ModifierNode) -> bool {
-        E::FROM_NODE.is_some_and(|from_node| {
-            node.as_any()
-                .downcast_ref::<E::Node>()
-                .is_some_and(|node| from_node(node) == self.element)
-        })
+        node.as_any()
+            .downcast_ref::<E::Node>()
+            .is_some_and(|node| self.element.equals_node(node))
     }
 }
 

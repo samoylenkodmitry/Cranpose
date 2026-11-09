@@ -19,6 +19,13 @@ pub trait ModifierNodeElement: fmt::Debug + Hash + PartialEq + Sized + 'static {
     /// element.
     const FROM_NODE: Option<fn(&Self::Node) -> Self> = None;
 
+    /// Whether `node` keeps an element equal to this one, for an element
+    /// with [`Self::FROM_NODE`]. An element whose node holds values a copy
+    /// would count references of compares them in place.
+    fn equals_node(&self, node: &Self::Node) -> bool {
+        Self::FROM_NODE.is_some_and(|from_node| from_node(node) == *self)
+    }
+
     /// Creates a new modifier node instance for this element.
     fn create(&self) -> Self::Node;
 
