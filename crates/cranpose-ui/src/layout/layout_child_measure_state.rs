@@ -55,7 +55,7 @@ impl LayoutBuilderState {
         position: usize,
         child_id: NodeId,
     ) -> Result<bool, NodeError> {
-        let unchanged = children.ids.get(position) == Some(&child_id)
+        let unchanged = children.id_at(position) == Some(child_id)
             && children.states[position].rebind_unchanged(self);
         if unchanged {
             return Ok(true);
@@ -601,7 +601,6 @@ pub(super) fn placement_for_child<'a>(
 
 /// What a node keeps for measuring its children, in their order.
 pub(super) struct LayoutChildren {
-    pub(super) ids: Vec<NodeId>,
     states: Vec<Rc<LayoutChildMeasureState>>,
     measurables: Vec<Box<dyn Measurable>>,
     frame: Rc<LayoutChildFrame>,
@@ -609,11 +608,10 @@ pub(super) struct LayoutChildren {
 
 impl LayoutChildren {
     /// Room for exactly `count` children, where growth would make room for
-    /// four in each of the three lists. Children added later grow the lists
+    /// four in each of the two lists. Children added later grow the lists
     /// as usual.
     fn with_capacity(count: usize, parent_parts: &Rc<LayoutParts>) -> Self {
         Self {
-            ids: Vec::with_capacity(count),
             states: Vec::with_capacity(count),
             measurables: Vec::with_capacity(count),
             frame: Rc::new(LayoutChildFrame::new(Rc::downgrade(parent_parts))),
@@ -624,14 +622,18 @@ impl LayoutChildren {
     /// bound. Inlined: the child is nearly always where it was.
     #[inline]
     fn state_at(&mut self, position: usize, child_id: NodeId) -> &LayoutChildMeasureState {
-        if self.ids.get(position) != Some(&child_id) {
+        if self.id_at(position) != Some(child_id) {
             self.bind_at(position, child_id);
         }
         &self.states[position]
     }
 
+    // The id of the child whose record sits at `position`.
+    fn id_at(&self, position: usize) -> Option<NodeId> {
+        self.states.get(position).map(|state| state.node_id)
+    }
+
     fn truncate(&mut self, len: usize) {
-        self.ids.truncate(len);
         self.states.truncate(len);
         self.measurables.truncate(len);
     }
@@ -640,18 +642,19 @@ impl LayoutChildren {
     /// on, or a new one.
     #[inline(never)]
     fn bind_at(&mut self, position: usize, child_id: NodeId) {
-        let from = match self.ids[position..].iter().position(|&id| id == child_id) {
+        let from = match self.states[position..]
+            .iter()
+            .position(|state| state.node_id == child_id)
+        {
             Some(offset) => position + offset,
             None => {
                 let state = LayoutChildMeasureState::new(child_id, Rc::clone(&self.frame));
-                self.ids.push(child_id);
                 self.states.push(Rc::clone(&state));
                 self.measurables
                     .push(Box::new(LayoutChildMeasurable::new(state)));
-                self.ids.len() - 1
+                self.states.len() - 1
             }
         };
-        self.ids.swap(position, from);
         self.states.swap(position, from);
         self.measurables.swap(position, from);
     }
