@@ -202,8 +202,8 @@ fn describe_dimension(constraint: DimensionConstraint) -> String {
     }
 }
 
-fn inspector_slice(inspector: &Option<Rc<[InspectorMetadata]>>) -> &[InspectorMetadata] {
-    inspector.as_deref().unwrap_or(&[])
+fn inspector_slice(inspector: &Option<Rc<Vec<InspectorMetadata>>>) -> &[InspectorMetadata] {
+    inspector.as_deref().map_or(&[], Vec::as_slice)
 }
 
 /// The inspector metadata of two modifiers joined, first `first`'s, or
@@ -211,11 +211,11 @@ fn inspector_slice(inspector: &Option<Rc<[InspectorMetadata]>>) -> &[InspectorMe
 fn merged_inspector(
     first: &[InspectorMetadata],
     second: &[InspectorMetadata],
-) -> Option<Rc<[InspectorMetadata]>> {
+) -> Option<Rc<Vec<InspectorMetadata>>> {
     if first.is_empty() && second.is_empty() {
         return None;
     }
-    Some(first.iter().chain(second).cloned().collect())
+    Some(Rc::new(first.iter().chain(second).cloned().collect()))
 }
 
 /// Whether `a` and `b` are equal elements: one element, as a kept chain
@@ -324,7 +324,7 @@ enum ModifierKind {
         elements: Elements,
         /// `None` when no element records inspector metadata, which is
         /// always outside tests and modifier debugging: no allocation.
-        inspector: Option<Rc<[InspectorMetadata]>>,
+        inspector: Option<Rc<Vec<InspectorMetadata>>>,
     },
 }
 
@@ -389,7 +389,6 @@ impl ExactSizeIterator for ModifierInspectorIterator<'_> {}
 #[must_use = "a modifier does nothing until a composable receives it"]
 pub struct Modifier {
     kind: ModifierKind,
-    element_count: usize,
     provides_composition_locals: bool,
 }
 
@@ -397,7 +396,6 @@ impl Default for Modifier {
     fn default() -> Self {
         Self {
             kind: ModifierKind::Empty,
-            element_count: 0,
             provides_composition_locals: false,
         }
     }
@@ -918,7 +916,6 @@ impl Modifier {
                 elements: elements.joined(next_elements),
                 inspector,
             },
-            element_count: self.element_count + next.element_count,
             provides_composition_locals: self.provides_composition_locals
                 || next.provides_composition_locals,
         }
@@ -926,7 +923,10 @@ impl Modifier {
 
     /// How many elements the modifier holds.
     pub(crate) fn element_count(&self) -> usize {
-        self.element_count
+        match &self.kind {
+            ModifierKind::Empty => 0,
+            ModifierKind::Single { elements, .. } => elements.len(),
+        }
     }
 
     pub(crate) fn iter_elements(&self) -> ModifierElementIterator<'_> {
@@ -968,7 +968,7 @@ impl Modifier {
         match &self.kind {
             ModifierKind::Empty => Vec::new(),
             ModifierKind::Single { inspector, .. } => {
-                inspector.as_deref().map(<[_]>::to_vec).unwrap_or_default()
+                inspector.as_deref().cloned().unwrap_or_default()
             }
         }
     }
@@ -1061,7 +1061,6 @@ impl Modifier {
                 elements: Elements::One(element),
                 inspector: None,
             },
-            element_count: 1,
         }
     }
 
@@ -1075,17 +1074,14 @@ impl Modifier {
                 elements,
                 inspector,
             } => {
-                let new_inspector = inspector_slice(&inspector)
-                    .iter()
-                    .cloned()
-                    .chain(std::iter::once(metadata))
-                    .collect();
+                let mut list = inspector.as_deref().cloned().unwrap_or_default();
+                list.push(metadata);
+                let new_inspector = Rc::new(list);
                 Self {
                     kind: ModifierKind::Single {
                         elements,
                         inspector: Some(new_inspector),
                     },
-                    element_count: self.element_count,
                     provides_composition_locals: self.provides_composition_locals,
                 }
             }
@@ -1107,7 +1103,8 @@ impl Modifier {
     /// long to name its elements; an element that asks for an update on
     /// every set counts as different.
     pub(crate) fn in_place_update(&self, other: &Self) -> Option<InPlaceUpdate> {
-        if self.element_count != other.element_count || self.element_count > u64::BITS as usize {
+        let count = self.element_count();
+        if count != other.element_count() || count > u64::BITS as usize {
             return None;
         }
         let mut update = InPlaceUpdate {
@@ -1141,7 +1138,7 @@ impl Modifier {
     }
 
     fn eq_internal(&self, other: &Self, consider_always_update: bool) -> bool {
-        if self.element_count != other.element_count {
+        if self.element_count() != other.element_count() {
             return false;
         }
 
