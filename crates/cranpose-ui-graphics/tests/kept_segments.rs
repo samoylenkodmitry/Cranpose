@@ -13,7 +13,7 @@ fn rect(x: f32) -> Rect {
     }
 }
 
-// The shapes of five runs, one recorded after another: lines and arcs keep
+// The shapes of six runs, one recorded after another: lines and arcs keep
 // their arguments beside their records, and the gradient paints with a
 // brush of the recorder's tables.
 fn runs() -> Vec<DrawPrimitive> {
@@ -50,6 +50,16 @@ fn runs() -> Vec<DrawPrimitive> {
             brush: Brush::solid(Color::BLUE),
             radii: CornerRadii::uniform(3.0),
             stroke: None,
+        },
+        DrawPrimitive::Arc {
+            rect: rect(50.0),
+            brush: Brush::solid(Color::BLUE),
+            center: Point::new(60.0, 9.0),
+            radius: 3.0,
+            start_angle: 2.0,
+            sweep_angle: 1.0,
+            stroke: None,
+            inner_radius: 1.0,
         },
     ]
 }
@@ -115,5 +125,44 @@ fn a_run_recorded_after_a_keep_starts_a_segment_of_its_own() {
         recorder.shape_count_in(&(start..recorder.all_segments().end)),
         1,
         "the new shape does not join the kept run"
+    );
+}
+
+#[test]
+fn a_shape_recorded_after_a_truncation_takes_the_place_of_the_dropped_ones() {
+    let mut recorder = ShapeRecorder::default();
+    let runs = recorded(&mut recorder);
+    let cut = runs[3].0.start;
+    recorder.truncate_segments(cut);
+    for (index, (segments, drawn)) in runs[..3].iter().enumerate() {
+        assert_eq!(
+            recorder.shape_primitives_in(segments).collect::<Vec<_>>(),
+            *drawn,
+            "run {index} draws what it drew"
+        );
+    }
+    assert_eq!(recorder.all_segments(), 0..cut, "the later runs went");
+
+    let arc = DrawPrimitive::Arc {
+        rect: rect(50.0),
+        brush: Brush::solid(Color::RED),
+        center: Point::new(60.0, 9.0),
+        radius: 4.0,
+        start_angle: 1.0,
+        sweep_angle: 1.5,
+        stroke: Some(Stroke::new(1.0)),
+        inner_radius: 0.0,
+    };
+    let mut alone = ShapeRecorder::default();
+    alone.push_primitive(arc.clone());
+    recorder.push_primitive(arc);
+    assert_eq!(
+        recorder
+            .shape_primitives_in(&(cut..recorder.all_segments().end))
+            .collect::<Vec<_>>(),
+        alone
+            .shape_primitives_in(&alone.all_segments())
+            .collect::<Vec<_>>(),
+        "the new arc reads its own arguments"
     );
 }

@@ -3,11 +3,17 @@
 // names its chunk and its segments there, and a packet leases a chunk whole.
 // A chunk takes new shapes only while no packet holds it, and a chunk that
 // no item names any more takes new shapes again once no packet holds it.
-// A chunk whose next shape would grow it, or that is full, first drops the
-// shapes no item draws once they are a quarter of it: a background drawn
-// anew each frame leaves its last shapes behind.
+// A background drawn anew each frame leaves its old shapes behind. The
+// shapes an item took last go with the item at once. A chunk whose next
+// shape would grow it, or that is full, first drops the shapes no item
+// draws once they are a quarter of it and at least `MIN_DEAD_SHAPES`.
 
-use std::{hash::Hasher, num::NonZeroU32, ops::Range, sync::Arc};
+use std::{
+    hash::Hasher,
+    num::NonZeroU32,
+    ops::Range,
+    sync::{Arc, OnceLock},
+};
 
 use cranpose_ui_graphics::{DrawPrimitive, FxHasher, Rect, ShapeRecorder};
 
@@ -21,6 +27,9 @@ const CHUNK_SHAPES: usize = 256;
 // shape writes into an empty chunk that the packets of the frames before
 // let go of.
 const KEPT_EMPTY_CHUNKS: usize = 4;
+// The fewest shapes no item draws for which a chunk moves the others: a
+// chunk of a few shapes grows to room for this many before it does.
+const MIN_DEAD_SHAPES: usize = 16;
 
 // A chunk's place in the store's list of chunks, past 0, so a slab of
 // runs needs no room for the absence of one.
@@ -43,7 +52,7 @@ impl ChunkId {
 }
 
 /// The shapes of one shape item in its chunk.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct ShapeRun {
     chunk: ChunkId,
     // How many shapes the item draws, and the rect they cover when it
@@ -52,8 +61,8 @@ pub struct ShapeRun {
     coverage: Rect,
     segments: Range<u32>,
     // A hash of what the shapes draw, which the chunk's other shapes leave
-    // alone.
-    print: u64,
+    // alone, made when a reader first asks: the pixel renderer reads none.
+    print: OnceLock<u64>,
 }
 
 /// A shape item as a reader sees it: shapes recorded into a chunk that
@@ -91,7 +100,11 @@ impl<'a> ShapeRef<'a> {
     /// A hash of what the item draws, which the other items of its chunk
     /// leave alone.
     pub fn print(self) -> u64 {
-        self.run.print
+        *self.run.print.get_or_init(|| {
+            let mut print = FxHasher::default();
+            self.recorder.hash_in(&self.run.segments, &mut print);
+            print.finish()
+        })
     }
 
     /// The primitives the item draws, in order.
@@ -142,14 +155,12 @@ impl ShapeChunks {
         let shapes = recorder.shape_count_in(&segments);
         entry.items += 1;
         entry.shapes += shapes;
-        let mut print = FxHasher::default();
-        recorder.hash_in(&segments, &mut print);
         ShapeRun {
             chunk,
             shapes,
             coverage: recorder.coverage_in(&segments).unwrap_or_default(),
             segments,
-            print: print.finish(),
+            print: OnceLock::new(),
         }
     }
 
@@ -164,7 +175,9 @@ impl ShapeChunks {
             let held = recorder.tables().shapes.len();
             let full = held >= CHUNK_SHAPES;
             let dead = held - chunk.shapes as usize;
-            if (full || held >= recorder.shape_capacity()) && dead > 0 && dead * 4 >= held {
+            if (full || held >= recorder.shape_capacity())
+                && dead >= (held / 4).max(MIN_DEAD_SHAPES)
+            {
                 keep_live_runs(open, recorder, runs, &mut self.live);
                 return open;
             }
@@ -194,6 +207,7 @@ impl ShapeChunks {
         id
     }
 
+    #[cold]
     fn add_chunk(&mut self) -> ChunkId {
         let chunk = Some(ShapeChunk {
             recorder: Arc::default(),
@@ -223,6 +237,12 @@ impl ShapeChunks {
         entry.items -= 1;
         entry.shapes -= run.shapes;
         if entry.items > 0 {
+            if let Some(recorder) = Arc::get_mut(&mut entry.recorder)
+                && !run.segments.is_empty()
+                && run.segments.end == recorder.all_segments().end
+            {
+                recorder.truncate_segments(run.segments.start);
+            }
             return;
         }
         if self.open == Some(chunk) {
@@ -259,6 +279,8 @@ impl ShapeChunks {
 // Moves the shapes of the runs in `chunk` to the front of its recorder, in
 // record order, and drops the shapes no run names. `live` is room for one
 // bit a segment.
+#[cold]
+#[inline(never)]
 fn keep_live_runs(
     chunk: ChunkId,
     recorder: &mut ShapeRecorder,

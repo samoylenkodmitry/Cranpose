@@ -39,6 +39,27 @@ impl From<DrawCommandId> for RecorderKey {
 }
 
 impl RecorderSlot {
+    // Storage for the next recording: a kept recording no reader holds,
+    // one that shares no shapes first, or a new one.
+    fn lend(&mut self) -> Rc<CommandRecording> {
+        let free = |handle: &Option<Rc<CommandRecording>>| {
+            handle.as_ref().is_some_and(|recording| {
+                Rc::strong_count(recording) == 1 && Rc::weak_count(recording) == 0
+            })
+        };
+        let unshared = self.handles.iter().position(|handle| {
+            free(handle)
+                && handle
+                    .as_ref()
+                    .is_some_and(|recording| !recording.shares_shapes())
+        });
+        let at = unshared.or_else(|| {
+            (self.handles.iter().all(Option::is_some) && free(&self.handles[2])).then_some(2)
+        });
+        at.and_then(|at| self.handles[at].take())
+            .unwrap_or_default()
+    }
+
     fn hold(&mut self, update: u64, recording: &Rc<CommandRecording>) {
         self.update = update;
         self.handles[2] = self.handles[1].take();
@@ -59,36 +80,28 @@ impl Recordings {
         }
     }
 
-    // Storage for the next recording of `id`: a kept recording no reader
-    // holds, one that shares no shapes first, or a new one.
-    pub(crate) fn acquire(&mut self, id: DrawCommandId) -> Rc<CommandRecording> {
-        let Some(slot) = self.slots.get_mut(&RecorderKey::from(id)) else {
-            return Rc::default();
-        };
-        let free = |handle: &Option<Rc<CommandRecording>>| {
-            handle.as_ref().is_some_and(|recording| {
-                Rc::strong_count(recording) == 1 && Rc::weak_count(recording) == 0
-            })
-        };
-        let unshared = slot.handles.iter().position(|handle| {
-            free(handle)
-                && handle
-                    .as_ref()
-                    .is_some_and(|recording| !recording.shares_shapes())
-        });
-        let at = unshared.or_else(|| {
-            (slot.handles.iter().all(Option::is_some) && free(&slot.handles[2])).then_some(2)
-        });
-        at.and_then(|at| slot.handles[at].take())
-            .unwrap_or_default()
-    }
-
-    // Notes `recording`, which `id` just recorded, beside the two before it
-    // when the command has an entry.
-    pub(crate) fn publish(&mut self, id: DrawCommandId, recording: &Rc<CommandRecording>) {
-        if let Some(slot) = self.slots.get_mut(&RecorderKey::from(id)) {
-            slot.hold(self.update, recording);
+    // Records the command `id` anew through `record`, which takes storage
+    // from the maker it gets once it records: a kept recording of the
+    // command that no reader holds, one that shares no shapes first, or a
+    // new one. The recording made joins the command's kept ones. One map
+    // lookup serves both.
+    pub(crate) fn record<T>(
+        &mut self,
+        id: DrawCommandId,
+        record: impl FnOnce(
+            &mut dyn FnMut() -> Rc<CommandRecording>,
+        ) -> Option<(Rc<CommandRecording>, T)>,
+    ) -> Option<(Rc<CommandRecording>, T)> {
+        let update = self.update;
+        let mut slot = self.slots.get_mut(&RecorderKey::from(id));
+        let made = record(&mut || {
+            slot.as_deref_mut()
+                .map_or_else(Rc::default, RecorderSlot::lend)
+        })?;
+        if let Some(slot) = slot {
+            slot.hold(update, &made.0);
         }
+        Some(made)
     }
 
     // Keeps `recording`, which `id` recorded and which no reader holds once

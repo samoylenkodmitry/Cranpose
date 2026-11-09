@@ -24,15 +24,29 @@ impl ShapeRecorder {
         self.tables.shapes.capacity()
     }
 
+    /// Drops the segments from `len` on with their shapes, the shapes
+    /// recorded last. The gradient tables stay whole while a shape left
+    /// paints with a brush.
+    pub fn truncate_segments(&mut self, len: u32) {
+        self.tables.truncate_segments(len);
+        self.forget_unused_gradient_lists();
+    }
+
     /// Keeps the segments `keep` takes, by index, with their shapes, moved
     /// to the front in order, and drops every other segment and shape. The
     /// gradient tables stay whole while a kept shape paints with a brush.
     pub fn keep_segments(&mut self, keep: impl Fn(u32) -> bool) {
         self.tables.keep_segments(keep);
+        self.forget_unused_gradient_lists();
+    }
+
+    // Lets go of the gradient lists once the tables dropped their brushes,
+    // and starts a segment of its own for the next shape. The bounds stay:
+    // they still hold every shape left.
+    fn forget_unused_gradient_lists(&mut self) {
         if self.tables.brushes().is_empty() {
             self.gradient_lists.clear();
         }
-        // The bounds stay: they still hold every kept shape.
         self.end_segment();
     }
 

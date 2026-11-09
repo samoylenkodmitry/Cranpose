@@ -166,6 +166,16 @@ impl ShapeRecords {
         self.curves.reserve(additional);
     }
 
+    // Drops the records from `len` on.
+    pub(crate) fn truncate(&mut self, len: usize) {
+        self.bodies.truncate(len);
+        self.curves.truncate(len);
+        if let Some(sources) = self.sources.storage_mut() {
+            let kept = sources.partition_point(|source| (source.index as usize) < len);
+            sources.truncate(kept);
+        }
+    }
+
     // Keeps the records of `kept`, ascending ranges of record indexes that
     // do not overlap, moved to the front in order, and drops the others.
     pub(crate) fn keep(&mut self, kept: impl Iterator<Item = Range<usize>>) {

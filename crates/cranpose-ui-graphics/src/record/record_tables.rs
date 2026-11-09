@@ -91,6 +91,27 @@ impl RecordTables {
         self.fingerprint.take();
     }
 
+    // Drops the segments from `len` on with their shapes, the shapes taken
+    // last. The gradient tables go once no shape left paints with a brush.
+    pub(super) fn truncate_segments(&mut self, len: u32) {
+        let Self {
+            shapes,
+            segments,
+            gradients,
+            fingerprint,
+        } = self;
+        fingerprint.take();
+        if let Some(first) = segments
+            .iter()
+            .skip(len as usize)
+            .find(|segment| segment.lane == RecordLane::Shapes)
+        {
+            shapes.truncate(first.start as usize);
+        }
+        segments.truncate(len as usize);
+        drop_unused_gradients(shapes, gradients);
+    }
+
     // Keeps the segments `keep` takes, by index, with their shapes, moved
     // to the front in order, and drops the others. The gradient tables go
     // once no kept shape paints with a brush, since a kept shape names its
@@ -119,13 +140,7 @@ impl RecordTables {
             }
             kept
         });
-        if let Some(tables) = gradients.as_deref_mut()
-            && shapes.bodies().iter().all(|body| body.brush == 0)
-        {
-            tables.brushes.clear();
-            tables.stops.clear();
-            tables.explicit_stops.clear();
-        }
+        drop_unused_gradients(shapes, gradients);
     }
 
     /// Gives back the room growth left in every table; see
@@ -181,5 +196,18 @@ impl RecordTables {
                 + tables.explicit_stops.capacity() * size_of::<f32>()
         });
         self.shapes.heap_bytes() + gradients + self.segments.capacity() * size_of::<RecordSegment>()
+    }
+}
+
+// Empties the gradient tables once no shape of `shapes` paints with a brush:
+// a shape names its brush by table index, so the tables stay whole while
+// one does.
+fn drop_unused_gradients(shapes: &ShapeRecords, gradients: &mut Option<Box<GradientTables>>) {
+    if let Some(tables) = gradients.as_deref_mut()
+        && shapes.bodies().iter().all(|body| body.brush == 0)
+    {
+        tables.brushes.clear();
+        tables.stops.clear();
+        tables.explicit_stops.clear();
     }
 }

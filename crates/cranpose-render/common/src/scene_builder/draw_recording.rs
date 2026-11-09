@@ -1,7 +1,7 @@
 use std::{borrow::Cow, ops::Range, rc::Rc};
 
 use cranpose_core::{NodeId, RecordId};
-use cranpose_ui::{DrawCommand, Point, Rect, Size};
+use cranpose_ui::{BackgroundDraw, DrawCommand, Point, Rect, Size};
 use cranpose_ui_graphics::{
     CommandRecording, CompositingStrategy, DrawGroup, DrawPlacement, GraphicsLayer, RecordLane,
 };
@@ -317,27 +317,21 @@ pub(super) fn append_draw_nodes(
             // node's content alone.
             if let DrawCommand::Background(background) = command {
                 if placement == DrawPlacement::Behind {
-                    items.push(store.add_shapes(|recorder| background.record(size, recorder)));
+                    items.push(add_background(store, background, size));
                 }
                 continue;
             }
-            let Some((recording, segments)) =
-                recording_for_placement_reusing(command, placement, size, || {
-                    store.recordings.acquire(id)
-                })
-            else {
+            let Some(recorded) = record_command(store, command, id, size) else {
                 continue;
             };
-            store.recordings.publish(id, &recording);
-            (recording, segments)
+            recorded
         };
         let grouped = shared.summary().has_groups
             && shared
                 .segments_in(&segments)
                 .any(|segment| segment.lane == RecordLane::GroupStart);
         items.push(if grouped {
-            GroupedDraws::new(store, id, phase, &shared, draws)
-                .wrapper(store, parent, segments, size)
+            grouped_item(store, parent, (id, phase), &shared, draws, segments)
         } else {
             store.add_run(DrawRunNode::for_command_shared(
                 phase,
@@ -347,6 +341,44 @@ pub(super) fn append_draw_nodes(
             ))
         });
     }
+}
+
+// The three paths below run out of line, so the loop over a node's
+// commands stays small: the ESP32 boards run it from the instruction cache.
+
+// The item of a background's shapes, recorded into the store's chunks.
+#[inline(never)]
+fn add_background(store: &mut SceneStore, background: &BackgroundDraw, size: Size) -> Item {
+    store.add_shapes(|recorder| background.record(size, recorder))
+}
+
+// Records `command`, the command `id`, anew into storage its kept
+// recordings lend, and notes the recording.
+#[inline(never)]
+fn record_command(
+    store: &mut SceneStore,
+    command: &DrawCommand,
+    id: DrawCommandId,
+    size: Size,
+) -> Option<(Rc<CommandRecording>, Range<u32>)> {
+    store.recordings.record(id, |storage| {
+        recording_for_placement_reusing(command, id.placement, size, storage)
+    })
+}
+
+// The layer a recording's draw groups take, in a wrapper under `parent`.
+#[cold]
+#[inline(never)]
+fn grouped_item(
+    store: &mut SceneStore,
+    parent: RecordId,
+    (id, phase): (DrawCommandId, PrimitivePhase),
+    recording: &Rc<CommandRecording>,
+    draws: DrawTarget<'_>,
+    segments: Range<u32>,
+) -> Item {
+    GroupedDraws::new(store, id, phase, recording, draws)
+        .wrapper(store, parent, segments, draws.size)
 }
 
 // Lowers `commands`, the draw commands of node `node_id` of size `size`,
