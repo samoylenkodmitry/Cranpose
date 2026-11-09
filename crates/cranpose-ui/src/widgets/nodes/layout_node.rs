@@ -39,9 +39,6 @@ pub struct LayoutNode {
     // The actual children of this node (folded view - includes virtual nodes as-is)
     pub(crate) children: Vec<NodeId>,
 
-    // Policy that measures and places the children of this node. Change it through
-    // `set_measure_policy` so that a measure is scheduled.
-    pub(crate) measure_policy: Rc<dyn MeasurePolicy>,
     /// Where the chain's layout modifiers put their content, written by
     /// layout and read by the draws and text the slices collect.
     density: crate::density::Density,
@@ -121,15 +118,12 @@ impl LayoutNode {
         measure_policy: Rc<dyn MeasurePolicy>,
         is_virtual: bool,
     ) -> Self {
-        let parts = Rc::new(LayoutParts::new(LayoutRuntimeState::new(Rc::clone(
-            &measure_policy,
-        ))));
+        let parts = Rc::new(LayoutParts::new(LayoutRuntimeState::new(measure_policy)));
         let mut node = Self {
             #[cfg(feature = "inspection")]
             source_trace: cranpose_core::source_trace::current_source_trace(),
             modifier,
             modifier_chain: ModifierChainHandle::detached(),
-            measure_policy,
             density: crate::density::Density::default(),
             children: Vec::new(),
             needs_semantics: Cell::new(true),
@@ -369,8 +363,12 @@ impl LayoutNode {
     /// Replaces the measure policy and schedules a measure. Does nothing if `policy` is the same
     /// `Rc` as the current one.
     pub fn set_measure_policy(&mut self, policy: Rc<dyn MeasurePolicy>) {
-        if !Rc::ptr_eq(&self.measure_policy, &policy) {
-            self.measure_policy = policy;
+        if self
+            .parts
+            .runtime_state()
+            .borrow_mut()
+            .replace_measure_policy(policy)
+        {
             self.parts.cache().clear();
             self.mark_needs_measure();
             if let Some(id) = self.id.get() {
@@ -769,7 +767,6 @@ impl Clone for LayoutNode {
             modifier_chain: ModifierChainHandle::for_layout_direction(
                 self.modifier_chain.layout_direction(),
             ),
-            measure_policy: Rc::clone(&self.measure_policy),
             density: self.density,
             children: self.children.clone(),
             needs_semantics: Cell::new(self.needs_semantics.get()),

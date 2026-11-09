@@ -120,8 +120,12 @@ impl<P: MeasurePolicy + Clone + PartialEq> PolicyUpdate for P {
     }
 
     fn update(&self, node: &mut LayoutNode) {
-        let current: &dyn std::any::Any = &*node.measure_policy;
-        if current.downcast_ref::<P>() != Some(self) {
+        let held = {
+            let runtime_state = node.layout_runtime_state().borrow();
+            let current: &dyn std::any::Any = runtime_state.measure_policy();
+            current.downcast_ref::<P>() == Some(self)
+        };
+        if !held {
             node.set_measure_policy(held_policy(self));
         }
     }

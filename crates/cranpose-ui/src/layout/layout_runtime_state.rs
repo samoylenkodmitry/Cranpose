@@ -31,10 +31,18 @@ impl LayoutRuntimeState {
     }
 
     pub(super) fn bind_node(&mut self, node: &LayoutNode) -> ModifierChainInputs {
-        if !Rc::ptr_eq(&self.measure_policy, &node.measure_policy) {
-            self.measure_policy = Rc::clone(&node.measure_policy);
-        }
         self.coordinator_chain.sync(node)
+    }
+
+    pub(crate) fn measure_policy(&self) -> &dyn MeasurePolicy {
+        &*self.measure_policy
+    }
+
+    // Gives the node `policy`; false when it holds that one already.
+    pub(crate) fn replace_measure_policy(&mut self, policy: Rc<dyn MeasurePolicy>) -> bool {
+        let replaced = !Rc::ptr_eq(&self.measure_policy, &policy);
+        self.measure_policy = policy;
+        replaced
     }
 
     // Notes that a measure placed the node's coordinators, and says whether
