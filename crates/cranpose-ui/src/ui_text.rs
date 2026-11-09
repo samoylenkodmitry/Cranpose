@@ -77,4 +77,14 @@ impl crate::widgets::text::IntoTextSource for UiText {
     fn into_text_source(self) -> crate::widgets::text::TextSource {
         self.resolve().into_text_source()
     }
+
+    // A message reads the language each time it composes; a fixed text
+    // does not.
+    fn static_text(&self) -> Option<crate::widgets::text::StaticText<'_>> {
+        match self {
+            Self::Empty => Some(crate::widgets::text::StaticText::Plain("")),
+            Self::Text(text) => text.static_text(),
+            Self::Message(_) => None,
+        }
+    }
 }

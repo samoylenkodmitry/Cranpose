@@ -419,6 +419,15 @@ impl AnnotatedString {
         &self.content.text
     }
 
+    /// Whether this is `text` with no styles, annotations or links: the
+    /// string [`AnnotatedString::new`] makes of `text`.
+    pub fn is_plain(&self, text: &str) -> bool {
+        self.handlers.is_none()
+            && self.content.span_styles.is_empty()
+            && self.content.extras.is_none()
+            && self.content.text == text
+    }
+
     /// Character styles with the byte ranges they cover.
     pub fn span_styles(&self) -> &[RangeStyle<SpanStyle>] {
         &self.content.span_styles

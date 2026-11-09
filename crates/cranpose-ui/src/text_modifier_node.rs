@@ -327,6 +327,22 @@ impl TextPreparedLayoutHandle {
 }
 
 impl TextModifierNode {
+    // Whether the node shows `text` in `style` with `options` on `density`,
+    // as a node made from an element of them does.
+    pub(crate) fn shows(
+        &self,
+        text: crate::widgets::StaticText<'_>,
+        style: &Arc<TextStyle>,
+        options: TextLayoutOptions,
+        density: Density,
+    ) -> bool {
+        let source = self.layout.source.borrow();
+        text.is(&source.text)
+            && (Arc::ptr_eq(&source.style, style) || *source.style == **style)
+            && source.options == options
+            && self.density == density
+    }
+
     /// A text node sized on `density`'s device pixel grid.
     pub fn new(
         text: AnnotatedString,

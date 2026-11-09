@@ -8,8 +8,8 @@ use cranpose_core::{NodeId, PackedU64};
 #[expect(unused_imports, reason = "only some cfgs read it")]
 use cranpose_foundation::InvalidationKind;
 use cranpose_foundation::{
-    BasicModifierNodeContext, ModifierInvalidations, ModifierNodeChain, ModifierNodeContext,
-    NodeCapabilities,
+    BasicModifierNodeContext, ModifierInvalidations, ModifierNode, ModifierNodeChain,
+    ModifierNodeContext, NodeCapabilities,
 };
 
 use super::{
@@ -365,6 +365,18 @@ impl ModifierChainHandle {
     // Whether the chain holds `modifier`'s elements, as `rule` compares them.
     pub(crate) fn holds(&self, modifier: &Modifier, rule: ElementMatch) -> bool {
         element_match::elements_match(self.chain.held_elements(), modifier, rule)
+    }
+
+    // The node after `modifier`'s elements, when the chain holds them, as
+    // they compare equal, and that one node more.
+    pub(crate) fn node_after(&self, modifier: &Modifier) -> Option<&Rc<RefCell<dyn ModifierNode>>> {
+        element_match::elements_match_but_last(
+            self.chain.held_elements(),
+            modifier,
+            ElementMatch::Equal,
+        )
+        .then(|| self.chain.get_node_rc(modifier.element_count()))
+        .flatten()
     }
 
     // The update in place from the chain's elements to `modifier`'s: see

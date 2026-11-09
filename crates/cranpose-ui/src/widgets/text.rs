@@ -11,10 +11,11 @@ use cranpose_core::{MutableState, NodeId, State};
 use cranpose_foundation::modifier_element;
 
 use crate::{
+    density::Density,
     modifier::Modifier,
     text::{TextLayoutOptions, TextOptions, TextOverflow, TextStyle},
-    text_modifier_node::{TextModifierElement, shared_text_style},
-    widgets::layout::{LayoutEnvironment, compose_empty_layout},
+    text_modifier_node::{TextModifierElement, TextModifierNode, shared_text_style},
+    widgets::{layout::NodeModifier, nodes::LayoutNode},
 };
 
 /// Text produced by a callback that runs each time the text composes, so state read in the callback
@@ -60,14 +61,45 @@ impl TextSource {
     }
 }
 
+/// A fixed text as a widget was given it, which the widget compares with the
+/// text its node shows without making a copy.
+#[doc(hidden)]
+#[derive(Clone, Copy)]
+pub enum StaticText<'a> {
+    /// Characters with no styles, annotations or links.
+    Plain(&'a str),
+    /// An annotated string.
+    Annotated(&'a crate::text::AnnotatedString),
+}
+
+impl StaticText<'_> {
+    /// Whether `shown` is this text.
+    pub(crate) fn is(self, shown: &crate::text::AnnotatedString) -> bool {
+        match self {
+            Self::Plain(text) => shown.is_plain(text),
+            Self::Annotated(text) => shown == text,
+        }
+    }
+}
+
 #[doc(hidden)]
 pub trait IntoTextSource {
     fn into_text_source(self) -> TextSource;
+
+    /// The text, when it is fixed: `None` for a text read from a state or
+    /// a callback each time it composes.
+    fn static_text(&self) -> Option<StaticText<'_>> {
+        None
+    }
 }
 
 impl IntoTextSource for String {
     fn into_text_source(self) -> TextSource {
         TextSource::Static(crate::text::AnnotatedString::from(self))
+    }
+
+    fn static_text(&self) -> Option<StaticText<'_>> {
+        Some(StaticText::Plain(self))
     }
 }
 
@@ -75,11 +107,19 @@ impl IntoTextSource for &str {
     fn into_text_source(self) -> TextSource {
         TextSource::Static(crate::text::AnnotatedString::from(self))
     }
+
+    fn static_text(&self) -> Option<StaticText<'_>> {
+        Some(StaticText::Plain(self))
+    }
 }
 
 impl IntoTextSource for crate::text::AnnotatedString {
     fn into_text_source(self) -> TextSource {
         TextSource::Static(self)
+    }
+
+    fn static_text(&self) -> Option<StaticText<'_>> {
+        Some(StaticText::Annotated(self))
     }
 }
 
@@ -124,57 +164,164 @@ impl IntoTextSource for DynamicTextSource {
     }
 }
 
-fn compose_basic_text_group(
-    text: TextSource,
+// The modifier of a text's node: the caller's `modifier`, then the text's
+// element.
+fn text_node_modifier(
+    text: crate::text::AnnotatedString,
     modifier: Modifier,
     style: Arc<TextStyle>,
     options: TextLayoutOptions,
-) -> NodeId {
-    #[cfg(feature = "localization")]
-    let style = crate::localization::apply_shared_text_locale(style);
-    let current = text.resolve();
-
-    let options = options.normalized();
-
-    let modifier = match crate::widgets::local_selection_registrar().current() {
-        Some(registrar) => modifier.then(crate::widgets::selection_container::selectable_text(
-            registrar,
-            current.clone(),
-            Arc::clone(&style),
-            options,
-        )),
-        None => modifier,
-    };
-    let environment = LayoutEnvironment::current();
+    density: Density,
+) -> Modifier {
     let text_element = modifier_element(TextModifierElement::with_shared_style(
-        current,
-        style,
-        options,
-        environment.density,
+        text, style, options, density,
     ));
-    let final_modifier = Modifier::from_dyn_element(text_element);
-    let combined_modifier = modifier.then(final_modifier);
-
-    compose_empty_layout(combined_modifier, environment)
+    modifier.then(Modifier::from_dyn_element(text_element))
 }
 
-/// The composable every text widget calls, named `Text` for the source
-/// traces inspection shows.
-mod shared_style {
+// The style and options a text lays out with: the style in the locale in
+// force, where the app localizes, and the options normalized.
+fn text_layout_inputs(
+    style: Arc<TextStyle>,
+    options: TextLayoutOptions,
+) -> (Arc<TextStyle>, TextLayoutOptions) {
+    #[cfg(feature = "localization")]
+    let style = crate::localization::apply_shared_text_locale(style);
+    (style, options.normalized())
+}
+
+// Composes a text widget: a fixed text outside a selection container
+// composes in its caller's group; any other in a group of its own.
+#[track_caller]
+fn compose_text<S>(
+    text: S,
+    modifier: Modifier,
+    style: Arc<TextStyle>,
+    options: TextLayoutOptions,
+) -> NodeId
+where
+    S: IntoTextSource + Clone + PartialEq + 'static,
+{
+    if let Some(fixed) = text.static_text()
+        && crate::widgets::local_selection_registrar()
+            .current()
+            .is_none()
+    {
+        return static_text::Text(fixed, modifier, style, options);
+    }
+    text_group::Text(text, modifier, style, options)
+}
+
+// The modifier of a fixed text's node as a text widget sets it: the
+// caller's modifier, then the text's element, made only when the node does
+// not show them already.
+struct StaticTextModifier<'a> {
+    modifier: Modifier,
+    text: StaticText<'a>,
+    style: Arc<TextStyle>,
+    options: TextLayoutOptions,
+    density: Density,
+}
+
+impl StaticTextModifier<'_> {
+    // Whether `node` shows the text: its chain holds the caller's modifier,
+    // then a text node of this text, style and options.
+    fn shown_by(&self, node: &LayoutNode) -> bool {
+        node.node_after(&self.modifier).is_some_and(|last| {
+            last.borrow()
+                .as_any()
+                .downcast_ref::<TextModifierNode>()
+                .is_some_and(|last| last.shows(self.text, &self.style, self.options, self.density))
+        })
+    }
+}
+
+impl NodeModifier for StaticTextModifier<'_> {
+    fn provided_locals(&self) -> Vec<cranpose_core::ProvidedValue> {
+        self.modifier.provided_composition_locals()
+    }
+
+    fn to_modifier(&self) -> Modifier {
+        let text = match self.text {
+            StaticText::Plain(text) => crate::text::AnnotatedString::from(text),
+            StaticText::Annotated(text) => text.clone(),
+        };
+        text_node_modifier(
+            text,
+            self.modifier.clone(),
+            Arc::clone(&self.style),
+            self.options,
+            self.density,
+        )
+    }
+
+    fn set_on(self, node: &mut LayoutNode) {
+        if !self.shown_by(node) {
+            node.set_modifier(self.to_modifier());
+        }
+    }
+}
+
+// The text widget of a fixed text, named `Text` for the source traces
+// inspection shows.
+mod static_text {
     use std::sync::Arc;
 
     use cranpose_core::NodeId;
 
-    use super::{IntoTextSource, compose_basic_text_group};
+    use super::{StaticText, StaticTextModifier, text_layout_inputs};
     use crate::{
         composable,
         modifier::Modifier,
         text::{TextLayoutOptions, TextStyle},
+        widgets::layout::{LayoutEnvironment, compose_empty_layout},
     };
 
-    /// Its stored parameters hold the style
-    /// [`crate::text_modifier_node::shared_text_style`] shares with equal
-    /// ones, eight bytes where a style takes 320, and compare it by pointer.
+    // Composes in its caller's group, as an inline composable: a fixed text
+    // reads no state, and its node holds what a later composition compares,
+    // so it keeps no group, scope or parameters of its own.
+    #[composable(no_skip)]
+    pub(super) fn Text(
+        text: StaticText<'_>,
+        modifier: Modifier,
+        style: Arc<TextStyle>,
+        options: TextLayoutOptions,
+    ) -> NodeId {
+        let (style, options) = text_layout_inputs(style, options);
+        let environment = LayoutEnvironment::current();
+        compose_empty_layout(
+            StaticTextModifier {
+                modifier,
+                text,
+                style,
+                options,
+                density: environment.density,
+            },
+            environment,
+        )
+    }
+}
+
+// The text widget in a group of its own, named `Text` for the source traces
+// inspection shows: a text read from a state or a callback, whose scope that
+// read recomposes alone, or one in a selection container, which remembers
+// its place in the container's selection.
+mod text_group {
+    use std::sync::Arc;
+
+    use cranpose_core::NodeId;
+
+    use super::{IntoTextSource, text_layout_inputs, text_node_modifier};
+    use crate::{
+        composable,
+        modifier::Modifier,
+        text::{TextLayoutOptions, TextStyle},
+        widgets::layout::{LayoutEnvironment, compose_empty_layout},
+    };
+
+    // Its stored parameters hold the style `shared_text_style` shares with
+    // equal ones, eight bytes where a style takes 320, and compare it by
+    // pointer.
     #[composable]
     pub(super) fn Text<S>(
         text: S,
@@ -185,7 +332,22 @@ mod shared_style {
     where
         S: IntoTextSource + Clone + PartialEq + 'static,
     {
-        compose_basic_text_group(text.into_text_source(), modifier, style, options)
+        let (style, options) = text_layout_inputs(style, options);
+        let environment = LayoutEnvironment::current();
+        let text = text.into_text_source().resolve();
+        let modifier = match crate::widgets::local_selection_registrar().current() {
+            Some(registrar) => modifier.then(crate::widgets::selection_container::selectable_text(
+                registrar,
+                text.clone(),
+                Arc::clone(&style),
+                options,
+            )),
+            None => modifier,
+        };
+        compose_empty_layout(
+            text_node_modifier(text, modifier, style, options, environment.density),
+            environment,
+        )
     }
 }
 
@@ -201,7 +363,7 @@ pub fn BasicTextWithOptions<S>(
 where
     S: IntoTextSource + Clone + PartialEq + 'static,
 {
-    shared_style::Text(text, modifier, shared_text_style(style), options)
+    compose_text(text, modifier, shared_text_style(style), options)
 }
 
 /// Displays `text` in `style` with the given overflow, wrapping and line limits. Compose's
@@ -220,7 +382,7 @@ pub fn BasicText<S>(
 where
     S: IntoTextSource + Clone + PartialEq + 'static,
 {
-    shared_style::Text(
+    compose_text(
         text,
         modifier,
         shared_text_style(style),
@@ -245,7 +407,7 @@ pub fn TextWithOptions<S>(
 where
     S: IntoTextSource + Clone + PartialEq + 'static,
 {
-    shared_style::Text(
+    compose_text(
         value,
         modifier,
         shared_text_style(style),
@@ -276,7 +438,7 @@ pub fn Text<S>(value: S, modifier: Modifier, style: TextStyle) -> NodeId
 where
     S: IntoTextSource + Clone + PartialEq + 'static,
 {
-    shared_style::Text(
+    compose_text(
         value,
         modifier,
         shared_text_style(style),

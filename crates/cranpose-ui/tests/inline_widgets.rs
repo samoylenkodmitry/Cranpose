@@ -1,8 +1,9 @@
 //! `Box`, `Row` and `Column` compose in their caller's group, as Compose's
-//! inline widgets do. The node tree stays as the code nests them while a
-//! composable around them skips, and a loop of them that shrinks and grows
-//! again keeps the nodes and remembered values of the items that stay. A
-//! composable that skips keeps its nodes in the order it emitted them.
+//! inline widgets do, and so does a `Text` of a fixed text. The node tree
+//! stays as the code nests them while a composable around them skips, and a
+//! loop of them that shrinks and grows again keeps the nodes and remembered
+//! values of the items that stay. A composable that skips keeps its nodes in
+//! the order it emitted them. A text read from a state recomposes alone.
 
 use std::{
     cell::{Cell, RefCell},
@@ -11,10 +12,12 @@ use std::{
 
 use cranpose_core::{Applier, MutableState, NodeId, remember, rememberMutableStateOf};
 use cranpose_ui::{
-    Box, BoxSpec, Column, ColumnSpec, Modifier, TestComposition, Text, TextStyle, composable,
-    run_test_composition,
+    Box, BoxSpec, Column, ColumnSpec, LayoutBox, Modifier, Size, TestComposition, Text, TextStyle,
+    composable, run_test_composition,
 };
 use smallvec::SmallVec;
+
+use crate::text_measured_layout_integration::layout_composition;
 
 thread_local! {
     /// The outer box, inner box and text the last `Card` pass composed.
@@ -207,5 +210,92 @@ fn a_skipped_composable_keeps_a_child_composables_node_ahead_of_its_own_later_no
         children(&mut composition, root),
         first,
         "the wheel stays below the reader, as the surfaces emitted them"
+    );
+}
+
+// The text the node `id` below `node` shows.
+fn shown_text(node: &LayoutBox, id: NodeId) -> Option<String> {
+    if node.node_id == id {
+        return node
+            .node_data
+            .modifier_slices()
+            .text_content()
+            .map(|text| text.to_string());
+    }
+    node.children.iter().find_map(|child| shown_text(child, id))
+}
+
+fn texts(composition: &mut TestComposition, ids: [NodeId; 2]) -> [Option<String>; 2] {
+    let layout = layout_composition(composition, Size::new(300.0, 300.0));
+    ids.map(|id| shown_text(layout.root(), id))
+}
+
+#[test]
+fn fixed_texts_keep_their_nodes_as_their_caller_recomposes_and_show_each_new_text() {
+    let count: Captured<u32> = Rc::default();
+    let captured = Rc::clone(&count);
+    let nodes = Rc::new(Cell::new(None));
+    let seen = Rc::clone(&nodes);
+    let mut composition = run_test_composition(move || {
+        let state = rememberMutableStateOf(|| 0u32);
+        *captured.borrow_mut() = Some(state);
+        let seen = Rc::clone(&seen);
+        Column(Modifier::empty(), ColumnSpec::default(), move || {
+            let fixed = Text("Fixed", Modifier::empty(), TextStyle::default());
+            let counted = Text(
+                format!("Count {}", state.value()),
+                Modifier::empty(),
+                TextStyle::default(),
+            );
+            seen.set(Some([fixed, counted]));
+        });
+    });
+    let first = nodes.get().expect("the column composed its texts");
+    assert_eq!(
+        texts(&mut composition, first),
+        [Some("Fixed".to_owned()), Some("Count 0".to_owned())]
+    );
+
+    for value in [1, 1, 2] {
+        set(&count, value);
+        composition.process_invalid_scopes().expect("recomposes");
+        assert_eq!(nodes.get(), Some(first), "the texts keep their nodes");
+        assert_eq!(
+            texts(&mut composition, first),
+            [Some("Fixed".to_owned()), Some(format!("Count {value}"))]
+        );
+    }
+}
+
+#[test]
+fn a_text_read_from_a_state_recomposes_without_its_caller() {
+    let count: Captured<u32> = Rc::default();
+    let captured = Rc::clone(&count);
+    let nodes = Rc::new(Cell::new(None));
+    let seen = Rc::clone(&nodes);
+    let passes = Rc::new(Cell::new(0));
+    let column_passes = Rc::clone(&passes);
+    let mut composition = run_test_composition(move || {
+        let state = rememberMutableStateOf(|| 0u32);
+        *captured.borrow_mut() = Some(state);
+        let (seen, passes) = (Rc::clone(&seen), Rc::clone(&column_passes));
+        Column(Modifier::empty(), ColumnSpec::default(), move || {
+            passes.set(passes.get() + 1);
+            let fixed = Text("Fixed", Modifier::empty(), TextStyle::default());
+            let read = Text(state, Modifier::empty(), TextStyle::default());
+            seen.set(Some([fixed, read]));
+        });
+    });
+    let first = nodes.get().expect("the column composed its texts");
+    let caller_passes = passes.get();
+
+    set(&count, 7);
+    composition.process_invalid_scopes().expect("recomposes");
+
+    assert_eq!(passes.get(), caller_passes, "the caller reads no state");
+    assert_eq!(nodes.get(), Some(first));
+    assert_eq!(
+        texts(&mut composition, first),
+        [Some("Fixed".to_owned()), Some("7".to_owned())]
     );
 }

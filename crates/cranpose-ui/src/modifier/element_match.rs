@@ -30,6 +30,19 @@ pub(crate) fn elements_match<'a>(
             .all(|(a, b)| element_matches(a, b, rule))
 }
 
+// Whether `held` are `modifier`'s elements, one for one, as `rule` compares
+// them, and one element more after them.
+pub(crate) fn elements_match_but_last<'a>(
+    held: impl ExactSizeIterator<Item = HeldElement<'a>>,
+    modifier: &Modifier,
+    rule: ElementMatch,
+) -> bool {
+    held.len() == modifier.element_count() + 1
+        && held
+            .zip(modifier.iter_elements())
+            .all(|(a, b)| element_matches(a, b, rule))
+}
+
 // Whether `a` and `b` hold equal elements as `rule` compares them: those of
 // one shared list without comparing them.
 pub(crate) fn modifiers_match(a: &Modifier, b: &Modifier, rule: ElementMatch) -> bool {

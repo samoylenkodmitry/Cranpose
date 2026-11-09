@@ -138,17 +138,42 @@ pub(crate) fn apply_text_locale(mut style: crate::text::TextStyle) -> crate::tex
     style
 }
 
-/// [`apply_text_locale`] for a shared style: the same one when it names its
-/// locales, else the shared style with the composition's locales.
+// The styles `apply_shared_text_locale` made last: each by the shared style
+// it was made from and the locales it took, so a screen that composes
+// texts in a few styles again copies none of them.
+pub(crate) type LocalizedTextStyles = crate::text::recent_values::RecentValues<
+    (
+        std::sync::Arc<crate::text::TextStyle>,
+        crate::text::LocaleList,
+        std::sync::Arc<crate::text::TextStyle>,
+    ),
+    16,
+>;
+
+// `apply_text_locale` for a shared style: the same one when it names its
+// locales or the composition has none, else the shared style with the
+// composition's locales.
 pub(crate) fn apply_shared_text_locale(
     style: std::sync::Arc<crate::text::TextStyle>,
 ) -> std::sync::Arc<crate::text::TextStyle> {
     if style.span_style.locale_list.is_some() {
         return style;
     }
-    crate::text_modifier_node::shared_text_style(apply_text_locale(crate::text::TextStyle::clone(
-        &style,
-    )))
+    let Some(locales) = text_locales().current() else {
+        return style;
+    };
+    crate::thread_state::with(|state| {
+        let mut localized = state.localized_text_styles.borrow_mut();
+        if let Some((_, _, made)) = localized
+            .find(|(from, made_in, _)| std::sync::Arc::ptr_eq(from, &style) && *made_in == locales)
+        {
+            return std::sync::Arc::clone(made);
+        }
+        let mut made = crate::text::TextStyle::clone(&style);
+        made.span_style.locale_list = Some(locales.clone());
+        let made = crate::text_modifier_node::shared_text_style(made);
+        std::sync::Arc::clone(&localized.keep((style, locales, made)).2)
+    })
 }
 
 struct CachedTranslation {

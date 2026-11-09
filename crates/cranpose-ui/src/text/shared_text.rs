@@ -1,7 +1,7 @@
 use std::{fmt, ops::Deref};
 
 use super::AnnotatedString;
-use crate::widgets::text::{IntoTextSource, TextSource};
+use crate::widgets::text::{IntoTextSource, StaticText, TextSource};
 
 /// Immutable text shared by widgets, localized results, and retained control labels.
 #[derive(Clone, Debug)]
@@ -29,14 +29,7 @@ impl PartialEq for SharedText {
             (Storage::Static(a), Storage::Static(b)) => a == b,
             (Storage::Annotated(a), Storage::Annotated(b)) => a == b,
             (Storage::Static(plain), Storage::Annotated(annotated))
-            | (Storage::Annotated(annotated), Storage::Static(plain)) => {
-                let content = annotated.render_string();
-                *plain == content.text()
-                    && content.span_styles().is_empty()
-                    && content.paragraph_styles().is_empty()
-                    && content.string_annotations().is_empty()
-                    && content.links().is_empty()
-            }
+            | (Storage::Annotated(annotated), Storage::Static(plain)) => annotated.is_plain(plain),
         }
     }
 }
@@ -93,5 +86,12 @@ impl IntoTextSource for SharedText {
             Storage::Static(text) => text.into_text_source(),
             Storage::Annotated(text) => TextSource::Static(text),
         }
+    }
+
+    fn static_text(&self) -> Option<StaticText<'_>> {
+        Some(match &self.0 {
+            Storage::Static(text) => StaticText::Plain(text),
+            Storage::Annotated(text) => StaticText::Annotated(text),
+        })
     }
 }

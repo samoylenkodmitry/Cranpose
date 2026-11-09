@@ -188,6 +188,23 @@ impl LayoutNode {
         }
     }
 
+    // The node after `modifier`'s elements in the node's chain, when the
+    // chain holds them and that one node more, and a set of an equal
+    // modifier would leave the chain as it is: `None` too for a chain that
+    // reads modifier locals, which a set syncs again.
+    pub(crate) fn node_after(
+        &self,
+        modifier: &Modifier,
+    ) -> Option<&Rc<RefCell<dyn cranpose_foundation::ModifierNode>>> {
+        if self
+            .modifier_capabilities()
+            .contains(NodeCapabilities::MODIFIER_LOCALS)
+        {
+            return None;
+        }
+        self.modifier_chain.node_after(modifier)
+    }
+
     // Reconciles the chain with `modifier`. `in_place` says how far the
     // change reaches when the modifier changed only in elements the chain can
     // update in place: when it does, the current slices are kept.
