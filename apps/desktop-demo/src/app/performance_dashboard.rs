@@ -17,13 +17,18 @@ use cranpose_ui::{
 
 use super::demo_text::text_style;
 
+mod chart_view;
+mod curve_plot;
+mod focus;
 mod launch_chart;
+mod motion;
 mod plot;
 mod runs;
 mod subject_bars;
 mod table;
+use focus::Focus;
 use launch_chart::{launch_lines, LaunchChart};
-use plot::{chart_y, scale, Plot};
+use plot::{Axis, Plot};
 pub use runs::{
     LegSamples, PerfFramesLeg, PerfFramesScenario, PerfIndex, PerfProtocol, PerfRun, PerfRunFrames,
     PerfScenario, PerfStart, PerfSubject, STARTS,
@@ -144,6 +149,13 @@ impl Palette {
     }
 }
 
+#[derive(Clone, Debug, PartialEq)]
+struct Selection {
+    scenario: String,
+    start: &'static str,
+    metric: Metric,
+}
+
 /// A median to one decimal, or a dash where the run has none.
 fn figure(value: Option<f64>) -> String {
     value.map_or_else(|| "–".to_string(), |value| format!("{value:.1}"))
@@ -245,6 +257,23 @@ impl Metric {
                  macOS."
             }
             Self::GpuClock => "Mean GPU clock over the run.",
+        }
+    }
+
+    fn curve_unit(self) -> &'static str {
+        match self {
+            Self::Fps | Self::FirstFrame => "fps",
+            Self::CpuPerFrame => "ms/frame",
+            Self::CpuCores => "cores",
+            Self::Ram | Self::GpuRam => "MB",
+            Self::CpuClock | Self::GpuClock => "MHz",
+        }
+    }
+
+    fn curve_format(self, value: f64) -> String {
+        match self {
+            Self::FirstFrame => Self::Fps.format(value),
+            _ => self.format(value),
         }
     }
 
@@ -425,7 +454,9 @@ fn Header(palette: Palette, refresh: Option<MutableState<u64>>) {
                             "Charts: the chosen metric from the launch, the frame rate over the \
                              last {RATE_WINDOW_MS:.0} ms and the rest as sampled every half \
                              second; a line is the median launch, its band the lowest to the \
-                             highest. Bars: medians over the run, best first."
+                             highest. Bars: medians over the run, best first. Hover a line, a \
+                             bar or a name to follow one framework; click bars to chart \
+                             only them."
                         ),
                         Modifier::empty(),
                         text_style(12.0, palette.muted, None),
@@ -721,8 +752,8 @@ fn LineChart(
         .copied()
         .filter(|value| value.is_finite())
         .fold(0.0f32, f32::max);
-    let (top, step) = scale(f64::from(peak));
-    Plot(palette, top, step, move |scope| {
+    let axis = Axis::from_zero(f64::from(peak));
+    Plot(palette, axis, move |scope| {
         let size = scope.size();
         let count = main.len();
         let at = |index: usize, value: f32| Point {
@@ -731,7 +762,7 @@ fn LineChart(
             } else {
                 size.width / 2.0
             },
-            y: chart_y(size.height, f64::from(value), top),
+            y: axis.y(size.height, f64::from(value)),
         };
         for series in [(&release, palette.baseline), (&main, palette.accent)] {
             let mut line = Path::new();
@@ -850,20 +881,24 @@ fn RunView(
     start: &'static str,
     metric: Metric,
 ) {
+    let focus = Focus::remember();
     ScenarioChips(palette, run.scenarios.keys().cloned().collect(), scenario);
     let frames = run_frames(source, run.file.clone()).get();
-    let scenario = shown_scenario(&run, &scenario.get());
-    let lines = launch_lines(palette, &run, &scenario, start, &subjects);
+    let selection = Selection {
+        scenario: shown_scenario(&run, &scenario.get()),
+        start,
+        metric,
+    };
+    let lines = launch_lines(palette, &run, &selection.scenario, start, &subjects);
     LaunchChart(
         palette,
+        focus,
         frames,
         run_ms(&run),
-        scenario.clone(),
-        start,
+        selection.clone(),
         lines.clone(),
-        metric,
     );
-    SubjectBars(palette, run, subjects, scenario, start, metric, lines);
+    SubjectBars(palette, focus, run, subjects, selection, lines);
 }
 
 /// The run's length in milliseconds from its launch.
