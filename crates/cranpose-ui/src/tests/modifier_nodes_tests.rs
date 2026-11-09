@@ -12,7 +12,7 @@ use cranpose_ui_layout::Placeable;
 
 use super::*;
 use crate::modifier::{
-    Color, EdgeInsets, Modifier, PointerInputScope, collect_modifier_slices,
+    Color, EdgeInsets, Modifier, Point, PointerInputScope, collect_modifier_slices,
     collect_slices_from_modifier,
 };
 
