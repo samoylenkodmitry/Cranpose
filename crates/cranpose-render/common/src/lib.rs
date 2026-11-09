@@ -6,7 +6,7 @@ pub mod byte_blend;
 /// Debug switches read from environment variables, with programmatic overrides.
 pub mod dev_overlay;
 mod draw_owners;
-pub use draw_owners::DrawOwnerChange;
+pub use draw_owners::{DrawOwnerChange, undrawn_nodes};
 
 /// The frame background every renderer clears to (linear values; sRGB
 /// surfaces display this as rgb(75, 75, 86)). One definition so backends

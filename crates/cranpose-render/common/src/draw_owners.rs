@@ -5,7 +5,7 @@
 use cranpose_core::NodeId;
 
 use crate::scene_store::{
-    JournalCursor, JournalEntry, JournalRead, RecordEvents, RecordKind, SceneStore,
+    JournalCursor, JournalEntry, JournalRead, RecordEvent, RecordEvents, RecordKind, SceneStore,
 };
 
 /// A layout node a scene started or stopped drawing.
@@ -24,34 +24,39 @@ impl DrawOwnerChange {
             Self::Joined(node) | Self::Left(node) => node,
         }
     }
+}
 
-    /// Keeps in `changes`, the changes several scenes read for one frame,
-    /// the nodes that left a scene and joined none, once each and sorted. A
-    /// node one scene left and another joined is drawn.
-    pub fn retain_undrawn(changes: &mut Vec<Self>) {
-        sort_by_node(changes);
-        let mut kept = 0;
-        let mut index = 0;
-        while let Some(change) = changes.get(index) {
-            let node = change.node();
-            let mut drawn = false;
-            while let Some(change) = changes.get(index).filter(|change| change.node() == node) {
-                drawn |= matches!(change, Self::Joined(_));
-                index += 1;
-            }
-            if !drawn {
-                changes[kept] = Self::Left(node);
-                kept += 1;
-            }
+/// Puts into `left`, sorted, the nodes that left a scene and joined none
+/// among `changes`, the changes several scenes read for one frame: a node
+/// one scene left and another joined is drawn. `joined` is room for the
+/// nodes that joined.
+pub fn undrawn_nodes(
+    changes: &[DrawOwnerChange],
+    left: &mut Vec<NodeId>,
+    joined: &mut Vec<NodeId>,
+) {
+    left.clear();
+    joined.clear();
+    for &change in changes {
+        match change {
+            DrawOwnerChange::Left(node) => left.push(node),
+            DrawOwnerChange::Joined(node) => joined.push(node),
         }
-        changes.truncate(kept);
     }
+    left.sort_unstable();
+    left.dedup();
+    joined.sort_unstable();
+    left.retain(|node| joined.binary_search(node).is_err());
 }
 
 pub(crate) struct DrawOwners {
     cursor: JournalCursor,
-    // The nodes one update gave a record, sorted.
+    // The nodes one update gave a record and those it took one from, each
+    // sorted.
     joined_in_update: Vec<NodeId>,
+    left_in_update: Vec<NodeId>,
+    // The nodes a later update changed, sorted: their changes stand.
+    decided: Vec<NodeId>,
 }
 
 impl DrawOwners {
@@ -59,6 +64,8 @@ impl DrawOwners {
         Self {
             cursor: store.open_journal(RecordEvents::OWNERS),
             joined_in_update: Vec::new(),
+            left_in_update: Vec::new(),
+            decided: Vec::new(),
         }
     }
 
@@ -73,63 +80,61 @@ impl DrawOwners {
         let Self {
             cursor,
             joined_in_update,
+            left_in_update,
+            decided,
         } = self;
-        let first = changes.len();
-        let known = store.read_journal(cursor, |_, read| {
+        store.read_journal(cursor, |_, read| {
             let JournalRead::Changes(entries) = read else {
                 return false;
             };
-            for update in entries.chunk_by(|a, b| a.update == b.update) {
-                joined_in_update.clear();
-                joined_in_update.extend(
-                    update
-                        .iter()
-                        .filter(|entry| entry.event.joins())
-                        .filter_map(drawn_node),
-                );
-                joined_in_update.sort_unstable();
-                joined_in_update.dedup();
+            decided.clear();
+            // The updates go newest first: a node's latest change decides.
+            let mut updates = entries
+                .chunk_by(|a, b| a.update == b.update)
+                .rev()
+                .peekable();
+            while let Some(update) = updates.next() {
+                sorted_nodes(update, RecordEvent::joins, joined_in_update);
+                sorted_nodes(update, RecordEvent::leaves, left_in_update);
+                let first = changes.len();
+                let undecided = |node: &NodeId| decided.binary_search(node).is_err();
                 changes.extend(
-                    update
+                    left_in_update
                         .iter()
-                        .filter(|entry| entry.event.leaves())
-                        .filter_map(drawn_node)
                         .filter(|node| joined_in_update.binary_search(node).is_err())
+                        .filter(|node| undecided(node))
+                        .copied()
                         .map(DrawOwnerChange::Left),
                 );
                 changes.extend(
                     joined_in_update
                         .iter()
+                        .filter(|node| undecided(node))
                         .copied()
                         .map(DrawOwnerChange::Joined),
                 );
+                if updates.peek().is_some() {
+                    decided.extend(changes[first..].iter().map(|change| change.node()));
+                    decided.sort_unstable();
+                }
             }
             true
-        });
-        if !known {
-            return false;
-        }
-        // The latest change of each node stands.
-        sort_by_node(&mut changes[first..]);
-        let mut kept = first;
-        for index in first..changes.len() {
-            if kept > first && changes[kept - 1].node() == changes[index].node() {
-                changes[kept - 1] = changes[index];
-            } else {
-                changes[kept] = changes[index];
-                kept += 1;
-            }
-        }
-        changes.truncate(kept);
-        true
+        })
     }
 }
 
-// Sorts `changes` by node and keeps the order of the changes of a node. The
-// draw owners and the shell share this one sort, which the ESP32 keeps in
-// flash once.
-fn sort_by_node(changes: &mut [DrawOwnerChange]) {
-    changes.sort_by_key(|change| change.node());
+// Puts into `nodes`, sorted and once each, the nodes whose own records
+// `update`'s entries of the events `takes` keeps name.
+fn sorted_nodes(update: &[JournalEntry], takes: fn(RecordEvent) -> bool, nodes: &mut Vec<NodeId>) {
+    nodes.clear();
+    nodes.extend(
+        update
+            .iter()
+            .filter(|entry| takes(entry.event))
+            .filter_map(drawn_node),
+    );
+    nodes.sort_unstable();
+    nodes.dedup();
 }
 
 // The node the record of `entry` draws, when it is the node's own record:
