@@ -38,7 +38,6 @@ fn push_text_style_draws_for_test(
     let node = TextPrimitiveNode {
         node_id: NodeId(1),
         rect,
-        text: prepared.text.clone(),
         render_text: prepared.render_text(),
         layout: prepared.layout.clone(),
         text_style: Arc::new(text_style.clone()),
@@ -117,7 +116,6 @@ fn snapped_text_leaf_root(animated: bool, translated_content_context: bool) -> L
                         width: 36.0,
                         height: 16.0,
                     },
-                    text: cranpose_ui::text::shared_plain_annotated_string("48 px"),
                     render_text: cranpose_ui::text::shared_plain_render_string("48 px"),
                     layout: laid_out("48 px", &TextStyle::default(), 36.0)
                         .layout

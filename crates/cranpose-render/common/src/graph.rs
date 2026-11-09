@@ -6,7 +6,7 @@ use std::{
 use cranpose_core::NodeId;
 use cranpose_ui::{
     GraphicsLayer, ModifierNodeSlices, Point, Rect, Size, TextOverflow, TextStyle,
-    text::{AnnotatedString, RenderString},
+    text::RenderString,
 };
 pub use cranpose_ui_graphics::transform::{FrontPolygon, ProjectiveTransform, quad_bounds};
 use cranpose_ui_graphics::{CommandRecording, DrawPlacement, DrawPrimitive, RecordingSummary};
@@ -84,11 +84,9 @@ pub struct TextPrimitiveNode {
     pub node_id: NodeId,
     /// Box of the laid-out text in logical pixels, after alignment and panning.
     pub rect: Rect,
-    /// Shared so the renderer can hand the same allocation to every draw it
-    /// emits for this node instead of deep-copying the string once per emit.
-    pub text: AnnotatedString,
-    /// `text` as the renderer's draws carry it across threads, shared with
-    /// the prepared layout it came from so no frame converts it again.
+    /// The string and its spans, as the renderer's draws carry them across
+    /// threads, shared with the prepared layout it came from so no frame
+    /// converts or copies it.
     pub render_text: std::sync::Arc<RenderString>,
     /// The lines and glyphs the text draws, from its top left corner at
     /// `rect`'s.
@@ -103,7 +101,7 @@ pub struct TextPrimitiveNode {
     /// Rectangle that cuts the glyphs: the node's box when the layout overflows it and overflow
     /// is not visible, or when the text pans; `None` otherwise, as Compose cuts a text.
     pub clip: Option<Rect>,
-    /// What a renderer reads of `text_style` and `text`'s spans to draw the
+    /// What a renderer reads of `text_style` and `render_text`'s spans to draw the
     /// glyphs, so that drawing a plain text does not load the style.
     pub paint: TextPaintCache,
 }

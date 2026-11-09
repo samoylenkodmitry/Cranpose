@@ -880,7 +880,6 @@ fn text_shadow_node() -> RenderNode {
                 width: 56.0,
                 height: 20.0,
             },
-            text: annotated,
             render_text,
             text_style: std::sync::Arc::new(TextStyle::from_span_style(style)),
             font_size: 18.0,

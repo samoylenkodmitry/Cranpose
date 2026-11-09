@@ -486,7 +486,7 @@ impl<'a> LayerRef<'a> {
         fn collect(layer: LayerRef<'_>, out: &mut Vec<String>) {
             for item in layer.items() {
                 match item {
-                    ItemRef::Text(text) => out.push(text.text.text().to_owned()),
+                    ItemRef::Text(text) => out.push(text.render_text.text().to_owned()),
                     ItemRef::Run(run) => {
                         for primitive in run.primitives() {
                             if let DrawPrimitive::Text(text) = primitive {

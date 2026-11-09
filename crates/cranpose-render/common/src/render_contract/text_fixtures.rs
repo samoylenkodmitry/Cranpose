@@ -202,7 +202,6 @@ fn text_node_with_style(
             node_id,
             rect,
             render_text: prepared.render_text(),
-            text,
             layout: prepared.layout.clone(),
             text_style: std::sync::Arc::new(text_style),
             font_size: 14.0,

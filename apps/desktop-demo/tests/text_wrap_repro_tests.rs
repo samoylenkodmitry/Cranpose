@@ -27,7 +27,7 @@ fn find_box<'a>(node: &'a LayoutBox, needle: &str) -> Option<&'a LayoutBox> {
 
 fn find_painted<'a>(layer: LayerRef<'a>, needle: &str) -> Option<&'a TextPrimitiveNode> {
     layer.items().find_map(|item| match item {
-        ItemRef::Text(text) if squashed(text.text.text()).starts_with(&squashed(needle)) => {
+        ItemRef::Text(text) if squashed(text.render_text.text()).starts_with(&squashed(needle)) => {
             Some(text)
         }
         ItemRef::Layer(child) | ItemRef::Leaf(child) => find_painted(child, needle),

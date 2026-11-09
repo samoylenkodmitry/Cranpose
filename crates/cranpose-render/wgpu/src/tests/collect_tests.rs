@@ -990,7 +990,6 @@ fn text_root(style: cranpose_ui::TextStyle) -> (LayerNode, Arc<cranpose_ui::Text
     let text = crate::test_support::with_layout(cranpose_render_common::graph::TextPrimitiveNode {
         node_id: NodeId(5),
         rect: rect(0.0, 0.0, 80.0, 20.0),
-        text: cranpose_ui::text::shared_plain_annotated_string("shared"),
         render_text: cranpose_ui::text::shared_plain_render_string("shared"),
         layout: Default::default(),
         text_style: Arc::clone(&style),

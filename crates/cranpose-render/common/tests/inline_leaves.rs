@@ -43,7 +43,7 @@ fn picture(graph: &Scene) -> Vec<String> {
                 ItemRef::Text(text) => {
                     out.push(format!(
                         "text {} at {:?}",
-                        text.text.text(),
+                        text.render_text.text(),
                         transform.bounds_for_rect(text.rect)
                     ));
                 }
@@ -90,7 +90,7 @@ fn text_has_layer(graph: &Scene, text: &str) -> bool {
         layer.items().find_map(|item| match item {
             ItemRef::Layer(layer) => search(layer, text, layer.node_id().is_some()),
             ItemRef::Leaf(leaf) => search(leaf, text, false),
-            ItemRef::Text(drawn) if drawn.text.text() == text => Some(in_layer),
+            ItemRef::Text(drawn) if drawn.render_text.text() == text => Some(in_layer),
             ItemRef::Text(_) | ItemRef::Draw(_) | ItemRef::Run(_) | ItemRef::Shape(_) => None,
         })
     }

@@ -164,7 +164,6 @@ pub(super) fn text_node_from_parts(parts: &TextNodeParts) -> Option<TextPrimitiv
     Some(TextPrimitiveNode {
         node_id: parts.node_id,
         rect: placement.rect,
-        text: prepared.text.clone(),
         render_text: prepared.render_text(),
         layout: prepared.layout.clone(),
         text_style: Arc::clone(visual_style),
@@ -192,7 +191,7 @@ pub(super) fn refresh_text_node(drawn: &mut TextPrimitiveNode, parts: &TextNodeP
     let Some(placement) = TextPlacement::of(parts, prepared) else {
         return false;
     };
-    if !Arc::ptr_eq(drawn.text.render_string(), prepared.text.render_string())
+    if !Arc::ptr_eq(&drawn.render_text, prepared.text.render_string())
         || !Arc::ptr_eq(&drawn.text_style, &prepared.visual_style)
     {
         let Some(text) = text_node_from_parts(parts) else {
@@ -205,7 +204,6 @@ pub(super) fn refresh_text_node(drawn: &mut TextPrimitiveNode, parts: &TextNodeP
     drawn.clip = placement.clip;
     drawn.overflow = placement.overflow;
     drawn.layout = prepared.layout.clone();
-    drawn.render_text = prepared.render_text();
     true
 }
 

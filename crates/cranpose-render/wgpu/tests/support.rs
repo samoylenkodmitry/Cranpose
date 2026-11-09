@@ -1201,7 +1201,6 @@ pub(crate) fn text_node(node_id: usize, text: &str, rect: Rect, font_size: f32) 
             cranpose_render_common::graph::TextPrimitiveNode {
                 node_id: NodeId(node_id),
                 rect,
-                text: cranpose_ui::text::shared_plain_annotated_string(text),
                 render_text: cranpose_ui::text::shared_plain_render_string(text),
                 text_style: std::sync::Arc::new(style),
                 font_size,

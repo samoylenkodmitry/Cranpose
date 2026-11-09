@@ -34,7 +34,7 @@ pub(crate) fn with_layout(
 ) -> cranpose_render_common::graph::TextPrimitiveNode {
     node.layout = in_layout_context(|| {
         cranpose_ui::text::prepare_text_layout(
-            &node.text,
+            &std::sync::Arc::clone(&node.render_text).into(),
             &node.text_style,
             cranpose_ui::TextLayoutOptions {
                 overflow: node.overflow,

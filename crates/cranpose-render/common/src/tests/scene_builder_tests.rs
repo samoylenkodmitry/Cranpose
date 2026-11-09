@@ -183,7 +183,7 @@ fn built(applier: &MemoryApplier, root: NodeId) -> Option<Built> {
 
 fn find_text_motion(layer: LayerRef<'_>, label: &str) -> Option<Option<TextMotion>> {
     layer.items().find_map(|item| match item {
-        ItemRef::Text(text) if text.text.text() == label => {
+        ItemRef::Text(text) if text.render_text.text() == label => {
             Some(text.text_style.paragraph_style.text_motion)
         }
         ItemRef::Layer(child) | ItemRef::Leaf(child) => find_text_motion(child, label),
@@ -194,7 +194,7 @@ fn find_text_motion(layer: LayerRef<'_>, label: &str) -> Option<Option<TextMotio
 fn collect_text_labels(layer: LayerRef<'_>, labels: &mut Vec<String>) {
     for item in layer.items() {
         match item {
-            ItemRef::Text(text) => labels.push(text.text.text().to_owned()),
+            ItemRef::Text(text) => labels.push(text.render_text.text().to_owned()),
             ItemRef::Layer(child) | ItemRef::Leaf(child) => collect_text_labels(child, labels),
             ItemRef::Draw(_) | ItemRef::Run(_) | ItemRef::Shape(_) => {}
         }
@@ -204,7 +204,7 @@ fn collect_text_labels(layer: LayerRef<'_>, labels: &mut Vec<String>) {
 fn find_text_top(layer: LayerRef<'_>, label: &str) -> Option<f32> {
     fn search(layer: LayerRef<'_>, label: &str, transform: ProjectiveTransform) -> Option<f32> {
         layer.items().find_map(|item| match item {
-            ItemRef::Text(text) if text.text.text() == label => {
+            ItemRef::Text(text) if text.render_text.text() == label => {
                 let quad = transform.map_rect(text.rect);
                 let top = quad
                     .iter()
@@ -1491,7 +1491,10 @@ fn collect_text_tops(layer: LayerRef<'_>) -> std::collections::BTreeMap<String, 
                         .map(|point| point[1])
                         .fold(f32::INFINITY, f32::min);
                     if top.is_finite() {
-                        out.insert(text.text.text().to_owned(), (top * 10.0).round() as i64);
+                        out.insert(
+                            text.render_text.text().to_owned(),
+                            (top * 10.0).round() as i64,
+                        );
                     }
                 }
                 ItemRef::Layer(child) | ItemRef::Leaf(child) => {
@@ -2393,7 +2396,7 @@ fn wrapped_paragraph_paints_the_height_it_measured() {
             value.chars().filter(|c| !c.is_whitespace()).collect()
         }
         let painted = find_text_primitive(graph.root_layer().expect("a scene"), &|text| {
-            squashed(text.text.text()) == squashed(BODY)
+            squashed(text.render_text.text()) == squashed(BODY)
         })
         .expect("painted paragraph");
 
@@ -2504,7 +2507,7 @@ fn paint_body(
     let painted_text = |root: LayerRef<'_>| {
         let painted =
             find_text_primitive(root, &|text| text.node_id == body_id).expect("painted paragraph");
-        layout_lines(&painted.layout, painted.text.text())
+        layout_lines(&painted.layout, painted.render_text.text())
     };
     let graph = built(&applier, root).expect("render graph");
     applier.clear_runtime_handle();

@@ -5770,7 +5770,7 @@ fn graph_scene_text_y(scene: &graph_scene::Scene, needle: &str) -> Option<f32> {
         layer.items().find_map(|item| match item {
             ItemRef::Layer(child) => walk(child, base, needle),
             ItemRef::Leaf(leaf) => walk_items(leaf, base + leaf.origin().y, needle),
-            ItemRef::Text(text) if text.text.text() == needle => Some(base + text.rect.y),
+            ItemRef::Text(text) if text.render_text.text() == needle => Some(base + text.rect.y),
             ItemRef::Text(_) | ItemRef::Draw(_) | ItemRef::Run(_) | ItemRef::Shape(_) => None,
         })
     }
@@ -5840,7 +5840,7 @@ fn graph_scene_text_values(scene: &graph_scene::Scene) -> Vec<String> {
         for item in layer.items() {
             match item {
                 ItemRef::Layer(child) | ItemRef::Leaf(child) => collect(child, out),
-                ItemRef::Text(text) => out.push(text.text.text().to_owned()),
+                ItemRef::Text(text) => out.push(text.render_text.text().to_owned()),
                 ItemRef::Draw(_) | ItemRef::Run(_) | ItemRef::Shape(_) => {}
             }
         }

@@ -79,7 +79,6 @@ pub fn build_dev_overlay_layer(
                         width: text_width,
                         height: text_height,
                     },
-                    text: overlay.text.clone(),
                     render_text: overlay.render_text(),
                     layout: overlay.layout.clone(),
                     text_style: std::sync::Arc::clone(&overlay.visual_style),

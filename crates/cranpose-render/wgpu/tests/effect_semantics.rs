@@ -1943,7 +1943,6 @@ fn gradient_dstout_alpha_fixture() -> LayerNode {
                         width: 48.0,
                         height: 18.0,
                     },
-                    text: cranpose_ui::text::shared_plain_annotated_string("TOP"),
                     render_text: cranpose_ui::text::shared_plain_render_string("TOP"),
                     text_style: std::sync::Arc::new(TextStyle::from_span_style(SpanStyle {
                         color: Some(Color::WHITE),
@@ -2808,7 +2807,6 @@ fn translation_only_wrapper_with_plain_text_only_fixture(wrapper_translation: Po
                     width: TRANSLATED_TEXT_LOCAL_SIZE.0 as f32,
                     height: 20.0,
                 },
-                text: cranpose_ui::text::shared_plain_annotated_string("Label"),
                 render_text: cranpose_ui::text::shared_plain_render_string("Label"),
                 text_style: std::sync::Arc::new(TextStyle::from_span_style(SpanStyle {
                     color: Some(Color::WHITE),
@@ -3096,7 +3094,6 @@ fn translation_only_wrapper_with_text_style_fixture(
                         width: 24.0,
                         height: 14.0,
                     },
-                    text: cranpose_ui::text::shared_plain_annotated_string("Text"),
                     render_text: cranpose_ui::text::shared_plain_render_string("Text"),
                     text_style: std::sync::Arc::new(text_style),
                     font_size: 14.0,
@@ -3169,7 +3166,6 @@ fn translation_only_wrapper_with_multispan_showcase_text_fixture(
                     width: 320.0,
                     height: 24.0,
                 },
-                text: showcase_multispan_text(),
                 render_text: std::sync::Arc::clone(showcase_multispan_text().render_string()),
                 text_style: std::sync::Arc::new(TextStyle::from_span_style(SpanStyle::default())),
                 font_size: 16.0,
@@ -3247,7 +3243,6 @@ fn showcase_card_wrapper(wrapper_translation: Point) -> LayerNode {
                         width: 304.0,
                         height: 24.0,
                     },
-                    text: showcase_multispan_text(),
                     render_text: std::sync::Arc::clone(showcase_multispan_text().render_string()),
                     text_style: std::sync::Arc::new(TextStyle::from_span_style(
                         SpanStyle::default(),
@@ -3316,7 +3311,6 @@ fn translation_only_wrapper_with_padded_multispan_showcase_text_fixture(
                     width: 304.0,
                     height: 24.0,
                 },
-                text: showcase_multispan_text(),
                 render_text: std::sync::Arc::clone(showcase_multispan_text().render_string()),
                 text_style: std::sync::Arc::new(TextStyle::from_span_style(SpanStyle::default())),
                 font_size: 16.0,
@@ -3376,7 +3370,6 @@ fn gradient_stroke_text_fixture() -> LayerNode {
                     width: 120.0,
                     height: 28.0,
                 },
-                text: cranpose_ui::text::shared_plain_annotated_string("Gradient"),
                 render_text: cranpose_ui::text::shared_plain_render_string("Gradient"),
                 text_style: std::sync::Arc::new(TextStyle::from_span_style(SpanStyle {
                     brush: Some(Brush::linear_gradient(vec![

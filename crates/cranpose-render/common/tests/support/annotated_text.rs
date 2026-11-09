@@ -60,7 +60,6 @@ pub(crate) fn text_graph(
                 rect: text_rect,
                 render_text: prepared.render_text(),
                 layout: prepared.layout.clone(),
-                text,
                 font_size: style.resolve_font_size(10.0),
                 text_style: Arc::new(style),
                 overflow: cranpose_ui::TextLayoutOptions::default().overflow,

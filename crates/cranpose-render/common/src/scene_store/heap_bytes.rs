@@ -2,7 +2,7 @@
 
 use std::mem::size_of;
 
-use cranpose_ui::text::AnnotatedString;
+use cranpose_ui::text::RenderString;
 use cranpose_ui_graphics::{DrawPrimitive, ShadowPrimitive};
 
 use super::{GeoRecord, SceneStore, TreeRecord, WarmRecord};
@@ -24,7 +24,7 @@ pub(super) fn store_heap_bytes(store: &SceneStore) -> usize {
         + store
             .texts
             .values()
-            .map(|text| annotated_string_heap_bytes(&text.text))
+            .map(|text| render_string_heap_bytes(&text.render_text))
             .sum::<usize>();
     let runs = store.runs.heap_bytes()
         + store
@@ -89,8 +89,7 @@ fn shadow_primitive_heap_bytes(shadow: &ShadowPrimitive) -> usize {
     }
 }
 
-fn annotated_string_heap_bytes(text: &AnnotatedString) -> usize {
-    let content = text.render_string();
+fn render_string_heap_bytes(content: &RenderString) -> usize {
     let ranges = content.span_styles().len()
         + content.paragraph_styles().len()
         + content.string_annotations().len()

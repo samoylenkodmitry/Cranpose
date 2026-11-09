@@ -68,9 +68,9 @@ fn text_paints(layer: LayerRef<'_>, out: &mut Vec<(String, TextPaint)>) {
                     text.paint().style_hash,
                     text.text_style.render_hash(),
                     "{} paints under its own style's hash",
-                    text.text.text()
+                    text.render_text.text()
                 );
-                out.push((text.text.text().to_owned(), *text.paint()));
+                out.push((text.render_text.text().to_owned(), *text.paint()));
             }
             ItemRef::Draw(_) | ItemRef::Run(_) | ItemRef::Shape(_) => {}
         }

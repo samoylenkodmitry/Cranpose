@@ -50,7 +50,6 @@ fn hidden_text_at(rect: Rect, clip: Option<Rect>) -> RenderNode {
             node_id: NodeId(51_001),
             rect,
             render_text: std::sync::Arc::clone(annotated.render_string()),
-            text: annotated,
             text_style: std::sync::Arc::new(TextStyle::from_span_style(SpanStyle {
                 color: Some(Color::BLACK),
                 font_size: TextUnit::Sp(18.0),

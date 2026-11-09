@@ -148,7 +148,7 @@ fn hash_draw<H: Hasher>(draw: &DrawPrimitiveNode, state: &mut H) {
 
 fn hash_text<H: Hasher>(text: &TextPrimitiveNode, state: &mut H) {
     text.rect.render_hash().hash(state);
-    text.text.render_hash().hash(state);
+    text.render_text.render_hash().hash(state);
     text.text_style.render_hash().hash(state);
     hash_f32_bits(text.font_size, state);
     text.overflow.hash(state);

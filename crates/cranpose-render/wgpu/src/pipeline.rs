@@ -20,7 +20,7 @@ use cranpose_ui::TextOverflow;
 use cranpose_ui::measure_text;
 #[cfg(test)]
 use cranpose_ui::prepare_text_layout;
-use cranpose_ui::text::{TextDrawStyle, TextStyle, shared_plain_render_string};
+use cranpose_ui::text::{AnnotatedString, TextDrawStyle, TextStyle, shared_plain_render_string};
 use cranpose_ui_graphics::{
     BlendMode, Color, DrawPrimitive, GraphicsLayer, LayerShape, Point, Recorded, Rect,
     RenderEffect, RoundedCornerShape, RuntimeShader, ShapeRecorder, TileMode,
@@ -381,11 +381,10 @@ fn gpu_text_effect_for_style(
     build_gpu_text_effect(&material, text_rect)
 }
 
-fn text_for_gpu_mask(
-    text: &cranpose_ui::text::AnnotatedString,
-) -> cranpose_ui::text::AnnotatedString {
+fn text_for_gpu_mask(text: impl Into<AnnotatedString>) -> AnnotatedString {
+    let text = text.into();
     if text.span_styles().is_empty() {
-        return text.clone();
+        return text;
     }
 
     text.map_span_styles(|span| {
@@ -398,9 +397,9 @@ fn text_for_gpu_mask(
 }
 
 fn text_with_layer_transformed_span_paint(
-    text: &cranpose_ui::text::AnnotatedString,
+    text: &AnnotatedString,
     content_layer: &GraphicsLayer,
-) -> cranpose_ui::text::AnnotatedString {
+) -> AnnotatedString {
     if text.span_styles().is_empty() {
         return text.clone();
     }
@@ -417,7 +416,7 @@ fn text_with_layer_transformed_span_paint(
 }
 
 fn merged_span_style_for_range(
-    text: &cranpose_ui::text::AnnotatedString,
+    text: &AnnotatedString,
     base_span_style: &cranpose_ui::text::SpanStyle,
     start: usize,
     end: usize,
@@ -432,7 +431,7 @@ fn merged_span_style_for_range(
 }
 
 fn gpu_text_material_batches_for_text(
-    text: &cranpose_ui::text::AnnotatedString,
+    text: &AnnotatedString,
     text_style: &TextStyle,
     fallback_color: Color,
     text_scale: f32,
@@ -479,9 +478,9 @@ fn gpu_text_material_batches_for_text(
 }
 
 fn text_for_gpu_mask_batch(
-    text: &cranpose_ui::text::AnnotatedString,
+    text: &AnnotatedString,
     visible_ranges: &[Range<usize>],
-) -> cranpose_ui::text::AnnotatedString {
+) -> AnnotatedString {
     let visible_style = cranpose_ui::text::SpanStyle {
         color: Some(Color::WHITE),
         ..Default::default()
@@ -490,8 +489,7 @@ fn text_for_gpu_mask_batch(
         .iter()
         .filter(|range| range.start < range.end)
         .fold(
-            cranpose_ui::text::AnnotatedString::builder()
-                .append_annotated(&text_for_gpu_mask(text)),
+            AnnotatedString::builder().append_annotated(&text_for_gpu_mask(text.clone())),
             |builder, range| builder.add_style(visible_style.clone(), range.clone()),
         )
         .to_annotated_string()
@@ -605,7 +603,7 @@ fn push_span_gpu_text_material_draws<S: TextStyleDrawSink>(
     transformed_text_style: &TextStyle,
     fallback_color: Color,
 ) -> bool {
-    let text = &node.text;
+    let text = &AnnotatedString::from(Arc::clone(&node.render_text));
     let text_scale = layer_uniform_scale(placement.layer);
     let transformed_span_text = text_with_layer_transformed_span_paint(text, placement.layer);
     let material_batches = gpu_text_material_batches_for_text(
@@ -655,7 +653,6 @@ fn emit_text_style_draws<S: TextStyleDrawSink>(
     } = placement;
     let TextPrimitiveNode {
         node_id,
-        text,
         render_text,
         layout,
         text_style,
@@ -710,7 +707,7 @@ fn emit_text_style_draws<S: TextStyleDrawSink>(
         shadow_text_style.span_style.color = Some(shadow_color);
         let blur_radius = shadow.blur_radius.max(0.0) * text_scale;
         let shadow_style_hash = shadow_text_style.render_hash();
-        let shadow_text = Arc::clone(text_for_gpu_mask(text).render_string());
+        let shadow_text = Arc::clone(text_for_gpu_mask(Arc::clone(render_text)).render_string());
         sink.push_shadow_text(
             TextDraw {
                 node_id,
@@ -777,11 +774,12 @@ fn emit_text_glyph_draws<S: TextStyleDrawSink>(
         }
 
         let (mask, color) = mask_style(style, Color::WHITE);
+        let mask_text = text_for_gpu_mask(Arc::clone(&node.render_text));
         push_text_effect(
             sink,
             node,
             (text_rect, text_scale, text_clip),
-            (&text_for_gpu_mask(&node.text), mask, color),
+            (&mask_text, mask, color),
             (effect, effect_rect),
         );
         return;

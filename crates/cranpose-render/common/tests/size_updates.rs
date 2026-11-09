@@ -132,7 +132,7 @@ fn texts(layer: LayerRef<'_>, parent: ProjectiveTransform, out: &mut Vec<DrawnTe
         match item {
             ItemRef::Layer(child) | ItemRef::Leaf(child) => texts(child, transform, out),
             ItemRef::Text(text) => out.push((
-                text.text.text().to_owned(),
+                text.render_text.text().to_owned(),
                 transform.bounds_for_rect(text.rect),
                 text.clip.map(|clip| transform.bounds_for_rect(clip)),
                 text.layout.width(),

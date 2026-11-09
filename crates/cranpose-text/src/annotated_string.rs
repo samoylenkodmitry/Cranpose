@@ -577,6 +577,17 @@ impl From<String> for AnnotatedString {
     }
 }
 
+// The text and spans of `content`, shared, with no link handlers: what a
+// renderer draws of a text.
+impl From<Arc<RenderString>> for AnnotatedString {
+    fn from(content: Arc<RenderString>) -> Self {
+        Self {
+            content,
+            handlers: None,
+        }
+    }
+}
+
 impl From<&str> for AnnotatedString {
     fn from(text: &str) -> Self {
         Self::new(text.to_owned())

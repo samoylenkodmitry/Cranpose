@@ -70,7 +70,7 @@ fn items_signature(layer: LayerRef<'_>, out: &mut Vec<String>) {
             }
             ItemRef::Draw(draw) => out.push(format!("draw {:?}", draw.primitive)),
             ItemRef::Text(text) => {
-                out.push(format!("text {} {:?}", text.text.text(), text.rect));
+                out.push(format!("text {} {:?}", text.render_text.text(), text.rect));
             }
             ItemRef::Run(run) => {
                 out.push(format!("run {:?}", run.primitives().collect::<Vec<_>>()));

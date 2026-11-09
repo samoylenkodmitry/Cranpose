@@ -124,7 +124,7 @@ fn painted(layer: LayerRef<'_>, parent: ProjectiveTransform, out: &mut Vec<(Rect
             ItemRef::Text(text) => {
                 out.push((
                     transform.bounds_for_rect(text.rect),
-                    text.text.text().to_owned(),
+                    text.render_text.text().to_owned(),
                 ));
                 continue;
             }
