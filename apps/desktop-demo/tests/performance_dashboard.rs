@@ -319,6 +319,11 @@ fn frameworks_show_the_highest_frame_rate_first_and_the_reason_a_framework_has_n
     );
     assert_eq!(
         labels[egui + 1],
+        "egui 0.36.2 on the chart",
+        "the bar is a checkbox named for its framework: {labels:?}"
+    );
+    assert_eq!(
+        labels[egui + 2],
         "55.7",
         "the frame rate sits on the framework's bar: {labels:?}"
     );
@@ -407,8 +412,11 @@ fn frames_that_alternate_short_and_long_read_their_average_rate() {
 }
 
 fn dashboard() -> RobotTestRule<TestRenderer> {
-    let index = Rc::new(PerfIndex::parse(INDEX).expect("the fixture parses"));
-    let source = frames();
+    dashboard_of(INDEX, frames())
+}
+
+fn dashboard_of(index: &str, source: FrameSource) -> RobotTestRule<TestRenderer> {
+    let index = Rc::new(PerfIndex::parse(index).expect("the fixture parses"));
     create_headless_robot_test(1100, 4000, move || {
         PerformanceDashboard(Rc::clone(&index), None, source.clone());
     })
@@ -426,6 +434,7 @@ fn choose(robot: &mut RobotTestRule<TestRenderer>, name: &str, nth: usize) {
         .get(nth)
         .unwrap_or_else(|| panic!("no chip {nth} named {name}: {chips:?}"));
     assert!(robot.click_at(chip.x + chip.width / 2.0, chip.y + chip.height / 2.0));
+    robot.wait_for_motion();
 }
 
 #[test]
@@ -450,7 +459,7 @@ fn a_framework_card_shows_the_metric_chosen_and_a_dash_where_a_run_has_none() {
 }
 
 #[test]
-fn a_framework_card_charts_the_sampled_metric_chosen_on_a_scale_of_its_own() {
+fn a_framework_card_charts_the_sampled_metric_chosen_on_a_scale_that_fits_its_values() {
     let mut robot = dashboard();
     assert!(
         !robot.get_all_text().iter().any(|text| text == "150"),
@@ -458,10 +467,11 @@ fn a_framework_card_charts_the_sampled_metric_chosen_on_a_scale_of_its_own() {
     );
     choose(&mut robot, "RAM MB", 1);
     let texts = robot.get_all_text();
-    for grid in ["50", "100", "150"] {
+    for grid in ["100", "120", "140", "160"] {
         assert!(
             texts.iter().any(|text| text == grid),
-            "egui's memory, up to 150 MB, on a grid every 50: {grid}: {texts:?}"
+            "egui's memory, 110 MB to 150 MB, far above zero, on a grid every 20 from 100: \
+             {grid}: {texts:?}"
         );
     }
 }
@@ -556,4 +566,299 @@ fn the_trend_follows_the_metric_chosen() {
             .any(|text| text == "gauntlet: CPU MHz, night by night"),
         "{texts:?}"
     );
+}
+
+// The desktop card's chart, from the corner its top grid label starts at to
+// the right edge of its last time label, 190 points down.
+fn desktop_chart(robot: &mut RobotTestRule<TestRenderer>) -> cranpose_ui::Rect {
+    let rects = robot.get_all_rects();
+    let labelled = |text: &str| -> Vec<cranpose_ui::Rect> {
+        rects
+            .iter()
+            .filter(|(_, label)| label.as_deref() == Some(text))
+            .map(|(bounds, _)| *bounds)
+            .collect()
+    };
+    // The trend's grid has no 60; the desktop card's chart comes last.
+    let top = *labelled("60").last().expect("the chart's top grid label");
+    let end = labelled("20000 ms")[0];
+    cranpose_ui::Rect {
+        x: top.x - 2.0,
+        y: top.y,
+        width: end.x + end.width - (top.x - 2.0),
+        height: 190.0,
+    }
+}
+
+fn count(texts: &[String], text: &str) -> usize {
+    texts.iter().filter(|shown| *shown == text).count()
+}
+
+// Two seconds in, a tenth of the 20 s run: egui draws 60 fps near the top of
+// the desktop chart, Compose has not drawn yet and reads 0 at its bottom.
+const AT_TWO_SECONDS: f32 = 0.1;
+const EGUI_Y: f32 = 14.0;
+const COMPOSE_Y: f32 = 185.0;
+const BETWEEN_Y: f32 = 100.0;
+
+#[test]
+fn hovering_a_chart_names_the_framework_nearest_to_the_pointer_and_its_value_at_that_time() {
+    let mut robot = dashboard();
+    let chart = desktop_chart(&mut robot);
+    // The browser card has a row of egui too.
+    let rows = count(&robot.get_all_text(), "egui 0.36.2");
+    let at = chart.x + chart.width * AT_TWO_SECONDS;
+    robot.move_to(at, chart.y + EGUI_Y);
+    robot.wait_for_motion();
+    let texts = robot.get_all_text();
+    for reading in ["2.00 s", "60.0 fps"] {
+        assert!(
+            texts.iter().any(|text| text == reading),
+            "{reading}: {texts:?}"
+        );
+    }
+    assert_eq!(
+        count(&texts, "egui 0.36.2"),
+        rows + 1,
+        "the tooltip names egui: {texts:?}"
+    );
+    robot.move_to(at, chart.y + COMPOSE_Y);
+    let texts = robot.get_all_text();
+    assert!(texts.iter().any(|text| text == "0.0 fps"), "{texts:?}");
+    assert_eq!(
+        count(&texts, "Compose Multiplatform 1.12.1"),
+        2,
+        "a bar and the tooltip: {texts:?}"
+    );
+    assert_eq!(count(&texts, "egui 0.36.2"), rows, "{texts:?}");
+}
+
+#[test]
+fn the_pointer_picks_up_a_curve_only_near_it_and_holds_it_until_another_comes_near() {
+    let mut robot = dashboard();
+    let chart = desktop_chart(&mut robot);
+    let at = chart.x + chart.width * AT_TWO_SECONDS;
+    let tooltip = |robot: &mut RobotTestRule<TestRenderer>| {
+        robot.get_all_text().iter().any(|text| text == "2.00 s")
+    };
+    robot.move_to(at, chart.y + BETWEEN_Y);
+    assert!(!tooltip(&mut robot), "no curve is near the pointer");
+    robot.move_to(at, chart.y + EGUI_Y);
+    assert!(tooltip(&mut robot), "egui is near");
+    robot.move_to(at + 30.0, chart.y + BETWEEN_Y);
+    let texts = robot.get_all_text();
+    assert!(
+        texts.iter().any(|text| text == "60.0 fps"),
+        "the pointer holds egui while no other curve is near: {texts:?}"
+    );
+    robot.move_to(at, chart.y + COMPOSE_Y);
+    let texts = robot.get_all_text();
+    assert!(
+        texts.iter().any(|text| text == "0.0 fps") && !texts.iter().any(|text| text == "60.0 fps"),
+        "Compose is near now: {texts:?}"
+    );
+    robot.move_to(chart.x + chart.width / 2.0, chart.y - 30.0);
+    assert!(
+        !tooltip(&mut robot),
+        "the pointer let go on leaving the chart"
+    );
+}
+
+// The rect of the first text `text` in the desktop card, after its heading.
+fn rect_of(robot: &mut RobotTestRule<TestRenderer>, text: &str) -> cranpose_ui::Rect {
+    robot
+        .get_all_rects()
+        .into_iter()
+        .find(|(_, shown)| shown.as_deref() == Some(text))
+        .unwrap_or_else(|| panic!("no {text}"))
+        .0
+}
+
+fn click_on(robot: &mut RobotTestRule<TestRenderer>, text: &str) {
+    let bounds = rect_of(robot, text);
+    assert!(
+        robot.click_at(
+            bounds.x + bounds.width / 2.0,
+            bounds.y + bounds.height / 2.0
+        ),
+        "{text} takes the click"
+    );
+    robot.wait_for_motion();
+}
+
+#[test]
+fn a_bar_picked_keeps_only_it_and_the_others_picked_on_the_chart_and_reads_them_together() {
+    let mut robot = dashboard();
+    let chart = desktop_chart(&mut robot);
+    let rows = count(&robot.get_all_text(), "egui 0.36.2");
+    click_on(&mut robot, "55.7");
+    click_on(&mut robot, "17.1");
+    let texts = robot.get_all_text();
+    assert!(
+        texts
+            .iter()
+            .any(|text| text == "2 picked: the chart shows only them."),
+        "{texts:?}"
+    );
+    // The pointer between the curves reads both at the time under it.
+    robot.move_to(chart.x + chart.width * AT_TWO_SECONDS, chart.y + BETWEEN_Y);
+    let texts = robot.get_all_text();
+    for reading in ["2.00 s", "60.0 fps", "0.0 fps"] {
+        assert!(
+            texts.iter().any(|text| text == reading),
+            "{reading}: {texts:?}"
+        );
+    }
+    assert_eq!(count(&texts, "egui 0.36.2"), rows + 1, "{texts:?}");
+    click_on(&mut robot, "Show all");
+    let texts = robot.get_all_text();
+    assert!(
+        !texts
+            .iter()
+            .any(|text| text.ends_with(" picked: the chart shows only them.")),
+        "{texts:?}"
+    );
+}
+
+#[test]
+fn picking_a_bar_moves_the_chart_to_its_new_scale_over_time() {
+    let mut robot = crowded(20.0, [400.0, 500.0]);
+    let bounds = rect_of(&mut robot, "20.0");
+    robot.click_at(
+        bounds.x + bounds.width / 2.0,
+        bounds.y + bounds.height / 2.0,
+    );
+    assert!(
+        robot.shell_mut().has_active_animations(),
+        "the scale and the fades settle over time"
+    );
+    robot.wait_for_motion();
+    assert!(!robot.shell_mut().has_active_animations());
+}
+
+// A card of twelve frameworks, each one's CPU time per frame the same through
+// the run: Cranpose's `cranpose`, Compose and eight others 27 ms to 43 ms, two
+// more `far`. The card shows the CPU time chosen.
+fn crowded(cranpose: f64, far: [f64; 2]) -> RobotTestRule<TestRenderer> {
+    let cpu: Vec<f64> = std::iter::once(cranpose)
+        .chain((1..10).map(|rank| 25.0 + f64::from(rank) * 2.0))
+        .chain(far)
+        .collect();
+    // A run compares frameworks when Compose is among them.
+    let name = |rank: usize| match rank {
+        0 => "cranpose".to_string(),
+        1 => "compose".to_string(),
+        _ => format!("framework-{rank}"),
+    };
+    let label = |rank: usize| match rank {
+        0 => "Cranpose".to_string(),
+        1 => "Compose".to_string(),
+        _ => format!("Framework {rank}"),
+    };
+    let summary: serde_json::Value = cpu
+        .iter()
+        .enumerate()
+        .map(|(rank, cpu)| {
+            (
+                name(rank),
+                serde_json::json!({"fps": 30.0, "cpu_ms_per_frame": cpu}),
+            )
+        })
+        .collect::<serde_json::Map<_, _>>()
+        .into();
+    let start = serde_json::json!({"summary": summary});
+    let index = serde_json::json!({"runs": [{
+        "file": "runs/crowded.json", "kind": "frameworks",
+        "started_at": "2026-10-06T06:40:00+00:00", "device": "Crowded",
+        "protocol": {"run_s": 10, "starts": ["first", "second"]},
+        "subjects": (0..cpu.len())
+            .map(|rank| serde_json::json!({"name": name(rank), "label": label(rank)}))
+            .collect::<Vec<_>>(),
+        "scenarios": {"gauntlet": {"legs": 24, "starts": {"first": start, "second": start}}}
+    }]});
+    let legs: Vec<serde_json::Value> = cpu
+        .iter()
+        .enumerate()
+        .flat_map(|(rank, cpu)| {
+            ["first", "second"].map(|start| {
+                serde_json::json!({
+                    "subject": name(rank), "start": start,
+                    "samples": {"t_ms": [500, 1000, 3000], "cpu_ms_per_frame": [cpu, cpu, cpu]}
+                })
+            })
+        })
+        .collect();
+    let frames = serde_json::json!({"scenarios": [{"scenario": "gauntlet", "legs": legs}]});
+    let source = FrameSource::Files(Rc::new(BTreeMap::from([(
+        "runs/crowded.json".to_string(),
+        frames.to_string(),
+    )])));
+    let mut robot = dashboard_of(&index.to_string(), source);
+    choose(&mut robot, "CPU ms per frame", 0);
+    robot
+}
+
+#[test]
+fn a_chart_leaves_out_the_frameworks_far_above_its_five_leaders() {
+    let mut robot = crowded(20.0, [400.0, 500.0]);
+    let texts = robot.get_all_text();
+    let note = "Not charted: Framework 10, Framework 11. Reaching up to 500.0 ms/frame, they \
+                would flatten the leaders.";
+    assert!(texts.iter().any(|text| text == note), "{texts:?}");
+    for grid in ["20", "40", "60"] {
+        assert!(texts.iter().any(|text| text == grid), "{grid}: {texts:?}");
+    }
+    assert!(
+        !texts.iter().any(|text| text == "600"),
+        "the scale fits the leaders and the curves near them, not the two far above: {texts:?}"
+    );
+    assert_eq!(
+        count(&texts, "Framework 11"),
+        1,
+        "the bars still show the two left out: {texts:?}"
+    );
+}
+
+#[test]
+fn a_chart_keeps_every_framework_within_one_and_a_half_times_the_reach_of_its_leaders() {
+    let mut robot = crowded(20.0, [45.0, 49.0]);
+    let texts = robot.get_all_text();
+    assert!(
+        !texts.iter().any(|text| text.starts_with("Not charted")),
+        "{texts:?}"
+    );
+}
+
+#[test]
+fn a_chart_keeps_cranpose_even_when_it_is_the_one_far_out() {
+    let mut robot = crowded(500.0, [400.0, 450.0]);
+    let texts = robot.get_all_text();
+    let note = "Not charted: Framework 10, Framework 11. Reaching up to 450.0 ms/frame, they \
+                would flatten the leaders.";
+    assert!(
+        texts.iter().any(|text| text == note),
+        "Cranpose is not among the left out, though it reaches farthest: {texts:?}"
+    );
+    assert!(
+        !texts.iter().any(|text| text == "600"),
+        "its curve rides the top edge of the leaders' scale: {texts:?}"
+    );
+}
+
+#[test]
+fn picked_bars_set_the_scale_of_the_chart_by_themselves() {
+    let mut robot = crowded(20.0, [400.0, 500.0]);
+    click_on(&mut robot, "20.0");
+    click_on(&mut robot, "500.0");
+    let texts = robot.get_all_text();
+    assert!(
+        texts.iter().any(|text| text == "600"),
+        "a far framework picked brings its scale: {texts:?}"
+    );
+    click_on(&mut robot, "500.0");
+    let texts = robot.get_all_text();
+    for grid in ["10", "20"] {
+        assert!(texts.iter().any(|text| text == grid), "{grid}: {texts:?}");
+    }
+    assert!(!texts.iter().any(|text| text == "600"), "{texts:?}");
 }
