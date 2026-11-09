@@ -5,7 +5,7 @@ use cranpose_render_common::{
     text_fonts::{TextFonts, default_typeface},
 };
 use cranpose_ui::text::{TextLayoutOptions, TextStyle};
-use cranpose_ui_graphics::Color;
+use cranpose_ui_graphics::{Color, Point};
 
 use super::*;
 use crate::{

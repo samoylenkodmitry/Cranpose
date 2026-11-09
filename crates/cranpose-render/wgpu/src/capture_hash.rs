@@ -1,20 +1,21 @@
 use std::hash::{Hash, Hasher};
 
 use cranpose_render_common::geometry::blur_reach;
-use cranpose_ui_graphics::{FxHasher, Point, Rect, RenderHash};
+use cranpose_ui_graphics::{FRAGMENT_KIND_ARC, FxHasher, Point, RecordLane, Rect, RenderHash};
 
 use crate::{
     draw_pass::{ResolvedComposite, ResolvedCompositeKind, SourceContent},
     effect_renderer::{CompositeSampleMode, RoundedCompositeMask},
+    geometry::{snap_delta_for_anchor, snapped_anchor_device_origin},
     opaque_prefix::capture_solid_rect,
     render::{
-        hash_device_offset, hash_device_rect, hash_f32_for_cache, hash_run_item_with_clip,
-        hash_text_gradient_phase_for_cache, resolve_image_geometry, shadow_draw_bounds,
-        text_raster_geometry_for_draw,
+        LINE_KINDS, hash_f32_for_cache, hash_text_gradient_phase_for_cache, resolve_image_geometry,
+        shadow_draw_bounds, text_raster_geometry_for_draw,
     },
     rrect_shadow::{device_clip, device_shadow, rrect_shadow_bounds},
     scene::{
-        CompositorScene, DrawOp, DrawOpKind, ImageDraw, RRectShadowDraw, ShadowDraw, TextDraw,
+        CompositorScene, DrawOp, DrawOpKind, ImageDraw, Placement, RRectShadowDraw, RunDraw,
+        ShadowDraw, TextDraw,
     },
 };
 
@@ -518,5 +519,137 @@ fn hash_composite_kind<H: Hasher>(
             blend_mode.hash(state);
             hash_optional_tuple(*source_region, SOURCE_SPACE, state);
         }
+    }
+}
+
+pub(crate) fn hash_device_offset<H: Hasher>(
+    value: f32,
+    origin: f32,
+    root_scale: f32,
+    state: &mut H,
+) {
+    hash_f32_for_cache((value - origin) * root_scale, state);
+}
+
+pub(crate) fn hash_device_rect<H: Hasher>(
+    rect: Rect,
+    origin_x: f32,
+    origin_y: f32,
+    root_scale: f32,
+    state: &mut H,
+) {
+    hash_device_offset(rect.x, origin_x, root_scale, state);
+    hash_device_offset(rect.y, origin_y, root_scale, state);
+    hash_device_offset(rect.width, 0.0, root_scale, state);
+    hash_device_offset(rect.height, 0.0, root_scale, state);
+}
+
+/// Hashes the rect `placement` is clipped to, `clip`, and its rounding, in
+/// device pixels from `origin`.
+fn hash_placement_clips<H: Hasher>(
+    placement: &Placement,
+    clip: Option<Rect>,
+    (origin_x, origin_y): (f32, f32),
+    root_scale: f32,
+    state: &mut H,
+) {
+    let rounding = placement.rounding;
+    for (rect, radius) in [
+        (clip, 0.0),
+        (
+            rounding.map(|rounding| rounding.rect),
+            rounding.map_or(0.0, |rounding| rounding.radius),
+        ),
+    ] {
+        rect.is_some().hash(state);
+        if let Some(rect) = rect {
+            let [x, y, width, height] = placement.device_rect(rect, root_scale);
+            for value in [
+                x - origin_x,
+                y - origin_y,
+                width,
+                height,
+                radius * root_scale,
+            ] {
+                hash_f32_for_cache(value, state);
+            }
+        }
+    }
+}
+
+pub(crate) fn hash_run_item_with_clip<H: Hasher>(
+    run: &RunDraw,
+    clip: Option<Rect>,
+    origin_x: f32,
+    origin_y: f32,
+    root_scale: f32,
+    state: &mut H,
+) {
+    let tables = run.tables();
+    tables.fingerprint().hash(state);
+    run.segments.start.hash(state);
+    run.segments.end.hash(state);
+    let placement = &run.placement;
+    let snap = placement
+        .snap_anchor
+        .map(|anchor| snap_delta_for_anchor(anchor, root_scale))
+        .unwrap_or_default();
+    let offset = Point::new(placement.offset.x + snap.x, placement.offset.y + snap.y);
+    let canonicalize = placement.snap_anchor.is_some();
+    canonicalize.hash(state);
+    for segment in &tables.segments[run.segments.start as usize..run.segments.end as usize] {
+        if segment.lane != RecordLane::Shapes {
+            continue;
+        }
+        let exact_placement =
+            !canonicalize || segment.kinds & ((1u8 << FRAGMENT_KIND_ARC) | LINE_KINDS) != 0;
+        exact_placement.hash(state);
+        if exact_placement {
+            for value in [offset.x, offset.y, origin_x, origin_y, root_scale] {
+                hash_f32_for_cache(value, state);
+            }
+            continue;
+        }
+        for index in segment.start..segment.start + segment.count {
+            let record = tables
+                .shapes
+                .get(index as usize)
+                .expect("shape segment record");
+            let half_width = if record.is_stroked() {
+                record.stroke_width * 0.5
+            } else {
+                0.0
+            };
+            let [left, top, right, bottom] = crate::run_geometry::device_shape_edges(
+                record.rect,
+                half_width,
+                offset,
+                root_scale,
+                canonicalize,
+            );
+            for value in [left - origin_x, top - origin_y, right - left, bottom - top] {
+                hash_f32_for_cache(value, state);
+            }
+        }
+    }
+    hash_placement_clips(placement, clip, (origin_x, origin_y), root_scale, state);
+    if tables.segments[run.segments.start as usize..run.segments.end as usize]
+        .iter()
+        .any(|segment| segment.gradient || segment.vertex_gradient)
+    {
+        let dither = placement
+            .snap_anchor
+            .map(|anchor| snapped_anchor_device_origin(anchor, root_scale))
+            .unwrap_or_default();
+        hash_f32_for_cache(dither.x - origin_x, state);
+        hash_f32_for_cache(dither.y - origin_y, state);
+    }
+    hash_f32_for_cache(placement.alpha, state);
+    match &placement.color_filter {
+        Some(filter) => {
+            1u8.hash(state);
+            filter.render_hash().hash(state);
+        }
+        None => 0u8.hash(state),
     }
 }

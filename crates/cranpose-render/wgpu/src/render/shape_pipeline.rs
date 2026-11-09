@@ -73,7 +73,7 @@ const ALL_SHAPE_KINDS: u8 =
 
 /// The kinds the shader draws from line records: segments, and slices of
 /// path fills. A variant compiles in the code of only those it draws.
-pub(super) const LINE_KINDS: u8 = (1 << FRAGMENT_KIND_LINE) | TRAPEZOID_KIND;
+pub(crate) const LINE_KINDS: u8 = (1 << FRAGMENT_KIND_LINE) | TRAPEZOID_KIND;
 
 const TRAPEZOID_KIND: u8 = 1 << FRAGMENT_KIND_TRAPEZOID;
 

@@ -1378,28 +1378,6 @@ fn rendered_surface(whole: DeviceRect, shown: DeviceRect, reach: f32) -> DeviceR
         .map_or(whole, DeviceRect::snap_out)
 }
 
-/// Whether a child's runtime shader can draw in the final pass over the
-/// child's content: the shader must apply the child's clip and alpha itself
-/// unless the child has neither.
-/// Whether the layer's content puts nothing on its surface.
-fn draws_nothing(content: &LayerScene) -> bool {
-    content.scene.draw_ops.is_empty()
-        && content.scene.shadow_draws.is_empty()
-        && content.children.is_empty()
-        && content.scene.backdrop_layers.is_empty()
-        && content.scene.effect_layers.is_empty()
-}
-
-fn composites_nothing(child: &ChildLayer) -> bool {
-    child.blend_mode == BlendMode::SrcOver
-        && (child.alpha == 0.0
-            || (draws_nothing(&child.content)
-                && child
-                    .effect
-                    .as_ref()
-                    .is_none_or(RenderEffect::preserves_transparency)))
-}
-
 /// The child's layer bounds in the pixels of a surface at `surface_rect`.
 fn layer_pixel_rect(child: &ChildLayer, surface_rect: DeviceRect, scale: f32) -> [f32; 4] {
     let bounds = DeviceRect::from_logical(child.local_bounds, scale);
@@ -4367,6 +4345,9 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         Ok(Some(CompositeSource { texture, content }))
     }
 
+    // Whether a child's runtime shader can draw in the final pass over the
+    // child's content: the shader must apply the child's clip and alpha
+    // itself unless the child has neither.
     fn shader_tail_composites(&mut self, child: &ChildLayer, shader: &RuntimeShader) -> bool {
         let plain = child.alpha >= 1.0 && child.rounded_clip.is_none();
         shader.substrates().is_empty()
@@ -5448,6 +5429,10 @@ pub(crate) fn scene_bounds(layer: &LayerScene, scale: f32) -> Option<Rect> {
 mod surface_atlas;
 pub(crate) use surface_atlas::SurfaceAtlasSizes;
 use surface_atlas::{AtlasPacker, AtlasPlacement};
+
+#[path = "frame_composites.rs"]
+mod composites;
+use composites::{composites_nothing, draws_nothing};
 
 #[path = "frame_scene.rs"]
 mod scene_surfaces;
