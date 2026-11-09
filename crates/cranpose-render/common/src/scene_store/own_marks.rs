@@ -1,7 +1,8 @@
 // What each own draw of a record draws and where, as an update last left
 // them: the next update that redraws the record finds which of them changed.
-// While no reader follows where records redraw, the marks of the records an
-// update redraws wait until a reader follows that or asks for reach.
+// While no reader follows where records redraw, an update that redraws a
+// record loses the marks; a reader that follows that again, or asks for
+// reach, finds them worked out anew for every record.
 
 use cranpose_core::RecordId;
 
@@ -33,18 +34,21 @@ pub(super) fn settle(store: &mut SceneStore) {
         // A reader that stopped following where records redraw since the
         // record waited for this end of the update.
         if !follow {
-            wait(store, index);
+            lose(store, index);
             continue;
         }
-        let settled = flags.without(RecordFlags::REDRAW_PENDING.with(RecordFlags::INSERTED));
-        store.tree[index].flags = settled.without(RecordFlags::MARKS_STALE);
-        let changed = remark(store, id);
-        // A record made in the update is new as a whole; one whose marks
-        // waited does not know what it drew before.
+        store.tree[index].flags =
+            flags.without(RecordFlags::REDRAW_PENDING.with(RecordFlags::INSERTED));
+        // With the marks lost, a record does not know what it drew before,
+        // and the refresh below marks it. A record made in the update is new
+        // as a whole.
+        let changed = if store.marks_lost {
+            Reach::Unknown
+        } else {
+            remark(store, id)
+        };
         let changed = if flags.contains(RecordFlags::INSERTED) {
             Reach::Empty
-        } else if flags.contains(RecordFlags::MARKS_STALE) {
-            Reach::Unknown
         } else {
             changed
         };
@@ -55,41 +59,44 @@ pub(super) fn settle(store: &mut SceneStore) {
     }
     store.redrawn = redrawn;
     if follow {
-        refresh_stale(store);
+        refresh_lost(store);
     }
 }
 
-// Leaves the marks of the record at `index`, which the update in progress
-// may have redrawn, to wait for a reader that follows where records redraw,
-// and logs the redraw without its reach. A record the update made logs none.
-pub(super) fn wait(store: &mut SceneStore, index: usize) {
+// Loses the marks for the redraw of the record at `index` while no reader
+// follows where records redraw, and logs the redraw without its reach. A
+// record the update made logs none.
+pub(super) fn lose(store: &mut SceneStore, index: usize) {
     let flags = store.tree[index].flags;
-    store.tree[index].flags = flags
-        .without(RecordFlags::REDRAW_PENDING.with(RecordFlags::INSERTED))
-        .with(RecordFlags::MARKS_STALE);
-    let record = store.record_ref(RecordId::from_index(index).expect("a row is a record"));
-    if !flags.contains(RecordFlags::MARKS_STALE) {
-        store.marks_stale.push(record);
-    }
+    store.tree[index].flags =
+        flags.without(RecordFlags::REDRAW_PENDING.with(RecordFlags::INSERTED));
+    store.marks_lost = true;
     if !flags.contains(RecordFlags::INSERTED) {
-        store.log(RecordEvent::Redrawn(Reach::Unknown), record.id);
+        store.log(
+            RecordEvent::Redrawn(Reach::Unknown),
+            RecordId::from_index(index).expect("a row is a record"),
+        );
     }
 }
 
-// Works out the marks of the records whose marks waited.
-pub(super) fn refresh_stale(store: &mut SceneStore) {
-    let mut stale = std::mem::take(&mut store.marks_stale);
-    for record in stale.drain(..) {
-        let Some(id) = store.resolve(record) else {
-            continue;
-        };
-        let flags = store.tree[id.index()].flags;
-        if flags.contains(RecordFlags::MARKS_STALE) {
-            store.tree[id.index()].flags = flags.without(RecordFlags::MARKS_STALE);
-            remark(store, id);
+// Works out the marks of every record anew once they were lost.
+pub(super) fn refresh_lost(store: &mut SceneStore) {
+    if !std::mem::take(&mut store.marks_lost) {
+        return;
+    }
+    if let Some(root) = store.root() {
+        remark_subtree(store, root);
+    }
+}
+
+fn remark_subtree(store: &mut SceneStore, id: RecordId) {
+    remark(store, id);
+    let span = store.tree[id.index()].items;
+    for position in 0..span.len() {
+        if let Some(child) = store.items.span(span)[position].as_child() {
+            remark_subtree(store, child);
         }
     }
-    store.marks_stale = stale;
 }
 
 // Works out the marks of the own draws of `id` anew; returns where they

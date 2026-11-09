@@ -44,8 +44,9 @@ pub struct SceneStore {
     // The records whose own draws the update in progress may have changed,
     // which its end compares with what they drew before.
     pub(super) redrawn: Vec<RecordRef>,
-    // The records whose marks wait for a reader that follows redraws.
-    pub(super) marks_stale: Vec<RecordRef>,
+    // Whether an update redrew records while no reader followed where they
+    // redraw, so no record's marks hold.
+    pub(super) marks_lost: bool,
     pub(super) order: ChildOrder,
     // The marks of the own draws of the record whose end of update is
     // being worked out.
@@ -111,7 +112,7 @@ impl SceneStore {
             update: SceneUpdate::default(),
             journal: Journal::default(),
             redrawn: Vec::new(),
-            marks_stale: Vec::new(),
+            marks_lost: false,
             order: ChildOrder::default(),
             mark_scratch: Vec::new(),
         }
@@ -177,7 +178,7 @@ impl SceneStore {
     // redraw, so it compares the next redraws with the store as it is now.
     fn mark_for_redraws(&mut self) {
         if self.follows_redrawn_reach() {
-            own_marks::refresh_stale(self);
+            own_marks::refresh_lost(self);
         }
     }
 
@@ -195,10 +196,14 @@ impl SceneStore {
     }
 
     // Logs `event` for `id` as the record is now, when a reader follows it.
+    #[inline]
     pub(super) fn log(&mut self, event: RecordEvent, id: RecordId) {
-        if !self.journal.wants(event, self.update) {
-            return;
+        if self.journal.wants(event, self.update) {
+            self.log_entry(event, id);
         }
+    }
+
+    fn log_entry(&mut self, event: RecordEvent, id: RecordId) {
         let index = id.index();
         self.journal.log(JournalEntry {
             update: self.update,
@@ -229,7 +234,7 @@ impl SceneStore {
     // records redraw, the record's marks wait at once.
     pub(super) fn redraw_pending(&mut self, index: usize) {
         if !self.follows_redrawn_reach() {
-            own_marks::wait(self, index);
+            own_marks::lose(self, index);
             return;
         }
         let flags = &mut self.tree[index].flags;
@@ -285,7 +290,7 @@ impl SceneStore {
     /// Works out the reach of every record whose reach a change beneath it
     /// left to be worked out again, as [`LayerRef::reach`] reads it.
     pub fn refresh_reach(&mut self) {
-        own_marks::refresh_stale(self);
+        own_marks::refresh_lost(self);
         if let Some(root) = self.root {
             super::reach::refresh(self, root);
         }
@@ -399,7 +404,7 @@ impl SceneStore {
         self.root = None;
         self.journal.clear(self.update);
         self.redrawn.clear();
-        self.marks_stale.clear();
+        self.marks_lost = false;
     }
 
     /// Makes a record from `seed`, changed in the update in progress, with no
@@ -536,7 +541,8 @@ impl SceneStore {
             super::facts::forget_children(self, index);
         }
         let noted = self.journal.follows(RecordEvent::Changed);
-        let changed = old != items;
+        let changed =
+            !noted && self.journal.wants(RecordEvent::Changed, self.update) && old != items;
         if noted {
             let record = self.record_ref(id);
             self.order.note(record, old);
@@ -545,7 +551,7 @@ impl SceneStore {
         self.stale(index);
         // A reader that learns only whether the update changed anything
         // learns it from the first write of other items.
-        if !noted && changed {
+        if changed {
             self.log(RecordEvent::Changed, id);
         }
     }

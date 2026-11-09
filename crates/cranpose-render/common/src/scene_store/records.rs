@@ -73,11 +73,8 @@ impl RecordFlags {
     // The update in progress may have changed the record's own draws, which
     // its end compares with what they were.
     pub(crate) const REDRAW_PENDING: Self = Self(1 << 10);
-    // An update changed the record's own draws while no reader followed
-    // redraws: its marks wait.
-    pub(crate) const MARKS_STALE: Self = Self(1 << 11);
     // The record keeps properties in the store's side slab.
-    pub(crate) const HAS_PROPS: Self = Self(1 << 12);
+    pub(crate) const HAS_PROPS: Self = Self(1 << 11);
     // The flags the store keeps itself, which `SceneStore::set_flags` leaves.
     pub(crate) const STORE_KEPT: Self = Self(
         Self::HAS_PROPS.0
@@ -85,8 +82,7 @@ impl RecordFlags {
             | Self::HAS_LAYER_BOUNDS.0
             | Self::REACH_STALE.0
             | Self::INSERTED.0
-            | Self::REDRAW_PENDING.0
-            | Self::MARKS_STALE.0,
+            | Self::REDRAW_PENDING.0,
     );
 
     /// Whether every flag of `other` is set.

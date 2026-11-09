@@ -152,6 +152,7 @@ impl Journal {
     // Whether an entry of `event` in `update` is kept: the update did not
     // clear the store, and an open reader follows such entries or learns
     // only whether the update changed anything, which no entry told yet.
+    #[inline]
     pub(super) fn wants(&self, event: RecordEvent, update: SceneUpdate) -> bool {
         self.cleared != Some(update)
             && (self.follows(event)
@@ -159,6 +160,7 @@ impl Journal {
     }
 
     // Whether an open reader follows each change of the kind of `event`.
+    #[inline]
     pub(super) fn follows(&self, event: RecordEvent) -> bool {
         self.wanted & event.bit() != 0
     }
