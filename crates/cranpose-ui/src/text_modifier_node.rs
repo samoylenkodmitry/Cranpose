@@ -573,7 +573,6 @@ impl TextModifierElement {
     }
 
     // Whether the element shows `text` in `style` with `options` on `density`.
-    #[inline]
     fn shows(
         &self,
         text: &AnnotatedString,
