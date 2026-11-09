@@ -1555,7 +1555,13 @@ fn push_text_style_draws_mixed_bidi_wrapped_color_spans_use_direct_path() {
         &mut scene,
         &TextPrimitiveNode {
             layout: prepared.layout.clone(),
-            ..text_node(NodeId(27), &prepared.text, &style, 14.0, options)
+            ..text_node(
+                NodeId(27),
+                &AnnotatedString::from(Arc::clone(&prepared.text)),
+                &style,
+                14.0,
+                options,
+            )
         },
         placement(rect, rect, &GraphicsLayer::default(), None),
     );

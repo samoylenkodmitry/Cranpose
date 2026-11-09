@@ -1,8 +1,8 @@
-use std::{cell::Cell, rc::Rc};
+use std::rc::Rc;
 
 use cranpose_ui::{
     AppContext, TextLayoutOptions, TextStyle, prepare_text_layout,
-    text::{AnnotatedString, LinkAnnotation},
+    text::{AnnotatedString, LinkAnnotation, LinkKey},
 };
 
 fn annotated_with_link(annotation: &str, link: LinkAnnotation) -> AnnotatedString {
@@ -61,52 +61,29 @@ fn prepared_cache_keeps_url_identity_for_equal_text_and_style() {
         let _ = prepare(&first);
         let prepared = prepare(&second);
 
-        assert!(matches!(
-            &prepared.text.get_link_annotations(0, prepared.text.len())[0].item,
-            LinkAnnotation::Url(url) if url == "https://example.invalid/second"
-        ));
+        assert_eq!(
+            prepared.text.links()[0].item,
+            LinkKey::Url("https://example.invalid/second".into())
+        );
     });
 }
 
 #[test]
-fn prepared_cache_keeps_click_handler_for_equal_link_tag() {
+fn prepared_cache_keeps_link_tag_for_equal_text_and_style() {
     AppContext::new().enter(|| {
-        let first_calls = Rc::new(Cell::new(0));
-        let first_calls_for_handler = Rc::clone(&first_calls);
-        let first = annotated_with_link(
-            "payload",
-            LinkAnnotation::Clickable {
-                tag: "same-tag".into(),
-                handler: Rc::new(move || {
-                    first_calls_for_handler.set(first_calls_for_handler.get() + 1);
-                }),
-            },
-        );
-
-        let second_calls = Rc::new(Cell::new(0));
-        let second_calls_for_handler = Rc::clone(&second_calls);
-        let second = annotated_with_link(
-            "payload",
-            LinkAnnotation::Clickable {
-                tag: "same-tag".into(),
-                handler: Rc::new(move || {
-                    second_calls_for_handler.set(second_calls_for_handler.get() + 1);
-                }),
-            },
-        );
+        let clickable = |tag: &str| LinkAnnotation::Clickable {
+            tag: tag.into(),
+            handler: Rc::new(|| {}),
+        };
+        let first = annotated_with_link("payload", clickable("first-tag"));
+        let second = annotated_with_link("payload", clickable("second-tag"));
 
         let _ = prepare(&first);
         let prepared = prepare(&second);
-        if let Some(link) = prepared
-            .text
-            .get_link_annotations(0, prepared.text.len())
-            .first()
-            && let LinkAnnotation::Clickable { handler, .. } = &link.item
-        {
-            handler();
-        }
 
-        assert_eq!(first_calls.get(), 0);
-        assert_eq!(second_calls.get(), 1);
+        assert_eq!(
+            prepared.text.links()[0].item,
+            LinkKey::Clickable("second-tag".into())
+        );
     });
 }

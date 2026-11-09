@@ -250,7 +250,7 @@ fn render(prepared: &PreparedTextLayout) -> (ImageBitmap, Vec<(AtlasGlyph, Glyph
     };
     let request = TextRasterRequest::new(
         &prepared.layout,
-        &prepared.text,
+        prepared.text.as_ref(),
         rect,
         &prepared.visual_style,
         Color::WHITE,

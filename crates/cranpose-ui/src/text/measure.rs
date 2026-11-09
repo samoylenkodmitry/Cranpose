@@ -45,8 +45,9 @@ pub struct TextMetrics {
 /// query, measurement and renderer reads, and the size it measures.
 #[derive(Clone, Debug)]
 pub struct PreparedTextLayout {
-    /// The text that was laid out.
-    pub text: AnnotatedString,
+    /// The text that was laid out, with its spans, shared with the text it
+    /// came from.
+    pub text: Arc<RenderString>,
     /// The style the text draws in, shared with every render node drawn
     /// from this layout.
     pub visual_style: Arc<TextStyle>,
@@ -65,7 +66,7 @@ impl PreparedTextLayout {
     // The prepared layout of `text` in `style` laid out as `layout`, `max_width`
     // the widest it could be.
     fn new(
-        text: AnnotatedString,
+        text: &AnnotatedString,
         style: Arc<TextStyle>,
         layout: TextLayout,
         (max_width, min_lines): (f32, usize),
@@ -73,7 +74,7 @@ impl PreparedTextLayout {
         Self {
             max_width,
             min_lines: u32::try_from(min_lines).unwrap_or(u32::MAX),
-            text,
+            text: Arc::clone(text.render_string()),
             visual_style: style,
             layout,
             visual_style_hash: OnceCell::new(),
@@ -170,14 +171,13 @@ impl PreparedTextLayout {
         spare: Option<Rc<Self>>,
     ) -> Rc<Self> {
         let mut aligned = Self {
+            text: Arc::clone(&self.text),
+            visual_style: Arc::clone(&self.visual_style),
+            layout: self.layout.clone(),
+            max_width: self.max_width,
             min_lines: self.min_lines,
             visual_style_hash: self.visual_style_hash.clone(),
-            ..Self::new(
-                self.text.clone(),
-                Arc::clone(&self.visual_style),
-                self.layout.clone(),
-                (self.max_width, 0),
-            )
+            layout_handle: OnceCell::new(),
         };
         aligned.realign(widths, align);
         if let Some(mut spare) = spare
@@ -216,7 +216,7 @@ impl PreparedTextLayout {
     /// every frame and scene rebuild drawing this layout hands over the same
     /// allocation.
     pub fn render_text(&self) -> Arc<RenderString> {
-        Arc::clone(self.text.render_string())
+        Arc::clone(&self.text)
     }
 
     /// [`RenderString::render_hash`](crate::text::RenderString::render_hash)
@@ -442,7 +442,7 @@ impl TextService {
         let min_lines = options.min_lines;
         let Some(min_font_size_sp) = options.overflow.scale_down_min_font_size_sp() else {
             let layout = self.layout(&text, &style, frame, (units, shaped));
-            return PreparedTextLayout::new(text, style, layout, (frame.max_width, min_lines));
+            return PreparedTextLayout::new(&text, style, layout, (frame.max_width, min_lines));
         };
         self.lay_out_scaled_down(text, style, frame, (units, shaped), min_font_size_sp)
     }
@@ -474,7 +474,7 @@ impl TextService {
         let base = style.resolve_font_size(DEFAULT_FONT_SIZE_SP);
         let min_factor = (min_font_size_sp.min(base) / base).clamp(0.0, 1.0);
         if fits(&full) || !frame.max_width.is_finite() || min_factor >= 1.0 {
-            return PreparedTextLayout::new(text, style, full, (frame.max_width, min_lines));
+            return PreparedTextLayout::new(&text, style, full, (frame.max_width, min_lines));
         }
         // Each size takes the glyphs of the first: shaping is the same at
         // every size.
@@ -500,7 +500,7 @@ impl TextService {
             }
         }
         let (text, style) = scaled_drawing(&text, &style, factor);
-        PreparedTextLayout::new(text, style, best, (frame.max_width, min_lines))
+        PreparedTextLayout::new(&text, style, best, (frame.max_width, min_lines))
     }
 
     // One layout of `text` in `style` in `frame`, with sizes in `units`, with

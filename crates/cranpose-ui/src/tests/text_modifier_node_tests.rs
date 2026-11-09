@@ -275,8 +275,8 @@ fn a_text_laid_out_as_written_shares_its_string_and_style_with_its_layout() {
         let whole = layout_at(200.0);
         let wrapped = layout_at(50.0);
         (
-            Arc::ptr_eq(whole.text.render_string(), source.render_string()),
-            Arc::ptr_eq(wrapped.text.render_string(), source.render_string()),
+            Arc::ptr_eq(&whole.text, source.render_string()),
+            Arc::ptr_eq(&wrapped.text, source.render_string()),
             wrapped.layout.line_count(),
             Arc::ptr_eq(&whole.visual_style, &wrapped.visual_style),
         )

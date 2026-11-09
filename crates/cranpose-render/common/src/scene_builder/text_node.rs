@@ -191,7 +191,7 @@ pub(super) fn refresh_text_node(drawn: &mut TextPrimitiveNode, parts: &TextNodeP
     let Some(placement) = TextPlacement::of(parts, prepared) else {
         return false;
     };
-    if !Arc::ptr_eq(&drawn.render_text, prepared.text.render_string())
+    if !Arc::ptr_eq(&drawn.render_text, &prepared.text)
         || !Arc::ptr_eq(&drawn.text_style, &prepared.visual_style)
     {
         let Some(text) = text_node_from_parts(parts) else {
