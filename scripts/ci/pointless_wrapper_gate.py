@@ -176,14 +176,21 @@ def findings(path):
 
 
 def added_lines(base):
-    """{path: {line numbers the diff against `base` adds}}"""
+    """{path: {line numbers the diff against `base` adds}}
+
+    The diff runs from the merge base to the working tree, the files the
+    gate reads, so a staged change that moves lines moves them in both.
+    """
+    merge_base = subprocess.run(
+        ["git", "merge-base", base, "HEAD"], capture_output=True, text=True, check=False
+    )
     diff = subprocess.run(
-        ["git", "diff", "--unified=0", f"{base}...HEAD", "--", "*.rs", ":(exclude)forks"],
+        ["git", "diff", "--unified=0", merge_base.stdout.strip(), "--", "*.rs", ":(exclude)forks"],
         capture_output=True,
         text=True,
         check=False,
     )
-    if diff.returncode != 0:
+    if merge_base.returncode != 0 or diff.returncode != 0:
         print(f"pointless_wrapper_gate: no diff against {base}; checking everything")
         return None
     added = {}
