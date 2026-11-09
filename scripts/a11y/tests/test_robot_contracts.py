@@ -1,7 +1,16 @@
+import contextlib
 import copy
+import io
+import json
+from pathlib import Path
+import plistlib
+import subprocess
+import sys
+import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
+import ios_robot
 from desktop_access import LinuxAdapter, MacAdapter, NativeAdapter
 from desktop_robot import run_checks, wait_for
 from ios_robot import verify_summary
@@ -168,6 +177,63 @@ class IosContractTests(unittest.TestCase):
     def summary():
         return {'passedTests': 4, 'failedTests': 0, 'skippedTests': 0,
                 'expectedFailures': 0, 'totalTestCount': 4, 'result': 'Passed'}
+
+
+class IosRepeatTests(unittest.TestCase):
+    """The robot's main() with each xcodebuild run replaced by a canned result."""
+
+    FAILURE = {'failureText': 'Failed to launch io.cranpose.demo: Timed out attempting to launch app.'}
+
+    def failed_summary(self):
+        return dict(IosContractTests.summary(), passedTests=2, failedTests=2, result='Failed',
+                    testFailures=[self.FAILURE])
+
+    @staticmethod
+    def run_main(runs):
+        """Runs main() with `runs`, each an (exit status, summary) pair, as xcodebuild's runs in order.
+        Returns the report, the number of runs that happened and the error main raised, if any."""
+        with tempfile.TemporaryDirectory() as root:
+            app = Path(root) / 'Demo.app'
+            app.mkdir()
+            (app / 'Info.plist').write_bytes(plistlib.dumps(
+                {'CFBundleExecutable': 'Demo', 'CFBundleIdentifier': 'io.cranpose.demo'}))
+            (app / 'Demo').write_bytes(b'binary')
+            output = Path(root) / 'out'
+            canned = [(subprocess.CompletedProcess([], status), summary) for status, summary in runs]
+            argv = ['ios_robot.py', '--app', str(app), '--device', 'UDID', '--output', str(output)]
+            raised = None
+            with patch.object(sys, 'argv', argv), patch.object(ios_robot, 'boot'), \
+                    patch.object(ios_robot, 'command', return_value=''), \
+                    patch.object(ios_robot, 'run_tests', side_effect=canned) as run_tests, \
+                    contextlib.redirect_stdout(io.StringIO()):
+                try:
+                    ios_robot.main()
+                except subprocess.CalledProcessError as error:
+                    raised = error
+            return json.loads((output / 'report.json').read_text()), run_tests.call_count, raised
+
+    def test_a_passing_run_is_not_repeated(self):
+        report, runs, raised = self.run_main([(0, IosContractTests.summary())])
+        self.assertIsNone(raised)
+        self.assertEqual((report['status'], runs), ('passed', 1))
+        self.assertNotIn('earlier_failures', report)
+
+    def test_a_failed_run_is_repeated_once_and_its_failures_are_kept(self):
+        report, runs, raised = self.run_main([(65, self.failed_summary()), (0, IosContractTests.summary())])
+        self.assertIsNone(raised)
+        self.assertEqual((report['status'], runs), ('passed', 2))
+        self.assertEqual(report['earlier_failures'], [[self.FAILURE]])
+
+    def test_two_failed_runs_fail_the_robot(self):
+        report, runs, raised = self.run_main([(65, self.failed_summary()), (65, self.failed_summary())])
+        self.assertIsInstance(raised, subprocess.CalledProcessError)
+        self.assertEqual((report['status'], runs), ('failed', 2))
+
+    def test_a_run_that_exits_cleanly_with_a_skipped_test_is_repeated(self):
+        skipped = dict(IosContractTests.summary(), passedTests=3, skippedTests=1)
+        report, runs, raised = self.run_main([(0, skipped), (0, IosContractTests.summary())])
+        self.assertIsNone(raised)
+        self.assertEqual((report['status'], runs), ('passed', 2))
 
 
 if __name__ == '__main__':
