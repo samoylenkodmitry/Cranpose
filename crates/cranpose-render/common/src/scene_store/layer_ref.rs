@@ -129,9 +129,13 @@ impl<'a> LayerRef<'a> {
         Size { width, height }
     }
 
+    #[expect(
+        clippy::inline_always,
+        reason = "the collect walk and the update call it for every record; out of line the gauntlet frame took 2% more instructions"
+    )]
     /// The bounds of the layer, where its clip cuts, its transforms pivot and
     /// an offscreen pass draws it.
-    #[inline]
+    #[inline(always)]
     pub fn local_bounds(self) -> Rect {
         if !self.flags().contains(RecordFlags::HAS_LAYER_BOUNDS) {
             return self.node_rect();
@@ -327,9 +331,13 @@ impl<'a> LayerRef<'a> {
             .unwrap_or_default()
     }
 
+    #[expect(
+        clippy::inline_always,
+        reason = "the collect walk and the update call it for every record; out of line the gauntlet frame took 2% more instructions"
+    )]
     /// The rectangle that cuts the content and pointer hits: the local
     /// bounds when the record clips to them or its graphics layer clips.
-    #[inline]
+    #[inline(always)]
     pub fn clip_rect(self) -> Option<Rect> {
         (self.clip_to_bounds() || self.graphics_layer().clip).then(|| self.local_bounds())
     }
@@ -341,9 +349,13 @@ impl<'a> LayerRef<'a> {
         self.clip_to_bounds().then(|| self.local_bounds())
     }
 
+    #[expect(
+        clippy::inline_always,
+        reason = "the collect walk and the update call it for every record; out of line the gauntlet frame took 2% more instructions"
+    )]
     /// Where the record's drawing is cut: its clip or, when it composites
     /// through an offscreen buffer for its alpha or by request, its bounds.
-    #[inline]
+    #[inline(always)]
     pub fn visual_clip_rect(self) -> Option<Rect> {
         let clip = self.clip_rect();
         if clip.is_some() {
@@ -501,7 +513,11 @@ impl<'a> LayerRef<'a> {
 }
 
 impl<'a> ItemRef<'a> {
-    #[inline]
+    #[expect(
+        clippy::inline_always,
+        reason = "the collect walk and the update call it for every record; out of line the gauntlet frame took 2% more instructions"
+    )]
+    #[inline(always)]
     pub(crate) fn of(store: &'a SceneStore, item: Item) -> Self {
         match item.kind() {
             ItemKind::Child => {

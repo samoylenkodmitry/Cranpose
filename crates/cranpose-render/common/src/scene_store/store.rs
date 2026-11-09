@@ -243,7 +243,11 @@ impl SceneStore {
     // Leaves the own draws of the record at `index` to be compared with what
     // they were at the end of the update. While no reader follows where
     // records redraw, the record's marks wait at once.
-    #[inline]
+    #[expect(
+        clippy::inline_always,
+        reason = "the collect walk and the update call it for every record; out of line the gauntlet frame took 2% more instructions"
+    )]
+    #[inline(always)]
     pub(super) fn redraw_pending(&mut self, index: usize) {
         if !self.follows_redrawn_reach() {
             own_marks::lose(self, index);
@@ -775,8 +779,12 @@ impl SceneStore {
             .unwrap_or_default()
     }
 
+    #[expect(
+        clippy::inline_always,
+        reason = "the collect walk and the update call it for every record; out of line the gauntlet frame took 2% more instructions"
+    )]
     /// The transform from `id` to its parent's content.
-    #[inline]
+    #[inline(always)]
     pub fn transform_to_parent(&self, id: RecordId) -> ProjectiveTransform {
         match self.tree[id.index()].transform {
             Some(transform) => self.transforms[transform.index()],
