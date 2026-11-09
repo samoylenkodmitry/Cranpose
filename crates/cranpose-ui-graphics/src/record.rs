@@ -869,7 +869,7 @@ pub struct ShapeRecorder {
     // The colour and stop lists of each brush record's gradient as the app
     // gave them, shared: a materialized shape takes them, not copies the
     // tables hold.
-    gradient_lists: Vec<GradientLists>,
+    gradient_lists: crate::rare_list::RareList<GradientLists>,
     last_segment_key: u32,
     segment_waste: u32,
     min: [f32; 2],
@@ -880,7 +880,7 @@ impl Default for ShapeRecorder {
     fn default() -> Self {
         Self {
             tables: RecordTables::default(),
-            gradient_lists: Vec::new(),
+            gradient_lists: crate::rare_list::RareList::default(),
             last_segment_key: NO_SEGMENT_KEY,
             segment_waste: 0,
             min: [f32::INFINITY; 2],
@@ -1677,11 +1677,10 @@ pub struct CommandRecording {
 
 #[derive(Clone, Debug)]
 struct RecordingContent {
-    others: Vec<DrawPrimitive>,
+    others: crate::rare_list::RareList<DrawPrimitive>,
     groups: DrawGroups,
     min: [f32; 2],
     max: [f32; 2],
-    shape_bounds: Option<Rect>,
     shape_count: u32,
     segment_count: u32,
     summary: RecordingSummary,
@@ -1691,11 +1690,10 @@ struct RecordingContent {
 impl Default for RecordingContent {
     fn default() -> Self {
         Self {
-            others: Vec::new(),
+            others: crate::rare_list::RareList::default(),
             groups: DrawGroups::default(),
             min: [f32::INFINITY; 2],
             max: [f32::NEG_INFINITY; 2],
-            shape_bounds: None,
             shape_count: 0,
             segment_count: 0,
             summary: RecordingSummary::default(),
@@ -1845,7 +1843,7 @@ impl CommandRecording {
     /// The rect every recorded shape's pixels lie within; `None` when no
     /// shape was recorded.
     pub fn shape_bounds(&self) -> Option<Rect> {
-        self.content.shape_bounds
+        self.shapes.bounds()
     }
 
     /// The shape columns, with complete records available on demand.
@@ -1894,7 +1892,7 @@ impl CommandRecording {
                 width: self.content.max[0] - self.content.min[0],
                 height: self.content.max[1] - self.content.min[1],
             });
-        match (self.content.shape_bounds, others) {
+        match (self.shapes.bounds(), others) {
             (Some(shapes), Some(others)) => Some(union_rect(shapes, others)),
             (shapes, others) => shapes.or(others),
         }
@@ -1930,7 +1928,7 @@ impl CommandRecording {
         *self.fingerprint.get_or_init(|| {
             let mut hasher = FxHasher::default();
             hasher.write_u64(self.shapes.fingerprint());
-            for primitive in &self.content.others {
+            for primitive in self.content.others.iter() {
                 hasher.write_u64(primitive.render_hash());
             }
             for group in self.content.groups.list() {
@@ -2117,7 +2115,6 @@ impl<'a> CommandRecorder<'a> {
         if self.fresh_shapes {
             self.shapes.tables.trim_growth();
         }
-        self.content.shape_bounds = self.shapes.bounds();
         self.content.shape_count = self.shapes.tables.shapes.len() as u32;
         self.content.segment_count = self.shapes.tables.segments.len() as u32;
         (self.shapes, self.content)
@@ -2148,7 +2145,6 @@ impl<'a> CommandRecorder<'a> {
         self.content.groups.clear();
         self.content.min = [f32::INFINITY; 2];
         self.content.max = [f32::NEG_INFINITY; 2];
-        self.content.shape_bounds = None;
         self.content.shape_count = 0;
         self.content.segment_count = 0;
         self.content.summary = RecordingSummary::default();

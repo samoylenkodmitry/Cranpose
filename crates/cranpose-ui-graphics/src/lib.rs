@@ -59,6 +59,7 @@ mod path;
 mod path_fill;
 mod path_recording;
 mod pointer_icon;
+mod rare_list;
 mod record;
 pub mod render_effect;
 mod render_hash;

@@ -62,7 +62,7 @@ pub struct ShapeRecords {
     bodies: Vec<ShapeRecordBody>,
     curves: Vec<ShapeRecordCurve>,
     /// By record index.
-    sources: Vec<RecordSource>,
+    sources: crate::rare_list::RareList<RecordSource>,
 }
 
 impl ShapeRecords {
@@ -70,7 +70,7 @@ impl ShapeRecords {
         Self {
             bodies: Vec::with_capacity(capacity),
             curves: Vec::with_capacity(capacity),
-            sources: Vec::new(),
+            sources: crate::rare_list::RareList::default(),
         }
     }
 
@@ -138,11 +138,11 @@ impl ShapeRecords {
     pub(crate) fn heap_bytes(&self) -> usize {
         self.bodies.capacity() * size_of::<ShapeRecordBody>()
             + self.curves.capacity() * size_of::<ShapeRecordCurve>()
-            + self.sources.capacity() * size_of::<RecordSource>()
+            + self.sources.heap_bytes()
     }
 
     pub(crate) fn source_bytes(&self) -> &[u8] {
-        bytemuck::cast_slice(&self.sources)
+        bytemuck::cast_slice(&self.sources[..])
     }
 
     pub(crate) fn clear(&mut self) {
@@ -154,7 +154,9 @@ impl ShapeRecords {
     pub(crate) fn trim_growth(&mut self) {
         trim_growth(&mut self.bodies);
         trim_growth(&mut self.curves);
-        trim_growth(&mut self.sources);
+        if let Some(sources) = self.sources.storage_mut() {
+            trim_growth(sources);
+        }
     }
 
     pub(crate) fn reserve(&mut self, additional: usize) {
