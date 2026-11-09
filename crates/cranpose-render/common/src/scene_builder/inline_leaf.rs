@@ -81,8 +81,8 @@ fn write_placed_child(
 }
 
 // Writes the node `node_id` of `data`, placed under `context`, into
-// `record` as a leaf. The items `record` held stay in the store: the caller
-// removes them.
+// `record` as a leaf, in place of the items it held, which the caller
+// removed.
 fn write_inline(
     store: &mut SceneStore,
     record: RecordId,
@@ -192,13 +192,16 @@ pub(super) fn update_dirty_inline(
                 return false;
             }
             note_layer_lowered();
+            // The old draws go first, last to first, so draws of the same
+            // kinds take their handles back in order and the leaf's items
+            // read as before.
             let mut old = store.lists.take();
             old.extend_from_slice(store.items(record));
-            write_inline(store, record, node_id, &data, context);
-            for &item in &old {
+            for &item in old.iter().rev() {
                 store.remove_item(item);
             }
             store.lists.give(old);
+            write_inline(store, record, node_id, &data, context);
             if !draws_inline(store, record) {
                 layer_from_content(store, record, node_id, &data, context);
             }

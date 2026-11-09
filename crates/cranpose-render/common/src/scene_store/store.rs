@@ -558,6 +558,11 @@ impl SceneStore {
     pub(super) fn replace_items(&mut self, id: RecordId, items: &[Item]) {
         let index = id.index();
         let old = self.items.span(self.tree[index].items);
+        // Draws written in place of removed ones of the same kinds take
+        // their handles: the items read as before.
+        if old == items {
+            return;
+        }
         if !super::facts::same_children(old, items) {
             super::facts::forget_children(self, index);
         }

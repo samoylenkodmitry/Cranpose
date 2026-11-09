@@ -506,6 +506,7 @@ fn redraw_retained_layer(
         let parts = ItemParts::of(store, container);
         let mut list = store.lists.take();
         list.extend_from_slice(parts.children());
+        parts.remove_own(store);
         write_own_content_around_children(
             store,
             container,
@@ -515,7 +516,7 @@ fn redraw_retained_layer(
         );
         store.set_items(container, &list);
         store.lists.give(list);
-        parts.remove(store);
+        parts.remove_gone(store);
         store.note_content_change(container);
         true
     })

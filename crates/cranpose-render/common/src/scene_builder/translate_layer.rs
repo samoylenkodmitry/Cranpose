@@ -336,6 +336,8 @@ pub(super) struct ItemParts {
     items: Vec<Item>,
     // Where the children lie among the items before the step.
     children: Range<usize>,
+    // How many items the container held before the step.
+    held: usize,
 }
 
 impl ItemParts {
@@ -353,6 +355,7 @@ impl ItemParts {
             .rposition(is_child)
             .map_or(first, |last| last + 1);
         Self {
+            held: items.len(),
             items,
             children: first..end,
         }
@@ -409,12 +412,22 @@ impl ItemParts {
         }
     }
 
-    // Removes the own draws and the children that left, once the container
-    // holds its new items.
-    pub(super) fn remove(self, store: &mut SceneStore) {
-        let (before, rest) = self.items.split_at(self.children.start);
-        let after = &rest[self.children.len()..];
-        for &item in before.iter().chain(after) {
+    // Removes the own draws before the container's new items are written,
+    // last to first, so draws of the same kinds take their handles back in
+    // order and the container's items read as before.
+    pub(super) fn remove_own(&self, store: &mut SceneStore) {
+        let before = &self.items[..self.children.start];
+        let after = &self.items[self.children.end..self.held];
+        for &item in before.iter().chain(after).rev() {
+            store.remove_item(item);
+        }
+    }
+
+    // Removes the children that left once the container holds its new
+    // items: a record made since takes no row a child the container held
+    // until then.
+    pub(super) fn remove_gone(self, store: &mut SceneStore) {
+        for &item in &self.items[self.held..] {
             store.remove_item(item);
         }
         self.give_back(store);
@@ -682,6 +695,7 @@ pub(super) fn translate_layer_from_data(
         parts.give_back(store);
         return translate_bail(reason);
     }
+    parts.remove_own(store);
     finish_translated_container(
         store,
         container,
@@ -689,7 +703,7 @@ pub(super) fn translate_layer_from_data(
         &modifier_slices,
         layout_state.size(),
     );
-    parts.remove(store);
+    parts.remove_gone(store);
     true
 }
 
