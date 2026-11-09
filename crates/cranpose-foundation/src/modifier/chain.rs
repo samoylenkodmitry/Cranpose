@@ -3,7 +3,7 @@
 
 use std::{any::TypeId, cell::RefCell, rc::Rc};
 
-use cranpose_core::{PackedU64, collections::map::HashMap};
+use cranpose_core::collections::map::HashMap;
 
 use super::{
     AnyModifierElement, DynModifierElement, InvalidationKind, MAX_DELEGATE_DEPTH,
@@ -19,7 +19,6 @@ pub use entry_element::HeldElement;
 /// element updated in place on every frame is not hashed for it.
 #[derive(Debug)]
 struct ModifierNodeEntry {
-    key: Option<PackedU64>,
     element: EntryElement,
     node: Rc<RefCell<dyn ModifierNode>>,
     capabilities: NodeCapabilities,
@@ -30,13 +29,11 @@ struct ModifierNodeEntry {
 
 impl ModifierNodeEntry {
     fn new(
-        key: Option<PackedU64>,
         element: DynModifierElement,
         node: Rc<RefCell<dyn ModifierNode>>,
         capabilities: NodeCapabilities,
     ) -> Self {
         let entry = Self {
-            key,
             element: EntryElement::new(element),
             node,
             capabilities,
@@ -237,9 +234,9 @@ impl EntryIndex {
         for (i, entry) in entries.iter().enumerate() {
             let held = entry.held();
             let (element_type, node_type) = (held.element_type(), held.node_type());
-            if let Some(key_value) = entry.key {
+            if let Some(key_value) = entry.element.key() {
                 keyed
-                    .entry((element_type, node_type, key_value.get()))
+                    .entry((element_type, node_type, key_value))
                     .or_insert_with(Vec::new)
                     .push(i);
             } else {
@@ -325,7 +322,7 @@ fn update_entry_in_place(
     let held = entry.held();
     if held.element_type() != element.element_type()
         || held.node_type() != element.node_type()
-        || entry.key.map(PackedU64::get) != element.key()
+        || entry.element.key() != element.key()
         || !element.can_update_node(&*entry.node.borrow())
     {
         return None;
@@ -363,12 +360,7 @@ fn fresh_entry(
     attach: bool,
 ) -> ModifierNodeEntry {
     let capabilities = element.capabilities();
-    let entry = ModifierNodeEntry::new(
-        element.key().map(PackedU64::new),
-        Rc::clone(&element),
-        element.create_node(),
-        capabilities,
-    );
+    let entry = ModifierNodeEntry::new(Rc::clone(&element), element.create_node(), capabilities);
     if attach {
         attach_node_tree(&mut *entry.node.borrow_mut(), context);
     }
@@ -428,7 +420,6 @@ fn reconcile_element(
     if idx != new_pos {
         request_auto_invalidations(context, capabilities);
     }
-    entry.key = key.map(PackedU64::new);
     entry.capabilities = capabilities;
     entry
         .node

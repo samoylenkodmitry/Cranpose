@@ -20,8 +20,16 @@ impl EntryElement {
     // value of it.
     pub(super) fn new(element: DynModifierElement) -> Self {
         match element.held_by_node() {
-            Some(held) => Self::InNode(held),
-            None => Self::Kept(element),
+            Some(held) if element.key().is_none() => Self::InNode(held),
+            _ => Self::Kept(element),
+        }
+    }
+
+    // The key of the element: an element its node holds has none.
+    pub(super) fn key(&self) -> Option<u64> {
+        match self {
+            Self::Kept(element) => element.key(),
+            Self::InNode(_) => None,
         }
     }
 
