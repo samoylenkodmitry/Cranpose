@@ -349,6 +349,13 @@ impl Hash for SizeElement {
 
 impl ModifierNodeElement for SizeElement {
     type Node = SizeNode;
+    const FROM_NODE: Option<fn(&SizeNode) -> Self> = Some(|node| Self {
+        min_width: node.min_width,
+        max_width: node.max_width,
+        min_height: node.min_height,
+        max_height: node.max_height,
+        enforce_incoming: node.enforce_incoming,
+    });
 
     fn create(&self) -> Self::Node {
         SizeNode::new(

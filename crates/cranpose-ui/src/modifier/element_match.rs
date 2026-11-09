@@ -1,11 +1,9 @@
 // How a modifier's elements compare with the elements held before them, in
-// order: those of an earlier modifier.
+// order: those of an earlier modifier, or those a node's chain holds.
 
-use std::rc::Rc;
+use cranpose_foundation::{DynModifierElement, HeldElement, NodeCapabilities};
 
-use cranpose_foundation::{DynModifierElement, NodeCapabilities};
-
-use super::{InPlaceReach, InPlaceUpdate, Modifier};
+use super::{InPlaceReach, InPlaceUpdate, Modifier, ModifierKind};
 
 // Which differences between two elements a comparison passes over.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -22,7 +20,7 @@ pub(crate) enum ElementMatch {
 // Whether `held` are `modifier`'s elements, one for one, as `rule` compares
 // them.
 pub(crate) fn elements_match<'a>(
-    held: impl ExactSizeIterator<Item = &'a DynModifierElement>,
+    held: impl ExactSizeIterator<Item = HeldElement<'a>>,
     modifier: &Modifier,
     rule: ElementMatch,
 ) -> bool {
@@ -32,20 +30,31 @@ pub(crate) fn elements_match<'a>(
             .all(|(a, b)| element_matches(a, b, rule))
 }
 
-fn element_matches(a: &DynModifierElement, b: &DynModifierElement, rule: ElementMatch) -> bool {
+// Whether `a` and `b` hold equal elements as `rule` compares them: those of
+// one shared list without comparing them.
+pub(crate) fn modifiers_match(a: &Modifier, b: &Modifier, rule: ElementMatch) -> bool {
+    match (&a.kind, &b.kind) {
+        (ModifierKind::Single { elements: a, .. }, ModifierKind::Single { elements: b, .. })
+            if a.shares_storage(b) =>
+        {
+            true
+        }
+        _ => elements_match(a.as_elements().iter().map(HeldElement::from), b, rule),
+    }
+}
+
+fn element_matches(a: HeldElement<'_>, b: &DynModifierElement, rule: ElementMatch) -> bool {
     // One element in both, as a kept chain shares them.
-    if Rc::ptr_eq(a, b) {
+    if a.is(b) {
         return true;
     }
     match rule {
-        ElementMatch::Equal => {
-            !a.requires_update() && !b.requires_update() && a.equals_element(&**b)
-        }
+        ElementMatch::Equal => !a.requires_update() && !b.requires_update() && a.equals(&**b),
         ElementMatch::Structural => {
             (a.element_type() == b.element_type()
                 && a.capabilities() == NodeCapabilities::DRAW
                 && b.capabilities() == NodeCapabilities::DRAW)
-                || a.equals_element(&**b)
+                || a.equals(&**b)
         }
     }
 }
@@ -56,7 +65,7 @@ fn element_matches(a: &DynModifierElement, b: &DynModifierElement, rule: Element
 // another element differs, or the chain is too long to name its elements;
 // an element that asks for an update on every set counts as different.
 pub(crate) fn in_place_update<'a>(
-    held: impl ExactSizeIterator<Item = &'a DynModifierElement>,
+    held: impl ExactSizeIterator<Item = HeldElement<'a>>,
     modifier: &Modifier,
 ) -> Option<InPlaceUpdate> {
     let count = held.len();
@@ -95,6 +104,6 @@ pub(crate) fn in_place_update<'a>(
 
 // Whether `a` and `b` are equal elements: one element, as a kept chain
 // shares them, or two that compare equal.
-fn same_element(a: &DynModifierElement, b: &DynModifierElement) -> bool {
-    Rc::ptr_eq(a, b) || a.equals_element(&**b)
+fn same_element(a: HeldElement<'_>, b: &DynModifierElement) -> bool {
+    a.is(b) || a.equals(&**b)
 }

@@ -162,6 +162,9 @@ impl Hash for PaddingElement {
 
 impl ModifierNodeElement for PaddingElement {
     type Node = PaddingNode;
+    const FROM_NODE: Option<fn(&PaddingNode) -> Self> = Some(|node| Self {
+        padding: node.padding,
+    });
 
     fn create(&self) -> Self::Node {
         PaddingNode::new(self.padding)

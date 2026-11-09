@@ -1086,7 +1086,7 @@ impl Modifier {
     /// This ignores identity-sensitive modifier elements (e.g., draw closures) so
     /// draw-only updates do not force measure/layout invalidation.
     pub fn structural_eq(&self, other: &Self) -> bool {
-        self.eq_internal(other, ElementMatch::Structural)
+        element_match::modifiers_match(self, other, ElementMatch::Structural)
     }
 
     fn as_elements(&self) -> &[DynModifierElement] {
@@ -1095,21 +1095,11 @@ impl Modifier {
             ModifierKind::Single { elements, .. } => elements,
         }
     }
-
-    fn eq_internal(&self, other: &Self, rule: ElementMatch) -> bool {
-        match (&self.kind, &other.kind) {
-            (
-                ModifierKind::Single { elements: a, .. },
-                ModifierKind::Single { elements: b, .. },
-            ) if a.shares_storage(b) => true,
-            _ => element_match::elements_match(self.as_elements().iter(), other, rule),
-        }
-    }
 }
 
 impl PartialEq for Modifier {
     fn eq(&self, other: &Self) -> bool {
-        self.eq_internal(other, ElementMatch::Equal)
+        element_match::modifiers_match(self, other, ElementMatch::Equal)
     }
 }
 

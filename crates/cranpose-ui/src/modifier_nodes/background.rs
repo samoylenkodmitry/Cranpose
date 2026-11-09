@@ -72,6 +72,7 @@ impl Hash for BackgroundElement {
 
 impl ModifierNodeElement for BackgroundElement {
     type Node = BackgroundNode;
+    const FROM_NODE: Option<fn(&BackgroundNode) -> Self> = Some(|node| Self { color: node.color });
 
     fn create(&self) -> Self::Node {
         BackgroundNode::new(self.color)
@@ -143,6 +144,7 @@ impl Hash for CornerShapeElement {
 
 impl ModifierNodeElement for CornerShapeElement {
     type Node = CornerShapeNode;
+    const FROM_NODE: Option<fn(&CornerShapeNode) -> Self> = Some(|node| Self { shape: node.shape });
 
     fn create(&self) -> Self::Node {
         CornerShapeNode::new(self.shape)

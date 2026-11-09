@@ -10,6 +10,9 @@ use super::{
     ModifierChainIter, ModifierChainNodeRef, ModifierNode, ModifierNodeContext, NodeCapabilities,
     NodePath, chain_node_ref::ChainPosition,
 };
+mod entry_element;
+use entry_element::EntryElement;
+pub use entry_element::HeldElement;
 
 /// One node of a chain and the element it last took. The element's hash,
 /// which matches entries when a chain rebuilds, is worked out then: an
@@ -17,7 +20,7 @@ use super::{
 #[derive(Debug)]
 struct ModifierNodeEntry {
     key: Option<PackedU64>,
-    element: DynModifierElement,
+    element: EntryElement,
     node: Rc<RefCell<dyn ModifierNode>>,
     capabilities: NodeCapabilities,
     // The union of the node's capabilities and those of every node after it,
@@ -34,7 +37,7 @@ impl ModifierNodeEntry {
     ) -> Self {
         let entry = Self {
             key,
-            element,
+            element: EntryElement::new(element),
             node,
             capabilities,
             aggregate: NodeCapabilities::empty(),
@@ -45,6 +48,10 @@ impl ModifierNodeEntry {
             .node_state()
             .set_capabilities(entry.capabilities);
         entry
+    }
+
+    fn held(&self) -> HeldElement<'_> {
+        self.element.view(&self.node, self.capabilities)
     }
 }
 
@@ -228,8 +235,8 @@ impl EntryIndex {
         let mut typed = HashMap::default();
 
         for (i, entry) in entries.iter().enumerate() {
-            let (element_type, node_type) =
-                (entry.element.element_type(), entry.element.node_type());
+            let held = entry.held();
+            let (element_type, node_type) = (held.element_type(), held.node_type());
             if let Some(key_value) = entry.key {
                 keyed
                     .entry((element_type, node_type, key_value.get()))
@@ -237,7 +244,7 @@ impl EntryIndex {
                     .push(i);
             } else {
                 hashed
-                    .entry((element_type, node_type, entry.element.hash_code()))
+                    .entry((element_type, node_type, held.hash_code()))
                     .or_insert_with(Vec::new)
                     .push(i);
                 typed
@@ -277,12 +284,7 @@ impl EntryIndex {
                     .get(&(query.element_type, query.node_type, query.hash_code))
             {
                 for &i in candidates {
-                    if !used[i]
-                        && entries[i]
-                            .element
-                            .as_ref()
-                            .equals_element(query.element.as_ref())
-                    {
+                    if !used[i] && entries[i].held().equals(query.element.as_ref()) {
                         return Some(i);
                     }
                 }
@@ -320,14 +322,15 @@ fn update_entry_in_place(
     element: &DynModifierElement,
     context: &mut dyn ModifierNodeContext,
 ) -> Option<InPlace> {
-    if entry.element.element_type() != element.element_type()
-        || entry.element.node_type() != element.node_type()
+    let held = entry.held();
+    if held.element_type() != element.element_type()
+        || held.node_type() != element.node_type()
         || entry.key.map(PackedU64::get) != element.key()
         || !element.can_update_node(&*entry.node.borrow())
     {
         return None;
     }
-    let same_element = entry.element.as_ref().equals_element(element.as_ref());
+    let same_element = held.equals(element.as_ref());
     let capabilities = element.capabilities();
     let mut outcome = if capabilities == entry.capabilities {
         InPlace::LinksHold
@@ -336,7 +339,7 @@ fn update_entry_in_place(
     };
     if !same_element || element.requires_update() {
         element.update_node(&mut *entry.node.borrow_mut());
-        entry.element = Rc::clone(element);
+        entry.element = EntryElement::new(Rc::clone(element));
         request_update_auto_invalidations(element.as_ref(), context, capabilities);
         entry
             .node
@@ -416,11 +419,11 @@ fn reconcile_element(
 
     used[idx] = true;
     match_order[idx] = Some(new_pos);
-    let same_element = entry.element.as_ref().equals_element(element.as_ref());
+    let same_element = entry.held().equals(element.as_ref());
     if !same_element || element.requires_update() {
         element.update_node(&mut *entry.node.borrow_mut());
-        entry.element = element;
-        request_update_auto_invalidations(entry.element.as_ref(), context, capabilities);
+        request_update_auto_invalidations(element.as_ref(), context, capabilities);
+        entry.element = EntryElement::new(element);
     }
     if idx != new_pos {
         request_auto_invalidations(context, capabilities);
@@ -712,9 +715,10 @@ impl ModifierNodeChain {
     }
 
     /// The elements of the chain's nodes, one for each in chain order: those
-    /// the chain was last updated from, or equal ones it kept.
-    pub fn elements(&self) -> impl ExactSizeIterator<Item = &DynModifierElement> {
-        self.entries.iter().map(|entry| &entry.element)
+    /// the chain was last updated from, or equal ones it kept, or the nodes
+    /// that hold every value of them.
+    pub fn held_elements(&self) -> impl ExactSizeIterator<Item = HeldElement<'_>> {
+        self.entries.iter().map(ModifierNodeEntry::held)
     }
 
     /// Returns the aggregated capability mask for the entire chain.

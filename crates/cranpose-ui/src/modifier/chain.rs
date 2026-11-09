@@ -364,28 +364,31 @@ impl ModifierChainHandle {
 
     // Whether the chain holds `modifier`'s elements, as `rule` compares them.
     pub(crate) fn holds(&self, modifier: &Modifier, rule: ElementMatch) -> bool {
-        element_match::elements_match(self.chain.elements(), modifier, rule)
+        element_match::elements_match(self.chain.held_elements(), modifier, rule)
     }
 
     // The update in place from the chain's elements to `modifier`'s: see
     // `element_match::in_place_update`.
     pub(crate) fn in_place_update(&self, modifier: &Modifier) -> Option<InPlaceUpdate> {
-        element_match::in_place_update(self.chain.elements(), modifier)
+        element_match::in_place_update(self.chain.held_elements(), modifier)
     }
 
     // A modifier of the chain's elements, equal to the one the chain was last
     // updated from. It carries the modifier's inspector metadata only where
     // inspection is built in.
     pub(crate) fn modifier(&self) -> Modifier {
-        let mut held = self.chain.elements();
+        let mut held = self.chain.held_elements();
         let Some(first) = held.next() else {
             return Modifier::empty();
         };
         let elements = if held.len() == 0 {
-            Elements::One(Rc::clone(first))
+            Elements::One(first.to_element())
         } else {
             Elements::Many(Rc::new(
-                std::iter::once(first).chain(held).cloned().collect(),
+                std::iter::once(first)
+                    .chain(held)
+                    .map(|element| element.to_element())
+                    .collect(),
             ))
         };
         Modifier {

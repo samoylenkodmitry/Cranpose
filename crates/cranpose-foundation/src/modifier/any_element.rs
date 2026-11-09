@@ -6,6 +6,7 @@ use std::{
     cell::{Cell, RefCell},
     fmt,
     hash::Hasher,
+    marker::PhantomData,
     rc::Rc,
 };
 
@@ -72,6 +73,100 @@ pub trait AnyModifierElement: fmt::Debug {
 
     /// Returns the element as `Any`, for downcasting to its concrete type.
     fn as_any(&self) -> &dyn Any;
+
+    /// What stands for the element beside its node when the node keeps
+    /// every value of it: see [`ModifierNodeElement::FROM_NODE`].
+    fn held_by_node(&self) -> Option<NodeHeld> {
+        None
+    }
+}
+
+/// What a chain keeps of an element whose node keeps every value of it, in
+/// place of the element: its type, and how to read it from the node.
+#[derive(Clone, Copy)]
+pub struct NodeHeld(&'static dyn HeldOps);
+
+impl fmt::Debug for NodeHeld {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("NodeHeld").finish_non_exhaustive()
+    }
+}
+
+impl NodeHeld {
+    pub(crate) fn element_type(self) -> TypeId {
+        self.0.element_type()
+    }
+
+    pub(crate) fn node_type(self) -> TypeId {
+        self.0.node_type()
+    }
+
+    // The hash of the element `node` holds, as the element itself hashes.
+    pub(crate) fn hash_code(self, node: &dyn ModifierNode) -> u64 {
+        self.0.hash_code(node)
+    }
+
+    // Whether `element` equals the element `node` holds.
+    pub(crate) fn equals(self, node: &dyn ModifierNode, element: &dyn AnyModifierElement) -> bool {
+        self.0.equals(node, element)
+    }
+
+    // The element `node` holds, made again.
+    pub(crate) fn element(self, node: &dyn ModifierNode) -> DynModifierElement {
+        self.0.element(node)
+    }
+}
+
+trait HeldOps {
+    fn element_type(&self) -> TypeId;
+    fn node_type(&self) -> TypeId;
+    fn hash_code(&self, node: &dyn ModifierNode) -> u64;
+    fn equals(&self, node: &dyn ModifierNode, element: &dyn AnyModifierElement) -> bool;
+    fn element(&self, node: &dyn ModifierNode) -> DynModifierElement;
+}
+
+struct HeldBy<E>(PhantomData<fn() -> E>);
+
+impl<E: ModifierNodeElement> HeldBy<E> {
+    const OPS: Self = Self(PhantomData);
+
+    // The element `node` holds. A chain keeps a `NodeHeld` only beside a
+    // node of the element's node type.
+    fn of(node: &dyn ModifierNode) -> E {
+        let from_node = E::FROM_NODE.expect("a node-held element makes itself from its node");
+        from_node(
+            node.as_any()
+                .downcast_ref::<E::Node>()
+                .expect("a node-held element's node is of its node type"),
+        )
+    }
+}
+
+impl<E: ModifierNodeElement> HeldOps for HeldBy<E> {
+    fn element_type(&self) -> TypeId {
+        TypeId::of::<E>()
+    }
+
+    fn node_type(&self) -> TypeId {
+        TypeId::of::<E::Node>()
+    }
+
+    fn hash_code(&self, node: &dyn ModifierNode) -> u64 {
+        let mut hasher = default::new();
+        Self::of(node).hash(&mut hasher);
+        hasher.finish()
+    }
+
+    fn equals(&self, node: &dyn ModifierNode, element: &dyn AnyModifierElement) -> bool {
+        element
+            .as_any()
+            .downcast_ref::<TypedModifierElement<E>>()
+            .is_some_and(|typed| typed.element == Self::of(node))
+    }
+
+    fn element(&self, node: &dyn ModifierNode) -> DynModifierElement {
+        modifier_element(Self::of(node))
+    }
 }
 
 struct TypedModifierElement<E: ModifierNodeElement> {
@@ -187,6 +282,10 @@ where
 
     fn as_any(&self) -> &dyn Any {
         self
+    }
+
+    fn held_by_node(&self) -> Option<NodeHeld> {
+        E::FROM_NODE.map(|_| NodeHeld(&HeldBy::<E>::OPS))
     }
 }
 

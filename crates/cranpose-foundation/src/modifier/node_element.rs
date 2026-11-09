@@ -8,9 +8,16 @@ use super::{InvalidationKind, ModifierNode, NodeCapabilities};
 
 /// Strongly typed modifier elements that can create and update nodes while
 /// exposing equality/hash/inspector contracts that mirror Jetpack Compose.
-pub trait ModifierNodeElement: fmt::Debug + Hash + PartialEq + 'static {
+pub trait ModifierNodeElement: fmt::Debug + Hash + PartialEq + Sized + 'static {
     /// The type of node that the element creates and updates.
     type Node: ModifierNode;
+
+    /// Makes the element again from a node it created or last updated, for
+    /// an element whose node keeps every value of it and that asks for no
+    /// update when equal. A chain keeps no such element beside its node: it
+    /// compares a new element with the node. `None`, the default, keeps the
+    /// element.
+    const FROM_NODE: Option<fn(&Self::Node) -> Self> = None;
 
     /// Creates a new modifier node instance for this element.
     fn create(&self) -> Self::Node;
