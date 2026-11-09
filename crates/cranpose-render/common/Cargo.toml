@@ -33,6 +33,8 @@ smallvec = "1.16.4"
 bytemuck = { workspace = true }
 
 [dev-dependencies]
+# The journal tests read where redraws changed the scene.
+cranpose-render-common = { path = ".", features = ["window-damage"] }
 # Tests lay text out with Cranpose Test Mono.
 cranpose-ui = { workspace = true, features = ["test-helpers"] }
 stats_alloc = "0.1.10"
@@ -46,6 +48,10 @@ embedded-default-font = []
 # Fonts an app installs while it runs, such as a downloaded font pack: the
 # app's fonts take them in at its next frame.
 installed-fonts = []
+# Where each redraw changed the scene's pixels, for a journal reader that
+# follows it, such as the window damage of the wgpu renderer. Without it a
+# redraw logs no reach.
+window-damage = []
 
 [[test]]
 name = "integration"

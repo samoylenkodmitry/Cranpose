@@ -36,7 +36,7 @@ embedded-default-font = ["cranpose-render-common/embedded-default-font"]
 installed-fonts = ["cranpose-render-common/installed-fonts"]
 
 [dependencies]
-cranpose-render-common = { workspace = true }
+cranpose-render-common = { workspace = true, features = ["window-damage"] }
 cranpose-ui-graphics = { workspace = true }
 cranpose-ui = { workspace = true }
 cranpose-text = { workspace = true }

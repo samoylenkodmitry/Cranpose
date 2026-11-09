@@ -1545,6 +1545,7 @@ dependencies = [
  "bytemuck",
  "cranpose-core",
  "cranpose-foundation",
+ "cranpose-render-common",
  "cranpose-text",
  "cranpose-ui",
  "cranpose-ui-graphics",

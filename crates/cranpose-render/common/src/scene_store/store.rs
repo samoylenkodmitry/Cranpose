@@ -180,10 +180,11 @@ impl SceneStore {
         self.mark_for_redraws();
     }
 
-    // Whether a reader follows where the update in progress redraws.
+    // Whether a reader follows where the update in progress redraws. A
+    // build without window damage logs each redraw without its reach.
     #[inline]
     pub(super) fn follows_redrawn_reach(&self) -> bool {
-        self.journal.wants_redrawn_reach(self.update)
+        cfg!(feature = "window-damage") && self.journal.wants_redrawn_reach(self.update)
     }
 
     // Works out the marks that wait once a reader follows where records
