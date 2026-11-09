@@ -56,7 +56,7 @@ impl FpsMonitor {
     }
 
     pub(crate) fn current_fps(&self) -> f32 {
-        self.tracker.last_fps
+        self.tracker.fps()
     }
 
     pub(crate) fn stats(&self) -> FpsStats {
@@ -78,10 +78,7 @@ struct FpsTracker {
     frame_times: VecDeque<Instant>,
     frame_intervals_ms: VecDeque<f32>,
     frame_work_ms: VecDeque<f32>,
-    last_fps: f32,
     frame_count: u64,
-    intervals: FrameIntervalStats,
-    work: FrameIntervalStats,
     last_recomp_count: u64,
     recomps_per_second: u64,
     last_recomp_calc: Instant,
@@ -93,10 +90,7 @@ impl FpsTracker {
             frame_times: VecDeque::with_capacity(FRAME_HISTORY_SIZE + 1),
             frame_intervals_ms: VecDeque::with_capacity(FRAME_HISTORY_SIZE),
             frame_work_ms: VecDeque::with_capacity(FRAME_HISTORY_SIZE),
-            last_fps: 0.0,
             frame_count: 0,
-            intervals: FrameIntervalStats::default(),
-            work: FrameIntervalStats::default(),
             last_recomp_count: 0,
             recomps_per_second: 0,
             last_recomp_calc: Instant::now(),
@@ -118,10 +112,7 @@ impl FpsTracker {
         self.frame_times.clear();
         self.frame_intervals_ms.clear();
         self.frame_work_ms.clear();
-        self.last_fps = 0.0;
         self.frame_count = 0;
-        self.intervals = FrameIntervalStats::default();
-        self.work = FrameIntervalStats::default();
         self.last_recomp_count = recomposition_count;
         self.recomps_per_second = 0;
         self.last_recomp_calc = Instant::now();
@@ -140,8 +131,6 @@ impl FpsTracker {
                 while self.frame_intervals_ms.len() > FRAME_HISTORY_SIZE {
                     self.frame_intervals_ms.pop_front();
                 }
-                self.intervals = FrameIntervalStats::from_samples(&self.frame_intervals_ms);
-                self.last_fps = fps_from_avg_ms(self.intervals.avg_ms);
             }
         }
 
@@ -153,7 +142,6 @@ impl FpsTracker {
         while self.frame_work_ms.len() > FRAME_HISTORY_SIZE {
             self.frame_work_ms.pop_front();
         }
-        self.work = FrameIntervalStats::from_samples(&self.frame_work_ms);
 
         self.frame_times.push_back(frame_started_at);
         self.frame_count += 1;
@@ -175,7 +163,7 @@ impl FpsTracker {
                     "{}",
                     recomposition_diagnostic_line(
                         self.recomps_per_second,
-                        self.last_fps,
+                        self.fps(),
                         recomposition_count,
                     )
                 );
@@ -183,26 +171,43 @@ impl FpsTracker {
         }
     }
 
+    // Frames a second over the intervals in the history.
+    fn fps(&self) -> f32 {
+        let count = self.frame_intervals_ms.len();
+        if count == 0 {
+            return 0.0;
+        }
+        let sum = self
+            .frame_intervals_ms
+            .iter()
+            .fold(0.0f32, |sum, &ms| sum + ms);
+        fps_from_avg_ms(sum / count as f32)
+    }
+
+    // The statistics of the history, worked out when read rather than at
+    // each frame.
     fn stats(&self, recomposition_count: u64) -> FpsStats {
+        let intervals = FrameIntervalStats::from_samples(&self.frame_intervals_ms);
+        let work = FrameIntervalStats::from_samples(&self.frame_work_ms);
         FpsStats {
-            fps: self.last_fps,
-            avg_ms: self.intervals.avg_ms,
-            latest_ms: self.intervals.latest_ms,
-            min_ms: self.intervals.min_ms,
-            max_ms: self.intervals.max_ms,
-            p95_ms: self.intervals.p95_ms,
-            p99_ms: self.intervals.p99_ms,
-            work_fps: fps_from_avg_ms(self.work.avg_ms),
-            work_avg_ms: self.work.avg_ms,
-            work_p95_ms: self.work.p95_ms,
-            work_max_ms: self.work.max_ms,
-            work_missed_120hz_budget: self.work.missed_120hz_budget,
-            work_missed_60hz_budget: self.work.missed_60hz_budget,
-            work_stalled_50ms_frames: self.work.stalled_50ms_frames,
-            interval_count: self.intervals.count,
-            missed_120hz_budget: self.intervals.missed_120hz_budget,
-            missed_60hz_budget: self.intervals.missed_60hz_budget,
-            stalled_50ms_frames: self.intervals.stalled_50ms_frames,
+            fps: fps_from_avg_ms(intervals.avg_ms),
+            avg_ms: intervals.avg_ms,
+            latest_ms: intervals.latest_ms,
+            min_ms: intervals.min_ms,
+            max_ms: intervals.max_ms,
+            p95_ms: intervals.p95_ms,
+            p99_ms: intervals.p99_ms,
+            work_fps: fps_from_avg_ms(work.avg_ms),
+            work_avg_ms: work.avg_ms,
+            work_p95_ms: work.p95_ms,
+            work_max_ms: work.max_ms,
+            work_missed_120hz_budget: work.missed_120hz_budget,
+            work_missed_60hz_budget: work.missed_60hz_budget,
+            work_stalled_50ms_frames: work.stalled_50ms_frames,
+            interval_count: intervals.count,
+            missed_120hz_budget: intervals.missed_120hz_budget,
+            missed_60hz_budget: intervals.missed_60hz_budget,
+            stalled_50ms_frames: intervals.stalled_50ms_frames,
             frame_count: self.frame_count,
             recompositions: recomposition_count,
             recomps_per_second: self.recomps_per_second,
