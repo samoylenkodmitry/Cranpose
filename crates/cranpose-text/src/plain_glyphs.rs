@@ -1,5 +1,6 @@
 use std::ops::Range;
 
+use cranpose_ui_graphics::shared_sort;
 use harfrust::{Direction, Feature, Scale, Script as ShapingScript, font::Font};
 use icu_properties::{CodePointMapData, props::GraphemeClusterBreak};
 use read_fonts::{
@@ -187,7 +188,7 @@ impl PlainGlyphs {
         // is busy already.
         mark_glyphs(font, &mut starts.busy)?;
         starts.lookups(font, scripts, &tags)?;
-        starts.pairs.sort_unstable();
+        shared_sort::sort_by(&mut starts.pairs, Ord::cmp);
         starts.pairs.dedup();
         let substitutes = starts.substitutes();
         Some(Self {
@@ -480,7 +481,7 @@ impl Starts<'_> {
             substitutes,
             ..
         } = self;
-        substitutes.sort_unstable();
+        shared_sort::sort_by(substitutes, Ord::cmp);
         let substituted = |glyph: u32| {
             substitutes
                 .binary_search_by_key(&glyph, |&(from, _)| from)
