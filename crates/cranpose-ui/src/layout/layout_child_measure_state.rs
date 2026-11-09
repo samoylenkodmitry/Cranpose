@@ -6,7 +6,7 @@ use std::{
     rc::{Rc, Weak},
 };
 
-use cranpose_core::{MemoryApplier, Node, NodeError, NodeId, NodeIdCell, PackedU64};
+use cranpose_core::{MemoryApplier, Node, NodeError, NodeId, PackedU64};
 use cranpose_ui_layout::{AlignmentLines, Constraints, MeasurePolicy, Placement};
 
 use super::{
@@ -105,7 +105,7 @@ pub(super) struct LayoutChildFrame {
     pub(super) error: Cell<Option<Box<NodeError>>>,
     pass: Cell<ChildPass>,
     // The node whose children the frame binds, which places them.
-    parent: NodeIdCell,
+    parent: Cell<Option<NodeId>>,
     // How many of the children have a z index other than 0, as their
     // records last placed or read it.
     placed_with_z_index: Cell<u32>,
@@ -132,7 +132,7 @@ impl LayoutChildFrame {
             builder: RefCell::new(None),
             error: Cell::new(None),
             pass: Cell::new(ChildPass::default()),
-            parent: NodeIdCell::new(None),
+            parent: Cell::new(None),
             placed_with_z_index: Cell::new(0),
             parent_parts,
         }
