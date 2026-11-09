@@ -1,5 +1,6 @@
 use std::rc::Rc;
 
+use cranpose_core::Node;
 use cranpose_ui_graphics::Size as GeometrySize;
 use cranpose_ui_layout::{Constraints, Measurable, MeasureResult, MeasureScope};
 
