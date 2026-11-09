@@ -17,10 +17,12 @@ use crate::{
 };
 
 mod band_ring;
+mod draw_groups;
 mod materialize;
 mod record_tables;
 
 use band_ring::{BandRing, vertex_pixels};
+use draw_groups::DrawGroups;
 use materialize::{
     ContentMarkers, brush_of, materialize_shape, parts_primitives_with_markers,
     parts_segment_primitives,
@@ -1367,7 +1369,7 @@ impl ShapeRecorder {
         let brush_bit = 1u8
             << match body.brush {
                 0 => 0,
-                index => self.tables.brushes[index as usize - 1].kind,
+                index => self.tables.brushes()[index as usize - 1].kind,
             };
         let kind_bit = 1u8 << record_fragment_kind(body.flags);
         let band_class = band_bucket.unwrap_or(0) as u8;
@@ -1543,14 +1545,14 @@ impl ShapeRecorder {
             return BrushShading::Solid;
         }
         let tables = &self.tables;
-        let Some(brush) = tables.brushes.get(body.brush as usize - 1) else {
+        let Some(brush) = tables.brushes().get(body.brush as usize - 1) else {
             return BrushShading::Fragment;
         };
         let vertex = if is_trapezoid(body.flags) {
-            vertex_gradient::clamps_between_two_stops(brush, &tables.stops, curve.radii)
+            vertex_gradient::clamps_between_two_stops(brush, tables.stops(), curve.radii)
         } else {
             body.flags & RECT_FILL_MASK == 0
-                && vertex_gradient::spans_quad(brush, &tables.stops, body.rect)
+                && vertex_gradient::spans_quad(brush, tables.stops(), body.rect)
         };
         if vertex {
             BrushShading::Vertex
@@ -1613,7 +1615,7 @@ impl ShapeRecorder {
                 stops,
             ),
         };
-        let tables = self.tables_mut();
+        let tables = self.tables_mut().gradients_mut();
         let stop_start = tables.stops.len() as u32;
         let count = colors.len();
         let positions = stops.as_deref().filter(|values| values.len() == count);
@@ -1676,11 +1678,7 @@ pub struct CommandRecording {
 #[derive(Clone, Debug)]
 struct RecordingContent {
     others: Vec<DrawPrimitive>,
-    /// The groups that [`RecordLane::GroupStart`] segments open.
-    groups: Vec<DrawGroup>,
-    /// While recording, the groups open now, outermost first, as indices
-    /// into `groups`. Empty once the recording is finished.
-    open_groups: Vec<u32>,
+    groups: DrawGroups,
     min: [f32; 2],
     max: [f32; 2],
     shape_bounds: Option<Rect>,
@@ -1694,8 +1692,7 @@ impl Default for RecordingContent {
     fn default() -> Self {
         Self {
             others: Vec::new(),
-            groups: Vec::new(),
-            open_groups: Vec::new(),
+            groups: DrawGroups::default(),
             min: [f32::INFINITY; 2],
             max: [f32::NEG_INFINITY; 2],
             shape_bounds: None,
@@ -1723,7 +1720,7 @@ impl PartialEq for CommandRecording {
     fn eq(&self, other: &Self) -> bool {
         self.shapes == other.shapes
             && self.content.others == other.content.others
-            && self.content.groups == other.content.groups
+            && self.content.groups.list() == other.content.groups.list()
             && self.content.content_markers == other.content.content_markers
     }
 }
@@ -1858,12 +1855,12 @@ impl CommandRecording {
 
     /// The gradient brush table that shape records index into.
     pub fn brushes(&self) -> &[BrushRecord] {
-        &self.shapes.tables.brushes
+        self.shapes.tables.brushes()
     }
 
     /// The gradient stop table that brush records index into.
     pub fn stops(&self) -> &[GradientStopRecord] {
-        &self.shapes.tables.stops
+        self.shapes.tables.stops()
     }
 
     /// The primitives that are not shapes, such as images, text and shadows, in recorded order.
@@ -1873,7 +1870,7 @@ impl CommandRecording {
 
     /// The groups that [`RecordLane::GroupStart`] segments open, in recorded order.
     pub fn groups(&self) -> &[DrawGroup] {
-        &self.content.groups
+        self.content.groups.list()
     }
 
     /// The segments in recorded order.
@@ -1936,7 +1933,7 @@ impl CommandRecording {
             for primitive in &self.content.others {
                 hasher.write_u64(primitive.render_hash());
             }
-            for group in &self.content.groups {
+            for group in self.content.groups.list() {
                 crate::render_hash::hash_draw_group(group, &mut hasher);
             }
             hasher.write_u32(self.content.content_markers);
@@ -2044,7 +2041,7 @@ impl CommandRecording {
                 RecordLane::Content => {}
                 RecordLane::GroupStart => entries.for_each(|index| {
                     visit(DrawPrimitive::Group(GroupMarker::Start(
-                        self.content.groups[index],
+                        self.content.groups.list()[index],
                     )));
                 }),
                 RecordLane::GroupEnd => {
@@ -2114,7 +2111,7 @@ impl<'a> CommandRecorder<'a> {
     }
 
     fn finish_parts(mut self) -> (&'a ShapeRecorder, &'a RecordingContent) {
-        while !self.content.open_groups.is_empty() {
+        while !self.content.groups.open().is_empty() {
             self.push_group_end();
         }
         if self.fresh_shapes {
@@ -2149,7 +2146,6 @@ impl<'a> CommandRecorder<'a> {
         self.shapes.clear();
         self.content.others.clear();
         self.content.groups.clear();
-        self.content.open_groups.clear();
         self.content.min = [f32::INFINITY; 2];
         self.content.max = [f32::NEG_INFINITY; 2];
         self.content.shape_bounds = None;
@@ -2170,11 +2166,11 @@ impl<'a> CommandRecorder<'a> {
     pub fn push_content(&mut self) {
         self.content.content_markers += 1;
         self.content.summary.has_content_markers = true;
-        for _ in &self.content.open_groups {
+        for _ in self.content.groups.open() {
             self.shapes.push_marker_segment(RecordLane::GroupEnd, 0);
         }
         self.shapes.push_marker_segment(RecordLane::Content, 0);
-        for &group in &self.content.open_groups {
+        for &group in self.content.groups.open() {
             self.shapes
                 .push_marker_segment(RecordLane::GroupStart, group);
         }
@@ -2183,9 +2179,7 @@ impl<'a> CommandRecorder<'a> {
     /// Starts a group of draws that `group` places: what is recorded until
     /// the matching [`Self::push_group_end`] is in the group's coordinates.
     pub fn push_group_start(&mut self, group: DrawGroup) {
-        let index = self.content.groups.len() as u32;
-        self.content.groups.push(group);
-        self.content.open_groups.push(index);
+        let index = self.content.groups.start(group);
         self.content.summary.has_groups = true;
         self.shapes
             .push_marker_segment(RecordLane::GroupStart, index);
@@ -2193,7 +2187,7 @@ impl<'a> CommandRecorder<'a> {
 
     /// Ends the group started last; nothing when no group is open.
     pub fn push_group_end(&mut self) {
-        if self.content.open_groups.pop().is_some() {
+        if self.content.groups.end() {
             self.shapes.push_marker_segment(RecordLane::GroupEnd, 0);
         }
     }

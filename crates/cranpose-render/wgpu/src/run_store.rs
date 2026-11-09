@@ -376,7 +376,7 @@ impl TableUpdate<'_> {
         match table {
             BODY_BUFFER => bytemuck::cast_slice(self.tables.shapes.bodies()),
             CURVE_BUFFER => bytemuck::cast_slice(self.tables.shapes.curves()),
-            BRUSH_BUFFER => bytemuck::cast_slice(&self.tables.brushes),
+            BRUSH_BUFFER => bytemuck::cast_slice(&self.tables.brushes()),
             _ => bytemuck::cast_slice(self.painted_stops),
         }
     }
@@ -387,7 +387,7 @@ impl TableUpdate<'_> {
         let previous: &[u8] = match table {
             BODY_BUFFER => bytemuck::cast_slice(self.previous.shapes.bodies()),
             CURVE_BUFFER => bytemuck::cast_slice(self.previous.shapes.curves()),
-            BRUSH_BUFFER => bytemuck::cast_slice(&self.previous.brushes),
+            BRUSH_BUFFER => bytemuck::cast_slice(&self.previous.brushes()),
             _ if self.stops_changed => &[],
             _ => self.bytes(table),
         };
@@ -510,8 +510,8 @@ fn stored_needs(tables: &RecordTables) -> [usize; STORED_TABLES] {
     [
         tables.shapes.len().max(1),
         tables.shapes.len().max(1),
-        tables.brushes.len(),
-        tables.stops.len(),
+        tables.brushes().len(),
+        tables.stops().len(),
     ]
 }
 
@@ -820,7 +820,7 @@ impl ArenaStaging {
         if mapped != u32::MAX {
             return Some(mapped);
         }
-        let brush = tables.brushes[source];
+        let brush = tables.brushes()[source];
         let stop_range = brush.stop_start as usize..(brush.stop_start + brush.stop_count) as usize;
         if !storage
             && (self.brushes.len() >= BRUSH_CHUNK
@@ -828,7 +828,7 @@ impl ArenaStaging {
         {
             return None;
         }
-        painted_stops(&tables.stops[stop_range], placement, &mut self.painted);
+        painted_stops(&tables.stops()[stop_range], placement, &mut self.painted);
         let stop_start = self.stops.len() as u32;
         self.stops.extend_from_slice(&self.painted);
         self.brushes.push(BrushRecord {
@@ -1237,8 +1237,8 @@ impl RunStore {
                     let previous_recorder =
                         std::mem::replace(&mut entry.recorder, Arc::clone(&run.recorder));
                     let previous = previous_recorder.tables();
-                    let stops_changed = entry.paint != paint || previous.stops != tables.stops;
-                    painted_stops(&tables.stops, &run.placement, scratch_stops);
+                    let stops_changed = entry.paint != paint || previous.stops() != tables.stops();
+                    painted_stops(&tables.stops(), &run.placement, scratch_stops);
                     let update = TableUpdate {
                         previous,
                         tables,
@@ -1258,7 +1258,7 @@ impl RunStore {
                 (entry, stats)
             }
             Entry::Vacant(slot) => {
-                painted_stops(&tables.stops, &run.placement, scratch_stops);
+                painted_stops(&tables.stops(), &run.placement, scratch_stops);
                 let update = TableUpdate {
                     previous: tables,
                     tables,
@@ -1364,8 +1364,8 @@ impl RunStore {
         staging.fits(
             self.mode,
             1,
-            run.tables().brushes.len().min(BRUSH_CHUNK),
-            run.tables().stops.len().min(STOP_CHUNK),
+            run.tables().brushes().len().min(BRUSH_CHUNK),
+            run.tables().stops().len().min(STOP_CHUNK),
         )
     }
 
@@ -1397,9 +1397,9 @@ impl RunStore {
         let placement_index = staging.placements.len() as u32;
         let placement = PlacementData::of(&run.placement, root_scale, turn, shift);
         staging.placements.push(placement.with_depth_skip(skip));
-        if !tables.brushes.is_empty() {
+        if !tables.brushes().is_empty() {
             staging.brush_map.clear();
-            staging.brush_map.resize(tables.brushes.len(), u32::MAX);
+            staging.brush_map.resize(tables.brushes().len(), u32::MAX);
         }
         let record_limit = mode.arena_records();
         let mut taken = 0u32;

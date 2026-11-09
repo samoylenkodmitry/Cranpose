@@ -12,28 +12,69 @@ use crate::{FxHasher, ShapeRecords};
 pub struct RecordTables {
     /// The shape records, stored in columns.
     pub shapes: ShapeRecords,
-    /// Gradient brushes, which shape records refer to by index.
-    pub brushes: Vec<BrushRecord>,
-    /// Gradient stops of all brushes, which brush records refer to by index.
-    pub stops: Vec<GradientStopRecord>,
-    /// Stop positions the app gave explicitly, which brush records refer to by index.
-    pub explicit_stops: Vec<f32>,
     /// Runs of consecutive entries that one draw can take, in recorded order.
     pub segments: Vec<RecordSegment>,
+    // The brush, stop and explicit stop tables, `None` until a shape paints
+    // with a gradient: most recordings paint none.
+    gradients: Option<Box<GradientTables>>,
     fingerprint: OnceLock<u64>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub(super) struct GradientTables {
+    pub(super) brushes: Vec<BrushRecord>,
+    pub(super) stops: Vec<GradientStopRecord>,
+    pub(super) explicit_stops: Vec<f32>,
+}
+
+impl GradientTables {
+    fn with_capacity_of(&self) -> Self {
+        Self {
+            brushes: Vec::with_capacity(self.brushes.capacity()),
+            stops: Vec::with_capacity(self.stops.capacity()),
+            explicit_stops: Vec::with_capacity(self.explicit_stops.capacity()),
+        }
+    }
 }
 
 impl PartialEq for RecordTables {
     fn eq(&self, other: &Self) -> bool {
         self.shapes == other.shapes
-            && self.brushes == other.brushes
-            && self.stops == other.stops
-            && self.explicit_stops == other.explicit_stops
+            && self.brushes() == other.brushes()
+            && self.stops() == other.stops()
+            && self.explicit_stops() == other.explicit_stops()
             && self.segments == other.segments
     }
 }
 
 impl RecordTables {
+    /// Gradient brushes, which shape records refer to by index.
+    pub fn brushes(&self) -> &[BrushRecord] {
+        self.gradients
+            .as_deref()
+            .map_or(&[], |tables| &tables.brushes)
+    }
+
+    /// Gradient stops of all brushes, which brush records refer to by index.
+    pub fn stops(&self) -> &[GradientStopRecord] {
+        self.gradients
+            .as_deref()
+            .map_or(&[], |tables| &tables.stops)
+    }
+
+    /// Stop positions the app gave explicitly, which brush records refer to
+    /// by index.
+    pub fn explicit_stops(&self) -> &[f32] {
+        self.gradients
+            .as_deref()
+            .map_or(&[], |tables| &tables.explicit_stops)
+    }
+
+    // The gradient tables, made on the first gradient a shape paints with.
+    pub(super) fn gradients_mut(&mut self) -> &mut GradientTables {
+        self.gradients.get_or_insert_default()
+    }
+
     // Forgets the fingerprint before the tables change.
     pub(super) fn forget_fingerprint(&mut self) {
         self.fingerprint.take();
@@ -41,9 +82,11 @@ impl RecordTables {
 
     pub(super) fn clear(&mut self) {
         self.shapes.clear();
-        self.brushes.clear();
-        self.stops.clear();
-        self.explicit_stops.clear();
+        if let Some(tables) = self.gradients.as_deref_mut() {
+            tables.brushes.clear();
+            tables.stops.clear();
+            tables.explicit_stops.clear();
+        }
         self.segments.clear();
         self.fingerprint.take();
     }
@@ -54,9 +97,11 @@ impl RecordTables {
     pub(super) fn trim_growth(&mut self) {
         use crate::shape_records::trim_growth;
         self.shapes.trim_growth();
-        trim_growth(&mut self.brushes);
-        trim_growth(&mut self.stops);
-        trim_growth(&mut self.explicit_stops);
+        if let Some(tables) = self.gradients.as_deref_mut() {
+            trim_growth(&mut tables.brushes);
+            trim_growth(&mut tables.stops);
+            trim_growth(&mut tables.explicit_stops);
+        }
         trim_growth(&mut self.segments);
     }
 
@@ -65,10 +110,11 @@ impl RecordTables {
     pub(super) fn with_capacity_of(&self) -> Self {
         Self {
             shapes: ShapeRecords::with_capacity(self.shapes.capacity()),
-            brushes: Vec::with_capacity(self.brushes.capacity()),
-            stops: Vec::with_capacity(self.stops.capacity()),
-            explicit_stops: Vec::with_capacity(self.explicit_stops.capacity()),
             segments: Vec::with_capacity(self.segments.capacity()),
+            gradients: self
+                .gradients
+                .as_deref()
+                .map(|tables| Box::new(tables.with_capacity_of())),
             fingerprint: OnceLock::new(),
         }
     }
@@ -81,9 +127,9 @@ impl RecordTables {
             hasher.write(bytemuck::cast_slice(self.shapes.bodies()));
             hasher.write(bytemuck::cast_slice(self.shapes.curves()));
             hasher.write(self.shapes.source_bytes());
-            hasher.write(bytemuck::cast_slice(&self.brushes));
-            hasher.write(bytemuck::cast_slice(&self.stops));
-            hasher.write(bytemuck::cast_slice(&self.explicit_stops));
+            hasher.write(bytemuck::cast_slice(self.brushes()));
+            hasher.write(bytemuck::cast_slice(self.stops()));
+            hasher.write(bytemuck::cast_slice(self.explicit_stops()));
             self.segments.hash(&mut hasher);
             hasher.finish()
         })
@@ -91,10 +137,12 @@ impl RecordTables {
 
     /// The heap the tables hold, capacity included.
     pub fn heap_bytes(&self) -> usize {
-        self.shapes.heap_bytes()
-            + self.brushes.capacity() * size_of::<BrushRecord>()
-            + self.stops.capacity() * size_of::<GradientStopRecord>()
-            + self.explicit_stops.capacity() * size_of::<f32>()
-            + self.segments.capacity() * size_of::<RecordSegment>()
+        let gradients = self.gradients.as_deref().map_or(0, |tables| {
+            size_of::<GradientTables>()
+                + tables.brushes.capacity() * size_of::<BrushRecord>()
+                + tables.stops.capacity() * size_of::<GradientStopRecord>()
+                + tables.explicit_stops.capacity() * size_of::<f32>()
+        });
+        self.shapes.heap_bytes() + gradients + self.segments.capacity() * size_of::<RecordSegment>()
     }
 }

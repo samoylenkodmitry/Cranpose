@@ -93,13 +93,15 @@ fn brush_stops<'a>(
     brush: &BrushRecord,
 ) -> Option<(&'a [GradientStopRecord], &'a [f32])> {
     let start = brush.stop_start as usize;
-    let stops = tables.stops.get(start..start + brush.stop_count as usize)?;
+    let stops = tables
+        .stops()
+        .get(start..start + brush.stop_count as usize)?;
     let explicit = if brush.explicit_len == u32::MAX {
         &[][..]
     } else {
         let start = brush.explicit_start as usize;
         tables
-            .explicit_stops
+            .explicit_stops()
             .get(start..start + brush.explicit_len as usize)?
     };
     Some((stops, explicit))
@@ -125,7 +127,7 @@ fn candidate<'a>(scene: &'a CompositorScene, op: &DrawOp) -> Option<Candidate<'a
     }
     let brush = match record.brush {
         0 => None,
-        index => Some(tables.brushes.get(index as usize - 1)?),
+        index => Some(tables.brushes().get(index as usize - 1)?),
     };
     let (stops, explicit) = match brush {
         Some(brush) => brush_stops(tables, brush)?,
