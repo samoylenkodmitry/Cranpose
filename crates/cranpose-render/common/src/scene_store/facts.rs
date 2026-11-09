@@ -11,6 +11,7 @@
 
 use std::{cell::Cell, mem::size_of};
 
+use cranpose_core::RecordId;
 use cranpose_ui::{GraphicsLayer, Rect};
 
 use super::{Item, ItemKind, ItemRef, LayerProps, LayerRef, RecordFlags, SceneStore};
@@ -79,7 +80,7 @@ fn forget(store: &SceneStore, index: usize, take: impl Fn(&mut RowFacts) -> bool
             break;
         }
         row.set(facts);
-        current = store.tree[index].parent.map(|parent| parent.index());
+        current = store.tree[index].parent.map(RecordId::index);
     }
 }
 
