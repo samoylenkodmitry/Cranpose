@@ -61,6 +61,7 @@ where
     /// show. A bridge that stored the revision it last projected can skip the
     /// whole snapshot-and-compare while this still reads the same — which on a
     /// frame that only draws is every frame.
+    #[inline(never)]
     pub fn semantics_snapshot_revision(&mut self) -> u64 {
         if self.app.semantics_enabled
             || self

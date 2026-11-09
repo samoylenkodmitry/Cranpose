@@ -164,7 +164,9 @@ fn swept_sweeps(old: &DrawShape, new: &DrawShape) -> Option<(f32, f32)> {
 // one arc that differs only in its sweep: around the part between their
 // ends, caps included. Away from it a point lies inside or outside both
 // sweeps alike, and its coverage reads only the end it lies near. Returns
-// false and adds nothing for any other pair.
+// false and adds nothing for any other pair. Out of line: arcs that sweep
+// are rare beside fills that move.
+#[inline(never)]
 fn add_swept_arc_areas(
     old: &DrawShape,
     new: &DrawShape,

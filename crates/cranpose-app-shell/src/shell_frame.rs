@@ -613,31 +613,7 @@ where
     );
 
     if !dirt.needs_scene_rebuild {
-        dirt.log(
-            frame,
-            scene_dirty,
-            if dirt.render_only_dirty {
-                "present-retained"
-            } else {
-                "skip"
-            },
-        );
-        surface.scoped_layout_scene_nodes = dirt.layout_dirty_nodes;
-        surface.scoped_moved_scene_nodes = dirt.moved_nodes;
-        surface.scoped_draw_nodes = dirt.draw_dirty_nodes;
-        surface.scoped_layer_property_nodes = dirt.layer_property_nodes;
-        surface.structural_scene_nodes = dirt.structural_parents;
-        surface.scene_updates = dirt.scene_updates;
-        if dirt.render_only_dirty && app.dev_options.fps_counter {
-            draw_dev_overlay(app, surface);
-        }
-        return SurfaceFrame {
-            result: FrameUpdateResult {
-                visual_changed: dirt.render_only_dirty,
-                ..FrameUpdateResult::default()
-            },
-            rebuilt: false,
-        };
+        return keep_surface_scene(app, surface, (frame, scene_dirty), dirt);
     }
 
     surface.scene_dirty = false;
@@ -671,6 +647,47 @@ where
             ..FrameUpdateResult::default()
         },
         rebuilt: true,
+    }
+}
+
+// Keeps the surface's scene for a frame that changed none of it, and hands
+// the frame's dirty lists back to the surface for the next frame. Out of
+// line: a frame that draws something rebuilds the scene.
+#[inline(never)]
+fn keep_surface_scene<R>(
+    app: &mut ShellApp,
+    surface: &mut RootSurface<R>,
+    (frame, scene_dirty): (&FrameDirt, bool),
+    dirt: SurfaceDirt,
+) -> SurfaceFrame
+where
+    R: Renderer,
+    R::Error: Debug,
+{
+    dirt.log(
+        frame,
+        scene_dirty,
+        if dirt.render_only_dirty {
+            "present-retained"
+        } else {
+            "skip"
+        },
+    );
+    surface.scoped_layout_scene_nodes = dirt.layout_dirty_nodes;
+    surface.scoped_moved_scene_nodes = dirt.moved_nodes;
+    surface.scoped_draw_nodes = dirt.draw_dirty_nodes;
+    surface.scoped_layer_property_nodes = dirt.layer_property_nodes;
+    surface.structural_scene_nodes = dirt.structural_parents;
+    surface.scene_updates = dirt.scene_updates;
+    if dirt.render_only_dirty && app.dev_options.fps_counter {
+        draw_dev_overlay(app, surface);
+    }
+    SurfaceFrame {
+        result: FrameUpdateResult {
+            visual_changed: dirt.render_only_dirty,
+            ..FrameUpdateResult::default()
+        },
+        rebuilt: false,
     }
 }
 
@@ -725,15 +742,26 @@ fn dev_overlay_belongs_on(id: RootId, fps_counter: bool) -> bool {
 fn refresh_draw_nodes<R: Renderer>(
     app: &mut ShellApp,
     surface: &mut RootSurface<R>,
-    mut dirty_nodes: Vec<NodeId>,
+    dirty_nodes: Vec<NodeId>,
 ) -> Vec<NodeId> {
-    if dirty_nodes.is_empty() {
+    if dirty_nodes.is_empty() || surface.layout_tree.is_none() {
         return dirty_nodes;
     }
+    refresh_layout_tree_draws(app, surface, dirty_nodes)
+}
+
+// Brings the boxes of `dirty_nodes` in the surface's layout tree up to date.
+// Out of line: a surface that keeps no layout tree, such as a framebuffer's,
+// does none of it.
+#[inline(never)]
+fn refresh_layout_tree_draws<R: Renderer>(
+    app: &mut ShellApp,
+    surface: &mut RootSurface<R>,
+    mut dirty_nodes: Vec<NodeId>,
+) -> Vec<NodeId> {
     let Some(layout_tree) = surface.layout_tree.as_mut() else {
         return dirty_nodes;
     };
-
     dirty_nodes.sort_unstable();
     dirty_nodes.dedup();
     let dirty_set: HashSet<NodeId> = dirty_nodes.iter().copied().collect();
