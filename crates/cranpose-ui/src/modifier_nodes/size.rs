@@ -18,10 +18,7 @@ use super::{hash_option_f32, impl_layout_modifier_node};
 /// Matches Kotlin: `SizeNode` in foundation-layout/src/commonMain/kotlin/androidx/compose/foundation/layout/Size.kt
 #[derive(Debug)]
 pub struct SizeNode {
-    min_width: Option<f32>,
-    max_width: Option<f32>,
-    min_height: Option<f32>,
-    max_height: Option<f32>,
+    bounds: SizeBounds,
     enforce_incoming: bool,
     /// The bounds rounded to the device grid of the density they were last
     /// asked for: each measure asks again for the same.
@@ -41,10 +38,7 @@ impl SizeNode {
         enforce_incoming: bool,
     ) -> Self {
         Self {
-            min_width,
-            max_width,
-            min_height,
-            max_height,
+            bounds: SizeBounds::of([min_width, max_width, min_height, max_height]),
             enforce_incoming,
             rounded: Cell::new(None),
             state: NodeState::new(),
@@ -68,13 +62,13 @@ impl SizeNode {
         use cranpose_ui_layout::round_to_px;
 
         let max_width = self
-            .max_width
+            .max_width()
             .map_or(f32::INFINITY, |v| round_to_px(v, density).max(0.0));
         let max_height = self
-            .max_height
+            .max_height()
             .map_or(f32::INFINITY, |v| round_to_px(v, density).max(0.0));
 
-        let min_width = self.min_width.map_or(0.0, |v| {
+        let min_width = self.min_width().map_or(0.0, |v| {
             let clamped = round_to_px(v, density).clamp(0.0, max_width);
             if clamped == f32::INFINITY {
                 0.0
@@ -83,7 +77,7 @@ impl SizeNode {
             }
         });
 
-        let min_height = self.min_height.map_or(0.0, |v| {
+        let min_height = self.min_height().map_or(0.0, |v| {
             let clamped = round_to_px(v, density).clamp(0.0, max_height);
             if clamped == f32::INFINITY {
                 0.0
@@ -102,22 +96,22 @@ impl SizeNode {
 
     /// Returns the smallest width in logical pixels, or `None` for no minimum.
     pub fn min_width(&self) -> Option<f32> {
-        self.min_width
+        self.bounds.get(MIN_WIDTH)
     }
 
     /// Returns the largest width in logical pixels, or `None` for no maximum.
     pub fn max_width(&self) -> Option<f32> {
-        self.max_width
+        self.bounds.get(MAX_WIDTH)
     }
 
     /// Returns the smallest height in logical pixels, or `None` for no minimum.
     pub fn min_height(&self) -> Option<f32> {
-        self.min_height
+        self.bounds.get(MIN_HEIGHT)
     }
 
     /// Returns the largest height in logical pixels, or `None` for no maximum.
     pub fn max_height(&self) -> Option<f32> {
-        self.max_height
+        self.bounds.get(MAX_HEIGHT)
     }
 
     /// Returns whether the incoming constraints take precedence over these bounds.
@@ -148,13 +142,13 @@ impl LayoutModifierNode for SizeNode {
         let target = self.target_constraints(density);
         Some(cranpose_ui_layout::ConstraintsHold {
             width: size_axis_hold(
-                (self.min_width, self.max_width),
+                (self.min_width(), self.max_width()),
                 target.min_width,
                 size.width,
                 wrapped.hold.map(|hold| hold.width),
             )?,
             height: size_axis_hold(
-                (self.min_height, self.max_height),
+                (self.min_height(), self.max_height()),
                 target.min_height,
                 size.height,
                 wrapped.hold.map(|hold| hold.height),
@@ -190,22 +184,22 @@ impl LayoutModifierNode for SizeNode {
                     .max(constraints.min_height),
             }
         } else {
-            let resolved_min_width = if self.min_width.is_some() {
+            let resolved_min_width = if self.min_width().is_some() {
                 target.min_width
             } else {
                 constraints.min_width.min(target.max_width)
             };
-            let resolved_max_width = if self.max_width.is_some() {
+            let resolved_max_width = if self.max_width().is_some() {
                 target.max_width
             } else {
                 constraints.max_width.max(target.min_width)
             };
-            let resolved_min_height = if self.min_height.is_some() {
+            let resolved_min_height = if self.min_height().is_some() {
                 target.min_height
             } else {
                 constraints.min_height.min(target.max_height)
             };
-            let resolved_max_height = if self.max_height.is_some() {
+            let resolved_max_height = if self.max_height().is_some() {
                 target.max_height
             } else {
                 constraints.max_height.max(target.min_height)
@@ -223,9 +217,9 @@ impl LayoutModifierNode for SizeNode {
         let measured_width = placeable.width();
         let measured_height = placeable.height();
 
-        let result_width = if self.min_width.is_some()
-            && self.max_width.is_some()
-            && self.min_width == self.max_width
+        let result_width = if self.min_width().is_some()
+            && self.max_width().is_some()
+            && self.min_width() == self.max_width()
             && target.min_width >= wrapped_constraints.min_width
             && target.min_width <= wrapped_constraints.max_width
         {
@@ -234,9 +228,9 @@ impl LayoutModifierNode for SizeNode {
             measured_width
         };
 
-        let result_height = if self.min_height.is_some()
-            && self.max_height.is_some()
-            && self.min_height == self.max_height
+        let result_height = if self.min_height().is_some()
+            && self.max_height().is_some()
+            && self.min_height() == self.max_height()
             && target.min_height >= wrapped_constraints.min_height
             && target.min_height <= wrapped_constraints.max_height
         {
@@ -350,10 +344,10 @@ impl Hash for SizeElement {
 impl ModifierNodeElement for SizeElement {
     type Node = SizeNode;
     const FROM_NODE: Option<fn(&SizeNode) -> Self> = Some(|node| Self {
-        min_width: node.min_width,
-        max_width: node.max_width,
-        min_height: node.min_height,
-        max_height: node.max_height,
+        min_width: node.min_width(),
+        max_width: node.max_width(),
+        min_height: node.min_height(),
+        max_height: node.max_height(),
         enforce_incoming: node.enforce_incoming,
     });
 
@@ -368,16 +362,14 @@ impl ModifierNodeElement for SizeElement {
     }
 
     fn update(&self, node: &mut Self::Node) {
-        if node.min_width != self.min_width
-            || node.max_width != self.max_width
-            || node.min_height != self.min_height
-            || node.max_height != self.max_height
-            || node.enforce_incoming != self.enforce_incoming
-        {
-            node.min_width = self.min_width;
-            node.max_width = self.max_width;
-            node.min_height = self.min_height;
-            node.max_height = self.max_height;
+        let bounds = SizeBounds::of([
+            self.min_width,
+            self.max_width,
+            self.min_height,
+            self.max_height,
+        ]);
+        if node.bounds != bounds || node.enforce_incoming != self.enforce_incoming {
+            node.bounds = bounds;
             node.enforce_incoming = self.enforce_incoming;
             node.rounded.set(None);
         }
@@ -446,5 +438,37 @@ fn size_intrinsic(
             cross.clamp(cross_min, cross_max)
         };
         intrinsic(child_cross).clamp(target_min, target_max)
+    }
+}
+
+// Which of a size node's bounds a slot of `SizeBounds` holds.
+const MIN_WIDTH: usize = 0;
+const MAX_WIDTH: usize = 1;
+const MIN_HEIGHT: usize = 2;
+const MAX_HEIGHT: usize = 3;
+
+// A size node's bounds in logical pixels: the bit of a slot in `set` says
+// the slot holds a bound, and a slot without one holds 0.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct SizeBounds {
+    values: [f32; 4],
+    set: u8,
+}
+
+impl SizeBounds {
+    fn of(bounds: [Option<f32>; 4]) -> Self {
+        let mut values = [0.0; 4];
+        let mut set = 0;
+        for (slot, bound) in bounds.into_iter().enumerate() {
+            if let Some(value) = bound {
+                values[slot] = value;
+                set |= 1 << slot;
+            }
+        }
+        Self { values, set }
+    }
+
+    fn get(self, slot: usize) -> Option<f32> {
+        (self.set & (1 << slot) != 0).then_some(self.values[slot])
     }
 }
