@@ -4,9 +4,7 @@ use std::{
 };
 
 use cranpose_core::NodeId;
-use cranpose_render_common::{
-    graph_scene::Scene, scene_builder::clear_command_recordings_for_tests,
-};
+use cranpose_render_common::graph_scene::Scene;
 use cranpose_ui::{
     Box, BoxSpec, Brush, Canvas, Color, GraphicsLayer, Modifier, RoundedCornerShape, Size,
     TestComposition, Text, TextStyle, run_test_composition,
@@ -63,7 +61,6 @@ fn initial_graph(composition: &mut TestComposition, root: NodeId) -> Scene {
 }
 
 fn assert_callback_once_per_update(outer_wrapper: bool, around: Around) {
-    clear_command_recordings_for_tests();
     let calls = Rc::new(Cell::new(0));
     let before = Rc::new(Cell::new(Color::BLUE));
     let after = Rc::new(Cell::new(Color::WHITE));
@@ -177,7 +174,6 @@ fn grouped_with_content_draws_once_per_scene_update_and_keeps_child_order() {
 
 #[test]
 fn nested_scene_build_does_not_replace_parent_with_content_recording() {
-    clear_command_recordings_for_tests();
     let nested_calls = Rc::new(Cell::new(0));
     let nested_before = Rc::new(Cell::new(Color(1.0, 1.0, 0.0, 1.0)));
     let nested_after = Rc::new(Cell::new(Color(1.0, 0.0, 1.0, 1.0)));

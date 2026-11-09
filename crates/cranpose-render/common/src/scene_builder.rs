@@ -14,12 +14,11 @@ mod dirty_walk;
 pub(crate) use dirty_walk::{DirtyAncestry, RetainedPath};
 use dirty_walk::{update_along_retained_path, walk_dirty_layers};
 mod draw_recording;
-pub use draw_recording::clear_command_recordings_for_tests;
+pub(crate) use draw_recording::draw_command_items;
 use draw_recording::{
-    DrawPass, DrawTarget, GroupPaint, NodeCommands, append_draw_nodes, bump_recording_generation,
-    draw_nodes, layer_node_capacity,
+    DrawPass, DrawTarget, GroupPaint, NodeCommands, append_draw_nodes, draw_nodes,
+    layer_node_capacity,
 };
-pub(crate) use draw_recording::{RecorderKey, RecorderSlot, draw_command_items};
 mod graph_changes;
 use graph_changes::GraphChanges;
 mod hit_graph;
@@ -177,7 +176,6 @@ pub(crate) fn rebuild_from_applier(
     if let Some(record) = store.root() {
         release_for_rebuild(store, record);
     }
-    bump_recording_generation();
     walk.retained_path = None;
     if !lower_root_into(applier, store, root) {
         store.clear();
@@ -256,7 +254,6 @@ fn update_from_applier_inner(
     if updates.is_empty() {
         return GraphUpdateReport::patched(GraphChanges::default());
     }
-    bump_recording_generation();
     store.begin_update();
 
     if cranpose_core::DIAGNOSTICS.scene_update_diag.is_set() {

@@ -5,7 +5,6 @@ use std::{alloc::System, cell::Cell, hint::black_box, rc::Rc, sync::Arc, time::I
 use cranpose_render_common::{
     graph::{DrawRunNode, ProjectiveTransform},
     graph_scene::Scene,
-    scene_builder::clear_command_recordings_for_tests,
     scene_store::{ItemRef, LayerRef},
 };
 use cranpose_ui::{Box, BoxSpec, Canvas, LayoutEngine, Modifier, Size, run_test_composition};
@@ -58,7 +57,6 @@ fn emit_arcs_range(
 }
 
 fn run_case(arcs: usize, readers: usize) {
-    clear_command_recordings_for_tests();
     let angle = Rc::new(Cell::new(0.0f32));
     let draw_angle = Rc::clone(&angle);
     let mut composition = run_test_composition(move || {
@@ -299,7 +297,6 @@ fn collect_runs_for_node<'a>(
 }
 
 fn run_with_content_case(arcs: usize) {
-    clear_command_recordings_for_tests();
     let callback_calls = Rc::new(Cell::new(0usize));
     let angle = Rc::new(Cell::new(0.0f32));
     let parent_slot = Rc::new(Cell::new(None));
@@ -540,7 +537,6 @@ fn run_property_mode(
 }
 
 fn run_property_case(arcs: usize, layers_first: bool) {
-    clear_command_recordings_for_tests();
     let angle = Rc::new(Cell::new(0.125f32));
     let draw_calls = Rc::new(Cell::new(0usize));
     let canvas_node = Rc::new(Cell::new(None));

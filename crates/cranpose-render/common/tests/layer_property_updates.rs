@@ -8,7 +8,6 @@ use cranpose_render_common::{
     SceneUpdates,
     graph::ProjectiveTransform,
     graph_scene::Scene,
-    scene_builder::clear_command_recordings_for_tests,
     scene_store::{ItemRef, LayerRef},
 };
 use cranpose_ui::{
@@ -125,7 +124,6 @@ fn layer_for(layer: LayerRef<'_>, node_id: NodeId) -> Option<LayerRef<'_>> {
 
 #[test]
 fn layer_only_update_keeps_outer_draw_and_child_canvas_recordings() {
-    clear_command_recordings_for_tests();
     let rotation = Rc::new(Cell::new(0.0_f32));
     let parent_id = Rc::new(Cell::new(None));
     let child_ids = Rc::new(RefCell::new(Vec::new()));
@@ -225,7 +223,6 @@ fn layer_only_update_keeps_outer_draw_and_child_canvas_recordings() {
 
 #[test]
 fn parent_layer_update_republishes_child_text_viewport_geometry() {
-    clear_command_recordings_for_tests();
     let rotation = Rc::new(Cell::new(0.0_f32));
     let parent_id = Rc::new(Cell::new(None));
     let window_rect = Rc::new(RefCell::new(None::<MutableState<Rect>>));
@@ -295,7 +292,6 @@ fn parent_layer_update_republishes_child_text_viewport_geometry() {
 
 #[test]
 fn parent_layer_and_child_content_dirt_are_both_applied() {
-    clear_command_recordings_for_tests();
     let rotation = Rc::new(Cell::new(0.0_f32));
     let color = Rc::new(Cell::new(Color::RED));
     let parent_id = Rc::new(Cell::new(None::<NodeId>));
@@ -356,7 +352,6 @@ fn parent_layer_and_child_content_dirt_are_both_applied() {
 
 #[test]
 fn parent_content_and_child_layer_dirt_match_a_fresh_rebuild() {
-    clear_command_recordings_for_tests();
     let parent_color = Rc::new(Cell::new(Color::RED));
     let child_rotation = Rc::new(Cell::new(0.0_f32));
     let parent_id = Rc::new(Cell::new(None::<NodeId>));

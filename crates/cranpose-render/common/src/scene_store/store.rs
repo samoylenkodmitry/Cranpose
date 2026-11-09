@@ -2,10 +2,14 @@
 // draw groups and leaves, each a row of fixed-size records with its items in
 // one span, its other properties and its draws in side arenas.
 
-use std::sync::atomic::{AtomicU16, Ordering};
+use std::{
+    rc::Rc,
+    sync::atomic::{AtomicU16, Ordering},
+};
 
 use cranpose_core::{NodeId, RecordId, RecordRef, SceneUpdate, StoreId, collections::map::HashSet};
 use cranpose_ui::{GraphicsLayer, Point, Rect};
+use cranpose_ui_graphics::CommandRecording;
 
 use super::{
     ChildOrder, Facts, GeoRecord, HashCache, Item, ItemKind, ItemLists, ItemRef, Journal,
@@ -13,9 +17,11 @@ use super::{
     RecordEvents, RecordFlags, RecordKind, RecordNode, Slab, Span, SpanPool, TransformId,
     TreeRecord, WarmRecord,
     own_marks::{self, OwnMark},
+    recordings::Recordings,
 };
 use crate::graph::{
-    DrawPrimitiveNode, DrawRunNode, LayerNode, ProjectiveTransform, TextPrimitiveNode,
+    DrawCommandId, DrawPrimitiveNode, DrawRunNode, LayerNode, ProjectiveTransform,
+    TextPrimitiveNode,
 };
 
 /// The scene a renderer draws and the hit targets come from.
@@ -51,6 +57,7 @@ pub struct SceneStore {
     // The marks of the own draws of the record whose end of update is
     // being worked out.
     pub(super) mark_scratch: Vec<OwnMark>,
+    recordings: Recordings,
 }
 
 /// One state of one store: what it held after one of its updates.
@@ -115,6 +122,7 @@ impl SceneStore {
             marks_lost: false,
             order: ChildOrder::default(),
             mark_scratch: Vec::new(),
+            recordings: Recordings::default(),
         }
     }
 
@@ -145,6 +153,7 @@ impl SceneStore {
     /// Starts a scene update and returns its number.
     pub fn begin_update(&mut self) -> SceneUpdate {
         self.journal.trim(self.tree.len());
+        self.recordings.begin_update();
         self.update = self.update.next();
         self.update
     }
@@ -517,9 +526,29 @@ impl SceneStore {
                 self.texts.remove(item.index());
             }
             ItemKind::Run => {
+                if let Some(run) = self.runs.get(item.index())
+                    && let Some(id) = run.command
+                    && Rc::strong_count(&run.recording) == 1
+                {
+                    self.recordings.keep(id, &run.recording);
+                }
                 self.runs.remove(item.index());
             }
         }
+    }
+
+    // Storage for the next recording of the draw command `id`.
+    pub(crate) fn recording_storage(&mut self, id: DrawCommandId) -> Rc<CommandRecording> {
+        self.recordings.acquire(id)
+    }
+
+    // Notes `recording`, which the draw command `id` just recorded.
+    pub(crate) fn publish_recording(
+        &mut self,
+        id: DrawCommandId,
+        recording: &Rc<CommandRecording>,
+    ) {
+        self.recordings.publish(id, recording);
     }
 
     /// A handle to `id` that tells a later holder whether the row went to

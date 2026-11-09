@@ -397,11 +397,10 @@ pub struct DrawRunNode {
     /// Which draw command recorded these primitives. `None` only for runs
     /// with no per-command provenance (hand-built tests).
     pub command: Option<DrawCommandId>,
-    /// The recording registry keeps a handle per layout node and command,
-    /// so this recording's buffers survive the draw run being dropped and
-    /// the command can record into them on a later update. Nothing mutates
-    /// a recording after construction, which is
-    /// what makes sharing sound.
+    /// The store keeps the recording when it lets go of the run, so the
+    /// command can record into its buffers on a later update. Nothing
+    /// mutates a recording after construction, which is what makes sharing
+    /// sound.
     pub recording: Rc<CommandRecording>,
     /// The segments of the recording this run draws: one placement's part
     /// of a with-content command, or the whole recording.

@@ -48,6 +48,10 @@ impl<T> Slab<T> {
         self.free
             .push(u32::try_from(index).expect("fewer than 2^32 entries"));
     }
+    pub(crate) fn get(&self, index: usize) -> Option<&T> {
+        self.entries.get(index)?.as_ref()
+    }
+
     pub(crate) fn values(&self) -> impl Iterator<Item = &T> {
         self.entries.iter().flatten()
     }

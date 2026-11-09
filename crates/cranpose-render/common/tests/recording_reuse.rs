@@ -3,7 +3,6 @@ use std::{cell::Cell, rc::Rc};
 use cranpose_core::NodeId;
 use cranpose_render_common::{
     graph_scene::Scene,
-    scene_builder::clear_command_recordings_for_tests,
     scene_store::{ItemRef, LayerRef},
 };
 use cranpose_ui::{
@@ -48,7 +47,6 @@ fn recording_colors(recording: &CommandRecording) -> Vec<Color> {
 
 #[test]
 fn canvas_rebuilds_keep_each_retained_frame_and_paint_the_new_state() {
-    clear_command_recordings_for_tests();
     let value = Rc::new(Cell::new(0usize));
     let draw_value = Rc::clone(&value);
     let mut composition = run_test_composition(move || {

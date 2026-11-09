@@ -11,7 +11,6 @@ use cranpose_core::{MutableState, NodeId};
 use cranpose_render_common::{
     graph::ProjectiveTransform,
     graph_scene::Scene,
-    scene_builder::clear_command_recordings_for_tests,
     scene_store::{ItemRef, LayerRef},
 };
 use cranpose_ui::{
@@ -158,7 +157,6 @@ fn painted_output(graph: &Scene) -> Vec<(Rect, String)> {
 
 #[test]
 fn a_node_that_only_moved_keeps_what_it_drew() {
-    clear_command_recordings_for_tests();
     let probe = Rc::new(RefCell::new(Probe::default()));
     let draws = Rc::new(Cell::new(0));
     let mut composition = moving_column(Rc::clone(&probe), Rc::clone(&draws));
@@ -197,7 +195,6 @@ fn a_node_that_only_moved_keeps_what_it_drew() {
 
 #[test]
 fn a_node_that_moved_and_changed_what_it_draws_draws_again() {
-    clear_command_recordings_for_tests();
     let probe = Rc::new(RefCell::new(Probe::default()));
     let draws = Rc::new(Cell::new(0));
     let mut composition = moving_column(Rc::clone(&probe), Rc::clone(&draws));
@@ -227,7 +224,6 @@ fn a_node_that_moved_and_changed_what_it_draws_draws_again() {
 
 #[test]
 fn a_node_that_moved_and_turned_keeps_what_it_drew() {
-    clear_command_recordings_for_tests();
     let probe = Rc::new(RefCell::new(Probe::default()));
     let draws = Rc::new(Cell::new(0));
     let mut composition = moving_column(Rc::clone(&probe), Rc::clone(&draws));

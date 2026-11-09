@@ -13,90 +13,6 @@ use crate::{
     style_shared::recording_for_placement_reusing,
 };
 
-pub(crate) struct RecorderSlot {
-    generation: u64,
-    handles: [Option<Rc<CommandRecording>>; 3],
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) struct RecorderKey {
-    node_id: NodeId,
-    command_index: u32,
-}
-
-impl From<DrawCommandId> for RecorderKey {
-    fn from(id: DrawCommandId) -> Self {
-        Self {
-            node_id: id.node_id,
-            command_index: id.command_index,
-        }
-    }
-}
-
-#[doc(hidden)]
-pub fn clear_command_recordings_for_tests() {
-    crate::thread_state::with(|state| state.command_recordings.borrow_mut().clear());
-}
-
-pub(super) fn bump_recording_generation() {
-    crate::thread_state::with(|state| {
-        let generation = state.recording_generation.get().wrapping_add(1);
-        state.recording_generation.set(generation);
-        if generation.is_multiple_of(512) {
-            state
-                .command_recordings
-                .borrow_mut()
-                .retain(|_, slot| generation.wrapping_sub(slot.generation) <= 64);
-        }
-    });
-}
-
-pub(super) fn acquire_storage(id: DrawCommandId) -> Rc<CommandRecording> {
-    crate::thread_state::with(|state| {
-        let mut map = state.command_recordings.borrow_mut();
-        let Some(slot) = map.get_mut(&RecorderKey::from(id)) else {
-            return Rc::default();
-        };
-        let free = |handle: &Option<Rc<CommandRecording>>| {
-            handle.as_ref().is_some_and(|recording| {
-                Rc::strong_count(recording) == 1 && Rc::weak_count(recording) == 0
-            })
-        };
-        let unshared = slot.handles.iter().position(|handle| {
-            free(handle)
-                && handle
-                    .as_ref()
-                    .is_some_and(|recording| !recording.shares_shapes())
-        });
-        let at = unshared.or_else(|| {
-            (slot.handles.iter().all(Option::is_some) && free(&slot.handles[2])).then_some(2)
-        });
-        at.and_then(|at| slot.handles[at].take())
-            .unwrap_or_default()
-    })
-}
-
-pub(super) fn publish_recording(
-    id: DrawCommandId,
-    recording: Rc<CommandRecording>,
-) -> Rc<CommandRecording> {
-    crate::thread_state::with(|state| {
-        let mut map = state.command_recordings.borrow_mut();
-        let generation = state.recording_generation.get();
-        let slot = map
-            .entry(RecorderKey::from(id))
-            .or_insert_with(|| RecorderSlot {
-                generation,
-                handles: [None, None, None],
-            });
-        slot.generation = generation;
-        slot.handles[2] = slot.handles[1].take();
-        slot.handles[1] = slot.handles[0].take();
-        slot.handles[0] = Some(Rc::clone(&recording));
-        recording
-    })
-}
-
 pub(super) enum DrawPass<'a> {
     Record(DrawPlacement),
     OverlayFrom(std::slice::Iter<'a, Item>),
@@ -396,11 +312,14 @@ pub(super) fn append_draw_nodes(
             (shared, segments)
         } else {
             let Some((recording, segments)) =
-                recording_for_placement_reusing(command, placement, size, || acquire_storage(id))
+                recording_for_placement_reusing(command, placement, size, || {
+                    store.recording_storage(id)
+                })
             else {
                 continue;
             };
-            (publish_recording(id, recording), segments)
+            store.publish_recording(id, &recording);
+            (recording, segments)
         };
         let grouped = shared.summary().has_groups
             && shared
@@ -431,7 +350,6 @@ pub(crate) fn draw_command_items(
     placement: DrawPlacement,
     phase: PrimitivePhase,
 ) -> Vec<Item> {
-    bump_recording_generation();
     let draws = DrawTarget {
         size,
         motion_context_animated: false,
