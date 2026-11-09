@@ -230,8 +230,17 @@ impl DrawnLayouts {
     fn begin_pass(&mut self) {
         self.pass += 1;
         let pass = self.pass;
-        self.slots.retain(|slot| pass - slot.pass <= 1);
+        if self.slots.iter().any(|slot| pass - slot.pass > 1) {
+            drop_undrawn(&mut self.slots, pass);
+        }
     }
+}
+
+// forwards on purpose: a pass whose texts drew what they drew before drops
+// none, and inlined the drops take room in the code each pass runs.
+#[inline(never)]
+fn drop_undrawn(slots: &mut Vec<DrawnLayout>, pass: u64) {
+    slots.retain(|slot| pass - slot.pass <= 1);
 }
 
 // The tags of hashes, each in the slot its hash picks, the newest in place

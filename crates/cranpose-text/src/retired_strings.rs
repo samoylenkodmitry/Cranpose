@@ -10,6 +10,14 @@ const LONGEST: usize = 128;
 // The most kept strings a new string looks at for one nothing holds.
 const LOOKS: usize = 8;
 
+// forwards on purpose: the strings go only once texts stop changing, and
+// inlined their drops take room in the code each pass runs.
+#[cold]
+#[inline(never)]
+fn drop_past(strings: &mut VecDeque<Arc<RenderString>>, kept: usize) {
+    strings.truncate(kept);
+}
+
 /// Plain strings that texts gave up while something else, as a scene or a
 /// layout in flight, still held them. A plain string made through it takes
 /// the oldest one nothing holds any more and writes its text into that
@@ -35,8 +43,10 @@ impl RetiredStrings {
 
     /// A pass of the texts that take and retire strings begins.
     pub fn begin_pass(&mut self) {
-        self.strings
-            .truncate(self.retired.max(self.taken).saturating_mul(3));
+        let kept = self.retired.max(self.taken).saturating_mul(3);
+        if self.strings.len() > kept {
+            drop_past(&mut self.strings, kept);
+        }
         (self.retired, self.taken) = (0, 0);
     }
 

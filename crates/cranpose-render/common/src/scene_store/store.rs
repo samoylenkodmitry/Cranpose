@@ -493,7 +493,10 @@ impl SceneStore {
         id
     }
 
+    // Out of line: inlined into `remove_item`, a removal most updates never
+    // make takes room in the code that drops each replaced draw.
     /// Removes `id`, its draws, its properties and every record beneath it.
+    #[inline(never)]
     pub fn remove_subtree(&mut self, id: RecordId) {
         self.log(RecordEvent::Removed, id);
         let index = id.index();

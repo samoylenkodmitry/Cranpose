@@ -88,6 +88,15 @@ impl Stamps {
                 _ => break,
             }
         }
+        self.reorders_after_a_change(old, new)
+    }
+
+    // Whether `new` holds the children of `old` it keeps in another order,
+    // once their lists differ. Out of line: most updates keep a record's
+    // children as they were.
+    #[cold]
+    #[inline(never)]
+    fn reorders_after_a_change(&mut self, old: &[RecordId], new: &[Item]) -> bool {
         self.stamp += 1;
         let stamp = self.stamp;
         for (position, item) in new.iter().enumerate() {

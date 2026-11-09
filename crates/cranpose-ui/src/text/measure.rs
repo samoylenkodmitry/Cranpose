@@ -15,7 +15,7 @@ use cranpose_ui_graphics::{MemoryHeadroom, Point};
 pub use super::prepared_text_layout::PreparedTextLayout;
 use super::{
     AnnotatedString, LineBox, SpanStyle, TextDrawStyle, TextUnit,
-    layout_cache::{CacheAdmission, Cached, LayoutCache},
+    layout_cache::{CacheAdmission, Cached, LayoutCache, Miss},
     layout_input::{DEFAULT_FONT_SIZE_SP, ParagraphSpans, TextUnits},
     layout_options::{TextLayoutOptions, TextOverflow},
     retired_layouts::RetiredLayouts,
@@ -211,6 +211,20 @@ impl TextService {
             Some((key, Cached::Missed(miss))) => Some((key, miss)),
             None => None,
         };
+        self.prepare_missed(source, frame, (units, admission), missed)
+    }
+
+    // Lays out `source` the cache did not hold and keeps it as `missed`
+    // says. Out of line: a text that shows what it showed before stops
+    // before it, and inlined it takes room in the cache's lookup.
+    #[inline(never)]
+    fn prepare_missed(
+        &self,
+        source: LayoutSource<'_>,
+        frame: TextFrame,
+        (units, admission): (TextUnits, CacheAdmission),
+        missed: Option<(TextKey, Miss)>,
+    ) -> Rc<PreparedTextLayout> {
         let prepared = self
             .lay_out_retired(&source, frame, units)
             .unwrap_or_else(|| {

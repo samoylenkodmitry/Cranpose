@@ -29,6 +29,9 @@ pub(super) fn settle(store: &mut SceneStore) {
     }
 }
 
+// Out of line: only a reader that follows where records redraw leaves
+// records to settle.
+#[inline(never)]
 fn settle_redrawn(store: &mut SceneStore, follow: bool) {
     let mut redrawn = std::mem::take(&mut store.redrawn);
     for record in redrawn.drain(..) {

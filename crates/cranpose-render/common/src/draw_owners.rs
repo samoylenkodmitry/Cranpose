@@ -51,6 +51,12 @@ pub fn undrawn_nodes(
 
 pub(crate) struct DrawOwners {
     cursor: JournalCursor,
+    nodes: UpdateNodes,
+}
+
+// The lists a read of the journal sorts nodes in.
+#[derive(Default)]
+struct UpdateNodes {
     // The nodes one update gave a record and those it took one from, each
     // sorted.
     joined_in_update: Vec<NodeId>,
@@ -63,9 +69,7 @@ impl DrawOwners {
     pub(crate) fn new(store: &mut SceneStore) -> Self {
         Self {
             cursor: store.open_journal(RecordEvents::OWNERS),
-            joined_in_update: Vec::new(),
-            left_in_update: Vec::new(),
-            decided: Vec::new(),
+            nodes: UpdateNodes::default(),
         }
     }
 
@@ -77,49 +81,61 @@ impl DrawOwners {
         store: &mut SceneStore,
         changes: &mut Vec<DrawOwnerChange>,
     ) -> bool {
-        let Self {
-            cursor,
-            joined_in_update,
-            left_in_update,
-            decided,
-        } = self;
+        let Self { cursor, nodes } = self;
         store.read_journal(cursor, |_, read| {
             let JournalRead::Changes(entries) = read else {
                 return false;
             };
-            decided.clear();
-            // The updates go newest first: a node's latest change decides.
-            let mut updates = entries
-                .chunk_by(|a, b| a.update == b.update)
-                .rev()
-                .peekable();
-            while let Some(update) = updates.next() {
-                sorted_nodes(update, RecordEvent::joins, joined_in_update);
-                sorted_nodes(update, RecordEvent::leaves, left_in_update);
-                let first = changes.len();
-                let undecided = |node: &NodeId| decided.binary_search(node).is_err();
-                changes.extend(
-                    left_in_update
-                        .iter()
-                        .filter(|node| joined_in_update.binary_search(node).is_err())
-                        .filter(|node| undecided(node))
-                        .copied()
-                        .map(DrawOwnerChange::Left),
-                );
-                changes.extend(
-                    joined_in_update
-                        .iter()
-                        .filter(|node| undecided(node))
-                        .copied()
-                        .map(DrawOwnerChange::Joined),
-                );
-                if updates.peek().is_some() {
-                    decided.extend(changes[first..].iter().map(|change| change.node()));
-                    decided.sort_unstable();
-                }
+            if !entries.is_empty() {
+                nodes.note_changes(entries, changes);
             }
             true
         })
+    }
+}
+
+impl UpdateNodes {
+    // Adds to `changes` the nodes `entries` gave a record or took one
+    // from, one change a node, as its latest update left it. Out of line:
+    // most updates add or remove no record.
+    #[inline(never)]
+    fn note_changes(&mut self, entries: &[JournalEntry], changes: &mut Vec<DrawOwnerChange>) {
+        let Self {
+            joined_in_update,
+            left_in_update,
+            decided,
+        } = self;
+        decided.clear();
+        // The updates go newest first: a node's latest change decides.
+        let mut updates = entries
+            .chunk_by(|a, b| a.update == b.update)
+            .rev()
+            .peekable();
+        while let Some(update) = updates.next() {
+            sorted_nodes(update, RecordEvent::joins, joined_in_update);
+            sorted_nodes(update, RecordEvent::leaves, left_in_update);
+            let first = changes.len();
+            let undecided = |node: &NodeId| decided.binary_search(node).is_err();
+            changes.extend(
+                left_in_update
+                    .iter()
+                    .filter(|node| joined_in_update.binary_search(node).is_err())
+                    .filter(|node| undecided(node))
+                    .copied()
+                    .map(DrawOwnerChange::Left),
+            );
+            changes.extend(
+                joined_in_update
+                    .iter()
+                    .filter(|node| undecided(node))
+                    .copied()
+                    .map(DrawOwnerChange::Joined),
+            );
+            if updates.peek().is_some() {
+                decided.extend(changes[first..].iter().map(|change| change.node()));
+                decided.sort_unstable();
+            }
+        }
     }
 }
 

@@ -163,9 +163,15 @@ fn layer_requires_effect_fallback(layer: &GraphicsLayer) -> bool {
 }
 
 fn report_unsupported_effects(layer: &GraphicsLayer, diagnostics: &RenderDiagnostics) {
-    if layer_requires_effect_fallback(layer)
-        && diagnostics.claim_warning_once("pixels.unsupported-layer-effect")
-    {
+    if layer_requires_effect_fallback(layer) {
+        warn_unsupported_effects(diagnostics);
+    }
+}
+
+#[cold]
+#[inline(never)]
+fn warn_unsupported_effects(diagnostics: &RenderDiagnostics) {
+    if diagnostics.claim_warning_once("pixels.unsupported-layer-effect") {
         log::warn!(
             "Pixels renderer does not support render/backdrop effects or non-SrcOver layer blend modes; falling back to base layer rendering"
         );
@@ -438,15 +444,16 @@ fn axis_scale(transformed: f32, local: f32) -> f32 {
 
 fn layer_raster_mapping(
     layer: LayerRef<'_>,
+    graphics_layer: &GraphicsLayer,
     transform: &ProjectiveTransform,
-    parent_content_style: &ContentStyle,
+    context: &RasterTraversalContext<'_>,
 ) -> RasterLayerMapping {
     // A draw group's layer copies the paint of the node whose draws it
     // holds, which reaches it here already.
     let content_style = if layer.draw_phase().is_some() {
-        parent_content_style.clone()
+        context.parent_content_style.clone()
     } else {
-        parent_content_style.under(layer.graphics_layer())
+        context.parent_content_style.under(graphics_layer)
     };
     let bounds = layer.local_bounds();
     // A node's rect that differs from its layer's bounds in some bit maps on
@@ -652,9 +659,9 @@ fn push_layer_items(
     passed_down_before: Option<usize>,
     reuse: &mut Option<Reuse<'_>>,
 ) {
-    let diagnostics = context.diagnostics;
     let transform = layer.transform_to_parent().then(*context.parent_transform);
-    let mapping = layer_raster_mapping(layer, &transform, context.parent_content_style);
+    let graphics_layer = layer.graphics_layer();
+    let mapping = layer_raster_mapping(layer, graphics_layer, &transform, context);
     let styled_content_layer;
     let raster_content_layer = if mapping.draws_plain() {
         &PLAIN_CONTENT_LAYER
@@ -662,7 +669,7 @@ fn push_layer_items(
         styled_content_layer = mapping.content_layer();
         &styled_content_layer
     };
-    report_unsupported_effects(layer.graphics_layer(), diagnostics);
+    report_unsupported_effects(graphics_layer, context.diagnostics);
 
     if mapping.transformed_bounds.width <= 0.0 || mapping.transformed_bounds.height <= 0.0 {
         return;
@@ -710,7 +717,7 @@ fn push_layer_items(
     // A scene draws the surfaces its eye sees in its own space where its
     // first child in 3D comes, far ones first: this renderer keeps no depth
     // between them, and draws a scene behind a doorway flat on its surface.
-    let (mut seen, in_space) = layer_space(layer, &transform, context.in_space);
+    let (mut seen, in_space) = layer_space(layer, graphics_layer, &transform, context.in_space);
     // Worked out at the first child layer: most layers have none.
     let mut children_same_as_before = None;
     for child in layer.items() {
@@ -760,7 +767,7 @@ fn push_layer_items(
                 parent_visual_clip: visual_clip,
                 inherited_translated_snap_anchor: translated_snap_anchor,
                 inherited_translated_content_context: effective_translated_content_context,
-                diagnostics,
+                diagnostics: context.diagnostics,
                 light: context.light,
                 same_as_before,
                 text: context.text,
@@ -816,10 +823,11 @@ fn push_inline_items(
 
 fn layer_space<'a>(
     layer: LayerRef<'a>,
+    graphics_layer: &GraphicsLayer,
     transform: &ProjectiveTransform,
     in_space: bool,
 ) -> (Option<Vec<(LayerRef<'a>, ProjectiveTransform)>>, bool) {
-    if layer.graphics_layer().space.is_none() {
+    if graphics_layer.space.is_none() {
         return (None, in_space);
     }
     let seen = seen_surfaces(layer, transform);
@@ -828,8 +836,13 @@ fn layer_space<'a>(
 }
 
 fn drawn_by_its_scene(layer: LayerRef<'_>, in_space: bool) -> bool {
-    in_space
-        && layer.graphics_layer().space.is_some()
+    in_space && spaced_outside_a_scene(layer)
+}
+
+// Out of line: only a walk within a scene's space reads it.
+#[inline(never)]
+fn spaced_outside_a_scene(layer: LayerRef<'_>) -> bool {
+    layer.graphics_layer().space.is_some()
         && cranpose_render_common::space::scene_of(layer).is_none()
 }
 
@@ -869,6 +882,9 @@ fn layer_snap_anchors(
     (translated_snap_anchor, layer_snap_anchor)
 }
 
+// Out of line: it runs once for a layer with child layers, and inlined its
+// comparison takes room in the walk's code at every layer.
+#[inline(never)]
 fn note_passed_down(
     scene: &mut RasterScene,
     record: usize,

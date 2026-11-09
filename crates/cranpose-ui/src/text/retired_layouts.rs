@@ -52,8 +52,18 @@ impl RetiredLayouts {
     }
 
     pub(crate) fn begin_pass(&mut self) {
-        self.layouts
-            .truncate(self.retired.max(self.taken).saturating_mul(3));
+        let kept = self.retired.max(self.taken).saturating_mul(3);
+        if self.layouts.len() > kept {
+            drop_past(&mut self.layouts, kept);
+        }
         (self.retired, self.taken) = (0, 0);
     }
+}
+
+// forwards on purpose: the layouts go only once texts stop changing, and
+// inlined their drops take room in the code each pass runs.
+#[cold]
+#[inline(never)]
+fn drop_past(layouts: &mut VecDeque<Rc<PreparedTextLayout>>, kept: usize) {
+    layouts.truncate(kept);
 }
