@@ -4,7 +4,10 @@
 
 use std::cell::RefCell;
 
-use cranpose_core::{NodeId, PackedNodeId, collections::id_pages::IdPages};
+use cranpose_core::{
+    NodeId, PackedNodeId,
+    collections::{id_pages::IdPages, map::HashMap},
+};
 use cranpose_foundation::NodeCapabilities;
 
 use super::LayoutNode;
@@ -19,38 +22,58 @@ pub(super) struct LayoutNodeRegistryDebugStats {
     pub(super) capacity: usize,
 }
 
-struct LayoutNodeRegistryEntry {
-    parent: PackedNodeId,
-    modifier_child_capabilities: NodeCapabilities,
-    modifier_locals: Option<ModifierLocalsHandle>,
-}
-
-// The entries by node id: ids come from a counter, so the pages hold the
-// nodes of a screen side by side.
+// The parent of each registered node by node id: ids come from a counter,
+// so the pages hold the nodes of a screen side by side. The modifier locals
+// sit apart, for the few chains that hold any.
 pub(crate) struct LayoutNodeRegistryState {
-    entries: RefCell<IdPages<Option<LayoutNodeRegistryEntry>>>,
+    parents: RefCell<IdPages<Option<PackedNodeId>>>,
+    locals: RefCell<HashMap<NodeId, ModifierLocalsHandle>>,
 }
 
 impl LayoutNodeRegistryState {
     pub(crate) fn new() -> Self {
         Self {
-            entries: RefCell::default(),
+            parents: RefCell::default(),
+            locals: RefCell::default(),
         }
     }
 
     fn register(&self, id: NodeId, node: &LayoutNode) {
-        let entry = LayoutNodeRegistryEntry {
-            parent: PackedNodeId::from(node.parent()),
-            modifier_child_capabilities: node.modifier_child_capabilities(),
-            modifier_locals: node.modifier_locals_handle(),
-        };
-        self.entries
+        self.parents
             .borrow_mut()
-            .update(id.0, |slot| *slot = Some(entry));
+            .update(id.0, |slot| *slot = Some(PackedNodeId::from(node.parent())));
+        self.keep_locals(
+            id,
+            node.modifier_child_capabilities(),
+            node.modifier_locals_handle(),
+        );
     }
 
     fn unregister(&self, id: NodeId) {
-        self.entries.borrow_mut().update(id.0, |slot| *slot = None);
+        self.parents.borrow_mut().update(id.0, |slot| *slot = None);
+        self.locals.borrow_mut().remove(&id);
+    }
+
+    // Keeps the modifier locals of node `id` while its chain holds some.
+    fn keep_locals(
+        &self,
+        id: NodeId,
+        capabilities: NodeCapabilities,
+        modifier_locals: Option<ModifierLocalsHandle>,
+    ) {
+        let held =
+            modifier_locals.filter(|_| capabilities.contains(NodeCapabilities::MODIFIER_LOCALS));
+        match held {
+            Some(locals) => {
+                self.locals.borrow_mut().insert(id, locals);
+            }
+            None => {
+                let mut kept = self.locals.borrow_mut();
+                if !kept.is_empty() {
+                    kept.remove(&id);
+                }
+            }
+        }
     }
 
     pub(super) fn update_entry(
@@ -60,24 +83,29 @@ impl LayoutNodeRegistryState {
         modifier_child_capabilities: NodeCapabilities,
         modifier_locals: Option<ModifierLocalsHandle>,
     ) {
-        if let Some(entry) = self
-            .entries
+        let registered = match self
+            .parents
             .borrow_mut()
             .entry_mut(id.0)
             .and_then(Option::as_mut)
         {
-            entry.parent = PackedNodeId::from(parent);
-            entry.modifier_child_capabilities = modifier_child_capabilities;
-            entry.modifier_locals = modifier_locals;
+            Some(slot) => {
+                *slot = PackedNodeId::from(parent);
+                true
+            }
+            None => false,
+        };
+        if registered {
+            self.keep_locals(id, modifier_child_capabilities, modifier_locals);
         }
     }
 
     #[cfg(test)]
     fn stats(&self) -> LayoutNodeRegistryDebugStats {
-        let entries = self.entries.borrow();
+        let parents = self.parents.borrow();
         LayoutNodeRegistryDebugStats {
-            len: entries.occupied(),
-            capacity: entries.capacity(),
+            len: parents.occupied(),
+            capacity: parents.capacity(),
         }
     }
 
@@ -86,27 +114,25 @@ impl LayoutNodeRegistryState {
         start: Option<NodeId>,
         token: &ModifierLocalToken,
     ) -> Option<ResolvedModifierLocal> {
+        if self.locals.borrow().is_empty() {
+            return None;
+        }
         let mut current = start;
-        while let Some(parent_id) = current {
-            let (next_parent, resolved) = {
-                let entries = self.entries.borrow();
-                if let Some(entry) = entries.entry(parent_id.0).and_then(Option::as_ref) {
-                    let resolved = entry
-                        .modifier_child_capabilities
-                        .contains(NodeCapabilities::MODIFIER_LOCALS)
-                        .then_some(entry.modifier_locals.as_ref())
-                        .flatten()
-                        .and_then(|locals| locals.borrow().resolve(token))
-                        .map(|value| value.with_source(ModifierLocalSource::Ancestor));
-                    (entry.parent.get(), resolved)
-                } else {
-                    (None, None)
-                }
-            };
-            if let Some(value) = resolved {
-                return Some(value);
+        while let Some(node) = current {
+            let locals = self.locals.borrow().get(&node).cloned();
+            let resolved = locals
+                .and_then(|locals| locals.borrow().resolve(token))
+                .map(|value| value.with_source(ModifierLocalSource::Ancestor));
+            if resolved.is_some() {
+                return resolved;
             }
-            current = next_parent;
+            current = self
+                .parents
+                .borrow()
+                .entry(node.0)
+                .copied()
+                .flatten()
+                .and_then(PackedNodeId::get);
         }
         None
     }
