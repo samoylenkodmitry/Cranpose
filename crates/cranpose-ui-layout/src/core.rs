@@ -175,19 +175,16 @@ pub struct Placeable {
     content_offset_x: f32,
     content_offset_y: f32,
     alignment_lines: crate::AlignmentLines,
-    place_target: Option<Rc<dyn PlaceTarget>>,
+    placer: Option<Rc<dyn ChildPlacer>>,
+    slot: u32,
 }
 
-/// What a node-backed [`Placeable`] tells when its parent places it.
-pub trait PlaceTarget {
-    /// Places the node at `(x, y)` in its parent.
-    fn place(&self, x: f32, y: f32);
-}
-
-impl<F: Fn(f32, f32)> PlaceTarget for F {
-    fn place(&self, x: f32, y: f32) {
-        self(x, y);
-    }
+/// What a node-backed [`Placeable`] tells when its parent places it: the
+/// parent's records of its children, one handle for all of them.
+pub trait ChildPlacer {
+    /// Places `child`, whose record sits at `slot` among the records, at
+    /// `(x, y)` in its parent.
+    fn place(&self, slot: u32, child: NodeId, x: f32, y: f32);
 }
 
 impl Placeable {
@@ -200,7 +197,8 @@ impl Placeable {
             content_offset_x: 0.0,
             content_offset_y: 0.0,
             alignment_lines: crate::AlignmentLines::default(),
-            place_target: None,
+            placer: None,
+            slot: 0,
         }
     }
 
@@ -218,18 +216,20 @@ impl Placeable {
             content_offset_x: content_offset.0,
             content_offset_y: content_offset.1,
             alignment_lines: crate::AlignmentLines::default(),
-            place_target: None,
+            placer: None,
+            slot: 0,
         }
     }
 
-    /// Creates a node-backed placeable whose `place()` tells `target`. The
-    /// target is shared, so a node's own measure state can be it without an
-    /// allocation per measure.
-    pub fn with_place_target(
+    /// Creates a node-backed placeable whose `place()` tells `placer` to
+    /// place the record at `slot`. The placer is shared by a parent's
+    /// children, so a measure allocates nothing for it.
+    pub fn with_placer(
         width: f32,
         height: f32,
         node_id: NodeId,
-        target: Rc<dyn PlaceTarget>,
+        placer: Rc<dyn ChildPlacer>,
+        slot: u32,
     ) -> Self {
         Self {
             width,
@@ -238,14 +238,15 @@ impl Placeable {
             content_offset_x: 0.0,
             content_offset_y: 0.0,
             alignment_lines: crate::AlignmentLines::default(),
-            place_target: Some(target),
+            placer: Some(placer),
+            slot,
         }
     }
 
     /// Places the child at the provided coordinates relative to its parent.
     pub fn place(&self, x: f32, y: f32) {
-        if let Some(target) = &self.place_target {
-            target.place(x, y);
+        if let Some(placer) = &self.placer {
+            placer.place(self.slot, self.node_id, x, y);
         }
     }
 

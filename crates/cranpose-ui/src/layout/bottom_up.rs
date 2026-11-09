@@ -561,11 +561,8 @@ impl LayoutBuilderState {
     ) -> bool {
         {
             let runtime_state = parent.layout_runtime_state().borrow();
-            let Some(record) = runtime_state
-                .child_states()
-                .iter()
-                .find(|state| state.node_id == child)
-            else {
+            let records = runtime_state.child_states();
+            let Some(record) = records.iter().find(|state| state.node_id == child) else {
                 return false;
             };
             if record.read_intrinsics.get() {
@@ -606,10 +603,9 @@ fn read_dirty_node(applier: &mut MemoryApplier, mut node: NodeId) -> Option<Dirt
 
 // The constraints `parent`'s last measure gave `child`.
 fn given_constraints(parent: &LayoutNode, child: NodeId) -> Option<Constraints> {
-    parent
-        .layout_runtime_state()
-        .borrow()
-        .child_states()
+    let runtime_state = parent.layout_runtime_state().borrow();
+    let records = runtime_state.child_states();
+    records
         .iter()
         .find(|state| state.node_id == child)
         .and_then(|state| state.measured_constraints.get())

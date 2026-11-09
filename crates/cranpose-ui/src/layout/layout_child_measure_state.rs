@@ -2,12 +2,13 @@
 //! records to the children before a pass over them.
 
 use std::{
-    cell::{Cell, RefCell},
+    cell::{Cell, Ref, RefCell},
+    ops::Deref,
     rc::{Rc, Weak},
 };
 
 use cranpose_core::{MemoryApplier, Node, NodeError, NodeId, NodeIdCell, PackedU64};
-use cranpose_ui_layout::{AlignmentLines, Constraints, MeasurePolicy, Placement};
+use cranpose_ui_layout::{AlignmentLines, ChildPlacer, Constraints, MeasurePolicy, Placement};
 
 use super::{
     LayoutBuilderState, LayoutRuntimeState, MeasuredChild, MeasuredNode, core::Measurable,
@@ -55,13 +56,13 @@ impl LayoutBuilderState {
         position: usize,
         child_id: NodeId,
     ) -> Result<bool, NodeError> {
-        let unchanged = children.id_at(position) == Some(child_id)
-            && children.states[position].rebind_unchanged(self);
-        if unchanged {
+        if children.rebinds_unchanged(position, child_id, self) {
             return Ok(true);
         }
         let bound = applier.with_node::<LayoutNode, _>(child_id, |child| {
-            children.state_at(position, child_id).bind(
+            children.bind_record(
+                position,
+                child_id,
                 LayoutChildBinding {
                     parts: child.layout_parts(),
                     layout_node: true,
@@ -76,7 +77,9 @@ impl LayoutBuilderState {
             Ok(()) => Ok(true),
             Err(NodeError::TypeMismatch { .. }) => {
                 match applier.with_node::<SubcomposeLayoutNode, _>(child_id, |child| {
-                    children.state_at(position, child_id).bind(
+                    children.bind_record(
+                        position,
+                        child_id,
                         LayoutChildBinding {
                             parts: child.layout_parts(),
                             layout_node: false,
@@ -112,6 +115,10 @@ pub(super) struct LayoutChildFrame {
     // The parts of the parent, whose layout state notes whether it placed
     // a child with a z index.
     parent_parts: Weak<LayoutParts>,
+    // The parent's record of each child, in the children's order. A pass
+    // reads and writes a record through its cells; only a bind adds, moves
+    // or drops records.
+    records: RefCell<Vec<LayoutChildMeasureState>>,
 }
 
 /// What a node binds its children for.
@@ -135,7 +142,12 @@ impl LayoutChildFrame {
             parent: NodeIdCell::new(None),
             placed_with_z_index: Cell::new(0),
             parent_parts,
+            records: RefCell::default(),
         }
+    }
+
+    pub(super) fn records(&self) -> Ref<'_, Vec<LayoutChildMeasureState>> {
+        self.records.borrow()
     }
 
     pub(super) fn bind(&self, builder: &Rc<LayoutBuilderState>, parent: NodeId, pass: ChildPass) {
@@ -193,12 +205,27 @@ pub(super) struct LayoutChildBinding<'a> {
     pub(super) descendant_dirty: bool,
 }
 
-/// A parent's record of one child, for each child of every parent: its
-/// shared parts sit in `Cell`s, read by take and put back, where a
-/// `RefCell`'s borrow flag would take a word of every record.
+// A placeable places its child through the record at its slot or, when a
+// bind moved the records after its measure, through the child's record
+// wherever it sits.
+impl ChildPlacer for LayoutChildFrame {
+    fn place(&self, slot: u32, child: NodeId, x: f32, y: f32) {
+        let records = self.records.borrow();
+        let record = records
+            .get(slot as usize)
+            .filter(|record| record.node_id == child)
+            .or_else(|| records.iter().find(|record| record.node_id == child));
+        if let Some(record) = record {
+            record.place(self, x, y);
+        }
+    }
+}
+
+// A parent's record of one child, for each child of every parent, in the
+// parent's frame: its shared parts sit in `Cell`s, read by take and put
+// back, where a `RefCell`'s borrow flag would take a word of every record.
 pub(super) struct LayoutChildMeasureState {
     pub(super) node_id: NodeId,
-    pub(super) frame: Rc<LayoutChildFrame>,
     // The child's shared parts, `None` until the record is first bound.
     pub(super) parts: Cell<Option<Rc<LayoutParts>>>,
     // Whether the record writes the child's size and placed flag: see
@@ -240,10 +267,9 @@ impl LayoutChildMeasureState {
             .unwrap_or_default()
     }
 
-    pub(super) fn new(node_id: NodeId, frame: Rc<LayoutChildFrame>) -> Rc<Self> {
-        Rc::new(Self {
+    pub(super) fn new(node_id: NodeId) -> Self {
+        Self {
             node_id,
-            frame,
             parts: Cell::new(None),
             layout_node: Cell::new(false),
             revision: Cell::new(0),
@@ -255,17 +281,27 @@ impl LayoutChildMeasureState {
             measured: Cell::new(None),
             last_position: Cell::new(None),
             placed_z_index: Cell::new(0.0),
-        })
+        }
     }
 
     /// Binds the child for a measure of its parent. A child with only dirty
     /// nodes below it keeps its cache: it measures again, but may keep its
     /// measurement.
-    pub(super) fn bind(&self, binding: LayoutChildBinding<'_>, pass: &LayoutBuilderState) {
+    pub(super) fn bind(
+        &self,
+        frame: &LayoutChildFrame,
+        binding: LayoutChildBinding<'_>,
+        pass: &LayoutBuilderState,
+    ) {
         let cache = binding.parts.cache();
-        self.bind_cache(cache, binding.dirty, binding.descendant_dirty, pass);
+        self.bind_cache(
+            frame,
+            cache,
+            (binding.dirty, binding.descendant_dirty),
+            pass,
+        );
         self.revision.set(cache.revision());
-        self.note_z_index(binding.parts.layout_state().borrow().z_index());
+        self.note_z_index(frame, binding.parts.layout_state().borrow().z_index());
         let parts = self.parts.take();
         let shared = parts
             .as_ref()
@@ -300,7 +336,7 @@ impl LayoutChildMeasureState {
     // the node, while the node's cache has the revision of the record's last
     // read: the node's parts and parent data are then as the record holds
     // them, and the node's flags sit in its cache. `false` otherwise.
-    fn rebind_unchanged(&self, pass: &LayoutBuilderState) -> bool {
+    fn rebind_unchanged(&self, frame: &LayoutChildFrame, pass: &LayoutBuilderState) -> bool {
         self.layout_node.get()
             && read_cell(&self.parts, |parts| {
                 parts.as_deref().is_some_and(|parts| {
@@ -309,7 +345,7 @@ impl LayoutChildMeasureState {
                     if unchanged {
                         let dirt = cache.dirt();
                         let dirty = dirt.measure || dirt.layout;
-                        self.bind_cache(cache, dirty, dirt.descendant.layout, pass);
+                        self.bind_cache(frame, cache, (dirty, dirt.descendant.layout), pass);
                     }
                     unchanged
                 })
@@ -318,9 +354,9 @@ impl LayoutChildMeasureState {
 
     fn bind_cache(
         &self,
+        frame: &LayoutChildFrame,
         cache: &NodeCache,
-        dirty: bool,
-        descendant_dirty: bool,
+        (dirty, descendant_dirty): (bool, bool),
         pass: &LayoutBuilderState,
     ) {
         let child_epoch = cache.epoch();
@@ -329,7 +365,7 @@ impl LayoutChildMeasureState {
         cache.activate(cache_epoch);
         self.cache_epoch.set(PackedU64::new(cache_epoch));
         self.force_remeasure.set(stale || descendant_dirty);
-        if self.frame.measures() {
+        if frame.measures() {
             self.measured.take();
             self.last_position.set(None);
             self.measured_constraints.set(None);
@@ -339,11 +375,15 @@ impl LayoutChildMeasureState {
 
     /// Runs `f` on the child's layout state with the context of the pass it
     /// measures in; nothing while it is bound to no pass.
-    pub(super) fn with_pass_layout_state(&self, f: impl FnOnce(&mut LayoutState, &AppContext)) {
+    pub(super) fn with_pass_layout_state(
+        &self,
+        frame: &LayoutChildFrame,
+        f: impl FnOnce(&mut LayoutState, &AppContext),
+    ) {
         if !self.layout_node.get() {
             return;
         }
-        let builder = self.frame.builder.borrow();
+        let builder = frame.builder.borrow();
         let Some(builder) = builder.as_ref() else {
             return;
         };
@@ -357,12 +397,12 @@ impl LayoutChildMeasureState {
     // Places the child where its parent's placement says. A policy that
     // placed its placeable there in this pass, as one that places its
     // placeables does, left only the z index to set.
-    pub(super) fn place_at(&self, position: Point, z_index: f32) {
+    pub(super) fn place_at(&self, frame: &LayoutChildFrame, position: Point, z_index: f32) {
         if self.last_position.get() != Some(position) {
-            self.place_retained(position);
+            self.place_retained(frame, position);
         }
         if self.placed_z_index.get().to_bits() != z_index.to_bits() {
-            self.note_z_index(z_index);
+            self.note_z_index(frame, z_index);
             read_cell(&self.parts, |parts| {
                 if let Some(parts) = parts {
                     parts
@@ -376,14 +416,32 @@ impl LayoutChildMeasureState {
 
     // Takes `z_index` as the child's, and counts the child among its
     // parent's children with a z index.
-    fn note_z_index(&self, z_index: f32) {
+    fn note_z_index(&self, frame: &LayoutChildFrame, z_index: f32) {
         let before = self.placed_z_index.replace(z_index);
-        self.frame.count_placed_z_index(before, z_index);
+        frame.count_placed_z_index(before, z_index);
     }
 
-    pub(super) fn place_retained(&self, position: Point) {
+    // Places the child at `(x, y)` as its parent's policy placed it, past
+    // the offset its own measurement puts its content at.
+    fn place(&self, frame: &LayoutChildFrame, x: f32, y: f32) {
+        let internal_offset = read_cell(&self.measured, |measured| {
+            measured
+                .as_ref()
+                .map(|measured| measured.offset)
+                .unwrap_or_default()
+        });
+        self.place_retained(
+            frame,
+            Point {
+                x: x + internal_offset.x,
+                y: y + internal_offset.y,
+            },
+        );
+    }
+
+    pub(super) fn place_retained(&self, frame: &LayoutChildFrame, position: Point) {
         self.last_position.set(Some(position));
-        let builder = self.frame.builder.borrow();
+        let builder = frame.builder.borrow();
         let Some(builder) = builder.as_ref() else {
             return;
         };
@@ -392,7 +450,7 @@ impl LayoutChildMeasureState {
                 parts.layout_state().borrow_mut().place(
                     Some(self.node_id),
                     position,
-                    self.frame.parent.get(),
+                    frame.parent.get(),
                     &builder.context,
                 );
             }
@@ -402,20 +460,28 @@ impl LayoutChildMeasureState {
     /// The intrinsic size of a child that is a layout node, from its
     /// modifier chain and measure policy, without measuring it. `None` for
     /// another node type, which measures for it.
-    pub(super) fn layout_intrinsic(&self, kind: IntrinsicKind) -> Option<f32> {
-        let builder = self.frame.builder.borrow();
+    pub(super) fn layout_intrinsic(
+        &self,
+        frame: &LayoutChildFrame,
+        kind: IntrinsicKind,
+    ) -> Option<f32> {
+        let builder = frame.builder.borrow();
         let builder = builder.as_ref()?;
         match builder.layout_node_intrinsic(self.node_id, kind) {
             Ok(value) => value,
             Err(err) => {
-                self.frame.record_error(err);
+                frame.record_error(err);
                 Some(0.0)
             }
         }
     }
 
-    fn perform_measure(&self, constraints: Constraints) -> Result<Rc<MeasuredNode>, NodeError> {
-        let builder = self.frame.builder.borrow();
+    fn perform_measure(
+        &self,
+        frame: &LayoutChildFrame,
+        constraints: Constraints,
+    ) -> Result<Rc<MeasuredNode>, NodeError> {
+        let builder = frame.builder.borrow();
         let builder = builder.as_ref().ok_or(NodeError::MissingContext {
             id: self.node_id,
             reason: "layout child applier not configured",
@@ -423,8 +489,12 @@ impl LayoutChildMeasureState {
         builder.measure_node(self.node_id, constraints)
     }
 
-    pub(super) fn measure_cached(&self, constraints: Constraints) -> Option<Rc<MeasuredNode>> {
-        if self.frame.measures() {
+    pub(super) fn measure_cached(
+        &self,
+        frame: &LayoutChildFrame,
+        constraints: Constraints,
+    ) -> Option<Rc<MeasuredNode>> {
+        if frame.measures() {
             self.measured_constraints.set(Some(constraints));
         }
         let parts = read_cell(&self.parts, Clone::clone);
@@ -437,15 +507,15 @@ impl LayoutChildMeasureState {
         {
             // A measure clears the placed flag the parent's placement sets
             // again; a child it no longer places then leaves the scene.
-            if self.frame.measures() {
-                self.with_pass_layout_state(|state, context| {
+            if frame.measures() {
+                self.with_pass_layout_state(frame, |state, context| {
                     state.clear_placed(Some(self.node_id), context);
                 });
             }
             return Some(cached);
         }
 
-        match self.perform_measure(constraints) {
+        match self.perform_measure(frame, constraints) {
             Ok(measured) => {
                 self.force_remeasure.set(false);
                 if let Some(cache) = cache {
@@ -454,19 +524,22 @@ impl LayoutChildMeasureState {
                 Some(measured)
             }
             Err(err) => {
-                self.frame.record_error(err);
+                frame.record_error(err);
                 None
             }
         }
     }
 }
 
-// A record that leaves its parent takes its child out of the parent's count
-// of children placed with a z index.
-impl Drop for LayoutChildMeasureState {
-    fn drop(&mut self) {
-        self.frame
-            .count_placed_z_index(self.placed_z_index.get(), 0.0);
+// The records of a node's children, borrowed from their frame for a pass:
+// none for a node that never bound a child.
+pub(super) struct ChildRecords<'a>(Option<Ref<'a, Vec<LayoutChildMeasureState>>>);
+
+impl Deref for ChildRecords<'_> {
+    type Target = [LayoutChildMeasureState];
+
+    fn deref(&self) -> &[LayoutChildMeasureState] {
+        self.0.as_deref().map_or(&[], Vec::as_slice)
     }
 }
 
@@ -475,10 +548,12 @@ impl Drop for LayoutChildMeasureState {
     reason = "a node's children records in their file"
 )]
 impl LayoutRuntimeState {
-    pub(super) fn child_states(&self) -> &[Rc<LayoutChildMeasureState>] {
-        self.children
-            .as_deref()
-            .map_or(&[], |children| children.states.as_slice())
+    pub(super) fn child_states(&self) -> ChildRecords<'_> {
+        ChildRecords(
+            self.children
+                .as_deref()
+                .map(|children| children.frame.records()),
+        )
     }
 
     pub(super) fn child_measurables(&self) -> &[Box<dyn Measurable>] {
@@ -528,7 +603,10 @@ impl LayoutRuntimeState {
         content_offset: Point,
         measured_children: &mut Vec<MeasuredChild>,
     ) {
-        let child_states = self.child_states();
+        let Some(children) = self.children.as_deref() else {
+            return;
+        };
+        let child_states = children.frame.records();
         measured_children.reserve_exact(child_states.len());
         for (index, child_state) in child_states.iter().enumerate() {
             let Some(measured) = child_state.measured.take() else {
@@ -542,7 +620,7 @@ impl LayoutRuntimeState {
                 y: base_position.y + measured.offset.y,
             };
             if let Some(placement) = placement {
-                child_state.place_at(position, placement.z_index);
+                child_state.place_at(&children.frame, position, placement.z_index);
             }
             measured_children.push(MeasuredChild::new(
                 &measured,
@@ -558,7 +636,7 @@ impl LayoutRuntimeState {
 }
 
 pub(super) fn inherited_alignment_lines(
-    child_states: &[Rc<LayoutChildMeasureState>],
+    child_states: &[LayoutChildMeasureState],
     placements: &[Placement],
     placement_indices: &mut Vec<usize>,
 ) -> AlignmentLines {
@@ -605,9 +683,10 @@ pub(super) fn placement_for_child<'a>(
         .filter(|placement| placement.node_id == node_id)
 }
 
-/// What a node keeps for measuring its children, in their order.
+// What a node keeps for measuring its children, in their order: their
+// records in the frame, and a measurable for each that names its record by
+// its place.
 pub(super) struct LayoutChildren {
-    states: Vec<Rc<LayoutChildMeasureState>>,
     measurables: Vec<Box<dyn Measurable>>,
     frame: Rc<LayoutChildFrame>,
 }
@@ -617,51 +696,87 @@ impl LayoutChildren {
     /// four in each of the two lists. Children added later grow the lists
     /// as usual.
     fn with_capacity(count: usize, parent_parts: &Rc<LayoutParts>) -> Self {
+        let frame = LayoutChildFrame::new(Rc::downgrade(parent_parts));
+        frame.records.borrow_mut().reserve_exact(count);
         Self {
-            states: Vec::with_capacity(count),
             measurables: Vec::with_capacity(count),
-            frame: Rc::new(LayoutChildFrame::new(Rc::downgrade(parent_parts))),
+            frame: Rc::new(frame),
         }
     }
 
-    /// The state of the child at `position`, for a pass `bind_children`
-    /// bound. Inlined: the child is nearly always where it was.
+    // Whether the record at `position` holds `child_id` and binds it again
+    // without a look at the node.
+    fn rebinds_unchanged(
+        &self,
+        position: usize,
+        child_id: NodeId,
+        pass: &LayoutBuilderState,
+    ) -> bool {
+        let records = self.frame.records.borrow();
+        records.get(position).is_some_and(|record| {
+            record.node_id == child_id && record.rebind_unchanged(&self.frame, pass)
+        })
+    }
+
+    // Binds the record of `child_id` at `position`, for a pass
+    // `bind_children` bound. Inlined: the child is nearly always where it
+    // was.
     #[inline]
-    fn state_at(&mut self, position: usize, child_id: NodeId) -> &LayoutChildMeasureState {
+    fn bind_record(
+        &mut self,
+        position: usize,
+        child_id: NodeId,
+        binding: LayoutChildBinding<'_>,
+        pass: &LayoutBuilderState,
+    ) {
         if self.id_at(position) != Some(child_id) {
             self.bind_at(position, child_id);
         }
-        &self.states[position]
+        self.frame.records.borrow()[position].bind(&self.frame, binding, pass);
     }
 
     // The id of the child whose record sits at `position`.
     fn id_at(&self, position: usize) -> Option<NodeId> {
-        self.states.get(position).map(|state| state.node_id)
+        self.frame
+            .records
+            .borrow()
+            .get(position)
+            .map(|record| record.node_id)
     }
 
+    // Drops the records past `len`, each taking its child out of the
+    // parent's count of children placed with a z index.
     fn truncate(&mut self, len: usize) {
-        self.states.truncate(len);
+        let mut records = self.frame.records.borrow_mut();
+        for record in records.get(len..).unwrap_or_default() {
+            self.frame
+                .count_placed_z_index(record.placed_z_index.get(), 0.0);
+        }
+        records.truncate(len);
         self.measurables.truncate(len);
     }
 
-    /// Puts the state of `child_id` at `position`: the one it had further
-    /// on, or a new one.
+    // Puts the record of `child_id` at `position`: the one it had further
+    // on, or a new one. A measurable names the record at its own place, so
+    // only the records move.
     #[inline(never)]
     fn bind_at(&mut self, position: usize, child_id: NodeId) {
-        let from = match self.states[position..]
+        let mut records = self.frame.records.borrow_mut();
+        let from = match records[position..]
             .iter()
-            .position(|state| state.node_id == child_id)
+            .position(|record| record.node_id == child_id)
         {
             Some(offset) => position + offset,
             None => {
-                let state = LayoutChildMeasureState::new(child_id, Rc::clone(&self.frame));
-                self.states.push(Rc::clone(&state));
-                self.measurables
-                    .push(Box::new(LayoutChildMeasurable::new(state)));
-                self.states.len() - 1
+                records.push(LayoutChildMeasureState::new(child_id));
+                let slot = records.len() - 1;
+                self.measurables.push(Box::new(LayoutChildMeasurable::new(
+                    Rc::clone(&self.frame),
+                    u32::try_from(slot).expect("a node has fewer than 2^32 children"),
+                )));
+                slot
             }
         };
-        self.states.swap(position, from);
-        self.measurables.swap(position, from);
+        records.swap(position, from);
     }
 }

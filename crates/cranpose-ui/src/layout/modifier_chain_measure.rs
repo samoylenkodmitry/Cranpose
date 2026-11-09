@@ -30,6 +30,7 @@ impl LayoutBuilderState {
     ) -> ModifierChainMeasurement {
         let _reading = self.context.measure_reads.reading(node_id);
         let scope = crate::density::DensityMeasureScope::new(chain.density);
+        let records = runtime_state.child_states();
 
         if !chain.uses_chain {
             let measurement = runtime_state.measure_policy.measure_into(
@@ -40,12 +41,8 @@ impl LayoutBuilderState {
             );
             return ModifierChainMeasurement {
                 size: measurement.size,
-                alignment_lines: inherited_alignment_lines(
-                    runtime_state.child_states(),
-                    placements,
-                    placement_indices,
-                )
-                .with_overrides(measurement.alignment_lines),
+                alignment_lines: inherited_alignment_lines(&records, placements, placement_indices)
+                    .with_overrides(measurement.alignment_lines),
                 content_offset: Point::default(),
                 offset: chain.offset,
                 window_root: chain.window_root,
@@ -69,7 +66,7 @@ impl LayoutBuilderState {
             &runtime_state.measure_policy,
             &scope,
             runtime_state.child_measurables(),
-            runtime_state.child_states(),
+            &records,
             placements,
             placement_indices,
         );

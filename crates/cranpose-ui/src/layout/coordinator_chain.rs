@@ -50,7 +50,7 @@ pub(super) struct CoordinatorFrame<'a> {
     measure_policy: &'a Rc<dyn MeasurePolicy>,
     scope: &'a dyn cranpose_ui_layout::MeasureScope,
     measurables: &'a [Box<dyn Measurable>],
-    child_states: &'a [Rc<LayoutChildMeasureState>],
+    child_states: &'a [LayoutChildMeasureState],
     placements: RefCell<&'a mut Vec<Placement>>,
     placement_indices: RefCell<&'a mut Vec<usize>>,
     context: RefCell<LayoutNodeContext>,
@@ -61,7 +61,7 @@ impl<'a> CoordinatorFrame<'a> {
         measure_policy: &'a Rc<dyn MeasurePolicy>,
         scope: &'a dyn cranpose_ui_layout::MeasureScope,
         measurables: &'a [Box<dyn Measurable>],
-        child_states: &'a [Rc<LayoutChildMeasureState>],
+        child_states: &'a [LayoutChildMeasureState],
         placements: &'a mut Vec<Placement>,
         placement_indices: &'a mut Vec<usize>,
     ) -> Self {

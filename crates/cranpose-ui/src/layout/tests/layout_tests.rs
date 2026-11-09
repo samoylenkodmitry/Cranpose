@@ -3,13 +3,11 @@ use std::{
     rc::Rc,
 };
 
-use cranpose_core::{Applier, ConcreteApplierHost, MemoryApplier, Node};
-use cranpose_ui_layout::{MeasurePolicy, MeasureResult, MeasureScope, Placement};
+use cranpose_core::{Applier, MemoryApplier, Node};
+use cranpose_ui_layout::{FlexParentData, MeasurePolicy, MeasureResult, MeasureScope, Placement};
 
 use super::{
     core::{Alignment, Measurable},
-    layout_child_measurable::LayoutChildMeasurable,
-    layout_child_measure_state::{LayoutChildBinding, LayoutChildFrame},
     *,
 };
 use crate::{
@@ -2072,59 +2070,92 @@ fn property_change_bubbles_without_manual_call() -> Result<(), NodeError> {
     Ok(())
 }
 
+// Records what each child's parent data says while its parent measures.
+#[derive(Clone)]
+struct ParentDataPolicy {
+    seen: Rc<RefCell<Vec<(cranpose_ui_layout::ParentData, Option<FlexParentData>)>>>,
+}
+
+impl PartialEq for ParentDataPolicy {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.seen, &other.seen)
+    }
+}
+
+impl MeasurePolicy for ParentDataPolicy {
+    fn measure(
+        &self,
+        _scope: &dyn MeasureScope,
+        measurables: &[Box<dyn Measurable>],
+        _constraints: Constraints,
+    ) -> MeasureResult {
+        self.seen.borrow_mut().extend(
+            measurables
+                .iter()
+                .map(|child| (child.parent_data(), child.flex_parent_data())),
+        );
+        MeasureResult::new(Size::default(), Vec::new())
+    }
+
+    fn min_intrinsic_width(&self, _measurables: &[Box<dyn Measurable>], _height: f32) -> f32 {
+        0.0
+    }
+
+    fn max_intrinsic_width(&self, _measurables: &[Box<dyn Measurable>], _height: f32) -> f32 {
+        0.0
+    }
+
+    fn min_intrinsic_height(&self, _measurables: &[Box<dyn Measurable>], _width: f32) -> f32 {
+        0.0
+    }
+
+    fn max_intrinsic_height(&self, _measurables: &[Box<dyn Measurable>], _width: f32) -> f32 {
+        0.0
+    }
+}
+
 #[test]
-fn parent_data_uses_resolved_layout_properties() {
+fn parent_data_uses_resolved_layout_properties() -> Result<(), NodeError> {
     let _app_context = crate::render_state::app_context_test_scope();
     let mut applier = MemoryApplier::new();
-    let layout_node = LayoutNode::new(
+    let child = applier.create(Box::new(LayoutNode::new(
         Modifier::empty()
             .columnWeight(1.0, true)
             .alignInBox(Alignment::BOTTOM_END)
             .alignInRow(VerticalAlignment::Bottom)
             .alignInColumn(HorizontalAlignment::End),
         Rc::new(MaxSizePolicy),
+    )));
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let mut root = LayoutNode::new(
+        Modifier::empty(),
+        Rc::new(ParentDataPolicy {
+            seen: Rc::clone(&seen),
+        }),
     );
-    let node_id = applier.create(Box::new(layout_node));
-    let context = crate::render_state::require_current_app_context("a layout test");
-    let builder =
-        LayoutBuilder::new_with_epoch(Rc::new(ConcreteApplierHost::new(applier)), 1, &context);
-    let frame = Rc::new(LayoutChildFrame::new(std::rc::Weak::new()));
-    let state = LayoutChildMeasureState::new(node_id, Rc::clone(&frame));
-    builder
-        .state
-        .applier
-        .borrow_typed()
-        .with_node::<LayoutNode, _>(node_id, |node| {
-            state.bind(
-                LayoutChildBinding {
-                    parts: node.layout_parts(),
-                    layout_node: true,
-                    parent_data: node.parent_data(),
-                    dirty: false,
-                    descendant_dirty: false,
-                },
-                &builder.state,
-            );
-        })
-        .expect("node available");
-    let measurable = LayoutChildMeasurable::new(state);
-    assert_eq!(
-        measurable.parent_data(),
-        cranpose_ui_layout::ParentData::default(),
-        "a child reports no parent data outside its parent's measure"
-    );
-    frame.bind(&builder.state, node_id, ChildPass::Measure);
+    root.children.push(child);
+    let root_id = applier.create(Box::new(root));
 
-    let parent_data = measurable
-        .flex_parent_data()
-        .expect("expected weight to propagate via resolved modifiers");
-    assert_eq!(parent_data.weight, 1.0);
-    assert!(parent_data.fill);
+    measure_layout(
+        &mut applier,
+        root_id,
+        Size {
+            width: 100.0,
+            height: 100.0,
+        },
+    )?;
 
-    let parent_data = measurable.parent_data();
+    let seen = seen.borrow();
+    let [(parent_data, flex)] = seen.as_slice() else {
+        panic!("the parent measured its one child once, saw {}", seen.len());
+    };
+    let flex = flex.expect("expected weight to propagate via resolved modifiers");
+    assert_eq!(flex.weight, 1.0);
+    assert!(flex.fill);
     assert_eq!(parent_data.box_alignment, Some(Alignment::BOTTOM_END));
     assert_eq!(parent_data.row_alignment, Some(VerticalAlignment::Bottom));
     assert_eq!(parent_data.column_alignment, Some(HorizontalAlignment::End));
+    Ok(())
 }
 
 #[test]
