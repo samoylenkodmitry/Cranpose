@@ -1,12 +1,12 @@
 //! The shapes of a range of a recorder's segments: how many there are,
-//! where they draw, what they hash to and the primitives they came from, for
-//! a reader of one run of a recorder that many runs share.
+//! where they draw and the primitives they came from, for a reader of one
+//! run of a recorder that many runs share.
 
-use std::{hash::Hasher, ops::Range, slice};
+use std::{ops::Range, slice};
 
 use super::{
-    NO_EXPLICIT_STOPS, NO_SEGMENT_KEY, RecordLane, RecordSegment, ShapeRecorder,
-    materialize::materialize_shape, record_coverage,
+    NO_SEGMENT_KEY, RecordLane, RecordSegment, ShapeRecorder, materialize::materialize_shape,
+    record_coverage,
 };
 use crate::{DrawPrimitive, Rect};
 
@@ -77,31 +77,6 @@ impl ShapeRecorder {
         self.shapes_in(segments)
             .map(|index| record_coverage(&bodies[index]))
             .reduce(|covered, coverage| covered.union(coverage))
-    }
-
-    /// Writes what the shapes in `segments` draw into `state`: their
-    /// records and the gradients they paint with.
-    pub fn hash_in(&self, segments: &Range<u32>, state: &mut impl Hasher) {
-        let tables = &self.tables;
-        for index in self.shapes_in(segments) {
-            let body = &tables.shapes.bodies()[index];
-            state.write(bytemuck::bytes_of(body));
-            state.write(bytemuck::bytes_of(&tables.shapes.curves()[index]));
-            let Some(brush) = (body.brush as usize)
-                .checked_sub(1)
-                .map(|brush| &tables.brushes()[brush])
-            else {
-                continue;
-            };
-            state.write(bytemuck::bytes_of(brush));
-            let stops = brush.stop_start as usize..(brush.stop_start + brush.stop_count) as usize;
-            state.write(bytemuck::cast_slice(&tables.stops()[stops]));
-            if brush.explicit_len != NO_EXPLICIT_STOPS {
-                let explicit = brush.explicit_start as usize
-                    ..(brush.explicit_start + brush.explicit_len) as usize;
-                state.write(bytemuck::cast_slice(&tables.explicit_stops()[explicit]));
-            }
-        }
     }
 
     /// The primitive each shape in `segments` was recorded from, in order.

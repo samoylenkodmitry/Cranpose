@@ -238,6 +238,7 @@ impl SceneStore {
     /// in another order and the own draws it redrew. Readers read the store
     /// after it.
     pub fn finish_update(&mut self) {
+        self.release_removed_shapes();
         super::child_order::settle(self);
         own_marks::settle(self);
         super::growth_slack::trim(self);

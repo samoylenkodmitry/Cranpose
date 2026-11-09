@@ -53,6 +53,14 @@ impl<T> Slab<T> {
         self.free
             .push(u32::try_from(index).expect("fewer than 2^32 entries"));
     }
+    // Takes the entry at `index` out; its index goes to the next one put in.
+    pub(crate) fn take(&mut self, index: usize) -> Option<T> {
+        let value = self.entries.get_mut(index)?.take()?;
+        self.free
+            .push(u32::try_from(index).expect("fewer than 2^32 entries"));
+        Some(value)
+    }
+
     pub(crate) fn get(&self, index: usize) -> Option<&T> {
         self.entries.get(index)?.as_ref()
     }

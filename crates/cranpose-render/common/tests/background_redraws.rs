@@ -3,9 +3,11 @@ use std::{cell::RefCell, rc::Rc};
 use cranpose_core::MutableState;
 use cranpose_render_common::graph_scene::Scene;
 use cranpose_ui::{BoxSpec, Modifier, TestComposition};
-use cranpose_ui_graphics::{Color, Size};
+use cranpose_ui_graphics::{Brush, Color, Rect, Size};
 
-use crate::scene_probe::{fresh_graph, initial_graph, solid_rect_colors, update_scene};
+use crate::scene_probe::{
+    fresh_graph, initial_graph, solid_rect_colors, solid_rects, update_scene,
+};
 
 const STILL_BOXES: usize = 20;
 
@@ -94,4 +96,90 @@ fn backgrounds_drawn_anew_in_turn_keep_the_store_heap_flat() {
         heap[29]
     );
     assert_paints_as_fresh(&scene, &mut composition);
+}
+
+// Sets the step `content` reads to each frame's number for `frames` frames
+// and checks after each that the updated scene paints the rects a fresh
+// one does, where they lie.
+fn assert_steps_paint_as_fresh(content: impl Fn(MutableState<u32>) + 'static, frames: u32) {
+    let step = Rc::new(RefCell::new(None));
+    let kept = Rc::clone(&step);
+    let content: Rc<dyn Fn(MutableState<u32>)> = Rc::new(content);
+    let mut composition = cranpose_ui::run_test_composition(move || {
+        let state = cranpose_core::rememberMutableStateOf(|| 0u32);
+        *kept.borrow_mut() = Some(state);
+        let content = Rc::clone(&content);
+        cranpose_ui::Box(
+            Modifier::empty().size(Size::new(200.0, 200.0)),
+            BoxSpec::default(),
+            move || content(state),
+        );
+    });
+    let root = composition.root().expect("a root");
+    let viewport = Size::new(240.0, 240.0);
+    let mut scene = initial_graph(&mut composition, root, viewport);
+    let state = step.borrow().expect("the state");
+    for frame in 1..=frames {
+        state.set(frame);
+        update_scene(&mut composition, root, viewport, &mut scene);
+        assert_eq!(
+            solid_rects(&scene),
+            solid_rects(&fresh_graph(&mut composition, root)),
+            "frame {frame}: the updated scene paints the rects a fresh one does"
+        );
+    }
+}
+
+#[test]
+fn a_node_drawn_anew_over_a_still_background_paints_both() {
+    assert_steps_paint_as_fresh(
+        |step| {
+            cranpose_ui::Box(
+                Modifier::empty()
+                    .size(Size::new(40.0, 40.0))
+                    .background(Color(0.0, 0.5, 0.0, 1.0))
+                    .draw_behind(move |scope| {
+                        let width = (step.get() % 30) as f32 + 1.0;
+                        scope.draw_rect_at(
+                            Rect {
+                                x: 0.0,
+                                y: 0.0,
+                                width,
+                                height: 4.0,
+                            },
+                            Brush::solid(Color(0.0, 0.0, 1.0, 1.0)),
+                        );
+                    }),
+                BoxSpec::default(),
+                || {},
+            );
+        },
+        40,
+    );
+}
+
+#[test]
+fn a_background_follows_its_color_and_its_node_size_beside_a_still_one() {
+    assert_steps_paint_as_fresh(
+        |step| {
+            let step = step.get();
+            cranpose_ui::Box(
+                Modifier::empty()
+                    .size(Size::new(40.0, 40.0))
+                    .background(Color((step % 7) as f32 / 7.0, 0.0, 0.0, 1.0))
+                    .padding(4.0)
+                    .background(Color(0.0, 0.0, 0.5, 1.0)),
+                BoxSpec::default(),
+                || {},
+            );
+            cranpose_ui::Box(
+                Modifier::empty()
+                    .size(Size::new(10.0 + (step % 20) as f32, 10.0))
+                    .background(Color(0.5, 0.5, 0.0, 1.0)),
+                BoxSpec::default(),
+                || {},
+            );
+        },
+        40,
+    );
 }

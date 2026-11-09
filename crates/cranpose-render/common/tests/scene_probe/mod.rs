@@ -7,7 +7,7 @@ use cranpose_render_common::{
     scene_store::{ItemRef, LayerRef},
 };
 use cranpose_ui::{LayoutEngine, Size, TestComposition};
-use cranpose_ui_graphics::{Brush, Color, DrawPrimitive};
+use cranpose_ui_graphics::{Brush, Color, DrawPrimitive, Rect};
 
 pub(crate) fn painted_text(layer: LayerRef<'_>, out: &mut Vec<String>) {
     out.extend(layer.painted_text());
@@ -97,16 +97,25 @@ pub(crate) fn fresh_graph(composition: &mut TestComposition, root: NodeId) -> Sc
 
 // Every solid rectangle color `scene` paints, in draw order.
 pub(crate) fn solid_rect_colors(scene: &Scene) -> Vec<Color> {
-    let mut colors = Vec::new();
-    painted_solid_rect_colors(scene.root_layer().expect("a scene"), &mut colors);
-    colors
+    solid_rects(scene)
+        .into_iter()
+        .map(|(_, color)| color)
+        .collect()
 }
 
-pub(crate) fn painted_solid_rect_colors(layer: LayerRef<'_>, colors: &mut Vec<Color>) {
+// Every solid rectangle `scene` paints, in its record's space, with its
+// color, in draw order.
+pub(crate) fn solid_rects(scene: &Scene) -> Vec<(Rect, Color)> {
+    let mut rects = Vec::new();
+    painted_solid_rects(scene.root_layer().expect("a scene"), &mut rects);
+    rects
+}
+
+fn painted_solid_rects(layer: LayerRef<'_>, rects: &mut Vec<(Rect, Color)>) {
     for item in layer.items() {
         let primitives: Vec<DrawPrimitive> = match item {
             ItemRef::Layer(child) | ItemRef::Leaf(child) => {
-                painted_solid_rect_colors(child, colors);
+                painted_solid_rects(child, rects);
                 continue;
             }
             ItemRef::Run(run) => run.primitives().collect(),
@@ -114,14 +123,15 @@ pub(crate) fn painted_solid_rect_colors(layer: LayerRef<'_>, colors: &mut Vec<Co
             ItemRef::Draw(draw) => vec![draw.primitive.clone()],
             ItemRef::Text(_) => continue,
         };
-        colors.extend(
+        rects.extend(
             primitives
                 .into_iter()
                 .filter_map(|primitive| match primitive {
                     DrawPrimitive::Rect {
+                        rect,
                         brush: Brush::Solid(color),
                         ..
-                    } => Some(color),
+                    } => Some((rect, color)),
                     _ => None,
                 }),
         );

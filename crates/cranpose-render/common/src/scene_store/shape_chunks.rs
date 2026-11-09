@@ -7,15 +7,12 @@
 // shapes an item took last go with the item at once. A chunk whose next
 // shape would grow it, or that is full, first drops the shapes no item
 // draws once they are a quarter of it and at least `MIN_DEAD_SHAPES`.
+// An item removed in an update keeps its shapes until the update ends: a
+// background drawn again with the same shapes takes them back.
 
-use std::{
-    hash::Hasher,
-    num::NonZeroU32,
-    ops::Range,
-    sync::{Arc, OnceLock},
-};
+use std::{num::NonZeroU32, ops::Range, sync::Arc};
 
-use cranpose_ui_graphics::{DrawPrimitive, FxHasher, Rect, ShapeRecorder};
+use cranpose_ui_graphics::{DrawPrimitive, Rect, ShapeRecorder};
 
 use super::{Item, ItemKind, SceneStore, slab::Slab};
 
@@ -61,8 +58,8 @@ pub struct ShapeRun {
     coverage: Rect,
     segments: Range<u32>,
     // A hash of what the shapes draw, which the chunk's other shapes leave
-    // alone, made when a reader first asks: the pixel renderer reads none.
-    print: OnceLock<u64>,
+    // alone, from what recorded them.
+    print: u64,
 }
 
 /// A shape item as a reader sees it: shapes recorded into a chunk that
@@ -99,12 +96,9 @@ impl<'a> ShapeRef<'a> {
 
     /// A hash of what the item draws, which the other items of its chunk
     /// leave alone.
+    #[inline]
     pub fn print(self) -> u64 {
-        *self.run.print.get_or_init(|| {
-            let mut print = FxHasher::default();
-            self.recorder.hash_in(&self.run.segments, &mut print);
-            print.finish()
-        })
+        self.run.print
     }
 
     /// The primitives the item draws, in order.
@@ -125,6 +119,10 @@ pub(super) struct ShapeChunks {
     // One bit a segment of the chunk that drops its dead shapes, set for
     // the segments a run names: room the next such chunk takes again.
     live: Vec<u64>,
+    // The runs of the items the update in progress removed, in the order
+    // it removed them: an item added with the shapes of the last one takes
+    // its run back. They go when the update ends or records other shapes.
+    removed: Vec<ShapeRun>,
 }
 
 #[derive(Clone)]
@@ -136,11 +134,32 @@ struct ShapeChunk {
 }
 
 impl ShapeChunks {
-    // Records the shapes of one item with `record` into a chunk that takes
-    // them, and returns where they went.
+    // The run of the last removed item when its shapes have `print`; else
+    // releases the removed runs and gives `None`.
+    fn take_removed(&mut self, print: u64) -> Option<ShapeRun> {
+        if self.removed.last().is_some_and(|run| run.print == print) {
+            return self.removed.pop();
+        }
+        self.release_removed();
+        None
+    }
+
+    // Releases the runs of the items the update removed, in the order it
+    // removed them.
+    fn release_removed(&mut self) {
+        let mut removed = std::mem::take(&mut self.removed);
+        for run in removed.drain(..) {
+            self.release(&run);
+        }
+        self.removed = removed;
+    }
+
+    // Records the shapes of one item with `record`, which draw what `print`
+    // hashes, into a chunk that takes them, and returns where they went.
     fn record(
         &mut self,
         runs: &mut Slab<ShapeRun>,
+        print: u64,
         record: impl FnOnce(&mut ShapeRecorder),
     ) -> ShapeRun {
         let chunk = self.writable_chunk(runs);
@@ -160,7 +179,7 @@ impl ShapeChunks {
             shapes,
             coverage: recorder.coverage_in(&segments).unwrap_or_default(),
             segments,
-            print: OnceLock::new(),
+            print,
         }
     }
 
@@ -265,6 +284,7 @@ impl ShapeChunks {
         self.chunks.capacity() * size_of::<Option<ShapeChunk>>()
             + self.empty.capacity() * size_of::<ChunkId>()
             + self.live.capacity() * size_of::<u64>()
+            + self.removed.capacity() * size_of::<ShapeRun>()
             + self
                 .chunks
                 .iter()
@@ -317,9 +337,17 @@ fn keep_live_runs(
 #[expect(clippy::multiple_inherent_impl, reason = "one file per concern")]
 impl SceneStore {
     /// Adds an item of the shapes `record` records into a chunk the store
-    /// shares among its shape items.
-    pub fn add_shapes(&mut self, record: impl FnOnce(&mut ShapeRecorder)) -> Item {
-        let run = self.shape_chunks.record(&mut self.shape_runs, record);
+    /// shares among its shape items. `print` is a hash of what they draw,
+    /// the same for the same shapes: the item the update in progress removed
+    /// last gives its shapes back when they have that print, and `record`
+    /// does not run.
+    pub fn add_shapes(&mut self, print: u64, record: impl FnOnce(&mut ShapeRecorder)) -> Item {
+        let run = match self.shape_chunks.take_removed(print) {
+            Some(run) => run,
+            None => self
+                .shape_chunks
+                .record(&mut self.shape_runs, print, record),
+        };
         Item::new(ItemKind::Shape, self.shape_runs.insert(run))
     }
 
@@ -333,12 +361,17 @@ impl SceneStore {
         }
     }
 
-    // Removes the shape item at `index` of the shape runs.
+    // Removes the shape item at `index` of the shape runs. Its shapes stay
+    // until the update ends, for an item that draws them again.
     pub(super) fn remove_shapes(&mut self, index: usize) {
-        if let Some(run) = self.shape_runs.get(index) {
-            self.shape_chunks.release(run);
-            self.shape_runs.remove(index);
+        if let Some(run) = self.shape_runs.take(index) {
+            self.shape_chunks.removed.push(run);
         }
+    }
+
+    // Lets go of the shapes of the items the update removed.
+    pub(super) fn release_removed_shapes(&mut self) {
+        self.shape_chunks.release_removed();
     }
 
     // The heap the shape items and their chunks hold.
