@@ -46,12 +46,7 @@ where
         if !known {
             observations.lost_for.get_or_insert(0);
         } else if !changes.is_empty() {
-            // A node one surface left and another joined is drawn.
-            changes.sort_unstable_by_key(|change| {
-                (change.node(), matches!(change, DrawOwnerChange::Left(_)))
-            });
-            changes.dedup_by_key(|change| change.node());
-            changes.retain(|change| matches!(change, DrawOwnerChange::Left(_)));
+            DrawOwnerChange::retain_undrawn(changes);
             if !changes.is_empty() {
                 cranpose_ui::retire_draw_observations(|node| {
                     changes

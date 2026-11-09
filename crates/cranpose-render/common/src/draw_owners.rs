@@ -24,6 +24,28 @@ impl DrawOwnerChange {
             Self::Joined(node) | Self::Left(node) => node,
         }
     }
+
+    /// Keeps in `changes`, the changes several scenes read for one frame,
+    /// the nodes that left a scene and joined none, once each and sorted. A
+    /// node one scene left and another joined is drawn.
+    pub fn retain_undrawn(changes: &mut Vec<Self>) {
+        sort_by_node(changes);
+        let mut kept = 0;
+        let mut index = 0;
+        while let Some(change) = changes.get(index) {
+            let node = change.node();
+            let mut drawn = false;
+            while let Some(change) = changes.get(index).filter(|change| change.node() == node) {
+                drawn |= matches!(change, Self::Joined(_));
+                index += 1;
+            }
+            if !drawn {
+                changes[kept] = Self::Left(node);
+                kept += 1;
+            }
+        }
+        changes.truncate(kept);
+    }
 }
 
 pub(crate) struct DrawOwners {
@@ -88,8 +110,7 @@ impl DrawOwners {
             return false;
         }
         // The latest change of each node stands.
-        let read = &mut changes[first..];
-        read.sort_by_key(|change| change.node());
+        sort_by_node(&mut changes[first..]);
         let mut kept = first;
         for index in first..changes.len() {
             if kept > first && changes[kept - 1].node() == changes[index].node() {
@@ -102,6 +123,13 @@ impl DrawOwners {
         changes.truncate(kept);
         true
     }
+}
+
+// Sorts `changes` by node and keeps the order of the changes of a node. The
+// draw owners and the shell share this one sort, which the ESP32 keeps in
+// flash once.
+fn sort_by_node(changes: &mut [DrawOwnerChange]) {
+    changes.sort_by_key(|change| change.node());
 }
 
 // The node the record of `entry` draws, when it is the node's own record:
