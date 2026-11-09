@@ -1,13 +1,15 @@
 // The frame's arena tables: the per-pass chunks small runs are copied
 // into, in generations a copied arena keeps and a mapped arena cycles.
 
+use cranpose_render_common::recent_peak::RecentPeak;
+
 use super::*;
 
-/// The frame's arena tables. A copied arena keeps its last generation from
-/// frame to frame, since the copies into it queue behind the draws that
-/// read it. A mapped arena writes each placement into a generation it
-/// keeps mapped until the frame is staged; its generations then cycle
-/// through a [`MappedPool`] while the GPU reads them.
+// A copied arena keeps its last generation from frame to frame, since the
+// copies into it queue behind the draws that read it. A mapped arena writes
+// each placement into a generation it keeps mapped until the frame is
+// staged; its generations then cycle through a `MappedPool` while the GPU
+// reads them.
 pub(super) struct ArenaTables {
     mode: RunBufferMode,
     upload: UploadMode,
@@ -18,18 +20,19 @@ pub(super) struct ArenaTables {
     pub(super) staging: ArenaStaging,
     pool: MappedPool<ArenaGeneration>,
     pub(super) requests: MapRequests,
-    /// The bytes of each table the last mapped frame placed: a frame opens
-    /// in a generation that holds them.
+    // The bytes of each table the last mapped frame placed: a frame opens
+    // in a generation that holds them.
     last_totals: [u64; BUFFER_COUNT],
-    /// Whether the frame's mapped generations were unmapped for its submit.
+    // Whether the frame's mapped generations were unmapped for its submit.
     sealed: bool,
-    /// The frame's mapped writes so far, reported when it is staged.
+    // The frame's mapped writes so far, reported when it is staged.
     written: FrameCommandStats,
+    // The most bytes of each table a frame placed lately: a generation far
+    // larger than recent frames fill goes, so the first frame of a screen,
+    // which places every run, does not hold its size for the frames after.
+    recent: [RecentPeak; BUFFER_COUNT],
 }
 
-/// The capacities of the generation a placement that does not fit `current`
-/// opens: what each table's placement asked for, at least the tables'
-/// initial sizes.
 fn grown_capacities(
     placements: &[UploadPlacement; BUFFER_COUNT],
     current: Option<&ArenaGeneration>,
@@ -63,19 +66,11 @@ const UNIFORM_CHUNKS: [usize; BUFFER_COUNT] = [
 
 impl ArenaTables {
     pub(super) fn new(mode: RunBufferMode, upload: UploadMode, alignment: u64) -> Self {
-        let bindings = std::array::from_fn(|index| {
-            let elements = if mode.storage {
-                1
-            } else {
-                UNIFORM_CHUNKS[index]
-            };
-            (elements * ELEMENT_SIZES[index]) as u64
-        });
         Self {
             mode,
             upload,
             alignment,
-            bindings,
+            bindings: first_bindings(mode),
             generations: Vec::new(),
             chunks: Vec::new(),
             staging: ArenaStaging::default(),
@@ -84,6 +79,7 @@ impl ArenaTables {
             last_totals: [0; BUFFER_COUNT],
             sealed: false,
             written: FrameCommandStats::default(),
+            recent: [RecentPeak::default(); BUFFER_COUNT],
         }
     }
 
@@ -141,11 +137,11 @@ impl ArenaTables {
         }
     }
 
-    /// A generation of at least `capacities` bytes per table: a mapped
-    /// arena reuses a free one, which at a frame's start holds the last
-    /// frame's tables with room to grow, and makes one when none is free.
-    /// Free generations that do not hold the frame's tables go, so the
-    /// pool keeps only generations a frame can take.
+    // A generation of at least `capacities` bytes per table: a mapped arena
+    // reuses a free one, which at a frame's start holds the last frame's
+    // tables with room to grow, and makes one when none is free. Free
+    // generations that do not hold the frame's tables go, and those far
+    // larger than recent frames fill.
     fn open(
         &mut self,
         device: &wgpu::Device,
@@ -164,8 +160,9 @@ impl ArenaTables {
         } else {
             capacities
         };
+        let recent = self.recent;
         let taken = self.pool.take(device, |free| {
-            free.retain(|generation| generation.holds(wanted));
+            free.retain(|generation| generation.holds(wanted) && !oversized(generation, &recent));
             free.pop()
         });
         match taken {
@@ -219,9 +216,6 @@ impl ArenaTables {
         }
     }
 
-    /// Writes the frame's tables: a copied arena's staged bytes through
-    /// the recorder, one copy per table; a mapped arena wrote them as they
-    /// were placed and unmaps its generations for the submit.
     pub(super) fn stage_pending(
         &mut self,
         device: &wgpu::Device,
@@ -259,12 +253,31 @@ impl ArenaTables {
         stats
     }
 
-    /// Ends the frame: a mapped arena's staged generations go to the pool,
-    /// to map again once the frame is submitted; otherwise the last
-    /// generation stays for the next frame. A mapped generation the frame
-    /// never staged is still mapped and stays writable.
+    // Ends the frame: a mapped arena's staged generations go to the pool,
+    // to map again once the frame is submitted; otherwise the last
+    // generation stays for the next frame, unless it is far larger than
+    // recent frames fill. A mapped generation the frame never staged is
+    // still mapped and stays writable.
     pub(super) fn reset(&mut self) {
         self.written = FrameCommandStats::default();
+        let first = first_bindings(self.mode);
+        for (table, recent) in self.recent.iter_mut().enumerate() {
+            let placed: u64 = self
+                .generations
+                .iter()
+                .map(|generation| generation.cursors[table])
+                .sum();
+            recent.note(bytes(placed));
+            // A storage binding grows to the largest table a frame placed;
+            // far above recent frames it goes back, and grows again on
+            // demand, so new generations open at what frames now place.
+            if recent
+                .shrink_to(bytes(self.bindings[table]), bytes(first[table]))
+                .is_some()
+            {
+                self.bindings[table] = first[table];
+            }
+        }
         if std::mem::take(&mut self.sealed) {
             for generation in self.generations.drain(..) {
                 self.pool.recycle(generation, &mut self.requests);
@@ -273,8 +286,45 @@ impl ArenaTables {
         }
         let keep = self.generations.len().saturating_sub(1);
         self.generations.drain(..keep);
+        if self
+            .generations
+            .last()
+            .is_some_and(|generation| oversized(generation, &self.recent))
+        {
+            self.generations.clear();
+        }
         for generation in &mut self.generations {
             generation.clear();
         }
     }
+}
+
+// The binding sizes an arena starts with: one element a table for storage
+// bindings, which grow with the tables, and the fixed windows of uniform
+// ones.
+fn first_bindings(mode: RunBufferMode) -> [u64; BUFFER_COUNT] {
+    std::array::from_fn(|index| {
+        let elements = if mode.storage {
+            1
+        } else {
+            UNIFORM_CHUNKS[index]
+        };
+        (elements * ELEMENT_SIZES[index]) as u64
+    })
+}
+
+fn bytes(size: u64) -> usize {
+    usize::try_from(size).unwrap_or(usize::MAX)
+}
+
+// Whether `generation` holds more than four times what `recent` frames
+// placed in one of its tables, past the size a table opens at.
+fn oversized(generation: &ArenaGeneration, recent: &[RecentPeak; BUFFER_COUNT]) -> bool {
+    (0..BUFFER_COUNT).any(|table| {
+        let least = (INITIAL_ARENA_CAPACITIES[table] * ELEMENT_SIZES[table])
+            .max(bytes(crate::frame_graph::MIN_UPLOAD_BUFFER_BYTES));
+        recent[table]
+            .shrink_to(bytes(generation.capacities[table]), least)
+            .is_some()
+    })
 }
