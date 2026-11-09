@@ -566,7 +566,7 @@ fn record_unplaced_parents(
         }
         for &child in &children {
             match read_layout_node(applier, child, |state, _| state.unplaced_in(pass)) {
-                Ok(Some(true)) => context.note_geometry_scene_node(parent),
+                Ok(Some(true)) => context.record_geometry_scene_node(parent),
                 Ok(Some(false)) => parents.push(child),
                 Ok(None) | Err(_) => {}
             }
@@ -1493,7 +1493,8 @@ impl LayoutBuilderState {
                 child_state.measured.take();
             }
             if runtime_state.take_moved_coordinators() {
-                self.context.note_geometry_scene_node(node_id);
+                let mut layout_state = parts.layout_state().borrow_mut();
+                layout_state.note_geometry_change(node_id, &self.context);
             }
             return Err(err);
         }
@@ -1526,10 +1527,10 @@ impl LayoutBuilderState {
             measurement.hold,
             measurement.ignores_child_sizes,
         );
-        if runtime_state.take_moved_coordinators() {
-            self.context.note_geometry_scene_node(node_id);
-        }
         let mut layout_state = parts.layout_state().borrow_mut();
+        if runtime_state.take_moved_coordinators() {
+            layout_state.note_geometry_change(node_id, &self.context);
+        }
         cache.clear_needs_measure();
         cache.clear_layout_dirt();
         layout_state.set_size(Some(node_id), measurement.size, &self.context);

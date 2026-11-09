@@ -6,8 +6,6 @@
 pub mod bounded_lru;
 pub mod growth_slack;
 pub mod id_pages;
-/// A set of node ids, one bit a node.
-pub mod node_bits;
 pub mod pass_aged;
 pub mod perfect_map;
 pub mod rare;

@@ -63,6 +63,11 @@ pub struct LayoutState {
     /// The layout pass that cleared the placed flag while the node was placed.
     cleared_in_pass: PackedU64,
     content_offset: Point,
+    semantics_stamp: PackedU64,
+    /// The take of the moved-node list this node was last noted in.
+    moved_noted_in: PackedU64,
+    /// The take of the reshaped-node list this node was last noted in.
+    reshaped_noted_in: PackedU64,
     z_index: f32,
     // Whether the node's last placement gave a child a z index other than 0.
     places_children_with_z_index: bool,
@@ -104,8 +109,14 @@ impl LayoutState {
     pub(crate) fn set_content_offset(&mut self, node_id: Option<NodeId>, offset: Point) {
         if self.content_offset != offset {
             self.content_offset = offset;
-            note_semantics_change(node_id);
+            self.note_semantics_change(node_id);
         }
+    }
+
+    /// Notes to the scene phase of `context` that the layout pass changed
+    /// the geometry of this node, `node_id`.
+    pub(crate) fn note_geometry_change(&mut self, node_id: NodeId, context: &AppContext) {
+        context.note_geometry_scene_node(node_id, &mut self.reshaped_noted_in);
     }
 
     /// The same state placed at the origin: what a window root's own scene
@@ -126,10 +137,10 @@ impl LayoutState {
     pub(crate) fn set_size(&mut self, node_id: Option<NodeId>, size: Size, context: &AppContext) {
         if self.size != size {
             if let Some(id) = node_id {
-                context.note_geometry_scene_node(id);
+                context.note_geometry_scene_node(id, &mut self.reshaped_noted_in);
             }
             self.size = size;
-            note_semantics_change(node_id);
+            self.note_semantics_change(node_id);
         }
     }
 
@@ -196,15 +207,15 @@ impl LayoutState {
         let moved = self.position != position;
         if let Some(id) = node_id {
             if newly_placed {
-                context.note_geometry_scene_node(id);
+                context.note_geometry_scene_node(id, &mut self.reshaped_noted_in);
             } else if moved {
-                context.record_moved_scene_node(id, placer);
+                context.record_moved_scene_node(id, placer, &mut self.moved_noted_in);
             }
         }
         self.position = position;
         if moved || !self.is_placed {
             self.is_placed = true;
-            note_semantics_change(node_id);
+            self.note_semantics_change(node_id);
         }
     }
 
@@ -218,20 +229,19 @@ impl LayoutState {
         }
         self.is_placed = false;
         self.cleared_in_pass = PackedU64::new(context.placement_pass().clear());
-        note_semantics_change(node_id);
+        self.note_semantics_change(node_id);
     }
 
     /// Whether `pass` found this node placed and left it unplaced.
     pub(crate) fn unplaced_in(&self, pass: u64) -> bool {
         !self.is_placed && self.cleared_in_pass.get() == pass
     }
-}
 
-// Notes to the semantics tree that layout changed node `node_id`.
-#[inline]
-pub(crate) fn note_semantics_change(node_id: Option<NodeId>) {
-    if let Some(id) = node_id {
-        crate::semantics_layout_log::record_layout_change(id);
+    #[inline]
+    pub(crate) fn note_semantics_change(&mut self, node_id: Option<NodeId>) {
+        if let Some(id) = node_id {
+            crate::semantics_layout_log::record_layout_change(id, &mut self.semantics_stamp);
+        }
     }
 }
 

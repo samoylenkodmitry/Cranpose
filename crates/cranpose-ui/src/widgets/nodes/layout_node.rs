@@ -718,7 +718,9 @@ impl LayoutNode {
     }
 
     fn note_semantics_layout_change(&self) {
-        super::layout_state::note_semantics_change(self.id.get());
+        if let Ok(mut state) = self.parts.layout_state().try_borrow_mut() {
+            state.note_semantics_change(self.id.get());
+        }
     }
 
     /// Returns the semantics that the modifier chain reports, or `None` if it reports none.
