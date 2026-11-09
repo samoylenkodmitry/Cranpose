@@ -20,9 +20,13 @@ const CHUNK_SHAPES: usize = 256;
 const KEPT_EMPTY_CHUNKS: usize = 4;
 
 /// The shapes of one shape item in its chunk.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ShapeRun {
     chunk: u32,
+    // How many shapes the item draws, and the rect they cover when it
+    // draws any: a collect reads them for every item it draws.
+    shapes: u32,
+    coverage: Rect,
     segments: Range<u32>,
     // A hash of what the shapes draw, which the chunk's other shapes leave
     // alone.
@@ -49,14 +53,16 @@ impl<'a> ShapeRef<'a> {
     }
 
     /// How many shapes the item draws.
+    #[inline]
     pub fn shape_count(self) -> u32 {
-        self.recorder.shape_count_in(&self.run.segments)
+        self.run.shapes
     }
 
     /// The rect the item's pixels lie within, in its record's space; `None`
     /// for an item that draws nothing.
+    #[inline]
     pub fn coverage(self) -> Option<Rect> {
-        self.recorder.coverage_in(&self.run.segments)
+        (self.run.shapes > 0).then_some(self.run.coverage)
     }
 
     /// A hash of what the item draws, which the other items of its chunk
@@ -107,6 +113,8 @@ impl ShapeChunks {
         recorder.hash_in(&segments, &mut print);
         ShapeRun {
             chunk,
+            shapes: recorder.shape_count_in(&segments),
+            coverage: recorder.coverage_in(&segments).unwrap_or_default(),
             segments,
             print: print.finish(),
         }
