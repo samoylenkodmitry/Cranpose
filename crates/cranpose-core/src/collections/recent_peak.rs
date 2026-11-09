@@ -7,6 +7,7 @@ pub struct RecentPeak(usize);
 
 impl RecentPeak {
     /// Notes a frame at which the collection held `len` entries.
+    #[inline]
     pub fn note(&mut self, len: usize) {
         self.0 = len.max(self.0 - self.0 / 8);
     }
@@ -14,6 +15,7 @@ impl RecentPeak {
     /// The room to shrink a collection of `capacity` to: twice the peak, at
     /// least `floor`, once the capacity passes four times that.
     #[must_use]
+    #[inline]
     pub fn shrink_to(self, capacity: usize, floor: usize) -> Option<usize> {
         let bound = self.0.max(floor);
         (capacity > 4 * bound).then_some(2 * bound)
@@ -22,15 +24,17 @@ impl RecentPeak {
     /// Gives back the room the recent frames left unused in `list`, a
     /// collection that fills like the one the peak notes, keeping its
     /// entries and room for at least `floor`.
+    #[inline]
     pub fn shrink<T>(self, list: &mut Vec<T>, floor: usize) {
         if let Some(room) = self.shrink_to(list.capacity(), floor) {
-            list.shrink_to(room);
+            shrink_list(list, room);
         }
     }
 
     /// Notes the frame `list` holds and gives back the room the recent
     /// frames left unused, keeping its entries and room for at least
     /// `floor`.
+    #[inline]
     pub fn trim<T>(&mut self, list: &mut Vec<T>, floor: usize) {
         self.note(list.len());
         self.shrink(list, floor);
@@ -38,9 +42,17 @@ impl RecentPeak {
 
     /// Notes the frame `list` held, empties it and gives back the room the
     /// recent frames left unused, keeping room for at least `floor`.
+    #[inline]
     pub fn clear<T>(&mut self, list: &mut Vec<T>, floor: usize) {
         self.note(list.len());
         list.clear();
         self.shrink(list, floor);
     }
+}
+
+// Out of line: a list gives back room seldom, and the check before it runs
+// for every list each frame.
+#[inline(never)]
+fn shrink_list<T>(list: &mut Vec<T>, room: usize) {
+    list.shrink_to(room);
 }

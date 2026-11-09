@@ -23,6 +23,7 @@ impl DirtyNodeSet {
 
     // Notes a take of the set and gives back the room recent takes left
     // unused, once the set is empty.
+    #[inline]
     fn note_take(&mut self, len: usize) {
         self.recent.note(len);
         if let Some(room) = self
