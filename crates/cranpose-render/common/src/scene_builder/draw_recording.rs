@@ -10,7 +10,7 @@ use super::{HeadKind, LayerHead, assign_layer};
 use crate::{
     graph::{CachePolicy, DrawCommandId, DrawRunNode, IsolationReasons, PrimitivePhase},
     scene_store::{Item, ItemRef, RecordKind, RecordSeed, SceneStore},
-    style_shared::recording_for_placement_reusing,
+    style_shared::{draws_in, recording_for_placement_reusing},
 };
 
 pub(super) enum DrawPass<'a> {
@@ -319,6 +319,11 @@ pub(super) fn append_draw_nodes(
                 if placement == DrawPlacement::Behind {
                     items.push(add_background(store, background, size));
                 }
+                continue;
+            }
+            // The overlay pass skips a command that draws behind alone
+            // before it looks for the command's recording.
+            if !draws_in(command, placement) {
                 continue;
             }
             let Some(recorded) = record_command(store, command, id, size) else {

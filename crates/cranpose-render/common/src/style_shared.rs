@@ -222,6 +222,11 @@ pub fn recording_for_placement_reusing(
     Some((shared, segments))
 }
 
+// Whether `command` draws anything in `placement`.
+pub(crate) fn draws_in(command: &DrawCommand, placement: DrawPlacement) -> bool {
+    placement_split(command, placement).is_some()
+}
+
 /// Whether `command` draws in `placement`, and for a with-content command
 /// the half of it `placement` takes.
 fn placement_split(
