@@ -11,7 +11,7 @@ use cranpose_ui_graphics::{CommandRecording, FxHashMap};
 use crate::graph::DrawCommandId;
 
 #[derive(Clone, Default)]
-pub(super) struct Recordings {
+pub(crate) struct Recordings {
     slots: FxHashMap<RecorderKey, RecorderSlot>,
     update: u64,
 }
@@ -61,7 +61,7 @@ impl Recordings {
 
     // Storage for the next recording of `id`: a kept recording no reader
     // holds, one that shares no shapes first, or a new one.
-    pub(super) fn acquire(&mut self, id: DrawCommandId) -> Rc<CommandRecording> {
+    pub(crate) fn acquire(&mut self, id: DrawCommandId) -> Rc<CommandRecording> {
         let Some(slot) = self.slots.get_mut(&RecorderKey::from(id)) else {
             return Rc::default();
         };
@@ -85,7 +85,7 @@ impl Recordings {
 
     // Notes `recording`, which `id` just recorded, beside the two before it
     // when the command has an entry.
-    pub(super) fn publish(&mut self, id: DrawCommandId, recording: &Rc<CommandRecording>) {
+    pub(crate) fn publish(&mut self, id: DrawCommandId, recording: &Rc<CommandRecording>) {
         if let Some(slot) = self.slots.get_mut(&RecorderKey::from(id)) {
             slot.hold(self.update, recording);
         }

@@ -313,12 +313,12 @@ pub(super) fn append_draw_nodes(
         } else {
             let Some((recording, segments)) =
                 recording_for_placement_reusing(command, placement, size, || {
-                    store.recording_storage(id)
+                    store.recordings.acquire(id)
                 })
             else {
                 continue;
             };
-            store.publish_recording(id, &recording);
+            store.recordings.publish(id, &recording);
             (recording, segments)
         };
         let grouped = shared.summary().has_groups

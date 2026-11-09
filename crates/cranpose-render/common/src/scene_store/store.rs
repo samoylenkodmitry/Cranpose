@@ -9,7 +9,6 @@ use std::{
 
 use cranpose_core::{NodeId, RecordId, RecordRef, SceneUpdate, StoreId, collections::map::HashSet};
 use cranpose_ui::{GraphicsLayer, Point, Rect};
-use cranpose_ui_graphics::CommandRecording;
 
 use super::{
     ChildOrder, Facts, GeoRecord, HashCache, Item, ItemKind, ItemLists, ItemRef, Journal,
@@ -20,8 +19,7 @@ use super::{
     recordings::Recordings,
 };
 use crate::graph::{
-    DrawCommandId, DrawPrimitiveNode, DrawRunNode, LayerNode, ProjectiveTransform,
-    TextPrimitiveNode,
+    DrawPrimitiveNode, DrawRunNode, LayerNode, ProjectiveTransform, TextPrimitiveNode,
 };
 
 /// The scene a renderer draws and the hit targets come from.
@@ -57,7 +55,7 @@ pub struct SceneStore {
     // The marks of the own draws of the record whose end of update is
     // being worked out.
     pub(super) mark_scratch: Vec<OwnMark>,
-    recordings: Recordings,
+    pub(crate) recordings: Recordings,
 }
 
 /// One state of one store: what it held after one of its updates.
@@ -539,20 +537,6 @@ impl SceneStore {
                 self.runs.remove(item.index());
             }
         }
-    }
-
-    // Storage for the next recording of the draw command `id`.
-    pub(crate) fn recording_storage(&mut self, id: DrawCommandId) -> Rc<CommandRecording> {
-        self.recordings.acquire(id)
-    }
-
-    // Notes `recording`, which the draw command `id` just recorded.
-    pub(crate) fn publish_recording(
-        &mut self,
-        id: DrawCommandId,
-        recording: &Rc<CommandRecording>,
-    ) {
-        self.recordings.publish(id, recording);
     }
 
     /// A handle to `id` that tells a later holder whether the row went to
