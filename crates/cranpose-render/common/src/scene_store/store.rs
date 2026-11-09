@@ -228,6 +228,7 @@ impl SceneStore {
     pub fn finish_update(&mut self) {
         super::child_order::settle(self);
         own_marks::settle(self);
+        super::growth_slack::trim(self);
     }
 
     // Leaves the own draws of the record at `index` to be compared with what

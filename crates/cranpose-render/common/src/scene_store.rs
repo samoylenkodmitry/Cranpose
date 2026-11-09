@@ -4,6 +4,7 @@
 mod child_order;
 mod content_hash;
 mod facts;
+mod growth_slack;
 mod hash_cache;
 mod heap_bytes;
 mod items;

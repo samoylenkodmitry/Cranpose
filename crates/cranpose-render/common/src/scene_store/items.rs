@@ -3,7 +3,7 @@
 
 use std::num::NonZeroU32;
 
-use cranpose_core::RecordId;
+use cranpose_core::{RecordId, collections::growth_slack::GrowthSlack};
 
 /// One item of a record: a child record or one of the record's draws.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -174,6 +174,10 @@ impl<T: Copy> SpanPool<T> {
     pub(crate) fn clear(&mut self) {
         self.items.clear();
         self.free.iter_mut().for_each(Vec::clear);
+    }
+
+    pub(crate) fn trim_growth_slack(&mut self) {
+        self.items.trim_growth_slack();
     }
 }
 

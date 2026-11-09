@@ -11,7 +11,7 @@
 
 use std::{cell::Cell, mem::size_of};
 
-use cranpose_core::RecordId;
+use cranpose_core::{RecordId, collections::growth_slack::GrowthSlack};
 use cranpose_ui::{GraphicsLayer, Rect};
 
 use super::{Item, ItemKind, ItemRef, LayerProps, LayerRef, RecordFlags, SceneStore};
@@ -54,6 +54,10 @@ impl Facts {
 
     pub(super) fn heap_bytes(&self) -> usize {
         self.rows.capacity() * size_of::<Cell<RowFacts>>()
+    }
+
+    pub(super) fn trim_growth_slack(&mut self) {
+        self.rows.trim_growth_slack();
     }
 }
 

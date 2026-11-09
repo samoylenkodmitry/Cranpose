@@ -3,6 +3,8 @@
 
 use std::ops::{Index, IndexMut};
 
+use cranpose_core::collections::growth_slack::GrowthSlack;
+
 #[derive(Clone)]
 pub(crate) struct Slab<T> {
     entries: Vec<Option<T>>,
@@ -57,6 +59,10 @@ impl<T> Slab<T> {
     pub(crate) fn clear(&mut self) {
         self.entries.clear();
         self.free.clear();
+    }
+
+    pub(crate) fn trim_growth_slack(&mut self) {
+        self.entries.trim_growth_slack();
     }
 }
 
