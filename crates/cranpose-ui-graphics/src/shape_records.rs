@@ -1,3 +1,5 @@
+use std::ops::Range;
+
 use bytemuck::{Pod, Zeroable};
 
 use crate::ShapeRecord;
@@ -162,6 +164,42 @@ impl ShapeRecords {
     pub(crate) fn reserve(&mut self, additional: usize) {
         self.bodies.reserve(additional);
         self.curves.reserve(additional);
+    }
+
+    // Keeps the records of `kept`, ascending ranges of record indexes that
+    // do not overlap, moved to the front in order, and drops the others.
+    pub(crate) fn keep(&mut self, kept: impl Iterator<Item = Range<usize>>) {
+        let Self {
+            bodies,
+            curves,
+            sources,
+        } = self;
+        let mut sources = sources.storage_mut();
+        let (mut to, mut source_from, mut source_to) = (0, 0, 0);
+        for range in kept {
+            bodies.copy_within(range.clone(), to);
+            curves.copy_within(range.clone(), to);
+            if let Some(sources) = sources.as_deref_mut() {
+                while let Some(&source) = sources.get(source_from)
+                    && (source.index as usize) < range.end
+                {
+                    if source.index as usize >= range.start {
+                        sources[source_to] = RecordSource {
+                            index: (source.index as usize - range.start + to) as u32,
+                            ..source
+                        };
+                        source_to += 1;
+                    }
+                    source_from += 1;
+                }
+            }
+            to += range.len();
+        }
+        bodies.truncate(to);
+        curves.truncate(to);
+        if let Some(sources) = sources {
+            sources.truncate(source_to);
+        }
     }
 
     pub(crate) fn push(

@@ -2,6 +2,7 @@ mod scene_probe;
 
 mod annotated_text_baselines;
 mod app_supplied_font_raster;
+mod background_redraws;
 mod draw_owner_changes;
 mod draw_scope_text_raster;
 mod draw_with_content_updates;

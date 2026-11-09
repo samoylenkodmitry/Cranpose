@@ -1,6 +1,7 @@
 mod arc_recording_speed;
 mod eye_pose;
 mod glass_placeholder;
+mod kept_segments;
 mod mesh_space;
 mod path_fill_slices;
 mod record_preparation;

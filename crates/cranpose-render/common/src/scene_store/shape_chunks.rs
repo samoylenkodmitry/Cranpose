@@ -3,12 +3,15 @@
 // names its chunk and its segments there, and a packet leases a chunk whole.
 // A chunk takes new shapes only while no packet holds it, and a chunk that
 // no item names any more takes new shapes again once no packet holds it.
+// A chunk whose next shape would grow it, or that is full, first drops the
+// shapes no item draws once they are a quarter of it: a background drawn
+// anew each frame leaves its last shapes behind.
 
 use std::{hash::Hasher, num::NonZeroU32, ops::Range, sync::Arc};
 
 use cranpose_ui_graphics::{DrawPrimitive, FxHasher, Rect, ShapeRecorder};
 
-use super::{Item, ItemKind, SceneStore};
+use super::{Item, ItemKind, SceneStore, slab::Slab};
 
 // The most shapes a chunk takes: a chunk that one item still names keeps
 // the room of this many.
@@ -106,20 +109,28 @@ pub(super) struct ShapeChunks {
     // The chunks no item names, which take shapes again once no packet
     // holds them.
     empty: Vec<ChunkId>,
+    // One bit a segment of the chunk that drops its dead shapes, set for
+    // the segments a run names: room the next such chunk takes again.
+    live: Vec<u64>,
 }
 
 #[derive(Clone)]
 struct ShapeChunk {
     recorder: Arc<ShapeRecorder>,
-    // How many items name the chunk.
+    // How many items name the chunk, and how many shapes they draw.
     items: u32,
+    shapes: u32,
 }
 
 impl ShapeChunks {
     // Records the shapes of one item with `record` into a chunk that takes
     // them, and returns where they went.
-    fn record(&mut self, record: impl FnOnce(&mut ShapeRecorder)) -> ShapeRun {
-        let chunk = self.writable_chunk();
+    fn record(
+        &mut self,
+        runs: &mut Slab<ShapeRun>,
+        record: impl FnOnce(&mut ShapeRecorder),
+    ) -> ShapeRun {
+        let chunk = self.writable_chunk(runs);
         let entry = self.chunks[chunk.index()]
             .as_mut()
             .expect("a writable chunk is there");
@@ -127,30 +138,39 @@ impl ShapeChunks {
         let start = recorder.all_segments().end;
         record(recorder);
         recorder.end_segment();
-        entry.items += 1;
         let segments = start..recorder.all_segments().end;
+        let shapes = recorder.shape_count_in(&segments);
+        entry.items += 1;
+        entry.shapes += shapes;
         let mut print = FxHasher::default();
         recorder.hash_in(&segments, &mut print);
         ShapeRun {
             chunk,
-            shapes: recorder.shape_count_in(&segments),
+            shapes,
             coverage: recorder.coverage_in(&segments).unwrap_or_default(),
             segments,
             print: print.finish(),
         }
     }
 
-    // A chunk with room that no packet holds: the open one, an empty one
+    // A chunk with room that no packet holds: the open one, rid of the
+    // shapes no item draws when it holds enough of them, an empty one
     // emptied of its old shapes, or a new one.
-    fn writable_chunk(&mut self) -> ChunkId {
-        let takes = |chunk: &mut ShapeChunk| {
-            Arc::get_mut(&mut chunk.recorder)
-                .is_some_and(|recorder| recorder.tables().shapes.len() < CHUNK_SHAPES)
-        };
+    fn writable_chunk(&mut self, runs: &mut Slab<ShapeRun>) -> ChunkId {
         if let Some(open) = self.open
-            && self.chunks[open.index()].as_mut().is_some_and(takes)
+            && let Some(chunk) = self.chunks[open.index()].as_mut()
+            && let Some(recorder) = Arc::get_mut(&mut chunk.recorder)
         {
-            return open;
+            let held = recorder.tables().shapes.len();
+            let full = held >= CHUNK_SHAPES;
+            let dead = held - chunk.shapes as usize;
+            if (full || held >= recorder.shape_capacity()) && dead > 0 && dead * 4 >= held {
+                keep_live_runs(open, recorder, runs, &mut self.live);
+                return open;
+            }
+            if !full {
+                return open;
+            }
         }
         let reused = self.empty.iter().position(|&id| {
             self.chunks[id.index()]
@@ -178,6 +198,7 @@ impl ShapeChunks {
         let chunk = Some(ShapeChunk {
             recorder: Arc::default(),
             items: 0,
+            shapes: 0,
         });
         let id = match self.chunks.iter().position(Option::is_none) {
             Some(id) => {
@@ -192,13 +213,15 @@ impl ShapeChunks {
         ChunkId::at(id)
     }
 
-    // Notes that an item that named `chunk` went. A chunk no item names
-    // waits for reuse; past the few kept, it goes.
-    fn release(&mut self, chunk: ChunkId) {
+    // Notes that the item of `run` went. A chunk no item names waits for
+    // reuse; past the few kept, it goes.
+    fn release(&mut self, run: &ShapeRun) {
+        let chunk = run.chunk;
         let Some(entry) = self.chunks[chunk.index()].as_mut() else {
             return;
         };
         entry.items -= 1;
+        entry.shapes -= run.shapes;
         if entry.items > 0 {
             return;
         }
@@ -212,6 +235,19 @@ impl ShapeChunks {
         }
     }
 
+    // The heap the chunks hold: their lists and every chunk's recorder.
+    fn heap_bytes(&self) -> usize {
+        self.chunks.capacity() * size_of::<Option<ShapeChunk>>()
+            + self.empty.capacity() * size_of::<ChunkId>()
+            + self.live.capacity() * size_of::<u64>()
+            + self
+                .chunks
+                .iter()
+                .flatten()
+                .map(|chunk| size_of::<ShapeRecorder>() + chunk.recorder.tables().heap_bytes())
+                .sum::<usize>()
+    }
+
     fn recorder(&self, chunk: ChunkId) -> &Arc<ShapeRecorder> {
         &self.chunks[chunk.index()]
             .as_ref()
@@ -220,12 +256,43 @@ impl ShapeChunks {
     }
 }
 
+// Moves the shapes of the runs in `chunk` to the front of its recorder, in
+// record order, and drops the shapes no run names. `live` is room for one
+// bit a segment.
+fn keep_live_runs(
+    chunk: ChunkId,
+    recorder: &mut ShapeRecorder,
+    runs: &mut Slab<ShapeRun>,
+    live: &mut Vec<u64>,
+) {
+    live.clear();
+    live.resize(recorder.all_segments().end.div_ceil(64) as usize, 0);
+    for run in runs.values().filter(|run| run.chunk == chunk) {
+        for segment in run.segments.clone() {
+            live[segment as usize / 64] |= 1 << (segment % 64);
+        }
+    }
+    recorder.keep_segments(|segment| live[segment as usize / 64] & (1 << (segment % 64)) != 0);
+    // A run now starts past the live segments before it.
+    for run in runs.values_mut().filter(|run| run.chunk == chunk) {
+        let (word, bit) = (run.segments.start as usize / 64, run.segments.start % 64);
+        let start = live[..word]
+            .iter()
+            .map(|bits| bits.count_ones())
+            .sum::<u32>()
+            + live
+                .get(word)
+                .map_or(0, |bits| (bits & ((1 << bit) - 1)).count_ones());
+        run.segments = start..start + run.segments.len() as u32;
+    }
+}
+
 #[expect(clippy::multiple_inherent_impl, reason = "one file per concern")]
 impl SceneStore {
     /// Adds an item of the shapes `record` records into a chunk the store
     /// shares among its shape items.
     pub fn add_shapes(&mut self, record: impl FnOnce(&mut ShapeRecorder)) -> Item {
-        let run = self.shape_chunks.record(record);
+        let run = self.shape_chunks.record(&mut self.shape_runs, record);
         Item::new(ItemKind::Shape, self.shape_runs.insert(run))
     }
 
@@ -241,10 +308,15 @@ impl SceneStore {
 
     // Removes the shape item at `index` of the shape runs.
     pub(super) fn remove_shapes(&mut self, index: usize) {
-        if let Some(chunk) = self.shape_runs.get(index).map(|run| run.chunk) {
-            self.shape_chunks.release(chunk);
+        if let Some(run) = self.shape_runs.get(index) {
+            self.shape_chunks.release(run);
             self.shape_runs.remove(index);
         }
+    }
+
+    // The heap the shape items and their chunks hold.
+    pub(super) fn shapes_heap_bytes(&self) -> usize {
+        self.shape_runs.heap_bytes() + self.shape_chunks.heap_bytes()
     }
 
     // How many shape items the store holds.

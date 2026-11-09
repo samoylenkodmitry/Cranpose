@@ -19,6 +19,23 @@ impl ShapeRecorder {
         self.segment_waste = 0;
     }
 
+    /// How many shapes the recorder holds before its storage grows.
+    pub fn shape_capacity(&self) -> usize {
+        self.tables.shapes.capacity()
+    }
+
+    /// Keeps the segments `keep` takes, by index, with their shapes, moved
+    /// to the front in order, and drops every other segment and shape. The
+    /// gradient tables stay whole while a kept shape paints with a brush.
+    pub fn keep_segments(&mut self, keep: impl Fn(u32) -> bool) {
+        self.tables.keep_segments(keep);
+        if self.tables.brushes().is_empty() {
+            self.gradient_lists.clear();
+        }
+        // The bounds stay: they still hold every kept shape.
+        self.end_segment();
+    }
+
     /// Iterates over the segments in the index range `segments`.
     pub fn segments_in(&self, segments: &Range<u32>) -> slice::Iter<'_, RecordSegment> {
         self.tables.segments[segments.start as usize..segments.end as usize].iter()

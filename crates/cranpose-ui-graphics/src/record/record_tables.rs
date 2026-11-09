@@ -3,7 +3,7 @@ use std::{
     sync::OnceLock,
 };
 
-use super::{BrushRecord, GradientStopRecord, RecordSegment};
+use super::{BrushRecord, GradientStopRecord, RecordLane, RecordSegment};
 use crate::{FxHasher, ShapeRecords};
 
 /// The POD half of a recording: what the GPU reads, shared with the
@@ -89,6 +89,43 @@ impl RecordTables {
         }
         self.segments.clear();
         self.fingerprint.take();
+    }
+
+    // Keeps the segments `keep` takes, by index, with their shapes, moved
+    // to the front in order, and drops the others. The gradient tables go
+    // once no kept shape paints with a brush, since a kept shape names its
+    // brush by table index.
+    pub(super) fn keep_segments(&mut self, keep: impl Fn(u32) -> bool) {
+        let Self {
+            shapes,
+            segments,
+            gradients,
+            fingerprint,
+        } = self;
+        fingerprint.take();
+        shapes.keep(
+            (0..)
+                .zip(segments.iter())
+                .filter(|&(index, segment)| keep(index) && segment.lane == RecordLane::Shapes)
+                .map(|(_, segment)| segment.range()),
+        );
+        let (mut index, mut shape_to) = (0, 0);
+        segments.retain_mut(|segment| {
+            let kept = keep(index);
+            index += 1;
+            if kept && segment.lane == RecordLane::Shapes {
+                segment.start = shape_to;
+                shape_to += segment.count;
+            }
+            kept
+        });
+        if let Some(tables) = gradients.as_deref_mut()
+            && shapes.bodies().iter().all(|body| body.brush == 0)
+        {
+            tables.brushes.clear();
+            tables.stops.clear();
+            tables.explicit_stops.clear();
+        }
     }
 
     /// Gives back the room growth left in every table; see

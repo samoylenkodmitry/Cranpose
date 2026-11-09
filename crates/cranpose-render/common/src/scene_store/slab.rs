@@ -61,6 +61,10 @@ impl<T> Slab<T> {
         self.entries.iter().flatten()
     }
 
+    pub(crate) fn values_mut(&mut self) -> impl Iterator<Item = &mut T> {
+        self.entries.iter_mut().flatten()
+    }
+
     pub(crate) fn heap_bytes(&self) -> usize {
         self.entries.capacity() * size_of::<Option<T>>() + self.free.capacity() * size_of::<u32>()
     }
