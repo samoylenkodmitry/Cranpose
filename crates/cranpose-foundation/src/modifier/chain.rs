@@ -11,8 +11,10 @@ use super::{
     NodePath, chain_node_ref::ChainPosition,
 };
 mod entry_element;
+mod in_place;
 use entry_element::EntryElement;
 pub use entry_element::HeldElement;
+use in_place::{InPlace, update_entry_in_place};
 
 /// One node of a chain and the element it last took. The element's hash,
 /// which matches entries when a chain rebuilds, is worked out then: an
@@ -298,58 +300,6 @@ impl EntryIndex {
 
         None
     }
-}
-
-/// What updating an entry in place did to the chain's links.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum InPlace {
-    /// The links and capability aggregates stand as they were.
-    LinksHold,
-    /// The entry's capabilities changed, or its updated node delegates and
-    /// may have changed its delegates: the chain links again.
-    Relink,
-}
-
-/// Updates `entry` for `element` where it is, when the element is of the
-/// entry's type and key and its node can take it: an element of a node's
-/// type and key updates the node whatever its content, as Compose does.
-/// `None` leaves the entry as it was.
-fn update_entry_in_place(
-    entry: &mut ModifierNodeEntry,
-    element: &DynModifierElement,
-    context: &mut dyn ModifierNodeContext,
-) -> Option<InPlace> {
-    let held = entry.held();
-    if held.element_type() != element.element_type()
-        || held.node_type() != element.node_type()
-        || entry.element.key() != element.key()
-        || !element.can_update_node(&*entry.node.borrow())
-    {
-        return None;
-    }
-    let same_element = held.equals(element.as_ref());
-    let capabilities = element.capabilities();
-    let mut outcome = if capabilities == entry.capabilities {
-        InPlace::LinksHold
-    } else {
-        InPlace::Relink
-    };
-    if !same_element || element.requires_update() {
-        element.update_node(&mut *entry.node.borrow_mut());
-        entry.element = EntryElement::new(Rc::clone(element));
-        request_update_auto_invalidations(element.as_ref(), context, capabilities);
-        entry
-            .node
-            .borrow()
-            .for_each_delegate(&mut |_| outcome = InPlace::Relink);
-    }
-    entry.capabilities = capabilities;
-    entry
-        .node
-        .borrow()
-        .node_state()
-        .set_capabilities(capabilities);
-    Some(outcome)
 }
 
 /// A new entry for `element` and its node, updated, and attached when
