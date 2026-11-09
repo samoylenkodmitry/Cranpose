@@ -48,8 +48,10 @@ const BARS: usize = 200;
 const FULL_BARS: usize = 64;
 const BAR_BOUND: isize = 4 * 1024;
 // What a canvas that draws again every frame may hold more than one that
-// drew once: a few lists that grew once, not a copy of what it draws.
-const REDRAW_BOUND: isize = 4 * 1024;
+// drew once: lists that grew once, the reach of each item and the areas a
+// frame changes, 16 bytes a bar each. The 200 bars themselves hold about
+// 65 KB, so a copy of what the canvas draws holds several times this.
+const REDRAW_BOUND: isize = 12 * 1024;
 
 fn run(framebuffer: &mut Framebuffer, frames: Range<u64>, pixels: &mut [u8]) {
     let mut areas = Vec::new();
@@ -143,6 +145,9 @@ fn screens_that_change_every_frame_leave_no_memory_behind() {
     assert!(composed < LEFT_BEHIND_BOUND, "composed: {composed} bytes");
     assert!(drawn < LEFT_BEHIND_BOUND, "drawn: {drawn} bytes");
     assert!(busy < LEFT_BEHIND_BOUND, "busy: {busy} bytes");
+    // A first host fills the thread's caches and pools, which the hosts
+    // measured after it then find alike.
+    let _ = held(|| Bars(true, BARS), MemoryHeadroom::Ample);
     let still = held(|| Bars(false, BARS), MemoryHeadroom::Ample);
     let moving = held(|| Bars(true, BARS), MemoryHeadroom::Ample);
     println!("held: still bars {still} bytes, moving bars {moving} bytes");
