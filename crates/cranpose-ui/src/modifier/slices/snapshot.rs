@@ -257,7 +257,7 @@ impl Backgrounds {
             color,
             coordinator: site.coordinator.clone(),
             insert_index: slices.draw_commands.len(),
-            precedes_layer: slices.layer_draw_boundary.is_none(),
+            precedes_layer: slices.layer.is_none(),
             corner_shape,
         });
     }
@@ -359,7 +359,6 @@ fn collect_draw_node(
     let layer_node = as_kind::<GraphicsLayerNode>(any, kind)
         .or_else(|| as_kind::<OffsetPxNode>(any, kind).map(OffsetPxNode::layer));
     if let Some(layer_node) = layer_node {
-        slices.mark_layer_draw_boundary();
         slices.push_graphics_layer(
             layer_node.layer_snapshot(),
             layer_node.layer_resolver(site.modifier_index),
@@ -368,8 +367,7 @@ fn collect_draw_node(
     }
 
     if kind == TypeId::of::<ClipToBoundsNode>() {
-        slices.mark_layer_draw_boundary();
-        slices.clip_to_bounds = true;
+        slices.layer_mut().clip_to_bounds = true;
         slices.enter_layer(site);
     }
 }

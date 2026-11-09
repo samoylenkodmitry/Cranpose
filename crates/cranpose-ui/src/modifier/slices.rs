@@ -23,21 +23,32 @@ use crate::{
 #[derive(Clone, Default)]
 pub struct ModifierNodeSlices {
     draw_commands: Vec<DrawCommand>,
-    layer_draw_boundary: Option<usize>,
-    clip_to_bounds: bool,
-    /// Where the outermost clip or graphics layer of the chain sits: its
-    /// coordinator, which a later offset moves the content inside of.
-    layer_coordinator: Option<CoordinatorRect>,
+    // What the chain's clips and graphics layers give, boxed: few nodes
+    // carry either.
+    layer: Option<Box<LayerSlices>>,
     text: Option<SliceText>,
     text_coordinator: Option<CoordinatorRect>,
-    /// Boxed: few nodes carry a layer, and inline it took 240 bytes of
-    /// every node's slices.
-    graphics_layer: Option<Box<GraphicsLayer>>,
     corner_shape: Option<RoundedCornerShape>,
     /// Boxed for the same reason: inline they took 150 bytes of every
     /// node's slices, and on the gauntlet's 5,600 nodes none sets them but the
     /// 44 animated layers' resolvers.
     rare: Option<Box<RareSlices>>,
+}
+
+// What a chain's clips and graphics layers give: made at the chain's
+// outermost clip or layer.
+#[derive(Clone)]
+struct LayerSlices {
+    // How many leading draw commands come from modifiers chained before the
+    // outermost clip or layer.
+    draw_boundary: usize,
+    clip_to_bounds: bool,
+    // Where the outermost clip or layer sits: its coordinator, which a later
+    // offset moves the content inside of.
+    coordinator: Option<CoordinatorRect>,
+    // Boxed again: a clip without a layer is common, and a layer takes 240
+    // bytes.
+    graphics_layer: Option<Box<GraphicsLayer>>,
 }
 
 fn publish_pointer_input_size(rare: &RareSlices, size: Size) {
@@ -300,7 +311,7 @@ impl ModifierNodeSlices {
     /// around the layer in the parent's space, outside its clip, alpha and
     /// transform, exactly as an outer `drawBehind` wraps a `graphicsLayer`.
     pub fn outer_draw_command_count(&self) -> usize {
-        self.layer_draw_boundary.unwrap_or(0)
+        self.layer.as_ref().map_or(0, |layer| layer.draw_boundary)
     }
 
     fn insert_background_draw(
@@ -311,17 +322,25 @@ impl ModifierNodeSlices {
     ) {
         let insert_index = insert_index.min(self.draw_commands.len());
         self.draw_commands.insert(insert_index, command);
-        if let Some(boundary) = self.layer_draw_boundary.as_mut()
+        if let Some(layer) = self.layer.as_deref_mut()
             && precedes_layer
         {
-            *boundary += 1;
+            layer.draw_boundary += 1;
         }
     }
 
-    fn mark_layer_draw_boundary(&mut self) {
-        if self.layer_draw_boundary.is_none() {
-            self.layer_draw_boundary = Some(self.draw_commands.len());
-        }
+    // The layer part, made at the chain's outermost clip or layer, which
+    // the draw commands so far precede.
+    fn layer_mut(&mut self) -> &mut LayerSlices {
+        let draw_boundary = self.draw_commands.len();
+        self.layer.get_or_insert_with(|| {
+            Box::new(LayerSlices {
+                draw_boundary,
+                clip_to_bounds: false,
+                coordinator: None,
+                graphics_layer: None,
+            })
+        })
     }
 
     /// The boxed fields when the chain set any; see [`RareSlices`].
@@ -389,7 +408,9 @@ impl ModifierNodeSlices {
 
     /// Returns whether the node clips its content to its bounds.
     pub fn clip_to_bounds(&self) -> bool {
-        self.clip_to_bounds
+        self.layer
+            .as_ref()
+            .is_some_and(|layer| layer.clip_to_bounds)
     }
 
     /// The bounds of the node's layer in a node of `node_size`, where its
@@ -398,8 +419,9 @@ impl ModifierNodeSlices {
     /// declared after it moves the content inside the layer rather than the
     /// layer. The node's own rect when it has neither.
     pub fn layer_bounds(&self, node_size: Size) -> Rect {
-        self.layer_coordinator
+        self.layer
             .as_ref()
+            .and_then(|layer| layer.coordinator.as_ref())
             .map_or_else(|| Rect::from_size(node_size), |layer| layer.rect(node_size))
     }
 
@@ -566,14 +588,17 @@ impl ModifierNodeSlices {
         {
             Some(Cow::Owned(resolve()))
         } else {
-            self.graphics_layer.as_deref().map(Cow::Borrowed)
+            self.layer
+                .as_ref()
+                .and_then(|layer| layer.graphics_layer.as_deref())
+                .map(Cow::Borrowed)
         }
     }
 
     /// Whether the chain sets a graphics layer, live or fixed, without
     /// resolving a live one as [`Self::graphics_layer`] does.
     pub fn has_graphics_layer(&self) -> bool {
-        self.graphics_layer.is_some()
+        self.held_graphics_layer()
             || self
                 .rare()
                 .is_some_and(|rare| rare.graphics_layer_resolver.is_some())
@@ -587,9 +612,17 @@ impl ModifierNodeSlices {
     /// Records the layer's coordinator when this is the chain's outermost
     /// clip or graphics layer.
     fn enter_layer(&mut self, site: &DrawSite) {
-        if self.layer_coordinator.is_none() {
-            self.layer_coordinator = Some(site.coordinator.clone());
+        let layer = self.layer_mut();
+        if layer.coordinator.is_none() {
+            layer.coordinator = Some(site.coordinator.clone());
         }
+    }
+
+    // Whether the chain holds a fixed graphics layer.
+    fn held_graphics_layer(&self) -> bool {
+        self.layer
+            .as_ref()
+            .is_some_and(|layer| layer.graphics_layer.is_some())
     }
 
     fn push_graphics_layer(
@@ -597,7 +630,10 @@ impl ModifierNodeSlices {
         layer: GraphicsLayer,
         resolver: Option<Rc<dyn Fn() -> GraphicsLayer>>,
     ) {
-        let existing_snapshot = self.graphics_layer.as_deref().cloned();
+        let existing_snapshot = self
+            .layer
+            .as_ref()
+            .and_then(|layer| layer.graphics_layer.as_deref().cloned());
         let next_snapshot = existing_snapshot.as_ref().map_or_else(
             || layer.clone(),
             |current| merge_graphics_layers(current.clone(), layer.clone()),
@@ -606,9 +642,9 @@ impl ModifierNodeSlices {
             .rare()
             .and_then(|rare| rare.graphics_layer_resolver.clone());
 
-        match &mut self.graphics_layer {
+        match &mut self.layer_mut().graphics_layer {
             Some(held) => **held = next_snapshot,
-            None => self.graphics_layer = Some(Box::new(next_snapshot)),
+            held @ None => *held = Some(Box::new(next_snapshot)),
         }
         let merged_resolver: Option<Rc<dyn Fn() -> GraphicsLayer>> =
             match (existing_resolver, resolver) {
@@ -651,7 +687,7 @@ impl ModifierNodeSlices {
             has_text_style: self.text.is_some(),
             has_text_layout_options: self.text.is_some(),
             has_prepared_text_layout: self.text.is_some(),
-            has_graphics_layer: self.graphics_layer.is_some(),
+            has_graphics_layer: self.held_graphics_layer(),
             has_graphics_layer_resolver: self
                 .rare()
                 .is_some_and(|rare| rare.graphics_layer_resolver.is_some()),
@@ -663,12 +699,9 @@ impl ModifierNodeSlices {
     // rare part.
     fn is_empty(&self) -> bool {
         self.draw_commands.is_empty()
-            && self.layer_draw_boundary.is_none()
-            && !self.clip_to_bounds
-            && self.layer_coordinator.is_none()
+            && self.layer.is_none()
             && self.text.is_none()
             && self.text_coordinator.is_none()
-            && self.graphics_layer.is_none()
             && self.corner_shape.is_none()
             && self.rare.as_deref().is_none_or(RareSlices::is_empty)
     }
@@ -676,12 +709,9 @@ impl ModifierNodeSlices {
     /// Resets the slice collection for reuse, retaining vector capacity.
     pub fn clear(&mut self) {
         self.draw_commands.clear();
-        self.layer_draw_boundary = None;
-        self.clip_to_bounds = false;
-        self.layer_coordinator = None;
+        self.layer = None;
         self.text = None;
         self.text_coordinator = None;
-        self.graphics_layer = None;
         self.corner_shape = None;
         if let Some(rare) = self.rare.as_deref_mut() {
             rare.clear();
@@ -695,7 +725,7 @@ impl fmt::Debug for ModifierNodeSlices {
             .field("draw_commands", &self.draw_commands.len())
             .field("pointer_inputs", &self.pointer_inputs().len())
             .field("pointer_icon", &self.pointer_icon())
-            .field("clip_to_bounds", &self.clip_to_bounds)
+            .field("clip_to_bounds", &self.clip_to_bounds())
             .field("motion_context_animated", &self.motion_context_animated())
             .field(
                 "translated_content_context",
@@ -712,7 +742,13 @@ impl fmt::Debug for ModifierNodeSlices {
             .field("text_content", &self.annotated_text())
             .field("text_style", &self.text_style())
             .field("text_layout_options", &self.text_layout_options())
-            .field("graphics_layer", &self.graphics_layer)
+            .field(
+                "graphics_layer",
+                &self
+                    .layer
+                    .as_ref()
+                    .and_then(|layer| layer.graphics_layer.as_ref()),
+            )
             .field(
                 "graphics_layer_resolver",
                 &self
