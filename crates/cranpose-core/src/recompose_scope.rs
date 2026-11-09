@@ -641,9 +641,13 @@ impl RecomposeScope {
 
     fn note_recompose_source(&self) {
         #[cfg(feature = "inspection")]
-        self.inner
-            .source_trace
-            .replace(source_trace::current_source_trace());
+        self.set_recompose_source(source_trace::current_source_trace());
+    }
+
+    // The composables a recomposition of the scope runs inside.
+    #[cfg(feature = "inspection")]
+    pub(crate) fn set_recompose_source(&self, trace: Rc<[source_trace::SourceLocation]>) {
+        self.inner.source_trace.replace(trace);
     }
 
     // Kept out of line: the ESP32-S3 hot-code list places it in IRAM.

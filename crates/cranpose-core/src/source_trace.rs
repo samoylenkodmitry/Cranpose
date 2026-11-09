@@ -132,7 +132,9 @@ fn record_composition(
         return None;
     }
     crate::with_current_composer_opt(|composer| {
-        let scope = composer.peek_recompose_scope()?;
+        // A body counts its runs on its scope, which it makes when its group
+        // has none yet.
+        let scope = composer.current_recompose_scope()?;
         let counter = scope.inner.recompositions.get_or_init(|| {
             crate::thread_state::runtimes(|state| {
                 state

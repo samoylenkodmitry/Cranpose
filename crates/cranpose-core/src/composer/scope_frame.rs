@@ -24,6 +24,10 @@ pub(crate) struct DeferredScope {
     parent_hint: Option<NodeId>,
     locals: LocalStackSnapshot,
     pub(crate) recompose: Option<fn(&Composer)>,
+    // The composables around the group when it took `recompose`: a scope
+    // its body makes later, inside its own source scope, restores these.
+    #[cfg(feature = "inspection")]
+    source: Option<std::rc::Rc<[crate::source_trace::SourceLocation]>>,
     // Whether the body runs whatever its parameters: a changed static
     // composition local, or reused content around it.
     pub(crate) forced: bool,
@@ -127,6 +131,8 @@ impl Composer {
             parent_hint,
             locals: self.core.local_stack.borrow().clone(),
             recompose: None,
+            #[cfg(feature = "inspection")]
+            source: None,
             forced,
             composed_once: !matches!(kind, GroupStartKind::Inserted),
             made: None,
@@ -162,6 +168,10 @@ impl Composer {
         scope.set_parent_hint(deferred.parent_hint);
         if let Some(recompose) = deferred.recompose {
             scope.set_recompose_fn(recompose);
+            #[cfg(feature = "inspection")]
+            if let Some(source) = deferred.source.take() {
+                scope.set_recompose_source(source);
+            }
         }
         if deferred.composed_once {
             scope.mark_composed_once();
@@ -180,7 +190,7 @@ impl Composer {
     pub(super) fn enter_group_scope(
         &self,
         scope_ref: &RecomposeScope,
-        entry: GroupScopeEntry<'_>,
+        entry: &GroupScopeEntry<'_>,
     ) -> bool {
         let GroupScopeEntry {
             options,
@@ -188,7 +198,7 @@ impl Composer {
             host,
             group,
             parent_hint,
-        } = entry;
+        } = *entry;
         // A group entered while its scope is inactive is reused content, as
         // when a lazy list gives a recycled row to another item: like Compose,
         // it composes again rather than skipping, which reactivates the
@@ -276,7 +286,13 @@ impl Composer {
         if let Some(ScopeFrame::Deferred(deferred)) = self.scope_stack().last_mut() {
             match &deferred.made {
                 Some(scope) => scope.set_recompose_fn(body),
-                None => deferred.recompose = Some(body),
+                None => {
+                    deferred.recompose = Some(body);
+                    #[cfg(feature = "inspection")]
+                    {
+                        deferred.source = Some(crate::source_trace::current_source_trace());
+                    }
+                }
             }
         }
     }

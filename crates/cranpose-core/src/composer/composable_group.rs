@@ -246,7 +246,7 @@ impl Composer {
         }
         let forces_content = self.enter_group_scope(
             &scope_ref,
-            GroupScopeEntry {
+            &GroupScopeEntry {
                 options,
                 start_kind: kind,
                 host,
