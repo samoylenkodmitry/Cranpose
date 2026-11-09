@@ -31,6 +31,7 @@ mod round_scaling_list_integration;
 mod round_scroll_indicator_integration;
 mod semantics_hint;
 mod shadow_api_integration;
+mod shared_measure_policies;
 mod static_density_integration;
 mod subcompose_disposal;
 #[cfg(feature = "svg")]

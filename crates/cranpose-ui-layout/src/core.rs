@@ -361,6 +361,14 @@ pub trait MeasurePolicy: Any {
         false
     }
 
+    /// Whether a measure leaves the policy as it was: no measure writes
+    /// state the policy holds. Layout nodes with equal policies that answer
+    /// `true` share one allocation. `false`, the default, gives each node a
+    /// policy of its own.
+    fn is_immutable(&self) -> bool {
+        false
+    }
+
     /// Computes the minimum intrinsic width of this policy.
     fn min_intrinsic_width(&self, measurables: &[Box<dyn Measurable>], height: f32) -> f32;
 

@@ -548,6 +548,10 @@ fn measured(
 }
 
 impl MeasurePolicy for FlexMeasurePolicy {
+    fn is_immutable(&self) -> bool {
+        true
+    }
+
     fn measure(
         &self,
         scope: &dyn MeasureScope,

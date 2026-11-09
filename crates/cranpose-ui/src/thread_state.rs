@@ -14,7 +14,7 @@ use cranpose_ui_layout::MeasurePolicy;
 use crate::{
     announce::Announcement,
     environment_locals::EnvironmentLocals,
-    layout::policies::SpareFlexChildren,
+    layout::policies::{SharedPolicies, SpareFlexChildren},
     modifier::{Modifier, ModifierNodeSlices},
     render_state::{AppContext, AppContextId},
     selection_container::RegistrarInner,
@@ -94,6 +94,7 @@ pub(crate) struct UiThreadState {
     // whether the chain gives any.
     pub(crate) spare_slices: Cell<Option<ModifierNodeSlices>>,
     pub(crate) empty_measure_policy: OnceCell<Rc<dyn MeasurePolicy>>,
+    pub(crate) shared_policies: RefCell<SharedPolicies>,
     pub(crate) draw_text_measurer: OnceCell<Rc<dyn DrawTextMeasurer>>,
     pub(crate) spare_flex_children: SpareFlexChildren,
 }
@@ -119,6 +120,7 @@ impl UiThreadState {
             empty_slices: OnceCell::new(),
             spare_slices: Cell::new(None),
             empty_measure_policy: OnceCell::new(),
+            shared_policies: RefCell::new(SharedPolicies::new()),
             draw_text_measurer: OnceCell::new(),
             spare_flex_children: SpareFlexChildren::new(),
         }

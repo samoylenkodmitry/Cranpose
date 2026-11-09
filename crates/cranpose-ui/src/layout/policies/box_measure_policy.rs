@@ -31,6 +31,10 @@ impl BoxMeasurePolicy {
 }
 
 impl MeasurePolicy for BoxMeasurePolicy {
+    fn is_immutable(&self) -> bool {
+        true
+    }
+
     fn measure(
         &self,
         scope: &dyn MeasureScope,

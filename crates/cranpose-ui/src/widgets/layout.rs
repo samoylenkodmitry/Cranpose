@@ -131,13 +131,18 @@ impl<P: MeasurePolicy + Clone + PartialEq> PolicyUpdate for P {
     }
 }
 
-// `policy` in an allocation of its own, or the thread's one empty policy,
-// which every leaf shares.
-fn held_policy<P: MeasurePolicy + Clone>(policy: &P) -> Rc<dyn MeasurePolicy> {
+// The thread's one empty policy, which every leaf shares; a held immutable
+// policy equal to `policy`; or else `policy` in an allocation of its own.
+fn held_policy<P: MeasurePolicy + Clone + PartialEq>(policy: &P) -> Rc<dyn MeasurePolicy> {
     if std::any::TypeId::of::<P>()
         == std::any::TypeId::of::<crate::layout::policies::EmptyMeasurePolicy>()
     {
         return crate::widgets::nodes::layout_node::empty_measure_policy();
+    }
+    if policy.is_immutable() {
+        return crate::thread_state::with(|state| {
+            state.shared_policies.borrow_mut().shared(policy)
+        });
     }
     Rc::new(policy.clone())
 }

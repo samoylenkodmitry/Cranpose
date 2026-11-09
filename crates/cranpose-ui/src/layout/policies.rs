@@ -3,6 +3,7 @@ mod empty_measure_policy;
 mod flex_measure_policy;
 mod flow_measure_policy;
 mod leaf_measure_policy;
+mod shared_policies;
 
 pub use box_measure_policy::BoxMeasurePolicy;
 pub use empty_measure_policy::EmptyMeasurePolicy;
@@ -10,6 +11,7 @@ pub(crate) use flex_measure_policy::SpareFlexChildren;
 pub use flex_measure_policy::{CrossAxisAlignment, FlexMeasurePolicy};
 pub use flow_measure_policy::FlowMeasurePolicy;
 pub use leaf_measure_policy::LeafMeasurePolicy;
+pub(crate) use shared_policies::SharedPolicies;
 
 #[cfg(test)]
 #[path = "tests/policies_tests.rs"]
