@@ -69,6 +69,11 @@ pub(super) fn forget_children(store: &SceneStore, index: usize) {
     forget(store, index, |row| row.children.take().is_some());
 }
 
+// Whether the record at `index` keeps its containment.
+pub(super) fn keeps_contained(store: &SceneStore, index: usize) -> bool {
+    store.facts.rows[index].get().contained.is_some()
+}
+
 // Climbs from the record at `index` while `take` finds a fact the record
 // kept, which it forgets.
 fn forget(store: &SceneStore, index: usize, take: impl Fn(&mut RowFacts) -> bool) {
@@ -84,25 +89,34 @@ fn forget(store: &SceneStore, index: usize, take: impl Fn(&mut RowFacts) -> bool
     }
 }
 
+#[inline]
 pub(super) fn has_hit_targets(layer: LayerRef<'_>) -> bool {
     child_facts(layer).hit_targets
 }
 
+#[inline]
 pub(super) fn has_origin_sinks(layer: LayerRef<'_>) -> bool {
     child_facts(layer).origin_sinks
 }
 
+#[inline]
 pub(super) fn has_space(layer: LayerRef<'_>) -> bool {
     child_facts(layer).space
 }
 
 // Whether everything `layer` and its subtree draw lies within its local
 // bounds, give or take the slack of antialiasing.
+#[inline]
 pub(super) fn contained(layer: LayerRef<'_>) -> bool {
-    let row = &layer.store.facts.rows[layer.id.index()];
-    if let Some(contained) = row.get().contained {
-        return contained;
+    match layer.store.facts.rows[layer.id.index()].get().contained {
+        Some(contained) => contained,
+        None => work_out_contained(layer),
     }
+}
+
+#[inline(never)]
+fn work_out_contained(layer: LayerRef<'_>) -> bool {
+    let row = &layer.store.facts.rows[layer.id.index()];
     let contained = layer.visual_clip_rect().is_some()
         || items_draw_within(
             layer,
@@ -115,11 +129,17 @@ pub(super) fn contained(layer: LayerRef<'_>) -> bool {
     contained
 }
 
+#[inline]
 fn child_facts(layer: LayerRef<'_>) -> ChildFacts {
-    let row = &layer.store.facts.rows[layer.id.index()];
-    if let Some(facts) = row.get().children {
-        return facts;
+    match layer.store.facts.rows[layer.id.index()].get().children {
+        Some(facts) => facts,
+        None => work_out_child_facts(layer),
     }
+}
+
+#[inline(never)]
+fn work_out_child_facts(layer: LayerRef<'_>) -> ChildFacts {
+    let row = &layer.store.facts.rows[layer.id.index()];
     let mut facts = ChildFacts {
         hit_targets: layer.hit_test().is_some(),
         origin_sinks: layer.flags().contains(RecordFlags::ORIGIN_SINKS),

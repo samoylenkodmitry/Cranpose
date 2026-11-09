@@ -66,6 +66,7 @@ pub(super) fn settle(store: &mut SceneStore) {
 // Loses the marks for the redraw of the record at `index` while no reader
 // follows where records redraw, and logs the redraw without its reach. A
 // record the update made logs none.
+#[inline(always)]
 pub(super) fn lose(store: &mut SceneStore, index: usize) {
     let flags = store.tree[index].flags;
     store.tree[index].flags =

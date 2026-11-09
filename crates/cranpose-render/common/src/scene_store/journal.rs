@@ -167,6 +167,7 @@ impl Journal {
 
     // Whether an open reader follows where the records `update` redraws
     // changed.
+    #[inline]
     pub(super) fn wants_redrawn_reach(&self, update: SceneUpdate) -> bool {
         self.wanted & REDRAWN_REACH != 0 && self.wants(RecordEvent::Redrawn(Reach::Empty), update)
     }

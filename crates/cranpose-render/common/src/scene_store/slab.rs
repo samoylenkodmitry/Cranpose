@@ -33,11 +33,18 @@ impl<T> Slab<T> {
         }
     }
 
-    pub(crate) fn remove(&mut self, index: usize) -> Option<T> {
-        let value = self.entries.get_mut(index)?.take()?;
+    // Drops the entry at `index` where it lies, which a move out would copy
+    // first.
+    pub(crate) fn remove(&mut self, index: usize) {
+        let Some(entry) = self.entries.get_mut(index) else {
+            return;
+        };
+        if entry.is_none() {
+            return;
+        }
+        *entry = None;
         self.free
             .push(u32::try_from(index).expect("fewer than 2^32 entries"));
-        Some(value)
     }
     pub(crate) fn values(&self) -> impl Iterator<Item = &T> {
         self.entries.iter().flatten()

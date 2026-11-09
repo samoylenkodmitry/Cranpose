@@ -112,6 +112,11 @@ impl<T: Copy> SpanPool<T> {
     // Writes `items` into `span`'s room when they fit it, else into new
     // room, giving the old back.
     pub(crate) fn write(&mut self, span: Span, items: &[T]) -> Span {
+        // Most often a record keeps as many entries as it held.
+        if items.len() == span.len() {
+            self.items[span.range()].copy_from_slice(items);
+            return span;
+        }
         let Some(&first) = items.first() else {
             self.free_span(span);
             return Span::default();

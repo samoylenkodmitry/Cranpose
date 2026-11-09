@@ -38,8 +38,10 @@ pub(super) fn translate_tracking_hits(
         .then(|| GraphChanges::hits(held || holds_hit_geometry(store.layer(layer))))
 }
 
+// Whether `layer` or a record beneath it handles pointers, or it is a
+// space.
 pub(super) fn holds_hit_geometry(layer: LayerRef<'_>) -> bool {
-    layer.hit_test().is_some() || layer.has_hit_targets() || layer.graphics_layer().space.is_some()
+    layer.has_hit_targets() || layer.graphics_layer().space.is_some()
 }
 
 fn try_translate_scrolled_layer(

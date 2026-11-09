@@ -201,9 +201,6 @@ pub(super) fn same_pair(a: [f32; 2], b: [f32; 2]) -> bool {
 
 // Whether two transforms hold the same numbers, bit for bit.
 pub(super) fn same_bits(a: ProjectiveTransform, b: ProjectiveTransform) -> bool {
-    let (a, b) = (a.matrix(), b.matrix());
-    a.as_flattened()
-        .iter()
-        .zip(b.as_flattened())
-        .all(|(a, b)| a.to_bits() == b.to_bits())
+    let bits = |transform: ProjectiveTransform| transform.matrix().map(|row| row.map(f32::to_bits));
+    bits(a) == bits(b)
 }

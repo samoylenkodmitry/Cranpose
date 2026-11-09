@@ -170,6 +170,7 @@ impl SceneStore {
     }
 
     // Whether a reader follows where the update in progress redraws.
+    #[inline]
     pub(super) fn follows_redrawn_reach(&self) -> bool {
         self.journal.wants_redrawn_reach(self.update)
     }
@@ -232,6 +233,7 @@ impl SceneStore {
     // Leaves the own draws of the record at `index` to be compared with what
     // they were at the end of the update. While no reader follows where
     // records redraw, the record's marks wait at once.
+    #[inline(always)]
     pub(super) fn redraw_pending(&mut self, index: usize) {
         if !self.follows_redrawn_reach() {
             own_marks::lose(self, index);
@@ -267,8 +269,19 @@ impl SceneStore {
     }
 
     // Leaves the containment and the reach of the record at `index` and of
-    // the ancestors that follow from them to be worked out again.
+    // the ancestors that follow from them to be worked out again. Most often
+    // an earlier change in the update left the record so already.
+    #[inline]
     pub(super) fn stale(&mut self, index: usize) {
+        if !self.tree[index].flags.contains(RecordFlags::REACH_STALE)
+            || super::facts::keeps_contained(self, index)
+        {
+            self.stale_climb(index);
+        }
+    }
+
+    #[inline(never)]
+    fn stale_climb(&mut self, index: usize) {
         super::facts::forget_contained(self, index);
         self.reach_stale(index);
     }
@@ -298,6 +311,7 @@ impl SceneStore {
 
     // Leaves the containment of the record at `index` and of its parent,
     // which reads what the record draws, to be worked out again.
+    #[inline]
     pub(super) fn stale_with_parent(&mut self, index: usize) {
         self.stale(index);
         if let Some(parent) = self.tree[index].parent {
@@ -652,6 +666,7 @@ impl SceneStore {
     }
 
     /// Sets the node rect size of `id`.
+    #[inline]
     pub fn set_size(&mut self, id: RecordId, width: f32, height: f32) {
         let index = id.index();
         let size = [width, height];
@@ -669,6 +684,7 @@ impl SceneStore {
     }
 
     /// Sets the offset of the content box of `id`.
+    #[inline]
     pub fn set_content_offset(&mut self, id: RecordId, offset: Point) {
         let index = id.index();
         let offset = [offset.x, offset.y];
@@ -788,11 +804,17 @@ impl SceneStore {
     }
 
     /// Sets what `id` draws for and the layout node it draws for.
+    #[inline]
     pub fn set_kind(&mut self, id: RecordId, kind: RecordKind, node: Option<NodeId>) {
         let index = id.index();
-        if self.tree[index].kind == kind && self.warm[index].node == node {
-            return;
+        if self.tree[index].kind != kind || self.warm[index].node != node {
+            self.change_kind(id, kind, node);
         }
+    }
+
+    #[inline(never)]
+    fn change_kind(&mut self, id: RecordId, kind: RecordKind, node: Option<NodeId>) {
+        let index = id.index();
         self.log(RecordEvent::Released, id);
         self.tree[index].kind = kind;
         self.warm[index].node = node;
@@ -860,6 +882,7 @@ impl SceneStore {
 
     // Notes that the update in progress moved the record at `index`, or its
     // content within it.
+    #[inline]
     pub(super) fn moved(&mut self, index: usize) {
         if self.tree[index].place_rev != self.update {
             self.tree[index].place_rev = self.update;
@@ -873,9 +896,19 @@ impl SceneStore {
     // Raises the subtree revision of `from` and its ancestors to the update
     // in progress, and leaves their hashes to be worked out again, stopping
     // at the first ancestor that holds the update already.
+    #[inline]
     pub(super) fn note_subtree_change(&mut self, from: Option<RecordId>) {
+        if let Some(record) = from
+            && self.tree[record.index()].subtree_rev != self.update
+        {
+            self.raise_subtree_revs(record);
+        }
+    }
+
+    #[inline(never)]
+    fn raise_subtree_revs(&mut self, from: RecordId) {
         let update = self.update;
-        let mut current = from;
+        let mut current = Some(from);
         while let Some(record) = current {
             let index = record.index();
             let tree = &mut self.tree[index];

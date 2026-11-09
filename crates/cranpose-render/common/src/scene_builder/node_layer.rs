@@ -683,8 +683,13 @@ pub(super) fn take_wrapped_layer(
     wrapped
 }
 
+// The node `layer` draws for or wraps; `None` for a draw group.
+#[inline]
 pub(super) fn layer_identity(layer: LayerRef<'_>) -> Option<NodeId> {
-    layer.node_id().or_else(|| layer.wraps())
+    match layer.kind() {
+        RecordKind::Layer | RecordKind::Leaf | RecordKind::Wrapper => layer.owner(),
+        RecordKind::DrawGroup => None,
+    }
 }
 
 pub(super) fn modifier_slices_have_origin_sinks(slices: &ModifierNodeSlices) -> bool {

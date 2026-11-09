@@ -99,6 +99,7 @@ impl SceneStore {
 
     // Writes the flags of the leaf at `index` the store does not keep
     // itself; returns whether they changed.
+    #[inline]
     fn write_leaf_flags(&mut self, index: usize, flags: RecordFlags) -> bool {
         let current = self.tree[index].flags;
         let flags = flags
@@ -116,6 +117,7 @@ impl SceneStore {
 
     // Puts the leaf at `index` at `origin_in_parent`, its transform the
     // translation there; returns whether it moved.
+    #[inline]
     fn place_leaf_row(&mut self, index: usize, origin_in_parent: Point) -> bool {
         let placement = [origin_in_parent.x, origin_in_parent.y];
         let placed = !same_pair(self.geo[index].placement, placement);

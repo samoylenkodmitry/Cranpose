@@ -760,6 +760,7 @@ fn remove_dirty_descendants(
 
 // The node an item of a record draws: a child record's, `None` for the
 // record's own draws and draw groups.
+#[inline]
 fn child_identity(store: &SceneStore, item: Item) -> Option<NodeId> {
     item.as_child()
         .and_then(|child| layer_identity(store.layer(child)))
