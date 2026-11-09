@@ -3,8 +3,6 @@
 
 use std::{any::TypeId, cell::RefCell, rc::Rc};
 
-use cranpose_core::collections::map::HashMap;
-
 use super::{
     AnyModifierElement, DynModifierElement, InvalidationKind, MAX_DELEGATE_DEPTH,
     ModifierChainIter, ModifierChainNodeRef, ModifierNode, ModifierNodeContext,
@@ -213,12 +211,6 @@ impl Default for ModifierNodeChain {
     }
 }
 
-struct EntryIndex {
-    keyed: HashMap<(TypeId, TypeId, u64), Vec<usize>>,
-    hashed: HashMap<(TypeId, TypeId, u64), Vec<usize>>,
-    typed: HashMap<(TypeId, TypeId), Vec<usize>>,
-}
-
 struct EntryMatchQuery<'a> {
     element_type: TypeId,
     node_type: TypeId,
@@ -227,78 +219,43 @@ struct EntryMatchQuery<'a> {
     element: &'a DynModifierElement,
 }
 
-impl EntryIndex {
-    fn build(entries: &[ModifierNodeEntry]) -> Self {
-        let mut keyed = HashMap::default();
-        let mut hashed = HashMap::default();
-        let mut typed = HashMap::default();
-
-        for (i, entry) in entries.iter().enumerate() {
-            let held = entry.held();
-            let (element_type, node_type) = (held.element_type(), held.node_type());
-            if let Some(key_value) = entry.element.key() {
-                keyed
-                    .entry((element_type, node_type, key_value))
-                    .or_insert_with(Vec::new)
-                    .push(i);
-            } else {
-                hashed
-                    .entry((element_type, node_type, held.hash_code()))
-                    .or_insert_with(Vec::new)
-                    .push(i);
-                typed
-                    .entry((element_type, node_type))
-                    .or_insert_with(Vec::new)
-                    .push(i);
-            }
+// The first old entry no element took yet that `query` may take over: one
+// of its types and key, or, for an unkeyed element, an equal unkeyed one of
+// its types, else any unkeyed one of its types. A chain holds a few entries,
+// so a scan takes less than an index would.
+fn find_match(
+    entries: &[ModifierNodeEntry],
+    used: &[bool],
+    query: &EntryMatchQuery<'_>,
+) -> Option<usize> {
+    let candidates = || {
+        entries
+            .iter()
+            .zip(used)
+            .enumerate()
+            .filter(|(_, (entry, used))| {
+                let held = entry.held();
+                !**used
+                    && held.element_type() == query.element_type
+                    && held.node_type() == query.node_type
+            })
+            .map(|(index, (entry, _))| (index, entry))
+    };
+    match query.key {
+        Some(key) => candidates()
+            .find(|(_, entry)| entry.element.key() == Some(key))
+            .map(|(index, _)| index),
+        None => {
+            let mut unkeyed = candidates().filter(|(_, entry)| entry.element.key().is_none());
+            let first = unkeyed.next()?;
+            std::iter::once(first)
+                .chain(unkeyed)
+                .find(|(_, entry)| {
+                    let held = entry.held();
+                    held.hash_code() == query.hash_code && held.equals(query.element.as_ref())
+                })
+                .map_or(Some(first.0), |(index, _)| Some(index))
         }
-
-        Self {
-            keyed,
-            hashed,
-            typed,
-        }
-    }
-
-    fn find_match(
-        &self,
-        entries: &[ModifierNodeEntry],
-        used: &[bool],
-        query: EntryMatchQuery<'_>,
-    ) -> Option<usize> {
-        if let Some(key_value) = query.key {
-            if let Some(candidates) =
-                self.keyed
-                    .get(&(query.element_type, query.node_type, key_value))
-            {
-                for &i in candidates {
-                    if !used[i] {
-                        return Some(i);
-                    }
-                }
-            }
-        } else {
-            if let Some(candidates) =
-                self.hashed
-                    .get(&(query.element_type, query.node_type, query.hash_code))
-            {
-                for &i in candidates {
-                    if !used[i] && entries[i].held().equals(query.element.as_ref()) {
-                        return Some(i);
-                    }
-                }
-            }
-
-            if let Some(candidates) = self.typed.get(&(query.element_type, query.node_type)) {
-                for &i in candidates {
-                    if !used[i] {
-                        return Some(i);
-                    }
-                }
-            }
-        }
-
-        None
     }
 }
 
@@ -326,7 +283,7 @@ fn fresh_entry(
 fn reconcile_element(
     element: DynModifierElement,
     new_pos: usize,
-    (old_entries, index): (&mut [ModifierNodeEntry], &EntryIndex),
+    old_entries: &mut [ModifierNodeEntry],
     (used, match_order): (&mut [bool], &mut [Option<usize>]),
     context: &mut dyn ModifierNodeContext,
     attach: bool,
@@ -341,10 +298,10 @@ fn reconcile_element(
         0
     };
     let capabilities = element.capabilities();
-    let Some(idx) = index.find_match(
+    let Some(idx) = find_match(
         old_entries,
         used,
-        EntryMatchQuery {
+        &EntryMatchQuery {
             element_type,
             node_type,
             key,
@@ -591,8 +548,6 @@ impl ModifierNodeChain {
         scratch.match_order.clear();
         scratch.match_order.resize(old_len, None);
 
-        let index = EntryIndex::build(&old_entries);
-
         let new_elements_count = scratch.elements.len();
         scratch.final_slots.clear();
         scratch.final_slots.reserve(new_elements_count);
@@ -601,7 +556,7 @@ impl ModifierNodeChain {
             let fresh = reconcile_element(
                 element,
                 new_pos,
-                (&mut old_entries, &index),
+                &mut old_entries,
                 (&mut scratch.old_used, &mut scratch.match_order),
                 context,
                 self.attached,
