@@ -197,7 +197,7 @@ desktop)
     step cranpose
     rust_target cranpose-app
     cargo_app cranpose-app
-    for app in egui slint iced gpui tauri dioxus xilem; do
+    for app in egui slint iced gpui tauri dioxus xilem rune bui ferro zgui; do
         rust_target "$app-app"
         reads=("$app-app" perf-data)
         # Dioxus draws with the web page's CSS.

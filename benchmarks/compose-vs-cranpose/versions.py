@@ -5,6 +5,9 @@ gauntlet source is, and moving each framework to its latest stable release.
   versions.py check                 the pinned and the latest version of each
   versions.py bump --record FILE    moves every pin behind its latest release
                                     forward; FILE lists what moved
+  versions.py bump --git-pins ...   moves the pins of frameworks that publish
+                                    no release (a commit of their repository)
+                                    as well; without it they stay where they are
   versions.py revert PIN --record FILE
                                     puts the pin back, as a build of the
                                     moved pin failed
@@ -47,6 +50,10 @@ SOURCES = {
     'tauri': 'benchmarks/compose-vs-cranpose/web-app/src/gauntlet.ts',
     'dioxus': 'benchmarks/compose-vs-cranpose/dioxus-app/src/main.rs',
     'xilem': 'benchmarks/compose-vs-cranpose/xilem-app/src/main.rs',
+    'rune': 'benchmarks/compose-vs-cranpose/rune-app/src/gauntlet.rs',
+    'bui': 'benchmarks/compose-vs-cranpose/bui-app/src/main.rs',
+    'ferro': 'benchmarks/compose-vs-cranpose/ferro-app/src/main.rs',
+    'zgui': 'benchmarks/compose-vs-cranpose/zgui-app/src/gauntlet.rs',
     'fyne': 'benchmarks/compose-vs-cranpose/fyne-app/main.go',
     'nativescript': 'benchmarks/compose-vs-cranpose/nativescript-app/app/app.ts',
     'lynx': 'benchmarks/compose-vs-cranpose/lynx-app/page/src/Gauntlet.tsx',
@@ -61,7 +68,7 @@ PLATFORM_APPS = {
     'android': ['compose', 'views', 'flutter', 'rn', 'nativescript', 'lynx', 'maui', 'avalonia', 'egui',
                 'slint', 'web'],
     'desktop': ['compose', 'egui', 'slint', 'iced', 'gpui', 'avalonia', 'swiftui', 'appkit', 'flutter', 'web',
-                'tauri', 'dioxus', 'xilem', 'fyne'],
+                'tauri', 'dioxus', 'xilem', 'rune', 'bui', 'ferro', 'zgui', 'fyne'],
     'browser': BROWSER_APPS[1:],
 }
 
@@ -69,7 +76,8 @@ NAMES = {
     'cranpose': 'Cranpose', 'cranpose-release': 'Cranpose', 'compose': 'Compose', 'views': 'Views',
     'flutter': 'Flutter', 'rn': 'React Native', 'maui': '.NET MAUI', 'avalonia': 'Avalonia',
     'egui': 'egui', 'slint': 'Slint', 'iced': 'iced', 'gpui': 'GPUI', 'swiftui': 'SwiftUI', 'appkit': 'AppKit',
-    'web': 'Web', 'tauri': 'Tauri', 'dioxus': 'Dioxus', 'xilem': 'Xilem',
+    'web': 'Web', 'tauri': 'Tauri', 'dioxus': 'Dioxus', 'xilem': 'Xilem', 'rune': 'Rune', 'bui': 'BUI', 'ferro': 'FerroUI',
+    'zgui': 'zgui',
     'fyne': 'Fyne', 'nativescript': 'NativeScript', 'lynx': 'Lynx',
 }
 
@@ -117,6 +125,11 @@ def nuget(package):
     return newest(json.loads(fetch(f'https://api.nuget.org/v3-flatcontainer/{package.lower()}/index.json'))['versions'])
 
 
+def github_head(repo):
+    """The newest commit of `repo`'s default branch, for a framework that publishes no release."""
+    return json.loads(fetch(f'https://api.github.com/repos/{repo}/commits/HEAD'))['sha']
+
+
 def maven(base, group, artifact):
     metadata = fetch(f'{base}/{group.replace(".", "/")}/{artifact}/maven-metadata.xml')
     return newest(re.findall(r'<version>([^<]+)</version>', metadata))
@@ -134,14 +147,21 @@ class Pin:
     """A framework version the repository pins: where, what it reads now,
     what its registry offers, and how a newer one is put in."""
 
-    def __init__(self, files, pattern, latest, refresh=None):
+    def __init__(self, files, pattern, latest, refresh=None, git=False):
         self.files = files
         self.pattern = pattern
         self.latest = latest
         self.refresh = refresh
+        # A commit of a repository that publishes no release moves most days:
+        # it moves only when asked to, in the same pull request as the rest.
+        self.git = git
 
     def current(self):
         return re.search(self.pattern, read(self.files[0])).group(1)
+
+    def newer(self, latest, current):
+        # A commit has no order: the newest one differs from the pinned one.
+        return latest != current if self.git else numbers(latest) > numbers(current)
 
     def set(self, version):
         for file in self.files:
@@ -233,6 +253,14 @@ PINS = {
                   cargo_update('dioxus-app')),
     'xilem': Pin(['xilem-app/Cargo.toml'], r'xilem = \{ version = "([^"]+)"', lambda: crates_io('xilem'),
                  cargo_update('xilem-app')),
+    'bui': Pin(['bui-app/Cargo.toml'], r'blenderui = "([^"]+)"', lambda: crates_io('blenderui'),
+               cargo_update('bui-app')),
+    'ferro': Pin(['ferro-app/Cargo.toml'], r'ferroui-view = \{ version = "([^"]+)"', lambda: crates_io('ferroui-view'),
+                 cargo_update('ferro-app')),
+    'rune': Pin(['rune-app/Cargo.toml'], r'github\.com/anomalyco/rune", rev = "([0-9a-f]+)"',
+                lambda: github_head('anomalyco/rune'), cargo_update('rune-app'), git=True),
+    'zgui': Pin(['zgui-app/Cargo.toml'], r'github\.com/zortax/zgui", rev = "([0-9a-f]+)"',
+                lambda: github_head('zortax/zgui'), cargo_update('zgui-app'), git=True),
     'fyne': Pin(['fyne-app/go.mod'], r'fyne\.io/fyne/v2 v([\d.]+)', lambda: go_module('fyne.io/fyne/v2'),
                 go_tidy('fyne-app')),
 }
@@ -242,7 +270,7 @@ PINS = {
 RUST_CRATES = {
     'egui': ('egui-app', 'eframe'), 'slint': ('slint-app', 'slint'), 'iced': ('iced-app', 'iced'),
     'gpui': ('gpui-app', 'gpui-pre'), 'tauri': ('tauri-app', 'tauri'), 'dioxus': ('dioxus-app', 'dioxus'),
-    'xilem': ('xilem-app', 'xilem'),
+    'xilem': ('xilem-app', 'xilem'), 'bui': ('bui-app', 'blenderui'), 'ferro': ('ferro-app', 'ferroui-view'),
 }
 # Apps that draw in the system's WKWebView on the desktop.
 WEBKIT = {'tauri', 'dioxus'}
@@ -287,6 +315,8 @@ def version(app, platform, release=None):
     if app in RUST_CRATES:
         found = locked(*RUST_CRATES[app])
         return f'{found}, WKWebView {safari_version()}' if app in WEBKIT and platform == 'desktop' else found
+    if app in PINS and PINS[app].git:
+        return PINS[app].current()[:9]
     if app == 'flutter':
         return flutter_version()
     if app == 'maui':
@@ -318,6 +348,8 @@ def main():
     parser.add_argument('command', choices=['check', 'bump', 'revert', 'write'])
     parser.add_argument('target', nargs='?', help='the pin to revert, or the file to write')
     parser.add_argument('--record', type=Path)
+    parser.add_argument('--git-pins', action='store_true',
+                        help='bump also the pins that name a commit of a repository')
     parser.add_argument('--platform', choices=['android', 'desktop', 'browser'])
     args = parser.parse_args()
 
@@ -342,9 +374,11 @@ def main():
         except Exception as error:  # a registry that does not answer leaves the pin alone
             print(f'{name:16} {current:>12}  latest unknown: {error}')
             continue
-        behind = latest and numbers(latest) > numbers(current)
-        print(f'{name:16} {current:>12}  latest {latest}{"  <- behind" if behind else ""}')
-        if args.command == 'bump' and behind:
+        behind = latest and pin.newer(latest, current)
+        held = behind and pin.git and not args.git_pins
+        print(f'{name:16} {current:>12}  latest {latest}{"  <- behind" if behind else ""}'
+              f'{", moves with --git-pins" if held else ""}')
+        if args.command == 'bump' and behind and not held:
             pin.set(latest)
             record[name] = {'from': current, 'to': latest, 'files': pin.files, 'reverted': False}
     if args.record:

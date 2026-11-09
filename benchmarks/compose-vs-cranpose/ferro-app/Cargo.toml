@@ -1,0 +1,28 @@
+[package]
+name = "perf-compare-ferro"
+version = "0.1.0"
+edition = "2024"
+description = "The gauntlet of the framework comparison in FerroUI"
+license = "Apache-2.0 OR MIT"
+publish = false
+
+[dependencies]
+# FerroUI's declarative layer over its Avalonia-derived controls, drawn by Skia.
+ferroui-view = { version = "0.4.0", features = ["desktop"] }
+ferroui-base = "0.4.0"
+ferroui-controls = "0.4.0"
+ferroui-themes-simple = "0.4.0"
+log = "0.4"
+perf-data = { path = "../perf-data" }
+url = "2"
+
+# Its own workspace, like a real application, built as the Cranpose app is.
+[workspace]
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+debug = 0

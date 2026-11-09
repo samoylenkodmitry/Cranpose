@@ -83,3 +83,6 @@ Applicance = "Applicance"
 # fontTools' module of OpenType layout tables, which scripts/fonts builds
 # test fonts with.
 otTables = "otTables"
+# BUI, Blender's interface as a library, and its `bui-app` in the framework comparison.
+bui = "bui"
+BUI = "BUI"

@@ -61,6 +61,10 @@ fmt:
     RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --manifest-path benchmarks/compose-vs-cranpose/tauri-app/Cargo.toml
     RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --manifest-path benchmarks/compose-vs-cranpose/dioxus-app/Cargo.toml
     RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --manifest-path benchmarks/compose-vs-cranpose/xilem-app/Cargo.toml
+    RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --manifest-path benchmarks/compose-vs-cranpose/rune-app/Cargo.toml
+    RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --manifest-path benchmarks/compose-vs-cranpose/bui-app/Cargo.toml
+    RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --manifest-path benchmarks/compose-vs-cranpose/ferro-app/Cargo.toml
+    RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --manifest-path benchmarks/compose-vs-cranpose/zgui-app/Cargo.toml
 
 # Verify formatting without touching the tree. This is the CI gate.
 fmt-check:
@@ -77,6 +81,10 @@ fmt-check:
     RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --check --manifest-path benchmarks/compose-vs-cranpose/tauri-app/Cargo.toml
     RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --check --manifest-path benchmarks/compose-vs-cranpose/dioxus-app/Cargo.toml
     RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --check --manifest-path benchmarks/compose-vs-cranpose/xilem-app/Cargo.toml
+    RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --check --manifest-path benchmarks/compose-vs-cranpose/rune-app/Cargo.toml
+    RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --check --manifest-path benchmarks/compose-vs-cranpose/bui-app/Cargo.toml
+    RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --check --manifest-path benchmarks/compose-vs-cranpose/ferro-app/Cargo.toml
+    RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --check --manifest-path benchmarks/compose-vs-cranpose/zgui-app/Cargo.toml
 
 # --- lint ------------------------------------------------------------------
 
@@ -676,6 +684,7 @@ test-shell-helpers: _benchmark-python ci-contract-gates
     python3 benchmarks/compose-vs-cranpose/tests/test_browser_tiers.py
     python3 benchmarks/compose-vs-cranpose/tests/test_starts.py
     python3 benchmarks/compose-vs-cranpose/tests/test_release_tree.py
+    python3 benchmarks/compose-vs-cranpose/tests/test_git_pins.py
     {{benchmark_python}} benchmarks/compose-vs-cranpose/tests/test_parity_compare.py
     python3 scripts/perf/publish_test.py
     python3 scripts/perf/nightly_test.py

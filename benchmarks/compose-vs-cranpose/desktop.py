@@ -168,6 +168,10 @@ APPS = {
     'tauri': [HERE / 'tauri-app/target/release/perf-compare-tauri', '--page={page}'],
     'dioxus': [HERE / 'dioxus-app/target/release/perf-compare-dioxus'],
     'xilem': [HERE / 'xilem-app/target/release/perf-compare-xilem'],
+    'rune': [HERE / 'rune-app/target/release/perf-compare-rune'],
+    'bui': [HERE / 'bui-app/target/release/perf-compare-bui'],
+    'ferro': [HERE / 'ferro-app/target/release/perf-compare-ferro'],
+    'zgui': [HERE / 'zgui-app/target/release/perf-compare-zgui'],
     'fyne': [HERE / 'fyne-app/build/perf-compare-fyne'],
 }
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Opens, or updates, the pull request that moves the gauntlet's frameworks
-to the releases the night built and measured.
+to the versions, releases or commits, the night built and measured.
 
 Reads `versions.py bump`'s record: the pins that moved and still built, with
 the rest of their app folders, are committed on `perf/framework-versions` and
@@ -18,7 +18,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 BRANCH = 'perf/framework-versions'
 BENCHMARK = 'benchmarks/compose-vs-cranpose'
-TITLE = "Move the gauntlet's frameworks to their latest releases"
+TITLE = "Move the gauntlet's frameworks to their latest versions"
 
 
 def run(*command):
@@ -34,7 +34,7 @@ def main():
     moved = {pin: change for pin, change in record.items() if not change['reverted']}
     kept = {pin: change for pin, change in record.items() if change['reverted']}
     if not moved:
-        print('no pin moved' + (f"; {', '.join(kept)} did not build at the latest release" if kept else ''))
+        print('no pin moved' + (f"; {', '.join(kept)} did not build at the latest version" if kept else ''))
         return
     lines = [f"- {pin}: {change['from']} → {change['to']}" for pin, change in moved.items()]
     lines += [f"- {pin}: {change['to']} did not build, so it stays at {change['from']}"
@@ -42,7 +42,7 @@ def main():
     run_url = f"{os.environ.get('GITHUB_SERVER_URL', 'https://github.com')}/{os.environ.get('GITHUB_REPOSITORY', '')}" \
               f"/actions/runs/{os.environ.get('GITHUB_RUN_ID', '')}"
     body = '\n'.join([
-        'The nightly built and measured these frameworks at their latest stable releases:',
+        'The nightly built and measured these frameworks at their latest stable versions:',
         '',
         *lines,
         '',
