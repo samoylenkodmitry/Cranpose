@@ -481,9 +481,7 @@ impl SurfaceRoutingScratch {
         for list in routed {
             recent.shrink(list, ROUTING_ROOM_KEPT);
         }
-        if let Some(room) = recent.shrink_to(self.seen.capacity(), ROUTING_ROOM_KEPT) {
-            self.seen.shrink_to(room);
-        }
+        recent.shrink(&mut self.seen, ROUTING_ROOM_KEPT);
     }
 }
 

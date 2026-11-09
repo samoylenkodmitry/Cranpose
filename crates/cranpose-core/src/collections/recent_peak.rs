@@ -1,3 +1,5 @@
+use std::hash::{BuildHasher, Hash};
+
 /// The most entries a collection reused every frame held lately, falling by
 /// an eighth a frame. The room a burst took, such as a first build's, goes
 /// back once later frames hold far fewer, while a collection that fills
@@ -25,9 +27,9 @@ impl RecentPeak {
     /// collection that fills like the one the peak notes, keeping its
     /// entries and room for at least `floor`.
     #[inline]
-    pub fn shrink<T>(self, list: &mut Vec<T>, floor: usize) {
-        if let Some(room) = self.shrink_to(list.capacity(), floor) {
-            shrink_list(list, room);
+    pub fn shrink<C: Room>(self, list: &mut C, floor: usize) {
+        if let Some(room) = self.shrink_to(list.room(), floor) {
+            give_back(list, room);
         }
     }
 
@@ -50,10 +52,55 @@ impl RecentPeak {
     }
 }
 
-// Out of line: a list gives back room seldom, and the check before it runs
-// for every list each frame.
+/// A collection whose unused room a [`RecentPeak`] gives back.
+pub trait Room {
+    /// How many entries the collection has room for.
+    fn room(&self) -> usize;
+
+    /// Gives back the room past `room` entries, keeping the entries.
+    fn give_back_to(&mut self, room: usize);
+}
+
+impl<T> Room for Vec<T> {
+    fn room(&self) -> usize {
+        self.capacity()
+    }
+
+    fn give_back_to(&mut self, room: usize) {
+        self.shrink_to(room);
+    }
+}
+
+// A hash map and a hash set give back room alike, whatever they hash with.
+macro_rules! hashed_room {
+    ($collection:ident<$($param:ident),*> where $($bound:tt)*) => {
+        #[expect(
+            clippy::disallowed_types,
+            reason = "every hash collection gives back room alike, whatever it hashes with"
+        )]
+        impl<$($param),*> Room for std::collections::$collection<$($param),*>
+        where
+            $($bound)*
+        {
+            fn room(&self) -> usize {
+                self.capacity()
+            }
+
+            fn give_back_to(&mut self, room: usize) {
+                self.shrink_to(room);
+            }
+        }
+    };
+}
+
+hashed_room!(HashMap<K, V, S> where K: Eq + Hash, S: BuildHasher);
+hashed_room!(HashSet<T, S> where T: Eq + Hash, S: BuildHasher);
+
+// forwards on purpose: a collection gives back room seldom, and the check
+// before it runs for every collection each frame, so the shrink stays out
+// of line and out of the checks.
 #[cold]
 #[inline(never)]
-pub(super) fn shrink_list<T>(list: &mut Vec<T>, room: usize) {
-    list.shrink_to(room);
+pub(super) fn give_back<C: Room>(list: &mut C, room: usize) {
+    list.give_back_to(room);
 }

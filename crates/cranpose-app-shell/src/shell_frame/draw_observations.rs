@@ -54,10 +54,7 @@ where
         if !known {
             lost_for.get_or_insert(0);
         } else if !changes.is_empty() {
-            undrawn_nodes(changes, left, joined);
-            if !left.is_empty() {
-                cranpose_ui::retire_draw_observations(|node| left.binary_search(&node).is_ok());
-            }
+            retire_undrawn(changes, left, joined);
         }
         let Some(frames) = lost_for.as_mut() else {
             return;
@@ -67,6 +64,14 @@ where
             return;
         }
         *lost_for = None;
+        self.prune_draw_observations();
+    }
+
+    // Retires the draw observations of every node no surface's scene holds:
+    // the full prune after a surface could not tell its changes.
+    #[cold]
+    #[inline(never)]
+    fn prune_draw_observations(&mut self) {
         let mut retained_visual_nodes = HashSet::default();
         let mut any_graph = false;
         for surface in &mut self.surfaces {
@@ -79,5 +84,15 @@ where
         if any_graph {
             cranpose_ui::retire_draw_observations(|node| !retained_visual_nodes.contains(&node));
         }
+    }
+}
+
+// Retires the draw observations of the nodes `changes` say no scene draws
+// any more. Out of line: most frames change no node's drawing.
+#[inline(never)]
+fn retire_undrawn(changes: &[DrawOwnerChange], left: &mut Vec<NodeId>, joined: &mut Vec<NodeId>) {
+    undrawn_nodes(changes, left, joined);
+    if !left.is_empty() {
+        cranpose_ui::retire_draw_observations(|node| left.binary_search(&node).is_ok());
     }
 }

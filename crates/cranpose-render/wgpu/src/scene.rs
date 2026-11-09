@@ -702,12 +702,9 @@ impl CompositorScene {
                 }
             }
         }
-        if let Some(room) = peaks
+        peaks
             .shadow_draws
-            .shrink_to(self.shadow_draws.capacity(), LIST_ROOM_KEPT)
-        {
-            self.shadow_draws.shrink_to(room);
-        }
+            .shrink(&mut self.shadow_draws, LIST_ROOM_KEPT);
         peaks
             .rrect_shadows
             .clear(&mut self.rrect_shadows, LIST_ROOM_KEPT);

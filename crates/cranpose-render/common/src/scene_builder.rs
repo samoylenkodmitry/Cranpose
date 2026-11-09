@@ -268,9 +268,7 @@ fn update_from_applier_inner(
     let mut report = update_dirty_nodes(applier, store, walk, &mut remaining_dirty_nodes);
     report.layers_moved |= merged.contains(GraphChanges::Moves);
     remaining_dirty_nodes.clear();
-    if let Some(room) = recent.shrink_to(remaining_dirty_nodes.capacity(), DIRTY_NODES_KEPT) {
-        remaining_dirty_nodes.shrink_to(room);
-    }
+    recent.shrink(&mut remaining_dirty_nodes, DIRTY_NODES_KEPT);
     crate::thread_state::with(|state| {
         state
             .dirty_node_scratch
@@ -295,41 +293,13 @@ fn update_dirty_nodes(
     if let Some(root_id) = layer_identity(store.layer(root))
         && let Some(kind) = remaining_dirty_nodes.remove(&root_id)
     {
-        if let Some(mut changes) = try_update_retained_layer(
+        return update_dirty_root(
             applier,
             store,
-            root,
+            dirty_ancestry,
             remaining_dirty_nodes,
-            kind,
-            Level::Root,
-            TranslateAncestorContext {
-                inherited_motion_context_animated: false,
-                inherited_translated_content_context: false,
-                parent_content_offset: Point::default(),
-                parent_abs: AbsOrigin::ROOT,
-            },
-        ) {
-            if remaining_dirty_nodes.is_empty() {
-                return GraphUpdateReport::patched(changes);
-            }
-            let walked = walk_dirty_layers(applier, store, dirty_ancestry, remaining_dirty_nodes)
-                .map(|(report, _)| report);
-            changes |= walked.map_or(GraphChanges::HitsAndMoves, |report| report.changes);
-            return GraphUpdateReport {
-                update: classify_walk(applier, walked.is_some(), remaining_dirty_nodes),
-                ..GraphUpdateReport::patched(changes)
-            };
-        }
-
-        let Some(hit_graph_dirty) = rebuild_tracking_hits(store, root, |store, root| {
-            release_for_rebuild(store, root);
-            lower_root_into(applier, store, root_id)
-        }) else {
-            return GraphUpdateReport::needs_rebuild(GraphRebuildReason::RootLayerUnavailable);
-        };
-        store.note_content_change(root);
-
-        return GraphUpdateReport::patched(GraphChanges::hits(hit_graph_dirty));
+            (root, root_id, kind),
+        );
     }
 
     // An update that does not go along the retained path may move the
@@ -361,6 +331,53 @@ fn update_dirty_nodes(
         GraphUpdate::Patched => GraphUpdateReport::patched(report.changes),
         GraphUpdate::NeedsRebuild(reason) => GraphUpdateReport::needs_rebuild(reason),
     }
+}
+
+// Updates the scene for a frame whose dirty nodes include the root, `kind`
+// the root's update: a retained root layer takes it in place, any other
+// root is lowered again. Out of line: most frames leave the root alone.
+#[inline(never)]
+fn update_dirty_root(
+    applier: &MemoryApplier,
+    store: &mut SceneStore,
+    dirty_ancestry: &mut DirtyAncestry,
+    remaining_dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
+    (root, root_id, kind): (RecordId, NodeId, NodeUpdate),
+) -> GraphUpdateReport {
+    if let Some(mut changes) = try_update_retained_layer(
+        applier,
+        store,
+        root,
+        remaining_dirty_nodes,
+        kind,
+        Level::Root,
+        TranslateAncestorContext {
+            inherited_motion_context_animated: false,
+            inherited_translated_content_context: false,
+            parent_content_offset: Point::default(),
+            parent_abs: AbsOrigin::ROOT,
+        },
+    ) {
+        if remaining_dirty_nodes.is_empty() {
+            return GraphUpdateReport::patched(changes);
+        }
+        let walked = walk_dirty_layers(applier, store, dirty_ancestry, remaining_dirty_nodes)
+            .map(|(report, _)| report);
+        changes |= walked.map_or(GraphChanges::HitsAndMoves, |report| report.changes);
+        return GraphUpdateReport {
+            update: classify_walk(applier, walked.is_some(), remaining_dirty_nodes),
+            ..GraphUpdateReport::patched(changes)
+        };
+    }
+
+    let Some(hit_graph_dirty) = rebuild_tracking_hits(store, root, |store, root| {
+        release_for_rebuild(store, root);
+        lower_root_into(applier, store, root_id)
+    }) else {
+        return GraphUpdateReport::needs_rebuild(GraphRebuildReason::RootLayerUnavailable);
+    };
+    store.note_content_change(root);
+    GraphUpdateReport::patched(GraphChanges::hits(hit_graph_dirty))
 }
 
 fn classify_walk(

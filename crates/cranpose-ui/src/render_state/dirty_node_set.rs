@@ -26,12 +26,7 @@ impl DirtyNodeSet {
     #[inline]
     fn note_take(&mut self, len: usize) {
         self.recent.note(len);
-        if let Some(room) = self
-            .recent
-            .shrink_to(self.dirty_nodes.capacity(), ROOM_KEPT)
-        {
-            self.dirty_nodes.shrink_to(room);
-        }
+        self.recent.shrink(&mut self.dirty_nodes, ROOM_KEPT);
     }
 
     pub(super) fn schedule_repass(&mut self, node_id: NodeId) {

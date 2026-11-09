@@ -21,7 +21,7 @@ pub trait GrowthSlack {
 impl<T> GrowthSlack for Vec<T> {
     fn trim_growth_slack(&mut self) {
         if let Some(target) = slack_target(self.len(), self.capacity()) {
-            super::recent_peak::shrink_list(self, target);
+            super::recent_peak::give_back(self, target);
         }
     }
 }
@@ -33,22 +33,7 @@ impl<T> GrowthSlack for Vec<T> {
 impl<K: Eq + Hash, V, S: BuildHasher> GrowthSlack for std::collections::HashMap<K, V, S> {
     fn trim_growth_slack(&mut self) {
         if let Some(target) = slack_target(self.len(), self.capacity()) {
-            shrink_map(self, target);
+            super::recent_peak::give_back(self, target);
         }
     }
-}
-
-#[expect(
-    clippy::disallowed_types,
-    reason = "every hash map trims alike, whatever it hashes with"
-)]
-// forwards on purpose: the shrink of a map stays out of the checks, as a
-// list's does.
-#[cold]
-#[inline(never)]
-fn shrink_map<K: Eq + Hash, V, S: BuildHasher>(
-    map: &mut std::collections::HashMap<K, V, S>,
-    target: usize,
-) {
-    map.shrink_to(target);
 }
