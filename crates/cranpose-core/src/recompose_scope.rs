@@ -70,8 +70,9 @@ enum OwnerKind {
     Lifetime,
 }
 
-/// The scope a scope's lifetime follows, and how it is tied to it.
-type OwnerLink = Cell<Option<(OwnerKind, Weak<RecomposeScopeInner>)>>;
+// The scope a scope's lifetime follows; `ScopeFlag::LifetimeOwner` says
+// how it is tied to it.
+type OwnerLink = Cell<Option<Weak<RecomposeScopeInner>>>;
 
 // A hand-written body that recomposes a scope.
 type RecomposeClosure = Box<dyn FnMut(&Composer)>;
@@ -119,7 +120,6 @@ pub(crate) struct RecomposeScopeInner {
     // generated recompose function, or a hand-written closure when the
     // function is `None`.
     recompose: Cell<Option<fn(&Composer)>>,
-    recompose_closure: Cell<Option<RecomposeClosure>>,
     owner: OwnerLink,
     local_stack: Cell<LocalStackSnapshot>,
     #[cfg(feature = "inspection")]
@@ -131,16 +131,17 @@ pub(crate) struct RecomposeScopeInner {
     /// How many subscriptions the body running now read in order, or
     /// [`DIVERGED`] or [`NOT_READING`].
     read_cursor: Cell<u32>,
-    // `None` until a body of the scope reads a state or a state invalidates
-    // it: most scopes read none.
-    reads: Cell<Option<Box<ScopeReads>>>,
+    // `None` until a body of the scope reads a state, a state invalidates it
+    // or a hand-written closure recomposes it: most scopes need none.
+    restart: Cell<Option<Box<RestartPart>>>,
 }
 
 type StateIds = SmallVec<[StateId; 2]>;
 
-// What a scope keeps of the states its bodies read.
+// What a scope keeps of the states its bodies read, and the hand-written
+// body that recomposes it.
 #[derive(Default)]
-struct ScopeReads {
+struct RestartPart {
     // The states the scope is subscribed to: what its last body read, in
     // read order.
     subscriptions: StateIds,
@@ -150,6 +151,9 @@ struct ScopeReads {
     // The states whose changes invalidated the scope since it last
     // recomposed.
     invalidation_sources: StateIds,
+    // A hand-written closure that recomposes the scope, where no
+    // `#[composable]` function does.
+    closure: Option<RecomposeClosure>,
 }
 
 /// What [`RecomposeScope::note_read`] made of a read.
@@ -178,7 +182,7 @@ enum ScopeOwner {
 impl RecomposeScopeInner {
     fn owner(&self) -> ScopeOwner {
         read_cell(&self.owner, |owner| {
-            owner.as_ref().map_or(ScopeOwner::Root, |(_, owner)| {
+            owner.as_ref().map_or(ScopeOwner::Root, |owner| {
                 owner
                     .upgrade()
                     .map_or(ScopeOwner::Dropped, ScopeOwner::Live)
@@ -215,7 +219,6 @@ impl RecomposeScopeInner {
             parent_hint: NodeIdCell::new(None),
             group_anchor: Cell::new(AnchorId::INVALID),
             recompose: Cell::new(None),
-            recompose_closure: Cell::new(None),
             owner: Cell::new(None),
             local_stack: Cell::new(None),
             #[cfg(feature = "inspection")]
@@ -225,18 +228,18 @@ impl RecomposeScopeInner {
             slots_storage_key: Cell::new(0),
             slots_runtime_state: Cell::new(None),
             read_cursor: Cell::new(NOT_READING),
-            reads: Cell::new(None),
+            restart: Cell::new(None),
         }
     }
 
-    // Runs `read` on the scope's reads, `None` while it has none.
-    fn read_reads<R>(&self, read: impl FnOnce(Option<&ScopeReads>) -> R) -> R {
-        read_cell(&self.reads, |reads| read(reads.as_deref()))
+    // Runs `read` on the scope's restart part, `None` while it has none.
+    fn read_restart<R>(&self, read: impl FnOnce(Option<&RestartPart>) -> R) -> R {
+        read_cell(&self.restart, |reads| read(reads.as_deref()))
     }
 
-    // Runs `update` on the scope's reads, made first if it has none.
-    fn update_reads<R>(&self, update: impl FnOnce(&mut ScopeReads) -> R) -> R {
-        update_cell(&self.reads, |reads| update(reads.get_or_insert_default()))
+    // Runs `update` on the scope's restart part, made first if it has none.
+    fn update_restart<R>(&self, update: impl FnOnce(&mut RestartPart) -> R) -> R {
+        update_cell(&self.restart, |reads| update(reads.get_or_insert_default()))
     }
 
     fn id(&self) -> ScopeId {
@@ -255,8 +258,8 @@ impl Drop for RecomposeScopeInner {
         note_scope_activity_change();
         let id = self.id();
         self.runtime.decrement_live_recompose_scope_count();
-        if let Some(reads) = self.reads.take() {
-            let ScopeReads {
+        if let Some(reads) = self.restart.take() {
+            let RestartPart {
                 subscriptions, run, ..
             } = *reads;
             for state_id in subscriptions.into_iter().chain(run.into_iter().flatten()) {
@@ -373,7 +376,7 @@ impl RecomposeScope {
 
     pub(crate) fn record_state_subscription(&self, state_id: StateId) {
         self.inner
-            .update_reads(|reads| push_unique_state_id(&mut reads.subscriptions, state_id));
+            .update_restart(|reads| push_unique_state_id(&mut reads.subscriptions, state_id));
     }
 
     /// Starts collecting the states a body of the scope reads.
@@ -392,7 +395,7 @@ impl RecomposeScope {
         if cursor == NOT_READING {
             return ScopeRead::NotReading;
         }
-        self.inner.update_reads(|reads| {
+        self.inner.update_restart(|reads| {
             if cursor == DIVERGED {
                 if let Some(run) = &mut reads.run
                     && run.last() != Some(&state_id)
@@ -445,7 +448,7 @@ impl RecomposeScope {
     fn settle_reads(&self, cursor: u32, ran: bool) {
         let id = self.id();
         let runtime = &self.inner.runtime;
-        update_cell(&self.inner.reads, |reads| {
+        update_cell(&self.inner.restart, |reads| {
             let Some(reads) = reads.as_deref_mut() else {
                 return;
             };
@@ -489,7 +492,7 @@ impl RecomposeScope {
     }
 
     fn clear_invalidation_sources(&self) {
-        update_cell(&self.inner.reads, |reads| {
+        update_cell(&self.inner.restart, |reads| {
             if let Some(reads) = reads.as_deref_mut() {
                 reads.invalidation_sources.clear();
             }
@@ -498,7 +501,7 @@ impl RecomposeScope {
 
     fn record_state_invalidation_source(&self, state_id: StateId) {
         if !self.inner.flags.get(ScopeFlag::UnknownInvalidationSource) {
-            self.inner.update_reads(|reads| {
+            self.inner.update_restart(|reads| {
                 push_unique_state_id(&mut reads.invalidation_sources, state_id);
             });
         }
@@ -545,7 +548,7 @@ impl RecomposeScope {
     #[inline(never)]
     fn note_running_write(&self, state_id: StateId) {
         let cursor = self.inner.read_cursor.get();
-        let read = self.inner.read_reads(|reads| {
+        let read = self.inner.read_restart(|reads| {
             reads.is_some_and(|reads| {
                 if cursor == DIVERGED {
                     reads
@@ -594,7 +597,8 @@ impl RecomposeScope {
     {
         self.note_recompose_source();
         self.inner.recompose.set(None);
-        self.inner.recompose_closure.set(Some(Box::new(callback)));
+        self.inner
+            .update_restart(|part| part.closure = Some(Box::new(callback)));
     }
 
     // Registers `body` as the function that recomposes the scope; the same
@@ -615,7 +619,11 @@ impl RecomposeScope {
     fn set_recompose(&self, body: fn(&Composer)) {
         self.note_recompose_source();
         self.inner.recompose.set(Some(body));
-        self.inner.recompose_closure.set(None);
+        update_cell(&self.inner.restart, |part| {
+            if let Some(part) = part.as_deref_mut() {
+                part.closure = None;
+            }
+        });
     }
 
     fn note_recompose_source(&self) {
@@ -641,7 +649,9 @@ impl RecomposeScope {
 
     #[inline(never)]
     fn run_recompose_closure(&self, composer: &Composer) -> bool {
-        let Some(mut closure) = self.inner.recompose_closure.take() else {
+        let Some(mut closure) = update_cell(&self.inner.restart, |part| {
+            part.as_deref_mut().and_then(|part| part.closure.take())
+        }) else {
             return false;
         };
         self.begin_reads();
@@ -650,9 +660,9 @@ impl RecomposeScope {
         self.inner.flags.set(ScopeFlag::Recomposing, false);
         self.end_reads(BodyRun::Ran);
         // The closure may have stored a new one for the scope while it ran.
-        update_cell(&self.inner.recompose_closure, |slot| {
-            if slot.is_none() {
-                *slot = Some(closure);
+        self.inner.update_restart(|part| {
+            if part.closure.is_none() {
+                part.closure = Some(closure);
             }
         });
         true
@@ -661,7 +671,9 @@ impl RecomposeScope {
     pub(crate) fn has_recompose_callback(&self) -> bool {
         self.inner.recompose.get().is_some()
             || self.inner.flags.get(ScopeFlag::Recomposing)
-            || read_cell(&self.inner.recompose_closure, Option::is_some)
+            || self
+                .inner
+                .read_restart(|part| part.is_some_and(|part| part.closure.is_some()))
     }
 
     /// How many scopes this one composes under.
@@ -697,15 +709,25 @@ impl RecomposeScope {
 
     /// Ties the scope to the scope its lifetime follows, or to none.
     fn set_owner(&self, kind: OwnerKind, owner: Option<&Self>) {
+        let held_kind = self.owner_kind();
         update_cell(&self.inner.owner, |link| {
-            let current = link
-                .as_ref()
-                .map(|(kind, owner)| (*kind, Weak::as_ptr(owner)));
+            let current = link.as_ref().map(|owner| (held_kind, Weak::as_ptr(owner)));
             if current != owner.map(|owner| (kind, Rc::as_ptr(&owner.inner))) {
-                *link = owner.map(|owner| (kind, owner.downgrade()));
+                *link = owner.map(Self::downgrade);
                 note_scope_activity_change();
             }
         });
+        self.inner
+            .flags
+            .set(ScopeFlag::LifetimeOwner, kind == OwnerKind::Lifetime);
+    }
+
+    fn owner_kind(&self) -> OwnerKind {
+        if self.inner.flags.get(ScopeFlag::LifetimeOwner) {
+            OwnerKind::Lifetime
+        } else {
+            OwnerKind::Parent
+        }
     }
 
     /// Makes `parent` the scope this one composes under, or makes it a root.
@@ -714,11 +736,11 @@ impl RecomposeScope {
     }
 
     fn owner_of_kind(&self, kind: OwnerKind) -> Option<Self> {
+        if self.owner_kind() != kind {
+            return None;
+        }
         read_cell(&self.inner.owner, |owner| {
-            owner
-                .as_ref()
-                .filter(|(owner_kind, _)| *owner_kind == kind)
-                .and_then(|(_, owner)| Self::upgrade(owner))
+            owner.as_ref().and_then(Self::upgrade)
         })
     }
 
@@ -905,7 +927,7 @@ impl RecomposeScope {
     // Whether a change of the state `state_id` alone invalidated the scope.
     pub(crate) fn invalidated_only_by_state(&self, state_id: StateId) -> bool {
         !self.inner.flags.get(ScopeFlag::UnknownInvalidationSource)
-            && self.inner.read_reads(|reads| {
+            && self.inner.read_restart(|reads| {
                 reads.is_some_and(|reads| {
                     let sources = &reads.invalidation_sources;
                     !sources.is_empty() && sources.iter().all(|source| *source == state_id)
@@ -917,7 +939,7 @@ impl RecomposeScope {
         if self.inner.flags.get(ScopeFlag::UnknownInvalidationSource) {
             return None;
         }
-        self.inner.read_reads(|reads| {
+        self.inner.read_restart(|reads| {
             let sources = &reads?.invalidation_sources;
             (!sources.is_empty()).then(|| {
                 sources

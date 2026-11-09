@@ -7,7 +7,7 @@ pub(super) enum ScopeFlag {
     ComposedOnce,
     PendingRecompose,
     // A hand-written recompose closure is running: it is out of
-    // `recompose_closure` meanwhile, and the scope still recomposes what
+    // its restart part meanwhile, and the scope still recomposes what
     // reads in it.
     Recomposing,
     ForceReuse,
@@ -20,6 +20,9 @@ pub(super) enum ScopeFlag {
     // The scope belongs to pausable content that has not completed: an
     // invalidation waits until it completes.
     Pending,
+    // The scope's owner is the scope its lifetime follows, which it does not
+    // compose under: `OwnerKind::Lifetime`.
+    LifetimeOwner,
 }
 
 impl ScopeFlag {
@@ -37,6 +40,7 @@ impl ScopeFlag {
             Self::UnknownInvalidationSource => 1 << 9,
             Self::Paused => 1 << 10,
             Self::Pending => 1 << 11,
+            Self::LifetimeOwner => 1 << 12,
         }
     }
 }
