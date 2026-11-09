@@ -79,6 +79,13 @@ pub trait AnyModifierElement: fmt::Debug {
     fn held_by_node(&self) -> Option<NodeHeld> {
         None
     }
+
+    /// Whether `node` is of this element's node type and keeps an element
+    /// equal to this one: always `false` for an element whose node keeps
+    /// none.
+    fn equals_node(&self, _node: &dyn ModifierNode) -> bool {
+        false
+    }
 }
 
 /// What a chain keeps of an element whose node keeps every value of it, in
@@ -106,11 +113,6 @@ impl NodeHeld {
         self.0.hash_code(node)
     }
 
-    // Whether `element` equals the element `node` holds.
-    pub(crate) fn equals(self, node: &dyn ModifierNode, element: &dyn AnyModifierElement) -> bool {
-        self.0.equals(node, element)
-    }
-
     // The element `node` holds, made again.
     pub(crate) fn element(self, node: &dyn ModifierNode) -> DynModifierElement {
         self.0.element(node)
@@ -121,7 +123,6 @@ trait HeldOps {
     fn element_type(&self) -> TypeId;
     fn node_type(&self) -> TypeId;
     fn hash_code(&self, node: &dyn ModifierNode) -> u64;
-    fn equals(&self, node: &dyn ModifierNode, element: &dyn AnyModifierElement) -> bool;
     fn element(&self, node: &dyn ModifierNode) -> DynModifierElement;
 }
 
@@ -155,13 +156,6 @@ impl<E: ModifierNodeElement> HeldOps for HeldBy<E> {
         let mut hasher = default::new();
         Self::of(node).hash(&mut hasher);
         hasher.finish()
-    }
-
-    fn equals(&self, node: &dyn ModifierNode, element: &dyn AnyModifierElement) -> bool {
-        element
-            .as_any()
-            .downcast_ref::<TypedModifierElement<E>>()
-            .is_some_and(|typed| typed.element == Self::of(node))
     }
 
     fn element(&self, node: &dyn ModifierNode) -> DynModifierElement {
@@ -286,6 +280,14 @@ where
 
     fn held_by_node(&self) -> Option<NodeHeld> {
         E::FROM_NODE.map(|_| NodeHeld(&HeldBy::<E>::OPS))
+    }
+
+    fn equals_node(&self, node: &dyn ModifierNode) -> bool {
+        E::FROM_NODE.is_some_and(|from_node| {
+            node.as_any()
+                .downcast_ref::<E::Node>()
+                .is_some_and(|node| from_node(node) == self.element)
+        })
     }
 }
 

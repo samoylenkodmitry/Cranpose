@@ -108,7 +108,7 @@ impl HeldElement<'_> {
     pub fn equals(&self, element: &dyn AnyModifierElement) -> bool {
         match self.0 {
             Held::Element(held) => held.equals_element(element),
-            Held::Node { held, node, .. } => held.equals(&*node.borrow(), element),
+            Held::Node { node, .. } => element.equals_node(&*node.borrow()),
         }
     }
 
