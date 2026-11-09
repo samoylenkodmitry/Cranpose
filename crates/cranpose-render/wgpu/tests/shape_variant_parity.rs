@@ -55,8 +55,8 @@ const ABLATE: &str = "CRANPOSE_ABLATE";
 const MAX_DIVERGING_BYTES: usize = 16;
 const MAX_DIVERGING_LEVEL: u8 = 2;
 
-fn assert_variants_match_general(name: &str, graph: LayerNode) {
-    assert_variants_match_general_under(name, &graph, None, 8);
+fn assert_variants_match_general(name: &str, graph: &LayerNode) {
+    assert_variants_match_general_under(name, graph, None, 8);
 }
 
 fn assert_variants_match_general_under(
@@ -106,12 +106,12 @@ fn assert_variants_match_general_under(
 
 #[test]
 fn solid_batches_shade_as_the_general_pipeline_does() {
-    assert_variants_match_general("solid", graph_for(record_solid_scene, None));
+    assert_variants_match_general("solid", &graph_for(record_solid_scene, None));
 }
 
 #[test]
 fn solid_fill_batches_shade_as_the_general_pipeline_does() {
-    assert_variants_match_general("solid fill", graph_for(record_solid_fill_scene, None));
+    assert_variants_match_general("solid fill", &graph_for(record_solid_fill_scene, None));
 }
 
 #[test]
@@ -124,13 +124,13 @@ fn clipped_solid_fill_batches_shade_as_the_general_pipeline_does() {
     };
     assert_variants_match_general(
         "clipped solid fill",
-        graph_for(record_solid_fill_scene, Some(clip)),
+        &graph_for(record_solid_fill_scene, Some(clip)),
     );
 }
 
 #[test]
 fn gradient_and_stroke_batches_shade_as_the_general_pipeline_does() {
-    assert_variants_match_general("mixed", graph_for(record_mixed_scene, None));
+    assert_variants_match_general("mixed", &graph_for(record_mixed_scene, None));
 }
 
 #[test]
@@ -141,12 +141,15 @@ fn clipped_batches_shade_as_the_general_pipeline_does() {
         width: 200.0,
         height: 190.0,
     };
-    assert_variants_match_general("clipped", graph_for(record_mixed_scene, Some(clip)));
+    assert_variants_match_general("clipped", &graph_for(record_mixed_scene, Some(clip)));
 }
 
 #[test]
 fn gradient_fill_batches_shade_as_the_general_pipeline_does() {
-    assert_variants_match_general("gradient fill", graph_for(record_gradient_fill_scene, None));
+    assert_variants_match_general(
+        "gradient fill",
+        &graph_for(record_gradient_fill_scene, None),
+    );
 }
 
 #[test]
@@ -159,7 +162,7 @@ fn clipped_gradient_fill_batches_shade_as_the_general_pipeline_does() {
     };
     assert_variants_match_general(
         "clipped gradient fill",
-        graph_for(record_gradient_fill_scene, Some(clip)),
+        &graph_for(record_gradient_fill_scene, Some(clip)),
     );
 }
 

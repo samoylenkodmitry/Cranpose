@@ -179,7 +179,7 @@ fn returned_packet_storage_reuses_both_slots_after_topology_shrinks() {
         wgpu::TextureFormat::Bgra8UnormSrgb,
         wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
     );
-    let expected = support::present_and_read(&mut renderer, WIDTH, HEIGHT, next_graph);
+    let expected = support::present_and_read(&mut renderer, WIDTH, HEIGHT, &next_graph);
     for (index, packet) in [first_small, second_small].into_iter().enumerate() {
         let outcome = renderer
             .render_held_packet_for_tests(&texture, &view, WIDTH, HEIGHT, packet)
@@ -208,15 +208,15 @@ fn reused_deep_scene_updates_backdrop_presence() {
     };
 
     let plain = backdrop_graph(false);
-    let expected = support::present_and_read(&mut renderer, WIDTH, HEIGHT, plain.clone());
+    let expected = support::present_and_read(&mut renderer, WIDTH, HEIGHT, &plain);
     let with_backdrop =
-        support::present_and_read(&mut renderer, WIDTH, HEIGHT, backdrop_graph(true));
+        support::present_and_read(&mut renderer, WIDTH, HEIGHT, &backdrop_graph(true));
     assert!(
         with_backdrop != expected,
         "the deepest layer's backdrop must affect the picture"
     );
 
-    let actual = support::present_and_read(&mut renderer, WIDTH, HEIGHT, plain);
+    let actual = support::present_and_read(&mut renderer, WIDTH, HEIGHT, &plain);
     assert_eq!(
         actual, expected,
         "a returned deep backdrop must not remain active after its shell is reused"

@@ -62,10 +62,10 @@ fn a_launch_with_no_record_finds_its_rect_and_text_pipelines_built() {
         GraphicsLayer::default(),
         Vec::new(),
     );
-    support::capture_graph(&mut renderer, empty, WIDTH, HEIGHT);
+    support::capture_graph(&mut renderer, &empty, WIDTH, HEIGHT);
     support::wait_for_background_compiler_idle();
     let built = cranpose_render_wgpu::pipelines_created();
-    let frame = support::capture_graph(&mut renderer, card_and_label(), WIDTH, HEIGHT);
+    let frame = support::capture_graph(&mut renderer, &card_and_label(), WIDTH, HEIGHT);
     assert!(
         support::distinct_colors(&frame.pixels) > 3,
         "the card and the label show"

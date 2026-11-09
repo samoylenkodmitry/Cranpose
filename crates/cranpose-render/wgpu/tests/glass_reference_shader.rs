@@ -584,8 +584,8 @@ fn a_lens_variant_and_a_resting_card_match_the_reference_shader() {
 fn assert_rest_agrees_and_activity_differs(
     renderer: &mut support::LockedRenderer,
     claim: &str,
-    rest: (LayerNode, LayerNode),
-    active: (LayerNode, LayerNode),
+    rest: &(LayerNode, LayerNode),
+    active: &(LayerNode, LayerNode),
 ) {
     let resting = capture(renderer, &rest.0, 1.0);
     let other = capture(renderer, &rest.1, 1.0);
@@ -625,11 +625,11 @@ fn a_resting_frosted_glass_never_runs_its_adaptive_block() {
         &mut renderer,
         "a resting glass returns before its adaptive block, so the shipped shader and the same \
          source without that block must agree at the same capture geometry",
-        (
+        &(
             frosted_card(0.42, 0.0, LIQUID_GLASS_WGSL, None),
             frosted_card(0.42, 0.0, &cut, None),
         ),
-        (
+        &(
             frosted_card(0.42, 0.5, LIQUID_GLASS_WGSL, None),
             frosted_card(0.42, 0.5, &cut, None),
         ),
@@ -649,11 +649,11 @@ fn a_resting_frosted_glass_reads_no_substrate() {
          byte for byte like one whose declaration is made explicit: the declaration sets the \
          capture geometry, and on Adreno a geometry change moves pixels even where the \
          substrate is never read",
-        (
+        &(
             frosted_card(0.42, 0.0, LIQUID_GLASS_WGSL, None),
             frosted_card(0.42, 0.0, LIQUID_GLASS_WGSL, Some(blur)),
         ),
-        (
+        &(
             frosted_card(0.42, 0.5, LIQUID_GLASS_WGSL, None),
             frosted_card(0.42, 0.5, LIQUID_GLASS_WGSL, Some(Vec::new())),
         ),

@@ -113,7 +113,7 @@ fn retained_texture_stats_count_the_offscreen_pool_once() {
         eprintln!("skipping (headless WGPU init failed)");
         return;
     };
-    support::capture_graph(&mut renderer, glass_page(), FRAME_WIDTH, FRAME_HEIGHT);
+    support::capture_graph(&mut renderer, &glass_page(), FRAME_WIDTH, FRAME_HEIGHT);
     let stats = renderer.last_frame_stats().expect("frame stats");
 
     assert!(
@@ -180,10 +180,10 @@ fn a_frame_through_reused_transients_matches_a_renderer_that_never_pooled() {
     renderer
         .render_current_scene_to_texture(FRAME_WIDTH, FRAME_HEIGHT)
         .expect("render should succeed");
-    support::capture_graph(&mut renderer, glass_page(), FRAME_WIDTH, FRAME_HEIGHT);
+    support::capture_graph(&mut renderer, &glass_page(), FRAME_WIDTH, FRAME_HEIGHT);
     let reused = support::capture_graph(
         &mut renderer,
-        glass_page_over(Some(BAND)),
+        &glass_page_over(Some(BAND)),
         FRAME_WIDTH,
         FRAME_HEIGHT,
     );
@@ -251,14 +251,14 @@ fn a_new_scrolled_size_matches_fresh_then_reuses_its_exact_textures() {
     };
     support::capture_graph(
         &mut renderer,
-        scrolled_glass_page(0.0),
+        &scrolled_glass_page(0.0),
         FRAME_WIDTH,
         FRAME_HEIGHT,
     );
     let offset = SCROLL_OFFSETS[5];
     let reused = support::capture_graph(
         &mut renderer,
-        scrolled_glass_page(offset),
+        &scrolled_glass_page(offset),
         FRAME_WIDTH,
         FRAME_HEIGHT,
     );
@@ -281,7 +281,7 @@ fn a_new_scrolled_size_matches_fresh_then_reuses_its_exact_textures() {
 
     let repeated = support::capture_graph(
         &mut renderer,
-        scrolled_glass_page(offset),
+        &scrolled_glass_page(offset),
         FRAME_WIDTH,
         FRAME_HEIGHT,
     );

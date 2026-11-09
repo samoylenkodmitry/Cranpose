@@ -23,7 +23,7 @@ fn tab_lighting_at_zero_glow_leaves_the_page_untouched() {
     let page = support::striped_page(WIDTH, HEIGHT);
     let plain = support::capture_graph(
         &mut renderer,
-        support::page_graph(WIDTH, HEIGHT, page.clone()),
+        &support::page_graph(WIDTH, HEIGHT, page.clone()),
         WIDTH,
         HEIGHT,
     );

@@ -107,7 +107,7 @@ fn a_blur_at_the_edge_of_its_clip_does_not_read_past_the_clip() {
             return;
         }
     };
-    let frame = support::capture_graph(&mut renderer, page(), FRAME, FRAME);
+    let frame = support::capture_graph(&mut renderer, &page(), FRAME, FRAME);
     let pixels = &frame.pixels;
 
     let top = BAND_TOP as usize;

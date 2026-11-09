@@ -68,7 +68,7 @@ fn folded_stages_draw_what_stages_the_device_specializes_draw() {
         let Ok(mut renderer) = support::headless_renderer() else {
             return;
         };
-        support::capture_graph(&mut renderer, scene(), SIZE, SIZE).pixels
+        support::capture_graph(&mut renderer, &scene(), SIZE, SIZE).pixels
     };
     assert!(
         cranpose_render_wgpu::shader_stages_folded() > before,
@@ -82,7 +82,7 @@ fn folded_stages_draw_what_stages_the_device_specializes_draw() {
     // drawing while this one is on.
     let shared = support::headless_renderer().map(|mut renderer| {
         cranpose_core::debug_toggles::set_debug_toggle(NO_SHADER_FOLD, Some("1"));
-        let pixels = support::capture_graph(&mut renderer, scene(), SIZE, SIZE).pixels;
+        let pixels = support::capture_graph(&mut renderer, &scene(), SIZE, SIZE).pixels;
         cranpose_core::debug_toggles::set_debug_toggle(NO_SHADER_FOLD, None);
         pixels
     });

@@ -78,10 +78,10 @@ impl LayoutSource<'_> {
         }
     }
 
-    fn shared(&self) -> (AnnotatedString, Arc<TextStyle>) {
+    fn shared_style(&self) -> Arc<TextStyle> {
         match self {
-            Self::Borrowed { text, style } => ((*text).clone(), Arc::new((*style).clone())),
-            Self::Shared { text, .. } => (text.text.clone(), Arc::clone(text.style)),
+            Self::Borrowed { style, .. } => Arc::new((*style).clone()),
+            Self::Shared { text, .. } => Arc::clone(text.style),
         }
     }
 
@@ -214,8 +214,8 @@ impl TextService {
         let prepared = self
             .lay_out_retired(&source, frame, units)
             .unwrap_or_else(|| {
-                let (text, style) = source.shared();
-                Rc::new(self.lay_out(text, style, frame, (units, source.shaped())))
+                let style = source.shared_style();
+                Rc::new(self.lay_out(source.text(), style, frame, (units, source.shaped())))
             });
         if let Some((key, miss)) = missed {
             self.layouts
@@ -259,11 +259,11 @@ impl TextService {
         }
         let mut spare = self.retired.borrow_mut().take()?;
         let slot = Rc::get_mut(&mut spare)?;
-        let (text, style) = source.shared();
-        self.with_input(&text, &style, frame, units, |layouter, input, fonts| {
+        let (text, style) = (source.text(), source.shared_style());
+        self.with_input(text, &style, frame, units, |layouter, input, fonts| {
             layouter.layout_into(input, fonts, &mut slot.layout);
         });
-        slot.retext(&text, style, frame);
+        slot.retext(text, style, frame);
         Some(spare)
     }
 
@@ -271,7 +271,7 @@ impl TextService {
     // the glyphs of `shaped` when given.
     fn lay_out(
         &self,
-        text: AnnotatedString,
+        text: &AnnotatedString,
         style: Arc<TextStyle>,
         frame: TextFrame,
         (units, shaped): (TextUnits, Option<&TextLayout>),
@@ -279,8 +279,8 @@ impl TextService {
         let options = frame.options.normalized();
         let min_lines = options.min_lines;
         let Some(min_font_size_sp) = options.overflow.scale_down_min_font_size_sp() else {
-            let layout = self.layout(&text, &style, frame, (units, shaped));
-            return PreparedTextLayout::new(&text, style, layout, (frame.max_width, min_lines));
+            let layout = self.layout(text, &style, frame, (units, shaped));
+            return PreparedTextLayout::new(text, style, layout, (frame.max_width, min_lines));
         };
         self.lay_out_scaled_down(text, style, frame, (units, shaped), min_font_size_sp)
     }
@@ -291,7 +291,7 @@ impl TextService {
     #[inline(never)]
     fn lay_out_scaled_down(
         &self,
-        text: AnnotatedString,
+        text: &AnnotatedString,
         style: Arc<TextStyle>,
         frame: TextFrame,
         (units, shaped): (TextUnits, Option<&TextLayout>),
@@ -308,11 +308,11 @@ impl TextService {
         };
         let fits =
             |layout: &TextLayout| !layout.did_overflow_height() && !layout.did_overflow_width();
-        let full = self.layout(&text, &style, frame, (units, shaped));
+        let full = self.layout(text, &style, frame, (units, shaped));
         let base = style.resolve_font_size(DEFAULT_FONT_SIZE_SP);
         let min_factor = (min_font_size_sp.min(base) / base).clamp(0.0, 1.0);
         if fits(&full) || !frame.max_width.is_finite() || min_factor >= 1.0 {
-            return PreparedTextLayout::new(&text, style, full, (frame.max_width, min_lines));
+            return PreparedTextLayout::new(text, style, full, (frame.max_width, min_lines));
         }
         // Each size takes the glyphs of the first: shaping is the same at
         // every size.
@@ -321,7 +321,7 @@ impl TextService {
                 factor: units.factor * factor,
                 ..units
             };
-            self.layout(&text, &style, frame, (units, Some(&full)))
+            self.layout(text, &style, frame, (units, Some(&full)))
         };
         let (mut best, mut factor) = (at(min_factor), min_factor);
         if fits(&best) {
@@ -337,7 +337,7 @@ impl TextService {
                 }
             }
         }
-        let (text, style) = scaled_drawing(&text, &style, factor);
+        let (text, style) = scaled_drawing(text, &style, factor);
         PreparedTextLayout::new(&text, style, best, (frame.max_width, min_lines))
     }
 

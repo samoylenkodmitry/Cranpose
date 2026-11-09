@@ -43,10 +43,10 @@ fn transparent_surface_extent_does_not_shift_projected_source_samples() {
     .enumerate()
     {
         let inner =
-            support::capture_graph(&mut renderer, graph(INNER_BOUNDS, transform), FRAME, FRAME);
+            support::capture_graph(&mut renderer, &graph(INNER_BOUNDS, transform), FRAME, FRAME);
         let expanded = support::capture_graph(
             &mut renderer,
-            graph(EXPANDED_BOUNDS, transform),
+            &graph(EXPANDED_BOUNDS, transform),
             FRAME,
             FRAME,
         );
@@ -306,7 +306,7 @@ fn capture_scaled_backdrop(
     page.push(RenderNode::Layer(Box::new(group)));
     let frame = support::capture_graph(
         renderer,
-        LayerNode {
+        &LayerNode {
             size: Size::new(FRAME as f32, FRAME as f32),
             children: page,
             ..LayerNode::default()
@@ -382,7 +382,7 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
         ],
         ..LayerNode::default()
     };
-    let frame = support::capture_graph(&mut renderer, graph, FRAME, FRAME);
+    let frame = support::capture_graph(&mut renderer, &graph, FRAME, FRAME);
     let pixel_x = 9usize;
     let pixel_y = 9usize;
     let pixel = &frame.pixels[(pixel_y * frame.width as usize + pixel_x) * 4..][..4];

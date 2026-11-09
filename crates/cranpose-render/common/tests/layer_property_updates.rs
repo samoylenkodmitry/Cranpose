@@ -54,7 +54,10 @@ fn apply_updates(composition: &mut TestComposition, graph: &mut Scene, updates: 
     let runtime = composition.runtime_handle();
     let mut applier = composition.applier_mut();
     applier.set_runtime_handle(runtime);
-    assert!(graph.update_from_applier(&applier, root, updates));
+    assert!(
+        graph.update_from_applier(&applier, root, updates),
+        "the scene takes the update in place"
+    );
     applier.clear_runtime_handle();
 }
 

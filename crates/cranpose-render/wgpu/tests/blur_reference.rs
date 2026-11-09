@@ -185,7 +185,7 @@ fn a_wide_blur_runs_both_passes_at_the_scratch_size() {
         return;
     };
     let pass_pixels = |renderer: &mut support::LockedRenderer, radius: f32| {
-        support::capture_graph(renderer, page(Some(radius)), FRAME, FRAME);
+        support::capture_graph(renderer, &page(Some(radius)), FRAME, FRAME);
         renderer.last_frame_stats().expect("stats").pass_pixels
     };
     let narrow = pass_pixels(&mut renderer, RADIUS);

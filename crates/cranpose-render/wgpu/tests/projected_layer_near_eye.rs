@@ -34,7 +34,7 @@ fn a_wall_reaching_behind_the_eye_draws_only_its_part_in_front() {
     };
     let frame = support::capture_graph(
         &mut renderer,
-        support::page_graph(FRAME, FRAME, vec![RenderNode::Layer(Box::new(wall))]),
+        &support::page_graph(FRAME, FRAME, vec![RenderNode::Layer(Box::new(wall))]),
         FRAME,
         FRAME,
     );

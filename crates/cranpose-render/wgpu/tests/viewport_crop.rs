@@ -113,7 +113,7 @@ fn a_backdrop_reading_card_larger_than_the_frame_renders_its_visible_part() {
     let offset = Point::new(-100.0, -50.0);
     let cropped = capture_graph(
         &mut renderer,
-        scene(FRAME, FRAME, offset, offset),
+        &scene(FRAME, FRAME, offset, offset),
         FRAME,
         FRAME,
     );
@@ -131,7 +131,7 @@ fn a_backdrop_reading_card_larger_than_the_frame_renders_its_visible_part() {
     );
     let whole = capture_graph(
         &mut renderer,
-        scene(
+        &scene(
             CARD_WIDTH as u32,
             CARD_HEIGHT as u32,
             Point::default(),

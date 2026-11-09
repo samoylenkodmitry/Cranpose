@@ -31,7 +31,7 @@ fn a_shape_specialization_draws_the_bytes_of_the_general_program() {
     let graph = every_shape();
     let capture = || {
         let mut renderer = LockedRenderer::beside_locked().expect("renderer");
-        support::capture_graph(&mut renderer, graph.clone(), 256, 256).pixels
+        support::capture_graph(&mut renderer, &graph, 256, 256).pixels
     };
     let specialized = capture();
     cranpose_core::debug_toggles::set_debug_toggle("CRANPOSE_SHAPE_VARIANTS", Some("0"));

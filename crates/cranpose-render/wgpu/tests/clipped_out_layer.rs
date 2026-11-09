@@ -49,7 +49,7 @@ fn a_glass_control_scrolled_out_of_its_list_paints_nothing() {
     };
     let shown = support::capture_graph(
         &mut renderer,
-        clip_band::page(glass(), SHOWN, vec![]),
+        &clip_band::page(glass(), SHOWN, vec![]),
         FRAME,
         FRAME,
     );
@@ -62,7 +62,7 @@ fn a_glass_control_scrolled_out_of_its_list_paints_nothing() {
 
     let scrolled = support::capture_graph(
         &mut renderer,
-        clip_band::page(glass(), SCROLLED_OUT, vec![]),
+        &clip_band::page(glass(), SCROLLED_OUT, vec![]),
         FRAME,
         FRAME,
     );

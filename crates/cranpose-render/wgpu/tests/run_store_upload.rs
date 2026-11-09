@@ -44,7 +44,7 @@ fn a_stored_run_draws_every_record_the_recording_changed() {
             renderer,
             WIDTH,
             HEIGHT,
-            support::stored_run_graph(WIDTH, HEIGHT, colors),
+            &support::stored_run_graph(WIDTH, HEIGHT, colors),
         )
     };
     let all_red = vec![RED; RECORDS];
@@ -165,7 +165,7 @@ fn stored_runs_that_take_gradients_after_solid_frames_paint_their_own() {
             renderer,
             WIDTH,
             TALL,
-            support::stored_runs_graph_of(WIDTH, TALL, runs),
+            &support::stored_runs_graph_of(WIDTH, TALL, runs),
         )
     };
     let at = |pixels: &[u8], index: usize| {

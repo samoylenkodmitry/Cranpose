@@ -236,7 +236,7 @@ fn squares() -> LayerNode {
 /// What `renderer`'s first frame waited for (see [`support::capture_waits`]);
 /// a frame that waited for nothing shows its squares.
 fn first_frame_waits(renderer: &mut support::LockedRenderer) -> u64 {
-    let (frame, _, waits) = support::capture_with_waits(renderer, squares(), 16, 16);
+    let (frame, _, waits) = support::capture_with_waits(renderer, &squares(), 16, 16);
     if waits == 0 {
         assert!(frame.pixels.as_chunks::<4>().0.contains(&[255; 4]));
     }
@@ -395,7 +395,7 @@ fn glass_of(spec: &LiquidGlassSpec) -> RenderEffect {
 /// What `renderer` waited for while drawing `page`.
 fn frame_waits_of(renderer: &mut support::LockedRenderer, page: LayerNode) -> u64 {
     use support::glass_page::{FRAME_HEIGHT, FRAME_WIDTH};
-    support::capture_waits(renderer, page, FRAME_WIDTH, FRAME_HEIGHT).1
+    support::capture_waits(renderer, &page, FRAME_WIDTH, FRAME_HEIGHT).1
 }
 
 /// Draws `page` until it draws without a placeholder, so the launch
@@ -451,7 +451,7 @@ fn frosted_frame_waits(renderer: &mut support::LockedRenderer) -> u64 {
 
 fn capture_frosted_page(renderer: &mut support::LockedRenderer) -> CapturedFrame {
     use support::glass_page::{FRAME_HEIGHT, FRAME_WIDTH};
-    let frame = support::capture_graph(renderer, frosted_page(), FRAME_WIDTH, FRAME_HEIGHT);
+    let frame = support::capture_graph(renderer, &frosted_page(), FRAME_WIDTH, FRAME_HEIGHT);
     let stats = renderer
         .last_frame_stats()
         .expect("frosted frame statistics");
@@ -726,7 +726,7 @@ fn a_relaunch_draws_cached_glass_with_its_own_pipelines() {
                 eprintln!("the driver cache needs PIPELINE_CACHE support");
                 return;
             }
-            support::capture_graph(relaunch, page(), FRAME_WIDTH, FRAME_HEIGHT);
+            support::capture_graph(relaunch, &page(), FRAME_WIDTH, FRAME_HEIGHT);
             let stats = relaunch.last_frame_stats().expect("glass frame statistics");
             assert_eq!(
                 stats.shader_pipeline_fallback_draws, 0,

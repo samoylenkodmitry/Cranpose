@@ -118,7 +118,7 @@ fn effect_page_with(layer: GraphicsLayer, effect: Option<RenderEffect>) -> Layer
 }
 
 /// What an app's renderer draws for `graph` once every pipeline is built.
-fn settled(graph: LayerNode) -> CapturedFrame {
+fn settled(graph: &LayerNode) -> CapturedFrame {
     let mut reference = support::LockedRenderer::beside_locked().expect("reference renderer");
     support::capture_graph(&mut reference, graph, SIZE, SIZE)
 }
@@ -152,9 +152,9 @@ fn first_frame(graph: &LayerNode) -> (support::LockedRenderer, CapturedFrame) {
     // The pipelines every screen draws with land first, so only the
     // effect waits: the page's fill, and the pane's composite, which the
     // first frame of the page draws without the depth pre-pass.
-    support::capture_graph(&mut renderer, empty_page(), SIZE, SIZE);
+    support::capture_graph(&mut renderer, &empty_page(), SIZE, SIZE);
     support::wait_for_background_compiler_idle();
-    let frame = support::capture_graph(&mut renderer, graph.clone(), SIZE, SIZE);
+    let frame = support::capture_graph(&mut renderer, graph, SIZE, SIZE);
     let stats = renderer.last_frame_stats().expect("frame statistics");
     assert_eq!(
         stats.placeholder_draws, 1,
@@ -175,13 +175,13 @@ fn assert_lands(renderer: &mut support::LockedRenderer, graph: &LayerNode) {
         "the frame after the pipeline lands",
         SIZE,
         &drawn.pixels,
-        &settled(graph.clone()).pixels,
+        &settled(&graph.clone()).pixels,
     );
     for _ in 0..4 {
         if !renderer.needs_frame_warmup() {
             return;
         }
-        support::capture_graph(renderer, graph.clone(), SIZE, SIZE);
+        support::capture_graph(renderer, graph, SIZE, SIZE);
     }
     panic!("the renderer kept asking for frames after the effect drew");
 }
@@ -201,7 +201,7 @@ fn a_backdrop_fills_its_shape_with_its_placeholder_until_its_pipeline_lands() {
     let graph = backdrop_page(shader("placeholder backdrop", Some(RED)));
     let (mut renderer, first) = first_frame(&graph);
     assert_eq!(pane_colors(&first), [[255, 0, 0, 255]]);
-    let without_pane = settled(white_page());
+    let without_pane = settled(&white_page());
     let outside = |frame: &CapturedFrame| {
         let mut pixels = frame.pixels.clone();
         for y in PANE.y as u32..(PANE.y + PANE.height) as u32 {
@@ -235,7 +235,7 @@ fn a_layer_effect_leaves_the_content_as_it_is_until_its_pipeline_lands() {
         "the content without its effect",
         SIZE,
         &first.pixels,
-        &settled(effect_page(None)).pixels,
+        &settled(&effect_page(None)).pixels,
     );
     assert_lands(&mut renderer, &graph);
 }
@@ -253,15 +253,15 @@ fn shader_only(tag: &str) -> GraphicsLayer {
 
 /// Asserts `graph`'s first frame shows the red placeholder over the pane,
 /// and that the shader lands.
-fn assert_placeholder_then_lands(graph: LayerNode) {
-    let (mut renderer, first) = first_frame(&graph);
+fn assert_placeholder_then_lands(graph: &LayerNode) {
+    let (mut renderer, first) = first_frame(graph);
     assert_eq!(pane_colors(&first), [[255, 0, 0, 255]]);
-    assert_lands(&mut renderer, &graph);
+    assert_lands(&mut renderer, graph);
 }
 
 #[test]
 fn a_layer_drawn_only_by_its_shader_shows_the_placeholder_until_its_pipeline_lands() {
-    assert_placeholder_then_lands(page(shader_only("shader-only layer"), Vec::new()));
+    assert_placeholder_then_lands(&page(shader_only("shader-only layer"), Vec::new()));
 }
 
 /// The red placeholder over the middle half of the pane, its corners
@@ -339,7 +339,7 @@ fn a_shadow_is_left_out_until_its_blur_lands() {
         "the page without its shadow",
         SIZE,
         &first.pixels,
-        &settled(page(GraphicsLayer::default(), vec![square()])).pixels,
+        &settled(&page(GraphicsLayer::default(), vec![square()])).pixels,
     );
     assert_lands(&mut renderer, &graph);
 }
@@ -359,7 +359,7 @@ fn a_frame_with_placeholders_awaits_their_pipelines_until_they_land() {
         );
         std::thread::sleep(std::time::Duration::from_millis(2));
     }
-    support::capture_graph(&mut renderer, graph, SIZE, SIZE);
+    support::capture_graph(&mut renderer, &graph, SIZE, SIZE);
     let stats = renderer.last_frame_stats().expect("frame statistics");
     assert_eq!(stats.placeholder_draws, 0);
     assert!(!renderer.awaits_pipelines());
@@ -369,7 +369,7 @@ fn a_frame_with_placeholders_awaits_their_pipelines_until_they_land() {
 /// and still shows the placeholder while the shader compiles.
 #[test]
 fn a_scaled_layer_drawn_only_by_its_shader_shows_the_placeholder() {
-    assert_placeholder_then_lands(page_with(
+    assert_placeholder_then_lands(&page_with(
         Rect {
             x: 0.0,
             y: 0.0,

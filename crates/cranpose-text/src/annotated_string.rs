@@ -721,8 +721,14 @@ impl Builder {
             return self;
         }
 
-        debug_assert!(annotated.text().is_char_boundary(range.start));
-        debug_assert!(annotated.text().is_char_boundary(range.end));
+        debug_assert!(
+            annotated.text().is_char_boundary(range.start),
+            "the clamped range starts on a character"
+        );
+        debug_assert!(
+            annotated.text().is_char_boundary(range.end),
+            "the clamped range ends on a character"
+        );
 
         let target_offset = self.text.len();
         self.text.push_str(&annotated.text()[range.clone()]);

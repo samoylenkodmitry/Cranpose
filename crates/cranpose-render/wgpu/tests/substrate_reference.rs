@@ -41,9 +41,9 @@ fn child_shader_tails_receive_their_substrates() {
         };
         let expected = capture(
             &mut renderer,
-            graph(probe.clone().then(RenderEffect::offset(0.0, 0.0))),
+            &graph(probe.clone().then(RenderEffect::offset(0.0, 0.0))),
         );
-        let actual = capture(&mut renderer, graph(probe));
+        let actual = capture(&mut renderer, &graph(probe));
         assert!(
             region_pixels(&actual, GLASS) == region_pixels(&expected, GLASS),
             "child {spec:?} substrate differs from its full effect path"
@@ -62,14 +62,14 @@ fn shader_chains_receive_each_stages_substrates() {
         let probe = support::substrate_probe(spec, SubstrateProbeRead::Held);
         let expected = capture(
             &mut renderer,
-            page(Some(effect_layer(GLASS, probe.clone()))),
+            &page(Some(effect_layer(GLASS, probe.clone()))),
         );
         for terminal in [false, true] {
             let mut chained = RenderEffect::offset(0.0, 0.0).then(probe.clone());
             if !terminal {
                 chained = chained.then(RenderEffect::offset(0.0, 0.0));
             }
-            let actual = capture(&mut renderer, page(Some(effect_layer(GLASS, chained))));
+            let actual = capture(&mut renderer, &page(Some(effect_layer(GLASS, chained))));
             for (a, b) in region_pixels(&actual, GLASS)
                 .iter()
                 .zip(region_pixels(&expected, GLASS))
@@ -113,7 +113,7 @@ fn page(layer: Option<RenderNode>) -> LayerNode {
     support::page_graph(FRAME_WIDTH, FRAME_HEIGHT, children)
 }
 
-fn capture(renderer: &mut support::LockedRenderer, graph: LayerNode) -> CapturedFrame {
+fn capture(renderer: &mut support::LockedRenderer, graph: &LayerNode) -> CapturedFrame {
     support::capture_graph(renderer, graph, FRAME_WIDTH, FRAME_HEIGHT)
 }
 
@@ -196,7 +196,7 @@ fn transformed_child_receives_its_shared_mean_after_blur() {
             glass,
         ],
     );
-    let frame = capture(&mut renderer, graph);
+    let frame = capture(&mut renderer, &graph);
     for pixel in region_pixels(&frame, rect(65.0, 45.0, 30.0, 25.0))
         .as_chunks::<4>()
         .0
@@ -229,7 +229,7 @@ fn shared_mean_uses_the_layer_extent_without_filter_padding() {
             ),
         ],
     );
-    let frame = capture(&mut renderer, graph);
+    let frame = capture(&mut renderer, &graph);
     for pixel in region_pixels(&frame, rect(65.0, 45.0, 30.0, 25.0))
         .as_chunks::<4>()
         .0
@@ -245,7 +245,7 @@ fn shared_mean_uses_the_layer_extent_without_filter_padding() {
 fn shared_mean_includes_every_texel_of_each_odd_sized_capture() {
     let mut renderer = support::headless_renderer().expect("mean substrate requires GPU");
     let regions = [rect(7.0, 5.0, 73.0, 51.0), rect(137.0, 11.0, 59.0, 83.0)];
-    let plain = capture(&mut renderer, page(None));
+    let plain = capture(&mut renderer, &page(None));
     let mut children = support::striped_page(FRAME_WIDTH, FRAME_HEIGHT);
     for region in regions {
         children.push(effect_layer(
@@ -255,7 +255,7 @@ fn shared_mean_includes_every_texel_of_each_odd_sized_capture() {
     }
     let actual = capture(
         &mut renderer,
-        support::page_graph(FRAME_WIDTH, FRAME_HEIGHT, children),
+        &support::page_graph(FRAME_WIDTH, FRAME_HEIGHT, children),
     );
     for region in regions {
         let source = region_pixels(&plain, region);
@@ -285,10 +285,10 @@ fn a_blurred_substrate_is_the_capture_blurred_by_its_radius() {
         eprintln!("skipping (headless WGPU init failed)");
         return;
     };
-    let plain = capture(&mut renderer, page(None));
+    let plain = capture(&mut renderer, &page(None));
     let probe = capture(
         &mut renderer,
-        page(Some(effect_layer(
+        &page(Some(effect_layer(
             GLASS,
             support::substrate_probe(
                 SubstrateSpec::Blur {
@@ -332,7 +332,7 @@ fn band_capture() -> Rect {
 fn gradient_band(renderer: &mut support::LockedRenderer) -> CapturedFrame {
     capture(
         renderer,
-        page(Some(effect_layer(
+        &page(Some(effect_layer(
             band(),
             gradient_blur_effect(WIDE_RADIUS, 0.0, GradientBlurDirection::TopToBottom),
         ))),
@@ -348,7 +348,7 @@ fn a_gradient_blur_realises_its_wide_radius_as_the_wide_level() {
         eprintln!("skipping (headless WGPU init failed)");
         return;
     };
-    let plain = capture(&mut renderer, page(None));
+    let plain = capture(&mut renderer, &page(None));
     let frame = gradient_band(&mut renderer);
     let capture_rect = band_capture();
     let expected = reference_blur_of(&plain, capture_rect, WIDE_RADIUS);
@@ -417,7 +417,7 @@ fn a_gradient_blur_blends_its_levels_between_sharp_and_wide() {
         eprintln!("skipping (headless WGPU init failed)");
         return;
     };
-    let plain = capture(&mut renderer, page(None));
+    let plain = capture(&mut renderer, &page(None));
     let frame = gradient_band(&mut renderer);
     let bottom = rect(0.0, BAND_TOP + BAND_HEIGHT - 2.0, FRAME_WIDTH as f32, 1.0);
     assert_eq!(

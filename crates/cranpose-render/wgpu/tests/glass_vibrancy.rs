@@ -785,7 +785,10 @@ fn extract_lens(root: LayerRef<'_>) -> Option<LayerNode> {
     let (foreground, transform) = lens_stage(root, ProjectiveTransform::identity(), 3.0)?;
     let (background, background_transform) =
         lens_stage(root, ProjectiveTransform::identity(), 2.0)?;
-    assert_eq!(transform, background_transform);
+    assert_eq!(
+        transform, background_transform,
+        "both lens stages sit in the same space"
+    );
     let mut lens = describe(foreground);
     lens.transform_to_parent = transform;
     lens.graphics_layer.backdrop_effect = Some(
@@ -1737,7 +1740,7 @@ fn native_touch_light_uses_a_gaussian_disk() {
     };
     let graph = support::shader_probe_graph(bounds, shader);
     let mut renderer = support::headless_renderer().expect("GPU native light test must run");
-    let frame = support::capture_graph(&mut renderer, graph, 320, 320);
+    let frame = support::capture_graph(&mut renderer, &graph, 320, 320);
     for row in include_str!("fixtures/native_glow_mask.csv")
         .lines()
         .skip(1)

@@ -194,12 +194,12 @@ fn cancelled_nested_scene_renders_the_same_on_the_next_frame() {
         }
     };
     let reference =
-        support::present_and_read(&mut renderer, WIDTH, HEIGHT, nested_isolated_graph());
+        support::present_and_read(&mut renderer, WIDTH, HEIGHT, &nested_isolated_graph());
 
     cancel_at_different_viewport(&mut renderer, &nested_isolated_graph());
 
     let after_cancel =
-        support::present_and_read(&mut renderer, WIDTH, HEIGHT, nested_isolated_graph());
+        support::present_and_read(&mut renderer, WIDTH, HEIGHT, &nested_isolated_graph());
     support::assert_same_bytes(
         "nested isolated scene after a cancelled packet",
         WIDTH,
@@ -228,14 +228,14 @@ fn a_cancelled_packet_leaves_the_run_store_at_its_last_upload() {
     let green = Color(0.2, 0.7, 0.3, 1.0);
     let red = Color(0.8, 0.2, 0.2, 1.0);
     let first =
-        support::present_and_read(&mut renderer, WIDTH, HEIGHT, stored_run_graph(96, green));
+        support::present_and_read(&mut renderer, WIDTH, HEIGHT, &stored_run_graph(96, green));
 
     cancel_at_different_viewport(&mut renderer, &stored_run_graph(96, red));
 
     let after_cancel =
-        support::present_and_read(&mut renderer, WIDTH, HEIGHT, stored_run_graph(96, red));
+        support::present_and_read(&mut renderer, WIDTH, HEIGHT, &stored_run_graph(96, red));
     let reference =
-        support::present_and_read(&mut renderer, WIDTH, HEIGHT, stored_run_graph(96, red));
+        support::present_and_read(&mut renderer, WIDTH, HEIGHT, &stored_run_graph(96, red));
     assert_ne!(
         first, after_cancel,
         "the red command must draw red, not the green tables the store retained"

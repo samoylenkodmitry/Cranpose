@@ -250,8 +250,8 @@ fn an_image_of_another_blend_mode_draws_after_the_held_image_below_it() {
             NO_INTERIORS_FIRST,
             (!interiors_first).then_some("1"),
         );
-        support::capture_graph(&mut renderer, graph.clone(), SIZE, SIZE);
-        let frame = support::capture_graph(&mut renderer, graph.clone(), SIZE, SIZE);
+        support::capture_graph(&mut renderer, &graph, SIZE, SIZE);
+        let frame = support::capture_graph(&mut renderer, &graph, SIZE, SIZE);
         cranpose_core::debug_toggles::set_debug_toggle(NO_INTERIORS_FIRST, None);
         assert_eq!(
             pixel(&frame, 20, 30),

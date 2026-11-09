@@ -79,7 +79,7 @@ fn glasses_page(count: usize, effect: impl Fn() -> RenderEffect) -> LayerNode {
     support::page_graph(FRAME_WIDTH, FRAME_HEIGHT, children)
 }
 
-fn capture(renderer: &mut support::LockedRenderer, graph: LayerNode) -> CapturedFrame {
+fn capture(renderer: &mut support::LockedRenderer, graph: &LayerNode) -> CapturedFrame {
     support::capture_graph(renderer, graph, FRAME_WIDTH, FRAME_HEIGHT)
 }
 
@@ -137,8 +137,8 @@ fn assert_packed_parity(label: &str, effect: impl Fn() -> RenderEffect, toleranc
             return;
         }
     };
-    let alone = capture(&mut renderer, glasses_page(1, &effect));
-    let packed = capture(&mut renderer, glasses_page(3, &effect));
+    let alone = capture(&mut renderer, &glasses_page(1, &effect));
+    let packed = capture(&mut renderer, &glasses_page(3, &effect));
     glass_has_content(&alone);
     assert_region_matches(label, &alone, &packed, tolerance);
 }
@@ -285,11 +285,11 @@ fn split_glass_preserves_resting_partial_and_full_activity() {
     let mut renderer = support::headless_renderer().expect("headless renderer");
     let resting = capture(
         &mut renderer,
-        glasses_page(1, || active_glass(0.0, 0.0, false)),
+        &glasses_page(1, || active_glass(0.0, 0.0, false)),
     );
     let full = capture(
         &mut renderer,
-        glasses_page(1, || active_glass(1.0, 0.0, false)),
+        &glasses_page(1, || active_glass(1.0, 0.0, false)),
     );
     assert_ne!(
         resting.pixels, full.pixels,
@@ -299,11 +299,11 @@ fn split_glass_preserves_resting_partial_and_full_activity() {
         for rim_style in [0.0, 0.5, 1.0] {
             let reference = capture(
                 &mut renderer,
-                glasses_page(1, || active_glass(activity, rim_style, false)),
+                &glasses_page(1, || active_glass(activity, rim_style, false)),
             );
             let specialized = capture(
                 &mut renderer,
-                glasses_page(1, || active_glass(activity, rim_style, true)),
+                &glasses_page(1, || active_glass(activity, rim_style, true)),
             );
             support::assert_same_bytes(
                 &format!("glass activity={activity} rim_style={rim_style}"),
@@ -332,7 +332,7 @@ fn a_shader_after_a_blur_is_told_the_size_its_downscaled_source_stands_for() {
     let padding = (effect().input_padding() + effect().output_padding()).ceil();
     let capture_size = (GLASS_WIDTH + 2.0 * padding, GLASS_HEIGHT + 2.0 * padding);
     let downscaled_height = (capture_size.1 / 2.0).ceil();
-    let frame = capture(&mut renderer, glasses_page(1, effect));
+    let frame = capture(&mut renderer, &glasses_page(1, effect));
     let probe = pixel_at(&frame, GLASS_LEFT + GLASS_WIDTH / 2.0, GLASS_TOP + 4.0);
     assert_eq!(
         [probe[0], probe[1], probe[2]],
@@ -396,10 +396,10 @@ fn a_shader_reads_its_capture_averaged_into_blocks_of_four_through_the_substrate
             return;
         }
     };
-    let page = capture(&mut renderer, glasses_page(0, glass_shader));
+    let page = capture(&mut renderer, &glasses_page(0, glass_shader));
     let frame = capture(
         &mut renderer,
-        glasses_page(1, || {
+        &glasses_page(1, || {
             support::substrate_probe(
                 SubstrateSpec::Average { block: 4 },
                 SubstrateProbeRead::BlockTexel,
@@ -433,7 +433,7 @@ fn assert_resized_atlas_substrates(effect: impl Fn(usize) -> RenderEffect, subst
             }
             support::page_graph(width, height, children)
         };
-        let packed = support::capture_graph(&mut renderer, scene(&[0, 1, 2]), width, height);
+        let packed = support::capture_graph(&mut renderer, &scene(&[0, 1, 2]), width, height);
         assert_eq!(renderer.device_error_count_for_tests(), 0);
         assert_eq!(
             renderer
@@ -443,7 +443,7 @@ fn assert_resized_atlas_substrates(effect: impl Fn(usize) -> RenderEffect, subst
             substrates * 3
         );
         for index in 0..3 {
-            let alone = support::capture_graph(&mut renderer, scene(&[index]), width, height);
+            let alone = support::capture_graph(&mut renderer, &scene(&[index]), width, height);
             let bounds = bounds(index);
             let visible = rect(
                 bounds.x + 2.0,
@@ -537,7 +537,7 @@ fn a_blurred_neighbour_preserves_averaged_substrates() {
             return;
         }
     };
-    let page = capture(&mut renderer, glasses_page(0, glass_shader));
+    let page = capture(&mut renderer, &glasses_page(0, glass_shader));
     let mut children = striped_page();
     children.push(glass_layer(
         0,
@@ -549,7 +549,7 @@ fn a_blurred_neighbour_preserves_averaged_substrates() {
     children.push(glass_layer(1, RenderEffect::blur(BLUR_RADIUS)));
     let frame = capture(
         &mut renderer,
-        support::page_graph(FRAME_WIDTH, FRAME_HEIGHT, children),
+        &support::page_graph(FRAME_WIDTH, FRAME_HEIGHT, children),
     );
     assert_first_glass_averages(&page, &frame);
 }
@@ -594,7 +594,7 @@ fn blur_substrates_preserve_captures_and_match_mixed_atlases_across_frames() {
             support::capture_graph_settled(&mut renderer, &scene(false), FRAME_WIDTH, FRAME_HEIGHT);
         let reference = capture(
             &mut support::LockedRenderer::beside_locked().expect("reference renderer"),
-            scene(false),
+            &scene(false),
         );
         // Stale reused uploads would move pixels far. NVIDIA's Vulkan driver
         // draws the reused and the fresh frame a step apart even with both on
@@ -604,7 +604,7 @@ fn blur_substrates_preserve_captures_and_match_mixed_atlases_across_frames() {
             delta <= 1,
             "reused blur uploads must match a fresh frame, off by {delta}"
         );
-        let mixed = capture(&mut renderer, scene(true));
+        let mixed = capture(&mut renderer, &scene(true));
         let top = (GLASS_TOP + y_offset).max(0.0);
         let visible_glass = rect(
             GLASS_LEFT,
@@ -642,10 +642,10 @@ fn a_blurred_glass_keeps_the_page_outside_its_rounded_corners() {
             return;
         }
     };
-    let page = capture(&mut renderer, glasses_page(0, glass_shader));
+    let page = capture(&mut renderer, &glasses_page(0, glass_shader));
     let glass = capture(
         &mut renderer,
-        glasses_page(1, || RenderEffect::blur(BLUR_RADIUS).then(glass_shader())),
+        &glasses_page(1, || RenderEffect::blur(BLUR_RADIUS).then(glass_shader())),
     );
     glass_has_content(&glass);
     for (x, y) in [
@@ -689,8 +689,11 @@ fn a_shader_glass_drawn_in_the_final_pass_matches_its_masked_blit_reference() {
             return;
         }
     };
-    let batched = capture(&mut renderer, glasses_page(2, glass_shader));
-    let reference = capture(&mut renderer, glasses_page(2, || unbatched(glass_shader())));
+    let batched = capture(&mut renderer, &glasses_page(2, glass_shader));
+    let reference = capture(
+        &mut renderer,
+        &glasses_page(2, || unbatched(glass_shader())),
+    );
     let batched_stats = renderer.last_frame_stats().expect("stats");
     glass_has_content(&batched);
     assert_region_matches(
@@ -744,9 +747,9 @@ fn an_empty_shader_child_drawn_in_the_final_pass_matches_its_surface_resolve() {
             children,
         )
     };
-    let tail = capture(&mut renderer, child(glass_shader()));
+    let tail = capture(&mut renderer, &child(glass_shader()));
     let tail_stats = renderer.last_frame_stats().expect("tail stats");
-    let surface = capture(&mut renderer, child(unbatched(glass_shader())));
+    let surface = capture(&mut renderer, &child(unbatched(glass_shader())));
     let surface_stats = renderer.last_frame_stats().expect("surface stats");
     assert_eq!(
         tail_stats.isolated_layer_renders, 0,
@@ -811,9 +814,9 @@ fn cards_over_band(card_count: usize, band: bool) -> LayerNode {
 /// Surface resolves and shader pixels the band adds on top of the cards
 /// alone.
 fn band_cost(renderer: &mut support::LockedRenderer, card_count: usize) -> (u32, u64) {
-    capture(renderer, cards_over_band(card_count, false));
+    capture(renderer, &cards_over_band(card_count, false));
     let cards_only = renderer.last_frame_stats().expect("stats");
-    let frame = capture(renderer, cards_over_band(card_count, true));
+    let frame = capture(renderer, &cards_over_band(card_count, true));
     glass_has_content(&frame);
     let with_band = renderer.last_frame_stats().expect("stats");
     (
@@ -917,9 +920,9 @@ fn a_glass_read_by_captures_above_it_is_shaded_once() {
             return;
         }
     };
-    let batched = capture(&mut renderer, glass_with_buttons(true));
+    let batched = capture(&mut renderer, &glass_with_buttons(true));
     let stats = renderer.last_frame_stats().expect("stats");
-    let reference = capture(&mut renderer, glass_with_buttons(false));
+    let reference = capture(&mut renderer, &glass_with_buttons(false));
     glass_has_content(&batched);
     let shaded_once = (GLASS_WIDTH * GLASS_HEIGHT + 2.0 * BUTTON_SIZE * BUTTON_SIZE) as u64;
     assert_eq!(
@@ -1029,8 +1032,8 @@ fn glass_content_mask_scene(with_material: bool) -> LayerNode {
 #[test]
 fn a_glass_content_mask_does_not_blur_inputs_it_cannot_sample() {
     let mut renderer = support::headless_renderer().expect("mask renderer");
-    let plain = capture(&mut renderer, glass_content_mask_scene(false));
-    let material = capture(&mut renderer, glass_content_mask_scene(true));
+    let plain = capture(&mut renderer, &glass_content_mask_scene(false));
+    let material = capture(&mut renderer, &glass_content_mask_scene(true));
     let stats = renderer.last_frame_stats().expect("mask frame stats");
     assert_eq!(
         support::max_channel_delta(&plain.pixels, &material.pixels),
@@ -1050,21 +1053,21 @@ fn animated_shader_reuses_unchanged_substrates_and_updates_glass_above_it() {
         let references = [0.2, 0.6, 1.0].map(|tint| {
             capture(
                 &mut renderer,
-                animated_substrate_scene(tint, false, stacked, isolated, false),
+                &animated_substrate_scene(tint, false, stacked, isolated, false),
             )
         });
         let changed_source_reference = capture(
             &mut renderer,
-            animated_substrate_scene(0.6, true, stacked, isolated, false),
+            &animated_substrate_scene(0.6, true, stacked, isolated, false),
         );
         let before = capture(
             &mut renderer,
-            animated_substrate_scene(0.0, false, stacked, isolated, true),
+            &animated_substrate_scene(0.0, false, stacked, isolated, true),
         );
         for (tint, reference) in [0.2, 0.6, 1.0].into_iter().zip(references) {
             let changed = capture(
                 &mut renderer,
-                animated_substrate_scene(tint, false, stacked, isolated, true),
+                &animated_substrate_scene(tint, false, stacked, isolated, true),
             );
             let stats = renderer
                 .last_frame_stats()
@@ -1087,7 +1090,7 @@ fn animated_shader_reuses_unchanged_substrates_and_updates_glass_above_it() {
         }
         let changed = capture(
             &mut renderer,
-            animated_substrate_scene(0.6, true, stacked, isolated, true),
+            &animated_substrate_scene(0.6, true, stacked, isolated, true),
         );
         assert_eq!(
             support::max_channel_delta(&changed.pixels, &changed_source_reference.pixels),
@@ -1103,12 +1106,12 @@ fn a_cached_backdrop_tracks_the_effect_of_the_glass_beneath_it() {
         return;
     };
     for _ in 0..6 {
-        capture(&mut renderer, stacked_cached_glasses(2.0, true));
+        capture(&mut renderer, &stacked_cached_glasses(2.0, true));
     }
-    let before = capture(&mut renderer, stacked_cached_glasses(2.0, true));
+    let before = capture(&mut renderer, &stacked_cached_glasses(2.0, true));
     assert!(renderer.last_frame_stats().expect("stats").layer_cache_hits > 0);
-    let changed = capture(&mut renderer, stacked_cached_glasses(14.0, true));
-    let reference = capture(&mut renderer, stacked_cached_glasses(14.0, false));
+    let changed = capture(&mut renderer, &stacked_cached_glasses(14.0, true));
+    let reference = capture(&mut renderer, &stacked_cached_glasses(14.0, false));
     let region = rect(
         GLASS_LEFT + 4.0,
         GLASS_TOP + 4.0,
@@ -1250,7 +1253,7 @@ impl NeighbourHarness {
 
     fn settle(&mut self, present: &[usize]) {
         for _ in 0..12 {
-            support::capture_graph(&mut self.cached, (self.graph)(present), 1104, 720);
+            support::capture_graph(&mut self.cached, &(self.graph)(present), 1104, 720);
         }
         let stats = self.cached.last_frame_stats().expect("frame stats");
         assert_eq!(
@@ -1260,7 +1263,7 @@ impl NeighbourHarness {
     }
 
     fn assert_exact(&mut self, label: &str, present: &[usize]) -> u32 {
-        let frame = support::capture_graph(&mut self.cached, (self.graph)(present), 1104, 720);
+        let frame = support::capture_graph(&mut self.cached, &(self.graph)(present), 1104, 720);
         let stats = self.cached.last_frame_stats().expect("frame stats");
         let misses = stats.layer_cache_misses;
         cranpose_core::debug_toggles::set_debug_toggle("CRANPOSE_NO_BACKDROP_CACHE", Some("1"));
@@ -1401,7 +1404,7 @@ fn a_stage_spanning_two_atlases_allocates_only_the_atlas_its_misses_land_in() {
         return;
     };
     let mut render = |marked: bool| {
-        let frame = support::capture_graph(&mut renderer, two_atlas_stage(marked), 4200, 2100);
+        let frame = support::capture_graph(&mut renderer, &two_atlas_stage(marked), 4200, 2100);
         (renderer.last_frame_stats().expect("frame stats"), frame)
     };
     let (cold, _) = render(false);
@@ -1442,7 +1445,7 @@ fn independent_glasses_are_pinned_together_without_changing_pixels() {
     let mut render = |identified| {
         let frame = support::capture_graph(
             &mut renderer,
-            independent_cached_glasses(identified),
+            &independent_cached_glasses(identified),
             1104,
             720,
         );
@@ -1459,7 +1462,7 @@ fn independent_glasses_are_pinned_together_without_changing_pixels() {
     assert_eq!(settled.layer_cache_hits, first.layer_cache_misses);
     let mut fresh = support::LockedRenderer::beside_locked().expect("second headless renderer");
     let reference =
-        support::capture_graph(&mut fresh, independent_cached_glasses(false), 1104, 720);
+        support::capture_graph(&mut fresh, &independent_cached_glasses(false), 1104, 720);
     assert_eq!(
         first.copy_count,
         fresh

@@ -58,7 +58,7 @@ fn blurred_page(radius: f32) -> LayerNode {
 /// What the frame drawing a blur of `radius` waited for, with the blur
 /// asserted so no waits means ready pipelines.
 fn frame_waits_for(renderer: &mut support::LockedRenderer, radius: f32) -> u64 {
-    let (stats, waits) = support::capture_waits(renderer, blurred_page(radius), FRAME, FRAME);
+    let (stats, waits) = support::capture_waits(renderer, &blurred_page(radius), FRAME, FRAME);
     assert!(
         stats.blur_passes > 0 || stats.placeholder_draws > 0,
         "the backdrop must blur, or wait for its blur"

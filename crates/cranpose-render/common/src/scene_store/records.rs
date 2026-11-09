@@ -143,7 +143,8 @@ pub(crate) struct WarmRecord {
 // A walk reads a record's rows by its index: two rows fill a 64-byte cache
 // line. A 32-bit target keeps a record's node in four bytes of the warm row.
 const _: () = assert!(
-    size_of::<TreeRecord>() == 32 && size_of::<GeoRecord>() == 32 && size_of::<WarmRecord>() <= 32
+    size_of::<TreeRecord>() == 32 && size_of::<GeoRecord>() == 32 && size_of::<WarmRecord>() <= 32,
+    "a record's tree and geometry rows take 32 bytes and its warm row at most 32"
 );
 
 // The node a record draws for, in one word: a `NodeId` has no spare value,

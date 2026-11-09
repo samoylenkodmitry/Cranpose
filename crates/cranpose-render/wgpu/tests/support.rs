@@ -941,16 +941,16 @@ pub(crate) mod clip_band {
 
 pub(crate) fn capture_graph(
     renderer: &mut LockedRenderer,
-    graph: LayerNode,
+    graph: &LayerNode,
     width: u32,
     height: u32,
 ) -> CapturedFrame {
-    capture_graph_with_scale(renderer, &graph, width, height, 1.0)
+    capture_graph_with_scale(renderer, graph, width, height, 1.0)
 }
 
 pub(crate) fn capture_waits(
     renderer: &mut LockedRenderer,
-    graph: LayerNode,
+    graph: &LayerNode,
     width: u32,
     height: u32,
 ) -> (RenderStatsSnapshot, u64) {
@@ -960,7 +960,7 @@ pub(crate) fn capture_waits(
 
 pub(crate) fn capture_with_waits(
     renderer: &mut LockedRenderer,
-    graph: LayerNode,
+    graph: &LayerNode,
     width: u32,
     height: u32,
 ) -> (CapturedFrame, RenderStatsSnapshot, u64) {
@@ -983,7 +983,7 @@ pub(crate) fn capture_drawn(
 ) -> (CapturedFrame, RenderStatsSnapshot) {
     let deadline = std::time::Instant::now() + Duration::from_secs(30);
     loop {
-        let frame = capture_graph(renderer, graph.clone(), width, height);
+        let frame = capture_graph(renderer, graph, width, height);
         let stats = renderer.last_frame_stats().expect("frame statistics");
         if stats.placeholder_draws == 0 && stats.instant_draws == 0 {
             return (frame, stats);
@@ -1082,7 +1082,7 @@ pub(crate) fn capture_graph_settled(
     height: u32,
 ) -> CapturedFrame {
     capture_settled(renderer, |renderer| {
-        capture_graph(renderer, graph.clone(), width, height)
+        capture_graph(renderer, graph, width, height)
     })
 }
 
@@ -1605,9 +1605,9 @@ pub(crate) fn present_and_read(
     renderer: &mut LockedRenderer,
     width: u32,
     height: u32,
-    graph: LayerNode,
+    graph: &LayerNode,
 ) -> Vec<u8> {
-    let texture = present(renderer, width, height, &graph);
+    let texture = present(renderer, width, height, graph);
     read_presented(renderer, &texture)
 }
 

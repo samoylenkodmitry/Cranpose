@@ -58,13 +58,13 @@ fn compare_ladder(substrates: bool) {
             reference.set_substrates(shader.substrates());
             let expected = support::capture_graph(
                 &mut renderer,
-                page(RenderEffect::runtime_shader(reference)),
+                &page(RenderEffect::runtime_shader(reference)),
                 FRAME,
                 FRAME,
             );
             let actual = support::capture_graph(
                 &mut renderer,
-                page(RenderEffect::Shader { shader }),
+                &page(RenderEffect::Shader { shader }),
                 FRAME,
                 FRAME,
             );

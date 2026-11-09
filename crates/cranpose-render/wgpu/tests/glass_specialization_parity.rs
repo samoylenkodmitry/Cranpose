@@ -257,7 +257,7 @@ fn a_glass_folded_only_to_what_its_neighbours_share_keeps_its_bytes() {
         "the materials share some folds, and each folds more on its own"
     );
     let mut renderer = support::headless_renderer().expect("GPU required for glass parity");
-    let plain = support::capture_graph(&mut renderer, panes_page([]), FRAME_WIDTH, FRAME_HEIGHT);
+    let plain = support::capture_graph(&mut renderer, &panes_page([]), FRAME_WIDTH, FRAME_HEIGHT);
     for (index, material) in materials.iter().enumerate() {
         let mut stand_in = material.clone();
         for &(name, value) in material.overrides() {
@@ -267,13 +267,13 @@ fn a_glass_folded_only_to_what_its_neighbours_share_keeps_its_bytes() {
         }
         let own = support::capture_graph(
             &mut renderer,
-            panes_page([RenderEffect::runtime_shader(material.clone())]),
+            &panes_page([RenderEffect::runtime_shader(material.clone())]),
             FRAME_WIDTH,
             FRAME_HEIGHT,
         );
         let standing_in = support::capture_graph(
             &mut renderer,
-            panes_page([RenderEffect::runtime_shader(stand_in)]),
+            &panes_page([RenderEffect::runtime_shader(stand_in)]),
             FRAME_WIDTH,
             FRAME_HEIGHT,
         );

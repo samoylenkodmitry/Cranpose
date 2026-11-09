@@ -134,7 +134,7 @@ fn page(with_glass: bool) -> LayerNode {
     support::page_graph(FRAME_WIDTH, FRAME_HEIGHT, children)
 }
 
-fn capture(renderer: &mut support::LockedRenderer, graph: LayerNode) -> CapturedFrame {
+fn capture(renderer: &mut support::LockedRenderer, graph: &LayerNode) -> CapturedFrame {
     support::capture_graph(renderer, graph, FRAME_WIDTH, FRAME_HEIGHT)
 }
 
@@ -180,7 +180,7 @@ fn draw_batches_keep_images_blend_changes_and_composites_in_order() {
         ];
         let frame = capture(
             &mut renderer,
-            support::page_graph(FRAME_WIDTH, FRAME_HEIGHT, children),
+            &support::page_graph(FRAME_WIDTH, FRAME_HEIGHT, children),
         );
         for (x, expected) in [
             (5, [255; 4]),
@@ -207,8 +207,8 @@ fn a_capture_holds_every_text_image_and_composite_that_reaches_into_it() {
         eprintln!("skipping (headless WGPU init failed)");
         return;
     };
-    let without = capture(&mut renderer, page(false));
-    let with = capture(&mut renderer, page(true));
+    let without = capture(&mut renderer, &page(false));
+    let with = capture(&mut renderer, &page(true));
     let inside = rect(
         GLASS.x + 2.0,
         GLASS.y + 2.0,
@@ -302,7 +302,7 @@ fn batched_shader_fragment_positions_match_the_parent_target() {
     );
     let frame = capture(
         &mut renderer,
-        support::page_graph(
+        &support::page_graph(
             FRAME_WIDTH,
             FRAME_HEIGHT,
             vec![
@@ -380,8 +380,8 @@ fn overlapping_capture_stages_preserve_translucent_draw_order() {
             }
             support::page_graph(FRAME_WIDTH, FRAME_HEIGHT, children)
         };
-        let expected = capture(&mut renderer, scene(false));
-        let actual = capture(&mut renderer, scene(true));
+        let expected = capture(&mut renderer, &scene(false));
+        let actual = capture(&mut renderer, &scene(true));
         assert!(renderer.last_frame_stats().unwrap().stages >= 2);
         assert_eq!(renderer.device_error_count_for_tests(), 0);
         let differences = image_difference_stats(
@@ -404,8 +404,8 @@ fn a_later_glass_of_a_stage_shows_what_was_drawn_after_the_earlier_glass() {
         eprintln!("skipping (headless WGPU init failed)");
         return;
     };
-    let without = capture(&mut renderer, staged_page(false));
-    let with = capture(&mut renderer, staged_page(true));
+    let without = capture(&mut renderer, &staged_page(false));
+    let with = capture(&mut renderer, &staged_page(true));
     for (label, glass) in [("first", SECOND_GLASS), ("second", GLASS)] {
         let inside = rect(
             glass.x + 2.0,
@@ -470,7 +470,7 @@ fn a_capture_adds_no_shape_fill_of_its_own() {
         return;
     };
     let fill = |renderer: &mut support::LockedRenderer, graph: LayerNode| {
-        capture(renderer, graph);
+        capture(renderer, &graph);
         renderer
             .last_frame_stats()
             .expect("frame stats")
@@ -490,7 +490,7 @@ fn a_glass_is_shaded_once_over_its_visible_pixels() {
         eprintln!("skipping (headless WGPU init failed)");
         return;
     };
-    capture(&mut renderer, staged_page(true));
+    capture(&mut renderer, &staged_page(true));
     let shaded = renderer
         .last_frame_stats()
         .expect("frame stats")
@@ -503,7 +503,7 @@ fn a_glass_is_shaded_once_over_its_visible_pixels() {
 }
 
 fn passes_and_copies(renderer: &mut support::LockedRenderer, graph: LayerNode) -> (u32, u32) {
-    capture(renderer, graph);
+    capture(renderer, &graph);
     let stats = renderer.last_frame_stats().expect("frame stats");
     (stats.pass_count, stats.copy_count)
 }
@@ -514,9 +514,9 @@ fn a_capture_of_the_page_is_a_copy_that_records_no_pass() {
         eprintln!("skipping (headless WGPU init failed)");
         return;
     };
-    let plain = capture(&mut renderer, glazed_page(false));
+    let plain = capture(&mut renderer, &glazed_page(false));
     let (plain_passes, plain_copies) = passes_and_copies(&mut renderer, glazed_page(false));
-    let glazed = capture(&mut renderer, glazed_page(true));
+    let glazed = capture(&mut renderer, &glazed_page(true));
     let (glazed_passes, glazed_copies) = passes_and_copies(&mut renderer, glazed_page(true));
     assert_eq!(plain_copies, 0, "a page without captures copies nothing");
     assert_eq!(
@@ -630,8 +630,8 @@ fn a_shadow_below_a_later_glass_of_the_stage_is_on_the_page_before_that_glass_co
         eprintln!("skipping (headless WGPU init failed)");
         return;
     };
-    let plain = capture(&mut renderer, shadowed_stage_page(false));
-    let glazed = capture(&mut renderer, shadowed_stage_page(true));
+    let plain = capture(&mut renderer, &shadowed_stage_page(false));
+    let glazed = capture(&mut renderer, &shadowed_stage_page(true));
     let stats = renderer.last_frame_stats().expect("frame stats");
     assert_eq!(stats.copy_count, 2, "both glasses copy the page");
     assert_eq!(
@@ -699,7 +699,7 @@ fn content_drawn_over_a_glass_stays_over_it_when_a_later_glass_copies_the_page()
         eprintln!("skipping (headless WGPU init failed)");
         return;
     };
-    let frame = capture(&mut renderer, covered_glass_page());
+    let frame = capture(&mut renderer, &covered_glass_page());
     let pixel = |x: f32, y: f32| {
         let index = ((y as u32 * frame.width + x as u32) * 4) as usize;
         [

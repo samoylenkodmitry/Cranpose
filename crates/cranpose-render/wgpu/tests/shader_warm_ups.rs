@@ -91,7 +91,7 @@ fn prime(renderer: &mut support::LockedRenderer) {
         page_draw(probe("prime page")),
         layer_draw(probe("prime layer")),
     ] {
-        let _ = support::capture_graph(renderer, graph, WIDTH, HEIGHT);
+        let _ = support::capture_graph(renderer, &graph, WIDTH, HEIGHT);
     }
     support::wait_for_background_compiler_idle();
 }
@@ -102,7 +102,7 @@ fn prime(renderer: &mut support::LockedRenderer) {
 /// layer would ask for, compile inside the frame off Vulkan, so the count
 /// is only about the shader's pipeline once shape variants are off.
 fn frame_waits_for(renderer: &mut support::LockedRenderer, graph: LayerNode) -> u64 {
-    let (stats, waits) = support::capture_waits(renderer, graph, WIDTH, HEIGHT);
+    let (stats, waits) = support::capture_waits(renderer, &graph, WIDTH, HEIGHT);
     assert!(
         stats.shader_pixels > 0 || stats.effect_applies > 0 || stats.placeholder_draws > 0,
         "the shader must draw, or wait for its pipeline"
@@ -185,7 +185,7 @@ fn a_requested_specialization_draws_without_a_general_stand_in() {
     }]);
     let pixels = support::settle(|| {
         let pixels =
-            support::capture_graph(&mut renderer, page_draw(shader.clone()), WIDTH, HEIGHT);
+            support::capture_graph(&mut renderer, &page_draw(shader.clone()), WIDTH, HEIGHT);
         let stats = renderer.last_frame_stats().expect("frame statistics");
         assert_eq!(stats.shader_pipeline_fallback_draws, 0);
         (stats, pixels)

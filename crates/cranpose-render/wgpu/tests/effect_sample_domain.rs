@@ -223,7 +223,7 @@ fn capture(
     whole: bool,
 ) -> (CapturedFrame, u64) {
     cranpose_core::debug_toggles::set_debug_toggle(TOGGLE, whole.then_some("1"));
-    let frame = support::capture_graph(renderer, page(glass()), FRAME_WIDTH, FRAME_HEIGHT);
+    let frame = support::capture_graph(renderer, &page(glass()), FRAME_WIDTH, FRAME_HEIGHT);
     cranpose_core::debug_toggles::set_debug_toggle(TOGGLE, None);
     let blur_pixels = renderer
         .last_frame_stats()
@@ -368,7 +368,7 @@ fn a_scaled_child_backdrop_can_read_inside_its_declared_input_padding() {
     };
     let frame = support::capture_graph(
         &mut renderer,
-        padded_sample_page(Some(padded_sample_glass())),
+        &padded_sample_page(Some(padded_sample_glass())),
         FRAME_WIDTH,
         FRAME_HEIGHT,
     );

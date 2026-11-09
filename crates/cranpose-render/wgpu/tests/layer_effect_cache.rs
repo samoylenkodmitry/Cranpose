@@ -51,13 +51,13 @@ fn blurred_layer_page() -> LayerNode {
 fn a_still_layers_effect_is_drawn_once_and_read_back() {
     let mut renderer = support::headless_renderer().expect("GPU required for the cache probe");
     let kind = effect_kind();
-    let first = support::capture_graph(&mut renderer, blurred_layer_page(), WIDTH, HEIGHT);
+    let first = support::capture_graph(&mut renderer, &blurred_layer_page(), WIDTH, HEIGHT);
     let stats = renderer.last_frame_stats().expect("frame statistics");
     assert!(stats.blur_passes > 0, "the first frame draws the blur");
     assert_eq!(stats.layer_cache_misses_by_kind[kind], 1);
     assert_eq!(stats.layer_cache_hits_by_kind[kind], 0);
 
-    let second = support::capture_graph(&mut renderer, blurred_layer_page(), WIDTH, HEIGHT);
+    let second = support::capture_graph(&mut renderer, &blurred_layer_page(), WIDTH, HEIGHT);
     let stats = renderer.last_frame_stats().expect("frame statistics");
     assert!(
         stats.blur_passes > 0,
@@ -66,7 +66,7 @@ fn a_still_layers_effect_is_drawn_once_and_read_back() {
     assert_eq!(stats.layer_cache_misses_by_kind[kind], 1);
     assert_eq!(stats.layer_cache_hits_by_kind[kind], 0);
 
-    let third = support::capture_graph(&mut renderer, blurred_layer_page(), WIDTH, HEIGHT);
+    let third = support::capture_graph(&mut renderer, &blurred_layer_page(), WIDTH, HEIGHT);
     let stats = renderer.last_frame_stats().expect("frame statistics");
     assert_eq!(stats.blur_passes, 0, "the third frame reads the blur back");
     assert_eq!(stats.effect_applies, 0);

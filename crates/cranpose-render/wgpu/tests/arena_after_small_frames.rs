@@ -37,11 +37,11 @@ fn draws_alike_after_small_frames(renderer: Result<support::LockedRenderer, Stri
             return;
         }
     };
-    let first = support::capture_graph(&mut renderer, rects(MANY), WIDTH, HEIGHT);
+    let first = support::capture_graph(&mut renderer, &rects(MANY), WIDTH, HEIGHT);
     for _ in 0..SMALL_FRAMES {
-        support::capture_graph(&mut renderer, rects(1), WIDTH, HEIGHT);
+        support::capture_graph(&mut renderer, &rects(1), WIDTH, HEIGHT);
     }
-    let again = support::capture_graph(&mut renderer, rects(MANY), WIDTH, HEIGHT);
+    let again = support::capture_graph(&mut renderer, &rects(MANY), WIDTH, HEIGHT);
     drop(renderer);
     assert!(
         first.pixels == again.pixels,

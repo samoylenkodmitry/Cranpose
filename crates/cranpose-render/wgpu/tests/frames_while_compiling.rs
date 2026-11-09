@@ -104,9 +104,9 @@ fn turned(degrees: f32) -> LayerNode {
 fn built_where_needed(before: Option<&LayerNode>, graph: &LayerNode) -> Vec<u8> {
     let mut reference = LockedRenderer::beside_locked().expect("reference renderer");
     if let Some(before) = before {
-        support::capture_graph(&mut reference, before.clone(), WIDTH, HEIGHT);
+        support::capture_graph(&mut reference, before, WIDTH, HEIGHT);
     }
-    support::capture_graph(&mut reference, graph.clone(), WIDTH, HEIGHT).pixels
+    support::capture_graph(&mut reference, graph, WIDTH, HEIGHT).pixels
 }
 
 /// Draws `before`, if any, and then `graph` until its pipelines landed,
@@ -115,7 +115,7 @@ fn built_where_needed(before: Option<&LayerNode>, graph: &LayerNode) -> Vec<u8> 
 fn landed(before: Option<&LayerNode>, graph: &LayerNode) -> Vec<u8> {
     let mut renderer = support::headless_renderer_compiling_in_background().expect("GPU required");
     let first = before.unwrap_or(graph);
-    support::capture_graph(&mut renderer, first.clone(), WIDTH, HEIGHT);
+    support::capture_graph(&mut renderer, first, WIDTH, HEIGHT);
     let stats = renderer.last_frame_stats().expect("frame statistics");
     assert!(
         !support::pipelines_settled(&stats),

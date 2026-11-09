@@ -117,14 +117,14 @@ fn large_rotating_runs_preserve_pixels_when_lengths_change() {
     let actual: Vec<_> = frames
         .iter()
         .map(|&(count, phase)| {
-            support::present_and_read(&mut renderer, 520, 520, large_arc_run(count, phase, true))
+            support::present_and_read(&mut renderer, 520, 520, &large_arc_run(count, phase, true))
         })
         .collect();
     drop(renderer);
     for ((count, phase), pixels) in frames.into_iter().zip(actual) {
         let mut fresh = support::headless_renderer().expect("fresh renderer");
         let expected =
-            support::present_and_read(&mut fresh, 520, 520, large_arc_run(count, phase, false));
+            support::present_and_read(&mut fresh, 520, 520, &large_arc_run(count, phase, false));
         assert!(
             pixels == expected,
             "draw-scope frame {phase} with {count} inputs differs from fresh serial pixels"
@@ -136,9 +136,9 @@ fn large_rotating_runs_preserve_pixels_when_lengths_change() {
 fn rotating_arcs_upload_motion_and_preserve_changed_pixels() {
     let mut renderer = support::headless_renderer().expect("headless renderer");
     let color = Color(0.8, 0.3, 0.1, 1.0);
-    let before = support::present_and_read(&mut renderer, SIDE, SIDE, rotating_arcs(0.0, color));
-    support::present_and_read(&mut renderer, SIDE, SIDE, rotating_arcs(0.4, color));
-    let after = support::present_and_read(&mut renderer, SIDE, SIDE, rotating_arcs(0.8, color));
+    let before = support::present_and_read(&mut renderer, SIDE, SIDE, &rotating_arcs(0.0, color));
+    support::present_and_read(&mut renderer, SIDE, SIDE, &rotating_arcs(0.4, color));
+    let after = support::present_and_read(&mut renderer, SIDE, SIDE, &rotating_arcs(0.8, color));
     let stats = renderer.last_frame_stats().expect("frame stats");
     assert!(
         before != after,
@@ -155,7 +155,7 @@ fn rotating_arcs_upload_motion_and_preserve_changed_pixels() {
     drop(renderer);
 
     let mut fresh = support::headless_renderer().expect("fresh headless renderer");
-    let expected = support::present_and_read(&mut fresh, SIDE, SIDE, rotating_arcs(0.8, color));
+    let expected = support::present_and_read(&mut fresh, SIDE, SIDE, &rotating_arcs(0.8, color));
     assert!(
         after == expected,
         "the updated table must match a fresh render"
@@ -164,7 +164,7 @@ fn rotating_arcs_upload_motion_and_preserve_changed_pixels() {
         &mut fresh,
         SIDE,
         SIDE,
-        rotating_arcs(0.8, Color(0.1, 0.7, 0.3, 1.0)),
+        &rotating_arcs(0.8, Color(0.1, 0.7, 0.3, 1.0)),
     );
     assert!(
         expected != recolored,

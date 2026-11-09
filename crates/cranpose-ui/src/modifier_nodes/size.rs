@@ -403,6 +403,7 @@ fn size_axis_hold(
     }
 }
 
+#[derive(Clone, Copy)]
 enum SizeAxis {
     Width,
     Height,

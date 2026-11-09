@@ -17,7 +17,7 @@ fn capture(layer: GraphicsLayer) -> Option<(usize, usize)> {
     let fill = support::solid_rect(CHILD, Color::from_rgb_u8(220, 30, 30));
     let frame = support::capture_graph(
         &mut renderer,
-        clip_band::page(layer, PLACEMENT, vec![fill]),
+        &clip_band::page(layer, PLACEMENT, vec![fill]),
         FRAME,
         FRAME,
     );

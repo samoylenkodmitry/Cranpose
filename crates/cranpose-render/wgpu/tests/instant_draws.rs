@@ -164,7 +164,7 @@ fn capture(
     renderer: &mut support::LockedRenderer,
     graph: &LayerNode,
 ) -> (Vec<u8>, RenderStatsSnapshot) {
-    let frame = support::capture_graph(renderer, graph.clone(), WIDTH, HEIGHT);
+    let frame = support::capture_graph(renderer, graph, WIDTH, HEIGHT);
     let stats = renderer.last_frame_stats().expect("frame statistics");
     (frame.pixels, stats)
 }

@@ -157,13 +157,13 @@ fn disjoint_inner_shadow_clip_does_not_turn_unbounded_through_blend_wrappers() {
     for recorded in [false, true] {
         let actual = support::capture_graph(
             &mut renderer,
-            disjoint_inner_shadow_graph(recorded, true),
+            &disjoint_inner_shadow_graph(recorded, true),
             FRAME,
             FRAME,
         );
         let expected = support::capture_graph(
             &mut renderer,
-            disjoint_inner_shadow_graph(recorded, false),
+            &disjoint_inner_shadow_graph(recorded, false),
             FRAME,
             FRAME,
         );
@@ -188,13 +188,13 @@ fn recorded_drop_shadow_reaches_into_parent_clip_from_offscreen_caster() {
     };
     let loose = support::capture_graph(
         &mut renderer,
-        clipped_offscreen_shadow_graph(false),
+        &clipped_offscreen_shadow_graph(false),
         FRAME,
         FRAME,
     );
     let recorded = support::capture_graph(
         &mut renderer,
-        clipped_offscreen_shadow_graph(true),
+        &clipped_offscreen_shadow_graph(true),
         FRAME,
         FRAME,
     );
@@ -258,7 +258,7 @@ fn changing_shadow_casters_and_cutouts_preserves_the_painted_region() {
             };
             let actual = support::capture_graph(
                 &mut renderer,
-                support::page_graph(
+                &support::page_graph(
                     FRAME,
                     FRAME,
                     vec![
@@ -297,7 +297,7 @@ fn changing_shadow_casters_and_cutouts_preserves_the_painted_region() {
             );
             let reference = support::capture_graph(
                 &mut renderer,
-                support::page_graph(FRAME, FRAME, reference),
+                &support::page_graph(FRAME, FRAME, reference),
                 FRAME,
                 FRAME,
             );
@@ -403,7 +403,8 @@ fn a_wide_drop_shadow_matches_its_kernel_within_the_downscale_budget() {
         eprintln!("skipping (headless WGPU init failed)");
         return;
     };
-    let frame = support::capture_graph(&mut renderer, page(Some(WIDE_RADIUS), false), FRAME, FRAME);
+    let frame =
+        support::capture_graph(&mut renderer, &page(Some(WIDE_RADIUS), false), FRAME, FRAME);
     let (worst, at) = worst_deviation(
         &frame,
         &reference_alpha(WIDE_RADIUS),
@@ -423,8 +424,8 @@ fn a_wide_drop_shadow_with_a_cutout_is_clear_under_its_caster_and_blurred_around
         eprintln!("skipping (headless WGPU init failed)");
         return;
     };
-    let frame = support::capture_graph(&mut renderer, page(Some(WIDE_RADIUS), true), FRAME, FRAME);
-    let plain = support::capture_graph(&mut renderer, page(None, false), FRAME, FRAME);
+    let frame = support::capture_graph(&mut renderer, &page(Some(WIDE_RADIUS), true), FRAME, FRAME);
+    let plain = support::capture_graph(&mut renderer, &page(None, false), FRAME, FRAME);
     let interior = rect(
         CASTER.x + 1.0,
         CASTER.y + 1.0,
@@ -461,7 +462,7 @@ fn a_wide_drop_shadow_blurs_at_the_scratch_size() {
         return;
     };
     let pass_pixels = |renderer: &mut support::LockedRenderer, radius: Option<f32>, cutout| {
-        support::capture_graph(renderer, page(radius, cutout), FRAME, FRAME);
+        support::capture_graph(renderer, &page(radius, cutout), FRAME, FRAME);
         renderer.last_frame_stats().expect("stats").pass_pixels
     };
     let none = pass_pixels(&mut renderer, None, false);
@@ -503,9 +504,10 @@ fn a_shadow_surface_ends_where_its_kernel_does() {
     );
     assert_eq!(blur_reach_px(WIDE_RADIUS), reach);
 
-    let frame = support::capture_graph(&mut renderer, page(Some(WIDE_RADIUS), false), FRAME, FRAME);
+    let frame =
+        support::capture_graph(&mut renderer, &page(Some(WIDE_RADIUS), false), FRAME, FRAME);
     let background = region_pixels(
-        &support::capture_graph(&mut renderer, page(None, false), FRAME, FRAME),
+        &support::capture_graph(&mut renderer, &page(None, false), FRAME, FRAME),
         rect(0.0, 0.0, 1.0, 1.0),
     );
     let outer = reach + 1.0;

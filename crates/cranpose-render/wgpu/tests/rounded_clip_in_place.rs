@@ -1188,7 +1188,7 @@ fn a_backdrop_updates_when_only_the_captured_clip_radius_changes() {
     for _ in 0..3 {
         support::capture_graph(
             &mut renderer,
-            backdrop_over_rounded_fill(4.0),
+            &backdrop_over_rounded_fill(4.0),
             WIDTH,
             HEIGHT,
         );
@@ -1202,7 +1202,7 @@ fn a_backdrop_updates_when_only_the_captured_clip_radius_changes() {
     for frame in 0..3 {
         let actual = support::capture_graph(
             &mut renderer,
-            backdrop_over_rounded_fill(20.0),
+            &backdrop_over_rounded_fill(20.0),
             WIDTH,
             HEIGHT,
         );

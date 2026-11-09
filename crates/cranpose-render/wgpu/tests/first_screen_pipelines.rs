@@ -89,12 +89,12 @@ fn first_frame_after_at(records: &[u8], viewport: (u32, u32)) -> (u64, Vec<u8>) 
     renderer.build_first_screen_pipelines(records, viewport);
     support::capture_graph(
         &mut renderer,
-        support::page_graph(WIDTH, HEIGHT, Vec::new()),
+        &support::page_graph(WIDTH, HEIGHT, Vec::new()),
         WIDTH,
         HEIGHT,
     );
     let built = pipelines_created();
-    let frame = support::capture_graph(&mut renderer, screen(), WIDTH, HEIGHT);
+    let frame = support::capture_graph(&mut renderer, &screen(), WIDTH, HEIGHT);
     (pipelines_created() - built, frame.pixels)
 }
 
@@ -103,7 +103,7 @@ fn a_launch_given_an_earlier_first_screen_draws_its_first_frame_with_pipelines_b
     let Ok(mut earlier) = support::headless_renderer() else {
         return;
     };
-    let drawn = support::capture_graph(&mut earlier, screen(), WIDTH, HEIGHT);
+    let drawn = support::capture_graph(&mut earlier, &screen(), WIDTH, HEIGHT);
     assert!(
         earlier.first_screen_pipelines().is_none(),
         "the first screen lasts past the first frame"
@@ -159,10 +159,10 @@ fn a_launch_builds_the_first_screen_recorded_nearest_its_size() {
         return;
     };
     let mut large = support::LockedRenderer::beside_locked().expect("a second renderer");
-    support::capture_graph(&mut small, screen(), WIDTH, HEIGHT);
+    support::capture_graph(&mut small, &screen(), WIDTH, HEIGHT);
     support::capture_graph(
         &mut large,
-        gradient_screen(WIDTH * 4, HEIGHT * 4),
+        &gradient_screen(WIDTH * 4, HEIGHT * 4),
         WIDTH * 4,
         HEIGHT * 4,
     );

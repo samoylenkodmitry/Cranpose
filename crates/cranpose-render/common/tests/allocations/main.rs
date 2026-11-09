@@ -284,7 +284,10 @@ fn ticker_frame_allocations(texts: usize, numbers: bool) -> usize {
                 updates.extend(children.map(|&id| (id, NodeUpdate::Content)));
             })
             .expect("the column");
-        assert!(graph.update_from_applier(&applier, root, &updates));
+        assert!(
+            graph.update_from_applier(&applier, root, &updates),
+            "the scene takes the update in place"
+        );
         applier.clear_runtime_handle();
     };
     for count in 1..=8 {
