@@ -3,9 +3,7 @@ use std::{borrow::Cow, sync::Arc};
 use cranpose_core::{NodeId, SceneUpdate};
 use cranpose_render_common::{
     graph::{CachePolicy, ProjectiveTransform},
-    layer_composition::{
-        layer_composite_params, layer_requires_isolation, local_content_layer_for,
-    },
+    layer_composition::{layer_composite_params, local_content_layer_for},
     layer_shadow::ShadowLight,
     layer_transform::layer_uniform_scale,
     primitive_emit::resolve_clip,
@@ -269,20 +267,6 @@ pub(crate) fn uniform_scale_translation(transform: ProjectiveTransform) -> Optio
     Some((scale, Point::new(matrix[0][2], matrix[1][2])))
 }
 
-/// Whether the layer's own composition needs its content on a separate
-/// texture, before any rounded clip or transform is considered.
-#[inline]
-fn child_needs_surface(layer: LayerRef<'_>) -> bool {
-    let graphics = layer.graphics_layer();
-    let isolation = layer.isolation();
-    isolation.explicit_offscreen
-        || isolation.effect
-        || isolation.blend_mode
-        || isolation.group_opacity
-        || graphics.compositing_strategy == CompositingStrategy::Offscreen
-        || layer_requires_isolation(graphics)
-}
-
 /// The scale of a `transform` that only scales evenly, turns and moves:
 /// affine, with a linear part that is an orthonormal one times the scale.
 /// Content drawn at that scale under the rest of the transform resamples
@@ -326,7 +310,7 @@ fn can_draw_in_place(
     similarity_scale(transform)
         .and_then(|scale| in_place_content_scale(scale, raster_scale))
         .is_some()
-        && !child_needs_surface(layer)
+        && !layer.needs_surface()
         && layer.backdrop().is_none()
         && rounded_clip_for_layer(layer).is_none()
         && content_draws_in_place(content)
@@ -382,7 +366,7 @@ fn child_placement(layer: LayerRef<'_>, raster_scale: RasterScale) -> Placement 
     let Some(translation) = direct_translation(layer.transform_to_parent()) else {
         return Placement::Isolated;
     };
-    if child_needs_surface(layer) {
+    if layer.needs_surface() {
         return Placement::Isolated;
     }
     match rounded_clip_for_layer(layer) {

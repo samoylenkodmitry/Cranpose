@@ -118,18 +118,31 @@ pub(super) fn move_kept_child(
     dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
 ) {
     let position = placed.geometry.position;
-    match (placed.kept, store.layer(record).kind()) {
-        (KeptChild::Left, _) => {}
-        (KeptChild::Moved, RecordKind::Leaf) => store.move_leaf(record, position),
-        (KeptChild::Moved, _) => {
-            translate_retained_child(store, record, position, children.parent_content_offset);
-            if store.layer(record).has_origin_sinks() {
-                publish_retained_window_geometry(applier, store.layer(record), children.parent_abs);
-            }
+    match placed.kept {
+        KeptChild::Left => {}
+        KeptChild::Moved if store.layer(record).kind() == RecordKind::Leaf => {
+            store.move_leaf(record, position);
         }
-        (KeptChild::Retexted, _) => {
+        KeptChild::Moved => move_kept_layer(applier, store, record, position, children),
+        KeptChild::Retexted => {
             write_kept_label(applier, store, record, placed, children, dirty_nodes);
         }
+    }
+}
+
+// Moves `record`, a layer the step keeps, to `position`; a subtree that
+// publishes window origins publishes them again from there.
+#[inline(never)]
+fn move_kept_layer(
+    applier: &MemoryApplier,
+    store: &mut SceneStore,
+    record: RecordId,
+    position: Point,
+    children: TranslateAncestorContext,
+) {
+    translate_retained_child(store, record, position, children.parent_content_offset);
+    if store.layer(record).has_origin_sinks() {
+        publish_retained_window_geometry(applier, store.layer(record), children.parent_abs);
     }
 }
 

@@ -4,7 +4,7 @@
 
 use cranpose_core::{NodeId, RecordId, RecordRef, SceneUpdate, StoreId};
 use cranpose_ui::{GraphicsLayer, Point, Rect, RenderEffect, Size};
-use cranpose_ui_graphics::{BlendMode, ColorFilter, DrawPrimitive};
+use cranpose_ui_graphics::{BlendMode, ColorFilter, CompositingStrategy, DrawPrimitive};
 
 use super::{Extent, Item, ItemKind, LayerProps, Reach, RecordFlags, RecordKind, SceneStore};
 use crate::{
@@ -279,6 +279,31 @@ impl<'a> LayerRef<'a> {
         self.props()
             .map(|props| props.isolation)
             .unwrap_or_default()
+    }
+
+    /// Whether the record's own composition needs its content on a texture
+    /// of its own: a reason to draw offscreen, or a graphics layer that
+    /// composites apart.
+    #[inline]
+    pub fn needs_surface(self) -> bool {
+        // A record with neither properties nor a graphics layer draws in
+        // place.
+        let kept = self
+            .flags()
+            .only(RecordFlags::HAS_PROPS | RecordFlags::HAS_GRAPHICS_LAYER);
+        kept != RecordFlags::default() && self.composes_apart()
+    }
+
+    #[inline(never)]
+    fn composes_apart(self) -> bool {
+        let graphics = self.graphics_layer();
+        let isolation = self.isolation();
+        isolation.explicit_offscreen
+            || isolation.effect
+            || isolation.blend_mode
+            || isolation.group_opacity
+            || graphics.compositing_strategy == CompositingStrategy::Offscreen
+            || crate::layer_composition::layer_requires_isolation(graphics)
     }
 
     /// The phase a draw group paints in among its node's own draws; `None`

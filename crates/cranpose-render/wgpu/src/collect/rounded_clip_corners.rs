@@ -8,7 +8,7 @@ use cranpose_ui_graphics::{
     ShadowPrimitive, expand_rect, primitive_coverage_rect,
 };
 
-use super::{AFFINE_TOLERANCE, RasterScale, child_needs_surface, direct_translation};
+use super::{AFFINE_TOLERANCE, RasterScale, direct_translation};
 use crate::scene::LayerRoundedClip;
 
 #[inline]
@@ -203,7 +203,7 @@ fn node_admits_corners(
             };
             // A child whose bounds stay clear holds content that stays clear.
             let clear = child_stays_clear(child, offset, corners);
-            if clear || child_needs_surface(child) {
+            if clear || child.needs_surface() {
                 return clear;
             }
             let child_offset = Point::new(offset.x + translation.x, offset.y + translation.y);
@@ -281,7 +281,7 @@ fn child_takes_corners(child: LayerRef<'_>, offset: Point, corners: &RoundedClip
     let plain = child.visual_clip_rect().is_none()
         && rounded_clip_for_layer(child).is_none()
         && child.graphics_layer().shadow_elevation <= 0.0
-        && !child_needs_surface(child);
+        && !child.needs_surface();
     match direct_translation(child.transform_to_parent()) {
         Some(translation) if plain => nodes_take_corners(
             child,
