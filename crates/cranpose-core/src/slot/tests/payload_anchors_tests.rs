@@ -175,29 +175,3 @@ fn payload_anchor_disposal_keeps_dense_storage_for_hot_path_reuse() {
     );
     assert_eq!(table.payload_anchors.validate_integrity(), Ok(()));
 }
-
-#[test]
-fn sparse_payload_anchor_ids_do_not_grow_dense_registry_storage() {
-    let mut registry = PayloadAnchorRegistry::new();
-    let anchor = PayloadAnchor::new(2_500_000, 1);
-    registry.next_id = anchor.id() + 1;
-
-    assert!(
-        registry
-            .set_state(anchor, PayloadAnchorState::Detached)
-            .is_none()
-    );
-    registry.set_active(anchor, AnchorId::new(1), 0);
-
-    assert_eq!(
-        registry.active_location(anchor),
-        Some((AnchorId::new(1), 0))
-    );
-    assert_eq!(registry.slot_len(), 1);
-    assert!(
-        registry.capacity() < 128,
-        "sparse payload ids must not allocate dense registry storage: capacity={}",
-        registry.capacity()
-    );
-    assert_eq!(registry.validate_integrity(), Ok(()));
-}

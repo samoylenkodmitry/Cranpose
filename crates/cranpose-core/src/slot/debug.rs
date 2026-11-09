@@ -38,8 +38,6 @@ pub struct SlotTableLocalDebugStats {
     pub active_anchor_count: usize,
     /// Entries in the group anchor registry in any state.
     pub anchor_slot_count: usize,
-    /// Anchor entries kept in the sparse map instead of the dense vector.
-    pub anchor_sparse_count: usize,
     /// Group anchors whose group is detached from the table.
     pub detached_anchor_count: usize,
     /// Group anchor entries that no longer resolve to a group.
@@ -126,8 +124,6 @@ pub struct SlotTableDebugStats {
     pub active_anchor_count: usize,
     /// Entries in the group anchor registry in any state.
     pub anchor_slot_count: usize,
-    /// Anchor entries kept in the sparse map instead of the dense vector.
-    pub anchor_sparse_count: usize,
     /// Group anchors whose group is detached from the table.
     pub detached_anchor_count: usize,
     /// Group anchor entries that no longer resolve to a group.
@@ -185,7 +181,6 @@ impl SlotTableDebugStats {
             pending_drop_capacity: lifecycle.pending_drop_capacity,
             active_anchor_count: local.active_anchor_count,
             anchor_slot_count: local.anchor_slot_count,
-            anchor_sparse_count: local.anchor_sparse_count,
             detached_anchor_count: local.detached_anchor_count,
             invalidated_anchor_count: local.invalidated_anchor_count,
             free_anchor_count: local.free_anchor_count,

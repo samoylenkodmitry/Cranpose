@@ -109,10 +109,6 @@ impl AnchorRegistry {
         self.storage.slot_len()
     }
 
-    pub(super) fn sparse_slot_len(&self) -> usize {
-        self.storage.sparse_slot_len()
-    }
-
     pub(super) fn detached_len(&self) -> usize {
         self.storage.detached_len()
     }
@@ -306,8 +302,8 @@ impl AnchorRegistry {
         self.reused_generations.insert(anchor.id, next_generation);
     }
 
-    fn maybe_shrink_sparse_storage(&mut self) {
-        if self.storage.maybe_shrink_sparse_storage() {
+    fn maybe_shrink(&mut self) {
+        if self.storage.maybe_shrink() {
             self.free_ids.shrink_to_fit();
             self.reused_generations.shrink_to_fit();
         }
@@ -351,7 +347,7 @@ impl SlotTable {
         }
         self.invalidate_detached_subtree_payload_anchors(subtree);
         if removed {
-            self.anchors.maybe_shrink_sparse_storage();
+            self.anchors.maybe_shrink();
         }
     }
 

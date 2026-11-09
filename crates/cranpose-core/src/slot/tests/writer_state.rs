@@ -583,7 +583,6 @@ fn released_anchors_are_reused_without_sparse_growth() {
     );
     assert_eq!(stats_after_clear.active_anchor_count, 0);
     assert_eq!(stats_after_clear.anchor_slot_count, 0);
-    assert_eq!(stats_after_clear.anchor_sparse_count, 0);
     assert_eq!(stats_after_clear.detached_anchor_count, 0);
     assert_eq!(stats_after_clear.invalidated_anchor_count, 0);
     assert_eq!(stats_after_clear.free_anchor_count, GROUP_COUNT);
@@ -608,7 +607,6 @@ fn released_anchors_are_reused_without_sparse_growth() {
     );
     assert_eq!(stats_after_reuse.active_anchor_count, 1);
     assert_eq!(stats_after_reuse.anchor_slot_count, 1);
-    assert_eq!(stats_after_reuse.anchor_sparse_count, 0);
     assert_eq!(stats_after_reuse.detached_anchor_count, 0);
     assert_eq!(stats_after_reuse.invalidated_anchor_count, 0);
     assert_eq!(stats_after_reuse.free_anchor_count, GROUP_COUNT - 1);

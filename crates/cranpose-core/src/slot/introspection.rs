@@ -38,7 +38,6 @@ impl SlotTable {
             node_capacity: self.node_debug_capacity(),
             active_anchor_count: self.anchors.active_len(),
             anchor_slot_count: self.anchors.slot_len(),
-            anchor_sparse_count: self.anchors.sparse_slot_len(),
             detached_anchor_count: self.anchors.detached_len(),
             invalidated_anchor_count: self.anchors.invalidated_len(),
             free_anchor_count: self.anchors.free_len(),
