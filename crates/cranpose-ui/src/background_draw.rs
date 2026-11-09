@@ -53,11 +53,12 @@ impl BackgroundDraw {
         }
     }
 
-    /// Records the background of a node of `size` into `recorder`, the
-    /// shape [`Self::draw`] records into a draw scope.
-    pub fn record(&self, size: Size, recorder: &mut ShapeRecorder) {
+    /// Records the background into `recorder` as `shape`, which
+    /// [`Self::shape_in`] gives for the node's size: the shape [`Self::draw`]
+    /// records into a draw scope.
+    pub fn record(&self, shape: (Rect, Option<CornerRadii>), recorder: &mut ShapeRecorder) {
         let brush = Brush::solid(self.color);
-        match self.shape_in(size) {
+        match shape {
             (rect, Some(radii)) => {
                 recorder.push_round_rect(rect, &brush, radii, None, BlendMode::SrcOver);
             }

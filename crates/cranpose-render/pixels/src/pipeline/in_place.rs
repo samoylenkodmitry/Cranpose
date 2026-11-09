@@ -10,11 +10,10 @@
 //! them.
 
 use cranpose_render_common::{
-    graph::ProjectiveTransform, graph_scene::RenderDiagnostics, layer_shadow::ShadowLight,
-    scene_store::SceneStore,
+    graph::ProjectiveTransform, graph_scene::RenderDiagnostics, scene_store::SceneStore,
 };
 
-use super::{ContentStyle, RasterTraversalContext, populate_draws_from_graph, scene_light};
+use super::{ContentStyle, LightSource, RasterTraversalContext, populate_draws_from_graph};
 use crate::{
     damage::merge_areas,
     draw::{ClipBounds, TextRaster},
@@ -33,7 +32,7 @@ struct Repush<'a> {
     window: ClipBounds,
     areas: &'a mut Vec<ClipBounds>,
     diagnostics: &'a RenderDiagnostics,
-    light: ShadowLight,
+    light: LightSource,
     scale: f32,
     text: &'a TextRaster,
 }
@@ -83,8 +82,8 @@ impl InPlaceUpdate<'_> {
             rewrite,
         } = self;
         areas.clear();
-        let light = scene_light(store, scale);
-        if scene.start != Some((scale, light)) {
+        let light = LightSource::of(store, scale);
+        if scene.start != Some(light) {
             return None;
         }
         let held = if reach.len() == scene.order.len() {

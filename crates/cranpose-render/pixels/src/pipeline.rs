@@ -82,7 +82,7 @@ struct RasterTraversalContext<'a> {
     inherited_translated_snap_anchor: Option<Point>,
     inherited_translated_content_context: bool,
     diagnostics: &'a RenderDiagnostics,
-    light: ShadowLight,
+    light: LightSource,
     same_as_before: bool,
     text: &'a TextRaster,
     surface_root: bool,
@@ -321,12 +321,32 @@ pub(crate) use in_place::{InPlaceUpdate, UpdatedReach};
 use layer_shadow::push_layer_shadow;
 use space::{push_seen_surfaces, seen_surfaces};
 
-fn scene_light(store: &SceneStore, scale: f32) -> ShadowLight {
-    let bounds = store
-        .root_layer()
-        .map(LayerRef::local_bounds)
-        .unwrap_or_default();
-    ShadowLight::for_window(bounds.width * scale, bounds.height * scale, scale, 1.0)
+// What the window's shadow light comes from: the root's size in device
+// pixels and the scale. A walk works the light out only for a layer that
+// casts a shadow.
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) struct LightSource {
+    width: f32,
+    height: f32,
+    scale: f32,
+}
+
+impl LightSource {
+    fn of(store: &SceneStore, scale: f32) -> Self {
+        let bounds = store
+            .root_layer()
+            .map(LayerRef::local_bounds)
+            .unwrap_or_default();
+        Self {
+            width: bounds.width * scale,
+            height: bounds.height * scale,
+            scale,
+        }
+    }
+
+    fn light(self) -> ShadowLight {
+        ShadowLight::for_window(self.width, self.height, self.scale, 1.0)
+    }
 }
 
 pub(crate) fn fill_raster_scene(
@@ -338,8 +358,8 @@ pub(crate) fn fill_raster_scene(
     text: &TextRaster,
 ) {
     scene.clear();
-    let light = scene_light(store, scale);
-    scene.start = Some((scale, light));
+    let light = LightSource::of(store, scale);
+    scene.start = Some(light);
     let mut reuse = previous.map(|old| Reuse {
         old,
         cursor: 0,
@@ -503,7 +523,7 @@ fn push_layer_shadow_of(
     mapping: &RasterLayerMapping,
     transform: &ProjectiveTransform,
     parent_visual_clip: Option<Rect>,
-    light: ShadowLight,
+    light: LightSource,
 ) {
     let graphics_layer = layer.graphics_layer();
     if graphics_layer.shadow_elevation <= 0.0 {
@@ -532,7 +552,7 @@ fn push_layer_shadow_of(
         mapping.layer_bounds,
         mapping.transformed_bounds,
         shadow_clip,
-        light,
+        light.light(),
     );
 }
 

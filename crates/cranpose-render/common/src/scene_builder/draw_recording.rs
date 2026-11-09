@@ -3,8 +3,8 @@ use std::{borrow::Cow, hash::Hasher, ops::Range, rc::Rc};
 use cranpose_core::{NodeId, RecordId};
 use cranpose_ui::{BackgroundDraw, Color, DrawCommand, Point, Rect, Size};
 use cranpose_ui_graphics::{
-    CommandRecording, CompositingStrategy, DrawGroup, DrawPlacement, FxHasher, GraphicsLayer,
-    RecordLane,
+    CommandRecording, CompositingStrategy, CornerRadii, DrawGroup, DrawPlacement, FxHasher,
+    GraphicsLayer, RecordLane,
 };
 
 use super::{HeadKind, LayerHead, assign_layer};
@@ -356,16 +356,18 @@ pub(super) fn append_draw_nodes(
 // unless the item the node drew them in before gives them back.
 #[inline(never)]
 fn add_background(store: &mut SceneStore, background: &BackgroundDraw, size: Size) -> Item {
-    store.add_shapes(background_print(background, size), |recorder| {
-        background.record(size, recorder);
+    let shape = background.shape_in(size);
+    store.add_shapes(background_print(shape, background.color()), |recorder| {
+        background.record(shape, recorder);
     })
 }
 
-// A hash of the shape `background` records in a node of `size`: its rect,
-// its corners when they are round, and its color.
-fn background_print(background: &BackgroundDraw, size: Size) -> u64 {
-    let (rect, radii) = background.shape_in(size);
-    let Color(red, green, blue, alpha) = background.color();
+// A hash of a background's shape: its rect, its corners when they are
+// round, and its color.
+fn background_print(
+    (rect, radii): (Rect, Option<CornerRadii>),
+    Color(red, green, blue, alpha): Color,
+) -> u64 {
     let mut print = FxHasher::default();
     for value in [
         rect.x,

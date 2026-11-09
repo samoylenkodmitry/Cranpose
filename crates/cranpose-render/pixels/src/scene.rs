@@ -5,7 +5,7 @@ pub use cranpose_render_common::graph_scene::{HitRegion, Scene};
 use cranpose_render_common::{
     glyph_reach::{InkSpread, glyph_part},
     graph::ProjectiveTransform,
-    layer_shadow::{ShadowLight, ShadowRRect},
+    layer_shadow::ShadowRRect,
     primitive_emit::ShapeDrawParams,
     scene_store::{ItemRef as RecordItem, LayerRef, Placement, RecordChanges, RecordKind},
 };
@@ -17,6 +17,7 @@ use cranpose_ui_graphics::{
 
 use crate::{
     draw::RenderItem,
+    pipeline::LightSource,
     rewrite::Rewrite,
     scene_item::{ItemRef, SceneItem},
 };
@@ -350,8 +351,9 @@ pub(crate) struct RasterScene {
     pub subtrees: Vec<SubtreeItems>,
     /// What the layers with child layers passed down to them.
     pub passed_down: Vec<PassedDown>,
-    /// The scale and the shadow light the walk started from.
-    pub start: Option<(f32, ShadowLight)>,
+    /// The scale and the root's size the walk started from, which the
+    /// shadow light comes from.
+    pub start: Option<LightSource>,
     pub(crate) kept: Vec<Range<usize>>,
     // The snap anchor of the layer whose draws push now, which their items
     // take.

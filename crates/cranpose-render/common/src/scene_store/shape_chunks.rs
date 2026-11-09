@@ -147,6 +147,9 @@ impl ShapeChunks {
     // Releases the runs of the items the update removed, in the order it
     // removed them.
     fn release_removed(&mut self) {
+        if self.removed.is_empty() {
+            return;
+        }
         let mut removed = std::mem::take(&mut self.removed);
         for run in removed.drain(..) {
             self.release(&run);
