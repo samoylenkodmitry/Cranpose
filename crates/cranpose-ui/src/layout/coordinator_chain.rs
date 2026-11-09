@@ -163,6 +163,39 @@ impl CoordinatorNode {
     }
 }
 
+// What a walk of a chain gave, with the chain revision it read: the inputs
+// but the density, which the node holds, and the density's scale, which
+// put the offsets on the device grid.
+#[derive(Clone, Copy)]
+struct SyncedInputs {
+    revision: PackedU64,
+    scale: f32,
+    offset: Point,
+    window_root: bool,
+    uses_chain: bool,
+}
+
+impl SyncedInputs {
+    fn of(revision: u64, inputs: ModifierChainInputs) -> Self {
+        Self {
+            revision: PackedU64::new(revision),
+            scale: inputs.density.density(),
+            offset: inputs.offset,
+            window_root: inputs.window_root,
+            uses_chain: inputs.uses_chain,
+        }
+    }
+
+    fn inputs(self, density: crate::density::Density) -> ModifierChainInputs {
+        ModifierChainInputs {
+            density,
+            window_root: self.window_root,
+            offset: self.offset,
+            uses_chain: self.uses_chain,
+        }
+    }
+}
+
 #[derive(Default)]
 pub(super) struct CoordinatorChain {
     nodes: Vec<CoordinatorNode>,
@@ -170,10 +203,10 @@ pub(super) struct CoordinatorChain {
     inner_size: Cell<Size>,
     /// The constraints the node's own measure policy last measured under.
     inner_constraints: Cell<Option<Constraints>>,
-    /// The chain revision the nodes were last synced at and the inputs it
+    /// The chain revision the nodes were last synced at and what the walk
     /// gave: a node whose modifiers did not change since measures again
     /// without walking its chain.
-    synced: Option<(PackedU64, ModifierChainInputs)>,
+    synced: Option<SyncedInputs>,
     // Whether a measure placed the coordinators, whose rects the nodes'
     // sizes and offsets give, and whether one of them moved since the scene
     // last heard of the node.
@@ -185,14 +218,14 @@ impl CoordinatorChain {
     pub(super) fn sync(&mut self, node: &LayoutNode) -> ModifierChainInputs {
         let density = node.density();
         let revision = node.modifier_chain().revision();
-        if let Some((synced, inputs)) = self.synced
-            && synced.get() == revision
-            && inputs.density == density
+        if let Some(synced) = self.synced
+            && synced.revision.get() == revision
+            && synced.scale == density.density()
         {
-            return inputs;
+            return synced.inputs(density);
         }
         let inputs = self.walk(node, density);
-        self.synced = Some((PackedU64::new(revision), inputs));
+        self.synced = Some(SyncedInputs::of(revision, inputs));
         // Other modifiers may place other coordinators.
         self.moved.set(true);
         inputs
@@ -445,7 +478,7 @@ impl CoordinatorChain {
     // of `node_size` without layout modifiers has its content alone, which
     // fills it. `None` before a measure placed them.
     pub(super) fn placed_rect(&self, ordinal: usize, node_size: Size) -> Option<GeometryRect> {
-        let (_, inputs) = self.synced.filter(|_| self.placed.get())?;
+        let inputs = self.synced.filter(|_| self.placed.get())?;
         if !inputs.uses_chain {
             return (ordinal == 0).then(|| GeometryRect::from_size(node_size));
         }
