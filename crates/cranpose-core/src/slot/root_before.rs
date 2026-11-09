@@ -59,7 +59,7 @@ impl SlotTable {
             {
                 if record.id == parent {
                     last = Some(RootBefore::Nothing);
-                } else if record.parent_id == Some(parent) {
+                } else if record.parent_id.get() == Some(parent) {
                     last = Some(RootBefore::Node(record.id));
                 }
                 next_own += 1;
@@ -71,7 +71,7 @@ impl SlotTable {
             let first_parent = (sibling.subtree_node_count > 0)
                 .then(|| self.nodes.get(sibling.node_start as usize))
                 .flatten()
-                .map(|record| record.parent_id);
+                .map(|record| record.parent_id.get());
             if first_parent == Some(Some(parent)) {
                 let ControlFlow::Continue(()) =
                     self.try_for_each_root_in(index, Some(parent), &mut |id| {

@@ -4,7 +4,7 @@
 
 use std::cell::RefCell;
 
-use cranpose_core::{NodeId, collections::id_pages::IdPages};
+use cranpose_core::{NodeId, PackedNodeId, collections::id_pages::IdPages};
 use cranpose_foundation::NodeCapabilities;
 
 use super::LayoutNode;
@@ -20,7 +20,7 @@ pub(super) struct LayoutNodeRegistryDebugStats {
 }
 
 struct LayoutNodeRegistryEntry {
-    parent: Option<NodeId>,
+    parent: PackedNodeId,
     modifier_child_capabilities: NodeCapabilities,
     modifier_locals: Option<ModifierLocalsHandle>,
 }
@@ -40,7 +40,7 @@ impl LayoutNodeRegistryState {
 
     fn register(&self, id: NodeId, node: &LayoutNode) {
         let entry = LayoutNodeRegistryEntry {
-            parent: node.parent(),
+            parent: PackedNodeId::from(node.parent()),
             modifier_child_capabilities: node.modifier_child_capabilities(),
             modifier_locals: node.modifier_locals_handle(),
         };
@@ -66,7 +66,7 @@ impl LayoutNodeRegistryState {
             .entry_mut(id.0)
             .and_then(Option::as_mut)
         {
-            entry.parent = parent;
+            entry.parent = PackedNodeId::from(parent);
             entry.modifier_child_capabilities = modifier_child_capabilities;
             entry.modifier_locals = modifier_locals;
         }
@@ -98,7 +98,7 @@ impl LayoutNodeRegistryState {
                         .flatten()
                         .and_then(|locals| locals.borrow().resolve(token))
                         .map(|value| value.with_source(ModifierLocalSource::Ancestor));
-                    (entry.parent, resolved)
+                    (entry.parent.get(), resolved)
                 } else {
                     (None, None)
                 }

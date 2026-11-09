@@ -1199,7 +1199,7 @@ fn validate_reports_duplicate_node_id_structurally() {
     table.nodes.push(NodeRecord {
         owner: table.groups[0].anchor,
         id: node,
-        parent_id: None,
+        parent_id: crate::PackedNodeId::NONE,
         generation: 2,
         source: crate::slot::BRANCH_PATH_ROOT,
         lifecycle: NodeLifecycle::Active,
@@ -1272,7 +1272,7 @@ fn validate_reports_node_count_mismatch_structurally() {
     table.nodes.push(NodeRecord {
         owner: table.groups[0].anchor,
         id: NodeId(999),
-        parent_id: None,
+        parent_id: crate::PackedNodeId::NONE,
         generation: 1,
         source: crate::slot::BRANCH_PATH_ROOT,
         lifecycle: NodeLifecycle::Active,

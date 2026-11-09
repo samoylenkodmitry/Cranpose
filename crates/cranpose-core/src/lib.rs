@@ -94,6 +94,8 @@ pub use node::{
 mod node_error;
 mod node_id_cell;
 pub use node_id_cell::NodeIdCell;
+mod packed_node_id;
+pub use packed_node_id::PackedNodeId;
 mod node_marks;
 mod phase;
 pub use phase::Phase;

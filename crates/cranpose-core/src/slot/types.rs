@@ -6,7 +6,7 @@ use std::{
 use smallvec::SmallVec;
 
 use super::{DeferredDrop, GroupRecord, MOVABLE_STATIC_KEY, checked_usize_to_u32};
-use crate::{AnchorId, Key, NodeId, RecomposeScope, collections::map::HashSet};
+use crate::{AnchorId, Key, NodeId, PackedNodeId, RecomposeScope, collections::map::HashSet};
 
 /// The root nodes of a group's subtree: most groups have a few, kept inline.
 pub(crate) type RootNodeIds = SmallVec<[NodeId; 4]>;
@@ -274,7 +274,7 @@ impl PayloadKind {
 pub(super) struct NodeRecord {
     pub(super) owner: AnchorId,
     pub(super) id: NodeId,
-    pub(super) parent_id: Option<NodeId>,
+    pub(super) parent_id: PackedNodeId,
     pub(super) generation: u32,
     pub(super) source: Key,
     pub(super) lifecycle: NodeLifecycle,
@@ -297,7 +297,7 @@ impl NodeRecord {
         Self {
             owner,
             id,
-            parent_id,
+            parent_id: PackedNodeId::from(parent_id),
             generation,
             source,
             lifecycle: NodeLifecycle::Active,
@@ -472,7 +472,7 @@ impl DetachedSubtree {
             .iter_mut()
             .filter(|node| roots.contains(&node.id))
         {
-            node.parent_id = parent;
+            node.parent_id = PackedNodeId::from(parent);
         }
     }
 
@@ -543,7 +543,7 @@ fn root_node_records(nodes: &[NodeRecord]) -> impl Iterator<Item = &NodeRecord> 
     let hashed: Option<HashSet<NodeId>> =
         (nodes.len() > ROOT_SCAN_LIMIT).then(|| nodes.iter().map(|node| node.id).collect());
     nodes.iter().filter(move |node| {
-        node.parent_id.is_none_or(|parent_id| match &hashed {
+        node.parent_id.get().is_none_or(|parent_id| match &hashed {
             Some(ids) => !ids.contains(&parent_id),
             None => nodes.iter().all(|other| other.id != parent_id),
         })

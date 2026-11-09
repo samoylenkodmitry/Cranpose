@@ -51,7 +51,7 @@ fn immediate_detached_subtree_disposal_propagates_remove_failure() {
         nodes: vec![NodeRecord {
             owner,
             id: NODE_ID,
-            parent_id: None,
+            parent_id: crate::PackedNodeId::NONE,
             generation: 0,
             source: crate::slot::BRANCH_PATH_ROOT,
             lifecycle: NodeLifecycle::RetainedDetached,
@@ -92,7 +92,7 @@ fn detached_subtree_root_node_metadata_falls_back_to_all_nodes() {
         nodes: vec![NodeRecord {
             owner,
             id: NODE_ID,
-            parent_id: Some(NODE_ID),
+            parent_id: crate::PackedNodeId::new(Some(NODE_ID)),
             generation: 0,
             source: crate::slot::BRANCH_PATH_ROOT,
             lifecycle: NodeLifecycle::RetainedDetached,

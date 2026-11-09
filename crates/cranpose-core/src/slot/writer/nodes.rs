@@ -22,7 +22,7 @@ impl SlotTable {
     ) {
         let Some(parent) = self
             .subtree_first_record_at(group_index)
-            .map(|first| first.parent_id)
+            .map(|first| first.parent_id.get())
         else {
             return;
         };
@@ -46,15 +46,19 @@ impl SlotTable {
         let found = if first.child_groups_before == 0 {
             Some(first.id)
         } else {
-            self.try_for_each_root_in(group_index, first.parent_id, &mut ControlFlow::Break)
+            self.try_for_each_root_in(group_index, first.parent_id.get(), &mut ControlFlow::Break)
                 .break_value()
         };
         #[cfg(any(test, debug_assertions))]
         if crate::slot::slot_validation_diagnostics_enabled() {
             assert_eq!(
                 found,
-                self.try_for_each_root_in(group_index, first.parent_id, &mut ControlFlow::Break)
-                    .break_value(),
+                self.try_for_each_root_in(
+                    group_index,
+                    first.parent_id.get(),
+                    &mut ControlFlow::Break
+                )
+                .break_value(),
                 "the first root must be the first one the subtree emitted"
             );
         }
@@ -111,7 +115,7 @@ impl SlotTable {
                     .get(next_own)
                     .filter(|record| record.child_groups_before <= children_before)
                 {
-                    if record.parent_id == parent {
+                    if record.parent_id.get() == parent {
                         f(record.id)?;
                     }
                     next_own += 1;
@@ -126,7 +130,7 @@ impl SlotTable {
                     let first_parent = self
                         .nodes
                         .get(child.node_start as usize)
-                        .map(|record| record.parent_id);
+                        .map(|record| record.parent_id.get());
                     if first_parent == Some(parent) {
                         self.try_for_each_root_in(child_index, parent, f)?;
                     }
@@ -137,7 +141,7 @@ impl SlotTable {
             }
         }
         for record in &own[next_own..] {
-            if record.parent_id == parent {
+            if record.parent_id.get() == parent {
                 f(record.id)?;
             }
         }
