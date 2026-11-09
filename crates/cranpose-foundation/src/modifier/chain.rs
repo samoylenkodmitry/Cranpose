@@ -172,9 +172,9 @@ pub struct ModifierNodeChain {
     // While a node of the chain delegates: the chain's nodes in order,
     // delegates after the node that delegates to them, each with its
     // capabilities and the union of its own and those of every node after
-    // it. Empty otherwise, when the entries are the order and keep the
-    // unions: most chains delegate nowhere and allocate none.
-    delegated_order: Vec<(NodePath, NodeCapabilities, NodeCapabilities)>,
+    // it. `None` otherwise, when the entries are the order and keep the
+    // unions: most chains delegate nowhere, and the list sits out of line.
+    delegated_order: Option<Box<Vec<(NodePath, NodeCapabilities, NodeCapabilities)>>>,
     /// Whether the chain's nodes are attached. A node that joins an attached
     /// chain attaches as it joins; one that joins a detached chain waits for
     /// [`Self::attach_nodes`].
@@ -445,7 +445,7 @@ impl ModifierNodeChain {
         Self {
             entries: Vec::new(),
             aggregated_capabilities: NodeCapabilities::empty(),
-            delegated_order: Vec::new(),
+            delegated_order: None,
             attached: false,
         }
     }
@@ -884,21 +884,20 @@ impl ModifierNodeChain {
 
     // How many nodes the chain's order holds, delegates included.
     pub(super) fn order_len(&self) -> usize {
-        if self.delegated_order.is_empty() {
-            self.entries.len()
-        } else {
-            self.delegated_order.len()
-        }
+        self.delegated_order
+            .as_deref()
+            .map_or(self.entries.len(), Vec::len)
     }
 
     // The node at `index` of the chain's order: its path, its capabilities
     // and the union of capabilities from it to the tail.
     pub(super) fn order_at(&self, index: usize) -> (NodePath, NodeCapabilities, NodeCapabilities) {
-        if self.delegated_order.is_empty() {
-            let entry = &self.entries[index];
-            (NodePath::root(index), entry.capabilities, entry.aggregate)
-        } else {
-            self.delegated_order[index]
+        match self.delegated_order.as_deref() {
+            Some(order) => order[index],
+            None => {
+                let entry = &self.entries[index];
+                (NodePath::root(index), entry.capabilities, entry.aggregate)
+            }
         }
     }
 
@@ -907,15 +906,15 @@ impl ModifierNodeChain {
     fn sync_chain_links(&mut self) {
         self.rebuild_delegated_order();
         let mut aggregate = NodeCapabilities::empty();
-        if self.delegated_order.is_empty() {
+        if let Some(order) = self.delegated_order.as_deref_mut() {
+            for (_, caps, aggregate_child) in order.iter_mut().rev() {
+                aggregate |= *caps;
+                *aggregate_child = aggregate;
+            }
+        } else {
             for entry in self.entries.iter_mut().rev() {
                 aggregate |= entry.capabilities;
                 entry.aggregate = aggregate;
-            }
-        } else {
-            for (_, caps, aggregate_child) in self.delegated_order.iter_mut().rev() {
-                aggregate |= *caps;
-                *aggregate_child = aggregate;
             }
         }
         self.aggregated_capabilities = aggregate;
@@ -931,20 +930,15 @@ impl ModifierNodeChain {
             delegates
         });
         if !delegates {
-            self.delegated_order = Vec::new();
+            self.delegated_order = None;
             return;
         }
-        self.delegated_order.clear();
+        let order = self.delegated_order.get_or_insert_default();
+        order.clear();
         let mut path_buf = [0usize; MAX_DELEGATE_DEPTH];
         for (index, entry) in self.entries.iter().enumerate() {
             let node_borrow = entry.node.borrow();
-            Self::enumerate_link_order(
-                &*node_borrow,
-                index,
-                &mut path_buf,
-                0,
-                &mut self.delegated_order,
-            );
+            Self::enumerate_link_order(&*node_borrow, index, &mut path_buf, 0, order);
         }
     }
 

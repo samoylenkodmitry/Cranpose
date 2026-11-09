@@ -79,12 +79,20 @@ struct NodeCacheState {
     /// node's next measure takes it to fill its memory in place of new
     /// allocations.
     spare: Option<Rc<MeasuredNode>>,
-    intrinsics: Vec<(IntrinsicKind, f32)>,
+    // The intrinsic sizes a parent read, `None` until one reads any: most
+    // nodes never answer one.
+    intrinsics: Option<Box<Vec<(IntrinsicKind, f32)>>>,
     /// Whether a parent read intrinsic sizes since the cache was cleared.
     intrinsics_read: bool,
 }
 
 impl NodeCacheState {
+    fn clear_intrinsics(&mut self) {
+        if let Some(intrinsics) = self.intrinsics.as_deref_mut() {
+            intrinsics.clear();
+        }
+    }
+
     fn retire_measurement(&mut self) {
         if let Some(entry) = self.measurement.take() {
             self.spare = Some(entry.measured);
@@ -184,7 +192,7 @@ impl NodeCache {
         self.advance_revision();
         let mut state = self.cache.borrow_mut();
         state.retire_measurement();
-        state.intrinsics.clear();
+        state.clear_intrinsics();
         state.intrinsics_read = false;
         state.epoch = PackedU64::default();
     }
@@ -201,7 +209,7 @@ impl NodeCache {
         let mut state = self.cache.borrow_mut();
         if state.epoch.get() != epoch {
             state.retire_measurement();
-            state.intrinsics.clear();
+            state.clear_intrinsics();
             state.intrinsics_read = false;
             state.epoch = PackedU64::new(epoch);
         }
@@ -233,7 +241,7 @@ impl NodeCache {
     /// them changed. A parent's earlier read still counts for
     /// [`Self::has_intrinsics`].
     pub(crate) fn forget_intrinsics(&self) {
-        self.cache.borrow_mut().intrinsics.clear();
+        self.cache.borrow_mut().clear_intrinsics();
     }
 
     pub(crate) fn epoch(&self) -> u64 {
@@ -357,6 +365,7 @@ impl NodeCache {
         let state = self.cache.borrow();
         state
             .intrinsics
+            .as_deref()?
             .iter()
             .find(|(stored_kind, _)| stored_kind == kind)
             .map(|(_, value)| *value)
@@ -365,14 +374,14 @@ impl NodeCache {
     pub(crate) fn store_intrinsic(&self, kind: IntrinsicKind, value: f32) {
         let mut state = self.cache.borrow_mut();
         state.intrinsics_read = true;
-        if let Some((_, existing)) = state
-            .intrinsics
+        let intrinsics = state.intrinsics.get_or_insert_default();
+        if let Some((_, existing)) = intrinsics
             .iter_mut()
             .find(|(stored_kind, _)| stored_kind == &kind)
         {
             *existing = value;
         } else {
-            state.intrinsics.push((kind, value));
+            intrinsics.push((kind, value));
         }
     }
 }
