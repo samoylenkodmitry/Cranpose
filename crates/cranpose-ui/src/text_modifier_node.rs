@@ -86,10 +86,6 @@ struct TextPreparedLayoutOwner {
     // a text that changes as a ticker's does measures again each frame,
     // which no hold spares, so it gives none.
     changed: Cell<bool>,
-    // Whether the cache holds layouts of an earlier source only: the next
-    // layout takes the allocation of the latest one, as a ticker's text
-    // lays out anew each frame.
-    stale: Cell<bool>,
 }
 
 /// What a text is laid out from.
@@ -134,7 +130,6 @@ impl TextPreparedLayoutOwner {
             }),
             measured_widths: Cell::new(None),
             changed: Cell::new(false),
-            stale: Cell::new(false),
             cache: RefCell::new(SmallVec::new()),
         }
     }
@@ -161,7 +156,7 @@ impl TextPreparedLayoutOwner {
         source.options = options;
         source.admission = CacheAdmission::Changed;
         drop(source);
-        self.stale.set(true);
+        self.cache.borrow_mut().clear();
         self.changed.set(true);
     }
 
@@ -183,7 +178,7 @@ impl TextPreparedLayoutOwner {
     // while it is.
     fn prepared(&self, widths: (f32, f32)) -> Ref<'_, Rc<crate::text::PreparedTextLayout>> {
         let stamp = crate::render_state::text_layout_stamp();
-        if !self.stale.get() {
+        {
             let cache = self.cache.borrow();
             if cache
                 .first()
@@ -203,9 +198,6 @@ impl TextPreparedLayoutOwner {
     // lines there, as a width that animates asks for each frame, or one the
     // cache keeps. False when none does.
     fn bring_kept(&self, widths: (f32, f32), stamp: (u64, u32)) -> bool {
-        if self.stale.get() {
-            return false;
-        }
         let mut cache = self.cache.borrow_mut();
         let Some(latest) = cache.first_mut() else {
             return false;
@@ -233,21 +225,14 @@ impl TextPreparedLayoutOwner {
         let source = self.source.borrow();
         let frame = source.frame(widths);
         let align = source.style.paragraph_style.text_align;
-        // A layout takes the allocation of the latest one of an earlier
-        // source, or at new widths that of the one the full cache lets go,
-        // as a width that animates asks for one every frame.
+        // A layout at new widths takes the allocation of the one the full
+        // cache lets go, as a width that animates asks for one every frame.
         let spare = {
             let mut cache = self.cache.borrow_mut();
-            if self.stale.replace(false) {
-                let latest = (!cache.is_empty()).then(|| cache.swap_remove(0).layout);
-                cache.clear();
-                latest
-            } else {
-                (cache.len() >= PREPARED_LAYOUT_CACHE_CAPACITY)
-                    .then(|| cache.pop())
-                    .flatten()
-                    .map(|entry| entry.layout)
-            }
+            (cache.len() >= PREPARED_LAYOUT_CACHE_CAPACITY)
+                .then(|| cache.pop())
+                .flatten()
+                .map(|entry| entry.layout)
         };
         let prepared = {
             // The cache holds layouts of this source only: the latest one, on
@@ -270,12 +255,7 @@ impl TextPreparedLayoutOwner {
                         style_hash: source.style_hash.get(),
                     };
                     let shaped = latest.map(|latest| &latest.layout);
-                    crate::text::measure::prepare_shared(
-                        &text,
-                        frame,
-                        (source.admission, spare),
-                        shaped,
-                    )
+                    crate::text::measure::prepare_shared(&text, frame, source.admission, shaped)
                 }
             }
         };
@@ -296,9 +276,6 @@ impl TextPreparedLayoutOwner {
     /// that keep it; `None` when the cache holds none.
     fn cached_widths(&self, widths: (f32, f32)) -> Option<(Size, cranpose_ui_layout::BoundRange)> {
         let stamp = crate::render_state::text_layout_stamp();
-        if self.stale.get() {
-            return None;
-        }
         let cache = self.cache.borrow();
         let entry = cache.iter().find(|entry| entry.keeps(widths, stamp))?;
         Some((entry.layout.size(), entry.max_widths))

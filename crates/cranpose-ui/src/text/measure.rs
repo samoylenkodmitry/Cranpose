@@ -180,19 +180,13 @@ impl PreparedTextLayout {
             )
         };
         aligned.realign(widths, align);
-        aligned.shared_in(spare)
-    }
-
-    // This layout in the allocation of `spare` when nothing else holds it,
-    // else in a new one.
-    fn shared_in(self, spare: Option<Rc<Self>>) -> Rc<Self> {
         if let Some(mut spare) = spare
             && let Some(slot) = Rc::get_mut(&mut spare)
         {
-            *slot = self;
+            *slot = aligned;
             return spare;
         }
-        Rc::new(self)
+        Rc::new(aligned)
     }
 
     // Places the lines across `(min_width, max_width)`, at which the layout
@@ -404,13 +398,12 @@ impl TextService {
 
     // The layout of `source` in `frame` with sizes in `units`: a cached one
     // that breaks into the same lines, aligned to the frame's widths, or a
-    // new one, in the allocation of `spare` when nothing else holds it.
+    // new one.
     fn prepare(
         &self,
         source: LayoutSource<'_>,
         frame: TextFrame,
         (units, admission): (TextUnits, CacheAdmission),
-        spare: Option<Rc<PreparedTextLayout>>,
     ) -> Rc<PreparedTextLayout> {
         let (text, style) = (source.text(), source.style());
         let key = TextKey::of(text, source.style_hash(), frame.options, units);
@@ -427,9 +420,7 @@ impl TextService {
             None => None,
         };
         let (text, style) = source.shared();
-        let prepared = self
-            .lay_out(text, style, frame, (units, source.shaped()))
-            .shared_in(spare);
+        let prepared = Rc::new(self.lay_out(text, style, frame, (units, source.shaped())));
         if let Some((key, miss)) = missed {
             self.layouts
                 .borrow_mut()
@@ -726,7 +717,6 @@ fn prepare_borrowed(
             LayoutSource::Borrowed { text, style },
             frame,
             (units, CacheAdmission::First),
-            None,
         )
     })
 }
@@ -763,7 +753,6 @@ pub(crate) fn prepare_resolved(text: &SharedText<'_>) -> Rc<PreparedTextLayout> 
             LayoutSource::Shared { text, shaped: None },
             TextFrame::unbounded(TextLayoutOptions::default()),
             (resolved_units(), CacheAdmission::Drawn),
-            None,
         )
     })
 }
@@ -801,12 +790,11 @@ pub fn prepare_text_layout(
 }
 
 // Lays out `text` in `style` between the widths of `frame`, sharing them,
-// kept by the shared cache as `admission` says, in the allocation of
-// `spare` when nothing else holds it.
+// kept by the shared cache as `admission` says.
 pub(crate) fn prepare_shared(
     text: &SharedText<'_>,
     frame: TextFrame,
-    (admission, spare): (CacheAdmission, Option<Rc<PreparedTextLayout>>),
+    admission: CacheAdmission,
     shaped: Option<&TextLayout>,
 ) -> Rc<PreparedTextLayout> {
     crate::render_state::with_text_service(|service| {
@@ -814,7 +802,6 @@ pub(crate) fn prepare_shared(
             LayoutSource::Shared { text, shaped },
             frame,
             (host_units(), admission),
-            spare,
         )
     })
 }

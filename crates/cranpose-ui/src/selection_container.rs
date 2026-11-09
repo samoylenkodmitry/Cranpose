@@ -114,7 +114,7 @@ impl Selectable {
             style: &self.style,
             style_hash: self.style.render_hash(),
         };
-        prepare_shared(&text, frame, (CacheAdmission::First, None), None)
+        prepare_shared(&text, frame, CacheAdmission::First, None)
     }
 
     /// The byte offset nearest `local`, a point in the content's coordinates.
