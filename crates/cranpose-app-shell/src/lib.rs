@@ -27,8 +27,8 @@ use std::{
 };
 
 use cranpose_core::{
-    Applier, Composition, MemoryApplier, NodeError, NodeId, NodeMarks, SceneNodeAttachmentScratch,
-    collections::map::HashSet, enter_event_handler_scope, location_key, run_in_mutable_snapshot,
+    Applier, Composition, MemoryApplier, NodeError, NodeId, collections::map::HashSet,
+    enter_event_handler_scope, location_key, run_in_mutable_snapshot,
 };
 pub use cranpose_foundation::{
     DEFAULT_ROTARY_SCROLL_FACTOR_DP, Modifiers, PointerId, PointerSource, RotaryScrollEvent,
@@ -239,26 +239,10 @@ where
 {
     pub(crate) app: ShellApp,
     pub(crate) surfaces: Vec<RootSurface<R>>,
-    pub(crate) routing_scratch: SurfaceRoutingScratch,
+    pub(crate) routing_scratch: surface::SurfaceRoutingScratch,
     pub(crate) pending_dirty_nodes: Vec<NodeId>,
     pub(crate) pending_layer_property_nodes: Vec<NodeId>,
     pub(crate) geometry_scene_nodes: cranpose_ui::GeometrySceneNodes,
-}
-
-#[derive(Default)]
-pub(crate) struct SurfaceRoutingScratch {
-    pub(crate) attached: Vec<Option<NodeId>>,
-    pub(crate) owners: Vec<Option<NodeId>>,
-    pub(crate) seen: HashSet<(usize, NodeId)>,
-    pub(crate) attachment: SceneNodeAttachmentScratch,
-    pub(crate) window_roots: cranpose_ui::WindowRootRoutingScratch,
-    /// The nodes a layout lane routing gave the surfaces, while the moved
-    /// lane after it is routed.
-    pub(crate) laid_out: NodeMarks,
-    /// Each surface's count of layout lane nodes before that routing.
-    pub(crate) laid_out_starts: Vec<usize>,
-    /// The moved nodes the moved lane routes.
-    pub(crate) moved: Vec<NodeId>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -608,7 +592,7 @@ where
                 buffer_size,
                 viewport,
             )],
-            routing_scratch: SurfaceRoutingScratch::default(),
+            routing_scratch: surface::SurfaceRoutingScratch::default(),
             pending_dirty_nodes: Vec::new(),
             pending_layer_property_nodes: Vec::new(),
             geometry_scene_nodes: cranpose_ui::GeometrySceneNodes::default(),

@@ -14,7 +14,9 @@ use std::{cell::RefCell, fmt::Debug, rc::Rc};
 
 mod list_room;
 
-use cranpose_core::{MemoryApplier, NodeId, collections::map::HashSet};
+use cranpose_core::{
+    MemoryApplier, NodeId, NodeMarks, SceneNodeAttachmentScratch, collections::map::HashSet,
+};
 use cranpose_foundation::{
     PointerButton, PointerButtons, PointerId, PointerSource, RotaryScrollEvent,
 };
@@ -27,8 +29,8 @@ use cranpose_ui_graphics::{Point, PointerIcon, Size};
 
 use crate::{
     AppShell, FramePacingMode, FrameRatePreference, FrameSchedule, FrameScheduler,
-    FrameUpdateResult, PlatformFrameDriver, ShellApp, SurfaceRoutingScratch,
-    hit_path_tracker::HitPathTracker, shell_frame::DevOverlay,
+    FrameUpdateResult, PlatformFrameDriver, ShellApp, hit_path_tracker::HitPathTracker,
+    shell_frame::DevOverlay,
 };
 
 /// Names a root surface of the app: the primary window, or a window root
@@ -443,6 +445,22 @@ pub(crate) enum SurfaceDirtyLane {
     Draw,
     LayerProperties,
     Structural,
+}
+
+#[derive(Default)]
+pub(crate) struct SurfaceRoutingScratch {
+    pub(crate) attached: Vec<Option<NodeId>>,
+    pub(crate) owners: Vec<Option<NodeId>>,
+    pub(crate) seen: HashSet<(usize, NodeId)>,
+    pub(crate) attachment: SceneNodeAttachmentScratch,
+    pub(crate) window_roots: cranpose_ui::WindowRootRoutingScratch,
+    /// The nodes a layout lane routing gave the surfaces, while the moved
+    /// lane after it is routed.
+    pub(crate) laid_out: NodeMarks,
+    /// Each surface's count of layout lane nodes before that routing.
+    pub(crate) laid_out_starts: Vec<usize>,
+    /// The moved nodes the moved lane routes.
+    pub(crate) moved: Vec<NodeId>,
 }
 
 fn append_surface_dirty_node(
