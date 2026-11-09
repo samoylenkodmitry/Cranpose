@@ -232,14 +232,27 @@ impl RecomposeScopeInner {
         }
     }
 
+    // Lends the scope's restart part, `None` while it has none, to `lend`
+    // and puts it back. Nothing the part is lent to reaches the cell, which
+    // stays empty meanwhile: putting the part back drops nothing, and a
+    // scope without one runs no drop code.
+    fn with_restart<R>(&self, lend: impl FnOnce(&mut Option<Box<RestartPart>>) -> R) -> R {
+        let mut part = self.restart.take();
+        let result = lend(&mut part);
+        if let Some(stale) = self.restart.replace(part) {
+            drop(stale);
+        }
+        result
+    }
+
     // Runs `read` on the scope's restart part, `None` while it has none.
     fn read_restart<R>(&self, read: impl FnOnce(Option<&RestartPart>) -> R) -> R {
-        read_cell(&self.restart, |reads| read(reads.as_deref()))
+        self.with_restart(|part| read(part.as_deref()))
     }
 
     // Runs `update` on the scope's restart part, made first if it has none.
     fn update_restart<R>(&self, update: impl FnOnce(&mut RestartPart) -> R) -> R {
-        update_cell(&self.restart, |reads| update(reads.get_or_insert_default()))
+        self.with_restart(|part| update(part.get_or_insert_default()))
     }
 
     fn id(&self) -> ScopeId {
@@ -448,7 +461,7 @@ impl RecomposeScope {
     fn settle_reads(&self, cursor: u32, ran: bool) {
         let id = self.id();
         let runtime = &self.inner.runtime;
-        update_cell(&self.inner.restart, |reads| {
+        self.inner.with_restart(|reads| {
             let Some(reads) = reads.as_deref_mut() else {
                 return;
             };
@@ -492,7 +505,7 @@ impl RecomposeScope {
     }
 
     fn clear_invalidation_sources(&self) {
-        update_cell(&self.inner.restart, |reads| {
+        self.inner.with_restart(|reads| {
             if let Some(reads) = reads.as_deref_mut() {
                 reads.invalidation_sources.clear();
             }
@@ -619,7 +632,7 @@ impl RecomposeScope {
     fn set_recompose(&self, body: fn(&Composer)) {
         self.note_recompose_source();
         self.inner.recompose.set(Some(body));
-        update_cell(&self.inner.restart, |part| {
+        self.inner.with_restart(|part| {
             if let Some(part) = part.as_deref_mut() {
                 part.closure = None;
             }
@@ -649,9 +662,10 @@ impl RecomposeScope {
 
     #[inline(never)]
     fn run_recompose_closure(&self, composer: &Composer) -> bool {
-        let Some(mut closure) = update_cell(&self.inner.restart, |part| {
-            part.as_deref_mut().and_then(|part| part.closure.take())
-        }) else {
+        let Some(mut closure) = self
+            .inner
+            .with_restart(|part| part.as_deref_mut().and_then(|part| part.closure.take()))
+        else {
             return false;
         };
         self.begin_reads();
