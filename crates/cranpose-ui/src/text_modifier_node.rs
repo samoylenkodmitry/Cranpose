@@ -33,7 +33,7 @@ use crate::{
 #[derive(Debug)]
 pub struct TextModifierNode {
     layout: Rc<TextPreparedLayoutOwner>,
-    density: Rc<Density>,
+    density: Density,
     state: NodeState,
 }
 
@@ -336,7 +336,7 @@ impl TextModifierNode {
     ) -> Self {
         Self {
             layout: Rc::new(TextPreparedLayoutOwner::new(text, style.into(), options)),
-            density: crate::density::shared_density(density),
+            density,
             state: NodeState::new(),
         }
     }
@@ -624,9 +624,7 @@ impl ModifierNodeElement for TextModifierElement {
     }
 
     fn update(&self, node: &mut Self::Node) {
-        if *node.density != self.density {
-            node.density = crate::density::shared_density(self.density);
-        }
+        node.density = self.density;
         node.layout.update(&self.text, &self.style, self.options);
     }
 
