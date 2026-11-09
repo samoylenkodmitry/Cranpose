@@ -36,8 +36,7 @@ impl SceneStore {
         self.set_kind(id, RecordKind::Leaf, Some(leaf.node));
         let unpropped = self.warm[index].props.is_some();
         if unpropped {
-            self.drop_props(index);
-            super::facts::forget_children(self, index);
+            self.unprop(index);
         }
         let size = [leaf.size.width, leaf.size.height];
         let resized = !same_pair(self.geo[index].size, size);
@@ -62,6 +61,15 @@ impl SceneStore {
         if moved {
             self.note_subtree_change(self.tree[index].parent);
         }
+    }
+
+    // Drops the properties of the record at `index`, which becomes a leaf,
+    // with the child facts they decided. A layer seldom turns into a leaf.
+    #[cold]
+    #[inline(never)]
+    fn unprop(&mut self, index: usize) {
+        self.drop_props(index);
+        super::facts::forget_children(self, index);
     }
 
     /// Places `id`, a leaf, at `origin_in_parent` by a translation alone,

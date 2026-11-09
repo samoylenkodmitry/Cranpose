@@ -227,25 +227,30 @@ impl ShapeChunks {
         ChunkId::at(id)
     }
 
-    // Notes that the item of `run` went. A chunk no item names waits for
-    // reuse; past the few kept, it goes.
+    // Notes that the item of `run` went. The open chunk no item names takes
+    // the next shapes from its start once no packet holds it; another such
+    // chunk waits for reuse, and past the few kept, it goes.
     fn release(&mut self, run: &ShapeRun) {
         let chunk = run.chunk;
+        let open = self.open == Some(chunk);
         let Some(entry) = self.chunks[chunk.index()].as_mut() else {
             return;
         };
         entry.items -= 1;
         entry.shapes -= run.shapes;
-        if entry.items > 0 {
-            if let Some(recorder) = Arc::get_mut(&mut entry.recorder)
-                && !run.segments.is_empty()
-                && run.segments.end == recorder.all_segments().end
-            {
+        if let Some(recorder) = Arc::get_mut(&mut entry.recorder) {
+            if entry.items == 0 && open {
+                recorder.clear();
+                return;
+            }
+            if !run.segments.is_empty() && run.segments.end == recorder.all_segments().end {
                 recorder.truncate_segments(run.segments.start);
             }
+        }
+        if entry.items > 0 {
             return;
         }
-        if self.open == Some(chunk) {
+        if open {
             self.open = None;
         }
         if self.empty.len() < KEPT_EMPTY_CHUNKS {
