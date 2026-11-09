@@ -152,7 +152,8 @@ impl TextPreparedLayoutOwner {
         if !shared_style {
             source.style = Arc::clone(style);
         }
-        source.text = text.clone();
+        let replaced = std::mem::replace(&mut source.text, text.clone());
+        crate::thread_state::with(|state| state.retired_strings.borrow_mut().retire(replaced));
         source.options = options;
         source.admission = CacheAdmission::Changed;
         drop(source);

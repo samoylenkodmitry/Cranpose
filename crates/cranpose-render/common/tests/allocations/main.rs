@@ -2,12 +2,12 @@
 
 use std::{alloc::System, cell::RefCell, rc::Rc};
 
-use cranpose_core::{MemoryApplier, NodeId};
+use cranpose_core::{MemoryApplier, MutableState, NodeId, rememberMutableStateOf};
 use cranpose_foundation::lazy::{LazyListScope, LazyListState, rememberLazyListState};
 use cranpose_render_common::{NodeUpdate, graph_scene::Scene, scene_store::LayerRef};
 use cranpose_ui::{
-    Color, GraphicsLayer, LayoutEngine, LazyColumn, LazyColumnSpec, Modifier, Size, Text,
-    TextStyle,
+    Color, GraphicsLayer, LayoutEngine, LayoutNode, LazyColumn, LazyColumnSpec,
+    MeasureLayoutOptions, Modifier, Size, Text, TextStyle, measure_layout_with_options,
     widgets::{Box, BoxSpec, Column, ColumnSpec},
 };
 use stats_alloc::{INSTRUMENTED_SYSTEM, Region, StatsAlloc};
@@ -225,6 +225,80 @@ fn a_row_scrolling_in_reuses_the_row_that_scrolled_out() {
     );
 }
 
+// Allocations a frame of `texts` texts that all change each frame, as a
+// ticker's do, through four words: composition, the layout an app runs
+// while no screen reader is connected and the scene update together.
+fn ticker_frame_allocations(texts: usize) -> usize {
+    const WORDS: [&str; 4] = ["alpha", "bravo", "charlie", "delta"];
+    const FRAME_LAYOUT: MeasureLayoutOptions = MeasureLayoutOptions {
+        collect_semantics: false,
+        build_layout_tree: false,
+    };
+    let tick_holder: Rc<RefCell<Option<MutableState<usize>>>> = Rc::default();
+    let holder = Rc::clone(&tick_holder);
+    let mut composition = cranpose_ui::run_test_composition(move || {
+        let tick = rememberMutableStateOf(|| 0usize);
+        *holder.borrow_mut() = Some(tick);
+        Column(Modifier::empty(), ColumnSpec::default(), move || {
+            for index in 0..texts {
+                Text(
+                    WORDS[(tick.get() + index) % WORDS.len()],
+                    Modifier::empty(),
+                    TextStyle::default(),
+                );
+            }
+        });
+    });
+    let root = composition.root().expect("a composed root");
+    let viewport = Size::new(400.0, 4000.0);
+    let tick = (*tick_holder.borrow()).expect("the tick state");
+    let mut graph = Scene::new();
+    let mut updates = Vec::new();
+    let mut frame = |count: usize| {
+        tick.set(count);
+        composition
+            .process_invalid_scopes()
+            .expect("the texts recompose");
+        let handle = composition.runtime_handle();
+        let mut applier = composition.applier_mut();
+        applier.set_runtime_handle(handle);
+        measure_layout_with_options(&mut applier, root, viewport, FRAME_LAYOUT).expect("layout");
+        if graph.root_layer().is_none() {
+            graph.rebuild_from_applier(&applier, root);
+        }
+        updates.clear();
+        applier
+            .with_node::<LayoutNode, _>(root, |column| {
+                let children = column.children().iter();
+                updates.extend(children.map(|&id| (id, NodeUpdate::Content)));
+            })
+            .expect("the column");
+        assert!(graph.update_from_applier(&applier, root, &updates));
+        applier.clear_runtime_handle();
+    };
+    for count in 1..=8 {
+        frame(count);
+    }
+    let region = Region::new(GLOBAL);
+    for count in 9..9 + PASSES {
+        frame(count);
+    }
+    region.change().allocations / PASSES
+}
+
+// A fixed text that shows another string each frame takes the room of the
+// string it showed before: it allocates nothing of its own.
+fn a_text_changing_each_frame_reuses_its_string() {
+    let few = ticker_frame_allocations(10);
+    let many = ticker_frame_allocations(110);
+    let per_text = many.saturating_sub(few) as f64 / 100.0;
+    println!("allocations per changing text a frame: {per_text}");
+    assert!(
+        per_text <= 0.1,
+        "{per_text} allocations per changing text a frame"
+    );
+}
+
 /// One test, so no other test's allocations land in these regions: the
 /// counting allocator counts every thread.
 fn scene_rebuilds_stay_within_their_allocation_budgets() {
@@ -232,6 +306,7 @@ fn scene_rebuilds_stay_within_their_allocation_budgets() {
     rebuilding_the_graph_reuses_the_graph_it_replaces();
     updating_one_cell_reuses_the_dirty_node_map();
     a_row_scrolling_in_reuses_the_row_that_scrolled_out();
+    a_text_changing_each_frame_reuses_its_string();
 }
 
 main_thread_test!(scene_rebuilds_stay_within_their_allocation_budgets);

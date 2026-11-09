@@ -167,7 +167,7 @@ impl RenderString {
     }
 
     // `text` with no styles, annotations or links.
-    fn plain(text: String) -> Self {
+    pub(crate) fn plain(text: String) -> Self {
         let hash = render_hash_impl(&text, &[], &[]);
         Self {
             text,
@@ -175,6 +175,19 @@ impl RenderString {
             extras: None,
             hash,
         }
+    }
+
+    // The bytes the string's text has room for, when it has no styles or
+    // annotations; `None` otherwise.
+    pub(crate) fn plain_capacity(&self) -> Option<usize> {
+        (self.span_styles.is_empty() && self.extras.is_none()).then_some(self.text.capacity())
+    }
+
+    // Makes a plain string hold `text`, in the room its text has.
+    pub(crate) fn refill_plain(&mut self, text: &str) {
+        self.text.clear();
+        self.text.push_str(text);
+        self.hash = render_hash_impl(&self.text, &[], &[]);
     }
 
     /// The characters.
@@ -389,6 +402,11 @@ pub struct RangeStyle<T> {
 }
 
 impl AnnotatedString {
+    // The string's content, when it has no link handlers.
+    pub(crate) fn into_plain_content(self) -> Option<Arc<RenderString>> {
+        self.handlers.is_none().then_some(self.content)
+    }
+
     /// Creates a string holding `text` with no styles and no annotations.
     pub fn new(text: String) -> Self {
         if text.is_empty() {
