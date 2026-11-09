@@ -41,6 +41,11 @@ pub struct SceneStore {
     pub(super) runs: Slab<DrawRunNode>,
     pub(super) shape_runs: Slab<ShapeRun>,
     pub(super) shape_chunks: ShapeChunks,
+    // The runs of the shape items the update in progress removed, in the
+    // order it removed them: an item added with the shapes of the last one
+    // takes its run back. They go when the update ends or records other
+    // shapes.
+    pub(super) removed_shapes: Vec<ShapeRun>,
     pub(super) hashes: HashCache,
     pub(super) facts: Facts,
     pub(crate) lists: ItemLists,
@@ -114,6 +119,7 @@ impl SceneStore {
             runs: Slab::default(),
             shape_runs: Slab::default(),
             shape_chunks: ShapeChunks::default(),
+            removed_shapes: Vec::new(),
             hashes: HashCache::default(),
             facts: Facts::default(),
             lists: ItemLists::default(),

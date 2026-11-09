@@ -119,10 +119,6 @@ pub(super) struct ShapeChunks {
     // One bit a segment of the chunk that drops its dead shapes, set for
     // the segments a run names: room the next such chunk takes again.
     live: Vec<u64>,
-    // The runs of the items the update in progress removed, in the order
-    // it removed them: an item added with the shapes of the last one takes
-    // its run back. They go when the update ends or records other shapes.
-    removed: Vec<ShapeRun>,
 }
 
 #[derive(Clone)]
@@ -134,29 +130,6 @@ struct ShapeChunk {
 }
 
 impl ShapeChunks {
-    // The run of the last removed item when its shapes have `print`; else
-    // releases the removed runs and gives `None`.
-    fn take_removed(&mut self, print: u64) -> Option<ShapeRun> {
-        if self.removed.last().is_some_and(|run| run.print == print) {
-            return self.removed.pop();
-        }
-        self.release_removed();
-        None
-    }
-
-    // Releases the runs of the items the update removed, in the order it
-    // removed them.
-    fn release_removed(&mut self) {
-        if self.removed.is_empty() {
-            return;
-        }
-        let mut removed = std::mem::take(&mut self.removed);
-        for run in removed.drain(..) {
-            self.release(&run);
-        }
-        self.removed = removed;
-    }
-
     // Records the shapes of one item with `record`, which draw what `print`
     // hashes, into a chunk that takes them, and returns where they went.
     fn record(
@@ -287,7 +260,6 @@ impl ShapeChunks {
         self.chunks.capacity() * size_of::<Option<ShapeChunk>>()
             + self.empty.capacity() * size_of::<ChunkId>()
             + self.live.capacity() * size_of::<u64>()
-            + self.removed.capacity() * size_of::<ShapeRun>()
             + self
                 .chunks
                 .iter()
@@ -345,12 +317,18 @@ impl SceneStore {
     /// last gives its shapes back when they have that print, and `record`
     /// does not run.
     pub fn add_shapes(&mut self, print: u64, record: impl FnOnce(&mut ShapeRecorder)) -> Item {
-        let run = match self.shape_chunks.take_removed(print) {
-            Some(run) => run,
-            None => self
-                .shape_chunks
-                .record(&mut self.shape_runs, print, record),
+        let run = match self.removed_shapes.last() {
+            Some(run) if run.print == print => self.removed_shapes.pop(),
+            Some(_) => {
+                self.release_removed_shapes();
+                None
+            }
+            None => None,
         };
+        let run = run.unwrap_or_else(|| {
+            self.shape_chunks
+                .record(&mut self.shape_runs, print, record)
+        });
         Item::new(ItemKind::Shape, self.shape_runs.insert(run))
     }
 
@@ -368,18 +346,24 @@ impl SceneStore {
     // until the update ends, for an item that draws them again.
     pub(super) fn remove_shapes(&mut self, index: usize) {
         if let Some(run) = self.shape_runs.take(index) {
-            self.shape_chunks.removed.push(run);
+            self.removed_shapes.push(run);
         }
     }
 
-    // Lets go of the shapes of the items the update removed.
+    // Lets go of the shapes of the items the update removed, in the order
+    // it removed them.
     pub(super) fn release_removed_shapes(&mut self) {
-        self.shape_chunks.release_removed();
+        for run in &self.removed_shapes {
+            self.shape_chunks.release(run);
+        }
+        self.removed_shapes.clear();
     }
 
     // The heap the shape items and their chunks hold.
     pub(super) fn shapes_heap_bytes(&self) -> usize {
-        self.shape_runs.heap_bytes() + self.shape_chunks.heap_bytes()
+        self.shape_runs.heap_bytes()
+            + self.shape_chunks.heap_bytes()
+            + self.removed_shapes.capacity() * size_of::<ShapeRun>()
     }
 
     // How many shape items the store holds.
@@ -391,5 +375,6 @@ impl SceneStore {
     pub(super) fn clear_shapes(&mut self) {
         self.shape_runs.clear();
         self.shape_chunks = ShapeChunks::default();
+        self.removed_shapes.clear();
     }
 }
