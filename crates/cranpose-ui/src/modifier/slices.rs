@@ -310,6 +310,7 @@ impl ModifierNodeSlices {
     /// modifiers chained before the node's graphics layer or clip. Those draw
     /// around the layer in the parent's space, outside its clip, alpha and
     /// transform, exactly as an outer `drawBehind` wraps a `graphicsLayer`.
+    #[inline]
     pub fn outer_draw_command_count(&self) -> usize {
         self.layer.as_ref().map_or(0, |layer| layer.draw_boundary)
     }
@@ -407,6 +408,7 @@ impl ModifierNodeSlices {
     }
 
     /// Returns whether the node clips its content to its bounds.
+    #[inline]
     pub fn clip_to_bounds(&self) -> bool {
         self.layer
             .as_ref()
@@ -418,6 +420,7 @@ impl ModifierNodeSlices {
     /// coordinator its outermost clip or graphics layer wraps, so an offset
     /// declared after it moves the content inside the layer rather than the
     /// layer. The node's own rect when it has neither.
+    #[inline]
     pub fn layer_bounds(&self, node_size: Size) -> Rect {
         self.layer
             .as_ref()
@@ -597,6 +600,7 @@ impl ModifierNodeSlices {
 
     /// Whether the chain sets a graphics layer, live or fixed, without
     /// resolving a live one as [`Self::graphics_layer`] does.
+    #[inline]
     pub fn has_graphics_layer(&self) -> bool {
         self.held_graphics_layer()
             || self

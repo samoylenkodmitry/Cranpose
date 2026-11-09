@@ -521,8 +521,10 @@ impl<'a> ItemRef<'a> {
     pub(crate) fn of(store: &'a SceneStore, item: Item) -> Self {
         match item.kind() {
             ItemKind::Child => {
-                let child =
-                    LayerRef::new(store, item.as_child().expect("a child item names a record"));
+                let child = LayerRef::new(
+                    store,
+                    RecordId::from_index(item.index()).expect("a child item names a record row"),
+                );
                 match child.kind() {
                     RecordKind::Leaf => Self::Leaf(child),
                     RecordKind::Layer | RecordKind::Wrapper | RecordKind::DrawGroup => {
