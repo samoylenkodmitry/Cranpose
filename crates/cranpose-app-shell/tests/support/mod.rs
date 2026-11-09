@@ -79,7 +79,7 @@ fn items_signature(layer: LayerRef<'_>, out: &mut Vec<String>) {
     }
 }
 
-fn signature_of(root: Option<LayerRef<'_>>) -> Option<Vec<String>> {
+pub(crate) fn signature_of(root: Option<LayerRef<'_>>) -> Option<Vec<String>> {
     root.map(|root| {
         let mut out = Vec::new();
         scene_signature(root, &mut out);

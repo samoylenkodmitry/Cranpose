@@ -19,14 +19,21 @@ impl RecentPeak {
         (capacity > 4 * bound).then_some(2 * bound)
     }
 
+    /// Gives back the room the recent frames left unused in `list`, a
+    /// collection that fills like the one the peak notes, keeping its
+    /// entries and room for at least `floor`.
+    pub fn shrink<T>(self, list: &mut Vec<T>, floor: usize) {
+        if let Some(room) = self.shrink_to(list.capacity(), floor) {
+            list.shrink_to(room);
+        }
+    }
+
     /// Notes the frame `list` holds and gives back the room the recent
     /// frames left unused, keeping its entries and room for at least
     /// `floor`.
     pub fn trim<T>(&mut self, list: &mut Vec<T>, floor: usize) {
         self.note(list.len());
-        if let Some(room) = self.shrink_to(list.capacity(), floor) {
-            list.shrink_to(room);
-        }
+        self.shrink(list, floor);
     }
 
     /// Notes the frame `list` held, empties it and gives back the room the
@@ -34,8 +41,6 @@ impl RecentPeak {
     pub fn clear<T>(&mut self, list: &mut Vec<T>, floor: usize) {
         self.note(list.len());
         list.clear();
-        if let Some(room) = self.shrink_to(list.capacity(), floor) {
-            list.shrink_to(room);
-        }
+        self.shrink(list, floor);
     }
 }

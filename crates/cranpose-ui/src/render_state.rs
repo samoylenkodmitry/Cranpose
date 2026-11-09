@@ -16,6 +16,7 @@ mod draw_observation;
 mod geometry_scene_nodes;
 pub(crate) mod measure_reads;
 mod noted_scene_nodes;
+mod taken_list;
 
 use dirty_node_set::DirtyNodeSet;
 use display_scale::normalize_density;
@@ -42,9 +43,8 @@ struct RenderState {
     moved_scene_nodes: RefCell<NotedSceneNodes<MovedSceneNode>>,
     /// Nodes whose z index changed: their parents' layers hold the order.
     z_order_changes: RefCell<DirtyNodeSet>,
-    /// Nodes whose redraw flag was set before they had an id, so no draw
-    /// repass names them: each surface's frame takes those under its root.
-    retained_redraws: RefCell<Vec<NodeId>>,
+    // Redraws asked before a node had an id, which no draw repass names.
+    retained_redraws: RefCell<taken_list::TakenList<NodeId>>,
     render_invalidated: Cell<bool>,
     pointer_invalidated: Cell<bool>,
     focus_invalidated: Cell<bool>,
@@ -115,7 +115,7 @@ impl RenderState {
             geometry_scene_nodes: RefCell::new(NotedSceneNodes::new()),
             moved_scene_nodes: RefCell::new(NotedSceneNodes::new()),
             z_order_changes: RefCell::new(DirtyNodeSet::new()),
-            retained_redraws: RefCell::new(Vec::new()),
+            retained_redraws: RefCell::default(),
             render_invalidated: Cell::new(false),
             pointer_invalidated: Cell::new(false),
             focus_invalidated: Cell::new(false),
@@ -401,10 +401,10 @@ impl AppContext {
             .take_dirty_nodes_into(output);
     }
 
-    /// Moves into `output` the nodes whose redraw flag was set before they
-    /// had an id, for a surface's frame to take those under its root.
+    /// Replaces `output`'s nodes with the nodes whose redraw flag was set
+    /// before they had an id: a surface's frame takes those under its root.
     pub fn take_retained_redraw_nodes_into(&self, output: &mut Vec<NodeId>) {
-        output.append(&mut self.state.retained_redraws.borrow_mut());
+        self.state.retained_redraws.borrow_mut().take_into(output);
     }
 
     /// Gives back a node [`Self::take_retained_redraw_nodes_into`] moved out

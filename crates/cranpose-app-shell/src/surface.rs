@@ -15,7 +15,8 @@ use std::{cell::RefCell, fmt::Debug, rc::Rc};
 mod list_room;
 
 use cranpose_core::{
-    MemoryApplier, NodeId, NodeMarks, SceneNodeAttachmentScratch, collections::map::HashSet,
+    MemoryApplier, NodeId, NodeMarks, SceneNodeAttachmentScratch,
+    collections::{map::HashSet, recent_peak::RecentPeak},
 };
 use cranpose_foundation::{
     PointerButton, PointerButtons, PointerId, PointerSource, RotaryScrollEvent,
@@ -447,6 +448,9 @@ pub(crate) enum SurfaceDirtyLane {
     Structural,
 }
 
+// The room each routing list keeps whatever recent frames routed.
+const ROUTING_ROOM_KEPT: usize = 64;
+
 #[derive(Default)]
 pub(crate) struct SurfaceRoutingScratch {
     pub(crate) attached: Vec<Option<NodeId>>,
@@ -461,6 +465,30 @@ pub(crate) struct SurfaceRoutingScratch {
     pub(crate) laid_out_starts: Vec<usize>,
     /// The moved nodes the moved lane routes.
     pub(crate) moved: Vec<NodeId>,
+    // The most nodes a routing of this frame named.
+    most: usize,
+    // The most nodes the routings of recent frames named.
+    recent: RecentPeak,
+}
+
+impl SurfaceRoutingScratch {
+    // Notes this frame's routings and gives back the room recent frames left
+    // unused, in the routing lists and in `routed`, lists this frame routed
+    // whole: a screen's first frame routes every node, while later frames
+    // route a few.
+    pub(crate) fn trim(&mut self, routed: [&mut Vec<NodeId>; 2]) {
+        self.recent.note(std::mem::take(&mut self.most));
+        let recent = self.recent;
+        recent.shrink(&mut self.attached, ROUTING_ROOM_KEPT);
+        recent.shrink(&mut self.owners, ROUTING_ROOM_KEPT);
+        recent.shrink(&mut self.moved, ROUTING_ROOM_KEPT);
+        for list in routed {
+            recent.shrink(list, ROUTING_ROOM_KEPT);
+        }
+        if let Some(room) = recent.shrink_to(self.seen.capacity(), ROUTING_ROOM_KEPT) {
+            self.seen.shrink_to(room);
+        }
+    }
 }
 
 fn append_surface_dirty_node(
@@ -531,6 +559,7 @@ fn route_batch_by_surface<R: Renderer>(
         &mut scratch.attached,
         &mut scratch.attachment,
     );
+    scratch.most = scratch.most.max(scratch.attached.len());
     if scratch.attached.is_empty() {
         scratch.owners.clear();
         return;

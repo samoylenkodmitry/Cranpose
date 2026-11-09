@@ -543,6 +543,10 @@ where
         );
         self.pending_dirty_nodes.clear();
         self.pending_layer_property_nodes.clear();
+        self.routing_scratch.trim([
+            &mut self.pending_dirty_nodes,
+            &mut self.pending_layer_property_nodes,
+        ]);
         let _ = self.app.app_context.has_focused_field();
         let attributed = self.surfaces.iter().any(|surface| {
             !surface.scoped_draw_nodes.is_empty()
@@ -651,6 +655,16 @@ where
     if dev_overlay_belongs_on(surface.id, app.dev_options.fps_counter) {
         draw_dev_overlay(app, surface);
     }
+    surface.list_room.trim(
+        [
+            &mut dirt.layout_dirty_nodes,
+            &mut dirt.moved_nodes,
+            &mut dirt.draw_dirty_nodes,
+            &mut dirt.layer_property_nodes,
+            &mut dirt.structural_parents,
+        ],
+        &mut dirt.scene_updates,
+    );
     dirt.layout_dirty_nodes.clear();
     dirt.moved_nodes.clear();
     surface.scoped_moved_scene_nodes = dirt.moved_nodes;
@@ -659,16 +673,6 @@ where
     surface.structural_scene_nodes = dirt.structural_parents;
     surface.scene_updates = dirt.scene_updates;
     surface.scoped_layout_scene_nodes = dirt.layout_dirty_nodes;
-    surface.list_room.trim(
-        [
-            &mut surface.scoped_layout_scene_nodes,
-            &mut surface.scoped_moved_scene_nodes,
-            &mut surface.scoped_draw_nodes,
-            &mut surface.scoped_layer_property_nodes,
-            &mut surface.structural_scene_nodes,
-        ],
-        &mut surface.scene_updates,
-    );
     SurfaceFrame {
         result: FrameUpdateResult {
             visual_changed: true,
