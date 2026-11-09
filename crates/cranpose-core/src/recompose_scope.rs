@@ -1,5 +1,5 @@
 use std::{
-    cell::{Cell, RefCell},
+    cell::Cell,
     hash::{Hash, Hasher},
     rc::{Rc, Weak},
 };
@@ -163,24 +163,34 @@ pub(crate) struct RecomposeScopeInner {
     owner: OwnerLink,
     local_stack: Cell<LocalStackSnapshot>,
     #[cfg(feature = "inspection")]
-    source_trace: RefCell<Rc<[source_trace::SourceLocation]>>,
+    source_trace: std::cell::RefCell<Rc<[source_trace::SourceLocation]>>,
     #[cfg(all(feature = "inspection", debug_assertions))]
     pub(crate) recompositions: std::cell::OnceCell<source_trace::RecompositionCounter>,
     slots_storage_key: Cell<usize>,
     slots_runtime_state: Cell<Option<Weak<composer::ComposerRuntimeState>>>,
-    /// The states the scope is subscribed to: what its last body read, in
-    /// read order.
-    state_subscriptions: RefCell<StateIds>,
-    /// What the body running now read so far, once it left the order of
-    /// `state_subscriptions`: none while it reads in order.
-    run_reads: Cell<Option<Box<StateIds>>>,
     /// How many subscriptions the body running now read in order, or
     /// [`DIVERGED`] or [`NOT_READING`].
     read_cursor: Cell<u32>,
-    invalidation_sources: Cell<StateIds>,
+    // `None` until a body of the scope reads a state or a state invalidates
+    // it: most scopes read none.
+    reads: Cell<Option<Box<ScopeReads>>>,
 }
 
 type StateIds = SmallVec<[StateId; 2]>;
+
+// What a scope keeps of the states its bodies read.
+#[derive(Default)]
+struct ScopeReads {
+    // The states the scope is subscribed to: what its last body read, in
+    // read order.
+    subscriptions: StateIds,
+    // What the body running now read so far, once it left the order of
+    // `subscriptions`: `None` while it reads in order.
+    run: Option<StateIds>,
+    // The states whose changes invalidated the scope since it last
+    // recomposed.
+    invalidation_sources: StateIds,
+}
 
 /// What [`RecomposeScope::note_read`] made of a read.
 pub(crate) enum ScopeRead {
@@ -249,16 +259,24 @@ impl RecomposeScopeInner {
             owner: Cell::new(None),
             local_stack: Cell::new(None),
             #[cfg(feature = "inspection")]
-            source_trace: RefCell::new(Rc::from([])),
+            source_trace: std::cell::RefCell::new(Rc::from([])),
             #[cfg(all(feature = "inspection", debug_assertions))]
             recompositions: std::cell::OnceCell::new(),
             slots_storage_key: Cell::new(0),
             slots_runtime_state: Cell::new(None),
-            state_subscriptions: RefCell::new(StateIds::new()),
-            run_reads: Cell::new(None),
             read_cursor: Cell::new(NOT_READING),
-            invalidation_sources: Cell::new(StateIds::new()),
+            reads: Cell::new(None),
         }
+    }
+
+    // Runs `read` on the scope's reads, `None` while it has none.
+    fn read_reads<R>(&self, read: impl FnOnce(Option<&ScopeReads>) -> R) -> R {
+        read_cell(&self.reads, |reads| read(reads.as_deref()))
+    }
+
+    // Runs `update` on the scope's reads, made first if it has none.
+    fn update_reads<R>(&self, update: impl FnOnce(&mut ScopeReads) -> R) -> R {
+        update_cell(&self.reads, |reads| update(reads.get_or_insert_default()))
     }
 
     fn id(&self) -> ScopeId {
@@ -277,13 +295,13 @@ impl Drop for RecomposeScopeInner {
         note_scope_activity_change();
         let id = self.id();
         self.runtime.decrement_live_recompose_scope_count();
-        let subscriptions = std::mem::take(self.state_subscriptions.get_mut());
-        let run_reads = self.run_reads.take().map(|reads| *reads);
-        for state_id in subscriptions
-            .into_iter()
-            .chain(run_reads.into_iter().flatten())
-        {
-            self.runtime.unregister_state_scope(state_id, id);
+        if let Some(reads) = self.reads.take() {
+            let ScopeReads {
+                subscriptions, run, ..
+            } = *reads;
+            for state_id in subscriptions.into_iter().chain(run.into_iter().flatten()) {
+                self.runtime.unregister_state_scope(state_id, id);
+            }
         }
         #[cfg(debug_assertions)]
         {
@@ -394,7 +412,8 @@ impl RecomposeScope {
     }
 
     pub(crate) fn record_state_subscription(&self, state_id: StateId) {
-        push_unique_state_id(&mut self.inner.state_subscriptions.borrow_mut(), state_id);
+        self.inner
+            .update_reads(|reads| push_unique_state_id(&mut reads.subscriptions, state_id));
     }
 
     /// Starts collecting the states a body of the scope reads.
@@ -406,37 +425,37 @@ impl RecomposeScope {
     /// what the last one read, in the same order, a read only moves the
     /// cursor along the subscriptions, and the state is known to watch the
     /// scope already; the first read off that order copies the reads so far
-    /// into `run_reads`.
+    /// into the run's reads.
     #[inline]
     pub(crate) fn note_read(&self, state_id: StateId) -> ScopeRead {
         let cursor = self.inner.read_cursor.get();
         if cursor == NOT_READING {
             return ScopeRead::NotReading;
         }
-        if cursor == DIVERGED {
-            update_cell(&self.inner.run_reads, |reads| {
-                if let Some(reads) = reads
-                    && reads.last() != Some(&state_id)
+        self.inner.update_reads(|reads| {
+            if cursor == DIVERGED {
+                if let Some(run) = &mut reads.run
+                    && run.last() != Some(&state_id)
                 {
-                    reads.push(state_id);
+                    run.push(state_id);
                 }
-            });
-            return ScopeRead::Collected;
-        }
-        let at = cursor as usize;
-        let subscribed = self.inner.state_subscriptions.borrow();
-        if subscribed.get(at) == Some(&state_id) {
-            self.inner.read_cursor.set(cursor + 1);
-            return ScopeRead::Watched;
-        }
-        if at > 0 && subscribed[at - 1] == state_id {
-            return ScopeRead::Watched;
-        }
-        let mut reads = StateIds::from_slice(&subscribed[..at]);
-        reads.push(state_id);
-        self.inner.run_reads.set(Some(Box::new(reads)));
-        self.inner.read_cursor.set(DIVERGED);
-        ScopeRead::Collected
+                return ScopeRead::Collected;
+            }
+            let at = cursor as usize;
+            let subscribed = &reads.subscriptions;
+            if subscribed.get(at) == Some(&state_id) {
+                self.inner.read_cursor.set(cursor + 1);
+                return ScopeRead::Watched;
+            }
+            if at > 0 && subscribed[at - 1] == state_id {
+                return ScopeRead::Watched;
+            }
+            let mut run = StateIds::from_slice(&subscribed[..at]);
+            run.push(state_id);
+            reads.run = Some(run);
+            self.inner.read_cursor.set(DIVERGED);
+            ScopeRead::Collected
+        })
     }
 
     // Keeps the subscriptions the scope has: its body runs this pass without
@@ -465,48 +484,62 @@ impl RecomposeScope {
     #[inline(never)]
     fn settle_reads(&self, cursor: u32, ran: bool) {
         let id = self.id();
-        let mut subscribed = self.inner.state_subscriptions.borrow_mut();
-        if cursor != DIVERGED {
-            // The body read a prefix of the subscriptions, in order.
-            let read = cursor as usize;
-            if ran && read < subscribed.len() {
-                for &state_id in &subscribed[read..] {
-                    if !subscribed[..read].contains(&state_id) {
-                        self.inner.runtime.forget_state_scope(state_id, id);
+        let runtime = &self.inner.runtime;
+        update_cell(&self.inner.reads, |reads| {
+            let Some(reads) = reads.as_deref_mut() else {
+                return;
+            };
+            let subscribed = &mut reads.subscriptions;
+            if cursor != DIVERGED {
+                // The body read a prefix of the subscriptions, in order.
+                let read = cursor as usize;
+                if ran && read < subscribed.len() {
+                    for &state_id in &subscribed[read..] {
+                        if !subscribed[..read].contains(&state_id) {
+                            runtime.forget_state_scope(state_id, id);
+                        }
+                    }
+                    subscribed.truncate(read);
+                }
+                return;
+            }
+            let Some(run) = reads.run.take() else {
+                return;
+            };
+            if ran {
+                for &state_id in subscribed.iter() {
+                    if !run.contains(&state_id) {
+                        runtime.forget_state_scope(state_id, id);
                     }
                 }
-                subscribed.truncate(read);
-            }
-            return;
-        }
-        let Some(reads) = self.inner.run_reads.take() else {
-            return;
-        };
-        if ran {
-            for &state_id in subscribed.iter() {
-                if !reads.contains(&state_id) {
-                    self.inner.runtime.forget_state_scope(state_id, id);
+                *subscribed = run;
+            } else {
+                for state_id in run {
+                    push_unique_state_id(subscribed, state_id);
                 }
             }
-            *subscribed = *reads;
-        } else {
-            for state_id in *reads {
-                push_unique_state_id(&mut subscribed, state_id);
-            }
-        }
+        });
     }
 
     fn record_unknown_invalidation_source(&self) {
         self.inner
             .flags
             .set(ScopeFlag::UnknownInvalidationSource, true);
-        update_cell(&self.inner.invalidation_sources, StateIds::clear);
+        self.clear_invalidation_sources();
+    }
+
+    fn clear_invalidation_sources(&self) {
+        update_cell(&self.inner.reads, |reads| {
+            if let Some(reads) = reads.as_deref_mut() {
+                reads.invalidation_sources.clear();
+            }
+        });
     }
 
     fn record_state_invalidation_source(&self, state_id: StateId) {
         if !self.inner.flags.get(ScopeFlag::UnknownInvalidationSource) {
-            update_cell(&self.inner.invalidation_sources, |ids| {
-                push_unique_state_id(ids, state_id);
+            self.inner.update_reads(|reads| {
+                push_unique_state_id(&mut reads.invalidation_sources, state_id);
             });
         }
     }
@@ -552,15 +585,18 @@ impl RecomposeScope {
     #[inline(never)]
     fn note_running_write(&self, state_id: StateId) {
         let cursor = self.inner.read_cursor.get();
-        let read = if cursor == DIVERGED {
-            read_cell(&self.inner.run_reads, |reads| {
-                reads
-                    .as_ref()
-                    .is_some_and(|reads| reads.contains(&state_id))
+        let read = self.inner.read_reads(|reads| {
+            reads.is_some_and(|reads| {
+                if cursor == DIVERGED {
+                    reads
+                        .run
+                        .as_ref()
+                        .is_some_and(|run| run.contains(&state_id))
+                } else {
+                    reads.subscriptions[..cursor as usize].contains(&state_id)
+                }
             })
-        } else {
-            self.inner.state_subscriptions.borrow()[..cursor as usize].contains(&state_id)
-        };
+        });
         if read {
             self.request_pending_recompose();
         }
@@ -573,7 +609,7 @@ impl RecomposeScope {
             self.inner
                 .flags
                 .set(ScopeFlag::UnknownInvalidationSource, false);
-            update_cell(&self.inner.invalidation_sources, StateIds::clear);
+            self.clear_invalidation_sources();
         }
         self.inner.flags.set(ScopeFlag::ForceReuse, false);
         self.inner.flags.set(ScopeFlag::ForceRecompose, false);
@@ -909,8 +945,11 @@ impl RecomposeScope {
     // Whether a change of the state `state_id` alone invalidated the scope.
     pub(crate) fn invalidated_only_by_state(&self, state_id: StateId) -> bool {
         !self.inner.flags.get(ScopeFlag::UnknownInvalidationSource)
-            && read_cell(&self.inner.invalidation_sources, |sources| {
-                !sources.is_empty() && sources.iter().all(|source| *source == state_id)
+            && self.inner.read_reads(|reads| {
+                reads.is_some_and(|reads| {
+                    let sources = &reads.invalidation_sources;
+                    !sources.is_empty() && sources.iter().all(|source| *source == state_id)
+                })
             })
     }
 
@@ -918,7 +957,8 @@ impl RecomposeScope {
         if self.inner.flags.get(ScopeFlag::UnknownInvalidationSource) {
             return None;
         }
-        read_cell(&self.inner.invalidation_sources, |sources| {
+        self.inner.read_reads(|reads| {
+            let sources = &reads?.invalidation_sources;
             (!sources.is_empty()).then(|| {
                 sources
                     .iter()
