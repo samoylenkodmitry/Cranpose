@@ -8,8 +8,8 @@ use cranpose_render_common::{
 };
 use cranpose_render_wgpu::CapturedFrame;
 use cranpose_ui_graphics::{
-    Brush, Color, DrawPlacement, DrawPrimitive, GraphicsLayer, LayerShape, Rect, RenderEffect,
-    RoundedCornerShape, Size,
+    Brush, Color, DrawPlacement, DrawPrimitive, GraphicsLayer, LayerShape, Point, Rect,
+    RenderEffect, RoundedCornerShape, Size,
 };
 
 use crate::support;
@@ -144,19 +144,21 @@ fn inspector_glass(cache_policy: CachePolicy) -> LayerNode {
     LayerNode {
         size: CONTENT.size(),
         layer_bounds: Some(CONTENT),
-        children: vec![RenderNode::Layer(Box::new(LayerNode {
-            node_id: Some(NodeId(71)),
-            size: bounds.size(),
-            layer_bounds: Some(bounds),
-            graphics_layer: GraphicsLayer {
-                backdrop_effect: Some(RenderEffect::blur(6.0)),
-                ..GraphicsLayer::default()
-            }
-            .into(),
-            cache_policy,
-            children: vec![support::solid_rect(bounds, Color(1.0, 1.0, 1.0, 0.35))],
-            ..LayerNode::default()
-        }))],
+        children: vec![RenderNode::Layer(Box::new(support::moved_to(
+            Point::new(bounds.x, bounds.y),
+            LayerNode {
+                node_id: Some(NodeId(71)),
+                size: bounds.size(),
+                graphics_layer: GraphicsLayer {
+                    backdrop_effect: Some(RenderEffect::blur(6.0)),
+                    ..GraphicsLayer::default()
+                }
+                .into(),
+                cache_policy,
+                children: vec![support::solid_rect(bounds, Color(1.0, 1.0, 1.0, 0.35))],
+                ..LayerNode::default()
+            },
+        )))],
         ..LayerNode::default()
     }
 }

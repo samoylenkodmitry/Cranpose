@@ -36,7 +36,9 @@ use cranpose_ui_graphics::{
 
 pub(crate) static TEST_FONT: &[u8] = DEFAULT_FONT_BYTES;
 
-pub(crate) use crate::shared_test_support::{draw_text_layout, prepared_text, with_layout};
+pub(crate) use crate::shared_test_support::{
+    draw_text_layout, moved_to, prepared_text, with_layout,
+};
 
 pub(crate) fn layer_node(
     node_id: Option<NodeId>,
@@ -863,17 +865,19 @@ pub(crate) fn page_graph(width: u32, height: u32, children: Vec<RenderNode>) -> 
 }
 
 pub(crate) fn shader_probe_graph(bounds: Rect, shader: RuntimeShader) -> LayerNode {
-    LayerNode {
-        size: bounds.size(),
-        layer_bounds: Some(bounds),
-        graphics_layer: cranpose_ui_graphics::GraphicsLayer {
-            render_effect: Some(RenderEffect::runtime_shader(shader)),
+    moved_to(
+        Point::new(bounds.x, bounds.y),
+        LayerNode {
+            size: bounds.size(),
+            graphics_layer: cranpose_ui_graphics::GraphicsLayer {
+                render_effect: Some(RenderEffect::runtime_shader(shader)),
+                ..Default::default()
+            }
+            .into(),
+            children: vec![solid_rect(bounds, Color::WHITE)],
             ..Default::default()
-        }
-        .into(),
-        children: vec![solid_rect(bounds, Color::WHITE)],
-        ..Default::default()
-    }
+        },
+    )
 }
 
 pub(crate) mod clip_band {
@@ -1511,19 +1515,21 @@ pub(crate) fn record_gradient_fill_scene(scope: &mut DrawScopeDefault) {
 pub(crate) fn contract_layer(
     node_id: Option<NodeId>,
     cache_policy: CachePolicy,
-    local_bounds: Rect,
+    rect: Rect,
     transform_to_parent: ProjectiveTransform,
     children: Vec<RenderNode>,
 ) -> LayerNode {
-    LayerNode {
-        node_id,
-        size: local_bounds.size(),
-        layer_bounds: Some(local_bounds),
-        transform_to_parent,
-        cache_policy,
-        children,
-        ..Default::default()
-    }
+    moved_to(
+        Point::new(rect.x, rect.y),
+        LayerNode {
+            node_id,
+            size: rect.size(),
+            transform_to_parent,
+            cache_policy,
+            children,
+            ..Default::default()
+        },
+    )
 }
 
 pub(crate) const STORED_RUN_NODE: NodeId = NodeId(7_200);

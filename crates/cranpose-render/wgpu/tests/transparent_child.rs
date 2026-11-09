@@ -253,7 +253,7 @@ fn zero_opacity_skips_source_over_effects_but_keeps_destructive_blending() {
         layer.graphics_layer.blend_mode = blend_mode;
         layer.children.push(RenderNode::Layer(Box::new(
             shared_test_support::layer_node(
-                BAR,
+                Rect::from_size(BAR.size()),
                 ProjectiveTransform::identity(),
                 GraphicsLayer {
                     backdrop_effect: Some(RenderEffect::blur(8.0)),

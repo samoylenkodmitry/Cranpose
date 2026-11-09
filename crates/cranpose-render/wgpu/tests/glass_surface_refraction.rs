@@ -420,6 +420,13 @@ fn native_vertical_spectral_step_preserves_directional_sample_spacing() {
     }
 }
 
+const LENS: Rect = Rect {
+    x: 8.0,
+    y: 16.0,
+    width: 144.0,
+    height: 64.0,
+};
+
 fn striped_surface(normal: bool, specialized: bool) -> LayerNode {
     let viewport = Rect {
         x: 0.0,
@@ -461,12 +468,7 @@ fn striped_surface(normal: bool, specialized: bool) -> LayerNode {
     }
     children.push(RenderNode::Layer(Box::new(
         shared_test_support::layer_node(
-            Rect {
-                x: 8.0,
-                y: 16.0,
-                width: 144.0,
-                height: 64.0,
-            },
+            LENS,
             ProjectiveTransform::identity(),
             GraphicsLayer {
                 backdrop_effect: Some(if specialized {
@@ -650,7 +652,8 @@ fn resting_edge_lens_matches_its_explicit_optical_stages() {
         let RenderNode::Layer(layer) = root.children.last_mut().expect("lens") else {
             panic!("lens must be a layer");
         };
-        layer.transform_to_parent = ProjectiveTransform::uniform_scale(scale)
+        layer.transform_to_parent = ProjectiveTransform::translation(LENS.x, LENS.y)
+            .then(ProjectiveTransform::uniform_scale(scale))
             .then(ProjectiveTransform::translation(offset.0, offset.1));
         let Some(RenderEffect::Shader { shader }) = &layer.graphics_layer.backdrop_effect else {
             panic!("lens must carry a shader");

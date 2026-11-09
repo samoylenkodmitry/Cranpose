@@ -24,22 +24,19 @@ fn graph(record: impl FnOnce(&mut DrawScopeDefault)) -> LayerNode {
     let mut recording = cranpose_ui_graphics::CommandRecording::default();
     let mut scope = DrawScopeDefault::new(Size::new(SIZE as f32, SIZE as f32), &mut recording);
     record(&mut scope);
-    LayerNode {
-        cache_policy: CachePolicy::None,
-        size: Size::new(183.0, 171.0),
-        layer_bounds: Some(Rect {
-            x: 11.25,
-            y: 7.5,
-            width: 183.0,
-            height: 171.0,
-        }),
-        clip_to_bounds: true,
-        children: vec![RenderNode::DrawRun(DrawRunNode::new(
-            PrimitivePhase::BeforeChildren,
-            scope.into_primitives(),
-        ))],
-        ..LayerNode::default()
-    }
+    support::moved_to(
+        Point::new(11.25, 7.5),
+        LayerNode {
+            cache_policy: CachePolicy::None,
+            size: Size::new(183.0, 171.0),
+            clip_to_bounds: true,
+            children: vec![RenderNode::DrawRun(DrawRunNode::new(
+                PrimitivePhase::BeforeChildren,
+                scope.into_primitives(),
+            ))],
+            ..LayerNode::default()
+        },
+    )
 }
 
 /// Solid arcs, discs, rounded rects and strokes, with lines of every cap
