@@ -1,34 +1,21 @@
-// The frames a window of the peak spans: the peak is the most of the window
-// under way and the window before it, the last 8 to 16 frames.
-const WINDOW_FRAMES: u8 = 8;
-
-/// The most entries a collection reused every frame held in the last 8 to 16
-/// frames. The room a burst took, such as a first build's, goes back once
-/// 16 later frames hold far fewer, while a collection that fills alike every
-/// frame keeps its room.
+/// The most entries a collection reused every frame held lately, falling by
+/// an eighth a frame. The room a burst took, such as a first build's, goes
+/// back once later frames hold far fewer, while a collection that fills
+/// alike every frame keeps its room.
 #[derive(Clone, Copy, Debug, Default)]
-pub struct RecentPeak {
-    current: usize,
-    previous: usize,
-    frames: u8,
-}
+pub struct RecentPeak(usize);
 
 impl RecentPeak {
     /// Notes a frame at which the collection held `len` entries.
     pub fn note(&mut self, len: usize) {
-        self.current = self.current.max(len);
-        self.frames += 1;
-        if self.frames == WINDOW_FRAMES {
-            self.previous = std::mem::take(&mut self.current);
-            self.frames = 0;
-        }
+        self.0 = len.max(self.0 - self.0 / 8);
     }
 
     /// The room to shrink a collection of `capacity` to: twice the peak, at
     /// least `floor`, once the capacity passes four times that.
     #[must_use]
     pub fn shrink_to(self, capacity: usize, floor: usize) -> Option<usize> {
-        let bound = self.current.max(self.previous).max(floor);
+        let bound = self.0.max(floor);
         (capacity > 4 * bound).then_some(2 * bound)
     }
 
