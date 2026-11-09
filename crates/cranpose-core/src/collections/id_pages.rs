@@ -5,10 +5,12 @@
 //! its values are vacant, and one spare page waits for the next range the
 //! counter reaches.
 
-const PAGE_BITS: usize = 7;
+// A page of 64 ids keeps a small app's tables near a kilobyte: such an app
+// holds one page of each.
+const PAGE_BITS: usize = 6;
 /// The ids one page holds.
 pub const PAGE_LEN: usize = 1 << PAGE_BITS;
-const DIRECTORY_BITS: usize = 7;
+const DIRECTORY_BITS: usize = 8;
 const DIRECTORY_LEN: usize = 1 << DIRECTORY_BITS;
 
 /// A value an [`IdPages`] entry holds, with the state an entry without a
@@ -45,15 +47,17 @@ impl<T: Vacant> Page<T> {
     }
 }
 
+// The pages of `DIRECTORY_LEN` in turn, as far as the last one that held
+// an entry since the directory was made.
 struct Directory<T> {
-    pages: [Option<Box<Page<T>>>; DIRECTORY_LEN],
+    pages: Vec<Option<Box<Page<T>>>>,
     occupied: usize,
 }
 
 impl<T> Directory<T> {
     fn new() -> Box<Self> {
         Box::new(Self {
-            pages: std::array::from_fn(|_| None),
+            pages: Vec::new(),
             occupied: 0,
         })
     }
@@ -69,7 +73,7 @@ fn split(id: usize) -> (usize, usize, usize) {
     )
 }
 
-/// Values by id in pages of 128, which come and go with the values.
+/// Values by id in pages of 64, which come and go with the values.
 pub struct IdPages<T> {
     directories: Vec<Option<Box<Directory<T>>>>,
     occupied: usize,
@@ -97,7 +101,7 @@ impl<T: Vacant> IdPages<T> {
         self.directories
             .get(directory)
             .and_then(Option::as_deref)
-            .and_then(|directory| directory.pages[page].as_deref())
+            .and_then(|directory| directory.pages.get(page)?.as_deref())
             .map(|page| &page.entries[entry])
     }
 
@@ -110,7 +114,7 @@ impl<T: Vacant> IdPages<T> {
         self.directories
             .get_mut(directory)
             .and_then(Option::as_deref_mut)
-            .and_then(|directory| directory.pages[page].as_deref_mut())
+            .and_then(|directory| directory.pages.get_mut(page)?.as_deref_mut())
             .map(|page| &mut page.entries[entry])
     }
 
@@ -122,6 +126,9 @@ impl<T: Vacant> IdPages<T> {
             self.directories.resize_with(directory_index + 1, || None);
         }
         let directory = self.directories[directory_index].get_or_insert_with(Directory::new);
+        if directory.pages.len() <= page_index {
+            directory.pages.resize_with(page_index + 1, || None);
+        }
         if directory.pages[page_index].is_none() {
             directory.pages[page_index] = Some(self.spare.take().unwrap_or_else(Page::new));
             directory.occupied += 1;
@@ -151,7 +158,7 @@ impl<T: Vacant> IdPages<T> {
             let Some(directory) = self.directories[directory_index].as_deref_mut() else {
                 continue;
             };
-            for page_index in 0..DIRECTORY_LEN {
+            for page_index in 0..directory.pages.len() {
                 let Some(page) = directory.pages[page_index].as_deref_mut() else {
                     continue;
                 };
