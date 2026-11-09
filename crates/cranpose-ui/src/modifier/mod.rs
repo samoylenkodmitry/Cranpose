@@ -71,7 +71,7 @@ pub use drag_and_drop::{
     DragAndDropSourceElement, DragAndDropSourceNode, DragAndDropState, DragAndDropTarget,
     DragAndDropTargetElement, DragAndDropTargetNode,
 };
-use element_match::ElementMatch;
+pub(crate) use element_match::ElementMatch;
 #[cfg(test)]
 pub(crate) use focus::FocusRequesterElement;
 pub use focus::{FocusDirection, FocusRequestError, FocusRequester};
@@ -1087,11 +1087,6 @@ impl Modifier {
     /// draw-only updates do not force measure/layout invalidation.
     pub fn structural_eq(&self, other: &Self) -> bool {
         self.eq_internal(other, ElementMatch::Structural)
-    }
-
-    // The update in place to `other`: see `element_match::in_place_update`.
-    pub(crate) fn in_place_update(&self, other: &Self) -> Option<InPlaceUpdate> {
-        element_match::in_place_update(self.as_elements().iter(), other)
     }
 
     fn as_elements(&self) -> &[DynModifierElement] {

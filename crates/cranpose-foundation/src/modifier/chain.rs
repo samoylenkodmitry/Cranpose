@@ -711,6 +711,12 @@ impl ModifierNodeChain {
         self.entries.is_empty()
     }
 
+    /// The elements of the chain's nodes, one for each in chain order: those
+    /// the chain was last updated from, or equal ones it kept.
+    pub fn elements(&self) -> impl ExactSizeIterator<Item = &DynModifierElement> {
+        self.entries.iter().map(|entry| &entry.element)
+    }
+
     /// Returns the aggregated capability mask for the entire chain.
     pub fn capabilities(&self) -> NodeCapabilities {
         self.aggregated_capabilities

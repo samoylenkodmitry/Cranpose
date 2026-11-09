@@ -27,7 +27,6 @@ fn node(id: NodeId, modifier: Modifier, children: Vec<LayoutBox>) -> LayoutBox {
         },
         Point::default(),
         LayoutNodeData::new(
-            modifier,
             Default::default(),
             Rc::default(),
             semantics,

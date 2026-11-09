@@ -15,8 +15,8 @@ use super::layout_invalidation_diag::log_layout_invalidation_dispatch;
 use crate::{
     layout::LayoutRuntimeState,
     modifier::{
-        InPlaceUpdate, Modifier, ModifierChainHandle, ModifierLocalToken, ModifierLocalsHandle,
-        ModifierNodeSlices, Point, ResolvedModifiers, Size,
+        ElementMatch, InPlaceUpdate, Modifier, ModifierChainHandle, ModifierLocalToken,
+        ModifierLocalsHandle, ModifierNodeSlices, Point, ResolvedModifiers, Size,
     },
     render_state::AppContext,
     widgets::nodes::{
@@ -64,10 +64,9 @@ pub struct LayoutNode {
     /// invalidated, the two ways its semantics change.
     semantics_reach: Cell<Option<cranpose_foundation::SemanticsReach>>,
     owner_context_id: Cell<Option<crate::render_state::AppContextId>>,
+    // The node's modifier nodes, with the elements of the modifier last set:
+    // the node keeps no modifier of its own.
     modifier_chain: ModifierChainHandle,
-    // The modifier of this node. Change it through `set_modifier` so that the modifier chain
-    // updates.
-    pub(crate) modifier: Modifier,
     /// Composable definitions responsible for this node, captured only for inspection builds.
     #[cfg(feature = "inspection")]
     pub source_trace: Rc<[cranpose_core::source_trace::SourceLocation]>,
@@ -122,7 +121,6 @@ impl LayoutNode {
         let mut node = Self {
             #[cfg(feature = "inspection")]
             source_trace: cranpose_core::source_trace::current_source_trace(),
-            modifier,
             modifier_chain: ModifierChainHandle::detached(),
             density: crate::density::shared_density(crate::density::Density::default()),
             children: Vec::new(),
@@ -142,7 +140,7 @@ impl LayoutNode {
             modifier_slices_dirty: Cell::new(true),
             parts,
         };
-        node.sync_modifier_chain(None);
+        node.sync_modifier_chain(&modifier, None);
         node
     }
 
@@ -153,7 +151,7 @@ impl LayoutNode {
 
     /// Returns the modifier that was last set on this node.
     pub fn modifier(&self) -> Modifier {
-        self.modifier.clone()
+        self.modifier_chain.modifier()
     }
 
     /// Replaces the node's modifier and updates its modifier chain, invalidating the work that the
@@ -169,7 +167,7 @@ impl LayoutNode {
         // An equal modifier leaves every element's node as it was. Only a
         // chain reading modifier locals resyncs, since its parent may now
         // provide others.
-        if self.modifier == modifier
+        if self.modifier_chain.holds(&modifier, ElementMatch::Equal)
             && !self
                 .modifier_capabilities()
                 .contains(NodeCapabilities::MODIFIER_LOCALS)
@@ -178,20 +176,22 @@ impl LayoutNode {
         }
         // A change only in elements nothing else reads, as a ticker's text
         // or an animated size, keeps the slices the chain gave.
-        let update = self.modifier.in_place_update(&modifier);
-        let modifier_changed = update.is_some() || !self.modifier.structural_eq(&modifier);
-        self.modifier = modifier;
-        self.sync_modifier_chain(update);
+        let update = self.modifier_chain.in_place_update(&modifier);
+        let modifier_changed = update.is_some()
+            || !self
+                .modifier_chain
+                .holds(&modifier, ElementMatch::Structural);
+        self.sync_modifier_chain(&modifier, update);
         if modifier_changed {
             self.parts.cache().clear();
             self.request_semantics_update();
         }
     }
 
-    /// Reconciles the chain with the node's modifier. `in_place` says how
-    /// far the change reaches when the modifier changed only in elements the
-    /// chain can update in place: when it does, the current slices are kept.
-    fn sync_modifier_chain(&mut self, in_place: Option<InPlaceUpdate>) {
+    // Reconciles the chain with `modifier`. `in_place` says how far the
+    // change reaches when the modifier changed only in elements the chain can
+    // update in place: when it does, the current slices are kept.
+    fn sync_modifier_chain(&mut self, modifier: &Modifier, in_place: Option<InPlaceUpdate>) {
         let prev_caps = self.modifier_capabilities();
         let start_parent = self.parent();
         let mut resolver = move |token: &ModifierLocalToken| {
@@ -202,13 +202,13 @@ impl LayoutNode {
         let mut context = self.modifier_chain.context(self.id.get());
         let in_place = in_place.is_some_and(|update| {
             self.modifier_chain
-                .update_elements_in_place(&self.modifier, update, &mut context)
+                .update_elements_in_place(modifier, update, &mut context)
         });
         let modifier_local_invalidations = if in_place {
             ModifierInvalidations::new()
         } else {
             self.modifier_chain
-                .update_with_resolver(&self.modifier, &mut resolver, &mut context)
+                .update_with_resolver(modifier, &mut resolver, &mut context)
         };
         if prev_caps.contains(NodeCapabilities::WINDOW_ROOT)
             != self
@@ -291,7 +291,7 @@ impl LayoutNode {
                                 invalidation,
                                 curr_caps,
                                 prev_caps,
-                                &self.modifier,
+                                &self.modifier_chain,
                             );
                             let inside_composition =
                                 cranpose_core::composer_context::try_with_composer(|_| ())
@@ -763,7 +763,6 @@ impl Clone for LayoutNode {
         let mut node = Self {
             #[cfg(feature = "inspection")]
             source_trace: Rc::clone(&self.source_trace),
-            modifier: self.modifier.clone(),
             modifier_chain: ModifierChainHandle::for_layout_direction(
                 self.modifier_chain.layout_direction(),
             ),
@@ -785,7 +784,7 @@ impl Clone for LayoutNode {
             modifier_slices_dirty: Cell::new(true),
             parts: Rc::clone(&self.parts),
         };
-        node.sync_modifier_chain(None);
+        node.sync_modifier_chain(&self.modifier(), None);
         node
     }
 }

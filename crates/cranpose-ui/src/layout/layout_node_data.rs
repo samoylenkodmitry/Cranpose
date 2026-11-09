@@ -1,5 +1,6 @@
-//! What a layout box keeps of its node: the node's modifier, slices,
-//! semantics and kind, read from the applier when the box is made.
+//! What a layout box keeps of its node: the node's slices, semantics and
+//! kind, and its modifier where inspection is built in, read from the
+//! applier when the box is made.
 
 use std::{cell::RefCell, fmt, rc::Rc};
 
@@ -8,8 +9,10 @@ use cranpose_foundation::SemanticsConfiguration;
 use cranpose_ui_graphics::{ProjectiveTransform, layer_transform::layer_transform_to_window};
 
 use super::{SemanticsRole, SemanticsText};
+#[cfg(feature = "inspection")]
+use crate::modifier::Modifier;
 use crate::{
-    modifier::{Modifier, ModifierNodeSlices, Point, ResolvedModifiers, Size},
+    modifier::{ModifierNodeSlices, Point, ResolvedModifiers, Size},
     subcompose_layout::SubcomposeLayoutNode,
     widgets::nodes::{LayoutNode, LayoutState},
 };
@@ -20,7 +23,9 @@ pub struct LayoutNodeData {
     /// Composable origins retained by an inspection-enabled layout node.
     #[cfg(feature = "inspection")]
     pub source_trace: Rc<[cranpose_core::source_trace::SourceLocation]>,
-    /// The modifier chain of the node.
+    /// The modifier of the node, kept where inspection is built in, which
+    /// reads it.
+    #[cfg(feature = "inspection")]
     pub modifier: Modifier,
     /// Padding, layout properties and offset that the modifier chain resolved to.
     pub resolved_modifiers: ResolvedModifiers,
@@ -39,7 +44,6 @@ pub struct LayoutNodeData {
 impl LayoutNodeData {
     /// Creates node data from its parts.
     pub fn new(
-        modifier: Modifier,
         resolved_modifiers: ResolvedModifiers,
         modifier_slices: Rc<ModifierNodeSlices>,
         semantics: Option<Rc<SemanticsConfiguration>>,
@@ -48,13 +52,31 @@ impl LayoutNodeData {
         Self {
             #[cfg(feature = "inspection")]
             source_trace: Rc::default(),
-            modifier,
+            #[cfg(feature = "inspection")]
+            modifier: Modifier::empty(),
             resolved_modifiers,
             modifier_slices,
             semantics,
             kind,
             z_index: 0.0,
         }
+    }
+
+    /// Reads the resolved modifiers, the modifier slices and the semantics
+    /// again from node `node_id` of `applier`, and the modifier where
+    /// inspection is built in. Data of a node that is neither a layout node
+    /// nor a subcompose node stays as it was.
+    pub fn refresh(&mut self, applier: &mut MemoryApplier, node_id: NodeId) {
+        let Some(info) = runtime_metadata_for(applier, node_id) else {
+            return;
+        };
+        #[cfg(feature = "inspection")]
+        {
+            self.modifier = info.modifier;
+        }
+        self.resolved_modifiers = info.resolved_modifiers;
+        self.modifier_slices = info.modifier_slices;
+        self.semantics = info.semantics;
     }
 
     /// Semantics the node's live modifier chain reported when the snapshot
@@ -117,9 +139,10 @@ pub(super) fn snapshot_node_data(
     size: Size,
     parent_transform: ProjectiveTransform,
 ) -> Result<(LayoutNodeData, ProjectiveTransform), NodeError> {
-    let info = runtime_metadata_for(applier, node_id)?;
+    let info = runtime_metadata_for(applier, node_id).unwrap_or_default();
     let kind = layout_kind_from_metadata(node_id, &info);
     let RuntimeNodeMetadata {
+        #[cfg(feature = "inspection")]
         modifier,
         resolved_modifiers,
         modifier_slices,
@@ -145,6 +168,7 @@ pub(super) fn snapshot_node_data(
         source_trace: applier
             .with_node::<LayoutNode, _>(node_id, |node| Rc::clone(&node.source_trace))
             .unwrap_or_default(),
+        #[cfg(feature = "inspection")]
         modifier,
         resolved_modifiers,
         modifier_slices,
@@ -157,6 +181,7 @@ pub(super) fn snapshot_node_data(
 
 #[derive(Clone)]
 struct RuntimeNodeMetadata {
+    #[cfg(feature = "inspection")]
     modifier: Modifier,
     resolved_modifiers: ResolvedModifiers,
     modifier_slices: Rc<ModifierNodeSlices>,
@@ -170,6 +195,7 @@ struct RuntimeNodeMetadata {
 impl Default for RuntimeNodeMetadata {
     fn default() -> Self {
         Self {
+            #[cfg(feature = "inspection")]
             modifier: Modifier::empty(),
             resolved_modifiers: ResolvedModifiers::default(),
             modifier_slices: Rc::default(),
@@ -189,19 +215,21 @@ pub(super) fn role_from_modifier_slices(modifier_slices: &ModifierNodeSlices) ->
         })
 }
 
+// What node `node_id` of `applier` shows a layout box; `None` for a node
+// that is neither a layout node nor a subcompose node.
 fn runtime_metadata_for(
     applier: &mut MemoryApplier,
     node_id: NodeId,
-) -> Result<RuntimeNodeMetadata, NodeError> {
+) -> Option<RuntimeNodeMetadata> {
     if let Ok(meta) = applier.with_node::<LayoutNode, _>(node_id, |layout| {
-        let modifier = layout.modifier.clone();
         let resolved_modifiers = layout.resolved_modifiers();
         let modifier_slices = layout.modifier_slices_snapshot();
         let role = role_from_modifier_slices(&modifier_slices);
         let z_index = modifier_slices.z_index() + layout.with_layout_state(LayoutState::z_index);
 
         RuntimeNodeMetadata {
-            modifier,
+            #[cfg(feature = "inspection")]
+            modifier: layout.modifier(),
             resolved_modifiers,
             modifier_slices,
             semantics: layout.semantics_configuration().map(Rc::new),
@@ -210,34 +238,24 @@ fn runtime_metadata_for(
             z_index,
         }
     }) {
-        return Ok(meta);
+        return Some(meta);
     }
-
-    if let Ok((modifier, resolved_modifiers, modifier_slices, semantics, z_index)) =
-        applier.with_node::<SubcomposeLayoutNode, _>(node_id, |node| {
+    applier
+        .with_node::<SubcomposeLayoutNode, _>(node_id, |node| {
             let modifier_slices = node.modifier_slices_snapshot();
             let placed = node.layout_parts().layout_state().borrow().z_index();
-            let z_index = modifier_slices.z_index() + placed;
-            (
-                node.modifier(),
-                node.resolved_modifiers(),
+            RuntimeNodeMetadata {
+                #[cfg(feature = "inspection")]
+                modifier: node.modifier(),
+                resolved_modifiers: node.resolved_modifiers(),
+                z_index: modifier_slices.z_index() + placed,
                 modifier_slices,
-                node.semantics_configuration().map(Rc::new),
-                z_index,
-            )
+                semantics: node.semantics_configuration().map(Rc::new),
+                role: SemanticsRole::Subcompose,
+                button_handler: None,
+            }
         })
-    {
-        return Ok(RuntimeNodeMetadata {
-            modifier,
-            resolved_modifiers,
-            modifier_slices,
-            semantics,
-            role: SemanticsRole::Subcompose,
-            button_handler: None,
-            z_index,
-        });
-    }
-    Ok(RuntimeNodeMetadata::default())
+        .ok()
 }
 
 fn layout_kind_from_metadata(_node_id: NodeId, info: &RuntimeNodeMetadata) -> LayoutNodeKind {

@@ -13,9 +13,12 @@ use cranpose_foundation::{
 };
 
 use super::{
-    DimensionConstraint, EdgeInsets, LayoutProperties, Modifier, ModifierInspectorRecord,
-    ModifierLocalAncestorResolver, ModifierLocalToken, Point, ResolvedModifiers,
-    layout_data::LayoutDataNode, local::ModifierLocalManager, modifier_debug_enabled,
+    DimensionConstraint, EdgeInsets, Elements, LayoutProperties, Modifier, ModifierInspectorRecord,
+    ModifierKind, ModifierLocalAncestorResolver, ModifierLocalToken, Point, ResolvedModifiers,
+    element_match::{self, ElementMatch},
+    layout_data::LayoutDataNode,
+    local::ModifierLocalManager,
+    modifier_debug_enabled,
     offset::OffsetPxNode,
 };
 mod shared_parent_data;
@@ -65,6 +68,19 @@ pub struct ModifierChainHandle {
     /// attachment: a reader that keeps what it derived from a chain knows
     /// when to derive it again, also after its node takes a new chain.
     revision: PackedU64,
+    // The inspector metadata of the modifier last set, which the layout
+    // tree's inspection reads.
+    #[cfg(feature = "inspection")]
+    inspector: Option<Rc<Vec<super::InspectorMetadata>>>,
+}
+
+// The inspector metadata `modifier` carries.
+#[cfg(feature = "inspection")]
+fn inspector_of(modifier: &Modifier) -> Option<Rc<Vec<super::InspectorMetadata>>> {
+    match &modifier.kind {
+        ModifierKind::Empty => None,
+        ModifierKind::Single { inspector, .. } => inspector.clone(),
+    }
 }
 
 /// What an update in place of a modifier element changes beyond its own
@@ -135,6 +151,8 @@ impl ModifierChainHandle {
             modifier_locals: None,
             debug_logging: false,
             revision: PackedU64::new(next_revision()),
+            #[cfg(feature = "inspection")]
+            inspector: None,
         }
     }
 
@@ -248,6 +266,10 @@ impl ModifierChainHandle {
             update.elements,
             context,
         );
+        #[cfg(feature = "inspection")]
+        if updated {
+            self.inspector = inspector_of(modifier);
+        }
         if updated && update.reach == InPlaceReach::Resolved {
             self.resolve();
         }
@@ -265,6 +287,10 @@ impl ModifierChainHandle {
         self.revision = PackedU64::new(next_revision());
         self.chain
             .update_from_ref_iter(modifier.iter_elements(), context);
+        #[cfg(feature = "inspection")]
+        {
+            self.inspector = inspector_of(modifier);
+        }
         if self.layout_direction.is_rtl() {
             self.update_offset_direction();
         }
@@ -334,6 +360,46 @@ impl ModifierChainHandle {
     pub fn chain_mut(&mut self) -> &mut ModifierNodeChain {
         self.revision = PackedU64::new(next_revision());
         &mut self.chain
+    }
+
+    // Whether the chain holds `modifier`'s elements, as `rule` compares them.
+    pub(crate) fn holds(&self, modifier: &Modifier, rule: ElementMatch) -> bool {
+        element_match::elements_match(self.chain.elements(), modifier, rule)
+    }
+
+    // The update in place from the chain's elements to `modifier`'s: see
+    // `element_match::in_place_update`.
+    pub(crate) fn in_place_update(&self, modifier: &Modifier) -> Option<InPlaceUpdate> {
+        element_match::in_place_update(self.chain.elements(), modifier)
+    }
+
+    // A modifier of the chain's elements, equal to the one the chain was last
+    // updated from. It carries the modifier's inspector metadata only where
+    // inspection is built in.
+    pub(crate) fn modifier(&self) -> Modifier {
+        let mut held = self.chain.elements();
+        let Some(first) = held.next() else {
+            return Modifier::empty();
+        };
+        let elements = if held.len() == 0 {
+            Elements::One(Rc::clone(first))
+        } else {
+            Elements::Many(Rc::new(
+                std::iter::once(first).chain(held).cloned().collect(),
+            ))
+        };
+        Modifier {
+            provides_composition_locals: elements
+                .iter()
+                .any(|element| element.provides_composition_locals()),
+            kind: ModifierKind::Single {
+                elements,
+                #[cfg(feature = "inspection")]
+                inspector: self.inspector.clone(),
+                #[cfg(not(feature = "inspection"))]
+                inspector: None,
+            },
+        }
     }
 
     /// Returns the aggregated capability mask for the reconciled chain.

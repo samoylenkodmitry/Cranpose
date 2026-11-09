@@ -2,8 +2,8 @@ use std::rc::Rc;
 
 use cranpose_core::NodeId;
 use cranpose_ui::{
-    LayoutBox, LayoutNodeData, LayoutNodeKind, Modifier, ModifierNodeSlices, Point, Rect,
-    ResolvedModifiers, SemanticsAction, SemanticsCallback, SemanticsNode, SemanticsRole,
+    LayoutBox, LayoutNodeData, LayoutNodeKind, ModifierNodeSlices, Point, Rect, ResolvedModifiers,
+    SemanticsAction, SemanticsCallback, SemanticsNode, SemanticsRole,
 };
 
 use super::{
@@ -137,7 +137,6 @@ fn sample_layout_box(
         },
         Point { x: 0.0, y: 0.0 },
         LayoutNodeData::new(
-            Modifier::empty(),
             ResolvedModifiers::default(),
             Rc::new(ModifierNodeSlices::default()),
             None,

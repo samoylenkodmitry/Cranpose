@@ -17,7 +17,10 @@ use web_time::Instant;
 
 use crate::{
     layout::MeasuredNode,
-    modifier::{Modifier, ModifierChainHandle, ModifierNodeSlices, Point, ResolvedModifiers, Size},
+    modifier::{
+        ElementMatch, Modifier, ModifierChainHandle, ModifierNodeSlices, Point, ResolvedModifiers,
+        Size,
+    },
     render_state::AppContext,
     widgets::nodes::{ChildPlacement, LayoutNode, LayoutParts, LayoutState, NodeCache},
 };
@@ -1367,7 +1370,7 @@ impl SubcomposeLayoutNodeHandle {
     }
 
     pub fn modifier(&self) -> Modifier {
-        self.inner.borrow().modifier.clone()
+        self.inner.borrow().modifier_chain.modifier()
     }
 
     pub fn layout_properties(&self) -> crate::modifier::LayoutProperties {
@@ -1579,7 +1582,6 @@ impl SubcomposeLayoutNodeHandle {
 }
 
 struct SubcomposeLayoutNodeInner {
-    modifier: Modifier,
     modifier_chain: ModifierChainHandle,
     modifier_capabilities: NodeCapabilities,
     state: SubcomposeState,
@@ -1641,7 +1643,6 @@ impl SubcomposeLayoutNodeInner {
 
     fn new(measure_policy: Rc<MeasurePolicy>) -> Self {
         Self {
-            modifier: Modifier::empty(),
             modifier_chain: ModifierChainHandle::detached(),
             modifier_capabilities: NodeCapabilities::default(),
             state: SubcomposeState::default(),
@@ -1670,12 +1671,11 @@ impl SubcomposeLayoutNodeInner {
     }
 
     fn set_modifier_collect(&mut self, modifier: Modifier) -> (ModifierInvalidations, bool) {
-        let modifier_changed = !self.modifier.structural_eq(&modifier);
-        self.modifier = modifier;
-        self.modifier_chain.set_debug_logging(self.debug_modifiers);
-        let invalidations = self
+        let modifier_changed = !self
             .modifier_chain
-            .update_on_node(self.node_id, &self.modifier);
+            .holds(&modifier, ElementMatch::Structural);
+        self.modifier_chain.set_debug_logging(self.debug_modifiers);
+        let invalidations = self.modifier_chain.update_on_node(self.node_id, &modifier);
         self.modifier_capabilities = self.modifier_chain.capabilities();
 
         (invalidations, modifier_changed)

@@ -4,7 +4,7 @@
 
 [counts]
 too_many_arguments = 10
-private_docs = 12600
+private_docs = 12597
 for_test_fns = 38
 cranpose_env_names = 77
 source_text_checks = 328
@@ -74,7 +74,7 @@ limit = 1000
 "crates/cranpose-ui-graphics/src/record.rs" = 2515
 "crates/cranpose-ui-graphics/src/render_effect.rs" = 1161
 "crates/cranpose-ui/src/layout/mod.rs" = 2394
-"crates/cranpose-ui/src/modifier/mod.rs" = 1161
+"crates/cranpose-ui/src/modifier/mod.rs" = 1156
 "crates/cranpose-ui/src/modifier/scroll.rs" = 1951
 "crates/cranpose-ui/src/modifier_nodes.rs" = 2901
 "crates/cranpose-ui/src/render_state.rs" = 1300
