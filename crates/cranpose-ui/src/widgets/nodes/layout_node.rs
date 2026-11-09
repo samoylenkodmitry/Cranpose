@@ -5,8 +5,8 @@ use std::{
 
 use cranpose_core::{NodeId, NodeIdCell};
 use cranpose_foundation::{
-    InvalidationKind, ModifierInvalidation, ModifierInvalidations, NodeCapabilities,
-    SemanticsConfiguration,
+    InvalidationKind, ModifierInvalidation, ModifierInvalidations, ModifierNodeElement,
+    NodeCapabilities, SemanticsConfiguration,
 };
 use cranpose_ui_layout::MeasurePolicy;
 
@@ -241,19 +241,54 @@ impl LayoutNode {
         if !in_place {
             self.forget_semantics_reach();
         }
-        let keep_slices = in_place && !self.modifier_slices_dirty.get();
-        if !keep_slices {
-            self.modifier_slices_dirty.set(true);
-        }
-
         let mut invalidations = context.take_invalidations();
         invalidations.extend(modifier_local_invalidations);
-        self.dispatch_modifier_invalidations_with_prev(&invalidations, prev_caps, keep_slices);
+        self.dispatch_chain_update(&invalidations, prev_caps, in_place);
         // An update in place leaves the node's parent, capabilities and
         // modifier locals as the registry holds them.
         if !in_place {
             self.refresh_registry_state();
         }
+    }
+
+    // Dispatches `invalidations`, what an update of the chain asked for. An
+    // update in place keeps the slices the chain gave, unless they are stale
+    // already.
+    fn dispatch_chain_update(
+        &self,
+        invalidations: &[ModifierInvalidation],
+        prev_caps: NodeCapabilities,
+        in_place: bool,
+    ) {
+        let keep_slices = in_place && !self.modifier_slices_dirty.get();
+        if !keep_slices {
+            self.modifier_slices_dirty.set(true);
+        }
+        self.dispatch_modifier_invalidations_with_prev(invalidations, prev_caps, keep_slices);
+    }
+
+    // Updates the node after `modifier`'s elements to `element` in place, as
+    // a set of `modifier` then `element` does when only that element
+    // changed. False, leaving the node as it was, when the chain does not
+    // hold `modifier`'s elements and one node of `element`'s type after
+    // them: see `ModifierChainHandle::update_node_after`.
+    pub(crate) fn update_node_after<E: ModifierNodeElement>(
+        &mut self,
+        modifier: &Modifier,
+        element: E,
+    ) -> bool {
+        let prev_caps = self.modifier_capabilities();
+        let mut context = self.modifier_chain.context(self.id.get());
+        if !self
+            .modifier_chain
+            .update_node_after(modifier, element, &mut context)
+        {
+            return false;
+        }
+        self.dispatch_chain_update(&context.take_invalidations(), prev_caps, true);
+        self.parts.cache().clear();
+        self.request_semantics_update();
+        true
     }
 
     fn update_modifier_slices_cache(&self) {

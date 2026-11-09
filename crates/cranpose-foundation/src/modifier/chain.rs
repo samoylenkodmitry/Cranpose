@@ -7,14 +7,14 @@ use cranpose_core::collections::map::HashMap;
 
 use super::{
     AnyModifierElement, DynModifierElement, InvalidationKind, MAX_DELEGATE_DEPTH,
-    ModifierChainIter, ModifierChainNodeRef, ModifierNode, ModifierNodeContext, NodeCapabilities,
-    NodePath, chain_node_ref::ChainPosition,
+    ModifierChainIter, ModifierChainNodeRef, ModifierNode, ModifierNodeContext,
+    ModifierNodeElement, NodeCapabilities, NodePath, chain_node_ref::ChainPosition,
 };
 mod entry_element;
 mod in_place;
 use entry_element::EntryElement;
 pub use entry_element::HeldElement;
-use in_place::{InPlace, update_entry_in_place};
+use in_place::{InPlace, update_entry_in_place, update_node_in_place};
 
 /// One node of a chain and the element it last took. The element's hash,
 /// which matches entries when a chain rebuilds, is worked out then: an
@@ -477,6 +477,31 @@ impl ModifierNodeChain {
             self.sync_chain_links();
         }
         updated
+    }
+
+    /// Updates the node of the chain's last entry to `element`, whose node
+    /// holds every value of it, as [`Self::update_entries_in_place`] updates
+    /// an entry. Returns false, leaving the chain as it was, when the last
+    /// entry is not of `element`'s type or its node cannot take it.
+    pub fn update_last_held<E: ModifierNodeElement>(
+        &mut self,
+        element: E,
+        context: &mut dyn ModifierNodeContext,
+    ) -> bool {
+        let Some(entry) = self.entries.last_mut() else {
+            return false;
+        };
+        if E::FROM_NODE.is_none() {
+            return false;
+        }
+        let element = super::any_element::unboxed_element(element);
+        let Some(outcome) = update_node_in_place(entry, &element, None, context) else {
+            return false;
+        };
+        if outcome == InPlace::Relink {
+            self.sync_chain_links();
+        }
+        true
     }
 
     /// Reconciles the chain against the elements that `elements` yields, without collecting them

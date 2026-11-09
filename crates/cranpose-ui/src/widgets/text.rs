@@ -165,18 +165,9 @@ impl IntoTextSource for DynamicTextSource {
 }
 
 // The modifier of a text's node: the caller's `modifier`, then the text's
-// element.
-fn text_node_modifier(
-    text: crate::text::AnnotatedString,
-    modifier: Modifier,
-    style: Arc<TextStyle>,
-    options: TextLayoutOptions,
-    density: Density,
-) -> Modifier {
-    let text_element = modifier_element(TextModifierElement::with_shared_style(
-        text, style, options, density,
-    ));
-    modifier.then(Modifier::from_dyn_element(text_element))
+// `element`.
+fn text_node_modifier(modifier: Modifier, element: TextModifierElement) -> Modifier {
+    modifier.then(Modifier::from_dyn_element(modifier_element(element)))
 }
 
 // The style and options a text lays out with: the style in the locale in
@@ -224,6 +215,20 @@ struct StaticTextModifier<'a> {
 }
 
 impl StaticTextModifier<'_> {
+    // The element of the text's node.
+    fn element(&self) -> TextModifierElement {
+        let text = match self.text {
+            StaticText::Plain(text) => crate::text::AnnotatedString::from(text),
+            StaticText::Annotated(text) => text.clone(),
+        };
+        TextModifierElement::with_shared_style(
+            text,
+            Arc::clone(&self.style),
+            self.options,
+            self.density,
+        )
+    }
+
     // Whether `node` shows the text: its chain holds the caller's modifier,
     // then a text node of this text, style and options.
     fn shown_by(&self, node: &LayoutNode) -> bool {
@@ -242,21 +247,13 @@ impl NodeModifier for StaticTextModifier<'_> {
     }
 
     fn to_modifier(&self) -> Modifier {
-        let text = match self.text {
-            StaticText::Plain(text) => crate::text::AnnotatedString::from(text),
-            StaticText::Annotated(text) => text.clone(),
-        };
-        text_node_modifier(
-            text,
-            self.modifier.clone(),
-            Arc::clone(&self.style),
-            self.options,
-            self.density,
-        )
+        text_node_modifier(self.modifier.clone(), self.element())
     }
 
     fn set_on(self, node: &mut LayoutNode) {
-        if !self.shown_by(node) {
+        // A node that shows another text takes this one in its text node,
+        // with no modifier made for it, as a ticker's does each frame.
+        if !self.shown_by(node) && !node.update_node_after(&self.modifier, self.element()) {
             node.set_modifier(self.to_modifier());
         }
     }
@@ -311,7 +308,7 @@ mod text_group {
 
     use cranpose_core::NodeId;
 
-    use super::{IntoTextSource, text_layout_inputs, text_node_modifier};
+    use super::{IntoTextSource, TextModifierElement, text_layout_inputs, text_node_modifier};
     use crate::{
         composable,
         modifier::Modifier,
@@ -345,7 +342,10 @@ mod text_group {
             None => modifier,
         };
         compose_empty_layout(
-            text_node_modifier(text, modifier, style, options, environment.density),
+            text_node_modifier(
+                modifier,
+                TextModifierElement::with_shared_style(text, style, options, environment.density),
+            ),
             environment,
         )
     }

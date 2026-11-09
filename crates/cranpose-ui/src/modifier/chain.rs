@@ -9,7 +9,7 @@ use cranpose_core::{NodeId, PackedU64};
 use cranpose_foundation::InvalidationKind;
 use cranpose_foundation::{
     BasicModifierNodeContext, ModifierInvalidations, ModifierNode, ModifierNodeChain,
-    ModifierNodeContext, NodeCapabilities,
+    ModifierNodeContext, ModifierNodeElement, NodeCapabilities,
 };
 
 use super::{
@@ -271,6 +271,33 @@ impl ModifierChainHandle {
             self.resolve();
         }
         updated
+    }
+
+    // Updates the node after `modifier`'s elements to `element` in place,
+    // as `update_elements_in_place` updates it from `modifier` then
+    // `element`, for an element whose update reaches its node alone. False,
+    // leaving the chain as it was, when the chain does not hold `modifier`'s
+    // elements and one node of `element`'s type after them, or reads
+    // modifier locals. An inspection build keeps the inspector metadata of
+    // the whole modifier, so it updates through the modifier.
+    pub(crate) fn update_node_after<E: ModifierNodeElement>(
+        &mut self,
+        modifier: &Modifier,
+        element: E,
+        context: &mut BasicModifierNodeContext,
+    ) -> bool {
+        !cfg!(feature = "inspection")
+            && InPlaceReach::of(TypeId::of::<E>()) == Some(InPlaceReach::Node)
+            && !self
+                .chain
+                .capabilities()
+                .contains(NodeCapabilities::MODIFIER_LOCALS)
+            && element_match::elements_match_but_last(
+                self.chain.held_elements(),
+                modifier,
+                ElementMatch::Equal,
+            )
+            && self.chain.update_last_held(element, context)
     }
 
     /// Reconciles the chain with `modifier`, its nodes asking `context` for
