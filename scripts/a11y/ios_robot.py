@@ -6,6 +6,16 @@ import plistlib
 import subprocess
 
 
+# The hosted runner's simulator once left a launch unserviced for 30 seconds while it showed only
+# its home screen (nightly 42557380010, 2026-11-09), which fails a test for a reason outside the
+# app. A failed run therefore repeats once, and the report keeps the first run's failures.
+ATTEMPTS = 2
+# The first run builds the app and the tests, which took 14.5 minutes of the former 15-minute limit
+# on the hosted runner on 2026-11-09. The second run finds them built.
+FIRST_RUN_SECONDS = 1500
+RERUN_SECONDS = 600
+
+
 def command(*args, **kwargs):
     return subprocess.check_output(list(args), text=True, stderr=subprocess.STDOUT,
                                    timeout=kwargs.pop('timeout', 120), **kwargs)
@@ -31,6 +41,24 @@ def boot(device_id, report):
             subprocess.run(['xcrun', 'simctl', 'shutdown', device_id], check=False, timeout=120)
 
 
+def run_tests(device_id, output, attempt):
+    """Runs the XCTest suite once and returns the process result and the test summary."""
+    results = output.resolve() / f'results-{attempt}.xcresult'
+    with (output / f'xcodebuild-{attempt}.log').open('w') as log:
+        result = subprocess.run([
+            'xcodebuild', '-project', 'apps/liquid-reference/LiquidReference.xcodeproj',
+            '-scheme', 'LiquidReference', '-configuration', 'Release',
+            '-destination', f'platform=iOS Simulator,id={device_id}',
+            '-derivedDataPath', 'target/accessibility-ios-tests',
+            '-resultBundlePath', str(results), '-parallel-testing-enabled', 'NO',
+            '-only-testing:LiquidReferenceTests/AccessibilityRobotTests', 'test'],
+            stdout=log, stderr=subprocess.STDOUT, check=False,
+            timeout=FIRST_RUN_SECONDS if attempt == 1 else RERUN_SECONDS)
+    summary = json.loads(command('xcrun', 'xcresulttool', 'get', 'test-results', 'summary',
+                                 '--path', str(results)))
+    return result, summary
+
+
 def verify_summary(summary):
     if (summary.get('passedTests') != 4 or summary.get('failedTests') != 0
             or summary.get('skippedTests') != 0 or summary.get('expectedFailures') != 0
@@ -52,21 +80,19 @@ def main():
     try:
         boot(args.device, report)
         command('xcrun', 'simctl', 'install', args.device, str(args.app.resolve()))
-        results = args.output.resolve() / 'results.xcresult'
-        with (args.output / 'xcodebuild.log').open('w') as log:
-            result = subprocess.run([
-                'xcodebuild', '-project', 'apps/liquid-reference/LiquidReference.xcodeproj',
-                '-scheme', 'LiquidReference', '-configuration', 'Release',
-                '-destination', f'platform=iOS Simulator,id={args.device}',
-                '-derivedDataPath', 'target/accessibility-ios-tests',
-                '-resultBundlePath', str(results), '-parallel-testing-enabled', 'NO',
-                '-only-testing:LiquidReferenceTests/AccessibilityRobotTests', 'test'],
-                stdout=log, stderr=subprocess.STDOUT, check=False, timeout=900)
-        summary = json.loads(command('xcrun', 'xcresulttool', 'get', 'test-results', 'summary',
-                                     '--path', str(results)))
-        report['summary'] = summary
-        result.check_returncode()
-        verify_summary(summary)
+        earlier_failures = []
+        for attempt in range(1, ATTEMPTS + 1):
+            result, summary = run_tests(args.device, args.output, attempt)
+            report['summary'] = summary
+            try:
+                result.check_returncode()
+                verify_summary(summary)
+                break
+            except (subprocess.CalledProcessError, AssertionError):
+                if attempt == ATTEMPTS:
+                    raise
+                earlier_failures.append(summary.get('testFailures', []))
+                report['earlier_failures'] = earlier_failures
         report['status'] = 'passed'
     except BaseException as error:
         report.update(status='failed', error=str(error))

@@ -8,10 +8,13 @@ final class AccessibilityRobotTests: XCTestCase {
         let app = XCUIApplication(bundleIdentifier: "io.cranpose.demo")
         app.launchArguments = ["--test_screen=accessibility_robot"]
         app.launch()
-        XCTAssertTrue(named("Accessibility robot", in: app).waitForExistence(timeout: 15))
+        // The hosted runner's simulator starts with a cold Metal compiler. In two nightlies the first
+        // launch's pipelines landed 18 and 33 seconds after it, and the screen stays dark until they do.
+        // Each wait returns as soon as its state is reached.
+        XCTAssertTrue(named("Accessibility robot", in: app).waitForExistence(timeout: 60))
         XCTAssertTrue(
             drawsScreen(app),
-            "The app drew no screen in 15 seconds: the first frame it drew while its pipelines compiled stays on the display until something asks for another."
+            "The app drew no screen in 90 seconds: the first frame it drew while its pipelines compiled stays on the display until something asks for another."
         )
         return app
     }
@@ -36,9 +39,9 @@ final class AccessibilityRobotTests: XCTestCase {
         return image.cropping(to: below).flatMap { UIImage(cgImage: $0).pngData() }
     }
 
-    /// Whether the screen below the status bar holds more than a background within fifteen seconds.
+    /// Whether the screen below the status bar holds more than a background within ninety seconds.
     private func drawsScreen(_ app: XCUIApplication) -> Bool {
-        let deadline = Date().addingTimeInterval(15)
+        let deadline = Date().addingTimeInterval(90)
         repeat {
             if holdsContent(app) { return true }
             RunLoop.current.run(until: Date().addingTimeInterval(0.25))
