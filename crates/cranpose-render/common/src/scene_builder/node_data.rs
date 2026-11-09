@@ -5,6 +5,7 @@ use std::any::Any;
 
 use cranpose_core::{MemoryApplier, NodeId};
 use cranpose_ui::{LayoutNode, Point, Size, SubcomposeLayoutNode, widgets::LayoutState};
+use cranpose_ui_graphics::shared_sort;
 
 use super::{Level, SnapshotNodeData, note_layer_lowered};
 
@@ -118,12 +119,15 @@ fn z_sorted_children(
     if in_order {
         return None;
     }
-    let mut ordered: Vec<(f32, NodeId)> = children
+    let z_indices: Vec<f32> = children
         .iter()
-        .map(|&child| (node_z_index(applier, child), child))
+        .map(|&child| node_z_index(applier, child))
         .collect();
-    ordered.sort_by(|a, b| a.0.total_cmp(&b.0));
-    Some(ordered.into_iter().map(|(_, child)| child).collect())
+    let mut order: Vec<usize> = (0..children.len()).collect();
+    shared_sort::sort_positions(&mut order, &mut |a, b| {
+        z_indices[a].total_cmp(&z_indices[b])
+    });
+    Some(order.into_iter().map(|index| children[index]).collect())
 }
 
 fn places_children_with_z_index(applier: &MemoryApplier, node_id: NodeId) -> bool {

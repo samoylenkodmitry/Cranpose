@@ -7,6 +7,7 @@ use std::{
 };
 
 use cranpose_core::{MemoryApplier, Node, NodeError, NodeId, NodeIdCell, PackedU64};
+use cranpose_ui_graphics::shared_sort;
 use cranpose_ui_layout::{AlignmentLines, Constraints, MeasurePolicy, Placement};
 
 use super::{
@@ -571,7 +572,9 @@ pub(super) fn inherited_alignment_lines(
             .all(|(placement, child)| placement.node_id == child.node_id);
     if !in_child_order {
         placement_indices.extend(0..placements.len());
-        placement_indices.sort_unstable_by_key(|&index| (placements[index].node_id, index));
+        shared_sort::sort_positions(placement_indices, &mut |a, b| {
+            placements[a].node_id.cmp(&placements[b].node_id)
+        });
     }
     let mut lines = AlignmentLines::default();
     for (index, child) in child_states.iter().enumerate() {

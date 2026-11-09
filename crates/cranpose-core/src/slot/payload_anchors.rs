@@ -431,15 +431,9 @@ impl PayloadAnchorRegistry {
             return;
         }
 
-        let mut ranges = self
-            .free_ids
-            .drain()
-            .map(|Reverse(range)| range)
-            .collect::<Vec<_>>();
-        ranges.sort_unstable();
-
+        // The heap gives the ranges up in order, the lowest first.
         let mut merged = Vec::<FreePayloadAnchorIdRange>::new();
-        for range in ranges {
+        while let Some(Reverse(range)) = self.free_ids.pop() {
             if range.is_empty() {
                 continue;
             }

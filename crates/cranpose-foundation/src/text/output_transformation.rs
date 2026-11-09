@@ -3,6 +3,7 @@
 
 use std::{ops::Range, rc::Rc};
 
+use cranpose_ui_graphics::shared_sort;
 use unicode_segmentation::UnicodeSegmentation;
 
 /// Changes how a text field shows its text without changing the text, as
@@ -75,8 +76,9 @@ impl OutputChanges {
     }
 
     fn apply(mut self, text: &str) -> ShownText {
-        self.changes
-            .sort_by_key(|(range, _)| (range.start, range.end));
+        shared_sort::sort_by(&mut self.changes, |(a, _), (b, _)| {
+            (a.start, a.end).cmp(&(b.start, b.end))
+        });
         let mut shown = String::with_capacity(text.len());
         let mut segments = Vec::with_capacity(self.changes.len() * 2 + 1);
         let mut source = 0;

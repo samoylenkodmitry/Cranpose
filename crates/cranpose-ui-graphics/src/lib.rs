@@ -67,6 +67,7 @@ mod runtime_shader_uniforms;
 mod shader_warm_up;
 mod shadow;
 mod shape_records;
+pub mod shared_sort;
 pub mod space;
 mod stroke;
 mod stroke_outline;
