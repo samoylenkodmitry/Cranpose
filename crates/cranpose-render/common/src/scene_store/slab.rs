@@ -9,6 +9,9 @@ use cranpose_core::collections::growth_slack::GrowthSlack;
 pub(crate) struct Slab<T> {
     entries: Vec<Option<T>>,
     free: Vec<u32>,
+    // Whether the entries changed length since their room was last
+    // checked: only a change of length can leave room to give back.
+    resized: bool,
 }
 
 impl<T> Default for Slab<T> {
@@ -16,6 +19,7 @@ impl<T> Default for Slab<T> {
         Self {
             entries: Vec::new(),
             free: Vec::new(),
+            resized: false,
         }
     }
 }
@@ -30,6 +34,7 @@ impl<T> Slab<T> {
             }
             None => {
                 self.entries.push(Some(value));
+                self.resized = true;
                 self.entries.len() - 1
             }
         }
@@ -63,10 +68,13 @@ impl<T> Slab<T> {
     pub(crate) fn clear(&mut self) {
         self.entries.clear();
         self.free.clear();
+        self.resized = true;
     }
 
     pub(crate) fn trim_growth_slack(&mut self) {
-        self.entries.trim_growth_slack();
+        if std::mem::take(&mut self.resized) {
+            self.entries.trim_growth_slack();
+        }
     }
 }
 

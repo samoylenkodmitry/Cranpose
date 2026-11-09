@@ -36,6 +36,9 @@ struct ChildFacts {
 #[derive(Clone, Default)]
 pub(crate) struct Facts {
     rows: Vec<Cell<RowFacts>>,
+    // Whether the rows changed length since their room was last checked:
+    // only a change of length can leave room to give back.
+    resized: bool,
 }
 
 impl Facts {
@@ -44,12 +47,16 @@ impl Facts {
     pub(super) fn open_row(&mut self, index: usize) {
         match self.rows.get(index) {
             Some(row) => row.set(RowFacts::default()),
-            None => self.rows.resize_with(index + 1, Cell::default),
+            None => {
+                self.rows.resize_with(index + 1, Cell::default);
+                self.resized = true;
+            }
         }
     }
 
     pub(super) fn clear(&mut self) {
         self.rows.clear();
+        self.resized = true;
     }
 
     pub(super) fn heap_bytes(&self) -> usize {
@@ -57,7 +64,9 @@ impl Facts {
     }
 
     pub(super) fn trim_growth_slack(&mut self) {
-        self.rows.trim_growth_slack();
+        if std::mem::take(&mut self.resized) {
+            self.rows.trim_growth_slack();
+        }
     }
 }
 

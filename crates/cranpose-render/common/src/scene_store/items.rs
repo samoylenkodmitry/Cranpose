@@ -93,6 +93,9 @@ impl Span {
 pub(crate) struct SpanPool<T> {
     items: Vec<T>,
     free: Vec<Vec<u32>>,
+    // Whether the items changed length since their room was last checked:
+    // only a change of length can leave room to give back.
+    resized: bool,
 }
 
 impl<T> Default for SpanPool<T> {
@@ -100,6 +103,7 @@ impl<T> Default for SpanPool<T> {
         Self {
             items: Vec::new(),
             free: Vec::new(),
+            resized: false,
         }
     }
 }
@@ -162,6 +166,7 @@ impl<T: Copy> SpanPool<T> {
         let start = u32::try_from(self.items.len()).expect("fewer than 2^32 items");
         let room = 1usize << class;
         self.items.resize(self.items.len() + room, filler);
+        self.resized = true;
         start
     }
 
@@ -178,10 +183,13 @@ impl<T: Copy> SpanPool<T> {
     pub(crate) fn clear(&mut self) {
         self.items.clear();
         self.free.iter_mut().for_each(Vec::clear);
+        self.resized = true;
     }
 
     pub(crate) fn trim_growth_slack(&mut self) {
-        self.items.trim_growth_slack();
+        if std::mem::take(&mut self.resized) {
+            self.items.trim_growth_slack();
+        }
     }
 }
 
