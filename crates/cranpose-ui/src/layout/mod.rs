@@ -1017,7 +1017,7 @@ struct ChildView {
     self_dirty: bool,
     /// The child's parent data, read only when the child changed itself:
     /// only its own modifiers give it.
-    parent_data: Option<cranpose_ui_layout::ParentData>,
+    parent_data: Option<crate::modifier::SharedParentData>,
     /// The constraints the child's own cache holds.
     cached_constraints: Option<Constraints>,
     read_intrinsics: bool,

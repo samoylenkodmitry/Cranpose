@@ -70,7 +70,7 @@ impl LiveLayoutNode<'_> {
         self.parts().layout_state().borrow().is_placed()
     }
 
-    pub(super) fn parent_data(&self) -> cranpose_ui_layout::ParentData {
+    pub(super) fn parent_data(&self) -> crate::modifier::SharedParentData {
         match self {
             Self::Layout(node) => node.parent_data(),
             Self::Subcompose(node) => node.parent_data(),

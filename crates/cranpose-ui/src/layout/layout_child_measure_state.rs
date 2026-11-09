@@ -7,14 +7,14 @@ use std::{
 };
 
 use cranpose_core::{MemoryApplier, Node, NodeError, NodeId, PackedU64};
-use cranpose_ui_layout::{AlignmentLines, Constraints, MeasurePolicy, ParentData, Placement};
+use cranpose_ui_layout::{AlignmentLines, Constraints, MeasurePolicy, Placement};
 
 use super::{
     LayoutBuilderState, LayoutRuntimeState, MeasuredChild, MeasuredNode, core::Measurable,
     layout_child_measurable::LayoutChildMeasurable,
 };
 use crate::{
-    modifier::Point,
+    modifier::{Point, SharedParentData},
     render_state::AppContext,
     subcompose_layout::SubcomposeLayoutNode,
     widgets::nodes::{IntrinsicKind, LayoutNode, LayoutParts, LayoutState, NodeCache},
@@ -65,7 +65,7 @@ impl LayoutBuilderState {
                 LayoutChildBinding {
                     parts: child.layout_parts(),
                     layout_node: true,
-                    parent_data: Some(child.parent_data()),
+                    parent_data: child.parent_data(),
                     dirty: child.needs_layout() || child.needs_measure(),
                     descendant_dirty: Node::descendant_needs_layout(child),
                 },
@@ -80,7 +80,7 @@ impl LayoutBuilderState {
                         LayoutChildBinding {
                             parts: child.layout_parts(),
                             layout_node: false,
-                            parent_data: Some(child.parent_data()),
+                            parent_data: child.parent_data(),
                             dirty: child.needs_layout() || child.needs_measure(),
                             descendant_dirty: Node::descendant_needs_layout(child),
                         },
@@ -176,7 +176,7 @@ pub(super) struct LayoutChildBinding<'a> {
     // Whether the child is a layout node, whose size and placed flag its
     // parent's measure writes: a subcompose node writes its own.
     pub(super) layout_node: bool,
-    pub(super) parent_data: Option<ParentData>,
+    pub(super) parent_data: SharedParentData,
     /// The child's own layout or measure is dirty.
     pub(super) dirty: bool,
     /// Only nodes below the child are dirty.
@@ -198,7 +198,7 @@ pub(super) struct LayoutChildMeasureState {
     revision: Cell<u32>,
     pub(super) cache_epoch: Cell<PackedU64>,
     pub(super) force_remeasure: Cell<bool>,
-    pub(super) parent_data: RefCell<Option<ParentData>>,
+    pub(super) parent_data: Cell<SharedParentData>,
     /// The constraints the parent's last measure gave the child.
     pub(super) measured_constraints: Cell<Option<Constraints>>,
     /// Whether the parent's last measure read the child's intrinsic sizes.
@@ -239,7 +239,7 @@ impl LayoutChildMeasureState {
             revision: Cell::new(0),
             cache_epoch: Cell::default(),
             force_remeasure: Cell::new(true),
-            parent_data: RefCell::new(None),
+            parent_data: Cell::default(),
             measured_constraints: Cell::new(None),
             read_intrinsics: Cell::new(false),
             measured: Cell::new(None),
@@ -266,7 +266,7 @@ impl LayoutChildMeasureState {
             Some(Rc::clone(binding.parts))
         });
         self.layout_node.set(binding.layout_node);
-        *self.parent_data.borrow_mut() = binding.parent_data;
+        self.parent_data.set(binding.parent_data);
     }
 
     // Whether `policy` reads a change from the parent data of the record's
@@ -274,12 +274,16 @@ impl LayoutChildMeasureState {
     pub(super) fn reads_parent_data_change(
         &self,
         policy: &dyn MeasurePolicy,
-        data: &ParentData,
+        data: &SharedParentData,
     ) -> bool {
-        self.parent_data
-            .borrow()
-            .as_ref()
-            .is_none_or(|bound| policy.reads_parent_data_change(bound, data))
+        if read_cell(&self.parts, Option::is_none) {
+            return true;
+        }
+        read_cell(&self.parent_data, |bound| {
+            !bound.same(data)
+                && bound
+                    .read(|bound| data.read(|data| policy.reads_parent_data_change(bound, data)))
+        })
     }
 
     // Binds the record again to the layout node it holds, without a look at

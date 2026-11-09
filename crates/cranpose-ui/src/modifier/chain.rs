@@ -18,6 +18,9 @@ use super::{
     layout_data::LayoutDataNode, local::ModifierLocalManager, modifier_debug_enabled,
     offset::OffsetPxNode,
 };
+mod shared_parent_data;
+pub(crate) use shared_parent_data::SharedParentData;
+
 use crate::{
     modifier_nodes::{
         AlignmentNode, FillDirection, FillElement, FillNode, OffsetNode, PaddingNode, SizeElement,
@@ -50,7 +53,7 @@ pub struct ModifierChainHandle {
     /// What the chain tells the parent's measure policy, which reads it on
     /// every pass. The resolved modifiers, which only a subcompose node's
     /// measure and on-request readers take, are worked out when read.
-    parent_data: cranpose_ui_layout::ParentData,
+    parent_data: SharedParentData,
     capabilities: NodeCapabilities,
     aggregate_child_capabilities: NodeCapabilities,
     /// `None` until the chain first provides or reads a modifier local, as
@@ -126,7 +129,7 @@ impl ModifierChainHandle {
             chain,
             layout_direction: crate::LayoutDirection::Ltr,
             pending_invalidations: None,
-            parent_data: cranpose_ui_layout::ParentData::default(),
+            parent_data: SharedParentData::default(),
             capabilities: NodeCapabilities::default(),
             aggregate_child_capabilities: NodeCapabilities::default(),
             modifier_locals: None,
@@ -365,7 +368,7 @@ impl ModifierChainHandle {
     /// What the chain tells the parent's measure policy about its node.
     /// The outermost node of each kind wins, as Compose folds
     /// `modifyParentData` from the innermost node out.
-    pub(crate) fn parent_data(&self) -> cranpose_ui_layout::ParentData {
+    pub(crate) fn parent_data(&self) -> SharedParentData {
         self.parent_data.clone()
     }
 
@@ -447,7 +450,7 @@ impl ModifierChainHandle {
             ..
         } = self.resolution();
         let weight = layout.weight.unwrap_or_default();
-        self.parent_data = cranpose_ui_layout::ParentData {
+        let data = cranpose_ui_layout::ParentData {
             weight: weight.weight,
             fill: weight.fill,
             box_alignment: layout.box_alignment,
@@ -458,6 +461,9 @@ impl ModifierChainHandle {
             fill_height_fraction: fill_height.unwrap_or_default(),
             layout_data,
         };
+        if !self.parent_data.read(|current| *current == data) {
+            self.parent_data = SharedParentData::of(data);
+        }
     }
 }
 

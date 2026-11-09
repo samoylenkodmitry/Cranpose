@@ -2181,7 +2181,7 @@ fn parent_data_uses_resolved_layout_properties() {
                 LayoutChildBinding {
                     parts: node.layout_parts(),
                     layout_node: true,
-                    parent_data: Some(node.parent_data()),
+                    parent_data: node.parent_data(),
                     dirty: false,
                     descendant_dirty: false,
                 },

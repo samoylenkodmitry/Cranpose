@@ -565,7 +565,7 @@ impl LayoutNode {
     }
 
     /// What the chain tells the parent's measure policy about this node.
-    pub(crate) fn parent_data(&self) -> cranpose_ui_layout::ParentData {
+    pub(crate) fn parent_data(&self) -> crate::modifier::SharedParentData {
         self.modifier_chain.parent_data()
     }
 

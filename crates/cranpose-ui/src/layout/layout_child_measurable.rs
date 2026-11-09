@@ -31,7 +31,7 @@ impl LayoutChildMeasurable {
         if self.state.frame.builder.borrow().is_none() {
             return None;
         }
-        self.state.parent_data.borrow().as_ref().map(read)
+        Some(read_cell(&self.state.parent_data, |data| data.read(read)))
     }
 
     // How many state reads the pass that binds the child has kept.

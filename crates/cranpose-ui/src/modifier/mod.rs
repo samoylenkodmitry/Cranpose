@@ -49,7 +49,7 @@ mod z_index;
 
 pub(crate) use chain::{
     InPlaceReach, InPlaceUpdate, ModifierChainHandle, ModifierChainInspectorNode,
-    ModifierLocalsHandle,
+    ModifierLocalsHandle, SharedParentData,
 };
 pub(crate) use coordinator_rect::CoordinatorRect;
 use cranpose_foundation::{
