@@ -2035,7 +2035,7 @@ fn appending_empty_draw_commands_preserves_existing_nodes_and_command_identity()
             DrawTarget {
                 size: Size::default(),
                 motion_context_animated: false,
-                layer: None,
+                paint: None,
             },
             phase,
         );

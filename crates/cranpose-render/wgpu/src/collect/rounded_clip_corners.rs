@@ -284,24 +284,22 @@ fn child_takes_corners(child: LayerRef<'_>, offset: Point, corners: &RoundedClip
 }
 
 // Whether everything `inline`, a node drawn in the layer at `offset`, puts
-// down stays clear of the corners: it draws within its rect, and that rect
-// does.
+// down stays clear of the corners: its rect does, and it draws within it.
 fn inline_stays_clear(inline: LayerRef<'_>, offset: Point, corners: &RoundedClipCorners) -> bool {
     let origin = inline.origin();
-    inline.draws_within_bounds()
-        && stays_clear(
-            expand_rect(
-                inline.node_rect(),
-                cranpose_render_common::graph::CONTAINED_DRAW_SLACK,
-            )
-            .translate(origin.x, origin.y),
-            offset,
-            corners,
+    stays_clear(
+        expand_rect(
+            inline.node_rect(),
+            cranpose_render_common::graph::CONTAINED_DRAW_SLACK,
         )
+        .translate(origin.x, origin.y),
+        offset,
+        corners,
+    ) && inline.draws_within_bounds()
 }
 
 fn child_stays_clear(child: LayerRef<'_>, offset: Point, corners: &RoundedClipCorners) -> bool {
-    if !child.draws_within_bounds() || child.graphics_layer().shadow_elevation > 0.0 {
+    if child.graphics_layer().shadow_elevation > 0.0 {
         return false;
     }
     let padding = cranpose_render_common::graph::CONTAINED_DRAW_SLACK
@@ -312,7 +310,7 @@ fn child_stays_clear(child: LayerRef<'_>, offset: Point, corners: &RoundedClipCo
             .bounds_for_rect(expand_rect(child.local_bounds(), padding)),
         offset,
         corners,
-    )
+    ) && child.draws_within_bounds()
 }
 
 /// Whether a run's shapes and images may take the corners: the rest of its

@@ -8,10 +8,10 @@ use cranpose_core::{NodeId, RecordId, RecordRef, SceneUpdate, StoreId, collectio
 use cranpose_ui::{GraphicsLayer, Point, Rect};
 
 use super::{
-    ChildOrder, GeoRecord, GraphicsLayerId, Item, ItemKind, ItemRef, Journal, JournalCursor,
-    JournalEntry, JournalRead, LayerProps, LayerRef, PropsId, Reach, ReachState, RecordEvent,
-    RecordEvents, RecordFlags, RecordKind, Slab, Span, SpanPool, TransformId, TreeRecord,
-    WarmRecord,
+    ChildOrder, Facts, GeoRecord, GraphicsLayerId, HashCache, Item, ItemKind, ItemLists, ItemRef,
+    Journal, JournalCursor, JournalEntry, JournalRead, LayerProps, LayerRef, PropsId, Reach,
+    ReachState, RecordEvent, RecordEvents, RecordFlags, RecordKind, Slab, Span, SpanPool,
+    TransformId, TreeRecord, WarmRecord,
     own_marks::{self, OwnMark},
 };
 use crate::graph::{
@@ -35,11 +35,12 @@ pub struct SceneStore {
     pub(super) draws: Slab<DrawPrimitiveNode>,
     pub(super) texts: Slab<TextPrimitiveNode>,
     pub(super) runs: Slab<DrawRunNode>,
+    pub(super) hashes: HashCache,
+    pub(super) facts: Facts,
+    pub(crate) lists: ItemLists,
     root: Option<RecordId>,
     update: SceneUpdate,
     journal: Journal,
-    // The records whose facts the update in progress may have changed.
-    pub(super) facts_stale: Vec<RecordId>,
     // The records whose own draws the update in progress may have changed,
     // which its end compares with what they drew before.
     pub(super) redrawn: Vec<RecordRef>,
@@ -103,10 +104,12 @@ impl SceneStore {
             draws: Slab::default(),
             texts: Slab::default(),
             runs: Slab::default(),
+            hashes: HashCache::default(),
+            facts: Facts::default(),
+            lists: ItemLists::default(),
             root: None,
             update: SceneUpdate::default(),
             journal: Journal::default(),
-            facts_stale: Vec::new(),
             redrawn: Vec::new(),
             marks_stale: Vec::new(),
             order: ChildOrder::default(),
@@ -212,11 +215,10 @@ impl SceneStore {
         });
     }
 
-    /// Works out what the walks read of the records the update in progress
-    /// changed: whether a subtree handles pointers, holds a space or draws
-    /// within its bounds. Readers read the store after it.
+    /// Ends the update in progress: logs the records whose children it put
+    /// in another order and the own draws it redrew. Readers read the store
+    /// after it.
     pub fn finish_update(&mut self) {
-        super::facts::refresh(self);
         super::child_order::settle(self);
         own_marks::settle(self);
     }
@@ -253,15 +255,10 @@ impl SceneStore {
         self.geo[index].reach = rect;
     }
 
-    // Leaves the facts of the record at `index` to be worked out at the end
-    // of the update.
+    // Leaves the containment and the reach of the record at `index` and of
+    // the ancestors that follow from them to be worked out again.
     pub(super) fn stale(&mut self, index: usize) {
-        let flags = &mut self.tree[index].flags;
-        if !flags.contains(RecordFlags::FACTS_STALE) {
-            *flags = flags.with(RecordFlags::FACTS_STALE);
-            self.facts_stale
-                .push(RecordId::from_index(index).expect("a row is a record"));
-        }
+        super::facts::forget_contained(self, index);
         self.reach_stale(index);
     }
 
@@ -288,8 +285,8 @@ impl SceneStore {
         }
     }
 
-    // Leaves the facts of the record at `index` and of its parent, which
-    // reads what the record draws, to be worked out at the end of the update.
+    // Leaves the containment of the record at `index` and of its parent,
+    // which reads what the record draws, to be worked out again.
     fn stale_with_parent(&mut self, index: usize) {
         self.stale(index);
         if let Some(parent) = self.tree[index].parent {
@@ -343,9 +340,7 @@ impl SceneStore {
     // when asked for.
     #[cfg(test)]
     pub(crate) fn forget_hashes(&self) {
-        for props in self.props.values() {
-            props.cache_hashes.set(None);
-        }
+        self.hashes.forget_all();
     }
 
     /// The record `id` as its readers see it.
@@ -392,9 +387,10 @@ impl SceneStore {
         self.draws.clear();
         self.texts.clear();
         self.runs.clear();
+        self.hashes.clear();
+        self.facts.clear();
         self.root = None;
         self.journal.clear(self.update);
-        self.facts_stale.clear();
         self.redrawn.clear();
         self.marks_stale.clear();
     }
@@ -439,6 +435,8 @@ impl SceneStore {
                 RecordId::from_index(self.tree.len() - 1).expect("fewer than 2^32 records")
             }
         };
+        self.hashes.open_row(id.index());
+        self.facts.open_row(id.index());
         match seed.parent {
             Some(parent) => self.note_subtree_change(Some(parent)),
             None => self.root = Some(id),
@@ -455,11 +453,7 @@ impl SceneStore {
     pub fn remove_subtree(&mut self, id: RecordId) {
         self.log(RecordEvent::Removed, id);
         let index = id.index();
-        if let Some(parent) = self.tree[index].parent
-            && !self.tree[parent.index()]
-                .flags
-                .contains(RecordFlags::FACTS_STALE)
-        {
+        if let Some(parent) = self.tree[index].parent {
             self.stale(parent.index());
         }
         let span = self.tree[index].items;
@@ -470,8 +464,6 @@ impl SceneStore {
         self.items.free_span(span);
         self.marks.free_span(self.warm[index].own_marks);
         self.drop_props(index);
-        // A freed row keeps no facts to work out.
-        self.tree[index].flags = self.tree[index].flags.without(RecordFlags::FACTS_STALE);
         if let Some(transform) = self.tree[index].transform.take() {
             self.transforms.remove(transform.index());
         }
@@ -528,9 +520,12 @@ impl SceneStore {
     /// [`Self::note_content_change`].
     pub fn set_items(&mut self, id: RecordId, items: &[Item]) {
         let index = id.index();
+        let old = self.items.span(self.tree[index].items);
+        if !super::facts::same_children(old, items) {
+            super::facts::forget_children(self, index);
+        }
         if self.journal.wants(RecordEvent::Changed, self.update) {
             let record = self.record_ref(id);
-            let old = self.items.span(self.tree[index].items);
             self.order.note(record, old);
         }
         self.tree[index].items = self.items.write(self.tree[index].items, items);
@@ -606,6 +601,9 @@ impl SceneStore {
             .with(current.only(RecordFlags::STORE_KEPT));
         if flags != current {
             self.tree[index].flags = flags;
+            if flags.only(RecordFlags::ORIGIN_SINKS) != current.only(RecordFlags::ORIGIN_SINKS) {
+                super::facts::forget_children(self, index);
+            }
             self.stale_with_parent(index);
         }
     }
@@ -762,6 +760,9 @@ impl SceneStore {
     pub fn clear_items(&mut self, id: RecordId) {
         let index = id.index();
         let span = self.tree[index].items;
+        if !super::facts::same_children(self.items.span(span), &[]) {
+            super::facts::forget_children(self, index);
+        }
         for position in 0..span.len() {
             let item = self.items.span(span)[position];
             self.remove_item(item);
@@ -783,6 +784,7 @@ impl SceneStore {
         let index = id.index();
         if self.warm[index].props.is_some() {
             self.drop_props(index);
+            super::facts::forget_children(self, index);
             self.stale_with_parent(index);
         }
     }
@@ -844,6 +846,11 @@ impl SceneStore {
     /// that keeps one keeps its slot.
     pub fn set_graphics_layer(&mut self, id: RecordId, layer: Option<GraphicsLayer>) {
         let slot = self.props(id).and_then(|props| props.graphics_layer);
+        let space =
+            |layer: Option<&GraphicsLayer>| layer.is_some_and(|layer| layer.space.is_some());
+        if space(slot.map(|slot| &self.graphics_layers[slot.index()])) != space(layer.as_ref()) {
+            super::facts::forget_children(self, id.index());
+        }
         match (slot, layer) {
             (Some(slot), Some(layer)) => {
                 let current = &self.graphics_layers[slot.index()];
@@ -866,38 +873,34 @@ impl SceneStore {
         }
     }
 
-    // Takes the graphics layer of `id` out, leaving its other properties: it
-    // reads as the default until `set_graphics_layer` puts it back.
-    pub(crate) fn take_graphics_layer(&mut self, id: RecordId) -> Option<GraphicsLayer> {
-        let entry = self.warm[id.index()].props?;
-        let slot = self.props[entry.index()].graphics_layer.take()?;
-        self.sync_props_flags(id.index());
-        self.stale_with_parent(id.index());
-        self.graphics_layers.remove(slot.index())
-    }
-
     /// Changes the properties of `id` with `edit`, starting from defaults
     /// when it has none; properties left at their defaults go.
     pub fn edit_props(&mut self, id: RecordId, edit: impl FnOnce(&mut LayerProps)) {
         let index = id.index();
-        let entry = match self.warm[index].props {
-            Some(entry) => entry,
-            None => {
-                let entry = PropsId::from_index(self.props.insert(LayerProps::default()));
-                self.warm[index].props = Some(entry);
-                entry
-            }
+        let entry = self.warm[index].props;
+        let mut fresh = None;
+        let props = match entry {
+            Some(entry) => &mut self.props[entry.index()],
+            None => fresh.insert(LayerProps::default()),
         };
-        let props = &mut self.props[entry.index()];
-        let before = super::facts::props_inputs(props);
+        let before = (super::facts::props_inputs(props), props.hit_test.is_some());
         edit(props);
-        let after = super::facts::props_inputs(props);
-        if props.is_default() {
-            self.props.remove(entry.index());
-            self.warm[index].props = None;
+        let after = (super::facts::props_inputs(props), props.hit_test.is_some());
+        match (entry, props.is_default(), fresh) {
+            (Some(entry), true, _) => {
+                self.props.remove(entry.index());
+                self.warm[index].props = None;
+            }
+            (None, false, Some(props)) => {
+                self.warm[index].props = Some(PropsId::from_index(self.props.insert(props)));
+            }
+            _ => {}
         }
         self.sync_props_flags(index);
-        if before != after {
+        if before.1 != after.1 {
+            super::facts::forget_children(self, index);
+        }
+        if before.0 != after.0 {
             self.stale_with_parent(index);
         }
     }
@@ -930,9 +933,7 @@ impl SceneStore {
         tree.content_rev = update;
         tree.subtree_rev = update;
         let parent = tree.parent;
-        if let Some(props) = self.warm[index].props {
-            self.props[props.index()].cache_hashes.set(None);
-        }
+        self.hashes.forget(index);
         self.note_subtree_change(parent);
     }
 
@@ -972,10 +973,9 @@ impl SceneStore {
             }
             tree.subtree_rev = update;
             current = tree.parent;
+            self.hashes.forget(index);
             if let Some(props) = self.warm[index].props {
-                let props = &mut self.props[props.index()];
-                props.cache_hashes.set(None);
-                props.content_run.note(update);
+                self.props[props.index()].content_run.note(update);
             }
         }
     }

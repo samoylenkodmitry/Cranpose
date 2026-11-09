@@ -6,7 +6,7 @@ use cranpose_ui_graphics::{
     CommandRecording, CompositingStrategy, DrawGroup, DrawPlacement, GraphicsLayer, RecordLane,
 };
 
-use super::{HeadKind, LayerHead, assign_layer, item_lists};
+use super::{HeadKind, LayerHead, assign_layer};
 use crate::{
     graph::{CachePolicy, DrawCommandId, DrawRunNode, IsolationReasons, PrimitivePhase},
     scene_store::{Item, ItemRef, RecordKind, RecordSeed, SceneStore},
@@ -147,7 +147,15 @@ impl DrawPass<'_> {
 pub(super) struct DrawTarget<'a> {
     pub(super) size: Size,
     pub(super) motion_context_animated: bool,
-    pub(super) layer: Option<&'a GraphicsLayer>,
+    pub(super) paint: Option<GroupPaint<'a>>,
+}
+
+// Where the layers of a node's draw groups take their paint from: a graphics
+// layer the builder holds, or the one a record holds in the store.
+#[derive(Clone, Copy)]
+pub(super) enum GroupPaint<'a> {
+    Layer(&'a GraphicsLayer),
+    Record(RecordId),
 }
 
 pub(super) struct GroupedDraws<'a> {
@@ -160,18 +168,23 @@ pub(super) struct GroupedDraws<'a> {
 
 impl<'a> GroupedDraws<'a> {
     fn new(
+        store: &SceneStore,
         id: DrawCommandId,
         phase: PrimitivePhase,
         recording: &'a Rc<CommandRecording>,
         draws: DrawTarget<'_>,
     ) -> Self {
+        let layer = match draws.paint {
+            Some(GroupPaint::Layer(layer)) => Some(layer),
+            Some(GroupPaint::Record(record)) => store.graphics_layer(record),
+            None => None,
+        };
         Self {
             id,
             phase,
             recording,
             motion_context_animated: draws.motion_context_animated,
-            paint: draws
-                .layer
+            paint: layer
                 .map(crate::layer_composition::local_content_layer_for)
                 .filter(|paint| paint.alpha != 1.0 || paint.color_filter.is_some())
                 .map(Cow::into_owned),
@@ -191,11 +204,11 @@ impl<'a> GroupedDraws<'a> {
             .position(|segment| segment.lane == RecordLane::GroupStart)
             .map_or(segments.end, |offset| segments.start + offset as u32);
         let wrapper = self.group_record(store, parent);
-        let mut list = item_lists::take();
+        let mut list = store.lists.take();
         list.push(store.add_run(self.run(segments.start..first_group)));
         self.write(store, wrapper, &mut list, first_group, segments.end);
         store.set_items(wrapper, &list);
-        item_lists::give(list);
+        store.lists.give(list);
         assign_layer(
             store,
             wrapper,
@@ -230,10 +243,10 @@ impl<'a> GroupedDraws<'a> {
                 RecordLane::GroupStart => {
                     self.push_run(store, list, run_start..position);
                     let record = self.group_record(store, parent);
-                    let mut nested = item_lists::take();
+                    let mut nested = store.lists.take();
                     position = self.write(store, record, &mut nested, position + 1, end);
                     store.set_items(record, &nested);
-                    item_lists::give(nested);
+                    store.lists.give(nested);
                     let group = self.recording.groups()[segment.start as usize];
                     assign_layer(store, record, self.head(&group));
                     list.push(Item::child(record));
@@ -348,7 +361,7 @@ pub(super) fn draw_nodes(
     draws: DrawTarget,
     phase: PrimitivePhase,
 ) -> Vec<Item> {
-    let mut items = item_lists::take();
+    let mut items = store.lists.take();
     append_draw_nodes(
         store,
         parent,
@@ -394,7 +407,8 @@ pub(super) fn append_draw_nodes(
                 .segments_in(&segments)
                 .any(|segment| segment.lane == RecordLane::GroupStart);
         items.push(if grouped {
-            GroupedDraws::new(id, phase, &shared, draws).wrapper(store, parent, segments, size)
+            GroupedDraws::new(store, id, phase, &shared, draws)
+                .wrapper(store, parent, segments, size)
         } else {
             store.add_run(DrawRunNode::for_command_shared(
                 phase,
@@ -421,7 +435,7 @@ pub(crate) fn draw_command_items(
     let draws = DrawTarget {
         size,
         motion_context_animated: false,
-        layer: None,
+        paint: None,
     };
     let commands = NodeCommands {
         node_id,

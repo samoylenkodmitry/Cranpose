@@ -8,7 +8,7 @@ use cranpose_ui::{
 
 use super::{
     SnapshotNodeData, TranslateAncestorContext, TranslateGeometry, TranslatedContainer, Wrapping,
-    hit_test_from_slices, read_node_data, refresh_hit_targets, set_origin_sinks, translate_bail,
+    hit_test_from_slices, read_node_data, set_origin_sinks, translate_bail,
     translate_layer::{apply_translated_container_state, translate_layer_from_data},
     translated_container,
 };
@@ -114,7 +114,6 @@ pub(super) fn translate_leaf_text(
     let hit_test = hit_test_from_slices(slices);
     store.edit_props(container, |props| props.hit_test = hit_test);
     set_origin_sinks(store, container, slices);
-    refresh_hit_targets(store, container);
     store.note_content_change(container);
     Some(true)
 }

@@ -19,8 +19,8 @@ use crate::{
 /// leaf drawn in its parent's layer.
 #[derive(Clone, Copy)]
 pub struct LayerRef<'a> {
-    store: &'a SceneStore,
-    id: RecordId,
+    pub(super) store: &'a SceneStore,
+    pub(super) id: RecordId,
 }
 
 /// One item of a record, in draw order.
@@ -199,19 +199,19 @@ impl<'a> LayerRef<'a> {
 
     /// Whether the record or a record beneath it handles pointers.
     pub fn has_hit_targets(self) -> bool {
-        self.flags().contains(RecordFlags::HAS_HIT_TARGETS)
+        super::facts::has_hit_targets(self)
     }
 
     /// Whether the record's subtree publishes live window origins: a text
     /// field's popup anchor, a scroll container's viewport rect.
     pub fn has_origin_sinks(self) -> bool {
-        self.flags().contains(RecordFlags::HAS_ORIGIN_SINKS)
+        super::facts::has_origin_sinks(self)
     }
 
     /// Whether the record or a record beneath it is a scene, a mesh surface
     /// or a 3D transform.
     pub fn has_space(self) -> bool {
-        self.flags().contains(RecordFlags::HAS_SPACE)
+        super::facts::has_space(self)
     }
 
     /// Where the record's subtree draws, in its own space: what its items
@@ -242,7 +242,7 @@ impl<'a> LayerRef<'a> {
     /// Whether everything the record's subtree draws lies within its local
     /// bounds, give or take [`crate::graph::CONTAINED_DRAW_SLACK`].
     pub fn draws_within_bounds(self) -> bool {
-        self.flags().contains(RecordFlags::CONTAINED)
+        super::facts::contained(self)
     }
 
     /// The reasons the record is drawn through its own offscreen buffer.
@@ -336,15 +336,9 @@ impl<'a> LayerRef<'a> {
     }
 
     fn raster_cache_hashes(self) -> LayerRasterCacheHashes {
-        let Some(props) = self.props() else {
-            return super::content_hash::raster_cache_hashes(self);
-        };
-        if let Some(hashes) = props.cache_hashes.get() {
-            return hashes;
-        }
-        let hashes = super::content_hash::raster_cache_hashes(self);
-        props.cache_hashes.set(Some(hashes));
-        hashes
+        self.store.hashes.hashes(self.id.index(), || {
+            super::content_hash::raster_cache_hashes(self)
+        })
     }
 
     /// Whether what the record draws changed in scene update `update` and in

@@ -35,6 +35,7 @@ pub(crate) struct ShownRecord {
 
 // The walk context of `layer`'s subtree as the walk's cull takes it;
 // `None` when the walk leaves `layer` out.
+#[inline]
 pub(super) fn culled<'s>(layer: LayerRef<'_>, context: WalkContext<'s>) -> Option<WalkContext<'s>> {
     let Some(cull) = context.cull else {
         return Some(context);
@@ -50,6 +51,7 @@ pub(super) fn culled<'s>(layer: LayerRef<'_>, context: WalkContext<'s>) -> Optio
 }
 
 // Records that the walk drew nothing of `layer`.
+#[inline]
 pub(super) fn record_hidden(layer: LayerRef<'_>, context: &WalkContext<'_>, out: &mut LayerScene) {
     if context.settings.records_shown && !context.settings.in_space {
         out.shown.push(ShownRecord {
@@ -63,15 +65,25 @@ pub(super) fn record_hidden(layer: LayerRef<'_>, context: &WalkContext<'_>, out:
 
 // Records that the walk drew `layer`, placed at the walk's offset, in place
 // or as a composite, with the shadows it pushed from `shadows_from` on.
+#[inline]
 pub(super) fn record_drawn(
+    layer: LayerRef<'_>,
+    context: &WalkContext<'_>,
+    drawn: (bool, usize),
+    out: &mut LayerScene,
+) {
+    if context.settings.records_shown && !context.settings.in_space {
+        record_drawn_area(layer, context, drawn, out);
+    }
+}
+
+#[inline(never)]
+fn record_drawn_area(
     layer: LayerRef<'_>,
     context: &WalkContext<'_>,
     (composite, shadows_from): (bool, usize),
     out: &mut LayerScene,
 ) {
-    if !context.settings.records_shown || context.settings.in_space {
-        return;
-    }
     let offset = context.offset;
     let reach = layer
         .extent()

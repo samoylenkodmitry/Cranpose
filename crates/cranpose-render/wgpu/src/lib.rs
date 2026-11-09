@@ -1049,9 +1049,10 @@ impl WgpuRenderer {
             .map(HeldFramePacket)
     }
 
-    /// Return a producer-built packet without presenting it. This exercises
-    /// the same bounded scene-storage recycler used by normal present returns
-    /// in offline producer benchmarks.
+    /// Return a producer-built packet without presenting it, as a target
+    /// that keeps its frames returns a packet whose damage it drew. This
+    /// exercises the bounded scene-storage recycler and the damage back-off
+    /// that normal present returns drive, in offline producer benchmarks.
     ///
     /// ```
     /// use cranpose_render_wgpu::{HeldFramePacket, WgpuRenderer};
@@ -1062,15 +1063,8 @@ impl WgpuRenderer {
     /// ```
     #[doc(hidden)]
     pub fn return_held_packet_for_tests(&mut self, packet: HeldFramePacket) {
-        let packet = packet.0;
-        self.frontend.apply_returns(RenderReturns {
-            scene: Some(frame_packet::FrameSceneStorage {
-                root: packet.root,
-                overlay: packet.overlay,
-            }),
-            frame_id: packet.frame_id,
-            ..RenderReturns::default()
-        });
+        self.frontend
+            .apply_returns(RenderReturns::drawn_in_place(packet.0));
     }
 
     #[doc(hidden)]

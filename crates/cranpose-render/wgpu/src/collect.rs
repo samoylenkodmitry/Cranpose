@@ -819,7 +819,7 @@ fn collect_inline(inline: LayerRef<'_>, context: WalkContext<'_>, out: &mut Laye
     let bounds = inline.node_rect().translate(offset.x, offset.y);
     if context
         .visual_clip
-        .is_some_and(|clip| inline.draws_within_bounds() && outside_clip(bounds, clip))
+        .is_some_and(|clip| outside_clip(bounds, clip) && inline.draws_within_bounds())
     {
         record_hidden(inline, &context, out);
         return context.settings.wants_pixel_sensitive
@@ -927,13 +927,13 @@ fn collect_isolated_child(
 }
 
 /// Whether nothing `child`, placed at `bounds`, draws can show inside
-/// `clip`: its subtree draws within its bounds, it casts no shadow, and those
-/// bounds miss the clip.
+/// `clip`: those bounds miss the clip, it casts no shadow, and its subtree
+/// draws within its bounds.
 fn clipped_away(child: LayerRef<'_>, bounds: Rect, clip: Option<Rect>) -> bool {
     clip.is_some_and(|clip| {
-        child.draws_within_bounds()
+        outside_clip(bounds, clip)
             && child.graphics_layer().shadow_elevation <= 0.0
-            && outside_clip(bounds, clip)
+            && child.draws_within_bounds()
     })
 }
 

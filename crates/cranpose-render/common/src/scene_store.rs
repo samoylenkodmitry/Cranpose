@@ -4,6 +4,7 @@
 mod child_order;
 mod content_hash;
 mod facts;
+mod hash_cache;
 mod heap_bytes;
 mod items;
 mod journal;
@@ -17,8 +18,10 @@ mod spec;
 mod store;
 
 use child_order::ChildOrder;
+use facts::Facts;
+use hash_cache::HashCache;
 pub use items::{Item, ItemKind};
-pub(crate) use items::{Span, SpanPool};
+pub(crate) use items::{ItemLists, Span, SpanPool};
 use journal::Journal;
 pub use journal::{JournalCursor, JournalEntry, JournalRead, RecordEvent, RecordEvents};
 pub use layer_props::LayerProps;

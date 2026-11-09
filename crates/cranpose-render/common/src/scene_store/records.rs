@@ -54,46 +54,32 @@ impl RecordFlags {
     pub const MOTION_ANIMATED: Self = Self(1 << 1);
     /// The record moves its content as one translated block.
     pub const TRANSLATED_CONTENT: Self = Self(1 << 2);
-    /// The record or a record beneath it handles pointers.
-    pub const HAS_HIT_TARGETS: Self = Self(1 << 3);
-    /// The record's subtree publishes live window origins.
-    pub const HAS_ORIGIN_SINKS: Self = Self(1 << 4);
-    /// The record or a record beneath it is a scene, a mesh surface or a 3D
-    /// transform.
-    pub const HAS_SPACE: Self = Self(1 << 5);
-    /// Everything the record's subtree draws lies within its layer bounds,
-    /// give or take the slack of antialiasing.
-    pub const CONTAINED: Self = Self(1 << 6);
+    /// The record's node publishes live window origins: a text field's
+    /// popup anchor, a scroll container's viewport rect.
+    pub const ORIGIN_SINKS: Self = Self(1 << 3);
     /// The record casts an elevation shadow.
-    pub const CASTS_SHADOW: Self = Self(1 << 7);
+    pub const CASTS_SHADOW: Self = Self(1 << 4);
     /// The record draws its draws after its children: a draw group of the
     /// draws after the children.
-    pub const AFTER_CHILDREN: Self = Self(1 << 8);
+    pub const AFTER_CHILDREN: Self = Self(1 << 5);
     /// The record has a graphics layer of its own.
-    pub const HAS_GRAPHICS_LAYER: Self = Self(1 << 9);
+    pub const HAS_GRAPHICS_LAYER: Self = Self(1 << 6);
     /// The record's layer bounds differ from its node rect.
-    pub const HAS_LAYER_BOUNDS: Self = Self(1 << 10);
-    // The update changed what the record's facts follow from.
-    pub(crate) const FACTS_STALE: Self = Self(1 << 11);
+    pub const HAS_LAYER_BOUNDS: Self = Self(1 << 7);
     // A change beneath the record left its reach to be worked out again.
-    pub(crate) const REACH_STALE: Self = Self(1 << 12);
+    pub(crate) const REACH_STALE: Self = Self(1 << 8);
     // The update in progress made the record.
-    pub(crate) const INSERTED: Self = Self(1 << 13);
+    pub(crate) const INSERTED: Self = Self(1 << 9);
     // The update in progress may have changed the record's own draws, which
     // its end compares with what they were.
-    pub(crate) const REDRAW_PENDING: Self = Self(1 << 14);
+    pub(crate) const REDRAW_PENDING: Self = Self(1 << 10);
     // An update changed the record's own draws while no reader followed
     // redraws: its marks wait.
-    pub(crate) const MARKS_STALE: Self = Self(1 << 15);
-    // The facts the store works out at the end of an update.
-    pub(crate) const FACTS: Self =
-        Self(Self::HAS_HIT_TARGETS.0 | Self::HAS_SPACE.0 | Self::CONTAINED.0);
+    pub(crate) const MARKS_STALE: Self = Self(1 << 11);
     // The flags the store keeps itself, which `SceneStore::set_flags` leaves.
     pub(crate) const STORE_KEPT: Self = Self(
-        Self::FACTS.0
-            | Self::HAS_GRAPHICS_LAYER.0
+        Self::HAS_GRAPHICS_LAYER.0
             | Self::HAS_LAYER_BOUNDS.0
-            | Self::FACTS_STALE.0
             | Self::REACH_STALE.0
             | Self::INSERTED.0
             | Self::REDRAW_PENDING.0
@@ -210,9 +196,6 @@ const _: () = assert!(
 
 // Whether two transforms hold the same numbers, bit for bit.
 pub(super) fn same_bits(a: ProjectiveTransform, b: ProjectiveTransform) -> bool {
-    a.matrix()
-        .iter()
-        .flatten()
-        .zip(b.matrix().iter().flatten())
-        .all(|(a, b)| a.to_bits() == b.to_bits())
+    let bits = |transform: ProjectiveTransform| transform.matrix().map(|row| row.map(f32::to_bits));
+    bits(a) == bits(b)
 }

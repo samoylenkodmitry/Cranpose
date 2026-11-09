@@ -12,13 +12,13 @@ use cranpose_core::{MemoryApplier, NodeId, RecordId, collections::map::HashMap};
 use cranpose_ui::{ModifierNodeSlices, Point, Rect, Size};
 
 use super::{
-    DrawTarget, GraphChanges, KeptChild, LowerContext, PlacedGeometry, SnapshotNodeData,
-    TranslateAncestorContext, TranslateGeometry, Wrapping, child_identity, content_layer,
-    forget_dirty_node, hit_test_from_slices, item_lists, layer_and_node_bounds, layer_identity,
+    DrawTarget, GraphChanges, GroupPaint, KeptChild, LowerContext, PlacedGeometry,
+    SnapshotNodeData, TranslateAncestorContext, TranslateGeometry, Wrapping, child_identity,
+    content_layer, forget_dirty_node, hit_test_from_slices, layer_and_node_bounds, layer_identity,
     lower_child, move_kept_child, outer_commands, outer_draws, placed_child_geometry,
-    placed_transform, read_node_data, refresh_hit_targets, set_bounds, set_origin_sinks,
-    shaped_graphics_layer, take_wrapped_layer, text_node, translate_bail, translate_unwrapped,
-    write_node_content, write_wrapper,
+    placed_transform, read_node_data, set_bounds, set_origin_sinks, shaped_graphics_layer,
+    take_wrapped_layer, text_node, translate_bail, translate_unwrapped, write_node_content,
+    write_wrapper,
 };
 use crate::{
     NodeUpdate,
@@ -79,7 +79,7 @@ fn try_translate_scrolled_layer(
         let draws = DrawTarget {
             size,
             motion_context_animated: store.layer(inner).motion_context_animated(),
-            layer: None,
+            paint: None,
         };
         let layer = take_wrapped_layer(store, container, node_id)
             .expect("the wrapped layer was found above");
@@ -176,7 +176,7 @@ enum ChildOrder {
 fn translated_children(
     applier: &MemoryApplier,
     store: &SceneStore,
-    container: RecordId,
+    children: &[Item],
     dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
     fresh_children: &[NodeId],
     scratch: &mut TranslateScratch,
@@ -194,7 +194,6 @@ fn translated_children(
             kept: KeptChild::Left,
         });
     }
-    let children = store.items(container);
     let children_unchanged = children.len() == placed_fresh.len()
         && children
             .iter()
@@ -227,7 +226,7 @@ fn translated_children(
             &mut scratch.old_index_by_id,
         )
     };
-    check_retained_children(store, container, dirty_nodes, placed_fresh).map(|()| order)
+    check_retained_children(store, children, dirty_nodes, placed_fresh).map(|()| order)
 }
 
 const MATCH_SEARCHES: usize = 16;
@@ -287,11 +286,10 @@ fn match_old_children(
 
 fn check_retained_children(
     store: &SceneStore,
-    container: RecordId,
+    children: &[Item],
     dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
     placed_fresh: &mut [PlacedChild],
 ) -> Result<(), &'static str> {
-    let children = store.items(container);
     for placed in placed_fresh {
         let Some(old_index) = placed.old_index else {
             continue;
@@ -328,56 +326,99 @@ fn check_retained_children(
     Ok(())
 }
 
-fn remove_leaving_children(
-    store: &mut SceneStore,
-    container: RecordId,
-    scratch: &mut TranslateScratch,
-    dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
-) {
-    let TranslateScratch {
-        placed_fresh,
-        retained,
-        kept,
-        ..
-    } = scratch;
-    retained.clear();
-    for &child in store.items(container) {
-        retained.push(Some(child));
-    }
-    store.set_items(container, &[]);
-    kept.clear();
-    kept.extend(
-        placed_fresh
-            .iter()
-            .map(|placed| placed.old_index.and_then(|index| retained[index].take())),
-    );
-    for leaving in retained.drain(..).flatten() {
-        forget_dirty_node(store, leaving, dirty_nodes);
-        store.remove_item(leaving);
-    }
+// The items of a container a translate step parts: the children its own
+// draws surround, those own draws, and the children that leave. The
+// container holds them all until the step writes its new items.
+pub(super) struct ItemParts {
+    pub(super) children: Vec<Item>,
+    own: Vec<Item>,
+    gone: Vec<Item>,
 }
 
-fn remove_children_around(
-    store: &mut SceneStore,
-    container: RecordId,
-    kept: Range<usize>,
-    list: &mut Vec<Item>,
-    dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
-) {
-    let mut leaving = item_lists::take();
-    for (index, &child) in store.items(container).iter().enumerate() {
-        if kept.contains(&index) {
-            list.push(child);
-        } else {
-            leaving.push(child);
+impl ItemParts {
+    // Parts the items of `container`; a draw group counts as an own draw.
+    pub(super) fn of(store: &mut SceneStore, container: RecordId) -> Self {
+        let mut parts = Self {
+            children: store.lists.take(),
+            own: store.lists.take(),
+            gone: store.lists.take(),
+        };
+        let is_child = |item: &Item| {
+            item.as_child()
+                .is_some_and(|child| store.layer(child).kind() != RecordKind::DrawGroup)
+        };
+        let items = store.items(container);
+        let first = items.iter().position(is_child).unwrap_or(items.len());
+        let end = items
+            .iter()
+            .rposition(is_child)
+            .map_or(first, |last| last + 1);
+        parts.children.extend_from_slice(&items[first..end]);
+        parts.own.extend_from_slice(&items[..first]);
+        parts.own.extend_from_slice(&items[end..]);
+        parts
+    }
+
+    // Keeps the children in `kept`, in order, in `list`; the others leave.
+    fn keep_range(
+        &mut self,
+        store: &SceneStore,
+        kept: Range<usize>,
+        list: &mut Vec<Item>,
+        dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
+    ) {
+        for (index, &child) in self.children.iter().enumerate() {
+            if kept.contains(&index) {
+                list.push(child);
+            } else {
+                forget_dirty_node(store, child, dirty_nodes);
+                self.gone.push(child);
+            }
         }
     }
-    store.set_items(container, &[]);
-    for &child in &leaving {
-        forget_dirty_node(store, child, dirty_nodes);
-        store.remove_item(child);
+
+    // Keeps the children the placed children of `scratch` take again; the
+    // others leave.
+    fn keep_placed(
+        &mut self,
+        store: &SceneStore,
+        scratch: &mut TranslateScratch,
+        dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
+    ) {
+        let TranslateScratch {
+            placed_fresh,
+            retained,
+            kept,
+            ..
+        } = scratch;
+        retained.clear();
+        retained.extend(self.children.iter().copied().map(Some));
+        kept.clear();
+        kept.extend(
+            placed_fresh
+                .iter()
+                .map(|placed| placed.old_index.and_then(|index| retained[index].take())),
+        );
+        for leaving in retained.drain(..).flatten() {
+            forget_dirty_node(store, leaving, dirty_nodes);
+            self.gone.push(leaving);
+        }
     }
-    item_lists::give(leaving);
+
+    // Removes the own draws and the children that left, once the container
+    // holds its new items.
+    pub(super) fn remove(self, store: &mut SceneStore) {
+        for &item in self.own.iter().chain(&self.gone) {
+            store.remove_item(item);
+        }
+        self.give_back(store);
+    }
+
+    pub(super) fn give_back(self, store: &mut SceneStore) {
+        store.lists.give(self.children);
+        store.lists.give(self.own);
+        store.lists.give(self.gone);
+    }
 }
 
 fn build_entering_children(
@@ -419,13 +460,10 @@ pub(super) fn write_own_content_around_children(
         return;
     }
     let kept = list.len();
-    let motion_context_animated = store.layer(container).motion_context_animated();
-    // The draws take the container's paint while they are written beneath it.
-    let graphics_layer = store.take_graphics_layer(container);
     let draws = DrawTarget {
         size,
-        motion_context_animated,
-        layer: graphics_layer.as_ref(),
+        motion_context_animated: store.layer(container).motion_context_animated(),
+        paint: Some(GroupPaint::Record(container)),
     };
     write_node_content(
         store,
@@ -436,33 +474,6 @@ pub(super) fn write_own_content_around_children(
         (kept, 0),
         |_, _| {},
     );
-    if graphics_layer.is_some() {
-        store.set_graphics_layer(container, graphics_layer);
-    }
-}
-
-pub(super) fn remove_own_draws(store: &mut SceneStore, container: RecordId) {
-    let is_child = |item: &Item| {
-        item.as_child()
-            .is_some_and(|child| store.layer(child).kind() != RecordKind::DrawGroup)
-    };
-    let items = store.items(container);
-    let first = items.iter().position(is_child).unwrap_or(items.len());
-    let end = items
-        .iter()
-        .rposition(is_child)
-        .map_or(first, |last| last + 1);
-    // A container that draws nothing of its own has nothing to remove.
-    if first == 0 && end == items.len() {
-        return;
-    }
-    let mut list = item_lists::take();
-    list.extend_from_slice(items);
-    store.set_items(container, &list[first..end]);
-    for &own in list[..first].iter().chain(&list[end..]) {
-        store.remove_item(own);
-    }
-    item_lists::give(list);
 }
 
 pub(super) fn apply_translated_container_state(
@@ -615,13 +626,13 @@ pub(super) fn translate_layer_from_data(
     // The container's own draws and text are recorded again around the
     // children it keeps: an unchanged draw reuses its recording, while
     // building the container anew lowered every child layer beneath it too.
-    remove_own_draws(store, container);
-    let mut list = item_lists::take();
+    let mut parts = ItemParts::of(store, container);
+    let mut list = store.lists.take();
     let translated = with_translate_scratch(|scratch| {
         let order = translated_children(
             applier,
             store,
-            container,
+            &parts.children,
             dirty_nodes,
             fresh_children,
             scratch,
@@ -636,9 +647,9 @@ pub(super) fn translate_layer_from_data(
         let children = geometry.children_context(layer, ancestors);
         match &order {
             ChildOrder::Shifted { kept, .. } => {
-                remove_children_around(store, container, kept.clone(), &mut list, dirty_nodes);
+                parts.keep_range(store, kept.clone(), &mut list, dirty_nodes);
             }
-            ChildOrder::Mixed => remove_leaving_children(store, container, scratch, dirty_nodes),
+            ChildOrder::Mixed => parts.keep_placed(store, scratch, dirty_nodes),
         }
         // The children are placed against the container's new content offset.
         store.set_content_offset(container, geometry.content_offset);
@@ -663,7 +674,8 @@ pub(super) fn translate_layer_from_data(
         Ok(())
     });
     if let Err(reason) = translated {
-        item_lists::give(list);
+        store.lists.give(list);
+        parts.give_back(store);
         return translate_bail(reason);
     }
     finish_translated_container(
@@ -673,6 +685,7 @@ pub(super) fn translate_layer_from_data(
         &modifier_slices,
         layout_state.size(),
     );
+    parts.remove(store);
     true
 }
 
@@ -688,10 +701,9 @@ fn finish_translated_container(
 ) {
     write_own_content_around_children(store, container, &mut list, modifier_slices, size);
     store.set_items(container, &list);
-    item_lists::give(list);
+    store.lists.give(list);
     let hit_test = hit_test_from_slices(modifier_slices);
     store.edit_props(container, |props| props.hit_test = hit_test);
     set_origin_sinks(store, container, modifier_slices);
-    refresh_hit_targets(store, container);
     store.note_content_change(container);
 }

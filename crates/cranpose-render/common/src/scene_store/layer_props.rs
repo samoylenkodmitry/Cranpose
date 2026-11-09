@@ -2,16 +2,11 @@
 // handling, bounds of its own. Only records that have one of them take an
 // entry.
 
-use std::cell::Cell;
-
 use cranpose_core::SceneUpdate;
 use cranpose_ui::{Point, Rect};
 
 use super::GraphicsLayerId;
-use crate::{
-    graph::{CachePolicy, HitTestNode, IsolationReasons},
-    raster_cache::LayerRasterCacheHashes,
-};
+use crate::graph::{CachePolicy, HitTestNode, IsolationReasons};
 
 /// The properties of a record that has a graphics layer, pointer handling,
 /// layer bounds other than its node rect, or translated content.
@@ -30,7 +25,6 @@ pub struct LayerProps {
     pub isolation: IsolationReasons,
     /// Whether a renderer may keep the record's pixels between frames.
     pub cache_policy: CachePolicy,
-    pub(crate) cache_hashes: Cell<Option<LayerRasterCacheHashes>>,
     pub(crate) content_run: ContentRun,
 }
 

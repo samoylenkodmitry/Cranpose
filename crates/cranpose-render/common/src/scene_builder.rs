@@ -7,7 +7,7 @@ use crate::{
     NodeUpdate, SceneUpdates,
     graph::ProjectiveTransform,
     layer_transform::layer_transform_to_parent,
-    scene_store::{Item, LayerRef, RecordFlags, RecordKind, SceneStore},
+    scene_store::{Item, LayerRef, RecordKind, SceneStore},
 };
 
 mod dirty_walk;
@@ -16,8 +16,8 @@ use dirty_walk::{update_along_retained_path, walk_dirty_layers};
 mod draw_recording;
 pub use draw_recording::clear_command_recordings_for_tests;
 use draw_recording::{
-    DrawPass, DrawTarget, NodeCommands, append_draw_nodes, bump_recording_generation, draw_nodes,
-    layer_node_capacity,
+    DrawPass, DrawTarget, GroupPaint, NodeCommands, append_draw_nodes, bump_recording_generation,
+    draw_nodes, layer_node_capacity,
 };
 pub(crate) use draw_recording::{RecorderKey, RecorderSlot, draw_command_items};
 mod graph_changes;
@@ -27,7 +27,6 @@ pub(crate) use hit_graph::HitGraphState;
 use hit_graph::rebuild_tracking_hits;
 mod inline_leaf;
 use inline_leaf::{lower_child, update_dirty_inline};
-mod item_lists;
 mod layer_shape;
 use layer_shape::shaped_graphics_layer;
 mod text_node;
@@ -38,16 +37,16 @@ mod node_data;
 use node_data::{PlacedGeometry, placed_child_geometry, read_node_data, read_placed_node_data};
 mod node_layer;
 use node_layer::{
-    AbsOrigin, HeadKind, LayerHead, LowerContext, add_child_origin_sinks, assign_layer,
-    hit_test_from_slices, layer_and_node_bounds, layer_identity, lower_root_into,
-    modifier_slices_have_origin_sinks, outer_commands, outer_draws, placed_transform,
-    prepare_node_layer, refresh_hit_targets, set_bounds, set_origin_sinks, slices_hit_something,
-    take_wrapped_layer, write_node_content, write_node_layer, write_wrapper,
+    AbsOrigin, HeadKind, LayerHead, LowerContext, assign_layer, hit_test_from_slices,
+    layer_and_node_bounds, layer_identity, lower_root_into, modifier_slices_have_origin_sinks,
+    outer_commands, outer_draws, placed_transform, prepare_node_layer, set_bounds,
+    set_origin_sinks, slices_hit_something, take_wrapped_layer, write_node_content,
+    write_node_layer, write_wrapper,
 };
 mod translate_layer;
 pub(crate) use translate_layer::TranslateScratch;
 use translate_layer::{
-    TranslatedContainer, remove_own_draws, translate_tracking_hits, translated_container,
+    ItemParts, TranslatedContainer, translate_tracking_hits, translated_container,
     write_own_content_around_children,
 };
 
@@ -504,9 +503,9 @@ fn redraw_retained_layer(
         {
             return false;
         }
-        remove_own_draws(store, container);
-        let mut list = item_lists::take();
-        list.extend_from_slice(store.items(container));
+        let parts = ItemParts::of(store, container);
+        let mut list = store.lists.take();
+        list.extend_from_slice(&parts.children);
         write_own_content_around_children(
             store,
             container,
@@ -515,8 +514,8 @@ fn redraw_retained_layer(
             data.layout_state.size(),
         );
         store.set_items(container, &list);
-        item_lists::give(list);
-        refresh_hit_targets(store, container);
+        store.lists.give(list);
+        parts.remove(store);
         store.note_content_change(container);
         true
     })
@@ -628,23 +627,6 @@ fn update_layer_properties(
         Some(previous.changes_against(&HitGraphState::of(layer)))
     })??;
     if wrapped {
-        refresh_hit_targets(store, container);
-        let sinks = store
-            .layer(container)
-            .children()
-            .any(LayerRef::has_origin_sinks);
-        let flags = store
-            .layer(container)
-            .flags()
-            .without(RecordFlags::HAS_ORIGIN_SINKS);
-        store.set_flags(
-            container,
-            if sinks {
-                flags.with(RecordFlags::HAS_ORIGIN_SINKS)
-            } else {
-                flags
-            },
-        );
         store.note_property_change(container);
     }
     Some(changes)

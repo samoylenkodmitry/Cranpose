@@ -5,7 +5,7 @@ use cranpose_core::{MemoryApplier, NodeId, RecordId, collections::map::HashMap};
 use cranpose_ui::{ModifierNodeSlices, Point, Rect, Size};
 
 use super::{
-    DrawTarget, Level, LowerContext, SnapshotNodeData, assign_layer, item_lists,
+    DrawTarget, Level, LowerContext, SnapshotNodeData, assign_layer,
     modifier_slices_have_origin_sinks, note_layer_lowered, prepare_node_layer, read_node_data,
     read_placed_node_data, remove_dirty_descendants, slices_hit_something,
     text_node::{TextNodeParts, drawn_text, refresh_text_node},
@@ -99,12 +99,12 @@ fn write_inline(
     let draws = DrawTarget {
         size,
         motion_context_animated: store.layer(record).motion_context_animated(),
-        layer: None,
+        paint: None,
     };
-    let mut list = item_lists::take();
+    let mut list = store.lists.take();
     write_node_content(store, record, &mut list, slices, draws, (0, 0), |_, _| {});
     store.set_items(record, &list);
-    item_lists::give(list);
+    store.lists.give(list);
     store.note_content_change(record);
 }
 
@@ -284,9 +284,9 @@ pub(super) fn fold_kept_leaf(
         && layer.props().is_none()
         && layer.node_id().is_some()
         && !layer.clip_to_bounds()
-        && !layer.has_origin_sinks()
         && !layer.translated_content_context()
         && layer.children().next().is_none()
+        && !layer.has_origin_sinks()
     {
         fold_leaf_layer(applier, store, record, parent_content_offset);
     }

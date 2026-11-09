@@ -9,10 +9,10 @@ use cranpose_ui::{ModifierNodeSlices, Point, Rect, Size, widgets::LayoutState};
 use cranpose_ui_graphics::{CompositingStrategy, DrawPlacement, GraphicsLayer, LayerShape};
 
 use super::{
-    DrawPass, DrawTarget, Level, NodeCommands, SnapshotNodeData, TextNodeParts,
+    DrawPass, DrawTarget, GroupPaint, Level, NodeCommands, SnapshotNodeData, TextNodeParts,
     TranslateAncestorContext, TranslateGeometry, append_draw_nodes, draw_nodes,
-    inline_leaf::lower_child, item_lists, layer_node_capacity, note_space_change,
-    read_placed_node_data, shaped_graphics_layer, text_node_from_parts,
+    inline_leaf::lower_child, layer_node_capacity, note_space_change, read_placed_node_data,
+    shaped_graphics_layer, text_node_from_parts,
 };
 use crate::{
     graph::{CachePolicy, HitTestNode, IsolationReasons, PrimitivePhase, ProjectiveTransform},
@@ -213,53 +213,27 @@ pub(super) fn assign_layer(store: &mut SceneStore, record: RecordId, head: Layer
         | flag_if(motion_context_animated, RecordFlags::MOTION_ANIMATED)
         | flag_if(translated_content_context, RecordFlags::TRANSLATED_CONTENT)
         | flag_if(after_children, RecordFlags::AFTER_CHILDREN)
-        | flag_if(
-            has_origin_sinks || children_have_origin_sinks(store, record),
-            RecordFlags::HAS_ORIGIN_SINKS,
-        );
+        | flag_if(has_origin_sinks, RecordFlags::ORIGIN_SINKS);
     store.set_flags(record, flags);
-    refresh_hit_targets(store, record);
     store.note_property_change(record);
 }
 
-pub(super) fn refresh_hit_targets(store: &mut SceneStore, record: RecordId) {
-    let layer = store.layer(record);
-    let hit_targets = layer.hit_test().is_some() || layer.children().any(LayerRef::has_hit_targets);
-    let flags = layer.flags().without(RecordFlags::HAS_HIT_TARGETS)
-        | flag_if(hit_targets, RecordFlags::HAS_HIT_TARGETS);
-    store.set_flags(record, flags);
-}
-
+// Sets whether the node of `record`, with `slices`, publishes live window
+// origins.
 pub(super) fn set_origin_sinks(
     store: &mut SceneStore,
     record: RecordId,
     slices: &ModifierNodeSlices,
 ) {
-    let sinks =
-        modifier_slices_have_origin_sinks(slices) || children_have_origin_sinks(store, record);
     let flags = store
         .layer(record)
         .flags()
-        .without(RecordFlags::HAS_ORIGIN_SINKS)
-        | flag_if(sinks, RecordFlags::HAS_ORIGIN_SINKS);
+        .without(RecordFlags::ORIGIN_SINKS)
+        | flag_if(
+            modifier_slices_have_origin_sinks(slices),
+            RecordFlags::ORIGIN_SINKS,
+        );
     store.set_flags(record, flags);
-}
-
-pub(super) fn add_child_origin_sinks(store: &mut SceneStore, record: RecordId) {
-    if children_have_origin_sinks(store, record) {
-        let flags = store
-            .layer(record)
-            .flags()
-            .with(RecordFlags::HAS_ORIGIN_SINKS);
-        store.set_flags(record, flags);
-    }
-}
-
-fn children_have_origin_sinks(store: &SceneStore, record: RecordId) -> bool {
-    store
-        .layer(record)
-        .children()
-        .any(LayerRef::has_origin_sinks)
 }
 
 pub(super) fn set_bounds(
@@ -373,10 +347,10 @@ fn write_layer_with_outer(
 ) {
     let Some((outer, draws)) = outer else {
         begin_record(store, target, head.kind, head.content_offset);
-        let mut list = item_lists::take();
+        let mut list = store.lists.take();
         write_content(store, target, &mut list, head.graphics_layer.as_ref());
         store.set_items(target, &list);
-        item_lists::give(list);
+        store.lists.give(list);
         assign_layer(store, target, head);
         return;
     };
@@ -392,10 +366,10 @@ fn write_layer_with_outer(
         parent: Some(target),
     });
     begin_record(store, layer, head.kind, head.content_offset);
-    let mut list = item_lists::take();
+    let mut list = store.lists.take();
     write_content(store, layer, &mut list, head.graphics_layer.as_ref());
     store.set_items(layer, &list);
-    item_lists::give(list);
+    store.lists.give(list);
     assign_layer(store, layer, head);
     write_wrapper(
         store,
@@ -558,7 +532,7 @@ pub(super) fn write_node_layer(
     let draws = DrawTarget {
         size,
         motion_context_animated: head.motion_context_animated,
-        layer: None,
+        paint: None,
     };
     let outer = outer_commands(node_id, &slices).map(|commands| (commands, draws));
     write_layer_with_outer(
@@ -568,7 +542,10 @@ pub(super) fn write_node_layer(
         outer,
         context.parent_content_offset,
         |store, record, list, layer| {
-            let draws = DrawTarget { layer, ..draws };
+            let draws = DrawTarget {
+                paint: layer.map(GroupPaint::Layer),
+                ..draws
+            };
             let written = (0, children.len());
             write_node_content(
                 store,
@@ -622,7 +599,7 @@ pub(super) fn outer_draws(
         draws,
         PrimitivePhase::BeforeChildren,
     );
-    let mut overlay = item_lists::take();
+    let mut overlay = store.lists.take();
     append_draw_nodes(
         store,
         wrapper,
@@ -661,8 +638,8 @@ pub(super) fn write_wrapper(
     behind.push(Item::child(layer));
     behind.extend_from_slice(&overlay);
     store.set_items(wrapper, &behind);
-    item_lists::give(behind);
-    item_lists::give(overlay);
+    store.lists.give(behind);
+    store.lists.give(overlay);
     let head = LayerHead {
         kind: HeadKind::Wrapper(node_id),
         local_bounds: node_rect,
@@ -689,7 +666,7 @@ pub(super) fn take_wrapped_layer(
     node_id: NodeId,
 ) -> Option<RecordId> {
     let mut wrapped = None;
-    let mut list = item_lists::take();
+    let mut list = store.lists.take();
     list.extend_from_slice(store.items(wrapper));
     store.set_items(wrapper, &[]);
     for &item in &list {
@@ -704,7 +681,7 @@ pub(super) fn take_wrapped_layer(
             _ => store.remove_item(item),
         }
     }
-    item_lists::give(list);
+    store.lists.give(list);
     wrapped
 }
 

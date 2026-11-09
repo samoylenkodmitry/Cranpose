@@ -138,6 +138,28 @@ pub struct PresentTimings {
     pub after_present_ns: i64,
 }
 
+impl RenderReturns {
+    // What a target that keeps its frames returns for `packet` once it drew
+    // the packet's damage over the frame before.
+    pub(crate) fn drawn_in_place(packet: FramePacket) -> Self {
+        Self {
+            target: Some(TargetDrawn {
+                damage: packet.damage.damage,
+                skipped: packet.skipped,
+                knew_before: packet.damage.since.is_some(),
+                cleared: false,
+            }),
+            held: Some(packet.frame_id),
+            scene: Some(FrameSceneStorage {
+                root: packet.root,
+                overlay: packet.overlay,
+            }),
+            frame_id: packet.frame_id,
+            ..Self::default()
+        }
+    }
+}
+
 #[derive(Default)]
 pub(crate) struct RenderReturns {
     pub(crate) scene: Option<FrameSceneStorage>,

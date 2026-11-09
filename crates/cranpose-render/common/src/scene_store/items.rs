@@ -171,3 +171,32 @@ impl<T: Copy> SpanPool<T> {
         self.free.iter_mut().for_each(Vec::clear);
     }
 }
+
+// Lists of items a writer fills before it writes them to their record, kept
+// between updates so a writer allocates no list of its own.
+#[derive(Clone, Default)]
+pub(crate) struct ItemLists {
+    lists: Vec<Vec<Item>>,
+}
+
+impl ItemLists {
+    pub(crate) fn take(&mut self) -> Vec<Item> {
+        self.lists.pop().unwrap_or_default()
+    }
+
+    pub(crate) fn give(&mut self, mut list: Vec<Item>) {
+        list.clear();
+        if list.capacity() > 0 {
+            self.lists.push(list);
+        }
+    }
+
+    pub(super) fn heap_bytes(&self) -> usize {
+        self.lists.capacity() * size_of::<Vec<Item>>()
+            + self
+                .lists
+                .iter()
+                .map(|list| list.capacity() * size_of::<Item>())
+                .sum::<usize>()
+    }
+}

@@ -8,9 +8,9 @@ use cranpose_core::{
 use cranpose_ui::Point;
 
 use super::{
-    AbsOrigin, GraphChanges, Level, LowerContext, TranslateAncestorContext, add_child_origin_sinks,
+    AbsOrigin, GraphChanges, Level, LowerContext, TranslateAncestorContext,
     inline_leaf::fold_kept_leaf, layer_identity, note_space_change, read_placed_node_data,
-    rebuild_tracking_hits, refresh_hit_targets, release_for_rebuild, remove_dirty_descendants,
+    rebuild_tracking_hits, release_for_rebuild, remove_dirty_descendants,
     try_update_retained_layer, update_dirty_inline, write_node_layer,
 };
 use crate::{
@@ -297,7 +297,6 @@ fn update_at_step(
         }
         (true, false) => return None,
     };
-    note_updated_children(store, layer);
     Some(ReplaceDirtyLayersReport {
         updated: true,
         changes,
@@ -389,10 +388,6 @@ fn replace_dirty_layers_from_applier(
         report.changes |= child_report.changes;
     }
 
-    if report.updated {
-        note_updated_children(store, parent);
-    }
-
     Some(report)
 }
 
@@ -429,11 +424,6 @@ fn update_inline_child(
     )?);
     report.updated = true;
     Some(())
-}
-
-fn note_updated_children(store: &mut SceneStore, parent: RecordId) {
-    refresh_hit_targets(store, parent);
-    add_child_origin_sinks(store, parent);
 }
 
 #[derive(Clone, Copy)]

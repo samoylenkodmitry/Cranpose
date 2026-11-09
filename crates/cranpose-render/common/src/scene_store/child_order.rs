@@ -44,7 +44,10 @@ impl ChildOrder {
         let start = self.before.len();
         self.before
             .extend(items.iter().filter_map(|item| item.as_child()));
-        self.records.push((record, start, self.before.len()));
+        // A record that kept no children cannot put them in another order.
+        if self.before.len() > start {
+            self.records.push((record, start, self.before.len()));
+        }
     }
 }
 

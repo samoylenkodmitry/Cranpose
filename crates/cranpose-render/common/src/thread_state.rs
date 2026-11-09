@@ -6,11 +6,9 @@ use cranpose_ui_graphics::FxHashMap;
 use crate::{
     NodeUpdate,
     scene_builder::{HitGraphState, RecorderKey, RecorderSlot, TranslateScratch},
-    scene_store::Item,
 };
 
 pub(crate) struct RenderThreadState {
-    pub(crate) item_lists: RefCell<Vec<Vec<Item>>>,
     pub(crate) translate_scratch: RefCell<TranslateScratch>,
     pub(crate) hit_geometry_scratch: Cell<Vec<HitGraphState>>,
     pub(crate) dirty_node_scratch: Cell<Option<NodeMap<cranpose_core::NodeId, NodeUpdate>>>,
@@ -24,7 +22,6 @@ pub(crate) struct RenderThreadState {
 impl RenderThreadState {
     fn new() -> Self {
         Self {
-            item_lists: RefCell::new(Vec::new()),
             translate_scratch: RefCell::new(TranslateScratch::default()),
             hit_geometry_scratch: Cell::new(Vec::new()),
             dirty_node_scratch: Cell::new(None),

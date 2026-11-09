@@ -76,7 +76,7 @@ fn layer_flags(layer: &LayerNode) -> RecordFlags {
             layer.translated_content_context,
             RecordFlags::TRANSLATED_CONTENT,
         ),
-        (layer.has_origin_sinks, RecordFlags::HAS_ORIGIN_SINKS),
+        (layer.has_origin_sinks, RecordFlags::ORIGIN_SINKS),
         (
             layer.draw_phase == Some(PrimitivePhase::AfterChildren),
             RecordFlags::AFTER_CHILDREN,
