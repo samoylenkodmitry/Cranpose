@@ -216,6 +216,9 @@ pub(crate) fn update_from_applier(
 
 // Returns a move when a node's layer change merged into new content: its
 // layer is lowered again, which keeps no record of where it lay.
+// The dirty nodes the map keeps room for at least.
+const DIRTY_NODES_KEPT: usize = 64;
+
 fn dirty_node_updates(
     updates: SceneUpdates<'_>,
     dirty: &mut HashMap<NodeId, NodeUpdate>,
@@ -261,13 +264,21 @@ fn update_from_applier_inner(
     }
 
     // The map of the frame before keeps its storage for this one.
-    let mut remaining_dirty_nodes =
+    let (mut remaining_dirty_nodes, mut recent) =
         crate::thread_state::with(|state| state.dirty_node_scratch.take()).unwrap_or_default();
     let merged = dirty_node_updates(updates, &mut remaining_dirty_nodes);
+    recent.note(remaining_dirty_nodes.len());
     let mut report = update_dirty_nodes(applier, store, walk, &mut remaining_dirty_nodes);
     report.layers_moved |= merged.contains(GraphChanges::Moves);
     remaining_dirty_nodes.clear();
-    crate::thread_state::with(|state| state.dirty_node_scratch.set(Some(remaining_dirty_nodes)));
+    if let Some(room) = recent.shrink_to(remaining_dirty_nodes.capacity(), DIRTY_NODES_KEPT) {
+        remaining_dirty_nodes.shrink_to(room);
+    }
+    crate::thread_state::with(|state| {
+        state
+            .dirty_node_scratch
+            .set(Some((remaining_dirty_nodes, recent)));
+    });
     report
 }
 

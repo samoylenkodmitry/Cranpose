@@ -4,6 +4,7 @@
 use cranpose_core::{NodeId, RecordRef, SceneUpdate, StoreId};
 
 use super::{Reach, RecordKind};
+use crate::recent_peak::RecentPeak;
 
 /// What an update did to a record.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -142,6 +143,8 @@ pub(super) struct Journal {
     // An update that cleared the store: what it writes after is left out,
     // as every reader has lost the store's earlier state anyway.
     cleared: Option<SceneUpdate>,
+    // The most entries a trim found lately.
+    recent: RecentPeak,
 }
 
 impl Journal {
@@ -195,8 +198,12 @@ impl Journal {
         let drop = read
             .max(self.entries.len().saturating_sub(keep))
             .min(self.entries.len());
+        self.recent.note(self.entries.len());
         self.entries.drain(..drop);
         self.start += drop as u64;
+        if let Some(room) = self.recent.shrink_to(self.entries.capacity(), ENTRIES_KEPT) {
+            self.entries.shrink_to(room);
+        }
     }
 
     pub(super) fn open(&mut self, store: StoreId, events: RecordEvents) -> JournalCursor {

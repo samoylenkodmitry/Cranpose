@@ -5,13 +5,15 @@ use cranpose_ui_graphics::FxHashMap;
 
 use crate::{
     NodeUpdate,
+    recent_peak::RecentPeak,
     scene_builder::{HitGraphState, RecorderKey, RecorderSlot, TranslateScratch},
 };
 
 pub(crate) struct RenderThreadState {
     pub(crate) translate_scratch: RefCell<TranslateScratch>,
     pub(crate) hit_geometry_scratch: Cell<Vec<HitGraphState>>,
-    pub(crate) dirty_node_scratch: Cell<Option<NodeMap<cranpose_core::NodeId, NodeUpdate>>>,
+    pub(crate) dirty_node_scratch:
+        Cell<Option<(NodeMap<cranpose_core::NodeId, NodeUpdate>, RecentPeak)>>,
     pub(crate) command_recordings: RefCell<FxHashMap<RecorderKey, RecorderSlot>>,
     pub(crate) recording_generation: Cell<u64>,
     pub(crate) space_changed: Cell<bool>,
