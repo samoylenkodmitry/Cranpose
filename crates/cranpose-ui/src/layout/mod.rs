@@ -1536,8 +1536,8 @@ impl LayoutBuilderState {
         }
         cache.clear_needs_measure();
         cache.clear_layout_dirt();
-        layout_state.set_size(measurement.size, &self.context);
-        layout_state.set_content_offset(measurement.content_offset);
+        layout_state.set_size(Some(node_id), measurement.size, &self.context);
+        layout_state.set_content_offset(Some(node_id), measurement.content_offset);
 
         Ok(Some(measured))
     }

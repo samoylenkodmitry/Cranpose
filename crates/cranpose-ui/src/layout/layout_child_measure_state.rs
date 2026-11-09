@@ -365,7 +365,10 @@ impl LayoutChildMeasureState {
             self.note_z_index(z_index);
             read_cell(&self.parts, |parts| {
                 if let Some(parts) = parts {
-                    parts.layout_state().borrow_mut().set_z_index(z_index);
+                    parts
+                        .layout_state()
+                        .borrow_mut()
+                        .set_z_index(Some(self.node_id), z_index);
                 }
             });
         }
@@ -387,6 +390,7 @@ impl LayoutChildMeasureState {
         read_cell(&self.parts, |parts| {
             if let Some(parts) = parts {
                 parts.layout_state().borrow_mut().place(
+                    Some(self.node_id),
                     position,
                     self.frame.parent.get(),
                     &builder.context,
@@ -434,7 +438,9 @@ impl LayoutChildMeasureState {
             // A measure clears the placed flag the parent's placement sets
             // again; a child it no longer places then leaves the scene.
             if self.frame.measures() {
-                self.with_pass_layout_state(LayoutState::clear_placed);
+                self.with_pass_layout_state(|state, context| {
+                    state.clear_placed(Some(self.node_id), context);
+                });
             }
             return Some(cached);
         }

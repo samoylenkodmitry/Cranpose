@@ -60,7 +60,6 @@ pub struct LayoutState {
     size: Size,
     position: Point,
     is_placed: bool,
-    node_id: Option<NodeId>,
     /// The layout pass that cleared the placed flag while the node was placed.
     cleared_in_pass: PackedU64,
     content_offset: Point,
@@ -105,12 +104,12 @@ impl LayoutState {
         self.content_offset
     }
 
-    /// Writes the content offset, reporting an actual change to the
-    /// semantics tree.
-    pub fn set_content_offset(&mut self, offset: Point) {
+    // Writes the content offset of node `node_id`, reporting an actual
+    // change to the semantics tree.
+    pub(crate) fn set_content_offset(&mut self, node_id: Option<NodeId>, offset: Point) {
         if self.content_offset != offset {
             self.content_offset = offset;
-            self.note_semantics_change();
+            self.note_semantics_change(node_id);
         }
     }
 
@@ -133,19 +132,15 @@ impl LayoutState {
         self.is_placed
     }
 
-    pub(crate) fn set_node_id(&mut self, node_id: NodeId) {
-        self.node_id = Some(node_id);
-    }
-
-    /// Writes the measured size, self-reporting an actual change to the
-    /// scene phase of `context`, the node's app context.
-    pub fn set_size(&mut self, size: Size, context: &AppContext) {
+    // Writes the measured size of node `node_id`, self-reporting an actual
+    // change to the scene phase of `context`, the node's app context.
+    pub(crate) fn set_size(&mut self, node_id: Option<NodeId>, size: Size, context: &AppContext) {
         if self.size != size {
-            if let Some(id) = self.node_id {
+            if let Some(id) = node_id {
                 context.note_geometry_scene_node(id, &mut self.reshaped_noted_in);
             }
             self.size = size;
-            self.note_semantics_change();
+            self.note_semantics_change(node_id);
         }
     }
 
@@ -168,42 +163,49 @@ impl LayoutState {
         }
     }
 
-    // Places the node where `at` says, with its z index.
+    // Places node `node_id` where `at` says, with its z index.
     pub(crate) fn place_child(
         &mut self,
+        node_id: Option<NodeId>,
         at: ChildPlacement,
         placer: Option<NodeId>,
         context: &AppContext,
     ) {
-        self.place(at.position, placer, context);
-        self.set_z_index(at.z_index);
+        self.place(node_id, at.position, placer, context);
+        self.set_z_index(node_id, at.z_index);
     }
 
-    // Sets the z index the parent placed the node with. A change reorders
-    // the node among its siblings, which its parent's layer holds.
-    pub(crate) fn set_z_index(&mut self, z_index: f32) {
+    // Sets the z index the parent placed node `node_id` with. A change
+    // reorders the node among its siblings, which its parent's layer holds.
+    pub(crate) fn set_z_index(&mut self, node_id: Option<NodeId>, z_index: f32) {
         if self.z_index.to_bits() == z_index.to_bits() {
             return;
         }
         self.z_index = z_index;
-        if let Some(id) = self.node_id {
+        if let Some(id) = node_id {
             crate::schedule_z_order_change(id);
         }
     }
 
-    /// Writes the placed position and marks the node placed, self-reporting
-    /// to the scene phase of `context`, the node's app context, an actual
-    /// move, and a placement of a node the scene does not draw: one the
-    /// running pass did not find placed. A move is reported apart, with
-    /// `placer`, the node whose placement put the node there, so the scene
-    /// can keep what it drew for the node.
-    pub fn place(&mut self, position: Point, placer: Option<NodeId>, context: &AppContext) {
+    // Writes the placed position of node `node_id` and marks it placed,
+    // self-reporting to the scene phase of `context`, the node's app
+    // context, an actual move, and a placement of a node the scene does not
+    // draw: one the running pass did not find placed. A move is reported
+    // apart, with `placer`, the node whose placement put the node there, so
+    // the scene can keep what it drew for the node.
+    pub(crate) fn place(
+        &mut self,
+        node_id: Option<NodeId>,
+        position: Point,
+        placer: Option<NodeId>,
+        context: &AppContext,
+    ) {
         // A node the running pass cleared while it was placed changes
         // nothing the scene draws by being placed again.
         let newly_placed =
             !self.is_placed && !context.placement_pass().restore(self.cleared_in_pass.get());
         let moved = self.position != position;
-        if let Some(id) = self.node_id {
+        if let Some(id) = node_id {
             if newly_placed {
                 context.note_geometry_scene_node(id, &mut self.reshaped_noted_in);
             } else if moved {
@@ -213,20 +215,21 @@ impl LayoutState {
         self.position = position;
         if moved || !self.is_placed {
             self.is_placed = true;
-            self.note_semantics_change();
+            self.note_semantics_change(node_id);
         }
     }
 
-    /// Clears the placed flag at the start of a layout pass of `context`.
-    /// Until its parent places it again the pass counts the node unplaced,
-    /// and the pass names it to the scene phase if it ends that way.
-    pub fn clear_placed(&mut self, context: &AppContext) {
+    // Clears the placed flag of node `node_id` at the start of a layout pass
+    // of `context`. Until its parent places it again the pass counts the
+    // node unplaced, and the pass names it to the scene phase if it ends
+    // that way.
+    pub(crate) fn clear_placed(&mut self, node_id: Option<NodeId>, context: &AppContext) {
         if !self.is_placed {
             return;
         }
         self.is_placed = false;
         self.cleared_in_pass = PackedU64::new(context.placement_pass().clear());
-        self.note_semantics_change();
+        self.note_semantics_change(node_id);
     }
 
     /// Whether `pass` found this node placed and left it unplaced.
@@ -235,8 +238,8 @@ impl LayoutState {
     }
 
     #[inline]
-    pub(crate) fn note_semantics_change(&mut self) {
-        if let Some(id) = self.node_id {
+    pub(crate) fn note_semantics_change(&mut self, node_id: Option<NodeId>) {
+        if let Some(id) = node_id {
             crate::semantics_layout_log::record_layout_change(id, &mut self.semantics_stamp);
         }
     }

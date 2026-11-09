@@ -3,11 +3,12 @@
 
 use std::cell::RefCell;
 
+use cranpose_core::NodeId;
 use cranpose_ui_graphics::{Rect, Size};
 use cranpose_ui_layout::Placement;
 
-use super::{LayoutState, NodeCache};
-use crate::layout::LayoutRuntimeState;
+use super::{ChildPlacement, LayoutState, NodeCache};
+use crate::{layout::LayoutRuntimeState, render_state::AppContext};
 
 // What layout reaches of a node without the applier, and what its parent's
 // record of it, its kept measurement and its draws' coordinator rects share:
@@ -41,6 +42,35 @@ impl LayoutParts {
 
     pub(crate) fn layout_state(&self) -> &RefCell<LayoutState> {
         &self.layout_state
+    }
+
+    // Places node `node_id`, whose parts these are, where `placer` placed it
+    // with `at`.
+    pub(crate) fn place(
+        &self,
+        node_id: Option<NodeId>,
+        at: ChildPlacement,
+        placer: Option<NodeId>,
+        context: &AppContext,
+    ) {
+        self.layout_state
+            .borrow_mut()
+            .place_child(node_id, at, placer, context);
+    }
+
+    // Writes the measured size of node `node_id`, whose parts these are.
+    pub(crate) fn set_size(&self, node_id: Option<NodeId>, size: Size, context: &AppContext) {
+        self.layout_state
+            .borrow_mut()
+            .set_size(node_id, size, context);
+    }
+
+    // Clears the placed flag of node `node_id`, whose parts these are, at the
+    // start of a layout pass.
+    pub(crate) fn clear_placed(&self, node_id: Option<NodeId>, context: &AppContext) {
+        self.layout_state
+            .borrow_mut()
+            .clear_placed(node_id, context);
     }
 
     // Notes whether `placements`, the node's latest, give a child a z index

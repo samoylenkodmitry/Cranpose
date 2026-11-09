@@ -921,25 +921,19 @@ impl SubcomposeLayoutNode {
     // during placement. `LayoutState::place` self-reports actual moves to
     // the scene phase.
     pub(crate) fn place(&self, at: ChildPlacement, placer: Option<NodeId>, context: &AppContext) {
-        self.parts
-            .layout_state()
-            .borrow_mut()
-            .place_child(at, placer, context);
+        self.parts.place(self.id.get(), at, placer, context);
     }
 
     /// Updates the measured size of this node. Called during measurement.
     /// [`LayoutState::set_size`] self-reports actual changes to the scene
     /// phase.
     pub fn set_measured_size(&self, size: Size, context: &AppContext) {
-        self.parts
-            .layout_state()
-            .borrow_mut()
-            .set_size(size, context);
+        self.parts.set_size(self.id.get(), size, context);
     }
 
     /// Clears the is_placed flag. Called at the start of a layout pass.
     pub fn clear_placed(&self, context: &AppContext) {
-        self.parts.layout_state().borrow_mut().clear_placed(context);
+        self.parts.clear_placed(self.id.get(), context);
     }
 
     /// Semantics reported by this node's live modifier chain.
@@ -1271,7 +1265,6 @@ impl cranpose_core::Node for SubcomposeLayoutNode {
 
     fn set_node_id(&mut self, id: NodeId) {
         self.id.set(Some(id));
-        self.parts.layout_state().borrow_mut().set_node_id(id);
         {
             let mut inner = self.inner.borrow_mut();
             let previous = inner.node_id.replace(id);

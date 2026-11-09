@@ -23,6 +23,13 @@ impl LiveLayoutNode<'_> {
         }
     }
 
+    fn id(&self) -> Option<NodeId> {
+        match self {
+            Self::Layout(node) => node.node_id(),
+            Self::Subcompose(node) => node.id(),
+        }
+    }
+
     pub(super) fn parent(&self) -> Option<NodeId> {
         match self {
             Self::Layout(node) => node.parent(),
@@ -82,14 +89,14 @@ impl LiveLayoutNode<'_> {
         self.parts()
             .layout_state()
             .borrow_mut()
-            .place_child(at, Some(placer), context);
+            .place_child(self.id(), at, Some(placer), context);
     }
 
     // Places the node again where `placer` last placed it.
     pub(super) fn stay_placed(&self, placer: NodeId, context: &AppContext) {
         let mut state = self.parts().layout_state().borrow_mut();
         let position = state.position();
-        state.place(position, Some(placer), context);
+        state.place(self.id(), position, Some(placer), context);
     }
 }
 

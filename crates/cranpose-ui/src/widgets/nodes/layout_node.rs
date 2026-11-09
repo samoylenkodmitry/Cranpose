@@ -498,7 +498,6 @@ impl LayoutNode {
         {
             unregister_layout_node(owner_context_id, existing);
         }
-        self.parts.layout_state().borrow_mut().set_node_id(id);
         // The new entry holds the node's parent, capabilities and modifier
         // locals as they are now.
         let owner_context_id = register_layout_node(id, self);
@@ -678,20 +677,14 @@ impl LayoutNode {
     /// [`LayoutState::set_size`] self-reports actual changes to the scene
     /// phase.
     pub fn set_measured_size(&self, size: Size, context: &AppContext) {
-        self.parts
-            .layout_state()
-            .borrow_mut()
-            .set_size(size, context);
+        self.parts.set_size(self.id.get(), size, context);
     }
 
     // Updates the position of this node, which `placer` placed. Called
     // during placement. `LayoutState::place` self-reports actual moves to
     // the scene phase.
     pub(crate) fn place(&self, at: ChildPlacement, placer: Option<NodeId>, context: &AppContext) {
-        self.parts
-            .layout_state()
-            .borrow_mut()
-            .place_child(at, placer, context);
+        self.parts.place(self.id.get(), at, placer, context);
     }
 
     /// Records the content offset (e.g. from padding).
@@ -699,17 +692,17 @@ impl LayoutNode {
         self.parts
             .layout_state()
             .borrow_mut()
-            .set_content_offset(offset);
+            .set_content_offset(self.id.get(), offset);
     }
 
     /// Clears the is_placed flag. Called at the start of a layout pass.
     pub fn clear_placed(&self, context: &AppContext) {
-        self.parts.layout_state().borrow_mut().clear_placed(context);
+        self.parts.clear_placed(self.id.get(), context);
     }
 
     fn note_semantics_layout_change(&self) {
         if let Ok(mut state) = self.parts.layout_state().try_borrow_mut() {
-            state.note_semantics_change();
+            state.note_semantics_change(self.id.get());
         }
     }
 

@@ -111,7 +111,7 @@ impl Measurable for LayoutChildMeasurable {
             |measured| (measured.size, measured.size_for_parent()),
         );
         state.with_pass_layout_state(|layout_state, context| {
-            layout_state.set_size(measured_size, context);
+            layout_state.set_size(Some(state.node_id), measured_size, context);
         });
         let alignment_lines = measured
             .as_ref()
