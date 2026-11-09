@@ -4,7 +4,7 @@
 // after the collect, which records how it drew each record, it adds the
 // areas they are drawn in now.
 
-use cranpose_core::{RecordId, RecordRef};
+use cranpose_core::{RecordId, RecordRef, collections::growth_slack::GrowthSlack};
 use cranpose_render_common::{
     graph_scene::Scene,
     scene_store::{
@@ -515,6 +515,10 @@ impl TargetState {
                 origin: shown.origin,
             };
         }
+        // By row arrays doubled to take a record; the room past a quarter
+        // of their rows goes back.
+        self.shown.trim_growth_slack();
+        self.marks.trim_growth_slack();
         if self.unknown_before {
             return Damage::Full;
         }
