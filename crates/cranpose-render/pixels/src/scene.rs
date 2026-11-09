@@ -302,12 +302,15 @@ impl<'a> Subtree<'a> {
         }
     }
 
-    // What the node itself was at its last change, which a change beneath
-    // it leaves.
-    pub(crate) fn own_change(self) -> RecordChange {
+    // What the subtree and the node itself were at their last changes: a
+    // change beneath the node changes the first alone.
+    pub(crate) fn changes(self) -> (RecordChange, RecordChange) {
         match self {
-            Self::Layer(layer) => layer.own_change(),
-            Self::Inline(leaf) => leaf.change(),
+            Self::Layer(layer) => layer.changes(),
+            Self::Inline(leaf) => {
+                let change = leaf.change();
+                (change, change)
+            }
         }
     }
 
@@ -425,10 +428,11 @@ impl RasterScene {
 
     pub(crate) fn open_subtree(&mut self, subtree: Subtree<'_>) -> usize {
         let counts = self.counts();
+        let (change, own_change) = subtree.changes();
         let record = SubtreeItems {
             identity: subtree.identity(),
-            change: subtree.change(),
-            own_change: subtree.own_change(),
+            change,
+            own_change,
             placement: subtree.placement(),
             passed_down: None,
             end: 0,

@@ -54,6 +54,11 @@ impl ChildOrder {
 // Logs as changed each record the update noted whose kept children it put
 // in another order, and forgets the notes.
 pub(super) fn settle(store: &mut SceneStore) {
+    // Most updates note no record's children: each round still ends.
+    if store.order.records.is_empty() {
+        store.order.round += 1;
+        return;
+    }
     let mut order = std::mem::take(&mut store.order);
     for &(record, start, end) in &order.records {
         if let Some(id) = store.resolve(record)

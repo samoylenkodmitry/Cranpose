@@ -169,15 +169,13 @@ impl RetainedPath {
         )?;
         let in_space = root.graphics_layer().space.is_some() || {
             let mut layer = root;
-            steps
-                .iter()
-                .any(|&(index, _)| match layer.items().nth(index) {
-                    Some(ItemRef::Layer(child)) => {
-                        layer = child;
-                        child.graphics_layer().space.is_some()
-                    }
-                    _ => false,
-                })
+            steps.iter().any(|&(index, _)| match layer.item(index) {
+                Some(ItemRef::Layer(child)) => {
+                    layer = child;
+                    child.graphics_layer().space.is_some()
+                }
+                _ => false,
+            })
         };
         Some(Self {
             node,
@@ -262,12 +260,12 @@ fn leads_to(mut layer: LayerRef<'_>, steps: &[(usize, Option<NodeId>)]) -> bool 
         return false;
     };
     for &(index, identity) in way {
-        match layer.items().nth(index) {
+        match layer.item(index) {
             Some(ItemRef::Layer(child)) if layer_identity(child) == identity => layer = child,
             _ => return false,
         }
     }
-    match layer.items().nth(last) {
+    match layer.item(last) {
         Some(ItemRef::Layer(child) | ItemRef::Leaf(child)) => layer_identity(child) == identity,
         Some(ItemRef::Draw(_) | ItemRef::Text(_) | ItemRef::Run(_) | ItemRef::Shape(_)) | None => {
             false

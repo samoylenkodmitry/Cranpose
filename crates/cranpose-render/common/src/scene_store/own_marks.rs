@@ -21,6 +21,15 @@ pub(crate) struct OwnMark {
 // changed, and keeps their marks for the next update.
 pub(super) fn settle(store: &mut SceneStore) {
     let follow = store.follows_redrawn_reach();
+    if !store.redrawn.is_empty() {
+        settle_redrawn(store, follow);
+    }
+    if follow {
+        refresh_lost(store);
+    }
+}
+
+fn settle_redrawn(store: &mut SceneStore, follow: bool) {
     let mut redrawn = std::mem::take(&mut store.redrawn);
     for record in redrawn.drain(..) {
         let Some(id) = store.resolve(record) else {
@@ -40,8 +49,8 @@ pub(super) fn settle(store: &mut SceneStore) {
         store.tree[index].flags =
             flags.without(RecordFlags::REDRAW_PENDING.with(RecordFlags::INSERTED));
         // With the marks lost, a record does not know what it drew before,
-        // and the refresh below marks it. A record made in the update is new
-        // as a whole.
+        // and the refresh that ends the settle marks it. A record made in the
+        // update is new as a whole.
         let changed = if store.marks_lost {
             Reach::Unknown
         } else {
@@ -58,9 +67,6 @@ pub(super) fn settle(store: &mut SceneStore) {
         }
     }
     store.redrawn = redrawn;
-    if follow {
-        refresh_lost(store);
-    }
 }
 
 // Loses the marks for the redraw of the record at `index` while no reader

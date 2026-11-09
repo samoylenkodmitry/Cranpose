@@ -124,17 +124,23 @@ impl Repush<'_> {
         if old.identity != subtree.identity() {
             return Err(Stop::OtherLayer);
         }
-        let placed_as_before = subtree.placed_at(&old.placement);
-        if old.change == subtree.change() && placed_as_before {
-            return Ok(());
+        // A subtree that holds no change pushes again only when it moved.
+        if old.change == subtree.change() {
+            if subtree.placed_at(&old.placement) {
+                return Ok(());
+            }
+            return self.push_again(subtree, record, parent);
         }
         // A node drawn inline has no records beneath its own.
         let Subtree::Layer(layer) = subtree else {
             return self.push_again(subtree, record, parent);
         };
-        // A layer that changed itself, moved, or drew its subtree without
-        // records of its children, as a surface or nothing, pushes it all.
-        if old.own_change != layer.own_change() || !placed_as_before || old.end == record + 1 {
+        // A layer that changed itself, drew its subtree without records of
+        // its children, as a surface or nothing, or moved pushes it all.
+        if old.own_change != layer.own_change()
+            || old.end == record + 1
+            || !subtree.placed_at(&old.placement)
+        {
             return self.push_again(subtree, record, parent);
         }
         let Some(passed) = old.passed_down else {

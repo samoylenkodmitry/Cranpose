@@ -471,6 +471,15 @@ impl<'a> LayerRef<'a> {
         self.change_at(self.store.content_rev(self.id))
     }
 
+    /// [`Self::change`] and [`Self::own_change`] from one read of the
+    /// record.
+    #[inline]
+    pub fn changes(self) -> (RecordChange, RecordChange) {
+        let row = &self.store.tree[self.id.index()];
+        let (subtree, own) = (row.subtree_rev, row.content_rev);
+        (self.change_at(subtree), self.change_at(own))
+    }
+
     fn change_at(self, update: SceneUpdate) -> RecordChange {
         RecordChange {
             store: self.store.id(),
@@ -483,6 +492,14 @@ impl<'a> LayerRef<'a> {
     #[inline]
     pub fn item_count(self) -> usize {
         self.store.items(self.id).len()
+    }
+
+    /// The record's item at `index` in draw order, read without the items
+    /// before it.
+    #[inline]
+    pub fn item(self, index: usize) -> Option<ItemRef<'a>> {
+        let item = *self.store.items(self.id).get(index)?;
+        Some(ItemRef::of(self.store, item))
     }
 
     /// The record's items in draw order.
