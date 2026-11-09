@@ -495,5 +495,13 @@ pub fn with_or_fresh<T: 'static, R>(
 // late destructor at thread exit needs.
 #[inline(never)]
 fn with_fresh<T, R>(fresh: impl FnOnce() -> T, f: impl FnOnce(&T) -> R) -> R {
-    f(&fresh())
+    f(&fresh_state(fresh))
+}
+
+// forwards on purpose: out of line, a state's construction takes one copy
+// for all the callers of `with_fresh` on that state. Inline, each caller
+// took its own, 250 bytes of stores for the UI's state on an ESP32.
+#[inline(never)]
+fn fresh_state<T>(fresh: impl FnOnce() -> T) -> T {
+    fresh()
 }
