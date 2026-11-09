@@ -68,8 +68,8 @@ impl Axis {
     // The grid lines, every `step` from the floor to the top.
     fn grid(&self) -> impl Iterator<Item = f64> + use<> {
         let (step, top) = (self.step, self.top);
-        ((self.floor / step).round() as i64..)
-            .map(move |line| line as f64 * step)
+        let first = (self.floor / step).round() * step;
+        std::iter::successors(Some(first), move |value| Some(value + step))
             .take_while(move |value| *value <= top + step * 1e-9)
     }
 }
@@ -112,7 +112,12 @@ pub(super) fn Plot(palette: Palette, axis: Axis, draw: impl Fn(&mut dyn DrawScop
                 }
                 draw(scope);
             });
-            let decimals = (-axis.step.log10().floor()).clamp(0.0, 3.0) as usize;
+            let decimals = match axis.step {
+                step if step >= 1.0 => 0,
+                step if step >= 0.1 => 1,
+                step if step >= 0.01 => 2,
+                _ => 3,
+            };
             for value in axis.grid() {
                 let y = axis.y(CHART_HEIGHT, value) - 14.0;
                 Text(

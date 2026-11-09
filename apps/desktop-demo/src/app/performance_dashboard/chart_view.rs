@@ -161,6 +161,22 @@ impl ChartView {
         }
     }
 
+    // The step whose time is the nearest to the pointer at `x`.
+    fn step_at(&self, plotted: &Plotted, x: f32, size: Size) -> usize {
+        let last = plotted
+            .curves
+            .first()
+            .map_or(0, |curve| curve.median.len().saturating_sub(1));
+        let at = |step: usize| plotted.point(size, step, 0.0, self.axis).x;
+        let after = (0..=last).take_while(|step| at(*step) < x).count();
+        match after {
+            0 => 0,
+            after if after > last => last,
+            after if x - at(after - 1) <= at(after) - x => after - 1,
+            after => after,
+        }
+    }
+
     // What the pointer at `pointer` on a chart of `size` reads. Without
     // picked bars, it holds the curve it reads until another curve comes
     // within PICK_DISTANCE of it, and reads none while no curve does. With
@@ -175,9 +191,7 @@ impl ChartView {
         if size.width <= 0.0 {
             return None;
         }
-        let steps = (plotted.run_ms / CHART_STEP_MS).floor() as usize;
-        let at = f64::from(pointer.x / size.width) * plotted.run_ms / CHART_STEP_MS;
-        let step = (at.round().max(0.0) as usize).min(steps);
+        let step = self.step_at(plotted, pointer.x, size);
         let reading = |curve: &LaunchCurve| -> Option<Point> {
             let value = curve
                 .median

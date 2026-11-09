@@ -676,10 +676,13 @@ fn rect_of(robot: &mut RobotTestRule<TestRenderer>, text: &str) -> cranpose_ui::
 
 fn click_on(robot: &mut RobotTestRule<TestRenderer>, text: &str) {
     let bounds = rect_of(robot, text);
-    assert!(robot.click_at(
-        bounds.x + bounds.width / 2.0,
-        bounds.y + bounds.height / 2.0
-    ));
+    assert!(
+        robot.click_at(
+            bounds.x + bounds.width / 2.0,
+            bounds.y + bounds.height / 2.0
+        ),
+        "{text} takes the click"
+    );
     robot.wait_for_motion();
 }
 

@@ -4,7 +4,7 @@
 
 use std::rc::Rc;
 
-use cranpose_animation::animateFloatAsState;
+use cranpose_animation::{animateFloatAsState, animateValueAsState};
 use cranpose_core::{key, MutableState};
 use cranpose_ui::{
     composable, text::FontWeight, Alignment, Box, BoxSpec, Brush, Color, Column, ColumnSpec,
@@ -264,8 +264,8 @@ pub(super) fn CurvePlot(palette: Palette, focus: Focus, plotted: Rc<Plotted>, vi
     let hover: MutableState<Option<ChartHover>> = cranpose_core::rememberMutableStateOf(|| None);
     let latest = cranpose_core::rememberUpdatedState((Rc::clone(&plotted), Rc::clone(&view)));
     let axis = Axis {
-        floor: animateFloatAsState(view.axis.floor as f32, settle(), "chart_floor").value() as f64,
-        top: animateFloatAsState(view.axis.top as f32, settle(), "chart_top").value() as f64,
+        floor: animateValueAsState(view.axis.floor, settle(), "chart_floor").value(),
+        top: animateValueAsState(view.axis.top, settle(), "chart_top").value(),
         step: view.axis.step,
     };
     let hovered = focus.hovered.get();
