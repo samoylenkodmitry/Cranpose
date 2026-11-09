@@ -29,7 +29,7 @@ pub enum RecordEvent {
 }
 
 impl RecordEvent {
-    const fn bit(self) -> u8 {
+    const fn bit(self) -> u16 {
         1 << match self {
             Self::Inserted => 0,
             Self::Changed => 1,
@@ -58,15 +58,22 @@ const ROWS_KEPT: usize = 4;
 const ENTRIES_KEPT: usize = 256;
 
 // The bit of a set of changes that asks for the reach of each redraw.
-const REDRAWN_REACH: u8 = 1 << 7;
+const REDRAWN_REACH: u16 = 1 << 7;
+// The bit of a set of changes that asks whether an update changed anything.
+const ANY_CHANGE: u16 = 1 << 8;
 
 /// The kinds of change a journal reader follows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct RecordEvents(u8);
+pub struct RecordEvents(u16);
 
 impl RecordEvents {
     /// Every change.
-    pub const ALL: Self = Self(u8::MAX);
+    pub const ALL: Self = Self(u16::MAX);
+    /// Whether an update changed anything: the first change of each update,
+    /// whatever its kind, for a reader that only tells an update that
+    /// changes nothing from one that changes something. The store spends
+    /// nothing on the other changes for it.
+    pub const ANY: Self = Self(ANY_CHANGE);
     /// The changes that give a node a record or take its record away:
     /// [`RecordEvent::Inserted`], [`RecordEvent::Removed`],
     /// [`RecordEvent::Released`] and [`RecordEvent::Claimed`].
@@ -76,11 +83,6 @@ impl RecordEvents {
             | RecordEvent::Released.bit()
             | RecordEvent::Claimed.bit(),
     );
-
-    /// Every change, each [`RecordEvent::Redrawn`] with an unknown reach:
-    /// for a reader that does not work out where its records redraw for a
-    /// while, so the store spends nothing on it.
-    pub const ALL_WITHOUT_REACH: Self = Self(!REDRAWN_REACH);
 
     /// Whether the set holds `event`.
     pub fn contains(self, event: RecordEvent) -> bool {
@@ -134,7 +136,9 @@ pub(super) struct Journal {
     // follows.
     readers: Vec<Option<(u64, RecordEvents)>>,
     // The changes some open reader follows.
-    wanted: u8,
+    wanted: u16,
+    // The update that logged an entry last.
+    logged: Option<SceneUpdate>,
     // An update that cleared the store: what it writes after is left out,
     // as every reader has lost the store's earlier state anyway.
     cleared: Option<SceneUpdate>,
@@ -145,10 +149,18 @@ impl Journal {
         self.start + self.entries.len() as u64
     }
 
-    // Whether an entry of `event` in `update` is kept: an open reader
-    // follows it and the update did not clear the store.
+    // Whether an entry of `event` in `update` is kept: the update did not
+    // clear the store, and an open reader follows such entries or learns
+    // only whether the update changed anything, which no entry told yet.
     pub(super) fn wants(&self, event: RecordEvent, update: SceneUpdate) -> bool {
-        self.wanted & event.bit() != 0 && self.cleared != Some(update)
+        self.cleared != Some(update)
+            && (self.follows(event)
+                || (self.wanted & ANY_CHANGE != 0 && self.logged != Some(update)))
+    }
+
+    // Whether an open reader follows each change of the kind of `event`.
+    pub(super) fn follows(&self, event: RecordEvent) -> bool {
+        self.wanted & event.bit() != 0
     }
 
     // Whether an open reader follows where the records `update` redraws
@@ -158,6 +170,7 @@ impl Journal {
     }
 
     pub(super) fn log(&mut self, entry: JournalEntry) {
+        self.logged = Some(entry.update);
         self.entries.push(entry);
     }
 

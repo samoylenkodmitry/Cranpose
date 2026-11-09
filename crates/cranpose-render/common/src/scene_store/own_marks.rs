@@ -30,17 +30,13 @@ pub(super) fn settle(store: &mut SceneStore) {
         if !flags.contains(RecordFlags::REDRAW_PENDING) {
             continue;
         }
-        let settled = flags.without(RecordFlags::REDRAW_PENDING.with(RecordFlags::INSERTED));
+        // A reader that stopped following where records redraw since the
+        // record waited for this end of the update.
         if !follow {
-            store.tree[index].flags = settled.with(RecordFlags::MARKS_STALE);
-            if !flags.contains(RecordFlags::MARKS_STALE) {
-                store.marks_stale.push(record);
-            }
-            if !flags.contains(RecordFlags::INSERTED) {
-                store.log(RecordEvent::Redrawn(Reach::Unknown), id);
-            }
+            wait(store, index);
             continue;
         }
+        let settled = flags.without(RecordFlags::REDRAW_PENDING.with(RecordFlags::INSERTED));
         store.tree[index].flags = settled.without(RecordFlags::MARKS_STALE);
         let changed = remark(store, id);
         // A record made in the update is new as a whole; one whose marks
@@ -60,6 +56,23 @@ pub(super) fn settle(store: &mut SceneStore) {
     store.redrawn = redrawn;
     if follow {
         refresh_stale(store);
+    }
+}
+
+// Leaves the marks of the record at `index`, which the update in progress
+// may have redrawn, to wait for a reader that follows where records redraw,
+// and logs the redraw without its reach. A record the update made logs none.
+pub(super) fn wait(store: &mut SceneStore, index: usize) {
+    let flags = store.tree[index].flags;
+    store.tree[index].flags = flags
+        .without(RecordFlags::REDRAW_PENDING.with(RecordFlags::INSERTED))
+        .with(RecordFlags::MARKS_STALE);
+    let record = store.record_ref(RecordId::from_index(index).expect("a row is a record"));
+    if !flags.contains(RecordFlags::MARKS_STALE) {
+        store.marks_stale.push(record);
+    }
+    if !flags.contains(RecordFlags::INSERTED) {
+        store.log(RecordEvent::Redrawn(Reach::Unknown), record.id);
     }
 }
 

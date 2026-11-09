@@ -325,12 +325,13 @@ impl TargetState {
         let mut cursor = self.cursor.take().unwrap_or_else(|| source.open());
         let recording = self.skipped == 0;
         if recording != self.recording {
-            // A frame that skips working out its damage needs no area of a
-            // redraw, so the scene works out none while frames skip.
+            // A frame that skips working out its damage needs only whether
+            // anything changed, so the scene logs nothing more while frames
+            // skip.
             let events = if recording {
                 RecordEvents::ALL
             } else {
-                RecordEvents::ALL_WITHOUT_REACH
+                RecordEvents::ANY
             };
             source.follow(&mut cursor, events);
         }

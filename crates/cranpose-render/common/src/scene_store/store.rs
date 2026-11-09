@@ -225,8 +225,13 @@ impl SceneStore {
     }
 
     // Leaves the own draws of the record at `index` to be compared with what
-    // they were at the end of the update.
+    // they were at the end of the update. While no reader follows where
+    // records redraw, the record's marks wait at once.
     pub(super) fn redraw_pending(&mut self, index: usize) {
+        if !self.follows_redrawn_reach() {
+            own_marks::wait(self, index);
+            return;
+        }
         let flags = &mut self.tree[index].flags;
         if !flags.contains(RecordFlags::REDRAW_PENDING) {
             *flags = flags.with(RecordFlags::REDRAW_PENDING);
@@ -530,12 +535,19 @@ impl SceneStore {
         if !super::facts::same_children(old, items) {
             super::facts::forget_children(self, index);
         }
-        if self.journal.wants(RecordEvent::Changed, self.update) {
+        let noted = self.journal.follows(RecordEvent::Changed);
+        let changed = old != items;
+        if noted {
             let record = self.record_ref(id);
             self.order.note(record, old);
         }
         self.tree[index].items = self.items.write(self.tree[index].items, items);
         self.stale(index);
+        // A reader that learns only whether the update changed anything
+        // learns it from the first write of other items.
+        if !noted && changed {
+            self.log(RecordEvent::Changed, id);
+        }
     }
 
     /// Adds a draw primitive for an item.

@@ -171,13 +171,19 @@ fn a_page_described_again_reports_only_the_draw_that_changed() {
 fn a_reader_that_follows_reaches_again_learns_each_redraw_after() {
     let mut store = SceneStore::new();
     store.describe(&page(Color::RED));
-    let mut cursor = store.open_journal(RecordEvents::ALL_WITHOUT_REACH);
+    let mut cursor = store.open_journal(RecordEvents::ANY);
 
     store.describe(&page(Color::WHITE));
     assert_eq!(
+        events(&mut store, &mut cursor).map(|events| events.len()),
+        Some(1),
+        "a reader of any change learns that the page changed, once"
+    );
+    store.describe(&page(Color::WHITE));
+    assert_eq!(
         events(&mut store, &mut cursor),
-        Some(vec![(RecordEvent::Redrawn(Reach::Unknown), NodeId(1))]),
-        "a reader without reaches learns that the page redrew"
+        Some(Vec::new()),
+        "a reader of any change learns that the same page changed nothing"
     );
 
     store.follow_journal(&mut cursor, RecordEvents::ALL);
