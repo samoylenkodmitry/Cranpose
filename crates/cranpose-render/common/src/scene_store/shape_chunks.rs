@@ -132,6 +132,9 @@ struct ShapeChunk {
 impl ShapeChunks {
     // Records the shapes of one item with `record`, which draw what `print`
     // hashes, into a chunk that takes them, and returns where they went.
+    // Out of line: a background drawn again unchanged takes its shapes back
+    // instead.
+    #[inline(never)]
     fn record(
         &mut self,
         runs: &mut Slab<ShapeRun>,
