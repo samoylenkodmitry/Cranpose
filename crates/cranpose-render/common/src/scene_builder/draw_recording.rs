@@ -396,11 +396,11 @@ pub(super) fn append_draw_nodes(
             (shared, segments)
         } else {
             let Some((recording, segments)) =
-                recording_for_placement_reusing(command, placement, size, || acquire_storage(id))
+                recording_for_placement_reusing(command, placement, size, Rc::default)
             else {
                 continue;
             };
-            (publish_recording(id, recording), segments)
+            (recording, segments)
         };
         let grouped = shared.summary().has_groups
             && shared
