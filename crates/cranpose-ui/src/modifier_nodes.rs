@@ -13,17 +13,22 @@ use cranpose_foundation::{
 use cranpose_ui_graphics::{ColorFilter, DrawScope, PointerIcon};
 use cranpose_ui_layout::{Alignment, HorizontalAlignment, IntrinsicSize, VerticalAlignment};
 
+mod background;
 mod clickable;
+mod padding;
 mod size;
 
+pub use background::{BackgroundElement, BackgroundNode, CornerShapeElement, CornerShapeNode};
 pub use clickable::{ClickableElement, ClickableNode};
+pub(crate) use padding::device_padding;
+pub use padding::{PaddingElement, PaddingNode};
 pub use size::{SizeElement, SizeNode};
 
 use crate::{
     draw::DrawCommand,
     modifier::{
-        BlendMode, Brush, Color, CompositingStrategy, EdgeInsets, GraphicsLayer, LayoutWeight,
-        Point, RoundedCornerShape,
+        BlendMode, Brush, CompositingStrategy, GraphicsLayer, LayoutWeight, Point,
+        RoundedCornerShape,
     },
 };
 
@@ -230,6 +235,7 @@ macro_rules! impl_draw_modifier_node {
         impl DrawModifierNode for $ty {}
     };
 }
+pub(crate) use impl_draw_modifier_node;
 
 macro_rules! impl_sink_reporter_element {
     ($element:ty, $node:ty) => {
@@ -301,322 +307,6 @@ fn attach_draw_observer(
 fn detach_draw_observer(node_id_cell: &Cell<Option<NodeId>>) {
     if let Some(node_id) = node_id_cell.replace(None) {
         crate::render_state::clear_draw_observations_for_node(node_id);
-    }
-}
-
-/// Node that adds padding around its content.
-#[derive(Debug)]
-pub struct PaddingNode {
-    padding: EdgeInsets,
-    state: NodeState,
-}
-
-impl PaddingNode {
-    /// Creates a node that pads its content by `padding`, in logical pixels.
-    pub fn new(padding: EdgeInsets) -> Self {
-        Self {
-            padding,
-            state: NodeState::new(),
-        }
-    }
-
-    /// Returns the padding on each edge, in logical pixels.
-    pub fn padding(&self) -> EdgeInsets {
-        self.padding
-    }
-}
-
-impl DelegatableNode for PaddingNode {
-    fn node_state(&self) -> &NodeState {
-        &self.state
-    }
-}
-
-impl_layout_modifier_node!(PaddingNode, invalidate = InvalidationKind::Layout);
-
-impl LayoutModifierNode for PaddingNode {
-    fn measure_hold(
-        &self,
-        density: f32,
-        _constraints: Constraints,
-        size: Size,
-        wrapped: cranpose_ui_layout::WrappedHold,
-    ) -> Option<cranpose_ui_layout::ConstraintsHold> {
-        let inner = wrapped.hold?;
-        let padding = device_padding(self.padding, density);
-        let horizontal = padding.horizontal_sum();
-        let vertical = padding.vertical_sum();
-        // A padded size the bounds cut changes with them.
-        if size.width != wrapped.size.width + horizontal
-            || size.height != wrapped.size.height + vertical
-        {
-            return None;
-        }
-        cranpose_ui_layout::ConstraintsHold {
-            width: inner.width.outset(horizontal),
-            height: inner.height.outset(vertical),
-        }
-        .intersect(cranpose_ui_layout::ConstraintsHold::sized(
-            size.width,
-            size.height,
-        ))
-    }
-
-    fn measure(
-        &self,
-        context: &mut dyn ModifierNodeContext,
-        measurable: &dyn Measurable,
-        constraints: Constraints,
-    ) -> cranpose_ui_layout::LayoutModifierMeasureResult {
-        let padding = device_padding(self.padding, context.density());
-        let horizontal_padding = padding.horizontal_sum();
-        let vertical_padding = padding.vertical_sum();
-
-        let inner_constraints = Constraints {
-            min_width: (constraints.min_width - horizontal_padding).max(0.0),
-            max_width: (constraints.max_width - horizontal_padding).max(0.0),
-            min_height: (constraints.min_height - vertical_padding).max(0.0),
-            max_height: (constraints.max_height - vertical_padding).max(0.0),
-        };
-
-        let inner_placeable = measurable.measure(inner_constraints);
-        let inner_width = inner_placeable.width();
-        let inner_height = inner_placeable.height();
-
-        let (width, height) = constraints.constrain(
-            inner_width + horizontal_padding,
-            inner_height + vertical_padding,
-        );
-
-        cranpose_ui_layout::LayoutModifierMeasureResult::new(
-            Size { width, height },
-            padding.left,
-            padding.top,
-        )
-    }
-
-    fn min_intrinsic_width(&self, measurable: &dyn Measurable, height: f32, density: f32) -> f32 {
-        let padding = device_padding(self.padding, density);
-        let inner_height = (height - padding.vertical_sum()).max(0.0);
-        measurable.min_intrinsic_width(inner_height) + padding.horizontal_sum()
-    }
-
-    fn max_intrinsic_width(&self, measurable: &dyn Measurable, height: f32, density: f32) -> f32 {
-        let padding = device_padding(self.padding, density);
-        let inner_height = (height - padding.vertical_sum()).max(0.0);
-        measurable.max_intrinsic_width(inner_height) + padding.horizontal_sum()
-    }
-
-    fn min_intrinsic_height(&self, measurable: &dyn Measurable, width: f32, density: f32) -> f32 {
-        let padding = device_padding(self.padding, density);
-        let inner_width = (width - padding.horizontal_sum()).max(0.0);
-        measurable.min_intrinsic_height(inner_width) + padding.vertical_sum()
-    }
-
-    fn max_intrinsic_height(&self, measurable: &dyn Measurable, width: f32, density: f32) -> f32 {
-        let padding = device_padding(self.padding, density);
-        let inner_width = (width - padding.horizontal_sum()).max(0.0);
-        measurable.max_intrinsic_height(inner_width) + padding.vertical_sum()
-    }
-}
-
-/// `padding` with each side on a whole device pixel of `density`, as
-/// Compose's `roundToPx` puts every padding side.
-pub(crate) fn device_padding(padding: EdgeInsets, density: f32) -> EdgeInsets {
-    use cranpose_ui_layout::round_to_px;
-    EdgeInsets {
-        left: round_to_px(padding.left, density),
-        top: round_to_px(padding.top, density),
-        right: round_to_px(padding.right, density),
-        bottom: round_to_px(padding.bottom, density),
-    }
-}
-
-/// Element that creates and updates padding nodes.
-#[derive(Debug, Clone, PartialEq)]
-pub struct PaddingElement {
-    padding: EdgeInsets,
-}
-
-impl PaddingElement {
-    /// Creates an element for a node that pads its content by `padding`, in logical pixels.
-    pub fn new(padding: EdgeInsets) -> Self {
-        Self { padding }
-    }
-}
-
-impl Hash for PaddingElement {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        hash_f32_value(state, self.padding.left);
-        hash_f32_value(state, self.padding.top);
-        hash_f32_value(state, self.padding.right);
-        hash_f32_value(state, self.padding.bottom);
-    }
-}
-
-impl ModifierNodeElement for PaddingElement {
-    type Node = PaddingNode;
-
-    fn create(&self) -> Self::Node {
-        PaddingNode::new(self.padding)
-    }
-
-    fn update(&self, node: &mut Self::Node) {
-        if node.padding != self.padding {
-            node.padding = self.padding;
-        }
-    }
-
-    fn capabilities(&self) -> NodeCapabilities {
-        NodeCapabilities::LAYOUT
-    }
-}
-
-/// Node that draws a background behind its content.
-#[derive(Debug)]
-pub struct BackgroundNode {
-    color: Color,
-    shape: Option<RoundedCornerShape>,
-    state: NodeState,
-}
-
-impl BackgroundNode {
-    /// Creates a node that fills its bounds with `color` behind its content, with square corners.
-    pub fn new(color: Color) -> Self {
-        Self {
-            color,
-            shape: None,
-            state: NodeState::new(),
-        }
-    }
-
-    /// Returns the fill color.
-    pub fn color(&self) -> Color {
-        self.color
-    }
-
-    /// Returns the corner shape of the fill, or `None` for square corners.
-    pub fn shape(&self) -> Option<RoundedCornerShape> {
-        self.shape
-    }
-}
-
-impl DelegatableNode for BackgroundNode {
-    fn node_state(&self) -> &NodeState {
-        &self.state
-    }
-}
-
-impl_draw_modifier_node!(BackgroundNode);
-
-/// Element that creates and updates background nodes.
-#[derive(Debug, Clone, PartialEq)]
-pub struct BackgroundElement {
-    color: Color,
-}
-
-impl BackgroundElement {
-    /// Creates an element for a node that fills its bounds with `color`.
-    pub fn new(color: Color) -> Self {
-        Self { color }
-    }
-}
-
-impl Hash for BackgroundElement {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        hash_f32_value(state, self.color.0);
-        hash_f32_value(state, self.color.1);
-        hash_f32_value(state, self.color.2);
-        hash_f32_value(state, self.color.3);
-    }
-}
-
-impl ModifierNodeElement for BackgroundElement {
-    type Node = BackgroundNode;
-
-    fn create(&self) -> Self::Node {
-        BackgroundNode::new(self.color)
-    }
-
-    fn update(&self, node: &mut Self::Node) {
-        if node.color != self.color {
-            node.color = self.color;
-        }
-    }
-
-    fn capabilities(&self) -> NodeCapabilities {
-        NodeCapabilities::DRAW
-    }
-}
-
-/// Node that tracks the latest rounded corner shape.
-#[derive(Debug)]
-pub struct CornerShapeNode {
-    shape: RoundedCornerShape,
-    state: NodeState,
-}
-
-impl CornerShapeNode {
-    /// Creates a node that holds `shape` as the current rounded corner shape.
-    pub fn new(shape: RoundedCornerShape) -> Self {
-        Self {
-            shape,
-            state: NodeState::new(),
-        }
-    }
-
-    /// Returns the corner shape.
-    pub fn shape(&self) -> RoundedCornerShape {
-        self.shape
-    }
-}
-
-impl DelegatableNode for CornerShapeNode {
-    fn node_state(&self) -> &NodeState {
-        &self.state
-    }
-}
-
-impl_draw_modifier_node!(CornerShapeNode);
-
-/// Element that creates and updates corner shape nodes.
-#[derive(Debug, Clone, PartialEq)]
-pub struct CornerShapeElement {
-    shape: RoundedCornerShape,
-}
-
-impl CornerShapeElement {
-    /// Creates an element for a node that holds `shape` as the current rounded corner shape.
-    pub fn new(shape: RoundedCornerShape) -> Self {
-        Self { shape }
-    }
-}
-
-impl Hash for CornerShapeElement {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        let radii = self.shape.radii();
-        hash_f32_value(state, radii.top_left);
-        hash_f32_value(state, radii.top_right);
-        hash_f32_value(state, radii.bottom_right);
-        hash_f32_value(state, radii.bottom_left);
-    }
-}
-
-impl ModifierNodeElement for CornerShapeElement {
-    type Node = CornerShapeNode;
-
-    fn create(&self) -> Self::Node {
-        CornerShapeNode::new(self.shape)
-    }
-
-    fn update(&self, node: &mut Self::Node) {
-        if node.shape != self.shape {
-            node.shape = self.shape;
-        }
-    }
-
-    fn capabilities(&self) -> NodeCapabilities {
-        NodeCapabilities::DRAW
     }
 }
 

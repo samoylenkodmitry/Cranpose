@@ -12,7 +12,8 @@ use cranpose_ui_layout::Placeable;
 
 use super::*;
 use crate::modifier::{
-    Modifier, PointerInputScope, collect_modifier_slices, collect_slices_from_modifier,
+    Color, EdgeInsets, Modifier, PointerInputScope, collect_modifier_slices,
+    collect_slices_from_modifier,
 };
 
 #[test]
@@ -235,7 +236,7 @@ fn modifier_chain_reuses_padding_nodes() {
     assert_eq!(initial_node, updated_node);
     {
         let node_ref = chain.node::<PaddingNode>(0).unwrap();
-        assert_eq!(node_ref.padding.left, 20.0);
+        assert_eq!(node_ref.padding().left, 20.0);
     }
 }
 
@@ -520,7 +521,7 @@ fn toggling_background_color_reuses_node() {
 
     {
         let node_ref = chain.node::<BackgroundNode>(0).unwrap();
-        assert_eq!(node_ref.color, blue);
+        assert_eq!(node_ref.color(), blue);
     }
 }
 
