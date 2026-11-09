@@ -338,7 +338,9 @@ pub(super) fn write_node_content(
         draws,
         PrimitivePhase::BeforeChildren,
     );
-    if let Some(text) = text_node_from_parts(&TextNodeParts::of(node_id, slices, size)) {
+    if slices.has_text()
+        && let Some(text) = text_node_from_parts(&TextNodeParts::of(node_id, slices, size))
+    {
         list.push(store.add_text(text));
     }
     // The kept children go after the draws and text just written.

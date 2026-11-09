@@ -52,7 +52,8 @@ impl RecentPeak {
 
 // Out of line: a list gives back room seldom, and the check before it runs
 // for every list each frame.
+#[cold]
 #[inline(never)]
-fn shrink_list<T>(list: &mut Vec<T>, room: usize) {
+pub(super) fn shrink_list<T>(list: &mut Vec<T>, room: usize) {
     list.shrink_to(room);
 }

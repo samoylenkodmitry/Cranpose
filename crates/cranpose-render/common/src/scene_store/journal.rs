@@ -202,9 +202,7 @@ impl Journal {
         self.recent.note(self.entries.len());
         self.entries.drain(..drop);
         self.start += drop as u64;
-        if let Some(room) = self.recent.shrink_to(self.entries.capacity(), ENTRIES_KEPT) {
-            self.entries.shrink_to(room);
-        }
+        self.recent.shrink(&mut self.entries, ENTRIES_KEPT);
     }
 
     pub(super) fn open(&mut self, store: StoreId, events: RecordEvents) -> JournalCursor {

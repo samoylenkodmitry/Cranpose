@@ -74,10 +74,16 @@ impl Recordings {
     pub(super) fn begin_update(&mut self) {
         self.update = self.update.wrapping_add(1);
         if self.update.is_multiple_of(512) {
-            let update = self.update;
-            self.slots
-                .retain(|_, slot| update.wrapping_sub(slot.update) <= 64);
+            self.sweep();
         }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn sweep(&mut self) {
+        let update = self.update;
+        self.slots
+            .retain(|_, slot| update.wrapping_sub(slot.update) <= 64);
     }
 
     // Records the command `id` anew through `record`, which takes storage
