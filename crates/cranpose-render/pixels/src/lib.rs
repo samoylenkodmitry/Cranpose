@@ -180,6 +180,21 @@ impl PixelsRenderer {
             }
             return;
         }
+        self.redraw_picture(picture, width, height, scale, changed);
+    }
+
+    // Builds `picture`'s scene again and puts into `changed` the areas that
+    // differ from the scene before. Out of line: most frames update the
+    // scene in place.
+    #[inline(never)]
+    fn redraw_picture(
+        &self,
+        picture: &mut Picture,
+        width: u32,
+        height: u32,
+        scale: f32,
+        changed: &mut Vec<PixelRect>,
+    ) {
         // An update in place that gave up after it changed part of the scene
         // left the areas it changed: the scene holds those changes already.
         let updated = (!picture.changed.is_empty()).then(|| std::mem::take(&mut picture.changed));
