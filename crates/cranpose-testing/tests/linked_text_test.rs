@@ -1,9 +1,11 @@
 // `LinkedText` through the headless robot: a click on a link that the text
-// wrapped onto a later line opens that link.
+// wrapped onto a later line opens that link, and a click on a link runs the
+// handler of the text shown, also when an equal text came before it.
 
 use std::{cell::RefCell, rc::Rc};
 
-use cranpose_testing::create_headless_robot_test;
+use cranpose_core::{MutableState, rememberMutableStateOf};
+use cranpose_testing::{RobotTestRule, TestRenderer, create_headless_robot_test};
 use cranpose_ui::{
     Box, BoxSpec, LinkedText, Modifier, TextStyle,
     text::{AnnotatedString, LinkAnnotation, get_offset_for_position, offset_for_position_wrapped},
@@ -82,4 +84,56 @@ fn a_click_on_a_link_on_a_wrapped_line_opens_that_link() {
     robot.wait_for_idle();
 
     assert_eq!(*opened.borrow(), [expected]);
+}
+
+// A text whose one link, tagged alike in every generation, notes
+// `generation` when clicked.
+fn tagged(clicks: &Rc<RefCell<Vec<u32>>>, generation: u32) -> AnnotatedString {
+    let clicks = Rc::clone(clicks);
+    AnnotatedString::builder()
+        .push_link(LinkAnnotation::Clickable {
+            tag: "same-tag".into(),
+            handler: Rc::new(move || clicks.borrow_mut().push(generation)),
+        })
+        .append("payload")
+        .pop()
+        .to_annotated_string()
+}
+
+fn click_payload(robot: &mut RobotTestRule<TestRenderer>) {
+    let bounds = robot
+        .find_by_text("payload")
+        .bounds()
+        .expect("the link shows");
+    robot.click_at(
+        bounds.x + bounds.width / 2.0,
+        bounds.y + bounds.height / 2.0,
+    );
+    robot.wait_for_idle();
+}
+
+#[test]
+fn a_click_on_a_link_runs_the_handler_of_the_text_shown() {
+    let clicks = Rc::new(RefCell::new(Vec::new()));
+    let generation_slot = Rc::new(RefCell::new(None::<MutableState<u32>>));
+    let app_clicks = Rc::clone(&clicks);
+    let app_slot = Rc::clone(&generation_slot);
+    let mut robot = create_headless_robot_test(400, 400, move || {
+        let generation = rememberMutableStateOf(|| 0u32);
+        *app_slot.borrow_mut() = Some(generation);
+        LinkedText(
+            tagged(&app_clicks, generation.get()),
+            Modifier::empty(),
+            TextStyle::default(),
+            |_url| {},
+        );
+    });
+    let generation = generation_slot.borrow().expect("the app composed");
+
+    click_payload(&mut robot);
+    generation.set(1);
+    robot.wait_for_idle();
+    click_payload(&mut robot);
+
+    assert_eq!(*clicks.borrow(), [0, 1]);
 }
