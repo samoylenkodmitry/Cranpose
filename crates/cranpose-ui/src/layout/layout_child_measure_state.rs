@@ -6,7 +6,7 @@ use std::{
     rc::{Rc, Weak},
 };
 
-use cranpose_core::{MemoryApplier, Node, NodeError, NodeId, PackedU64};
+use cranpose_core::{MemoryApplier, Node, NodeError, NodeId, NodeIdCell, PackedU64};
 use cranpose_ui_layout::{AlignmentLines, Constraints, MeasurePolicy, Placement};
 
 use super::{
@@ -98,13 +98,14 @@ impl LayoutBuilderState {
     }
 }
 
-#[derive(Default)]
 pub(super) struct LayoutChildFrame {
     pub(super) builder: RefCell<Option<Rc<LayoutBuilderState>>>,
-    pub(super) error: RefCell<Option<NodeError>>,
+    // The first error a child recorded in the pass, boxed: most passes
+    // record none.
+    pub(super) error: Cell<Option<Box<NodeError>>>,
     pass: Cell<ChildPass>,
-    /// The node whose children the frame binds, which places them.
-    parent: Cell<Option<NodeId>>,
+    // The node whose children the frame binds, which places them.
+    parent: NodeIdCell,
     // How many of the children have a z index other than 0, as their
     // records last placed or read it.
     placed_with_z_index: Cell<u32>,
@@ -126,8 +127,19 @@ pub(super) enum ChildPass {
 }
 
 impl LayoutChildFrame {
+    pub(super) fn new(parent_parts: Weak<LayoutParts>) -> Self {
+        Self {
+            builder: RefCell::new(None),
+            error: Cell::new(None),
+            pass: Cell::new(ChildPass::default()),
+            parent: NodeIdCell::new(None),
+            placed_with_z_index: Cell::new(0),
+            parent_parts,
+        }
+    }
+
     pub(super) fn bind(&self, builder: &Rc<LayoutBuilderState>, parent: NodeId, pass: ChildPass) {
-        self.error.borrow_mut().take();
+        self.error.take();
         *self.builder.borrow_mut() = Some(Rc::clone(builder));
         self.pass.set(pass);
         self.parent.set(Some(parent));
@@ -164,10 +176,8 @@ impl LayoutChildFrame {
         if self.builder.borrow().is_none() {
             return;
         }
-        let mut slot = self.error.borrow_mut();
-        if slot.is_none() {
-            *slot = Some(err);
-        }
+        let first = self.error.take();
+        self.error.set(first.or_else(|| Some(Box::new(err))));
     }
 }
 
@@ -500,7 +510,8 @@ impl LayoutRuntimeState {
     pub(super) fn take_child_error(&self) -> Option<NodeError> {
         self.children
             .as_ref()
-            .and_then(|children| children.frame.error.borrow_mut().take())
+            .and_then(|children| children.frame.error.take())
+            .map(|err| *err)
     }
 
     /// Puts the children the last measure measured into `measured_children`.
@@ -605,10 +616,7 @@ impl LayoutChildren {
             ids: Vec::with_capacity(count),
             states: Vec::with_capacity(count),
             measurables: Vec::with_capacity(count),
-            frame: Rc::new(LayoutChildFrame {
-                parent_parts: Rc::downgrade(parent_parts),
-                ..LayoutChildFrame::default()
-            }),
+            frame: Rc::new(LayoutChildFrame::new(Rc::downgrade(parent_parts))),
         }
     }
 

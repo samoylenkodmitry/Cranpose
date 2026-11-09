@@ -2088,7 +2088,7 @@ fn parent_data_uses_resolved_layout_properties() {
     let context = crate::render_state::require_current_app_context("a layout test");
     let builder =
         LayoutBuilder::new_with_epoch(Rc::new(ConcreteApplierHost::new(applier)), 1, &context);
-    let frame = Rc::new(LayoutChildFrame::default());
+    let frame = Rc::new(LayoutChildFrame::new(std::rc::Weak::new()));
     let state = LayoutChildMeasureState::new(node_id, Rc::clone(&frame));
     builder
         .state
