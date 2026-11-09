@@ -1,11 +1,14 @@
-// A node's chain keeps the padding, size and background of its modifier in
-// their nodes alone. As the modifier reorders, repeats, drops and changes
-// them, the node lays out as a fresh composition of the same modifier does,
-// and gives back a modifier equal to the one set.
+// A node's chain keeps the padding, size and background of its modifier,
+// and a text's string and style, in their nodes alone. As the modifier
+// reorders, repeats, drops and changes them, and the text changes, the
+// nodes lay out and show what a fresh composition of the same state shows,
+// and the node gives back a modifier equal to the one set.
 
 use std::{cell::Cell, rc::Rc};
 
-use cranpose_ui::{Box, BoxSpec, Color, LayoutBox, LayoutNode, LayoutTree, Modifier, Size};
+use cranpose_ui::{
+    Box, BoxSpec, Color, LayoutBox, LayoutNode, LayoutTree, Modifier, Size, Text, TextStyle,
+};
 
 use crate::{directional_layout::tagged, text_measured_layout_integration::layout_composition};
 
@@ -36,13 +39,11 @@ fn subject(variant: usize) {
         Modifier::empty().content_description("wrapper"),
         BoxSpec::default(),
         move || {
-            Box(modifier(variant), BoxSpec::default(), || {
-                Box(
-                    Modifier::empty()
-                        .size_points(12.0, 12.0)
-                        .content_description("child"),
-                    BoxSpec::default(),
-                    || {},
+            Box(modifier(variant), BoxSpec::default(), move || {
+                Text(
+                    ["one", "two two", "three"][variant % 3],
+                    Modifier::empty().content_description("child"),
+                    TextStyle::default(),
                 );
             });
         },
@@ -84,6 +85,11 @@ fn a_chain_holding_elements_in_its_nodes_follows_every_change_of_its_modifier() 
         for (kept, made) in pairs {
             assert_eq!(rect(kept), rect(made), "after variant {value}");
         }
+        let text = |layout: &LayoutTree| {
+            let slices = tagged(layout.root(), "child").node_data.modifier_slices();
+            slices.text_content().map(|text| text.to_string())
+        };
+        assert_eq!(text(&layout), text(&fresh), "the text of variant {value}");
         let id = subject_box(&layout).node_id;
         let held = composition
             .applier_mut()

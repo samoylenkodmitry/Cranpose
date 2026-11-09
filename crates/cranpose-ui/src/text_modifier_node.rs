@@ -613,6 +613,15 @@ impl Hash for TextModifierElement {
 
 impl ModifierNodeElement for TextModifierElement {
     type Node = TextModifierNode;
+    const FROM_NODE: Option<fn(&TextModifierNode) -> Self> = Some(|node| {
+        let source = node.layout.source.borrow();
+        Self {
+            text: source.text.clone(),
+            style: Arc::clone(&source.style),
+            options: source.options,
+            density: node.density,
+        }
+    });
 
     fn create(&self) -> Self::Node {
         TextModifierNode::new(
