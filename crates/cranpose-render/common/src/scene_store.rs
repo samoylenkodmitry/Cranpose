@@ -13,6 +13,7 @@ mod layer_props;
 mod layer_ref;
 mod leaf_write;
 mod own_marks;
+mod placement;
 mod reach;
 mod record_props;
 mod recordings;
@@ -32,6 +33,7 @@ pub use journal::{JournalCursor, JournalEntry, JournalRead, RecordEvent, RecordE
 pub use layer_props::LayerProps;
 pub use layer_ref::{ItemRef, LayerRef, RecordChange};
 pub use leaf_write::Leaf;
+pub use placement::Placement;
 pub use reach::{BLUR_PIXEL_SLACK, Extent, Reach, ShadowCaster};
 pub(crate) use records::{
     GeoRecord, GraphicsLayerId, PropsId, ReachState, RecordNode, TransformId, TreeRecord,

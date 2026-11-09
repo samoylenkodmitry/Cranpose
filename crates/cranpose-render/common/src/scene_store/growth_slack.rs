@@ -8,10 +8,15 @@ use cranpose_core::collections::growth_slack::GrowthSlack;
 use super::SceneStore;
 
 pub(super) fn trim(store: &mut SceneStore) {
+    // A record's four rows grow, clear and give back room together, so the
+    // tree row's room speaks for all four.
+    let rows = store.tree.capacity();
     store.tree.trim_growth_slack();
-    store.geo.trim_growth_slack();
-    store.warm.trim_growth_slack();
-    store.generations.trim_growth_slack();
+    if store.tree.capacity() != rows {
+        store.geo.trim_growth_slack();
+        store.warm.trim_growth_slack();
+        store.generations.trim_growth_slack();
+    }
     store.facts.trim_growth_slack();
     store.items.trim_growth_slack();
     store.marks.trim_growth_slack();

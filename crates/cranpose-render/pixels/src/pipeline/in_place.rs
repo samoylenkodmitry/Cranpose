@@ -124,7 +124,7 @@ impl Repush<'_> {
         if old.identity != subtree.identity() {
             return Err(Stop::OtherLayer);
         }
-        let placed_as_before = old.transform == subtree.transform_to_parent();
+        let placed_as_before = old.placement == subtree.placement();
         if old.change == subtree.change() && placed_as_before {
             return Ok(());
         }

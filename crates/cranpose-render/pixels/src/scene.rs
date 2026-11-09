@@ -7,7 +7,7 @@ use cranpose_render_common::{
     graph::ProjectiveTransform,
     layer_shadow::{ShadowLight, ShadowRRect},
     primitive_emit::ShapeDrawParams,
-    scene_store::{ItemRef as RecordItem, LayerRef, RecordChange},
+    scene_store::{ItemRef as RecordItem, LayerRef, Placement, RecordChange},
 };
 use cranpose_ui::TextStyle;
 use cranpose_ui_graphics::{
@@ -281,7 +281,7 @@ impl<'a> Subtree<'a> {
     // The node and the node whose outer draws it wraps.
     pub(crate) fn identity(self) -> (Option<NodeId>, Option<NodeId>) {
         match self {
-            Self::Layer(layer) => (layer.node_id(), layer.wraps()),
+            Self::Layer(layer) => layer.identity(),
             Self::Inline(leaf) => (leaf.owner(), None),
         }
     }
@@ -303,9 +303,9 @@ impl<'a> Subtree<'a> {
     }
 
     // The node's placement in its parent's layer.
-    pub(crate) fn transform_to_parent(self) -> ProjectiveTransform {
+    pub(crate) fn placement(self) -> Placement {
         match self {
-            Self::Layer(layer) | Self::Inline(layer) => layer.transform_to_parent(),
+            Self::Layer(layer) | Self::Inline(layer) => layer.placement(),
         }
     }
 }
@@ -320,7 +320,7 @@ pub(crate) struct SubtreeItems {
     /// The layer's own change number, which a change beneath it leaves.
     pub own_change: RecordChange,
     /// The layer's placement in its parent, which the number leaves out.
-    pub transform: ProjectiveTransform,
+    pub placement: Placement,
     /// Where [`RasterScene::passed_down`] holds what the layer passed to its
     /// child layers, when it has any.
     pub passed_down: Option<usize>,
@@ -412,7 +412,7 @@ impl RasterScene {
             identity: subtree.identity(),
             change: subtree.change(),
             own_change: subtree.own_change(),
-            transform: subtree.transform_to_parent(),
+            placement: subtree.placement(),
             passed_down: None,
             end: 0,
             start: counts,

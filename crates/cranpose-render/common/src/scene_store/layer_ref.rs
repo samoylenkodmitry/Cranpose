@@ -7,7 +7,8 @@ use cranpose_ui::{GraphicsLayer, Point, Rect, RenderEffect, Size};
 use cranpose_ui_graphics::{BlendMode, ColorFilter, CompositingStrategy, DrawPrimitive};
 
 use super::{
-    Extent, Item, ItemKind, LayerProps, Reach, RecordFlags, RecordKind, SceneStore, ShapeRef,
+    Extent, Item, ItemKind, LayerProps, Placement, Reach, RecordFlags, RecordKind, SceneStore,
+    ShapeRef,
 };
 use crate::{
     graph::{
@@ -94,6 +95,17 @@ impl<'a> LayerRef<'a> {
         }
     }
 
+    /// [`Self::node_id`] and [`Self::wraps`] from one read of the record.
+    #[inline]
+    pub fn identity(self) -> (Option<NodeId>, Option<NodeId>) {
+        let owner = self.owner();
+        match self.kind() {
+            RecordKind::Layer | RecordKind::Leaf => (owner, None),
+            RecordKind::Wrapper => (None, owner),
+            RecordKind::DrawGroup => (None, None),
+        }
+    }
+
     /// The layout node the record draws for, whatever its kind.
     #[inline]
     pub fn owner(self) -> Option<NodeId> {
@@ -170,6 +182,13 @@ impl<'a> LayerRef<'a> {
     #[inline]
     pub fn transform_to_parent(self) -> ProjectiveTransform {
         self.store.transform_to_parent(self.id)
+    }
+
+    /// Where the record sits in its parent's layer: [`Self::transform_to_parent`]
+    /// without making a transform of a point.
+    #[inline]
+    pub fn placement(self) -> Placement {
+        self.store.placement(self.id)
     }
 
     /// Offset of the node's content box from its origin, where its children

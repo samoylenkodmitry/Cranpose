@@ -12,9 +12,9 @@ use cranpose_ui::{GraphicsLayer, Point, Rect};
 
 use super::{
     ChildOrder, Facts, GeoRecord, HashCache, Item, ItemKind, ItemLists, ItemRef, Journal,
-    JournalCursor, JournalEntry, JournalRead, LayerProps, LayerRef, Reach, ReachState, RecordEvent,
-    RecordEvents, RecordFlags, RecordKind, RecordNode, ShapeChunks, ShapeRun, Slab, Span, SpanPool,
-    TransformId, TreeRecord, WarmRecord,
+    JournalCursor, JournalEntry, JournalRead, LayerProps, LayerRef, Placement, Reach, ReachState,
+    RecordEvent, RecordEvents, RecordFlags, RecordKind, RecordNode, ShapeChunks, ShapeRun, Slab,
+    Span, SpanPool, TransformId, TreeRecord, WarmRecord,
     own_marks::{self, OwnMark},
     recordings::Recordings,
 };
@@ -783,6 +783,15 @@ impl SceneStore {
                 let origin = self.placed_origin(id.index());
                 ProjectiveTransform::translation(origin.x, origin.y)
             }
+        }
+    }
+
+    /// Where `id` sits in its parent's layer.
+    #[inline]
+    pub fn placement(&self, id: RecordId) -> Placement {
+        match self.tree[id.index()].transform {
+            Some(transform) => Placement::By(self.transforms[transform.index()]),
+            None => Placement::At(self.placed_origin(id.index())),
         }
     }
 
