@@ -472,6 +472,14 @@ release (`cranpose-release`, once a release draws the gauntlet) and main.
    `frameworks.py`. `just perf-browser` then opens macm3's browser builds in
    Chrome on the phone at tier 8, then at tier 10 (below).
 
+Rune and zgui publish no release: their pins name a commit, which moves
+most days. `versions.py bump` leaves them where they are. A night dispatched
+with the `git_pins` input (`gh workflow run perf-nightly.yml -f git_pins=true`)
+moves them to their repository's latest commit as well, measures a main the
+dashboard already holds again, and the pull request
+`perf/framework-versions` carries them with the pins of the other
+frameworks.
+
 Each run names the version of every framework it measured: the pins
 `versions.py` reads, the Flutter SDK and .NET MAUI workload `build_apps.sh`
 keeps at their latest, the phone's WebView, the Mac's Chrome or Safari's
@@ -695,6 +703,10 @@ and the panels lie over a different part of the cluster's look-alike levels.
 | `tauri` | the same page in a Tauri window, on the system's WKWebView; the page asks the app for the tier and logs through its commands |
 | `dioxus` | `dioxus-app`: Dioxus components over the web page's CSS, on Dioxus's desktop renderer (WKWebView) |
 | `xilem` | `xilem-app`: Xilem's views over Masonry's widgets, drawn by Vello on wgpu |
+| `rune` | `rune-app`: Rune's views over its own wgpu renderer, pinned to a commit since the repository publishes no crate |
+| `bui` | `bui-app`: BUI's HTML-like elements, laid out by taffy and rasterized on the CPU on macOS (crate `blenderui`) |
+| `ferro` | `ferro-app`: FerroUI's declarative builders and signals over its Avalonia-derived controls, drawn by Skia |
+| `zgui` | `zgui-app`: zgui's elements under a CSS style sheet, with signals, on wgpu and Vello, pinned to a commit |
 | `fyne` | `fyne-app`: Fyne on OpenGL, canvas objects the app places itself |
 
 What each framework lacks and how its app does without:
@@ -728,6 +740,22 @@ What each framework lacks and how its app does without:
   own line height and have no line limit, so a box as tall as the lines
   clips a paragraph, and the subtitle is three labels in a row. Its virtual
   scroll moves by whole rows, so rows report their heights, as iced's do.
+- Rune, BUI, FerroUI and zgui have no list that lays out only the rows on
+  screen: each app builds the rows from the first one on screen to the
+  window's bottom, and every row reports its height once laid out (Rune's
+  `on_layout`, BUI's `bounds_of`, FerroUI's `on_size_changed`, zgui's node
+  bounds).
+- Rune clips a paragraph with `max_lines` and draws the sparkline's fading
+  fill as a gradient box under a white polygon above the line; the wall's
+  tiles are one cached layer.
+- BUI parses `line-clamp` and ignores it, so a box as tall as the lines clips
+  the paragraph. Its canvas has no gradient fill: the sparkline's fill is six
+  clipped polygon bands.
+- FerroUI's sparkline is a polygon and a polyline sized from the card's
+  width, and its panels turn through render transforms.
+- zgui has no line clamp either: a box as tall as the lines clips the
+  paragraph. It reads pictures by path or by registered bytes, so the avatars
+  are PNG files in memory.
 - Fyne sizes an object before it knows its width, so the app wraps
   paragraphs and places every object itself, as Fyne's custom widgets do. It
   rotates no object: the badge stays upright. Its canvas has no path: the
@@ -793,7 +821,7 @@ it. `build_apps.sh browser DIR` makes `DIR/APP/index.html`:
 | `avalonia` | `avalonia-app/Browser`: Avalonia on Skia, compiled ahead of time to WebAssembly |
 | `web` | the plain page of DOM and CSS, which every other app is held to |
 
-GPUI, Xilem, Fyne, Tauri and the native toolkits have no browser target, and
+GPUI, Xilem, Rune, BUI, FerroUI, zgui, Fyne, Tauri and the native toolkits have no browser target, and
 React Native, Lynx, NativeScript, MAUI and Views are not pages. Every page
 takes its tier and freeze frame from the query string, `?tier=12&freeze=120`,
 and logs its `PERF` lines on the console. `browser.py` serves the pages, and

@@ -1,0 +1,32 @@
+[package]
+name = "perf-compare-zgui"
+version = "0.1.0"
+edition = "2024"
+description = "The gauntlet of the framework comparison in zgui"
+license = "Apache-2.0 OR MIT"
+publish = false
+
+[dependencies]
+# zgui's repository head: the 0.1.0 release on crates.io is 271 commits behind it.
+zgui = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+# The registry of in-memory pictures an `image` element names by URL.
+zgui-image = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+log = "0.4"
+perf-data = { path = "../perf-data" }
+png = "0.17"
+
+# zgui's workspace patches the font collection under its text engine with a vendored copy; a
+# dependent does not inherit the patch, so the app names the same one.
+[patch.crates-io]
+fontique = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+
+# Its own workspace, like a real application, built as the Cranpose app is.
+[workspace]
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+debug = 0

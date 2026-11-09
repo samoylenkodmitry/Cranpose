@@ -19,6 +19,13 @@ on:
   schedule:
     - cron: '30 1 * * *'
   workflow_dispatch:
+    inputs:
+      git_pins:
+        description: >-
+          Also move the frameworks that publish no release (Rune, zgui) to
+          their repository's latest commit, in the same pull request
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -67,6 +74,8 @@ jobs:
 
       - name: Skip a main this Mac already measured
         id: published
+        # A night asked to move the commit pins measures again.
+        if: ${{ !inputs.git_pins }}
         run: |
           chip="$(sysctl -n machdep.cpu.brand_string)"
           chrome="$(defaults read '/Applications/Google Chrome.app/Contents/Info' CFBundleShortVersionString | cut -d. -f1)"
@@ -89,7 +98,9 @@ jobs:
 
       - name: Move every framework to its latest release
         if: steps.published.outputs.measured != 'yes'
-        run: python3 benchmarks/compose-vs-cranpose/versions.py bump --record "$RUNNER_TEMP/bumps.json"
+        env:
+          GIT_PINS: ${{ inputs.git_pins && '--git-pins' || '' }}
+        run: python3 benchmarks/compose-vs-cranpose/versions.py bump $GIT_PINS --record "$RUNNER_TEMP/bumps.json"
 
       - name: Build every framework's apps
         if: steps.published.outputs.measured != 'yes'
