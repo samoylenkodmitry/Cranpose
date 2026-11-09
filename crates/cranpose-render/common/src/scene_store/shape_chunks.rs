@@ -4,7 +4,7 @@
 // A chunk takes new shapes only while no packet holds it, and a chunk that
 // no item names any more takes new shapes again once no packet holds it.
 
-use std::{hash::Hasher, ops::Range, sync::Arc};
+use std::{hash::Hasher, num::NonZeroU32, ops::Range, sync::Arc};
 
 use cranpose_ui_graphics::{DrawPrimitive, FxHasher, Rect, ShapeRecorder};
 
@@ -19,10 +19,30 @@ const CHUNK_SHAPES: usize = 256;
 // let go of.
 const KEPT_EMPTY_CHUNKS: usize = 4;
 
+// A chunk's place in the store's list of chunks, past 0, so a slab of
+// runs needs no room for the absence of one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ChunkId(NonZeroU32);
+
+impl ChunkId {
+    fn at(index: usize) -> Self {
+        Self(
+            u32::try_from(index + 1)
+                .ok()
+                .and_then(NonZeroU32::new)
+                .expect("a store holds fewer than 2^32 shape chunks"),
+        )
+    }
+
+    fn index(self) -> usize {
+        self.0.get() as usize - 1
+    }
+}
+
 /// The shapes of one shape item in its chunk.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ShapeRun {
-    chunk: u32,
+    chunk: ChunkId,
     // How many shapes the item draws, and the rect they cover when it
     // draws any: a collect reads them for every item it draws.
     shapes: u32,
@@ -82,10 +102,10 @@ pub(super) struct ShapeChunks {
     // By chunk id; `None` for an id whose chunk went.
     chunks: Vec<Option<ShapeChunk>>,
     // The chunk that took the last shapes.
-    open: Option<u32>,
+    open: Option<ChunkId>,
     // The chunks no item names, which take shapes again once no packet
     // holds them.
-    empty: Vec<u32>,
+    empty: Vec<ChunkId>,
 }
 
 #[derive(Clone)]
@@ -100,7 +120,7 @@ impl ShapeChunks {
     // them, and returns where they went.
     fn record(&mut self, record: impl FnOnce(&mut ShapeRecorder)) -> ShapeRun {
         let chunk = self.writable_chunk();
-        let entry = self.chunks[chunk as usize]
+        let entry = self.chunks[chunk.index()]
             .as_mut()
             .expect("a writable chunk is there");
         let recorder = Arc::get_mut(&mut entry.recorder).expect("no packet holds a writable chunk");
@@ -122,25 +142,25 @@ impl ShapeChunks {
 
     // A chunk with room that no packet holds: the open one, an empty one
     // emptied of its old shapes, or a new one.
-    fn writable_chunk(&mut self) -> u32 {
+    fn writable_chunk(&mut self) -> ChunkId {
         let takes = |chunk: &mut ShapeChunk| {
             Arc::get_mut(&mut chunk.recorder)
                 .is_some_and(|recorder| recorder.tables().shapes.len() < CHUNK_SHAPES)
         };
         if let Some(open) = self.open
-            && self.chunks[open as usize].as_mut().is_some_and(takes)
+            && self.chunks[open.index()].as_mut().is_some_and(takes)
         {
             return open;
         }
         let reused = self.empty.iter().position(|&id| {
-            self.chunks[id as usize]
+            self.chunks[id.index()]
                 .as_mut()
                 .is_some_and(|chunk| Arc::get_mut(&mut chunk.recorder).is_some())
         });
         let id = match reused {
             Some(at) => {
                 let id = self.empty.swap_remove(at);
-                if let Some(recorder) = self.chunks[id as usize]
+                if let Some(recorder) = self.chunks[id.index()]
                     .as_mut()
                     .and_then(|chunk| Arc::get_mut(&mut chunk.recorder))
                 {
@@ -154,7 +174,7 @@ impl ShapeChunks {
         id
     }
 
-    fn add_chunk(&mut self) -> u32 {
+    fn add_chunk(&mut self) -> ChunkId {
         let chunk = Some(ShapeChunk {
             recorder: Arc::default(),
             items: 0,
@@ -169,13 +189,13 @@ impl ShapeChunks {
                 self.chunks.len() - 1
             }
         };
-        u32::try_from(id).expect("a store holds fewer than 2^32 shape chunks")
+        ChunkId::at(id)
     }
 
     // Notes that an item that named `chunk` went. A chunk no item names
     // waits for reuse; past the few kept, it goes.
-    fn release(&mut self, chunk: u32) {
-        let Some(entry) = self.chunks[chunk as usize].as_mut() else {
+    fn release(&mut self, chunk: ChunkId) {
+        let Some(entry) = self.chunks[chunk.index()].as_mut() else {
             return;
         };
         entry.items -= 1;
@@ -188,12 +208,12 @@ impl ShapeChunks {
         if self.empty.len() < KEPT_EMPTY_CHUNKS {
             self.empty.push(chunk);
         } else {
-            self.chunks[chunk as usize] = None;
+            self.chunks[chunk.index()] = None;
         }
     }
 
-    fn recorder(&self, chunk: u32) -> &Arc<ShapeRecorder> {
-        &self.chunks[chunk as usize]
+    fn recorder(&self, chunk: ChunkId) -> &Arc<ShapeRecorder> {
+        &self.chunks[chunk.index()]
             .as_ref()
             .expect("a shape item names a live chunk")
             .recorder
