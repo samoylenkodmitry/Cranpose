@@ -43,8 +43,6 @@ struct RenderState {
     moved_scene_nodes: RefCell<NotedSceneNodes<MovedSceneNode>>,
     /// Nodes whose z index changed: their parents' layers hold the order.
     z_order_changes: RefCell<DirtyNodeSet>,
-    // Redraws asked before a node had an id, which no draw repass names.
-    retained_redraws: RefCell<taken_list::TakenList<NodeId>>,
     render_invalidated: Cell<bool>,
     pointer_invalidated: Cell<bool>,
     focus_invalidated: Cell<bool>,
@@ -115,7 +113,6 @@ impl RenderState {
             geometry_scene_nodes: RefCell::new(NotedSceneNodes::new()),
             moved_scene_nodes: RefCell::new(NotedSceneNodes::new()),
             z_order_changes: RefCell::new(DirtyNodeSet::new()),
-            retained_redraws: RefCell::default(),
             render_invalidated: Cell::new(false),
             pointer_invalidated: Cell::new(false),
             focus_invalidated: Cell::new(false),
@@ -399,19 +396,6 @@ impl AppContext {
             .draw_repasses
             .borrow_mut()
             .take_dirty_nodes_into(output);
-    }
-
-    /// Replaces `output`'s nodes with the nodes whose redraw flag was set
-    /// before they had an id: a surface's frame takes those under its root.
-    pub fn take_retained_redraw_nodes_into(&self, output: &mut Vec<NodeId>) {
-        self.state.retained_redraws.borrow_mut().take_into(output);
-    }
-
-    /// Gives back a node [`Self::take_retained_redraw_nodes_into`] moved out
-    /// that the surface did not take: one under another window root or not
-    /// attached yet.
-    pub fn keep_retained_redraw_node(&self, node_id: NodeId) {
-        self.state.retained_redraws.borrow_mut().push(node_id);
     }
 
     /// Appends the nodes whose z index changed since the last call to
@@ -1021,14 +1005,6 @@ fn schedule_layer_property_repass_in_context(context: &AppContext, node_id: Node
         .borrow_mut()
         .schedule_repass(node_id);
     context.state.render_invalidated.set(true);
-}
-
-/// Notes `node_id`, whose redraw flag was set before it had an id, in the
-/// current context: no draw repass names it, so a surface's frame takes it.
-pub(crate) fn note_retained_redraw(node_id: NodeId) {
-    if let Some(context) = current_app_context() {
-        context.keep_retained_redraw_node(node_id);
-    }
 }
 
 /// Returns true if any draw repasses are pending.

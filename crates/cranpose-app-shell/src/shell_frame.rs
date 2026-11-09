@@ -57,7 +57,6 @@ struct FrameDirt {
     render_dirty: bool,
     pointer_dirty: bool,
     attributed: bool,
-    layer_properties_pending: bool,
     recomposed_this_frame: bool,
 }
 
@@ -555,15 +554,10 @@ where
                 || !surface.scoped_layout_scene_nodes.is_empty()
                 || !surface.scoped_moved_scene_nodes.is_empty()
         });
-        let layer_properties_pending = self
-            .surfaces
-            .iter()
-            .any(|surface| !surface.scoped_layer_property_nodes.is_empty());
         let frame = FrameDirt {
             render_dirty,
             pointer_dirty,
             attributed,
-            layer_properties_pending,
             recomposed_this_frame: laid_out.recomposed,
         };
 
@@ -598,10 +592,7 @@ where
     let layer_property_nodes = std::mem::take(&mut surface.scoped_layer_property_nodes);
     let structural_parents = std::mem::take(&mut surface.structural_scene_nodes);
     let draw_repass_pending = !draw_dirty_nodes.is_empty();
-    let mut draw_dirty_nodes = refresh_draw_nodes(app, surface, draw_dirty_nodes);
-    if frame.render_dirty && !frame.layer_properties_pending && !draw_repass_pending {
-        draw_dirty_nodes = refresh_retained_redraw_nodes(app, surface, draw_dirty_nodes);
-    }
+    let draw_dirty_nodes = refresh_draw_nodes(app, surface, draw_dirty_nodes);
     let layout = ScopedLayoutNodes {
         reshaped: std::mem::take(&mut surface.scoped_layout_scene_nodes),
         moved: std::mem::take(&mut surface.scoped_moved_scene_nodes),
@@ -757,28 +748,6 @@ fn refresh_draw_nodes<R: Renderer>(
     dirty_nodes
 }
 
-fn refresh_retained_redraw_nodes<R: Renderer>(
-    app: &mut ShellApp,
-    surface: &mut RootSurface<R>,
-    mut dirty_nodes: Vec<NodeId>,
-) -> Vec<NodeId> {
-    dirty_nodes.clear();
-    let Some(root) = surface.root_node(app) else {
-        return dirty_nodes;
-    };
-    {
-        let mut applier = app.composition.applier_mut();
-        collect_retained_redraw_nodes(
-            &mut applier,
-            &app.app_context,
-            root,
-            &mut dirty_nodes,
-            &mut surface.redraw_walk,
-        );
-    }
-    refresh_draw_nodes(app, surface, dirty_nodes)
-}
-
 fn clear_dispatch_invalidation(
     applier: &mut MemoryApplier,
     node_id: NodeId,
@@ -844,93 +813,6 @@ pub(crate) fn build_draw_refresh_scope(
         }
     }
     refresh_scope
-}
-
-/// Collects into `dirty_nodes` the nodes under `root` whose redraw flag was
-/// set before they had an id, clearing the flags: a draw repass names every
-/// other node whose content changed. A node under another window root, or
-/// not attached yet, stays noted in `context` for a later frame. `pending`
-/// keeps its storage for the next frame.
-fn collect_retained_redraw_nodes(
-    applier: &mut MemoryApplier,
-    context: &AppContext,
-    root: NodeId,
-    dirty_nodes: &mut Vec<NodeId>,
-    pending: &mut Vec<NodeId>,
-) {
-    pending.clear();
-    context.take_retained_redraw_nodes_into(pending);
-    for &id in pending.iter() {
-        match redraw_place(applier, id, root) {
-            RedrawPlace::Here => {
-                if take_redraw_flag(applier, id) {
-                    dirty_nodes.push(id);
-                }
-            }
-            RedrawPlace::Elsewhere => context.keep_retained_redraw_node(id),
-            RedrawPlace::Gone => {}
-        }
-    }
-}
-
-/// Where a node noted for a redraw lies for the surface of `root`.
-enum RedrawPlace {
-    /// Under `root` and under no other window root: the surface takes it.
-    Here,
-    /// Under another window root, or not attached to a root yet.
-    Elsewhere,
-    /// The node is gone.
-    Gone,
-}
-
-fn redraw_place(applier: &mut MemoryApplier, id: NodeId, root: NodeId) -> RedrawPlace {
-    let mut current = id;
-    loop {
-        if current == root {
-            return RedrawPlace::Here;
-        }
-        let Ok(node) = applier.get_mut(current) else {
-            return if current == id {
-                RedrawPlace::Gone
-            } else {
-                RedrawPlace::Elsewhere
-            };
-        };
-        let parent = node.parent();
-        if node
-            .as_any_mut()
-            .downcast_mut::<LayoutNode>()
-            .is_some_and(|layout| layout.is_window_root())
-        {
-            return RedrawPlace::Elsewhere;
-        }
-        let Some(parent) = parent else {
-            return RedrawPlace::Elsewhere;
-        };
-        current = parent;
-    }
-}
-
-/// Clears the redraw flag of the layout or subcompose node `id`, and returns
-/// whether it was set.
-fn take_redraw_flag(applier: &mut MemoryApplier, id: NodeId) -> bool {
-    let Ok(node) = applier.get_mut(id) else {
-        return false;
-    };
-    let any = node.as_any_mut();
-    if let Some(layout) = any.downcast_mut::<LayoutNode>() {
-        let redraw = layout.needs_redraw();
-        layout.clear_needs_redraw();
-        return redraw;
-    }
-    match any.downcast_mut::<SubcomposeLayoutNode>() {
-        Some(subcompose) => {
-            let redraw = subcompose.needs_redraw();
-            subcompose.clear_needs_redraw();
-            redraw
-        }
-        None => false,
-    }
 }
 
 fn refresh_layout_box_data(
