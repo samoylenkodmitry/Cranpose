@@ -324,10 +324,10 @@ fn fold_leaf_layer(
     store.set_placement(
         record,
         origin,
-        ProjectiveTransform::translation(
+        Some(ProjectiveTransform::translation(
             origin.x + parent_content_offset.x,
             origin.y + parent_content_offset.y,
-        ),
+        )),
     );
     store.set_flags(
         record,

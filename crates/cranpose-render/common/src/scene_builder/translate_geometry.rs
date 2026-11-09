@@ -4,7 +4,7 @@ use cranpose_ui_graphics::GraphicsLayer;
 
 use super::{
     AbsOrigin, LowerContext, TranslateAncestorContext, inline_leaf::retext_kept_inline,
-    placed_transform, publish_retained_window_geometry, text_node, translate_layer::PlacedChild,
+    placing_transform, publish_retained_window_geometry, text_node, translate_layer::PlacedChild,
 };
 use crate::{
     NodeUpdate,
@@ -80,7 +80,7 @@ pub(super) fn translate_retained_child(
     position: Point,
     content_offset: Point,
 ) {
-    let transform = placed_transform(
+    let transform = placing_transform(
         store.layer(layer).local_bounds(),
         position,
         store.graphics_layer(layer),

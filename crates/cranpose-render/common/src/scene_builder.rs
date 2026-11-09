@@ -39,7 +39,7 @@ mod node_layer;
 use node_layer::{
     AbsOrigin, HeadKind, LayerHead, LowerContext, assign_layer, hit_test_from_slices,
     layer_and_node_bounds, layer_identity, lower_root_into, modifier_slices_have_origin_sinks,
-    outer_commands, outer_draws, placed_transform, prepare_node_layer, set_bounds,
+    outer_commands, outer_draws, placing_transform, prepare_node_layer, set_bounds,
     set_origin_sinks, slices_hit_something, take_wrapped_layer, write_node_content,
     write_node_layer, write_wrapper,
 };
@@ -615,7 +615,7 @@ fn update_layer_properties(
                 Point::default(),
                 layer.graphics_layer(),
             );
-            store.set_placement(target, Point::default(), transform);
+            store.set_placement(target, Point::default(), Some(transform));
         }
         let layer = store.layer(target);
         if layer.has_origin_sinks()

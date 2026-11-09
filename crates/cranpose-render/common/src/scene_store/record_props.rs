@@ -86,7 +86,16 @@ impl SceneStore {
 
     /// Sets the graphics layer of `id`; `None` reads as the default. A record
     /// that keeps one keeps its slot.
+    #[inline]
     pub fn set_graphics_layer(&mut self, id: RecordId, layer: Option<GraphicsLayer>) {
+        // Most records keep no graphics layer.
+        if layer.is_some() || self.warm[id.index()].graphics_layer.is_some() {
+            self.replace_graphics_layer(id, layer);
+        }
+    }
+
+    #[inline(never)]
+    fn replace_graphics_layer(&mut self, id: RecordId, layer: Option<GraphicsLayer>) {
         let index = id.index();
         let slot = self.warm[index].graphics_layer;
         let space =

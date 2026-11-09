@@ -754,33 +754,36 @@ impl SceneStore {
     }
 
     /// Places `id` at `origin_in_parent` in its parent's content by
-    /// `transform`: a transform that only moves the record there, past the
-    /// parent's content offset, takes no entry of its own. The parent's
-    /// content offset is set before.
+    /// `transform`, or by a translation there alone, past the parent's
+    /// content offset, for `None`. A transform that only moves the record
+    /// there takes no entry of its own. The parent's content offset is set
+    /// before.
     pub fn set_placement(
         &mut self,
         id: RecordId,
         origin_in_parent: Point,
-        transform: ProjectiveTransform,
+        transform: Option<ProjectiveTransform>,
     ) {
         let index = id.index();
         let placement = [origin_in_parent.x, origin_in_parent.y];
         let moved = !super::records::same_pair(self.geo[index].placement, placement);
         self.geo[index].placement = placement;
-        let origin = self.placed_origin(index);
-        let places_only = super::records::same_bits(
-            transform,
-            ProjectiveTransform::translation(origin.x, origin.y),
-        );
-        let entry = self.tree[index].transform;
         // An entry holds a transform that does more than place the record.
+        let transform = transform.filter(|transform| {
+            let origin = self.placed_origin(index);
+            !super::records::same_bits(
+                *transform,
+                ProjectiveTransform::translation(origin.x, origin.y),
+            )
+        });
+        let entry = self.tree[index].transform;
         let unchanged = !moved
-            && match entry {
-                Some(entry) => {
-                    !places_only
-                        && super::records::same_bits(self.transforms[entry.index()], transform)
+            && match (entry, transform) {
+                (Some(entry), Some(transform)) => {
+                    super::records::same_bits(self.transforms[entry.index()], transform)
                 }
-                None => places_only,
+                (None, None) => true,
+                (Some(_), None) | (None, Some(_)) => false,
             };
         if unchanged {
             return;
@@ -789,14 +792,14 @@ impl SceneStore {
         if let Some(parent) = self.tree[index].parent {
             self.stale(parent.index());
         }
-        match (places_only, entry) {
-            (true, Some(old)) => {
+        match (transform, entry) {
+            (None, Some(old)) => {
                 self.tree[index].transform = None;
                 self.transforms.remove(old.index());
             }
-            (true, None) => {}
-            (false, Some(old)) => self.transforms[old.index()] = transform,
-            (false, None) => {
+            (None, None) => {}
+            (Some(transform), Some(old)) => self.transforms[old.index()] = transform,
+            (Some(transform), None) => {
                 let entry = TransformId::from_index(self.transforms.insert(transform));
                 self.tree[index].transform = Some(entry);
             }

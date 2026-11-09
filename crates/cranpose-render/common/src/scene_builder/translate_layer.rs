@@ -16,7 +16,7 @@ use super::{
     SnapshotNodeData, TranslateAncestorContext, TranslateGeometry, Wrapping, child_identity,
     content_layer, forget_dirty_node, hit_test_from_slices, layer_and_node_bounds, layer_identity,
     lower_child, move_kept_child, outer_commands, outer_draws, placed_child_geometry,
-    placed_transform, read_node_data, set_bounds, set_origin_sinks, shaped_graphics_layer,
+    placing_transform, read_node_data, set_bounds, set_origin_sinks, shaped_graphics_layer,
     take_wrapped_layer, text_node, translate_bail, translate_unwrapped, write_node_content,
     write_wrapper,
 };
@@ -490,7 +490,7 @@ pub(super) fn apply_translated_container_state(
 ) {
     let layer = store.layer(container);
     let position = layout_state.position();
-    let transform = placed_transform(
+    let transform = placing_transform(
         layer.local_bounds(),
         position,
         store.graphics_layer(container),

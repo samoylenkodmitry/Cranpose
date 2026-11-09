@@ -48,7 +48,7 @@ fn write_layer(
             .unwrap_or_default(),
         RecordKind::Layer | RecordKind::Wrapper | RecordKind::Leaf => layer.origin_in_parent,
     };
-    store.set_placement(record, origin, layer.transform_to_parent);
+    store.set_placement(record, origin, Some(layer.transform_to_parent));
     if store.graphics_layer(record) != layer.graphics_layer.get() {
         store.set_graphics_layer(record, layer.graphics_layer.get().cloned());
     }
@@ -251,7 +251,10 @@ fn write_leaf(
     store.set_placement(
         record,
         origin,
-        ProjectiveTransform::translation(inline.origin.x, inline.origin.y),
+        Some(ProjectiveTransform::translation(
+            inline.origin.x,
+            inline.origin.y,
+        )),
     );
     store.set_flags(record, flags);
     if restyled {

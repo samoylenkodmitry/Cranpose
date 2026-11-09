@@ -187,7 +187,7 @@ pub(super) fn assign_layer(store: &mut SceneStore, record: RecordId, head: Layer
     store.set_content_offset(record, content_offset);
     let size = node_bounds.unwrap_or(local_bounds);
     store.set_size(record, size.width, size.height);
-    store.set_placement(record, origin_in_parent, transform_to_parent);
+    store.set_placement(record, origin_in_parent, Some(transform_to_parent));
     let space = graphics_layer
         .as_ref()
         .is_some_and(|layer| layer.space.is_some());
@@ -236,6 +236,7 @@ pub(super) fn set_origin_sinks(
     store.set_flags(record, flags);
 }
 
+#[inline]
 pub(super) fn set_bounds(
     store: &mut SceneStore,
     record: RecordId,
@@ -247,7 +248,31 @@ pub(super) fn set_bounds(
     store.set_layer_bounds(record, node_bounds.map(|_| local_bounds));
 }
 
-pub(super) fn placed_transform(
+// The transform that places a layer with `graphics_layer` at `placement`
+// in content offset by `parent_content_offset`; `None` when a translation
+// to the placement alone does.
+pub(super) fn placing_transform(
+    local_bounds: Rect,
+    placement: Point,
+    graphics_layer: Option<&GraphicsLayer>,
+    parent_content_offset: Point,
+) -> Option<ProjectiveTransform> {
+    let moves_only = graphics_layer.is_none_or(|layer| {
+        !layer_scales_or_rotates(layer)
+            && layer.translation_x.to_bits() == 0
+            && layer.translation_y.to_bits() == 0
+    });
+    (!moves_only).then(|| {
+        placed_transform(
+            local_bounds,
+            placement,
+            graphics_layer,
+            parent_content_offset,
+        )
+    })
+}
+
+fn placed_transform(
     local_bounds: Rect,
     placement: Point,
     graphics_layer: Option<&GraphicsLayer>,
@@ -628,7 +653,7 @@ pub(super) fn write_wrapper(
         inner.graphics_layer(),
     );
     store.set_content_offset(wrapper, Point::default());
-    store.set_placement(layer, Point::default(), transform);
+    store.set_placement(layer, Point::default(), Some(transform));
     let OuterDraws {
         mut behind,
         overlay,
