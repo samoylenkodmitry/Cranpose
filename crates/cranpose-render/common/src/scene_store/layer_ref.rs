@@ -48,27 +48,32 @@ pub struct RecordChange {
 }
 
 impl<'a> LayerRef<'a> {
+    #[inline]
     pub(crate) fn new(store: &'a SceneStore, id: RecordId) -> Self {
         Self { store, id }
     }
 
     /// The store that holds the record.
+    #[inline]
     pub fn store(self) -> &'a SceneStore {
         self.store
     }
 
     /// The record's id in its store.
+    #[inline]
     pub fn id(self) -> RecordId {
         self.id
     }
 
     /// What the record draws for.
+    #[inline]
     pub fn kind(self) -> RecordKind {
         self.store.tree[self.id.index()].kind
     }
 
     /// The layout node of a node's layer or leaf; `None` for a wrapper, a
     /// draw group and an overlay.
+    #[inline]
     pub fn node_id(self) -> Option<NodeId> {
         match self.kind() {
             RecordKind::Layer | RecordKind::Leaf => self.owner(),
@@ -77,6 +82,7 @@ impl<'a> LayerRef<'a> {
     }
 
     /// The node whose outer draws a wrapper holds.
+    #[inline]
     pub fn wraps(self) -> Option<NodeId> {
         match self.kind() {
             RecordKind::Wrapper => self.owner(),
@@ -85,11 +91,13 @@ impl<'a> LayerRef<'a> {
     }
 
     /// The layout node the record draws for, whatever its kind.
+    #[inline]
     pub fn owner(self) -> Option<NodeId> {
         self.store.warm[self.id.index()].node
     }
 
     /// The record that holds this one.
+    #[inline]
     pub fn parent(self) -> Option<Self> {
         self.store.tree[self.id.index()]
             .parent
@@ -97,21 +105,25 @@ impl<'a> LayerRef<'a> {
     }
 
     /// The properties the record keeps beyond its fixed-size parts.
+    #[inline]
     pub fn props(self) -> Option<&'a LayerProps> {
         self.store.props(self.id)
     }
 
     /// The record's flags.
+    #[inline]
     pub fn flags(self) -> RecordFlags {
         self.store.tree[self.id.index()].flags
     }
 
     /// The node's rect, `(0, 0, size)`, where its pointer handlers are.
+    #[inline]
     pub fn node_rect(self) -> Rect {
         self.store.geo[self.id.index()].node_rect()
     }
 
     /// The node's size.
+    #[inline]
     pub fn size(self) -> Size {
         let [width, height] = self.store.geo[self.id.index()].size;
         Size { width, height }
@@ -119,6 +131,7 @@ impl<'a> LayerRef<'a> {
 
     /// The bounds of the layer, where its clip cuts, its transforms pivot and
     /// an offscreen pass draws it.
+    #[inline]
     pub fn local_bounds(self) -> Rect {
         if !self.flags().contains(RecordFlags::HAS_LAYER_BOUNDS) {
             return self.node_rect();
@@ -129,6 +142,7 @@ impl<'a> LayerRef<'a> {
     }
 
     /// The node's rect when it differs from [`Self::local_bounds`].
+    #[inline]
     pub fn node_bounds(self) -> Option<Rect> {
         self.props()
             .and_then(|props| props.layer_bounds)
@@ -137,6 +151,7 @@ impl<'a> LayerRef<'a> {
 
     /// The record's top left in its parent's layer: its placement and the
     /// parent's content offset. A leaf's transform moves it there.
+    #[inline]
     pub fn origin(self) -> Point {
         self.store.origin(self.id)
     }
@@ -144,18 +159,21 @@ impl<'a> LayerRef<'a> {
     /// Maps the record's space to its parent's content space, with the
     /// placement, the graphics layer transform and the parent's content
     /// offset applied.
+    #[inline]
     pub fn transform_to_parent(self) -> ProjectiveTransform {
         self.store.transform_to_parent(self.id)
     }
 
     /// Offset of the node's content box from its origin, where its children
     /// are placed.
+    #[inline]
     pub fn content_offset(self) -> Point {
         self.store.content_offset(self.id)
     }
 
     /// Where layout placed the record within its parent's content, before
     /// the parent's content offset.
+    #[inline]
     pub fn origin_in_parent(self) -> Point {
         self.store.origin_in_parent(self.id)
     }
@@ -163,17 +181,20 @@ impl<'a> LayerRef<'a> {
     /// Whether the record lies in a motion context such as an animated
     /// scroll, where a renderer must not snap its content rigidly to the
     /// pixel grid.
+    #[inline]
     pub fn motion_context_animated(self) -> bool {
         self.flags().contains(RecordFlags::MOTION_ANIMATED)
     }
 
     /// Whether the record moves its content as one translated block, so a
     /// renderer may snap that content to the pixel grid as a whole.
+    #[inline]
     pub fn translated_content_context(self) -> bool {
         self.flags().contains(RecordFlags::TRANSLATED_CONTENT)
     }
 
     /// Translation of the content in a translated content context.
+    #[inline]
     pub fn translated_content_offset(self) -> Point {
         self.props()
             .map(|props| props.translated_content_offset)
@@ -181,6 +202,7 @@ impl<'a> LayerRef<'a> {
     }
 
     /// The graphics layer properties; defaults when none were set.
+    #[inline]
     pub fn graphics_layer(self) -> &'a GraphicsLayer {
         self.store
             .graphics_layer(self.id)
@@ -188,28 +210,33 @@ impl<'a> LayerRef<'a> {
     }
 
     /// Whether the record cuts its content to its local bounds.
+    #[inline]
     pub fn clip_to_bounds(self) -> bool {
         self.flags().contains(RecordFlags::CLIP_TO_BOUNDS)
     }
 
     /// Pointer handling of the node.
+    #[inline]
     pub fn hit_test(self) -> Option<&'a HitTestNode> {
         self.props().and_then(|props| props.hit_test.as_ref())
     }
 
     /// Whether the record or a record beneath it handles pointers.
+    #[inline]
     pub fn has_hit_targets(self) -> bool {
         super::facts::has_hit_targets(self)
     }
 
     /// Whether the record's subtree publishes live window origins: a text
     /// field's popup anchor, a scroll container's viewport rect.
+    #[inline]
     pub fn has_origin_sinks(self) -> bool {
         super::facts::has_origin_sinks(self)
     }
 
     /// Whether the record or a record beneath it is a scene, a mesh surface
     /// or a 3D transform.
+    #[inline]
     pub fn has_space(self) -> bool {
         super::facts::has_space(self)
     }
@@ -241,11 +268,13 @@ impl<'a> LayerRef<'a> {
 
     /// Whether everything the record's subtree draws lies within its local
     /// bounds, give or take [`crate::graph::CONTAINED_DRAW_SLACK`].
+    #[inline]
     pub fn draws_within_bounds(self) -> bool {
         super::facts::contained(self)
     }
 
     /// The reasons the record is drawn through its own offscreen buffer.
+    #[inline]
     pub fn isolation(self) -> IsolationReasons {
         self.props()
             .map(|props| props.isolation)
@@ -265,6 +294,7 @@ impl<'a> LayerRef<'a> {
     }
 
     /// Whether a renderer may keep the record's pixels between frames.
+    #[inline]
     pub fn cache_policy(self) -> CachePolicy {
         self.props()
             .map(|props| props.cache_policy)
@@ -273,18 +303,21 @@ impl<'a> LayerRef<'a> {
 
     /// The rectangle that cuts the content and pointer hits: the local
     /// bounds when the record clips to them or its graphics layer clips.
+    #[inline]
     pub fn clip_rect(self) -> Option<Rect> {
         (self.clip_to_bounds() || self.graphics_layer().clip).then(|| self.local_bounds())
     }
 
     /// Where the record's own shadow is cut: its bounds when it clips its
     /// content to them. A graphics-layer clip leaves the shadow whole.
+    #[inline]
     pub fn shadow_clip(self) -> Option<Rect> {
         self.clip_to_bounds().then(|| self.local_bounds())
     }
 
     /// Where the record's drawing is cut: its clip or, when it composites
     /// through an offscreen buffer for its alpha or by request, its bounds.
+    #[inline]
     pub fn visual_clip_rect(self) -> Option<Rect> {
         self.clip_rect().or_else(|| {
             let isolation = self.isolation();
@@ -293,26 +326,31 @@ impl<'a> LayerRef<'a> {
     }
 
     /// The render effect applied to the record's content.
+    #[inline]
     pub fn effect(self) -> Option<&'a RenderEffect> {
         self.graphics_layer().render_effect.as_ref()
     }
 
     /// The effect applied to what lies behind the record.
+    #[inline]
     pub fn backdrop(self) -> Option<&'a RenderEffect> {
         self.graphics_layer().backdrop_effect.as_ref()
     }
 
     /// Alpha of the record from 0.0 (transparent) to 1.0 (opaque).
+    #[inline]
     pub fn opacity(self) -> f32 {
         self.graphics_layer().alpha
     }
 
     /// How the record composites onto what lies beneath it.
+    #[inline]
     pub fn blend_mode(self) -> BlendMode {
         self.graphics_layer().blend_mode
     }
 
     /// The color filter applied to the record's content.
+    #[inline]
     pub fn color_filter(self) -> Option<&'a ColorFilter> {
         self.graphics_layer().color_filter.as_ref()
     }
@@ -370,11 +408,13 @@ impl<'a> LayerRef<'a> {
     }
 
     /// How many items the record holds.
+    #[inline]
     pub fn item_count(self) -> usize {
         self.store.items(self.id).len()
     }
 
     /// The record's items in draw order.
+    #[inline]
     pub fn items(self) -> impl DoubleEndedIterator<Item = ItemRef<'a>> + ExactSizeIterator + 'a {
         let store = self.store;
         store
@@ -409,6 +449,7 @@ impl<'a> LayerRef<'a> {
     }
 
     /// The child records among the items, in draw order.
+    #[inline]
     pub fn children(self) -> impl DoubleEndedIterator<Item = Self> + 'a {
         let store = self.store;
         store
@@ -419,6 +460,7 @@ impl<'a> LayerRef<'a> {
 }
 
 impl<'a> ItemRef<'a> {
+    #[inline]
     pub(crate) fn of(store: &'a SceneStore, item: Item) -> Self {
         match item.kind() {
             ItemKind::Child => {

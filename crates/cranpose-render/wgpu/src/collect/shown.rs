@@ -6,7 +6,11 @@ use cranpose_render_common::scene_store::{LayerRef, Reach};
 use cranpose_ui_graphics::{Point, Rect};
 
 use super::{LayerScene, WalkContext};
-use crate::{rrect_shadow::rrect_shadow_bounds, scene::CompositorScene, target_state::Visit};
+use crate::{
+    rrect_shadow::rrect_shadow_bounds,
+    scene::CompositorScene,
+    target_state::{Cull, Visit},
+};
 
 // How a walk drew a record's subtree, in the space of the walk's root.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -33,20 +37,20 @@ pub(crate) struct ShownRecord {
     pub(crate) origin: Option<Point>,
 }
 
-// The walk context of `layer`'s subtree as the walk's cull takes it;
+// The cull `layer`'s subtree walks under, from `cull`, its parent's;
 // `None` when the walk leaves `layer` out.
 #[inline]
-pub(super) fn culled<'s>(layer: LayerRef<'_>, context: WalkContext<'s>) -> Option<WalkContext<'s>> {
-    let Some(cull) = context.cull else {
-        return Some(context);
+pub(super) fn culled<'s>(
+    layer: LayerRef<'_>,
+    cull: Option<&'s Cull<'s>>,
+) -> Option<Option<&'s Cull<'s>>> {
+    let Some(cull) = cull else {
+        return Some(None);
     };
     match cull.visit(layer.store().record_ref(layer.id())) {
         Visit::Skip => None,
-        Visit::Walk => Some(context),
-        Visit::WalkAll => Some(WalkContext {
-            cull: None,
-            ..context
-        }),
+        Visit::Walk => Some(Some(cull)),
+        Visit::WalkAll => Some(None),
     }
 }
 

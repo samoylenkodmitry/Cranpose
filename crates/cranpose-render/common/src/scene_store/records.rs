@@ -76,9 +76,12 @@ impl RecordFlags {
     // An update changed the record's own draws while no reader followed
     // redraws: its marks wait.
     pub(crate) const MARKS_STALE: Self = Self(1 << 11);
+    // The record keeps properties in the store's side slab.
+    pub(crate) const HAS_PROPS: Self = Self(1 << 12);
     // The flags the store keeps itself, which `SceneStore::set_flags` leaves.
     pub(crate) const STORE_KEPT: Self = Self(
-        Self::HAS_GRAPHICS_LAYER.0
+        Self::HAS_PROPS.0
+            | Self::HAS_GRAPHICS_LAYER.0
             | Self::HAS_LAYER_BOUNDS.0
             | Self::REACH_STALE.0
             | Self::INSERTED.0
@@ -135,6 +138,7 @@ pub(crate) struct GeoRecord {
 pub(crate) struct WarmRecord {
     pub(crate) node: Option<NodeId>,
     pub(crate) props: Option<PropsId>,
+    pub(crate) graphics_layer: Option<GraphicsLayerId>,
     pub(crate) content_offset: [f32; 2],
     // The marks of the record's own draws as an update last left them.
     pub(crate) own_marks: Span,
@@ -194,8 +198,16 @@ const _: () = assert!(
     "a geometry record fills half a cache line"
 );
 
+// Whether two pairs hold the same numbers, bit for bit.
+pub(super) fn same_pair(a: [f32; 2], b: [f32; 2]) -> bool {
+    a[0].to_bits() == b[0].to_bits() && a[1].to_bits() == b[1].to_bits()
+}
+
 // Whether two transforms hold the same numbers, bit for bit.
 pub(super) fn same_bits(a: ProjectiveTransform, b: ProjectiveTransform) -> bool {
-    let bits = |transform: ProjectiveTransform| transform.matrix().map(|row| row.map(f32::to_bits));
-    bits(a) == bits(b)
+    let (a, b) = (a.matrix(), b.matrix());
+    a.as_flattened()
+        .iter()
+        .zip(b.as_flattened())
+        .all(|(a, b)| a.to_bits() == b.to_bits())
 }

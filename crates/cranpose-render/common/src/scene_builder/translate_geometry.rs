@@ -122,13 +122,8 @@ pub(super) fn move_kept_child(
     match (placed.kept, store.layer(record).kind()) {
         (KeptChild::Left, _) => {}
         (KeptChild::Moved, RecordKind::Leaf) => {
-            let offset = children.parent_content_offset;
-            store.set_placement(
-                record,
-                position,
-                ProjectiveTransform::translation(position.x + offset.x, position.y + offset.y),
-            );
-            store.note_place_change(record);
+            let flags = store.flags(record);
+            store.place_leaf(record, position, flags);
         }
         (KeptChild::Moved, _) => {
             translate_retained_child(store, record, position, children.parent_content_offset);

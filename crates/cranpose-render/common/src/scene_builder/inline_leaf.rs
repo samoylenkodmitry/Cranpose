@@ -15,7 +15,7 @@ use super::{
 use crate::{
     NodeUpdate,
     graph::ProjectiveTransform,
-    scene_store::{Item, ItemKind, RecordFlags, RecordKind, RecordSeed, SceneStore},
+    scene_store::{Item, ItemKind, Leaf, RecordFlags, RecordKind, RecordSeed, SceneStore},
 };
 
 // Whether a node with `slices`, `size` and no children draws in its
@@ -91,21 +91,26 @@ fn write_inline(
 ) {
     let slices = &data.modifier_slices;
     let size = data.layout_state.size();
-    store.set_kind(record, RecordKind::Leaf, Some(node_id));
-    store.clear_props(record);
-    store.set_content_offset(record, data.layout_state.content_offset());
-    store.set_size(record, size.width, size.height);
-    place_inline(store, record, data, context);
+    let flags = leaf_flags(data, context);
     let draws = DrawTarget {
         size,
-        motion_context_animated: store.layer(record).motion_context_animated(),
+        motion_context_animated: flags.contains(RecordFlags::MOTION_ANIMATED),
         paint: None,
     };
     let mut list = store.lists.take();
     write_node_content(store, record, &mut list, slices, draws, (0, 0), |_, _| {});
-    store.set_items(record, &list);
+    store.write_leaf(
+        record,
+        Leaf {
+            node: node_id,
+            size,
+            content_offset: data.layout_state.content_offset(),
+            origin_in_parent: data.layout_state.position(),
+            flags,
+            items: &list,
+        },
+    );
     store.lists.give(list);
-    store.note_content_change(record);
 }
 
 // Puts `record`, the leaf of the node of `data`, where the node lies under
@@ -116,24 +121,21 @@ fn place_inline(
     data: &SnapshotNodeData<'_>,
     context: LowerContext,
 ) {
-    let placement = data.layout_state.position();
-    let offset = context.parent_content_offset;
-    store.set_placement(
+    store.place_leaf(
         record,
-        placement,
-        ProjectiveTransform::translation(placement.x + offset.x, placement.y + offset.y),
+        data.layout_state.position(),
+        leaf_flags(data, context),
     );
-    let animated =
-        context.inherited_motion_context_animated || data.modifier_slices.motion_context_animated();
-    store.set_flags(
-        record,
-        if animated {
-            RecordFlags::MOTION_ANIMATED
-        } else {
-            RecordFlags::default()
-        },
-    );
-    store.note_place_change(record);
+}
+
+// The flags of the leaf of the node of `data` under `context`: whether it
+// lies in a motion context.
+fn leaf_flags(data: &SnapshotNodeData<'_>, context: LowerContext) -> RecordFlags {
+    if context.inherited_motion_context_animated || data.modifier_slices.motion_context_animated() {
+        RecordFlags::MOTION_ANIMATED
+    } else {
+        RecordFlags::default()
+    }
 }
 
 // Whether the content just written into `record` draws in its parent's

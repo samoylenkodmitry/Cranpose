@@ -726,13 +726,14 @@ fn boundary_anchor(
 fn collect_child(
     child: LayerRef<'_>,
     motion: &mut LayerMotion,
-    context: WalkContext<'_>,
+    mut context: WalkContext<'_>,
     out: &mut LayerScene,
     recycler: &mut LayerSceneRecycler,
 ) -> bool {
-    let Some(context) = culled(child, context) else {
+    let Some(cull) = culled(child, context.cull) else {
         return false;
     };
+    context.cull = cull;
     let composite = layer_composite_params(child.graphics_layer());
     if composite.is_some_and(|(alpha, blend)| alpha == 0.0 && blend == BlendMode::SrcOver) {
         record_hidden(child, &context, out);
@@ -810,10 +811,15 @@ fn collect_child(
 // the walk of its parent's children: its content takes the place, clip and
 // snap anchor a child layer that only moves would give it. Returns whether
 // it draws pixel-sensitive content, when the walk wants to know.
-fn collect_inline(inline: LayerRef<'_>, context: WalkContext<'_>, out: &mut LayerScene) -> bool {
-    let Some(context) = culled(inline, context) else {
+fn collect_inline(
+    inline: LayerRef<'_>,
+    mut context: WalkContext<'_>,
+    out: &mut LayerScene,
+) -> bool {
+    let Some(cull) = culled(inline, context.cull) else {
         return false;
     };
+    context.cull = cull;
     let origin = inline.origin();
     let offset = Point::new(context.offset.x + origin.x, context.offset.y + origin.y);
     let bounds = inline.node_rect().translate(offset.x, offset.y);

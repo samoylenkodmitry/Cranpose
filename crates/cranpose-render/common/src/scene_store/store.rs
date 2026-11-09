@@ -118,6 +118,7 @@ impl SceneStore {
     }
 
     /// The store's identity among the renderers' stores.
+    #[inline]
     pub fn id(&self) -> StoreId {
         self.id
     }
@@ -225,7 +226,7 @@ impl SceneStore {
 
     // Leaves the own draws of the record at `index` to be compared with what
     // they were at the end of the update.
-    fn redraw_pending(&mut self, index: usize) {
+    pub(super) fn redraw_pending(&mut self, index: usize) {
         let flags = &mut self.tree[index].flags;
         if !flags.contains(RecordFlags::REDRAW_PENDING) {
             *flags = flags.with(RecordFlags::REDRAW_PENDING);
@@ -344,6 +345,7 @@ impl SceneStore {
     }
 
     /// The record `id` as its readers see it.
+    #[inline]
     pub fn layer(&self, id: RecordId) -> LayerRef<'_> {
         LayerRef::new(self, id)
     }
@@ -415,6 +417,7 @@ impl SceneStore {
         let warm = WarmRecord {
             node: seed.node,
             props: None,
+            graphics_layer: None,
             content_offset: [0.0; 2],
             own_marks: Span::default(),
             own_reach: Reach::Empty,
@@ -497,6 +500,7 @@ impl SceneStore {
 
     /// A handle to `id` that tells a later holder whether the row went to
     /// another record since.
+    #[inline]
     pub fn record_ref(&self, id: RecordId) -> RecordRef {
         RecordRef {
             id,
@@ -505,11 +509,13 @@ impl SceneStore {
     }
 
     /// The record `held` names, while its row still holds that record.
+    #[inline]
     pub fn resolve(&self, held: RecordRef) -> Option<RecordId> {
         (self.generations.get(held.id.index()) == Some(&held.generation)).then_some(held.id)
     }
 
     /// The items of `id` in draw order.
+    #[inline]
     pub fn items(&self, id: RecordId) -> &[Item] {
         self.items.span(self.tree[id.index()].items)
     }
@@ -548,11 +554,13 @@ impl SceneStore {
     }
 
     /// The draw primitive of a draw item.
+    #[inline]
     pub fn draw(&self, item: Item) -> &DrawPrimitiveNode {
         &self.draws[item.index()]
     }
 
     /// The text of a text item.
+    #[inline]
     pub fn text(&self, item: Item) -> &TextPrimitiveNode {
         &self.texts[item.index()]
     }
@@ -563,21 +571,25 @@ impl SceneStore {
     }
 
     /// The draw run of a run item.
+    #[inline]
     pub fn run(&self, item: Item) -> &DrawRunNode {
         &self.runs[item.index()]
     }
 
     /// What `id` draws for.
+    #[inline]
     pub fn kind(&self, id: RecordId) -> RecordKind {
         self.tree[id.index()].kind
     }
 
     /// The layout node `id` draws for.
+    #[inline]
     pub fn node(&self, id: RecordId) -> Option<NodeId> {
         self.warm[id.index()].node
     }
 
     /// The record that holds `id`.
+    #[inline]
     pub fn parent(&self, id: RecordId) -> Option<RecordId> {
         self.tree[id.index()].parent
     }
@@ -588,6 +600,7 @@ impl SceneStore {
     }
 
     /// The flags of `id`.
+    #[inline]
     pub fn flags(&self, id: RecordId) -> RecordFlags {
         self.tree[id.index()].flags
     }
@@ -609,6 +622,7 @@ impl SceneStore {
     }
 
     /// The size of the node rect of `id`.
+    #[inline]
     pub fn node_rect(&self, id: RecordId) -> Rect {
         self.geo[id.index()].node_rect()
     }
@@ -617,13 +631,14 @@ impl SceneStore {
     pub fn set_size(&mut self, id: RecordId, width: f32, height: f32) {
         let index = id.index();
         let size = [width, height];
-        if self.geo[index].size.map(f32::to_bits) != size.map(f32::to_bits) {
+        if !super::records::same_pair(self.geo[index].size, size) {
             self.geo[index].size = size;
             self.stale_with_parent(index);
         }
     }
 
     /// The offset of the content box of `id` from its origin.
+    #[inline]
     pub fn content_offset(&self, id: RecordId) -> Point {
         let [x, y] = self.warm[id.index()].content_offset;
         Point::new(x, y)
@@ -633,7 +648,7 @@ impl SceneStore {
     pub fn set_content_offset(&mut self, id: RecordId, offset: Point) {
         let index = id.index();
         let offset = [offset.x, offset.y];
-        if self.warm[index].content_offset.map(f32::to_bits) != offset.map(f32::to_bits) {
+        if !super::records::same_pair(self.warm[index].content_offset, offset) {
             self.warm[index].content_offset = offset;
             self.stale(index);
             self.moved(index);
@@ -642,6 +657,7 @@ impl SceneStore {
 
     /// Where layout placed `id` in its parent's content, before the
     /// parent's content offset.
+    #[inline]
     pub fn origin_in_parent(&self, id: RecordId) -> Point {
         let [x, y] = self.geo[id.index()].placement;
         Point::new(x, y)
@@ -649,6 +665,7 @@ impl SceneStore {
 
     /// The top left of `id` in its parent's layer: its placement and the
     /// parent's content offset.
+    #[inline]
     pub fn origin(&self, id: RecordId) -> Point {
         let index = id.index();
         match self.tree[index].transform {
@@ -661,6 +678,7 @@ impl SceneStore {
 
     // Where the placement of the record at `index` puts it in its parent's
     // layer, past the parent's content offset.
+    #[inline]
     fn placed_origin(&self, index: usize) -> Point {
         let [x, y] = self.geo[index].placement;
         let offset = self.parent_content_offset(index);
@@ -675,6 +693,7 @@ impl SceneStore {
         }
     }
 
+    #[inline]
     fn parent_content_offset(&self, index: usize) -> Point {
         self.tree[index]
             .parent
@@ -683,6 +702,7 @@ impl SceneStore {
     }
 
     /// The transform from `id` to its parent's content.
+    #[inline]
     pub fn transform_to_parent(&self, id: RecordId) -> ProjectiveTransform {
         match self.tree[id.index()].transform {
             Some(transform) => self.transforms[transform.index()],
@@ -705,7 +725,7 @@ impl SceneStore {
     ) {
         let index = id.index();
         let placement = [origin_in_parent.x, origin_in_parent.y];
-        let moved = self.geo[index].placement.map(f32::to_bits) != placement.map(f32::to_bits);
+        let moved = !super::records::same_pair(self.geo[index].placement, placement);
         self.geo[index].placement = placement;
         let origin = self.placed_origin(index);
         let places_only = super::records::same_bits(
@@ -816,7 +836,7 @@ impl SceneStore {
 
     // Notes that the update in progress moved the record at `index`, or its
     // content within it.
-    fn moved(&mut self, index: usize) {
+    pub(super) fn moved(&mut self, index: usize) {
         if self.tree[index].place_rev != self.update {
             self.tree[index].place_rev = self.update;
             self.log(
@@ -829,7 +849,7 @@ impl SceneStore {
     // Raises the subtree revision of `from` and its ancestors to the update
     // in progress, and leaves their hashes to be worked out again, stopping
     // at the first ancestor that holds the update already.
-    fn note_subtree_change(&mut self, from: Option<RecordId>) {
+    pub(super) fn note_subtree_change(&mut self, from: Option<RecordId>) {
         let update = self.update;
         let mut current = from;
         while let Some(record) = current {

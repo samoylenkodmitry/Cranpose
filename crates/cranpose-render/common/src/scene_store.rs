@@ -10,6 +10,7 @@ mod items;
 mod journal;
 mod layer_props;
 mod layer_ref;
+mod leaf_write;
 mod own_marks;
 mod reach;
 mod record_props;
@@ -27,6 +28,7 @@ use journal::Journal;
 pub use journal::{JournalCursor, JournalEntry, JournalRead, RecordEvent, RecordEvents};
 pub use layer_props::LayerProps;
 pub use layer_ref::{ItemRef, LayerRef, RecordChange};
+pub use leaf_write::Leaf;
 pub use reach::{BLUR_PIXEL_SLACK, Extent, Reach, ShadowCaster};
 pub(crate) use records::{
     GeoRecord, GraphicsLayerId, PropsId, ReachState, TransformId, TreeRecord, WarmRecord,

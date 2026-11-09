@@ -1,21 +1,20 @@
-// What a record holds beyond its fixed-size parts: a graphics layer, pointer
-// handling, bounds of its own. Only records that have one of them take an
-// entry.
+// What a record holds beyond its fixed-size parts and its graphics layer:
+// pointer handling, bounds of its own, offscreen reasons. Only records that
+// have one of them take an entry.
 
 use cranpose_core::SceneUpdate;
 use cranpose_ui::{Point, Rect};
 
-use super::GraphicsLayerId;
 use crate::graph::{CachePolicy, HitTestNode, IsolationReasons};
 
-/// The properties of a record that has a graphics layer, pointer handling,
-/// layer bounds other than its node rect, or translated content.
+/// The properties of a record that has pointer handling, layer bounds other
+/// than its node rect, translated content, a reason to draw offscreen or a
+/// cache policy.
 #[derive(Clone, Default)]
 pub struct LayerProps {
     /// The bounds of the layer, where its clip cuts, its transforms pivot and
     /// an offscreen pass draws it, when they differ from the node rect.
     pub layer_bounds: Option<Rect>,
-    pub(crate) graphics_layer: Option<GraphicsLayerId>,
     /// Translation of the content when the record moves its content as one
     /// translated block.
     pub translated_content_offset: Point,
@@ -33,7 +32,6 @@ impl LayerProps {
     // entry. The content run goes with the entry.
     pub(crate) fn is_default(&self) -> bool {
         self.layer_bounds.is_none()
-            && self.graphics_layer.is_none()
             && self.translated_content_offset == Point::default()
             && self.hit_test.is_none()
             && !self.isolation.has_any()
