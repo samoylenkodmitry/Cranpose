@@ -151,6 +151,21 @@ impl Default for Density {
     }
 }
 
+// `density` behind a pointer that every layout node of the same density
+// shares: a node keeps a word where the density takes three. The thread
+// keeps the two densities its nodes took last, as a new node starts at the
+// default density before its composition gives it the screen's.
+pub(crate) fn shared_density(density: Density) -> std::rc::Rc<Density> {
+    crate::thread_state::with(|state| {
+        let mut held = state.node_densities.borrow_mut();
+        if let Some(found) = held.iter().flatten().find(|held| ***held == density) {
+            return std::rc::Rc::clone(found);
+        }
+        held[0] = held[1].take();
+        std::rc::Rc::clone(held[1].insert(std::rc::Rc::new(density)))
+    })
+}
+
 /// The production [`cranpose_ui_layout::MeasureScope`]: a grid captured at
 /// composition time, carried through measurement.
 ///

@@ -95,6 +95,7 @@ pub(crate) struct UiThreadState {
     pub(crate) spare_slices: Cell<Option<ModifierNodeSlices>>,
     pub(crate) empty_measure_policy: OnceCell<Rc<dyn MeasurePolicy>>,
     pub(crate) shared_policies: RefCell<SharedPolicies>,
+    pub(crate) node_densities: RefCell<[Option<Rc<crate::density::Density>>; 2]>,
     pub(crate) draw_text_measurer: OnceCell<Rc<dyn DrawTextMeasurer>>,
     pub(crate) spare_flex_children: SpareFlexChildren,
 }
@@ -121,6 +122,7 @@ impl UiThreadState {
             spare_slices: Cell::new(None),
             empty_measure_policy: OnceCell::new(),
             shared_policies: RefCell::new(SharedPolicies::new()),
+            node_densities: RefCell::new([None, None]),
             draw_text_measurer: OnceCell::new(),
             spare_flex_children: SpareFlexChildren::new(),
         }

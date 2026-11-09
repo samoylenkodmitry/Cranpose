@@ -41,7 +41,7 @@ pub struct LayoutNode {
 
     /// Where the chain's layout modifiers put their content, written by
     /// layout and read by the draws and text the slices collect.
-    density: crate::density::Density,
+    density: Rc<crate::density::Density>,
     is_virtual: bool,
     needs_semantics: Cell<bool>,
     /// The semantics tree has to read this node again, though its own
@@ -124,7 +124,7 @@ impl LayoutNode {
             source_trace: cranpose_core::source_trace::current_source_trace(),
             modifier,
             modifier_chain: ModifierChainHandle::detached(),
-            density: crate::density::Density::default(),
+            density: crate::density::shared_density(crate::density::Density::default()),
             children: Vec::new(),
             needs_semantics: Cell::new(true),
             descendant_needs_semantics: Cell::new(false),
@@ -338,13 +338,13 @@ impl LayoutNode {
 
     /// The grid this node was composed against.
     pub fn density(&self) -> crate::density::Density {
-        self.density
+        *self.density
     }
 
     /// Records the grid the composition provided, re-measuring if it moved.
     pub fn set_density(&mut self, density: crate::density::Density) {
-        if self.density != density {
-            self.density = density;
+        if *self.density != density {
+            self.density = crate::density::shared_density(density);
             self.parts.cache().clear();
             self.modifier_slices_dirty.set(true);
             self.mark_needs_measure();
@@ -767,7 +767,7 @@ impl Clone for LayoutNode {
             modifier_chain: ModifierChainHandle::for_layout_direction(
                 self.modifier_chain.layout_direction(),
             ),
-            density: self.density,
+            density: Rc::clone(&self.density),
             children: self.children.clone(),
             needs_semantics: Cell::new(self.needs_semantics.get()),
             descendant_needs_semantics: Cell::new(self.descendant_needs_semantics.get()),
