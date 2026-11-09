@@ -29,7 +29,7 @@ pub fn debug_label_current_scope(name: &'static str) {
         return;
     }
     with_current_composer(|composer| {
-        if let Some(scope) = composer.current_recompose_scope() {
+        if let Some(scope) = composer.peek_recompose_scope() {
             thread_state::runtimes(|state| {
                 state.scope_labels.borrow_mut().insert(scope.id(), name);
             });

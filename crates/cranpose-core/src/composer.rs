@@ -22,10 +22,11 @@ use crate::{
 
 mod composable_group;
 mod runtime_state;
+mod scope_frame;
 mod subcompose_slot;
-
 pub use composable_group::{ComposableGroup, ParameterChange};
 pub(crate) use runtime_state::ComposerRuntimeState;
+pub(crate) use scope_frame::ScopeFrame;
 use subcompose_slot::{measure_slot_state, subcompose_slot_at};
 
 /// A typed reference to a value stored in a slot, made by `Composer::use_value_slot`. It is valid
@@ -190,7 +191,7 @@ fn spare_commands() -> CommandQueue {
 pub(crate) struct ComposerStacks {
     slot_hosts: Vec<Rc<SlotsHost>>,
     parent_stack: Vec<ParentFrame>,
-    scope_stack: Vec<RecomposeScope>,
+    scope_stack: Vec<ScopeFrame>,
 }
 
 /// The most entries a kept stack has room for; a larger one grew in a spike
@@ -301,7 +302,7 @@ pub(crate) struct ComposerCore {
     pub(crate) subcompose_stack: RefCell<Vec<SubcomposeFrame>>,
     pub(crate) root: Cell<Option<NodeId>>,
     pub(crate) commands: RefCell<CommandQueue>,
-    pub(crate) scope_stack: RefCell<Vec<RecomposeScope>>,
+    pub(crate) scope_stack: RefCell<Vec<ScopeFrame>>,
     subcomposition_owner_scope: RefCell<Option<RecomposeScope>>,
     pub(crate) local_stack: RefCell<LocalStackSnapshot>,
     pub(crate) side_effects: RefCell<Vec<Box<dyn FnOnce()>>>,
@@ -317,6 +318,9 @@ pub(crate) struct ComposerCore {
     /// Whether a static composition local provided around what composes
     /// now changed: every group opened meanwhile runs its body.
     locals_changed: Cell<bool>,
+    /// How many open groups compose reused or restored content, under which
+    /// every group runs its body.
+    reused_depth: Cell<u32>,
     pub(crate) _not_send: PhantomData<*const ()>,
 }
 
@@ -428,6 +432,7 @@ impl ComposerCore {
             restarted_scope: RefCell::new(None),
             root_render_requested: Cell::new(false),
             locals_changed: Cell::new(false),
+            reused_depth: Cell::new(0),
             _not_send: PhantomData,
         }
     }
@@ -471,6 +476,7 @@ impl ComposerCore {
             restarted_scope,
             root_render_requested,
             locals_changed,
+            reused_depth,
             _not_send: _,
         } = self;
         if !Rc::ptr_eq(shared_state, &parts.shared_state) {
@@ -501,6 +507,7 @@ impl ComposerCore {
         *restarted_scope.get_mut() = None;
         root_render_requested.set(false);
         locals_changed.set(false);
+        reused_depth.set(0);
     }
 
     /// Lets go of what the finished pass composed under: its stacks, locals,
@@ -1001,7 +1008,7 @@ impl Composer {
         });
     }
 
-    pub(crate) fn scope_stack(&self) -> RefMut<'_, Vec<RecomposeScope>> {
+    pub(crate) fn scope_stack(&self) -> RefMut<'_, Vec<ScopeFrame>> {
         self.core.scope_stack.borrow_mut()
     }
 
@@ -1278,58 +1285,6 @@ impl Composer {
             .is_some_and(|holder| !Rc::ptr_eq(&holder, host))
     }
 
-    fn enter_group_scope(&self, scope_ref: &RecomposeScope, entry: GroupScopeEntry<'_>) {
-        let GroupScopeEntry {
-            options,
-            start_kind,
-            host,
-            group,
-            parent_hint,
-        } = entry;
-        // A group entered while its scope is inactive is reused content, as
-        // when a lazy list gives a recycled row to another item: like Compose,
-        // it composes again rather than skipping, which reactivates the
-        // scopes beneath it.
-        let reused = !scope_ref.is_active() && scope_ref.has_composed_once();
-        scope_ref.reactivate();
-        {
-            let mut stack = self.scope_stack();
-            match stack.last() {
-                Some(parent_scope) => scope_ref.set_parent_scope(Some(parent_scope)),
-                None => scope_ref.set_lifetime_owner_scope(
-                    self.core.subcomposition_owner_scope.borrow().as_ref(),
-                ),
-            }
-            stack.push(scope_ref.clone());
-        }
-        scope_ref.set_retention_mode(options.retention);
-
-        // Content under a changed static composition local runs every body,
-        // as restored content does.
-        let restored = matches!(start_kind, GroupStartKind::Restored);
-        let recompose = options.force_recompose | self.core.locals_changed.get() | restored;
-        if recompose | (reused & !options.force_reuse) {
-            scope_ref.force_recompose();
-        } else if options.force_reuse {
-            scope_ref.force_reuse();
-        }
-
-        scope_ref.set_slots_host(host);
-
-        {
-            let mut stack = self.subcompose_stack();
-            if let Some(frame) = stack.last_mut() {
-                frame.scopes.push(scope_ref.clone());
-            }
-        }
-
-        scope_ref.snapshot_locals(&self.core.local_stack.borrow());
-        if restored {
-            reparent_restored_scopes(host, group, scope_ref.parent_hint(), parent_hint);
-        }
-        scope_ref.set_parent_hint(parent_hint);
-    }
-
     fn start_group(
         &self,
         host: &Rc<SlotsHost>,
@@ -1348,12 +1303,12 @@ impl Composer {
                 return (started, None);
             }
         }
-        let parent_scope_id = self
-            .core
-            .scope_stack
-            .borrow()
-            .last()
-            .map(RecomposeScope::id);
+        // Retained content is found again by its parent's scope.
+        let parent_scope_id = {
+            let mut stack = self.scope_stack();
+            let top = stack.len().checked_sub(1);
+            top.map(|top| self.frame_scope(&mut stack, top).id())
+        };
         let GroupEntry {
             key,
             restored,
@@ -1530,7 +1485,7 @@ impl Composer {
             reason = "the method path is not general over the session lifetime"
         )]
         let result = host.with_write_session(|slots| slots.finish_group_body_changes());
-        self.close_finished_group(host, scope, result);
+        self.close_finished_group(host, Some(scope), result);
     }
 
     /// Handles what a group's body left, when it left anything, and pops
@@ -1538,25 +1493,13 @@ impl Composer {
     fn close_finished_group(
         &self,
         host: &Rc<SlotsHost>,
-        scope: &RecomposeScope,
+        scope: Option<&RecomposeScope>,
         result: Option<FinishGroupResult>,
     ) {
         if let Some(result) = result {
-            self.handle_finished_group_result(host, Some(scope.id()), result);
+            self.handle_finished_group_result(host, scope.map(RecomposeScope::id), result);
         }
-        self.pop_closed_scope(scope);
-    }
-
-    fn pop_closed_scope(&self, scope: &RecomposeScope) {
-        if let Some(popped) = self.scope_stack().pop() {
-            debug_assert_eq!(
-                popped.id(),
-                scope.id(),
-                "closed scope must match the active scope stack"
-            );
-        } else {
-            log::error!("scope stack underflow while closing scope {}", scope.id());
-        }
+        self.pop_closed_scope();
     }
 
     /// Returns the value `init` made on the first composition at this call site. Later compositions
@@ -1767,32 +1710,10 @@ impl Composer {
         }
     }
 
-    /// Returns the recompose scope being composed, or `None` outside any scope.
-    pub fn current_recompose_scope(&self) -> Option<RecomposeScope> {
-        self.core.scope_stack.borrow().last().cloned()
-    }
-
     // The scope whose body runs again from its own invalidation and calls
     // the bodies that run now; `None` outside a recomposition.
     pub(crate) fn restarted_scope(&self) -> Option<RecomposeScope> {
         self.core.restarted_scope.borrow().clone()
-    }
-
-    /// Notes a read of `state_id` in the scope that the read recomposes: the
-    /// nearest one with a recompose callback. Returns that scope unless the
-    /// read repeats the last body's, which the state already watches.
-    pub(crate) fn note_state_read(
-        &self,
-        state_id: Option<crate::StateId>,
-    ) -> Option<(RecomposeScope, crate::ScopeRead)> {
-        let stack = self.core.scope_stack.borrow();
-        let scope = stack
-            .iter()
-            .rev()
-            .find(|scope| scope.has_recompose_callback())
-            .or_else(|| stack.last())?;
-        let read = state_id.map_or(crate::ScopeRead::NotReading, |id| scope.note_read(id));
-        (!matches!(read, crate::ScopeRead::Watched)).then(|| (scope.clone(), read))
     }
 
     /// Returns the phase of the frame in which this composer is used.

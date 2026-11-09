@@ -404,7 +404,6 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
     let composer_ident = Ident::new("__composer", Span::mixed_site());
     let slot_key = slot_key(&core_path);
     let caller_key_ident = Ident::new("__cranpose_caller_key", Span::mixed_site());
-    let current_scope_ident = Ident::new("__current_scope", Span::mixed_site());
     let result_ident = Ident::new("__result", Span::mixed_site());
     let group_ident = Ident::new("__cranpose_group", Span::mixed_site());
     let key_expr = quote! { #caller_key_ident };
@@ -629,7 +628,6 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
             core_path: &core_path,
             composer: &composer_ident,
             group: &group_ident,
-            current_scope: &current_scope_ident,
             scope_label: &scope_label_ident,
             return_ty: &return_ty,
             slot_key: &slot_key,
@@ -678,7 +676,6 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
                 #(, #helper_inputs)*
             ) -> #return_ty #where_clause {
                 #slot_origin
-                let #current_scope_ident = #group_ident.scope();
                 #helper_body
             }
         };
@@ -803,11 +800,11 @@ fn unit_helper_body(
     param_setup: &[TokenStream2],
     recompose_fn: &TokenStream2,
 ) -> TokenStream2 {
-    let (core_path, group, current_scope) = (call.core_path, call.group, call.current_scope);
+    let (core_path, group) = (call.core_path, call.group);
     let (scope_label, body_call) = (call.scope_label, call.body_call);
     quote! {
         #core_path::debug_label_current_scope(stringify!(#scope_label));
-        let mut __changed = #current_scope.should_recompose();
+        let mut __changed = #group.should_recompose();
         #(#param_setup)*
         if !#group.should_execute(__changed.into(), #recompose_fn) {
             return;

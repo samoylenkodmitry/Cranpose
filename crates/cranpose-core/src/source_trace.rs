@@ -132,7 +132,7 @@ fn record_composition(
         return None;
     }
     crate::with_current_composer_opt(|composer| {
-        let scope = composer.current_recompose_scope()?;
+        let scope = composer.peek_recompose_scope()?;
         let counter = scope.inner.recompositions.get_or_init(|| {
             crate::thread_state::runtimes(|state| {
                 state

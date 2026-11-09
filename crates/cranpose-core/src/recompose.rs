@@ -83,7 +83,8 @@ impl Composer {
     // state it holds and reads no slot: it runs without its group, with its
     // scope current for the states it reads to subscribe.
     fn rerun_derivation(&self, scope: &RecomposeScope) {
-        self.scope_stack().push(scope.clone());
+        self.scope_stack()
+            .push(crate::composer::ScopeFrame::Made(scope.clone()));
         let saved_locals = std::mem::replace(&mut *self.local_stack(), scope.local_stack());
         scope.run_recompose(self);
         *self.local_stack() = saved_locals;
@@ -159,7 +160,7 @@ impl Composer {
             };
             {
                 let mut stack = self.scope_stack();
-                stack.push(scope.clone());
+                stack.push(crate::composer::ScopeFrame::Made(scope.clone()));
             }
             let guard = RecomposeGuard {
                 composer: self,

@@ -20,6 +20,7 @@ mod recompose_child_order;
 mod recomposition_inspection;
 mod returned_values;
 mod scene_attachment_scratch;
+mod scopes_on_demand;
 mod snapshot_observation;
 mod snapshot_runtime_thread_isolation;
 mod stage_times;

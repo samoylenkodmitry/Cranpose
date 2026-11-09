@@ -1,6 +1,6 @@
 use std::{cell::Cell, hash::Hash, rc::Rc};
 
-use super::{GroupScopeEntry, PendingMovable, SlotHostPassGuard};
+use super::{GroupScopeEntry, PendingMovable, SlotHostPassGuard, scope_frame};
 use crate::{
     BodyRun, Composer, Key, RecomposeOptions, RecomposeScope, RetentionMode, SlotsHost,
     explicit_group_key_seed, slot::GroupStart,
@@ -12,9 +12,14 @@ use crate::{
 pub struct ComposableGroup<'a> {
     composer: &'a Composer,
     host: Rc<SlotsHost>,
-    scope: RecomposeScope,
+    // The group's scope when it opened with one; `None` for a group whose
+    // body makes its scope when it first needs one.
+    scope: Option<RecomposeScope>,
     pass: Option<SlotHostPassGuard>,
     runs_body: bool,
+    // Whether the group composes reused content, under which every group
+    // runs its body.
+    forces_content: bool,
     completed: bool,
     body: Cell<Body>,
 }
@@ -51,9 +56,13 @@ enum Body {
 }
 
 impl ComposableGroup<'_> {
-    /// The recompose scope of the group.
-    pub fn scope(&self) -> &RecomposeScope {
-        &self.scope
+    /// Whether the group's body runs whatever its parameters: its scope asks
+    /// to recompose, or the content around it runs every body.
+    pub fn should_recompose(&self) -> bool {
+        match &self.scope {
+            Some(scope) => scope.should_recompose(),
+            None => self.composer.deferred_scope_forced(),
+        }
     }
 
     /// Registers `body` as the function that recomposes the group's scope,
@@ -61,7 +70,18 @@ impl ComposableGroup<'_> {
     /// function needs no box and no call shim.
     #[inline]
     pub fn set_recompose_fn(&self, body: fn(&Composer)) {
-        self.scope.set_recompose_fn(body);
+        match &self.scope {
+            Some(scope) => scope.set_recompose_fn(body),
+            None => self.composer.set_deferred_recompose_fn(body),
+        }
+    }
+
+    // Whether the group composed before.
+    fn has_composed_once(&self) -> bool {
+        match &self.scope {
+            Some(scope) => scope.has_composed_once(),
+            None => self.composer.deferred_scope_composed_once(),
+        }
     }
 
     /// Skips the group's body: what it composed last stays. The call
@@ -79,10 +99,10 @@ impl ComposableGroup<'_> {
     /// the call composes nothing more in the group before closing it.
     /// Compose's `Composer.shouldExecute`.
     pub fn should_execute(&self, change: ParameterChange, recompose: fn(&Composer)) -> bool {
-        self.scope.set_recompose_fn(recompose);
+        self.set_recompose_fn(recompose);
         match self.body.get() {
             Body::Paused => false,
-            _ if change == ParameterChange::Unchanged && self.scope.has_composed_once() => {
+            _ if change == ParameterChange::Unchanged && self.has_composed_once() => {
                 self.body.set(Body::Skipped);
                 false
             }
@@ -94,11 +114,11 @@ impl ComposableGroup<'_> {
     // not composed once and stays invalid until the body runs.
     #[cold]
     #[inline(never)]
-    fn close_paused(&self) {
-        self.scope.end_reads(BodyRun::Skipped);
+    fn close_paused(&self, scope: &RecomposeScope) {
+        scope.end_reads(BodyRun::Skipped);
         self.composer
-            .close_group_in_active_pass(&self.host, &self.scope);
-        self.composer.hold_paused(&self.scope);
+            .close_group_in_active_pass(&self.host, Some(scope), None);
+        self.composer.hold_paused(scope);
     }
 
     /// Ends the group after its body composed.
@@ -110,25 +130,42 @@ impl ComposableGroup<'_> {
 
 impl Drop for ComposableGroup<'_> {
     fn drop(&mut self) {
-        match self.body.get() {
-            Body::Runs => {
-                if self.completed {
-                    self.scope.mark_composed_once();
+        let body = self.body.get();
+        match (body, &self.scope) {
+            (Body::Paused, Some(scope)) => self.close_paused(scope),
+            _ => {
+                // The scope the group opened with, or one its body made.
+                let made_by_body = self
+                    .scope
+                    .is_none()
+                    .then(|| self.composer.scope_made_by_body())
+                    .flatten();
+                let scope = self
+                    .scope
+                    .as_ref()
+                    .or_else(|| made_by_body.as_ref().map(|(_, scope)| scope));
+                if let Some(scope) = scope {
+                    if self.completed {
+                        scope.mark_composed_once();
+                    }
+                    let ran = matches!(body, Body::Runs) & self.completed & self.runs_body;
+                    scope.end_reads(BodyRun::from(ran));
                 }
-                self.scope
-                    .end_reads(BodyRun::from(self.completed & self.runs_body));
-                self.composer
-                    .close_group_in_active_pass(&self.host, &self.scope);
-            }
-            Body::Skipped => {
-                if self.completed {
-                    self.scope.mark_composed_once();
+                if matches!(body, Body::Skipped) {
+                    self.composer
+                        .close_skipped_group_in_active_pass(&self.host, scope);
+                } else {
+                    let store = made_by_body.as_ref().map(|(group, scope)| {
+                        scope.set_slots_host(&self.host);
+                        (*group, scope)
+                    });
+                    self.composer
+                        .close_group_in_active_pass(&self.host, scope, store);
                 }
-                self.scope.end_reads(BodyRun::Skipped);
-                self.composer
-                    .close_skipped_group_in_active_pass(&self.host, &self.scope);
             }
-            Body::Paused => self.close_paused(),
+        }
+        if self.forces_content {
+            self.composer.leave_forced_content();
         }
         if let Some(mut pass) = self.pass.take() {
             if self.completed
@@ -160,12 +197,15 @@ impl Composer {
         scope
     }
 
+    // Opens a group; returns its scope, `None` for one whose body makes it
+    // when it first needs one, whether its body runs and whether it forces
+    // the groups below it to run theirs.
     #[inline(never)]
     fn open_group_in_active_pass(
         &self,
         host: &Rc<SlotsHost>,
         key: crate::slot::GroupKeySeed,
-    ) -> (RecomposeScope, bool) {
+    ) -> (Option<RecomposeScope>, bool, bool) {
         let options = self.core.pending_scope_options.take().unwrap_or_default();
         let parent_node = self.current_parent_hint();
         let (
@@ -177,23 +217,34 @@ impl Composer {
             },
             placeholder_for,
         ) = self.start_group(host, key, parent_node);
+        // Movable content keeps its scope, which a move reparents its
+        // scopes from.
+        if scope.is_none()
+            && !key.exact
+            && placeholder_for.is_none()
+            && scope_frame::may_defer(options, kind)
+            && self.defers_scopes_here()
+        {
+            self.push_deferred_scope((group, anchor), kind, parent_node);
+            return (None, true, false);
+        }
         let scope_ref = self.scope_for_started_group(host, group, scope);
         if let Some(movable_key) = placeholder_for {
+            let parent_scope = {
+                let mut stack = self.scope_stack();
+                let top = stack.len().checked_sub(1);
+                top.map(|top| self.frame_scope(&mut stack, top).downgrade())
+            };
             self.core.shared_state.record_pending_movable(
                 host,
                 PendingMovable {
                     key: movable_key,
                     placeholder: anchor,
-                    parent_scope: self
-                        .core
-                        .scope_stack
-                        .borrow()
-                        .last()
-                        .map(RecomposeScope::downgrade),
+                    parent_scope,
                 },
             );
         }
-        self.enter_group_scope(
+        let forces_content = self.enter_group_scope(
             &scope_ref,
             GroupScopeEntry {
                 options,
@@ -203,13 +254,23 @@ impl Composer {
                 parent_hint: parent_node,
             },
         );
-        (scope_ref, placeholder_for.is_none())
+        (Some(scope_ref), placeholder_for.is_none(), forces_content)
     }
 
+    // Closes a group whose body ran: `store` is the scope its body made,
+    // which goes into the group's record.
     #[inline(never)]
-    fn close_group_in_active_pass(&self, host: &Rc<SlotsHost>, scope: &RecomposeScope) {
+    fn close_group_in_active_pass(
+        &self,
+        host: &Rc<SlotsHost>,
+        scope: Option<&RecomposeScope>,
+        store: Option<(crate::slot::ActiveGroupId, &RecomposeScope)>,
+    ) {
         let result = host.with_write_session(|slots| {
             let result = slots.finish_group_body_changes();
+            if let Some((group, made)) = store {
+                slots.set_group_scope(group, made.clone());
+            }
             slots.end_group();
             result
         });
@@ -217,19 +278,25 @@ impl Composer {
         self.settle_closed_group(scope);
     }
 
-    /// Closes a group whose body was skipped, in one slot session: its root
-    /// nodes stay attached where they were.
+    // Closes a group whose body was skipped, in one slot session: its root
+    // nodes stay attached where they were.
     #[inline(never)]
-    fn close_skipped_group_in_active_pass(&self, host: &Rc<SlotsHost>, scope: &RecomposeScope) {
+    fn close_skipped_group_in_active_pass(
+        &self,
+        host: &Rc<SlotsHost>,
+        scope: Option<&RecomposeScope>,
+    ) {
         // Attaching a node reaches the parent stack and the applier, never
         // the slot table the session holds.
         host.with_write_session(|slots| slots.skip_and_end_group(|id| self.attach_to_parent(id)));
-        self.pop_closed_scope(scope);
+        self.pop_closed_scope();
         self.settle_closed_group(scope);
     }
 
-    fn settle_closed_group(&self, scope: &RecomposeScope) {
-        scope.mark_recomposed();
+    fn settle_closed_group(&self, scope: Option<&RecomposeScope>) {
+        if let Some(scope) = scope {
+            scope.mark_recomposed();
+        }
         if let Err(err) = self.flush_pending_commands_if_large() {
             log::error!("mid-composition command flush failed: {err}");
         }
@@ -244,14 +311,17 @@ impl Composer {
             let pass = self.begin_slot_host_pass(&host, crate::slot::SlotPassMode::Compose);
             (self.active_slots_host(), Some(pass))
         };
-        let (scope, runs_body) = self.open_group_in_active_pass(&host, key);
-        scope.begin_reads();
+        let (scope, runs_body, forces_content) = self.open_group_in_active_pass(&host, key);
+        if let Some(scope) = &scope {
+            scope.begin_reads();
+        }
         ComposableGroup {
             composer: self,
             host,
             scope,
             pass,
             runs_body,
+            forces_content,
             completed: false,
             body: Cell::new(Body::Runs),
         }
@@ -259,6 +329,9 @@ impl Composer {
 
     #[doc(hidden)]
     pub fn __open_composable_group(&self, key: Key) -> ComposableGroup<'_> {
+        // A composable that returns a value invalidates its caller's scope
+        // when a recomposition of its own returns another one.
+        self.current_recompose_scope();
         self.open_group(crate::slot::GroupKeySeed::unkeyed(key))
     }
 
@@ -267,7 +340,10 @@ impl Composer {
     #[doc(hidden)]
     pub fn __open_pausable_group(&self, key: Key) -> ComposableGroup<'_> {
         let group = self.open_group(crate::slot::GroupKeySeed::unkeyed(key));
-        if self.core.shared_state.pausing.is_holding() && self.pauses_first_body(&group.scope) {
+        if self.core.shared_state.pausing.is_holding()
+            && let Some(scope) = &group.scope
+            && self.pauses_first_body(scope)
+        {
             group.body.set(Body::Paused);
         }
         group
