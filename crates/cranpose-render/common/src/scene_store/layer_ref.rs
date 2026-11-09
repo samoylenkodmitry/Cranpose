@@ -191,6 +191,13 @@ impl<'a> LayerRef<'a> {
         self.store.placement(self.id)
     }
 
+    /// Whether the record sits in its parent's layer at `placement`, read
+    /// in place.
+    #[inline]
+    pub fn placed_at(self, placement: &Placement) -> bool {
+        self.store.placed_at(self.id, placement)
+    }
+
     /// Offset of the node's content box from its origin, where its children
     /// are placed.
     #[inline]
@@ -486,6 +493,13 @@ impl<'a> LayerRef<'a> {
             .items(self.id)
             .iter()
             .map(move |item| ItemRef::of(store, *item))
+    }
+
+    /// The kinds of the record's items in draw order, read without the
+    /// items themselves.
+    #[inline]
+    pub fn item_kinds(self) -> impl Iterator<Item = ItemKind> + 'a {
+        self.store.items(self.id).iter().map(|item| item.kind())
     }
 
     /// The record's own draws in draw order: its items without its children.

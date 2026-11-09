@@ -7,7 +7,7 @@ use cranpose_render_common::{
     graph::ProjectiveTransform,
     layer_shadow::{ShadowLight, ShadowRRect},
     primitive_emit::ShapeDrawParams,
-    scene_store::{ItemRef as RecordItem, LayerRef, Placement, RecordChange},
+    scene_store::{ItemRef as RecordItem, LayerRef, Placement, RecordChange, RecordKind},
 };
 use cranpose_ui::TextStyle;
 use cranpose_ui_graphics::{
@@ -267,6 +267,14 @@ pub(crate) enum Subtree<'a> {
 
 impl<'a> Subtree<'a> {
     // The node `child`, an item of a record, draws, when it draws one.
+    // The subtree of `record`, a child record of a layer.
+    pub(crate) fn of_record(record: LayerRef<'a>) -> Self {
+        match record.kind() {
+            RecordKind::Leaf => Self::Inline(record),
+            RecordKind::Layer | RecordKind::Wrapper | RecordKind::DrawGroup => Self::Layer(record),
+        }
+    }
+
     pub(crate) fn of_child(child: RecordItem<'a>) -> Option<Self> {
         match child {
             RecordItem::Layer(layer) => Some(Self::Layer(layer)),
@@ -279,6 +287,7 @@ impl<'a> Subtree<'a> {
     }
 
     // The node and the node whose outer draws it wraps.
+    #[inline]
     pub(crate) fn identity(self) -> (Option<NodeId>, Option<NodeId>) {
         match self {
             Self::Layer(layer) => layer.identity(),
@@ -306,6 +315,14 @@ impl<'a> Subtree<'a> {
     pub(crate) fn placement(self) -> Placement {
         match self {
             Self::Layer(layer) | Self::Inline(layer) => layer.placement(),
+        }
+    }
+
+    // Whether the node sits in its parent's layer at `placement`.
+    #[inline]
+    pub(crate) fn placed_at(self, placement: &Placement) -> bool {
+        match self {
+            Self::Layer(layer) | Self::Inline(layer) => layer.placed_at(placement),
         }
     }
 }

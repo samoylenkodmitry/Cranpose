@@ -9,7 +9,7 @@ use cranpose_render_common::{
     layer_shadow::ShadowLight,
     layer_transform::{apply_layer_affine_to_rect, apply_layer_to_rect, layer_uniform_scale},
     primitive_emit::resolve_clip,
-    scene_store::{ItemRef, LayerRef, SceneStore},
+    scene_store::{ItemKind, LayerRef, SceneStore},
     text_decoration::{visit_text_backgrounds, visit_text_lines},
     text_raster::GlyphInk,
 };
@@ -134,18 +134,16 @@ fn flush_copies(reuse: &mut Option<Reuse<'_>>, scene: &mut RasterScene) {
     }
 }
 
-fn contains_text_primitives(layer: LayerRef<'_>) -> bool {
-    layer.items().any(|child| matches!(child, ItemRef::Text(_)))
-}
-
-fn contains_draw_primitives(layer: LayerRef<'_>) -> bool {
-    layer.items().any(|child| matches!(child, ItemRef::Draw(_)))
-}
-
 fn content_needs_rigid_snap(layer: LayerRef<'_>, translated_content_context: bool) -> bool {
-    (translated_content_context
-        && (contains_draw_primitives(layer) || contains_text_primitives(layer)))
-        || (contains_text_primitives(layer) && contains_draw_primitives(layer))
+    let (mut draws, mut texts) = (false, false);
+    for kind in layer.item_kinds() {
+        match kind {
+            ItemKind::Draw => draws = true,
+            ItemKind::Text => texts = true,
+            ItemKind::Child | ItemKind::Run | ItemKind::Shape => {}
+        }
+    }
+    (translated_content_context && (draws || texts)) || (draws && texts)
 }
 
 fn is_render_effect_supported(_effect: &RenderEffect) -> bool {
@@ -547,7 +545,7 @@ fn populate_draws_from_graph(
         // The layer's number covers its subtree, save its placement.
         if context.same_as_before
             && record.change == subtree.change()
-            && record.placement == subtree.placement()
+            && subtree.placed_at(&record.placement)
         {
             let (end, stop) = (record.end, record.stop);
             reuse.cursor = end;

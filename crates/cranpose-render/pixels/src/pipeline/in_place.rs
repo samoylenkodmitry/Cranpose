@@ -124,7 +124,7 @@ impl Repush<'_> {
         if old.identity != subtree.identity() {
             return Err(Stop::OtherLayer);
         }
-        let placed_as_before = old.placement == subtree.placement();
+        let placed_as_before = subtree.placed_at(&old.placement);
         if old.change == subtree.change() && placed_as_before {
             return Ok(());
         }
@@ -142,11 +142,9 @@ impl Repush<'_> {
         };
         let mut next = record + 1;
         let mut walked = Ok(());
-        for child in layer.items() {
-            if walked.is_ok()
-                && let Some(child) = Subtree::of_child(child)
-            {
-                walked = self.visit(child, next, Some(passed));
+        for child in layer.children() {
+            if walked.is_ok() {
+                walked = self.visit(Subtree::of_record(child), next, Some(passed));
                 next = self
                     .scene
                     .subtrees
