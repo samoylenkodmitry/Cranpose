@@ -10,8 +10,8 @@ use cranpose_ui::{GraphicsLayer, Point, Rect};
 use super::{
     ChildOrder, Facts, GeoRecord, HashCache, Item, ItemKind, ItemLists, ItemRef, Journal,
     JournalCursor, JournalEntry, JournalRead, LayerProps, LayerRef, Reach, ReachState, RecordEvent,
-    RecordEvents, RecordFlags, RecordKind, Slab, Span, SpanPool, TransformId, TreeRecord,
-    WarmRecord,
+    RecordEvents, RecordFlags, RecordKind, RecordNode, Slab, Span, SpanPool, TransformId,
+    TreeRecord, WarmRecord,
     own_marks::{self, OwnMark},
 };
 use crate::graph::{
@@ -218,7 +218,7 @@ impl SceneStore {
                 id: parent,
                 generation: self.generations[parent.index()],
             }),
-            node: self.warm[index].node,
+            node: self.warm[index].node.map(RecordNode::id),
         });
     }
 
@@ -439,12 +439,11 @@ impl SceneStore {
             transform: None,
         };
         let warm = WarmRecord {
-            node: seed.node,
+            node: seed.node.map(RecordNode::of),
             props: None,
             graphics_layer: None,
             content_offset: [0.0; 2],
             own_marks: Span::default(),
-            own_reach: Reach::Empty,
         };
         let id = match self.free_rows.pop() {
             Some(row) => {
@@ -462,7 +461,6 @@ impl SceneStore {
                 RecordId::from_index(self.tree.len() - 1).expect("fewer than 2^32 records")
             }
         };
-        self.hashes.open_row(id.index());
         self.facts.open_row(id.index());
         match seed.parent {
             Some(parent) => self.note_subtree_change(Some(parent)),
@@ -490,6 +488,7 @@ impl SceneStore {
         }
         self.items.free_span(span);
         self.marks.free_span(self.warm[index].own_marks);
+        self.hashes.remove(index);
         self.drop_props(index);
         if let Some(transform) = self.tree[index].transform.take() {
             self.transforms.remove(transform.index());
@@ -628,7 +627,7 @@ impl SceneStore {
     /// The layout node `id` draws for.
     #[inline]
     pub fn node(&self, id: RecordId) -> Option<NodeId> {
-        self.warm[id.index()].node
+        self.warm[id.index()].node.map(RecordNode::id)
     }
 
     /// The record that holds `id`.
@@ -815,7 +814,7 @@ impl SceneStore {
     #[inline]
     pub fn set_kind(&mut self, id: RecordId, kind: RecordKind, node: Option<NodeId>) {
         let index = id.index();
-        if self.tree[index].kind != kind || self.warm[index].node != node {
+        if self.tree[index].kind != kind || self.warm[index].node != node.map(RecordNode::of) {
             self.change_kind(id, kind, node);
         }
     }
@@ -825,7 +824,7 @@ impl SceneStore {
         let index = id.index();
         self.log(RecordEvent::Released, id);
         self.tree[index].kind = kind;
-        self.warm[index].node = node;
+        self.warm[index].node = node.map(RecordNode::of);
         self.stale_with_parent(index);
         self.log(RecordEvent::Claimed, id);
     }
@@ -880,7 +879,6 @@ impl SceneStore {
         tree.content_rev = update;
         tree.subtree_rev = update;
         let parent = tree.parent;
-        self.hashes.forget(index);
         self.note_subtree_change(parent);
     }
 
@@ -932,7 +930,6 @@ impl SceneStore {
             tree.subtree_rev = update;
             current = tree.parent;
             let flags = tree.flags;
-            self.hashes.forget(index);
             if flags.contains(RecordFlags::HAS_PROPS)
                 && let Some(props) = self.warm[index].props
             {

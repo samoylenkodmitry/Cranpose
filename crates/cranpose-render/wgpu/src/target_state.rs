@@ -441,7 +441,7 @@ impl TargetState {
     /// Ends the frame whose collect drew `root`: keeps how it drew each
     /// record, adds the areas the changed records are drawn in now, and
     /// returns the frame's damage.
-    pub(crate) fn end(&mut self, store: &SceneStore, root: Option<&mut LayerScene>) -> Damage {
+    pub(crate) fn end(&mut self, store: &SceneStore, root: Option<&LayerScene>) -> Damage {
         if !self.recording {
             return if self.still {
                 Damage::Part(DamageRects::default())
@@ -497,13 +497,13 @@ impl TargetState {
         }
     }
 
-    fn ended(&mut self, store: &SceneStore, mut root: Option<&mut LayerScene>) -> Damage {
+    fn ended(&mut self, store: &SceneStore, root: Option<&LayerScene>) -> Damage {
         let Some(setting) = self.setting else {
             return Damage::Full;
         };
         (self.damage, self.whole) = self.begun;
-        let shown = root.as_deref_mut().map(|root| root.shown.drain(..));
-        for shown in shown.into_iter().flatten() {
+        let shown = root.map_or(&[][..], |root| &root.shown);
+        for shown in shown {
             let row = shown.record.id.index();
             if row >= self.shown.len() {
                 self.shown.resize(row + 1, Shown::default());

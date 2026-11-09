@@ -40,7 +40,8 @@ mod node_window_bounds;
 pub mod primitive_emit;
 /// Keys of the cached rasters of layers.
 pub mod raster_cache;
-mod recent_peak;
+/// The room a reused collection keeps between frames.
+pub mod recent_peak;
 /// Shared cases that every renderer backend is checked against.
 pub mod render_contract;
 /// 16-bit pixels of the format most small displays take.

@@ -1,12 +1,12 @@
 // The fixed-size records of a scene store, one of each per row: what every
 // walk reads, what damage and culling read, and what the scene update reads.
 
-use std::num::NonZeroU32;
+use std::num::{NonZeroU32, NonZeroUsize};
 
 use cranpose_core::{NodeId, RecordId, SceneUpdate};
 use cranpose_ui::Rect;
 
-use super::{Reach, Span};
+use super::Span;
 use crate::graph::ProjectiveTransform;
 
 /// What a record draws for.
@@ -132,14 +132,32 @@ pub(crate) struct GeoRecord {
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct WarmRecord {
-    pub(crate) node: Option<NodeId>,
+    pub(crate) node: Option<RecordNode>,
     pub(crate) props: Option<PropsId>,
     pub(crate) graphics_layer: Option<GraphicsLayerId>,
     pub(crate) content_offset: [f32; 2],
     // The marks of the record's own draws as an update last left them.
     pub(crate) own_marks: Span,
-    // Where the record's own draws reach, beside its children's.
-    pub(crate) own_reach: Reach,
+}
+
+// The node a record draws for, in one word: a `NodeId` has no spare value,
+// so the record keeps the id plus one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct RecordNode(NonZeroUsize);
+
+impl RecordNode {
+    pub(crate) fn of(node: NodeId) -> Self {
+        Self(
+            node.0
+                .checked_add(1)
+                .and_then(NonZeroUsize::new)
+                .expect("a record's node id lies below usize::MAX"),
+        )
+    }
+
+    pub(crate) fn id(self) -> NodeId {
+        NodeId(self.0.get() - 1)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -192,6 +210,11 @@ const _: () = assert!(
 const _: () = assert!(
     size_of::<GeoRecord>() == 32,
     "a geometry record fills half a cache line"
+);
+#[cfg(target_pointer_width = "64")]
+const _: () = assert!(
+    size_of::<WarmRecord>() == 32,
+    "a warm record fills half a cache line"
 );
 
 // Whether two pairs hold the same numbers, bit for bit.

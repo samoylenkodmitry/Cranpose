@@ -93,7 +93,7 @@ impl<'a> LayerRef<'a> {
     /// The layout node the record draws for, whatever its kind.
     #[inline]
     pub fn owner(self) -> Option<NodeId> {
-        self.store.warm[self.id.index()].node
+        self.store.node(self.id)
     }
 
     /// The record that holds this one.
@@ -258,7 +258,8 @@ impl<'a> LayerRef<'a> {
         if self.flags().contains(RecordFlags::REACH_STALE) {
             return Reach::Unknown;
         }
-        self.store.warm[self.id.index()].own_reach
+        let marks = self.store.warm[self.id.index()].own_marks;
+        super::own_marks::reach(self.store.marks.span(marks)).within(self.visual_clip_rect())
     }
 
     /// What the record draws in its parent's space.
@@ -401,7 +402,9 @@ impl<'a> LayerRef<'a> {
     }
 
     fn raster_cache_hashes(self) -> LayerRasterCacheHashes {
-        self.store.hashes.hashes(self.id.index(), || {
+        let index = self.id.index();
+        let subtree_rev = self.store.tree[index].subtree_rev;
+        self.store.hashes.hashes(index, subtree_rev, || {
             super::content_hash::raster_cache_hashes(self)
         })
     }

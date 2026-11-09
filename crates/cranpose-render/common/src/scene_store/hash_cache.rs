@@ -1,57 +1,69 @@
-// The raster cache hashes of each record, kept once worked out until the
-// update notes a change to the record or to a record beneath it.
+// The raster cache hashes of the records a reader asked for, each kept with
+// the subtree revision it was worked out at: a change to the record or to a
+// record beneath it raises that revision, which leaves the hashes stale.
+// Only isolated layers and the records beneath them are hashed, so the
+// cache keeps no row for every other record.
 
-use std::{cell::Cell, mem::size_of};
+use std::{cell::RefCell, mem::size_of};
+
+use cranpose_core::{SceneUpdate, collections::map::HashMap};
 
 use crate::raster_cache::LayerRasterCacheHashes;
 
+type Entry = (SceneUpdate, LayerRasterCacheHashes);
+
 #[derive(Clone, Default)]
 pub(crate) struct HashCache {
-    rows: Vec<Cell<Option<LayerRasterCacheHashes>>>,
+    entries: RefCell<HashMap<u32, Entry>>,
 }
 
 impl HashCache {
-    // Makes the row at `index` hold nothing: a new record's, or a freed row a
-    // new record takes.
-    pub(super) fn open_row(&mut self, index: usize) {
-        match self.rows.get(index) {
-            Some(row) => row.set(None),
-            None => self.rows.resize_with(index + 1, Cell::default),
+    // Drops the hashes of the record at `index`, which leaves its row.
+    pub(super) fn remove(&mut self, index: usize) {
+        let entries = self.entries.get_mut();
+        if !entries.is_empty() {
+            entries.remove(&row(index));
         }
-    }
-
-    pub(super) fn forget(&self, index: usize) {
-        self.rows[index].set(None);
     }
 
     #[cfg(test)]
     pub(super) fn forget_all(&self) {
-        for row in &self.rows {
-            row.set(None);
-        }
+        self.entries.borrow_mut().clear();
     }
 
-    // The hashes of the record at `index`, worked out by `work_out` when the
-    // row holds none.
+    // The hashes of the record at `index`, whose subtree revision is
+    // `subtree_rev`, worked out by `work_out` when the cache holds none of
+    // that revision. `work_out` asks for the hashes of the records beneath,
+    // so no borrow of the cache spans it.
     pub(super) fn hashes(
         &self,
         index: usize,
+        subtree_rev: SceneUpdate,
         work_out: impl FnOnce() -> LayerRasterCacheHashes,
     ) -> LayerRasterCacheHashes {
-        let row = &self.rows[index];
-        if let Some(hashes) = row.get() {
+        let kept = self.entries.borrow().get(&row(index)).copied();
+        if let Some((rev, hashes)) = kept
+            && rev == subtree_rev
+        {
             return hashes;
         }
         let hashes = work_out();
-        row.set(Some(hashes));
+        self.entries
+            .borrow_mut()
+            .insert(row(index), (subtree_rev, hashes));
         hashes
     }
 
     pub(super) fn clear(&mut self) {
-        self.rows.clear();
+        self.entries.get_mut().clear();
     }
 
     pub(super) fn heap_bytes(&self) -> usize {
-        self.rows.capacity() * size_of::<Cell<Option<LayerRasterCacheHashes>>>()
+        // A table keeps one control byte beside each slot.
+        self.entries.borrow().capacity() * (size_of::<(u32, Entry)>() + 1)
     }
+}
+
+fn row(index: usize) -> u32 {
+    u32::try_from(index).expect("fewer than 2^32 records")
 }

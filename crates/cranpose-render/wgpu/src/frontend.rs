@@ -243,7 +243,7 @@ impl RendererFrontend {
     ) -> (Option<Box<LayerScene>>, Damage) {
         let window = purpose == PacketFor::Window;
         let recycler = &mut self.scene_recyclers[self.returned_scenes];
-        let mut overlay = self.dev_overlay.root_layer().map(|overlay| {
+        let overlay = self.dev_overlay.root_layer().map(|overlay| {
             collect_overlay(
                 overlay,
                 (root_scale, window && self.overlay_target.records()),
@@ -252,7 +252,7 @@ impl RendererFrontend {
         });
         let damage = if window {
             self.overlay_target
-                .end(&self.dev_overlay, overlay.as_deref_mut())
+                .end(&self.dev_overlay, overlay.as_deref())
         } else {
             Damage::Full
         };
@@ -281,7 +281,7 @@ impl RendererFrontend {
         let mut widened = false;
         let (root, damage) = loop {
             let culled = cull.map(|region| self.target.cull(store, region));
-            let mut root = collect_root(
+            let root = collect_root(
                 root_layer,
                 records,
                 culled.as_ref(),
@@ -295,7 +295,7 @@ impl RendererFrontend {
             }
             let damage = self
                 .target
-                .end(store, Some(&mut root))
+                .end(store, Some(&root))
                 .union(overlay_damage, (width, height));
             let Some(region) = cull else {
                 break (root, damage);

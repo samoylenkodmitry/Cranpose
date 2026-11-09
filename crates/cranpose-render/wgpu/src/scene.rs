@@ -8,6 +8,7 @@ use cranpose_render_common::{
     glyph_reach::{InkSpread, glyph_part},
     graph::DrawCommandId,
     layer_shadow::ShadowRRect,
+    recent_peak::RecentPeak,
     text_paint::TextPaint,
     text_raster::TextRasterRequest,
 };
@@ -527,7 +528,25 @@ pub(crate) struct CompositorScene {
     pub effect_layers: Vec<EffectLayer>,
     pub backdrop_layers: Vec<BackdropLayer>,
     pub next_z: usize,
+    peaks: ListPeaks,
 }
+
+// The most entries each list of a scene held lately, by which a cleared
+// scene gives back the room a burst took.
+#[derive(Clone, Copy, Debug, Default)]
+struct ListPeaks {
+    runs: RecentPeak,
+    images: RecentPeak,
+    texts: RecentPeak,
+    shadow_draws: RecentPeak,
+    rrect_shadows: RecentPeak,
+    draw_ops: RecentPeak,
+    effect_layers: RecentPeak,
+    backdrop_layers: RecentPeak,
+}
+
+// The room a scene list keeps whatever its recent frames held.
+const LIST_ROOM_KEPT: usize = 64;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct SceneCapacityHint {
@@ -606,6 +625,7 @@ impl CompositorScene {
                 effect_layers: buffers.effect_layers,
                 backdrop_layers: buffers.backdrop_layers,
                 next_z: 0,
+                peaks: ListPeaks::default(),
             };
         }
         Self {
@@ -623,6 +643,7 @@ impl CompositorScene {
             effect_layers: Vec::with_capacity(hint.effect_layers),
             backdrop_layers: Vec::with_capacity(hint.backdrop_layers),
             next_z: 0,
+            peaks: ListPeaks::default(),
         }
     }
 
@@ -640,11 +661,13 @@ impl CompositorScene {
     }
 
     pub(crate) fn clear(&mut self) {
-        self.runs.clear();
+        let peaks = &mut self.peaks;
+        peaks.runs.clear(&mut self.runs, LIST_ROOM_KEPT);
         self.loose.recorder.clear();
-        self.images.clear();
-        self.texts.clear();
+        peaks.images.clear(&mut self.images, LIST_ROOM_KEPT);
+        peaks.texts.clear(&mut self.texts, LIST_ROOM_KEPT);
         let recorder_limit = self.shadow_draws.capacity().saturating_mul(2);
+        peaks.shadow_draws.note(self.shadow_draws.len());
         for shadow in self.shadow_draws.drain(..) {
             for mut run in [shadow.shapes, shadow.post_blur_cutouts]
                 .into_iter()
@@ -658,10 +681,22 @@ impl CompositorScene {
                 }
             }
         }
-        self.rrect_shadows.clear();
-        self.draw_ops.clear();
-        self.effect_layers.clear();
-        self.backdrop_layers.clear();
+        if let Some(room) = peaks
+            .shadow_draws
+            .shrink_to(self.shadow_draws.capacity(), LIST_ROOM_KEPT)
+        {
+            self.shadow_draws.shrink_to(room);
+        }
+        peaks
+            .rrect_shadows
+            .clear(&mut self.rrect_shadows, LIST_ROOM_KEPT);
+        peaks.draw_ops.clear(&mut self.draw_ops, LIST_ROOM_KEPT);
+        peaks
+            .effect_layers
+            .clear(&mut self.effect_layers, LIST_ROOM_KEPT);
+        peaks
+            .backdrop_layers
+            .clear(&mut self.backdrop_layers, LIST_ROOM_KEPT);
         self.next_z = 0;
     }
 

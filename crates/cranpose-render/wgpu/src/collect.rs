@@ -7,6 +7,7 @@ use cranpose_render_common::{
     layer_shadow::ShadowLight,
     layer_transform::layer_uniform_scale,
     primitive_emit::resolve_clip,
+    recent_peak::RecentPeak,
     scene_store::{ItemRef, LayerRef},
     space::SeenDoor,
 };
@@ -60,7 +61,12 @@ pub(crate) struct LayerScene {
     // How a window's walk drew each record it drew in place, when the scene
     // is a window's root.
     pub(crate) shown: Vec<ShownRecord>,
+    shown_peak: RecentPeak,
 }
+
+// The room a scene's list of drawn records keeps whatever its recent frames
+// held.
+const SHOWN_ROOM_KEPT: usize = 64;
 
 /// The layer scenes of returned packets, kept with their buffers for the
 /// next collect. Boxed, as a layer's content is: a scene is some 540 bytes,
@@ -91,7 +97,7 @@ impl LayerSceneRecycler {
         }
         scene.scene.clear();
         scene.has_backdrop = false;
-        scene.shown.clear();
+        scene.shown_peak.clear(&mut scene.shown, SHOWN_ROOM_KEPT);
         self.scenes.push(scene);
     }
 
@@ -113,6 +119,7 @@ impl LayerScene {
             children,
             has_backdrop: false,
             shown: Vec::new(),
+            shown_peak: RecentPeak::default(),
         };
         layer.refresh_backdrop_summary();
         layer

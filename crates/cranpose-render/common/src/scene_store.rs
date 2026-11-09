@@ -31,7 +31,8 @@ pub use layer_ref::{ItemRef, LayerRef, RecordChange};
 pub use leaf_write::Leaf;
 pub use reach::{BLUR_PIXEL_SLACK, Extent, Reach, ShadowCaster};
 pub(crate) use records::{
-    GeoRecord, GraphicsLayerId, PropsId, ReachState, TransformId, TreeRecord, WarmRecord,
+    GeoRecord, GraphicsLayerId, PropsId, ReachState, RecordNode, TransformId, TreeRecord,
+    WarmRecord,
 };
 pub use records::{RecordFlags, RecordKind};
 pub(crate) use slab::Slab;

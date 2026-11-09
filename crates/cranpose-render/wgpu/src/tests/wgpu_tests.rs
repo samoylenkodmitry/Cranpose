@@ -1,4 +1,3 @@
-use cranpose_core::NodeId;
 use cranpose_render_common::{Renderer, scene_store::ItemRef};
 use cranpose_ui_graphics::{GraphicsLayer, Size};
 
@@ -22,9 +21,7 @@ fn dev_overlay_is_recorded_outside_app_graph() {
     );
 
     assert!(
-        renderer.frontend.scene.root_layer().is_none_or(|root| root
-            .children()
-            .all(|layer| layer.node_id() != Some(NodeId(usize::MAX)))),
+        renderer.frontend.scene.root_layer().is_none(),
         "dev overlay must not be mixed into the app scene graph"
     );
 
@@ -37,7 +34,7 @@ fn dev_overlay_is_recorded_outside_app_graph() {
         panic!("dev overlay should be the final top-level layer");
     };
 
-    assert_eq!(overlay.node_id(), Some(NodeId(usize::MAX)));
+    assert_eq!(overlay.node_id(), None);
     assert_eq!(
         overlay.graphics_layer().compositing_strategy,
         GraphicsLayer::default().compositing_strategy,

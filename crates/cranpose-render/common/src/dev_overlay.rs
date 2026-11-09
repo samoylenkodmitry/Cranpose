@@ -32,7 +32,8 @@ impl DevOverlayKey {
 }
 
 /// Build the dev-overlay layer: a translucent pill with the stats text, laid
-/// out in `overlay`, in the top-right corner of `viewport`.
+/// out in `overlay`, in the top-right corner of `viewport`. The layer draws
+/// for no layout node; `node_id` keys its text.
 pub fn build_dev_overlay_layer(
     overlay: &cranpose_ui::PreparedTextLayout,
     viewport: Size,
@@ -47,7 +48,7 @@ pub fn build_dev_overlay_layer(
     let y = padding;
 
     let overlay_layer = LayerNode {
-        node_id: Some(node_id),
+        node_id: None,
         size: Size::new(text_width + padding, text_height + padding / 2.0),
         transform_to_parent: ProjectiveTransform::translation(x, y),
         children: vec![

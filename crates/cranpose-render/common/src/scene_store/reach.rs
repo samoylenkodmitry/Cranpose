@@ -127,7 +127,6 @@ pub(super) fn refresh(store: &mut SceneStore, id: RecordId) {
         .fold(Reach::Empty, Reach::union);
     let reach = own.union(children).within(clip);
     store.set_reach(index, reach);
-    store.warm[index].own_reach = own.within(clip);
     let flags = &mut store.tree[index].flags;
     *flags = flags.without(RecordFlags::REACH_STALE);
 }
