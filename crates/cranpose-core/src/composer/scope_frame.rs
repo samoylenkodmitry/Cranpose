@@ -143,20 +143,17 @@ impl Composer {
     // The scope of the frame at `index`, made now for a group that has
     // none yet.
     pub(super) fn frame_scope(&self, stack: &mut [ScopeFrame], index: usize) -> RecomposeScope {
-        let owner = stack[..index]
-            .iter()
-            .rev()
-            .find_map(ScopeFrame::scope)
-            .cloned();
-        let deferred = match &mut stack[index] {
+        let (below, frame) = stack.split_at_mut(index);
+        let deferred = match &mut frame[0] {
             ScopeFrame::Made(scope) => return scope.clone(),
             ScopeFrame::Deferred(deferred) => deferred,
         };
         if let Some(scope) = &deferred.made {
             return scope.clone();
         }
+        let owner = below.iter().rev().find_map(ScopeFrame::scope);
         let scope = RecomposeScope::new(self.runtime_handle());
-        match &owner {
+        match owner {
             Some(owner) => scope.set_parent_scope(Some(owner)),
             None => scope
                 .set_lifetime_owner_scope(self.core.subcomposition_owner_scope.borrow().as_ref()),
