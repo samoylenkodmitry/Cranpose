@@ -215,30 +215,42 @@ struct StaticTextModifier<'a> {
 }
 
 impl StaticTextModifier<'_> {
-    // The element of the text's node.
-    fn element(&self) -> TextModifierElement {
-        let text = match self.text {
+    // The text, shared with equal texts the app shows.
+    fn shared_text(&self) -> crate::text::AnnotatedString {
+        match self.text {
             StaticText::Plain(text) => crate::render_state::current_app_context()
                 .map_or_else(|| text.into(), |context| context.text.plain_text(text)),
             StaticText::Annotated(text) => text.clone(),
-        };
+        }
+    }
+
+    // The element of the text's node.
+    fn element(&self) -> TextModifierElement {
         TextModifierElement::with_shared_style(
-            text,
+            self.shared_text(),
             Arc::clone(&self.style),
             self.options,
             self.density,
         )
     }
 
-    // Whether `node` shows the text: its chain holds the caller's modifier,
-    // then a text node of this text, style and options.
-    fn shown_by(&self, node: &LayoutNode) -> bool {
-        node.node_after(&self.modifier).is_some_and(|last| {
-            last.borrow()
-                .as_any()
-                .downcast_ref::<TextModifierNode>()
-                .is_some_and(|last| last.shows(self.text, &self.style, self.options, self.density))
-        })
+    // Shows the text in the text node after the caller's modifier in
+    // `node`'s chain, comparing it once: whether the node took another text,
+    // or `None` when the chain holds no such node. An inspection build keeps
+    // the inspector metadata of the whole modifier, so another text goes
+    // through the modifier.
+    fn show_in(&self, node: &LayoutNode) -> Option<bool> {
+        let last = node.node_after(&self.modifier)?;
+        let mut last = last.borrow_mut();
+        let text_node = last.as_any_mut().downcast_mut::<TextModifierNode>()?;
+        if text_node.shows(self.text, &self.style, self.options, self.density) {
+            return Some(false);
+        }
+        if cfg!(feature = "inspection") {
+            return None;
+        }
+        text_node.show(&self.shared_text(), &self.style, self.options, self.density);
+        Some(true)
     }
 }
 
@@ -254,8 +266,10 @@ impl NodeModifier for StaticTextModifier<'_> {
     fn set_on(&mut self, node: &mut LayoutNode) {
         // A node that shows another text takes this one in its text node,
         // with no modifier made for it, as a ticker's does each frame.
-        if !self.shown_by(node) && !node.update_node_after(&self.modifier, self.element()) {
-            node.set_modifier(self.to_modifier());
+        match self.show_in(node) {
+            Some(true) => node.note_last_node_updated(),
+            Some(false) => {}
+            None => node.set_modifier(self.to_modifier()),
         }
     }
 }

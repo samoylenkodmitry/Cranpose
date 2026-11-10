@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use super::{
-    AnyModifierElement, DynModifierElement, EntryElement, ModifierNodeContext, ModifierNodeEntry,
+    DynModifierElement, EntryElement, ModifierNodeContext, ModifierNodeEntry,
     request_update_auto_invalidations,
 };
 
@@ -24,18 +24,6 @@ pub(super) fn update_entry_in_place(
     element: &DynModifierElement,
     context: &mut dyn ModifierNodeContext,
 ) -> Option<InPlace> {
-    update_node_in_place(entry, &**element, Some(element), context)
-}
-
-// Updates the node of `entry` for `element` as `update_entry_in_place`
-// does. An updated entry keeps `kept`, or its own element where `kept` is
-// `None`, which an element its node holds leaves the same.
-pub(super) fn update_node_in_place(
-    entry: &mut ModifierNodeEntry,
-    element: &dyn AnyModifierElement,
-    kept: Option<&DynModifierElement>,
-    context: &mut dyn ModifierNodeContext,
-) -> Option<InPlace> {
     let held = entry.held();
     if held.element_type() != element.element_type()
         || held.node_type() != element.node_type()
@@ -44,7 +32,7 @@ pub(super) fn update_node_in_place(
     {
         return None;
     }
-    let same_element = held.equals(element);
+    let same_element = held.equals(&**element);
     let capabilities = element.capabilities();
     let mut outcome = if capabilities == entry.capabilities {
         InPlace::LinksHold
@@ -53,10 +41,8 @@ pub(super) fn update_node_in_place(
     };
     if !same_element || element.requires_update() {
         element.update_node(&mut *entry.node.borrow_mut());
-        if let Some(kept) = kept {
-            entry.element = EntryElement::new(Rc::clone(kept));
-        }
-        request_update_auto_invalidations(element, context, capabilities);
+        entry.element = EntryElement::new(Rc::clone(element));
+        request_update_auto_invalidations(&**element, context, capabilities);
         entry
             .node
             .borrow()

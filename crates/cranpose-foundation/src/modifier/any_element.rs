@@ -291,11 +291,5 @@ pub fn modifier_element<E: ModifierNodeElement>(element: E) -> DynModifierElemen
     Rc::new(TypedModifierElement::new(element))
 }
 
-// `element` type-erased where it lies, for an update that keeps no
-// element: one its node holds.
-pub(super) fn unboxed_element<E: ModifierNodeElement>(element: E) -> impl AnyModifierElement {
-    TypedModifierElement::new(element)
-}
-
 /// Boxed type-erased modifier element.
 pub type DynModifierElement = Rc<dyn AnyModifierElement>;

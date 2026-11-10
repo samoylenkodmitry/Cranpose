@@ -351,6 +351,19 @@ impl TextModifierNode {
             && self.density == density
     }
 
+    // Shows `text` in `style` with `options` on `density`'s grid in place
+    // of what the node showed, as an equal element's update does.
+    pub(crate) fn show(
+        &mut self,
+        text: &AnnotatedString,
+        style: &Arc<TextStyle>,
+        options: TextLayoutOptions,
+        density: Density,
+    ) {
+        self.density = density;
+        self.layout.update(text, style, options);
+    }
+
     /// A text node sized on `density`'s device pixel grid.
     pub fn new(
         text: AnnotatedString,
@@ -668,8 +681,7 @@ impl ModifierNodeElement for TextModifierElement {
     }
 
     fn update(&self, node: &mut Self::Node) {
-        node.density = self.density;
-        node.layout.update(&self.text, &self.style, self.options);
+        node.show(&self.text, &self.style, self.options, self.density);
     }
 
     fn equals_node(&self, node: &TextModifierNode) -> bool {
