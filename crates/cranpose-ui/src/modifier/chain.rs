@@ -510,7 +510,7 @@ impl ModifierChainHandle {
             // A plain element has no node: its element type names it.
             let type_name = match node_ref.plain_words() {
                 Some((fns, _)) => Some(fns.type_name()),
-                None => node_ref.with_node(|node| type_name_of_val(node)),
+                None => node_ref.with_node(type_name_of_val),
             };
             let Some(type_name) = type_name else {
                 return;

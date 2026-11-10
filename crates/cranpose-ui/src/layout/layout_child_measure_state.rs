@@ -482,7 +482,7 @@ impl LayoutParts {
 
     fn perform_measure(&self, constraints: Constraints) -> Result<Rc<MeasuredNode>, NodeError> {
         let record = self.record();
-        let builder = record.builder().ok_or(NodeError::MissingContext {
+        let builder = record.builder().ok_or_else(|| NodeError::MissingContext {
             id: record.child_id(),
             reason: "layout child applier not configured",
         })?;

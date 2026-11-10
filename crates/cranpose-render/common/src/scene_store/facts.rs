@@ -254,10 +254,9 @@ fn work_out_child_facts(layer: LayerRef<'_>) -> ChildFacts {
         facts.origin_sinks |= child.origin_sinks;
         facts.space |= child.space;
     }
-    row.set(RowFacts {
-        children: Some(facts),
-        ..row.get()
-    });
+    let mut kept = row.get();
+    kept.children = Some(facts);
+    row.set(kept);
     facts
 }
 

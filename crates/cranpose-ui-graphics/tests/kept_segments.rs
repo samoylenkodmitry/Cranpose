@@ -89,7 +89,7 @@ fn keep(kept: &[usize]) -> ShapeRecorder {
     let mut start = 0;
     for &index in kept {
         let (segments, drawn) = &runs[index];
-        let moved = start..start + segments.len() as u32;
+        let moved = start..start + (segments.end - segments.start);
         assert_eq!(
             recorder.shape_primitives_in(&moved).collect::<Vec<_>>(),
             *drawn,

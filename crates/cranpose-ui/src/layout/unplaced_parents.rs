@@ -33,7 +33,10 @@ pub(super) fn record_unplaced_parents(
     let mut children = Vec::new();
     for parent in parents {
         children.clear();
-        let _ = read_layout_node(applier, parent, |_, ids| children.extend_from_slice(ids));
+        let read = read_layout_node(applier, parent, |_, ids| children.extend_from_slice(ids));
+        if !matches!(read, Ok(Some(()))) {
+            continue;
+        }
         let lists_unplaced = children.iter().any(|&child| {
             matches!(
                 read_layout_node(applier, child, |state, _| state.unplaced_in(pass)),

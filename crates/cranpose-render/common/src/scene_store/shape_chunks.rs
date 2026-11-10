@@ -308,7 +308,7 @@ fn keep_live_runs(
             + live
                 .get(word)
                 .map_or(0, |bits| (bits & ((1 << bit) - 1)).count_ones());
-        run.segments = start..start + run.segments.len() as u32;
+        run.segments = start..start + (run.segments.end - run.segments.start);
     }
 }
 

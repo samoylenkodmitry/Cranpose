@@ -646,10 +646,14 @@ fn update_graph_from_applier_replaces_dirty_child_layer() {
 
 // The target content hash of each record below `layer`, with its path and
 // node, in tree order.
-fn cached_hashes(layer: LayerRef<'_>, path: String, out: &mut Vec<(String, Option<NodeId>, u64)>) {
-    out.push((path.clone(), layer.node_id(), layer.target_content_hash()));
+fn cached_hashes(layer: LayerRef<'_>, path: &str, out: &mut Vec<(String, Option<NodeId>, u64)>) {
+    out.push((
+        path.to_owned(),
+        layer.node_id(),
+        layer.target_content_hash(),
+    ));
     for (index, child) in layer.children().enumerate() {
-        cached_hashes(child, format!("{path}/{index}"), out);
+        cached_hashes(child, &format!("{path}/{index}"), out);
     }
 }
 
@@ -657,10 +661,10 @@ fn cached_hashes(layer: LayerRef<'_>, path: String, out: &mut Vec<(String, Optio
 // the same records.
 fn assert_dirty_hash_road_matches_full_walk(graph: &Built) {
     let mut kept = Vec::new();
-    cached_hashes(root_of(&graph.store), "root".to_owned(), &mut kept);
+    cached_hashes(root_of(&graph.store), "root", &mut kept);
     graph.store.forget_hashes();
     let mut worked_out = Vec::new();
-    cached_hashes(root_of(&graph.store), "root".to_owned(), &mut worked_out);
+    cached_hashes(root_of(&graph.store), "root", &mut worked_out);
     assert_eq!(kept, worked_out, "target content hashes by record path");
 }
 

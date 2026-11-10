@@ -94,7 +94,11 @@ fn assert_draw_records_once_per_update(case: Case, with_child: bool) {
     });
 
     assert_eq!(calls.get(), 2, "one update records the draw once");
-    assert_eq!(solid_rect_colors(&scene), [Color::GREEN, Color::RED]);
+    assert_eq!(
+        solid_rect_colors(&scene),
+        [Color::GREEN, Color::RED],
+        "the update drew the new colors in the order of the draws"
+    );
 }
 
 #[test]

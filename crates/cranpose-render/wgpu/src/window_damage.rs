@@ -379,15 +379,21 @@ pub(crate) struct FrameDamages {
 }
 
 impl FrameDamages {
+    // The entry that holds the damage of `frame`, or of a frame `HISTORY`
+    // frames apart.
+    fn slot(frame: u64) -> usize {
+        (frame % HISTORY as u64) as usize
+    }
+
     fn noted(&self, frame: u64) -> Option<PacketDamage> {
-        self.entries[(frame % HISTORY as u64) as usize]
+        self.entries[Self::slot(frame)]
             .filter(|(noted, _)| *noted == frame)
             .map(|(_, damage)| damage)
     }
 
     /// Keeps the damage of the packet of `frame`.
     pub(crate) fn note(&mut self, frame: u64, damage: PacketDamage) {
-        self.entries[(frame % HISTORY as u64) as usize] = Some((frame, damage));
+        self.entries[Self::slot(frame)] = Some((frame, damage));
     }
 
     /// What `frame` changes in a target that holds `held`: the union of the

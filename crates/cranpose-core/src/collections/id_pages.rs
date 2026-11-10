@@ -63,7 +63,12 @@ impl<T, const PAGE: usize, const DIRECTORY: usize> Directory<T, PAGE, DIRECTORY>
 // directories of `DIRECTORY` pages.
 #[inline]
 fn split<const PAGE: usize, const DIRECTORY: usize>(id: usize) -> (usize, usize, usize) {
-    const { assert!(PAGE.is_power_of_two() && DIRECTORY.is_power_of_two()) };
+    const {
+        assert!(
+            PAGE.is_power_of_two() && DIRECTORY.is_power_of_two(),
+            "pages and directories split an id by its bits"
+        );
+    };
     let page_bits = PAGE.trailing_zeros();
     let directory_bits = DIRECTORY.trailing_zeros();
     (

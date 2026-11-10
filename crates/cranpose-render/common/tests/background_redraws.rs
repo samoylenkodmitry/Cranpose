@@ -33,8 +33,8 @@ fn boxes_with_tints(
                         || {},
                     );
                 }
-                for index in 0..tinted {
-                    let step = (state.get() + index as u32 * 64) % 256;
+                for index in (0u32..).take(tinted) {
+                    let step = (state.get() + index * 64) % 256;
                     cranpose_ui::Box(
                         Modifier::empty()
                             .size(Size::new(40.0, 40.0))

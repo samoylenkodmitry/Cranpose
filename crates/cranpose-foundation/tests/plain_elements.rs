@@ -2,7 +2,7 @@
 // A chain reconciled with other elements gives back each plain value at its
 // new place, keeps the nodes it can and asks for a redraw of a changed value.
 
-use std::hash::Hash;
+use std::{hash::Hash, rc::Rc};
 
 use cranpose_foundation::{
     BasicModifierNodeContext, DelegatableNode, DynModifierElement, InvalidationKind, ModifierNode,
@@ -157,12 +157,12 @@ fn a_plain_element_makes_no_node_and_keeps_the_nodes_beside_it() {
         chain.get_node_rc(0).is_none(),
         "a plain element has no node"
     );
-    let node = chain.get_node_rc(1).expect("the mark's node").clone();
+    let node = Rc::clone(chain.get_node_rc(1).expect("the mark's node"));
 
     chain.update_from_slice(&[mark(7), tint(2)], &mut context);
 
     let kept = chain.get_node_rc(0).expect("the mark's node");
-    assert!(std::rc::Rc::ptr_eq(&node, kept), "the mark keeps its node");
+    assert!(Rc::ptr_eq(&node, kept), "the mark keeps its node");
     assert_eq!(chain.capabilities(), NodeCapabilities::DRAW);
 }
 

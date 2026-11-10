@@ -218,7 +218,11 @@ impl ArenaTables {
                     capacity[0].min(capacity[1]),
                 )
             });
-            fill.dispatch(&mut pass, bind_group, rows as u32);
+            fill.dispatch(
+                &mut pass,
+                bind_group,
+                u32::try_from(rows).unwrap_or(u32::MAX),
+            );
         }
     }
 
@@ -250,8 +254,8 @@ impl ArenaTables {
                 if staged.is_empty() {
                     continue;
                 }
-                let padded = staged.len().div_ceil(wgpu::COPY_BUFFER_ALIGNMENT as usize)
-                    * wgpu::COPY_BUFFER_ALIGNMENT as usize;
+                let alignment = wgpu::COPY_BUFFER_ALIGNMENT as usize;
+                let padded = staged.len().div_ceil(alignment) * alignment;
                 staged.resize(padded, 0);
                 stats += recorder.stage_frame_buffer_copy(device, buffer, 0, staged);
             }

@@ -12,6 +12,10 @@ use cranpose_ui_graphics::{CommandRecording, FxHashMap};
 
 use crate::graph::DrawCommandId;
 
+// A recording a command made, with the segments of it that are the
+// command's.
+pub(crate) type Recorded = (Rc<CommandRecording>, Range<u32>);
+
 #[derive(Clone, Default)]
 pub(crate) struct Recordings {
     slots: FxHashMap<RecorderKey, RecorderSlot>,
@@ -19,7 +23,7 @@ pub(crate) struct Recordings {
     // The recordings a redraw in place made before it gave up, with their
     // segments, for the fallback that records the node's draws anew in the
     // same update.
-    parked: Vec<(DrawCommandId, (Rc<CommandRecording>, Range<u32>))>,
+    parked: Vec<(DrawCommandId, Recorded)>,
 }
 
 #[derive(Clone)]
@@ -127,17 +131,14 @@ impl Recordings {
 
     // Parks `recorded`, which the command `id` recorded in this update, for
     // a fallback that records the command again in it.
-    pub(crate) fn park(&mut self, id: DrawCommandId, recorded: (Rc<CommandRecording>, Range<u32>)) {
+    pub(crate) fn park(&mut self, id: DrawCommandId, recorded: Recorded) {
         self.parked.push((id, recorded));
     }
 
     // The recording the command `id` parked in this update, with its
     // segments.
     #[inline]
-    pub(crate) fn take_parked(
-        &mut self,
-        id: DrawCommandId,
-    ) -> Option<(Rc<CommandRecording>, Range<u32>)> {
+    pub(crate) fn take_parked(&mut self, id: DrawCommandId) -> Option<Recorded> {
         if self.parked.is_empty() {
             return None;
         }

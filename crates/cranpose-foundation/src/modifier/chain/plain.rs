@@ -153,6 +153,9 @@ impl PlainIntrinsic {
     }
 }
 
+// Writes an element's words as a coordinator keeps them for a density.
+type PrepareFn = fn(&[u32], f32, &mut [u32]);
+
 type MeasureFn = fn(
     &[u32],
     &mut dyn ModifierNodeContext,
@@ -164,7 +167,7 @@ type MeasureFn = fn(
 /// coordinator keeps of the element's type.
 pub struct PlainLayoutFns {
     // `None` for an element a coordinator keeps as it is.
-    prepare: Option<fn(&[u32], f32, &mut [u32])>,
+    prepare: Option<PrepareFn>,
     measure: MeasureFn,
     measure_hold: fn(&[u32], f32, Constraints, Size, WrappedHold) -> Option<ConstraintsHold>,
     intrinsic: fn(&[u32], &dyn Measurable, PlainIntrinsic, f32) -> f32,
