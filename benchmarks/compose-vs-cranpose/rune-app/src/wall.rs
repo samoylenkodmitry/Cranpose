@@ -79,7 +79,15 @@ pub(crate) fn view(wall: &Wall, _: &mut Cx<Wall>) -> El {
         .children((0..wall.rows).map(move |line| {
             row()
                 .gap(WALL_GAP)
-                .children((0..columns).map(move |column| tile(line * columns + column, tier)))
+                .children((0..columns).map(move |column| {
+                    let index = line * columns + column;
+                    tile(
+                        index,
+                        [tier.tile_width, tier.tile_height],
+                        tier.tile_height,
+                        rgb(wall_fill_rgb(index)),
+                    )
+                }))
         }));
     let cursor = el()
         .size(tier.tile_width, tier.tile_height)
@@ -96,34 +104,35 @@ pub(crate) fn view(wall: &Wall, _: &mut Cx<Wall>) -> El {
         .child(el().w_full().grow(1.0).child(tiles).child(cursor))
 }
 
-/// One tile: its label over a dot and its value, on its fill, each part at its
-/// own offset.
-fn tile(index: usize, tier: WallTier) -> El {
-    let (label_size, value_size) = wall_text_size(tier.tile_height);
-    let dot = wall_dot_size(tier.tile_height);
-    let padding = wall_padding(tier.tile_height);
+/// One tile of `size` points on `fill`: its parts, which follow `unit_height`,
+/// the height of a single tile.
+pub(crate) fn tile(index: usize, size: [f32; 2], unit_height: f32, fill: Color) -> El {
+    el().size(size[0], size[1])
+        .radius(WALL_CORNER)
+        .fill(fill)
+        .children(tile_parts(index, unit_height))
+}
+
+/// A tile's label over a dot and its value, each at its own offset.
+pub(crate) fn tile_parts(index: usize, unit_height: f32) -> [El; 3] {
+    let (label_size, value_size) = wall_text_size(unit_height);
+    let dot = wall_dot_size(unit_height);
+    let padding = wall_padding(unit_height);
     let ink = rgb(WALL_INK_RGB);
     let label_line = label_size * 1.4;
     let value_line = value_size * 1.4;
-    el().size(tier.tile_width, tier.tile_height)
-        .radius(WALL_CORNER)
-        .fill(rgb(wall_fill_rgb(index)))
-        .child(
-            text(wall_label(index))
-                .font(roboto(label_size, true))
-                .color(ink)
-                .absolute(padding, padding),
-        )
-        .child(
-            el().size(dot, dot)
-                .radius(dot / 2.0)
-                .fill(rgb(wall_dot_rgb(index)))
-                .absolute(padding, padding + label_line + (value_line - dot) / 2.0),
-        )
-        .child(
-            text(wall_value(index))
-                .font(roboto(value_size, false))
-                .color(ink)
-                .absolute(padding + dot * 1.5, padding + label_line),
-        )
+    [
+        text(wall_label(index))
+            .font(roboto(label_size, true))
+            .color(ink)
+            .absolute(padding, padding),
+        el().size(dot, dot)
+            .radius(dot / 2.0)
+            .fill(rgb(wall_dot_rgb(index)))
+            .absolute(padding, padding + label_line + (value_line - dot) / 2.0),
+        text(wall_value(index))
+            .font(roboto(value_size, false))
+            .color(ink)
+            .absolute(padding + dot * 1.5, padding + label_line),
+    ]
 }

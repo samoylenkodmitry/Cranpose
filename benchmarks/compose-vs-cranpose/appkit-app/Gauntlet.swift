@@ -28,6 +28,9 @@ enum Launch {
     static let freeze = Int(environment["PERF_FREEZE"] ?? "") ?? 0
     static let fonts = environment["PERF_FONTS"] ?? "fonts"
     static let wall = environment["PERF_SCENARIO"] == "wall"
+    static let patchwork = environment["PERF_SCENARIO"] == "patchwork"
+    /// The folder with the chat's `spin.gif` and `progress.svg`.
+    static let chat = environment["PERF_CHAT"] ?? "chat-assets"
     /// The window every desktop app opens for the gauntlet, in points.
     static let window = CGSize(width: 1280, height: 820)
 }
@@ -96,8 +99,8 @@ final class TextStyle {
     /// line keep no leading, as Compose trims it.
     let natural: CGFloat
 
-    init(_ size: CGFloat, _ color: NSColor, bold: Bool = false, lines: Int = 1) {
-        let font = NSFont(name: bold ? "Roboto-Bold" : "Roboto-Regular", size: size)
+    init(_ size: CGFloat, _ color: NSColor, bold: Bool = false, mono: Bool = false, lines: Int = 1) {
+        let font = NSFont(name: mono ? "DejaVuSansMono" : bold ? "Roboto-Bold" : "Roboto-Regular", size: size)
             ?? .systemFont(ofSize: size, weight: bold ? .bold : .regular)
         lineHeight = size * 1.4
         natural = font.ascender - font.descender
@@ -828,11 +831,16 @@ class RootView: Box {
     @objc private func tick(_ link: CADisplayLink) {
         if Clock.frame == 0 { log("PERF first_frame") }
         Clock.frame += 1
-        needsLayout = true
+        advance(Clock.frame)
         if Launch.freeze > 0 && Clock.frame >= Launch.freeze {
             log("PERF frozen frame=\(Clock.frame)")
             link.invalidate()
         }
+    }
+
+    /// Moves the screen to the new frame. The gauntlet and the wall ask for a layout.
+    func advance(_ frame: Int) {
+        needsLayout = true
     }
 
     override func layout() {
@@ -895,34 +903,14 @@ final class WallView: RootView {
         columns = grid.columns
         tiles = grid.columns * grid.rows
         super.init(title: "Still wall", background: NSColor(rgb: WallData.backgroundRGB))
-        let height = tier.tileHeight
-        let labelStyle = TextStyle(WallData.labelSize(height), .white, bold: true)
-        let valueStyle = TextStyle(WallData.valueSize(height), .white)
-        let (padding, dot) = (WallData.padding(height), WallData.dotSize(height))
+        let styles = TileStyles(tier)
         var layers: [CALayer] = []
         layers.reserveCapacity(tiles + 1)
         for index in 0..<tiles {
-            let tile = stillLayer()
-            tile.frame = CGRect(origin: WallData.origin(index, columns, tier),
-                                size: CGSize(width: tier.tileWidth, height: height))
-            tile.backgroundColor = NSColor(rgb: WallData.fillRGB(index)).cgColor
-            tile.cornerRadius = WallData.corner
-            tile.masksToBounds = true
-            let label: TextLayer = stillLayer(TextLayer())
-            label.set(WallData.label(index), labelStyle)
-            let labelSize = label.size(within: .greatestFiniteMagnitude)
-            label.place(CGRect(origin: CGPoint(x: padding, y: padding), size: labelSize))
-            let value: TextLayer = stillLayer(TextLayer())
-            value.set(WallData.value(index), valueStyle)
-            let valueSize = value.size(within: .greatestFiniteMagnitude)
-            let line = padding + labelSize.height
-            value.place(CGRect(origin: CGPoint(x: padding + dot * 1.5, y: line), size: valueSize))
-            let spot = stillLayer()
-            spot.frame = CGRect(x: padding, y: line + (valueSize.height - dot) / 2, width: dot, height: dot)
-            spot.cornerRadius = dot / 2
-            spot.backgroundColor = NSColor(rgb: WallData.dotRGB(index)).cgColor
-            for sublayer in [label, spot, value] { tile.addSublayer(sublayer) }
-            layers.append(tile)
+            let tile = Tile(index, size: CGSize(width: tier.tileWidth, height: tier.tileHeight), styles,
+                            fill: Colors.palette[index % Colors.palette.count])
+            tile.move(to: WallData.origin(index, columns, tier))
+            layers.append(tile.layer)
         }
         cursor.borderColor = NSColor.white.cgColor
         cursor.borderWidth = WallData.cursorWidth
@@ -953,10 +941,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         backingScale = NSScreen.main?.backingScaleFactor ?? 2
-        let root: RootView = Launch.wall ? WallView() : GauntletView()
+        let root: RootView = Launch.wall ? WallView() : Launch.patchwork ? PatchworkView() : GauntletView()
         let window = NSWindow(contentRect: CGRect(origin: .zero, size: Launch.window),
                               styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
-        window.title = Launch.wall ? "Still wall" : "Gauntlet"
+        window.title = Launch.wall ? "Still wall" : Launch.patchwork ? "Patchwork" : "Gauntlet"
         window.contentView = root
         window.center()
         window.makeKeyAndOrderFront(nil)
@@ -973,7 +961,7 @@ enum GauntletApp {
     static func main() {
         // Roboto is no macOS system font: the app registers the files every
         // desktop app loads, for this process only.
-        for file in ["Roboto-Regular.ttf", "Roboto-Bold.ttf"] {
+        for file in ["Roboto-Regular.ttf", "Roboto-Bold.ttf", "DejaVuSansMono.ttf"] {
             let url = URL(fileURLWithPath: Launch.fonts).appendingPathComponent(file)
             CTFontManagerRegisterFontsForURL(url as CFURL, .process, nil)
         }

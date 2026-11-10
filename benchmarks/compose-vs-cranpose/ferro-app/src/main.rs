@@ -9,6 +9,8 @@
 //! window to its bottom, kept by key as the window moves; each row reports
 //! its height once laid out.
 
+mod chat;
+mod patchwork;
 mod wall;
 
 use std::{cell::RefCell, collections::HashMap, io::Cursor, rc::Rc};
@@ -44,7 +46,7 @@ fn palette(index: usize) -> String {
     hex(PALETTE_RGB[index % PALETTE_RGB.len()])
 }
 
-/// Roboto from the files the other apps load.
+/// Roboto and the monospaced face from the files the other apps load.
 struct DeviceRoboto {
     base: FontCollectionBase,
     key: Uri,
@@ -65,7 +67,11 @@ fn register_fonts() {
         base: FontCollectionBase::new(),
         key: Uri::absolute("fonts:Device").expect("a font collection key"),
     });
-    for file in ["Roboto-Regular.ttf", "Roboto-Bold.ttf"] {
+    for file in [
+        "Roboto-Regular.ttf",
+        "Roboto-Bold.ttf",
+        "DejaVuSansMono.ttf",
+    ] {
         match font_bytes(file) {
             Ok(bytes) => {
                 FontCollectionBase::try_add_glyph_typeface_from_stream(
@@ -723,6 +729,7 @@ fn main() {
             let screen = match load.scenario {
                 Scenario::Gauntlet => gauntlet(state),
                 Scenario::Wall => wall::wall(state.frame),
+                Scenario::Patchwork => patchwork::patchwork(state.frame),
             };
             window()
                 .title(load.scenario.title())

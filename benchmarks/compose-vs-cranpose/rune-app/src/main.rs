@@ -2,9 +2,14 @@
 //! Rune's own idiom. The benchmark's README describes it; `desktop.py` runs
 //! it: `PERF_TIER=16 PERF_FONTS=../fonts cargo run --release`.
 
+mod chat;
 mod gauntlet;
+mod patchwork;
 mod wall;
 
+use std::sync::OnceLock;
+
+use patchwork::Patchwork;
 use perf_data::*;
 use rune::{AppSpec, Color, Family, TextStyle, color::srgb_decode};
 
@@ -28,20 +33,31 @@ pub(crate) fn roboto(size: f32, bold: bool) -> TextStyle {
     }
 }
 
-/// The Roboto files every desktop app loads, read once and kept for the
-/// program's life, as `AppSpec` holds fonts.
-fn fonts() -> &'static [&'static [u8]] {
-    let faces = ["Roboto-Regular.ttf", "Roboto-Bold.ttf"]
-        .into_iter()
-        .filter_map(|file| match font_bytes(file) {
-            Ok(bytes) => Some(&*Box::leak(bytes.into_boxed_slice())),
-            Err(error) => {
-                log::warn!("no {file}: {error}");
-                None
-            }
-        })
-        .collect::<Vec<&'static [u8]>>();
-    Box::leak(faces.into_boxed_slice())
+/// The font files of the screen, read once and kept for the program's life,
+/// as `AppSpec` holds fonts: Roboto, and the patchwork's code face.
+pub(crate) fn fonts() -> &'static [&'static [u8]] {
+    static FONTS: OnceLock<&'static [&'static [u8]]> = OnceLock::new();
+    FONTS.get_or_init(|| {
+        let files: &[&str] = match perf_data::launch().scenario {
+            Scenario::Patchwork => &[
+                "Roboto-Regular.ttf",
+                "Roboto-Bold.ttf",
+                "DejaVuSansMono.ttf",
+            ],
+            Scenario::Wall | Scenario::Gauntlet => &["Roboto-Regular.ttf", "Roboto-Bold.ttf"],
+        };
+        let faces = files
+            .iter()
+            .filter_map(|file| match font_bytes(file) {
+                Ok(bytes) => Some(&*Box::leak(bytes.into_boxed_slice())),
+                Err(error) => {
+                    log::warn!("no {file}: {error}");
+                    None
+                }
+            })
+            .collect::<Vec<&'static [u8]>>();
+        Box::leak(faces.into_boxed_slice())
+    })
 }
 
 fn main() {
@@ -62,6 +78,13 @@ fn main() {
             setup: Some(|app: &mut gauntlet::App, wake| app.setup(wake)),
             poll: Some(gauntlet::poll),
             ..AppSpec::new(title, size, gauntlet::App::new, gauntlet::view)
+        }),
+        Scenario::Patchwork => rune::run(AppSpec {
+            fonts: fonts(),
+            families: ("Roboto", "DejaVu Sans Mono"),
+            setup: Some(|patchwork: &mut Patchwork, wake| patchwork.setup(wake)),
+            poll: Some(patchwork::poll),
+            ..AppSpec::new(title, size, Patchwork::new, patchwork::view)
         }),
     }
 }

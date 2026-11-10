@@ -214,8 +214,9 @@ const LAYERS: &str = "
 .nested-text { font-size: 11px; color: #374151; }
 ";
 
-/// The sheet of the still wall.
-pub(crate) fn wall() -> String {
+/// The rules the still wall and the patchwork share: the page, the clock line
+/// and the tiles.
+fn wall_rules() -> String {
     let tier = wall_tier(perf_data::launch().tier);
     let (label, value) = wall_text_size(tier.tile_height);
     let dot = wall_dot_size(tier.tile_height);
@@ -224,9 +225,6 @@ pub(crate) fn wall() -> String {
 .page {{ background-color: {background}; }}
 .clock {{ height: {WALL_CLOCK_HEIGHT}px; flex-shrink: 0; padding: 0 8px; justify-content: center; }}
 .clock-text {{ font-size: {WALL_CLOCK_TEXT}px; color: {ink}; }}
-.board {{ position: relative; flex: 1 1 0; min-height: 0; }}
-.tiles {{ padding: {WALL_GAP}px; gap: {WALL_GAP}px; }}
-.line {{ flex-direction: row; gap: {WALL_GAP}px; }}
 .tile {{
     position: relative;
     flex-shrink: 0;
@@ -237,20 +235,168 @@ pub(crate) fn wall() -> String {
 .tile-label {{ position: absolute; font-size: {label}px; font-weight: 700; color: {ink}; }}
 .tile-dot {{ position: absolute; width: {dot}px; height: {dot}px; border-radius: {half}px; }}
 .tile-value {{ position: absolute; font-size: {value}px; color: {ink}; }}
-.cursor {{
-    position: absolute;
-    left: 0;
-    top: 0;
-    width: {tile_width}px;
-    height: {tile_height}px;
-    border: {WALL_CURSOR_WIDTH}px solid {ink};
-    border-radius: {WALL_CORNER}px;
-}}
+.tiles {{ padding: {WALL_GAP}px; gap: {WALL_GAP}px; }}
+.line {{ flex-direction: row; gap: {WALL_GAP}px; }}
 ",
         ink = hex(WALL_INK_RGB),
         background = hex(WALL_BACKGROUND_RGB),
         tile_width = tier.tile_width,
         tile_height = tier.tile_height,
         half = dot / 2.0,
+    )
+}
+
+/// The sheet of the still wall.
+pub(crate) fn wall() -> String {
+    let tier = wall_tier(perf_data::launch().tier);
+    format!(
+        "{}
+.board {{ position: relative; flex: 1 1 0; min-height: 0; }}
+.cursor {{
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: {}px;
+    height: {}px;
+    border: {WALL_CURSOR_WIDTH}px solid {};
+    border-radius: {WALL_CORNER}px;
+}}
+",
+        wall_rules(),
+        tier.tile_width,
+        tier.tile_height,
+        hex(WALL_INK_RGB),
+    )
+}
+
+/// The sheet of the patchwork: the wall's rules and those of the nine patches
+/// and the chat.
+pub(crate) fn patchwork() -> String {
+    let tier = wall_tier(perf_data::launch().tier);
+    let (patch_width, patch_height) = crate::patchwork::patch_size();
+    let (label, _) = wall_text_size(tier.tile_height);
+    let (double_width, double_height) = (
+        patchwork_double(tier.tile_width),
+        patchwork_double(tier.tile_height),
+    );
+    let mut css = format!(
+        "{}
+.body {{ flex: 1 1 0; min-height: 0; flex-direction: row; }}
+.patches {{ width: {patches}px; flex-shrink: 0; }}
+.patch-row {{ flex-direction: row; height: {patch_height}px; flex-shrink: 0; }}
+.patch {{
+    position: relative;
+    flex-shrink: 0;
+    width: {patch_width}px;
+    height: {patch_height}px;
+    overflow: hidden;
+}}
+.chart {{ display: block; flex-shrink: 0; width: {double_width}px; height: {double_height}px; }}
+.card {{
+    position: absolute;
+    left: 0;
+    top: 0;
+    padding: 0 {WALL_GAP}px;
+    gap: {WALL_GAP}px;
+}}
+.card-head {{ border-radius: {WALL_CORNER}px; height: {tile_height}px; box-sizing: border-box; }}
+.card-title {{ font-weight: 700; color: {ink}; }}
+.reorder {{
+    flex-wrap: wrap;
+    align-content: flex-start;
+    gap: {WALL_GAP}px;
+    padding: {WALL_GAP}px;
+    box-sizing: border-box;
+}}
+.nest {{ width: {double_width}px; height: {double_height}px; flex-shrink: 0; }}
+.nest-level {{ flex: 1 1 0; min-height: 0; }}
+.nest-text {{ font-weight: 700; color: {ink}; }}
+.scroller {{ width: {patch_width}px; height: {patch_height}px; --zgui-scrollbar-thumb: transparent; --zgui-scrollbar-track: transparent; }}
+.scroll-row {{
+    flex-direction: row;
+    flex: none;
+    gap: {WALL_GAP}px;
+    padding: {WALL_GAP}px 0 0 {WALL_GAP}px;
+    height: {row}px;
+    box-sizing: border-box;
+}}
+.paragraph {{ padding: {WALL_GAP}px; font-size: {label}px; line-height: {line}px; color: {ink}; }}
+.pile-field {{ position: relative; width: 100%; height: 100%; }}
+.pile {{ position: absolute; width: {double_width}px; height: {double_height}px; }}
+",
+        wall_rules(),
+        patches = patch_width * PATCH_COLUMNS as f32,
+        tile_height = tier.tile_height,
+        ink = hex(WALL_INK_RGB),
+        row = tier.tile_height + WALL_GAP,
+        line = label * 1.4,
+    );
+    for (index, rgb) in PALETTE_RGB.iter().enumerate() {
+        css.push_str(&format!(
+            ".pile{index} {{ background-color: {}; }}\n",
+            rgba(*rgb, f32::from(PATCHWORK_PILE_ALPHA) / 255.0)
+        ));
+    }
+    css.push_str(&format!(
+        ".pile-opaque {{ background-color: {}; }}\n",
+        hex(PATCHWORK_PILE_OPAQUE_RGB)
+    ));
+    css.push_str(&chat_rules());
+    css
+}
+
+/// The rules of the chat.
+fn chat_rules() -> String {
+    format!(
+        "
+.chat {{
+    width: {CHAT_WIDTH}px;
+    flex-shrink: 0;
+    background-color: {background};
+    color: #FFFFFF;
+    font-size: {CHAT_TEXT}px;
+}}
+.chat-list {{ flex: 1 1 0; min-height: 0; --zgui-scrollbar-thumb: transparent; --zgui-scrollbar-track: transparent; }}
+.chat-blocks {{ padding: 8px; gap: 8px; }}
+.bubble {{
+    align-self: flex-end;
+    padding: 6px 10px;
+    border-radius: 10px;
+    background-color: {user};
+}}
+.chat-heading {{ font-size: {CHAT_HEADING_TEXT}px; font-weight: 700; }}
+.code {{ padding: 8px; border-radius: 6px; background-color: {panel}; }}
+.code-text {{
+    font-family: \"DejaVu Sans Mono\";
+    font-size: {CHAT_CODE_TEXT}px;
+    white-space: pre-wrap;
+}}
+.table-row {{ flex-direction: row; padding: 3px 6px; }}
+.table-shaded {{ background-color: {panel}; }}
+.table-cell {{ flex: 1 1 0; min-width: 0; font-size: {CHAT_CODE_TEXT}px; }}
+.gif {{ width: {CHAT_GIF_SIZE}px; height: {CHAT_GIF_SIZE}px; align-self: flex-start; }}
+.buttons {{ flex-direction: row; gap: 8px; }}
+.button {{
+    padding: 6px 10px;
+    border-radius: 6px;
+    background-color: {user};
+    font-weight: 700;
+}}
+.status {{
+    height: {CHAT_STATUS_HEIGHT}px;
+    flex-shrink: 0;
+    flex-direction: row;
+    align-items: center;
+    gap: 6px;
+    padding: 0 8px;
+    background-color: {panel};
+}}
+.spinner {{ width: {CHAT_SPINNER_SIZE}px; height: {CHAT_SPINNER_SIZE}px; flex-shrink: 0; }}
+.status-text {{ --zgui-text-fill: background; color: {dim}; }}
+",
+        background = hex(CHAT_BACKGROUND_RGB),
+        user = hex(CHAT_USER_RGB),
+        panel = hex(CHAT_PANEL_RGB),
+        dim = hex(CHAT_SHIMMER_RGB[0]),
     )
 }

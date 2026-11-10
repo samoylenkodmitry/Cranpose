@@ -21,6 +21,7 @@ pub enum DemoTab {
     Performance,
     Gauntlet,
     StillWall,
+    Patchwork,
     Images,
     Text,
     Wsz,
@@ -62,7 +63,7 @@ pub struct DemoTabInfo {
     pub startup_aliases: &'static [&'static str],
 }
 
-pub const DEMO_TAB_INFO: [DemoTabInfo; 36] = [
+pub const DEMO_TAB_INFO: [DemoTabInfo; 37] = [
     DemoTabInfo {
         tab: DemoTab::Guide,
         label: "Cranpose Guide",
@@ -188,6 +189,13 @@ pub const DEMO_TAB_INFO: [DemoTabInfo; 36] = [
         slug: "still-wall",
         source_path: "apps/desktop-demo/src/app/bench_tab.rs",
         startup_aliases: &["wall"],
+    },
+    DemoTabInfo {
+        tab: DemoTab::Patchwork,
+        label: "Patchwork",
+        slug: "patchwork",
+        source_path: "apps/desktop-demo/src/app/bench_tab.rs",
+        startup_aliases: &[],
     },
     DemoTabInfo {
         tab: DemoTab::Images,
@@ -382,7 +390,7 @@ pub fn startup_tab_from_args(args: impl IntoIterator<Item = String>) -> DemoTab 
         .unwrap_or(DEFAULT_INITIAL_TAB)
 }
 
-pub const DEMO_TABS: [DemoTab; 36] = [
+pub const DEMO_TABS: [DemoTab; 37] = [
     DemoTab::Guide,
     DemoTab::Performance,
     DemoTab::Liquid,
@@ -391,6 +399,7 @@ pub const DEMO_TABS: [DemoTab; 36] = [
     DemoTab::Tv,
     DemoTab::Gauntlet,
     DemoTab::StillWall,
+    DemoTab::Patchwork,
     DemoTab::Counter,
     DemoTab::CompositionLocal,
     DemoTab::Async,

@@ -89,7 +89,9 @@ def index_entry(run, file):
                     start: {
                         'summary': {name: {metric: judged['summary'][name][metric]
                                            for metric in SUMMARY_METRICS if metric in judged['summary'][name]}
-                                    for name in names},
+                                    # A subject that does not draw the screen has no
+                                    # medians there.
+                                    for name in names if name in judged['summary']},
                         'verdicts': judged['verdicts'],
                         # Why a subject has no legs of the start: its first
                         # failure there.

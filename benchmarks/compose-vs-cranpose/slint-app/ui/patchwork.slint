@@ -1,0 +1,344 @@
+// The patchwork in Slint (`../README.md`): nine patches of the still wall's
+// tiles and the chat beside them.
+//
+// In Slint's declarative idiom every patch is a repeater over a Rust model
+// made once, and a frame writes only the model rows that changed: one row of
+// fills (recolor), the fills of two tiles (pile), the digits of one row of
+// nests (deep), the placed tiles that moved (reorder). The cards are rows of a
+// model that gains a card at its front when a move begins; a binding on the
+// frame places each card. The scroll patch is a `ListView`, which builds only
+// the rows it shows from a model that makes a row when asked, and the frame
+// sets its offset. The paragraph is one text. The charts and the still patch
+// have no binding on the frame.
+
+import { ListView } from "std-widgets.slint";
+import { WallClock, WallTile, TileBox } from "wall.slint";
+import { Chat, ChatItem } from "chat.slint";
+
+export struct ChartData {
+    path: string,
+    color: color,
+}
+
+export struct PatchCard {
+    id: int,
+    title: string,
+    header: color,
+    tiles: [WallTile],
+}
+
+/// A tile of the reorder patch with the place its row of items gives it.
+export struct PlacedTile {
+    tile: WallTile,
+    x: length,
+    y: length,
+    width: length,
+}
+
+export struct TileRow {
+    tiles: [WallTile],
+}
+
+/// What every patch shares, set once.
+export global Metrics {
+    in property <length> patch-width;
+    in property <length> patch-height;
+    in property <length> tile-width;
+    in property <length> tile-height;
+    in property <int> columns;
+    in property <int> rows;
+    in property <length> label-size;
+    in property <length> value-size;
+    in property <length> dot;
+    in property <length> pad;
+    in property <[color]> palette;
+    /// The nests or charts across and down a patch.
+    in property <int> pair-columns;
+    in property <int> pair-rows;
+    in property <int> pile-columns;
+    in property <int> pile-count;
+    /// The top of the card `id` in the frame, in points.
+    pure callback card-top(id: int, frame: int) -> float;
+}
+
+component PatchTile inherits TileBox {
+    pad: Metrics.pad;
+    label-size: Metrics.label-size;
+    value-size: Metrics.value-size;
+    dot: Metrics.dot;
+}
+
+component Patch inherits Rectangle {
+    width: Metrics.patch-width;
+    height: Metrics.patch-height;
+    clip: true;
+}
+
+component Still inherits Patch {
+    in property <[WallTile]> tiles;
+    for t[index] in tiles: PatchTile {
+        x: 1px + Math.mod(index, Metrics.columns) * (Metrics.tile-width + 1px);
+        y: 1px + floor(index / Metrics.columns) * (Metrics.tile-height + 1px);
+        width: Metrics.tile-width;
+        height: Metrics.tile-height;
+        tile: t;
+    }
+}
+
+component Charts inherits Patch {
+    in property <[ChartData]> charts;
+    for chart[index] in charts: Path {
+        x: 1px + Math.mod(index, Metrics.pair-columns) * (2 * Metrics.tile-width + 2px);
+        y: 1px + floor(index / Metrics.pair-columns) * (2 * Metrics.tile-height + 2px);
+        width: 2 * Metrics.tile-width + 1px;
+        height: 2 * Metrics.tile-height + 1px;
+        viewbox-width: self.width / 1px;
+        viewbox-height: self.height / 1px;
+        commands: chart.path;
+        stroke: chart.color;
+        stroke-width: 1px;
+    }
+}
+
+component Recolor inherits Patch {
+    in property <[WallTile]> tiles;
+    in property <[color]> fills;
+    for t[index] in tiles: PatchTile {
+        x: 1px + Math.mod(index, Metrics.columns) * (Metrics.tile-width + 1px);
+        y: 1px + floor(index / Metrics.columns) * (Metrics.tile-height + 1px);
+        width: Metrics.tile-width;
+        height: Metrics.tile-height;
+        tile: t;
+        fill: fills[index];
+    }
+}
+
+component Cards inherits Patch {
+    in property <[PatchCard]> cards;
+    for card in cards: Rectangle {
+        x: 1px;
+        y: Metrics.card-top(card.id, WallClock.frame) * 1px;
+        width: Metrics.columns * (Metrics.tile-width + 1px) - 1px;
+        height: (1 + ceil(card.tiles.length / Metrics.columns)) * (Metrics.tile-height + 1px) - 1px;
+        Rectangle {
+            x: 0;
+            y: 0;
+            width: parent.width;
+            height: Metrics.tile-height;
+            background: card.header;
+            border-radius: 2px;
+            Text {
+                x: Metrics.pad;
+                y: Metrics.pad;
+                text: card.title;
+                font-size: Metrics.label-size;
+                font-weight: 700;
+                color: white;
+                wrap: no-wrap;
+            }
+        }
+        for t[index] in card.tiles: PatchTile {
+            x: Math.mod(index, Metrics.columns) * (Metrics.tile-width + 1px);
+            y: (1 + floor(index / Metrics.columns)) * (Metrics.tile-height + 1px);
+            width: Metrics.tile-width;
+            height: Metrics.tile-height;
+            tile: t;
+        }
+    }
+}
+
+component Reorder inherits Patch {
+    in property <[PlacedTile]> placed;
+    for item in placed: PatchTile {
+        x: item.x;
+        y: item.y;
+        width: item.width;
+        height: Metrics.tile-height;
+        tile: item.tile;
+    }
+}
+
+/// 12 boxes nested around three digits. Slint components cannot contain
+/// themselves, so the boxes are stacked from the outermost in, each inset
+/// where its parent pads.
+component Nest inherits Rectangle {
+    in property <int> index;
+    in property <string> value;
+    for level in 12: Rectangle {
+        x: level * Metrics.pad;
+        y: level * Metrics.pad;
+        width: root.width - 2 * level * Metrics.pad;
+        height: root.height - 2 * level * Metrics.pad;
+        background: Metrics.palette[Math.mod(index + level, Metrics.palette.length)];
+    }
+    Text {
+        x: 12 * Metrics.pad;
+        y: 12 * Metrics.pad;
+        text: value;
+        font-size: Metrics.label-size;
+        font-weight: 700;
+        color: white;
+        wrap: no-wrap;
+    }
+}
+
+component Deep inherits Patch {
+    in property <[string]> values;
+    for v[at] in values: Nest {
+        x: 1px + Math.mod(at, Metrics.pair-columns) * (2 * Metrics.tile-width + 2px);
+        y: 1px + floor(at / Metrics.pair-columns) * (2 * Metrics.tile-height + 2px);
+        width: 2 * Metrics.tile-width + 1px;
+        height: 2 * Metrics.tile-height + 1px;
+        index: at;
+        value: v;
+    }
+}
+
+component Scroll inherits Patch {
+    in property <[TileRow]> rows;
+    in-out property <length> offset <=> list.content-y;
+    list := ListView {
+        width: parent.width;
+        height: parent.height;
+        for row in rows: Rectangle {
+            height: Metrics.tile-height + 1px;
+            for t[column] in row.tiles: PatchTile {
+                x: 1px + column * (Metrics.tile-width + 1px);
+                y: 1px;
+                width: Metrics.tile-width;
+                height: Metrics.tile-height;
+                tile: t;
+            }
+        }
+    }
+}
+
+component Paragraph inherits Patch {
+    in property <string> text;
+    Text {
+        x: 1px;
+        y: 1px;
+        width: parent.width - 2px;
+        text: text;
+        font-size: Metrics.label-size;
+        color: white;
+        wrap: word-wrap;
+    }
+}
+
+component Pile inherits Patch {
+    in property <[WallTile]> tiles;
+    in property <[color]> fills;
+    for f[index] in fills: PatchTile {
+        x: 1px + Math.mod(index, Metrics.pile-columns) * (Metrics.tile-width + 1px);
+        y: 1px + floor(index / Metrics.pile-columns) * (Metrics.tile-height + 1px);
+        width: 2 * Metrics.tile-width + 1px;
+        height: 2 * Metrics.tile-height + 1px;
+        tile: tiles[index];
+        fill: f;
+    }
+}
+
+export component PatchworkWindow inherits Window {
+    in property <[WallTile]> tiles;
+    in property <[color]> recolor-fills;
+    in property <[color]> pile-fills;
+    in property <[ChartData]> charts;
+    in property <[PatchCard]> cards;
+    in property <[PlacedTile]> placed;
+    in property <[string]> nests;
+    in property <[TileRow]> scroll-rows;
+    in-out property <length> scroll-offset <=> scroll.offset;
+    in property <string> paragraph;
+    in property <[ChatItem]> chat-items;
+    in property <[string]> chat-status;
+    in property <image> chat-spinner;
+    in property <image> chat-gif;
+    title: "Patchwork";
+    background: #0F1220;
+    default-font-family: "Roboto";
+    VerticalLayout {
+        Rectangle {
+            height: 56px;
+            background: #1E2A4A;
+            Text {
+                x: 16px;
+                height: parent.height;
+                text: "Patchwork";
+                font-size: 20px;
+                font-weight: 700;
+                color: white;
+                vertical-alignment: center;
+            }
+        }
+        Rectangle {
+            height: 24px;
+            Text {
+                x: 8px;
+                height: parent.height;
+                text: WallClock.text;
+                font-size: 14px;
+                color: white;
+                vertical-alignment: center;
+            }
+        }
+        Rectangle {
+            Still {
+                x: 0;
+                y: 0;
+                tiles: tiles;
+            }
+            Charts {
+                x: Metrics.patch-width;
+                y: 0;
+                charts: charts;
+            }
+            Recolor {
+                x: 2 * Metrics.patch-width;
+                y: 0;
+                tiles: tiles;
+                fills: recolor-fills;
+            }
+            Cards {
+                x: 0;
+                y: Metrics.patch-height;
+                cards: cards;
+            }
+            Reorder {
+                x: Metrics.patch-width;
+                y: Metrics.patch-height;
+                placed: placed;
+            }
+            Deep {
+                x: 2 * Metrics.patch-width;
+                y: Metrics.patch-height;
+                values: nests;
+            }
+            scroll := Scroll {
+                x: 0;
+                y: 2 * Metrics.patch-height;
+                rows: scroll-rows;
+            }
+            Paragraph {
+                x: Metrics.patch-width;
+                y: 2 * Metrics.patch-height;
+                text: paragraph;
+            }
+            Pile {
+                x: 2 * Metrics.patch-width;
+                y: 2 * Metrics.patch-height;
+                tiles: tiles;
+                fills: pile-fills;
+            }
+            Chat {
+                x: 3 * Metrics.patch-width;
+                width: 320px;
+                height: parent.height;
+                items: chat-items;
+                status: chat-status;
+                spinner: chat-spinner;
+                gif-frame: chat-gif;
+            }
+        }
+    }
+}

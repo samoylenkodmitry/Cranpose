@@ -2,7 +2,7 @@ using Avalonia;
 
 namespace PerfAvalonia;
 
-/// <summary>The gauntlet in a desktop window, as `desktop.py` runs it.</summary>
+/// <summary>The gauntlet, the still wall or the patchwork in a desktop window, as `desktop.py` runs it.</summary>
 static class Program
 {
     [STAThread]
@@ -10,7 +10,9 @@ static class Program
     {
         Launch.Tier = Variable("PERF_TIER", 5);
         Launch.Freeze = Variable("PERF_FREEZE", 0);
-        Launch.Wall = Environment.GetEnvironmentVariable("PERF_SCENARIO") == "wall";
+        var scenario = Environment.GetEnvironmentVariable("PERF_SCENARIO");
+        Launch.Wall = scenario == "wall";
+        if (scenario == "patchwork") Launch.Patchwork = () => new PatchworkView(Launch.Tier, Launch.Freeze);
         Launch.Log = Console.WriteLine;
         AppBuilder.Configure<App>().UsePlatformDetect().StartWithClassicDesktopLifetime(args);
     }

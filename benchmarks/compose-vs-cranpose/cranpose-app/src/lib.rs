@@ -13,6 +13,7 @@ use std::cell::Cell;
 use cranpose::prelude::*;
 pub use screens::{
     gauntlet::{GauntletLoad, GauntletScreen},
+    patchwork::{PatchworkLoad, PatchworkScreen},
     wall::{WallLoad, WallScreen},
     workspace::{FRAME_OBSERVER, WorkspaceFrame, WorkspaceMode},
 };
@@ -30,6 +31,7 @@ pub enum Scenario {
     Workspace,
     Gauntlet,
     Wall,
+    Patchwork,
 }
 
 impl Scenario {
@@ -45,6 +47,7 @@ impl Scenario {
             "workspace" => Self::Workspace,
             "gauntlet" => Self::Gauntlet,
             "wall" => Self::Wall,
+            "patchwork" => Self::Patchwork,
             _ => Self::Feed,
         }
     }
@@ -63,6 +66,7 @@ impl Scenario {
             // Both apps title it alike: the two pictures are compared.
             Self::Gauntlet => "Gauntlet",
             Self::Wall => "Still wall",
+            Self::Patchwork => "Patchwork",
         }
     }
 }
@@ -70,23 +74,30 @@ impl Scenario {
 /// The Roboto faces every app loads: on Android the device's own, the files
 /// the Compose app loads, so both frameworks shape and measure identical
 /// fonts; on a desktop the ones in the folder `PERF_FONTS` names, which
-/// every desktop app loads. Read once and kept for the life of the process.
+/// every desktop app loads. After them comes the monospaced face of the
+/// chat's code, where the folder holds it. Read once and kept for the life
+/// of the process.
 #[cfg(any(
     target_os = "android",
     feature = "desktop",
     all(feature = "web", target_arch = "wasm32")
 ))]
 fn roboto_faces() -> &'static [&'static [u8]] {
-    let faces: Vec<&'static [u8]> = ["Roboto-Regular.ttf", "Roboto-Medium.ttf", "Roboto-Bold.ttf"]
-        .iter()
-        .filter_map(|file| match perf_data::font_bytes(file) {
-            Ok(bytes) => Some(&*Box::leak(bytes.into_boxed_slice())),
-            Err(error) => {
-                log::warn!("font {file} unavailable: {error}");
-                None
-            }
-        })
-        .collect();
+    let faces: Vec<&'static [u8]> = [
+        "Roboto-Regular.ttf",
+        "Roboto-Medium.ttf",
+        "Roboto-Bold.ttf",
+        "DejaVuSansMono.ttf",
+    ]
+    .iter()
+    .filter_map(|file| match perf_data::font_bytes(file) {
+        Ok(bytes) => Some(&*Box::leak(bytes.into_boxed_slice())),
+        Err(error) => {
+            log::warn!("font {file} unavailable: {error}");
+            None
+        }
+    })
+    .collect();
     Box::leak(faces.into_boxed_slice())
 }
 
@@ -115,7 +126,7 @@ pub fn run_desktop() -> Result<(), cranpose::LaunchError> {
 #[cfg(any(target_os = "android", feature = "desktop"))]
 fn launcher() -> AppLauncher {
     let (width, height) = match launch_args().string("scenario") {
-        Some("workspace" | "gauntlet" | "wall") => perf_data::DESKTOP_WINDOW,
+        Some("workspace" | "gauntlet" | "wall" | "patchwork") => perf_data::DESKTOP_WINDOW,
         _ => (360, 748),
     };
     AppLauncher::new()
@@ -141,6 +152,7 @@ struct Launch {
     workspace: screens::workspace::WorkspaceMode,
     gauntlet: screens::gauntlet::GauntletLoad,
     wall: screens::wall::WallLoad,
+    patchwork: screens::patchwork::PatchworkLoad,
     still: bool,
 }
 
@@ -181,6 +193,10 @@ impl Launch {
                 freeze: u32::try_from(count("freeze", 0)).unwrap_or(u32::MAX),
             },
             wall: screens::wall::WallLoad {
+                tier: count("tier", 5),
+                freeze: u32::try_from(count("freeze", 0)).unwrap_or(u32::MAX),
+            },
+            patchwork: screens::patchwork::PatchworkLoad {
                 tier: count("tier", 5),
                 freeze: u32::try_from(count("freeze", 0)).unwrap_or(u32::MAX),
             },
@@ -235,6 +251,7 @@ pub fn PerfCompareApp() {
                 }
                 Scenario::Gauntlet => screens::gauntlet::GauntletScreen(launch.gauntlet),
                 Scenario::Wall => screens::wall::WallScreen(launch.wall),
+                Scenario::Patchwork => screens::patchwork::PatchworkScreen(launch.patchwork),
             }
         },
     );

@@ -5,9 +5,13 @@
 
 use std::{ops::Range, path::PathBuf, sync::OnceLock};
 
+pub mod chat;
 pub mod frame_index;
+pub mod patchwork;
 pub mod wall;
+pub use chat::*;
 pub use frame_index::FrameIndex;
+pub use patchwork::*;
 pub use wall::*;
 
 pub const POST_COUNT: usize = 5000;
@@ -498,12 +502,14 @@ pub const GAUNTLET_TIERS: [GauntletTier; 16] = [
 /// The window every desktop app opens for the gauntlet, in logical points.
 pub const DESKTOP_WINDOW: (u32, u32) = (1280, 820);
 
-/// The screen a launch shows: the gauntlet, or the still wall of [`wall`].
+/// The screen a launch shows: the gauntlet, the still wall of [`wall`] or the
+/// patchwork of [`patchwork`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Scenario {
     #[default]
     Gauntlet,
     Wall,
+    Patchwork,
 }
 
 impl Scenario {
@@ -511,6 +517,7 @@ impl Scenario {
     pub fn from_name(name: &str) -> Self {
         match name {
             "wall" => Self::Wall,
+            "patchwork" => Self::Patchwork,
             _ => Self::Gauntlet,
         }
     }
@@ -520,6 +527,7 @@ impl Scenario {
         match self {
             Self::Gauntlet => "gauntlet",
             Self::Wall => "wall",
+            Self::Patchwork => "patchwork",
         }
     }
 
@@ -528,6 +536,7 @@ impl Scenario {
         match self {
             Self::Gauntlet => "Gauntlet",
             Self::Wall => "Still wall",
+            Self::Patchwork => "Patchwork",
         }
     }
 }

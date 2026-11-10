@@ -16,6 +16,8 @@ use std::{collections::HashMap, fmt::Write, sync::OnceLock};
 use dioxus::prelude::*;
 use perf_data::*;
 
+#[cfg(not(target_arch = "wasm32"))]
+mod patchwork;
 mod wall;
 
 const FOOTER_LABELS: [&str; 3] = ["likes", "replies", "shares"];
@@ -138,6 +140,11 @@ fn App() -> Element {
     match perf_data::launch().scenario {
         Scenario::Gauntlet => rsx! { GauntletApp {} },
         Scenario::Wall => rsx! { wall::WallApp {} },
+        #[cfg(not(target_arch = "wasm32"))]
+        Scenario::Patchwork => rsx! { patchwork::PatchworkApp {} },
+        // Only the desktop apps draw the patchwork.
+        #[cfg(target_arch = "wasm32")]
+        Scenario::Patchwork => rsx! { GauntletApp {} },
     }
 }
 
@@ -492,7 +499,8 @@ mod platform {
         format!("{ASSETS}://localhost/avatar/{index}")
     }
 
-    /// Serves `/avatar/N` and `/font/FILE` to the page.
+    /// Serves `/avatar/N`, `/font/FILE` and the chat's animated picture to
+    /// the page.
     fn serve(request: &Request<Vec<u8>>) -> Response<Cow<'static, [u8]>> {
         let path = request.uri().path();
         let found = if let Some(index) = path.strip_prefix("/avatar/") {
@@ -500,6 +508,8 @@ mod platform {
                 .parse::<usize>()
                 .ok()
                 .map(|index| ("image/bmp", avatar_bmp(index)))
+        } else if path == "/chat/spin.gif" {
+            Some(("image/gif", perf_data::CHAT_GIF.to_vec()))
         } else if let Some(file) = path.strip_prefix("/font/") {
             std::fs::read(font_path(file))
                 .ok()
@@ -520,16 +530,18 @@ mod platform {
     /// The page's head: its CSS, Roboto from the files every desktop app loads,
     /// and the tier's scale.
     fn head() -> String {
-        let font = |weight: u32, file: &str| {
+        let face = |family: &str, weight: u32, file: &str| {
             format!(
-                "@font-face {{ font-family: PerfRoboto; font-weight: {weight}; \
+                "@font-face {{ font-family: {family}; font-weight: {weight}; \
                  src: url(\"{ASSETS}://localhost/font/{file}\"); }}"
             )
         };
+        let font = |weight: u32, file: &str| face("PerfRoboto", weight, file);
         format!(
-            "<style>{STYLE}\n{}\n{}\n#main {{ display: contents; }}\n:root {{ --s: {}; }}</style>",
+            "<style>{STYLE}\n{}\n{}\n{}\n#main {{ display: contents; }}\n:root {{ --s: {}; }}</style>",
             font(400, "Roboto-Regular.ttf"),
             font(700, "Roboto-Bold.ttf"),
+            face("PerfMono", 400, "DejaVuSansMono.ttf"),
             scale()
         )
     }
