@@ -123,6 +123,14 @@ impl HeldElement<'_> {
         }
     }
 
+    /// Whether the chain keeps the element's values, in its node or as
+    /// words, in place of the element. Such an element asks for no update
+    /// when equal, and an element equal to it is of its type, so that one
+    /// asks for none either.
+    pub fn is_kept_by_value(&self) -> bool {
+        matches!(self.0, Held::Node { .. } | Held::Plain { .. })
+    }
+
     /// Whether `element` is this element itself, not only an equal one.
     pub fn is(&self, element: &DynModifierElement) -> bool {
         match self.0 {

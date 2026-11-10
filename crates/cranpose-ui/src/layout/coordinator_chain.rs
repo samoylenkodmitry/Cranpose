@@ -258,9 +258,6 @@ impl CoordinatorNode {
 #[derive(Clone, Copy)]
 struct SyncedInputs {
     revision: PackedU64,
-    // The chain's count of value changes in place the plain coordinators'
-    // words were read at.
-    values: u32,
     scale: f32,
     offset: Point,
     window_root: bool,
@@ -268,10 +265,9 @@ struct SyncedInputs {
 }
 
 impl SyncedInputs {
-    fn of((revision, values): (u64, u32), inputs: ModifierChainInputs) -> Self {
+    fn of(revision: u64, inputs: ModifierChainInputs) -> Self {
         Self {
             revision: PackedU64::new(revision),
-            values,
             scale: inputs.density.density(),
             offset: inputs.offset,
             window_root: inputs.window_root,
@@ -311,26 +307,41 @@ impl CoordinatorChain {
     pub(super) fn sync(&mut self, node: &LayoutNode) -> ModifierChainInputs {
         let density = node.density();
         let chain = node.modifier_chain();
-        let (revision, values) = (chain.revision(), chain.values());
-        if let Some(synced) = &mut self.synced
+        let revision = chain.revision();
+        // A walk reads every entry, so it takes the changes too.
+        let changed = chain.take_changed_in_place();
+        if let Some(synced) = self.synced
             && synced.revision.get() == revision
             && synced.scale.to_bits() == density.density().to_bits()
         {
-            // A value changed in place: the entries stand where they were,
-            // and each plain coordinator takes its words again.
-            if synced.values != values {
-                synced.values = values;
-                for coordinator in &mut self.nodes {
-                    coordinator.read_plain(chain.chain(), density.density());
-                }
+            // Values changed in place: the entries stand where they were,
+            // and the coordinators of those entries take their words again.
+            if changed != 0 {
+                self.read_changed(chain.chain(), changed, density.density());
             }
             return synced.inputs(density);
         }
         let inputs = self.walk(node, density);
-        self.synced = Some(SyncedInputs::of((revision, values), inputs));
+        self.synced = Some(SyncedInputs::of(revision, inputs));
         // Other modifiers may place other coordinators.
         self.moved.set(true);
         inputs
+    }
+
+    // Out of line: most syncs find nothing changed.
+    #[inline(never)]
+    fn read_changed(
+        &mut self,
+        chain: &cranpose_foundation::ModifierNodeChain,
+        changed: u64,
+        density: f32,
+    ) {
+        for coordinator in &mut self.nodes {
+            let index = u32::try_from(coordinator.modifier_index).unwrap_or(u32::MAX);
+            if changed.checked_shr(index).is_some_and(|rest| rest & 1 == 1) {
+                coordinator.read_plain(chain, density);
+            }
+        }
     }
 
     /// Syncs the nodes with the layout nodes of `node`'s chain and sums

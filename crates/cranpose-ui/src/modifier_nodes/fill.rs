@@ -66,6 +66,15 @@ impl FillElement {
         self.fraction
     }
 
+    // Whether the element fills the width, and whether the height.
+    pub(crate) fn fills(&self) -> (bool, bool) {
+        match self.direction {
+            FillDirection::Horizontal => (true, false),
+            FillDirection::Vertical => (false, true),
+            FillDirection::Both => (true, true),
+        }
+    }
+
     // The extent the content gets of a given `extent` across the axis that
     // `other` fills: the filled fraction, unless only `other` fills.
     fn filled(&self, extent: f32, other: FillDirection, density: f32) -> f32 {

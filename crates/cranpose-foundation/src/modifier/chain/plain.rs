@@ -402,7 +402,10 @@ impl<E: PlainElement> AnyModifierElement for TypedPlainElement<E> {
     }
 
     fn equals_plain(&self, fns: &PlainFns, words: &[u32]) -> bool {
-        fns.element_type() == TypeId::of::<E>() && E::from_words(words) == self.0
+        // The same table tells the same type without a call; two tables of
+        // one type may still differ in address.
+        (std::ptr::eq(fns, self.fns()) || fns.element_type() == TypeId::of::<E>())
+            && E::from_words(words) == self.0
     }
 }
 

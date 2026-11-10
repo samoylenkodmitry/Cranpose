@@ -109,12 +109,17 @@ pub(crate) fn match_for_set<'a>(
         return matched;
     }
     for (index, (a, b)) in held.zip(modifier.iter_elements()).enumerate() {
+        // Most pairs are equal values the chain keeps: one compare tells,
+        // and an equal element asks for no update either.
+        if a.is_kept_by_value() && a.equals(&**b) {
+            continue;
+        }
         // One element in both, as a kept chain shares them.
         let shared = a.is(b);
         let asks_update = a.requires_update() || b.requires_update();
         // Most pairs are equal: they leave everything as it is. An update
         // in place skips them, as it would find them equal again.
-        if shared || (!asks_update && a.equals(&**b)) {
+        if shared || (!asks_update && !a.is_kept_by_value() && a.equals(&**b)) {
             if asks_update {
                 matched.in_place = None;
             }
@@ -148,6 +153,13 @@ impl SetMatch {
         if let Some(update) = &mut self.in_place {
             match InPlaceReach::of(element_type).filter(|_| same_type && !asks_update) {
                 Some(InPlaceReach::Node) => update.elements |= 1 << index,
+                Some(InPlaceReach::Measure) => {
+                    // A parent data change of another element reaches further.
+                    if update.reach == InPlaceReach::Node {
+                        update.reach = InPlaceReach::Measure;
+                    }
+                    update.elements |= 1 << index;
+                }
                 Some(InPlaceReach::Resolved) => {
                     update.reach = InPlaceReach::Resolved;
                     update.elements |= 1 << index;

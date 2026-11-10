@@ -1,6 +1,6 @@
 use std::{
     any::{Any, TypeId, type_name_of_val},
-    cell::RefCell,
+    cell::{Cell, RefCell},
     rc::Rc,
 };
 
@@ -66,10 +66,11 @@ pub struct ModifierChainHandle {
     /// attachment: a reader that keeps what it derived from a chain knows
     /// when to derive it again, also after its node takes a new chain.
     revision: PackedU64,
-    // Counts the updates in place that changed a value layout reads, which
-    // leave the revision as it is: a reader that keeps a copy of a plain
-    // element's value takes the value again when this moves.
-    values: u32,
+    // The entries whose values layout reads and an update in place changed
+    // since the node's coordinators last took them, one bit an entry: such
+    // an update leaves the revision as it is, and a coordinator keeps a
+    // copy of a plain element's value.
+    changed_in_place: Cell<u64>,
     // The inspector metadata of the modifier last set, which the layout
     // tree's inspection reads.
     #[cfg(feature = "inspection")]
@@ -94,7 +95,10 @@ pub(crate) enum InPlaceReach {
     /// Nothing else: a text's slices read its layout through a handle that
     /// the update changes in place.
     Node,
-    /// The chain's resolved layout properties and the parent data they give.
+    // The node's own measure, which reads the element's new value: a size
+    // enters nothing the node's parent reads.
+    Measure,
+    /// The node's measure and the parent data the chain gives its parent.
     Resolved,
 }
 
@@ -113,9 +117,9 @@ impl InPlaceReach {
     pub(crate) fn of(element_type: TypeId) -> Option<Self> {
         if element_type == TypeId::of::<TextModifierElement>() {
             Some(Self::Node)
-        } else if element_type == TypeId::of::<SizeElement>()
-            || element_type == TypeId::of::<FillElement>()
-        {
+        } else if element_type == TypeId::of::<SizeElement>() {
+            Some(Self::Measure)
+        } else if element_type == TypeId::of::<FillElement>() {
             Some(Self::Resolved)
         } else {
             None
@@ -151,7 +155,7 @@ impl ModifierChainHandle {
             modifier_locals: None,
             debug_logging: false,
             revision: PackedU64::new(next_revision()),
-            values: 0,
+            changed_in_place: Cell::new(0),
             #[cfg(feature = "inspection")]
             inspector: None,
         }
@@ -179,9 +183,10 @@ impl ModifierChainHandle {
         self.revision.get()
     }
 
-    /// The count of the chain's value changes in place; see the field.
-    pub(crate) fn values(&self) -> u32 {
-        self.values
+    // The entries an update in place changed since the last call, one bit
+    // an entry; see the field.
+    pub(crate) fn take_changed_in_place(&self) -> u64 {
+        self.changed_in_place.take()
     }
 
     pub(crate) fn set_layout_direction(&mut self, direction: crate::LayoutDirection) -> bool {
@@ -277,9 +282,12 @@ impl ModifierChainHandle {
         if updated {
             self.inspector = inspector_of(modifier);
         }
+        if updated && update.reach != InPlaceReach::Node {
+            self.changed_in_place
+                .set(self.changed_in_place.get() | update.elements);
+        }
         if updated && update.reach == InPlaceReach::Resolved {
-            self.values = self.values.wrapping_add(1);
-            self.resolve();
+            self.resolve_fills();
         }
         updated
     }
@@ -543,6 +551,40 @@ impl ModifierChainHandle {
         resolution
     }
 
+    // Works out again the fill fractions of the chain's parent data, after
+    // an update in place: of the elements one takes, only a fill enters the
+    // parent data, so every other part of the data stands.
+    fn resolve_fills(&mut self) {
+        let mut fill_width = None;
+        let mut fill_height = None;
+        self.chain
+            .for_each_forward_matching(NodeCapabilities::LAYOUT, |node_ref| {
+                if let Some(fill) = node_ref.plain::<FillElement>() {
+                    let (horizontal, vertical) = fill.fills();
+                    if horizontal {
+                        fill_width.get_or_insert_with(|| fill.fraction());
+                    }
+                    if vertical {
+                        fill_height.get_or_insert_with(|| fill.fraction());
+                    }
+                }
+            });
+        let width = fill_width.unwrap_or_default();
+        let height = fill_height.unwrap_or_default();
+        let data = self.parent_data.read(|current| {
+            (current.fill_width_fraction != width || current.fill_height_fraction != height).then(
+                || cranpose_ui_layout::ParentData {
+                    fill_width_fraction: width,
+                    fill_height_fraction: height,
+                    ..current.clone()
+                },
+            )
+        });
+        if let Some(data) = data {
+            self.parent_data.set(data);
+        }
+    }
+
     /// Works out the chain's parent data again.
     fn resolve(&mut self) {
         let Resolution {
@@ -629,11 +671,7 @@ impl Resolution {
 
     fn take_fill(&mut self, fill: &FillElement) {
         apply_fill_node(&mut self.layout, fill);
-        let (horizontal, vertical) = match fill.direction() {
-            FillDirection::Horizontal => (true, false),
-            FillDirection::Vertical => (false, true),
-            FillDirection::Both => (true, true),
-        };
+        let (horizontal, vertical) = fill.fills();
         if horizontal {
             self.fill_width.get_or_insert_with(|| fill.fraction());
         }
