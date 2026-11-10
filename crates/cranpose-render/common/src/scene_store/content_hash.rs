@@ -25,6 +25,7 @@ pub(super) fn motion_source_content_hash(layer: LayerRef<'_>) -> u64 {
 }
 
 // A hash of what an own draw of a record draws; `None` for a child.
+#[cfg(feature = "window-damage")]
 pub(super) fn own_draw_print(item: ItemRef<'_>) -> Option<u64> {
     let print = match item {
         ItemRef::Draw(draw) => finish_hash(|state| hash_draw(draw, state)),

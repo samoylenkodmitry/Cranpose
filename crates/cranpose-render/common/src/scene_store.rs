@@ -12,6 +12,7 @@ mod journal;
 mod layer_props;
 mod layer_ref;
 mod leaf_write;
+#[cfg(feature = "window-damage")]
 mod own_marks;
 mod placement;
 mod reach;
@@ -26,6 +27,7 @@ mod store;
 
 use child_order::ChildOrder;
 use facts::Facts;
+#[cfg(feature = "window-damage")]
 pub use facts::OwnDrawFacts;
 use hash_cache::HashCache;
 pub use items::{Item, ItemKind};
@@ -37,9 +39,10 @@ pub use layer_ref::{ItemRef, LayerRef, RecordChanges};
 pub use leaf_write::Leaf;
 pub use placement::Placement;
 pub use reach::{BLUR_PIXEL_SLACK, Extent, Reach, ShadowCaster};
+#[cfg(feature = "window-damage")]
+pub(crate) use records::ReachState;
 pub(crate) use records::{
-    GeoRecord, GraphicsLayerId, PropsId, ReachState, RecordNode, TransformId, TreeRecord,
-    WarmRecord,
+    GeoRecord, GraphicsLayerId, PropsId, RecordNode, TransformId, TreeRecord, WarmRecord,
 };
 pub use records::{RecordFlags, RecordKind};
 use shape_chunks::ShapeChunks;

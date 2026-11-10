@@ -27,6 +27,7 @@ pub enum RecordKind {
 }
 
 // Which reach a record's rect stands for.
+#[cfg(feature = "window-damage")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub(crate) enum ReachState {
@@ -114,6 +115,7 @@ pub(crate) struct TreeRecord {
     pub(crate) parent: Option<RecordId>,
     pub(crate) items: Span,
     pub(crate) kind: RecordKind,
+    #[cfg(feature = "window-damage")]
     pub(crate) reach_state: ReachState,
     pub(crate) flags: RecordFlags,
     pub(crate) content_rev: SceneUpdate,
@@ -122,10 +124,14 @@ pub(crate) struct TreeRecord {
     pub(crate) transform: Option<TransformId>,
 }
 
+// Without window damage a record keeps no reach, and two geometry rows fill
+// what one fills with it.
 #[derive(Clone, Copy, Debug, Default)]
-#[repr(C, align(32))]
+#[cfg_attr(feature = "window-damage", repr(C, align(32)))]
+#[cfg_attr(not(feature = "window-damage"), repr(C, align(16)))]
 pub(crate) struct GeoRecord {
     pub(crate) placement: [f32; 2],
+    #[cfg(feature = "window-damage")]
     pub(crate) reach: Rect,
     pub(crate) size: [f32; 2],
 }
@@ -137,15 +143,9 @@ pub(crate) struct WarmRecord {
     pub(crate) graphics_layer: Option<GraphicsLayerId>,
     pub(crate) content_offset: [f32; 2],
     // The marks of the record's own draws as an update last left them.
+    #[cfg(feature = "window-damage")]
     pub(crate) own_marks: Span,
 }
-
-// A walk reads a record's rows by its index: two rows fill a 64-byte cache
-// line. A 32-bit target keeps a record's node in four bytes of the warm row.
-const _: () = assert!(
-    size_of::<TreeRecord>() == 32 && size_of::<GeoRecord>() == 32 && size_of::<WarmRecord>() <= 32,
-    "a record's tree and geometry rows take 32 bytes and its warm row at most 32"
-);
 
 // The node a record draws for, in one word: a `NodeId` has no spare value,
 // so the record keeps the id plus one.
@@ -210,18 +210,25 @@ impl GeoRecord {
     }
 }
 
+// A walk reads a record's rows by its index: two rows fill a 64-byte cache
+// line. A 32-bit target keeps a record's node in four bytes of the warm row.
 const _: () = assert!(
     size_of::<TreeRecord>() == 32,
     "a tree record fills half a cache line"
 );
+#[cfg(feature = "window-damage")]
 const _: () = assert!(
     size_of::<GeoRecord>() == 32,
     "a geometry record fills half a cache line"
 );
-#[cfg(target_pointer_width = "64")]
+#[cfg(not(feature = "window-damage"))]
 const _: () = assert!(
-    size_of::<WarmRecord>() == 32,
-    "a warm record fills half a cache line"
+    size_of::<GeoRecord>() == 16,
+    "a geometry record fills a quarter of a cache line"
+);
+const _: () = assert!(
+    size_of::<WarmRecord>() <= 32,
+    "a warm record fills at most half a cache line"
 );
 
 // Whether two pairs hold the same numbers, bit for bit.

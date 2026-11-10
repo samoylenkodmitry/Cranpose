@@ -1,13 +1,17 @@
 // Where a record's subtree draws: its reach, worked out when a reader asks
 // for the records a change left stale, and its extent in its parent's space.
 
+#[cfg(feature = "window-damage")]
 use cranpose_core::RecordId;
 use cranpose_ui::Rect;
+#[cfg(feature = "window-damage")]
 use cranpose_ui_graphics::{
     DrawPrimitive, RecordLane, ShadowPrimitive, expand_rect, primitive_coverage_rect,
 };
 
+#[cfg(feature = "window-damage")]
 use super::{ItemRef, LayerRef, RecordFlags, SceneStore, own_marks};
+#[cfg(feature = "window-damage")]
 use crate::graph::{DrawPrimitiveNode, DrawRunNode};
 
 /// Where a record's subtree draws, in one space.
@@ -101,6 +105,7 @@ pub struct ShadowCaster {
 
 // Works out the reach of `id` when a change left it stale, after that of
 // each of its children a change left stale.
+#[cfg(feature = "window-damage")]
 pub(super) fn refresh(store: &mut SceneStore, id: RecordId) {
     let index = id.index();
     if !store.tree[index].flags.contains(RecordFlags::REACH_STALE) {
@@ -114,7 +119,7 @@ pub(super) fn refresh(store: &mut SceneStore, id: RecordId) {
     }
     let layer = LayerRef::new(store, id);
     let clip = layer.visual_clip_rect();
-    let own = own_marks::reach(store.marks.span(store.warm[index].own_marks));
+    let own = own_marks::reach(store.marks.pool.span(store.warm[index].own_marks));
     let children = layer
         .children()
         .map(|child| {
@@ -133,6 +138,7 @@ pub(super) fn refresh(store: &mut SceneStore, id: RecordId) {
 
 // Where an own draw of a record draws, in the record's space; `None` for a
 // child.
+#[cfg(feature = "window-damage")]
 pub(super) fn own_draw_reach(item: ItemRef<'_>) -> Option<Reach> {
     match item {
         ItemRef::Draw(draw) => Some(draw_reach(draw)),
@@ -143,10 +149,12 @@ pub(super) fn own_draw_reach(item: ItemRef<'_>) -> Option<Reach> {
     }
 }
 
+#[cfg(feature = "window-damage")]
 fn draw_reach(draw: &DrawPrimitiveNode) -> Reach {
     primitive_reach(&draw.primitive).within(draw.clip)
 }
 
+#[cfg(feature = "window-damage")]
 fn run_reach(run: &DrawRunNode) -> Reach {
     let reach = run.recording.bounds().map_or(Reach::Empty, Reach::Finite);
     if !run.summary.has_shadow {
@@ -165,6 +173,7 @@ fn run_reach(run: &DrawRunNode) -> Reach {
 // Where `primitive` draws. A shadow's blur reaches past its shape by at most
 // its radius and [`BLUR_PIXEL_SLACK`] pixels; at a raster scale under one,
 // a renderer adds the pixels the logical units here leave out.
+#[cfg(feature = "window-damage")]
 fn primitive_reach(primitive: &DrawPrimitive) -> Reach {
     match primitive {
         DrawPrimitive::Blend { primitive, .. } => primitive_reach(primitive),
@@ -184,6 +193,7 @@ fn primitive_reach(primitive: &DrawPrimitive) -> Reach {
 pub const BLUR_PIXEL_SLACK: f32 = 17.0;
 
 // The extent of `layer` in its parent's space.
+#[cfg(feature = "window-damage")]
 pub(super) fn extent(layer: LayerRef<'_>) -> Extent {
     let to_parent = layer.transform_to_parent();
     let Some(graphics_layer) = layer.store().graphics_layer(layer.id()) else {

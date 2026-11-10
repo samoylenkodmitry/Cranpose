@@ -13,23 +13,30 @@
 use std::{cell::Cell, mem::size_of};
 
 use cranpose_core::RecordId;
-use cranpose_ui::{GraphicsLayer, Rect};
+use cranpose_ui::GraphicsLayer;
+#[cfg(feature = "window-damage")]
+use cranpose_ui::Rect;
+#[cfg(feature = "window-damage")]
 use cranpose_ui_graphics::DrawPrimitive;
 
-use super::{
-    Item, ItemKind, ItemRef, LayerProps, LayerRef, RecordFlags, SceneStore, resize_vec::ResizeVec,
-};
+#[cfg(feature = "window-damage")]
+use super::ItemRef;
+use super::{Item, ItemKind, LayerProps, LayerRef, RecordFlags, SceneStore, resize_vec::ResizeVec};
+#[cfg(feature = "window-damage")]
 use crate::graph::{CONTAINED_DRAW_SLACK, inflate_rect, rect_within};
 
 #[derive(Clone, Copy, Default)]
 struct RowFacts {
     children: Option<ChildFacts>,
+    #[cfg(feature = "window-damage")]
     contained: Option<bool>,
+    #[cfg(feature = "window-damage")]
     own: Option<OwnDrawFacts>,
 }
 
 /// What a record's own draws hold that decides how a renderer snaps them
 /// to the pixel grid.
+#[cfg(feature = "window-damage")]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct OwnDrawFacts {
     /// Whether a text or an image is among them: content whose pixels must
@@ -85,6 +92,7 @@ impl Facts {
 
 // Forgets the containment of the record at `index` and of each ancestor
 // whose containment followed from it.
+#[cfg(feature = "window-damage")]
 pub(super) fn forget_contained(store: &SceneStore, index: usize) {
     forget(store, index, |row| row.contained.take().is_some());
 }
@@ -97,6 +105,7 @@ pub(super) fn forget_children(store: &SceneStore, index: usize) {
 
 // Forgets the own draw facts of the record at `index`, whose own draws
 // changed.
+#[cfg(feature = "window-damage")]
 pub(super) fn forget_own(store: &SceneStore, index: usize) {
     let row = &store.facts.rows[index];
     row.set(RowFacts {
@@ -105,7 +114,13 @@ pub(super) fn forget_own(store: &SceneStore, index: usize) {
     });
 }
 
+// Without window damage no reader asks for own draw facts.
+#[cfg(not(feature = "window-damage"))]
+#[inline]
+pub(super) fn forget_own(_store: &SceneStore, _index: usize) {}
+
 // Whether the record at `index` keeps its containment.
+#[cfg(feature = "window-damage")]
 pub(super) fn keeps_contained(store: &SceneStore, index: usize) -> bool {
     store.facts.rows[index].get().contained.is_some()
 }
@@ -142,6 +157,7 @@ pub(super) fn has_space(layer: LayerRef<'_>) -> bool {
 
 // Whether everything `layer` and its subtree draw lies within its local
 // bounds, give or take the slack of antialiasing.
+#[cfg(feature = "window-damage")]
 #[inline]
 pub(super) fn contained(layer: LayerRef<'_>) -> bool {
     match layer.store.facts.rows[layer.id.index()].get().contained {
@@ -150,6 +166,7 @@ pub(super) fn contained(layer: LayerRef<'_>) -> bool {
     }
 }
 
+#[cfg(feature = "window-damage")]
 #[inline(never)]
 fn work_out_contained(layer: LayerRef<'_>) -> bool {
     let row = &layer.store.facts.rows[layer.id.index()];
@@ -165,6 +182,7 @@ fn work_out_contained(layer: LayerRef<'_>) -> bool {
     contained
 }
 
+#[cfg(feature = "window-damage")]
 #[inline]
 pub(super) fn own_draw_facts(layer: LayerRef<'_>) -> OwnDrawFacts {
     match layer.store.facts.rows[layer.id.index()].get().own {
@@ -173,6 +191,7 @@ pub(super) fn own_draw_facts(layer: LayerRef<'_>) -> OwnDrawFacts {
     }
 }
 
+#[cfg(feature = "window-damage")]
 #[inline(never)]
 fn work_out_own_draw_facts(layer: LayerRef<'_>) -> OwnDrawFacts {
     let mut facts = OwnDrawFacts::default();
@@ -204,6 +223,7 @@ fn work_out_own_draw_facts(layer: LayerRef<'_>) -> OwnDrawFacts {
     facts
 }
 
+#[cfg(feature = "window-damage")]
 fn primitive_is_pixel_sensitive(primitive: &DrawPrimitive) -> bool {
     match primitive {
         DrawPrimitive::Blend { primitive, .. } => primitive_is_pixel_sensitive(primitive),
@@ -242,6 +262,7 @@ fn work_out_child_facts(layer: LayerRef<'_>) -> ChildFacts {
 }
 
 // Whether the items of `layer` put nothing outside `bounds` of it.
+#[cfg(feature = "window-damage")]
 fn items_draw_within(layer: LayerRef<'_>, bounds: Rect) -> bool {
     layer.items().all(|item| match item {
         ItemRef::Draw(_) => false,

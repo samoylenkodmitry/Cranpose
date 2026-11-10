@@ -41,7 +41,10 @@ pub(super) fn store_heap_bytes(store: &SceneStore) -> usize {
                         .sum::<usize>()
             })
             .sum::<usize>();
-    let marks = store.marks.heap_bytes() + size_of_val(store.mark_scratch.as_slice());
+    #[cfg(feature = "window-damage")]
+    let marks = store.marks.heap_bytes();
+    #[cfg(not(feature = "window-damage"))]
+    let marks = 0;
     rows + store.hashes.heap_bytes()
         + store.facts.heap_bytes()
         + store.lists.heap_bytes()

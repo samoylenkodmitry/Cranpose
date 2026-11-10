@@ -644,6 +644,7 @@ impl Scene {
 
     /// Works out the reach of the records a change left stale; see
     /// [`SceneStore::refresh_reach`].
+    #[cfg(feature = "window-damage")]
     pub fn refresh_reach(&mut self) {
         self.store.refresh_reach();
     }

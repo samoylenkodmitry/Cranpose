@@ -6,10 +6,9 @@ use cranpose_core::{NodeId, RecordId, RecordRef, SceneUpdate, StoreId};
 use cranpose_ui::{GraphicsLayer, Point, Rect, RenderEffect, Size};
 use cranpose_ui_graphics::{BlendMode, ColorFilter, CompositingStrategy, DrawPrimitive};
 
-use super::{
-    Extent, Item, ItemKind, LayerProps, OwnDrawFacts, Placement, Reach, RecordFlags, RecordKind,
-    SceneStore, ShapeRef,
-};
+#[cfg(feature = "window-damage")]
+use super::{Extent, OwnDrawFacts, Reach};
+use super::{Item, ItemKind, LayerProps, Placement, RecordFlags, RecordKind, SceneStore, ShapeRef};
 use crate::{
     graph::{
         CachePolicy, DrawPrimitiveNode, DrawRunNode, HitTestNode, IsolationReasons, PrimitivePhase,
@@ -295,6 +294,7 @@ impl<'a> LayerRef<'a> {
 
     /// What the record's own draws hold that decides how a renderer snaps
     /// them to the pixel grid.
+    #[cfg(feature = "window-damage")]
     #[inline]
     pub fn own_draw_facts(self) -> OwnDrawFacts {
         super::facts::own_draw_facts(self)
@@ -303,6 +303,7 @@ impl<'a> LayerRef<'a> {
     /// Where the record's subtree draws, in its own space: what its items
     /// draw and its children's extents, within its clip. A change beneath
     /// the record since [`SceneStore::refresh_reach`] leaves it unknown.
+    #[cfg(feature = "window-damage")]
     pub fn reach(self) -> Reach {
         if self.flags().contains(RecordFlags::REACH_STALE) {
             return Reach::Unknown;
@@ -313,21 +314,24 @@ impl<'a> LayerRef<'a> {
     /// Where the record's own draws reach, beside its children's, in its
     /// own space and within its clip. A change beneath the record since
     /// [`SceneStore::refresh_reach`] leaves it unknown.
+    #[cfg(feature = "window-damage")]
     pub fn own_reach(self) -> Reach {
         if self.flags().contains(RecordFlags::REACH_STALE) {
             return Reach::Unknown;
         }
         let marks = self.store.warm[self.id.index()].own_marks;
-        super::own_marks::reach(self.store.marks.span(marks)).within(self.visual_clip_rect())
+        super::own_marks::reach(self.store.marks.pool.span(marks)).within(self.visual_clip_rect())
     }
 
     /// What the record draws in its parent's space.
+    #[cfg(feature = "window-damage")]
     pub fn extent(self) -> Extent {
         super::reach::extent(self)
     }
 
     /// Whether everything the record's subtree draws lies within its local
     /// bounds, give or take [`crate::graph::CONTAINED_DRAW_SLACK`].
+    #[cfg(feature = "window-damage")]
     #[inline]
     pub fn draws_within_bounds(self) -> bool {
         super::facts::contained(self)
@@ -497,6 +501,7 @@ impl<'a> LayerRef<'a> {
     /// Whether what the record draws changed in scene update `update` and in
     /// the one before it, so a raster cache keyed on its content would miss
     /// again.
+    #[cfg(feature = "window-damage")]
     pub fn content_churns(self, update: SceneUpdate) -> bool {
         self.props()
             .is_some_and(|props| props.content_run.churns(update))

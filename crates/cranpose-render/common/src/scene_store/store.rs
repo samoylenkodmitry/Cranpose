@@ -13,12 +13,12 @@ use cranpose_ui_graphics::CommandRecording;
 
 use super::{
     ChildOrder, Facts, GeoRecord, HashCache, Item, ItemKind, ItemLists, ItemRef, Journal,
-    JournalCursor, JournalEntry, JournalRead, LayerProps, LayerRef, Reach, ReachState, RecordEvent,
+    JournalCursor, JournalEntry, JournalRead, LayerProps, LayerRef, Reach, RecordEvent,
     RecordEvents, RecordFlags, RecordKind, RecordNode, ShapeChunks, ShapeRun, Slab, Span, SpanPool,
-    TreeRecord, WarmRecord,
-    own_marks::{self, OwnMark},
-    recordings::Recordings,
+    TreeRecord, WarmRecord, recordings::Recordings,
 };
+#[cfg(feature = "window-damage")]
+use super::{ReachState, own_marks};
 use crate::graph::{
     DrawCommandId, DrawPrimitiveNode, DrawRunNode, LayerNode, ProjectiveTransform,
     TextPrimitiveNode,
@@ -34,7 +34,8 @@ pub struct SceneStore {
     pub(super) generations: Vec<u32>,
     pub(super) free_rows: Vec<u32>,
     pub(super) items: SpanPool<Item>,
-    pub(super) marks: SpanPool<OwnMark>,
+    #[cfg(feature = "window-damage")]
+    pub(super) marks: own_marks::Marks,
     pub(super) props: Slab<LayerProps>,
     pub(super) graphics_layers: Slab<GraphicsLayer>,
     pub(super) transforms: Slab<ProjectiveTransform>,
@@ -54,16 +55,7 @@ pub struct SceneStore {
     root: Option<RecordId>,
     update: SceneUpdate,
     journal: Journal,
-    // The records whose own draws the update in progress may have changed,
-    // which its end compares with what they drew before.
-    pub(super) redrawn: Vec<RecordRef>,
-    // Whether an update redrew records while no reader followed where they
-    // redraw, so no record's marks hold.
-    pub(super) marks_lost: bool,
     pub(super) order: ChildOrder,
-    // The marks of the own draws of the record whose end of update is
-    // being worked out.
-    pub(super) mark_scratch: Vec<OwnMark>,
     pub(crate) recordings: Recordings,
 }
 
@@ -112,7 +104,8 @@ impl SceneStore {
             generations: Vec::new(),
             free_rows: Vec::new(),
             items: SpanPool::default(),
-            marks: SpanPool::default(),
+            #[cfg(feature = "window-damage")]
+            marks: own_marks::Marks::default(),
             props: Slab::default(),
             graphics_layers: Slab::default(),
             transforms: Slab::default(),
@@ -128,10 +121,7 @@ impl SceneStore {
             root: None,
             update: SceneUpdate::default(),
             journal: Journal::default(),
-            redrawn: Vec::new(),
-            marks_lost: false,
             order: ChildOrder::default(),
-            mark_scratch: Vec::new(),
             recordings: Recordings::default(),
         }
     }
@@ -188,20 +178,25 @@ impl SceneStore {
         self.mark_for_redraws();
     }
 
-    // Whether a reader follows where the update in progress redraws. A
-    // build without window damage logs each redraw without its reach.
+    // Whether a reader follows where the update in progress redraws.
+    #[cfg(feature = "window-damage")]
     #[inline]
     pub(super) fn follows_redrawn_reach(&self) -> bool {
-        cfg!(feature = "window-damage") && self.journal.wants_redrawn_reach(self.update)
+        self.journal.wants_redrawn_reach(self.update)
     }
 
     // Works out the marks that wait once a reader follows where records
     // redraw, so it compares the next redraws with the store as it is now.
+    #[cfg(feature = "window-damage")]
     fn mark_for_redraws(&mut self) {
         if self.follows_redrawn_reach() {
             own_marks::refresh_lost(self);
         }
     }
+
+    #[cfg(not(feature = "window-damage"))]
+    #[inline]
+    fn mark_for_redraws(&mut self) {}
 
     /// Hands `read` the store and the changes of its records since the
     /// reader's last read, then marks them read. A reader of another store
@@ -254,6 +249,7 @@ impl SceneStore {
     pub fn finish_update(&mut self) {
         self.release_removed_shapes();
         super::child_order::settle(self);
+        #[cfg(feature = "window-damage")]
         own_marks::settle(self);
         super::growth_slack::trim(self);
     }
@@ -266,6 +262,7 @@ impl SceneStore {
         reason = "the collect walk and the update call it for every record; out of line the gauntlet frame took 2% more instructions"
     )]
     #[inline(always)]
+    #[cfg(feature = "window-damage")]
     pub(super) fn redraw_pending(&mut self, index: usize) {
         if !self.follows_redrawn_reach() {
             own_marks::lose(self, index);
@@ -274,14 +271,26 @@ impl SceneStore {
         let flags = &mut self.tree[index].flags;
         if !flags.contains(RecordFlags::REDRAW_PENDING) {
             *flags = flags.with(RecordFlags::REDRAW_PENDING);
-            self.redrawn.push(RecordRef {
+            self.marks.redrawn.push(RecordRef {
                 id: RecordId::from_index(index).expect("a row is a record"),
                 generation: self.generations[index],
             });
         }
     }
 
+    // Without window damage a record keeps no marks, and logs each redraw
+    // without its reach.
+    #[cfg(not(feature = "window-damage"))]
+    #[inline]
+    pub(super) fn redraw_pending(&mut self, index: usize) {
+        self.log(
+            RecordEvent::Redrawn(Reach::Unknown),
+            RecordId::from_index(index).expect("a row is a record"),
+        );
+    }
+
     // The reach of the record at `index`.
+    #[cfg(feature = "window-damage")]
     pub(super) fn reach(&self, index: usize) -> Reach {
         match self.tree[index].reach_state {
             ReachState::Empty => Reach::Empty,
@@ -290,6 +299,7 @@ impl SceneStore {
         }
     }
 
+    #[cfg(feature = "window-damage")]
     pub(super) fn set_reach(&mut self, index: usize, reach: Reach) {
         let (state, rect) = match reach {
             Reach::Empty => (ReachState::Empty, Rect::default()),
@@ -303,6 +313,7 @@ impl SceneStore {
     // Leaves the containment and the reach of the record at `index` and of
     // the ancestors that follow from them to be worked out again. Most often
     // an earlier change in the update left the record so already.
+    #[cfg(feature = "window-damage")]
     #[inline]
     pub(super) fn stale(&mut self, index: usize) {
         if !self.tree[index].flags.contains(RecordFlags::REACH_STALE)
@@ -312,6 +323,12 @@ impl SceneStore {
         }
     }
 
+    // Without window damage no reader asks for reach or containment.
+    #[cfg(not(feature = "window-damage"))]
+    #[inline]
+    pub(super) fn stale(&mut self, _index: usize) {}
+
+    #[cfg(feature = "window-damage")]
     #[inline(never)]
     fn stale_climb(&mut self, index: usize) {
         super::facts::forget_contained(self, index);
@@ -320,6 +337,7 @@ impl SceneStore {
 
     // Leaves the reach of the record at `index` and of its ancestors to be
     // worked out again, stopping at the first that waits for it already.
+    #[cfg(feature = "window-damage")]
     fn reach_stale(&mut self, index: usize) {
         let mut current = Some(index);
         while let Some(index) = current {
@@ -334,6 +352,7 @@ impl SceneStore {
 
     /// Works out the reach of every record whose reach a change beneath it
     /// left to be worked out again, as [`LayerRef::reach`] reads it.
+    #[cfg(feature = "window-damage")]
     pub fn refresh_reach(&mut self) {
         own_marks::refresh_lost(self);
         if let Some(root) = self.root {
@@ -439,6 +458,7 @@ impl SceneStore {
         self.generations.clear();
         self.free_rows.clear();
         self.items.clear();
+        #[cfg(feature = "window-damage")]
         self.marks.clear();
         self.props.clear();
         self.graphics_layers.clear();
@@ -451,8 +471,6 @@ impl SceneStore {
         self.facts.clear();
         self.root = None;
         self.journal.clear(self.update);
-        self.redrawn.clear();
-        self.marks_lost = false;
     }
 
     /// Makes a record from `seed`, changed in the update in progress, with no
@@ -465,6 +483,7 @@ impl SceneStore {
             parent: seed.parent,
             items: Span::default(),
             kind: seed.kind,
+            #[cfg(feature = "window-damage")]
             reach_state: ReachState::Empty,
             flags: RecordFlags::default(),
             content_rev: update,
@@ -477,6 +496,7 @@ impl SceneStore {
             props: None,
             graphics_layer: None,
             content_offset: [0.0; 2],
+            #[cfg(feature = "window-damage")]
             own_marks: Span::default(),
         };
         let id = match self.free_rows.pop() {
@@ -501,9 +521,8 @@ impl SceneStore {
             None => self.root = Some(id),
         }
         self.stale_with_parent(id.index());
-        let flags = &mut self.tree[id.index()].flags;
-        *flags = flags.with(RecordFlags::INSERTED);
-        self.redraw_pending(id.index());
+        #[cfg(feature = "window-damage")]
+        own_marks::pend_inserted(self, id.index());
         self.log(RecordEvent::Inserted, id);
         id
     }
@@ -524,7 +543,8 @@ impl SceneStore {
             self.remove_item(item);
         }
         self.items.free_span(span);
-        self.marks.free_span(self.warm[index].own_marks);
+        #[cfg(feature = "window-damage")]
+        self.marks.pool.free_span(self.warm[index].own_marks);
         self.hashes.remove(index);
         self.drop_props(index);
         if let Some(transform) = self.tree[index].transform.take() {
@@ -792,12 +812,8 @@ impl SceneStore {
         super::facts::forget_own(self, index);
         let tree = &mut self.tree[index];
         tree.content_rev = update;
-        let (flags, raise) = (tree.flags, tree.subtree_rev != update);
-        if flags.contains(RecordFlags::HAS_PROPS)
-            && let Some(props) = self.warm[index].props
-        {
-            self.props[props.index()].content_run.note(update);
-        }
+        let raise = tree.subtree_rev != update;
+        self.note_content_run(index);
         if raise {
             self.raise_subtree_revs(id);
         }
@@ -866,14 +882,26 @@ impl SceneStore {
             }
             tree.subtree_rev = update;
             current = tree.parent;
-            let flags = tree.flags;
-            if flags.contains(RecordFlags::HAS_PROPS)
-                && let Some(props) = self.warm[index].props
-            {
-                self.props[props.index()].content_run.note(update);
-            }
+            self.note_content_run(index);
         }
     }
+
+    // Counts the update in progress in the content run of the record at
+    // `index`, which `LayerRef::content_churns` reads.
+    #[cfg(feature = "window-damage")]
+    #[inline]
+    fn note_content_run(&mut self, index: usize) {
+        if self.tree[index].flags.contains(RecordFlags::HAS_PROPS)
+            && let Some(props) = self.warm[index].props
+        {
+            self.props[props.index()].content_run.note(self.update);
+        }
+    }
+
+    // Without window damage no reader asks whether a record's content churns.
+    #[cfg(not(feature = "window-damage"))]
+    #[inline]
+    fn note_content_run(&mut self, _index: usize) {}
 
     /// The update that last changed what `id` itself draws.
     pub fn content_rev(&self, id: RecordId) -> SceneUpdate {

@@ -60,6 +60,7 @@ const ROWS_KEPT: usize = 4;
 const ENTRIES_KEPT: usize = 256;
 
 // The bit of a set of changes that asks for the reach of each redraw.
+#[cfg(feature = "window-damage")]
 const REDRAWN_REACH: u16 = 1 << 7;
 // The bit of a set of changes that asks whether an update changed anything.
 const ANY_CHANGE: u16 = 1 << 8;
@@ -171,6 +172,7 @@ impl Journal {
 
     // Whether an open reader follows where the records `update` redraws
     // changed.
+    #[cfg(feature = "window-damage")]
     #[inline]
     pub(super) fn wants_redrawn_reach(&self, update: SceneUpdate) -> bool {
         self.wanted & REDRAWN_REACH != 0 && self.wants(RecordEvent::Redrawn(Reach::Empty), update)

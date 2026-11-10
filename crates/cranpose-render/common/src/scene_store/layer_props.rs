@@ -2,6 +2,7 @@
 // pointer handling, bounds of its own, offscreen reasons. Only records that
 // have one of them take an entry.
 
+#[cfg(feature = "window-damage")]
 use cranpose_core::SceneUpdate;
 use cranpose_ui::{Point, Rect};
 
@@ -24,6 +25,7 @@ pub struct LayerProps {
     pub isolation: IsolationReasons,
     /// Whether a renderer may keep the record's pixels between frames.
     pub cache_policy: CachePolicy,
+    #[cfg(feature = "window-damage")]
     pub(crate) content_run: ContentRun,
 }
 
@@ -41,12 +43,14 @@ impl LayerProps {
 
 // The last scene update that changed what a record draws, and how many
 // updates in a row up to it did.
+#[cfg(feature = "window-damage")]
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct ContentRun {
     last: SceneUpdate,
     run: u32,
 }
 
+#[cfg(feature = "window-damage")]
 impl ContentRun {
     pub(crate) fn note(&mut self, update: SceneUpdate) {
         if self.run > 0 && self.last == update {

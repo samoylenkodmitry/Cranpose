@@ -13,13 +13,14 @@ use super::SceneStore;
 pub(super) fn trim(store: &mut SceneStore) {
     let resized = store.facts.resized()
         | store.items.resized()
-        | store.marks.resized()
         | store.props.resized()
         | store.graphics_layers.resized()
         | store.transforms.resized()
         | store.draws.resized()
         | store.texts.resized()
         | store.runs.resized();
+    #[cfg(feature = "window-damage")]
+    let resized = resized | store.marks.pool.resized();
     if resized {
         trim_resized(store);
     }
@@ -41,7 +42,8 @@ fn trim_resized(store: &mut SceneStore) {
     }
     store.facts.trim_growth_slack();
     store.items.trim_growth_slack();
-    store.marks.trim_growth_slack();
+    #[cfg(feature = "window-damage")]
+    store.marks.pool.trim_growth_slack();
     store.props.trim_growth_slack();
     store.graphics_layers.trim_growth_slack();
     store.transforms.trim_growth_slack();

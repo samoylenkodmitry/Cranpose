@@ -137,6 +137,7 @@ impl TextPrimitiveNode {
             .then(|| glyph_bounds(self.rect, &self.layout, paint.spread))
     }
 
+    #[cfg(feature = "window-damage")]
     pub(crate) fn draws_within(&self, bounds: Rect) -> bool {
         self.draw_bounds()
             .is_some_and(|drawn| rect_within(drawn, bounds))
@@ -472,6 +473,7 @@ impl DrawRunNode {
     }
 
     // Whether the run puts nothing outside `bounds` of its layer.
+    #[cfg(feature = "window-damage")]
     pub(crate) fn draws_within(&self, bounds: Rect) -> bool {
         !self.summary.has_shadow
             && self
@@ -481,6 +483,7 @@ impl DrawRunNode {
     }
 }
 
+#[cfg(feature = "window-damage")]
 pub(crate) fn inflate_rect(rect: Rect, by: f32) -> Rect {
     Rect {
         x: rect.x - by,
@@ -490,6 +493,7 @@ pub(crate) fn inflate_rect(rect: Rect, by: f32) -> Rect {
     }
 }
 
+#[cfg(feature = "window-damage")]
 pub(crate) fn rect_within(inner: Rect, outer: Rect) -> bool {
     inner.x >= outer.x
         && inner.y >= outer.y
