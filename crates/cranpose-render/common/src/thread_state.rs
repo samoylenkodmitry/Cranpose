@@ -21,8 +21,6 @@ pub(crate) struct RenderThreadState {
     // The paints of the texts the thread made, shared by those that paint
     // the same.
     pub(crate) text_paints: RefCell<ContentPool<Arc<TextPaint>>>,
-    #[cfg(test)]
-    pub(crate) lowered_layer_count: Cell<usize>,
 }
 
 impl RenderThreadState {
@@ -33,8 +31,6 @@ impl RenderThreadState {
             dirty_node_scratch: Cell::new(None),
             space_changed: Cell::new(false),
             text_paints: RefCell::new(ContentPool::new()),
-            #[cfg(test)]
-            lowered_layer_count: Cell::new(0),
         }
     }
 }

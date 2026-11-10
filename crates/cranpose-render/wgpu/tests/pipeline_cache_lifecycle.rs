@@ -111,7 +111,13 @@ fn caching_renderer() -> Option<support::LockedRenderer> {
         eprintln!("pipeline cache lifecycle requires PIPELINE_CACHE support");
         return None;
     }
-    renderer.scene_mut().describe(&support::layer_node(
+    renderer.scene_mut().describe(&white_square());
+    Some(renderer)
+}
+
+// A white square that fills a 16 by 16 frame.
+fn white_square() -> LayerNode {
+    support::layer_node(
         None,
         16.0,
         16.0,
@@ -128,8 +134,7 @@ fn caching_renderer() -> Option<support::LockedRenderer> {
             },
             None,
         )],
-    ));
-    Some(renderer)
+    )
 }
 
 #[test]
@@ -181,12 +186,11 @@ fn dropping_a_renderer_stops_writing_its_previous_pipeline_cache() {
     assert!(original.pixels.as_chunks::<4>().0.contains(&[255; 4]));
     wait_for_cache(&previous_cache);
 
-    let store = renderer.scene().store().clone();
     drop(renderer);
     fs::remove_file(&previous_cache).expect("remove retired renderer's cache file");
     let replacement_cache = files.select("replacement.bin");
     let mut renderer = support::LockedRenderer::beside_locked().expect("replacement GPU required");
-    renderer.scene_mut().replace_store(store);
+    renderer.scene_mut().describe(&white_square());
     let replacement = renderer.capture_frame(16, 16).expect("replacement frame");
     assert_eq!(replacement.pixels, original.pixels);
     wait_for_cache(&replacement_cache);

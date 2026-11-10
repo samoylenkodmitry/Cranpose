@@ -34,7 +34,6 @@ const TRANSLATED_SUBTREE_BUDGET: NormalizedDifferenceBudget = NormalizedDifferen
 };
 
 /// A scene that every backend renders for a shared case, with the frame size it renders at.
-#[derive(Clone)]
 pub struct RenderFixture {
     /// Frame width in pixels.
     pub width: u32,

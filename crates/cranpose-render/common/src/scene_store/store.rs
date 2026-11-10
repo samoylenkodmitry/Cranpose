@@ -25,9 +25,9 @@ use crate::graph::{
 };
 
 /// The scene a renderer draws and the hit targets come from.
-#[derive(Clone)]
 pub struct SceneStore {
-    id: Identity,
+    // The store's identity among the renderers' stores.
+    id: StoreId,
     pub(super) tree: Vec<TreeRecord>,
     pub(super) geo: Vec<GeoRecord>,
     pub(super) warm: Vec<WarmRecord>,
@@ -81,17 +81,6 @@ pub struct RecordSeed {
     pub parent: Option<RecordId>,
 }
 
-// A store's identity among the renderers' stores. A clone of a store is
-// another store that diverges from the first, so it takes an identity of its
-// own: no reader takes one store's state for the other's.
-struct Identity(StoreId);
-
-impl Clone for Identity {
-    fn clone(&self) -> Self {
-        Self(next_store_id())
-    }
-}
-
 fn next_store_id() -> StoreId {
     static NEXT: AtomicU16 = AtomicU16::new(1);
     loop {
@@ -111,7 +100,7 @@ impl SceneStore {
     /// An empty store.
     pub fn new() -> Self {
         Self {
-            id: Identity(next_store_id()),
+            id: next_store_id(),
             tree: Vec::new(),
             geo: Vec::new(),
             warm: Vec::new(),
@@ -144,13 +133,13 @@ impl SceneStore {
     /// The store's identity among the renderers' stores.
     #[inline]
     pub fn id(&self) -> StoreId {
-        self.id.0
+        self.id
     }
 
     /// The store's identity and latest update.
     pub fn version(&self) -> SceneVersion {
         SceneVersion {
-            store: self.id.0,
+            store: self.id,
             update: self.update,
         }
     }
@@ -176,7 +165,7 @@ impl SceneStore {
     /// Starts following the `events` of the store's records: the reader's
     /// first read reports the changes after now.
     pub fn open_journal(&mut self, events: RecordEvents) -> JournalCursor {
-        let cursor = self.journal.open(self.id.0, events);
+        let cursor = self.journal.open(self.id, events);
         self.mark_for_redraws();
         cursor
     }
@@ -189,7 +178,7 @@ impl SceneStore {
     /// Makes the reader of `cursor` follow `events` from the next update
     /// on.
     pub fn follow_journal(&mut self, cursor: &mut JournalCursor, events: RecordEvents) {
-        self.journal.follow(self.id.0, cursor, events);
+        self.journal.follow(self.id, cursor, events);
         self.mark_for_redraws();
     }
 
@@ -221,15 +210,15 @@ impl SceneStore {
         cursor: &mut JournalCursor,
         read: impl FnOnce(&Self, JournalRead<'_>) -> R,
     ) -> R {
-        let result = read(self, self.journal.changes(self.id.0, cursor));
-        self.journal.mark_read(self.id.0, cursor);
+        let result = read(self, self.journal.changes(self.id, cursor));
+        self.journal.mark_read(self.id, cursor);
         result
     }
 
     // Whether the reader of `cursor` read every change of the store.
     #[inline]
     pub(crate) fn journal_caught_up(&self, cursor: &JournalCursor) -> bool {
-        self.journal.caught_up(self.id.0, cursor)
+        self.journal.caught_up(self.id, cursor)
     }
 
     // Logs `event` for `id` as the record is now, when a reader follows it.

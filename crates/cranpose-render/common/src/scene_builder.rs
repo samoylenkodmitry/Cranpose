@@ -129,24 +129,6 @@ impl GraphUpdateReport {
     }
 }
 
-fn note_layer_lowered() {
-    #[cfg(test)]
-    crate::thread_state::with(|state| {
-        let count = &state.lowered_layer_count;
-        count.set(count.get() + 1);
-    });
-}
-
-#[cfg(test)]
-fn reset_lowered_layer_count() {
-    crate::thread_state::with(|state| state.lowered_layer_count.set(0));
-}
-
-#[cfg(test)]
-fn lowered_layer_count() -> usize {
-    crate::thread_state::with(|state| state.lowered_layer_count.get())
-}
-
 // What the dirty walk keeps of one update for the next: the path to the
 // layer it updated last and the marks of the nodes it walked through.
 #[derive(Default)]

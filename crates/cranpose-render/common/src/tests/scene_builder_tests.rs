@@ -18,7 +18,7 @@ use cranpose_ui_graphics::{
 use super::{node_layer::root_record, text_node::TEXT_CLIP_PAD, *};
 use crate::{
     graph::{DrawRunNode, PrimitivePhase, TextPrimitiveNode},
-    scene_store::ItemRef,
+    scene_store::{ItemRef, RecordChanges},
 };
 
 // Each of `ids` with the update that records it again.
@@ -179,6 +179,48 @@ impl Built {
 fn built(applier: &MemoryApplier, root: NodeId) -> Option<Built> {
     let mut built = Built::default();
     rebuild_from_applier(applier, root, &mut built.store, &mut built.walk).then_some(built)
+}
+
+// What each record of `graph` that draws for a node was at its last
+// changes, by node.
+fn record_changes(graph: &Built) -> HashMap<NodeId, RecordChanges> {
+    fn visit(layer: LayerRef<'_>, out: &mut HashMap<NodeId, RecordChanges>) {
+        if let Some(node) = layer.node_id() {
+            out.insert(node, layer.changes());
+        }
+        for child in layer.children() {
+            visit(child, out);
+        }
+    }
+    let mut out = HashMap::default();
+    visit(root_of(&graph.store), &mut out);
+    out
+}
+
+// Updates `graph` for the dirty nodes `dirty` and checks that no record of
+// a clean node drew anew: a scroll moves clean rows, it writes none again.
+fn update_keeping_clean_records(
+    graph: &mut Built,
+    applier: &MemoryApplier,
+    root: NodeId,
+    dirty: &[NodeId],
+) -> GraphUpdateReport {
+    let before = record_changes(graph);
+    let report = graph.update_from_applier(applier, root, &content(dirty));
+    let after = record_changes(graph);
+    let mut redrawn: Vec<NodeId> = before
+        .iter()
+        .filter(|(node, was)| {
+            !dirty.contains(node) && after.get(node).is_some_and(|now| !was.same_own(*now))
+        })
+        .map(|(node, _)| *node)
+        .collect();
+    redrawn.sort_unstable();
+    assert!(
+        redrawn.is_empty(),
+        "records of clean nodes drew anew: {redrawn:?} (dirty={dirty:?})"
+    );
+    report
 }
 
 fn find_text_motion(layer: LayerRef<'_>, label: &str) -> Option<Option<TextMotion>> {
@@ -602,24 +644,24 @@ fn update_graph_from_applier_replaces_dirty_child_layer() {
     );
 }
 
-fn assert_same_cache_hash_state(dirty_road: LayerRef<'_>, full_road: LayerRef<'_>, path: &str) {
-    assert_eq!(
-        dirty_road.target_content_hash(),
-        full_road.target_content_hash(),
-        "target content hash at {path} (node {:?})",
-        dirty_road.node_id()
-    );
-    for (index, (dirty_child, full_child)) in
-        dirty_road.children().zip(full_road.children()).enumerate()
-    {
-        assert_same_cache_hash_state(dirty_child, full_child, &format!("{path}/{index}"));
+// The target content hash of each record below `layer`, with its path and
+// node, in tree order.
+fn cached_hashes(layer: LayerRef<'_>, path: String, out: &mut Vec<(String, Option<NodeId>, u64)>) {
+    out.push((path.clone(), layer.node_id(), layer.target_content_hash()));
+    for (index, child) in layer.children().enumerate() {
+        cached_hashes(child, format!("{path}/{index}"), out);
     }
 }
 
+// The hashes an update left in `graph` equal those worked out again from
+// the same records.
 fn assert_dirty_hash_road_matches_full_walk(graph: &Built) {
-    let full_road = graph.store.clone();
-    full_road.forget_hashes();
-    assert_same_cache_hash_state(root_of(&graph.store), root_of(&full_road), "root");
+    let mut kept = Vec::new();
+    cached_hashes(root_of(&graph.store), "root".to_owned(), &mut kept);
+    graph.store.forget_hashes();
+    let mut worked_out = Vec::new();
+    cached_hashes(root_of(&graph.store), "root".to_owned(), &mut worked_out);
+    assert_eq!(kept, worked_out, "target content hashes by record path");
 }
 
 #[test]
@@ -682,9 +724,9 @@ fn dirty_update_leaves_the_hashes_a_full_walk_leaves() {
         .compute_layout(root, viewport)
         .expect("initial layout");
     let mut graph = built(&applier, root).expect("initial graph");
+    assert_dirty_hash_road_matches_full_walk(&graph);
     applier.clear_runtime_handle();
     drop(applier);
-    assert_dirty_hash_road_matches_full_walk(&graph);
 
     let label = label_holder
         .borrow()
@@ -1021,7 +1063,7 @@ fn update_graph_from_applier_refreshes_scroll_content_offset() {
 }
 
 #[test]
-fn an_overmarked_ancestor_chain_still_translates_instead_of_relowering() {
+fn an_overmarked_ancestor_chain_over_a_scroll_moves_the_rows() {
     let scroll_holder: Rc<RefCell<Option<ScrollState>>> = Rc::new(RefCell::new(None));
     let scroll_holder_for_comp = Rc::clone(&scroll_holder);
 
@@ -1068,20 +1110,13 @@ fn an_overmarked_ancestor_chain_still_translates_instead_of_relowering() {
     applier
         .compute_layout(root, viewport)
         .expect("scrolled layout");
-    reset_lowered_layer_count();
-    let report = graph.update_from_applier(&applier, root, &content(&dirty_nodes));
+    let report = update_keeping_clean_records(&mut graph, &applier, root, &dirty_nodes);
     applier.clear_runtime_handle();
 
     assert!(
         report.applied(),
         "chain update should apply in place, got {:?}",
         report.update
-    );
-    let lowered = lowered_layer_count();
-    assert_eq!(
-        lowered, 0,
-        "an over-marked ancestor chain over a pure scroll must still \
-         translate; {lowered} layers were rebuilt (dirty={dirty_nodes:?})"
     );
     let updated_row_top =
         find_text_top(graph.root_layer().expect("a scene"), "row 3").expect("updated row text");
@@ -1093,7 +1128,7 @@ fn an_overmarked_ancestor_chain_still_translates_instead_of_relowering() {
 }
 
 #[test]
-fn a_scrolled_container_translates_clean_children_instead_of_relowering() {
+fn a_scrolled_container_moves_each_clean_row_by_the_scroll() {
     let scroll_holder: Rc<RefCell<Option<ScrollState>>> = Rc::new(RefCell::new(None));
     let scroll_holder_for_comp = Rc::clone(&scroll_holder);
 
@@ -1134,20 +1169,13 @@ fn a_scrolled_container_translates_clean_children_instead_of_relowering() {
     applier
         .compute_layout(root, viewport)
         .expect("scrolled layout");
-    reset_lowered_layer_count();
-    let report = graph.update_from_applier(&applier, root, &content(&dirty_nodes));
+    let report = update_keeping_clean_records(&mut graph, &applier, root, &dirty_nodes);
     applier.clear_runtime_handle();
 
     assert!(
         report.applied(),
         "scroll update should apply in place, got {:?}",
         report.update
-    );
-    let lowered = lowered_layer_count();
-    assert_eq!(
-        lowered, 0,
-        "a pure scroll of clean children must translate the retained \
-         subtrees, not re-lower them; {lowered} layers were rebuilt"
     );
     for (index, initial_row_top) in initial_row_tops.into_iter().enumerate() {
         let updated_row_top = find_text_top(
@@ -1164,7 +1192,7 @@ fn a_scrolled_container_translates_clean_children_instead_of_relowering() {
 }
 
 #[test]
-fn a_scrolled_container_refreshes_dirty_shadowed_rows_without_relowering_children() {
+fn a_scrolled_container_moves_shadowed_rows_with_one_wrapper_each() {
     for wrapped_root in [false, true] {
         assert_shadowed_scroll_reuses_children(wrapped_root);
     }
@@ -1267,15 +1295,9 @@ fn assert_shadowed_scroll_reuses_children(wrapped_root: bool) {
     applier
         .compute_layout(root, viewport)
         .expect("scrolled layout");
-    reset_lowered_layer_count();
-    let report = graph.update_from_applier(&applier, root, &content(&dirty_nodes));
+    let report = update_keeping_clean_records(&mut graph, &applier, root, &dirty_nodes);
 
     assert!(report.applied(), "got {:?}", report.update);
-    assert_eq!(
-        lowered_layer_count(),
-        0,
-        "rows wrapped in their outer shadow must translate like plain rows"
-    );
     let updated_row_top =
         find_text_top(graph.root_layer().expect("a scene"), "row 3").expect("row text");
     assert!(updated_row_top < initial_row_top - consumed_scroll * 0.75);
@@ -1365,7 +1387,7 @@ fn take_redraw_nodes(applier: &mut MemoryApplier, node: NodeId, out: &mut Vec<No
 }
 
 #[test]
-fn a_sliding_lazy_window_lowers_only_the_entering_rows() {
+fn a_sliding_lazy_window_shows_what_a_fresh_build_shows() {
     let state_holder: Rc<RefCell<Option<LazyListState>>> = Rc::new(RefCell::new(None));
     let state_holder_for_comp = Rc::clone(&state_holder);
     let mut composition = cranpose_ui::run_test_composition(move || {
@@ -1434,9 +1456,7 @@ fn a_sliding_lazy_window_lowers_only_the_entering_rows() {
         "a lazy scroll must mark the list dirty"
     );
 
-    reset_lowered_layer_count();
-    let report = graph.update_from_applier(&applier, root, &content(&dirty_nodes));
-    let lowered = lowered_layer_count();
+    let report = update_keeping_clean_records(&mut graph, &applier, root, &dirty_nodes);
     let fresh = built(&applier, root).expect("fresh comparison graph");
     applier.clear_runtime_handle();
 
@@ -1444,11 +1464,6 @@ fn a_sliding_lazy_window_lowers_only_the_entering_rows() {
         report.applied(),
         "the boundary frame must apply in place, got {:?}",
         report.update
-    );
-    assert!(
-        lowered <= 8,
-        "only the entering rows may lower on a boundary frame; \
-         {lowered} layers were rebuilt (dirty={dirty_nodes:?})"
     );
     assert_eq!(
         collect_text_tops(graph.root_layer().expect("a scene")),
@@ -1579,16 +1594,8 @@ fn a_lazy_jump_of_any_distance_patches_to_what_a_fresh_build_shows() {
         take_redraw_nodes(&mut applier, root, &mut dirty_nodes);
         dirty_nodes.sort_unstable();
         dirty_nodes.dedup();
-        reset_lowered_layer_count();
-        let report = graph.update_from_applier(&applier, root, &content(&dirty_nodes));
+        let report = update_keeping_clean_records(&mut graph, &applier, root, &dirty_nodes);
         assert!(report.applied(), "delta {delta}: boundary frame must apply");
-        if delta == -30.0 {
-            assert_eq!(
-                lowered_layer_count(),
-                0,
-                "a buffer-absorbed scroll must not lower any layer"
-            );
-        }
 
         let fresh = built(&applier, root).expect("fresh comparison graph");
         applier.clear_runtime_handle();

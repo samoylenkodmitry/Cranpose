@@ -246,13 +246,12 @@ fn a_box_whose_children_swap_places_reports_its_subtree_changed() {
 }
 
 #[test]
-fn clones_of_a_store_that_diverge_keep_versions_apart() {
-    let original = rooted_store();
-    let mut first = original.clone();
-    let mut second = original.clone();
+fn two_stores_with_the_same_updates_keep_versions_apart() {
+    let mut first = rooted_store();
+    let mut second = rooted_store();
 
     add_and_remove(&mut first, NodeId(2));
-    add_and_remove(&mut second, NodeId(3));
+    add_and_remove(&mut second, NodeId(2));
 
     assert_ne!(first.version(), second.version());
 }

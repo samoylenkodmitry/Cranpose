@@ -573,7 +573,7 @@ fn run_property_case(arcs: usize, layers_first: bool) {
     let initial_transform = transform_points(initial.root_layer().expect("a scene"), canvas_node)
         .expect("initial Canvas node transform");
     let mut content_graph = Scene::new();
-    content_graph.replace_store(initial.store().clone());
+    content_graph.rebuild_from_applier(&applier, composition_root);
     let mut layer_graph = initial;
     let initial_calls = draw_calls.get();
     let measure = |layers_only, graph: &mut Scene| {

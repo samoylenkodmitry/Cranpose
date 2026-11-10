@@ -7,8 +7,8 @@ use cranpose_ui::{ModifierNodeSlices, Point, Rect, Size};
 use super::{
     DrawTarget, Level, LowerContext, SnapshotNodeData, assign_layer,
     draw_recording::{NodeCommands, redraw_in_place},
-    modifier_slices_have_origin_sinks, note_layer_lowered, prepare_node_layer, read_node_data,
-    read_placed_node_data, remove_dirty_descendants, slices_hit_something,
+    modifier_slices_have_origin_sinks, prepare_node_layer, read_placed_node_data,
+    remove_dirty_descendants, slices_hit_something,
     text_node::{TextNodeParts, drawn_text, refresh_text_node},
     translate_layer::holds_hit_geometry,
     write_node_content, write_node_layer,
@@ -213,7 +213,7 @@ pub(super) fn update_dirty_inline(
     context: LowerContext,
     dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
 ) -> Option<bool> {
-    read_child_data(applier, node_id, |data| {
+    read_placed_node_data(applier, node_id, Level::Child, |data| {
         if lowers_inline(&data) {
             // Without a layer the node's layer properties draw nothing:
             // a node that kept its size only moves.
@@ -230,7 +230,6 @@ pub(super) fn update_dirty_inline(
             {
                 return false;
             }
-            note_layer_lowered();
             // The old draws go first, last to first, so draws of the same
             // kinds take their handles back in order and the leaf's items
             // read as before.
@@ -246,7 +245,6 @@ pub(super) fn update_dirty_inline(
             }
             return false;
         }
-        note_layer_lowered();
         store.clear_items(record);
         write_placed_child(applier, store, record, node_id, data, context);
         remove_dirty_descendants(store, record, dirty_nodes);
@@ -296,24 +294,10 @@ pub(super) fn retext_kept_inline(
     let Some(node_id) = store.layer(record).owner() else {
         return false;
     };
-    read_child_data(applier, node_id, |data| {
+    read_placed_node_data(applier, node_id, Level::Child, |data| {
         lowers_inline(&data) && retext_inline(store, record, &data, context)
     })
     .unwrap_or(false)
-}
-
-// Reads the data of `node_id`, a placed child drawn in its parent's layer,
-// as `read_placed_node_data` does without counting a lowering: an update
-// that only moves or retexts the node lowers nothing. `None` for a node
-// that is gone, not placed or a window root.
-fn read_child_data<R>(
-    applier: &MemoryApplier,
-    node_id: NodeId,
-    read: impl FnOnce(SnapshotNodeData<'_>) -> R,
-) -> Option<R> {
-    read_node_data(applier, node_id, |data| {
-        (!data.window_root && data.layout_state.is_placed()).then(|| read(data))
-    })?
 }
 
 // Turns `record`, the layer of a dirty node a scene update kept, into the
@@ -357,7 +341,9 @@ fn fold_leaf_layer(
     let Some(node_id) = layer.node_id() else {
         return;
     };
-    if !read_child_data(applier, node_id, |data| lowers_inline(&data)).unwrap_or(false) {
+    if !read_placed_node_data(applier, node_id, Level::Child, |data| lowers_inline(&data))
+        .unwrap_or(false)
+    {
         return;
     }
     let origin = layer.origin_in_parent();

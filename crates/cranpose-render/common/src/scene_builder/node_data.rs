@@ -7,7 +7,7 @@ use cranpose_core::{MemoryApplier, NodeId};
 use cranpose_ui::{LayoutNode, Point, Size, SubcomposeLayoutNode, widgets::LayoutState};
 use cranpose_ui_graphics::shared_sort;
 
-use super::{Level, SnapshotNodeData, note_layer_lowered};
+use super::{Level, SnapshotNodeData};
 
 pub(super) fn read_placed_node_data<R>(
     applier: &MemoryApplier,
@@ -22,7 +22,6 @@ pub(super) fn read_placed_node_data<R>(
             }
             data.layout_state = data.layout_state.at_origin();
         }
-        note_layer_lowered();
         if !data.layout_state.is_placed() {
             return None;
         }
