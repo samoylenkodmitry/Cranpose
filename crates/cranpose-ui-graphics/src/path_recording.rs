@@ -156,8 +156,6 @@ pub(crate) fn record_vector_path(
     blend_mode: BlendMode,
     side: PathSide,
 ) {
-    const MAX_MASK_PIXELS: f32 = 4096.0;
-
     if path.is_empty() || !brush.paints() {
         return;
     }
@@ -167,45 +165,68 @@ pub(crate) fn record_vector_path(
     }
 
     let rect = vector_mask_rect(bounds);
-    let origin = Point::new(rect.x, rect.y);
-    let mask_width = (rect.width * VECTOR_PATH_SUPERSAMPLE)
-        .ceil()
-        .clamp(1.0, MAX_MASK_PIXELS) as usize;
-    let mask_height = (rect.height * VECTOR_PATH_SUPERSAMPLE)
-        .ceil()
-        .clamp(1.0, MAX_MASK_PIXELS) as usize;
-    let mask_size = (mask_width, mask_height);
+    for_each_mask_tile(rect, |tile| {
+        let origin = Point::new(tile.x, tile.y);
+        let mask_size = (
+            (tile.width * VECTOR_PATH_SUPERSAMPLE).ceil().max(1.0) as usize,
+            (tile.height * VECTOR_PATH_SUPERSAMPLE).ceil().max(1.0) as usize,
+        );
+        let key = vector_path_mask_key(path, origin, mask_size, brush, brush_rect, side);
+        let image = match vector_path_mask_cache_get(key) {
+            Some(image) => image,
+            None => {
+                let Some(image) =
+                    rasterize_vector_path(path, brush, brush_rect, origin, mask_size, side)
+                else {
+                    return;
+                };
+                vector_path_mask_cache_put(key, image.clone());
+                image
+            }
+        };
 
-    let key = vector_path_mask_key(path, origin, mask_size, brush, brush_rect, side);
-    let image = match vector_path_mask_cache_get(key) {
-        Some(image) => image,
-        None => {
-            let Some(image) =
-                rasterize_vector_path(path, brush, brush_rect, origin, mask_size, side)
-            else {
-                return;
-            };
-            vector_path_mask_cache_put(key, image.clone());
+        let image = DrawPrimitive::Image {
+            rect: tile,
+            image,
+            alpha: 1.0,
+            color_filter: None,
+            sampling: ImageSampling::Linear,
+            src_rect: None,
+        };
+        recording.push_other(if blend_mode == BlendMode::SrcOver {
             image
-        }
-    };
-
-    let image = DrawPrimitive::Image {
-        rect,
-        image,
-        alpha: 1.0,
-        color_filter: None,
-        sampling: ImageSampling::Linear,
-        src_rect: None,
-    };
-    recording.push_other(if blend_mode == BlendMode::SrcOver {
-        image
-    } else {
-        DrawPrimitive::Blend {
-            primitive: Box::new(image),
-            blend_mode,
-        }
+        } else {
+            DrawPrimitive::Blend {
+                primitive: Box::new(image),
+                blend_mode,
+            }
+        });
     });
+}
+
+// Calls `tile` with each part of `rect` one coverage mask holds: a mask is
+// an image of at most `MAX_MASK_PIXELS` a side, so a larger rect takes
+// several, side by side.
+fn for_each_mask_tile(rect: Rect, mut tile: impl FnMut(Rect)) {
+    const MAX_MASK_PIXELS: f32 = 4096.0;
+    const SIDE: f32 = MAX_MASK_PIXELS / VECTOR_PATH_SUPERSAMPLE;
+
+    let mut y = 0.0;
+    while y < rect.height {
+        let height = (rect.height - y).min(SIDE);
+        let mut x = 0.0;
+        while x < rect.width {
+            let width = (rect.width - x).min(SIDE);
+            tile(Rect {
+                x: rect.x + x,
+                y: rect.y + y,
+                width,
+                height,
+            });
+            x += SIDE;
+        }
+        y += SIDE;
+    }
 }
 
 /// The rect a path's coverage mask covers: its bounds out to whole pixels and
