@@ -42,6 +42,25 @@ impl RecentPeak {
         self.shrink(list, floor);
     }
 
+    /// [`Self::trim`] for a list with room for more than four times `floor`
+    /// entries. A list with less room gives back none whatever its peak, so
+    /// its frames go unnoted until its room grows past that; the peak a
+    /// frame notes then is at most twice `floor` above what noting every
+    /// frame would hold.
+    #[inline]
+    pub fn trim_past_floor<T>(&mut self, list: &mut Vec<T>, floor: usize) {
+        if list.capacity() > 4 * floor {
+            self.trim_roomy(list, floor);
+        }
+    }
+
+    // Out of line, so the checks of many small lists lie together.
+    #[cold]
+    #[inline(never)]
+    fn trim_roomy<T>(&mut self, list: &mut Vec<T>, floor: usize) {
+        self.trim(list, floor);
+    }
+
     /// Notes the frame `list` held, empties it and gives back the room the
     /// recent frames left unused, keeping room for at least `floor`.
     #[inline]

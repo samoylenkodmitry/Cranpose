@@ -21,9 +21,10 @@ impl ListRoom {
         nodes: [&mut Vec<NodeId>; 5],
         updates: &mut Vec<(NodeId, NodeUpdate)>,
     ) {
+        // Most frames name a few nodes into small lists.
         for (peak, list) in self.nodes.iter_mut().zip(nodes) {
-            peak.trim(list, LIST_ROOM_KEPT);
+            peak.trim_past_floor(list, LIST_ROOM_KEPT);
         }
-        self.updates.trim(updates, LIST_ROOM_KEPT);
+        self.updates.trim_past_floor(updates, LIST_ROOM_KEPT);
     }
 }
