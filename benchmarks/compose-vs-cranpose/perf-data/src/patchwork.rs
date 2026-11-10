@@ -62,6 +62,43 @@ impl Patch {
     ];
 }
 
+/// One patch's tiles: `columns` by `rows` of them, `width` by `height`
+/// points each.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct PatchTiles {
+    pub columns: usize,
+    pub rows: usize,
+    pub width: f32,
+    pub height: f32,
+}
+
+impl PatchTiles {
+    /// The tiles of `tier` that fill a patch `patch_width` by `patch_height`
+    /// points.
+    pub fn new(tier: crate::WallTier, patch_width: f32, patch_height: f32) -> Self {
+        let (columns, rows) = crate::wall_grid(tier, patch_width, patch_height);
+        Self {
+            columns,
+            rows,
+            width: tier.tile_width,
+            height: tier.tile_height,
+        }
+    }
+
+    /// The tiles as items that change in turn.
+    pub fn in_turn(self) -> InTurn {
+        InTurn {
+            columns: self.columns,
+            rows: self.rows,
+        }
+    }
+
+    /// The number of tiles.
+    pub fn count(self) -> usize {
+        self.columns * self.rows
+    }
+}
+
 /// The step, in tiles or words, of everything that jumps: with the still
 /// wall's cursor it crosses a patch in a few frames.
 const JUMP: usize = 37;

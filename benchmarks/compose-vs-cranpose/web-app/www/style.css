@@ -703,6 +703,12 @@ body.still-wall {
   will-change: transform;
 }
 
+.chat-spinner svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
 .chat-shimmer {
   color: transparent;
   background: linear-gradient(90deg, #64748B, #FFFFFF, #64748B) 0 0 / 120px 100% repeat-x;

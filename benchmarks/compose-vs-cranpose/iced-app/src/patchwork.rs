@@ -53,28 +53,14 @@ pub struct Patchwork {
     advances: RefCell<HashMap<char, f32>>,
 }
 
-// One patch's tiles and its size.
+// One patch: its tiles and its size.
 #[derive(Clone, Copy)]
 struct Grid {
-    columns: usize,
-    rows: usize,
-    width: f32,
-    height: f32,
+    tiles: PatchTiles,
     patch: Size,
 }
 
 impl Grid {
-    fn in_turn(self) -> InTurn {
-        InTurn {
-            columns: self.columns,
-            rows: self.rows,
-        }
-    }
-
-    fn tiles(self) -> usize {
-        self.columns * self.rows
-    }
-
     // `content` in a patch's box, which cuts what lies past it.
     fn patch<'a>(self, content: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
         container(content)
@@ -167,12 +153,8 @@ impl Patchwork {
             ((self.window.width - CHAT_WIDTH) / PATCH_COLUMNS as f32).floor(),
             ((self.window.height - 56.0 - WALL_CLOCK_HEIGHT) / PATCH_ROWS as f32).floor(),
         );
-        let (columns, rows) = wall_grid(self.tier, patch.width, patch.height);
         Grid {
-            columns,
-            rows,
-            width: self.tier.tile_width,
-            height: self.tier.tile_height,
+            tiles: PatchTiles::new(self.tier, patch.width, patch.height),
             patch,
         }
     }
@@ -231,8 +213,8 @@ impl Patchwork {
             Patch::Scroll => scroll(grid, frame),
             Patch::Paragraph => container(
                 line(
-                    patchwork_paragraph(frame, patchwork_paragraph_words(grid.tiles())),
-                    wall_text_size(grid.height).0,
+                    patchwork_paragraph(frame, patchwork_paragraph_words(grid.tiles.count())),
+                    wall_text_size(grid.tiles.height).0,
                     ROBOTO,
                 )
                 .width(Length::Fill),
@@ -428,10 +410,11 @@ fn highlighted(turn: usize, code: &str) -> View {
 }
 
 fn still(grid: Grid) -> View {
-    let (width, height) = (grid.width, grid.height);
-    lazy((grid.columns, grid.rows), move |&(columns, rows)| {
-        tiles(columns, rows, width, height)
-    })
+    let (width, height) = (grid.tiles.width, grid.tiles.height);
+    lazy(
+        (grid.tiles.columns, grid.tiles.rows),
+        move |&(columns, rows)| tiles(columns, rows, width, height),
+    )
     .into()
 }
 
@@ -460,10 +443,10 @@ impl canvas::Program<Message> for Charts<'_> {
         bounds: Rectangle,
         _: Cursor,
     ) -> Vec<canvas::Geometry> {
-        let (columns, rows) = patchwork_pairs(self.grid.columns, self.grid.rows);
+        let (columns, rows) = patchwork_pairs(self.grid.tiles.columns, self.grid.tiles.rows);
         let (width, height) = (
-            patchwork_double(self.grid.width),
-            patchwork_double(self.grid.height),
+            patchwork_double(self.grid.tiles.width),
+            patchwork_double(self.grid.tiles.height),
         );
         let step = width / (PATCHWORK_CHART_POINTS - 1) as f32;
         vec![self.cache.draw(renderer, bounds.size(), |frame| {
@@ -496,15 +479,15 @@ impl canvas::Program<Message> for Charts<'_> {
 
 // Tiles whose fill changes in turn: a row is lazy on how often it changed.
 fn recolor(grid: Grid, frame: u32) -> View {
-    let turn = grid.in_turn();
-    rows_of((0..grid.rows).map(|row| {
-        let first = row * grid.columns;
+    let turn = grid.tiles.in_turn();
+    rows_of((0..grid.tiles.rows).map(|row| {
+        let first = row * grid.tiles.columns;
         lazy((first, turn.step(first, frame)), move |_| -> View {
-            Row::with_children((first..first + grid.columns).map(|index| {
+            Row::with_children((first..first + grid.tiles.columns).map(|index| {
                 tile_on(
                     index,
-                    Size::new(grid.width, grid.height),
-                    grid.height,
+                    Size::new(grid.tiles.width, grid.tiles.height),
+                    grid.tiles.height,
                     rgb(patchwork_recolor_rgb(index, frame, turn)),
                 )
             }))
@@ -517,8 +500,13 @@ fn recolor(grid: Grid, frame: u32) -> View {
 
 // Cards pinned at the frame's places, each lazy on its number.
 fn cards(grid: Grid, frame: u32) -> View {
-    let cards = Cards::new(grid.columns, grid.rows, grid.height, grid.patch.height);
-    let header = patchwork_reorder_width(cards.columns, grid.width);
+    let cards = Cards::new(
+        grid.tiles.columns,
+        grid.tiles.rows,
+        grid.tiles.height,
+        grid.patch.height,
+    );
+    let header = patchwork_reorder_width(cards.columns, grid.tiles.width);
     Stack::with_children(
         (0..cards.places())
             .filter_map(|place| cards.place(place, frame))
@@ -528,14 +516,14 @@ fn cards(grid: Grid, frame: u32) -> View {
                     let title = container(
                         line(
                             patchwork_card_title(id),
-                            wall_text_size(grid.height).0,
+                            wall_text_size(grid.tiles.height).0,
                             ROBOTO_BOLD,
                         )
                         .wrapping(text::Wrapping::None),
                     )
                     .width(header)
-                    .height(grid.height)
-                    .padding(wall_padding(grid.height))
+                    .height(grid.tiles.height)
+                    .padding(wall_padding(grid.tiles.height))
                     .clip(true)
                     .style(move |_| rounded(rgb(patchwork_card_rgb(id)), WALL_CORNER));
                     let rows = (0..cards.rows).map(|row| {
@@ -543,8 +531,8 @@ fn cards(grid: Grid, frame: u32) -> View {
                             let place = row * cards.columns + column;
                             tile(
                                 patchwork_card_tile(id, place, cards.tiles()),
-                                grid.width,
-                                grid.height,
+                                grid.tiles.width,
+                                grid.tiles.height,
                             )
                         }))
                         .spacing(WALL_GAP)
@@ -566,16 +554,17 @@ fn cards(grid: Grid, frame: u32) -> View {
 
 // A wrapping row of items in the frame's order, each lazy on its number.
 fn reorder(grid: Grid, frame: u32) -> View {
-    let count = patchwork_reorder_count(grid.tiles());
+    let count = patchwork_reorder_count(grid.tiles.count());
     container(
         Row::with_children((0..count).map(|position| {
             let item = patchwork_reorder_item(position, frame, count);
             lazy(item, move |&item| {
-                let width = patchwork_reorder_width(patchwork_reorder_units(item), grid.width);
+                let width =
+                    patchwork_reorder_width(patchwork_reorder_units(item), grid.tiles.width);
                 tile_on(
                     item,
-                    Size::new(width, grid.height),
-                    grid.height,
+                    Size::new(width, grid.tiles.height),
+                    grid.tiles.height,
                     rgb(wall_fill_rgb(item)),
                 )
             })
@@ -593,16 +582,16 @@ fn reorder(grid: Grid, frame: u32) -> View {
 // Nests of boxes around digits that change in turn: a row of nests is lazy
 // on how often it changed.
 fn deep(grid: Grid, frame: u32) -> View {
-    let (columns, rows) = patchwork_pairs(grid.columns, grid.rows);
+    let (columns, rows) = patchwork_pairs(grid.tiles.columns, grid.tiles.rows);
     let turn = InTurn { columns, rows };
-    let padding = wall_padding(grid.height);
+    let padding = wall_padding(grid.tiles.height);
     rows_of((0..rows).map(|row| {
         let first = row * columns;
         lazy((first, turn.step(first, frame)), move |_| -> View {
             Row::with_children((first..first + columns).map(|index| {
                 let digits = line(
                     patchwork_deep_value(index, frame, turn),
-                    wall_text_size(grid.height).0,
+                    wall_text_size(grid.tiles.height).0,
                     ROBOTO_BOLD,
                 )
                 .wrapping(text::Wrapping::None);
@@ -617,8 +606,8 @@ fn deep(grid: Grid, frame: u32) -> View {
                         .into();
                 }
                 container(nest)
-                    .width(patchwork_double(grid.width))
-                    .height(patchwork_double(grid.height))
+                    .width(patchwork_double(grid.tiles.width))
+                    .height(patchwork_double(grid.tiles.height))
                     .into()
             }))
             .spacing(WALL_GAP)
@@ -631,13 +620,20 @@ fn deep(grid: Grid, frame: u32) -> View {
 // The rows the frame shows and the one the patch's edge cuts, each lazy on
 // its place in the list.
 fn scroll(grid: Grid, frame: u32) -> View {
-    let first = patchwork_scroll_first(frame, patchwork_scroll_rows(grid.columns), grid.rows);
-    rows_of((first..=first + grid.rows).map(|row| {
+    let first = patchwork_scroll_first(
+        frame,
+        patchwork_scroll_rows(grid.tiles.columns),
+        grid.tiles.rows,
+    );
+    rows_of((first..=first + grid.tiles.rows).map(|row| {
         lazy(row, move |&row| -> View {
-            Row::with_children(
-                (0..grid.columns)
-                    .map(|column| tile(row * grid.columns + column, grid.width, grid.height)),
-            )
+            Row::with_children((0..grid.tiles.columns).map(|column| {
+                tile(
+                    row * grid.tiles.columns + column,
+                    grid.tiles.width,
+                    grid.tiles.height,
+                )
+            }))
             .spacing(WALL_GAP)
             .into()
         })
@@ -647,9 +643,12 @@ fn scroll(grid: Grid, frame: u32) -> View {
 
 // Translucent tiles pinned over one another.
 fn pile(grid: Grid, frame: u32) -> View {
-    let (columns, rows) = patchwork_pile_grid(grid.columns, grid.rows);
+    let (columns, rows) = patchwork_pile_grid(grid.tiles.columns, grid.tiles.rows);
     let opaque = patchwork_pile_opaque(frame, columns * rows);
-    let size = Size::new(patchwork_double(grid.width), patchwork_double(grid.height));
+    let size = Size::new(
+        patchwork_double(grid.tiles.width),
+        patchwork_double(grid.tiles.height),
+    );
     Stack::with_children((0..columns * rows).map(|index| {
         let fill = if index == opaque {
             rgb(PATCHWORK_PILE_OPAQUE_RGB)
@@ -657,9 +656,9 @@ fn pile(grid: Grid, frame: u32) -> View {
             let [red, green, blue] = wall_fill_rgb(index);
             Color::from_rgba8(red, green, blue, f32::from(PATCHWORK_PILE_ALPHA) / 255.0)
         };
-        pin(tile_on(index, size, grid.height, fill))
-            .x(WALL_GAP + (index % columns) as f32 * (grid.width + WALL_GAP))
-            .y(WALL_GAP + (index / columns) as f32 * (grid.height + WALL_GAP))
+        pin(tile_on(index, size, grid.tiles.height, fill))
+            .x(WALL_GAP + (index % columns) as f32 * (grid.tiles.width + WALL_GAP))
+            .y(WALL_GAP + (index / columns) as f32 * (grid.tiles.height + WALL_GAP))
             .into()
     }))
     .width(grid.patch.width)

@@ -44,7 +44,7 @@ pub(crate) fn WallApp() -> Element {
 
 /// The line above the wall: the frame's number, new each frame.
 #[component]
-fn Clock() -> Element {
+pub(crate) fn Clock() -> Element {
     rsx! {
         div { class: "wall-clock", "{wall_clock(FRAME())}" }
     }

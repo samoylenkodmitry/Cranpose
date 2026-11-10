@@ -22,7 +22,7 @@ use super::{
 };
 use crate::data::{
     self, Cards, ChatToken, InTurn, PATCH_COLUMNS, PATCH_ROWS, PATCHWORK_CHART_POINTS,
-    PATCHWORK_DEPTH, Patch, WALL_GAP,
+    PATCHWORK_DEPTH, Patch, PatchTiles, WALL_GAP,
 };
 
 /// The patchwork's tier and the frame it freezes on; 0 runs on.
@@ -32,30 +32,15 @@ pub struct PatchworkLoad {
     pub freeze: u32,
 }
 
-// One patch's tiles: `columns` by `rows` of them `width` by `height` points
-// each, in a patch `patch_width` by `patch_height` points.
+// One patch: its tiles and its size in points.
 #[derive(Clone, Copy, PartialEq, Debug)]
 struct Grid {
-    columns: usize,
-    rows: usize,
-    width: f32,
-    height: f32,
+    tiles: PatchTiles,
     patch_width: f32,
     patch_height: f32,
 }
 
 impl Grid {
-    fn in_turn(self) -> InTurn {
-        InTurn {
-            columns: self.columns,
-            rows: self.rows,
-        }
-    }
-
-    fn tiles(self) -> usize {
-        self.columns * self.rows
-    }
-
     // A patch's own box: the patch's size, which cuts what lies past it.
     fn patch(self) -> Modifier {
         Modifier::empty()
@@ -79,15 +64,11 @@ pub fn PatchworkScreen(load: PatchworkLoad) {
                     let patches_width = scope.max_width().0 - data::CHAT_WIDTH;
                     let patch_width = (patches_width / PATCH_COLUMNS as f32).floor();
                     let patch_height = (scope.max_height().0 / PATCH_ROWS as f32).floor();
-                    let (columns, rows) = data::wall_grid(tier, patch_width, patch_height);
                     Patches(
                         frame,
                         load,
                         Grid {
-                            columns,
-                            rows,
-                            width: tier.tile_width,
-                            height: tier.tile_height,
+                            tiles: PatchTiles::new(tier, patch_width, patch_height),
                             patch_width,
                             patch_height,
                         },
@@ -115,27 +96,30 @@ fn Patches(frame: MutableState<u32>, load: PatchworkLoad, grid: Grid) {
             .map(Rc::new)
     })
     .with(|feed| feed.clone());
-    let scroll_rows = data::patchwork_scroll_rows(grid.columns);
-    LaunchedEffect((freeze, grid.columns, grid.rows), async move |scope| {
-        let clock = scope.runtime().frame_clock();
-        let mut index = 0u32;
-        loop {
-            clock.next_frame().await;
-            index += 1;
-            frame.set(index);
-            list_state.scroll_to_item(
-                data::patchwork_scroll_first(index, scroll_rows, grid.rows),
-                0.0,
-            );
-            if let Some(feed) = &feed {
-                chat.advance(feed);
+    let scroll_rows = data::patchwork_scroll_rows(grid.tiles.columns);
+    LaunchedEffect(
+        (freeze, grid.tiles.columns, grid.tiles.rows),
+        async move |scope| {
+            let clock = scope.runtime().frame_clock();
+            let mut index = 0u32;
+            loop {
+                clock.next_frame().await;
+                index += 1;
+                frame.set(index);
+                list_state.scroll_to_item(
+                    data::patchwork_scroll_first(index, scroll_rows, grid.tiles.rows),
+                    0.0,
+                );
+                if let Some(feed) = &feed {
+                    chat.advance(feed);
+                }
+                if freeze > 0 && index >= freeze {
+                    log::info!("PERF frozen frame={index}");
+                    break;
+                }
             }
-            if freeze > 0 && index >= freeze {
-                log::info!("PERF frozen frame={index}");
-                break;
-            }
-        }
-    });
+        },
+    );
     Row(Modifier::empty(), RowSpec::default(), move || {
         Column(Modifier::empty(), ColumnSpec::default(), move || {
             for row in 0..PATCH_ROWS {
@@ -169,7 +153,12 @@ fn show(patch: Patch, frame: MutableState<u32>, list_state: LazyListState, grid:
 #[composable]
 fn Still(grid: Grid) {
     Box(grid.patch(), BoxSpec::default(), move || {
-        Wall(grid.columns, grid.rows, grid.width, grid.height);
+        Wall(
+            grid.tiles.columns,
+            grid.tiles.rows,
+            grid.tiles.width,
+            grid.tiles.height,
+        );
     });
 }
 
@@ -177,13 +166,13 @@ fn Still(grid: Grid) {
 // reads no state, so no frame records it again.
 #[composable]
 fn Charts(grid: Grid) {
-    let (columns, rows) = data::patchwork_pairs(grid.columns, grid.rows);
+    let (columns, rows) = data::patchwork_pairs(grid.tiles.columns, grid.tiles.rows);
     Box(grid.patch(), BoxSpec::default(), move || {
         tile_rows(columns, rows, move |index| {
             Chart(
                 index,
-                data::patchwork_double(grid.width),
-                data::patchwork_double(grid.height),
+                data::patchwork_double(grid.tiles.width),
+                data::patchwork_double(grid.tiles.height),
             );
         });
     });
@@ -220,7 +209,7 @@ fn Chart(index: usize, width: f32, height: f32) {
 #[composable]
 fn Recolor(frame: MutableState<u32>, grid: Grid) {
     Box(grid.patch(), BoxSpec::default(), move || {
-        tile_rows(grid.columns, grid.rows, move |index| {
+        tile_rows(grid.tiles.columns, grid.tiles.rows, move |index| {
             RecolorTile(frame, index, grid);
         });
     });
@@ -228,8 +217,8 @@ fn Recolor(frame: MutableState<u32>, grid: Grid) {
 
 #[composable]
 fn RecolorTile(frame: MutableState<u32>, index: usize, grid: Grid) {
-    let (width, height) = (grid.width, grid.height);
-    let turn = grid.in_turn();
+    let (width, height) = (grid.tiles.width, grid.tiles.height);
+    let turn = grid.tiles.in_turn();
     let fill = derivedStateOf(move || data::patchwork_recolor_rgb(index, frame.get(), turn));
     Column(
         Modifier::empty()
@@ -252,7 +241,12 @@ fn RecolorTile(frame: MutableState<u32>, index: usize, grid: Grid) {
 // cards and composes, lays out and draws none of them again.
 #[composable]
 fn CardStack(frame: MutableState<u32>, grid: Grid) {
-    let cards = Cards::new(grid.columns, grid.rows, grid.height, grid.patch_height);
+    let cards = Cards::new(
+        grid.tiles.columns,
+        grid.tiles.rows,
+        grid.tiles.height,
+        grid.patch_height,
+    );
     let moves = derivedStateOf(move || frame.get() / data::PATCHWORK_CARD_FRAMES);
     let begun = moves.get() * data::PATCHWORK_CARD_FRAMES;
     Box(grid.patch(), BoxSpec::default(), move || {
@@ -267,7 +261,7 @@ fn CardStack(frame: MutableState<u32>, grid: Grid) {
 // Card `id`: its header over its rows of tiles.
 #[composable]
 fn Card(frame: MutableState<u32>, cards: Cards, id: usize, grid: Grid) {
-    let width = data::patchwork_reorder_width(cards.columns, grid.width);
+    let width = data::patchwork_reorder_width(cards.columns, grid.tiles.width);
     Column(
         Modifier::empty()
             .padding_horizontal(WALL_GAP)
@@ -280,16 +274,16 @@ fn Card(frame: MutableState<u32>, cards: Cards, id: usize, grid: Grid) {
         move || {
             Box(
                 Modifier::empty()
-                    .size_points(width, grid.height)
+                    .size_points(width, grid.tiles.height)
                     .background(rgb(data::patchwork_card_rgb(id)))
                     .rounded_corners(data::WALL_CORNER)
-                    .padding(data::wall_padding(grid.height)),
+                    .padding(data::wall_padding(grid.tiles.height)),
                 BoxSpec::default(),
                 move || {
                     TextWithOptions(
                         data::patchwork_card_title(id),
                         Modifier::empty(),
-                        text_style(data::wall_text_size(grid.height).0, INK, true),
+                        text_style(data::wall_text_size(grid.tiles.height).0, INK, true),
                         ONE_LINE,
                     );
                 },
@@ -303,8 +297,8 @@ fn Card(frame: MutableState<u32>, cards: Cards, id: usize, grid: Grid) {
                             let tile = row * cards.columns + column;
                             Tile(
                                 data::patchwork_card_tile(id, tile, cards.tiles()),
-                                grid.width,
-                                grid.height,
+                                grid.tiles.width,
+                                grid.tiles.height,
                             );
                         }
                     },
@@ -318,7 +312,7 @@ fn Card(frame: MutableState<u32>, cards: Cards, id: usize, grid: Grid) {
 // item keeps its key, so a frame moves those two and composes none again.
 #[composable]
 fn Reorder(frame: MutableState<u32>, grid: Grid) {
-    let count = data::patchwork_reorder_count(grid.tiles());
+    let count = data::patchwork_reorder_count(grid.tiles.count());
     let turned = frame.get();
     FlowRow(
         grid.patch().padding(WALL_GAP),
@@ -328,10 +322,12 @@ fn Reorder(frame: MutableState<u32>, grid: Grid) {
         move || {
             for position in 0..count {
                 let item = data::patchwork_reorder_item(position, turned, count);
-                let width =
-                    data::patchwork_reorder_width(data::patchwork_reorder_units(item), grid.width);
+                let width = data::patchwork_reorder_width(
+                    data::patchwork_reorder_units(item),
+                    grid.tiles.width,
+                );
                 key(item, move || {
-                    Tile(item, width, grid.height);
+                    Tile(item, width, grid.tiles.height);
                 });
             }
         },
@@ -349,17 +345,17 @@ struct Nest {
 // Nests of boxes around digits that change in turn.
 #[composable]
 fn Deep(frame: MutableState<u32>, grid: Grid) {
-    let (columns, rows) = data::patchwork_pairs(grid.columns, grid.rows);
+    let (columns, rows) = data::patchwork_pairs(grid.tiles.columns, grid.tiles.rows);
     let nest = Nest {
-        height: grid.height,
+        height: grid.tiles.height,
         turn: InTurn { columns, rows },
     };
     Box(grid.patch(), BoxSpec::default(), move || {
         tile_rows(columns, rows, move |index| {
             Box(
                 Modifier::empty().size_points(
-                    data::patchwork_double(grid.width),
-                    data::patchwork_double(grid.height),
+                    data::patchwork_double(grid.tiles.width),
+                    data::patchwork_double(grid.tiles.height),
                 ),
                 BoxSpec::default(),
                 move || NestLevel(frame, index, 0, nest),
@@ -415,7 +411,8 @@ fn ScrollList(list_state: LazyListState, grid: Grid) {
             .content_padding_all(WALL_GAP),
         move |scope| {
             scope.items(
-                LazyItems::new(data::patchwork_scroll_rows(grid.columns)).key(|row| row as u64),
+                LazyItems::new(data::patchwork_scroll_rows(grid.tiles.columns))
+                    .key(|row| row as u64),
                 move |row| ScrollRow(row, grid),
             );
         },
@@ -428,8 +425,12 @@ fn ScrollRow(row: usize, grid: Grid) {
         Modifier::empty(),
         RowSpec::new().horizontal_arrangement(LinearArrangement::spaced_by(WALL_GAP)),
         move || {
-            for column in 0..grid.columns {
-                Tile(row * grid.columns + column, grid.width, grid.height);
+            for column in 0..grid.tiles.columns {
+                Tile(
+                    row * grid.tiles.columns + column,
+                    grid.tiles.width,
+                    grid.tiles.height,
+                );
             }
         },
     );
@@ -448,9 +449,12 @@ fn Paragraph(frame: MutableState<u32>, grid: Grid) {
 #[composable]
 fn ParagraphText(frame: MutableState<u32>, grid: Grid) {
     Text(
-        data::patchwork_paragraph(frame.get(), data::patchwork_paragraph_words(grid.tiles())),
+        data::patchwork_paragraph(
+            frame.get(),
+            data::patchwork_paragraph_words(grid.tiles.count()),
+        ),
         Modifier::empty(),
-        text_style(data::wall_text_size(grid.height).0, INK, false),
+        text_style(data::wall_text_size(grid.tiles.height).0, INK, false),
     );
 }
 
@@ -458,7 +462,7 @@ fn ParagraphText(frame: MutableState<u32>, grid: Grid) {
 // tile composes again only when it turns opaque or translucent.
 #[composable]
 fn Pile(frame: MutableState<u32>, grid: Grid) {
-    let (columns, rows) = data::patchwork_pile_grid(grid.columns, grid.rows);
+    let (columns, rows) = data::patchwork_pile_grid(grid.tiles.columns, grid.tiles.rows);
     let opaque = data::patchwork_pile_opaque(frame.get(), columns * rows);
     Box(grid.patch(), BoxSpec::default(), move || {
         for index in 0..columns * rows {
@@ -484,17 +488,17 @@ fn PileTile(index: usize, column: usize, row: usize, grid: Grid, opaque: bool) {
     Column(
         Modifier::empty()
             .offset(
-                WALL_GAP + column as f32 * (grid.width + WALL_GAP),
-                WALL_GAP + row as f32 * (grid.height + WALL_GAP),
+                WALL_GAP + column as f32 * (grid.tiles.width + WALL_GAP),
+                WALL_GAP + row as f32 * (grid.tiles.height + WALL_GAP),
             )
             .size_points(
-                data::patchwork_double(grid.width),
-                data::patchwork_double(grid.height),
+                data::patchwork_double(grid.tiles.width),
+                data::patchwork_double(grid.tiles.height),
             )
             .background(fill)
             .rounded_corners(data::WALL_CORNER)
-            .padding(data::wall_padding(grid.height)),
+            .padding(data::wall_padding(grid.tiles.height)),
         ColumnSpec::default(),
-        move || tile_content(index, grid.height),
+        move || tile_content(index, grid.tiles.height),
     );
 }
