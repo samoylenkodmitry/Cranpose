@@ -185,6 +185,9 @@ impl Cull<'_> {
 enum Scope {
     // All the record's subtree draws.
     Subtree,
+    // All the record's subtree draws, placed anew: the record moved or is
+    // new.
+    Placed,
     // What the record draws of its own, within the reach in its space.
     Own(Reach),
 }
@@ -193,6 +196,7 @@ impl Scope {
     fn of(event: RecordEvent) -> Self {
         match event {
             RecordEvent::Redrawn(within) => Self::Own(within),
+            RecordEvent::Moved | RecordEvent::Inserted => Self::Placed,
             _ => Self::Subtree,
         }
     }
@@ -380,6 +384,35 @@ impl TargetState {
         (known && !self.begun.1).then_some(self.begun.0)
     }
 
+    // The damage the frame takes when each moved and new record takes the
+    // area the frame before tells for it: its reach, placed at the origin
+    // the frame before drew its parent's space at. `None` when the frame
+    // works out no damage, an old area is not known, or a moved record casts
+    // an elevation shadow or lies under a parent the frame before drew
+    // through a surface or under a turn: the walk then works the areas out.
+    pub(crate) fn predicted_damage(&self, store: &SceneStore) -> Option<Damage> {
+        let setting = self.setting?;
+        let mut damage = self.begun()?;
+        for &(record, scope) in &self.changed {
+            let (Scope::Placed, Some(id)) = (scope, store.resolve(record)) else {
+                continue;
+            };
+            let extent = store.layer(id).extent();
+            let (Reach::Finite(rect), None) = (extent.reach, extent.caster) else {
+                return None;
+            };
+            let origin = store
+                .parent(id)
+                .and_then(|parent| self.shown(store.record_ref(parent)))
+                .and_then(|shown| shown.origin)?;
+            let placed = rect.translate(origin.x, origin.y);
+            if let Some(pixels) = PixelBox::of(placed, setting.root_scale, setting.viewport) {
+                damage.add(pixels.rect());
+            }
+        }
+        Some(settle(damage, setting.viewport))
+    }
+
     // What a walk of the frame leaves out of `region` of the records of
     // `store`: it walks every changed record and its ancestors, and all of
     // a moved or new record's subtree.
@@ -391,7 +424,7 @@ impl TargetState {
                 continue;
             };
             let visit = match scope {
-                Scope::Subtree => Visit::WalkAll,
+                Scope::Subtree | Scope::Placed => Visit::WalkAll,
                 Scope::Own(_) => Visit::Walk,
             };
             let mut next = self.mark(id.index(), visit).then_some(id);
@@ -597,7 +630,7 @@ impl TargetState {
         };
         self.shown(record)
             .map_or(Area::Hidden, |shown| match scope {
-                Scope::Subtree => shown.area,
+                Scope::Subtree | Scope::Placed => shown.area,
                 Scope::Own(within) => shown.own_part(within, setting),
             })
     }
