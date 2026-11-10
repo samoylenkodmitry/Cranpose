@@ -8,7 +8,10 @@ use cranpose_ui_graphics::{Rect, Size};
 use cranpose_ui_layout::Placement;
 
 use super::{ChildPlacement, LayoutCells, NodeCache};
-use crate::{layout::LayoutRuntimeState, render_state::AppContext};
+use crate::{
+    layout::{LayoutChildMeasureState, LayoutRuntimeState},
+    render_state::AppContext,
+};
 
 // What layout reaches of a node without the applier, and what its parent's
 // record of it, its kept measurement and its draws' coordinator rects share:
@@ -17,6 +20,8 @@ pub(crate) struct LayoutParts {
     cache: NodeCache,
     layout_state: LayoutCells,
     runtime_state: RefCell<LayoutRuntimeState>,
+    // The record the node's parent keeps of it.
+    record: LayoutChildMeasureState,
 }
 
 impl LayoutParts {
@@ -25,6 +30,7 @@ impl LayoutParts {
             cache: NodeCache::default(),
             layout_state: LayoutCells::default(),
             runtime_state: RefCell::new(runtime_state),
+            record: LayoutChildMeasureState::default(),
         }
     }
 
@@ -42,6 +48,10 @@ impl LayoutParts {
 
     pub(crate) fn layout_state(&self) -> &LayoutCells {
         &self.layout_state
+    }
+
+    pub(crate) fn record(&self) -> &LayoutChildMeasureState {
+        &self.record
     }
 
     // Places node `node_id`, whose parts these are, where `placer` placed it

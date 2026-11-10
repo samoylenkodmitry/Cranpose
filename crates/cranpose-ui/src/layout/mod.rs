@@ -35,9 +35,8 @@ use cranpose_ui_graphics::ProjectiveTransform;
 use cranpose_ui_layout::{AlignmentLines, Constraints, MeasurePolicy, PlaceTarget};
 pub(crate) use frame_layout_arena::FrameLayoutArena;
 use frame_layout_arena::VecPools;
-use layout_child_measure_state::{
-    ChildPass, LayoutChildMeasureState, inherited_alignment_lines, read_cell,
-};
+pub(crate) use layout_child_measure_state::LayoutChildMeasureState;
+use layout_child_measure_state::{ChildPass, inherited_alignment_lines, read_cell};
 use layout_node_data::{role_from_modifier_slices, snapshot_node_data};
 pub(crate) use layout_runtime_state::LayoutRuntimeState;
 use live_layout_node::{LiveLayoutNode, read_live_layout_node};
@@ -1489,8 +1488,8 @@ impl LayoutBuilderState {
         );
 
         if let Some(err) = runtime_state.take_child_error() {
-            for child_state in runtime_state.child_states() {
-                child_state.measured.take();
+            for child in runtime_state.child_states() {
+                child.record().measured.take();
             }
             if runtime_state.take_moved_coordinators() {
                 let layout_state = parts.layout_state();
@@ -1716,19 +1715,16 @@ impl LayoutBuilderState {
             .unwrap_or_default()
             .iter()
             .enumerate()
-            .find(|(_, state)| state.node_id == child_id)
+            .find(|(_, state)| state.record().child_id() == child_id)
         else {
             return Ok(ChildChange::Refuse);
         };
         *next_state += offset + 1;
-        // A clean child's flags sit in the cache its record shares with it.
-        if read_cell(&state.parts, |parts| {
-            parts
-                .as_ref()
-                .is_some_and(|parts| !parts.cache().dirt().any())
-        }) {
+        // A clean child's flags sit in the cache of its parts.
+        if !state.cache().dirt().any() {
             return Ok(ChildChange::Unchanged);
         }
+        let state = state.record();
         self.child_change(child_id, |view| {
             let parent_data_changed = view.parent_data.as_ref().is_some_and(|data| {
                 state.reads_parent_data_change(&*runtime_state.measure_policy, data)
@@ -1944,9 +1940,10 @@ fn policy_intrinsic(
     }
 }
 
-impl PlaceTarget for LayoutChildMeasureState {
+// A child's parts take the place its parent's policy gives the child.
+impl PlaceTarget for LayoutParts {
     fn place(&self, x: f32, y: f32) {
-        let internal_offset = read_cell(&self.measured, |measured| {
+        let internal_offset = read_cell(&self.record().measured, |measured| {
             measured
                 .as_ref()
                 .map(|measured| measured.offset)

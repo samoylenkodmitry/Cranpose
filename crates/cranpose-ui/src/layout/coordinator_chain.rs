@@ -15,13 +15,13 @@ use cranpose_foundation::{
 use cranpose_ui_layout::{AlignmentLines, Constraints, MeasurePolicy, Placement};
 
 use super::{
-    LayoutChildMeasureState, LayoutNodeContext, ModifierChainInputs,
+    LayoutNodeContext, ModifierChainInputs,
     core::{Measurable, Placeable},
     inherited_alignment_lines, policy_intrinsic,
 };
 use crate::{
     modifier::{Point, Rect as GeometryRect, Size},
-    widgets::nodes::{IntrinsicKind, LayoutNode},
+    widgets::nodes::{IntrinsicKind, LayoutNode, LayoutParts},
 };
 
 /// The intrinsic size `kind` names, of a measurable.
@@ -62,7 +62,7 @@ pub(super) struct CoordinatorFrame<'a> {
     measure_policy: &'a Rc<dyn MeasurePolicy>,
     scope: &'a dyn cranpose_ui_layout::MeasureScope,
     measurables: &'a [Box<dyn Measurable>],
-    child_states: &'a [Rc<LayoutChildMeasureState>],
+    child_states: &'a [Rc<LayoutParts>],
     placements: RefCell<&'a mut Vec<Placement>>,
     placement_indices: RefCell<&'a mut Vec<usize>>,
     context: RefCell<LayoutNodeContext>,
@@ -73,7 +73,7 @@ impl<'a> CoordinatorFrame<'a> {
         measure_policy: &'a Rc<dyn MeasurePolicy>,
         scope: &'a dyn cranpose_ui_layout::MeasureScope,
         measurables: &'a [Box<dyn Measurable>],
-        child_states: &'a [Rc<LayoutChildMeasureState>],
+        child_states: &'a [Rc<LayoutParts>],
         placements: &'a mut Vec<Placement>,
         placement_indices: &'a mut Vec<usize>,
     ) -> Self {
