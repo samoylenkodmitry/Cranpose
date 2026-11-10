@@ -1,14 +1,6 @@
-use std::{
-    sync::{
-        Arc,
-        atomic::{AtomicBool, AtomicUsize, Ordering},
-        mpsc,
-    },
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 
-use cranpose_core::{NodeId, Runtime};
-use cranpose_runtime_std::StdScheduler;
+use cranpose_core::NodeId;
 
 #[test]
 fn a_window_coming_up_alone_takes_focus_so_its_cursor_is_drawn() {
@@ -334,12 +326,12 @@ use super::{
     nearest_monitor_to_rect, next_frame_anchor, occlusion_leaves_a_frame_owed,
     pace_after_empty_redraw, physical_outer_origin_from_surface, physical_surface_local_pointer,
     physical_surface_origin_from_outer, physical_surface_rect_contains_pointer, press_belongs_here,
-    press_to_hand_over, primary_declaration_host_needs_direct_update, primary_frame_waker,
-    primary_frame_waker_uses_event_proxy, primary_launch_requires_initial_redraw,
-    primary_pointer_gesture_poll_action, primary_pointer_move_should_recover_press,
-    primary_surface_redraw_drives_app, primary_viewport_for_surface_size,
-    primary_window_should_show, recovered_native_window_drag_start_pointer,
-    should_chain_no_vsync_redraw, surface_reconfigure_requires_redraw,
+    press_to_hand_over, primary_declaration_host_needs_direct_update,
+    primary_launch_requires_initial_redraw, primary_pointer_gesture_poll_action,
+    primary_pointer_move_should_recover_press, primary_surface_redraw_drives_app,
+    primary_viewport_for_surface_size, primary_window_should_show,
+    recovered_native_window_drag_start_pointer, should_chain_no_vsync_redraw,
+    surface_reconfigure_requires_redraw,
 };
 use crate::app_launcher::AppSettings;
 
@@ -611,94 +603,6 @@ fn visible_primary_surface_drives_redraw_updates() {
     assert!(primary_surface_redraw_drives_app(true, false));
     assert!(!primary_surface_redraw_drives_app(false, false));
     assert!(!primary_surface_redraw_drives_app(true, true));
-}
-
-#[test]
-fn hidden_primary_frame_waker_uses_event_loop_proxy() {
-    assert!(!primary_frame_waker_uses_event_proxy(true, true, false));
-    assert!(primary_frame_waker_uses_event_proxy(true, false, false));
-    assert!(primary_frame_waker_uses_event_proxy(true, true, true));
-}
-
-#[test]
-fn off_thread_primary_frame_waker_always_uses_event_loop_proxy() {
-    assert!(primary_frame_waker_uses_event_proxy(false, true, false));
-    assert!(primary_frame_waker_uses_event_proxy(false, false, false));
-    assert!(primary_frame_waker_uses_event_proxy(false, true, true));
-}
-
-fn counting(counter: &Arc<AtomicUsize>) -> impl Fn() + Send + Sync + 'static {
-    let counter = Arc::clone(counter);
-    move || {
-        counter.fetch_add(1, Ordering::SeqCst);
-    }
-}
-
-#[test]
-fn primary_frame_waker_on_the_event_loop_thread_redraws_a_shown_window_directly() {
-    let redraws = Arc::new(AtomicUsize::new(0));
-    let wake_ups = Arc::new(AtomicUsize::new(0));
-    let shown = Arc::new(AtomicBool::new(true));
-    let waker = primary_frame_waker(
-        std::thread::current().id(),
-        Arc::clone(&shown),
-        false,
-        counting(&redraws),
-        counting(&wake_ups),
-    );
-
-    waker();
-    assert_eq!(redraws.load(Ordering::SeqCst), 1);
-    assert_eq!(wake_ups.load(Ordering::SeqCst), 0);
-
-    shown.store(false, Ordering::SeqCst);
-    waker();
-    assert_eq!(redraws.load(Ordering::SeqCst), 1);
-    assert_eq!(wake_ups.load(Ordering::SeqCst), 1);
-}
-
-#[test]
-fn background_ui_post_returns_without_the_event_loop_thread() {
-    let (main_queue, main_queue_jobs) = mpsc::channel::<mpsc::SyncSender<()>>();
-    let wake_ups = Arc::new(AtomicUsize::new(0));
-    let scheduler = Arc::new(StdScheduler::new());
-    scheduler.set_frame_waker(primary_frame_waker(
-        std::thread::current().id(),
-        Arc::new(AtomicBool::new(true)),
-        false,
-        move || {
-            let (serviced, wait_for_main_thread) = mpsc::sync_channel(0);
-            if main_queue.send(serviced).is_ok() {
-                let _ = wait_for_main_thread.recv();
-            }
-        },
-        counting(&wake_ups),
-    ));
-    let runtime = Runtime::new(Arc::<StdScheduler>::clone(&scheduler));
-    let dispatcher = runtime.handle().dispatcher();
-    let (posted, post_returned) = mpsc::channel();
-    let worker = std::thread::spawn(move || {
-        dispatcher.post(|| {});
-        let _ = posted.send(());
-    });
-
-    let returned = post_returned.recv_timeout(Duration::from_secs(5)).is_ok();
-    let mut redraws_waiting_on_main_thread = 0;
-    for serviced in main_queue_jobs.try_iter() {
-        redraws_waiting_on_main_thread += 1;
-        let _ = serviced.send(());
-    }
-    let worker_finished = worker.join().is_ok();
-
-    assert!(
-        returned,
-        "a background post waited for the event loop thread"
-    );
-    assert!(worker_finished);
-    assert_eq!(redraws_waiting_on_main_thread, 0);
-    assert_eq!(wake_ups.load(Ordering::SeqCst), 1);
-    assert!(scheduler.has_frame_request());
-    assert!(runtime.handle().has_pending_ui());
 }
 
 #[test]

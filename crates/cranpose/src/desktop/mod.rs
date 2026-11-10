@@ -7,6 +7,7 @@ pub(crate) mod accessibility_options;
 pub(crate) mod bundled_assets;
 pub(crate) mod cursor;
 pub(crate) mod event_loop;
+mod frame_wake;
 pub(crate) mod host_surface;
 pub(crate) mod incoming;
 pub(crate) mod input;

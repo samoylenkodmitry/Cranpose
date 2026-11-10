@@ -22,7 +22,10 @@ use winit::{
     window::{ResizeDirection, Window, WindowAttributes, WindowId as WinitWindowId, WindowLevel},
 };
 
-use super::input::{app_modifiers, dispatch_keyboard_input};
+use super::{
+    frame_wake::{FrameWakes, window_frame_waker},
+    input::{app_modifiers, dispatch_keyboard_input},
+};
 #[cfg(feature = "robot")]
 use crate::robot::{RobotCommand, panic_payload_message};
 use crate::{
@@ -449,6 +452,7 @@ struct App {
     current_modifiers: winit::keyboard::ModifiersState,
     last_cursor_position: Option<(f32, f32)>,
     primary_shown: Arc<std::sync::atomic::AtomicBool>,
+    wakes: Arc<FrameWakes>,
     primary_presence: Option<super::lifecycle::WindowPresence>,
     robot: RobotSeat,
     recorder: Option<crate::recorder::InputRecorder>,
@@ -540,6 +544,7 @@ impl App {
             current_modifiers: winit::keyboard::ModifiersState::empty(),
             last_cursor_position: None,
             primary_shown: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            wakes: Arc::default(),
             primary_presence: None,
             robot,
             recorder,
@@ -1024,6 +1029,8 @@ impl App {
     /// application menu once the first frame is presented, and the app's
     /// desktop integration.
     fn serve_platform_before_waiting(&mut self, event_loop: &dyn ActiveEventLoop) {
+        // A frame wake the loop has not taken up by now holds no later one back.
+        self.wakes.loop_waits();
         #[cfg(target_os = "macos")]
         self.application_menu.install_when_due();
         #[cfg(feature = "robot")]
@@ -4525,32 +4532,6 @@ fn show_primary_window(window: &dyn Window, builds_pipelines: bool) {
     window.set_visible(true);
 }
 
-fn primary_frame_waker_uses_event_proxy(
-    on_event_loop_thread: bool,
-    primary_window_visible: bool,
-    headless: bool,
-) -> bool {
-    !on_event_loop_thread || !primary_surface_redraw_drives_app(primary_window_visible, headless)
-}
-
-fn primary_frame_waker(
-    event_loop_thread: std::thread::ThreadId,
-    primary_shown: Arc<std::sync::atomic::AtomicBool>,
-    headless: bool,
-    request_redraw: impl Fn() + Send + Sync + 'static,
-    wake_event_loop: impl Fn() + Send + Sync + 'static,
-) -> impl Fn() + Send + Sync + 'static {
-    move || {
-        let on_event_loop_thread = std::thread::current().id() == event_loop_thread;
-        let shown = primary_shown.load(std::sync::atomic::Ordering::Relaxed);
-        if primary_frame_waker_uses_event_proxy(on_event_loop_thread, shown, headless) {
-            wake_event_loop();
-        } else {
-            request_redraw();
-        }
-    }
-}
-
 fn primary_launch_requires_initial_redraw(primary_window_visible: bool, headless: bool) -> bool {
     primary_surface_redraw_drives_app(primary_window_visible, headless)
 }
@@ -5092,6 +5073,7 @@ impl Drop for App {
 
 impl ApplicationHandler for App {
     fn proxy_wake_up(&mut self, event_loop: &dyn ActiveEventLoop) {
+        self.wakes.proxy_taken();
         if self.exiting {
             return;
         }
@@ -5277,14 +5259,11 @@ impl ApplicationHandler for App {
             &window,
         ));
 
-        let frame_waker_window = Arc::clone(&window);
-        let frame_waker_event_proxy = self.event_proxy.clone();
-        app.set_frame_waker(primary_frame_waker(
-            std::thread::current().id(),
-            Arc::clone(&self.primary_shown),
-            headless,
-            move || frame_waker_window.request_redraw(),
-            move || frame_waker_event_proxy.wake_up(),
+        app.set_frame_waker(window_frame_waker(
+            (!headless).then(|| Arc::clone(&self.primary_shown)),
+            Arc::clone(&self.wakes),
+            Arc::clone(&window),
+            self.event_proxy.clone(),
         ));
 
         let mut platform = DesktopWinitPlatform::default();
@@ -5603,7 +5582,7 @@ impl ApplicationHandler for App {
             }
             WindowEvent::RedrawRequested => {
                 record_pacing_event(|diag| &mut diag.redraw_events);
-                self.primary_redraw_pending = false;
+                self.wakes.redraw_taken(&mut self.primary_redraw_pending);
                 if defer_window_redraw(event_loop, primary_frames_enabled, frame_cap_deadline) {
                     return;
                 }
