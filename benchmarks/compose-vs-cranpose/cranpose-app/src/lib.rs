@@ -74,23 +74,30 @@ impl Scenario {
 /// The Roboto faces every app loads: on Android the device's own, the files
 /// the Compose app loads, so both frameworks shape and measure identical
 /// fonts; on a desktop the ones in the folder `PERF_FONTS` names, which
-/// every desktop app loads. Read once and kept for the life of the process.
+/// every desktop app loads. After them comes the monospaced face of the
+/// chat's code, where the folder holds it. Read once and kept for the life
+/// of the process.
 #[cfg(any(
     target_os = "android",
     feature = "desktop",
     all(feature = "web", target_arch = "wasm32")
 ))]
 fn roboto_faces() -> &'static [&'static [u8]] {
-    let faces: Vec<&'static [u8]> = ["Roboto-Regular.ttf", "Roboto-Medium.ttf", "Roboto-Bold.ttf"]
-        .iter()
-        .filter_map(|file| match perf_data::font_bytes(file) {
-            Ok(bytes) => Some(&*Box::leak(bytes.into_boxed_slice())),
-            Err(error) => {
-                log::warn!("font {file} unavailable: {error}");
-                None
-            }
-        })
-        .collect();
+    let faces: Vec<&'static [u8]> = [
+        "Roboto-Regular.ttf",
+        "Roboto-Medium.ttf",
+        "Roboto-Bold.ttf",
+        "DejaVuSansMono.ttf",
+    ]
+    .iter()
+    .filter_map(|file| match perf_data::font_bytes(file) {
+        Ok(bytes) => Some(&*Box::leak(bytes.into_boxed_slice())),
+        Err(error) => {
+            log::warn!("font {file} unavailable: {error}");
+            None
+        }
+    })
+    .collect();
     Box::leak(faces.into_boxed_slice())
 }
 
@@ -192,9 +199,7 @@ impl Launch {
             patchwork: screens::patchwork::PatchworkLoad {
                 tier: count("tier", 5),
                 freeze: u32::try_from(count("freeze", 0)).unwrap_or(u32::MAX),
-                only: count("only", 0)
-                    .checked_sub(1)
-                    .and_then(|patch| data::Patch::ALL.get(patch).copied()),
+                only: screens::patchwork::Only::from_number(count("only", 0)),
             },
             still: args.boolean("still").unwrap_or(false),
         }

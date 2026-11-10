@@ -13,6 +13,8 @@
 import { PALETTE } from '../../shared-ts/data.js';
 import { GAP, TIERS, clock, dotColor, element, fit, label, tile, tileSizes, value } from './wall.js';
 
+/** The width of the chat at the right of the screen. */
+const CHAT_WIDTH = 320;
 const DEPTH = 12;
 const CHART_POINTS = 512;
 const JUMP = 37;
@@ -229,7 +231,7 @@ export function patchwork(tier: number, freeze: number, log: (message: string) =
   // Builds the patches for the tiles that fit in one, again only when that
   // number changes.
   const lay = () => {
-    const patchWidth = Math.floor(area.clientWidth / 3);
+    const patchWidth = Math.floor((area.clientWidth - CHAT_WIDTH) / 3);
     const patchHeight = Math.floor(area.clientHeight / 3);
     const across = fit(patchWidth, width);
     const down = fit(patchHeight, height);

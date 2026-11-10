@@ -1,3 +1,4 @@
+pub mod chat;
 pub mod feed;
 pub mod gauntlet;
 pub mod heavy;

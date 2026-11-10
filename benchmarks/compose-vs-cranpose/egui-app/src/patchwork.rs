@@ -294,7 +294,7 @@ impl eframe::App for Patchwork {
         paint_clock(ui, clock, self.frame.get());
         let area = Rect::from_min_max(clock.left_bottom(), screen.max);
         let patch = vec2(
-            (area.width() / PATCH_COLUMNS as f32).floor(),
+            ((area.width() - CHAT_WIDTH) / PATCH_COLUMNS as f32).floor(),
             (area.height() / PATCH_ROWS as f32).floor(),
         );
         let grid = wall_grid(self.tier, patch.x, patch.y);

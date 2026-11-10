@@ -7,11 +7,14 @@
 //! fill changes. The churn patch's cells and the reorder patch's row compose
 //! again each frame, the row's items under their keys.
 
+use std::rc::Rc;
+
 use cranpose::{LazyItems, prelude::*};
 use cranpose_foundation::lazy::rememberLazyListState;
 use cranpose_ui::widgets::{FlowRow, FlowSpec};
 
 use super::{
+    chat::{Chat, ChatShown},
     text_style,
     wall::{BACKGROUND, Clock, INK, ONE_LINE, Tile, Wall, rgb, tile_content, tile_rows},
 };
@@ -20,13 +23,43 @@ use crate::data::{
     WALL_GAP,
 };
 
-/// The patchwork's tier, the frame it freezes on (0 runs on) and the one
-/// patch it shows, when a launch asks for one alone.
+/// What of the screen a launch shows.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Only {
+    /// Every patch and the chat.
+    All,
+    /// One patch alone.
+    Patch(Patch),
+    /// The chat alone.
+    Chat,
+}
+
+impl Only {
+    /// `--only=N`: 1 to 9 a patch in the screen's order, 10 the chat, any
+    /// other number everything.
+    pub fn from_number(number: usize) -> Self {
+        match number
+            .checked_sub(1)
+            .and_then(|patch| Patch::ALL.get(patch))
+        {
+            Some(patch) => Self::Patch(*patch),
+            None if number == Patch::ALL.len() + 1 => Self::Chat,
+            None => Self::All,
+        }
+    }
+
+    fn shows(self, patch: Patch) -> bool {
+        self == Self::All || self == Self::Patch(patch)
+    }
+}
+
+/// The patchwork's tier, the frame it freezes on (0 runs on) and what of
+/// the screen it shows.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct PatchworkLoad {
     pub tier: usize,
     pub freeze: u32,
-    pub only: Option<Patch>,
+    pub only: Only,
 }
 
 // One patch's tiles: `columns` by `rows` of them `width` by `height` points
@@ -66,7 +99,8 @@ pub fn PatchworkScreen(load: PatchworkLoad) {
             BoxWithConstraints(
                 Modifier::empty().fill_max_width().weight(1.0),
                 move |scope| {
-                    let patch_width = (scope.max_width().0 / PATCH_COLUMNS as f32).floor();
+                    let patches_width = scope.max_width().0 - data::CHAT_WIDTH;
+                    let patch_width = (patches_width / PATCH_COLUMNS as f32).floor();
                     let patch_height = (scope.max_height().0 / PATCH_ROWS as f32).floor();
                     let (columns, rows) = data::wall_grid(tier, patch_width, patch_height);
                     Patches(
@@ -91,6 +125,18 @@ pub fn PatchworkScreen(load: PatchworkLoad) {
 fn Patches(frame: MutableState<u32>, load: PatchworkLoad, grid: Grid) {
     let freeze = load.freeze;
     let list_state = rememberLazyListState();
+    let chat = ChatShown {
+        blocks: rememberMutableStateOf(|| 0usize),
+        last: rememberMutableStateOf(|| 0usize),
+        list: rememberLazyListState(),
+    };
+    let feed = remember(|| {
+        data::ChatFeed::start()
+            .map_err(|error| log::warn!("chat data thread: {error}"))
+            .ok()
+            .map(Rc::new)
+    })
+    .with(|feed| feed.clone());
     let jump_rows = data::patchwork_jump_rows(grid.columns);
     LaunchedEffect((freeze, grid.columns, grid.rows), async move |scope| {
         let clock = scope.runtime().frame_clock();
@@ -100,23 +146,31 @@ fn Patches(frame: MutableState<u32>, load: PatchworkLoad, grid: Grid) {
             index += 1;
             frame.set(index);
             list_state.scroll_to_item(data::patchwork_jump_first(index, jump_rows, grid.rows), 0.0);
+            if let Some(feed) = &feed {
+                chat.advance(feed);
+            }
             if freeze > 0 && index >= freeze {
                 log::info!("PERF frozen frame={index}");
                 break;
             }
         }
     });
-    Column(Modifier::empty(), ColumnSpec::default(), move || {
-        for row in 0..PATCH_ROWS {
-            Row(Modifier::empty(), RowSpec::default(), move || {
-                for patch in &Patch::ALL[row * PATCH_COLUMNS..(row + 1) * PATCH_COLUMNS] {
-                    if load.only.is_some_and(|only| only != *patch) {
-                        Box(grid.patch(), BoxSpec::default(), || {});
-                        continue;
+    Row(Modifier::empty(), RowSpec::default(), move || {
+        Column(Modifier::empty(), ColumnSpec::default(), move || {
+            for row in 0..PATCH_ROWS {
+                Row(Modifier::empty(), RowSpec::default(), move || {
+                    for patch in &Patch::ALL[row * PATCH_COLUMNS..(row + 1) * PATCH_COLUMNS] {
+                        if load.only.shows(*patch) {
+                            show(*patch, frame, list_state, grid);
+                        } else {
+                            Box(grid.patch(), BoxSpec::default(), || {});
+                        }
                     }
-                    show(*patch, frame, list_state, grid);
-                }
-            });
+                });
+            }
+        });
+        if matches!(load.only, Only::All | Only::Chat) {
+            Chat(frame, chat);
         }
     });
 }
