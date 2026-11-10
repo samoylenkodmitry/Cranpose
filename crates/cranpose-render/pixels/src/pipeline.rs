@@ -1,4 +1,4 @@
-use std::{ops::Range, sync::Arc};
+use std::{borrow::Cow, ops::Range, sync::Arc};
 
 use cranpose_core::NodeId;
 use cranpose_render_common::{
@@ -413,11 +413,11 @@ impl RasterLayerBounds {
     }
 }
 
-struct RasterLayerMapping {
+struct RasterLayerMapping<'a> {
     layer_bounds: RasterLayerBounds,
     content_bounds: RasterLayerBounds,
     transformed_bounds: Rect,
-    content_style: ContentStyle,
+    content_style: Cow<'a, ContentStyle>,
     scale_x: f32,
     scale_y: f32,
 }
@@ -427,7 +427,7 @@ const PLAIN_CONTENT_LAYER: GraphicsLayer = GraphicsLayer {
     ..GraphicsLayer::DEFAULT
 };
 
-impl RasterLayerMapping {
+impl RasterLayerMapping<'_> {
     fn draws_plain(&self) -> bool {
         self.content_style.alpha == 1.0
             && self.content_style.color_filter.is_none()
@@ -435,15 +435,20 @@ impl RasterLayerMapping {
             && self.scale_y == 1.0
     }
 
-    fn content_layer(&self) -> GraphicsLayer {
-        GraphicsLayer {
+    // The layer a node's draws take under this mapping: the plain one when
+    // they draw as they were recorded.
+    fn content_layer(&self) -> Cow<'static, GraphicsLayer> {
+        if self.draws_plain() {
+            return Cow::Borrowed(&PLAIN_CONTENT_LAYER);
+        }
+        Cow::Owned(GraphicsLayer {
             alpha: self.content_style.alpha,
             color_filter: self.content_style.color_filter.clone(),
             scale_x: self.scale_x,
             scale_y: self.scale_y,
             transform_origin: TransformOrigin::new(0.0, 0.0),
             ..GraphicsLayer::default()
-        }
+        })
     }
 }
 
@@ -462,18 +467,18 @@ fn axis_scale(transformed: f32, local: f32) -> f32 {
     }
 }
 
-fn layer_raster_mapping(
+fn layer_raster_mapping<'a>(
     layer: LayerRef<'_>,
     graphics_layer: &GraphicsLayer,
     transform: &ProjectiveTransform,
-    context: &RasterTraversalContext<'_>,
-) -> RasterLayerMapping {
+    context: &RasterTraversalContext<'a>,
+) -> RasterLayerMapping<'a> {
     // A draw group's layer copies the paint of the node whose draws it
     // holds, which reaches it here already.
     let content_style = if layer.draw_phase().is_some() {
-        context.parent_content_style.clone()
+        Cow::Borrowed(context.parent_content_style)
     } else {
-        context.parent_content_style.under(graphics_layer)
+        Cow::Owned(context.parent_content_style.under(graphics_layer))
     };
     let bounds = layer.local_bounds();
     // A node's rect that differs from its layer's bounds in some bit maps on
@@ -492,12 +497,12 @@ fn layer_raster_mapping(
 
 // `content_bounds` is `None` where the node's draws map as its layer does,
 // as an inline node's do.
-fn raster_layer_mapping(
+fn raster_layer_mapping<'a>(
     local_bounds: Rect,
     content_bounds: Option<RasterLayerBounds>,
     transform: &ProjectiveTransform,
-    content_style: ContentStyle,
-) -> RasterLayerMapping {
+    content_style: Cow<'a, ContentStyle>,
+) -> RasterLayerMapping<'a> {
     let transformed_bounds = transform.bounds_for_rect(local_bounds);
     let (scale_x, scale_y) = raster_layer_scale(transformed_bounds, local_bounds);
     let layer_bounds = RasterLayerBounds::from_transformed_bounds(transformed_bounds, local_bounds);
@@ -520,7 +525,7 @@ fn raster_layer_mapping(
 fn push_layer_shadow_of(
     scene: &mut RasterScene,
     layer: LayerRef<'_>,
-    mapping: &RasterLayerMapping,
+    mapping: &RasterLayerMapping<'_>,
     transform: &ProjectiveTransform,
     parent_visual_clip: Option<Rect>,
     light: LightSource,
@@ -680,16 +685,10 @@ fn push_layer_items(
     passed_down_before: Option<usize>,
     reuse: &mut Option<Reuse<'_>>,
 ) {
-    let transform = layer.transform_to_parent().then(*context.parent_transform);
+    let transform = layer.placement().then(*context.parent_transform);
     let graphics_layer = layer.graphics_layer();
     let mapping = layer_raster_mapping(layer, graphics_layer, &transform, context);
-    let styled_content_layer;
-    let raster_content_layer = if mapping.draws_plain() {
-        &PLAIN_CONTENT_LAYER
-    } else {
-        styled_content_layer = mapping.content_layer();
-        &styled_content_layer
-    };
+    let raster_content_layer = mapping.content_layer();
     report_unsupported_effects(graphics_layer, context.diagnostics);
 
     if mapping.transformed_bounds.width <= 0.0 || mapping.transformed_bounds.height <= 0.0 {
@@ -705,7 +704,7 @@ fn push_layer_items(
     let effective_translated_content_context =
         context.inherited_translated_content_context || layer.translated_content_context();
     let (translated_snap_anchor, layer_snap_anchor) =
-        layer_snap_anchors(layer, context, &transform, &mapping, raster_content_layer);
+        layer_snap_anchors(layer, context, &transform, &mapping, &raster_content_layer);
 
     if visual_clip.is_some_and(|clip| clip.is_empty()) {
         return;
@@ -729,7 +728,7 @@ fn push_layer_items(
 
     let primitive_context = PrimitiveRenderContext {
         layer_bounds: mapping.content_bounds,
-        node_layer: raster_content_layer,
+        node_layer: &raster_content_layer,
         visual_clip,
         motion_context_animated: layer.motion_context_animated(),
         content_offset_translation: effective_translated_content_context,
@@ -808,30 +807,24 @@ fn push_inline_items(
     scene: &mut RasterScene,
     context: &RasterTraversalContext<'_>,
 ) {
-    let transform = inline.transform_to_parent().then(*context.parent_transform);
+    let transform = inline.placement().then(*context.parent_transform);
     let node_rect = inline.node_rect();
-    let content_style = context.parent_content_style.under(&GraphicsLayer::DEFAULT);
+    let content_style = Cow::Borrowed(context.parent_content_style);
     let mapping = raster_layer_mapping(node_rect, None, &transform, content_style);
     if mapping.transformed_bounds.width <= 0.0 || mapping.transformed_bounds.height <= 0.0 {
         return;
     }
-    let styled_content_layer;
-    let raster_content_layer = if mapping.draws_plain() {
-        &PLAIN_CONTENT_LAYER
-    } else {
-        styled_content_layer = mapping.content_layer();
-        &styled_content_layer
-    };
+    let raster_content_layer = mapping.content_layer();
     let translated = context.inherited_translated_content_context;
     let layer_snap_anchor = context.inherited_translated_snap_anchor.or_else(|| {
         ((translated || !inline.motion_context_animated())
             && content_needs_rigid_snap(inline, translated))
-        .then(|| rigid_snap_anchor(mapping.layer_bounds.raster_rect(), raster_content_layer))
+        .then(|| rigid_snap_anchor(mapping.layer_bounds.raster_rect(), &raster_content_layer))
         .flatten()
     });
     let primitive_context = PrimitiveRenderContext {
         layer_bounds: mapping.content_bounds,
-        node_layer: raster_content_layer,
+        node_layer: &raster_content_layer,
         visual_clip: context.parent_visual_clip,
         motion_context_animated: inline.motion_context_animated(),
         content_offset_translation: translated,
@@ -871,7 +864,7 @@ fn layer_snap_anchors(
     layer: LayerRef<'_>,
     context: &RasterTraversalContext<'_>,
     transform: &ProjectiveTransform,
-    mapping: &RasterLayerMapping,
+    mapping: &RasterLayerMapping<'_>,
     content_layer: &GraphicsLayer,
 ) -> (Option<Point>, Option<Point>) {
     let effective_translated_content_context =

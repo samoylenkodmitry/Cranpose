@@ -19,6 +19,17 @@ pub enum Placement {
     By(ProjectiveTransform),
 }
 
+impl Placement {
+    /// Returns the transform from the record's space to the space that
+    /// `parent` maps the record's parent into.
+    pub fn then(self, parent: ProjectiveTransform) -> ProjectiveTransform {
+        match self {
+            Self::At(origin) => parent.after_translation(origin.x, origin.y),
+            Self::By(transform) => transform.then(parent),
+        }
+    }
+}
+
 #[expect(clippy::multiple_inherent_impl, reason = "one file per concern")]
 impl SceneStore {
     /// The offset of the content box of `id` from its origin.

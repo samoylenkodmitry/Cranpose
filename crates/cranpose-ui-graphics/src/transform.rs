@@ -216,6 +216,21 @@ impl ProjectiveTransform {
         }
     }
 
+    /// Returns the transform that translates positions by (`tx`, `ty`) and
+    /// then applies `self`: `ProjectiveTransform::translation(tx, ty).then(self)`.
+    pub fn after_translation(self, tx: f32, ty: f32) -> Self {
+        // The sums run in `multiply_matrices`' order; the other cells keep
+        // their values, which the product would only add zeros to.
+        let [[a, b, c], [d, e, f], [g, h, i]] = self.matrix;
+        Self {
+            matrix: [
+                [a, b, a * tx + b * ty + c],
+                [d, e, d * tx + e * ty + f],
+                [g, h, g * tx + h * ty + i],
+            ],
+        }
+    }
+
     /// Maps destination coordinates back to the source, unless the matrix is singular.
     pub fn inverse(self) -> Option<Self> {
         let m = self.matrix;
