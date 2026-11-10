@@ -354,35 +354,35 @@ fn opens_group(recording: &CommandRecording, segments: &Range<u32>) -> bool {
             .any(|segment| segment.lane == RecordLane::GroupStart)
 }
 
-// Draws `commands`, the draw commands of the node `node_id` of size `size`,
-// over `items`, the items of the leaf that drew them before, when they come
-// out as the same kinds in the same order: a background whose shape and
-// color stay keeps its shapes, and a run records again into its own
-// recording. False when other items come out, or a command draws around
-// the content; the caller then writes the leaf anew over what this wrote.
+// Draws `commands`, a node's draw commands at size `size`, over `own`, the
+// items of its record that drew them before, in draw order without its
+// children, when they come out as the same kinds in the same order: a
+// background whose shape and color stay keeps its shapes, and a run
+// records again into its own recording. False when other items come out,
+// or a command draws around the content; the caller then writes the
+// node's draws anew over what this wrote.
 pub(super) fn redraw_in_place(
     store: &mut SceneStore,
-    items: &[Item],
-    (node_id, size): (NodeId, Size),
-    commands: &[DrawCommand],
+    mut own: impl Iterator<Item = Item>,
+    commands: NodeCommands<'_>,
+    size: Size,
 ) -> bool {
-    let mut old = items.iter().copied();
     for placement in [DrawPlacement::Behind, DrawPlacement::Overlay] {
-        for (command_index, command) in commands.iter().enumerate() {
+        for (offset, command) in commands.commands.iter().enumerate() {
             let drawn = match command {
                 DrawCommand::WithContent(_) => return false,
                 DrawCommand::Background(_) if placement == DrawPlacement::Overlay => continue,
-                DrawCommand::Background(background) => old
+                DrawCommand::Background(background) => own
                     .next()
                     .is_some_and(|item| keeps_background(store, item, background, size)),
                 _ if !draws_in(command, placement) => continue,
                 _ => {
                     let id = DrawCommandId {
-                        node_id,
-                        command_index: command_index as u32,
+                        node_id: commands.node_id,
+                        command_index: (commands.first_index + offset) as u32,
                         placement,
                     };
-                    old.next()
+                    own.next()
                         .is_some_and(|item| draws_run_again(store, item, (command, id), size))
                 }
             };
@@ -391,7 +391,7 @@ pub(super) fn redraw_in_place(
             }
         }
     }
-    old.next().is_none()
+    own.next().is_none()
 }
 
 // Whether the shape item `item` holds the shapes `background` draws at

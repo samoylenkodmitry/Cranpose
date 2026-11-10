@@ -17,7 +17,7 @@ mod draw_recording;
 pub(crate) use draw_recording::draw_command_items;
 use draw_recording::{
     DrawPass, DrawTarget, GroupPaint, NodeCommands, append_draw_nodes, draw_nodes,
-    layer_node_capacity,
+    layer_node_capacity, redraw_in_place,
 };
 mod graph_changes;
 use graph_changes::GraphChanges;
@@ -529,6 +529,20 @@ fn redraw_retained_layer(
             return false;
         }
         let parts = ItemParts::of(store, container);
+        let slices = &data.modifier_slices;
+        let outer = slices.outer_draw_command_count();
+        let commands = NodeCommands {
+            node_id,
+            commands: &slices.draw_commands()[outer..],
+            first_index: outer,
+        };
+        if !slices.has_text()
+            && redraw_in_place(store, parts.own(), commands, data.layout_state.size())
+        {
+            parts.give_back(store);
+            store.note_content_change(container);
+            return true;
+        }
         let mut list = store.lists.take();
         list.extend_from_slice(parts.children());
         parts.remove_own(store);

@@ -6,7 +6,7 @@ use cranpose_ui::{ModifierNodeSlices, Point, Rect, Size};
 
 use super::{
     DrawTarget, Level, LowerContext, SnapshotNodeData, assign_layer,
-    draw_recording::redraw_in_place,
+    draw_recording::{NodeCommands, redraw_in_place},
     modifier_slices_have_origin_sinks, note_layer_lowered, prepare_node_layer, read_node_data,
     read_placed_node_data, remove_dirty_descendants, slices_hit_something,
     text_node::{TextNodeParts, drawn_text, refresh_text_node},
@@ -133,8 +133,13 @@ fn redraw_inline(
     }
     let mut items = store.lists.take();
     items.extend_from_slice(store.items(record));
+    let commands = NodeCommands {
+        node_id,
+        commands: slices.draw_commands(),
+        first_index: 0,
+    };
     let size = data.layout_state.size();
-    let drawn = redraw_in_place(store, &items, (node_id, size), slices.draw_commands());
+    let drawn = redraw_in_place(store, items.iter().copied(), commands, size);
     store.lists.give(items);
     if !drawn {
         return false;

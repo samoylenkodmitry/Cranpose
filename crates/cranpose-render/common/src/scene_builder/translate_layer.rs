@@ -365,6 +365,15 @@ impl ItemParts {
         &self.items[self.children.clone()]
     }
 
+    // The container's own items in draw order: those before its children,
+    // then those after them.
+    pub(super) fn own(&self) -> impl DoubleEndedIterator<Item = Item> + '_ {
+        self.items[..self.children.start]
+            .iter()
+            .chain(&self.items[self.children.end..self.held])
+            .copied()
+    }
+
     // Keeps the children in `kept`, in order, in `list`; the others leave.
     fn keep_range(
         &mut self,
@@ -416,9 +425,7 @@ impl ItemParts {
     // last to first, so draws of the same kinds take their handles back in
     // order and the container's items read as before.
     pub(super) fn remove_own(&self, store: &mut SceneStore) {
-        let before = &self.items[..self.children.start];
-        let after = &self.items[self.children.end..self.held];
-        for &item in before.iter().chain(after).rev() {
+        for item in self.own().rev() {
             store.remove_item(item);
         }
     }
