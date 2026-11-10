@@ -363,34 +363,25 @@ fn add_background(store: &mut SceneStore, background: &BackgroundDraw, size: Siz
 }
 
 // A hash of a background's shape: its rect, its corners when they are
-// round, and its color.
+// round, and its color. Two numbers take one word: a fold of a word costs a
+// 32-bit target several multiplies.
 fn background_print(
     (rect, radii): (Rect, Option<CornerRadii>),
     Color(red, green, blue, alpha): Color,
 ) -> u64 {
+    let pair = |a: f32, b: f32| u64::from(a.to_bits()) << 32 | u64::from(b.to_bits());
     let mut print = FxHasher::default();
-    for value in [
-        rect.x,
-        rect.y,
-        rect.width,
-        rect.height,
-        red,
-        green,
-        blue,
-        alpha,
+    for word in [
+        pair(rect.x, rect.y),
+        pair(rect.width, rect.height),
+        pair(red, green),
+        pair(blue, alpha),
     ] {
-        print.write_u32(value.to_bits());
+        print.write_u64(word);
     }
     if let Some(radii) = radii {
-        print.write_u8(1);
-        for value in [
-            radii.top_left,
-            radii.top_right,
-            radii.bottom_right,
-            radii.bottom_left,
-        ] {
-            print.write_u32(value.to_bits());
-        }
+        print.write_u64(pair(radii.top_left, radii.top_right));
+        print.write_u64(pair(radii.bottom_right, radii.bottom_left));
     }
     print.finish()
 }
