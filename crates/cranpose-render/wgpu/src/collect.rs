@@ -378,6 +378,11 @@ impl<'a> Visit<'a> {
         }
     }
 
+    #[expect(
+        clippy::inline_always,
+        reason = "the walk reads the clip of every record it visits; out of line the gauntlet frame took 2.5 M more instructions"
+    )]
+    #[inline(always)]
     fn visual_clip(&self) -> Option<Rect> {
         self.layer.visual_clip_of(self.graphics, self.bounds)
     }

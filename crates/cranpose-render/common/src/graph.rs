@@ -115,7 +115,6 @@ impl TextPrimitiveNode {
                 self.text_style.render_hash(),
                 self.render_text.span_styles(),
                 (self.font_size, &self.layout),
-                (self.render_text.render_hash(), self.render_text.is_empty()),
             )
         })
     }

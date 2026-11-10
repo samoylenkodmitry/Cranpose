@@ -412,7 +412,11 @@ impl<'a> LayerRef<'a> {
     /// through an offscreen buffer for its alpha or by request, its bounds.
     #[inline(always)]
     pub fn visual_clip_rect(self) -> Option<Rect> {
-        self.visual_clip_with(|| self.graphics_layer().clip, || self.local_bounds())
+        let clip = self.clip_rect();
+        if clip.is_some() {
+            return clip;
+        }
+        self.cut_by_isolation().then(|| self.local_bounds())
     }
 
     #[expect(
@@ -423,26 +427,15 @@ impl<'a> LayerRef<'a> {
     /// `graphics` and local bounds `bounds` a reader holds already.
     #[inline(always)]
     pub fn visual_clip_of(self, graphics: &GraphicsLayer, bounds: Rect) -> Option<Rect> {
-        self.visual_clip_with(|| graphics.clip, || bounds)
+        (self.clip_to_bounds() || graphics.clip || self.cut_by_isolation()).then_some(bounds)
     }
 
-    // Where the record's drawing is cut, with its graphics layer's clip from
-    // `graphics_clip` and its local bounds from `bounds`.
-    #[expect(
-        clippy::inline_always,
-        reason = "the two readers above inline it into the collect walk"
-    )]
-    #[inline(always)]
-    fn visual_clip_with(
-        self,
-        graphics_clip: impl FnOnce() -> bool,
-        bounds: impl FnOnce() -> Rect,
-    ) -> Option<Rect> {
-        if self.clip_to_bounds() || graphics_clip() {
-            return Some(bounds());
-        }
+    // Whether the record composites through an offscreen buffer for its
+    // alpha or by request, which cuts its drawing to its bounds.
+    #[inline]
+    fn cut_by_isolation(self) -> bool {
         let isolation = self.isolation();
-        (isolation.group_opacity || isolation.explicit_offscreen).then(bounds)
+        isolation.group_opacity || isolation.explicit_offscreen
     }
 
     /// The render effect applied to the record's content.

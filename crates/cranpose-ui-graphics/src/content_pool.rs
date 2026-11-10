@@ -1,4 +1,4 @@
-use std::{collections::hash_map::Entry, rc::Rc};
+use std::{collections::hash_map::Entry, rc::Rc, sync::Arc};
 
 use crate::{FxBuildHasher, FxHashMap};
 
@@ -10,6 +10,12 @@ pub trait PooledValue {
 }
 
 impl<T: ?Sized> PooledValue for Rc<T> {
+    fn is_held(&self) -> bool {
+        Self::strong_count(self) > 1
+    }
+}
+
+impl<T: ?Sized> PooledValue for Arc<T> {
     fn is_held(&self) -> bool {
         Self::strong_count(self) > 1
     }

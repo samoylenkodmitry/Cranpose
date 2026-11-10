@@ -357,9 +357,9 @@ impl DrawnText {
     /// gradient, in its style or in a span.
     pub(crate) fn plain(string: Arc<RenderString>, paint: &TextPaint) -> Self {
         Self {
+            hash: string.render_hash(),
+            empty: string.is_empty(),
             string,
-            hash: paint.text_hash,
-            empty: paint.text_empty,
             gradient: false,
             static_motion: paint.static_motion,
             spread: paint.spread,

@@ -16,7 +16,7 @@ use crate::{
     NodeUpdate,
     graph::TextPrimitiveNode,
     scene_store::{Item, ItemKind, RecordKind, SceneStore},
-    text_paint::{TextPaint, TextPaintCache},
+    text_paint::TextPaintCache,
 };
 
 pub(super) const TEXT_CLIP_PAD: f32 = 1.0;
@@ -170,13 +170,12 @@ pub(super) fn text_node_from_parts(parts: &TextNodeParts) -> Option<TextPrimitiv
         font_size,
         overflow: placement.overflow,
         clip: placement.clip,
-        paint: TextPaintCache::holding(TextPaint::of(
+        paint: TextPaintCache::of_text(
             visual_style,
             prepared.visual_style_hash(),
             prepared.text.span_styles(),
             (font_size, &prepared.layout),
-            (prepared.render_text_hash(), prepared.text.is_empty()),
-        )),
+        ),
     })
 }
 

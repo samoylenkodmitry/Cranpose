@@ -2,12 +2,14 @@
 //! worked out once per text node so that drawing a plain text never loads
 //! its style, and drawing a cached run never loads its string.
 
-use std::cell::OnceCell;
+use std::{cell::OnceCell, hash::Hasher, sync::Arc};
 
+use cranpose_text::SynthesizedStyle;
 use cranpose_ui::{
     Brush, Color, TextStyle,
     text::{RangeStyle, SpanStyle, TextDecoration, TextDrawStyle, TextMotion},
 };
+use cranpose_ui_graphics::FxHasher;
 
 use crate::glyph_reach::InkSpread;
 
@@ -26,12 +28,6 @@ pub struct TextPaint {
     /// The style's [`TextStyle::render_hash`], which keys the glyph caches
     /// a renderer draws the text from, so no frame hashes the style again.
     pub style_hash: u64,
-    /// The string's `RenderString::render_hash`, which keys those caches
-    /// beside the style's, so that drawing a cached run never loads the
-    /// string.
-    pub text_hash: u64,
-    /// Whether the string has no characters.
-    pub text_empty: bool,
     /// Whether the style's motion is static, so its glyphs stay on whole
     /// pixels.
     pub static_motion: bool,
@@ -41,18 +37,20 @@ pub struct TextPaint {
     /// How far past their outlines the glyphs put ink: a stroke's outer
     /// half, and the bold or italic a face of the layout synthesizes.
     pub spread: InkSpread,
+    // The font size and the bold and italic the layout synthesizes, which
+    // a paint shared among texts of one style was worked out at.
+    font_size: f32,
+    synthesized: SynthesizedStyle,
 }
 
 impl TextPaint {
     /// The paint of a text in `style`, whose [`TextStyle::render_hash`] is
-    /// `style_hash`, with `spans`, at `font_size`, laid out as `layout`, whose
-    /// string's `RenderString::render_hash` and emptiness are `text`.
+    /// `style_hash`, with `spans`, at `font_size`, laid out as `layout`.
     pub fn of(
         style: &TextStyle,
         style_hash: u64,
         spans: &[RangeStyle<SpanStyle>],
         (font_size, layout): (f32, &cranpose_text::TextLayout),
-        (text_hash, text_empty): (u64, bool),
     ) -> Self {
         let span_style = &style.span_style;
         let span_paint = SpanPaint::of(spans);
@@ -74,8 +72,6 @@ impl TextPaint {
                 .filter(|shift| shift.is_specified())
                 .map_or(0.0, |shift| -(shift.0 * font_size)),
             style_hash,
-            text_hash,
-            text_empty,
             static_motion: style
                 .paragraph_style
                 .text_motion
@@ -89,8 +85,43 @@ impl TextPaint {
             } else {
                 InkSpread::of_text(style, spans, layout)
             },
+            font_size,
+            synthesized: layout.synthesized_style(),
         }
     }
+
+    // Whether the paint is that of a text without spans in the style whose
+    // render hash is `style_hash`, at `font_size`, with `synthesized`.
+    fn made_at(&self, style_hash: u64, font_size: f32, synthesized: SynthesizedStyle) -> bool {
+        self.style_hash == style_hash
+            && self.font_size.to_bits() == font_size.to_bits()
+            && self.synthesized == synthesized
+    }
+}
+
+// The paint of a text without spans in `style`, whose render hash is
+// `style_hash`, at `font_size`, laid out as `layout`: the one the thread
+// worked out for another text of that style, at that size and with the
+// same bold and italic synthesized, which most labels of a screen share.
+fn shared_paint(
+    style: &TextStyle,
+    style_hash: u64,
+    (font_size, layout): (f32, &cranpose_text::TextLayout),
+) -> Arc<TextPaint> {
+    let synthesized = layout.synthesized_style();
+    let bold = synthesized.bold_size.map_or(0, f32::to_bits);
+    let mut key = FxHasher::default();
+    key.write_u64(style_hash);
+    key.write_u64(u64::from(font_size.to_bits()) << 32 | u64::from(bold));
+    key.write_u8(u8::from(synthesized.italic) | u8::from(synthesized.bold_size.is_some()) << 1);
+    crate::thread_state::with(|state| {
+        state.text_paints.borrow_mut().with(
+            key.finish(),
+            |kept| kept.made_at(style_hash, font_size, synthesized),
+            || Arc::new(TextPaint::of(style, style_hash, &[], (font_size, layout))),
+            Arc::clone,
+        )
+    })
 }
 
 // What the spans of a text paint of their own.
@@ -128,18 +159,31 @@ fn decorates(decoration: Option<TextDecoration>) -> bool {
 /// renderer first asks for it. It is derived data, so two caches always
 /// compare equal.
 #[derive(Clone, Debug, Default)]
-pub struct TextPaintCache(OnceCell<TextPaint>);
+pub struct TextPaintCache(OnceCell<Arc<TextPaint>>);
 
 impl TextPaintCache {
-    /// A cache holding `paint`.
-    pub fn holding(paint: TextPaint) -> Self {
+    /// A cache holding the paint of a text in `style`, whose
+    /// [`TextStyle::render_hash`] is `style_hash`, with `spans`, at
+    /// `font_size`, laid out as `layout`: shared with the other texts the
+    /// thread made in that style when the text has no spans.
+    pub fn of_text(
+        style: &TextStyle,
+        style_hash: u64,
+        spans: &[RangeStyle<SpanStyle>],
+        text: (f32, &cranpose_text::TextLayout),
+    ) -> Self {
+        let paint = if spans.is_empty() {
+            shared_paint(style, style_hash, text)
+        } else {
+            Arc::new(TextPaint::of(style, style_hash, spans, text))
+        };
         Self(OnceCell::from(paint))
     }
 
     /// The cached paint, or the one `compute` returns, which the cache then
     /// keeps.
     pub fn get_or(&self, compute: impl FnOnce() -> TextPaint) -> &TextPaint {
-        self.0.get_or_init(compute)
+        self.0.get_or_init(|| Arc::new(compute()))
     }
 }
 

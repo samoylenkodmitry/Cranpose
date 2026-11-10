@@ -1,10 +1,15 @@
-use std::cell::{Cell, RefCell};
+use std::{
+    cell::{Cell, RefCell},
+    sync::Arc,
+};
 
 use cranpose_core::collections::{map::HashMap as NodeMap, recent_peak::RecentPeak};
+use cranpose_ui_graphics::ContentPool;
 
 use crate::{
     NodeUpdate,
     scene_builder::{HitGraphState, TranslateScratch},
+    text_paint::TextPaint,
 };
 
 pub(crate) struct RenderThreadState {
@@ -13,6 +18,9 @@ pub(crate) struct RenderThreadState {
     pub(crate) dirty_node_scratch:
         Cell<Option<(NodeMap<cranpose_core::NodeId, NodeUpdate>, RecentPeak)>>,
     pub(crate) space_changed: Cell<bool>,
+    // The paints of the texts the thread made, shared by those that paint
+    // the same.
+    pub(crate) text_paints: RefCell<ContentPool<Arc<TextPaint>>>,
     #[cfg(test)]
     pub(crate) lowered_layer_count: Cell<usize>,
 }
@@ -24,6 +32,7 @@ impl RenderThreadState {
             hit_geometry_scratch: Cell::new(Vec::new()),
             dirty_node_scratch: Cell::new(None),
             space_changed: Cell::new(false),
+            text_paints: RefCell::new(ContentPool::new()),
             #[cfg(test)]
             lowered_layer_count: Cell::new(0),
         }
