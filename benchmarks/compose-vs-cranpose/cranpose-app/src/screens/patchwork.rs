@@ -9,20 +9,19 @@
 //! and the pile patch in one call whose tiles skip but for the two whose
 //! fill changes.
 
-use std::rc::Rc;
-
 use cranpose::{LazyItems, prelude::*};
 use cranpose_foundation::lazy::rememberLazyListState;
 use cranpose_ui::widgets::{FlowRow, FlowSpec};
 
+#[cfg(feature = "chat")]
+use super::chat::{Chat, rememberChat};
 use super::{
-    chat::{Chat, ChatShown},
     text_style,
     wall::{BACKGROUND, Clock, INK, ONE_LINE, Tile, Wall, rgb, tile_content, tile_rows},
 };
 use crate::data::{
-    self, Cards, ChatToken, InTurn, PATCH_COLUMNS, PATCH_ROWS, PATCHWORK_CHART_POINTS,
-    PATCHWORK_DEPTH, Patch, PatchTiles, WALL_GAP,
+    self, Cards, InTurn, PATCH_COLUMNS, PATCH_ROWS, PATCHWORK_CHART_POINTS, PATCHWORK_DEPTH, Patch,
+    PatchTiles, WALL_GAP,
 };
 
 /// The patchwork's tier and the frame it freezes on; 0 runs on.
@@ -83,19 +82,12 @@ pub fn PatchworkScreen(load: PatchworkLoad) {
 fn Patches(frame: MutableState<u32>, load: PatchworkLoad, grid: Grid) {
     let freeze = load.freeze;
     let list_state = rememberLazyListState();
-    let chat = ChatShown {
-        blocks: rememberMutableStateOf(|| 0usize),
-        last: rememberMutableStateOf(|| 0usize),
-        token: rememberMutableStateOf(ChatToken::default),
-        list: rememberLazyListState(),
-    };
-    let feed = remember(|| {
-        data::ChatFeed::start()
-            .map_err(|error| log::warn!("chat data thread: {error}"))
-            .ok()
-            .map(Rc::new)
-    })
-    .with(|feed| feed.clone());
+    // The desktop app draws the chat; a build without it leaves its column
+    // empty.
+    #[cfg(feature = "chat")]
+    let chat = rememberChat();
+    #[cfg(feature = "chat")]
+    let shown = chat.shown;
     let scroll_rows = data::patchwork_scroll_rows(grid.tiles.columns);
     LaunchedEffect(
         (freeze, grid.tiles.columns, grid.tiles.rows),
@@ -110,9 +102,8 @@ fn Patches(frame: MutableState<u32>, load: PatchworkLoad, grid: Grid) {
                     data::patchwork_scroll_first(index, scroll_rows, grid.tiles.rows),
                     0.0,
                 );
-                if let Some(feed) = &feed {
-                    chat.advance(feed);
-                }
+                #[cfg(feature = "chat")]
+                chat.advance();
                 if freeze > 0 && index >= freeze {
                     log::info!("PERF frozen frame={index}");
                     break;
@@ -130,7 +121,8 @@ fn Patches(frame: MutableState<u32>, load: PatchworkLoad, grid: Grid) {
                 });
             }
         });
-        Chat(frame, chat);
+        #[cfg(feature = "chat")]
+        Chat(frame, shown);
     });
 }
 

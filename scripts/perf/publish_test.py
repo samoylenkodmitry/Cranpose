@@ -74,6 +74,14 @@ class IndexEntryTest(unittest.TestCase):
                          ({'cranpose': 'first'}, {'cranpose-release': 'later'}),
                          "a subject's first failure of a start says why it has no frames there")
 
+    def test_an_entry_leaves_out_of_a_screen_the_subject_that_does_not_draw_it(self):
+        measured = run()
+        for start in measured['scenarios'][0]['starts'].values():
+            del start['summary']['cranpose-release']
+        starts = publish.index_entry(measured, 'runs/x.json')['scenarios']['gauntlet']['starts']
+        self.assertEqual(sorted(starts['second']['summary']), ['cranpose'],
+                         'a release that knows no such screen has no medians there')
+
     def test_an_entry_keeps_each_starts_confirmed_regressions_with_its_medians(self):
         nightly = {**run(), 'confirmed_regressions': {'gauntlet': {'second': ['fps']}}}
         starts = publish.index_entry(nightly, 'runs/x.json')['scenarios']['gauntlet']['starts']

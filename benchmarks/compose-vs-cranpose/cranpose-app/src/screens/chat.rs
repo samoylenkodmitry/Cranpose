@@ -10,6 +10,7 @@
 use std::{cell::OnceCell, rc::Rc};
 
 use cranpose::{LazyItems, prelude::*};
+use cranpose_foundation::lazy::rememberLazyListState;
 use cranpose_ui::{
     text::{AnnotatedString, FontFamily, FontWeight, SpanStyle},
     widgets::rememberSvg,
@@ -28,6 +29,42 @@ const MUTED: Color = rgb(data::CHAT_SHIMMER_RGB[0]);
 const PANEL: Color = rgb(data::CHAT_PANEL_RGB);
 const BUBBLE: Color = rgb(data::CHAT_USER_RGB);
 
+/// The chat as the frame loop holds it: what it shows, and the data thread
+/// its tokens come from.
+#[derive(Clone)]
+pub struct ChatLive {
+    pub shown: ChatShown,
+    feed: Option<Rc<data::ChatFeed>>,
+}
+
+impl ChatLive {
+    /// Takes the frame's tokens and keeps the list at its end.
+    pub fn advance(&self) {
+        if let Some(feed) = &self.feed {
+            self.shown.advance(feed);
+        }
+    }
+}
+
+/// The chat's state and its data thread, started once.
+#[composable]
+pub fn rememberChat() -> ChatLive {
+    let shown = ChatShown {
+        blocks: rememberMutableStateOf(|| 0usize),
+        last: rememberMutableStateOf(|| 0usize),
+        token: rememberMutableStateOf(ChatToken::default),
+        list: rememberLazyListState(),
+    };
+    let feed = remember(|| {
+        data::ChatFeed::start()
+            .map_err(|error| log::warn!("chat data thread: {error}"))
+            .ok()
+            .map(Rc::new)
+    })
+    .with(|feed| feed.clone());
+    ChatLive { shown, feed }
+}
+
 /// What the chat shows: its blocks so far, how much of the last one and the
 /// last token. The frame loop writes them as tokens arrive.
 #[derive(Clone, Copy, PartialEq)]
@@ -39,8 +76,7 @@ pub struct ChatShown {
 }
 
 impl ChatShown {
-    /// Takes the frame's tokens from `feed` and keeps the list at its end.
-    pub fn advance(self, feed: &data::ChatFeed) {
+    fn advance(self, feed: &data::ChatFeed) {
         for _ in 0..data::CHAT_TOKENS_PER_FRAME {
             let Some(token) = feed.take() else {
                 break;
