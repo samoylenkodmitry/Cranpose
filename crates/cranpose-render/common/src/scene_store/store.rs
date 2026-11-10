@@ -214,6 +214,12 @@ impl SceneStore {
         result
     }
 
+    // Whether the reader of `cursor` read every change of the store.
+    #[inline]
+    pub(crate) fn journal_caught_up(&self, cursor: &JournalCursor) -> bool {
+        self.journal.caught_up(self.id, cursor)
+    }
+
     // Logs `event` for `id` as the record is now, when a reader follows it.
     #[inline]
     pub(super) fn log(&mut self, event: RecordEvent, id: RecordId) {

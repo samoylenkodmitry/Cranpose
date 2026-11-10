@@ -266,6 +266,14 @@ impl Journal {
             .fold(0, |wanted, &(_, events)| wanted | events.0);
     }
 
+    // Whether the reader of `cursor` read every entry: a read would find
+    // none and leave the reader as it is.
+    #[inline]
+    pub(super) fn caught_up(&self, store: StoreId, cursor: &JournalCursor) -> bool {
+        cursor.store == store
+            && matches!(self.readers.get(cursor.slot), Some(&Some((next, _))) if next == self.end())
+    }
+
     pub(super) fn changes(&self, store: StoreId, cursor: &JournalCursor) -> JournalRead<'_> {
         let Some(Some((next, _))) = self.readers.get(cursor.slot).copied() else {
             return JournalRead::Lost;

@@ -81,6 +81,10 @@ impl DrawOwners {
         store: &mut SceneStore,
         changes: &mut Vec<DrawOwnerChange>,
     ) -> bool {
+        // Most frames log no change a reader follows.
+        if store.journal_caught_up(&self.cursor) {
+            return true;
+        }
         let Self { cursor, nodes } = self;
         store.read_journal(cursor, |_, read| {
             let JournalRead::Changes(entries) = read else {
