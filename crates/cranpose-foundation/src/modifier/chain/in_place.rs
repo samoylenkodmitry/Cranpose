@@ -1,8 +1,8 @@
 use std::rc::Rc;
 
 use super::{
-    DynModifierElement, ElementMaker, EntryElement, EntrySlot, ModifierNodeContext,
-    ModifierNodeEntry, request_update_auto_invalidations,
+    DynModifierElement, ElementMaker, EntryElement, ModifierNodeContext, ModifierNodeEntry,
+    request_update_auto_invalidations,
 };
 
 /// What updating an entry in place did to the chain's links.
@@ -25,26 +25,28 @@ pub(super) fn update_entry_in_place(
     element: &DynModifierElement,
     context: &mut dyn ModifierNodeContext,
 ) -> Option<InPlace> {
-    match (&mut entry.slot, element.maker()) {
-        (EntrySlot::Plain { fns, words }, ElementMaker::Plain(value)) => {
+    match (entry, element.maker()) {
+        (ModifierNodeEntry::Plain { fns, words, .. }, ElementMaker::Plain(value)) => {
             if fns.element_type() != value.fns().element_type() {
                 return None;
             }
             let words = &mut words[..fns.words()];
             if !value.equals_words(words) {
                 value.write_words(words);
-                request_update_auto_invalidations(&**element, context, entry.capabilities);
+                request_update_auto_invalidations(&**element, context, fns.capabilities());
             }
             Some(InPlace::LinksHold)
         }
         (
-            EntrySlot::Node {
+            ModifierNodeEntry::Node {
                 element: held,
                 node,
+                capabilities: held_capabilities,
+                ..
             },
             ElementMaker::Node(maker),
         ) => {
-            let view = held.view(node, entry.capabilities);
+            let view = held.view(node, *held_capabilities);
             if view.element_type() != element.element_type()
                 || view.node_type() != maker.node_type()
                 || held.key() != element.key()
@@ -54,7 +56,7 @@ pub(super) fn update_entry_in_place(
             }
             let same_element = view.equals(&**element);
             let capabilities = element.capabilities();
-            let mut outcome = if capabilities == entry.capabilities {
+            let mut outcome = if capabilities == *held_capabilities {
                 InPlace::LinksHold
             } else {
                 InPlace::Relink
@@ -66,7 +68,7 @@ pub(super) fn update_entry_in_place(
                 node.borrow()
                     .for_each_delegate(&mut |_| outcome = InPlace::Relink);
             }
-            entry.capabilities = capabilities;
+            *held_capabilities = capabilities;
             node.borrow().node_state().set_capabilities(capabilities);
             Some(outcome)
         }

@@ -12,13 +12,13 @@ mod entry;
 mod entry_element;
 mod in_place;
 mod plain;
-use entry::{EntrySlot, ModifierNodeEntry};
+use entry::ModifierNodeEntry;
 use entry_element::EntryElement;
 pub use entry_element::HeldElement;
 use in_place::{InPlace, update_entry_in_place};
 pub use plain::{
-    PLAIN_LAYOUT_WORDS_MAX, PLAIN_WORDS_MAX, PlainElement, PlainFns, PlainIntrinsic, PlainLayout,
-    PlainLayoutFns, PlainValue, plain_element,
+    PLAIN_WORDS_MAX, PlainElement, PlainFns, PlainIntrinsic, PlainLayout, PlainLayoutFns,
+    PlainValue, plain_element,
 };
 
 fn visit_node_tree_mut(
@@ -287,8 +287,8 @@ fn reconcile_element(
         return Some(fresh_entry(element, context, attach));
     };
     let entry = &mut old_entries[idx];
-    match (&mut entry.slot, maker) {
-        (EntrySlot::Plain { fns, words }, ElementMaker::Plain(value)) => {
+    match (&mut *entry, maker) {
+        (ModifierNodeEntry::Plain { fns, words, .. }, ElementMaker::Plain(value)) => {
             let held = &mut words[..fns.words()];
             if !value.equals_words(held) {
                 value.write_words(held);
@@ -296,18 +296,21 @@ fn reconcile_element(
             }
         }
         (
-            EntrySlot::Node {
+            ModifierNodeEntry::Node {
                 element: held,
                 node,
+                capabilities: held_capabilities,
+                ..
             },
             ElementMaker::Node(maker),
         ) if maker.can_update_node(&*node.borrow()) => {
-            let same_element = held.view(node, entry.capabilities).equals(element.as_ref());
+            let same_element = held.view(node, *held_capabilities).equals(element.as_ref());
             if !same_element || element.requires_update() {
                 maker.update_node(&mut *node.borrow_mut());
                 request_update_auto_invalidations(element.as_ref(), context, capabilities);
                 *held = EntryElement::new(Rc::clone(&element), maker);
             }
+            *held_capabilities = capabilities;
             node.borrow().node_state().set_capabilities(capabilities);
         }
         _ => return Some(fresh_entry(element, context, attach)),
@@ -318,7 +321,6 @@ fn reconcile_element(
     if idx != new_pos {
         request_auto_invalidations(context, capabilities);
     }
-    entry.capabilities = capabilities;
     None
 }
 
@@ -427,7 +429,7 @@ impl ModifierNodeChain {
     /// node in place and left its capabilities as they were.
     pub fn invalidate_last(&self, context: &mut dyn ModifierNodeContext) {
         if let Some(entry) = self.entries.last() {
-            request_auto_invalidations(context, entry.capabilities);
+            request_auto_invalidations(context, entry.capabilities());
         }
     }
 
@@ -485,7 +487,7 @@ impl ModifierNodeChain {
         if fast_path_failed_at.is_none() && scratch.elements.is_empty() {
             if elements_count < self.entries.len() {
                 for entry in self.entries.drain(elements_count..) {
-                    request_auto_invalidations(context, entry.capabilities);
+                    request_auto_invalidations(context, entry.capabilities());
                     entry.detach();
                 }
                 relink = true;
@@ -538,7 +540,7 @@ impl ModifierNodeChain {
             match scratch.match_order[i] {
                 Some(pos) if scratch.old_used[i] => scratch.final_slots[pos] = Some(entry),
                 _ => {
-                    request_auto_invalidations(context, entry.capabilities);
+                    request_auto_invalidations(context, entry.capabilities());
                     entry.detach();
                 }
             }
@@ -745,10 +747,7 @@ impl ModifierNodeChain {
     /// The table and the words of the plain element at `index`.
     #[inline]
     pub fn plain_words(&self, index: usize) -> Option<(&'static PlainFns, &[u32])> {
-        match &self.entries.get(index)?.slot {
-            EntrySlot::Plain { fns, words } => Some((fns, &words[..fns.words()])),
-            EntrySlot::Node { .. } => None,
-        }
+        self.entries.get(index)?.plain_words()
     }
 
     /// The value of the plain element at `index`, when it is an `E`.
@@ -820,7 +819,11 @@ impl ModifierNodeChain {
             Some(order) => order[index],
             None => {
                 let entry = &self.entries[index];
-                (NodePath::root(index), entry.capabilities, entry.aggregate)
+                (
+                    NodePath::root(index),
+                    entry.capabilities(),
+                    entry.aggregate(),
+                )
             }
         }
     }
@@ -837,8 +840,8 @@ impl ModifierNodeChain {
             }
         } else {
             for entry in self.entries.iter_mut().rev() {
-                aggregate |= entry.capabilities;
-                entry.aggregate = aggregate;
+                aggregate |= entry.capabilities();
+                entry.set_aggregate(aggregate);
             }
         }
         self.aggregated_capabilities = aggregate;
@@ -868,7 +871,7 @@ impl ModifierNodeChain {
                 }
                 None => order.push((
                     NodePath::root(index),
-                    entry.capabilities,
+                    entry.capabilities(),
                     NodeCapabilities::empty(),
                 )),
             }
