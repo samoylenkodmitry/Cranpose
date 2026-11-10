@@ -95,21 +95,20 @@ impl LayoutNode {
         Self::new_with_virtual(Modifier::empty(), empty_measure_policy(), true)
     }
 
+    // A node that waits in a recycle pool for the node that takes its place
+    // whole. It holds no parts of its own and no chain: the shells of a
+    // thread share one clean, empty block of parts.
     fn new_recycled_shell(is_virtual: bool) -> Self {
-        let mut shell =
-            Self::new_with_virtual(Modifier::empty(), empty_measure_policy(), is_virtual);
-        shell.parts.cache().set_dirt(LayoutDirt::CLEAN);
+        let parts = crate::thread_state::with(|state| {
+            Rc::clone(state.shell_parts.get_or_init(|| {
+                let parts = Rc::new(LayoutParts::empty());
+                parts.cache().set_dirt(LayoutDirt::CLEAN);
+                parts
+            }))
+        });
+        let shell = Self::without_modifier(parts, is_virtual);
         shell.needs_semantics.set(false);
-        shell.descendant_needs_semantics.set(false);
         shell.needs_redraw.set(false);
-        shell.needs_pointer_pass.set(false);
-        shell.needs_focus_sync.set(false);
-        shell.parent.set(None);
-        shell.folded_parent.set(None);
-        shell.id.set(None);
-        shell.owner_context_id.set(None);
-        shell.debug_modifiers.set(false);
-        shell.modifier_slices_dirty = Cell::new(true);
         shell
     }
 
@@ -119,7 +118,14 @@ impl LayoutNode {
         is_virtual: bool,
     ) -> Self {
         let parts = Rc::new(LayoutParts::new(LayoutRuntimeState::new(measure_policy)));
-        let mut node = Self {
+        let mut node = Self::without_modifier(parts, is_virtual);
+        node.sync_modifier_chain(&modifier, None);
+        node
+    }
+
+    // A node with `parts` whose chain no modifier has reached yet.
+    fn without_modifier(parts: Rc<LayoutParts>, is_virtual: bool) -> Self {
+        Self {
             #[cfg(feature = "inspection")]
             source_trace: cranpose_core::source_trace::current_source_trace(),
             modifier_chain: ModifierChainHandle::detached(),
@@ -140,9 +146,7 @@ impl LayoutNode {
             modifier_slices_snapshot: crate::modifier::SlicesSnapshot::default(),
             modifier_slices_dirty: Cell::new(true),
             parts,
-        };
-        node.sync_modifier_chain(&modifier, None);
-        node
+        }
     }
 
     /// The node's children, in the order they were inserted, virtual nodes as they are.
