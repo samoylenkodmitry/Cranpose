@@ -6,7 +6,7 @@ use std::{
 
 use cranpose_foundation::{
     BasicModifierNodeContext, ModifierNodeChain, NodeCapabilities, PointerButton, PointerButtons,
-    PointerEvent, PointerEventKind, modifier_element,
+    PointerEvent, PointerEventKind, modifier_element, plain_element,
 };
 use cranpose_ui_layout::Placeable;
 
@@ -184,7 +184,7 @@ fn background_node_is_draw_only() {
     let mut context = BasicModifierNodeContext::new();
 
     let color = Color(1.0, 0.0, 0.0, 1.0);
-    let elements = vec![modifier_element(BackgroundElement::new(color))];
+    let elements = vec![plain_element(BackgroundElement::new(color))];
     chain.update_from_slice(&elements, &mut context);
 
     assert_eq!(chain.len(), 1);
@@ -198,7 +198,7 @@ fn corner_shape_node_is_draw_only() {
     let mut chain = ModifierNodeChain::new();
     let mut context = BasicModifierNodeContext::new();
 
-    let elements = vec![modifier_element(CornerShapeElement::new(
+    let elements = vec![plain_element(CornerShapeElement::new(
         RoundedCornerShape::uniform(6.0),
     ))];
     chain.update_from_slice(&elements, &mut context);
@@ -466,7 +466,7 @@ fn mixed_modifier_chain_tracks_all_capabilities() {
         modifier_element(ClickableElement::new(move |_| {
             clicked.set(true);
         })),
-        modifier_element(BackgroundElement::new(Color(1.0, 0.0, 0.0, 1.0))),
+        plain_element(BackgroundElement::new(Color(1.0, 0.0, 0.0, 1.0))),
     ];
     chain.update_from_slice(&elements, &mut context);
 
@@ -495,34 +495,22 @@ fn mixed_modifier_chain_tracks_all_capabilities() {
 }
 
 #[test]
-fn toggling_background_color_reuses_node() {
+fn a_background_takes_its_new_color_in_its_place() {
     let _app_context = crate::render_state::app_context_test_scope();
     let mut chain = ModifierNodeChain::new();
     let mut context = BasicModifierNodeContext::new();
 
     let red = Color(1.0, 0.0, 0.0, 1.0);
-    let elements = vec![modifier_element(BackgroundElement::new(red))];
+    let elements = vec![plain_element(BackgroundElement::new(red))];
     chain.update_from_slice(&elements, &mut context);
-
-    let initial_node_ptr = {
-        let node_ref = chain.node::<BackgroundNode>(0).unwrap();
-        &*node_ref as *const _
-    };
 
     let blue = Color(0.0, 0.0, 1.0, 1.0);
-    let elements = vec![modifier_element(BackgroundElement::new(blue))];
+    let elements = vec![plain_element(BackgroundElement::new(blue))];
     chain.update_from_slice(&elements, &mut context);
 
-    let updated_node_ptr = {
-        let node_ref = chain.node::<BackgroundNode>(0).unwrap();
-        &*node_ref as *const _
-    };
-    assert_eq!(initial_node_ptr, updated_node_ptr, "Node should be reused");
-
-    {
-        let node_ref = chain.node::<BackgroundNode>(0).unwrap();
-        assert_eq!(node_ref.color(), blue);
-    }
+    assert_eq!(chain.len(), 1);
+    let background = chain.plain::<BackgroundElement>(0).expect("a background");
+    assert_eq!(background.color(), blue);
 }
 
 #[test]
@@ -536,31 +524,32 @@ fn reordering_modifiers_with_stable_reuse() {
 
     let elements = vec![
         modifier_element(PaddingElement::new(padding)),
-        modifier_element(BackgroundElement::new(color)),
+        plain_element(BackgroundElement::new(color)),
     ];
     chain.update_from_slice(&elements, &mut context);
 
-    let (padding_ptr, background_ptr) = {
+    let padding_ptr = {
         let padding_ref = chain.node::<PaddingNode>(0).unwrap();
-        let background_ref = chain.node::<BackgroundNode>(1).unwrap();
-        (&*padding_ref as *const _, &*background_ref as *const _)
+        &*padding_ref as *const _
     };
 
     let elements = vec![
-        modifier_element(BackgroundElement::new(color)),
+        plain_element(BackgroundElement::new(color)),
         modifier_element(PaddingElement::new(padding)),
     ];
     chain.update_from_slice(&elements, &mut context);
 
-    let (new_background_ptr, new_padding_ptr) = {
-        let background_ref = chain.node::<BackgroundNode>(0).unwrap();
+    let new_padding_ptr = {
         let padding_ref = chain.node::<PaddingNode>(1).unwrap();
-        (&*background_ref as *const _, &*padding_ref as *const _)
+        &*padding_ref as *const _
     };
 
     assert_eq!(
-        background_ptr, new_background_ptr,
-        "Background node should be reused"
+        chain
+            .plain::<BackgroundElement>(0)
+            .map(|background| background.color()),
+        Some(color),
+        "the background moves before the padding"
     );
     assert_eq!(
         padding_ptr, new_padding_ptr,

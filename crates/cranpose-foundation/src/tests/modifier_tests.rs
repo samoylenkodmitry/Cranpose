@@ -521,16 +521,12 @@ impl DirectElement {
     }
 }
 
-impl AnyModifierElement for DirectElement {
+impl NodeMaker for DirectElement {
     fn node_type(&self) -> TypeId {
         match self.kind {
             DirectNodeKind::A => TypeId::of::<DirectNodeA>(),
             DirectNodeKind::B => TypeId::of::<DirectNodeB>(),
         }
-    }
-
-    fn element_type(&self) -> TypeId {
-        self.shared_element_type
     }
 
     fn create_node(&self) -> Rc<RefCell<dyn ModifierNode>> {
@@ -561,6 +557,16 @@ impl AnyModifierElement for DirectElement {
         } else {
             self.log.borrow_mut().push("wrong-node-update".to_string());
         }
+    }
+}
+
+impl AnyModifierElement for DirectElement {
+    fn element_type(&self) -> TypeId {
+        self.shared_element_type
+    }
+
+    fn maker(&self) -> ElementMaker<'_> {
+        ElementMaker::Node(self)
     }
 
     fn key(&self) -> Option<u64> {

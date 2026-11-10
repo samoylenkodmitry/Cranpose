@@ -22,8 +22,9 @@ use crate::{
         scroll::{MotionContextAnimatedNode, TranslatedContentContextNode},
     },
     modifier_nodes::{
-        BackgroundNode, ClipToBoundsNode, CornerShapeNode, DrawCommandNode, GraphicsLayerNode,
-        PaddingNode, PointerIconNode, SelectableTextNode, WindowRectReporterNode,
+        BackgroundElement, ClipToBoundsNode, CornerShapeElement, DrawCommandNode,
+        GraphicsLayerNode, PaddingNode, PointerIconNode, SelectableTextNode,
+        WindowRectReporterNode,
     },
     text_field_modifier_node::TextFieldModifierNode,
     text_modifier_node::TextModifierNode,
@@ -136,6 +137,8 @@ fn collect_modifier_slices_into(
     for (modifier_index, node_ref) in chain.head_to_tail().enumerate() {
         let node_caps = node_ref.kind_set();
 
+        backgrounds.take_plain(&node_ref, (parts, layout_ordinal, padding), slices);
+
         node_ref.with_node(|node| {
             let any = node.as_any();
 
@@ -158,7 +161,7 @@ fn collect_modifier_slices_into(
                     displaceable: has_layout,
                     modifier_index,
                 };
-                collect_draw_node(node, &draw, slices, &mut backgrounds);
+                collect_draw_node(node, &draw, slices);
             }
 
             // `InPlaceReach::of` names the layout elements whose values no
@@ -245,21 +248,34 @@ impl Backgrounds {
     fn push(
         &mut self,
         color: crate::modifier::Color,
-        shape: Option<RoundedCornerShape>,
-        site: &DrawSite,
+        coordinator: CoordinatorRect,
         slices: &ModifierNodeSlices,
     ) {
-        let corner_shape = shape.or_else(|| self.pending_shape.take());
-        if shape.is_some() {
-            self.last_shape = shape;
-        }
+        let corner_shape = self.pending_shape.take();
         self.slots.push(BackgroundSlot {
             color,
-            coordinator: site.coordinator.clone(),
+            coordinator,
             insert_index: slices.draw_commands.len(),
             precedes_layer: slices.layer.is_none(),
             corner_shape,
         });
+    }
+
+    // Takes in the plain element at `node_ref`, when it is a background,
+    // which draws in the rect of the coordinator `ordinal` under `padding`,
+    // or a corner shape.
+    fn take_plain(
+        &mut self,
+        node_ref: &cranpose_foundation::ModifierChainNodeRef<'_>,
+        (parts, ordinal, padding): (Option<&Rc<LayoutParts>>, usize, EdgeInsets),
+        slices: &ModifierNodeSlices,
+    ) {
+        if let Some(background) = node_ref.plain::<BackgroundElement>() {
+            let coordinator = CoordinatorRect::new(parts, ordinal, padding);
+            self.push(background.color(), coordinator, slices);
+        } else if let Some(shape) = node_ref.plain::<CornerShapeElement>() {
+            self.shape(shape.shape());
+        }
     }
 
     fn shape(&mut self, shape: RoundedCornerShape) {
@@ -316,20 +332,11 @@ fn collect_draw_node(
     node: &dyn cranpose_foundation::ModifierNode,
     site: &DrawSite,
     slices: &mut ModifierNodeSlices,
-    backgrounds: &mut Backgrounds,
 ) {
     let any = node.as_any();
     // The node's type, asked once: each check below compares it, where a
     // downcast would ask the node again.
     let kind = Any::type_id(any);
-    if let Some(bg_node) = as_kind::<BackgroundNode>(any, kind) {
-        backgrounds.push(bg_node.color(), bg_node.shape(), site, slices);
-    }
-
-    if let Some(shape_node) = as_kind::<CornerShapeNode>(any, kind) {
-        backgrounds.shape(shape_node.shape());
-    }
-
     if let Some(z_index_node) = as_kind::<crate::modifier::z_index::ZIndexNode>(any, kind) {
         slices.rare_mut().z_index += z_index_node.z_index();
     }

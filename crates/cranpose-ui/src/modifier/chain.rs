@@ -380,10 +380,9 @@ impl ModifierChainHandle {
         .flatten()
     }
 
-    // The update in place from the chain's elements to `modifier`'s: see
-    // `element_match::in_place_update`.
-    pub(crate) fn in_place_update(&self, modifier: &Modifier) -> Option<InPlaceUpdate> {
-        element_match::in_place_update(self.chain.held_elements(), modifier)
+    // How `modifier`'s elements compare with the chain's, for a set of it.
+    pub(crate) fn match_for_set(&self, modifier: &Modifier) -> element_match::SetMatch {
+        element_match::match_for_set(self.chain.held_elements(), modifier)
     }
 
     // A modifier of the chain's elements, equal to the one the chain was last

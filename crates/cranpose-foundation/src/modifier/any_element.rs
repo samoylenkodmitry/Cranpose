@@ -12,24 +12,17 @@ use std::{
 
 use cranpose_core::{PackedU64, ProvidedValue, hash::default};
 
-use super::{InvalidationKind, ModifierNode, ModifierNodeElement, NodeCapabilities};
+use super::{
+    InvalidationKind, ModifierNode, ModifierNodeElement, NodeCapabilities, PlainFns, PlainValue,
+};
 
 /// Type-erased modifier element used by the runtime to reconcile chains.
 pub trait AnyModifierElement: fmt::Debug {
-    /// The type of node that the element creates.
-    fn node_type(&self) -> TypeId;
-
     /// The type of the element itself.
     fn element_type(&self) -> TypeId;
 
-    /// A new node for this element, in the shared cell its chain entry keeps.
-    fn create_node(&self) -> Rc<RefCell<dyn ModifierNode>>;
-
-    /// Whether `node` is of the type that this element updates.
-    fn can_update_node(&self, node: &dyn ModifierNode) -> bool;
-
-    /// Brings `node` up to date with the data of this element.
-    fn update_node(&self, node: &mut dyn ModifierNode);
+    /// How a chain keeps the element: by a node it makes, or as a value.
+    fn maker(&self) -> ElementMaker<'_>;
 
     /// The key that tells apart several elements of one type, or `None` when the element has none.
     fn key(&self) -> Option<u64>;
@@ -74,17 +67,47 @@ pub trait AnyModifierElement: fmt::Debug {
     /// Returns the element as `Any`, for downcasting to its concrete type.
     fn as_any(&self) -> &dyn Any;
 
-    /// What stands for the element beside its node when the node keeps
-    /// every value of it: see [`ModifierNodeElement::FROM_NODE`].
-    fn held_by_node(&self) -> Option<NodeHeld> {
-        None
-    }
-
     /// Whether `node` is of this element's node type and keeps an element
     /// equal to this one: always `false` for an element whose node keeps
     /// none.
     fn equals_node(&self, _node: &dyn ModifierNode) -> bool {
         false
+    }
+
+    /// Whether `words`, the value of a plain element of the type `fns`
+    /// tells, hold a value equal to this element: always `false` for an
+    /// element that is not plain.
+    fn equals_plain(&self, _fns: &PlainFns, _words: &[u32]) -> bool {
+        false
+    }
+}
+
+/// How a chain keeps an element.
+pub enum ElementMaker<'a> {
+    /// By a node the element makes and updates.
+    Node(&'a dyn NodeMaker),
+    /// As words in the chain's payload: see [`super::PlainElement`].
+    Plain(&'a dyn PlainValue),
+}
+
+/// An element that makes a node and updates it.
+pub trait NodeMaker {
+    /// The type of node that the element creates.
+    fn node_type(&self) -> TypeId;
+
+    /// A new node for this element, in the shared cell its chain entry keeps.
+    fn create_node(&self) -> Rc<RefCell<dyn ModifierNode>>;
+
+    /// Whether `node` is of the type that this element updates.
+    fn can_update_node(&self, node: &dyn ModifierNode) -> bool;
+
+    /// Brings `node` up to date with the data of this element.
+    fn update_node(&self, node: &mut dyn ModifierNode);
+
+    /// What stands for the element beside its node when the node keeps
+    /// every value of it: see [`ModifierNodeElement::FROM_NODE`].
+    fn held_by_node(&self) -> Option<NodeHeld> {
+        None
     }
 }
 
@@ -190,16 +213,12 @@ where
     }
 }
 
-impl<E> AnyModifierElement for TypedModifierElement<E>
+impl<E> NodeMaker for TypedModifierElement<E>
 where
     E: ModifierNodeElement,
 {
     fn node_type(&self) -> TypeId {
         TypeId::of::<E::Node>()
-    }
-
-    fn element_type(&self) -> TypeId {
-        TypeId::of::<E>()
     }
 
     fn create_node(&self) -> Rc<RefCell<dyn ModifierNode>> {
@@ -214,6 +233,23 @@ where
         if let Some(typed) = node.as_any_mut().downcast_mut::<E::Node>() {
             self.element.update(typed);
         }
+    }
+
+    fn held_by_node(&self) -> Option<NodeHeld> {
+        E::FROM_NODE.map(|_| NodeHeld(&HeldBy::<E>::FNS))
+    }
+}
+
+impl<E> AnyModifierElement for TypedModifierElement<E>
+where
+    E: ModifierNodeElement,
+{
+    fn element_type(&self) -> TypeId {
+        TypeId::of::<E>()
+    }
+
+    fn maker(&self) -> ElementMaker<'_> {
+        ElementMaker::Node(self)
     }
 
     fn key(&self) -> Option<u64> {
@@ -272,10 +308,6 @@ where
 
     fn as_any(&self) -> &dyn Any {
         self
-    }
-
-    fn held_by_node(&self) -> Option<NodeHeld> {
-        E::FROM_NODE.map(|_| NodeHeld(&HeldBy::<E>::FNS))
     }
 
     fn equals_node(&self, node: &dyn ModifierNode) -> bool {

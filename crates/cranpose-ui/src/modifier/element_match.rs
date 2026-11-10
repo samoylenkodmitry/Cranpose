@@ -72,51 +72,88 @@ fn element_matches(a: HeldElement<'_>, b: &DynModifierElement, rule: ElementMatc
     }
 }
 
-// The update in place from `held` to `modifier`'s elements, when they line
-// up one for one and are equal except elements that `InPlaceReach::of`
-// accepts: how far it reaches, and the elements it updates. `None` when
-// another element differs, or the chain is too long to name its elements;
-// an element that asks for an update on every set counts as different.
-pub(crate) fn in_place_update<'a>(
+// How a modifier's elements compare with the elements a chain holds, from
+// one walk of both: what a set of the modifier needs to know.
+pub(crate) struct SetMatch {
+    // Whether the chain holds the modifier's elements as `ElementMatch::Equal`
+    // compares them.
+    pub(crate) equal: bool,
+    // Whether it holds them as `ElementMatch::Structural` compares them.
+    pub(crate) structural: bool,
+    // The update in place from the chain's elements to the modifier's, when
+    // they line up one for one and are equal except elements that
+    // `InPlaceReach::of` accepts: how far it reaches, and the elements it
+    // updates. `None` when another element differs, or the chain is too
+    // long to name its elements; an element that asks for an update on
+    // every set counts as different.
+    pub(crate) in_place: Option<InPlaceUpdate>,
+}
+
+// Compares `held` with `modifier`'s elements, each pair once.
+pub(crate) fn match_for_set<'a>(
     held: impl ExactSizeIterator<Item = HeldElement<'a>>,
     modifier: &Modifier,
-) -> Option<InPlaceUpdate> {
+) -> SetMatch {
     let count = held.len();
-    if count != modifier.element_count() || count > u64::BITS as usize {
-        return None;
-    }
-    let mut update = InPlaceUpdate {
-        reach: InPlaceReach::Node,
-        elements: 0,
+    let mut matched = SetMatch {
+        equal: count == modifier.element_count(),
+        structural: count == modifier.element_count(),
+        in_place: (count == modifier.element_count() && count <= u64::BITS as usize).then_some(
+            InPlaceUpdate {
+                reach: InPlaceReach::Node,
+                elements: 0,
+            },
+        ),
     };
+    if !matched.structural {
+        return matched;
+    }
     for (index, (a, b)) in held.zip(modifier.iter_elements()).enumerate() {
-        if a.requires_update() || b.requires_update() {
-            return None;
-        }
-        let element_type = a.element_type();
-        match InPlaceReach::of(element_type) {
-            // A text updates in place whether it changed or not.
-            Some(InPlaceReach::Node) if b.element_type() == element_type => {
-                update.elements |= 1 << index;
+        // One element in both, as a kept chain shares them.
+        let shared = a.is(b);
+        let asks_update = a.requires_update() || b.requires_update();
+        // Most pairs are equal: they leave everything as it is. An update
+        // in place skips them, as it would find them equal again.
+        if shared || (!asks_update && a.equals(&**b)) {
+            if asks_update {
+                matched.in_place = None;
             }
-            Some(InPlaceReach::Resolved) if b.element_type() == element_type => {
-                if !same_element(a, b) {
+            continue;
+        }
+        matched.differ_at(index, (a, b), asks_update);
+        if !matched.structural && matched.in_place.is_none() {
+            break;
+        }
+    }
+    matched
+}
+
+impl SetMatch {
+    // Takes in the pair `a` and `b` at `index`, which differ or ask for an
+    // update on every set, as `asks_update` tells.
+    fn differ_at(
+        &mut self,
+        index: usize,
+        (a, b): (HeldElement<'_>, &DynModifierElement),
+        asks_update: bool,
+    ) {
+        self.equal = false;
+        let same = asks_update && a.equals(&**b);
+        let element_type = a.element_type();
+        let same_type = b.element_type() == element_type;
+        self.structural &= same
+            || (same_type
+                && a.capabilities() == NodeCapabilities::DRAW
+                && b.capabilities() == NodeCapabilities::DRAW);
+        if let Some(update) = &mut self.in_place {
+            match InPlaceReach::of(element_type).filter(|_| same_type && !asks_update) {
+                Some(InPlaceReach::Node) => update.elements |= 1 << index,
+                Some(InPlaceReach::Resolved) => {
                     update.reach = InPlaceReach::Resolved;
                     update.elements |= 1 << index;
                 }
-            }
-            _ => {
-                if !same_element(a, b) {
-                    return None;
-                }
+                None => self.in_place = None,
             }
         }
     }
-    Some(update)
-}
-
-// Whether `a` and `b` are equal elements: one element, as a kept chain
-// shares them, or two that compare equal.
-fn same_element(a: HeldElement<'_>, b: &DynModifierElement) -> bool {
-    a.is(b) || a.equals(&**b)
 }

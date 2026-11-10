@@ -16,8 +16,8 @@ mod tree_node;
 use crate::{
     layout::LayoutRuntimeState,
     modifier::{
-        ElementMatch, InPlaceUpdate, Modifier, ModifierChainHandle, ModifierLocalToken,
-        ModifierLocalsHandle, ModifierNodeSlices, Point, ResolvedModifiers, Size,
+        InPlaceUpdate, Modifier, ModifierChainHandle, ModifierLocalToken, ModifierLocalsHandle,
+        ModifierNodeSlices, Point, ResolvedModifiers, Size,
     },
     render_state::AppContext,
     widgets::nodes::{
@@ -168,7 +168,8 @@ impl LayoutNode {
         // An equal modifier leaves every element's node as it was. Only a
         // chain reading modifier locals resyncs, since its parent may now
         // provide others.
-        if self.modifier_chain.holds(&modifier, ElementMatch::Equal)
+        let matched = self.modifier_chain.match_for_set(&modifier);
+        if matched.equal
             && !self
                 .modifier_capabilities()
                 .contains(NodeCapabilities::MODIFIER_LOCALS)
@@ -177,11 +178,8 @@ impl LayoutNode {
         }
         // A change only in elements nothing else reads, as a ticker's text
         // or an animated size, keeps the slices the chain gave.
-        let update = self.modifier_chain.in_place_update(&modifier);
-        let modifier_changed = update.is_some()
-            || !self
-                .modifier_chain
-                .holds(&modifier, ElementMatch::Structural);
+        let update = matched.in_place;
+        let modifier_changed = update.is_some() || !matched.structural;
         self.sync_modifier_chain(&modifier, update);
         if modifier_changed {
             self.parts.cache().clear();

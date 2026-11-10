@@ -19,8 +19,8 @@ mod node_capabilities;
 mod node_element;
 mod scroll_axis_range;
 
-pub use any_element::{AnyModifierElement, DynModifierElement, NodeHeld, modifier_element};
-pub use chain::{HeldElement, ModifierNodeChain};
+pub use any_element::*;
+pub use chain::*;
 pub use chain_node_ref::{ModifierChainIter, ModifierChainNodeRef};
 pub use node_capabilities::NodeCapabilities;
 pub use node_element::ModifierNodeElement;

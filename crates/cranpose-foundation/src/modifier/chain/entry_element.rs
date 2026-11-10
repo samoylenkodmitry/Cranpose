@@ -1,10 +1,12 @@
-// The element a chain entry took last, kept as it is or held by the entry's
-// node, and the view a comparison with a new element reads.
+// The element a chain entry took last, kept as it is, held by the entry's
+// node or written as words in the chain's payload, and the view a comparison
+// with a new element reads.
 
 use std::{any::TypeId, cell::RefCell, rc::Rc};
 
 use super::super::{
-    AnyModifierElement, DynModifierElement, ModifierNode, NodeCapabilities, NodeHeld,
+    AnyModifierElement, DynModifierElement, ElementMaker, ModifierNode, NodeCapabilities, NodeHeld,
+    NodeMaker, PlainElement, PlainFns,
 };
 
 #[derive(Debug)]
@@ -18,8 +20,8 @@ pub(super) enum EntryElement {
 impl EntryElement {
     // How an entry keeps `element`: by its node when the node holds every
     // value of it.
-    pub(super) fn new(element: DynModifierElement) -> Self {
-        match element.held_by_node() {
+    pub(super) fn new(element: DynModifierElement, maker: &dyn NodeMaker) -> Self {
+        match maker.held_by_node() {
             Some(held) if element.key().is_none() => Self::InNode(held),
             _ => Self::Kept(element),
         }
@@ -62,6 +64,16 @@ enum Held<'a> {
         node: &'a RefCell<dyn ModifierNode>,
         capabilities: NodeCapabilities,
     },
+    Plain {
+        fns: &'static PlainFns,
+        words: &'a [u32],
+    },
+}
+
+impl<'a> HeldElement<'a> {
+    pub(super) fn of_words(fns: &'static PlainFns, words: &'a [u32]) -> Self {
+        Self(Held::Plain { fns, words })
+    }
 }
 
 impl<'a> From<&'a DynModifierElement> for HeldElement<'a> {
@@ -76,14 +88,20 @@ impl HeldElement<'_> {
         match self.0 {
             Held::Element(element) => element.element_type(),
             Held::Node { held, .. } => held.element_type(),
+            Held::Plain { fns, .. } => fns.element_type(),
         }
     }
 
-    /// The type of the node the element makes.
+    /// The type of the node the element makes: its own type for a plain
+    /// element, which makes none.
     pub fn node_type(&self) -> TypeId {
         match self.0 {
-            Held::Element(element) => element.node_type(),
+            Held::Element(element) => match element.maker() {
+                ElementMaker::Node(maker) => maker.node_type(),
+                ElementMaker::Plain(value) => value.fns().element_type(),
+            },
             Held::Node { held, .. } => held.node_type(),
+            Held::Plain { fns, .. } => fns.element_type(),
         }
     }
 
@@ -92,15 +110,16 @@ impl HeldElement<'_> {
         match self.0 {
             Held::Element(element) => element.capabilities(),
             Held::Node { capabilities, .. } => capabilities,
+            Held::Plain { fns, .. } => fns.capabilities(),
         }
     }
 
     /// Whether the element asks for an update of its node even when equal:
-    /// one its node holds never does.
+    /// one its node holds never does, nor does a plain one.
     pub fn requires_update(&self) -> bool {
         match self.0 {
             Held::Element(element) => element.requires_update(),
-            Held::Node { .. } => false,
+            Held::Node { .. } | Held::Plain { .. } => false,
         }
     }
 
@@ -108,7 +127,7 @@ impl HeldElement<'_> {
     pub fn is(&self, element: &DynModifierElement) -> bool {
         match self.0 {
             Held::Element(held) => Rc::ptr_eq(held, element),
-            Held::Node { .. } => false,
+            Held::Node { .. } | Held::Plain { .. } => false,
         }
     }
 
@@ -117,6 +136,16 @@ impl HeldElement<'_> {
         match self.0 {
             Held::Element(held) => held.equals_element(element),
             Held::Node { node, .. } => element.equals_node(&*node.borrow()),
+            Held::Plain { fns, words } => element.equals_plain(fns, words),
+        }
+    }
+
+    /// The element's value, when the chain keeps it as words of an `E`.
+    #[inline]
+    pub fn plain<E: PlainElement>(&self) -> Option<E> {
+        match self.0 {
+            Held::Plain { fns, words } => fns.read(words),
+            Held::Element(_) | Held::Node { .. } => None,
         }
     }
 
@@ -125,6 +154,7 @@ impl HeldElement<'_> {
         match self.0 {
             Held::Element(element) => element.hash_code(),
             Held::Node { held, node, .. } => held.hash_code(&*node.borrow()),
+            Held::Plain { fns, words } => fns.hash_code(words),
         }
     }
 
@@ -133,6 +163,7 @@ impl HeldElement<'_> {
         match self.0 {
             Held::Element(element) => Rc::clone(element),
             Held::Node { held, node, .. } => held.element(&*node.borrow()),
+            Held::Plain { fns, words } => fns.element(words),
         }
     }
 }

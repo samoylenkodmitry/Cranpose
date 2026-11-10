@@ -25,7 +25,7 @@ mod size;
 mod weight;
 
 pub(crate) use alignment::{AlignmentElement, AlignmentNode};
-pub use background::{BackgroundElement, BackgroundNode, CornerShapeElement, CornerShapeNode};
+pub use background::{BackgroundElement, CornerShapeElement};
 pub use clickable::{ClickableElement, ClickableNode};
 pub(crate) use clip::{ClipToBoundsElement, ClipToBoundsNode};
 pub use fill::{FillDirection, FillElement, FillNode};
