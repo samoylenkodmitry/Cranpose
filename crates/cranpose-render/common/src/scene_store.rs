@@ -18,6 +18,7 @@ mod reach;
 mod record_props;
 mod recordings;
 mod records;
+mod resize_vec;
 mod shape_chunks;
 mod slab;
 mod spec;

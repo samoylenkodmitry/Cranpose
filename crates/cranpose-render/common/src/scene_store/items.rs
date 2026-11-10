@@ -3,7 +3,9 @@
 
 use std::num::NonZeroU32;
 
-use cranpose_core::{RecordId, collections::growth_slack::GrowthSlack};
+use cranpose_core::RecordId;
+
+use super::resize_vec::ResizeVec;
 
 /// One item of a record: a child record or one of the record's draws.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -91,19 +93,15 @@ impl Span {
 // to that room; a freed span's room goes to the next span of its size class.
 #[derive(Clone)]
 pub(crate) struct SpanPool<T> {
-    items: Vec<T>,
+    items: ResizeVec<T>,
     free: Vec<Vec<u32>>,
-    // Whether the items changed length since their room was last checked:
-    // only a change of length can leave room to give back.
-    resized: bool,
 }
 
 impl<T> Default for SpanPool<T> {
     fn default() -> Self {
         Self {
-            items: Vec::new(),
+            items: ResizeVec::default(),
             free: Vec::new(),
-            resized: false,
         }
     }
 }
@@ -166,7 +164,6 @@ impl<T: Copy> SpanPool<T> {
         let start = u32::try_from(self.items.len()).expect("fewer than 2^32 items");
         let room = 1usize << class;
         self.items.resize(self.items.len() + room, filler);
-        self.resized = true;
         start
     }
 
@@ -183,13 +180,15 @@ impl<T: Copy> SpanPool<T> {
     pub(crate) fn clear(&mut self) {
         self.items.clear();
         self.free.iter_mut().for_each(Vec::clear);
-        self.resized = true;
+    }
+
+    #[inline]
+    pub(crate) fn resized(&self) -> bool {
+        self.items.resized()
     }
 
     pub(crate) fn trim_growth_slack(&mut self) {
-        if std::mem::take(&mut self.resized) {
-            self.items.trim_growth_slack();
-        }
+        self.items.trim_growth_slack();
     }
 }
 

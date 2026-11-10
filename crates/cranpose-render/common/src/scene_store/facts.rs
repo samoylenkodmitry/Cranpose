@@ -12,11 +12,13 @@
 
 use std::{cell::Cell, mem::size_of};
 
-use cranpose_core::{RecordId, collections::growth_slack::GrowthSlack};
+use cranpose_core::RecordId;
 use cranpose_ui::{GraphicsLayer, Rect};
 use cranpose_ui_graphics::DrawPrimitive;
 
-use super::{Item, ItemKind, ItemRef, LayerProps, LayerRef, RecordFlags, SceneStore};
+use super::{
+    Item, ItemKind, ItemRef, LayerProps, LayerRef, RecordFlags, SceneStore, resize_vec::ResizeVec,
+};
 use crate::graph::{CONTAINED_DRAW_SLACK, inflate_rect, rect_within};
 
 #[derive(Clone, Copy, Default)]
@@ -50,10 +52,7 @@ struct ChildFacts {
 
 #[derive(Clone, Default)]
 pub(crate) struct Facts {
-    rows: Vec<Cell<RowFacts>>,
-    // Whether the rows changed length since their room was last checked:
-    // only a change of length can leave room to give back.
-    resized: bool,
+    rows: ResizeVec<Cell<RowFacts>>,
 }
 
 impl Facts {
@@ -62,26 +61,25 @@ impl Facts {
     pub(super) fn open_row(&mut self, index: usize) {
         match self.rows.get(index) {
             Some(row) => row.set(RowFacts::default()),
-            None => {
-                self.rows.resize_with(index + 1, Cell::default);
-                self.resized = true;
-            }
+            None => self.rows.resize_with(index + 1, Cell::default),
         }
     }
 
     pub(super) fn clear(&mut self) {
         self.rows.clear();
-        self.resized = true;
     }
 
     pub(super) fn heap_bytes(&self) -> usize {
         self.rows.capacity() * size_of::<Cell<RowFacts>>()
     }
 
+    #[inline]
+    pub(super) fn resized(&self) -> bool {
+        self.rows.resized()
+    }
+
     pub(super) fn trim_growth_slack(&mut self) {
-        if std::mem::take(&mut self.resized) {
-            self.rows.trim_growth_slack();
-        }
+        self.rows.trim_growth_slack();
     }
 }
 

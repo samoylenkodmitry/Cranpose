@@ -189,20 +189,28 @@ impl Journal {
     }
 
     // Drops the entries every reader has read, and the oldest beyond what a
-    // store of `rows` record rows keeps, whose readers lose them.
+    // store of `rows` record rows keeps, whose readers lose them. Most
+    // updates log no entry a reader follows.
+    #[inline]
     pub(super) fn trim(&mut self, rows: usize) {
+        let len = self.entries.len();
+        self.recent.note(len);
+        if len > 0 {
+            self.drop_read(rows, len);
+        }
+        self.recent.shrink(&mut self.entries, ENTRIES_KEPT);
+    }
+
+    #[inline(never)]
+    fn drop_read(&mut self, rows: usize, len: usize) {
         let keep = ROWS_KEPT * rows + ENTRIES_KEPT;
         let read = self.readers.iter().flatten().map(|&(next, _)| next).min();
-        let read = read.map_or(self.entries.len(), |next| {
+        let read = read.map_or(len, |next| {
             usize::try_from(next.saturating_sub(self.start)).unwrap_or(usize::MAX)
         });
-        let drop = read
-            .max(self.entries.len().saturating_sub(keep))
-            .min(self.entries.len());
-        self.recent.note(self.entries.len());
+        let drop = read.max(len.saturating_sub(keep)).min(len);
         self.entries.drain(..drop);
         self.start += drop as u64;
-        self.recent.shrink(&mut self.entries, ENTRIES_KEPT);
     }
 
     pub(super) fn open(&mut self, store: StoreId, events: RecordEvents) -> JournalCursor {
