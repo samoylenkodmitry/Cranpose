@@ -17,8 +17,8 @@ use entry_element::EntryElement;
 pub use entry_element::HeldElement;
 use in_place::{InPlace, update_entry_in_place};
 pub use plain::{
-    PLAIN_WORDS_MAX, PlainElement, PlainFns, PlainIntrinsic, PlainLayout, PlainLayoutFns,
-    PlainValue, plain_element,
+    PLAIN_LAYOUT_WORDS_MAX, PLAIN_WORDS_MAX, PlainElement, PlainFns, PlainIntrinsic, PlainLayout,
+    PlainLayoutFns, PlainValue, plain_element,
 };
 
 fn visit_node_tree_mut(

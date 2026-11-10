@@ -9,8 +9,8 @@ use std::{
 
 use cranpose_core::{NodeId, PackedU64};
 use cranpose_foundation::{
-    InvalidationKind, ModifierNodeContext, NodeCapabilities, PLAIN_WORDS_MAX, PlainIntrinsic,
-    PlainLayoutFns,
+    InvalidationKind, ModifierNodeContext, NodeCapabilities, PLAIN_LAYOUT_WORDS_MAX,
+    PlainIntrinsic, PlainLayoutFns,
 };
 use cranpose_ui_layout::{AlignmentLines, Constraints, MeasurePolicy, Placement};
 
@@ -161,7 +161,7 @@ enum Source {
     Plain {
         // `None` for a plain element that measures nothing itself.
         layout: Option<&'static PlainLayoutFns>,
-        words: [u32; PLAIN_WORDS_MAX],
+        words: [u32; PLAIN_LAYOUT_WORDS_MAX],
     },
 }
 
@@ -198,8 +198,8 @@ fn prepared(
     layout: Option<&'static PlainLayoutFns>,
     words: &[u32],
     density: f32,
-) -> [u32; PLAIN_WORDS_MAX] {
-    let mut all = [0; PLAIN_WORDS_MAX];
+) -> [u32; PLAIN_LAYOUT_WORDS_MAX] {
+    let mut all = [0; PLAIN_LAYOUT_WORDS_MAX];
     if let Some(layout) = layout {
         layout.prepare(words, density, &mut all);
     }

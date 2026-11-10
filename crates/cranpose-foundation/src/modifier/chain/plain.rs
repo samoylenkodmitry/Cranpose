@@ -20,6 +20,10 @@ use super::super::{
 /// The most words a plain element's value takes in a chain's payload.
 pub const PLAIN_WORDS_MAX: usize = 8;
 
+/// The most words the value of a plain element that measures takes: a
+/// coordinator keeps a copy of them for every layout modifier of a node.
+pub const PLAIN_LAYOUT_WORDS_MAX: usize = 5;
+
 /// A modifier element that is a value and nothing else: it keeps no state
 /// between frames, hears of no attach, detach or reset and delegates to no
 /// node. A chain keeps its value as [`Self::WORDS`] words and makes no node
@@ -148,6 +152,12 @@ impl fmt::Debug for PlainLayoutFns {
 impl PlainLayoutFns {
     /// The table of the plain layout element `E`.
     pub const fn of<E: PlainLayout>() -> Self {
+        const {
+            assert!(
+                E::WORDS <= PLAIN_LAYOUT_WORDS_MAX,
+                "a coordinator's copy holds the words of a plain layout element"
+            );
+        }
         Self {
             prepare: |words, density, prepared| {
                 E::from_words(words)
@@ -183,7 +193,12 @@ impl PlainLayoutFns {
     /// Writes into `prepared` the words of the element `words` hold as a
     /// coordinator keeps it for measures at `density`; see
     /// [`PlainLayout::prepared`]. The other calls take prepared words.
-    pub fn prepare(&self, words: &[u32], density: f32, prepared: &mut [u32; PLAIN_WORDS_MAX]) {
+    pub fn prepare(
+        &self,
+        words: &[u32],
+        density: f32,
+        prepared: &mut [u32; PLAIN_LAYOUT_WORDS_MAX],
+    ) {
         (self.prepare)(words, density, prepared);
     }
 
