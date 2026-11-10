@@ -1,14 +1,12 @@
 // The fill modifiers: the element that fills a fraction of the room on an
 // axis. It is a plain element: a chain keeps its values as words.
 
-use std::hash::{Hash, Hasher};
+use std::hash::Hash;
 
 use cranpose_foundation::{
     Constraints, Measurable, ModifierNodeContext, NodeCapabilities, PlainElement, PlainLayout,
     PlainLayoutFns, Size,
 };
-
-use super::hash_f32_value;
 
 /// Direction for fill modifiers (horizontal, vertical, or both).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -82,13 +80,6 @@ impl FillElement {
             return extent;
         }
         cranpose_ui_layout::round_to_px(extent * self.fraction, density)
-    }
-}
-
-impl Hash for FillElement {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.direction.hash(state);
-        hash_f32_value(state, self.fraction);
     }
 }
 

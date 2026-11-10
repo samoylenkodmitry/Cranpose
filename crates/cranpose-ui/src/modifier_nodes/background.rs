@@ -1,11 +1,8 @@
 // The background modifier and the corner shape it draws in: plain elements,
 // which a chain keeps as words.
 
-use std::hash::{Hash, Hasher};
-
 use cranpose_foundation::{NodeCapabilities, PlainElement};
 
-use super::hash_f32_value;
 use crate::modifier::{Color, RoundedCornerShape};
 
 /// Element of a background: a fill behind the node's content.
@@ -23,15 +20,6 @@ impl BackgroundElement {
     /// Returns the fill color.
     pub fn color(&self) -> Color {
         self.color
-    }
-}
-
-impl Hash for BackgroundElement {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        hash_f32_value(state, self.color.0);
-        hash_f32_value(state, self.color.1);
-        hash_f32_value(state, self.color.2);
-        hash_f32_value(state, self.color.3);
     }
 }
 
@@ -72,16 +60,6 @@ impl CornerShapeElement {
     /// Returns the corner shape.
     pub fn shape(&self) -> RoundedCornerShape {
         self.shape
-    }
-}
-
-impl Hash for CornerShapeElement {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        let radii = self.shape.radii();
-        hash_f32_value(state, radii.top_left);
-        hash_f32_value(state, radii.top_right);
-        hash_f32_value(state, radii.bottom_right);
-        hash_f32_value(state, radii.bottom_left);
     }
 }
 

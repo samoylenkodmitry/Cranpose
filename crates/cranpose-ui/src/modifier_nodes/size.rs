@@ -1,14 +1,10 @@
 // The size modifier: the element that bounds its content's size. It is a
 // plain element: a chain keeps its bounds as words.
 
-use std::hash::{Hash, Hasher};
-
 use cranpose_foundation::{
     Constraints, InvalidationKind, Measurable, ModifierNodeContext, NodeCapabilities, PlainElement,
     PlainLayout, PlainLayoutFns, Size,
 };
-
-use super::hash_option_f32;
 
 // Which of a size element's bounds a slot of its values holds, and the bit
 // of its flags that says the slot holds a bound.
@@ -173,16 +169,6 @@ impl SizeElement {
     }
 }
 
-impl Hash for SizeElement {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        hash_option_f32(state, self.min_width());
-        hash_option_f32(state, self.max_width());
-        hash_option_f32(state, self.min_height());
-        hash_option_f32(state, self.max_height());
-        self.enforce_incoming().hash(state);
-    }
-}
-
 impl PlainElement for SizeElement {
     const WORDS: usize = 5;
     const CAPABILITIES: NodeCapabilities = NodeCapabilities::LAYOUT;
@@ -211,6 +197,8 @@ impl PlainElement for SizeElement {
 }
 
 impl PlainLayout for SizeElement {
+    const PREPARES: bool = true;
+
     fn prepared(self, density: f32) -> Self {
         let target = self.round_targets(density);
         let mut flags = self.flags | PREPARED;

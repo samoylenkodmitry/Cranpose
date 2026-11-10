@@ -1,14 +1,11 @@
 // The padding modifier: the element that insets its content. It is a plain
 // element: a chain keeps its insets as words.
 
-use std::hash::{Hash, Hasher};
-
 use cranpose_foundation::{
     Constraints, Measurable, ModifierNodeContext, NodeCapabilities, PlainElement, PlainLayout,
     PlainLayoutFns, Size,
 };
 
-use super::hash_f32_value;
 use crate::modifier::EdgeInsets;
 
 /// Element that insets its content: a plain element, which a chain keeps
@@ -27,15 +24,6 @@ impl PaddingElement {
     /// Returns the padding on each edge, in logical pixels.
     pub fn padding(&self) -> EdgeInsets {
         self.padding
-    }
-}
-
-impl Hash for PaddingElement {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        hash_f32_value(state, self.padding.left);
-        hash_f32_value(state, self.padding.top);
-        hash_f32_value(state, self.padding.right);
-        hash_f32_value(state, self.padding.bottom);
     }
 }
 

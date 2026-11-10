@@ -4,7 +4,7 @@
 use std::{
     any::{Any, TypeId, type_name},
     fmt,
-    hash::{Hash, Hasher},
+    hash::Hasher,
     marker::PhantomData,
     rc::Rc,
 };
@@ -26,7 +26,7 @@ pub const PLAIN_WORDS_MAX: usize = 5;
 /// between frames, hears of no attach, detach or reset and delegates to no
 /// node. A chain keeps its value as [`Self::WORDS`] words and makes no node
 /// for it; a reader takes the value back with [`Self::from_words`].
-pub trait PlainElement: fmt::Debug + Hash + PartialEq + Sized + 'static {
+pub trait PlainElement: fmt::Debug + PartialEq + Sized + 'static {
     /// How many words the value takes: at most [`PLAIN_WORDS_MAX`].
     const WORDS: usize;
 
@@ -77,6 +77,10 @@ pub trait PlainLayout: PlainElement {
     fn prepared(self, _density: f32) -> Self {
         self
     }
+
+    /// Whether [`Self::prepared`] changes the element: `false`, the
+    /// default, lets a coordinator copy the words as they are.
+    const PREPARES: bool = false;
 
     /// The incoming constraints the last measure, which gave `size` under
     /// `constraints`, holds for; see
@@ -135,7 +139,8 @@ type MeasureFn = fn(
 /// How a plain layout element measures, read from its words: what a
 /// coordinator keeps of the element's type.
 pub struct PlainLayoutFns {
-    prepare: fn(&[u32], f32, &mut [u32]),
+    // `None` for an element a coordinator keeps as it is.
+    prepare: Option<fn(&[u32], f32, &mut [u32])>,
     measure: MeasureFn,
     measure_hold: fn(&[u32], f32, Constraints, Size, WrappedHold) -> Option<ConstraintsHold>,
     intrinsic: fn(&[u32], &dyn Measurable, PlainIntrinsic, f32) -> f32,
@@ -151,10 +156,14 @@ impl PlainLayoutFns {
     /// The table of the plain layout element `E`.
     pub const fn of<E: PlainLayout>() -> Self {
         Self {
-            prepare: |words, density, prepared| {
-                E::from_words(words)
-                    .prepared(density)
-                    .to_words(&mut prepared[..E::WORDS]);
+            prepare: if E::PREPARES {
+                Some(|words, density, prepared| {
+                    E::from_words(words)
+                        .prepared(density)
+                        .to_words(&mut prepared[..E::WORDS]);
+                })
+            } else {
+                None
             },
             measure: |words, context, measurable, constraints| {
                 E::from_words(words).measure(context, measurable, constraints)
@@ -186,7 +195,10 @@ impl PlainLayoutFns {
     /// coordinator keeps it for measures at `density`; see
     /// [`PlainLayout::prepared`]. The other calls take prepared words.
     pub fn prepare(&self, words: &[u32], density: f32, prepared: &mut [u32; PLAIN_WORDS_MAX]) {
-        (self.prepare)(words, density, prepared);
+        match self.prepare {
+            Some(prepare) => prepare(words, density, prepared),
+            None => prepared[..words.len()].copy_from_slice(words),
+        }
     }
 
     /// Measures as the element `words` hold does.
@@ -233,7 +245,6 @@ pub struct PlainFns {
     capabilities: NodeCapabilities,
     layout: Option<&'static PlainLayoutFns>,
     type_name: fn() -> &'static str,
-    hash_code: fn(&[u32]) -> u64,
     element: fn(&[u32]) -> DynModifierElement,
 }
 
@@ -270,7 +281,7 @@ impl PlainFns {
     }
 
     pub(in super::super) fn hash_code(&self, words: &[u32]) -> u64 {
-        (self.hash_code)(words)
+        hash_words(words)
     }
 
     pub(in super::super) fn element(&self, words: &[u32]) -> DynModifierElement {
@@ -298,14 +309,19 @@ impl<E: PlainElement> FnsOf<E> {
         capabilities: E::CAPABILITIES,
         layout: E::LAYOUT,
         type_name: type_name::<E>,
-        hash_code: |words| hash_of(&E::from_words(words)),
         element: |words| plain_element(E::from_words(words)),
     };
 }
 
-fn hash_of<E: Hash>(element: &E) -> u64 {
+// The hash of a plain element: of its words, in one function for every
+// type. A chain's rebuild alone reads it, to pick an equal entry among
+// those of one type, so two equal values of other bits, as the two zeros,
+// may hash apart.
+fn hash_words(words: &[u32]) -> u64 {
     let mut hasher = default::new();
-    element.hash(&mut hasher);
+    for &word in words {
+        hasher.write_u32(word);
+    }
     hasher.finish()
 }
 
@@ -325,9 +341,13 @@ pub trait PlainValue {
 
 struct TypedPlainElement<E: PlainElement>(E);
 
+// The type alone, as the wrapper of a node's element prints: the values
+// would bring each element's formatting into every image.
 impl<E: PlainElement> fmt::Debug for TypedPlainElement<E> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.fmt(f)
+        f.debug_struct("TypedPlainElement")
+            .field("type", &type_name::<E>())
+            .finish()
     }
 }
 
@@ -363,7 +383,10 @@ impl<E: PlainElement> AnyModifierElement for TypedPlainElement<E> {
     }
 
     fn hash_code(&self) -> u64 {
-        hash_of(&self.0)
+        let mut words = [0; PLAIN_WORDS_MAX];
+        let words = &mut words[..E::WORDS];
+        self.0.to_words(words);
+        hash_words(words)
     }
 
     fn equals_element(&self, other: &dyn AnyModifierElement) -> bool {

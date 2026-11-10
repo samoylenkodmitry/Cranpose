@@ -45,16 +45,6 @@ fn hash_f32_value<H: Hasher>(state: &mut H, value: f32) {
     state.write_u32(value.to_bits());
 }
 
-fn hash_option_f32<H: Hasher>(state: &mut H, value: Option<f32>) {
-    match value {
-        Some(v) => {
-            state.write_u8(1);
-            hash_f32_value(state, v);
-        }
-        None => state.write_u8(0),
-    }
-}
-
 /// Hashes which 3D role a layer has and which mesh it is drawn on: equal
 /// layers hash alike, and the camera and placement are left to equality.
 fn hash_space<H: Hasher>(state: &mut H, space: Option<&cranpose_ui_graphics::space::LayerSpace>) {
