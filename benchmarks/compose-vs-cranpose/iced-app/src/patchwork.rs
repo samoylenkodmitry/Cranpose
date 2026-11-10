@@ -16,8 +16,8 @@ use iced::{
     Task, Theme, alignment,
     mouse::Cursor,
     widget::{
-        Column, Row, Stack, button, canvas, column, container, image, lazy, pin, rich_text, row,
-        scrollable, span, svg, text,
+        Column, Row, Stack, button, canvas, column, container, image, lazy, operation, pin,
+        rich_text, row, scrollable, span, svg, text,
     },
 };
 use perf_data::*;
@@ -45,6 +45,8 @@ pub struct Patchwork {
     // The charts' geometry, drawn once for a grid.
     charts: canvas::Cache,
     feed: Option<ChatFeed>,
+    // The chat's list, which each frame scrolls to its end.
+    list: iced::widget::Id,
     token: Option<ChatToken>,
     // The animated picture's frames.
     gif: Vec<image::Handle>,
@@ -111,6 +113,7 @@ impl Patchwork {
                 .map_err(|error| log::warn!("chat data thread: {error}"))
                 .ok(),
             token: None,
+            list: iced::widget::Id::unique(),
             gif: gif_frames(),
             spinner: svg::Handle::from_memory(CHAT_SVG.as_bytes()),
             advances: RefCell::new(HashMap::new()),
@@ -133,6 +136,7 @@ impl Patchwork {
                             None => break,
                         }
                     }
+                    return operation::snap_to_end(self.list.clone());
                 }
             }
         }
@@ -234,7 +238,7 @@ impl Patchwork {
             }
         }
         let list = scrollable(blocks)
-            .anchor_bottom()
+            .id(self.list.clone())
             .direction(scrollable::Direction::Vertical(
                 scrollable::Scrollbar::hidden(),
             ))
