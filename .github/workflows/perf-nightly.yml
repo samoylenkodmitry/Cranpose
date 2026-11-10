@@ -154,7 +154,7 @@ jobs:
         shell: bash --noprofile --norc -eo pipefail {0}
         run: |
           scripts/ci/with_host_lock.sh --exclusive python3 benchmarks/compose-vs-cranpose/desktop.py \
-            --output "$RUNNER_TEMP/desktop" --scenario gauntlet:16 --scenario wall:20 --main "$(git rev-parse HEAD)" \
+            --output "$RUNNER_TEMP/desktop" --scenario gauntlet:16 --scenario wall:20 --scenario patchwork:17 --main "$(git rev-parse HEAD)" \
             --release "$(git describe --tags --abbrev=0 --match 'v*')"
 
       - name: Publish the desktop run
