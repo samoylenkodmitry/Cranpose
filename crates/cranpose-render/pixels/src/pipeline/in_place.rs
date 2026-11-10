@@ -149,14 +149,15 @@ impl Repush<'_> {
         let mut next = record + 1;
         let mut walked = Ok(());
         for child in layer.children() {
-            if walked.is_ok() {
-                walked = self.visit(Subtree::of_record(child), next, Some(passed));
-                next = self
-                    .scene
-                    .subtrees
-                    .get(next)
-                    .map_or(usize::MAX, |at| at.end);
+            walked = self.visit(Subtree::of_record(child), next, Some(passed));
+            if walked.is_err() {
+                break;
             }
+            next = self
+                .scene
+                .subtrees
+                .get(next)
+                .map_or(usize::MAX, |at| at.end);
         }
         match walked {
             Err(Stop::Rebuild) => Err(Stop::Rebuild),
