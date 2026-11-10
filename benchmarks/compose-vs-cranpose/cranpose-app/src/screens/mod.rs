@@ -1,3 +1,4 @@
+#[cfg(feature = "chat")]
 pub mod chat;
 pub mod feed;
 pub mod gauntlet;

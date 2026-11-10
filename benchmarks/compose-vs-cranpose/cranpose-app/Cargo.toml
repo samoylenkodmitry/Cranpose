@@ -26,7 +26,7 @@ path = "src/main.rs"
 required-features = ["desktop"]
 
 [features]
-default = ["renderer-wgpu", "desktop", "entry"]
+default = ["renderer-wgpu", "desktop", "entry", "chat"]
 # Exports the Android entry symbol. An app that links this crate as a library turns it off and exports its own.
 entry = []
 renderer-wgpu = ["cranpose/renderer-wgpu"]
@@ -37,18 +37,22 @@ android = ["cranpose/android", "cranpose/release-log-info"]
 # The gauntlet in a browser: `wasm-pack build --target web --no-default-features
 # --features web,renderer-wgpu`. The faces are embedded, as a page has no files.
 web = ["cranpose/web", "dep:wasm-bindgen", "dep:wasm-logger"]
+# The chat beside the patchwork, which the desktop app draws: its spinner
+# needs SVG and its animated picture a GIF decoder. A crate that shows the
+# screens elsewhere leaves it out, so neither reaches its build.
+chat = ["cranpose-ui/svg", "dep:gif"]
 
 [dependencies]
 cranpose = { path = "../../../crates/cranpose", default-features = false }
 cranpose-core = { path = "../../../crates/cranpose-core" }
-cranpose-ui = { path = "../../../crates/cranpose-ui", features = ["svg"] }
+cranpose-ui = { path = "../../../crates/cranpose-ui" }
 cranpose-foundation = { path = "../../../crates/cranpose-foundation" }
 log = "0.4"
 perf-data = { path = "../perf-data" }
 
 wasm-bindgen = { version = "0.2", optional = true }
 wasm-logger = { version = "0.2", optional = true }
-gif = "0.14.2"
+gif = { version = "0.14.2", optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 console_error_panic_hook = "0.1"
