@@ -460,12 +460,14 @@ _size-ceiling path max what:
     fi
     echo "size budget: the {{what}} is $size bytes, within {{max}}"
 
-# The web demo's wasm after `just web`: 13.3 MiB. It was 13.25 MiB, the size
-# of 2026-10-29 (13,784,385 bytes) and about 0.8%; the Backrooms tab of #2118
-# took the demo to about 13,923,000 bytes with its rooms, shader and HUD. The
-# text engine of #1961 added 800 KB: HarfRust shapes every script on the web
-# and read-fonts reads every outline format, in place of ttf-parser's 125 KB.
-web-size-budget: (_size-ceiling "apps/desktop-demo/pkg/desktop_app_bg.wasm" "13946061" "web demo wasm")
+# The web demo's wasm after `just web`: 13.4 MiB. It was 13.3 MiB and 13.25 MiB
+# before, the size of 2026-10-29 (13,784,385 bytes) and about 0.8%; the
+# Backrooms tab of #2118 took the demo to about 13,923,000 bytes with its
+# rooms, shader and HUD. The Performance tab of #2162 (hover, pick and
+# animated charts) took it to 13,997,201 bytes. The text engine of #1961 added
+# 800 KB: HarfRust shapes every script on the web and read-fonts reads every
+# outline format, in place of ttf-parser's 125 KB.
+web-size-budget: (_size-ceiling "apps/desktop-demo/pkg/desktop_app_bg.wasm" "14050918" "web demo wasm")
 
 # The ESP32-S3 app image after `just esp32-build`: 3.3 MiB, the image of
 # 2026-10-29 (3,366,944 bytes) and about 2.4%. The text engine of #1961 added
