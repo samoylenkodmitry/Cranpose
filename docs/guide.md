@@ -826,7 +826,30 @@ resumes with its result. The closure and the result must be `Send`. An
 its wait. A closure that has already started still runs to its end on the
 worker. Its result goes nowhere. A browser page has one thread. There
 `withBlocking` returns `BlockingError::Unsupported` without running the
-closure. Run the work in the effect there, or in a Web Worker.
+closure.
+
+A worker job runs off the UI thread on every platform, the browser included.
+Mark a function `#[worker_job]` and pass its call to the same `withBlocking`:
+
+```rust
+#[worker_job]
+fn parse_report(json: String) -> Vec<u8> {
+    Report::parse(&json).to_bytes()
+}
+
+LaunchedEffect(json.clone(), async move |_| {
+    let bytes = withBlocking(parse_report.with(json)).await.ok();
+    report.set(bytes.map(Report::from_bytes));
+});
+```
+
+The job runs on the same pool of worker threads. In a browser it runs in a Web
+Worker, which loads the page's wasm module again and has a memory of its own.
+So the job takes one input and returns one output, and both cross as bytes:
+their types implement `WorkerData`, as `Vec<u8>`, `String` and the number types
+do. The function captures nothing. Its name is the job's name, one of a kind in
+the app. A page starts a worker with its first job, runs at most four, and
+closes one that sat idle for 30 seconds.
 
 #### Start child tasks
 

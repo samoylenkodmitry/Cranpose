@@ -1,0 +1,27 @@
+[package]
+name = "perf-compare-floem"
+version = "0.1.0"
+edition = "2024"
+description = "The gauntlet of the framework comparison in Floem"
+license = "Apache-2.0 OR MIT"
+publish = false
+
+[dependencies]
+# Floem on its Vello renderer: the default Vger renderer draws no turned
+# shape or text, which the gauntlet's panels and the chat's spinner need.
+floem = { version = "0.2.0", default-features = false, features = ["vello", "default-image-formats"] }
+floem_renderer = "0.2.0"
+gif = "0.14.2"
+log = "0.4"
+perf-data = { path = "../perf-data" }
+
+# Its own workspace, like a real application, built as the Cranpose app is.
+[workspace]
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+debug = 0

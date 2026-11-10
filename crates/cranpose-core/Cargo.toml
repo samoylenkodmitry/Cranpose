@@ -62,7 +62,10 @@ dispatch2 = "0.3"
 wasm-bindgen = "0.2"
 # `delay` hands its deadline to the browser's own timer rather than spinning a
 # frame loop, so an idle wait costs nothing.
-web-sys = { version = "0.3", features = ["Window"] }
+# The workers of `launch_worker` load the page's module from a script the
+# page hands them as a blob.
+web-sys = { version = "0.3", features = ["Window", "Navigator", "Worker", "WorkerOptions", "WorkerType", "Blob", "BlobPropertyBag", "Url", "MessageEvent"] }
+js-sys = "0.3"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 event-listener = "5.4.2"

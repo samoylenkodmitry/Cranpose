@@ -207,16 +207,16 @@ pub use cranpose_audio::{AudioEngine, install as install_audio};
 pub use cranpose_capabilities as capabilities;
 mod composition_api {
     pub use cranpose_core::{
-        BlockingError, BlockingExecutor, BlockingExecutorConfig, BlockingTask, CollectEvents,
-        ComputedState, CoroutineScope, DisposableEffect, DisposableEffectResult,
+        BlockingError, BlockingExecutor, BlockingExecutorConfig, BlockingTask, BlockingWork,
+        CollectEvents, ComputedState, CoroutineScope, DisposableEffect, DisposableEffectResult,
         DisposableEffectScope, EventStream, LaunchedEffect, LaunchedEffectScope, MovableContent,
-        MutableState, SnapshotStateList, SnapshotStateMap, State, TaskHandle, collectAsState,
-        computedStateOf, delay, derivedStateOf, forget_movable, interval, key, launchBlocking,
-        movable, movableContentOf, mutableStateList, mutableStateListOf, mutableStateMap,
-        mutableStateMapOf, mutableStateOf, mutableStateOfNeverEqual, produceState, remember,
-        rememberCoroutineScope, rememberEventStream, rememberKeyed, rememberMovableContentOf,
-        rememberMutableStateOf, rememberMutableStateOfNeverEqual, rememberUpdatedState,
-        withBlocking,
+        MutableState, SnapshotStateList, SnapshotStateMap, State, TaskHandle, WorkerCall,
+        WorkerData, WorkerJob, collectAsState, computedStateOf, delay, derivedStateOf,
+        forget_movable, interval, key, launchBlocking, movable, movableContentOf, mutableStateList,
+        mutableStateListOf, mutableStateMap, mutableStateMapOf, mutableStateOf,
+        mutableStateOfNeverEqual, produceState, remember, rememberCoroutineScope,
+        rememberEventStream, rememberKeyed, rememberMovableContentOf, rememberMutableStateOf,
+        rememberMutableStateOfNeverEqual, rememberUpdatedState, withBlocking,
     };
 }
 #[cfg(feature = "image-loading")]
@@ -344,12 +344,12 @@ pub fn FrameEffect<K: PartialEq + 'static>(
 #[doc(hidden)]
 pub use cranpose_core::{
     __branch_group_scope_advance, __branch_group_scope_deferred, __constant, __current_composer,
-    __inline_source_scope, __source_scope, CallbackHolder, ComposableGroup, Composer, Key,
-    ParamReturnState, ParamState, RecomposeScope, ReturnSlot, ValueSlotHandle, branch_location_key,
-    cached_composable_definition_key, caller_location_key, composable_definition_key,
-    composable_identity_key, const_location_key, constant_value_key, debug_label_current_scope,
-    hot_branch_key, hot_definition_key, hot_origin, location_key, noted_location_key,
-    refresh_param, refresh_shared_param, store_param, with_current_composer,
+    __inline_source_scope, __source_scope, __worker, CallbackHolder, ComposableGroup, Composer,
+    Key, ParamReturnState, ParamState, RecomposeScope, ReturnSlot, ValueSlotHandle,
+    branch_location_key, cached_composable_definition_key, caller_location_key,
+    composable_definition_key, composable_identity_key, const_location_key, constant_value_key,
+    debug_label_current_scope, hot_branch_key, hot_definition_key, hot_origin, location_key,
+    noted_location_key, refresh_param, refresh_shared_param, store_param, with_current_composer,
 };
 
 #[cfg(all(

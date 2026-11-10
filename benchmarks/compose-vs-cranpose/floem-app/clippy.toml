@@ -1,0 +1,4 @@
+# The app is its own workspace, as a real application is: it uses the
+# standard collections, not cranpose-core's.
+too-many-arguments-threshold = 7
+too-many-lines-threshold = 100

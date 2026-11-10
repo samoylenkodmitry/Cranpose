@@ -28,3 +28,4 @@ mod state_hooks;
 mod static_locals;
 mod task_wakes;
 mod value_slot_handle_ui;
+mod worker_jobs;

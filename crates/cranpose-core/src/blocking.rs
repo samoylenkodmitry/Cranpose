@@ -174,21 +174,56 @@ fn shared_executor() -> &'static BlockingExecutor {
     EXECUTOR.get_or_init(BlockingExecutor::default)
 }
 
-/// Runs synchronous work on the shared bounded executor when first polled.
+/// Work [`withBlocking`] and [`launchBlocking`] run off the UI thread: a
+/// closure, or a [`WorkerJob`](crate::WorkerJob) with its input.
 ///
-/// A full queue suspends this future until capacity is available, keeping the UI
-/// thread free. Shutdown and unwinding panics are reported as errors. Dropping
-/// the future releases its captures and cancels work not yet started. Running
-/// closures cannot be interrupted. Bound concurrent callers to bound the memory
-/// retained by their suspended futures.
-/// On Web this returns `Unsupported` without running the closure.
-#[expect(non_snake_case, reason = "names follow Compose's casing")]
-pub async fn withBlocking<T, F>(work: F) -> Result<T, BlockingError>
+/// A closure runs on the shared executor's threads. A browser page has no
+/// such thread and a closure cannot cross to a Web Worker, so a closure
+/// returns `Unsupported` there. A worker job's call runs on every platform:
+/// on the executor's threads, and in a Web Worker in a browser.
+pub trait BlockingWork<T>: 'static {
+    #[doc(hidden)]
+    fn run_blocking(self) -> impl Future<Output = Result<T, BlockingError>>;
+}
+
+impl<T, F> BlockingWork<T> for F
 where
     T: Send + 'static,
     F: FnOnce() -> T + Send + 'static,
 {
-    shared_executor().submit(work).await
+    fn run_blocking(self) -> impl Future<Output = Result<T, BlockingError>> {
+        shared_executor().submit(self)
+    }
+}
+
+impl<J: crate::WorkerJob> BlockingWork<J::Output> for crate::WorkerCall<J> {
+    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+    fn run_blocking(self) -> impl Future<Output = Result<J::Output, BlockingError>> {
+        shared_executor().submit(move || J::run(self.input))
+    }
+
+    #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+    async fn run_blocking(self) -> Result<J::Output, BlockingError> {
+        use crate::WorkerData;
+        crate::worker_pool::run(J::NAME, self.input.into_bytes())
+            .await
+            .map(J::Output::from_bytes)
+    }
+}
+
+/// Runs synchronous work off the UI thread when first polled: a closure, or
+/// a worker job's call.
+///
+/// A full queue suspends this future until capacity is available, keeping the UI
+/// thread free. Shutdown and unwinding panics are reported as errors. Dropping
+/// the future releases its captures and cancels work not yet started. Running
+/// work cannot be interrupted. Bound concurrent callers to bound the memory
+/// retained by their suspended futures.
+/// On Web a closure returns `Unsupported` without running, and a worker job's
+/// call runs in a Web Worker.
+#[expect(non_snake_case, reason = "names follow Compose's casing")]
+pub async fn withBlocking<T>(work: impl BlockingWork<T>) -> Result<T, BlockingError> {
+    work.run_blocking().await
 }
 
 /// Starts blocking work and delivers its result on the current runtime's UI
@@ -201,13 +236,10 @@ where
 /// For screen ownership, prefer `rememberCoroutineScope().launch` with
 /// `withBlocking`. Without a live runtime this returns `NoRuntime`.
 #[expect(non_snake_case, reason = "names follow Compose's casing")]
-pub fn launchBlocking<T>(
-    work: impl FnOnce() -> T + Send + 'static,
+pub fn launchBlocking<T: 'static>(
+    work: impl BlockingWork<T>,
     on_ui: impl FnOnce(Result<T, BlockingError>) + 'static,
-) -> Result<TaskHandle, BlockingError>
-where
-    T: Send + 'static,
-{
+) -> Result<TaskHandle, BlockingError> {
     let runtime = current_runtime_handle().ok_or(BlockingError::NoRuntime)?;
     runtime
         .spawn_ui(async move { on_ui(withBlocking(work).await) })
