@@ -510,6 +510,17 @@ impl ModifierNodeChain {
         context: &mut dyn ModifierNodeContext,
         scratch: &mut ReconcileScratch,
     ) {
+        // No old entry to take over, as at a new node's first sync: every
+        // element gets an entry of its own, with no query for a match.
+        if fail_idx == self.entries.len() {
+            self.entries.reserve_exact(scratch.elements.len());
+            for element in scratch.elements.drain(..) {
+                self.entries
+                    .push(fresh_entry(element, context, self.attached));
+            }
+            self.sync_chain_links();
+            return;
+        }
         let mut old_entries: Vec<ModifierNodeEntry> = self.entries.drain(fail_idx..).collect();
         let processed_entries_len = self.entries.len();
         let old_len = old_entries.len();
