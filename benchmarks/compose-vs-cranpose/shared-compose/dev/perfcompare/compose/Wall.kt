@@ -58,7 +58,7 @@ import kotlinx.coroutines.isActive
 // frame, so its frame records nothing again.
 
 val WALL_BACKGROUND = Color(WALL_BACKGROUND_ARGB)
-private val INK = Color(WALL_INK_ARGB)
+internal val INK = Color(WALL_INK_ARGB)
 
 /** The wall's tier and the frame it freezes on; 0 runs on. */
 @Immutable
@@ -90,7 +90,7 @@ fun ColumnScope.WallScreen(load: WallLoad) {
 
 // The line above the wall: the frame's number, new each frame.
 @Composable
-private fun Clock(frame: IntState) {
+internal fun Clock(frame: IntState) {
     Box(
         Modifier.fillMaxWidth().height(WALL_CLOCK_HEIGHT.dp).padding(horizontal = 8.dp),
         contentAlignment = Alignment.CenterStart,
@@ -102,7 +102,7 @@ private fun Clock(frame: IntState) {
 // The tiles, [columns] by [rows] of them [width] by [height] points each,
 // `WALL_GAP` apart.
 @Composable
-private fun Wall(columns: Int, rows: Int, width: Float, height: Float) {
+internal fun Wall(columns: Int, rows: Int, width: Float, height: Float) {
     Column(
         Modifier.padding(WALL_GAP.dp),
         verticalArrangement = Arrangement.spacedBy(WALL_GAP.dp),
@@ -119,14 +119,22 @@ private fun Wall(columns: Int, rows: Int, width: Float, height: Float) {
 
 // One tile: its label over a dot and its value, on its fill.
 @Composable
-private fun Tile(index: Int, width: Float, height: Float) {
-    val dot = wallDotSize(height)
-    Column(
+internal fun Tile(index: Int, width: Float, height: Float) {
+    TileContent(
+        index,
+        height,
         Modifier
             .size(width.dp, height.dp)
-            .background(Color(wallFillArgb(index)), RoundedCornerShape(WALL_CORNER.dp))
-            .padding(wallPadding(height).dp),
-    ) {
+            .background(Color(wallFillArgb(index)), RoundedCornerShape(WALL_CORNER.dp)),
+    )
+}
+
+// What a tile [height] points tall shows, in a box [modifier] sizes and
+// fills: its label over a dot and its value.
+@Composable
+internal fun TileContent(index: Int, height: Float, modifier: Modifier) {
+    val dot = wallDotSize(height)
+    Column(modifier.padding(wallPadding(height).dp)) {
         BasicText(
             wallLabel(index),
             style = textStyle(wallLabelSize(height), INK, true),

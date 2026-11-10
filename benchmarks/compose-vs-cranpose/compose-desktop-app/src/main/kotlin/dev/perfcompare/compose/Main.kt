@@ -26,11 +26,18 @@ import org.jetbrains.skia.ImageInfo
 
 // What `shared-compose` asks of the desktop app, and the window `desktop.py`
 // measures: 1280 x 820 points of content, the screen in `PERF_SCENARIO`
-// (`gauntlet` or `wall`), the tier in `PERF_TIER`, the frame to freeze on in
-// `PERF_FREEZE` and the Roboto files in `PERF_FONTS`.
+// (`gauntlet`, `wall` or `patchwork`), the tier in `PERF_TIER`, the frame to
+// freeze on in `PERF_FREEZE`, the font files in `PERF_FONTS` and the pictures
+// of the patchwork's chat in `PERF_CHAT`.
 
 private val environment: Map<String, String> = System.getenv()
 private val fonts = File(environment["PERF_FONTS"] ?: "fonts")
+
+/** The folder of the animated picture and the spinner of the patchwork's chat. */
+internal val chatAssets = File(environment["PERF_CHAT"] ?: "chat-assets")
+
+/** The monospaced face of the chat's code. */
+internal val Mono = FontFamily(Font(File(fonts, "DejaVuSansMono.ttf"), FontWeight.Normal))
 
 /** The Roboto files every desktop app loads. */
 internal val Roboto = FontFamily(
@@ -63,8 +70,10 @@ fun avatarBitmap(index: Int): ImageBitmap {
 fun main() = application {
     val tier = environment["PERF_TIER"]?.toIntOrNull() ?: 5
     val freeze = environment["PERF_FREEZE"]?.toIntOrNull() ?: 0
-    val wall = environment["PERF_SCENARIO"] == "wall"
-    val title = if (wall) "Still wall" else "Gauntlet"
+    val scenario = environment["PERF_SCENARIO"]
+    val wall = scenario == "wall"
+    val patchwork = scenario == "patchwork"
+    val title = if (wall) "Still wall" else if (patchwork) "Patchwork" else "Gauntlet"
     var firstFrameLogged = false
     val state = rememberWindowState(size = DpSize(1280.dp, 820.dp))
     Window(onCloseRequest = ::exitApplication, state = state, title = title, resizable = false) {
@@ -77,7 +86,7 @@ fun main() = application {
         Column(
             Modifier
                 .fillMaxSize()
-                .background(if (wall) WALL_BACKGROUND else Color(0xFFEEF0F5))
+                .background(if (wall || patchwork) WALL_BACKGROUND else Color(0xFFEEF0F5))
                 .drawBehind {
                     if (!firstFrameLogged) {
                         firstFrameLogged = true
@@ -86,7 +95,11 @@ fun main() = application {
                 },
         ) {
             TopBar(title)
-            if (wall) WallScreen(WallLoad(tier, freeze)) else GauntletScreen(GauntletLoad(tier, freeze))
+            when {
+                wall -> WallScreen(WallLoad(tier, freeze))
+                patchwork -> PatchworkScreen(PatchworkLoad(tier, freeze))
+                else -> GauntletScreen(GauntletLoad(tier, freeze))
+            }
         }
     }
 }
