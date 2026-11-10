@@ -79,17 +79,19 @@ fun main() = application {
     val state = rememberWindowState(size = DpSize(1280.dp, 820.dp))
     Window(onCloseRequest = ::exitApplication, state = state, title = title, resizable = false) {
         LaunchedEffect(Unit) {
-            // The window's size counts its title bar: it grows by the
-            // window's insets, so the content is 1280 x 820. The insets are
-            // known once the window shows its first frames.
-            var insets = window.insets
+            // The window's size counts its title bar, so the window grows by
+            // what its content lacks of 1280 x 820. The content has its size
+            // once the window shows its first frames.
             var waited = 0
-            while (insets.top == 0 && waited < 120) {
+            while (window.contentPane.height == 0 && waited < 120) {
                 withFrameNanos { }
-                insets = window.insets
                 waited++
             }
-            state.size = DpSize((1280 + insets.left + insets.right).dp, (820 + insets.top + insets.bottom).dp)
+            val content = window.contentPane
+            state.size = DpSize(
+                (1280 + (window.width - content.width)).dp,
+                (820 + (window.height - content.height)).dp,
+            )
         }
         Column(
             Modifier
