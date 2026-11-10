@@ -459,3 +459,73 @@ body.still-wall {
   border-radius: 2px;
   will-change: transform;
 }
+
+/* The patchwork (`src/patchwork.ts`): eight patches of the wall's tiles,
+   four across and two down. A patch cuts what lies past it and lays out
+   apart from the others. */
+.patchwork {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: repeat(4, var(--patch-width));
+  grid-auto-rows: var(--patch-height);
+  line-height: 1.4;
+}
+
+.patch {
+  position: relative;
+  box-sizing: border-box;
+  padding: 1px;
+  contain: strict;
+}
+
+.patch-grid {
+  display: grid;
+  grid-template-columns: repeat(var(--columns, 1), var(--width));
+  grid-auto-rows: var(--height);
+  gap: 1px;
+  align-content: start;
+}
+
+.patch-pairs {
+  grid-template-columns: repeat(var(--pairs, 1), calc(2 * var(--width) + 1px));
+  grid-auto-rows: calc(2 * var(--height) + 1px);
+}
+
+.patch-flow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1px;
+  align-content: flex-start;
+}
+
+.patch-flow .wall-tile {
+  height: var(--height);
+}
+
+.patch-blank {
+  border-radius: 2px;
+}
+
+.patch-nest {
+  box-sizing: border-box;
+  padding: var(--pad);
+  font-size: var(--label);
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.patch-nest .patch-nest {
+  width: 100%;
+  height: 100%;
+}
+
+.patch-paragraph {
+  font-size: var(--label);
+}
+
+.patch-pile .wall-tile {
+  position: absolute;
+  width: calc(2 * var(--width) + 1px);
+  height: calc(2 * var(--height) + 1px);
+}

@@ -17,12 +17,12 @@ use perf_data::*;
 
 use super::{TOP_BAR, bold, roboto};
 
-const fn rgb(rgb: [u8; 3]) -> Color32 {
+pub(super) const fn rgb(rgb: [u8; 3]) -> Color32 {
     Color32::from_rgb(rgb[0], rgb[1], rgb[2])
 }
 
-const BACKGROUND: Color32 = rgb(WALL_BACKGROUND_RGB);
-const INK: Color32 = rgb(WALL_INK_RGB);
+pub(super) const BACKGROUND: Color32 = rgb(WALL_BACKGROUND_RGB);
+pub(super) const INK: Color32 = rgb(WALL_INK_RGB);
 
 /// The still wall's state: its frame and the tiles' text, laid out once.
 pub struct Wall {
@@ -47,52 +47,15 @@ impl Wall {
 
     // Lays out every tile's text for a wall `grid` tiles across and down.
     fn lay_out_tiles(&mut self, ui: &Ui, grid: (usize, usize)) {
-        let (label_size, value_size) = wall_text_size(self.tier.tile_height);
-        let line = |text: String, size: f32, family: FontFamily| {
-            let job = LayoutJob::simple_singleline(text, FontId::new(size, family), INK);
-            ui.ctx().fonts_mut(|fonts| fonts.layout_job(job))
-        };
         self.text = (0..grid.0 * grid.1)
-            .map(|index| {
-                [
-                    line(wall_label(index), label_size, bold()),
-                    line(wall_value(index), value_size, FontFamily::Proportional),
-                ]
-            })
+            .map(|index| tile_text(ui, self.tier.tile_height, index))
             .collect();
         self.grid = grid;
-    }
-
-    fn top_bar(ui: &Ui, screen: Rect) -> Rect {
-        let rect = Rect::from_min_size(screen.min, vec2(screen.width(), 56.0));
-        ui.painter().rect_filled(rect, 0.0, TOP_BAR);
-        let title = LayoutJob::simple_singleline(
-            "Still wall".to_owned(),
-            FontId::new(20.0, bold()),
-            Color32::WHITE,
-        );
-        let title = ui.ctx().fonts_mut(|fonts| fonts.layout_job(title));
-        let at = pos2(rect.left() + 16.0, rect.center().y - title.size().y / 2.0);
-        ui.painter().galley(at, title, Color32::WHITE);
-        rect
-    }
-
-    fn clock(&self, ui: &Ui, rect: Rect) {
-        let job = LayoutJob::simple_singleline(
-            wall_clock(self.frame.get()),
-            FontId::new(WALL_CLOCK_TEXT, FontFamily::Proportional),
-            INK,
-        );
-        let clock = ui.ctx().fonts_mut(|fonts| fonts.layout_job(job));
-        let at = pos2(rect.left() + 8.0, rect.center().y - clock.size().y / 2.0);
-        ui.painter().galley(at, clock, INK);
     }
 
     fn wall(&self, ui: &Ui, area: Rect) {
         let painter = ui.painter();
         let (width, height) = (self.tier.tile_width, self.tier.tile_height);
-        let padding = wall_padding(height);
-        let dot = wall_dot_size(height);
         let corner = CornerRadius::same(WALL_CORNER as u8);
         let tile_rect = |index: usize| {
             let (column, row) = (index % self.grid.0, index / self.grid.0);
@@ -105,15 +68,15 @@ impl Wall {
                 vec2(width, height),
             )
         };
-        for (index, [label, value]) in self.text.iter().enumerate() {
-            let rect = tile_rect(index);
-            painter.rect_filled(rect, corner, rgb(wall_fill_rgb(index)));
-            let inner = rect.shrink(padding);
-            painter.galley(inner.min, label.clone(), INK);
-            let line = inner.min.y + label.size().y;
-            let center = pos2(inner.min.x + dot / 2.0, line + value.size().y / 2.0);
-            painter.circle_filled(center, dot / 2.0, rgb(wall_dot_rgb(index)));
-            painter.galley(pos2(inner.min.x + dot * 1.5, line), value.clone(), INK);
+        for (index, text) in self.text.iter().enumerate() {
+            paint_tile(
+                painter,
+                tile_rect(index),
+                rgb(wall_fill_rgb(index)),
+                height,
+                index,
+                text,
+            );
         }
         let cursor = tile_rect(wall_cursor(self.frame.get(), self.text.len()));
         painter.rect_stroke(
@@ -130,9 +93,9 @@ impl eframe::App for Wall {
         let more = self.frame.advance();
         let screen = ui.max_rect();
         ui.painter().rect_filled(screen, 0.0, BACKGROUND);
-        let bar = Self::top_bar(ui, screen);
+        let bar = top_bar(ui, screen, "Still wall");
         let clock = Rect::from_min_size(bar.left_bottom(), vec2(screen.width(), WALL_CLOCK_HEIGHT));
-        self.clock(ui, clock);
+        paint_clock(ui, clock, self.frame.get());
         let area = Rect::from_min_max(clock.left_bottom(), screen.max);
         let grid = wall_grid(self.tier, area.width(), area.height());
         if grid != self.grid {
@@ -143,4 +106,63 @@ impl eframe::App for Wall {
             ui.ctx().request_repaint();
         }
     }
+}
+
+/// A line of `text` that never wraps, laid out.
+pub(super) fn line(ui: &Ui, text: String, size: f32, family: FontFamily) -> Arc<Galley> {
+    let job = LayoutJob::simple_singleline(text, FontId::new(size, family), INK);
+    ui.ctx().fonts_mut(|fonts| fonts.layout_job(job))
+}
+
+/// The label and the value of tile `index`, for tiles `height` points tall.
+pub(super) fn tile_text(ui: &Ui, height: f32, index: usize) -> [Arc<Galley>; 2] {
+    let (label_size, value_size) = wall_text_size(height);
+    [
+        line(ui, wall_label(index), label_size, bold()),
+        line(ui, wall_value(index), value_size, FontFamily::Proportional),
+    ]
+}
+
+/// Paints tile `index` in `rect` on `fill`, with content for tiles `height`
+/// points tall: its label over its dot and its value.
+pub(super) fn paint_tile(
+    painter: &egui::Painter,
+    rect: Rect,
+    fill: Color32,
+    height: f32,
+    index: usize,
+    [label, value]: &[Arc<Galley>; 2],
+) {
+    let dot = wall_dot_size(height);
+    painter.rect_filled(rect, CornerRadius::same(WALL_CORNER as u8), fill);
+    let inner = rect.shrink(wall_padding(height));
+    painter.galley(inner.min, label.clone(), INK);
+    let line = inner.min.y + label.size().y;
+    let center = pos2(inner.min.x + dot / 2.0, line + value.size().y / 2.0);
+    painter.circle_filled(center, dot / 2.0, rgb(wall_dot_rgb(index)));
+    painter.galley(pos2(inner.min.x + dot * 1.5, line), value.clone(), INK);
+}
+
+/// The top bar with `title`, at the top of `screen`.
+pub(super) fn top_bar(ui: &Ui, screen: Rect, title: &str) -> Rect {
+    let rect = Rect::from_min_size(screen.min, vec2(screen.width(), 56.0));
+    ui.painter().rect_filled(rect, 0.0, TOP_BAR);
+    let title =
+        LayoutJob::simple_singleline(title.to_owned(), FontId::new(20.0, bold()), Color32::WHITE);
+    let title = ui.ctx().fonts_mut(|fonts| fonts.layout_job(title));
+    let at = pos2(rect.left() + 16.0, rect.center().y - title.size().y / 2.0);
+    ui.painter().galley(at, title, Color32::WHITE);
+    rect
+}
+
+/// The clock line of frame `frame` in `rect`.
+pub(super) fn paint_clock(ui: &Ui, rect: Rect, frame: u32) {
+    let clock = line(
+        ui,
+        wall_clock(frame),
+        WALL_CLOCK_TEXT,
+        FontFamily::Proportional,
+    );
+    let at = pos2(rect.left() + 8.0, rect.center().y - clock.size().y / 2.0);
+    ui.painter().galley(at, clock, INK);
 }

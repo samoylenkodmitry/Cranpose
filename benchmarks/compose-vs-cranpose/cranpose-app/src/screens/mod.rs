@@ -3,6 +3,7 @@ pub mod gauntlet;
 pub mod heavy;
 pub mod layers;
 pub mod particles;
+pub mod patchwork;
 pub mod ticker;
 pub mod wall;
 pub mod workspace;

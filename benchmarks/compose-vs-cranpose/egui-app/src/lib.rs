@@ -22,6 +22,7 @@ use eframe::egui::{
 };
 use perf_data::*;
 
+mod patchwork;
 mod wall;
 
 pub use wall::Wall;
@@ -888,6 +889,7 @@ fn screen(ctx: &egui::Context, load: Launch) -> Box<dyn eframe::App> {
     match load.scenario {
         Scenario::Gauntlet => Box::new(Gauntlet::new(ctx, load)),
         Scenario::Wall => Box::new(Wall::new(ctx, load)),
+        Scenario::Patchwork => Box::new(patchwork::Patchwork::new(ctx, load)),
     }
 }
 

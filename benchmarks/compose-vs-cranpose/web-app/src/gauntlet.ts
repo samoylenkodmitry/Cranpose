@@ -36,12 +36,13 @@ import {
   tickers,
   widthFraction,
 } from '../../shared-ts/data.js';
+import { patchwork } from './patchwork.js';
 import { wall } from './wall.js';
 
 interface Launch {
   tier: number;
   freeze: number;
-  /** The screen: the gauntlet unless it is `wall`. */
+  /** The screen: the gauntlet unless it is `wall` or `patchwork`. */
   scenario?: string;
 }
 
@@ -331,6 +332,10 @@ async function main() {
   // The still wall in the gauntlet's place, when the launch asks for it.
   if (launch.scenario === 'wall') {
     wall(launch.tier, launch.freeze, log);
+    return;
+  }
+  if (launch.scenario === 'patchwork') {
+    patchwork(launch.tier, launch.freeze, log);
     return;
   }
   const tier = gauntletTier(launch.tier);

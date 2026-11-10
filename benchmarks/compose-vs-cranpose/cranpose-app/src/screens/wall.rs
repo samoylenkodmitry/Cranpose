@@ -19,19 +19,19 @@ pub struct WallLoad {
     pub freeze: u32,
 }
 
-const fn rgb(rgb: [u8; 3]) -> Color {
+pub(super) const fn rgb(rgb: [u8; 3]) -> Color {
     Color::from_rgb_u8(rgb[0], rgb[1], rgb[2])
 }
 
-const BACKGROUND: Color = rgb(data::WALL_BACKGROUND_RGB);
+pub(super) const BACKGROUND: Color = rgb(data::WALL_BACKGROUND_RGB);
 // A tile's text stays on one line and is cut at the tile's edge.
-const ONE_LINE: TextOptions = TextOptions {
+pub(super) const ONE_LINE: TextOptions = TextOptions {
     overflow: TextOverflow::Clip,
     soft_wrap: false,
     max_lines: Some(1),
     min_lines: 1,
 };
-const INK: Color = rgb(data::WALL_INK_RGB);
+pub(super) const INK: Color = rgb(data::WALL_INK_RGB);
 
 #[composable]
 pub fn WallScreen(load: WallLoad) {
@@ -72,7 +72,7 @@ pub fn WallScreen(load: WallLoad) {
 
 // The line above the wall: the frame's number, new each frame.
 #[composable]
-fn Clock(frame: MutableState<u32>) {
+pub(super) fn Clock(frame: MutableState<u32>) {
     Box(
         Modifier::empty()
             .fill_max_width()
@@ -92,19 +92,28 @@ fn Clock(frame: MutableState<u32>) {
 // The tiles, `columns` by `rows` of them `width` by `height` points each,
 // `WALL_GAP` apart.
 #[composable]
-fn Wall(columns: usize, rows: usize, width: f32, height: f32) {
+pub(super) fn Wall(columns: usize, rows: usize, width: f32, height: f32) {
+    tile_rows(columns, rows, move |index| {
+        Tile(index, width, height);
+    });
+}
+
+// `columns` by `rows` cells, `WALL_GAP` apart and from the edges, each of
+// which `cell` fills for its index.
+pub(super) fn tile_rows(columns: usize, rows: usize, cell: impl Fn(usize) + Clone + 'static) {
     Column(
         Modifier::empty().padding(data::WALL_GAP),
         ColumnSpec::new().vertical_arrangement(LinearArrangement::spaced_by(data::WALL_GAP)),
         move || {
             for row in 0..rows {
+                let cell = cell.clone();
                 Row(
                     Modifier::empty(),
                     RowSpec::new()
                         .horizontal_arrangement(LinearArrangement::spaced_by(data::WALL_GAP)),
                     move || {
                         for column in 0..columns {
-                            Tile(row * columns + column, width, height);
+                            cell(row * columns + column);
                         }
                     },
                 );
@@ -115,9 +124,7 @@ fn Wall(columns: usize, rows: usize, width: f32, height: f32) {
 
 // One tile: its label over a dot and its value, on its fill.
 #[composable]
-fn Tile(index: usize, width: f32, height: f32) {
-    let (label_size, value_size) = data::wall_text_size(height);
-    let dot = data::wall_dot_size(height);
+pub(super) fn Tile(index: usize, width: f32, height: f32) {
     Column(
         Modifier::empty()
             .size_points(width, height)
@@ -125,34 +132,40 @@ fn Tile(index: usize, width: f32, height: f32) {
             .rounded_corners(data::WALL_CORNER)
             .padding(data::wall_padding(height)),
         ColumnSpec::default(),
+        move || tile_content(index, height),
+    );
+}
+
+// What a tile `height` points tall shows on its fill: its label over a dot
+// and its value.
+pub(super) fn tile_content(index: usize, height: f32) {
+    let (label_size, value_size) = data::wall_text_size(height);
+    let dot = data::wall_dot_size(height);
+    TextWithOptions(
+        data::wall_label(index),
+        Modifier::empty(),
+        text_style(label_size, INK, true),
+        ONE_LINE,
+    );
+    Row(
+        Modifier::empty(),
+        RowSpec::new()
+            .horizontal_arrangement(LinearArrangement::spaced_by(dot * 0.5))
+            .vertical_alignment(VerticalAlignment::CenterVertically),
         move || {
-            TextWithOptions(
-                data::wall_label(index),
-                Modifier::empty(),
-                text_style(label_size, INK, true),
-                ONE_LINE,
+            Box(
+                Modifier::empty()
+                    .size_points(dot, dot)
+                    .background(rgb(data::wall_dot_rgb(index)))
+                    .rounded_corners(dot * 0.5),
+                BoxSpec::default(),
+                || {},
             );
-            Row(
+            TextWithOptions(
+                data::wall_value(index),
                 Modifier::empty(),
-                RowSpec::new()
-                    .horizontal_arrangement(LinearArrangement::spaced_by(dot * 0.5))
-                    .vertical_alignment(VerticalAlignment::CenterVertically),
-                move || {
-                    Box(
-                        Modifier::empty()
-                            .size_points(dot, dot)
-                            .background(rgb(data::wall_dot_rgb(index)))
-                            .rounded_corners(dot * 0.5),
-                        BoxSpec::default(),
-                        || {},
-                    );
-                    TextWithOptions(
-                        data::wall_value(index),
-                        Modifier::empty(),
-                        text_style(value_size, INK, false),
-                        ONE_LINE,
-                    );
-                },
+                text_style(value_size, INK, false),
+                ONE_LINE,
             );
         },
     );
