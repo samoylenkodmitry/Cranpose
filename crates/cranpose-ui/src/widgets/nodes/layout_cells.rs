@@ -170,7 +170,7 @@ impl LayoutCells {
             return;
         }
         self.cleared_in_pass
-            .set(PackedU64::new(context.placement_pass().clear()));
+            .set(PackedU64::new(context.placement_pass().clear(node_id)));
         self.note_semantics_change(node_id);
     }
 

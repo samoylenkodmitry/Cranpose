@@ -6,6 +6,12 @@
 pub struct RecentPeak(usize);
 
 impl RecentPeak {
+    /// A peak of no entries.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self(0)
+    }
+
     /// Notes a frame at which the collection held `len` entries.
     #[inline]
     pub fn note(&mut self, len: usize) {

@@ -22,6 +22,7 @@ mod semantics_labels;
 mod semantics_tree;
 mod semantics_update;
 mod subcompose_measure;
+mod unplaced_parents;
 
 use std::{cell::RefCell, mem::size_of, rc::Rc};
 
@@ -47,6 +48,7 @@ pub use semantics_tree::{
     SemanticsText, SemanticsTree,
 };
 use semantics_tree::{modal_takes_space, top_modal_path};
+use unplaced_parents::record_unplaced_parents;
 use web_time::Instant;
 
 #[cfg(test)]
@@ -540,36 +542,6 @@ fn finish_placement(applier: &mut MemoryApplier, root: NodeId, context: &AppCont
     }
     if let Some(pass) = context.placement_pass().with_unplaced_nodes() {
         record_unplaced_parents(applier, root, pass, context);
-    }
-}
-
-/// Names to the scene phase the parent of every node `pass` found placed and
-/// left unplaced: no geometry setter reported those, yet their layers leave
-/// the scene. Out of line: a pass rarely unplaces nodes.
-#[inline(never)]
-fn record_unplaced_parents(
-    applier: &mut MemoryApplier,
-    root: NodeId,
-    pass: u64,
-    context: &AppContext,
-) {
-    let mut parents = vec![root];
-    let mut children = Vec::new();
-    while let Some(parent) = parents.pop() {
-        children.clear();
-        if !matches!(
-            read_layout_node(applier, parent, |_, ids| children.extend_from_slice(ids)),
-            Ok(Some(()))
-        ) {
-            continue;
-        }
-        for &child in &children {
-            match read_layout_node(applier, child, |state, _| state.unplaced_in(pass)) {
-                Ok(Some(true)) => context.record_geometry_scene_node(parent),
-                Ok(Some(false)) => parents.push(child),
-                Ok(None) | Err(_) => {}
-            }
-        }
     }
 }
 

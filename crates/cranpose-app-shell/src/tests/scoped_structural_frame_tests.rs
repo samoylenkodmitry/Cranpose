@@ -6,7 +6,7 @@ use cranpose_render_common::{
     scene_builder::build_from_applier,
     scene_store::{ItemRef, LayerRef},
 };
-use cranpose_ui::Layout;
+use cranpose_ui::{BoxWithConstraints, Layout};
 use cranpose_ui_layout::{
     Constraints, Measurable, MeasurePolicy, MeasureResult, MeasureScope, Placement,
 };
@@ -373,11 +373,29 @@ fn an_unchanged_layout_pass_preserves_the_scene_without_recording_it() {
     assert_scene_matches_rebuild(&mut host.shell, "unchanged layout");
 }
 
+// The peeking box under a subcompose node, whose slot host lies between
+// that node and the box.
+#[composable]
+fn PeekBoxUnderConstraints() {
+    BoxWithConstraints(Modifier::empty().fill_max_size(), |_| {
+        PeekBox();
+    });
+}
+
 #[test]
 fn a_node_its_parent_stops_placing_leaves_the_scene_and_returns_where_it_was() {
+    assert_an_unplaced_child_leaves_and_returns(PeekBox);
+}
+
+#[test]
+fn a_node_under_a_subcompose_node_leaves_the_scene_when_its_parent_stops_placing_it() {
+    assert_an_unplaced_child_leaves_and_returns(PeekBoxUnderConstraints);
+}
+
+fn assert_an_unplaced_child_leaves_and_returns(content: fn()) {
     let _guard = test_guard();
     PEEK_SHOWN.with(|slot| slot.borrow_mut().take());
-    let mut peek = CountedShell::settled(location_key(file!(), line!(), column!()), PeekBox);
+    let mut peek = CountedShell::settled(location_key(file!(), line!(), column!()), content);
     let shown = PEEK_SHOWN
         .with(|slot| *slot.borrow())
         .expect("the box exposes whether it shows its second child");

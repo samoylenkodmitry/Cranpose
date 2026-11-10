@@ -1,9 +1,9 @@
 //! Where a layout node's parent placed it and what size it measured, and
 //! the placement bookkeeping of a layout pass.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 
-use cranpose_core::PackedU64;
+use cranpose_core::{NodeId, PackedU64, collections::recent_peak::RecentPeak};
 
 use crate::modifier::{Point, Size};
 
@@ -13,13 +13,22 @@ use crate::modifier::{Point, Size};
 pub(crate) struct PlacementPass {
     id: Cell<u64>,
     unplaced: Cell<usize>,
+    // The placed nodes the pass cleared, placed again or not: its end looks
+    // for the unplaced among them, and not through the whole tree.
+    cleared: RefCell<Vec<NodeId>>,
+    recent: Cell<RecentPeak>,
 }
+
+// The room the list of cleared nodes keeps whatever recent passes cleared.
+const CLEARED_KEPT: usize = 64;
 
 impl PlacementPass {
     pub(crate) const fn new() -> Self {
         Self {
             id: Cell::new(1),
             unplaced: Cell::new(0),
+            cleared: RefCell::new(Vec::new()),
+            recent: Cell::new(RecentPeak::new()),
         }
     }
 
@@ -27,6 +36,33 @@ impl PlacementPass {
     pub(crate) fn begin(&self) {
         self.id.set(self.id.get() + 1);
         self.unplaced.set(0);
+        let mut cleared = self.cleared.borrow_mut();
+        let held = cleared.len();
+        cleared.clear();
+        if cleared.capacity() > 4 * CLEARED_KEPT {
+            self.give_back(&mut cleared, held);
+        }
+    }
+
+    // Gives back the room recent passes left unused in the list of cleared
+    // nodes, which held `held` of them. Out of line: few passes clear enough
+    // nodes for the list to have room to give back.
+    #[cold]
+    #[inline(never)]
+    fn give_back(&self, cleared: &mut Vec<NodeId>, held: usize) {
+        let mut recent = self.recent.get();
+        recent.settle(cleared, held, CLEARED_KEPT);
+        self.recent.set(recent);
+    }
+
+    // The placed nodes the running pass cleared, for its end to read and
+    // give back with `keep_cleared`.
+    pub(crate) fn take_cleared(&self) -> Vec<NodeId> {
+        std::mem::take(&mut *self.cleared.borrow_mut())
+    }
+
+    pub(crate) fn keep_cleared(&self, cleared: Vec<NodeId>) {
+        *self.cleared.borrow_mut() = cleared;
     }
 
     /// The running pass, when it has left a node unplaced that it found placed.
@@ -34,9 +70,13 @@ impl PlacementPass {
         (self.unplaced.get() > 0).then(|| self.id.get())
     }
 
-    /// Counts a placed node the running pass cleared, and returns the pass.
-    pub(super) fn clear(&self) -> u64 {
+    /// Counts placed node `node_id`, which the running pass cleared, and
+    /// returns the pass.
+    pub(super) fn clear(&self, node_id: Option<NodeId>) -> u64 {
         self.unplaced.set(self.unplaced.get() + 1);
+        if let Some(node_id) = node_id {
+            self.cleared.borrow_mut().push(node_id);
+        }
         self.id.get()
     }
 
