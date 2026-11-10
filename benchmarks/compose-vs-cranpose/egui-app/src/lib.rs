@@ -22,6 +22,9 @@ use eframe::egui::{
 };
 use perf_data::*;
 
+#[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
+mod chat;
+mod patchwork;
 mod wall;
 
 pub use wall::Wall;
@@ -87,6 +90,20 @@ pub fn roboto() -> FontDefinitions {
         names.extend(fallback.iter().cloned());
         names.retain(|font| fonts.font_data.contains_key(font));
         fonts.families.insert(family, names);
+    }
+    // The monospaced face of the chat's code, before egui's own.
+    match perf_data::font_bytes("DejaVuSansMono.ttf") {
+        Ok(bytes) => {
+            fonts
+                .font_data
+                .insert("mono".to_owned(), Arc::new(FontData::from_owned(bytes)));
+            fonts
+                .families
+                .entry(FontFamily::Monospace)
+                .or_default()
+                .insert(0, "mono".to_owned());
+        }
+        Err(error) => log::warn!("no DejaVuSansMono.ttf: {error}"),
     }
     fonts
 }
@@ -888,6 +905,7 @@ fn screen(ctx: &egui::Context, load: Launch) -> Box<dyn eframe::App> {
     match load.scenario {
         Scenario::Gauntlet => Box::new(Gauntlet::new(ctx, load)),
         Scenario::Wall => Box::new(Wall::new(ctx, load)),
+        Scenario::Patchwork => Box::new(patchwork::Patchwork::new(ctx, load)),
     }
 }
 

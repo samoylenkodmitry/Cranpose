@@ -11,6 +11,7 @@
 
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 
 import 'data.dart';
@@ -61,8 +62,29 @@ int wallCursor(int frame, int tiles) => (frame * 37) % math.max(tiles, 1);
 
 String wallClock(int frame) => 'frame ${frame.toString().padLeft(6, '0')}';
 
-TextStyle _text(double size, {bool bold = false}) =>
+/// White text of [size], bold or not.
+TextStyle inkText(double size, {bool bold = false}) =>
     TextStyle(fontSize: size, color: _ink, fontWeight: bold ? FontWeight.bold : FontWeight.normal);
+
+/// The clock line: its text is the only widget that listens to [frame].
+class WallClock extends StatelessWidget {
+  final ValueListenable<int> frame;
+
+  const WallClock(this.frame, {super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: wallClockHeight,
+      padding: const EdgeInsets.symmetric(horizontal: 8),
+      alignment: Alignment.centerLeft,
+      child: ValueListenableBuilder(
+        valueListenable: frame,
+        builder: (context, frame, _) => Text(wallClock(frame), style: inkText(wallClockText)),
+      ),
+    );
+  }
+}
 
 /// The clock line, the tiles and the cursor, under the top bar.
 class Wall extends StatefulWidget {
@@ -110,21 +132,13 @@ class _WallState extends State<Wall> with SingleTickerProviderStateMixin {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Container(
-          height: wallClockHeight,
-          padding: const EdgeInsets.symmetric(horizontal: 8),
-          alignment: Alignment.centerLeft,
-          child: ValueListenableBuilder(
-            valueListenable: _frame,
-            builder: (context, frame, _) => Text(wallClock(frame), style: _text(wallClockText)),
-          ),
-        ),
+        WallClock(_frame),
         Expanded(
           child: LayoutBuilder(builder: (context, constraints) {
             final (columns, rows) = wallGrid(tier, constraints.maxWidth, constraints.maxHeight);
             return Stack(
               children: [
-                RepaintBoundary(child: _Tiles(columns, rows, tier)),
+                RepaintBoundary(child: WallTiles(columns, rows, tier)),
                 _Cursor(_frame, columns, columns * rows, tier),
               ],
             );
@@ -135,57 +149,85 @@ class _WallState extends State<Wall> with SingleTickerProviderStateMixin {
   }
 }
 
-/// The tiles, [columns] by [rows] of them, `wallGap` apart.
-class _Tiles extends StatelessWidget {
-  final int columns;
-  final int rows;
-  final WallTier tier;
+/// Rows of cells, [wallGap] apart and from the edges.
+class WallCells extends StatelessWidget {
+  final List<Widget> rows;
 
-  const _Tiles(this.columns, this.rows, this.tier);
+  const WallCells(this.rows, {super.key});
 
   @override
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.all(wallGap),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        spacing: wallGap,
-        children: [
-          for (var row = 0; row < rows; row++)
-            Row(
-              spacing: wallGap,
-              children: [
-                for (var column = 0; column < columns; column++) _Tile(row * columns + column, tier),
-              ],
-            ),
-        ],
-      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, spacing: wallGap, children: rows),
     );
   }
 }
 
-/// One tile: its label over a dot and its value, on its fill.
-class _Tile extends StatelessWidget {
+/// The tiles, [columns] by [rows] of them, `wallGap` apart.
+class WallTiles extends StatelessWidget {
+  final int columns;
+  final int rows;
+  final WallTier tier;
+
+  const WallTiles(this.columns, this.rows, this.tier, {super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return WallCells([
+      for (var row = 0; row < rows; row++)
+        Row(
+          spacing: wallGap,
+          children: [
+            for (var column = 0; column < columns; column++) WallTile(row * columns + column, tier),
+          ],
+        ),
+    ]);
+  }
+}
+
+/// One tile: its label over a dot and its value, on its fill. [width],
+/// [height] and [fill] replace the tile's box and its fill.
+class WallTile extends StatelessWidget {
+  final int index;
+  final WallTier tier;
+  final double? width;
+  final double? height;
+  final Color? fill;
+
+  const WallTile(this.index, this.tier, {this.width, this.height, this.fill, super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: width ?? tier.tileWidth,
+      height: height ?? tier.tileHeight,
+      decoration: BoxDecoration(
+          color: fill ?? Color(wallFillArgb(index)), borderRadius: BorderRadius.circular(wallCorner)),
+      child: WallTileBody(index, tier),
+    );
+  }
+}
+
+/// A tile's label, dot and value, without its fill: the text and the padding
+/// follow the tier's tile.
+class WallTileBody extends StatelessWidget {
   final int index;
   final WallTier tier;
 
-  const _Tile(this.index, this.tier);
+  const WallTileBody(this.index, this.tier, {super.key});
 
   @override
   Widget build(BuildContext context) {
     final height = tier.tileHeight;
     final dot = height * 0.22;
-    return Container(
-      width: tier.tileWidth,
-      height: height,
+    return Padding(
       padding: EdgeInsets.all(height * 0.06),
-      decoration: BoxDecoration(
-          color: Color(wallFillArgb(index)), borderRadius: BorderRadius.circular(wallCorner)),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(wallLabel(index),
-              style: _text(height * 0.30, bold: true), softWrap: false, overflow: TextOverflow.clip, maxLines: 1),
+              style: inkText(height * 0.30, bold: true), softWrap: false, overflow: TextOverflow.clip, maxLines: 1),
           Row(
             spacing: dot * 0.5,
             children: [
@@ -197,7 +239,7 @@ class _Tile extends StatelessWidget {
               ),
               Flexible(
                 child: Text(wallValue(index),
-                    style: _text(height * 0.26), softWrap: false, overflow: TextOverflow.clip, maxLines: 1),
+                    style: inkText(height * 0.26), softWrap: false, overflow: TextOverflow.clip, maxLines: 1),
               ),
             ],
           ),

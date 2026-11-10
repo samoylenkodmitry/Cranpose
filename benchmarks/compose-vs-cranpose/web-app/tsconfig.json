@@ -8,5 +8,5 @@
     "rootDir": "..",
     "outDir": "www/js"
   },
-  "files": ["src/gauntlet.ts"]
+  "files": ["src/gauntlet.ts", "src/chat-worker.ts"]
 }

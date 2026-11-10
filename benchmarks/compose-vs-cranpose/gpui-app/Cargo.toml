@@ -11,8 +11,8 @@ publish = false
 # CoreText text system (`font-kit`).
 gpui = { package = "gpui-pre", version = "=0.3.12" }
 gpui_platform = { package = "gpui-pre-platform", version = "=0.3.12", features = ["font-kit"] }
-# GPUI's image frames, for the avatars.
-image = { version = "0.25", default-features = false }
+# GPUI's image frames, for the avatars and the chat's animated picture.
+image = { version = "0.25", default-features = false, features = ["gif"] }
 log = "0.4"
 perf-data = { path = "../perf-data" }
 # Glyph outlines for the badge's rotated text.

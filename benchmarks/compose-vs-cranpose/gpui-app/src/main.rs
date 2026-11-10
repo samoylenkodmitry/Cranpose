@@ -19,6 +19,8 @@ use gpui::{
 };
 use perf_data::*;
 
+mod chat;
+mod patchwork;
 mod wall;
 
 /// Blocks of five card rows and a cluster: no measurement window reaches the end.
@@ -875,45 +877,60 @@ impl Render for Gauntlet {
 fn main() {
     perf_data::log_to_stdout();
     let load = Launch::from_env();
-    gpui_platform::application().run(move |cx: &mut App| {
-        let tier = gauntlet_tier(load.tier);
-        let mut fonts: Vec<Cow<'static, [u8]>> = Vec::new();
-        for file in ["Roboto-Regular.ttf", "Roboto-Bold.ttf"] {
-            match std::fs::read(perf_data::font_path(file)) {
-                Ok(bytes) => fonts.push(Cow::Owned(bytes)),
-                Err(error) => log::warn!("no {file}: {error}"),
+    // The patchwork's spinner is the progress SVG, one document for each of
+    // its paths.
+    gpui_platform::application()
+        .with_assets(chat::SpinnerLayers)
+        .run(move |cx: &mut App| {
+            let tier = gauntlet_tier(load.tier);
+            let mut fonts: Vec<Cow<'static, [u8]>> = Vec::new();
+            for file in ["Roboto-Regular.ttf", "Roboto-Bold.ttf"] {
+                match std::fs::read(perf_data::font_path(file)) {
+                    Ok(bytes) => fonts.push(Cow::Owned(bytes)),
+                    Err(error) => log::warn!("no {file}: {error}"),
+                }
             }
-        }
-        let glyphs = match fonts.as_slice() {
-            [regular, bold] => Glyphs::new(regular, bold, tier),
-            _ => None,
-        };
-        if let Err(error) = cx.text_system().add_fonts(fonts) {
-            log::warn!("fonts not added: {error}");
-        }
-        if load.scenario == Scenario::Wall {
-            wall::open(load, cx);
-            return;
-        }
-        let (width, height) = perf_data::DESKTOP_WINDOW;
-        let bounds = Bounds::centered(None, size(px(width as f32), px(height as f32)), cx);
-        let options = WindowOptions {
-            window_bounds: Some(WindowBounds::Windowed(bounds)),
-            titlebar: Some(TitlebarOptions {
-                title: Some("Gauntlet".into()),
+            let glyphs = match fonts.as_slice() {
+                [regular, bold] => Glyphs::new(regular, bold, tier),
+                _ => None,
+            };
+            // The chat's code block is set in the monospaced face.
+            if load.scenario == Scenario::Patchwork {
+                match perf_data::font_bytes("DejaVuSansMono.ttf") {
+                    Ok(bytes) => fonts.push(Cow::Owned(bytes)),
+                    Err(error) => log::warn!("no DejaVuSansMono.ttf: {error}"),
+                }
+            }
+            if let Err(error) = cx.text_system().add_fonts(fonts) {
+                log::warn!("fonts not added: {error}");
+            }
+            if load.scenario == Scenario::Wall {
+                wall::open(load, cx);
+                return;
+            }
+            if load.scenario == Scenario::Patchwork {
+                patchwork::open(load, cx);
+                return;
+            }
+            let (width, height) = perf_data::DESKTOP_WINDOW;
+            let bounds = Bounds::centered(None, size(px(width as f32), px(height as f32)), cx);
+            let options = WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(bounds)),
+                titlebar: Some(TitlebarOptions {
+                    title: Some("Gauntlet".into()),
+                    ..Default::default()
+                }),
+                is_resizable: false,
+                // The window draws every frame even when another window is in
+                // front, as the other frameworks' windows do.
+                inactive_frame_interval: None,
                 ..Default::default()
-            }),
-            is_resizable: false,
-            // The window draws every frame even when another window is in
-            // front, as the other frameworks' windows do.
-            inactive_frame_interval: None,
-            ..Default::default()
-        };
-        if let Err(error) = cx.open_window(options, |_, cx| {
-            cx.new(|_| Gauntlet::new(load, tier, glyphs))
-        }) {
-            log::error!("no window: {error}");
-        }
-        cx.activate(true);
-    });
+            };
+            if let Err(error) = cx.open_window(options, |_, cx| {
+                cx.new(|_| Gauntlet::new(load, tier, glyphs))
+            }) {
+                log::error!("no window: {error}");
+            }
+            cx.activate(true);
+        });
 }

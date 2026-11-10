@@ -1,12 +1,18 @@
-//! Masonry widgets the gauntlet needs and Xilem has none of, each with its
-//! view: a frame clock, a row that wraps, a box that holds one child (and
-//! measures, scrolls or turns it), a filled bar and a sparkline.
+//! Masonry widgets the gauntlet and the patchwork need and Xilem has none of,
+//! each with its view: a frame clock, a row that wraps, a box that holds one
+//! child (and measures, scrolls or turns it), a column that follows its end,
+//! drawings, text in several colors or under a gradient, and a virtual list
+//! that scrolls to an item.
 
-use std::sync::OnceLock;
+use std::{ops::Range, sync::OnceLock};
 
-use perf_data::{AVATAR_COUNT, AVATAR_SIZE, GAUNTLET_SPARK_POINTS, avatar_rgba, spark_value};
+use perf_data::{
+    AVATAR_COUNT, AVATAR_SIZE, CHAT_GIF, GAUNTLET_SPARK_POINTS, PATCHWORK_CHART_POINTS,
+    PATCHWORK_CHART_STROKE, WALL_GAP, avatar_rgba, patchwork_chart_rgb, patchwork_chart_value,
+    spark_value,
+};
 use xilem::{
-    Blob, Color, ImageBrush, ImageFormat, Pod, ViewCtx, WidgetView,
+    Blob, Color, FontWeight, ImageBrush, ImageFormat, Pod, ViewCtx, WidgetView,
     core::{
         AppendVec, ElementSplice, MessageContext, MessageResult, Mut, SuperElement, View,
         ViewElement, ViewId, ViewMarker, ViewPathTracker as _, ViewSequence,
@@ -14,14 +20,16 @@ use xilem::{
     masonry::{
         accesskit::{Node, Role},
         core::{
-            AccessCtx, BoxConstraints, ChildrenIds, FromDynWidget, LayoutCtx, NewWidget, NoAction,
-            PaintCtx, PropertiesMut, PropertiesRef, RegisterCtx, Update, UpdateCtx, Widget,
-            WidgetMut, WidgetPod,
+            AccessCtx, BoxConstraints, BrushIndex, ChildrenIds, FromDynWidget, LayoutCtx,
+            NewWidget, NoAction, PaintCtx, PropertiesMut, PropertiesRef, RegisterCtx,
+            StyleProperty, Update, UpdateCtx, Widget, WidgetMut, WidgetPod, render_text,
         },
         kurbo::{Affine, BezPath, Circle, Point, Rect, RoundedRect, Size, Stroke, Vec2},
-        peniko::{Fill, Gradient, ImageAlphaType, ImageData},
+        parley::{FontStack, Layout, LineHeight},
+        peniko::{Brush, Fill, Gradient, ImageAlphaType, ImageData},
         properties::{BoxShadow, types::UnitPoint},
         vello::Scene,
+        widgets::VirtualScroll,
     },
 };
 
@@ -413,11 +421,26 @@ where
 
 // ---------------------------------------------------------------- flow
 
-/// Children left to right, wrapping, `gap` apart both ways, as Compose's
-/// `FlowRow`.
+/// How a [`Flow`] places its children.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Arrange {
+    /// Left to right, wrapping, `gap` apart both ways, as Compose's `FlowRow`.
+    Wrap,
+    /// One under another, `gap` apart and `padding` from the edges: from the
+    /// top while they are shorter than the flow, else with the last one at
+    /// the bottom. Only the children the flow shows take part in layout and
+    /// painting; the others are stashed.
+    Tail { padding: f64 },
+}
+
+/// A widget that places its children as its [`Arrange`] says.
 pub struct Flow {
     children: Vec<WidgetPod<dyn Widget>>,
     gap: f64,
+    arrange: Arrange,
+    /// While a tail lays out, the distance from the flow's bottom to the top
+    /// of each child shown, the last child first.
+    edges: Vec<f64>,
 }
 
 impl Flow {
@@ -438,6 +461,38 @@ impl Flow {
     }
 }
 
+impl Flow {
+    // Lays out the children from the last one up until they fill the flow;
+    // the ones before are stashed, as they lie out of view.
+    fn layout_tail(&mut self, ctx: &mut LayoutCtx<'_>, bc: &BoxConstraints, padding: f64) -> Size {
+        let size = bc.max();
+        let loose = BoxConstraints::new(
+            Size::ZERO,
+            Size::new(size.width - 2.0 * padding, f64::INFINITY),
+        );
+        self.edges.clear();
+        let mut below = padding;
+        let mut full = false;
+        for child in self.children.iter_mut().rev() {
+            ctx.set_stashed(child, full);
+            if full {
+                continue;
+            }
+            let edge = below + ctx.run_layout(child, &loose).height;
+            self.edges.push(edge);
+            below = edge + self.gap;
+            full = edge >= size.height;
+        }
+        let first = self.edges.last().copied().unwrap_or(padding);
+        let base = if full { size.height } else { first + padding };
+        for (child, edge) in self.children.iter_mut().rev().zip(&self.edges) {
+            ctx.place_child(child, Point::new(padding, base - edge));
+        }
+        ctx.set_clip_path(size.to_rect());
+        size
+    }
+}
+
 impl Widget for Flow {
     type Action = NoAction;
 
@@ -447,6 +502,9 @@ impl Widget for Flow {
         _: &mut PropertiesMut<'_>,
         bc: &BoxConstraints,
     ) -> Size {
+        if let Arrange::Tail { padding } = self.arrange {
+            return self.layout_tail(ctx, bc, padding);
+        }
         let width = bc.max().width;
         let loose = BoxConstraints::new(Size::ZERO, Size::new(width, f64::INFINITY));
         let (mut x, mut y, mut line) = (0.0_f64, 0.0_f64, 0.0_f64);
@@ -487,12 +545,30 @@ pub fn flow<State, Seq>(children: Seq, gap: f64) -> FlowView<Seq>
 where
     Seq: ViewSequence<State, (), ViewCtx, FlowElement>,
 {
-    FlowView { children, gap }
+    FlowView {
+        children,
+        gap,
+        arrange: Arrange::Wrap,
+    }
+}
+
+/// `children` one under another, `gap` apart and `padding` from the edges,
+/// the last one at the bottom once they fill the height.
+pub fn tail<State, Seq>(children: Seq, gap: f64, padding: f64) -> FlowView<Seq>
+where
+    Seq: ViewSequence<State, (), ViewCtx, FlowElement>,
+{
+    FlowView {
+        children,
+        gap,
+        arrange: Arrange::Tail { padding },
+    }
 }
 
 pub struct FlowView<Seq> {
     children: Seq,
     gap: f64,
+    arrange: Arrange,
 }
 
 /// A child of a [`Flow`], as Xilem's sequences hand it over.
@@ -607,6 +683,8 @@ where
         let widget = Flow {
             children,
             gap: self.gap,
+            arrange: self.arrange,
+            edges: Vec::new(),
         };
         (ctx.create_pod(widget), (seq_state, elements))
     }
@@ -619,8 +697,9 @@ where
         mut element: Mut<'_, Self::Element>,
         state: &mut State,
     ) {
-        if self.gap != prev.gap {
+        if self.gap != prev.gap || self.arrange != prev.arrange {
             element.widget.gap = self.gap;
+            element.widget.arrange = self.arrange;
             element.ctx.request_layout();
         }
         let mut splice = FlowSplice {
@@ -679,6 +758,16 @@ pub enum Picture {
     },
     /// Avatar `index`, `side` wide and tall, cut to a circle.
     Avatar { index: usize, side: f64 },
+    /// The patchwork's charts: `columns` by `rows` cells `width` by `height`
+    /// points, `WALL_GAP` apart and from the edges, each with its line.
+    Charts {
+        columns: usize,
+        rows: usize,
+        width: f64,
+        height: f64,
+    },
+    /// Frame `frame` of the chat's animated picture, `side` wide and tall.
+    Gif { frame: usize, side: f64 },
     /// A card's 48-point line over a fading fill, on `frame`.
     Sparkline {
         card: usize,
@@ -707,6 +796,33 @@ fn avatars() -> &'static [ImageBrush] {
     })
 }
 
+/// The chat's animated picture: every frame as a bitmap, decoded once; none
+/// when it does not decode.
+pub fn gif_frames() -> &'static [ImageBrush] {
+    static FRAMES: OnceLock<Vec<ImageBrush>> = OnceLock::new();
+    FRAMES.get_or_init(|| {
+        let mut options = gif::DecodeOptions::new();
+        options.set_color_output(gif::ColorOutput::RGBA);
+        let mut frames = Vec::new();
+        match options.read_info(CHAT_GIF) {
+            Ok(mut decoder) => {
+                let (width, height) = (u32::from(decoder.width()), u32::from(decoder.height()));
+                while let Ok(Some(frame)) = decoder.read_next_frame() {
+                    frames.push(ImageBrush::new(ImageData {
+                        data: Blob::from(frame.buffer.to_vec()),
+                        format: ImageFormat::Rgba8,
+                        alpha_type: ImageAlphaType::Alpha,
+                        width,
+                        height,
+                    }));
+                }
+            }
+            Err(error) => log::warn!("chat picture: {error}"),
+        }
+        frames
+    })
+}
+
 /// A widget that paints a [`Picture`].
 pub struct Drawing {
     picture: Picture,
@@ -724,7 +840,8 @@ impl Widget for Drawing {
         let (width, height) = match self.picture {
             Picture::Bar { width, height, .. } => (width.unwrap_or(bc.max().width), height),
             Picture::Sparkline { height, .. } => (bc.max().width, height),
-            Picture::Avatar { side, .. } => (side, side),
+            Picture::Charts { .. } => (bc.max().width, bc.max().height),
+            Picture::Avatar { side, .. } | Picture::Gif { side, .. } => (side, side),
         };
         bc.constrain(Size::new(width, height))
     }
@@ -751,12 +868,47 @@ impl Widget for Drawing {
                     &RoundedRect::from_rect(filled, radius),
                 );
             }
+            Picture::Gif { frame, side } => {
+                if let Some(picture) = gif_frames().get(frame) {
+                    let scale = side / f64::from(picture.image.width);
+                    scene.draw_image(picture, Affine::scale(scale));
+                }
+            }
             Picture::Avatar { index, side } => {
                 if let Some(avatar) = avatars().get(index) {
                     let circle = Circle::new(size.to_rect().center(), side / 2.0);
                     scene.push_clip_layer(Affine::IDENTITY, &circle);
                     scene.draw_image(avatar, Affine::scale(side / f64::from(AVATAR_SIZE)));
                     scene.pop_layer();
+                }
+            }
+            Picture::Charts {
+                columns,
+                rows,
+                width,
+                height,
+            } => {
+                let gap = f64::from(WALL_GAP);
+                let step = width / (PATCHWORK_CHART_POINTS - 1) as f64;
+                let stroke = Stroke::new(f64::from(PATCHWORK_CHART_STROKE));
+                for index in 0..columns * rows {
+                    let left = gap + (index % columns) as f64 * (width + gap);
+                    let top = gap + (index / columns) as f64 * (height + gap);
+                    let mut line = BezPath::new();
+                    for point in 0..PATCHWORK_CHART_POINTS {
+                        let at = Point::new(
+                            left + point as f64 * step,
+                            top + height * (1.0 - f64::from(patchwork_chart_value(index, point))),
+                        );
+                        if point == 0 {
+                            line.move_to(at);
+                        } else {
+                            line.line_to(at);
+                        }
+                    }
+                    let [red, green, blue] = patchwork_chart_rgb(index);
+                    let color = Color::from_rgb8(red, green, blue);
+                    scene.stroke(&stroke, Affine::IDENTITY, color, None, &line);
                 }
             }
             Picture::Sparkline {
@@ -838,6 +990,9 @@ impl<State: 'static> View<State, (), ViewCtx> for DrawingView {
             ) && !matches!(
                 (prev.picture, self.picture),
                 (Picture::Avatar { side: a, .. }, Picture::Avatar { side: b, .. }) if a == b
+            ) && !matches!(
+                (prev.picture, self.picture),
+                (Picture::Gif { side: a, .. }, Picture::Gif { side: b, .. }) if a == b
             );
             element.widget.picture = self.picture;
             if resized {
@@ -858,5 +1013,231 @@ impl<State: 'static> View<State, (), ViewCtx> for DrawingView {
         _: &mut State,
     ) -> MessageResult<()> {
         MessageResult::Stale
+    }
+}
+
+// ---------------------------------------------------------------- rich text
+
+/// Text in one family and size whose stretches take their colors from
+/// `brushes`, which may be gradients: Masonry's labels have one color.
+#[derive(Clone, PartialEq)]
+pub struct RichText {
+    pub text: String,
+    /// The byte ranges that take another brush, with its index in `brushes`;
+    /// the rest takes brush 0.
+    pub spans: Vec<(Range<usize>, usize)>,
+    pub brushes: Vec<Brush>,
+    pub size: f32,
+    pub family: &'static str,
+    pub bold: bool,
+    /// Whether the text breaks into lines at the width it is given.
+    pub wrap: bool,
+}
+
+impl RichText {
+    /// Whether a change from `other` needs the text shaped again, rather
+    /// than painted again.
+    fn shape_differs(&self, other: &Self) -> bool {
+        self.text != other.text
+            || self.spans != other.spans
+            || self.size != other.size
+            || self.family != other.family
+            || self.bold != other.bold
+            || self.wrap != other.wrap
+    }
+}
+
+/// A widget that shapes and paints a [`RichText`] with the lines 1.4 em tall
+/// as the other apps set them.
+pub struct Rich {
+    content: RichText,
+    layout: Layout<BrushIndex>,
+    shaped: bool,
+    max_advance: Option<f32>,
+}
+
+impl Widget for Rich {
+    type Action = NoAction;
+
+    fn layout(
+        &mut self,
+        ctx: &mut LayoutCtx<'_>,
+        _: &mut PropertiesMut<'_>,
+        bc: &BoxConstraints,
+    ) -> Size {
+        let max_advance = self.content.wrap.then_some(bc.max().width as f32);
+        let reshape = !self.shaped || ctx.fonts_changed();
+        if reshape {
+            let content = &self.content;
+            let (fonts, layouts) = ctx.text_contexts();
+            let mut builder = layouts.ranged_builder(fonts, &content.text, 1.0, true);
+            builder.push_default(StyleProperty::FontSize(content.size));
+            builder.push_default(StyleProperty::FontStack(FontStack::from(content.family)));
+            builder.push_default(StyleProperty::FontWeight(if content.bold {
+                FontWeight::BOLD
+            } else {
+                FontWeight::NORMAL
+            }));
+            builder.push_default(StyleProperty::LineHeight(LineHeight::FontSizeRelative(1.4)));
+            builder.push_default(StyleProperty::Brush(BrushIndex(0)));
+            for (range, brush) in &content.spans {
+                builder.push(StyleProperty::Brush(BrushIndex(*brush)), range.clone());
+            }
+            builder.build_into(&mut self.layout, &content.text);
+            self.shaped = true;
+        }
+        if reshape || max_advance != self.max_advance {
+            self.layout.break_all_lines(max_advance);
+            self.layout.align(
+                Some(self.layout.width()),
+                xilem::TextAlign::Start,
+                xilem::masonry::TextAlignOptions::default(),
+            );
+            self.max_advance = max_advance;
+        }
+        bc.constrain(Size::new(
+            f64::from(self.layout.width()),
+            f64::from(self.layout.height()),
+        ))
+    }
+
+    fn paint(&mut self, _: &mut PaintCtx<'_>, _: &PropertiesRef<'_>, scene: &mut Scene) {
+        render_text(
+            scene,
+            Affine::IDENTITY,
+            &self.layout,
+            &self.content.brushes,
+            true,
+        );
+    }
+
+    leaf!();
+}
+
+/// Shows `content`.
+pub fn rich(content: RichText) -> RichView {
+    RichView { content }
+}
+
+pub struct RichView {
+    content: RichText,
+}
+
+impl ViewMarker for RichView {}
+impl<State: 'static> View<State, (), ViewCtx> for RichView {
+    type Element = Pod<Rich>;
+    type ViewState = ();
+
+    fn build(&self, ctx: &mut ViewCtx, _: &mut State) -> (Self::Element, Self::ViewState) {
+        (
+            ctx.create_pod(Rich {
+                content: self.content.clone(),
+                layout: Layout::new(),
+                shaped: false,
+                max_advance: None,
+            }),
+            (),
+        )
+    }
+
+    fn rebuild(
+        &self,
+        prev: &Self,
+        (): &mut (),
+        _: &mut ViewCtx,
+        mut element: Mut<'_, Self::Element>,
+        _: &mut State,
+    ) {
+        if self.content.shape_differs(&prev.content) {
+            element.widget.content.clone_from(&self.content);
+            element.widget.shaped = false;
+            element.ctx.request_layout();
+        } else if self.content.brushes != prev.content.brushes {
+            element
+                .widget
+                .content
+                .brushes
+                .clone_from(&self.content.brushes);
+            element.ctx.request_paint_only();
+        }
+    }
+
+    fn teardown(&self, (): &mut (), ctx: &mut ViewCtx, element: Mut<'_, Self::Element>) {
+        ctx.teardown_leaf(element);
+    }
+
+    fn message(
+        &self,
+        (): &mut (),
+        _: &mut MessageContext,
+        _: Mut<'_, Self::Element>,
+        _: &mut State,
+    ) -> MessageResult<()> {
+        MessageResult::Stale
+    }
+}
+
+// ---------------------------------------------------------------- list anchor
+
+/// A [`VirtualScroll`] view that scrolls to item `anchor` whenever `anchor`
+/// changes: Xilem's view only scrolls to what the user's wheel reaches.
+pub fn anchored<V>(list: V, anchor: i64) -> Anchored<V> {
+    Anchored { list, anchor }
+}
+
+pub struct Anchored<V> {
+    list: V,
+    anchor: i64,
+}
+
+impl<V> ViewMarker for Anchored<V> {}
+impl<State, Action, V> View<State, Action, ViewCtx> for Anchored<V>
+where
+    State: 'static,
+    Action: 'static,
+    V: View<State, Action, ViewCtx, Element = Pod<VirtualScroll>>,
+{
+    type Element = Pod<VirtualScroll>;
+    /// The list's state and the anchor the widget was last set to.
+    type ViewState = (V::ViewState, i64);
+
+    fn build(&self, ctx: &mut ViewCtx, state: &mut State) -> (Self::Element, Self::ViewState) {
+        let (element, list_state) = self.list.build(ctx, state);
+        (element, (list_state, 0))
+    }
+
+    fn rebuild(
+        &self,
+        prev: &Self,
+        (list_state, anchor): &mut Self::ViewState,
+        ctx: &mut ViewCtx,
+        mut element: Mut<'_, Self::Element>,
+        state: &mut State,
+    ) {
+        self.list
+            .rebuild(&prev.list, list_state, ctx, element.reborrow_mut(), state);
+        if *anchor != self.anchor {
+            VirtualScroll::overwrite_anchor(&mut element, self.anchor);
+            *anchor = self.anchor;
+        }
+    }
+
+    fn teardown(
+        &self,
+        (list_state, _): &mut Self::ViewState,
+        ctx: &mut ViewCtx,
+        element: Mut<'_, Self::Element>,
+    ) {
+        self.list.teardown(list_state, ctx, element);
+    }
+
+    fn message(
+        &self,
+        (list_state, _): &mut Self::ViewState,
+        message: &mut MessageContext,
+        element: Mut<'_, Self::Element>,
+        state: &mut State,
+    ) -> MessageResult<Action> {
+        self.list.message(list_state, message, element, state)
     }
 }

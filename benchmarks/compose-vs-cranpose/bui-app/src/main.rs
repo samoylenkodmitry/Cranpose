@@ -8,6 +8,8 @@
 //! from wall time. The list builds only the rows from the first one on screen
 //! to the window's bottom; each row's height is read from the last layout.
 
+mod chat;
+mod patchwork;
 mod wall;
 
 use std::{collections::HashMap, sync::Arc};
@@ -585,6 +587,7 @@ fn main() {
     for (weight, bold, file) in [
         ("Roboto", false, "Roboto-Regular.ttf"),
         ("Roboto", true, "Roboto-Bold.ttf"),
+        ("DejaVu Sans Mono", false, "DejaVuSansMono.ttf"),
     ] {
         match font_bytes(file) {
             Ok(bytes) => {
@@ -612,6 +615,10 @@ fn main() {
             }
             Scenario::Wall => {
                 cx.open_window(options, |_, cx| cx.new(|_| wall::Wall::new()))
+                    .unwrap();
+            }
+            Scenario::Patchwork => {
+                cx.open_window(options, |_, cx| cx.new(|_| patchwork::Patchwork::new()))
                     .unwrap();
             }
         }

@@ -54,16 +54,7 @@ impl Render for Wall {
                 .flex_col()
                 .bg(color(WALL_BACKGROUND_RGB))
                 .child(top_bar("Still wall"))
-                .child(
-                    div()
-                        .w_full()
-                        .h(px(WALL_CLOCK_HEIGHT))
-                        .flex_none()
-                        .px(px(8.0))
-                        .flex()
-                        .items_center()
-                        .child(text(wall_clock(frame), WALL_CLOCK_TEXT, REGULAR, ink)),
-                )
+                .child(clock(frame))
                 .child(
                     div()
                         .relative()
@@ -75,35 +66,68 @@ impl Render for Wall {
     }
 }
 
+/// The line under the top bar that shows the frame.
+pub(crate) fn clock(frame: u32) -> Div {
+    div()
+        .w_full()
+        .h(px(WALL_CLOCK_HEIGHT))
+        .flex_none()
+        .px(px(8.0))
+        .flex()
+        .items_center()
+        .child(text(
+            wall_clock(frame),
+            WALL_CLOCK_TEXT,
+            REGULAR,
+            color(WALL_INK_RGB),
+        ))
+}
+
 fn tiles(columns: usize, rows: usize, tier: WallTier) -> impl IntoElement {
+    grid(columns, rows, move |index| {
+        tile(
+            index,
+            tier.tile_width,
+            tier.tile_height,
+            tier.tile_height,
+            color(wall_fill_rgb(index)),
+        )
+        .into_any_element()
+    })
+}
+
+/// `columns` by `rows` cells, `WALL_GAP` apart and from the edges, each the
+/// element `cell` builds for its index.
+pub(crate) fn grid(columns: usize, rows: usize, cell: impl Fn(usize) -> AnyElement) -> Div {
     div()
         .p(px(WALL_GAP))
         .flex()
         .flex_col()
         .gap(px(WALL_GAP))
-        .children((0..rows).map(move |row| {
+        .children((0..rows).map(|row| {
             div()
                 .flex()
                 .gap(px(WALL_GAP))
-                .children((0..columns).map(move |column| tile(row * columns + column, tier)))
+                .children((0..columns).map(|column| cell(row * columns + column)))
         }))
 }
 
-/// One tile: its label over a dot and its value, on its fill, each part at
-/// its own offset.
-fn tile(index: usize, tier: WallTier) -> impl IntoElement {
-    let (label_size, value_size) = wall_text_size(tier.tile_height);
-    let dot = wall_dot_size(tier.tile_height);
-    let padding = wall_padding(tier.tile_height);
+/// One tile of tile number `index`: its label over a dot and its value, on
+/// `fill`, each part at its own offset. The box is `width` by `height`; the
+/// text and the dot follow `text_height`, the height of a plain tile.
+pub(crate) fn tile(index: usize, width: f32, height: f32, text_height: f32, fill: Rgba) -> Div {
+    let (label_size, value_size) = wall_text_size(text_height);
+    let dot = wall_dot_size(text_height);
+    let padding = wall_padding(text_height);
     let ink = color(WALL_INK_RGB);
     let (label_line, value_line) = (label_size * 1.4, value_size * 1.4);
     div()
         .relative()
         .flex_none()
-        .w(px(tier.tile_width))
-        .h(px(tier.tile_height))
+        .w(px(width))
+        .h(px(height))
         .rounded(px(WALL_CORNER))
-        .bg(color(wall_fill_rgb(index)))
+        .bg(fill)
         .child(line(
             wall_label(index),
             label_size,

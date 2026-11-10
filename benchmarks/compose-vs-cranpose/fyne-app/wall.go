@@ -66,28 +66,14 @@ func runWall(a fyne.App, l launch) {
 	background := canvas.NewRectangle(rgb(0x0F1220))
 	place(background, 0, 0, windowWidth, windowHeight)
 	topBar, heading := newTopBar("Still wall")
-	clockStyle := style{wallClockText, false}
+	clockStyle := style{wallClockText, false, false}
 	clock := newText(wallClock(0), white, clockStyle)
 	objects := make([]fyne.CanvasObject, 0, 5+4*tiles)
 	objects = append(objects, background, topBar, heading, clock)
-	height := tier.height
-	label, value := style{height * 0.30, true}, style{height * 0.26, false}
-	padding, dot := height*0.06, height*0.22
+	look := newTileLook(tier.height)
 	for index := range tiles {
 		x, y := wallOrigin(index, columns, tier)
-		y += top
-		fill := canvas.NewRectangle(palette(index))
-		fill.CornerRadius = wallCorner
-		place(fill, x, y, tier.width, height)
-		name := newText(fmt.Sprintf("%05d", index), white, label)
-		placeText(name, x+padding, y+padding, label)
-		line := y + padding + measure(name.Text, label).Height
-		number := newText(wallValue(index), white, value)
-		numberHeight := measure(number.Text, value).Height
-		placeText(number, x+padding+dot*1.5, line, value)
-		spot := canvas.NewCircle(rgb(chipBackgroundRGB[(index/8)%8]))
-		place(spot, x+padding, line+(numberHeight-dot)/2, dot, dot)
-		objects = append(objects, fill, name, spot, number)
+		objects = append(objects, look.newTile(index, x, top+y, tier.width, tier.height).objects()...)
 	}
 	cursor := canvas.NewRectangle(color.Transparent)
 	cursor.StrokeColor = white

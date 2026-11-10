@@ -13,8 +13,11 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
+import 'chat.dart';
+import 'chat_feed.dart';
 import 'data.dart';
 import 'host.dart';
+import 'patchwork.dart';
 import 'wall.dart';
 
 const _ink = Color(0xFF111827);
@@ -61,6 +64,12 @@ Future<void> main(List<String> args) async {
   if (scenario == 'wall') {
     await fonts.load();
     runApp(Screen('Still wall', wallBackground, Wall(wallTier(tier), freeze)));
+  } else if (scenario == 'patchwork' && drawsPatchwork) {
+    final mono = FontLoader(patchworkMono)..addFont(fontFile('DejaVuSansMono.ttf'));
+    final assets = ChatAssets.load();
+    final feed = ChatFeed.start();
+    await Future.wait([fonts.load(), mono.load()]);
+    runApp(Screen('Patchwork', wallBackground, Patchwork(wallTier(tier), freeze, await assets, await feed)));
   } else {
     final avatars = Future.wait(List.generate(avatarCount, _avatar));
     await fonts.load();

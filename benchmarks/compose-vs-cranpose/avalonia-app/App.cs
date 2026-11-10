@@ -20,8 +20,12 @@ public static class Launch
     /// <summary>Whether the screen is the still wall in place of the gauntlet.</summary>
     public static bool Wall { get; set; }
 
+    /// <summary>The patchwork's screen, which only the desktop head has.</summary>
+    public static Func<Control>? Patchwork { get; set; }
+
     /// <summary>The screen asked for.</summary>
-    public static Control Screen() => Wall ? new WallView(Tier, Freeze) : new GauntletView(Tier, Freeze);
+    public static Control Screen() =>
+        Patchwork?.Invoke() ?? (Wall ? new WallView(Tier, Freeze) : new GauntletView(Tier, Freeze));
 
     /// <summary>Writes a `PERF` line where `measure.py` reads it.</summary>
     public static Action<string> Log { get; set; } = _ => { };
@@ -60,7 +64,7 @@ public sealed class App : Avalonia.Application
         {
             desktop.MainWindow = new Window
             {
-                Title = Launch.Wall ? "Still wall" : "Gauntlet",
+                Title = Launch.Patchwork is not null ? "Patchwork" : Launch.Wall ? "Still wall" : "Gauntlet",
                 Width = DesktopWidth,
                 Height = DesktopHeight,
                 CanResize = false,

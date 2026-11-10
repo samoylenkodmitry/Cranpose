@@ -88,6 +88,7 @@ pub(super) fn tab_requires_scroll(tab: DemoTab) -> bool {
             | DemoTab::Performance
             | DemoTab::Gauntlet
             | DemoTab::StillWall
+            | DemoTab::Patchwork
             | DemoTab::Animations
             | DemoTab::RecompositionLab
             | DemoTab::WebView
@@ -133,6 +134,7 @@ pub(super) fn render_active_tab(
         | DemoTab::Performance
         | DemoTab::Gauntlet
         | DemoTab::StillWall
+        | DemoTab::Patchwork
         | DemoTab::Images
         | DemoTab::Text
         | DemoTab::Wsz
@@ -155,8 +157,11 @@ fn render_showcase_tab(active: DemoTab, startup: StartupSelection, wsz_tab_state
     match active {
         DemoTab::HackerNews => HackerNewsTab(),
         DemoTab::Performance => performance_dashboard::PerformanceTab(),
-        DemoTab::Gauntlet => BenchTab(BenchScreen::Gauntlet),
-        DemoTab::StillWall => BenchTab(BenchScreen::StillWall),
+        DemoTab::Gauntlet | DemoTab::StillWall | DemoTab::Patchwork => {
+            if let Some(screen) = BenchScreen::of(active) {
+                BenchTab(screen);
+            }
+        }
         DemoTab::Images => images_tab(),
         DemoTab::Text => TextShowcaseTab(),
         DemoTab::Wsz => WszTab(wsz_tab_state),

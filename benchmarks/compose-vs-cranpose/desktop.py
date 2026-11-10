@@ -2,9 +2,10 @@
 """Measures the gauntlet's desktop apps on a Mac, from outside every app.
 
 Each app runs alone in a 1280 x 820 window (`perf-data`'s `DESKTOP_WINDOW`),
-with the screen in `PERF_SCENARIO` (the gauntlet or the still wall), the tier
-in `PERF_TIER`, the frame to freeze on in `PERF_FREEZE` and the Roboto files
-in `PERF_FONTS`; Cranpose takes them as `--scenario=NAME --tier=N` arguments
+with the screen in `PERF_SCENARIO` (the gauntlet, the still wall or the
+patchwork), the tier in `PERF_TIER`, the frame to freeze on in `PERF_FREEZE`,
+the font files in `PERF_FONTS` and the pictures of the patchwork's chat in
+`PERF_CHAT`; Cranpose takes them as `--scenario=NAME --tier=N` arguments
 and the web page in its address. Each `--scenario NAME[:TIER]` is measured in
 turn, at its own tier or else at `--tier`, into one report: the gauntlet
 alone when none is given. `FrameCount.app` counts the frames the app's
@@ -80,6 +81,8 @@ from timelines import SLOW_FPS, SLOW_SECONDS, STARTS, per_second, slow_rule
 
 HERE = Path(__file__).resolve().parent
 FONTS = HERE / 'fonts'
+# The animated picture and the spinner of the patchwork's chat.
+CHAT_ASSETS = HERE / 'chat-assets'
 # `PERF_FRAMECOUNT` names another copy of it, for trying a change to
 # `framecount/` without replacing the installed one.
 FRAMECOUNT = Path(os.environ.get('PERF_FRAMECOUNT') or Path.home() / 'Applications/FrameCount.app')
@@ -130,7 +133,10 @@ def clear_app_state(profile):
 DISAGREEMENT = 1.5
 
 # The screens every app draws.
-SCREENS = ('gauntlet', 'wall')
+SCREENS = ('gauntlet', 'wall', 'patchwork')
+# The screens only the desktop apps draw: the patchwork's chat takes its
+# tokens from a thread, which a page in a browser has not.
+DESKTOP_SCREENS = ('patchwork',)
 
 # The screens the release's app knows, one name a line, which `build_apps.sh
 # release` writes beside it.
@@ -286,9 +292,11 @@ def sign_anew(path):
 
 
 def serve_page():
-    """Serves the web page, and the Roboto files under `fonts/` beside it, on
-    a free local port for the whole run."""
-    return BrowserServer(HERE / 'web-app/www', isolate=False, aliases={'/fonts/': FONTS})
+    """Serves the web page, and the font files under `fonts/` and the chat's
+    pictures under `chat-assets/` beside it, on a free local port for the
+    whole run."""
+    return BrowserServer(HERE / 'web-app/www', isolate=False,
+                         aliases={'/fonts/': FONTS, '/chat-assets/': CHAT_ASSETS})
 
 
 # The services a WKWebView runs its page in. launchd starts them, outside the
@@ -674,7 +682,7 @@ class App:
         if program:
             command[0] = program
         variables = {'PERF_SCENARIO': args.scenario, 'PERF_TIER': str(tier), 'PERF_FREEZE': str(freeze),
-                     'PERF_FONTS': str(stage / 'fonts')}
+                     'PERF_FONTS': str(stage / 'fonts'), 'PERF_CHAT': str(stage / 'chat-assets')}
         executable, arguments = command[0], command[1:]
         self.log.write_text('')
         self.started = time.monotonic()
@@ -899,8 +907,9 @@ def main():
                         help='run the apps `build_apps.sh browser DIST` built, in Chrome')
     parser.add_argument('--release', help='the release tag `cranpose-release` was built at')
     parser.add_argument('--scenario', type=screen, action='append', metavar='NAME[:TIER]',
-                        help='a screen every app shows, the gauntlet or the still wall, at TIER or else '
-                             '--tier; given again, the run measures each in turn')
+                        help='a screen every app shows, the gauntlet, the still wall or the patchwork '
+                             '(desktop apps only), at TIER or else --tier; given again, the run measures '
+                             'each in turn')
     parser.add_argument('--tier', type=int, default=12)
     parser.add_argument('--rounds', type=int, default=1,
                         help="rounds, in each of which every app starts after the apps' state is removed, "
@@ -920,6 +929,8 @@ def main():
     parser.add_argument('--tile-delta', type=float, default=12.0)
     args = parser.parse_args()
     args.screens = [(name, tier or args.tier) for name, tier in args.scenario or [('gauntlet', None)]]
+    if args.browser and any(name in DESKTOP_SCREENS for name, _ in args.screens):
+        parser.error(f'only the desktop apps draw {", ".join(DESKTOP_SCREENS)}')
     # The parity pictures and Chrome's warm-up show the first screen.
     args.scenario, args.tier = args.screens[0]
     if args.browser:
@@ -939,6 +950,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix='gauntlet-') as folder:
         stage = Path(folder)
         shutil.copytree(FONTS, stage / 'fonts')
+        shutil.copytree(CHAT_ASSETS, stage / 'chat-assets')
         # No measuring on a display that is not as the run is calibrated for.
         began, problems = observe_display(stage, 'start')
         if problems:

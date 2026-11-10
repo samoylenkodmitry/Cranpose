@@ -18,6 +18,45 @@ export global WallClock {
     in-out property <string> text;
 }
 
+/// One tile: its label over a dot and its value, on `fill`. The patchwork
+/// shares it.
+export component TileBox inherits Rectangle {
+    in property <WallTile> tile;
+    in property <color> fill: tile.fill;
+    in property <length> pad;
+    in property <length> label-size;
+    in property <length> value-size;
+    in property <length> dot;
+    background: fill;
+    border-radius: 2px;
+    clip: true;
+    label := Text {
+        x: pad;
+        y: pad;
+        text: tile.label;
+        font-size: label-size;
+        font-weight: 700;
+        color: white;
+        wrap: no-wrap;
+    }
+    Rectangle {
+        x: pad;
+        y: pad + label.preferred-height + (value.preferred-height - dot) / 2;
+        width: dot;
+        height: dot;
+        border-radius: dot / 2;
+        background: tile.dot;
+    }
+    value := Text {
+        x: pad + dot * 1.5;
+        y: pad + label.preferred-height;
+        text: tile.value;
+        font-size: value-size;
+        color: white;
+        wrap: no-wrap;
+    }
+}
+
 export component WallWindow inherits Window {
     in property <[WallTile]> tiles;
     in property <int> columns;
@@ -58,39 +97,16 @@ export component WallWindow inherits Window {
             }
         }
         Rectangle {
-            for tile[index] in tiles: Rectangle {
+            for t[index] in tiles: TileBox {
                 x: 1px + Math.mod(index, columns) * (tile-width + 1px);
                 y: 1px + floor(index / columns) * (tile-height + 1px);
                 width: tile-width;
                 height: tile-height;
-                background: tile.fill;
-                border-radius: 2px;
-                clip: true;
-                label := Text {
-                    x: pad;
-                    y: pad;
-                    text: tile.label;
-                    font-size: label-size;
-                    font-weight: 700;
-                    color: white;
-                    wrap: no-wrap;
-                }
-                Rectangle {
-                    x: pad;
-                    y: pad + label.preferred-height + (value.preferred-height - dot) / 2;
-                    width: dot;
-                    height: dot;
-                    border-radius: dot / 2;
-                    background: tile.dot;
-                }
-                value := Text {
-                    x: pad + dot * 1.5;
-                    y: pad + label.preferred-height;
-                    text: tile.value;
-                    font-size: value-size;
-                    color: white;
-                    wrap: no-wrap;
-                }
+                tile: t;
+                pad: pad;
+                label-size: label-size;
+                value-size: value-size;
+                dot: dot;
             }
             Rectangle {
                 x: 1px + Math.mod(cursor, columns) * (tile-width + 1px);

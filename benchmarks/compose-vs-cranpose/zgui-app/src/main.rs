@@ -3,7 +3,10 @@
 //! follow signals, under a style sheet. The benchmark's README describes it;
 //! `desktop.py` runs it: `PERF_TIER=16 PERF_FONTS=../fonts cargo run --release`.
 
+mod chat;
 mod gauntlet;
+mod patchwork;
+mod picture;
 mod sheet;
 mod wall;
 
@@ -15,13 +18,21 @@ use zgui::{
     view::{AnyView, FrameHandle, Timers},
 };
 
-/// Roboto from the files every desktop app loads, and no other face.
-fn fonts() -> Fonts {
+/// Roboto from the files every desktop app loads, and the chat's monospaced
+/// face for the patchwork; no other face.
+fn fonts(scenario: Scenario) -> Fonts {
     let fonts = Fonts::shipped_only();
-    for file in ["Roboto-Regular.ttf", "Roboto-Bold.ttf"] {
+    let mut files = vec![
+        ("Roboto-Regular.ttf", "Roboto"),
+        ("Roboto-Bold.ttf", "Roboto"),
+    ];
+    if scenario == Scenario::Patchwork {
+        files.push(("DejaVuSansMono.ttf", "DejaVu Sans Mono"));
+    }
+    for (file, family) in files {
         match font_bytes(file) {
             Ok(bytes) => {
-                if let Err(error) = fonts.register(Arc::new(bytes), Some("Roboto")) {
+                if let Err(error) = fonts.register(Arc::new(bytes), Some(family)) {
                     log::warn!("{file} is no font: {error:?}");
                 }
             }
@@ -71,12 +82,13 @@ fn main() -> Result<(), zgui::Error> {
             gauntlet::screen,
         ),
         Scenario::Wall => (sheet::wall(), wall::screen),
+        Scenario::Patchwork => (sheet::patchwork(), patchwork::screen),
     };
     app()
         .with_title(launch.scenario.title())
         .with_size(width as f32, height as f32)
         .with_resizable(false)
-        .with_fonts(fonts())
+        .with_fonts(fonts(launch.scenario))
         .with_stylesheet(sheet)
         .run(screen)
 }

@@ -9,72 +9,137 @@
 //! again each frame.
 
 use gpui::{
-    App, AppContext, Bounds, Context, Entity, FontWeight, Hsla, IntoElement, ParentElement, Render,
-    StyleRefinement, Styled, TitlebarOptions, Window, WindowBounds, WindowOptions, div, px,
-    relative, size,
+    App, AppContext, Bounds, Context, Div, Entity, FontWeight, Hsla, IntoElement, ParentElement,
+    Render, StyleRefinement, Styled, TitlebarOptions, Window, WindowBounds, WindowOptions, div,
+    prelude::FluentBuilder, px, relative, size,
 };
 use perf_data::*;
 
 use super::{hex, rgb};
 
-/// The tiles, `columns` by `rows` of them: a view that never changes.
-struct Tiles {
-    tier: WallTier,
-    columns: usize,
-    rows: usize,
+/// The tiles, `columns` by `rows` of them: a view that never changes. Without
+/// `filled` the tiles show their text and dots over what lies beneath.
+pub(super) struct Tiles {
+    pub(super) tier: WallTier,
+    pub(super) columns: usize,
+    pub(super) rows: usize,
+    pub(super) filled: bool,
 }
 
 impl Render for Tiles {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         let (width, height) = (self.tier.tile_width, self.tier.tile_height);
-        let columns = self.columns;
+        let (columns, filled) = (self.columns, self.filled);
         div()
             .flex()
             .flex_col()
             .gap(px(WALL_GAP))
             .p(px(WALL_GAP))
             .children((0..self.rows).map(move |row| {
-                div().flex().gap(px(WALL_GAP)).children(
-                    (0..columns).map(move |column| tile(row * columns + column, width, height)),
-                )
+                div()
+                    .flex()
+                    .gap(px(WALL_GAP))
+                    .children((0..columns).map(move |column| {
+                        let index = row * columns + column;
+                        tile_box(
+                            index,
+                            width,
+                            height,
+                            height,
+                            filled.then(|| rgb(wall_fill_rgb(index))),
+                        )
+                    }))
             }))
     }
 }
 
-// One tile: its label over a dot and its value, on its fill.
-fn tile(index: usize, width: f32, height: f32) -> impl IntoElement {
-    let (label_size, value_size) = wall_text_size(height);
-    let dot = wall_dot_size(height);
+/// One tile on its own wall fill.
+pub(super) fn tile(index: usize, width: f32, height: f32) -> Div {
+    tile_box(
+        index,
+        width,
+        height,
+        height,
+        Some(rgb(wall_fill_rgb(index))),
+    )
+}
+
+/// The line height of the screens' text, in text sizes.
+pub(super) const LINE_HEIGHT: f32 = 1.4;
+
+/// Where the parts of a tile lie, in points from the tile's corner, for tiles
+/// `tile_height` points tall: the label over a dot and the value. The element
+/// tile puts its parts there, and so does a tile painted on a canvas.
+#[derive(Clone, Copy)]
+pub(super) struct TileGeometry {
+    pub(super) label_size: f32,
+    pub(super) value_size: f32,
+    pub(super) label_line: f32,
+    pub(super) value_line: f32,
+    pub(super) dot: f32,
+    pub(super) label: (f32, f32),
+    pub(super) dot_at: (f32, f32),
+    pub(super) value: (f32, f32),
+}
+
+impl TileGeometry {
+    pub(super) fn new(tile_height: f32) -> Self {
+        let (label_size, value_size) = wall_text_size(tile_height);
+        let (label_line, value_line) = (label_size * LINE_HEIGHT, value_size * LINE_HEIGHT);
+        let (padding, dot) = (wall_padding(tile_height), wall_dot_size(tile_height));
+        // The dot and the value share a band, centered on one another.
+        let band = dot.max(value_line);
+        let top = padding + label_line;
+        Self {
+            label_size,
+            value_size,
+            label_line,
+            value_line,
+            dot,
+            label: (padding, padding),
+            dot_at: (padding, top + (band - dot) / 2.0),
+            value: (padding + dot * 1.5, top + (band - value_line) / 2.0),
+        }
+    }
+}
+
+/// A tile's label over a dot and its value, in a box of `width` by `height`
+/// on `fill`; the parts follow tiles `tile_height` points tall.
+pub(super) fn tile_box(
+    index: usize,
+    width: f32,
+    height: f32,
+    tile_height: f32,
+    fill: Option<Hsla>,
+) -> Div {
+    let geometry = TileGeometry::new(tile_height);
+    let part = |(left, top): (f32, f32)| div().absolute().left(px(left)).top(px(top));
     div()
         .flex_none()
+        .relative()
         .w(px(width))
         .h(px(height))
-        .p(px(wall_padding(height)))
         .overflow_hidden()
         .whitespace_nowrap()
+        .line_height(relative(LINE_HEIGHT))
         .rounded(px(WALL_CORNER))
-        .bg(rgb(wall_fill_rgb(index)))
-        .flex()
-        .flex_col()
+        .when_some(fill, |tile, fill| tile.bg(fill))
         .child(
-            div()
-                .text_size(px(label_size))
+            part(geometry.label)
+                .text_size(px(geometry.label_size))
                 .font_weight(FontWeight::BOLD)
                 .child(wall_label(index)),
         )
         .child(
-            div()
-                .flex()
-                .items_center()
-                .gap(px(dot * 0.5))
-                .child(
-                    div()
-                        .flex_none()
-                        .size(px(dot))
-                        .rounded(px(dot / 2.0))
-                        .bg(rgb(wall_dot_rgb(index))),
-                )
-                .child(div().text_size(px(value_size)).child(wall_value(index))),
+            part(geometry.dot_at)
+                .size(px(geometry.dot))
+                .rounded(px(geometry.dot / 2.0))
+                .bg(rgb(wall_dot_rgb(index))),
+        )
+        .child(
+            part(geometry.value)
+                .text_size(px(geometry.value_size))
+                .child(wall_value(index)),
         )
 }
 
@@ -99,32 +164,11 @@ impl Render for Wall {
             .flex()
             .flex_col()
             .font_family("Roboto")
-            .line_height(relative(1.4))
+            .line_height(relative(LINE_HEIGHT))
             .text_color(ink)
             .bg(rgb(WALL_BACKGROUND_RGB))
-            .child(
-                div()
-                    .flex_none()
-                    .h(px(56.0))
-                    .px(px(16.0))
-                    .flex()
-                    .items_center()
-                    .bg(hex(0x1E2A4A))
-                    .text_size(px(20.0))
-                    .font_weight(FontWeight::BOLD)
-                    .text_color(gpui::white())
-                    .child("Still wall"),
-            )
-            .child(
-                div()
-                    .flex_none()
-                    .h(px(WALL_CLOCK_HEIGHT))
-                    .px(px(8.0))
-                    .flex()
-                    .items_center()
-                    .text_size(px(WALL_CLOCK_TEXT))
-                    .child(wall_clock(self.frame.get())),
-            )
+            .child(top_bar("Still wall"))
+            .child(clock(self.frame.get()))
             .child(
                 div()
                     .flex_1()
@@ -148,6 +192,33 @@ impl Render for Wall {
                     ),
             )
     }
+}
+
+/// The bar with the screen's title.
+pub(super) fn top_bar(title: &'static str) -> Div {
+    div()
+        .flex_none()
+        .h(px(56.0))
+        .px(px(16.0))
+        .flex()
+        .items_center()
+        .bg(hex(0x1E2A4A))
+        .text_size(px(20.0))
+        .font_weight(FontWeight::BOLD)
+        .text_color(gpui::white())
+        .child(title)
+}
+
+/// The clock line under the top bar.
+pub(super) fn clock(frame: u32) -> Div {
+    div()
+        .flex_none()
+        .h(px(WALL_CLOCK_HEIGHT))
+        .px(px(8.0))
+        .flex()
+        .items_center()
+        .text_size(px(WALL_CLOCK_TEXT))
+        .child(wall_clock(frame))
 }
 
 // The grid of the wall in the desktop window, under the top bar and the
@@ -180,6 +251,7 @@ pub fn open(load: Launch, cx: &mut App) {
             tier,
             columns,
             rows,
+            filled: true,
         });
         cx.new(|_| Wall {
             tier,

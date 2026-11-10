@@ -199,7 +199,8 @@ desktop)
     cargo_app cranpose-app
     for app in egui slint iced gpui tauri dioxus xilem rune bui ferro zgui; do
         rust_target "$app-app"
-        reads=("$app-app" perf-data)
+        # perf-data holds the pictures of the patchwork's chat.
+        reads=("$app-app" perf-data chat-assets)
         # Dioxus draws with the web page's CSS.
         if [[ $app == dioxus ]]; then
             reads+=(web-app/www/style.css)
@@ -354,6 +355,9 @@ release)
         echo gauntlet
         if grep -q '"wall" => Self::Wall' "$app/src/lib.rs"; then
             echo wall
+        fi
+        if grep -q '"patchwork" => Self::Patchwork' "$app/src/lib.rs"; then
+            echo patchwork
         fi
     } > "$cache/targets/cranpose-release/screens.txt"
     ln -sfn "$cache/targets/cranpose-release" "$here/cranpose-app/target-release"

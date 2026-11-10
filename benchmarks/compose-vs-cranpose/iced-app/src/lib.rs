@@ -23,6 +23,7 @@ use iced::{
 };
 use perf_data::*;
 
+mod patchwork;
 mod wall;
 
 /// Blocks of five card rows and a cluster: no measurement window reaches the end.
@@ -759,8 +760,10 @@ impl canvas::Program<Message> for Layers<'_> {
 /// Runs the gauntlet in a window of `size` that the page or the desktop
 /// gives it.
 pub fn run(load: Launch, size: Size) -> iced::Result {
-    if load.scenario == Scenario::Wall {
-        return wall::run(load, size);
+    match load.scenario {
+        Scenario::Wall => return wall::run(load, size),
+        Scenario::Patchwork => return patchwork::run(load, size),
+        Scenario::Gauntlet => {}
     }
     let mut application = iced::application(
         move || Gauntlet::new(load, size),

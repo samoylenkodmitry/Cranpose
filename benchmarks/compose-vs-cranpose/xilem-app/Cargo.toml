@@ -11,6 +11,10 @@ publish = false
 xilem = { version = "0.4.0" }
 log = "0.4"
 perf-data = { path = "../perf-data" }
+gif = "0.14.2"
+resvg = { version = "0.45", default-features = false }
+usvg = { version = "0.45", default-features = false }
+tiny-skia = "0.11"
 
 # Its own workspace, like a real application, built as the Cranpose app is.
 [workspace]

@@ -14,6 +14,8 @@ zgui-image = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c0
 log = "0.4"
 perf-data = { path = "../perf-data" }
 png = "0.17"
+zgui-ui = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a", version = "0.1.0" }
+gif = "0.14.2"
 
 # zgui's workspace patches the font collection under its text engine with a vendored copy; a
 # dependent does not inherit the patch, so the app names the same one.

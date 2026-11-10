@@ -113,7 +113,12 @@ impl Wall {
 
 // The tiles, `columns` by `rows` of them `width` by `height` points each,
 // `WALL_GAP` apart.
-fn tiles(columns: usize, rows: usize, width: f32, height: f32) -> Element<'static, Message> {
+pub(super) fn tiles(
+    columns: usize,
+    rows: usize,
+    width: f32,
+    height: f32,
+) -> Element<'static, Message> {
     Column::with_children((0..rows).map(|row| {
         Row::with_children((0..columns).map(|column| tile(row * columns + column, width, height)))
             .spacing(WALL_GAP)
@@ -125,11 +130,26 @@ fn tiles(columns: usize, rows: usize, width: f32, height: f32) -> Element<'stati
 }
 
 // One tile: its label over a dot and its value, on its fill.
-fn tile(index: usize, width: f32, height: f32) -> Element<'static, Message> {
+pub(super) fn tile(index: usize, width: f32, height: f32) -> Element<'static, Message> {
+    tile_on(
+        index,
+        Size::new(width, height),
+        height,
+        rgb(wall_fill_rgb(index)),
+    )
+}
+
+// Tile `index` of `size` on `fill`, with the content of a tile `height`
+// points tall.
+pub(super) fn tile_on(
+    index: usize,
+    size: Size,
+    height: f32,
+    fill_color: Color,
+) -> Element<'static, Message> {
     let (label_size, value_size) = wall_text_size(height);
     let dot = wall_dot_size(height);
     let dot_color = rgb(wall_dot_rgb(index));
-    let fill_color = rgb(wall_fill_rgb(index));
     let line = |content: String, size: f32| {
         text(content)
             .size(size)
@@ -148,8 +168,8 @@ fn tile(index: usize, width: f32, height: f32) -> Element<'static, Message> {
         .spacing(dot * 0.5)
         .align_y(alignment::Vertical::Center),
     ])
-    .width(width)
-    .height(height)
+    .width(size.width)
+    .height(size.height)
     .padding(wall_padding(height))
     .clip(true)
     .style(move |_| rounded(fill_color, WALL_CORNER))
