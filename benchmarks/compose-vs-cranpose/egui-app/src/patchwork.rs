@@ -28,6 +28,9 @@ pub struct Patchwork {
     grid: (usize, usize),
     // The label and the value of each tile of a patch.
     text: Vec<[Arc<Galley>; 2]>,
+    // The chat at the right, in the desktop app.
+    #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
+    chat: super::chat::Chat,
 }
 
 // One patch in a frame: where it lies and what the frame paints in it.
@@ -46,6 +49,8 @@ impl Patchwork {
             frame: FrameIndex::new(load.freeze),
             grid: (0, 0),
             text: Vec::new(),
+            #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
+            chat: super::chat::Chat::new(ctx),
         }
     }
 
@@ -328,6 +333,12 @@ impl eframe::App for Patchwork {
                 Patch::Pile => self.pile(&shown),
             }
         }
+        #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
+        self.chat.show(
+            ui,
+            Rect::from_min_max(pos2(area.right() - CHAT_WIDTH, area.top()), area.max),
+            self.frame.get(),
+        );
         if more {
             ui.ctx().request_repaint();
         }

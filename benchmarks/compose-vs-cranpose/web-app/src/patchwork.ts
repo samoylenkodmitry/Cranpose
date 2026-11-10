@@ -11,10 +11,9 @@
 // list that recycles its rows does.
 
 import { PALETTE } from '../../shared-ts/data.js';
+import { chat } from './chat.js';
 import { GAP, TIERS, clock, dotColor, element, fit, label, tile, tileSizes, value } from './wall.js';
 
-/** The width of the chat at the right of the screen. */
-const CHAT_WIDTH = 320;
 const DEPTH = 12;
 const CHART_POINTS = 512;
 const JUMP = 37;
@@ -216,7 +215,9 @@ export function patchwork(tier: number, freeze: number, log: (message: string) =
   document.body.classList.add('still-wall');
   element('header', 'top-bar', document.body).textContent = 'Patchwork';
   const line = element('div', 'wall-clock', document.body);
-  const area = element('div', 'patchwork', document.body);
+  const screen = element('div', 'patchwork-screen', document.body);
+  const area = element('div', 'patchwork', screen);
+  const showChat = chat(screen);
   tileSizes(area, width, height);
   let columns = 0;
   let rows = 0;
@@ -224,6 +225,7 @@ export function patchwork(tier: number, freeze: number, log: (message: string) =
   let patches: Show[] = [];
   const show = () => {
     line.textContent = clock(frame);
+    showChat(frame);
     for (const patchShow of patches) {
       patchShow(frame);
     }
@@ -231,7 +233,7 @@ export function patchwork(tier: number, freeze: number, log: (message: string) =
   // Builds the patches for the tiles that fit in one, again only when that
   // number changes.
   const lay = () => {
-    const patchWidth = Math.floor((area.clientWidth - CHAT_WIDTH) / 3);
+    const patchWidth = Math.floor(area.clientWidth / 3);
     const patchHeight = Math.floor(area.clientHeight / 3);
     const across = fit(patchWidth, width);
     const down = fit(patchHeight, height);

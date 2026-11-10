@@ -19,8 +19,8 @@ use super::{
     wall::{BACKGROUND, Clock, INK, ONE_LINE, Tile, Wall, rgb, tile_content, tile_rows},
 };
 use crate::data::{
-    self, ChurnKind, PATCH_COLUMNS, PATCH_ROWS, PATCHWORK_CHART_POINTS, PATCHWORK_DEPTH, Patch,
-    WALL_GAP,
+    self, ChatToken, ChurnKind, PATCH_COLUMNS, PATCH_ROWS, PATCHWORK_CHART_POINTS, PATCHWORK_DEPTH,
+    Patch, WALL_GAP,
 };
 
 /// What of the screen a launch shows.
@@ -128,6 +128,7 @@ fn Patches(frame: MutableState<u32>, load: PatchworkLoad, grid: Grid) {
     let chat = ChatShown {
         blocks: rememberMutableStateOf(|| 0usize),
         last: rememberMutableStateOf(|| 0usize),
+        token: rememberMutableStateOf(ChatToken::default),
         list: rememberLazyListState(),
     };
     let feed = remember(|| {

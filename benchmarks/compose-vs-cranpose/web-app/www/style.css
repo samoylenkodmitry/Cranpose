@@ -9,6 +9,10 @@
   font-weight: 400;
 }
 @font-face {
+  font-family: PerfMono;
+  src: url("fonts/DejaVuSansMono.ttf");
+}
+@font-face {
   font-family: PerfRoboto;
   src: local("Roboto Bold"), local("Roboto-Bold"), url("fonts/Roboto-Bold.ttf");
   font-weight: 700;
@@ -535,4 +539,122 @@ body.still-wall {
   position: absolute;
   width: calc(2 * var(--width) + 1px);
   height: calc(2 * var(--height) + 1px);
+}
+
+/* The patchwork's patches and, at their right, the chat (`src/chat.ts`). */
+.patchwork-screen {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.chat {
+  flex: none;
+  width: 320px;
+  display: flex;
+  flex-direction: column;
+  background: #14182B;
+  font-size: 12px;
+  line-height: 1.4;
+  contain: strict;
+}
+
+/* A column laid out from its end keeps to its end as the list grows. */
+.chat-scroll {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column-reverse;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.chat-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+}
+
+.chat-user {
+  align-self: flex-end;
+  padding: 6px 10px;
+  border-radius: 10px;
+  background: #2B3A67;
+}
+
+.chat-code {
+  margin: 0;
+  padding: 8px;
+  border-radius: 6px;
+  background: #0B0E1A;
+  font: 11px/1.4 PerfMono, monospace;
+  white-space: pre-wrap;
+}
+
+.code-keyword { color: #C084FC; }
+.code-text { color: #86EFAC; }
+.code-number { color: #FDBA74; }
+.code-comment { color: #64748B; }
+
+.chat-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-size: 11px;
+  text-align: left;
+}
+
+.chat-table th,
+.chat-table td {
+  padding: 3px 6px;
+}
+
+.chat-table tr:first-child,
+.chat-table tr:nth-child(even) {
+  background: #0B0E1A;
+}
+
+.chat-gif {
+  width: 64px;
+  height: 64px;
+}
+
+.chat-buttons {
+  display: flex;
+  gap: 8px;
+}
+
+.chat-buttons button {
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: #2B3A67;
+  color: inherit;
+  font: inherit;
+  font-weight: 700;
+}
+
+.chat-status {
+  flex: none;
+  height: 28px;
+  padding: 0 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: #0B0E1A;
+}
+
+.chat-spinner {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  will-change: transform;
+}
+
+.chat-shimmer {
+  color: transparent;
+  background: linear-gradient(90deg, #64748B, #FFFFFF, #64748B) 0 0 / 120px 100% repeat-x;
+  -webkit-background-clip: text;
+  background-clip: text;
 }

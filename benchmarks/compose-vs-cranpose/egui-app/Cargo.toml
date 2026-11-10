@@ -15,6 +15,7 @@ name = "perf_egui"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+gif = "0.14.2"
 log = "0.4"
 perf-data = { path = "../perf-data" }
 
@@ -24,6 +25,7 @@ perf-data = { path = "../perf-data" }
 # https://github.com/emilk/egui/blob/main/crates/eframe/README.md
 [target.'cfg(not(any(target_arch = "wasm32", target_os = "android")))'.dependencies]
 eframe = { version = "0.37.0", default-features = false, features = ["wgpu", "default_fonts", "accesskit"] }
+egui_extras = { version = "0.37", default-features = false, features = ["svg"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # The same shell in a browser, on the same renderer: glow is WebGL2 there.

@@ -3,12 +3,13 @@
 //!
 //! In Cranpose's idiom the list reads only the number of blocks, so a token
 //! composes the last block alone, the one that reads how much of it shows.
-//! The spinner turns in a graphics layer; the animated picture and the
-//! moving gradient each read the frame in a composable of their own.
+//! The status line's spinner turns in a graphics layer, which composes and
+//! draws nothing again; its text reads the last token and the frame in a
+//! composable of its own, as the animated picture reads the frame.
 
 use std::{cell::OnceCell, rc::Rc};
 
-use cranpose::{LazyItems, WebView, prelude::*};
+use cranpose::{LazyItems, prelude::*};
 use cranpose_ui::{
     text::{AnnotatedString, FontFamily, FontWeight, SpanStyle},
     widgets::rememberSvg,
@@ -27,12 +28,13 @@ const MUTED: Color = rgb(data::CHAT_SHIMMER_RGB[0]);
 const PANEL: Color = rgb(data::CHAT_PANEL_RGB);
 const BUBBLE: Color = rgb(data::CHAT_USER_RGB);
 
-/// What the chat shows: its blocks so far and how much of the last one.
-/// The frame loop writes both as tokens arrive.
+/// What the chat shows: its blocks so far, how much of the last one and the
+/// last token. The frame loop writes them as tokens arrive.
 #[derive(Clone, Copy, PartialEq)]
 pub struct ChatShown {
     pub blocks: MutableState<usize>,
     pub last: MutableState<usize>,
+    pub token: MutableState<ChatToken>,
     pub list: LazyListState,
 }
 
@@ -40,13 +42,15 @@ impl ChatShown {
     /// Takes the frame's tokens from `feed` and keeps the list at its end.
     pub fn advance(self, feed: &data::ChatFeed) {
         for _ in 0..data::CHAT_TOKENS_PER_FRAME {
-            let Some(ChatToken { block, shown }) = feed.take() else {
+            let Some(token) = feed.take() else {
                 break;
             };
+            let ChatToken { block, shown, .. } = token;
             if self.blocks.get_non_reactive() != block + 1 {
                 self.blocks.set(block + 1);
             }
             self.last.set(shown);
+            self.token.set(token);
         }
         self.list.dispatch_scroll_delta(-1.0e6);
     }
@@ -54,12 +58,26 @@ impl ChatShown {
 
 #[composable]
 pub fn Chat(frame: MutableState<u32>, shown: ChatShown) {
-    let count = shown.blocks.get();
-    LazyColumn(
+    Column(
         Modifier::empty()
             .width(data::CHAT_WIDTH)
             .fill_max_height()
             .background(rgb(data::CHAT_BACKGROUND_RGB)),
+        ColumnSpec::default(),
+        move || {
+            Blocks(frame, shown);
+            Status(frame, shown.token);
+        },
+    );
+}
+
+// The list of blocks: it reads their number, so it composes again when a
+// block begins and not for the tokens of a block.
+#[composable]
+fn Blocks(frame: MutableState<u32>, shown: ChatShown) {
+    let count = shown.blocks.get();
+    LazyColumn(
+        Modifier::empty().fill_max_width().weight(1.0),
         shown.list,
         LazyColumnSpec::new()
             .vertical_arrangement(LinearArrangement::spaced_by(8.0))
@@ -75,18 +93,67 @@ pub fn Chat(frame: MutableState<u32>, shown: ChatShown) {
     );
 }
 
+// The status line under the list: a spinner that turns each frame and what
+// the agent does, under a gradient that moves each frame.
+#[composable]
+fn Status(frame: MutableState<u32>, token: MutableState<ChatToken>) {
+    Row(
+        Modifier::empty()
+            .fill_max_width()
+            .height(data::CHAT_STATUS_HEIGHT)
+            .background(PANEL)
+            .padding_horizontal(8.0),
+        RowSpec::new()
+            .horizontal_arrangement(LinearArrangement::spaced_by(6.0))
+            .vertical_alignment(VerticalAlignment::CenterVertically),
+        move || {
+            let spinner = rememberSvg(data::CHAT_SVG.as_bytes())
+                .map_err(|error| log::warn!("chat spinner: {error}"));
+            if let Ok(spinner) = spinner {
+                Image(
+                    Painter::from_svg(spinner),
+                    None,
+                    Modifier::empty()
+                        .size_points(data::CHAT_SPINNER_SIZE, data::CHAT_SPINNER_SIZE)
+                        .graphics_layer(move || GraphicsLayer {
+                            rotation_z: frame.get() as f32 * data::CHAT_SPIN_DEGREES,
+                            ..Default::default()
+                        }),
+                    Alignment::CENTER,
+                    ContentScale::Fit,
+                    1.0,
+                    None,
+                );
+            }
+            StatusText(frame, token);
+        },
+    );
+}
+
+#[composable]
+fn StatusText(frame: MutableState<u32>, token: MutableState<ChatToken>) {
+    let start = (frame.get() as f32 * data::CHAT_SHIMMER_STEP) % data::CHAT_SHIMMER_SPAN;
+    let mut style = text_style(data::CHAT_TEXT, INK, false);
+    style.span_style.color = None;
+    style.span_style.brush = Some(Brush::horizontal_gradient_tiled(
+        vec![MUTED, rgb(data::CHAT_SHIMMER_RGB[1]), MUTED],
+        start,
+        start + data::CHAT_SHIMMER_SPAN,
+        TileMode::Repeated,
+    ));
+    Text(data::chat_status(token.get()), Modifier::empty(), style);
+}
+
 // Block `index` of the chat; `live` while it is the last one, the one that
 // reads how much of it `shown` tokens show.
 #[composable]
 fn Block(index: usize, live: bool, frame: MutableState<u32>, shown: MutableState<usize>) {
     match CHAT_TURN[index % CHAT_TURN.len()] {
         ChatBlock::User(text) => User(text),
-        ChatBlock::Progress(label) => Progress(label, live, frame),
         ChatBlock::Paragraph(text) => Paragraph(ChatToken::turn(index), text, live, shown),
         ChatBlock::Code(code) => Code(ChatToken::turn(index), code, live, shown),
         ChatBlock::Table(rows) => Table(rows, live, shown),
         ChatBlock::Gif => Gif(frame),
-        ChatBlock::Web => Web(),
         ChatBlock::Buttons(labels) => Buttons(labels),
     }
 }
@@ -107,64 +174,6 @@ fn User(text: &'static str) {
             );
         },
     );
-}
-
-#[composable]
-fn Progress(label: &'static str, live: bool, frame: MutableState<u32>) {
-    Row(
-        Modifier::empty(),
-        RowSpec::new()
-            .horizontal_arrangement(LinearArrangement::spaced_by(6.0))
-            .vertical_alignment(VerticalAlignment::CenterVertically),
-        move || {
-            let spinner = rememberSvg(data::CHAT_SVG.as_bytes())
-                .map_err(|error| log::warn!("chat spinner: {error}"));
-            if let Ok(spinner) = spinner {
-                Image(
-                    Painter::from_svg(spinner),
-                    None,
-                    Modifier::empty()
-                        .size_points(16.0, 16.0)
-                        .graphics_layer(move || GraphicsLayer {
-                            rotation_z: if live {
-                                frame.get() as f32 * data::CHAT_SPIN_DEGREES
-                            } else {
-                                0.0
-                            },
-                            ..Default::default()
-                        }),
-                    Alignment::CENTER,
-                    ContentScale::Fit,
-                    1.0,
-                    None,
-                );
-            }
-            if live {
-                Shimmer(label, frame);
-            } else {
-                Text(
-                    label,
-                    Modifier::empty(),
-                    text_style(data::CHAT_TEXT, MUTED, false),
-                );
-            }
-        },
-    );
-}
-
-// The live progress line's label under a gradient that moves each frame.
-#[composable]
-fn Shimmer(label: &'static str, frame: MutableState<u32>) {
-    let start = (frame.get() as f32 * data::CHAT_SHIMMER_STEP) % data::CHAT_SHIMMER_SPAN;
-    let mut style = text_style(data::CHAT_TEXT, INK, false);
-    style.span_style.color = None;
-    style.span_style.brush = Some(Brush::horizontal_gradient_tiled(
-        vec![MUTED, rgb(data::CHAT_SHIMMER_RGB[1]), MUTED],
-        start,
-        start + data::CHAT_SHIMMER_SPAN,
-        TileMode::Repeated,
-    ));
-    Text(label, Modifier::empty(), style);
 }
 
 #[composable]
@@ -328,16 +337,6 @@ fn Gif(frame: MutableState<u32>) {
         ContentScale::Fit,
         1.0,
         None,
-    );
-}
-
-#[composable]
-fn Web() {
-    let (width, height) = data::CHAT_WEB_SIZE;
-    WebView(
-        data::chat_html_url(),
-        Modifier::empty().size_points(width, height),
-        |_| {},
     );
 }
 

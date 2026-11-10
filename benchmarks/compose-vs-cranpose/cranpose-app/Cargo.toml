@@ -32,7 +32,7 @@ entry = []
 renderer-wgpu = ["cranpose/renderer-wgpu"]
 # The embedded face is what the desktop app draws in when `PERF_FONTS` names
 # no Roboto files.
-desktop = ["cranpose/desktop", "cranpose/embedded-default-font", "cranpose/webview"]
+desktop = ["cranpose/desktop", "cranpose/embedded-default-font"]
 android = ["cranpose/android", "cranpose/release-log-info"]
 # The gauntlet in a browser: `wasm-pack build --target web --no-default-features
 # --features web,renderer-wgpu`. The faces are embedded, as a page has no files.
