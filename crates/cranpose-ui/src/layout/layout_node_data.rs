@@ -243,7 +243,7 @@ fn runtime_metadata_for(
     applier
         .with_node::<SubcomposeLayoutNode, _>(node_id, |node| {
             let modifier_slices = node.modifier_slices_snapshot();
-            let placed = node.layout_parts().layout_state().borrow().z_index();
+            let placed = node.layout_parts().layout_state().z_index();
             RuntimeNodeMetadata {
                 #[cfg(feature = "inspection")]
                 modifier: node.modifier(),

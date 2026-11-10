@@ -18,7 +18,7 @@ use crate::{
     modifier::{Point, SharedParentData},
     render_state::AppContext,
     subcompose_layout::SubcomposeLayoutNode,
-    widgets::nodes::{IntrinsicKind, LayoutNode, LayoutParts, LayoutState, NodeCache},
+    widgets::nodes::{IntrinsicKind, LayoutCells, LayoutNode, LayoutParts, NodeCache},
 };
 
 #[expect(
@@ -160,7 +160,6 @@ impl LayoutChildFrame {
         {
             parent
                 .layout_state()
-                .borrow_mut()
                 .set_places_children_with_z_index(count > 0);
         }
     }
@@ -266,7 +265,7 @@ impl LayoutChildMeasureState {
         let cache = binding.parts.cache();
         self.bind_cache(cache, binding.dirty, binding.descendant_dirty, pass);
         self.revision.set(cache.revision());
-        self.note_z_index(binding.parts.layout_state().borrow().z_index());
+        self.note_z_index(binding.parts.layout_state().z_index());
         let parts = self.parts.take();
         let shared = parts
             .as_ref()
@@ -340,7 +339,7 @@ impl LayoutChildMeasureState {
 
     /// Runs `f` on the child's layout state with the context of the pass it
     /// measures in; nothing while it is bound to no pass.
-    pub(super) fn with_pass_layout_state(&self, f: impl FnOnce(&mut LayoutState, &AppContext)) {
+    pub(super) fn with_pass_layout_state(&self, f: impl FnOnce(&LayoutCells, &AppContext)) {
         if !self.layout_node.get() {
             return;
         }
@@ -350,7 +349,7 @@ impl LayoutChildMeasureState {
         };
         read_cell(&self.parts, |parts| {
             if let Some(parts) = parts {
-                f(&mut parts.layout_state().borrow_mut(), &builder.context);
+                f(parts.layout_state(), &builder.context);
             }
         });
     }
@@ -368,7 +367,6 @@ impl LayoutChildMeasureState {
                 if let Some(parts) = parts {
                     parts
                         .layout_state()
-                        .borrow_mut()
                         .set_z_index(Some(self.node_id), z_index);
                 }
             });
@@ -390,7 +388,7 @@ impl LayoutChildMeasureState {
         };
         read_cell(&self.parts, |parts| {
             if let Some(parts) = parts {
-                parts.layout_state().borrow_mut().place(
+                parts.layout_state().place(
                     Some(self.node_id),
                     position,
                     self.frame.parent.get(),

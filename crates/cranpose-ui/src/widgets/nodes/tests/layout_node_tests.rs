@@ -5,7 +5,10 @@ use cranpose_ui_graphics::Size as GeometrySize;
 use cranpose_ui_layout::{Constraints, Measurable, MeasureResult, MeasureScope};
 
 use super::*;
-use crate::{MovedSceneNode, widgets::nodes::layout_node_registry::layout_node_registry_stats};
+use crate::{
+    MovedSceneNode,
+    widgets::nodes::{LayoutCells, layout_node_registry::layout_node_registry_stats},
+};
 
 /// The node that places the nodes of these tests.
 const PLACER: Option<NodeId> = Some(NodeId(3));
@@ -396,7 +399,7 @@ fn layout_state_reports_the_changes_a_semantics_tree_reads() {
     let _app_context = crate::render_state::app_context_test_scope();
     let context = crate::render_state::require_current_app_context("a test");
     drain_semantics_layout_changes();
-    let mut state = LayoutState::default();
+    let state = LayoutCells::default();
     let id = Some(NodeId(9));
     state.set_content_offset(id, Point::default());
     state.set_size(id, Size::default(), &context);
@@ -418,7 +421,7 @@ fn layout_state_reports_the_changes_a_semantics_tree_reads() {
     state.place(id, Point { x: 1.0, y: 0.0 }, PLACER, &context);
     assert_eq!(drain_semantics_layout_changes(), vec![NodeId(9)], "moved");
     state.set_content_offset(id, Point { x: 2.0, y: 0.0 });
-    assert_eq!(state.content_offset(), Point { x: 2.0, y: 0.0 });
+    assert_eq!(state.snapshot().content_offset(), Point { x: 2.0, y: 0.0 });
     assert_eq!(
         drain_semantics_layout_changes(),
         vec![NodeId(9)],
@@ -473,7 +476,7 @@ fn a_first_placement_reports_the_node_even_at_the_origin() {
     let context = crate::render_state::require_current_app_context("a test");
     context.placement_pass().begin();
     let id = Some(NodeId(7));
-    let mut state = LayoutState::default();
+    let state = LayoutCells::default();
     state.place(id, origin(), PLACER, &context);
     assert!(state.is_placed());
     assert_eq!(crate::take_geometry_scene_nodes().reshaped, vec![NodeId(7)]);
@@ -484,7 +487,7 @@ fn a_node_its_pass_clears_and_places_where_it_was_reports_nothing() {
     let _app_context = crate::render_state::app_context_test_scope();
     let context = crate::render_state::require_current_app_context("a test");
     let id = Some(NodeId(7));
-    let mut state = LayoutState::default();
+    let state = LayoutCells::default();
     state.place(id, origin(), PLACER, &context);
     let _ = crate::take_geometry_scene_nodes();
 
@@ -536,9 +539,9 @@ fn a_node_moved_again_before_a_take_is_reported_once_and_again_after_it() {
     let _app_context = crate::render_state::app_context_test_scope();
     let context = crate::render_state::require_current_app_context("a test");
     let first_id = Some(NodeId(7));
-    let mut first = LayoutState::default();
+    let first = LayoutCells::default();
     let second_id = Some(NodeId(8));
-    let mut second = LayoutState::default();
+    let second = LayoutCells::default();
     first.place(first_id, origin(), PLACER, &context);
     second.place(second_id, origin(), PLACER, &context);
     let _ = crate::take_geometry_scene_nodes();
@@ -562,7 +565,7 @@ fn a_node_its_pass_clears_and_never_places_is_left_unplaced() {
     let _app_context = crate::render_state::app_context_test_scope();
     let context = crate::render_state::require_current_app_context("a test");
     let id = Some(NodeId(7));
-    let mut state = LayoutState::default();
+    let state = LayoutCells::default();
     state.place(id, origin(), PLACER, &context);
     context.placement_pass().begin();
     state.clear_placed(id, &context);
@@ -570,8 +573,8 @@ fn a_node_its_pass_clears_and_never_places_is_left_unplaced() {
         .placement_pass()
         .with_unplaced_nodes()
         .expect("the pass left a node unplaced");
-    assert!(state.unplaced_in(pass));
-    assert!(!state.unplaced_in(pass + 1));
+    assert!(state.snapshot().unplaced_in(pass));
+    assert!(!state.snapshot().unplaced_in(pass + 1));
 
     context.placement_pass().begin();
     assert_eq!(

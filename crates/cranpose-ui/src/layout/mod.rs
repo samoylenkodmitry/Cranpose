@@ -1493,7 +1493,7 @@ impl LayoutBuilderState {
                 child_state.measured.take();
             }
             if runtime_state.take_moved_coordinators() {
-                let mut layout_state = parts.layout_state().borrow_mut();
+                let layout_state = parts.layout_state();
                 layout_state.note_geometry_change(node_id, &self.context);
             }
             return Err(err);
@@ -1527,7 +1527,7 @@ impl LayoutBuilderState {
             measurement.hold,
             measurement.ignores_child_sizes,
         );
-        let mut layout_state = parts.layout_state().borrow_mut();
+        let layout_state = parts.layout_state();
         if runtime_state.take_moved_coordinators() {
             layout_state.note_geometry_change(node_id, &self.context);
         }

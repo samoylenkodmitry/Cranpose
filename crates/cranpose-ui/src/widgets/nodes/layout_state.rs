@@ -3,12 +3,9 @@
 
 use std::cell::Cell;
 
-use cranpose_core::{NodeId, PackedU64};
+use cranpose_core::PackedU64;
 
-use crate::{
-    modifier::{Point, Size},
-    render_state::AppContext,
-};
+use crate::modifier::{Point, Size};
 
 /// The running layout pass and how many placed nodes it has cleared and not
 /// placed again yet: the nodes it unplaces, unless their parents place them
@@ -38,14 +35,14 @@ impl PlacementPass {
     }
 
     /// Counts a placed node the running pass cleared, and returns the pass.
-    fn clear(&self) -> u64 {
+    pub(super) fn clear(&self) -> u64 {
         self.unplaced.set(self.unplaced.get() + 1);
         self.id.get()
     }
 
     /// Whether a node cleared in pass `cleared_in` was cleared by the running
     /// pass, which then counts it placed again.
-    fn restore(&self, cleared_in: u64) -> bool {
+    pub(super) fn restore(&self, cleared_in: u64) -> bool {
         let restored = cleared_in == self.id.get();
         if restored {
             self.unplaced.set(self.unplaced.get().saturating_sub(1));
@@ -57,28 +54,23 @@ impl PlacementPass {
 /// The measured size and placed position that a layout node kept from its latest layout pass.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct LayoutState {
-    size: Size,
-    position: Point,
-    is_placed: bool,
-    /// The layout pass that cleared the placed flag while the node was placed.
-    cleared_in_pass: PackedU64,
-    content_offset: Point,
-    semantics_stamp: PackedU64,
-    /// The take of the moved-node list this node was last noted in.
-    moved_noted_in: PackedU64,
-    /// The take of the reshaped-node list this node was last noted in.
-    reshaped_noted_in: PackedU64,
-    z_index: f32,
+    pub(super) size: Size,
+    pub(super) position: Point,
+    pub(super) is_placed: bool,
+    // The layout pass that cleared the placed flag while the node was placed.
+    pub(super) cleared_in_pass: PackedU64,
+    pub(super) content_offset: Point,
+    pub(super) z_index: f32,
     // Whether the node's last placement gave a child a z index other than 0.
-    places_children_with_z_index: bool,
+    pub(super) places_children_with_z_index: bool,
 }
 
 // Where a parent placed a child: its position in the parent, and the z
 // index the placement gave it among its siblings.
 #[derive(Clone, Copy, Default)]
 pub(crate) struct ChildPlacement {
-    position: Point,
-    z_index: f32,
+    pub(super) position: Point,
+    pub(super) z_index: f32,
 }
 
 impl ChildPlacement {
@@ -104,21 +96,6 @@ impl LayoutState {
         self.content_offset
     }
 
-    // Writes the content offset of node `node_id`, reporting an actual
-    // change to the semantics tree.
-    pub(crate) fn set_content_offset(&mut self, node_id: Option<NodeId>, offset: Point) {
-        if self.content_offset != offset {
-            self.content_offset = offset;
-            self.note_semantics_change(node_id);
-        }
-    }
-
-    /// Notes to the scene phase of `context` that the layout pass changed
-    /// the geometry of this node, `node_id`.
-    pub(crate) fn note_geometry_change(&mut self, node_id: NodeId, context: &AppContext) {
-        context.note_geometry_scene_node(node_id, &mut self.reshaped_noted_in);
-    }
-
     /// The same state placed at the origin: what a window root's own scene
     /// starts from, since the position its parent gave it belongs to the
     /// parent's window.
@@ -130,18 +107,6 @@ impl LayoutState {
     /// Returns whether layout has placed the node.
     pub fn is_placed(&self) -> bool {
         self.is_placed
-    }
-
-    // Writes the measured size of node `node_id`, self-reporting an actual
-    // change to the scene phase of `context`, the node's app context.
-    pub(crate) fn set_size(&mut self, node_id: Option<NodeId>, size: Size, context: &AppContext) {
-        if self.size != size {
-            if let Some(id) = node_id {
-                context.note_geometry_scene_node(id, &mut self.reshaped_noted_in);
-            }
-            self.size = size;
-            self.note_semantics_change(node_id);
-        }
     }
 
     /// The z index the node's parent last placed it with. It adds to the
@@ -156,92 +121,9 @@ impl LayoutState {
         self.places_children_with_z_index
     }
 
-    pub(crate) fn set_places_children_with_z_index(&mut self, places: bool) {
-        if self.places_children_with_z_index != places {
-            self.places_children_with_z_index = places;
-            count_z_index_placer(places);
-        }
-    }
-
-    // Places node `node_id` where `at` says, with its z index.
-    pub(crate) fn place_child(
-        &mut self,
-        node_id: Option<NodeId>,
-        at: ChildPlacement,
-        placer: Option<NodeId>,
-        context: &AppContext,
-    ) {
-        self.place(node_id, at.position, placer, context);
-        self.set_z_index(node_id, at.z_index);
-    }
-
-    // Sets the z index the parent placed node `node_id` with. A change
-    // reorders the node among its siblings, which its parent's layer holds.
-    pub(crate) fn set_z_index(&mut self, node_id: Option<NodeId>, z_index: f32) {
-        if self.z_index.to_bits() == z_index.to_bits() {
-            return;
-        }
-        self.z_index = z_index;
-        if let Some(id) = node_id {
-            crate::schedule_z_order_change(id);
-        }
-    }
-
-    // Writes the placed position of node `node_id` and marks it placed,
-    // self-reporting to the scene phase of `context`, the node's app
-    // context, an actual move, and a placement of a node the scene does not
-    // draw: one the running pass did not find placed. A move is reported
-    // apart, with `placer`, the node whose placement put the node there, so
-    // the scene can keep what it drew for the node.
-    pub(crate) fn place(
-        &mut self,
-        node_id: Option<NodeId>,
-        position: Point,
-        placer: Option<NodeId>,
-        context: &AppContext,
-    ) {
-        // A node the running pass cleared while it was placed changes
-        // nothing the scene draws by being placed again.
-        let newly_placed =
-            !self.is_placed && !context.placement_pass().restore(self.cleared_in_pass.get());
-        let moved = self.position != position;
-        if let Some(id) = node_id {
-            if newly_placed {
-                context.note_geometry_scene_node(id, &mut self.reshaped_noted_in);
-            } else if moved {
-                context.record_moved_scene_node(id, placer, &mut self.moved_noted_in);
-            }
-        }
-        self.position = position;
-        if moved || !self.is_placed {
-            self.is_placed = true;
-            self.note_semantics_change(node_id);
-        }
-    }
-
-    // Clears the placed flag of node `node_id` at the start of a layout pass
-    // of `context`. Until its parent places it again the pass counts the
-    // node unplaced, and the pass names it to the scene phase if it ends
-    // that way.
-    pub(crate) fn clear_placed(&mut self, node_id: Option<NodeId>, context: &AppContext) {
-        if !self.is_placed {
-            return;
-        }
-        self.is_placed = false;
-        self.cleared_in_pass = PackedU64::new(context.placement_pass().clear());
-        self.note_semantics_change(node_id);
-    }
-
-    /// Whether `pass` found this node placed and left it unplaced.
+    // Whether `pass` found this node placed and left it unplaced.
     pub(crate) fn unplaced_in(&self, pass: u64) -> bool {
         !self.is_placed && self.cleared_in_pass.get() == pass
-    }
-
-    #[inline]
-    pub(crate) fn note_semantics_change(&mut self, node_id: Option<NodeId>) {
-        if let Some(id) = node_id {
-            crate::semantics_layout_log::record_layout_change(id, &mut self.semantics_stamp);
-        }
     }
 }
 

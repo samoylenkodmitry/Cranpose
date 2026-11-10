@@ -708,22 +708,22 @@ impl LayoutNode {
 
     /// Returns a clone of the current layout state.
     pub fn layout_state(&self) -> LayoutState {
-        *self.parts.layout_state().borrow()
+        self.parts.layout_state().snapshot()
     }
 
     /// Returns the measured size of this node.
     pub fn measured_size(&self) -> Size {
-        self.parts.layout_state().borrow().size()
+        self.parts.layout_state().size()
     }
 
     /// Returns the position of this node relative to its parent.
     pub fn position(&self) -> Point {
-        self.parts.layout_state().borrow().position()
+        self.parts.layout_state().position()
     }
 
     /// Returns true if this node has been placed in the current layout pass.
     pub fn is_placed(&self) -> bool {
-        self.parts.layout_state().borrow().is_placed()
+        self.parts.layout_state().is_placed()
     }
 
     /// Updates the measured size of this node. Called during measurement.
@@ -744,7 +744,6 @@ impl LayoutNode {
     pub fn set_content_offset(&self, offset: Point) {
         self.parts
             .layout_state()
-            .borrow_mut()
             .set_content_offset(self.id.get(), offset);
     }
 
@@ -754,9 +753,9 @@ impl LayoutNode {
     }
 
     fn note_semantics_layout_change(&self) {
-        if let Ok(mut state) = self.parts.layout_state().try_borrow_mut() {
-            state.note_semantics_change(self.id.get());
-        }
+        self.parts
+            .layout_state()
+            .note_semantics_change(self.id.get());
     }
 
     /// Returns the semantics that the modifier chain reports, or `None` if it reports none.
@@ -791,9 +790,9 @@ impl LayoutNode {
         &self.modifier_chain
     }
 
-    /// Runs `read` on the node's layout state, without a copy of it.
+    /// Runs `read` on the node's layout state.
     pub fn with_layout_state<R>(&self, read: impl FnOnce(&LayoutState) -> R) -> R {
-        read(&self.parts.layout_state().borrow())
+        read(&self.parts.layout_state().snapshot())
     }
 
     pub(crate) fn layout_parts(&self) -> &Rc<LayoutParts> {

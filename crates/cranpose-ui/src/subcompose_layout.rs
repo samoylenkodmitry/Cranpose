@@ -906,7 +906,7 @@ impl SubcomposeLayoutNode {
 
     /// Returns a clone of the current layout state.
     pub fn layout_state(&self) -> LayoutState {
-        *self.parts.layout_state().borrow()
+        self.parts.layout_state().snapshot()
     }
 
     pub(crate) fn cache(&self) -> &NodeCache {
