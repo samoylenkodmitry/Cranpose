@@ -14,6 +14,8 @@
 //! has laid it out. Xilem has no wrapping row, no box that clips, scrolls
 //! or turns about its centre, and no canvas: `widgets` adds them.
 
+mod chat;
+mod patchwork;
 mod wall;
 mod widgets;
 
@@ -599,18 +601,25 @@ fn main() {
             run(app, app_logic);
         }
         Scenario::Wall => run(wall::Wall::new(), wall::wall_logic),
+        Scenario::Patchwork => run(patchwork::Patchwork::new(), patchwork::patchwork_logic),
     }
 }
 
 /// Runs `logic` over `state` in the desktop window, in the Roboto files
-/// every desktop app loads.
+/// every desktop app loads and, for the patchwork's code, the monospaced
+/// face.
 fn run<State: 'static, View: WidgetView<State>>(state: State, logic: fn(&mut State) -> View) {
     let (width, height) = DESKTOP_WINDOW;
     let window = WindowOptions::new(perf_data::launch().scenario.title())
         .with_initial_inner_size(LogicalSize::new(f64::from(width), f64::from(height)))
         .with_resizable(false);
     let mut xilem = Xilem::new_simple(state, logic, window);
-    for file in ["Roboto-Regular.ttf", "Roboto-Bold.ttf"] {
+    let mono =
+        (perf_data::launch().scenario == Scenario::Patchwork).then_some("DejaVuSansMono.ttf");
+    for file in ["Roboto-Regular.ttf", "Roboto-Bold.ttf"]
+        .into_iter()
+        .chain(mono)
+    {
         match std::fs::read(font_path(file)) {
             Ok(bytes) => xilem = xilem.with_font(Blob::from(bytes)),
             Err(error) => log::warn!("no {file}: {error}"),

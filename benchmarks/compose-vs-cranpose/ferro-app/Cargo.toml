@@ -15,6 +15,7 @@ ferroui-themes-simple = "0.4.0"
 log = "0.4"
 perf-data = { path = "../perf-data" }
 url = "2"
+gif = "0.14.2"
 
 # Its own workspace, like a real application, built as the Cranpose app is.
 [workspace]

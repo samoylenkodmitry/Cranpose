@@ -24,8 +24,8 @@ use super::{
     widgets::{Hold, frame_clock, hold, ignore_height},
 };
 
-const BACKGROUND: Color = rgb(WALL_BACKGROUND_RGB);
-const INK: Color = rgb(WALL_INK_RGB);
+pub(crate) const BACKGROUND: Color = rgb(WALL_BACKGROUND_RGB);
+pub(crate) const INK: Color = rgb(WALL_INK_RGB);
 
 /// What the wall reads, which each frame advances.
 pub(crate) struct Wall {
@@ -61,14 +61,7 @@ pub(crate) fn wall_logic(wall: &mut Wall) -> impl WidgetView<Wall> + use<> {
     flex_col((
         frame_clock(Wall::advance),
         top_bar("Still wall"),
-        sized_box(hold(
-            text(wall_clock(wall.frame.get()), WALL_CLOCK_TEXT, INK, false),
-            Hold::Align(UnitPoint::LEFT),
-            ignore_height,
-        ))
-        .expand_width()
-        .height(px(WALL_CLOCK_HEIGHT))
-        .padding(Padding::horizontal(8.0)),
+        clock_line(wall.frame.get()),
         zstack((
             memoize(
                 (columns, rows, tile_width, tile_height),
@@ -95,18 +88,36 @@ pub(crate) fn wall_logic(wall: &mut Wall) -> impl WidgetView<Wall> + use<> {
     .background_color(BACKGROUND)
 }
 
+/// The clock line under the top bar.
+pub(crate) fn clock_line<State: 'static>(frame: u32) -> impl WidgetView<State> + use<State> {
+    sized_box(hold(
+        text(wall_clock(frame), WALL_CLOCK_TEXT, INK, false),
+        Hold::Align(UnitPoint::LEFT),
+        ignore_height,
+    ))
+    .expand_width()
+    .height(px(WALL_CLOCK_HEIGHT))
+    .padding(Padding::horizontal(8.0))
+}
+
 /// The tiles, `columns` by `rows` of them `width` by `height` points each,
 /// `WALL_GAP` apart.
-fn tiles(columns: usize, rows: usize, width: f32, height: f32) -> impl WidgetView<Wall> + use<> {
+pub(crate) fn tiles<State: 'static>(
+    columns: usize,
+    rows: usize,
+    width: f32,
+    height: f32,
+) -> impl WidgetView<State> + use<State> {
     flex_col(
         (0..rows)
             .map(|row| {
-                flex_row(
-                    (0..columns)
-                        .map(|column| tile_view(row * columns + column, width, height))
-                        .collect::<Vec<_>>(),
+                tile_row(
+                    columns,
+                    width,
+                    height,
+                    &|column| row * columns + column,
+                    &|index| rgb(wall_fill_rgb(index)),
                 )
-                .gap(px(WALL_GAP))
             })
             .collect::<Vec<_>>(),
     )
@@ -115,10 +126,54 @@ fn tiles(columns: usize, rows: usize, width: f32, height: f32) -> impl WidgetVie
     .padding(f64::from(WALL_GAP))
 }
 
-/// One tile: its label over a dot and its value, on its fill. Each part
-/// sits at its own offset in the tile, its lines 1.4 em tall as the other
-/// apps set them.
-fn tile_view(index: usize, width: f32, height: f32) -> impl WidgetView<Wall> + use<> {
+/// A row of `columns` tiles `WALL_GAP` apart: the tile in column `column`
+/// shows tile `index(column)` on the fill `fill` gives its index.
+pub(crate) fn tile_row<State: 'static>(
+    columns: usize,
+    width: f32,
+    height: f32,
+    index: &dyn Fn(usize) -> usize,
+    fill: &dyn Fn(usize) -> Color,
+) -> impl WidgetView<State> + use<State> {
+    flex_row(
+        (0..columns)
+            .map(|column| {
+                let index = index(column);
+                tile_on(index, width, height, height, fill(index))
+            })
+            .collect::<Vec<_>>(),
+    )
+    .gap(px(WALL_GAP))
+}
+
+/// A box `width` by `height` points on `fill` around tile `index`'s parts,
+/// which are sized for tiles `text_height` tall. The parts are memoized
+/// apart from the box, so a new fill rebuilds none of them.
+pub(crate) fn tile_on<State: 'static>(
+    index: usize,
+    width: f32,
+    height: f32,
+    text_height: f32,
+    fill: Color,
+) -> impl WidgetView<State> + use<State> {
+    hold(
+        sized_box(memoize((index, text_height), |&(index, text_height)| {
+            tile_parts(index, text_height)
+        }))
+        .width(px(width))
+        .height(px(height))
+        .corner_radius(f64::from(WALL_CORNER))
+        .background_color(fill),
+        Hold::Clamp {
+            max: f64::from(height),
+        },
+        ignore_height,
+    )
+}
+
+/// A tile's label over a dot and its value. Each part sits at its own
+/// offset in the tile, its lines 1.4 em tall as the other apps set them.
+fn tile_parts<State: 'static>(index: usize, height: f32) -> impl WidgetView<State> + use<State> {
     let (label_size, value_size) = wall_text_size(height);
     let dot = f64::from(wall_dot_size(height));
     let padding = f64::from(wall_padding(height));
@@ -128,41 +183,29 @@ fn tile_view(index: usize, width: f32, height: f32) -> impl WidgetView<Wall> + u
         offset: Vec2::new(x, y),
         radians: 0.0,
     };
-    hold(
-        sized_box(
-            zstack((
-                hold(
-                    text(wall_label(index), label_size, INK, true),
-                    at(padding, padding),
-                    ignore_height,
-                )
-                .alignment(UnitPoint::TOP_LEFT),
-                hold(
-                    sized_box(label(""))
-                        .width(Length::px(dot))
-                        .height(Length::px(dot))
-                        .corner_radius(dot / 2.0)
-                        .background_color(rgb(wall_dot_rgb(index))),
-                    at(padding, padding + label_line + (value_line - dot) / 2.0),
-                    ignore_height,
-                )
-                .alignment(UnitPoint::TOP_LEFT),
-                hold(
-                    text(wall_value(index), value_size, INK, false),
-                    at(padding + dot * 1.5, padding + label_line),
-                    ignore_height,
-                )
-                .alignment(UnitPoint::TOP_LEFT),
-            ))
-            .alignment(UnitPoint::TOP_LEFT),
+    zstack((
+        hold(
+            text(wall_label(index), label_size, INK, true),
+            at(padding, padding),
+            ignore_height,
         )
-        .width(px(width))
-        .height(px(height))
-        .corner_radius(f64::from(WALL_CORNER))
-        .background_color(rgb(wall_fill_rgb(index))),
-        Hold::Clamp {
-            max: f64::from(height),
-        },
-        ignore_height,
-    )
+        .alignment(UnitPoint::TOP_LEFT),
+        hold(
+            sized_box(label(""))
+                .width(Length::px(dot))
+                .height(Length::px(dot))
+                .corner_radius(dot / 2.0)
+                .background_color(rgb(wall_dot_rgb(index))),
+            at(padding, padding + label_line + (value_line - dot) / 2.0),
+            ignore_height,
+        )
+        .alignment(UnitPoint::TOP_LEFT),
+        hold(
+            text(wall_value(index), value_size, INK, false),
+            at(padding + dot * 1.5, padding + label_line),
+            ignore_height,
+        )
+        .alignment(UnitPoint::TOP_LEFT),
+    ))
+    .alignment(UnitPoint::TOP_LEFT)
 }

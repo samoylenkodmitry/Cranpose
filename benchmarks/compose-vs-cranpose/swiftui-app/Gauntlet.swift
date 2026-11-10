@@ -21,6 +21,9 @@ enum Launch {
     static let freeze = Int(environment["PERF_FREEZE"] ?? "") ?? 0
     static let fonts = environment["PERF_FONTS"] ?? "fonts"
     static let wall = environment["PERF_SCENARIO"] == "wall"
+    static let patchwork = environment["PERF_SCENARIO"] == "patchwork"
+    /// The folder with the chat's `spin.gif` and `progress.svg`.
+    static let chat = environment["PERF_CHAT"] ?? "chat-assets"
     /// The window every desktop app opens for the gauntlet, in points.
     static let window = CGSize(width: 1280, height: 820)
 }
@@ -35,6 +38,8 @@ func log(_ line: String) {
 @Observable
 final class Clock: NSObject {
     var frame = 0
+    /// Moves the patchwork's state to the new frame before the views read it.
+    @ObservationIgnored var advance: ((Int) -> Void)?
     @ObservationIgnored private var link: CADisplayLink?
 
     func start() {
@@ -47,6 +52,7 @@ final class Clock: NSObject {
     @objc private func tick(_ link: CADisplayLink) {
         if frame == 0 { log("PERF first_frame") }
         frame += 1
+        advance?(frame)
         if Launch.freeze > 0 && frame >= Launch.freeze {
             log("PERF frozen frame=\(frame)")
             link.invalidate()
@@ -556,19 +562,17 @@ struct WallClock: View {
     }
 }
 
-/// The tiles, `columns` by `rows` of them.
-struct WallTiles: View {
+/// `columns` by `rows` cells, `WallData.gap` apart and from the edges.
+struct Cells<Cell: View>: View {
     let columns: Int
     let rows: Int
-    let tier: WallData.Tier
+    @ViewBuilder let cell: (Int) -> Cell
 
     var body: some View {
         VStack(alignment: .leading, spacing: WallData.gap) {
             ForEach(0..<rows, id: \.self) { row in
                 HStack(spacing: WallData.gap) {
-                    ForEach(0..<columns, id: \.self) { column in
-                        WallTile(index: row * columns + column, tier: tier)
-                    }
+                    ForEach(0..<columns, id: \.self) { column in cell(row * columns + column) }
                 }
             }
         }
@@ -576,13 +580,40 @@ struct WallTiles: View {
     }
 }
 
-/// One tile: its label over a dot and its value, on its fill.
-struct WallTile: View {
-    let index: Int
+/// The tiles, `columns` by `rows` of them.
+struct WallTiles: View {
+    let columns: Int
+    let rows: Int
     let tier: WallData.Tier
 
     var body: some View {
-        let height = tier.tileHeight
+        Cells(columns: columns, rows: rows) { WallTile(index: $0, tier: tier) }
+    }
+}
+
+/// One tile: its label over a dot and its value, on its fill. The patchwork
+/// gives a tile its own size or fill.
+struct WallTile: View {
+    let index: Int
+    let tier: WallData.Tier
+    var size: CGSize?
+    var fill: Color?
+
+    var body: some View {
+        TileText(index: index, height: tier.tileHeight)
+            .frame(width: size?.width ?? tier.tileWidth, height: size?.height ?? tier.tileHeight,
+                   alignment: .topLeading)
+            .background(fill ?? Color(rgb: WallData.fillRGB(index)), in: RoundedRectangle(cornerRadius: WallData.corner))
+            .clipped()
+    }
+}
+
+/// A tile's texts, which stay as they are when its fill or size changes.
+struct TileText: View {
+    let index: Int
+    let height: CGFloat
+
+    var body: some View {
         let dot = WallData.dotSize(height)
         VStack(alignment: .leading, spacing: 0) {
             Text(WallData.label(index)).font(roboto(WallData.labelSize(height), 1, bold: true)).fixedSize()
@@ -593,9 +624,6 @@ struct WallTile: View {
         }
         .foregroundStyle(.white)
         .padding(WallData.padding(height))
-        .frame(width: tier.tileWidth, height: height, alignment: .topLeading)
-        .background(Color(rgb: WallData.fillRGB(index)), in: RoundedRectangle(cornerRadius: WallData.corner))
-        .clipped()
     }
 }
 
@@ -618,29 +646,36 @@ struct WallCursor: View {
 @main
 struct GauntletApp: App {
     @State private var clock = Clock()
-    /// The gauntlet's data; none for the wall.
+    /// The gauntlet's data; none for the wall and the patchwork.
     private let model: Model?
+    private let patchwork: PatchworkModel?
 
     init() {
         // Roboto is no macOS system font: the app registers the files every
         // desktop app loads, for this process only.
-        for file in ["Roboto-Regular.ttf", "Roboto-Bold.ttf"] {
+        for file in ["Roboto-Regular.ttf", "Roboto-Bold.ttf", "DejaVuSansMono.ttf"] {
             let url = URL(fileURLWithPath: Launch.fonts).appendingPathComponent(file)
             CTFontManagerRegisterFontsForURL(url as CFURL, .process, nil)
         }
-        model = Launch.wall ? nil : Model()
+        model = Launch.wall || Launch.patchwork ? nil : Model()
+        patchwork = Launch.patchwork ? PatchworkModel() : nil
     }
 
     var body: some Scene {
-        Window(Launch.wall ? "Still wall" : "Gauntlet", id: "gauntlet") {
+        Window(Launch.wall ? "Still wall" : Launch.patchwork ? "Patchwork" : "Gauntlet", id: "gauntlet") {
             Group {
                 if let model {
                     GauntletView(model: model, clock: clock)
+                } else if let patchwork {
+                    PatchworkView(model: patchwork, clock: clock)
                 } else {
                     WallView(clock: clock)
                 }
             }
-            .onAppear { clock.start() }
+            .onAppear {
+                clock.advance = patchwork?.advance
+                clock.start()
+            }
         }
         .windowResizability(.contentSize)
     }

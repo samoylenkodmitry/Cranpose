@@ -28,6 +28,7 @@ android_logger = "0.15"
 # draws through wgpu there, and Slint tells the rendering notifier a frame
 # was drawn only with wgpu's API exposed.
 [target.'cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))'.dependencies]
+gif = "0.14.2"
 slint = { version = "1.18.1", default-features = false, features = ["std", "compat-1-2", "backend-winit", "renderer-skia", "unstable-fontique-011", "unstable-wgpu-30"] }
 
 # In a browser: winit's canvas and Slint's FemtoVG renderer on WebGL2, which

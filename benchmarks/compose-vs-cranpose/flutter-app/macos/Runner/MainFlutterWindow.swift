@@ -7,7 +7,11 @@ class MainFlutterWindow: NSWindow {
   override func awakeFromNib() {
     let flutterViewController = FlutterViewController()
     self.contentViewController = flutterViewController
-    self.title = ProcessInfo.processInfo.environment["PERF_SCENARIO"] == "wall" ? "Still wall" : "Gauntlet"
+    switch ProcessInfo.processInfo.environment["PERF_SCENARIO"] {
+    case "wall": self.title = "Still wall"
+    case "patchwork": self.title = "Patchwork"
+    default: self.title = "Gauntlet"
+    }
     self.setContentSize(NSSize(width: 1280, height: 820))
     self.styleMask.remove(.resizable)
 

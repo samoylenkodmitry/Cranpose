@@ -18,7 +18,7 @@ use zgui::{
 };
 use zgui_image::ImageBytes;
 
-use crate::run_frames;
+use crate::{picture, run_frames};
 
 const FOOTER_LABELS: [&str; 3] = ["likes", "replies", "shares"];
 const UP: &str = "#16A34A";
@@ -112,16 +112,7 @@ fn scroll_offset(frame: u32) -> f32 {
 
 /// The avatar as the PNG file the `image` element names it by.
 fn avatar(index: usize) -> ImageBytes {
-    let mut file = Vec::new();
-    let mut encoder = png::Encoder::new(&mut file, AVATAR_SIZE, AVATAR_SIZE);
-    encoder.set_color(png::ColorType::Rgba);
-    encoder.set_depth(png::BitDepth::Eight);
-    let mut writer = encoder.write_header().expect("a PNG header");
-    writer
-        .write_image_data(&avatar_rgba(index))
-        .expect("the avatar's pixels");
-    writer.finish().expect("a finished PNG");
-    ImageBytes::new(file)
+    picture::from_rgba(AVATAR_SIZE, AVATAR_SIZE, &avatar_rgba(index))
 }
 
 pub(crate) fn screen() -> AnyView {

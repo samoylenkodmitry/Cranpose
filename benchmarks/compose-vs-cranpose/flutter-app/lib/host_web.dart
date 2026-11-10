@@ -20,4 +20,13 @@ void perf(String line) => debugPrint(line);
 
 /// A Roboto file from the page's assets: the build copies the files every
 /// app loads into `assets/fonts`.
-Future<ByteData> robotoFont(String file) => rootBundle.load('assets/fonts/$file');
+Future<ByteData> robotoFont(String file) => fontFile(file);
+
+/// A page does not draw the patchwork: its chat needs a data thread.
+bool get drawsPatchwork => false;
+
+/// The patchwork's chat pictures, which a page never asks for.
+Future<Uint8List> chatFile(String file) => throw UnsupportedError('The patchwork runs on the desktop.');
+
+/// A font file from the page's assets.
+Future<ByteData> fontFile(String file) => rootBundle.load('assets/fonts/$file');

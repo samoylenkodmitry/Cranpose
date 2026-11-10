@@ -46,6 +46,10 @@
 	<ItemGroup Condition="'$(TargetFramework)' == 'net10.0'">
 		<PackageReference Include="Avalonia.Desktop" Version="12.1.6" />
 		<Compile Remove="Android/**" />
+		<!-- The patchwork is desktop only: its screen is in Desktop/. -->
+		<Compile Include="../shared-cs/PatchworkData.cs" Link="PatchworkData.cs" />
+		<Compile Include="../shared-cs/ChatData.cs" Link="ChatData.cs" />
+		<Compile Include="../shared-cs/ChatGif.cs" Link="ChatGif.cs" />
 	</ItemGroup>
 
 </Project>

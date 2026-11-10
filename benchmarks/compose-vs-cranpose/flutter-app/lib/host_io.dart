@@ -35,9 +35,22 @@ void perf(String line) {
   );
 }
 
-/// A Roboto file: the device's own on Android, elsewhere the one in the
-/// folder `PERF_FONTS` names, which every desktop app loads.
-Future<ByteData> robotoFont(String file) async {
-  final folder = Platform.isAndroid ? '/system/fonts' : Platform.environment['PERF_FONTS'] ?? 'fonts';
+/// A font file in the folder `PERF_FONTS` names, which every desktop app loads.
+Future<ByteData> fontFile(String file) async {
+  final folder = Platform.environment['PERF_FONTS'] ?? 'fonts';
   return ByteData.sublistView(await File('$folder/$file').readAsBytes());
+}
+
+/// A Roboto file: the device's own on Android, elsewhere the desktop's.
+Future<ByteData> robotoFont(String file) async => Platform.isAndroid
+    ? ByteData.sublistView(await File('/system/fonts/$file').readAsBytes())
+    : fontFile(file);
+
+/// Whether the platform draws the patchwork, whose chat needs a data thread.
+bool get drawsPatchwork => Platform.isMacOS || Platform.isWindows || Platform.isLinux;
+
+/// A picture of the patchwork's chat from the folder `PERF_CHAT` names.
+Future<Uint8List> chatFile(String file) {
+  final folder = Platform.environment['PERF_CHAT'] ?? 'chat-assets';
+  return File('$folder/$file').readAsBytes();
 }

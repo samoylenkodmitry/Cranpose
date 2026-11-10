@@ -5,7 +5,7 @@ use std::cell::RefCell;
 
 use perf_data::*;
 use zgui::{
-    elements::{self as e},
+    elements::{self as e, Box_, Column, Element},
     prelude::*,
     view::AnyView,
 };
@@ -29,11 +29,7 @@ pub(crate) fn screen() -> AnyView {
         }
         !frozen
     });
-    let tiles = e::column().class("tiles").children((0..rows).map(|line| {
-        AnyView::new(e::row().class("line").children(
-            (0..columns).map(move |column| AnyView::new(tile(line * columns + column, tier))),
-        ))
-    }));
+    let tiles = tiles(columns, rows, tier);
     let cursor = e::r#box()
         .class("cursor")
         .style_property("transform", move || {
@@ -45,34 +41,55 @@ pub(crate) fn screen() -> AnyView {
             ))
         });
     AnyView::new(
-        e::column()
-            .class("page")
-            .child(
-                e::column()
-                    .class("top")
-                    .child(e::text().class("top-title").child("Still wall")),
-            )
-            .child(
-                e::column().class("clock").child(
-                    e::text()
-                        .class("clock-text")
-                        .child(move || wall_clock(frame.get())),
-                ),
-            )
-            .child(e::r#box().class("board").child(tiles).child(cursor)),
+        page("Still wall", frame).child(e::r#box().class("board").child(tiles).child(cursor)),
     )
 }
 
-/// One tile: its label over a dot and its value, on its fill, each part at its
-/// own offset.
-fn tile(index: usize, tier: WallTier) -> impl IntoView {
+/// The page of a wall screen: the top bar titled `title` and the clock line
+/// that follows `frame`, to which the caller adds the body.
+pub(crate) fn page(title: &'static str, frame: RwSignal<u32>) -> Element<Column> {
+    e::column()
+        .class("page")
+        .child(
+            e::column()
+                .class("top")
+                .child(e::text().class("top-title").child(title)),
+        )
+        .child(
+            e::column().class("clock").child(
+                e::text()
+                    .class("clock-text")
+                    .child(move || wall_clock(frame.get())),
+            ),
+        )
+}
+
+/// The tiles of a wall `columns` by `rows`, one line of tiles to a row.
+pub(crate) fn tiles(columns: usize, rows: usize, tier: WallTier) -> Element<Column> {
+    e::column().class("tiles").children((0..rows).map(|line| {
+        AnyView::new(e::row().class("line").children(
+            (0..columns).map(move |column| AnyView::new(tile(line * columns + column, tier))),
+        ))
+    }))
+}
+
+/// One tile on its own fill.
+pub(crate) fn tile(index: usize, tier: WallTier) -> Element<Box_> {
+    tile_content(
+        e::r#box().style_property("background-color", Some(hex(wall_fill_rgb(index)))),
+        index,
+        tier,
+    )
+}
+
+/// The parts of tile `index` in `base`: its label over a dot and its value,
+/// each at its own offset.
+pub(crate) fn tile_content(base: Element<Box_>, index: usize, tier: WallTier) -> Element<Box_> {
     let (label_size, value_size) = wall_text_size(tier.tile_height);
     let dot = wall_dot_size(tier.tile_height);
     let padding = wall_padding(tier.tile_height);
     let (label_line, value_line) = (label_size * 1.4, value_size * 1.4);
-    e::r#box()
-        .class("tile")
-        .style_property("background-color", Some(hex(wall_fill_rgb(index))))
+    base.class("tile")
         .child(
             e::text()
                 .class("tile-label")

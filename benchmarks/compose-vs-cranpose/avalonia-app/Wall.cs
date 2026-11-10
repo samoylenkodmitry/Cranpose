@@ -57,6 +57,53 @@ public static class WallData
         new(Gap + index % columns * (tier.Width + Gap), Gap + index / columns * (tier.Height + Gap));
 }
 
+/// <summary>A tile: its label over a dot and its value, on a fill the owner sets. Its texts follow
+/// `textHeight`, the height of a tile of the wall. <see cref="Bind"/> shows tile `index`, so a list that
+/// recycles its rows reuses the controls.</summary>
+public sealed class TileView : Border
+{
+    readonly TextBlock label;
+    readonly TextBlock value;
+    readonly Border spot;
+
+    public TileView(Look look, double width, double height, double textHeight, double padding)
+    {
+        label = look.Text(textHeight * 0.30, Brushes.White, bold: true);
+        value = look.Text(textHeight * 0.26, Brushes.White);
+        var dot = textHeight * 0.22;
+        spot = new Border
+        {
+            Width = dot,
+            Height = dot,
+            CornerRadius = new CornerRadius(dot / 2),
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        Width = width;
+        Height = height;
+        CornerRadius = new CornerRadius(WallData.Corner);
+        Padding = new Thickness(padding);
+        ClipToBounds = true;
+        Child = new StackPanel
+        {
+            Children =
+            {
+                label,
+                new StackPanel { Orientation = Orientation.Horizontal, Spacing = dot * 0.5, Children = { spot, value } },
+            },
+        };
+    }
+
+    /// <summary>Shows tile `index`'s label, value and dot; a text that did not change is not set again.</summary>
+    public void Bind(int index)
+    {
+        var text = WallData.Label(index);
+        if (label.Text != text) label.Text = text;
+        text = WallData.Value(index);
+        if (value.Text != text) value.Text = text;
+        spot.Background = Look.ChipBackground[index / Look.Palette.Length % Look.ChipBackground.Length];
+    }
+}
+
 public sealed class WallView : Grid
 {
     /// <summary>The wall's area in the window every desktop app opens, under the top bar and the clock line.</summary>
@@ -91,38 +138,11 @@ public sealed class WallView : Grid
 
         var wall = new Canvas { ClipToBounds = true };
         var height = tier.Height;
-        var dot = height * 0.22;
         for (var index = 0; index < tiles; index++)
         {
-            var label = look.Text(height * 0.30, Brushes.White, bold: true);
-            label.Text = WallData.Label(index);
-            var value = look.Text(height * 0.26, Brushes.White);
-            value.Text = WallData.Value(index);
-            var spot = new Border
-            {
-                Width = dot,
-                Height = dot,
-                CornerRadius = new CornerRadius(dot / 2),
-                Background = Look.ChipBackground[index / Look.Palette.Length % Look.ChipBackground.Length],
-                VerticalAlignment = VerticalAlignment.Center,
-            };
-            var tile = new Border
-            {
-                Width = tier.Width,
-                Height = height,
-                CornerRadius = new CornerRadius(WallData.Corner),
-                Padding = new Thickness(height * 0.06),
-                Background = Look.Palette[index % Look.Palette.Length],
-                ClipToBounds = true,
-                Child = new StackPanel
-                {
-                    Children =
-                    {
-                        label,
-                        new StackPanel { Orientation = Orientation.Horizontal, Spacing = dot * 0.5, Children = { spot, value } },
-                    },
-                },
-            };
+            var tile = new TileView(look, tier.Width, height, height, height * 0.06);
+            tile.Bind(index);
+            tile.Background = Look.Palette[index % Look.Palette.Length];
             var at = WallData.Origin(index, columns, tier);
             Canvas.SetLeft(tile, at.X);
             Canvas.SetTop(tile, at.Y);

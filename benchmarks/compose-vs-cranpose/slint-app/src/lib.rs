@@ -1,6 +1,7 @@
 //! The gauntlet in Slint: `ui/gauntlet.slint` draws it; this side hands it
 //! the deterministic data, the sparkline paths and the frame clock. The
-//! benchmark's README describes it.
+//! benchmark's README describes it. On a desktop the patchwork, drawn by
+//! `ui/patchwork.slint`, is a third screen.
 
 use std::{fmt::Write, rc::Rc};
 
@@ -18,6 +19,11 @@ use slint::{
 
 slint::include_modules!();
 
+#[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
+mod chat;
+#[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
+mod patchwork;
+
 /// Blocks of five card rows and a cluster: no measurement window reaches the end.
 const ROWS: usize = 2000 * (CARD_ROWS_PER_CLUSTER + 1);
 /// How far the list scrolls each frame, in logical pixels (dp).
@@ -25,6 +31,16 @@ const SCROLL_PER_FRAME: f32 = 3.0;
 
 fn color(rgb: [u8; 3]) -> Color {
     Color::from_rgb_u8(rgb[0], rgb[1], rgb[2])
+}
+
+/// Tile `index` of the still wall.
+fn wall_tile(index: usize) -> WallTile {
+    WallTile {
+        label: wall_label(index).into(),
+        value: wall_value(index).into(),
+        fill: color(wall_fill_rgb(index)),
+        dot: color(wall_dot_rgb(index)),
+    }
 }
 
 /// The list's rows, made as the list shows them.
@@ -124,6 +140,10 @@ pub fn run(launch: Launch, size: Option<slint::LogicalSize>) -> Result<(), Platf
     if launch.scenario == Scenario::Wall {
         return run_wall(launch, size);
     }
+    #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
+    if let (Scenario::Patchwork, Some(size)) = (launch.scenario, size) {
+        return patchwork::run(launch, size);
+    }
     let tier = gauntlet_tier(launch.tier);
     let window = GauntletWindow::new()?;
     if let Some(size) = size {
@@ -210,14 +230,7 @@ fn run_wall(launch: Launch, size: Option<slint::LogicalSize>) -> Result<(), Plat
     });
     window.window().set_size(size);
     let (columns, rows) = wall_grid(tier, size.width, size.height - 56.0 - WALL_CLOCK_HEIGHT);
-    let tiles: Vec<WallTile> = (0..columns * rows)
-        .map(|index| WallTile {
-            label: wall_label(index).into(),
-            value: wall_value(index).into(),
-            fill: color(wall_fill_rgb(index)),
-            dot: color(wall_dot_rgb(index)),
-        })
-        .collect();
+    let tiles: Vec<WallTile> = (0..columns * rows).map(wall_tile).collect();
     let (label_size, value_size) = wall_text_size(tier.tile_height);
     window.set_tiles(ModelRc::new(VecModel::from(tiles)));
     window.set_columns(columns as i32);
@@ -270,6 +283,7 @@ fn android_main(app: slint::android::AndroidApp) {
 #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
 pub fn run_desktop(launch: Launch) -> Result<(), PlatformError> {
     register_roboto();
+    register_fonts(&["DejaVuSansMono.ttf"]);
     let (width, height) = perf_data::DESKTOP_WINDOW;
     run(
         launch,
@@ -308,9 +322,15 @@ pub fn run_web() {
 /// `Roboto` family then finds.
 #[cfg(not(target_os = "android"))]
 fn register_roboto() {
+    register_fonts(&["Roboto-Regular.ttf", "Roboto-Bold.ttf"]);
+}
+
+/// Registers the font files `files` name with Slint's font collection.
+#[cfg(not(target_os = "android"))]
+fn register_fonts(files: &[&str]) {
     use slint::fontique_011::fontique;
     let mut collection = slint::fontique_011::shared_collection();
-    for file in ["Roboto-Regular.ttf", "Roboto-Bold.ttf"] {
+    for file in files {
         match perf_data::font_bytes(file) {
             Ok(bytes) => {
                 collection.register_fonts(fontique::Blob::new(std::sync::Arc::new(bytes)), None);

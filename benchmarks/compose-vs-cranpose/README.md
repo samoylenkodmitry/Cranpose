@@ -48,6 +48,7 @@ model with every comparison because frame capacity varies by device.
 | `workspace` | GPUI trading workspace: quote subscriptions, watchlist, chart, order book, trades and statistics. | 200 symbols, 16 hidden subscriptions | Text updates, clipping, scrolling and hover |
 | `gauntlet` | Every stage at once (below). Advances a frame index each frame, never wall time. | tier 5 | Composition, layout, intrinsics, text, images, paths, shadows, layers |
 | `wall` | The still wall (below): thousands of tiles that never change, a clock line whose text changes and a cursor outline that moves. Desktop and browser apps. | tier 20 | What a frame costs when almost nothing on the screen changes |
+| `patchwork` | The patchwork (below): nine patches of the wall's tiles beside a chat. A frame changes one row of a patch, the places of its cards, two items of a row or one word, and the chat grows by a few characters. Desktop apps. | tier 17 | What a frame costs when a small part of the screen changes and the rest is reused |
 
 Knobs:
 
@@ -63,6 +64,7 @@ Knobs:
   with its stream, automatic scrolling and synthetic hover stopped;
 - `gauntlet`: `--ei tier` (1 to 16) and `--ei freeze K`, which stops on frame K
   for picture comparisons.
+- `wall` and `patchwork`: the same two, with tiers 1 to 20.
 
 ### Gauntlet
 
@@ -283,6 +285,127 @@ cursor's place, nothing else.
 | 18 | 5 x 3 | 213 x 184 | 39,192 |
 | 19 | 4 x 3 | 255 x 184 | 46,920 |
 | 20 | 3 x 3 | 319 x 184 | 58,696 |
+
+### Patchwork
+
+One screen of nine patches beside a chat, where a frame changes a small part
+and leaves the rest as it was. A framework that keeps what did not change
+pays for the part that did; one that builds the screen again each frame pays
+for all of it. Each patch changes in a way of its own, so each kind of change
+costs the two designs differently, and no one design pays little for all
+nine. Only the desktop apps draw it: the chat takes its tokens from a
+thread. `desktop.py --scenario patchwork` measures it;
+`perf-data/src/patchwork.rs` and `perf-data/src/chat.rs` hold its data, and
+the other languages' files follow them bit for bit.
+
+Under the top bar and the still wall's clock line the patches lie three
+across and three down at the left, and the chat takes 320 points at the
+right. A patch is a third of the rest of the width and a third of the
+height, in whole points, and cuts what lies past it. It holds the still
+wall's tiles at the tier's size, as many as fit.
+
+- **Still:** tiles that never change.
+- **Charts:** line charts that never change, each over 2 by 2 tiles: 512
+  points on a line 1 point wide, so the points lie closer than a point apart
+  at the higher tiers.
+- **Recolor:** tiles whose fill changes, one row of tiles a frame, the next
+  row down the frame after.
+- **Cards:** cards that move every frame. A card is a header and rows of
+  tiles, a quarter of the patch's rows. For 32 frames a new card slides in
+  from above the patch and every other card moves down by a card, the last
+  one out of the patch; for the next 32 the first and the third card move to
+  each other's places and back, one over the other.
+- **Reorder:** a wrapping row of tiles 1 to 3 tiles wide, in which two
+  neighbours change places every frame.
+- **Deep:** cells of 12 boxes nested inside one another around three digits;
+  the digits of one row of cells change a frame.
+- **Scroll:** a list of rows of tiles, about 100,000 tiles long, that
+  scrolls by one row a frame.
+- **Paragraph:** one paragraph of five-digit words, three for each tile of a
+  patch, in which one word changes every frame.
+- **Pile:** translucent tiles of 2 by 2 tiles' size that lie four deep; one
+  of them is opaque, another one every frame.
+
+The chat shows an agent's answer as it arrives. A data thread sends tokens
+through a bounded queue and waits while the screen is behind; a token is two
+numbers, and the turn it walks through is a constant, so the data layer
+costs nothing to speak of. Each frame the screen takes up to 4 tokens
+without waiting and keeps its list at the end. A turn is a question in a
+bubble, two headings, six paragraphs and a code block that appear 6
+characters a token, a table that appears a row a token, an animated picture
+of 16 frames and a row of three buttons: about 2,900 characters, most of
+them text. The code is in DejaVu Sans Mono with its keywords, quoted text,
+numbers and comments colored. Every typed block starts with its turn's
+number, so no turn shows the text of another. Under the list a status line
+shows a spinner, an SVG that turns 12 degrees a frame, and what the agent
+does with the count of tokens, under a gradient that moves 6 points a frame.
+
+Each framework builds the screen in its own idiom for content that mostly
+stays. Cranpose and Compose read a state derived from the frame in each
+tile, cell and nest, so a frame composes or draws again the row that
+changed; their cards move in graphics layers, and their chat list reads the
+number of blocks, so a token composes the last block alone. egui paints
+every patch each frame from the still tiles' text it laid out once, and
+builds the chat from its widgets, holding the blocks of the last two turns.
+iced makes a row of tiles `lazy` on how often it changed, a card on its
+number and a whole block of the chat on its place, and draws the charts
+from one canvas cache. The web page touches only the elements of the row
+that changed, moves the cards by transforms, gives each patch a layer of its
+own, so a change in one patch paints no other, and appends to the chat only
+what a token adds; its data thread is a worker. Tauri shows that page, and
+Dioxus renders the same elements from components that read a memo of their
+own row.
+
+Flutter derives each row's value from the frame in a listenable that
+notifies only when the value changes, keeps the cards and the patches in
+repaint boundaries and moves the cards by a transform; its data thread is an
+isolate. SwiftUI gives each row, card and tile an observable object of its
+own, so a frame evaluates the views that read a changed one, and moves the
+cards by an offset. AppKit makes its layers once and a frame sets the
+properties that changed; a token appends to a text view's storage. Avalonia
+and Fyne make their controls and canvas objects once, set the brushes or
+texts of the row that changed and move the cards whole; Avalonia's lists
+recycle their rows. Slint binds only the changing values to the frame and
+writes the rows of its models that changed; Rust wraps its reorder row, as
+Slint has no flow layout. GPUI embeds each row, patch and chat part as a
+cached view and notifies the views that changed. Xilem memoizes a row on how
+often it changed, a card on its number and a block on how much of it shows.
+Rune memoizes the same parts and draws what stays as cached layers. FerroUI
+and zgui give each row a signal that the frame loop sets when the row's turn
+comes. BUI builds its element tree again each frame and keeps the layout of
+the nodes that did not change.
+
+What a framework lacks, its app replaces with the nearest thing it has.
+egui, iced, GPUI, Slint, Rune, BUI and Fyne have no gradient for text and
+color the status line glyph by glyph. Fyne draws no turned object and shows
+the spinner from frames turned in advance. Slint, Xilem, Rune, FerroUI and
+zgui show no animated picture by themselves, so their apps decode the
+frames once and show one by its index, as Cranpose's app does; the web page
+leaves the animation to the browser. Fyne's text is wider at small sizes, so
+its paragraph breaks its lines two words earlier.
+
+| Tier | Tile (points) | Grid of a patch | Tiles | Charts, nests | Cards x tiles | Paragraph words |
+| --- | --- | --- | ---: | ---: | --- | ---: |
+| 1 | 64 x 40 | 4 x 5 | 20 | 4 | 2 x 4 | 60 |
+| 2 | 54 x 34 | 5 x 6 | 30 | 6 | 3 x 5 | 90 |
+| 3 | 46 x 29 | 6 x 7 | 42 | 9 | 3 x 6 | 126 |
+| 4 | 40 x 25 | 7 x 9 | 63 | 12 | 3 x 14 | 189 |
+| 5 | 34 x 21 | 9 x 10 | 90 | 20 | 3 x 18 | 270 |
+| 6 | 30 x 18 | 10 x 12 | 120 | 30 | 3 x 30 | 360 |
+| 7 | 26 x 16 | 11 x 13 | 143 | 30 | 3 x 33 | 429 |
+| 8 | 22 x 14 | 13 x 15 | 195 | 42 | 3 x 39 | 585 |
+| 9 | 19 x 12 | 15 x 18 | 270 | 63 | 3 x 60 | 810 |
+| 10 | 16 x 10 | 18 x 21 | 378 | 90 | 3 x 90 | 1,134 |
+| 11 | 14 x 9 | 21 x 23 | 483 | 110 | 3 x 105 | 1,449 |
+| 12 | 12 x 8 | 24 x 26 | 624 | 156 | 3 x 144 | 1,872 |
+| 13 | 10 x 7 | 29 x 29 | 841 | 196 | 3 x 203 | 2,523 |
+| 14 | 8 x 6 | 35 x 33 | 1,155 | 272 | 3 x 280 | 3,465 |
+| 15 | 7 x 5 | 39 x 39 | 1,521 | 361 | 3 x 351 | 4,563 |
+| 16 | 6 x 4 | 45 x 47 | 2,115 | 506 | 3 x 495 | 6,345 |
+| 17 | 5 x 4 | 53 x 47 | 2,491 | 598 | 3 x 583 | 7,473 |
+| 18 | 5 x 3 | 53 x 59 | 3,127 | 754 | 3 x 742 | 9,381 |
+| 19 | 4 x 3 | 63 x 59 | 3,717 | 899 | 3 x 882 | 11,151 |
+| 20 | 3 x 3 | 79 x 59 | 4,661 | 1,131 | 3 x 1,106 | 13,983 |
 
 ## Parity rules
 

@@ -4,7 +4,9 @@
 // objects without asking for a width first, so the app wraps paragraphs and
 // places the cards and rows by hand. The benchmark's README describes it;
 // `desktop.py` runs it with the screen in `PERF_SCENARIO` (`wall.go` draws the
-// still wall), the tier in `PERF_TIER` and the Roboto files in `PERF_FONTS`.
+// still wall, `patchwork_screen.go` the patchwork), the tier in `PERF_TIER`,
+// the Roboto and DejaVu Sans Mono files in `PERF_FONTS` and the chat's picture
+// and spinner in `PERF_CHAT`.
 //
 // Every frame advances a frame index and everything follows from it, never
 // from wall time. A Fyne animation, which the driver ticks once per frame it
@@ -69,8 +71,8 @@ func palette(index int) color.NRGBA { return rgb(paletteRGB[index%8]) }
 // launch is what `desktop.py` asked of the app.
 type launch struct {
 	tier, freeze int
-	fonts        string
-	wall         bool
+	fonts, chat  string
+	scenario     string
 }
 
 func readLaunch() launch {
@@ -80,33 +82,42 @@ func readLaunch() launch {
 		}
 		return fallback
 	}
-	fonts := os.Getenv("PERF_FONTS")
-	if fonts == "" {
-		fonts = "fonts"
+	folder := func(name, fallback string) string {
+		if value := os.Getenv(name); value != "" {
+			return value
+		}
+		return fallback
 	}
-	return launch{number("PERF_TIER", 5), number("PERF_FREEZE", 0), fonts, os.Getenv("PERF_SCENARIO") == "wall"}
+	return launch{
+		number("PERF_TIER", 5), number("PERF_FREEZE", 0),
+		folder("PERF_FONTS", "fonts"), folder("PERF_CHAT", "chat-assets"), os.Getenv("PERF_SCENARIO"),
+	}
 }
 
-// robotoTheme draws every text in the Roboto files every desktop app loads.
+// robotoTheme draws every text in the Roboto files every desktop app loads,
+// and the monospaced text in DejaVu Sans Mono.
 type robotoTheme struct {
 	fyne.Theme
-	regular, bold fyne.Resource
+	regular, bold, mono fyne.Resource
 }
 
 func (t robotoTheme) Font(style fyne.TextStyle) fyne.Resource {
+	if style.Monospace {
+		return t.mono
+	}
 	if style.Bold {
 		return t.bold
 	}
 	return t.regular
 }
 
-// style is a text's size and weight; its line height is 1.4 em.
+// style is a text's size, weight and face; its line height is 1.4 em.
 type style struct {
-	size float32
-	bold bool
+	size       float32
+	bold, mono bool
 }
 
-func (s style) textStyle() fyne.TextStyle { return fyne.TextStyle{Bold: s.bold} }
+func (s style) textStyle() fyne.TextStyle { return fyne.TextStyle{Bold: s.bold, Monospace: s.mono} }
 
 // measure is a text's size, measured once per text and style.
 var measured = map[style]map[string]fyne.Size{}
@@ -292,10 +303,10 @@ func newScreen() *screen {
 	sc := &screen{
 		launch: l, tier: tier, s: s, posts: makePosts(), shown: map[int]*rowView{}, anchorTop: 8 * s,
 		styles: styles{
-			ticker: style{10 * s, false}, tickerBold: style{10 * s, true}, title: style{13 * s, true},
-			subtitle: style{11 * s, false}, subtitleBold: style{11 * s, true}, body: style{12 * s, false},
-			percent: style{10 * s, false}, stat: style{12 * s, true}, statLabel: style{9 * s, false},
-			badge: style{9 * s, true}, level: style{9 * s, false}, chip: style{10 * s, false},
+			ticker: style{10 * s, false, false}, tickerBold: style{10 * s, true, false}, title: style{13 * s, true, false},
+			subtitle: style{11 * s, false, false}, subtitleBold: style{11 * s, true, false}, body: style{12 * s, false, false},
+			percent: style{10 * s, false, false}, stat: style{12 * s, true, false}, statLabel: style{9 * s, false, false},
+			badge: style{9 * s, true, false}, level: style{9 * s, false, false}, chip: style{10 * s, false, false},
 		},
 	}
 	for index := range avatarCount {
@@ -335,7 +346,7 @@ type stackedLayer struct {
 }
 
 func newStackedLayer(layer, rows int) *stackedLayer {
-	title, cell, heading, line := style{13, true}, style{9, false}, style{11, true}, style{11, false}
+	title, cell, heading, line := style{13, true, false}, style{9, false, false}, style{11, true, false}, style{11, false, false}
 	back := canvas.NewRectangle(color.NRGBA{0x1E, 0x29, 0x3B, 0xC0})
 	back.CornerRadius = 12
 	name := newText(fmt.Sprintf("Layer %d", layer+1), white, title)
@@ -811,9 +822,15 @@ func main() {
 		}
 		return fyne.NewStaticResource(file, bytes)
 	}
-	a.Settings().SetTheme(robotoTheme{theme.LightTheme(), read("Roboto-Regular.ttf"), read("Roboto-Bold.ttf")})
-	if l.wall {
+	a.Settings().SetTheme(robotoTheme{
+		theme.LightTheme(), read("Roboto-Regular.ttf"), read("Roboto-Bold.ttf"), read("DejaVuSansMono.ttf"),
+	})
+	switch l.scenario {
+	case "wall":
 		runWall(a, l)
+		return
+	case "patchwork":
+		runPatchwork(a, l)
 		return
 	}
 	w := newWindow(a, "Gauntlet")
@@ -844,7 +861,7 @@ func newWindow(a fyne.App, title string) fyne.Window {
 func newTopBar(title string) (*canvas.Rectangle, *canvas.Text) {
 	topBar := canvas.NewRectangle(rgb(0x1E2A4A))
 	place(topBar, 0, 0, windowWidth, 56)
-	s := style{20, true}
+	s := style{20, true, false}
 	heading := newText(title, white, s)
 	size := measure(title, s)
 	place(heading, 16, (56-size.Height)/2, size.Width, size.Height)
