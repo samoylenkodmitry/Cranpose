@@ -52,14 +52,14 @@ fn window_scene<'a>(
 pub(super) fn collect_space_children(
     layer: LayerRef<'_>,
     motion: &mut LayerMotion,
-    (context, content): (WalkContext<'_>, &ContentContext<'_>),
+    (context, content): (&WalkContext<'_>, &ContentContext<'_>),
     out: &mut LayerScene,
     recycler: &mut LayerSceneRecycler,
 ) -> bool {
     // Only a scene outside every other scene's space shows to the window;
     // one inside is a doorway its window scene draws.
     let mut pending = (!context.settings.in_space)
-        .then(|| window_scene(layer, &context))
+        .then(|| window_scene(layer, context))
         .flatten();
     let in_space = context.settings.in_space || pending.is_some();
     let settings = WalkSettings {
@@ -69,7 +69,7 @@ pub(super) fn collect_space_children(
     let context = WalkContext {
         settings: &settings,
         cull: None,
-        ..context
+        ..*context
     };
     let content_offset = layer.content_offset();
     let mut has_pixel_sensitive_subtree =
@@ -78,12 +78,12 @@ pub(super) fn collect_space_children(
         has_pixel_sensitive_subtree |= match child {
             ItemRef::Layer(child_layer) => {
                 if let Some((draw, view)) = pending.take_if(|_| child_layer.has_space()) {
-                    collect_seen_surfaces(&draw, view, motion, context, out, recycler);
+                    collect_seen_surfaces(&draw, view, motion, &context, out, recycler);
                 }
                 !(in_space && child_layer.graphics_layer().space.is_some())
-                    && collect_child(child_layer, motion, context, out, recycler)
+                    && collect_child(child_layer, motion, &context, out, recycler)
             }
-            ItemRef::Leaf(inline) => collect_inline(inline, content_offset, context, out),
+            ItemRef::Leaf(inline) => collect_inline(inline, content_offset, &context, out),
             ItemRef::Draw(_) | ItemRef::Text(_) | ItemRef::Run(_) | ItemRef::Shape(_) => {
                 push_content(out, child, content);
                 false
@@ -99,7 +99,7 @@ fn collect_seen_surfaces(
     draw: &Arc<SceneDraw>,
     view: EyeView<'_>,
     motion: &mut LayerMotion,
-    context: WalkContext<'_>,
+    context: &WalkContext<'_>,
     out: &mut LayerScene,
     recycler: &mut LayerSceneRecycler,
 ) {

@@ -271,7 +271,7 @@ fn isolated_layers_snap_their_own_text_and_translating_text_descendants() {
             let (child, _) = isolated_child(
                 store.root_layer().expect("the store holds the layer"),
                 &mut LayerMotion::default(),
-                WalkContext {
+                &WalkContext {
                     offset: Point::new(0.3, 0.7),
                     visual_clip: None,
                     rounding: None,
