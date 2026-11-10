@@ -78,7 +78,9 @@ where
     // One composer lookup for the node and its children's bracket: each
     // lookup reads a thread-local.
     cranpose_core::with_current_composer(|composer| {
-        let (id, provided, _) = emit_layout_node(composer, modifier, measure_policy, environment);
+        let mut modifier = modifier;
+        let (id, provided, _) =
+            emit_layout_node(composer, &mut modifier, measure_policy, environment);
         composer.push_parent(id);
         compose_under_locals(provided, &mut content);
         composer.pop_parent();
@@ -87,13 +89,13 @@ where
 }
 
 pub(crate) fn compose_empty_layout(
-    modifier: impl NodeModifier,
+    mut modifier: impl NodeModifier,
     environment: LayoutEnvironment,
 ) -> NodeId {
     cranpose_core::with_current_composer(|composer| {
         let (id, provided, holds_children) = emit_layout_node(
             composer,
-            modifier,
+            &mut modifier,
             &crate::layout::policies::EmptyMeasurePolicy,
             environment,
         );
@@ -143,11 +145,23 @@ fn held_policy<P: MeasurePolicy + Clone + PartialEq>(policy: &P) -> Rc<dyn Measu
         return crate::widgets::nodes::layout_node::empty_measure_policy();
     }
     if policy.is_immutable() {
-        return crate::thread_state::with(|state| {
-            state.shared_policies.borrow_mut().shared(policy)
-        });
+        return shared_policy(
+            &|held: &dyn std::any::Any| held.downcast_ref::<P>() == Some(policy),
+            &|| Rc::new(policy.clone()),
+        );
     }
     Rc::new(policy.clone())
+}
+
+// The held immutable policy `equal` finds, or the one `make` makes. One body
+// for every policy type: a generic body that reads the thread's state takes
+// the state's first-read code into every crate that compiles it.
+#[inline(never)]
+fn shared_policy(
+    equal: &dyn Fn(&dyn std::any::Any) -> bool,
+    make: &dyn Fn() -> Rc<dyn MeasurePolicy>,
+) -> Rc<dyn MeasurePolicy> {
+    crate::thread_state::with(|state| state.shared_policies.borrow_mut().shared(equal, make))
 }
 
 // What a layout node's modifier is set from: a modifier, or what makes one
@@ -157,8 +171,9 @@ pub(crate) trait NodeModifier {
     fn provided_locals(&self) -> Vec<cranpose_core::ProvidedValue>;
     // The modifier, for a node made new.
     fn to_modifier(&self) -> Modifier;
-    // Sets the modifier on `node`.
-    fn set_on(self, node: &mut LayoutNode);
+    // Sets the modifier on `node`; a modifier may give its value to the node
+    // and stay empty.
+    fn set_on(&mut self, node: &mut LayoutNode);
 }
 
 impl NodeModifier for Modifier {
@@ -170,19 +185,19 @@ impl NodeModifier for Modifier {
         self.clone()
     }
 
-    fn set_on(self, node: &mut LayoutNode) {
-        node.set_modifier(self);
+    fn set_on(&mut self, node: &mut LayoutNode) {
+        node.set_modifier(std::mem::take(self));
     }
 }
 
 // Emits and updates a layout node; returns it, the composition locals its
 // modifier provides and whether it holds children. The node keeps the policy
 // it holds while `policy` equals it. Out of line, one function for every
-// policy type.
+// policy and modifier.
 #[inline(never)]
-fn emit_layout_node<M: NodeModifier>(
+fn emit_layout_node(
     composer: &cranpose_core::Composer,
-    modifier: M,
+    modifier: &mut dyn NodeModifier,
     policy: &dyn PolicyUpdate,
     environment: LayoutEnvironment,
 ) -> (NodeId, Vec<cranpose_core::ProvidedValue>, bool) {

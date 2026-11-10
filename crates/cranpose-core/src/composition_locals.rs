@@ -577,6 +577,13 @@ impl LocalKey {
     pub(crate) fn entry_source(&self) -> Key {
         Key(avalanche_location_key(Rc::as_ptr(&self.0) as usize as u64))
     }
+
+    // Out of line: every local's read would carry the log's code.
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn report_type_mismatch(&self) {
+        log::error!("composition local entry type mismatch for key {self:?}");
+    }
 }
 
 impl std::fmt::Debug for LocalKey {

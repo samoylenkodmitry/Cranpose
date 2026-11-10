@@ -1702,9 +1702,7 @@ impl Composer {
             Ok(entry) => Some(value(&entry)),
             Err(entry) => entry
                 .downcast::<C>()
-                .inspect_err(|_| {
-                    log::error!("composition local entry type mismatch for key {key:?}");
-                })
+                .inspect_err(|_| key.report_type_mismatch())
                 .ok()
                 .map(|entry| computed(&entry)),
         }

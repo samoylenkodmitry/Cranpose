@@ -98,7 +98,7 @@ impl SnapshotStateObserver {
 
     /// Remove recorded reads for scopes that satisfy `predicate`.
     pub fn clear_if(&self, predicate: impl Fn(&dyn Any) -> bool) {
-        self.inner.clear_if(predicate);
+        self.inner.clear_if(&predicate);
     }
 
     /// Remove all recorded observations.
@@ -297,7 +297,9 @@ impl SnapshotStateObserverInner {
         }
     }
 
-    fn clear_if(&self, predicate: impl Fn(&dyn Any) -> bool) {
+    // One body for every predicate: removals are rare, and a copy for each
+    // caller costs 3 KB of flash on the ESP32.
+    fn clear_if(&self, predicate: &dyn Fn(&dyn Any) -> bool) {
         let removed = self.partition_scopes(|entry| predicate(entry.scope.as_ref()));
         for entry in removed {
             self.unregister_entry(&entry);

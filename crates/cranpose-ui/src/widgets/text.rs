@@ -251,7 +251,7 @@ impl NodeModifier for StaticTextModifier<'_> {
         text_node_modifier(self.modifier.clone(), self.element())
     }
 
-    fn set_on(self, node: &mut LayoutNode) {
+    fn set_on(&mut self, node: &mut LayoutNode) {
         // A node that shows another text takes this one in its text node,
         // with no modifier made for it, as a ticker's does each frame.
         if !self.shown_by(node) && !node.update_node_after(&self.modifier, self.element()) {

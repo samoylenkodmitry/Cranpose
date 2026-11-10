@@ -20,20 +20,18 @@ impl SharedPolicies {
         }
     }
 
-    // The held policy equal to `policy`, or a new one, which takes the place
-    // of the one held longest.
-    pub(crate) fn shared<P: MeasurePolicy + Clone + PartialEq>(
+    // The held policy `equal` finds, or the one `make` makes, which takes the
+    // place of the one held longest.
+    pub(crate) fn shared(
         &mut self,
-        policy: &P,
+        equal: &dyn Fn(&dyn Any) -> bool,
+        make: &dyn Fn() -> Rc<dyn MeasurePolicy>,
     ) -> Rc<dyn MeasurePolicy> {
-        let held = self.recent.iter().flatten().find(|held| {
-            let held: &dyn Any = &***held;
-            held.downcast_ref::<P>() == Some(policy)
-        });
+        let held = self.recent.iter().flatten().find(|held| equal(&***held));
         if let Some(held) = held {
             return Rc::clone(held);
         }
-        let made: Rc<dyn MeasurePolicy> = Rc::new(policy.clone());
+        let made = make();
         self.recent[self.next] = Some(Rc::clone(&made));
         self.next = (self.next + 1) % SHARED_POLICIES;
         made
