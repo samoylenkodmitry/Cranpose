@@ -218,22 +218,54 @@ impl SvgColor {
     fn with_opacity(self, opacity: f32) -> Self {
         let opacity = opacity.clamp(0.0, 1.0);
         Self {
-            a: ((self.a as f32 * opacity).round()).clamp(0.0, 255.0) as u8,
+            a: byte(f32::from(self.a) * opacity),
             ..self
         }
     }
 }
 
+// A side of a raster in whole pixels, for a positive length that fits.
+pub(super) fn raster_axis(value: f32) -> Result<u32, SvgPainterError> {
+    if !value.is_finite() || value <= 0.0 {
+        return Err(SvgPainterError::InvalidRasterDimensions);
+    }
+
+    let rounded = value.ceil();
+    if rounded > u32::MAX as f32 {
+        return Err(SvgPainterError::RasterDimensionsTooLarge);
+    }
+    // Only the lint budget's run turns this lint on, so an `expect` would
+    // go unmet in every other build.
+    #[allow(
+        clippy::cast_sign_loss,
+        clippy::cast_possible_truncation,
+        reason = "the value is above zero and no more than u32::MAX here"
+    )]
+    Ok(rounded as u32)
+}
+
+// `value` as a colour byte: rounded, and held within a byte's range.
+fn byte(value: f32) -> u8 {
+    // Only the lint budget's run turns this lint on, so an `expect` would
+    // go unmet in every other build.
+    #[allow(
+        clippy::cast_sign_loss,
+        clippy::cast_possible_truncation,
+        reason = "the clamp leaves a value within a byte"
+    )]
+    let byte = (value.clamp(0.0, 255.0) + 0.5) as u8;
+    byte
+}
+
 fn parse_tags(source: &str) -> Result<Vec<SvgTag>, SvgPainterError> {
     let mut tags = Vec::new();
     let mut remainder = source;
-    while let Some(start) = remainder.find('<') {
-        remainder = &remainder[start + 1..];
-        let Some(end) = remainder.find('>') else {
+    while let Some((_, opened)) = remainder.split_once('<') {
+        let Some((tag, rest)) = opened.split_once('>') else {
             return Err(SvgPainterError::Parse("unterminated SVG tag".to_string()));
         };
-        let mut body = remainder[..end].trim();
-        remainder = &remainder[end + 1..];
+        let mut body = tag.trim();
+        remainder = rest;
 
         if body.is_empty()
             || body.starts_with('/')
@@ -247,15 +279,21 @@ fn parse_tags(source: &str) -> Result<Vec<SvgTag>, SvgPainterError> {
             body = stripped.trim_end();
         }
 
-        let name_end = body
-            .find(|ch: char| ch.is_ascii_whitespace())
-            .unwrap_or(body.len());
-        let name = body[..name_end].to_ascii_lowercase();
-        let attributes = parse_attributes(&body[name_end..])?;
-        tags.push(SvgTag { name, attributes });
+        let (name, attributes) = body
+            .split_once(|ch: char| ch.is_ascii_whitespace())
+            .unwrap_or((body, ""));
+        tags.push(SvgTag {
+            name: name.to_ascii_lowercase(),
+            attributes: parse_attributes(attributes)?,
+        });
     }
 
     Ok(tags)
+}
+
+// The part of `source` between two of its ASCII delimiters.
+fn span(source: &str, range: std::ops::Range<usize>) -> &str {
+    source.get(range).unwrap_or_default()
 }
 
 fn parse_attributes(source: &str) -> Result<Vec<(String, String)>, SvgPainterError> {
@@ -279,7 +317,7 @@ fn parse_attributes(source: &str) -> Result<Vec<(String, String)>, SvgPainterErr
         {
             index += 1;
         }
-        let key = source[key_start..index].to_ascii_lowercase();
+        let key = span(source, key_start..index).to_ascii_lowercase();
 
         while index < bytes.len() && bytes[index].is_ascii_whitespace() {
             index += 1;
@@ -310,7 +348,7 @@ fn parse_attributes(source: &str) -> Result<Vec<(String, String)>, SvgPainterErr
                     "unterminated attribute value".to_string(),
                 ));
             }
-            let value = source[value_start..index].to_string();
+            let value = span(source, value_start..index).to_string();
             index += 1;
             value
         } else {
@@ -319,7 +357,7 @@ fn parse_attributes(source: &str) -> Result<Vec<(String, String)>, SvgPainterErr
             {
                 index += 1;
             }
-            source[value_start..index].to_string()
+            span(source, value_start..index).to_string()
         };
         attributes.push((key, value));
     }
@@ -517,46 +555,36 @@ fn parse_color(value: &str, opacity: f32) -> Result<SvgColor, SvgPainterError> {
 }
 
 fn parse_hex_color(hex: &str, opacity: f32) -> Result<SvgColor, SvgPainterError> {
-    let parse_pair = |value: &str| {
-        u8::from_str_radix(value, 16)
-            .map_err(|_| SvgPainterError::Parse(format!("invalid SVG color `#{hex}`")))
+    let invalid = || SvgPainterError::Parse(format!("invalid SVG color `#{hex}`"));
+    // A colour has 3, 4, 6 or 8 hex digits: a digit or a pair for each
+    // channel, with or without alpha.
+    let pairs = match hex.len() {
+        3 | 4 => false,
+        6 | 8 => true,
+        _ => return Err(invalid()),
     };
-    let parse_nibble = |value: &str| {
-        u8::from_str_radix(value, 16)
-            .map(|nibble| nibble * 17)
-            .map_err(|_| SvgPainterError::Parse(format!("invalid SVG color `#{hex}`")))
-    };
-
-    let color = match hex.len() {
-        3 => SvgColor {
-            r: parse_nibble(&hex[0..1])?,
-            g: parse_nibble(&hex[1..2])?,
-            b: parse_nibble(&hex[2..3])?,
-            a: 255,
-        },
-        4 => SvgColor {
-            r: parse_nibble(&hex[0..1])?,
-            g: parse_nibble(&hex[1..2])?,
-            b: parse_nibble(&hex[2..3])?,
-            a: parse_nibble(&hex[3..4])?,
-        },
-        6 => SvgColor {
-            r: parse_pair(&hex[0..2])?,
-            g: parse_pair(&hex[2..4])?,
-            b: parse_pair(&hex[4..6])?,
-            a: 255,
-        },
-        8 => SvgColor {
-            r: parse_pair(&hex[0..2])?,
-            g: parse_pair(&hex[2..4])?,
-            b: parse_pair(&hex[4..6])?,
-            a: parse_pair(&hex[6..8])?,
-        },
-        _ => {
-            return Err(SvgPainterError::Parse(format!(
-                "invalid SVG color `#{hex}`"
-            )));
+    // A character that is no hex digit, a part of a longer character among
+    // them, makes the colour invalid.
+    let mut digits = [0u8; 8];
+    for (digit, byte) in digits.iter_mut().zip(hex.bytes()) {
+        *digit = char::from(byte)
+            .to_digit(16)
+            .and_then(|digit| u8::try_from(digit).ok())
+            .ok_or_else(invalid)?;
+    }
+    let channel = |index: usize| {
+        if pairs {
+            digits[index * 2] * 16 + digits[index * 2 + 1]
+        } else {
+            digits[index] * 17
         }
+    };
+    let alpha = if hex.len() % 4 == 0 { channel(3) } else { 255 };
+    let color = SvgColor {
+        r: channel(0),
+        g: channel(1),
+        b: channel(2),
+        a: alpha,
     };
     Ok(color.with_opacity(opacity))
 }
@@ -587,12 +615,12 @@ fn parse_color_component(value: &str) -> Result<u8, SvgPainterError> {
         let number: f32 = percent
             .parse()
             .map_err(|_| SvgPainterError::Parse(format!("invalid color component `{value}`")))?;
-        Ok(((number.clamp(0.0, 100.0) / 100.0) * 255.0).round() as u8)
+        Ok(byte(number.clamp(0.0, 100.0) / 100.0 * 255.0))
     } else {
         let number: f32 = value
             .parse()
             .map_err(|_| SvgPainterError::Parse(format!("invalid color component `{value}`")))?;
-        Ok(number.round().clamp(0.0, 255.0) as u8)
+        Ok(byte(number))
     }
 }
 
@@ -780,7 +808,7 @@ impl<'a> PathDataParser<'a> {
         if start == self.index {
             return Err(SvgPainterError::Parse("expected SVG path number".into()));
         }
-        self.data[start..self.index]
+        span(self.data, start..self.index)
             .parse()
             .map_err(|_| SvgPainterError::Parse("invalid SVG path number".to_string()))
     }
@@ -804,7 +832,8 @@ impl<'a> PathDataParser<'a> {
     }
 
     fn peek_command(&self) -> Option<char> {
-        self.data[self.index..]
+        self.data
+            .get(self.index..)?
             .chars()
             .next()
             .filter(char::is_ascii_alphabetic)

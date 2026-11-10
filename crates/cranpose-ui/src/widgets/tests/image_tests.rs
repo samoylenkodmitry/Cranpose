@@ -365,11 +365,9 @@ fn svg_painter_reuses_cached_raster_for_same_size() {
 #[cfg(feature = "svg")]
 fn svg_raster_cache_evicts_least_recently_used_entry() {
     let mut cache = SvgRasterCache::default();
-    let keys: Vec<SvgRasterKey> = (0..SVG_RASTER_CACHE_LIMIT)
-        .map(|index| SvgRasterKey {
-            width: index as u32 + 1,
-            height: 1,
-        })
+    let limit = u32::try_from(SVG_RASTER_CACHE_LIMIT).expect("a small limit");
+    let keys: Vec<SvgRasterKey> = (1..=limit)
+        .map(|width| SvgRasterKey { width, height: 1 })
         .collect();
 
     for key in &keys {
@@ -378,7 +376,7 @@ fn svg_raster_cache_evicts_least_recently_used_entry() {
 
     let recent = cache.get(keys[0]).expect("cached raster");
     let new_key = SvgRasterKey {
-        width: SVG_RASTER_CACHE_LIMIT as u32 + 1,
+        width: limit + 1,
         height: 1,
     };
     cache.insert(new_key, cache_test_bitmap(new_key.width));
@@ -628,4 +626,35 @@ fn image_measure_fits_within_constraints() {
 fn image_measure_zero_intrinsic() {
     let size = measure_image(Size::ZERO, Constraints::loose(400.0, 400.0));
     assert_eq!(size, Size::new(0.0, 0.0));
+}
+
+#[test]
+#[cfg(feature = "svg")]
+fn svg_painter_refuses_a_hex_color_with_a_wide_character() {
+    // Three bytes, as a short colour has, with a two-byte character in them.
+    let svg =
+        "<svg width=\"2\" height=\"2\"><rect width=\"2\" height=\"2\" fill=\"#\u{e9}1\"/></svg>";
+    assert!(
+        SvgPainter::from_bytes(svg.as_bytes()).is_err(),
+        "a colour that is no hex number was read"
+    );
+}
+
+#[test]
+#[cfg(feature = "svg")]
+fn svg_painter_reads_short_and_long_hex_colors_alike() {
+    let pixel = |fill: &str| {
+        let svg = format!(
+            "<svg width=\"1\" height=\"1\"><rect width=\"1\" height=\"1\" fill=\"{fill}\"/></svg>"
+        );
+        let painter = SvgPainter::from_bytes(svg.as_bytes()).expect("svg painter");
+        pixel_at(
+            &painter.rasterize(Size::new(1.0, 1.0)).expect("raster"),
+            0,
+            0,
+        )
+    };
+    assert_eq!(pixel("#f80"), [255, 136, 0, 255]);
+    assert_eq!(pixel("#ff8800"), [255, 136, 0, 255]);
+    assert_eq!(pixel("#ff880088"), pixel("#f808"));
 }

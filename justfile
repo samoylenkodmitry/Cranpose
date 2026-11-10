@@ -467,9 +467,10 @@ _size-ceiling path max what:
 # animated charts) took it to 13,997,201 bytes. The text engine of #1961 added
 # 800 KB: HarfRust shapes every script on the web and read-fonts reads every
 # outline format, in place of ttf-parser's 125 KB. The Patchwork tab of #2165
-# (the nine patches of the comparison's third screen, without its chat) took
-# it to 14,051,422 bytes.
-web-size-budget: (_size-ceiling "apps/desktop-demo/pkg/desktop_app_bg.wasm" "14105139" "web demo wasm")
+# (the nine patches of the comparison's third screen) took it to 14,051,422
+# bytes. The chat of that screen took it to 14,197,518 bytes: the SVG reader
+# of its spinner and the GIF decoder of its picture.
+web-size-budget: (_size-ceiling "apps/desktop-demo/pkg/desktop_app_bg.wasm" "14251794" "web demo wasm")
 
 # The ESP32-S3 app image after `just esp32-build`: 3.3 MiB, the image of
 # 2026-10-29 (3,366,944 bytes) and about 2.4%. The text engine of #1961 added
