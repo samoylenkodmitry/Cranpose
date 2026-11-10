@@ -14,6 +14,15 @@ impl SharedParentData {
         Self((data != ParentData::default()).then(|| Rc::new(data)))
     }
 
+    // Holds `data` in place of the data held. A chain that alone holds its
+    // data writes over it: no record keeps that pointer to compare with.
+    pub(crate) fn set(&mut self, data: ParentData) {
+        match self.0.as_mut().and_then(Rc::get_mut) {
+            Some(held) if data != ParentData::default() => *held = data,
+            _ => *self = Self::of(data),
+        }
+    }
+
     pub(crate) fn read<R>(&self, read: impl FnOnce(&ParentData) -> R) -> R {
         match &self.0 {
             Some(data) => read(data),

@@ -565,7 +565,7 @@ impl ModifierChainHandle {
             layout_data,
         };
         if !self.parent_data.read(|current| *current == data) {
-            self.parent_data = SharedParentData::of(data);
+            self.parent_data.set(data);
         }
     }
 }
