@@ -232,12 +232,16 @@ just robot-accessibility-ios target/aarch64-apple-ios-sim/debug/CranposeDemo.app
 ```
 
 Select an available simulator UUID from `xcrun simctl list devices available`.
-The runner boots that simulator if necessary and installs the app. Three XCTest
-tests inspect names, traits and numeric values, activate native elements, and
-tap and type through the native keyboard. All three must execute and pass with
-zero skips or expected failures. The result bundle includes native hierarchy
-and screenshot attachments; `xcodebuild.log` and the executable hash accompany
-the report. `just clippy-ios` checks the shipped simulator feature set;
+The runner boots that simulator if necessary and installs the app. Four XCTest
+tests inspect names, traits and numeric values, activate native elements, tap
+and type through the native keyboard, and move the app to the background and
+back. All four must execute and pass with zero skips or expected failures. A
+run with a failed test repeats once, because a hosted simulator can leave a
+launch unserviced; the report keeps the failures of the first run in
+`earlier_failures`. Each run's result bundle (`results-N.xcresult`) includes
+native hierarchy and screenshot attachments; `xcodebuild-N.log` and the
+executable hash accompany the report. `just clippy-ios` checks the shipped
+simulator feature set;
 `just ios-device` checks the physical-device binary build.
 
 ## Regression and harness checks
