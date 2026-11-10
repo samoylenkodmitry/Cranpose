@@ -57,7 +57,7 @@ struct SnapshotNodeData<'a> {
 }
 
 /// Why a scoped scene update could not be applied, forcing the caller to throw
-/// the render graph away and build it again from the applier.
+/// the scene away and build it again from the applier.
 ///
 /// The reason has to travel with the outcome because the shell picks the
 /// scoped path from the shape of the dirty set, before this code runs, and
@@ -70,10 +70,9 @@ pub enum GraphRebuildReason {
     RootLayerUnavailable,
     /// A dirty subtree's replacement layer could not be built.
     DirtyLayerUnavailable,
-    /// This many dirty nodes own no layer in the render graph, so the scoped
-    /// walk never reached them. A node enters the graph only as a `LayerNode`;
-    /// a dirty node that never produced one -- or whose layer left the graph
-    /// this frame -- cannot be patched in place.
+    /// This many dirty nodes own no record in the scene, so the scoped walk
+    /// never reached them. A dirty node that never made a record, or whose
+    /// record left the scene this frame, cannot be patched in place.
     UnmatchedDirtyNodes(usize),
 }
 
@@ -212,11 +211,11 @@ pub(crate) fn update_from_applier(
     report
 }
 
-// Returns a move when a node's layer change merged into new content: its
-// layer is lowered again, which keeps no record of where it lay.
 // The dirty nodes the map keeps room for at least.
 const DIRTY_NODES_KEPT: usize = 64;
 
+// Returns a move when a node's layer change merged into new content: its
+// layer is lowered again, which keeps no record of where it lay.
 fn dirty_node_updates(
     updates: SceneUpdates<'_>,
     dirty: &mut HashMap<NodeId, NodeUpdate>,

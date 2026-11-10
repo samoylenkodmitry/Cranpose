@@ -1,4 +1,4 @@
-// Where a render graph draws each layout node in the window.
+// Where a scene draws each layout node in the window.
 
 use cranpose_core::{NodeId, collections::map::HashMap};
 use cranpose_ui_graphics::Rect;

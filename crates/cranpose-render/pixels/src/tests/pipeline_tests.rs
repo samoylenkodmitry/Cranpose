@@ -1,5 +1,6 @@
 use cranpose_core::NodeId;
 use cranpose_render_common::{
+    Brush,
     graph::{
         DrawPrimitiveNode, LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase,
         ProjectiveTransform, RenderNode,

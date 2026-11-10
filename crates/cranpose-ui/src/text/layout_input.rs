@@ -4,13 +4,11 @@ use cranpose_text::{
     FontFamily, FontFamilyResolver, FontFeatureSettings, FontRequest, FontStyle, FontWeight,
     ParagraphLengths, ShapingSpan,
 };
+use cranpose_ui_graphics::DEFAULT_FONT_SIZE;
 use smallvec::SmallVec;
 
 use super::{AnnotatedString, SpanStyle, TextStyle, TextUnit};
 use crate::density::Density;
-
-// Compose's default text size.
-pub(crate) const DEFAULT_FONT_SIZE_SP: f32 = 14.0;
 
 // How a text's sizes become pixels: the density and its font scale, and a
 // factor every text size is multiplied by, which auto-size searches.
@@ -96,7 +94,7 @@ impl<'a> ShapingStyle<'a> {
 impl<'a> ParagraphSpans<'a> {
     // The spans of `text` in `style` with sizes in `units`.
     pub(crate) fn new(text: &'a AnnotatedString, style: &'a TextStyle, units: TextUnits) -> Self {
-        let size = units.sp(style.resolve_font_size(DEFAULT_FONT_SIZE_SP));
+        let size = units.sp(style.resolve_font_size(DEFAULT_FONT_SIZE));
         let base = ShapingStyle {
             family: &FontFamily::Default,
             weight: FontWeight::NORMAL,

@@ -190,7 +190,7 @@ pub struct HitRegion {
     pub world_to_local: ProjectiveTransform,
     /// Rounded shape that narrows the target's rectangle, or `None` for a plain rectangle.
     pub shape: Option<RoundedCornerShape>,
-    /// The node's modifier slices, shared with the render graph: its pointer
+    /// The node's modifier slices, shared with the scene: its pointer
     /// handlers and pointer icon.
     pub handlers: Rc<ModifierNodeSlices>,
     /// Draw order of the target. A larger value is drawn later and is hit first.

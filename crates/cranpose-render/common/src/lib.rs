@@ -44,7 +44,7 @@ pub mod raster_cache;
 pub mod render_contract;
 /// 16-bit pixels of the format most small displays take.
 pub mod rgb565;
-/// Building and updating the render graph from the layout tree.
+/// Building and updating the scene's records from the layout tree.
 pub mod scene_builder;
 /// Which mesh surface of a 3D scene a window point shows.
 pub mod scene_pick;
@@ -179,7 +179,7 @@ pub trait RenderScene {
     /// The hit target type that hit testing returns.
     type HitTarget: HitTestTarget + Clone;
 
-    /// Removes the render graph and all hit targets.
+    /// Removes the scene's records and all hit targets.
     fn clear(&mut self);
 
     /// Performs hit testing at the given coordinates.
@@ -281,7 +281,7 @@ pub trait RenderScene {
 
 /// Abstraction implemented by concrete renderer backends.
 pub trait Renderer {
-    /// The scene type that holds the render graph and the hit targets of this renderer.
+    /// The scene type that holds the records and the hit targets of this renderer.
     type Scene: RenderScene;
     /// Error returned when the scene cannot be rebuilt or updated.
     type Error;
@@ -310,7 +310,7 @@ pub trait Renderer {
     /// the scale with each draw ignore it.
     fn set_root_scale(&mut self, _scale: f32) {}
 
-    /// The scene that holds the render graph and the hit targets.
+    /// The scene that holds the records and the hit targets.
     fn scene(&self) -> &Self::Scene;
     /// Mutable access to the scene.
     fn scene_mut(&mut self) -> &mut Self::Scene;

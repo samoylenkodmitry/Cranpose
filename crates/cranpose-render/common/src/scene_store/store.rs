@@ -647,8 +647,7 @@ impl SceneStore {
         }
         super::facts::forget_own(self, index);
         let noted = self.journal.follows(RecordEvent::Changed);
-        let changed =
-            !noted && self.journal.wants(RecordEvent::Changed, self.update) && old != items;
+        let changed = !noted && self.journal.wants(RecordEvent::Changed, self.update);
         if noted {
             let record = self.record_ref(id);
             self.order.note(record, old);

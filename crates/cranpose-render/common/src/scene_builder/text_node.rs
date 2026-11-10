@@ -160,7 +160,7 @@ pub(super) fn text_node_from_parts(parts: &TextNodeParts) -> Option<TextPrimitiv
     let prepared = parts.measured_layout.as_ref()?;
     let placement = TextPlacement::of(parts, prepared)?;
     let visual_style = &prepared.visual_style;
-    let font_size = visual_style.resolve_font_size(14.0);
+    let font_size = visual_style.resolve_font_size(cranpose_ui_graphics::DEFAULT_FONT_SIZE);
     Some(TextPrimitiveNode {
         node_id: parts.node_id,
         rect: placement.rect,

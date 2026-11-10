@@ -80,6 +80,10 @@ impl SceneStore {
         let offset = self.parent_content_offset(index);
         match self.tree[index].kind {
             RecordKind::Leaf => Point::new(x + offset.x, y + offset.y),
+            // A layer sums its origin as `placed_transform` does, with its
+            // graphics layer's translation, zero where the store keeps no
+            // transform: the sum turns a negative zero positive, so the
+            // origin keeps the bits a transform of the layer would hold.
             RecordKind::Layer | RecordKind::Wrapper => {
                 Point::new(x + 0.0 + offset.x, y + 0.0 + offset.y)
             }

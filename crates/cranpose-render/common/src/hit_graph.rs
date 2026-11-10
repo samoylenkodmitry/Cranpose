@@ -14,7 +14,7 @@ use crate::{
     scene_store::LayerRef,
 };
 
-/// Receives the hit targets that `collect_hits_from_graph` finds in a render graph.
+/// Receives the hit targets that `collect_hits_from_graph` finds in a scene.
 pub trait HitGraphSink {
     /// Records an interactive node. `capture_path` lists the node first and then its pointer-input
     /// ancestors from the nearest outward, and `geometry` is in window space.

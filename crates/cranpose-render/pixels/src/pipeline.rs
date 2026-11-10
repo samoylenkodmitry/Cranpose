@@ -2,7 +2,6 @@ use std::{borrow::Cow, ops::Range, sync::Arc};
 
 use cranpose_core::NodeId;
 use cranpose_render_common::{
-    Brush,
     graph::{ProjectiveTransform, TextPrimitiveNode},
     graph_scene::RenderDiagnostics,
     layer_composition::folded_layer_alpha,
@@ -11,6 +10,7 @@ use cranpose_render_common::{
     primitive_emit::resolve_clip,
     scene_store::{ItemKind, LayerRef, SceneStore},
     text_decoration::{visit_text_backgrounds, visit_text_lines},
+    text_paint::resolve_text_color_without_gradient_fallback,
     text_raster::GlyphInk,
 };
 use cranpose_ui::text::TextStyle;
@@ -176,21 +176,6 @@ fn warn_unsupported_effects(diagnostics: &RenderDiagnostics) {
             "Pixels renderer does not support render/backdrop effects or non-SrcOver layer blend modes; falling back to base layer rendering"
         );
     }
-}
-
-fn resolve_text_color_without_gradient_fallback(text_style: &TextStyle, default: Color) -> Color {
-    let mut color = text_style
-        .span_style
-        .color
-        .or(match text_style.span_style.brush.as_ref() {
-            Some(Brush::Solid(color)) => Some(*color),
-            _ => None,
-        })
-        .unwrap_or(default);
-    if let Some(alpha) = text_style.span_style.alpha {
-        color.3 *= alpha.clamp(0.0, 1.0);
-    }
-    color
 }
 
 // Where a text node draws: the bounds and transform of its layer, its box

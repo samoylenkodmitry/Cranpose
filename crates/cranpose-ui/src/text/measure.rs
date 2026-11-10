@@ -10,13 +10,13 @@ use cranpose_text::{
     CaretDirection, FontExtent, FontFamily, FontFamilyResolver, FontRequest, FontStyle, FontWeight,
     LayoutInput, ParagraphIntrinsics, RetiredStrings, TextLayout, TextLayouter, paragraph_line_box,
 };
-use cranpose_ui_graphics::{MemoryHeadroom, Point};
+use cranpose_ui_graphics::{DEFAULT_FONT_SIZE, MemoryHeadroom, Point};
 
 pub use super::prepared_text_layout::PreparedTextLayout;
 use super::{
     AnnotatedString, LineBox, SpanStyle, TextDrawStyle, TextUnit,
     layout_cache::{CacheAdmission, Cached, LayoutCache, Miss},
-    layout_input::{DEFAULT_FONT_SIZE_SP, ParagraphSpans, TextUnits},
+    layout_input::{ParagraphSpans, TextUnits},
     layout_options::{TextLayoutOptions, TextOverflow},
     retired_layouts::RetiredLayouts,
     style::TextStyle,
@@ -323,7 +323,7 @@ impl TextService {
         let fits =
             |layout: &TextLayout| !layout.did_overflow_height() && !layout.did_overflow_width();
         let full = self.layout(text, &style, frame, (units, shaped));
-        let base = style.resolve_font_size(DEFAULT_FONT_SIZE_SP);
+        let base = style.resolve_font_size(DEFAULT_FONT_SIZE);
         let min_factor = (min_font_size_sp.min(base) / base).clamp(0.0, 1.0);
         if fits(&full) || !frame.max_width.is_finite() || min_factor >= 1.0 {
             return PreparedTextLayout::new(text, style, full, (frame.max_width, min_lines));
@@ -436,7 +436,7 @@ impl TextService {
         let size = units
             .density
             .font_scale_curve()
-            .sp_to_dp(style.resolve_font_size(DEFAULT_FONT_SIZE_SP))
+            .sp_to_dp(style.resolve_font_size(DEFAULT_FONT_SIZE))
             * units.factor;
         let fonts = self.fonts.borrow();
         let typeface = fonts.resolve(FontRequest {
@@ -522,7 +522,7 @@ fn scaled_drawing(
 ) -> (AnnotatedString, Arc<TextStyle>) {
     let mut scaled_style = style.clone();
     scaled_style.span_style.font_size =
-        TextUnit::Sp(style.resolve_font_size(DEFAULT_FONT_SIZE_SP) * factor);
+        TextUnit::Sp(style.resolve_font_size(DEFAULT_FONT_SIZE) * factor);
     scale_span_drawing(&mut scaled_style.span_style, factor);
     let text = if text.span_styles().is_empty() {
         text.clone()
