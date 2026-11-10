@@ -32,6 +32,14 @@ pub trait Applier: Any {
     /// parent, or other code ran, so their marks may no longer reach the root.
     fn forget_bubble_passes(&mut self) {}
 
+    /// The flags of the dirty bubbles that passed `id` in the open batch,
+    /// for a caller that gives `id` a parent and carries them on from it.
+    /// `None` when the applier cannot tell: the caller then forgets the
+    /// batch's passes.
+    fn bubble_passes_of(&mut self, _id: NodeId) -> Option<u8> {
+        None
+    }
+
     /// Notes that a dirty bubble carrying `flags` passed the ancestor `id`.
     /// `true` when one carrying all of them passed it earlier in the open
     /// batch: that one marked every ancestor above `id`, so this one may

@@ -5,8 +5,11 @@
 //! a scoped layout repass can leave a dirty node under a clean ancestor. Within
 //! a batch no layout pass runs, so a walk may stop at an ancestor an earlier
 //! walk of the batch passed with the same flags: that walk marked every
-//! ancestor above it. A node that changes its parent, or code the batch runs,
-//! makes the batch forget what its walks passed.
+//! ancestor above it. A node that moves from one parent to another, or code the
+//! batch runs, makes the batch forget what its walks passed. A node that
+//! had no parent and gets one keeps them: every bubble from its subtree
+//! passed it and stopped there, so one bubble with the flags they carried
+//! goes on from its new parent.
 
 /// The low bits of a pass hold the bubble's flags, the rest its round.
 const FLAG_BITS: u32 = 3;
@@ -45,6 +48,19 @@ impl BubblePasses {
             self.round = 0;
         }
         self.round += 1;
+    }
+
+    // The flags of the bubbles that passed the node at `index` in the
+    // open round: 0 when none did.
+    pub(crate) fn passed(&self, index: usize) -> u8 {
+        match self.passes.get(index) {
+            Some(&pass)
+                if self.open_batches > 0 && pass & !FLAG_MASK == self.round << FLAG_BITS =>
+            {
+                (pass & FLAG_MASK) as u8
+            }
+            _ => 0,
+        }
     }
 
     /// Notes that a bubble carrying `flags` passed the node at `index`;

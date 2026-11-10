@@ -92,6 +92,11 @@ impl Applier for MemoryApplier {
         self.state.bubble_passes.forget();
     }
 
+    fn bubble_passes_of(&mut self, id: NodeId) -> Option<u8> {
+        self.resolve_node_index(id)
+            .map(|index| self.state.bubble_passes.passed(index))
+    }
+
     fn note_bubble_pass(&mut self, id: NodeId, flags: u8) -> bool {
         self.resolve_node_index(id)
             .is_some_and(|index| self.state.bubble_passes.note(index, flags))

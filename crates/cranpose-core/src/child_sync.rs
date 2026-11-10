@@ -63,9 +63,21 @@ pub(crate) fn insert_child_with_reparenting(
         .get_mut(child_id)
         .ok()
         .and_then(|node| node.parent());
-    if old_parent != Some(parent_id) {
-        applier.forget_bubble_passes();
-    }
+    // The bubbles that passed a child with no parent stopped at it: one
+    // bubble with their flags goes on from its new parent, and the batch
+    // keeps what its walks passed. A child that leaves another parent, or
+    // one whose passes the applier cannot tell, makes the batch forget.
+    let carried = match old_parent {
+        Some(old_parent_id) if old_parent_id == parent_id => 0,
+        None => applier.bubble_passes_of(child_id).unwrap_or_else(|| {
+            applier.forget_bubble_passes();
+            0
+        }),
+        Some(_) => {
+            applier.forget_bubble_passes();
+            0
+        }
+    };
     if let Some(old_parent_id) = old_parent
         && old_parent_id != parent_id
     {
@@ -91,6 +103,9 @@ pub(crate) fn insert_child_with_reparenting(
     }
     if let Ok(child_node) = applier.get_mut(child_id) {
         child_node.on_attached_to_parent(parent_id);
+    }
+    if carried != 0 {
+        DirtyBubble::carry_on(applier, parent_id, carried);
     }
     inserted
 }
