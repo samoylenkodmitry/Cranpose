@@ -41,6 +41,11 @@ impl RetiredStrings {
         }
     }
 
+    /// Whether no string waits for a text to take it.
+    pub fn is_empty(&self) -> bool {
+        self.strings.is_empty()
+    }
+
     /// A pass of the texts that take and retire strings begins.
     pub fn begin_pass(&mut self) {
         let kept = self.retired.max(self.taken).saturating_mul(3);

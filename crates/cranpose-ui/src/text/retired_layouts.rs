@@ -51,6 +51,10 @@ impl RetiredLayouts {
         None
     }
 
+    pub(crate) fn is_empty(&self) -> bool {
+        self.layouts.is_empty()
+    }
+
     pub(crate) fn begin_pass(&mut self) {
         let kept = self.retired.max(self.taken).saturating_mul(3);
         if self.layouts.len() > kept {

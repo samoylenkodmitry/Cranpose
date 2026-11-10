@@ -157,6 +157,9 @@ pub(crate) struct TextService {
     intrinsics: RefCell<PassAgedCache<TextKey, ParagraphIntrinsics>>,
     retired: RefCell<RetiredLayouts>,
     retired_strings: RefCell<RetiredStrings>,
+    // Whether a text retired or took a layout or a string since both pools
+    // were last found empty: a pass ages the pools only then.
+    retired_live: Cell<bool>,
 }
 
 impl TextService {
@@ -172,6 +175,7 @@ impl TextService {
             )),
             retired: RefCell::default(),
             retired_strings: RefCell::default(),
+            retired_live: Cell::new(false),
         }
     }
 
@@ -246,6 +250,7 @@ impl TextService {
         text: AnnotatedString,
         layouts: impl IntoIterator<Item = Rc<PreparedTextLayout>>,
     ) {
+        self.retired_live.set(true);
         self.retired_strings.borrow_mut().retire(text);
         let mut retired = self.retired.borrow_mut();
         layouts
@@ -255,6 +260,7 @@ impl TextService {
 
     // A plain string of `text`, in the room of a retired one nothing holds.
     pub(crate) fn plain_text(&self, text: &str) -> AnnotatedString {
+        self.retired_live.set(true);
         self.retired_strings.borrow_mut().plain(text)
     }
 
@@ -271,6 +277,7 @@ impl TextService {
         if source.shaped().is_some() || scales.is_some() {
             return None;
         }
+        self.retired_live.set(true);
         let mut spare = self.retired.borrow_mut().take()?;
         let slot = Rc::get_mut(&mut spare)?;
         let (text, style) = (source.text(), source.shared_style());
@@ -479,9 +486,24 @@ impl TextService {
         };
         self.layouts.borrow_mut().begin_pass(idle_passes, headroom);
         self.intrinsics.borrow_mut().begin_pass(idle_passes, drop);
-        self.retired.borrow_mut().begin_pass();
-        self.retired_strings.borrow_mut().begin_pass();
+        if self.retired_live.get() {
+            self.age_retired();
+        }
         self.layouter.borrow_mut().set_memory_headroom(headroom);
+    }
+
+    // Starts a pass of the retired layouts and strings, which stay live
+    // while either pool holds any. Out of line: no pass of a screen whose
+    // texts stand comes here.
+    #[cold]
+    #[inline(never)]
+    fn age_retired(&self) {
+        let (mut layouts, mut strings) =
+            (self.retired.borrow_mut(), self.retired_strings.borrow_mut());
+        layouts.begin_pass();
+        strings.begin_pass();
+        self.retired_live
+            .set(!(layouts.is_empty() && strings.is_empty()));
     }
 
     /// A frame starts: the first use of the service in it outside a layout
