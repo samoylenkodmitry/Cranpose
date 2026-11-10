@@ -87,9 +87,6 @@ impl SceneStore {
             self.stale(parent.index());
         }
         self.note_content_change(id);
-        if rows.moved {
-            self.note_subtree_change(self.tree[index].parent);
-        }
     }
 
     // Drops the properties of the record at `index`, which becomes a leaf,
@@ -117,9 +114,6 @@ impl SceneStore {
             && (moved || reflagged)
         {
             self.stale(parent.index());
-            if moved {
-                self.note_subtree_change(Some(parent));
-            }
         }
     }
 

@@ -255,3 +255,38 @@ fn a_node_that_moved_and_turned_keeps_what_it_drew() {
         "the scene paints the canvas moved and turned"
     );
 }
+
+// A scene description that only moves a child changes its parent's
+// subtree, so a reader that skips unchanged subtrees draws the child at its
+// new place.
+#[test]
+fn a_described_child_that_only_moves_changes_its_parents_subtree() {
+    use cranpose_render_common::{
+        graph::{LayerNode, RenderNode},
+        scene_store::SceneStore,
+    };
+    use cranpose_ui_graphics::Point;
+
+    let root_with_child_at = |x: f32| LayerNode {
+        node_id: Some(NodeId(1)),
+        size: Size::new(100.0, 100.0),
+        children: vec![RenderNode::Layer(Box::new(LayerNode {
+            node_id: Some(NodeId(2)),
+            size: Size::new(10.0, 10.0),
+            origin_in_parent: Point::new(x, 0.0),
+            transform_to_parent: ProjectiveTransform::translation(x, 0.0),
+            ..Default::default()
+        }))],
+        ..Default::default()
+    };
+    let mut store = SceneStore::from_layer(&root_with_child_at(10.0));
+    let root = store.root().expect("a root");
+    let before = store.layer(root).changes();
+
+    store.describe(&root_with_child_at(20.0));
+
+    assert!(
+        !before.same_subtree(store.layer(root).changes()),
+        "the root's subtree holds the moved child"
+    );
+}

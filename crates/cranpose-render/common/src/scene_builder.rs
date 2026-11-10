@@ -579,7 +579,6 @@ fn move_retained_layer(
         placed.position,
         ancestors.parent_content_offset,
     );
-    store.note_place_change(layer);
     let moved = store.layer(layer);
     if moved.has_origin_sinks() {
         publish_retained_window_geometry(applier, moved, ancestors.parent_abs);

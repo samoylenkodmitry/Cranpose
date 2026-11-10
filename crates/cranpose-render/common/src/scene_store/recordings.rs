@@ -1,9 +1,11 @@
 // The recordings of the draw commands that record again, kept so that a
 // command's next recording reuses the storage of one no reader holds. A
-// command enters when the store lets go of a run whose recording no other
-// reader holds: one that records once and stays drawn takes no entry.
+// command enters when the store lets go of a run's recording, which a reader
+// may still hold: one that records once and stays drawn takes no entry, and
+// a recording a run holds stays the run's alone, so the run can record into
+// it again in place.
 
-use std::rc::Rc;
+use std::{ops::Range, rc::Rc};
 
 use cranpose_core::NodeId;
 use cranpose_ui_graphics::{CommandRecording, FxHashMap};
@@ -14,6 +16,10 @@ use crate::graph::DrawCommandId;
 pub(crate) struct Recordings {
     slots: FxHashMap<RecorderKey, RecorderSlot>,
     update: u64,
+    // The recordings a redraw in place made before it gave up, with their
+    // segments, for the fallback that records the node's draws anew in the
+    // same update.
+    parked: Vec<(DrawCommandId, (Rc<CommandRecording>, Range<u32>))>,
 }
 
 #[derive(Clone)]
@@ -72,10 +78,21 @@ impl Recordings {
     // Starts an update. Every 512 updates the commands that neither recorded
     // nor let go of a run for 64 leave.
     pub(super) fn begin_update(&mut self) {
+        if !self.parked.is_empty() {
+            self.drop_parked();
+        }
         self.update = self.update.wrapping_add(1);
         if self.update.is_multiple_of(512) {
             self.sweep();
         }
+    }
+
+    // A fallback takes what a redraw parked in its update; what it left
+    // goes.
+    #[cold]
+    #[inline(never)]
+    fn drop_parked(&mut self) {
+        self.parked.clear();
     }
 
     #[cold]
@@ -89,8 +106,7 @@ impl Recordings {
     // Records the command `id` anew through `record`, which takes storage
     // from the maker it gets once it records: a kept recording of the
     // command that no reader holds, one that shares no shapes first, or a
-    // new one. The recording made joins the command's kept ones. One map
-    // lookup serves both.
+    // new one.
     pub(crate) fn record<T>(
         &mut self,
         id: DrawCommandId,
@@ -101,17 +117,36 @@ impl Recordings {
         let update = self.update;
         let mut slot = self.slots.get_mut(&RecorderKey::from(id));
         let made = record(&mut || {
-            slot.as_deref_mut()
-                .map_or_else(Rc::default, RecorderSlot::lend)
+            slot.as_deref_mut().map_or_else(Rc::default, |slot| {
+                slot.update = update;
+                slot.lend()
+            })
         })?;
-        if let Some(slot) = slot {
-            slot.hold(update, &made.0);
-        }
         Some(made)
     }
 
-    // Keeps `recording`, which `id` recorded and which no reader holds once
-    // the store lets go of its run, for the command's next recording.
+    // Parks `recorded`, which the command `id` recorded in this update, for
+    // a fallback that records the command again in it.
+    pub(crate) fn park(&mut self, id: DrawCommandId, recorded: (Rc<CommandRecording>, Range<u32>)) {
+        self.parked.push((id, recorded));
+    }
+
+    // The recording the command `id` parked in this update, with its
+    // segments.
+    #[inline]
+    pub(crate) fn take_parked(
+        &mut self,
+        id: DrawCommandId,
+    ) -> Option<(Rc<CommandRecording>, Range<u32>)> {
+        if self.parked.is_empty() {
+            return None;
+        }
+        let at = self.parked.iter().position(|(parked, _)| *parked == id)?;
+        Some(self.parked.swap_remove(at).1)
+    }
+
+    // Keeps `recording`, which `id` recorded and which the store lets go
+    // of, for the command's next recording once no reader holds it.
     pub(super) fn keep(&mut self, id: DrawCommandId, recording: &Rc<CommandRecording>) {
         let update = self.update;
         self.slots

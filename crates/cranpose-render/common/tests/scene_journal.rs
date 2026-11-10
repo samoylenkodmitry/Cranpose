@@ -244,3 +244,32 @@ fn a_box_whose_children_swap_places_reports_its_subtree_changed() {
     });
     assert!(changed, "the box draws its children in another order");
 }
+
+#[test]
+fn clones_of_a_store_that_diverge_keep_versions_apart() {
+    let original = rooted_store();
+    let mut first = original.clone();
+    let mut second = original.clone();
+
+    add_and_remove(&mut first, NodeId(2));
+    add_and_remove(&mut second, NodeId(3));
+
+    assert_ne!(first.version(), second.version());
+}
+
+#[test]
+fn a_handle_taken_before_a_clear_names_no_record_after_it() {
+    let mut store = rooted_store();
+    let held = store.record_ref(store.root().expect("a root"));
+
+    store.clear();
+    store.begin_update();
+    store.insert(RecordSeed {
+        kind: RecordKind::Layer,
+        node: Some(NodeId(9)),
+        parent: None,
+    });
+    store.finish_update();
+
+    assert_eq!(store.resolve(held), None);
+}

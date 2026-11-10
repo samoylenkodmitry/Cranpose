@@ -354,44 +354,87 @@ fn opens_group(recording: &CommandRecording, segments: &Range<u32>) -> bool {
             .any(|segment| segment.lane == RecordLane::GroupStart)
 }
 
+// One step of a node's draws as a redraw in place writes them over the
+// node's items, in draw order: a background, or a command that records a
+// run.
+enum DrawStep<'a> {
+    Background(&'a BackgroundDraw),
+    Run(&'a DrawCommand, DrawCommandId),
+}
+
+// Hands `visit` each step of `commands` in draw order: the draws behind the
+// content, then those over it. False when a command draws around the
+// content, or when `visit` returns false.
+fn walk_steps<'a>(commands: NodeCommands<'a>, mut visit: impl FnMut(DrawStep<'a>) -> bool) -> bool {
+    for placement in [DrawPlacement::Behind, DrawPlacement::Overlay] {
+        for (offset, command) in commands.commands.iter().enumerate() {
+            let step = match command {
+                DrawCommand::WithContent(_) => return false,
+                DrawCommand::Background(_) if placement == DrawPlacement::Overlay => continue,
+                DrawCommand::Background(background) => DrawStep::Background(background),
+                _ if !draws_in(command, placement) => continue,
+                _ => DrawStep::Run(
+                    command,
+                    DrawCommandId {
+                        node_id: commands.node_id,
+                        command_index: (commands.first_index + offset) as u32,
+                        placement,
+                    },
+                ),
+            };
+            if !visit(step) {
+                return false;
+            }
+        }
+    }
+    true
+}
+
 // Draws `commands`, a node's draw commands at size `size`, over `own`, the
 // items of its record that drew them before, in draw order without its
 // children, when they come out as the same kinds in the same order: a
 // background whose shape and color stay keeps its shapes, and a run
 // records again into its own recording. False when other items come out,
-// or a command draws around the content; the caller then writes the
-// node's draws anew over what this wrote.
+// a command draws around the content, a run drew another command or a
+// recording opens a draw group; the caller then writes the node's draws
+// anew over what this wrote, and takes the recordings this made, which it
+// parks, so no draw callback runs twice.
 pub(super) fn redraw_in_place(
     store: &mut SceneStore,
-    mut own: impl Iterator<Item = Item>,
+    own: impl Iterator<Item = Item> + Clone,
     commands: NodeCommands<'_>,
     size: Size,
 ) -> bool {
-    for placement in [DrawPlacement::Behind, DrawPlacement::Overlay] {
-        for (offset, command) in commands.commands.iter().enumerate() {
-            let drawn = match command {
-                DrawCommand::WithContent(_) => return false,
-                DrawCommand::Background(_) if placement == DrawPlacement::Overlay => continue,
-                DrawCommand::Background(background) => own
-                    .next()
-                    .is_some_and(|item| draws_background_again(store, item, background, size)),
-                _ if !draws_in(command, placement) => continue,
-                _ => {
-                    let id = DrawCommandId {
-                        node_id: commands.node_id,
-                        command_index: (commands.first_index + offset) as u32,
-                        placement,
-                    };
-                    own.next()
-                        .is_some_and(|item| draws_run_again(store, item, (command, id), size))
-                }
-            };
-            if !drawn {
-                return false;
+    let mut items = own.clone();
+    let mut drawn = 0;
+    let all = walk_steps(commands, |step| {
+        let again = items.next().is_some_and(|item| match step {
+            DrawStep::Background(background) => {
+                draws_background_again(store, item, background, size)
             }
+            DrawStep::Run(command, id) => draws_run_again(store, item, (command, id), size),
+        });
+        drawn += usize::from(again);
+        again
+    }) && items.next().is_none();
+    if !all {
+        park_runs(store, own.take(drawn));
+    }
+    all
+}
+
+// Parks the recordings the runs among `drawn` made in this update, for the
+// fallback that writes their node's draws anew.
+#[cold]
+#[inline(never)]
+fn park_runs(store: &mut SceneStore, drawn: impl Iterator<Item = Item>) {
+    for item in drawn.filter(|item| item.kind() == ItemKind::Run) {
+        let run = store.run(item);
+        if let Some(id) = run.command {
+            let recorded = (Rc::clone(&run.recording), run.segments.clone());
+            store.recordings.park(id, recorded);
         }
     }
-    own.next().is_none()
 }
 
 // Draws `background` at `size` into the shape item `item`, which keeps its
@@ -416,7 +459,8 @@ fn draws_background_again(
 // Records `command`, the command `id`, again into the run `item` that drew
 // it before: into the run's own recording when no reader holds it, else
 // into storage the store keeps for the command. False when `item` is no
-// run of the command or the new recording opens a draw group.
+// run of the command, or when the new recording opens a draw group, which
+// it then parks for the fallback.
 #[inline(never)]
 fn draws_run_again(
     store: &mut SceneStore,
@@ -441,6 +485,8 @@ fn draws_run_again(
     };
     let run = store.run_mut(item);
     if opens_group(&run.recording, &segments) {
+        let recording = Rc::clone(&run.recording);
+        store.recordings.park(id, (recording, segments));
         return false;
     }
     run.summary = run.recording.summary_in(&segments);
@@ -494,6 +540,9 @@ fn record_command(
     id: DrawCommandId,
     size: Size,
 ) -> Option<(Rc<CommandRecording>, Range<u32>)> {
+    if let Some(parked) = store.recordings.take_parked(id) {
+        return Some(parked);
+    }
     store.recordings.record(id, |storage| {
         recording_for_placement_reusing(command, id.placement, size, storage)
     })

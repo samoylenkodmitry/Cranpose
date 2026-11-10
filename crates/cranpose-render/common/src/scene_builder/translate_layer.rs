@@ -367,7 +367,7 @@ impl ItemParts {
 
     // The container's own items in draw order: those before its children,
     // then those after them.
-    pub(super) fn own(&self) -> impl DoubleEndedIterator<Item = Item> + '_ {
+    pub(super) fn own(&self) -> impl DoubleEndedIterator<Item = Item> + Clone + '_ {
         self.items[..self.children.start]
             .iter()
             .chain(&self.items[self.children.end..self.held])
@@ -530,7 +530,6 @@ pub(super) fn apply_translated_container_state(
         geometry.window_transform,
         layout_state.size(),
     );
-    store.note_place_change(container);
 }
 
 fn reconcile_translated_children(

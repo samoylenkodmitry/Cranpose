@@ -27,11 +27,14 @@ use crate::graph::{
 /// The scene a renderer draws and the hit targets come from.
 #[derive(Clone)]
 pub struct SceneStore {
-    id: StoreId,
+    id: Identity,
     pub(super) tree: Vec<TreeRecord>,
     pub(super) geo: Vec<GeoRecord>,
     pub(super) warm: Vec<WarmRecord>,
     pub(super) generations: Vec<u32>,
+    // The generation a new row starts at: past every one a cleared store
+    // gave out.
+    generation_floor: u32,
     pub(super) free_rows: Vec<u32>,
     pub(super) items: SpanPool<Item>,
     #[cfg(feature = "window-damage")]
@@ -78,6 +81,17 @@ pub struct RecordSeed {
     pub parent: Option<RecordId>,
 }
 
+// A store's identity among the renderers' stores. A clone of a store is
+// another store that diverges from the first, so it takes an identity of its
+// own: no reader takes one store's state for the other's.
+struct Identity(StoreId);
+
+impl Clone for Identity {
+    fn clone(&self) -> Self {
+        Self(next_store_id())
+    }
+}
+
 fn next_store_id() -> StoreId {
     static NEXT: AtomicU16 = AtomicU16::new(1);
     loop {
@@ -97,11 +111,12 @@ impl SceneStore {
     /// An empty store.
     pub fn new() -> Self {
         Self {
-            id: next_store_id(),
+            id: Identity(next_store_id()),
             tree: Vec::new(),
             geo: Vec::new(),
             warm: Vec::new(),
             generations: Vec::new(),
+            generation_floor: 0,
             free_rows: Vec::new(),
             items: SpanPool::default(),
             #[cfg(feature = "window-damage")]
@@ -129,13 +144,13 @@ impl SceneStore {
     /// The store's identity among the renderers' stores.
     #[inline]
     pub fn id(&self) -> StoreId {
-        self.id
+        self.id.0
     }
 
     /// The store's identity and latest update.
     pub fn version(&self) -> SceneVersion {
         SceneVersion {
-            store: self.id,
+            store: self.id.0,
             update: self.update,
         }
     }
@@ -161,7 +176,7 @@ impl SceneStore {
     /// Starts following the `events` of the store's records: the reader's
     /// first read reports the changes after now.
     pub fn open_journal(&mut self, events: RecordEvents) -> JournalCursor {
-        let cursor = self.journal.open(self.id, events);
+        let cursor = self.journal.open(self.id.0, events);
         self.mark_for_redraws();
         cursor
     }
@@ -174,7 +189,7 @@ impl SceneStore {
     /// Makes the reader of `cursor` follow `events` from the next update
     /// on.
     pub fn follow_journal(&mut self, cursor: &mut JournalCursor, events: RecordEvents) {
-        self.journal.follow(self.id, cursor, events);
+        self.journal.follow(self.id.0, cursor, events);
         self.mark_for_redraws();
     }
 
@@ -206,15 +221,15 @@ impl SceneStore {
         cursor: &mut JournalCursor,
         read: impl FnOnce(&Self, JournalRead<'_>) -> R,
     ) -> R {
-        let result = read(self, self.journal.changes(self.id, cursor));
-        self.journal.mark_read(self.id, cursor);
+        let result = read(self, self.journal.changes(self.id.0, cursor));
+        self.journal.mark_read(self.id.0, cursor);
         result
     }
 
     // Whether the reader of `cursor` read every change of the store.
     #[inline]
     pub(crate) fn journal_caught_up(&self, cursor: &JournalCursor) -> bool {
-        self.journal.caught_up(self.id, cursor)
+        self.journal.caught_up(self.id.0, cursor)
     }
 
     // Logs `event` for `id` as the record is now, when a reader follows it.
@@ -455,6 +470,11 @@ impl SceneStore {
         self.tree.clear();
         self.geo.clear();
         self.warm.clear();
+        // A record made after the clear takes a generation past every one
+        // given out before, so no handle taken before names it.
+        if let Some(&last) = self.generations.iter().max() {
+            self.generation_floor = last.wrapping_add(1);
+        }
         self.generations.clear();
         self.free_rows.clear();
         self.items.clear();
@@ -511,7 +531,7 @@ impl SceneStore {
                 self.tree.push(tree);
                 self.geo.push(GeoRecord::default());
                 self.warm.push(warm);
-                self.generations.push(0);
+                self.generations.push(self.generation_floor);
                 RecordId::from_index(self.tree.len() - 1).expect("fewer than 2^32 records")
             }
         };
@@ -574,7 +594,7 @@ impl SceneStore {
             }
             ItemKind::Run => {
                 if let Some(run) = self.runs.take(item.index()) {
-                    self.keep_unheld(run.command, &run.recording);
+                    self.keep_released(run.command, &run.recording);
                 }
             }
             ItemKind::Shape => self.remove_shapes(item.index()),
@@ -690,15 +710,13 @@ impl SceneStore {
         let run = &mut self.runs[item.index()];
         let command = run.command;
         let old = std::mem::replace(&mut run.recording, recording);
-        self.keep_unheld(command, &old);
+        self.keep_released(command, &old);
     }
 
     // Keeps `recording`, which `command` recorded and which the store lets
-    // go of, for the command's next recording when no reader holds it.
-    fn keep_unheld(&mut self, command: Option<DrawCommandId>, recording: &Rc<CommandRecording>) {
-        if let Some(id) = command
-            && Rc::strong_count(recording) == 1
-        {
+    // go of, for the command's next recording once no reader holds it.
+    fn keep_released(&mut self, command: Option<DrawCommandId>, recording: &Rc<CommandRecording>) {
+        if let Some(id) = command {
             self.recordings.keep(id, recording);
         }
     }
@@ -835,18 +853,8 @@ impl SceneStore {
         self.note_subtree_change(parent);
     }
 
-    /// Notes that the update in progress may have moved `id` in its parent,
-    /// or its content within it: when it did, the parent's content changed,
-    /// while the subtree of `id` holds.
-    pub fn note_place_change(&mut self, id: RecordId) {
-        let index = id.index();
-        if self.tree[index].place_rev == self.update {
-            self.note_subtree_change(self.tree[index].parent);
-        }
-    }
-
     // Notes that the update in progress moved the record at `index`, or its
-    // content within it.
+    // content within it. Its ancestors take the update as their subtree's.
     #[inline]
     pub(super) fn moved(&mut self, index: usize) {
         if self.tree[index].place_rev != self.update {
@@ -855,6 +863,7 @@ impl SceneStore {
                 RecordEvent::Moved,
                 RecordId::from_index(index).expect("a row is a record"),
             );
+            self.note_subtree_change(self.tree[index].parent);
         }
     }
 
