@@ -8,9 +8,11 @@ use cranpose_ui::{
     composable, text::FontWeight, Button, ButtonSpec, Color, Column, ColumnSpec, LinearArrangement,
     Modifier, Row, RowSpec, Text,
 };
-use perf_compare::{GauntletLoad, GauntletScreen, WallLoad, WallScreen};
+use perf_compare::{
+    GauntletLoad, GauntletScreen, PatchworkLoad, PatchworkScreen, WallLoad, WallScreen,
+};
 
-use super::{demo_text::text_style, demo_theme::DemoPalette};
+use super::{demo_tab::DemoTab, demo_text::text_style, demo_theme::DemoPalette};
 
 const CHOSEN: Color = Color::from_rgb_u8(0x25, 0x63, 0xEB);
 const CHIP: Color = Color::from_rgb_u8(0xE2, 0xE8, 0xF0);
@@ -21,23 +23,35 @@ const INK: Color = Color::from_rgb_u8(0x11, 0x18, 0x27);
 pub(super) enum BenchScreen {
     Gauntlet,
     StillWall,
+    Patchwork,
 }
 
 impl BenchScreen {
+    // The screen tab `tab` shows, for a tab of the comparison.
+    pub(super) fn of(tab: DemoTab) -> Option<Self> {
+        match tab {
+            DemoTab::Gauntlet => Some(Self::Gauntlet),
+            DemoTab::StillWall => Some(Self::StillWall),
+            DemoTab::Patchwork => Some(Self::Patchwork),
+            _ => None,
+        }
+    }
+
     // The tiers the comparison defines.
     fn tiers(self) -> usize {
         match self {
             Self::Gauntlet => 16,
-            Self::StillWall => 20,
+            Self::StillWall | Self::Patchwork => 20,
         }
     }
 
     // The tier the tab opens at: the phones' gauntlet tier and the desktop
-    // apps' wall tier of the nightly.
+    // apps' wall tier of the nightly, and tier 14 of the patchwork.
     fn first_tier(self) -> usize {
         match self {
             Self::Gauntlet => 12,
             Self::StillWall => 20,
+            Self::Patchwork => 14,
         }
     }
 }
@@ -59,6 +73,10 @@ pub(super) fn BenchTab(screen: BenchScreen) {
                     freeze: 0,
                 }),
                 BenchScreen::StillWall => WallScreen(WallLoad {
+                    tier: chosen,
+                    freeze: 0,
+                }),
+                BenchScreen::Patchwork => PatchworkScreen(PatchworkLoad {
                     tier: chosen,
                     freeze: 0,
                 }),

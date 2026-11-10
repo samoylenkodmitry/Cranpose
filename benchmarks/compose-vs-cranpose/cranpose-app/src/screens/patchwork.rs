@@ -3,7 +3,8 @@
 //!
 //! In Cranpose's idiom a tile, a cell or a nest reads a state derived from
 //! the frame, which changes only when its own content does: a frame composes
-//! or draws again the part that changed and nothing else. The reorder
+//! or draws again the part that changed and nothing else. The cards move
+//! in graphics layers, which compose and draw nothing again. The reorder
 //! patch's row composes again each frame with its items under their keys,
 //! and the pile patch in one call whose tiles skip but for the two whose
 //! fill changes.
@@ -20,47 +21,15 @@ use super::{
     wall::{BACKGROUND, Clock, INK, ONE_LINE, Tile, Wall, rgb, tile_content, tile_rows},
 };
 use crate::data::{
-    self, ChatToken, ChurnKind, InTurn, PATCH_COLUMNS, PATCH_ROWS, PATCHWORK_CHART_POINTS,
+    self, Cards, ChatToken, InTurn, PATCH_COLUMNS, PATCH_ROWS, PATCHWORK_CHART_POINTS,
     PATCHWORK_DEPTH, Patch, WALL_GAP,
 };
 
-/// What of the screen a launch shows.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Only {
-    /// Every patch and the chat.
-    All,
-    /// One patch alone.
-    Patch(Patch),
-    /// The chat alone.
-    Chat,
-}
-
-impl Only {
-    /// `--only=N`: 1 to 9 a patch in the screen's order, 10 the chat, any
-    /// other number everything.
-    pub fn from_number(number: usize) -> Self {
-        match number
-            .checked_sub(1)
-            .and_then(|patch| Patch::ALL.get(patch))
-        {
-            Some(patch) => Self::Patch(*patch),
-            None if number == Patch::ALL.len() + 1 => Self::Chat,
-            None => Self::All,
-        }
-    }
-
-    fn shows(self, patch: Patch) -> bool {
-        self == Self::All || self == Self::Patch(patch)
-    }
-}
-
-/// The patchwork's tier, the frame it freezes on (0 runs on) and what of
-/// the screen it shows.
+/// The patchwork's tier and the frame it freezes on; 0 runs on.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct PatchworkLoad {
     pub tier: usize,
     pub freeze: u32,
-    pub only: Only,
 }
 
 // One patch's tiles: `columns` by `rows` of them `width` by `height` points
@@ -172,18 +141,12 @@ fn Patches(frame: MutableState<u32>, load: PatchworkLoad, grid: Grid) {
             for row in 0..PATCH_ROWS {
                 Row(Modifier::empty(), RowSpec::default(), move || {
                     for patch in &Patch::ALL[row * PATCH_COLUMNS..(row + 1) * PATCH_COLUMNS] {
-                        if load.only.shows(*patch) {
-                            show(*patch, frame, list_state, grid);
-                        } else {
-                            Box(grid.patch(), BoxSpec::default(), || {});
-                        }
+                        show(*patch, frame, list_state, grid);
                     }
                 });
             }
         });
-        if matches!(load.only, Only::All | Only::Chat) {
-            Chat(frame, chat);
-        }
+        Chat(frame, chat);
     });
 }
 
@@ -193,7 +156,7 @@ fn show(patch: Patch, frame: MutableState<u32>, list_state: LazyListState, grid:
         Patch::Still => Still(grid),
         Patch::Charts => Charts(grid),
         Patch::Recolor => Recolor(frame, grid),
-        Patch::Churn => Churn(frame, grid),
+        Patch::Cards => CardStack(frame, grid),
         Patch::Reorder => Reorder(frame, grid),
         Patch::Deep => Deep(frame, grid),
         Patch::Scroll => ScrollList(list_state, grid),
@@ -283,52 +246,72 @@ fn RecolorTile(frame: MutableState<u32>, index: usize, grid: Grid) {
     );
 }
 
-// Cells that show another kind of content in turn: a cell composes again
-// when its own kind changes.
+// Cards that move every frame. The stack composes again when a move
+// begins, as a card comes in or the last one leaves; within a move each
+// card's graphics layer reads the frame for its place, so a frame moves the
+// cards and composes, lays out and draws none of them again.
 #[composable]
-fn Churn(frame: MutableState<u32>, grid: Grid) {
+fn CardStack(frame: MutableState<u32>, grid: Grid) {
+    let cards = Cards::new(grid.columns, grid.rows, grid.height, grid.patch_height);
+    let moves = derivedStateOf(move || frame.get() / data::PATCHWORK_CARD_FRAMES);
+    let begun = moves.get() * data::PATCHWORK_CARD_FRAMES;
     Box(grid.patch(), BoxSpec::default(), move || {
-        tile_rows(grid.columns, grid.rows, move |index| {
-            ChurnCell(frame, index, grid);
-        });
+        for place in 0..cards.places() {
+            if let Some(card) = cards.place(place, begun) {
+                key(card.id, move || Card(frame, cards, card.id, grid));
+            }
+        }
     });
 }
 
+// Card `id`: its header over its rows of tiles.
 #[composable]
-fn ChurnCell(frame: MutableState<u32>, index: usize, grid: Grid) {
-    let (width, height) = (grid.width, grid.height);
-    let turn = grid.in_turn();
-    let cell = Modifier::empty()
-        .size_points(width, height)
-        .rounded_corners(data::WALL_CORNER);
-    let kind = derivedStateOf(move || data::patchwork_churn(index, frame.get(), turn));
-    match kind.get() {
-        ChurnKind::Tile => {
-            Tile(index, width, height);
-        }
-        ChurnKind::Blank => {
+fn Card(frame: MutableState<u32>, cards: Cards, id: usize, grid: Grid) {
+    let width = data::patchwork_reorder_width(cards.columns, grid.width);
+    Column(
+        Modifier::empty()
+            .padding_horizontal(WALL_GAP)
+            .graphics_layer(move || GraphicsLayer {
+                // A card no frame shows waits above the patch.
+                translation_y: cards.top(id, frame.get()).unwrap_or(-cards.height),
+                ..Default::default()
+            }),
+        ColumnSpec::new().vertical_arrangement(LinearArrangement::spaced_by(WALL_GAP)),
+        move || {
             Box(
-                cell.background(rgb(data::wall_dot_rgb(index))),
-                BoxSpec::default(),
-                || {},
-            );
-        }
-        ChurnKind::Label => {
-            Box(
-                cell.background(rgb(data::wall_fill_rgb(index)))
-                    .padding(data::wall_padding(height)),
+                Modifier::empty()
+                    .size_points(width, grid.height)
+                    .background(rgb(data::patchwork_card_rgb(id)))
+                    .rounded_corners(data::WALL_CORNER)
+                    .padding(data::wall_padding(grid.height)),
                 BoxSpec::default(),
                 move || {
                     TextWithOptions(
-                        data::wall_label(index),
+                        data::patchwork_card_title(id),
                         Modifier::empty(),
-                        text_style(data::wall_text_size(height).0, INK, true),
+                        text_style(data::wall_text_size(grid.height).0, INK, true),
                         ONE_LINE,
                     );
                 },
             );
-        }
-    }
+            for row in 0..cards.rows {
+                Row(
+                    Modifier::empty(),
+                    RowSpec::new().horizontal_arrangement(LinearArrangement::spaced_by(WALL_GAP)),
+                    move || {
+                        for column in 0..cards.columns {
+                            let tile = row * cards.columns + column;
+                            Tile(
+                                data::patchwork_card_tile(id, tile, cards.tiles()),
+                                grid.width,
+                                grid.height,
+                            );
+                        }
+                    },
+                );
+            }
+        },
+    );
 }
 
 // A wrapping row of items, two of which change places every frame: each

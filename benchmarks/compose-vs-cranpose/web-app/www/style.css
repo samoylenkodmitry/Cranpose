@@ -530,6 +530,27 @@ body.still-wall {
   height: var(--height);
 }
 
+.patch-card {
+  position: absolute;
+  left: 1px;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  will-change: transform;
+}
+
+.patch-card-title {
+  box-sizing: border-box;
+  height: var(--height);
+  padding: var(--pad);
+  border-radius: 2px;
+  font-size: var(--label);
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
 .patch-flow {
   display: flex;
   flex-wrap: wrap;
@@ -539,10 +560,6 @@ body.still-wall {
 
 .patch-flow .wall-tile {
   height: var(--height);
-}
-
-.patch-blank {
-  border-radius: 2px;
 }
 
 .patch-nest {

@@ -4,10 +4,9 @@
 //
 // In the web platform's idiom the page builds each patch's elements once and
 // each frame touches only what changed: the backgrounds, the cells and the
-// text nodes of the eighth of a patch whose turn it is, the two items that
-// change places, the paragraph's text, two tiles of the pile. The churn
-// patch keeps each cell's three kinds of content and puts the new one in
-// the cell. The scroll patch moves the row that left to the list's end and
+// text nodes of the row of a patch whose turn it is, the two items that
+// change places, the paragraph's text, two tiles of the pile. The cards
+// move by transforms in layers of their own. The scroll patch moves the row that left to the list's end and
 // writes the row that came in into it, as a list that recycles its rows
 // does.
 
@@ -110,30 +109,81 @@ function recolor(area: HTMLElement, columns: number, rows: number): Show {
   });
 }
 
-function churn(area: HTMLElement, columns: number, rows: number): Show {
-  const tiles = columns * rows;
-  const grid = patch(area, 'patch-grid');
-  const kinds: HTMLDivElement[][] = [];
-  const shown: HTMLDivElement[] = [];
-  const spare = document.createDocumentFragment();
-  for (let index = 0; index < tiles; index++) {
-    const whole = tile(index, grid);
-    const blank = element('div', 'patch-blank', spare);
-    blank.style.background = dotColor(index);
-    const named = element('div', 'wall-tile', spare);
-    named.style.background = PALETTE[index % PALETTE.length];
-    element('div', 'wall-label', named).textContent = label(index);
-    kinds.push([whole, blank, named]);
-    shown.push(whole);
-  }
-  spare.replaceChildren();
-  return inTurn(columns, rows, (index, changes) => {
-    const next = kinds[index][changes % 3];
-    if (next !== shown[index]) {
-      shown[index].replaceWith(next);
-      shown[index] = next;
+const CARD_FRAMES = 32;
+const GRADIENT_END = [
+  '#7F1D1D', '#7C2D12', '#713F12', '#14532D', '#134E4A', '#1E3A8A', '#4C1D95', '#831843',
+];
+
+// Cards that move every frame, each a header over rows of tiles. A card is
+// built when it comes in and removed when it has left; in between a frame
+// sets its transform, in a layer of its own, and touches nothing inside it.
+function cards(
+  area: HTMLElement,
+  columns: number,
+  rows: number,
+  width: number,
+  height: number,
+  patchHeight: number,
+): Show {
+  const box = patch(area, 'patch-cards');
+  const cardRows = Math.max(1, Math.trunc(rows / 4));
+  const tiles = columns * cardRows;
+  const cardHeight = height + cardRows * (height + GAP);
+  const pitch = cardHeight + GAP;
+  const slots = Math.max(1, Math.trunc((patchHeight - GAP) / pitch));
+  const shown = new Map<number, HTMLDivElement>();
+  const build = (id: number) => {
+    const card = document.createElement('div');
+    card.className = 'patch-card';
+    const header = element('div', 'patch-card-title', card);
+    header.style.background = GRADIENT_END[id % GRADIENT_END.length];
+    header.textContent = `Group ${String(id % 100000).padStart(5, '0')}`;
+    const grid = element('div', 'patch-grid', card);
+    for (let place = 0; place < tiles; place++) {
+      tile((id * tiles + place) % 100000, grid);
     }
-  });
+    return card;
+  };
+  return (frame) => {
+    const moves = Math.trunc(frame / CARD_FRAMES);
+    const along = (frame % CARD_FRAMES) / CARD_FRAMES;
+    const came = Math.ceil(moves / 2) + ((moves + 1) % 2);
+    const coming = moves % 2 === 0;
+    const other = Math.min(2, slots - 1);
+    const reach = other * pitch * (1 - Math.abs(2 * along - 1));
+    const kept = new Set<number>();
+    const placed: HTMLDivElement[] = [];
+    let cameIn = false;
+    for (let place = 0; place < (coming ? slots + 1 : slots); place++) {
+      const id = came + slots - 1 - place;
+      if (id < 0) {
+        continue;
+      }
+      const moved = coming ? -1 + along : 0;
+      const swapped = coming ? 0 : place === 0 ? reach : place === other ? -reach : 0;
+      const top = GAP + (place + moved) * pitch + swapped;
+      let card = shown.get(id);
+      if (!card) {
+        card = build(id);
+        shown.set(id, card);
+        cameIn = true;
+      }
+      placed.push(card);
+      card.style.transform = `translateY(${top}px)`;
+      kept.add(id);
+    }
+    // The cards lie in the order of their places, so that one that crosses
+    // another lies over it; a card that came in takes its place among them.
+    if (cameIn) {
+      box.append(...placed);
+    }
+    for (const [id, card] of shown) {
+      if (!kept.has(id)) {
+        card.remove();
+        shown.delete(id);
+      }
+    }
+  };
 }
 
 function reorder(area: HTMLElement, tiles: number, width: number): Show {
@@ -264,14 +314,8 @@ function pile(area: HTMLElement, columns: number, rows: number, width: number, h
 }
 
 /** Shows the patchwork of `tier` in place of the page's gauntlet, and
- * advances its frame each animation frame until frame `freeze`. `only` 1 to
- * 9 shows that patch alone, 10 the chat alone, and 0 everything. */
-export function patchwork(
-  tier: number,
-  freeze: number,
-  log: (message: string) => void,
-  only = 0,
-) {
+ * advances its frame each animation frame until frame `freeze`. */
+export function patchwork(tier: number, freeze: number, log: (message: string) => void) {
   const [width, height] = TIERS[Math.min(Math.max(tier, 1), TIERS.length) - 1];
   document.title = 'Patchwork';
   document.body.replaceChildren();
@@ -280,7 +324,7 @@ export function patchwork(
   const line = element('div', 'wall-clock', document.body);
   const screen = element('div', 'patchwork-screen', document.body);
   const area = element('div', 'patchwork', screen);
-  const showChat = only === 0 || only === 10 ? chat(screen) : () => {};
+  const showChat = chat(screen);
   tileSizes(area, width, height);
   let columns = 0;
   let rows = 0;
@@ -314,7 +358,7 @@ export function patchwork(
       () => still(area, tiles),
       () => charts(area, columns, rows, width, height),
       () => recolor(area, columns, rows),
-      () => churn(area, columns, rows),
+      () => cards(area, columns, rows, width, height, patchHeight),
       () => reorder(area, tiles, width),
       () => deep(area, columns, rows),
       () => scroll(area, columns, rows, height),
@@ -322,16 +366,12 @@ export function patchwork(
       () => pile(area, columns, rows, width, height),
     ];
     patches = [];
-    builders.forEach((build, place) => {
-      if (only === 0 || only === place + 1) {
-        const shown = build();
-        if (shown) {
-          patches.push(shown);
-        }
-      } else {
-        patch(area, '');
+    for (const build of builders) {
+      const shown = build();
+      if (shown) {
+        patches.push(shown);
       }
-    });
+    }
     show();
   };
   lay();

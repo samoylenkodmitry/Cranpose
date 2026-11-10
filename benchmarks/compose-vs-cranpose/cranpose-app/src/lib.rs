@@ -199,7 +199,6 @@ impl Launch {
             patchwork: screens::patchwork::PatchworkLoad {
                 tier: count("tier", 5),
                 freeze: u32::try_from(count("freeze", 0)).unwrap_or(u32::MAX),
-                only: screens::patchwork::Only::from_number(count("only", 0)),
             },
             still: args.boolean("still").unwrap_or(false),
         }

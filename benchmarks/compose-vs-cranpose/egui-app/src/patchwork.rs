@@ -151,24 +151,49 @@ impl Patchwork {
         }
     }
 
-    fn churn(&self, shown: &Shown) {
-        let height = self.tier.tile_height;
+    // The cards at the frame's places, the topmost first, so that one that
+    // crosses another lies over it.
+    fn cards(&self, shown: &Shown) {
+        let (width, height) = (self.tier.tile_width, self.tier.tile_height);
+        let cards = Cards::new(self.grid.0, self.grid.1, height, shown.rect.height());
         let corner = CornerRadius::same(WALL_CORNER as u8);
-        for (index, text) in self.text.iter().enumerate() {
-            let rect = self.tile(shown.rect.min, index);
-            let fill = rgb(wall_fill_rgb(index));
-            match patchwork_churn(index, shown.frame, self.in_turn()) {
-                ChurnKind::Tile => paint_tile(&shown.painter, rect, fill, height, index, text),
-                ChurnKind::Blank => {
-                    shown
-                        .painter
-                        .rect_filled(rect, corner, rgb(wall_dot_rgb(index)));
-                }
-                ChurnKind::Label => {
-                    shown.painter.rect_filled(rect, corner, fill);
-                    let at = rect.shrink(wall_padding(height)).min;
-                    shown.painter.galley(at, text[0].clone(), INK);
-                }
+        for card in (0..cards.places()).filter_map(|place| cards.place(place, shown.frame)) {
+            let origin = shown.rect.min + vec2(WALL_GAP, card.top);
+            let header = Rect::from_min_size(
+                origin,
+                vec2(patchwork_reorder_width(cards.columns, width), height),
+            );
+            shown
+                .painter
+                .rect_filled(header, corner, rgb(patchwork_card_rgb(card.id)));
+            let title = line(
+                shown.ui,
+                patchwork_card_title(card.id),
+                wall_text_size(height).0,
+                bold(),
+            );
+            let at = header.shrink(wall_padding(height)).min;
+            shown.painter.galley(at, title, INK);
+            for tile in 0..cards.tiles() {
+                let (column, row) = (tile % cards.columns, tile / cards.columns + 1);
+                let index = patchwork_card_tile(card.id, tile, cards.tiles());
+                let rect = Rect::from_min_size(
+                    origin
+                        + vec2(
+                            column as f32 * (width + WALL_GAP),
+                            row as f32 * (height + WALL_GAP),
+                        ),
+                    vec2(width, height),
+                );
+                let text = tile_text(shown.ui, height, index);
+                paint_tile(
+                    &shown.painter,
+                    rect,
+                    rgb(wall_fill_rgb(index)),
+                    height,
+                    index,
+                    &text,
+                );
             }
         }
     }
@@ -333,7 +358,7 @@ impl eframe::App for Patchwork {
                 Patch::Still => self.still(&shown),
                 Patch::Charts => self.charts(&shown),
                 Patch::Recolor => self.recolor(&shown),
-                Patch::Churn => self.churn(&shown),
+                Patch::Cards => self.cards(&shown),
                 Patch::Reorder => self.reorder(&shown),
                 Patch::Deep => self.deep(&shown),
                 Patch::Scroll => self.scroll(&shown),

@@ -1,8 +1,8 @@
 //! The patchwork: nine patches of the still wall's tiles, three across and
 //! three down. Two never change. In the other seven a frame changes a small
 //! part and leaves the rest as it was, each patch in a way of its own: one
-//! row of its tiles, two items of a row, one row of a list, one word of a
-//! paragraph, one tile under others. A framework that keeps what did not
+//! row of its tiles, the places of its cards, two items of a row, one row
+//! of a list, one word of a paragraph, one tile under others. A framework that keeps what did not
 //! change pays for the part that did; one that builds the screen again each
 //! frame pays for all of it. Each kind of change costs the two designs
 //! differently, so no one design pays little for all nine.
@@ -28,9 +28,10 @@ pub enum Patch {
     /// Tiles whose content never changes and whose fill changes every
     /// few frames, one row of the tiles each frame.
     Recolor,
-    /// Cells that show another kind of content every few frames, one row of
-    /// the cells each frame.
-    Churn,
+    /// Cards, each a header over rows of tiles, that move every frame: one
+    /// slides in at the top and pushes the others down until the last one
+    /// has left, then two of them change places and change back.
+    Cards,
     /// A wrapping row of items 1 to 3 tiles wide, two of which change places
     /// every frame.
     Reorder,
@@ -52,7 +53,7 @@ impl Patch {
         Self::Still,
         Self::Charts,
         Self::Recolor,
-        Self::Churn,
+        Self::Cards,
         Self::Reorder,
         Self::Deep,
         Self::Scroll,
@@ -108,25 +109,125 @@ pub fn patchwork_recolor_rgb(index: usize, frame: u32, turn: InTurn) -> [u8; 3] 
     crate::PALETTE_RGB[(index + turn.step(index, frame)) % crate::PALETTE_RGB.len()]
 }
 
-/// What a cell of the churn patch shows.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum ChurnKind {
-    /// The wall's tile: a label over a dot and a value.
-    Tile,
-    /// A fill of the tile's dot color, and nothing on it.
-    Blank,
-    /// The tile's fill with its label alone.
-    Label,
+/// The frames one move of the cards patch takes: a card's way in, or two
+/// cards' way to each other's places and back.
+pub const PATCHWORK_CARD_FRAMES: u32 = 32;
+
+/// The cards patch for a patch of `columns` by `rows` tiles, `patch_height`
+/// points tall: how large a card is and how many of them the patch holds.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct Cards {
+    /// The tiles across a card.
+    pub columns: usize,
+    /// The rows of tiles under a card's header.
+    pub rows: usize,
+    /// The height of a card: its header, as tall as a tile, and its rows,
+    /// `WALL_GAP` apart.
+    pub height: f32,
+    /// The cards that rest in the patch, one under another `WALL_GAP` apart.
+    pub slots: usize,
 }
 
-/// What cell `index` of the churn patch shows in frame `frame`: each cell
-/// goes through the three kinds.
-pub fn patchwork_churn(index: usize, frame: u32, turn: InTurn) -> ChurnKind {
-    match turn.step(index, frame) % 3 {
-        0 => ChurnKind::Tile,
-        1 => ChurnKind::Blank,
-        _ => ChurnKind::Label,
+/// A card of the cards patch in a frame.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct CardPlace {
+    /// The card's number: it names the card's header and its tiles, and
+    /// stays with the card as it moves.
+    pub id: usize,
+    /// The card's top, in points from the patch's top; above 0 while the
+    /// card is on its way in.
+    pub top: f32,
+}
+
+impl Cards {
+    /// The cards of a patch `columns` by `rows` tiles of `tile_height`
+    /// points, in a patch `patch_height` points tall: a card holds a quarter
+    /// of the patch's rows.
+    pub fn new(columns: usize, rows: usize, tile_height: f32, patch_height: f32) -> Self {
+        let card_rows = (rows / 4).max(1);
+        let height = tile_height + card_rows as f32 * (tile_height + WALL_GAP);
+        Self {
+            columns,
+            rows: card_rows,
+            height,
+            slots: (((patch_height - WALL_GAP) / (height + WALL_GAP)) as usize).max(1),
+        }
     }
+
+    /// The places a frame may show a card at: the resting cards and the one
+    /// on its way in.
+    pub fn places(self) -> usize {
+        self.slots + 1
+    }
+
+    /// The card at place `place` in frame `frame`, the topmost first; none
+    /// at the last place while no card is on its way in. Cards are drawn in
+    /// this order, so a later one lies over an earlier one where two cross.
+    ///
+    /// The moves alternate, `PATCHWORK_CARD_FRAMES` frames each. In the
+    /// first a new card slides in from above the patch and every other card
+    /// moves down by a card, the last one out of the patch. In the second
+    /// the first and the third card (or the last, of fewer than three) move
+    /// to each other's places and back.
+    pub fn place(self, place: usize, frame: u32) -> Option<CardPlace> {
+        let moves = (frame / PATCHWORK_CARD_FRAMES) as usize;
+        let along = (frame % PATCHWORK_CARD_FRAMES) as f32 / PATCHWORK_CARD_FRAMES as f32;
+        let pitch = self.height + WALL_GAP;
+        // The cards that came in so far, the one on its way in among them.
+        let came = moves.div_ceil(2) + (moves + 1) % 2;
+        if moves % 2 == 0 {
+            // The card at the first place is new; the others moved down.
+            Some(CardPlace {
+                id: (came + self.slots - 1).checked_sub(place)?,
+                top: WALL_GAP + (place as f32 - 1.0 + along) * pitch,
+            })
+        } else if place < self.slots {
+            let other = 2.min(self.slots - 1);
+            let reach = (other as f32 * pitch) * (1.0 - (2.0 * along - 1.0).abs());
+            let moved = if place == 0 {
+                reach
+            } else if place == other {
+                -reach
+            } else {
+                0.0
+            };
+            Some(CardPlace {
+                id: came + self.slots - 1 - place,
+                top: WALL_GAP + place as f32 * pitch + moved,
+            })
+        } else {
+            None
+        }
+    }
+
+    /// The top of card `id` in frame `frame`, while the frame shows it.
+    pub fn top(self, id: usize, frame: u32) -> Option<f32> {
+        (0..self.places())
+            .filter_map(|place| self.place(place, frame))
+            .find(|card| card.id == id)
+            .map(|card| card.top)
+    }
+
+    /// The tiles of a card.
+    pub fn tiles(self) -> usize {
+        self.columns * self.rows
+    }
+}
+
+/// The header of card `id` of the cards patch.
+pub fn patchwork_card_title(id: usize) -> String {
+    format!("Group {:05}", id % 100_000)
+}
+
+/// The fill of card `id`'s header.
+pub fn patchwork_card_rgb(id: usize) -> [u8; 3] {
+    crate::GRADIENT_END_RGB[id % crate::GRADIENT_END_RGB.len()]
+}
+
+/// The wall tile at place `tile` of card `id`, whose card holds `tiles`
+/// tiles: no two cards on the screen hold the same tile.
+pub fn patchwork_card_tile(id: usize, tile: usize, tiles: usize) -> usize {
+    (id * tiles + tile) % 100_000
 }
 
 /// The items of the reorder patch for a patch of `tiles` tiles: they fill

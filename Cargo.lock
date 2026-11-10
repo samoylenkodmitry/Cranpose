@@ -4930,6 +4930,7 @@ dependencies = [
  "cranpose-core",
  "cranpose-foundation",
  "cranpose-ui",
+ "gif",
  "log",
  "perf-data",
  "wasm-bindgen-futures",
