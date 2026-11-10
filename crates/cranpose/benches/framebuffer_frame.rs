@@ -14,7 +14,9 @@
 //! clock or a sensor reading does: each frame composes, measures and draws
 //! that text again. `TEXT=draw` draws that line in the draw phase instead,
 //! reading the number there: frames then draw it again without composing or
-//! laying out.
+//! laying out. `TEXT=framed` composes that line over a background inside
+//! a border, as a badge shows a count: each frame draws the node's own
+//! draws around its new text.
 //!
 //! `STRIP_ROWS` (default 0, an area at once) draws each area in strips of
 //! that many rows, as a host with a small buffer does, and `REDRAW=all`
@@ -82,7 +84,7 @@ mod still_wall;
 #[path = "../tests/support/text_style.rs"]
 mod text_style;
 
-use reading::{ComposedReading, DrawnReading};
+use reading::{ComposedReading, DrawnReading, FramedReading};
 
 const WIDTH: u32 = 320;
 const HEIGHT: u32 = 240;
@@ -104,17 +106,19 @@ fn nest_depth() -> usize {
 }
 
 /// The line of text that changes every frame, if any: `TEXT=frame` composes
-/// it, `TEXT=draw` draws it.
+/// it, `TEXT=framed` composes it inside a frame, `TEXT=draw` draws it.
 #[derive(Clone, Copy, PartialEq)]
 enum TickerText {
     None,
     Composed,
+    Framed,
     Drawn,
 }
 
 fn ticker_text() -> TickerText {
     match std::env::var("TEXT").as_deref() {
         Ok("frame") => TickerText::Composed,
+        Ok("framed") => TickerText::Framed,
         Ok("draw") => TickerText::Drawn,
         _ => TickerText::None,
     }
@@ -379,6 +383,7 @@ fn BarScreen() {
             match ticker_text() {
                 TickerText::None => {}
                 TickerText::Composed => ComposedReading(TextStyle::default()),
+                TickerText::Framed => FramedReading(TextStyle::default()),
                 TickerText::Drawn => DrawnReading(Color::WHITE, DrawTextStyle::default().font_size),
             }
             Nested(nest_depth());
