@@ -127,6 +127,8 @@ private fun Patches(frame: androidx.compose.runtime.MutableIntState, freeze: Int
     val chat = rememberChat()
     val rowPx = with(LocalDensity.current) { (grid.tiles.height + WALL_GAP).dp.toPx() }
     LaunchedEffect(freeze, grid) {
+        // A new grid starts the frames over, and the list with them.
+        list.scrollToItem(0)
         var index = 0
         while (isActive) {
             withFrameNanos { }
