@@ -273,6 +273,15 @@ impl SceneStore {
         }
     }
 
+    // The reach of the record at `index`.
+    pub(super) fn reach(&self, index: usize) -> Reach {
+        match self.tree[index].reach_state {
+            ReachState::Empty => Reach::Empty,
+            ReachState::Finite => Reach::Finite(self.geo[index].reach),
+            ReachState::Unknown => Reach::Unknown,
+        }
+    }
+
     pub(super) fn set_reach(&mut self, index: usize, reach: Reach) {
         let (state, rect) = match reach {
             Reach::Empty => (ReachState::Empty, Rect::default()),

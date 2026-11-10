@@ -9,7 +9,6 @@ use cranpose_ui_graphics::{BlendMode, ColorFilter, CompositingStrategy, DrawPrim
 use super::{
     Extent, Item, ItemKind, LayerProps, Placement, Reach, RecordFlags, RecordKind, SceneStore,
     ShapeRef,
-    records::{GeoRecord, ReachState, RecordNode, TreeRecord, WarmRecord},
 };
 use crate::{
     graph::{
@@ -25,11 +24,6 @@ use crate::{
 pub struct LayerRef<'a> {
     pub(super) store: &'a SceneStore,
     pub(super) id: RecordId,
-    // The record's rows, read once when the view is made: the walks read
-    // several fields of each record they visit.
-    tree: &'a TreeRecord,
-    geo: &'a GeoRecord,
-    warm: &'a WarmRecord,
 }
 
 /// One item of a record, in draw order.
@@ -79,14 +73,7 @@ impl RecordChanges {
 impl<'a> LayerRef<'a> {
     #[inline]
     pub(crate) fn new(store: &'a SceneStore, id: RecordId) -> Self {
-        let index = id.index();
-        Self {
-            store,
-            id,
-            tree: &store.tree[index],
-            geo: &store.geo[index],
-            warm: &store.warm[index],
-        }
+        Self { store, id }
     }
 
     /// The store that holds the record.
@@ -104,7 +91,7 @@ impl<'a> LayerRef<'a> {
     /// What the record draws for.
     #[inline]
     pub fn kind(self) -> RecordKind {
-        self.tree.kind
+        self.store.tree[self.id.index()].kind
     }
 
     /// The layout node of a node's layer or leaf; `None` for a wrapper, a
@@ -140,41 +127,39 @@ impl<'a> LayerRef<'a> {
     /// The layout node the record draws for, whatever its kind.
     #[inline]
     pub fn owner(self) -> Option<NodeId> {
-        self.warm.node.map(RecordNode::id)
+        self.store.node(self.id)
     }
 
     /// The record that holds this one.
     #[inline]
     pub fn parent(self) -> Option<Self> {
-        self.tree.parent.map(|parent| Self::new(self.store, parent))
+        self.store.tree[self.id.index()]
+            .parent
+            .map(|parent| Self::new(self.store, parent))
     }
 
     /// The properties the record keeps beyond its fixed-size parts.
     #[inline]
     pub fn props(self) -> Option<&'a LayerProps> {
-        if !self.tree.flags.contains(RecordFlags::HAS_PROPS) {
-            return None;
-        }
-        let store = self.store;
-        self.warm.props.map(|props| &store.props[props.index()])
+        self.store.props(self.id)
     }
 
     /// The record's flags.
     #[inline]
     pub fn flags(self) -> RecordFlags {
-        self.tree.flags
+        self.store.tree[self.id.index()].flags
     }
 
     /// The node's rect, `(0, 0, size)`, where its pointer handlers are.
     #[inline]
     pub fn node_rect(self) -> Rect {
-        self.geo.node_rect()
+        self.store.geo[self.id.index()].node_rect()
     }
 
     /// The node's size.
     #[inline]
     pub fn size(self) -> Size {
-        let [width, height] = self.geo.size;
+        let [width, height] = self.store.geo[self.id.index()].size;
         Size { width, height }
     }
 
@@ -235,16 +220,14 @@ impl<'a> LayerRef<'a> {
     /// are placed.
     #[inline]
     pub fn content_offset(self) -> Point {
-        let [x, y] = self.warm.content_offset;
-        Point::new(x, y)
+        self.store.content_offset(self.id)
     }
 
     /// Where layout placed the record within its parent's content, before
     /// the parent's content offset.
     #[inline]
     pub fn origin_in_parent(self) -> Point {
-        let [x, y] = self.geo.placement;
-        Point::new(x, y)
+        self.store.origin_in_parent(self.id)
     }
 
     /// Whether the record lies in a motion context such as an animated
@@ -273,13 +256,9 @@ impl<'a> LayerRef<'a> {
     /// The graphics layer properties; defaults when none were set.
     #[inline]
     pub fn graphics_layer(self) -> &'a GraphicsLayer {
-        let store = self.store;
-        self.warm
-            .graphics_layer
-            .filter(|_| self.tree.flags.contains(RecordFlags::HAS_GRAPHICS_LAYER))
-            .map_or(&GraphicsLayer::DEFAULT, |slot| {
-                &store.graphics_layers[slot.index()]
-            })
+        self.store
+            .graphics_layer(self.id)
+            .unwrap_or(&GraphicsLayer::DEFAULT)
     }
 
     /// Whether the record cuts its content to its local bounds.
@@ -321,11 +300,7 @@ impl<'a> LayerRef<'a> {
         if self.flags().contains(RecordFlags::REACH_STALE) {
             return Reach::Unknown;
         }
-        match self.tree.reach_state {
-            ReachState::Empty => Reach::Empty,
-            ReachState::Finite => Reach::Finite(self.geo.reach),
-            ReachState::Unknown => Reach::Unknown,
-        }
+        self.store.reach(self.id.index())
     }
 
     /// Where the record's own draws reach, beside its children's, in its
@@ -335,7 +310,7 @@ impl<'a> LayerRef<'a> {
         if self.flags().contains(RecordFlags::REACH_STALE) {
             return Reach::Unknown;
         }
-        let marks = self.warm.own_marks;
+        let marks = self.store.warm[self.id.index()].own_marks;
         super::own_marks::reach(self.store.marks.span(marks)).within(self.visual_clip_rect())
     }
 
@@ -505,7 +480,7 @@ impl<'a> LayerRef<'a> {
     /// What the record and its subtree were at their last changes.
     #[inline]
     pub fn changes(self) -> RecordChanges {
-        let row = self.tree;
+        let row = &self.store.tree[self.id.index()];
         let (subtree, own) = (row.subtree_rev, row.content_rev);
         RecordChanges {
             store: self.store.id(),
@@ -518,14 +493,14 @@ impl<'a> LayerRef<'a> {
     /// How many items the record holds.
     #[inline]
     pub fn item_count(self) -> usize {
-        self.store.items.span(self.tree.items).len()
+        self.store.items(self.id).len()
     }
 
     /// The record's item at `index` in draw order, read without the items
     /// before it.
     #[inline]
     pub fn item(self, index: usize) -> Option<ItemRef<'a>> {
-        let item = *self.store.items.span(self.tree.items).get(index)?;
+        let item = *self.store.items(self.id).get(index)?;
         Some(ItemRef::of(self.store, item))
     }
 
@@ -543,11 +518,7 @@ impl<'a> LayerRef<'a> {
     /// items themselves.
     #[inline]
     pub fn item_kinds(self) -> impl Iterator<Item = ItemKind> + 'a {
-        self.store
-            .items
-            .span(self.tree.items)
-            .iter()
-            .map(|item| item.kind())
+        self.store.items(self.id).iter().map(|item| item.kind())
     }
 
     /// The record's own draws in draw order: its items without its children.
