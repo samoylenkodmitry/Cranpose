@@ -1,4 +1,4 @@
-//! The patchwork (`../../../README.md`): eight patches of the still wall's
+//! The patchwork (`../../../README.md`): nine patches of the still wall's
 //! tiles, each of which changes in a way of its own every frame.
 //!
 //! In Cranpose's idiom each patch reads the frame as late as it can: the
@@ -15,7 +15,10 @@ use super::{
     text_style,
     wall::{BACKGROUND, Clock, INK, ONE_LINE, Tile, Wall, rgb, tile_content, tile_rows},
 };
-use crate::data::{self, ChurnKind, PATCH_COLUMNS, PATCH_ROWS, PATCHWORK_DEPTH, Patch, WALL_GAP};
+use crate::data::{
+    self, ChurnKind, PATCH_COLUMNS, PATCH_ROWS, PATCHWORK_CHART_POINTS, PATCHWORK_DEPTH, Patch,
+    WALL_GAP,
+};
 
 /// The patchwork's tier, the frame it freezes on (0 runs on) and the one
 /// patch it shows, when a launch asks for one alone.
@@ -111,20 +114,26 @@ fn Patches(frame: MutableState<u32>, load: PatchworkLoad, grid: Grid) {
                         Box(grid.patch(), BoxSpec::default(), || {});
                         continue;
                     }
-                    match patch {
-                        Patch::Still => Still(grid),
-                        Patch::Recolor => Recolor(frame, grid),
-                        Patch::Churn => Churn(frame, grid),
-                        Patch::Reorder => Reorder(frame, grid),
-                        Patch::Deep => Deep(frame, grid),
-                        Patch::Jump => Jump(list_state, grid),
-                        Patch::Paragraph => Paragraph(frame, grid),
-                        Patch::Pile => Pile(frame, grid),
-                    }
+                    show(*patch, frame, list_state, grid);
                 }
             });
         }
     });
+}
+
+// Patch `patch` in its box.
+fn show(patch: Patch, frame: MutableState<u32>, list_state: LazyListState, grid: Grid) {
+    match patch {
+        Patch::Still => Still(grid),
+        Patch::Charts => Charts(grid),
+        Patch::Recolor => Recolor(frame, grid),
+        Patch::Churn => Churn(frame, grid),
+        Patch::Reorder => Reorder(frame, grid),
+        Patch::Deep => Deep(frame, grid),
+        Patch::Jump => Jump(list_state, grid),
+        Patch::Paragraph => Paragraph(frame, grid),
+        Patch::Pile => Pile(frame, grid),
+    }
 }
 
 // Tiles that never change.
@@ -132,6 +141,47 @@ fn Patches(frame: MutableState<u32>, load: PatchworkLoad, grid: Grid) {
 fn Still(grid: Grid) {
     Box(grid.patch(), BoxSpec::default(), move || {
         Wall(grid.columns, grid.rows, grid.width, grid.height);
+    });
+}
+
+// Line charts that never change: each draws its line in a draw block that
+// reads no state, so no frame records it again.
+#[composable]
+fn Charts(grid: Grid) {
+    let (columns, rows) = data::patchwork_pairs(grid.columns, grid.rows);
+    Box(grid.patch(), BoxSpec::default(), move || {
+        tile_rows(columns, rows, move |index| {
+            Chart(
+                index,
+                data::patchwork_double(grid.width),
+                data::patchwork_double(grid.height),
+            );
+        });
+    });
+}
+
+#[composable]
+fn Chart(index: usize, width: f32, height: f32) {
+    Canvas(Modifier::empty().size_points(width, height), move |scope| {
+        let size = scope.size();
+        let step = size.width / (PATCHWORK_CHART_POINTS - 1) as f32;
+        let mut line = Path::new();
+        for point in 0..PATCHWORK_CHART_POINTS {
+            let at = Point {
+                x: point as f32 * step,
+                y: size.height * (1.0 - data::patchwork_chart_value(index, point)),
+            };
+            if point == 0 {
+                line.move_to(at);
+            } else {
+                line.line_to(at);
+            }
+        }
+        scope.draw_path(
+            &line,
+            Brush::solid(rgb(data::patchwork_chart_rgb(index))),
+            DrawStyle::Stroke(Stroke::new(data::PATCHWORK_CHART_STROKE)),
+        );
     });
 }
 

@@ -460,14 +460,14 @@ body.still-wall {
   will-change: transform;
 }
 
-/* The patchwork (`src/patchwork.ts`): eight patches of the wall's tiles,
-   four across and two down. A patch cuts what lies past it and lays out
+/* The patchwork (`src/patchwork.ts`): nine patches of the wall's tiles,
+   three across and three down. A patch cuts what lies past it and lays out
    apart from the others. */
 .patchwork {
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: repeat(4, var(--patch-width));
+  grid-template-columns: repeat(3, var(--patch-width));
   grid-auto-rows: var(--patch-height);
   line-height: 1.4;
 }
@@ -490,6 +490,13 @@ body.still-wall {
 .patch-pairs {
   grid-template-columns: repeat(var(--pairs, 1), calc(2 * var(--width) + 1px));
   grid-auto-rows: calc(2 * var(--height) + 1px);
+}
+
+.patch-chart {
+  width: 100%;
+  height: 100%;
+  fill: none;
+  stroke-width: 1px;
 }
 
 .patch-flow {

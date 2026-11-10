@@ -1,4 +1,4 @@
-//! The patchwork in egui (`../README.md`): eight patches of the still wall's
+//! The patchwork in egui (`../README.md`): nine patches of the still wall's
 //! tiles, each of which changes in a way of its own every frame.
 //!
 //! egui paints every patch every frame. The text of the tiles that never
@@ -93,6 +93,34 @@ impl Patchwork {
                 index,
                 text,
             );
+        }
+    }
+
+    fn charts(&self, shown: &Shown) {
+        let (columns, rows) = patchwork_pairs(self.grid.0, self.grid.1);
+        let (width, height) = (
+            patchwork_double(self.tier.tile_width),
+            patchwork_double(self.tier.tile_height),
+        );
+        let step = width / (PATCHWORK_CHART_POINTS - 1) as f32;
+        for index in 0..columns * rows {
+            let min = shown.rect.min
+                + vec2(
+                    WALL_GAP + (index % columns) as f32 * (width + WALL_GAP),
+                    WALL_GAP + (index / columns) as f32 * (height + WALL_GAP),
+                );
+            let points = (0..PATCHWORK_CHART_POINTS)
+                .map(|point| {
+                    min + vec2(
+                        point as f32 * step,
+                        height * (1.0 - patchwork_chart_value(index, point)),
+                    )
+                })
+                .collect();
+            shown.painter.add(egui::Shape::line(
+                points,
+                egui::Stroke::new(PATCHWORK_CHART_STROKE, rgb(patchwork_chart_rgb(index))),
+            ));
         }
     }
 
@@ -290,6 +318,7 @@ impl eframe::App for Patchwork {
             };
             match kind {
                 Patch::Still => self.still(&shown),
+                Patch::Charts => self.charts(&shown),
                 Patch::Recolor => self.recolor(&shown),
                 Patch::Churn => self.churn(&shown),
                 Patch::Reorder => self.reorder(&shown),

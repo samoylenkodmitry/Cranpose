@@ -1,4 +1,4 @@
-// The patchwork as a web page (`../../README.md`): eight patches of the still
+// The patchwork as a web page (`../../README.md`): nine patches of the still
 // wall's tiles, each of which changes in a way of its own every frame. Its
 // data follows `perf-data/src/patchwork.rs` bit for bit.
 //
@@ -14,6 +14,7 @@ import { PALETTE } from '../../shared-ts/data.js';
 import { GAP, TIERS, clock, dotColor, element, fit, label, tile, tileSizes, value } from './wall.js';
 
 const DEPTH = 12;
+const CHART_POINTS = 512;
 const JUMP = 37;
 const PILE_ALPHA = '99';
 const PILE_OPAQUE = '#000000';
@@ -42,6 +43,33 @@ function still(area: HTMLElement, tiles: number) {
   const grid = patch(area, 'patch-grid');
   for (let index = 0; index < tiles; index++) {
     tile(index, grid);
+  }
+}
+
+// Each chart is an SVG line the page builds once.
+function charts(area: HTMLElement, columns: number, rows: number, width: number, height: number) {
+  const grid = patch(area, 'patch-grid patch-pairs');
+  const pairs = Math.max(1, Math.trunc(columns / 2));
+  grid.style.setProperty('--pairs', String(pairs));
+  const count = pairs * Math.max(1, Math.trunc(rows / 2));
+  const [chartWidth, chartHeight] = [2 * width + GAP, 2 * height + GAP];
+  const step = chartWidth / (CHART_POINTS - 1);
+  const svg = 'http://www.w3.org/2000/svg';
+  for (let index = 0; index < count; index++) {
+    const points: string[] = [];
+    for (let point = 0; point < CHART_POINTS; point++) {
+      const at = point * 0.125;
+      const value =
+        0.5 + 0.38 * Math.sin(at * 0.32 + index * 0.77) + 0.08 * Math.sin(at * 1.7 + index);
+      points.push(`${point * step},${chartHeight * (1 - value)}`);
+    }
+    const chart = document.createElementNS(svg, 'svg');
+    chart.setAttribute('class', 'patch-chart');
+    const line = document.createElementNS(svg, 'polyline');
+    line.setAttribute('points', points.join(' '));
+    line.setAttribute('stroke', PALETTE[index % PALETTE.length]);
+    chart.append(line);
+    grid.append(chart);
   }
 }
 
@@ -201,8 +229,8 @@ export function patchwork(tier: number, freeze: number, log: (message: string) =
   // Builds the patches for the tiles that fit in one, again only when that
   // number changes.
   const lay = () => {
-    const patchWidth = Math.floor(area.clientWidth / 4);
-    const patchHeight = Math.floor(area.clientHeight / 2);
+    const patchWidth = Math.floor(area.clientWidth / 3);
+    const patchHeight = Math.floor(area.clientHeight / 3);
     const across = fit(patchWidth, width);
     const down = fit(patchHeight, height);
     if (across === columns && down === rows) {
@@ -216,6 +244,7 @@ export function patchwork(tier: number, freeze: number, log: (message: string) =
     area.style.setProperty('--columns', String(columns));
     area.replaceChildren();
     still(area, tiles);
+    charts(area, columns, rows, width, height);
     patches = [
       recolor(area, tiles),
       churn(area, tiles),

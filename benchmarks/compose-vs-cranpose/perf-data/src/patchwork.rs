@@ -1,8 +1,8 @@
-//! The patchwork: eight patches of the still wall's tiles, four across and
-//! two down, each of which changes in a way of its own every frame. A patch
-//! costs a framework that keeps its nodes in one way and a framework that
-//! builds the screen again each frame in another, so no one design pays
-//! little for all eight.
+//! The patchwork: nine patches of the still wall's tiles, three across and
+//! three down. Two never change and seven change every frame, each in a way
+//! of its own. A patch costs a framework that keeps its nodes in one way and
+//! a framework that builds the screen again each frame in another, so no one
+//! design pays little for all nine.
 //!
 //! Everything a frame shows follows from its frame index `k`, in integer
 //! arithmetic, as on the still wall, whose tiers, tiles and clock line the
@@ -11,15 +11,17 @@
 use crate::wall::{WALL_GAP, wall_label};
 
 /// The patches across the screen.
-pub const PATCH_COLUMNS: usize = 4;
+pub const PATCH_COLUMNS: usize = 3;
 /// The patches down the screen.
-pub const PATCH_ROWS: usize = 2;
+pub const PATCH_ROWS: usize = 3;
 
 /// The patches in the order the screen shows them, row by row.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Patch {
     /// Tiles that never change.
     Still,
+    /// Line charts of many points that never change.
+    Charts,
     /// Tiles whose fill changes every frame and whose content never does.
     Recolor,
     /// Cells that show another kind of content every frame.
@@ -43,6 +45,7 @@ impl Patch {
     /// Every patch, in the screen's order.
     pub const ALL: [Self; PATCH_COLUMNS * PATCH_ROWS] = [
         Self::Still,
+        Self::Charts,
         Self::Recolor,
         Self::Churn,
         Self::Reorder,
@@ -56,6 +59,26 @@ impl Patch {
 /// The step, in tiles or rows, of everything that jumps: with the still
 /// wall's cursor it crosses a patch in a few frames.
 const JUMP: usize = 37;
+
+/// The points of one chart of the charts patch. A chart covers 2 by 2 tiles
+/// and the gap between them, so its points lie closer than a point apart at
+/// the higher tiers: a chart of more samples than it has pixels.
+pub const PATCHWORK_CHART_POINTS: usize = 512;
+/// The width of a chart's line, in points.
+pub const PATCHWORK_CHART_STROKE: f32 = 1.0;
+
+/// The height of chart `index` at `point`, as a fraction of the chart: the
+/// gauntlet's sparkline on frame 0, eight points of the chart to one of the
+/// sparkline's.
+pub fn patchwork_chart_value(index: usize, point: usize) -> f32 {
+    let at = point as f32 * 0.125;
+    0.5 + 0.38 * (at * 0.32 + index as f32 * 0.77).sin() + 0.08 * (at * 1.7 + index as f32).sin()
+}
+
+/// The color of chart `index`'s line.
+pub fn patchwork_chart_rgb(index: usize) -> [u8; 3] {
+    crate::PALETTE_RGB[index % crate::PALETTE_RGB.len()]
+}
 
 /// The fill of tile `index` of the recolor patch in frame `frame`.
 pub fn patchwork_recolor_rgb(index: usize, frame: u32) -> [u8; 3] {
@@ -111,8 +134,9 @@ pub fn patchwork_reorder_width(units: usize, tile_width: f32) -> f32 {
 /// inside the one around it.
 pub const PATCHWORK_DEPTH: usize = 12;
 
-/// The nests across and down a patch of `columns` by `rows` tiles, and the
-/// tiles across and down the pile patch: both hold items 2 by 2 tiles large.
+/// The nests across and down the deep patch, and the charts across and down
+/// the charts patch, for a patch of `columns` by `rows` tiles: both hold
+/// items 2 by 2 tiles large.
 pub fn patchwork_pairs(columns: usize, rows: usize) -> (usize, usize) {
     ((columns / 2).max(1), (rows / 2).max(1))
 }
