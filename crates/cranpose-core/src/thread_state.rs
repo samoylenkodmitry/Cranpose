@@ -170,6 +170,8 @@ pub(crate) struct RuntimeThreadState {
     )]
     pub(crate) spare_write_states: RefCell<Vec<Box<crate::slot::SlotWriteSessionState>>>,
     pub(crate) bridges: RefCell<FixedHashMap<u64, Rc<dyn Any>>>,
+    #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+    pub(crate) worker_pool: RefCell<crate::worker_pool::Pool>,
     /// The constant values `__constant` keeps, by slot: empty until the
     /// first one.
     pub(crate) constants: RefCell<Vec<Option<KeptConstant>>>,
@@ -209,6 +211,8 @@ impl RuntimeThreadState {
             spare_composer_stacks: Cell::new(None),
             spare_write_states: RefCell::new(Vec::new()),
             bridges: RefCell::new(fixed_hash_map()),
+            #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+            worker_pool: RefCell::new(crate::worker_pool::Pool::new()),
             constants: RefCell::new(Vec::new()),
             computed_observer: RefCell::new(None),
             #[cfg(any(test, debug_assertions))]
@@ -244,6 +248,8 @@ impl RuntimeThreadState {
             spare_composer_stacks,
             spare_write_states,
             bridges,
+            #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+            worker_pool,
             constants,
             computed_observer,
             #[cfg(any(test, debug_assertions))]
@@ -271,6 +277,8 @@ impl RuntimeThreadState {
         spare_composer_stacks.swap(&other.spare_composer_stacks);
         swap_values(spare_write_states, &other.spare_write_states);
         swap_values(bridges, &other.bridges);
+        #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+        swap_values(worker_pool, &other.worker_pool);
         swap_values(constants, &other.constants);
         swap_values(computed_observer, &other.computed_observer);
         #[cfg(any(test, debug_assertions))]

@@ -10,7 +10,7 @@ use std::{
 
 pub use cranpose_core::Composition;
 use cranpose_core::{ApplierGuard, MemoryApplier, NodeError, NodeId, RuntimeHandle, location_key};
-pub use cranpose_macros::composable;
+pub use cranpose_macros::{composable, worker_job};
 #[cfg(feature = "localization")]
 pub use cranpose_macros::{message, tr, translation_messages, translations};
 #[cfg(feature = "localization")]

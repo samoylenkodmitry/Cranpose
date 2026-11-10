@@ -20,6 +20,7 @@ mod localization;
 mod packed_params;
 mod preview;
 mod returning_call;
+mod worker_job;
 
 /// Localizes readable source text using the nearest localization provider.
 /// Named arguments use `name = expression`; optional literal metadata is
@@ -64,6 +65,22 @@ pub fn translation_messages(input: TokenStream) -> TokenStream {
 #[cfg(test)]
 #[path = "tests/preview_tests.rs"]
 mod preview_tests;
+
+/// Makes a function a job that `LaunchedEffectScope::launch_worker` runs off
+/// the UI thread: on a thread where the platform has threads, in a Web Worker
+/// in a browser.
+///
+/// The function takes one parameter and returns a value. Both types implement
+/// `WorkerData`. The function's name is the job's name, one of a kind in the
+/// app. The attribute replaces the function with a unit type of the same
+/// name, which is what `launch_worker` takes.
+#[proc_macro_attribute]
+pub fn worker_job(_args: TokenStream, item: TokenStream) -> TokenStream {
+    let item = syn::parse_macro_input!(item as ItemFn);
+    worker_job::expand(&item)
+        .unwrap_or_else(|error| error.to_compile_error())
+        .into()
+}
 
 /// Registers a parameterless component fixture for IDE previews.
 ///

@@ -1335,6 +1335,7 @@ dependencies = [
  "foldhash",
  "futures-task",
  "hashbrown 0.17.1",
+ "js-sys",
  "log",
  "pollster",
  "portable-atomic",
