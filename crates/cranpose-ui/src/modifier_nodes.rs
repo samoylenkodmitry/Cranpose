@@ -11,7 +11,6 @@ use cranpose_foundation::{
     NodeState, PointerEvent, PointerInputNode, Size,
 };
 use cranpose_ui_graphics::{ColorFilter, DrawScope, PointerIcon};
-use cranpose_ui_layout::{Alignment, HorizontalAlignment, VerticalAlignment};
 
 mod alignment;
 mod background;
@@ -24,17 +23,17 @@ mod padding;
 mod size;
 mod weight;
 
-pub(crate) use alignment::{AlignmentElement, AlignmentNode};
+pub(crate) use alignment::AlignmentElement;
 pub use background::{BackgroundElement, CornerShapeElement};
 pub use clickable::{ClickableElement, ClickableNode};
-pub(crate) use clip::{ClipToBoundsElement, ClipToBoundsNode};
+pub(crate) use clip::ClipToBoundsElement;
 pub use fill::{FillDirection, FillElement};
 pub(crate) use intrinsic_size::IntrinsicSizeElement;
 pub use offset::{FractionalOffsetElement, FractionalOffsetNode, OffsetElement, OffsetNode};
 pub use padding::PaddingElement;
 pub(crate) use padding::device_padding;
 pub use size::SizeElement;
-pub(crate) use weight::{WeightElement, WeightNode};
+pub(crate) use weight::WeightElement;
 
 use crate::{
     draw::DrawCommand,
@@ -162,29 +161,6 @@ fn hash_graphics_layer<H: Hasher>(state: &mut H, layer: &GraphicsLayer) {
     state.write_u8(blend_tag);
 }
 
-fn hash_horizontal_alignment<H: Hasher>(state: &mut H, alignment: HorizontalAlignment) {
-    let tag = match alignment {
-        HorizontalAlignment::Start => 0,
-        HorizontalAlignment::CenterHorizontally => 1,
-        HorizontalAlignment::End => 2,
-    };
-    state.write_u8(tag);
-}
-
-fn hash_vertical_alignment<H: Hasher>(state: &mut H, alignment: VerticalAlignment) {
-    let tag = match alignment {
-        VerticalAlignment::Top => 0,
-        VerticalAlignment::CenterVertically => 1,
-        VerticalAlignment::Bottom => 2,
-    };
-    state.write_u8(tag);
-}
-
-fn hash_alignment<H: Hasher>(state: &mut H, alignment: Alignment) {
-    hash_horizontal_alignment(state, alignment.horizontal);
-    hash_vertical_alignment(state, alignment.vertical);
-}
-
 macro_rules! impl_layout_modifier_node {
     ($ty:ty) => {
         impl ModifierNode for $ty {
@@ -234,7 +210,6 @@ macro_rules! impl_draw_modifier_node {
         impl DrawModifierNode for $ty {}
     };
 }
-pub(crate) use impl_draw_modifier_node;
 
 macro_rules! impl_sink_reporter_element {
     ($element:ty, $node:ty) => {

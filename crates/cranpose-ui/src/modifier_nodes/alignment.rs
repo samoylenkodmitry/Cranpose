@@ -1,69 +1,8 @@
-// The alignment modifiers: the node that tells a box, a row or a column
-// where to align the content, and its element.
+// The alignment modifiers, which tell a box, a row or a column where to
+// align the child: a plain element, which a chain keeps as one word.
 
-use std::hash::{Hash, Hasher};
-
-use cranpose_foundation::{
-    DelegatableNode, InvalidationKind, ModifierNode, ModifierNodeContext, ModifierNodeElement,
-    NodeCapabilities, NodeState,
-};
+use cranpose_foundation::{NodeCapabilities, PlainElement};
 use cranpose_ui_layout::{Alignment, HorizontalAlignment, VerticalAlignment};
-
-use super::{hash_alignment, hash_horizontal_alignment, hash_vertical_alignment};
-
-#[derive(Debug)]
-pub(crate) struct AlignmentNode {
-    box_alignment: Option<Alignment>,
-    column_alignment: Option<HorizontalAlignment>,
-    row_alignment: Option<VerticalAlignment>,
-    row_baseline: bool,
-    state: NodeState,
-}
-
-impl AlignmentNode {
-    pub(crate) fn new(
-        box_alignment: Option<Alignment>,
-        column_alignment: Option<HorizontalAlignment>,
-        row_alignment: Option<VerticalAlignment>,
-        row_baseline: bool,
-    ) -> Self {
-        Self {
-            box_alignment,
-            column_alignment,
-            row_alignment,
-            row_baseline,
-            state: NodeState::new(),
-        }
-    }
-
-    pub(crate) fn box_alignment(&self) -> Option<Alignment> {
-        self.box_alignment
-    }
-
-    pub(crate) fn column_alignment(&self) -> Option<HorizontalAlignment> {
-        self.column_alignment
-    }
-
-    pub(crate) fn row_alignment(&self) -> Option<VerticalAlignment> {
-        self.row_alignment
-    }
-
-    pub(crate) fn row_baseline(&self) -> bool {
-        self.row_baseline
-    }
-}
-
-impl DelegatableNode for AlignmentNode {
-    fn node_state(&self) -> &NodeState {
-        &self.state
-    }
-}
-
-impl ModifierNode for AlignmentNode {
-    fn on_attach(&mut self, context: &mut dyn ModifierNodeContext) {
-        context.invalidate(InvalidationKind::Layout);
-    }
-}
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct AlignmentElement {
@@ -71,6 +10,42 @@ pub(crate) struct AlignmentElement {
     column_alignment: Option<HorizontalAlignment>,
     row_alignment: Option<VerticalAlignment>,
     row_baseline: bool,
+}
+
+// The bits of the element's word: each alignment takes two, 0 for none and
+// its place past that, in the order box horizontal, box vertical, column,
+// row; the baseline takes the bit after them.
+const PLACE_BITS: u32 = 2;
+const PLACE_MASK: u32 = (1 << PLACE_BITS) - 1;
+const BASELINE: u32 = 1 << (4 * PLACE_BITS);
+
+const HORIZONTAL: [HorizontalAlignment; 3] = [
+    HorizontalAlignment::Start,
+    HorizontalAlignment::CenterHorizontally,
+    HorizontalAlignment::End,
+];
+const VERTICAL: [VerticalAlignment; 3] = [
+    VerticalAlignment::Top,
+    VerticalAlignment::CenterVertically,
+    VerticalAlignment::Bottom,
+];
+
+// The two bits of `place` among `places`, 0 for `None`.
+fn bits<T: PartialEq>(places: &[T; 3], place: Option<T>) -> u32 {
+    place.map_or(0, |place| {
+        places
+            .iter()
+            .zip(1..)
+            .find_map(|(known, bits)| (*known == place).then_some(bits))
+            .unwrap_or(0)
+    })
+}
+
+// The place the bits at `field` of `word` name among `places`.
+fn place<T: Copy>(places: &[T; 3], word: u32, field: u32) -> Option<T> {
+    let bits = (word >> (field * PLACE_BITS)) & PLACE_MASK;
+    bits.checked_sub(1)
+        .and_then(|index| places.get(index as usize).copied())
 }
 
 impl AlignmentElement {
@@ -109,64 +84,54 @@ impl AlignmentElement {
             row_baseline: true,
         }
     }
-}
 
-impl Hash for AlignmentElement {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        if let Some(alignment) = self.box_alignment {
-            state.write_u8(1);
-            hash_alignment(state, alignment);
-        } else {
-            state.write_u8(0);
-        }
-        if let Some(alignment) = self.column_alignment {
-            state.write_u8(1);
-            hash_horizontal_alignment(state, alignment);
-        } else {
-            state.write_u8(0);
-        }
-        if let Some(alignment) = self.row_alignment {
-            state.write_u8(1);
-            hash_vertical_alignment(state, alignment);
-        } else {
-            state.write_u8(0);
-        }
-        self.row_baseline.hash(state);
+    pub(crate) fn in_box(&self) -> Option<Alignment> {
+        self.box_alignment
+    }
+
+    pub(crate) fn in_column(&self) -> Option<HorizontalAlignment> {
+        self.column_alignment
+    }
+
+    pub(crate) fn in_row(&self) -> Option<VerticalAlignment> {
+        self.row_alignment
+    }
+
+    pub(crate) fn on_row_baseline(&self) -> bool {
+        self.row_baseline
     }
 }
 
-impl ModifierNodeElement for AlignmentElement {
-    type Node = AlignmentNode;
-    const FROM_NODE: Option<fn(&AlignmentNode) -> Self> = Some(|node| Self {
-        box_alignment: node.box_alignment,
-        column_alignment: node.column_alignment,
-        row_alignment: node.row_alignment,
-        row_baseline: node.row_baseline,
-    });
+impl PlainElement for AlignmentElement {
+    const WORDS: usize = 1;
+    const CAPABILITIES: NodeCapabilities = NodeCapabilities::LAYOUT;
 
-    fn create(&self) -> Self::Node {
-        AlignmentNode::new(
-            self.box_alignment,
-            self.column_alignment,
-            self.row_alignment,
-            self.row_baseline,
-        )
+    fn to_words(&self, words: &mut [u32]) {
+        let in_box = self.box_alignment;
+        let fields = [
+            bits(&HORIZONTAL, in_box.map(|alignment| alignment.horizontal)),
+            bits(&VERTICAL, in_box.map(|alignment| alignment.vertical)),
+            bits(&HORIZONTAL, self.column_alignment),
+            bits(&VERTICAL, self.row_alignment),
+        ];
+        let places = fields
+            .iter()
+            .zip(0..)
+            .fold(0, |word, (bits, field)| word | bits << (field * PLACE_BITS));
+        let baseline = if self.row_baseline { BASELINE } else { 0 };
+        words.copy_from_slice(&[places | baseline]);
     }
 
-    fn update(&self, node: &mut Self::Node) {
-        if node.box_alignment != self.box_alignment {
-            node.box_alignment = self.box_alignment;
+    #[inline]
+    fn from_words(words: &[u32]) -> Self {
+        let word = words.first().copied().unwrap_or(0);
+        let in_box = place(&HORIZONTAL, word, 0).zip(place(&VERTICAL, word, 1));
+        Self {
+            box_alignment: in_box
+                .map(|(horizontal, vertical)| Alignment::new(horizontal, vertical)),
+            column_alignment: place(&HORIZONTAL, word, 2),
+            row_alignment: place(&VERTICAL, word, 3),
+            row_baseline: word & BASELINE != 0,
         }
-        if node.column_alignment != self.column_alignment {
-            node.column_alignment = self.column_alignment;
-        }
-        if node.row_alignment != self.row_alignment {
-            node.row_alignment = self.row_alignment;
-        }
-        node.row_baseline = self.row_baseline;
-    }
-
-    fn capabilities(&self) -> NodeCapabilities {
-        NodeCapabilities::LAYOUT
     }
 }

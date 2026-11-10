@@ -55,7 +55,7 @@ pub(crate) use chain::{
 pub(crate) use coordinator_rect::CoordinatorRect;
 use cranpose_foundation::{
     DynModifierElement, ModifierNodeElement, ProgressBarRangeInfo, SemanticsConfiguration,
-    modifier_element,
+    modifier_element, plain_element,
 };
 pub use cranpose_foundation::{
     PointerButton, PointerButtons, PointerEvent, PointerEventKind, PointerSource, RotaryScrollEvent,
@@ -418,7 +418,7 @@ impl Modifier {
         let modifier = crate::thread_state::with(|state| {
             state
                 .clip_to_bounds
-                .get_or_init(|| Self::with_element(ClipToBoundsElement::new()))
+                .get_or_init(|| Self::from_dyn_element(plain_element(ClipToBoundsElement)))
                 .clone()
         });
         let modifier =

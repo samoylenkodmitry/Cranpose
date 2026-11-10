@@ -11,7 +11,7 @@ source_text_checks = 328
 half_state_words = 0
 
 [ast_grep]
-"bool-parameter" = 124
+"bool-parameter" = 122
 "cfg-on-robot-app-feature" = 0
 "drain-collect" = 10
 "get-prefix" = 70
@@ -75,7 +75,7 @@ limit = 1000
 "crates/cranpose-ui/src/layout/mod.rs" = 2361
 "crates/cranpose-ui/src/modifier/mod.rs" = 1146
 "crates/cranpose-ui/src/modifier/scroll.rs" = 1951
-"crates/cranpose-ui/src/modifier_nodes.rs" = 1186
+"crates/cranpose-ui/src/modifier_nodes.rs" = 1161
 "crates/cranpose-ui/src/render_state.rs" = 1300
 "crates/cranpose-ui/src/subcompose_layout.rs" = 1685
 "crates/cranpose-ui/src/text_field_modifier_node.rs" = 1686

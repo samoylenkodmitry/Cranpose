@@ -26,8 +26,8 @@ pub(crate) use shared_parent_data::SharedParentData;
 
 use crate::{
     modifier_nodes::{
-        AlignmentNode, FillDirection, FillElement, OffsetNode, PaddingElement, SizeElement,
-        WeightNode,
+        AlignmentElement, FillDirection, FillElement, OffsetNode, PaddingElement, SizeElement,
+        WeightElement,
     },
     text_modifier_node::TextModifierElement,
 };
@@ -638,6 +638,12 @@ impl Resolution {
             apply_size_node(&mut self.layout, &SizeElement::from_words(words));
         } else if kind == TypeId::of::<FillElement>() {
             self.take_fill(&FillElement::from_words(words));
+        } else if kind == TypeId::of::<WeightElement>() {
+            self.layout
+                .weight
+                .get_or_insert_with(|| WeightElement::from_words(words).layout_weight());
+        } else if kind == TypeId::of::<AlignmentElement>() {
+            apply_alignment(&mut self.layout, &AlignmentElement::from_words(words));
         }
     }
 
@@ -645,17 +651,7 @@ impl Resolution {
     fn take(&mut self, node: &dyn Any) {
         // One type lookup a node: each `downcast_ref` asks for it again.
         let kind = Any::type_id(node);
-        if kind == TypeId::of::<WeightNode>() {
-            if let Some(weight) = node.downcast_ref::<WeightNode>() {
-                self.layout
-                    .weight
-                    .get_or_insert_with(|| weight.layout_weight());
-            }
-        } else if kind == TypeId::of::<AlignmentNode>() {
-            if let Some(alignment) = node.downcast_ref::<AlignmentNode>() {
-                apply_alignment_node(&mut self.layout, alignment);
-            }
-        } else if kind == TypeId::of::<OffsetNode>() {
+        if kind == TypeId::of::<OffsetNode>() {
             if let Some(offset) = node.downcast_ref::<OffsetNode>() {
                 let delta = offset.offset();
                 self.offset.x += delta.x;
@@ -680,19 +676,19 @@ impl Resolution {
         }
     }
 }
-/// Sets the alignments a parent reads from `node` that no outer node set.
-fn apply_alignment_node(layout: &mut LayoutProperties, node: &AlignmentNode) {
+/// Sets the alignments a parent reads from `element` that no outer one set.
+fn apply_alignment(layout: &mut LayoutProperties, element: &AlignmentElement) {
     if layout.box_alignment.is_none() {
-        layout.box_alignment = node.box_alignment();
+        layout.box_alignment = element.in_box();
     }
     if layout.column_alignment.is_none() {
-        layout.column_alignment = node.column_alignment();
+        layout.column_alignment = element.in_column();
     }
     // A row alignment and a baseline alignment both set where a Row child
     // sits across it: the outer one of either kind wins.
     if layout.row_alignment.is_none() && !layout.row_baseline {
-        layout.row_alignment = node.row_alignment();
-        layout.row_baseline = node.row_baseline();
+        layout.row_alignment = element.in_row();
+        layout.row_baseline = element.on_row_baseline();
     }
 }
 

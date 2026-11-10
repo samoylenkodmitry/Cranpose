@@ -22,7 +22,7 @@ use crate::{
         scroll::{MotionContextAnimatedNode, TranslatedContentContextNode},
     },
     modifier_nodes::{
-        BackgroundElement, ClipToBoundsNode, CornerShapeElement, DrawCommandNode,
+        BackgroundElement, ClipToBoundsElement, CornerShapeElement, DrawCommandNode,
         GraphicsLayerNode, PaddingElement, PointerIconNode, SelectableTextNode,
         WindowRectReporterNode,
     },
@@ -139,9 +139,14 @@ fn collect_modifier_slices_into(
 
         // A plain element is a background, a corner shape or a layout
         // modifier, whose coordinator the draws after it belong past.
-        if let Some(insets) =
-            backgrounds.take_plain(&node_ref, (parts, layout_ordinal, padding), density, slices)
-        {
+        let site = PlainSite {
+            parts,
+            ordinal: layout_ordinal,
+            padding,
+            displaceable: has_layout,
+            modifier_index,
+        };
+        if let Some(insets) = backgrounds.take_plain(&node_ref, site, density, slices) {
             padding += insets;
             layout_ordinal += 1;
         }
@@ -238,6 +243,24 @@ struct Backgrounds {
     last_shape: Option<RoundedCornerShape>,
 }
 
+// Where a plain element sits in the walk of its chain: the coordinator the
+// draws at it belong to, which is `ordinal` under `padding`, whether a
+// layout modifier of the chain may displace them, and its entry.
+#[derive(Clone, Copy)]
+struct PlainSite<'a> {
+    parts: Option<&'a Rc<LayoutParts>>,
+    ordinal: usize,
+    padding: EdgeInsets,
+    displaceable: bool,
+    modifier_index: usize,
+}
+
+impl PlainSite<'_> {
+    fn coordinator(&self) -> CoordinatorRect {
+        CoordinatorRect::new(self.parts, self.ordinal, self.padding)
+    }
+}
+
 struct BackgroundSlot {
     color: crate::modifier::Color,
     coordinator: CoordinatorRect,
@@ -264,22 +287,28 @@ impl Backgrounds {
     }
 
     // Takes in the plain element at `node_ref`: a background, which draws
-    // in the rect of the coordinator `ordinal` under `padding`, a corner
-    // shape, or a layout modifier, whose insets at `density` it returns,
-    // zero for all but a padding. `None` for a node.
+    // in the rect of the coordinator at `site`, a corner shape, a clip to
+    // that coordinator's bounds, or a layout modifier, whose insets at
+    // `density` it returns, zero for all but a padding. `None` for a node.
     fn take_plain(
         &mut self,
         node_ref: &cranpose_foundation::ModifierChainNodeRef<'_>,
-        (parts, ordinal, padding): (Option<&Rc<LayoutParts>>, usize, EdgeInsets),
+        site: PlainSite<'_>,
         density: f32,
-        slices: &ModifierNodeSlices,
+        slices: &mut ModifierNodeSlices,
     ) -> Option<EdgeInsets> {
         let (fns, words) = node_ref.plain_words()?;
         if let Some(background) = fns.read::<BackgroundElement>(words) {
-            let coordinator = CoordinatorRect::new(parts, ordinal, padding);
-            self.push(background.color(), coordinator, slices);
+            self.push(background.color(), site.coordinator(), slices);
         } else if let Some(shape) = fns.read::<CornerShapeElement>(words) {
             self.shape(shape.shape());
+        } else if fns.read::<ClipToBoundsElement>(words).is_some() {
+            slices.layer_mut().clip_to_bounds = true;
+            slices.enter_layer(&DrawSite {
+                coordinator: site.coordinator(),
+                displaceable: site.displaceable,
+                modifier_index: site.modifier_index,
+            });
         }
         fns.capabilities()
             .contains(NodeCapabilities::LAYOUT)
@@ -371,11 +400,6 @@ fn collect_draw_node(
             layer_node.layer_snapshot(),
             layer_node.layer_resolver(site.modifier_index),
         );
-        slices.enter_layer(site);
-    }
-
-    if kind == TypeId::of::<ClipToBoundsNode>() {
-        slices.layer_mut().clip_to_bounds = true;
         slices.enter_layer(site);
     }
 }

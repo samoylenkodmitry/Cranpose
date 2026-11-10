@@ -1,3 +1,5 @@
+use cranpose_foundation::plain_element;
+
 use super::{Alignment, HorizontalAlignment, Modifier, VerticalAlignment, inspector_metadata};
 use crate::modifier_nodes::AlignmentElement;
 
@@ -6,7 +8,7 @@ impl Modifier {
     /// baseline alignment in a Row. A child without a baseline is placed at the top.
     pub fn align_by_baseline(self) -> Self {
         self.then(
-            Self::with_element(AlignmentElement::row_baseline())
+            Self::from_dyn_element(plain_element(AlignmentElement::row_baseline()))
                 .with_inspector_metadata(inspector_metadata("alignByBaseline", |_| {})),
         )
     }
@@ -14,11 +16,10 @@ impl Modifier {
     /// Aligns this child inside a `Box` by `alignment`. Compose's `BoxScope.align`.
     pub fn align(self, alignment: Alignment) -> Self {
         self.then(
-            Self::with_element(AlignmentElement::box_alignment(alignment)).with_inspector_metadata(
-                inspector_metadata("align", move |info| {
+            Self::from_dyn_element(plain_element(AlignmentElement::box_alignment(alignment)))
+                .with_inspector_metadata(inspector_metadata("align", move |info| {
                     info.add_alignment("boxAlignment", alignment);
-                }),
-            ),
+                })),
         )
     }
 
@@ -31,20 +32,22 @@ impl Modifier {
     /// Aligns this child horizontally inside a `Column`. Compose's `ColumnScope.align`.
     #[expect(non_snake_case, reason = "names follow Compose's casing")]
     pub fn alignInColumn(self, alignment: HorizontalAlignment) -> Self {
-        let modifier = Self::with_element(AlignmentElement::column_alignment(alignment))
-            .with_inspector_metadata(inspector_metadata("alignInColumn", move |info| {
-                info.add_alignment("columnAlignment", alignment);
-            }));
+        let modifier =
+            Self::from_dyn_element(plain_element(AlignmentElement::column_alignment(alignment)))
+                .with_inspector_metadata(inspector_metadata("alignInColumn", move |info| {
+                    info.add_alignment("columnAlignment", alignment);
+                }));
         self.then(modifier)
     }
 
     /// Aligns this child vertically inside a `Row`. Compose's `RowScope.align`.
     #[expect(non_snake_case, reason = "names follow Compose's casing")]
     pub fn alignInRow(self, alignment: VerticalAlignment) -> Self {
-        let modifier = Self::with_element(AlignmentElement::row_alignment(alignment))
-            .with_inspector_metadata(inspector_metadata("alignInRow", move |info| {
-                info.add_alignment("rowAlignment", alignment);
-            }));
+        let modifier =
+            Self::from_dyn_element(plain_element(AlignmentElement::row_alignment(alignment)))
+                .with_inspector_metadata(inspector_metadata("alignInRow", move |info| {
+                    info.add_alignment("rowAlignment", alignment);
+                }));
         self.then(modifier)
     }
 }
