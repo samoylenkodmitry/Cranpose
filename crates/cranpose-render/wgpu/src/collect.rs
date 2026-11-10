@@ -7,7 +7,7 @@ use cranpose_render_common::{
     layer_shadow::ShadowLight,
     layer_transform::layer_uniform_scale,
     primitive_emit::resolve_clip,
-    scene_store::{ItemRef, LayerRef},
+    scene_store::{self, ItemRef, LayerRef},
     space::SeenDoor,
 };
 use cranpose_ui_graphics::{
@@ -398,7 +398,11 @@ enum Placement {
 }
 
 fn child_placement(layer: LayerRef<'_>, raster_scale: RasterScale) -> Placement {
-    let Some(translation) = direct_translation(layer.transform_to_parent()) else {
+    let translation = match layer.placement() {
+        scene_store::Placement::At(origin) => Some(origin),
+        scene_store::Placement::By(transform) => direct_translation(transform),
+    };
+    let Some(translation) = translation else {
         return Placement::Isolated;
     };
     if layer.needs_surface() {
