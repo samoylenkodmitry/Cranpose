@@ -604,6 +604,8 @@ test-features: test-watchos test-localization
     cargo clippy -p cranpose-text -p cranpose-ui --all-targets --features cranpose-text/hyphenation-embedded,cranpose-ui/text-hyphenation-embedded -- -D warnings
     cargo test --profile ci -p cranpose-ui --features southeast-asian-line-breaks --test integration thai_line_breaks
     cargo clippy -p cranpose-ui --all-targets --features southeast-asian-line-breaks -- -D warnings
+    # The pixel host alone builds the scene store without window damage.
+    cargo test --profile ci -p cranpose-render-pixels
     cargo test --profile ci -p cranpose-render-pixels --features installed-fonts,cranpose-app-shell/installed-fonts --test installed_fonts
     cargo test --profile ci -p cranpose-render-wgpu --features installed-fonts,cranpose-app-shell/installed-fonts --test installed_fonts
     cargo clippy -p cranpose-render-pixels -p cranpose-render-wgpu --all-targets --features cranpose-render-pixels/installed-fonts,cranpose-render-wgpu/installed-fonts,cranpose-app-shell/installed-fonts -- -D warnings
