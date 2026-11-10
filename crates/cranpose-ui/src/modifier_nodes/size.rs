@@ -3,7 +3,7 @@
 
 use cranpose_foundation::{
     Constraints, InvalidationKind, Measurable, ModifierNodeContext, NodeCapabilities, PlainElement,
-    PlainLayout, PlainLayoutFns, Size,
+    PlainIntrinsic, PlainLayout, PlainLayoutFns, Size,
 };
 
 // Which of a size element's bounds a slot of its values holds, and the bit
@@ -331,43 +331,18 @@ impl PlainLayout for SizeElement {
         })
     }
 
-    fn min_intrinsic_width(&self, measurable: &dyn Measurable, height: f32, density: f32) -> f32 {
+    fn intrinsic(&self, measurable: &dyn Measurable, kind: PlainIntrinsic, density: f32) -> f32 {
+        let axis = if kind.is_width() {
+            SizeAxis::Width
+        } else {
+            SizeAxis::Height
+        };
         size_intrinsic(
             self.target_constraints(density),
-            SizeAxis::Width,
+            axis,
             self.enforce_incoming(),
-            height,
-            |h| measurable.min_intrinsic_width(h),
-        )
-    }
-
-    fn max_intrinsic_width(&self, measurable: &dyn Measurable, height: f32, density: f32) -> f32 {
-        size_intrinsic(
-            self.target_constraints(density),
-            SizeAxis::Width,
-            self.enforce_incoming(),
-            height,
-            |h| measurable.max_intrinsic_width(h),
-        )
-    }
-
-    fn min_intrinsic_height(&self, measurable: &dyn Measurable, width: f32, density: f32) -> f32 {
-        size_intrinsic(
-            self.target_constraints(density),
-            SizeAxis::Height,
-            self.enforce_incoming(),
-            width,
-            |w| measurable.min_intrinsic_height(w),
-        )
-    }
-
-    fn max_intrinsic_height(&self, measurable: &dyn Measurable, width: f32, density: f32) -> f32 {
-        size_intrinsic(
-            self.target_constraints(density),
-            SizeAxis::Height,
-            self.enforce_incoming(),
-            width,
-            |w| measurable.max_intrinsic_height(w),
+            kind.cross(),
+            |cross| kind.at(cross).of(measurable),
         )
     }
 }

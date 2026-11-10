@@ -5,8 +5,8 @@ use std::{
 };
 
 use cranpose_foundation::{
-    BasicModifierNodeContext, ModifierNodeChain, NodeCapabilities, PlainLayout, PointerButton,
-    PointerButtons, PointerEvent, PointerEventKind, modifier_element, plain_element,
+    BasicModifierNodeContext, ModifierNodeChain, NodeCapabilities, PlainIntrinsic, PlainLayout,
+    PointerButton, PointerButtons, PointerEvent, PointerEventKind, modifier_element, plain_element,
 };
 use cranpose_ui_layout::Placeable;
 
@@ -170,11 +170,23 @@ fn padding_node_respects_intrinsics() {
         intrinsic_height: 30.0,
     };
 
-    assert_eq!(node.min_intrinsic_width(&measurable, 100.0, 1.0), 70.0);
-    assert_eq!(node.max_intrinsic_width(&measurable, 100.0, 1.0), 70.0);
+    assert_eq!(
+        node.intrinsic(&measurable, PlainIntrinsic::MinWidth(100.0), 1.0),
+        70.0
+    );
+    assert_eq!(
+        node.intrinsic(&measurable, PlainIntrinsic::MaxWidth(100.0), 1.0),
+        70.0
+    );
 
-    assert_eq!(node.min_intrinsic_height(&measurable, 100.0, 1.0), 50.0);
-    assert_eq!(node.max_intrinsic_height(&measurable, 100.0, 1.0), 50.0);
+    assert_eq!(
+        node.intrinsic(&measurable, PlainIntrinsic::MinHeight(100.0), 1.0),
+        50.0
+    );
+    assert_eq!(
+        node.intrinsic(&measurable, PlainIntrinsic::MaxHeight(100.0), 1.0),
+        50.0
+    );
 }
 
 #[test]

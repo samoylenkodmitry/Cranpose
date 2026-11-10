@@ -4,8 +4,8 @@
 use std::hash::Hash;
 
 use cranpose_foundation::{
-    Constraints, Measurable, ModifierNodeContext, NodeCapabilities, PlainElement, PlainLayout,
-    PlainLayoutFns, Size,
+    Constraints, Measurable, ModifierNodeContext, NodeCapabilities, PlainElement, PlainIntrinsic,
+    PlainLayout, PlainLayoutFns, Size,
 };
 
 /// Direction for fill modifiers (horizontal, vertical, or both).
@@ -212,20 +212,14 @@ impl PlainLayout for FillElement {
         })
     }
 
-    fn min_intrinsic_width(&self, measurable: &dyn Measurable, height: f32, density: f32) -> f32 {
-        measurable.min_intrinsic_width(self.filled(height, FillDirection::Horizontal, density))
-    }
-
-    fn max_intrinsic_width(&self, measurable: &dyn Measurable, height: f32, density: f32) -> f32 {
-        measurable.max_intrinsic_width(self.filled(height, FillDirection::Horizontal, density))
-    }
-
-    fn min_intrinsic_height(&self, measurable: &dyn Measurable, width: f32, density: f32) -> f32 {
-        measurable.min_intrinsic_height(self.filled(width, FillDirection::Vertical, density))
-    }
-
-    fn max_intrinsic_height(&self, measurable: &dyn Measurable, width: f32, density: f32) -> f32 {
-        measurable.max_intrinsic_height(self.filled(width, FillDirection::Vertical, density))
+    fn intrinsic(&self, measurable: &dyn Measurable, kind: PlainIntrinsic, density: f32) -> f32 {
+        let other = if kind.is_width() {
+            FillDirection::Horizontal
+        } else {
+            FillDirection::Vertical
+        };
+        kind.at(self.filled(kind.cross(), other, density))
+            .of(measurable)
     }
 }
 

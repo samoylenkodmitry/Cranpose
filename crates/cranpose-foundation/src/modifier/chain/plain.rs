@@ -95,24 +95,10 @@ pub trait PlainLayout: PlainElement {
         None
     }
 
-    /// The minimum intrinsic width: the wrapped content's by default.
-    fn min_intrinsic_width(&self, measurable: &dyn Measurable, height: f32, _density: f32) -> f32 {
-        measurable.min_intrinsic_width(height)
-    }
-
-    /// The maximum intrinsic width: the wrapped content's by default.
-    fn max_intrinsic_width(&self, measurable: &dyn Measurable, height: f32, _density: f32) -> f32 {
-        measurable.max_intrinsic_width(height)
-    }
-
-    /// The minimum intrinsic height: the wrapped content's by default.
-    fn min_intrinsic_height(&self, measurable: &dyn Measurable, width: f32, _density: f32) -> f32 {
-        measurable.min_intrinsic_height(width)
-    }
-
-    /// The maximum intrinsic height: the wrapped content's by default.
-    fn max_intrinsic_height(&self, measurable: &dyn Measurable, width: f32, _density: f32) -> f32 {
-        measurable.max_intrinsic_height(width)
+    /// The intrinsic size `kind` names: the wrapped content's by default,
+    /// for an element that keeps the content's size.
+    fn intrinsic(&self, measurable: &dyn Measurable, kind: PlainIntrinsic, _density: f32) -> f32 {
+        kind.of(measurable)
     }
 }
 
@@ -127,6 +113,44 @@ pub enum PlainIntrinsic {
     MinHeight(f32),
     /// The maximum height at a width.
     MaxHeight(f32),
+}
+
+impl PlainIntrinsic {
+    /// This intrinsic size of `measurable`.
+    pub fn of(self, measurable: &dyn Measurable) -> f32 {
+        match self {
+            Self::MinWidth(height) => measurable.min_intrinsic_width(height),
+            Self::MaxWidth(height) => measurable.max_intrinsic_width(height),
+            Self::MinHeight(width) => measurable.min_intrinsic_height(width),
+            Self::MaxHeight(width) => measurable.max_intrinsic_height(width),
+        }
+    }
+
+    /// The extent across the axis asked for: the height of a width, the
+    /// width of a height.
+    pub fn cross(self) -> f32 {
+        match self {
+            Self::MinWidth(cross)
+            | Self::MaxWidth(cross)
+            | Self::MinHeight(cross)
+            | Self::MaxHeight(cross) => cross,
+        }
+    }
+
+    /// The same size asked for at the extent `cross` across its axis.
+    pub fn at(self, cross: f32) -> Self {
+        match self {
+            Self::MinWidth(_) => Self::MinWidth(cross),
+            Self::MaxWidth(_) => Self::MaxWidth(cross),
+            Self::MinHeight(_) => Self::MinHeight(cross),
+            Self::MaxHeight(_) => Self::MaxHeight(cross),
+        }
+    }
+
+    /// Whether a width is asked for, not a height.
+    pub fn is_width(self) -> bool {
+        matches!(self, Self::MinWidth(_) | Self::MaxWidth(_))
+    }
 }
 
 type MeasureFn = fn(
@@ -172,21 +196,7 @@ impl PlainLayoutFns {
                 E::from_words(words).measure_hold(density, constraints, size, wrapped)
             },
             intrinsic: |words, measurable, kind, density| {
-                let element = E::from_words(words);
-                match kind {
-                    PlainIntrinsic::MinWidth(height) => {
-                        element.min_intrinsic_width(measurable, height, density)
-                    }
-                    PlainIntrinsic::MaxWidth(height) => {
-                        element.max_intrinsic_width(measurable, height, density)
-                    }
-                    PlainIntrinsic::MinHeight(width) => {
-                        element.min_intrinsic_height(measurable, width, density)
-                    }
-                    PlainIntrinsic::MaxHeight(width) => {
-                        element.max_intrinsic_height(measurable, width, density)
-                    }
-                }
+                E::from_words(words).intrinsic(measurable, kind, density)
             },
         }
     }
