@@ -76,6 +76,7 @@ impl LayoutCells {
 
     // Notes to the scene phase of `context` that the layout pass changed the
     // geometry of this node, `node_id`.
+    #[inline]
     pub(crate) fn note_geometry_change(&self, node_id: NodeId, context: &AppContext) {
         stamp(&self.reshaped_noted_in, |noted| {
             context.note_geometry_scene_node(node_id, noted);
@@ -84,6 +85,7 @@ impl LayoutCells {
 
     // Writes the measured size of node `node_id`, self-reporting an actual
     // change to the scene phase of `context`, the node's app context.
+    #[inline]
     pub(crate) fn set_size(&self, node_id: Option<NodeId>, size: Size, context: &AppContext) {
         if self.size.get() != size {
             if let Some(id) = node_id {
