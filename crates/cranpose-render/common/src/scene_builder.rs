@@ -245,11 +245,11 @@ fn update_from_applier_inner(
     let (mut remaining_dirty_nodes, mut recent) =
         crate::thread_state::with(|state| state.dirty_node_scratch.take()).unwrap_or_default();
     let merged = dirty_node_updates(updates, &mut remaining_dirty_nodes);
-    recent.note(remaining_dirty_nodes.len());
+    let named = remaining_dirty_nodes.len();
     let mut report = update_dirty_nodes(applier, store, walk, &mut remaining_dirty_nodes);
     report.layers_moved |= merged.contains(GraphChanges::Moves);
     remaining_dirty_nodes.clear();
-    recent.shrink(&mut remaining_dirty_nodes, DIRTY_NODES_KEPT);
+    recent.settle_spent(&mut remaining_dirty_nodes, named, DIRTY_NODES_KEPT);
     crate::thread_state::with(|state| {
         state
             .dirty_node_scratch

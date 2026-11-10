@@ -1,5 +1,3 @@
-use std::hash::{BuildHasher, Hash};
-
 /// The most entries a collection reused every frame held lately, falling by
 /// an eighth a frame. The room a burst took, such as a first build's, goes
 /// back once later frames hold far fewer, while a collection that fills
@@ -43,22 +41,60 @@ impl RecentPeak {
     }
 
     /// [`Self::trim`] for a list with room for more than four times `floor`
-    /// entries. A list with less room gives back none whatever its peak, so
-    /// its frames go unnoted until its room grows past that; the peak a
-    /// frame notes then is at most twice `floor` above what noting every
-    /// frame would hold.
+    /// entries: see [`Self::settle`].
     #[inline]
     pub fn trim_past_floor<T>(&mut self, list: &mut Vec<T>, floor: usize) {
-        if list.capacity() > 4 * floor {
-            self.trim_roomy(list, floor);
+        self.settle(list, list.len(), floor);
+    }
+
+    /// Notes a frame at which `list` held `len` entries and gives back the
+    /// room the recent frames left unused, keeping its entries and room for
+    /// at least `floor`, for a list with room for more than four times
+    /// `floor` entries. A list with less room gives back none whatever its
+    /// peak, so its frames go unnoted until its room grows past that; the
+    /// peak a frame notes then is at most twice `floor` above what noting
+    /// every frame would hold.
+    #[inline]
+    pub fn settle<C: Room>(&mut self, list: &mut C, len: usize, floor: usize) {
+        if list.room() > 4 * floor {
+            self.settle_roomy(list, len, floor);
         }
     }
 
     // Out of line, so the checks of many small lists lie together.
     #[cold]
     #[inline(never)]
-    fn trim_roomy<T>(&mut self, list: &mut Vec<T>, floor: usize) {
-        self.trim(list, floor);
+    fn settle_roomy<C: Room>(&mut self, list: &mut C, len: usize, floor: usize) {
+        self.note(len);
+        self.shrink(list, floor);
+    }
+
+    /// [`Self::settle`] for a hash collection whose entries are spent: one
+    /// that gives back room becomes a new, empty collection. A shrink that
+    /// kept the entries would bring the code that moves them into every
+    /// program for a collection that is empty at this point of its frame.
+    #[inline]
+    pub fn settle_spent<C: SpentRoom>(&mut self, table: &mut C, len: usize, floor: usize) {
+        if table.room() > 4 * floor {
+            self.renew_roomy(table, len, floor);
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn renew_roomy<C: SpentRoom>(&mut self, table: &mut C, len: usize, floor: usize) {
+        self.note(len);
+        self.renew(table, floor);
+    }
+
+    /// Gives back the room the recent frames left unused in `table`, a hash
+    /// collection whose entries are spent, keeping room for at least
+    /// `floor`: see [`Self::settle_spent`].
+    #[inline]
+    pub fn renew<C: SpentRoom>(self, table: &mut C, floor: usize) {
+        if let Some(room) = self.shrink_to(table.room(), floor) {
+            table.renew(room);
+        }
     }
 
     /// Notes the frame `list` held, empties it and gives back the room the
@@ -90,30 +126,40 @@ impl<T> Room for Vec<T> {
     }
 }
 
-// A hash map and a hash set give back room alike, whatever they hash with.
-macro_rules! hashed_room {
-    ($collection:ident<$($param:ident),*> where $($bound:tt)*) => {
+/// A hash collection a [`RecentPeak`] renews once its entries are spent.
+pub trait SpentRoom {
+    /// How many entries the collection has room for.
+    fn room(&self) -> usize;
+
+    /// Replaces the collection with an empty one with room for `room`
+    /// entries.
+    fn renew(&mut self, room: usize);
+}
+
+// A hash map and a hash set renew alike, whatever they hash with.
+macro_rules! spent_room {
+    ($collection:ident<$($param:ident),*>) => {
         #[expect(
             clippy::disallowed_types,
-            reason = "every hash collection gives back room alike, whatever it hashes with"
+            reason = "every hash collection renews alike, whatever it hashes with"
         )]
-        impl<$($param),*> Room for std::collections::$collection<$($param),*>
+        impl<$($param),*> SpentRoom for std::collections::$collection<$($param),*>
         where
-            $($bound)*
+            S: Default,
         {
             fn room(&self) -> usize {
                 self.capacity()
             }
 
-            fn give_back_to(&mut self, room: usize) {
-                self.shrink_to(room);
+            fn renew(&mut self, room: usize) {
+                *self = Self::with_capacity_and_hasher(room, S::default());
             }
         }
     };
 }
 
-hashed_room!(HashMap<K, V, S> where K: Eq + Hash, S: BuildHasher);
-hashed_room!(HashSet<T, S> where T: Eq + Hash, S: BuildHasher);
+spent_room!(HashMap<K, V, S>);
+spent_room!(HashSet<T, S>);
 
 // forwards on purpose: a collection gives back room seldom, and the check
 // before it runs for every collection each frame, so the shrink stays out

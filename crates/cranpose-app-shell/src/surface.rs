@@ -473,7 +473,27 @@ impl SurfaceRoutingScratch {
     // whole: a screen's first frame routes every node, while later frames
     // route a few.
     pub(crate) fn trim(&mut self, routed: [&mut Vec<NodeId>; 2]) {
-        self.recent.note(std::mem::take(&mut self.most));
+        let most = std::mem::take(&mut self.most);
+        let room = [
+            self.attached.capacity(),
+            self.owners.capacity(),
+            self.moved.capacity(),
+            routed[0].capacity(),
+            routed[1].capacity(),
+            self.seen.capacity(),
+        ];
+        // No list with less room gives any back whatever the peak, so such
+        // a frame goes unnoted: see `RecentPeak::settle`.
+        if room.into_iter().any(|room| room > 4 * ROUTING_ROOM_KEPT) {
+            self.trim_roomy(most, routed);
+        }
+    }
+
+    // Out of line: few frames find a list with room to give back.
+    #[cold]
+    #[inline(never)]
+    fn trim_roomy(&mut self, most: usize, routed: [&mut Vec<NodeId>; 2]) {
+        self.recent.note(most);
         let recent = self.recent;
         recent.shrink(&mut self.attached, ROUTING_ROOM_KEPT);
         recent.shrink(&mut self.owners, ROUTING_ROOM_KEPT);
@@ -481,7 +501,8 @@ impl SurfaceRoutingScratch {
         for list in routed {
             recent.shrink(list, ROUTING_ROOM_KEPT);
         }
-        recent.shrink(&mut self.seen, ROUTING_ROOM_KEPT);
+        // The routing that filled the set is over.
+        recent.renew(&mut self.seen, ROUTING_ROOM_KEPT);
     }
 }
 

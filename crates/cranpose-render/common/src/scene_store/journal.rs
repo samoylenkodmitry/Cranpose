@@ -196,11 +196,10 @@ impl Journal {
     #[inline]
     pub(super) fn trim(&mut self, rows: usize) {
         let len = self.entries.len();
-        self.recent.note(len);
         if len > 0 {
             self.drop_read(rows, len);
         }
-        self.recent.shrink(&mut self.entries, ENTRIES_KEPT);
+        self.recent.settle(&mut self.entries, len, ENTRIES_KEPT);
     }
 
     #[inline(never)]

@@ -25,8 +25,8 @@ impl DirtyNodeSet {
     // unused, once the set is empty.
     #[inline]
     fn note_take(&mut self, len: usize) {
-        self.recent.note(len);
-        self.recent.shrink(&mut self.dirty_nodes, ROOM_KEPT);
+        self.recent
+            .settle_spent(&mut self.dirty_nodes, len, ROOM_KEPT);
     }
 
     pub(super) fn schedule_repass(&mut self, node_id: NodeId) {

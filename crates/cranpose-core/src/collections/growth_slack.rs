@@ -32,8 +32,18 @@ impl<T> GrowthSlack for Vec<T> {
 )]
 impl<K: Eq + Hash, V, S: BuildHasher> GrowthSlack for std::collections::HashMap<K, V, S> {
     fn trim_growth_slack(&mut self) {
+        // Out of line, as a list's shrink is: a map gives back room seldom.
+        #[cold]
+        #[inline(never)]
+        fn shrink<K: Eq + Hash, V, S: BuildHasher>(
+            map: &mut std::collections::HashMap<K, V, S>,
+            target: usize,
+        ) {
+            map.shrink_to(target);
+        }
+
         if let Some(target) = slack_target(self.len(), self.capacity()) {
-            super::recent_peak::give_back(self, target);
+            shrink(self, target);
         }
     }
 }

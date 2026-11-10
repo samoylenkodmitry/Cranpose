@@ -34,7 +34,6 @@ impl<T> TakenList<T> {
     pub(super) fn take_into(&mut self, output: &mut Vec<T>) {
         output.clear();
         std::mem::swap(&mut self.items, output);
-        self.recent.note(output.len());
-        self.recent.shrink(&mut self.items, ROOM_KEPT);
+        self.recent.settle(&mut self.items, output.len(), ROOM_KEPT);
     }
 }
