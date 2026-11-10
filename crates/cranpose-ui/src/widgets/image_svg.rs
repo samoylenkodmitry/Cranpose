@@ -579,7 +579,11 @@ fn parse_hex_color(hex: &str, opacity: f32) -> Result<SvgColor, SvgPainterError>
             digits[index] * 17
         }
     };
-    let alpha = if hex.len() % 4 == 0 { channel(3) } else { 255 };
+    let alpha = if hex.len().is_multiple_of(4) {
+        channel(3)
+    } else {
+        255
+    };
     let color = SvgColor {
         r: channel(0),
         g: channel(1),
