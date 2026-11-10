@@ -374,7 +374,7 @@ pub(super) fn redraw_in_place(
                 DrawCommand::Background(_) if placement == DrawPlacement::Overlay => continue,
                 DrawCommand::Background(background) => own
                     .next()
-                    .is_some_and(|item| keeps_background(store, item, background, size)),
+                    .is_some_and(|item| draws_background_again(store, item, background, size)),
                 _ if !draws_in(command, placement) => continue,
                 _ => {
                     let id = DrawCommandId {
@@ -394,17 +394,23 @@ pub(super) fn redraw_in_place(
     own.next().is_none()
 }
 
-// Whether the shape item `item` holds the shapes `background` draws at
-// `size`.
-fn keeps_background(
-    store: &SceneStore,
+// Draws `background` at `size` into the shape item `item`, which keeps its
+// shapes while their print stays. False when `item` is no shape item.
+fn draws_background_again(
+    store: &mut SceneStore,
     item: Item,
     background: &BackgroundDraw,
     size: Size,
 ) -> bool {
-    item.kind() == ItemKind::Shape
-        && store.shapes_print(item)
-            == background_print(background.shape_in(size), background.color())
+    if item.kind() != ItemKind::Shape {
+        return false;
+    }
+    let shape = background.shape_in(size);
+    let print = background_print(shape, background.color());
+    if store.shapes_print(item) != print {
+        store.redraw_shapes(item, print, |recorder| background.record(shape, recorder));
+    }
+    true
 }
 
 // Records `command`, the command `id`, again into the run `item` that drew

@@ -56,6 +56,17 @@ impl<T> Slab<T> {
         Some(value)
     }
 
+    // Takes the entry at `index` out while its index stays its own: no
+    // other entry takes the index before `put` fills it again.
+    pub(crate) fn lend(&mut self, index: usize) -> Option<T> {
+        self.entries.get_mut(index)?.take()
+    }
+
+    // Fills the entry at `index`, which `lend` took out.
+    pub(crate) fn put(&mut self, index: usize, value: T) {
+        self.entries[index] = Some(value);
+    }
+
     pub(crate) fn values(&self) -> impl Iterator<Item = &T> {
         self.entries.iter().flatten()
     }

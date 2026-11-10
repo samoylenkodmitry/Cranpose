@@ -335,6 +335,30 @@ impl SceneStore {
         Item::new(ItemKind::Shape, self.shape_runs.insert(run))
     }
 
+    // Records the shapes of the shape item `item` anew through `record`,
+    // as `print` names them: the item keeps its handle, and its old shapes
+    // go at once.
+    pub(crate) fn redraw_shapes(
+        &mut self,
+        item: Item,
+        print: u64,
+        record: impl FnOnce(&mut ShapeRecorder),
+    ) {
+        let index = item.index();
+        let Some(old) = self.shape_runs.lend(index) else {
+            return;
+        };
+        // Recording other shapes lets go of the removed ones first, as
+        // `add_shapes` does: a chunk that makes room keeps only the shapes
+        // of the items the store holds.
+        self.release_removed_shapes();
+        self.shape_chunks.release(&old);
+        let run = self
+            .shape_chunks
+            .record(&mut self.shape_runs, print, record);
+        self.shape_runs.put(index, run);
+    }
+
     // A hash of what the shape item `item` draws: two items of one print
     // draw alike.
     #[inline]
