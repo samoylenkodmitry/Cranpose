@@ -37,10 +37,7 @@ pub(crate) use layer_motion::LayerMotion;
 use push_content::{assign_shadow_anchor, push_content};
 pub(crate) use push_content::{assign_snap_anchor_since, scene_counts};
 use raster_scale::RasterScale;
-use rigid_snap::{
-    layer_has_pixel_sensitive_subtree, node_is_pixel_sensitive, primitive_is_drawn,
-    primitive_is_pixel_sensitive, rigid_snap_anchor,
-};
+use rigid_snap::{layer_has_pixel_sensitive_subtree, rigid_snap_anchor};
 use rounded_clip_corners::{
     content_admits_rounded_clip, content_takes_rounded_clip, rounded_clip_for_layer,
 };
@@ -359,6 +356,33 @@ fn content_draws_in_place(content: &LayerScene) -> bool {
             .all(|child| child.in_place && child.clip.is_none())
 }
 
+// A record the walk visits, with what the walk reads of it more than once.
+#[derive(Clone, Copy)]
+struct Visit<'a> {
+    layer: LayerRef<'a>,
+    graphics: &'a GraphicsLayer,
+    bounds: Rect,
+}
+
+impl<'a> Visit<'a> {
+    #[expect(
+        clippy::inline_always,
+        reason = "the walk makes a visit of every record; out of line the gauntlet frame took 4.5 M more instructions"
+    )]
+    #[inline(always)]
+    fn of(layer: LayerRef<'a>) -> Self {
+        Self {
+            layer,
+            graphics: layer.graphics_layer(),
+            bounds: layer.local_bounds(),
+        }
+    }
+
+    fn visual_clip(&self) -> Option<Rect> {
+        self.layer.visual_clip_of(self.graphics, self.bounds)
+    }
+}
+
 #[derive(Clone, Copy)]
 enum Placement {
     Direct(Point),
@@ -533,9 +557,11 @@ fn isolated_child(
     parent_scene: &mut CompositorScene,
     recycler: &mut LayerSceneRecycler,
 ) -> (ChildLayer, bool) {
-    let local_layer = local_content_layer_for(layer.graphics_layer());
+    let visit = Visit::of(layer);
+    let graphics = visit.graphics;
+    let local_layer = local_content_layer_for(graphics);
     let content_hash = content_key(layer, context.settings.update);
-    let nominal_scale = layer_uniform_scale(layer.graphics_layer());
+    let nominal_scale = layer_uniform_scale(graphics);
     let retained_scale = if layer.cache_policy() == CachePolicy::Auto {
         motion.retained_scale(layer.node_id(), nominal_scale, content_hash)
     } else {
@@ -545,7 +571,7 @@ fn isolated_child(
         .settings
         .raster_scale
         .within(nominal_scale, retained_scale);
-    if layer.backdrop().is_some()
+    if graphics.backdrop_effect.is_some()
         && uniform_scale_translation(layer.transform_to_parent()).is_none()
     {
         raster_scale = raster_scale.within(nominal_scale, retained_scale);
@@ -570,7 +596,7 @@ fn isolated_child(
     };
     let mut content = recycler.take(SceneCapacityHint::default());
     let has_pixel_sensitive_subtree =
-        collect_into(layer, motion, content_context, &mut content, recycler);
+        collect_into(&visit, motion, content_context, &mut content, recycler);
     content.scene.flush_loose();
     content.refresh_backdrop_summary();
     let transform = layer
@@ -579,18 +605,17 @@ fn isolated_child(
             context.offset.x,
             context.offset.y,
         ));
-    let parent_bounds = transform.bounds_for_rect(layer.local_bounds());
+    let parent_bounds = transform.bounds_for_rect(visit.bounds);
     let rigid = context.translated || has_pixel_sensitive_subtree;
     let snap_anchor = context.snap_anchor.or_else(|| {
         rigid
             .then(|| rigid_snap_anchor(parent_bounds, &local_layer))
             .flatten()
     });
-    let alpha = if layer.graphics_layer().compositing_strategy == CompositingStrategy::ModulateAlpha
-    {
+    let alpha = if graphics.compositing_strategy == CompositingStrategy::ModulateAlpha {
         1.0
     } else {
-        GraphicsLayer::composite_alpha_8bit(layer.graphics_layer().alpha)
+        GraphicsLayer::composite_alpha_8bit(graphics.alpha)
     };
     let cacheable = layer.cache_policy() == CachePolicy::Auto && !content.contains_backdrop();
     let surface_scale = if cacheable {
@@ -604,14 +629,14 @@ fn isolated_child(
         ChildLayer {
             z_index: parent_scene.next_z(),
             node_id: layer.node_id(),
-            local_bounds: layer.local_bounds(),
+            local_bounds: visit.bounds,
             transform,
             clip: context.visual_clip,
             rounded_clip: rounded_clip_for_layer(layer),
             alpha,
-            blend_mode: layer.graphics_layer().blend_mode,
-            effect: layer.effect().cloned(),
-            backdrop: layer.backdrop().cloned(),
+            blend_mode: graphics.blend_mode,
+            effect: graphics.render_effect.clone(),
+            backdrop: graphics.backdrop_effect.clone(),
             backdrop_alpha: local_layer.alpha,
             snap_anchor,
             surface_scale,
@@ -626,18 +651,17 @@ fn isolated_child(
 }
 
 fn collect_into(
-    layer: LayerRef<'_>,
+    visit: &Visit<'_>,
     motion: &mut LayerMotion,
     context: WalkContext<'_>,
     out: &mut LayerScene,
     recycler: &mut LayerSceneRecycler,
 ) -> bool {
-    let local_layer = local_content_layer_for(layer.graphics_layer());
-    let layer_bounds = layer
-        .local_bounds()
-        .translate(context.offset.x, context.offset.y);
-    let layer_clip = layer
-        .visual_clip_rect()
+    let layer = visit.layer;
+    let local_layer = local_content_layer_for(visit.graphics);
+    let layer_bounds = visit.bounds.translate(context.offset.x, context.offset.y);
+    let layer_clip = visit
+        .visual_clip()
         .map(|clip| clip.translate(context.offset.x, context.offset.y));
     let visual_clip = resolve_clip(context.visual_clip, layer_clip);
     if visual_clip.is_some_and(|clip| clip.is_empty()) {
@@ -675,11 +699,12 @@ fn collect_into(
         settings: context.settings,
         cull: context.cull,
     };
-    if context.settings.in_space || layer.graphics_layer().space.is_some() {
+    if context.settings.in_space || visit.graphics.space.is_some() {
         return collect_space_children(layer, motion, (child_context, &content), out, recycler);
     }
     let content_offset = layer.content_offset();
-    let mut has_pixel_sensitive_subtree = false;
+    let mut has_pixel_sensitive_subtree =
+        context.settings.wants_pixel_sensitive && layer.own_draw_facts().pixel_sensitive;
     for child in layer.items() {
         has_pixel_sensitive_subtree |= match child {
             ItemRef::Layer(child_layer) => {
@@ -688,7 +713,7 @@ fn collect_into(
             ItemRef::Leaf(inline) => collect_inline(inline, content_offset, child_context, out),
             ItemRef::Draw(_) | ItemRef::Text(_) | ItemRef::Run(_) | ItemRef::Shape(_) => {
                 push_content(out, child, &content);
-                context.settings.wants_pixel_sensitive && node_is_pixel_sensitive(child)
+                false
             }
         };
     }
@@ -726,7 +751,8 @@ fn collect_child(
         return false;
     };
     context.cull = cull;
-    let composite = layer_composite_params(child.graphics_layer());
+    let visit = Visit::of(child);
+    let composite = layer_composite_params(visit.graphics);
     if composite.is_some_and(|(alpha, blend)| alpha == 0.0 && blend == BlendMode::SrcOver) {
         record_hidden(child, &context, out);
         return context.settings.wants_pixel_sensitive && layer_has_pixel_sensitive_subtree(child);
@@ -745,26 +771,19 @@ fn collect_child(
         context.offset.x + translation.x,
         context.offset.y + translation.y,
     );
-    let child_bounds = child
-        .local_bounds()
-        .translate(child_offset.x, child_offset.y);
-    if clipped_away(child, child_bounds, context.visual_clip) {
+    let child_bounds = visit.bounds.translate(child_offset.x, child_offset.y);
+    if clipped_away(&visit, child_bounds, context.visual_clip) {
         record_hidden(child, &context, out);
         return context.settings.wants_pixel_sensitive && layer_has_pixel_sensitive_subtree(child);
     }
     let child_anchor = context.snap_anchor.or_else(|| {
         context
             .translated
-            .then(|| {
-                rigid_snap_anchor(
-                    child_bounds,
-                    &local_content_layer_for(child.graphics_layer()),
-                )
-            })
+            .then(|| rigid_snap_anchor(child_bounds, &local_content_layer_for(visit.graphics)))
             .flatten()
     });
     let shadows_from = out.scene.rrect_shadows.len();
-    if layer_casts_shadow(child.graphics_layer()) {
+    if layer_casts_shadow(visit.graphics) {
         push_direct_layer_shadow(
             child,
             (child_offset, child_bounds),
@@ -776,8 +795,8 @@ fn collect_child(
     record_drawn(child, &context, (false, shadows_from), out);
     let (visual_clip, rounding) = match radius {
         Some(radius) => {
-            let clip = child
-                .visual_clip_rect()
+            let clip = visit
+                .visual_clip()
                 .map(|clip| clip.translate(child_offset.x, child_offset.y));
             (
                 resolve_clip(context.visual_clip, clip),
@@ -793,10 +812,10 @@ fn collect_child(
         snap_anchor: child_anchor,
         ..context
     };
-    if child.backdrop().is_some() {
+    if visit.graphics.backdrop_effect.is_some() {
         push_backdrop_layer(child, child_offset, child_context, &mut out.scene);
     }
-    collect_into(child, motion, child_context, out, recycler)
+    collect_into(&visit, motion, child_context, out, recycler)
 }
 
 // Collects `inline`, a node drawn in its parent's layer, under `context`,
@@ -827,8 +846,7 @@ fn collect_inline(
         .is_some_and(|clip| outside_clip(bounds, clip) && inline.draws_within_bounds())
     {
         record_hidden(inline, &context, out);
-        return context.settings.wants_pixel_sensitive
-            && inline.items().any(node_is_pixel_sensitive);
+        return context.settings.wants_pixel_sensitive && inline.own_draw_facts().pixel_sensitive;
     }
     record_drawn(
         inline,
@@ -855,12 +873,10 @@ fn collect_inline(
         anchor,
         motion_context_animated: inline.motion_context_animated() || translated,
     };
-    let mut pixel_sensitive = false;
     for node in inline.items() {
         push_content(out, node, &content);
-        pixel_sensitive |= context.settings.wants_pixel_sensitive && node_is_pixel_sensitive(node);
     }
-    pixel_sensitive
+    context.settings.wants_pixel_sensitive && inline.own_draw_facts().pixel_sensitive
 }
 
 #[inline(never)]
@@ -934,11 +950,11 @@ fn collect_isolated_child(
 /// Whether nothing `child`, placed at `bounds`, draws can show inside
 /// `clip`: those bounds miss the clip, it casts no shadow, and its subtree
 /// draws within its bounds.
-fn clipped_away(child: LayerRef<'_>, bounds: Rect, clip: Option<Rect>) -> bool {
+fn clipped_away(child: &Visit<'_>, bounds: Rect, clip: Option<Rect>) -> bool {
     clip.is_some_and(|clip| {
         outside_clip(bounds, clip)
-            && child.graphics_layer().shadow_elevation <= 0.0
-            && child.draws_within_bounds()
+            && child.graphics.shadow_elevation <= 0.0
+            && child.layer.draws_within_bounds()
     })
 }
 
@@ -957,20 +973,8 @@ fn outside_clip(bounds: Rect, clip: Rect) -> bool {
 }
 
 fn content_needs_rigid_snap(layer: LayerRef<'_>, translated: bool) -> bool {
-    layer.own_draws().any(|child| match child {
-        ItemRef::Text(_) => true,
-        ItemRef::Draw(draw) => {
-            primitive_is_pixel_sensitive(&draw.primitive)
-                || (translated && primitive_is_drawn(&draw.primitive))
-        }
-        ItemRef::Run(run) => {
-            run.summary.has_text
-                || run.summary.has_pixel_sensitive
-                || (translated && run.summary.has_non_shadow)
-        }
-        ItemRef::Shape(shape) => translated && shape.shape_count() > 0,
-        ItemRef::Layer(_) | ItemRef::Leaf(_) => false,
-    })
+    let facts = layer.own_draw_facts();
+    facts.pixel_sensitive || (translated && facts.drawn)
 }
 
 #[cfg(test)]

@@ -25,6 +25,7 @@ mod store;
 
 use child_order::ChildOrder;
 use facts::Facts;
+pub use facts::OwnDrawFacts;
 use hash_cache::HashCache;
 pub use items::{Item, ItemKind};
 pub(crate) use items::{ItemLists, Span, SpanPool};

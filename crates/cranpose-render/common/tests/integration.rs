@@ -14,6 +14,7 @@ mod lazy_trim_scene;
 mod mesh_surface_hits;
 mod moved_layers;
 mod multilingual_text;
+mod own_draw_facts;
 mod recording_reuse;
 mod scaling_list_scene;
 mod scene_journal;

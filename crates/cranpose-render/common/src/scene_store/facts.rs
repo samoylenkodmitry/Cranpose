@@ -7,12 +7,14 @@
 // touches in its record and climbs while the records it reaches kept that
 // fact, so a record that kept none ends the climb. Draws, sizes and places
 // touch containment; the children a record holds, a pointer handler, a
-// space and an origin sink touch the child facts.
+// space and an origin sink touch the child facts. A record's own draw facts
+// follow from its own draws alone.
 
 use std::{cell::Cell, mem::size_of};
 
 use cranpose_core::{RecordId, collections::growth_slack::GrowthSlack};
 use cranpose_ui::{GraphicsLayer, Rect};
+use cranpose_ui_graphics::DrawPrimitive;
 
 use super::{Item, ItemKind, ItemRef, LayerProps, LayerRef, RecordFlags, SceneStore};
 use crate::graph::{CONTAINED_DRAW_SLACK, inflate_rect, rect_within};
@@ -21,6 +23,19 @@ use crate::graph::{CONTAINED_DRAW_SLACK, inflate_rect, rect_within};
 struct RowFacts {
     children: Option<ChildFacts>,
     contained: Option<bool>,
+    own: Option<OwnDrawFacts>,
+}
+
+/// What a record's own draws hold that decides how a renderer snaps them
+/// to the pixel grid.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct OwnDrawFacts {
+    /// Whether a text or an image is among them: content whose pixels must
+    /// land on the grid.
+    pub pixel_sensitive: bool,
+    /// Whether one puts anything on the target beyond shadows and content
+    /// slots.
+    pub drawn: bool,
 }
 
 // Whether the record or a record beneath it handles pointers, whether one
@@ -82,6 +97,16 @@ pub(super) fn forget_children(store: &SceneStore, index: usize) {
     forget(store, index, |row| row.children.take().is_some());
 }
 
+// Forgets the own draw facts of the record at `index`, whose own draws
+// changed.
+pub(super) fn forget_own(store: &SceneStore, index: usize) {
+    let row = &store.facts.rows[index];
+    row.set(RowFacts {
+        own: None,
+        ..row.get()
+    });
+}
+
 // Whether the record at `index` keeps its containment.
 pub(super) fn keeps_contained(store: &SceneStore, index: usize) -> bool {
     store.facts.rows[index].get().contained.is_some()
@@ -140,6 +165,53 @@ fn work_out_contained(layer: LayerRef<'_>) -> bool {
         ..row.get()
     });
     contained
+}
+
+#[inline]
+pub(super) fn own_draw_facts(layer: LayerRef<'_>) -> OwnDrawFacts {
+    match layer.store.facts.rows[layer.id.index()].get().own {
+        Some(facts) => facts,
+        None => work_out_own_draw_facts(layer),
+    }
+}
+
+#[inline(never)]
+fn work_out_own_draw_facts(layer: LayerRef<'_>) -> OwnDrawFacts {
+    let mut facts = OwnDrawFacts::default();
+    for item in layer.own_draws() {
+        let (pixel_sensitive, drawn) = match item {
+            ItemRef::Text(_) => (true, true),
+            ItemRef::Draw(draw) => (
+                primitive_is_pixel_sensitive(&draw.primitive),
+                !matches!(
+                    draw.primitive,
+                    DrawPrimitive::Content | DrawPrimitive::Shadow(_)
+                ),
+            ),
+            ItemRef::Run(run) => (
+                run.summary.has_text || run.summary.has_pixel_sensitive,
+                run.summary.has_non_shadow,
+            ),
+            ItemRef::Shape(shape) => (false, shape.shape_count() > 0),
+            ItemRef::Layer(_) | ItemRef::Leaf(_) => (false, false),
+        };
+        facts.pixel_sensitive |= pixel_sensitive;
+        facts.drawn |= drawn;
+    }
+    let row = &layer.store.facts.rows[layer.id.index()];
+    row.set(RowFacts {
+        own: Some(facts),
+        ..row.get()
+    });
+    facts
+}
+
+fn primitive_is_pixel_sensitive(primitive: &DrawPrimitive) -> bool {
+    match primitive {
+        DrawPrimitive::Blend { primitive, .. } => primitive_is_pixel_sensitive(primitive),
+        DrawPrimitive::Image { .. } | DrawPrimitive::Text(_) => true,
+        _ => false,
+    }
 }
 
 #[inline]

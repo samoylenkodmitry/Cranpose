@@ -10,8 +10,7 @@ use cranpose_render_common::{
 
 use super::{
     LayerMotion, LayerScene, LayerSceneRecycler, MeshChild, SceneDraw, SeenDraw, WalkContext,
-    WalkSettings, collect_child, collect_inline, collect_isolated_child, node_is_pixel_sensitive,
-    push_content,
+    WalkSettings, collect_child, collect_inline, collect_isolated_child, push_content,
 };
 use crate::scene::ContentContext;
 
@@ -73,7 +72,8 @@ pub(super) fn collect_space_children(
         ..context
     };
     let content_offset = layer.content_offset();
-    let mut has_pixel_sensitive_subtree = false;
+    let mut has_pixel_sensitive_subtree =
+        context.settings.wants_pixel_sensitive && layer.own_draw_facts().pixel_sensitive;
     for child in layer.items() {
         has_pixel_sensitive_subtree |= match child {
             ItemRef::Layer(child_layer) => {
@@ -86,7 +86,7 @@ pub(super) fn collect_space_children(
             ItemRef::Leaf(inline) => collect_inline(inline, content_offset, context, out),
             ItemRef::Draw(_) | ItemRef::Text(_) | ItemRef::Run(_) | ItemRef::Shape(_) => {
                 push_content(out, child, content);
-                context.settings.wants_pixel_sensitive && node_is_pixel_sensitive(child)
+                false
             }
         };
     }

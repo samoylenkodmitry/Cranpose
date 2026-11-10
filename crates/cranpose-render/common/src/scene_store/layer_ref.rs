@@ -7,8 +7,8 @@ use cranpose_ui::{GraphicsLayer, Point, Rect, RenderEffect, Size};
 use cranpose_ui_graphics::{BlendMode, ColorFilter, CompositingStrategy, DrawPrimitive};
 
 use super::{
-    Extent, Item, ItemKind, LayerProps, Placement, Reach, RecordFlags, RecordKind, SceneStore,
-    ShapeRef,
+    Extent, Item, ItemKind, LayerProps, OwnDrawFacts, Placement, Reach, RecordFlags, RecordKind,
+    SceneStore, ShapeRef,
 };
 use crate::{
     graph::{
@@ -293,6 +293,13 @@ impl<'a> LayerRef<'a> {
         super::facts::has_space(self)
     }
 
+    /// What the record's own draws hold that decides how a renderer snaps
+    /// them to the pixel grid.
+    #[inline]
+    pub fn own_draw_facts(self) -> OwnDrawFacts {
+        super::facts::own_draw_facts(self)
+    }
+
     /// Where the record's subtree draws, in its own space: what its items
     /// draw and its children's extents, within its clip. A change beneath
     /// the record since [`SceneStore::refresh_reach`] leaves it unknown.
@@ -405,12 +412,37 @@ impl<'a> LayerRef<'a> {
     /// through an offscreen buffer for its alpha or by request, its bounds.
     #[inline(always)]
     pub fn visual_clip_rect(self) -> Option<Rect> {
-        let clip = self.clip_rect();
-        if clip.is_some() {
-            return clip;
+        self.visual_clip_with(|| self.graphics_layer().clip, || self.local_bounds())
+    }
+
+    #[expect(
+        clippy::inline_always,
+        reason = "the collect walk calls it for every record; out of line the gauntlet frame took 2.5 M more instructions"
+    )]
+    /// [`Self::visual_clip_rect`] of the record whose graphics layer
+    /// `graphics` and local bounds `bounds` a reader holds already.
+    #[inline(always)]
+    pub fn visual_clip_of(self, graphics: &GraphicsLayer, bounds: Rect) -> Option<Rect> {
+        self.visual_clip_with(|| graphics.clip, || bounds)
+    }
+
+    // Where the record's drawing is cut, with its graphics layer's clip from
+    // `graphics_clip` and its local bounds from `bounds`.
+    #[expect(
+        clippy::inline_always,
+        reason = "the two readers above inline it into the collect walk"
+    )]
+    #[inline(always)]
+    fn visual_clip_with(
+        self,
+        graphics_clip: impl FnOnce() -> bool,
+        bounds: impl FnOnce() -> Rect,
+    ) -> Option<Rect> {
+        if self.clip_to_bounds() || graphics_clip() {
+            return Some(bounds());
         }
         let isolation = self.isolation();
-        (isolation.group_opacity || isolation.explicit_offscreen).then(|| self.local_bounds())
+        (isolation.group_opacity || isolation.explicit_offscreen).then(bounds)
     }
 
     /// The render effect applied to the record's content.

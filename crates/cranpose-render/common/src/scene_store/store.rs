@@ -601,6 +601,7 @@ impl SceneStore {
         if !super::facts::same_children(old, items) {
             super::facts::forget_children(self, index);
         }
+        super::facts::forget_own(self, index);
         let noted = self.journal.follows(RecordEvent::Changed);
         let changed =
             !noted && self.journal.wants(RecordEvent::Changed, self.update) && old != items;
@@ -748,6 +749,7 @@ impl SceneStore {
         }
         self.items.free_span(span);
         self.tree[index].items = Span::default();
+        super::facts::forget_own(self, index);
         self.stale(index);
     }
 
@@ -759,6 +761,7 @@ impl SceneStore {
         let index = id.index();
         self.redraw_pending(index);
         self.stale(index);
+        super::facts::forget_own(self, index);
         let tree = &mut self.tree[index];
         tree.content_rev = update;
         let (flags, raise) = (tree.flags, tree.subtree_rev != update);
