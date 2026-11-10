@@ -18,20 +18,19 @@ pub(super) enum InPlace {
 // Updates `entry` for `element` where it is, when the element is of the
 // entry's type and key and the entry can take it: an element of a node's
 // type and key updates the node whatever its content, as Compose does, and
-// a plain element writes its words over the entry's in `payload`. `None`
+// a plain element writes its words over the entry's. `None`
 // leaves the entry as it was.
 pub(super) fn update_entry_in_place(
     entry: &mut ModifierNodeEntry,
-    payload: &mut [u32],
     element: &DynModifierElement,
     context: &mut dyn ModifierNodeContext,
 ) -> Option<InPlace> {
     match (&mut entry.slot, element.maker()) {
-        (EntrySlot::Plain { fns, at }, ElementMaker::Plain(value)) => {
+        (EntrySlot::Plain { fns, words }, ElementMaker::Plain(value)) => {
             if fns.element_type() != value.fns().element_type() {
                 return None;
             }
-            let words = &mut payload[*at as usize..][..fns.words()];
+            let words = &mut words[..fns.words()];
             if !value.equals_words(words) {
                 value.write_words(words);
                 request_update_auto_invalidations(&**element, context, entry.capabilities);

@@ -1,5 +1,5 @@
 // The element a chain entry took last, kept as it is, held by the entry's
-// node or written as words in the chain's payload, and the view a comparison
+// node or written as words in the entry, and the view a comparison
 // with a new element reads.
 
 use std::{any::TypeId, cell::RefCell, rc::Rc};

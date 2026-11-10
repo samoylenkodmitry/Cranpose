@@ -1,5 +1,5 @@
 // A modifier element that is a value alone: a chain keeps it as words in
-// its payload, with no node.
+// the element's entry, with no node.
 
 use std::{
     any::{Any, TypeId, type_name},
@@ -17,8 +17,9 @@ use super::super::{
     Measurable, ModifierNodeContext, NodeCapabilities, Size,
 };
 
-/// The most words a plain element's value takes in a chain's payload.
-pub const PLAIN_WORDS_MAX: usize = 8;
+/// The most words a plain element's value takes: with its type's table
+/// they fill the room of a chain entry.
+pub const PLAIN_WORDS_MAX: usize = 6;
 
 /// The most words the value of a plain element that measures takes: a
 /// coordinator keeps a copy of them for every layout modifier of a node.

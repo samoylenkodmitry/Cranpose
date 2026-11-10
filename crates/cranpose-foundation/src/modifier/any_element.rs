@@ -86,7 +86,7 @@ pub trait AnyModifierElement: fmt::Debug {
 pub enum ElementMaker<'a> {
     /// By a node the element makes and updates.
     Node(&'a dyn NodeMaker),
-    /// As words in the chain's payload: see [`super::PlainElement`].
+    /// As words in the element's chain entry: see [`super::PlainElement`].
     Plain(&'a dyn PlainValue),
 }
 

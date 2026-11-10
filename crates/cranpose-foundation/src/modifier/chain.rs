@@ -141,8 +141,6 @@ fn detach_node_tree(node: &mut dyn ModifierNode) {
 /// to manually manage their lifetimes.
 pub struct ModifierNodeChain {
     entries: Vec<ModifierNodeEntry>,
-    // The values of the plain entries, in entry order, one after another.
-    payload: Vec<u32>,
     pub(super) aggregated_capabilities: NodeCapabilities,
     // While a node of the chain delegates: the chain's nodes in order,
     // delegates after the node that delegates to them, each with its
@@ -169,8 +167,6 @@ struct ReconcileScratch {
     match_order: Vec<Option<usize>>,
     final_slots: Vec<Option<ModifierNodeEntry>>,
     elements: Vec<DynModifierElement>,
-    // The words of the plain entries a rebuild works on.
-    words: Vec<u32>,
 }
 
 thread_local! {
@@ -198,7 +194,6 @@ struct EntryMatchQuery<'a> {
 // so a scan takes less than an index would.
 fn find_match(
     entries: &[ModifierNodeEntry],
-    payload: &[u32],
     used: &[bool],
     query: &EntryMatchQuery<'_>,
 ) -> Option<usize> {
@@ -208,7 +203,7 @@ fn find_match(
             .zip(used)
             .enumerate()
             .filter(|(_, (entry, used))| {
-                let held = entry.held(payload);
+                let held = entry.held();
                 !**used
                     && held.element_type() == query.element_type
                     && held.node_type() == query.node_type
@@ -225,7 +220,7 @@ fn find_match(
             std::iter::once(first)
                 .chain(unkeyed)
                 .find(|(_, entry)| {
-                    let held = entry.held(payload);
+                    let held = entry.held();
                     held.hash_code() == query.hash_code && held.equals(query.element.as_ref())
                 })
                 .map_or(Some(first.0), |(index, _)| Some(index))
@@ -234,16 +229,15 @@ fn find_match(
 }
 
 /// A new entry for `element`: its node, updated, and attached when `attach`,
-/// as it joins an attached chain, or its words at the end of `payload`.
+/// as it joins an attached chain, or its words.
 fn fresh_entry(
     element: DynModifierElement,
-    payload: &mut Vec<u32>,
     context: &mut dyn ModifierNodeContext,
     attach: bool,
 ) -> ModifierNodeEntry {
     let capabilities = element.capabilities();
     let entry = match element.maker() {
-        ElementMaker::Plain(value) => ModifierNodeEntry::of_plain(value, payload),
+        ElementMaker::Plain(value) => ModifierNodeEntry::of_plain(value),
         ElementMaker::Node(maker) => {
             let entry = ModifierNodeEntry::of_node(Rc::clone(&element), maker, capabilities);
             if let Some(node) = entry.node() {
@@ -260,13 +254,13 @@ fn fresh_entry(
 }
 
 /// Matches `element`, at `new_pos` of the rebuilt tail, against the old
-/// entries, whose words lie in `words`: one of its type and key that can
+/// entries: one of its type and key that can
 /// take it is updated and marked for `new_pos`, and `None` is returned;
 /// otherwise the element's new entry is, attached when `attach`.
 fn reconcile_element(
     element: DynModifierElement,
     new_pos: usize,
-    (old_entries, words): (&mut [ModifierNodeEntry], &mut Vec<u32>),
+    old_entries: &mut [ModifierNodeEntry],
     (used, match_order): (&mut [bool], &mut [Option<usize>]),
     context: &mut dyn ModifierNodeContext,
     attach: bool,
@@ -289,13 +283,13 @@ fn reconcile_element(
         element: &element,
     };
     let capabilities = element.capabilities();
-    let Some(idx) = find_match(old_entries, words, used, &query) else {
-        return Some(fresh_entry(element, words, context, attach));
+    let Some(idx) = find_match(old_entries, used, &query) else {
+        return Some(fresh_entry(element, context, attach));
     };
     let entry = &mut old_entries[idx];
     match (&mut entry.slot, maker) {
-        (EntrySlot::Plain { fns, at }, ElementMaker::Plain(value)) => {
-            let held = &mut words[*at as usize..][..fns.words()];
+        (EntrySlot::Plain { fns, words }, ElementMaker::Plain(value)) => {
+            let held = &mut words[..fns.words()];
             if !value.equals_words(held) {
                 value.write_words(held);
                 request_update_auto_invalidations(element.as_ref(), context, capabilities);
@@ -316,7 +310,7 @@ fn reconcile_element(
             }
             node.borrow().node_state().set_capabilities(capabilities);
         }
-        _ => return Some(fresh_entry(element, words, context, attach)),
+        _ => return Some(fresh_entry(element, context, attach)),
     }
 
     used[idx] = true;
@@ -341,7 +335,6 @@ impl ModifierNodeChain {
     pub fn detached() -> Self {
         Self {
             entries: Vec::new(),
-            payload: Vec::new(),
             aggregated_capabilities: NodeCapabilities::empty(),
             delegated_order: None,
             attached: false,
@@ -402,7 +395,6 @@ impl ModifierNodeChain {
             return false;
         }
         let mut relink = false;
-        let payload = &mut self.payload;
         let updated = self
             .entries
             .iter_mut()
@@ -415,15 +407,15 @@ impl ModifierNodeChain {
                     .is_some_and(|rest| rest & 1 == 1)
             })
             .map(|(_, pair)| pair)
-            .all(|(entry, element)| {
-                match update_entry_in_place(entry, payload, element, context) {
+            .all(
+                |(entry, element)| match update_entry_in_place(entry, element, context) {
                     Some(outcome) => {
                         relink |= outcome == InPlace::Relink;
                         true
                     }
                     None => false,
-                }
-            });
+                },
+            );
         if relink {
             self.sync_chain_links();
         }
@@ -479,12 +471,9 @@ impl ModifierNodeChain {
         for (idx, element) in elements.enumerate() {
             elements_count = idx + 1;
             if fast_path_failed_at.is_none() && idx < old_len {
-                if let Some(outcome) = update_entry_in_place(
-                    &mut self.entries[idx],
-                    &mut self.payload,
-                    element,
-                    context,
-                ) {
+                if let Some(outcome) =
+                    update_entry_in_place(&mut self.entries[idx], element, context)
+                {
                     relink |= outcome == InPlace::Relink;
                     continue;
                 }
@@ -495,8 +484,6 @@ impl ModifierNodeChain {
 
         if fast_path_failed_at.is_none() && scratch.elements.is_empty() {
             if elements_count < self.entries.len() {
-                let kept_words = self.payload_start(elements_count);
-                self.payload.truncate(kept_words);
                 for entry in self.entries.drain(elements_count..) {
                     request_auto_invalidations(context, entry.capabilities);
                     entry.detach();
@@ -521,20 +508,7 @@ impl ModifierNodeChain {
         context: &mut dyn ModifierNodeContext,
         scratch: &mut ReconcileScratch,
     ) {
-        // The words of the entries from `fail_idx` move to the scratch,
-        // where the rebuild reads and writes them; each entry of the new
-        // tail then puts its words back in entry order.
-        let kept_words = self.payload_start(fail_idx);
-        let words = &mut scratch.words;
-        words.clear();
-        words.extend_from_slice(&self.payload[kept_words..]);
-        self.payload.truncate(kept_words);
         let mut old_entries: Vec<ModifierNodeEntry> = self.entries.drain(fail_idx..).collect();
-        for entry in &mut old_entries {
-            if let EntrySlot::Plain { at, .. } = &mut entry.slot {
-                *at -= kept_words as u32;
-            }
-        }
         let processed_entries_len = self.entries.len();
         let old_len = old_entries.len();
 
@@ -552,7 +526,7 @@ impl ModifierNodeChain {
             let fresh = reconcile_element(
                 element,
                 new_pos,
-                (&mut old_entries, words),
+                &mut old_entries,
                 (&mut scratch.old_used, &mut scratch.match_order),
                 context,
                 self.attached,
@@ -574,24 +548,8 @@ impl ModifierNodeChain {
         // most hold one to three entries, where growth would make room for
         // four.
         self.entries.reserve_exact(scratch.final_slots.len());
-        let tail_words: usize = scratch
-            .final_slots
-            .iter()
-            .flatten()
-            .map(|entry| match entry.slot {
-                EntrySlot::Plain { fns, .. } => fns.words(),
-                EntrySlot::Node { .. } => 0,
-            })
-            .sum();
-        self.payload.reserve_exact(tail_words);
         for slot in scratch.final_slots.drain(..) {
-            if let Some(mut entry) = slot {
-                if let EntrySlot::Plain { fns, at } = &mut entry.slot {
-                    let from = *at as usize;
-                    *at = self.payload.len() as u32;
-                    self.payload
-                        .extend_from_slice(&words[from..from + fns.words()]);
-                }
+            if let Some(entry) = slot {
                 self.entries.push(entry);
             } else {
                 log::error!("modifier reconciliation produced an empty final slot");
@@ -626,7 +584,6 @@ impl ModifierNodeChain {
 
     /// Detaches every node in the chain and clears internal storage.
     pub fn detach_all(&mut self) {
-        self.payload.clear();
         for entry in std::mem::take(&mut self.entries) {
             entry.detach();
             if let Some(node) = entry.node() {
@@ -636,18 +593,6 @@ impl ModifierNodeChain {
             }
         }
         self.sync_chain_links();
-    }
-
-    // Where the words of the plain entries from `index` on start: the
-    // payload keeps them in entry order.
-    fn payload_start(&self, index: usize) -> usize {
-        self.entries[index..]
-            .iter()
-            .find_map(|entry| match entry.slot {
-                EntrySlot::Plain { at, .. } => Some(at as usize),
-                EntrySlot::Node { .. } => None,
-            })
-            .unwrap_or(self.payload.len())
     }
 
     /// The number of entries in the chain: its nodes and its plain elements.
@@ -664,7 +609,7 @@ impl ModifierNodeChain {
     /// the chain was last updated from, or equal ones it kept, or the nodes
     /// that hold every value of them.
     pub fn held_elements(&self) -> impl ExactSizeIterator<Item = HeldElement<'_>> {
-        self.entries.iter().map(|entry| entry.held(&self.payload))
+        self.entries.iter().map(ModifierNodeEntry::held)
     }
 
     /// Returns the aggregated capability mask for the entire chain.
@@ -800,10 +745,8 @@ impl ModifierNodeChain {
     /// The table and the words of the plain element at `index`.
     #[inline]
     pub fn plain_words(&self, index: usize) -> Option<(&'static PlainFns, &[u32])> {
-        match self.entries.get(index)?.slot {
-            EntrySlot::Plain { fns, at } => {
-                Some((fns, &self.payload[at as usize..][..fns.words()]))
-            }
+        match &self.entries.get(index)?.slot {
+            EntrySlot::Plain { fns, words } => Some((fns, &words[..fns.words()])),
             EntrySlot::Node { .. } => None,
         }
     }
@@ -811,7 +754,7 @@ impl ModifierNodeChain {
     /// The value of the plain element at `index`, when it is an `E`.
     #[inline]
     pub fn plain<E: PlainElement>(&self, index: usize) -> Option<E> {
-        self.entries.get(index)?.held(&self.payload).plain()
+        self.entries.get(index)?.held().plain()
     }
 
     /// Returns true if the chain contains any nodes matching the given invalidation kind.

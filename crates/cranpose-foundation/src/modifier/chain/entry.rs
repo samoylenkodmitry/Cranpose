@@ -1,11 +1,11 @@
 // An entry of a modifier chain: a node with the element it last took, or a
-// plain element's words in the chain's payload.
+// plain element's words.
 
 use std::{cell::RefCell, rc::Rc};
 
 use super::{
     DynModifierElement, EntryElement, HeldElement, ModifierNode, NodeCapabilities, NodeMaker,
-    PlainFns, PlainValue, detach_node_tree,
+    PLAIN_WORDS_MAX, PlainFns, PlainValue, detach_node_tree,
 };
 
 // One element of a chain as the chain keeps it. The element's hash, which
@@ -27,11 +27,11 @@ pub(super) enum EntrySlot {
         element: EntryElement,
         node: Rc<RefCell<dyn ModifierNode>>,
     },
-    // A plain element's value: `fns.words()` words of the chain's payload
-    // from `at`.
+    // A plain element's value: its first `fns.words()` words. They fit
+    // beside the table in the room a node and its element take.
     Plain {
         fns: &'static PlainFns,
-        at: u32,
+        words: [u32; PLAIN_WORDS_MAX],
     },
 }
 
@@ -53,25 +53,21 @@ impl ModifierNodeEntry {
         }
     }
 
-    // An entry of `value`, whose words go at the end of `payload`.
-    pub(super) fn of_plain(value: &dyn PlainValue, payload: &mut Vec<u32>) -> Self {
+    pub(super) fn of_plain(value: &dyn PlainValue) -> Self {
         let fns = value.fns();
-        let at = payload.len();
-        payload.resize(at + fns.words(), 0);
-        value.write_words(&mut payload[at..]);
+        let mut words = [0; PLAIN_WORDS_MAX];
+        value.write_words(&mut words[..fns.words()]);
         Self {
-            slot: EntrySlot::Plain { fns, at: at as u32 },
+            slot: EntrySlot::Plain { fns, words },
             capabilities: fns.capabilities(),
             aggregate: NodeCapabilities::empty(),
         }
     }
 
-    pub(super) fn held<'a>(&'a self, payload: &'a [u32]) -> HeldElement<'a> {
+    pub(super) fn held(&self) -> HeldElement<'_> {
         match &self.slot {
             EntrySlot::Node { element, node } => element.view(node, self.capabilities),
-            EntrySlot::Plain { fns, at } => {
-                HeldElement::of_words(fns, &payload[*at as usize..][..fns.words()])
-            }
+            EntrySlot::Plain { fns, words } => HeldElement::of_words(fns, &words[..fns.words()]),
         }
     }
 
