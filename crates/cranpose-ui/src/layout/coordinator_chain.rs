@@ -8,7 +8,10 @@ use std::{
 };
 
 use cranpose_core::{NodeId, PackedU64};
-use cranpose_foundation::{InvalidationKind, ModifierNodeContext, NodeCapabilities};
+use cranpose_foundation::{
+    InvalidationKind, ModifierNodeContext, NodeCapabilities, PLAIN_WORDS_MAX, PlainIntrinsic,
+    PlainLayoutFns,
+};
 use cranpose_ui_layout::{AlignmentLines, Constraints, MeasurePolicy, Placement};
 
 use super::{
@@ -43,6 +46,15 @@ fn layout_modifier_intrinsic(
         IntrinsicKind::MaxWidth(height) => node.max_intrinsic_width(wrapped, height, density),
         IntrinsicKind::MinHeight(width) => node.min_intrinsic_height(wrapped, width, density),
         IntrinsicKind::MaxHeight(width) => node.max_intrinsic_height(wrapped, width, density),
+    }
+}
+
+fn plain_intrinsic(kind: IntrinsicKind) -> PlainIntrinsic {
+    match kind {
+        IntrinsicKind::MinWidth(height) => PlainIntrinsic::MinWidth(height),
+        IntrinsicKind::MaxWidth(height) => PlainIntrinsic::MaxWidth(height),
+        IntrinsicKind::MinHeight(width) => PlainIntrinsic::MinHeight(width),
+        IntrinsicKind::MaxHeight(width) => PlainIntrinsic::MaxHeight(width),
     }
 }
 
@@ -133,33 +145,110 @@ impl Measurable for CoordinatorLink<'_, '_, '_> {
 
 struct CoordinatorNode {
     modifier_index: usize,
-    node: Rc<RefCell<dyn cranpose_foundation::ModifierNode>>,
+    source: Source,
     measured_size: Cell<Size>,
     /// The constraints this node last measured under.
     measured_constraints: Cell<Constraints>,
     accumulated_offset: Cell<Point>,
 }
 
+// What a coordinator measures with. A measure runs while the applier is
+// free for the children's measures, so the coordinator keeps what it needs
+// of its modifier: the node, or a plain element's table and its words as
+// the last sync read them, prepared for the sync's density.
+enum Source {
+    Node(Rc<RefCell<dyn cranpose_foundation::ModifierNode>>),
+    Plain {
+        // `None` for a plain element that measures nothing itself.
+        layout: Option<&'static PlainLayoutFns>,
+        words: [u32; PLAIN_WORDS_MAX],
+    },
+}
+
+// The layout modifier at an entry of a chain, as a walk reads it.
+enum Found<'a> {
+    Node(&'a Rc<RefCell<dyn cranpose_foundation::ModifierNode>>),
+    Plain(Option<&'static PlainLayoutFns>, &'a [u32]),
+}
+
+impl<'a> Found<'a> {
+    fn at(chain: &'a cranpose_foundation::ModifierNodeChain, index: usize) -> Option<Self> {
+        match chain.get_node_rc(index) {
+            Some(node) => Some(Self::Node(node)),
+            None => chain
+                .plain_words(index)
+                .map(|(fns, words)| Self::Plain(fns.layout(), words)),
+        }
+    }
+
+    fn source(&self, density: f32) -> Source {
+        match *self {
+            Self::Node(node) => Source::Node(Rc::clone(node)),
+            Self::Plain(layout, words) => Source::Plain {
+                layout,
+                words: prepared(layout, words, density),
+            },
+        }
+    }
+}
+
+// The words a coordinator keeps of a plain element's `words` for measures
+// at `density`.
+fn prepared(
+    layout: Option<&'static PlainLayoutFns>,
+    words: &[u32],
+    density: f32,
+) -> [u32; PLAIN_WORDS_MAX] {
+    let mut all = [0; PLAIN_WORDS_MAX];
+    if let Some(layout) = layout {
+        layout.prepare(words, density, &mut all);
+    }
+    all
+}
+
 impl CoordinatorNode {
-    fn new(
-        modifier_index: usize,
-        node: Rc<RefCell<dyn cranpose_foundation::ModifierNode>>,
-    ) -> Self {
+    fn new(modifier_index: usize, source: Source) -> Self {
         Self {
             modifier_index,
-            node,
+            source,
             measured_size: Cell::new(Size::default()),
             measured_constraints: Cell::new(Constraints::tight(0.0, 0.0)),
             accumulated_offset: Cell::new(Point::default()),
         }
     }
 
-    fn matches(
-        &self,
-        modifier_index: usize,
-        node: &Rc<RefCell<dyn cranpose_foundation::ModifierNode>>,
-    ) -> bool {
-        self.modifier_index == modifier_index && Rc::ptr_eq(&self.node, node)
+    // Takes the words of the coordinator's plain element again from `chain`,
+    // whose entries stand where the last walk found them.
+    fn read_plain(&mut self, chain: &cranpose_foundation::ModifierNodeChain, density: f32) {
+        if let Source::Plain { layout, words } = &mut self.source
+            && let Some((_, found)) = chain.plain_words(self.modifier_index)
+        {
+            *words = prepared(*layout, found, density);
+        }
+    }
+
+    // Whether the coordinator stands for `found` at `modifier_index`: the
+    // same node, or a plain element of the same measure, whose words it
+    // then takes.
+    fn takes(&mut self, modifier_index: usize, found: &Found<'_>, density: f32) -> bool {
+        if self.modifier_index != modifier_index {
+            return false;
+        }
+        match (&mut self.source, found) {
+            (Source::Node(held), Found::Node(node)) => Rc::ptr_eq(held, node),
+            (Source::Plain { layout, words }, Found::Plain(found_layout, found_words)) => {
+                let same = match (*layout, *found_layout) {
+                    (Some(held), Some(found)) => std::ptr::eq(held, found),
+                    (None, None) => true,
+                    _ => false,
+                };
+                if same {
+                    *words = prepared(*layout, found_words, density);
+                }
+                same
+            }
+            _ => false,
+        }
     }
 }
 
@@ -169,6 +258,9 @@ impl CoordinatorNode {
 #[derive(Clone, Copy)]
 struct SyncedInputs {
     revision: PackedU64,
+    // The chain's count of value changes in place the plain coordinators'
+    // words were read at.
+    values: u32,
     scale: f32,
     offset: Point,
     window_root: bool,
@@ -176,9 +268,10 @@ struct SyncedInputs {
 }
 
 impl SyncedInputs {
-    fn of(revision: u64, inputs: ModifierChainInputs) -> Self {
+    fn of((revision, values): (u64, u32), inputs: ModifierChainInputs) -> Self {
         Self {
             revision: PackedU64::new(revision),
+            values,
             scale: inputs.density.density(),
             offset: inputs.offset,
             window_root: inputs.window_root,
@@ -217,15 +310,24 @@ pub(super) struct CoordinatorChain {
 impl CoordinatorChain {
     pub(super) fn sync(&mut self, node: &LayoutNode) -> ModifierChainInputs {
         let density = node.density();
-        let revision = node.modifier_chain().revision();
-        if let Some(synced) = self.synced
+        let chain = node.modifier_chain();
+        let (revision, values) = (chain.revision(), chain.values());
+        if let Some(synced) = &mut self.synced
             && synced.revision.get() == revision
             && synced.scale.to_bits() == density.density().to_bits()
         {
+            // A value changed in place: the entries stand where they were,
+            // and each plain coordinator takes its words again.
+            if synced.values != values {
+                synced.values = values;
+                for coordinator in &mut self.nodes {
+                    coordinator.read_plain(chain.chain(), density.density());
+                }
+            }
             return synced.inputs(density);
         }
         let inputs = self.walk(node, density);
-        self.synced = Some(SyncedInputs::of(revision, inputs));
+        self.synced = Some(SyncedInputs::of((revision, values), inputs));
         // Other modifiers may place other coordinators.
         self.moved.set(true);
         inputs
@@ -246,18 +348,19 @@ impl CoordinatorChain {
         }
 
         let chain = chain_handle.chain();
+        let scale = density.density();
         let mut len = 0;
         let mut matches = true;
         chain.for_each_forward_matching(NodeCapabilities::LAYOUT, |node_ref| {
             let Some(index) = node_ref.entry_index() else {
                 return;
             };
-            if let Some(node) = chain.get_node_rc(index) {
+            if let Some(found) = Found::at(chain, index) {
                 matches = matches
                     && self
                         .nodes
-                        .get(len)
-                        .is_some_and(|candidate| candidate.matches(index, node));
+                        .get_mut(len)
+                        .is_some_and(|candidate| candidate.takes(index, &found, scale));
                 len += 1;
             }
             node_ref.with_node(|node| {
@@ -274,31 +377,36 @@ impl CoordinatorChain {
 
         inputs.uses_chain = len > 0;
         if inputs.uses_chain && !(matches && len == self.nodes.len()) {
-            self.rebuild(chain, len);
+            self.rebuild(chain, len, scale);
         }
         inputs
     }
 
-    fn rebuild(&mut self, chain: &cranpose_foundation::ModifierNodeChain, len: usize) {
+    fn rebuild(
+        &mut self,
+        chain: &cranpose_foundation::ModifierNodeChain,
+        len: usize,
+        density: f32,
+    ) {
         let mut previous_nodes = std::mem::take(&mut self.nodes);
         // Exactly: most chains hold one layout modifier, where growth would
         // make room for four.
         self.nodes.reserve_exact(len);
         chain.for_each_forward_matching(NodeCapabilities::LAYOUT, |node_ref| {
-            let Some((index, node)) = node_ref
+            let Some((index, found)) = node_ref
                 .entry_index()
-                .and_then(|index| chain.get_node_rc(index).map(|node| (index, node)))
+                .and_then(|index| Found::at(chain, index).map(|found| (index, found)))
             else {
                 return;
             };
             match previous_nodes
-                .iter()
-                .position(|candidate| candidate.matches(index, node))
+                .iter_mut()
+                .position(|candidate| candidate.takes(index, &found, density))
             {
                 Some(position) => self.nodes.push(previous_nodes.swap_remove(position)),
                 None => self
                     .nodes
-                    .push(CoordinatorNode::new(index, Rc::clone(node))),
+                    .push(CoordinatorNode::new(index, found.source(density))),
             }
         });
     }
@@ -323,11 +431,17 @@ impl CoordinatorChain {
         };
         for node in self.nodes.iter().rev() {
             let size = node.measured_size.get();
-            let hold = match node.node.borrow().as_layout_node() {
-                Some(layout) => {
-                    layout.measure_hold(density, node.measured_constraints.get(), size, wrapped)
-                }
-                None => wrapped.hold,
+            let constraints = node.measured_constraints.get();
+            let hold = match &node.source {
+                Source::Node(held) => match held.borrow().as_layout_node() {
+                    Some(layout) => layout.measure_hold(density, constraints, size, wrapped),
+                    None => wrapped.hold,
+                },
+                Source::Plain {
+                    layout: Some(layout),
+                    words,
+                } => layout.measure_hold(words, density, constraints, size, wrapped),
+                Source::Plain { layout: None, .. } => wrapped.hold,
             };
             wrapped = cranpose_ui_layout::WrappedHold { size, hold };
         }
@@ -379,10 +493,32 @@ impl CoordinatorChain {
         };
 
         let wrapped = CoordinatorLink::new(self, frame, index + 1);
-        let node_borrow = node.node.borrow();
         node.measured_constraints.set(constraints);
-
-        let Some(layout_node) = node_borrow.as_layout_node() else {
+        let measure = |context: &mut LayoutNodeContext| match &node.source {
+            Source::Node(held) => held
+                .borrow()
+                .as_layout_node()
+                .map(|layout| layout.measure(context, &wrapped, constraints)),
+            Source::Plain { layout, words } => {
+                layout.map(|layout| layout.measure(words, context, &wrapped, constraints))
+            }
+        };
+        let measured = match frame.context.try_borrow_mut() {
+            Ok(mut context) => measure(&mut context),
+            Err(_) => {
+                let mut temp = LayoutNodeContext::new(frame.scope.density());
+                let measured = measure(&mut temp);
+                if let Ok(mut context) = frame.context.try_borrow_mut() {
+                    for kind in temp.take_invalidations() {
+                        context.invalidate(kind);
+                    }
+                }
+                measured
+            }
+        };
+        // A modifier that measures nothing itself passes its content's
+        // measure through.
+        let Some(result) = measured else {
             let placeable = wrapped.measure(constraints);
             self.place(
                 &node.measured_size,
@@ -394,20 +530,6 @@ impl CoordinatorChain {
             let child_accumulated = self.total_content_offset_from(index + 1);
             self.place(&node.accumulated_offset, child_accumulated);
             return placeable;
-        };
-
-        let result = match frame.context.try_borrow_mut() {
-            Ok(mut context) => layout_node.measure(&mut *context, &wrapped, constraints),
-            Err(_) => {
-                let mut temp = LayoutNodeContext::new(frame.scope.density());
-                let result = layout_node.measure(&mut temp, &wrapped, constraints);
-                if let Ok(mut context) = frame.context.try_borrow_mut() {
-                    for kind in temp.take_invalidations() {
-                        context.invalidate(kind);
-                    }
-                }
-                result
-            }
         };
 
         self.place(&node.measured_size, result.size);
@@ -447,13 +569,18 @@ impl CoordinatorChain {
             return policy_intrinsic(frame.measure_policy.as_ref(), frame.measurables, kind);
         };
         let wrapped = CoordinatorLink::new(self, frame, index + 1);
-        let node_borrow = node.node.borrow();
-        node_borrow.as_layout_node().map_or_else(
-            || measurable_intrinsic(&wrapped, kind),
-            |layout_node| {
-                layout_modifier_intrinsic(layout_node, &wrapped, kind, frame.scope.density())
-            },
-        )
+        let density = frame.scope.density();
+        match &node.source {
+            Source::Node(held) => held.borrow().as_layout_node().map_or_else(
+                || measurable_intrinsic(&wrapped, kind),
+                |layout_node| layout_modifier_intrinsic(layout_node, &wrapped, kind, density),
+            ),
+            Source::Plain {
+                layout: Some(layout),
+                words,
+            } => layout.intrinsic(words, &wrapped, plain_intrinsic(kind), density),
+            Source::Plain { layout: None, .. } => measurable_intrinsic(&wrapped, kind),
+        }
     }
 
     // Sets a size or an offset the coordinators' rects come from, noting a

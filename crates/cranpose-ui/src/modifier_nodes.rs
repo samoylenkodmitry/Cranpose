@@ -28,12 +28,12 @@ pub(crate) use alignment::{AlignmentElement, AlignmentNode};
 pub use background::{BackgroundElement, CornerShapeElement};
 pub use clickable::{ClickableElement, ClickableNode};
 pub(crate) use clip::{ClipToBoundsElement, ClipToBoundsNode};
-pub use fill::{FillDirection, FillElement, FillNode};
+pub use fill::{FillDirection, FillElement};
 pub(crate) use intrinsic_size::IntrinsicSizeElement;
 pub use offset::{FractionalOffsetElement, FractionalOffsetNode, OffsetElement, OffsetNode};
+pub use padding::PaddingElement;
 pub(crate) use padding::device_padding;
-pub use padding::{PaddingElement, PaddingNode};
-pub use size::{SizeElement, SizeNode};
+pub use size::SizeElement;
 pub(crate) use weight::{WeightElement, WeightNode};
 
 use crate::{

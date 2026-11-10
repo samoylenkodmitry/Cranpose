@@ -1,14 +1,14 @@
-// The fill modifiers: the node that fills a fraction of the room on an
-// axis, and its element.
+// The fill modifiers: the element that fills a fraction of the room on an
+// axis. It is a plain element: a chain keeps its values as words.
 
 use std::hash::{Hash, Hasher};
 
 use cranpose_foundation::{
-    Constraints, DelegatableNode, InvalidationKind, LayoutModifierNode, Measurable, ModifierNode,
-    ModifierNodeContext, ModifierNodeElement, NodeCapabilities, NodeState, Size,
+    Constraints, Measurable, ModifierNodeContext, NodeCapabilities, PlainElement, PlainLayout,
+    PlainLayoutFns, Size,
 };
 
-use super::{hash_f32_value, impl_layout_modifier_node};
+use super::hash_f32_value;
 
 /// Direction for fill modifiers (horizontal, vertical, or both).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -21,38 +21,53 @@ pub enum FillDirection {
     Both,
 }
 
-/// Node that fills the maximum available space in one or both dimensions.
+/// Element that fills a fraction of the room on an axis: a plain element,
+/// which a chain keeps as words.
 ///
-/// Matches Kotlin: `FillNode` in foundation-layout/src/commonMain/kotlin/androidx/compose/foundation/layout/Size.kt
-#[derive(Debug)]
-pub struct FillNode {
+/// Matches Kotlin: `FillElement` in foundation-layout/src/commonMain/kotlin/androidx/compose/foundation/layout/Size.kt
+#[derive(Debug, Clone, PartialEq)]
+pub struct FillElement {
     direction: FillDirection,
     fraction: f32,
-    state: NodeState,
 }
 
-impl FillNode {
-    /// Creates a node that fills `fraction` of the available space along `direction`.
-    pub fn new(direction: FillDirection, fraction: f32) -> Self {
+impl FillElement {
+    /// Creates an element that fills `fraction` of the available width.
+    pub fn width(fraction: f32) -> Self {
         Self {
-            direction,
+            direction: FillDirection::Horizontal,
             fraction,
-            state: NodeState::new(),
         }
     }
 
-    /// Returns the axes the node fills.
+    /// Creates an element that fills `fraction` of the available height.
+    pub fn height(fraction: f32) -> Self {
+        Self {
+            direction: FillDirection::Vertical,
+            fraction,
+        }
+    }
+
+    /// Creates an element that fills `fraction` of the available width and height.
+    pub fn size(fraction: f32) -> Self {
+        Self {
+            direction: FillDirection::Both,
+            fraction,
+        }
+    }
+
+    /// Returns the axis or axes the element fills.
     pub fn direction(&self) -> FillDirection {
         self.direction
     }
 
-    /// Returns the share of the available space the node fills, from 0.0 to 1.0.
+    /// Returns the fraction of the available room the element fills.
     pub fn fraction(&self) -> f32 {
         self.fraction
     }
 
-    /// The extent the content gets of a given `extent` across the axis that
-    /// `other` fills: the filled fraction, unless only `other` fills.
+    // The extent the content gets of a given `extent` across the axis that
+    // `other` fills: the filled fraction, unless only `other` fills.
     fn filled(&self, extent: f32, other: FillDirection, density: f32) -> f32 {
         if self.direction == other || !extent.is_finite() {
             return extent;
@@ -61,15 +76,46 @@ impl FillNode {
     }
 }
 
-impl DelegatableNode for FillNode {
-    fn node_state(&self) -> &NodeState {
-        &self.state
+impl Hash for FillElement {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.direction.hash(state);
+        hash_f32_value(state, self.fraction);
     }
 }
 
-impl_layout_modifier_node!(FillNode, invalidate = InvalidationKind::Layout);
+impl PlainElement for FillElement {
+    const WORDS: usize = 2;
+    const CAPABILITIES: NodeCapabilities = NodeCapabilities::LAYOUT;
+    const LAYOUT: Option<&'static PlainLayoutFns> = Some(&PlainLayoutFns::of::<Self>());
 
-impl LayoutModifierNode for FillNode {
+    #[inline]
+    fn to_words(&self, words: &mut [u32]) {
+        words[0] = match self.direction {
+            FillDirection::Horizontal => 0,
+            FillDirection::Vertical => 1,
+            FillDirection::Both => 2,
+        };
+        words[1] = self.fraction.to_bits();
+    }
+
+    #[inline]
+    fn from_words(words: &[u32]) -> Self {
+        let (direction, fraction) = match *words {
+            [direction, fraction, ..] => (direction, fraction),
+            _ => (2, 0),
+        };
+        Self {
+            direction: match direction {
+                0 => FillDirection::Horizontal,
+                1 => FillDirection::Vertical,
+                _ => FillDirection::Both,
+            },
+            fraction: f32::from_bits(fraction),
+        }
+    }
+}
+
+impl PlainLayout for FillElement {
     /// A filled axis holds while the same max fills it the same; an axis
     /// the node leaves alone passes the bounds on and holds what its content
     /// holds.
@@ -183,73 +229,8 @@ impl LayoutModifierNode for FillNode {
     }
 }
 
-/// Element that creates and updates fill nodes.
-///
-/// Matches Kotlin: `FillElement` in foundation-layout/src/commonMain/kotlin/androidx/compose/foundation/layout/Size.kt
-#[derive(Debug, Clone, PartialEq)]
-pub struct FillElement {
-    direction: FillDirection,
-    fraction: f32,
-}
-
-impl FillElement {
-    /// Creates an element that fills `fraction` of the available width.
-    pub fn width(fraction: f32) -> Self {
-        Self {
-            direction: FillDirection::Horizontal,
-            fraction,
-        }
-    }
-
-    /// Creates an element that fills `fraction` of the available height.
-    pub fn height(fraction: f32) -> Self {
-        Self {
-            direction: FillDirection::Vertical,
-            fraction,
-        }
-    }
-
-    /// Creates an element that fills `fraction` of the available width and height.
-    pub fn size(fraction: f32) -> Self {
-        Self {
-            direction: FillDirection::Both,
-            fraction,
-        }
-    }
-}
-
-impl Hash for FillElement {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.direction.hash(state);
-        hash_f32_value(state, self.fraction);
-    }
-}
-
-impl ModifierNodeElement for FillElement {
-    type Node = FillNode;
-    const FROM_NODE: Option<fn(&FillNode) -> Self> = Some(|node| Self {
-        direction: node.direction,
-        fraction: node.fraction,
-    });
-
-    fn create(&self) -> Self::Node {
-        FillNode::new(self.direction, self.fraction)
-    }
-
-    fn update(&self, node: &mut Self::Node) {
-        if node.direction != self.direction || node.fraction != self.fraction {
-            node.direction = self.direction;
-            node.fraction = self.fraction;
-        }
-    }
-
-    fn capabilities(&self) -> NodeCapabilities {
-        NodeCapabilities::LAYOUT
-    }
-}
-
 /// One axis of what a fill modifier holds for: see
-/// [`FillNode::measure_hold`].
+/// `FillElement::measure_hold`.
 fn fill_axis_hold(
     fills: bool,
     (max, size): (f32, f32),

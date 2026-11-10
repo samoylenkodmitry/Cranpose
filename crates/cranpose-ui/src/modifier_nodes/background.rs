@@ -44,10 +44,15 @@ impl PlainElement for BackgroundElement {
         words.copy_from_slice(&[red, green, blue, alpha].map(f32::to_bits));
     }
 
+    #[inline]
     fn from_words(words: &[u32]) -> Self {
-        let channel = |index: usize| f32::from_bits(words[index]);
+        let channels = match *words {
+            [red, green, blue, alpha, ..] => [red, green, blue, alpha],
+            _ => [0; 4],
+        };
+        let [red, green, blue, alpha] = channels.map(f32::from_bits);
         Self {
-            color: Color(channel(0), channel(1), channel(2), channel(3)),
+            color: Color(red, green, blue, alpha),
         }
     }
 }
@@ -97,10 +102,17 @@ impl PlainElement for CornerShapeElement {
         );
     }
 
+    #[inline]
     fn from_words(words: &[u32]) -> Self {
-        let radius = |index: usize| f32::from_bits(words[index]);
+        let radii = match *words {
+            [top_left, top_right, bottom_right, bottom_left, ..] => {
+                [top_left, top_right, bottom_right, bottom_left]
+            }
+            _ => [0; 4],
+        };
+        let [top_left, top_right, bottom_right, bottom_left] = radii.map(f32::from_bits);
         Self {
-            shape: RoundedCornerShape::new(radius(0), radius(1), radius(2), radius(3)),
+            shape: RoundedCornerShape::new(top_left, top_right, bottom_right, bottom_left),
         }
     }
 }

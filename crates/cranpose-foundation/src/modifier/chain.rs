@@ -16,7 +16,10 @@ use entry::{EntrySlot, ModifierNodeEntry};
 use entry_element::EntryElement;
 pub use entry_element::HeldElement;
 use in_place::{InPlace, update_entry_in_place};
-pub use plain::{PLAIN_WORDS_MAX, PlainElement, PlainFns, PlainValue, plain_element};
+pub use plain::{
+    PLAIN_WORDS_MAX, PlainElement, PlainFns, PlainIntrinsic, PlainLayout, PlainLayoutFns,
+    PlainValue, plain_element,
+};
 
 fn visit_node_tree_mut(
     node: &mut dyn ModifierNode,
@@ -792,6 +795,17 @@ impl ModifierNodeChain {
     /// hold and clone it only to hold a new one.
     pub fn get_node_rc(&self, index: usize) -> Option<&Rc<RefCell<dyn ModifierNode>>> {
         self.entries.get(index).and_then(ModifierNodeEntry::node)
+    }
+
+    /// The table and the words of the plain element at `index`.
+    #[inline]
+    pub fn plain_words(&self, index: usize) -> Option<(&'static PlainFns, &[u32])> {
+        match self.entries.get(index)?.slot {
+            EntrySlot::Plain { fns, at } => {
+                Some((fns, &self.payload[at as usize..][..fns.words()]))
+            }
+            EntrySlot::Node { .. } => None,
+        }
     }
 
     /// The value of the plain element at `index`, when it is an `E`.

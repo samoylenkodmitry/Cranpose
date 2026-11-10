@@ -1,11 +1,11 @@
 use cranpose_core::{Composition, MemoryApplier, NodeId, location_key};
 use cranpose_foundation::{
-    BasicModifierNodeContext, LayoutModifierNode, ModifierNodeChain, modifier_element,
+    BasicModifierNodeContext, LayoutModifierNode, ModifierNodeChain, PlainLayout, modifier_element,
+    plain_element,
 };
 use cranpose_ui::{
     Box as ComposeBox, BoxSpec, Column, ColumnSpec, EdgeInsets, Modifier, OffsetElement,
-    OffsetNode, PaddingElement, PaddingNode, Row, RowSpec, Size, SizeElement, SizeNode, Text,
-    TextStyle, composable,
+    OffsetNode, PaddingElement, Row, RowSpec, Size, SizeElement, Text, TextStyle, composable,
 };
 use cranpose_ui_layout::{Constraints, Measurable, Placeable};
 
@@ -645,10 +645,10 @@ fn test_padding_math_validation() {
     let mut context = BasicModifierNodeContext::new();
 
     let padding = EdgeInsets::uniform(10.0);
-    let elements = vec![modifier_element(PaddingElement::new(padding))];
+    let elements = vec![plain_element(PaddingElement::new(padding))];
     chain.update_from_slice(&elements, &mut context);
 
-    let node = chain.node_mut::<PaddingNode>(0).unwrap();
+    let node = chain.plain::<PaddingElement>(0).unwrap();
     let measurable = TestMeasurable {
         width: 50.0,
         height: 30.0,
@@ -686,10 +686,10 @@ fn test_asymmetric_padding_math() {
         right: 15.0,
         bottom: 20.0,
     };
-    let elements = vec![modifier_element(PaddingElement::new(padding))];
+    let elements = vec![plain_element(PaddingElement::new(padding))];
     chain.update_from_slice(&elements, &mut context);
 
-    let node = chain.node_mut::<PaddingNode>(0).unwrap();
+    let node = chain.plain::<PaddingElement>(0).unwrap();
     let measurable = TestMeasurable {
         width: 100.0,
         height: 100.0,
@@ -721,10 +721,10 @@ fn test_size_modifier_math() {
     let mut chain = ModifierNodeChain::new();
     let mut context = BasicModifierNodeContext::new();
 
-    let elements = vec![modifier_element(SizeElement::new(Some(150.0), Some(200.0)))];
+    let elements = vec![plain_element(SizeElement::new(Some(150.0), Some(200.0)))];
     chain.update_from_slice(&elements, &mut context);
 
-    let node = chain.node_mut::<SizeNode>(0).unwrap();
+    let node = chain.plain::<SizeElement>(0).unwrap();
     let measurable = TestMeasurable {
         width: 50.0,
         height: 50.0,
@@ -757,8 +757,8 @@ fn test_chained_padding_accumulation() {
     let mut context = BasicModifierNodeContext::new();
 
     let elements = vec![
-        modifier_element(PaddingElement::new(EdgeInsets::uniform(10.0))),
-        modifier_element(PaddingElement::new(EdgeInsets::uniform(20.0))),
+        plain_element(PaddingElement::new(EdgeInsets::uniform(10.0))),
+        plain_element(PaddingElement::new(EdgeInsets::uniform(20.0))),
     ];
     chain.update_from_slice(&elements, &mut context);
 
@@ -775,11 +775,11 @@ fn test_chained_padding_accumulation() {
         max_height: 300.0,
     };
 
-    let node0 = chain.node_mut::<PaddingNode>(0).unwrap();
+    let node0 = chain.plain::<PaddingElement>(0).unwrap();
     let result0 = node0.measure(&mut context, &measurable, constraints);
     assert_eq!(result0.size.width, 120.0, "First padding: 100 + 10*2 = 120");
 
-    let node1 = chain.node_mut::<PaddingNode>(1).unwrap();
+    let node1 = chain.plain::<PaddingElement>(1).unwrap();
     let result1 = node1.measure(&mut context, &measurable, constraints);
     assert_eq!(
         result1.size.width, 140.0,
@@ -806,26 +806,26 @@ fn test_padding_size_order_math() {
 
     let mut chain1 = ModifierNodeChain::new();
     let elements1 = vec![
-        modifier_element(PaddingElement::new(EdgeInsets::uniform(10.0))),
-        modifier_element(SizeElement::new(Some(100.0), Some(100.0))),
+        plain_element(PaddingElement::new(EdgeInsets::uniform(10.0))),
+        plain_element(SizeElement::new(Some(100.0), Some(100.0))),
     ];
     chain1.update_from_slice(&elements1, &mut context);
 
     let mut chain2 = ModifierNodeChain::new();
     let elements2 = vec![
-        modifier_element(SizeElement::new(Some(100.0), Some(100.0))),
-        modifier_element(PaddingElement::new(EdgeInsets::uniform(10.0))),
+        plain_element(SizeElement::new(Some(100.0), Some(100.0))),
+        plain_element(PaddingElement::new(EdgeInsets::uniform(10.0))),
     ];
     chain2.update_from_slice(&elements2, &mut context);
 
-    let padding_node_1 = chain1.node_mut::<PaddingNode>(0).unwrap();
+    let padding_node_1 = chain1.plain::<PaddingElement>(0).unwrap();
     let result_padding = padding_node_1.measure(&mut context, &measurable, constraints);
     assert_eq!(
         result_padding.size.width, 70.0,
         "Padding first: 50 + 10*2 = 70"
     );
 
-    let size_node_2 = chain2.node_mut::<SizeNode>(0).unwrap();
+    let size_node_2 = chain2.plain::<SizeElement>(0).unwrap();
     let result_size = size_node_2.measure(&mut context, &measurable, constraints);
     assert_eq!(result_size.size.width, 100.0, "Size first: enforces 100");
 }
@@ -874,10 +874,10 @@ fn test_complex_modifier_chain_math() {
     let mut context = BasicModifierNodeContext::new();
 
     let elements = vec![
-        modifier_element(PaddingElement::new(EdgeInsets::uniform(5.0))),
-        modifier_element(SizeElement::new(Some(80.0), Some(60.0))),
+        plain_element(PaddingElement::new(EdgeInsets::uniform(5.0))),
+        plain_element(SizeElement::new(Some(80.0), Some(60.0))),
         modifier_element(OffsetElement::new(10.0, 10.0, false)),
-        modifier_element(PaddingElement::new(EdgeInsets::uniform(10.0))),
+        plain_element(PaddingElement::new(EdgeInsets::uniform(10.0))),
     ];
     chain.update_from_slice(&elements, &mut context);
 
@@ -894,12 +894,12 @@ fn test_complex_modifier_chain_math() {
         max_height: 300.0,
     };
 
-    let node0 = chain.node_mut::<PaddingNode>(0).unwrap();
+    let node0 = chain.plain::<PaddingElement>(0).unwrap();
     let result0 = node0.measure(&mut context, &measurable, constraints);
     assert_eq!(result0.size.width, 60.0, "Inner padding: 50 + 5*2 = 60");
     assert_eq!(result0.size.height, 50.0, "Inner padding: 40 + 5*2 = 50");
 
-    let node1 = chain.node_mut::<SizeNode>(1).unwrap();
+    let node1 = chain.plain::<SizeElement>(1).unwrap();
     let result1 = node1.measure(&mut context, &measurable, constraints);
     assert_eq!(result1.size.width, 80.0, "Size enforces 80");
     assert_eq!(result1.size.height, 60.0, "Size enforces 60");
@@ -909,7 +909,7 @@ fn test_complex_modifier_chain_math() {
     assert_eq!(result2.size.width, 50.0, "Offset doesn't change size");
     assert_eq!(result2.size.height, 40.0, "Offset doesn't change size");
 
-    let node3 = chain.node_mut::<PaddingNode>(3).unwrap();
+    let node3 = chain.plain::<PaddingElement>(3).unwrap();
     let result3 = node3.measure(&mut context, &measurable, constraints);
     assert_eq!(result3.size.width, 70.0, "Outer padding: 50 + 10*2 = 70");
     assert_eq!(result3.size.height, 60.0, "Outer padding: 40 + 10*2 = 60");
@@ -923,35 +923,25 @@ fn test_modifier_reuse_pointer_identity() {
     let mut chain = ModifierNodeChain::new();
     let mut context = BasicModifierNodeContext::new();
 
-    let elements = vec![modifier_element(PaddingElement::new(EdgeInsets::uniform(
+    let elements = vec![plain_element(PaddingElement::new(EdgeInsets::uniform(
         10.0,
     )))];
     chain.update_from_slice(&elements, &mut context);
 
-    let initial_ptr = {
-        let node_ref = chain.node::<PaddingNode>(0).unwrap();
-        &*node_ref as *const _
-    };
-
-    let elements = vec![modifier_element(PaddingElement::new(EdgeInsets::uniform(
+    let elements = vec![plain_element(PaddingElement::new(EdgeInsets::uniform(
         20.0,
     )))];
     chain.update_from_slice(&elements, &mut context);
 
-    let updated_ptr = {
-        let node_ref = chain.node::<PaddingNode>(0).unwrap();
-        &*node_ref as *const _
-    };
-
     assert_eq!(
-        initial_ptr, updated_ptr,
-        "Modifier node should be reused, not recreated"
+        chain.len(),
+        1,
+        "the padding takes its new value in its place"
     );
-
-    let node_ref = chain.node::<PaddingNode>(0).unwrap();
+    let padding = chain.plain::<PaddingElement>(0).unwrap();
     assert_eq!(
-        node_ref.padding().left,
+        padding.padding().left,
         20.0,
-        "Node should have updated padding value"
+        "the chain should hold the updated padding value"
     );
 }

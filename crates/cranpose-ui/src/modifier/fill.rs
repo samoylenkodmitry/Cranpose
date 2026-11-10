@@ -1,3 +1,5 @@
+use cranpose_foundation::plain_element;
+
 use super::{DimensionConstraint, Modifier, inspector_metadata};
 use crate::modifier_nodes::FillElement;
 
@@ -9,11 +11,11 @@ fn fill_modifier(
     if fraction == 1.0 {
         crate::thread_state::with(|state| {
             full(state)
-                .get_or_init(|| Modifier::with_element(element(1.0)))
+                .get_or_init(|| Modifier::from_dyn_element(plain_element(element(1.0))))
                 .clone()
         })
     } else {
-        Modifier::with_element(element(fraction))
+        Modifier::from_dyn_element(plain_element(element(fraction)))
     }
 }
 

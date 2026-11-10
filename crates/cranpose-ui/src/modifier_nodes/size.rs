@@ -1,61 +1,139 @@
-// The size modifier: the node that bounds its content's size, and its
-// element.
+// The size modifier: the element that bounds its content's size. It is a
+// plain element: a chain keeps its bounds as words.
 
-use std::{
-    cell::Cell,
-    hash::{Hash, Hasher},
-};
+use std::hash::{Hash, Hasher};
 
 use cranpose_foundation::{
-    Constraints, DelegatableNode, InvalidationKind, LayoutModifierNode, Measurable, ModifierNode,
-    ModifierNodeContext, ModifierNodeElement, NodeCapabilities, NodeState, Size,
+    Constraints, InvalidationKind, Measurable, ModifierNodeContext, NodeCapabilities, PlainElement,
+    PlainLayout, PlainLayoutFns, Size,
 };
 
-use super::{hash_option_f32, impl_layout_modifier_node};
+use super::hash_option_f32;
 
-/// Node that enforces size constraints on its content.
+// Which of a size element's bounds a slot of its values holds, and the bit
+// of its flags that says the slot holds a bound.
+const MIN_WIDTH: usize = 0;
+const MAX_WIDTH: usize = 1;
+const MIN_HEIGHT: usize = 2;
+const MAX_HEIGHT: usize = 3;
+// The incoming constraints take precedence over the bounds.
+const ENFORCE_INCOMING: u32 = 1 << 4;
+// The values are the constraints the bounds ask for at a coordinator's
+// density, each on a whole device pixel; the two bits after tell whether
+// the bounds fixed the width and the height.
+const PREPARED: u32 = 1 << 5;
+const FIXED_WIDTH: u32 = 1 << 6;
+const FIXED_HEIGHT: u32 = 1 << 7;
+
+/// Element that bounds the size of its content: a plain element, which a
+/// chain keeps as words.
 ///
-/// Matches Kotlin: `SizeNode` in foundation-layout/src/commonMain/kotlin/androidx/compose/foundation/layout/Size.kt
-#[derive(Debug)]
-pub struct SizeNode {
-    bounds: SizeBounds,
-    enforce_incoming: bool,
-    /// The bounds rounded to the device grid of the density they were last
-    /// asked for: each measure asks again for the same.
-    rounded: Cell<Option<(f32, Constraints)>>,
-    state: NodeState,
+/// Matches Kotlin: `SizeElement` in foundation-layout/src/commonMain/kotlin/androidx/compose/foundation/layout/Size.kt
+#[derive(Debug, Clone, PartialEq)]
+pub struct SizeElement {
+    // The bounds in logical pixels, 0 for one left open.
+    values: [f32; 4],
+    flags: u32,
 }
 
-impl SizeNode {
-    /// Creates a node that limits its content to the given widths and heights, in logical pixels. A
-    /// `None` bound is left open. When `enforce_incoming` is true, the incoming constraints take
-    /// precedence over these bounds.
-    pub fn new(
+impl SizeElement {
+    /// Creates an element that fixes the width and height, in logical pixels. A `None` length is
+    /// left free. The incoming constraints take precedence.
+    pub fn new(width: Option<f32>, height: Option<f32>) -> Self {
+        Self::with_constraints(width, width, height, height, true)
+    }
+
+    /// Creates an element with the given widths and heights, in logical pixels. A `None` bound is
+    /// left open. When `enforce_incoming` is true, the incoming constraints take precedence over
+    /// these bounds.
+    pub fn with_constraints(
         min_width: Option<f32>,
         max_width: Option<f32>,
         min_height: Option<f32>,
         max_height: Option<f32>,
         enforce_incoming: bool,
     ) -> Self {
-        Self {
-            bounds: SizeBounds::of([min_width, max_width, min_height, max_height]),
-            enforce_incoming,
-            rounded: Cell::new(None),
-            state: NodeState::new(),
+        let mut values = [0.0; 4];
+        let mut flags = if enforce_incoming {
+            ENFORCE_INCOMING
+        } else {
+            0
+        };
+        let bounds = [min_width, max_width, min_height, max_height];
+        for (slot, bound) in bounds.into_iter().enumerate() {
+            if let Some(value) = bound {
+                values[slot] = value;
+                flags |= 1 << slot;
+            }
         }
+        Self { values, flags }
     }
 
-    /// The constraints the sizes ask for, each on a whole device pixel of
-    /// `density` as Compose's `SizeNode` rounds them.
-    fn target_constraints(&self, density: f32) -> Constraints {
-        if let Some((rounded_for, target)) = self.rounded.get()
-            && rounded_for == density
-        {
-            return target;
+    fn bound(&self, slot: usize) -> Option<f32> {
+        (self.flags & (1 << slot) != 0).then_some(self.values[slot])
+    }
+
+    /// Returns the smallest width in logical pixels, or `None` for no minimum.
+    pub fn min_width(&self) -> Option<f32> {
+        self.bound(MIN_WIDTH)
+    }
+
+    /// Returns the largest width in logical pixels, or `None` for no maximum.
+    pub fn max_width(&self) -> Option<f32> {
+        self.bound(MAX_WIDTH)
+    }
+
+    /// Returns the smallest height in logical pixels, or `None` for no minimum.
+    pub fn min_height(&self) -> Option<f32> {
+        self.bound(MIN_HEIGHT)
+    }
+
+    /// Returns the largest height in logical pixels, or `None` for no maximum.
+    pub fn max_height(&self) -> Option<f32> {
+        self.bound(MAX_HEIGHT)
+    }
+
+    /// Returns whether the incoming constraints take precedence over these bounds.
+    pub fn enforce_incoming(&self) -> bool {
+        self.flags & ENFORCE_INCOMING != 0
+    }
+
+    // Whether the bounds of the axis whose slots are `min` and `max` fix
+    // its size: both set, and equal.
+    fn fixes(&self, min: usize, max: usize, fixed: u32) -> bool {
+        if self.flags & PREPARED != 0 {
+            return self.flags & fixed != 0;
         }
-        let target = self.round_targets(density);
-        self.rounded.set(Some((density, target)));
-        target
+        self.bound(min).is_some() && self.bound(min) == self.bound(max)
+    }
+
+    fn fixes_width(&self) -> bool {
+        self.fixes(MIN_WIDTH, MAX_WIDTH, FIXED_WIDTH)
+    }
+
+    fn fixes_height(&self) -> bool {
+        self.fixes(MIN_HEIGHT, MAX_HEIGHT, FIXED_HEIGHT)
+    }
+
+    // Whether no bound of the axis whose slots are `min` and `max` is set.
+    fn frees(&self, min: usize, max: usize) -> bool {
+        self.flags & ((1 << min) | (1 << max)) == 0
+    }
+
+    // The constraints the sizes ask for, each on a whole device pixel of
+    // `density` as Compose's `SizeNode` rounds them: those a coordinator
+    // prepared, or worked out here.
+    fn target_constraints(&self, density: f32) -> Constraints {
+        if self.flags & PREPARED != 0 {
+            let [min_width, max_width, min_height, max_height] = self.values;
+            return Constraints {
+                min_width,
+                max_width,
+                min_height,
+                max_height,
+            };
+        }
+        self.round_targets(density)
     }
 
     fn round_targets(&self, density: f32) -> Constraints {
@@ -93,42 +171,66 @@ impl SizeNode {
             max_height,
         }
     }
+}
 
-    /// Returns the smallest width in logical pixels, or `None` for no minimum.
-    pub fn min_width(&self) -> Option<f32> {
-        self.bounds.get(MIN_WIDTH)
-    }
-
-    /// Returns the largest width in logical pixels, or `None` for no maximum.
-    pub fn max_width(&self) -> Option<f32> {
-        self.bounds.get(MAX_WIDTH)
-    }
-
-    /// Returns the smallest height in logical pixels, or `None` for no minimum.
-    pub fn min_height(&self) -> Option<f32> {
-        self.bounds.get(MIN_HEIGHT)
-    }
-
-    /// Returns the largest height in logical pixels, or `None` for no maximum.
-    pub fn max_height(&self) -> Option<f32> {
-        self.bounds.get(MAX_HEIGHT)
-    }
-
-    /// Returns whether the incoming constraints take precedence over these bounds.
-    pub fn enforce_incoming(&self) -> bool {
-        self.enforce_incoming
+impl Hash for SizeElement {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        hash_option_f32(state, self.min_width());
+        hash_option_f32(state, self.max_width());
+        hash_option_f32(state, self.min_height());
+        hash_option_f32(state, self.max_height());
+        self.enforce_incoming().hash(state);
     }
 }
 
-impl DelegatableNode for SizeNode {
-    fn node_state(&self) -> &NodeState {
-        &self.state
+impl PlainElement for SizeElement {
+    const WORDS: usize = 5;
+    const CAPABILITIES: NodeCapabilities = NodeCapabilities::LAYOUT;
+    const UPDATE_INVALIDATION: Option<InvalidationKind> = Some(InvalidationKind::Layout);
+    const LAYOUT: Option<&'static PlainLayoutFns> = Some(&PlainLayoutFns::of::<Self>());
+
+    #[inline]
+    fn to_words(&self, words: &mut [u32]) {
+        let [a, b, c, d] = self.values.map(f32::to_bits);
+        words.copy_from_slice(&[a, b, c, d, self.flags]);
+    }
+
+    // One length check for the five words, where an index each would
+    // check five times. A coordinator hands more words than the element's.
+    #[inline]
+    fn from_words(words: &[u32]) -> Self {
+        let (values, flags) = match *words {
+            [a, b, c, d, flags, ..] => ([a, b, c, d], flags),
+            _ => ([0; 4], 0),
+        };
+        Self {
+            values: values.map(f32::from_bits),
+            flags,
+        }
     }
 }
 
-impl_layout_modifier_node!(SizeNode, invalidate = InvalidationKind::Layout);
+impl PlainLayout for SizeElement {
+    fn prepared(self, density: f32) -> Self {
+        let target = self.round_targets(density);
+        let mut flags = self.flags | PREPARED;
+        if self.fixes_width() {
+            flags |= FIXED_WIDTH;
+        }
+        if self.fixes_height() {
+            flags |= FIXED_HEIGHT;
+        }
+        Self {
+            values: [
+                target.min_width,
+                target.max_width,
+                target.min_height,
+                target.max_height,
+            ],
+            flags,
+        }
+    }
 
-impl LayoutModifierNode for SizeNode {
     fn measure_hold(
         &self,
         density: f32,
@@ -136,19 +238,19 @@ impl LayoutModifierNode for SizeNode {
         size: Size,
         wrapped: cranpose_ui_layout::WrappedHold,
     ) -> Option<cranpose_ui_layout::ConstraintsHold> {
-        if !self.enforce_incoming {
+        if !self.enforce_incoming() {
             return None;
         }
         let target = self.target_constraints(density);
         Some(cranpose_ui_layout::ConstraintsHold {
             width: size_axis_hold(
-                (self.min_width(), self.max_width()),
+                (self.fixes_width(), self.frees(MIN_WIDTH, MAX_WIDTH)),
                 target.min_width,
                 size.width,
                 wrapped.hold.map(|hold| hold.width),
             )?,
             height: size_axis_hold(
-                (self.min_height(), self.max_height()),
+                (self.fixes_height(), self.frees(MIN_HEIGHT, MAX_HEIGHT)),
                 target.min_height,
                 size.height,
                 wrapped.hold.map(|hold| hold.height),
@@ -164,7 +266,7 @@ impl LayoutModifierNode for SizeNode {
     ) -> cranpose_ui_layout::LayoutModifierMeasureResult {
         let target = self.target_constraints(context.density());
 
-        let wrapped_constraints = if self.enforce_incoming {
+        let wrapped_constraints = if self.enforce_incoming() {
             Constraints {
                 min_width: target
                     .min_width
@@ -217,9 +319,7 @@ impl LayoutModifierNode for SizeNode {
         let measured_width = placeable.width();
         let measured_height = placeable.height();
 
-        let result_width = if self.min_width().is_some()
-            && self.max_width().is_some()
-            && self.min_width() == self.max_width()
+        let result_width = if self.fixes_width()
             && target.min_width >= wrapped_constraints.min_width
             && target.min_width <= wrapped_constraints.max_width
         {
@@ -228,9 +328,7 @@ impl LayoutModifierNode for SizeNode {
             measured_width
         };
 
-        let result_height = if self.min_height().is_some()
-            && self.max_height().is_some()
-            && self.min_height() == self.max_height()
+        let result_height = if self.fixes_height()
             && target.min_height >= wrapped_constraints.min_height
             && target.min_height <= wrapped_constraints.max_height
         {
@@ -249,7 +347,7 @@ impl LayoutModifierNode for SizeNode {
         size_intrinsic(
             self.target_constraints(density),
             SizeAxis::Width,
-            self.enforce_incoming,
+            self.enforce_incoming(),
             height,
             |h| measurable.min_intrinsic_width(h),
         )
@@ -259,7 +357,7 @@ impl LayoutModifierNode for SizeNode {
         size_intrinsic(
             self.target_constraints(density),
             SizeAxis::Width,
-            self.enforce_incoming,
+            self.enforce_incoming(),
             height,
             |h| measurable.max_intrinsic_width(h),
         )
@@ -269,7 +367,7 @@ impl LayoutModifierNode for SizeNode {
         size_intrinsic(
             self.target_constraints(density),
             SizeAxis::Height,
-            self.enforce_incoming,
+            self.enforce_incoming(),
             width,
             |w| measurable.min_intrinsic_height(w),
         )
@@ -279,127 +377,29 @@ impl LayoutModifierNode for SizeNode {
         size_intrinsic(
             self.target_constraints(density),
             SizeAxis::Height,
-            self.enforce_incoming,
+            self.enforce_incoming(),
             width,
             |w| measurable.max_intrinsic_height(w),
         )
     }
 }
 
-/// Element that creates and updates size nodes.
-///
-/// Matches Kotlin: `SizeElement` in foundation-layout/src/commonMain/kotlin/androidx/compose/foundation/layout/Size.kt
-#[derive(Debug, Clone, PartialEq)]
-pub struct SizeElement {
-    min_width: Option<f32>,
-    max_width: Option<f32>,
-    min_height: Option<f32>,
-    max_height: Option<f32>,
-    enforce_incoming: bool,
-}
-
-impl SizeElement {
-    /// Creates an element that fixes the width and height, in logical pixels. A `None` length is
-    /// left free. The incoming constraints take precedence.
-    pub fn new(width: Option<f32>, height: Option<f32>) -> Self {
-        Self {
-            min_width: width,
-            max_width: width,
-            min_height: height,
-            max_height: height,
-            enforce_incoming: true,
-        }
-    }
-
-    /// Creates an element with the given widths and heights, in logical pixels. A `None` bound is
-    /// left open. When `enforce_incoming` is true, the incoming constraints take precedence over
-    /// these bounds.
-    pub fn with_constraints(
-        min_width: Option<f32>,
-        max_width: Option<f32>,
-        min_height: Option<f32>,
-        max_height: Option<f32>,
-        enforce_incoming: bool,
-    ) -> Self {
-        Self {
-            min_width,
-            max_width,
-            min_height,
-            max_height,
-            enforce_incoming,
-        }
-    }
-}
-
-impl Hash for SizeElement {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        hash_option_f32(state, self.min_width);
-        hash_option_f32(state, self.max_width);
-        hash_option_f32(state, self.min_height);
-        hash_option_f32(state, self.max_height);
-        self.enforce_incoming.hash(state);
-    }
-}
-
-impl ModifierNodeElement for SizeElement {
-    type Node = SizeNode;
-    const FROM_NODE: Option<fn(&SizeNode) -> Self> = Some(|node| Self {
-        min_width: node.min_width(),
-        max_width: node.max_width(),
-        min_height: node.min_height(),
-        max_height: node.max_height(),
-        enforce_incoming: node.enforce_incoming,
-    });
-
-    fn create(&self) -> Self::Node {
-        SizeNode::new(
-            self.min_width,
-            self.max_width,
-            self.min_height,
-            self.max_height,
-            self.enforce_incoming,
-        )
-    }
-
-    fn update(&self, node: &mut Self::Node) {
-        let bounds = SizeBounds::of([
-            self.min_width,
-            self.max_width,
-            self.min_height,
-            self.max_height,
-        ]);
-        if node.bounds != bounds || node.enforce_incoming != self.enforce_incoming {
-            node.bounds = bounds;
-            node.enforce_incoming = self.enforce_incoming;
-            node.rounded.set(None);
-        }
-    }
-
-    fn capabilities(&self) -> NodeCapabilities {
-        NodeCapabilities::LAYOUT
-    }
-
-    fn update_invalidation_kind(&self) -> Option<InvalidationKind> {
-        Some(InvalidationKind::Layout)
-    }
-}
-
-/// One axis of what a size modifier that enforces incoming constraints
-/// holds for: a fixed size that fit holds while the bounds allow it, and an
-/// axis it leaves unsized passes the bounds to its content and holds what
-/// the content holds.
+// One axis of what a size modifier that enforces incoming constraints
+// holds for: a fixed size that fit holds while the bounds allow it, and an
+// axis it leaves unsized, as `free` tells, passes the bounds to its content
+// and holds what the content holds.
 fn size_axis_hold(
-    (min, max): (Option<f32>, Option<f32>),
+    (fixed, free): (bool, bool),
     target: f32,
     size: f32,
     wrapped: Option<cranpose_ui_layout::AxisHold>,
 ) -> Option<cranpose_ui_layout::AxisHold> {
-    match (min, max) {
-        (Some(min), Some(max)) if min == max && size == target => {
-            Some(cranpose_ui_layout::AxisHold::sized(target))
-        }
-        (None, None) => wrapped,
-        _ => None,
+    if fixed && size == target {
+        Some(cranpose_ui_layout::AxisHold::sized(target))
+    } else if free {
+        wrapped
+    } else {
+        None
     }
 }
 
@@ -439,37 +439,5 @@ fn size_intrinsic(
             cross.clamp(cross_min, cross_max)
         };
         intrinsic(child_cross).clamp(target_min, target_max)
-    }
-}
-
-// Which of a size node's bounds a slot of `SizeBounds` holds.
-const MIN_WIDTH: usize = 0;
-const MAX_WIDTH: usize = 1;
-const MIN_HEIGHT: usize = 2;
-const MAX_HEIGHT: usize = 3;
-
-// A size node's bounds in logical pixels: the bit of a slot in `set` says
-// the slot holds a bound, and a slot without one holds 0.
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct SizeBounds {
-    values: [f32; 4],
-    set: u8,
-}
-
-impl SizeBounds {
-    fn of(bounds: [Option<f32>; 4]) -> Self {
-        let mut values = [0.0; 4];
-        let mut set = 0;
-        for (slot, bound) in bounds.into_iter().enumerate() {
-            if let Some(value) = bound {
-                values[slot] = value;
-                set |= 1 << slot;
-            }
-        }
-        Self { values, set }
-    }
-
-    fn get(self, slot: usize) -> Option<f32> {
-        (self.set & (1 << slot) != 0).then_some(self.values[slot])
     }
 }

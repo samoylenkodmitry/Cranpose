@@ -23,7 +23,7 @@ use crate::{
     },
     modifier_nodes::{
         BackgroundElement, ClipToBoundsNode, CornerShapeElement, DrawCommandNode,
-        GraphicsLayerNode, PaddingNode, PointerIconNode, SelectableTextNode,
+        GraphicsLayerNode, PaddingElement, PointerIconNode, SelectableTextNode,
         WindowRectReporterNode,
     },
     text_field_modifier_node::TextFieldModifierNode,
@@ -137,7 +137,14 @@ fn collect_modifier_slices_into(
     for (modifier_index, node_ref) in chain.head_to_tail().enumerate() {
         let node_caps = node_ref.kind_set();
 
-        backgrounds.take_plain(&node_ref, (parts, layout_ordinal, padding), slices);
+        // A plain element is a background, a corner shape or a layout
+        // modifier, whose coordinator the draws after it belong past.
+        if let Some(insets) =
+            backgrounds.take_plain(&node_ref, (parts, layout_ordinal, padding), density, slices)
+        {
+            padding += insets;
+            layout_ordinal += 1;
+        }
 
         node_ref.with_node(|node| {
             let any = node.as_any();
@@ -167,11 +174,6 @@ fn collect_modifier_slices_into(
             // `InPlaceReach::of` names the layout elements whose values no
             // slice reads; a slice that reads one here takes it off that list.
             if has_layout && node_caps.intersects(NodeCapabilities::LAYOUT) {
-                if let Some(padding_node) = any.downcast_ref::<PaddingNode>() {
-                    padding +=
-                        crate::modifier_nodes::device_padding(padding_node.padding(), density);
-                }
-
                 if let Some(motion_context_node) = any.downcast_ref::<MotionContextAnimatedNode>() {
                     slices.rare_mut().motion_context_animated = motion_context_node.is_active();
                 }
@@ -261,21 +263,30 @@ impl Backgrounds {
         });
     }
 
-    // Takes in the plain element at `node_ref`, when it is a background,
-    // which draws in the rect of the coordinator `ordinal` under `padding`,
-    // or a corner shape.
+    // Takes in the plain element at `node_ref`: a background, which draws
+    // in the rect of the coordinator `ordinal` under `padding`, a corner
+    // shape, or a layout modifier, whose insets at `density` it returns,
+    // zero for all but a padding. `None` for a node.
     fn take_plain(
         &mut self,
         node_ref: &cranpose_foundation::ModifierChainNodeRef<'_>,
         (parts, ordinal, padding): (Option<&Rc<LayoutParts>>, usize, EdgeInsets),
+        density: f32,
         slices: &ModifierNodeSlices,
-    ) {
-        if let Some(background) = node_ref.plain::<BackgroundElement>() {
+    ) -> Option<EdgeInsets> {
+        let (fns, words) = node_ref.plain_words()?;
+        if let Some(background) = fns.read::<BackgroundElement>(words) {
             let coordinator = CoordinatorRect::new(parts, ordinal, padding);
             self.push(background.color(), coordinator, slices);
-        } else if let Some(shape) = node_ref.plain::<CornerShapeElement>() {
+        } else if let Some(shape) = fns.read::<CornerShapeElement>(words) {
             self.shape(shape.shape());
         }
+        fns.capabilities()
+            .contains(NodeCapabilities::LAYOUT)
+            .then(|| match fns.read::<PaddingElement>(words) {
+                Some(element) => crate::modifier_nodes::device_padding(element.padding(), density),
+                None => EdgeInsets::default(),
+            })
     }
 
     fn shape(&mut self, shape: RoundedCornerShape) {

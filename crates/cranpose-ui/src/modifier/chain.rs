@@ -9,7 +9,7 @@ use cranpose_core::{NodeId, PackedU64};
 use cranpose_foundation::InvalidationKind;
 use cranpose_foundation::{
     BasicModifierNodeContext, ModifierInvalidations, ModifierNode, ModifierNodeChain,
-    ModifierNodeContext, NodeCapabilities,
+    ModifierNodeContext, NodeCapabilities, PlainElement as _,
 };
 
 use super::{
@@ -26,8 +26,8 @@ pub(crate) use shared_parent_data::SharedParentData;
 
 use crate::{
     modifier_nodes::{
-        AlignmentNode, FillDirection, FillElement, FillNode, OffsetNode, PaddingNode, SizeElement,
-        SizeNode, WeightNode,
+        AlignmentNode, FillDirection, FillElement, OffsetNode, PaddingElement, SizeElement,
+        WeightNode,
     },
     text_modifier_node::TextModifierElement,
 };
@@ -66,6 +66,10 @@ pub struct ModifierChainHandle {
     /// attachment: a reader that keeps what it derived from a chain knows
     /// when to derive it again, also after its node takes a new chain.
     revision: PackedU64,
+    // Counts the updates in place that changed a value layout reads, which
+    // leave the revision as it is: a reader that keeps a copy of a plain
+    // element's value takes the value again when this moves.
+    values: u32,
     // The inspector metadata of the modifier last set, which the layout
     // tree's inspection reads.
     #[cfg(feature = "inspection")]
@@ -147,6 +151,7 @@ impl ModifierChainHandle {
             modifier_locals: None,
             debug_logging: false,
             revision: PackedU64::new(next_revision()),
+            values: 0,
             #[cfg(feature = "inspection")]
             inspector: None,
         }
@@ -172,6 +177,11 @@ impl ModifierChainHandle {
     /// The chain's current revision; see the field.
     pub(crate) fn revision(&self) -> u64 {
         self.revision.get()
+    }
+
+    /// The count of the chain's value changes in place; see the field.
+    pub(crate) fn values(&self) -> u32 {
+        self.values
     }
 
     pub(crate) fn set_layout_direction(&mut self, direction: crate::LayoutDirection) -> bool {
@@ -268,6 +278,7 @@ impl ModifierChainHandle {
             self.inspector = inspector_of(modifier);
         }
         if updated && update.reach == InPlaceReach::Resolved {
+            self.values = self.values.wrapping_add(1);
             self.resolve();
         }
         updated
@@ -488,24 +499,30 @@ impl ModifierChainHandle {
             .collect();
         let mut snapshot = Vec::with_capacity(chain_len);
         self.chain.for_each_forward(|node_ref| {
-            node_ref.with_node(|node| {
-                let depth = node_ref.delegate_depth();
-                let entry_index = node_ref.entry_index();
-                let inspector = if depth == 0 {
-                    entry_index
-                        .and_then(|idx| records.get_mut(idx))
-                        .and_then(Option::take)
-                } else {
-                    None
-                };
-                snapshot.push(ModifierChainInspectorNode {
-                    depth,
-                    entry_index,
-                    type_name: type_name_of_val(node),
-                    capabilities: node_ref.kind_set(),
-                    aggregate_child_capabilities: node_ref.aggregate_child_capabilities(),
-                    inspector,
-                });
+            // A plain element has no node: its element type names it.
+            let type_name = match node_ref.plain_words() {
+                Some((fns, _)) => Some(fns.type_name()),
+                None => node_ref.with_node(|node| type_name_of_val(node)),
+            };
+            let Some(type_name) = type_name else {
+                return;
+            };
+            let depth = node_ref.delegate_depth();
+            let entry_index = node_ref.entry_index();
+            let inspector = if depth == 0 {
+                entry_index
+                    .and_then(|idx| records.get_mut(idx))
+                    .and_then(Option::take)
+            } else {
+                None
+            };
+            snapshot.push(ModifierChainInspectorNode {
+                depth,
+                entry_index,
+                type_name,
+                capabilities: node_ref.kind_set(),
+                aggregate_child_capabilities: node_ref.aggregate_child_capabilities(),
+                inspector,
             });
         });
         snapshot
@@ -516,7 +533,12 @@ impl ModifierChainHandle {
         let mut resolution = Resolution::default();
         self.chain
             .for_each_forward_matching(NodeCapabilities::LAYOUT, |node_ref| {
-                node_ref.with_node(|node| resolution.take(node.as_any()));
+                match node_ref.plain_words() {
+                    Some((fns, words)) => resolution.take_plain(fns, words),
+                    None => {
+                        node_ref.with_node(|node| resolution.take(node.as_any()));
+                    }
+                }
             });
         resolution
     }
@@ -563,23 +585,25 @@ struct Resolution {
 }
 
 impl Resolution {
+    /// Takes in the next plain element of the walk, of the type `fns`
+    /// tells, from its `words`.
+    fn take_plain(&mut self, fns: &cranpose_foundation::PlainFns, words: &[u32]) {
+        // One type lookup an element: each `read` asks for it again.
+        let kind = fns.element_type();
+        if kind == TypeId::of::<PaddingElement>() {
+            self.padding += PaddingElement::from_words(words).padding();
+        } else if kind == TypeId::of::<SizeElement>() {
+            apply_size_node(&mut self.layout, &SizeElement::from_words(words));
+        } else if kind == TypeId::of::<FillElement>() {
+            self.take_fill(&FillElement::from_words(words));
+        }
+    }
+
     /// Takes in the next node of the walk.
     fn take(&mut self, node: &dyn Any) {
         // One type lookup a node: each `downcast_ref` asks for it again.
         let kind = Any::type_id(node);
-        if kind == TypeId::of::<PaddingNode>() {
-            if let Some(padding) = node.downcast_ref::<PaddingNode>() {
-                self.padding += padding.padding();
-            }
-        } else if kind == TypeId::of::<SizeNode>() {
-            if let Some(size) = node.downcast_ref::<SizeNode>() {
-                apply_size_node(&mut self.layout, size);
-            }
-        } else if kind == TypeId::of::<FillNode>() {
-            if let Some(fill) = node.downcast_ref::<FillNode>() {
-                self.take_fill(fill);
-            }
-        } else if kind == TypeId::of::<WeightNode>() {
+        if kind == TypeId::of::<WeightNode>() {
             if let Some(weight) = node.downcast_ref::<WeightNode>() {
                 self.layout
                     .weight
@@ -603,7 +627,7 @@ impl Resolution {
         }
     }
 
-    fn take_fill(&mut self, fill: &FillNode) {
+    fn take_fill(&mut self, fill: &FillElement) {
         apply_fill_node(&mut self.layout, fill);
         let (horizontal, vertical) = match fill.direction() {
             FillDirection::Horizontal => (true, false),
@@ -634,7 +658,7 @@ fn apply_alignment_node(layout: &mut LayoutProperties, node: &AlignmentNode) {
     }
 }
 
-fn apply_size_node(layout: &mut LayoutProperties, node: &SizeNode) {
+fn apply_size_node(layout: &mut LayoutProperties, node: &SizeElement) {
     apply_size_axis(
         node.min_width(),
         node.max_width(),
@@ -678,7 +702,7 @@ fn apply_size_axis(
     }
 }
 
-fn apply_fill_node(layout: &mut LayoutProperties, node: &FillNode) {
+fn apply_fill_node(layout: &mut LayoutProperties, node: &FillElement) {
     let fraction = node.fraction();
     match node.direction() {
         FillDirection::Horizontal => {

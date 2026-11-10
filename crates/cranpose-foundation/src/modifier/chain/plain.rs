@@ -10,9 +10,11 @@ use std::{
 };
 
 use cranpose_core::{ProvidedValue, hash::default};
+use cranpose_ui_layout::{ConstraintsHold, LayoutModifierMeasureResult, WrappedHold};
 
 use super::super::{
-    AnyModifierElement, DynModifierElement, ElementMaker, InvalidationKind, NodeCapabilities,
+    AnyModifierElement, Constraints, DynModifierElement, ElementMaker, InvalidationKind,
+    Measurable, ModifierNodeContext, NodeCapabilities, Size,
 };
 
 /// The most words a plain element's value takes in a chain's payload.
@@ -39,6 +41,12 @@ pub trait PlainElement: fmt::Debug + Hash + PartialEq + Sized + 'static {
     /// The value that [`Self::to_words`] wrote into `words`.
     fn from_words(words: &[u32]) -> Self;
 
+    /// How the element measures the content it wraps, for an element with
+    /// [`NodeCapabilities::LAYOUT`]: `Some(&PlainLayoutFns::of::<Self>())`
+    /// for a [`PlainLayout`]. `None`, the default, passes the content's
+    /// measure through.
+    const LAYOUT: Option<&'static PlainLayoutFns> = None;
+
     /// Human readable name surfaced to inspector tooling.
     fn inspector_name(&self) -> &'static str {
         type_name::<Self>()
@@ -48,12 +56,181 @@ pub trait PlainElement: fmt::Debug + Hash + PartialEq + Sized + 'static {
     fn inspector_properties(&self, _inspector: &mut dyn FnMut(&'static str, String)) {}
 }
 
+/// A plain element that measures the content it wraps, as a
+/// [`super::super::LayoutModifierNode`] does, from its value alone.
+pub trait PlainLayout: PlainElement {
+    /// Measures the wrapped content under `constraints` and returns the size
+    /// the element takes and where it places the content.
+    fn measure(
+        &self,
+        context: &mut dyn ModifierNodeContext,
+        measurable: &dyn Measurable,
+        constraints: Constraints,
+    ) -> LayoutModifierMeasureResult;
+
+    /// The element as a coordinator keeps it for measures at `density`: an
+    /// element that rounds its values to device pixels may round them here
+    /// once, and measure from the rounded values. The default is the
+    /// element itself.
+    fn prepared(self, _density: f32) -> Self {
+        self
+    }
+
+    /// The incoming constraints the last measure, which gave `size` under
+    /// `constraints`, holds for; see
+    /// [`super::super::LayoutModifierNode::measure_hold`].
+    fn measure_hold(
+        &self,
+        _density: f32,
+        _constraints: Constraints,
+        _size: Size,
+        _wrapped: WrappedHold,
+    ) -> Option<ConstraintsHold> {
+        None
+    }
+
+    /// The minimum intrinsic width: the wrapped content's by default.
+    fn min_intrinsic_width(&self, measurable: &dyn Measurable, height: f32, _density: f32) -> f32 {
+        measurable.min_intrinsic_width(height)
+    }
+
+    /// The maximum intrinsic width: the wrapped content's by default.
+    fn max_intrinsic_width(&self, measurable: &dyn Measurable, height: f32, _density: f32) -> f32 {
+        measurable.max_intrinsic_width(height)
+    }
+
+    /// The minimum intrinsic height: the wrapped content's by default.
+    fn min_intrinsic_height(&self, measurable: &dyn Measurable, width: f32, _density: f32) -> f32 {
+        measurable.min_intrinsic_height(width)
+    }
+
+    /// The maximum intrinsic height: the wrapped content's by default.
+    fn max_intrinsic_height(&self, measurable: &dyn Measurable, width: f32, _density: f32) -> f32 {
+        measurable.max_intrinsic_height(width)
+    }
+}
+
+/// Which intrinsic size a measure asks for.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum PlainIntrinsic {
+    /// The minimum width at a height.
+    MinWidth(f32),
+    /// The maximum width at a height.
+    MaxWidth(f32),
+    /// The minimum height at a width.
+    MinHeight(f32),
+    /// The maximum height at a width.
+    MaxHeight(f32),
+}
+
+type MeasureFn = fn(
+    &[u32],
+    &mut dyn ModifierNodeContext,
+    &dyn Measurable,
+    Constraints,
+) -> LayoutModifierMeasureResult;
+
+/// How a plain layout element measures, read from its words: what a
+/// coordinator keeps of the element's type.
+pub struct PlainLayoutFns {
+    prepare: fn(&[u32], f32, &mut [u32]),
+    measure: MeasureFn,
+    measure_hold: fn(&[u32], f32, Constraints, Size, WrappedHold) -> Option<ConstraintsHold>,
+    intrinsic: fn(&[u32], &dyn Measurable, PlainIntrinsic, f32) -> f32,
+}
+
+impl fmt::Debug for PlainLayoutFns {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PlainLayoutFns").finish_non_exhaustive()
+    }
+}
+
+impl PlainLayoutFns {
+    /// The table of the plain layout element `E`.
+    pub const fn of<E: PlainLayout>() -> Self {
+        Self {
+            prepare: |words, density, prepared| {
+                E::from_words(words)
+                    .prepared(density)
+                    .to_words(&mut prepared[..E::WORDS]);
+            },
+            measure: |words, context, measurable, constraints| {
+                E::from_words(words).measure(context, measurable, constraints)
+            },
+            measure_hold: |words, density, constraints, size, wrapped| {
+                E::from_words(words).measure_hold(density, constraints, size, wrapped)
+            },
+            intrinsic: |words, measurable, kind, density| {
+                let element = E::from_words(words);
+                match kind {
+                    PlainIntrinsic::MinWidth(height) => {
+                        element.min_intrinsic_width(measurable, height, density)
+                    }
+                    PlainIntrinsic::MaxWidth(height) => {
+                        element.max_intrinsic_width(measurable, height, density)
+                    }
+                    PlainIntrinsic::MinHeight(width) => {
+                        element.min_intrinsic_height(measurable, width, density)
+                    }
+                    PlainIntrinsic::MaxHeight(width) => {
+                        element.max_intrinsic_height(measurable, width, density)
+                    }
+                }
+            },
+        }
+    }
+
+    /// Writes into `prepared` the words of the element `words` hold as a
+    /// coordinator keeps it for measures at `density`; see
+    /// [`PlainLayout::prepared`]. The other calls take prepared words.
+    pub fn prepare(&self, words: &[u32], density: f32, prepared: &mut [u32; PLAIN_WORDS_MAX]) {
+        (self.prepare)(words, density, prepared);
+    }
+
+    /// Measures as the element `words` hold does.
+    #[inline]
+    pub fn measure(
+        &self,
+        words: &[u32],
+        context: &mut dyn ModifierNodeContext,
+        measurable: &dyn Measurable,
+        constraints: Constraints,
+    ) -> LayoutModifierMeasureResult {
+        (self.measure)(words, context, measurable, constraints)
+    }
+
+    /// The hold of the last measure of the element `words` hold.
+    pub fn measure_hold(
+        &self,
+        words: &[u32],
+        density: f32,
+        constraints: Constraints,
+        size: Size,
+        wrapped: WrappedHold,
+    ) -> Option<ConstraintsHold> {
+        (self.measure_hold)(words, density, constraints, size, wrapped)
+    }
+
+    /// The intrinsic size `kind` names of the element `words` hold.
+    pub fn intrinsic(
+        &self,
+        words: &[u32],
+        measurable: &dyn Measurable,
+        kind: PlainIntrinsic,
+        density: f32,
+    ) -> f32 {
+        (self.intrinsic)(words, measurable, kind, density)
+    }
+}
+
 /// What a chain keeps of a plain element's type beside its words: how many
 /// they are, what the element takes part in, and how to read them.
 pub struct PlainFns {
     element_type: fn() -> TypeId,
     words: u8,
     capabilities: NodeCapabilities,
+    layout: Option<&'static PlainLayoutFns>,
+    type_name: fn() -> &'static str,
     hash_code: fn(&[u32]) -> u64,
     element: fn(&[u32]) -> DynModifierElement,
 }
@@ -78,6 +255,16 @@ impl PlainFns {
     /// What the element takes part in.
     pub fn capabilities(&self) -> NodeCapabilities {
         self.capabilities
+    }
+
+    /// How the element measures, when it does.
+    pub fn layout(&self) -> Option<&'static PlainLayoutFns> {
+        self.layout
+    }
+
+    /// The name of the element's type.
+    pub fn type_name(&self) -> &'static str {
+        (self.type_name)()
     }
 
     pub(in super::super) fn hash_code(&self, words: &[u32]) -> u64 {
@@ -107,6 +294,8 @@ impl<E: PlainElement> FnsOf<E> {
         element_type: TypeId::of::<E>,
         words: Self::WORDS,
         capabilities: E::CAPABILITIES,
+        layout: E::LAYOUT,
+        type_name: type_name::<E>,
         hash_code: |words| hash_of(&E::from_words(words)),
         element: |words| plain_element(E::from_words(words)),
     };

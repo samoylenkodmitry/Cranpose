@@ -1,29 +1,27 @@
-// The padding modifier: the node that insets its content, and its element.
+// The padding modifier: the element that insets its content. It is a plain
+// element: a chain keeps its insets as words.
 
 use std::hash::{Hash, Hasher};
 
 use cranpose_foundation::{
-    Constraints, DelegatableNode, InvalidationKind, LayoutModifierNode, Measurable, ModifierNode,
-    ModifierNodeContext, ModifierNodeElement, NodeCapabilities, NodeState, Size,
+    Constraints, Measurable, ModifierNodeContext, NodeCapabilities, PlainElement, PlainLayout,
+    PlainLayoutFns, Size,
 };
 
-use super::{hash_f32_value, impl_layout_modifier_node};
+use super::hash_f32_value;
 use crate::modifier::EdgeInsets;
 
-/// Node that adds padding around its content.
-#[derive(Debug)]
-pub struct PaddingNode {
+/// Element that insets its content: a plain element, which a chain keeps
+/// as words.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PaddingElement {
     padding: EdgeInsets,
-    state: NodeState,
 }
 
-impl PaddingNode {
-    /// Creates a node that pads its content by `padding`, in logical pixels.
+impl PaddingElement {
+    /// Creates an element that pads its content by `padding`, in logical pixels.
     pub fn new(padding: EdgeInsets) -> Self {
-        Self {
-            padding,
-            state: NodeState::new(),
-        }
+        Self { padding }
     }
 
     /// Returns the padding on each edge, in logical pixels.
@@ -32,15 +30,50 @@ impl PaddingNode {
     }
 }
 
-impl DelegatableNode for PaddingNode {
-    fn node_state(&self) -> &NodeState {
-        &self.state
+impl Hash for PaddingElement {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        hash_f32_value(state, self.padding.left);
+        hash_f32_value(state, self.padding.top);
+        hash_f32_value(state, self.padding.right);
+        hash_f32_value(state, self.padding.bottom);
     }
 }
 
-impl_layout_modifier_node!(PaddingNode, invalidate = InvalidationKind::Layout);
+impl PlainElement for PaddingElement {
+    const WORDS: usize = 4;
+    const CAPABILITIES: NodeCapabilities = NodeCapabilities::LAYOUT;
+    const LAYOUT: Option<&'static PlainLayoutFns> = Some(&PlainLayoutFns::of::<Self>());
 
-impl LayoutModifierNode for PaddingNode {
+    #[inline]
+    fn to_words(&self, words: &mut [u32]) {
+        let EdgeInsets {
+            left,
+            top,
+            right,
+            bottom,
+        } = self.padding;
+        words.copy_from_slice(&[left, top, right, bottom].map(f32::to_bits));
+    }
+
+    #[inline]
+    fn from_words(words: &[u32]) -> Self {
+        let sides = match *words {
+            [left, top, right, bottom, ..] => [left, top, right, bottom],
+            _ => [0; 4],
+        };
+        let [left, top, right, bottom] = sides.map(f32::from_bits);
+        Self {
+            padding: EdgeInsets {
+                left,
+                top,
+                right,
+                bottom,
+            },
+        }
+    }
+}
+
+impl PlainLayout for PaddingElement {
     fn measure_hold(
         &self,
         density: f32,
@@ -135,48 +168,5 @@ pub(crate) fn device_padding(padding: EdgeInsets, density: f32) -> EdgeInsets {
         top: round_to_px(padding.top, density),
         right: round_to_px(padding.right, density),
         bottom: round_to_px(padding.bottom, density),
-    }
-}
-
-/// Element that creates and updates padding nodes.
-#[derive(Debug, Clone, PartialEq)]
-pub struct PaddingElement {
-    padding: EdgeInsets,
-}
-
-impl PaddingElement {
-    /// Creates an element for a node that pads its content by `padding`, in logical pixels.
-    pub fn new(padding: EdgeInsets) -> Self {
-        Self { padding }
-    }
-}
-
-impl Hash for PaddingElement {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        hash_f32_value(state, self.padding.left);
-        hash_f32_value(state, self.padding.top);
-        hash_f32_value(state, self.padding.right);
-        hash_f32_value(state, self.padding.bottom);
-    }
-}
-
-impl ModifierNodeElement for PaddingElement {
-    type Node = PaddingNode;
-    const FROM_NODE: Option<fn(&PaddingNode) -> Self> = Some(|node| Self {
-        padding: node.padding,
-    });
-
-    fn create(&self) -> Self::Node {
-        PaddingNode::new(self.padding)
-    }
-
-    fn update(&self, node: &mut Self::Node) {
-        if node.padding != self.padding {
-            node.padding = self.padding;
-        }
-    }
-
-    fn capabilities(&self) -> NodeCapabilities {
-        NodeCapabilities::LAYOUT
     }
 }
