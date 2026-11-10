@@ -117,13 +117,13 @@ fn leaf_of(node_id: NodeId, data: &SnapshotNodeData<'_>, flags: RecordFlags) -> 
 }
 
 // Draws the node `node_id` of `data` again over the items of `record`, its
-// leaf, when its draws come out as the same kinds in the same order and
-// draw no text. False when they do not; the caller then writes the leaf
-// anew.
+// leaf, for the change `kind`, when its draws come out as the same kinds in
+// the same order and draw no text. False when they do not; the caller then
+// writes the leaf anew.
 fn redraw_inline(
     store: &mut SceneStore,
-    record: RecordId,
-    node_id: NodeId,
+    (record, node_id): (RecordId, NodeId),
+    kind: NodeUpdate,
     data: &SnapshotNodeData<'_>,
     context: LowerContext,
 ) -> bool {
@@ -136,10 +136,16 @@ fn redraw_inline(
     let size = data.layout_state.size();
     let drawn = redraw_in_place(store, &items, (node_id, size), slices.draw_commands());
     store.lists.give(items);
-    if drawn {
+    if !drawn {
+        return false;
+    }
+    // A change of draws alone leaves the node's layout: the leaf's rows hold.
+    if kind == NodeUpdate::Draws {
+        store.note_content_change(record);
+    } else {
         store.redraw_leaf(record, leaf_of(node_id, data, leaf_flags(data, context)));
     }
-    drawn
+    true
 }
 
 // Puts `record`, the leaf of the node of `data`, where the node lies under
@@ -217,7 +223,7 @@ pub(super) fn update_dirty_inline(
                 return false;
             }
             if retext_inline(store, record, &data, context)
-                || redraw_inline(store, record, node_id, &data, context)
+                || redraw_inline(store, (record, node_id), kind, &data, context)
             {
                 return false;
             }
