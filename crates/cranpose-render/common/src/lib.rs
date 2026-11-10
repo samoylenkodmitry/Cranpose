@@ -88,8 +88,9 @@ pub enum NodeUpdate {
     /// Its layout, children or draw commands changed: the scene records it
     /// again.
     Content,
-    /// Only state its draws read changed: its layer keeps its children and
-    /// records the node's draws again.
+    /// Only its draws changed: state they read, or a draw modifier updated
+    /// in place, such as a background's color. Its layer keeps its children
+    /// and records the node's draws again.
     Draws,
     /// Its graphics-layer properties changed and it drew the same.
     Layer,
