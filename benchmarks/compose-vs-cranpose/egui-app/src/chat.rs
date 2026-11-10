@@ -129,9 +129,16 @@ impl Chat {
                         .show(ui, |ui| Self::text(ui, text.to_owned()));
                 });
             }
-            ChatBlock::Paragraph(text) => {
+            ChatBlock::Heading(text) | ChatBlock::Paragraph(text) => {
+                let heading = matches!(CHAT_TURN[block % CHAT_TURN.len()], ChatBlock::Heading(_));
                 let chars = shown.map_or(text.len(), |shown| chat_shown_chars(text, shown));
-                Self::text(ui, format!("{} {}", chat_turn_label(turn), &text[..chars]));
+                let text = format!("{} {}", chat_turn_label(turn), &text[..chars]);
+                let look = if heading {
+                    format(CHAT_HEADING_TEXT, bold(), INK)
+                } else {
+                    format(CHAT_TEXT, FontFamily::Proportional, INK)
+                };
+                ui.add(Label::new(LayoutJob::single_section(text, look)).wrap());
             }
             ChatBlock::Code(code) => {
                 let chars = shown.map_or(code.len(), |shown| chat_shown_chars(code, shown));
@@ -146,29 +153,7 @@ impl Chat {
             }
             ChatBlock::Table(rows) => {
                 let count = shown.map_or(rows.len(), |shown| shown.min(rows.len()));
-                let column = (ui.available_width() - 3.0 * GAP) / CHAT_TABLE_COLUMNS as f32;
-                Grid::new(("chat-table", block))
-                    .num_columns(CHAT_TABLE_COLUMNS)
-                    .striped(true)
-                    .min_col_width(column)
-                    .max_col_width(column)
-                    .spacing(vec2(GAP, 3.0))
-                    .show(ui, |ui| {
-                        for (index, row) in rows[..count].iter().enumerate() {
-                            let family = if index == 0 {
-                                bold()
-                            } else {
-                                FontFamily::Proportional
-                            };
-                            for cell in row {
-                                let text = RichText::new(*cell)
-                                    .font(FontId::new(CHAT_CODE_TEXT, family.clone()))
-                                    .color(INK);
-                                ui.label(text);
-                            }
-                            ui.end_row();
-                        }
-                    });
+                Self::table(ui, block, &rows[..count]);
             }
             ChatBlock::Gif => {
                 if !self.gif.is_empty() {
@@ -190,6 +175,33 @@ impl Chat {
                 });
             }
         }
+    }
+
+    // The table of block `block` with `rows`, the first of which is its header.
+    fn table(ui: &mut Ui, block: usize, rows: &[[&str; CHAT_TABLE_COLUMNS]]) {
+        let column = (ui.available_width() - 3.0 * GAP) / CHAT_TABLE_COLUMNS as f32;
+        Grid::new(("chat-table", block))
+            .num_columns(CHAT_TABLE_COLUMNS)
+            .striped(true)
+            .min_col_width(column)
+            .max_col_width(column)
+            .spacing(vec2(GAP, 3.0))
+            .show(ui, |ui| {
+                for (index, row) in rows.iter().enumerate() {
+                    let family = if index == 0 {
+                        bold()
+                    } else {
+                        FontFamily::Proportional
+                    };
+                    for cell in row {
+                        let text = RichText::new(*cell)
+                            .font(FontId::new(CHAT_CODE_TEXT, family.clone()))
+                            .color(INK);
+                        ui.label(text);
+                    }
+                    ui.end_row();
+                }
+            });
     }
 
     // A paragraph of the chat's text, wrapped at the width left.

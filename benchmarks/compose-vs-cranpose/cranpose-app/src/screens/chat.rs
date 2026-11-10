@@ -150,7 +150,8 @@ fn StatusText(frame: MutableState<u32>, token: MutableState<ChatToken>) {
 fn Block(index: usize, live: bool, frame: MutableState<u32>, shown: MutableState<usize>) {
     match CHAT_TURN[index % CHAT_TURN.len()] {
         ChatBlock::User(text) => User(text),
-        ChatBlock::Paragraph(text) => Paragraph(ChatToken::turn(index), text, live, shown),
+        ChatBlock::Heading(text) => Typed(ChatToken::turn(index), text, true, live, shown),
+        ChatBlock::Paragraph(text) => Typed(ChatToken::turn(index), text, false, live, shown),
         ChatBlock::Code(code) => Code(ChatToken::turn(index), code, live, shown),
         ChatBlock::Table(rows) => Table(rows, live, shown),
         ChatBlock::Gif => Gif(frame),
@@ -176,17 +177,24 @@ fn User(text: &'static str) {
     );
 }
 
+// A paragraph, or a heading in the bold face: the turn's number, then as
+// much of `text` as arrived.
 #[composable]
-fn Paragraph(turn: usize, text: &'static str, live: bool, shown: MutableState<usize>) {
+fn Typed(turn: usize, text: &'static str, heading: bool, live: bool, shown: MutableState<usize>) {
     let chars = if live {
         data::chat_shown_chars(text, shown.get())
     } else {
         text.len()
     };
+    let size = if heading {
+        data::CHAT_HEADING_TEXT
+    } else {
+        data::CHAT_TEXT
+    };
     Text(
         format!("{} {}", data::chat_turn_label(turn), &text[..chars]),
         Modifier::empty().fill_max_width(),
-        text_style(data::CHAT_TEXT, INK, false),
+        text_style(size, INK, heading),
     );
 }
 

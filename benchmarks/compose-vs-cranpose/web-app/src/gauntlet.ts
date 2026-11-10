@@ -44,6 +44,8 @@ interface Launch {
   freeze: number;
   /** The screen: the gauntlet unless it is `wall` or `patchwork`. */
   scenario?: string;
+  /** The one part of the patchwork to show: patch 1 to 9, or 10 for the chat. */
+  only?: number;
 }
 
 /** The Android app's plugin: what `am start` asked, and `PERF` lines under the other apps' log tag. */
@@ -86,6 +88,7 @@ function host(): { launch: Promise<Launch>; log(message: string): void } {
       tier: Number(query.get('tier') ?? 5),
       freeze: Number(query.get('freeze') ?? 0),
       scenario: query.get('scenario') ?? undefined,
+      only: Number(query.get('only') ?? 0),
     }),
     log: (message) => console.log(message),
   };
@@ -335,7 +338,7 @@ async function main() {
     return;
   }
   if (launch.scenario === 'patchwork') {
-    patchwork(launch.tier, launch.freeze, log);
+    patchwork(launch.tier, launch.freeze, log, launch.only ?? 0);
     return;
   }
   const tier = gauntletTier(launch.tier);

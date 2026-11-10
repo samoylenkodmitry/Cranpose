@@ -1,11 +1,12 @@
 //! The patchwork (`../../../README.md`): nine patches of the still wall's
-//! tiles, each of which changes in a way of its own every frame.
+//! tiles. Two never change; in the others a frame changes a small part.
 //!
-//! In Cranpose's idiom each patch reads the frame as late as it can: the
-//! recolor patch in its tiles' draw blocks, the deep patch in its innermost
-//! texts, the pile patch in one call whose tiles skip but for the two whose
-//! fill changes. The churn patch's cells and the reorder patch's row compose
-//! again each frame, the row's items under their keys.
+//! In Cranpose's idiom a tile, a cell or a nest reads a state derived from
+//! the frame, which changes only when its own content does: a frame composes
+//! or draws again the part that changed and nothing else. The reorder
+//! patch's row composes again each frame with its items under their keys,
+//! and the pile patch in one call whose tiles skip but for the two whose
+//! fill changes.
 
 use std::rc::Rc;
 
@@ -19,8 +20,8 @@ use super::{
     wall::{BACKGROUND, Clock, INK, ONE_LINE, Tile, Wall, rgb, tile_content, tile_rows},
 };
 use crate::data::{
-    self, ChatToken, ChurnKind, PATCH_COLUMNS, PATCH_ROWS, PATCHWORK_CHART_POINTS, PATCHWORK_DEPTH,
-    Patch, WALL_GAP,
+    self, ChatToken, ChurnKind, InTurn, PATCH_COLUMNS, PATCH_ROWS, PATCHWORK_CHART_POINTS,
+    PATCHWORK_DEPTH, Patch, WALL_GAP,
 };
 
 /// What of the screen a launch shows.
@@ -75,6 +76,13 @@ struct Grid {
 }
 
 impl Grid {
+    fn in_turn(self) -> InTurn {
+        InTurn {
+            columns: self.columns,
+            rows: self.rows,
+        }
+    }
+
     fn tiles(self) -> usize {
         self.columns * self.rows
     }
@@ -138,7 +146,7 @@ fn Patches(frame: MutableState<u32>, load: PatchworkLoad, grid: Grid) {
             .map(Rc::new)
     })
     .with(|feed| feed.clone());
-    let jump_rows = data::patchwork_jump_rows(grid.columns);
+    let scroll_rows = data::patchwork_scroll_rows(grid.columns);
     LaunchedEffect((freeze, grid.columns, grid.rows), async move |scope| {
         let clock = scope.runtime().frame_clock();
         let mut index = 0u32;
@@ -146,7 +154,10 @@ fn Patches(frame: MutableState<u32>, load: PatchworkLoad, grid: Grid) {
             clock.next_frame().await;
             index += 1;
             frame.set(index);
-            list_state.scroll_to_item(data::patchwork_jump_first(index, jump_rows, grid.rows), 0.0);
+            list_state.scroll_to_item(
+                data::patchwork_scroll_first(index, scroll_rows, grid.rows),
+                0.0,
+            );
             if let Some(feed) = &feed {
                 chat.advance(feed);
             }
@@ -185,7 +196,7 @@ fn show(patch: Patch, frame: MutableState<u32>, list_state: LazyListState, grid:
         Patch::Churn => Churn(frame, grid),
         Patch::Reorder => Reorder(frame, grid),
         Patch::Deep => Deep(frame, grid),
-        Patch::Jump => Jump(list_state, grid),
+        Patch::Scroll => ScrollList(list_state, grid),
         Patch::Paragraph => Paragraph(frame, grid),
         Patch::Pile => Pile(frame, grid),
     }
@@ -240,25 +251,29 @@ fn Chart(index: usize, width: f32, height: f32) {
     });
 }
 
-// Tiles whose fill follows the frame: each tile's draw block reads it, so a
-// frame draws the fills again and composes and lays out nothing.
+// Tiles whose fill changes in turn: each tile's draw block reads its own
+// fill, derived from the frame, so a frame draws again the fills that
+// changed and composes and lays out nothing.
 #[composable]
 fn Recolor(frame: MutableState<u32>, grid: Grid) {
     Box(grid.patch(), BoxSpec::default(), move || {
         tile_rows(grid.columns, grid.rows, move |index| {
-            RecolorTile(frame, index, grid.width, grid.height);
+            RecolorTile(frame, index, grid);
         });
     });
 }
 
 #[composable]
-fn RecolorTile(frame: MutableState<u32>, index: usize, width: f32, height: f32) {
+fn RecolorTile(frame: MutableState<u32>, index: usize, grid: Grid) {
+    let (width, height) = (grid.width, grid.height);
+    let turn = grid.in_turn();
+    let fill = derivedStateOf(move || data::patchwork_recolor_rgb(index, frame.get(), turn));
     Column(
         Modifier::empty()
             .size_points(width, height)
             .draw_behind(move |scope| {
                 scope.draw_round_rect(
-                    Brush::solid(rgb(data::patchwork_recolor_rgb(index, frame.get()))),
+                    Brush::solid(rgb(fill.get())),
                     CornerRadii::uniform(data::WALL_CORNER),
                 );
             })
@@ -268,22 +283,26 @@ fn RecolorTile(frame: MutableState<u32>, index: usize, width: f32, height: f32) 
     );
 }
 
-// Cells that show another kind of content every frame.
+// Cells that show another kind of content in turn: a cell composes again
+// when its own kind changes.
 #[composable]
 fn Churn(frame: MutableState<u32>, grid: Grid) {
     Box(grid.patch(), BoxSpec::default(), move || {
         tile_rows(grid.columns, grid.rows, move |index| {
-            ChurnCell(frame, index, grid.width, grid.height);
+            ChurnCell(frame, index, grid);
         });
     });
 }
 
 #[composable]
-fn ChurnCell(frame: MutableState<u32>, index: usize, width: f32, height: f32) {
+fn ChurnCell(frame: MutableState<u32>, index: usize, grid: Grid) {
+    let (width, height) = (grid.width, grid.height);
+    let turn = grid.in_turn();
     let cell = Modifier::empty()
         .size_points(width, height)
         .rounded_corners(data::WALL_CORNER);
-    match data::patchwork_churn(index, frame.get()) {
+    let kind = derivedStateOf(move || data::patchwork_churn(index, frame.get(), turn));
+    match kind.get() {
         ChurnKind::Tile => {
             Tile(index, width, height);
         }
@@ -312,8 +331,8 @@ fn ChurnCell(frame: MutableState<u32>, index: usize, width: f32, height: f32) {
     }
 }
 
-// A wrapping row of items whose order turns by one item every frame: each
-// item keeps its key, so a frame moves the items and composes none again.
+// A wrapping row of items, two of which change places every frame: each
+// item keeps its key, so a frame moves those two and composes none again.
 #[composable]
 fn Reorder(frame: MutableState<u32>, grid: Grid) {
     let count = data::patchwork_reorder_count(grid.tiles());
@@ -336,10 +355,22 @@ fn Reorder(frame: MutableState<u32>, grid: Grid) {
     );
 }
 
-// Nests of boxes around digits that change every frame.
+// What every nest of the patch shares: the tiles' height and the nests
+// across and down, which change in turn.
+#[derive(Clone, Copy, PartialEq, Debug)]
+struct Nest {
+    height: f32,
+    turn: InTurn,
+}
+
+// Nests of boxes around digits that change in turn.
 #[composable]
 fn Deep(frame: MutableState<u32>, grid: Grid) {
     let (columns, rows) = data::patchwork_pairs(grid.columns, grid.rows);
+    let nest = Nest {
+        height: grid.height,
+        turn: InTurn { columns, rows },
+    };
     Box(grid.patch(), BoxSpec::default(), move || {
         tile_rows(columns, rows, move |index| {
             Box(
@@ -348,7 +379,7 @@ fn Deep(frame: MutableState<u32>, grid: Grid) {
                     data::patchwork_double(grid.height),
                 ),
                 BoxSpec::default(),
-                move || NestLevel(frame, index, 0, grid.height),
+                move || NestLevel(frame, index, 0, nest),
             );
         });
     });
@@ -357,7 +388,8 @@ fn Deep(frame: MutableState<u32>, grid: Grid) {
 // Box `level` of nest `index` and everything inside it, for tiles `height`
 // points tall.
 #[composable]
-fn NestLevel(frame: MutableState<u32>, index: usize, level: usize, height: f32) {
+fn NestLevel(frame: MutableState<u32>, index: usize, level: usize, nest: Nest) {
+    let height = nest.height;
     Box(
         Modifier::empty()
             .fill_max_size()
@@ -366,30 +398,32 @@ fn NestLevel(frame: MutableState<u32>, index: usize, level: usize, height: f32) 
         BoxSpec::default(),
         move || {
             if level + 1 < PATCHWORK_DEPTH {
-                NestLevel(frame, index, level + 1, height);
+                NestLevel(frame, index, level + 1, nest);
             } else {
-                NestValue(frame, index, height);
+                NestValue(frame, index, nest);
             }
         },
     );
 }
 
-// The digits inside a nest: the one composable of the nest that reads the
-// frame.
+// The digits inside a nest: the one composable of the nest that changes,
+// when its own digits do.
 #[composable]
-fn NestValue(frame: MutableState<u32>, index: usize, height: f32) {
+fn NestValue(frame: MutableState<u32>, index: usize, nest: Nest) {
+    let Nest { height, turn } = nest;
+    let number = derivedStateOf(move || data::patchwork_deep_number(index, frame.get(), turn));
     TextWithOptions(
-        data::patchwork_deep_value(index, frame.get()),
+        format!("{:03}", number.get()),
         Modifier::empty(),
         text_style(data::wall_text_size(height).0, INK, true),
         ONE_LINE,
     );
 }
 
-// A lazy list of rows of tiles, which the frame loop scrolls to other rows
+// A lazy list of rows of tiles, which the frame loop scrolls by one row
 // every frame.
 #[composable]
-fn Jump(list_state: LazyListState, grid: Grid) {
+fn ScrollList(list_state: LazyListState, grid: Grid) {
     LazyColumn(
         grid.patch(),
         list_state,
@@ -398,15 +432,15 @@ fn Jump(list_state: LazyListState, grid: Grid) {
             .content_padding_all(WALL_GAP),
         move |scope| {
             scope.items(
-                LazyItems::new(data::patchwork_jump_rows(grid.columns)).key(|row| row as u64),
-                move |row| JumpRow(row, grid),
+                LazyItems::new(data::patchwork_scroll_rows(grid.columns)).key(|row| row as u64),
+                move |row| ScrollRow(row, grid),
             );
         },
     );
 }
 
 #[composable]
-fn JumpRow(row: usize, grid: Grid) {
+fn ScrollRow(row: usize, grid: Grid) {
     Row(
         Modifier::empty(),
         RowSpec::new().horizontal_arrangement(LinearArrangement::spaced_by(WALL_GAP)),

@@ -1,8 +1,11 @@
 //! The patchwork: nine patches of the still wall's tiles, three across and
-//! three down. Two never change and seven change every frame, each in a way
-//! of its own. A patch costs a framework that keeps its nodes in one way and
-//! a framework that builds the screen again each frame in another, so no one
-//! design pays little for all nine.
+//! three down. Two never change. In the other seven a frame changes a small
+//! part and leaves the rest as it was, each patch in a way of its own: one
+//! row of its tiles, two items of a row, one row of a list, one word of a
+//! paragraph, one tile under others. A framework that keeps what did not
+//! change pays for the part that did; one that builds the screen again each
+//! frame pays for all of it. Each kind of change costs the two designs
+//! differently, so no one design pays little for all nine.
 //!
 //! Everything a frame shows follows from its frame index `k`, in integer
 //! arithmetic, as on the still wall, whose tiers, tiles and clock line the
@@ -22,18 +25,20 @@ pub enum Patch {
     Still,
     /// Line charts of many points that never change.
     Charts,
-    /// Tiles whose fill changes every frame and whose content never does.
+    /// Tiles whose content never changes and whose fill changes every
+    /// few frames, one row of the tiles each frame.
     Recolor,
-    /// Cells that show another kind of content every frame.
+    /// Cells that show another kind of content every few frames, one row of
+    /// the cells each frame.
     Churn,
-    /// A wrapping row of items 1 to 3 tiles wide, whose order turns by one
-    /// item every frame.
+    /// A wrapping row of items 1 to 3 tiles wide, two of which change places
+    /// every frame.
     Reorder,
     /// Boxes nested `PATCHWORK_DEPTH` deep around digits that change every
-    /// frame.
+    /// few frames, in one row of the nests each frame.
     Deep,
-    /// A list of rows of tiles that shows other rows every frame.
-    Jump,
+    /// A list of rows of tiles that scrolls by one row every frame.
+    Scroll,
     /// One paragraph of five-digit words, one of which changes every frame.
     Paragraph,
     /// Translucent tiles lying over one another, one of which is opaque,
@@ -50,15 +55,33 @@ impl Patch {
         Self::Churn,
         Self::Reorder,
         Self::Deep,
-        Self::Jump,
+        Self::Scroll,
         Self::Paragraph,
         Self::Pile,
     ];
 }
 
-/// The step, in tiles or rows, of everything that jumps: with the still
+/// The step, in tiles or words, of everything that jumps: with the still
 /// wall's cursor it crosses a patch in a few frames.
 const JUMP: usize = 37;
+
+/// The items of a patch that change in turn: `columns` by `rows` tiles,
+/// cells or nests. Each frame changes the items of one row, the next row
+/// down the frame after, so a frame changes one row of the patch and the
+/// others stay. What stays grows faster with the tier than what changes.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct InTurn {
+    pub columns: usize,
+    pub rows: usize,
+}
+
+impl InTurn {
+    /// The changes of item `index` up to frame `frame`: one more every
+    /// `rows` frames, in the frame of the item's row.
+    pub fn step(self, index: usize, frame: u32) -> usize {
+        (index / self.columns.max(1) + frame as usize) / self.rows.max(1)
+    }
+}
 
 /// The points of one chart of the charts patch. A chart covers 2 by 2 tiles
 /// and the gap between them, so its points lie closer than a point apart at
@@ -81,8 +104,8 @@ pub fn patchwork_chart_rgb(index: usize) -> [u8; 3] {
 }
 
 /// The fill of tile `index` of the recolor patch in frame `frame`.
-pub fn patchwork_recolor_rgb(index: usize, frame: u32) -> [u8; 3] {
-    crate::PALETTE_RGB[(index + frame as usize) % crate::PALETTE_RGB.len()]
+pub fn patchwork_recolor_rgb(index: usize, frame: u32, turn: InTurn) -> [u8; 3] {
+    crate::PALETTE_RGB[(index + turn.step(index, frame)) % crate::PALETTE_RGB.len()]
 }
 
 /// What a cell of the churn patch shows.
@@ -97,9 +120,9 @@ pub enum ChurnKind {
 }
 
 /// What cell `index` of the churn patch shows in frame `frame`: each cell
-/// goes through the three kinds, a third of the cells in step.
-pub fn patchwork_churn(index: usize, frame: u32) -> ChurnKind {
-    match (index + frame as usize) % 3 {
+/// goes through the three kinds.
+pub fn patchwork_churn(index: usize, frame: u32, turn: InTurn) -> ChurnKind {
+    match turn.step(index, frame) % 3 {
         0 => ChurnKind::Tile,
         1 => ChurnKind::Blank,
         _ => ChurnKind::Label,
@@ -112,9 +135,25 @@ pub fn patchwork_reorder_count(tiles: usize) -> usize {
     (tiles * 2 / 5).max(1)
 }
 
+/// The first of the two neighbouring places of the reorder patch whose items
+/// change places in frame `frame`. Every other item lies at the place of its
+/// own number, and so do these two again in the next frame.
+pub fn patchwork_reorder_swap(frame: u32, count: usize) -> usize {
+    (frame as usize).wrapping_mul(JUMP) % count.saturating_sub(1).max(1)
+}
+
 /// The item at place `position` of the reorder patch in frame `frame`.
 pub fn patchwork_reorder_item(position: usize, frame: u32, count: usize) -> usize {
-    (position + frame as usize) % count.max(1)
+    let swap = patchwork_reorder_swap(frame, count);
+    if count < 2 {
+        position
+    } else if position == swap {
+        position + 1
+    } else if position == swap + 1 {
+        position - 1
+    } else {
+        position
+    }
 }
 
 /// The width of item `item` of the reorder patch, in tiles: 1 to 3. An item
@@ -152,21 +191,27 @@ pub fn patchwork_deep_rgb(index: usize, level: usize) -> [u8; 3] {
     crate::PALETTE_RGB[(index + level) % crate::PALETTE_RGB.len()]
 }
 
-/// The three digits inside nest `index` in frame `frame`.
-pub fn patchwork_deep_value(index: usize, frame: u32) -> String {
-    format!("{:03}", (index * 7 + frame as usize) % 1000)
+/// The number inside nest `index` in frame `frame`, under 1000.
+pub fn patchwork_deep_number(index: usize, frame: u32, turn: InTurn) -> usize {
+    (index * 7 + turn.step(index, frame)) % 1000
 }
 
-/// The rows of the jump patch's list for rows of `columns` tiles: every tile
-/// of the list has a label of its own in five digits.
-pub fn patchwork_jump_rows(columns: usize) -> usize {
+/// The three digits inside nest `index` in frame `frame`.
+pub fn patchwork_deep_value(index: usize, frame: u32, turn: InTurn) -> String {
+    format!("{:03}", patchwork_deep_number(index, frame, turn))
+}
+
+/// The rows of the scroll patch's list for rows of `columns` tiles: every
+/// tile of the list has a label of its own in five digits.
+pub fn patchwork_scroll_rows(columns: usize) -> usize {
     100_000 / columns.max(1)
 }
 
-/// The first row the jump patch shows in frame `frame`, of a list of `total`
-/// rows of which `visible` show at once.
-pub fn patchwork_jump_first(frame: u32, total: usize, visible: usize) -> usize {
-    (frame as usize).wrapping_mul(JUMP) % (total.saturating_sub(visible) + 1)
+/// The first row the scroll patch shows in frame `frame`, of a list of
+/// `total` rows of which `visible` show at once: one row further each frame,
+/// and from the list's end back to its start.
+pub fn patchwork_scroll_first(frame: u32, total: usize, visible: usize) -> usize {
+    frame as usize % (total.saturating_sub(visible) + 1)
 }
 
 /// The words of the paragraph patch for a patch of `tiles` tiles.

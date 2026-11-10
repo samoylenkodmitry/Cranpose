@@ -14,6 +14,8 @@ struct Launch {
     tier: usize,
     freeze: u32,
     scenario: &'static str,
+    /// The one part of the patchwork to show, from `PERF_ONLY`; 0 for all.
+    only: usize,
 }
 
 #[tauri::command]
@@ -23,6 +25,10 @@ fn launch() -> Launch {
         tier: launch.tier,
         freeze: launch.freeze,
         scenario: launch.scenario.name(),
+        only: std::env::var("PERF_ONLY")
+            .ok()
+            .and_then(|only| only.parse().ok())
+            .unwrap_or(0),
     }
 }
 

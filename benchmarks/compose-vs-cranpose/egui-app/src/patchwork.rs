@@ -1,5 +1,5 @@
 //! The patchwork in egui (`../README.md`): nine patches of the still wall's
-//! tiles, each of which changes in a way of its own every frame.
+//! tiles. Two never change; in the others a frame changes a small part.
 //!
 //! egui paints every patch every frame. The text of the tiles that never
 //! change is laid out once, as on the still wall; the text a frame changes
@@ -51,6 +51,13 @@ impl Patchwork {
             text: Vec::new(),
             #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
             chat: super::chat::Chat::new(ctx),
+        }
+    }
+
+    fn in_turn(&self) -> InTurn {
+        InTurn {
+            columns: self.grid.0,
+            rows: self.grid.1,
         }
     }
 
@@ -132,7 +139,7 @@ impl Patchwork {
     fn recolor(&self, shown: &Shown) {
         for (index, text) in self.text.iter().enumerate() {
             let rect = self.tile(shown.rect.min, index);
-            let fill = rgb(patchwork_recolor_rgb(index, shown.frame));
+            let fill = rgb(patchwork_recolor_rgb(index, shown.frame, self.in_turn()));
             paint_tile(
                 &shown.painter,
                 rect,
@@ -150,7 +157,7 @@ impl Patchwork {
         for (index, text) in self.text.iter().enumerate() {
             let rect = self.tile(shown.rect.min, index);
             let fill = rgb(wall_fill_rgb(index));
-            match patchwork_churn(index, shown.frame) {
+            match patchwork_churn(index, shown.frame, self.in_turn()) {
                 ChurnKind::Tile => paint_tile(&shown.painter, rect, fill, height, index, text),
                 ChurnKind::Blank => {
                     shown
@@ -217,7 +224,7 @@ impl Patchwork {
             }
             let value = line(
                 shown.ui,
-                patchwork_deep_value(index, shown.frame),
+                patchwork_deep_value(index, shown.frame, InTurn { columns, rows }),
                 size,
                 bold(),
             );
@@ -225,11 +232,12 @@ impl Patchwork {
         }
     }
 
-    // The rows the frame shows, and the one its edge cuts: the list lays out
-    // the text of each, as no frame shows the rows of the one before.
-    fn jump(&self, shown: &Shown) {
+    // The rows the frame shows, and the one its edge cuts. egui keeps the
+    // layout of a text it showed the frame before, so a frame lays out the
+    // one row that came in.
+    fn scroll(&self, shown: &Shown) {
         let (columns, rows) = self.grid;
-        let first = patchwork_jump_first(shown.frame, patchwork_jump_rows(columns), rows);
+        let first = patchwork_scroll_first(shown.frame, patchwork_scroll_rows(columns), rows);
         for row in 0..=rows {
             for column in 0..columns {
                 let index = (first + row) * columns + column;
@@ -328,7 +336,7 @@ impl eframe::App for Patchwork {
                 Patch::Churn => self.churn(&shown),
                 Patch::Reorder => self.reorder(&shown),
                 Patch::Deep => self.deep(&shown),
-                Patch::Jump => self.jump(&shown),
+                Patch::Scroll => self.scroll(&shown),
                 Patch::Paragraph => self.paragraph(&shown),
                 Patch::Pile => self.pile(&shown),
             }

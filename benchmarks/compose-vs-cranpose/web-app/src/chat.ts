@@ -20,7 +20,7 @@ const HELD = 2 * TURN.length;
 const SPIN_DEGREES = 12;
 const SHIMMER_STEP = 6;
 const SHIMMER_SPAN = 120;
-const KEYWORDS = new Set(['fn', 'let', 'mut', 'if', 'return', 'usize', 'f32', 'Row']);
+const KEYWORDS = new Set(['fn', 'let', 'mut', 'if', 'for', 'in', 'return', 'usize', 'f32', 'Row']);
 const SPINNER =
   '<svg class="chat-spinner" viewBox="0 0 24 24" fill="none" stroke-width="3">' +
   '<path d="M12 3 C16.97 3 21 7.03 21 12 C21 16.97 16.97 21 12 21 C7.03 21 3 16.97 3 12 C3 7.03 7.03 3 12 3 Z" stroke="#3B4A7A"/>' +
@@ -129,6 +129,8 @@ function build(list: HTMLElement, index: number): Grow {
     case 'user':
       element('div', 'chat-user', list).textContent = block.text;
       return () => {};
+    case 'heading':
+      return typed(element('div', 'chat-heading', list), `${turnLabel(turn)} `, block.text);
     case 'paragraph':
       return typed(element('div', 'chat-paragraph', list), `${turnLabel(turn)} `, block.text);
     case 'code':

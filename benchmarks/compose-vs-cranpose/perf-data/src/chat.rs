@@ -36,8 +36,9 @@ pub const CHAT_SHIMMER_STEP: f32 = 6.0;
 pub const CHAT_SHIMMER_SPAN: f32 = 120.0;
 /// The side of the animated picture, in points.
 pub const CHAT_GIF_SIZE: f32 = 64.0;
-/// The size of the chat's text and of its code, in points.
+/// The size of the chat's text, of its headings and of its code, in points.
 pub const CHAT_TEXT: f32 = 12.0;
+pub const CHAT_HEADING_TEXT: f32 = 14.0;
 pub const CHAT_CODE_TEXT: f32 = 11.0;
 
 /// The chat's background, the fill of a question, the fill of a code block
@@ -57,6 +58,8 @@ pub static CHAT_SVG: &str = include_str!("../../chat-assets/progress.svg");
 pub enum ChatBlock {
     /// The user's question, whole at once in a bubble at the right.
     User(&'static str),
+    /// A heading in the bold face, which appears like a paragraph.
+    Heading(&'static str),
     /// Text that appears `CHAT_TOKEN_CHARS` characters a token.
     Paragraph(&'static str),
     /// Code in a monospaced face with its keywords, strings, numbers and
@@ -70,13 +73,42 @@ pub enum ChatBlock {
     Buttons(&'static [&'static str]),
 }
 
-/// One turn of the chat.
-pub static CHAT_TURN: [ChatBlock; 8] = [
+/// One turn of the chat: a question and a long answer, most of which is
+/// text that arrives a few characters a token.
+pub static CHAT_TURN: [ChatBlock; 15] = [
     ChatBlock::User("Why does the list stutter when one row changes?"),
+    ChatBlock::Heading("What happens in a frame"),
     ChatBlock::Paragraph(
-        "The row measures its text again on every frame. Its parent then lays out all of \
-         its children, although only one of them changed size. A boundary around the row \
-         keeps the work inside it.",
+        "The list stutters because a small change starts a large amount of work. The row \
+         that changed shows a counter, and the counter gets a new value on every frame. \
+         The row measures its text again, which is right, because the text is new. The \
+         row then tells its parent that its size may have changed. The parent does not \
+         check whether the size really changed. It measures and places every one of its \
+         children again, the ones on the screen and the ones kept ready beyond its edges. \
+         Each child measures its own text again, although none of that text changed. A \
+         frame that should cost one row costs the whole list, and the cost grows with \
+         the number of rows, not with the size of the change.",
+    ),
+    ChatBlock::Paragraph(
+        "The profile shows the same thing from the other side. Most of the frame goes to \
+         text shaping, and nearly all of the shaped strings are equal to the strings of \
+         the frame before. The cache of shaped text does not help, because the list asks \
+         for each string at a width that differs by a fraction of a point from the width \
+         of the last frame, so every lookup misses. Drawing takes a small part of the \
+         frame and does not change, because the picture is almost the same.",
+    ),
+    ChatBlock::Heading("Three things to change"),
+    ChatBlock::Paragraph(
+        "- Give the row a fixed height. A row whose size cannot change needs no new \
+         layout of its parent, so the work stops at the row.",
+    ),
+    ChatBlock::Paragraph(
+        "- Round the width that the list passes to its rows to whole points. Equal \
+         strings then meet equal widths, and the cache of shaped text answers.",
+    ),
+    ChatBlock::Paragraph(
+        "- Read the counter in the draw phase where the toolkit allows it. A value \
+         that changes only what is drawn should not start composition or layout.",
     ),
     ChatBlock::Code(
         "// Measure only the row that changed.\n\
@@ -88,11 +120,22 @@ pub static CHAT_TURN: [ChatBlock; 8] = [
          \x20   row.label = \"measured\";\n\
          \x20   row.height = row.measure(320.0);\n\
          \x20   row.height\n\
+         }\n\
+         \n\
+         // A row of fixed height ends the pass.\n\
+         fn place(rows: &mut [Row], first: usize) {\n\
+         \x20   let mut top = 0.0;\n\
+         \x20   for row in &mut rows[first..] {\n\
+         \x20       row.top = top;\n\
+         \x20       top = top + row.height;\n\
+         \x20   }\n\
          }\n",
     ),
     ChatBlock::Paragraph(
-        "With the boundary the frame lays out one row, not the list. These are the passes \
-         before and after the change:",
+        "With the boundary in place the frame lays out one row and leaves the others \
+         alone. I ran the list of two thousand rows before and after the change, on the \
+         same device and at the same scroll position. These are the passes of one frame, \
+         as the median of three hundred frames:",
     ),
     ChatBlock::Table(&[
         ["Pass", "Before", "After", "Change"],
@@ -103,8 +146,15 @@ pub static CHAT_TURN: [ChatBlock; 8] = [
         ["Frame", "10.26 ms", "3.03 ms", "-70%"],
     ]),
     ChatBlock::Gif,
-    ChatBlock::Paragraph("The picture above turns while the benchmark runs."),
+    ChatBlock::Paragraph(
+        "Drawing is now the largest pass, and it did not move. The next step is to keep \
+         the drawing of the rows that did not change and to draw only the row with the \
+         counter. That needs a look at how the list records its rows, which I have not \
+         read yet. The picture above turns while the benchmark runs; it stops when the \
+         run ends. Tell me whether to apply the three changes, or to show the diff first.",
+    ),
     ChatBlock::Buttons(&["Apply", "Show diff", "Dismiss"]),
+    ChatBlock::Paragraph("Waiting for your answer."),
 ];
 
 impl ChatBlock {
@@ -113,7 +163,7 @@ impl ChatBlock {
     pub fn status(self) -> &'static str {
         match self {
             Self::User(_) => "Reading",
-            Self::Paragraph(_) => "Writing",
+            Self::Heading(_) | Self::Paragraph(_) => "Writing",
             Self::Code(_) => "Writing code",
             Self::Table(_) => "Filling the table",
             Self::Gif => "Drawing",
@@ -125,7 +175,9 @@ impl ChatBlock {
     pub fn tokens(self) -> usize {
         match self {
             Self::User(_) | Self::Gif | Self::Buttons(_) => 1,
-            Self::Paragraph(text) | Self::Code(text) => text.len().div_ceil(CHAT_TOKEN_CHARS),
+            Self::Heading(text) | Self::Paragraph(text) | Self::Code(text) => {
+                text.len().div_ceil(CHAT_TOKEN_CHARS)
+            }
             Self::Table(rows) => rows.len(),
         }
     }
@@ -174,7 +226,8 @@ impl ChatToken {
     }
 }
 
-/// The characters of `text` that `shown` tokens show.
+/// The characters of `text` that `shown` tokens show. The chat's text is
+/// ASCII, so a byte is a character.
 pub fn chat_shown_chars(text: &str, shown: usize) -> usize {
     (shown * CHAT_TOKEN_CHARS).min(text.len())
 }
@@ -227,7 +280,9 @@ impl CodeKind {
     }
 }
 
-const KEYWORDS: [&str; 8] = ["fn", "let", "mut", "if", "return", "usize", "f32", "Row"];
+const KEYWORDS: [&str; 10] = [
+    "fn", "let", "mut", "if", "for", "in", "return", "usize", "f32", "Row",
+];
 
 /// The colored stretches of `code`, in order, as byte ranges: its keywords,
 /// its quoted text, its numbers and its `//` comments. Code is ASCII, so a

@@ -476,11 +476,14 @@ body.still-wall {
   line-height: 1.4;
 }
 
+/* A patch has a layer of its own, so a change in one patch paints that
+   patch's changed part and no other patch. */
 .patch {
   position: relative;
   box-sizing: border-box;
   padding: 1px;
   contain: strict;
+  will-change: transform;
 }
 
 .patch-grid {
@@ -501,6 +504,30 @@ body.still-wall {
   height: 100%;
   fill: none;
   stroke-width: 1px;
+}
+
+/* A scroll container the compositor moves: it paints the row that came in
+   and moves the rows it painted before. */
+.patch-scroller {
+  overflow-y: scroll;
+  scrollbar-width: none;
+}
+
+.patch-sheet {
+  position: relative;
+}
+
+.patch-row {
+  position: absolute;
+  left: 0;
+  display: flex;
+  gap: 1px;
+}
+
+.patch-row .wall-tile {
+  flex: none;
+  width: var(--width);
+  height: var(--height);
 }
 
 .patch-flow {
@@ -569,7 +596,9 @@ body.still-wall {
   scrollbar-width: none;
 }
 
+/* While the list is shorter than the chat it lies at the chat's top. */
 .chat-list {
+  margin-bottom: auto;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -581,6 +610,11 @@ body.still-wall {
   padding: 6px 10px;
   border-radius: 10px;
   background: #2B3A67;
+}
+
+.chat-heading {
+  font-size: 14px;
+  font-weight: 700;
 }
 
 .chat-code {

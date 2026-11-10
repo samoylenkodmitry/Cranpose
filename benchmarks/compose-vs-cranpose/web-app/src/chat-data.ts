@@ -5,19 +5,55 @@ export const TOKEN_CHARS = 6;
 export const TOKENS_PER_FRAME = 4;
 
 export type Block =
-  | { kind: 'user' | 'paragraph' | 'code'; text: string }
+  | { kind: 'user' | 'heading' | 'paragraph' | 'code'; text: string }
   | { kind: 'table'; rows: readonly (readonly string[])[] }
   | { kind: 'gif' }
   | { kind: 'buttons'; labels: readonly string[] };
 
 export const TURN: readonly Block[] = [
   { kind: 'user', text: 'Why does the list stutter when one row changes?' },
+  { kind: 'heading', text: 'What happens in a frame' },
   {
     kind: 'paragraph',
     text:
-      'The row measures its text again on every frame. Its parent then lays out all of ' +
-      'its children, although only one of them changed size. A boundary around the row ' +
-      'keeps the work inside it.',
+      'The list stutters because a small change starts a large amount of work. The row ' +
+      'that changed shows a counter, and the counter gets a new value on every frame. ' +
+      'The row measures its text again, which is right, because the text is new. The ' +
+      'row then tells its parent that its size may have changed. The parent does not ' +
+      'check whether the size really changed. It measures and places every one of its ' +
+      'children again, the ones on the screen and the ones kept ready beyond its edges. ' +
+      'Each child measures its own text again, although none of that text changed. A ' +
+      'frame that should cost one row costs the whole list, and the cost grows with ' +
+      'the number of rows, not with the size of the change.',
+  },
+  {
+    kind: 'paragraph',
+    text:
+      'The profile shows the same thing from the other side. Most of the frame goes to ' +
+      'text shaping, and nearly all of the shaped strings are equal to the strings of ' +
+      'the frame before. The cache of shaped text does not help, because the list asks ' +
+      'for each string at a width that differs by a fraction of a point from the width ' +
+      'of the last frame, so every lookup misses. Drawing takes a small part of the ' +
+      'frame and does not change, because the picture is almost the same.',
+  },
+  { kind: 'heading', text: 'Three things to change' },
+  {
+    kind: 'paragraph',
+    text:
+      '- Give the row a fixed height. A row whose size cannot change needs no new ' +
+      'layout of its parent, so the work stops at the row.',
+  },
+  {
+    kind: 'paragraph',
+    text:
+      '- Round the width that the list passes to its rows to whole points. Equal ' +
+      'strings then meet equal widths, and the cache of shaped text answers.',
+  },
+  {
+    kind: 'paragraph',
+    text:
+      '- Read the counter in the draw phase where the toolkit allows it. A value ' +
+      'that changes only what is drawn should not start composition or layout.',
   },
   {
     kind: 'code',
@@ -31,13 +67,24 @@ export const TURN: readonly Block[] = [
       '    row.label = "measured";\n' +
       '    row.height = row.measure(320.0);\n' +
       '    row.height\n' +
+      '}\n' +
+      '\n' +
+      '// A row of fixed height ends the pass.\n' +
+      'fn place(rows: &mut [Row], first: usize) {\n' +
+      '    let mut top = 0.0;\n' +
+      '    for row in &mut rows[first..] {\n' +
+      '        row.top = top;\n' +
+      '        top = top + row.height;\n' +
+      '    }\n' +
       '}\n',
   },
   {
     kind: 'paragraph',
     text:
-      'With the boundary the frame lays out one row, not the list. These are the passes ' +
-      'before and after the change:',
+      'With the boundary in place the frame lays out one row and leaves the others ' +
+      'alone. I ran the list of two thousand rows before and after the change, on the ' +
+      'same device and at the same scroll position. These are the passes of one frame, ' +
+      'as the median of three hundred frames:',
   },
   {
     kind: 'table',
@@ -51,13 +98,23 @@ export const TURN: readonly Block[] = [
     ],
   },
   { kind: 'gif' },
-  { kind: 'paragraph', text: 'The picture above turns while the benchmark runs.' },
+  {
+    kind: 'paragraph',
+    text:
+      'Drawing is now the largest pass, and it did not move. The next step is to keep ' +
+      'the drawing of the rows that did not change and to draw only the row with the ' +
+      'counter. That needs a look at how the list records its rows, which I have not ' +
+      'read yet. The picture above turns while the benchmark runs; it stops when the ' +
+      'run ends. Tell me whether to apply the three changes, or to show the diff first.',
+  },
   { kind: 'buttons', labels: ['Apply', 'Show diff', 'Dismiss'] },
+  { kind: 'paragraph', text: 'Waiting for your answer.' },
 ];
 
 /** The tokens `block` takes to appear whole. */
 export function tokens(block: Block): number {
   switch (block.kind) {
+    case 'heading':
     case 'paragraph':
     case 'code':
       return Math.ceil(block.text.length / TOKEN_CHARS);
@@ -72,6 +129,7 @@ export function tokens(block: Block): number {
  * last one. */
 export const STATUS: Record<Block['kind'], string> = {
   user: 'Reading',
+  heading: 'Writing',
   paragraph: 'Writing',
   code: 'Writing code',
   table: 'Filling the table',
