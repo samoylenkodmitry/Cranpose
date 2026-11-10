@@ -446,6 +446,68 @@ fn layers_that_change_under_a_still_parent_keep_its_alpha_tint_and_clip() {
     kept_frames_match_full_redraws(1.5, StillParent);
 }
 
+// A parent whose padding changes every frame and whose rows hold still:
+// a leaf child and a child layer move with the parent's content. A box
+// beside the parent comes and goes every other frame, so the picture is
+// also built anew from the rows it held.
+#[composable]
+fn PaddedParent(captured: Step) {
+    let step = rememberMutableStateOf(|| 0u32);
+    *captured.borrow_mut() = Some(step);
+    let inset = (step.value() % 4) as f32 * 3.0;
+    let beside = step.value() % 2 == 1;
+    Column(Modifier::empty(), ColumnSpec::default(), move || {
+        Box(
+            Modifier::empty()
+                .offset(16.0, 12.0)
+                .width(150.0)
+                .height(90.0)
+                .background(Color::from_rgb_u8(40, 44, 64))
+                .padding(inset),
+            BoxSpec::default(),
+            || {
+                Column(Modifier::empty(), ColumnSpec::default(), || {
+                    Box(
+                        Modifier::empty()
+                            .width(60.0)
+                            .height(14.0)
+                            .background(Color::from_rgb_u8(200, 90, 60)),
+                        BoxSpec::default(),
+                        || {},
+                    );
+                    Box(
+                        Modifier::empty()
+                            .width(40.0)
+                            .height(14.0)
+                            .graphics_layer(|| GraphicsLayer {
+                                alpha: 0.7,
+                                ..GraphicsLayer::default()
+                            })
+                            .background(Color::from_rgb_u8(60, 160, 220)),
+                        BoxSpec::default(),
+                        || {},
+                    );
+                });
+            },
+        );
+        if beside {
+            Box(
+                Modifier::empty()
+                    .width(30.0)
+                    .height(10.0)
+                    .background(Color::from_rgb_u8(90, 200, 90)),
+                BoxSpec::default(),
+                || {},
+            );
+        }
+    });
+}
+
+#[test]
+fn children_move_with_a_parent_whose_padding_changes() {
+    kept_frames_match_full_redraws(1.0, PaddedParent);
+}
+
 #[composable]
 fn Counter(captured: Step) {
     let step = rememberMutableStateOf(|| 0u32);

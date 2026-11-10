@@ -126,7 +126,7 @@ impl Repush<'_> {
         // A subtree that holds no change pushes again only when it moved.
         let changes = subtree.changes();
         if old.changes.same_subtree(changes) {
-            if subtree.placed_at(&old.placement) {
+            if old.changes.same_place(changes) {
                 return Ok(());
             }
             return self.push_again(subtree, record, parent);
@@ -139,7 +139,7 @@ impl Repush<'_> {
         // its children, as a surface or nothing, or moved pushes it all.
         if !old.changes.same_own(changes)
             || old.end == record + 1
-            || !subtree.placed_at(&old.placement)
+            || !old.changes.same_place(changes)
         {
             return self.push_again(subtree, record, parent);
         }

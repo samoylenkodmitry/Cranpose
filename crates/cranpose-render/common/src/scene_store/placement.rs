@@ -102,17 +102,6 @@ impl SceneStore {
         }
     }
 
-    /// Whether `id` sits in its parent's layer at `placement`.
-    #[inline]
-    pub fn placed_at(&self, id: RecordId, placement: &Placement) -> bool {
-        let index = id.index();
-        match (self.tree[index].transform, placement) {
-            (None, Placement::At(origin)) => self.placed_origin(index) == *origin,
-            (Some(transform), Placement::By(by)) => self.transforms[transform.index()] == *by,
-            (None, Placement::By(_)) | (Some(_), Placement::At(_)) => false,
-        }
-    }
-
     /// Where `id` sits in its parent's layer.
     #[inline]
     pub fn placement(&self, id: RecordId) -> Placement {

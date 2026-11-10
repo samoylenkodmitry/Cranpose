@@ -42,8 +42,8 @@ pub enum ItemRef<'a> {
     Shape(ShapeRef<'a>),
 }
 
-/// What a record and its subtree were at their last changes, their
-/// placement in the parent left out: two values taken of one record agree
+/// What a record and its subtree were at their last changes, and where the
+/// record sat in its parent's layer: two values taken of one record agree
 /// where nothing changed in between.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct RecordChanges {
@@ -51,6 +51,10 @@ pub struct RecordChanges {
     record: RecordRef,
     subtree: SceneUpdate,
     own: SceneUpdate,
+    // The record's placement in its parent and its parent's content offset,
+    // which together put it in its parent's layer.
+    placed: SceneUpdate,
+    parent_placed: SceneUpdate,
 }
 
 impl RecordChanges {
@@ -66,6 +70,14 @@ impl RecordChanges {
     #[inline]
     pub fn same_own(self, other: Self) -> bool {
         (self.store, self.record, self.own) == (other.store, other.record, other.own)
+    }
+
+    /// Whether the record sat in one place in its parent's layer between
+    /// `self` and `other`: neither it nor its parent's content moved.
+    #[inline]
+    pub fn same_place(self, other: Self) -> bool {
+        (self.store, self.record, self.placed, self.parent_placed)
+            == (other.store, other.record, other.placed, other.parent_placed)
     }
 }
 
@@ -206,13 +218,6 @@ impl<'a> LayerRef<'a> {
     #[inline]
     pub fn placement(self) -> Placement {
         self.store.placement(self.id)
-    }
-
-    /// Whether the record sits in its parent's layer at `placement`, read
-    /// in place.
-    #[inline]
-    pub fn placed_at(self, placement: &Placement) -> bool {
-        self.store.placed_at(self.id, placement)
     }
 
     /// Offset of the node's content box from its origin, where its children
@@ -507,16 +512,21 @@ impl<'a> LayerRef<'a> {
             .is_some_and(|props| props.content_run.churns(update))
     }
 
-    /// What the record and its subtree were at their last changes.
+    /// What the record and its subtree were at their last changes, and
+    /// where it sat in its parent's layer.
     #[inline]
     pub fn changes(self) -> RecordChanges {
         let row = &self.store.tree[self.id.index()];
-        let (subtree, own) = (row.subtree_rev, row.content_rev);
+        let parent_placed = row.parent.map_or_else(SceneUpdate::default, |parent| {
+            self.store.tree[parent.index()].place_rev
+        });
         RecordChanges {
             store: self.store.id(),
             record: self.store.record_ref(self.id),
-            subtree,
-            own,
+            subtree: row.subtree_rev,
+            own: row.content_rev,
+            placed: row.place_rev,
+            parent_placed,
         }
     }
 

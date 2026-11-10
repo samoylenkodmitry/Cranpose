@@ -570,9 +570,10 @@ fn populate_draws_from_graph(
         && let Some(record) = reuse.old.subtrees.get(index)
     {
         // The layer's number covers its subtree, save its placement.
+        let changes = subtree.changes();
         if context.same_as_before
-            && record.changes.same_subtree(subtree.changes())
-            && subtree.placed_at(&record.placement)
+            && record.changes.same_subtree(changes)
+            && record.changes.same_place(changes)
         {
             let (end, stop) = (record.end, record.stop);
             reuse.cursor = end;

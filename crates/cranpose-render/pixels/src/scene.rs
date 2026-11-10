@@ -7,7 +7,7 @@ use cranpose_render_common::{
     graph::ProjectiveTransform,
     layer_shadow::ShadowRRect,
     primitive_emit::ShapeDrawParams,
-    scene_store::{ItemRef as RecordItem, LayerRef, Placement, RecordChanges, RecordKind},
+    scene_store::{ItemRef as RecordItem, LayerRef, RecordChanges, RecordKind},
 };
 use cranpose_ui::TextStyle;
 use cranpose_ui_graphics::{
@@ -303,32 +303,16 @@ impl<'a> Subtree<'a> {
             Self::Layer(layer) | Self::Inline(layer) => layer.changes(),
         }
     }
-
-    // The node's placement in its parent's layer.
-    pub(crate) fn placement(self) -> Placement {
-        match self {
-            Self::Layer(layer) | Self::Inline(layer) => layer.placement(),
-        }
-    }
-
-    // Whether the node sits in its parent's layer at `placement`.
-    #[inline]
-    pub(crate) fn placed_at(self, placement: &Placement) -> bool {
-        match self {
-            Self::Layer(layer) | Self::Inline(layer) => layer.placed_at(placement),
-        }
-    }
 }
 
 #[derive(Clone, Copy)]
 pub(crate) struct SubtreeItems {
     /// The layer's node and the node whose outer draws it wraps.
     pub identity: (Option<NodeId>, Option<NodeId>),
-    /// The layer's change numbers when it pushed the items: its subtree's
-    /// and its own, which a change beneath it leaves.
+    /// The layer's change numbers when it pushed the items: its subtree's,
+    /// its own, which a change beneath it leaves, and its place in its
+    /// parent's layer.
     pub changes: RecordChanges,
-    /// The layer's placement in its parent, which the number leaves out.
-    pub placement: Placement,
     /// Where [`RasterScene::passed_down`] holds what the layer passed to its
     /// child layers, when it has any.
     pub passed_down: Option<usize>,
@@ -420,7 +404,6 @@ impl RasterScene {
         let record = SubtreeItems {
             identity: subtree.identity(),
             changes: subtree.changes(),
-            placement: subtree.placement(),
             passed_down: None,
             end: 0,
             start: counts,
