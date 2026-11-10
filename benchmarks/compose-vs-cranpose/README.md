@@ -830,6 +830,7 @@ and the panels lie over a different part of the cluster's look-alike levels.
 | `bui` | `bui-app`: BUI's HTML-like elements, laid out by taffy and rasterized on the CPU on macOS (crate `blenderui`) |
 | `ferro` | `ferro-app`: FerroUI's declarative builders and signals over its Avalonia-derived controls, drawn by Skia |
 | `zgui` | `zgui-app`: zgui's elements under a CSS style sheet, with signals, on wgpu and Vello, pinned to a commit |
+| `floem` | `floem-app`: Floem's views over its signals, drawn by Vello on wgpu |
 | `fyne` | `fyne-app`: Fyne on OpenGL, canvas objects the app places itself |
 
 What each framework lacks and how its app does without:

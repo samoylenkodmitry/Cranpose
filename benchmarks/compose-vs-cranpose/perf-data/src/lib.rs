@@ -128,6 +128,16 @@ const TAGS: [&str; 12] = [
     "#skia", "#ui", "#mobile",
 ];
 
+/// The gauntlet's colours, each as red, green and blue.
+pub const GAUNTLET_INK_RGB: [u8; 3] = [0x11, 0x18, 0x27];
+pub const GAUNTLET_BODY_RGB: [u8; 3] = [0x37, 0x41, 0x51];
+pub const GAUNTLET_MUTED_RGB: [u8; 3] = [0x6B, 0x72, 0x80];
+pub const GAUNTLET_HAIRLINE_RGB: [u8; 3] = [0xE5, 0xE7, 0xEB];
+pub const GAUNTLET_PANEL_RGB: [u8; 3] = [0xE2, 0xE8, 0xF0];
+pub const GAUNTLET_BACKGROUND_RGB: [u8; 3] = [0xEE, 0xF0, 0xF5];
+pub const GAUNTLET_UP_RGB: [u8; 3] = [0x16, 0xA3, 0x4A];
+pub const GAUNTLET_DOWN_RGB: [u8; 3] = [0xDC, 0x26, 0x26];
+
 pub struct Rng(u32);
 
 impl Rng {
