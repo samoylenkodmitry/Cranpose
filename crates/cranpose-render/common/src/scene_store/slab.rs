@@ -56,10 +56,6 @@ impl<T> Slab<T> {
         Some(value)
     }
 
-    pub(crate) fn get(&self, index: usize) -> Option<&T> {
-        self.entries.get(index)?.as_ref()
-    }
-
     pub(crate) fn values(&self) -> impl Iterator<Item = &T> {
         self.entries.iter().flatten()
     }

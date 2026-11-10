@@ -6,6 +6,7 @@ use cranpose_ui::{ModifierNodeSlices, Point, Rect, Size};
 
 use super::{
     DrawTarget, Level, LowerContext, SnapshotNodeData, assign_layer,
+    draw_recording::redraw_in_place,
     modifier_slices_have_origin_sinks, note_layer_lowered, prepare_node_layer, read_node_data,
     read_placed_node_data, remove_dirty_descendants, slices_hit_something,
     text_node::{TextNodeParts, drawn_text, refresh_text_node},
@@ -100,18 +101,45 @@ fn write_inline(
     };
     let mut list = store.lists.take();
     write_node_content(store, record, &mut list, slices, draws, (0, 0), |_, _| {});
-    store.write_leaf(
-        record,
-        Leaf {
-            node: node_id,
-            size,
-            content_offset: data.layout_state.content_offset(),
-            origin_in_parent: data.layout_state.position(),
-            flags,
-            items: &list,
-        },
-    );
+    store.write_leaf(record, leaf_of(node_id, data, flags), &list);
     store.lists.give(list);
+}
+
+// The leaf the node `node_id` of `data` draws as, with `flags`.
+fn leaf_of(node_id: NodeId, data: &SnapshotNodeData<'_>, flags: RecordFlags) -> Leaf {
+    Leaf {
+        node: node_id,
+        size: data.layout_state.size(),
+        content_offset: data.layout_state.content_offset(),
+        origin_in_parent: data.layout_state.position(),
+        flags,
+    }
+}
+
+// Draws the node `node_id` of `data` again over the items of `record`, its
+// leaf, when its draws come out as the same kinds in the same order and
+// draw no text. False when they do not; the caller then writes the leaf
+// anew.
+fn redraw_inline(
+    store: &mut SceneStore,
+    record: RecordId,
+    node_id: NodeId,
+    data: &SnapshotNodeData<'_>,
+    context: LowerContext,
+) -> bool {
+    let slices = &data.modifier_slices;
+    if slices.has_text() {
+        return false;
+    }
+    let mut items = store.lists.take();
+    items.extend_from_slice(store.items(record));
+    let size = data.layout_state.size();
+    let drawn = redraw_in_place(store, &items, (node_id, size), slices.draw_commands());
+    store.lists.give(items);
+    if drawn {
+        store.redraw_leaf(record, leaf_of(node_id, data, leaf_flags(data, context)));
+    }
+    drawn
 }
 
 // Puts `record`, the leaf of the node of `data`, where the node lies under
@@ -188,7 +216,9 @@ pub(super) fn update_dirty_inline(
                 place_inline(store, record, &data, context);
                 return false;
             }
-            if retext_inline(store, record, &data, context) {
+            if retext_inline(store, record, &data, context)
+                || redraw_inline(store, record, node_id, &data, context)
+            {
                 return false;
             }
             note_layer_lowered();

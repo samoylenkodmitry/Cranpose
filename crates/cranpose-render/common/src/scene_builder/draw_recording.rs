@@ -10,8 +10,8 @@ use cranpose_ui_graphics::{
 use super::{HeadKind, LayerHead, assign_layer};
 use crate::{
     graph::{CachePolicy, DrawCommandId, DrawRunNode, IsolationReasons, PrimitivePhase},
-    scene_store::{Item, ItemRef, RecordKind, RecordSeed, SceneStore},
-    style_shared::{draws_in, recording_for_placement_reusing},
+    scene_store::{Item, ItemKind, ItemRef, RecordKind, RecordSeed, SceneStore},
+    style_shared::{draws_in, record_in_place, recording_for_placement_reusing},
 };
 
 pub(super) enum DrawPass<'a> {
@@ -332,11 +332,7 @@ pub(super) fn append_draw_nodes(
             };
             recorded
         };
-        let grouped = shared.summary().has_groups
-            && shared
-                .segments_in(&segments)
-                .any(|segment| segment.lane == RecordLane::GroupStart);
-        items.push(if grouped {
+        items.push(if opens_group(&shared, &segments) {
             grouped_item(store, parent, (id, phase), &shared, draws, segments)
         } else {
             store.add_run(DrawRunNode::for_command_shared(
@@ -347,6 +343,103 @@ pub(super) fn append_draw_nodes(
             ))
         });
     }
+}
+
+// Whether `segments` of `recording` open a draw group, which a layer of its
+// own places.
+fn opens_group(recording: &CommandRecording, segments: &Range<u32>) -> bool {
+    recording.summary().has_groups
+        && recording
+            .segments_in(segments)
+            .any(|segment| segment.lane == RecordLane::GroupStart)
+}
+
+// Draws `commands`, the draw commands of the node `node_id` of size `size`,
+// over `items`, the items of the leaf that drew them before, when they come
+// out as the same kinds in the same order: a background whose shape and
+// color stay keeps its shapes, and a run records again into its own
+// recording. False when other items come out, or a command draws around
+// the content; the caller then writes the leaf anew over what this wrote.
+pub(super) fn redraw_in_place(
+    store: &mut SceneStore,
+    items: &[Item],
+    (node_id, size): (NodeId, Size),
+    commands: &[DrawCommand],
+) -> bool {
+    let mut old = items.iter().copied();
+    for placement in [DrawPlacement::Behind, DrawPlacement::Overlay] {
+        for (command_index, command) in commands.iter().enumerate() {
+            let drawn = match command {
+                DrawCommand::WithContent(_) => return false,
+                DrawCommand::Background(_) if placement == DrawPlacement::Overlay => continue,
+                DrawCommand::Background(background) => old
+                    .next()
+                    .is_some_and(|item| keeps_background(store, item, background, size)),
+                _ if !draws_in(command, placement) => continue,
+                _ => {
+                    let id = DrawCommandId {
+                        node_id,
+                        command_index: command_index as u32,
+                        placement,
+                    };
+                    old.next()
+                        .is_some_and(|item| draws_run_again(store, item, (command, id), size))
+                }
+            };
+            if !drawn {
+                return false;
+            }
+        }
+    }
+    old.next().is_none()
+}
+
+// Whether the shape item `item` holds the shapes `background` draws at
+// `size`.
+fn keeps_background(
+    store: &SceneStore,
+    item: Item,
+    background: &BackgroundDraw,
+    size: Size,
+) -> bool {
+    item.kind() == ItemKind::Shape
+        && store.shapes_print(item)
+            == background_print(background.shape_in(size), background.color())
+}
+
+// Records `command`, the command `id`, again into the run `item` that drew
+// it before: into the run's own recording when no reader holds it, else
+// into storage the store keeps for the command. False when `item` is no
+// run of the command or the new recording opens a draw group.
+#[inline(never)]
+fn draws_run_again(
+    store: &mut SceneStore,
+    item: Item,
+    (command, id): (&DrawCommand, DrawCommandId),
+    size: Size,
+) -> bool {
+    if item.kind() != ItemKind::Run || store.run(item).command != Some(id) {
+        return false;
+    }
+    let in_place = Rc::get_mut(&mut store.run_mut(item).recording)
+        .map(|recording| record_in_place(command, id.placement, size, recording));
+    let segments = match in_place {
+        Some(segments) => segments,
+        None => record_command(store, command, id, size).map(|(recording, segments)| {
+            store.swap_run_recording(item, recording);
+            segments
+        }),
+    };
+    let Some(segments) = segments else {
+        return false;
+    };
+    let run = store.run_mut(item);
+    if opens_group(&run.recording, &segments) {
+        return false;
+    }
+    run.summary = run.recording.summary_in(&segments);
+    run.segments = segments;
+    true
 }
 
 // The three paths below run out of line, so the loop over a node's

@@ -7,9 +7,9 @@ use cranpose_ui::{Point, Size};
 
 use super::{Item, RecordFlags, RecordKind, SceneStore, records::same_pair};
 
-/// What a leaf holds once a scene update wrote it.
+/// What a leaf holds once a scene update wrote it, its draws aside.
 #[derive(Clone, Copy, Debug)]
-pub struct Leaf<'a> {
+pub struct Leaf {
     /// The layout node the leaf draws for.
     pub node: NodeId,
     /// The node's size.
@@ -21,17 +21,40 @@ pub struct Leaf<'a> {
     pub origin_in_parent: Point,
     /// The leaf's flags, such as [`RecordFlags::MOTION_ANIMATED`].
     pub flags: RecordFlags,
-    /// The leaf's draws, in draw order.
-    pub items: &'a [Item],
+}
+
+// What writing a leaf's rows changed.
+#[derive(Clone, Copy)]
+struct LeafRows {
+    // The leaf moved in its parent, or its content within it.
+    moved: bool,
+    // The parent's containment and reach no longer hold.
+    parent_stale: bool,
 }
 
 #[expect(clippy::multiple_inherent_impl, reason = "one file per concern")]
 impl SceneStore {
     /// Writes `id` as `leaf`: a leaf of `leaf.node` without properties,
     /// placed by a translation alone, whose draws changed in the update in
-    /// progress. The draws and children `id` held before stay in the store:
-    /// the caller removes them.
-    pub fn write_leaf(&mut self, id: RecordId, leaf: Leaf<'_>) {
+    /// progress, to `items`. The draws and children `id` held before stay in
+    /// the store: the caller removes them.
+    pub fn write_leaf(&mut self, id: RecordId, leaf: Leaf, items: &[Item]) {
+        let rows = self.write_leaf_rows(id, leaf);
+        // The content change noted below leaves the leaf's containment and
+        // reach to be worked out again.
+        self.replace_items(id, items);
+        self.end_leaf_write(id, rows);
+    }
+
+    // Writes `id` as `leaf` around the items it holds, which the update in
+    // progress drew again in place.
+    pub(crate) fn redraw_leaf(&mut self, id: RecordId, leaf: Leaf) {
+        let rows = self.write_leaf_rows(id, leaf);
+        self.end_leaf_write(id, rows);
+    }
+
+    #[inline]
+    fn write_leaf_rows(&mut self, id: RecordId, leaf: Leaf) -> LeafRows {
         let index = id.index();
         self.set_kind(id, RecordKind::Leaf, Some(leaf.node));
         let unpropped = self.warm[index].props.is_some();
@@ -46,19 +69,25 @@ impl SceneStore {
         self.warm[index].content_offset = offset;
         let reflagged = self.write_leaf_flags(index, leaf.flags);
         let moved = self.place_leaf_row(index, leaf.origin_in_parent) || shifted;
-        // The content change noted below leaves the leaf's containment and
-        // reach to be worked out again.
-        self.replace_items(id, leaf.items);
-        if moved {
+        LeafRows {
+            moved,
+            parent_stale: unpropped || resized || reflagged || moved,
+        }
+    }
+
+    #[inline]
+    fn end_leaf_write(&mut self, id: RecordId, rows: LeafRows) {
+        let index = id.index();
+        if rows.moved {
             self.moved(index);
         }
         if let Some(parent) = self.tree[index].parent
-            && (unpropped || resized || reflagged || moved)
+            && rows.parent_stale
         {
             self.stale(parent.index());
         }
         self.note_content_change(id);
-        if moved {
+        if rows.moved {
             self.note_subtree_change(self.tree[index].parent);
         }
     }

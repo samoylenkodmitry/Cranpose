@@ -335,6 +335,13 @@ impl SceneStore {
         Item::new(ItemKind::Shape, self.shape_runs.insert(run))
     }
 
+    // A hash of what the shape item `item` draws: two items of one print
+    // draw alike.
+    #[inline]
+    pub(crate) fn shapes_print(&self, item: Item) -> u64 {
+        self.shape_runs[item.index()].print
+    }
+
     /// The shapes of a shape item.
     #[inline]
     pub fn shapes(&self, item: Item) -> ShapeRef<'_> {

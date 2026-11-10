@@ -9,6 +9,7 @@ use std::{
 
 use cranpose_core::{NodeId, RecordId, RecordRef, SceneUpdate, StoreId, collections::map::HashSet};
 use cranpose_ui::{GraphicsLayer, Rect};
+use cranpose_ui_graphics::CommandRecording;
 
 use super::{
     ChildOrder, Facts, GeoRecord, HashCache, Item, ItemKind, ItemLists, ItemRef, Journal,
@@ -19,7 +20,8 @@ use super::{
     recordings::Recordings,
 };
 use crate::graph::{
-    DrawPrimitiveNode, DrawRunNode, LayerNode, ProjectiveTransform, TextPrimitiveNode,
+    DrawCommandId, DrawPrimitiveNode, DrawRunNode, LayerNode, ProjectiveTransform,
+    TextPrimitiveNode,
 };
 
 /// The scene a renderer draws and the hit targets come from.
@@ -551,13 +553,9 @@ impl SceneStore {
                 self.texts.remove(item.index());
             }
             ItemKind::Run => {
-                if let Some(run) = self.runs.get(item.index())
-                    && let Some(id) = run.command
-                    && Rc::strong_count(&run.recording) == 1
-                {
-                    self.recordings.keep(id, &run.recording);
+                if let Some(run) = self.runs.take(item.index()) {
+                    self.keep_unheld(run.command, &run.recording);
                 }
-                self.runs.remove(item.index());
             }
             ItemKind::Shape => self.remove_shapes(item.index()),
         }
@@ -659,6 +657,30 @@ impl SceneStore {
     #[inline]
     pub fn run(&self, item: Item) -> &DrawRunNode {
         &self.runs[item.index()]
+    }
+
+    // The draw run of a run item, to draw again in place.
+    #[inline]
+    pub(crate) fn run_mut(&mut self, item: Item) -> &mut DrawRunNode {
+        &mut self.runs[item.index()]
+    }
+
+    // Puts `recording` in place of the recording of the run `item`.
+    pub(crate) fn swap_run_recording(&mut self, item: Item, recording: Rc<CommandRecording>) {
+        let run = &mut self.runs[item.index()];
+        let command = run.command;
+        let old = std::mem::replace(&mut run.recording, recording);
+        self.keep_unheld(command, &old);
+    }
+
+    // Keeps `recording`, which `command` recorded and which the store lets
+    // go of, for the command's next recording when no reader holds it.
+    fn keep_unheld(&mut self, command: Option<DrawCommandId>, recording: &Rc<CommandRecording>) {
+        if let Some(id) = command
+            && Rc::strong_count(recording) == 1
+        {
+            self.recordings.keep(id, recording);
+        }
     }
 
     /// What `id` draws for.

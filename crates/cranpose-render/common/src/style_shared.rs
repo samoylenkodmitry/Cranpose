@@ -222,6 +222,19 @@ pub fn recording_for_placement_reusing(
     Some((shared, segments))
 }
 
+// Records `command` anew into `recording`, which no other handle holds,
+// and names the segments `placement` draws; `None` when the command has no
+// `placement` half.
+pub(crate) fn record_in_place(
+    command: &DrawCommand,
+    placement: DrawPlacement,
+    size: Size,
+    recording: &mut CommandRecording,
+) -> Option<Range<u32>> {
+    let split = placement_split(command, placement)?;
+    Some(record_with(command, split, size, recording))
+}
+
 // Whether `command` draws anything in `placement`.
 pub(crate) fn draws_in(command: &DrawCommand, placement: DrawPlacement) -> bool {
     placement_split(command, placement).is_some()
