@@ -1,13 +1,16 @@
 use std::{borrow::Cow, hash::Hasher, ops::Range, rc::Rc};
 
 use cranpose_core::{NodeId, RecordId};
-use cranpose_ui::{BackgroundDraw, Color, DrawCommand, Point, Rect, Size};
+use cranpose_ui::{BackgroundDraw, Color, DrawCommand, ModifierNodeSlices, Point, Rect, Size};
 use cranpose_ui_graphics::{
     CommandRecording, CompositingStrategy, CornerRadii, DrawGroup, DrawPlacement, FxHasher,
     GraphicsLayer, RecordLane,
 };
 
-use super::{HeadKind, LayerHead, assign_layer};
+use super::{
+    HeadKind, LayerHead, assign_layer,
+    text_node::{TextNodeParts, refresh_text_node},
+};
 use crate::{
     graph::{CachePolicy, DrawCommandId, DrawRunNode, IsolationReasons, PrimitivePhase},
     scene_store::{Item, ItemKind, ItemRef, RecordKind, RecordSeed, SceneStore},
@@ -355,18 +358,29 @@ fn opens_group(recording: &CommandRecording, segments: &Range<u32>) -> bool {
 }
 
 // One step of a node's draws as a redraw in place writes them over the
-// node's items, in draw order: a background, or a command that records a
-// run.
+// node's items, in draw order: a background, a command that records a run,
+// or the node's text.
 enum DrawStep<'a> {
     Background(&'a BackgroundDraw),
     Run(&'a DrawCommand, DrawCommandId),
+    Text(&'a ModifierNodeSlices),
 }
 
 // Hands `visit` each step of `commands` in draw order: the draws behind the
-// content, then those over it. False when a command draws around the
-// content, or when `visit` returns false.
-fn walk_steps<'a>(commands: NodeCommands<'a>, mut visit: impl FnMut(DrawStep<'a>) -> bool) -> bool {
+// content, then `text`, then the draws over it. False when a command draws
+// around the content, or when `visit` returns false.
+fn walk_steps<'a>(
+    commands: NodeCommands<'a>,
+    text: Option<&'a ModifierNodeSlices>,
+    mut visit: impl FnMut(DrawStep<'a>) -> bool,
+) -> bool {
     for placement in [DrawPlacement::Behind, DrawPlacement::Overlay] {
+        if placement == DrawPlacement::Overlay
+            && let Some(text) = text
+            && !visit(DrawStep::Text(text))
+        {
+            return false;
+        }
         for (offset, command) in commands.commands.iter().enumerate() {
             let step = match command {
                 DrawCommand::WithContent(_) => return false,
@@ -393,8 +407,9 @@ fn walk_steps<'a>(commands: NodeCommands<'a>, mut visit: impl FnMut(DrawStep<'a>
 // Draws `commands`, a node's draw commands at size `size`, over `own`, the
 // items of its record that drew them before, in draw order without its
 // children, when they come out as the same kinds in the same order: a
-// background whose shape and color stay keeps its shapes, and a run
-// records again into its own recording. False when other items come out,
+// background whose shape and color stay keeps its shapes, a run records
+// again into its own recording, and the text of `text`, the node's slices
+// when it draws text, writes into the text it drew. False when other items come out,
 // a command draws around the content, a run drew another command or a
 // recording opens a draw group; the caller then writes the node's draws
 // anew over what this wrote, and takes the recordings this made, which it
@@ -403,16 +418,19 @@ pub(super) fn redraw_in_place(
     store: &mut SceneStore,
     own: impl Iterator<Item = Item> + Clone,
     commands: NodeCommands<'_>,
+    text: Option<&ModifierNodeSlices>,
     size: Size,
 ) -> bool {
+    let node_id = commands.node_id;
     let mut items = own.clone();
     let mut drawn = 0;
-    let all = walk_steps(commands, |step| {
+    let all = walk_steps(commands, text, |step| {
         let again = items.next().is_some_and(|item| match step {
             DrawStep::Background(background) => {
                 draws_background_again(store, item, background, size)
             }
             DrawStep::Run(command, id) => draws_run_again(store, item, (command, id), size),
+            DrawStep::Text(slices) => draws_text_again(store, item, (node_id, slices), size),
         });
         drawn += usize::from(again);
         again
@@ -435,6 +453,23 @@ fn park_runs(store: &mut SceneStore, drawn: impl Iterator<Item = Item>) {
             store.recordings.park(id, recorded);
         }
     }
+}
+
+// Writes the text that `slices` of the node `node_id` draw at `size` into
+// the text item `item`. False when `item` is no text item or the node draws
+// no text now. Out of line: most nodes a redraw takes draw no text.
+#[inline(never)]
+fn draws_text_again(
+    store: &mut SceneStore,
+    item: Item,
+    (node_id, slices): (NodeId, &ModifierNodeSlices),
+    size: Size,
+) -> bool {
+    item.kind() == ItemKind::Text
+        && refresh_text_node(
+            store.text_mut(item),
+            &TextNodeParts::of(node_id, slices, size),
+        )
 }
 
 // Draws `background` at `size` into the shape item `item`, which keeps its

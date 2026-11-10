@@ -117,9 +117,9 @@ fn leaf_of(node_id: NodeId, data: &SnapshotNodeData<'_>, flags: RecordFlags) -> 
 }
 
 // Draws the node `node_id` of `data` again over the items of `record`, its
-// leaf, for the change `kind`, when its draws come out as the same kinds in
-// the same order and draw no text. False when they do not; the caller then
-// writes the leaf anew.
+// leaf, for the change `kind`, when its draws and text come out as the same
+// kinds in the same order. False when they do not; the caller then writes
+// the leaf anew.
 fn redraw_inline(
     store: &mut SceneStore,
     (record, node_id): (RecordId, NodeId),
@@ -128,9 +128,6 @@ fn redraw_inline(
     context: LowerContext,
 ) -> bool {
     let slices = &data.modifier_slices;
-    if slices.has_text() {
-        return false;
-    }
     let mut items = store.lists.take();
     items.extend_from_slice(store.items(record));
     let commands = NodeCommands {
@@ -139,7 +136,8 @@ fn redraw_inline(
         first_index: 0,
     };
     let size = data.layout_state.size();
-    let drawn = redraw_in_place(store, items.iter().copied(), commands, size);
+    let text = slices.has_text().then_some(&**slices);
+    let drawn = redraw_in_place(store, items.iter().copied(), commands, text, size);
     store.lists.give(items);
     if !drawn {
         return false;

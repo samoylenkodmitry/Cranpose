@@ -14,7 +14,7 @@ use cranpose_render_common::{
 use cranpose_ui::{
     Box, BoxSpec, Color, Column, ColumnSpec, Modifier, Size, Text, TextStyle, run_test_composition,
 };
-use cranpose_ui_graphics::{CompositingStrategy, DrawPrimitive, GraphicsLayer};
+use cranpose_ui_graphics::{CompositingStrategy, DrawPrimitive, GraphicsLayer, RoundedCornerShape};
 
 use crate::scene_probe::{fresh_graph, initial_graph, update_scene};
 
@@ -239,4 +239,55 @@ fn a_cached_layer_misses_when_a_leaf_it_draws_changes_its_text() {
         picture(&graph),
         picture(&fresh_graph(&mut composition, root))
     );
+}
+
+// Labels that draw a background under their text and a border over it, one
+// in its parent's layer and one through a layer of its own. A change of the
+// string, the tint or both, an empty string and the way back draw as a
+// fresh scene does.
+#[test]
+fn a_label_between_its_own_draws_redraws_as_a_fresh_scene_does() {
+    type States = (MutableState<&'static str>, MutableState<Color>);
+    const GREEN: Color = Color(0.1, 0.6, 0.2, 1.0);
+    let states: std::rc::Rc<Cell<Option<States>>> = std::rc::Rc::new(Cell::new(None));
+    let slot = std::rc::Rc::clone(&states);
+    let mut composition = run_test_composition(move || {
+        let label = cranpose_core::rememberMutableStateOf(|| "label");
+        let tint = cranpose_core::rememberMutableStateOf(|| FILL);
+        slot.set(Some((label, tint)));
+        Column(Modifier::empty(), ColumnSpec::default(), move || {
+            let framed = |modifier: Modifier| {
+                modifier.background(tint.get()).border(
+                    1.0,
+                    Color(0.9, 0.2, 0.1, 1.0),
+                    RoundedCornerShape::uniform(2.0),
+                )
+            };
+            Text(label.get(), framed(Modifier::empty()), TextStyle::default());
+            let faded = Modifier::empty().graphics_layer_value(GraphicsLayer {
+                alpha: 0.5,
+                ..GraphicsLayer::default()
+            });
+            Text(label.get(), framed(faded), TextStyle::default());
+        });
+    });
+    let root = composition.root().expect("root");
+    let mut graph = initial_graph(&mut composition, root, VIEWPORT);
+    let (label, tint) = states.get().expect("label states");
+    for (text, color) in [
+        ("label", GREEN),
+        ("a longer label", GREEN),
+        ("short", FILL),
+        ("", FILL),
+        ("label", GREEN),
+    ] {
+        label.set(text);
+        tint.set(color);
+        update_scene(&mut composition, root, VIEWPORT, &mut graph);
+        assert_eq!(
+            picture(&graph),
+            picture(&fresh_graph(&mut composition, root)),
+            "{text:?}"
+        );
+    }
 }

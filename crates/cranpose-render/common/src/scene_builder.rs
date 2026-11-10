@@ -536,9 +536,8 @@ fn redraw_retained_layer(
             commands: &slices.draw_commands()[outer..],
             first_index: outer,
         };
-        if !slices.has_text()
-            && redraw_in_place(store, parts.own(), commands, data.layout_state.size())
-        {
+        let text = slices.has_text().then_some(&**slices);
+        if redraw_in_place(store, parts.own(), commands, text, data.layout_state.size()) {
             parts.give_back(store);
             store.note_content_change(container);
             return true;
