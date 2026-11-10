@@ -272,15 +272,22 @@ impl RendererFrontend {
         (overlay, overlay_damage): (Option<&LayerScene>, Damage),
     ) -> (Box<LayerScene>, Damage, Option<DamageRects>) {
         let window = purpose == PacketFor::Window;
-        let mut cull = if window { self.cull_region() } else { None };
         let since = self
             .window
             .last()
             .filter(|_| self.target.knew_before() && self.overlay_target.knew_before());
         let next = self.frame_sequence.wrapping_add(1);
-        if let Some(region) = cull.as_mut() {
-            self.widen_by_predicted_repaint(region, (since, next), overlay_damage, (width, height));
-        }
+        let mut cull = window
+            .then(|| self.cull_region())
+            .flatten()
+            .and_then(|region| {
+                self.widen_by_predicted_repaint(
+                    region,
+                    (since, next),
+                    overlay_damage,
+                    (width, height),
+                )
+            });
         let store = self.scene.store();
         let root_layer = store.root_layer().expect("the scene has a root");
         let recycler = &mut self.scene_recyclers[self.returned_scenes];
@@ -334,25 +341,26 @@ impl RendererFrontend {
         (root, damage, cull)
     }
 
-    // Widens `region`, which a window walk culls to, by what the next image
+    // `region`, which a window walk culls to, widened by what the next image
     // repaints when the frame changes what the target predicts, so the walk
-    // takes in the repaint without walking again.
+    // takes in the repaint without walking again; `None`, a walk of every
+    // record, when that image repaints whole.
     fn widen_by_predicted_repaint(
         &mut self,
-        region: &mut DamageRects,
+        mut region: DamageRects,
         (since, next): (Option<u64>, u64),
         overlay_damage: Damage,
         viewport: (u32, u32),
-    ) {
+    ) -> Option<DamageRects> {
         let Some(predicted) = self.target.predicted_damage(self.scene.store()) else {
-            return;
+            return Some(region);
         };
         let damage = predicted.union(overlay_damage, viewport);
         let packet = self.window.next_damage(damage, since, viewport);
-        let repaint = self.window.repaint(next, packet);
-        for rect in repaint.iter().flat_map(DamageRects::as_slice) {
+        for rect in self.window.repaint(next, packet)?.as_slice() {
             region.add(*rect);
         }
+        Some(region)
     }
 
     // Starts a window frame of `setting` in the targets of the scene and of

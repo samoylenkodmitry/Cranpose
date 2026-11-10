@@ -386,10 +386,12 @@ impl TargetState {
 
     // The damage the frame takes when each moved and new record takes the
     // area the frame before tells for it: its reach, placed at the origin
-    // the frame before drew its parent's space at. `None` when the frame
-    // works out no damage, an old area is not known, or a moved record casts
-    // an elevation shadow or lies under a parent the frame before drew
-    // through a surface or under a turn: the walk then works the areas out.
+    // the frame before drew its parent's space at. The whole window when a
+    // moved record's reach is not known: the walk finds that record's area
+    // unknown too. `None` when the frame works out no damage, an old area is
+    // not known, or a moved record casts an elevation shadow or lies under a
+    // parent the frame before drew through a surface or under a turn: the
+    // walk then works the areas out.
     pub(crate) fn predicted_damage(&self, store: &SceneStore) -> Option<Damage> {
         let setting = self.setting?;
         let mut damage = self.begun()?;
@@ -398,8 +400,11 @@ impl TargetState {
                 continue;
             };
             let extent = store.layer(id).extent();
-            let (Reach::Finite(rect), None) = (extent.reach, extent.caster) else {
-                return None;
+            let rect = match (extent.reach, extent.caster) {
+                (Reach::Unknown, _) => return Some(Damage::Full),
+                (Reach::Finite(rect), None) => rect,
+                (Reach::Empty, None) => continue,
+                (_, Some(_)) => return None,
             };
             let origin = store
                 .parent(id)

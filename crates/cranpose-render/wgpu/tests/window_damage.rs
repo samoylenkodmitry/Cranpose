@@ -79,6 +79,9 @@ enum Scene {
     // The page moving for `MOVES` steps, then a shape changing colour over
     // the page held still.
     MovedThenStill,
+    // A box moving down a pixel a step, holding a card that casts an
+    // elevation shadow: the reach of the moved box is not known.
+    MovedCaster,
 }
 
 /// A caret near the bottom, far from the spinner.
@@ -327,6 +330,7 @@ fn changing_box(scene: Scene, step: MutableState<u32>) -> Option<Modifier> {
         | Scene::Picture
         | Scene::Appearing
         | Scene::MovedPage
+        | Scene::MovedCaster
         | Scene::SpinnerAndCaret
         | Scene::FiveSpots => return None,
     })
@@ -362,6 +366,26 @@ fn Changing(scene: Scene, step: MutableState<u32>) {
                     || {},
                 );
             }
+        }
+        Scene::MovedCaster => {
+            let [x, y, width, height] = SPOT;
+            Box(
+                rect_modifier([x, y + step.get() as f32, width, height]),
+                BoxSpec::default(),
+                move || {
+                    Box(
+                        Modifier::empty()
+                            .size_points(width, height)
+                            .graphics_layer(|| GraphicsLayer {
+                                shadow_elevation: 6.0,
+                                ..Default::default()
+                            })
+                            .background(Color::WHITE),
+                        BoxSpec::default(),
+                        || {},
+                    );
+                },
+            );
         }
         Scene::Picture => {
             let picture = PICTURES.with(|pictures| pictures[(step.get() % 2) as usize].clone());
@@ -833,7 +857,7 @@ fn assert_damage_holds_the_changes_at(scene: Scene, scale: f32, keeper: Keeper) 
                     matches!(damage, FrameDamage::Full | FrameDamage::Skipped),
                     "{label}: a frame moving the page changes most of the window"
                 );
-            } else {
+            } else if scene != Scene::MovedCaster {
                 assert_within(&label, damage, reach);
                 partial_frames += usize::from((1..whole).contains(&repainted));
             }
@@ -841,7 +865,7 @@ fn assert_damage_holds_the_changes_at(scene: Scene, scale: f32, keeper: Keeper) 
         before = Some(frame.direct);
     }
     assert!(
-        scene == Scene::MovedPage || partial_frames > 0,
+        matches!(scene, Scene::MovedPage | Scene::MovedCaster) || partial_frames > 0,
         "{scene:?} {keeper:?} at {scale}: no frame drew a part of the window"
     );
     assert!(
@@ -923,6 +947,13 @@ fn a_shape_appearing_and_going() {
 #[test]
 fn the_whole_page_moving_one_pixel() {
     assert_damage_holds_the_changes(Scene::MovedPage);
+}
+
+// The moved box's reach is not known, so the frame takes every record in
+// one walk.
+#[test]
+fn a_box_holding_a_shadow_caster_moving() {
+    assert_damage_holds_the_changes(Scene::MovedCaster);
 }
 
 /// The frames of a spinner that turns for as long as it shows, beside two
