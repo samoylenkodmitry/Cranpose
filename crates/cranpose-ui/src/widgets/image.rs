@@ -453,14 +453,12 @@ impl SvgPainter {
 
     #[cfg(feature = "svg")]
     fn cached_bitmap(&self, key: SvgRasterKey) -> Result<Option<ImageBitmap>, SvgPainterError> {
-        let mut cache = self.lock_cache();
-        Ok(cache.get(key))
+        Ok(self.lock_cache().get(key))
     }
 
     #[cfg(feature = "svg")]
     fn cache_bitmap(&self, key: SvgRasterKey, bitmap: ImageBitmap) -> Result<(), SvgPainterError> {
-        let mut cache = self.lock_cache();
-        cache.insert(key, bitmap);
+        self.lock_cache().insert(key, bitmap);
         Ok(())
     }
 
@@ -918,26 +916,13 @@ fn draw_svg_painter(
 
 #[cfg(feature = "svg")]
 fn svg_raster_key(pixel_size: Size) -> Result<SvgRasterKey, SvgPainterError> {
-    let width = svg_raster_axis(pixel_size.width)?;
-    let height = svg_raster_axis(pixel_size.height)?;
+    let width = image_svg::raster_axis(pixel_size.width)?;
+    let height = image_svg::raster_axis(pixel_size.height)?;
     width
         .checked_mul(height)
         .and_then(|value| value.checked_mul(4))
         .ok_or(SvgPainterError::RasterDimensionsTooLarge)?;
     Ok(SvgRasterKey { width, height })
-}
-
-#[cfg(feature = "svg")]
-fn svg_raster_axis(value: f32) -> Result<u32, SvgPainterError> {
-    if !value.is_finite() || value <= 0.0 {
-        return Err(SvgPainterError::InvalidRasterDimensions);
-    }
-
-    let rounded = value.ceil();
-    if rounded > u32::MAX as f32 {
-        return Err(SvgPainterError::RasterDimensionsTooLarge);
-    }
-    Ok(rounded as u32)
 }
 
 /// Displays a painter with an optional accessible description.

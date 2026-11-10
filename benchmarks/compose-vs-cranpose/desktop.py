@@ -178,6 +178,7 @@ APPS = {
     'bui': [HERE / 'bui-app/target/release/perf-compare-bui'],
     'ferro': [HERE / 'ferro-app/target/release/perf-compare-ferro'],
     'zgui': [HERE / 'zgui-app/target/release/perf-compare-zgui'],
+    'floem': [HERE / 'floem-app/target/release/perf-compare-floem'],
     'fyne': [HERE / 'fyne-app/build/perf-compare-fyne'],
 }
 

@@ -54,6 +54,7 @@ SOURCES = {
     'bui': 'benchmarks/compose-vs-cranpose/bui-app/src/main.rs',
     'ferro': 'benchmarks/compose-vs-cranpose/ferro-app/src/main.rs',
     'zgui': 'benchmarks/compose-vs-cranpose/zgui-app/src/gauntlet.rs',
+    'floem': 'benchmarks/compose-vs-cranpose/floem-app/src/gauntlet.rs',
     'fyne': 'benchmarks/compose-vs-cranpose/fyne-app/main.go',
     'nativescript': 'benchmarks/compose-vs-cranpose/nativescript-app/app/app.ts',
     'lynx': 'benchmarks/compose-vs-cranpose/lynx-app/page/src/Gauntlet.tsx',
@@ -68,7 +69,7 @@ PLATFORM_APPS = {
     'android': ['compose', 'views', 'flutter', 'rn', 'nativescript', 'lynx', 'maui', 'avalonia', 'egui',
                 'slint', 'web'],
     'desktop': ['compose', 'egui', 'slint', 'iced', 'gpui', 'avalonia', 'swiftui', 'appkit', 'flutter', 'web',
-                'tauri', 'dioxus', 'xilem', 'rune', 'bui', 'ferro', 'zgui', 'fyne'],
+                'tauri', 'dioxus', 'xilem', 'rune', 'bui', 'ferro', 'zgui', 'floem', 'fyne'],
     'browser': BROWSER_APPS[1:],
 }
 
@@ -77,7 +78,7 @@ NAMES = {
     'flutter': 'Flutter', 'rn': 'React Native', 'maui': '.NET MAUI', 'avalonia': 'Avalonia',
     'egui': 'egui', 'slint': 'Slint', 'iced': 'iced', 'gpui': 'GPUI', 'swiftui': 'SwiftUI', 'appkit': 'AppKit',
     'web': 'Web', 'tauri': 'Tauri', 'dioxus': 'Dioxus', 'xilem': 'Xilem', 'rune': 'Rune', 'bui': 'BUI', 'ferro': 'FerroUI',
-    'zgui': 'zgui',
+    'zgui': 'zgui', 'floem': 'Floem',
     'fyne': 'Fyne', 'nativescript': 'NativeScript', 'lynx': 'Lynx',
 }
 
@@ -253,6 +254,8 @@ PINS = {
                   cargo_update('dioxus-app')),
     'xilem': Pin(['xilem-app/Cargo.toml'], r'xilem = \{ version = "([^"]+)"', lambda: crates_io('xilem'),
                  cargo_update('xilem-app')),
+    'floem': Pin(['floem-app/Cargo.toml'], r'floem = \{ version = "([^"]+)"', lambda: crates_io('floem'),
+                 cargo_update('floem-app')),
     'bui': Pin(['bui-app/Cargo.toml'], r'blenderui = "([^"]+)"', lambda: crates_io('blenderui'),
                cargo_update('bui-app')),
     'ferro': Pin(['ferro-app/Cargo.toml'], r'ferroui-view = \{ version = "([^"]+)"', lambda: crates_io('ferroui-view'),
@@ -271,6 +274,7 @@ RUST_CRATES = {
     'egui': ('egui-app', 'eframe'), 'slint': ('slint-app', 'slint'), 'iced': ('iced-app', 'iced'),
     'gpui': ('gpui-app', 'gpui-pre'), 'tauri': ('tauri-app', 'tauri'), 'dioxus': ('dioxus-app', 'dioxus'),
     'xilem': ('xilem-app', 'xilem'), 'bui': ('bui-app', 'blenderui'), 'ferro': ('ferro-app', 'ferroui-view'),
+    'floem': ('floem-app', 'floem'),
 }
 # Apps that draw in the system's WKWebView on the desktop.
 WEBKIT = {'tauri', 'dioxus'}

@@ -72,6 +72,9 @@ mod launched_effect;
 mod layout_dirt_roots;
 mod location_key;
 mod memory_applier;
+mod worker_job;
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+mod worker_pool;
 pub use memory_applier::{MemoryApplier, MemoryApplierDebugStats, SceneNodeAttachmentScratch};
 mod movable_content;
 mod node;
@@ -165,8 +168,8 @@ pub mod internal {
 }
 pub use applier_host::{ApplierGuard, ApplierHost, ConcreteApplierHost, NodeDisposal};
 pub use blocking::{
-    BlockingError, BlockingExecutor, BlockingExecutorConfig, BlockingTask, launchBlocking,
-    withBlocking,
+    BlockingError, BlockingExecutor, BlockingExecutorConfig, BlockingTask, BlockingWork,
+    launchBlocking, withBlocking,
 };
 pub use callbacks::{
     CallbackForwarder, CallbackHolder, ParamReturnState, ParamSlot, ParamState, ReturnSlot,
@@ -233,6 +236,7 @@ pub use slot::{
     SlotTableLocalDebugStats,
 };
 pub use snapshot_state_observer::SnapshotStateObserver;
+pub use worker_job::{__worker, WorkerCall, WorkerData, WorkerJob};
 
 /// Identifies a composition group: the hash of its call site, or of an explicit key together with
 /// its call site. Kept at a 32-bit word's alignment on ESP-IDF, as a [`PackedU64`] is.
