@@ -73,7 +73,8 @@ function host(): { launch: Promise<Launch>; log(message: string): void } {
   const tauri = window.__TAURI__?.core;
   if (tauri) {
     return {
-      launch: tauri.invoke<Launch>('launch'),
+      // The app grows its window until the page is as tall as every app's content.
+      launch: tauri.invoke<Launch>('launch', { shown: window.innerHeight }),
       log: (message) => {
         console.log(message);
         void tauri.invoke('log', { message });

@@ -16,8 +16,20 @@ struct Launch {
     scenario: &'static str,
 }
 
+/// What `desktop.py` asked of the page. `shown` is the height the page has,
+/// in points: macOS counts the title bar in the size the window was given,
+/// so the window first grows until the page is as tall as every app's
+/// content.
 #[tauri::command]
-fn launch() -> Launch {
+fn launch(window: tauri::WebviewWindow, shown: f64) -> Launch {
+    let (width, height) = perf_data::DESKTOP_WINDOW;
+    let missing = f64::from(height) - shown;
+    if missing >= 1.0 {
+        let grown = tauri::LogicalSize::new(f64::from(width), f64::from(height) + missing);
+        if let Err(error) = window.set_size(grown) {
+            eprintln!("the window keeps its height: {error}");
+        }
+    }
     let launch = perf_data::Launch::from_env();
     Launch {
         tier: launch.tier,

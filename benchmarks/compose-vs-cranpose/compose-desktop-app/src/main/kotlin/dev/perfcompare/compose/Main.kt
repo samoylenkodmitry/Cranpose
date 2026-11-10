@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Color
@@ -79,8 +80,15 @@ fun main() = application {
     Window(onCloseRequest = ::exitApplication, state = state, title = title, resizable = false) {
         LaunchedEffect(Unit) {
             // The window's size counts its title bar: it grows by the
-            // window's insets, so the content is 1280 x 820.
-            val insets = window.insets
+            // window's insets, so the content is 1280 x 820. The insets are
+            // known once the window shows its first frames.
+            var insets = window.insets
+            var waited = 0
+            while (insets.top == 0 && waited < 120) {
+                withFrameNanos { }
+                insets = window.insets
+                waited++
+            }
             state.size = DpSize((1280 + insets.left + insets.right).dp, (820 + insets.top + insets.bottom).dp)
         }
         Column(
