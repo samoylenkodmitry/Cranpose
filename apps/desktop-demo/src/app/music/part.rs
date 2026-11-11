@@ -18,7 +18,7 @@ use cranpose_ui::{composable, Color};
 
 use super::{
     held_notes::PartSlot,
-    note_bar::NoteBar,
+    note_bar::{NoteBar, LONGEST_BEAD_SECONDS, MOST_GLOW_SECONDS},
     performance::{local_performance, Performance},
     roll::local_roll_slice,
     song::{note_seconds, Note, Notes},
@@ -112,11 +112,12 @@ pub fn Part(notes: Notes, color: Color) {
         });
     }
 
-    // The notes that sound in the slice: the ones that start in it, and
-    // the ones that start before it and still ring.
-    let earliest = f64::from(slice.from - notes.longest_ring());
-    let first = notes.first_at_or_after(earliest);
-    let end = notes.first_at_or_after(f64::from(slice.to()));
+    // The notes that show in the slice: the ones that start in it, the ones
+    // that start before it and still ring, and the ones whose glow reaches
+    // into it from either side. A short note shows for as long as its bead.
+    let lasts = notes.longest_ring().max(LONGEST_BEAD_SECONDS) + MOST_GLOW_SECONDS;
+    let first = notes.first_at_or_after(f64::from(slice.from - lasts));
+    let end = notes.first_at_or_after(f64::from(slice.to() + MOST_GLOW_SECONDS));
     let crossings = {
         let notes = notes.clone();
         derivedStateOf(move || {
@@ -139,7 +140,7 @@ pub fn Part(notes: Notes, color: Color) {
     };
     CompositionLocalProvider([local_part().provides(Some(scope))], move || {
         for (index, note) in (first..end).zip(&notes.as_slice()[first..end]) {
-            if note.silent_at() <= slice.from {
+            if note.start + note.ring.max(LONGEST_BEAD_SECONDS) + MOST_GLOW_SECONDS <= slice.from {
                 continue;
             }
             let Ok(index) = u32::try_from(index) else {

@@ -42,8 +42,8 @@ const ARROW_SECONDS: f64 = 5.0;
 const ACCENT: Color = Color::from_rgb_u8(0x7C, 0xB7, 0xFF);
 // One color for each part of the song, in the order of its parts.
 const PART_COLORS: [Color; 4] = [
-    Color::from_rgb_u8(0x6C, 0xC4, 0xFF),
-    Color::from_rgb_u8(0xFF, 0xC8, 0x57),
+    Color::from_rgb_u8(0x4F, 0xB2, 0xFF),
+    Color::from_rgb_u8(0xFF, 0xB4, 0x3C),
     Color::from_rgb_u8(0x5E, 0xE0, 0xA8),
     Color::from_rgb_u8(0xF7, 0x8F, 0xC6),
 ];

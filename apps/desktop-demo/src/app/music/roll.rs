@@ -68,6 +68,11 @@ impl RollSlice {
         seconds * SLICE_HEIGHT
     }
 
+    // The seconds of the song that `height` of a roll shows.
+    pub fn seconds_of(height: f32) -> f32 {
+        height / SLICE_HEIGHT
+    }
+
     // The song seconds the slice ends at.
     pub fn to(self) -> f32 {
         self.from + 1.0

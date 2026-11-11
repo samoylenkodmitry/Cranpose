@@ -1,12 +1,13 @@
 // One key of a piano keyboard as a composable. It draws itself, lights in
-// the color of the note that holds it down, dips under the note and springs
-// back, and sends a glow and a ring up into the roll over it at each strike.
+// the color of the note that holds it down, and dips under the note and
+// springs back. Where the note lands on it, light blooms at its upper edge,
+// and each strike throws sparks up into the roll.
 
 use cranpose_animation::{spring, tween, updateTransition, Animatable, Easing, Lerp};
 use cranpose_core::{derivedStateOf, remember, with_current_composer, LaunchedEffect, State};
 use cranpose_ui::{
     composable, Box as CranposeBox, BoxSpec, Brush, Color, CornerRadii, DrawScope, Modifier, Point,
-    Rect, Stroke,
+    Rect,
 };
 
 use super::{held_notes::KeyDown, key_range::is_black_key, performance::local_performance};
@@ -23,19 +24,29 @@ const PRESS_DAMPING: f32 = 0.5;
 const PRESS_STIFFNESS: f32 = 900.0;
 // The time the light of a key takes to come and to go.
 const LIGHT_MILLIS: u64 = 140;
-// The glow over a key that is down: its height and strength at the strike,
-// and the share of both it keeps while the key is held.
-const GLOW_HEIGHT: f32 = 150.0;
-const GLOW_ALPHA: f32 = 0.6;
-const GLOW_REST: f32 = 0.3;
-// A strike sends a ring up from the key for this long. The glow and the
-// spark fall to their rest in the same time.
-const STRIKE_MILLIS: u64 = 700;
-const RING_RADIUS: std::ops::Range<f32> = 5.0..44.0;
-const RING_WIDTH: f32 = 2.0;
-const RING_ALPHA: f32 = 0.7;
-const SPARK_RADIUS: f32 = 14.0;
-const SPARK_ALPHA: f32 = 0.9;
+// Where a drop lands on its key, light blooms at the key's upper edge. The
+// bloom stays while the key is held, at this share of what it is at the
+// strike, and a strike takes this long to settle.
+const BLOOM_REST: f32 = 0.6;
+const STRIKE_MILLIS: u64 = 900;
+// The white middle of the bloom, and the haze of the key's light around it.
+const CORE_RADIUS: f32 = 15.0;
+const HAZE_RADIUS: f32 = 36.0;
+const HAZE_ALPHA: f32 = 0.5;
+// The beam the bloom sends up into the water over the key.
+const BEAM_HEIGHT: f32 = 110.0;
+const BEAM_ALPHA: f32 = 0.42;
+// The flare along the edge of the keys: how far it reaches to each side at
+// rest, what it gains at the strike, and its height.
+const FLARE_REACH: f32 = 40.0;
+const FLARE_GAIN: f32 = 34.0;
+const FLARE_HEIGHT: f32 = 3.0;
+// A strike throws this many sparks up from the key: how far they fly, how
+// far they fall back by the end, and their radius.
+const SPARKS: u8 = 12;
+const SPARK_REACH: f32 = 60.0;
+const SPARK_FALL: f32 = 22.0;
+const SPARK_RADIUS: f32 = 1.3;
 const CORNERS: CornerRadii = CornerRadii {
     top_left: 0.0,
     top_right: 0.0,
@@ -79,8 +90,18 @@ struct KeyPicture {
     bottom: Color,
     // How far the key is down: 0 up, 1 down, a little past both in a swing.
     press: f32,
-    // How far the ring of the last strike has gone, from 0 to 1.
-    ring: f32,
+    // How far the last strike has settled, from 0 to 1.
+    settled: f32,
+    // What tells the splash of this key from that of another.
+    seed: f32,
+}
+
+// A share from 0 to 1 that stays the same for one key and one drop of
+// its splash, and differs between them.
+fn scatter(seed: f32, salt: f32) -> f32 {
+    ((seed * 12.9898 + salt * 78.233).sin() * 43_758.547)
+        .fract()
+        .abs()
 }
 
 impl KeyPicture {
@@ -102,68 +123,129 @@ impl KeyPicture {
         }
     }
 
-    // Draws what stands over a key that is down by the share `down`: its
-    // glow, and the ring and the spark of a strike that has not ended.
+    // Draws the bloom over a key that is down by the share `down`, and the
+    // sparks of a strike that has not settled.
     fn draw_strike(self, scope: &mut dyn DrawScope, down: f32) {
         let Self {
             bottom: color,
-            ring,
+            settled,
             ..
         } = self;
         let size = scope.size();
-        let fresh = 1.0 - ring;
-        let strength = GLOW_REST + (1.0 - GLOW_REST) * fresh;
-        let height = GLOW_HEIGHT * strength;
-        // The glow stands on the key's upper edge, over the roll. A gradient
-        // is placed from the corner of the shape it paints.
-        scope.draw_rect_at(
-            Rect {
-                x: -size.width * 0.5,
-                y: -height,
-                width: size.width * 2.0,
-                height,
-            },
-            Brush::vertical_gradient(
-                vec![
-                    color.with_alpha(0.0),
-                    color.with_alpha(GLOW_ALPHA * strength * down),
-                ],
-                0.0,
-                height,
-            ),
-        );
-        if fresh <= 0.0 {
-            return;
-        }
+        let fresh = 1.0 - settled;
+        let strength = (BLOOM_REST + (1.0 - BLOOM_REST) * fresh) * down;
+        let hot = color.lerp(&Color::WHITE, 0.55);
         let center = Point {
             x: size.width * 0.5,
             y: 0.0,
         };
-        scope.draw_circle_stroked(
-            Brush::solid(
-                Color::WHITE
-                    .lerp(&color, ring)
-                    .with_alpha(RING_ALPHA * fresh * down),
-            ),
-            center,
-            RING_RADIUS.start + (RING_RADIUS.end - RING_RADIUS.start) * ring,
-            Stroke::new(RING_WIDTH),
-        );
-        let radius = SPARK_RADIUS * (1.0 + ring);
+        // A gradient is placed from the corner of the shape it paints.
+        let around = |radius: f32| Point {
+            x: radius,
+            y: radius,
+        };
+        let haze = HAZE_RADIUS * (0.8 + 0.5 * fresh);
         scope.draw_circle(
             Brush::radial_gradient(
                 vec![
-                    Color::WHITE.with_alpha(SPARK_ALPHA * fresh * down),
+                    color.with_alpha(HAZE_ALPHA * strength),
                     color.with_alpha(0.0),
                 ],
-                Point {
-                    x: radius,
-                    y: radius,
-                },
-                radius,
+                around(haze),
+                haze,
             ),
             center,
-            radius,
+            haze,
+        );
+        let beam = BEAM_HEIGHT * (0.6 + 0.4 * fresh);
+        scope.draw_rect_at(
+            Rect {
+                x: -size.width * 0.1,
+                y: -beam,
+                width: size.width * 1.2,
+                height: beam,
+            },
+            Brush::vertical_gradient(
+                vec![
+                    color.with_alpha(0.0),
+                    color.with_alpha(BEAM_ALPHA * strength),
+                ],
+                0.0,
+                beam,
+            ),
+        );
+        draw_flare(
+            scope,
+            center,
+            FLARE_REACH + FLARE_GAIN * fresh,
+            hot,
+            strength,
+        );
+        let core = CORE_RADIUS * (0.8 + 0.7 * fresh);
+        scope.draw_circle(
+            Brush::radial_gradient(
+                vec![
+                    Color::WHITE.with_alpha(strength.min(1.0)),
+                    hot.with_alpha(0.6 * strength),
+                    color.with_alpha(0.0),
+                ],
+                around(core),
+                core,
+            ),
+            center,
+            core,
+        );
+        if fresh > 0.0 {
+            self.draw_sparks(scope, center, hot.with_alpha(fresh * down));
+        }
+    }
+
+    // Draws the sparks of a strike that has not settled: they fly up and out
+    // from `center`, fast at first, and fall back a little.
+    fn draw_sparks(self, scope: &mut dyn DrawScope, center: Point, light: Color) {
+        let flown = 1.0 - (1.0 - self.settled) * (1.0 - self.settled);
+        for spark in 0..SPARKS {
+            let salt = f32::from(spark);
+            // From 80 degrees to the left of straight up to 80 to the right.
+            let angle = (scatter(self.seed, salt) - 0.5) * 2.8;
+            let reach = SPARK_REACH * (0.25 + 0.75 * scatter(self.seed, salt + 9.0)) * flown;
+            scope.draw_circle(
+                Brush::solid(light),
+                Point {
+                    x: center.x + angle.sin() * reach,
+                    y: center.y - angle.cos() * reach + SPARK_FALL * self.settled * self.settled,
+                },
+                SPARK_RADIUS * (1.0 - 0.4 * self.settled),
+            );
+        }
+    }
+}
+
+// Draws the flare of a landing along the edge of the keys, `reach` to each
+// side of `center`: a wide soft one in the light `hot`, and a thin white one
+// over it.
+fn draw_flare(scope: &mut dyn DrawScope, center: Point, reach: f32, hot: Color, strength: f32) {
+    for (reach, height, light) in [
+        (reach, FLARE_HEIGHT * 4.0, hot.with_alpha(0.45 * strength)),
+        (
+            reach * 0.7,
+            FLARE_HEIGHT,
+            Color::WHITE.with_alpha(0.95 * strength),
+        ),
+    ] {
+        // A gradient is placed from the corner of the shape it paints.
+        scope.draw_rect_at(
+            Rect {
+                x: center.x - reach,
+                y: -height * 0.5,
+                width: reach * 2.0,
+                height,
+            },
+            Brush::horizontal_gradient(
+                vec![light.with_alpha(0.0), light, light.with_alpha(0.0)],
+                0.0,
+                reach * 2.0,
+            ),
         );
     }
 }
@@ -178,8 +260,9 @@ struct Light {
 
 // Draws the key `key` in `place`, a rectangle of its keyboard. The key
 // lights while `lights` or a hand of the performance around the call holds
-// it down. It dips as it goes down and springs back, each strike sends a
-// ring up from it, and its light fades when it goes up.
+// it down. It dips as it goes down and springs back, light blooms where a
+// note lands on it, each strike throws sparks up from it, and its light
+// fades when it goes up.
 #[composable]
 pub fn PianoKey(key: u8, place: Rect, colors: KeyboardColors, lights: State<KeyLights>) {
     let Some(performance) = local_performance().current() else {
@@ -224,21 +307,21 @@ pub fn PianoKey(key: u8, place: Rect, colors: KeyboardColors, lights: State<KeyL
     );
     let bottom = transition.animateColor(light.map_or(bottom, |light| light.color), fade, "bottom");
 
-    // Each strike starts the ring again at the key, also the strike of a
+    // Each strike starts the bloom again at the key, also the strike of a
     // note that follows another on the same key with no rest between them.
     let runtime = with_current_composer(|composer| composer.runtime_handle());
-    let ring = remember(move || Animatable::new(1.0, runtime)).with(Animatable::clone);
-    let strike = light.map(|light| light.strike);
+    let strike_light = remember(move || Animatable::new(1.0, runtime)).with(Animatable::clone);
+    let struck = light.map(|light| light.strike);
     {
-        let mut ring = ring.clone();
-        LaunchedEffect(strike, async move |_| {
-            if strike.is_some() {
-                ring.snapTo(0.0);
-                ring.animateTo(1.0, tween(STRIKE_MILLIS, Easing::EaseOut));
+        let mut strike_light = strike_light.clone();
+        LaunchedEffect(struck, async move |_| {
+            if struck.is_some() {
+                strike_light.snapTo(0.0);
+                strike_light.animateTo(1.0, tween(STRIKE_MILLIS, Easing::EaseOut));
             }
         });
     }
-    let ring = ring.state();
+    let strike = strike_light.state();
 
     CranposeBox(
         Modifier::empty()
@@ -250,7 +333,8 @@ pub fn PianoKey(key: u8, place: Rect, colors: KeyboardColors, lights: State<KeyL
                     top: top.get(),
                     bottom: bottom.get(),
                     press: press.get(),
-                    ring: ring.get(),
+                    settled: strike.get(),
+                    seed: f32::from(key),
                 }
                 .draw(scope);
             }),
