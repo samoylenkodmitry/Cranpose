@@ -17,8 +17,15 @@ framework functions with samples left out of the budget first in flash, the
 hottest per byte first: placed one after another they share the cache with
 each other less, and a change elsewhere moves them less.
 
+With --check first, it writes nothing: it names the patterns of list and
+order files that matched a function of a base image and match none of
+another image, and exits with an error when there is one. A change that
+renames, inlines or removes a listed function shows there, before a board
+run reads its code from flash.
+
 Usage: hot_code.py BUDGET_KB OUT_LD --profile ELF LOG [--profile ELF LOG ...]
        [--board NAME] [--flash-order OUT_ORDER]
+       hot_code.py --check BASE_ELF ELF LIST [LIST ...]
 """
 
 import argparse
@@ -95,7 +102,55 @@ def write_flash_order(out, patterns, profile_count, board):
     print(f"{out}: {len(patterns)} patterns in flash")
 
 
+def listed_patterns(text):
+    """The function patterns a list or order file names, each once."""
+    return list(dict.fromkeys(re.findall(r"\s\.text\.([^\s)]+)\)", text)))
+
+
+def matches_any(pattern, blob):
+    """Whether `pattern` matches a line of `blob`. The lines that hold the
+    pattern's longest literal part are the only ones it can match."""
+    literal = max(pattern.split("*"), key=len)
+    at = blob.find(literal)
+    while at >= 0:
+        start = blob.rfind("\n", 0, at) + 1
+        end = blob.find("\n", at)
+        end = len(blob) if end < 0 else end
+        if fnmatch.fnmatchcase(blob[start:end], pattern):
+            return True
+        at = blob.find(literal, end)
+    return False
+
+
+def lost_patterns(patterns, base_names, names):
+    """The patterns that match a function of the base image and none of the
+    other image's."""
+    base, other = "\n".join(base_names), "\n".join(names)
+    return [pattern for pattern in patterns if matches_any(pattern, base) and not matches_any(pattern, other)]
+
+
+def check(arguments):
+    """`--check BASE_ELF ELF LIST...`: stops with the patterns the image
+    lost against the base image."""
+    if len(arguments) < 3:
+        sys.exit("usage: hot_code.py --check BASE_ELF ELF LIST [LIST ...]")
+    base_names = functions(arguments[0], demangle=False)[2]
+    names = functions(arguments[1], demangle=False)[2]
+    lost = {}
+    for path in arguments[2:]:
+        found = lost_patterns(listed_patterns(pathlib.Path(path).read_text()), base_names, names)
+        if found:
+            lost[path] = found
+    if lost:
+        lines = [f"{path}: {pattern}" for path, patterns in lost.items() for pattern in patterns]
+        sys.exit("patterns that matched the base image and match nothing now:\n" + "\n".join(lines))
+    print("every pattern that matched the base image still matches")
+
+
 def main():
+    if sys.argv[1:2] == ["--check"]:
+        check(sys.argv[2:])
+        return
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("budget_kb", type=float)
     parser.add_argument("out", type=pathlib.Path)
@@ -151,4 +206,5 @@ def main():
           f"{100 * covered:.1f}% of Rust samples")
 
 
-main()
+if __name__ == "__main__":
+    main()

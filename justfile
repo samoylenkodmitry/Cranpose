@@ -689,6 +689,7 @@ test-shell-helpers: _benchmark-python ci-contract-gates
     python3 benchmarks/compose-vs-cranpose/tests/test_ab_decisions.py
     python3 benchmarks/compose-vs-cranpose/tests/test_desktop_accounting.py
     python3 scripts/esp32/board_ab_test.py
+    python3 scripts/esp32/hot_code_test.py
     python3 benchmarks/compose-vs-cranpose/tests/test_display_state.py
     python3 benchmarks/compose-vs-cranpose/tests/test_adb_recovery.py
     python3 benchmarks/compose-vs-cranpose/tests/test_chrome_first_run.py
