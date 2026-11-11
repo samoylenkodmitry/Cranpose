@@ -172,6 +172,7 @@ runners! {
     robot_modifier_render,
     robot_multiline_click,
     robot_multiline_nav,
+    robot_music_tab,
     robot_nested_glass_animated,
     robot_nested_glass_cache,
     robot_no_fling_recording2,

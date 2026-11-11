@@ -16,7 +16,7 @@ use super::{
     glass_tiles::GlassTilesTab,
     images::images_tab,
     interactive_anim::InteractiveAnimTab,
-    lazy_list_example,
+    lazy_list::lazy_list_example,
     liquid_ui::LiquidUiTab,
     markdown_viewer_tab, mineswapper2, modifier_showcase_tab, performance_dashboard,
     recomposition_lab::RecompositionLabTab,
@@ -102,6 +102,7 @@ pub(super) fn tab_requires_scroll(tab: DemoTab) -> bool {
             | DemoTab::Room
             | DemoTab::Backrooms
             | DemoTab::Tv
+            | DemoTab::Music
     )
 }
 
@@ -148,7 +149,8 @@ pub(super) fn render_active_tab(
         | DemoTab::GlassTiles
         | DemoTab::Room
         | DemoTab::Backrooms
-        | DemoTab::Tv => render_showcase_tab(active, startup, wsz_tab_state),
+        | DemoTab::Tv
+        | DemoTab::Music => render_showcase_tab(active, startup, wsz_tab_state),
     }
 }
 
@@ -173,9 +175,9 @@ fn render_showcase_tab(active: DemoTab, startup: StartupSelection, wsz_tab_state
         DemoTab::Liquid => LiquidUiTab(),
         DemoTab::GlassFeed => GlassFeedTab(),
         DemoTab::GlassTiles => GlassTilesTab(),
-        DemoTab::Room => room::RoomTab(),
-        DemoTab::Backrooms => BackroomsTab(),
-        DemoTab::Tv => super::tv::TvTab(),
+        DemoTab::Room | DemoTab::Backrooms | DemoTab::Tv | DemoTab::Music => {
+            render_scene_tab(active);
+        }
         DemoTab::Guide
         | DemoTab::Counter
         | DemoTab::CompositionLocal
@@ -194,5 +196,17 @@ fn render_showcase_tab(active: DemoTab, startup: StartupSelection, wsz_tab_state
         | DemoTab::FilePicker
         | DemoTab::Rotary
         | DemoTab::Wear => {}
+    }
+}
+
+// The tabs that fill the pane with a scene of their own.
+#[composable]
+fn render_scene_tab(active: DemoTab) {
+    match active {
+        DemoTab::Room => room::RoomTab(),
+        DemoTab::Backrooms => BackroomsTab(),
+        DemoTab::Tv => super::tv::TvTab(),
+        DemoTab::Music => super::music::MusicTab(),
+        _ => {}
     }
 }

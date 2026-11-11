@@ -25,6 +25,7 @@ mod mineswapper_lazy_list_regression;
 mod modifier_showcase_layout_tests;
 mod modifier_showcase_rendering_tests;
 mod modifier_showcase_tests;
+mod music;
 mod performance_dashboard;
 mod recursive_layout_tab_switch_regression;
 mod reference_content;

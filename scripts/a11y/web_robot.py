@@ -15,6 +15,7 @@ CHECKS = {
     'accessibility': ('scripts/a11y/web-page-check.mjs', [], 180),
     'webgpu': ('scripts/a11y/tests/gpu-smoke.mjs', ['webgpu'], 300),
     'webgl': ('scripts/a11y/tests/gpu-smoke.mjs', ['gl'], 300),
+    'music': ('scripts/a11y/tests/music-sound.mjs', [], 120),
 }
 
 

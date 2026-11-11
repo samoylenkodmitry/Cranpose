@@ -3,7 +3,10 @@ use std::{collections::BTreeSet, path::Path};
 use crate::test_layout::{collect_sources, workspace_members};
 
 const FRAMEWORK_CRATES: &str = "crates/";
-const BUDGET: usize = 18;
+// 19 with the open streams of cranpose-audio's Web Audio backend, that
+// crate's one thread-local. A page's values stay on the thread that made
+// them, and a sink, which is `Send`, names its stream there.
+const BUDGET: usize = 19;
 
 pub(crate) fn run_at(root: &Path) -> Result<(), String> {
     check(root, BUDGET)
