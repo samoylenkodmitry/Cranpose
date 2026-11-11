@@ -13,9 +13,10 @@ use cranpose_services::{rememberLifecycleState, LifecycleState};
 use cranpose_ui::{composable, Color};
 
 use super::{
+    held_notes::{KeyDown, NotePlace, PartSlot},
     key_set::KeySet,
-    player::{KeyDown, MusicOutput, MusicPlayer, PartSlot, ShownPart},
-    song::Notes,
+    player::{MusicOutput, MusicPlayer},
+    song::{Note, Notes},
     voicing::Voicing,
 };
 use crate::app::ticking::Ticking;
@@ -27,6 +28,9 @@ use crate::app::ticking::Ticking;
 const PULL: f64 = 0.1;
 // Past this distance the shown clock jumps: the song was moved.
 const JUMP_SECONDS: f64 = 0.25;
+// A step of the shown clock under this is no step: a clock whose sound
+// stands still comes to rest, and the picture with it.
+const STILL_SECONDS: f64 = 1.0e-4;
 // How long the output device stays on after the clock stops, for the last
 // notes and their room to fade.
 const REST_AFTER: Duration = Duration::from_secs(5);
@@ -51,8 +55,9 @@ struct PerformanceState {
     // Counts the keys struck by hand and the moves of a dragged clock, so
     // the device stays awake for them.
     wakes: MutableState<u32>,
-    // Counts the changes to the parts, so their pictures compose again.
-    part_changes: MutableState<u32>,
+    // Counts the holds and releases of parts and notes, so the lights of
+    // the keys follow them.
+    holds: MutableState<u32>,
     hand_keys: MutableState<KeySet>,
 }
 
@@ -79,6 +84,12 @@ impl Performance {
     // redraws the block each frame the clock moves.
     pub fn seconds(&self) -> f64 {
         self.state.shown_seconds.get()
+    }
+
+    // The same seconds for a scope that something else runs again:
+    // this read subscribes no one.
+    pub fn seconds_now(&self) -> f64 {
+        self.state.shown_seconds.get_non_reactive()
     }
 
     pub fn play(&self) {
@@ -156,29 +167,35 @@ impl Performance {
         self.state.drag.get().map(|_| self.state.drag_moves.get())
     }
 
-    // Takes a slot for `notes`, shown in `color`. The part sounds once
-    // `voice_part` gives it a voicing.
-    pub fn add_part(&self, notes: &Notes, color: Color) -> Option<PartSlot> {
-        let slot = self.player.add_part(notes, color);
-        self.state.part_changes.update(|changes| *changes += 1);
+    // Holds the part that `notes` belong to, shown in `color`, until
+    // `release_part`.
+    pub fn hold_part(&self, notes: &Notes, color: Color) -> Option<PartSlot> {
+        let slot = self.player.hold_part(notes, color);
+        self.state.holds.update(|holds| *holds += 1);
         slot
     }
 
     pub fn voice_part(&self, slot: PartSlot, voicing: Voicing) {
         self.player.voice_part(slot, voicing);
-        self.state.part_changes.update(|changes| *changes += 1);
+        self.state.holds.update(|holds| *holds += 1);
     }
 
-    pub fn remove_part(&self, slot: PartSlot) {
-        self.player.remove_part(slot);
-        self.state.part_changes.update(|changes| *changes += 1);
+    pub fn release_part(&self, slot: PartSlot) {
+        self.player.release_part(slot);
+        self.state.holds.update(|holds| *holds += 1);
     }
 
-    // The parts of the performance. A composable that calls this composes
-    // again when a part comes, goes or changes its voicing.
-    pub fn parts(&self) -> Vec<ShownPart> {
-        self.state.part_changes.get();
-        self.player.parts()
+    // Holds `note`, the one at `index` of the part in `slot`, until
+    // `release_note`: it sounds while the clock stands in it.
+    pub fn hold_note(&self, slot: PartSlot, index: u32, note: Note) -> Option<NotePlace> {
+        let place = self.player.hold_note(slot, index, note);
+        self.state.holds.update(|holds| *holds += 1);
+        place
+    }
+
+    pub fn release_note(&self, place: NotePlace) {
+        self.player.release_note(place);
+        self.state.holds.update(|holds| *holds += 1);
     }
 
     pub fn seek(&self, seconds: f64) {
@@ -186,10 +203,12 @@ impl Performance {
         self.state.shown_seconds.set(seconds.max(0.0));
     }
 
-    // Calls `held` for each key the parts hold down at the shown clock.
-    // Called in a draw block, this redraws the block as the clock moves.
-    pub fn for_each_key_down(&self, held: impl FnMut(KeyDown)) {
-        self.player.for_each_key_down(self.seconds(), held);
+    // Calls `down` for each key the held notes keep down at the shown
+    // clock. A scope that calls this runs again when the clock moves and
+    // when a note is held or let go.
+    pub fn for_each_key_down(&self, down: impl FnMut(KeyDown)) {
+        self.state.holds.get();
+        self.player.for_each_key_down(self.seconds(), down);
     }
 
     // Strikes `key` by hand. A key that is down already stays as it is,
@@ -223,14 +242,18 @@ impl Performance {
             self.state.shown_seconds.set(self.player.position());
             return;
         }
-        let shown = self.state.shown_seconds.get() + f64::from(frame_seconds) * tempo;
+        let before = self.state.shown_seconds.get();
+        let shown = before + f64::from(frame_seconds) * tempo;
         let apart = heard - shown;
         let shown = if apart.abs() > JUMP_SECONDS {
             heard
         } else {
             shown + apart * PULL
-        };
-        self.state.shown_seconds.set(shown.max(0.0));
+        }
+        .max(0.0);
+        if (shown - before).abs() >= STILL_SECONDS {
+            self.state.shown_seconds.set(shown);
+        }
     }
 }
 
@@ -271,7 +294,7 @@ pub fn rememberPerformance(seconds: f32) -> Performance {
             drag: mutableStateOf(None),
             drag_moves: mutableStateOf(0),
             wakes: mutableStateOf(0),
-            part_changes: mutableStateOf(0),
+            holds: mutableStateOf(0),
             hand_keys: mutableStateOf(KeySet::EMPTY),
         },
     })

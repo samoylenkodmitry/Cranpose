@@ -1,9 +1,11 @@
-// The Music tab: "Clair de lune" as a tree of composables. Each hand is a
-// `Part` that the performance sounds and shows; `Instrument`, `Transpose`
-// and `Volume` wrap the parts and change how they sound. The `Roll` is a
-// scrolling column of the notes: the piece moves it, and a hand that moves
-// it plays the notes that cross its lower edge. The `Keyboard` lights the
-// keys the parts hold and plays under a finger.
+// The Music tab: "Clair de lune" as a tree of composables. Each note is a
+// `NoteBar`: a rectangle on the roll that sounds while it is composed and
+// the clock stands in it. Each hand is a `Part` that composes its notes.
+// `Instrument`, `Transpose` and `Volume` wrap the parts and change how they
+// sound. The `Roll` is a scrolling column of the song's seconds: the piece
+// moves it. A hand that moves it plays the notes that cross its lower edge.
+// The `Keyboard` is a row of `PianoKey`s: each lights under the note that
+// holds it down and plays under a finger.
 
 use cranpose::liquid::prelude::*;
 use cranpose_core::{remember, with_key, LaunchedEffect};
@@ -16,10 +18,11 @@ use super::{
     clair_de_lune::clair_de_lune,
     controls::ControlPanel,
     key_range::KeyRange,
-    keyboard::{Keyboard, KeyboardColors},
+    keyboard::Keyboard,
     night_sky::NightSky,
     part::Part,
     performance::{rememberPerformance, Perform, Performance},
+    piano_key::KeyboardColors,
     roll::Roll,
     settings::{rememberSettings, Settings},
     song::Song,
@@ -136,31 +139,19 @@ fn take_key(event: &KeyEvent, performance: &Performance, settings: Settings) -> 
     true
 }
 
-// The parts of the song, the roll that shows them and the keyboard they
-// fall onto.
+// The roll of the song over the keyboard its notes fall onto. The parts are
+// the content of the roll: it composes them in each of its seconds, and
+// they compose their notes there.
 #[composable]
 fn Score(song: Song, settings: Settings, keyboard: Modifier) {
-    let transpose = settings.transpose.get();
     Instrument(settings.timbre.get(), move || {
         let song = song.clone();
-        Transpose(transpose, move || {
-            for (index, part) in song.parts.iter().enumerate() {
-                if !settings.plays(index) {
-                    continue;
-                }
-                with_key(&index, || {
-                    Volume(settings.part_volume(index), {
-                        let notes = part.notes.clone();
-                        move || Part(notes.clone(), PART_COLORS[index % PART_COLORS.len()])
-                    });
-                });
-            }
-        });
         let keyboard = keyboard.clone();
         Column(
             Modifier::empty().fill_max_size(),
             ColumnSpec::new(),
             move || {
+                let song = song.clone();
                 Roll(
                     KEYS,
                     Modifier::empty()
@@ -168,6 +159,7 @@ fn Score(song: Song, settings: Settings, keyboard: Modifier) {
                         .weight(1.0)
                         .test_tag(ROLL_TAG)
                         .content_description("Notes of the piece"),
+                    move || Parts(song.clone(), settings),
                 );
                 Keyboard(
                     KEYS,
@@ -176,10 +168,27 @@ fn Score(song: Song, settings: Settings, keyboard: Modifier) {
                         .clone()
                         .fill_max_width()
                         .height(KEYBOARD_HEIGHT)
-                        .test_tag(KEYBOARD_TAG)
-                        .content_description("Piano keyboard"),
+                        .test_tag(KEYBOARD_TAG),
                 );
             },
         );
+    });
+}
+
+// The parts of the song that play, each at its pitch and volume.
+#[composable]
+fn Parts(song: Song, settings: Settings) {
+    Transpose(settings.transpose.get(), move || {
+        for (index, part) in song.parts.iter().enumerate() {
+            if !settings.plays(index) {
+                continue;
+            }
+            with_key(&index, || {
+                Volume(settings.part_volume(index), {
+                    let notes = part.notes.clone();
+                    move || Part(notes.clone(), PART_COLORS[index % PART_COLORS.len()])
+                });
+            });
+        }
     });
 }

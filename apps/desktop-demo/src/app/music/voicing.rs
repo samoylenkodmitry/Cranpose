@@ -5,6 +5,7 @@
 use std::cell::RefCell;
 
 use cranpose_core::{compositionLocalOf, CompositionLocal, CompositionLocalProvider};
+use cranpose_ui::composable;
 
 use super::timbre::Timbre;
 
@@ -20,13 +21,18 @@ pub struct Voicing {
     pub volume: f32,
 }
 
+impl Voicing {
+    // A piano at its own pitch and loudness.
+    pub const DEFAULT: Self = Self {
+        timbre: Timbre::Piano,
+        transpose: 0,
+        volume: 1.0,
+    };
+}
+
 impl Default for Voicing {
     fn default() -> Self {
-        Self {
-            timbre: Timbre::Piano,
-            transpose: 0,
-            volume: 1.0,
-        }
+        Self::DEFAULT
     }
 }
 
@@ -41,29 +47,28 @@ pub fn local_voicing() -> CompositionLocal<Voicing> {
     })
 }
 
-// Each of these reads the voicing around its call and provides a changed one
-// to its content. The provider is the only scope they need, so they are
-// plain functions.
-fn voiced(voicing: Voicing, content: impl FnMut() + 'static) {
+#[composable]
+fn Voiced(voicing: Voicing, content: impl FnMut() + 'static) {
     CompositionLocalProvider([local_voicing().provides(voicing)], content);
 }
 
 // Plays `content` with the sound of `timbre`.
-#[expect(non_snake_case, reason = "a block of a score reads as a composable")]
+#[composable]
 pub fn Instrument(timbre: Timbre, content: impl FnMut() + 'static) {
     let voicing = local_voicing().current();
-    voiced(Voicing { timbre, ..voicing }, content);
+    Voiced(Voicing { timbre, ..voicing }, content);
 }
 
-// Plays `content` this many semitones above the pitch it has outside.
-#[expect(non_snake_case, reason = "a block of a score reads as a composable")]
+// Plays `content` this many semitones above the pitch it has outside, and
+// shows its notes over the keys of that pitch.
+#[composable]
 pub fn Transpose(semitones: i8, content: impl FnMut() + 'static) {
     let voicing = local_voicing().current();
     let transpose = voicing
         .transpose
         .saturating_add(semitones)
         .clamp(LOWEST_TRANSPOSE, HIGHEST_TRANSPOSE);
-    voiced(
+    Voiced(
         Voicing {
             transpose,
             ..voicing
@@ -73,10 +78,10 @@ pub fn Transpose(semitones: i8, content: impl FnMut() + 'static) {
 }
 
 // Plays `content` at this share of the loudness it has outside.
-#[expect(non_snake_case, reason = "a block of a score reads as a composable")]
+#[composable]
 pub fn Volume(volume: f32, content: impl FnMut() + 'static) {
     let voicing = local_voicing().current();
-    voiced(
+    Voiced(
         Voicing {
             volume: voicing.volume * volume.max(0.0),
             ..voicing

@@ -1,20 +1,22 @@
-// The renderer of a performance. Its clock is a place in the song: the notes
-// of the parts sound while the clock stands inside them. While the piece
-// plays, the clock runs and each note starts on the frame its start falls
-// on. A hand can also drag the clock, and then each note it enters sounds as
-// far into its life as the clock stands past the note's start.
+// The renderer of a performance. It plays the notes that are held in it: a
+// note composable holds its note here while it is in the composition. Its
+// clock is a place in the song, and a held note sounds while the clock
+// stands inside it. While the piece plays, the clock runs and each note
+// starts on the frame its start falls on. A hand can also drag the clock,
+// and then each note it enters sounds as far into its life as the clock
+// stands past the note's start.
 
 use std::sync::Arc;
 
 use cranpose_audio::{
     backend::{Renderer, NOMINAL_CHANNELS, NOMINAL_SAMPLE_RATE},
-    ring::{Consumer, Producer},
+    ring::Consumer,
     RenderStatus,
 };
 
 use super::{
     reverb::Reverb,
-    song::{note_seconds, Note, Notes},
+    song::{note_seconds, Note},
     transport::Transport,
     voice::Voice,
     voice_bank::{Owner, Tag, VoiceBank},
@@ -22,6 +24,9 @@ use super::{
 };
 
 pub(super) const MAX_PARTS: u8 = 8;
+// The notes held at once: those of the seconds a roll composes around its
+// line, in the densest passage of a piano piece.
+pub(super) const MAX_NOTES: u16 = 512;
 // Keys go up at the ends of spans this long, and a key that goes up fades
 // over many of them.
 const SPAN_FRAMES: usize = 64;
@@ -36,14 +41,27 @@ const DRAG_JUMP_SECONDS: f64 = 0.25;
 const LIMIT_INPUT: f32 = 3.0;
 
 pub(super) enum Command {
+    // Sets how the notes of the part in `slot` sound.
     SetPart {
         slot: u8,
-        notes: Notes,
         voicing: Voicing,
     },
+    // Lets the dampers fall on the notes of the part in `slot`.
     ClearPart {
         slot: u8,
     },
+    // Holds `note` of the part in slot `part` at `place`.
+    HoldNote {
+        place: u16,
+        part: u8,
+        note: Note,
+    },
+    // Lets go of the note at `place`: it sounds no more.
+    DropNote {
+        place: u16,
+    },
+    // Lets go of every held note.
+    DropAll,
     // Puts the clock at these song seconds.
     Seek(f64),
     // Drags the clock toward these song seconds while the piece does not play.
@@ -60,10 +78,19 @@ pub(super) enum Command {
     },
 }
 
-struct Part {
-    notes: Notes,
-    next: usize,
-    voicing: Voicing,
+// A note a composable holds.
+#[derive(Clone, Copy)]
+struct Held {
+    part: u8,
+    note: Note,
+    // Whether the running clock has passed the start of the note.
+    struck: bool,
+}
+
+impl Held {
+    fn sounds(&self) -> std::ops::Range<f64> {
+        f64::from(self.note.start)..f64::from(self.note.silent_at())
+    }
 }
 
 // A clock under a hand: where the hand put it and how fast it goes there.
@@ -75,16 +102,14 @@ struct Drag {
 
 pub(super) struct Synth {
     commands: Consumer<Command>,
-    // Notes the synth lets go of return here, so the thread that made them
-    // frees them.
-    retired: Producer<Notes>,
     transport: Arc<Transport>,
     sample_rate: f32,
     channels: usize,
     position: f64,
     was_playing: bool,
     drag: Option<Drag>,
-    parts: [Option<Part>; MAX_PARTS as usize],
+    parts: [Voicing; MAX_PARTS as usize],
+    notes: [Option<Held>; MAX_NOTES as usize],
     bank: VoiceBank,
     reverb: Reverb,
 }
@@ -97,73 +122,67 @@ fn soft_limit(sample: f32) -> f32 {
 }
 
 impl Synth {
-    pub(super) fn new(
-        commands: Consumer<Command>,
-        retired: Producer<Notes>,
-        transport: Arc<Transport>,
-    ) -> Self {
+    pub(super) fn new(commands: Consumer<Command>, transport: Arc<Transport>) -> Self {
         let mut reverb = Reverb::new();
         reverb.set_sample_rate(NOMINAL_SAMPLE_RATE);
         Self {
             commands,
-            retired,
             transport,
             sample_rate: NOMINAL_SAMPLE_RATE,
             channels: NOMINAL_CHANNELS,
             position: 0.0,
             was_playing: false,
             drag: None,
-            parts: [const { None }; MAX_PARTS as usize],
+            parts: [Voicing::DEFAULT; MAX_PARTS as usize],
+            notes: [None; MAX_NOTES as usize],
             bank: VoiceBank::new(),
             reverb,
         }
     }
 
-    fn retire(&mut self, notes: Notes) {
-        // The queue holds as many notes as there are commands in flight; a
-        // full one means the other thread is gone, and its notes with it.
-        if let Err(notes) = self.retired.push(notes) {
-            std::mem::forget(notes);
-        }
+    fn damp_notes(&mut self) {
+        self.bank.release_where(|tag| tag.owner.is_note());
     }
 
-    fn damp_parts(&mut self) {
-        self.bank.release_where(|tag| tag.owner.is_part());
-    }
-
-    fn find_next_notes(&mut self) {
-        for part in self.parts.iter_mut().flatten() {
-            part.next = part.notes.first_at_or_after(self.position);
+    // Marks each held note by whether the clock has passed its start, so a
+    // clock that runs from here strikes the notes ahead of it and no other.
+    fn mark_struck(&mut self) {
+        let position = self.position;
+        for held in self.notes.iter_mut().flatten() {
+            held.struck = f64::from(held.note.start) <= position;
         }
     }
 
     fn apply_commands(&mut self, playing: bool) {
         while let Some(command) = self.commands.pop() {
             match command {
-                Command::SetPart {
-                    slot,
-                    notes,
-                    voicing,
-                } => self.set_part(slot, notes, voicing),
+                Command::SetPart { slot, voicing } => self.parts[usize::from(slot)] = voicing,
                 Command::ClearPart { slot } => {
-                    if let Some(part) = self.parts[usize::from(slot)].take() {
-                        self.retire(part.notes);
-                    }
-                    self.bank
-                        .release_where(|tag| tag.owner == Owner::Part(slot));
+                    self.bank.release_where(|tag| tag.owner.is_of_part(slot));
+                }
+                Command::HoldNote { place, part, note } => {
+                    self.hold(place, part, note, playing);
+                }
+                Command::DropNote { place } => {
+                    self.notes[usize::from(place)] = None;
+                    self.bank.release_where(|tag| tag.owner.is_at(place));
+                }
+                Command::DropAll => {
+                    self.notes = [None; MAX_NOTES as usize];
+                    self.damp_notes();
                 }
                 Command::Seek(seconds) => {
                     self.position = seconds;
-                    self.find_next_notes();
-                    self.damp_parts();
+                    self.damp_notes();
                     if playing || self.drag.is_some() {
                         self.enter_notes(None);
                     }
+                    self.mark_struck();
                 }
                 Command::Drag(target) => self.drag_toward(target),
                 Command::EndDrag => {
                     self.drag = None;
-                    self.damp_parts();
+                    self.damp_notes();
                 }
                 Command::KeyDown {
                     key,
@@ -180,27 +199,47 @@ impl Synth {
         }
     }
 
-    fn set_part(&mut self, slot: u8, notes: Notes, voicing: Voicing) {
-        let place = &mut self.parts[usize::from(slot)];
-        if let Some(part) = place {
-            if part.notes.same_notes(&notes) {
-                // The part keeps its own share of the notes, so this drop
-                // frees nothing.
-                part.voicing = voicing;
-                return;
-            }
+    // Takes a note a composable holds from now on. A note the clock already
+    // stands in, held late after a jump of the roll, sounds from where the
+    // clock stands.
+    fn hold(&mut self, place: u16, part: u8, note: Note, playing: bool) {
+        let held = Held {
+            part,
+            note,
+            struck: f64::from(note.start) <= self.position,
+        };
+        self.notes[usize::from(place)] = Some(held);
+        if (playing || self.drag.is_some()) && held.sounds().contains(&self.position) {
+            self.strike(place, held);
         }
-        let next = notes.first_at_or_after(self.position);
-        let before = place.replace(Part {
-            notes,
-            next,
+    }
+
+    // Strikes the note held at `place` as far into its life as the clock
+    // stands past its start, unless it has faded by then.
+    fn strike(&mut self, place: u16, held: Held) {
+        let voicing = self.parts[usize::from(held.part)];
+        let sounds = held.sounds();
+        let age = note_seconds((self.position - sounds.start).max(0.0));
+        let key = f32::from(held.note.key) + f32::from(voicing.transpose);
+        if !Voice::sounds_after(voicing.timbre.recipe(), key, age) {
+            return;
+        }
+        self.bank.strike(
+            Tag {
+                owner: Owner::Note {
+                    part: held.part,
+                    place,
+                },
+                key: held.note.key,
+                // A note struck half a frame early sounds from now.
+                sounds_from: sounds.start.min(self.position),
+                silent_at: sounds.end,
+            },
+            held.note.velocity,
             voicing,
-        });
-        if let Some(part) = before {
-            self.retire(part.notes);
-        }
-        self.bank
-            .release_where(|tag| tag.owner == Owner::Part(slot));
+            age,
+            self.sample_rate,
+        );
     }
 
     fn drag_toward(&mut self, target: f64) {
@@ -208,7 +247,7 @@ impl Synth {
             // Too far to pass through on the way: the clock is put there,
             // and the notes it lands in sound from where it landed.
             self.position = target;
-            self.damp_parts();
+            self.damp_notes();
             self.enter_notes(None);
         } else if self.drag.is_none() {
             // The hand takes the clock: the notes it stands in sound.
@@ -236,84 +275,47 @@ impl Synth {
         }
     }
 
-    // Strikes the notes the clock stands in now and did not stand in at
-    // `before`, each as far into its life as the clock is past its start,
-    // and lets the dampers fall on the notes the clock left. `None` strikes
-    // every note the clock stands in.
+    // Strikes the held notes the clock stands in now and did not stand in at
+    // `before`, and lets the dampers fall on the notes the clock left.
+    // `None` strikes every held note the clock stands in.
     fn enter_notes(&mut self, before: Option<f64>) {
         let now = self.position;
-        for (slot, part) in (0u8..).zip(&self.parts) {
-            let Some(part) = part else { continue };
-            let earliest = now - f64::from(part.notes.longest_ring());
-            let first = part.notes.first_at_or_after(earliest);
-            let end = part.notes.started_by(now);
-            for note in &part.notes.as_slice()[first..end] {
-                let sounds = f64::from(note.start)..f64::from(note.silent_at());
-                if !sounds.contains(&now) || before.is_some_and(|before| sounds.contains(&before)) {
-                    continue;
-                }
-                let age = note_seconds(now - sounds.start);
-                let key = f32::from(note.key) + f32::from(part.voicing.transpose);
-                if !Voice::sounds_after(part.voicing.timbre.recipe(), key, age) {
-                    continue;
-                }
-                self.bank.strike(
-                    Tag {
-                        owner: Owner::Part(slot),
-                        key: note.key,
-                        sounds_from: sounds.start,
-                        silent_at: sounds.end,
-                    },
-                    note.velocity,
-                    part.voicing,
-                    age,
-                    self.sample_rate,
-                );
+        for place in 0..MAX_NOTES {
+            let Some(held) = self.notes[usize::from(place)] else {
+                continue;
+            };
+            let sounds = held.sounds();
+            if sounds.contains(&now) && !before.is_some_and(|before| sounds.contains(&before)) {
+                self.strike(place, held);
             }
         }
         self.bank.release_outside(now);
     }
 
-    // Starts the notes that fall on the frame the running clock is at.
+    // Starts the held notes that fall on the frame the running clock is at.
     fn strike_due(&mut self, step: f64) {
         let due_before = self.position + step * 0.5;
-        for slot in 0..MAX_PARTS {
-            while let Some((note, voicing)) = self.due_note(slot, due_before) {
-                self.bank.strike(
-                    Tag {
-                        owner: Owner::Part(slot),
-                        key: note.key,
-                        // A note struck half a frame early sounds from now.
-                        sounds_from: f64::from(note.start).min(self.position),
-                        silent_at: f64::from(note.silent_at()),
-                    },
-                    note.velocity,
-                    voicing,
-                    0.0,
-                    self.sample_rate,
-                );
+        for place in 0..MAX_NOTES {
+            let Some(held) = self.notes[usize::from(place)].as_mut() else {
+                continue;
+            };
+            if held.struck || f64::from(held.note.start) >= due_before {
+                continue;
             }
+            held.struck = true;
+            let held = *held;
+            self.strike(place, held);
         }
     }
 
-    fn due_note(&mut self, slot: u8, due_before: f64) -> Option<(Note, Voicing)> {
-        let part = self.parts[usize::from(slot)].as_mut()?;
-        let note = *part.notes.as_slice().get(part.next)?;
-        if f64::from(note.start) >= due_before {
-            return None;
-        }
-        part.next += 1;
-        Some((note, part.voicing))
-    }
-
-    // Frames from the clock to the start of the next note of any part.
+    // Frames from the clock to the start of the next held note.
     fn frames_to_next_note(&self, step: f64) -> usize {
         let next = self
-            .parts
+            .notes
             .iter()
             .flatten()
-            .filter_map(|part| part.notes.as_slice().get(part.next))
-            .map(|note| f64::from(note.start))
+            .filter(|held| !held.struck)
+            .map(|held| f64::from(held.note.start))
             .fold(f64::INFINITY, f64::min);
         let frames = ((next - self.position) / step).ceil();
         if frames >= SPAN_FRAMES as f64 {
@@ -328,16 +330,19 @@ impl Synth {
         frames.max(1)
     }
 
-    // Takes in whether the piece plays now: a clock that starts to run finds
-    // its next notes, and one that stops lets the dampers fall, since it
-    // would never reach the times they fall at.
+    // Takes in whether the piece plays now: a clock that starts to run
+    // sounds the notes it stands in, unless a hand that dragged it there
+    // already did, and one that stops lets the dampers fall, since it would
+    // never reach the times they fall at.
     fn follow_transport(&mut self, playing: bool) {
         if playing && !self.was_playing {
-            self.drag = None;
-            self.find_next_notes();
+            if self.drag.take().is_none() {
+                self.enter_notes(None);
+            }
+            self.mark_struck();
         }
         if self.was_playing && !playing {
-            self.damp_parts();
+            self.damp_notes();
         }
         self.was_playing = playing;
     }

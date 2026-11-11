@@ -25,6 +25,15 @@ fn scatter(star: u16, salt: f32) -> f32 {
         .abs()
 }
 
+// The middle of a circle of `radius` for its gradient, which is placed from
+// the corner of the square around the circle.
+fn middle_of(radius: f32) -> Point {
+    Point {
+        x: radius,
+        y: radius,
+    }
+}
+
 // Fills its place with the night. Nothing here changes, so the sky is drawn
 // once.
 #[composable]
@@ -54,14 +63,18 @@ pub(super) fn NightSky(modifier: Modifier) {
         scope.draw_circle(
             Brush::radial_gradient(
                 vec![MOON.with_alpha(MOON_HALO_ALPHA), MOON.with_alpha(0.0)],
-                moon,
+                middle_of(MOON_HALO_RADIUS),
                 MOON_HALO_RADIUS,
             ),
             moon,
             MOON_HALO_RADIUS,
         );
         scope.draw_circle(
-            Brush::radial_gradient(vec![Color::WHITE, MOON], moon, MOON_RADIUS),
+            Brush::radial_gradient(
+                vec![Color::WHITE, MOON],
+                middle_of(MOON_RADIUS),
+                MOON_RADIUS,
+            ),
             moon,
             MOON_RADIUS,
         );

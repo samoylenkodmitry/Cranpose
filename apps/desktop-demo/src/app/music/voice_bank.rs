@@ -1,5 +1,5 @@
-// The voices of a synth and what each of them plays: a note of a part, or a
-// key under a hand.
+// The voices of a synth and what each of them plays: a note a composable
+// holds, or a key under a hand.
 
 use super::{
     voice::{Strike, Voice},
@@ -12,14 +12,22 @@ const HIGHEST_KEY: i16 = 127;
 
 #[derive(Clone, Copy, PartialEq)]
 pub(super) enum Owner {
-    // A note of the part in this slot.
-    Part(u8),
+    // The note held at this place, of the part in this slot.
+    Note { part: u8, place: u16 },
     Hand,
 }
 
 impl Owner {
-    pub(super) fn is_part(self) -> bool {
-        matches!(self, Self::Part(_))
+    pub(super) fn is_note(self) -> bool {
+        matches!(self, Self::Note { .. })
+    }
+
+    pub(super) fn is_of_part(self, slot: u8) -> bool {
+        matches!(self, Self::Note { part, .. } if part == slot)
+    }
+
+    pub(super) fn is_at(self, held_at: u16) -> bool {
+        matches!(self, Self::Note { place, .. } if place == held_at)
     }
 }
 
@@ -108,11 +116,11 @@ impl VoiceBank {
         }
     }
 
-    // Lets the dampers fall on the notes of parts that do not sound at
-    // `seconds` of the song.
+    // Lets the dampers fall on the held notes that do not sound at `seconds`
+    // of the song.
     pub(super) fn release_outside(&mut self, seconds: f64) {
         for (voice, tag) in self.voices.iter_mut().zip(&self.tags) {
-            if tag.owner.is_part() && voice.is_held() && !tag.sounds_at(seconds) {
+            if tag.owner.is_note() && voice.is_held() && !tag.sounds_at(seconds) {
                 voice.release();
             }
         }

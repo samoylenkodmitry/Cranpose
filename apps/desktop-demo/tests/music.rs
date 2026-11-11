@@ -19,8 +19,8 @@ use cranpose_ui::{Color, Key, KeyEvent};
 use desktop_app::app::{
     combined_app_with_initial_tab,
     music::{
-        clair_de_lune, local_music_output, KeyRange, MusicOutput, MusicPlayer, Note, Notes, Timbre,
-        Voicing,
+        clair_de_lune, local_music_output, KeyRange, MusicOutput, MusicPlayer, Note, NotePlace,
+        Notes, PartSlot, Song, Timbre, Voicing,
     },
     DemoTab, TEST_ACTIVE_TAB_STATE,
 };
@@ -47,9 +47,19 @@ struct KeptOutput {
 
 impl KeptOutput {
     fn new() -> Self {
+        Self::rendering_as_it_opens(0)
+    }
+
+    // An output that renders `frames` inside the call that opens it, before
+    // the player has its sink. The Web Audio backend does that.
+    fn rendering_as_it_opens(frames: usize) -> Self {
         let renderer = Rc::new(RefCell::new(None));
         let kept = Rc::clone(&renderer);
-        let output = MusicOutput::new(move |renderer| {
+        let output = MusicOutput::new(move |mut renderer| {
+            if frames > 0 {
+                renderer.set_device_format(SAMPLE_RATE, CHANNELS);
+                let _: RenderStatus = renderer.render(&mut vec![0.0; frames * CHANNELS]);
+            }
             *kept.borrow_mut() = Some(renderer);
             Ok(Box::new(KeptSink))
         });
@@ -91,6 +101,31 @@ impl Stage {
     fn render(&self, seconds: f32) -> Vec<f32> {
         self.output.render(seconds)
     }
+
+    // Holds a part of `notes` with `voicing` and every one of its notes,
+    // as the note composables of a roll that shows all of them do.
+    fn hold(&self, notes: &Notes, voicing: Voicing) -> Held {
+        let part = self
+            .player
+            .hold_part(notes, Color::WHITE)
+            .expect("a new player has a free slot");
+        self.player.voice_part(part, voicing);
+        let places = (0u32..)
+            .zip(notes.as_slice())
+            .map(|(index, note)| {
+                self.player
+                    .hold_note(part, index, *note)
+                    .expect("a few notes find a place")
+            })
+            .collect();
+        Held { part, places }
+    }
+}
+
+// A part a test holds, and the places of its notes in their order.
+struct Held {
+    part: PartSlot,
+    places: Vec<NotePlace>,
 }
 
 // The host's lifecycle is one for the process. The tests of the tab run one at
@@ -235,17 +270,51 @@ fn transpose_moves_a_key_by_semitones() {
 }
 
 #[test]
-fn a_part_starts_its_note_on_the_frame_of_its_start() {
+fn a_held_note_starts_on_the_frame_of_its_start() {
     let stage = Stage::new();
     stage.player.set_length(10.0);
-    let slot = stage
-        .player
-        .add_part(&one_note(0.5, 60), Color::WHITE)
-        .unwrap();
-    stage.player.voice_part(slot, pure());
+    stage.hold(&one_note(0.5, 60), pure());
     stage.player.play();
     let sound = stage.render(1.0);
     assert_eq!(first_sound(&sound), Some(24_000));
+}
+
+#[test]
+fn a_note_nothing_holds_does_not_sound() {
+    let stage = Stage::new();
+    stage.player.set_length(10.0);
+    let notes = one_note(0.5, 60);
+    let part = stage
+        .player
+        .hold_part(&notes, Color::WHITE)
+        .expect("a new player has a free slot");
+    stage.player.voice_part(part, pure());
+    stage.player.play();
+    assert_eq!(first_sound(&stage.render(1.0)), None);
+}
+
+#[test]
+fn a_note_held_twice_sounds_until_both_holders_let_go() {
+    let stage = Stage::new();
+    stage.player.set_length(10.0);
+    let notes = long_note();
+    let held = stage.hold(&notes, pure());
+    let again = stage
+        .player
+        .hold_note(held.part, 0, notes.as_slice()[0])
+        .expect("the note has a place already");
+    assert_eq!(again, held.places[0], "one note takes one place");
+    stage.player.play();
+    stage.render(1.5);
+
+    stage.player.release_note(again);
+    assert!(
+        settled_level(&stage.render(0.3)) > 0.01,
+        "one holder is left"
+    );
+    stage.player.release_note(held.places[0]);
+    stage.render(4.0);
+    assert_eq!(first_sound(&stage.render(0.2)), None, "no holder is left");
 }
 
 #[test]
@@ -253,11 +322,7 @@ fn tempo_scales_the_time_to_a_note() {
     let stage = Stage::new();
     stage.player.set_length(10.0);
     stage.player.set_tempo(2.0);
-    let slot = stage
-        .player
-        .add_part(&one_note(0.5, 60), Color::WHITE)
-        .unwrap();
-    stage.player.voice_part(slot, pure());
+    stage.hold(&one_note(0.5, 60), pure());
     stage.player.play();
     let sound = stage.render(1.0);
     assert_eq!(first_sound(&sound), Some(12_000));
@@ -268,11 +333,7 @@ fn tempo_scales_the_time_to_a_note() {
 fn a_paused_clock_stands_still_and_a_seek_moves_it() {
     let stage = Stage::new();
     stage.player.set_length(10.0);
-    let slot = stage
-        .player
-        .add_part(&one_note(3.0, 60), Color::WHITE)
-        .unwrap();
-    stage.player.voice_part(slot, pure());
+    stage.hold(&one_note(3.0, 60), pure());
     stage.player.play();
     stage.render(0.5);
     stage.player.pause();
@@ -283,6 +344,22 @@ fn a_paused_clock_stands_still_and_a_seek_moves_it() {
     stage.player.play();
     let sound = stage.render(0.5);
     assert_eq!(first_sound(&sound), Some(12_000));
+}
+
+#[test]
+fn a_seek_before_the_first_sound_holds_on_a_device_that_renders_as_it_opens() {
+    let output = KeptOutput::rendering_as_it_opens(1024);
+    let stage = Stage {
+        player: MusicPlayer::new(output.output.clone()),
+        output,
+    };
+    stage.player.set_length(10.0);
+    stage.hold(&one_note(3.0, 60), pure());
+    stage.player.seek(2.75);
+    stage.player.play();
+    let sound = stage.render(0.5);
+    assert_eq!(first_sound(&sound), Some(12_000));
+    assert!((stage.player.position() - 3.25).abs() < 1.0e-6);
 }
 
 #[test]
@@ -297,31 +374,23 @@ fn the_clock_stops_at_the_length_of_the_song() {
 }
 
 #[test]
-fn a_removed_part_plays_no_more_notes() {
+fn a_part_let_go_of_falls_silent() {
     let stage = Stage::new();
     stage.player.set_length(10.0);
-    let slot = stage
-        .player
-        .add_part(&one_note(0.5, 60), Color::WHITE)
-        .unwrap();
-    stage.player.voice_part(slot, pure());
+    let held = stage.hold(&long_note(), pure());
     stage.player.play();
-    stage.render(0.25);
-    stage.player.remove_part(slot);
-    let sound = stage.render(1.0);
-    assert_eq!(first_sound(&sound), None);
+    assert!(settled_level(&stage.render(1.5)) > 0.01);
+    stage.player.release_part(held.part);
+    stage.render(4.0);
+    assert_eq!(first_sound(&stage.render(0.2)), None);
 }
 
 #[test]
 fn a_zero_volume_part_is_silent() {
     let stage = Stage::new();
     stage.player.set_length(10.0);
-    let slot = stage
-        .player
-        .add_part(&one_note(0.1, 60), Color::WHITE)
-        .unwrap();
-    stage.player.voice_part(
-        slot,
+    stage.hold(
+        &one_note(0.1, 60),
         Voicing {
             volume: 0.0,
             ..pure()
@@ -331,18 +400,60 @@ fn a_zero_volume_part_is_silent() {
     assert_eq!(first_sound(&stage.render(1.0)), None);
 }
 
+// Plays `song` at four times its tempo the way a roll does: each note is
+// held from a few seconds before the clock reaches it until it has rung out.
+fn perform(stage: &Stage, song: &Song) -> Vec<f32> {
+    const AHEAD_SECONDS: f64 = 6.0;
+    let parts: Vec<_> = song
+        .parts
+        .iter()
+        .map(|part| {
+            let slot = stage
+                .player
+                .hold_part(&part.notes, Color::WHITE)
+                .expect("the player has a slot for each hand");
+            stage.player.voice_part(slot, Voicing::default());
+            (slot, &part.notes)
+        })
+        .collect();
+    let mut next = vec![0usize; parts.len()];
+    let mut held: Vec<(f32, NotePlace)> = Vec::new();
+    let mut sound = Vec::new();
+    stage.player.set_tempo(4.0);
+    stage.player.play();
+    while stage.player.is_playing() {
+        let clock = stage.player.position();
+        for ((slot, notes), next) in parts.iter().zip(&mut next) {
+            let until = notes.first_at_or_after(clock + AHEAD_SECONDS);
+            for (index, note) in (*next..until).zip(&notes.as_slice()[*next..until]) {
+                let index = u32::try_from(index).expect("a song of under four billion notes");
+                let place = stage
+                    .player
+                    .hold_note(*slot, index, *note)
+                    .expect("the notes of a few seconds find a place");
+                held.push((note.silent_at(), place));
+            }
+            *next = until;
+        }
+        held.retain(|(silent_at, place)| {
+            let rings = f64::from(*silent_at) > clock;
+            if !rings {
+                stage.player.release_note(*place);
+            }
+            rings
+        });
+        sound.extend(stage.render(0.25));
+    }
+    sound.extend(stage.render(1.0));
+    sound
+}
+
 #[test]
 fn the_whole_piece_stays_under_full_scale() {
     let song = clair_de_lune();
     let stage = Stage::new();
     stage.player.set_length(song.seconds());
-    stage.player.set_tempo(4.0);
-    for part in &song.parts {
-        let slot = stage.player.add_part(&part.notes, Color::WHITE).unwrap();
-        stage.player.voice_part(slot, Voicing::default());
-    }
-    stage.player.play();
-    let sound = stage.render(song.seconds() / 4.0 + 1.0);
+    let sound = perform(&stage, &song);
     let peak = sound
         .iter()
         .fold(0.0f32, |peak, sample| peak.max(sample.abs()));
@@ -354,14 +465,10 @@ fn the_whole_piece_stays_under_full_scale() {
 }
 
 #[test]
-fn the_keys_down_follow_the_notes_and_their_transposition() {
+fn the_keys_down_follow_the_held_notes_and_their_transposition() {
     let stage = Stage::new();
-    let slot = stage
-        .player
-        .add_part(&one_note(1.0, 60), Color::WHITE)
-        .unwrap();
-    stage.player.voice_part(
-        slot,
+    let held = stage.hold(
+        &one_note(1.0, 60),
         Voicing {
             transpose: 2,
             ..pure()
@@ -371,6 +478,12 @@ fn the_keys_down_follow_the_notes_and_their_transposition() {
     let down = stage.player.keys_down_at(1.1);
     assert!(down.contains(62) && down.len() == 1);
     assert!(stage.player.keys_down_at(1.3).is_empty());
+
+    stage.player.release_note(held.places[0]);
+    assert!(
+        stage.player.keys_down_at(1.1).is_empty(),
+        "a note nothing holds keeps no key down"
+    );
 }
 
 #[test]
@@ -513,11 +626,7 @@ fn settled_level(sound: &[f32]) -> f32 {
 fn stage_with(notes: &Notes) -> Stage {
     let stage = Stage::new();
     stage.player.set_length(10.0);
-    let slot = stage
-        .player
-        .add_part(notes, Color::WHITE)
-        .expect("a new player has a free slot");
-    stage.player.voice_part(slot, pure());
+    stage.hold(notes, pure());
     stage
 }
 

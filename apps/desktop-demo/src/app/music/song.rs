@@ -44,7 +44,6 @@ impl Note {
 pub struct Notes {
     notes: Arc<[Note]>,
     seconds: f32,
-    longest_held: f32,
     longest_ring: f32,
 }
 
@@ -54,7 +53,6 @@ impl Notes {
         notes.sort_by(|a, b| a.start.total_cmp(&b.start));
         Self {
             seconds: notes.iter().map(Note::silent_at).fold(0.0, f32::max),
-            longest_held: notes.iter().map(|note| note.held).fold(0.0, f32::max),
             longest_ring: notes.iter().map(|note| note.ring).fold(0.0, f32::max),
             notes: notes.into(),
         }
@@ -70,20 +68,9 @@ impl Notes {
             .partition_point(|note| f64::from(note.start) < seconds)
     }
 
-    // The count of the notes that start at `seconds` or earlier.
-    pub fn started_by(&self, seconds: f64) -> usize {
-        self.notes
-            .partition_point(|note| f64::from(note.start) <= seconds)
-    }
-
     // Seconds from the start of the song to the end of the last sound.
     pub fn seconds(&self) -> f32 {
         self.seconds
-    }
-
-    // The longest time a key of this part stays down, in seconds.
-    pub fn longest_held(&self) -> f32 {
-        self.longest_held
     }
 
     // The longest time a note of this part sounds, in seconds.
@@ -91,14 +78,16 @@ impl Notes {
         self.longest_ring
     }
 
-    pub(super) fn same_notes(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.notes, &other.notes)
+    // A number that the clones of these notes share and no other notes
+    // have while one of them lives.
+    pub fn id(&self) -> usize {
+        Arc::as_ptr(&self.notes).addr()
     }
 }
 
 impl PartialEq for Notes {
     fn eq(&self, other: &Self) -> bool {
-        self.same_notes(other)
+        self.id() == other.id()
     }
 }
 

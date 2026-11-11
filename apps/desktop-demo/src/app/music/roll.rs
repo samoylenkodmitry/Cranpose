@@ -1,5 +1,6 @@
-// The roll of a performance: a scrolling column of its notes, each a
-// rectangle over the key it plays, with the song's start at the bottom.
+// The roll of a performance: a scrolling column of the song's seconds, with
+// the song's start at the bottom. The parts in its content compose their
+// notes into each second, each note a rectangle over the key it plays.
 //
 // The place of the column and the clock of the performance are one value.
 // The lower edge of the roll is the line the notes sound at. While the piece
@@ -7,22 +8,22 @@
 // drag, a wheel, a fling or the scrollbar, the column moves the clock, and
 // the notes that cross the line sound.
 
-use std::rc::Rc;
+use std::{cell::RefCell, rc::Rc};
 
-use cranpose_animation::Lerp;
-use cranpose_core::{with_key, LaunchedEffect, SideEffect};
+use cranpose_core::{
+    compositionLocalOf, CompositionLocal, CompositionLocalProvider, LaunchedEffect, SideEffect,
+};
 use cranpose_foundation::lazy::{rememberLazyListState, LazyListState};
 use cranpose_ui::{
-    composable, Box as CranposeBox, BoxSpec, BoxWithConstraints, BoxWithConstraintsScope, Brush,
-    Canvas, Color, CornerRadii, LazyColumn, LazyColumnSpec, LazyListScope, Modifier, Point, Rect,
+    composable, Box as CranposeBox, BoxSpec, BoxWithConstraints, BoxWithConstraintsScope, Color,
+    LazyColumn, LazyColumnSpec, LazyListScope, Modifier,
 };
 use cranpose_ui_graphics::whole;
 
 use super::{
     key_range::KeyRange,
     performance::{local_performance, Performance},
-    player::ShownPart,
-    song::{note_seconds, Note},
+    song::note_seconds,
 };
 use crate::app::{
     lazy_scrollbar::{LazyScrollbarRail, LazyScrollbarStyle, RailStart},
@@ -31,29 +32,9 @@ use crate::app::{
 
 // The column holds the song in slices of one second, one item each.
 const SLICE_HEIGHT: f32 = 120.0;
-const NOTE_CORNER: f32 = 4.0;
-// The time the pedal lets a note ring past its key is drawn this faint.
-const PEDAL_ALPHA: f32 = 0.2;
-// A note that waits for the line is drawn dimmer than one that sounds.
-const WAITING_ALPHA: f32 = 0.78;
-// How far a note that sounds is mixed toward white.
-const SOUNDING_LIGHT: f32 = 0.35;
-// The halo around a note that sounds, and the bright end every note leads with.
-const HALO: f32 = 4.0;
-const HALO_ALPHA: f32 = 0.3;
-const HEAD_HEIGHT: f32 = 5.0;
-const HEAD_LIGHT: f32 = 0.55;
-// The line at the lower edge, and the glow of a key that is down: its
-// height and strength at the strike, the share of both it keeps while the
-// key is held, and how fast it falls there, per second.
+// The line at the lower edge.
 const LINE_HEIGHT: f32 = 1.5;
-const LINE_ALPHA: f32 = 0.28;
-const GLOW_HEIGHT: f32 = 150.0;
-const GLOW_ALPHA: f32 = 0.6;
-const GLOW_REST: f32 = 0.3;
-const GLOW_FADE: f32 = 3.0;
-const SPARK_RADIUS: f32 = 14.0;
-const SPARK_ALPHA: f32 = 0.9;
+const LINE: Color = Color(1.0, 1.0, 1.0, 0.28);
 // Places of the column closer than half a pixel are one place.
 const SAME_PLACE_SECONDS: f64 = 0.5 / SLICE_HEIGHT as f64;
 // A hand that has not moved the column for this long has let go of the clock.
@@ -70,6 +51,50 @@ const SCROLLBAR: LazyScrollbarStyle = LazyScrollbarStyle {
     rail_color: Color::TRANSPARENT,
     thumb_color: Color(1.0, 1.0, 1.0, 0.35),
 };
+
+// One second of a roll, as the content composed in it sees it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RollSlice {
+    // The song seconds the slice starts at; it ends one second later.
+    pub from: f32,
+    pub keys: KeyRange,
+    // The width of the roll, which the keys of `keys` share.
+    pub width: f32,
+}
+
+impl RollSlice {
+    // The height of `seconds` of the song on a roll.
+    pub fn height_of(seconds: f32) -> f32 {
+        seconds * SLICE_HEIGHT
+    }
+
+    // The song seconds the slice ends at.
+    pub fn to(self) -> f32 {
+        self.from + 1.0
+    }
+}
+
+// The slice of a roll the caller is composed in, if it is in one.
+pub fn local_roll_slice() -> CompositionLocal<Option<RollSlice>> {
+    thread_local! {
+        static LOCAL_ROLL_SLICE: RefCell<Option<CompositionLocal<Option<RollSlice>>>> = const { RefCell::new(None) };
+    }
+    LOCAL_ROLL_SLICE.with(|cell| {
+        cell.borrow_mut()
+            .get_or_insert_with(|| compositionLocalOf(|| None))
+            .clone()
+    })
+}
+
+// What a roll composes in each of its slices.
+#[derive(Clone)]
+struct SliceContent(Rc<dyn Fn()>);
+
+impl PartialEq for SliceContent {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+    }
+}
 
 // The whole part of a count that is not negative.
 fn count(value: f32) -> usize {
@@ -94,17 +119,21 @@ fn seconds_at(index: usize, offset: f32) -> f64 {
     f64::from(slice_start(index)) + f64::from(offset / SLICE_HEIGHT)
 }
 
+// Scrolls the song of the performance around the call over the keys of
+// `keys`. `content` is composed once in each second of the song that is on
+// the roll or near it, and finds that second in `local_roll_slice`: a `Part`
+// in it composes its notes of that second there.
 #[composable]
-pub fn Roll(keys: KeyRange, modifier: Modifier) {
+pub fn Roll(keys: KeyRange, modifier: Modifier, content: impl Fn() + 'static) {
     let Some(performance) = local_performance().current() else {
         return;
     };
     let list_state = rememberLazyListState();
-    let parts: Rc<[ShownPart]> = performance.parts().into();
     let song_seconds = performance.player().length();
+    let content = SliceContent(Rc::new(content));
 
     FollowClock(list_state, performance.clone());
-    FollowHand(list_state, performance.clone());
+    FollowHand(list_state, performance);
 
     BoxWithConstraints(modifier.clip_to_bounds(), move |scope| {
         let width = scope.constraints().max_width;
@@ -112,19 +141,33 @@ pub fn Roll(keys: KeyRange, modifier: Modifier) {
         // The slices of the song, and above them as many empty ones as fill
         // the roll, so the last note can come down to the line.
         let slices = count(song_seconds.ceil()) + count((height / SLICE_HEIGHT).ceil());
-        let parts = Rc::clone(&parts);
-        let performance = performance.clone();
+        let content = content.clone();
         LazyColumn(
             Modifier::empty().fill_max_size(),
             list_state,
             LazyColumnSpec::new().reverse_layout(true),
             move |scope| {
                 scope.items(slices, move |index| {
-                    Slice(index, Rc::clone(&parts), keys, width);
+                    Slice(
+                        RollSlice {
+                            from: slice_start(index),
+                            keys,
+                            width,
+                        },
+                        content.clone(),
+                    );
                 });
             },
         );
-        Sounding(keys, performance);
+        CranposeBox(
+            Modifier::empty()
+                .offset(0.0, height - LINE_HEIGHT)
+                .fill_max_width()
+                .height(LINE_HEIGHT)
+                .background(LINE),
+            BoxSpec::default(),
+            || {},
+        );
         CranposeBox(
             Modifier::empty()
                 .offset(width - SCROLLBAR.rail_width, 0.0)
@@ -133,6 +176,21 @@ pub fn Roll(keys: KeyRange, modifier: Modifier) {
             move || LazyScrollbarRail(list_state, SCROLLBAR_TAG, SCROLLBAR, RailStart::Bottom),
         );
     });
+}
+
+// One second of the song: the roll's content, composed for this second.
+#[composable]
+fn Slice(slice: RollSlice, content: SliceContent) {
+    CranposeBox(
+        Modifier::empty().fill_max_width().height(SLICE_HEIGHT),
+        BoxSpec::default(),
+        move || {
+            let content = content.clone();
+            CompositionLocalProvider([local_roll_slice().provides(Some(slice))], move || {
+                (content.0)();
+            });
+        },
+    );
 }
 
 fn stands_at(list_state: LazyListState) -> f64 {
@@ -208,189 +266,4 @@ fn FollowHand(list_state: LazyListState, performance: Performance) {
         while seconds_between(since, scope.with_frame_nanos(|now| now).await) < HAND_REST_SECONDS {}
         performance.end_drag();
     });
-}
-
-// What follows the clock on the roll, in one layer over the notes: the line
-// the notes sound at, each note that sounds now drawn lit with a halo, and
-// the glow of its key at the line, bright as the key goes down and fading
-// while it is held. The notes under it are drawn once and only scroll.
-#[composable]
-fn Sounding(keys: KeyRange, performance: Performance) {
-    Canvas(Modifier::empty().fill_max_size(), move |scope| {
-        let size = scope.size();
-        scope.draw_rect_at(
-            Rect {
-                x: 0.0,
-                y: size.height - LINE_HEIGHT,
-                width: size.width,
-                height: LINE_HEIGHT,
-            },
-            Brush::solid(Color::WHITE.with_alpha(LINE_ALPHA)),
-        );
-        performance.for_each_key_down(|held| {
-            let Some((left, width)) = keys.note_span(held.key, size.width) else {
-                return;
-            };
-            // The note from the line up to the lift of its key. The part of
-            // it under the line lies past the edge of the roll.
-            let top = size.height - held.seconds_left * SLICE_HEIGHT;
-            let bar = Rect {
-                x: left,
-                y: top,
-                width,
-                height: size.height - top + NOTE_CORNER,
-            };
-            scope.draw_round_rect_at(
-                Rect {
-                    x: bar.x - HALO,
-                    y: bar.y - HALO,
-                    width: bar.width + HALO * 2.0,
-                    height: bar.height + HALO,
-                },
-                Brush::solid(held.color.with_alpha(HALO_ALPHA)),
-                CornerRadii::uniform(NOTE_CORNER + HALO),
-            );
-            scope.draw_round_rect_at(
-                bar,
-                Brush::solid(held.color.lerp(&Color::WHITE, SOUNDING_LIGHT)),
-                CornerRadii::uniform(NOTE_CORNER),
-            );
-
-            let fresh = (-held.seconds_down * GLOW_FADE).exp();
-            let strength = GLOW_REST + (1.0 - GLOW_REST) * fresh;
-            let glow_top = size.height - GLOW_HEIGHT * strength;
-            scope.draw_rect_at(
-                Rect {
-                    x: left - width * 0.5,
-                    y: glow_top,
-                    width: width * 2.0,
-                    height: size.height - glow_top,
-                },
-                Brush::vertical_gradient(
-                    vec![
-                        held.color.with_alpha(0.0),
-                        held.color.with_alpha(GLOW_ALPHA * strength),
-                    ],
-                    glow_top,
-                    size.height,
-                ),
-            );
-            let center = Point {
-                x: left + width * 0.5,
-                y: size.height,
-            };
-            let radius = SPARK_RADIUS * (2.0 - fresh);
-            scope.draw_circle(
-                Brush::radial_gradient(
-                    vec![
-                        Color::WHITE.with_alpha(SPARK_ALPHA * fresh),
-                        held.color.with_alpha(0.0),
-                    ],
-                    center,
-                    radius,
-                ),
-                center,
-                radius,
-            );
-        });
-    });
-}
-
-// One second of the song: the notes of every part that sound in it.
-#[composable]
-fn Slice(index: usize, parts: Rc<[ShownPart]>, keys: KeyRange, width: f32) {
-    CranposeBox(
-        Modifier::empty().fill_max_width().height(SLICE_HEIGHT),
-        BoxSpec::default(),
-        move || {
-            let from = slice_start(index);
-            for (part_index, part) in parts.iter().enumerate() {
-                let earliest = f64::from(from - part.notes.longest_ring());
-                let first = part.notes.first_at_or_after(earliest);
-                let end = part.notes.first_at_or_after(f64::from(from + 1.0));
-                for (note_index, note) in (first..end).zip(&part.notes.as_slice()[first..end]) {
-                    if note.silent_at() <= from {
-                        continue;
-                    }
-                    with_key(&(part_index, note_index), || {
-                        NoteBar(*note, part.transpose, part.color, from, keys, width);
-                    });
-                }
-            }
-        },
-    );
-}
-
-// The part of one note that lies in the slice from `slice_from` seconds: the
-// time its key is down as a bar with a bright end toward the line, and the
-// time the pedal lets it ring past that as a faint bar. Nothing here reads
-// the clock, so the note is drawn once.
-#[composable]
-fn NoteBar(note: Note, transpose: i8, color: Color, slice_from: f32, keys: KeyRange, width: f32) {
-    let key = i16::from(note.key) + i16::from(transpose);
-    let Some((left, bar_width)) = u8::try_from(key)
-        .ok()
-        .and_then(|key| keys.note_span(key, width))
-    else {
-        return;
-    };
-    let slice_to = slice_from + 1.0;
-    // Seconds within the slice, from its start: later is higher on the roll.
-    let rings = (note.start - slice_from).max(0.0)..(note.silent_at() - slice_from).min(1.0);
-    let held = rings.start..(note.key_released_at() - slice_from).min(1.0);
-    let starts_here = note.start >= slice_from;
-    let key_lifts_here = note.key_released_at() <= slice_to;
-    let pedal_ends_here = note.silent_at() <= slice_to;
-    // A cut between two slices stays square.
-    let corners = move |top_ends: bool| {
-        let corner = |rounded: bool| if rounded { NOTE_CORNER } else { 0.0 };
-        CornerRadii {
-            top_left: corner(top_ends),
-            top_right: corner(top_ends),
-            bottom_right: corner(starts_here),
-            bottom_left: corner(starts_here),
-        }
-    };
-
-    CranposeBox(
-        Modifier::empty()
-            .offset(left, (1.0 - rings.end) * SLICE_HEIGHT)
-            .size_points(bar_width, (rings.end - rings.start) * SLICE_HEIGHT)
-            .draw_behind(move |scope| {
-                let size = scope.size();
-                scope.draw_round_rect(
-                    Brush::solid(color.with_alpha(PEDAL_ALPHA)),
-                    corners(pedal_ends_here),
-                );
-                if held.end <= held.start {
-                    return;
-                }
-                let height = (held.end - held.start) * SLICE_HEIGHT;
-                let bar = Rect {
-                    x: 0.0,
-                    y: size.height - height,
-                    width: size.width,
-                    height,
-                };
-                scope.draw_round_rect_at(
-                    bar,
-                    Brush::solid(color.with_alpha(WAITING_ALPHA)),
-                    corners(key_lifts_here),
-                );
-                if starts_here {
-                    // The end of the note that reaches the line first.
-                    scope.draw_round_rect_at(
-                        Rect {
-                            y: size.height - HEAD_HEIGHT.min(height),
-                            height: HEAD_HEIGHT.min(height),
-                            ..bar
-                        },
-                        Brush::solid(color.lerp(&Color::WHITE, HEAD_LIGHT)),
-                        CornerRadii::uniform(NOTE_CORNER),
-                    );
-                }
-            }),
-        BoxSpec::default(),
-        || {},
-    );
 }

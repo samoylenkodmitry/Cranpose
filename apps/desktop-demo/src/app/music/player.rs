@@ -1,5 +1,5 @@
 // The handle of the thread that draws on a synth: it opens the output device
-// at the first sound and sends the synth its parts and keys.
+// at the first sound and tells the synth what the composition holds.
 
 use std::{
     cell::{Cell, RefCell},
@@ -15,16 +15,17 @@ use cranpose_services::AudioError;
 use cranpose_ui::Color;
 
 use super::{
+    held_notes::{Heard, HeldNotes, KeyDown, NotePlace, PartSlot},
     key_set::KeySet,
-    song::{note_seconds, Notes},
-    synth::{Command, Synth, MAX_PARTS},
+    song::{Note, Notes},
+    synth::{Command, Synth},
     transport::Transport,
     voicing::Voicing,
 };
 
-// A slider moves a part's voicing once a frame; the synth takes the queue
-// empty about a hundred times a second.
-const COMMAND_QUEUE: usize = 256;
+// Room for everything a player holds, told to the synth at once when its
+// device starts, and for the commands of the frames after.
+const COMMAND_QUEUE: usize = 2048;
 
 type OpenSink = dyn Fn(Box<dyn Renderer>) -> Result<Box<dyn AudioSink>, AudioError>;
 
@@ -56,10 +57,6 @@ impl PartialEq for MusicOutput {
     }
 }
 
-// One of the parts a player sounds at once.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct PartSlot(u8);
-
 enum Device {
     // The synth waits for the first sound: a browser opens an output only
     // after the user acted on the page, and a tab nobody plays holds no device.
@@ -69,38 +66,17 @@ enum Device {
     Failed(String),
 }
 
-// A key a part holds down, as a picture shows it.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct KeyDown {
-    // The key at the pitch its part sounds it.
-    pub key: u8,
-    // The color of its part.
-    pub color: Color,
-    // Seconds of the song since the key went down, and until it lifts.
-    pub seconds_down: f32,
-    pub seconds_left: f32,
-}
-
-// What a picture needs of a part.
-#[derive(Clone, PartialEq)]
-pub struct ShownPart {
-    pub notes: Notes,
-    // Semitones the part sounds above its written keys.
-    pub transpose: i8,
-    pub color: Color,
-}
-
 struct Inner {
     transport: Arc<Transport>,
     commands: RefCell<ring::Producer<Command>>,
-    retired: RefCell<ring::Consumer<Notes>>,
     device: RefCell<Option<Device>>,
     output: MusicOutput,
-    parts: RefCell<[Option<ShownPart>; MAX_PARTS as usize]>,
+    held: RefCell<HeldNotes>,
     dropped_commands: Cell<u32>,
 }
 
-// Plays parts and single keys through a synth. Clones share the player.
+// Plays the notes composables hold, and single keys, through a synth.
+// Clones share the player.
 #[derive(Clone)]
 pub struct MusicPlayer {
     inner: Rc<Inner>,
@@ -116,25 +92,25 @@ impl MusicPlayer {
     // A player that opens `output` at its first sound.
     pub fn new(output: MusicOutput) -> Self {
         let (commands, synth_commands) = ring::channel(COMMAND_QUEUE);
-        let (synth_retired, retired) = ring::channel(COMMAND_QUEUE);
         let transport = Arc::new(Transport::new());
-        let synth = Synth::new(synth_commands, synth_retired, Arc::clone(&transport));
+        let synth = Synth::new(synth_commands, Arc::clone(&transport));
         Self {
             inner: Rc::new(Inner {
                 transport,
                 commands: RefCell::new(commands),
-                retired: RefCell::new(retired),
                 device: RefCell::new(Some(Device::Waiting(Box::new(synth)))),
                 output,
-                parts: RefCell::new([const { None }; MAX_PARTS as usize]),
+                held: RefCell::new(HeldNotes::new()),
                 dropped_commands: Cell::new(0),
             }),
         }
     }
 
-    fn send(&self, command: Command) {
-        // Notes the synth let go of are freed here, off the audio thread.
-        while self.inner.retired.borrow_mut().pop().is_some() {}
+    fn is_listening(&self) -> bool {
+        matches!(self.inner.device.borrow().as_ref(), Some(Device::Open(_)))
+    }
+
+    fn push(&self, command: Command) {
         if self.inner.commands.borrow_mut().push(command).is_err() {
             let dropped = self.inner.dropped_commands.get() + 1;
             self.inner.dropped_commands.set(dropped);
@@ -142,8 +118,49 @@ impl MusicPlayer {
         }
     }
 
+    // Tells the synth of a change. A synth whose device does not run takes
+    // nothing from its queue, so it hears nothing here and all of it from
+    // `tell_all` when the device starts.
+    fn send(&self, command: Command) {
+        if self.is_listening() {
+            self.push(command);
+        }
+    }
+
+    // Tells a synth whose device is about to start everything the player
+    // holds, and where the clock stands.
+    fn tell_all(&self) {
+        self.push(Command::Seek(self.inner.transport.position()));
+        let held = self.inner.held.borrow();
+        for (slot, part) in held.parts() {
+            self.push(Command::SetPart {
+                slot: slot.0,
+                voicing: part.voicing,
+            });
+        }
+        self.push(Command::DropAll);
+        for (place, note) in held.notes() {
+            self.push(Command::HoldNote {
+                place: place.0,
+                part: note.part,
+                note: note.note,
+            });
+        }
+    }
+
     // Opens the device, or starts it again after a rest.
     fn wake(&self) {
+        let asleep = matches!(
+            self.inner.device.borrow().as_ref(),
+            Some(Device::Waiting(_) | Device::Resting(_))
+        );
+        if !asleep {
+            return;
+        }
+        // The synth hears all of it before its device starts: a device may
+        // render inside the call that starts it, as Web Audio does, and a
+        // synth that renders first writes its old clock over the player's.
+        self.tell_all();
         let mut device = self.inner.device.borrow_mut();
         *device = match device.take() {
             Some(Device::Waiting(synth)) => match (self.inner.output.0)(synth) {
@@ -202,9 +219,9 @@ impl MusicPlayer {
     }
 
     // Drags the clock to `seconds` of the song by hand. The piece stops
-    // running; the notes the clock stands in sound, each as far into its
-    // life as the clock is past its start, and so does every note the clock
-    // enters on its way.
+    // running; the held notes the clock stands in sound, each as far into
+    // its life as the clock is past its start, and so does every held note
+    // the clock enters on its way.
     pub fn drag_to(&self, seconds: f64) {
         self.wake();
         self.inner.transport.set_playing(false);
@@ -243,54 +260,59 @@ impl MusicPlayer {
         self.inner.transport.set_length(seconds);
     }
 
-    // Takes a slot for `notes`. The part sounds once `voice_part` gives it
-    // a voicing. `None` when every slot is taken.
-    pub fn add_part(&self, notes: &Notes, color: Color) -> Option<PartSlot> {
-        let mut parts = self.inner.parts.borrow_mut();
-        let slot = (0..MAX_PARTS).find(|slot| parts[usize::from(*slot)].is_none())?;
-        parts[usize::from(slot)] = Some(ShownPart {
-            notes: notes.clone(),
-            transpose: 0,
-            color,
-        });
-        Some(PartSlot(slot))
+    // Holds the part that `notes` belong to, shown in `color`, until
+    // `release_part`. A part held several times takes one slot. `None` when
+    // every slot is taken.
+    pub fn hold_part(&self, notes: &Notes, color: Color) -> Option<PartSlot> {
+        let (slot, heard) = self.inner.held.borrow_mut().hold_part(notes.id(), color)?;
+        if heard == Heard::Changed {
+            self.send(Command::SetPart {
+                slot: slot.0,
+                voicing: Voicing::DEFAULT,
+            });
+        }
+        Some(slot)
     }
 
-    // The parts the player holds, in the order of their slots.
-    pub fn parts(&self) -> Vec<ShownPart> {
-        self.inner
-            .parts
-            .borrow()
-            .iter()
-            .flatten()
-            .cloned()
-            .collect()
-    }
-
-    // Sounds the part of `slot` with `voicing` from its next note on.
+    // Sets how the notes of the part in `slot` sound from their next strike on.
     pub fn voice_part(&self, slot: PartSlot, voicing: Voicing) {
-        let notes = {
-            let mut parts = self.inner.parts.borrow_mut();
-            let Some(part) = parts[usize::from(slot.0)].as_mut() else {
-                return;
-            };
-            part.transpose = voicing.transpose;
-            part.notes.clone()
-        };
-        self.send(Command::SetPart {
-            slot: slot.0,
-            notes,
-            voicing,
-        });
+        if self.inner.held.borrow_mut().voice_part(slot, voicing) == Heard::Changed {
+            self.send(Command::SetPart {
+                slot: slot.0,
+                voicing,
+            });
+        }
     }
 
-    // Silences the part of `slot` and frees the slot.
-    pub fn remove_part(&self, slot: PartSlot) {
-        if self.inner.parts.borrow_mut()[usize::from(slot.0)]
-            .take()
-            .is_some()
-        {
+    // Lets go of one hold of the part in `slot`. The last one silences the
+    // part and frees the slot.
+    pub fn release_part(&self, slot: PartSlot) {
+        if self.inner.held.borrow_mut().release_part(slot) == Heard::Changed {
             self.send(Command::ClearPart { slot: slot.0 });
+        }
+    }
+
+    // Holds `note`, the one at `index` of the part in `slot`, until
+    // `release_note`: the synth sounds it while its clock stands in it. A
+    // note held several times takes one place. `None` when every place is
+    // taken.
+    pub fn hold_note(&self, slot: PartSlot, index: u32, note: Note) -> Option<NotePlace> {
+        let (place, heard) = self.inner.held.borrow_mut().hold_note(slot, index, note)?;
+        if heard == Heard::Changed {
+            self.send(Command::HoldNote {
+                place: place.0,
+                part: slot.0,
+                note,
+            });
+        }
+        Some(place)
+    }
+
+    // Lets go of one hold of the note at `place`. With the last one the
+    // note sounds no more.
+    pub fn release_note(&self, place: NotePlace) {
+        if self.inner.held.borrow_mut().release_note(place) == Heard::Changed {
+            self.send(Command::DropNote { place: place.0 });
         }
     }
 
@@ -308,37 +330,17 @@ impl MusicPlayer {
         self.send(Command::KeyUp { key });
     }
 
-    // Calls `held` for each key the parts hold down at `seconds` of the song.
-    pub fn for_each_key_down(&self, seconds: f64, mut held: impl FnMut(KeyDown)) {
-        for part in self.inner.parts.borrow().iter().flatten() {
-            let earliest = seconds - f64::from(part.notes.longest_held());
-            let started = part.notes.first_at_or_after(seconds);
-            for note in part.notes.as_slice()[..started]
-                .iter()
-                .rev()
-                .take_while(|note| f64::from(note.start) >= earliest)
-            {
-                let key = i16::from(note.key) + i16::from(part.transpose);
-                if f64::from(note.key_released_at()) <= seconds {
-                    continue;
-                }
-                if let Ok(key) = u8::try_from(key) {
-                    held(KeyDown {
-                        key,
-                        color: part.color,
-                        seconds_down: note_seconds(seconds - f64::from(note.start)),
-                        seconds_left: note_seconds(f64::from(note.key_released_at()) - seconds),
-                    });
-                }
-            }
-        }
+    // Calls `down` for each key the held notes keep down at `seconds` of
+    // the song.
+    pub fn for_each_key_down(&self, seconds: f64, down: impl FnMut(KeyDown)) {
+        self.inner.held.borrow().for_each_key_down(seconds, down);
     }
 
-    // The keys the parts hold down at `seconds` of the song, each at the
-    // pitch its part sounds it.
+    // The keys the held notes keep down at `seconds` of the song, each at
+    // the pitch its part sounds it.
     pub fn keys_down_at(&self, seconds: f64) -> KeySet {
-        let mut down = KeySet::EMPTY;
-        self.for_each_key_down(seconds, |held| down.insert(held.key));
-        down
+        let mut keys = KeySet::EMPTY;
+        self.for_each_key_down(seconds, |down| keys.insert(down.key));
+        keys
     }
 }
