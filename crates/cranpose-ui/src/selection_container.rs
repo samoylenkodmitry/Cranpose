@@ -15,7 +15,9 @@ use std::{
 };
 
 use cranpose_core::MutableState;
-use cranpose_ui_graphics::{Point, ProjectiveTransform, Rect, Size, WindowCoordinates};
+use cranpose_ui_graphics::{
+    Point, ProjectiveTransform, Rect, Size, WindowCoordinates, shared_sort,
+};
 
 use crate::{
     text::{
@@ -227,7 +229,9 @@ impl SelectionRegistrar {
             .iter()
             .map(|held| (held.key, held.geometry.rect()))
             .collect();
-        order.sort_by(|(_, a), (_, b)| a.y.total_cmp(&b.y).then(a.x.total_cmp(&b.x)));
+        shared_sort::sort_by(&mut order, |(_, a), (_, b)| {
+            a.y.total_cmp(&b.y).then(a.x.total_cmp(&b.x))
+        });
         order.into_iter().map(|(key, _)| key).collect()
     }
 

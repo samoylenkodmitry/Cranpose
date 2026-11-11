@@ -1,6 +1,5 @@
 use std::{
     cell::{Cell, Ref, RefCell},
-    cmp::Reverse,
     rc::Rc,
 };
 
@@ -10,7 +9,7 @@ use cranpose_core::{
 };
 use cranpose_foundation::{MINIMUM_TOUCH_TARGET_SIZE, PointerEvent, PointerEventKind};
 use cranpose_ui::{LayoutNode, ModifierNodeSlices, SubcomposeLayoutNode};
-use cranpose_ui_graphics::{Point, PointerIcon, Rect, RoundedCornerShape, space::Ray};
+use cranpose_ui_graphics::{Point, PointerIcon, Rect, RoundedCornerShape, shared_sort, space::Ray};
 
 use crate::{
     HitTestTarget, RenderScene, SceneUpdates,
@@ -768,7 +767,9 @@ impl RenderScene for Scene {
             .filter_map(|(index, hit)| hit.contains(x, y).then_some(index))
             .collect();
 
-        hit_indices.sort_by_key(|&index| Reverse(list.hits[index].z_index));
+        shared_sort::sort_positions(&mut hit_indices, &mut |a, b| {
+            list.hits[b].z_index.cmp(&list.hits[a].z_index)
+        });
         hit_indices
             .into_iter()
             .map(|index| list.hits[index].clone())
@@ -809,7 +810,7 @@ impl RenderScene for Scene {
                 })
             })
             .collect();
-        hit.sort_by_key(|hit| Reverse(hit.z_index));
+        shared_sort::sort_by(&mut hit, |a, b| b.z_index.cmp(&a.z_index));
         hit.into_iter().cloned().collect()
     }
 
