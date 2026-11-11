@@ -319,9 +319,8 @@ wall's tiles at the tier's size, as many as fit.
   neighbours change places every frame.
 - **Deep:** cells of 12 boxes nested inside one another around three digits;
   the digits of one row of cells change a frame.
-  Each box pads its content by 6% of a tile's height. From about tier 15
-  that is under half a device pixel on a 2x display (0.24 points at tier
-  17). Compose puts each padding side on a whole device pixel
+  Each box pads its content by 6% of a tile's height. From tier 17 that
+  is under half a device pixel on a 2x display (0.24 points at tier 17). Compose puts each padding side on a whole device pixel
   (`roundToPx`), and Cranpose does the same, so both draw such a nest as its
   innermost box alone, with the digits at the cell's corner. Frameworks that
   keep fractions of a pixel draw thin rings there. The boxes and their work
