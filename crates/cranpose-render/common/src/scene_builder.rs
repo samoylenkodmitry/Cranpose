@@ -7,7 +7,7 @@ use crate::{
     NodeUpdate, SceneUpdates,
     graph::ProjectiveTransform,
     layer_transform::layer_transform_to_parent,
-    scene_store::{Item, LayerRef, RecordKind, SceneStore},
+    scene_store::{HeadKind, Item, LayerHead, LayerRef, RecordKind, SceneStore},
 };
 
 mod dirty_walk;
@@ -36,11 +36,10 @@ mod node_data;
 use node_data::{PlacedGeometry, placed_child_geometry, read_node_data, read_placed_node_data};
 mod node_layer;
 use node_layer::{
-    AbsOrigin, HeadKind, LayerHead, LowerContext, assign_layer, hit_test_from_slices,
-    layer_and_node_bounds, layer_identity, lower_root_into, modifier_slices_have_origin_sinks,
-    outer_commands, outer_draws, placing_transform, prepare_node_layer, set_bounds,
-    set_origin_sinks, slices_hit_something, take_wrapped_layer, write_node_content,
-    write_node_layer, write_wrapper,
+    AbsOrigin, LowerContext, assign_layer, hit_test_from_slices, layer_and_node_bounds,
+    layer_identity, lower_root_into, modifier_slices_have_origin_sinks, outer_commands,
+    outer_draws, placing_transform, prepare_node_layer, set_bounds, set_origin_sinks,
+    slices_hit_something, take_wrapped_layer, write_node_content, write_node_layer, write_wrapper,
 };
 mod translate_layer;
 pub(crate) use translate_layer::TranslateScratch;

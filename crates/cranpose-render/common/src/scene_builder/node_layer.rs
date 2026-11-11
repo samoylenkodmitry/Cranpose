@@ -19,7 +19,9 @@ use crate::{
     layer_transform::{
         layer_scales_or_rotates, layer_transform_to_parent, layer_transform_to_window,
     },
-    scene_store::{Item, LayerRef, RecordFlags, RecordKind, RecordSeed, SceneStore},
+    scene_store::{
+        HeadKind, Item, LayerHead, LayerRef, RecordFlags, RecordKind, RecordSeed, SceneStore,
+    },
 };
 
 #[derive(Clone, Copy)]
@@ -63,41 +65,6 @@ impl LowerContext {
             parent_content_offset: content_offset,
         }
     }
-}
-
-#[derive(Clone, Copy)]
-pub(super) enum HeadKind {
-    Node(NodeId),
-    Wrapper(NodeId),
-    Group { node: NodeId, phase: PrimitivePhase },
-}
-
-impl HeadKind {
-    fn record(self) -> (RecordKind, NodeId) {
-        match self {
-            Self::Node(node) => (RecordKind::Layer, node),
-            Self::Wrapper(node) => (RecordKind::Wrapper, node),
-            Self::Group { node, .. } => (RecordKind::DrawGroup, node),
-        }
-    }
-}
-
-pub(super) struct LayerHead {
-    pub(super) kind: HeadKind,
-    pub(super) local_bounds: Rect,
-    pub(super) node_bounds: Option<Rect>,
-    pub(super) transform_to_parent: ProjectiveTransform,
-    pub(super) content_offset: Point,
-    pub(super) motion_context_animated: bool,
-    pub(super) translated_content_context: bool,
-    pub(super) translated_content_offset: Point,
-    pub(super) origin_in_parent: Point,
-    pub(super) graphics_layer: Option<GraphicsLayer>,
-    pub(super) clip_to_bounds: bool,
-    pub(super) hit_test: Option<HitTestNode>,
-    pub(super) has_origin_sinks: bool,
-    pub(super) isolation: IsolationReasons,
-    pub(super) cache_policy: CachePolicy,
 }
 
 struct NodeFrame {
@@ -156,66 +123,15 @@ fn begin_record(store: &mut SceneStore, record: RecordId, kind: HeadKind, conten
     store.set_content_offset(record, content_offset);
 }
 
-fn flag_if(on: bool, flag: RecordFlags) -> RecordFlags {
-    if on { flag } else { RecordFlags::default() }
-}
-
 pub(super) fn assign_layer(store: &mut SceneStore, record: RecordId, head: LayerHead) {
-    let LayerHead {
-        kind,
-        local_bounds,
-        node_bounds,
-        transform_to_parent,
-        content_offset,
-        motion_context_animated,
-        translated_content_context,
-        translated_content_offset,
-        origin_in_parent,
-        graphics_layer,
-        clip_to_bounds,
-        hit_test,
-        has_origin_sinks,
-        isolation,
-        cache_policy,
-    } = head;
-    let (record_kind, node) = kind.record();
-    if store.node(record) != Some(node) {
-        // A record that draws for another node starts a new run of changes.
-        store.clear_props(record);
-    }
-    store.set_kind(record, record_kind, Some(node));
-    store.set_content_offset(record, content_offset);
-    let size = node_bounds.unwrap_or(local_bounds);
-    store.write_size(record, size.width, size.height);
-    store.set_placement(record, origin_in_parent, Some(transform_to_parent));
-    let space = graphics_layer
+    let space = head
+        .graphics_layer
         .as_ref()
         .is_some_and(|layer| layer.space.is_some());
-    store.set_graphics_layer(record, graphics_layer);
-    store.edit_props(record, |props| {
-        props.layer_bounds = node_bounds.map(|_| local_bounds);
-        props.translated_content_offset = translated_content_offset;
-        props.hit_test = hit_test;
-        props.isolation = isolation;
-        props.cache_policy = cache_policy;
-    });
+    store.write_head(record, head);
     if space {
         note_space_change();
     }
-    let after_children = matches!(
-        kind,
-        HeadKind::Group {
-            phase: PrimitivePhase::AfterChildren,
-            ..
-        }
-    );
-    let flags = flag_if(clip_to_bounds, RecordFlags::CLIP_TO_BOUNDS)
-        | flag_if(motion_context_animated, RecordFlags::MOTION_ANIMATED)
-        | flag_if(translated_content_context, RecordFlags::TRANSLATED_CONTENT)
-        | flag_if(after_children, RecordFlags::AFTER_CHILDREN)
-        | flag_if(has_origin_sinks, RecordFlags::ORIGIN_SINKS);
-    store.write_flags(record, flags);
-    store.note_property_change(record);
 }
 
 // Sets whether the node of `record`, with `slices`, publishes live window
@@ -225,14 +141,12 @@ pub(super) fn set_origin_sinks(
     record: RecordId,
     slices: &ModifierNodeSlices,
 ) {
-    let flags = store
-        .layer(record)
-        .flags()
-        .without(RecordFlags::ORIGIN_SINKS)
-        | flag_if(
-            modifier_slices_have_origin_sinks(slices),
-            RecordFlags::ORIGIN_SINKS,
-        );
+    let flags = store.layer(record).flags();
+    let flags = if modifier_slices_have_origin_sinks(slices) {
+        flags | RecordFlags::ORIGIN_SINKS
+    } else {
+        flags.without(RecordFlags::ORIGIN_SINKS)
+    };
     store.write_flags(record, flags);
 }
 
