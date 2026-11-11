@@ -236,9 +236,6 @@ fn push_root(
         }
         let now = subtree.changes();
         let moved = !old.changes.same_place(now);
-        if !asked && !moved && old.changes.same_subtree(now) {
-            return Ok(None);
-        }
         // A layer that changed nothing of its own, with records of its
         // children, leaves the change to the records beneath it, which the
         // store names too. A node drawn inline has none beneath its own.
