@@ -198,12 +198,13 @@ impl LiquidDragAxis {
             self.settle_to_at(target, animation, animation_time_nanos);
             return;
         };
-        let time_ms = self.sample_time_ms(event_time_ms);
-        self.velocity.borrow_mut().add_data_point(time_ms, position);
+        let lift_ms = self.sample_time_ms(event_time_ms);
         let release_velocity = if self.follow.is_some() {
             self.animation.borrow().velocity()
         } else {
-            self.velocity.borrow().calculate_velocity_with_max(8_000.0)
+            self.velocity
+                .borrow_mut()
+                .release_velocity(lift_ms, position, 8_000.0)
         };
         let mut value = self.animation.borrow_mut();
         if let Some(time) = animation_time_nanos {

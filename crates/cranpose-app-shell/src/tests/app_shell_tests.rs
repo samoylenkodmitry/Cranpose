@@ -3633,6 +3633,48 @@ fn android_style_consecutive_flings_keep_direction() {
     );
 }
 
+// A scroll that ends with a small move the other way, as a lifting finger
+// makes, must not fling back faster than the finger moved.
+#[test]
+fn a_small_move_back_before_the_lift_does_not_fling_back_fast() {
+    let _guard = test_guard();
+    APP_SHELL_WHEEL_SCROLL_STATE.with(|slot| slot.borrow_mut().take());
+
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(
+        HitGraphRenderer::default(),
+        root_key,
+        app_shell_tall_fling_scroll_probe,
+    );
+    shell.set_buffer_size(320, 640);
+    shell.set_viewport(320.0, 640.0);
+    shell.update_at_frame_time_nanos(16_000_000);
+
+    let mut event_ms = 5_000_000i64;
+    shell.set_cursor_at_time(160.0, 600.0, Some(event_ms));
+    shell.pointer_pressed_at_time(Some(event_ms));
+    // Up at 1,000 points a second.
+    let mut y = 600.0f32;
+    for _ in 0..12 {
+        event_ms += 8;
+        y -= 8.0;
+        shell.set_cursor_at_time(160.0, y, Some(event_ms));
+    }
+    // 8 points back down in the last sample, then the lift.
+    event_ms += 8;
+    y += 8.0;
+    shell.set_cursor_at_time(160.0, y, Some(event_ms));
+    shell.pointer_released_at_position_time(160.0, y, Some(event_ms));
+
+    let velocity = shell.debug_enter_app_context(cranpose_ui::debug_last_fling_velocity);
+    // Up is negative. The fling may go on up, slower than the finger went,
+    // or turn a little back; it must not go back fast.
+    assert!(
+        velocity > -1_000.0 && velocity < 400.0,
+        "an 8 point move back after 1,000 points a second flung at {velocity}"
+    );
+}
+
 // Lets `duration` of real time pass: the scroller times a move that carries
 // no event time by the clock.
 fn wait(duration: Duration) {

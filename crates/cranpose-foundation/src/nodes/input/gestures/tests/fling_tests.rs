@@ -9,8 +9,9 @@ fn fling_reports_velocity_on_release() {
     let mut gesture = FlingGesture::new();
     gesture.handle_event(&pointer(PointerEventKind::Down, 0.0, 0.0), 0);
     gesture.handle_event(&pointer(PointerEventKind::Move, 0.0, 40.0), 10);
+    gesture.handle_event(&pointer(PointerEventKind::Move, 0.0, 80.0), 20);
 
-    match gesture.handle_event(&pointer(PointerEventKind::Up, 0.0, 80.0), 20) {
+    match gesture.handle_event(&pointer(PointerEventKind::Up, 0.0, 120.0), 30) {
         FlingGestureEvent::Fling(velocity) => {
             assert_eq!(velocity.x, 0.0);
             assert!(velocity.y > 0.0);

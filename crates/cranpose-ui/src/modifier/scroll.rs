@@ -493,9 +493,7 @@ where
                         }
 
                         let should_consume = match event.kind {
-                            PointerEventKind::Down => {
-                                detector.on_down(event.position, event.time_ms)
-                            }
+                            PointerEventKind::Down => detector.on_down(&event),
                             PointerEventKind::Move => detector.on_move(
                                 event.position,
                                 event.buttons,
@@ -624,7 +622,16 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
         }
     }
 
-    fn on_down(&self, position: Point, time_ms: Option<i64>) -> bool {
+    fn along_axis(&self, point: Point) -> f32 {
+        if self.axis.is_vertical() {
+            point.y
+        } else {
+            point.x
+        }
+    }
+
+    fn on_down(&self, event: &PointerEvent) -> bool {
+        let (position, time_ms) = (event.position, event.time_ms);
         let interrupted = self.scroll_target.stop_animation();
         let mut gs = self.gesture_state.borrow_mut();
         gs.interrupted_animation = interrupted;
@@ -650,12 +657,8 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
         gs.gesture_start_event_time_ms = time_ms;
         gs.is_overscrolling = self.overscroll.offset().abs() > 0.001;
 
-        let pos = if self.axis.is_vertical() {
-            position.y
-        } else {
-            position.x
-        };
-        gs.velocity_tracker.add_data_point(0, pos);
+        gs.velocity_tracker
+            .add_data_point(0, self.along_axis(event.global_position));
         gs.last_velocity_sample_ms = Some(0);
 
         false
@@ -717,11 +720,8 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
 
         gs.last_position = Some(position);
 
-        let pos = if self.axis.is_vertical() {
-            position.y
-        } else {
-            position.x
-        };
+        // In the window: an element that follows the finger barely moves under it.
+        let pos = self.along_axis(event.global_position);
         let event_sample_ms = gs
             .gesture_start_event_time_ms
             .zip(time_ms)

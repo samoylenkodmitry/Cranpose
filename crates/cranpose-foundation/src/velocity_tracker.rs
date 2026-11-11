@@ -1,11 +1,19 @@
 //! Velocity tracking for fling gesture support.
 //!
-//! Port of Jetpack Compose's VelocityTracker1D using the Impulse strategy.
-//! This calculates velocity based on kinetic energy principles.
+//! Port of Jetpack Compose's `VelocityTracker1D` with its default strategy
+//! for a pointer's positions: a least-squares fit of a curve of degree 2
+//! through the last samples, whose slope at the newest sample is the
+//! velocity.
 
 const HISTORY_SIZE: usize = 20;
 
 const HORIZON_MS: i64 = 100;
+
+// The fewest samples a velocity is worked out from, as Compose's `Lsq2`.
+const MIN_SAMPLES: usize = 3;
+
+// How small, against the size of its terms, a determinant counts as zero.
+const SINGULAR: f64 = 1.0e-9;
 
 /// If no movement for this duration, assume the pointer has stopped.
 pub const ASSUME_STOPPED_MS: i64 = 40;
@@ -16,11 +24,13 @@ struct DataPointAtTime {
     data_point: f32,
 }
 
-/// 1D velocity tracker using impulse-based velocity calculation.
+/// 1D velocity tracker over a pointer's positions.
 ///
-/// This implements the same algorithm as Jetpack Compose's VelocityTracker1D
-/// with the Impulse strategy, which calculates velocity based on the
-/// kinetic energy imparted by the touch gestures.
+/// This implements Jetpack Compose's `VelocityTracker1D` with its default
+/// `Lsq2` strategy: the velocity is the slope, at the newest sample, of the
+/// curve of degree 2 that fits the samples of the last 100 ms best. One
+/// sample against the others' direction, as a finger makes when it lifts,
+/// bends the curve a little and does not set the velocity by itself.
 ///
 /// # Usage
 /// ```ignore
@@ -33,7 +43,6 @@ struct DataPointAtTime {
 pub struct VelocityTracker1D {
     samples: [Option<DataPointAtTime>; HISTORY_SIZE],
     index: usize,
-    is_differential: bool,
 }
 
 impl Default for VelocityTracker1D {
@@ -48,14 +57,10 @@ impl VelocityTracker1D {
         Self {
             samples: [None; HISTORY_SIZE],
             index: 0,
-            is_differential: false,
         }
     }
 
-    /// Adds a data point at the given time (milliseconds).
-    ///
-    /// For absolute tracking, `data_point` is the position.
-    /// For differential tracking, `data_point` is the change since last point.
+    /// Adds the position `data_point` at the given time (milliseconds).
     pub fn add_data_point(&mut self, time_ms: i64, data_point: f32) {
         self.index = (self.index + 1) % HISTORY_SIZE;
         self.samples[self.index] = Some(DataPointAtTime {
@@ -66,7 +71,9 @@ impl VelocityTracker1D {
 
     /// Calculates the velocity in units/second.
     ///
-    /// Returns 0.0 if there aren't enough samples or if the pointer hasn't moved.
+    /// Returns 0.0 with fewer than three samples in the last 100 ms, or when
+    /// the pointer rested for more than [`ASSUME_STOPPED_MS`] between two of
+    /// them.
     pub fn calculate_velocity(&self) -> f32 {
         let mut data_points = [0.0f32; HISTORY_SIZE];
         let mut times = [0.0f32; HISTORY_SIZE];
@@ -82,11 +89,7 @@ impl VelocityTracker1D {
         while let Some(sample) = self.samples[current_index] {
             let age = (newest_sample.time_ms - sample.time_ms) as f32;
             let delta = (sample.time_ms - previous_sample.time_ms).abs() as f32;
-            previous_sample = if self.is_differential {
-                sample
-            } else {
-                newest_sample
-            };
+            previous_sample = sample;
 
             if age > HORIZON_MS as f32 || delta > ASSUME_STOPPED_MS as f32 {
                 break;
@@ -107,14 +110,11 @@ impl VelocityTracker1D {
             }
         }
 
-        if sample_count < 2 {
+        if sample_count < MIN_SAMPLES {
             return 0.0;
         }
 
-        let velocity_per_ms =
-            calculate_impulse_velocity(&data_points, &times, sample_count, self.is_differential);
-
-        velocity_per_ms * 1000.0
+        fitted_velocity(&times[..sample_count], &data_points[..sample_count]) * 1000.0
     }
 
     /// Calculates the velocity in units/second, capped to `max_velocity`.
@@ -131,6 +131,33 @@ impl VelocityTracker1D {
         velocity.clamp(-max_velocity, max_velocity)
     }
 
+    /// The velocity a gesture ends with when its pointer lifts at
+    /// `lift_position` at `lift_time_ms`, capped to `max_velocity`: zero when
+    /// the pointer rested for more than [`ASSUME_STOPPED_MS`] before it
+    /// lifted.
+    ///
+    /// A lift at the last sample's position is no sample of the motion, as
+    /// in Compose: it repeats that position at a later time, which would read
+    /// as a pointer that slowed down. A lift somewhere else is the motion's
+    /// last sample.
+    pub fn release_velocity(
+        &mut self,
+        lift_time_ms: i64,
+        lift_position: f32,
+        max_velocity: f32,
+    ) -> f32 {
+        let Some(newest) = self.samples[self.index] else {
+            return 0.0;
+        };
+        if lift_time_ms - newest.time_ms > ASSUME_STOPPED_MS {
+            return 0.0;
+        }
+        if lift_position != newest.data_point {
+            self.add_data_point(lift_time_ms, lift_position);
+        }
+        self.calculate_velocity_with_max(max_velocity)
+    }
+
     /// Clears all tracked data.
     pub fn reset(&mut self) {
         self.samples = [None; HISTORY_SIZE];
@@ -138,46 +165,49 @@ impl VelocityTracker1D {
     }
 }
 
-fn calculate_impulse_velocity(
-    data_points: &[f32; HISTORY_SIZE],
-    times: &[f32; HISTORY_SIZE],
-    sample_count: usize,
-    is_differential: bool,
-) -> f32 {
-    if sample_count < 2 {
-        return 0.0;
+// The slope at time zero, in units a millisecond, of the curve of degree 2
+// that fits `positions` at `times` best: `times` are at or before zero, the
+// newest sample's time. Samples at fewer than three different times bend no
+// curve, so those take the best line's slope, and samples at one time have
+// no slope.
+fn fitted_velocity(times: &[f32], positions: &[f32]) -> f32 {
+    // The sums of the normal equations, in f64: a time is up to 100 and its
+    // fourth power loses digits in f32.
+    let (mut s1, mut s2, mut s3, mut s4) = (0.0f64, 0.0f64, 0.0f64, 0.0f64);
+    let (mut p0, mut p1, mut p2) = (0.0f64, 0.0f64, 0.0f64);
+    for (&time, &position) in times.iter().zip(positions) {
+        let (time, position) = (f64::from(time), f64::from(position));
+        let square = time * time;
+        s1 += time;
+        s2 += square;
+        s3 += square * time;
+        s4 += square * square;
+        p0 += position;
+        p1 += position * time;
+        p2 += position * square;
     }
-
-    let mut work = 0.0f32;
-    let start = sample_count - 1;
-    let mut next_time = times[start];
-
-    for i in (1..=start).rev() {
-        let current_time = next_time;
-        next_time = times[i - 1];
-        if current_time == next_time {
-            continue;
+    let s0 = times.len() as f64;
+    // position = a + b * time + c * time^2; b by Cramer's rule.
+    let determinant =
+        s0 * (s2 * s4 - s3 * s3) - s1 * (s1 * s4 - s3 * s2) + s2 * (s1 * s3 - s2 * s2);
+    let slope = if determinant.abs() > SINGULAR * s0 * s2 * s4 {
+        (s0 * (p1 * s4 - s3 * p2) - p0 * (s1 * s4 - s3 * s2) + s2 * (s1 * p2 - p1 * s2))
+            / determinant
+    } else {
+        let spread = s0 * s2 - s1 * s1;
+        if spread.abs() <= SINGULAR * s0 * s2 {
+            return 0.0;
         }
-
-        let data_points_delta = if is_differential {
-            -data_points[i - 1]
-        } else {
-            data_points[i] - data_points[i - 1]
-        };
-        let v_curr = data_points_delta / (current_time - next_time);
-        let v_prev = kinetic_energy_to_velocity(work);
-        work += (v_curr - v_prev) * v_curr.abs();
-        if i == start {
-            work *= 0.5;
-        }
-    }
-
-    kinetic_energy_to_velocity(work)
-}
-
-#[inline]
-fn kinetic_energy_to_velocity(kinetic_energy: f32) -> f32 {
-    kinetic_energy.signum() * (2.0 * kinetic_energy.abs()).sqrt()
+        (s0 * p1 - s1 * p0) / spread
+    };
+    // Only the lint budget's run turns this lint on, so an `expect` would
+    // go unmet in every other build.
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "a velocity in units a millisecond is far inside f32"
+    )]
+    let slope = slope as f32;
+    slope
 }
 
 #[cfg(test)]
