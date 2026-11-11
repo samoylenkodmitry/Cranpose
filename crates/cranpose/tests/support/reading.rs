@@ -30,6 +30,27 @@ pub fn ComposedReading(style: TextStyle) {
     );
 }
 
+// The number in a `Text` in `style` over a background inside a border, as
+// a badge or a price tag shows it, composed again each frame.
+#[composable]
+pub fn FramedReading(style: TextStyle) {
+    let count = reading().value();
+    Text(
+        format!("Reading {}", count as u32),
+        Modifier::empty()
+            .background(Color::from_rgb_u8(30, 70, 140))
+            .border(1.0, Color::WHITE, RoundedCornerShape::uniform(4.0)),
+        style,
+    );
+}
+
+// A number that counts up one every frame, for a screen that changes one
+// of several nodes a frame.
+#[composable]
+pub fn frame_count() -> State<f32> {
+    reading()
+}
+
 /// The number in `color` at `font_size`, drawn by a draw scope that reads
 /// it: frames draw it again without composing or laying out.
 #[composable]
