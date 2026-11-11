@@ -154,7 +154,8 @@ fn open_sound(robot: &mut RobotTestRule<TestRenderer>) {
         robot.find_by_text("Sound").click(),
         "the panel has a Sound chip"
     );
-    robot.wait_for_idle();
+    // The settings slide in: a click waits until they rest.
+    robot.wait_for_motion();
 }
 
 fn shows(robot: &mut RobotTestRule<TestRenderer>, text: &str) -> bool {

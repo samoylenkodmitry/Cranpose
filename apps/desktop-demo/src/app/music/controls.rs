@@ -6,7 +6,10 @@ use cranpose_core::{derivedStateOf, with_key, SideEffect};
 use cranpose_ui::{
     composable,
     text::FontWeight,
-    widgets::{FlowRow, FlowSpec},
+    widgets::{
+        fade_in, fade_out, slide_in_vertically, slide_out_vertically, AnimatedVisibility, FlowRow,
+        FlowSpec,
+    },
     Column, ColumnSpec, LinearArrangement, Modifier, Row, RowSpec, Text, VerticalAlignment,
 };
 use cranpose_ui_graphics::whole;
@@ -24,6 +27,9 @@ const PANEL_CORNER: f32 = 26.0;
 const PANEL_PADDING: f32 = 16.0;
 const ROW_SPACING: f32 = 12.0;
 const GROUP_SPACING: f32 = 22.0;
+// The sound settings come down from this share of their height above
+// their place, and go back up there.
+const SOUND_SLIDE: f32 = -0.2;
 const SLIDER_WIDTH: f32 = 170.0;
 const TIMBRES_WIDTH: f32 = 330.0;
 const ICON_SIZE: f32 = 18.0;
@@ -62,13 +68,30 @@ pub(super) fn ControlPanel(
             let performance = performance.clone();
             Column(
                 Modifier::empty().fill_max_width().padding(PANEL_PADDING),
-                ColumnSpec::new().vertical_arrangement(LinearArrangement::spaced_by(ROW_SPACING)),
+                ColumnSpec::new(),
                 move || {
-                    Heading(settings, shown);
-                    Transport(performance.clone(), song.seconds());
-                    if shown {
-                        Sound(song.clone(), settings);
-                    }
+                    let performance = performance.clone();
+                    let seconds = song.seconds();
+                    Column(
+                        Modifier::empty().fill_max_width(),
+                        ColumnSpec::new()
+                            .vertical_arrangement(LinearArrangement::spaced_by(ROW_SPACING)),
+                        move || {
+                            Heading(settings, shown);
+                            Transport(performance.clone(), seconds);
+                        },
+                    );
+                    // The settings bring their gap with them: hidden, they
+                    // leave the panel as high as its transport.
+                    AnimatedVisibility(
+                        shown,
+                        fade_in() + slide_in_vertically(SOUND_SLIDE),
+                        fade_out() + slide_out_vertically(SOUND_SLIDE),
+                        {
+                            let song = song.clone();
+                            move || Sound(song.clone(), settings)
+                        },
+                    );
                 },
             );
         },
@@ -194,7 +217,9 @@ fn Sound(song: Song, settings: Settings) {
     let volume = settings.volume.get();
     let semitones = settings.transpose.get();
     FlowRow(
-        Modifier::empty().fill_max_width(),
+        Modifier::empty()
+            .fill_max_width()
+            .padding_each(0.0, ROW_SPACING, 0.0, 0.0),
         FlowSpec::default()
             .main_axis_spacing(GROUP_SPACING)
             .cross_axis_spacing(ROW_SPACING),

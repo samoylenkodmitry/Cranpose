@@ -1,5 +1,6 @@
 // The Music tab in the real app: a move of the song's position draws the
-// notes of that moment over the keyboard. The run presses no key and never
+// notes of that moment over the keyboard and lights the keys under the
+// notes that sound. The run presses no key and never
 // plays, so it opens no output device and makes no sound.
 
 use crate::{output_paths, robot_launch};
@@ -30,6 +31,10 @@ const STRIP_HEIGHT: f32 = 120.0;
 // its channels by at least this much.
 const NOTE_BRIGHTNESS: u8 = 150;
 const FEWEST_NOTE_PIXELS: usize = 400;
+// A lit key has the color of its note: its channels lie this far apart.
+// The channels of a white, a black and a gray pixel lie closer.
+const LIGHT_SPREAD: u8 = 80;
+const FEWEST_LIT_KEY_PIXELS: usize = 300;
 
 fn shot_dir() -> PathBuf {
     std::env::var_os(SHOT_DIR_ENV).map_or_else(
@@ -61,6 +66,22 @@ fn note_pixels(image: &RgbaImage) -> usize {
         .enumerate_pixels()
         .filter(|(x, y, _)| columns.contains(x) && rows.contains(y))
         .filter(|(_, _, pixel)| pixel.0[..3].iter().any(|channel| *channel >= NOTE_BRIGHTNESS))
+        .count()
+}
+
+// Pixels of the keyboard that have the color of a note.
+fn lit_key_pixels(image: &RgbaImage) -> usize {
+    let scale = image.height() as f32 / WINDOW_HEIGHT as f32;
+    let top = ((WINDOW_HEIGHT as f32 - KEYBOARD_HEIGHT) * scale) as u32;
+    image
+        .enumerate_pixels()
+        .filter(|(_, y, _)| *y >= top)
+        .filter(|(_, _, pixel)| {
+            let channels = &pixel.0[..3];
+            let brightest = channels.iter().max().copied().unwrap_or(0);
+            let darkest = channels.iter().min().copied().unwrap_or(0);
+            brightest - darkest >= LIGHT_SPREAD
+        })
         .count()
 }
 
@@ -100,7 +121,9 @@ pub(crate) fn main() {
                     middle,
                 )
                 .expect("a drag of the position slider's thumb");
-            robot.pump_frames(3).expect("the tab settles");
+            // The keys go down and the notes light on springs: they rest
+            // a moment after the move.
+            robot.wait_for_idle().expect("the lights of the tab come to rest");
 
             assert!(
                 robot
@@ -115,6 +138,13 @@ pub(crate) fn main() {
             assert!(
                 pixels >= FEWEST_NOTE_PIXELS,
                 "the roll draws the notes of the moment: {pixels} pixels in a note's color"
+            );
+
+            let lit = lit_key_pixels(&moved);
+            println!("lit key pixels after the move: {lit}");
+            assert!(
+                lit >= FEWEST_LIT_KEY_PIXELS,
+                "a key under a note that sounds is lit: {lit} pixels in a note's color"
             );
 
             println!("PASS: the Music tab draws the notes at the position of the song");

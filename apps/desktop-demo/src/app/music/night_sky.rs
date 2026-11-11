@@ -1,17 +1,12 @@
-// The sky behind the roll: a night, its stars and a moon, for a piece named
-// after moonlight.
+// The sky behind the roll: a night and its stars, for a piece named after
+// moonlight.
 
 use cranpose_ui::{composable, Brush, Canvas, Color, Modifier, Point};
 
 const ZENITH: Color = Color::from_rgb_u8(0x03, 0x06, 0x12);
 const MIDDLE: Color = Color::from_rgb_u8(0x0A, 0x12, 0x2E);
 const HORIZON: Color = Color::from_rgb_u8(0x1B, 0x1F, 0x4D);
-const MOON: Color = Color::from_rgb_u8(0xDD, 0xE8, 0xFF);
-// Where the moon stands, as shares of the sky's width and height.
-const MOON_PLACE: (f32, f32) = (0.86, 0.62);
-const MOON_RADIUS: f32 = 30.0;
-const MOON_HALO_RADIUS: f32 = 260.0;
-const MOON_HALO_ALPHA: f32 = 0.22;
+const STAR: Color = Color::from_rgb_u8(0xDD, 0xE8, 0xFF);
 const STARS: u16 = 110;
 // The stars keep to this share of the sky from its top.
 const STARS_REACH: f32 = 0.8;
@@ -23,15 +18,6 @@ fn scatter(star: u16, salt: f32) -> f32 {
     ((f32::from(star) * 12.9898 + salt * 78.233).sin() * 43_758.547)
         .fract()
         .abs()
-}
-
-// The middle of a circle of `radius` for its gradient, which is placed from
-// the corner of the square around the circle.
-fn middle_of(radius: f32) -> Point {
-    Point {
-        x: radius,
-        y: radius,
-    }
 }
 
 // Fills its place with the night. Nothing here changes, so the sky is drawn
@@ -51,32 +37,10 @@ pub(super) fn NightSky(modifier: Modifier) {
                 y: scatter(star, 2.0) * size.height * STARS_REACH,
             };
             scope.draw_circle(
-                Brush::solid(MOON.with_alpha(STAR_ALPHA * (0.35 + 0.65 * scatter(star, 3.0)))),
+                Brush::solid(STAR.with_alpha(STAR_ALPHA * (0.35 + 0.65 * scatter(star, 3.0)))),
                 center,
                 0.6 + scatter(star, 5.0) * 1.1,
             );
         }
-        let moon = Point {
-            x: size.width * MOON_PLACE.0,
-            y: size.height * MOON_PLACE.1,
-        };
-        scope.draw_circle(
-            Brush::radial_gradient(
-                vec![MOON.with_alpha(MOON_HALO_ALPHA), MOON.with_alpha(0.0)],
-                middle_of(MOON_HALO_RADIUS),
-                MOON_HALO_RADIUS,
-            ),
-            moon,
-            MOON_HALO_RADIUS,
-        );
-        scope.draw_circle(
-            Brush::radial_gradient(
-                vec![Color::WHITE, MOON],
-                middle_of(MOON_RADIUS),
-                MOON_RADIUS,
-            ),
-            moon,
-            MOON_RADIUS,
-        );
     });
 }

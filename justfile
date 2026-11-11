@@ -472,7 +472,7 @@ _size-ceiling path max what:
 # (the nine patches of the comparison's third screen) took it to 14,051,422
 # bytes. The chat of that screen took it to 14,197,518 bytes: the SVG reader
 # of its spinner and the GIF decoder of its picture. The Music tab took it to
-# 14,473,866 bytes, about 230 KB: its composables and synth, the MIDI reader
+# 14,480,645 bytes, about 237 KB: its composables and synth, the MIDI reader
 # with its 17 KB song, and the Web Audio backend.
 web-size-budget: (_size-ceiling "apps/desktop-demo/pkg/desktop_app_bg.wasm" "14486500" "web demo wasm")
 

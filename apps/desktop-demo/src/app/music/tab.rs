@@ -19,6 +19,7 @@ use super::{
     controls::ControlPanel,
     key_range::KeyRange,
     keyboard::Keyboard,
+    moon::Moon,
     night_sky::NightSky,
     part::Part,
     performance::{rememberPerformance, Perform, Performance},
@@ -91,6 +92,7 @@ pub(crate) fn MusicTab() {
                     BoxSpec::default(),
                     move || {
                         NightSky(Modifier::empty().fill_max_size());
+                        Moon(Modifier::empty().fill_max_size());
                         Score(song.clone(), settings, takes_keys.clone());
                         ControlPanel(
                             song.clone(),

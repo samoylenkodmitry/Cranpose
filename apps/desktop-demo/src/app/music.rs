@@ -8,6 +8,7 @@ mod key_range;
 mod key_set;
 mod keyboard;
 mod midi;
+mod moon;
 mod night_sky;
 mod note_bar;
 mod part;
