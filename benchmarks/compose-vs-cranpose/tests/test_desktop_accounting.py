@@ -330,6 +330,22 @@ class FreshInstallTest(unittest.TestCase):
                 desktop.wait_for_program_checks(stage)
             self.assertEqual(len(list((stage / 'probes').glob('*/probe'))), 1)
 
+    def test_a_failed_leg_quotes_the_panic_and_not_the_hint_after_it(self):
+        log = ['Initialising in parallel using 10 threads',
+               "thread 'main' panicked at wgpu_core.rs:3411:5:",
+               'wgpu error: Validation Error',
+               'Caused by:',
+               'In Device::create_bind_group',
+               'Buffer binding 1 range 201326592 exceeds `max_*_buffer_binding_size` limit 134217728',
+               'note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace']
+        words = desktop.last_words(log)
+        self.assertIn('Buffer binding 1 range 201326592 exceeds', words)
+        self.assertNotIn('RUST_BACKTRACE', words)
+
+    def test_a_failed_leg_without_a_panic_quotes_its_last_line(self):
+        self.assertEqual(desktop.last_words(['PERF first_frame']), ', last log line: PERF first_frame')
+        self.assertEqual(desktop.last_words([]), ', logged nothing')
+
 
 if __name__ == '__main__':
     unittest.main()

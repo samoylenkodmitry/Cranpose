@@ -282,11 +282,9 @@ fn mirror_root(document: &Document) -> Result<HtmlElement, JsValue> {
     let root = document.create_element("div")?.dyn_into::<HtmlElement>()?;
     root.set_attribute("data-cranpose-accessibility", "")?;
     root.set_attribute("aria-label", "Application controls")?;
-    let style = root.style();
-    style.set_property("position", "fixed")?;
-    style.set_property("inset", "0")?;
-    style.set_property("z-index", "2147483647")?;
-    style.set_property("pointer-events", "none")?;
+    for (property, value) in super::canvas_layout::MIRROR_ROOT_STYLES {
+        root.style().set_property(property, value)?;
+    }
     Ok(root)
 }
 

@@ -666,6 +666,18 @@ def framecount(pid, out, *arguments):
     return out
 
 
+def last_words(lines):
+    """What an app's log says of its end: a panic with its message, which
+    the hint about backtraces follows and would hide, or else its last line."""
+    if not lines:
+        return ', logged nothing'
+    panic = next((at for at, line in enumerate(lines) if 'panicked at' in line), None)
+    if panic is None:
+        return f', last log line: {lines[-1][:160]}'
+    message = [line for line in lines[panic + 1:] if not line.startswith('note: run with')]
+    return f', panic: {" ".join(message)[:300]}'
+
+
 class App:
     """One app running in its window until `stop`. An app in a bundle starts
     through `open`, as Launch Services starts apps: the JVM, for one, opens
@@ -728,8 +740,7 @@ class App:
             running = 'the app had ended'
         lines = [line.strip() for line in self.log.read_text(errors='replace').splitlines() if line.strip()]
         drew = 'drew a first frame' if any('PERF first_frame' in line for line in lines) else 'drew no frame yet'
-        last = f', last log line: {lines[-1][:160]}' if lines else ', logged nothing'
-        return f'{running}, {drew}{last}'
+        return f'{running}, {drew}{last_words(lines)}'
 
     def stop(self):
         """Ends the app and keeps its output beside the results."""
