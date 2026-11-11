@@ -9,10 +9,10 @@ use cranpose_ui::{ModifierNodeSlices, Point, Rect, Size, widgets::LayoutState};
 use cranpose_ui_graphics::{CompositingStrategy, DrawPlacement, GraphicsLayer, LayerShape};
 
 use super::{
-    DrawPass, DrawTarget, GroupPaint, Level, NodeCommands, SnapshotNodeData, TextNodeParts,
+    DrawPass, DrawTarget, GroupPaint, Level, NodeCommands, NodeDraws, OwnDraws, SnapshotNodeData,
     TranslateAncestorContext, TranslateGeometry, append_draw_nodes, draw_nodes,
     inline_leaf::lower_child, layer_node_capacity, note_space_change, read_placed_node_data,
-    shaped_graphics_layer, text_node_from_parts,
+    shaped_graphics_layer, text_item,
 };
 use crate::{
     graph::{CachePolicy, HitTestNode, IsolationReasons, PrimitivePhase, ProjectiveTransform},
@@ -303,10 +303,83 @@ fn placed_transform(
     }
 }
 
+// A node's own draws and text, as the items of its record are written: the
+// draws behind its content and its text, then, after its children, the
+// draws over it.
+pub(super) struct NodeContent<'a> {
+    draws: NodeDraws<'a>,
+    slices: &'a ModifierNodeSlices,
+}
+
+impl<'a> NodeContent<'a> {
+    // The content of the node `node_id`, whose slices are `slices`, in
+    // `record`.
+    pub(super) fn of(
+        record: RecordId,
+        node_id: NodeId,
+        slices: &'a ModifierNodeSlices,
+        draws: DrawTarget<'a>,
+    ) -> Self {
+        let outer_count = slices.outer_draw_command_count();
+        Self {
+            draws: NodeDraws {
+                parent: record,
+                commands: NodeCommands {
+                    node_id,
+                    commands: &slices.draw_commands()[outer_count..],
+                    first_index: outer_count,
+                },
+                target: draws,
+            },
+            slices,
+        }
+    }
+
+    // Writes the draws behind the content, then the text. Returns whether a
+    // command draws over the content.
+    #[inline]
+    pub(super) fn write_behind(
+        &self,
+        store: &mut SceneStore,
+        (list, own): (&mut Vec<Item>, &mut OwnDraws<'_>),
+    ) -> bool {
+        let over = append_draw_nodes(
+            store,
+            &self.draws,
+            (list, own),
+            DrawPass::Record(DrawPlacement::Behind),
+            PrimitivePhase::BeforeChildren,
+        );
+        if self.slices.has_text() {
+            let text = (self.draws.commands.node_id, self.slices);
+            list.extend(text_item(store, own, text, self.draws.target.size));
+        }
+        over
+    }
+
+    // Writes the draws over the content; the draws behind it start at
+    // `first_draw` of `list`.
+    #[inline]
+    pub(super) fn write_over(
+        &self,
+        store: &mut SceneStore,
+        (list, own): (&mut Vec<Item>, &mut OwnDraws<'_>),
+        first_draw: usize,
+    ) {
+        append_draw_nodes(
+            store,
+            &self.draws,
+            (list, own),
+            DrawPass::OverlayFromOutput(first_draw),
+            PrimitivePhase::AfterChildren,
+        );
+    }
+}
+
 pub(super) fn write_node_content(
     store: &mut SceneStore,
     record: RecordId,
-    list: &mut Vec<Item>,
+    (list, own): (&mut Vec<Item>, &mut OwnDraws<'_>),
     slices: &ModifierNodeSlices,
     draws: DrawTarget,
     (kept, written): (usize, usize),
@@ -315,47 +388,22 @@ pub(super) fn write_node_content(
     let node_id = store
         .node(record)
         .expect("a node's content is written into a record of that node");
-    let size = draws.size;
-    let outer_count = slices.outer_draw_command_count();
-    let commands = NodeCommands {
-        node_id,
-        commands: &slices.draw_commands()[outer_count..],
-        first_index: outer_count,
-    };
+    let content = NodeContent::of(record, node_id, slices, draws);
     list.reserve(layer_node_capacity(
-        commands.commands,
+        content.draws.commands.commands,
         written,
         slices.has_text(),
     ));
     let first_kept = list.len() - kept;
     let first_draw = list.len();
-    append_draw_nodes(
-        store,
-        record,
-        list,
-        commands,
-        DrawPass::Record(DrawPlacement::Behind),
-        draws,
-        PrimitivePhase::BeforeChildren,
-    );
-    if slices.has_text()
-        && let Some(text) = text_node_from_parts(&TextNodeParts::of(node_id, slices, size))
-    {
-        list.push(store.add_text(text));
-    }
+    let over = content.write_behind(store, (list, own));
     // The kept children go after the draws and text just written.
     list[first_kept..].rotate_left(kept);
     let first_draw = first_draw - kept;
     write_children(store, list);
-    append_draw_nodes(
-        store,
-        record,
-        list,
-        commands,
-        DrawPass::OverlayFromOutput(first_draw),
-        draws,
-        PrimitivePhase::AfterChildren,
-    );
+    if over {
+        content.write_over(store, (list, own), first_draw);
+    }
 }
 
 // Writes a node's layer into `target`, whose items are empty: in `target`
@@ -575,7 +623,7 @@ pub(super) fn write_node_layer(
             write_node_content(
                 store,
                 record,
-                list,
+                (list, &mut OwnDraws::none()),
                 &slices,
                 draws,
                 written,
@@ -625,13 +673,16 @@ pub(super) fn outer_draws(
         PrimitivePhase::BeforeChildren,
     );
     let mut overlay = store.lists.take();
+    let node = NodeDraws {
+        parent: wrapper,
+        commands,
+        target: draws,
+    };
     append_draw_nodes(
         store,
-        wrapper,
-        &mut overlay,
-        commands,
+        &node,
+        (&mut overlay, &mut OwnDraws::none()),
         DrawPass::OverlayFrom(behind.iter()),
-        draws,
         PrimitivePhase::AfterChildren,
     );
     OuterDraws { behind, overlay }

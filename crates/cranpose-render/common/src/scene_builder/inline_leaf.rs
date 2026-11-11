@@ -6,12 +6,13 @@ use cranpose_ui::{ModifierNodeSlices, Point, Rect, Size};
 
 use super::{
     DrawTarget, Level, LowerContext, SnapshotNodeData, assign_layer,
-    draw_recording::{NodeCommands, redraw_in_place},
-    modifier_slices_have_origin_sinks, prepare_node_layer, read_placed_node_data,
-    remove_dirty_descendants, slices_hit_something,
+    draw_recording::OwnDraws,
+    modifier_slices_have_origin_sinks,
+    node_layer::NodeContent,
+    prepare_node_layer, read_placed_node_data, remove_dirty_descendants, slices_hit_something,
     text_node::{TextNodeParts, drawn_text, refresh_text_node},
     translate_layer::holds_hit_geometry,
-    write_node_content, write_node_layer,
+    write_node_layer,
 };
 use crate::{
     NodeUpdate,
@@ -82,8 +83,7 @@ fn write_placed_child(
 }
 
 // Writes the node `node_id` of `data`, placed under `context`, into
-// `record` as a leaf, in place of the items it held, which the caller
-// removed.
+// `record`, whose items are empty, as a leaf.
 fn write_inline(
     store: &mut SceneStore,
     record: RecordId,
@@ -91,18 +91,32 @@ fn write_inline(
     data: &SnapshotNodeData<'_>,
     context: LowerContext,
 ) {
-    let slices = &data.modifier_slices;
-    let size = data.layout_state.size();
     let flags = leaf_flags(data, context);
+    let mut list = store.lists.take();
+    let items = (&mut list, &mut OwnDraws::none());
+    write_inline_content(store, (record, node_id), items, data, flags);
+    store.write_leaf(record, leaf_of(node_id, data, flags), &list);
+    store.lists.give(list);
+}
+
+// Writes the draws and text of the node `node_id` of `data`, a leaf with
+// `flags`, into `list`, items of `record`.
+fn write_inline_content(
+    store: &mut SceneStore,
+    (record, node_id): (RecordId, NodeId),
+    (list, own): (&mut Vec<Item>, &mut OwnDraws<'_>),
+    data: &SnapshotNodeData<'_>,
+    flags: RecordFlags,
+) {
     let draws = DrawTarget {
-        size,
+        size: data.layout_state.size(),
         motion_context_animated: flags.contains(RecordFlags::MOTION_ANIMATED),
         paint: None,
     };
-    let mut list = store.lists.take();
-    write_node_content(store, record, &mut list, slices, draws, (0, 0), |_, _| {});
-    store.write_leaf(record, leaf_of(node_id, data, flags), &list);
-    store.lists.give(list);
+    let content = NodeContent::of(record, node_id, &data.modifier_slices, draws);
+    if content.write_behind(store, (list, own)) {
+        content.write_over(store, (list, own), 0);
+    }
 }
 
 // The leaf the node `node_id` of `data` draws as, with `flags`.
@@ -116,39 +130,36 @@ fn leaf_of(node_id: NodeId, data: &SnapshotNodeData<'_>, flags: RecordFlags) -> 
     }
 }
 
-// Draws the node `node_id` of `data` again over the items of `record`, its
-// leaf, for the change `kind`, when its draws and text come out as the same
-// kinds in the same order. False when they do not; the caller then writes
-// the leaf anew.
-fn redraw_inline(
+// Writes the node `node_id` of `data` again into `record`, its leaf, for
+// the change `kind`: each draw and the text take the item `record` held in
+// their place when that one can hold them, and the items no draw took go. A
+// node whose draws now group some of them takes a layer of its own.
+fn rewrite_inline(
     store: &mut SceneStore,
     (record, node_id): (RecordId, NodeId),
     kind: NodeUpdate,
     data: &SnapshotNodeData<'_>,
     context: LowerContext,
-) -> bool {
-    let slices = &data.modifier_slices;
-    let mut items = store.lists.take();
-    items.extend_from_slice(store.items(record));
-    let commands = NodeCommands {
-        node_id,
-        commands: slices.draw_commands(),
-        first_index: 0,
-    };
-    let size = data.layout_state.size();
-    let text = slices.has_text().then_some(&**slices);
-    let drawn = redraw_in_place(store, items.iter().copied(), commands, text, size);
-    store.lists.give(items);
-    if !drawn {
-        return false;
-    }
-    // A change of draws alone leaves the node's layout: the leaf's rows hold.
-    if kind == NodeUpdate::Draws {
+) {
+    let flags = leaf_flags(data, context);
+    let mut old = store.lists.take();
+    old.extend_from_slice(store.items(record));
+    let mut own = OwnDraws::of(&old, &[]);
+    let mut list = store.lists.take();
+    write_inline_content(store, (record, node_id), (&mut list, &mut own), data, flags);
+    // A change of draws alone that kept every item leaves the node's
+    // layout: the leaf's rows hold.
+    if kind == NodeUpdate::Draws && list == old {
         store.note_content_change(record);
     } else {
-        store.redraw_leaf(record, leaf_of(node_id, data, leaf_flags(data, context)));
+        store.write_leaf(record, leaf_of(node_id, data, flags), &list);
+        own.finish(store);
+        if !draws_inline(store, record) {
+            layer_from_content(store, record, node_id, data, context);
+        }
     }
-    true
+    store.lists.give(list);
+    store.lists.give(old);
 }
 
 // Puts `record`, the leaf of the node of `data`, where the node lies under
@@ -225,23 +236,8 @@ pub(super) fn update_dirty_inline(
                 place_inline(store, record, &data, context);
                 return false;
             }
-            if retext_inline(store, record, &data, context)
-                || redraw_inline(store, (record, node_id), kind, &data, context)
-            {
-                return false;
-            }
-            // The old draws go first, last to first, so draws of the same
-            // kinds take their handles back in order and the leaf's items
-            // read as before.
-            let mut old = store.lists.take();
-            old.extend_from_slice(store.items(record));
-            for &item in old.iter().rev() {
-                store.remove_item(item);
-            }
-            store.lists.give(old);
-            write_inline(store, record, node_id, &data, context);
-            if !draws_inline(store, record) {
-                layer_from_content(store, record, node_id, &data, context);
+            if !retext_inline(store, record, &data, context) {
+                rewrite_inline(store, (record, node_id), kind, &data, context);
             }
             return false;
         }

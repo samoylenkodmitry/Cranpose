@@ -9,7 +9,7 @@ use cranpose_ui_graphics::{
 
 use super::{
     HeadKind, LayerHead, assign_layer,
-    text_node::{TextNodeParts, refresh_text_node},
+    text_node::{TextNodeParts, refresh_text_node, text_node_from_parts},
 };
 use crate::{
     graph::{CachePolicy, DrawCommandId, DrawRunNode, IsolationReasons, PrimitivePhase},
@@ -31,17 +31,19 @@ impl DrawPass<'_> {
         }
     }
 
+    // The recording the behind half of `command` made, for the overlay
+    // half this pass places: `None` in a pass that records, and for a
+    // command that draws on one side of the content alone.
+    #[inline]
     fn take_recording(
         &mut self,
         store: &SceneStore,
         command: &DrawCommand,
         output: &[Item],
     ) -> Option<Rc<CommandRecording>> {
-        if matches!(command, DrawCommand::Overlay(_)) {
-            return None;
-        }
         let item = match self {
             Self::Record(_) => return None,
+            _ if matches!(command, DrawCommand::Overlay(_)) => return None,
             Self::OverlayFrom(items) => *items.next().expect("each behind command has a draw run"),
             Self::OverlayFromOutput(index) => {
                 let item = output[*index];
@@ -49,20 +51,29 @@ impl DrawPass<'_> {
                 item
             }
         };
-        // A command whose draws a group places is a layer that starts
-        // with the run before its first group.
-        let run = match ItemRef::of(store, item) {
-            ItemRef::Run(run) => run,
-            ItemRef::Layer(group) => match group.items().next() {
-                Some(ItemRef::Run(run)) => run,
-                _ => return None,
-            },
-            ItemRef::Draw(_) | ItemRef::Text(_) | ItemRef::Leaf(_) | ItemRef::Shape(_) => {
-                return None;
-            }
-        };
-        matches!(command, DrawCommand::WithContent(_)).then(|| Rc::clone(&run.recording))
+        if !matches!(command, DrawCommand::WithContent(_)) {
+            return None;
+        }
+        behind_recording(store, item)
     }
+}
+
+// The recording of `item`, which the behind half of a with-content command
+// drew: a run, or the layer of a draw group, which starts with the run
+// before its first group.
+#[inline(never)]
+fn behind_recording(store: &SceneStore, item: Item) -> Option<Rc<CommandRecording>> {
+    let run = match ItemRef::of(store, item) {
+        ItemRef::Run(run) => run,
+        ItemRef::Layer(group) => match group.items().next() {
+            Some(ItemRef::Run(run)) => run,
+            _ => return None,
+        },
+        ItemRef::Draw(_) | ItemRef::Text(_) | ItemRef::Leaf(_) | ItemRef::Shape(_) => {
+            return None;
+        }
+    };
+    Some(Rc::clone(&run.recording))
 }
 
 #[derive(Clone, Copy)]
@@ -78,6 +89,63 @@ pub(super) struct DrawTarget<'a> {
 pub(super) enum GroupPaint<'a> {
     Layer(&'a GraphicsLayer),
     Record(RecordId),
+}
+
+// The items a record drew of its own before an update writes its node's
+// draws again, in draw order: those before the record's children, then
+// those after them. A draw takes the old item in its place when that one can
+// hold it, and a new item otherwise. The old items no draw took go when the
+// write ends.
+pub(super) struct OwnDraws<'a> {
+    old: [&'a [Item]; 2],
+    next: usize,
+}
+
+impl<'a> OwnDraws<'a> {
+    // No old items: every draw takes a new item.
+    pub(super) const fn none() -> Self {
+        Self::of(&[], &[])
+    }
+
+    pub(super) const fn of(before: &'a [Item], after: &'a [Item]) -> Self {
+        Self {
+            old: [before, after],
+            next: 0,
+        }
+    }
+
+    fn at(&self, index: usize) -> Option<Item> {
+        let [before, after] = self.old;
+        match before.get(index) {
+            Some(item) => Some(*item),
+            None => after.get(index - before.len()).copied(),
+        }
+    }
+
+    // The old item in the next draw's place, when it `fits` the draw.
+    #[inline]
+    fn take(
+        &mut self,
+        store: &SceneStore,
+        fits: impl FnOnce(&SceneStore, Item) -> bool,
+    ) -> Option<Item> {
+        let item = self.at(self.next)?;
+        if !fits(store, item) {
+            return None;
+        }
+        self.next += 1;
+        Some(item)
+    }
+
+    // Removes the old items no draw took, once the record holds its new
+    // items.
+    pub(super) fn finish(self, store: &mut SceneStore) {
+        let mut index = self.next;
+        while let Some(item) = self.at(index) {
+            store.remove_item(item);
+            index += 1;
+        }
+    }
 }
 
 pub(super) struct GroupedDraws<'a> {
@@ -268,6 +336,15 @@ pub(super) fn layer_node_capacity(
             .count()
 }
 
+// The draws of a node as a pass writes them: the record that takes their
+// items, the commands and what they draw into.
+#[derive(Clone, Copy)]
+pub(super) struct NodeDraws<'a> {
+    pub(super) parent: RecordId,
+    pub(super) commands: NodeCommands<'a>,
+    pub(super) target: DrawTarget<'a>,
+}
+
 #[derive(Clone, Copy)]
 pub(super) struct NodeCommands<'a> {
     pub(super) node_id: NodeId,
@@ -284,68 +361,201 @@ pub(super) fn draw_nodes(
     phase: PrimitivePhase,
 ) -> Vec<Item> {
     let mut items = store.lists.take();
+    let node = NodeDraws {
+        parent,
+        commands,
+        target: draws,
+    };
     append_draw_nodes(
         store,
-        parent,
-        &mut items,
-        commands,
+        &node,
+        (&mut items, &mut OwnDraws::none()),
         DrawPass::Record(placement),
-        draws,
         phase,
     );
     items
 }
 
+// Writes the draws of `node` that `pass` places into `items`, items of its
+// record: each draw takes the item of `own` in its place when that one drew
+// it before, and a new item otherwise. Returns whether a command draws
+// over the node's content, so the pass behind it tells its caller whether
+// the pass over it has anything to write.
 pub(super) fn append_draw_nodes(
     store: &mut SceneStore,
-    parent: RecordId,
-    items: &mut Vec<Item>,
-    commands: NodeCommands<'_>,
+    node: &NodeDraws<'_>,
+    (items, own): (&mut Vec<Item>, &mut OwnDraws<'_>),
     mut pass: DrawPass<'_>,
-    draws: DrawTarget,
     phase: PrimitivePhase,
-) {
-    let size = draws.size;
+) -> bool {
+    let commands = node.commands;
     let placement = pass.placement();
+    let mut over = false;
     for (command_index, command) in commands.commands.iter().enumerate() {
+        over |= matches!(
+            command,
+            DrawCommand::Overlay(_) | DrawCommand::WithContent(_)
+        );
         let id = DrawCommandId {
             node_id: commands.node_id,
             command_index: (commands.first_index + command_index) as u32,
             placement,
         };
-        let (shared, segments) = if let Some(shared) = pass.take_recording(store, command, items) {
-            let segments = shared.content_split(DrawPlacement::Overlay);
-            (shared, segments)
-        } else {
-            // A background takes shapes in the store's chunks, behind the
-            // node's content alone.
-            if let DrawCommand::Background(background) = command {
-                if placement == DrawPlacement::Behind {
-                    items.push(add_background(store, background, size));
-                }
-                continue;
+        let draw = (id, phase);
+        if let Some(shared) = pass.take_recording(store, command, items) {
+            items.push(shared_item(store, node, own, draw, shared));
+            continue;
+        }
+        // A background takes shapes in the store's chunks, behind the
+        // node's content alone.
+        if let DrawCommand::Background(background) = command {
+            if placement == DrawPlacement::Behind {
+                items.push(background_item(store, own, background, node.target.size));
             }
-            // The overlay pass skips a command that draws behind alone
-            // before it looks for the command's recording.
-            if !draws_in(command, placement) {
-                continue;
-            }
-            let Some(recorded) = record_command(store, command, id, size) else {
-                continue;
-            };
-            recorded
-        };
-        items.push(if opens_group(&shared, &segments) {
-            grouped_item(store, parent, (id, phase), &shared, draws, segments)
+            continue;
+        }
+        // The overlay pass skips a command that draws behind alone before
+        // it looks for the command's recording.
+        if !draws_in(command, placement) {
+            continue;
+        }
+        if let Some(item) = command_item(store, node, own, (command, draw)) {
+            items.push(item);
+        }
+    }
+    over
+}
+
+// Whether `item` is the run that drew the command `id`.
+fn is_run_of(store: &SceneStore, item: Item, id: DrawCommandId) -> bool {
+    item.kind() == ItemKind::Run && store.run(item).command == Some(id)
+}
+
+// The item of the overlay half of a with-content command, which draws its
+// segments of `shared`, the recording the behind half made: the run that
+// drew the half before takes the recording, else a new run does. A half
+// that opens a draw group takes a layer of its own.
+#[inline(never)]
+fn shared_item(
+    store: &mut SceneStore,
+    node: &NodeDraws<'_>,
+    own: &mut OwnDraws<'_>,
+    (id, phase): (DrawCommandId, PrimitivePhase),
+    shared: Rc<CommandRecording>,
+) -> Item {
+    let segments = shared.content_split(DrawPlacement::Overlay);
+    if opens_group(&shared, &segments) {
+        return grouped_item(store, node, (id, phase), &shared, segments);
+    }
+    let Some(run) = own.take(store, |store, item| is_run_of(store, item, id)) else {
+        return store.add_run(DrawRunNode::for_command_shared(
+            phase,
+            Some(id),
+            shared,
+            segments,
+        ));
+    };
+    store.swap_run_recording(run, shared);
+    draw_segments(store, run, segments);
+    run
+}
+
+// Makes the run `item` draw `segments` of the recording it holds.
+fn draw_segments(store: &mut SceneStore, item: Item, segments: Range<u32>) {
+    let run = store.run_mut(item);
+    run.summary = run.recording.summary_in(&segments);
+    run.segments = segments;
+}
+
+// The item of a background's shapes: the shape item in its place, which
+// keeps its shapes while their print stays, or a new one.
+fn background_item(
+    store: &mut SceneStore,
+    own: &mut OwnDraws<'_>,
+    background: &BackgroundDraw,
+    size: Size,
+) -> Item {
+    let Some(item) = own.take(store, |_, item| item.kind() == ItemKind::Shape) else {
+        return add_background(store, background, size);
+    };
+    let shape = background.shape_in(size);
+    let print = background_print(shape, background.color());
+    if store.shapes_print(item) != print {
+        store.redraw_shapes(item, print, |recorder| background.record(shape, recorder));
+    }
+    item
+}
+
+// The item that draws `command`, recorded now. The run that drew the
+// command before, when it lies in the draw's place, records it again: into
+// its own recording when no reader holds it, else into storage the store
+// keeps for the command. Without such a run the command records into that
+// storage for a new run. A recording that opens a draw group takes a layer
+// of its own. `None` when the command draws nothing in its placement.
+#[inline(never)]
+fn command_item(
+    store: &mut SceneStore,
+    node: &NodeDraws<'_>,
+    own: &mut OwnDraws<'_>,
+    (command, (id, phase)): (&DrawCommand, (DrawCommandId, PrimitivePhase)),
+) -> Option<Item> {
+    let size = node.target.size;
+    let Some(run) = own.take(store, |store, item| is_run_of(store, item, id)) else {
+        let (recording, segments) = record_command(store, command, id, size)?;
+        return Some(if opens_group(&recording, &segments) {
+            grouped_item(store, node, (id, phase), &recording, segments)
         } else {
             store.add_run(DrawRunNode::for_command_shared(
                 phase,
                 Some(id),
-                shared,
+                recording,
                 segments,
             ))
         });
+    };
+    let in_place = Rc::get_mut(&mut store.run_mut(run).recording)
+        .map(|recording| record_in_place(command, id.placement, size, recording));
+    let segments = match in_place {
+        Some(segments) => segments,
+        None => record_command(store, command, id, size).map(|(recording, segments)| {
+            store.swap_run_recording(run, recording);
+            segments
+        }),
+    };
+    let Some(segments) = segments else {
+        store.remove_item(run);
+        return None;
+    };
+    if opens_group(&store.run(run).recording, &segments) {
+        // The groups' runs take the recording; the run that held it goes.
+        let recording = Rc::clone(&store.run(run).recording);
+        store.remove_item(run);
+        return Some(grouped_item(store, node, (id, phase), &recording, segments));
     }
+    draw_segments(store, run, segments);
+    Some(run)
+}
+
+// The item of the text `slices` of the node `node_id` draw at `size`: the
+// text item in its place takes the text, where a text and style that stay
+// keep their paint; else a new one does. `None` when the node draws no
+// text. Out of line: most nodes draw no text.
+#[inline(never)]
+pub(super) fn text_item(
+    store: &mut SceneStore,
+    own: &mut OwnDraws<'_>,
+    (node_id, slices): (NodeId, &ModifierNodeSlices),
+    size: Size,
+) -> Option<Item> {
+    let parts = TextNodeParts::of(node_id, slices, size);
+    let Some(item) = own.take(store, |_, item| item.kind() == ItemKind::Text) else {
+        return text_node_from_parts(&parts).map(|text| store.add_text(text));
+    };
+    if refresh_text_node(store.text_mut(item), &parts) {
+        return Some(item);
+    }
+    store.remove_item(item);
+    None
 }
 
 // Whether `segments` of `recording` open a draw group, which a layer of its
@@ -356,181 +566,6 @@ fn opens_group(recording: &CommandRecording, segments: &Range<u32>) -> bool {
             .segments_in(segments)
             .any(|segment| segment.lane == RecordLane::GroupStart)
 }
-
-// One step of a node's draws as a redraw in place writes them over the
-// node's items, in draw order: a background, a command that records a run,
-// or the node's text.
-enum DrawStep<'a> {
-    Background(&'a BackgroundDraw),
-    Run(&'a DrawCommand, DrawCommandId),
-    Text(&'a ModifierNodeSlices),
-}
-
-// Hands `visit` each step of `commands` in draw order: the draws behind the
-// content, then `text`, then the draws over it. False when a command draws
-// around the content, or when `visit` returns false.
-fn walk_steps<'a>(
-    commands: NodeCommands<'a>,
-    text: Option<&'a ModifierNodeSlices>,
-    mut visit: impl FnMut(DrawStep<'a>) -> bool,
-) -> bool {
-    for placement in [DrawPlacement::Behind, DrawPlacement::Overlay] {
-        if placement == DrawPlacement::Overlay
-            && let Some(text) = text
-            && !visit(DrawStep::Text(text))
-        {
-            return false;
-        }
-        for (offset, command) in commands.commands.iter().enumerate() {
-            let step = match command {
-                DrawCommand::WithContent(_) => return false,
-                DrawCommand::Background(_) if placement == DrawPlacement::Overlay => continue,
-                DrawCommand::Background(background) => DrawStep::Background(background),
-                _ if !draws_in(command, placement) => continue,
-                _ => DrawStep::Run(
-                    command,
-                    DrawCommandId {
-                        node_id: commands.node_id,
-                        command_index: (commands.first_index + offset) as u32,
-                        placement,
-                    },
-                ),
-            };
-            if !visit(step) {
-                return false;
-            }
-        }
-    }
-    true
-}
-
-// Draws `commands`, a node's draw commands at size `size`, over `own`, the
-// items of its record that drew them before, in draw order without its
-// children, when they come out as the same kinds in the same order: a
-// background whose shape and color stay keeps its shapes, a run records
-// again into its own recording, and the text of `text`, the node's slices
-// when it draws text, writes into the text it drew. False when other items come out,
-// a command draws around the content, a run drew another command or a
-// recording opens a draw group; the caller then writes the node's draws
-// anew over what this wrote, and takes the recordings this made, which it
-// parks, so no draw callback runs twice.
-pub(super) fn redraw_in_place(
-    store: &mut SceneStore,
-    own: impl Iterator<Item = Item> + Clone,
-    commands: NodeCommands<'_>,
-    text: Option<&ModifierNodeSlices>,
-    size: Size,
-) -> bool {
-    let node_id = commands.node_id;
-    let mut items = own.clone();
-    let mut drawn = 0;
-    let all = walk_steps(commands, text, |step| {
-        let again = items.next().is_some_and(|item| match step {
-            DrawStep::Background(background) => {
-                draws_background_again(store, item, background, size)
-            }
-            DrawStep::Run(command, id) => draws_run_again(store, item, (command, id), size),
-            DrawStep::Text(slices) => draws_text_again(store, item, (node_id, slices), size),
-        });
-        drawn += usize::from(again);
-        again
-    }) && items.next().is_none();
-    if !all {
-        park_runs(store, own.take(drawn));
-    }
-    all
-}
-
-// Parks the recordings the runs among `drawn` made in this update, for the
-// fallback that writes their node's draws anew.
-#[cold]
-#[inline(never)]
-fn park_runs(store: &mut SceneStore, drawn: impl Iterator<Item = Item>) {
-    for item in drawn.filter(|item| item.kind() == ItemKind::Run) {
-        let run = store.run(item);
-        if let Some(id) = run.command {
-            let recorded = (Rc::clone(&run.recording), run.segments.clone());
-            store.recordings.park(id, recorded);
-        }
-    }
-}
-
-// Writes the text that `slices` of the node `node_id` draw at `size` into
-// the text item `item`. False when `item` is no text item or the node draws
-// no text now. Out of line: most nodes a redraw takes draw no text.
-#[inline(never)]
-fn draws_text_again(
-    store: &mut SceneStore,
-    item: Item,
-    (node_id, slices): (NodeId, &ModifierNodeSlices),
-    size: Size,
-) -> bool {
-    item.kind() == ItemKind::Text
-        && refresh_text_node(
-            store.text_mut(item),
-            &TextNodeParts::of(node_id, slices, size),
-        )
-}
-
-// Draws `background` at `size` into the shape item `item`, which keeps its
-// shapes while their print stays. False when `item` is no shape item.
-fn draws_background_again(
-    store: &mut SceneStore,
-    item: Item,
-    background: &BackgroundDraw,
-    size: Size,
-) -> bool {
-    if item.kind() != ItemKind::Shape {
-        return false;
-    }
-    let shape = background.shape_in(size);
-    let print = background_print(shape, background.color());
-    if store.shapes_print(item) != print {
-        store.redraw_shapes(item, print, |recorder| background.record(shape, recorder));
-    }
-    true
-}
-
-// Records `command`, the command `id`, again into the run `item` that drew
-// it before: into the run's own recording when no reader holds it, else
-// into storage the store keeps for the command. False when `item` is no
-// run of the command, or when the new recording opens a draw group, which
-// it then parks for the fallback.
-#[inline(never)]
-fn draws_run_again(
-    store: &mut SceneStore,
-    item: Item,
-    (command, id): (&DrawCommand, DrawCommandId),
-    size: Size,
-) -> bool {
-    if item.kind() != ItemKind::Run || store.run(item).command != Some(id) {
-        return false;
-    }
-    let in_place = Rc::get_mut(&mut store.run_mut(item).recording)
-        .map(|recording| record_in_place(command, id.placement, size, recording));
-    let segments = match in_place {
-        Some(segments) => segments,
-        None => record_command(store, command, id, size).map(|(recording, segments)| {
-            store.swap_run_recording(item, recording);
-            segments
-        }),
-    };
-    let Some(segments) = segments else {
-        return false;
-    };
-    let run = store.run_mut(item);
-    if opens_group(&run.recording, &segments) {
-        let recording = Rc::clone(&run.recording);
-        store.recordings.park(id, (recording, segments));
-        return false;
-    }
-    run.summary = run.recording.summary_in(&segments);
-    run.segments = segments;
-    true
-}
-
-// The three paths below run out of line, so the loop over a node's
-// commands stays small: the ESP32 boards run it from the instruction cache.
 
 // The item of a background's shapes, recorded into the store's chunks
 // unless the item the node drew them in before gives them back.
@@ -575,9 +610,6 @@ fn record_command(
     id: DrawCommandId,
     size: Size,
 ) -> Option<(Rc<CommandRecording>, Range<u32>)> {
-    if let Some(parked) = store.recordings.take_parked(id) {
-        return Some(parked);
-    }
     store.recordings.record(id, |storage| {
         recording_for_placement_reusing(command, id.placement, size, storage)
     })
@@ -588,14 +620,18 @@ fn record_command(
 #[inline(never)]
 fn grouped_item(
     store: &mut SceneStore,
-    parent: RecordId,
+    node: &NodeDraws<'_>,
     (id, phase): (DrawCommandId, PrimitivePhase),
     recording: &Rc<CommandRecording>,
-    draws: DrawTarget<'_>,
     segments: Range<u32>,
 ) -> Item {
-    GroupedDraws::new(store, id, phase, recording, draws)
-        .wrapper(store, parent, segments, draws.size)
+    let draws = node.target;
+    GroupedDraws::new(store, id, phase, recording, draws).wrapper(
+        store,
+        node.parent,
+        segments,
+        draws.size,
+    )
 }
 
 // Lowers `commands`, the draw commands of node `node_id` of size `size`,

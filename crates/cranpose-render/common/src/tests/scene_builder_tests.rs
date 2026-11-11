@@ -2037,21 +2037,24 @@ fn appending_empty_draw_commands_preserves_existing_nodes_and_command_identity()
         (DrawPlacement::Behind, PrimitivePhase::BeforeChildren),
         (DrawPlacement::Overlay, PrimitivePhase::AfterChildren),
     ] {
-        append_draw_nodes(
-            &mut store,
-            root,
-            &mut items,
-            NodeCommands {
+        let node = NodeDraws {
+            parent: root,
+            commands: NodeCommands {
                 node_id: NodeId(42),
                 commands: &commands,
                 first_index: 3,
             },
-            DrawPass::Record(placement),
-            DrawTarget {
+            target: DrawTarget {
                 size: Size::default(),
                 motion_context_animated: false,
                 paint: None,
             },
+        };
+        append_draw_nodes(
+            &mut store,
+            &node,
+            (&mut items, &mut OwnDraws::none()),
+            DrawPass::Record(placement),
             phase,
         );
     }

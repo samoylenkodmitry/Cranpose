@@ -12,7 +12,7 @@ use cranpose_core::{MemoryApplier, NodeId, RecordId, collections::map::HashMap};
 use cranpose_ui::{ModifierNodeSlices, Point, Rect, Size};
 
 use super::{
-    DrawTarget, GraphChanges, GroupPaint, KeptChild, LowerContext, PlacedGeometry,
+    DrawTarget, GraphChanges, GroupPaint, KeptChild, LowerContext, OwnDraws, PlacedGeometry,
     SnapshotNodeData, TranslateAncestorContext, TranslateGeometry, Wrapping, child_identity,
     content_layer, forget_dirty_node, hit_test_from_slices, layer_and_node_bounds, layer_identity,
     lower_child, move_kept_child, outer_commands, outer_draws, placed_child_geometry,
@@ -365,13 +365,13 @@ impl ItemParts {
         &self.items[self.children.clone()]
     }
 
-    // The container's own items in draw order: those before its children,
-    // then those after them.
-    pub(super) fn own(&self) -> impl DoubleEndedIterator<Item = Item> + Clone + '_ {
-        self.items[..self.children.start]
-            .iter()
-            .chain(&self.items[self.children.end..self.held])
-            .copied()
+    // The container's own items in draw order, for the write of its
+    // node's draws: those before its children, then those after them.
+    pub(super) fn own_draws(&self) -> OwnDraws<'_> {
+        OwnDraws::of(
+            &self.items[..self.children.start],
+            &self.items[self.children.end..self.held],
+        )
     }
 
     // Keeps the children in `kept`, in order, in `list`; the others leave.
@@ -421,15 +421,6 @@ impl ItemParts {
         }
     }
 
-    // Removes the own draws before the container's new items are written,
-    // last to first, so draws of the same kinds take their handles back in
-    // order and the container's items read as before.
-    pub(super) fn remove_own(&self, store: &mut SceneStore) {
-        for item in self.own().rev() {
-            store.remove_item(item);
-        }
-    }
-
     // Removes the children that left once the container holds its new
     // items: a record made since takes no row a child the container held
     // until then.
@@ -474,7 +465,7 @@ fn build_entering_children(
 pub(super) fn write_own_content_around_children(
     store: &mut SceneStore,
     container: RecordId,
-    list: &mut Vec<Item>,
+    (list, own): (&mut Vec<Item>, &mut OwnDraws<'_>),
     modifier_slices: &ModifierNodeSlices,
     size: Size,
 ) {
@@ -492,7 +483,7 @@ pub(super) fn write_own_content_around_children(
     write_node_content(
         store,
         container,
-        list,
+        (list, own),
         modifier_slices,
         draws,
         (kept, 0),
@@ -701,14 +692,15 @@ pub(super) fn translate_layer_from_data(
         parts.give_back(store);
         return translate_bail(reason);
     }
-    parts.remove_own(store);
+    let mut own = parts.own_draws();
     finish_translated_container(
         store,
         container,
-        list,
+        (list, &mut own),
         &modifier_slices,
         layout_state.size(),
     );
+    own.finish(store);
     parts.remove_gone(store);
     true
 }
@@ -719,11 +711,11 @@ pub(super) fn translate_layer_from_data(
 fn finish_translated_container(
     store: &mut SceneStore,
     container: RecordId,
-    mut list: Vec<Item>,
+    (mut list, own): (Vec<Item>, &mut OwnDraws<'_>),
     modifier_slices: &Rc<ModifierNodeSlices>,
     size: Size,
 ) {
-    write_own_content_around_children(store, container, &mut list, modifier_slices, size);
+    write_own_content_around_children(store, container, (&mut list, own), modifier_slices, size);
     store.set_items(container, &list);
     store.lists.give(list);
     let hit_test = hit_test_from_slices(modifier_slices);

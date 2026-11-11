@@ -46,13 +46,6 @@ impl SceneStore {
         self.end_leaf_write(id, rows);
     }
 
-    // Writes `id` as `leaf` around the items it holds, which the update in
-    // progress drew again in place.
-    pub(crate) fn redraw_leaf(&mut self, id: RecordId, leaf: Leaf) {
-        let rows = self.write_leaf_rows(id, leaf);
-        self.end_leaf_write(id, rows);
-    }
-
     #[inline]
     fn write_leaf_rows(&mut self, id: RecordId, leaf: Leaf) -> LeafRows {
         let index = id.index();

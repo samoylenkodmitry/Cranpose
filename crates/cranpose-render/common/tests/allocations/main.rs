@@ -1,15 +1,24 @@
 #![allow(clippy::print_stdout, reason = "a test prints what it measured")]
 
-use std::{alloc::System, cell::RefCell, rc::Rc};
+use std::{
+    alloc::System,
+    cell::{Cell, RefCell},
+    rc::Rc,
+};
 
 use cranpose_core::{MemoryApplier, MutableState, NodeId, rememberMutableStateOf};
 use cranpose_foundation::lazy::{LazyListScope, LazyListState, rememberLazyListState};
-use cranpose_render_common::{NodeUpdate, graph_scene::Scene, scene_store::LayerRef};
+use cranpose_render_common::{
+    NodeUpdate,
+    graph_scene::Scene,
+    scene_store::{ItemRef, LayerRef},
+};
 use cranpose_ui::{
-    Color, GraphicsLayer, LayoutEngine, LayoutNode, LazyColumn, LazyColumnSpec,
+    Brush, Color, CornerRadii, GraphicsLayer, LayoutEngine, LayoutNode, LazyColumn, LazyColumnSpec,
     MeasureLayoutOptions, Modifier, Size, Text, TextStyle, measure_layout_with_options,
     widgets::{Box, BoxSpec, Column, ColumnSpec},
 };
+use cranpose_ui_graphics::{CommandRecording, Rect};
 use stats_alloc::{INSTRUMENTED_SYSTEM, Region, StatsAlloc};
 
 #[macro_use]
@@ -316,6 +325,84 @@ fn a_text_changing_each_frame_reuses_its_string_and_layout() {
     }
 }
 
+// The recordings the runs under `layer` draw from, as a reader holds them.
+fn recordings(layer: LayerRef<'_>, held: &mut Vec<Rc<CommandRecording>>) {
+    for item in layer.items() {
+        match item {
+            ItemRef::Run(run) => held.push(Rc::clone(&run.recording)),
+            ItemRef::Layer(child) | ItemRef::Leaf(child) => recordings(child, held),
+            ItemRef::Draw(_) | ItemRef::Text(_) | ItemRef::Shape(_) => {}
+        }
+    }
+}
+
+// A node that draws behind its content and then around it, drawn again
+// each update while a reader holds the recordings of the update before, as
+// a picture does: each new recording takes the storage of one the reader
+// let go of, so a steady update allocates nothing.
+fn a_node_drawn_around_its_content_reuses_its_recordings() {
+    let width = Rc::new(Cell::new(10.0f32));
+    let drawn = Rc::clone(&width);
+    let mut composition = cranpose_ui::run_test_composition(move || {
+        let drawn = Rc::clone(&drawn);
+        Box(
+            Modifier::empty()
+                .size(Size::new(64.0, 16.0))
+                .draw_behind(|scope| {
+                    let bounds = Rect::from_size(scope.size());
+                    scope.draw_round_rect_at(
+                        bounds,
+                        Brush::solid(Color::RED),
+                        CornerRadii::uniform(4.0),
+                    );
+                })
+                .draw_with_content(move |scope| {
+                    scope.draw_content();
+                    let bar = Rect::from_size(Size::new(drawn.get(), 16.0));
+                    scope.draw_round_rect_at(
+                        bar,
+                        Brush::solid(Color::BLUE),
+                        CornerRadii::uniform(4.0),
+                    );
+                }),
+            BoxSpec::default(),
+            || {},
+        );
+    });
+    let root = composition.root().expect("a composed root");
+    let handle = composition.runtime_handle();
+    let mut applier = composition.applier_mut();
+    applier.set_runtime_handle(handle);
+    applier
+        .compute_layout(root, Size::new(400.0, 400.0))
+        .expect("layout");
+    let mut graph = Scene::new();
+    graph.rebuild_from_applier(&applier, root);
+    let mut held = Vec::with_capacity(16);
+    let update = |graph: &mut Scene, held: &mut Vec<Rc<CommandRecording>>| {
+        width.set(width.get() + 1.0);
+        assert!(
+            graph.update_from_applier(&applier, root, &[(root, NodeUpdate::Draws)]),
+            "the node draws again in place"
+        );
+        held.clear();
+        recordings(graph.root_layer().expect("a scene"), held);
+    };
+    for _ in 0..6 {
+        update(&mut graph, &mut held);
+    }
+    assert!(held.len() >= 2, "the node draws runs: {}", held.len());
+    let region = Region::new(GLOBAL);
+    for _ in 0..PASSES {
+        update(&mut graph, &mut held);
+    }
+    let allocations = region.change().allocations;
+    drop(held);
+    applier.clear_runtime_handle();
+    println!("allocations of {PASSES} redraws around content: {allocations}");
+    assert_eq!(allocations, 0, "a redraw around content allocates");
+}
+
 /// One test, so no other test's allocations land in these regions: the
 /// counting allocator counts every thread.
 fn scene_rebuilds_stay_within_their_allocation_budgets() {
@@ -324,6 +411,7 @@ fn scene_rebuilds_stay_within_their_allocation_budgets() {
     updating_one_cell_reuses_the_dirty_node_map();
     a_row_scrolling_in_reuses_the_row_that_scrolled_out();
     a_text_changing_each_frame_reuses_its_string_and_layout();
+    a_node_drawn_around_its_content_reuses_its_recordings();
 }
 
 main_thread_test!(scene_rebuilds_stay_within_their_allocation_budgets);

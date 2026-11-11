@@ -5,25 +5,17 @@
 // a recording a run holds stays the run's alone, so the run can record into
 // it again in place.
 
-use std::{ops::Range, rc::Rc};
+use std::rc::Rc;
 
 use cranpose_core::NodeId;
 use cranpose_ui_graphics::{CommandRecording, FxHashMap};
 
 use crate::graph::DrawCommandId;
 
-// A recording a command made, with the segments of it that are the
-// command's.
-pub(crate) type Recorded = (Rc<CommandRecording>, Range<u32>);
-
 #[derive(Clone, Default)]
 pub(crate) struct Recordings {
     slots: FxHashMap<RecorderKey, RecorderSlot>,
     update: u64,
-    // The recordings a redraw in place made before it gave up, with their
-    // segments, for the fallback that records the node's draws anew in the
-    // same update.
-    parked: Vec<(DrawCommandId, Recorded)>,
 }
 
 #[derive(Clone)]
@@ -70,8 +62,14 @@ impl RecorderSlot {
             .unwrap_or_default()
     }
 
+    // Keeps `recording`, once: the two runs of a with-content command let
+    // go of one recording, and a recording held twice reads as held by a
+    // reader for as long as the slot keeps it.
     fn hold(&mut self, update: u64, recording: &Rc<CommandRecording>) {
         self.update = update;
+        if (self.handles[0].as_ref()).is_some_and(|held| Rc::ptr_eq(held, recording)) {
+            return;
+        }
         self.handles[2] = self.handles[1].take();
         self.handles[1] = self.handles[0].take();
         self.handles[0] = Some(Rc::clone(recording));
@@ -82,21 +80,10 @@ impl Recordings {
     // Starts an update. Every 512 updates the commands that neither recorded
     // nor let go of a run for 64 leave.
     pub(super) fn begin_update(&mut self) {
-        if !self.parked.is_empty() {
-            self.drop_parked();
-        }
         self.update = self.update.wrapping_add(1);
         if self.update.is_multiple_of(512) {
             self.sweep();
         }
-    }
-
-    // A fallback takes what a redraw parked in its update; what it left
-    // goes.
-    #[cold]
-    #[inline(never)]
-    fn drop_parked(&mut self) {
-        self.parked.clear();
     }
 
     #[cold]
@@ -127,23 +114,6 @@ impl Recordings {
             })
         })?;
         Some(made)
-    }
-
-    // Parks `recorded`, which the command `id` recorded in this update, for
-    // a fallback that records the command again in it.
-    pub(crate) fn park(&mut self, id: DrawCommandId, recorded: Recorded) {
-        self.parked.push((id, recorded));
-    }
-
-    // The recording the command `id` parked in this update, with its
-    // segments.
-    #[inline]
-    pub(crate) fn take_parked(&mut self, id: DrawCommandId) -> Option<Recorded> {
-        if self.parked.is_empty() {
-            return None;
-        }
-        let at = self.parked.iter().position(|(parked, _)| *parked == id)?;
-        Some(self.parked.swap_remove(at).1)
     }
 
     // Keeps `recording`, which `id` recorded and which the store lets go

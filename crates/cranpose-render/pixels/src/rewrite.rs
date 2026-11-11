@@ -152,7 +152,9 @@ impl Rewrite {
         if self.spilled_at.is_none() {
             let index = self.next.records;
             if index < self.stop.records {
-                self.rerouted |= records[index].changes.record() != record.changes.record();
+                // A route names a row: a record of another generation in the
+                // same row and place keeps its route.
+                self.rerouted |= records[index].changes.record().id != record.changes.record().id;
                 records[index] = SubtreeItems {
                     end: index + 1,
                     ..record

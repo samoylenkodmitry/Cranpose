@@ -16,8 +16,8 @@ use dirty_walk::{update_along_retained_path, walk_dirty_layers};
 mod draw_recording;
 pub(crate) use draw_recording::draw_command_items;
 use draw_recording::{
-    DrawPass, DrawTarget, GroupPaint, NodeCommands, append_draw_nodes, draw_nodes,
-    layer_node_capacity, redraw_in_place,
+    DrawPass, DrawTarget, GroupPaint, NodeCommands, NodeDraws, OwnDraws, append_draw_nodes,
+    draw_nodes, layer_node_capacity, text_item,
 };
 mod graph_changes;
 use graph_changes::GraphChanges;
@@ -30,7 +30,7 @@ mod layer_shape;
 use layer_shape::shaped_graphics_layer;
 mod text_node;
 mod translate_geometry;
-use text_node::{TextNodeParts, text_node_from_parts, translate_unwrapped};
+use text_node::translate_unwrapped;
 use translate_geometry::{KeptChild, TranslateGeometry, move_kept_child, translate_retained_child};
 mod node_data;
 use node_data::{PlacedGeometry, placed_child_geometry, read_node_data, read_placed_node_data};
@@ -510,32 +510,20 @@ fn redraw_retained_layer(
             return false;
         }
         let parts = ItemParts::of(store, container);
-        let slices = &data.modifier_slices;
-        let outer = slices.outer_draw_command_count();
-        let commands = NodeCommands {
-            node_id,
-            commands: &slices.draw_commands()[outer..],
-            first_index: outer,
-        };
-        let text = slices.has_text().then_some(&**slices);
-        if redraw_in_place(store, parts.own(), commands, text, data.layout_state.size()) {
-            parts.give_back(store);
-            store.note_content_change(container);
-            return true;
-        }
         let mut list = store.lists.take();
         list.extend_from_slice(parts.children());
-        parts.remove_own(store);
+        let mut own = parts.own_draws();
         write_own_content_around_children(
             store,
             container,
-            &mut list,
+            (&mut list, &mut own),
             &data.modifier_slices,
             data.layout_state.size(),
         );
         store.set_items(container, &list);
+        own.finish(store);
         store.lists.give(list);
-        parts.remove_gone(store);
+        parts.give_back(store);
         store.note_content_change(container);
         true
     })
