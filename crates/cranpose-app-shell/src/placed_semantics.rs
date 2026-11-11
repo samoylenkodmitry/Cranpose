@@ -29,7 +29,7 @@
 //!
 //! `compute_layout` returns a `LayoutTree` built from the `Placement`s a
 //! `MeasurePolicy` returned. The scene the
-//! renderer is handed is not: [`build_graph_from_applier`] walks the retained
+//! renderer is handed is not: the scene builder walks the retained
 //! node state and drops any node whose `is_placed` is false, and `is_placed` is
 //! set by `placeable.place(x, y)` — *not* by pushing a `Placement` into a vec.
 //! The two disagreed once and a whole widget set laid out correctly in every

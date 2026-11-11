@@ -227,6 +227,12 @@ fn enter_source(
     )]
     composes: Composes,
 ) -> SourceScope {
+    // The count comes first: a scope it makes reads the stack for its trace.
+    #[cfg(all(feature = "inspection", debug_assertions))]
+    let recompositions = match composes {
+        Composes::InOwnScope => record_composition(name, file, line, manifest_dir),
+        Composes::InCallerScope => None,
+    };
     #[cfg(feature = "inspection")]
     let depth = crate::thread_state::runtimes(|state| {
         let mut stack = state.source_stack.borrow_mut();
@@ -237,10 +243,7 @@ fn enter_source(
             line,
             manifest_dir,
             #[cfg(debug_assertions)]
-            recompositions: match composes {
-                Composes::InOwnScope => record_composition(name, file, line, manifest_dir),
-                Composes::InCallerScope => None,
-            },
+            recompositions,
         });
         depth
     });

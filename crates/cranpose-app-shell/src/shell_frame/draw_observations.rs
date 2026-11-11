@@ -4,7 +4,7 @@
 
 use std::fmt::Debug;
 
-use cranpose_core::{NodeId, collections::map::HashSet};
+use cranpose_core::NodeId;
 use cranpose_render_common::{DrawOwnerChange, RenderScene, Renderer, undrawn_nodes};
 
 use crate::AppShell;
@@ -72,17 +72,20 @@ where
     #[cold]
     #[inline(never)]
     fn prune_draw_observations(&mut self) {
-        let mut retained_visual_nodes = HashSet::default();
         let mut any_graph = false;
         for surface in &mut self.surfaces {
             any_graph |= surface
                 .renderer
                 .scene()
                 .collect_retained_visual_observation_nodes(&mut surface.retained_visual_nodes);
-            retained_visual_nodes.extend(surface.retained_visual_nodes.iter().copied());
         }
         if any_graph {
-            cranpose_ui::retire_draw_observations(|node| !retained_visual_nodes.contains(&node));
+            let surfaces = &self.surfaces;
+            cranpose_ui::retire_draw_observations(|node| {
+                !surfaces
+                    .iter()
+                    .any(|surface| surface.retained_visual_nodes.contains(&node))
+            });
         }
     }
 }

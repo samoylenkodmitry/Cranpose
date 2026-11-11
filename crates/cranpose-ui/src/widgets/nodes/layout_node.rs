@@ -716,9 +716,8 @@ impl LayoutNode {
         self.parts.layout_state().is_placed()
     }
 
-    /// Updates the measured size of this node. Called during measurement.
-    /// [`LayoutState::set_size`] self-reports actual changes to the scene
-    /// phase.
+    /// Updates the measured size of this node. Called during measurement. An
+    /// actual change reports itself to the scene phase.
     pub fn set_measured_size(&self, size: Size, context: &AppContext) {
         self.parts.set_size(self.id.get(), size, context);
     }
