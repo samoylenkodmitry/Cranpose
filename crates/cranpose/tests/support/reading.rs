@@ -9,7 +9,7 @@ use cranpose_animation::{
 
 /// A number that counts up one every frame.
 #[composable]
-fn reading() -> State<f32> {
+pub fn reading() -> State<f32> {
     let transition = rememberInfiniteTransition("reading");
     let spec = infiniteRepeatable(
         AnimationSpec::linear(100_000),

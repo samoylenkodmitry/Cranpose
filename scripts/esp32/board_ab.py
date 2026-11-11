@@ -18,12 +18,19 @@ build different code, as cargo hashes a path crate's metadata from its path.
 A build and its links stay under that worktree's target/esp32-ab, kept by
 commit, so the base of the next comparison does not build again.
 
+`--no-hot-code` builds every revision with the hot-code lists off
+(`sdkconfig.no_hot_code`), so all code runs from flash and neither side's
+lists decide what is fast: the comparison that judges a change of the code a
+frame runs. A placement then shifts the whole of the flash code by a gap a
+seed picks.
+
 Run it in the Xtensa Rust environment (`. ~/export-esp-1.98.1.sh`).
 
-Usage: board_ab.py --board e32r35t BASE REVISION [REVISION...]
+Usage: board_ab.py --board e32r35t [--no-hot-code] BASE REVISION [REVISION...]
 """
 
 import argparse
+import hashlib
 import json
 import os
 import pathlib
@@ -81,19 +88,29 @@ def gapped(order, seed, out, largest):
     out.write_text("\n".join(text) + "\n")
 
 
+def shifted(seed, out, largest):
+    """An order file that names no code and opens one gap `seed` picks, a
+    multiple of 4 bytes below `largest`: every function moves by it."""
+    gap = 4 * (1 + random.Random(seed).randrange(largest // 4 - 1))
+    out.write_text(f".flash.text :\n{{\n  . = . + {gap};\n}}\n")
+
+
 def relink(kept, order, elf):
     saved = json.loads((kept / "args.json").read_text())
     flag = "-Wl,--section-ordering-file,"
     arguments = [flag + str(order) if argument.startswith(flag) else argument for argument in saved["args"]]
+    if flag + str(order) not in arguments:
+        arguments.append(flag + str(order))
     arguments[arguments.index("-o") + 1] = str(elf)
     linked = subprocess.run(["ldproxy", *arguments], cwd=saved["cwd"], capture_output=True, text=True)
     if linked.returncode:
         sys.exit(f"relink of {elf} failed:\n{linked.stdout[-2000:]}{linked.stderr[-2000:]}")
 
 
-def build(tree, board, commit, placements):
-    """The ELFs of `commit`, one a placement, built in `tree` unless kept."""
-    out = tree / "target/esp32-ab" / f"{commit[:12]}-{board}"
+def build(tree, board, commit, placements, hot_code):
+    """The ELFs of `commit`, one a placement, built in `tree` unless kept:
+    with the hot-code lists, or with all code in flash."""
+    out = tree / "target/esp32-ab" / f"{commit[:12]}-{board}{'' if hot_code else '-flash'}"
     elves = [out / f"p{seed}.elf" for seed in range(placements)]
     if all(elf.exists() for elf in elves):
         return out, elves
@@ -103,6 +120,9 @@ def build(tree, board, commit, placements):
     perfstats = tree / "benchmarks/esp32/perfstats"
     window = out / "sdkconfig.window"
     window.write_text("CONFIG_PERFSTATS_WINDOW_MS=1000\n")
+    settings = [perfstats / "sdkconfig.defaults", window]
+    if not hot_code:
+        settings.append(pathlib.Path(__file__).with_name("sdkconfig.no_hot_code"))
     features = [board, "screens-in-turn", *(["dashboard"] if LARGE_SCREENS[board] else [])]
     triple = f"xtensa-{mcu}-espidf".upper().replace("-", "_")
     environment = {f"CARGO_TARGET_{triple}_LINKER": str(pathlib.Path(__file__).with_name("keep_link.py")),
@@ -114,7 +134,7 @@ def build(tree, board, commit, placements):
         # file, and so esp-idf-sys's inputs, the same.
         elf, bootloader, partitions = board_run.build_rust(
             tree / "apps/esp32-demo", "esp32-demo", board, [perfstats],
-            [perfstats / "sdkconfig.defaults", window], features,
+            settings, features,
             tree / "target/esp32-ab" / f"{board}.log", demo=tree / "apps/esp32-demo")
     finally:
         for name, value in saved.items():
@@ -130,8 +150,17 @@ def build(tree, board, commit, placements):
             shutil.copy(elf, target)
             continue
         gaps = out / f"gaps{seed}.order"
-        gapped(order, seed, gaps, LARGEST_GAP[board])
+        if hot_code:
+            gapped(order, seed, gaps, LARGEST_GAP[board])
+        else:
+            shifted(seed, gaps, LARGEST_GAP[board])
         relink(out / "link", gaps, target)
+    hashes = [hashlib.sha256(elf.read_bytes()).hexdigest() for elf in elves]
+    if len(set(hashes)) != len(hashes):
+        # The next run links the placements again.
+        for elf in elves[1:]:
+            elf.unlink()
+        sys.exit(f"two placements of {commit[:12]} are one image: the gaps moved no code")
     return out, elves
 
 
@@ -184,6 +213,8 @@ def main():
     parser.add_argument("--board", choices=board_run.BOARDS, required=True)
     parser.add_argument("--port", help="the serial port; found by name when omitted")
     parser.add_argument("--placements", type=int, default=4)
+    parser.add_argument("--no-hot-code", action="store_true",
+                        help="build with the hot-code lists off: all code runs from flash")
     parser.add_argument("revisions", nargs="+", help="the base first, then the revisions to compare with it")
     args = parser.parse_args()
     if len(args.revisions) < 2:
@@ -191,7 +222,8 @@ def main():
     port = args.port or board_run.one(board_run.BOARDS[args.board]["port"], "serial port")
     commits = [git("rev-parse", revision) for revision in args.revisions]
     tree = worktree(args.board)
-    builds = {commit: build(tree, args.board, commit, args.placements) for commit in dict.fromkeys(commits)}
+    builds = {commit: build(tree, args.board, commit, args.placements, not args.no_hot_code)
+              for commit in dict.fromkeys(commits)}
     screens = 4 + 4 * LARGE_SCREENS[args.board]
     seconds = screens * SCREEN_SECONDS + BOOT_SECONDS
     names = list(dict.fromkeys(args.revisions))

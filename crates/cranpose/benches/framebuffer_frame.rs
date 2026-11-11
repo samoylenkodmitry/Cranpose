@@ -8,15 +8,18 @@
 //! `NEST_DEPTH` plain boxes (default 0) wrap it. With `BAR=draw` the bar reads
 //! its width in the draw phase instead, as a progress indicator that takes
 //! its progress as a function does: frames then draw again without composing
-//! or laying out.
+//! or laying out. With `BAR=content` the bar draws its track in a draw
+//! callback and its width in a callback around its content, both on one
+//! node. `BARS` bars (default 1) take a new width by turns, one a frame, so
+//! each frame changes another node than the frame before.
 //!
 //! `TEXT=frame` adds a line of text whose number changes every frame, as a
 //! clock or a sensor reading does: each frame composes, measures and draws
-//! that text again. `TEXT=draw` draws that line in the draw phase instead,
-//! reading the number there: frames then draw it again without composing or
-//! laying out. `TEXT=framed` composes that line over a background inside
+//! that text again. `TEXT=framed` composes that line over a background inside
 //! a border, as a badge shows a count: each frame draws the node's own
-//! draws around its new text.
+//! draws around its new text. `TEXT=draw` draws that line in the draw phase
+//! instead, reading the number there: frames then draw it again without
+//! composing or laying out.
 //!
 //! `STRIP_ROWS` (default 0, an area at once) draws each area in strips of
 //! that many rows, as a host with a small buffer does, and `REDRAW=all`
@@ -84,7 +87,7 @@ mod still_wall;
 #[path = "../tests/support/text_style.rs"]
 mod text_style;
 
-use reading::{ComposedReading, DrawnReading, FramedReading};
+use reading::{ComposedReading, DrawnReading, FramedReading, reading};
 
 const WIDTH: u32 = 320;
 const HEIGHT: u32 = 240;
@@ -106,7 +109,7 @@ fn nest_depth() -> usize {
 }
 
 /// The line of text that changes every frame, if any: `TEXT=frame` composes
-/// it, `TEXT=framed` composes it inside a frame, `TEXT=draw` draws it.
+/// it, `TEXT=draw` draws it.
 #[derive(Clone, Copy, PartialEq)]
 enum TickerText {
     None,
@@ -124,9 +127,30 @@ fn ticker_text() -> TickerText {
     }
 }
 
-/// Whether the bar reads its width while it draws: `BAR=draw`.
-fn bar_reads_in_draw() -> bool {
-    std::env::var("BAR").is_ok_and(|bar| bar == "draw")
+// How the bar takes its width: composed again each frame, read while it
+// draws (`BAR=draw`), or read by a draw around its content after a draw
+// callback of the same node (`BAR=content`).
+#[derive(Clone, Copy)]
+enum Bar {
+    Composed,
+    Drawn,
+    Content,
+}
+
+impl Bar {
+    fn from_env() -> Self {
+        match std::env::var("BAR").as_deref() {
+            Ok("draw") => Self::Drawn,
+            Ok("content") => Self::Content,
+            _ => Self::Composed,
+        }
+    }
+}
+
+// Bars that take a new width by turns, one a frame: `BARS` (default 1, the
+// one animated bar).
+fn bar_count() -> usize {
+    env_count("BARS").max(1)
 }
 
 // What the frames show: `SCREEN=dashboard`, `paths`, `moves`, `wall`,
@@ -329,13 +353,100 @@ fn DrawnBar() {
     );
 }
 
+// A bar whose track a draw callback draws and whose width a draw around its
+// content draws, both on one node.
+#[composable]
+fn ContentBar() {
+    let transition = rememberInfiniteTransition("bar");
+    let spec = infiniteRepeatable(
+        AnimationSpec::linear(1500),
+        RepeatMode::Reverse,
+        StartOffset::default(),
+    );
+    let fraction = transition.animateFloat(0.1, 1.0, spec, "width");
+    Box(
+        Modifier::empty()
+            .fill_max_width()
+            .height(16.0)
+            .draw_behind(|scope| {
+                let size = scope.size();
+                scope.draw_round_rect_at(
+                    Rect {
+                        x: 0.0,
+                        y: 0.0,
+                        width: size.width,
+                        height: size.height,
+                    },
+                    Brush::solid(Color::from_rgb_u8(40, 44, 64)),
+                    CornerRadii::uniform(8.0),
+                );
+            })
+            .draw_with_content(move |scope| {
+                scope.draw_content();
+                let size = scope.size();
+                scope.draw_round_rect_at(
+                    Rect {
+                        x: 0.0,
+                        y: 0.0,
+                        width: size.width * fraction.value(),
+                        height: size.height,
+                    },
+                    Brush::solid(Color::from_rgb_u8(98, 160, 255)),
+                    CornerRadii::uniform(8.0),
+                );
+            }),
+        BoxSpec::default(),
+        || {},
+    );
+}
+
+// One of `bars` bars that take a new width by turns: this one on the frames
+// whose count leaves `index` when divided by `bars`.
+#[composable]
+fn TurnBar(index: usize, bars: usize, frames: State<f32>) {
+    let turn = derivedStateOf(move || (frames.value() as usize + bars - 1 - index) / bars);
+    let fraction = 0.1 + 0.9 * (turn.value() % 16) as f32 / 15.0;
+    Box(
+        Modifier::empty()
+            .fill_max_width()
+            .height(16.0)
+            .background(Color::from_rgb_u8(40, 44, 64))
+            .rounded_corners(8.0),
+        BoxSpec::default(),
+        move || {
+            Box(
+                Modifier::empty()
+                    .fill_max_width_fraction(fraction)
+                    .height(16.0)
+                    .background(Color::from_rgb_u8(98, 160, 255))
+                    .rounded_corners(8.0),
+                BoxSpec::default(),
+                || {},
+            );
+        },
+    );
+}
+
+#[composable]
+fn TurnBars(bars: usize) {
+    let frames = reading();
+    for index in 0..bars {
+        cranpose_core::with_key(&index, || TurnBar(index, bars, frames));
+    }
+}
+
 #[composable]
 fn Nested(depth: usize) {
     if depth == 0 {
-        if bar_reads_in_draw() {
-            DrawnBar();
-        } else {
-            AnimatedBar();
+        let bars = bar_count();
+        if bars > 1 {
+            TurnBars(bars);
+            return;
+        }
+        match Bar::from_env() {
+            Bar::Composed => AnimatedBar(),
+            Bar::Drawn => DrawnBar(),
+            Bar::Content => ContentBar(),
         }
     } else {
         Box(Modifier::empty(), BoxSpec::default(), move || {
