@@ -326,7 +326,7 @@ fn snapped_quad_bounds(quad: [[f32; 2]; 4], anchor: Option<SnapAnchor>, root_sca
 
 /// The logical rect a draw may touch: its snapped bounds within its clip,
 /// `None` when the clip leaves nothing.
-fn clipped_bounds(rect: Rect, clip: Option<Rect>) -> Option<Rect> {
+pub(crate) fn clipped_bounds(rect: Rect, clip: Option<Rect>) -> Option<Rect> {
     match clip {
         Some(clip) => rect.intersect(clip),
         None => Some(rect),
@@ -347,18 +347,6 @@ pub(crate) fn image_draw_bounds(image: &ImageDraw, root_scale: f32) -> Option<Re
     clipped_bounds(
         snapped_quad_bounds(image.quad, image.snap_anchor, root_scale),
         image.clip,
-    )
-}
-
-pub(crate) fn run_draw_bounds(run: &RunDraw, root_scale: f32) -> Option<Rect> {
-    let snap_delta = run
-        .placement
-        .snap_anchor
-        .map(|anchor| snap_delta_for_anchor(anchor, root_scale))
-        .unwrap_or_default();
-    clipped_bounds(
-        run.bounds.translate(snap_delta.x, snap_delta.y),
-        run.placement.clip,
     )
 }
 

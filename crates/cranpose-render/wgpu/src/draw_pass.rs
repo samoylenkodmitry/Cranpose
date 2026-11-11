@@ -197,7 +197,7 @@ fn is_member(segment: &PassSegment<'_>) -> bool {
 
 enum Item<'a> {
     /// A run, the window of its records the segment draws, and its draw
-    /// bounds: see [`run_draw_bounds`].
+    /// bounds: see [`op_bounds::run_draw_bounds`].
     Run(&'a RunDraw, Option<std::ops::Range<u32>>, Rect),
     Image(usize),
     /// A text with its logical geometry: see
@@ -258,25 +258,6 @@ fn stage_scissor(
         (RunStage::Paint, Some(clip)) => intersect_target_rects(scissor, clip),
         _ => Some(scissor),
     }
-}
-
-fn composite_visible(
-    composite: &ResolvedComposite,
-    target_size: (u32, u32),
-    segment_offset: [f32; 2],
-    segment_scissor: Option<(u32, u32, u32, u32)>,
-) -> bool {
-    let (x, y, width, height) = dest_in_target(composite.dest, segment_offset);
-    let (left, top, right, bottom) = match segment_scissor {
-        Some((sx, sy, sw, sh)) => (sx as f32, sy as f32, (sx + sw) as f32, (sy + sh) as f32),
-        None => (0.0, 0.0, target_size.0 as f32, target_size.1 as f32),
-    };
-    if x >= right || y >= bottom || x + width <= left || y + height <= top {
-        return false;
-    }
-    composite
-        .scissor
-        .is_none_or(|scissor| scissor_in_target(scissor, target_size, segment_offset).is_some())
 }
 
 impl GpuRenderer {

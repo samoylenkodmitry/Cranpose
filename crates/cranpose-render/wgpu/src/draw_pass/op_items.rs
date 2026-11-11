@@ -1,11 +1,15 @@
 use cranpose_ui_graphics::Rect;
 
-use super::{Item, PassSegment, PassTarget, composite_visible, op_is_visible_in_rect};
+use super::{
+    Item, PassSegment, PassTarget, ResolvedComposite, op_bounds::run_draw_bounds,
+    op_is_visible_in_rect, target_space::dest_in_target,
+};
 use crate::{
     ablation::Ablation,
-    render::{run_draw_bounds, segment_scene_rect, text_draw_geometry_in_rect},
+    render::{segment_scene_rect, text_draw_geometry_in_rect},
     run_store::run_has_shapes,
     scene::{CompositorScene, DrawOp, DrawOpKind, RunDraw, TextDraw},
+    scissor::scissor_in_target,
 };
 
 // Whether a segment's texts draw, or the text ablation leaves them out.
@@ -167,6 +171,25 @@ fn op_item<'a>(
 /// `viewport_rect`.
 fn visible_run_bounds(run: &RunDraw, viewport_rect: Rect, root_scale: f32) -> Option<Rect> {
     run_draw_bounds(run, root_scale).filter(|bounds| bounds.intersect(viewport_rect).is_some())
+}
+
+fn composite_visible(
+    composite: &ResolvedComposite,
+    target_size: (u32, u32),
+    segment_offset: [f32; 2],
+    segment_scissor: Option<(u32, u32, u32, u32)>,
+) -> bool {
+    let (x, y, width, height) = dest_in_target(composite.dest, segment_offset);
+    let (left, top, right, bottom) = match segment_scissor {
+        Some((sx, sy, sw, sh)) => (sx as f32, sy as f32, (sx + sw) as f32, (sy + sh) as f32),
+        None => (0.0, 0.0, target_size.0 as f32, target_size.1 as f32),
+    };
+    if x >= right || y >= bottom || x + width <= left || y + height <= top {
+        return false;
+    }
+    composite
+        .scissor
+        .is_none_or(|scissor| scissor_in_target(scissor, target_size, segment_offset).is_some())
 }
 
 /// The logical rect a segment's draws are judged against: its scissor
