@@ -4,13 +4,16 @@
 //! shadow and stacking order, scrolls under a clip, appears and disappears,
 //! and arcs sweep.
 
-use std::{cell::RefCell, rc::Rc};
+use std::{cell::RefCell, rc::Rc, sync::Arc};
 
 use cranpose_app_shell::AppShell;
-use cranpose_core::{MutableState, location_key, rememberMutableStateOf};
+use cranpose_core::{MutableState, location_key, rememberMovableContentOf, rememberMutableStateOf};
 use cranpose_macros::composable;
 use cranpose_render_pixels::{Picture, PixelRect, PixelsRenderer};
-use cranpose_ui::{Box, BoxSpec, Column, ColumnSpec, Modifier, Text, TextStyle};
+use cranpose_ui::{
+    Box, BoxSpec, Column, ColumnSpec, Modifier, Size, Text, TextStyle,
+    space::{Camera, Mat4, Material, Mesh, MeshSurface, Scene3d, Vec3},
+};
 use cranpose_ui_graphics::{
     Brush, Color, ColorFilter, DrawScope, GraphicsLayer, Point, Stroke, StrokeCap, TAU,
 };
@@ -547,6 +550,175 @@ fn ManyBoxes(captured: Step) {
 fn kept_frames_match_full_redraws_while_hundreds_of_nodes_change_at_once() {
     kept_frames_match_full_redraws(1.0, ManyBoxes);
     kept_frames_match_full_redraws_taken(1.0, ManyBoxes, 2);
+}
+
+// Content that moves between a parent that shifts and stretches it and a
+// parent that fades it, in updates that also put a sibling before it, take
+// one away, and give a keyed box's place to a box of another key.
+#[composable]
+fn Movers(captured: Step) {
+    let step = rememberMutableStateOf(|| 0u32);
+    *captured.borrow_mut() = Some(step);
+    let n = step.value();
+    let mover = rememberMovableContentOf(move || {
+        Box(
+            Modifier::empty()
+                .width(30.0)
+                .height(10.0)
+                .background(color(step.value() / 5, 3)),
+            BoxSpec::default(),
+            || {},
+        );
+    });
+    let (stretched, faded) = (mover.clone(), mover);
+    Column(
+        Modifier::empty().fill_max_size(),
+        ColumnSpec::default(),
+        move || {
+            let stretched = stretched.clone();
+            Column(
+                Modifier::empty()
+                    .width(120.0)
+                    .height(40.0)
+                    .graphics_layer(|| GraphicsLayer {
+                        translation_x: 12.0,
+                        scale_x: 1.5,
+                        ..GraphicsLayer::default()
+                    }),
+                ColumnSpec::default(),
+                move || {
+                    if n % 3 == 1 {
+                        Box(
+                            Modifier::empty()
+                                .width(20.0)
+                                .height(6.0)
+                                .background(color(1, 5)),
+                            BoxSpec::default(),
+                            || {},
+                        );
+                    }
+                    if n % 2 == 0 {
+                        stretched.show();
+                    }
+                },
+            );
+            let faded = faded.clone();
+            Column(
+                Modifier::empty()
+                    .width(120.0)
+                    .height(40.0)
+                    .graphics_layer(|| GraphicsLayer {
+                        alpha: 0.5,
+                        ..GraphicsLayer::default()
+                    }),
+                ColumnSpec::default(),
+                move || {
+                    if n % 2 == 1 {
+                        faded.show();
+                    }
+                    let key = n % 4;
+                    cranpose_core::with_key(&key, || {
+                        Box(
+                            Modifier::empty()
+                                .width(10.0 + key as f32 * 5.0)
+                                .height(6.0)
+                                .background(color(key, 9)),
+                            BoxSpec::default(),
+                            || {},
+                        );
+                    });
+                },
+            );
+        },
+    );
+}
+
+#[test]
+fn kept_frames_match_full_redraws_while_content_moves_between_parents() {
+    for every in [1, 2, 3] {
+        kept_frames_match_full_redraws_taken(1.0, Movers, every);
+        kept_frames_match_full_redraws_taken(1.5, Movers, every);
+    }
+}
+
+// A 3D scene with two panels turned in depth and a flat box; one panel
+// changes each frame, the other and the flat box by turns.
+#[composable]
+fn Surfaces(captured: Step) {
+    let step = rememberMutableStateOf(|| 0u32);
+    *captured.borrow_mut() = Some(step);
+    let n = step.value();
+    let plane = Arc::new(Mesh::plane());
+    Box(
+        Modifier::empty().fill_max_size().scene3d(|| Scene3d {
+            camera: Camera::look_at(
+                Vec3::new(0.0, 0.0, -400.0),
+                Vec3::ZERO,
+                Vec3::new(0.0, 1.0, 0.0),
+                400.0,
+            ),
+            light: None,
+            eye: None,
+        }),
+        BoxSpec::default(),
+        move || {
+            for panel in 0..2u32 {
+                let plane = Arc::clone(&plane);
+                cranpose_core::with_key(&panel, || {
+                    let turn = if panel == 0 { n } else { n / 3 };
+                    Box(
+                        Modifier::empty()
+                            .required_size(Size {
+                                width: 60.0,
+                                height: 40.0,
+                            })
+                            .mesh_surface(move || MeshSurface {
+                                mesh: Arc::clone(&plane),
+                                transform: Mat4::translation(Vec3::new(-0.5, -0.5, 0.0))
+                                    .then(&Mat4::scaling(Vec3::new(60.0, 40.0, 1.0)))
+                                    .then(&Mat4::rotation_y(0.5))
+                                    .then(&Mat4::translation(Vec3::new(
+                                        panel as f32 * 110.0 - 55.0,
+                                        20.0,
+                                        0.0,
+                                    ))),
+                                material: Material::Unlit,
+                                casts_shadow: false,
+                                solid: true,
+                            })
+                            .background(color(turn, panel)),
+                        BoxSpec::default(),
+                        move || {
+                            Box(
+                                Modifier::empty()
+                                    .width(20.0 + (turn % 4) as f32 * 8.0)
+                                    .height(10.0)
+                                    .background(color(turn, panel + 4)),
+                                BoxSpec::default(),
+                                || {},
+                            );
+                        },
+                    );
+                });
+            }
+            Box(
+                Modifier::empty()
+                    .width(60.0 + (n / 4 % 3) as f32 * 10.0)
+                    .height(20.0)
+                    .background(color(n / 4, 11)),
+                BoxSpec::default(),
+                || {},
+            );
+        },
+    );
+}
+
+#[test]
+fn kept_frames_match_full_redraws_while_a_surface_turned_in_depth_changes() {
+    for every in [1, 2] {
+        kept_frames_match_full_redraws_taken(1.0, Surfaces, every);
+        kept_frames_match_full_redraws_taken(1.5, Surfaces, every);
+    }
 }
 
 #[test]
