@@ -17,6 +17,7 @@ use cranpose_ui::{
 };
 
 use super::{
+    chat_feed::ChatFeed,
     text_style,
     wall::{INK, rgb},
 };
@@ -34,7 +35,7 @@ const BUBBLE: Color = rgb(data::CHAT_USER_RGB);
 #[derive(Clone)]
 pub struct ChatLive {
     pub shown: ChatShown,
-    feed: Option<Rc<data::ChatFeed>>,
+    feed: Option<Rc<ChatFeed>>,
 }
 
 impl ChatLive {
@@ -56,7 +57,7 @@ pub fn rememberChat() -> ChatLive {
         list: rememberLazyListState(),
     };
     let feed = remember(|| {
-        data::ChatFeed::start()
+        ChatFeed::start()
             .map_err(|error| log::warn!("chat data thread: {error}"))
             .ok()
             .map(Rc::new)
@@ -76,7 +77,7 @@ pub struct ChatShown {
 }
 
 impl ChatShown {
-    fn advance(self, feed: &data::ChatFeed) {
+    fn advance(self, feed: &ChatFeed) {
         for _ in 0..data::CHAT_TOKENS_PER_FRAME {
             let Some(token) = feed.take() else {
                 break;
