@@ -45,12 +45,13 @@ impl BenchScreen {
         }
     }
 
-    // The tier the tab opens at: the phones' gauntlet tier and the desktop
-    // apps' wall tier of the nightly, and tier 14 of the patchwork.
+    // The tier the tab opens at: the phones' gauntlet tier, a light tier of
+    // the wall, which draws at once on any device, and tier 14 of the
+    // patchwork. The chips reach the tiers the nightly runs.
     fn first_tier(self) -> usize {
         match self {
             Self::Gauntlet => 12,
-            Self::StillWall => 20,
+            Self::StillWall => 5,
             Self::Patchwork => 14,
         }
     }
