@@ -1,4 +1,4 @@
-use super::canvas_inline_styles;
+use super::{MIRROR_ROOT_STYLES, canvas_inline_styles};
 
 fn properties(fill_viewport: bool) -> Vec<&'static str> {
     canvas_inline_styles(fill_viewport)
@@ -9,7 +9,15 @@ fn properties(fill_viewport: bool) -> Vec<&'static str> {
 
 #[test]
 fn page_laid_out_canvases_keep_the_box_their_container_gives_them() {
-    assert_eq!(properties(false), vec!["touch-action"]);
+    assert_eq!(
+        properties(false),
+        vec![
+            "touch-action",
+            "user-select",
+            "-webkit-user-select",
+            "-webkit-touch-callout"
+        ]
+    );
 }
 
 #[test]
@@ -21,6 +29,9 @@ fn viewport_filling_canvases_take_the_whole_viewport() {
             ("height", "100vh"),
             ("height", "100dvh"),
             ("touch-action", "none"),
+            ("user-select", "none"),
+            ("-webkit-user-select", "none"),
+            ("-webkit-touch-callout", "none"),
         ]
     );
 }
@@ -39,5 +50,30 @@ fn viewport_filling_heights_end_on_the_dynamic_unit() {
 fn every_mode_takes_pointer_gestures_from_the_browser() {
     for fill_viewport in [false, true] {
         assert!(canvas_inline_styles(fill_viewport).contains(&("touch-action", "none")));
+    }
+}
+
+#[test]
+fn every_mode_keeps_a_long_press_from_selecting_the_page() {
+    for fill_viewport in [false, true] {
+        let styles = canvas_inline_styles(fill_viewport);
+        for property in [
+            "user-select",
+            "-webkit-user-select",
+            "-webkit-touch-callout",
+        ] {
+            assert!(styles.contains(&(property, "none")), "{property}");
+        }
+    }
+}
+
+#[test]
+fn the_accessibility_mirror_is_unselectable_and_takes_no_pointer() {
+    for style in [
+        ("pointer-events", "none"),
+        ("user-select", "none"),
+        ("-webkit-user-select", "none"),
+    ] {
+        assert!(MIRROR_ROOT_STYLES.contains(&style), "{style:?}");
     }
 }

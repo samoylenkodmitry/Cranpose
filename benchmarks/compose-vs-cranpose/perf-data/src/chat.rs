@@ -329,12 +329,10 @@ pub fn chat_gif_frame(frame: u32, frames: usize) -> usize {
 
 /// The tokens of the chat as they leave the data layer: a thread of its own
 /// sends them through a bounded channel and waits while the screen is behind.
-#[cfg(not(target_family = "wasm"))]
 pub struct ChatFeed {
     tokens: std::sync::mpsc::Receiver<ChatToken>,
 }
 
-#[cfg(not(target_family = "wasm"))]
 impl ChatFeed {
     /// Starts the data thread.
     pub fn start() -> std::io::Result<Self> {
@@ -357,28 +355,5 @@ impl ChatFeed {
     /// The next token, when one has arrived. The screen never waits for one.
     pub fn take(&self) -> Option<ChatToken> {
         self.tokens.try_recv().ok()
-    }
-}
-
-/// The tokens of the chat on the web, where a page has no thread to spare:
-/// the screen counts them itself, as fast as it takes them.
-#[cfg(target_family = "wasm")]
-pub struct ChatFeed {
-    count: std::cell::Cell<usize>,
-}
-
-#[cfg(target_family = "wasm")]
-impl ChatFeed {
-    /// Starts the count.
-    pub fn start() -> std::io::Result<Self> {
-        Ok(Self {
-            count: std::cell::Cell::new(0),
-        })
-    }
-
-    /// The next token.
-    pub fn take(&self) -> Option<ChatToken> {
-        self.count.set(self.count.get() + 1);
-        Some(ChatToken::after(self.count.get()))
     }
 }

@@ -6,6 +6,14 @@ use cranpose_ui::{
 
 use super::demo_random_u32;
 
+// What the line says while a fetch runs. A browser page has one thread, and
+// `launch_background` runs its work there.
+const FETCHING: &str = if cfg!(target_arch = "wasm32") {
+    "Fetching value..."
+} else {
+    "Fetching value on background thread..."
+};
+
 // A line with the last fetched value over the button that fetches the next.
 #[composable]
 pub(super) fn FetchAsyncValue() {
@@ -73,7 +81,7 @@ pub(super) fn FetchAsyncValue() {
         ButtonSpec::default(),
         {
             move || {
-                async_message.set("Fetching value on background thread...".to_string());
+                async_message.set(FETCHING.to_string());
                 fetch_request.update(|value| *value += 1);
             }
         },

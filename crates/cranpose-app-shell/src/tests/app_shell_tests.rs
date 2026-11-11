@@ -3522,6 +3522,100 @@ fn android_style_consecutive_flings_keep_direction() {
     );
 }
 
+// A scroll that ends with a small move the other way, as a lifting finger
+// makes, goes on the way the finger scrolled.
+#[test]
+fn a_small_move_back_before_the_lift_keeps_the_fling_s_direction() {
+    let _guard = test_guard();
+    APP_SHELL_WHEEL_SCROLL_STATE.with(|slot| slot.borrow_mut().take());
+
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(
+        HitGraphRenderer::default(),
+        root_key,
+        app_shell_tall_fling_scroll_probe,
+    );
+    shell.set_buffer_size(320, 640);
+    shell.set_viewport(320.0, 640.0);
+    shell.update_at_frame_time_nanos(16_000_000);
+
+    let mut event_ms = 5_000_000i64;
+    shell.set_cursor_at_time(160.0, 600.0, Some(event_ms));
+    shell.pointer_pressed_at_time(Some(event_ms));
+    // Up at 1,000 points a second.
+    let mut y = 600.0f32;
+    for _ in 0..12 {
+        event_ms += 8;
+        y -= 8.0;
+        shell.set_cursor_at_time(160.0, y, Some(event_ms));
+    }
+    // 8 points back down in the last sample, then the lift.
+    event_ms += 8;
+    y += 8.0;
+    shell.set_cursor_at_time(160.0, y, Some(event_ms));
+    shell.pointer_released_at_position_time(160.0, y, Some(event_ms));
+
+    let velocity = shell.debug_enter_app_context(cranpose_ui::debug_last_fling_velocity);
+    // Up is negative. An iOS scroll view gives the last move a twentieth of
+    // the weight: 0.95 * 1000 up and 0.05 * 1000 down leave 900 up.
+    assert!(
+        (velocity + 900.0).abs() < 20.0,
+        "an 8 point move back after 1,000 points a second flung at {velocity}"
+    );
+}
+
+// Lets `duration` of real time pass: the scroller times a move that carries
+// no event time by the clock.
+fn wait(duration: Duration) {
+    let until = Instant::now() + duration;
+    while Instant::now() < until {
+        std::thread::yield_now();
+    }
+}
+
+// A shell that passes no event time, as the web's did, handles the moves a
+// stalled frame held back one after another: the fling must follow the speed
+// the finger moved at, not the speed the moves were handled at.
+#[test]
+fn moves_handled_in_a_burst_fling_at_the_fingers_speed() {
+    let _guard = test_guard();
+    APP_SHELL_WHEEL_SCROLL_STATE.with(|slot| slot.borrow_mut().take());
+
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(
+        HitGraphRenderer::default(),
+        root_key,
+        app_shell_tall_fling_scroll_probe,
+    );
+    shell.set_buffer_size(320, 640);
+    shell.set_viewport(320.0, 640.0);
+    shell.update_at_frame_time_nanos(16_000_000);
+
+    shell.set_cursor(160.0, 600.0);
+    shell.pointer_pressed();
+    // The finger moves 8 points every 8 ms: 1,000 points a second.
+    let mut y = 600.0f32;
+    for _ in 0..6 {
+        wait(Duration::from_millis(8));
+        y -= 8.0;
+        shell.set_cursor(160.0, y);
+    }
+    // A frame stalls for 40 ms, then its five moves and the release arrive
+    // at once.
+    wait(Duration::from_millis(40));
+    for _ in 0..5 {
+        y -= 8.0;
+        shell.set_cursor(160.0, y);
+    }
+    shell.pointer_released();
+
+    let velocity = shell.debug_enter_app_context(cranpose_ui::debug_last_fling_velocity);
+    assert!(
+        velocity < -300.0 && velocity > -2_500.0,
+        "a finger at 1,000 points a second flung at {velocity} points a second"
+    );
+}
+
 #[test]
 fn two_finger_pinch_reaches_zoomable_state_through_shell() {
     let _guard = test_guard();

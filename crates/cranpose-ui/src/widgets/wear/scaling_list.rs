@@ -1027,11 +1027,10 @@ fn wear_scaling_list_input(
                                 }
                                 PointerEventKind::Up if pointer == Some(event.id) => {
                                     if dragging {
-                                        if let Some(time) = event.time_ms {
-                                            velocity.add_data_point(time, event.position.y);
-                                        }
-                                        let speed = -velocity
-                                            .calculate_velocity_with_max(MAX_FLING_VELOCITY);
+                                        let (y, cap) = (event.position.y, MAX_FLING_VELOCITY);
+                                        let speed = -event.time_ms.map_or(0.0, |at| {
+                                            velocity.release_velocity(at, y, cap)
+                                        });
                                         let fling_state = touch_state;
                                         fling.start_fling(
                                             0.0,

@@ -319,6 +319,15 @@ wall's tiles at the tier's size, as many as fit.
   neighbours change places every frame.
 - **Deep:** cells of 12 boxes nested inside one another around three digits;
   the digits of one row of cells change a frame.
+  Each box pads its content by 6% of a tile's height. From tier 16, where
+  a tile is 4 points tall, that is under half a device pixel on a 2x
+  display: 0.24 points. Compose puts each padding side on a whole device
+  pixel (`roundToPx`), and Cranpose does the same, so both draw such a nest
+  as its innermost box alone, with the digits at the cell's corner. The
+  Compose Desktop and the Cranpose apps show the same flat nests at tiers
+  16 and 17, and the same rings up to tier 15. Frameworks that keep
+  fractions of a pixel draw thin rings at every tier. The boxes and their
+  work are the same in both pictures.
 - **Scroll:** a list of rows of tiles, about 100,000 tiles long, that
   scrolls by one row a frame.
 - **Paragraph:** one paragraph of five-digit words, three for each tile of a
@@ -550,10 +559,14 @@ leaves it, then a second time. Every leg is one launch measured from its start
 command for 10 s (`--run`), the same span for every app, and keeps the frames
 of every second from the launch; the dashboard charts those seconds for every
 framework, the first starts and the second starts apart. A leg whose app
-presented fewer than 30 frames in each of 5 seconds in a row ends there,
+presented fewer than 10 frames in each of 5 seconds in a row ends there,
 marked `stopped`, on every harness, `ab.py` and `desktop.py` too: the rest of
 it would only repeat that the app is slow. Seconds in a row, not an average,
-so a slow start that the app then outruns does not end it. In Chrome a first start begins with
+so a slow start that the app then outruns does not end it. The line is 10 fps
+because an ended leg is a shorter span, in which the launch weighs more: with
+the line at 30 fps an app near it, as Cranpose and egui are on the wall at
+tier 20, reported about 25 fps from a whole leg and about 21 fps from an ended
+one. In Chrome a first start begins with
 Chrome's data cleared (`pm clear com.android.chrome`, then its first-run
 screen passed with "Stay signed out"): only that empties its compiled GPU
 programs, which DevTools' cache clearing and `pm trim-caches` leave. The
@@ -880,6 +893,26 @@ What each framework lacks and how its app does without:
 - zgui has no line clamp either: a box as tall as the lines clips the
   paragraph. It reads pictures by path or by registered bytes, so the avatars
   are PNG files in memory.
+- A leg with no result says why in the report, beside its failure: whether
+  the app was still running, whether it drew a frame, and the last line it
+  logged. The known ones on macm3:
+  - SwiftUI and Compose need 12 to 18 s to show the wall at tier 20, longer
+    than a 10 s leg, so the leg sees no window.
+  - Xilem's wall at tier 20 and Floem's gauntlet at tier 16 end when Vello
+    asks wgpu for a buffer binding of 201 MB, over the limit of 128 MB.
+    Xilem's patchwork at tier 17 opens a window and shows no content.
+  - Rune and BUI opened no window when the nightly's runner started their
+    programs directly, though they did from a terminal. `build_apps.sh` now
+    puts a bundle around each and `desktop.py` opens that, as Launch
+    Services starts apps.
+- Floem draws with Vello, whose buffers have a fixed size. Vello gave a black
+  window from about 14,900 painted tiles, so the app draws content that never
+  changes once into a picture: the wall's tiles and the patchwork's still and
+  chart patches. Its rate on those screens is the rate of showing that
+  picture. The gauntlet at tier 16 has no result on macm3: Vello asks wgpu for
+  a buffer binding of 201 MB, over the limit of 128 MB, and the app ends. At
+  tier 12 the gauntlet runs. Its list is a few rows off the other apps',
+  since Floem lays out text lines a little taller.
 - Fyne sizes an object before it knows its width, so the app wraps
   paragraphs and places every object itself, as Fyne's custom widgets do. It
   rotates no object: the badge stays upright. Its canvas has no path: the
