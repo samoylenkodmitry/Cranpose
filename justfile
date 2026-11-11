@@ -208,7 +208,7 @@ esp32-flash-e32r35t port: esp32-build-e32r35t
 # Compares revisions of the demo on a board, every screen over 4 placements
 # of the code, the base first: `just esp32-ab e32r35t origin/main HEAD`.
 # `--no-hot-code` among the revisions compares them with the hot-code lists
-# off, for a change that renames, inlines or removes listed functions.
+# off; `--null NAME` names the null leg and adds each screen's verdict.
 # `--port <port>` among the revisions names the board's serial port when
 # another device's name matches it. See benchmarks/esp32/README.md.
 esp32-ab board +args: _disk-guard
@@ -688,6 +688,7 @@ test-shell-helpers: _benchmark-python ci-contract-gates
     python3 benchmarks/compose-vs-cranpose/tests/test_run_samples.py
     python3 benchmarks/compose-vs-cranpose/tests/test_ab_decisions.py
     python3 benchmarks/compose-vs-cranpose/tests/test_desktop_accounting.py
+    python3 scripts/esp32/board_ab_test.py
     python3 benchmarks/compose-vs-cranpose/tests/test_display_state.py
     python3 benchmarks/compose-vs-cranpose/tests/test_adb_recovery.py
     python3 benchmarks/compose-vs-cranpose/tests/test_chrome_first_run.py

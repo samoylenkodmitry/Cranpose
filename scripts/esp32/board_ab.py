@@ -24,9 +24,24 @@ lists decide what is fast: the comparison that judges a change of the code a
 frame runs. A placement then shifts the whole of the flash code by a gap a
 seed picks.
 
+`--null REVISION` names the null leg among the revisions: the base with one
+function no code calls, which moves code and changes no behaviour. With it
+the last report gives each screen a tolerance, the larger of the timer's
+step and the largest difference of the null leg from the base, and each
+other revision a verdict: it loses when every placement reads above the base
+and the mean lies above the tolerance, wins on the mirror of that, holds
+when the mean lies inside the tolerance, and stays open otherwise.
+`--unpaired` is for sides whose order files differ, so that their placements
+are no pairs: a revision loses when all its readings lie above all of the
+base's. A run that lacks a screen, an instruction count or a placement
+decides nothing and exits with an error.
+
+A revision is a commit, or `NAME=COMMIT` to give its leg a name; one commit
+may run as two legs.
+
 Run it in the Xtensa Rust environment (`. ~/export-esp-1.98.1.sh`).
 
-Usage: board_ab.py --board e32r35t [--no-hot-code] BASE REVISION [REVISION...]
+Usage: board_ab.py --board e32r35t [--no-hot-code] [--null NAME] BASE REVISION [REVISION...]
 """
 
 import argparse
@@ -57,6 +72,8 @@ GAPS = 6
 # maps 3,342,304 bytes of flash code, of which the demo leaves about 15 KB,
 # so its gaps stay within a third of that.
 LARGEST_GAP = {"es3c35p": 4096, "e32r35t": 2048}
+# The boards' frame timer reads in steps of 0.01 ms.
+TIMER_STEP_MS = 0.01
 
 
 def git(*args, cwd=ROOT):
@@ -113,6 +130,7 @@ def build(tree, board, commit, placements, hot_code):
     out = tree / "target/esp32-ab" / f"{commit[:12]}-{board}{'' if hot_code else '-flash'}"
     elves = [out / f"p{seed}.elf" for seed in range(placements)]
     if all(elf.exists() for elf in elves):
+        distinct_images(commit, elves)
         return out, elves
     git("checkout", "--force", "--detach", commit, cwd=tree)
     out.mkdir(parents=True, exist_ok=True)
@@ -155,13 +173,23 @@ def build(tree, board, commit, placements, hot_code):
         else:
             shifted(seed, gaps, LARGEST_GAP[board])
         relink(out / "link", gaps, target)
+    distinct_images(commit, elves)
+    return out, elves
+
+
+def same_images(elves):
+    """Whether two of the images are one: a gap that moved no code."""
     hashes = [hashlib.sha256(elf.read_bytes()).hexdigest() for elf in elves]
-    if len(set(hashes)) != len(hashes):
-        # The next run links the placements again.
+    return len(set(hashes)) != len(hashes)
+
+
+def distinct_images(commit, elves):
+    """Stops the run when two placements of `commit` are one image, kept or
+    new, and drops them so that the next run links them again."""
+    if same_images(elves):
         for elf in elves[1:]:
             elf.unlink()
         sys.exit(f"two placements of {commit[:12]} are one image: the gaps moved no code")
-    return out, elves
 
 
 def run(board, port, out, elf, seconds):
@@ -208,6 +236,64 @@ def report(results, names):
     return "\n".join(lines)
 
 
+def incomplete(results, names, screens, placements):
+    """What a run lacks: a placement of a leg, one of its `screens` screens,
+    or a screen's instruction count. A run that lacks any decides nothing."""
+    lacks = []
+    seen = list(dict.fromkeys(screen for side in results.values() for run in side for screen in run))
+    if len(seen) != screens:
+        lacks.append(f"{len(seen)} screens reported, {screens} expected")
+    for name in names:
+        runs = results[name]
+        if len(runs) != placements:
+            lacks.append(f"{name}: {len(runs)} of {placements} placements")
+        for seed, run in enumerate(runs):
+            for screen in seen:
+                if screen not in run:
+                    lacks.append(f"{name}: placement {seed + 1} lacks {screen}")
+                elif run[screen][1] is None:
+                    lacks.append(f"{name}: placement {seed + 1} lacks the instructions of {screen}")
+    return lacks
+
+
+def verdict(mine, base, tolerance, paired):
+    """`mine`'s frame times against `base`'s on one screen, by the boards
+    rule."""
+    if not paired:
+        if min(mine) > max(base):
+            return "loses"
+        return "wins" if max(mine) < min(base) else "holds"
+    differences = [a - b for a, b in zip(mine, base)]
+    mean = sum(differences) / len(differences)
+    if all(difference > 0 for difference in differences) and mean > tolerance:
+        return "loses"
+    if all(difference < 0 for difference in differences) and mean < -tolerance:
+        return "wins"
+    return "holds" if abs(mean) <= tolerance else "open"
+
+
+def verdicts(results, names, null, paired):
+    """Each screen's tolerance and each revision's verdict on it. The
+    tolerance is the larger of the timer's step and the largest difference
+    of the null leg from the base."""
+    lines = []
+    screens = list(dict.fromkeys(screen for run in results[names[0]] for screen in run))
+    for screen in screens:
+        times = {name: [run[screen][0] for run in results[name]] for name in names}
+        base = times[names[0]]
+        tolerance = max([TIMER_STEP_MS, *(abs(a - b) for a, b in zip(times[null], base))])
+        calls = "  ".join(f"{name} {verdict(times[name], base, tolerance, paired)}"
+                          for name in names[1:] if name != null)
+        lines.append(f"{screen:9} tolerance {tolerance:.3f} ms  {calls}")
+    return "\n".join(lines)
+
+
+def leg(revision):
+    """A leg's name and commit from `NAME=COMMIT` or a bare commit."""
+    name, _, commit = revision.rpartition("=")
+    return (name or commit), git("rev-parse", commit)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--board", choices=board_run.BOARDS, required=True)
@@ -215,26 +301,38 @@ def main():
     parser.add_argument("--placements", type=int, default=4)
     parser.add_argument("--no-hot-code", action="store_true",
                         help="build with the hot-code lists off: all code runs from flash")
-    parser.add_argument("revisions", nargs="+", help="the base first, then the revisions to compare with it")
+    parser.add_argument("--null", help="the name of the null leg among the revisions")
+    parser.add_argument("--unpaired", action="store_true",
+                        help="the sides' order files differ: their placements are no pairs")
+    parser.add_argument("revisions", nargs="+",
+                        help="the base first, then the revisions to compare with it, each COMMIT or NAME=COMMIT")
     args = parser.parse_args()
     if len(args.revisions) < 2:
         sys.exit("give a base and at least one revision")
     port = args.port or board_run.one(board_run.BOARDS[args.board]["port"], "serial port")
-    commits = [git("rev-parse", revision) for revision in args.revisions]
+    legs = [leg(revision) for revision in args.revisions]
+    names = [name for name, _ in legs]
+    commits = [commit for _, commit in legs]
+    if len(set(names)) != len(names):
+        sys.exit("two legs share a name: give one of them NAME=COMMIT")
+    if args.null and args.null not in names[1:]:
+        sys.exit(f"the null leg {args.null} is not among the revisions after the base")
     tree = worktree(args.board)
     builds = {commit: build(tree, args.board, commit, args.placements, not args.no_hot_code)
               for commit in dict.fromkeys(commits)}
     screens = 4 + 4 * LARGE_SCREENS[args.board]
     seconds = screens * SCREEN_SECONDS + BOOT_SECONDS
-    names = list(dict.fromkeys(args.revisions))
-    if len(names) != len(args.revisions):
-        sys.exit("a revision is given twice")
     results = {name: [] for name in names}
     for seed in range(args.placements):
         for name, commit in zip(names, commits):
             out, elves = builds[commit]
             results[name].append(figures(run(args.board, port, out, elves[seed], seconds)))
         print(f"placement {seed + 1} of {args.placements}:\n{report(results, names)}\n", flush=True)
+    lacks = incomplete(results, names, screens, args.placements)
+    if lacks:
+        sys.exit("the run decides nothing:\n" + "\n".join(lacks))
+    if args.null:
+        print(f"verdicts against {names[0]}:\n{verdicts(results, names, args.null, not args.unpaired)}", flush=True)
 
 
 if __name__ == "__main__":
