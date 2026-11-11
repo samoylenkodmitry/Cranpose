@@ -7,10 +7,14 @@
 //! damage each frame reports holds every pixel the whole frames change, and
 //! a frame that moves the whole page draws the whole window.
 
-use std::{cell::RefCell, rc::Rc, sync::MutexGuard};
+use std::{
+    cell::RefCell,
+    rc::Rc,
+    sync::{Arc, MutexGuard},
+};
 
 use cranpose_app_shell::AppShell;
-use cranpose_core::{MutableState, NodeId, location_key};
+use cranpose_core::{MutableState, NodeId, location_key, remember};
 use cranpose_liquid::{Glass, GlassSurface};
 use cranpose_render_common::{
     Renderer,
@@ -19,7 +23,8 @@ use cranpose_render_common::{
 use cranpose_render_wgpu::{FrameDamage, RenderStatsSnapshot, WgpuRenderer};
 use cranpose_ui::{
     Alignment, Box, BoxSpec, Color, Column, ColumnSpec, ContentScale, GraphicsLayer, Image,
-    LayerShape, Modifier, RenderEffect, Row, RowSpec, Text, TextStyle, composable,
+    LayerShape, Modifier, RenderEffect, Row, RowSpec, Size, Text, TextStyle, composable,
+    space::{Camera, Mat4, Material, Mesh, MeshSurface, Scene3d, Vec3},
     text::{SpanStyle, TextUnit},
 };
 use cranpose_ui_graphics::{
@@ -41,6 +46,8 @@ const GLASS: [f32; 4] = [60.0, 80.0, 200.0, 100.0];
 const UPPER_GLASS: [f32; 4] = [140.0, 140.0, 140.0, 90.0];
 /// A spinner beside the glass, over the cards.
 const SPINNER: [f32; 4] = [180.0, 10.0, 24.0, 24.0];
+// A small 3D scene over the cards, below the glass.
+const TURNING_SCENE: [f32; 4] = [100.0, 220.0, 120.0, 120.0];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Scene {
@@ -82,6 +89,10 @@ enum Scene {
     // A box moving down a pixel a step, holding a card that casts an
     // elevation shadow: the reach of the moved box is not known.
     MovedCaster,
+    // A plane turning in a small 3D scene by a state its mesh surface's
+    // closure reads, as a globe spins: its record lies in the scene's space,
+    // whose reach is not known, so the frame may draw whole.
+    TurnedSurface,
 }
 
 /// A caret near the bottom, far from the spinner.
@@ -330,7 +341,8 @@ fn changing_box(scene: Scene, step: MutableState<u32>) -> Option<Modifier> {
         | Scene::MovedPage
         | Scene::MovedCaster
         | Scene::SpinnerAndCaret
-        | Scene::FiveSpots => return None,
+        | Scene::FiveSpots
+        | Scene::TurnedSurface => return None,
     })
 }
 
@@ -385,6 +397,7 @@ fn Changing(scene: Scene, step: MutableState<u32>) {
                 },
             );
         }
+        Scene::TurnedSurface => TurningSurface(step),
         Scene::Picture => {
             let picture = PICTURES.with(|pictures| pictures[(step.get() % 2) as usize].clone());
             Image(
@@ -414,6 +427,50 @@ fn Changing(scene: Scene, step: MutableState<u32>) {
             }
         }
     }
+}
+
+// The scene of `Scene::TurnedSurface`: a plane seen from 300 points away,
+// turned a fifth of a radian about the vertical a step.
+#[composable]
+fn TurningSurface(step: MutableState<u32>) {
+    let plane = remember(|| Arc::new(Mesh::plane())).with(Arc::clone);
+    Box(
+        rect_modifier(TURNING_SCENE)
+            .background(Color(0.1, 0.1, 0.16, 1.0))
+            .scene3d(|| Scene3d {
+                camera: Camera::look_at(
+                    Vec3::new(0.0, 0.0, -300.0),
+                    Vec3::ZERO,
+                    Vec3::new(0.0, 1.0, 0.0),
+                    300.0,
+                ),
+                light: None,
+                eye: None,
+            }),
+        BoxSpec::default(),
+        move || {
+            let plane = Arc::clone(&plane);
+            Box(
+                Modifier::empty()
+                    .required_size(Size {
+                        width: 64.0,
+                        height: 64.0,
+                    })
+                    .mesh_surface(move || MeshSurface {
+                        mesh: Arc::clone(&plane),
+                        transform: Mat4::translation(Vec3::new(-0.5, -0.5, 0.0))
+                            .then(&Mat4::scaling(Vec3::new(80.0, 80.0, 1.0)))
+                            .then(&Mat4::rotation_y(step.get() as f32 * 0.2)),
+                        material: Material::Unlit,
+                        casts_shadow: false,
+                        solid: true,
+                    })
+                    .background(Color(0.9, 0.6, 0.1, 1.0)),
+                BoxSpec::default(),
+                || {},
+            );
+        },
+    );
 }
 
 #[composable]
@@ -745,6 +802,7 @@ impl Scene {
             // A turned square reaches past its box by a fifth of its side.
             Self::TurnedLayer => around(SPOT, 12.0),
             Self::Spinner | Self::TurnedSpinner => around(SPINNER, 12.0),
+            Self::TurnedSurface => around(TURNING_SCENE, 8.0),
             _ => around(SPOT, 8.0),
         }
     }
@@ -855,7 +913,7 @@ fn assert_damage_holds_the_changes_at(scene: Scene, scale: f32, keeper: Keeper) 
                     matches!(damage, FrameDamage::Full | FrameDamage::Skipped),
                     "{label}: a frame moving the page changes most of the window"
                 );
-            } else if scene != Scene::MovedCaster {
+            } else if !matches!(scene, Scene::MovedCaster | Scene::TurnedSurface) {
                 assert_within(&label, damage, reach);
                 partial_frames += usize::from((1..whole).contains(&repainted));
             }
@@ -863,7 +921,10 @@ fn assert_damage_holds_the_changes_at(scene: Scene, scale: f32, keeper: Keeper) 
         before = Some(frame.direct);
     }
     assert!(
-        matches!(scene, Scene::MovedPage | Scene::MovedCaster) || partial_frames > 0,
+        matches!(
+            scene,
+            Scene::MovedPage | Scene::MovedCaster | Scene::TurnedSurface
+        ) || partial_frames > 0,
         "{scene:?} {keeper:?} at {scale}: no frame drew a part of the window"
     );
     assert!(
@@ -900,6 +961,11 @@ fn a_label_changing_text() {
 #[test]
 fn an_image_changing_bitmap() {
     assert_damage_holds_the_changes(Scene::Picture);
+}
+
+#[test]
+fn a_surface_turning_in_a_3d_scene() {
+    assert_damage_holds_the_changes(Scene::TurnedSurface);
 }
 
 #[test]

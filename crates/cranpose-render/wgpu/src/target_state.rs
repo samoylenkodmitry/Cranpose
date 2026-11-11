@@ -11,6 +11,7 @@ use cranpose_render_common::{
         BLUR_PIXEL_SLACK, JournalCursor, JournalEntry, JournalRead, Reach, RecordEvent,
         RecordEvents, SceneStore,
     },
+    space::scene_of,
 };
 use cranpose_ui_graphics::{Point, Rect};
 
@@ -603,9 +604,11 @@ impl TargetState {
     }
 
     // The area the target drew `record` in, as the target's areas say: that
-    // of its topmost ancestor drawn hidden or through a surface, else its
-    // own. A record gone from the store is found under `parent`; one whose
-    // parent went too lies in the area of that parent.
+    // of its topmost ancestor drawn hidden or through a surface, or that
+    // shows a scene, else its own. The walk keeps no area of a record in a
+    // scene's space, and a change there changes all the scene draws. A
+    // record gone from the store is found under `parent`; one whose parent
+    // went too lies in the area of that parent.
     fn area_of(
         &mut self,
         store: &SceneStore,
@@ -628,10 +631,17 @@ impl TargetState {
             current = store.parent(id);
         }
         for &ancestor in self.path.iter().rev() {
-            match self
+            let area = self
                 .shown(store.record_ref(ancestor))
-                .map(|shown| shown.area)
-            {
+                .map(|shown| shown.area);
+            if scene_of(store.layer(ancestor)).is_some() {
+                return match area {
+                    Some(Area::Drawn(pixels)) => Area::Composite(pixels),
+                    Some(area) => area,
+                    None => Area::Hidden,
+                };
+            }
+            match area {
                 Some(Area::Drawn(_) | Area::Unknown) => {}
                 Some(area) => return area,
                 // An ancestor new since the frame: the record moved under
