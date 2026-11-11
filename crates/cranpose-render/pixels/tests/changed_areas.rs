@@ -15,7 +15,7 @@ use cranpose_ui::{
     space::{Camera, Mat4, Material, Mesh, MeshSurface, Scene3d, Vec3},
 };
 use cranpose_ui_graphics::{
-    Brush, Color, ColorFilter, DrawScope, GraphicsLayer, Point, Stroke, StrokeCap, TAU,
+    Brush, Color, ColorFilter, DrawScope, GraphicsLayer, Point, Rect, Stroke, StrokeCap, TAU,
 };
 
 const WIDTH: u32 = 240;
@@ -718,6 +718,72 @@ fn kept_frames_match_full_redraws_while_a_surface_turned_in_depth_changes() {
     for every in [1, 2] {
         kept_frames_match_full_redraws_taken(1.0, Surfaces, every);
         kept_frames_match_full_redraws_taken(1.5, Surfaces, every);
+    }
+}
+
+// Two bars whose fills a draw callback draws: the first inside a clip of
+// its width every frame, the second inside a clip on two frames of three and
+// bare on the third, with a second clip inside the first on every fourth.
+#[composable]
+fn ClippedBars(captured: Step) {
+    let step = rememberMutableStateOf(|| 0u32);
+    *captured.borrow_mut() = Some(step);
+    let n = step.value();
+    Column(
+        Modifier::empty().fill_max_size(),
+        ColumnSpec::default(),
+        move || {
+            for bar in 0..2u32 {
+                cranpose_core::with_key(&bar, || {
+                    Box(
+                        Modifier::empty()
+                            .width(200.0)
+                            .height(16.0)
+                            .background(Color::from_rgb_u8(40, 44, 64))
+                            .draw_behind(move |scope| {
+                                let size = scope.size();
+                                let whole = Rect {
+                                    x: 0.0,
+                                    y: 0.0,
+                                    width: size.width,
+                                    height: size.height,
+                                };
+                                let shown = Rect {
+                                    width: 20.0 + (n * 13 % 170) as f32,
+                                    ..whole
+                                };
+                                let fill = Brush::solid(color(n, bar));
+                                if bar == 1 && n % 3 == 2 {
+                                    scope.draw_rect_at(shown, fill);
+                                    return;
+                                }
+                                scope.clip_rect(shown, &mut |scope| {
+                                    scope.draw_rect_at(whole, fill.clone());
+                                    if bar == 1 && n % 4 == 0 {
+                                        let inner = Rect {
+                                            height: size.height / 2.0,
+                                            ..whole
+                                        };
+                                        scope.clip_rect(inner, &mut |scope| {
+                                            scope.draw_rect_at(whole, Brush::solid(color(n, 7)));
+                                        });
+                                    }
+                                });
+                            }),
+                        BoxSpec::default(),
+                        || {},
+                    );
+                });
+            }
+        },
+    );
+}
+
+#[test]
+fn kept_frames_match_full_redraws_while_clipped_draws_change() {
+    for every in [1, 2] {
+        kept_frames_match_full_redraws_taken(1.0, ClippedBars, every);
+        kept_frames_match_full_redraws_taken(1.5, ClippedBars, every);
     }
 }
 

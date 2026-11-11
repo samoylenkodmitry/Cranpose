@@ -181,24 +181,27 @@ impl<'a> GroupedDraws<'a> {
         }
     }
 
+    // The wrapper of `segments` under `parent`: `kept`, the wrapper the
+    // command drew in before, or a new one.
     fn wrapper(
         &self,
         store: &mut SceneStore,
         parent: RecordId,
         segments: Range<u32>,
         size: Size,
+        kept: Option<RecordId>,
     ) -> Item {
         let first_group = self
             .recording
             .segments_in(&segments)
             .position(|segment| segment.lane == RecordLane::GroupStart)
             .map_or(segments.end, |offset| segments.start + offset as u32);
-        let wrapper = self.group_record(store, parent);
-        let mut list = store.lists.take();
-        list.push(store.add_run(self.run(segments.start..first_group)));
-        self.write(store, wrapper, &mut list, first_group, segments.end);
-        store.set_items(wrapper, &list);
-        store.lists.give(list);
+        let wrapper = kept.unwrap_or_else(|| self.group_record(store, parent));
+        self.write_record(store, wrapper, |draws, store, list, own| {
+            // The wrapper starts with a run, which names its command.
+            list.push(draws.run_item(store, own, segments.start..first_group));
+            draws.write(store, wrapper, (list, own), first_group, segments.end)
+        });
         assign_layer(
             store,
             wrapper,
@@ -217,11 +220,33 @@ impl<'a> GroupedDraws<'a> {
         record
     }
 
+    // Gives `record` the items `write` lists, which take the record's old
+    // items in their places; the old items none took go.
+    fn write_record(
+        &self,
+        store: &mut SceneStore,
+        record: RecordId,
+        write: impl FnOnce(&Self, &mut SceneStore, &mut Vec<Item>, &mut OwnDraws<'_>) -> u32,
+    ) -> u32 {
+        let mut old = store.lists.take();
+        old.extend_from_slice(store.items(record));
+        let mut list = store.lists.take();
+        let mut own = OwnDraws::of(&old, &[]);
+        let position = write(self, store, &mut list, &mut own);
+        store.set_items(record, &list);
+        own.finish(store);
+        // Its runs draw another recording, whether or not its items changed.
+        store.note_content_change(record);
+        store.lists.give(list);
+        store.lists.give(old);
+        position
+    }
+
     fn write(
         &self,
         store: &mut SceneStore,
         parent: RecordId,
-        list: &mut Vec<Item>,
+        (list, own): (&mut Vec<Item>, &mut OwnDraws<'_>),
         mut position: u32,
         end: u32,
     ) -> u32 {
@@ -231,25 +256,27 @@ impl<'a> GroupedDraws<'a> {
             let segment = segments[position as usize];
             match segment.lane {
                 RecordLane::GroupStart => {
-                    self.push_run(store, list, run_start..position);
-                    let record = self.group_record(store, parent);
-                    let mut nested = store.lists.take();
-                    position = self.write(store, record, &mut nested, position + 1, end);
-                    store.set_items(record, &nested);
-                    store.lists.give(nested);
+                    self.push_run(store, (list, own), run_start..position);
+                    let record = own
+                        .take(store, is_draw_group)
+                        .and_then(Item::as_child)
+                        .unwrap_or_else(|| self.group_record(store, parent));
+                    position = self.write_record(store, record, |draws, store, nested, inner| {
+                        draws.write(store, record, (nested, inner), position + 1, end)
+                    });
                     let group = self.recording.groups()[segment.start as usize];
                     assign_layer(store, record, self.head(&group));
                     list.push(Item::child(record));
                     run_start = position;
                 }
                 RecordLane::GroupEnd => {
-                    self.push_run(store, list, run_start..position);
+                    self.push_run(store, (list, own), run_start..position);
                     return position + 1;
                 }
                 RecordLane::Shapes | RecordLane::Others | RecordLane::Content => position += 1,
             }
         }
-        self.push_run(store, list, run_start..end);
+        self.push_run(store, (list, own), run_start..end);
         end
     }
 
@@ -262,9 +289,30 @@ impl<'a> GroupedDraws<'a> {
         )
     }
 
-    fn push_run(&self, store: &mut SceneStore, list: &mut Vec<Item>, segments: Range<u32>) {
+    // The run of `segments`: the run in its place, which takes the
+    // recording, or a new one.
+    fn run_item(
+        &self,
+        store: &mut SceneStore,
+        own: &mut OwnDraws<'_>,
+        segments: Range<u32>,
+    ) -> Item {
+        let Some(run) = own.take(store, |store, item| is_run_of(store, item, self.id)) else {
+            return store.add_run(self.run(segments));
+        };
+        store.swap_run_recording(run, Rc::clone(self.recording));
+        draw_segments(store, run, segments);
+        run
+    }
+
+    fn push_run(
+        &self,
+        store: &mut SceneStore,
+        (list, own): (&mut Vec<Item>, &mut OwnDraws<'_>),
+        segments: Range<u32>,
+    ) {
         if !segments.is_empty() {
-            list.push(store.add_run(self.run(segments)));
+            list.push(self.run_item(store, own, segments));
         }
     }
 
@@ -431,6 +479,21 @@ fn is_run_of(store: &SceneStore, item: Item, id: DrawCommandId) -> bool {
     item.kind() == ItemKind::Run && store.run(item).command == Some(id)
 }
 
+// Whether `item` is the record of a draw group.
+fn is_draw_group(store: &SceneStore, item: Item) -> bool {
+    item.as_child()
+        .is_some_and(|record| store.kind(record) == RecordKind::DrawGroup)
+}
+
+// Whether `item` is the wrapper the grouped command `id` drew in.
+fn is_wrapper_of(store: &SceneStore, item: Item, id: DrawCommandId) -> bool {
+    is_draw_group(store, item)
+        && item
+            .as_child()
+            .and_then(|record| store.items(record).first())
+            .is_some_and(|first| is_run_of(store, *first, id))
+}
+
 // The item of the overlay half of a with-content command, which draws its
 // segments of `shared`, the recording the behind half made: the run that
 // drew the half before takes the recording, else a new run does. A half
@@ -445,7 +508,7 @@ fn shared_item(
 ) -> Item {
     let segments = shared.content_split(DrawPlacement::Overlay);
     if opens_group(&shared, &segments) {
-        return grouped_item(store, node, (id, phase), &shared, segments);
+        return grouped_item(store, node, own, (id, phase), &shared, segments);
     }
     let Some(run) = own.take(store, |store, item| is_run_of(store, item, id)) else {
         return store.add_run(DrawRunNode::for_command_shared(
@@ -503,7 +566,7 @@ fn command_item(
     let Some(run) = own.take(store, |store, item| is_run_of(store, item, id)) else {
         let (recording, segments) = record_command(store, command, id, size)?;
         return Some(if opens_group(&recording, &segments) {
-            grouped_item(store, node, (id, phase), &recording, segments)
+            grouped_item(store, node, own, (id, phase), &recording, segments)
         } else {
             store.add_run(DrawRunNode::for_command_shared(
                 phase,
@@ -530,7 +593,14 @@ fn command_item(
         // The groups' runs take the recording; the run that held it goes.
         let recording = Rc::clone(&store.run(run).recording);
         store.remove_item(run);
-        return Some(grouped_item(store, node, (id, phase), &recording, segments));
+        return Some(grouped_item(
+            store,
+            node,
+            own,
+            (id, phase),
+            &recording,
+            segments,
+        ));
     }
     draw_segments(store, run, segments);
     Some(run)
@@ -615,22 +685,29 @@ fn record_command(
     })
 }
 
-// The layer a recording's draw groups take, in a wrapper under `parent`.
+// The layer a recording's draw groups take, in a wrapper under `parent`:
+// the wrapper in the draw's place, when the command drew in it before, takes
+// the groups.
 #[cold]
 #[inline(never)]
 fn grouped_item(
     store: &mut SceneStore,
     node: &NodeDraws<'_>,
+    own: &mut OwnDraws<'_>,
     (id, phase): (DrawCommandId, PrimitivePhase),
     recording: &Rc<CommandRecording>,
     segments: Range<u32>,
 ) -> Item {
     let draws = node.target;
+    let kept = own
+        .take(store, |store, item| is_wrapper_of(store, item, id))
+        .and_then(Item::as_child);
     GroupedDraws::new(store, id, phase, recording, draws).wrapper(
         store,
         node.parent,
         segments,
         draws.size,
+        kept,
     )
 }
 
