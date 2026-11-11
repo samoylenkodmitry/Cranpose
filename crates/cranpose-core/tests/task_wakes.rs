@@ -82,3 +82,58 @@ fn a_task_woken_from_another_thread_runs_after_polls_that_found_nothing() {
         "a stale wake keeps UI work pending"
     );
 }
+
+#[test]
+fn work_queued_by_a_resumed_task_runs_in_the_drain_that_resumed_it() {
+    let composition = Composition::new(MemoryApplier::new());
+    let runtime = composition.runtime_handle();
+    let signal = Signal::default();
+    let ran = Rc::new(Cell::new(false));
+    let queued = Rc::clone(&ran);
+    let waited = signal.clone();
+    let queue = runtime.clone();
+    let _task = runtime.spawn_ui(async move {
+        waited.await;
+        queue.enqueue_ui_task(Box::new(move || queued.set(true)));
+    });
+    // The task waits, and a drain with nothing queued runs nothing.
+    runtime.drain_ui();
+    assert!(!ran.get());
+    assert!(!runtime.has_pending_ui());
+
+    std::thread::spawn(move || signal.set())
+        .join()
+        .expect("the waking thread ends");
+    runtime.drain_ui();
+    assert!(
+        ran.get(),
+        "the resumed task's work waited for another drain"
+    );
+    assert!(!runtime.has_pending_ui());
+}
+
+#[test]
+fn a_queued_task_runs_while_a_stale_wake_is_all_that_else_waits() {
+    let composition = Composition::new(MemoryApplier::new());
+    let runtime = composition.runtime_handle();
+    let signal = Signal::default();
+    let waited = signal.clone();
+    let _task = runtime.spawn_ui(async move { waited.await });
+    runtime.drain_ui();
+    let late = signal.clone();
+    signal.set();
+    runtime.drain_ui();
+    // The finished task's waker wakes once more, then a task is queued that
+    // queues another: one drain runs both.
+    late.set();
+    let count = Rc::new(Cell::new(0));
+    let (first, second) = (Rc::clone(&count), Rc::clone(&count));
+    let queue = runtime.clone();
+    runtime.enqueue_ui_task(Box::new(move || {
+        first.set(first.get() + 1);
+        queue.enqueue_ui_task(Box::new(move || second.set(second.get() + 1)));
+    }));
+    runtime.drain_ui();
+    assert_eq!(count.get(), 2, "a queued task waited for another drain");
+    assert!(!runtime.has_pending_ui());
+}
