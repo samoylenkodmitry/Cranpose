@@ -414,11 +414,11 @@ impl RuntimeInner {
             .map_or(true, |tasks| tasks.contains(id))
     }
 
+    // Polls the woken tasks; the drain calls it once a wake is set. Without
+    // a wake no task can make progress, and the order stays. Out of line:
+    // the poll is large and most drains find no wake.
+    #[inline(never)]
     fn poll_async_tasks(&self) -> bool {
-        // Without a wake no task can make progress, and the order stays.
-        if !self.task_woken.load(Ordering::Acquire) {
-            return false;
-        }
         // The tasks still pending move to the front of `order`, which goes
         // back as the task order, after any task spawned while polling.
         let mut order = std::mem::take(&mut *self.task_order.borrow_mut());
@@ -489,13 +489,8 @@ impl RuntimeInner {
     fn drain_ui(&self) {
         #[cfg(any(target_os = "emscripten", target_os = "espidf"))]
         crate::concurrency::fire_due_alarms();
-        // A frame drains several times, and most drains find nothing.
-        while self.ui_dispatcher.has_pending()
-            || self.task_woken.load(Ordering::Acquire)
-            || !self.local_tasks.borrow().is_empty()
-        {
+        loop {
             let mut executed = false;
-
             // A message counts as pending from before it is sent until it
             // ran, so none waits while none is pending.
             if self.ui_dispatcher.has_pending() {
@@ -514,16 +509,20 @@ impl RuntimeInner {
                 }
             }
 
-            executed |= self.run_local_tasks();
-            executed |= self.poll_async_tasks();
-            // The tasks just polled may have queued work of their own, such
-            // as a state observer's change notice for a state they wrote. It
-            // belongs to this drain, or a frame that resumed an animation
-            // would draw the value it wrote only on the next frame. It does
-            // not count as progress: a task writing state on every poll must
-            // not keep the drain polling it.
-            self.run_local_tasks();
-
+            // Most drains find nothing: each queue is tested here before its call.
+            if !self.local_tasks.borrow().is_empty() {
+                executed |= self.run_local_tasks();
+            }
+            if self.task_woken.load(Ordering::Acquire) {
+                executed |= self.poll_async_tasks();
+                // The tasks just polled may have queued work of their own,
+                // such as a state observer's change notice for a state they
+                // wrote. It belongs to this drain, or a frame that resumed an
+                // animation would draw the value it wrote only on the next
+                // frame. It does not count as progress: a task writing state
+                // on every poll must not keep the drain polling it.
+                self.run_local_tasks();
+            }
             if !executed {
                 break;
             }
