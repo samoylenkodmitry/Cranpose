@@ -120,12 +120,11 @@ impl InPlaceUpdate<'_> {
                 continue;
             }
             match push_root(scene, store, id, roots) {
-                Ok(Some(root)) => roots.push(root),
+                Ok(Some(root)) => add_root(roots, root),
                 Ok(None) => {}
                 Err(Rebuild) => return None,
             }
         }
-        outermost(roots);
         let held = if reach.len() == scene.order.len() {
             UpdatedReach::Held
         } else {
@@ -155,27 +154,50 @@ impl InPlaceUpdate<'_> {
     }
 }
 
-// Sorts `roots` by their places and drops each that lies in the subtree of
-// another: that one's push draws it. The list is short, so it sorts in place
-// by insertion.
-fn outermost(roots: &mut Vec<PushRoot>) {
-    for sorted in 1..roots.len() {
-        let mut at = sorted;
-        while at > 0 && roots[at - 1].place > roots[at].place {
-            roots.swap(at - 1, at);
-            at -= 1;
-        }
+// Whether a root of `found` pushes the record at `place`: the roots lie
+// apart, in the order of their places. A store mostly names its records in
+// that order, so the last root answers for most.
+#[inline]
+fn pushed_by(found: &[PushRoot], place: usize) -> bool {
+    match found.last() {
+        None => false,
+        Some(last) if last.place <= place => place < last.end,
+        Some(_) => pushed_by_earlier(found, place),
     }
-    let (mut kept, mut end) = (0, 0);
-    for index in 0..roots.len() {
-        let root = roots[index];
-        if root.place >= end {
-            end = root.end;
-            roots[kept] = root;
-            kept += 1;
-        }
+}
+
+#[cold]
+#[inline(never)]
+fn pushed_by_earlier(found: &[PushRoot], place: usize) -> bool {
+    let after = found.partition_point(|root| root.place <= place);
+    after
+        .checked_sub(1)
+        .and_then(|before| found.get(before))
+        .is_some_and(|root| place < root.end)
+}
+
+// Adds `root` to `found` where its place puts it, in place of the roots
+// beneath it: its push draws them.
+#[inline]
+fn add_root(found: &mut Vec<PushRoot>, root: PushRoot) {
+    if found.last().is_none_or(|last| last.end <= root.place) {
+        found.push(root);
+    } else {
+        add_root_between(found, root);
     }
-    roots.truncate(kept);
+}
+
+#[cold]
+#[inline(never)]
+fn add_root_between(found: &mut Vec<PushRoot>, root: PushRoot) {
+    let at = found.partition_point(|other| other.place < root.place);
+    let beneath = found
+        .iter()
+        .skip(at)
+        .take_while(|other| other.place < root.end)
+        .count();
+    found.drain(at..at + beneath);
+    found.insert(at, root);
 }
 
 // The record whose subtree pushes again for the change of `record`, when one
@@ -201,10 +223,7 @@ fn push_root(
         };
         // A root found for an earlier change pushes the records beneath
         // it, this one among them.
-        if found
-            .iter()
-            .any(|root| (root.place..root.end).contains(&place))
-        {
+        if pushed_by(found, place) {
             return Ok(None);
         }
         let old = &scene.subtrees[place];
