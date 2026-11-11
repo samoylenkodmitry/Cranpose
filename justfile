@@ -476,8 +476,11 @@ _size-ceiling path max what:
 # of its spinner and the GIF decoder of its picture. The Music tab took it to
 # 14,480,645 bytes, about 237 KB: its composables and synth, the MIDI reader
 # with its 17 KB song, and the Web Audio backend. Its two rain shaders add
-# their WGSL sources, 27,026 bytes.
-web-size-budget: (_size-ceiling "apps/desktop-demo/pkg/desktop_app_bg.wasm" "14522000" "web demo wasm")
+# their WGSL sources, 27,026 bytes. The scene store of #2158 took it to
+# 14,535,956 bytes, about 30 KB over main's demo: the store's records, draw
+# specs, layer references, reach and content hashes. The owner allowed that
+# growth of 30 KB.
+web-size-budget: (_size-ceiling "apps/desktop-demo/pkg/desktop_app_bg.wasm" "14552000" "web demo wasm")
 
 # The ESP32-S3 app image after `just esp32-build`: 3.3 MiB, the image of
 # 2026-10-29 (3,366,944 bytes) and about 2.4%. The text engine of #1961 added
