@@ -188,6 +188,30 @@ build() {
     stamp "${paths[@]}" > "$kept.stamp"
 }
 
+# A bundle around a Rust app's program, in the app's build folder: the least
+# Launch Services needs to start it.
+bundled() {
+    local app=$1 program=perf-compare-$1
+    local bundle=$here/$app-app/build/$program.app
+    rm -rf "$bundle"
+    mkdir -p "$bundle/Contents/MacOS"
+    cp "$here/$app-app/target/release/$program" "$bundle/Contents/MacOS/$program"
+    cat > "$bundle/Contents/Info.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleExecutable</key><string>$program</string>
+    <key>CFBundleIdentifier</key><string>dev.perfcompare.$app</string>
+    <key>CFBundleName</key><string>$program</string>
+    <key>CFBundlePackageType</key><string>APPL</string>
+    <key>NSHighResolutionCapable</key><true/>
+</dict>
+</plist>
+PLIST
+    codesign --force --sign - "$bundle"
+}
+
 case $mode in
 desktop)
     flutter_ready
@@ -207,6 +231,12 @@ desktop)
         fi
         build "$app" "$app-app/target/release/perf-compare-$app" "${reads[@]}" -- \
             attempt "$app" cargo_app "$app-app"
+    done
+    # Rune and BUI open no window when a process outside the login session
+    # starts their programs, as the nightly's runner does: Launch Services
+    # starts a bundle, so desktop.py opens each from one.
+    for app in rune bui; do
+        bundled "$app"
     done
     build avalonia avalonia-app/bin/Release/net10.0/osx-arm64/publish avalonia-app shared-cs -- \
         attempt avalonia bash -c "cd '$here/avalonia-app' && dotnet publish -c Release -f net10.0 -p:TargetFrameworks=net10.0 -r osx-arm64"
