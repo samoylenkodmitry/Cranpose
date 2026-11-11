@@ -716,7 +716,7 @@ fn finish_translated_container(
     size: Size,
 ) {
     write_own_content_around_children(store, container, (&mut list, own), modifier_slices, size);
-    store.set_items(container, &list);
+    store.write_items(container, &list);
     store.lists.give(list);
     let hit_test = hit_test_from_slices(modifier_slices);
     store.set_hit_test(container, hit_test);

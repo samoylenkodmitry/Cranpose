@@ -40,7 +40,7 @@ fn write_layer(
     let flags = layer_flags(layer);
     let restyled = kept.is_some() && restyled(store, record, layer, layer_bounds, flags);
     store.set_content_offset(record, layer.content_offset);
-    store.set_size(record, layer.size.width, layer.size.height);
+    store.write_size(record, layer.size.width, layer.size.height);
     let origin = match kind {
         RecordKind::DrawGroup => layer
             .transform_to_parent
@@ -59,7 +59,7 @@ fn write_layer(
         props.isolation = layer.isolation;
         props.cache_policy = layer.cache_policy;
     });
-    store.set_flags(record, flags);
+    store.write_flags(record, flags);
     if restyled {
         store.note_property_change(record);
     }
@@ -169,7 +169,7 @@ fn write_items(store: &mut SceneStore, record: RecordId, children: &[RenderNode]
     if redrawn || store.items(record) != items.as_slice() {
         store.note_content_change(record);
     }
-    store.set_items(record, &items);
+    store.write_items(record, &items);
 }
 
 // Which of a record's items a walk over them reads.
@@ -245,7 +245,7 @@ fn write_leaf(
         RecordFlags::default()
     };
     let restyled = kept.is_some() && resized_or_flagged(store, record, inline.size, flags);
-    store.set_size(record, inline.size.width, inline.size.height);
+    store.write_size(record, inline.size.width, inline.size.height);
     let offset = store.content_offset(parent);
     let origin = Point::new(inline.origin.x - offset.x, inline.origin.y - offset.y);
     store.set_placement(
@@ -256,7 +256,7 @@ fn write_leaf(
             inline.origin.y,
         )),
     );
-    store.set_flags(record, flags);
+    store.write_flags(record, flags);
     if restyled {
         store.note_property_change(record);
     }

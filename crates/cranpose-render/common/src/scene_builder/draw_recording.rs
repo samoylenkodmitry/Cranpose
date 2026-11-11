@@ -233,7 +233,7 @@ impl<'a> GroupedDraws<'a> {
         let mut list = store.lists.take();
         let mut own = OwnDraws::of(&old, &[]);
         let position = write(self, store, &mut list, &mut own);
-        store.set_items(record, &list);
+        store.write_items(record, &list);
         own.finish(store);
         // Its runs draw another recording, whether or not its items changed.
         store.note_content_change(record);

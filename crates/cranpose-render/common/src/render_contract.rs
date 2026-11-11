@@ -386,7 +386,7 @@ fn build_fixture_with(
     let root = store.root().expect("a fixture has a root");
     let mut items = store.items(root).to_vec();
     items.extend(write(store, root));
-    store.set_items(root, &items);
+    store.write_items(root, &items);
     store.note_content_change(root);
     store.finish_update();
     fixture

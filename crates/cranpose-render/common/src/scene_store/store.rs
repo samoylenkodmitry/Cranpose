@@ -652,6 +652,16 @@ impl SceneStore {
     /// caller that changes the record's own draws notes it with
     /// [`Self::note_content_change`].
     pub fn set_items(&mut self, id: RecordId, items: &[Item]) {
+        if self.items.span(self.tree[id.index()].items) != items {
+            // The note stamps the record, so the write lists it once.
+            self.note_content_change(id);
+            self.write_items(id, items);
+        }
+    }
+
+    // Writes the items of `id` for the scene builder, which notes the
+    // change itself.
+    pub(crate) fn write_items(&mut self, id: RecordId, items: &[Item]) {
         self.replace_items(id, items);
         self.stale(id.index());
     }
@@ -776,6 +786,16 @@ impl SceneStore {
 
     /// Sets the flags of `id`.
     pub fn set_flags(&mut self, id: RecordId, flags: RecordFlags) {
+        let drawn = self.tree[id.index()].flags.only(RecordFlags::DRAWN);
+        self.write_flags(id, flags);
+        if self.tree[id.index()].flags.only(RecordFlags::DRAWN) != drawn {
+            self.note_property_change(id);
+        }
+    }
+
+    // Writes the flags of `id` for the scene builder, which notes the
+    // change itself.
+    pub(crate) fn write_flags(&mut self, id: RecordId, flags: RecordFlags) {
         let index = id.index();
         let current = self.tree[index].flags;
         let flags = flags
@@ -797,14 +817,24 @@ impl SceneStore {
     }
 
     /// Sets the node rect size of `id`.
-    #[inline]
     pub fn set_size(&mut self, id: RecordId, width: f32, height: f32) {
+        if self.write_size(id, width, height) {
+            self.note_property_change(id);
+        }
+    }
+
+    // Writes the node rect size of `id` for the scene builder, which notes
+    // the change itself; `false` when it stays.
+    #[inline]
+    pub(crate) fn write_size(&mut self, id: RecordId, width: f32, height: f32) -> bool {
         let index = id.index();
         let size = [width, height];
-        if !super::records::same_pair(self.geo[index].size, size) {
-            self.geo[index].size = size;
-            self.stale_with_parent(index);
+        if super::records::same_pair(self.geo[index].size, size) {
+            return false;
         }
+        self.geo[index].size = size;
+        self.stale_with_parent(index);
+        true
     }
 
     /// Sets what `id` draws for and the layout node it draws for.
@@ -829,6 +859,16 @@ impl SceneStore {
 
     /// Removes every item of `id`: its draws and the records beneath it.
     pub fn clear_items(&mut self, id: RecordId) {
+        if self.tree[id.index()].items.len() != 0 {
+            // The note stamps the record, so the removal lists it once.
+            self.note_content_change(id);
+            self.drop_items(id);
+        }
+    }
+
+    // Removes every item of `id` for the scene builder, which notes the
+    // change itself.
+    pub(crate) fn drop_items(&mut self, id: RecordId) {
         let index = id.index();
         let span = self.tree[index].items;
         if !super::facts::same_children(self.items.span(span), &[]) {

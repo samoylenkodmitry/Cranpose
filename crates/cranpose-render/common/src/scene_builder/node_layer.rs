@@ -186,7 +186,7 @@ pub(super) fn assign_layer(store: &mut SceneStore, record: RecordId, head: Layer
     store.set_kind(record, record_kind, Some(node));
     store.set_content_offset(record, content_offset);
     let size = node_bounds.unwrap_or(local_bounds);
-    store.set_size(record, size.width, size.height);
+    store.write_size(record, size.width, size.height);
     store.set_placement(record, origin_in_parent, Some(transform_to_parent));
     let space = graphics_layer
         .as_ref()
@@ -214,7 +214,7 @@ pub(super) fn assign_layer(store: &mut SceneStore, record: RecordId, head: Layer
         | flag_if(translated_content_context, RecordFlags::TRANSLATED_CONTENT)
         | flag_if(after_children, RecordFlags::AFTER_CHILDREN)
         | flag_if(has_origin_sinks, RecordFlags::ORIGIN_SINKS);
-    store.set_flags(record, flags);
+    store.write_flags(record, flags);
     store.note_property_change(record);
 }
 
@@ -233,7 +233,7 @@ pub(super) fn set_origin_sinks(
             modifier_slices_have_origin_sinks(slices),
             RecordFlags::ORIGIN_SINKS,
         );
-    store.set_flags(record, flags);
+    store.write_flags(record, flags);
 }
 
 #[inline]
@@ -244,7 +244,7 @@ pub(super) fn set_bounds(
     node_bounds: Option<Rect>,
 ) {
     let size = node_bounds.unwrap_or(local_bounds);
-    store.set_size(record, size.width, size.height);
+    store.write_size(record, size.width, size.height);
     store.set_layer_bounds(record, node_bounds.map(|_| local_bounds));
 }
 
@@ -422,7 +422,7 @@ fn write_layer_with_outer(
         begin_record(store, target, head.kind, head.content_offset);
         let mut list = store.lists.take();
         write_content(store, target, &mut list, head.graphics_layer.as_ref());
-        store.set_items(target, &list);
+        store.write_items(target, &list);
         store.lists.give(list);
         assign_layer(store, target, head);
         return;
@@ -441,7 +441,7 @@ fn write_layer_with_outer(
     begin_record(store, layer, head.kind, head.content_offset);
     let mut list = store.lists.take();
     write_content(store, layer, &mut list, head.graphics_layer.as_ref());
-    store.set_items(layer, &list);
+    store.write_items(layer, &list);
     store.lists.give(list);
     assign_layer(store, layer, head);
     write_wrapper(
@@ -713,7 +713,7 @@ pub(super) fn write_wrapper(
     } = outer;
     behind.push(Item::child(layer));
     behind.extend_from_slice(&overlay);
-    store.set_items(wrapper, &behind);
+    store.write_items(wrapper, &behind);
     store.lists.give(behind);
     store.lists.give(overlay);
     let head = LayerHead {
@@ -744,7 +744,7 @@ pub(super) fn take_wrapped_layer(
     let mut wrapped = None;
     let mut list = store.lists.take();
     list.extend_from_slice(store.items(wrapper));
-    store.set_items(wrapper, &[]);
+    store.write_items(wrapper, &[]);
     for &item in &list {
         match item.as_child() {
             Some(child)

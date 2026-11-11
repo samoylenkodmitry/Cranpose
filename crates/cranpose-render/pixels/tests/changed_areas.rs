@@ -1,14 +1,20 @@
 //! A frame kept by a host and redrawn only in the areas
-//! `PixelsRenderer::update_picture` reports stays equal to a full redraw, frame
-//! after frame, while content moves, resizes, changes color, text, alpha,
-//! shadow and stacking order, scrolls under a clip, appears and disappears,
-//! and arcs sweep.
+//! `PixelsRenderer::update_picture` reports stays equal to a full redraw while
+//! content moves, resizes, changes color, text, alpha, shadow and stacking
+//! order, scrolls under a clip, appears and disappears, arcs sweep, and one
+//! public setter of the scene store changes one record alone.
 
 use std::{cell::RefCell, rc::Rc, sync::Arc};
 
 use cranpose_app_shell::AppShell;
-use cranpose_core::{MutableState, location_key, rememberMovableContentOf, rememberMutableStateOf};
+use cranpose_core::{
+    MutableState, RecordId, location_key, rememberMovableContentOf, rememberMutableStateOf,
+};
 use cranpose_macros::composable;
+use cranpose_render_common::{
+    Renderer,
+    scene_store::{ItemRef, LayerRef, RecordFlags, SceneStore},
+};
 use cranpose_render_pixels::{Picture, PixelRect, PixelsRenderer};
 use cranpose_ui::{
     Box, BoxSpec, Column, ColumnSpec, Modifier, Size, Text, TextStyle,
@@ -1370,4 +1376,168 @@ fn many_changed_boxes_join_into_the_same_areas_frame_after_frame() {
         first,
     ];
     assert_eq!(seen, expected);
+}
+
+// A box that clips a wider child, beside a box of its own: records that a
+// write of the scene store changes alone.
+#[composable]
+fn ClippedPair(_captured: Step) {
+    Box(
+        Modifier::empty().fill_max_size(),
+        BoxSpec::default(),
+        || {
+            Box(
+                Modifier::empty()
+                    .offset(20.0, 20.0)
+                    .width(80.0)
+                    .height(60.0)
+                    .clip_to_bounds()
+                    .background(color(1, 2)),
+                BoxSpec::default(),
+                || {
+                    Box(
+                        Modifier::empty()
+                            .offset(10.0, 10.0)
+                            .width(120.0)
+                            .height(30.0)
+                            .background(color(3, 4)),
+                        BoxSpec::default(),
+                        || {},
+                    );
+                },
+            );
+            Box(
+                Modifier::empty()
+                    .offset(140.0, 100.0)
+                    .width(40.0)
+                    .height(40.0)
+                    .background(color(5, 6)),
+                BoxSpec::default(),
+                || {},
+            );
+        },
+    );
+}
+
+// The record of `ClippedPair` that draws `size`.
+fn record_of_size(store: &SceneStore, size: Size) -> RecordId {
+    fn find(layer: LayerRef<'_>, size: Size) -> Option<RecordId> {
+        if layer.size() == size {
+            return Some(layer.id());
+        }
+        layer.items().find_map(|item| match item {
+            ItemRef::Layer(child) | ItemRef::Leaf(child) => find(child, size),
+            _ => None,
+        })
+    }
+    let root = store.root_layer().expect("the scene has a root layer");
+    find(root, size).expect("a record draws that size")
+}
+
+const CLIP: Size = Size {
+    width: 80.0,
+    height: 60.0,
+};
+const SIDE: Size = Size {
+    width: 40.0,
+    height: 40.0,
+};
+
+// Draws `ClippedPair` into a kept frame, runs `write` alone in an update of
+// the scene's records, and asserts that the frame kept from the areas the
+// renderer reports equals a full redraw.
+fn a_store_write_alone_keeps_the_frame_whole(label: &str, write: impl FnOnce(&mut SceneStore)) {
+    let (mut shell, _) = shell(1.0, ClippedPair);
+    shell.update();
+    let mut picture = Picture::default();
+    let mut areas = Vec::new();
+    let mut kept = vec![0u8; (WIDTH * HEIGHT * 4) as usize];
+    let mut full = vec![0u8; (WIDTH * HEIGHT * 4) as usize];
+    let mut area_pixels = Vec::new();
+    shell.primary().with_renderer(|renderer| {
+        let mut keep = |renderer: &mut PixelsRenderer| {
+            renderer.update_picture(&mut picture, WIDTH, HEIGHT, 1.0, &mut areas);
+            for area in &areas {
+                area_pixels.resize(area.width as usize * area.height as usize * 4, 0);
+                renderer.draw_picture_area(&picture, *area, &mut area_pixels);
+                apply(&mut kept, *area, &area_pixels);
+            }
+        };
+        keep(renderer);
+        renderer.scene_mut().edit_store(write);
+        keep(renderer);
+        renderer.draw_scaled(&mut full, WIDTH, HEIGHT, 1.0);
+    });
+    assert_eq!(
+        first_difference(&kept, &full),
+        None,
+        "{label}: the kept frame differs from a full redraw at (x, y); areas {areas:?}"
+    );
+}
+
+#[test]
+fn a_record_resized_alone_redraws() {
+    a_store_write_alone_keeps_the_frame_whole("set_size", |store| {
+        let record = record_of_size(store, CLIP);
+        store.set_size(record, 50.0, 40.0);
+    });
+}
+
+#[test]
+fn a_record_unclipped_alone_redraws() {
+    a_store_write_alone_keeps_the_frame_whole("set_flags", |store| {
+        let record = record_of_size(store, CLIP);
+        let flags = store
+            .layer(record)
+            .flags()
+            .without(RecordFlags::CLIP_TO_BOUNDS);
+        store.set_flags(record, flags);
+    });
+}
+
+#[test]
+fn a_record_moved_alone_redraws() {
+    a_store_write_alone_keeps_the_frame_whole("set_placement", |store| {
+        let record = record_of_size(store, SIDE);
+        let origin = store.layer(record).origin_in_parent();
+        store.set_placement(record, Point::new(origin.x - 30.0, origin.y + 10.0), None);
+    });
+}
+
+#[test]
+fn a_record_whose_content_shifts_alone_redraws() {
+    a_store_write_alone_keeps_the_frame_whole("set_content_offset", |store| {
+        let record = record_of_size(store, CLIP);
+        store.set_content_offset(record, Point::new(-6.0, 8.0));
+    });
+}
+
+#[test]
+fn a_record_faded_alone_redraws() {
+    a_store_write_alone_keeps_the_frame_whole("set_graphics_layer", |store| {
+        let record = record_of_size(store, SIDE);
+        store.set_graphics_layer(
+            record,
+            Some(GraphicsLayer {
+                alpha: 0.5,
+                ..GraphicsLayer::default()
+            }),
+        );
+    });
+}
+
+#[test]
+fn a_record_emptied_alone_redraws() {
+    a_store_write_alone_keeps_the_frame_whole("clear_items", |store| {
+        let record = record_of_size(store, SIDE);
+        store.clear_items(record);
+    });
+}
+
+#[test]
+fn a_record_given_no_items_alone_redraws() {
+    a_store_write_alone_keeps_the_frame_whole("set_items", |store| {
+        let record = record_of_size(store, SIDE);
+        store.set_items(record, &[]);
+    });
 }

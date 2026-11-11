@@ -520,7 +520,7 @@ fn redraw_retained_layer(
             &data.modifier_slices,
             data.layout_state.size(),
         );
-        store.set_items(container, &list);
+        store.write_items(container, &list);
         own.finish(store);
         store.lists.give(list);
         parts.give_back(store);
@@ -725,7 +725,7 @@ fn note_space_change() {
 }
 
 fn release_for_rebuild(store: &mut SceneStore, record: RecordId) {
-    store.clear_items(record);
+    store.drop_items(record);
     store.set_hit_test(record, None);
 }
 

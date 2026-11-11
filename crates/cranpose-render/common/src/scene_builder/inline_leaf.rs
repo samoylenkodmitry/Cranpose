@@ -241,7 +241,7 @@ pub(super) fn update_dirty_inline(
             }
             return false;
         }
-        store.clear_items(record);
+        store.drop_items(record);
         write_placed_child(applier, store, record, node_id, data, context);
         remove_dirty_descendants(store, record, dirty_nodes);
         holds_hit_geometry(store.layer(record))
@@ -272,7 +272,7 @@ fn retext_inline(
         return false;
     }
     place_inline(store, record, data, context);
-    store.set_size(record, size.width, size.height);
+    store.write_size(record, size.width, size.height);
     store.note_content_change(record);
     true
 }
@@ -353,7 +353,7 @@ fn fold_leaf_layer(
             origin.y + parent_content_offset.y,
         )),
     );
-    store.set_flags(
+    store.write_flags(
         record,
         if animated {
             RecordFlags::MOTION_ANIMATED
