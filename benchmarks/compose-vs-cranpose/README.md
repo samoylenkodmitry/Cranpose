@@ -884,6 +884,14 @@ What each framework lacks and how its app does without:
 - zgui has no line clamp either: a box as tall as the lines clips the
   paragraph. It reads pictures by path or by registered bytes, so the avatars
   are PNG files in memory.
+- Floem draws with Vello, whose buffers have a fixed size. Vello gave a black
+  window from about 14,900 painted tiles, so the app draws content that never
+  changes once into a picture: the wall's tiles and the patchwork's still and
+  chart patches. Its rate on those screens is the rate of showing that
+  picture. The gauntlet at tier 16 has no result on macm3: Vello asks wgpu for
+  a buffer binding of 201 MB, over the limit of 128 MB, and the app ends. At
+  tier 12 the gauntlet runs. Its list is a few rows off the other apps',
+  since Floem lays out text lines a little taller.
 - Fyne sizes an object before it knows its width, so the app wraps
   paragraphs and places every object itself, as Fyne's custom widgets do. It
   rotates no object: the badge stays upright. Its canvas has no path: the
