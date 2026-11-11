@@ -5,7 +5,10 @@ use std::{cell::Cell, rc::Rc};
 
 use cranpose_core::{MutableState, rememberMutableStateOf};
 use cranpose_testing::create_headless_robot_test;
-use cranpose_ui::{Box, BoxSpec, Column, ColumnSpec, GraphicsLayer, Modifier, Point, Rect, Size};
+use cranpose_ui::{
+    AnimatedVisibility, Box, BoxSpec, Column, ColumnSpec, GraphicsLayer, Modifier, Point, Rect,
+    Size, slide_in_vertically, slide_out_vertically,
+};
 
 fn clicks_after_translation(in_popup: bool) -> (u32, u32) {
     let clicks = Rc::new(Cell::new(0));
@@ -93,4 +96,58 @@ fn a_tagged_control_is_found_where_its_layer_draws_it() {
     );
     assert!(robot.find_by_tag("moved").click());
     assert_eq!(clicks.get(), 1);
+}
+
+// Two controls slide in with `AnimatedVisibility`, from half their height
+// above their place. Once they rest, a click on each lands on it.
+#[test]
+fn a_click_reaches_each_control_that_slid_in() {
+    let clicks = Rc::new(Cell::new((0u32, 0u32)));
+    let counted = Rc::clone(&clicks);
+    let shown: Rc<Cell<Option<MutableState<bool>>>> = Rc::default();
+    let installed = Rc::clone(&shown);
+    let mut robot = create_headless_robot_test(300, 400, move || {
+        let state = rememberMutableStateOf(|| false);
+        installed.set(Some(state));
+        let counted = Rc::clone(&counted);
+        Column(Modifier::empty(), ColumnSpec::default(), move || {
+            Box(
+                Modifier::empty().size(Size::new(300.0, 100.0)),
+                BoxSpec::default(),
+                || {},
+            );
+            let counted = Rc::clone(&counted);
+            AnimatedVisibility(
+                state.get(),
+                slide_in_vertically(-0.5),
+                slide_out_vertically(-0.5),
+                move || {
+                    let (upper, lower) = (Rc::clone(&counted), Rc::clone(&counted));
+                    Column(Modifier::empty(), ColumnSpec::default(), move || {
+                        let (upper, lower) = (Rc::clone(&upper), Rc::clone(&lower));
+                        Box(
+                            Modifier::empty()
+                                .size(Size::new(100.0, 50.0))
+                                .clickable(move |_| upper.set((upper.get().0 + 1, upper.get().1))),
+                            BoxSpec::default(),
+                            || {},
+                        );
+                        Box(
+                            Modifier::empty()
+                                .size(Size::new(100.0, 50.0))
+                                .clickable(move |_| lower.set((lower.get().0, lower.get().1 + 1))),
+                            BoxSpec::default(),
+                            || {},
+                        );
+                    });
+                },
+            );
+        });
+    });
+    robot.wait_for_idle();
+    shown.get().expect("composed").set(true);
+    robot.wait_for_motion();
+    robot.click_at(50.0, 125.0);
+    robot.click_at(50.0, 175.0);
+    assert_eq!(clicks.get(), (1, 1));
 }

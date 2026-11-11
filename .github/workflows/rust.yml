@@ -422,6 +422,19 @@ jobs:
           name: webgl-smoke
           path: ${{ runner.temp }}/webgl-smoke
           retention-days: 3
+      - name: Play the Music tab of the web demo
+        id: music
+        if: ${{ !cancelled() && steps.provision.conclusion == 'success' && steps.changes.outputs.docs_only != 'true' && steps.memo.outputs.passed != 'true' }}
+        # A page renders its sound on the thread that draws it and schedules
+        # it through Web Audio, which no native check runs.
+        run: just web-music-check "$RUNNER_TEMP/web-demo" "$RUNNER_TEMP/music-check"
+      - name: Keep the Music check's screenshot and console
+        if: ${{ failure() && steps.music.conclusion == 'failure' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: music-check
+          path: ${{ runner.temp }}/music-check
+          retention-days: 3
 
       - name: Remember that this tree passed
         if: ${{ success() && steps.memo.outputs.passed != 'true' }}

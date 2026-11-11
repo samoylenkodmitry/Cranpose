@@ -50,6 +50,7 @@ mod lazy_scrollbar;
 mod liquid_ui;
 mod markdown;
 mod mineswapper2;
+pub mod music;
 pub(crate) mod net_image;
 pub mod performance_dashboard;
 pub mod pet;
@@ -89,7 +90,6 @@ pub use glass_tiles::{
 };
 pub use hacker_news::HACKER_NEWS_SCROLL_STABILITY_TARGET_TITLE;
 use hacker_news::{HackerNewsScrollStabilityFixtureTab, HackerNewsTab};
-use lazy_list::lazy_list_example;
 pub use liquid_ui::{
     set_tab_swipe_reference_page, LiquidReferenceFixture, LiquidReferenceFixtureCase,
     LIQUID_SCROLL_VIEWPORT_TAG, TAB_SWIPE_REFERENCE_STAGE_HEIGHT, TAB_SWIPE_REFERENCE_STAGE_WIDTH,

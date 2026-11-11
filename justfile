@@ -471,8 +471,11 @@ _size-ceiling path max what:
 # outline format, in place of ttf-parser's 125 KB. The Patchwork tab of #2165
 # (the nine patches of the comparison's third screen) took it to 14,051,422
 # bytes. The chat of that screen took it to 14,197,518 bytes: the SVG reader
-# of its spinner and the GIF decoder of its picture.
-web-size-budget: (_size-ceiling "apps/desktop-demo/pkg/desktop_app_bg.wasm" "14251794" "web demo wasm")
+# of its spinner and the GIF decoder of its picture. The Music tab took it to
+# 14,480,645 bytes, about 237 KB: its composables and synth, the MIDI reader
+# with its 17 KB song, and the Web Audio backend. Its two rain shaders add
+# their WGSL sources, 27,026 bytes.
+web-size-budget: (_size-ceiling "apps/desktop-demo/pkg/desktop_app_bg.wasm" "14522000" "web demo wasm")
 
 # The ESP32-S3 app image after `just esp32-build`: 3.3 MiB, the image of
 # 2026-10-29 (3,366,944 bytes) and about 2.4%. The text engine of #1961 added
@@ -868,7 +871,13 @@ web-webgpu-smoke site output:
 web-webgl-smoke site output:
     python3 scripts/a11y/web_robot.py --check webgl --site {{quote(site)}} --output {{quote(output)}}
 
-# Build and package the web demo, then open every page on WebGPU and on WebGL2.
+# Press Play on the Music tab of a packaged web demo in headless Chrome, muted,
+# and check the page schedules the piece through Web Audio.
+web-music-check site output:
+    python3 scripts/a11y/web_robot.py --check music --site {{quote(site)}} --output {{quote(output)}}
+
+# Build and package the web demo, then open every page on WebGPU and on WebGL2
+# and play the Music tab.
 web-backends: web
     #!/usr/bin/env bash
     set -euo pipefail
@@ -876,6 +885,7 @@ web-backends: web
     apps/desktop-demo/package-web.sh "$run/site"
     just web-webgpu-smoke "$run/site" "$run/webgpu"
     just web-webgl-smoke "$run/site" "$run/webgl"
+    just web-music-check "$run/site" "$run/music"
 
 test-web-ime-webdriver endpoint browser url output *args:
     python3 scripts/a11y/web_ime_robot.py --endpoint {{quote(endpoint)}} --browser {{quote(browser)}} --url {{quote(url)}} --output {{quote(output)}} {{args}}

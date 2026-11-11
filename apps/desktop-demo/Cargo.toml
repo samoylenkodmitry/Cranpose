@@ -35,20 +35,23 @@ required-features = ["ios"]
 default = ["renderer-wgpu", "desktop-http"]
 renderer-pixels = ["cranpose/renderer-pixels"]
 renderer-wgpu = ["cranpose/renderer-wgpu"]
-desktop = ["cranpose/desktop"]
+desktop = ["cranpose/desktop", "cranpose-audio/cpal-backend"]
 desktop-http = ["desktop", "cranpose-services/http-native"]
 ios = [
     "renderer-wgpu",
     "cranpose/ios",
+    "cranpose-audio/cpal-backend",
     "cranpose-services/http-native",
 ]
 android = [
     "cranpose/android",
     "cranpose/release-log-info",
+    "cranpose-audio/aaudio",
     "cranpose-services/http-native",
 ]
 web = [
     "cranpose/web",
+    "cranpose-audio/web-audio",
     "cranpose-services/web-http",
 ]
 # Enable real app robot testing
@@ -75,6 +78,10 @@ image = { version = "0.25.10", default-features = false, features = ["png", "jpe
 zip = { version = "9.2.0", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 cranpose-ui-graphics = { workspace = true }
 pulldown-cmark = { version = "0.13.6", default-features = false }
+# The Music tab: its synth renders through the audio backend, and it reads its
+# song from a MIDI file.
+cranpose-audio = { path = "../../crates/cranpose-audio", default-features = false }
+midly = { version = "0.5.3", default-features = false, features = ["alloc"] }
 
 # Non-WASM dependencies
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]

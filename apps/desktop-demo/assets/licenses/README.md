@@ -8,6 +8,17 @@ at revision `232dfe39588ccb2ec1e418458c7c11e5ceee3a4e`. Cranamp distributes the
 repository under Apache License 2.0; the full license is included here as
 `catamp-APACHE-2.0.txt`.
 
+## Clair de lune MIDI sequence
+
+The bundled `music/clair-de-lune.mid` is Claude Debussy's "Clair de lune" from
+the Suite bergamasque, sequenced by Bernd Krueger and published at
+[piano-midi.de](http://www.piano-midi.de) (edition 2011-08-20, copyright 1998
+by Bernd Krueger). The file is unchanged. Its author licenses it under
+[CC BY-SA 3.0 DE](https://creativecommons.org/licenses/by-sa/3.0/de/deed.en):
+copies and adaptations name Bernd Krueger and piano-midi.de and carry the same
+license. The Music tab shows this credit beside the title of the piece. The
+license covers this file and not the code of the demo.
+
 ## Remaining asset review
 
 - `TwemojiMozilla.ttf` embeds emoji artwork. Mozilla's source project records
