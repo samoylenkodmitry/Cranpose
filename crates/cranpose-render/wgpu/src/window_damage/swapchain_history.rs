@@ -53,16 +53,6 @@ impl SwapchainHistory {
         oldest
     }
 
-    /// Forgets what `image` holds: a frame the history does not follow
-    /// draws into it.
-    pub(crate) fn drop_image(&mut self, image: PresentedImage) {
-        self.see(image);
-        if let Some(held) = self.held.get_mut(image.index as usize) {
-            *held = None;
-        }
-        self.presented = None;
-    }
-
     fn see(&mut self, image: PresentedImage) {
         if let Some(bit) = 1u8.checked_shl(image.index) {
             self.seen |= bit;
@@ -100,7 +90,7 @@ impl SwapchainHistory {
         damages: &FrameDamages,
     ) -> Damage {
         let held = self.held.get(image.index as usize).copied().flatten();
-        let damage = damages.since(held, frame).damage;
+        let damage = damages.since(held.filter(|_| image.kept), frame).damage;
         let Damage::Part(mut rects) = damage else {
             return damage;
         };

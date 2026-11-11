@@ -41,6 +41,8 @@ pub(super) struct FrameDamagePlan {
     /// Whether the frame draws whole as the first of its target's frames
     /// whose frame before is known.
     pub(super) baseline: bool,
+    // Whether the target held no frame before this one.
+    pub(super) unheld: bool,
 }
 
 impl FrameDamagePlan {
@@ -81,6 +83,7 @@ impl FrameDamagePlan {
             damage: self.damage,
             skipped: packet.skipped,
             knew_before: !self.baseline,
+            unheld: self.unheld,
             cleared: matches!(self.keeper, Keeper::Cleared { .. })
                 || matches!(
                     root,

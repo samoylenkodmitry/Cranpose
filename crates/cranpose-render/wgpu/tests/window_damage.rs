@@ -97,14 +97,12 @@ const SPOTS: [[f32; 4]; 5] = [
 ];
 
 /// The frames a target draws whole before one can draw a part: the first,
-/// with nothing to compare with; one the back-off skips; and the next,
-/// summarized as the frame the one after compares with.
-const START_FRAMES: u32 = 3;
+/// with nothing to draw over.
+const START_FRAMES: u32 = 1;
 
-/// The frames a swapchain draws whole before one draws a part: its images
-/// first hold no frame, then the target's start frames, until the image of
-/// the last of those comes back.
-const SWAPCHAIN_START_FRAMES: u32 = 2 * SWAPCHAIN_IMAGES as u32 + START_FRAMES - 1;
+/// The frames a swapchain draws whole before one draws a part: one into
+/// each of its images, which first hold no frame.
+const SWAPCHAIN_START_FRAMES: u32 = SWAPCHAIN_IMAGES as u32;
 
 /// The frames in a row that change a small part of the window before the
 /// renderer keeps a copy of the frame for images that come cleared.
@@ -1261,6 +1259,41 @@ fn a_light_page_draws_whole_into_images_that_come_cleared() {
         summarized <= 4,
         "{summarized} of {FRAMES} frames summarized"
     );
+}
+
+// The frames of `keeper`'s first `frames` steps that draw the whole window,
+// each step changing a small part of the page.
+fn whole_frames_at_a_start(keeper: Keeper, frames: u32) -> Option<u32> {
+    let (_lock, renderer) = renderer()?;
+    let mut harness = Harness::new(renderer, Scene::Shape, 1.0, keeper);
+    let whole = u64::from(WIDTH * HEIGHT);
+    let mut drawn_whole = 0;
+    for step in 0..frames {
+        let frame = harness.frame(step);
+        let label = format!("step {step}: {:?}", frame.stats);
+        support::assert_same_bytes(&label, WIDTH, &frame.kept, &frame.direct);
+        drawn_whole += u32::from(frame.stats.repainted_pixels == whole);
+    }
+    Some(drawn_whole)
+}
+
+/// A window draws whole once into each image of its swapchain, as each
+/// arrives holding no frame; every frame after draws what it changes.
+#[test]
+fn a_start_draws_each_swapchain_image_whole_once() {
+    let frames = 4 * SWAPCHAIN_START_FRAMES;
+    if let Some(drawn_whole) = whole_frames_at_a_start(Keeper::Swapchain(DIRECT), frames) {
+        assert_eq!(drawn_whole, SWAPCHAIN_START_FRAMES);
+    }
+}
+
+/// A target that keeps its frame draws whole once, with nothing to draw
+/// over; every frame after draws what it changes.
+#[test]
+fn a_start_draws_a_kept_target_whole_once() {
+    if let Some(drawn_whole) = whole_frames_at_a_start(Keeper::Composition, 8) {
+        assert_eq!(drawn_whole, START_FRAMES);
+    }
 }
 
 /// Once every image of a swapchain holds the frame, a frame that changes

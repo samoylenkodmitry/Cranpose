@@ -228,6 +228,9 @@ pub(crate) struct TargetDrawn {
     pub(crate) skipped: bool,
     /// Whether the packet knew the frame before it.
     pub(crate) knew_before: bool,
+    // Whether the target held no frame, so it took this one whole for its
+    // own sake.
+    pub(crate) unheld: bool,
     /// Whether the target is images that come cleared, whose frames the
     /// renderer's copy keeps.
     pub(crate) cleared: bool,
@@ -519,12 +522,18 @@ impl TargetState {
             }
         }
         self.full_frames = self.full_frames.saturating_add(1);
+        // A target that held no frame took this one whole for its own sake:
+        // the skips start with the second such frame in a row.
+        let run = self.full_frames - u32::from(drawn.unheld);
+        if run == 0 {
+            return;
+        }
         let first = if drawn.cleared {
             COPY_HOLD_OFF.trailing_zeros()
         } else {
             0
         };
-        let doublings = 2 * (self.full_frames - 1) + first;
+        let doublings = 2 * (run - 1) + first;
         self.skipped = 1u32 << doublings.min(MAX_SKIPPED.trailing_zeros());
         self.stale = true;
         if self.skipped >= RELEASE_SKIPS {

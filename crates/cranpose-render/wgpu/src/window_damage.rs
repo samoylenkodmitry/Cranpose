@@ -370,6 +370,9 @@ pub(crate) struct Held {
 pub(crate) struct Since {
     pub(crate) damage: Damage,
     pub(crate) baseline: bool,
+    // Whether the target held no frame, so the frame draws whole for the
+    // target's sake, whatever it changes.
+    pub(crate) unheld: bool,
 }
 
 /// The damages of the packets the renderer took last, by frame.
@@ -404,6 +407,7 @@ impl FrameDamages {
         let changed = |damage| Since {
             damage,
             baseline: false,
+            unheld: false,
         };
         if self
             .noted(frame.packet.frame_id)
@@ -411,11 +415,15 @@ impl FrameDamages {
         {
             return changed(Damage::Skipped);
         }
-        let Some(held) =
-            held.filter(|held| (held.setting, held.viewport) == (frame.setting, frame.viewport))
-        else {
-            return changed(Damage::Full);
+        let Some(held) = held else {
+            return Since {
+                unheld: true,
+                ..changed(Damage::Full)
+            };
         };
+        if (held.setting, held.viewport) != (frame.setting, frame.viewport) {
+            return changed(Damage::Full);
+        }
         match self.union_back(frame.packet.frame_id, held.frame) {
             Ok(union) => changed(Damage::Part(union)),
             Err(since) => since,
@@ -429,6 +437,7 @@ impl FrameDamages {
         let unknown = |baseline| Since {
             damage: Damage::Full,
             baseline,
+            unheld: false,
         };
         // A frame that changed nothing against the one before is that one.
         let mut held_frame = held;

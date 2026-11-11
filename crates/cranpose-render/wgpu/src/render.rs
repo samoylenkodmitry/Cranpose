@@ -1875,6 +1875,7 @@ impl GpuRenderer {
             keeper,
             held,
             baseline: since.baseline,
+            unheld: since.unheld,
         };
         match frame_root {
             FrameRoot::Composition { composition, .. }
@@ -1932,15 +1933,10 @@ impl GpuRenderer {
                     }
                 };
                 self.swapchain.begin(surface_epoch);
-                if !image.kept {
-                    // Drawn whole, and only a frame a lap of images later
-                    // could draw over it.
-                    self.swapchain.drop_image(image);
-                    return None;
-                }
                 // The frame changes what the frame presented last showed by
                 // its damage; it draws over what its image holds by the
-                // damages since that image's frame.
+                // damages since that image's frame, and whole into an image
+                // that comes without the frame it held.
                 let damage = self.swapchain.presented_damage(&frame, &self.frame_damages);
                 let held = self
                     .swapchain

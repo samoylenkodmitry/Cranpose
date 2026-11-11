@@ -41,7 +41,12 @@ impl ClearedImages {
             } else {
                 Damage::Skipped
             };
-            return (Since { damage, baseline }, false);
+            let since = Since {
+                damage,
+                baseline,
+                unheld: false,
+            };
+            return (since, false);
         }
         let since = self.copied_damage(damages, self.kept, frame);
         if !matches!(since.damage, Damage::Part(_)) {
