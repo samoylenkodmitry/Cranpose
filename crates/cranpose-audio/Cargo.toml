@@ -25,10 +25,11 @@ log = "0.4"
 parking_lot = "0.12.5"
 
 [features]
-# The AAudio output device. Costs nothing off Android: `ndk` is only declared
-# for the Android target, and cranpose already depends on it there.
+# The AAudio output device. Costs nothing off Android: `libc` is only declared
+# for the Android target. AAudio is found when the first stream opens, so an
+# app links on any `minSdk` and runs silent on an Android older than 8.0.
 default = ["aaudio", "avaudio"]
-aaudio = ["dep:ndk"]
+aaudio = ["dep:libc"]
 # The AVAudioEngine output device on watchOS. Costs nothing elsewhere: its
 # dependencies are only declared for the watchOS target.
 avaudio = [
@@ -47,7 +48,7 @@ cpal-backend = ["dep:cpal"]
 web-audio = ["dep:wasm-bindgen", "dep:web-sys"]
 
 [target.'cfg(target_os = "android")'.dependencies]
-ndk = { version = "0.9.0", default-features = false, features = ["audio"], optional = true }
+libc = { version = "0.2", optional = true }
 
 [target.'cfg(target_os = "watchos")'.dependencies]
 objc2 = { version = "0.6", optional = true }
