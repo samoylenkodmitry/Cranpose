@@ -215,13 +215,18 @@ impl PlainLayoutFns {
         }
     }
 
-    /// Writes into `prepared` the words of the element `words` hold as a
-    /// coordinator keeps it for the measures `at` tells; see
-    /// [`PlainLayout::prepared`]. The other calls take prepared words.
-    pub fn prepare(&self, words: &[u32], at: PrepareAt, prepared: &mut [u32; PLAIN_WORDS_MAX]) {
+    /// The words of the element `words` hold as a coordinator keeps it for
+    /// the measures `at` tells; see [`PlainLayout::prepared`]. The other
+    /// calls take prepared words.
+    #[inline]
+    pub fn prepare(&self, words: &[u32; PLAIN_WORDS_MAX], at: PrepareAt) -> [u32; PLAIN_WORDS_MAX] {
         match self.prepare {
-            Some(prepare) => prepare(words, at, prepared),
-            None => prepared[..words.len()].copy_from_slice(words),
+            Some(prepare) => {
+                let mut prepared = [0; PLAIN_WORDS_MAX];
+                prepare(words, at, &mut prepared);
+                prepared
+            }
+            None => *words,
         }
     }
 

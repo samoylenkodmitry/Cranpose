@@ -168,7 +168,7 @@ enum Source {
 // The layout modifier at an entry of a chain, as a walk reads it.
 enum Found<'a> {
     Node(&'a Rc<RefCell<dyn cranpose_foundation::ModifierNode>>),
-    Plain(Option<&'static PlainLayoutFns>, &'a [u32]),
+    Plain(Option<&'static PlainLayoutFns>, &'a [u32; PLAIN_WORDS_MAX]),
 }
 
 impl<'a> Found<'a> {
@@ -176,8 +176,8 @@ impl<'a> Found<'a> {
         match chain.get_node_rc(index) {
             Some(node) => Some(Self::Node(node)),
             None => chain
-                .plain_words(index)
-                .map(|(fns, words)| Self::Plain(fns.layout(), words)),
+                .plain_layout(index)
+                .map(|(layout, words)| Self::Plain(layout, words)),
         }
     }
 
@@ -196,14 +196,10 @@ impl<'a> Found<'a> {
 // measures `at` tells.
 fn prepared(
     layout: Option<&'static PlainLayoutFns>,
-    words: &[u32],
+    words: &[u32; PLAIN_WORDS_MAX],
     at: PrepareAt,
 ) -> [u32; PLAIN_WORDS_MAX] {
-    let mut all = [0; PLAIN_WORDS_MAX];
-    if let Some(layout) = layout {
-        layout.prepare(words, at, &mut all);
-    }
-    all
+    layout.map_or([0; PLAIN_WORDS_MAX], |layout| layout.prepare(words, at))
 }
 
 impl CoordinatorNode {
@@ -221,7 +217,7 @@ impl CoordinatorNode {
     // whose entries stand where the last walk found them.
     fn read_plain(&mut self, chain: &cranpose_foundation::ModifierNodeChain, at: PrepareAt) {
         if let Source::Plain { layout, words } = &mut self.source
-            && let Some((_, found)) = chain.plain_words(self.modifier_index)
+            && let Some((_, found)) = chain.plain_layout(self.modifier_index)
         {
             *words = prepared(*layout, found, at);
         }

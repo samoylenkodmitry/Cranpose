@@ -5,7 +5,7 @@ use std::{cell::RefCell, rc::Rc};
 
 use super::{
     DynModifierElement, EntryElement, HeldElement, ModifierNode, NodeCapabilities, NodeMaker,
-    PLAIN_WORDS_MAX, PlainFns, PlainValue, detach_node_tree,
+    PLAIN_WORDS_MAX, PlainFns, PlainLayoutFns, PlainValue, detach_node_tree,
 };
 
 // One element of a chain as the chain keeps it. The element's hash, which
@@ -96,6 +96,17 @@ impl ModifierNodeEntry {
     pub(super) fn plain_words(&self) -> Option<(&'static PlainFns, &[u32])> {
         match self {
             Self::Plain { fns, words, .. } => Some((fns, &words[..fns.words()])),
+            Self::Node { .. } => None,
+        }
+    }
+
+    // How a plain entry's element measures, with every word of the entry:
+    // the words past the element's own are zero.
+    pub(super) fn plain_layout(
+        &self,
+    ) -> Option<(Option<&'static PlainLayoutFns>, &[u32; PLAIN_WORDS_MAX])> {
+        match self {
+            Self::Plain { fns, words, .. } => Some((fns.layout(), words)),
             Self::Node { .. } => None,
         }
     }

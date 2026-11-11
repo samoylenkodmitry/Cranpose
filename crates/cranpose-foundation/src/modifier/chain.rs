@@ -761,6 +761,16 @@ impl ModifierNodeChain {
         self.entries.get(index)?.plain_words()
     }
 
+    /// How the plain element at `index` measures, with every word of its
+    /// entry: the words past the element's own are zero.
+    #[inline]
+    pub fn plain_layout(
+        &self,
+        index: usize,
+    ) -> Option<(Option<&'static PlainLayoutFns>, &[u32; PLAIN_WORDS_MAX])> {
+        self.entries.get(index)?.plain_layout()
+    }
+
     /// The value of the plain element at `index`, when it is an `E`.
     #[inline]
     pub fn plain<E: PlainElement>(&self, index: usize) -> Option<E> {

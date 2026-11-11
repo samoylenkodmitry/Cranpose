@@ -489,7 +489,11 @@ impl RuntimeInner {
     fn drain_ui(&self) {
         #[cfg(any(target_os = "emscripten", target_os = "espidf"))]
         crate::concurrency::fire_due_alarms();
-        loop {
+        // A frame drains several times, and most drains find nothing.
+        while self.ui_dispatcher.has_pending()
+            || self.task_woken.load(Ordering::Acquire)
+            || !self.local_tasks.borrow().is_empty()
+        {
             let mut executed = false;
 
             // A message counts as pending from before it is sent until it
@@ -510,13 +514,8 @@ impl RuntimeInner {
                 }
             }
 
-            if self.run_local_tasks() {
-                executed = true;
-            }
-
-            if self.poll_async_tasks() {
-                executed = true;
-            }
+            executed |= self.run_local_tasks();
+            executed |= self.poll_async_tasks();
             // The tasks just polled may have queued work of their own, such
             // as a state observer's change notice for a state they wrote. It
             // belongs to this drain, or a frame that resumed an animation
