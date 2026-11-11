@@ -48,6 +48,7 @@ fn flag_if(on: bool, flag: RecordFlags) -> RecordFlags {
     if on { flag } else { RecordFlags::default() }
 }
 
+#[expect(clippy::multiple_inherent_impl, reason = "one file per concern")]
 impl SceneStore {
     // Writes `head` as the head of `record` and notes a property change.
     pub(crate) fn write_head(&mut self, record: RecordId, head: LayerHead) {
