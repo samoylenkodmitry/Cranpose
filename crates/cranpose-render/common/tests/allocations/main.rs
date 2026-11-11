@@ -336,35 +336,44 @@ fn recordings(layer: LayerRef<'_>, held: &mut Vec<Rc<CommandRecording>>) {
     }
 }
 
-// A node that draws behind its content and then around it, drawn again
-// each update while a reader holds the recordings of the update before, as
-// a picture does: each new recording takes the storage of one the reader
-// let go of, so a steady update allocates nothing.
-fn a_node_drawn_around_its_content_reuses_its_recordings() {
+// A node that draws behind its content and then around it.
+fn drawn_around_content(modifier: Modifier, width: Rc<Cell<f32>>) -> Modifier {
+    modifier
+        .draw_behind(|scope| {
+            let bounds = Rect::from_size(scope.size());
+            scope.draw_round_rect_at(bounds, Brush::solid(Color::RED), CornerRadii::uniform(4.0));
+        })
+        .draw_with_content(move |scope| {
+            scope.draw_content();
+            let bar = Rect::from_size(Size::new(width.get(), 16.0));
+            scope.draw_round_rect_at(bar, Brush::solid(Color::BLUE), CornerRadii::uniform(4.0));
+        })
+}
+
+// A node that draws inside a clip, which the scene places as a draw group.
+fn drawn_inside_a_clip(modifier: Modifier, width: Rc<Cell<f32>>) -> Modifier {
+    modifier.draw_behind(move |scope| {
+        let bounds = Rect::from_size(scope.size());
+        let shown = Rect::from_size(Size::new(width.get(), 16.0));
+        scope.clip_rect(shown, &mut |scope| {
+            scope.draw_round_rect_at(bounds, Brush::solid(Color::BLUE), CornerRadii::uniform(4.0));
+        });
+    })
+}
+
+// A node with the draws of `draws`, drawn again each update while a reader
+// holds the recordings of the update before, as a picture does: each new
+// recording takes the storage of one the reader let go of, so a steady
+// update allocates nothing.
+fn redraws_reuse_their_recordings(draws: fn(Modifier, Rc<Cell<f32>>) -> Modifier, what: &str) {
     let width = Rc::new(Cell::new(10.0f32));
     let drawn = Rc::clone(&width);
     let mut composition = cranpose_ui::run_test_composition(move || {
-        let drawn = Rc::clone(&drawn);
         Box(
-            Modifier::empty()
-                .size(Size::new(64.0, 16.0))
-                .draw_behind(|scope| {
-                    let bounds = Rect::from_size(scope.size());
-                    scope.draw_round_rect_at(
-                        bounds,
-                        Brush::solid(Color::RED),
-                        CornerRadii::uniform(4.0),
-                    );
-                })
-                .draw_with_content(move |scope| {
-                    scope.draw_content();
-                    let bar = Rect::from_size(Size::new(drawn.get(), 16.0));
-                    scope.draw_round_rect_at(
-                        bar,
-                        Brush::solid(Color::BLUE),
-                        CornerRadii::uniform(4.0),
-                    );
-                }),
+            draws(
+                Modifier::empty().size(Size::new(64.0, 16.0)),
+                Rc::clone(&drawn),
+            ),
             BoxSpec::default(),
             || {},
         );
@@ -399,8 +408,8 @@ fn a_node_drawn_around_its_content_reuses_its_recordings() {
     let allocations = region.change().allocations;
     drop(held);
     applier.clear_runtime_handle();
-    println!("allocations of {PASSES} redraws around content: {allocations}");
-    assert_eq!(allocations, 0, "a redraw around content allocates");
+    println!("allocations of {PASSES} redraws {what}: {allocations}");
+    assert_eq!(allocations, 0, "a redraw {what} allocates");
 }
 
 /// One test, so no other test's allocations land in these regions: the
@@ -411,7 +420,8 @@ fn scene_rebuilds_stay_within_their_allocation_budgets() {
     updating_one_cell_reuses_the_dirty_node_map();
     a_row_scrolling_in_reuses_the_row_that_scrolled_out();
     a_text_changing_each_frame_reuses_its_string_and_layout();
-    a_node_drawn_around_its_content_reuses_its_recordings();
+    redraws_reuse_their_recordings(drawn_around_content, "around content");
+    redraws_reuse_their_recordings(drawn_inside_a_clip, "inside a clip");
 }
 
 main_thread_test!(scene_rebuilds_stay_within_their_allocation_budgets);
