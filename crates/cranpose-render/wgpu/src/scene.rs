@@ -292,6 +292,15 @@ impl RunDraw {
     pub(crate) fn record_count(&self) -> u32 {
         self.records
     }
+
+    // Whether every record of the run is a rect or a rounded rect, filled or
+    // stroked: no line, path slice or arc.
+    pub(crate) fn holds_only_rects(&self) -> bool {
+        const RECTS: u8 = (1 << cranpose_ui_graphics::FRAGMENT_KIND_FILL)
+            | (1 << cranpose_ui_graphics::FRAGMENT_KIND_STROKE);
+        self.segment_records()
+            .all(|segment| segment.kinds & !RECTS == 0)
+    }
 }
 
 /// The primitives a layer pushes one by one, recorded together under the

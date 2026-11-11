@@ -651,6 +651,12 @@ fn push_label(scene: &mut CompositorScene, x: f32, color: Color, clip: Option<Re
 /// Draws `scene` into a 128×32 target; the target's pixels and the draws
 /// the pass issued.
 fn draw_scene(renderer: &mut GpuRenderer, scene: &CompositorScene) -> (Vec<u8>, u32) {
+    draw_scenes(renderer, &[scene])
+}
+
+// Draws `scenes` into one 128×32 target, each in a pass of its own over
+// the ones before; the target's pixels and the draws the passes issued.
+fn draw_scenes(renderer: &mut GpuRenderer, scenes: &[&CompositorScene]) -> (Vec<u8>, u32) {
     let target = crate::offscreen::create_2d_texture(
         &renderer.device,
         renderer.pipelines.composition_format,
@@ -664,21 +670,31 @@ fn draw_scene(renderer: &mut GpuRenderer, scene: &CompositorScene) -> (Vec<u8>, 
     renderer.run_store.begin_frame(false);
     renderer.text.glyph_run_arena.begin_frame();
     renderer.frame_stats.draw_calls.set(0);
-    let segments = [PassSegment::plain(scene, [0.0, 0.0], 1.0)];
+    let passes: Vec<_> = scenes
+        .iter()
+        .map(|scene| [PassSegment::plain(scene, [0.0, 0.0], 1.0)])
+        .collect();
     let (device, queue) = (Arc::clone(&renderer.device), Arc::clone(&renderer.queue));
     let mut graph = WgpuFrameGraph::new(None);
     graph.add_fallible_command_pass(None, &[], &[], |recorder| {
-        renderer.encode_pass(
-            recorder,
-            PassTarget {
-                view: &view,
-                width: 128,
-                height: 32,
-            },
-            (&segments, SegmentLayout::Stacked),
-            wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-            "Batched text test",
-        )?;
+        for (index, segments) in passes.iter().enumerate() {
+            let load = if index == 0 {
+                wgpu::LoadOp::Clear(wgpu::Color::BLACK)
+            } else {
+                wgpu::LoadOp::Load
+            };
+            renderer.encode_pass(
+                recorder,
+                PassTarget {
+                    view: &view,
+                    width: 128,
+                    height: 32,
+                },
+                (segments, SegmentLayout::Stacked),
+                load,
+                "Batched text test",
+            )?;
+        }
         renderer.stage_frame_uploads(recorder);
         renderer.viewport_uniforms.uploads.finish_frame();
         renderer.run_store.finish_frame();
@@ -819,17 +835,97 @@ fn a_shape_that_shares_no_pixel_with_a_held_label_joins_its_batch() {
     }
 }
 
+// A 45 degree line 0.2 wide under `snap` whose butt end's right corner
+// lies 0.58 pixel left of the centre of pixel (`x`, `y`): across and along
+// the line that centre is 0.46 pixel from the line's edges, so it still
+// takes coverage, and the shape stage snaps no line to the pixel grid.
+fn slanted_line_run(x: usize, y: usize, snap: Option<SnapAnchor>, color: Color) -> RunDraw {
+    let end = Point {
+        x: x as f32 - 0.15,
+        y: y as f32 + 0.5,
+    };
+    let start = Point {
+        x: end.x - 8.0,
+        y: end.y - 8.0,
+    };
+    let mut recorder = cranpose_ui_graphics::ShapeRecorder::default();
+    recorder.push_primitive(cranpose_ui_graphics::DrawPrimitive::Line {
+        rect: Rect {
+            x: start.x,
+            y: start.y,
+            width: 8.0,
+            height: 8.0,
+        },
+        brush: cranpose_ui_graphics::Brush::solid(color),
+        start,
+        end,
+        stroke: cranpose_ui_graphics::Stroke::new(0.2),
+    });
+    RunDraw::whole(
+        Arc::new(recorder),
+        crate::scene::Placement::at(Point::default(), snap, None),
+    )
+    .expect("a run with a line")
+}
+
+// The red card with a white label on it cut to `clip`, as one scene.
+fn card_and_label(clip: Rect) -> CompositorScene {
+    let mut scene = CompositorScene::new();
+    scene.push_run(filled_run(0.0, 40.0, Color(1.0, 0.0, 0.0, 1.0)));
+    push_label(&mut scene, 4.0, Color::WHITE, Some(clip));
+    scene
+}
+
 #[test]
-fn an_unsnapped_shape_a_fraction_into_a_held_labels_row_draws_after_it() {
+fn a_slanted_line_whose_corner_reaches_a_held_label_draws_after_it() {
     let (_lock, mut renderer) = test_renderer();
     let blue = Color(0.0, 0.0, 1.0, 1.0);
-    let dot = dot_run(16.0 - 1.0 / 32.0, None, blue);
-    let (_, draws) = draw_scene(&mut renderer, &card_label_dot(true, Some(dot)));
-    assert_eq!(
-        draws, 4,
-        "the dot's edge lies 1/32 pixel into the label's last row, where its coverage shows, so \
-         the card's shape draw ends before the label and the dot draws after it"
-    );
+    let whole = Rect {
+        x: 0.0,
+        y: 0.0,
+        width: 128.0,
+        height: 32.0,
+    };
+    let mut white = CompositorScene::new();
+    white.push_run(filled_run(0.0, 128.0, Color::WHITE));
+    let (white, _) = draw_scene(&mut renderer, &white);
+    let (label, _) = draw_scene(&mut renderer, &card_and_label(whole));
+    let (x, y) = (12..34)
+        .flat_map(|x| (10..28).map(move |y| (x, y)))
+        .find(|&(x, y)| pixel_at(&label, x, y) == pixel_at(&white, x, y))
+        .expect("the label inks a pixel whole");
+    // Cut at column `x`, the label's glyphs hold no column the line's own
+    // rect reaches.
+    let cut = Rect {
+        x: x as f32,
+        ..whole
+    };
+    for snap in [Some(SnapAnchor::rigid(Point::default())), None] {
+        let line = || {
+            let mut scene = CompositorScene::new();
+            scene.push_run(slanted_line_run(x, y, snap, blue));
+            scene
+        };
+        let mut both = card_and_label(cut);
+        both.push_run(slanted_line_run(x, y, snap, blue));
+        let (pixels, _) = draw_scene(&mut renderer, &both);
+        let (in_turn, _) = draw_scenes(&mut renderer, &[&card_and_label(cut), &line()]);
+        assert_ne!(
+            pixel_at(&in_turn, x, y),
+            pixel_at(&label, x, y),
+            "the line under {snap:?} tints the label's whole pixel {x},{y} it draws over"
+        );
+        for row in 0..32 {
+            for column in 0..128 {
+                assert_eq!(
+                    pixel_at(&pixels, column, row),
+                    pixel_at(&in_turn, column, row),
+                    "the line under {snap:?} draws after the label its corner reaches, as a \
+                     pass of its own would, at {column},{row}"
+                );
+            }
+        }
+    }
 }
 
 #[test]

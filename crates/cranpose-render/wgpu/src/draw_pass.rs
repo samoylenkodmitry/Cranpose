@@ -47,7 +47,7 @@ use mixed_turns::turns_mixed;
 use pass_buffers::PassBuffers;
 pub(crate) use pass_scratch::PassScratch;
 use segment_run::{ArenaClip, SegmentBinding, SegmentRun};
-use shape_reach::shape_reach;
+use shape_reach::RunReach;
 use target_space::{dest_in_target, mask_in_target, translate_inverse};
 
 /// A render target and its size in pixels.
@@ -1345,7 +1345,8 @@ impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
     /// cannot. A member's rect clip goes to the shader instead, so the clips
     /// of members leave their records one batch, and a member's run that
     /// may reach past its slot takes a chunk scissored to the slot.
-    fn arena_clip(&mut self, draw: &RunDraw, bounds: Rect, run: &SegmentRun<'s, '_>) -> ArenaClip {
+    fn arena_clip(&mut self, reach: &mut RunReach<'_, 's, '_>) -> ArenaClip {
+        let (draw, run) = (reach.draw, reach.run);
         let clip = self
             .clip_scissor
             .arena(&draw.placement, run.segment.scale, &run.viewport);
@@ -1357,7 +1358,7 @@ impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
             };
         };
         let paint = clip.filter(|_| draw.placement.clip_rounded());
-        let reach = shape_reach(draw, bounds, run).and_then(|reach| match clip {
+        let reach = reach.get().and_then(|reach| match clip {
             Some(clip) => intersect_target_rects(reach, clip),
             None => Some(reach),
         });
@@ -1379,9 +1380,8 @@ impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
         while let Some(Item::Run(draw, window, bounds)) =
             items.next_if(|item| matches!(item, Item::Run(..)))
         {
-            if !self.held.is_empty()
-                && shape_reach(draw, bounds, run).is_some_and(|reach| self.held.overlaps(reach))
-            {
+            let mut reach = RunReach::new(draw, bounds, run);
+            if !self.held.is_empty() && reach.get().is_some_and(|reach| self.held.overlaps(reach)) {
                 self.draw_held(renderer, run.binding);
             }
             let window = window.unwrap_or(0..u32::MAX);
@@ -1419,7 +1419,7 @@ impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
             } else {
                 let total = draw.record_count().min(window.end);
                 let mut from = window.start;
-                let clip = self.arena_clip(draw, bounds, run);
+                let clip = self.arena_clip(&mut reach);
                 if self.chunk.is_some() && clip.chunk != self.chunk_scissor {
                     self.close_chunk(renderer, run.binding);
                 }
