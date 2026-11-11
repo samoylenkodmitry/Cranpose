@@ -174,8 +174,11 @@ APPS = {
     'tauri': [HERE / 'tauri-app/target/release/perf-compare-tauri', '--page={page}'],
     'dioxus': [HERE / 'dioxus-app/target/release/perf-compare-dioxus'],
     'xilem': [HERE / 'xilem-app/target/release/perf-compare-xilem'],
-    'rune': [HERE / 'rune-app/target/release/perf-compare-rune'],
-    'bui': [HERE / 'bui-app/target/release/perf-compare-bui'],
+    # Rune and BUI start from a bundle `build_apps.sh` puts around each: their
+    # programs open no window when a process outside the login session, as
+    # the nightly's runner is, starts them directly.
+    'rune': [HERE / 'rune-app/build/perf-compare-rune.app/Contents/MacOS/perf-compare-rune'],
+    'bui': [HERE / 'bui-app/build/perf-compare-bui.app/Contents/MacOS/perf-compare-bui'],
     'ferro': [HERE / 'ferro-app/target/release/perf-compare-ferro'],
     'zgui': [HERE / 'zgui-app/target/release/perf-compare-zgui'],
     'floem': [HERE / 'floem-app/target/release/perf-compare-floem'],
@@ -715,6 +718,19 @@ class App:
             time.sleep(0.1)
         raise RuntimeError(f'{name}: no process for {pattern}')
 
+    def state(self):
+        """Whether the app still runs, whether it drew, and the last line it
+        logged: what a leg that failed says beside its failure."""
+        try:
+            os.kill(self.pid, 0)
+            running = 'the app was still running'
+        except OSError:
+            running = 'the app had ended'
+        lines = [line.strip() for line in self.log.read_text(errors='replace').splitlines() if line.strip()]
+        drew = 'drew a first frame' if any('PERF first_frame' in line for line in lines) else 'drew no frame yet'
+        last = f', last log line: {lines[-1][:160]}' if lines else ', logged nothing'
+        return f'{running}, {drew}{last}'
+
     def stop(self):
         """Ends the app and keeps its output beside the results."""
         self.end()
@@ -795,8 +811,13 @@ def measure(name, args, work, server, stage, label, earlier, profile, program=No
                           None)
         usage = Usage(app.pid, server_pid, launched)
         out = stage / f'{label}-frames.json'
-        frames = framecount(app.pid, out, '--until', f'{launched + args.run:.3f}',
-                            '--slow-fps', str(SLOW_FPS), '--slow-seconds', str(SLOW_SECONDS), '--out', str(out))
+        try:
+            frames = framecount(app.pid, out, '--until', f'{launched + args.run:.3f}',
+                                '--slow-fps', str(SLOW_FPS), '--slow-seconds', str(SLOW_SECONDS), '--out', str(out))
+        except RuntimeError as failure:
+            # What the app was doing says why it showed nothing: still
+            # starting, or ended, with its last words.
+            raise RuntimeError(f'{failure}; {app.state()}') from failure
         after, ended = processes(), time.monotonic()
         taken = usage.stop()
         clocked, clock_samples = clocks.stop()
@@ -1011,7 +1032,7 @@ def undisturbed_leg(name, args, server, stage, label, earlier, failures, profile
         except (RuntimeError, subprocess.SubprocessError) as failure:
             print(f'{label:16} failed: {failure}', flush=True)
             failures.append({'subject': name, 'start': start, 'label': f'{label}-{attempt + 1}',
-                             'error': str(failure)[:300]})
+                             'error': str(failure)[:600]})
             continue
         leg['idle_other_cores'] = round(idle, 2)
         if checks_waited is not None:

@@ -893,6 +893,18 @@ What each framework lacks and how its app does without:
 - zgui has no line clamp either: a box as tall as the lines clips the
   paragraph. It reads pictures by path or by registered bytes, so the avatars
   are PNG files in memory.
+- A leg with no result says why in the report, beside its failure: whether
+  the app was still running, whether it drew a frame, and the last line it
+  logged. The known ones on macm3:
+  - SwiftUI and Compose need 12 to 18 s to show the wall at tier 20, longer
+    than a 10 s leg, so the leg sees no window.
+  - Xilem's wall at tier 20 and Floem's gauntlet at tier 16 end when Vello
+    asks wgpu for a buffer binding of 201 MB, over the limit of 128 MB.
+    Xilem's patchwork at tier 17 opens a window and shows no content.
+  - Rune and BUI opened no window when the nightly's runner started their
+    programs directly, though they did from a terminal. `build_apps.sh` now
+    puts a bundle around each and `desktop.py` opens that, as Launch
+    Services starts apps.
 - Floem draws with Vello, whose buffers have a fixed size. Vello gave a black
   window from about 14,900 painted tiles, so the app draws content that never
   changes once into a picture: the wall's tiles and the patchwork's still and
