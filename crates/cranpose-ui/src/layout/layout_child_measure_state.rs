@@ -7,6 +7,7 @@ use std::{
 };
 
 use cranpose_core::{MemoryApplier, Node, NodeError, NodeId, NodeIdCell, PackedU64};
+use cranpose_ui_graphics::shared_sort::sort_positions;
 use cranpose_ui_layout::{AlignmentLines, Constraints, MeasurePolicy, Placement};
 
 use super::{
@@ -623,7 +624,12 @@ pub(super) fn inherited_alignment_lines(
             .all(|(placement, child)| placement.node_id == child.record().child_id());
     if !in_child_order {
         placement_indices.extend(0..placements.len());
-        placement_indices.sort_unstable_by_key(|&index| (placements[index].node_id, index));
+        // The sort every caller shares: a sort of its own for these positions
+        // took 9.6 KB of a 32-bit board's flash, for a parent that places
+        // its children out of their order. No two keys are equal.
+        sort_positions(placement_indices, &mut |a, b| {
+            (placements[a].node_id, a).cmp(&(placements[b].node_id, b))
+        });
     }
     let mut lines = AlignmentLines::default();
     for (index, child) in child_states.iter().enumerate() {
