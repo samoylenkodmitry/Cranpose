@@ -528,15 +528,15 @@ fn ManyBoxes(captured: Step) {
         move || {
             for index in 0..300u32 {
                 cranpose_core::with_key(&index, || {
-                    let changes = (1..=n)
-                        .filter(|frame| index < changing_boxes(*frame))
-                        .count();
+                    let changes: u32 = (1..=n)
+                        .map(|frame| u32::from(index < changing_boxes(frame)))
+                        .sum();
                     Box(
                         Modifier::empty()
                             .offset((index % 30) as f32 * 8.0, (index / 30) as f32 * 6.0)
                             .width(6.0)
                             .height(4.0)
-                            .background(color(changes as u32, index)),
+                            .background(color(changes, index)),
                         BoxSpec::default(),
                         || {},
                     );
