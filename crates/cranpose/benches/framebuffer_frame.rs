@@ -10,8 +10,11 @@
 //! its progress as a function does: frames then draw again without composing
 //! or laying out. With `BAR=content` the bar draws its track in a draw
 //! callback and its width in a callback around its content, both on one
-//! node. `BARS` bars (default 1) take a new width by turns, one a frame, so
-//! each frame changes another node than the frame before.
+//! node. With `BAR=group` the bar draws its fill inside a clip, which the
+//! scene places as a draw group. `BARS` bars (default 1) take a new width by
+//! turns, one a frame, so each frame changes another node than the frame
+//! before; with `TURN=all` every bar takes a new width in every frame, so a
+//! frame changes many nodes at once.
 //!
 //! `TEXT=frame` adds a line of text whose number changes every frame, as a
 //! clock or a sensor reading does: each frame composes, measures and draws
@@ -24,6 +27,8 @@
 //! `STRIP_ROWS` (default 0, an area at once) draws each area in strips of
 //! that many rows, as a host with a small buffer does, and `REDRAW=all`
 //! draws the whole picture each frame, as a host does after a screen change.
+//! `EVERY=n` (default 1) takes the picture at each n-th update alone, as a
+//! host does that draws slower than its scene changes.
 //!
 //! `SCREEN=dashboard` shows the dashboard of the ESP32 benchmarks, 320 by
 //! 480, in place of that screen: most of it changes every frame.
@@ -128,13 +133,15 @@ fn ticker_text() -> TickerText {
 }
 
 // How the bar takes its width: composed again each frame, read while it
-// draws (`BAR=draw`), or read by a draw around its content after a draw
-// callback of the same node (`BAR=content`).
+// draws (`BAR=draw`), read by a draw around its content after a draw
+// callback of the same node (`BAR=content`), or read by a draw inside a
+// clip (`BAR=group`).
 #[derive(Clone, Copy)]
 enum Bar {
     Composed,
     Drawn,
     Content,
+    Grouped,
 }
 
 impl Bar {
@@ -142,6 +149,7 @@ impl Bar {
         match std::env::var("BAR").as_deref() {
             Ok("draw") => Self::Drawn,
             Ok("content") => Self::Content,
+            Ok("group") => Self::Grouped,
             _ => Self::Composed,
         }
     }
@@ -400,11 +408,68 @@ fn ContentBar() {
     );
 }
 
+// A bar whose fill a draw callback draws inside a clip of its width: the
+// scene places the clipped draw as a draw group.
+#[composable]
+fn GroupBar() {
+    let transition = rememberInfiniteTransition("bar");
+    let spec = infiniteRepeatable(
+        AnimationSpec::linear(1500),
+        RepeatMode::Reverse,
+        StartOffset::default(),
+    );
+    let fraction = transition.animateFloat(0.1, 1.0, spec, "width");
+    Box(
+        Modifier::empty()
+            .fill_max_width()
+            .height(16.0)
+            .background(Color::from_rgb_u8(40, 44, 64))
+            .rounded_corners(8.0)
+            .draw_behind(move |scope| {
+                let size = scope.size();
+                let shown = Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: size.width * fraction.value(),
+                    height: size.height,
+                };
+                scope.clip_rect(shown, &mut |scope| {
+                    scope.draw_round_rect_at(
+                        Rect {
+                            x: 0.0,
+                            y: 0.0,
+                            width: size.width,
+                            height: size.height,
+                        },
+                        Brush::solid(Color::from_rgb_u8(98, 160, 255)),
+                        CornerRadii::uniform(8.0),
+                    );
+                });
+            }),
+        BoxSpec::default(),
+        || {},
+    );
+}
+
+// Whether every bar takes a new width in every frame: `TURN=all`.
+fn bars_turn_together() -> bool {
+    std::env::var("TURN").is_ok_and(|turn| turn == "all")
+}
+
 // One of `bars` bars that take a new width by turns: this one on the frames
-// whose count leaves `index` when divided by `bars`.
+// whose count leaves `index` when divided by `bars`, or on every frame when
+// the bars turn together.
 #[composable]
 fn TurnBar(index: usize, bars: usize, frames: State<f32>) {
-    let turn = derivedStateOf(move || (frames.value() as usize + bars - 1 - index) / bars);
+    let together = bars_turn_together();
+    let turn = derivedStateOf(move || {
+        let frame = frames.value() as usize;
+        if together {
+            frame + index
+        } else {
+            (frame + bars - 1 - index) / bars
+        }
+    });
     let fraction = 0.1 + 0.9 * (turn.value() % 16) as f32 / 15.0;
     Box(
         Modifier::empty()
@@ -447,6 +512,7 @@ fn Nested(depth: usize) {
             Bar::Composed => AnimatedBar(),
             Bar::Drawn => DrawnBar(),
             Bar::Content => ContentBar(),
+            Bar::Grouped => GroupBar(),
         }
     } else {
         Box(Modifier::empty(), BoxSpec::default(), move || {
@@ -514,8 +580,9 @@ fn run_frames(
         .ok()
         .and_then(|ms| ms.parse::<u64>().ok())
         .map_or(FRAME_NANOS, |ms| ms * 1_000_000);
+    let every = env_count("EVERY").max(1) as u64;
     for frame in from..to {
-        if framebuffer.tick(frame * step) {
+        if framebuffer.tick(frame * step) && frame % every == 0 {
             drawing.draw(framebuffer, areas, pixels);
         }
         framebuffer.run_pending_tasks();
