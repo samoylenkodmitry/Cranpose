@@ -55,13 +55,15 @@ fn test_velocity_capped() {
     let mut tracker = VelocityTracker1D::new();
     tracker.add_data_point(0, 0.0);
     tracker.add_data_point(1, 10_000.0);
+    tracker.add_data_point(2, 20_000.0);
 
     let velocity = tracker.calculate_velocity_with_max(8_000.0);
     assert_eq!(velocity, 8_000.0);
 
     tracker.reset();
-    tracker.add_data_point(0, 10_000.0);
-    tracker.add_data_point(1, 0.0);
+    tracker.add_data_point(0, 20_000.0);
+    tracker.add_data_point(1, 10_000.0);
+    tracker.add_data_point(2, 0.0);
 
     let velocity = tracker.calculate_velocity_with_max(8_000.0);
     assert_eq!(velocity, -8_000.0);
@@ -90,4 +92,47 @@ fn test_gap_over_stopped_threshold_returns_zero() {
 
     let velocity = tracker.calculate_velocity();
     assert_eq!(velocity, 0.0);
+}
+
+// A track of positions 8 ms apart, the last one first.
+fn velocity_of(positions: &[f32]) -> f32 {
+    let mut tracker = VelocityTracker1D::new();
+    for (index, position) in positions.iter().enumerate() {
+        tracker.add_data_point(index as i64 * 8, *position);
+    }
+    tracker.calculate_velocity()
+}
+
+// A finger that lifts often moves a little back first. An iOS scroll view
+// gives that last move a twentieth of the weight, so the fling goes on the
+// way the finger scrolled.
+#[test]
+fn a_small_move_back_at_the_end_keeps_the_fling_s_direction() {
+    // 1,000 units a second, then 8 units back in the last sample:
+    // 0.6 * 1000 + 0.35 * 1000 - 0.05 * 1000.
+    let velocity = velocity_of(&[0.0, 8.0, 16.0, 24.0, 32.0, 24.0]);
+    assert!((velocity - 900.0).abs() < 1.0, "{velocity}");
+    // 250 units a second, then 6 units back: 0.95 * 250 - 0.05 * 750.
+    let velocity = velocity_of(&[0.0, 2.0, 4.0, 6.0, 8.0, 2.0]);
+    assert!((velocity - 200.0).abs() < 1.0, "{velocity}");
+}
+
+#[test]
+fn a_pointer_that_stops_in_its_last_sample_keeps_most_of_its_speed() {
+    let moving = velocity_of(&[0.0, 8.0, 16.0, 24.0, 32.0, 40.0]);
+    let stopped = velocity_of(&[0.0, 8.0, 16.0, 24.0, 32.0, 32.0]);
+    assert!((moving - 1_000.0).abs() < 1.0, "{moving}");
+    assert!((stopped - 950.0).abs() < 1.0, "{stopped}");
+}
+
+#[test]
+fn motion_before_a_rest_is_no_part_of_the_velocity() {
+    let mut tracker = VelocityTracker1D::new();
+    // Fast, a rest of 200 ms, then two slow samples.
+    for (time, position) in [(0, 0.0), (8, 80.0), (16, 160.0), (216, 160.0), (224, 161.0)] {
+        tracker.add_data_point(time, position);
+    }
+    // Only the pair after the rest counts: 0.05 * 125.
+    let velocity = tracker.calculate_velocity();
+    assert!((velocity - 6.25).abs() < 0.1, "{velocity}");
 }

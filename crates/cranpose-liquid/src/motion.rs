@@ -94,6 +94,10 @@ pub(crate) struct LiquidDragAxis {
     last_sample_ms: Cell<Option<i64>>,
 }
 
+// The gap between two moves that carry no event time and share a frame: a
+// 120 Hz touch panel's.
+const UNTIMED_SAMPLE_GAP_MS: i64 = 8;
+
 impl LiquidDragAxis {
     fn new(initial: f32, runtime: RuntimeHandle, follow: Option<AnimationType>) -> Self {
         Self {
@@ -114,10 +118,16 @@ impl LiquidDragAxis {
                     .map(|nanos| (nanos / 1_000_000) as i64)
             })
             .unwrap_or_else(|| self.last_sample_ms.get().unwrap_or(0) + 16);
-        let monotonic = self
-            .last_sample_ms
-            .get()
-            .map_or(candidate, |last| candidate.max(last + 1));
+        // A move with no time of its own that the same frame holds as the
+        // last one was made about a touch sample after it, not a
+        // millisecond: a millisecond apart, two such moves read as a flick.
+        let monotonic = self.last_sample_ms.get().map_or(candidate, |last| {
+            if candidate > last {
+                candidate
+            } else {
+                last + UNTIMED_SAMPLE_GAP_MS
+            }
+        });
         self.last_sample_ms.set(Some(monotonic));
         monotonic
     }
@@ -188,12 +198,13 @@ impl LiquidDragAxis {
             self.settle_to_at(target, animation, animation_time_nanos);
             return;
         };
-        let time_ms = self.sample_time_ms(event_time_ms);
-        self.velocity.borrow_mut().add_data_point(time_ms, position);
+        let lift_ms = self.sample_time_ms(event_time_ms);
         let release_velocity = if self.follow.is_some() {
             self.animation.borrow().velocity()
         } else {
-            self.velocity.borrow().calculate_velocity_with_max(8_000.0)
+            self.velocity
+                .borrow_mut()
+                .release_velocity(lift_ms, position, 8_000.0)
         };
         let mut value = self.animation.borrow_mut();
         if let Some(time) = animation_time_nanos {

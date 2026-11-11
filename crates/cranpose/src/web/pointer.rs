@@ -107,6 +107,15 @@ fn secondary_id(event: &PointerEvent) -> Option<PointerId> {
     (!event.is_primary()).then(|| PointerId(u64::from(event.pointer_id().unsigned_abs()) + 1))
 }
 
+// The time the browser gives the event, in whole milliseconds: when the
+// finger moved, not when the page got to handle the move. A frame that runs
+// long hands its moves over together, and timed by their handling they read
+// as one fast flick.
+fn event_ms(event: &PointerEvent) -> Option<i64> {
+    let time = event.time_stamp();
+    time.is_finite().then(|| time.round() as i64)
+}
+
 impl Pointers {
     fn on(&self, name: &str, handle: Handler) -> Result<(), JsValue> {
         let pointers = self.clone();
@@ -130,10 +139,10 @@ impl Pointers {
     fn moved(&self, event: &PointerEvent, app: &mut AppShell<WgpuRenderer>, at: Point) {
         match secondary_id(event) {
             Some(id) => {
-                app.secondary_pointer_moved(id, at.x, at.y, None);
+                app.secondary_pointer_moved(id, at.x, at.y, event_ms(event));
             }
             None => {
-                app.set_cursor(at.x, at.y);
+                app.set_cursor_at_time(at.x, at.y, event_ms(event));
                 if is_mouse(event) {
                     self.mouse_buttons_changed(event, app, at);
                 }
@@ -156,7 +165,7 @@ impl Pointers {
             if (before ^ held) & bit == 0 {
                 continue;
             }
-            let event_time = app.realtime_pointer_event_time(None);
+            let event_time = app.realtime_pointer_event_time(event_ms(event));
             let pressed = held & bit != 0;
             if pressed {
                 app.set_cursor_at_event_time(at.x, at.y, event_time);
@@ -187,10 +196,10 @@ impl Pointers {
         match secondary_id(event) {
             Some(id) => {
                 self.secondaries.borrow_mut().push(id);
-                app.secondary_pointer_pressed(id, at.x, at.y, None);
+                app.secondary_pointer_pressed(id, at.x, at.y, event_ms(event));
             }
             None => {
-                let event_time = app.realtime_pointer_event_time(None);
+                let event_time = app.realtime_pointer_event_time(event_ms(event));
                 app.set_cursor_at_event_time(at.x, at.y, event_time);
                 app.pointer_pressed_at_event_time(event_time);
             }
@@ -199,14 +208,14 @@ impl Pointers {
 
     fn released(&self, event: &PointerEvent, app: &mut AppShell<WgpuRenderer>, at: Point) {
         match secondary_id(event) {
-            Some(id) => self.release_secondary(app, id, at),
+            Some(id) => self.release_secondary(event, app, id, at),
             None if is_mouse(event) => self.mouse_buttons_changed(event, app, at),
             None => {
                 let lifted = std::mem::take(&mut *self.secondaries.borrow_mut());
                 for id in lifted {
-                    app.secondary_pointer_released(id, at.x, at.y, None);
+                    app.secondary_pointer_released(id, at.x, at.y, event_ms(event));
                 }
-                let event_time = app.realtime_pointer_event_time(None);
+                let event_time = app.realtime_pointer_event_time(event_ms(event));
                 app.pointer_released_at_position_event_time(at.x, at.y, event_time);
             }
         }
@@ -215,7 +224,7 @@ impl Pointers {
 
     fn cancelled(&self, event: &PointerEvent, app: &mut AppShell<WgpuRenderer>, at: Point) {
         match secondary_id(event) {
-            Some(id) => self.release_secondary(app, id, at),
+            Some(id) => self.release_secondary(event, app, id, at),
             None => {
                 self.secondaries.borrow_mut().clear();
                 self.mouse_buttons.set(0);
@@ -225,8 +234,14 @@ impl Pointers {
         let _ = self.canvas.release_pointer_capture(event.pointer_id());
     }
 
-    fn release_secondary(&self, app: &mut AppShell<WgpuRenderer>, id: PointerId, at: Point) {
+    fn release_secondary(
+        &self,
+        event: &PointerEvent,
+        app: &mut AppShell<WgpuRenderer>,
+        id: PointerId,
+        at: Point,
+    ) {
         self.secondaries.borrow_mut().retain(|&finger| finger != id);
-        app.secondary_pointer_released(id, at.x, at.y, None);
+        app.secondary_pointer_released(id, at.x, at.y, event_ms(event));
     }
 }

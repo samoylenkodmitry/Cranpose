@@ -20,6 +20,8 @@
 #   drag_window.sh cpu <example> <command...>         CPU seconds the running example spends while
 #                                                     the command runs, for a gesture that must not spin
 #   drag_window.sh drag <x0,y0> <x1,y1> [steps] [ms]  press, move in steps, release
+#   drag_window.sh path <ms> <x,y> <x,y>...           press at the first point, move through the
+#                                                     others <ms> apart, release at the last
 #   drag_window.sh drag-pane <log> <id> <lx,ly> <dx,dy> [steps]
 #                                                     drag from a demo window's local point by a delta,
 #                                                     then print what the demo did
@@ -159,6 +161,21 @@ drag() {
     cliclick "du:$x1,$y1" "w:400"
 }
 
+# One run of cliclick for the whole path: a run for each step would add its
+# own start time to every pause.
+path() {
+    need cliclick
+    local pause="$1"
+    shift
+    local first="$1" last="${*: -1}" steps=()
+    shift
+    local point
+    for point in "$@"; do
+        steps+=("dm:$point" "w:$pause")
+    done
+    cliclick "dd:$first" "w:250" "${steps[@]}" "du:$last" "w:400"
+}
+
 drag_pane() {
     local log="$1" id="$2" local_point="$3" delta="$4" steps="${5:-10}"
     local origin
@@ -290,6 +307,7 @@ case "$command" in
     key) key "$@" ;;
     cpu) cpu "$@" ;;
     drag) drag "$@" ;;
+    path) path "$@" ;;
     drag-pane) drag_pane "$@" ;;
     snap) snap "$@" ;;
     mark) mark "$@" ;;

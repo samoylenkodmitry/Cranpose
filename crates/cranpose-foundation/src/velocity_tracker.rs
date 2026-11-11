@@ -1,11 +1,17 @@
 //! Velocity tracking for fling gesture support.
 //!
-//! Port of Jetpack Compose's VelocityTracker1D using the Impulse strategy.
-//! This calculates velocity based on kinetic energy principles.
+//! The velocity a touch ends with is the one an iOS scroll view gives the
+//! same touch samples: a weighted mean of the last three velocities from one
+//! sample to the next, the oldest of them weighing most. The weights are the
+//! ones Flutter's `IOSScrollViewFlingVelocityTracker` fits to
+//! `scrollViewWillEndDragging(_:withVelocity:targetContentOffset:)`.
 
 const HISTORY_SIZE: usize = 20;
 
-const HORIZON_MS: i64 = 100;
+// The weights of the velocities between the last four samples, the newest
+// pair first. The last move before a lift is often a twitch of the finger,
+// so it weighs least.
+const PAIR_WEIGHTS: [f32; 3] = [0.05, 0.35, 0.6];
 
 /// If no movement for this duration, assume the pointer has stopped.
 pub const ASSUME_STOPPED_MS: i64 = 40;
@@ -16,11 +22,13 @@ struct DataPointAtTime {
     data_point: f32,
 }
 
-/// 1D velocity tracker using impulse-based velocity calculation.
+/// 1D velocity tracker over a pointer's positions.
 ///
-/// This implements the same algorithm as Jetpack Compose's VelocityTracker1D
-/// with the Impulse strategy, which calculates velocity based on the
-/// kinetic energy imparted by the touch gestures.
+/// The velocity is a weighted mean of the last three velocities from one
+/// sample to the next: 0.6 for the oldest, 0.35 for the middle one and 0.05
+/// for the newest, as an iOS scroll view weighs them. One move against the
+/// others' direction, as a finger makes when it lifts, changes the result by
+/// a twentieth of its own speed.
 ///
 /// # Usage
 /// ```ignore
@@ -33,7 +41,6 @@ struct DataPointAtTime {
 pub struct VelocityTracker1D {
     samples: [Option<DataPointAtTime>; HISTORY_SIZE],
     index: usize,
-    is_differential: bool,
 }
 
 impl Default for VelocityTracker1D {
@@ -48,14 +55,10 @@ impl VelocityTracker1D {
         Self {
             samples: [None; HISTORY_SIZE],
             index: 0,
-            is_differential: false,
         }
     }
 
-    /// Adds a data point at the given time (milliseconds).
-    ///
-    /// For absolute tracking, `data_point` is the position.
-    /// For differential tracking, `data_point` is the change since last point.
+    /// Adds the position `data_point` at the given time (milliseconds).
     pub fn add_data_point(&mut self, time_ms: i64, data_point: f32) {
         self.index = (self.index + 1) % HISTORY_SIZE;
         self.samples[self.index] = Some(DataPointAtTime {
@@ -66,55 +69,30 @@ impl VelocityTracker1D {
 
     /// Calculates the velocity in units/second.
     ///
-    /// Returns 0.0 if there aren't enough samples or if the pointer hasn't moved.
+    /// A pair of samples that is missing, or at one time, counts as no
+    /// motion. So does a pair more than [`ASSUME_STOPPED_MS`] apart, and every
+    /// pair before it: the pointer rested there, and what it did before the
+    /// rest is no part of this motion.
     pub fn calculate_velocity(&self) -> f32 {
-        let mut data_points = [0.0f32; HISTORY_SIZE];
-        let mut times = [0.0f32; HISTORY_SIZE];
-        let mut sample_count = 0;
-
-        let Some(newest_sample) = self.samples[self.index] else {
-            return 0.0;
-        };
-
-        let mut current_index = self.index;
-        let mut previous_sample = newest_sample;
-
-        while let Some(sample) = self.samples[current_index] {
-            let age = (newest_sample.time_ms - sample.time_ms) as f32;
-            let delta = (sample.time_ms - previous_sample.time_ms).abs() as f32;
-            previous_sample = if self.is_differential {
-                sample
-            } else {
-                newest_sample
+        let mut velocity = 0.0;
+        let mut newer_index = self.index;
+        for weight in PAIR_WEIGHTS {
+            let older_index = (newer_index + HISTORY_SIZE - 1) % HISTORY_SIZE;
+            let (Some(newer), Some(older)) = (self.samples[newer_index], self.samples[older_index])
+            else {
+                break;
             };
-
-            if age > HORIZON_MS as f32 || delta > ASSUME_STOPPED_MS as f32 {
+            let elapsed_ms = newer.time_ms - older.time_ms;
+            if !(0..=ASSUME_STOPPED_MS).contains(&elapsed_ms) {
                 break;
             }
-
-            data_points[sample_count] = sample.data_point;
-            times[sample_count] = -age;
-
-            current_index = if current_index == 0 {
-                HISTORY_SIZE - 1
-            } else {
-                current_index - 1
-            };
-
-            sample_count += 1;
-            if sample_count >= HISTORY_SIZE {
-                break;
+            if elapsed_ms > 0 {
+                let per_ms = (newer.data_point - older.data_point) / elapsed_ms as f32;
+                velocity += weight * per_ms * 1000.0;
             }
+            newer_index = older_index;
         }
-
-        if sample_count < 2 {
-            return 0.0;
-        }
-
-        let velocity_per_ms =
-            calculate_impulse_velocity(&data_points, &times, sample_count, self.is_differential);
-
-        velocity_per_ms * 1000.0
+        velocity
     }
 
     /// Calculates the velocity in units/second, capped to `max_velocity`.
@@ -131,53 +109,37 @@ impl VelocityTracker1D {
         velocity.clamp(-max_velocity, max_velocity)
     }
 
+    /// The velocity a gesture ends with when its pointer lifts at
+    /// `lift_position` at `lift_time_ms`, capped to `max_velocity`: zero when
+    /// the pointer rested for more than [`ASSUME_STOPPED_MS`] before it
+    /// lifted.
+    ///
+    /// A lift at the last sample's position is no sample of the motion: it
+    /// repeats that position at a later time, which would read as a pointer
+    /// that slowed down. A lift somewhere else is the motion's last sample.
+    pub fn release_velocity(
+        &mut self,
+        lift_time_ms: i64,
+        lift_position: f32,
+        max_velocity: f32,
+    ) -> f32 {
+        let Some(newest) = self.samples[self.index] else {
+            return 0.0;
+        };
+        if lift_time_ms - newest.time_ms > ASSUME_STOPPED_MS {
+            return 0.0;
+        }
+        if lift_position != newest.data_point {
+            self.add_data_point(lift_time_ms, lift_position);
+        }
+        self.calculate_velocity_with_max(max_velocity)
+    }
+
     /// Clears all tracked data.
     pub fn reset(&mut self) {
         self.samples = [None; HISTORY_SIZE];
         self.index = 0;
     }
-}
-
-fn calculate_impulse_velocity(
-    data_points: &[f32; HISTORY_SIZE],
-    times: &[f32; HISTORY_SIZE],
-    sample_count: usize,
-    is_differential: bool,
-) -> f32 {
-    if sample_count < 2 {
-        return 0.0;
-    }
-
-    let mut work = 0.0f32;
-    let start = sample_count - 1;
-    let mut next_time = times[start];
-
-    for i in (1..=start).rev() {
-        let current_time = next_time;
-        next_time = times[i - 1];
-        if current_time == next_time {
-            continue;
-        }
-
-        let data_points_delta = if is_differential {
-            -data_points[i - 1]
-        } else {
-            data_points[i] - data_points[i - 1]
-        };
-        let v_curr = data_points_delta / (current_time - next_time);
-        let v_prev = kinetic_energy_to_velocity(work);
-        work += (v_curr - v_prev) * v_curr.abs();
-        if i == start {
-            work *= 0.5;
-        }
-    }
-
-    kinetic_energy_to_velocity(work)
-}
-
-#[inline]
-fn kinetic_energy_to_velocity(kinetic_energy: f32) -> f32 {
-    kinetic_energy.signum() * (2.0 * kinetic_energy.abs()).sqrt()
 }
 
 #[cfg(test)]

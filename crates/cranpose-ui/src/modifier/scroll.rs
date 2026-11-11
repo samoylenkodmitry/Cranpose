@@ -12,6 +12,9 @@ use cranpose_foundation::{
 use cranpose_ui_layout::Axis;
 use web_time::Instant;
 
+mod arrival_clock;
+use arrival_clock::ArrivalClock;
+
 use super::{Modifier, Point, PointerEvent, PointerEventKind, inspector_metadata};
 use crate::{
     bring_into_view_spec::current_bring_into_view_spec,
@@ -68,6 +71,8 @@ struct ScrollGestureState {
 
     last_velocity_sample_ms: Option<i64>,
 
+    arrival_clock: ArrivalClock,
+
     fling_animation: Option<FlingAnimation>,
 
     is_overscrolling: bool,
@@ -90,6 +95,7 @@ impl Default for ScrollGestureState {
             gesture_start_time: None,
             gesture_start_event_time_ms: None,
             last_velocity_sample_ms: None,
+            arrival_clock: ArrivalClock::default(),
             fling_animation: None,
             is_overscrolling: false,
             settle_animation: None,
@@ -487,9 +493,7 @@ where
                         }
 
                         let should_consume = match event.kind {
-                            PointerEventKind::Down => {
-                                detector.on_down(event.position, event.time_ms)
-                            }
+                            PointerEventKind::Down => detector.on_down(&event),
                             PointerEventKind::Move => detector.on_move(
                                 event.position,
                                 event.buttons,
@@ -618,7 +622,16 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
         }
     }
 
-    fn on_down(&self, position: Point, time_ms: Option<i64>) -> bool {
+    fn along_axis(&self, point: Point) -> f32 {
+        if self.axis.is_vertical() {
+            point.y
+        } else {
+            point.x
+        }
+    }
+
+    fn on_down(&self, event: &PointerEvent) -> bool {
+        let (position, time_ms) = (event.position, event.time_ms);
         let interrupted = self.scroll_target.stop_animation();
         let mut gs = self.gesture_state.borrow_mut();
         gs.interrupted_animation = interrupted;
@@ -640,15 +653,12 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
         gs.axis_locked_out = false;
         gs.velocity_tracker.reset();
         gs.gesture_start_time = Some(Instant::now());
+        gs.arrival_clock = ArrivalClock::default();
         gs.gesture_start_event_time_ms = time_ms;
         gs.is_overscrolling = self.overscroll.offset().abs() > 0.001;
 
-        let pos = if self.axis.is_vertical() {
-            position.y
-        } else {
-            position.x
-        };
-        gs.velocity_tracker.add_data_point(0, pos);
+        gs.velocity_tracker
+            .add_data_point(0, self.along_axis(event.global_position));
         gs.last_velocity_sample_ms = Some(0);
 
         false
@@ -710,11 +720,8 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
 
         gs.last_position = Some(position);
 
-        let pos = if self.axis.is_vertical() {
-            position.y
-        } else {
-            position.x
-        };
+        // In the window: an element that follows the finger barely moves under it.
+        let pos = self.along_axis(event.global_position);
         let event_sample_ms = gs
             .gesture_start_event_time_ms
             .zip(time_ms)
@@ -725,21 +732,11 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
                 None => event_sample_ms.max(0),
             })
         } else if let Some(start_time) = gs.gesture_start_time {
-            let elapsed_ms = start_time.elapsed().as_millis() as i64;
-            Some(match gs.last_velocity_sample_ms {
-                Some(last_sample_ms) => {
-                    let mut sample_ms = if elapsed_ms <= last_sample_ms {
-                        last_sample_ms + 1
-                    } else {
-                        elapsed_ms
-                    };
-                    if sample_ms - last_sample_ms > ASSUME_STOPPED_MS {
-                        sample_ms = last_sample_ms + ASSUME_STOPPED_MS;
-                    }
-                    sample_ms
-                }
-                None => elapsed_ms,
-            })
+            let last_sample_ms = gs.last_velocity_sample_ms;
+            Some(
+                gs.arrival_clock
+                    .sample_ms(Instant::now(), start_time, last_sample_ms),
+            )
         } else {
             None
         };

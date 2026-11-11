@@ -66,8 +66,15 @@ impl FlingGesture {
                 FlingGestureEvent::None
             }
             PointerEventKind::Up if self.pointer_id == Some(event.id) => {
-                self.add_position(time_ms, event.position);
-                let velocity = self.velocity();
+                let Point { x, y } = event.position;
+                let velocity = Point {
+                    x: self
+                        .x_tracker
+                        .release_velocity(time_ms, x, MAX_FLING_VELOCITY),
+                    y: self
+                        .y_tracker
+                        .release_velocity(time_ms, y, MAX_FLING_VELOCITY),
+                };
                 self.reset();
                 if velocity.x == 0.0 && velocity.y == 0.0 {
                     FlingGestureEvent::None
