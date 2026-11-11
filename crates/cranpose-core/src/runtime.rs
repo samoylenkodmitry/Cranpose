@@ -448,13 +448,11 @@ impl RuntimeInner {
             .map_or(true, |tasks| tasks.contains(id))
     }
 
-    // Out of line: the poll is large; most drains leave at its first test.
+    // Polls the woken tasks; the drain calls it once a wake is set. Without
+    // a wake no task can make progress, and the order stays. Out of line:
+    // the poll is large and most drains find no wake.
     #[inline(never)]
     fn poll_async_tasks(&self) -> bool {
-        // Without a wake no task can make progress, and the order stays.
-        if !self.task_woken.load(Ordering::Acquire) {
-            return false;
-        }
         // The tasks still pending move to the front of `order`, which goes
         // back as the task order, after any task spawned while polling.
         let mut order = std::mem::take(&mut *self.task_order.borrow_mut());
