@@ -448,6 +448,8 @@ impl RuntimeInner {
             .map_or(true, |tasks| tasks.contains(id))
     }
 
+    // Out of line: the poll is large; most drains leave at its first test.
+    #[inline(never)]
     fn poll_async_tasks(&self) -> bool {
         // Without a wake no task can make progress, and the order stays.
         if !self.task_woken.load(Ordering::Acquire) {
@@ -548,8 +550,7 @@ impl RuntimeInner {
                 }
             }
 
-            executed |= self.run_local_tasks();
-            executed |= self.poll_async_tasks();
+            executed |= self.run_local_tasks() | self.poll_async_tasks();
             // The tasks just polled may have queued work of their own, such
             // as a state observer's change notice for a state they wrote. It
             // belongs to this drain, or a frame that resumed an animation
