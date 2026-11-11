@@ -1,5 +1,7 @@
 #[cfg(feature = "chat")]
 pub mod chat;
+#[cfg(feature = "chat")]
+mod chat_feed;
 pub mod feed;
 pub mod gauntlet;
 pub mod heavy;

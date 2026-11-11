@@ -3,10 +3,11 @@
 
 use std::rc::Rc;
 
-use cranpose_core::{key, rememberMutableStateOf, MutableState};
+use cranpose_core::{key, remember, rememberMutableStateOf, MutableState};
 use cranpose_ui::{
-    composable, text::FontWeight, Button, ButtonSpec, Color, Column, ColumnSpec, LinearArrangement,
-    Modifier, Row, RowSpec, Text,
+    composable, text::FontWeight, Box, BoxSpec, BoxWithConstraints, BoxWithConstraintsScope,
+    Button, ButtonSpec, Color, Column, ColumnSpec, LinearArrangement, Modifier, Row, RowSpec,
+    ScrollState, Text,
 };
 use perf_compare::{
     GauntletLoad, GauntletScreen, PatchworkLoad, PatchworkScreen, WallLoad, WallScreen,
@@ -77,22 +78,60 @@ pub(super) fn BenchTab(screen: BenchScreen) {
                     tier: chosen,
                     freeze: 0,
                 }),
-                BenchScreen::Patchwork => PatchworkScreen(PatchworkLoad {
-                    tier: chosen,
-                    freeze: 0,
+                BenchScreen::Patchwork => AtComparisonWidth(move || {
+                    PatchworkScreen(PatchworkLoad {
+                        tier: chosen,
+                        freeze: 0,
+                    });
                 }),
             });
         },
     );
 }
 
-// Chips for tiers 1 to `tiers`; a tap on one sets `tier`.
+// The width of the comparison's window, in points.
+const COMPARISON_WIDTH: f32 = 1280.0;
+
+// `content` at the comparison's window width at least. The patchwork puts
+// nine patches beside a chat of a fixed width, so on a phone the patches
+// would be strips: a narrower window scrolls sideways over the screen.
+#[composable]
+fn AtComparisonWidth(content: impl Fn() + Clone + 'static) {
+    let scroll = remember(|| ScrollState::new(0.0)).with(|scroll| *scroll);
+    BoxWithConstraints(Modifier::empty().fill_max_size(), move |scope| {
+        let width = scope.max_width().0.max(COMPARISON_WIDTH);
+        let height = scope.max_height().0;
+        let content = content.clone();
+        Box(
+            Modifier::empty()
+                .fill_max_size()
+                .horizontal_scroll(scroll, false),
+            BoxSpec::default(),
+            move || {
+                let content = content.clone();
+                Box(
+                    Modifier::empty().size_points(width, height),
+                    BoxSpec::default(),
+                    move || content(),
+                );
+            },
+        );
+    });
+}
+
+// Chips for tiers 1 to `tiers`; a tap on one sets `tier`. The row scrolls
+// sideways where the window is narrower than its chips.
+
 #[composable]
 fn TierChips(tier: MutableState<usize>, tiers: usize) {
     let label = DemoPalette::current().text;
     let choose: Rc<dyn Fn(usize)> = Rc::new(move |chosen| tier.set(chosen));
+    let scroll = remember(|| ScrollState::new(0.0)).with(|scroll| *scroll);
     Row(
-        Modifier::empty().fill_max_width().padding(8.0),
+        Modifier::empty()
+            .fill_max_width()
+            .horizontal_scroll(scroll, false)
+            .padding(8.0),
         RowSpec::new().horizontal_arrangement(LinearArrangement::SpacedBy(4.0)),
         move || {
             Text(
