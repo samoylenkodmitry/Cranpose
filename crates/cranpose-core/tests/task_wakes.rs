@@ -118,7 +118,7 @@ fn a_queued_task_runs_while_a_stale_wake_is_all_that_else_waits() {
     let runtime = composition.runtime_handle();
     let signal = Signal::default();
     let waited = signal.clone();
-    let _task = runtime.spawn_ui(async move { waited.await });
+    let _task = runtime.spawn_ui(waited);
     runtime.drain_ui();
     let late = signal.clone();
     signal.set();
