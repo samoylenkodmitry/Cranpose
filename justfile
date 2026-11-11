@@ -207,6 +207,8 @@ esp32-flash-e32r35t port: esp32-build-e32r35t
 
 # Compares revisions of the demo on a board, every screen over 4 placements
 # of the code, the base first: `just esp32-ab e32r35t origin/main HEAD`.
+# `--no-hot-code` among the revisions compares them with the hot-code lists
+# off, for a change that renames, inlines or removes listed functions.
 # `--port <port>` among the revisions names the board's serial port when
 # another device's name matches it. See benchmarks/esp32/README.md.
 esp32-ab board +args: _disk-guard
