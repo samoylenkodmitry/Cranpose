@@ -4,11 +4,11 @@
 //! replaced items alone. A subtree that pushes the items it pushed before,
 //! in kind and order, writes each over the old one as it pushes it; from an
 //! item that differs on, it pushes into a spill scene that is spliced in,
-//! and what follows it moves. A layer whose child layers no longer match
-//! its records pushes its whole subtree again. The walk to the changed
-//! layers reads one record a layer and pushes nothing for the layers above
-//! them.
+//! and what follows it moves. The update starts from the records the store
+//! changed and finds each in the scene by its route, so it reads the changed
+//! records and the records above them, and none beside them.
 
+use cranpose_core::{RecordId, RecordRef};
 use cranpose_render_common::{
     graph::ProjectiveTransform, graph_scene::RenderDiagnostics, scene_store::SceneStore,
 };
@@ -21,7 +21,7 @@ use crate::{
     scene::{RasterScene, Subtree},
 };
 
-// What a walk that pushes changed layers again shares.
+// What the pushes of the changed subtrees share.
 struct Repush<'a> {
     scene: &'a mut RasterScene,
     reach: &'a mut Vec<Option<ClipBounds>>,
@@ -37,13 +37,25 @@ struct Repush<'a> {
     text: &'a TextRaster,
 }
 
-// Why a walk to a layer stopped.
-enum Stop {
-    // The record holds another layer: the parent pushes its subtree again.
-    OtherLayer,
-    // A subtree's entries of what its layers passed down lie apart: the
-    // scene is built again.
-    Rebuild,
+// The scene cannot take the change in place: it is built again.
+struct Rebuild;
+
+// A record whose subtree pushes again, with its place among the scene's
+// records and where its subtree's records end, as the update found them.
+#[derive(Clone, Copy)]
+pub(crate) struct PushRoot {
+    place: usize,
+    end: usize,
+    record: RecordId,
+}
+
+// A store with the records it changed in its latest `updates` updates, the
+// ones a scene lags by.
+#[derive(Clone, Copy)]
+pub(crate) struct Changed<'a> {
+    pub store: &'a SceneStore,
+    pub records: &'a [RecordRef],
+    pub updates: u32,
 }
 
 // Whether the scene's reach list still holds where each item reaches.
@@ -57,19 +69,22 @@ pub(crate) enum UpdatedReach {
     Lost,
 }
 
-// A scene to bring up to its graph in place, where each of its items
+// A scene to bring up to its store in place, where each of its items
 // reaches, and the storage the update borrows: the rewrite that pushes a
-// changed subtree again.
+// changed subtree again and the list of the subtrees to push.
 pub(crate) struct InPlaceUpdate<'a> {
     pub scene: &'a mut RasterScene,
     pub reach: &'a mut Vec<Option<ClipBounds>>,
     pub rewrite: &'a mut Option<Box<Rewrite>>,
+    pub roots: &'a mut Vec<PushRoot>,
 }
 
 impl InPlaceUpdate<'_> {
+    // Pushes again the subtrees of the records `changed` names, the records
+    // its store changed since the scene was brought up to it.
     pub(crate) fn run(
         self,
-        store: &SceneStore,
+        changed: Changed<'_>,
         diagnostics: &RenderDiagnostics,
         scale: f32,
         text: &TextRaster,
@@ -80,12 +95,37 @@ impl InPlaceUpdate<'_> {
             scene,
             reach,
             rewrite,
+            roots,
         } = self;
         areas.clear();
+        let store = changed.store;
         let light = LightSource::of(store, scale);
         if scene.start != Some(light) {
             return None;
         }
+        store.root_layer()?;
+        scene.refresh_routes();
+        roots.clear();
+        for &record in changed.records {
+            let Some(id) = store.resolve(record) else {
+                continue;
+            };
+            // A parent that changed itself or moved in those updates pushes
+            // its subtree, or leaves it to a record above: the store names
+            // the parent too.
+            if store
+                .parent(id)
+                .is_some_and(|parent| store.changed_within(parent, changed.updates))
+            {
+                continue;
+            }
+            match push_root(scene, store, id, roots) {
+                Ok(Some(root)) => roots.push(root),
+                Ok(None) => {}
+                Err(Rebuild) => return None,
+            }
+        }
+        outermost(roots);
         let held = if reach.len() == scene.order.len() {
             UpdatedReach::Held
         } else {
@@ -103,71 +143,132 @@ impl InPlaceUpdate<'_> {
             scale,
             text,
         };
-        let root = store.root_layer()?;
-        let walked = repush.visit(Subtree::Layer(root), 0, None);
+        // The subtrees push in the order they draw in, so the areas come in
+        // that order.
+        let pushed = roots
+            .iter()
+            .try_for_each(|root| repush.push_root(store, root.record));
         let held = repush.held;
         merge_areas(areas);
-        walked.ok()?;
+        pushed.ok()?;
         Some(held)
     }
 }
 
-impl Repush<'_> {
-    fn visit(
-        &mut self,
-        subtree: Subtree<'_>,
-        record: usize,
-        parent: Option<usize>,
-    ) -> Result<(), Stop> {
-        let old = self.scene.subtrees.get(record).ok_or(Stop::OtherLayer)?;
-        if old.identity != subtree.identity() {
-            return Err(Stop::OtherLayer);
+// Sorts `roots` by their places and drops each that lies in the subtree of
+// another: that one's push draws it. The list is short, so it sorts in place
+// by insertion.
+fn outermost(roots: &mut Vec<PushRoot>) {
+    for sorted in 1..roots.len() {
+        let mut at = sorted;
+        while at > 0 && roots[at - 1].place > roots[at].place {
+            roots.swap(at - 1, at);
+            at -= 1;
         }
-        // A subtree that holds no change pushes again only when it moved.
-        let changes = subtree.changes();
-        if old.changes.same_subtree(changes) {
-            if old.changes.same_place(changes) {
-                return Ok(());
-            }
-            return self.push_again(subtree, record, parent);
+    }
+    let (mut kept, mut end) = (0, 0);
+    for index in 0..roots.len() {
+        let root = roots[index];
+        if root.place >= end {
+            end = root.end;
+            roots[kept] = root;
+            kept += 1;
         }
-        // A node drawn inline has no records beneath its own.
-        let Subtree::Layer(layer) = subtree else {
-            return self.push_again(subtree, record, parent);
+    }
+    roots.truncate(kept);
+}
+
+// The record whose subtree pushes again for the change of `record`, when one
+// does that is not beneath a root of `found`: the record itself, or the
+// nearest one above it that the scene holds and that can push.
+fn push_root(
+    scene: &RasterScene,
+    store: &SceneStore,
+    record: RecordId,
+    found: &[PushRoot],
+) -> Result<Option<PushRoot>, Rebuild> {
+    let mut id = record;
+    // Whether a record beneath `id` leaves its push to it, whatever `id`
+    // changed itself.
+    let mut asked = false;
+    loop {
+        let parent = store.parent(id);
+        // The scene holds no record of it: the record above draws it.
+        let Some(place) = scene.route(store.record_ref(id)) else {
+            id = parent.ok_or(Rebuild)?;
+            asked = true;
+            continue;
         };
-        // A layer that changed itself, drew its subtree without records of
-        // its children, as a surface or nothing, or moved pushes it all.
-        if !old.changes.same_own(changes)
-            || old.end == record + 1
-            || !old.changes.same_place(changes)
+        // A root found for an earlier change pushes the records beneath
+        // it, this one among them.
+        if found
+            .iter()
+            .any(|root| (root.place..root.end).contains(&place))
         {
-            return self.push_again(subtree, record, parent);
+            return Ok(None);
         }
-        let Some(passed) = old.passed_down else {
-            return self.push_again(subtree, record, parent);
+        let old = &scene.subtrees[place];
+        let subtree = Subtree::of_record(store.layer(id));
+        // The record holds another layer: the record above pushes.
+        if old.identity != subtree.identity() {
+            id = parent.ok_or(Rebuild)?;
+            asked = true;
+            continue;
+        }
+        let now = subtree.changes();
+        let moved = !old.changes.same_place(now);
+        if !asked && !moved && old.changes.same_subtree(now) {
+            return Ok(None);
+        }
+        // A layer that changed nothing of its own, with records of its
+        // children, leaves the change to the records beneath it, which the
+        // store names too. A node drawn inline has none beneath its own.
+        let pushes = asked
+            || moved
+            || match subtree {
+                Subtree::Inline(_) => true,
+                Subtree::Layer(_) => {
+                    !old.changes.same_own(now) || old.end == place + 1 || old.passed_down.is_none()
+                }
+            };
+        if !pushes {
+            return Ok(None);
+        }
+        // A parent that passed nothing down pushes its own subtree.
+        if let Some(parent) = parent
+            && passed_down_by(scene, store, parent).is_none()
+        {
+            id = parent;
+            asked = true;
+            continue;
+        }
+        return Ok(Some(PushRoot {
+            place,
+            end: old.end,
+            record: id,
+        }));
+    }
+}
+
+// Where the scene holds what the record `parent` passed down to its child
+// layers.
+fn passed_down_by(scene: &RasterScene, store: &SceneStore, parent: RecordId) -> Option<usize> {
+    scene
+        .route(store.record_ref(parent))
+        .and_then(|at| scene.subtrees[at].passed_down)
+}
+
+impl Repush<'_> {
+    // Pushes the subtree of `record` again where the scene holds it now: a
+    // push before it may have moved it.
+    fn push_root(&mut self, store: &SceneStore, record: RecordId) -> Result<(), Rebuild> {
+        self.scene.refresh_routes();
+        let place = self.scene.route(store.record_ref(record)).ok_or(Rebuild)?;
+        let parent = match store.parent(record) {
+            Some(parent) => Some(passed_down_by(self.scene, store, parent).ok_or(Rebuild)?),
+            None => None,
         };
-        let mut next = record + 1;
-        let mut walked = Ok(());
-        for child in layer.children() {
-            walked = self.visit(Subtree::of_record(child), next, Some(passed));
-            if walked.is_err() {
-                break;
-            }
-            next = self
-                .scene
-                .subtrees
-                .get(next)
-                .map_or(usize::MAX, |at| at.end);
-        }
-        match walked {
-            Err(Stop::Rebuild) => Err(Stop::Rebuild),
-            // A child pushed again with more or fewer records moved where
-            // the layer ends.
-            Ok(()) if next == self.scene.subtrees[record].end => Ok(()),
-            // The child layers no longer match the records: the layer pushes
-            // its whole subtree again in place of what they pushed.
-            Ok(()) | Err(Stop::OtherLayer) => self.push_again(subtree, record, parent),
-        }
+        self.push_again(Subtree::of_record(store.layer(record)), place, parent)
     }
 
     fn push_again(
@@ -175,7 +276,7 @@ impl Repush<'_> {
         subtree: Subtree<'_>,
         record: usize,
         parent: Option<usize>,
-    ) -> Result<(), Stop> {
+    ) -> Result<(), Rebuild> {
         let passed = parent.and_then(|at| self.scene.passed_down.get(at));
         let transform = passed.map_or_else(
             || ProjectiveTransform::uniform_scale(self.scale),
@@ -204,7 +305,7 @@ impl Repush<'_> {
         let mut rewrite = self.rewrite.take().unwrap_or_default();
         if !rewrite.start(self.scene, record, self.window, self.reach, self.held) {
             *self.rewrite = Some(rewrite);
-            return Err(Stop::Rebuild);
+            return Err(Rebuild);
         }
         self.scene.rewrite = Some(rewrite);
         populate_draws_from_graph(subtree, self.scene, &context, &mut None);
@@ -214,6 +315,13 @@ impl Repush<'_> {
             .take()
             .expect("the rewrite started above");
         rewrite.finish(self.scene, record);
+        // The records the subtree pushed lie where its old ones did: the
+        // routes of those that took another's place are noted, unless all
+        // routes wait to be filled again.
+        if rewrite.rerouted() && !self.scene.routes_stale {
+            let end = self.scene.subtrees.get(record).map_or(record, |at| at.end);
+            self.scene.route_records(record..end);
+        }
         let (reach, held, areas) = rewrite.results();
         (*self.reach, self.held) = (reach, held);
         self.areas.append(areas);

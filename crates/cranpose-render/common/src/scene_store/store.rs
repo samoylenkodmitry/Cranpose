@@ -15,7 +15,7 @@ use super::{
     ChildOrder, Facts, GeoRecord, HashCache, Item, ItemKind, ItemLists, ItemRef, Journal,
     JournalCursor, JournalEntry, JournalRead, LayerProps, LayerRef, Reach, RecordEvent,
     RecordEvents, RecordFlags, RecordKind, RecordNode, ShapeChunks, ShapeRun, Slab, Span, SpanPool,
-    TreeRecord, WarmRecord, recordings::Recordings,
+    TreeRecord, WarmRecord, recordings::Recordings, touched::Touched,
 };
 #[cfg(feature = "window-damage")]
 use super::{ReachState, own_marks};
@@ -58,6 +58,7 @@ pub struct SceneStore {
     root: Option<RecordId>,
     update: SceneUpdate,
     journal: Journal,
+    touched: Touched,
     pub(super) order: ChildOrder,
     pub(crate) recordings: Recordings,
 }
@@ -125,6 +126,7 @@ impl SceneStore {
             root: None,
             update: SceneUpdate::default(),
             journal: Journal::default(),
+            touched: Touched::default(),
             order: ChildOrder::default(),
             recordings: Recordings::default(),
         }
@@ -158,8 +160,39 @@ impl SceneStore {
     pub fn begin_update(&mut self) -> SceneUpdate {
         self.journal.trim(self.tree.len());
         self.recordings.begin_update();
+        self.touched.begin(self.update);
         self.update = self.update.next();
         self.update
+    }
+
+    /// The records the latest update made, changed or moved, with the update
+    /// before it. A reader that holds the scene of that update brings itself
+    /// up to the store from them, with no walk of the records that held
+    /// still. A record may come twice. `None` when the update changed more
+    /// records than the store lists, or cleared the store: the reader reads
+    /// the store whole.
+    pub fn touched(&self) -> Option<(SceneUpdate, &[RecordRef])> {
+        self.touched.read()
+    }
+
+    /// Whether `id` changed itself or moved in the latest `updates` updates.
+    #[inline]
+    pub fn changed_within(&self, id: RecordId, updates: u32) -> bool {
+        let row = &self.tree[id.index()];
+        self.update.since(row.content_rev) < updates || self.update.since(row.place_rev) < updates
+    }
+
+    // Lists the record at `index` among those the update changed, unless a
+    // stamp of the update shows it listed.
+    #[inline]
+    fn touch(&mut self, index: usize) {
+        let tree = &self.tree[index];
+        if tree.content_rev != self.update && tree.place_rev != self.update {
+            self.touched.note(RecordRef {
+                id: RecordId::from_index(index).expect("a row is a record"),
+                generation: self.generations[index],
+            });
+        }
     }
 
     /// Starts following the `events` of the store's records: the reader's
@@ -480,6 +513,7 @@ impl SceneStore {
         self.facts.clear();
         self.root = None;
         self.journal.clear(self.update);
+        self.touched.lose();
     }
 
     /// Makes a record from `seed`, changed in the update in progress, with no
@@ -533,6 +567,7 @@ impl SceneStore {
         #[cfg(feature = "window-damage")]
         own_marks::pend_inserted(self, id.index());
         self.log(RecordEvent::Inserted, id);
+        self.touched.note(self.record_ref(id));
         id
     }
 
@@ -642,6 +677,7 @@ impl SceneStore {
             self.order.note(record, old);
         }
         self.tree[index].items = self.items.write(self.tree[index].items, items);
+        self.touch(index);
         // A reader that learns only whether the update changed anything
         // learns it from the first write of other items.
         if changed {
@@ -788,6 +824,7 @@ impl SceneStore {
         self.warm[index].node = node.map(RecordNode::of);
         self.stale_with_parent(index);
         self.log(RecordEvent::Claimed, id);
+        self.touch(index);
     }
 
     /// Removes every item of `id`: its draws and the records beneath it.
@@ -805,6 +842,9 @@ impl SceneStore {
         self.tree[index].items = Span::default();
         super::facts::forget_own(self, index);
         self.stale(index);
+        if span.len() != 0 {
+            self.touch(index);
+        }
     }
 
     /// Notes that the update in progress changed what `id` draws: its own
@@ -816,6 +856,7 @@ impl SceneStore {
         self.redraw_pending(index);
         self.stale(index);
         super::facts::forget_own(self, index);
+        self.touch(index);
         let tree = &mut self.tree[index];
         tree.content_rev = update;
         let raise = tree.subtree_rev != update;
@@ -834,6 +875,7 @@ impl SceneStore {
         if self.tree[index].content_rev != update {
             self.log(RecordEvent::Changed, id);
         }
+        self.touch(index);
         let tree = &mut self.tree[index];
         tree.content_rev = update;
         tree.subtree_rev = update;
@@ -846,6 +888,7 @@ impl SceneStore {
     #[inline]
     pub(super) fn moved(&mut self, index: usize) {
         if self.tree[index].place_rev != self.update {
+            self.touch(index);
             self.tree[index].place_rev = self.update;
             self.log(
                 RecordEvent::Moved,

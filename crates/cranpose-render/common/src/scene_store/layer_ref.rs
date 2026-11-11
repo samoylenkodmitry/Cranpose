@@ -58,6 +58,12 @@ pub struct RecordChanges {
 }
 
 impl RecordChanges {
+    /// The record the changes are of, with the generation of its row.
+    #[inline]
+    pub fn record(self) -> RecordRef {
+        self.record
+    }
+
     /// Whether nothing in the record's subtree changed between `self` and
     /// `other`.
     #[inline]

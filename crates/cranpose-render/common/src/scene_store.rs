@@ -24,6 +24,7 @@ mod shape_chunks;
 mod slab;
 mod spec;
 mod store;
+mod touched;
 
 use child_order::ChildOrder;
 use facts::Facts;

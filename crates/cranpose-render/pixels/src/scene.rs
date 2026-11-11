@@ -1,6 +1,6 @@
 use std::{ops::Range, sync::Arc};
 
-use cranpose_core::NodeId;
+use cranpose_core::{NodeId, RecordRef};
 pub use cranpose_render_common::graph_scene::{HitRegion, Scene};
 use cranpose_render_common::{
     glyph_reach::{InkSpread, glyph_part},
@@ -344,6 +344,14 @@ pub(crate) struct RasterScene {
     pub(crate) snap_anchor: Option<Point>,
     // While a changed subtree pushes again over its old items: where.
     pub(crate) rewrite: Option<Box<Rewrite>>,
+    // By record row, one past the place of the record's entry in `subtrees`
+    // and zero for none: where the update of a changed record starts, with
+    // no walk to it. An entry may name a place another record took since;
+    // `route` checks.
+    routes: Vec<u32>,
+    // Whether `subtrees` changed its records' places since `routes` was
+    // filled.
+    pub(crate) routes_stale: bool,
 }
 
 #[expect(clippy::multiple_inherent_impl, reason = "item reach in draw/reach")]
@@ -361,6 +369,8 @@ impl RasterScene {
             kept: Vec::new(),
             snap_anchor: None,
             rewrite: None,
+            routes: Vec::new(),
+            routes_stale: true,
         }
     }
 
@@ -374,6 +384,37 @@ impl RasterScene {
         self.passed_down.clear();
         self.start = None;
         self.kept.clear();
+        self.routes_stale = true;
+    }
+
+    // The place in `subtrees` of the entry of `record`, when the scene
+    // holds one.
+    pub(crate) fn route(&self, record: RecordRef) -> Option<usize> {
+        let place = (*self.routes.get(record.id.index())? as usize).checked_sub(1)?;
+        (self.subtrees.get(place)?.changes.record() == record).then_some(place)
+    }
+
+    // Fills the routes again when the records' places changed.
+    pub(crate) fn refresh_routes(&mut self) {
+        if self.routes_stale {
+            self.routes.clear();
+            self.route_records(0..self.subtrees.len());
+            self.routes_stale = false;
+        }
+    }
+
+    // Notes the places of the records `places` holds.
+    pub(crate) fn route_records(&mut self, places: Range<usize>) {
+        for place in places {
+            let Some(entry) = self.subtrees.get(place) else {
+                return;
+            };
+            let row = entry.changes.record().id.index();
+            if row >= self.routes.len() {
+                self.routes.resize(row + 1, 0);
+            }
+            self.routes[row] = u32::try_from(place + 1).unwrap_or(0);
+        }
     }
 
     pub(crate) fn counts(&self) -> ItemCounts {

@@ -387,6 +387,12 @@ fn first_difference(kept: &[u8], full: &[u8]) -> Option<(usize, usize)> {
 }
 
 fn kept_frames_match_full_redraws(scale: f32, scenes: fn(Step)) {
+    kept_frames_match_full_redraws_taken(scale, scenes, 1);
+}
+
+// The kept frame takes the picture at each `every`-th update alone, as a
+// host does that draws slower than its scene changes.
+fn kept_frames_match_full_redraws_taken(scale: f32, scenes: fn(Step), every: u32) {
     let (mut shell, captured) = shell(scale, scenes);
     let mut picture = Picture::default();
     let mut areas = Vec::new();
@@ -399,6 +405,9 @@ fn kept_frames_match_full_redraws(scale: f32, scenes: fn(Step)) {
             step.set(frame);
         }
         shell.update();
+        if frame % every != 0 {
+            continue;
+        }
         shell.primary().with_renderer(|renderer| {
             renderer.update_picture(&mut picture, WIDTH, HEIGHT, scale, &mut areas);
             for area in &areas {
@@ -413,6 +422,84 @@ fn kept_frames_match_full_redraws(scale: f32, scenes: fn(Step)) {
             None,
             "frame {frame} at scale {scale}: the kept frame differs from a full redraw at (x, y); areas {areas:?}"
         );
+    }
+}
+
+// Nodes that change by turns among nodes that hold still: two bars under
+// still rows, each on its own frames; a box under a still parent whose
+// layer comes and goes; and a line that leaves and comes back.
+#[composable]
+fn Turns(captured: Step) {
+    let step = rememberMutableStateOf(|| 0u32);
+    *captured.borrow_mut() = Some(step);
+    let n = step.value();
+    Column(
+        Modifier::empty().fill_max_size(),
+        ColumnSpec::default(),
+        move || {
+            for row in 0..5u32 {
+                cranpose_core::with_key(&row, || {
+                    Text(
+                        format!("Still row {row}"),
+                        Modifier::empty(),
+                        TextStyle::default(),
+                    );
+                });
+            }
+            for bar in 0..2u32 {
+                cranpose_core::with_key(&(100 + bar), || {
+                    // Each frame gives one of the two bars its next width.
+                    let turn = (n + 1 - bar) / 2;
+                    Box(
+                        Modifier::empty()
+                            .width(20.0 + (turn * 13 % 150) as f32)
+                            .height(8.0)
+                            .background(color(turn, bar)),
+                        BoxSpec::default(),
+                        || {},
+                    );
+                });
+            }
+            Box(
+                Modifier::empty()
+                    .width(120.0)
+                    .height(20.0)
+                    .background(Color::from_rgb_u8(20, 20, 20)),
+                BoxSpec::default(),
+                move || {
+                    let inner = Modifier::empty()
+                        .width(40.0 + (n % 5) as f32 * 4.0)
+                        .height(12.0)
+                        .background(color(n / 3, 7));
+                    let inner = if (n / 3) % 2 == 1 {
+                        inner.graphics_layer(|| GraphicsLayer {
+                            alpha: 0.5,
+                            ..GraphicsLayer::default()
+                        })
+                    } else {
+                        inner
+                    };
+                    Box(inner, BoxSpec::default(), || {});
+                },
+            );
+            if n % 4 != 3 {
+                Text("Comes and goes", Modifier::empty(), TextStyle::default());
+            }
+        },
+    );
+}
+
+#[test]
+fn kept_frames_match_full_redraws_while_nodes_change_by_turns() {
+    kept_frames_match_full_redraws(1.0, Turns);
+    kept_frames_match_full_redraws(1.5, Turns);
+}
+
+#[test]
+fn a_kept_frame_that_skips_updates_matches_a_full_redraw() {
+    for every in [2, 3, 7] {
+        kept_frames_match_full_redraws_taken(1.0, Turns, every);
+        kept_frames_match_full_redraws_taken(1.5, Scenes, every);
     }
 }
 

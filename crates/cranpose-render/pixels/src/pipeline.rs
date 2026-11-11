@@ -302,7 +302,7 @@ mod space;
 #[cfg(test)]
 pub(crate) use draw_child::push_draw_primitive;
 use draw_child::render_draw_child;
-pub(crate) use in_place::{InPlaceUpdate, UpdatedReach};
+pub(crate) use in_place::{Changed, InPlaceUpdate, PushRoot, UpdatedReach};
 use layer_shadow::push_layer_shadow;
 use space::{push_seen_surfaces, seen_surfaces};
 

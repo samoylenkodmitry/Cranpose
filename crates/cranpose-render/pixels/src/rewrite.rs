@@ -33,6 +33,10 @@ pub(crate) struct Rewrite {
     // match the old item in its place.
     spilled_at: Option<Places>,
     spill: RasterScene,
+    // Whether a record the subtree placed is another than the old one in
+    // its place, or lies in the spill: the scene's routes to the subtree's
+    // records no longer hold.
+    rerouted: bool,
     // The part of the frame whose changed pixels `areas` takes.
     window: ClipBounds,
     // Whether `reach` holds where each item of the scene reaches.
@@ -83,6 +87,7 @@ impl Rewrite {
         };
         self.spilled_at = None;
         self.spill.clear();
+        self.rerouted = false;
         self.window = window;
         (self.reach, self.held) = (std::mem::take(reach), held);
         true
@@ -147,6 +152,7 @@ impl Rewrite {
         if self.spilled_at.is_none() {
             let index = self.next.records;
             if index < self.stop.records {
+                self.rerouted |= records[index].changes.record() != record.changes.record();
                 records[index] = SubtreeItems {
                     end: index + 1,
                     ..record
@@ -157,6 +163,7 @@ impl Rewrite {
             self.spilled_at = Some(self.next);
         }
         let index = self.record_count();
+        self.rerouted = true;
         self.spill.subtrees.push(SubtreeItems {
             end: index + 1,
             ..record
@@ -257,10 +264,18 @@ impl Rewrite {
             later.passed_down = later.passed_down.map(|index| shift(index, entries));
         }
         // The runs copied in place from the scene the walk started from no
-        // longer lie where they did, nor each item where `reach` holds.
+        // longer lie where they did, nor each item where `reach` holds, nor
+        // each later record where its route leads.
         scene.kept.clear();
+        scene.routes_stale |= records.0 != records.1;
         self.held = UpdatedReach::Lost;
         self.spill.clear();
+    }
+
+    // Whether the routes to the records of the subtree the rewrite pushed
+    // need to be noted again.
+    pub(crate) fn rerouted(&self) -> bool {
+        self.rerouted
     }
 
     // Hands back the reach list the rewrite took, whether it still holds

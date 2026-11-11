@@ -17,10 +17,12 @@ mod surface;
 #[path = "tests/text_draws.rs"]
 mod text_draws;
 
+use cranpose_core::{RecordRef, SceneUpdate, StoreId};
 pub use cranpose_render_common::rgb565::Rgb565Order;
 use cranpose_render_common::{
     Renderer, SceneUpdates,
     rgb565::{Rgb565Be, Rgb565Le},
+    scene_store::SceneStore,
     text_fonts::TextFonts,
 };
 use cranpose_ui_graphics::{MemoryHeadroom, Size};
@@ -66,6 +68,80 @@ pub struct Picture {
     // Where each item of `raster` can draw in the frame, in its order: each
     // strip a host draws passes over the items that miss it.
     reach: Vec<Option<draw::ClipBounds>>,
+    // The store and its update the scene was brought up to.
+    synced: Option<(StoreId, SceneUpdate)>,
+    // The subtrees an update in place pushes again, kept for its room.
+    roots: Vec<pipeline::PushRoot>,
+}
+
+// The most records and updates the changes keep: past them a picture that
+// lags builds its scene again.
+const MOST_CHANGES: usize = 256;
+const MOST_UPDATES: usize = 8;
+
+// The records the store changed in its latest updates, oldest first: a
+// picture that holds the scene of one of those updates pushes again the
+// records changed since.
+#[derive(Default)]
+struct StoreChanges {
+    // The store's update when its changes were read last.
+    at: Option<(StoreId, SceneUpdate)>,
+    // Each update the changes reach back to, with where the records changed
+    // after it start.
+    updates: Vec<(SceneUpdate, usize)>,
+    records: Vec<RecordRef>,
+}
+
+impl StoreChanges {
+    // Adds what the latest update of `store` changed.
+    fn read(&mut self, store: &SceneStore) {
+        let now = (store.id(), store.update());
+        if self.at == Some(now) {
+            return;
+        }
+        let touched = store.touched();
+        let follows = touched.is_some_and(|(since, records)| {
+            self.at == Some((now.0, since))
+                && self.updates.len() < MOST_UPDATES
+                && self.records.len() + records.len() <= MOST_CHANGES
+        });
+        if !follows {
+            self.updates.clear();
+            self.records.clear();
+        }
+        if let Some((since, records)) = touched {
+            self.updates.push((since, self.records.len()));
+            self.records.extend_from_slice(records);
+        }
+        self.at = Some(now);
+    }
+
+    // The records `store` changed since `synced`, when the changes reach
+    // back to it and up to the store's update.
+    fn since<'a>(
+        &'a self,
+        store: &'a SceneStore,
+        synced: Option<(StoreId, SceneUpdate)>,
+    ) -> Option<pipeline::Changed<'a>> {
+        let now = (store.id(), store.update());
+        if synced == Some(now) {
+            return Some(pipeline::Changed {
+                store,
+                records: &[],
+                updates: 0,
+            });
+        }
+        let (id, update) = synced?;
+        if self.at != Some(now) || id != now.0 {
+            return None;
+        }
+        let &(_, start) = self.updates.iter().find(|span| span.0 == update)?;
+        Some(pipeline::Changed {
+            store,
+            records: &self.records[start..],
+            updates: now.1.since(update),
+        })
+    }
 }
 
 fn valid_scale(scale: f32) -> f32 {
@@ -79,6 +155,7 @@ fn valid_scale(scale: f32) -> f32 {
 /// A renderer that draws the scene into a caller-owned RGBA pixel buffer on the CPU.
 pub struct PixelsRenderer {
     scene: Scene,
+    changes: StoreChanges,
     text: draw::TextRaster,
     /// The app context this renderer gave its text measurer.
     app_context: Option<std::rc::Weak<cranpose_ui::AppContext>>,
@@ -103,6 +180,7 @@ impl PixelsRenderer {
     pub fn with_fonts(fonts: &[&'static [u8]]) -> Self {
         Self {
             scene: Scene::new(),
+            changes: StoreChanges::default(),
             text: draw::TextRaster::new(TextFonts::from_fonts_or_default(fonts)),
             app_context: None,
         }
@@ -162,7 +240,10 @@ impl PixelsRenderer {
         changed: &mut Vec<PixelRect>,
     ) {
         let scale = valid_scale(scale);
+        let store = self.scene.store();
+        let now = Some((store.id(), store.update()));
         if let Some(reach) = self.update_picture_in_place(picture, width, height, scale) {
+            picture.synced = now;
             changed.clear();
             changed.extend(picture.changed.iter().copied().map(pixel_rect));
             match reach {
@@ -181,6 +262,7 @@ impl PixelsRenderer {
             return;
         }
         self.redraw_picture(picture, width, height, scale, changed);
+        picture.synced = now;
     }
 
     // Builds `picture`'s scene again and puts into `changed` the areas that
@@ -243,9 +325,10 @@ impl PixelsRenderer {
     // Brings `picture`'s scene up to the current scene in place, and puts
     // the areas the changed layers changed into `picture.changed`. `None`
     // when the scene must be built again: the first time, after a change of
-    // size, scale or light, or of the root layer, or when a layer's records
-    // no longer lie in one run, with the areas the update changed before it
-    // stopped in `picture.changed`.
+    // size, scale or light, or of the root layer, when the picture holds
+    // another scene than the one before the store's last update, or when a
+    // layer's records no longer lie in one run, with the areas the update
+    // changed before it stopped in `picture.changed`.
     fn update_picture_in_place(
         &self,
         picture: &mut Picture,
@@ -260,6 +343,7 @@ impl PixelsRenderer {
         if (picture.width, picture.height, picture.scale) != (width, height, scale) {
             return None;
         }
+        let changed = self.changes.since(self.scene.store(), picture.synced)?;
         let window = draw::ClipBounds {
             min_x: 0,
             min_y: 0,
@@ -270,9 +354,10 @@ impl PixelsRenderer {
             scene: raster,
             reach: &mut picture.reach,
             rewrite: &mut picture.rewrite,
+            roots: &mut picture.roots,
         }
         .run(
-            self.scene.store(),
+            changed,
             self.scene.diagnostics(),
             scale,
             &self.text,
@@ -435,6 +520,7 @@ impl Renderer for PixelsRenderer {
         _viewport: Size,
     ) -> Result<(), Self::Error> {
         self.scene.rebuild_from_applier(applier, root);
+        self.changes.read(self.scene.store());
         Ok(())
     }
 
@@ -446,6 +532,7 @@ impl Renderer for PixelsRenderer {
         updates: SceneUpdates<'_>,
     ) -> Result<(), Self::Error> {
         self.scene.update_from_applier(applier, root, updates);
+        self.changes.read(self.scene.store());
         Ok(())
     }
 }
