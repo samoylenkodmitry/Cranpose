@@ -75,19 +75,32 @@ where
     F: FnMut() + 'static,
     P: MeasurePolicy + Clone + PartialEq,
 {
+    compose_layout_node(modifier, measure_policy, environment, &mut content)
+}
+
+// The layout node of `compose_layout` and its children's bracket, compiled
+// once: inlined into every widget call it took the modifier's drop and the
+// bracket into each app body, about 200 bytes of wasm a call.
+#[inline(never)]
+fn compose_layout_node(
+    mut modifier: Modifier,
+    policy: &dyn PolicyUpdate,
+    environment: LayoutEnvironment,
+    content: &mut dyn FnMut(),
+) -> NodeId {
     // One composer lookup for the node and its children's bracket: each
     // lookup reads a thread-local.
     cranpose_core::with_current_composer(|composer| {
-        let mut modifier = modifier;
-        let (id, provided, _) =
-            emit_layout_node(composer, &mut modifier, measure_policy, environment);
+        let (id, provided, _) = emit_layout_node(composer, &mut modifier, policy, environment);
         composer.push_parent(id);
-        compose_under_locals(provided, &mut content);
+        compose_under_locals(provided, content);
         composer.pop_parent();
         id
     })
 }
 
+// A layout node with no children, compiled once for each kind of modifier.
+#[inline(never)]
 pub(crate) fn compose_empty_layout(
     mut modifier: impl NodeModifier,
     environment: LayoutEnvironment,
@@ -192,9 +205,9 @@ impl NodeModifier for Modifier {
 
 // Emits and updates a layout node; returns it, the composition locals its
 // modifier provides and whether it holds children. The node keeps the policy
-// it holds while `policy` equals it. Out of line, one function for every
-// policy and modifier.
-#[inline(never)]
+// it holds while `policy` equals it. One body for every policy and modifier,
+// inlined into its two callers, which are out of line themselves.
+#[inline]
 fn emit_layout_node(
     composer: &cranpose_core::Composer,
     modifier: &mut dyn NodeModifier,
