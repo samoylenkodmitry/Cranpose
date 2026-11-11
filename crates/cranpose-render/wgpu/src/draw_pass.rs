@@ -16,7 +16,7 @@ use crate::{
     pipeline_compiler::CompileLane,
     render::{
         ArenaPlacement, GpuRenderer, ImageSlot, PassDepth, PassFrame, RunStage, StoreRunBatch,
-        TargetRect, ViewportUniformParams, scissor_rect_for_rect, supported_blend_mode,
+        TargetRect, ViewportUniformParams, supported_blend_mode,
     },
     rrect_shadow::{ShadowInstance, append_shadow_instances},
     run_store::RunDrawCall,
@@ -39,6 +39,7 @@ mod mixed_turns;
 mod pass_buffers;
 mod pass_scratch;
 mod segment_run;
+mod shape_reach;
 mod target_space;
 pub(crate) use interiors_first::lays_interiors_first;
 use interiors_first::takes_depth;
@@ -46,6 +47,7 @@ use mixed_turns::turns_mixed;
 use pass_buffers::PassBuffers;
 pub(crate) use pass_scratch::PassScratch;
 use segment_run::{ArenaClip, SegmentBinding, SegmentRun};
+use shape_reach::shape_reach;
 use target_space::{dest_in_target, mask_in_target, translate_inverse};
 
 /// A render target and its size in pixels.
@@ -1356,22 +1358,6 @@ impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
         });
     }
 
-    /// The target pixels a shape run can touch, a pixel wider on each side
-    /// for its antialiased edge.
-    fn run_target_bounds(&self, bounds: Rect, run: &SegmentRun<'s, '_>) -> Option<TargetRect> {
-        let pixel = 1.0 / run.segment.scale;
-        scissor_rect_for_rect(
-            Rect {
-                x: bounds.x - pixel,
-                y: bounds.y - pixel,
-                width: bounds.width + 2.0 * pixel,
-                height: bounds.height + 2.0 * pixel,
-            },
-            run.segment.scale,
-            run.viewport,
-        )
-    }
-
     /// How an arena run's clip applies: the scissor its paint takes, how its
     /// pipeline tests the clip, and the scissor its chunk takes. A rect clip
     /// becomes the paint's scissor, and the shader tests what a scissor
@@ -1390,12 +1376,10 @@ impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
             };
         };
         let paint = clip.filter(|_| draw.placement.clip_rounded());
-        let reach = self
-            .run_target_bounds(bounds, run)
-            .and_then(|reach| match clip {
-                Some(clip) => intersect_target_rects(reach, clip),
-                None => Some(reach),
-            });
+        let reach = shape_reach(draw, bounds, run).and_then(|reach| match clip {
+            Some(clip) => intersect_target_rects(reach, clip),
+            None => Some(reach),
+        });
         ArenaClip {
             paint,
             tested: crate::render::SegmentClip::of(&draw.placement, paint.is_some()),
@@ -1415,9 +1399,7 @@ impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
             items.next_if(|item| matches!(item, Item::Run(..)))
         {
             if !self.held.is_empty()
-                && self
-                    .run_target_bounds(bounds, run)
-                    .is_some_and(|bounds| self.held.overlaps(bounds))
+                && shape_reach(draw, bounds, run).is_some_and(|reach| self.held.overlaps(reach))
             {
                 self.draw_held(renderer, run.binding);
             }

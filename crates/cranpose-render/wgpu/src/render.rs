@@ -48,7 +48,7 @@ use crate::{
     rrect_shadow::{SHADOW_QUAD_CORNERS, ShadowInstance},
     run_store::{ArenaBinding, PlacementData, RunBufferMode, RunDrawCall, RunStore, StoredTables},
     scene::{ImageDraw, RunDraw, ShadowDraw, SnapAnchor, TextDraw},
-    scissor::intersect_target_rects,
+    scissor::{intersect_target_rects, target_rect_between},
     shape_pipelines::{PipelineDemand, ShapePipelineFactory, ShapePipelines},
     shared_shader::SharedShader,
 };
@@ -3254,8 +3254,6 @@ pub(crate) fn scissor_rect_for_rect(
     root_scale: f32,
     viewport: ViewportUniformParams,
 ) -> Option<(u32, u32, u32, u32)> {
-    let width = viewport.width as f32;
-    let height = viewport.height as f32;
     let mut left = canonicalize_device_coordinate(rect.x * root_scale);
     let mut top = canonicalize_device_coordinate(rect.y * root_scale);
     let mut right = canonicalize_device_coordinate((rect.x + rect.width) * root_scale);
@@ -3270,19 +3268,15 @@ pub(crate) fn scissor_rect_for_rect(
         (left, top) = (bounds.x, bounds.y);
         (right, bottom) = (bounds.x + bounds.width, bounds.y + bounds.height);
     }
-    let left = (left - viewport.offset[0]).clamp(0.0, width).floor();
-    let top = (top - viewport.offset[1]).clamp(0.0, height).floor();
-    let right = (right - viewport.offset[0]).clamp(0.0, width).ceil();
-    let bottom = (bottom - viewport.offset[1]).clamp(0.0, height).ceil();
-    if right <= left || bottom <= top {
-        return None;
-    }
-    Some((
-        left as u32,
-        top as u32,
-        (right - left) as u32,
-        (bottom - top) as u32,
-    ))
+    target_rect_between(
+        [
+            (left - viewport.offset[0]).floor(),
+            (top - viewport.offset[1]).floor(),
+            (right - viewport.offset[0]).ceil(),
+            (bottom - viewport.offset[1]).ceil(),
+        ],
+        (viewport.width, viewport.height),
+    )
 }
 
 fn scissor_rect_for_layer(

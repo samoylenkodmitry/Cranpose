@@ -55,6 +55,28 @@ pub(crate) fn target_rect_within(inner: TargetRect, outer: TargetRect) -> bool {
         && inner.1 + inner.3 <= outer.1 + outer.3
 }
 
+// The pixels between the whole-pixel `edges` (left, top, right, bottom),
+// cut to a `width` by `height` target; `None` when they hold none.
+pub(crate) fn target_rect_between(
+    edges: [f32; 4],
+    (width, height): (u32, u32),
+) -> Option<TargetRect> {
+    let (width, height) = (width as f32, height as f32);
+    let left = edges[0].clamp(0.0, width);
+    let top = edges[1].clamp(0.0, height);
+    let right = edges[2].clamp(0.0, width);
+    let bottom = edges[3].clamp(0.0, height);
+    if right <= left || bottom <= top {
+        return None;
+    }
+    Some((
+        left as u32,
+        top as u32,
+        (right - left) as u32,
+        (bottom - top) as u32,
+    ))
+}
+
 pub(crate) fn target_rects_overlap(a: TargetRect, b: TargetRect) -> bool {
     a.0 < b.0 + b.2 && b.0 < a.0 + a.2 && a.1 < b.1 + b.3 && b.1 < a.1 + a.3
 }

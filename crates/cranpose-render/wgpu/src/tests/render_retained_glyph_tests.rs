@@ -601,7 +601,7 @@ fn filled_run(x: f32, width: f32, color: Color) -> RunDraw {
     .expect("a run with a rect")
 }
 
-fn push_label(scene: &mut CompositorScene, x: f32, color: Color) {
+fn push_label(scene: &mut CompositorScene, x: f32, color: Color, clip: Option<Rect>) {
     let style = TextStyle {
         span_style: cranpose_ui::text::SpanStyle {
             font_size: cranpose_ui::text::TextUnit::Sp(18.0),
@@ -644,7 +644,7 @@ fn push_label(scene: &mut CompositorScene, x: f32, color: Color) {
         text_style: Arc::new(style),
         font_size: 18.0,
         scale: 1.0,
-        clip: None,
+        clip,
     });
 }
 
@@ -711,7 +711,7 @@ fn labels_between_shapes_they_do_not_touch_draw_in_one_batch() {
     let mut scene = CompositorScene::new();
     for x in [0.0, 64.0] {
         scene.push_run(filled_run(x, 40.0, red));
-        push_label(&mut scene, x + 4.0, Color::WHITE);
+        push_label(&mut scene, x + 4.0, Color::WHITE, None);
     }
     let (pixels, draws) = draw_scene(&mut renderer, &scene);
     let background = pixel_at(&pixels, 2, 2).to_vec();
@@ -737,7 +737,7 @@ fn a_shape_over_a_label_still_draws_over_it() {
     let blue = Color(0.0, 0.0, 1.0, 1.0);
     let mut scene = CompositorScene::new();
     scene.push_run(filled_run(0.0, 40.0, red));
-    push_label(&mut scene, 4.0, Color::WHITE);
+    push_label(&mut scene, 4.0, Color::WHITE, None);
     scene.push_run(filled_run(0.0, 128.0, blue));
     let (pixels, _) = draw_scene(&mut renderer, &scene);
     let covered = pixel_at(&pixels, 20, 16).to_vec();
@@ -750,6 +750,86 @@ fn a_shape_over_a_label_still_draws_over_it() {
             );
         }
     }
+}
+
+// A 4 pixel square at (8, `y`) under `snap`.
+fn dot_run(y: f32, snap: Option<SnapAnchor>, color: Color) -> RunDraw {
+    let mut recorder = cranpose_ui_graphics::ShapeRecorder::default();
+    recorder.push_primitive(cranpose_ui_graphics::DrawPrimitive::Rect {
+        rect: Rect {
+            x: 8.0,
+            y,
+            width: 4.0,
+            height: 4.0,
+        },
+        brush: cranpose_ui_graphics::Brush::solid(color),
+        stroke: None,
+    });
+    RunDraw::whole(
+        Arc::new(recorder),
+        crate::scene::Placement::at(Point::default(), snap, None),
+    )
+    .expect("a run with a rect")
+}
+
+// A card, a label on it cut off below row 16, then `dot`, each when asked.
+fn card_label_dot(label: bool, dot: Option<RunDraw>) -> CompositorScene {
+    let mut scene = CompositorScene::new();
+    scene.push_run(filled_run(0.0, 40.0, Color(1.0, 0.0, 0.0, 1.0)));
+    if label {
+        let clip = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 40.0,
+            height: 16.0,
+        };
+        push_label(&mut scene, 4.0, Color::WHITE, Some(clip));
+    }
+    if let Some(dot) = dot {
+        scene.push_run(dot);
+    }
+    scene
+}
+
+#[test]
+fn a_shape_that_shares_no_pixel_with_a_held_label_joins_its_batch() {
+    let (_lock, mut renderer) = test_renderer();
+    let blue = Color(0.0, 0.0, 1.0, 1.0);
+    for snap in [Some(SnapAnchor::rigid(Point::default())), None] {
+        let dot = || Some(dot_run(16.0, snap, blue));
+        let (pixels, draws) = draw_scene(&mut renderer, &card_label_dot(true, dot()));
+        let (label_alone, _) = draw_scene(&mut renderer, &card_label_dot(true, None));
+        let (dot_alone, _) = draw_scene(&mut renderer, &card_label_dot(false, dot()));
+        assert_eq!(
+            draws, 3,
+            "the label ends at row 16 and the dot under {snap:?} starts there, so the dot joins \
+             the card's shape draw: one interior pre-pass draw, one shape draw and one glyph draw"
+        );
+        for y in 0..32 {
+            let expected = if y < 16 { &label_alone } else { &dot_alone };
+            for x in 0..128 {
+                assert_eq!(
+                    pixel_at(&pixels, x, y),
+                    pixel_at(expected, x, y),
+                    "the label and the dot under {snap:?} share no pixel, so drawing the dot \
+                     first changes none, at {x},{y}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn an_unsnapped_shape_a_fraction_into_a_held_labels_row_draws_after_it() {
+    let (_lock, mut renderer) = test_renderer();
+    let blue = Color(0.0, 0.0, 1.0, 1.0);
+    let dot = dot_run(16.0 - 1.0 / 32.0, None, blue);
+    let (_, draws) = draw_scene(&mut renderer, &card_label_dot(true, Some(dot)));
+    assert_eq!(
+        draws, 4,
+        "the dot's edge lies 1/32 pixel into the label's last row, where its coverage shows, so \
+         the card's shape draw ends before the label and the dot draws after it"
+    );
 }
 
 #[test]
