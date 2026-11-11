@@ -70,6 +70,12 @@ impl Notes {
             .partition_point(|note| f64::from(note.start) < seconds)
     }
 
+    // The count of the notes that start at `seconds` or earlier.
+    pub fn started_by(&self, seconds: f64) -> usize {
+        self.notes
+            .partition_point(|note| f64::from(note.start) <= seconds)
+    }
+
     // Seconds from the start of the song to the end of the last sound.
     pub fn seconds(&self) -> f32 {
         self.seconds

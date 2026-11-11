@@ -2,20 +2,26 @@
 // composition as a score comes from DaKapo (https://github.com/O-O-Balance/DaKapo).
 
 mod clair_de_lune;
+mod controls;
 mod key_range;
 mod key_set;
 mod keyboard;
 mod midi;
+mod night_sky;
 mod part;
 mod performance;
 mod player;
 mod reverb;
+mod roll;
+mod settings;
 mod song;
 mod synth;
 mod tab;
 mod timbre;
 mod transport;
+mod typed_keys;
 mod voice;
+mod voice_bank;
 mod voicing;
 
 pub use clair_de_lune::clair_de_lune;
@@ -27,7 +33,8 @@ pub use part::Part;
 pub use performance::{
     local_music_output, local_performance, rememberPerformance, Perform, Performance,
 };
-pub use player::{MusicOutput, MusicPlayer, PartSlot};
+pub use player::{KeyDown, MusicOutput, MusicPlayer, PartSlot, ShownPart};
+pub use roll::Roll;
 pub use song::{Note, Notes, Song, SongPart};
 pub(crate) use tab::MusicTab;
 pub use timbre::Timbre;

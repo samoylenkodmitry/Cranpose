@@ -17,8 +17,9 @@ const BLOCK_FRAMES: usize = 1024;
 pub(crate) const LEAD_SECONDS: f64 = 0.1;
 
 // The least time between the context's clock and the start of a block the
-// stream schedules, so the block is not already late when the browser gets it.
-const RESTART_MARGIN_SECONDS: f64 = 0.02;
+// stream schedules, so the block is not already late when the browser gets
+// it. A context can move its clock in steps of 20 ms.
+const START_MARGIN_SECONDS: f64 = 0.03;
 
 // A browser starts a context only after the user has acted on the page.
 const UNLOCK_EVENTS: [&str; 3] = ["pointerdown", "pointerup", "keydown"];
@@ -44,14 +45,7 @@ impl Stream {
         if !self.wanted.get() || self.context.state() != AudioContextState::Running {
             return;
         }
-        let now = self.context.current_time();
-        // A block the browser gets after its start plays late, over the block
-        // that follows it. A hole of silence is the smaller fault.
-        let earliest = now + RESTART_MARGIN_SECONDS;
-        if self.next_start.get() < earliest {
-            self.next_start.set(earliest);
-        }
-        while self.next_start.get() - now < LEAD_SECONDS {
+        while self.next_start.get() - self.context.current_time() < LEAD_SECONDS {
             if let Err(error) = self.schedule_block() {
                 log::warn!("cranpose audio: the browser refused a block: {error:?}");
                 return;
@@ -89,7 +83,11 @@ impl Stream {
             let scheduled: &AudioScheduledSourceNode = source.as_ref();
             scheduled.set_onended(Some(refill.as_ref().unchecked_ref()));
         }
-        let start = self.next_start.get();
+        // A block the browser gets after its start plays late, over the block
+        // that follows it. A hole of silence is the smaller fault. The clock
+        // is read here, after the render: the first render of a page is slow.
+        let earliest = self.context.current_time() + START_MARGIN_SECONDS;
+        let start = self.next_start.get().max(earliest);
         source.start_with_when(start)?;
         self.next_start
             .set(start + BLOCK_FRAMES as f64 / f64::from(sample_rate));

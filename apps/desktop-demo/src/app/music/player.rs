@@ -12,10 +12,11 @@ use cranpose_audio::{
     ring,
 };
 use cranpose_services::AudioError;
+use cranpose_ui::Color;
 
 use super::{
     key_set::KeySet,
-    song::Notes,
+    song::{note_seconds, Notes},
     synth::{Command, Synth, MAX_PARTS},
     transport::Transport,
     voicing::Voicing,
@@ -68,10 +69,25 @@ enum Device {
     Failed(String),
 }
 
-#[derive(Clone)]
-struct ShownPart {
-    notes: Notes,
-    transpose: i8,
+// A key a part holds down, as a picture shows it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct KeyDown {
+    // The key at the pitch its part sounds it.
+    pub key: u8,
+    // The color of its part.
+    pub color: Color,
+    // Seconds of the song since the key went down, and until it lifts.
+    pub seconds_down: f32,
+    pub seconds_left: f32,
+}
+
+// What a picture needs of a part.
+#[derive(Clone, PartialEq)]
+pub struct ShownPart {
+    pub notes: Notes,
+    // Semitones the part sounds above its written keys.
+    pub transpose: i8,
+    pub color: Color,
 }
 
 struct Inner {
@@ -185,6 +201,21 @@ impl MusicPlayer {
         self.send(Command::Seek(seconds));
     }
 
+    // Drags the clock to `seconds` of the song by hand. The piece stops
+    // running; the notes the clock stands in sound, each as far into its
+    // life as the clock is past its start, and so does every note the clock
+    // enters on its way.
+    pub fn drag_to(&self, seconds: f64) {
+        self.wake();
+        self.inner.transport.set_playing(false);
+        self.send(Command::Drag(seconds.max(0.0)));
+    }
+
+    // Lets go of a dragged clock: the dampers fall.
+    pub fn end_drag(&self) {
+        self.send(Command::EndDrag);
+    }
+
     // Song seconds the synth has rendered up to.
     pub fn position(&self) -> f64 {
         self.inner.transport.position()
@@ -203,6 +234,10 @@ impl MusicPlayer {
         self.inner.transport.set_volume(volume);
     }
 
+    pub fn length(&self) -> f32 {
+        self.inner.transport.length()
+    }
+
     // Song seconds the clock stops at.
     pub fn set_length(&self, seconds: f32) {
         self.inner.transport.set_length(seconds);
@@ -210,14 +245,26 @@ impl MusicPlayer {
 
     // Takes a slot for `notes`. The part sounds once `voice_part` gives it
     // a voicing. `None` when every slot is taken.
-    pub fn add_part(&self, notes: &Notes) -> Option<PartSlot> {
+    pub fn add_part(&self, notes: &Notes, color: Color) -> Option<PartSlot> {
         let mut parts = self.inner.parts.borrow_mut();
         let slot = (0..MAX_PARTS).find(|slot| parts[usize::from(*slot)].is_none())?;
         parts[usize::from(slot)] = Some(ShownPart {
             notes: notes.clone(),
             transpose: 0,
+            color,
         });
         Some(PartSlot(slot))
+    }
+
+    // The parts the player holds, in the order of their slots.
+    pub fn parts(&self) -> Vec<ShownPart> {
+        self.inner
+            .parts
+            .borrow()
+            .iter()
+            .flatten()
+            .cloned()
+            .collect()
     }
 
     // Sounds the part of `slot` with `voicing` from its next note on.
@@ -261,27 +308,37 @@ impl MusicPlayer {
         self.send(Command::KeyUp { key });
     }
 
-    // The keys the parts hold down at `seconds` of the song, each at the
-    // pitch its part sounds it.
-    pub fn keys_down_at(&self, seconds: f64) -> KeySet {
-        let mut down = KeySet::EMPTY;
+    // Calls `held` for each key the parts hold down at `seconds` of the song.
+    pub fn for_each_key_down(&self, seconds: f64, mut held: impl FnMut(KeyDown)) {
         for part in self.inner.parts.borrow().iter().flatten() {
-            let notes = part.notes.as_slice();
             let earliest = seconds - f64::from(part.notes.longest_held());
             let started = part.notes.first_at_or_after(seconds);
-            for note in notes[..started]
+            for note in part.notes.as_slice()[..started]
                 .iter()
                 .rev()
                 .take_while(|note| f64::from(note.start) >= earliest)
             {
-                if f64::from(note.key_released_at()) > seconds {
-                    let key = i16::from(note.key) + i16::from(part.transpose);
-                    if let Ok(key) = u8::try_from(key) {
-                        down.insert(key);
-                    }
+                let key = i16::from(note.key) + i16::from(part.transpose);
+                if f64::from(note.key_released_at()) <= seconds {
+                    continue;
+                }
+                if let Ok(key) = u8::try_from(key) {
+                    held(KeyDown {
+                        key,
+                        color: part.color,
+                        seconds_down: note_seconds(seconds - f64::from(note.start)),
+                        seconds_left: note_seconds(f64::from(note.key_released_at()) - seconds),
+                    });
                 }
             }
         }
+    }
+
+    // The keys the parts hold down at `seconds` of the song, each at the
+    // pitch its part sounds it.
+    pub fn keys_down_at(&self, seconds: f64) -> KeySet {
+        let mut down = KeySet::EMPTY;
+        self.for_each_key_down(seconds, |held| down.insert(held.key));
         down
     }
 }

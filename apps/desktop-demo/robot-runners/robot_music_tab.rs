@@ -16,14 +16,19 @@ const START_CLOCK: &str = "0:00 / ";
 // The share of the song the run moves to: the middle section, where both
 // hands play running notes.
 const SEEK_SHARE: f32 = 0.4;
-const PAGE_PADDING: f32 = 16.0;
-const KEYBOARD_HEIGHT: f32 = 96.0;
+// The panel's margin and padding: the position slider ends this far from
+// the window's edge.
+const PANEL_INSET: f32 = 28.0;
+const SLIDER_GAP: f32 = 12.0;
+// How far inside the slider the middle of its thumb stands at the start.
+const THUMB_REACH: f32 = 14.0;
+const KEYBOARD_HEIGHT: f32 = 104.0;
 // The strip of the roll right above the keyboard: the notes that sound now
 // and within the next second.
 const STRIP_HEIGHT: f32 = 120.0;
-// The roll's own color, and how far a pixel may be from it and still be roll.
-const ROLL_COLOR: [u8; 3] = [0x0B, 0x10, 0x20];
-const COLOR_TOLERANCE: i32 = 12;
+// A pixel of a note is brighter than the night behind the roll in one of
+// its channels by at least this much.
+const NOTE_BRIGHTNESS: u8 = 150;
 const FEWEST_NOTE_PIXELS: usize = 400;
 
 fn shot_dir() -> PathBuf {
@@ -49,19 +54,13 @@ fn capture(robot: &Robot, name: &str) -> RgbaImage {
 fn note_pixels(image: &RgbaImage) -> usize {
     let scale = image.height() as f32 / WINDOW_HEIGHT as f32;
     let scale_x = image.width() as f32 / WINDOW_WIDTH as f32;
-    let bottom = WINDOW_HEIGHT as f32 - PAGE_PADDING - KEYBOARD_HEIGHT;
+    let bottom = WINDOW_HEIGHT as f32 - KEYBOARD_HEIGHT;
     let rows = ((bottom - STRIP_HEIGHT) * scale) as u32..(bottom * scale) as u32;
-    let columns =
-        (PAGE_PADDING * scale_x) as u32..((WINDOW_WIDTH as f32 - PAGE_PADDING) * scale_x) as u32;
+    let columns = 0..((WINDOW_WIDTH as f32 - PANEL_INSET) * scale_x) as u32;
     image
         .enumerate_pixels()
         .filter(|(x, y, _)| columns.contains(x) && rows.contains(y))
-        .filter(|(_, _, pixel)| {
-            ROLL_COLOR
-                .iter()
-                .zip(pixel.0)
-                .any(|(roll, have)| (i32::from(*roll) - i32::from(have)).abs() > COLOR_TOLERANCE)
-        })
+        .filter(|(_, _, pixel)| pixel.0[..3].iter().any(|channel| *channel >= NOTE_BRIGHTNESS))
         .count()
 }
 
@@ -86,13 +85,21 @@ pub(crate) fn main() {
                 .expect("semantics")
                 .expect("the tab shows its clock at the start of the song");
 
-            // The position fader fills the row from the clock to the page's edge.
-            let fader_left = clock_x + clock_width + PAGE_PADDING;
-            let fader_right = WINDOW_WIDTH as f32 - PAGE_PADDING;
-            let seek_x = fader_left + (fader_right - fader_left) * SEEK_SHARE;
+            capture(&robot, "music-start");
+
+            // The position slider fills the row from the clock to the panel's
+            // edge, and its thumb stands at its start.
+            let slider_left = clock_x + clock_width + SLIDER_GAP;
+            let slider_right = WINDOW_WIDTH as f32 - PANEL_INSET;
+            let middle = clock_y + clock_height * 0.5;
             robot
-                .click(seek_x, clock_y + clock_height * 0.5)
-                .expect("a click on the position fader");
+                .drag(
+                    slider_left + THUMB_REACH,
+                    middle,
+                    slider_left + (slider_right - slider_left) * SEEK_SHARE,
+                    middle,
+                )
+                .expect("a drag of the position slider's thumb");
             robot.pump_frames(3).expect("the tab settles");
 
             assert!(

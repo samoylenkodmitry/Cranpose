@@ -13,6 +13,12 @@ impl KeySet {
         }
     }
 
+    pub fn remove(&mut self, key: u8) {
+        if let Some(bit) = 1u128.checked_shl(u32::from(key)) {
+            self.0 &= !bit;
+        }
+    }
+
     pub fn contains(self, key: u8) -> bool {
         1u128
             .checked_shl(u32::from(key))

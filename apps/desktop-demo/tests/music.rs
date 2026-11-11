@@ -15,6 +15,7 @@ use cranpose_audio::{
 use cranpose_core::CompositionLocalProvider;
 use cranpose_services::{advance_lifecycle, LifecycleState};
 use cranpose_testing::robot::{RobotTestRule, TestRenderer};
+use cranpose_ui::{Color, Key, KeyEvent};
 use desktop_app::app::{
     combined_app_with_initial_tab,
     music::{
@@ -110,6 +111,15 @@ fn music_tab(output: &KeptOutput) -> RobotTestRule<TestRenderer> {
     });
     robot.wait_for_idle();
     robot
+}
+
+// Opens the sound settings of the panel.
+fn open_sound(robot: &mut RobotTestRule<TestRenderer>) {
+    assert!(
+        robot.find_by_text("Sound").click(),
+        "the panel has a Sound chip"
+    );
+    robot.wait_for_idle();
 }
 
 fn shows(robot: &mut RobotTestRule<TestRenderer>, text: &str) -> bool {
@@ -228,7 +238,10 @@ fn transpose_moves_a_key_by_semitones() {
 fn a_part_starts_its_note_on_the_frame_of_its_start() {
     let stage = Stage::new();
     stage.player.set_length(10.0);
-    let slot = stage.player.add_part(&one_note(0.5, 60)).unwrap();
+    let slot = stage
+        .player
+        .add_part(&one_note(0.5, 60), Color::WHITE)
+        .unwrap();
     stage.player.voice_part(slot, pure());
     stage.player.play();
     let sound = stage.render(1.0);
@@ -240,7 +253,10 @@ fn tempo_scales_the_time_to_a_note() {
     let stage = Stage::new();
     stage.player.set_length(10.0);
     stage.player.set_tempo(2.0);
-    let slot = stage.player.add_part(&one_note(0.5, 60)).unwrap();
+    let slot = stage
+        .player
+        .add_part(&one_note(0.5, 60), Color::WHITE)
+        .unwrap();
     stage.player.voice_part(slot, pure());
     stage.player.play();
     let sound = stage.render(1.0);
@@ -252,7 +268,10 @@ fn tempo_scales_the_time_to_a_note() {
 fn a_paused_clock_stands_still_and_a_seek_moves_it() {
     let stage = Stage::new();
     stage.player.set_length(10.0);
-    let slot = stage.player.add_part(&one_note(3.0, 60)).unwrap();
+    let slot = stage
+        .player
+        .add_part(&one_note(3.0, 60), Color::WHITE)
+        .unwrap();
     stage.player.voice_part(slot, pure());
     stage.player.play();
     stage.render(0.5);
@@ -281,7 +300,10 @@ fn the_clock_stops_at_the_length_of_the_song() {
 fn a_removed_part_plays_no_more_notes() {
     let stage = Stage::new();
     stage.player.set_length(10.0);
-    let slot = stage.player.add_part(&one_note(0.5, 60)).unwrap();
+    let slot = stage
+        .player
+        .add_part(&one_note(0.5, 60), Color::WHITE)
+        .unwrap();
     stage.player.voice_part(slot, pure());
     stage.player.play();
     stage.render(0.25);
@@ -294,7 +316,10 @@ fn a_removed_part_plays_no_more_notes() {
 fn a_zero_volume_part_is_silent() {
     let stage = Stage::new();
     stage.player.set_length(10.0);
-    let slot = stage.player.add_part(&one_note(0.1, 60)).unwrap();
+    let slot = stage
+        .player
+        .add_part(&one_note(0.1, 60), Color::WHITE)
+        .unwrap();
     stage.player.voice_part(
         slot,
         Voicing {
@@ -313,7 +338,7 @@ fn the_whole_piece_stays_under_full_scale() {
     stage.player.set_length(song.seconds());
     stage.player.set_tempo(4.0);
     for part in &song.parts {
-        let slot = stage.player.add_part(&part.notes).unwrap();
+        let slot = stage.player.add_part(&part.notes, Color::WHITE).unwrap();
         stage.player.voice_part(slot, Voicing::default());
     }
     stage.player.play();
@@ -331,7 +356,10 @@ fn the_whole_piece_stays_under_full_scale() {
 #[test]
 fn the_keys_down_follow_the_notes_and_their_transposition() {
     let stage = Stage::new();
-    let slot = stage.player.add_part(&one_note(1.0, 60)).unwrap();
+    let slot = stage
+        .player
+        .add_part(&one_note(1.0, 60), Color::WHITE)
+        .unwrap();
     stage.player.voice_part(
         slot,
         Voicing {
@@ -378,6 +406,7 @@ fn a_hand_turned_off_is_silent_until_it_is_turned_on() {
     let _alone = alone();
     let output = KeptOutput::new();
     let mut robot = music_tab(&output);
+    open_sound(&mut robot);
     assert!(robot.find_by_text("Piano right").click());
     assert!(robot.find_by_text("Piano left").click());
     robot.wait_for_idle();
@@ -395,6 +424,7 @@ fn a_press_on_the_keyboard_sounds_the_key_under_it() {
     let _alone = alone();
     let output = KeptOutput::new();
     let mut robot = music_tab(&output);
+    open_sound(&mut robot);
     assert!(robot.find_by_text("Pure tone").click());
     robot.wait_for_idle();
     let keyboard = robot
@@ -461,4 +491,279 @@ fn the_piece_stops_when_the_app_leaves_the_screen() {
     assert!(shows(&mut robot, "Play"), "the piece waits for a press");
     output.render(8.0);
     assert_eq!(first_sound(&output.render(1.0)), None);
+}
+
+// One long A above middle C: it starts at one second of the song and its
+// string rings for four.
+fn long_note() -> Notes {
+    Notes::new(vec![Note {
+        start: 1.0,
+        held: 4.0,
+        ring: 4.0,
+        key: 69,
+        velocity: 100,
+    }])
+}
+
+// The level of the A after the first moments of `sound`, past the attack.
+fn settled_level(sound: &[f32]) -> f32 {
+    level_at(&sound[2_400..], 440.0)
+}
+
+fn stage_with(notes: &Notes) -> Stage {
+    let stage = Stage::new();
+    stage.player.set_length(10.0);
+    let slot = stage
+        .player
+        .add_part(notes, Color::WHITE)
+        .expect("a new player has a free slot");
+    stage.player.voice_part(slot, pure());
+    stage
+}
+
+#[test]
+fn a_clock_dragged_into_a_note_sounds_it_as_far_as_it_has_faded() {
+    let at_the_start = stage_with(&long_note());
+    at_the_start.player.drag_to(1.0);
+    let fresh = settled_level(&at_the_start.render(0.3));
+    assert!(fresh > 0.01, "the note sounds under the clock: {fresh}");
+
+    // The pure tone falls 60 dB in five seconds: two seconds in, 24 dB.
+    let two_seconds_in = stage_with(&long_note());
+    two_seconds_in.player.drag_to(3.0);
+    let faded = settled_level(&two_seconds_in.render(0.3)) / fresh;
+    assert!(
+        (0.045..0.08).contains(&faded),
+        "two seconds into the note it sounds at {faded} of its strike"
+    );
+}
+
+#[test]
+fn a_dragged_clock_sounds_each_note_it_enters_and_damps_the_one_it_leaves() {
+    let stage = stage_with(&Notes::new(vec![
+        Note {
+            start: 1.0,
+            held: 0.5,
+            ring: 0.5,
+            key: 69,
+            velocity: 100,
+        },
+        Note {
+            start: 2.0,
+            held: 0.5,
+            ring: 0.5,
+            key: 81,
+            velocity: 100,
+        },
+    ]));
+    stage.player.drag_to(0.5);
+    assert_eq!(first_sound(&stage.render(0.2)), None, "no note at the rest");
+
+    stage.player.drag_to(1.1);
+    let first = stage.render(0.3);
+    assert!(level_at(&first, 440.0) > 20.0 * level_at(&first, 880.0));
+
+    stage.player.drag_to(2.1);
+    stage.render(1.0);
+    let second = stage.render(0.3);
+    assert!(level_at(&second, 880.0) > 20.0 * level_at(&second, 440.0));
+
+    // Back between the two notes: the clock stands in neither.
+    stage.player.drag_to(1.8);
+    stage.render(4.0);
+    assert_eq!(first_sound(&stage.render(0.2)), None);
+}
+
+#[test]
+fn a_clock_the_hand_lets_go_of_falls_silent() {
+    let stage = stage_with(&long_note());
+    stage.player.drag_to(1.5);
+    assert!(settled_level(&stage.render(0.3)) > 0.01);
+    stage.player.end_drag();
+    stage.render(4.0);
+    assert_eq!(first_sound(&stage.render(0.2)), None);
+}
+
+#[test]
+fn a_seek_into_a_note_while_the_piece_plays_sounds_the_note() {
+    let stage = stage_with(&long_note());
+    stage.player.play();
+    stage.render(0.5);
+    stage.player.seek(3.0);
+    let level = settled_level(&stage.render(0.3));
+    assert!(level > 0.0005, "the note sounds from its middle: {level}");
+    assert!((stage.player.position() - 3.3).abs() < 1.0e-6);
+}
+
+#[test]
+fn play_takes_over_from_a_dragged_clock() {
+    let stage = stage_with(&one_note(2.0, 60));
+    stage.player.drag_to(1.5);
+    stage.render(0.1);
+    stage.player.play();
+    let sound = stage.render(1.0);
+    assert_eq!(first_sound(&sound), Some(24_000));
+}
+
+// The seconds the tab's clock shows.
+fn shown_clock(robot: &mut RobotTestRule<TestRenderer>) -> u32 {
+    let texts = robot.get_all_text();
+    let clock = texts
+        .iter()
+        .find_map(|text| text.split_once(" / "))
+        .expect("the tab shows its clock")
+        .0;
+    let (minutes, seconds) = clock.split_once(':').expect("minutes and seconds");
+    let whole = |digits: &str| digits.parse::<u32>().expect("the clock shows digits");
+    whole(minutes) * 60 + whole(seconds)
+}
+
+// Lets the roll rest until the tab takes the hand to have let go.
+fn rest_the_roll(robot: &mut RobotTestRule<TestRenderer>, output: &KeptOutput) {
+    play_for(robot, output, 0.5);
+}
+
+// Pulls the roll down by `pixels` with a held pointer, a step each frame,
+// and returns the sound of those frames. The pointer stays down.
+fn pull_roll_down(
+    robot: &mut RobotTestRule<TestRenderer>,
+    output: &KeptOutput,
+    pixels: f32,
+) -> Vec<f32> {
+    let roll = robot
+        .find_by_tag("MusicRoll")
+        .bounds()
+        .expect("the tab shows a roll");
+    let x = roll.x + roll.width * 0.5;
+    let top = roll.y + roll.height * 0.25;
+    robot.mouse_move(x, top);
+    robot.mouse_down();
+    let mut sound = Vec::new();
+    let steps = 30;
+    for step in 1..=steps {
+        robot.mouse_move(x, top + pixels * step as f32 / steps as f32);
+        robot.advance_time(1_000_000_000 / 60);
+        if output.renderer.borrow().is_some() {
+            sound.extend(output.render(1.0 / 60.0));
+        }
+    }
+    sound
+}
+
+#[test]
+fn a_hand_that_pulls_the_roll_sounds_the_notes_that_cross_the_line() {
+    let _alone = alone();
+    let output = KeptOutput::new();
+    let mut robot = music_tab(&output);
+    assert!(shows(&mut robot, "0:00 / 4:"));
+
+    // Three seconds of the song come down to the line, less the first
+    // pixels, which tell a drag from a press.
+    let sound = pull_roll_down(&mut robot, &output, 360.0);
+    assert!(
+        first_sound(&sound).is_some(),
+        "the notes that crossed the line sounded"
+    );
+    let under_the_hand = shown_clock(&mut robot);
+    assert!(
+        (2..=3).contains(&under_the_hand),
+        "the clock went with the roll: {under_the_hand} s"
+    );
+    assert!(shows(&mut robot, "Play"), "the piece itself does not run");
+
+    // The release flings the roll on; the song goes with it, then rests.
+    robot.mouse_up();
+    play_for(&mut robot, &output, 4.0);
+    rest_the_roll(&mut robot, &output);
+    robot.wait_for_idle();
+    assert!(shown_clock(&mut robot) >= under_the_hand);
+    assert!(shows(&mut robot, "Play"));
+    output.render(4.0);
+    assert_eq!(
+        first_sound(&output.render(0.5)),
+        None,
+        "the roll rests: the dampers fell"
+    );
+}
+
+#[test]
+fn a_piece_that_plays_runs_on_from_where_a_hand_left_the_roll() {
+    let _alone = alone();
+    let output = KeptOutput::new();
+    let mut robot = music_tab(&output);
+    assert!(robot.find_by_tag("MusicRoll").exists());
+    assert!(robot.find_by_text("Play").click());
+    play_for(&mut robot, &output, 1.0);
+
+    // Ten seconds of the song go by under the hand.
+    pull_roll_down(&mut robot, &output, 1200.0);
+    assert!(
+        shows(&mut robot, "Pause"),
+        "the piece still counts as playing"
+    );
+    robot.mouse_up();
+    play_for(&mut robot, &output, 1.5);
+    assert!(shows(&mut robot, "Pause"));
+    let after_the_hand = shown_clock(&mut robot);
+    assert!(
+        after_the_hand >= 11,
+        "the piece runs on from the place of the roll: {after_the_hand} s"
+    );
+    // The fling has come to rest, and the clock runs at the pace of the piece.
+    play_for(&mut robot, &output, 6.0);
+    rest_the_roll(&mut robot, &output);
+    let rested = shown_clock(&mut robot);
+    play_for(&mut robot, &output, 2.0);
+    assert!(shows(&mut robot, "Pause"));
+    assert!((1..=3).contains(&(shown_clock(&mut robot) - rested)));
+}
+
+// A whole key event of a computer's keyboard through the shell.
+fn key(robot: &mut RobotTestRule<TestRenderer>, event: &KeyEvent) -> bool {
+    let taken = robot.shell_mut().on_key_event(event);
+    robot.advance_time(1_000_000_000 / 60);
+    taken
+}
+
+#[test]
+fn the_home_row_plays_the_piano_and_the_space_bar_the_piece() {
+    let _alone = alone();
+    let output = KeptOutput::new();
+    let mut robot = music_tab(&output);
+    open_sound(&mut robot);
+    assert!(robot.find_by_text("Pure tone").click());
+    robot.wait_for_idle();
+
+    // The A key is middle C.
+    assert!(key(&mut robot, &KeyEvent::key_down(Key::A, "a")));
+    assert!(
+        key(&mut robot, &KeyEvent::key_down(Key::A, "a")),
+        "a held key repeats"
+    );
+    let held = play_for(&mut robot, &output, 0.5);
+    let middle_c = level_at(&held, 261.63);
+    assert!(middle_c > 0.01, "middle C sounds: {middle_c}");
+    assert!(middle_c > 20.0 * level_at(&held, 277.18));
+    assert!(key(&mut robot, &KeyEvent::key_up(Key::A)));
+    play_for(&mut robot, &output, 4.0);
+    assert_eq!(first_sound(&play_for(&mut robot, &output, 0.2)), None);
+
+    assert!(key(&mut robot, &KeyEvent::key_down(Key::Spacebar, " ")));
+    play_for(&mut robot, &output, 0.5);
+    assert!(shows(&mut robot, "Pause"), "the space bar starts the piece");
+    assert!(key(&mut robot, &KeyEvent::key_down(Key::Spacebar, " ")));
+    play_for(&mut robot, &output, 0.2);
+    robot.wait_for_idle();
+    assert!(shows(&mut robot, "Play"), "and stops it");
+
+    assert!(key(
+        &mut robot,
+        &KeyEvent::key_down(Key::DirectionRight, "")
+    ));
+    robot.wait_for_idle();
+    assert_eq!(
+        shown_clock(&mut robot),
+        5,
+        "an arrow moves the piece by five seconds"
+    );
 }

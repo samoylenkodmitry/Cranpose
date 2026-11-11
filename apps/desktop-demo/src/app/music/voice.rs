@@ -1,7 +1,10 @@
 // One sounding note: a sum of sine partials, each with its own fade, under
 // an envelope that opens at the strike and closes at the release.
 
-use std::f32::consts::{FRAC_PI_4, TAU};
+use std::{
+    f32::consts::{FRAC_PI_4, TAU},
+    f64::consts::TAU as TAU_F64,
+};
 
 use super::timbre::{Recipe, PARTIALS};
 
@@ -46,6 +49,29 @@ pub(super) struct Voice {
     right: f32,
 }
 
+// A strike of a key.
+#[derive(Clone, Copy)]
+pub(super) struct Strike {
+    // The MIDI number of the key.
+    pub key: f32,
+    // How hard the key is struck, from 0 to 1.
+    pub velocity: f32,
+    // The share of its loudness the strike keeps.
+    pub gain: f32,
+    // Seconds since the strike: the voice starts this far into its life,
+    // its partials faded and turned as far.
+    pub age_seconds: f32,
+}
+
+fn narrowed(value: f64) -> f32 {
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "a sine or a cosine, within -1 and 1"
+    )]
+    let value = value as f32;
+    value
+}
+
 // The share a level keeps each frame when it falls 60 dB in `seconds`.
 fn fall_per_frame(seconds: f32, sample_rate: f32) -> f32 {
     (0.001f32.ln() / (seconds * sample_rate)).exp()
@@ -67,16 +93,23 @@ impl Voice {
         right: 0.0,
     };
 
-    // Starts the voice on `key`, a MIDI key number, struck with `velocity`
-    // from 0 to 1.
-    pub(super) fn strike(
-        &mut self,
-        recipe: &Recipe,
-        key: f32,
-        velocity: f32,
-        gain: f32,
-        sample_rate: f32,
-    ) {
+    // Whether a note of `key` still sounds `age_seconds` after its strike.
+    pub(super) fn sounds_after(recipe: &Recipe, key: f32, age_seconds: f32) -> bool {
+        recipe.fade_seconds.is_none_or(|seconds| {
+            let key_fade = 2f32.powf((A4_KEY - key) / FADE_OCTAVES);
+            age_seconds < seconds * key_fade * SILENT.ln() / 0.001f32.ln()
+        })
+    }
+
+    // Starts the voice as `strike` says, at the rate of the device.
+    pub(super) fn strike(&mut self, recipe: &Recipe, strike: Strike, sample_rate: f32) {
+        let Strike {
+            key,
+            velocity,
+            gain,
+            age_seconds,
+        } = strike;
+        let age_frames = age_seconds.max(0.0) * sample_rate;
         let frequency = A4_HERTZ * 2f32.powf((key - A4_KEY) / 12.0);
         let key_fade = 2f32.powf((A4_KEY - key) / FADE_OCTAVES);
         let mut power = 0.0;
@@ -87,19 +120,24 @@ impl Voice {
                 * recipe.ratios[index]
                 * (1.0 + recipe.stiffness * number * number).sqrt();
             let angle = TAU * partial / sample_rate;
-            self.sin[index] = 0.0;
-            self.cos[index] = 1.0;
+            // The turns of the partial since the strike, as an angle
+            // within one turn.
+            let turned = (f64::from(angle) * f64::from(age_frames)).rem_euclid(TAU_F64);
+            self.sin[index] = narrowed(turned.sin());
+            self.cos[index] = narrowed(turned.cos());
             self.turn_sin[index] = angle.sin();
             self.turn_cos[index] = angle.cos();
-            self.level[index] = if partial < HIGHEST_PARTIAL * sample_rate {
-                recipe.levels[index] * velocity.powf(recipe.brightness * above_first)
-            } else {
-                0.0
-            };
             self.fade[index] = recipe.fade_seconds.map_or(1.0, |seconds| {
                 let spread = 1.0 + recipe.fade_spread * index as f32;
                 fall_per_frame(seconds * key_fade / spread, sample_rate)
             });
+            self.level[index] = if partial < HIGHEST_PARTIAL * sample_rate {
+                recipe.levels[index]
+                    * velocity.powf(recipe.brightness * above_first)
+                    * self.fade[index].powf(age_frames)
+            } else {
+                0.0
+            };
             power += recipe.levels[index] * recipe.levels[index];
         }
         let loudness = velocity.powf(1.5) * gain * STRIKE_LEVEL / power.sqrt();

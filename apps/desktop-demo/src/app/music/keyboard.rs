@@ -1,29 +1,37 @@
 // A piano keyboard as a composable: it lights the keys the parts of the
 // performance hold down, and a press on a key sounds it.
 
+use cranpose_animation::Lerp;
 use cranpose_core::{rememberMutableStateOf, rememberUpdatedState, MutableState};
 use cranpose_foundation::{PointerEvent, PointerEventKind, PointerId};
 use cranpose_ui::{
-    composable, Brush, Canvas, Color, CornerRadii, DrawScope, Modifier, PointerInputScope, Rect,
-    Size,
+    composable, Box as CranposeBox, BoxSpec, Brush, Canvas, Color, CornerRadii, DrawScope,
+    Modifier, PointerInputScope, Rect, Size,
 };
 
 use super::{
     key_range::{is_black_key, KeyRange},
-    key_set::KeySet,
     performance::{local_performance, Performance},
     voicing::{local_voicing, Voicing},
 };
 
 const KEY_GAP: f32 = 1.0;
-const KEY_CORNER: f32 = 2.0;
+const KEY_CORNER: f32 = 3.0;
+const KEY_COUNT: usize = 128;
+// How far a lit key is mixed toward white at its top.
+const LIGHT_TOP: f32 = 0.55;
 
 // The colors of a keyboard.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct KeyboardColors {
+    // A white key at its top and at its lower edge.
     pub white: Color,
+    pub white_edge: Color,
+    // A black key at its lower end and at its top.
     pub black: Color,
-    pub lit: Color,
+    pub black_edge: Color,
+    // A key under a finger.
+    pub hand: Color,
     pub gap: Color,
 }
 
@@ -70,43 +78,72 @@ fn follow_finger(
     true
 }
 
-fn draw_keys(scope: &mut dyn DrawScope, keys: KeyRange, colors: KeyboardColors, down: KeySet) {
+// The place of `key` on a keyboard of `size`, or none outside the range.
+fn key_rect(keys: KeyRange, key: u8, size: Size) -> Option<Rect> {
+    let (left, width) = keys.key_span(key, size.width)?;
+    let height = if is_black_key(key) {
+        size.height * keys.black_key_height()
+    } else {
+        size.height
+    };
+    Some(Rect {
+        x: left + KEY_GAP * 0.5,
+        y: 0.0,
+        width: (width - KEY_GAP).max(1.0),
+        height,
+    })
+}
+
+const KEY_CORNERS: CornerRadii = CornerRadii {
+    top_left: 0.0,
+    top_right: 0.0,
+    bottom_right: KEY_CORNER,
+    bottom_left: KEY_CORNER,
+};
+
+// The keys at rest. Nothing here reads the clock, so the layer is drawn once.
+fn draw_keys(scope: &mut dyn DrawScope, keys: KeyRange, colors: KeyboardColors) {
     let size = scope.size();
     scope.draw_rect(Brush::solid(colors.gap));
-    let black_height = size.height * keys.black_key_height();
     // The black keys lie over the white ones.
     for black in [false, true] {
+        let (top, bottom) = if black {
+            (colors.black_edge, colors.black)
+        } else {
+            (colors.white, colors.white_edge)
+        };
         for key in keys.keys().filter(|key| is_black_key(*key) == black) {
-            let Some((left, width)) = keys.key_span(key, size.width) else {
+            let Some(rect) = key_rect(keys, key, size) else {
                 continue;
             };
-            let color = match (down.contains(key), black) {
-                (true, _) => colors.lit,
-                (false, true) => colors.black,
-                (false, false) => colors.white,
-            };
             scope.draw_round_rect_at(
-                Rect {
-                    x: left + KEY_GAP * 0.5,
-                    y: 0.0,
-                    width: (width - KEY_GAP).max(1.0),
-                    height: if black { black_height } else { size.height },
-                },
-                Brush::solid(color),
-                CornerRadii {
-                    top_left: 0.0,
-                    top_right: 0.0,
-                    bottom_right: KEY_CORNER,
-                    bottom_left: KEY_CORNER,
-                },
+                rect,
+                Brush::vertical_gradient(vec![top, bottom], 0.0, rect.height),
+                KEY_CORNERS,
             );
         }
     }
 }
 
-// Draws the keys of `keys`. A key lights while a part of the performance
-// around the call holds it down. A press sounds the key with the voicing
-// around the call, and a drag moves the sound from key to key.
+// A key that is down: the key in the color of what holds it, lighter where
+// it meets the roll.
+fn draw_light(scope: &mut dyn DrawScope, keys: KeyRange, key: u8, color: Color) {
+    let size = scope.size();
+    let Some(rect) = key_rect(keys, key, size) else {
+        return;
+    };
+    let top = color.lerp(&Color::WHITE, LIGHT_TOP);
+    scope.draw_round_rect_at(
+        rect,
+        Brush::vertical_gradient(vec![top, color], 0.0, rect.height),
+        KEY_CORNERS,
+    );
+}
+
+// Draws the keys of `keys`. A key lights in the color of the part of the
+// performance around the call that holds it down. A press sounds the key
+// with the voicing around the call, and a drag moves the sound from key to
+// key; each finger plays its own key.
 #[composable]
 pub fn Keyboard(keys: KeyRange, colors: KeyboardColors, modifier: Modifier) {
     let Some(performance) = local_performance().current() else {
@@ -140,16 +177,47 @@ pub fn Keyboard(keys: KeyRange, colors: KeyboardColors, modifier: Modifier) {
                 }
             });
 
-    Canvas(modifier, move |scope| {
-        let mut down = performance.keys_down();
-        fingers.with(|fingers| {
-            for (_, key) in fingers {
-                let sounded = i16::from(*key) + i16::from(voicing.transpose);
-                if let Ok(sounded) = u8::try_from(sounded) {
-                    down.insert(sounded);
+    CranposeBox(modifier, BoxSpec::default(), move || {
+        Canvas(Modifier::empty().fill_max_size(), move |scope| {
+            draw_keys(scope, keys, colors);
+        });
+        let performance = performance.clone();
+        Canvas(Modifier::empty().fill_max_size(), move |scope| {
+            // A black key over a lit white one keeps its own look, so the
+            // white keys light first and the black keys between them are
+            // drawn again.
+            let mut lit = [None; KEY_COUNT];
+            performance.for_each_key_down(|held| lit[usize::from(held.key)] = Some(held.color));
+            let by_hand = performance.hand_keys();
+            for key in keys.keys().filter(|key| by_hand.contains(*key)) {
+                lit[usize::from(key)] = Some(colors.hand);
+            }
+            if lit.iter().all(Option::is_none) {
+                return;
+            }
+            let size = scope.size();
+            for key in keys.keys().filter(|key| !is_black_key(*key)) {
+                if let Some(color) = lit[usize::from(key)] {
+                    draw_light(scope, keys, key, color);
+                }
+            }
+            for key in keys.keys().filter(|key| is_black_key(*key)) {
+                let Some(rect) = key_rect(keys, key, size) else {
+                    continue;
+                };
+                match lit[usize::from(key)] {
+                    Some(color) => draw_light(scope, keys, key, color),
+                    None => scope.draw_round_rect_at(
+                        rect,
+                        Brush::vertical_gradient(
+                            vec![colors.black_edge, colors.black],
+                            0.0,
+                            rect.height,
+                        ),
+                        KEY_CORNERS,
+                    ),
                 }
             }
         });
-        draw_keys(scope, keys, colors, down);
     });
 }

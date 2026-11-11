@@ -1,5 +1,8 @@
-// The renderer of a performance: it starts each note of its parts on the
-// frame the note falls on, and adds up the voices that sound.
+// The renderer of a performance. Its clock is a place in the song: the notes
+// of the parts sound while the clock stands inside them. While the piece
+// plays, the clock runs and each note starts on the frame its start falls
+// on. A hand can also drag the clock, and then each note it enters sounds as
+// far into its life as the clock stands past the note's start.
 
 use std::sync::Arc;
 
@@ -11,19 +14,24 @@ use cranpose_audio::{
 
 use super::{
     reverb::Reverb,
-    song::{Note, Notes},
+    song::{note_seconds, Note, Notes},
     transport::Transport,
     voice::Voice,
+    voice_bank::{Owner, Tag, VoiceBank},
     voicing::Voicing,
 };
 
 pub(super) const MAX_PARTS: u8 = 8;
-const MAX_VOICES: usize = 48;
 // Keys go up at the ends of spans this long, and a key that goes up fades
 // over many of them.
 const SPAN_FRAMES: usize = 64;
-const HARDEST_STRIKE: f32 = 127.0;
-const HIGHEST_KEY: i16 = 127;
+// A dragged clock reaches the place the hand put it within this time, so
+// the steps of the hand, one a frame of the display, become one motion.
+const DRAG_GLIDE_SECONDS: f64 = 0.02;
+// A hand that moves the clock farther than this in one step, some fifteen
+// times the speed of the piece, jumps: the clock does not sound the notes
+// between.
+const DRAG_JUMP_SECONDS: f64 = 0.25;
 // The soft limit is exact below this input and flat above it.
 const LIMIT_INPUT: f32 = 3.0;
 
@@ -36,7 +44,12 @@ pub(super) enum Command {
     ClearPart {
         slot: u8,
     },
+    // Puts the clock at these song seconds.
     Seek(f64),
+    // Drags the clock toward these song seconds while the piece does not play.
+    Drag(f64),
+    // Lets go of a dragged clock: the dampers fall.
+    EndDrag,
     KeyDown {
         key: u8,
         velocity: u8,
@@ -53,18 +66,11 @@ struct Part {
     voicing: Voicing,
 }
 
-#[derive(Clone, Copy, PartialEq)]
-enum Owner {
-    Part(u8),
-    Hand,
-}
-
+// A clock under a hand: where the hand put it and how fast it goes there.
 #[derive(Clone, Copy)]
-struct Tag {
-    owner: Owner,
-    key: u8,
-    // Song seconds the damper falls at.
-    silent_at: f64,
+struct Drag {
+    target: f64,
+    seconds_per_frame: f64,
 }
 
 pub(super) struct Synth {
@@ -77,9 +83,9 @@ pub(super) struct Synth {
     channels: usize,
     position: f64,
     was_playing: bool,
+    drag: Option<Drag>,
     parts: [Option<Part>; MAX_PARTS as usize],
-    voices: [Voice; MAX_VOICES],
-    tags: [Tag; MAX_VOICES],
+    bank: VoiceBank,
     reverb: Reverb,
 }
 
@@ -106,13 +112,9 @@ impl Synth {
             channels: NOMINAL_CHANNELS,
             position: 0.0,
             was_playing: false,
+            drag: None,
             parts: [const { None }; MAX_PARTS as usize],
-            voices: [Voice::IDLE; MAX_VOICES],
-            tags: [Tag {
-                owner: Owner::Hand,
-                key: 0,
-                silent_at: f64::INFINITY,
-            }; MAX_VOICES],
+            bank: VoiceBank::new(),
             reverb,
         }
     }
@@ -125,15 +127,17 @@ impl Synth {
         }
     }
 
-    fn release_where(&mut self, released: impl Fn(&Tag) -> bool) {
-        for (voice, tag) in self.voices.iter_mut().zip(&self.tags) {
-            if released(tag) {
-                voice.release();
-            }
+    fn damp_parts(&mut self) {
+        self.bank.release_where(|tag| tag.owner.is_part());
+    }
+
+    fn find_next_notes(&mut self) {
+        for part in self.parts.iter_mut().flatten() {
+            part.next = part.notes.first_at_or_after(self.position);
         }
     }
 
-    fn apply_commands(&mut self) {
+    fn apply_commands(&mut self, playing: bool) {
         while let Some(command) = self.commands.pop() {
             match command {
                 Command::SetPart {
@@ -145,30 +149,32 @@ impl Synth {
                     if let Some(part) = self.parts[usize::from(slot)].take() {
                         self.retire(part.notes);
                     }
-                    self.release_where(|tag| tag.owner == Owner::Part(slot));
+                    self.bank
+                        .release_where(|tag| tag.owner == Owner::Part(slot));
                 }
                 Command::Seek(seconds) => {
                     self.position = seconds;
-                    for part in self.parts.iter_mut().flatten() {
-                        part.next = part.notes.first_at_or_after(seconds);
+                    self.find_next_notes();
+                    self.damp_parts();
+                    if playing || self.drag.is_some() {
+                        self.enter_notes(None);
                     }
-                    self.release_where(|tag| tag.owner != Owner::Hand);
+                }
+                Command::Drag(target) => self.drag_toward(target),
+                Command::EndDrag => {
+                    self.drag = None;
+                    self.damp_parts();
                 }
                 Command::KeyDown {
                     key,
                     velocity,
                     voicing,
-                } => self.strike(
-                    Tag {
-                        owner: Owner::Hand,
-                        key,
-                        silent_at: f64::INFINITY,
-                    },
-                    velocity,
-                    voicing,
-                ),
+                } => self
+                    .bank
+                    .strike(Tag::hand(key), velocity, voicing, 0.0, self.sample_rate),
                 Command::KeyUp { key } => {
-                    self.release_where(|tag| tag.owner == Owner::Hand && tag.key == key);
+                    self.bank
+                        .release_where(|tag| tag.owner == Owner::Hand && tag.key == key);
                 }
             }
         }
@@ -193,49 +199,98 @@ impl Synth {
         if let Some(part) = before {
             self.retire(part.notes);
         }
-        self.release_where(|tag| tag.owner == Owner::Part(slot));
+        self.bank
+            .release_where(|tag| tag.owner == Owner::Part(slot));
     }
 
-    fn strike(&mut self, tag: Tag, velocity: u8, voicing: Voicing) {
-        let index = self
-            .voices
-            .iter()
-            .position(Voice::is_idle)
-            .unwrap_or_else(|| self.quietest_voice());
-        let key = (i16::from(tag.key) + i16::from(voicing.transpose)).clamp(0, HIGHEST_KEY);
-        self.voices[index].strike(
-            voicing.timbre.recipe(),
-            f32::from(key),
-            f32::from(velocity) / HARDEST_STRIKE,
-            voicing.volume,
-            self.sample_rate,
-        );
-        self.tags[index] = tag;
+    fn drag_toward(&mut self, target: f64) {
+        if (target - self.position).abs() > DRAG_JUMP_SECONDS {
+            // Too far to pass through on the way: the clock is put there,
+            // and the notes it lands in sound from where it landed.
+            self.position = target;
+            self.damp_parts();
+            self.enter_notes(None);
+        } else if self.drag.is_none() {
+            // The hand takes the clock: the notes it stands in sound.
+            self.enter_notes(None);
+        }
+        let frames = DRAG_GLIDE_SECONDS * f64::from(self.sample_rate);
+        self.drag = Some(Drag {
+            target,
+            seconds_per_frame: (target - self.position) / frames,
+        });
     }
 
-    fn quietest_voice(&self) -> usize {
-        let mut quietest = 0;
-        for index in 1..MAX_VOICES {
-            if self.voices[index].loudness() < self.voices[quietest].loudness() {
-                quietest = index;
+    // Moves a dragged clock for `frames` and sounds the notes it enters.
+    fn follow_drag(&mut self, drag: Drag, frames: usize) {
+        let before = self.position;
+        let step = drag.seconds_per_frame * frames as f64;
+        let reached = if step >= 0.0 {
+            (before + step).min(drag.target)
+        } else {
+            (before + step).max(drag.target)
+        };
+        if reached.to_bits() != before.to_bits() {
+            self.position = reached;
+            self.enter_notes(Some(before));
+        }
+    }
+
+    // Strikes the notes the clock stands in now and did not stand in at
+    // `before`, each as far into its life as the clock is past its start,
+    // and lets the dampers fall on the notes the clock left. `None` strikes
+    // every note the clock stands in.
+    fn enter_notes(&mut self, before: Option<f64>) {
+        let now = self.position;
+        for (slot, part) in (0u8..).zip(&self.parts) {
+            let Some(part) = part else { continue };
+            let earliest = now - f64::from(part.notes.longest_ring());
+            let first = part.notes.first_at_or_after(earliest);
+            let end = part.notes.started_by(now);
+            for note in &part.notes.as_slice()[first..end] {
+                let sounds = f64::from(note.start)..f64::from(note.silent_at());
+                if !sounds.contains(&now) || before.is_some_and(|before| sounds.contains(&before)) {
+                    continue;
+                }
+                let age = note_seconds(now - sounds.start);
+                let key = f32::from(note.key) + f32::from(part.voicing.transpose);
+                if !Voice::sounds_after(part.voicing.timbre.recipe(), key, age) {
+                    continue;
+                }
+                self.bank.strike(
+                    Tag {
+                        owner: Owner::Part(slot),
+                        key: note.key,
+                        sounds_from: sounds.start,
+                        silent_at: sounds.end,
+                    },
+                    note.velocity,
+                    part.voicing,
+                    age,
+                    self.sample_rate,
+                );
             }
         }
-        quietest
+        self.bank.release_outside(now);
     }
 
-    // Starts the notes that fall on the frame the clock is at.
+    // Starts the notes that fall on the frame the running clock is at.
     fn strike_due(&mut self, step: f64) {
         let due_before = self.position + step * 0.5;
         for slot in 0..MAX_PARTS {
             while let Some((note, voicing)) = self.due_note(slot, due_before) {
-                self.strike(
+                self.bank.strike(
                     Tag {
                         owner: Owner::Part(slot),
                         key: note.key,
+                        // A note struck half a frame early sounds from now.
+                        sounds_from: f64::from(note.start).min(self.position),
                         silent_at: f64::from(note.silent_at()),
                     },
                     note.velocity,
                     voicing,
+                    0.0,
+                    self.sample_rate,
                 );
             }
         }
@@ -273,11 +328,34 @@ impl Synth {
         frames.max(1)
     }
 
-    fn release_due(&mut self) {
-        let position = self.position;
-        for (voice, tag) in self.voices.iter_mut().zip(&self.tags) {
-            if voice.is_held() && tag.silent_at <= position {
-                voice.release();
+    // Takes in whether the piece plays now: a clock that starts to run finds
+    // its next notes, and one that stops lets the dampers fall, since it
+    // would never reach the times they fall at.
+    fn follow_transport(&mut self, playing: bool) {
+        if playing && !self.was_playing {
+            self.drag = None;
+            self.find_next_notes();
+        }
+        if self.was_playing && !playing {
+            self.damp_parts();
+        }
+        self.was_playing = playing;
+    }
+
+    // Writes the frames of `block` to `out`, which holds `self.channels`
+    // samples a frame.
+    fn write(&self, block: &[[f32; 2]], out: &mut [f32], volume: f32) {
+        for (frame, [left, right]) in out.chunks_exact_mut(self.channels).zip(block) {
+            let left = soft_limit(left * volume);
+            let right = soft_limit(right * volume);
+            match frame {
+                [only] => *only = (left + right) * 0.5,
+                [first, second, others @ ..] => {
+                    *first = left;
+                    *second = right;
+                    others.fill(0.0);
+                }
+                [] => {}
             }
         }
     }
@@ -293,14 +371,10 @@ impl Renderer for Synth {
     }
 
     fn render(&mut self, out: &mut [f32]) -> RenderStatus {
-        self.apply_commands();
-        let volume = self.transport.volume();
         let playing = self.transport.is_playing();
-        if self.was_playing && !playing {
-            // A stopped clock would never reach the time the dampers fall at.
-            self.release_where(|tag| tag.owner != Owner::Hand);
-        }
-        self.was_playing = playing;
+        self.follow_transport(playing);
+        self.apply_commands(playing);
+        let volume = self.transport.volume();
         let step = f64::from(self.transport.tempo()) / f64::from(self.sample_rate);
 
         let mut rest = out;
@@ -313,34 +387,21 @@ impl Renderer for Synth {
             if playing {
                 self.strike_due(step);
                 span = span.min(self.frames_to_next_note(step));
+            } else if let Some(drag) = self.drag {
+                self.follow_drag(drag, span);
             }
 
             let mut block = [[0.0f32; 2]; SPAN_FRAMES];
             let block = &mut block[..span];
-            for voice in &mut self.voices {
-                voice.render(block);
-            }
+            self.bank.render(block);
             self.reverb.render(block);
-
             let (now, later) = rest.split_at_mut(span * self.channels);
-            for (frame, [left, right]) in now.chunks_exact_mut(self.channels).zip(block.iter()) {
-                let left = soft_limit(left * volume);
-                let right = soft_limit(right * volume);
-                match frame {
-                    [only] => *only = (left + right) * 0.5,
-                    [first, second, others @ ..] => {
-                        *first = left;
-                        *second = right;
-                        others.fill(0.0);
-                    }
-                    [] => {}
-                }
-            }
+            self.write(block, now, volume);
             rest = later;
 
             if playing {
                 self.position += span as f64 * step;
-                self.release_due();
+                self.bank.release_outside(self.position);
             }
         }
 

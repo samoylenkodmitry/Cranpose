@@ -35,6 +35,25 @@ impl Default for LazyScrollbarModel {
     }
 }
 
+// The end of the rail that stands for the start of the list.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RailStart {
+    Top,
+    // For a list laid out from the bottom up.
+    Bottom,
+}
+
+impl RailStart {
+    // The share of the rail's travel, from its top, that stands for the
+    // share `fraction` of the list's scroll; and the reverse.
+    fn along_rail(self, fraction: f32) -> f32 {
+        match self {
+            Self::Top => fraction,
+            Self::Bottom => 1.0 - fraction,
+        }
+    }
+}
+
 pub(crate) fn compute_scrollbar_metrics(
     rail_height: f32,
     thumb_fraction: f32,
@@ -175,10 +194,10 @@ pub(crate) fn LazyScrollbarRail(
     list_state: cranpose_foundation::lazy::LazyListState,
     semantics_tag: &'static str,
     style: LazyScrollbarStyle,
+    start: RailStart,
 ) {
     let (model, _) = read_interaction_scrollbar_model(list_state);
-    let thumb_fraction = model.thumb_fraction;
-    let scroll_fraction = model.scroll_fraction;
+    let scroll_fraction = start.along_rail(model.scroll_fraction);
 
     UiBox(
         Modifier::empty()
@@ -191,7 +210,7 @@ pub(crate) fn LazyScrollbarRail(
             .draw_behind(move |scope| {
                 let (thumb_h, thumb_y) = compute_scrollbar_metrics(
                     scope.size().height,
-                    thumb_fraction,
+                    model.thumb_fraction,
                     scroll_fraction,
                     style.min_thumb_height,
                 );
@@ -238,7 +257,7 @@ pub(crate) fn LazyScrollbarRail(
                                         let (thumb_h, thumb_y) = compute_scrollbar_metrics(
                                             rail_h,
                                             model.thumb_fraction,
-                                            model.scroll_fraction,
+                                            start.along_rail(model.scroll_fraction),
                                             style.min_thumb_height,
                                         );
                                         if model.max_item_position > 0.0 {
@@ -254,7 +273,7 @@ pub(crate) fn LazyScrollbarRail(
                                             let (target_idx, target_offset) =
                                                 scroll_target_for_fraction(
                                                     model,
-                                                    target_scroll_fraction,
+                                                    start.along_rail(target_scroll_fraction),
                                                 );
                                             list_state.scroll_to_item(target_idx, target_offset);
                                             dragging = true;
@@ -289,7 +308,7 @@ pub(crate) fn LazyScrollbarRail(
                                         let (target_idx, target_offset) =
                                             scroll_target_for_fraction(
                                                 model,
-                                                target_scroll_fraction,
+                                                start.along_rail(target_scroll_fraction),
                                             );
                                         if model.max_item_position > 0.0 {
                                             if model.total_items > 5_000 {
@@ -361,7 +380,7 @@ pub(crate) fn LazyListWithScrollbar<F>(
                     }
                 },
             );
-            LazyScrollbarRail(list_state, rail_tag, style);
+            LazyScrollbarRail(list_state, rail_tag, style, RailStart::Top);
         },
     );
 }

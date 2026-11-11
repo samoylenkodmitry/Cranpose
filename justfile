@@ -472,9 +472,9 @@ _size-ceiling path max what:
 # (the nine patches of the comparison's third screen) took it to 14,051,422
 # bytes. The chat of that screen took it to 14,197,518 bytes: the SVG reader
 # of its spinner and the GIF decoder of its picture. The Music tab took it to
-# 14,396,426 bytes, about 150 KB: its composables and synth, the MIDI reader
+# 14,431,336 bytes, about 185 KB: its composables and synth, the MIDI reader
 # with its 17 KB song, and the Web Audio backend.
-web-size-budget: (_size-ceiling "apps/desktop-demo/pkg/desktop_app_bg.wasm" "14451460" "web demo wasm")
+web-size-budget: (_size-ceiling "apps/desktop-demo/pkg/desktop_app_bg.wasm" "14486500" "web demo wasm")
 
 # The ESP32-S3 app image after `just esp32-build`: 3.3 MiB, the image of
 # 2026-10-29 (3,366,944 bytes) and about 2.4%. The text engine of #1961 added

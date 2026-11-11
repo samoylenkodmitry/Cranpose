@@ -2696,7 +2696,7 @@ Call this from a user action. Use `pause_media`, `seek_media_fraction` and `set_
 An app that plays only WAV files of PCM samples, such as its own recordings, enables `media-wav` in place of `media` and leaves out the other codecs.
 For game sounds, enable `audio`. On desktop, enable `audio-desktop`.
 In a browser `audio` plays through Web Audio, and the sound starts at the user's first press or key.
-An app that makes its own samples hands a `Renderer` to `cranpose_audio::backend::open`. The desktop demo's Music tab plays a piece this way: each part of the score is a composable that draws its notes and sounds them.
+An app that makes its own samples hands a `Renderer` to `cranpose_audio::backend::open`. The desktop demo's Music tab plays a piece this way: each part of the score is a composable, and its notes are rectangles in a lazy column. The piece scrolls the column, and a hand that scrolls it plays the notes that cross its lower edge.
 See [Cranamp](https://github.com/samoylenkodmitry/cranamp) for a player app.
 
 ### Show an image from the network

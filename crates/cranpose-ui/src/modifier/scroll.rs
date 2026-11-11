@@ -622,6 +622,15 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
         }
     }
 
+    // A delta of the pointer as the scroll target takes it.
+    fn toward_target(&self, pointer_delta: f32) -> f32 {
+        if self.reverse_scrolling {
+            -pointer_delta
+        } else {
+            pointer_delta
+        }
+    }
+
     fn along_axis(&self, point: Point) -> f32 {
         if self.axis.is_vertical() {
             point.y
@@ -706,7 +715,10 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
             let main_delta = signed_main_delta.abs();
             let cross_delta = delta_along(down_pos, position, self.axis.cross_axis()).abs();
             if main_delta > DRAG_THRESHOLD && main_delta >= cross_delta {
-                if self.scroll_target.can_consume(signed_main_delta) {
+                if self
+                    .scroll_target
+                    .can_consume(self.toward_target(signed_main_delta))
+                {
                     gs.is_dragging = true;
                     self.scroll_target.set_dragging(true);
                     self.motion_context.set_active(true);
@@ -751,30 +763,18 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
 
         if gs.is_dragging {
             drop(gs);
-            let delta = if self.reverse_scrolling {
-                -incremental_delta
-            } else {
-                incremental_delta
-            };
+            let delta = self.toward_target(incremental_delta);
             let overscroll = self.overscroll.clone();
             overscroll.apply_to_scroll(delta, |delta| self.scroll_target.apply_delta(delta));
             self.scroll_target.invalidate();
             true
         } else if gs.is_overscrolling {
             drop(gs);
-            let delta = if self.reverse_scrolling {
-                -incremental_delta
-            } else {
-                incremental_delta
-            };
+            let delta = self.toward_target(incremental_delta);
             self.apply_overscroll_delta(delta)
         } else if edge_candidate {
             drop(gs);
-            let delta = if self.reverse_scrolling {
-                -incremental_delta
-            } else {
-                incremental_delta
-            };
+            let delta = self.toward_target(incremental_delta);
             let detector = self.clone_for_watcher();
             event.defer_post_dispatch_action(move || detector.apply_overscroll_candidate(delta));
             false
@@ -860,11 +860,7 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
             set_last_fling_velocity(velocity);
         }
 
-        let adjusted_velocity = if self.reverse_scrolling {
-            -velocity
-        } else {
-            velocity
-        };
+        let adjusted_velocity = self.toward_target(velocity);
         // The containers around the scroller take their part first; a fling
         // with too little left does not start.
         let adjusted_velocity = if gesture_owned {
@@ -1032,11 +1028,7 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
             return false;
         }
 
-        let delta = if self.reverse_scrolling {
-            -axis_delta
-        } else {
-            axis_delta
-        };
+        let delta = self.toward_target(axis_delta);
         if !self.scroll_target.can_consume(delta) && self.scroll_target.can_scroll() {
             let detector = self.clone_for_watcher();
             event.defer_post_dispatch_action(move || detector.apply_wheel_delta(delta));
