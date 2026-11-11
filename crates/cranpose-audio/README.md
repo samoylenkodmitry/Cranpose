@@ -4,7 +4,7 @@
 
 ## Setup
 
-For Cranpose apps, enable `cranpose/audio` on Android and watchOS and `cranpose/audio-desktop` on desktop. Android and Wear OS use AAudio, and watchOS uses `AVAudioEngine`. Desktop uses `cpal` and needs the host audio development libraries; Linux builds require ALSA development headers. Direct users of `cranpose-audio` can select the `aaudio`, `avaudio` or `cpal-backend` crate feature.
+For Cranpose apps, enable `cranpose/audio` on Android, watchOS and the web and `cranpose/audio-desktop` on desktop. Android and Wear OS use AAudio, watchOS uses `AVAudioEngine`, and a browser uses Web Audio. Desktop uses `cpal` and needs the host audio development libraries; Linux builds require ALSA development headers. Direct users of `cranpose-audio` can select the `aaudio`, `avaudio`, `web-audio` or `cpal-backend` crate feature.
 
 Install the engine once on the UI thread before composition:
 
@@ -26,6 +26,8 @@ fn play_wav(wav_bytes: &[u8]) -> Result<(), AudioError> {
 The UI thread decodes supported WAV clips and sends bounded commands to the audio thread. The callback mixes up to 32 voices, applies playback rate, pan, volume, and the effects or music bus, then clamps the output. The callback performs bounded work and uses a lock-free queue. Other containers return `AudioError::UnsupportedFormat`; clips use mono or stereo `f32` samples.
 
 Android uses AAudio from API 26 onward. The backend requests low-latency, 32-bit float stereo output. Device disconnects stop the stream; later playback opens a fresh stream. watchOS renders stereo float at the output's rate into an `AVAudioSourceNode`, in the ambient session category; when the system stops the engine, later playback opens a new one. Desktop `cpal` pauses after the mixer reports idle on its next engine call.
+
+A browser gives a page no real-time callback on the thread that runs the composition. The Web Audio backend renders on that thread, 1024 frames at a time, and keeps `backend::RENDER_LEAD_SECONDS` of sound scheduled ahead of the context's clock. Each sound is this much later than on the other backends, and a frame that blocks the page for longer leaves a gap. A browser starts a context only after the user has acted on the page; a stream opened before that starts at the first press or key.
 
 ## Links
 

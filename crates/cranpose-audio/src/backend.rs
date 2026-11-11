@@ -25,6 +25,25 @@ mod avaudio;
 ))]
 mod cpal_device;
 
+#[cfg(all(feature = "web-audio", target_arch = "wasm32"))]
+mod web_audio;
+
+/// How long before its sound a render call runs, in seconds, on top of the
+/// buffer of the device itself.
+///
+/// A browser gives a page no real-time callback on the thread that runs the
+/// composition, so the Web Audio backend renders this far ahead. A picture
+/// that follows a renderer's clock on that backend shows the clock this much
+/// earlier than the sound.
+#[cfg(all(feature = "web-audio", target_arch = "wasm32"))]
+pub const RENDER_LEAD_SECONDS: f32 = web_audio::LEAD_SECONDS as f32;
+
+/// How long before its sound a render call runs, in seconds, on top of the
+/// buffer of the device itself. Zero here: the device calls the renderer on
+/// its own real-time thread.
+#[cfg(not(all(feature = "web-audio", target_arch = "wasm32")))]
+pub const RENDER_LEAD_SECONDS: f32 = 0.0;
+
 /// The rate a renderer is built for before the device reports the one it
 /// negotiated. AAudio only tells you after the stream is open, so every
 /// renderer starts on an assumption and corrects it in its first callback.
@@ -100,12 +119,13 @@ pub fn is_compiled() -> bool {
             feature = "cpal-backend",
             not(any(target_os = "android", target_arch = "wasm32"))
         ))
+        || cfg!(all(feature = "web-audio", target_arch = "wasm32"))
 }
 
 /// Opens the platform output device, starts it, and runs `renderer` on it.
 ///
 /// Each arm is a separate `cfg` block, so the explicit returns are what keeps
-/// exactly one of them live per target instead of one expression with four
+/// exactly one of them live per target instead of one expression with five
 /// conditional parts.
 #[expect(clippy::needless_return, reason = "each cfg arm returns")]
 pub fn open(renderer: Box<dyn Renderer>) -> Result<Box<dyn AudioSink>, AudioError> {
@@ -127,13 +147,19 @@ pub fn open(renderer: Box<dyn Renderer>) -> Result<Box<dyn AudioSink>, AudioErro
         return cpal_device::open(renderer);
     }
 
+    #[cfg(all(feature = "web-audio", target_arch = "wasm32"))]
+    {
+        return web_audio::open(renderer);
+    }
+
     #[cfg(not(any(
         all(feature = "aaudio", target_os = "android"),
         all(feature = "avaudio", target_os = "watchos"),
         all(
             feature = "cpal-backend",
             not(any(target_os = "android", target_arch = "wasm32"))
-        )
+        ),
+        all(feature = "web-audio", target_arch = "wasm32")
     )))]
     {
         drop(renderer);

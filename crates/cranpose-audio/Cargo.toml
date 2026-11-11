@@ -10,7 +10,7 @@ authors.workspace = true
 keywords.workspace = true
 categories.workspace = true
 readme = "README.md"
-description = "Real-time audio engine for Cranpose (AAudio on Android/Wear OS, AVAudioEngine on watchOS, cpal on desktop)"
+description = "Real-time audio engine for Cranpose (AAudio on Android/Wear OS, AVAudioEngine on watchOS, cpal on desktop, Web Audio in a browser)"
 
 [package.metadata.docs.rs]
 all-features = true
@@ -42,6 +42,9 @@ avaudio = [
 # links a system audio library (ALSA on Linux, CoreAudio on macOS, WASAPI on
 # Windows) that a build machine may not have headers for.
 cpal-backend = ["dep:cpal"]
+# The Web Audio output device in a browser. Costs nothing elsewhere: its
+# dependencies are only declared for wasm32.
+web-audio = ["dep:wasm-bindgen", "dep:web-sys"]
 
 [target.'cfg(target_os = "android")'.dependencies]
 ndk = { version = "0.9.0", default-features = false, features = ["audio"], optional = true }
@@ -72,3 +75,18 @@ dispatch2 = { version = "0.3", optional = true }
 
 [target.'cfg(not(any(target_os = "android", target_arch = "wasm32")))'.dependencies]
 cpal = { version = "0.18.2", optional = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = { version = "0.2", optional = true }
+web-sys = { version = "0.3", optional = true, features = [
+    "AudioBuffer",
+    "AudioBufferSourceNode",
+    "AudioContext",
+    "AudioContextState",
+    "AudioDestinationNode",
+    "AudioNode",
+    "AudioScheduledSourceNode",
+    "BaseAudioContext",
+    "EventTarget",
+    "Window",
+] }
