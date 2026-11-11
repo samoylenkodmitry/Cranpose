@@ -86,11 +86,11 @@ abstract class CranposeExtension @Inject constructor(objects: ObjectFactory) {
      * Defaults to the lowest effective `minSdk` among enabled application
      * variants, including product flavors, because their Cargo build cache is
      * shared. With no enabled variants, uses `defaultConfig.minSdk` when set.
-     * An explicit value overrides this default. It matters because `cargo-ndk`
-     * otherwise links against API 21, whose sysroot has no `libaaudio.so`.
-     * An application that enables Cranpose's audio backend then fails to link
-     * with `unable to find library -laaudio`, on a build that never mentioned
-     * an API level.
+     * An explicit value overrides this default. It matters because the
+     * library links with every symbol resolved against this level's platform
+     * libraries: a call that Android added later fails the build instead of
+     * the library load on an older device. Without a level `cargo-ndk` links
+     * against API 21.
      */
     val androidApiLevel: Property<Int> = objects.property(Int::class.java)
 
