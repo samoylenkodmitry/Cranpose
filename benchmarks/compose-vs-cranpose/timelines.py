@@ -12,7 +12,11 @@ STARTS = ('first', 'second')
 # start that the app then outruns does not end it. The seconds before the
 # first frame are the launch, which every run measures whole: an app whose
 # first frame comes late is measured from there, not ended before it shows.
-SLOW_FPS = 30
+# The line is far below the rates the frameworks are compared at: a run that
+# ends early is a shorter span, whose launch weighs more in its rate, so an
+# app that runs near the line would report one rate when a run stays above
+# it and a lower one when the run falls just under.
+SLOW_FPS = 10
 SLOW_SECONDS = 5
 
 
