@@ -103,38 +103,36 @@ fn velocity_of(positions: &[f32]) -> f32 {
     tracker.calculate_velocity()
 }
 
-// A finger that lifts often moves a little back first. That move alone must
-// not send the fling back faster than the finger ever moved.
+// A finger that lifts often moves a little back first. An iOS scroll view
+// gives that last move a twentieth of the weight, so the fling goes on the
+// way the finger scrolled.
 #[test]
-fn a_small_move_back_at_the_end_does_not_fling_back_fast() {
-    // 1,000 units a second, then 8 units back in the last sample.
+fn a_small_move_back_at_the_end_keeps_the_fling_s_direction() {
+    // 1,000 units a second, then 8 units back in the last sample:
+    // 0.6 * 1000 + 0.35 * 1000 - 0.05 * 1000.
     let velocity = velocity_of(&[0.0, 8.0, 16.0, 24.0, 32.0, 24.0]);
-    assert!(
-        velocity.abs() < 400.0,
-        "an 8 unit move back after 1,000 units a second gave {velocity}"
-    );
-    // 250 units a second, then 6 units back: the finger never passed 750.
+    assert!((velocity - 900.0).abs() < 1.0, "{velocity}");
+    // 250 units a second, then 6 units back: 0.95 * 250 - 0.05 * 750.
     let velocity = velocity_of(&[0.0, 2.0, 4.0, 6.0, 8.0, 2.0]);
-    assert!(
-        velocity.abs() < 750.0,
-        "a 6 unit move back after 250 units a second gave {velocity}"
-    );
+    assert!((velocity - 200.0).abs() < 1.0, "{velocity}");
 }
 
 #[test]
-fn a_pointer_that_stops_in_its_last_sample_slows_down() {
+fn a_pointer_that_stops_in_its_last_sample_keeps_most_of_its_speed() {
     let moving = velocity_of(&[0.0, 8.0, 16.0, 24.0, 32.0, 40.0]);
     let stopped = velocity_of(&[0.0, 8.0, 16.0, 24.0, 32.0, 32.0]);
     assert!((moving - 1_000.0).abs() < 1.0, "{moving}");
-    assert!(stopped > 0.0 && stopped < 600.0, "{stopped}");
+    assert!((stopped - 950.0).abs() < 1.0, "{stopped}");
 }
 
 #[test]
-fn samples_at_two_times_take_a_line_s_slope() {
+fn motion_before_a_rest_is_no_part_of_the_velocity() {
     let mut tracker = VelocityTracker1D::new();
-    tracker.add_data_point(0, 0.0);
-    tracker.add_data_point(8, 8.0);
-    tracker.add_data_point(8, 8.0);
+    // Fast, a rest of 200 ms, then two slow samples.
+    for (time, position) in [(0, 0.0), (8, 80.0), (16, 160.0), (216, 160.0), (224, 161.0)] {
+        tracker.add_data_point(time, position);
+    }
+    // Only the pair after the rest counts: 0.05 * 125.
     let velocity = tracker.calculate_velocity();
-    assert!((velocity - 1_000.0).abs() < 1.0, "{velocity}");
+    assert!((velocity - 6.25).abs() < 0.1, "{velocity}");
 }

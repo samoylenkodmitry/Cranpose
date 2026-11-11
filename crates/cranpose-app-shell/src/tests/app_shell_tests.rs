@@ -3634,9 +3634,9 @@ fn android_style_consecutive_flings_keep_direction() {
 }
 
 // A scroll that ends with a small move the other way, as a lifting finger
-// makes, must not fling back faster than the finger moved.
+// makes, goes on the way the finger scrolled.
 #[test]
-fn a_small_move_back_before_the_lift_does_not_fling_back_fast() {
+fn a_small_move_back_before_the_lift_keeps_the_fling_s_direction() {
     let _guard = test_guard();
     APP_SHELL_WHEEL_SCROLL_STATE.with(|slot| slot.borrow_mut().take());
 
@@ -3667,10 +3667,10 @@ fn a_small_move_back_before_the_lift_does_not_fling_back_fast() {
     shell.pointer_released_at_position_time(160.0, y, Some(event_ms));
 
     let velocity = shell.debug_enter_app_context(cranpose_ui::debug_last_fling_velocity);
-    // Up is negative. The fling may go on up, slower than the finger went,
-    // or turn a little back; it must not go back fast.
+    // Up is negative. An iOS scroll view gives the last move a twentieth of
+    // the weight: 0.95 * 1000 up and 0.05 * 1000 down leave 900 up.
     assert!(
-        velocity > -1_000.0 && velocity < 400.0,
+        (velocity + 900.0).abs() < 20.0,
         "an 8 point move back after 1,000 points a second flung at {velocity}"
     );
 }
