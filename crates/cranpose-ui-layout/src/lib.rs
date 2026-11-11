@@ -8,6 +8,7 @@ mod axis;
 mod constraints;
 mod core;
 mod intrinsics;
+mod layout_direction;
 mod pixels;
 
 pub use core::*;
@@ -18,6 +19,7 @@ pub use arrangement::*;
 pub use axis::*;
 pub use constraints::*;
 pub use intrinsics::*;
+pub use layout_direction::*;
 pub use pixels::*;
 
 /// The layout API in one import.

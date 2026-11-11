@@ -26,7 +26,7 @@ pub(crate) use shared_parent_data::SharedParentData;
 
 use crate::{
     modifier_nodes::{
-        AlignmentElement, FillDirection, FillElement, OffsetNode, PaddingElement, SizeElement,
+        AlignmentElement, FillDirection, FillElement, OffsetElement, PaddingElement, SizeElement,
         WeightElement,
     },
     text_modifier_node::TextModifierElement,
@@ -203,11 +203,7 @@ impl ModifierChainHandle {
     fn update_offset_direction(&mut self) {
         let direction = self.layout_direction;
         self.chain.visit_nodes_mut(|node, capabilities| {
-            if capabilities.contains(NodeCapabilities::LAYOUT)
-                && let Some(offset) = node.as_any_mut().downcast_mut::<OffsetNode>()
-            {
-                offset.set_layout_direction(direction);
-            } else if capabilities.contains(NodeCapabilities::DRAW)
+            if capabilities.contains(NodeCapabilities::DRAW)
                 && let Some(offset) = node.as_any_mut().downcast_mut::<OffsetPxNode>()
             {
                 offset.set_layout_direction(direction);
@@ -538,7 +534,10 @@ impl ModifierChainHandle {
 
     // One walk over the chain's layout nodes, from the outermost in.
     fn resolution(&self) -> Resolution {
-        let mut resolution = Resolution::default();
+        let mut resolution = Resolution {
+            direction: self.layout_direction,
+            ..Resolution::default()
+        };
         self.chain
             .for_each_forward_matching(NodeCapabilities::LAYOUT, |node_ref| {
                 match node_ref.plain_words() {
@@ -620,6 +619,8 @@ impl ModifierChainHandle {
 struct Resolution {
     layout: LayoutProperties,
     padding: EdgeInsets,
+    // The direction the chain's node reads, which mirrors its offsets.
+    direction: crate::LayoutDirection,
     offset: Point,
     fill_width: Option<f32>,
     fill_height: Option<f32>,
@@ -644,21 +645,16 @@ impl Resolution {
                 .get_or_insert_with(|| WeightElement::from_words(words).layout_weight());
         } else if kind == TypeId::of::<AlignmentElement>() {
             apply_alignment(&mut self.layout, &AlignmentElement::from_words(words));
+        } else if kind == TypeId::of::<OffsetElement>() {
+            let delta = OffsetElement::from_words(words).offset(self.direction);
+            self.offset.x += delta.x;
+            self.offset.y += delta.y;
         }
     }
 
     /// Takes in the next node of the walk.
     fn take(&mut self, node: &dyn Any) {
-        // One type lookup a node: each `downcast_ref` asks for it again.
-        let kind = Any::type_id(node);
-        if kind == TypeId::of::<OffsetNode>() {
-            if let Some(offset) = node.downcast_ref::<OffsetNode>() {
-                let delta = offset.offset();
-                self.offset.x += delta.x;
-                self.offset.y += delta.y;
-            }
-        } else if kind == TypeId::of::<LayoutDataNode>()
-            && self.layout_data.is_none()
+        if self.layout_data.is_none()
             && let Some(data) = node.downcast_ref::<LayoutDataNode>()
         {
             self.layout_data = Some(Rc::clone(data.data()));

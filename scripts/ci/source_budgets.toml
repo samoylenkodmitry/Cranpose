@@ -11,7 +11,7 @@ source_text_checks = 328
 half_state_words = 0
 
 [ast_grep]
-"bool-parameter" = 122
+"bool-parameter" = 121
 "cfg-on-robot-app-feature" = 0
 "drain-collect" = 10
 "get-prefix" = 70

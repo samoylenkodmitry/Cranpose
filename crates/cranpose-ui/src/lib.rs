@@ -240,7 +240,7 @@ pub use modifier::{last_fling_velocity, reset_last_fling_velocity};
 pub use modifier_nodes::{
     AlphaElement, AlphaNode, BackgroundElement, ClickableElement, ClickableNode,
     CornerShapeElement, FillDirection, FillElement, FractionalOffsetElement, FractionalOffsetNode,
-    OffsetElement, OffsetNode, PaddingElement, SizeElement,
+    OffsetElement, PaddingElement, SizeElement,
 };
 pub use nested_scroll::{NestedScroll, NestedScrollConnection, NestedScrollSource};
 pub use nine_patch::{

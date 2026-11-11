@@ -5,42 +5,46 @@ use std::hash::{Hash, Hasher};
 
 use cranpose_foundation::{
     Constraints, DelegatableNode, InvalidationKind, LayoutModifierNode, Measurable, ModifierNode,
-    ModifierNodeContext, ModifierNodeElement, NodeCapabilities, NodeState, Size,
+    ModifierNodeContext, ModifierNodeElement, NodeCapabilities, NodeState, PlainElement,
+    PlainLayout, PlainLayoutFns, PrepareAt, Size,
 };
+use cranpose_ui_layout::{LayoutDirection, round_to_px};
 
 use super::{hash_f32_value, impl_layout_modifier_node, measure_pass_through};
 use crate::modifier::Point;
 
-/// Node that offsets its content by a fixed (x, y) amount.
+/// Element that offsets its content by a fixed (x, y) amount.
 ///
-/// Matches Kotlin: `OffsetNode` in foundation-layout/src/commonMain/kotlin/androidx/compose/foundation/layout/Offset.kt
-#[derive(Debug)]
-pub struct OffsetNode {
+/// Matches Kotlin: `OffsetElement` in foundation-layout/src/commonMain/kotlin/androidx/compose/foundation/layout/Offset.kt
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct OffsetElement {
     x: f32,
     y: f32,
-    rtl_aware: bool,
-    layout_direction: crate::LayoutDirection,
-    state: NodeState,
+    flags: u32,
 }
 
-impl OffsetNode {
-    /// Creates a node that moves its content by `x` and `y`, in logical pixels. With `rtl_aware`
+// A right-to-left layout direction mirrors `x`.
+const RTL_AWARE: u32 = 1;
+// A coordinator mirrored the offset for its direction and put it on the
+// device pixels of its density already: see `PlainLayout::prepared`.
+const PLACED: u32 = 1 << 1;
+
+impl OffsetElement {
+    /// Creates an element that moves content by `x` and `y`, in logical pixels. With `rtl_aware`
     /// set, a right-to-left layout direction mirrors `x`.
     pub fn new(x: f32, y: f32, rtl_aware: bool) -> Self {
         Self {
             x,
             y,
-            rtl_aware,
-            layout_direction: crate::LayoutDirection::Ltr,
-            state: NodeState::new(),
+            flags: if rtl_aware { RTL_AWARE } else { 0 },
         }
     }
 
-    /// Returns the offset in logical pixels, with `x` mirrored when the node is RTL aware and the
-    /// layout direction is right-to-left.
-    pub fn offset(&self) -> Point {
+    /// Returns the offset in logical pixels as a layout of `direction` applies it: `x` mirrored
+    /// when the element is RTL aware and the direction is right-to-left.
+    pub fn offset(&self, direction: LayoutDirection) -> Point {
         Point {
-            x: if self.rtl_aware && self.layout_direction.is_rtl() {
+            x: if self.rtl_aware() && direction.is_rtl() {
                 -self.x
             } else {
                 self.x
@@ -49,36 +53,64 @@ impl OffsetNode {
         }
     }
 
-    /// The offset on a whole device pixel of `density`, where Compose's
-    /// `OffsetNode` places its content.
-    pub fn device_offset(&self, density: f32) -> Point {
-        use cranpose_ui_layout::round_to_px;
-        let offset = self.offset();
+    /// Returns whether a right-to-left layout direction mirrors `x`.
+    pub fn rtl_aware(&self) -> bool {
+        self.flags & RTL_AWARE != 0
+    }
+
+    // Where the element places its content: on a whole device pixel of
+    // `at`'s density, where Compose's `OffsetNode` places it.
+    pub(crate) fn placed(&self, at: PrepareAt) -> Point {
+        if self.flags & PLACED != 0 {
+            return Point {
+                x: self.x,
+                y: self.y,
+            };
+        }
+        let offset = self.offset(at.direction);
         Point {
-            x: round_to_px(offset.x, density),
-            y: round_to_px(offset.y, density),
+            x: round_to_px(offset.x, at.density),
+            y: round_to_px(offset.y, at.density),
+        }
+    }
+}
+
+impl PlainElement for OffsetElement {
+    const WORDS: usize = 3;
+    const CAPABILITIES: NodeCapabilities = NodeCapabilities::LAYOUT;
+    const UPDATE_INVALIDATION: Option<InvalidationKind> = Some(InvalidationKind::Layout);
+    const LAYOUT: Option<&'static PlainLayoutFns> = Some(&PlainLayoutFns::of::<Self>());
+
+    #[inline]
+    fn to_words(&self, words: &mut [u32]) {
+        words.copy_from_slice(&[self.x.to_bits(), self.y.to_bits(), self.flags]);
+    }
+
+    #[inline]
+    fn from_words(words: &[u32]) -> Self {
+        match *words {
+            [x, y, flags, ..] => Self {
+                x: f32::from_bits(x),
+                y: f32::from_bits(y),
+                flags,
+            },
+            _ => Self::new(0.0, 0.0, false),
+        }
+    }
+}
+
+impl PlainLayout for OffsetElement {
+    const PREPARES: bool = true;
+
+    fn prepared(self, at: PrepareAt) -> Self {
+        let Point { x, y } = self.placed(at);
+        Self {
+            x,
+            y,
+            flags: PLACED,
         }
     }
 
-    /// Returns whether a right-to-left layout direction mirrors `x`.
-    pub fn rtl_aware(&self) -> bool {
-        self.rtl_aware
-    }
-
-    pub(crate) fn set_layout_direction(&mut self, direction: crate::LayoutDirection) {
-        self.layout_direction = direction;
-    }
-}
-
-impl DelegatableNode for OffsetNode {
-    fn node_state(&self) -> &NodeState {
-        &self.state
-    }
-}
-
-impl_layout_modifier_node!(OffsetNode, invalidate = InvalidationKind::Layout);
-
-impl LayoutModifierNode for OffsetNode {
     fn measure_hold(
         &self,
         _density: f32,
@@ -95,63 +127,12 @@ impl LayoutModifierNode for OffsetNode {
         measurable: &dyn Measurable,
         constraints: Constraints,
     ) -> cranpose_ui_layout::LayoutModifierMeasureResult {
-        let offset = self.device_offset(context.density());
+        // An element no coordinator prepared knows no direction.
+        let offset = self.placed(PrepareAt {
+            density: context.density(),
+            direction: LayoutDirection::Ltr,
+        });
         measure_pass_through(measurable, constraints, |_| (offset.x, offset.y))
-    }
-}
-
-/// Element that creates and updates offset nodes.
-///
-/// Matches Kotlin: `OffsetElement` in foundation-layout/src/commonMain/kotlin/androidx/compose/foundation/layout/Offset.kt
-#[derive(Debug, Clone, PartialEq)]
-pub struct OffsetElement {
-    x: f32,
-    y: f32,
-    rtl_aware: bool,
-}
-
-impl OffsetElement {
-    /// Creates an element that moves content by `x` and `y`, in logical pixels. With `rtl_aware`
-    /// set, a right-to-left layout direction mirrors `x`.
-    pub fn new(x: f32, y: f32, rtl_aware: bool) -> Self {
-        Self { x, y, rtl_aware }
-    }
-}
-
-impl Hash for OffsetElement {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        hash_f32_value(state, self.x);
-        hash_f32_value(state, self.y);
-        self.rtl_aware.hash(state);
-    }
-}
-
-impl ModifierNodeElement for OffsetElement {
-    type Node = OffsetNode;
-    const FROM_NODE: Option<fn(&OffsetNode) -> Self> = Some(|node| Self {
-        x: node.x,
-        y: node.y,
-        rtl_aware: node.rtl_aware,
-    });
-
-    fn create(&self) -> Self::Node {
-        OffsetNode::new(self.x, self.y, self.rtl_aware)
-    }
-
-    fn update(&self, node: &mut Self::Node) {
-        if node.x != self.x || node.y != self.y || node.rtl_aware != self.rtl_aware {
-            node.x = self.x;
-            node.y = self.y;
-            node.rtl_aware = self.rtl_aware;
-        }
-    }
-
-    fn capabilities(&self) -> NodeCapabilities {
-        NodeCapabilities::LAYOUT
-    }
-
-    fn update_invalidation_kind(&self) -> Option<InvalidationKind> {
-        Some(InvalidationKind::Layout)
     }
 }
 

@@ -3,7 +3,7 @@
 
 use cranpose_foundation::{
     Constraints, Measurable, ModifierNodeContext, NodeCapabilities, PlainElement, PlainIntrinsic,
-    PlainLayout, PlainLayoutFns, Size,
+    PlainLayout, PlainLayoutFns, PrepareAt, Size,
 };
 
 use crate::modifier::EdgeInsets;
@@ -82,9 +82,9 @@ impl PlainElement for PaddingElement {
 impl PlainLayout for PaddingElement {
     const PREPARES: bool = true;
 
-    fn prepared(self, density: f32) -> Self {
+    fn prepared(self, at: PrepareAt) -> Self {
         Self {
-            padding: self.device(density),
+            padding: self.device(at.density),
             on_device_pixels: true,
         }
     }

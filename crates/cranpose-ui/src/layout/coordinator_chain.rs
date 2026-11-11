@@ -10,7 +10,7 @@ use std::{
 use cranpose_core::{NodeId, PackedU64};
 use cranpose_foundation::{
     InvalidationKind, ModifierNodeContext, NodeCapabilities, PLAIN_WORDS_MAX, PlainIntrinsic,
-    PlainLayoutFns,
+    PlainLayoutFns, PrepareAt,
 };
 use cranpose_ui_layout::{AlignmentLines, Constraints, MeasurePolicy, Placement};
 
@@ -155,7 +155,7 @@ struct CoordinatorNode {
 // What a coordinator measures with. A measure runs while the applier is
 // free for the children's measures, so the coordinator keeps what it needs
 // of its modifier: the node, or a plain element's table and its words as
-// the last sync read them, prepared for the sync's density.
+// the last sync read them, prepared for the sync's density and direction.
 enum Source {
     Node(Rc<RefCell<dyn cranpose_foundation::ModifierNode>>),
     Plain {
@@ -181,27 +181,27 @@ impl<'a> Found<'a> {
         }
     }
 
-    fn source(&self, density: f32) -> Source {
+    fn source(&self, at: PrepareAt) -> Source {
         match *self {
             Self::Node(node) => Source::Node(Rc::clone(node)),
             Self::Plain(layout, words) => Source::Plain {
                 layout,
-                words: prepared(layout, words, density),
+                words: prepared(layout, words, at),
             },
         }
     }
 }
 
-// The words a coordinator keeps of a plain element's `words` for measures
-// at `density`.
+// The words a coordinator keeps of a plain element's `words` for the
+// measures `at` tells.
 fn prepared(
     layout: Option<&'static PlainLayoutFns>,
     words: &[u32],
-    density: f32,
+    at: PrepareAt,
 ) -> [u32; PLAIN_WORDS_MAX] {
     let mut all = [0; PLAIN_WORDS_MAX];
     if let Some(layout) = layout {
-        layout.prepare(words, density, &mut all);
+        layout.prepare(words, at, &mut all);
     }
     all
 }
@@ -219,18 +219,18 @@ impl CoordinatorNode {
 
     // Takes the words of the coordinator's plain element again from `chain`,
     // whose entries stand where the last walk found them.
-    fn read_plain(&mut self, chain: &cranpose_foundation::ModifierNodeChain, density: f32) {
+    fn read_plain(&mut self, chain: &cranpose_foundation::ModifierNodeChain, at: PrepareAt) {
         if let Source::Plain { layout, words } = &mut self.source
             && let Some((_, found)) = chain.plain_words(self.modifier_index)
         {
-            *words = prepared(*layout, found, density);
+            *words = prepared(*layout, found, at);
         }
     }
 
     // Whether the coordinator stands for `found` at `modifier_index`: the
     // same node, or a plain element of the same measure, whose words it
     // then takes.
-    fn takes(&mut self, modifier_index: usize, found: &Found<'_>, density: f32) -> bool {
+    fn takes(&mut self, modifier_index: usize, found: &Found<'_>, at: PrepareAt) -> bool {
         if self.modifier_index != modifier_index {
             return false;
         }
@@ -243,7 +243,7 @@ impl CoordinatorNode {
                     _ => false,
                 };
                 if same {
-                    *words = prepared(*layout, found_words, density);
+                    *words = prepared(*layout, found_words, at);
                 }
                 same
             }
@@ -307,21 +307,25 @@ impl CoordinatorChain {
     pub(super) fn sync(&mut self, node: &LayoutNode) -> ModifierChainInputs {
         let density = node.density();
         let chain = node.modifier_chain();
+        let at = PrepareAt {
+            density: density.density(),
+            direction: chain.layout_direction(),
+        };
         let revision = chain.revision();
         // A walk reads every entry, so it takes the changes too.
         let changed = chain.take_changed_in_place();
         if let Some(synced) = self.synced
             && synced.revision.get() == revision
-            && synced.scale.to_bits() == density.density().to_bits()
+            && synced.scale.to_bits() == at.density.to_bits()
         {
             // Values changed in place: the entries stand where they were,
             // and the coordinators of those entries take their words again.
             if changed != 0 {
-                self.read_changed(chain.chain(), changed, density.density());
+                self.read_changed(chain.chain(), changed, at);
             }
             return synced.inputs(density);
         }
-        let inputs = self.walk(node, density);
+        let inputs = self.walk(node, density, at);
         self.synced = Some(SyncedInputs::of(revision, inputs));
         // Other modifiers may place other coordinators.
         self.moved.set(true);
@@ -334,19 +338,24 @@ impl CoordinatorChain {
         &mut self,
         chain: &cranpose_foundation::ModifierNodeChain,
         changed: u64,
-        density: f32,
+        at: PrepareAt,
     ) {
         for coordinator in &mut self.nodes {
             let index = u32::try_from(coordinator.modifier_index).unwrap_or(u32::MAX);
             if changed.checked_shr(index).is_some_and(|rest| rest & 1 == 1) {
-                coordinator.read_plain(chain, density);
+                coordinator.read_plain(chain, at);
             }
         }
     }
 
     /// Syncs the nodes with the layout nodes of `node`'s chain and sums
     /// its offsets.
-    fn walk(&mut self, node: &LayoutNode, density: crate::density::Density) -> ModifierChainInputs {
+    fn walk(
+        &mut self,
+        node: &LayoutNode,
+        density: crate::density::Density,
+        at: PrepareAt,
+    ) -> ModifierChainInputs {
         let mut inputs = ModifierChainInputs {
             density,
             window_root: node.is_window_root(),
@@ -359,7 +368,6 @@ impl CoordinatorChain {
         }
 
         let chain = chain_handle.chain();
-        let scale = density.density();
         let mut len = 0;
         let mut matches = true;
         chain.for_each_forward_matching(NodeCapabilities::LAYOUT, |node_ref| {
@@ -371,24 +379,19 @@ impl CoordinatorChain {
                     && self
                         .nodes
                         .get_mut(len)
-                        .is_some_and(|candidate| candidate.takes(index, &found, scale));
+                        .is_some_and(|candidate| candidate.takes(index, &found, at));
                 len += 1;
             }
-            node_ref.with_node(|node| {
-                if let Some(offset_node) = node
-                    .as_any()
-                    .downcast_ref::<crate::modifier_nodes::OffsetNode>()
-                {
-                    let delta = offset_node.device_offset(density.density());
-                    inputs.offset.x += delta.x;
-                    inputs.offset.y += delta.y;
-                }
-            });
+            if let Some(offset) = node_ref.plain::<crate::modifier_nodes::OffsetElement>() {
+                let delta = offset.placed(at);
+                inputs.offset.x += delta.x;
+                inputs.offset.y += delta.y;
+            }
         });
 
         inputs.uses_chain = len > 0;
         if inputs.uses_chain && !(matches && len == self.nodes.len()) {
-            self.rebuild(chain, len, scale);
+            self.rebuild(chain, len, at);
         }
         inputs
     }
@@ -397,7 +400,7 @@ impl CoordinatorChain {
         &mut self,
         chain: &cranpose_foundation::ModifierNodeChain,
         len: usize,
-        density: f32,
+        at: PrepareAt,
     ) {
         let mut previous_nodes = std::mem::take(&mut self.nodes);
         // Exactly: most chains hold one layout modifier, where growth would
@@ -412,12 +415,12 @@ impl CoordinatorChain {
             };
             match previous_nodes
                 .iter_mut()
-                .position(|candidate| candidate.takes(index, &found, density))
+                .position(|candidate| candidate.takes(index, &found, at))
             {
                 Some(position) => self.nodes.push(previous_nodes.swap_remove(position)),
                 None => self
                     .nodes
-                    .push(CoordinatorNode::new(index, found.source(density))),
+                    .push(CoordinatorNode::new(index, found.source(at))),
             }
         });
     }

@@ -1,11 +1,10 @@
 use cranpose_core::{Composition, MemoryApplier, NodeId, location_key};
 use cranpose_foundation::{
-    BasicModifierNodeContext, LayoutModifierNode, ModifierNodeChain, PlainLayout, modifier_element,
-    plain_element,
+    BasicModifierNodeContext, ModifierNodeChain, PlainLayout, plain_element,
 };
 use cranpose_ui::{
     Box as ComposeBox, BoxSpec, Column, ColumnSpec, EdgeInsets, Modifier, OffsetElement,
-    OffsetNode, PaddingElement, Row, RowSpec, Size, SizeElement, Text, TextStyle, composable,
+    PaddingElement, Row, RowSpec, Size, SizeElement, Text, TextStyle, composable,
 };
 use cranpose_ui_layout::{Constraints, Measurable, Placeable};
 
@@ -838,10 +837,10 @@ fn test_offset_doesnt_affect_size() {
     let mut chain = ModifierNodeChain::new();
     let mut context = BasicModifierNodeContext::new();
 
-    let elements = vec![modifier_element(OffsetElement::new(20.0, 30.0, false))];
+    let elements = vec![plain_element(OffsetElement::new(20.0, 30.0, false))];
     chain.update_from_slice(&elements, &mut context);
 
-    let node = chain.node_mut::<OffsetNode>(0).unwrap();
+    let node = chain.plain::<OffsetElement>(0).unwrap();
     let measurable = TestMeasurable {
         width: 100.0,
         height: 80.0,
@@ -876,7 +875,7 @@ fn test_complex_modifier_chain_math() {
     let elements = vec![
         plain_element(PaddingElement::new(EdgeInsets::uniform(5.0))),
         plain_element(SizeElement::new(Some(80.0), Some(60.0))),
-        modifier_element(OffsetElement::new(10.0, 10.0, false)),
+        plain_element(OffsetElement::new(10.0, 10.0, false)),
         plain_element(PaddingElement::new(EdgeInsets::uniform(10.0))),
     ];
     chain.update_from_slice(&elements, &mut context);
@@ -904,7 +903,7 @@ fn test_complex_modifier_chain_math() {
     assert_eq!(result1.size.width, 80.0, "Size enforces 80");
     assert_eq!(result1.size.height, 60.0, "Size enforces 60");
 
-    let node2 = chain.node_mut::<OffsetNode>(2).unwrap();
+    let node2 = chain.plain::<OffsetElement>(2).unwrap();
     let result2 = node2.measure(&mut context, &measurable, constraints);
     assert_eq!(result2.size.width, 50.0, "Offset doesn't change size");
     assert_eq!(result2.size.height, 40.0, "Offset doesn't change size");

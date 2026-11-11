@@ -10,7 +10,9 @@ use std::{
 };
 
 use cranpose_core::{ProvidedValue, hash::default};
-use cranpose_ui_layout::{ConstraintsHold, LayoutModifierMeasureResult, WrappedHold};
+use cranpose_ui_layout::{
+    ConstraintsHold, LayoutDirection, LayoutModifierMeasureResult, WrappedHold,
+};
 
 use super::super::{
     AnyModifierElement, Constraints, DynModifierElement, ElementMaker, InvalidationKind,
@@ -70,11 +72,11 @@ pub trait PlainLayout: PlainElement {
         constraints: Constraints,
     ) -> LayoutModifierMeasureResult;
 
-    /// The element as a coordinator keeps it for measures at `density`: an
-    /// element that rounds its values to device pixels may round them here
-    /// once, and measure from the rounded values. The default is the
-    /// element itself.
-    fn prepared(self, _density: f32) -> Self {
+    /// The element as a coordinator keeps it for the measures `at` tells:
+    /// an element that rounds its values to device pixels, or mirrors them
+    /// for a layout direction, may do so here once, and measure from those
+    /// values. The default is the element itself.
+    fn prepared(self, _at: PrepareAt) -> Self {
         self
     }
 
@@ -100,6 +102,15 @@ pub trait PlainLayout: PlainElement {
     fn intrinsic(&self, measurable: &dyn Measurable, kind: PlainIntrinsic, _density: f32) -> f32 {
         kind.of(measurable)
     }
+}
+
+/// What a coordinator prepares a plain layout element for.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PrepareAt {
+    /// The density of the node's measures.
+    pub density: f32,
+    /// The direction the node's layout reads.
+    pub direction: LayoutDirection,
 }
 
 /// Which intrinsic size a measure asks for.
@@ -153,8 +164,8 @@ impl PlainIntrinsic {
     }
 }
 
-// Writes an element's words as a coordinator keeps them for a density.
-type PrepareFn = fn(&[u32], f32, &mut [u32]);
+// Writes an element's words as a coordinator keeps them.
+type PrepareFn = fn(&[u32], PrepareAt, &mut [u32]);
 
 type MeasureFn = fn(
     &[u32],
@@ -184,9 +195,9 @@ impl PlainLayoutFns {
     pub const fn of<E: PlainLayout>() -> Self {
         Self {
             prepare: if E::PREPARES {
-                Some(|words, density, prepared| {
+                Some(|words, at, prepared| {
                     E::from_words(words)
-                        .prepared(density)
+                        .prepared(at)
                         .to_words(&mut prepared[..E::WORDS]);
                 })
             } else {
@@ -205,11 +216,11 @@ impl PlainLayoutFns {
     }
 
     /// Writes into `prepared` the words of the element `words` hold as a
-    /// coordinator keeps it for measures at `density`; see
+    /// coordinator keeps it for the measures `at` tells; see
     /// [`PlainLayout::prepared`]. The other calls take prepared words.
-    pub fn prepare(&self, words: &[u32], density: f32, prepared: &mut [u32; PLAIN_WORDS_MAX]) {
+    pub fn prepare(&self, words: &[u32], at: PrepareAt, prepared: &mut [u32; PLAIN_WORDS_MAX]) {
         match self.prepare {
-            Some(prepare) => prepare(words, density, prepared),
+            Some(prepare) => prepare(words, at, prepared),
             None => prepared[..words.len()].copy_from_slice(words),
         }
     }

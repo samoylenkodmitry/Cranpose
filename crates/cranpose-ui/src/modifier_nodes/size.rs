@@ -3,7 +3,7 @@
 
 use cranpose_foundation::{
     Constraints, InvalidationKind, Measurable, ModifierNodeContext, NodeCapabilities, PlainElement,
-    PlainIntrinsic, PlainLayout, PlainLayoutFns, Size,
+    PlainIntrinsic, PlainLayout, PlainLayoutFns, PrepareAt, Size,
 };
 
 // Which of a size element's bounds a slot of its values holds, and the bit
@@ -199,8 +199,8 @@ impl PlainElement for SizeElement {
 impl PlainLayout for SizeElement {
     const PREPARES: bool = true;
 
-    fn prepared(self, density: f32) -> Self {
-        let target = self.round_targets(density);
+    fn prepared(self, at: PrepareAt) -> Self {
+        let target = self.round_targets(at.density);
         let mut flags = self.flags | PREPARED;
         if self.fixes_width() {
             flags |= FIXED_WIDTH;

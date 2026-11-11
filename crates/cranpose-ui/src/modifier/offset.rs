@@ -5,7 +5,7 @@ use std::{
 
 use cranpose_foundation::{
     DelegatableNode, ModifierNode, ModifierNodeContext, ModifierNodeElement, NodeCapabilities,
-    NodeState,
+    NodeState, plain_element,
 };
 
 use super::{GraphicsLayer, Modifier, Point, inspector_metadata};
@@ -24,11 +24,10 @@ impl Modifier {
     ///
     /// Example: `Modifier::empty().offset(10.0, 20.0)`
     pub fn offset(self, x: f32, y: f32) -> Self {
-        let modifier = Self::with_element(OffsetElement::new(x, y, true)).with_inspector_metadata(
-            inspector_metadata("offset", move |info| {
+        let modifier = Self::from_dyn_element(plain_element(OffsetElement::new(x, y, true)))
+            .with_inspector_metadata(inspector_metadata("offset", move |info| {
                 info.add_offset_components("offsetX", "offsetY", Point { x, y });
-            }),
-        );
+            }));
         self.then(modifier)
     }
 
@@ -40,11 +39,10 @@ impl Modifier {
     ///
     /// Example: `Modifier::empty().absolute_offset(10.0, 20.0)`
     pub fn absolute_offset(self, x: f32, y: f32) -> Self {
-        let modifier = Self::with_element(OffsetElement::new(x, y, false)).with_inspector_metadata(
-            inspector_metadata("absoluteOffset", move |info| {
+        let modifier = Self::from_dyn_element(plain_element(OffsetElement::new(x, y, false)))
+            .with_inspector_metadata(inspector_metadata("absoluteOffset", move |info| {
                 info.add_offset_components("absoluteOffsetX", "absoluteOffsetY", Point { x, y });
-            }),
-        );
+            }));
         self.then(modifier)
     }
 

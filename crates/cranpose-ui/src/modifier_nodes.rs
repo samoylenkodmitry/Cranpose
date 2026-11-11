@@ -29,7 +29,7 @@ pub use clickable::{ClickableElement, ClickableNode};
 pub(crate) use clip::ClipToBoundsElement;
 pub use fill::{FillDirection, FillElement};
 pub(crate) use intrinsic_size::IntrinsicSizeElement;
-pub use offset::{FractionalOffsetElement, FractionalOffsetNode, OffsetElement, OffsetNode};
+pub use offset::{FractionalOffsetElement, FractionalOffsetNode, OffsetElement};
 pub use padding::PaddingElement;
 pub(crate) use padding::device_padding;
 pub use size::SizeElement;
