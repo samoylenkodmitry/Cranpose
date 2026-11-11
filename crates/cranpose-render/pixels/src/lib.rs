@@ -74,10 +74,13 @@ pub struct Picture {
     roots: Vec<pipeline::PushRoot>,
 }
 
-// The most records and updates the changes keep: past them a picture that
-// lags builds its scene again.
+// The most records and updates the changes keep, the latest ones: a picture
+// that lags past them builds its scene again. Once they hold `MOST_UPDATES`
+// they forget all but the latest `KEPT_UPDATES`, so an update seldom pays
+// for the forgetting.
 const MOST_CHANGES: usize = 256;
-const MOST_UPDATES: usize = 8;
+const MOST_UPDATES: usize = 32;
+const KEPT_UPDATES: usize = 8;
 
 // The records the store changed in its latest updates, oldest first: a
 // picture that holds the scene of one of those updates pushes again the
@@ -100,20 +103,39 @@ impl StoreChanges {
             return;
         }
         let touched = store.touched();
-        let follows = touched.is_some_and(|(since, records)| {
-            self.at == Some((now.0, since))
-                && self.updates.len() < MOST_UPDATES
-                && self.records.len() + records.len() <= MOST_CHANGES
-        });
-        if !follows {
+        if !touched.is_some_and(|(since, _)| self.at == Some((now.0, since))) {
             self.updates.clear();
             self.records.clear();
         }
         if let Some((since, records)) = touched {
+            if self.updates.len() == MOST_UPDATES
+                || self.records.len() + records.len() > MOST_CHANGES
+            {
+                self.forget_oldest(records.len());
+            }
             self.updates.push((since, self.records.len()));
             self.records.extend_from_slice(records);
         }
         self.at = Some(now);
+    }
+
+    // Forgets the oldest updates: all but the latest `KEPT_UPDATES`, and
+    // more of them until half of the records' room is free after `more`
+    // records, so updates that change many records seldom come here too.
+    #[cold]
+    fn forget_oldest(&mut self, more: usize) {
+        let records = self.records.len();
+        let start = |gone: usize| self.updates.get(gone).map_or(records, |update| update.1);
+        let mut gone = self.updates.len().saturating_sub(KEPT_UPDATES);
+        while gone < self.updates.len() && records - start(gone) + more > MOST_CHANGES / 2 {
+            gone += 1;
+        }
+        let cut = start(gone);
+        self.records.drain(..cut);
+        self.updates.drain(..gone);
+        for update in &mut self.updates {
+            update.1 -= cut;
+        }
     }
 
     // The records `store` changed since `synced`, when the changes reach
@@ -135,7 +157,8 @@ impl StoreChanges {
         if self.at != Some(now) || id != now.0 {
             return None;
         }
-        let &(_, start) = self.updates.iter().find(|span| span.0 == update)?;
+        // A picture mostly lags by one update, the last of the list.
+        let &(_, start) = self.updates.iter().rfind(|span| span.0 == update)?;
         Some(pipeline::Changed {
             store,
             records: &self.records[start..],
