@@ -260,7 +260,10 @@ fn passed_down_by(scene: &RasterScene, store: &SceneStore, parent: RecordId) -> 
 
 impl Repush<'_> {
     // Pushes the subtree of `record` again where the scene holds it now: a
-    // push before it may have moved it.
+    // push before it may have moved it. Out of line: the push holds the
+    // scene's whole walk, and inlined it made the update one function too
+    // large for a board to keep in RAM.
+    #[inline(never)]
     fn push_root(&mut self, store: &SceneStore, record: RecordId) -> Result<(), Rebuild> {
         self.scene.refresh_routes();
         let place = self.scene.route(store.record_ref(record)).ok_or(Rebuild)?;
