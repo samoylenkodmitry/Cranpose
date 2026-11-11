@@ -495,12 +495,58 @@ fn kept_frames_match_full_redraws_while_nodes_change_by_turns() {
     kept_frames_match_full_redraws(1.5, Turns);
 }
 
+// The lags lie on both sides of the updates a renderer follows a store
+// through before it reads the store whole.
 #[test]
 fn a_kept_frame_that_skips_updates_matches_a_full_redraw() {
-    for every in [2, 3, 7] {
+    for every in [2, 3, 7, 8, 9] {
         kept_frames_match_full_redraws_taken(1.0, Turns, every);
         kept_frames_match_full_redraws_taken(1.5, Scenes, every);
     }
+}
+
+// How many of the boxes of `ManyBoxes` change at `frame`: counts on both
+// sides of the records a store lists as changed in one update, and of half
+// that many, as a record may come twice.
+fn changing_boxes(frame: u32) -> u32 {
+    [126, 127, 128, 129, 130, 254, 255, 256, 257, 258, 300, 3][frame as usize % 12]
+}
+
+// 300 boxes, of which the first `changing_boxes` take their next color each
+// frame.
+#[composable]
+fn ManyBoxes(captured: Step) {
+    let step = rememberMutableStateOf(|| 0u32);
+    *captured.borrow_mut() = Some(step);
+    let n = step.value();
+    Box(
+        Modifier::empty().fill_max_size(),
+        BoxSpec::default(),
+        move || {
+            for index in 0..300u32 {
+                cranpose_core::with_key(&index, || {
+                    let changes = (1..=n)
+                        .filter(|frame| index < changing_boxes(*frame))
+                        .count();
+                    Box(
+                        Modifier::empty()
+                            .offset((index % 30) as f32 * 8.0, (index / 30) as f32 * 6.0)
+                            .width(6.0)
+                            .height(4.0)
+                            .background(color(changes as u32, index)),
+                        BoxSpec::default(),
+                        || {},
+                    );
+                });
+            }
+        },
+    );
+}
+
+#[test]
+fn kept_frames_match_full_redraws_while_hundreds_of_nodes_change_at_once() {
+    kept_frames_match_full_redraws(1.0, ManyBoxes);
+    kept_frames_match_full_redraws_taken(1.0, ManyBoxes, 2);
 }
 
 #[test]
