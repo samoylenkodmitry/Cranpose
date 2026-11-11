@@ -87,7 +87,7 @@ mod still_wall;
 #[path = "../tests/support/text_style.rs"]
 mod text_style;
 
-use reading::{ComposedReading, DrawnReading, FramedReading, frame_count};
+use reading::{ComposedReading, DrawnReading, FramedReading, reading};
 
 const WIDTH: u32 = 320;
 const HEIGHT: u32 = 240;
@@ -429,7 +429,7 @@ fn TurnBar(index: usize, bars: usize, frames: State<f32>) {
 
 #[composable]
 fn TurnBars(bars: usize) {
-    let frames = frame_count();
+    let frames = reading();
     for index in 0..bars {
         cranpose_core::with_key(&index, || TurnBar(index, bars, frames));
     }

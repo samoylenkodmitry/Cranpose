@@ -9,7 +9,7 @@ use cranpose_animation::{
 
 /// A number that counts up one every frame.
 #[composable]
-fn reading() -> State<f32> {
+pub fn reading() -> State<f32> {
     let transition = rememberInfiniteTransition("reading");
     let spec = infiniteRepeatable(
         AnimationSpec::linear(100_000),
@@ -42,13 +42,6 @@ pub fn FramedReading(style: TextStyle) {
             .border(1.0, Color::WHITE, RoundedCornerShape::uniform(4.0)),
         style,
     );
-}
-
-// A number that counts up one every frame, for a screen that changes one
-// of several nodes a frame.
-#[composable]
-pub fn frame_count() -> State<f32> {
-    reading()
 }
 
 /// The number in `color` at `font_size`, drawn by a draw scope that reads
