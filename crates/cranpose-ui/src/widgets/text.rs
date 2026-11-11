@@ -194,9 +194,7 @@ where
     S: IntoTextSource + Clone + PartialEq + 'static,
 {
     if let Some(fixed) = text.static_text()
-        && crate::widgets::local_selection_registrar()
-            .current()
-            .is_none()
+        && crate::widgets::selection_container::current_selection_registrar().is_none()
     {
         return static_text::Text(fixed, modifier, style, options);
     }
@@ -347,7 +345,7 @@ mod text_group {
         let (style, options) = text_layout_inputs(style, options);
         let environment = LayoutEnvironment::current();
         let text = text.into_text_source().resolve();
-        let modifier = match crate::widgets::local_selection_registrar().current() {
+        let modifier = match crate::widgets::selection_container::current_selection_registrar() {
             Some(registrar) => modifier.then(crate::widgets::selection_container::selectable_text(
                 registrar,
                 text.clone(),
