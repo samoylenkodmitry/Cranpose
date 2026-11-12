@@ -102,32 +102,39 @@ impl SlotTable {
             node_cursor,
             next_child_index,
         );
-        let quiet = !(leftovers.payloads | leftovers.nodes | leftovers.children);
-        if quiet & matches!(body, FrameBody::Runs) {
-            return self.finish_quiet_body(state);
+        if !(leftovers.payloads
+            | leftovers.nodes
+            | leftovers.children
+            | !matches!(body, FrameBody::Runs))
+        {
+            self.flush_payload_location_refreshes(state);
+            #[cfg(any(test, debug_assertions))]
+            if state.group_stack.len() == 1 {
+                self.debug_assert_valid_after("finish_group_body");
+            }
+            return None;
         }
         if matches!(body, FrameBody::RootsInsertRun) {
             // Every record of the run is in: the records after it return.
             self.settle_insert_run();
-            if quiet {
-                return self.finish_quiet_body(state);
-            }
         }
         let was_skipped = matches!(body, FrameBody::Skipped { .. });
 
         if leftovers.payloads {
-            let removed = self.remove_payload_tail_at_cursor(group_anchor, payload_cursor);
-            if !removed.is_empty() {
-                let removed_payload_count = removed.len();
-                for payload in removed {
-                    lifecycle.queue_drop(payload.into_deferred_drop());
-                }
-                state.note_removed_payloads(removed_payload_count);
-            }
+            self.drop_payload_tail(lifecycle, state, group_anchor, payload_cursor);
         }
         self.flush_payload_location_refreshes(state);
         #[cfg(any(test, debug_assertions))]
         state.debug_assert_no_pending_payload_location_refreshes("finish_group_body");
+        if !(leftovers.nodes | leftovers.children | was_skipped) {
+            // Nothing is left for the composer: the body dropped payloads
+            // only, or it ended an insert run.
+            #[cfg(any(test, debug_assertions))]
+            if state.group_stack.len() == 1 {
+                self.debug_assert_valid_after("finish_group_body");
+            }
+            return None;
+        }
 
         let mut direct_nodes = Vec::new();
         if leftovers.nodes {
@@ -161,18 +168,23 @@ impl SlotTable {
         Some(result)
     }
 
-    // Ends a body that left nothing for the composer to handle.
-    #[inline]
-    fn finish_quiet_body(
+    // Removes the payloads the body left past its cursor and queues their
+    // drops.
+    fn drop_payload_tail(
         &mut self,
+        lifecycle: &mut SlotLifecycleCoordinator,
         state: &mut SlotWriteSessionState,
-    ) -> Option<FinishGroupResult> {
-        self.flush_payload_location_refreshes(state);
-        #[cfg(any(test, debug_assertions))]
-        if state.group_stack.len() == 1 {
-            self.debug_assert_valid_after("finish_group_body");
+        group_anchor: AnchorId,
+        payload_cursor: usize,
+    ) {
+        let removed = self.remove_payload_tail_at_cursor(group_anchor, payload_cursor);
+        if !removed.is_empty() {
+            let removed_payload_count = removed.len();
+            for payload in removed {
+                lifecycle.queue_drop(payload.into_deferred_drop());
+            }
+            state.note_removed_payloads(removed_payload_count);
         }
-        None
     }
 
     fn open_frame_root_node_ids(&self, group_anchor: AnchorId, group_index: usize) -> RootNodeIds {
