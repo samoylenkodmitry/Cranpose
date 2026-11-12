@@ -37,6 +37,17 @@ impl<T> ResizeVec<T> {
         self.resized = true;
     }
 
+    pub(super) fn truncate(&mut self, len: usize) {
+        self.values.truncate(len);
+        self.resized = true;
+    }
+
+    // Notes a change that may leave room to give back, such as the removal
+    // of the record of the last row.
+    pub(super) fn note_resized(&mut self) {
+        self.resized = true;
+    }
+
     pub(super) fn capacity(&self) -> usize {
         self.values.capacity()
     }

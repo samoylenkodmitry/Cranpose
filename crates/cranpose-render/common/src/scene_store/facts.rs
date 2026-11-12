@@ -88,6 +88,15 @@ impl Facts {
     pub(super) fn trim_growth_slack(&mut self) {
         self.rows.trim_growth_slack();
     }
+
+    // Notes that the store freed its last row.
+    pub(super) fn note_last_row_freed(&mut self) {
+        self.rows.note_resized();
+    }
+
+    pub(super) fn truncate_rows(&mut self, len: usize) {
+        self.rows.truncate(len);
+    }
 }
 
 // Forgets the containment of the record at `index` and of each ancestor

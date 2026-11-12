@@ -33,8 +33,8 @@ pub struct SceneStore {
     pub(super) warm: Vec<WarmRecord>,
     pub(super) generations: Vec<u32>,
     // The generation a new row starts at: past every one a cleared store
-    // gave out.
-    generation_floor: u32,
+    // or a cut row gave out.
+    pub(super) generation_floor: u32,
     pub(super) free_rows: Vec<u32>,
     pub(super) items: SpanPool<Item>,
     #[cfg(feature = "window-damage")]
@@ -278,6 +278,7 @@ impl SceneStore {
     /// in another order and the own draws it redrew. Readers read the store
     /// after it.
     pub fn finish_update(&mut self) {
+        self.shape_chunks.settle_empty();
         super::child_order::settle(self);
         #[cfg(feature = "window-damage")]
         own_marks::settle(self);
@@ -583,6 +584,9 @@ impl SceneStore {
         self.generations[index] = self.generations[index].wrapping_add(1);
         self.free_rows
             .push(u32::try_from(index).expect("fewer than 2^32 records"));
+        if index + 1 == self.tree.len() {
+            self.facts.note_last_row_freed();
+        }
         if self.root == Some(id) {
             self.root = None;
         }

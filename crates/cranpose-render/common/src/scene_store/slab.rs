@@ -3,6 +3,8 @@
 
 use std::ops::{Index, IndexMut};
 
+use cranpose_core::collections::growth_slack::GrowthSlack;
+
 use super::resize_vec::ResizeVec;
 
 #[derive(Clone)]
@@ -91,6 +93,20 @@ impl<T> Slab<T> {
 
     pub(crate) fn trim_growth_slack(&mut self) {
         self.entries.trim_growth_slack();
+    }
+
+    // Cuts the empty entries at the end, so the room they took can go.
+    pub(crate) fn cut_free_tail(&mut self) {
+        let len = self
+            .entries
+            .iter()
+            .rposition(Option::is_some)
+            .map_or(0, |last| last + 1);
+        if len < self.entries.len() {
+            self.entries.truncate(len);
+            self.free.retain(|&index| (index as usize) < len);
+            self.free.trim_growth_slack();
+        }
     }
 }
 

@@ -3,7 +3,7 @@
 
 use std::num::NonZeroU32;
 
-use cranpose_core::RecordId;
+use cranpose_core::{RecordId, collections::growth_slack::GrowthSlack};
 
 use super::resize_vec::ResizeVec;
 
@@ -187,8 +187,34 @@ impl<T: Copy> SpanPool<T> {
         self.items.resized()
     }
 
+    // The entries the spans hold room for, free ones among them.
+    pub(super) fn len(&self) -> usize {
+        self.items.len()
+    }
+
     pub(crate) fn trim_growth_slack(&mut self) {
         self.items.trim_growth_slack();
+    }
+
+    // Cuts the free spans at the end, one search of the free lists a span,
+    // so the room they took can go.
+    pub(super) fn cut_free_tail(&mut self) {
+        let mut len = self.items.len();
+        while let Some((class, at)) = self.free.iter().enumerate().find_map(|(class, starts)| {
+            let at = starts
+                .iter()
+                .position(|&start| start as usize + (1 << class) == len)?;
+            Some((class, at))
+        }) {
+            self.free[class].swap_remove(at);
+            len -= 1 << class;
+        }
+        if len < self.items.len() {
+            self.items.truncate(len);
+            self.free
+                .iter_mut()
+                .for_each(GrowthSlack::trim_growth_slack);
+        }
     }
 }
 
@@ -202,6 +228,13 @@ pub(crate) struct ItemLists {
 impl ItemLists {
     pub(crate) fn take(&mut self) -> Vec<Item> {
         self.lists.pop().unwrap_or_default()
+    }
+
+    // Gives back the room of the kept lists past `len` items.
+    pub(super) fn shrink_to(&mut self, len: usize) {
+        for list in &mut self.lists {
+            list.shrink_to(len);
+        }
     }
 
     pub(crate) fn give(&mut self, mut list: Vec<Item>) {
