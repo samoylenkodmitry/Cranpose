@@ -25,6 +25,8 @@ uint32_t CPRelease(size_t index);
 void CPTouch(uint8_t phase, float x, float y);
 void CPCrown(float delta, uint64_t elapsed);
 void CPActive(bool active);
+/// Whether the scene is on the screen: false in the background.
+void CPVisible(bool visible);
 void CPSafeArea(float left, float top, float right, float bottom);
 const char * _Nonnull CPError(void);
 #ifdef __cplusplus
