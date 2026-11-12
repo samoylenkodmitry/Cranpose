@@ -238,9 +238,21 @@ impl SceneStore {
         self.journal.stamps_since(read.update, self.update)
     }
 
-    // Logs `event` for `id` as the record is now, when a reader follows it.
+    /// Whether an update after `read`, the version of the store a reader
+    /// read last, changed a record. True for no version, a version of
+    /// another store or one the store was cleared after.
+    pub fn changed_since(&self, read: Option<SceneVersion>) -> bool {
+        match read {
+            Some(read) if read.store == self.id => self.journal.changed_since(read.update),
+            _ => true,
+        }
+    }
+
+    // Notes the change of `event` for `id` and logs it as the record is
+    // now, when a reader follows it.
     #[inline]
     pub(super) fn log(&mut self, event: RecordEvent, id: RecordId) {
+        self.journal.note_change(self.update);
         if self.journal.wants(event, self.update) {
             self.log_entry(event, id);
         }
@@ -640,17 +652,17 @@ impl SceneStore {
         }
         super::facts::forget_own(self, index);
         let noted = self.journal.follows(RecordEvent::Changed);
-        let changed = !noted && self.journal.wants(RecordEvent::Changed, self.update);
         if noted {
             let record = self.record_ref(id);
             self.order.note(record, old);
         }
         self.tree[index].items = self.items.write(self.tree[index].items, items);
         self.touch(index);
-        // A reader that learns only whether the update changed anything
-        // learns it from the first write of other items.
-        if changed {
-            self.log(RecordEvent::Changed, id);
+        // A reader that follows these changes learns them when the update
+        // ends, from the order of the children and the redrawn own draws.
+        // Any other write of items is a change of its own.
+        if !noted {
+            self.journal.note_change(self.update);
         }
     }
 

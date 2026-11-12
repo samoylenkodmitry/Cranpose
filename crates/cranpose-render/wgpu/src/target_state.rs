@@ -301,8 +301,7 @@ impl TargetState {
         if !self.recording {
             // A frame that changes nothing says so, skipped or not.
             let same = self.setting == Some(setting);
-            self.still = same
-                && matches!(store.changes_since(read), JournalRead::Changes(entries) if entries.is_empty());
+            self.still = same && !store.changed_since(read);
             return;
         }
         self.whole = false;
@@ -333,12 +332,12 @@ impl TargetState {
 
     // The changes the records keep for the target from the next update on:
     // a frame that skips working out its damage needs only whether
-    // anything changed, so the records log nothing more while frames skip.
+    // anything changed, which the store tells without entries.
     pub(crate) fn followed(&self) -> RecordEvents {
         if self.recording {
             RecordEvents::ALL
         } else {
-            RecordEvents::ANY
+            RecordEvents::NONE
         }
     }
 

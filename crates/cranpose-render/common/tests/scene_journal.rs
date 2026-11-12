@@ -70,6 +70,11 @@ impl Reader {
             JournalRead::Lost => None,
         }
     }
+
+    // Whether `store` changed since the last read.
+    fn changed(&mut self, store: &SceneStore) -> bool {
+        store.changed_since(self.0.replace(store.version()))
+    }
 }
 
 #[test]
@@ -131,6 +136,41 @@ fn a_reader_of_another_store_follows_this_one() {
     assert_eq!(reader.events(&second).map(|events| events.len()), Some(2));
 }
 
+#[test]
+fn a_reader_learns_whether_the_store_changed_while_it_follows_nothing() {
+    let mut store = SceneStore::new();
+    store.follow(RecordEvents::NONE);
+    insert_root(&mut store);
+    let mut reader = Reader::of(&store);
+
+    assert!(!reader.changed(&store), "no update came");
+    store.begin_update();
+    store.finish_update();
+    assert!(!reader.changed(&store), "an update wrote nothing");
+    add_and_remove(&mut store, NodeId(2));
+    assert!(reader.changed(&store), "a record came and went");
+    assert!(!reader.changed(&store), "the change was read once");
+
+    for _ in 0..400 {
+        store.begin_update();
+        store.finish_update();
+    }
+    assert!(
+        !reader.changed(&store),
+        "updates that write nothing change nothing, however many came"
+    );
+    store.clear();
+    assert!(reader.changed(&store), "a cleared store changed");
+    assert!(
+        store.changed_since(None),
+        "a reader that read nothing finds a change"
+    );
+    assert!(
+        rooted_store().changed_since(Some(store.version())),
+        "a version of another store finds a change"
+    );
+}
+
 const DOT: Rect = Rect {
     x: 40.0,
     y: 30.0,
@@ -185,20 +225,18 @@ fn a_page_described_again_reports_only_the_draw_that_changed() {
 fn a_reader_that_follows_reaches_again_learns_each_redraw_after() {
     let mut store = SceneStore::new();
     store.describe(&page(Color::RED));
-    store.follow(RecordEvents::ANY);
+    store.follow(RecordEvents::NONE);
     let mut reader = Reader::of(&store);
 
     store.describe(&page(Color::WHITE));
-    assert_eq!(
-        reader.events(&store).map(|events| events.len()),
-        Some(1),
-        "a reader of any change learns that the page changed, once"
+    assert!(
+        reader.changed(&store),
+        "a reader that follows nothing learns that the page changed"
     );
     store.describe(&page(Color::WHITE));
-    assert_eq!(
-        reader.events(&store),
-        Some(Vec::new()),
-        "a reader of any change learns that the same page changed nothing"
+    assert!(
+        !reader.changed(&store),
+        "a reader that follows nothing learns that the same page changed nothing"
     );
 
     store.follow(RecordEvents::ALL);

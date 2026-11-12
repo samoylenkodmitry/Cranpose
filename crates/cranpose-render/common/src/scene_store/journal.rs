@@ -69,10 +69,8 @@ const MOST_STAMPS: usize = 256;
 // The bit of a set of changes that asks for the reach of each redraw.
 #[cfg(feature = "window-damage")]
 const REDRAWN_REACH: u16 = 1 << 7;
-// The bit of a set of changes that asks whether an update changed anything.
-const ANY_CHANGE: u16 = 1 << 8;
 // The bit of a set of changes that asks for the records each update stamped.
-const STAMPED: u16 = 1 << 9;
+const STAMPED: u16 = 1 << 8;
 
 /// The kinds of change a store's journal keeps for its readers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -83,11 +81,6 @@ impl RecordEvents {
     pub const NONE: Self = Self(0);
     /// Every change as an entry.
     pub const ALL: Self = Self(!STAMPED);
-    /// Whether an update changed anything: the first change of each update,
-    /// whatever its kind, for a reader that only tells an update that
-    /// changes nothing from one that changes something. The store spends
-    /// nothing on the other changes for it.
-    pub const ANY: Self = Self(ANY_CHANGE);
     /// The changes that take a node's record away: [`RecordEvent::Removed`]
     /// and [`RecordEvent::Released`].
     pub const LEAVES: Self = Self(RecordEvent::Removed.bit() | RecordEvent::Released.bit());
@@ -142,8 +135,8 @@ pub(super) struct Journal {
     // follows the stamps.
     stamps: UpdateLog<RecordRef>,
     followed: RecordEvents,
-    // The update that logged an entry last.
-    logged: Option<SceneUpdate>,
+    // The latest update that changed a record, whatever the store follows.
+    changed: SceneUpdate,
     // An update that cleared the store: what it writes after is left out,
     // as every reader has lost the store's earlier state anyway.
     cleared: Option<SceneUpdate>,
@@ -157,13 +150,22 @@ impl Default for RecordEvents {
 
 impl Journal {
     // Whether an entry of `event` in `update` is kept: the update did not
-    // clear the store, and the store follows such entries or learns only
-    // whether the update changed anything, which no entry told yet.
+    // clear the store, and the store follows such entries.
     #[inline]
     pub(super) fn wants(&self, event: RecordEvent, update: SceneUpdate) -> bool {
-        self.cleared != Some(update)
-            && (self.follows(event)
-                || (self.followed.0 & ANY_CHANGE != 0 && self.logged != Some(update)))
+        self.cleared != Some(update) && self.follows(event)
+    }
+
+    // Notes that `update` changed a record.
+    #[inline]
+    pub(super) fn note_change(&mut self, update: SceneUpdate) {
+        self.changed = update;
+    }
+
+    // Whether an update after `read` changed a record.
+    #[inline]
+    pub(super) fn changed_since(&self, read: SceneUpdate) -> bool {
+        self.changed.is_after(read)
     }
 
     // Whether the store follows each change of the kind of `event`.
@@ -204,7 +206,6 @@ impl Journal {
     }
 
     pub(super) fn log(&mut self, entry: JournalEntry) {
-        self.logged = Some(entry.update);
         self.entries.push(entry, usize::MAX);
     }
 
@@ -225,6 +226,7 @@ impl Journal {
         self.entries.clear();
         self.stamps.clear();
         self.cleared = Some(update);
+        self.changed = update;
     }
 
     // The changes of the updates after `read`, the update a reader read
