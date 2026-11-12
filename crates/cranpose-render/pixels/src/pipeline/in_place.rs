@@ -5,8 +5,9 @@
 //! in kind and order, writes each over the old one as it pushes it; from an
 //! item that differs on, it pushes into a spill scene that is spliced in,
 //! and what follows it moves. The update starts from the records the store
-//! changed and finds each in the scene by its route, so it reads the changed
-//! records and the records above them, and none beside them.
+//! changed and finds each in the scene by its route, once, so it reads the
+//! changed records and the records above them, and none beside them. All its
+//! subtrees push in one rewrite session.
 
 use cranpose_core::{RecordId, RecordRef};
 use cranpose_render_common::{
@@ -26,13 +27,9 @@ mod frame_shift;
 // What the pushes of the changed subtrees share.
 struct Repush<'a> {
     scene: &'a mut RasterScene,
-    reach: &'a mut Vec<Option<ClipBounds>>,
-    // Whether `reach` still holds where each item of `scene` reaches: a
-    // splice moves the items after it.
-    held: UpdatedReach,
+    // The update's rewrite session, which holds the reach list and the areas
+    // the pushes change. It lies in `scene` while a subtree pushes.
     rewrite: &'a mut Option<Box<Rewrite>>,
-    window: ClipBounds,
-    areas: &'a mut Vec<ClipBounds>,
     diagnostics: &'a RenderDiagnostics,
     light: LightSource,
     scale: f32,
@@ -52,12 +49,15 @@ enum RootKind {
 }
 
 // A record whose subtree pushes again or shifts, with its place among the
-// scene's records and where its subtree's records end, as the update found
-// them.
+// scene's records, where its subtree's records end and where the scene holds
+// what its parent passed down, as the update found them: a splice of an
+// earlier subtree that changes how many records or entries the scene holds
+// moves them.
 #[derive(Clone, Copy)]
 pub(crate) struct PushRoot {
     place: usize,
     end: usize,
+    parent: Option<usize>,
     record: RecordId,
     kind: RootKind,
 }
@@ -143,13 +143,15 @@ impl InPlaceUpdate<'_> {
         } else {
             UpdatedReach::Lost
         };
+        if roots.is_empty() {
+            return Some(held);
+        }
+        rewrite
+            .get_or_insert_default()
+            .begin_update(window, reach, held);
         let mut repush = Repush {
             scene,
-            reach,
-            held,
             rewrite,
-            window,
-            areas,
             diagnostics,
             light,
             scale,
@@ -160,7 +162,7 @@ impl InPlaceUpdate<'_> {
         let pushed = roots
             .iter()
             .try_for_each(|root| repush.push_root(store, root));
-        let held = repush.held;
+        let held = session(repush.rewrite).end_update(reach, areas);
         merge_areas(areas);
         pushed.ok()?;
         Some(held)
@@ -272,13 +274,14 @@ fn push_root(
             return Ok(None);
         }
         // A parent that passed nothing down pushes its own subtree.
-        if let Some(parent) = parent
-            && passed_down_by(scene, store, parent).is_none()
-        {
-            id = parent;
-            asked = true;
-            continue;
-        }
+        let passed = match passed_down_above(scene, store, parent) {
+            Ok(passed) => passed,
+            Err(parent) => {
+                id = parent;
+                asked = true;
+                continue;
+            }
+        };
         let shifts = !asked
             && moved
             && matches!(subtree, Subtree::Layer(_))
@@ -286,6 +289,7 @@ fn push_root(
         return Ok(Some(PushRoot {
             place,
             end: old.end,
+            parent: passed,
             record: id,
             kind: if shifts {
                 RootKind::Shift
@@ -296,6 +300,20 @@ fn push_root(
     }
 }
 
+// Where the scene holds what the record above a root, `parent`, passed down:
+// `None` for a root with no record above it, and the record itself when it
+// passed nothing down.
+fn passed_down_above(
+    scene: &RasterScene,
+    store: &SceneStore,
+    parent: Option<RecordId>,
+) -> Result<Option<usize>, RecordId> {
+    let Some(parent) = parent else {
+        return Ok(None);
+    };
+    passed_down_by(scene, store, parent).map(Some).ok_or(parent)
+}
+
 // Where the scene holds what the record `parent` passed down to its child
 // layers.
 fn passed_down_by(scene: &RasterScene, store: &SceneStore, parent: RecordId) -> Option<usize> {
@@ -304,20 +322,27 @@ fn passed_down_by(scene: &RasterScene, store: &SceneStore, parent: RecordId) -> 
         .and_then(|at| scene.subtrees[at].passed_down)
 }
 
+// The update's rewrite session in the slot that holds it while no subtree
+// pushes.
+fn session(slot: &mut Option<Box<Rewrite>>) -> &mut Rewrite {
+    slot.as_deref_mut()
+        .expect("the update holds its rewrite between pushes")
+}
+
 impl<'a> Repush<'a> {
-    // Brings the subtree of `record` up to the store where the scene holds
-    // it now: a push before it may have moved it. A subtree that only
-    // moved its content as a frame shifts, and any other pushes again. Out
-    // of line: the push holds the scene's whole walk, and inlined it made
-    // the update one function too large for a board to keep in RAM.
+    // Brings the subtree of `root` up to the store where the scene holds it
+    // now: the places found for it hold, unless a splice of an earlier
+    // subtree moved them. A subtree that only moved its content as a frame
+    // shifts, and any other pushes again. Out of line: the push holds the
+    // scene's whole walk, and inlined it made the update one function too
+    // large for a board to keep in RAM.
     #[inline(never)]
     fn push_root(&mut self, store: &SceneStore, root: &PushRoot) -> Result<(), Rebuild> {
         let record = root.record;
-        self.scene.refresh_routes();
-        let place = self.scene.route(store.record_ref(record)).ok_or(Rebuild)?;
-        let parent = match store.parent(record) {
-            Some(parent) => Some(passed_down_by(self.scene, store, parent).ok_or(Rebuild)?),
-            None => None,
+        let (place, parent) = if session(self.rewrite).shifted() {
+            self.find_again(store, record)?
+        } else {
+            (root.place, root.parent)
         };
         if root.kind == RootKind::Shift && self.shift_frame(store, record, place, parent) {
             return Ok(());
@@ -326,6 +351,24 @@ impl<'a> Repush<'a> {
             self.forget_frames_within(place);
         }
         self.push_again(Subtree::of_record(store.layer(record)), place, parent)
+    }
+
+    // Where the scene holds the record now and what its parent passed down,
+    // after a splice moved them.
+    #[cold]
+    #[inline(never)]
+    fn find_again(
+        &mut self,
+        store: &SceneStore,
+        record: RecordId,
+    ) -> Result<(usize, Option<usize>), Rebuild> {
+        self.scene.refresh_routes();
+        let place = self.scene.route(store.record_ref(record)).ok_or(Rebuild)?;
+        let parent = match store.parent(record) {
+            Some(parent) => Some(passed_down_by(self.scene, store, parent).ok_or(Rebuild)?),
+            None => None,
+        };
+        Ok((place, parent))
     }
 
     // What the children of the record that passed down `passed` inherit: the
@@ -389,8 +432,8 @@ impl<'a> Repush<'a> {
         let passed = parent.and_then(|at| self.scene.passed_down.get(at));
         let inherited = self.inherited(passed);
         let context = self.context(passed, &inherited);
-        let mut rewrite = self.rewrite.take().unwrap_or_default();
-        if !rewrite.start(self.scene, record, self.window, self.reach, self.held) {
+        let mut rewrite = self.rewrite.take().expect("the update holds its rewrite");
+        if !rewrite.start(self.scene, record) {
             *self.rewrite = Some(rewrite);
             return Err(Rebuild);
         }
@@ -409,9 +452,6 @@ impl<'a> Repush<'a> {
             let end = self.scene.subtrees.get(record).map_or(record, |at| at.end);
             self.scene.route_records(record..end);
         }
-        let (reach, held, areas) = rewrite.results();
-        (*self.reach, self.held) = (reach, held);
-        self.areas.append(areas);
         *self.rewrite = Some(rewrite);
         Ok(())
     }

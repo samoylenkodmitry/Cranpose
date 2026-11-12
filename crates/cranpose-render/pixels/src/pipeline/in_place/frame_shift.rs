@@ -9,11 +9,10 @@ use cranpose_core::{RecordId, RecordRef};
 use cranpose_render_common::scene_store::{ItemKind, LayerRef, SceneStore};
 use cranpose_ui_graphics::{Point, Rect};
 
-use super::Repush;
+use super::{Repush, session};
 use crate::{
-    damage::{ItemReach, move_item},
     frame::Frame,
-    pipeline::{RasterTraversalContext, UpdatedReach, layer_raster_mapping, layer_snap_anchors},
+    pipeline::{RasterTraversalContext, layer_raster_mapping, layer_snap_anchors},
     scene::{RasterScene, SubtreeItems},
     scene_item::ItemRef,
     shift::Shift,
@@ -156,14 +155,7 @@ impl Repush<'_> {
             None => return false,
         };
         if !shift.is_none() {
-            for index in head.start.order..head.stop.order {
-                let item = self.scene.order[index];
-                let held = match self.reach.get_mut(index) {
-                    Some(held) if self.held == UpdatedReach::Held => ItemReach::Replaced(held),
-                    _ => ItemReach::Unknown,
-                };
-                move_item(self.scene, item, shift, held, self.window, self.areas);
-            }
+            session(self.rewrite).move_items(self.scene, head.start.order..head.stop.order, shift);
             self.scene.frames.set_anchor(position, moved);
         }
         true

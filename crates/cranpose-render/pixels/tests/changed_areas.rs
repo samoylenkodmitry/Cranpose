@@ -539,6 +539,52 @@ fn kept_frames_match_full_redraws_while_hundreds_of_nodes_change_at_once() {
     kept_frames_match_full_redraws_taken(1.0, ManyBoxes, 2);
 }
 
+// Siblings that take their next color each frame, the first three also gaining
+// and losing a child in turns, so that an update pushes several subtrees and
+// the splice of each of the first three moves the records after it.
+#[composable]
+fn SplicedSiblings(captured: Step) {
+    let step = rememberMutableStateOf(|| 0u32);
+    *captured.borrow_mut() = Some(step);
+    let n = step.value();
+    Box(
+        Modifier::empty().fill_max_size(),
+        BoxSpec::default(),
+        move || {
+            for sibling in 0..5u32 {
+                cranpose_core::with_key(&sibling, || {
+                    Box(
+                        Modifier::empty()
+                            .offset(sibling as f32 * 44.0, 10.0)
+                            .width(40.0)
+                            .height(30.0)
+                            .background(color(n, sibling)),
+                        BoxSpec::default(),
+                        move || {
+                            if sibling > 2 || (n + sibling) % 3 != 0 {
+                                Box(
+                                    Modifier::empty()
+                                        .width(10.0 + ((n + sibling) % 4) as f32 * 6.0)
+                                        .height(12.0)
+                                        .background(color(n / 2, sibling + 7)),
+                                    BoxSpec::default(),
+                                    || {},
+                                );
+                            }
+                        },
+                    );
+                });
+            }
+        },
+    );
+}
+
+#[test]
+fn kept_frames_match_full_redraws_while_several_subtrees_splice_in_one_update() {
+    kept_frames_match_full_redraws(1.0, SplicedSiblings);
+    kept_frames_match_full_redraws(1.5, SplicedSiblings);
+}
+
 // Content that moves between a parent that shifts and stretches it and a
 // parent that fades it, in updates that also put a sibling before it, take
 // one away, and give a keyed box's place to a box of another key.
