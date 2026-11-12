@@ -19,6 +19,7 @@ mod recompose_child_order;
 #[cfg(feature = "inspection")]
 mod recomposition_inspection;
 mod returned_values;
+mod runtimes_on_one_thread;
 mod scene_attachment_scratch;
 mod scopes_on_demand;
 mod snapshot_observation;
