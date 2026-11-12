@@ -8,7 +8,7 @@ use cranpose_ui::{
 
 use super::{
     SnapshotNodeData, TranslateAncestorContext, TranslateGeometry, TranslatedContainer, Wrapping,
-    hit_test_from_slices, read_node_data, set_origin_sinks, translate_bail,
+    hit_test_from_slices, read_node_data, set_origin_sinks,
     translate_layer::{apply_translated_container_state, translate_layer_from_data},
     translated_container,
 };
@@ -87,16 +87,15 @@ pub(super) fn translate_leaf_text(
         return None;
     }
     let layout_state = &data.layout_state;
-    let TranslatedContainer { node_id } = match translated_container(
+    let Some(TranslatedContainer { node_id }) = translated_container(
         store,
         container,
         layout_state,
         slices,
         ancestors,
         Wrapping::Bare,
-    ) {
-        Ok(plan) => plan,
-        Err(reason) => return Some(translate_bail(reason)),
+    ) else {
+        return Some(false);
     };
     let parts = TextNodeParts::of(node_id, slices, layout_state.size());
     if !refresh_text_node(drawn_text(store, container)?, &parts) {

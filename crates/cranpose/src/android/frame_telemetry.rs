@@ -81,10 +81,6 @@ const DIAGNOSTIC_PROPERTIES: &[(&str, &str)] = &[
         "CRANPOSE_RENDER_PHASE_DIRTY_DIAG",
     ),
     (
-        "debug.cranpose.scene_update_diag",
-        "CRANPOSE_SCENE_UPDATE_DIAG",
-    ),
-    (
         "debug.cranpose.render_stage_ms",
         "CRANPOSE_WGPU_RENDER_STAGE_TELEMETRY_MS",
     ),

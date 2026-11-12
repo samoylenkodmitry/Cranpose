@@ -170,7 +170,6 @@ pub(crate) fn rebuild_from_applier(
 
 // Applies `updates` to `store` in place, and reports whether the hit targets
 // must be collected again or why the store must be built again.
-#[expect(clippy::print_stderr, reason = "CRANPOSE_SCENE_UPDATE_DIAG asks")]
 pub(crate) fn update_from_applier(
     applier: &MemoryApplier,
     store: &mut SceneStore,
@@ -180,14 +179,6 @@ pub(crate) fn update_from_applier(
     let report = update_from_applier_inner(applier, store, walk, updates);
     if !updates.is_empty() && report.applied() {
         store.finish_update();
-    }
-    if let GraphUpdate::NeedsRebuild(reason) = report.update
-        && cranpose_core::DIAGNOSTICS.scene_update_diag.is_set()
-    {
-        eprintln!(
-            "[scene-update-diag] scoped update abandoned, whole scene rebuilt: {reason:?} dirty={}",
-            updates.len()
-        );
     }
     report
 }
@@ -224,7 +215,6 @@ fn changes_layer(update: NodeUpdate) -> bool {
     matches!(update, NodeUpdate::Layer | NodeUpdate::MovedLayer)
 }
 
-#[expect(clippy::print_stderr, reason = "CRANPOSE_SCENE_UPDATE_DIAG asks")]
 fn update_from_applier_inner(
     applier: &MemoryApplier,
     store: &mut SceneStore,
@@ -235,10 +225,6 @@ fn update_from_applier_inner(
         return GraphUpdateReport::patched(GraphChanges::default());
     }
     store.begin_update();
-
-    if cranpose_core::DIAGNOSTICS.scene_update_diag.is_set() {
-        eprintln!("[scene-update-diag] dirty={updates:?}");
-    }
 
     // The map of the frame before keeps its storage for this one.
     let (mut remaining_dirty_nodes, mut recent) =
@@ -404,14 +390,6 @@ fn is_drawn(applier: &MemoryApplier, node: NodeId) -> bool {
     true
 }
 
-#[expect(clippy::print_stderr, reason = "CRANPOSE_SCENE_UPDATE_DIAG asks")]
-fn translate_bail(reason: &str) -> bool {
-    if cranpose_core::DIAGNOSTICS.scene_update_diag.is_set() {
-        eprintln!("[scene-update-diag] translate bail: {reason}");
-    }
-    false
-}
-
 #[derive(Clone, Copy)]
 struct TranslateAncestorContext {
     inherited_motion_context_animated: bool,
@@ -504,7 +482,7 @@ fn redraw_retained_layer(
             ancestors,
             Wrapping::Bare,
         )
-        .is_err()
+        .is_none()
         {
             return false;
         }

@@ -17,8 +17,7 @@ use super::{
     content_layer, forget_dirty_node, hit_test_from_slices, layer_and_node_bounds, layer_identity,
     lower_child, move_kept_child, outer_commands, outer_draws, placed_child_geometry,
     placing_transform, read_node_data, set_bounds, set_origin_sinks, shaped_graphics_layer,
-    take_wrapped_layer, text_node, translate_bail, translate_unwrapped, write_node_content,
-    write_wrapper,
+    take_wrapped_layer, text_node, translate_unwrapped, write_node_content, write_wrapper,
 };
 use crate::{
     NodeUpdate,
@@ -52,7 +51,7 @@ fn try_translate_scrolled_layer(
     ancestors: TranslateAncestorContext,
 ) -> bool {
     let Some(node_id) = layer_identity(store.layer(container)) else {
-        return translate_bail("no node id");
+        return false;
     };
     read_node_data(applier, node_id, |data| {
         if store.layer(container).kind() != RecordKind::Wrapper {
@@ -60,12 +59,12 @@ fn try_translate_scrolled_layer(
         }
         let slices = Rc::clone(&data.modifier_slices);
         let Some(commands) = outer_commands(node_id, &slices) else {
-            return translate_bail("outer draws removed");
+            return false;
         };
         let size = data.layout_state.size();
         let placement = data.layout_state.position();
         let Some(inner) = content_layer(store, container) else {
-            return translate_bail("wrapped layer missing");
+            return false;
         };
         if !translate_layer_from_data(
             applier,
@@ -97,7 +96,7 @@ fn try_translate_scrolled_layer(
         store.note_content_change(container);
         true
     })
-    .unwrap_or_else(|| translate_bail("container snapshot read failed"))
+    .unwrap_or(false)
 }
 
 pub(super) struct TranslatedContainer {
@@ -111,16 +110,14 @@ pub(super) fn translated_container(
     modifier_slices: &ModifierNodeSlices,
     ancestors: TranslateAncestorContext,
     wrapping: Wrapping,
-) -> Result<TranslatedContainer, &'static str> {
+) -> Option<TranslatedContainer> {
     if cranpose_core::DIAGNOSTICS.disable_scroll_translate.is_set() {
-        return Err("fast path disabled by ablation switch");
+        return None;
     }
     let layer = store.layer(container);
-    let Some(node_id) = layer.node_id() else {
-        return Err("no node id");
-    };
+    let node_id = layer.node_id()?;
     if !layout_state.is_placed() {
-        return Err("container unplaced");
+        return None;
     }
     let outer_count = modifier_slices.outer_draw_command_count();
     if (outer_count > 0 && wrapping == Wrapping::Bare)
@@ -129,17 +126,17 @@ pub(super) fn translated_container(
             != layer.motion_context_animated()
         || modifier_slices.translated_content_context() != layer.translated_content_context()
     {
-        return Err("container outer draws or translated context changed");
+        return None;
     }
     if modifier_slices.clip_to_bounds() != layer.clip_to_bounds() {
-        return Err("container clip changed");
+        return None;
     }
     // A resized container keeps its children: only its bounds and the clip
     // shaped to them follow its size. Any other change to its graphics layer
     // may change what its children inherit.
     let current = shaped_graphics_layer(modifier_slices, layer.local_bounds());
     if !graphics_layers_read_alike(store.graphics_layer(container), current.as_deref()) {
-        return Err("container graphics layer changed");
+        return None;
     }
     let (local_bounds, node_bounds) = layer_and_node_bounds(modifier_slices, layout_state.size());
     if local_bounds != layer.local_bounds() {
@@ -147,7 +144,7 @@ pub(super) fn translated_container(
         store.set_graphics_layer(container, resized);
     }
     set_bounds(store, container, local_bounds, node_bounds);
-    Ok(TranslatedContainer { node_id })
+    Some(TranslatedContainer { node_id })
 }
 
 #[derive(Default)]
@@ -182,7 +179,7 @@ fn translated_children(
     dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
     fresh_children: &[NodeId],
     scratch: &mut TranslateScratch,
-) -> Result<ChildOrder, &'static str> {
+) -> Option<ChildOrder> {
     let placed_fresh = &mut scratch.placed_fresh;
     placed_fresh.clear();
     for &id in fresh_children {
@@ -214,9 +211,7 @@ fn translated_children(
         old_ids.clear();
         let (mut lowest, mut highest) = (NodeId(usize::MAX), NodeId(0));
         for &child in children {
-            let Some(id) = child_identity(store, child) else {
-                return Err("child without node id");
-            };
+            let id = child_identity(store, child)?;
             lowest = lowest.min(id);
             highest = highest.max(id);
             old_ids.push(id);
@@ -291,14 +286,12 @@ fn check_retained_children(
     children: &[Item],
     dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
     placed_fresh: &mut [PlacedChild],
-) -> Result<(), &'static str> {
+) -> Option<()> {
     for placed in placed_fresh {
         let Some(old_index) = placed.old_index else {
             continue;
         };
-        let Some(child) = children[old_index].as_child() else {
-            return Err("retained child slot is not a node");
-        };
+        let child = children[old_index].as_child()?;
         let layer = store.layer(child);
         let text_alone = || match layer.kind() {
             RecordKind::Leaf => text_node::text_alone(store.items(child)),
@@ -308,7 +301,7 @@ fn check_retained_children(
         };
         let fits = Rect::from_size(placed.geometry.size) == layer.node_rect();
         placed.kept = match dirty_nodes.get_mut(&placed.id) {
-            None if !fits => return Err("child resized"),
+            None if !fits => return None,
             None => KeptChild::Moved,
             Some(kind @ (NodeUpdate::Moved | NodeUpdate::MovedLayer)) if !fits => {
                 *kind = NodeUpdate::Content;
@@ -325,7 +318,7 @@ fn check_retained_children(
             Some(_) => KeptChild::Left,
         };
     }
-    Ok(())
+    Some(())
 }
 
 // The items of a container a translate step parts: the children its own
@@ -627,15 +620,17 @@ pub(super) fn translate_layer_from_data(
     } else {
         layout_state
     };
-    if let Err(reason) = translated_container(
+    if translated_container(
         store,
         container,
         &layout_state,
         &modifier_slices,
         ancestors,
         wrapping,
-    ) {
-        return translate_bail(reason);
+    )
+    .is_none()
+    {
+        return false;
     }
     // The container's own draws and text are recorded again around the
     // children it keeps: an unchanged draw reuses its recording, while
@@ -685,12 +680,12 @@ pub(super) fn translate_layer_from_data(
             order,
             children,
         );
-        Ok(())
+        Some(())
     });
-    if let Err(reason) = translated {
+    if translated.is_none() {
         store.lists.give(list);
         parts.give_back(store);
-        return translate_bail(reason);
+        return false;
     }
     let mut own = parts.own_draws();
     finish_translated_container(

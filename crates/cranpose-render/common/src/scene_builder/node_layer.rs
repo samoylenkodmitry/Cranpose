@@ -492,7 +492,6 @@ pub(super) fn prepare_node_layer(
     (head, child_context)
 }
 
-#[expect(clippy::print_stderr, reason = "CRANPOSE_SCENE_UPDATE_DIAG asks")]
 pub(super) fn write_node_layer(
     applier: &MemoryApplier,
     store: &mut SceneStore,
@@ -508,13 +507,6 @@ pub(super) fn write_node_layer(
         window_root: _,
     } = data;
     let size = layout_state.size();
-    if cranpose_core::DIAGNOSTICS.scene_update_diag.is_set() {
-        let placement = layout_state.position();
-        eprintln!(
-            "[scene-update-diag] build layer node={node_id:?} size=({:.2},{:.2}) pos=({:.2},{:.2})",
-            size.width, size.height, placement.x, placement.y,
-        );
-    }
     let (head, child_context) = prepare_node_layer(node_id, &slices, &layout_state, context);
     let draws = DrawTarget {
         size,
