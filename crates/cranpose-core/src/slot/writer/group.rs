@@ -4,6 +4,7 @@ use super::{
         GroupStart, GroupStartKind, SlotTable, SlotWriteSession,
     },
     SlotWriteSessionState,
+    frames::GroupFrame,
 };
 use crate::{AnchorId, NodeId, RecomposeScope};
 
@@ -74,21 +75,18 @@ impl SlotWriteSession<'_> {
             .open_group_index(frame.group_anchor, frame.group_index)
     }
 
-    // Closes the top frame and returns its group's anchor and index. The
-    // insert run whose root that frame held ends.
+    // Closes the top frame without finishing its body and returns its
+    // group's anchor and index. The insert run its group roots ends.
     pub(in crate::slot) fn pop_frame(&mut self) -> Option<(AnchorId, usize)> {
-        let popped = self.state.pop_group_frame()?;
-        if self.state.group_stack.closed_insert_run() {
-            self.end_insert_run();
+        if self
+            .state
+            .group_stack
+            .last()
+            .is_some_and(GroupFrame::roots_insert_run)
+        {
+            self.table.settle_insert_run();
         }
-        Some(popped)
-    }
-
-    // Kept out of line, so a frame that closes no run carries none of it.
-    #[cold]
-    #[inline(never)]
-    fn end_insert_run(&mut self) {
-        self.table.settle_insert_run();
+        self.state.pop_group_frame()
     }
 
     fn discard_stale_group_frames(&mut self) {
@@ -343,9 +341,11 @@ impl SlotWriteSession<'_> {
         else {
             return self.recover_malformed_group_start(key, started.anchor);
         };
-        if start.kind == GroupStartKind::Inserted && self.table.open_insert_run(start.group.index())
+        if start.kind == GroupStartKind::Inserted
+            && self.table.open_insert_run(start.group.index())
+            && let Some(frame) = self.state.group_stack.last_mut()
         {
-            self.state.group_stack.root_insert_run_at_top();
+            frame.root_insert_run();
         }
         start
     }
@@ -400,13 +400,20 @@ impl SlotWriteSession<'_> {
     }
 
     pub(crate) fn end_group(&mut self) {
+        #[cfg(any(test, debug_assertions))]
+        debug_assert!(
+            !(self.table.insert_run_is_parked()
+                && self
+                    .state
+                    .group_stack
+                    .last()
+                    .is_some_and(GroupFrame::roots_insert_run)),
+            "the body's finish ends the insert run its group roots"
+        );
         let Some((group_anchor, opened_index)) = self.state.pop_group_frame() else {
             log::error!("slot writer end_group called with an empty group stack");
             return;
         };
-        if self.state.group_stack.closed_insert_run() {
-            self.end_insert_run();
-        }
         let Some(group_index) = self.table.open_group_index(group_anchor, opened_index) else {
             log::error!("slot writer end_group ignored stale group frame anchor {group_anchor:?}");
             return;
@@ -441,16 +448,18 @@ impl SlotWriteSession<'_> {
     /// `finish_group_body` and `end_group` would one after another, and
     /// gives `attach_root` each of the group's root nodes.
     pub(crate) fn skip_and_end_group(&mut self, attach_root: impl FnMut(NodeId)) {
+        debug_assert!(
+            !self
+                .state
+                .group_stack
+                .last()
+                .is_some_and(GroupFrame::roots_insert_run),
+            "a group skips only once it composed, so it never roots an insert run"
+        );
         let Some((group_anchor, opened_index)) = self.state.pop_group_frame() else {
             log::error!("slot writer skip_and_end_group called with an empty group stack");
             return;
         };
-        // A group skips only once it composed, so it never roots an insert
-        // run, which only a new group's frame does.
-        debug_assert!(
-            !self.state.group_stack.closes_insert_run(),
-            "a skipped group must not close the insert run"
-        );
         let Some(group_index) = self.table.open_group_index(group_anchor, opened_index) else {
             log::error!(
                 "slot writer skip_and_end_group ignored stale group frame anchor {group_anchor:?}"
