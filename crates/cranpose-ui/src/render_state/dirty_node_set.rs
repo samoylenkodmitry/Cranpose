@@ -1,7 +1,7 @@
-use cranpose_core::{NodeId, collections::map::HashSet};
-
-// The nodes a set keeps room for at rest.
-const ROOM_KEPT: usize = 64;
+use cranpose_core::{
+    NodeId,
+    collections::{growth_slack::ROOM_KEPT_AT_REST, map::HashSet},
+};
 
 pub(super) struct DirtyNodeSet {
     pub(super) dirty_nodes: HashSet<NodeId>,
@@ -41,7 +41,7 @@ impl DirtyNodeSet {
 
     // Gives back the room a burst of nodes took, keeping room for a few.
     pub(super) fn trim(&mut self) {
-        self.dirty_nodes.shrink_to(ROOM_KEPT);
+        self.dirty_nodes.shrink_to(ROOM_KEPT_AT_REST);
     }
 
     pub(super) fn dirty_nodes_snapshot(&self) -> Vec<NodeId> {

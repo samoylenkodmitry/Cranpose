@@ -2,7 +2,7 @@
 
 use std::{ops::Range, sync::Arc};
 
-use cranpose_core::NodeId;
+use cranpose_core::{NodeId, collections::growth_slack::ROOM_KEPT_AT_REST};
 pub use cranpose_render_common::graph_scene::{HitRegion, Scene};
 use cranpose_render_common::{
     glyph_reach::{InkSpread, glyph_part},
@@ -560,9 +560,6 @@ pub(crate) struct CompositorScene {
     pub next_z: usize,
 }
 
-// The entries each list of a scene keeps room for at rest.
-const LIST_ROOM_KEPT: usize = 64;
-
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct SceneCapacityHint {
     pub runs: usize,
@@ -602,16 +599,16 @@ pub(crate) fn trim_scene_buffer_pool() {
 
 impl SceneBuffers {
     fn trim(&mut self) {
-        self.runs.shrink_to(LIST_ROOM_KEPT);
-        self.images.shrink_to(LIST_ROOM_KEPT);
-        self.texts.shrink_to(LIST_ROOM_KEPT);
-        self.shadow_draws.shrink_to(LIST_ROOM_KEPT);
-        self.shadow_recorders.truncate(LIST_ROOM_KEPT);
-        self.shadow_recorders.shrink_to(LIST_ROOM_KEPT);
-        self.rrect_shadows.shrink_to(LIST_ROOM_KEPT);
-        self.draw_ops.shrink_to(LIST_ROOM_KEPT);
-        self.effect_layers.shrink_to(LIST_ROOM_KEPT);
-        self.backdrop_layers.shrink_to(LIST_ROOM_KEPT);
+        self.runs.shrink_to(ROOM_KEPT_AT_REST);
+        self.images.shrink_to(ROOM_KEPT_AT_REST);
+        self.texts.shrink_to(ROOM_KEPT_AT_REST);
+        self.shadow_draws.shrink_to(ROOM_KEPT_AT_REST);
+        self.shadow_recorders.truncate(ROOM_KEPT_AT_REST);
+        self.shadow_recorders.shrink_to(ROOM_KEPT_AT_REST);
+        self.rrect_shadows.shrink_to(ROOM_KEPT_AT_REST);
+        self.draw_ops.shrink_to(ROOM_KEPT_AT_REST);
+        self.effect_layers.shrink_to(ROOM_KEPT_AT_REST);
+        self.backdrop_layers.shrink_to(ROOM_KEPT_AT_REST);
     }
 }
 

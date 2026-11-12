@@ -13,7 +13,8 @@
 use std::{cell::RefCell, fmt::Debug, rc::Rc};
 
 use cranpose_core::{
-    MemoryApplier, NodeId, NodeMarks, SceneNodeAttachmentScratch, collections::map::HashSet,
+    MemoryApplier, NodeId, NodeMarks, SceneNodeAttachmentScratch,
+    collections::{growth_slack::ROOM_KEPT_AT_REST, map::HashSet},
 };
 use cranpose_foundation::{
     PointerButton, PointerButtons, PointerId, PointerSource, RotaryScrollEvent,
@@ -436,9 +437,6 @@ pub(crate) enum SurfaceDirtyLane {
     Structural,
 }
 
-// The nodes each routing list keeps room for at rest.
-const ROUTING_ROOM_KEPT: usize = 64;
-
 #[derive(Default)]
 pub(crate) struct SurfaceRoutingScratch {
     pub(crate) attached: Vec<Option<NodeId>>,
@@ -459,10 +457,10 @@ impl SurfaceRoutingScratch {
     // Gives back the room a burst of routed nodes took, keeping room for a
     // few.
     pub(crate) fn trim(&mut self) {
-        self.attached.shrink_to(ROUTING_ROOM_KEPT);
-        self.owners.shrink_to(ROUTING_ROOM_KEPT);
-        self.moved.shrink_to(ROUTING_ROOM_KEPT);
-        self.seen.shrink_to(ROUTING_ROOM_KEPT);
+        self.attached.shrink_to(ROOM_KEPT_AT_REST);
+        self.owners.shrink_to(ROOM_KEPT_AT_REST);
+        self.moved.shrink_to(ROOM_KEPT_AT_REST);
+        self.seen.shrink_to(ROOM_KEPT_AT_REST);
     }
 }
 

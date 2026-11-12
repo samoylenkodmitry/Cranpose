@@ -1,6 +1,9 @@
 use std::{any::Any, rc::Rc};
 
-use cranpose_core::{MemoryApplier, NodeId, RecordId, collections::map::HashMap};
+use cranpose_core::{
+    MemoryApplier, NodeId, RecordId,
+    collections::{growth_slack::ROOM_KEPT_AT_REST, map::HashMap},
+};
 use cranpose_ui::{ModifierNodeSlices, Point, Rect, SubcomposeLayoutNode};
 
 use crate::{
@@ -141,9 +144,9 @@ impl DirtyRoom {
     // Gives back the room a burst of dirty nodes took, keeping room for a
     // few.
     fn trim(&mut self) {
-        self.nodes.shrink_to(DIRTY_NODES_KEPT);
-        self.order.shrink_to(DIRTY_NODES_KEPT);
-        self.ancestors.shrink_to(DIRTY_NODES_KEPT);
+        self.nodes.shrink_to(ROOM_KEPT_AT_REST);
+        self.order.shrink_to(ROOM_KEPT_AT_REST);
+        self.ancestors.shrink_to(ROOM_KEPT_AT_REST);
     }
 }
 
@@ -200,9 +203,6 @@ pub(crate) fn update_from_applier(
     }
     report
 }
-
-// The dirty nodes the room keeps room for at rest.
-const DIRTY_NODES_KEPT: usize = 64;
 
 // Returns a move when a node's layer change merged into new content: its
 // layer is lowered again, which keeps no record of where it lay.

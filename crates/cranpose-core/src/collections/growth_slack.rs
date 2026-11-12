@@ -6,6 +6,10 @@ use std::hash::{BuildHasher, Hash};
 
 const MIN_TRIMMED_SLACK: usize = 16;
 
+/// The entries a list or a set keeps room for at rest, once a burst took
+/// more.
+pub const ROOM_KEPT_AT_REST: usize = 64;
+
 fn slack_target(len: usize, capacity: usize) -> Option<usize> {
     let slack = capacity.saturating_sub(len);
     (slack > (len / 4).max(MIN_TRIMMED_SLACK)).then_some(len + len / 8)

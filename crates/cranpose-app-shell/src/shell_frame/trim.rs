@@ -6,13 +6,11 @@
 
 use std::{cell::Cell, fmt::Debug, time::Duration};
 
+use cranpose_core::collections::growth_slack::ROOM_KEPT_AT_REST;
 use cranpose_render_common::{RenderScene, Renderer};
 use web_time::Instant;
 
 use crate::{AppShell, FrameSchedule};
-
-// The nodes each list keeps room for at rest.
-const LIST_ROOM_KEPT: usize = 64;
 
 // How long the shell rests before it trims: a frame within it, such as the
 // next frame of a hover, finds the room of the last one.
@@ -90,13 +88,14 @@ where
     fn trim(&mut self) {
         self.app.app_context.trim();
         self.routing_scratch.trim();
-        self.pending_dirty_nodes.shrink_to(LIST_ROOM_KEPT);
-        self.pending_layer_property_nodes.shrink_to(LIST_ROOM_KEPT);
+        self.pending_dirty_nodes.shrink_to(ROOM_KEPT_AT_REST);
+        self.pending_layer_property_nodes
+            .shrink_to(ROOM_KEPT_AT_REST);
         let geometry = &mut self.geometry_scene_nodes;
-        geometry.reshaped.shrink_to(LIST_ROOM_KEPT);
-        geometry.moved.shrink_to(LIST_ROOM_KEPT);
-        geometry.unplaced.shrink_to(LIST_ROOM_KEPT);
-        self.app.left_nodes.shrink_to(LIST_ROOM_KEPT);
+        geometry.reshaped.shrink_to(ROOM_KEPT_AT_REST);
+        geometry.moved.shrink_to(ROOM_KEPT_AT_REST);
+        geometry.unplaced.shrink_to(ROOM_KEPT_AT_REST);
+        self.app.left_nodes.shrink_to(ROOM_KEPT_AT_REST);
         for surface in &mut self.surfaces {
             for list in [
                 &mut surface.scoped_layout_scene_nodes,
@@ -105,9 +104,9 @@ where
                 &mut surface.scoped_layer_property_nodes,
                 &mut surface.structural_scene_nodes,
             ] {
-                list.shrink_to(LIST_ROOM_KEPT);
+                list.shrink_to(ROOM_KEPT_AT_REST);
             }
-            surface.scene_updates.shrink_to(LIST_ROOM_KEPT);
+            surface.scene_updates.shrink_to(ROOM_KEPT_AT_REST);
             surface.renderer.scene_mut().trim();
             surface.renderer.trim();
         }
