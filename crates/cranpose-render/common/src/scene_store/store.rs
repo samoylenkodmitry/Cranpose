@@ -712,8 +712,9 @@ impl SceneStore {
         &self.texts[item.index()]
     }
 
-    /// The text of a text item, to change in place.
-    pub fn text_mut(&mut self, item: Item) -> &mut TextPrimitiveNode {
+    // The text of a text item, to change in place by the scene builder,
+    // which notes the change of the record that holds it.
+    pub(crate) fn text_mut(&mut self, item: Item) -> &mut TextPrimitiveNode {
         &mut self.texts[item.index()]
     }
 
