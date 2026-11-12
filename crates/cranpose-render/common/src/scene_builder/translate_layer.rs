@@ -140,11 +140,15 @@ pub(super) fn translated_container(
     }
     let (local_bounds, node_bounds) = layer_and_node_bounds(modifier_slices, layout_state.size());
     let resized = local_bounds != layer.local_bounds();
+    let mut changed = false;
     if resized {
         let shaped = shaped_graphics_layer(modifier_slices, local_bounds).map(Cow::into_owned);
-        store.write_graphics_layer(container, shaped);
+        changed = store.write_graphics_layer(container, shaped);
     }
-    set_bounds(store, container, local_bounds, node_bounds);
+    changed |= set_bounds(store, container, local_bounds, node_bounds);
+    if changed {
+        store.note_property_change(container);
+    }
     // A resize is more than the move of the content a translate step notes
     // alone.
     if resized {

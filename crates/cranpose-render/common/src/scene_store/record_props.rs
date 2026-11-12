@@ -148,14 +148,16 @@ impl SceneStore {
     }
 
     // Writes the layer bounds of `id` for the scene builder, which notes the
-    // change itself.
-    pub(crate) fn write_layer_bounds(&mut self, id: RecordId, bounds: Option<Rect>) {
+    // change itself; `false` when they stay.
+    pub(crate) fn write_layer_bounds(&mut self, id: RecordId, bounds: Option<Rect>) -> bool {
         let bits = |bounds: Option<Rect>| {
             bounds.map(|bounds| [bounds.x, bounds.y, bounds.width, bounds.height].map(f32::to_bits))
         };
-        if bits(self.props(id).and_then(|props| props.layer_bounds)) != bits(bounds) {
+        let changed = bits(self.props(id).and_then(|props| props.layer_bounds)) != bits(bounds);
+        if changed {
             self.edit_props(id, |props| props.layer_bounds = bounds);
         }
+        changed
     }
 
     /// Sets the pointer handling of `id`: `None` when it has none. What the

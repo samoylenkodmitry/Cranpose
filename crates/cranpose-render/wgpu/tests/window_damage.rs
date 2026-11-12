@@ -93,6 +93,12 @@ enum Scene {
     // closure reads, as a globe spins: its record lies in the scene's space,
     // whose reach is not known, so the frame may draw whole.
     TurnedSurface,
+    // A fill that stays inside a clip that shrinks a step: the draw group's
+    // bounds change and its draws do not.
+    ShrunkClip,
+    // A box that clips a child wider than it and shrinks a step: the box's
+    // bounds change and its draws and its child do not.
+    ShrunkParent,
 }
 
 /// A caret near the bottom, far from the spinner.
@@ -304,6 +310,14 @@ fn gradient(scope: &mut dyn DrawScope, step: u32) {
     );
 }
 
+fn shrunk_clip(scope: &mut dyn DrawScope, step: u32) {
+    let whole = Rect::from_size(scope.size());
+    let shown = Rect::from_size(Size::new(whole.width - step as f32 * 3.0, whole.height));
+    scope.clip_rect(shown, &mut |scope| {
+        scope.draw_rect_at(whole, Brush::solid(shade(0)));
+    });
+}
+
 fn growing_star(scope: &mut dyn DrawScope, step: u32) {
     scope.draw_path(
         &star(Point::new(12.0, 12.0), 8.0 + (step % 3) as f32),
@@ -324,6 +338,7 @@ fn changing_box(scene: Scene, step: MutableState<u32>) -> Option<Modifier> {
         | Scene::MovedThenStill => spot().background(shade(step.get())),
         Scene::Arc => arc_drawn_again(SPOT, step, 30.0),
         Scene::Gradient => spot().draw_behind(move |scope| gradient(scope, step.get())),
+        Scene::ShrunkClip => spot().draw_behind(move |scope| shrunk_clip(scope, step.get())),
         Scene::Star => spot().draw_behind(move |scope| growing_star(scope, step.get())),
         Scene::TurnedLayer => arc_turned(SPOT, step, 15.0),
         Scene::FadedLayer => spot().graphics_layer(|| GraphicsLayer {
@@ -342,7 +357,8 @@ fn changing_box(scene: Scene, step: MutableState<u32>) -> Option<Modifier> {
         | Scene::MovedCaster
         | Scene::SpinnerAndCaret
         | Scene::FiveSpots
-        | Scene::TurnedSurface => return None,
+        | Scene::TurnedSurface
+        | Scene::ShrunkParent => return None,
     })
 }
 
@@ -397,7 +413,7 @@ fn Changing(scene: Scene, step: MutableState<u32>) {
                 },
             );
         }
-        Scene::TurnedSurface => TurningSurface(step),
+        Scene::TurnedSurface | Scene::ShrunkParent => TreeScene(scene, step),
         Scene::Picture => {
             let picture = PICTURES.with(|pictures| pictures[(step.get() % 2) as usize].clone());
             Image(
@@ -427,6 +443,37 @@ fn Changing(scene: Scene, step: MutableState<u32>) {
             }
         }
     }
+}
+
+// The scenes that compose a tree of their own: a plane turning in a 3D
+// scene, and a box shrinking around its child.
+#[composable]
+fn TreeScene(scene: Scene, step: MutableState<u32>) {
+    match scene {
+        Scene::ShrunkParent => ShrinkingParent(step),
+        _ => TurningSurface(step),
+    }
+}
+
+// The scene of `Scene::ShrunkParent`: a box that clips a child of the spot's
+// size and loses three points of width a step.
+#[composable]
+fn ShrinkingParent(step: MutableState<u32>) {
+    let [x, y, width, height] = SPOT;
+    let shrunk = Size::new(width - step.get() as f32 * 3.0, height);
+    Box(
+        Modifier::empty().offset(x, y).size(shrunk).clip_to_bounds(),
+        BoxSpec::default(),
+        move || {
+            Box(
+                Modifier::empty()
+                    .required_size(Size::new(width, height))
+                    .background(shade(0)),
+                BoxSpec::default(),
+                || {},
+            );
+        },
+    );
 }
 
 // The scene of `Scene::TurnedSurface`: a plane seen from 300 points away,
@@ -941,6 +988,16 @@ fn a_shape_changing_colour() {
 #[test]
 fn an_arc_drawn_at_a_new_angle() {
     assert_damage_holds_the_changes(Scene::Arc);
+}
+
+#[test]
+fn a_clip_shrinking_around_a_still_fill() {
+    assert_damage_holds_the_changes(Scene::ShrunkClip);
+}
+
+#[test]
+fn a_box_shrinking_around_a_still_child() {
+    assert_damage_holds_the_changes(Scene::ShrunkParent);
 }
 
 #[test]
