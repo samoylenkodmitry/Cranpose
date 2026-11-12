@@ -136,6 +136,7 @@ impl GraphUpdateReport {
 pub(crate) struct DirtyRoom {
     nodes: HashMap<NodeId, NodeUpdate>,
     order: Vec<DirtyPlace>,
+    ancestors: Vec<NodeId>,
     recent: RecentPeak,
 }
 
@@ -244,39 +245,73 @@ fn update_dirty_nodes(
     store: &mut SceneStore,
     room: &mut DirtyRoom,
 ) -> GraphUpdateReport {
-    let DirtyRoom { nodes, order, .. } = room;
-    let Some(root) = store.root() else {
-        return GraphUpdateReport::needs_rebuild(GraphRebuildReason::RootLayerUnavailable);
+    let DirtyRoom {
+        nodes,
+        order,
+        ancestors,
+        ..
+    } = room;
+    let mut changes = match update_named_nodes(applier, store, nodes, order) {
+        Ok(changes) => changes,
+        Err(reason) => return GraphUpdateReport::needs_rebuild(reason),
     };
-    if let Some(root_id) = layer_identity(store.layer(root))
-        && let Some(kind) = nodes.remove(&root_id)
-    {
-        return update_dirty_root(applier, store, (nodes, order), (root, root_id, kind));
+    // A node the store holds no record of, as one placed again, lowers with
+    // the nearest node above it that the store draws.
+    if !nodes.is_empty() {
+        name_drawn_ancestors(applier, store, nodes, ancestors);
+        changes |= match update_named_nodes(applier, store, nodes, order) {
+            Ok(changes) => changes,
+            Err(reason) => return GraphUpdateReport::needs_rebuild(reason),
+        };
     }
-    let Some(changes) = update_dirty_records(applier, store, nodes, order) else {
-        return GraphUpdateReport::needs_rebuild(GraphRebuildReason::DirtyLayerUnavailable);
-    };
-    match classify_walk(applier, true, nodes) {
-        GraphUpdate::Patched => GraphUpdateReport::patched(changes),
-        GraphUpdate::NeedsRebuild(reason) => GraphUpdateReport::needs_rebuild(reason),
+    nodes.retain(|&node, _| is_drawn(applier, node));
+    if nodes.is_empty() {
+        GraphUpdateReport::patched(changes)
+    } else {
+        GraphUpdateReport::needs_rebuild(GraphRebuildReason::UnmatchedDirtyNodes(nodes.len()))
     }
 }
 
-// Updates the scene for a frame whose dirty nodes include the root, `kind`
-// the root's update: a retained root layer takes it in place, any other
-// root is lowered again. Out of line: most frames leave the root alone.
+// Updates the root and the records of the nodes in `nodes`, taking each node
+// it updates out of `nodes`.
+fn update_named_nodes(
+    applier: &MemoryApplier,
+    store: &mut SceneStore,
+    nodes: &mut HashMap<NodeId, NodeUpdate>,
+    order: &mut Vec<DirtyPlace>,
+) -> Result<GraphChanges, GraphRebuildReason> {
+    let root = store
+        .root()
+        .ok_or(GraphRebuildReason::RootLayerUnavailable)?;
+    let mut changes = GraphChanges::default();
+    if let Some(root_id) = layer_identity(store.layer(root))
+        && let Some(kind) = nodes.remove(&root_id)
+    {
+        changes = update_dirty_root(applier, store, nodes, (root, root_id, kind))?;
+        if nodes.is_empty() {
+            return Ok(changes);
+        }
+    }
+    let records = update_dirty_records(applier, store, nodes, order)
+        .ok_or(GraphRebuildReason::DirtyLayerUnavailable)?;
+    Ok(changes | records)
+}
+
+// Updates the root, `kind` its update: a retained root layer takes it in
+// place, any other root is lowered again with every node beneath it, which
+// leaves no node in `nodes`. Out of line: most frames leave the root alone.
 #[inline(never)]
 fn update_dirty_root(
     applier: &MemoryApplier,
     store: &mut SceneStore,
-    (remaining_dirty_nodes, order): (&mut HashMap<NodeId, NodeUpdate>, &mut Vec<DirtyPlace>),
+    nodes: &mut HashMap<NodeId, NodeUpdate>,
     (root, root_id, kind): (RecordId, NodeId, NodeUpdate),
-) -> GraphUpdateReport {
-    if let Some(mut changes) = try_update_retained_layer(
+) -> Result<GraphChanges, GraphRebuildReason> {
+    if let Some(changes) = try_update_retained_layer(
         applier,
         store,
         root,
-        remaining_dirty_nodes,
+        nodes,
         kind,
         Level::Root,
         TranslateAncestorContext {
@@ -286,46 +321,74 @@ fn update_dirty_root(
             parent_abs: AbsOrigin::ROOT,
         },
     ) {
-        if remaining_dirty_nodes.is_empty() {
-            return GraphUpdateReport::patched(changes);
-        }
-        let walked = update_dirty_records(applier, store, remaining_dirty_nodes, order);
-        changes |= walked.unwrap_or(GraphChanges::HitsAndMoves);
-        return GraphUpdateReport {
-            update: classify_walk(applier, walked.is_some(), remaining_dirty_nodes),
-            ..GraphUpdateReport::patched(changes)
-        };
+        return Ok(changes);
     }
-
-    let Some(hit_graph_dirty) = rebuild_tracking_hits(store, root, |store, root| {
+    let hit_graph_dirty = rebuild_tracking_hits(store, root, |store, root| {
         release_for_rebuild(store, root);
         lower_root_into(applier, store, root_id)
-    }) else {
-        return GraphUpdateReport::needs_rebuild(GraphRebuildReason::RootLayerUnavailable);
-    };
+    })
+    .ok_or(GraphRebuildReason::RootLayerUnavailable)?;
     store.note_content_change(root);
-    GraphUpdateReport::patched(GraphChanges::hits(hit_graph_dirty))
+    nodes.clear();
+    Ok(GraphChanges::hits(hit_graph_dirty))
 }
 
-fn classify_walk(
+// Names in place of each node in `nodes` that the store holds no record of
+// the nearest node above it that the store draws, with new content.
+// `ancestors` is room for those.
+fn name_drawn_ancestors(
     applier: &MemoryApplier,
-    walked: bool,
-    remaining_dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
-) -> GraphUpdate {
-    if !walked {
-        return GraphUpdate::NeedsRebuild(GraphRebuildReason::DirtyLayerUnavailable);
+    store: &SceneStore,
+    nodes: &mut HashMap<NodeId, NodeUpdate>,
+    ancestors: &mut Vec<NodeId>,
+) {
+    ancestors.clear();
+    nodes.retain(|&node, _| {
+        if store.record_of(node).is_some() {
+            return true;
+        }
+        let Some(ancestor) = drawn_ancestor(applier, store, node) else {
+            return true;
+        };
+        ancestors.push(ancestor);
+        false
+    });
+    for &ancestor in ancestors.iter() {
+        nodes
+            .entry(ancestor)
+            .and_modify(|kind| *kind = kind.merge(NodeUpdate::Content))
+            .or_insert(NodeUpdate::Content);
     }
-    remaining_dirty_nodes.retain(|&node, _| is_drawn(applier, node));
-    if !remaining_dirty_nodes.is_empty() {
-        GraphUpdate::NeedsRebuild(GraphRebuildReason::UnmatchedDirtyNodes(
-            remaining_dirty_nodes.len(),
-        ))
-    } else {
-        GraphUpdate::Patched
+}
+
+// The nearest node above `node` that the store draws. `None` when a
+// subcompose node above keeps `node` among its inactive children, or no node
+// above is drawn.
+fn drawn_ancestor(applier: &MemoryApplier, store: &SceneStore, node: NodeId) -> Option<NodeId> {
+    match climb(applier, node, |above| store.record_of(above).is_some()) {
+        ClimbEnd::Stop(ancestor) => Some(ancestor),
+        ClimbEnd::Inactive | ClimbEnd::Top => None,
     }
 }
 
 fn is_drawn(applier: &MemoryApplier, node: NodeId) -> bool {
+    !matches!(climb(applier, node, |_| false), ClimbEnd::Inactive)
+}
+
+// Where a climb from a node through the nodes above it ended.
+enum ClimbEnd {
+    // At the node the climb's `stop` picked.
+    Stop(NodeId),
+    // Under a subcompose node that keeps the node the climb came from among
+    // its inactive children.
+    Inactive,
+    // Past the top.
+    Top,
+}
+
+// Climbs from `node` through the nodes above it that are not virtual, up to
+// the first that `stop` picks.
+fn climb(applier: &MemoryApplier, node: NodeId, stop: impl Fn(NodeId) -> bool) -> ClimbEnd {
     let mut child = node;
     let mut current = node;
     while let Some(parent) = applier
@@ -334,7 +397,7 @@ fn is_drawn(applier: &MemoryApplier, node: NodeId) -> bool {
         .and_then(cranpose_core::Node::parent)
     {
         let Ok(parent_node) = applier.get_ref(parent) else {
-            return true;
+            return ClimbEnd::Top;
         };
         current = parent;
         if parent_node.is_virtual() {
@@ -344,11 +407,14 @@ fn is_drawn(applier: &MemoryApplier, node: NodeId) -> bool {
         if let Some(subcompose) = parent_node.downcast_ref::<SubcomposeLayoutNode>()
             && !subcompose.with_active_children(|children| children.contains(&child))
         {
-            return false;
+            return ClimbEnd::Inactive;
+        }
+        if stop(parent) {
+            return ClimbEnd::Stop(parent);
         }
         child = parent;
     }
-    true
+    ClimbEnd::Top
 }
 
 #[derive(Clone, Copy)]

@@ -403,9 +403,7 @@ fn assert_an_unplaced_child_leaves_and_returns(content: fn()) {
     for show in [false, true, false, true] {
         shown.set_value(show);
         let (rebuilds, _) = peek.frame();
-        if !show {
-            assert_eq!(rebuilds, 0, "the child leaves in place");
-        }
+        assert_eq!(rebuilds, 0, "the scene takes the change in place");
         assert_scene_matches_rebuild(
             &mut peek.shell,
             if show {
