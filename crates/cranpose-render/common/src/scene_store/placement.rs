@@ -117,8 +117,12 @@ impl SceneStore {
         }
     }
 
+    #[expect(
+        clippy::inline_always,
+        reason = "the pixel push reads it for every record; out of line it built the placement in memory"
+    )]
     /// Where `id` sits in its parent's layer.
-    #[inline]
+    #[inline(always)]
     pub fn placement(&self, id: RecordId) -> Placement {
         match self.tree[id.index()].transform {
             Some(transform) => Placement::By(self.transforms[transform.index()]),
