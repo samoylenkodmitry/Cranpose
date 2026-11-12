@@ -93,11 +93,11 @@ impl MeasurePolicy for StackedRows {
     fn measure(
         &self,
         _: &dyn MeasureScope,
-        measurables: &[std::boxed::Box<dyn Measurable>],
+        measurables: &[Box<dyn Measurable>],
         constraints: Constraints,
     ) -> MeasureResult {
         let mut placements = Vec::with_capacity(measurables.len());
-        let mut place = |index: usize, child: &std::boxed::Box<dyn Measurable>| {
+        let mut place = |index: usize, child: &dyn Measurable| {
             let placeable = child.measure(constraints);
             placements.push(Placement::new(
                 placeable.node_id(),
@@ -111,31 +111,31 @@ impl MeasurePolicy for StackedRows {
                 .iter()
                 .enumerate()
                 .rev()
-                .for_each(|(index, child)| place(index, child));
+                .for_each(|(index, child)| place(index, child.as_ref()));
         } else {
             measurables
                 .iter()
                 .enumerate()
-                .for_each(|(index, child)| place(index, child));
+                .for_each(|(index, child)| place(index, child.as_ref()));
         }
         let (width, height) =
             constraints.constrain(constraints.max_width, 10.0 * measurables.len() as f32);
         MeasureResult::new(Size::new(width, height), placements)
     }
 
-    fn min_intrinsic_width(&self, _: &[std::boxed::Box<dyn Measurable>], _: f32) -> f32 {
+    fn min_intrinsic_width(&self, _: &[Box<dyn Measurable>], _: f32) -> f32 {
         0.0
     }
 
-    fn max_intrinsic_width(&self, _: &[std::boxed::Box<dyn Measurable>], _: f32) -> f32 {
+    fn max_intrinsic_width(&self, _: &[Box<dyn Measurable>], _: f32) -> f32 {
         0.0
     }
 
-    fn min_intrinsic_height(&self, _: &[std::boxed::Box<dyn Measurable>], _: f32) -> f32 {
+    fn min_intrinsic_height(&self, _: &[Box<dyn Measurable>], _: f32) -> f32 {
         0.0
     }
 
-    fn max_intrinsic_height(&self, _: &[std::boxed::Box<dyn Measurable>], _: f32) -> f32 {
+    fn max_intrinsic_height(&self, _: &[Box<dyn Measurable>], _: f32) -> f32 {
         0.0
     }
 }
