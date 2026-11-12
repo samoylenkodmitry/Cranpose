@@ -625,8 +625,7 @@ pub(super) fn inherited_alignment_lines(
     if !in_child_order {
         placement_indices.extend(0..placements.len());
         // The sort every caller shares: a sort of its own for these positions
-        // took 9.6 KB of a 32-bit board's flash, for a parent that places
-        // its children out of their order. No two keys are equal.
+        // costs a 32-bit board 9.6 KB of flash.
         sort_positions(placement_indices, &mut |a, b| {
             (placements[a].node_id, a).cmp(&(placements[b].node_id, b))
         });

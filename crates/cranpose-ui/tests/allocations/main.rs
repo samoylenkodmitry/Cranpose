@@ -7,14 +7,15 @@ use cranpose_animation::{
 };
 use cranpose_core::{mutableStateOf, remember};
 use cranpose_ui::{
-    MeasureLayoutOptions, Modifier, measure_layout, measure_layout_with_options,
-    run_test_composition,
+    Constraints, Layout, MeasureLayoutOptions, MeasureResult, Modifier, TestComposition,
+    measure_layout, measure_layout_with_options, run_test_composition,
     widgets::{
         box_widget::{Box, BoxSpec},
         column::{Column, ColumnSpec},
     },
 };
 use cranpose_ui_graphics::{Color, Size};
+use cranpose_ui_layout::{Measurable, MeasurePolicy, MeasureScope, Placement};
 use stats_alloc::{INSTRUMENTED_SYSTEM, Region, StatsAlloc};
 
 #[macro_use]
@@ -29,24 +30,31 @@ static GLOBAL: &StatsAlloc<System> = &INSTRUMENTED_SYSTEM;
 
 const PASSES: usize = 10;
 
+// Rows of 10 points as tall as their parent is wide.
+fn rows(count: usize) {
+    for _ in 0..count {
+        Box(
+            Modifier::empty().fill_max_width().height(10.0),
+            BoxSpec::default(),
+            || {},
+        );
+    }
+}
+
 /// Allocations per pass of remeasuring a column of `rows` rows, each pass at
 /// a new width, so every row measures again.
-fn remeasure_allocations(rows: usize) -> usize {
-    let mut composition = run_test_composition(move || {
+fn remeasure_allocations(count: usize) -> usize {
+    pass_allocations(run_test_composition(move || {
         Column(
             Modifier::empty().fill_max_width(),
             ColumnSpec::default(),
-            move || {
-                for _ in 0..rows {
-                    Box(
-                        Modifier::empty().fill_max_width().height(10.0),
-                        BoxSpec::default(),
-                        || {},
-                    );
-                }
-            },
+            move || rows(count),
         );
-    });
+    }))
+}
+
+// Allocations per pass of measuring `composition` at a new width.
+fn pass_allocations(mut composition: TestComposition) -> usize {
     let root = composition.root().expect("a composed root");
     let handle = composition.runtime_handle();
     let mut applier = composition.applier_mut();
@@ -73,6 +81,83 @@ fn remeasuring_a_row_allocates_nothing() {
     let per_row = many.saturating_sub(few) as f64 / 100.0;
     println!("allocations per remeasured row: {per_row}");
     assert!(per_row == 0.0, "{per_row} allocations per remeasured row");
+}
+
+// Places its children one under another, last first when `reversed`.
+#[derive(Clone, PartialEq)]
+struct StackedRows {
+    reversed: bool,
+}
+
+impl MeasurePolicy for StackedRows {
+    fn measure(
+        &self,
+        _: &dyn MeasureScope,
+        measurables: &[std::boxed::Box<dyn Measurable>],
+        constraints: Constraints,
+    ) -> MeasureResult {
+        let mut placements = Vec::with_capacity(measurables.len());
+        let mut place = |index: usize, child: &std::boxed::Box<dyn Measurable>| {
+            let placeable = child.measure(constraints);
+            placements.push(Placement::new(
+                placeable.node_id(),
+                0.0,
+                index as f32 * 10.0,
+                0.0,
+            ));
+        };
+        if self.reversed {
+            measurables
+                .iter()
+                .enumerate()
+                .rev()
+                .for_each(|(index, child)| place(index, child));
+        } else {
+            measurables
+                .iter()
+                .enumerate()
+                .for_each(|(index, child)| place(index, child));
+        }
+        let (width, height) =
+            constraints.constrain(constraints.max_width, 10.0 * measurables.len() as f32);
+        MeasureResult::new(Size::new(width, height), placements)
+    }
+
+    fn min_intrinsic_width(&self, _: &[std::boxed::Box<dyn Measurable>], _: f32) -> f32 {
+        0.0
+    }
+
+    fn max_intrinsic_width(&self, _: &[std::boxed::Box<dyn Measurable>], _: f32) -> f32 {
+        0.0
+    }
+
+    fn min_intrinsic_height(&self, _: &[std::boxed::Box<dyn Measurable>], _: f32) -> f32 {
+        0.0
+    }
+
+    fn max_intrinsic_height(&self, _: &[std::boxed::Box<dyn Measurable>], _: f32) -> f32 {
+        0.0
+    }
+}
+
+// A parent that places 600 children in reverse order finds each child's
+// placement with no allocation: a pass allocates what one that places them
+// in order does.
+fn placing_children_out_of_order_allocates_nothing() {
+    let stacked = |reversed: bool| {
+        pass_allocations(run_test_composition(move || {
+            Layout(
+                Modifier::empty().fill_max_width(),
+                StackedRows { reversed },
+                || rows(600),
+            );
+        }))
+    };
+    let (in_order, reversed) = (stacked(false), stacked(true));
+    println!(
+        "allocations a pass of 600 children placed in order: {in_order}, reversed: {reversed}"
+    );
+    assert_eq!(reversed, in_order, "the reversed placements allocate");
 }
 
 /// A layout pass as an app shell runs it, with no layout or semantics tree,
@@ -320,6 +405,7 @@ fn a_thread_that_held_a_composition_frees_its_memory_at_exit() {
 /// counting allocator counts every thread.
 fn layout_and_modifiers_stay_within_their_allocation_budgets() {
     remeasuring_a_row_allocates_nothing();
+    placing_children_out_of_order_allocates_nothing();
     a_layout_pass_lends_its_applier_without_rebuilding_it();
     a_kept_column_lets_its_changed_children_fill_their_measurements();
     an_animation_frame_allocates_only_its_recomposition();

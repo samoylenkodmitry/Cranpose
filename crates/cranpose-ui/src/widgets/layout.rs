@@ -79,8 +79,8 @@ where
 }
 
 // The layout node of `compose_layout` and its children's bracket, compiled
-// once: inlined into every widget call it took the modifier's drop and the
-// bracket into each app body, about 200 bytes of wasm a call.
+// once: inlined, it puts the modifier's drop and the bracket into the body of
+// every widget call, about 200 bytes of wasm a call.
 #[inline(never)]
 fn compose_layout_node(
     mut modifier: Modifier,

@@ -5,12 +5,13 @@
 
 use std::cmp::Ordering;
 
-/// Sorts `positions`, positions in a list the caller compares, by `compare`
-/// and keeps equal positions in their order, as [`slice::sort_by`] does.
-/// Every caller shares one sort routine. It allocates nothing for up to
-/// 1024 positions.
+/// Sorts `positions`, positions in a list the caller compares, by `compare`,
+/// and positions that compare equal by their own values: positions handed
+/// over in ascending order keep equal items in their order, as
+/// [`slice::sort_by`] does. Every caller shares one sort routine, which
+/// allocates nothing.
 pub fn sort_positions(positions: &mut [usize], compare: &mut dyn FnMut(usize, usize) -> Ordering) {
-    positions.sort_by(|&a, &b| compare(a, b));
+    positions.sort_unstable_by(|&a, &b| compare(a, b).then(a.cmp(&b)));
 }
 
 /// Sorts `items` by `compare` and keeps equal items in their order, as
