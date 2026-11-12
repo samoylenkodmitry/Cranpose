@@ -34,6 +34,9 @@ gl-templates = ["dep:cranpose-gl-templates", "dep:cranpose-ui-graphics"]
 embedded-default-font = ["cranpose-render-common/embedded-default-font"]
 # Fonts an app installs while it runs; see `cranpose-render-common`.
 installed-fonts = ["cranpose-render-common/installed-fonts"]
+# The layer tree that tests describe a scene and an overlay by; see
+# `cranpose-render-common`. No shipped build turns it on.
+layer-tree = ["cranpose-render-common/layer-tree"]
 
 [dependencies]
 cranpose-render-common = { workspace = true, features = ["window-damage"] }
@@ -148,6 +151,8 @@ cranpose-gl-templates = { workspace = true, optional = true }
 cranpose-ui-graphics = { workspace = true, optional = true }
 
 [dev-dependencies]
+# The tests describe scenes and overlays as layer trees.
+cranpose-render-wgpu = { path = ".", features = ["layer-tree"] }
 # Path-only dev-deps: stripped from the published manifest (publish order ignores dev edges).
 cranpose-app-shell = { path = "../../cranpose-app-shell", features = ["test-support"] }
 # The tests flip the diagnostic and ablation switches.

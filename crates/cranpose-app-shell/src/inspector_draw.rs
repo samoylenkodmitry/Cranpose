@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
 use cranpose_core::NodeId;
-use cranpose_render_common::graph::{
-    DrawPrimitiveNode, LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, RenderNode,
-    TextPrimitiveNode,
+use cranpose_render_common::{
+    graph::{DrawPrimitiveNode, PrimitiveNode, TextPrimitiveNode},
+    scene_store::OverlayLayer,
 };
 use cranpose_ui::{TextLayoutOptions, TextOverflow, TextStyle};
 use cranpose_ui_graphics::{Brush, Color, CornerRadii, DrawPrimitive, Point, Rect, Size, Stroke};
@@ -61,15 +61,14 @@ fn floating_bounds(mut bounds: Rect, position: Option<Point>, area: Rect) -> Rec
 }
 
 struct Canvas {
-    children: Vec<RenderNode>,
+    primitives: Vec<PrimitiveNode>,
     viewport: Rect,
 }
 
 impl Canvas {
     fn rectangle(&mut self, rect: Rect, color: Color, stroke: Option<Stroke>) {
-        self.children.push(RenderNode::Primitive(PrimitiveEntry {
-            phase: PrimitivePhase::AfterChildren,
-            node: PrimitiveNode::Draw(Box::new(DrawPrimitiveNode {
+        self.primitives
+            .push(PrimitiveNode::Draw(Box::new(DrawPrimitiveNode {
                 primitive: DrawPrimitive::RoundRect {
                     rect,
                     brush: Brush::Solid(color),
@@ -77,24 +76,22 @@ impl Canvas {
                     stroke,
                 },
                 clip: None,
-            })),
-        }));
+            })));
     }
 
     fn text(&mut self, text: &str, rect: Rect, color: Color, font_size: f32) {
         let mut style = TextStyle::default();
         style.span_style.color = Some(color);
         style.span_style.font_size = cranpose_ui::text::TextUnit::Sp(font_size);
-        let id = NodeId(usize::MAX.saturating_sub(1024 + self.children.len()));
+        let id = NodeId(usize::MAX.saturating_sub(1024 + self.primitives.len()));
         let prepared = cranpose_ui::text::prepare_text_layout(
             &cranpose_ui::text::AnnotatedString::from(text),
             &style,
             TextLayoutOptions::default(),
             Some(rect.width),
         );
-        self.children.push(RenderNode::Primitive(PrimitiveEntry {
-            phase: PrimitivePhase::AfterChildren,
-            node: PrimitiveNode::Text(Box::new(TextPrimitiveNode {
+        self.primitives
+            .push(PrimitiveNode::Text(Box::new(TextPrimitiveNode {
                 node_id: id,
                 rect,
                 render_text: prepared.render_text(),
@@ -104,8 +101,7 @@ impl Canvas {
                 overflow: TextOverflow::Clip,
                 clip: Some(rect),
                 paint: Default::default(),
-            })),
-        }));
+            })));
     }
 
     fn button(
@@ -139,21 +135,21 @@ impl Canvas {
         state.controls.push(InspectorControl { action, bounds });
     }
 
-    fn finish(self) -> LayerNode {
-        LayerNode {
+    fn finish(self) -> OverlayLayer {
+        OverlayLayer {
             size: self.viewport.size(),
-            children: self.children,
-            ..Default::default()
+            origin: Point::default(),
+            primitives: self.primitives,
         }
     }
 }
 
 /// The inspector over a window of `viewport`, its controls inside `area`.
 #[inline(never)]
-pub(super) fn build(state: &mut InspectorState, viewport: Size, area: Rect) -> LayerNode {
+pub(super) fn build(state: &mut InspectorState, viewport: Size, area: Rect) -> OverlayLayer {
     state.controls.clear();
     let mut canvas = Canvas {
-        children: Vec::new(),
+        primitives: Vec::new(),
         viewport: Rect::from_size(viewport),
     };
     if state.open {

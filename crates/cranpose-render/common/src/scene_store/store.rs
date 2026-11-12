@@ -19,9 +19,10 @@ use super::{
 };
 #[cfg(feature = "window-damage")]
 use super::{ReachState, own_marks};
+#[cfg(feature = "layer-tree")]
+use crate::graph::LayerNode;
 use crate::graph::{
-    DrawCommandId, DrawPrimitiveNode, DrawRunNode, LayerNode, ProjectiveTransform,
-    TextPrimitiveNode,
+    DrawCommandId, DrawPrimitiveNode, DrawRunNode, ProjectiveTransform, TextPrimitiveNode,
 };
 
 /// The scene a renderer draws and the hit targets come from.
@@ -396,6 +397,7 @@ impl SceneStore {
     }
 
     /// A store that holds `root` and the tree beneath it as records.
+    #[cfg(feature = "layer-tree")]
     pub fn from_layer(root: &LayerNode) -> Self {
         let mut store = Self::new();
         store.describe(root);
@@ -405,6 +407,7 @@ impl SceneStore {
     /// Writes `root` and the tree beneath it as records in place of what the
     /// store held, in a new update. Records of the same kind and node at the
     /// same place stay, so the update changes only what differs.
+    #[cfg(feature = "layer-tree")]
     pub fn describe(&mut self, root: &LayerNode) {
         self.begin_update();
         super::spec::write_root(self, root);

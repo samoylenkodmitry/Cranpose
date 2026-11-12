@@ -11,9 +11,11 @@ use cranpose_foundation::{MINIMUM_TOUCH_TARGET_SIZE, PointerEvent, PointerEventK
 use cranpose_ui::{LayoutNode, ModifierNodeSlices, SubcomposeLayoutNode};
 use cranpose_ui_graphics::{Point, PointerIcon, Rect, RoundedCornerShape, shared_sort, space::Ray};
 
+#[cfg(feature = "layer-tree")]
+use crate::graph::LayerNode;
 use crate::{
     HitTestTarget, RenderScene, SceneUpdates,
-    graph::{LayerNode, ProjectiveTransform},
+    graph::ProjectiveTransform,
     left_nodes::LeftNodes,
     scene_pick::ScenePick,
     scene_store::{LayerRef, RecordEvents, SceneStore},
@@ -639,6 +641,7 @@ impl Scene {
 
     /// Writes the layer tree `root` describes in place of the scene's
     /// records. The hit targets follow it.
+    #[cfg(feature = "layer-tree")]
     pub fn describe(&mut self, root: &LayerNode) {
         self.store.describe(root);
         self.hits.get_mut().stale = true;

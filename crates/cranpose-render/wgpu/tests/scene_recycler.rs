@@ -151,19 +151,19 @@ fn returned_packet_storage_reuses_both_slots_after_topology_shrinks() {
     .into();
     let stale_root = page(vec![RenderNode::Layer(Box::new(shadowed))]);
     renderer.scene_mut().describe(&stale_root);
-    renderer.set_inspector_overlay(Some(stale_root.clone()));
+    renderer.set_overlay_tree(Some(stale_root.clone()));
     let older_packet = renderer
         .build_frame_packet_for_tests(WIDTH, HEIGHT)
         .expect("first shadowed root and overlay packet builds");
     renderer.scene_mut().describe(&stale_root);
-    renderer.set_inspector_overlay(Some(stale_root));
+    renderer.set_overlay_tree(Some(stale_root));
     let newer_packet = renderer
         .build_frame_packet_for_tests(WIDTH, HEIGHT)
         .expect("second shadowed root and overlay packet builds");
     renderer.return_held_packet_for_tests(older_packet);
     renderer.return_held_packet_for_tests(newer_packet);
 
-    renderer.set_inspector_overlay(None);
+    renderer.set_overlay_tree(None);
     renderer.scene_mut().describe(&next_graph);
     let first_small = renderer
         .build_frame_packet_for_tests(WIDTH, HEIGHT)
