@@ -321,7 +321,9 @@ mod text_group {
 
     use cranpose_core::NodeId;
 
-    use super::{IntoTextSource, TextModifierElement, text_layout_inputs, text_node_modifier};
+    use super::{
+        IntoTextSource, TextModifierElement, TextSource, text_layout_inputs, text_node_modifier,
+    };
     use crate::{
         composable,
         modifier::Modifier,
@@ -342,9 +344,21 @@ mod text_group {
     where
         S: IntoTextSource + Clone + PartialEq + 'static,
     {
+        text_node(text.into_text_source(), modifier, style, options)
+    }
+
+    // What the group makes of any text type. Out of line, one copy: the group
+    // of each text type would repeat it.
+    #[inline(never)]
+    fn text_node(
+        source: TextSource,
+        modifier: Modifier,
+        style: Arc<TextStyle>,
+        options: TextLayoutOptions,
+    ) -> NodeId {
         let (style, options) = text_layout_inputs(style, options);
         let environment = LayoutEnvironment::current();
-        let text = text.into_text_source().resolve();
+        let text = source.resolve();
         let modifier = match crate::widgets::selection_container::current_selection_registrar() {
             Some(registrar) => modifier.then(crate::widgets::selection_container::selectable_text(
                 registrar,
