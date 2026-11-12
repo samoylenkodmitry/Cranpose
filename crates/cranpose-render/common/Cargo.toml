@@ -14,7 +14,7 @@ description = "Scene, renderer and hit-test contracts for Cranpose backends"
 autotests = false
 
 [package.metadata.docs.rs]
-all-features = true
+features = ["embedded-default-font", "installed-fonts", "window-damage"]
 rustdoc-args = ["--cfg", "docsrs"]
 
 [lints]
@@ -33,8 +33,9 @@ smallvec = "1.16.4"
 bytemuck = { workspace = true }
 
 [dev-dependencies]
-# The journal tests read where redraws changed the scene.
-cranpose-render-common = { path = ".", features = ["window-damage"] }
+# The journal tests read where redraws changed the scene. The tests describe
+# scenes as layer trees.
+cranpose-render-common = { path = ".", features = ["window-damage", "layer-tree"] }
 # Tests lay text out with Cranpose Test Mono.
 cranpose-ui = { workspace = true, features = ["test-helpers"] }
 stats_alloc = "0.1.10"
@@ -52,6 +53,10 @@ installed-fonts = []
 # follows it, such as the window damage of the wgpu renderer. Without it a
 # redraw logs no reach.
 window-damage = []
+# The layer tree that describes a scene by hand, with the shared render
+# cases written as one: the tests of the renderers build their scenes from it.
+# No shipped build turns it on.
+layer-tree = []
 
 [[test]]
 name = "integration"

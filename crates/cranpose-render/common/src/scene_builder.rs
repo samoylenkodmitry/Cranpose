@@ -13,6 +13,7 @@ use crate::{
 mod dirty_records;
 use dirty_records::{DirtyPlace, update_dirty_records};
 mod draw_recording;
+#[cfg(feature = "layer-tree")]
 pub(crate) use draw_recording::draw_command_items;
 use draw_recording::{
     DrawPass, DrawTarget, GroupPaint, NodeCommands, NodeDraws, OwnDraws, append_draw_nodes,

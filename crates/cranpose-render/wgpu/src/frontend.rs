@@ -1,9 +1,10 @@
 use std::rc::Weak;
 
+#[cfg(feature = "layer-tree")]
+use cranpose_render_common::graph::{LayerNode, RenderNode};
 use cranpose_render_common::{
-    dev_overlay::DevOverlayKey,
-    graph::{LayerNode, RenderNode},
-    scene_store::SceneStore,
+    dev_overlay::{DevOverlayKey, FpsOverlay},
+    scene_store::{OverlayLayer, SceneStore},
     text_fonts::TextFonts,
 };
 use web_time::Instant;
@@ -42,8 +43,8 @@ pub(crate) struct RendererFrontend {
     pub(crate) dev_overlay_cache: Option<DevOverlayKey>,
     // The overlays' records; empty while no overlay shows.
     pub(crate) dev_overlay: SceneStore,
-    pub(crate) fps_overlay: Option<LayerNode>,
-    pub(crate) inspector_overlay: Option<LayerNode>,
+    pub(crate) fps_overlay: Option<FpsOverlay>,
+    pub(crate) inspector_overlay: Option<OverlayLayer>,
     pub(crate) root_scene_capacity: SceneCapacityHint,
     scene_recyclers: [LayerSceneRecycler; MAX_FRAMES_IN_FLIGHT],
     returned_scenes: usize,
@@ -73,26 +74,43 @@ pub(crate) struct RendererFrontend {
 
 impl RendererFrontend {
     pub(crate) fn refresh_dev_overlay(&mut self) {
+        self.recycle_kept_packet();
+        if self.fps_overlay.is_none() && self.inspector_overlay.is_none() {
+            self.dev_overlay.clear();
+            return;
+        }
+        let window = self
+            .fps_overlay
+            .as_ref()
+            .map_or_else(Default::default, |fps| fps.window);
+        // The inspector draws over the frame counter, as the last layer of
+        // the overlay's root.
+        let layers = self
+            .fps_overlay
+            .iter()
+            .map(|fps| &fps.layer)
+            .chain(&self.inspector_overlay);
+        self.dev_overlay.describe_overlay(window, layers);
+    }
+
+    // Replaces the overlay with the records of `overlay`, a layer tree, in a
+    // root of its own.
+    #[cfg(feature = "layer-tree")]
+    pub(crate) fn describe_overlay_tree(&mut self, overlay: Option<LayerNode>) {
+        self.recycle_kept_packet();
+        match overlay {
+            Some(layer) => self.dev_overlay.describe(&LayerNode {
+                children: vec![RenderNode::Layer(Box::new(layer))],
+                ..Default::default()
+            }),
+            None => self.dev_overlay.clear(),
+        }
+    }
+
+    fn recycle_kept_packet(&mut self) {
         if let Some(packet) = self.kept_packet.take() {
             self.recycle(packet);
         }
-        let Some(inspector) = self.inspector_overlay.take() else {
-            match &self.fps_overlay {
-                Some(fps) => self.dev_overlay.describe(fps),
-                None => self.dev_overlay.clear(),
-            }
-            return;
-        };
-        // The inspector draws over the frame counter, as the last child of
-        // its root: it moves in for the write and back out after.
-        let had_fps = self.fps_overlay.is_some();
-        let mut root = self.fps_overlay.take().unwrap_or_default();
-        root.children.push(RenderNode::Layer(Box::new(inspector)));
-        self.dev_overlay.describe(&root);
-        if let Some(RenderNode::Layer(inspector)) = root.children.pop() {
-            self.inspector_overlay = Some(*inspector);
-        }
-        self.fps_overlay = had_fps.then_some(root);
     }
 
     pub(crate) fn clear_fps_overlay(&mut self) {

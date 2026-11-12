@@ -1,4 +1,4 @@
-use cranpose_ui_graphics::{Brush, Color, DrawPrimitive};
+use cranpose_ui_graphics::{Brush, Color, DrawPrimitive, Point, Size};
 
 use super::*;
 use crate::scene_store::{LayerRef, SceneStore};

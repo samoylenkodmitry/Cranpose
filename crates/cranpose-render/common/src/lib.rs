@@ -19,7 +19,7 @@ pub mod geometry;
 /// Glyph masks and the cache renderers keep them in.
 pub mod glyph_mask;
 pub mod glyph_reach;
-/// The draws a scene holds and the layer tree that describes a scene built by hand.
+/// The draws a scene holds.
 pub mod graph;
 /// The retained scene: its records together with the hit targets built from them.
 pub mod graph_scene;
@@ -40,6 +40,7 @@ pub mod primitive_emit;
 /// Keys of the cached rasters of layers.
 pub mod raster_cache;
 /// Shared cases that every renderer backend is checked against.
+#[cfg(feature = "layer-tree")]
 pub mod render_contract;
 /// 16-bit pixels of the format most small displays take.
 pub mod rgb565;
@@ -374,7 +375,14 @@ pub trait Renderer {
     ///
     /// Passing `None` removes the inspector. Its primitives must not participate
     /// in application hit testing, layout, or accessibility.
-    fn set_inspector_overlay(&mut self, _overlay: Option<graph::LayerNode>) {}
+    fn set_inspector_overlay(&mut self, _overlay: Option<scene_store::OverlayLayer>) {}
+
+    /// Replaces the overlay with the layer tree `overlay` describes, as a
+    /// renderer's tests describe an overlay by hand.
+    ///
+    /// Passing `None` removes the overlay. Default implementation does nothing.
+    #[cfg(feature = "layer-tree")]
+    fn set_overlay_tree(&mut self, _overlay: Option<graph::LayerNode>) {}
 
     /// Tells the renderer that its app held still between the last frame and the next one: the
     /// shell asked the platform for no frame and no update. A renderer that compares frames to

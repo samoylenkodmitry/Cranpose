@@ -1,15 +1,17 @@
 use cranpose_core::NodeId;
 use cranpose_render_common::{
     Renderer,
-    graph::{CachePolicy, LayerNode, ProjectiveTransform},
+    graph::{CachePolicy, DrawPrimitiveNode, LayerNode, PrimitiveNode, ProjectiveTransform},
+    scene_store::OverlayLayer,
 };
 use cranpose_render_wgpu::CapturedFrame;
-use cranpose_ui_graphics::{Color, Rect, Size};
+use cranpose_ui_graphics::{Brush, Color, DrawPrimitive, Point, Rect, Size};
 
 use crate::support;
 
 const FRAME_WIDTH: u32 = 128;
 const FRAME_HEIGHT: u32 = 96;
+const RED: [u8; 4] = [255, 0, 0, 255];
 
 fn shadowed_root_graph(cache_policy: CachePolicy) -> LayerNode {
     let card = Rect {
@@ -180,4 +182,75 @@ fn dev_overlay_packet_renders_over_both_root_kinds() {
     renderer
         .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
         .expect("surface frame with overlay should render");
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn inspector_overlay_draws_its_rectangles_over_the_scene() {
+    let mut renderer = match support::headless_renderer() {
+        Ok(renderer) => renderer,
+        Err(err) => {
+            eprintln!(
+                "skipping inspector overlay assertions because headless WGPU init failed: {err}"
+            );
+            return;
+        }
+    };
+    let frame = Rect {
+        x: 0.0,
+        y: 0.0,
+        width: FRAME_WIDTH as f32,
+        height: FRAME_HEIGHT as f32,
+    };
+    let page = || {
+        support::contract_layer(
+            Some(NodeId(4_300)),
+            CachePolicy::None,
+            frame,
+            ProjectiveTransform::identity(),
+            vec![support::solid_rect(frame, Color(0.1, 0.1, 0.1, 1.0))],
+        )
+    };
+    let panel = Rect {
+        x: 20.0,
+        y: 16.0,
+        width: 60.0,
+        height: 40.0,
+    };
+    renderer.scene_mut().describe(&page());
+    renderer.set_inspector_overlay(Some(OverlayLayer {
+        size: frame.size(),
+        origin: Point::default(),
+        primitives: vec![PrimitiveNode::Draw(Box::new(DrawPrimitiveNode {
+            primitive: DrawPrimitive::Rect {
+                rect: panel,
+                brush: Brush::Solid(Color(1.0, 0.0, 0.0, 1.0)),
+                stroke: None,
+            },
+            clip: None,
+        }))],
+    }));
+    let covered = renderer
+        .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
+        .expect("the frame with the inspector renders");
+    assert_eq!(rgba(&covered, 50, 36), RED);
+    assert_ne!(
+        rgba(&covered, 100, 80),
+        RED,
+        "the page shows past the panel"
+    );
+
+    renderer.set_inspector_overlay(None);
+    renderer.scene_mut().describe(&page());
+    assert_ne!(
+        rgba(
+            &renderer
+                .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
+                .expect("the frame without the inspector renders"),
+            50,
+            36
+        ),
+        RED,
+        "the panel goes with the inspector"
+    );
 }

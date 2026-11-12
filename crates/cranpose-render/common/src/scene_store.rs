@@ -14,6 +14,7 @@ mod layer_props;
 mod layer_ref;
 mod leaf_write;
 mod node_records;
+mod overlay_layer;
 #[cfg(feature = "window-damage")]
 mod own_marks;
 mod placement;
@@ -23,6 +24,7 @@ mod recordings;
 mod records;
 mod shape_chunks;
 mod slab;
+#[cfg(feature = "layer-tree")]
 mod spec;
 mod store;
 mod translated_write;
@@ -42,6 +44,7 @@ pub use layer_props::LayerProps;
 pub use layer_ref::{ItemRef, LayerRef, RecordChanges};
 pub use leaf_write::Leaf;
 use node_records::NodeRecords;
+pub use overlay_layer::OverlayLayer;
 pub use placement::Placement;
 pub use reach::{BLUR_PIXEL_SLACK, Extent, Reach, ShadowCaster};
 #[cfg(feature = "window-damage")]

@@ -1499,7 +1499,7 @@ fn overlay_frame(
     overlay: Option<LayerNode>,
     dot: Color,
 ) -> (FrameDamage, Vec<u8>, Vec<u8>) {
-    renderer.set_inspector_overlay(overlay);
+    renderer.set_overlay_tree(overlay);
     renderer.scene_mut().describe(&page_with_dot(dot));
     let [composed, direct] = images.each_ref().map(|image| {
         renderer

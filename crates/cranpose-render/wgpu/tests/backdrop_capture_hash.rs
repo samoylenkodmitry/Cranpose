@@ -448,15 +448,15 @@ fn overlay_backdrop_tracks_the_root_page_after_cache_warmup() {
     let Some(mut cached) = renderer() else {
         return;
     };
-    cached.set_inspector_overlay(Some(inspector_glass(CachePolicy::Auto)));
+    cached.set_overlay_tree(Some(inspector_glass(CachePolicy::Auto)));
     let warm = capture(&mut cached, &painted_page(Color::RED));
     let _ = capture(&mut cached, &painted_page(Color::RED));
     let updated = capture(&mut cached, &painted_page(Color::BLUE));
 
-    cached.set_inspector_overlay(None);
+    cached.set_overlay_tree(None);
     let plain_blue = capture(&mut cached, &painted_page(Color::BLUE));
     let mut fresh = support::LockedRenderer::beside_locked().expect("reference renderer");
-    fresh.set_inspector_overlay(Some(inspector_glass(CachePolicy::None)));
+    fresh.set_overlay_tree(Some(inspector_glass(CachePolicy::None)));
     let reference = capture(&mut fresh, &painted_page(Color::BLUE));
     let overlay_bounds = Rect {
         x: 16.0,

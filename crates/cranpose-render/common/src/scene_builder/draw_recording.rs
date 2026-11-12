@@ -714,6 +714,7 @@ fn grouped_item(
 // Lowers `commands`, the draw commands of node `node_id` of size `size`,
 // into items of `record` that paint in `phase`, as the scene builder lowers
 // a node's draws: runs, and layers for the draws a `DrawScope` groups.
+#[cfg(feature = "layer-tree")]
 pub(crate) fn draw_command_items(
     store: &mut SceneStore,
     record: RecordId,

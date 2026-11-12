@@ -8,8 +8,7 @@ use cranpose_ui::{Point, Rect, Size};
 
 use super::{Item, ItemKind, RecordFlags, RecordKind, RecordSeed, SceneStore};
 use crate::graph::{
-    InlineNode, LayerNode, PrimitiveNode, PrimitivePhase, ProjectiveTransform, RenderNode,
-    for_each_in_draw_order,
+    InlineNode, LayerNode, PrimitivePhase, ProjectiveTransform, RenderNode, for_each_in_draw_order,
 };
 
 pub(super) fn write_root(store: &mut SceneStore, root: &LayerNode) {
@@ -199,24 +198,16 @@ fn replace(store: &mut SceneStore, old: Option<RecordId>, new: RecordId) -> Item
 }
 
 fn same_draw(store: &SceneStore, item: Item, node: &RenderNode) -> bool {
-    match (item.kind(), node) {
-        (ItemKind::Draw, RenderNode::Primitive(entry)) => {
-            matches!(&entry.node, PrimitiveNode::Draw(draw) if **draw == *store.draw(item))
-        }
-        (ItemKind::Text, RenderNode::Primitive(entry)) => {
-            matches!(&entry.node, PrimitiveNode::Text(text) if **text == *store.text(item))
-        }
-        (ItemKind::Run, RenderNode::DrawRun(run)) => run == store.run(item),
-        _ => false,
+    match node {
+        RenderNode::Primitive(entry) => store.holds(item, &entry.node),
+        RenderNode::DrawRun(run) => item.kind() == ItemKind::Run && run == store.run(item),
+        RenderNode::Layer(_) | RenderNode::Inline(_) => false,
     }
 }
 
 fn add_draw(store: &mut SceneStore, node: &RenderNode) -> Item {
     match node {
-        RenderNode::Primitive(entry) => match &entry.node {
-            PrimitiveNode::Draw(draw) => store.add_draw((**draw).clone()),
-            PrimitiveNode::Text(text) => store.add_text((**text).clone()),
-        },
+        RenderNode::Primitive(entry) => store.add_primitive(&entry.node),
         RenderNode::DrawRun(run) => store.add_run(run.clone()),
         RenderNode::Layer(_) | RenderNode::Inline(_) => {
             unreachable!("a child record is no draw")

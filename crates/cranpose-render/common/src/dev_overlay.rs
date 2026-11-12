@@ -1,11 +1,11 @@
 //! Renderer-drawn dev overlay (fps counter): one shared graph builder so
 //! every backend draws the identical overlay without composition impact.
 
-use cranpose_ui_graphics::{Brush, Color, CornerRadii, DrawPrimitive, Rect, Size};
+use cranpose_ui_graphics::{Brush, Color, CornerRadii, DrawPrimitive, Point, Rect, Size};
 
-use crate::graph::{
-    DrawPrimitiveNode, LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase,
-    ProjectiveTransform, RenderNode, TextPrimitiveNode,
+use crate::{
+    graph::{DrawPrimitiveNode, PrimitiveNode, TextPrimitiveNode},
+    scene_store::OverlayLayer,
 };
 
 /// Cache key for the last-built overlay; rebuilding only on change keeps the
@@ -31,14 +31,23 @@ impl DevOverlayKey {
     }
 }
 
-/// Build the dev-overlay layer: a translucent pill with the stats text, laid
-/// out in `overlay`, in the top-right corner of `viewport`. The layer draws
-/// for no layout node; `node_id` keys its text.
-pub fn build_dev_overlay_layer(
+/// The frame counter's overlay: its layer, and the window it lies in.
+#[derive(Clone, Debug)]
+pub struct FpsOverlay {
+    /// The size of the window the layer lies in, in logical pixels.
+    pub window: Size,
+    /// The pill that holds the stats text.
+    pub layer: OverlayLayer,
+}
+
+/// Build the dev overlay: a translucent pill with the stats text, laid out
+/// in `overlay`, in the top-right corner of `viewport`. The pill draws for
+/// no layout node; `node_id` keys its text.
+pub fn build_fps_overlay(
     overlay: &cranpose_ui::PreparedTextLayout,
     viewport: Size,
     node_id: cranpose_core::NodeId,
-) -> LayerNode {
+) -> FpsOverlay {
     let padding = 8.0;
     let Size {
         width: text_width,
@@ -47,55 +56,46 @@ pub fn build_dev_overlay_layer(
     let x = (viewport.width - text_width - padding * 2.0).max(padding);
     let y = padding;
 
-    let overlay_layer = LayerNode {
-        node_id: None,
+    let layer = OverlayLayer {
         size: Size::new(text_width + padding, text_height + padding / 2.0),
-        transform_to_parent: ProjectiveTransform::translation(x, y),
-        children: vec![
-            RenderNode::Primitive(PrimitiveEntry {
-                phase: PrimitivePhase::BeforeChildren,
-                node: PrimitiveNode::Draw(Box::new(DrawPrimitiveNode {
-                    primitive: DrawPrimitive::RoundRect {
-                        rect: Rect {
-                            x: 0.0,
-                            y: 0.0,
-                            width: text_width + padding,
-                            height: text_height + padding / 2.0,
-                        },
-                        brush: Brush::Solid(Color(0.0, 0.0, 0.0, 0.7)),
-                        radii: CornerRadii::uniform(4.0),
-                        stroke: None,
-                    },
-                    clip: None,
-                })),
-            }),
-            RenderNode::Primitive(PrimitiveEntry {
-                phase: PrimitivePhase::AfterChildren,
-                node: PrimitiveNode::Text(Box::new(TextPrimitiveNode {
-                    node_id,
+        origin: Point::new(x, y),
+        primitives: vec![
+            PrimitiveNode::Draw(Box::new(DrawPrimitiveNode {
+                primitive: DrawPrimitive::RoundRect {
                     rect: Rect {
-                        x: padding / 2.0,
-                        y: padding / 4.0,
-                        width: text_width,
-                        height: text_height,
+                        x: 0.0,
+                        y: 0.0,
+                        width: text_width + padding,
+                        height: text_height + padding / 2.0,
                     },
-                    render_text: overlay.render_text(),
-                    layout: overlay.layout.clone(),
-                    text_style: std::sync::Arc::clone(&overlay.visual_style),
-                    font_size: overlay
-                        .visual_style
-                        .resolve_font_size(cranpose_ui_graphics::DEFAULT_FONT_SIZE),
-                    overflow: cranpose_ui::TextOverflow::Clip,
-                    clip: None,
-                    paint: Default::default(),
-                })),
-            }),
+                    brush: Brush::Solid(Color(0.0, 0.0, 0.0, 0.7)),
+                    radii: CornerRadii::uniform(4.0),
+                    stroke: None,
+                },
+                clip: None,
+            })),
+            PrimitiveNode::Text(Box::new(TextPrimitiveNode {
+                node_id,
+                rect: Rect {
+                    x: padding / 2.0,
+                    y: padding / 4.0,
+                    width: text_width,
+                    height: text_height,
+                },
+                render_text: overlay.render_text(),
+                layout: overlay.layout.clone(),
+                text_style: std::sync::Arc::clone(&overlay.visual_style),
+                font_size: overlay
+                    .visual_style
+                    .resolve_font_size(cranpose_ui_graphics::DEFAULT_FONT_SIZE),
+                overflow: cranpose_ui::TextOverflow::Clip,
+                clip: None,
+                paint: Default::default(),
+            })),
         ],
-        ..Default::default()
     };
-    LayerNode {
-        size: viewport,
-        children: vec![RenderNode::Layer(Box::new(overlay_layer))],
-        ..Default::default()
+    FpsOverlay {
+        window: viewport,
+        layer,
     }
 }

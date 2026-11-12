@@ -1,5 +1,5 @@
 use cranpose_core::{MemoryApplier, NodeId};
-use cranpose_render_common::{Renderer, graph::LayerNode, text_fonts::TextFonts};
+use cranpose_render_common::{Renderer, scene_store::OverlayLayer, text_fonts::TextFonts};
 use cranpose_ui_graphics::Size;
 
 use crate::{PresentBackend, Scene, WgpuRenderer, WgpuRendererError};
@@ -87,13 +87,11 @@ impl Renderer for WgpuRenderer {
         {
             return;
         }
-        self.frontend.fps_overlay = Some(
-            cranpose_render_common::dev_overlay::build_dev_overlay_layer(
-                overlay,
-                viewport,
-                DEV_OVERLAY_NODE_ID,
-            ),
-        );
+        self.frontend.fps_overlay = Some(cranpose_render_common::dev_overlay::build_fps_overlay(
+            overlay,
+            viewport,
+            DEV_OVERLAY_NODE_ID,
+        ));
         self.frontend.dev_overlay_cache = Some(key);
         self.frontend.refresh_dev_overlay();
     }
@@ -118,9 +116,14 @@ impl Renderer for WgpuRenderer {
             .build_while_idle(&renderer.device, &renderer.queue)
     }
 
-    fn set_inspector_overlay(&mut self, overlay: Option<LayerNode>) {
+    fn set_inspector_overlay(&mut self, overlay: Option<OverlayLayer>) {
         self.frontend.inspector_overlay = overlay;
         self.frontend.refresh_dev_overlay();
+    }
+
+    #[cfg(feature = "layer-tree")]
+    fn set_overlay_tree(&mut self, overlay: Option<cranpose_render_common::graph::LayerNode>) {
+        self.frontend.describe_overlay_tree(overlay);
     }
 
     fn needs_frame_warmup(&self) -> bool {

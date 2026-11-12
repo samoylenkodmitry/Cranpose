@@ -1586,6 +1586,7 @@ dependencies = [
  "cranpose-liquid",
  "cranpose-macros",
  "cranpose-render-common",
+ "cranpose-render-wgpu",
  "cranpose-shader-passes",
  "cranpose-text",
  "cranpose-ui",
