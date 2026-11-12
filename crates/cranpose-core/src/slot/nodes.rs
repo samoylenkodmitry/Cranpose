@@ -49,6 +49,7 @@ impl SlotTable {
     }
 
     fn insert_group_node(&mut self, group_index: usize, node_index: usize, node: NodeRecord) {
+        self.note_run_insert();
         self.record_segment_range_update_from(group_index);
         insert_group_segment_item::<NodeSegment, _>(
             &mut self.groups,

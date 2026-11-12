@@ -107,6 +107,7 @@ impl SlotTable {
             return AnchorId::INVALID;
         };
         let generation = self.allocate_group_generation();
+        self.note_run_insert();
         let payload_start = if insert_index < self.groups.len() {
             self.groups[insert_index].payload_start
         } else {

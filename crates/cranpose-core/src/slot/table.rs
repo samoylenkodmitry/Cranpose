@@ -5,6 +5,7 @@ use super::{
 };
 use crate::collections::growth_slack::GrowthSlack;
 
+mod insert_run;
 mod metadata;
 mod mutation;
 mod values;
@@ -49,6 +50,7 @@ pub struct SlotTable {
     pub(super) movables: MovableIndex,
     pub(super) diagnostics: SlotTableDiagnostics,
     stale_group_indexes: metadata::StaleGroupIndexes,
+    insert_run: Option<insert_run::InsertRun>,
     next_group_generation: u32,
 }
 
@@ -65,6 +67,7 @@ impl SlotTable {
             movables: MovableIndex::default(),
             diagnostics: Default::default(),
             stale_group_indexes: metadata::StaleGroupIndexes::default(),
+            insert_run: None,
             next_group_generation: 1,
         }
     }

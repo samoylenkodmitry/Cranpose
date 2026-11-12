@@ -49,6 +49,10 @@ impl SlotTable {
     }
 
     pub(in crate::slot) fn debug_assert_valid_after(&self, operation: &'static str) {
+        // A parked insert run holds the records after it until it ends.
+        if self.insert_run_is_parked() {
+            return;
+        }
         if crate::slot::slot_validation_diagnostics_enabled() {
             if let Err(err) = self.validate() {
                 panic!("slot table invariant violation after {operation}: {err:?}");

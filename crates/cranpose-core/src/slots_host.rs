@@ -387,7 +387,9 @@ impl SlotsHost {
     }
 
     pub(crate) fn abandon_active_pass(&self) {
-        self.inner.borrow_mut().active_pass = None;
+        let mut inner = self.inner.borrow_mut();
+        inner.active_pass = None;
+        inner.table.settle_insert_run();
     }
 
     pub(crate) fn with_write_session<R>(
@@ -437,6 +439,9 @@ impl SlotsHost {
         else {
             return Ok(FinishedSlotPass::default());
         };
+        // A pass that ends with frames still open may hold an insert run;
+        // the checks below read the whole table.
+        table.settle_insert_run();
 
         state.flush_payload_location_refreshes(table);
 

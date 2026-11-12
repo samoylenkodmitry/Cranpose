@@ -74,6 +74,23 @@ impl SlotWriteSession<'_> {
             .open_group_index(frame.group_anchor, frame.group_index)
     }
 
+    // Closes the top frame and returns its group's anchor and index. The
+    // insert run whose root that frame held ends.
+    pub(in crate::slot) fn pop_frame(&mut self) -> Option<(AnchorId, usize)> {
+        let popped = self.state.pop_group_frame()?;
+        if self.state.group_stack.closed_insert_run() {
+            self.end_insert_run();
+        }
+        Some(popped)
+    }
+
+    // Kept out of line, so a frame that closes no run carries none of it.
+    #[cold]
+    #[inline(never)]
+    fn end_insert_run(&mut self) {
+        self.table.settle_insert_run();
+    }
+
     fn discard_stale_group_frames(&mut self) {
         while let Some((group_anchor, group_index)) = self
             .state
@@ -91,7 +108,7 @@ impl SlotWriteSession<'_> {
             log::error!(
                 "slot writer discarded stale group frame before beginning a child for anchor {group_anchor:?}"
             );
-            if self.state.pop_group_frame().is_none() {
+            if self.pop_frame().is_none() {
                 return;
             }
         }
@@ -160,7 +177,7 @@ impl SlotWriteSession<'_> {
             return started;
         }
 
-        while self.state.pop_group_frame().is_some() {}
+        while self.pop_frame().is_some() {}
         let root_insert_index = self.table.group_count();
         self.state.restart_parent_children(root_insert_index);
         let root_anchor = self
@@ -322,8 +339,15 @@ impl SlotWriteSession<'_> {
 
         let resolution = resolution.unwrap_or_else(|| self.resolve_active_child(cursor, key));
         let started = self.materialize_group_at_cursor(cursor, key, resolution);
-        self.open_started_group(started.anchor, cursor.index(), started.kind)
-            .unwrap_or_else(|| self.recover_malformed_group_start(key, started.anchor))
+        let Some(start) = self.open_started_group(started.anchor, cursor.index(), started.kind)
+        else {
+            return self.recover_malformed_group_start(key, started.anchor);
+        };
+        if start.kind == GroupStartKind::Inserted && self.table.open_insert_run(start.group.index())
+        {
+            self.state.group_stack.root_insert_run_at_top();
+        }
+        start
     }
 
     /// Opens the group at the writer's cursor when it is the one `key`
@@ -380,6 +404,9 @@ impl SlotWriteSession<'_> {
             log::error!("slot writer end_group called with an empty group stack");
             return;
         };
+        if self.state.group_stack.closed_insert_run() {
+            self.end_insert_run();
+        }
         let Some(group_index) = self.table.open_group_index(group_anchor, opened_index) else {
             log::error!("slot writer end_group ignored stale group frame anchor {group_anchor:?}");
             return;
@@ -418,6 +445,12 @@ impl SlotWriteSession<'_> {
             log::error!("slot writer skip_and_end_group called with an empty group stack");
             return;
         };
+        // A group skips only once it composed, so it never roots an insert
+        // run, which only a new group's frame does.
+        debug_assert!(
+            !self.state.group_stack.closes_insert_run(),
+            "a skipped group must not close the insert run"
+        );
         let Some(group_index) = self.table.open_group_index(group_anchor, opened_index) else {
             log::error!(
                 "slot writer skip_and_end_group ignored stale group frame anchor {group_anchor:?}"
