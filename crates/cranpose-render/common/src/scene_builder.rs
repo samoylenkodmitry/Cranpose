@@ -323,20 +323,18 @@ fn update_dirty_root(
     nodes: &mut HashMap<NodeId, NodeUpdate>,
     (root, root_id, kind): (RecordId, NodeId, NodeUpdate),
 ) -> Result<GraphChanges, GraphRebuildReason> {
-    if let Some(changes) = try_update_retained_layer(
-        applier,
-        store,
-        root,
-        nodes,
-        kind,
-        Level::Root,
-        TranslateAncestorContext {
-            inherited_motion_context_animated: false,
-            inherited_translated_content_context: false,
-            parent_content_offset: Point::default(),
-            parent_abs: AbsOrigin::ROOT,
-        },
-    ) {
+    let ancestors = TranslateAncestorContext {
+        inherited: Inherited::default(),
+        parent_abs: AbsOrigin::ROOT,
+    };
+    if kind == NodeUpdate::Draws
+        && redraw_retained_layer(applier, store, root, Level::Root, ancestors.inherited)
+    {
+        return Ok(GraphChanges::default());
+    }
+    if let Some(changes) =
+        try_update_retained_layer(applier, store, root, nodes, kind, Level::Root, ancestors)
+    {
         return Ok(changes);
     }
     let hit_graph_dirty = rebuild_tracking_hits(store, root, |store, root| {
@@ -427,11 +425,17 @@ fn climb(applier: &MemoryApplier, node: NodeId, stop: impl Fn(NodeId) -> bool) -
     ClimbEnd::Top
 }
 
+// What the records above a layer pass to it, besides where they lie.
+#[derive(Clone, Copy, Default)]
+struct Inherited {
+    motion_context_animated: bool,
+    translated_content_context: bool,
+    parent_content_offset: Point,
+}
+
 #[derive(Clone, Copy)]
 struct TranslateAncestorContext {
-    inherited_motion_context_animated: bool,
-    inherited_translated_content_context: bool,
-    parent_content_offset: Point,
+    inherited: Inherited,
     parent_abs: AbsOrigin,
 }
 
@@ -472,11 +476,9 @@ fn try_update_retained_layer(
             move_retained_layer(applier, store, layer, ancestors)
                 .or_else(|| translate_tracking_hits(applier, store, layer, dirty_nodes, ancestors))
         }
-        NodeUpdate::Draws if redraw_retained_layer(applier, store, layer, level, ancestors) => {
-            Some(GraphChanges::default())
-        }
         // A translate keeps the layer's graphics layer: one that changed is
-        // lowered again.
+        // lowered again. A draws update that `redraw_retained_layer` could
+        // not take comes here.
         NodeUpdate::Content | NodeUpdate::Draws | NodeUpdate::Moved => {
             translate_tracking_hits(applier, store, layer, dirty_nodes, ancestors)
         }
@@ -489,12 +491,15 @@ fn try_update_retained_layer(
     }
 }
 
+// Records the draws of the node of `container` again around the children its
+// layer keeps. False, with nothing written, when the node changed in more than
+// its draws. It reads no window geometry above the layer.
 fn redraw_retained_layer(
     applier: &MemoryApplier,
     store: &mut SceneStore,
     container: RecordId,
     level: Level,
-    ancestors: TranslateAncestorContext,
+    inherited: Inherited,
 ) -> bool {
     let layer = store.layer(container);
     // The wrapper of a node's outer draws is written with its layer.
@@ -516,7 +521,7 @@ fn redraw_retained_layer(
             container,
             &data.layout_state,
             &data.modifier_slices,
-            ancestors,
+            inherited,
             Wrapping::Bare,
         )
         .is_none()
@@ -559,7 +564,7 @@ fn move_retained_layer(
         store,
         layer,
         placed.position,
-        ancestors.parent_content_offset,
+        ancestors.inherited.parent_content_offset,
     );
     let moved = store.layer(layer);
     if moved.has_origin_sinks() {

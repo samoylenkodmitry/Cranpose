@@ -3,7 +3,7 @@ use cranpose_ui::{Point, Rect};
 use cranpose_ui_graphics::GraphicsLayer;
 
 use super::{
-    AbsOrigin, LowerContext, TranslateAncestorContext, inline_leaf::retext_kept_inline,
+    AbsOrigin, Inherited, LowerContext, TranslateAncestorContext, inline_leaf::retext_kept_inline,
     placing_transform, publish_retained_window_geometry, text_node, translate_layer::PlacedChild,
 };
 use crate::{
@@ -58,10 +58,12 @@ impl TranslateGeometry {
         ancestors: TranslateAncestorContext,
     ) -> TranslateAncestorContext {
         TranslateAncestorContext {
-            inherited_motion_context_animated: container.motion_context_animated(),
-            inherited_translated_content_context: ancestors.inherited_translated_content_context
-                || container.translated_content_context(),
-            parent_content_offset: self.content_offset,
+            inherited: Inherited {
+                motion_context_animated: container.motion_context_animated(),
+                translated_content_context: ancestors.inherited.translated_content_context
+                    || container.translated_content_context(),
+                parent_content_offset: self.content_offset,
+            },
             parent_abs: self.child_abs(),
         }
     }
@@ -140,7 +142,12 @@ fn move_kept_layer(
     position: Point,
     children: TranslateAncestorContext,
 ) {
-    translate_retained_child(store, record, position, children.parent_content_offset);
+    translate_retained_child(
+        store,
+        record,
+        position,
+        children.inherited.parent_content_offset,
+    );
     if store.layer(record).has_origin_sinks() {
         publish_retained_window_geometry(applier, store.layer(record), children.parent_abs);
     }
