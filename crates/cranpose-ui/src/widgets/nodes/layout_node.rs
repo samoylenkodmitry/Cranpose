@@ -831,9 +831,10 @@ impl Node for LayoutNode {
     }
 
     fn remove_child(&mut self, child: NodeId) -> bool {
-        let before = self.children.len();
-        self.children.retain(|&id| id != child);
-        let removed = self.children.len() < before;
+        // A child is listed once, and a child sync removes children from
+        // the last: the search from the end finds it at once.
+        let at = self.children.iter().rposition(|&id| id == child);
+        let removed = at.map(|at| self.children.remove(at)).is_some();
         if removed {
             self.parts.cache().clear();
             self.mark_needs_measure();
