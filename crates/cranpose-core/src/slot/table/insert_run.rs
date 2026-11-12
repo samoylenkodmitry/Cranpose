@@ -7,8 +7,9 @@
 
 use super::{
     super::{
-        CheckedU32Delta, GroupRecord, NodeRecord, checked_u32_delta, checked_usize_to_i64,
+        GroupRecord, NodeRecord, checked_usize_to_i64,
         payload_store::ParkedOrder,
+        segments::{GroupSegment, NodeSegment, PayloadSegment, shift_group_segment_starts_from},
     },
     SlotTable,
     metadata::StaleGroupIndexes,
@@ -50,18 +51,24 @@ struct ParkedTail {
 impl SlotTable {
     // Starts an insert run for the group the writer inserted at
     // `root_index`, when groups follow it and no run is open. `false` when
-    // it started none.
+    // it started none. A group appended at the end, as every group of a
+    // first composition is, returns at the first check.
     #[inline]
     pub(in crate::slot) fn open_insert_run(&mut self, root_index: usize) -> bool {
-        if self.insert_run.is_some() || root_index + 1 >= self.groups.len() {
+        if root_index + 1 >= self.groups.len() || self.insert_run.is_some() {
             return false;
         }
+        self.start_insert_run(root_index);
+        true
+    }
+
+    #[inline(never)]
+    fn start_insert_run(&mut self, root_index: usize) {
         self.insert_run = Some(InsertRun {
             root: self.groups[root_index].anchor,
             root_index,
             tail: RunTail::InPlace { inserts: 0 },
         });
-        true
     }
 
     // Notes a record about to enter the table: the records after an open
@@ -82,7 +89,15 @@ impl SlotTable {
 
     // Ends the open run: the parked records come back after the run's
     // records, which leaves the table whole for any reader.
+    #[inline]
     pub(crate) fn settle_insert_run(&mut self) {
+        if self.insert_run.is_some() {
+            self.end_insert_run();
+        }
+    }
+
+    #[inline(never)]
+    fn end_insert_run(&mut self) {
         if let Some(InsertRun {
             tail: RunTail::Parked(tail),
             ..
@@ -146,54 +161,35 @@ impl SlotTable {
     }
 
     // Puts the parked records back after the run's records and moves their
-    // starts past them, in one pass over the returned groups. Their anchors
-    // trail them by the groups the run added, as after that many inserts;
-    // past the bound on that, the same pass writes them.
+    // starts past them. Their anchors trail them by the groups the run
+    // added, as after that many inserts; past the bound on that, they are
+    // written again.
     #[cold]
     #[inline(never)]
     fn unpark_run_tail(&mut self, mut tail: ParkedTail) {
         let base = self.groups.len();
         let write_indexes =
             !self.note_groups_returned(tail.stale, tail.group_start, base - tail.group_start);
-        if write_indexes {
-            // Only the run's groups hold stale indexes now: write them before
-            // the parked groups return, so no later flush walks those again.
-            self.flush_stale_group_indexes();
-        }
-        let node_delta = start_delta(self.nodes.len(), tail.node_start, "node segment start");
+        let node_delta = start_delta(self.nodes.len(), tail.node_start, NodeSegment::NAME);
         let payload_delta = start_delta(
             self.payloads.len(),
             tail.payload_start,
-            "payload segment start",
+            PayloadSegment::NAME,
         );
         self.groups.append(&mut tail.groups);
         self.nodes.append(&mut tail.nodes);
         self.payloads.append_order(tail.payload_order);
-        for (index, group) in (base..).zip(&mut self.groups[base..]) {
-            group.node_start =
-                checked_u32_delta(group.node_start, node_delta, 0, "node segment start");
-            group.payload_start = checked_u32_delta(
-                group.payload_start,
-                payload_delta,
-                0,
-                "payload segment start",
-            );
-            if write_indexes {
-                self.anchors.move_active(group.anchor, index);
-            }
-        }
+        shift_group_segment_starts_from::<NodeSegment>(&mut self.groups, base, node_delta);
+        shift_group_segment_starts_from::<PayloadSegment>(&mut self.groups, base, payload_delta);
         if write_indexes {
-            self.diagnostics
-                .record_group_index_refresh(self.groups.len() - base);
+            // Writes the run's stale indexes and the returned groups' ones.
+            self.refresh_group_indexes_from(base);
         }
     }
 }
 
 // How far the parked records' starts move: from where they began to the end
 // of the run's records.
-fn start_delta(run_end: usize, parked_start: usize, field: &'static str) -> CheckedU32Delta {
-    CheckedU32Delta::from_i64(
-        checked_usize_to_i64(run_end, field) - checked_usize_to_i64(parked_start, field),
-        field,
-    )
+fn start_delta(run_end: usize, parked_start: usize, field: &'static str) -> i64 {
+    checked_usize_to_i64(run_end, field) - checked_usize_to_i64(parked_start, field)
 }

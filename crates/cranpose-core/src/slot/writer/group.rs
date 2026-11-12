@@ -75,20 +75,6 @@ impl SlotWriteSession<'_> {
             .open_group_index(frame.group_anchor, frame.group_index)
     }
 
-    // Closes the top frame without finishing its body and returns its
-    // group's anchor and index. The insert run its group roots ends.
-    pub(in crate::slot) fn pop_frame(&mut self) -> Option<(AnchorId, usize)> {
-        if self
-            .state
-            .group_stack
-            .last()
-            .is_some_and(GroupFrame::roots_insert_run)
-        {
-            self.table.settle_insert_run();
-        }
-        self.state.pop_group_frame()
-    }
-
     fn discard_stale_group_frames(&mut self) {
         while let Some((group_anchor, group_index)) = self
             .state
@@ -106,7 +92,9 @@ impl SlotWriteSession<'_> {
             log::error!(
                 "slot writer discarded stale group frame before beginning a child for anchor {group_anchor:?}"
             );
-            if self.pop_frame().is_none() {
+            // A frame closed without its body's finish may root the insert run.
+            self.table.settle_insert_run();
+            if self.state.pop_group_frame().is_none() {
                 return;
             }
         }
@@ -175,7 +163,8 @@ impl SlotWriteSession<'_> {
             return started;
         }
 
-        while self.pop_frame().is_some() {}
+        self.table.settle_insert_run();
+        while self.state.pop_group_frame().is_some() {}
         let root_insert_index = self.table.group_count();
         self.state.restart_parent_children(root_insert_index);
         let root_anchor = self
