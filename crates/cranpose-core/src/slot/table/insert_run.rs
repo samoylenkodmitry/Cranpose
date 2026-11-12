@@ -50,31 +50,31 @@ struct ParkedTail {
 
 impl SlotTable {
     // Starts an insert run for the group the writer inserted at
-    // `root_index`, when groups follow it and no run is open. `false` when
-    // it started none. A group appended at the end, as every group of a
-    // first composition is, returns at the first check.
-    #[inline]
+    // `root_index`, before other groups, when no run is open. `false` when
+    // it started none.
     pub(in crate::slot) fn open_insert_run(&mut self, root_index: usize) -> bool {
-        if root_index + 1 >= self.groups.len() || self.insert_run.is_some() {
+        if self.insert_run.is_some() {
             return false;
         }
-        self.start_insert_run(root_index);
-        true
-    }
-
-    #[inline(never)]
-    fn start_insert_run(&mut self, root_index: usize) {
         self.insert_run = Some(InsertRun {
             root: self.groups[root_index].anchor,
             root_index,
             tail: RunTail::InPlace { inserts: 0 },
         });
+        true
     }
 
     // Notes a record about to enter the table: the records after an open
     // run's subtree leave once its inserts reach `PARK_AFTER_INSERTS`.
     #[inline]
     pub(in crate::slot) fn note_run_insert(&mut self) {
+        if self.insert_run.is_some() {
+            self.count_run_insert();
+        }
+    }
+
+    #[inline(never)]
+    fn count_run_insert(&mut self) {
         if let Some(InsertRun {
             tail: RunTail::InPlace { inserts },
             ..
