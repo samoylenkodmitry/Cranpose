@@ -259,12 +259,14 @@ fn update_dirty_nodes(
     // the nearest node above it that the store draws.
     if !nodes.is_empty() {
         name_drawn_ancestors(applier, store, nodes, ancestors);
+    }
+    if !nodes.is_empty() {
         changes |= match update_named_nodes(applier, store, nodes, order) {
             Ok(changes) => changes,
             Err(reason) => return GraphUpdateReport::needs_rebuild(reason),
         };
+        nodes.retain(|&node, _| is_drawn(applier, node));
     }
-    nodes.retain(|&node, _| is_drawn(applier, node));
     if nodes.is_empty() {
         GraphUpdateReport::patched(changes)
     } else {
@@ -334,8 +336,9 @@ fn update_dirty_root(
 }
 
 // Names in place of each node in `nodes` that the store holds no record of
-// the nearest node above it that the store draws, with new content.
-// `ancestors` is room for those.
+// the nearest node above it that the store draws, with new content, and
+// drops those a subcompose node above keeps inactive, which draw nothing.
+// `ancestors` is room for the nodes named.
 fn name_drawn_ancestors(
     applier: &MemoryApplier,
     store: &SceneStore,
@@ -347,27 +350,20 @@ fn name_drawn_ancestors(
         if store.record_of(node).is_some() {
             return true;
         }
-        let Some(ancestor) = drawn_ancestor(applier, store, node) else {
-            return true;
-        };
-        ancestors.push(ancestor);
-        false
+        match climb(applier, node, |above| store.record_of(above).is_some()) {
+            ClimbEnd::Stop(ancestor) => {
+                ancestors.push(ancestor);
+                false
+            }
+            ClimbEnd::Inactive => false,
+            ClimbEnd::Top => true,
+        }
     });
     for &ancestor in ancestors.iter() {
         nodes
             .entry(ancestor)
             .and_modify(|kind| *kind = kind.merge(NodeUpdate::Content))
             .or_insert(NodeUpdate::Content);
-    }
-}
-
-// The nearest node above `node` that the store draws. `None` when a
-// subcompose node above keeps `node` among its inactive children, or no node
-// above is drawn.
-fn drawn_ancestor(applier: &MemoryApplier, store: &SceneStore, node: NodeId) -> Option<NodeId> {
-    match climb(applier, node, |above| store.record_of(above).is_some()) {
-        ClimbEnd::Stop(ancestor) => Some(ancestor),
-        ClimbEnd::Inactive | ClimbEnd::Top => None,
     }
 }
 
