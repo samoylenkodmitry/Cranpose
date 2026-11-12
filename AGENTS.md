@@ -39,6 +39,8 @@ Performance rules:
 - Benchmark on the slowest shipped device against the last release before merging. Desktop numbers do not count.
 - Amplify every loss you spot: build a bench layout that makes the loss large, then work on it with that layout. Add the layout to the benches and the nightly, so a regression of the same kind shows at once.
 - Keep every test, benchmark and device run as short as physically possible. Alternate A and B, read the result after each pair, and stop as soon as it clearly shows the answer: a difference well past the noise, or clearly no difference. Never run long fixed batches.
+- Measuring and housekeeping take at most a fifth of the work; design and code take the rest. A measure lasts at most two minutes and runs once: no repeat and no loop once its first result answers.
+- A tracking issue holds decisions and current state, one number for each claim. Run logs and tables of readings stay in evidence files.
 - Benchmarks measure each launch from its start, warm-up included, over the same span for every subject, and keep the fps of every second of the run. Every graph shows those seconds; no data is dropped or hidden, and frameworks are compared on the same full runs. Every report shows each subject's first start after install (its data and caches cleared) and its second start apart, for every framework, case and metric.
 - When moving work between CPU, GPU or threads, measure the unit that bounds that device.
 - Gate every new shader or per-frame feature so code that does not use it compiles or skips it out. Compare malioc registers and cycles per variant.

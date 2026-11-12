@@ -161,8 +161,8 @@ impl MusicPlayer {
         // render inside the call that starts it, as Web Audio does, and a
         // synth that renders first writes its old clock over the player's.
         self.tell_all();
-        let mut device = self.inner.device.borrow_mut();
-        *device = match device.take() {
+        let device = self.inner.device.borrow_mut().take();
+        let woken = match device {
             Some(Device::Waiting(synth)) => match (self.inner.output.0)(synth) {
                 Ok(sink) => Some(Device::Open(sink)),
                 Err(error) => {
@@ -176,18 +176,20 @@ impl MusicPlayer {
             }
             other => other,
         };
+        *self.inner.device.borrow_mut() = woken;
     }
 
     // Stops the output device until the next sound. The clock stops with it.
     pub fn rest(&self) {
-        let mut device = self.inner.device.borrow_mut();
-        *device = match device.take() {
+        let device = self.inner.device.borrow_mut().take();
+        let resting = match device {
             Some(Device::Open(sink)) => {
                 sink.suspend();
                 Some(Device::Resting(sink))
             }
             other => other,
         };
+        *self.inner.device.borrow_mut() = resting;
     }
 
     // Why the player makes no sound, when the platform gave it no device.
