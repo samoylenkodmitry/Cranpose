@@ -25,17 +25,27 @@ pub(in crate::slot) struct GroupFrame {
     pub(in crate::slot) keys: FrameKeyState,
     pub(in crate::slot) sibling_index: Option<SiblingIndex>,
     pub(in crate::slot) body_finished: bool,
-    skip_end: Option<usize>,
+    body: FrameBody,
     pub(in crate::slot) fold_watermark: usize,
+}
+
+// What the frame's body does besides composing the group's content. The
+// body's finish reads it for every group, so a run's root costs the other
+// groups nothing.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(in crate::slot) enum FrameBody {
+    Runs,
+    // The body skipped to the end of the group, at this child index.
+    Skipped { end: usize },
+    // The body runs, and the group roots the table's insert run, which ends
+    // when the body finishes.
+    RootsInsertRun,
 }
 
 #[derive(Default)]
 pub(in crate::slot) struct GroupFrameStack {
     frames: Vec<GroupFrame>,
     depth: usize,
-    // The depth of the frame whose group roots the table's insert run, 0
-    // without one: the run ends when that frame closes.
-    run_depth: usize,
 }
 
 impl GroupFrameStack {
@@ -56,27 +66,6 @@ impl GroupFrameStack {
     pub(in crate::slot) fn pop(&mut self) -> Option<&GroupFrame> {
         self.depth = self.depth.checked_sub(1)?;
         self.frames.get(self.depth)
-    }
-
-    // Marks the top frame as the root of the table's insert run.
-    pub(in crate::slot) fn root_insert_run_at_top(&mut self) {
-        self.run_depth = self.depth;
-    }
-
-    // Whether the last pop closed the insert run's root frame, which ends
-    // the run.
-    #[inline]
-    pub(in crate::slot) fn closed_insert_run(&mut self) -> bool {
-        if self.closes_insert_run() {
-            self.run_depth = 0;
-            return true;
-        }
-        false
-    }
-
-    #[inline]
-    pub(in crate::slot) fn closes_insert_run(&self) -> bool {
-        self.depth < self.run_depth
     }
 
     pub(in crate::slot) fn last(&self) -> Option<&GroupFrame> {
@@ -107,7 +96,6 @@ impl GroupFrameStack {
 
     pub(in crate::slot) fn clear(&mut self) {
         self.depth = 0;
-        self.run_depth = 0;
     }
 }
 
@@ -148,7 +136,7 @@ impl Default for GroupFrame {
             keys: FrameKeyState::default(),
             sibling_index: None,
             body_finished: false,
-            skip_end: None,
+            body: FrameBody::Runs,
             fold_watermark: 0,
         }
     }
@@ -173,7 +161,7 @@ impl GroupFrame {
         self.keys.clear();
         self.sibling_index = None;
         self.body_finished = false;
-        self.skip_end = None;
+        self.body = FrameBody::Runs;
         self.fold_watermark = 0;
     }
 
@@ -194,18 +182,33 @@ impl GroupFrame {
     }
 
     pub(in crate::slot) fn skip_to_existing_group_end(&mut self, end: usize) {
+        debug_assert!(
+            !self.roots_insert_run(),
+            "a new group has no content to skip to"
+        );
         self.next_child_index = end;
         self.payload_cursor = self.old_payload_len;
         self.node_cursor = self.old_node_len;
-        self.skip_end = Some(end);
+        self.body = FrameBody::Skipped { end };
     }
 
-    pub(in crate::slot) fn was_skipped(&self) -> bool {
-        self.skip_end.is_some()
+    pub(in crate::slot) fn root_insert_run(&mut self) {
+        self.body = FrameBody::RootsInsertRun;
+    }
+
+    pub(in crate::slot) fn roots_insert_run(&self) -> bool {
+        self.body == FrameBody::RootsInsertRun
+    }
+
+    pub(in crate::slot) fn body(&self) -> FrameBody {
+        self.body
     }
 
     pub(in crate::slot) fn untouched_since_skip(&self) -> bool {
-        self.skip_end == Some(self.next_child_index)
+        self.body
+            == FrameBody::Skipped {
+                end: self.next_child_index,
+            }
             && self.payload_cursor == self.old_payload_len
             && self.node_cursor == self.old_node_len
     }
