@@ -1,7 +1,7 @@
 use cranpose_render_common::render_contract::{
     ALL_SHARED_RENDER_CASES, RenderedFrame, SharedRenderCase,
 };
-use cranpose_render_pixels::{Scene, draw_scene};
+use cranpose_render_pixels::draw_scene;
 
 #[test]
 fn pixels_warning_state_is_scene_owned() {
@@ -43,10 +43,10 @@ fn pixels_renderer_matches_shared_render_contracts() {
     for case in ALL_SHARED_RENDER_CASES {
         let mut frames = Vec::new();
         for fixture in case.fixtures() {
-            let mut scene = Scene::new();
-            scene.replace_store(fixture.store);
             let mut frame = vec![0u8; (fixture.width * fixture.height * 4) as usize];
-            app_context.enter(|| draw_scene(&mut frame, fixture.width, fixture.height, &scene));
+            app_context.enter(|| {
+                draw_scene(&mut frame, fixture.width, fixture.height, &fixture.scene);
+            });
             frames.push(RenderedFrame {
                 width: fixture.width,
                 height: fixture.height,
@@ -67,10 +67,10 @@ fn pixels_renderer_matches_shared_stroke_and_arc_contracts() {
     ] {
         let mut frames = Vec::new();
         for fixture in case.fixtures() {
-            let mut scene = Scene::new();
-            scene.replace_store(fixture.store);
             let mut frame = vec![0u8; (fixture.width * fixture.height * 4) as usize];
-            app_context.enter(|| draw_scene(&mut frame, fixture.width, fixture.height, &scene));
+            app_context.enter(|| {
+                draw_scene(&mut frame, fixture.width, fixture.height, &fixture.scene);
+            });
             frames.push(RenderedFrame {
                 width: fixture.width,
                 height: fixture.height,

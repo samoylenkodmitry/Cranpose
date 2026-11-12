@@ -18,9 +18,9 @@ use super::{
 };
 use crate::{
     graph::PrimitivePhase,
+    graph_scene::Scene,
     image_compare::{pixel_difference, sample_pixel},
-    scene_builder::{WalkMemory, draw_command_items, rebuild_from_applier},
-    scene_store::SceneStore,
+    scene_builder::draw_command_items,
 };
 
 const CELL: f32 = 60.0;
@@ -296,16 +296,14 @@ pub(super) fn painted_groups_fixture() -> RenderFixture {
     applier
         .compute_layout(root, size)
         .expect("the composition lays out");
-    let mut store = SceneStore::new();
-    assert!(
-        rebuild_from_applier(&applier, root, &mut store, &mut WalkMemory::default()),
-        "the composition draws"
-    );
+    let mut scene = Scene::new();
+    scene.rebuild_from_applier(&applier, root);
     applier.clear_runtime_handle();
+    assert!(scene.root_layer().is_some(), "the composition draws");
     RenderFixture {
         width: PAINTED_WIDTH,
         height: PAINTED_HEIGHT,
-        store,
+        scene,
         normalized_rect: None,
     }
 }

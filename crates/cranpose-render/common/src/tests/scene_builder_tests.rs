@@ -657,14 +657,13 @@ fn cached_hashes(layer: LayerRef<'_>, path: &str, out: &mut Vec<(String, Option<
     }
 }
 
-// The hashes an update left in `graph` equal those worked out again from
-// the same records.
-fn assert_dirty_hash_road_matches_full_walk(graph: &Built) {
+// The hashes an update left in `graph` equal those of a scene built again
+// from the same layout tree.
+fn assert_dirty_hash_road_matches_full_walk(graph: &Built, fresh: &Built) {
     let mut kept = Vec::new();
     cached_hashes(root_of(&graph.store), "root", &mut kept);
-    graph.store.forget_hashes();
     let mut worked_out = Vec::new();
-    cached_hashes(root_of(&graph.store), "root", &mut worked_out);
+    cached_hashes(root_of(&fresh.store), "root", &mut worked_out);
     assert_eq!(kept, worked_out, "target content hashes by record path");
 }
 
@@ -728,7 +727,7 @@ fn dirty_update_leaves_the_hashes_a_full_walk_leaves() {
         .compute_layout(root, viewport)
         .expect("initial layout");
     let mut graph = built(&applier, root).expect("initial graph");
-    assert_dirty_hash_road_matches_full_walk(&graph);
+    assert_dirty_hash_road_matches_full_walk(&graph, &built(&applier, root).expect("fresh graph"));
     applier.clear_runtime_handle();
     drop(applier);
 
@@ -759,7 +758,7 @@ fn dirty_update_leaves_the_hashes_a_full_walk_leaves() {
         "dirty child update should apply in place, got {:?}",
         report.update
     );
-    assert_dirty_hash_road_matches_full_walk(&graph);
+    assert_dirty_hash_road_matches_full_walk(&graph, &built(&applier, root).expect("fresh graph"));
 }
 
 #[test]
@@ -847,7 +846,7 @@ fn dirty_update_with_a_new_row_leaves_the_hashes_a_full_walk_leaves() {
         labels.iter().any(|label| label == "row 2"),
         "the new row must be in the patched graph, got {labels:?}"
     );
-    assert_dirty_hash_road_matches_full_walk(&graph);
+    assert_dirty_hash_road_matches_full_walk(&graph, &built(&applier, root).expect("fresh graph"));
 }
 
 #[test]
@@ -989,7 +988,7 @@ fn scrolled_list_under_a_composited_layer_keeps_the_hashes_a_full_walk_leaves() 
         "scroll update should apply in place, got {:?}",
         report.update
     );
-    assert_dirty_hash_road_matches_full_walk(&graph);
+    assert_dirty_hash_road_matches_full_walk(&graph, &built(&applier, root).expect("fresh graph"));
 }
 
 #[test]
@@ -1063,7 +1062,7 @@ fn update_graph_from_applier_refreshes_scroll_content_offset() {
         updated_target_top < initial_target_top - consumed_scroll * 0.75,
         "partial graph update must refresh scroll content offset: initial_y={initial_target_top} updated_y={updated_target_top} dirty_nodes={dirty_nodes:?}"
     );
-    assert_dirty_hash_road_matches_full_walk(&graph);
+    assert_dirty_hash_road_matches_full_walk(&graph, &built(&applier, root).expect("fresh graph"));
 }
 
 #[test]
@@ -1128,7 +1127,7 @@ fn an_overmarked_ancestor_chain_over_a_scroll_moves_the_rows() {
         updated_row_top < initial_row_top - consumed_scroll * 0.75,
         "the translation must land through the chain: initial_y={initial_row_top} updated_y={updated_row_top}"
     );
-    assert_dirty_hash_road_matches_full_walk(&graph);
+    assert_dirty_hash_road_matches_full_walk(&graph, &built(&applier, root).expect("fresh graph"));
 }
 
 #[test]
@@ -1192,7 +1191,7 @@ fn a_scrolled_container_moves_each_clean_row_by_the_scroll() {
             "row {index} did not follow the scroll: initial_y={initial_row_top} updated_y={updated_row_top}"
         );
     }
-    assert_dirty_hash_road_matches_full_walk(&graph);
+    assert_dirty_hash_road_matches_full_walk(&graph, &built(&applier, root).expect("fresh graph"));
 }
 
 #[test]
@@ -1311,7 +1310,7 @@ fn assert_shadowed_scroll_reuses_children(wrapped_root: bool) {
         .filter(|layer| layer.wraps().is_some())
         .count();
     assert_eq!(wrappers, 12, "every row keeps exactly one wrapper");
-    assert_dirty_hash_road_matches_full_walk(&graph);
+    assert_dirty_hash_road_matches_full_walk(&graph, &built(&applier, root).expect("fresh graph"));
     let fresh = built(&applier, root).expect("fresh graph");
     applier.clear_runtime_handle();
     let hashes = |layer: LayerRef<'_>| (layer.target_content_hash(), layer.effect_hash());
@@ -1366,7 +1365,7 @@ fn assert_shadowed_scroll_reuses_children(wrapped_root: bool) {
         collect_text_tops(graph.root_layer().expect("a scene")),
         collect_text_tops(fresh.root_layer().expect("a scene"))
     );
-    assert_dirty_hash_road_matches_full_walk(&graph);
+    assert_dirty_hash_road_matches_full_walk(&graph, &built(&applier, root).expect("fresh graph"));
 }
 
 fn take_redraw_nodes(applier: &mut MemoryApplier, node: NodeId, out: &mut Vec<NodeId>) {
@@ -1481,7 +1480,7 @@ fn a_sliding_lazy_window_shows_what_a_fresh_build_shows() {
         "the retained rows must move with the scroll: \
          initial_y={initial_row_top} updated_y={updated_row_top}"
     );
-    assert_dirty_hash_road_matches_full_walk(&graph);
+    assert_dirty_hash_road_matches_full_walk(&graph, &built(&applier, root).expect("fresh graph"));
 }
 
 fn collect_layer_origins(layer: LayerRef<'_>) -> Vec<(Option<NodeId>, Option<NodeId>, Point)> {
@@ -3243,6 +3242,8 @@ fn nested_label_composition(
             Modifier::empty().size_points(240.0, 200.0),
             ColumnSpec::default(),
             move || {
+                // Above the padded box, so the box's growth moves no sibling.
+                Text("stable", Modifier::empty(), TextStyle::default());
                 let leaf = Rc::new(RefCell::new(None));
                 let leaf_seen = Rc::clone(&leaf);
                 let padded = cranpose_ui::Box(
@@ -3270,7 +3271,6 @@ fn nested_label_composition(
                         );
                     },
                 );
-                Text("stable", Modifier::empty(), TextStyle::default());
                 if let Some(leaf) = *leaf.borrow() {
                     *ids.borrow_mut() = Some((padded, leaf));
                 }
@@ -3350,7 +3350,7 @@ fn a_node_changed_alone_frame_after_frame_updates_as_a_walk_from_the_root_does()
             find_layer_origin(fresh.root_layer().expect("a scene"), leaf),
             "frame {text}/{pad}: the text sits where a fresh scene puts it"
         );
-        assert_dirty_hash_road_matches_full_walk(&graph);
+        assert_dirty_hash_road_matches_full_walk(&graph, &fresh);
     }
 }
 
@@ -3418,7 +3418,7 @@ fn the_same_dirty_nodes_frame_after_frame_update_as_a_fresh_scene_does() {
             find_layer_origin(fresh.root_layer().expect("a scene"), leaf),
             "frame {text}/{pad}: the text sits where a fresh scene puts it"
         );
-        assert_dirty_hash_road_matches_full_walk(&graph);
+        assert_dirty_hash_road_matches_full_walk(&graph, &fresh);
     }
 }
 

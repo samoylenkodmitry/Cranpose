@@ -11517,8 +11517,8 @@ struct ObservedRowStates {
     tick: MutableState<u32>,
 }
 
-// A renderer that hands its scene a store built from scratch on every
-// update, so its scene cannot tell which nodes it stopped drawing.
+// A renderer that clears its scene before every rebuild, so its scene
+// cannot tell which nodes it stopped drawing.
 struct RebuildingRenderer {
     scene: graph_scene::Scene,
     rebuilds: Rc<Cell<usize>>,
@@ -11537,9 +11537,8 @@ impl Renderer for RebuildingRenderer {
         _viewport: Size,
     ) -> Result<(), Self::Error> {
         self.rebuilds.set(self.rebuilds.get() + 1);
-        let store =
-            cranpose_render_common::scene_builder::build_from_applier(applier, root).ok_or(())?;
-        self.scene.replace_store(store);
+        self.scene.clear();
+        self.scene.rebuild_from_applier(applier, root);
         Ok(())
     }
 }
@@ -11592,11 +11591,11 @@ fn a_row_scrolled_away_asks_for_no_redraw_of_what_it_read() {
     );
 }
 
-// A scene handed a store built from scratch cannot tell which nodes it
-// stopped drawing: the observations of a row scrolled away stay until a full
-// prune, which comes `OBSERVATION_PRUNE_INTERVAL` frames after.
+// A scene cleared before a rebuild cannot tell which nodes it stopped
+// drawing: the observations of a row scrolled away stay until a full prune,
+// which comes `OBSERVATION_PRUNE_INTERVAL` frames after.
 #[test]
-fn a_scene_built_from_scratch_retires_observations_in_a_full_prune() {
+fn a_cleared_scene_retires_observations_in_a_full_prune() {
     let _guard = test_guard();
     let root_key = location_key(file!(), line!(), column!());
     let states = Rc::new(RefCell::new(None));

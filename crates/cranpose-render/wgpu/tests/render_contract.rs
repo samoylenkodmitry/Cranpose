@@ -84,7 +84,7 @@ fn wgpu_renderer_matches_shared_render_contracts() {
     for case in ALL_SHARED_RENDER_CASES {
         let mut frames = Vec::new();
         for fixture in case.fixtures() {
-            renderer.scene_mut().replace_store(fixture.store);
+            *renderer.scene_mut() = fixture.scene;
             let frame = renderer
                 .capture_frame(fixture.width, fixture.height)
                 .unwrap_or_else(|err| {
@@ -122,7 +122,7 @@ fn wgpu_renderer_matches_shared_stroke_and_arc_contracts() {
     ] {
         let mut frames = Vec::new();
         for fixture in case.fixtures() {
-            renderer.scene_mut().replace_store(fixture.store);
+            *renderer.scene_mut() = fixture.scene;
             let frame = renderer
                 .capture_frame(fixture.width, fixture.height)
                 .unwrap_or_else(|err| {

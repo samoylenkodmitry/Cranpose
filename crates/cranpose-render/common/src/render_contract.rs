@@ -8,6 +8,7 @@ use crate::{
         DrawPrimitiveNode, LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase,
         ProjectiveTransform, RenderNode,
     },
+    graph_scene::Scene,
     image_compare::{
         image_difference_stats, normalize_rgba_region, pixel_difference, sample_pixel,
     },
@@ -39,8 +40,8 @@ pub struct RenderFixture {
     pub width: u32,
     /// Frame height in pixels.
     pub height: u32,
-    /// The records to render.
-    pub store: SceneStore,
+    /// The scene to render.
+    pub scene: Scene,
     /// Region of the frame, in pixels, to resample to a fixed size before frames are compared, or
     /// `None` when frames are compared at their rendered size.
     pub normalized_rect: Option<Rect>,
@@ -364,7 +365,7 @@ fn build_fixture(width: u32, height: u32, children: Vec<RenderNode>) -> RenderFi
     RenderFixture {
         width,
         height,
-        store: SceneStore::from_layer(&graph_layer(
+        scene: described(&graph_layer(
             bounds.size(),
             ProjectiveTransform::identity(),
             with_background(bounds, children),
@@ -381,15 +382,20 @@ fn build_fixture_with(
     write: impl FnOnce(&mut SceneStore, cranpose_core::RecordId) -> Vec<Item>,
 ) -> RenderFixture {
     let mut fixture = build_fixture(width, height, Vec::new());
-    let store = &mut fixture.store;
-    store.begin_update();
-    let root = store.root().expect("a fixture has a root");
-    let mut items = store.items(root).to_vec();
-    items.extend(write(store, root));
-    store.write_items(root, &items);
-    store.note_content_change(root);
-    store.finish_update();
+    fixture.scene.edit_store(|store| {
+        let root = store.root().expect("a fixture has a root");
+        let mut items = store.items(root).to_vec();
+        items.extend(write(store, root));
+        store.write_items(root, &items);
+        store.note_content_change(root);
+    });
     fixture
+}
+
+fn described(root: &LayerNode) -> Scene {
+    let mut scene = Scene::new();
+    scene.describe(root);
+    scene
 }
 
 fn build_translated_fixture(
@@ -434,7 +440,7 @@ fn build_translated_fixture_with_context(
     RenderFixture {
         width,
         height,
-        store: SceneStore::from_layer(&graph_layer(
+        scene: described(&graph_layer(
             bounds.size(),
             ProjectiveTransform::identity(),
             with_background(bounds, vec![RenderNode::Layer(Box::new(subtree))]),

@@ -5,9 +5,8 @@ use cranpose_core::{MutableState, location_key, rememberMutableStateOf};
 use cranpose_render_common::{
     Renderer,
     graph::{DrawRunNode, LayerNode, PrimitivePhase, RenderNode},
-    scene_store::SceneStore,
 };
-use cranpose_render_wgpu::{CapturedFrame, WgpuRenderer};
+use cranpose_render_wgpu::{CapturedFrame, Scene, WgpuRenderer};
 use cranpose_ui::{
     Alignment, Canvas, Color, Modifier, Size, composable,
     widgets::{Box, BoxSpec},
@@ -144,13 +143,10 @@ fn settled_capture(shell: &mut AppShell<WgpuRenderer>) -> CapturedFrame {
 }
 
 fn capture_reference_graph(shell: &mut AppShell<WgpuRenderer>, graph: &LayerNode) -> CapturedFrame {
-    let original = shell
-        .renderer()
-        .scene_mut()
-        .replace_store(SceneStore::new());
+    let original = std::mem::replace(shell.renderer().scene_mut(), Scene::new());
     shell.renderer().scene_mut().describe(graph);
     let captured = settled_capture(shell);
-    shell.renderer().scene_mut().replace_store(original);
+    *shell.renderer().scene_mut() = original;
     captured
 }
 

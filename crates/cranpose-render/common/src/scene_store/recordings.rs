@@ -12,13 +12,12 @@ use cranpose_ui_graphics::{CommandRecording, FxHashMap};
 
 use crate::graph::DrawCommandId;
 
-#[derive(Clone, Default)]
+#[derive(Default)]
 pub(crate) struct Recordings {
     slots: FxHashMap<RecorderKey, RecorderSlot>,
     update: u64,
 }
 
-#[derive(Clone)]
 struct RecorderSlot {
     // The update that last recorded the command or let go of its run.
     update: u64,

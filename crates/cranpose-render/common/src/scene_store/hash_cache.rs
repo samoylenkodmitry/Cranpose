@@ -26,11 +26,6 @@ impl HashCache {
         }
     }
 
-    #[cfg(test)]
-    pub(super) fn forget_all(&self) {
-        self.entries.borrow_mut().clear();
-    }
-
     // The hashes of the record at `index`, whose subtree revision is
     // `subtree_rev`, worked out by `work_out` when the cache holds none of
     // that revision. `work_out` asks for the hashes of the records beneath,

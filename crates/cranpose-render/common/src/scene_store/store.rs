@@ -449,13 +449,6 @@ impl SceneStore {
         }
     }
 
-    // Forgets the hashes the records keep, so that they are worked out again
-    // when asked for.
-    #[cfg(test)]
-    pub(crate) fn forget_hashes(&self) {
-        self.hashes.forget_all();
-    }
-
     /// The record `id` as its readers see it.
     #[inline]
     pub fn layer(&self, id: RecordId) -> LayerRef<'_> {

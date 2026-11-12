@@ -663,15 +663,6 @@ impl Scene {
         self.layer_moves += 1;
     }
 
-    /// Puts `store` in place of the scene's records and returns the records
-    /// it held. The hit targets follow it.
-    pub fn replace_store(&mut self, store: SceneStore) -> SceneStore {
-        self.walk = WalkMemory::default();
-        self.hits.get_mut().stale = true;
-        self.layer_moves += 1;
-        std::mem::replace(&mut self.store, store)
-    }
-
     /// Runs `edit` on the scene's records in a new update. The hit targets
     /// follow them.
     pub fn edit_store(&mut self, edit: impl FnOnce(&mut SceneStore)) {
