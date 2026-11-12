@@ -27,6 +27,9 @@ mod snapshot_runtime_thread_isolation;
 mod stage_times;
 mod state_hooks;
 mod static_locals;
+mod subtree_inserts;
 mod task_wakes;
+#[path = "support/tracked_parent.rs"]
+mod tracked_parent;
 mod value_slot_handle_ui;
 mod worker_jobs;

@@ -33,6 +33,9 @@ pub(in crate::slot) struct GroupFrame {
 pub(in crate::slot) struct GroupFrameStack {
     frames: Vec<GroupFrame>,
     depth: usize,
+    // The depth of the frame whose group roots the table's insert run, 0
+    // without one: the run ends when that frame closes.
+    run_depth: usize,
 }
 
 impl GroupFrameStack {
@@ -53,6 +56,27 @@ impl GroupFrameStack {
     pub(in crate::slot) fn pop(&mut self) -> Option<&GroupFrame> {
         self.depth = self.depth.checked_sub(1)?;
         self.frames.get(self.depth)
+    }
+
+    // Marks the top frame as the root of the table's insert run.
+    pub(in crate::slot) fn root_insert_run_at_top(&mut self) {
+        self.run_depth = self.depth;
+    }
+
+    // Whether the last pop closed the insert run's root frame, which ends
+    // the run.
+    #[inline]
+    pub(in crate::slot) fn closed_insert_run(&mut self) -> bool {
+        if self.closes_insert_run() {
+            self.run_depth = 0;
+            return true;
+        }
+        false
+    }
+
+    #[inline]
+    pub(in crate::slot) fn closes_insert_run(&self) -> bool {
+        self.depth < self.run_depth
     }
 
     pub(in crate::slot) fn last(&self) -> Option<&GroupFrame> {
@@ -83,6 +107,7 @@ impl GroupFrameStack {
 
     pub(in crate::slot) fn clear(&mut self) {
         self.depth = 0;
+        self.run_depth = 0;
     }
 }
 

@@ -73,6 +73,43 @@ impl SlotTable {
         }
     }
 
+    // The stale indexes as they stand, which an insert run keeps while it
+    // holds the groups after it aside.
+    pub(in crate::slot) fn stale_group_indexes(&self) -> StaleGroupIndexes {
+        self.stale_group_indexes
+    }
+
+    // Notes the groups an insert run held aside back in the table `count`
+    // places past `start`, where they left, their anchors as they were then:
+    // `when_parked` held for them. `false` notes nothing when their indexes
+    // would trail too far, and the caller writes them.
+    pub(in crate::slot) fn note_groups_returned(
+        &mut self,
+        when_parked: StaleGroupIndexes,
+        start: usize,
+        count: usize,
+    ) -> bool {
+        let (from, trail) = if when_parked.inserts == 0 {
+            (start, count)
+        } else {
+            (when_parked.from, when_parked.inserts + count)
+        };
+        let stale = &mut self.stale_group_indexes;
+        let inserts = stale.inserts.max(trail);
+        if inserts >= MAX_STALE_GROUP_INSERTS {
+            return false;
+        }
+        if trail > 0 {
+            stale.from = if stale.inserts == 0 {
+                from
+            } else {
+                stale.from.min(from)
+            };
+            stale.inserts = inserts;
+        }
+        true
+    }
+
     /// Writes the indexes inserts left stale, before any other change moves
     /// groups.
     #[inline]

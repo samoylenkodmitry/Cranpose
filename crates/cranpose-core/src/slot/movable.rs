@@ -71,9 +71,11 @@ impl SlotTable {
 
     /// Whether this table currently holds the movable's content.
     pub(crate) fn movable_is_attached(&self, id: Key) -> bool {
+        // The anchor's state answers without the group, which an insert run
+        // of this table may hold aside while another table composes.
         self.movables
             .anchor(id)
-            .is_some_and(|anchor| self.active_group_index(anchor).is_some())
+            .is_some_and(|anchor| self.anchors.active_index(anchor).is_some())
     }
 
     /// Whether this table issued the anchors a detached subtree carries.
@@ -134,10 +136,12 @@ impl SlotTable {
 }
 
 impl SlotWriteSession<'_> {
-    pub(crate) fn movable_attached_elsewhere(&self, key: GroupKey) -> bool {
+    pub(crate) fn movable_attached_elsewhere(&mut self, key: GroupKey) -> bool {
         let Some(id) = key.movable_id() else {
             return false;
         };
+        // The content may sit among the groups an insert run holds aside.
+        self.table.settle_insert_run();
         self.table
             .movable_parent_anchor(id)
             .is_some_and(|parent| parent != self.state.current_parent_anchor())
