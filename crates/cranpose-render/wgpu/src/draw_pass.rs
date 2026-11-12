@@ -1,18 +1,16 @@
-use std::{iter::Peekable, rc::Rc, sync::Arc};
+use std::iter::Peekable;
 
-use cranpose_ui_graphics::{BlendMode, FrontPolygon, Rect, RuntimeShader};
+use cranpose_ui_graphics::{BlendMode, Rect};
 
 use crate::{
     effect_renderer::{
-        BlitDest, CompositeBatchItem, CompositeSampleMode, PreparedCompositeDraw,
-        PreparedProjectiveComposite, PreparedShaderDraw, ProjectiveCompositeItem, QuadPlacement,
-        RoundedCompositeMask, ShaderCompositeBatchItem, SubstrateRegions,
+        BlitDest, CompositeBatchItem, PreparedCompositeDraw, PreparedProjectiveComposite,
+        PreparedShaderDraw, ProjectiveCompositeItem, QuadPlacement, ShaderCompositeBatchItem,
     },
     frame_graph::FrameCommandRecorder,
     geometry::SegmentTransform,
     instant_triangles::{InstantDraw, LayerTexels},
     lazy_resource::Pending,
-    offscreen::OffscreenTarget,
     pipeline_compiler::CompileLane,
     render::{
         ArenaPlacement, GpuRenderer, ImageSlot, PassDepth, PassFrame, RunStage, StoreRunBatch,
@@ -20,7 +18,7 @@ use crate::{
     },
     rrect_shadow::{ShadowInstance, append_shadow_instances},
     run_store::RunDrawCall,
-    scene::{CompositorScene, DrawOp, RRectShadowDraw, RunDraw, TextDraw},
+    scene::{RRectShadowDraw, RunDraw, TextDraw},
     scissor::{intersect_scissors, intersect_target_rects, scissor_in_target, target_rect_within},
     shape_pipelines::PipelineDemand,
 };
@@ -34,6 +32,11 @@ pub(crate) use op_items::segment_draws_anything;
 use op_items::{OpItems, Texts, merge_items, segment_viewport_rect};
 mod op_bounds;
 pub(crate) use op_bounds::{op_draw_bounds, op_is_visible_in_rect};
+mod pass_segment;
+use pass_segment::joins_members;
+pub(crate) use pass_segment::{PassSegment, SegmentLayout};
+mod resolved_composite;
+pub(crate) use resolved_composite::{ResolvedComposite, ResolvedCompositeKind, SourceContent};
 mod interiors_first;
 mod mixed_turns;
 mod pass_buffers;
@@ -56,143 +59,6 @@ pub(crate) struct PassTarget<'a> {
     pub(crate) view: &'a wgpu::TextureView,
     pub(crate) width: u32,
     pub(crate) height: u32,
-}
-
-/// What a composite's texture holds beyond this frame: a retained texture
-/// keeps the pixels its cache key names for as long as it lives, so the key's
-/// hash identifies them; a transient one is drawn anew every frame and
-/// identifies nothing.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum SourceContent {
-    Retained(u64),
-    Transient,
-}
-
-impl SourceContent {
-    pub(crate) fn retained(key: &impl std::hash::Hash) -> Self {
-        let mut hasher = cranpose_ui_graphics::FxHasher::default();
-        key.hash(&mut hasher);
-        Self::Retained(std::hash::Hasher::finish(&hasher))
-    }
-
-    /// The hash naming a retained texture's pixels; none for a transient.
-    pub(crate) fn retained_hash(self) -> Option<u64> {
-        match self {
-            Self::Retained(hash) => Some(hash),
-            Self::Transient => None,
-        }
-    }
-
-    /// The content of a texture derived from this one by `step`, retained
-    /// exactly when this one is.
-    pub(crate) fn derived(self, step: &impl std::hash::Hash) -> Self {
-        match self {
-            Self::Retained(hash) => Self::retained(&(hash, step)),
-            Self::Transient => Self::Transient,
-        }
-    }
-}
-
-/// A resolved texture drawn into the pass at its z, described in the scene's
-/// device space so one description serves every target the scene is drawn
-/// into.
-#[derive(Clone)]
-pub(crate) struct ResolvedComposite {
-    pub(crate) z_index: usize,
-    pub(crate) source: Rc<OffscreenTarget>,
-    pub(crate) content: SourceContent,
-    pub(crate) dest: (f32, f32, f32, f32),
-    pub(crate) scissor: Option<(f32, f32, f32, f32)>,
-    pub(crate) kind: ResolvedCompositeKind,
-}
-
-#[derive(Clone)]
-pub(crate) enum ResolvedCompositeKind {
-    Blit {
-        alpha: f32,
-        blend_mode: BlendMode,
-        rounded_mask: Option<RoundedCompositeMask>,
-        sample_mode: CompositeSampleMode,
-        source_viewport: Option<(f32, f32, f32, f32)>,
-    },
-    Shader {
-        shader: Arc<RuntimeShader>,
-        layer_pixel_rect: [f32; 4],
-        source_region: Option<(f32, f32, f32, f32)>,
-        source_logical_size: Option<(f32, f32)>,
-        substrate_regions: SubstrateRegions,
-        rounded_mask: Option<RoundedCompositeMask>,
-        alpha: f32,
-    },
-    Projective {
-        dest: FrontPolygon,
-        inverse: [[f32; 3]; 3],
-        alpha: f32,
-        blend_mode: BlendMode,
-        sample_mode: CompositeSampleMode,
-        source_region: Option<(f32, f32, f32, f32)>,
-    },
-}
-
-/// One scene's contribution to a pass: its ops in z order, the composites
-/// resolved for it, where its device space origin sits in the target's
-/// scene space, the target pixels it may touch (the whole target when
-/// `None`), the transform its device space is drawn under: the identity,
-/// except for a layer drawn in place, whose segments carry no composites,
-/// and the scale from its scene's logical space to device pixels.
-#[derive(Clone)]
-pub(crate) struct PassSegment<'a> {
-    pub(crate) scene: &'a CompositorScene,
-    pub(crate) ops: &'a [DrawOp],
-    pub(crate) composites: &'a [ResolvedComposite],
-    pub(crate) offset: [f32; 2],
-    pub(crate) scissor: Option<(u32, u32, u32, u32)>,
-    pub(crate) first_run_window: Option<std::ops::Range<u32>>,
-    pub(crate) transform: SegmentTransform,
-    pub(crate) scale: f32,
-}
-
-impl<'a> PassSegment<'a> {
-    // All of `scene`'s ops, with no composites or scissor, untransformed.
-    pub(crate) fn plain(scene: &'a CompositorScene, offset: [f32; 2], scale: f32) -> Self {
-        Self {
-            scene,
-            ops: &scene.draw_ops,
-            composites: &[],
-            offset,
-            scissor: None,
-            first_run_window: None,
-            transform: SegmentTransform::IDENTITY,
-            scale,
-        }
-    }
-}
-
-/// How the segments of a pass lie: in order, each over the ones before it,
-/// or side by side, as the members of an atlas lie, each within its
-/// scissor, which no other segment's touches.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum SegmentLayout {
-    Stacked,
-    SideBySide,
-}
-
-/// Whether side-by-side segments `a` and `b`, next to each other, share one
-/// binding as members (see [`PassPrep::members`]).
-fn joins_members(a: &PassSegment<'_>, b: &PassSegment<'_>) -> bool {
-    is_member(a) && is_member(b)
-}
-
-/// Whether a side-by-side segment can share a binding with others: it is
-/// untransformed, without composites and within its scissor, and its offset
-/// is whole pixels, so its records snapped to the device grid stay on it in
-/// the target's space.
-fn is_member(segment: &PassSegment<'_>) -> bool {
-    segment.transform.is_identity()
-        && segment.composites.is_empty()
-        && segment.scissor.is_some()
-        && segment.offset[0].fract() == 0.0
-        && segment.offset[1].fract() == 0.0
 }
 
 enum Item<'a> {
