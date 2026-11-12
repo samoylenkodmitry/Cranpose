@@ -508,6 +508,7 @@ fn a_node_its_pass_clears_and_places_where_it_was_reports_nothing() {
                 node: NodeId(7),
                 placer: PLACER,
             }],
+            unplaced: Vec::new(),
         },
         "a move is reported apart from a reshape"
     );
@@ -529,6 +530,7 @@ fn a_node_its_pass_clears_and_places_where_it_was_reports_nothing() {
                 node: NodeId(7),
                 placer: PLACER,
             }],
+            unplaced: Vec::new(),
         },
         "a node that moved and resized is reported as both"
     );

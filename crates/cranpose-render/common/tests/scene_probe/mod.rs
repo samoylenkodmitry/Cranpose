@@ -3,6 +3,7 @@
 
 use cranpose_core::{MemoryApplier, NodeId};
 use cranpose_render_common::{
+    RenderScene,
     graph_scene::Scene,
     scene_store::{ItemRef, LayerRef},
 };
@@ -68,6 +69,9 @@ pub(crate) fn update_scene(
         applier.compute_layout(root, viewport).expect("relayout");
         let geometry = cranpose_ui::take_geometry_scene_nodes();
         let mut content = geometry.reshaped;
+        for &node in &geometry.unplaced {
+            content.extend(scene.drawn_parent(node));
+        }
         content.extend(cranpose_ui::take_draw_repass_nodes());
         content.extend(applier.take_structural_change_parents_attached_to(root));
         content.sort_unstable();

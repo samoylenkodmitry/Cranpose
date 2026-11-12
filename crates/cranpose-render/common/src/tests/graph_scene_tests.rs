@@ -129,16 +129,6 @@ fn rebuilding_hits_reuses_buffers_releases_handlers_and_preserves_captured_targe
 }
 
 #[test]
-fn collecting_observation_owners_clears_an_empty_scene() {
-    let scene = Scene::new();
-    let mut nodes = HashSet::from_iter([NodeId(13), NodeId(17)]);
-    let capacity = nodes.capacity();
-    assert!(scene.collect_retained_visual_observation_nodes(&mut nodes));
-    assert!(nodes.is_empty());
-    assert_eq!(nodes.capacity(), capacity);
-}
-
-#[test]
 fn rebuilding_clip_buffers_replaces_clips_without_changing_captured_targets() {
     let mut scene = Scene::new();
     let rect = Rect {

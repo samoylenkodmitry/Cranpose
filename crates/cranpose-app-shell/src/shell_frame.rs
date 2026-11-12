@@ -1,11 +1,10 @@
 use super::*;
 
 mod dev_overlay;
-pub(crate) mod draw_observations;
+mod draw_observations;
 mod frame_telemetry;
 mod layout_phase;
 pub(crate) use dev_overlay::{DevOverlay, draw_dev_overlay};
-pub(crate) use draw_observations::DrawObservations;
 use frame_telemetry::{
     FrameStages, RenderPhaseDirtyDiagnostics, frame_stage_telemetry_threshold_ms,
     log_frame_stage_telemetry, log_render_phase_dirty_diagnostics,

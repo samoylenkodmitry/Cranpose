@@ -4,7 +4,7 @@ use std::{cell::RefCell, rc::Rc};
 
 use cranpose_core::{MemoryApplier, MutableState, NodeId};
 use cranpose_foundation::lazy::{LazyItems, LazyListScope, rememberLazyListState};
-use cranpose_render_common::graph_scene::Scene;
+use cranpose_render_common::{RenderScene, graph_scene::Scene};
 use cranpose_ui::{
     LayoutEngine, LinearArrangement, Modifier, PaddingValues, Size, Text, TextStyle,
     widgets::{LazyColumn, LazyColumnSpec},
@@ -56,11 +56,19 @@ fn TrimmableList(dropped: MutableState<usize>) {
     );
 }
 
-/// The scope the app shell hands the scoped scene update: the content of
-/// every node the layout pass reshaped or placed anew and of every parent
-/// whose child set changed, and the nodes it only moved.
-fn scoped_scene_nodes(applier: &mut MemoryApplier, root: NodeId) -> (Vec<NodeId>, Vec<NodeId>) {
-    let geometry = cranpose_ui::take_geometry_scene_nodes();
+/// The scope the app shell hands the scoped scene update of `scene`: the
+/// content of every node the layout pass reshaped or placed anew, of every
+/// node `scene` draws an unplaced node within and of every parent whose
+/// child set changed, and the nodes it only moved.
+fn scoped_scene_nodes(
+    applier: &mut MemoryApplier,
+    root: NodeId,
+    scene: &Scene,
+) -> (Vec<NodeId>, Vec<NodeId>) {
+    let mut geometry = cranpose_ui::take_geometry_scene_nodes();
+    for &node in &geometry.unplaced {
+        geometry.reshaped.extend(scene.drawn_parent(node));
+    }
     let mut attached = |ids: Vec<NodeId>, nodes: &mut Vec<NodeId>| {
         for node in ids {
             if let Some(node) = applier.scene_node_attached_to(node, root)
@@ -109,7 +117,7 @@ fn dropping_leading_keyed_lazy_rows_one_at_a_time_repaints_the_survivors() {
         applier.clear_runtime_handle();
         graph
     };
-    let _ = scoped_scene_nodes(&mut composition.applier_mut(), root);
+    let _ = scoped_scene_nodes(&mut composition.applier_mut(), root, &graph);
 
     let mut painted = Vec::new();
     painted_text(graph.root_layer().expect("a scene"), &mut painted);
@@ -136,7 +144,7 @@ fn dropping_leading_keyed_lazy_rows_one_at_a_time_repaints_the_survivors() {
             let mut applier = composition.applier_mut();
             applier.set_runtime_handle(handle.clone());
             applier.compute_layout(root, VIEWPORT).expect("relayout");
-            let (dirty, moved) = scoped_scene_nodes(&mut applier, root);
+            let (dirty, moved) = scoped_scene_nodes(&mut applier, root, &graph);
             assert!(
                 !dirty.is_empty() || !moved.is_empty(),
                 "dropping row {} told the scene phase nothing had moved",

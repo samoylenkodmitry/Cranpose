@@ -219,8 +219,8 @@ pub(crate) struct ShellApp {
     pub(crate) text_input_routes: Rc<RefCell<TextInputRoutes>>,
     pub(crate) text_input_router_installed: bool,
     pub(crate) window_roots_seen: Option<u64>,
-    /// The draw observations kept for the nodes the surfaces draw.
-    pub(crate) draw_observations: shell_frame::DrawObservations,
+    // Room for the nodes whose records the scenes dropped in a frame.
+    pub(crate) left_nodes: Vec<NodeId>,
     /// The installed-font generation the renderers last took in.
     #[cfg(feature = "installed-fonts")]
     pub(crate) installed_fonts: usize,
@@ -580,7 +580,7 @@ where
             text_input_routes: Rc::new(RefCell::new(TextInputRoutes::default())),
             text_input_router_installed: false,
             window_roots_seen: None,
-            draw_observations: shell_frame::DrawObservations::default(),
+            left_nodes: Vec::new(),
             #[cfg(feature = "installed-fonts")]
             installed_fonts: 0,
         };

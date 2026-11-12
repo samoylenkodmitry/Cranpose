@@ -13,8 +13,8 @@ use cranpose_ui_graphics::{Point, PointerIcon, Rect, RoundedCornerShape, shared_
 
 use crate::{
     HitTestTarget, RenderScene, SceneUpdates,
-    draw_owners::DrawOwners,
     graph::{LayerNode, ProjectiveTransform},
+    left_nodes::LeftNodes,
     scene_builder::WalkMemory,
     scene_pick::ScenePick,
     scene_store::{JournalCursor, JournalRead, LayerRef, RecordEvents, SceneStore},
@@ -579,7 +579,7 @@ pub struct Scene {
     // The updates that moved a layer with no layout pass, and the rebuilds,
     // which may have.
     layer_moves: u64,
-    draw_owners: DrawOwners,
+    left_nodes: LeftNodes,
 }
 
 /// How many hit targets a [`Scene`] holds and has room for, and the same for
@@ -601,7 +601,7 @@ impl Scene {
     pub fn new() -> Self {
         let mut store = SceneStore::new();
         Self {
-            draw_owners: DrawOwners::new(&mut store),
+            left_nodes: LeftNodes::new(&mut store),
             store,
             walk: WalkMemory::default(),
             hits: RefCell::default(),
@@ -900,13 +900,16 @@ impl RenderScene for Scene {
         self.layer_moves
     }
 
-    fn collect_retained_visual_observation_nodes(&self, nodes: &mut HashSet<NodeId>) -> bool {
-        self.store.collect_visual_observation_nodes(nodes);
-        true
+    fn draws(&self, node: NodeId) -> bool {
+        self.store.record_of(node).is_some()
     }
 
-    fn read_draw_owner_changes(&mut self, changes: &mut Vec<crate::DrawOwnerChange>) -> bool {
-        self.draw_owners.read(&mut self.store, changes)
+    fn drawn_parent(&self, node: NodeId) -> Option<NodeId> {
+        self.store.drawn_parent(node)
+    }
+
+    fn read_left_nodes(&mut self, left: &mut Vec<NodeId>) -> bool {
+        self.left_nodes.read(&mut self.store, left)
     }
 }
 

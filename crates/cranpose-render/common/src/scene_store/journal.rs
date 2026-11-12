@@ -43,11 +43,6 @@ impl RecordEvent {
         }
     }
 
-    /// Whether the entry's node draws through the record from now on.
-    pub fn joins(self) -> bool {
-        matches!(self, Self::Inserted | Self::Claimed)
-    }
-
     /// Whether the entry's node no longer draws through the record.
     pub fn leaves(self) -> bool {
         matches!(self, Self::Removed | Self::Released)
@@ -77,15 +72,9 @@ impl RecordEvents {
     /// changes nothing from one that changes something. The store spends
     /// nothing on the other changes for it.
     pub const ANY: Self = Self(ANY_CHANGE);
-    /// The changes that give a node a record or take its record away:
-    /// [`RecordEvent::Inserted`], [`RecordEvent::Removed`],
-    /// [`RecordEvent::Released`] and [`RecordEvent::Claimed`].
-    pub const OWNERS: Self = Self(
-        RecordEvent::Inserted.bit()
-            | RecordEvent::Removed.bit()
-            | RecordEvent::Released.bit()
-            | RecordEvent::Claimed.bit(),
-    );
+    /// The changes that take a node's record away: [`RecordEvent::Removed`]
+    /// and [`RecordEvent::Released`].
+    pub const LEAVES: Self = Self(RecordEvent::Removed.bit() | RecordEvent::Released.bit());
 
     /// Whether the set holds `event`.
     pub fn contains(self, event: RecordEvent) -> bool {

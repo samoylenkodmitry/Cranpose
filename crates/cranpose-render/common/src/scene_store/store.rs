@@ -7,15 +7,15 @@ use std::{
     sync::atomic::{AtomicU16, Ordering},
 };
 
-use cranpose_core::{NodeId, RecordId, RecordRef, SceneUpdate, StoreId, collections::map::HashSet};
+use cranpose_core::{NodeId, RecordId, RecordRef, SceneUpdate, StoreId};
 use cranpose_ui::{GraphicsLayer, Rect};
 use cranpose_ui_graphics::CommandRecording;
 
 use super::{
-    ChildOrder, Facts, GeoRecord, HashCache, Item, ItemKind, ItemLists, ItemRef, Journal,
-    JournalCursor, JournalEntry, JournalRead, LayerProps, LayerRef, Reach, RecordEvent,
-    RecordEvents, RecordFlags, RecordKind, RecordNode, ShapeChunks, ShapeRun, Slab, Span, SpanPool,
-    TreeRecord, WarmRecord, recordings::Recordings, touched::Touched,
+    ChildOrder, Facts, GeoRecord, HashCache, Item, ItemKind, ItemLists, Journal, JournalCursor,
+    JournalEntry, JournalRead, LayerProps, LayerRef, NodeRecords, Reach, RecordEvent, RecordEvents,
+    RecordFlags, RecordKind, RecordNode, ShapeChunks, ShapeRun, Slab, Span, SpanPool, TreeRecord,
+    WarmRecord, recordings::Recordings, touched::Touched,
 };
 #[cfg(feature = "window-damage")]
 use super::{ReachState, own_marks};
@@ -49,6 +49,7 @@ pub struct SceneStore {
     pub(super) shape_chunks: ShapeChunks,
     pub(super) hashes: HashCache,
     pub(super) facts: Facts,
+    pub(super) node_records: NodeRecords,
     pub(crate) lists: ItemLists,
     root: Option<RecordId>,
     update: SceneUpdate,
@@ -116,6 +117,7 @@ impl SceneStore {
             shape_chunks: ShapeChunks::default(),
             hashes: HashCache::default(),
             facts: Facts::default(),
+            node_records: NodeRecords::default(),
             lists: ItemLists::default(),
             root: None,
             update: SceneUpdate::default(),
@@ -411,32 +413,6 @@ impl SceneStore {
         self.finish_update();
     }
 
-    /// Replaces `nodes` with the layout nodes whose draws the store holds,
-    /// keeping its capacity.
-    pub fn collect_visual_observation_nodes(&self, nodes: &mut HashSet<NodeId>) {
-        fn collect(layer: LayerRef<'_>, nodes: &mut HashSet<NodeId>) {
-            if let Some(node_id) = layer.node_id() {
-                nodes.insert(node_id);
-            }
-            for item in layer.items() {
-                match item {
-                    ItemRef::Run(run) => {
-                        if let Some(command) = run.command {
-                            nodes.insert(command.node_id);
-                        }
-                    }
-                    ItemRef::Layer(child) | ItemRef::Leaf(child) => collect(child, nodes),
-                    ItemRef::Draw(_) | ItemRef::Text(_) | ItemRef::Shape(_) => {}
-                }
-            }
-        }
-
-        nodes.clear();
-        if let Some(root) = self.root_layer() {
-            collect(root, nodes);
-        }
-    }
-
     /// The record `id` as its readers see it.
     #[inline]
     pub fn layer(&self, id: RecordId) -> LayerRef<'_> {
@@ -493,6 +469,7 @@ impl SceneStore {
         self.clear_shapes();
         self.hashes.clear();
         self.facts.clear();
+        self.node_records.clear();
         self.root = None;
         self.journal.clear(self.update);
         self.touched.lose();
@@ -541,6 +518,7 @@ impl SceneStore {
             }
         };
         self.facts.open_row(id.index());
+        self.node_records.claim(id, seed.kind, seed.node);
         match seed.parent {
             Some(parent) => self.note_subtree_change(Some(parent)),
             None => self.root = Some(id),
@@ -560,6 +538,8 @@ impl SceneStore {
     pub fn remove_subtree(&mut self, id: RecordId) {
         self.log(RecordEvent::Removed, id);
         let index = id.index();
+        self.node_records
+            .release(id, self.tree[index].kind, self.node(id));
         if let Some(parent) = self.tree[index].parent {
             self.stale(parent.index());
         }
@@ -747,6 +727,26 @@ impl SceneStore {
         self.tree[id.index()].parent
     }
 
+    // The record `node` draws through: its layer or its leaf.
+    pub(crate) fn record_of(&self, node: NodeId) -> Option<RecordId> {
+        self.node_records.get(node)
+    }
+
+    // The node whose record holds the records of `node`: the one to draw
+    // again for the records of `node` to leave. `None` when no record draws
+    // for `node` or its record is the root.
+    pub(crate) fn drawn_parent(&self, node: NodeId) -> Option<NodeId> {
+        let mut record = self.record_of(node)?;
+        loop {
+            record = self.parent(record)?;
+            if let Some(parent) = self.node(record)
+                && parent != node
+            {
+                return Some(parent);
+            }
+        }
+    }
+
     /// The flags of `id`.
     #[inline]
     pub fn flags(&self, id: RecordId) -> RecordFlags {
@@ -795,6 +795,9 @@ impl SceneStore {
     fn change_kind(&mut self, id: RecordId, kind: RecordKind, node: Option<NodeId>) {
         let index = id.index();
         self.log(RecordEvent::Released, id);
+        self.node_records
+            .release(id, self.tree[index].kind, self.node(id));
+        self.node_records.claim(id, kind, node);
         self.tree[index].kind = kind;
         self.warm[index].node = node.map(RecordNode::of);
         self.stale_with_parent(index);

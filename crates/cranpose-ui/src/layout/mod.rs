@@ -22,7 +22,7 @@ mod semantics_labels;
 mod semantics_tree;
 mod semantics_update;
 mod subcompose_measure;
-mod unplaced_parents;
+mod unplaced_nodes;
 
 use std::{cell::RefCell, mem::size_of, rc::Rc};
 
@@ -48,7 +48,7 @@ pub use semantics_tree::{
     SemanticsText, SemanticsTree,
 };
 use semantics_tree::{modal_takes_space, top_modal_path};
-use unplaced_parents::record_unplaced_parents;
+use unplaced_nodes::record_unplaced_nodes;
 use web_time::Instant;
 
 #[cfg(test)]
@@ -541,7 +541,7 @@ fn finish_placement(applier: &mut MemoryApplier, root: NodeId, context: &AppCont
         });
     }
     if let Some(pass) = context.placement_pass().with_unplaced_nodes() {
-        record_unplaced_parents(applier, root, pass, context);
+        record_unplaced_nodes(applier, pass, context);
     }
 }
 

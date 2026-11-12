@@ -1,5 +1,4 @@
-use cranpose_core::collections::map::HashSet;
-use cranpose_ui_graphics::{Brush, Color, DrawPlacement, DrawPrimitive};
+use cranpose_ui_graphics::{Brush, Color, DrawPrimitive};
 
 use super::*;
 use crate::scene_store::{LayerRef, SceneStore};
@@ -85,59 +84,6 @@ fn axis_aligned_rect_to_quad_keeps_exact_axis_aligned_scale() {
         transform.matrix(),
         [[3.0, 0.0, 8.0], [0.0, 3.0, 0.0], [0.0, 0.0, 1.0]]
     );
-}
-
-#[test]
-fn retained_visual_observation_nodes_collect_layers_and_command_owners() {
-    let bounds = Rect {
-        x: 0.0,
-        y: 0.0,
-        width: 20.0,
-        height: 20.0,
-    };
-    let command = |node_id| DrawCommandId {
-        node_id,
-        command_index: 0,
-        placement: DrawPlacement::Behind,
-    };
-    let mut child = test_layer(
-        bounds,
-        vec![RenderNode::DrawRun(DrawRunNode::for_command(
-            PrimitivePhase::BeforeChildren,
-            Some(command(NodeId(17))),
-            Vec::new(),
-        ))],
-    );
-    child.node_id = Some(NodeId(13));
-    let mut root = test_layer(
-        bounds,
-        vec![
-            RenderNode::DrawRun(DrawRunNode::for_command(
-                PrimitivePhase::BeforeChildren,
-                Some(command(NodeId(9))),
-                Vec::new(),
-            )),
-            RenderNode::DrawRun(DrawRunNode::new(PrimitivePhase::BeforeChildren, Vec::new())),
-            RenderNode::Layer(Box::new(child)),
-        ],
-    );
-
-    root.node_id = Some(NodeId(5));
-
-    let mut store = SceneStore::from_layer(&root);
-    let mut nodes = HashSet::from_iter([NodeId(999)]);
-    store.collect_visual_observation_nodes(&mut nodes);
-    assert_eq!(
-        nodes,
-        HashSet::from_iter([NodeId(5), NodeId(9), NodeId(13), NodeId(17)])
-    );
-    let capacity = nodes.capacity();
-    root.children.clear();
-    root.node_id = Some(NodeId(23));
-    store.describe(&root);
-    store.collect_visual_observation_nodes(&mut nodes);
-    assert_eq!(nodes, HashSet::from_iter([NodeId(23)]));
-    assert_eq!(nodes.capacity(), capacity);
 }
 
 #[test]

@@ -17,6 +17,9 @@ pub(crate) struct PlacementPass {
     // for the unplaced among them, and not through the whole tree.
     cleared: RefCell<Vec<NodeId>>,
     recent: Cell<RecentPeak>,
+    // The nodes the passes since the scene phase last took them left
+    // unplaced.
+    left_unplaced: RefCell<Vec<NodeId>>,
 }
 
 // The room the list of cleared nodes keeps whatever recent passes cleared.
@@ -29,6 +32,7 @@ impl PlacementPass {
             unplaced: Cell::new(0),
             cleared: RefCell::new(Vec::new()),
             recent: Cell::new(RecentPeak::new()),
+            left_unplaced: RefCell::new(Vec::new()),
         }
     }
 
@@ -63,6 +67,19 @@ impl PlacementPass {
 
     pub(crate) fn keep_cleared(&self, cleared: Vec<NodeId>) {
         *self.cleared.borrow_mut() = cleared;
+    }
+
+    // Keeps `nodes`, which the running pass left unplaced, for the scene
+    // phase.
+    pub(crate) fn keep_unplaced(&self, nodes: &[NodeId]) {
+        self.left_unplaced.borrow_mut().extend_from_slice(nodes);
+    }
+
+    // Moves the nodes the passes left unplaced since the last take into
+    // `output`, dropping what `output` held.
+    pub(crate) fn take_unplaced(&self, output: &mut Vec<NodeId>) {
+        output.clear();
+        std::mem::swap(&mut *self.left_unplaced.borrow_mut(), output);
     }
 
     /// The running pass, when it has left a node unplaced that it found placed.

@@ -11475,19 +11475,13 @@ fn a_platform_answering_the_font_scale_the_shell_shows_recomposes_nothing() {
 }
 
 // A lazy list of 100 rows, 240 by 120: the first row draws a bar as wide as
-// `width`, the others a line of text. A text above it shows `tick`.
+// `width`, the others a line of text.
 fn observed_row_list(states: Rc<RefCell<Option<ObservedRowStates>>>) -> impl FnMut() + 'static {
     move || {
         let list = rememberLazyListState();
         let width = rememberMutableStateOf(|| 24.0f32);
-        let tick = rememberMutableStateOf(|| 0u32);
-        *states.borrow_mut() = Some(ObservedRowStates { list, width, tick });
+        *states.borrow_mut() = Some(ObservedRowStates { list, width });
         Column(Modifier::empty(), ColumnSpec::default(), move || {
-            Text(
-                format!("tick {}", tick.get()),
-                Modifier::empty(),
-                TextStyle::default(),
-            );
             LazyColumn(
                 Modifier::empty().size_points(240.0, 120.0),
                 list,
@@ -11514,7 +11508,6 @@ fn observed_row_list(states: Rc<RefCell<Option<ObservedRowStates>>>) -> impl FnM
 struct ObservedRowStates {
     list: LazyListState,
     width: MutableState<f32>,
-    tick: MutableState<u32>,
 }
 
 // A renderer that clears its scene before every rebuild, so its scene
@@ -11565,7 +11558,7 @@ fn a_row_scrolled_away_asks_for_no_redraw_of_what_it_read() {
         observed_row_list(Rc::clone(&states)),
     );
     shell.update();
-    let ObservedRowStates { list, width, .. } = states.borrow().expect("the app's states");
+    let ObservedRowStates { list, width } = states.borrow().expect("the app's states");
     width.set(48.0);
     shell.update();
     assert_eq!(
@@ -11592,10 +11585,10 @@ fn a_row_scrolled_away_asks_for_no_redraw_of_what_it_read() {
 }
 
 // A scene cleared before a rebuild cannot tell which nodes it stopped
-// drawing: the observations of a row scrolled away stay until a full prune,
-// which comes `OBSERVATION_PRUNE_INTERVAL` frames after.
+// drawing: the shell then retires the observations of every node no scene
+// draws, a row scrolled away among them.
 #[test]
-fn a_cleared_scene_retires_observations_in_a_full_prune() {
+fn a_cleared_scene_retires_the_observations_of_the_nodes_it_no_longer_draws() {
     let _guard = test_guard();
     let root_key = location_key(file!(), line!(), column!());
     let states = Rc::new(RefCell::new(None));
@@ -11609,7 +11602,7 @@ fn a_cleared_scene_retires_observations_in_a_full_prune() {
         observed_row_list(Rc::clone(&states)),
     );
     shell.update();
-    let ObservedRowStates { list, width, tick } = states.borrow().expect("the app's states");
+    let ObservedRowStates { list, width } = states.borrow().expect("the app's states");
     list.scroll_to_item(60, 0.0);
     for _ in 0..4 {
         shell.update();
@@ -11617,23 +11610,6 @@ fn a_cleared_scene_retires_observations_in_a_full_prune() {
     rebuilds.set(0);
     width.set(48.0);
     shell.update();
-    assert_eq!(
-        rebuilds.get(),
-        1,
-        "the row scrolled away keeps its observation until a full prune"
-    );
 
-    for frame in 1..=shell_frame::draw_observations::OBSERVATION_PRUNE_INTERVAL {
-        tick.set(frame);
-        shell.update();
-    }
-    rebuilds.set(0);
-    width.set(96.0);
-    shell.update();
-
-    assert_eq!(
-        rebuilds.get(),
-        0,
-        "the full prune retired the row's observation"
-    );
+    assert_eq!(rebuilds.get(), 0, "a row no scene draws asks for no redraw");
 }

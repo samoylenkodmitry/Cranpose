@@ -91,7 +91,6 @@ pub struct RootSurface<R: Renderer> {
     pub(crate) structural_scene_nodes: Vec<NodeId>,
     pub(crate) scene_updates: Vec<(NodeId, NodeUpdate)>,
     pub(crate) list_room: list_room::ListRoom,
-    pub(crate) retained_visual_nodes: HashSet<NodeId>,
     pub(crate) is_dirty: bool,
     pub(crate) buttons_pressed: PointerButtons,
     pub(crate) pointer_source: PointerSource,
@@ -140,7 +139,6 @@ impl<R: Renderer> RootSurface<R> {
             structural_scene_nodes: Vec::new(),
             scene_updates: Vec::new(),
             list_room: list_room::ListRoom::default(),
-            retained_visual_nodes: HashSet::default(),
             is_dirty: true,
             buttons_pressed: PointerButtons::NONE,
             pointer_source: PointerSource::Unknown,
@@ -198,7 +196,6 @@ impl<R: Renderer> RootSurface<R> {
         self.root = root;
         self.forget_snapshots();
         self.invalidate_scene_root(root);
-        self.retained_visual_nodes.clear();
         self.hit_path_tracker.clear();
         self.hovered_nodes.clear();
         self.buttons_pressed = PointerButtons::NONE;

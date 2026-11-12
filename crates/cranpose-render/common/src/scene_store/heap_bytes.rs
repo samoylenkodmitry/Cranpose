@@ -47,6 +47,7 @@ pub(super) fn store_heap_bytes(store: &SceneStore) -> usize {
     let marks = 0;
     rows + store.hashes.heap_bytes()
         + store.facts.heap_bytes()
+        + store.node_records.heap_bytes()
         + store.lists.heap_bytes()
         + store.items.heap_bytes()
         + marks

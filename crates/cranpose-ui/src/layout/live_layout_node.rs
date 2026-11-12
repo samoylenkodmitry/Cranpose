@@ -37,14 +37,6 @@ impl LiveLayoutNode<'_> {
         }
     }
 
-    // The node whose child the node is, a slot host among them.
-    pub(super) fn direct_parent(&self) -> Option<NodeId> {
-        match self {
-            Self::Layout(node) => node.folded_parent(),
-            Self::Subcompose(node) => node.parent(),
-        }
-    }
-
     pub(super) fn is_window_root(&self) -> bool {
         matches!(self, Self::Layout(node) if node.is_window_root())
     }

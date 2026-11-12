@@ -50,6 +50,7 @@ fn trim_resized(store: &mut SceneStore) {
             store.warm.trim_growth_slack();
             store.generations.trim_growth_slack();
         }
+        store.node_records.trim_growth_slack();
     }
     store.facts.trim_growth_slack();
     store.items.trim_growth_slack();

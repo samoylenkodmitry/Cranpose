@@ -12,6 +12,9 @@ pub struct GeometrySceneNodes {
     /// Nodes that moved in their parent: the scene moves what it drew for
     /// them, unless they are also reshaped or drawn again.
     pub moved: Vec<MovedSceneNode>,
+    /// Nodes the pass found placed and left unplaced: what the scene drew
+    /// for them leaves it.
+    pub unplaced: Vec<NodeId>,
 }
 
 /// A node a layout pass moved, with the node whose placement put it there:
@@ -27,6 +30,6 @@ pub struct MovedSceneNode {
 impl GeometrySceneNodes {
     /// Whether the pass changed no node's geometry.
     pub fn is_empty(&self) -> bool {
-        self.reshaped.is_empty() && self.moved.is_empty()
+        self.reshaped.is_empty() && self.moved.is_empty() && self.unplaced.is_empty()
     }
 }

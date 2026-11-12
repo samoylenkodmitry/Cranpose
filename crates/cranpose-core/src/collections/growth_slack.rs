@@ -42,8 +42,10 @@ impl<K: Eq + Hash, V, S: BuildHasher> GrowthSlack for std::collections::HashMap<
             map.shrink_to(target);
         }
 
-        if let Some(target) = slack_target(self.len(), self.capacity()) {
-            shrink(self, target);
+        // A map rounds its buckets up to a power of two, which leaves room
+        // past the items: asked for room past them, it may keep twice that.
+        if slack_target(self.len(), self.capacity()).is_some() {
+            shrink(self, self.len());
         }
     }
 }

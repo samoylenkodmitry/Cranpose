@@ -5,8 +5,7 @@
 pub mod byte_blend;
 /// Debug switches read from environment variables, with programmatic overrides.
 pub mod dev_overlay;
-mod draw_owners;
-pub use draw_owners::{DrawOwnerChange, undrawn_nodes};
+mod left_nodes;
 
 /// The frame background every renderer clears to (linear values; sRGB
 /// surfaces display this as rgb(75, 75, 86)). One definition so backends
@@ -76,7 +75,7 @@ mod thread_state;
 #[path = "tests/pointer_slices.rs"]
 mod pointer_slices;
 
-use cranpose_core::{MemoryApplier, collections::map::HashSet};
+use cranpose_core::MemoryApplier;
 use cranpose_foundation::nodes::input::PointerEvent;
 pub use cranpose_ui_graphics::Brush;
 use cranpose_ui_graphics::Size;
@@ -260,22 +259,25 @@ pub trait RenderScene {
         0
     }
 
-    /// Replaces the set with retained visual observation owners, preserving its capacity.
-    /// Returns whether the scene provides this information.
-    fn collect_retained_visual_observation_nodes(
-        &self,
-        nodes: &mut HashSet<cranpose_core::NodeId>,
-    ) -> bool {
-        nodes.clear();
-        false
+    /// Whether the scene draws `node`. A scene that keeps no record of the nodes it draws says
+    /// it does.
+    fn draws(&self, _node: cranpose_core::NodeId) -> bool {
+        true
     }
 
-    /// Adds to `changes` the layout nodes the scene started or stopped drawing since the last
-    /// call, one change a node, as the scene's latest update left it. Returns whether the scene
-    /// can tell: a scene handed a store built from scratch since cannot, and the caller asks for
-    /// every node it draws instead.
-    fn read_draw_owner_changes(&mut self, _changes: &mut Vec<DrawOwnerChange>) -> bool {
-        false
+    /// The node whose record holds what the scene draws for `node`: the node the scene draws
+    /// again for `node` to leave it. `None` when the scene draws no record for `node`, or that
+    /// record is its root.
+    fn drawn_parent(&self, _node: cranpose_core::NodeId) -> Option<cranpose_core::NodeId> {
+        None
+    }
+
+    /// Adds to `left` the layout nodes whose records the scene dropped since the last call; a
+    /// node may draw through another record since, as [`Self::draws`] tells. Returns whether the
+    /// scene can tell: a scene handed a store built from scratch since cannot, and the caller
+    /// asks [`Self::draws`] of every node instead.
+    fn read_left_nodes(&mut self, _left: &mut Vec<cranpose_core::NodeId>) -> bool {
+        true
     }
 }
 

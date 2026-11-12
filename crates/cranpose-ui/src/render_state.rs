@@ -460,11 +460,11 @@ impl AppContext {
             .moved_scene_nodes
             .borrow_mut()
             .take_into(&mut output.moved);
+        self.placement_pass().take_unplaced(&mut output.unplaced);
     }
 
-    /// Notes that the layout pass changed `node_id`'s geometry. A node
-    /// whose layout state is at hand notes it with
-    /// [`Self::note_geometry_scene_node`] instead, once a take.
+    // Notes that the layout pass changed `node_id`'s geometry; a node whose
+    // layout state is at hand uses `note_geometry_scene_node`, once a take.
     pub(crate) fn record_geometry_scene_node(&self, node_id: NodeId) {
         self.state.geometry_scene_nodes.borrow_mut().push(node_id);
     }

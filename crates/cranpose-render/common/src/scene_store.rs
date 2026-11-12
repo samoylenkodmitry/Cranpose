@@ -13,6 +13,7 @@ mod layer_head;
 mod layer_props;
 mod layer_ref;
 mod leaf_write;
+mod node_records;
 #[cfg(feature = "window-damage")]
 mod own_marks;
 mod placement;
@@ -41,6 +42,7 @@ pub(crate) use layer_head::{HeadKind, LayerHead};
 pub use layer_props::LayerProps;
 pub use layer_ref::{ItemRef, LayerRef, RecordChanges};
 pub use leaf_write::Leaf;
+use node_records::NodeRecords;
 pub use placement::Placement;
 pub use reach::{BLUR_PIXEL_SLACK, Extent, Reach, ShadowCaster};
 #[cfg(feature = "window-damage")]
