@@ -81,6 +81,7 @@ fn render_graph_draw(
         PrimitiveClipSpace::LayerTransformed,
     );
     if effective_clip.is_some_and(|clip| clip.is_empty()) {
+        scene.note_culled();
         return;
     }
     push_draw_primitive(
@@ -132,6 +133,7 @@ fn render_graph_text(
         PrimitiveClipSpace::LayerTransformed,
     );
     if text_clip.is_some_and(|clip| clip.is_empty()) {
+        scene.note_culled();
         return;
     }
 

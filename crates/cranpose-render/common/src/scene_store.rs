@@ -27,6 +27,7 @@ mod slab;
 #[cfg(feature = "layer-tree")]
 mod spec;
 mod store;
+mod translate_run;
 mod translated_write;
 mod update_log;
 

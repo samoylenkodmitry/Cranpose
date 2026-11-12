@@ -139,11 +139,17 @@ pub(super) fn translated_container(
         return None;
     }
     let (local_bounds, node_bounds) = layer_and_node_bounds(modifier_slices, layout_state.size());
-    if local_bounds != layer.local_bounds() {
-        let resized = shaped_graphics_layer(modifier_slices, local_bounds).map(Cow::into_owned);
-        store.write_graphics_layer(container, resized);
+    let resized = local_bounds != layer.local_bounds();
+    if resized {
+        let shaped = shaped_graphics_layer(modifier_slices, local_bounds).map(Cow::into_owned);
+        store.write_graphics_layer(container, shaped);
     }
     set_bounds(store, container, local_bounds, node_bounds);
+    // A resize is more than the move of the content a translate step notes
+    // alone.
+    if resized {
+        store.note_content_change(container);
+    }
     Some(TranslatedContainer { node_id })
 }
 

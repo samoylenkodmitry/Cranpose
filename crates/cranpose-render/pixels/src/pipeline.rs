@@ -452,6 +452,11 @@ fn axis_scale(transformed: f32, local: f32) -> f32 {
     }
 }
 
+#[expect(
+    clippy::inline_always,
+    reason = "the push walk and the frame step call it: out of line, the dashboard frame took 0.2% more instructions"
+)]
+#[inline(always)]
 fn layer_raster_mapping<'a>(
     layer: LayerRef<'_>,
     graphics_layer: &GraphicsLayer,
@@ -692,6 +697,7 @@ fn push_layer_items(
         layer_snap_anchors(layer, context, &transform, &mapping, &raster_content_layer);
 
     if visual_clip.is_some_and(|clip| clip.is_empty()) {
+        scene.note_culled();
         return;
     }
 
@@ -723,6 +729,11 @@ fn push_layer_items(
     // first child in 3D comes, far ones first: this renderer keeps no depth
     // between them, and draws a scene behind a doorway flat on its surface.
     let (mut seen, in_space) = layer_space(layer, graphics_layer, &transform, context.in_space);
+    // The outermost translated container whose content a rigid snap carries
+    // may be a frame: a push that passes over a node its clip cuts away
+    // ends that.
+    let frame_root = is_frame_root(layer, context, translated_snap_anchor);
+    let culled = frame_root.then_some(scene.culled);
     // Worked out at the first child layer: most layers have none.
     let mut children_same_as_before = None;
     for child in layer.items() {
@@ -753,6 +764,7 @@ fn push_layer_items(
                 clip: visual_clip,
                 snap_anchor: translated_snap_anchor,
                 translated: effective_translated_content_context,
+                framed: frame_root && content_follows_offset(layer),
             };
             note_passed_down(
                 scene,
@@ -782,6 +794,25 @@ fn push_layer_items(
             reuse,
         );
     }
+    scene.forget_frame_if_culled(record, culled);
+}
+
+// Whether `layer`, pushed with the translated snap anchor `anchor`, is the
+// outermost translated container whose content a rigid snap carries.
+fn is_frame_root(
+    layer: LayerRef<'_>,
+    context: &RasterTraversalContext<'_>,
+    anchor: Option<Point>,
+) -> bool {
+    layer.translated_content_context()
+        && !context.inherited_translated_content_context
+        && anchor.is_some()
+}
+
+// Whether the offset a rigid snap follows is the offset the children of
+// `layer` lie past.
+fn content_follows_offset(layer: LayerRef<'_>) -> bool {
+    layer.translated_content_offset() == layer.content_offset()
 }
 
 // Pushes the content of `inline`, a node drawn in its parent's layer,
@@ -845,6 +876,11 @@ fn spaced_outside_a_scene(layer: LayerRef<'_>) -> bool {
         && cranpose_render_common::space::scene_of(layer).is_none()
 }
 
+#[expect(
+    clippy::inline_always,
+    reason = "the push walk and the frame step call it: out of line, the dashboard frame took 0.2% more instructions"
+)]
+#[inline(always)]
 fn layer_snap_anchors(
     layer: LayerRef<'_>,
     context: &RasterTraversalContext<'_>,
@@ -870,14 +906,17 @@ fn layer_snap_anchors(
     let translated_snap_anchor = context
         .inherited_translated_snap_anchor
         .or(boundary_snap_anchor);
-    let layer_snap_anchor = translated_snap_anchor.or_else(|| {
-        if allow_rigid_snap && content_needs_rigid_snap(layer, effective_translated_content_context)
+    // Written as a match: a closure here became a function the walk calls,
+    // once the frame step also called this one.
+    let layer_snap_anchor = match translated_snap_anchor {
+        Some(anchor) => Some(anchor),
+        None if allow_rigid_snap
+            && content_needs_rigid_snap(layer, effective_translated_content_context) =>
         {
             rigid_snap_anchor(mapping.layer_bounds.raster_rect(), content_layer)
-        } else {
-            None
         }
-    });
+        None => None,
+    };
     (translated_snap_anchor, layer_snap_anchor)
 }
 

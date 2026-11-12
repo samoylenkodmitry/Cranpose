@@ -638,14 +638,15 @@ impl SceneStore {
     }
 
     // Replaces the items of `id` with `items` and logs the change, leaving
-    // its containment and reach to the caller.
-    pub(super) fn replace_items(&mut self, id: RecordId, items: &[Item]) {
+    // its containment and reach to the caller. Returns whether the items
+    // differ from the ones it held.
+    pub(super) fn replace_items(&mut self, id: RecordId, items: &[Item]) -> bool {
         let index = id.index();
         let old = self.items.span(self.tree[index].items);
         // Draws written in place of removed ones of the same kinds take
         // their handles: the items read as before.
         if old == items {
-            return;
+            return false;
         }
         if !super::facts::same_children(old, items) {
             super::facts::forget_children(self, index);
@@ -664,6 +665,7 @@ impl SceneStore {
         if !noted {
             self.journal.note_change(self.update);
         }
+        true
     }
 
     /// Adds a draw primitive for an item.

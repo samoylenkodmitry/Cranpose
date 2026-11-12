@@ -536,6 +536,19 @@ impl<'a> LayerRef<'a> {
         }
     }
 
+    /// Whether the record itself, its properties, draws and items, changed
+    /// since `held` at most by the offset at which it moves its translated
+    /// content, whatever changed beneath it. A record that draws nothing of
+    /// its own keeps its children through such a change.
+    #[inline]
+    pub fn only_translated_since(self, held: RecordChanges) -> bool {
+        let now = self.changes();
+        now.same_own(held)
+            || self
+                .props()
+                .is_some_and(|props| props.translate_run.covers(held.own, now.own))
+    }
+
     /// How many items the record holds.
     #[inline]
     pub fn item_count(self) -> usize {

@@ -185,6 +185,20 @@ impl Rewrite {
         }
     }
 
+    // The passed-down entry that lies at `index` were the spill in place.
+    pub(crate) fn passed_down_mut<'a>(
+        &'a mut self,
+        entries: &'a mut [PassedDown],
+        index: usize,
+    ) -> Option<&'a mut PassedDown> {
+        match self.spilled_at {
+            Some(at) if index >= at.passed_down => {
+                self.spill.passed_down.get_mut(index - at.passed_down)
+            }
+            _ => entries.get_mut(index),
+        }
+    }
+
     // Puts `entry` in place of the old passed-down entry where the subtree
     // notes its next one, while the old subtree has one there; else into
     // the spill. Returns where the entry would lie, were the spill in place.

@@ -25,6 +25,11 @@ use cranpose_ui_graphics::{
     StrokeCap, TAU,
 };
 
+#[path = "support/kept_frames.rs"]
+mod kept_frames;
+
+use kept_frames::KeptFrames;
+
 const WIDTH: u32 = 240;
 const HEIGHT: u32 = 180;
 const FRAMES: u32 = 24;
@@ -404,35 +409,10 @@ fn kept_frames_match_full_redraws(scale: f32, scenes: fn(Step)) {
 // host does that draws slower than its scene changes.
 fn kept_frames_match_full_redraws_taken(scale: f32, scenes: fn(Step), every: u32) {
     let (mut shell, captured) = shell(scale, scenes);
-    let mut picture = Picture::default();
-    let mut areas = Vec::new();
-    let mut kept = vec![0u8; (WIDTH * HEIGHT * 4) as usize];
-    let mut full = vec![0u8; (WIDTH * HEIGHT * 4) as usize];
-    let mut area_pixels = Vec::new();
-    for frame in 0..FRAMES {
-        if frame > 0 {
-            let step = (*captured.borrow()).expect("the composition remembered the step");
-            step.set(frame);
-        }
-        shell.update();
-        if frame % every != 0 {
-            continue;
-        }
-        shell.primary().with_renderer(|renderer| {
-            renderer.update_picture(&mut picture, WIDTH, HEIGHT, scale, &mut areas);
-            for area in &areas {
-                area_pixels.resize(area.width as usize * area.height as usize * 4, 0);
-                renderer.draw_picture_area(&picture, *area, &mut area_pixels);
-                apply(&mut kept, *area, &area_pixels);
-            }
-            renderer.draw_scaled(&mut full, WIDTH, HEIGHT, scale);
-        });
-        assert_eq!(
-            first_difference(&kept, &full),
-            None,
-            "frame {frame} at scale {scale}: the kept frame differs from a full redraw at (x, y); areas {areas:?}"
-        );
-    }
+    KeptFrames::new((WIDTH, HEIGHT), scale).check(&mut shell, (FRAMES, every), |frame| {
+        let step = (*captured.borrow()).expect("the composition remembered the step");
+        step.set(frame);
+    });
 }
 
 // Nodes that change by turns among nodes that hold still: two bars under

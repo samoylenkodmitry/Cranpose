@@ -18,8 +18,10 @@ use crate::{
     damage::merge_areas,
     draw::{ClipBounds, TextRaster},
     rewrite::Rewrite,
-    scene::{RasterScene, Subtree},
+    scene::{PassedDown, RasterScene, Subtree},
 };
+
+mod frame_shift;
 
 // What the pushes of the changed subtrees share.
 struct Repush<'a> {
@@ -40,13 +42,24 @@ struct Repush<'a> {
 // The scene cannot take the change in place: it is built again.
 struct Rebuild;
 
-// A record whose subtree pushes again, with its place among the scene's
-// records and where its subtree's records end, as the update found them.
+// What the update does to the subtree of a changed record.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RootKind {
+    // The subtree pushes again.
+    Push,
+    // The subtree is a frame that only moved its content: it shifts.
+    Shift,
+}
+
+// A record whose subtree pushes again or shifts, with its place among the
+// scene's records and where its subtree's records end, as the update found
+// them.
 #[derive(Clone, Copy)]
 pub(crate) struct PushRoot {
     place: usize,
     end: usize,
     record: RecordId,
+    kind: RootKind,
 }
 
 // A store with the records it changed in its latest `updates` updates, the
@@ -119,7 +132,7 @@ impl InPlaceUpdate<'_> {
             {
                 continue;
             }
-            match push_root(scene, store, id, roots) {
+            match push_root(scene, store, id, (roots, changed.records)) {
                 Ok(Some(root)) => add_root(roots, root),
                 Ok(None) => {}
                 Err(Rebuild) => return None,
@@ -146,7 +159,7 @@ impl InPlaceUpdate<'_> {
         // that order.
         let pushed = roots
             .iter()
-            .try_for_each(|root| repush.push_root(store, root.record));
+            .try_for_each(|root| repush.push_root(store, root));
         let held = repush.held;
         merge_areas(areas);
         pushed.ok()?;
@@ -200,14 +213,15 @@ fn add_root_between(found: &mut Vec<PushRoot>, root: PushRoot) {
     found.insert(at, root);
 }
 
-// The record whose subtree pushes again for the change of `record`, when one
-// does that is not beneath a root of `found`: the record itself, or the
-// nearest one above it that the scene holds and that can push.
+// The record whose subtree pushes again or shifts for the change of
+// `record`, when one does that is not beneath a root of `found`: the record
+// itself, or the nearest one above it that the scene holds and that can
+// push. `stamps` are the records the store changed.
 fn push_root(
     scene: &RasterScene,
     store: &SceneStore,
     record: RecordId,
-    found: &[PushRoot],
+    (found, stamps): (&[PushRoot], &[RecordRef]),
 ) -> Result<Option<PushRoot>, Rebuild> {
     let mut id = record;
     // Whether a record beneath `id` leaves its push to it, whatever `id`
@@ -221,6 +235,13 @@ fn push_root(
             asked = true;
             continue;
         };
+        // A subtree beneath a frame lies where the frame was pushed: the
+        // frame pushes again in its place.
+        if let Some(frame) = frame_shift::frame_above(scene, store, place) {
+            id = frame;
+            asked = true;
+            continue;
+        }
         // A root found for an earlier change pushes the records beneath
         // it, this one among them.
         if pushed_by(found, place) {
@@ -258,10 +279,19 @@ fn push_root(
             asked = true;
             continue;
         }
+        let shifts = !asked
+            && moved
+            && matches!(subtree, Subtree::Layer(_))
+            && frame_shift::can_shift(scene, store, (old, id), stamps);
         return Ok(Some(PushRoot {
             place,
             end: old.end,
             record: id,
+            kind: if shifts {
+                RootKind::Shift
+            } else {
+                RootKind::Push
+            },
         }));
     }
 }
@@ -274,29 +304,38 @@ fn passed_down_by(scene: &RasterScene, store: &SceneStore, parent: RecordId) -> 
         .and_then(|at| scene.subtrees[at].passed_down)
 }
 
-impl Repush<'_> {
-    // Pushes the subtree of `record` again where the scene holds it now: a
-    // push before it may have moved it. Out of line: the push holds the
-    // scene's whole walk, and inlined it made the update one function too
-    // large for a board to keep in RAM.
+impl<'a> Repush<'a> {
+    // Brings the subtree of `record` up to the store where the scene holds
+    // it now: a push before it may have moved it. A subtree that only
+    // moved its content as a frame shifts, and any other pushes again. Out
+    // of line: the push holds the scene's whole walk, and inlined it made
+    // the update one function too large for a board to keep in RAM.
     #[inline(never)]
-    fn push_root(&mut self, store: &SceneStore, record: RecordId) -> Result<(), Rebuild> {
+    fn push_root(&mut self, store: &SceneStore, root: &PushRoot) -> Result<(), Rebuild> {
+        let record = root.record;
         self.scene.refresh_routes();
         let place = self.scene.route(store.record_ref(record)).ok_or(Rebuild)?;
         let parent = match store.parent(record) {
             Some(parent) => Some(passed_down_by(self.scene, store, parent).ok_or(Rebuild)?),
             None => None,
         };
+        if root.kind == RootKind::Shift && self.shift_frame(store, record, place, parent) {
+            return Ok(());
+        }
+        if !self.scene.frames.is_empty() {
+            self.forget_frames_within(place);
+        }
         self.push_again(Subtree::of_record(store.layer(record)), place, parent)
     }
 
-    fn push_again(
-        &mut self,
-        subtree: Subtree<'_>,
-        record: usize,
-        parent: Option<usize>,
-    ) -> Result<(), Rebuild> {
-        let passed = parent.and_then(|at| self.scene.passed_down.get(at));
+    // What the children of the record that passed down `passed` inherit: the
+    // window's, for none.
+    #[expect(
+        clippy::inline_always,
+        reason = "the push and the frame step call it: out of line, the dashboard update took more instructions"
+    )]
+    #[inline(always)]
+    fn inherited(&self, passed: Option<&PassedDown>) -> (ProjectiveTransform, ContentStyle) {
         let transform = passed.map_or_else(
             || ProjectiveTransform::uniform_scale(self.scale),
             |passed| passed.transform,
@@ -305,9 +344,27 @@ impl Repush<'_> {
             alpha: passed.alpha,
             color_filter: passed.color_filter.clone(),
         });
-        let context = RasterTraversalContext {
-            parent_transform: &transform,
-            parent_content_style: &style,
+        (transform, style)
+    }
+
+    // The context a push of the children of the record that passed down
+    // `passed` runs in, with what they `inherit`.
+    #[expect(
+        clippy::inline_always,
+        reason = "the push and the frame step call it: out of line, the dashboard update took more instructions"
+    )]
+    #[inline(always)]
+    fn context<'c>(
+        &self,
+        passed: Option<&PassedDown>,
+        inherited: &'c (ProjectiveTransform, ContentStyle),
+    ) -> RasterTraversalContext<'c>
+    where
+        'a: 'c,
+    {
+        RasterTraversalContext {
+            parent_transform: &inherited.0,
+            parent_content_style: &inherited.1,
             parent_visual_clip: passed.and_then(|passed| passed.clip),
             inherited_translated_snap_anchor: passed.and_then(|passed| passed.snap_anchor),
             inherited_translated_content_context: passed.is_some_and(|passed| passed.translated),
@@ -320,7 +377,18 @@ impl Repush<'_> {
             // walk to a changed layer stops at a scene's first child in
             // 3D: the layers it pushes again lie outside every space.
             in_space: false,
-        };
+        }
+    }
+
+    fn push_again(
+        &mut self,
+        subtree: Subtree<'_>,
+        record: usize,
+        parent: Option<usize>,
+    ) -> Result<(), Rebuild> {
+        let passed = parent.and_then(|at| self.scene.passed_down.get(at));
+        let inherited = self.inherited(passed);
+        let context = self.context(passed, &inherited);
         let mut rewrite = self.rewrite.take().unwrap_or_default();
         if !rewrite.start(self.scene, record, self.window, self.reach, self.held) {
             *self.rewrite = Some(rewrite);

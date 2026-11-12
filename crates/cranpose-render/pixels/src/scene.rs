@@ -17,9 +17,11 @@ use cranpose_ui_graphics::{
 
 use crate::{
     draw::RenderItem,
+    frame::Frames,
     pipeline::LightSource,
     rewrite::Rewrite,
     scene_item::{ItemRef, SceneItem},
+    shift::Shift,
 };
 
 #[derive(Clone, Debug)]
@@ -52,6 +54,16 @@ impl Outline {
         match self {
             Self::Fill(shape) | Self::Stroke(shape, _) => shape,
             Self::Arc(_) | Self::Line(_) | Self::Trapezoid(_) => None,
+        }
+    }
+
+    // The geometry `shift` moves, as the pixels of a frame draw it.
+    pub(crate) fn shifted(self, shift: Shift) -> Self {
+        let (dx, dy) = shift.offset();
+        if shift.is_none() {
+            self
+        } else {
+            self.translated(dx, dy)
         }
     }
 
@@ -95,6 +107,13 @@ impl DrawShape {
             clip: None,
             ..self.clone()
         }
+    }
+
+    // Moves the shape by `shift`, where it keeps its clip.
+    pub(crate) fn shift_by(&mut self, shift: Shift) {
+        self.rect = shift.rect(self.rect);
+        self.snap_anchor = self.snap_anchor.map(|anchor| shift.point(anchor));
+        self.outline = self.outline.shifted(shift);
     }
 
     pub(crate) fn of_params(params: ShapeDrawParams) -> Self {
@@ -151,6 +170,12 @@ pub(crate) struct ShadowDraw {
 }
 
 impl TextDraw {
+    // Moves the text by `shift`, where it keeps its clip.
+    pub(crate) fn shift_by(&mut self, shift: Shift) {
+        self.rect = shift.rect(self.rect);
+        self.snap_anchor = self.snap_anchor.map(|anchor| shift.point(anchor));
+    }
+
     // The part of `rect`, where the text draws from its top left corner,
     // in which its glyphs and their shadows draw.
     pub(crate) fn glyph_reach(&self, rect: Rect) -> Rect {
@@ -169,6 +194,18 @@ impl TextDraw {
 }
 
 impl ImageDraw {
+    // Moves the image by `shift`, where it keeps its clip.
+    pub(crate) fn shift_by(&mut self, shift: Shift) {
+        let (dx, dy) = shift.offset();
+        match &mut self.transform {
+            Some(transform) => {
+                *transform = transform.then(ProjectiveTransform::translation(dx, dy));
+            }
+            None => self.rect = shift.rect(self.rect),
+        }
+        self.snap_anchor = self.snap_anchor.map(|anchor| shift.point(anchor));
+    }
+
     pub(crate) fn translated(&self, dx: f32, dy: f32) -> Self {
         let (rect, transform) = match self.transform {
             Some(transform) => (
@@ -256,6 +293,9 @@ pub(crate) struct PassedDown {
     pub clip: Option<Rect>,
     pub snap_anchor: Option<Point>,
     pub translated: bool,
+    // Whether the container's subtree can move as a frame when only the
+    // offset it moves its children by changes.
+    pub framed: bool,
 }
 
 // A node of the graph a scene keeps a record of: a layer with its subtree,
@@ -335,6 +375,12 @@ pub(crate) struct RasterScene {
     pub subtrees: Vec<SubtreeItems>,
     /// What the layers with child layers passed down to them.
     pub passed_down: Vec<PassedDown>,
+    // The subtrees whose items draw shifted from where they were pushed.
+    pub(crate) frames: Frames,
+    // How many times a push passed over a node whose clip left nothing of it
+    // to draw: the node's items are not in the scene, and where it moves to
+    // they would show.
+    pub(crate) culled: u32,
     /// The scale and the root's size the walk started from, which the
     /// shadow light comes from.
     pub start: Option<LightSource>,
@@ -365,6 +411,8 @@ impl RasterScene {
             order: Vec::new(),
             subtrees: Vec::new(),
             passed_down: Vec::new(),
+            frames: Frames::default(),
+            culled: 0,
             start: None,
             kept: Vec::new(),
             snap_anchor: None,
@@ -382,6 +430,7 @@ impl RasterScene {
         self.order.clear();
         self.subtrees.clear();
         self.passed_down.clear();
+        self.frames.clear();
         self.start = None;
         self.kept.clear();
         self.routes_stale = true;
@@ -459,6 +508,36 @@ impl RasterScene {
             ..record
         });
         index
+    }
+
+    // Notes that a push passed over a node whose clip left nothing of it.
+    pub(crate) fn note_culled(&mut self) {
+        self.culled = self.culled.wrapping_add(1);
+    }
+
+    // Ends the subtree's chance to be a frame, when a push passed over a node
+    // since `culled`, the count when a frame root's push began: its items lack the
+    // nodes the clip cut away, which a shift would bring into view.
+    #[inline]
+    pub(crate) fn forget_frame_if_culled(&mut self, index: usize, culled: Option<u32>) {
+        if culled.is_some_and(|culled| self.culled != culled) {
+            self.forget_frame(index);
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn forget_frame(&mut self, index: usize) {
+        let Some(at) = self.record_mut(index).and_then(|record| record.passed_down) else {
+            return;
+        };
+        let entry = match self.rewrite.as_deref_mut() {
+            Some(rewrite) => rewrite.passed_down_mut(&mut self.passed_down, at),
+            None => self.passed_down.get_mut(at),
+        };
+        if let Some(entry) = entry {
+            entry.framed = false;
+        }
     }
 
     pub(crate) fn note_passed_down(&mut self, index: usize, passed_down: PassedDown) {

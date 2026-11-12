@@ -4,8 +4,10 @@ use cranpose_ui_graphics::{ArcGeometry, Brush, CornerRadii, Rect, TAU};
 
 use crate::{
     draw::{ClipBounds, RenderItem, ShapeCoverage, clip_rect_to_window, place_shape},
+    frame::shift_item,
     scene::{DrawShape, ImageDraw, Outline, RasterScene, ShadowDraw, TextDraw},
     scene_item::ItemRef,
+    shift::Shift,
 };
 
 const MAX_AREAS: usize = 8;
@@ -343,6 +345,62 @@ pub(crate) fn add_changed_pair(
         add_area(areas, area);
     }
     if let ItemReach::Replaced(held) = reach {
+        *held = new_bounds;
+    }
+}
+
+// Moves `item` of `scene` by `shift`, a move of its frame, and adds to
+// `areas` where it draws differently, as `add_changed_pair` does for an item
+// that took another's place; `held` says where it reached.
+#[inline(never)]
+pub(crate) fn move_item(
+    scene: &mut RasterScene,
+    item: RenderItem,
+    shift: Shift,
+    held: ItemReach<'_>,
+    window: ClipBounds,
+    areas: &mut Vec<ClipBounds>,
+) {
+    // A solid fill that moves narrows to the strips along its moved edges.
+    let fill = match item {
+        RenderItem::Shape(at) if solid_fill(&scene.shapes[at]) => place_shape(&scene.shapes[at])
+            .and_then(|placed| match placed.coverage {
+                ShapeCoverage::Fill { rect, radii } => Some((rect, radii)),
+                _ => None,
+            }),
+        _ => None,
+    };
+    let old_bounds = match &held {
+        ItemReach::Unknown => scene.item_bounds(item, window),
+        ItemReach::Kept(held) => *held,
+        ItemReach::Replaced(held) => **held,
+    };
+    shift_item(scene, item, shift);
+    let narrowed = match (fill, item) {
+        (Some((a, radii)), RenderItem::Shape(at)) => {
+            let draw = &scene.shapes[at];
+            place_shape(draw).and_then(|placed| {
+                let ShapeCoverage::Fill { rect: b, .. } = placed.coverage else {
+                    return None;
+                };
+                let strips = edge_strips(a, b, radii.unwrap_or_default());
+                for strip in strips.into_iter().flatten() {
+                    if let Some(area) = clip_rect_to_window(strip, draw.clip, window) {
+                        add_area(areas, area);
+                    }
+                }
+                Some(clip_rect_to_window(placed.rect, draw.clip, window))
+            })
+        }
+        _ => None,
+    };
+    let new_bounds = narrowed.unwrap_or_else(|| scene.item_bounds(item, window));
+    if narrowed.is_none() {
+        for area in [old_bounds, new_bounds].into_iter().flatten() {
+            add_area(areas, area);
+        }
+    }
+    if let ItemReach::Replaced(held) = held {
         *held = new_bounds;
     }
 }

@@ -6,6 +6,7 @@
 use cranpose_core::SceneUpdate;
 use cranpose_ui::{Point, Rect};
 
+use super::translate_run::TranslateRun;
 use crate::graph::{CachePolicy, HitTestNode, IsolationReasons};
 
 /// The properties of a record that has pointer handling, layer bounds other
@@ -27,6 +28,8 @@ pub struct LayerProps {
     pub cache_policy: CachePolicy,
     #[cfg(feature = "window-damage")]
     pub(crate) content_run: ContentRun,
+    // The updates that changed the record's content only by moving it.
+    pub(crate) translate_run: TranslateRun,
 }
 
 impl LayerProps {

@@ -3,6 +3,7 @@
 
 mod damage;
 mod draw;
+mod frame;
 mod growth_trim;
 mod pipeline;
 mod pixel;
@@ -10,6 +11,7 @@ mod rewrite;
 /// The retained scene and hit regions of the pixel renderer.
 pub mod scene;
 mod scene_item;
+mod shift;
 pub mod sprites;
 mod style;
 mod surface;
