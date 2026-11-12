@@ -177,6 +177,10 @@ fn open_urls(_urls: &[String]) -> Result<(), String> {
 
 #[path = "device_loss.rs"]
 mod device_loss;
+#[path = "native_window_wakes.rs"]
+mod native_window_wakes;
+#[path = "present_thread.rs"]
+mod present_thread;
 #[path = "primary_frame.rs"]
 mod primary_frame;
 #[path = "primary_surface.rs"]
@@ -186,8 +190,9 @@ mod primary_surface;
 mod robot_driver;
 #[path = "robot_seat.rs"]
 mod robot_seat;
+use native_window_wakes::native_window_wakes;
 use primary_surface::{
-    PrimarySurface, apply_primary_surface_resize, headless_requested_viewport,
+    PrimaryPresent, PrimarySurface, apply_primary_surface_resize, headless_requested_viewport,
     primary_viewport_for_surface_size, surface_logical_viewport_size,
 };
 #[cfg(feature = "robot")]
@@ -438,7 +443,7 @@ struct App {
     platform_env: Rc<crate::platform_env::PlatformEnvironment>,
     content: Option<Box<dyn FnMut()>>,
     window: Option<Arc<dyn Window>>,
-    surface: Option<wgpu::Surface<'static>>,
+    surface: Option<PrimaryPresent>,
     surface_config: Option<wgpu::SurfaceConfiguration>,
     surface_caps: Option<wgpu::SurfaceCapabilities>,
     app: Option<AppShell<WgpuRenderer>>,
@@ -627,7 +632,8 @@ impl App {
         else {
             return;
         };
-        if let (Some(surface), Some(surface_config)) = (&self.surface, &mut self.surface_config) {
+        let surface = self.surface.as_ref().and_then(PrimaryPresent::surface);
+        if let (Some(surface), Some(surface_config)) = (surface, &mut self.surface_config) {
             apply_frame_pacing_mode(
                 &device,
                 surface,
@@ -684,56 +690,6 @@ impl App {
     fn refresh_and_sync_native_windows(&mut self, event_loop: &dyn ActiveEventLoop) {
         self.refresh_native_window_requests();
         self.sync_native_windows(event_loop);
-    }
-
-    fn handle_primary_frame_requested(&mut self, event_loop: &dyn ActiveEventLoop) {
-        if !self.primary_frames_enabled() {
-            return;
-        }
-        let registry = Rc::clone(&self.native_window_registry);
-        let frame_interval = self.frame_interval();
-        let waiting_for_frame_cap = self
-            .last_frame_start_time
-            .and_then(|started_at| frame_interval.map(|interval| started_at + interval))
-            .is_some_and(|deadline| deadline > Instant::now());
-        let primary_visible = self.primary_visible();
-        let direct_declaration_update = {
-            let Some(app) = &mut self.app else {
-                return;
-            };
-            let needs_redraw = app.frame_schedule().needs_frame;
-            if !needs_redraw {
-                return;
-            }
-            let direct_declaration_update = primary_declaration_host_needs_direct_update(
-                primary_visible,
-                self.settings.headless,
-                needs_redraw,
-                waiting_for_frame_cap,
-            );
-            if direct_declaration_update {
-                trace_native_window!(
-                    "primary declaration host proxy update visible={} headless={}",
-                    primary_visible,
-                    self.settings.headless
-                );
-                let update_result = update_declaration_host_frame(
-                    app,
-                    &registry,
-                    &mut self.last_frame_start_time,
-                    frame_interval,
-                );
-                self.robot.record_idle_update_result(update_result);
-            }
-            direct_declaration_update
-        };
-
-        if direct_declaration_update {
-            self.sync_native_windows(event_loop);
-        } else if waiting_for_frame_cap {
-        } else if let Some(window) = &self.window {
-            request_redraw_once(window, &mut self.primary_redraw_pending);
-        }
     }
 
     fn poll_primary_pointer_gesture(&mut self) -> bool {
@@ -3676,11 +3632,24 @@ fn wgpu_renderer_for_surface(
     scale_factor: f64,
     on_device_lost: cranpose_render_wgpu::DeviceLostHandler,
 ) -> WgpuRenderer {
+    let mut renderer = wgpu_renderer(text_system, scale_factor, on_device_lost);
+    renderer.init_gpu(GpuTarget::on_adapter(
+        adapter,
+        device,
+        queue,
+        surface_format,
+    ));
+    renderer
+}
+
+fn wgpu_renderer(
+    text_system: WgpuTextSystem,
+    scale_factor: f64,
+    on_device_lost: cranpose_render_wgpu::DeviceLostHandler,
+) -> WgpuRenderer {
     let mut renderer = WgpuRenderer::with_text_system(text_system);
     renderer.set_root_scale(scale_factor as f32);
     renderer.set_device_lost_handler(on_device_lost);
-    let target = GpuTarget::on_adapter(adapter, device, queue, surface_format);
-    renderer.init_gpu(target);
     renderer
 }
 
@@ -4954,6 +4923,11 @@ impl cranpose_app_shell::PlatformTextInputHandler for DesktopTextInput {
 
 impl Drop for App {
     fn drop(&mut self) {
+        // The present thread holds the surface, which holds the window: the
+        // thread ends while the loop still holds the window.
+        if let Some(app) = &mut self.app {
+            app.renderer().shutdown_present_runtime();
+        }
         cranpose_services::advance_lifecycle(cranpose_services::LifecycleState::Destroyed);
     }
 }
@@ -5070,15 +5044,18 @@ impl ApplicationHandler for App {
 
         let text_system = WgpuTextSystem::from_text_fonts(self.settings.resolve_fonts());
         let initial_scale = window.scale_factor();
-        let renderer = wgpu_renderer_for_surface(
+        let mut renderer = wgpu_renderer(
             text_system.clone(),
+            initial_scale,
+            self.device_loss.handler(&self.event_proxy),
+        );
+        let target = GpuTarget::on_adapter(
             &adapter,
             Arc::clone(&device),
             Arc::clone(&queue),
             crate::surface_format::display_surface_view_format(surface_format),
-            initial_scale,
-            self.device_loss.handler(&self.event_proxy),
         );
+        let present = self.start_primary_renderer(&mut renderer, target, surface, &surface_config);
 
         let viewport = primary_viewport_for_surface_size(
             &self.settings,
@@ -5159,7 +5136,7 @@ impl ApplicationHandler for App {
             primary_launch_requires_initial_redraw(self.primary_visible(), self.settings.headless);
 
         self.window = Some(window);
-        self.surface = Some(surface);
+        self.surface = Some(present);
         self.surface_config = Some(surface_config);
         self.surface_caps = Some(surface_caps);
         self.app = Some(app);
@@ -5209,6 +5186,9 @@ impl ApplicationHandler for App {
             return;
         }
         self.relay_primary_held_press(event_loop, &event);
+        if matches!(event, WindowEvent::RedrawRequested) {
+            self.drain_primary_present_returns();
+        }
         let primary_frames_enabled = self.primary_frames_enabled();
         let Some(window) = &self.window else {
             return;
@@ -5238,13 +5218,13 @@ impl ApplicationHandler for App {
         let Some(platform) = &mut self.platform else {
             return;
         };
-        let Some(surface) = &self.surface else { return };
+        let Some(present) = &self.surface else { return };
         let Some(surface_config) = &mut self.surface_config else {
             return;
         };
         let mut primary = PrimarySurface {
             window,
-            surface,
+            present,
             config: surface_config,
             viewport_override: primary_viewport_override,
         };
@@ -5470,7 +5450,9 @@ impl ApplicationHandler for App {
             WindowEvent::RedrawRequested => {
                 record_pacing_event(|diag| &mut diag.redraw_events);
                 self.wakes.redraw_taken(&mut self.primary_redraw_pending);
-                if defer_window_redraw(event_loop, primary_frames_enabled, frame_cap_deadline) {
+                if defer_window_redraw(event_loop, primary_frames_enabled, frame_cap_deadline)
+                    || !app.renderer().has_frame_credit()
+                {
                     return;
                 }
                 log::trace!(target: "cranpose::input", "desktop redraw requested");
@@ -5542,6 +5524,7 @@ impl ApplicationHandler for App {
         }
         self.serve_platform_before_waiting(event_loop);
         self.serve_app_requests();
+        self.drain_primary_present_returns();
         let now = Instant::now();
         if self.poll_native_window_global_primary_press() {
             self.refresh_native_window_requests();
@@ -5594,7 +5577,11 @@ impl ApplicationHandler for App {
             self.last_redraw_empty,
         );
         let frame_schedule = app.frame_schedule();
-        let has_active_animations = frames_enabled && app.has_active_animations();
+        // The present thread holds every frame it takes: the next one waits
+        // for the wake of its hand back, not on a deadline or a poll.
+        let waits_for_present = !app.renderer().has_frame_credit();
+        let has_active_animations =
+            frames_enabled && app.has_active_animations() && !waits_for_present;
         let needs_update = frame_schedule.needs_update;
         let needs_redraw =
             primary_frames_enabled && (frame_schedule.needs_frame || app.frame_owed());
@@ -5606,8 +5593,8 @@ impl ApplicationHandler for App {
         }
         let next_frame_time = last_frame_start_time
             .and_then(|started_at| frame_interval.map(|interval| started_at + interval));
-        let waiting_for_frame_cap =
-            needs_redraw && next_frame_time.is_some_and(|deadline| deadline > now);
+        let waiting_for_frame_cap = needs_redraw
+            && (waits_for_present || next_frame_time.is_some_and(|deadline| deadline > now));
         let primary_next_event_time = primary_frames_enabled
             .then_some(frame_schedule.next_deadline)
             .flatten();
@@ -5639,68 +5626,12 @@ impl ApplicationHandler for App {
         let webview_deadline = None;
 
         let Some(app) = self.app.as_mut() else { return };
-        let mut native_drag_deadline: Option<Instant> = None;
-        let native_position_poll_deadline = self
-            .native_windows
-            .values()
-            .any(|native| {
-                native_window_position_poll_needed(
-                    native.options.visible,
-                    native.active_drag.is_some(),
-                    native.pending_outer_positions.has_pending(),
-                )
-            })
-            .then_some(self.next_native_window_position_poll_at);
-        let mut native_frame_cap_deadline: Option<Instant> = None;
-        let mut native_next_event_time: Option<Instant> = None;
-        let pacing_mode = app.frame_pacing_mode();
-        for native in self.native_windows.values_mut() {
-            if !native.presentable() {
-                continue;
-            }
-            let Some(surface) = native_surface(app, native) else {
-                continue;
-            };
-
-            let frame_schedule = surface.frame_schedule();
-            let needs_redraw = native_surface_needs_frame(
-                frame_schedule.needs_frame,
-                surface.frame_owed(),
-                surface.needs_redraw(),
-                native.surface_dirty,
-            );
-            let next_frame_time = native.last_frame_start_time.and_then(|started_at| {
-                native
-                    .frame_interval(pacing_mode)
-                    .map(|interval| started_at + interval)
-            });
-            let waiting_for_frame_cap =
-                needs_redraw && next_frame_time.is_some_and(|deadline| deadline > now);
-
-            if needs_redraw && !waiting_for_frame_cap {
-                native.window.request_redraw();
-            }
-            if let Some(next_poll_at) = native.active_drag.and_then(|active_drag| {
-                native_window_drag_poll_deadline(
-                    active_drag.next_poll_at,
-                    NATIVE_WINDOW_GLOBAL_POINTER_POLLED,
-                )
-            }) {
-                native_drag_deadline = Some(
-                    native_drag_deadline.map_or(next_poll_at, |current| current.min(next_poll_at)),
-                );
-            }
-            if waiting_for_frame_cap && let Some(deadline) = next_frame_time {
-                native_frame_cap_deadline = Some(
-                    native_frame_cap_deadline.map_or(deadline, |current| current.min(deadline)),
-                );
-            }
-            if let Some(next_time) = frame_schedule.next_deadline {
-                native_next_event_time = Some(
-                    native_next_event_time.map_or(next_time, |current| current.min(next_time)),
-                );
-            }
-        }
+        let native = native_window_wakes(
+            app,
+            &mut self.native_windows,
+            self.next_native_window_position_poll_at,
+            now,
+        );
 
         let robot_needs_poll = self.robot.awaiting_progress();
 
@@ -5709,17 +5640,18 @@ impl ApplicationHandler for App {
             LoopControlInputs {
                 robot_needs_poll,
                 free_running: primary_frames_enabled
+                    && !waits_for_present
                     && free_running_frame(
                         frame_interval,
                         needs_redraw,
                         self.primary_redraw_pending,
                     ),
                 primary_pointer_polled,
-                drag_poll_deadline: native_drag_deadline,
-                position_poll_deadline: native_position_poll_deadline,
+                drag_poll_deadline: native.drag_poll,
+                position_poll_deadline: native.position_poll,
                 frame_cap_deadline: [
-                    next_frame_time.filter(|_| waiting_for_frame_cap),
-                    native_frame_cap_deadline,
+                    next_frame_time.filter(|deadline| waiting_for_frame_cap && *deadline > now),
+                    native.frame_cap,
                 ]
                 .into_iter()
                 .flatten()
@@ -5728,7 +5660,7 @@ impl ApplicationHandler for App {
                 next_event_time: [
                     webview_deadline,
                     primary_next_event_time,
-                    native_next_event_time,
+                    native.next_event,
                     self.accessibility
                         .as_ref()
                         .and_then(super::accessibility::DesktopAccessibilityBridge::wake_deadline),

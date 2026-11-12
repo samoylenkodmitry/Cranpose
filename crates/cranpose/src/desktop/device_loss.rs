@@ -104,7 +104,9 @@ impl App {
                 Err(_) => {
                     let adapter = crate::wgpu_surface::request_adapter(
                         &context.gpu.instance,
-                        self.surface.as_ref(),
+                        self.surface
+                            .as_ref()
+                            .and_then(super::PrimaryPresent::surface),
                     )
                     .map_err(LaunchError::NoAdapter)?;
                     let opened = request_primary_device(&adapter, requirements)
@@ -131,7 +133,13 @@ impl App {
                 adapter_downlevel: downlevel,
             });
         };
-        if let (Some(surface), Some(config)) = (&self.surface, &self.surface_config) {
+        // A primary window that presents on the present thread keeps the
+        // lost device: its surface sits on that thread.
+        let surface = self
+            .surface
+            .as_ref()
+            .and_then(super::PrimaryPresent::surface);
+        if let (Some(surface), Some(config)) = (surface, &self.surface_config) {
             surface.configure(&gpu.device, config);
             hand_over(app.renderer(), config.format);
         }
