@@ -60,7 +60,7 @@ impl SceneStore {
         let offset = [leaf.content_offset.x, leaf.content_offset.y];
         let shifted = !same_pair(self.warm[index].content_offset, offset);
         self.warm[index].content_offset = offset;
-        let reflagged = self.write_leaf_flags(index, leaf.flags);
+        let reflagged = self.write_flag_row(index, leaf.flags);
         let moved = self.place_leaf_row(index, leaf.origin_in_parent) || shifted;
         LeafRows {
             moved,
@@ -95,7 +95,7 @@ impl SceneStore {
     /// with `flags`.
     pub fn place_leaf(&mut self, id: RecordId, origin_in_parent: Point, flags: RecordFlags) {
         let index = id.index();
-        let reflagged = self.write_leaf_flags(index, flags);
+        let reflagged = self.write_flag_row(index, flags);
         let moved = self.place_leaf_row(index, origin_in_parent);
         if moved {
             self.moved(index);
@@ -121,10 +121,10 @@ impl SceneStore {
         }
     }
 
-    // Writes the flags of the leaf at `index` the store does not keep
+    // Writes the flags of the record at `index` the store does not keep
     // itself; returns whether they changed.
     #[inline]
-    fn write_leaf_flags(&mut self, index: usize, flags: RecordFlags) -> bool {
+    pub(super) fn write_flag_row(&mut self, index: usize, flags: RecordFlags) -> bool {
         let current = self.tree[index].flags;
         let flags = flags
             .without(RecordFlags::STORE_KEPT)

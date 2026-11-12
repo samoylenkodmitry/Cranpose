@@ -19,9 +19,7 @@ use crate::{
     layer_transform::{
         layer_scales_or_rotates, layer_transform_to_parent, layer_transform_to_window,
     },
-    scene_store::{
-        HeadKind, Item, LayerHead, LayerRef, RecordFlags, RecordKind, RecordSeed, SceneStore,
-    },
+    scene_store::{HeadKind, Item, LayerHead, LayerRef, RecordKind, RecordSeed, SceneStore},
 };
 
 #[derive(Clone, Copy)]
@@ -132,22 +130,6 @@ pub(super) fn assign_layer(store: &mut SceneStore, record: RecordId, head: Layer
     if space {
         note_space_change();
     }
-}
-
-// Sets whether the node of `record`, with `slices`, publishes live window
-// origins.
-pub(super) fn set_origin_sinks(
-    store: &mut SceneStore,
-    record: RecordId,
-    slices: &ModifierNodeSlices,
-) {
-    let flags = store.layer(record).flags();
-    let flags = if modifier_slices_have_origin_sinks(slices) {
-        flags | RecordFlags::ORIGIN_SINKS
-    } else {
-        flags.without(RecordFlags::ORIGIN_SINKS)
-    };
-    store.write_flags(record, flags);
 }
 
 #[inline]

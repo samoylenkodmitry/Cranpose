@@ -15,14 +15,14 @@ use super::{
     DrawTarget, GraphChanges, GroupPaint, KeptChild, LowerContext, OwnDraws, PlacedGeometry,
     SnapshotNodeData, TranslateAncestorContext, TranslateGeometry, Wrapping, child_identity,
     content_layer, forget_dirty_node, hit_test_from_slices, layer_and_node_bounds, layer_identity,
-    lower_child, move_kept_child, outer_commands, outer_draws, placed_child_geometry,
-    placing_transform, read_node_data, set_bounds, set_origin_sinks, shaped_graphics_layer,
+    lower_child, modifier_slices_have_origin_sinks, move_kept_child, outer_commands, outer_draws,
+    placed_child_geometry, placing_transform, read_node_data, set_bounds, shaped_graphics_layer,
     take_wrapped_layer, text_node, translate_unwrapped, write_node_content, write_wrapper,
 };
 use crate::{
     NodeUpdate,
     graph::graphics_layers_read_alike,
-    scene_store::{Item, LayerRef, RecordKind, SceneStore},
+    scene_store::{Item, LayerRef, RecordKind, SceneStore, TranslatedWrite},
 };
 
 pub(super) fn translate_tracking_hits(
@@ -492,22 +492,14 @@ pub(super) fn apply_translated_container_state(
     parent_content_offset: Point,
     geometry: TranslateGeometry,
 ) {
-    let layer = store.layer(container);
     let position = layout_state.position();
     let transform = placing_transform(
-        layer.local_bounds(),
+        store.layer(container).local_bounds(),
         position,
         store.graphics_layer(container),
         parent_content_offset,
     );
-    let translated = layer.translated_content_context();
     store.set_placement(container, position, transform);
-    if translated {
-        let offset = modifier_slices
-            .translated_content_offset()
-            .unwrap_or(geometry.content_offset);
-        store.edit_props(container, |props| props.translated_content_offset = offset);
-    }
     modifier_slices.publish_window_geometry(
         geometry.top_left,
         geometry.window_transform,
@@ -710,10 +702,29 @@ fn finish_translated_container(
     size: Size,
 ) {
     write_own_content_around_children(store, container, (&mut list, own), modifier_slices, size);
-    store.write_items(container, &list);
+    let write = translated_write(store, container, modifier_slices, Some(&list));
+    store.write_translated(container, write);
     store.lists.give(list);
-    let hit_test = hit_test_from_slices(modifier_slices);
-    store.set_hit_test(container, hit_test);
-    set_origin_sinks(store, container, modifier_slices);
-    store.note_content_change(container);
+}
+
+// What a translate step writes into `container`, a layer of a node with
+// `slices` placed against the content offset the store holds, past its
+// children: `items` when the step wrote them.
+pub(super) fn translated_write<'a>(
+    store: &SceneStore,
+    container: RecordId,
+    slices: &Rc<ModifierNodeSlices>,
+    items: Option<&'a [Item]>,
+) -> TranslatedWrite<'a> {
+    let translated = store.layer(container).translated_content_context();
+    TranslatedWrite {
+        translated_content_offset: translated.then(|| {
+            slices
+                .translated_content_offset()
+                .unwrap_or_else(|| store.content_offset(container))
+        }),
+        items,
+        hit_test: hit_test_from_slices(slices),
+        origin_sinks: modifier_slices_have_origin_sinks(slices),
+    }
 }

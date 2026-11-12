@@ -8,8 +8,10 @@ use cranpose_ui::{
 
 use super::{
     SnapshotNodeData, TranslateAncestorContext, TranslateGeometry, TranslatedContainer, Wrapping,
-    hit_test_from_slices, read_node_data, set_origin_sinks,
-    translate_layer::{apply_translated_container_state, translate_layer_from_data},
+    read_node_data,
+    translate_layer::{
+        apply_translated_container_state, translate_layer_from_data, translated_write,
+    },
     translated_container,
 };
 use crate::{
@@ -111,10 +113,8 @@ pub(super) fn translate_leaf_text(
     store.set_content_offset(container, geometry.content_offset);
     let offset = ancestors.parent_content_offset;
     apply_translated_container_state(store, container, slices, layout_state, offset, geometry);
-    let hit_test = hit_test_from_slices(slices);
-    store.set_hit_test(container, hit_test);
-    set_origin_sinks(store, container, slices);
-    store.note_content_change(container);
+    let write = translated_write(store, container, slices, None);
+    store.write_translated(container, write);
     Some(true)
 }
 

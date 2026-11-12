@@ -26,6 +26,7 @@ mod slab;
 mod spec;
 mod store;
 mod touched;
+mod translated_write;
 
 use child_order::ChildOrder;
 use facts::Facts;
@@ -52,3 +53,4 @@ use shape_chunks::ShapeChunks;
 pub use shape_chunks::{ShapeRef, ShapeRun};
 pub(crate) use slab::Slab;
 pub use store::{RecordSeed, SceneStore, SceneVersion};
+pub(crate) use translated_write::TranslatedWrite;
