@@ -330,13 +330,25 @@ impl SlotWriteSession<'_> {
         else {
             return self.recover_malformed_group_start(key, started.anchor);
         };
+        // A group appended at the end, as every group of a first
+        // composition is, moves no record.
         if start.kind == GroupStartKind::Inserted
-            && self.table.open_insert_run(start.group.index())
+            && start.group.index() + 1 < self.table.group_count()
+        {
+            self.root_insert_run(start.group.index());
+        }
+        start
+    }
+
+    // Starts an insert run rooted at the new group at `index`, whose frame is
+    // the top one, unless one is open.
+    #[inline(never)]
+    fn root_insert_run(&mut self, index: usize) {
+        if self.table.open_insert_run(index)
             && let Some(frame) = self.state.group_stack.last_mut()
         {
             frame.root_insert_run();
         }
-        start
     }
 
     /// Opens the group at the writer's cursor when it is the one `key`

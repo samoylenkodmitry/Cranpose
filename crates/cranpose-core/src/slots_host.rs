@@ -439,9 +439,6 @@ impl SlotsHost {
         else {
             return Ok(FinishedSlotPass::default());
         };
-        // A pass that ends with frames still open may hold an insert run;
-        // the checks below read the whole table.
-        table.settle_insert_run();
 
         state.flush_payload_location_refreshes(table);
 
