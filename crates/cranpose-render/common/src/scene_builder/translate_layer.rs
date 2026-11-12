@@ -501,7 +501,6 @@ pub(super) fn apply_translated_container_state(
         parent_content_offset,
     );
     let translated = layer.translated_content_context();
-    store.set_content_offset(container, geometry.content_offset);
     store.set_placement(container, position, transform);
     if translated {
         let offset = modifier_slices

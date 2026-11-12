@@ -108,6 +108,7 @@ pub(super) fn translate_leaf_text(
         layer.local_bounds(),
         ancestors.parent_abs,
     );
+    store.set_content_offset(container, geometry.content_offset);
     let offset = ancestors.parent_content_offset;
     apply_translated_container_state(store, container, slices, layout_state, offset, geometry);
     let hit_test = hit_test_from_slices(slices);
