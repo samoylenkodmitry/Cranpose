@@ -344,14 +344,14 @@ mod text_group {
     where
         S: IntoTextSource + Clone + PartialEq + 'static,
     {
-        text_node(text.into_text_source(), modifier, style, options)
+        text_node(&text.into_text_source(), modifier, style, options)
     }
 
     // What the group makes of any text type. Out of line, one copy: the group
     // of each text type would repeat it.
     #[inline(never)]
     fn text_node(
-        source: TextSource,
+        source: &TextSource,
         modifier: Modifier,
         style: Arc<TextStyle>,
         options: TextLayoutOptions,
