@@ -459,6 +459,21 @@ fn a_still_screen_needs_no_tick_until_woken() {
     .expect("valid surface");
     app.set_active(true);
     assert!(app.tick(1));
+    sleeps_after_its_trim(&mut app, 1);
+}
+
+// Ticks `app`, last ticked at `frame_time`, once at the time of its trim at
+// rest, as a host that wakes there does: then it needs no tick until woken.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the test waits for the trim's time as a host does"
+)]
+fn sleeps_after_its_trim(app: &mut Application, frame_time: u64) {
+    let NextTick::At(at) = app.next_tick() else {
+        panic!("a resting app asks for a tick at its trim");
+    };
+    std::thread::sleep(at.saturating_duration_since(Instant::now()));
+    app.tick(frame_time + 1);
     assert_eq!(app.next_tick(), NextTick::OnWake);
 }
 
@@ -523,5 +538,5 @@ fn a_delay_wakes_a_resting_host_and_its_change_shows() {
             std::thread::sleep(Duration::from_millis(1));
         }
     }
-    assert_eq!(app.next_tick(), NextTick::OnWake);
+    sleeps_after_its_trim(&mut app, frame_time);
 }

@@ -9,7 +9,7 @@ use std::{
 };
 
 use cranpose::{
-    framebuffer::{Framebuffer, PixelRect, Rgb565Order},
+    framebuffer::{FrameSchedule, Framebuffer, PixelRect, Rgb565Order},
     prelude::*,
 };
 use cranpose_animation::{
@@ -55,6 +55,10 @@ fn the_host_theme_reaches_content() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the test waits for the trim's time as a host does"
+)]
 fn a_still_picture_lets_the_host_sleep() {
     let mut framebuffer = Framebuffer::new(40, 30, 1.0, SystemTheme::Light, &[], || {
         Spacer(Modifier::empty().fill_max_size().background(RED));
@@ -66,8 +70,17 @@ fn a_still_picture_lets_the_host_sleep() {
     let schedule = framebuffer.frame_schedule();
     assert!(!schedule.needs_update);
     assert!(!schedule.needs_frame);
-    assert_eq!(schedule.next_deadline, None);
+    // One wake at the time of the trim at rest, which draws nothing.
+    let trim = schedule
+        .next_deadline
+        .expect("a still picture trims at rest");
+    std::thread::sleep(trim.saturating_duration_since(Instant::now()));
     assert!(!framebuffer.tick(16_000_001));
+    assert_eq!(
+        framebuffer.frame_schedule(),
+        FrameSchedule::default(),
+        "after its trim the host sleeps"
+    );
     let mut areas = Vec::new();
     framebuffer.changed_areas(&mut areas);
     assert!(
