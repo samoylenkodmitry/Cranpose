@@ -1,5 +1,5 @@
 use cranpose_render_common::{graph::ProjectiveTransform, scene_store::LayerRef};
-use cranpose_ui_graphics::Rect;
+use cranpose_ui_graphics::{Rect, shared_sort};
 
 use super::{ContentStyle, RasterTraversalContext, populate_draws_from_graph};
 use crate::scene::{RasterScene, Subtree};
@@ -62,7 +62,7 @@ pub(super) fn seen_surfaces<'a>(
             Some((depth, seen.layer, parent))
         })
         .collect();
-    surfaces.sort_by(|a, b| b.0.total_cmp(&a.0));
+    shared_sort::sort_by(&mut surfaces, |a, b| b.0.total_cmp(&a.0));
     Some(
         surfaces
             .into_iter()

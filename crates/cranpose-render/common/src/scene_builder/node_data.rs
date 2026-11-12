@@ -5,6 +5,7 @@ use std::any::Any;
 
 use cranpose_core::{MemoryApplier, NodeId};
 use cranpose_ui::{LayoutNode, Point, Size, SubcomposeLayoutNode, widgets::LayoutState};
+use cranpose_ui_graphics::shared_sort;
 
 use super::{Level, SnapshotNodeData};
 
@@ -121,7 +122,7 @@ fn z_sorted_children(
         .iter()
         .map(|&child| (node_z_index(applier, child), child))
         .collect();
-    ordered.sort_by(|a, b| a.0.total_cmp(&b.0));
+    shared_sort::sort_by(&mut ordered, |a, b| a.0.total_cmp(&b.0));
     Some(ordered.into_iter().map(|(_, child)| child).collect())
 }
 

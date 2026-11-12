@@ -1,5 +1,6 @@
 use std::collections::VecDeque;
 
+use cranpose_ui_graphics::shared_sort;
 use web_time::Instant;
 
 const FRAME_HISTORY_SIZE: usize = 60;
@@ -265,7 +266,7 @@ impl FrameIntervalStats {
         }
 
         let sorted = &mut sorted[..count];
-        sorted.sort_by(f32::total_cmp);
+        shared_sort::sort_by(sorted, f32::total_cmp);
 
         Self {
             count: count as u32,

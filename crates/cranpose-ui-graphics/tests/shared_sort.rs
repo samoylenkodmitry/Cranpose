@@ -14,7 +14,7 @@ fn keys(count: usize, seed: u32) -> Vec<(u32, usize)> {
 
 #[test]
 fn shared_sort_matches_the_standard_stable_sort() {
-    for count in [0, 1, 2, 3, 17, 64, 1500] {
+    for count in [0, 1, 2, 3, 17, 20, 21, 64, 1500] {
         for seed in 0..4 {
             let mut shared = keys(count, seed);
             let mut standard = shared.clone();

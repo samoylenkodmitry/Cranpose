@@ -14,16 +14,32 @@ pub fn sort_positions(positions: &mut [usize], compare: &mut dyn FnMut(usize, us
     positions.sort_unstable_by(|&a, &b| compare(a, b).then(a.cmp(&b)));
 }
 
+// The longest list `sort_by` sorts in place, with no list of positions.
+const SORTED_IN_PLACE: usize = 20;
+
 /// Sorts `items` by `compare` and keeps equal items in their order, as
-/// [`slice::sort_by`] does, through [`sort_positions`]. It allocates a list
-/// of `items.len()` positions.
+/// [`slice::sort_by`] does. A list of up to 20 items sorts in place; a
+/// longer one sorts through [`sort_positions`] and allocates a list of
+/// `items.len()` positions.
 pub fn sort_by<T>(items: &mut [T], mut compare: impl FnMut(&T, &T) -> Ordering) {
-    if items.len() < 2 {
+    if items.len() <= SORTED_IN_PLACE {
+        insert_in_order(items, &mut compare);
         return;
     }
     let mut order: Vec<usize> = (0..items.len()).collect();
     sort_positions(&mut order, &mut |a, b| compare(&items[a], &items[b]));
     place_in_order(items, &mut order);
+}
+
+// Moves each item back past the items before it that compare greater.
+fn insert_in_order<T>(items: &mut [T], compare: &mut impl FnMut(&T, &T) -> Ordering) {
+    for end in 1..items.len() {
+        let mut at = end;
+        while at > 0 && compare(&items[at - 1], &items[at]) == Ordering::Greater {
+            items.swap(at - 1, at);
+            at -= 1;
+        }
+    }
 }
 
 // Moves the item at `order[place]` to `place` for every place, following
