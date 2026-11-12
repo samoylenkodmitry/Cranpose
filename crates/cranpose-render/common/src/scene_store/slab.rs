@@ -96,11 +96,21 @@ impl<T> Slab<T> {
             .rposition(Option::is_some)
             .map_or(0, |last| last + 1);
         if len < self.entries.len() {
-            self.entries.truncate(len);
-            self.free.retain(|&index| (index as usize) < len);
-            self.free.trim_growth_slack();
+            // The cut entries are empty: a truncate would drop each of them
+            // with the drop code of the entry type, which every slab would
+            // repeat.
+            std::mem::forget(self.entries.drain(len..));
+            cut_free_list(&mut self.free, len);
         }
     }
+}
+
+// Drops the free indices a cut took the entries of. Out of line, one copy
+// for every slab: a trim runs at rest.
+#[inline(never)]
+fn cut_free_list(free: &mut Vec<u32>, len: usize) {
+    free.retain(|&index| (index as usize) < len);
+    free.trim_growth_slack();
 }
 
 impl<T> Index<usize> for Slab<T> {
