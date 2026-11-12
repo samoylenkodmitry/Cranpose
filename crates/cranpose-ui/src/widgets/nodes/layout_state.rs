@@ -3,7 +3,7 @@
 
 use std::cell::{Cell, RefCell};
 
-use cranpose_core::{NodeId, PackedU64, collections::growth_slack::ROOM_KEPT_AT_REST};
+use cranpose_core::{NodeId, PackedU64, collections::growth_slack::RoomAtRest};
 
 use crate::modifier::{Point, Size};
 
@@ -41,8 +41,8 @@ impl PlacementPass {
     // Gives back the room a burst of cleared or unplaced nodes took,
     // keeping room for a few.
     pub(crate) fn trim(&self) {
-        self.cleared.borrow_mut().shrink_to(ROOM_KEPT_AT_REST);
-        self.left_unplaced.borrow_mut().shrink_to(ROOM_KEPT_AT_REST);
+        self.cleared.borrow_mut().keep_room_at_rest();
+        self.left_unplaced.borrow_mut().keep_room_at_rest();
     }
 
     // The placed nodes the running pass cleared, for its end to read and

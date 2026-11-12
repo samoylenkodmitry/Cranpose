@@ -14,7 +14,7 @@ use std::{cell::RefCell, fmt::Debug, rc::Rc};
 
 use cranpose_core::{
     MemoryApplier, NodeId, NodeMarks, SceneNodeAttachmentScratch,
-    collections::{growth_slack::ROOM_KEPT_AT_REST, map::HashSet},
+    collections::{growth_slack::RoomAtRest, map::HashSet},
 };
 use cranpose_foundation::{
     PointerButton, PointerButtons, PointerId, PointerSource, RotaryScrollEvent,
@@ -457,10 +457,10 @@ impl SurfaceRoutingScratch {
     // Gives back the room a burst of routed nodes took, keeping room for a
     // few.
     pub(crate) fn trim(&mut self) {
-        self.attached.shrink_to(ROOM_KEPT_AT_REST);
-        self.owners.shrink_to(ROOM_KEPT_AT_REST);
-        self.moved.shrink_to(ROOM_KEPT_AT_REST);
-        self.seen.shrink_to(ROOM_KEPT_AT_REST);
+        self.attached.keep_room_at_rest();
+        self.owners.keep_room_at_rest();
+        self.moved.keep_room_at_rest();
+        self.seen.keep_room_at_rest();
     }
 }
 

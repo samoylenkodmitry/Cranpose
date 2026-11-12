@@ -2,7 +2,10 @@
 
 use std::{ops::Range, sync::Arc};
 
-use cranpose_core::{NodeId, collections::growth_slack::ROOM_KEPT_AT_REST};
+use cranpose_core::{
+    NodeId,
+    collections::growth_slack::{ROOM_KEPT_AT_REST, RoomAtRest},
+};
 pub use cranpose_render_common::graph_scene::{HitRegion, Scene};
 use cranpose_render_common::{
     glyph_reach::{InkSpread, glyph_part},
@@ -599,16 +602,16 @@ pub(crate) fn trim_scene_buffer_pool() {
 
 impl SceneBuffers {
     fn trim(&mut self) {
-        self.runs.shrink_to(ROOM_KEPT_AT_REST);
-        self.images.shrink_to(ROOM_KEPT_AT_REST);
-        self.texts.shrink_to(ROOM_KEPT_AT_REST);
-        self.shadow_draws.shrink_to(ROOM_KEPT_AT_REST);
+        self.runs.keep_room_at_rest();
+        self.images.keep_room_at_rest();
+        self.texts.keep_room_at_rest();
+        self.shadow_draws.keep_room_at_rest();
         self.shadow_recorders.truncate(ROOM_KEPT_AT_REST);
-        self.shadow_recorders.shrink_to(ROOM_KEPT_AT_REST);
-        self.rrect_shadows.shrink_to(ROOM_KEPT_AT_REST);
-        self.draw_ops.shrink_to(ROOM_KEPT_AT_REST);
-        self.effect_layers.shrink_to(ROOM_KEPT_AT_REST);
-        self.backdrop_layers.shrink_to(ROOM_KEPT_AT_REST);
+        self.shadow_recorders.keep_room_at_rest();
+        self.rrect_shadows.keep_room_at_rest();
+        self.draw_ops.keep_room_at_rest();
+        self.effect_layers.keep_room_at_rest();
+        self.backdrop_layers.keep_room_at_rest();
     }
 }
 

@@ -1,4 +1,4 @@
-use cranpose_core::collections::growth_slack::ROOM_KEPT_AT_REST;
+use cranpose_core::collections::growth_slack::RoomAtRest;
 
 // A list a frame takes whole. A take trades the list's storage with the
 // taker's, so the two storages take turns.
@@ -29,6 +29,6 @@ impl<T> TakenList<T> {
 
     // Gives back the room a burst of items took, keeping room for a few.
     pub(super) fn trim(&mut self) {
-        self.items.shrink_to(ROOM_KEPT_AT_REST);
+        self.items.keep_room_at_rest();
     }
 }

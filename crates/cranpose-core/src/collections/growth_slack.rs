@@ -43,3 +43,41 @@ impl<K: Eq + Hash, V, S: BuildHasher> GrowthSlack for std::collections::HashMap<
         }
     }
 }
+
+/// A collection that keeps room for a few entries at rest.
+pub trait RoomAtRest {
+    /// Gives back the room past the items and past [`ROOM_KEPT_AT_REST`]
+    /// entries.
+    fn keep_room_at_rest(&mut self);
+}
+
+// The trims at rest run out of line: one copy for each collection type
+// serves every collection of it.
+impl<T> RoomAtRest for Vec<T> {
+    #[inline(never)]
+    fn keep_room_at_rest(&mut self) {
+        self.shrink_to(ROOM_KEPT_AT_REST);
+    }
+}
+
+#[expect(
+    clippy::disallowed_types,
+    reason = "every hash map trims alike, whatever it hashes with"
+)]
+impl<K: Eq + Hash, V, S: BuildHasher> RoomAtRest for std::collections::HashMap<K, V, S> {
+    #[inline(never)]
+    fn keep_room_at_rest(&mut self) {
+        self.shrink_to(ROOM_KEPT_AT_REST);
+    }
+}
+
+#[expect(
+    clippy::disallowed_types,
+    reason = "every hash set trims alike, whatever it hashes with"
+)]
+impl<T: Eq + Hash, S: BuildHasher> RoomAtRest for std::collections::HashSet<T, S> {
+    #[inline(never)]
+    fn keep_room_at_rest(&mut self) {
+        self.shrink_to(ROOM_KEPT_AT_REST);
+    }
+}

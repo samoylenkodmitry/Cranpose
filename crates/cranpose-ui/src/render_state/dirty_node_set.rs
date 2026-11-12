@@ -1,6 +1,6 @@
 use cranpose_core::{
     NodeId,
-    collections::{growth_slack::ROOM_KEPT_AT_REST, map::HashSet},
+    collections::{growth_slack::RoomAtRest, map::HashSet},
 };
 
 pub(super) struct DirtyNodeSet {
@@ -41,7 +41,7 @@ impl DirtyNodeSet {
 
     // Gives back the room a burst of nodes took, keeping room for a few.
     pub(super) fn trim(&mut self) {
-        self.dirty_nodes.shrink_to(ROOM_KEPT_AT_REST);
+        self.dirty_nodes.keep_room_at_rest();
     }
 
     pub(super) fn dirty_nodes_snapshot(&self) -> Vec<NodeId> {
