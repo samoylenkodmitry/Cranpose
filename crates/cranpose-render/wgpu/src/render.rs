@@ -1756,9 +1756,7 @@ impl GpuRenderer {
                         .saturating_mul(COMPOSITION_BYTES_PER_PIXEL)
                 })),
         );
-        self.frame_stats
-            .text_pool_size
-            .set(self.text.image_cache.len() as u32);
+        self.text.record_pool_sizes(&self.frame_stats);
         self.frame_stats
             .image_cache_size
             .set(self.images.len() as u32);

@@ -288,6 +288,8 @@ pub struct FrameStatsSnapshot {
     pub offscreen_pool_bytes: u64,
     /// Rasterized text images in the text image cache at the end of the frame.
     pub text_pool_size: u32,
+    /// Glyph runs in the text run cache at the end of the frame.
+    pub text_glyph_runs_cached: u32,
     /// Layers in the layer cache at the end of the frame.
     pub layer_cache_size: u32,
     /// Bytes of the layer cache's textures at the end of the frame.

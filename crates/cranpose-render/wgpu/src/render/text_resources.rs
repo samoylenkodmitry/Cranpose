@@ -92,9 +92,11 @@ impl TextResources {
     pub(super) fn begin_text_glyph_run_frame(&mut self) {
         self.glyph_run_frame += 1;
         let frame = self.glyph_run_frame;
-        let runs = &self.glyph_run_cache;
+        // The runs wait in the cache in the order they were last drawn, which
+        // `evict_idle` reads: a kept text's run takes its place by `get`.
+        let runs = &mut self.glyph_run_cache;
         self.kept.begin_frame(frame, |key| {
-            if let Some(run) = runs.peek(&key) {
+            if let Some(run) = runs.get(&key) {
                 run.last_frame.set(frame);
             }
         });
@@ -128,6 +130,14 @@ impl TextResources {
                 self.glyph_gpu_run_cache.pop(key);
             }
         }
+    }
+
+    // Notes the sizes of the text caches at the end of a frame.
+    pub(super) fn record_pool_sizes(&self, stats: &FrameStats) {
+        stats.text_pool_size.set(self.image_cache.len() as u32);
+        stats
+            .text_glyph_runs_cached
+            .set(u32::try_from(self.glyph_run_cache.len()).unwrap_or(u32::MAX));
     }
 
     /// What every pixel of a frame depends on besides its items: the clear

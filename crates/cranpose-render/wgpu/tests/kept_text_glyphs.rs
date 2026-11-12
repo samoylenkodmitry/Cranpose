@@ -304,3 +304,35 @@ fn a_text_cut_by_its_layers_clip_paints_where_a_first_draw_paints_it() {
         );
     }
 }
+
+#[test]
+fn the_runs_of_a_text_that_changes_every_frame_leave_the_cache_beside_kept_texts() {
+    let Some(mut renderer) = renderer_or_skip("changing text") else {
+        return;
+    };
+    let mut last = None;
+    for frame in 0..90 {
+        let changing = format!("Foxtrot {frame}");
+        let mut labels = LABEL_TEXTS;
+        labels[LABELS as usize - 1] = &changing;
+        let graph = page(labels, (0.0, 0.0), GraphicsLayer::default());
+        renderer.scene_mut().describe(&graph);
+        renderer
+            .capture_frame_with_scale(WIDTH * 2, HEIGHT * 2, 2.0)
+            .expect("frame renders");
+        last = renderer.last_frame_stats();
+    }
+    let stats = last.expect("frame stats");
+    assert_eq!(
+        stats.text_glyph_runs_kept,
+        LABELS - 1,
+        "the texts that stay draw from their kept quads"
+    );
+    // A run no frame drew for 30 frames leaves the cache, whichever texts
+    // draw from kept quads beside it.
+    assert!(
+        stats.text_glyph_runs_cached <= LABELS + 35,
+        "{} runs stay cached after 90 frames",
+        stats.text_glyph_runs_cached
+    );
+}
