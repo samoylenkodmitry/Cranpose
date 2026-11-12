@@ -2748,7 +2748,7 @@ impl GpuRenderer {
         );
         window_draws(draws, start, window);
         let run_draws = &draws[start..];
-        let upload_start = Instant::now();
+        let upload_start = stage_telemetry::timed_stage_start();
         let (upload, fill, tables) = self.run_store.upload_stored(
             &self.device,
             recorder,
@@ -2757,7 +2757,7 @@ impl GpuRenderer {
             window,
             run_draws,
         );
-        if let Some(total_ms) = should_log_wgpu_render_stage(upload_start, Instant::now()) {
+        if let Some(total_ms) = stage_telemetry::timed_stage_ms(upload_start) {
             log::warn!(
                 "[wgpu-render-stage:run-upload] total_ms={total_ms:.2} bytes={} records={}",
                 upload.upload_bytes,
