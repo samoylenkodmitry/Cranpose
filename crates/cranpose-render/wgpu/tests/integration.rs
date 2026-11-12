@@ -55,6 +55,7 @@ mod glyph_ink;
 mod gpu_fence_uploads;
 mod gradient_blur_reference;
 mod held_images;
+mod held_shapes;
 mod in_place_layers;
 mod initial_present_contract;
 mod instant_draws;
