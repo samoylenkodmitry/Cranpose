@@ -5,7 +5,7 @@ use cranpose_core::{MemoryApplier, NodeId, RecordId, collections::map::HashMap};
 use cranpose_ui::{ModifierNodeSlices, Point, Rect, Size};
 
 use super::{
-    DrawTarget, Level, LowerContext, SnapshotNodeData, assign_layer,
+    AbsOrigin, DrawTarget, Level, LowerContext, SnapshotNodeData, assign_layer,
     draw_recording::OwnDraws,
     modifier_slices_have_origin_sinks,
     node_layer::NodeContent,
@@ -218,16 +218,17 @@ fn layer_from_content(
 
 // Updates `record`, the leaf of the dirty node `node_id`, for the change
 // `kind` under `context`: in place while the node draws inline, else as
-// its new layer. Returns whether hit geometry changed: only a node that
-// takes a layer with a hit target changes it. `None` when the node's data
-// is gone.
+// its new layer. A node that draws inline publishes no window geometry, so
+// `context` holds none. `window` works out where the records above `record`
+// put their children, for the node that takes a layer. Returns whether hit
+// geometry changed: only a node that takes a layer with a hit target changes
+// it. `None` when the node's data is gone.
 pub(super) fn update_dirty_inline(
     applier: &MemoryApplier,
     store: &mut SceneStore,
-    record: RecordId,
-    node_id: NodeId,
-    kind: NodeUpdate,
+    (record, node_id, kind): (RecordId, NodeId, NodeUpdate),
     context: LowerContext,
+    window: impl FnOnce(&SceneStore) -> AbsOrigin,
     dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
 ) -> Option<bool> {
     read_placed_node_data(applier, node_id, Level::Child, |data| {
@@ -248,6 +249,10 @@ pub(super) fn update_dirty_inline(
             return false;
         }
         store.drop_items(record);
+        let context = LowerContext {
+            parent_abs: Some(window(store)),
+            ..context
+        };
         write_placed_child(
             applier,
             store,

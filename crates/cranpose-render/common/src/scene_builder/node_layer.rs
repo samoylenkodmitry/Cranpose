@@ -41,10 +41,10 @@ impl LowerContext {
     // What a child lowers with beneath `ancestors`.
     pub(super) fn beneath(ancestors: TranslateAncestorContext) -> Self {
         Self {
-            inherited_motion_context_animated: ancestors.inherited_motion_context_animated,
-            inherited_translated_content_context: ancestors.inherited_translated_content_context,
+            inherited_motion_context_animated: ancestors.inherited.motion_context_animated,
+            inherited_translated_content_context: ancestors.inherited.translated_content_context,
             parent_abs: Some(ancestors.parent_abs),
-            parent_content_offset: ancestors.parent_content_offset,
+            parent_content_offset: ancestors.inherited.parent_content_offset,
         }
     }
 

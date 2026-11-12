@@ -12,12 +12,13 @@ use cranpose_core::{MemoryApplier, NodeId, RecordId, collections::map::HashMap};
 use cranpose_ui::{ModifierNodeSlices, Point, Rect, Size};
 
 use super::{
-    DrawTarget, GraphChanges, GroupPaint, KeptChild, LowerContext, OwnDraws, PlacedGeometry,
-    SnapshotNodeData, TranslateAncestorContext, TranslateGeometry, Wrapping, child_identity,
-    content_layer, forget_dirty_node, hit_test_from_slices, layer_and_node_bounds, layer_identity,
-    lower_child, modifier_slices_have_origin_sinks, move_kept_child, outer_commands, outer_draws,
-    placed_child_geometry, placing_transform, read_node_data, set_bounds, shaped_graphics_layer,
-    take_wrapped_layer, text_node, translate_unwrapped, write_node_content, write_wrapper,
+    DrawTarget, GraphChanges, GroupPaint, Inherited, KeptChild, LowerContext, OwnDraws,
+    PlacedGeometry, SnapshotNodeData, TranslateAncestorContext, TranslateGeometry, Wrapping,
+    child_identity, content_layer, forget_dirty_node, hit_test_from_slices, layer_and_node_bounds,
+    layer_identity, lower_child, modifier_slices_have_origin_sinks, move_kept_child,
+    outer_commands, outer_draws, placed_child_geometry, placing_transform, read_node_data,
+    set_bounds, shaped_graphics_layer, take_wrapped_layer, text_node, translate_unwrapped,
+    write_node_content, write_wrapper,
 };
 use crate::{
     NodeUpdate,
@@ -91,7 +92,7 @@ fn try_translate_scrolled_layer(
             layer,
             placement,
             outer,
-            ancestors.parent_content_offset,
+            ancestors.inherited.parent_content_offset,
         );
         store.note_content_change(container);
         true
@@ -108,7 +109,7 @@ pub(super) fn translated_container(
     container: RecordId,
     layout_state: &cranpose_ui::widgets::LayoutState,
     modifier_slices: &ModifierNodeSlices,
-    ancestors: TranslateAncestorContext,
+    inherited: Inherited,
     wrapping: Wrapping,
 ) -> Option<TranslatedContainer> {
     if cranpose_core::DIAGNOSTICS.disable_scroll_translate.is_set() {
@@ -121,8 +122,7 @@ pub(super) fn translated_container(
     }
     let outer_count = modifier_slices.outer_draw_command_count();
     if (outer_count > 0 && wrapping == Wrapping::Bare)
-        || (ancestors.inherited_motion_context_animated
-            || modifier_slices.motion_context_animated())
+        || (inherited.motion_context_animated || modifier_slices.motion_context_animated())
             != layer.motion_context_animated()
         || modifier_slices.translated_content_context() != layer.translated_content_context()
     {
@@ -596,9 +596,8 @@ pub(super) fn translate_layer_from_data(
     wrapping: Wrapping,
 ) -> bool {
     let TranslateAncestorContext {
-        parent_content_offset,
+        inherited,
         parent_abs,
-        ..
     } = ancestors;
     let SnapshotNodeData {
         layout_state,
@@ -616,7 +615,7 @@ pub(super) fn translate_layer_from_data(
         container,
         &layout_state,
         &modifier_slices,
-        ancestors,
+        inherited,
         wrapping,
     )
     .is_none()
@@ -659,7 +658,7 @@ pub(super) fn translate_layer_from_data(
             container,
             &modifier_slices,
             &layout_state,
-            parent_content_offset,
+            inherited.parent_content_offset,
             geometry,
         );
         reconcile_translated_children(
