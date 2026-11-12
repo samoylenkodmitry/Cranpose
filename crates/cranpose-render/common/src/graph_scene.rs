@@ -16,7 +16,7 @@ use crate::{
     graph::{LayerNode, ProjectiveTransform},
     left_nodes::LeftNodes,
     scene_pick::ScenePick,
-    scene_store::{JournalCursor, JournalRead, LayerRef, RecordEvents, SceneStore},
+    scene_store::{LayerRef, RecordEvents, SceneStore},
 };
 
 /// Counters and once-only warnings that a scene collects while it dispatches pointer events.
@@ -598,8 +598,9 @@ impl Scene {
     /// Creates an empty scene with no records and no hit targets.
     pub fn new() -> Self {
         let mut store = SceneStore::new();
+        store.follow(RecordEvents::LEAVES);
         Self {
-            left_nodes: LeftNodes::new(&mut store),
+            left_nodes: LeftNodes::default(),
             store,
             hits: RefCell::default(),
             diagnostics: Rc::new(RenderDiagnostics::new()),
@@ -617,26 +618,11 @@ impl Scene {
         &self.store
     }
 
-    /// Starts following the `events` of the scene's records; see
-    /// [`SceneStore::open_journal`].
-    pub fn open_journal(&mut self, events: RecordEvents) -> JournalCursor {
-        self.store.open_journal(events)
-    }
-
-    /// Makes the reader of `cursor` follow `events` from the next update
-    /// on; see [`SceneStore::follow_journal`].
-    pub fn follow_journal(&mut self, cursor: &mut JournalCursor, events: RecordEvents) {
-        self.store.follow_journal(cursor, events);
-    }
-
-    /// Hands `read` the scene's records and their changes since the reader's
-    /// last read; see [`SceneStore::read_journal`].
-    pub fn read_journal<R>(
-        &mut self,
-        cursor: &mut JournalCursor,
-        read: impl FnOnce(&SceneStore, JournalRead<'_>) -> R,
-    ) -> R {
-        self.store.read_journal(cursor, read)
+    /// Keeps the changes of the kinds in `events` for the scene's readers
+    /// from the next update on, beside the leaves the scene reads itself;
+    /// see [`SceneStore::follow`].
+    pub fn follow(&mut self, events: RecordEvents) {
+        self.store.follow(events | RecordEvents::LEAVES);
     }
 
     /// Works out the reach of the records a change left stale; see
@@ -893,7 +879,7 @@ impl RenderScene for Scene {
     }
 
     fn read_left_nodes(&mut self, left: &mut Vec<NodeId>) -> bool {
-        self.left_nodes.read(&mut self.store, left)
+        self.left_nodes.read(&self.store, left)
     }
 }
 

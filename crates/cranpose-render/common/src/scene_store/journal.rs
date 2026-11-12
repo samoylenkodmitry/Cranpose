@@ -1,11 +1,16 @@
-// The changes of a store's records, kept until every reader that follows
-// them has read them.
+// The changes of a store's records in its latest updates, read by update
+// number: a reader keeps the version of the store it read last and reads
+// the changes of the updates after it. A reader further behind than the
+// journal keeps works from the store as it is.
 
-use cranpose_core::{
-    NodeId, RecordRef, SceneUpdate, StoreId, collections::recent_peak::RecentPeak,
+use std::ops::BitOr;
+
+use cranpose_core::{NodeId, RecordRef, SceneUpdate};
+
+use super::{
+    Reach,
+    update_log::{UpdateLog, UpdatesKept},
 };
-
-use super::{Reach, RecordKind};
 
 /// What an update did to a record.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -19,11 +24,11 @@ pub enum RecordEvent {
     Moved,
     /// The record and the subtree beneath it went.
     Removed,
-    /// The record stopped drawing for the node the entry names, or as the
-    /// kind the entry names.
+    /// The record stopped drawing for the node the entry names, or as what
+    /// it drew.
     Released,
-    /// The record started drawing for the node the entry names, or as the
-    /// kind the entry names.
+    /// The record started drawing for the node the entry names, or as what
+    /// it draws now.
     Claimed,
     /// What the record draws of its own, beside its children, changed
     /// within the reach, in the record's space.
@@ -49,24 +54,35 @@ impl RecordEvent {
     }
 }
 
-// How many entries a record row and a store keep past the slowest reader:
-// a reader further behind rebuilds what it follows from the store.
+// The updates whose entries the journal keeps, and the most entries a record
+// row and a store keep: their readers read each frame. Past them a reader
+// works out what it follows again, as it would walk most of the store
+// anyway.
+const ENTRY_UPDATES: UpdatesKept = UpdatesKept { most: 8, kept: 2 };
 const ROWS_KEPT: usize = 4;
 const ENTRIES_KEPT: usize = 256;
+// The updates whose stamps the journal keeps, and the most records it keeps
+// and an update stamps: a reader of stamps may lag by a few pictures.
+const STAMP_UPDATES: UpdatesKept = UpdatesKept { most: 32, kept: 8 };
+const MOST_STAMPS: usize = 256;
 
 // The bit of a set of changes that asks for the reach of each redraw.
 #[cfg(feature = "window-damage")]
 const REDRAWN_REACH: u16 = 1 << 7;
 // The bit of a set of changes that asks whether an update changed anything.
 const ANY_CHANGE: u16 = 1 << 8;
+// The bit of a set of changes that asks for the records each update stamped.
+const STAMPED: u16 = 1 << 9;
 
-/// The kinds of change a journal reader follows.
+/// The kinds of change a store's journal keeps for its readers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RecordEvents(u16);
 
 impl RecordEvents {
-    /// Every change.
-    pub const ALL: Self = Self(u16::MAX);
+    /// No change.
+    pub const NONE: Self = Self(0);
+    /// Every change as an entry.
+    pub const ALL: Self = Self(!STAMPED);
     /// Whether an update changed anything: the first change of each update,
     /// whatever its kind, for a reader that only tells an update that
     /// changes nothing from one that changes something. The store spends
@@ -75,10 +91,20 @@ impl RecordEvents {
     /// The changes that take a node's record away: [`RecordEvent::Removed`]
     /// and [`RecordEvent::Released`].
     pub const LEAVES: Self = Self(RecordEvent::Removed.bit() | RecordEvent::Released.bit());
+    /// The records each update made, changed or moved, as handles alone.
+    pub const STAMPS: Self = Self(STAMPED);
 
     /// Whether the set holds `event`.
     pub fn contains(self, event: RecordEvent) -> bool {
         self.0 & event.bit() != 0
+    }
+}
+
+impl BitOr for RecordEvents {
+    type Output = Self;
+
+    fn bitor(self, other: Self) -> Self {
+        Self(self.0 | other.0)
     }
 }
 
@@ -89,8 +115,6 @@ pub struct JournalEntry {
     pub update: SceneUpdate,
     /// What the change did.
     pub event: RecordEvent,
-    /// What the record draws for in the change.
-    pub kind: RecordKind,
     /// The record, with the generation its row had in the change.
     pub record: RecordRef,
     /// The record that held it.
@@ -99,180 +123,121 @@ pub struct JournalEntry {
     pub node: Option<NodeId>,
 }
 
-/// A reader of a store's journal. Each reader reads every change once.
-#[derive(Debug)]
-pub struct JournalCursor {
-    store: StoreId,
-    slot: usize,
-    events: RecordEvents,
-}
-
-/// What a reader learns from a read. The changes hold every kind of change
-/// some open reader follows, so a reader skips the kinds it does not.
-#[derive(Debug)]
+/// What a reader learns from a read.
+#[derive(Clone, Copy, Debug)]
 pub enum JournalRead<'a> {
-    /// The changes since the reader's last read, oldest first.
+    /// The changes of the updates after the reader's version, oldest first,
+    /// of the kinds the store follows.
     Changes(&'a [JournalEntry]),
     /// The changes are not known: the store was cleared or replaced since
-    /// the last read, or the reader fell further behind than the journal
-    /// keeps. The reader works from the store as it is.
+    /// the reader's version, or the reader fell further behind than the
+    /// journal keeps. The reader works from the store as it is.
     Lost,
 }
 
 #[derive(Clone, Debug, Default)]
 pub(super) struct Journal {
-    entries: Vec<JournalEntry>,
-    // The sequence number of the first entry.
-    start: u64,
-    // The sequence number each open reader reads next, and the changes it
-    // follows.
-    readers: Vec<Option<(u64, RecordEvents)>>,
-    // The changes some open reader follows.
-    wanted: u16,
+    entries: UpdateLog<JournalEntry>,
+    // The records each update made, changed or moved, while the store
+    // follows the stamps.
+    stamps: UpdateLog<RecordRef>,
+    followed: RecordEvents,
     // The update that logged an entry last.
     logged: Option<SceneUpdate>,
     // An update that cleared the store: what it writes after is left out,
     // as every reader has lost the store's earlier state anyway.
     cleared: Option<SceneUpdate>,
-    // The most entries a trim found lately.
-    recent: RecentPeak,
+}
+
+impl Default for RecordEvents {
+    fn default() -> Self {
+        Self::NONE
+    }
 }
 
 impl Journal {
-    fn end(&self) -> u64 {
-        self.start + self.entries.len() as u64
-    }
-
     // Whether an entry of `event` in `update` is kept: the update did not
-    // clear the store, and an open reader follows such entries or learns
-    // only whether the update changed anything, which no entry told yet.
+    // clear the store, and the store follows such entries or learns only
+    // whether the update changed anything, which no entry told yet.
     #[inline]
     pub(super) fn wants(&self, event: RecordEvent, update: SceneUpdate) -> bool {
         self.cleared != Some(update)
             && (self.follows(event)
-                || (self.wanted & ANY_CHANGE != 0 && self.logged != Some(update)))
+                || (self.followed.0 & ANY_CHANGE != 0 && self.logged != Some(update)))
     }
 
-    // Whether an open reader follows each change of the kind of `event`.
+    // Whether the store follows each change of the kind of `event`.
     #[inline]
     pub(super) fn follows(&self, event: RecordEvent) -> bool {
-        self.wanted & event.bit() != 0
+        self.followed.0 & event.bit() != 0
     }
 
-    // Whether an open reader follows where the records `update` redraws
-    // changed.
+    // Whether the store follows where the records `update` redraws changed.
     #[cfg(feature = "window-damage")]
     #[inline]
     pub(super) fn wants_redrawn_reach(&self, update: SceneUpdate) -> bool {
-        self.wanted & REDRAWN_REACH != 0 && self.wants(RecordEvent::Redrawn(Reach::Empty), update)
+        self.followed.0 & REDRAWN_REACH != 0
+            && self.wants(RecordEvent::Redrawn(Reach::Empty), update)
+    }
+
+    pub(super) fn followed(&self) -> RecordEvents {
+        self.followed
+    }
+
+    // Keeps the changes of the kinds in `events` from now on. Stamps kept
+    // before a time the store did not follow them leave a gap: they go.
+    pub(super) fn follow(&mut self, events: RecordEvents) {
+        if !self.follows_stamps() {
+            self.stamps.clear();
+        }
+        self.followed = events;
+    }
+
+    // Starts the changes of `update`, forgetting the oldest beyond what a
+    // store of `rows` record rows keeps.
+    pub(super) fn begin(&mut self, update: SceneUpdate, rows: usize) {
+        self.entries
+            .begin(update, ENTRY_UPDATES, ROWS_KEPT * rows + ENTRIES_KEPT);
+        if self.follows_stamps() {
+            self.stamps.begin(update, STAMP_UPDATES, MOST_STAMPS);
+        }
     }
 
     pub(super) fn log(&mut self, entry: JournalEntry) {
         self.logged = Some(entry.update);
-        self.entries.push(entry);
+        self.entries.push(entry, usize::MAX);
     }
 
-    // Forgets every entry: each reader's next read finds its changes lost.
+    // Whether the store follows the records each update stamps.
+    #[inline]
+    pub(super) fn follows_stamps(&self) -> bool {
+        self.followed.0 & STAMPED != 0
+    }
+
+    // Lists `record` among those the update in progress stamped.
+    pub(super) fn stamp(&mut self, record: RecordRef) {
+        self.stamps.push(record, MOST_STAMPS);
+    }
+
+    // Forgets every change: a reader of an earlier version finds its
+    // changes lost. `update` is the store's update from now on.
     pub(super) fn clear(&mut self, update: SceneUpdate) {
-        self.start = self.end() + 1;
         self.entries.clear();
+        self.stamps.clear();
         self.cleared = Some(update);
     }
 
-    // Drops the entries every reader has read, and the oldest beyond what a
-    // store of `rows` record rows keeps, whose readers lose them. Most
-    // updates log no entry a reader follows.
-    #[inline]
-    pub(super) fn trim(&mut self, rows: usize) {
-        let len = self.entries.len();
-        if len > 0 {
-            self.drop_read(rows, len);
-        }
-        self.recent.settle(&mut self.entries, len, ENTRIES_KEPT);
+    // The changes of the updates after `read`, the update a reader read
+    // last, when the store's update is `now`.
+    pub(super) fn since(&self, read: SceneUpdate, now: SceneUpdate) -> JournalRead<'_> {
+        self.entries
+            .since(read, now)
+            .map_or(JournalRead::Lost, JournalRead::Changes)
     }
 
-    #[inline(never)]
-    fn drop_read(&mut self, rows: usize, len: usize) {
-        let keep = ROWS_KEPT * rows + ENTRIES_KEPT;
-        let read = self.readers.iter().flatten().map(|&(next, _)| next).min();
-        let read = read.map_or(len, |next| {
-            usize::try_from(next.saturating_sub(self.start)).unwrap_or(usize::MAX)
-        });
-        let drop = read.max(len.saturating_sub(keep)).min(len);
-        self.entries.drain(..drop);
-        self.start += drop as u64;
-    }
-
-    pub(super) fn open(&mut self, store: StoreId, events: RecordEvents) -> JournalCursor {
-        let next = Some((self.end(), events));
-        let slot = match self.readers.iter().position(Option::is_none) {
-            Some(slot) => {
-                self.readers[slot] = next;
-                slot
-            }
-            None => {
-                self.readers.push(next);
-                self.readers.len() - 1
-            }
-        };
-        self.refresh_wanted();
-        JournalCursor {
-            store,
-            slot,
-            events,
-        }
-    }
-
-    // Makes the reader of `cursor` follow `events`; a reader of another
-    // store follows them once its next read opens it here.
-    pub(super) fn follow(
-        &mut self,
-        store: StoreId,
-        cursor: &mut JournalCursor,
-        events: RecordEvents,
-    ) {
-        cursor.events = events;
-        if cursor.store != store {
-            return;
-        }
-        if let Some(Some((_, followed))) = self.readers.get_mut(cursor.slot) {
-            *followed = events;
-        }
-        self.refresh_wanted();
-    }
-
-    fn refresh_wanted(&mut self) {
-        self.wanted = self
-            .readers
-            .iter()
-            .flatten()
-            .fold(0, |wanted, &(_, events)| wanted | events.0);
-    }
-
-    // Whether the reader of `cursor` read every entry: a read would find
-    // none and leave the reader as it is.
-    #[inline]
-    pub(super) fn caught_up(&self, store: StoreId, cursor: &JournalCursor) -> bool {
-        cursor.store == store
-            && matches!(self.readers.get(cursor.slot), Some(&Some((next, _))) if next == self.end())
-    }
-
-    pub(super) fn changes(&self, store: StoreId, cursor: &JournalCursor) -> JournalRead<'_> {
-        let Some(Some((next, _))) = self.readers.get(cursor.slot).copied() else {
-            return JournalRead::Lost;
-        };
-        if cursor.store != store || next < self.start {
-            return JournalRead::Lost;
-        }
-        let first = usize::try_from(next - self.start).unwrap_or(usize::MAX);
-        JournalRead::Changes(&self.entries[first.min(self.entries.len())..])
-    }
-
-    pub(super) fn mark_read(&mut self, store: StoreId, cursor: &mut JournalCursor) {
-        let end = self.end();
-        match self.readers.get_mut(cursor.slot) {
-            Some(Some((next, _))) if cursor.store == store => *next = end,
-            _ => *cursor = self.open(store, cursor.events),
-        }
+    // The records the updates after `read` stamped, when the store's update
+    // is `now`; `None` when the journal lost some of them.
+    pub(super) fn stamps_since(&self, read: SceneUpdate, now: SceneUpdate) -> Option<&[RecordRef]> {
+        self.stamps.since(read, now)
     }
 }

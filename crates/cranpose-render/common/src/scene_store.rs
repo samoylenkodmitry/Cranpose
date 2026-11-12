@@ -26,8 +26,8 @@ mod shape_chunks;
 mod slab;
 mod spec;
 mod store;
-mod touched;
 mod translated_write;
+mod update_log;
 
 use child_order::ChildOrder;
 use facts::Facts;
@@ -37,7 +37,7 @@ use hash_cache::HashCache;
 pub use items::{Item, ItemKind};
 pub(crate) use items::{ItemLists, Span, SpanPool};
 use journal::Journal;
-pub use journal::{JournalCursor, JournalEntry, JournalRead, RecordEvent, RecordEvents};
+pub use journal::{JournalEntry, JournalRead, RecordEvent, RecordEvents};
 pub(crate) use layer_head::{HeadKind, LayerHead};
 pub use layer_props::LayerProps;
 pub use layer_ref::{ItemRef, LayerRef, RecordChanges};

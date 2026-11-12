@@ -12,10 +12,10 @@ use cranpose_ui::{GraphicsLayer, Rect};
 use cranpose_ui_graphics::CommandRecording;
 
 use super::{
-    ChildOrder, Facts, GeoRecord, HashCache, Item, ItemKind, ItemLists, Journal, JournalCursor,
-    JournalEntry, JournalRead, LayerProps, LayerRef, NodeRecords, Reach, RecordEvent, RecordEvents,
-    RecordFlags, RecordKind, RecordNode, ShapeChunks, ShapeRun, Slab, Span, SpanPool, TreeRecord,
-    WarmRecord, recordings::Recordings, touched::Touched,
+    ChildOrder, Facts, GeoRecord, HashCache, Item, ItemKind, ItemLists, Journal, JournalEntry,
+    JournalRead, LayerProps, LayerRef, NodeRecords, Reach, RecordEvent, RecordEvents, RecordFlags,
+    RecordKind, RecordNode, ShapeChunks, ShapeRun, Slab, Span, SpanPool, TreeRecord, WarmRecord,
+    recordings::Recordings,
 };
 #[cfg(feature = "window-damage")]
 use super::{ReachState, own_marks};
@@ -54,7 +54,6 @@ pub struct SceneStore {
     root: Option<RecordId>,
     update: SceneUpdate,
     journal: Journal,
-    touched: Touched,
     pub(super) order: ChildOrder,
     pub(crate) recordings: Recordings,
 }
@@ -64,6 +63,13 @@ pub struct SceneStore {
 pub struct SceneVersion {
     store: StoreId,
     update: SceneUpdate,
+}
+
+impl SceneVersion {
+    /// The update the store had made.
+    pub fn update(self) -> SceneUpdate {
+        self.update
+    }
 }
 
 /// What a new record starts as.
@@ -122,7 +128,6 @@ impl SceneStore {
             root: None,
             update: SceneUpdate::default(),
             journal: Journal::default(),
-            touched: Touched::default(),
             order: ChildOrder::default(),
             recordings: Recordings::default(),
         }
@@ -154,21 +159,10 @@ impl SceneStore {
 
     /// Starts a scene update and returns its number.
     pub fn begin_update(&mut self) -> SceneUpdate {
-        self.journal.trim(self.tree.len());
         self.recordings.begin_update();
-        self.touched.begin(self.update);
         self.update = self.update.next();
+        self.journal.begin(self.update, self.tree.len());
         self.update
-    }
-
-    /// The records the latest update made, changed or moved, with the update
-    /// before it. A reader that holds the scene of that update brings itself
-    /// up to the store from them, with no walk of the records that held
-    /// still. A record may come twice. `None` when the update changed more
-    /// records than the store lists, or cleared the store: the reader reads
-    /// the store whole.
-    pub fn touched(&self) -> Option<(SceneUpdate, &[RecordRef])> {
-        self.touched.read()
     }
 
     /// Whether `id` changed itself or moved in the latest `updates` updates.
@@ -183,27 +177,24 @@ impl SceneStore {
     #[inline]
     fn touch(&mut self, index: usize) {
         let tree = &self.tree[index];
-        if tree.content_rev != self.update && tree.place_rev != self.update {
-            self.touched.note(RecordRef {
+        if self.journal.follows_stamps()
+            && tree.content_rev != self.update
+            && tree.place_rev != self.update
+        {
+            self.journal.stamp(RecordRef {
                 id: RecordId::from_index(index).expect("a row is a record"),
                 generation: self.generations[index],
             });
         }
     }
 
-    /// Starts following the `events` of the store's records: the reader's
-    /// first read reports the changes after now.
-    pub fn open_journal(&mut self, events: RecordEvents) -> JournalCursor {
-        let cursor = self.journal.open(self.id, events);
-        self.mark_for_redraws();
-        cursor
-    }
-
-    /// Makes the reader of `cursor` follow `events` from the next update
-    /// on.
-    pub fn follow_journal(&mut self, cursor: &mut JournalCursor, events: RecordEvents) {
-        self.journal.follow(self.id, cursor, events);
-        self.mark_for_redraws();
+    /// Keeps the changes of the kinds in `events` for the store's readers
+    /// from the next update on, in place of those it kept.
+    pub fn follow(&mut self, events: RecordEvents) {
+        if self.journal.followed() != events {
+            self.journal.follow(events);
+            self.mark_for_redraws();
+        }
     }
 
     // Whether a reader follows where the update in progress redraws.
@@ -226,23 +217,24 @@ impl SceneStore {
     #[inline]
     fn mark_for_redraws(&mut self) {}
 
-    /// Hands `read` the store and the changes of its records since the
-    /// reader's last read, then marks them read. A reader of another store
-    /// starts following this one, and learns that its changes are lost.
-    pub fn read_journal<R>(
-        &mut self,
-        cursor: &mut JournalCursor,
-        read: impl FnOnce(&Self, JournalRead<'_>) -> R,
-    ) -> R {
-        let result = read(self, self.journal.changes(self.id, cursor));
-        self.journal.mark_read(self.id, cursor);
-        result
+    /// The changes of the store's records in the updates after `read`, the
+    /// version of the store a reader read last. Lost for no version, a
+    /// version of another store or one older than the store keeps.
+    pub fn changes_since(&self, read: Option<SceneVersion>) -> JournalRead<'_> {
+        match read {
+            Some(read) if read.store == self.id => self.journal.since(read.update, self.update),
+            _ => JournalRead::Lost,
+        }
     }
 
-    // Whether the reader of `cursor` read every change of the store.
-    #[inline]
-    pub(crate) fn journal_caught_up(&self, cursor: &JournalCursor) -> bool {
-        self.journal.caught_up(self.id, cursor)
+    /// The records the updates after `read` made, changed or moved, while
+    /// the store follows [`RecordEvents::STAMPS`]; a record may come more
+    /// than once. `None` for no version, a version of another store or one
+    /// older than the store keeps, or when an update stamped more records
+    /// than the store keeps.
+    pub fn stamps_since(&self, read: Option<SceneVersion>) -> Option<&[RecordRef]> {
+        let read = read.filter(|read| read.store == self.id)?;
+        self.journal.stamps_since(read.update, self.update)
     }
 
     // Logs `event` for `id` as the record is now, when a reader follows it.
@@ -258,7 +250,6 @@ impl SceneStore {
         self.journal.log(JournalEntry {
             update: self.update,
             event,
-            kind: self.tree[index].kind,
             record: RecordRef {
                 id,
                 generation: self.generations[index],
@@ -471,8 +462,10 @@ impl SceneStore {
         self.facts.clear();
         self.node_records.clear();
         self.root = None;
+        // The store takes an update of its own, which no reader read: a
+        // reader of an earlier version finds its changes lost.
+        self.update = self.update.next();
         self.journal.clear(self.update);
-        self.touched.lose();
     }
 
     /// Makes a record from `seed`, changed in the update in progress, with no
@@ -527,7 +520,9 @@ impl SceneStore {
         #[cfg(feature = "window-damage")]
         own_marks::pend_inserted(self, id.index());
         self.log(RecordEvent::Inserted, id);
-        self.touched.note(self.record_ref(id));
+        if self.journal.follows_stamps() {
+            self.journal.stamp(self.record_ref(id));
+        }
         id
     }
 

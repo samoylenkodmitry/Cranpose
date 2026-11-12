@@ -17,7 +17,7 @@ use crate::{
     },
     render::{frame_clear_color, instant_ms, should_log_wgpu_render_stage},
     scene::{Scene, SceneCapacityHint},
-    target_state::{Journaled, TargetSetting, TargetState},
+    target_state::{TargetSetting, TargetState},
     window_packets::{PacketDraws, WindowPackets},
 };
 
@@ -369,10 +369,10 @@ impl RendererFrontend {
         if std::mem::take(&mut self.held_still) {
             self.target.held_still();
         }
-        self.target
-            .begin(Journaled::Scene(&mut self.scene), setting);
-        self.overlay_target
-            .begin(Journaled::Store(&mut self.dev_overlay), setting);
+        self.target.begin(self.scene.store(), setting);
+        self.scene.follow(self.target.followed());
+        self.overlay_target.begin(&self.dev_overlay, setting);
+        self.dev_overlay.follow(self.overlay_target.followed());
         if self.target.records() {
             self.scene.refresh_reach();
         }

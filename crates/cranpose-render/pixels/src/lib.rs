@@ -17,12 +17,11 @@ mod surface;
 #[path = "tests/text_draws.rs"]
 mod text_draws;
 
-use cranpose_core::{RecordRef, SceneUpdate, StoreId};
 pub use cranpose_render_common::rgb565::Rgb565Order;
 use cranpose_render_common::{
     Renderer, SceneUpdates,
     rgb565::{Rgb565Be, Rgb565Le},
-    scene_store::SceneStore,
+    scene_store::{RecordEvents, SceneVersion},
     text_fonts::TextFonts,
 };
 use cranpose_ui_graphics::{MemoryHeadroom, Size};
@@ -68,103 +67,10 @@ pub struct Picture {
     // Where each item of `raster` can draw in the frame, in its order: each
     // strip a host draws passes over the items that miss it.
     reach: Vec<Option<draw::ClipBounds>>,
-    // The store and its update the scene was brought up to.
-    synced: Option<(StoreId, SceneUpdate)>,
+    // The version of the store the scene was brought up to.
+    synced: Option<SceneVersion>,
     // The subtrees an update in place pushes again, kept for its room.
     roots: Vec<pipeline::PushRoot>,
-}
-
-// The most records and updates the changes keep, the latest ones: a picture
-// that lags past them builds its scene again. Once they hold `MOST_UPDATES`
-// they forget all but the latest `KEPT_UPDATES`, so an update seldom pays
-// for the forgetting.
-const MOST_CHANGES: usize = 256;
-const MOST_UPDATES: usize = 32;
-const KEPT_UPDATES: usize = 8;
-
-// The records the store changed in its latest updates, oldest first: a
-// picture that holds the scene of one of those updates pushes again the
-// records changed since.
-#[derive(Default)]
-struct StoreChanges {
-    // The store's update when its changes were read last.
-    at: Option<(StoreId, SceneUpdate)>,
-    // Each update the changes reach back to, with where the records changed
-    // after it start.
-    updates: Vec<(SceneUpdate, usize)>,
-    records: Vec<RecordRef>,
-}
-
-impl StoreChanges {
-    // Adds what the latest update of `store` changed.
-    fn read(&mut self, store: &SceneStore) {
-        let now = (store.id(), store.update());
-        if self.at == Some(now) {
-            return;
-        }
-        let touched = store.touched();
-        if !touched.is_some_and(|(since, _)| self.at == Some((now.0, since))) {
-            self.updates.clear();
-            self.records.clear();
-        }
-        if let Some((since, records)) = touched {
-            if self.updates.len() == MOST_UPDATES
-                || self.records.len() + records.len() > MOST_CHANGES
-            {
-                self.forget_oldest(records.len());
-            }
-            self.updates.push((since, self.records.len()));
-            self.records.extend_from_slice(records);
-        }
-        self.at = Some(now);
-    }
-
-    // Forgets the oldest updates: all but the latest `KEPT_UPDATES`, and
-    // more of them until half of the records' room is free after `more`
-    // records, so updates that change many records seldom come here too.
-    #[cold]
-    fn forget_oldest(&mut self, more: usize) {
-        let records = self.records.len();
-        let start = |gone: usize| self.updates.get(gone).map_or(records, |update| update.1);
-        let mut gone = self.updates.len().saturating_sub(KEPT_UPDATES);
-        while gone < self.updates.len() && records - start(gone) + more > MOST_CHANGES / 2 {
-            gone += 1;
-        }
-        let cut = start(gone);
-        self.records.drain(..cut);
-        self.updates.drain(..gone);
-        for update in &mut self.updates {
-            update.1 -= cut;
-        }
-    }
-
-    // The records `store` changed since `synced`, when the changes reach
-    // back to it and up to the store's update.
-    fn since<'a>(
-        &'a self,
-        store: &'a SceneStore,
-        synced: Option<(StoreId, SceneUpdate)>,
-    ) -> Option<pipeline::Changed<'a>> {
-        let now = (store.id(), store.update());
-        if synced == Some(now) {
-            return Some(pipeline::Changed {
-                store,
-                records: &[],
-                updates: 0,
-            });
-        }
-        let (id, update) = synced?;
-        if self.at != Some(now) || id != now.0 {
-            return None;
-        }
-        // A picture mostly lags by one update, the last of the list.
-        let &(_, start) = self.updates.iter().rfind(|span| span.0 == update)?;
-        Some(pipeline::Changed {
-            store,
-            records: &self.records[start..],
-            updates: now.1.since(update),
-        })
-    }
 }
 
 fn valid_scale(scale: f32) -> f32 {
@@ -178,7 +84,6 @@ fn valid_scale(scale: f32) -> f32 {
 /// A renderer that draws the scene into a caller-owned RGBA pixel buffer on the CPU.
 pub struct PixelsRenderer {
     scene: Scene,
-    changes: StoreChanges,
     text: draw::TextRaster,
     /// The app context this renderer gave its text measurer.
     app_context: Option<std::rc::Weak<cranpose_ui::AppContext>>,
@@ -201,9 +106,10 @@ impl PixelsRenderer {
     /// the embedded default font when the `embedded-default-font` feature is
     /// on, and draws no text otherwise.
     pub fn with_fonts(fonts: &[&'static [u8]]) -> Self {
+        let mut scene = Scene::new();
+        scene.follow(RecordEvents::STAMPS);
         Self {
-            scene: Scene::new(),
-            changes: StoreChanges::default(),
+            scene,
             text: draw::TextRaster::new(TextFonts::from_fonts_or_default(fonts)),
             app_context: None,
         }
@@ -264,7 +170,7 @@ impl PixelsRenderer {
     ) {
         let scale = valid_scale(scale);
         let store = self.scene.store();
-        let now = Some((store.id(), store.update()));
+        let now = Some(store.version());
         if let Some(reach) = self.update_picture_in_place(picture, width, height, scale) {
             picture.synced = now;
             changed.clear();
@@ -366,7 +272,13 @@ impl PixelsRenderer {
         if (picture.width, picture.height, picture.scale) != (width, height, scale) {
             return None;
         }
-        let changed = self.changes.since(self.scene.store(), picture.synced)?;
+        let store = self.scene.store();
+        let synced = picture.synced?;
+        let changed = pipeline::Changed {
+            store,
+            records: store.stamps_since(Some(synced))?,
+            updates: store.update().since(synced.update()),
+        };
         let window = draw::ClipBounds {
             min_x: 0,
             min_y: 0,
@@ -543,7 +455,6 @@ impl Renderer for PixelsRenderer {
         _viewport: Size,
     ) -> Result<(), Self::Error> {
         self.scene.rebuild_from_applier(applier, root);
-        self.changes.read(self.scene.store());
         Ok(())
     }
 
@@ -555,7 +466,6 @@ impl Renderer for PixelsRenderer {
         updates: SceneUpdates<'_>,
     ) -> Result<(), Self::Error> {
         self.scene.update_from_applier(applier, root, updates);
-        self.changes.read(self.scene.store());
         Ok(())
     }
 }

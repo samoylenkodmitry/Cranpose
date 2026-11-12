@@ -4,8 +4,8 @@ use cranpose_core::{MutableState, NodeId, RecordRef};
 use cranpose_render_common::{
     graph::{DrawRunNode, LayerNode, PrimitivePhase, RenderNode},
     scene_store::{
-        JournalCursor, JournalRead, Reach, RecordEvent, RecordEvents, RecordKind, RecordSeed,
-        SceneStore,
+        JournalRead, Reach, RecordEvent, RecordEvents, RecordKind, RecordSeed, SceneStore,
+        SceneVersion,
     },
 };
 use cranpose_ui::{BoxSpec, Modifier};
@@ -13,9 +13,10 @@ use cranpose_ui_graphics::{Brush, Color, DrawPrimitive, Rect, Size};
 
 use crate::scene_probe::{initial_graph, update_scene};
 
-// A store holding a root layer.
+// A store holding a root layer, which keeps every change.
 fn rooted_store() -> SceneStore {
     let mut store = SceneStore::new();
+    store.follow(RecordEvents::ALL);
     insert_root(&mut store);
     store
 }
@@ -47,53 +48,62 @@ fn add_and_remove(store: &mut SceneStore, node: NodeId) {
     store.finish_update();
 }
 
-fn events(
-    store: &mut SceneStore,
-    cursor: &mut JournalCursor,
-) -> Option<Vec<(RecordEvent, NodeId)>> {
-    store.read_journal(cursor, |_, read| match read {
-        JournalRead::Changes(entries) => Some(
-            entries
-                .iter()
-                .map(|entry| (entry.event, entry.node.expect("a node's record")))
-                .collect(),
-        ),
-        JournalRead::Lost => None,
-    })
+// A reader of a store's changes: the version of the store it read last.
+struct Reader(Option<SceneVersion>);
+
+impl Reader {
+    // A reader that read `store` as it is now.
+    fn of(store: &SceneStore) -> Self {
+        Self(Some(store.version()))
+    }
+
+    // The changes of `store` since the last read, `None` when lost.
+    fn events(&mut self, store: &SceneStore) -> Option<Vec<(RecordEvent, NodeId)>> {
+        let read = self.0.replace(store.version());
+        match store.changes_since(read) {
+            JournalRead::Changes(entries) => Some(
+                entries
+                    .iter()
+                    .map(|entry| (entry.event, entry.node.expect("a node's record")))
+                    .collect(),
+            ),
+            JournalRead::Lost => None,
+        }
+    }
 }
 
 #[test]
 fn a_reader_reads_each_change_once() {
     let mut store = rooted_store();
-    let mut cursor = store.open_journal(RecordEvents::ALL);
+    let mut reader = Reader::of(&store);
 
     add_and_remove(&mut store, NodeId(2));
 
     assert_eq!(
-        events(&mut store, &mut cursor),
+        reader.events(&store),
         Some(vec![
             (RecordEvent::Inserted, NodeId(2)),
             (RecordEvent::Removed, NodeId(2)),
         ])
     );
-    assert_eq!(events(&mut store, &mut cursor), Some(Vec::new()));
+    assert_eq!(reader.events(&store), Some(Vec::new()));
 }
 
 #[test]
 fn a_reader_further_behind_than_the_journal_keeps_loses_the_changes() {
     let mut store = rooted_store();
-    let mut behind = store.open_journal(RecordEvents::ALL);
-    let mut current = store.open_journal(RecordEvents::ALL);
+    let mut behind = Reader::of(&store);
+    let mut current = Reader::of(&store);
 
     for node in 2..400 {
         add_and_remove(&mut store, NodeId(node));
-        assert!(events(&mut store, &mut current).is_some());
+        assert!(current.events(&store).is_some());
     }
 
-    assert_eq!(events(&mut store, &mut behind), None);
+    assert_eq!(behind.events(&store), None);
     add_and_remove(&mut store, NodeId(400));
     assert_eq!(
-        events(&mut store, &mut behind).map(|events| events.len()),
+        behind.events(&store).map(|events| events.len()),
         Some(2),
         "a reader that lost the changes follows the store again"
     );
@@ -102,26 +112,23 @@ fn a_reader_further_behind_than_the_journal_keeps_loses_the_changes() {
 #[test]
 fn a_cleared_store_loses_the_changes() {
     let mut store = rooted_store();
-    let mut cursor = store.open_journal(RecordEvents::ALL);
+    let mut reader = Reader::of(&store);
 
     add_and_remove(&mut store, NodeId(2));
     store.clear();
 
-    assert_eq!(events(&mut store, &mut cursor), None);
+    assert_eq!(reader.events(&store), None);
 }
 
 #[test]
 fn a_reader_of_another_store_follows_this_one() {
-    let mut first = rooted_store();
+    let first = rooted_store();
     let mut second = rooted_store();
-    let mut cursor = first.open_journal(RecordEvents::ALL);
+    let mut reader = Reader::of(&first);
 
-    assert_eq!(events(&mut second, &mut cursor), None);
+    assert_eq!(reader.events(&second), None);
     add_and_remove(&mut second, NodeId(2));
-    assert_eq!(
-        events(&mut second, &mut cursor).map(|events| events.len()),
-        Some(2)
-    );
+    assert_eq!(reader.events(&second).map(|events| events.len()), Some(2));
 }
 
 const DOT: Rect = Rect {
@@ -156,18 +163,19 @@ fn page(dot: Color) -> LayerNode {
 fn a_page_described_again_reports_only_the_draw_that_changed() {
     let mut store = SceneStore::new();
     store.describe(&page(Color::RED));
-    let mut cursor = store.open_journal(RecordEvents::ALL);
+    store.follow(RecordEvents::ALL);
+    let mut reader = Reader::of(&store);
 
     store.describe(&page(Color::WHITE));
     assert_eq!(
-        events(&mut store, &mut cursor),
+        reader.events(&store),
         Some(vec![(RecordEvent::Redrawn(Reach::Finite(DOT)), NodeId(1))]),
         "the page redrew the dot alone"
     );
 
     store.describe(&page(Color::WHITE));
     assert_eq!(
-        events(&mut store, &mut cursor),
+        reader.events(&store),
         Some(Vec::new()),
         "the same page changes nothing"
     );
@@ -177,26 +185,27 @@ fn a_page_described_again_reports_only_the_draw_that_changed() {
 fn a_reader_that_follows_reaches_again_learns_each_redraw_after() {
     let mut store = SceneStore::new();
     store.describe(&page(Color::RED));
-    let mut cursor = store.open_journal(RecordEvents::ANY);
+    store.follow(RecordEvents::ANY);
+    let mut reader = Reader::of(&store);
 
     store.describe(&page(Color::WHITE));
     assert_eq!(
-        events(&mut store, &mut cursor).map(|events| events.len()),
+        reader.events(&store).map(|events| events.len()),
         Some(1),
         "a reader of any change learns that the page changed, once"
     );
     store.describe(&page(Color::WHITE));
     assert_eq!(
-        events(&mut store, &mut cursor),
+        reader.events(&store),
         Some(Vec::new()),
         "a reader of any change learns that the same page changed nothing"
     );
 
-    store.follow_journal(&mut cursor, RecordEvents::ALL);
+    store.follow(RecordEvents::ALL);
     for (colour, label) in [(Color::RED, "back to red"), (Color::WHITE, "white again")] {
         store.describe(&page(colour));
         assert_eq!(
-            events(&mut store, &mut cursor),
+            reader.events(&store),
             Some(vec![(RecordEvent::Redrawn(Reach::Finite(DOT)), NodeId(1))]),
             "{label}: the page redrew the dot"
         );
@@ -238,16 +247,17 @@ fn a_box_whose_children_swap_places_reports_its_subtree_changed() {
     let root = composition.root().expect("a root");
     let viewport = Size::new(120.0, 120.0);
     let mut scene = initial_graph(&mut composition, root, viewport);
-    let mut cursor = scene.open_journal(RecordEvents::ALL);
+    scene.follow(RecordEvents::ALL);
+    let read = Some(scene.store().version());
 
     swapped.borrow().expect("the order").set(true);
     update_scene(&mut composition, root, viewport, &mut scene);
-    let changed = scene.read_journal(&mut cursor, |_, read| match read {
+    let changed = match scene.store().changes_since(read) {
         JournalRead::Changes(entries) => entries
             .iter()
             .any(|entry| entry.event == RecordEvent::Changed && entry.node == Some(root)),
         JournalRead::Lost => false,
-    });
+    };
     assert!(changed, "the box draws its children in another order");
 }
 

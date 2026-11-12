@@ -6,10 +6,9 @@
 
 use cranpose_core::{RecordId, RecordRef, collections::growth_slack::GrowthSlack};
 use cranpose_render_common::{
-    graph_scene::Scene,
     scene_store::{
-        BLUR_PIXEL_SLACK, JournalCursor, JournalEntry, JournalRead, Reach, RecordEvent,
-        RecordEvents, SceneStore,
+        BLUR_PIXEL_SLACK, JournalEntry, JournalRead, Reach, RecordEvent, RecordEvents, SceneStore,
+        SceneVersion,
     },
     space::scene_of,
 };
@@ -239,7 +238,8 @@ pub(crate) struct TargetDrawn {
 
 #[derive(Default)]
 pub(crate) struct TargetState {
-    cursor: Option<JournalCursor>,
+    // The version of the records read last.
+    read: Option<SceneVersion>,
     // By record row, how the target last drew the record.
     shown: Vec<Shown>,
     setting: Option<TargetSetting>,
@@ -282,40 +282,6 @@ pub(crate) struct TargetState {
     lost_root: Option<Area>,
 }
 
-/// The records a target state follows: a scene's, or those of a store of
-/// their own.
-pub(crate) enum Journaled<'a> {
-    Scene(&'a mut Scene),
-    Store(&'a mut SceneStore),
-}
-
-impl Journaled<'_> {
-    fn open(&mut self) -> JournalCursor {
-        match self {
-            Self::Scene(scene) => scene.open_journal(RecordEvents::ALL),
-            Self::Store(store) => store.open_journal(RecordEvents::ALL),
-        }
-    }
-
-    fn follow(&mut self, cursor: &mut JournalCursor, events: RecordEvents) {
-        match self {
-            Self::Scene(scene) => scene.follow_journal(cursor, events),
-            Self::Store(store) => store.follow_journal(cursor, events),
-        }
-    }
-
-    fn read<R>(
-        &mut self,
-        cursor: &mut JournalCursor,
-        read: impl FnOnce(&SceneStore, JournalRead<'_>) -> R,
-    ) -> R {
-        match self {
-            Self::Scene(scene) => scene.read_journal(cursor, read),
-            Self::Store(store) => store.read_journal(cursor, read),
-        }
-    }
-}
-
 impl TargetState {
     /// Ends a run of frames that changed most of the window: the app held
     /// still since the frame before.
@@ -327,37 +293,23 @@ impl TargetState {
     /// Starts a frame of `setting` of the records of `source`: reads their
     /// changes since the frame before, and puts the areas the frame before
     /// drew the changed records in into the frame's damage.
-    pub(crate) fn begin(&mut self, mut source: Journaled<'_>, setting: TargetSetting) {
+    pub(crate) fn begin(&mut self, store: &SceneStore, setting: TargetSetting) {
         self.damage = DamageRects::default();
         self.changed.clear();
-        let mut cursor = self.cursor.take().unwrap_or_else(|| source.open());
-        let recording = self.skipped == 0;
-        if recording != self.recording {
-            // A frame that skips working out its damage needs only whether
-            // anything changed, so the scene logs nothing more while frames
-            // skip.
-            let events = if recording {
-                RecordEvents::ALL
-            } else {
-                RecordEvents::ANY
-            };
-            source.follow(&mut cursor, events);
-        }
-        self.recording = recording;
+        let read = self.read.replace(store.version());
+        self.recording = self.skipped == 0;
         if !self.recording {
             // A frame that changes nothing says so, skipped or not.
             let same = self.setting == Some(setting);
-            self.still = source.read(&mut cursor, |_, read| {
-                same && matches!(read, JournalRead::Changes(entries) if entries.is_empty())
-            });
-            self.cursor = Some(cursor);
+            self.still = same
+                && matches!(store.changes_since(read), JournalRead::Changes(entries) if entries.is_empty());
             return;
         }
         self.whole = false;
         self.lost_root = None;
         self.unknown_before = std::mem::take(&mut self.stale) || self.setting != Some(setting);
         self.setting = Some(setting);
-        source.read(&mut cursor, |store, read| match read {
+        match store.changes_since(read) {
             // The records went or were replaced: all the root drew before
             // and draws now changes.
             JournalRead::Lost => {
@@ -375,9 +327,19 @@ impl TargetState {
                     self.note(store, entry);
                 }
             }
-        });
-        self.cursor = Some(cursor);
+        }
         self.begun = (self.damage, self.whole);
+    }
+
+    // The changes the records keep for the target from the next update on:
+    // a frame that skips working out its damage needs only whether
+    // anything changed, so the records log nothing more while frames skip.
+    pub(crate) fn followed(&self) -> RecordEvents {
+        if self.recording {
+            RecordEvents::ALL
+        } else {
+            RecordEvents::ANY
+        }
     }
 
     // The damage of the areas the frame before drew the changed records in;
