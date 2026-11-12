@@ -794,6 +794,97 @@ fn kept_frames_match_full_redraws_while_clipped_draws_change() {
     }
 }
 
+// A fill that stays while the clip around it shrinks a few points each
+// frame: the draw group's bounds change and the draws do not.
+#[composable]
+fn ShrinkingClip(captured: Step) {
+    let step = rememberMutableStateOf(|| 0u32);
+    *captured.borrow_mut() = Some(step);
+    let shown = 180.0 - step.value() as f32 * 7.0;
+    Box(
+        Modifier::empty()
+            .offset(20.0, 50.0)
+            .width(200.0)
+            .height(16.0)
+            .draw_behind(move |scope| {
+                let whole = Rect::from_size(scope.size());
+                let fill = Brush::solid(Color::from_rgb_u8(98, 160, 255));
+                scope.clip_rect(
+                    Rect::from_size(Size::new(shown, whole.height)),
+                    &mut |scope| {
+                        scope.draw_rect_at(whole, fill.clone());
+                    },
+                );
+            }),
+        BoxSpec::default(),
+        || {},
+    );
+}
+
+#[test]
+fn kept_frames_match_full_redraws_while_a_clip_shrinks_around_a_still_fill() {
+    kept_frames_match_full_redraws(1.0, ShrinkingClip);
+    kept_frames_match_full_redraws(1.5, ShrinkingClip);
+}
+
+#[test]
+fn a_clip_shrinking_around_a_still_fill_changes_the_strip_it_uncovers() {
+    let (mut shell, captured) = shell(1.0, ShrinkingClip);
+    let mut picture = Picture::default();
+    let mut areas = Vec::new();
+    shell.update();
+    shell.primary().with_renderer(|renderer| {
+        renderer.update_picture(&mut picture, WIDTH, HEIGHT, 1.0, &mut areas);
+    });
+    let step = (*captured.borrow()).expect("the composition remembered the step");
+    step.set(1);
+    shell.update();
+    shell.primary().with_renderer(|renderer| {
+        renderer.update_picture(&mut picture, WIDTH, HEIGHT, 1.0, &mut areas);
+    });
+    // The clip's end moves from x = 200 to 193 in the box at x = 20.
+    assert!(
+        areas.iter().any(|area| {
+            area.x <= 193
+                && area.x + area.width >= 200
+                && area.y <= 50
+                && area.y + area.height >= 66
+        }),
+        "the strip the clip uncovered lies in one area of {areas:?}"
+    );
+}
+
+// A box that clips a child wider than it and shrinks a few points each
+// frame: its bounds change and nothing it draws does.
+#[composable]
+fn ShrinkingParent(captured: Step) {
+    let step = rememberMutableStateOf(|| 0u32);
+    *captured.borrow_mut() = Some(step);
+    let shown = 180.0 - step.value() as f32 * 7.0;
+    Box(
+        Modifier::empty()
+            .offset(20.0, 50.0)
+            .size(Size::new(shown, 16.0))
+            .clip_to_bounds(),
+        BoxSpec::default(),
+        || {
+            Box(
+                Modifier::empty()
+                    .required_size(Size::new(200.0, 16.0))
+                    .background(Color::from_rgb_u8(98, 160, 255)),
+                BoxSpec::default(),
+                || {},
+            );
+        },
+    );
+}
+
+#[test]
+fn kept_frames_match_full_redraws_while_a_clipping_box_shrinks_around_a_still_child() {
+    kept_frames_match_full_redraws(1.0, ShrinkingParent);
+    kept_frames_match_full_redraws(1.5, ShrinkingParent);
+}
+
 #[test]
 fn kept_frames_match_full_redraws_at_one_pixel_per_point() {
     kept_frames_match_full_redraws(1.0, Scenes);

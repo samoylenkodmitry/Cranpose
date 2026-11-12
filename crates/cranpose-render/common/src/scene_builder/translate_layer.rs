@@ -139,11 +139,15 @@ pub(super) fn translated_container(
         return None;
     }
     let (local_bounds, node_bounds) = layer_and_node_bounds(modifier_slices, layout_state.size());
+    let mut changed = false;
     if local_bounds != layer.local_bounds() {
         let resized = shaped_graphics_layer(modifier_slices, local_bounds).map(Cow::into_owned);
-        store.write_graphics_layer(container, resized);
+        changed = store.write_graphics_layer(container, resized);
     }
-    set_bounds(store, container, local_bounds, node_bounds);
+    changed |= set_bounds(store, container, local_bounds, node_bounds);
+    if changed {
+        store.note_property_change(container);
+    }
     Some(TranslatedContainer { node_id })
 }
 

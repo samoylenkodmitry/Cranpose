@@ -132,16 +132,18 @@ pub(super) fn assign_layer(store: &mut SceneStore, record: RecordId, head: Layer
     }
 }
 
+// Writes the bounds of `record`, which the caller notes; `false` when they
+// stay.
 #[inline]
 pub(super) fn set_bounds(
     store: &mut SceneStore,
     record: RecordId,
     local_bounds: Rect,
     node_bounds: Option<Rect>,
-) {
+) -> bool {
     let size = node_bounds.unwrap_or(local_bounds);
-    store.write_size(record, size.width, size.height);
-    store.write_layer_bounds(record, node_bounds.map(|_| local_bounds));
+    let resized = store.write_size(record, size.width, size.height);
+    store.write_layer_bounds(record, node_bounds.map(|_| local_bounds)) | resized
 }
 
 // The transform that places a layer with `graphics_layer` at `placement`

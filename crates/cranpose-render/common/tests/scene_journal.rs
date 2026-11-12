@@ -299,6 +299,56 @@ fn a_box_whose_children_swap_places_reports_its_subtree_changed() {
     assert!(changed, "the box draws its children in another order");
 }
 
+// A box that clips a child wider than it, with a width `width` gives.
+fn clipping_box(width: Rc<RefCell<Option<MutableState<f32>>>>) -> cranpose_ui::TestComposition {
+    cranpose_ui::run_test_composition(move || {
+        let state = cranpose_core::rememberMutableStateOf(|| 40.0f32);
+        *width.borrow_mut() = Some(state);
+        cranpose_ui::Box(
+            Modifier::empty().size(Size::new(100.0, 100.0)),
+            BoxSpec::default(),
+            move || {
+                cranpose_ui::Box(
+                    Modifier::empty()
+                        .size(Size::new(state.get(), 16.0))
+                        .clip_to_bounds(),
+                    BoxSpec::default(),
+                    || {
+                        cranpose_ui::Box(
+                            Modifier::empty()
+                                .required_size(Size::new(40.0, 16.0))
+                                .background(Color::RED),
+                            BoxSpec::default(),
+                            || {},
+                        );
+                    },
+                );
+            },
+        );
+    })
+}
+
+#[test]
+fn a_clipping_box_that_shrinks_around_a_still_child_reports_its_subtree_changed() {
+    let width = Rc::default();
+    let mut composition = clipping_box(Rc::clone(&width));
+    let root = composition.root().expect("a root");
+    let viewport = Size::new(120.0, 120.0);
+    let mut scene = initial_graph(&mut composition, root, viewport);
+    scene.follow(RecordEvents::ALL);
+    let read = Some(scene.store().version());
+
+    width.borrow().expect("the width").set(30.0);
+    update_scene(&mut composition, root, viewport, &mut scene);
+    let changed = match scene.store().changes_since(read) {
+        JournalRead::Changes(entries) => entries
+            .iter()
+            .any(|entry| entry.event == RecordEvent::Changed),
+        JournalRead::Lost => false,
+    };
+    assert!(changed, "the box cuts less of its child now");
+}
+
 #[test]
 fn two_stores_with_the_same_updates_keep_versions_apart() {
     let mut first = rooted_store();
