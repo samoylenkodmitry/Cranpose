@@ -451,23 +451,38 @@ fn GroupBar() {
     );
 }
 
-// Whether every bar takes a new width in every frame: `TURN=all`.
-fn bars_turn_together() -> bool {
-    std::env::var("TURN").is_ok_and(|turn| turn == "all")
+// When the bars take a new width.
+#[derive(Clone, Copy, PartialEq)]
+enum Turns {
+    // One bar a frame, each in its turn.
+    OneByOne,
+    // Every bar in every frame: `TURN=all`.
+    Together,
+}
+
+impl Turns {
+    // Read once for all bars: `getenv` scans the whole environment, so a
+    // read in each bar's body made the count depend on the shell's
+    // variables.
+    fn from_env() -> Self {
+        if std::env::var("TURN").is_ok_and(|turn| turn == "all") {
+            Self::Together
+        } else {
+            Self::OneByOne
+        }
+    }
 }
 
 // One of `bars` bars that take a new width by turns: this one on the frames
 // whose count leaves `index` when divided by `bars`, or on every frame when
 // the bars turn together.
 #[composable]
-fn TurnBar(index: usize, bars: usize, frames: State<f32>) {
-    let together = bars_turn_together();
+fn TurnBar(index: usize, bars: usize, turns: Turns, frames: State<f32>) {
     let turn = derivedStateOf(move || {
         let frame = frames.value() as usize;
-        if together {
-            frame + index
-        } else {
-            (frame + bars - 1 - index) / bars
+        match turns {
+            Turns::Together => frame + index,
+            Turns::OneByOne => (frame + bars - 1 - index) / bars,
         }
     });
     let fraction = 0.1 + 0.9 * (turn.value() % 16) as f32 / 15.0;
@@ -495,8 +510,9 @@ fn TurnBar(index: usize, bars: usize, frames: State<f32>) {
 #[composable]
 fn TurnBars(bars: usize) {
     let frames = reading();
+    let turns = Turns::from_env();
     for index in 0..bars {
-        cranpose_core::with_key(&index, || TurnBar(index, bars, frames));
+        cranpose_core::with_key(&index, || TurnBar(index, bars, turns, frames));
     }
 }
 
