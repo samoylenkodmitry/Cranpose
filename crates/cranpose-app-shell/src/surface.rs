@@ -952,10 +952,6 @@ where
             primary.focus_check_due = false;
             self.primary().keep_focus();
         }
-        // At rest the room a burst took goes back: a frame would take it
-        // again.
-        if self.compute_frame_schedule().is_idle() {
-            self.trim();
-        }
+        self.trim_at_rest();
     }
 }

@@ -52,8 +52,9 @@ fn flag_if(on: bool, flag: RecordFlags) -> RecordFlags {
 
 #[expect(clippy::multiple_inherent_impl, reason = "one file per concern")]
 impl SceneStore {
-    // Writes `head` as the head of `record` and notes a property change when
-    // a part of the head changed.
+    // Writes `head` as the head of `record` and notes a property change,
+    // unless the head stayed and the update already noted a change of the
+    // record.
     pub(crate) fn write_head(&mut self, record: RecordId, head: LayerHead) {
         let LayerHead {
             kind,
@@ -108,7 +109,9 @@ impl SceneStore {
             | flag_if(after_children, RecordFlags::AFTER_CHILDREN)
             | flag_if(has_origin_sinks, RecordFlags::ORIGIN_SINKS);
         changed |= self.write_flags(record, flags);
-        if changed {
+        // A head that stayed adds nothing to a change the update already
+        // noted for the record, as a redraw of its draws notes.
+        if changed || self.content_rev(record) != self.update() {
             self.note_property_change(record);
         }
     }
