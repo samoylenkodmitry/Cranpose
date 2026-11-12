@@ -135,7 +135,12 @@ fn assert_recursive_layout_visible(robot: &cranpose::Robot, expected_depth: usiz
     );
 }
 
-fn button_center(robot: &cranpose::Robot, label: &str) -> (f32, f32) {
+// The center of the tab `label` once the tab bar shows it. The bar stays where
+// this leaves it, so a later click on the center reaches the same tab.
+fn visible_tab_center(robot: &cranpose::Robot, label: &str) -> (f32, f32) {
+    find_button_exact_in_semantics(robot, label)
+        .unwrap_or_else(|| panic!("tab {label:?} could not be brought into view"));
+    settle(robot, 30);
     let (x, y, width, height) = robot
         .find_button_bounds_exact(label)
         .unwrap_or_else(|err| panic!("failed to query button {label:?}: {err}"))
@@ -360,7 +365,6 @@ pub(crate) fn main() {
             scroll_tab_bar_home(&robot);
             click_tab(&robot, "Counter App").expect("navigate to Counter App");
             assert_active_tab_content(&robot, "Increment", "Counter App");
-            let counter_tab_center = button_center(&robot, "Counter App");
 
             click_tab(&robot, "Recursive Layout").expect("navigate to Recursive Layout");
             assert_active_tab_content(&robot, "Increase depth", "Recursive Layout");
@@ -391,6 +395,9 @@ pub(crate) fn main() {
                 assert_active_tab_content(&robot, "Increase depth", "Recursive Layout");
                 assert_current_depth(&robot, 3, "before spike");
                 assert_recursive_layout_visible(&robot, 3, "before spike");
+                // The spike runs without semantics, so the way back is the
+                // place of the Counter App tab, read while semantics still work.
+                let counter_tab_center = visible_tab_center(&robot, "Counter App");
                 robot
                     .set_semantics_enabled(false)
                     .expect("disable semantics for spike");
@@ -404,7 +411,6 @@ pub(crate) fn main() {
                 #[cfg(target_os = "linux")]
                 log_smaps_top("peak");
 
-                scroll_tab_bar_home(&robot);
                 robot
                     .click(counter_tab_center.0, counter_tab_center.1)
                     .expect("click cached Counter App tab");

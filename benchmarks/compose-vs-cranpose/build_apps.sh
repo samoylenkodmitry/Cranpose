@@ -67,7 +67,11 @@ flutter_ready() {
     if [[ ! -d $cache/flutter ]]; then
         git clone -q --branch stable https://github.com/flutter/flutter.git "$cache/flutter"
     else
-        git -C "$cache/flutter" pull -q --ff-only
+        # Flutter moves `stable` to each new release branch, which does not
+        # descend from the fixes of the last one, so the cache follows the
+        # branch rather than fast-forwarding it.
+        git -C "$cache/flutter" fetch -q origin stable
+        git -C "$cache/flutter" checkout -q -B stable FETCH_HEAD
     fi
     flutter --version
 }
