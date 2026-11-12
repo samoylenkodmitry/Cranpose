@@ -150,7 +150,6 @@ fn scene_read_keeps_lazy_children_stable_while_the_handle_changes() {
 #[derive(Default)]
 struct Built {
     store: SceneStore,
-    walk: WalkMemory,
 }
 
 impl Built {
@@ -160,12 +159,12 @@ impl Built {
         _root: NodeId,
         updates: SceneUpdates<'_>,
     ) -> GraphUpdateReport {
-        update_from_applier(applier, &mut self.store, &mut self.walk, updates)
+        update_from_applier(applier, &mut self.store, updates)
     }
 
     fn rebuild_from_applier(&mut self, applier: &MemoryApplier, root: NodeId) {
         assert!(
-            rebuild_from_applier(applier, root, &mut self.store, &mut self.walk),
+            rebuild_from_applier(applier, root, &mut self.store),
             "the root lowers"
         );
     }
@@ -178,7 +177,7 @@ impl Built {
 // The scene of the layout tree below `root`, built from scratch.
 fn built(applier: &MemoryApplier, root: NodeId) -> Option<Built> {
     let mut built = Built::default();
-    rebuild_from_applier(applier, root, &mut built.store, &mut built.walk).then_some(built)
+    rebuild_from_applier(applier, root, &mut built.store).then_some(built)
 }
 
 // What each record of `graph` that draws for a node was at its last
@@ -3280,7 +3279,7 @@ fn nested_label_composition(
 }
 
 #[test]
-fn a_node_changed_alone_frame_after_frame_updates_as_a_walk_from_the_root_does() {
+fn a_node_changed_alone_frame_after_frame_updates_as_a_fresh_scene_draws_it() {
     let label: Holder<cranpose_core::MutableState<String>> = Rc::default();
     let padding: Holder<cranpose_core::MutableState<f32>> = Rc::default();
     let ids: Holder<(NodeId, NodeId)> = Rc::default();
@@ -3308,30 +3307,20 @@ fn a_node_changed_alone_frame_after_frame_updates_as_a_walk_from_the_root_does()
 
     // The text alone, twice; the padded box, which moves the text; the text
     // alone, twice again.
-    let frames: [(&str, f32, NodeId, bool); 5] = [
-        ("b", 0.0, leaf, false),
-        ("c", 0.0, leaf, true),
-        ("c", 12.0, padded, false),
-        ("d", 12.0, leaf, false),
-        ("e", 12.0, leaf, true),
+    let frames: [(&str, f32, NodeId); 5] = [
+        ("b", 0.0, leaf),
+        ("c", 0.0, leaf),
+        ("c", 12.0, padded),
+        ("d", 12.0, leaf),
+        ("e", 12.0, leaf),
     ];
-    for (text, pad, dirty, along_path) in frames {
+    for (text, pad, dirty) in frames {
         label.set_value(text.to_string());
         padding.set_value(pad);
         composition.process_invalid_scopes().expect("recomposition");
         let mut applier = composition.applier_mut();
         applier.set_runtime_handle(handle.clone());
         applier.compute_layout(root, viewport).expect("layout");
-        let held = graph
-            .walk
-            .retained_path
-            .as_ref()
-            .is_some_and(|path| path.node == dirty);
-        assert_eq!(
-            held, along_path,
-            "frame {text}/{pad}: the update goes along the retained path only \
-             when the last one changed this node alone"
-        );
         assert!(
             graph
                 .update_from_applier(&applier, root, &[(dirty, NodeUpdate::Content)])

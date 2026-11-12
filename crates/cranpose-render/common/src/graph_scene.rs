@@ -15,7 +15,6 @@ use crate::{
     HitTestTarget, RenderScene, SceneUpdates,
     graph::{LayerNode, ProjectiveTransform},
     left_nodes::LeftNodes,
-    scene_builder::WalkMemory,
     scene_pick::ScenePick,
     scene_store::{JournalCursor, JournalRead, LayerRef, RecordEvents, SceneStore},
 };
@@ -570,7 +569,6 @@ impl HitTargets<'_> {
 /// The records a window draws together with the hit targets built from them.
 pub struct Scene {
     store: SceneStore,
-    walk: WalkMemory,
     // Collected from the store when a query first needs them after it
     // changed: a frame that moves a target and takes no pointer input does
     // not walk the store for targets.
@@ -603,7 +601,6 @@ impl Scene {
         Self {
             left_nodes: LeftNodes::new(&mut store),
             store,
-            walk: WalkMemory::default(),
             hits: RefCell::default(),
             diagnostics: Rc::new(RenderDiagnostics::new()),
             layer_moves: 0,
@@ -658,7 +655,6 @@ impl Scene {
     /// records. The hit targets follow it.
     pub fn describe(&mut self, root: &LayerNode) {
         self.store.describe(root);
-        self.walk = WalkMemory::default();
         self.hits.get_mut().stale = true;
         self.layer_moves += 1;
     }
@@ -669,7 +665,6 @@ impl Scene {
         self.store.begin_update();
         edit(&mut self.store);
         self.store.finish_update();
-        self.walk = WalkMemory::default();
         self.hits.get_mut().stale = true;
         self.layer_moves += 1;
     }
@@ -679,12 +674,7 @@ impl Scene {
     pub fn rebuild_from_applier(&mut self, applier: &MemoryApplier, root: NodeId) {
         self.hits.get_mut().stale = true;
         self.layer_moves += 1;
-        if crate::scene_builder::rebuild_from_applier(
-            applier,
-            root,
-            &mut self.store,
-            &mut self.walk,
-        ) {
+        if crate::scene_builder::rebuild_from_applier(applier, root, &mut self.store) {
             crate::scene_builder::publish_space(applier, &self.store);
         }
     }
@@ -740,12 +730,7 @@ impl Scene {
         root: NodeId,
         updates: SceneUpdates<'_>,
     ) -> bool {
-        let report = crate::scene_builder::update_from_applier(
-            applier,
-            &mut self.store,
-            &mut self.walk,
-            updates,
-        );
+        let report = crate::scene_builder::update_from_applier(applier, &mut self.store, updates);
         if updates.is_empty() || !report.applied() {
             self.rebuild_from_applier(applier, root);
             return false;
@@ -794,7 +779,6 @@ impl RenderScene for Scene {
 
     fn clear(&mut self) {
         self.store.clear();
-        self.walk = WalkMemory::default();
         self.clear_hits();
     }
 

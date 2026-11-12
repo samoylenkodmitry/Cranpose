@@ -1,6 +1,9 @@
 use std::{any::Any, rc::Rc};
 
-use cranpose_core::{MemoryApplier, NodeId, RecordId, collections::map::HashMap};
+use cranpose_core::{
+    MemoryApplier, NodeId, RecordId,
+    collections::{map::HashMap, recent_peak::RecentPeak},
+};
 use cranpose_ui::{ModifierNodeSlices, Point, Rect, SubcomposeLayoutNode};
 
 use crate::{
@@ -10,9 +13,8 @@ use crate::{
     scene_store::{HeadKind, Item, LayerHead, LayerRef, RecordKind, SceneStore},
 };
 
-mod dirty_walk;
-pub(crate) use dirty_walk::{DirtyAncestry, RetainedPath};
-use dirty_walk::{update_along_retained_path, walk_dirty_layers};
+mod dirty_records;
+use dirty_records::{DirtyPlace, update_dirty_records};
 mod draw_recording;
 pub(crate) use draw_recording::draw_command_items;
 use draw_recording::{
@@ -128,19 +130,20 @@ impl GraphUpdateReport {
     }
 }
 
-// What the dirty walk keeps of one update for the next: the path to the
-// layer it updated last and the marks of the nodes it walked through.
+// The room an update keeps its dirty nodes in, which the next update on the
+// thread takes again.
 #[derive(Default)]
-pub(crate) struct WalkMemory {
-    retained_path: Option<RetainedPath>,
-    dirty_ancestry: DirtyAncestry,
+pub(crate) struct DirtyRoom {
+    nodes: HashMap<NodeId, NodeUpdate>,
+    order: Vec<DirtyPlace>,
+    recent: RecentPeak,
 }
 
 /// Builds the records of the layout tree below `root`, read from `applier`.
 /// Returns `None` when `root` cannot be lowered to a layer.
 pub fn build_from_applier(applier: &MemoryApplier, root: NodeId) -> Option<SceneStore> {
     let mut store = SceneStore::new();
-    rebuild_from_applier(applier, root, &mut store, &mut WalkMemory::default()).then_some(store)
+    rebuild_from_applier(applier, root, &mut store).then_some(store)
 }
 
 // Lowers the layout tree below `root` into `store` again, its records reusing
@@ -150,13 +153,11 @@ pub(crate) fn rebuild_from_applier(
     applier: &MemoryApplier,
     root: NodeId,
     store: &mut SceneStore,
-    walk: &mut WalkMemory,
 ) -> bool {
     store.begin_update();
     if let Some(record) = store.root() {
         release_for_rebuild(store, record);
     }
-    walk.retained_path = None;
     if !lower_root_into(applier, store, root) {
         store.clear();
         return false;
@@ -173,10 +174,9 @@ pub(crate) fn rebuild_from_applier(
 pub(crate) fn update_from_applier(
     applier: &MemoryApplier,
     store: &mut SceneStore,
-    walk: &mut WalkMemory,
     updates: SceneUpdates<'_>,
 ) -> GraphUpdateReport {
-    let report = update_from_applier_inner(applier, store, walk, updates);
+    let report = update_from_applier_inner(applier, store, updates);
     if !updates.is_empty() && report.applied() {
         store.finish_update();
     }
@@ -218,7 +218,6 @@ fn changes_layer(update: NodeUpdate) -> bool {
 fn update_from_applier_inner(
     applier: &MemoryApplier,
     store: &mut SceneStore,
-    walk: &mut WalkMemory,
     updates: SceneUpdates<'_>,
 ) -> GraphUpdateReport {
     if updates.is_empty() {
@@ -226,75 +225,39 @@ fn update_from_applier_inner(
     }
     store.begin_update();
 
-    // The map of the frame before keeps its storage for this one.
-    let (mut remaining_dirty_nodes, mut recent) =
+    // The room of the frame before keeps its storage for this one.
+    let mut room =
         crate::thread_state::with(|state| state.dirty_node_scratch.take()).unwrap_or_default();
-    let merged = dirty_node_updates(updates, &mut remaining_dirty_nodes);
-    let named = remaining_dirty_nodes.len();
-    let mut report = update_dirty_nodes(applier, store, walk, &mut remaining_dirty_nodes);
+    let merged = dirty_node_updates(updates, &mut room.nodes);
+    let named = room.nodes.len();
+    let mut report = update_dirty_nodes(applier, store, &mut room);
     report.layers_moved |= merged.contains(GraphChanges::Moves);
-    remaining_dirty_nodes.clear();
-    recent.settle_spent(&mut remaining_dirty_nodes, named, DIRTY_NODES_KEPT);
-    crate::thread_state::with(|state| {
-        state
-            .dirty_node_scratch
-            .set(Some((remaining_dirty_nodes, recent)));
-    });
+    room.nodes.clear();
+    room.recent
+        .settle_spent(&mut room.nodes, named, DIRTY_NODES_KEPT);
+    crate::thread_state::with(|state| state.dirty_node_scratch.set(Some(room)));
     report
 }
 
 fn update_dirty_nodes(
     applier: &MemoryApplier,
     store: &mut SceneStore,
-    walk: &mut WalkMemory,
-    remaining_dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
+    room: &mut DirtyRoom,
 ) -> GraphUpdateReport {
-    let WalkMemory {
-        retained_path,
-        dirty_ancestry,
-    } = walk;
+    let DirtyRoom { nodes, order, .. } = room;
     let Some(root) = store.root() else {
         return GraphUpdateReport::needs_rebuild(GraphRebuildReason::RootLayerUnavailable);
     };
     if let Some(root_id) = layer_identity(store.layer(root))
-        && let Some(kind) = remaining_dirty_nodes.remove(&root_id)
+        && let Some(kind) = nodes.remove(&root_id)
     {
-        return update_dirty_root(
-            applier,
-            store,
-            dirty_ancestry,
-            remaining_dirty_nodes,
-            (root, root_id, kind),
-        );
+        return update_dirty_root(applier, store, (nodes, order), (root, root_id, kind));
     }
-
-    // An update that does not go along the retained path may move the
-    // layers on it, so only one that does keeps it.
-    if let Some(path) = retained_path.take()
-        && let Some(report) =
-            update_along_retained_path(applier, store, &path, remaining_dirty_nodes)
-    {
-        if report.is_some() {
-            *retained_path = Some(RetainedPath {
-                update: store.update(),
-                ..path
-            });
-        }
-        return match report {
-            Some(report) => GraphUpdateReport::patched(report.changes),
-            None => GraphUpdateReport::needs_rebuild(GraphRebuildReason::DirtyLayerUnavailable),
-        };
-    }
-
-    let Some((report, path)) =
-        walk_dirty_layers(applier, store, dirty_ancestry, remaining_dirty_nodes)
-    else {
+    let Some(changes) = update_dirty_records(applier, store, nodes, order) else {
         return GraphUpdateReport::needs_rebuild(GraphRebuildReason::DirtyLayerUnavailable);
     };
-    *retained_path = path;
-
-    match classify_walk(applier, true, remaining_dirty_nodes) {
-        GraphUpdate::Patched => GraphUpdateReport::patched(report.changes),
+    match classify_walk(applier, true, nodes) {
+        GraphUpdate::Patched => GraphUpdateReport::patched(changes),
         GraphUpdate::NeedsRebuild(reason) => GraphUpdateReport::needs_rebuild(reason),
     }
 }
@@ -306,8 +269,7 @@ fn update_dirty_nodes(
 fn update_dirty_root(
     applier: &MemoryApplier,
     store: &mut SceneStore,
-    dirty_ancestry: &mut DirtyAncestry,
-    remaining_dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
+    (remaining_dirty_nodes, order): (&mut HashMap<NodeId, NodeUpdate>, &mut Vec<DirtyPlace>),
     (root, root_id, kind): (RecordId, NodeId, NodeUpdate),
 ) -> GraphUpdateReport {
     if let Some(mut changes) = try_update_retained_layer(
@@ -327,9 +289,8 @@ fn update_dirty_root(
         if remaining_dirty_nodes.is_empty() {
             return GraphUpdateReport::patched(changes);
         }
-        let walked = walk_dirty_layers(applier, store, dirty_ancestry, remaining_dirty_nodes)
-            .map(|(report, _)| report);
-        changes |= walked.map_or(GraphChanges::HitsAndMoves, |report| report.changes);
+        let walked = update_dirty_records(applier, store, remaining_dirty_nodes, order);
+        changes |= walked.unwrap_or(GraphChanges::HitsAndMoves);
         return GraphUpdateReport {
             update: classify_walk(applier, walked.is_some(), remaining_dirty_nodes),
             ..GraphUpdateReport::patched(changes)

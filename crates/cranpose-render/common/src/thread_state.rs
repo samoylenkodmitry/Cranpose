@@ -3,20 +3,17 @@ use std::{
     sync::Arc,
 };
 
-use cranpose_core::collections::{map::HashMap as NodeMap, recent_peak::RecentPeak};
 use cranpose_ui_graphics::ContentPool;
 
 use crate::{
-    NodeUpdate,
-    scene_builder::{HitGraphState, TranslateScratch},
+    scene_builder::{DirtyRoom, HitGraphState, TranslateScratch},
     text_paint::TextPaint,
 };
 
 pub(crate) struct RenderThreadState {
     pub(crate) translate_scratch: RefCell<TranslateScratch>,
     pub(crate) hit_geometry_scratch: Cell<Vec<HitGraphState>>,
-    pub(crate) dirty_node_scratch:
-        Cell<Option<(NodeMap<cranpose_core::NodeId, NodeUpdate>, RecentPeak)>>,
+    pub(crate) dirty_node_scratch: Cell<Option<DirtyRoom>>,
     pub(crate) space_changed: Cell<bool>,
     // The paints of the texts the thread made, shared by those that paint
     // the same.
