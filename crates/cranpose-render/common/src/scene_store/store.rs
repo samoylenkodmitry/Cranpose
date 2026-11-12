@@ -759,11 +759,6 @@ impl SceneStore {
         self.tree[id.index()].parent
     }
 
-    /// Sets the record that holds `id`.
-    pub fn set_parent(&mut self, id: RecordId, parent: Option<RecordId>) {
-        self.tree[id.index()].parent = parent;
-    }
-
     /// The flags of `id`.
     #[inline]
     pub fn flags(&self, id: RecordId) -> RecordFlags {
