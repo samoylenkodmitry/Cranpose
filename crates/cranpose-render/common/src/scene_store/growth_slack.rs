@@ -1,57 +1,36 @@
-// The room a store's arrays keep past their entries: an array that doubled
-// to take one more record would keep room for as many again, so each update
-// ends by giving back room past a quarter of the entries. An update that
-// removed the record of the last row, with more than half of the rows free,
-// cuts the free rows at the end, and the free entries at the end of the
-// other arrays with them, so a scene that shrank gives back the room of its
-// peak. A list that scrolls frees its last row with few rows free, and the
-// cut leaves it. Free lists keep their room, which the next removals take
-// again.
+// The room a store's arrays keep past their entries, given back at rest: an
+// array that doubled to take one more record would keep room for as many
+// again, so the trim gives back room past a quarter of the entries. With
+// more than half of the rows free, it cuts the free rows at the end, and the
+// free entries at the end of the other arrays with them, so a scene that
+// shrank gives back the room of its peak. The item spans move together once
+// free spans hold more than half of their room, and the shape chunks drop
+// the shapes no item draws. Free lists keep their room, which the next
+// removals take again.
 
 use cranpose_core::collections::growth_slack::GrowthSlack;
 
 use super::SceneStore;
 
-// Most updates change the length of no array: the arrays that did give
-// back their room out of line.
-#[inline]
 pub(super) fn trim(store: &mut SceneStore) {
-    let resized = store.facts.resized()
-        | store.items.resized()
-        | store.props.resized()
-        | store.graphics_layers.resized()
-        | store.transforms.resized()
-        | store.draws.resized()
-        | store.texts.resized()
-        | store.runs.resized();
-    #[cfg(feature = "window-damage")]
-    let resized = resized | store.marks.pool.resized();
-    if resized {
-        trim_resized(store);
-    }
-}
-
-#[inline(never)]
-fn trim_resized(store: &mut SceneStore) {
-    // A record's four rows and its facts grow, clear and give back room
-    // together, so the facts speak for the rows' length and the tree row's
-    // room for all four.
-    let cut = store.facts.resized()
-        && 2 * store.free_rows.len() > store.tree.len()
-        && cut_free_rows(store);
-    if cut {
+    if 2 * store.free_rows.len() > store.tree.len() && cut_free_rows(store) {
         cut_free_tails(store);
     }
-    if store.facts.resized() {
-        let rows = store.tree.capacity();
-        store.tree.trim_growth_slack();
-        if store.tree.capacity() != rows {
-            store.geo.trim_growth_slack();
-            store.warm.trim_growth_slack();
-            store.generations.trim_growth_slack();
-        }
-        store.node_records.trim_growth_slack();
-    }
+    store
+        .items
+        .pack(store.tree.iter_mut().map(|row| &mut row.items));
+    store.lists.shrink_to(store.items.len());
+    #[cfg(feature = "window-damage")]
+    store
+        .marks
+        .pool
+        .pack(store.warm.iter_mut().map(|row| &mut row.own_marks));
+    store.trim_shapes();
+    store.tree.trim_growth_slack();
+    store.geo.trim_growth_slack();
+    store.warm.trim_growth_slack();
+    store.generations.trim_growth_slack();
+    store.node_records.trim_growth_slack();
     store.facts.trim_growth_slack();
     store.items.trim_growth_slack();
     #[cfg(feature = "window-damage")]
@@ -66,11 +45,8 @@ fn trim_resized(store: &mut SceneStore) {
 }
 
 // Cuts the free entries at the end of the arrays the records of the cut
-// rows held entries of, and gives back the room the kept lists took past
-// the items: a record holds no more items than the store does.
+// rows held entries of.
 fn cut_free_tails(store: &mut SceneStore) {
-    store.items.cut_free_tail();
-    store.lists.shrink_to(store.items.len());
     store.props.cut_free_tail();
     store.graphics_layers.cut_free_tail();
     store.transforms.cut_free_tail();

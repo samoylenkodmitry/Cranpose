@@ -1,10 +1,11 @@
-// A scene that grew to many rows and shrank back holds about the heap of a
-// scene that held the rows that remain from its start, once both went on
-// with the same updates.
+// A scene that grew to many rows and shrank back holds at rest about the
+// heap of a scene that held the rows that remain from its start, once both
+// went on with the same updates.
 
 use std::{cell::RefCell, rc::Rc};
 
 use cranpose_core::MutableState;
+use cranpose_render_common::RenderScene;
 use cranpose_ui::{BoxSpec, ColumnSpec, Modifier, Size, TestComposition};
 use cranpose_ui_graphics::{Brush, Color, Rect};
 
@@ -61,8 +62,8 @@ fn rows(states: Rc<RefCell<Option<RowStates>>>) -> TestComposition {
     })
 }
 
-// The store heap of a scene of 100 rows, after it took `peak` rows when
-// `peak` is more, then after 20 updates that recolor its first row.
+// The store heap of a scene of 100 rows at rest, after it took `peak` rows
+// when `peak` is more, then 20 updates that recolor its first row.
 fn heap_after(peak: Option<usize>) -> usize {
     let states = Rc::default();
     let mut composition = rows(Rc::clone(&states));
@@ -79,11 +80,12 @@ fn heap_after(peak: Option<usize>) -> usize {
         tint.set(step);
         update_scene(&mut composition, root, VIEWPORT, &mut scene);
     }
+    scene.trim();
     scene.store().heap_bytes()
 }
 
 #[test]
-fn a_scene_grown_and_shrunk_holds_the_heap_of_one_that_never_grew() {
+fn a_scene_grown_and_shrunk_holds_at_rest_the_heap_of_one_that_never_grew() {
     let shrunk = heap_after(Some(2000));
     let steady = heap_after(None);
     println!("store heap: shrunk {shrunk} bytes, never grown {steady}");

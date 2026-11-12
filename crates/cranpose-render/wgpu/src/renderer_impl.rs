@@ -35,6 +35,10 @@ impl Renderer for WgpuRenderer {
         self.frontend.text_fonts = fonts;
     }
 
+    fn trim(&mut self) {
+        self.frontend.trim();
+    }
+
     fn set_root_scale(&mut self, scale: f32) {
         self.frontend.root_scale = scale;
     }

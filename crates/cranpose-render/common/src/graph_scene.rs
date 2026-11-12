@@ -768,6 +768,11 @@ impl RenderScene for Scene {
         self.clear_hits();
     }
 
+    fn trim(&mut self) {
+        self.store.trim();
+        crate::scene_builder::trim_dirty_room();
+    }
+
     fn hit_test(&self, x: f32, y: f32) -> Vec<Self::HitTarget> {
         let list = self.fresh_hits();
         let mut hit_indices: Vec<usize> = list

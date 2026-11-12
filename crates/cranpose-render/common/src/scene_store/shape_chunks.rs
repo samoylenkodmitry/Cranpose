@@ -10,6 +10,7 @@
 
 use std::{num::NonZeroU32, ops::Range, sync::Arc};
 
+use cranpose_core::collections::growth_slack::GrowthSlack;
 use cranpose_ui_graphics::{DrawPrimitive, Rect, ShapeRecorder};
 
 use super::{Item, ItemKind, SceneStore, slab::Slab};
@@ -255,6 +256,41 @@ impl ShapeChunks {
         }
     }
 
+    // Gives back at rest the chunks no item names and, in each chunk no
+    // packet holds, the shapes no item draws and the room of its growth.
+    // A packet keeps a chunk it holds until it lets go.
+    #[cold]
+    fn trim(&mut self, runs: &mut Slab<ShapeRun>) {
+        for id in self.empty.drain(..) {
+            self.chunks[id.index()] = None;
+        }
+        for (index, slot) in self.chunks.iter_mut().enumerate() {
+            let Some(chunk) = slot else {
+                continue;
+            };
+            let id = ChunkId::at(index);
+            if chunk.items == 0 {
+                *slot = None;
+                if self.open == Some(id) {
+                    self.open = None;
+                }
+                continue;
+            }
+            let Some(recorder) = Arc::get_mut(&mut chunk.recorder) else {
+                continue;
+            };
+            if recorder.tables().shapes.len() > chunk.shapes as usize {
+                keep_live_runs(id, recorder, runs, &mut self.live);
+            }
+            recorder.trim_growth();
+        }
+        while self.chunks.last().is_some_and(Option::is_none) {
+            self.chunks.pop();
+        }
+        self.chunks.trim_growth_slack();
+        self.live = Vec::new();
+    }
+
     // The heap the chunks hold: their lists and every chunk's recorder.
     fn heap_bytes(&self) -> usize {
         self.chunks.capacity() * size_of::<Option<ShapeChunk>>()
@@ -369,6 +405,11 @@ impl SceneStore {
     // The heap the shape items and their chunks hold.
     pub(super) fn shapes_heap_bytes(&self) -> usize {
         self.shape_runs.heap_bytes() + self.shape_chunks.heap_bytes()
+    }
+
+    // Gives back at rest the room of the shapes no item draws.
+    pub(super) fn trim_shapes(&mut self) {
+        self.shape_chunks.trim(&mut self.shape_runs);
     }
 
     // How many shape items the store holds.

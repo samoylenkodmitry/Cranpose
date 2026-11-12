@@ -5,18 +5,16 @@ use std::ops::{Index, IndexMut};
 
 use cranpose_core::collections::growth_slack::GrowthSlack;
 
-use super::resize_vec::ResizeVec;
-
 #[derive(Clone)]
 pub(crate) struct Slab<T> {
-    entries: ResizeVec<Option<T>>,
+    entries: Vec<Option<T>>,
     free: Vec<u32>,
 }
 
 impl<T> Default for Slab<T> {
     fn default() -> Self {
         Self {
-            entries: ResizeVec::default(),
+            entries: Vec::new(),
             free: Vec::new(),
         }
     }
@@ -84,11 +82,6 @@ impl<T> Slab<T> {
     pub(crate) fn clear(&mut self) {
         self.entries.clear();
         self.free.clear();
-    }
-
-    #[inline]
-    pub(crate) fn resized(&self) -> bool {
-        self.entries.resized()
     }
 
     pub(crate) fn trim_growth_slack(&mut self) {

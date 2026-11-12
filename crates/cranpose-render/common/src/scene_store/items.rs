@@ -5,8 +5,6 @@ use std::num::NonZeroU32;
 
 use cranpose_core::{RecordId, collections::growth_slack::GrowthSlack};
 
-use super::resize_vec::ResizeVec;
-
 /// One item of a record: a child record or one of the record's draws.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Item(NonZeroU32);
@@ -93,14 +91,14 @@ impl Span {
 // to that room; a freed span's room goes to the next span of its size class.
 #[derive(Clone)]
 pub(crate) struct SpanPool<T> {
-    items: ResizeVec<T>,
+    items: Vec<T>,
     free: Vec<Vec<u32>>,
 }
 
 impl<T> Default for SpanPool<T> {
     fn default() -> Self {
         Self {
-            items: ResizeVec::default(),
+            items: Vec::new(),
             free: Vec::new(),
         }
     }
@@ -182,11 +180,6 @@ impl<T: Copy> SpanPool<T> {
         self.free.iter_mut().for_each(Vec::clear);
     }
 
-    #[inline]
-    pub(crate) fn resized(&self) -> bool {
-        self.items.resized()
-    }
-
     // The entries the spans hold room for, free ones among them.
     pub(super) fn len(&self) -> usize {
         self.items.len()
@@ -196,28 +189,28 @@ impl<T: Copy> SpanPool<T> {
         self.items.trim_growth_slack();
     }
 
-    // Cuts the free spans at the end, so the room they took can go. Each
-    // free list is sorted once, so a span at the end is the last of its
-    // list.
-    pub(super) fn cut_free_tail(&mut self) {
-        let mut len = self.items.len();
-        self.free
-            .iter_mut()
-            .for_each(|starts| starts.sort_unstable());
-        while let Some(class) = (0..self.free.len()).find(|&class| {
-            self.free[class]
-                .last()
-                .is_some_and(|&start| start as usize + (1 << class) == len)
-        }) {
-            self.free[class].pop();
-            len -= 1 << class;
+    // Once free spans hold more than half of the room, moves the spans
+    // `spans` names into room of their own, in order, each in the room of
+    // its size class, so the room of the free spans goes. `spans` names
+    // every span the pool holds.
+    pub(super) fn pack<'a>(&mut self, spans: impl Iterator<Item = &'a mut Span>) {
+        let free: usize = self
+            .free
+            .iter()
+            .enumerate()
+            .map(|(class, starts)| starts.len() << class)
+            .sum();
+        if 2 * free <= self.items.len() {
+            return;
         }
-        if len < self.items.len() {
-            self.items.truncate(len);
-            self.free
-                .iter_mut()
-                .for_each(GrowthSlack::trim_growth_slack);
+        let mut packed = Self {
+            items: Vec::with_capacity(self.items.len() - free),
+            free: Vec::new(),
+        };
+        for span in spans {
+            *span = packed.write(Span::default(), self.span(*span));
         }
+        *self = packed;
     }
 }
 

@@ -32,6 +32,12 @@ impl ShapeRecorder {
         self.forget_unused_gradient_lists();
     }
 
+    /// Gives back the room growth left in the recorder's tables. The shapes
+    /// stay.
+    pub fn trim_growth(&mut self) {
+        self.tables.trim_growth();
+    }
+
     /// Keeps the segments `keep` takes, by index, with their shapes, moved
     /// to the front in order, and drops every other segment and shape. The
     /// gradient tables stay whole while a kept shape paints with a brush.

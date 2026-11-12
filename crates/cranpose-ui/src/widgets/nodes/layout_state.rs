@@ -3,7 +3,7 @@
 
 use std::cell::{Cell, RefCell};
 
-use cranpose_core::{NodeId, PackedU64, collections::recent_peak::RecentPeak};
+use cranpose_core::{NodeId, PackedU64};
 
 use crate::modifier::{Point, Size};
 
@@ -16,13 +16,12 @@ pub(crate) struct PlacementPass {
     // The placed nodes the pass cleared, placed again or not: its end looks
     // for the unplaced among them, and not through the whole tree.
     cleared: RefCell<Vec<NodeId>>,
-    recent: Cell<RecentPeak>,
     // The nodes the passes since the scene phase last took them left
     // unplaced.
     left_unplaced: RefCell<Vec<NodeId>>,
 }
 
-// The room the list of cleared nodes keeps whatever recent passes cleared.
+// The nodes the lists of cleared and unplaced nodes keep room for at rest.
 const CLEARED_KEPT: usize = 64;
 
 impl PlacementPass {
@@ -31,7 +30,6 @@ impl PlacementPass {
             id: Cell::new(1),
             unplaced: Cell::new(0),
             cleared: RefCell::new(Vec::new()),
-            recent: Cell::new(RecentPeak::new()),
             left_unplaced: RefCell::new(Vec::new()),
         }
     }
@@ -40,23 +38,14 @@ impl PlacementPass {
     pub(crate) fn begin(&self) {
         self.id.set(self.id.get() + 1);
         self.unplaced.set(0);
-        let mut cleared = self.cleared.borrow_mut();
-        let held = cleared.len();
-        cleared.clear();
-        if cleared.capacity() > 4 * CLEARED_KEPT {
-            self.give_back(&mut cleared, held);
-        }
+        self.cleared.borrow_mut().clear();
     }
 
-    // Gives back the room recent passes left unused in the list of cleared
-    // nodes, which held `held` of them. Out of line: few passes clear enough
-    // nodes for the list to have room to give back.
-    #[cold]
-    #[inline(never)]
-    fn give_back(&self, cleared: &mut Vec<NodeId>, held: usize) {
-        let mut recent = self.recent.get();
-        recent.settle(cleared, held, CLEARED_KEPT);
-        self.recent.set(recent);
+    // Gives back the room a burst of cleared or unplaced nodes took,
+    // keeping room for a few.
+    pub(crate) fn trim(&self) {
+        self.cleared.borrow_mut().shrink_to(CLEARED_KEPT);
+        self.left_unplaced.borrow_mut().shrink_to(CLEARED_KEPT);
     }
 
     // The placed nodes the running pass cleared, for its end to read and

@@ -269,6 +269,13 @@ impl SceneStore {
         super::child_order::settle(self);
         #[cfg(feature = "window-damage")]
         own_marks::settle(self);
+    }
+
+    /// Gives back the room the store's arrays hold past their records and
+    /// draws: the room a burst took, such as a first build's or a long
+    /// list's. The store's owner calls it at rest, when no frame waits, as
+    /// a frame would take the room again.
+    pub fn trim(&mut self) {
         super::growth_slack::trim(self);
     }
 
@@ -543,9 +550,13 @@ impl SceneStore {
             let item = self.items.span(span)[position];
             self.remove_item(item);
         }
+        // A free row names no span, so a trim packs the live spans alone.
         self.items.free_span(span);
+        self.tree[index].items = Span::default();
         #[cfg(feature = "window-damage")]
-        self.marks.pool.free_span(self.warm[index].own_marks);
+        self.marks
+            .pool
+            .free_span(std::mem::take(&mut self.warm[index].own_marks));
         self.hashes.remove(index);
         self.drop_props(index);
         if let Some(transform) = self.tree[index].transform.take() {
@@ -554,9 +565,6 @@ impl SceneStore {
         self.generations[index] = self.generations[index].wrapping_add(1);
         self.free_rows
             .push(u32::try_from(index).expect("fewer than 2^32 records"));
-        if index + 1 == self.tree.len() {
-            self.facts.note_last_row_freed();
-        }
         if self.root == Some(id) {
             self.root = None;
         }

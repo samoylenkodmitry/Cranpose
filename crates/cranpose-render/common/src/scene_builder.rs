@@ -1,9 +1,6 @@
 use std::{any::Any, rc::Rc};
 
-use cranpose_core::{
-    MemoryApplier, NodeId, RecordId,
-    collections::{map::HashMap, recent_peak::RecentPeak},
-};
+use cranpose_core::{MemoryApplier, NodeId, RecordId, collections::map::HashMap};
 use cranpose_ui::{ModifierNodeSlices, Point, Rect, SubcomposeLayoutNode};
 
 use crate::{
@@ -137,7 +134,26 @@ pub(crate) struct DirtyRoom {
     nodes: HashMap<NodeId, NodeUpdate>,
     order: Vec<DirtyPlace>,
     ancestors: Vec<NodeId>,
-    recent: RecentPeak,
+}
+
+impl DirtyRoom {
+    // Gives back the room a burst of dirty nodes took, keeping room for a
+    // few.
+    fn trim(&mut self) {
+        self.nodes.shrink_to(DIRTY_NODES_KEPT);
+        self.order.shrink_to(DIRTY_NODES_KEPT);
+        self.ancestors.shrink_to(DIRTY_NODES_KEPT);
+    }
+}
+
+// Gives back the room the updates of the thread took for their dirty nodes.
+pub(crate) fn trim_dirty_room() {
+    crate::thread_state::with(|state| {
+        if let Some(mut room) = state.dirty_node_scratch.take() {
+            room.trim();
+            state.dirty_node_scratch.set(Some(room));
+        }
+    });
 }
 
 /// Builds the records of the layout tree below `root`, read from `applier`.
@@ -184,7 +200,7 @@ pub(crate) fn update_from_applier(
     report
 }
 
-// The dirty nodes the map keeps room for at least.
+// The dirty nodes the room keeps room for at rest.
 const DIRTY_NODES_KEPT: usize = 64;
 
 // Returns a move when a node's layer change merged into new content: its
@@ -230,12 +246,9 @@ fn update_from_applier_inner(
     let mut room =
         crate::thread_state::with(|state| state.dirty_node_scratch.take()).unwrap_or_default();
     let merged = dirty_node_updates(updates, &mut room.nodes);
-    let named = room.nodes.len();
     let mut report = update_dirty_nodes(applier, store, &mut room);
     report.layers_moved |= merged.contains(GraphChanges::Moves);
     room.nodes.clear();
-    room.recent
-        .settle_spent(&mut room.nodes, named, DIRTY_NODES_KEPT);
     crate::thread_state::with(|state| state.dirty_node_scratch.set(Some(room)));
     report
 }

@@ -4,6 +4,7 @@ mod dev_overlay;
 mod draw_observations;
 mod frame_telemetry;
 mod layout_phase;
+mod trim;
 pub(crate) use dev_overlay::{DevOverlay, draw_dev_overlay};
 use frame_telemetry::{
     FrameStages, RenderPhaseDirtyDiagnostics, frame_stage_telemetry_threshold_ms,
@@ -541,10 +542,6 @@ where
         );
         self.pending_dirty_nodes.clear();
         self.pending_layer_property_nodes.clear();
-        self.routing_scratch.trim([
-            &mut self.pending_dirty_nodes,
-            &mut self.pending_layer_property_nodes,
-        ]);
         let _ = self.app.app_context.has_focused_field();
         let attributed = self.surfaces.iter().any(|surface| {
             !surface.scoped_draw_nodes.is_empty()
@@ -621,16 +618,6 @@ where
     if dev_overlay_belongs_on(surface.id, app.dev_options.fps_counter) {
         draw_dev_overlay(app, surface);
     }
-    surface.list_room.trim(
-        [
-            &mut dirt.layout_dirty_nodes,
-            &mut dirt.moved_nodes,
-            &mut dirt.draw_dirty_nodes,
-            &mut dirt.layer_property_nodes,
-            &mut dirt.structural_parents,
-        ],
-        &mut dirt.scene_updates,
-    );
     dirt.layout_dirty_nodes.clear();
     dirt.moved_nodes.clear();
     surface.scoped_moved_scene_nodes = dirt.moved_nodes;

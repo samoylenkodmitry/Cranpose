@@ -31,6 +31,10 @@ impl<T> NotedSceneNodes<T> {
         self.nodes.push(node);
     }
 
+    pub(super) fn trim(&mut self) {
+        self.nodes.trim();
+    }
+
     // Moves the nodes into `output`, dropping what `output` held.
     pub(super) fn take_into(&mut self, output: &mut Vec<T>) {
         if !self.nodes.is_empty() {

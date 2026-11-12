@@ -12,11 +12,8 @@
 
 use std::{cell::RefCell, fmt::Debug, rc::Rc};
 
-mod list_room;
-
 use cranpose_core::{
-    MemoryApplier, NodeId, NodeMarks, SceneNodeAttachmentScratch,
-    collections::{map::HashSet, recent_peak::RecentPeak},
+    MemoryApplier, NodeId, NodeMarks, SceneNodeAttachmentScratch, collections::map::HashSet,
 };
 use cranpose_foundation::{
     PointerButton, PointerButtons, PointerId, PointerSource, RotaryScrollEvent,
@@ -90,7 +87,6 @@ pub struct RootSurface<R: Renderer> {
     pub(crate) scoped_layer_property_nodes: Vec<NodeId>,
     pub(crate) structural_scene_nodes: Vec<NodeId>,
     pub(crate) scene_updates: Vec<(NodeId, NodeUpdate)>,
-    pub(crate) list_room: list_room::ListRoom,
     pub(crate) is_dirty: bool,
     pub(crate) buttons_pressed: PointerButtons,
     pub(crate) pointer_source: PointerSource,
@@ -138,7 +134,6 @@ impl<R: Renderer> RootSurface<R> {
             scoped_layer_property_nodes: Vec::new(),
             structural_scene_nodes: Vec::new(),
             scene_updates: Vec::new(),
-            list_room: list_room::ListRoom::default(),
             is_dirty: true,
             buttons_pressed: PointerButtons::NONE,
             pointer_source: PointerSource::Unknown,
@@ -441,7 +436,7 @@ pub(crate) enum SurfaceDirtyLane {
     Structural,
 }
 
-// The room each routing list keeps whatever recent frames routed.
+// The nodes each routing list keeps room for at rest.
 const ROUTING_ROOM_KEPT: usize = 64;
 
 #[derive(Default)]
@@ -458,48 +453,16 @@ pub(crate) struct SurfaceRoutingScratch {
     pub(crate) laid_out_starts: Vec<usize>,
     /// The moved nodes the moved lane routes.
     pub(crate) moved: Vec<NodeId>,
-    // The most nodes a routing of this frame named.
-    most: usize,
-    // The most nodes the routings of recent frames named.
-    recent: RecentPeak,
 }
 
 impl SurfaceRoutingScratch {
-    // Notes this frame's routings and gives back the room recent frames left
-    // unused, in the routing lists and in `routed`, lists this frame routed
-    // whole: a screen's first frame routes every node, while later frames
-    // route a few.
-    pub(crate) fn trim(&mut self, routed: [&mut Vec<NodeId>; 2]) {
-        let most = std::mem::take(&mut self.most);
-        let room = [
-            self.attached.capacity(),
-            self.owners.capacity(),
-            self.moved.capacity(),
-            routed[0].capacity(),
-            routed[1].capacity(),
-            self.seen.capacity(),
-        ];
-        // No list with less room gives any back whatever the peak, so such
-        // a frame goes unnoted: see `RecentPeak::settle`.
-        if room.into_iter().any(|room| room > 4 * ROUTING_ROOM_KEPT) {
-            self.trim_roomy(most, routed);
-        }
-    }
-
-    // Out of line: few frames find a list with room to give back.
-    #[cold]
-    #[inline(never)]
-    fn trim_roomy(&mut self, most: usize, routed: [&mut Vec<NodeId>; 2]) {
-        self.recent.note(most);
-        let recent = self.recent;
-        recent.shrink(&mut self.attached, ROUTING_ROOM_KEPT);
-        recent.shrink(&mut self.owners, ROUTING_ROOM_KEPT);
-        recent.shrink(&mut self.moved, ROUTING_ROOM_KEPT);
-        for list in routed {
-            recent.shrink(list, ROUTING_ROOM_KEPT);
-        }
-        // The routing that filled the set is over.
-        recent.renew(&mut self.seen, ROUTING_ROOM_KEPT);
+    // Gives back the room a burst of routed nodes took, keeping room for a
+    // few.
+    pub(crate) fn trim(&mut self) {
+        self.attached.shrink_to(ROUTING_ROOM_KEPT);
+        self.owners.shrink_to(ROUTING_ROOM_KEPT);
+        self.moved.shrink_to(ROUTING_ROOM_KEPT);
+        self.seen.shrink_to(ROUTING_ROOM_KEPT);
     }
 }
 
@@ -571,7 +534,6 @@ fn route_batch_by_surface<R: Renderer>(
         &mut scratch.attached,
         &mut scratch.attachment,
     );
-    scratch.most = scratch.most.max(scratch.attached.len());
     if scratch.attached.is_empty() {
         scratch.owners.clear();
         return;
@@ -989,6 +951,11 @@ where
         if primary.dpad_navigation && (laid_out || primary.focus_check_due) {
             primary.focus_check_due = false;
             self.primary().keep_focus();
+        }
+        // At rest the room a burst took goes back: a frame would take it
+        // again.
+        if self.compute_frame_schedule().is_idle() {
+            self.trim();
         }
     }
 }

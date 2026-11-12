@@ -1,6 +1,6 @@
 use std::{borrow::Cow, sync::Arc};
 
-use cranpose_core::{NodeId, SceneUpdate, collections::recent_peak::RecentPeak};
+use cranpose_core::{NodeId, SceneUpdate};
 use cranpose_render_common::{
     graph::{CachePolicy, ProjectiveTransform},
     layer_composition::{layer_composite_params, local_content_layer_for},
@@ -57,12 +57,7 @@ pub(crate) struct LayerScene {
     // How a window's walk drew each record it drew in place, when the scene
     // is a window's root.
     pub(crate) shown: Vec<ShownRecord>,
-    shown_peak: RecentPeak,
 }
-
-// The room a scene's list of drawn records keeps whatever its recent frames
-// held.
-const SHOWN_ROOM_KEPT: usize = 64;
 
 /// The layer scenes of returned packets, kept with their buffers for the
 /// next collect. Boxed, as a layer's content is: a scene is some 540 bytes,
@@ -93,12 +88,20 @@ impl LayerSceneRecycler {
         }
         scene.scene.clear();
         scene.has_backdrop = false;
-        scene.shown_peak.clear(&mut scene.shown, SHOWN_ROOM_KEPT);
+        scene.shown.clear();
         self.scenes.push(scene);
     }
 
     pub(crate) fn clear(&mut self) {
         self.scenes.clear();
+    }
+
+    // Gives back at rest the room the kept scenes took: each dropped scene
+    // leaves its lists for the next on the thread, which keep room for a
+    // few draws.
+    pub(crate) fn trim(&mut self) {
+        self.scenes.clear();
+        crate::scene::trim_scene_buffer_pool();
     }
 
     pub(crate) fn returned_packet(&mut self) {
@@ -115,7 +118,6 @@ impl LayerScene {
             children,
             has_backdrop: false,
             shown: Vec::new(),
-            shown_peak: RecentPeak::default(),
         };
         layer.refresh_backdrop_summary();
         layer

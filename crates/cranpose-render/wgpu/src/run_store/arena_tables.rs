@@ -1,8 +1,6 @@
 // The frame's arena tables: the per-pass chunks small runs are copied
 // into, in generations a copied arena keeps and a mapped arena cycles.
 
-use cranpose_core::collections::recent_peak::RecentPeak;
-
 use super::{
     ArcTrigFill, ArenaChunk, ArenaGeneration, ArenaStaging, BODY_BUFFER, BRUSH_CHUNK, BUFFER_COUNT,
     CURVE_BUFFER, ELEMENT_SIZES, FrameCommandRecorder, FrameCommandStats, INITIAL_ARENA_RECORDS,
@@ -10,6 +8,7 @@ use super::{
     RECORD_CHUNK, RunBufferMode, STOP_CHUNK, UploadMode, UploadPlacement, align_u64_to,
     place_upload,
 };
+use crate::idle_pool::RecentPeak;
 
 // A copied arena keeps its last generation from frame to frame, since the
 // copies into it queue behind the draws that read it. A mapped arena writes
@@ -85,7 +84,7 @@ impl ArenaTables {
             last_totals: [0; BUFFER_COUNT],
             sealed: false,
             written: FrameCommandStats::default(),
-            recent: [RecentPeak::default(); BUFFER_COUNT],
+            recent: std::array::from_fn(|_| RecentPeak::default()),
         }
     }
 
@@ -166,9 +165,9 @@ impl ArenaTables {
         } else {
             capacities
         };
-        let recent = self.recent;
+        let recent = &self.recent;
         let taken = self.pool.take(device, |free| {
-            free.retain(|generation| generation.holds(wanted) && !oversized(generation, &recent));
+            free.retain(|generation| generation.holds(wanted) && !oversized(generation, recent));
             free.pop()
         });
         match taken {
@@ -277,14 +276,12 @@ impl ArenaTables {
                 .iter()
                 .map(|generation| generation.cursors[table])
                 .sum();
-            recent.note(bytes(placed));
+            recent.reach(placed);
+            recent.end_frame();
             // A storage binding grows to the largest table a frame placed;
             // far above recent frames it goes back, and grows again on
             // demand, so new generations open at what frames now place.
-            if recent
-                .shrink_to(bytes(self.bindings[table]), bytes(first[table]))
-                .is_some()
-            {
+            if far_above(self.bindings[table], recent, first[table]) {
                 self.bindings[table] = first[table];
             }
         }
@@ -333,8 +330,12 @@ fn oversized(generation: &ArenaGeneration, recent: &[RecentPeak; BUFFER_COUNT]) 
     (0..BUFFER_COUNT).any(|table| {
         let least = (INITIAL_ARENA_CAPACITIES[table] * ELEMENT_SIZES[table])
             .max(bytes(crate::frame_graph::MIN_UPLOAD_BUFFER_BYTES));
-        recent[table]
-            .shrink_to(bytes(generation.capacities[table]), least)
-            .is_some()
+        far_above(generation.capacities[table], &recent[table], least as u64)
     })
+}
+
+// Whether `size` lies above four times what `recent` frames placed, and four
+// times `least`.
+fn far_above(size: u64, recent: &RecentPeak, least: u64) -> bool {
+    size > 4 * recent.value().max(least)
 }

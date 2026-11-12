@@ -13,8 +13,8 @@ use support::{checking_shell, signature_of};
 
 const ROWS: usize = 24;
 const PER_ROW: usize = 30;
-// Frames that change one box, well past the frames after which the shell's
-// lists give back the room the first frame took.
+// Frames that change one box, each ending at rest, where the shell's lists
+// give back the room the first frame took.
 const SMALL_FRAMES: usize = 60;
 
 type Captured = Rc<RefCell<Option<(MutableState<bool>, MutableState<f32>)>>>;

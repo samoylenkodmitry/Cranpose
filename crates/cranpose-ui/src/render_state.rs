@@ -17,6 +17,7 @@ mod geometry_scene_nodes;
 pub(crate) mod measure_reads;
 mod noted_scene_nodes;
 mod taken_list;
+mod trim;
 
 use dirty_node_set::DirtyNodeSet;
 use display_scale::normalize_density;
@@ -147,6 +148,7 @@ impl Drop for AppContextScope {
     }
 }
 
+#[expect(clippy::multiple_inherent_impl, reason = "one file per concern")]
 impl AppContext {
     pub fn new() -> Rc<Self> {
         Self::new_with_density(1.0, None)
@@ -225,8 +227,7 @@ impl AppContext {
         self.mouse_input.take()
     }
 
-    /// Asks the shell to give the rest of the held press to `node` alone: the
-    /// other targets under the press see it cancelled.
+    // Gives the rest of the held press to `node` alone: other targets see it cancelled.
     pub(crate) fn claim_pointer(&self, node: NodeId) {
         self.pointer_claim.set(Some(node));
     }
@@ -469,8 +470,7 @@ impl AppContext {
         self.state.geometry_scene_nodes.borrow_mut().push(node_id);
     }
 
-    /// Notes that the layout pass changed `node_id`'s geometry. `noted_in`
-    /// is the node's own record of the take it was last noted in.
+    // Notes a geometry change of `node_id`, last noted in the take `noted_in`.
     pub(crate) fn note_geometry_scene_node(&self, node_id: NodeId, noted_in: &mut PackedU64) {
         self.state
             .geometry_scene_nodes

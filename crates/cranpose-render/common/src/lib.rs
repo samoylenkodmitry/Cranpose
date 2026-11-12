@@ -259,6 +259,10 @@ pub trait RenderScene {
         0
     }
 
+    /// Gives back the room the scene's storage holds past what it draws. Its
+    /// owner calls it at rest, when no frame waits.
+    fn trim(&mut self) {}
+
     /// Whether the scene draws `node`. A scene that keeps no record of the nodes it draws says
     /// it does.
     fn draws(&self, _node: cranpose_core::NodeId) -> bool {
@@ -294,6 +298,10 @@ pub trait Renderer {
     /// Renderers that provide text measurement or other per-app services should install
     /// them here rather than as constructor side effects.
     fn attach_app_context_services(&mut self, _app_context: &cranpose_ui::AppContext) {}
+
+    /// Gives back the room the renderer's storage holds past what it draws,
+    /// beside its scene's. AppShell calls it at rest, when no frame waits.
+    fn trim(&mut self) {}
 
     /// Takes in the fonts installed since the renderer last looked (see
     /// `installed_fonts::install_font_file`). A renderer that installed the

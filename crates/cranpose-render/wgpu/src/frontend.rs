@@ -363,6 +363,15 @@ impl RendererFrontend {
         Some(region)
     }
 
+    // Gives back at rest the room the kept layer scenes took, and the
+    // overlays' records past what they hold.
+    pub(crate) fn trim(&mut self) {
+        for recycler in &mut self.scene_recyclers {
+            recycler.trim();
+        }
+        self.dev_overlay.trim();
+    }
+
     // Starts a window frame of `setting` in the targets of the scene and of
     // the overlays.
     fn begin_targets(&mut self, setting: TargetSetting) {

@@ -12,7 +12,7 @@
 
 use std::{cell::Cell, mem::size_of};
 
-use cranpose_core::RecordId;
+use cranpose_core::{RecordId, collections::growth_slack::GrowthSlack};
 use cranpose_ui::GraphicsLayer;
 #[cfg(feature = "window-damage")]
 use cranpose_ui::Rect;
@@ -21,7 +21,7 @@ use cranpose_ui_graphics::DrawPrimitive;
 
 #[cfg(feature = "window-damage")]
 use super::ItemRef;
-use super::{Item, ItemKind, LayerProps, LayerRef, RecordFlags, SceneStore, resize_vec::ResizeVec};
+use super::{Item, ItemKind, LayerProps, LayerRef, RecordFlags, SceneStore};
 #[cfg(feature = "window-damage")]
 use crate::graph::{CONTAINED_DRAW_SLACK, inflate_rect, rect_within};
 
@@ -59,7 +59,7 @@ struct ChildFacts {
 
 #[derive(Clone, Default)]
 pub(crate) struct Facts {
-    rows: ResizeVec<Cell<RowFacts>>,
+    rows: Vec<Cell<RowFacts>>,
 }
 
 impl Facts {
@@ -80,18 +80,8 @@ impl Facts {
         self.rows.capacity() * size_of::<Cell<RowFacts>>()
     }
 
-    #[inline]
-    pub(super) fn resized(&self) -> bool {
-        self.rows.resized()
-    }
-
     pub(super) fn trim_growth_slack(&mut self) {
         self.rows.trim_growth_slack();
-    }
-
-    // Notes that the store freed its last row.
-    pub(super) fn note_last_row_freed(&mut self) {
-        self.rows.note_resized();
     }
 
     pub(super) fn truncate_rows(&mut self, len: usize) {
