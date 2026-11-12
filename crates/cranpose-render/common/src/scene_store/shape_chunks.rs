@@ -316,22 +316,11 @@ fn keep_live_runs(
 impl SceneStore {
     /// Adds an item of the shapes `record` records into a chunk the store
     /// shares among its shape items. `print` is a hash of what they draw,
-    /// the same for the same shapes: the item the update in progress removed
-    /// last gives its shapes back when they have that print, and `record`
-    /// does not run.
+    /// the same for the same shapes.
     pub fn add_shapes(&mut self, print: u64, record: impl FnOnce(&mut ShapeRecorder)) -> Item {
-        let run = match self.removed_shapes.last() {
-            Some(run) if run.print == print => self.removed_shapes.pop(),
-            Some(_) => {
-                self.release_removed_shapes();
-                None
-            }
-            None => None,
-        };
-        let run = run.unwrap_or_else(|| {
-            self.shape_chunks
-                .record(&mut self.shape_runs, print, record)
-        });
+        let run = self
+            .shape_chunks
+            .record(&mut self.shape_runs, print, record);
         Item::new(ItemKind::Shape, self.shape_runs.insert(run))
     }
 
@@ -348,10 +337,6 @@ impl SceneStore {
         let Some(old) = self.shape_runs.lend(index) else {
             return;
         };
-        // Recording other shapes lets go of the removed ones first, as
-        // `add_shapes` does: a chunk that makes room keeps only the shapes
-        // of the items the store holds.
-        self.release_removed_shapes();
         self.shape_chunks.release(&old);
         let run = self
             .shape_chunks
@@ -376,28 +361,17 @@ impl SceneStore {
         }
     }
 
-    // Removes the shape item at `index` of the shape runs. Its shapes stay
-    // until the update ends, for an item that draws them again.
+    // Removes the shape item at `index` of the shape runs and lets go of
+    // its shapes.
     pub(super) fn remove_shapes(&mut self, index: usize) {
         if let Some(run) = self.shape_runs.take(index) {
-            self.removed_shapes.push(run);
+            self.shape_chunks.release(&run);
         }
-    }
-
-    // Lets go of the shapes of the items the update removed, in the order
-    // it removed them.
-    pub(super) fn release_removed_shapes(&mut self) {
-        for run in &self.removed_shapes {
-            self.shape_chunks.release(run);
-        }
-        self.removed_shapes.clear();
     }
 
     // The heap the shape items and their chunks hold.
     pub(super) fn shapes_heap_bytes(&self) -> usize {
-        self.shape_runs.heap_bytes()
-            + self.shape_chunks.heap_bytes()
-            + self.removed_shapes.capacity() * size_of::<ShapeRun>()
+        self.shape_runs.heap_bytes() + self.shape_chunks.heap_bytes()
     }
 
     // How many shape items the store holds.
@@ -409,6 +383,5 @@ impl SceneStore {
     pub(super) fn clear_shapes(&mut self) {
         self.shape_runs.clear();
         self.shape_chunks = ShapeChunks::default();
-        self.removed_shapes.clear();
     }
 }
