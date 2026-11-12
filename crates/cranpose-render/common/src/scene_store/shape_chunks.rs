@@ -279,7 +279,10 @@ impl ShapeChunks {
             let Some(recorder) = Arc::get_mut(&mut chunk.recorder) else {
                 continue;
             };
-            if recorder.tables().shapes.len() > chunk.shapes as usize {
+            // Each move scans every run: only a chunk that a quarter of dead
+            // shapes fills moves, as a chunk that takes shapes does.
+            let held = recorder.tables().shapes.len();
+            if held - chunk.shapes as usize >= (held / 4).max(MIN_DEAD_SHAPES) {
                 keep_live_runs(id, recorder, runs, &mut self.live);
             }
             recorder.trim_growth();

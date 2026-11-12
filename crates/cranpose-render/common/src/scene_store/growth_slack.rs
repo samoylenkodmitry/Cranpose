@@ -57,8 +57,9 @@ fn cut_free_tails(store: &mut SceneStore) {
 }
 
 // Cuts the free rows at the end of the row arrays. The free list is sorted
-// once, so its tail holds the rows to cut. A row made past the cut starts
-// at a generation past those of the rows cut.
+// once, so its tail holds the rows to cut; then it is turned, so new records
+// take the lowest rows first and leave the end free for the next cut. A row
+// made past the cut starts at a generation past those of the rows cut.
 fn cut_free_rows(store: &mut SceneStore) -> bool {
     let rows = store.tree.len();
     let mut keep = rows;
@@ -71,6 +72,7 @@ fn cut_free_rows(store: &mut SceneStore) -> bool {
         store.free_rows.pop();
         keep -= 1;
     }
+    store.free_rows.reverse();
     if keep == rows {
         return false;
     }

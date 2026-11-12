@@ -185,6 +185,69 @@ fn a_leaf_that_gains_and_loses_a_child_draws_as_a_fresh_scene_does() {
     }
 }
 
+// The key the cached pixels of the offscreen column of `graph` go by.
+fn cached(graph: &Scene) -> u64 {
+    fn find(layer: LayerRef<'_>) -> Option<LayerRef<'_>> {
+        if layer.isolation().explicit_offscreen {
+            return Some(layer);
+        }
+        layer.children().find_map(find)
+    }
+    find(graph.root_layer().expect("a scene"))
+        .expect("the offscreen column")
+        .target_content_hash()
+}
+
+const OFFSCREEN: GraphicsLayer = GraphicsLayer {
+    compositing_strategy: CompositingStrategy::Offscreen,
+    ..GraphicsLayer::DEFAULT
+};
+
+#[test]
+fn a_cached_layer_misses_when_a_leaf_it_draws_gains_a_child() {
+    let state: std::rc::Rc<Cell<Option<MutableState<bool>>>> = std::rc::Rc::new(Cell::new(None));
+    let slot = std::rc::Rc::clone(&state);
+    let mut composition = run_test_composition(move || {
+        let nested = cranpose_core::rememberMutableStateOf(|| false);
+        slot.set(Some(nested));
+        Column(
+            Modifier::empty().graphics_layer_value(OFFSCREEN),
+            ColumnSpec::default(),
+            move || {
+                Box(
+                    Modifier::empty().size_points(100.0, 40.0).background(FILL),
+                    BoxSpec::default(),
+                    move || {
+                        if nested.get() {
+                            Box(
+                                Modifier::empty()
+                                    .size_points(10.0, 10.0)
+                                    .background(Color::RED),
+                                BoxSpec::default(),
+                                || {},
+                            );
+                        }
+                    },
+                );
+            },
+        );
+    });
+    let root = composition.root().expect("root");
+    let mut graph = initial_graph(&mut composition, root, VIEWPORT);
+    let before = cached(&graph);
+    state.get().expect("state").set(true);
+    update_scene(&mut composition, root, VIEWPORT, &mut graph);
+    assert_ne!(
+        cached(&graph),
+        before,
+        "the column's cached pixels lack the new child, so its key changes"
+    );
+    assert_eq!(
+        picture(&graph),
+        picture(&fresh_graph(&mut composition, root))
+    );
+}
+
 #[test]
 fn a_cached_layer_misses_when_a_leaf_it_draws_changes_its_text() {
     let state: std::rc::Rc<Cell<Option<MutableState<&'static str>>>> =
@@ -194,10 +257,7 @@ fn a_cached_layer_misses_when_a_leaf_it_draws_changes_its_text() {
         let label = cranpose_core::rememberMutableStateOf(|| "alpha");
         slot.set(Some(label));
         Column(
-            Modifier::empty().graphics_layer_value(GraphicsLayer {
-                compositing_strategy: CompositingStrategy::Offscreen,
-                ..GraphicsLayer::default()
-            }),
+            Modifier::empty().graphics_layer_value(OFFSCREEN),
             ColumnSpec::default(),
             move || {
                 Text(label.get(), Modifier::empty(), TextStyle::default());
@@ -207,17 +267,6 @@ fn a_cached_layer_misses_when_a_leaf_it_draws_changes_its_text() {
     });
     let root = composition.root().expect("root");
     let mut graph = initial_graph(&mut composition, root, VIEWPORT);
-    let cached = |graph: &Scene| {
-        fn find(layer: LayerRef<'_>) -> Option<LayerRef<'_>> {
-            if layer.isolation().explicit_offscreen {
-                return Some(layer);
-            }
-            layer.children().find_map(find)
-        }
-        find(graph.root_layer().expect("a scene"))
-            .expect("the offscreen column")
-            .target_content_hash()
-    };
     let before = cached(&graph);
     let label = state.get().expect("state");
     // A text of the same width: only what the leaf draws changes.

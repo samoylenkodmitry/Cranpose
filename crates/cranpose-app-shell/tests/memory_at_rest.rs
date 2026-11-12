@@ -8,6 +8,7 @@ use cranpose_core::{MutableState, rememberMutableStateOf};
 use cranpose_macros::composable;
 use cranpose_ui::{Box, BoxSpec, Column, ColumnSpec, Modifier, Row, RowSpec};
 use cranpose_ui_graphics::Color;
+use web_time::Instant;
 
 mod support;
 use support::checking_shell;
@@ -60,9 +61,17 @@ fn heap_at_rest(first: bool) -> usize {
     let shown = (*captured.borrow()).expect("the wall is composed");
     shown.set(false);
     shell.update();
+    // The platform wakes the resting shell at the time of its trim.
+    let due = (shell.frame_schedule().next_deadline).expect("a resting shell trims later");
+    std::thread::sleep(due.saturating_duration_since(Instant::now()));
+    assert!(
+        shell.frame_schedule().needs_update,
+        "the time of the trim asks for an update"
+    );
+    shell.update();
     assert!(
         shell.frame_schedule().is_idle(),
-        "the hidden wall's frames come to rest"
+        "the trimmed shell asks for nothing"
     );
     shell.primary().scene().store().heap_bytes()
 }
