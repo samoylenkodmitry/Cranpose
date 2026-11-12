@@ -51,6 +51,10 @@ fn Wall(captured: Shown, first: bool) {
 
 // The scene heap of a wall shown first when `first` holds, after it hides
 // the boxes and comes to rest.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the test waits out the shell's rest as its platform does"
+)]
 fn heap_at_rest(first: bool) -> usize {
     let captured: Shown = Rc::new(RefCell::new(None));
     let (mut shell, _) = checking_shell(false, {
