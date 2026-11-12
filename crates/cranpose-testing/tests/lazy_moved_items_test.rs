@@ -12,8 +12,8 @@ use cranpose_foundation::lazy::{LazyListScope, LazyListState, rememberLazyListSt
 use cranpose_testing::robot::TestRenderer;
 use cranpose_ui::{Box, BoxSpec, LazyColumn, LazyColumnSpec, LinearArrangement, Modifier};
 
-const WIDTH: f32 = 200.0;
-const HEIGHT: f32 = 300.0;
+const WIDTH: u16 = 200;
+const HEIGHT: u16 = 300;
 const STEP: f32 = 8.0;
 
 // Rows of four heights, so a row and the one three before it differ.
@@ -44,7 +44,7 @@ impl Log {
                 captured_ids.set(Some(rows));
                 let shown = rows.get();
                 LazyColumn(
-                    Modifier::empty().size_points(WIDTH, HEIGHT),
+                    Modifier::empty().size_points(f32::from(WIDTH), f32::from(HEIGHT)),
                     list_state,
                     LazyColumnSpec::default()
                         .vertical_arrangement(LinearArrangement::spaced_by(8.0)),
@@ -62,8 +62,8 @@ impl Log {
                 );
             },
         );
-        shell.set_viewport(WIDTH, HEIGHT);
-        shell.set_buffer_size(WIDTH as u32, HEIGHT as u32);
+        shell.set_viewport(f32::from(WIDTH), f32::from(HEIGHT));
+        shell.set_buffer_size(u32::from(WIDTH), u32::from(HEIGHT));
         shell.update();
         let ids = ids.get().expect("composed log");
         Self { shell, state, ids }
@@ -126,7 +126,10 @@ fn scrolled_log() -> Log {
     for _ in 0..150 {
         log.scroll_by(-STEP);
     }
-    assert!(log.state().first_visible_item_index_non_reactive() > 8);
+    assert!(
+        log.state().first_visible_item_index_non_reactive() > 8,
+        "the log did not scroll past its first eight rows"
+    );
     log
 }
 
