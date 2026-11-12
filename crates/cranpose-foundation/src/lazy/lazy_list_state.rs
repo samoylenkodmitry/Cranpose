@@ -100,6 +100,7 @@ impl PartialEq for LazyListState {
 
 #[derive(Clone, Copy)]
 struct CachedItemSize {
+    key: u64,
     size: f32,
     last_used: u64,
 }
@@ -725,9 +726,10 @@ impl LazyListState {
         inner.item_size_clock
     }
 
-    fn insert_item_size(inner: &mut LazyListStateInner, index: usize, size: f32) -> bool {
+    fn insert_item_size(inner: &mut LazyListStateInner, index: usize, key: u64, size: f32) -> bool {
         let tick = Self::next_item_size_cache_tick(inner);
         let item = CachedItemSize {
+            key,
             size,
             last_used: tick,
         };
@@ -753,26 +755,16 @@ impl LazyListState {
             .retain(|_, item| item.last_used > oldest_kept);
     }
 
-    /// Caches the measured size of an item for scroll estimation.
-    pub fn cache_item_size(&self, index: usize, size: f32) {
-        self.inner.try_with(|cell| {
-            let mut inner = cell.borrow_mut();
-            if Self::insert_item_size(&mut inner, index, size) {
-                Self::record_item_size_sample(&mut inner, size);
-            }
-        });
-    }
-
-    /// Caches multiple measured item sizes in one pass and returns the updated average.
+    /// Caches measured `(index, key, size)` item sizes and returns the updated average.
     pub fn cache_item_sizes<I>(&self, sizes: I) -> f32
     where
-        I: IntoIterator<Item = (usize, f32)>,
+        I: IntoIterator<Item = (usize, u64, f32)>,
     {
         self.inner
             .try_with(|cell| {
                 let mut inner = cell.borrow_mut();
-                for (index, size) in sizes {
-                    if Self::insert_item_size(&mut inner, index, size) {
+                for (index, key, size) in sizes {
+                    if Self::insert_item_size(&mut inner, index, key, size) {
                         Self::record_item_size_sample(&mut inner, size);
                     }
                 }
@@ -781,13 +773,18 @@ impl LazyListState {
             .unwrap_or(super::DEFAULT_ITEM_SIZE_ESTIMATE)
     }
 
-    /// Gets a cached item size if available.
-    pub fn get_cached_size(&self, index: usize) -> Option<f32> {
+    /// The size cached for `index`, when it was measured for the item with
+    /// `key`: once items move, an index holds another item, whose size the
+    /// list does not know.
+    pub fn cached_item_size(&self, index: usize, key: u64) -> Option<f32> {
         self.inner
             .try_with(|cell| {
                 let mut inner = cell.borrow_mut();
                 let tick = Self::next_item_size_cache_tick(&mut inner);
-                let item = inner.item_size_cache.get_mut(&index)?;
+                let item = inner
+                    .item_size_cache
+                    .get_mut(&index)
+                    .filter(|item| item.key == key)?;
                 item.last_used = tick;
                 Some(item.size)
             })

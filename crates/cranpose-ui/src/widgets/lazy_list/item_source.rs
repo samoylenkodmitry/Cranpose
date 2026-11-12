@@ -11,6 +11,10 @@ impl LazyItemSource for LazyListItems<'_, '_, '_> {
         Ok(self.item(index))
     }
 
+    fn key(&self, index: usize) -> u64 {
+        self.inputs.content.get_key(index).to_slot_id()
+    }
+
     fn keep_beyond(&mut self, index: usize, distance: f32) -> Result<BeyondItem, Infallible> {
         let composed = self.composed(index);
         if !self.admits(composed, distance) {

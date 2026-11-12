@@ -750,7 +750,7 @@ fn place_lazy_list(
         result
             .visible_items
             .iter()
-            .map(|item| (item.index, item.main_axis_size)),
+            .map(|item| (item.index, item.key, item.main_axis_size)),
     );
     let truly_visible_count = result
         .visible_items

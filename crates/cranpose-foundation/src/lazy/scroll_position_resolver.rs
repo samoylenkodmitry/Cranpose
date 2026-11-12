@@ -1,10 +1,8 @@
 use super::{
-    lazy_list_measure::LazyListMeasureConfig,
-    lazy_list_state::{LazyListMeasureStateSnapshot, LazyListState},
+    lazy_list_measure::LazyListMeasureConfig, lazy_list_state::LazyListMeasureStateSnapshot,
 };
 
 pub(super) struct ScrollPositionResolver<'a> {
-    state: &'a LazyListState,
     measure_state: LazyListMeasureStateSnapshot,
     config: &'a LazyListMeasureConfig,
     items_count: usize,
@@ -13,14 +11,12 @@ pub(super) struct ScrollPositionResolver<'a> {
 
 impl<'a> ScrollPositionResolver<'a> {
     pub(super) fn new(
-        state: &'a LazyListState,
         measure_state: LazyListMeasureStateSnapshot,
         config: &'a LazyListMeasureConfig,
         items_count: usize,
         effective_viewport_size: f32,
     ) -> Self {
         Self {
-            state,
             measure_state,
             config,
             items_count,
@@ -76,17 +72,18 @@ impl<'a> ScrollPositionResolver<'a> {
         (index, offset)
     }
 
-    pub(crate) fn normalize_forward_with_cache(
+    pub(crate) fn normalize_forward_with_known_sizes(
         &self,
         mut index: usize,
         mut offset: f32,
+        known_size: impl Fn(usize) -> Option<f32>,
     ) -> (usize, f32) {
         if offset <= 0.0 {
             return (index, offset);
         }
 
         while index + 1 < self.items_count {
-            let Some(item_size) = self.state.get_cached_size(index) else {
+            let Some(item_size) = known_size(index) else {
                 break;
             };
             let item_extent = item_size + self.config.spacing;

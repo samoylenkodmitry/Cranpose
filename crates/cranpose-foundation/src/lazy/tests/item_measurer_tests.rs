@@ -30,6 +30,10 @@ where
         Ok((self.measure)(index))
     }
 
+    fn key(&self, index: usize) -> u64 {
+        index as u64
+    }
+
     fn keep_beyond(&mut self, index: usize, _distance: f32) -> Result<BeyondItem, Infallible> {
         Ok(if (self.keep)(index) {
             BeyondItem::Kept
@@ -307,6 +311,10 @@ fn placed_beyond_items_sit_on_both_sides_of_the_viewport_items() {
 
         fn measure(&mut self, index: usize) -> Result<LazyListMeasuredItem, Infallible> {
             Ok(create_test_item(index, 50.0))
+        }
+
+        fn key(&self, index: usize) -> u64 {
+            index as u64
         }
 
         fn keep_beyond(&mut self, index: usize, _distance: f32) -> Result<BeyondItem, Infallible> {
