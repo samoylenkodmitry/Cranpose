@@ -21,14 +21,25 @@ impl SceneStore {
             .map(|props| &self.props[props.index()])
     }
 
-    /// Removes the properties of `id`, its graphics layer among them.
+    /// Removes the properties of `id`, its graphics layer among them, and
+    /// notes a property change when it had any.
     pub fn clear_props(&mut self, id: RecordId) {
-        let index = id.index();
-        if self.warm[index].props.is_some() || self.warm[index].graphics_layer.is_some() {
-            self.drop_props(index);
-            super::facts::forget_children(self, index);
-            self.stale_with_parent(index);
+        if self.strip_props(id) {
+            self.note_property_change(id);
         }
+    }
+
+    // Removes the properties and the graphics layer of `id` for the scene
+    // builder, which notes the change itself; `false` when it had none.
+    pub(crate) fn strip_props(&mut self, id: RecordId) -> bool {
+        let index = id.index();
+        if self.warm[index].props.is_none() && self.warm[index].graphics_layer.is_none() {
+            return false;
+        }
+        self.drop_props(index);
+        super::facts::forget_children(self, index);
+        self.stale_with_parent(index);
+        true
     }
 
     // Removes the properties and the graphics layer of the record at
@@ -139,26 +150,39 @@ impl SceneStore {
         }
     }
 
-    /// Sets the layer bounds of `id`: `None` when they are its node rect.
+    /// Sets the layer bounds of `id`, `None` when they are its node rect, and
+    /// notes a property change when they change.
     pub fn set_layer_bounds(&mut self, id: RecordId, bounds: Option<Rect>) {
-        let bits = |bounds: Option<Rect>| {
-            bounds.map(|bounds| [bounds.x, bounds.y, bounds.width, bounds.height].map(f32::to_bits))
-        };
-        if bits(self.props(id).and_then(|props| props.layer_bounds)) != bits(bounds) {
-            self.edit_props(id, |props| props.layer_bounds = bounds);
+        if self.write_layer_bounds(id, bounds) {
+            self.note_property_change(id);
         }
     }
 
-    /// Sets the pointer handling of `id`: `None` when it has none.
+    // Writes the layer bounds of `id` for the scene builder, which notes the
+    // change itself; `false` when they stay.
+    pub(crate) fn write_layer_bounds(&mut self, id: RecordId, bounds: Option<Rect>) -> bool {
+        let bits = |bounds: Option<Rect>| {
+            bounds.map(|bounds| [bounds.x, bounds.y, bounds.width, bounds.height].map(f32::to_bits))
+        };
+        if bits(self.props(id).and_then(|props| props.layer_bounds)) == bits(bounds) {
+            return false;
+        }
+        self.edit_props(id, |props| props.layer_bounds = bounds);
+        true
+    }
+
+    /// Sets the pointer handling of `id`: `None` when it has none. What the
+    /// record draws stays.
     pub fn set_hit_test(&mut self, id: RecordId, hit_test: Option<HitTestNode>) {
         if hit_test.is_some() || self.props(id).is_some_and(|props| props.hit_test.is_some()) {
             self.edit_props(id, |props| props.hit_test = hit_test);
         }
     }
 
-    /// Changes the properties of `id` with `edit`, starting from defaults
-    /// when it has none; properties left at their defaults go.
-    pub fn edit_props(&mut self, id: RecordId, edit: impl FnOnce(&mut LayerProps)) {
+    // Changes the properties of `id` with `edit`, starting from defaults
+    // when it has none, for the scene builder, which notes the change
+    // itself. Properties left at their defaults go.
+    pub(crate) fn edit_props(&mut self, id: RecordId, edit: impl FnOnce(&mut LayerProps)) {
         let index = id.index();
         let entry = self.warm[index].props;
         let mut fresh = None;

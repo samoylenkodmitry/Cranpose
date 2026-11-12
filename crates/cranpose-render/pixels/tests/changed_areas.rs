@@ -18,10 +18,11 @@ use cranpose_render_common::{
 use cranpose_render_pixels::{Picture, PixelRect, PixelsRenderer};
 use cranpose_ui::{
     Box, BoxSpec, Column, ColumnSpec, Modifier, Size, Text, TextStyle,
-    space::{Camera, Mat4, Material, Mesh, MeshSurface, Scene3d, Vec3},
+    space::{Camera, LayerSpace, Mat4, Material, Mesh, MeshSurface, Scene3d, Vec3},
 };
 use cranpose_ui_graphics::{
-    Brush, Color, ColorFilter, DrawScope, GraphicsLayer, Point, Rect, Stroke, StrokeCap, TAU,
+    Brush, Color, ColorFilter, DrawScope, GraphicsLayer, Point, ProjectiveTransform, Rect, Stroke,
+    StrokeCap, TAU,
 };
 
 const WIDTH: u32 = 240;
@@ -1378,8 +1379,9 @@ fn many_changed_boxes_join_into_the_same_areas_frame_after_frame() {
     assert_eq!(seen, expected);
 }
 
-// A box that clips a wider child, beside a box of its own: records that a
-// write of the scene store changes alone.
+// A box that clips a wider child, a box of its own and a faded box with a
+// child that handles clicks: records that a write of the scene store
+// changes alone.
 #[composable]
 fn ClippedPair(_captured: Step) {
     Box(
@@ -1415,6 +1417,30 @@ fn ClippedPair(_captured: Step) {
                 BoxSpec::default(),
                 || {},
             );
+            Box(
+                Modifier::empty()
+                    .offset(20.0, 100.0)
+                    .width(60.0)
+                    .height(50.0)
+                    .graphics_layer(|| GraphicsLayer {
+                        alpha: FADED_ALPHA,
+                        ..GraphicsLayer::default()
+                    })
+                    .clickable(|_| {})
+                    .background(color(7, 8)),
+                BoxSpec::default(),
+                || {
+                    Box(
+                        Modifier::empty()
+                            .offset(5.0, 5.0)
+                            .width(30.0)
+                            .height(20.0)
+                            .background(color(9, 10)),
+                        BoxSpec::default(),
+                        || {},
+                    );
+                },
+            );
         },
     );
 }
@@ -1442,6 +1468,11 @@ const SIDE: Size = Size {
     width: 40.0,
     height: 40.0,
 };
+const FADED: Size = Size {
+    width: 60.0,
+    height: 50.0,
+};
+const FADED_ALPHA: f32 = 0.8;
 
 // What a store write alone does to the picture.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1522,6 +1553,105 @@ fn a_record_moved_alone_redraws() {
         let record = record_of_size(store, SIDE);
         let origin = store.layer(record).origin_in_parent();
         store.set_placement(record, Point::new(origin.x - 30.0, origin.y + 10.0), None);
+    });
+}
+
+#[test]
+fn a_record_turned_alone_redraws() {
+    a_store_write_alone_keeps_the_frame_whole("set_placement", Seen::Changed, |store| {
+        let record = record_of_size(store, CLIP);
+        let origin = store.layer(record).origin_in_parent();
+        let transform = ProjectiveTransform::translation(origin.x + 25.0, origin.y + 5.0);
+        store.set_placement(record, origin, Some(transform));
+    });
+}
+
+#[test]
+fn a_record_given_other_layer_bounds_alone_redraws() {
+    a_store_write_alone_keeps_the_frame_whole("set_layer_bounds", Seen::Changed, |store| {
+        let record = record_of_size(store, CLIP);
+        store.set_layer_bounds(
+            record,
+            Some(Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 50.0,
+                height: 30.0,
+            }),
+        );
+    });
+}
+
+#[test]
+fn a_record_stripped_of_its_properties_alone_redraws() {
+    a_store_write_alone_keeps_the_frame_whole("clear_props", Seen::Changed, |store| {
+        let record = record_of_size(store, FADED);
+        let root = store.root().expect("the scene has a root");
+        assert!(
+            store.layer(root).has_hit_targets(),
+            "the faded box handles clicks"
+        );
+        store.clear_props(record);
+        assert!(
+            !store.layer(root).has_hit_targets(),
+            "clear_props: no record handles clicks"
+        );
+    });
+}
+
+#[test]
+fn a_record_that_stops_handling_clicks_alone_keeps_its_pixels() {
+    a_store_write_alone_keeps_the_frame_whole("set_hit_test", Seen::Same, |store| {
+        let record = record_of_size(store, FADED);
+        let root = store.root().expect("the scene has a root");
+        assert!(
+            store.layer(root).has_hit_targets(),
+            "the faded box handles clicks"
+        );
+        store.set_hit_test(record, None);
+        assert!(
+            !store.layer(root).has_hit_targets(),
+            "set_hit_test: no record handles clicks"
+        );
+    });
+}
+
+#[test]
+fn a_record_that_publishes_its_origin_alone_keeps_its_pixels() {
+    a_store_write_alone_keeps_the_frame_whole("set_flags", Seen::Same, |store| {
+        let record = record_of_size(store, CLIP);
+        let root = store.root().expect("the scene has a root");
+        assert!(
+            !store.layer(root).has_origin_sinks(),
+            "no record publishes its origin"
+        );
+        let flags = store.layer(record).flags().with(RecordFlags::ORIGIN_SINKS);
+        store.set_flags(record, flags);
+        assert!(
+            store.layer(root).has_origin_sinks(),
+            "set_flags: the faded box publishes its origin"
+        );
+    });
+}
+
+#[test]
+fn a_record_that_opens_a_space_alone_keeps_its_pixels() {
+    a_store_write_alone_keeps_the_frame_whole("set_graphics_layer", Seen::Same, |store| {
+        let record = record_of_size(store, FADED);
+        let root = store.root().expect("the scene has a root");
+        assert!(!store.layer(root).has_space(), "no record holds a space");
+        store.set_graphics_layer(
+            record,
+            Some(GraphicsLayer {
+                alpha: FADED_ALPHA,
+                space: Some(Arc::new(LayerSpace::Transform(Mat4::IDENTITY))),
+                ..GraphicsLayer::default()
+            }),
+        );
+        assert!(
+            store.layer(root).has_space(),
+            "set_graphics_layer: the faded box holds a space"
+        );
     });
 }
 

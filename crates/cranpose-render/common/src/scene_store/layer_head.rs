@@ -72,7 +72,7 @@ impl SceneStore {
         let (record_kind, node) = kind.record();
         if self.node(record) != Some(node) {
             // A record that draws for another node starts a new run of changes.
-            self.clear_props(record);
+            self.strip_props(record);
         }
         self.set_kind(record, record_kind, Some(node));
         self.set_content_offset(record, content_offset);

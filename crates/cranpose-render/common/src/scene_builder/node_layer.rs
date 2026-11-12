@@ -141,7 +141,7 @@ pub(super) fn set_bounds(
 ) {
     let size = node_bounds.unwrap_or(local_bounds);
     store.write_size(record, size.width, size.height);
-    store.set_layer_bounds(record, node_bounds.map(|_| local_bounds));
+    store.write_layer_bounds(record, node_bounds.map(|_| local_bounds));
 }
 
 // The transform that places a layer with `graphics_layer` at `placement`
