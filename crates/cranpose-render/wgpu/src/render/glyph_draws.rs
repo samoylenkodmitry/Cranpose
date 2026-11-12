@@ -4,8 +4,9 @@ use bytemuck::{Pod, Zeroable};
 use cranpose_ui_graphics::Rect;
 
 use super::{
-    CachedGpuTextGlyphRun, GlyphRunQuads, TargetRect, ViewportUniformParams,
-    cached_text_glyph_instance, cached_text_glyph_quad_is_visible_in_viewport, confined_scissor,
+    CachedGpuTextGlyphRun, GlyphRunBounds, TargetRect, ViewportUniformParams,
+    cached_text_glyph_instance, confined_scissor,
+    text_glyph_cache::{CachedTextGlyphQuad, cached_text_glyph_quad_is_visible_in_viewport},
 };
 use crate::{
     frame_graph::{BufferUpload, UploadAllocatorSpec},
@@ -36,6 +37,16 @@ impl GlyphExtent {
         self.top = self.top.min(rect[1]);
         self.right = self.right.max(rect[2]);
         self.bottom = self.bottom.max(rect[3]);
+    }
+
+    // The extent moved by `by`.
+    pub(super) fn moved(self, [x, y]: [f32; 2]) -> Self {
+        Self {
+            left: self.left + x,
+            top: self.top + y,
+            right: self.right + x,
+            bottom: self.bottom + y,
+        }
     }
 }
 
@@ -109,6 +120,15 @@ impl GlyphInstance {
         }
     }
 
+    // The quad moved by `by`.
+    pub(super) fn moved(self, [x, y]: [f32; 2]) -> Self {
+        let [left, top, right, bottom] = self.rect;
+        Self {
+            rect: [left + x, top + y, right + x, bottom + y],
+            ..self
+        }
+    }
+
     /// The part of the quad inside `edges` (left, top, right, bottom, in the
     /// quad's own space), its atlas coordinates cut to match; `None` when
     /// none of it is inside.
@@ -142,17 +162,14 @@ impl GlyphInstance {
 #[inline]
 pub(super) fn for_each_visible_glyph(
     source_raster_rect: Rect,
-    quads: GlyphRunQuads<'_>,
+    (quads, bounds): (impl Iterator<Item = CachedTextGlyphQuad>, GlyphRunBounds),
     (clip, cut): (Option<Rect>, Option<[f32; 4]>),
     viewport: ViewportUniformParams,
     root_scale: f32,
     mut sink: impl FnMut(GlyphInstance),
 ) {
-    let whole_run_visible =
-        quads
-            .bounds
-            .within_viewport(source_raster_rect, clip, viewport, root_scale);
-    for quad in quads.iter() {
+    let whole_run_visible = bounds.within_viewport(source_raster_rect, clip, viewport, root_scale);
+    for quad in quads {
         if !whole_run_visible
             && !cached_text_glyph_quad_is_visible_in_viewport(
                 source_raster_rect,

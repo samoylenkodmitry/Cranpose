@@ -142,7 +142,7 @@ fn a_run_draws_the_same_glyphs_whether_or_not_its_bounds_answer_for_them() {
                     let mut drawn = Vec::new();
                     for_each_visible_glyph(
                         raster,
-                        quads(bounds),
+                        (quads(bounds).iter(), bounds),
                         (clip, None),
                         view,
                         1.0,

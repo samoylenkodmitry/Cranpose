@@ -3409,6 +3409,7 @@ mod image_draws;
 pub(crate) use draw_space::{ArenaPlacement, DrawSpace};
 mod image_textures;
 use image_textures::ImageTextures;
+mod kept_text_glyphs;
 mod text_glyph_cache;
 mod text_resources;
 pub(crate) use image_draws::{
@@ -3460,8 +3461,7 @@ use text_glyph_cache::{
     CachedGpuTextGlyphRun, GlyphRunBounds, GlyphRunQuads, MAX_TEXT_GLYPH_GPU_RUN_CACHE_ITEMS,
     MAX_TEXT_GLYPH_MASK_CACHE_ITEMS, MAX_TEXT_IMAGE_CACHE_ITEMS, MIN_TEXT_GLYPH_RUN_CACHE_ITEMS,
     RETAINED_TEXT_GLYPH_RUN_MIN_QUADS, TEXT_GLYPH_GPU_RUN_IDLE_FRAMES, TEXT_GLYPH_RUN_IDLE_FRAMES,
-    TextGlyphRunDraw, TextGlyphRunLookup, cached_text_glyph_instance,
-    cached_text_glyph_quad_is_visible_in_viewport, log_text_atlas_fallback,
+    TextGlyphRunDraw, TextGlyphRunLookup, cached_text_glyph_instance, log_text_atlas_fallback,
 };
 
 #[cfg(test)]

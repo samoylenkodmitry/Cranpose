@@ -85,7 +85,7 @@ pub(super) fn collect_space_children(
             }
             ItemRef::Leaf(inline) => collect_inline(inline, content_offset, &context, out),
             ItemRef::Draw(_) | ItemRef::Text(_) | ItemRef::Run(_) | ItemRef::Shape(_) => {
-                push_content(out, child, content);
+                push_content(out, child, content, &mut None);
                 false
             }
         };

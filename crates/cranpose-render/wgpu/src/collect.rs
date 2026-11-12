@@ -716,6 +716,7 @@ fn collect_into(
     let content_offset = layer.content_offset();
     let mut has_pixel_sensitive_subtree =
         context.settings.wants_pixel_sensitive && layer.own_draw_facts().pixel_sensitive;
+    let mut text_owner = Some(layer);
     for child in layer.items() {
         has_pixel_sensitive_subtree |= match child {
             ItemRef::Layer(child_layer) => {
@@ -723,7 +724,7 @@ fn collect_into(
             }
             ItemRef::Leaf(inline) => collect_inline(inline, content_offset, &child_context, out),
             ItemRef::Draw(_) | ItemRef::Text(_) | ItemRef::Run(_) | ItemRef::Shape(_) => {
-                push_content(out, child, &content);
+                push_content(out, child, &content, &mut text_owner);
                 false
             }
         };
@@ -879,8 +880,9 @@ fn collect_inline(
         anchor,
         motion_context_animated: inline.motion_context_animated() || translated,
     };
+    let mut text_owner = Some(inline);
     for node in inline.items() {
-        push_content(out, node, &content);
+        push_content(out, node, &content, &mut text_owner);
     }
     context.settings.wants_pixel_sensitive && inline.own_draw_facts().pixel_sensitive
 }

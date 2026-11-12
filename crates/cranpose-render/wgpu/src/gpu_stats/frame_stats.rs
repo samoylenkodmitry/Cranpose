@@ -75,6 +75,7 @@ pub(crate) struct FrameStats {
     pub text_glyph_atlas_misses: Cell<u32>,
     pub text_glyph_atlas_miss_pixels: Cell<u64>,
     pub text_glyph_runs_collected: Cell<u32>,
+    pub text_glyph_runs_kept: Cell<u32>,
     pub offscreen_pool_size: Cell<u32>,
     pub offscreen_pool_bytes: Cell<u64>,
     pub text_pool_size: Cell<u32>,
@@ -388,6 +389,11 @@ impl FrameStats {
             .set(self.text_glyph_runs_collected.get().saturating_add(1));
     }
 
+    pub(crate) fn record_text_glyph_run_kept(&self) {
+        self.text_glyph_runs_kept
+            .set(self.text_glyph_runs_kept.get().saturating_add(1));
+    }
+
     pub(crate) fn record_text_glyph_atlas_miss(&self, width: u32, height: u32) {
         self.text_glyph_atlas_misses
             .set(self.text_glyph_atlas_misses.get().saturating_add(1));
@@ -475,6 +481,7 @@ impl FrameStats {
             text_glyph_atlas_misses: self.text_glyph_atlas_misses.get(),
             text_glyph_atlas_miss_pixels: self.text_glyph_atlas_miss_pixels.get(),
             text_glyph_runs_collected: self.text_glyph_runs_collected.get(),
+            text_glyph_runs_kept: self.text_glyph_runs_kept.get(),
             offscreen_pool_size: self.offscreen_pool_size.get(),
             offscreen_pool_bytes: self.offscreen_pool_bytes.get(),
             text_pool_size: self.text_pool_size.get(),
@@ -552,6 +559,7 @@ impl FrameStats {
         self.text_glyph_atlas_misses.set(0);
         self.text_glyph_atlas_miss_pixels.set(0);
         self.text_glyph_runs_collected.set(0);
+        self.text_glyph_runs_kept.set(0);
         *self.top_isolated_layers.borrow_mut() = [None; TOP_ISOLATED_LAYER_LIMIT];
         self.top_isolated_layer_count.set(0);
         self.shadow_shape_cache_miss_log_count.set(0);

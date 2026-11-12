@@ -58,14 +58,34 @@ pub(super) struct CachedTextImage {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(super) struct TextGlyphRunCacheKey(pub(super) u64);
 
+// One glyph of a run as a quad: where it lies from the run's origin, its
+// colour and its place in the atlas.
 #[derive(Clone, Copy)]
 pub(super) struct CachedTextGlyphQuad {
-    pub(super) x: i32,
-    pub(super) y: i32,
-    pub(super) width: usize,
-    pub(super) height: usize,
-    pub(super) color: (f32, f32, f32, f32),
+    pub(super) offset: [f32; 2],
+    pub(super) size: [f32; 2],
+    pub(super) color: [f32; 4],
     pub(super) uv: ImageUvRect,
+}
+
+impl CachedTextGlyphQuad {
+    // The quad of a run whose origin lies at `origin`.
+    #[inline]
+    pub(super) fn at(&self, origin: [f32; 2]) -> GlyphInstance {
+        let x0 = origin[0] + self.offset[0];
+        let y0 = origin[1] + self.offset[1];
+        GlyphInstance {
+            rect: [x0, y0, x0 + self.size[0], y0 + self.size[1]],
+            uv: [
+                self.uv.min[0],
+                self.uv.min[1],
+                self.uv.max[0],
+                self.uv.max[1],
+            ],
+            uv_bounds: self.uv.sample_bounds,
+            color: self.color,
+        }
+    }
 }
 
 pub(super) struct CachedTextGlyphRun {
@@ -129,6 +149,34 @@ impl GlyphRunBounds {
         ]
     }
 
+    // Whether the run at `source_raster_rect` shows whole and uncut: its
+    // viewport is not turned, its box lies inside `cut`, when the text is
+    // cut, and inside what `viewport` shows of `clip`.
+    pub(super) fn shows_whole(
+        self,
+        source_raster_rect: Rect,
+        (clip, cut): (Option<Rect>, Option<[f32; 4]>),
+        viewport: ViewportUniformParams,
+        root_scale: f32,
+    ) -> bool {
+        let origin = [source_raster_rect.x, source_raster_rect.y];
+        viewport.transform.is_identity()
+            && self.within_cut(origin, cut)
+            && self.within_viewport(source_raster_rect, clip, viewport, root_scale)
+    }
+
+    // Whether the run's box from `origin` lies inside the edges of `cut`,
+    // when the text is cut: no glyph of it changes.
+    pub(super) fn within_cut(self, origin: [f32; 2], cut: Option<[f32; 4]>) -> bool {
+        let bounds = self.at(origin);
+        cut.is_none_or(|edges| {
+            bounds[0] >= edges[0]
+                && bounds[1] >= edges[1]
+                && bounds[2] <= edges[2]
+                && bounds[3] <= edges[3]
+        })
+    }
+
     /// Whether every glyph of the run at `source_raster_rect` lies inside
     /// what `viewport` shows of `clip`, so none needs its own test.
     pub(crate) fn within_viewport(
@@ -170,6 +218,7 @@ pub(super) struct TextGlyphRunLookup {
 pub(super) struct TextGlyphRunDraw<'a> {
     pub(super) text_draw: &'a TextDraw,
     pub(super) raster_rect: Rect,
+    pub(super) text_scale: f32,
     pub(super) run_key: TextGlyphRunCacheKey,
     pub(super) run: TextGlyphRunLookup,
 }
@@ -204,31 +253,7 @@ impl GlyphRunQuads<'_> {
         &self,
         origin: [f32; 2],
     ) -> impl Iterator<Item = GlyphInstance> + '_ {
-        let texel = self.texel;
-        self.glyphs
-            .boxes()
-            .zip(self.entries)
-            .map(move |(glyph, entry)| {
-                let x0 = origin[0] + glyph.x as f32;
-                let y0 = origin[1] + glyph.y as f32;
-                let uv = glyph_atlas_uv_rect(*entry, texel);
-                GlyphInstance {
-                    rect: [
-                        x0,
-                        y0,
-                        x0 + f32::from(glyph.width),
-                        y0 + f32::from(glyph.height),
-                    ],
-                    uv: [uv.min[0], uv.min[1], uv.max[0], uv.max[1]],
-                    uv_bounds: uv.sample_bounds,
-                    color: [
-                        glyph.color.0.clamp(0.0, 1.0),
-                        glyph.color.1.clamp(0.0, 1.0),
-                        glyph.color.2.clamp(0.0, 1.0),
-                        glyph.color.3.clamp(0.0, 1.0),
-                    ],
-                }
-            })
+        self.iter().map(move |quad| quad.at(origin))
     }
 
     pub(crate) fn iter(&self) -> impl Iterator<Item = CachedTextGlyphQuad> + '_ {
@@ -253,16 +278,14 @@ pub(super) fn cached_text_glyph_quad(
     texel: f32,
 ) -> CachedTextGlyphQuad {
     CachedTextGlyphQuad {
-        x: glyph.x,
-        y: glyph.y,
-        width: usize::from(glyph.width),
-        height: usize::from(glyph.height),
-        color: (
+        offset: [glyph.x as f32, glyph.y as f32],
+        size: [f32::from(glyph.width), f32::from(glyph.height)],
+        color: [
             glyph.color.0.clamp(0.0, 1.0),
             glyph.color.1.clamp(0.0, 1.0),
             glyph.color.2.clamp(0.0, 1.0),
             glyph.color.3.clamp(0.0, 1.0),
-        ),
+        ],
         uv: glyph_atlas_uv_rect(entry, texel),
     }
 }
@@ -273,22 +296,10 @@ pub(super) fn cached_text_glyph_instance(
     source_raster_rect: Rect,
     quad: &CachedTextGlyphQuad,
 ) -> Option<GlyphInstance> {
-    if quad.width == 0 || quad.height == 0 || quad.color.3 <= 0.0 {
+    if quad.size[0] == 0.0 || quad.size[1] == 0.0 || quad.color[3] <= 0.0 {
         return None;
     }
-    let x0 = source_raster_rect.x + quad.x as f32;
-    let y0 = source_raster_rect.y + quad.y as f32;
-    Some(GlyphInstance {
-        rect: [x0, y0, x0 + quad.width as f32, y0 + quad.height as f32],
-        uv: [
-            quad.uv.min[0],
-            quad.uv.min[1],
-            quad.uv.max[0],
-            quad.uv.max[1],
-        ],
-        uv_bounds: quad.uv.sample_bounds,
-        color: [quad.color.0, quad.color.1, quad.color.2, quad.color.3],
-    })
+    Some(quad.at([source_raster_rect.x, source_raster_rect.y]))
 }
 
 fn cached_text_glyph_quad_logical_rect(
@@ -300,10 +311,10 @@ fn cached_text_glyph_quad_logical_rect(
         return None;
     }
     Some(Rect {
-        x: (source_raster_rect.x + quad.x as f32) / root_scale,
-        y: (source_raster_rect.y + quad.y as f32) / root_scale,
-        width: quad.width as f32 / root_scale,
-        height: quad.height as f32 / root_scale,
+        x: (source_raster_rect.x + quad.offset[0]) / root_scale,
+        y: (source_raster_rect.y + quad.offset[1]) / root_scale,
+        width: quad.size[0] / root_scale,
+        height: quad.size[1] / root_scale,
     })
 }
 

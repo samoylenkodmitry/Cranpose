@@ -279,6 +279,9 @@ pub struct FrameStatsSnapshot {
     /// Texts whose glyph runs the frame laid out again: a text drawn as it
     /// was before takes its run from the cache.
     pub text_glyph_runs_collected: u32,
+    /// Texts the frame drew from the glyph quads kept with their records,
+    /// which cost no run and no atlas lookup.
+    pub text_glyph_runs_kept: u32,
     /// Textures held for reuse at the end of the frame, with the composition target.
     pub offscreen_pool_size: u32,
     /// Bytes of the textures counted by `offscreen_pool_size`.

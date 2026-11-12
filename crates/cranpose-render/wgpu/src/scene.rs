@@ -8,7 +8,7 @@ use cranpose_render_common::{
     glyph_reach::{InkSpread, glyph_part},
     graph::DrawCommandId,
     layer_shadow::ShadowRRect,
-    scene_store::ShapeRef,
+    scene_store::{RecordChanges, ShapeRef},
     text_paint::TextPaint,
     text_raster::TextRasterRequest,
 };
@@ -322,6 +322,9 @@ pub(crate) struct DrawnText {
     gradient: bool,
     static_motion: bool,
     spread: InkSpread,
+    // The record of the scene store whose first text this is, as the
+    // collection found it.
+    kept_from: Option<RecordChanges>,
 }
 
 impl DrawnText {
@@ -358,6 +361,7 @@ impl DrawnText {
                 == cranpose_ui::text::TextMotion::Static,
             spread,
             string,
+            kept_from: None,
         }
     }
 
@@ -372,7 +376,20 @@ impl DrawnText {
             gradient: false,
             static_motion: paint.static_motion,
             spread: paint.spread,
+            kept_from: None,
         }
+    }
+
+    // Notes the record the text belongs to, so a renderer may keep what it
+    // works out of the text with that record while the record's own draws
+    // stay.
+    pub(crate) fn keep_from(&mut self, record: RecordChanges) {
+        self.kept_from = Some(record);
+    }
+
+    // The record noted by [`Self::keep_from`].
+    pub(crate) fn kept_from(&self) -> Option<RecordChanges> {
+        self.kept_from
     }
 
     pub(crate) fn string(&self) -> &Arc<RenderString> {

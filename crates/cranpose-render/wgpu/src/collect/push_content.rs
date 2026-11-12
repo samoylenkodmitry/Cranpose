@@ -4,7 +4,7 @@
 use cranpose_render_common::{
     graph::{DrawPrimitiveNode, DrawRunNode, TextPrimitiveNode},
     primitive_emit::{PrimitiveClipSpace, resolve_primitive_clip},
-    scene_store::{ItemRef, ShapeRef},
+    scene_store::{ItemRef, LayerRef, ShapeRef},
 };
 use cranpose_ui_graphics::{Point, RecordLane};
 
@@ -16,10 +16,17 @@ use crate::{
     },
 };
 
-pub(super) fn push_content(out: &mut LayerScene, node: ItemRef<'_>, content: &ContentContext<'_>) {
+// Pushes the draws of `node`, an item of the record `owner` holds until the
+// first text of the record takes it: that text notes its record.
+pub(super) fn push_content(
+    out: &mut LayerScene,
+    node: ItemRef<'_>,
+    content: &ContentContext<'_>,
+    owner: &mut Option<LayerRef<'_>>,
+) {
     match node {
         ItemRef::Draw(draw) => push_draw(out, draw, content),
-        ItemRef::Text(text) => push_text(out, text, content),
+        ItemRef::Text(text) => push_text(out, text, (content, owner.take())),
         ItemRef::Run(run) => push_draw_run(out, run, content),
         ItemRef::Shape(shape) => push_shapes(out, shape, content),
         ItemRef::Layer(_) | ItemRef::Leaf(_) => {}
@@ -59,7 +66,11 @@ fn push_draw(out: &mut LayerScene, draw: &DrawPrimitiveNode, content: &ContentCo
     assign_snap_anchor_since(&mut out.scene, counts, snap_anchor);
 }
 
-fn push_text(out: &mut LayerScene, text: &TextPrimitiveNode, content: &ContentContext<'_>) {
+fn push_text(
+    out: &mut LayerScene,
+    text: &TextPrimitiveNode,
+    (content, owner): (&ContentContext<'_>, Option<LayerRef<'_>>),
+) {
     let ContentContext {
         layer_bounds,
         local_layer,
@@ -78,6 +89,7 @@ fn push_text(out: &mut LayerScene, text: &TextPrimitiveNode, content: &ContentCo
     if text_clip.is_some_and(|clip| clip.is_empty()) {
         return;
     }
+    let texts = out.scene.texts.len();
     push_text_style_draws(
         &mut out.scene,
         text,
@@ -89,6 +101,13 @@ fn push_text(out: &mut LayerScene, text: &TextPrimitiveNode, content: &ContentCo
             snap_anchor,
         },
     );
+    // A plain text pushes one draw, which a renderer may keep with its record.
+    if let Some(owner) = owner
+        && text.paint().plain
+        && out.scene.texts.len() == texts + 1
+    {
+        out.scene.texts[texts].text.keep_from(owner.changes());
+    }
 }
 
 /// Places a recorded run: every maximal stretch of shape segments becomes

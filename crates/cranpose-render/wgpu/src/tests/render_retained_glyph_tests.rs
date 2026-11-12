@@ -37,11 +37,9 @@ fn test_renderer() -> (std::sync::MutexGuard<'static, ()>, GpuRenderer) {
 
 fn test_quads() -> [CachedTextGlyphQuad; 1] {
     [CachedTextGlyphQuad {
-        x: 0,
-        y: 0,
-        width: 2,
-        height: 2,
-        color: (1.0, 1.0, 1.0, 1.0),
+        offset: [0.0, 0.0],
+        size: [2.0, 2.0],
+        color: [1.0, 1.0, 1.0, 1.0],
         uv: ImageUvRect {
             min: [0.0, 0.0],
             max: [1.0, 1.0],
@@ -947,7 +945,7 @@ fn a_glyph_quad_becomes_one_instance_at_its_raster_origin() {
         })
     );
     let clear = CachedTextGlyphQuad {
-        color: (1.0, 1.0, 1.0, 0.0),
+        color: [1.0, 1.0, 1.0, 0.0],
         ..quad
     };
     assert_eq!(cached_text_glyph_instance(origin, &clear), None);
@@ -1015,8 +1013,8 @@ fn a_runs_quads_are_derived_from_its_glyphs_and_atlas_entries() {
     };
     let first = glyphs.boxes().next().expect("one glyph");
     let expected = cached_text_glyph_quad(&first, run.1[0], texel);
-    assert_eq!((quad.x, quad.y, quad.width, quad.height), (3, 0, 2, 2));
-    assert_eq!(quad.color, (1.0, 0.5, 0.0, 1.0), "colour is clamped");
+    assert_eq!((quad.offset, quad.size), ([3.0, 0.0], [2.0, 2.0]));
+    assert_eq!(quad.color, [1.0, 0.5, 0.0, 1.0], "colour is clamped");
     assert_eq!(quad.uv.min, expected.uv.min);
     assert_eq!(quad.uv.max, expected.uv.max);
     assert_eq!(quad.uv.sample_bounds, expected.uv.sample_bounds);

@@ -10,6 +10,7 @@ use std::{
 use cranpose_core::{collections::bounded_lru::BoundedLruCache, hash::default as default_hash};
 use cranpose_render_common::{
     glyph_mask::GlyphMaskCache,
+    scene_store::RecordChanges,
     text_atlas::{AtlasGlyph, collect_solid_text_atlas_run},
     text_canvas::TextPixels,
     text_raster::rasterize_text,
@@ -21,16 +22,17 @@ use super::{
     GlyphQuads, GlyphRunBounds, GlyphRunQuads, GlyphSamplers, ImageBatch, ImageTextures,
     MAX_TEXT_GLYPH_GPU_RUN_CACHE_ITEMS, MAX_TEXT_GLYPH_MASK_CACHE_ITEMS,
     MAX_TEXT_IMAGE_CACHE_ITEMS, MIN_TEXT_GLYPH_RUN_CACHE_ITEMS, RETAINED_TEXT_GLYPH_RUN_MIN_QUADS,
-    RunAtlasEntries, TEXT_GLYPH_GPU_RUN_IDLE_FRAMES, TEXT_GLYPH_RUN_IDLE_FRAMES, TextGlyphRunDraw,
-    TextGlyphRunLookup, TurnedGlyph, ViewportUniformParams, draw_rect_is_visible_in_viewport,
-    evict_idle, for_each_visible_glyph,
+    RunAtlasEntries, TEXT_GLYPH_GPU_RUN_IDLE_FRAMES, TEXT_GLYPH_RUN_IDLE_FRAMES, TargetRect,
+    TextGlyphRunDraw, TextGlyphRunLookup, TurnedGlyph, ViewportUniformParams,
+    draw_rect_is_visible_in_viewport, evict_idle, for_each_visible_glyph,
     glyph_atlas::{GlyphAtlasEntry, TextGlyphAtlas},
     glyph_cut_edges, glyph_rect_aligned, hash_text_draw_for_cache,
-    hash_text_raster_geometry_for_cache, log_text_atlas_fallback, sampling_under,
-    scissor_rect_for_layer, shared_glyph_clip,
+    hash_text_raster_geometry_for_cache,
+    kept_text_glyphs::{DrawnAt, KeptFacts, KeptTextGlyphs},
+    log_text_atlas_fallback, sampling_under, scissor_rect_for_layer, shared_glyph_clip,
     text_glyph_cache::{
-        CachedGpuTextGlyphRun, CachedTextGlyphRun, CachedTextImage, TextGlyphRunCacheKey,
-        TextImageCacheKey,
+        CachedGpuTextGlyphRun, CachedTextGlyphQuad, CachedTextGlyphRun, CachedTextImage,
+        TextGlyphRunCacheKey, TextImageCacheKey,
     },
     text_raster_geometry_at, text_raster_geometry_for_draw,
 };
@@ -49,6 +51,7 @@ pub(crate) struct TextResources {
     pub(super) glyph_gpu_run_cache:
         BoundedLruCache<TextGlyphRunCacheKey, Rc<CachedGpuTextGlyphRun>>,
     pub(super) glyph_run_arena: GlyphRunArena,
+    pub(super) kept: KeptTextGlyphs,
     pub(super) glyph_run_frame: u64,
     pub(super) glyph_runs_drawn: usize,
     pub(super) glyph_mask_cache: GlyphMaskCache,
@@ -69,6 +72,7 @@ impl TextResources {
                 MAX_TEXT_GLYPH_GPU_RUN_CACHE_ITEMS,
             ),
             glyph_run_arena: GlyphRunArena::new(copy_free),
+            kept: KeptTextGlyphs::default(),
             glyph_run_frame: 0,
             glyph_runs_drawn: 0,
             glyph_mask_cache: GlyphMaskCache::with_capacity_at_least_one(
@@ -84,9 +88,16 @@ impl TextResources {
     /// [`TEXT_GLYPH_GPU_RUN_IDLE_FRAMES`] leave the GPU cache and those no
     /// frame drew for [`TEXT_GLYPH_RUN_IDLE_FRAMES`] the CPU cache, and the
     /// arena takes back the quads dropped retained runs held.
+    // A text that draws from its kept quads keeps its run from idling out.
     pub(super) fn begin_text_glyph_run_frame(&mut self) {
         self.glyph_run_frame += 1;
         let frame = self.glyph_run_frame;
+        let runs = &self.glyph_run_cache;
+        self.kept.begin_frame(frame, |key| {
+            if let Some(run) = runs.peek(&key) {
+                run.last_frame.set(frame);
+            }
+        });
         let demand = std::mem::take(&mut self.glyph_runs_drawn).saturating_mul(2);
         self.glyph_run_cache.set_cap(
             std::num::NonZeroUsize::new(demand.max(MIN_TEXT_GLYPH_RUN_CACHE_ITEMS))
@@ -381,7 +392,7 @@ impl TextResources {
 
     fn append_text_glyph_quad_run(
         source_raster_rect: Rect,
-        quads: GlyphRunQuads<'_>,
+        (quads, run_bounds): (impl Iterator<Item = CachedTextGlyphQuad>, GlyphRunBounds),
         (clip, cut): (Option<Rect>, Option<[f32; 4]>),
         space: DrawSpace,
         glyph_instances: &mut GlyphInstances,
@@ -391,22 +402,15 @@ impl TextResources {
         let start = glyph_instances.lens();
         let mut extent = GlyphExtent::EMPTY;
         let origin = [source_raster_rect.x, source_raster_rect.y];
-        let bounds = quads.bounds.at(origin);
-        let kind = if viewport.transform.is_identity()
-            && cut.is_none_or(|edges| {
-                bounds[0] >= edges[0]
-                    && bounds[1] >= edges[1]
-                    && bounds[2] <= edges[2]
-                    && bounds[3] <= edges[3]
-            })
-            && quads
-                .bounds
-                .within_viewport(source_raster_rect, clip, viewport, root_scale)
-        {
+        let bounds = run_bounds.at(origin);
+        let whole = run_bounds.shows_whole(source_raster_rect, (clip, cut), viewport, root_scale);
+        let kind = if whole {
             // Every quad shows whole and uncut: they sit at whole pixels from
             // the run's origin, which then decides their alignment, and
             // their extent is the run's bounds.
-            glyph_instances.plain.extend(quads.instances_at(origin));
+            glyph_instances
+                .plain
+                .extend(quads.map(|quad| quad.at(origin)));
             extent.add(bounds);
             GlyphQuads::plain_at(
                 [origin[0], origin[1], origin[0], origin[1]],
@@ -417,7 +421,7 @@ impl TextResources {
             let mut aligned = true;
             for_each_visible_glyph(
                 source_raster_rect,
-                quads,
+                (quads, run_bounds),
                 (clip, cut),
                 viewport,
                 root_scale,
@@ -437,7 +441,7 @@ impl TextResources {
             let turned = &mut glyph_instances.turned;
             for_each_visible_glyph(
                 source_raster_rect,
-                quads,
+                (quads, run_bounds),
                 (clip, cut),
                 viewport,
                 root_scale,
@@ -534,6 +538,17 @@ impl TextResources {
         if !static_text_motion {
             return false;
         }
+        if let Some(changes) = text_draw.text.kept_from()
+            && self.append_kept_text_glyphs(
+                text_draw,
+                (changes, raster_rect, text_scale),
+                (viewport, root_scale),
+                (glyph_instances, glyph_cmds),
+                upload.stats,
+            )
+        {
+            return true;
+        }
         let run_key = Self::text_glyph_run_cache_key(text_draw, raster_rect, text_scale);
         let mut collected_run = std::mem::take(&mut self.scratch_glyph_run);
         let mut generated_entries = std::mem::take(&mut self.scratch_glyph_entries);
@@ -553,6 +568,7 @@ impl TextResources {
                     TextGlyphRunDraw {
                         text_draw,
                         raster_rect,
+                        text_scale,
                         run_key,
                         run,
                     },
@@ -587,19 +603,11 @@ impl TextResources {
         let TextGlyphRunDraw {
             text_draw,
             raster_rect,
+            text_scale,
             run_key,
             run,
         } = draw;
-        // The glyphs draw only in their reach, which the text's damage covers.
-        let reach = text_draw.glyph_reach(raster_rect, text_draw.scale * root_scale);
-        let draw_rect = Rect {
-            x: reach.x / root_scale,
-            y: reach.y / root_scale,
-            width: reach.width / root_scale,
-            height: reach.height / root_scale,
-        };
-        let Some(scissor) = scissor_rect_for_layer(draw_rect, text_draw.clip, root_scale, viewport)
-        else {
+        let Some(scissor) = text_glyph_scissor(text_draw, raster_rect, viewport, root_scale) else {
             return true;
         };
         // A retained run's quads are uploaded whole: under a turn only the
@@ -625,7 +633,6 @@ impl TextResources {
             return true;
         }
 
-        let turned = !viewport.transform.is_identity();
         let instance_start = glyph_instances.len_for(viewport.transform);
         let (entries, entries_cached) = match run.entries {
             Some(entries) => (entries, true),
@@ -650,9 +657,17 @@ impl TextResources {
             bounds: run.bounds,
         };
         let cut = glyph_cut_edges(text_draw.clip, scissor, viewport, root_scale);
+        if let Some(changes) = text_draw.text.kept_from()
+            && entries.len() < RETAINED_TEXT_GLYPH_RUN_MIN_QUADS
+            && viewport.transform.is_identity()
+        {
+            let facts = KeptFacts::of(text_draw.color, text_scale, self.glyph_atlas.generation());
+            self.kept
+                .keep((changes, facts), (run_key, run.bounds), quads.iter());
+        }
         let (kind, extent) = Self::append_text_glyph_quad_run(
             raster_rect,
-            quads,
+            (quads.iter(), quads.bounds),
             (text_draw.clip, cut),
             DrawSpace {
                 viewport,
@@ -662,19 +677,107 @@ impl TextResources {
             entries_cached.then_some(&*upload.stats),
         );
         let instance_end = glyph_instances.len_for(viewport.transform);
-        if instance_end > instance_start {
-            let (clip, bounds) = if turned {
-                (None, scissor)
-            } else {
-                shared_glyph_clip(extent, scissor, viewport)
-            };
-            glyph_cmds.push(GlyphDrawCmd::shared(
-                (instance_start..instance_end, kind),
-                clip,
-                bounds,
-                self.glyph_atlas.bind_group(viewport.transform),
-            ));
+        self.push_shared_glyph_draw(
+            (instance_start..instance_end, kind),
+            (extent, scissor),
+            viewport,
+            glyph_cmds,
+        );
+        true
+    }
+
+    // Appends the draw of the shared quads in `instances`, which `extent`
+    // covers within `scissor`, unless there are none.
+    fn push_shared_glyph_draw(
+        &self,
+        (instances, kind): (std::ops::Range<usize>, GlyphQuads),
+        (extent, scissor): (GlyphExtent, TargetRect),
+        viewport: ViewportUniformParams,
+        glyph_cmds: &mut Vec<GlyphDrawCmd>,
+    ) {
+        if instances.is_empty() {
+            return;
         }
+        let (clip, bounds) = if viewport.transform.is_identity() {
+            shared_glyph_clip(extent, scissor, viewport)
+        } else {
+            (None, scissor)
+        };
+        glyph_cmds.push(GlyphDrawCmd::shared(
+            (instances, kind),
+            clip,
+            bounds,
+            self.glyph_atlas.bind_group(viewport.transform),
+        ));
+    }
+
+    // Appends the draws of a text from the quads kept with its record.
+    // `false` when the text has no kept quads that fit its record, color,
+    // scale and atlas, or its viewport is turned. Nothing was appended then.
+    fn append_kept_text_glyphs(
+        &mut self,
+        text_draw: &TextDraw,
+        (changes, raster_rect, text_scale): (RecordChanges, Rect, f32),
+        (viewport, root_scale): (ViewportUniformParams, f32),
+        (glyph_instances, glyph_cmds): (&mut GlyphInstances, &mut Vec<GlyphDrawCmd>),
+        stats: &FrameStats,
+    ) -> bool {
+        if !viewport.transform.is_identity() {
+            return false;
+        }
+        let facts = KeptFacts::of(text_draw.color, text_scale, self.glyph_atlas.generation());
+        let Some(kept) = self.kept.get(changes, facts) else {
+            return false;
+        };
+        let Some(scissor) = text_glyph_scissor(text_draw, raster_rect, viewport, root_scale) else {
+            self.glyph_runs_drawn += 1;
+            return true;
+        };
+        let cut = glyph_cut_edges(text_draw.clip, scissor, viewport, root_scale);
+        let origin = [raster_rect.x, raster_rect.y];
+        let at = DrawnAt::of(origin, cut, viewport.offset);
+        let bounds = kept.bounds();
+        let visible = bounds.within_viewport(raster_rect, text_draw.clip, viewport, root_scale);
+        let instance_start = glyph_instances.plain.len();
+        let drawn = at.and_then(|at| kept.drawn_at(at)).filter(|_| visible);
+        let (kind, extent) = if let Some((instances, kind, extent)) = drawn {
+            glyph_instances
+                .plain
+                .extend(instances.iter().map(|glyph| glyph.moved(origin)));
+            stats.record_text_glyph_atlas_hits(u32::try_from(instances.len()).unwrap_or(u32::MAX));
+            (kind, extent.moved(origin))
+        } else {
+            let Some(quads) = kept.quads() else {
+                return false;
+            };
+            let drew = Self::append_text_glyph_quad_run(
+                raster_rect,
+                (quads.iter().copied(), bounds),
+                (text_draw.clip, cut),
+                DrawSpace {
+                    viewport,
+                    scale: root_scale,
+                },
+                glyph_instances,
+                Some(stats),
+            );
+            if let Some(at) = at
+                && visible
+                && !bounds.within_cut(origin, cut)
+            {
+                let instances = &glyph_instances.plain[instance_start..];
+                kept.note_drawn((at, origin), (instances, drew.0, drew.1));
+            }
+            drew
+        };
+        stats.record_text_glyph_run_kept();
+        self.glyph_runs_drawn += 1;
+        self.push_shared_glyph_draw(
+            (instance_start..glyph_instances.plain.len(), kind),
+            (extent, scissor),
+            viewport,
+            glyph_cmds,
+        );
         true
     }
 
@@ -792,4 +895,22 @@ impl TextResources {
         (raster_rect.width <= 0.0 || raster_rect.height <= 0.0).hash(&mut state);
         TextGlyphRunCacheKey(state.finish())
     }
+}
+
+// The target pixels `text_draw` can reach: its glyphs' reach within its
+// clip. The glyphs draw only there, which the text's damage covers.
+fn text_glyph_scissor(
+    text_draw: &TextDraw,
+    raster_rect: Rect,
+    viewport: ViewportUniformParams,
+    root_scale: f32,
+) -> Option<TargetRect> {
+    let reach = text_draw.glyph_reach(raster_rect, text_draw.scale * root_scale);
+    let draw_rect = Rect {
+        x: reach.x / root_scale,
+        y: reach.y / root_scale,
+        width: reach.width / root_scale,
+        height: reach.height / root_scale,
+    };
+    scissor_rect_for_layer(draw_rect, text_draw.clip, root_scale, viewport)
 }

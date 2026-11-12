@@ -58,6 +58,12 @@ pub struct RecordChanges {
 }
 
 impl RecordChanges {
+    /// The store that holds the record.
+    #[inline]
+    pub fn store(self) -> StoreId {
+        self.store
+    }
+
     /// The record the changes are of, with the generation of its row.
     #[inline]
     pub fn record(self) -> RecordRef {
