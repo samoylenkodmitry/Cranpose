@@ -486,7 +486,6 @@ fn expand_content_masks(store: &mut SceneStore, record: RecordId) -> usize {
         shader.set_output_support(None);
         shader.set_output_padding(64.0);
         store.set_graphics_layer(record, layer);
-        store.note_property_change(record);
         expanded += 1;
     }
     let children: Vec<RecordId> = store.layer(record).children().map(LayerRef::id).collect();

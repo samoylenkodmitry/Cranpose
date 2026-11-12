@@ -79,7 +79,7 @@ impl SceneStore {
         let size = node_bounds.unwrap_or(local_bounds);
         self.write_size(record, size.width, size.height);
         self.set_placement(record, origin_in_parent, Some(transform_to_parent));
-        self.set_graphics_layer(record, graphics_layer);
+        self.write_graphics_layer(record, graphics_layer);
         self.edit_props(record, |props| {
             props.layer_bounds = node_bounds.map(|_| local_bounds);
             props.translated_content_offset = translated_content_offset;

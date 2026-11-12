@@ -50,7 +50,7 @@ fn write_layer(
     };
     store.set_placement(record, origin, Some(layer.transform_to_parent));
     if store.graphics_layer(record) != layer.graphics_layer.get() {
-        store.set_graphics_layer(record, layer.graphics_layer.get().cloned());
+        store.write_graphics_layer(record, layer.graphics_layer.get().cloned());
     }
     store.edit_props(record, |props| {
         props.layer_bounds = layer_bounds;

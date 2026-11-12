@@ -141,7 +141,7 @@ pub(super) fn translated_container(
     let (local_bounds, node_bounds) = layer_and_node_bounds(modifier_slices, layout_state.size());
     if local_bounds != layer.local_bounds() {
         let resized = shaped_graphics_layer(modifier_slices, local_bounds).map(Cow::into_owned);
-        store.set_graphics_layer(container, resized);
+        store.write_graphics_layer(container, resized);
     }
     set_bounds(store, container, local_bounds, node_bounds);
     Some(TranslatedContainer { node_id })

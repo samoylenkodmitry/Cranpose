@@ -1443,31 +1443,52 @@ const SIDE: Size = Size {
     height: 40.0,
 };
 
+// What a store write alone does to the picture.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Seen {
+    // Some pixel changes.
+    Changed,
+    // Every pixel stays.
+    Same,
+}
+
 // Draws `ClippedPair` into a kept frame, runs `write` alone in an update of
-// the scene's records, and asserts that the frame kept from the areas the
-// renderer reports equals a full redraw.
-fn a_store_write_alone_keeps_the_frame_whole(label: &str, write: impl FnOnce(&mut SceneStore)) {
+// the scene's records, and asserts that the write does to the picture what
+// `seen` says and that the frame kept from the areas the renderer reports
+// equals a full redraw.
+fn a_store_write_alone_keeps_the_frame_whole(
+    label: &str,
+    seen: Seen,
+    write: impl FnOnce(&mut SceneStore),
+) {
     let (mut shell, _) = shell(1.0, ClippedPair);
     shell.update();
     let mut picture = Picture::default();
     let mut areas = Vec::new();
     let mut kept = vec![0u8; (WIDTH * HEIGHT * 4) as usize];
     let mut full = vec![0u8; (WIDTH * HEIGHT * 4) as usize];
+    let mut before = vec![0u8; (WIDTH * HEIGHT * 4) as usize];
     let mut area_pixels = Vec::new();
     shell.primary().with_renderer(|renderer| {
-        let mut keep = |renderer: &mut PixelsRenderer| {
+        let mut keep = |renderer: &mut PixelsRenderer, kept: &mut [u8]| {
             renderer.update_picture(&mut picture, WIDTH, HEIGHT, 1.0, &mut areas);
             for area in &areas {
                 area_pixels.resize(area.width as usize * area.height as usize * 4, 0);
                 renderer.draw_picture_area(&picture, *area, &mut area_pixels);
-                apply(&mut kept, *area, &area_pixels);
+                apply(kept, *area, &area_pixels);
             }
         };
-        keep(renderer);
+        keep(renderer, &mut kept);
+        before.copy_from_slice(&kept);
         renderer.scene_mut().edit_store(write);
-        keep(renderer);
+        keep(renderer, &mut kept);
         renderer.draw_scaled(&mut full, WIDTH, HEIGHT, 1.0);
     });
+    assert_eq!(
+        first_difference(&before, &full).map_or(Seen::Same, |_| Seen::Changed),
+        seen,
+        "{label}: what the write does to the picture"
+    );
     assert_eq!(
         first_difference(&kept, &full),
         None,
@@ -1477,7 +1498,7 @@ fn a_store_write_alone_keeps_the_frame_whole(label: &str, write: impl FnOnce(&mu
 
 #[test]
 fn a_record_resized_alone_redraws() {
-    a_store_write_alone_keeps_the_frame_whole("set_size", |store| {
+    a_store_write_alone_keeps_the_frame_whole("set_size", Seen::Changed, |store| {
         let record = record_of_size(store, CLIP);
         store.set_size(record, 50.0, 40.0);
     });
@@ -1485,7 +1506,7 @@ fn a_record_resized_alone_redraws() {
 
 #[test]
 fn a_record_unclipped_alone_redraws() {
-    a_store_write_alone_keeps_the_frame_whole("set_flags", |store| {
+    a_store_write_alone_keeps_the_frame_whole("set_flags", Seen::Changed, |store| {
         let record = record_of_size(store, CLIP);
         let flags = store
             .layer(record)
@@ -1497,7 +1518,7 @@ fn a_record_unclipped_alone_redraws() {
 
 #[test]
 fn a_record_moved_alone_redraws() {
-    a_store_write_alone_keeps_the_frame_whole("set_placement", |store| {
+    a_store_write_alone_keeps_the_frame_whole("set_placement", Seen::Changed, |store| {
         let record = record_of_size(store, SIDE);
         let origin = store.layer(record).origin_in_parent();
         store.set_placement(record, Point::new(origin.x - 30.0, origin.y + 10.0), None);
@@ -1506,7 +1527,7 @@ fn a_record_moved_alone_redraws() {
 
 #[test]
 fn a_record_whose_content_shifts_alone_redraws() {
-    a_store_write_alone_keeps_the_frame_whole("set_content_offset", |store| {
+    a_store_write_alone_keeps_the_frame_whole("set_content_offset", Seen::Changed, |store| {
         let record = record_of_size(store, CLIP);
         store.set_content_offset(record, Point::new(-6.0, 8.0));
     });
@@ -1514,8 +1535,8 @@ fn a_record_whose_content_shifts_alone_redraws() {
 
 #[test]
 fn a_record_faded_alone_redraws() {
-    a_store_write_alone_keeps_the_frame_whole("set_graphics_layer", |store| {
-        let record = record_of_size(store, SIDE);
+    a_store_write_alone_keeps_the_frame_whole("set_graphics_layer", Seen::Changed, |store| {
+        let record = record_of_size(store, CLIP);
         store.set_graphics_layer(
             record,
             Some(GraphicsLayer {
@@ -1528,7 +1549,7 @@ fn a_record_faded_alone_redraws() {
 
 #[test]
 fn a_record_emptied_alone_redraws() {
-    a_store_write_alone_keeps_the_frame_whole("clear_items", |store| {
+    a_store_write_alone_keeps_the_frame_whole("clear_items", Seen::Changed, |store| {
         let record = record_of_size(store, SIDE);
         store.clear_items(record);
     });
@@ -1536,7 +1557,7 @@ fn a_record_emptied_alone_redraws() {
 
 #[test]
 fn a_record_given_no_items_alone_redraws() {
-    a_store_write_alone_keeps_the_frame_whole("set_items", |store| {
+    a_store_write_alone_keeps_the_frame_whole("set_items", Seen::Changed, |store| {
         let record = record_of_size(store, SIDE);
         store.set_items(record, &[]);
     });
@@ -1544,7 +1565,7 @@ fn a_record_given_no_items_alone_redraws() {
 
 #[test]
 fn a_record_of_another_kind_alone_redraws() {
-    a_store_write_alone_keeps_the_frame_whole("set_kind", |store| {
+    a_store_write_alone_keeps_the_frame_whole("set_kind", Seen::Same, |store| {
         let record = record_of_size(store, SIDE);
         let layer = store.layer(record);
         assert_eq!(layer.kind(), RecordKind::Leaf, "the plain box is a leaf");

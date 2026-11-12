@@ -85,9 +85,19 @@ impl SceneStore {
     }
 
     /// Sets the graphics layer of `id`; `None` reads as the default. A record
-    /// that keeps one keeps its slot.
-    #[inline]
+    /// that keeps one keeps its slot. A changed layer notes a property
+    /// change.
     pub fn set_graphics_layer(&mut self, id: RecordId, layer: Option<GraphicsLayer>) {
+        if self.graphics_layer(id) != layer.as_ref() {
+            self.write_graphics_layer(id, layer);
+            self.note_property_change(id);
+        }
+    }
+
+    // Writes the graphics layer of `id` for the scene builder, which notes
+    // the change itself.
+    #[inline]
+    pub(crate) fn write_graphics_layer(&mut self, id: RecordId, layer: Option<GraphicsLayer>) {
         // Most records keep no graphics layer.
         if layer.is_some() || self.warm[id.index()].graphics_layer.is_some() {
             self.replace_graphics_layer(id, layer);
