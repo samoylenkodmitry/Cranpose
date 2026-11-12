@@ -699,6 +699,10 @@ impl SceneStore {
     // Puts `recording` in place of the recording of the run `item`.
     pub(crate) fn swap_run_recording(&mut self, item: Item, recording: Rc<CommandRecording>) {
         let run = &mut self.runs[item.index()];
+        // A run handed the recording it draws lets go of nothing.
+        if Rc::ptr_eq(&run.recording, &recording) {
+            return;
+        }
         let command = run.command;
         let old = std::mem::replace(&mut run.recording, recording);
         self.keep_released(command, &old);
@@ -757,11 +761,13 @@ impl SceneStore {
     }
 
     // Writes the flags of `id` for the scene builder, which notes the
-    // change itself.
-    pub(crate) fn write_flags(&mut self, id: RecordId, flags: RecordFlags) {
-        if self.write_flag_row(id.index(), flags) {
+    // change itself; `false` when they stay.
+    pub(crate) fn write_flags(&mut self, id: RecordId, flags: RecordFlags) -> bool {
+        let changed = self.write_flag_row(id.index(), flags);
+        if changed {
             self.stale_with_parent(id.index());
         }
+        changed
     }
 
     /// The size of the node rect of `id`.
@@ -784,14 +790,18 @@ impl SceneStore {
         true
     }
 
-    /// Sets what `id` draws for and the layout node it draws for. A
-    /// [`RecordKind::Leaf`] holds no layer properties and no child layers.
+    /// Sets what `id` draws for and the layout node it draws for, and
+    /// returns whether either changed. A [`RecordKind::Leaf`] holds no layer
+    /// properties and no child layers.
     #[inline]
-    pub fn set_kind(&mut self, id: RecordId, kind: RecordKind, node: Option<NodeId>) {
+    pub fn set_kind(&mut self, id: RecordId, kind: RecordKind, node: Option<NodeId>) -> bool {
         let index = id.index();
-        if self.tree[index].kind != kind || self.warm[index].node != node.map(RecordNode::of) {
+        let changed =
+            self.tree[index].kind != kind || self.warm[index].node != node.map(RecordNode::of);
+        if changed {
             self.change_kind(id, kind, node);
         }
+        changed
     }
 
     #[inline(never)]

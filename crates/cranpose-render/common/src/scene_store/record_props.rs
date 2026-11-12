@@ -96,17 +96,20 @@ impl SceneStore {
     }
 
     // Writes the graphics layer of `id` for the scene builder, which notes
-    // the change itself.
+    // the change itself; `false` when it stays.
     #[inline]
-    pub(crate) fn write_graphics_layer(&mut self, id: RecordId, layer: Option<GraphicsLayer>) {
+    pub(crate) fn write_graphics_layer(
+        &mut self,
+        id: RecordId,
+        layer: Option<GraphicsLayer>,
+    ) -> bool {
         // Most records keep no graphics layer.
-        if layer.is_some() || self.warm[id.index()].graphics_layer.is_some() {
-            self.replace_graphics_layer(id, layer);
-        }
+        (layer.is_some() || self.warm[id.index()].graphics_layer.is_some())
+            && self.replace_graphics_layer(id, layer)
     }
 
     #[inline(never)]
-    fn replace_graphics_layer(&mut self, id: RecordId, layer: Option<GraphicsLayer>) {
+    fn replace_graphics_layer(&mut self, id: RecordId, layer: Option<GraphicsLayer>) -> bool {
         let index = id.index();
         let slot = self.warm[index].graphics_layer;
         let space =
@@ -117,6 +120,9 @@ impl SceneStore {
         match (slot, layer) {
             (Some(slot), Some(layer)) => {
                 let current = &self.graphics_layers[slot.index()];
+                if *current == layer {
+                    return false;
+                }
                 if super::facts::layer_inputs(current) != super::facts::layer_inputs(&layer) {
                     self.stale_with_parent(id.index());
                 }
@@ -136,8 +142,9 @@ impl SceneStore {
                 *flags = flags.with(RecordFlags::HAS_GRAPHICS_LAYER);
                 self.stale_with_parent(index);
             }
-            (None, None) => {}
+            (None, None) => return false,
         }
+        true
     }
 
     // Writes the layer bounds of `id` for the scene builder, which notes the

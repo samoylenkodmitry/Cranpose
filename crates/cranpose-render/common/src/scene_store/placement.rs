@@ -39,16 +39,19 @@ impl SceneStore {
         Point::new(x, y)
     }
 
-    /// Sets the offset of the content box of `id`.
+    /// Sets the offset of the content box of `id`, and returns whether it
+    /// changed.
     #[inline]
-    pub fn set_content_offset(&mut self, id: RecordId, offset: Point) {
+    pub fn set_content_offset(&mut self, id: RecordId, offset: Point) -> bool {
         let index = id.index();
         let offset = [offset.x, offset.y];
-        if !super::records::same_pair(self.warm[index].content_offset, offset) {
+        let changed = !super::records::same_pair(self.warm[index].content_offset, offset);
+        if changed {
             self.warm[index].content_offset = offset;
             self.stale(index);
             self.moved(index);
         }
+        changed
     }
 
     /// Where layout placed `id` in its parent's content, before the
@@ -134,13 +137,13 @@ impl SceneStore {
     /// `transform`, or by a translation there alone, past the parent's
     /// content offset, for `None`. A transform that only moves the record
     /// there takes no entry of its own. The parent's content offset is set
-    /// before.
+    /// before. Returns whether the placement changed.
     pub fn set_placement(
         &mut self,
         id: RecordId,
         origin_in_parent: Point,
         transform: Option<ProjectiveTransform>,
-    ) {
+    ) -> bool {
         let index = id.index();
         let placement = [origin_in_parent.x, origin_in_parent.y];
         let moved = !super::records::same_pair(self.geo[index].placement, placement);
@@ -163,7 +166,7 @@ impl SceneStore {
                 (Some(_), None) | (None, Some(_)) => false,
             };
         if unchanged {
-            return;
+            return false;
         }
         self.moved(index);
         if let Some(parent) = self.tree[index].parent {
@@ -181,5 +184,6 @@ impl SceneStore {
                 self.tree[index].transform = Some(entry);
             }
         }
+        true
     }
 }

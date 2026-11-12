@@ -18,7 +18,7 @@ use cranpose_ui::{
     MeasureLayoutOptions, Modifier, Size, Text, TextStyle, measure_layout_with_options,
     widgets::{Box, BoxSpec, Column, ColumnSpec},
 };
-use cranpose_ui_graphics::{CommandRecording, Rect};
+use cranpose_ui_graphics::{CommandRecording, DrawScope, Rect};
 use stats_alloc::{INSTRUMENTED_SYSTEM, Region, StatsAlloc};
 
 #[macro_use]
@@ -361,6 +361,25 @@ fn drawn_inside_a_clip(modifier: Modifier, width: Rc<Cell<f32>>) -> Modifier {
     })
 }
 
+// A node that draws around its content, behind it inside a clip every other
+// update: the behind half of the command turns from a run into a draw group
+// and back.
+fn drawn_around_content_in_a_clip_in_turn(modifier: Modifier, width: Rc<Cell<f32>>) -> Modifier {
+    modifier.draw_with_content(move |scope| {
+        let bar = Rect::from_size(Size::new(width.get(), 16.0));
+        let mut fill = |scope: &mut dyn DrawScope| {
+            scope.draw_round_rect_at(bar, Brush::solid(Color::RED), CornerRadii::uniform(4.0));
+        };
+        if width.get().rem_euclid(2.0) < 1.0 {
+            scope.clip_rect(bar, &mut fill);
+        } else {
+            fill(scope);
+        }
+        scope.draw_content();
+        scope.draw_round_rect_at(bar, Brush::solid(Color::BLUE), CornerRadii::uniform(4.0));
+    })
+}
+
 // A node with the draws of `draws`, drawn again each update while a reader
 // holds the recordings of the update before, as a picture does: each new
 // recording takes the storage of one the reader let go of, so a steady
@@ -422,6 +441,10 @@ fn scene_rebuilds_stay_within_their_allocation_budgets() {
     a_text_changing_each_frame_reuses_its_string_and_layout();
     redraws_reuse_their_recordings(drawn_around_content, "around content");
     redraws_reuse_their_recordings(drawn_inside_a_clip, "inside a clip");
+    redraws_reuse_their_recordings(
+        drawn_around_content_in_a_clip_in_turn,
+        "around content, in a clip in turn",
+    );
 }
 
 main_thread_test!(scene_rebuilds_stay_within_their_allocation_budgets);

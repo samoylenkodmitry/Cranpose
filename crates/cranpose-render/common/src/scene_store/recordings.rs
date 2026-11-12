@@ -61,12 +61,12 @@ impl RecorderSlot {
             .unwrap_or_default()
     }
 
-    // Keeps `recording`, once: the two runs of a with-content command let
-    // go of one recording, and a recording held twice reads as held by a
-    // reader for as long as the slot keeps it.
+    // Keeps `recording`, once: the runs of a command let go of one recording
+    // in any order, and a recording held twice reads as held by a reader for
+    // as long as the slot keeps it.
     fn hold(&mut self, update: u64, recording: &Rc<CommandRecording>) {
         self.update = update;
-        if (self.handles[0].as_ref()).is_some_and(|held| Rc::ptr_eq(held, recording)) {
+        if (self.handles.iter().flatten()).any(|held| Rc::ptr_eq(held, recording)) {
             return;
         }
         self.handles[2] = self.handles[1].take();

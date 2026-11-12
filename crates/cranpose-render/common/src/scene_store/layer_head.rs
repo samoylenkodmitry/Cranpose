@@ -1,10 +1,12 @@
 // The head of a layer record, as the scene builder works it out for a node,
 // a wrapper or a draw group, and its write into the store in one call.
 
+use std::rc::Rc;
+
 use cranpose_core::{NodeId, RecordId};
 use cranpose_ui::{GraphicsLayer, Point, Rect};
 
-use super::{RecordFlags, RecordKind, SceneStore};
+use super::{LayerProps, RecordFlags, RecordKind, SceneStore};
 use crate::graph::{
     CachePolicy, HitTestNode, IsolationReasons, PrimitivePhase, ProjectiveTransform,
 };
@@ -50,7 +52,8 @@ fn flag_if(on: bool, flag: RecordFlags) -> RecordFlags {
 
 #[expect(clippy::multiple_inherent_impl, reason = "one file per concern")]
 impl SceneStore {
-    // Writes `head` as the head of `record` and notes a property change.
+    // Writes `head` as the head of `record` and notes a property change when
+    // a part of the head changed.
     pub(crate) fn write_head(&mut self, record: RecordId, head: LayerHead) {
         let LayerHead {
             kind,
@@ -74,19 +77,24 @@ impl SceneStore {
             // A record that draws for another node starts a new run of changes.
             self.strip_props(record);
         }
-        self.set_kind(record, record_kind, Some(node));
-        self.set_content_offset(record, content_offset);
+        let mut changed = self.set_kind(record, record_kind, Some(node));
+        changed |= self.set_content_offset(record, content_offset);
         let size = node_bounds.unwrap_or(local_bounds);
-        self.write_size(record, size.width, size.height);
-        self.set_placement(record, origin_in_parent, Some(transform_to_parent));
-        self.write_graphics_layer(record, graphics_layer);
-        self.edit_props(record, |props| {
-            props.layer_bounds = node_bounds.map(|_| local_bounds);
-            props.translated_content_offset = translated_content_offset;
-            props.hit_test = hit_test;
-            props.isolation = isolation;
-            props.cache_policy = cache_policy;
-        });
+        changed |= self.write_size(record, size.width, size.height);
+        changed |= self.set_placement(record, origin_in_parent, Some(transform_to_parent));
+        changed |= self.write_graphics_layer(record, graphics_layer);
+        let layer_bounds = node_bounds.map(|_| local_bounds);
+        let props = (layer_bounds, translated_content_offset, &hit_test);
+        if !props_stay(self.props(record), props, (isolation, cache_policy)) {
+            self.edit_props(record, |props| {
+                props.layer_bounds = layer_bounds;
+                props.translated_content_offset = translated_content_offset;
+                props.hit_test = hit_test;
+                props.isolation = isolation;
+                props.cache_policy = cache_policy;
+            });
+            changed = true;
+        }
         let after_children = matches!(
             kind,
             HeadKind::Group {
@@ -99,7 +107,39 @@ impl SceneStore {
             | flag_if(translated_content_context, RecordFlags::TRANSLATED_CONTENT)
             | flag_if(after_children, RecordFlags::AFTER_CHILDREN)
             | flag_if(has_origin_sinks, RecordFlags::ORIGIN_SINKS);
-        self.write_flags(record, flags);
-        self.note_property_change(record);
+        changed |= self.write_flags(record, flags);
+        if changed {
+            self.note_property_change(record);
+        }
     }
+}
+
+// Whether `props`, or the defaults for `None`, already hold the head's
+// layer bounds, translated content offset, pointer handling, isolation and
+// cache policy. Pointer handling stays while it shares its slices.
+fn props_stay(
+    props: Option<&LayerProps>,
+    (layer_bounds, offset, hit_test): (Option<Rect>, Point, &Option<HitTestNode>),
+    (isolation, cache_policy): (IsolationReasons, CachePolicy),
+) -> bool {
+    let bits = |rect: Option<Rect>| {
+        rect.map(|rect| [rect.x, rect.y, rect.width, rect.height].map(f32::to_bits))
+    };
+    let Some(props) = props else {
+        return layer_bounds.is_none()
+            && super::records::same_pair([offset.x, offset.y], [0.0; 2])
+            && hit_test.is_none()
+            && isolation == IsolationReasons::default()
+            && cache_policy == CachePolicy::default();
+    };
+    let held = props.translated_content_offset;
+    bits(props.layer_bounds) == bits(layer_bounds)
+        && super::records::same_pair([held.x, held.y], [offset.x, offset.y])
+        && match (&props.hit_test, hit_test) {
+            (Some(held), Some(hit_test)) => Rc::ptr_eq(&held.handlers, &hit_test.handlers),
+            (None, None) => true,
+            (Some(_), None) | (None, Some(_)) => false,
+        }
+        && props.isolation == isolation
+        && props.cache_policy == cache_policy
 }

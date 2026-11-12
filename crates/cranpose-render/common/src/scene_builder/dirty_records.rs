@@ -33,13 +33,15 @@ pub(super) fn update_dirty_records(
     order.clear();
     order.extend(dirty.keys().filter_map(|&node| {
         let record = outer_record(store, node)?;
-        let parent = store.parent(record)?;
-        Some((depth(store, parent), parent, node))
+        Some((0, store.parent(record)?, node))
     }));
     // The update of a record may rewrite or drop the records beneath it, so
     // the records nearest the root go first. Siblings come together, and
     // share what the records above them pass down.
     if order.len() > 1 {
+        for (depth_of, parent, _) in order.iter_mut() {
+            *depth_of = depth(store, *parent);
+        }
         order.sort_unstable();
     }
     let mut changes = GraphChanges::default();
