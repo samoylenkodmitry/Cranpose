@@ -6,7 +6,7 @@ use cranpose_core::RecordId;
 use cranpose_ui::Rect;
 #[cfg(feature = "window-damage")]
 use cranpose_ui_graphics::{
-    DrawPrimitive, RecordLane, ShadowPrimitive, expand_rect, primitive_coverage_rect,
+    BlendMode, DrawPrimitive, RecordLane, ShadowPrimitive, expand_rect, primitive_coverage_rect,
 };
 
 #[cfg(feature = "window-damage")]
@@ -211,6 +211,19 @@ pub(super) fn extent(layer: LayerRef<'_>) -> Extent {
         .map_or(Reach::Empty, |backdrop| {
             Reach::Finite(expand_rect(layer.local_bounds(), backdrop.output_padding()))
         });
+    // A blend other than source-over, or an effect that does not keep
+    // transparency, writes the layer's whole surface whatever its content
+    // draws: a shader may paint a layer that holds nothing.
+    let paints_surface = graphics_layer.blend_mode != BlendMode::SrcOver
+        || graphics_layer
+            .render_effect
+            .as_ref()
+            .is_some_and(|effect| !effect.preserves_transparency());
+    let surface = if paints_surface {
+        Reach::Finite(expand_rect(layer.local_bounds(), effect))
+    } else {
+        Reach::Empty
+    };
     let space = graphics_layer.space.is_some();
     let reach = if space {
         Reach::Unknown
@@ -218,6 +231,7 @@ pub(super) fn extent(layer: LayerRef<'_>) -> Extent {
         layer
             .reach()
             .mapped(|rect| expand_rect(rect, effect))
+            .union(surface)
             .union(backdrop)
             .mapped(|rect| to_parent.bounds_for_rect(rect))
     };

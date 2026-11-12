@@ -28,8 +28,9 @@ use cranpose_ui::{
     text::{SpanStyle, TextUnit},
 };
 use cranpose_ui_graphics::{
-    Brush, CornerRadii, Dp, DrawPlacement, DrawPrimitive, DrawScope, DrawStyle, ImageBitmap, Path,
-    Point, Rect, RoundedCornerShape, Stroke,
+    BlendMode, Brush, CornerRadii, Dp, DrawPlacement, DrawPrimitive, DrawScope, DrawStyle,
+    ImageBitmap, Path, Point, RUNTIME_SHADER_PRELUDE_WGSL, Rect, RoundedCornerShape, RuntimeShader,
+    Stroke,
 };
 
 use crate::support::{self, rect_modifier};
@@ -99,6 +100,13 @@ enum Scene {
     // A box that clips a child wider than it and shrinks a step: the box's
     // bounds change and its draws and its child do not.
     ShrunkParent,
+    // A layer with nothing to draw, painted whole by a runtime shader whose
+    // colour changes a step, as a control's stage is: the shader writes its
+    // rect over the layer's empty content.
+    PaintedLayer,
+    // A layer with nothing to draw that replaces what lies beneath it,
+    // showing every other step: its blend writes its whole surface.
+    ReplacingLayer,
 }
 
 /// A caret near the bottom, far from the spinner.
@@ -303,6 +311,19 @@ fn shadowed(step: MutableState<u32>) -> Modifier {
         .rounded_corners(6.0)
 }
 
+// A shader that paints its whole rect, red by the step: it writes over
+// transparent content.
+fn painted(step: u32) -> RenderEffect {
+    let mut shader = RuntimeShader::new(&format!(
+        "{RUNTIME_SHADER_PRELUDE_WGSL}
+         @fragment fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {{
+             return vec4<f32>(u[0].x, input.uv.y, 0.4, 1.0);
+         }}"
+    ));
+    shader.set_float(0, (step % 4) as f32 * 0.25);
+    RenderEffect::runtime_shader(shader)
+}
+
 fn gradient(scope: &mut dyn DrawScope, step: u32) {
     scope.draw_round_rect(
         Brush::linear_gradient(vec![shade(step), Color(0.1, 0.2, 0.6, 1.0)]),
@@ -348,6 +369,7 @@ fn changing_box(scene: Scene, step: MutableState<u32>) -> Option<Modifier> {
         Scene::BlurredContent => spot().blur(Dp(3.0)),
         Scene::Shadow => shadowed(step),
         Scene::Appearing if step.get() % 2 == 1 => spot().background(Color(0.9, 0.2, 0.2, 1.0)),
+        Scene::PaintedLayer | Scene::ReplacingLayer => return empty_layer(scene, step),
         Scene::Spinner | Scene::BareSpinner => arc_drawn_again(SPINNER, step, 12.0),
         Scene::TurnedSpinner => arc_turned(SPINNER, step, 12.0),
         Scene::Label
@@ -442,6 +464,23 @@ fn Changing(scene: Scene, step: MutableState<u32>) {
                 });
             }
         }
+    }
+}
+
+// The box of a layer with nothing to draw: one a shader paints, its colour
+// read in the layer's block as a control's stage reads its animation, and
+// one that replaces what lies beneath it every other step.
+fn empty_layer(scene: Scene, step: MutableState<u32>) -> Option<Modifier> {
+    match scene {
+        Scene::PaintedLayer => Some(spot().graphics_layer(move || GraphicsLayer {
+            render_effect: Some(painted(step.get())),
+            ..Default::default()
+        })),
+        _ if step.get() % 2 == 1 => Some(spot().graphics_layer(|| GraphicsLayer {
+            blend_mode: BlendMode::Src,
+            ..Default::default()
+        })),
+        _ => None,
     }
 }
 
@@ -1028,6 +1067,16 @@ fn a_surface_turning_in_a_3d_scene() {
 #[test]
 fn a_layer_turning() {
     assert_damage_holds_the_changes(Scene::TurnedLayer);
+}
+
+#[test]
+fn a_layer_painted_by_a_shader_over_no_content() {
+    assert_damage_holds_the_changes(Scene::PaintedLayer);
+}
+
+#[test]
+fn a_layer_replacing_what_lies_beneath_appearing_and_going() {
+    assert_damage_holds_the_changes(Scene::ReplacingLayer);
 }
 
 #[test]
