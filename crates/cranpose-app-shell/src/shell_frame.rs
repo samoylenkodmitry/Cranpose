@@ -11,6 +11,7 @@ use frame_telemetry::{
     log_frame_stage_telemetry, log_render_phase_dirty_diagnostics,
     render_phase_dirty_diagnostics_enabled,
 };
+pub(crate) use trim::RestTrim;
 
 // A frame runs its phases in order: composition, layout, render. Each phase
 // takes the token of the phase before it, and only that phase makes its

@@ -243,6 +243,7 @@ where
     pub(crate) pending_dirty_nodes: Vec<NodeId>,
     pub(crate) pending_layer_property_nodes: Vec<NodeId>,
     pub(crate) geometry_scene_nodes: cranpose_ui::GeometrySceneNodes,
+    pub(crate) rest: shell_frame::RestTrim,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -596,6 +597,7 @@ where
             pending_dirty_nodes: Vec::new(),
             pending_layer_property_nodes: Vec::new(),
             geometry_scene_nodes: cranpose_ui::GeometrySceneNodes::default(),
+            rest: shell_frame::RestTrim::default(),
         };
         shell.process_frame();
         shell
@@ -742,11 +744,8 @@ where
             .ok()
     }
 
-    /// The `drag_and_drop_target` under `point` and where the point falls in
-    /// that target's surface. A point on the screen is looked up in every
-    /// surface whose window position the platform told, later windows
-    /// first and the primary last; a point without one only in `source`,
-    /// the surface holding the press.
+    // The `drag_and_drop_target` under `point` and where it falls in that target's surface: in
+    // surfaces with a window position, later ones first and the primary last; else in `source`.
     pub(crate) fn drag_and_drop_target_at(
         &self,
         point: cranpose_ui::DragAndDropPoint,
@@ -1144,7 +1143,8 @@ where
     }
 
     fn compute_frame_schedule(&self) -> FrameSchedule {
-        self.surfaces[0].compute_frame_schedule(&self.app, self.any_surface_dirty())
+        let schedule = self.surfaces[0].compute_frame_schedule(&self.app, self.any_surface_dirty());
+        self.rest.schedule(schedule)
     }
 
     /// Computes the frame schedule of the primary surface, stores it in the surface's scheduler and
