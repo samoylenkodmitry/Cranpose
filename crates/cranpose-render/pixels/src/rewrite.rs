@@ -1,18 +1,21 @@
-//! A changed subtree pushed again over its old items, records and
-//! passed-down entries in the scene that holds them. While the new items
-//! match the old ones in kind and draw order, each takes the old item's
-//! place, and the pair adds the area where the two draw differently. From
-//! the first one that does not match, the subtree pushes into a spill
-//! scene, whose items take the place of the old ones left when the subtree
-//! ends, and what follows moves. A frame mostly pushes a changed subtree as
-//! it pushed it before, so the spill seldom holds anything.
+//! The changed subtrees of an update, pushed again in one session over their
+//! old items, records and passed-down entries in the scene that holds them.
+//! While the new items match the old ones in kind and draw order, each takes
+//! the old item's place, and the pair adds the area where the two draw
+//! differently. From the first one that does not match, the subtree pushes
+//! into a spill scene, whose items take the place of the old ones left when
+//! the subtree ends, and what follows moves. A frame mostly pushes a changed
+//! subtree as it pushed it before, so the spill seldom holds anything.
+
+use std::ops::Range;
 
 use crate::{
-    damage::{ItemReach, add_changed_pair, add_changed_runs},
+    damage::{self, ItemReach, add_changed_pair, add_changed_runs},
     draw::{ClipBounds, RenderItem},
     pipeline::UpdatedReach,
     scene::{ItemCounts, PassedDown, RasterScene, SubtreeItems},
     scene_item::SceneItem,
+    shift::Shift,
 };
 
 // Where in a scene's lists a subtree's next item, record and passed-down
@@ -24,42 +27,109 @@ struct Places {
     passed_down: usize,
 }
 
+// Where the passed-down entries of the records before a place in the scene
+// end. The subtrees of an update come in the order of their records, so each
+// scan goes on from where the one before it stopped.
+#[derive(Default)]
+struct EntriesBefore {
+    // The records before this place are scanned.
+    records: usize,
+    // One past the largest entry those records hold, zero for none.
+    end: usize,
+}
+
+impl EntriesBefore {
+    fn of(&mut self, subtrees: &[SubtreeItems], record: usize) -> usize {
+        if record < self.records {
+            *self = Self::default();
+        }
+        for entry in subtrees[self.records..record]
+            .iter()
+            .filter_map(|before| before.passed_down)
+        {
+            self.end = self.end.max(entry + 1);
+        }
+        self.records = record;
+        self.end
+    }
+}
+
+// Where the old item at `at` of the draw order reached, as `reach` holds it
+// when `held` says so.
+fn reach_at(reach: &mut [Option<ClipBounds>], held: UpdatedReach, at: usize) -> ItemReach<'_> {
+    match reach.get_mut(at) {
+        Some(slot) if held == UpdatedReach::Held => ItemReach::Replaced(slot),
+        _ => ItemReach::Unknown,
+    }
+}
+
 #[derive(Default)]
 pub(crate) struct Rewrite {
+    // The subtree being pushed: where its next item, record and entry go.
     next: Places,
     // Where the old subtree's items, records and entries end.
     stop: Places,
     // Where the subtree's pushes went on in `spill` from, once one did not
     // match the old item in its place.
     spilled_at: Option<Places>,
+    // Empty between two subtrees: the splice that ends a subtree drains it.
     spill: RasterScene,
     // Whether a record the subtree placed is another than the old one in
     // its place, or lies in the spill: the scene's routes to the subtree's
     // records no longer hold.
     rerouted: bool,
-    // The part of the frame whose changed pixels `areas` takes.
+    // The fields from here on belong to the update, from `begin_update` to
+    // `end_update`. The part of the frame whose changed pixels `areas` takes.
     window: ClipBounds,
     // Whether `reach` holds where each item of the scene reaches.
     held: UpdatedReach,
     reach: Vec<Option<ClipBounds>>,
     areas: Vec<ClipBounds>,
+    // Whether a splice changed how many records or entries the scene holds:
+    // the places found for the subtrees after it no longer hold.
+    shifted: bool,
+    entries: EntriesBefore,
 }
 
 impl Rewrite {
-    // Starts the rewrite of the subtree whose record in `scene` is
-    // `record`, whose changed pixels in `window` it will add to its areas,
-    // taking `reach`, which holds where each item reaches when `held` says
-    // so.
-    // `false`, with `reach` left, when the subtree's passed-down entries do
-    // not lie in one run.
-    pub(crate) fn start(
+    // Starts the update's session, whose changed pixels in `window` it will
+    // add to its areas, taking `reach`, which holds where each item reaches
+    // when `held` says so.
+    pub(crate) fn begin_update(
         &mut self,
-        scene: &RasterScene,
-        record: usize,
         window: ClipBounds,
         reach: &mut Vec<Option<ClipBounds>>,
         held: UpdatedReach,
-    ) -> bool {
+    ) {
+        self.window = window;
+        (self.reach, self.held) = (std::mem::take(reach), held);
+        self.shifted = false;
+        self.entries = EntriesBefore::default();
+    }
+
+    // Ends the update's session: hands back the reach list it took, adds the
+    // areas it changed, in the order it changed them, to `areas`, and says
+    // whether the reach list still holds where each item of the scene
+    // reaches.
+    pub(crate) fn end_update(
+        &mut self,
+        reach: &mut Vec<Option<ClipBounds>>,
+        areas: &mut Vec<ClipBounds>,
+    ) -> UpdatedReach {
+        *reach = std::mem::take(&mut self.reach);
+        areas.append(&mut self.areas);
+        self.held
+    }
+
+    // Whether the places found for the subtrees of the update before a
+    // splice no longer hold.
+    pub(crate) fn shifted(&self) -> bool {
+        self.shifted
+    }
+
+    // Starts the rewrite of the subtree whose record in `scene` is `record`.
+    // `false` when the subtree's passed-down entries do not lie in one run.
+    pub(crate) fn start(&mut self, scene: &RasterScene, record: usize) -> bool {
         let Some((extent, first)) = scene.subtree_span(record) else {
             return false;
         };
@@ -67,11 +137,7 @@ impl Rewrite {
         // A subtree with no entries of its own takes its new ones after the
         // entries of the records before it, which the walk pushed first.
         let first = if extent.passed_down == 0 {
-            scene.subtrees[..record]
-                .iter()
-                .filter_map(|before| before.passed_down)
-                .max()
-                .map_or(0, |last| last + 1)
+            self.entries.of(&scene.subtrees, record)
         } else {
             first
         };
@@ -86,11 +152,23 @@ impl Rewrite {
             passed_down: first + extent.passed_down,
         };
         self.spilled_at = None;
-        self.spill.clear();
         self.rerouted = false;
-        self.window = window;
-        (self.reach, self.held) = (std::mem::take(reach), held);
         true
+    }
+
+    // Moves the items `items` of `scene`'s draw order by `shift`, adding the
+    // areas where they draw differently.
+    pub(crate) fn move_items(
+        &mut self,
+        scene: &mut RasterScene,
+        items: Range<usize>,
+        shift: Shift,
+    ) {
+        for at in items {
+            let item = scene.order[at];
+            let reach = reach_at(&mut self.reach, self.held, at);
+            damage::move_item(scene, item, shift, reach, self.window, &mut self.areas);
+        }
     }
 
     // How many items of each kind the scene would hold up to where the
@@ -121,10 +199,7 @@ impl Rewrite {
             let (list, order) = T::lists(scene);
             if at < self.stop.items.order && T::index_of(order[at]) == Some(slot) {
                 let old = std::mem::replace(&mut list[slot], item);
-                let reach = match self.reach.get_mut(at) {
-                    Some(held) if self.held == UpdatedReach::Held => ItemReach::Replaced(held),
-                    _ => ItemReach::Unknown,
-                };
+                let reach = reach_at(&mut self.reach, self.held, at);
                 add_changed_pair(
                     old.as_ref(),
                     list[slot].as_ref(),
@@ -284,6 +359,7 @@ impl Rewrite {
         // each later record where its route leads.
         scene.kept.clear();
         scene.routes_stale |= records.0 != records.1;
+        self.shifted |= records.0 != records.1 || entries.0 != entries.1;
         self.held = UpdatedReach::Lost;
         self.spill.clear();
     }
@@ -292,14 +368,6 @@ impl Rewrite {
     // need to be noted again.
     pub(crate) fn rerouted(&self) -> bool {
         self.rerouted
-    }
-
-    // Hands back the reach list the rewrite took, whether it still holds
-    // where each item of the scene reaches, and the areas it changed.
-    pub(crate) fn results(
-        &mut self,
-    ) -> (Vec<Option<ClipBounds>>, UpdatedReach, &mut Vec<ClipBounds>) {
-        (std::mem::take(&mut self.reach), self.held, &mut self.areas)
     }
 
     // Lets the spill's storage go.
