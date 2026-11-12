@@ -68,8 +68,8 @@ impl<T> UpdateLog<T> {
             .unwrap_or(self.items.len())
     }
 
-    // Forgets the oldest `gone` updates and gives back the room the log
-    // grew past what it keeps.
+    // Forgets the oldest `gone` updates. The items keep their room: the
+    // updates after fill it again, and the trim at rest gives it back.
     fn forget(&mut self, gone: usize) {
         let cut = if gone < self.updates.len() {
             self.start(gone)
@@ -77,7 +77,6 @@ impl<T> UpdateLog<T> {
             self.items.len()
         };
         self.items.drain(..cut);
-        self.items.trim_growth_slack();
         self.updates.drain(..gone);
         for (_, start) in &mut self.updates {
             if let Some(start) = start {

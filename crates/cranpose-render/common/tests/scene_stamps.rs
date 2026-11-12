@@ -101,6 +101,25 @@ fn an_update_that_stamps_more_records_than_the_journal_keeps_stamps_none() {
 }
 
 #[test]
+fn a_store_changed_in_every_update_keeps_its_heap_once_warm() {
+    let (mut store, _, children) = store_with_children(6);
+    let heap: Vec<usize> = (0..200)
+        .map(|_| {
+            store.begin_update();
+            for &child in &children {
+                store.note_content_change(child);
+            }
+            store.finish_update();
+            store.heap_bytes()
+        })
+        .collect();
+    assert!(
+        heap[64..].iter().all(|&bytes| bytes == heap[64]),
+        "the store's heap after each update: {heap:?}"
+    );
+}
+
+#[test]
 fn a_cleared_store_loses_its_stamps() {
     let (mut store, _, children) = store_with_children(2);
     let before = store.version();
