@@ -106,3 +106,7 @@ harness = false
 [[bench]]
 name = "dirty_bubble"
 harness = false
+
+[[bench]]
+name = "keyed_subtree_insert"
+harness = false
