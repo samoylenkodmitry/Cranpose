@@ -27,6 +27,7 @@ use crate::{
 };
 
 mod debug_stats;
+mod registered_runtime;
 mod scope_runtime;
 mod state_arena;
 mod state_owners;
@@ -34,6 +35,7 @@ mod task_slots;
 mod ui_task;
 
 pub use debug_stats::RuntimeDebugStats;
+pub(crate) use registered_runtime::{runtime_handle_by_id, with_state_arena_by_id};
 pub(crate) use scope_runtime::ScopeRuntime;
 pub(crate) use state_arena::{DerivedRefresh, StateArena};
 pub use state_arena::{StateArenaDebugStats, StateId};
@@ -1482,28 +1484,6 @@ pub fn current_runtime_handle() -> Option<RuntimeHandle> {
     .flatten()
 }
 
-pub(crate) fn runtime_handle_by_id(id: RuntimeId) -> Option<RuntimeHandle> {
-    with_registered_runtime(id, |handle| Some(handle.clone()))
-}
-
-/// Runs `f` on this thread's handle of the runtime `id`: the active
-/// runtime's, which most lookups name, without hashing the id, or else the
-/// registered one.
-fn with_registered_runtime<R>(
-    id: RuntimeId,
-    f: impl FnOnce(&RuntimeHandle) -> Option<R>,
-) -> Option<R> {
-    thread_state::try_runtimes(|state| {
-        if let Some(handle) = state.active_runtimes.borrow().last()
-            && handle.id == id
-        {
-            return f(handle);
-        }
-        state.registered_runtimes.borrow().get(&id).and_then(f)
-    })
-    .flatten()
-}
-
 #[cfg(target_os = "android")]
 pub(crate) fn share_rescue<'a>(
     handles: impl Iterator<Item = &'a RuntimeHandle>,
@@ -1519,14 +1499,6 @@ pub(crate) fn share_rescue<'a>(
         *inner.rescued.borrow_mut() = Some(Rc::clone(&shared));
     }
     Some(shared)
-}
-
-pub(crate) fn with_state_arena_by_id<R>(
-    id: RuntimeId,
-    f: impl FnOnce(&StateArena) -> R,
-) -> Option<R> {
-    let inner = with_registered_runtime(id, |handle| handle.inner.upgrade())?;
-    Some(f(&inner.state_arena))
 }
 
 pub(crate) fn live_recompose_scope_count() -> usize {
