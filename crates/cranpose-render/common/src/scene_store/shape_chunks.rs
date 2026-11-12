@@ -7,8 +7,6 @@
 // shapes an item took last go with the item at once. A chunk whose next
 // shape would grow it, or that is full, first drops the shapes no item
 // draws once they are a quarter of it and at least `MIN_DEAD_SHAPES`.
-// An item removed in an update keeps its shapes until the update ends: a
-// background drawn again with the same shapes takes them back.
 
 use std::{num::NonZeroU32, ops::Range, sync::Arc};
 
