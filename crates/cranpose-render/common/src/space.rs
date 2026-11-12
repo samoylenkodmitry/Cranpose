@@ -547,7 +547,7 @@ pub fn scene_of(layer: LayerRef<'_>) -> Option<&Scene3d> {
 pub fn for_each_window_eye(
     layer: LayerRef<'_>,
     to_window: ProjectiveTransform,
-    visit: &mut impl FnMut(&SpaceTree<'_>, &EyeView<'_>, ProjectiveTransform),
+    visit: &mut dyn FnMut(&SpaceTree<'_>, &EyeView<'_>, ProjectiveTransform),
 ) {
     for_each_window_scene(layer, to_window, &mut |scene_layer, to_window| {
         let Some(tree) = SpaceTree::of(scene_layer) else {
@@ -589,7 +589,7 @@ impl EyeView<'_> {
 pub fn for_each_window_scene<'a>(
     layer: LayerRef<'a>,
     to_window: ProjectiveTransform,
-    visit: &mut impl FnMut(LayerRef<'a>, ProjectiveTransform),
+    visit: &mut dyn FnMut(LayerRef<'a>, ProjectiveTransform),
 ) {
     if scene_of(layer).is_some() {
         visit(layer, to_window);
