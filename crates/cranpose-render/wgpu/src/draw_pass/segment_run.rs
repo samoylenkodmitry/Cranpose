@@ -3,6 +3,7 @@ use crate::render::{DrawSpace, TargetRect, ViewportUniformParams};
 
 /// One segment's viewport, turn included, and what its shapes and glyphs
 /// bind while its items are batched.
+#[derive(Clone)]
 pub(super) struct SegmentRun<'s, 'a> {
     pub(super) segment: &'a PassSegment<'s>,
     pub(super) viewport: ViewportUniformParams,

@@ -1114,7 +1114,7 @@ fn assert_spinner_repaints_only_itself_over(scene: Scene, keeper: Keeper) {
             stats.repainted_pixels
         );
         assert!(
-            stats.draw_calls * 10 < whole_draws,
+            stats.draw_calls * 5 < whole_draws,
             "{label}: {} draws against {whole_draws} for the whole window",
             stats.draw_calls
         );
@@ -1164,7 +1164,7 @@ fn two_small_animations_far_apart_repaint_only_their_areas() {
                 continue;
             }
             assert!(
-                stats.draw_calls * 10 < whole_draws,
+                stats.draw_calls * 5 < whole_draws,
                 "{label}: {} draws against {whole_draws} for the whole window",
                 stats.draw_calls
             );

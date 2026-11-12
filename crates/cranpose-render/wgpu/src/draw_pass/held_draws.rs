@@ -1,5 +1,5 @@
 use crate::{
-    render::{TargetRect, ViewportUniformParams},
+    render::{GlyphDrawCmd, TargetRect, ViewportUniformParams},
     scissor::target_rects_overlap,
 };
 
@@ -37,13 +37,103 @@ pub(super) fn held_cells(rect: TargetRect) -> (std::ops::Range<usize>, u64) {
     (first_row..last_row + 1, mask)
 }
 
+// The target pixels one lane of held draws touches.
+#[derive(Default)]
+struct LaneCells {
+    union: Option<TargetRect>,
+    // Per band of cell rows, the cell columns a held draw touches. A shape
+    // touching none of them overlaps no held draw.
+    cells: Vec<u64>,
+    // Per band of cell rows, the target pixels of each held draw touching
+    // it: a shape that touches a held cell is checked only against the
+    // draws of its own bands. A list's tickers held a few hundred glyph
+    // draws, which every background after them was checked against.
+    rows: Vec<Vec<TargetRect>>,
+}
+
+impl LaneCells {
+    fn mark(&mut self, rect: TargetRect) {
+        self.union = Some(
+            self.union
+                .map_or(rect, |union| target_rect_union(union, rect)),
+        );
+        let (rows, mask) = held_cells(rect);
+        if self.cells.len() < rows.end {
+            self.cells.resize(rows.end, 0);
+        }
+        if self.rows.len() < rows.end {
+            self.rows.resize_with(rows.end, Vec::new);
+        }
+        for (cells, held) in self.cells[rows.clone()]
+            .iter_mut()
+            .zip(&mut self.rows[rows])
+        {
+            *cells |= mask;
+            held.push(rect);
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.union.is_none()
+    }
+
+    // Whether a draw touching `rect` would cover a held draw: one that
+    // overlaps it shares a band of cell rows with it.
+    fn overlaps(&self, rect: TargetRect) -> bool {
+        if !self
+            .union
+            .is_some_and(|union| target_rects_overlap(union, rect))
+        {
+            return false;
+        }
+        let (rows, mask) = held_cells(rect);
+        let end = rows.end.min(self.cells.len());
+        let start = rows.start.min(end);
+        self.cells[start..end]
+            .iter()
+            .zip(&self.rows[start..end])
+            .any(|(cells, held)| {
+                cells & mask != 0 && held.iter().any(|held| target_rects_overlap(*held, rect))
+            })
+    }
+
+    fn clear(&mut self) {
+        for held in &mut self.rows[..self.cells.len()] {
+            held.clear();
+        }
+        self.cells.clear();
+        self.union = None;
+    }
+}
+
+// Where a shape goes among the held draws.
+pub(super) enum ShapeLane {
+    // Into the open chunk: it overlaps no held draw.
+    Chunk,
+    // Held behind the glyphs and images it overlaps, within these pixels.
+    Behind(TargetRect),
+    // After everything held is drawn.
+    Flush,
+}
+
+// Where the glyph draws of a text go among the held draws.
+#[derive(PartialEq)]
+pub(super) enum GlyphLane {
+    Front,
+    Behind,
+    Flush,
+}
+
 /// Glyph and src-over image draws held back so the shapes after them keep
 /// filling one arena chunk: the text and avatar of a card no longer split
-/// the backgrounds around them into draws of their own. A shape that
-/// overlaps a held draw, or any draw of another kind, draws them first, so
-/// nothing is reordered past a pixel it shares. The held glyphs draw before
-/// the held images, so an image may lie over held glyphs and a text that
-/// lies over a held image draws what is held first.
+/// the backgrounds around them into draws of their own. The held draws
+/// lie in lanes, drawn in this order after the chunk's shapes so far: glyphs
+/// and images in front, then the shapes behind them, then glyphs behind
+/// those. An item joins the first lane of its kind that no later lane holds
+/// a draw it overlaps; one that fits none draws everything held first, so
+/// nothing is reordered past a pixel it shares. The glyphs in front draw
+/// before the images, so an image may lie over held glyphs and a text that
+/// lies over a held image goes behind the shapes.
 #[derive(Default)]
 pub(crate) struct HeldDraws {
     cmds: Option<std::ops::Range<usize>>,
@@ -53,15 +143,9 @@ pub(crate) struct HeldDraws {
     held: usize,
     /// The target pixels the held images touch.
     image_bounds: Vec<TargetRect>,
-    union: Option<TargetRect>,
-    /// Per band of cell rows, the cell columns a held draw touches. A shape
-    /// touching none of them overlaps no held draw.
-    cells: Vec<u64>,
-    /// Per band of cell rows, the target pixels of each held draw touching
-    /// it: a shape that touches a held cell is checked only against the
-    /// draws of its own bands. A list's tickers held a few hundred glyph
-    /// draws, which every background after them was checked against.
-    rows: Vec<Vec<TargetRect>>,
+    front: LaneCells,
+    shapes: LaneCells,
+    glyphs: LaneCells,
 }
 
 impl HeldDraws {
@@ -76,7 +160,8 @@ impl HeldDraws {
             None => cmds,
         });
         for rect in bounds {
-            self.mark(rect);
+            self.front.mark(rect);
+            self.held += 1;
         }
     }
 
@@ -94,54 +179,69 @@ impl HeldDraws {
         };
         self.images = Some((cmds, viewport));
         self.image_bounds.push(bounds);
-        self.mark(bounds);
+        self.front.mark(bounds);
+        self.held += 1;
     }
 
-    fn mark(&mut self, rect: TargetRect) {
-        self.union = Some(
-            self.union
-                .map_or(rect, |union| target_rect_union(union, rect)),
-        );
+    // Holds a run of shapes that touches `reach` behind the glyphs and images.
+    pub(super) fn hold_shapes(&mut self, reach: TargetRect) {
+        self.shapes.mark(reach);
         self.held += 1;
-        let (rows, mask) = held_cells(rect);
-        if self.cells.len() < rows.end {
-            self.cells.resize(rows.end, 0);
-        }
-        if self.rows.len() < rows.end {
-            self.rows.resize_with(rows.end, Vec::new);
-        }
-        for (cells, held) in self.cells[rows.clone()]
-            .iter_mut()
-            .zip(&mut self.rows[rows])
-        {
-            *cells |= mask;
-            held.push(rect);
+    }
+
+    // Holds glyph draws `cmds` behind the held shapes.
+    pub(super) fn hold_behind(&mut self, cmds: &[GlyphDrawCmd]) {
+        for cmd in cmds {
+            self.glyphs.mark(cmd.bounds());
+            self.held += 1;
         }
     }
 
     /// Whether nothing is held.
     pub(super) fn is_empty(&self) -> bool {
-        self.union.is_none()
+        self.front.is_empty() && self.shapes.is_empty() && self.glyphs.is_empty()
     }
 
-    /// Whether a draw touching `rect` would cover a held draw: one that
-    /// overlaps it shares a band of cell rows with it.
+    /// Whether a draw touching `rect` would cover a held draw.
     pub(super) fn overlaps(&self, rect: TargetRect) -> bool {
-        if !self
-            .union
-            .is_some_and(|union| target_rects_overlap(union, rect))
-        {
-            return false;
+        self.front.overlaps(rect) || self.shapes.overlaps(rect) || self.glyphs.overlaps(rect)
+    }
+
+    // Where a run of shapes that can reach `reach` goes. It goes behind the
+    // held draws it overlaps unless it overlaps held glyphs that draw after
+    // its lane.
+    pub(super) fn place_shapes(&self, reach: Option<TargetRect>) -> ShapeLane {
+        let Some(reach) = reach.filter(|reach| self.overlaps(*reach)) else {
+            return ShapeLane::Chunk;
+        };
+        if self.full() || self.glyphs.overlaps(reach) {
+            ShapeLane::Flush
+        } else {
+            ShapeLane::Behind(reach)
         }
-        let (rows, mask) = held_cells(rect);
-        let end = rows.end.min(self.cells.len());
-        let start = rows.start.min(end);
-        self.cells[start..end]
-            .iter()
-            .zip(&self.rows[start..end])
-            .any(|(cells, held)| {
-                cells & mask != 0 && held.iter().any(|held| target_rects_overlap(*held, rect))
-            })
+    }
+
+    // Where the glyph draws `cmds` of a text go: behind the shapes when they
+    // overlap held images or shapes, or glyphs behind those, and the text
+    // can wait there; else after everything held is drawn.
+    pub(super) fn place_glyphs(&self, cmds: &[GlyphDrawCmd]) -> GlyphLane {
+        if self.full() {
+            return GlyphLane::Flush;
+        }
+        let behind = cmds.iter().any(|cmd| {
+            let rect = cmd.bounds();
+            self.covers_image(rect) || self.shapes.overlaps(rect) || self.glyphs.overlaps(rect)
+        });
+        match (behind, cmds.iter().all(GlyphDrawCmd::takes_shared_plain)) {
+            (false, _) => GlyphLane::Front,
+            (true, true) => GlyphLane::Behind,
+            (true, false) => GlyphLane::Flush,
+        }
+    }
+
+    // Whether a draw touching `rect` overlaps one held behind the images.
+    pub(super) fn overlaps_behind(&self, rect: TargetRect) -> bool {
+        self.shapes.overlaps(rect) || self.glyphs.overlaps(rect)
     }
 
     /// Whether glyphs touching `rect` would cover a held image.
@@ -160,17 +260,22 @@ impl HeldDraws {
         self.held >= MAX_HELD_DRAWS
     }
 
+    // Whether runs or glyphs are held behind the glyphs and images.
+    pub(super) fn has_behind(&self) -> bool {
+        !self.shapes.is_empty() || !self.glyphs.is_empty()
+    }
+
     pub(super) fn take(&mut self) -> HeldCmds {
+        let behind = self.has_behind();
         self.held = 0;
         self.image_bounds.clear();
-        for held in &mut self.rows[..self.cells.len()] {
-            held.clear();
-        }
-        self.cells.clear();
-        self.union = None;
+        self.front.clear();
+        self.shapes.clear();
+        self.glyphs.clear();
         HeldCmds {
             glyphs: self.cmds.take(),
             images: self.images.take(),
+            behind,
         }
     }
 }
@@ -179,4 +284,6 @@ impl HeldDraws {
 pub(super) struct HeldCmds {
     pub(super) glyphs: Option<std::ops::Range<usize>>,
     pub(super) images: Option<(std::ops::Range<usize>, ViewportUniformParams)>,
+    // Whether runs or glyphs are held behind them.
+    pub(super) behind: bool,
 }

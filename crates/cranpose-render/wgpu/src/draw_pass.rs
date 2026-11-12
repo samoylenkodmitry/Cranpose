@@ -4,8 +4,8 @@ use cranpose_ui_graphics::{BlendMode, Rect};
 
 use crate::{
     effect_renderer::{
-        BlitDest, CompositeBatchItem, PreparedCompositeDraw, PreparedProjectiveComposite,
-        PreparedShaderDraw, ProjectiveCompositeItem, QuadPlacement, ShaderCompositeBatchItem,
+        BlitDest, CompositeBatchItem, ProjectiveCompositeItem, QuadPlacement,
+        ShaderCompositeBatchItem,
     },
     frame_graph::FrameCommandRecorder,
     geometry::SegmentTransform,
@@ -13,18 +13,25 @@ use crate::{
     lazy_resource::Pending,
     pipeline_compiler::CompileLane,
     render::{
-        ArenaPlacement, GpuRenderer, ImageSlot, PassDepth, PassFrame, RunStage, StoreRunBatch,
-        TargetRect, ViewportUniformParams, supported_blend_mode,
+        ArenaPlacement, GpuRenderer, ImageSlot, PassDepth, PassFrame, RunStage, TargetRect,
+        ViewportUniformParams, supported_blend_mode,
     },
     rrect_shadow::{ShadowInstance, append_shadow_instances},
     run_store::RunDrawCall,
-    scene::{RRectShadowDraw, RunDraw, TextDraw},
+    scene::{RunDraw, TextDraw},
     scissor::{intersect_scissors, intersect_target_rects, scissor_in_target, target_rect_within},
     shape_pipelines::PipelineDemand,
 };
 
+mod batch;
+pub(crate) use batch::RunCalls;
+use batch::{Batch, PassCmds, group_glyph_batches, stage_scissor};
+mod item;
+use item::Item;
 mod held_draws;
-use held_draws::{HeldCmds, HeldDraws};
+use held_draws::{GlyphLane, HeldCmds, HeldDraws, ShapeLane};
+mod held_run;
+use held_run::HeldRun;
 mod tracked_pass;
 pub(crate) use tracked_pass::TrackedPass;
 mod op_items;
@@ -32,6 +39,8 @@ pub(crate) use op_items::segment_draws_anything;
 use op_items::{OpItems, Texts, merge_items, segment_viewport_rect};
 mod op_bounds;
 pub(crate) use op_bounds::{op_draw_bounds, op_is_visible_in_rect};
+mod pass_target;
+pub(crate) use pass_target::PassTarget;
 mod pass_segment;
 use pass_segment::joins_members;
 pub(crate) use pass_segment::{PassSegment, SegmentLayout};
@@ -52,79 +61,6 @@ pub(crate) use pass_scratch::PassScratch;
 use segment_run::{ArenaClip, SegmentBinding, SegmentRun};
 use shape_reach::RunReach;
 use target_space::{dest_in_target, mask_in_target, translate_inverse};
-
-/// A render target and its size in pixels.
-#[derive(Clone, Copy)]
-pub(crate) struct PassTarget<'a> {
-    pub(crate) view: &'a wgpu::TextureView,
-    pub(crate) width: u32,
-    pub(crate) height: u32,
-}
-
-enum Item<'a> {
-    /// A run, the window of its records the segment draws, and its draw
-    /// bounds: see [`op_bounds::run_draw_bounds`].
-    Run(&'a RunDraw, Option<std::ops::Range<u32>>, Rect),
-    Image(usize),
-    /// A text with its logical geometry: see
-    /// [`crate::render::text_logical_geometry_for_draw`].
-    Text(&'a TextDraw, (Rect, f32)),
-    RRectShadow(&'a RRectShadowDraw),
-    Composite(&'a ResolvedComposite),
-}
-
-enum Batch<'a> {
-    StoreRun {
-        batch: StoreRunBatch,
-        scissor: Option<(u32, u32, u32, u32)>,
-    },
-    /// Draws of an arena chunk, as ranges of the pass's arena draws: the
-    /// ones it paints here, and on the batch that closes the chunk, every
-    /// draw of the chunk, whose opaque interiors go down together.
-    Arena {
-        chunk: usize,
-        uniform_slot: usize,
-        paint: std::ops::Range<usize>,
-        interiors: Option<std::ops::Range<usize>>,
-        scissor: Option<(u32, u32, u32, u32)>,
-        /// The scissor the painted draws' unturned clip puts on them.
-        clip: Option<(u32, u32, u32, u32)>,
-    },
-    Images {
-        cmds: std::ops::Range<usize>,
-        blend_mode: BlendMode,
-        uniform_slot: usize,
-        scissor: Option<(u32, u32, u32, u32)>,
-    },
-    Glyphs {
-        cmds: std::ops::Range<usize>,
-        uniform_slot: usize,
-        scissor: Option<(u32, u32, u32, u32)>,
-    },
-    Shadows {
-        instances: std::ops::Range<u32>,
-        uniform_slot: usize,
-        scissor: Option<(u32, u32, u32, u32)>,
-    },
-    Composite(PreparedCompositeDraw<'a>),
-    Shader(PreparedShaderDraw<'a>),
-    Projective(PreparedProjectiveComposite<'a>),
-    Instant(InstantDraw<'a>),
-}
-
-/// The scissor a shape batch's `stage` draws under: the batch's, and for its
-/// paint only the pixels its unturned clip keeps, `None` when none are left.
-/// The interiors keep the batch's: their pipeline cuts each to its clip.
-fn stage_scissor(
-    scissor: TargetRect,
-    clip: Option<TargetRect>,
-    stage: RunStage,
-) -> Option<TargetRect> {
-    match (stage, clip) {
-        (RunStage::Paint, Some(clip)) => intersect_target_rects(scissor, clip),
-        _ => Some(scissor),
-    }
-}
 
 impl GpuRenderer {
     /// Uploads the quads a prepared pass drew into its scratch: image
@@ -196,7 +132,7 @@ impl GpuRenderer {
             &mut scratch,
         );
         let prepared = prep.segments(self, (segments, layout), &mut scratch);
-        prep.finish(self);
+        prep.finish(self, &mut scratch);
         let mut parts = self.draw_parts();
         parts.text.flush_glyph_uploads(&mut parts.upload);
         self.prefetch_overlay_pipelines(
@@ -567,43 +503,6 @@ impl GpuRenderer {
     }
 }
 
-// A batch of run draw calls: the uniform slot and scissor they draw under,
-// the calls, the stage they draw and the meshes a call falls back to while
-// its pipeline compiles, with the depth buffer or not.
-#[derive(Clone, Copy)]
-pub(crate) struct RunCalls<'a> {
-    pub(crate) uniform_slot: usize,
-    pub(crate) draws: &'a [RunDrawCall],
-    pub(crate) scissor: (u32, u32, u32, u32),
-    pub(crate) stage: RunStage,
-    pub(crate) meshes: Option<(crate::mesh_fallback::RunMeshes<'a>, PassDepth)>,
-}
-
-/// The commands a pass's batches draw ranges of.
-#[derive(Clone, Copy)]
-struct PassCmds<'a> {
-    images: &'a [crate::render::ImageDrawCmd],
-    glyphs: &'a [crate::render::GlyphDrawCmd],
-    arena: &'a [RunDrawCall],
-    /// The pass's fallback triangles: the index range of each of `arena`'s
-    /// draws that takes one, and the chunks the indices count in.
-    meshes: &'a crate::mesh_fallback::PassMeshes,
-}
-
-/// Draws each glyph batch's retained runs after its shared quads, and its
-/// labels one kind, turned or upright, at a time, where their order allows:
-/// see [`crate::render::defer_retained_glyph_runs`] and
-/// [`crate::render::group_glyph_kinds`].
-fn group_glyph_batches(batches: &[Batch<'_>], scratch: &mut PassScratch) {
-    for batch in batches {
-        if let Batch::Glyphs { cmds, .. } = batch {
-            let cmds = &mut scratch.glyph_cmds[cmds.clone()];
-            let shared = crate::render::defer_retained_glyph_runs(cmds, &mut scratch.glyph_moved);
-            crate::render::group_glyph_kinds(&mut cmds[..shared], &mut scratch.glyph_moved);
-        }
-    }
-}
-
 /// Turns the segments of one pass into batches, one item run at a time.
 struct PassPrep<'a, 's, C> {
     recorder: &'a mut C,
@@ -614,6 +513,8 @@ struct PassPrep<'a, 's, C> {
     /// draws.
     chunk: Option<usize>,
     held: HeldDraws,
+    // The runs held behind the held glyphs and images, drawn after them.
+    held_runs: Vec<HeldRun<'s>>,
     /// Whether the pass has a depth buffer its opaque interiors fill first.
     depth: PassDepth,
     /// Whether the pass's flat and turned segments alternate often enough
@@ -674,6 +575,7 @@ impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
             batches: Vec::new(),
             chunk: None,
             held: std::mem::take(&mut scratch.held),
+            held_runs: Vec::new(),
             depth,
             mixed_turns,
             overlay_segment: None,
@@ -736,14 +638,14 @@ impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
     /// one, once what the open one holds is drawn.
     fn bind(
         &mut self,
-        renderer: &mut GpuRenderer,
+        (renderer, scratch): (&mut GpuRenderer, &mut PassScratch),
         bound: ViewportUniformParams,
         scissor: Option<TargetRect>,
     ) -> SegmentBinding {
         match self.open {
             Some(open) if open.bound == bound && open.scissor == scissor => open,
             _ => {
-                self.finish(renderer);
+                self.finish(renderer, scratch);
                 let open = SegmentBinding {
                     uniform_slot: renderer
                         .viewport_uniforms
@@ -763,7 +665,7 @@ impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
     fn segment(
         &mut self,
         renderer: &mut GpuRenderer,
-        segment: &PassSegment<'s>,
+        segment: &'s PassSegment<'s>,
         scratch: &mut PassScratch,
     ) -> Result<(), String> {
         debug_assert!(
@@ -775,7 +677,7 @@ impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
             transform: SegmentTransform::IDENTITY,
             ..viewport
         };
-        let binding = self.bind(renderer, bound, segment.scissor);
+        let binding = self.bind((renderer, scratch), bound, segment.scissor);
         let run = SegmentRun {
             segment,
             viewport,
@@ -807,7 +709,7 @@ impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
     fn members(
         &mut self,
         renderer: &mut GpuRenderer,
-        members: &[PassSegment<'s>],
+        members: &'s [PassSegment<'s>],
         scratch: &mut PassScratch,
     ) -> Result<(), String> {
         let Some(first) = members.first() else {
@@ -817,7 +719,7 @@ impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
             offset: [0.0; 2],
             ..self.viewport_of(first)
         };
-        let binding = self.bind(renderer, bound, None);
+        let binding = self.bind((renderer, scratch), bound, None);
         let ops = members
             .iter()
             .map(|member| member.ops.len())
@@ -861,13 +763,13 @@ impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
         &mut self,
         renderer: &mut GpuRenderer,
         items: &mut Peekable<impl Iterator<Item = Item<'s>>>,
-        run: &SegmentRun<'s, '_>,
+        run: &SegmentRun<'s, 's>,
         scratch: &mut PassScratch,
     ) -> Result<(), String> {
         while let Some(item) = items.peek() {
             match item {
                 Item::Run(..) => {
-                    self.run_items(renderer, items, run);
+                    self.run_items(renderer, items, (run, scratch));
                     continue;
                 }
                 Item::Image(_) => {
@@ -878,12 +780,12 @@ impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
                     self.text_item(renderer, (text, *geometry), run, scratch)?;
                 }
                 Item::RRectShadow(_) => {
-                    let place = self.draw_held(renderer, run.binding);
+                    let place = self.draw_held(renderer, run.binding, scratch);
                     self.shadow_run(renderer, (items, place), run, scratch);
                     continue;
                 }
                 Item::Composite(composite) => {
-                    let held = self.draw_held(renderer, run.binding);
+                    let held = self.draw_held(renderer, run.binding, scratch);
                     self.composite_item(renderer, (composite, held), run, scratch)?;
                 }
             }
@@ -894,9 +796,9 @@ impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
 
     /// Draws what the open binding still holds; the next segment binds
     /// afresh.
-    fn finish(&mut self, renderer: &mut GpuRenderer) {
+    fn finish(&mut self, renderer: &mut GpuRenderer, scratch: &mut PassScratch) {
         if let Some(open) = self.open.take() {
-            self.flush(renderer, open);
+            self.flush(renderer, open, scratch);
         }
     }
 
@@ -965,17 +867,55 @@ impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
     /// chunk open: its shapes so far paint first and the held draws above
     /// them, while its later records, and the opaque interiors of all of
     /// them, stay one chunk. Without an open chunk it draws what is held.
-    fn draw_held(&mut self, renderer: &mut GpuRenderer, binding: SegmentBinding) -> Option<u32> {
+    fn draw_held(
+        &mut self,
+        renderer: &mut GpuRenderer,
+        binding: SegmentBinding,
+        scratch: &mut PassScratch,
+    ) -> Option<u32> {
         let Some(open) = self.chunk else {
-            self.flush(renderer, binding);
+            self.flush(renderer, binding, scratch);
             return None;
         };
         // The held draws, and a draw that follows, take the next record's place.
         self.cut_paint(renderer, binding, open);
         let base = self.depth_seq.saturating_add(renderer.open_arena_records());
         let held = self.held.take();
+        let behind = held.behind;
         self.push_held(renderer, binding, held, Some(base));
+        if behind {
+            return self.draw_behind(renderer, binding, scratch);
+        }
         self.depth.is_on().then_some(base)
+    }
+
+    // Draws what is held behind the glyphs and images, which are drawn: its
+    // runs join the chunk and paint, and the glyphs held behind draw over
+    // them. Returns the place after them in a pass with a depth buffer.
+    fn draw_behind(
+        &mut self,
+        renderer: &mut GpuRenderer,
+        binding: SegmentBinding,
+        scratch: &mut PassScratch,
+    ) -> Option<u32> {
+        let mut runs = std::mem::take(&mut self.held_runs);
+        for held in runs.drain(..) {
+            let mut reach = RunReach::new(held.draw, held.bounds, &held.run);
+            let window = held.window.unwrap_or(0..u32::MAX);
+            self.append_run(renderer, (held.draw, window), &mut reach, &held.run);
+        }
+        self.held_runs = runs;
+        let base = self.chunk.map(|open| {
+            self.cut_paint(renderer, binding, open);
+            self.depth_seq.saturating_add(renderer.open_arena_records())
+        });
+        if scratch.glyph_instances.holds_behind() {
+            let cmds = scratch
+                .glyph_instances
+                .release_behind(&mut scratch.glyph_cmds);
+            self.push_glyphs(renderer, binding, cmds, base);
+        }
+        base.filter(|_| self.depth.is_on())
     }
 
     /// Lays out as fallback triangles the chunk's draws in `range`, just
@@ -1114,10 +1054,23 @@ impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
 
     /// Draws everything held: the open chunk's shapes, then the held draws
     /// above them.
-    fn flush(&mut self, renderer: &mut GpuRenderer, binding: SegmentBinding) {
+    fn flush(
+        &mut self,
+        renderer: &mut GpuRenderer,
+        binding: SegmentBinding,
+        scratch: &mut PassScratch,
+    ) {
+        if self.chunk.is_some() && self.held.has_behind() {
+            self.draw_held(renderer, binding, scratch);
+        }
         self.close_chunk(renderer, binding);
         let held = self.held.take();
+        let behind = held.behind;
         self.push_held(renderer, binding, held, None);
+        if behind {
+            self.draw_behind(renderer, binding, scratch);
+            self.close_chunk(renderer, binding);
+        }
     }
 
     /// Pushes the held glyphs, then the held images, placed in a pass with
@@ -1241,94 +1194,121 @@ impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
         &mut self,
         renderer: &mut GpuRenderer,
         items: &mut Peekable<impl Iterator<Item = Item<'s>>>,
-        run: &SegmentRun<'s, '_>,
+        (run, scratch): (&SegmentRun<'s, 's>, &mut PassScratch),
     ) {
         while let Some(Item::Run(draw, window, bounds)) =
             items.next_if(|item| matches!(item, Item::Run(..)))
         {
             let mut reach = RunReach::new(draw, bounds, run);
-            if !self.held.is_empty() && reach.get().is_some_and(|reach| self.held.overlaps(reach)) {
-                self.draw_held(renderer, run.binding);
+            let stored = renderer.run_is_stored(draw);
+            let lane = if self.held.is_empty() {
+                ShapeLane::Chunk
+            } else {
+                self.held.place_shapes(reach.get())
+            };
+            match lane {
+                ShapeLane::Chunk => {}
+                ShapeLane::Behind(held) if !stored => {
+                    self.held.hold_shapes(held);
+                    self.held_runs
+                        .push(HeldRun::new((draw, window, bounds), run));
+                    continue;
+                }
+                ShapeLane::Behind(_) | ShapeLane::Flush => {
+                    self.draw_held(renderer, run.binding, scratch);
+                }
             }
             let window = window.unwrap_or(0..u32::MAX);
-            if renderer.run_is_stored(draw) {
-                // The chunk stays open, its paint so far drawn first; `depth_seq`
-                // moves past the stored run's places, which its later records skip.
-                if let Some(open) = self.chunk {
-                    self.cut_paint(renderer, run.binding, open);
-                }
-                let open = self.chunk.map_or(0, |_| renderer.open_arena_records());
-                let space = run.space().at_place(self.depth_seq.saturating_add(open));
-                let batch = renderer.prepare_store_run(
-                    self.recorder,
-                    draw,
-                    (space, &mut self.clip_scissor),
-                    &window,
-                    (self.depth, self.depth_keys.as_mut()),
-                    (&mut self.arena_draws, &mut self.pipelines),
-                );
-                renderer.mesh_store_run(
-                    draw,
-                    space,
-                    batch.draws.clone(),
-                    &self.arena_draws,
-                    self.depth,
-                    &mut self.meshes,
-                );
-                if self.depth.is_on() {
-                    self.take_depth_range(batch.draws.clone());
-                }
-                self.batches.push(Batch::StoreRun {
-                    batch,
-                    scissor: run.segment.scissor,
-                });
-            } else {
-                let total = draw.record_count().min(window.end);
-                let mut from = window.start;
-                let clip = self.arena_clip(&mut reach);
-                if self.chunk.is_some() && clip.chunk != self.chunk_scissor {
-                    self.close_chunk(renderer, run.binding);
-                }
-                self.chunk_scissor = clip.chunk;
-                if let Some(open) = self.chunk
-                    && clip.paint != self.chunk_clip
-                {
-                    self.cut_paint(renderer, run.binding, open);
-                }
-                self.chunk_clip = clip.paint;
-                let segment_clip = clip.tested;
-                let at = ArenaPlacement {
-                    space: run.space(),
-                    shift: run.shift,
-                    mixed_turns: self.mixed_turns,
-                    depth: self.depth,
-                };
-                while from < total {
-                    if self
-                        .chunk
-                        .is_some_and(|open| !renderer.arena_accepts(open, draw))
-                    {
-                        self.close_chunk(renderer, run.binding);
-                    }
-                    let open = match self.chunk {
-                        Some(open) => open,
-                        None => self.open_chunk(renderer),
-                    };
-                    let taken = renderer.append_arena_run(
-                        open,
-                        draw,
-                        from..total,
-                        (at, self.depth_seq - self.chunk_base),
-                        segment_clip,
-                        (&mut self.pipelines, self.depth_keys.as_mut()),
-                    );
-                    if taken == 0 {
-                        self.close_chunk(renderer, run.binding);
-                        continue;
-                    }
-                    from += taken;
-                }
+            if !stored {
+                self.append_run(renderer, (draw, window), &mut reach, run);
+                continue;
             }
+            // The chunk stays open, its paint so far drawn first; `depth_seq`
+            // moves past the stored run's places, which its later records skip.
+            if let Some(open) = self.chunk {
+                self.cut_paint(renderer, run.binding, open);
+            }
+            let open = self.chunk.map_or(0, |_| renderer.open_arena_records());
+            let space = run.space().at_place(self.depth_seq.saturating_add(open));
+            let batch = renderer.prepare_store_run(
+                self.recorder,
+                draw,
+                (space, &mut self.clip_scissor),
+                &window,
+                (self.depth, self.depth_keys.as_mut()),
+                (&mut self.arena_draws, &mut self.pipelines),
+            );
+            renderer.mesh_store_run(
+                draw,
+                space,
+                batch.draws.clone(),
+                &self.arena_draws,
+                self.depth,
+                &mut self.meshes,
+            );
+            if self.depth.is_on() {
+                self.take_depth_range(batch.draws.clone());
+            }
+            self.batches.push(Batch::StoreRun {
+                batch,
+                scissor: run.segment.scissor,
+            });
+        }
+    }
+
+    // Appends the records of `draw` in `window` to the open chunk, opening
+    // and closing chunks as its clip and the chunk's room ask.
+    fn append_run(
+        &mut self,
+        renderer: &mut GpuRenderer,
+        (draw, window): (&RunDraw, std::ops::Range<u32>),
+        reach: &mut RunReach<'_, 's, '_>,
+        run: &SegmentRun<'s, '_>,
+    ) {
+        let total = draw.record_count().min(window.end);
+        let mut from = window.start;
+        let clip = self.arena_clip(reach);
+        if self.chunk.is_some() && clip.chunk != self.chunk_scissor {
+            self.close_chunk(renderer, run.binding);
+        }
+        self.chunk_scissor = clip.chunk;
+        if let Some(open) = self.chunk
+            && clip.paint != self.chunk_clip
+        {
+            self.cut_paint(renderer, run.binding, open);
+        }
+        self.chunk_clip = clip.paint;
+        let segment_clip = clip.tested;
+        let at = ArenaPlacement {
+            space: run.space(),
+            shift: run.shift,
+            mixed_turns: self.mixed_turns,
+            depth: self.depth,
+        };
+        while from < total {
+            if self
+                .chunk
+                .is_some_and(|open| !renderer.arena_accepts(open, draw))
+            {
+                self.close_chunk(renderer, run.binding);
+            }
+            let open = match self.chunk {
+                Some(open) => open,
+                None => self.open_chunk(renderer),
+            };
+            let taken = renderer.append_arena_run(
+                open,
+                draw,
+                from..total,
+                (at, self.depth_seq - self.chunk_base),
+                segment_clip,
+                (&mut self.pipelines, self.depth_keys.as_mut()),
+            );
+            if taken == 0 {
+                self.close_chunk(renderer, run.binding);
+                continue;
+            }
+            from += taken;
         }
     }
 
@@ -1347,7 +1327,7 @@ impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
         };
         let image = &run.segment.scene.images[*index];
         if supported_blend_mode(image.blend_mode) != BlendMode::SrcOver {
-            self.flush(renderer, run.binding);
+            self.flush(renderer, run.binding, scratch);
             return self.image_run(renderer, items, run, scratch);
         }
         items.next();
@@ -1358,7 +1338,7 @@ impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
                 .image_viewport()
                 .is_some_and(|held| held != viewport)
         {
-            self.draw_held(renderer, run.binding);
+            self.draw_held(renderer, run.binding, scratch);
         }
         let mark = scratch.image_mark();
         let mut parts = renderer.draw_parts();
@@ -1371,6 +1351,9 @@ impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
             .get(mark.cmds)
             .map(crate::render::ImageDrawCmd::bounds)
         {
+            if self.held.overlaps_behind(bounds) {
+                self.draw_held(renderer, run.binding, scratch);
+            }
             self.held
                 .hold_image(mark.cmds..scratch.images.cmds.len(), viewport, bounds);
         }
@@ -1468,18 +1451,30 @@ impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
         if drew_glyphs {
             let glyph_end = scratch.glyph_cmds.len();
             if glyph_start < glyph_end {
-                let cmds = &scratch.glyph_cmds[glyph_start..glyph_end];
-                if self.held.full() || cmds.iter().any(|cmd| self.held.covers_image(cmd.bounds())) {
-                    self.draw_held(renderer, run.binding);
+                let at = (instance_start, glyph_start);
+                let mut held = glyph_start..glyph_end;
+                match self.held.place_glyphs(&scratch.glyph_cmds[held.clone()]) {
+                    GlyphLane::Front => {}
+                    GlyphLane::Behind => {
+                        self.held.hold_behind(&scratch.glyph_cmds[held]);
+                        let glyphs = &mut scratch.glyph_instances;
+                        glyphs.hold_behind(&mut scratch.glyph_cmds, at);
+                        return Ok(());
+                    }
+                    GlyphLane::Flush => {
+                        let glyphs = &mut scratch.glyph_instances;
+                        glyphs.park(&mut scratch.glyph_cmds, at);
+                        self.draw_held(renderer, run.binding, scratch);
+                        held = scratch.glyph_instances.unpark(&mut scratch.glyph_cmds);
+                    }
                 }
-                self.held.hold(
-                    glyph_start..glyph_end,
-                    cmds.iter().map(crate::render::GlyphDrawCmd::bounds),
-                );
+                let cmds = &scratch.glyph_cmds[held.clone()];
+                self.held
+                    .hold(held, cmds.iter().map(crate::render::GlyphDrawCmd::bounds));
             }
             return Ok(());
         }
-        self.flush(renderer, run.binding);
+        self.flush(renderer, run.binding, scratch);
         let mark = scratch.image_mark();
         let mut parts = renderer.draw_parts();
         let images = (&mut scratch.images, parts.images);

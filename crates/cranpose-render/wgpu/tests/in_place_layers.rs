@@ -44,6 +44,10 @@ enum Scene {
     /// A paragraph of ink text naming `w`, wrapped to 140 points and held to
     /// 30, turned by 21 degrees: the text clips its lines to its own bounds.
     ClippedText,
+    // A label with a box of ink over its middle, and over both a line of ink
+    // text naming `w`, turned by -17 degrees: the turned text overlaps the
+    // box and the label the pass holds back.
+    TextOverBox,
     /// A 0.6w x 60 box of ink scaled by 0.7.
     ScaledBox,
     /// A line of ink text naming `w`, scaled by 0.75.
@@ -152,6 +156,14 @@ fn TurnedPage(scene: Scene, offscreen: bool, width: MutableState<f32>) {
                 Scene::ScaledBox => InkBox(w * 0.6, 60.0, 0.0, 0.7, offscreen),
                 Scene::ScaledText => {
                     InkText(format!("Scaled in place {w}"), turned(0.0, 0.75, offscreen));
+                }
+                Scene::TextOverBox => {
+                    InkText(format!("Label {w}"), Modifier::empty());
+                    InkBox(40.0, 12.0, 0.0, 1.0, false);
+                    InkText(
+                        format!("Turned in place {w}"),
+                        turned(-17.0, 1.0, offscreen),
+                    );
                 }
                 Scene::ScaledTurnedBox => InkBox(w * 0.6, 60.0, 23.0, 0.8, offscreen),
                 Scene::Chart => InkChart(w * 0.6, offscreen),
@@ -340,6 +352,11 @@ fn a_turned_box_drawn_in_place_covers_what_its_surface_covers() {
 #[test]
 fn turned_text_drawn_in_place_lands_where_its_surface_lands() {
     assert_lands_alike(Scene::Text, 0.04, 0.25);
+}
+
+#[test]
+fn turned_text_over_what_the_pass_holds_back_lands_where_its_surface_lands() {
+    assert_lands_alike(Scene::TextOverBox, 0.04, 0.25);
 }
 
 #[test]
