@@ -10,7 +10,6 @@
 
 use std::{num::NonZeroU32, ops::Range, sync::Arc};
 
-use cranpose_core::collections::growth_slack::GrowthSlack;
 use cranpose_ui_graphics::{DrawPrimitive, Rect, ShapeRecorder};
 
 use super::{Item, ItemKind, SceneStore, slab::Slab};
@@ -23,11 +22,6 @@ const CHUNK_SHAPES: usize = 256;
 // shape writes into an empty chunk that the packets of the frames before
 // let go of.
 const KEPT_EMPTY_CHUNKS: usize = 4;
-// The updates after which the kept chunks go when none of them was kept or
-// taken again in between: far more than a packet stays in flight, so a
-// scene that redraws its shapes keeps them, and one that shrank gives back
-// their room.
-const IDLE_EMPTY_UPDATES: u32 = 16;
 // The fewest shapes no item draws for which a chunk moves the others: a
 // chunk of a few shapes grows to room for this many before it does.
 const MIN_DEAD_SHAPES: usize = 16;
@@ -120,9 +114,6 @@ pub(super) struct ShapeChunks {
     // The chunks no item names, which take shapes again once no packet
     // holds them.
     empty: Vec<ChunkId>,
-    // The updates that ended with chunks in `empty` since one was kept
-    // there or taken out.
-    empty_idle: u32,
     // One bit a segment of the chunk that drops its dead shapes, set for
     // the segments a run names: room the next such chunk takes again.
     live: Vec<u64>,
@@ -196,7 +187,6 @@ impl ShapeChunks {
         });
         let id = match reused {
             Some(at) => {
-                self.empty_idle = 0;
                 let id = self.empty.swap_remove(at);
                 if let Some(recorder) = self.chunks[id.index()]
                     .as_mut()
@@ -234,8 +224,7 @@ impl ShapeChunks {
 
     // Notes that the item of `run` went. The open chunk no item names takes
     // the next shapes from its start once no packet holds it; another such
-    // chunk waits for reuse, and past the few kept, or once the kept wait
-    // long, it goes.
+    // chunk waits for reuse, and past the few kept, it goes.
     fn release(&mut self, run: &ShapeRun) {
         let chunk = run.chunk;
         let open = self.open == Some(chunk);
@@ -260,63 +249,10 @@ impl ShapeChunks {
             self.open = None;
         }
         if self.empty.len() < KEPT_EMPTY_CHUNKS {
-            self.empty_idle = 0;
             self.empty.push(chunk);
         } else {
             self.chunks[chunk.index()] = None;
         }
-    }
-
-    // Ends an update of the chunks: the kept empty ones go once
-    // `IDLE_EMPTY_UPDATES` updates passed in which none was kept or taken.
-    #[inline]
-    pub(super) fn settle_empty(&mut self) {
-        if !self.empty.is_empty() {
-            self.empty_idle += 1;
-            if self.empty_idle >= IDLE_EMPTY_UPDATES {
-                self.drop_empty();
-            }
-        }
-    }
-
-    #[cold]
-    #[inline(never)]
-    fn drop_empty(&mut self) {
-        self.empty_idle = 0;
-        for id in self.empty.drain(..) {
-            self.chunks[id.index()] = None;
-        }
-        let len = self
-            .chunks
-            .iter()
-            .rposition(Option::is_some)
-            .map_or(0, |last| last + 1);
-        self.chunks.truncate(len);
-        self.chunks.trim_growth_slack();
-        self.empty.trim_growth_slack();
-    }
-
-    // Drops from each chunk no packet holds the shapes no item draws, and
-    // gives back the room of the most shapes it held: a store that cut most
-    // of its records keeps its shapes in chunks of its peak's room.
-    #[cold]
-    #[inline(never)]
-    pub(super) fn compact(&mut self, runs: &mut Slab<ShapeRun>) {
-        let Self { chunks, live, .. } = self;
-        for (index, chunk) in chunks.iter_mut().enumerate() {
-            let Some(chunk) = chunk.as_mut() else {
-                continue;
-            };
-            let Some(recorder) = Arc::get_mut(&mut chunk.recorder) else {
-                continue;
-            };
-            if (chunk.shapes as usize) < recorder.tables().shapes.len() {
-                keep_live_runs(ChunkId::at(index), recorder, runs, live);
-            }
-            recorder.trim_growth();
-        }
-        live.clear();
-        live.trim_growth_slack();
     }
 
     // The heap the chunks hold: their lists and every chunk's recorder.

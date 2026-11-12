@@ -196,17 +196,20 @@ impl<T: Copy> SpanPool<T> {
         self.items.trim_growth_slack();
     }
 
-    // Cuts the free spans at the end, one search of the free lists a span,
-    // so the room they took can go.
+    // Cuts the free spans at the end, so the room they took can go. Each
+    // free list is sorted once, so a span at the end is the last of its
+    // list.
     pub(super) fn cut_free_tail(&mut self) {
         let mut len = self.items.len();
-        while let Some((class, at)) = self.free.iter().enumerate().find_map(|(class, starts)| {
-            let at = starts
-                .iter()
-                .position(|&start| start as usize + (1 << class) == len)?;
-            Some((class, at))
+        self.free
+            .iter_mut()
+            .for_each(|starts| starts.sort_unstable());
+        while let Some(class) = (0..self.free.len()).find(|&class| {
+            self.free[class]
+                .last()
+                .is_some_and(|&start| start as usize + (1 << class) == len)
         }) {
-            self.free[class].swap_remove(at);
+            self.free[class].pop();
             len -= 1 << class;
         }
         if len < self.items.len() {

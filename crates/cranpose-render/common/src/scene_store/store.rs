@@ -278,7 +278,6 @@ impl SceneStore {
     /// in another order and the own draws it redrew. Readers read the store
     /// after it.
     pub fn finish_update(&mut self) {
-        self.shape_chunks.settle_empty();
         super::child_order::settle(self);
         #[cfg(feature = "window-damage")]
         own_marks::settle(self);

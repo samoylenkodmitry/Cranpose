@@ -24,12 +24,6 @@ impl ShapeRecorder {
         self.tables.shapes.capacity()
     }
 
-    /// Gives back the room its storage keeps past an eighth more than the
-    /// shapes and segments it holds, once growth left over a quarter more.
-    pub fn trim_growth(&mut self) {
-        self.tables.trim_growth();
-    }
-
     /// Drops the segments from `len` on with their shapes, the shapes
     /// recorded last. The gradient tables stay whole while a shape left
     /// paints with a brush.
