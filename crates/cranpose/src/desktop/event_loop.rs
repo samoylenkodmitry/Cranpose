@@ -177,6 +177,8 @@ fn open_urls(_urls: &[String]) -> Result<(), String> {
 
 #[path = "device_loss.rs"]
 mod device_loss;
+#[path = "primary_frame.rs"]
+mod primary_frame;
 #[path = "primary_surface.rs"]
 mod primary_surface;
 #[cfg(feature = "robot")]
@@ -5504,89 +5506,9 @@ impl ApplicationHandler for App {
                     present == PresentStep::Present,
                 );
                 if present == PresentStep::Present {
-                    self.primary_surface_dirty = true;
-                    let acquire_started_at = Instant::now();
-                    let output = match current_surface_texture(primary.surface, "primary window") {
-                        SurfaceFrame::Ready(output) => output,
-                        SurfaceFrame::Reconfigure => {
-                            let size = window.surface_size();
-                            primary.configure(app, size.width, size.height);
-                            if surface_reconfigure_requires_redraw(size.width, size.height) {
-                                request_redraw_once(window, &mut self.primary_redraw_pending);
-                            }
-                            return;
-                        }
-                        SurfaceFrame::Skip => {
-                            // No texture: the window is minimized, occluded or
-                            // timed out. The next attempt waits a frame
-                            // interval, as after an empty redraw, or the loop
-                            // retries at once and spins a core.
-                            pace_after_empty_redraw(
-                                &mut self.last_frame_start_time,
-                                &mut self.last_redraw_empty,
-                                frame_started_at,
-                                false,
-                            );
-                            self.robot.note_unpresentable();
-                            return;
-                        }
-                    };
-                    let after_acquire = Instant::now();
-
-                    let config = &primary.config;
-                    if let Err(err) = crate::wgpu_surface::render_surface_frame(
-                        app.renderer(),
-                        &output,
-                        config.format,
-                        (config.width, config.height),
-                    ) {
-                        log::error!("render failed: {err:?}");
+                    let times = (frame_started_at, after_update);
+                    if self.present_primary_frame(times, frame_interval).is_break() {
                         return;
-                    }
-                    let after_render = Instant::now();
-
-                    window.pre_present_notify();
-                    app.renderer().present(output);
-                    let after_present = Instant::now();
-                    record_pacing_event(|diag| &mut diag.presents);
-                    self.primary_surface_dirty = false;
-                    self.primary_initial_present_pending = false;
-                    app.record_presented_frame(frame_started_at, after_render);
-                    log_desktop_frame_telemetry(
-                        frame_started_at,
-                        after_update,
-                        after_acquire,
-                        after_render,
-                        after_present,
-                        "primary",
-                    );
-                    self.last_frame_start_time = Some(presented_frame_anchor(
-                        next_frame_anchor(
-                            self.last_frame_start_time,
-                            frame_started_at,
-                            frame_interval,
-                        ),
-                        frame_interval,
-                        after_acquire.duration_since(acquire_started_at),
-                    ));
-                    #[cfg(target_os = "macos")]
-                    self.application_menu.frame_presented();
-                    #[cfg(target_os = "macos")]
-                    reveal_staged_primary(
-                        &mut self.primary_staged,
-                        self.primary_shown
-                            .load(std::sync::atomic::Ordering::Relaxed),
-                        window.as_ref(),
-                    );
-                    self.device_loss.presented();
-                    self.robot.note_presented();
-                    if !self.robot.drives()
-                        && should_chain_no_vsync_redraw(
-                            frame_interval,
-                            app.frame_schedule().needs_frame,
-                        )
-                    {
-                        request_redraw_once(window, &mut self.primary_redraw_pending);
                     }
                 } else {
                     record_pacing_event(|diag| &mut diag.skipped_no_present);
