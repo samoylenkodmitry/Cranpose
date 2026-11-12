@@ -191,23 +191,82 @@ impl<'a> GroupedDraws<'a> {
         size: Size,
         kept: Option<RecordId>,
     ) -> Item {
-        let first_group = self
-            .recording
-            .segments_in(&segments)
-            .position(|segment| segment.lane == RecordLane::GroupStart)
-            .map_or(segments.end, |offset| segments.start + offset as u32);
-        let wrapper = kept.unwrap_or_else(|| self.group_record(store, parent));
-        self.write_record(store, wrapper, |draws, store, list, own| {
-            // The wrapper starts with a run, which names its command.
-            list.push(draws.run_item(store, own, segments.start..first_group));
-            draws.write(store, wrapper, (list, own), first_group, segments.end)
-        });
+        let wrapper = match kept {
+            Some(kept) if self.redraw_kept(store, kept, &segments) => kept,
+            kept => {
+                let first_group = self
+                    .recording
+                    .segments_in(&segments)
+                    .position(|segment| segment.lane == RecordLane::GroupStart)
+                    .map_or(segments.end, |offset| segments.start + offset as u32);
+                let wrapper = kept.unwrap_or_else(|| self.group_record(store, parent));
+                self.write_record(store, wrapper, |draws, store, list, own| {
+                    // The wrapper starts with a run, which names its command.
+                    list.push(draws.run_item(store, own, segments.start..first_group));
+                    draws.write(store, wrapper, (list, own), first_group, segments.end)
+                });
+                wrapper
+            }
+        };
         assign_layer(
             store,
             wrapper,
             self.head(&DrawGroup::plain(Rect::from_size(size))),
         );
         Item::child(wrapper)
+    }
+
+    // Draws the recording in `wrapper`, the wrapper the command drew
+    // `segments` in before, when its segments lie in the lanes of the one the
+    // wrapper draws: the records keep their items, each run takes the
+    // recording at its segments, and each draw group takes its head anew.
+    // `false` leaves the wrapper as it was.
+    fn redraw_kept(
+        &self,
+        store: &mut SceneStore,
+        wrapper: RecordId,
+        segments: &Range<u32>,
+    ) -> bool {
+        let Some(&first) = store.items(wrapper).first() else {
+            return false;
+        };
+        let old = store.run(first);
+        if old.segments.start != segments.start || !same_lanes(&old.recording, self.recording) {
+            return false;
+        }
+        let recording = self.recording;
+        let mut groups = recording
+            .segments_in(segments)
+            .filter(|segment| segment.lane == RecordLane::GroupStart)
+            .map(|segment| recording.groups()[segment.start as usize]);
+        self.redraw_in_place(store, wrapper, &mut groups);
+        true
+    }
+
+    // Gives each run beneath `record` the recording at its segments and each
+    // draw group beneath it the head of the next of `groups`, in draw order,
+    // then notes the new content of `record`.
+    fn redraw_in_place(
+        &self,
+        store: &mut SceneStore,
+        record: RecordId,
+        groups: &mut impl Iterator<Item = DrawGroup>,
+    ) {
+        for position in 0..store.items(record).len() {
+            let item = store.items(record)[position];
+            if let Some(child) = item.as_child() {
+                let group = groups
+                    .next()
+                    .expect("segments in one lanes open as many groups");
+                self.redraw_in_place(store, child, groups);
+                assign_layer(store, child, self.head(&group));
+            } else {
+                store.swap_run_recording(item, Rc::clone(self.recording));
+                let segments = store.run(item).segments.clone();
+                draw_segments(store, item, segments);
+            }
+        }
+        store.note_content_change(record);
     }
 
     fn group_record(&self, store: &mut SceneStore, parent: RecordId) -> RecordId {
@@ -477,6 +536,15 @@ pub(super) fn append_draw_nodes(
 // Whether `item` is the run that drew the command `id`.
 fn is_run_of(store: &SceneStore, item: Item, id: DrawCommandId) -> bool {
     item.kind() == ItemKind::Run && store.run(item).command == Some(id)
+}
+
+// Whether the segments of `new` lie in the lanes of those of `old`, so each
+// run and draw group of `old` names the same segments in `new`.
+fn same_lanes(old: &CommandRecording, new: &CommandRecording) -> bool {
+    old.segments().len() == new.segments().len()
+        && (old.segments().iter())
+            .zip(new.segments())
+            .all(|(old, new)| old.lane == new.lane)
 }
 
 // Whether `item` is the record of a draw group.
