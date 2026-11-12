@@ -52,6 +52,12 @@ const BAR_BOUND: isize = 4 * 1024;
 // frame changes, 16 bytes a bar each. The 200 bars themselves hold about
 // 65 KB, so a copy of what the canvas draws holds several times this.
 const REDRAW_BOUND: isize = 12 * 1024;
+// What a column shrunk from 2,000 rows to 100 may hold more than one that
+// never grew, once it holds still: the scene journal keeps the room of the
+// update that shrank it until the next update, and the layout's pools, the
+// slot table and the shell's lists keep the room of their peak. A raster
+// scene that kept the room of its peak held 529,200 bytes more.
+const SHRUNK_BOUND: isize = 1700 * 1024;
 
 fn run(framebuffer: &mut Framebuffer, frames: Range<u64>, pixels: &mut [u8]) {
     let mut areas = Vec::new();
@@ -166,4 +172,61 @@ fn screens_that_change_every_frame_leave_no_memory_behind() {
     );
 }
 
-main_thread_test!(screens_that_change_every_frame_leave_no_memory_behind);
+// A column of 100 rows with a background each, and of `peak` rows during
+// the second second of its clock when `peak` is some.
+#[composable]
+fn ShrinkingColumn(peak: Option<usize>) {
+    let seconds = rememberInfiniteTransition("seconds").animateFloat(
+        0.0,
+        60.0,
+        infiniteRepeatable(
+            AnimationSpec::linear(60_000),
+            RepeatMode::Restart,
+            StartOffset::default(),
+        ),
+        "seconds",
+    );
+    let rows = match peak {
+        Some(peak) if (1.0..2.0).contains(&seconds.value()) => peak,
+        _ => 100,
+    };
+    Column(
+        Modifier::empty().width(WIDTH as f32),
+        ColumnSpec::default(),
+        move || {
+            for index in 0..rows {
+                Box(
+                    Modifier::empty()
+                        .width(WIDTH as f32)
+                        .height(0.5)
+                        .background(Color::from_rgb_u8((index % 256) as u8, 0, 0)),
+                    BoxSpec::default(),
+                    || {},
+                );
+            }
+        },
+    );
+}
+
+// A column that grew from 100 rows to 2,000 and shrank back gives back most
+// of the room of its peak, though it holds still after the shrink.
+fn a_shrunk_column_gives_back_most_of_its_peak() {
+    let steady = held(|| ShrinkingColumn(None), MemoryHeadroom::Ample);
+    let shrunk = held(|| ShrinkingColumn(Some(2000)), MemoryHeadroom::Ample);
+    println!(
+        "held: a column that never grew {steady} bytes, one shrunk from 2,000 rows {shrunk} bytes"
+    );
+    assert!(
+        shrunk - steady < SHRUNK_BOUND,
+        "the shrunk column holds {} bytes more",
+        shrunk - steady
+    );
+}
+
+// One test: the allocator counts every thread's memory.
+fn hosts_hold_what_their_screens_need() {
+    screens_that_change_every_frame_leave_no_memory_behind();
+    a_shrunk_column_gives_back_most_of_its_peak();
+}
+
+main_thread_test!(hosts_hold_what_their_screens_need);

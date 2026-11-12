@@ -271,7 +271,14 @@ impl PixelsRenderer {
             changed.extend(picture.changed.iter().copied().map(pixel_rect));
             match reach {
                 pipeline::UpdatedReach::Held => {}
-                pipeline::UpdatedReach::Lost => picture.measure_reach(),
+                // A push that lost records lost the reach too: only then can
+                // the scene keep the room of many more records than it holds.
+                pipeline::UpdatedReach::Lost => {
+                    picture.measure_reach();
+                    if growth_trim::shrank(picture) {
+                        growth_trim::trim(picture);
+                    }
+                }
             }
             // With little memory left, the spill an update took for a
             // subtree that pushed other items than before goes, and so does
@@ -340,7 +347,9 @@ impl PixelsRenderer {
         picture.height = height;
         picture.scale = scale;
         picture.measure_reach();
-        if cranpose_ui::current_memory_headroom() == MemoryHeadroom::Tight {
+        if cranpose_ui::current_memory_headroom() == MemoryHeadroom::Tight
+            || growth_trim::shrank(picture)
+        {
             growth_trim::trim(picture);
         }
     }
