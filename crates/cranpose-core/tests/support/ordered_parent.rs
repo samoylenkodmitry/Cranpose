@@ -69,9 +69,11 @@ impl Node for OrderedParent {
     }
 
     fn remove_child(&mut self, child: NodeId) -> bool {
-        let previous_len = self.children.len();
-        self.children.retain(|&id| id != child);
-        self.children.len() != previous_len
+        let Some(at) = self.children.iter().rposition(|&id| id == child) else {
+            return false;
+        };
+        self.children.remove(at);
+        true
     }
 
     fn move_child(&mut self, from: usize, to: usize) {

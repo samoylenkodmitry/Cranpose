@@ -188,23 +188,35 @@ impl SlotTable {
         detached
     }
 
+    // Detaches the children from the cursor on, from the last one: a detach
+    // moves the groups after the subtree it takes, and past the last child
+    // lie only the groups after the parent. The children land in `detached`
+    // in their order.
     fn detach_children_at_cursor_into(
         &mut self,
         cursor: ChildCursor,
         detached: &mut Vec<DetachedSubtree>,
     ) {
-        while self.direct_child_anchor_at_cursor(cursor).is_some() {
-            let subtree = self.detach_subtree_at_index_internal(cursor.index(), false);
+        if self.direct_child_anchor_at_cursor(cursor).is_none() {
+            return;
+        }
+        let first = detached.len();
+        let end = self.direct_child_range(cursor.parent()).end();
+        for index in (cursor.index()..end).rev() {
+            if self.groups[index].parent_anchor != cursor.parent() {
+                continue;
+            }
+            let subtree = self.detach_subtree_at_index_internal(index, false);
             if subtree.group_count() == 0 {
                 log::error!(
-                    "slot table stopped detaching children at cursor parent={:?} index={} after empty subtree extraction",
+                    "slot table stopped detaching children at cursor parent={:?} index={index} after empty subtree extraction",
                     cursor.parent(),
-                    cursor.index()
                 );
                 break;
             }
             detached.push(subtree);
         }
+        detached[first..].reverse();
     }
 
     pub(in crate::slot) fn restore_subtree(
