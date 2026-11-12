@@ -72,9 +72,13 @@ fn heap_at_rest(first: bool) -> usize {
         shell.frame_schedule().needs_update,
         "the time of the trim asks for an update"
     );
+    assert!(
+        shell.needs_update() && shell.needs_update_without_frame(),
+        "a loop that updates on either check, as Android's does, runs the trim"
+    );
     shell.update();
     assert!(
-        shell.frame_schedule().is_idle(),
+        shell.frame_schedule().is_idle() && !shell.needs_update_without_frame(),
         "the trimmed shell asks for nothing"
     );
     shell.primary().scene().store().heap_bytes()

@@ -56,7 +56,7 @@ impl Component {
                 },
             );
         }
-        let schedule = self.view.shell().frame_schedule();
+        let schedule = self.view.frame_schedule();
         let next_frame_ms = if schedule.needs_frame || schedule.needs_update {
             Some(0)
         } else {

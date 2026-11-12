@@ -60,7 +60,9 @@ impl IdleWork {
         frame_started: Instant,
         schedule: FrameSchedule,
     ) {
-        self.stands_still.set(schedule.is_idle());
+        // A timed event that waits, as a trim at rest, leaves the app still.
+        self.stands_still
+            .set(!schedule.needs_frame && !schedule.needs_update);
         if self.queued.get() || !(self.stands_still.get() || self.has_prefetch_work()) {
             return;
         }

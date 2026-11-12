@@ -1,4 +1,4 @@
-use cranpose_app_shell::{AppShell, default_root_key};
+use cranpose_app_shell::{AppShell, FrameSchedule, default_root_key};
 use cranpose_render_wgpu::{WgpuRenderer, WgpuTextSystem};
 
 use crate::{AppSettings, GpuContext};
@@ -121,6 +121,16 @@ impl GuestView {
         } else {
             self.shell.cancel_gesture();
             self.shell.notify_app_paused();
+        }
+    }
+
+    /// What the view asks its host for: the shell's schedule while visible,
+    /// and nothing while hidden, as a hidden view neither updates nor draws.
+    pub fn frame_schedule(&self) -> FrameSchedule {
+        if self.visible {
+            self.shell.frame_schedule()
+        } else {
+            FrameSchedule::default()
         }
     }
 

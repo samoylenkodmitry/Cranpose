@@ -136,6 +136,12 @@ impl EmbeddedView {
         Ok(())
     }
 
+    /// What the view asks its host for after a draw: the shell's schedule
+    /// while visible, and nothing while hidden.
+    pub fn frame_schedule(&self) -> cranpose_app_shell::FrameSchedule {
+        self.view.frame_schedule()
+    }
+
     /// Suspends drawing while detached or hidden and cancels any active gesture.
     ///
     /// Becoming visible requests a fresh frame without destroying the composition.

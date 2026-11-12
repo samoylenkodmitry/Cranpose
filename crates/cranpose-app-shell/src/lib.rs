@@ -597,7 +597,7 @@ where
             pending_dirty_nodes: Vec::new(),
             pending_layer_property_nodes: Vec::new(),
             geometry_scene_nodes: cranpose_ui::GeometrySceneNodes::default(),
-            rest: shell_frame::RestTrim::default(),
+            rest: shell_frame::RestTrim::begun(),
         };
         shell.process_frame();
         shell
@@ -943,17 +943,17 @@ where
         })
     }
 
-    /// Returns whether the shell has work to run: queued UI tasks, state changes, layout, semantics
-    /// or an active animation.
+    /// Returns whether the shell has work to run: queued UI tasks, state changes, layout, semantics,
+    /// an active animation or the trim at rest, once its rest has passed.
     pub fn needs_update(&self) -> bool {
         self.app.app_context.enter(|| {
             self.app
                 .needs_ui_update_in_context(self.any_surface_dirty())
-        })
+        }) || self.rest.passed()
     }
 
-    /// Returns whether queued UI, state, layout, semantics, or due cursor work can be processed
-    /// without advancing the frame clock. Awaiting a display frame alone is false.
+    /// Returns whether queued UI, state, layout, semantics, due cursor work or a due trim at rest can
+    /// be processed without advancing the frame clock. Awaiting a display frame alone is false.
     pub fn needs_update_without_frame(&self) -> bool {
         self.app.app_context.enter(|| {
             self.any_surface_dirty()
@@ -966,7 +966,7 @@ where
                     .surfaces
                     .iter()
                     .any(|surface| surface.renderer_warmup_due(&self.app))
-        })
+        }) || self.rest.passed()
     }
 
     /// Returns true when the runtime holds work for the UI thread: posted tasks,
@@ -1287,7 +1287,7 @@ where
             let result = self.process_frame_in_context(composed);
             stages.reached();
             log_update_stage_telemetry(&stages, outcome);
-            self.end_update(result.structure_changed);
+            self.end_update(result, frame_time);
             result
         })
     }
