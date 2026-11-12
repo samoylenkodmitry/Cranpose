@@ -4,6 +4,7 @@
 
 use std::{cell::Cell, rc::Rc};
 
+use cranpose_core::MutableState;
 use cranpose_testing::{ComposeTestRule, PlacedSemanticsNode};
 use cranpose_ui::{
     Box, BoxSpec, Column, ColumnSpec, Constraints, IntrinsicSize, Layout, MeasureResult, Modifier,
@@ -323,4 +324,103 @@ fn a_weighted_row_is_wide_enough_for_each_weighted_child() {
         "equal weights need twice the widest weighted child"
     );
     assert_eq!(bounds(&root, "wide").0, 50.0);
+}
+
+/// A layout as wide as it is asked to be, whose min intrinsic width is 10
+/// and max intrinsic width is 100.
+#[derive(Clone, PartialEq)]
+struct Stretchy;
+
+impl MeasurePolicy for Stretchy {
+    fn measure(
+        &self,
+        _: &dyn MeasureScope,
+        _: &Measurables,
+        constraints: Constraints,
+    ) -> MeasureResult {
+        let width = if constraints.max_width.is_finite() {
+            constraints.max_width
+        } else {
+            constraints.min_width
+        };
+        let (width, height) = constraints.constrain(width, 10.0);
+        MeasureResult::new(Size::new(width, height), Vec::new())
+    }
+
+    fn min_intrinsic_width(&self, _: &Measurables, _: f32) -> f32 {
+        10.0
+    }
+
+    fn max_intrinsic_width(&self, _: &Measurables, _: f32) -> f32 {
+        100.0
+    }
+
+    fn min_intrinsic_height(&self, _: &Measurables, _: f32) -> f32 {
+        10.0
+    }
+
+    fn max_intrinsic_height(&self, _: &Measurables, _: f32) -> f32 {
+        10.0
+    }
+}
+
+/// A rule that composes a row of `Stretchy` whose intrinsic modifier is what
+/// `modifier` makes of the state it returns.
+fn stretchy_row<T: Clone + PartialEq + 'static>(
+    initial: T,
+    modifier: fn(T) -> Modifier,
+) -> (ComposeTestRule, MutableState<T>) {
+    let mut rule = ComposeTestRule::new();
+    let state = MutableState::with_runtime(initial, rule.runtime_handle());
+    rule.set_content(move || {
+        Row(
+            tagged(modifier(state.get()), "row"),
+            RowSpec::default(),
+            || {
+                Layout(Modifier::empty(), Stretchy, || {});
+            },
+        );
+    })
+    .expect("the content composes");
+    (rule, state)
+}
+
+fn row_width(rule: &mut ComposeTestRule) -> f32 {
+    let root = rule
+        .placed_semantics(Size::new(400.0, 400.0))
+        .expect("the content lays out")
+        .expect("the content places something");
+    bounds(&root, "row").0
+}
+
+#[test]
+fn a_changed_intrinsic_size_lays_the_content_out_at_its_new_size() {
+    let (mut rule, size) = stretchy_row(IntrinsicSize::Min, |size| {
+        Modifier::empty().width_intrinsic(size)
+    });
+    assert_eq!(row_width(&mut rule), 10.0, "the min intrinsic width");
+    size.set(IntrinsicSize::Max);
+    assert_eq!(
+        row_width(&mut rule),
+        100.0,
+        "the row takes the max intrinsic width once it asks for it"
+    );
+}
+
+#[test]
+fn an_intrinsic_modifier_that_changes_its_axis_leaves_the_old_axis_free() {
+    let (mut rule, along_width) = stretchy_row(true, |along_width| {
+        if along_width {
+            Modifier::empty().width_intrinsic(IntrinsicSize::Max)
+        } else {
+            Modifier::empty().height_intrinsic(IntrinsicSize::Max)
+        }
+    });
+    assert_eq!(row_width(&mut rule), 100.0, "the width follows the content");
+    along_width.set(false);
+    assert_eq!(
+        row_width(&mut rule),
+        400.0,
+        "the width is free again and takes all the room the layout offers"
+    );
 }

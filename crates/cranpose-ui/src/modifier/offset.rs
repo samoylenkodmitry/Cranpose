@@ -60,11 +60,13 @@ impl Modifier {
     ///
     /// Example: `Modifier::empty().offset_fraction(0.0, -0.5)`
     pub fn offset_fraction(self, x_fraction: f32, y_fraction: f32) -> Self {
-        let modifier = Self::with_element(FractionalOffsetElement::new(x_fraction, y_fraction))
-            .with_inspector_metadata(inspector_metadata("offsetFraction", move |info| {
-                info.add_property("offsetFractionX", x_fraction.to_string());
-                info.add_property("offsetFractionY", y_fraction.to_string());
-            }));
+        let modifier = Self::from_dyn_element(plain_element(FractionalOffsetElement::new(
+            x_fraction, y_fraction,
+        )))
+        .with_inspector_metadata(inspector_metadata("offsetFraction", move |info| {
+            info.add_property("offsetFractionX", x_fraction.to_string());
+            info.add_property("offsetFractionY", y_fraction.to_string());
+        }));
         self.then(modifier)
     }
 

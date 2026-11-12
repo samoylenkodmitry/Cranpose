@@ -123,10 +123,10 @@ fn padding_node_clamps_to_constraints() {
 }
 
 #[test]
-fn fractional_offset_node_places_content_by_fraction_of_measured_size() {
+fn fractional_offset_places_content_by_fraction_of_measured_size() {
     let _app_context = crate::render_state::app_context_test_scope();
     let mut context = BasicModifierNodeContext::new();
-    let node = FractionalOffsetNode::new(0.25, -0.5);
+    let node = FractionalOffsetElement::new(0.25, -0.5);
     let measurable = TestMeasurable {
         intrinsic_width: 80.0,
         intrinsic_height: 40.0,
@@ -147,17 +147,21 @@ fn fractional_offset_node_places_content_by_fraction_of_measured_size() {
 }
 
 #[test]
-fn fractional_offset_node_passes_intrinsics_through() {
-    let node = FractionalOffsetNode::new(0.0, 1.0);
+fn fractional_offset_passes_intrinsics_through() {
+    let node = FractionalOffsetElement::new(0.0, 1.0);
     let measurable = TestMeasurable {
         intrinsic_width: 64.0,
         intrinsic_height: 32.0,
     };
 
-    assert_eq!(node.min_intrinsic_width(&measurable, 32.0, 1.0), 64.0);
-    assert_eq!(node.max_intrinsic_width(&measurable, 32.0, 1.0), 64.0);
-    assert_eq!(node.min_intrinsic_height(&measurable, 64.0, 1.0), 32.0);
-    assert_eq!(node.max_intrinsic_height(&measurable, 64.0, 1.0), 32.0);
+    for (kind, expected) in [
+        (PlainIntrinsic::MinWidth(32.0), 64.0),
+        (PlainIntrinsic::MaxWidth(32.0), 64.0),
+        (PlainIntrinsic::MinHeight(64.0), 32.0),
+        (PlainIntrinsic::MaxHeight(64.0), 32.0),
+    ] {
+        assert_eq!(node.intrinsic(&measurable, kind, 1.0), expected);
+    }
 }
 
 #[test]

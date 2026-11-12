@@ -1,16 +1,13 @@
 // The offset modifiers, by points and by fractions of the content's size:
-// their nodes and elements.
-
-use std::hash::{Hash, Hasher};
+// their elements.
 
 use cranpose_foundation::{
-    Constraints, DelegatableNode, InvalidationKind, LayoutModifierNode, Measurable, ModifierNode,
-    ModifierNodeContext, ModifierNodeElement, NodeCapabilities, NodeState, PlainElement,
+    Constraints, InvalidationKind, Measurable, ModifierNodeContext, NodeCapabilities, PlainElement,
     PlainLayout, PlainLayoutFns, PrepareAt, Size,
 };
 use cranpose_ui_layout::{LayoutDirection, round_to_px};
 
-use super::{hash_f32_value, impl_layout_modifier_node, measure_pass_through};
+use super::measure_pass_through;
 use crate::modifier::Point;
 
 /// Element that offsets its content by a fixed (x, y) amount.
@@ -136,50 +133,51 @@ impl PlainLayout for OffsetElement {
     }
 }
 
-/// Node that offsets its content by a fraction of its own measured size.
+/// Element that offsets its content by a fraction of its own measured size.
 ///
 /// There is no direct Jetpack Compose modifier equivalent; Compose's slide
-/// transitions receive the measured size through a lambda instead. This node
-/// backs `slide_in_vertically` / `slide_out_vertically` in
+/// transitions receive the measured size through a lambda instead. This
+/// element backs `slide_in_vertically` / `slide_out_vertically` in
 /// `AnimatedVisibility`, where the offset is expressed as a fraction of the
 /// content height.
-#[derive(Debug)]
-pub struct FractionalOffsetNode {
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FractionalOffsetElement {
     x_fraction: f32,
     y_fraction: f32,
-    state: NodeState,
 }
 
-impl FractionalOffsetNode {
-    /// Creates a node that moves its content by `x_fraction` of its own width and `y_fraction` of
-    /// its own height.
+impl FractionalOffsetElement {
+    /// Creates an element that moves its content by `x_fraction` of its own width and
+    /// `y_fraction` of its own height.
     pub fn new(x_fraction: f32, y_fraction: f32) -> Self {
         Self {
             x_fraction,
             y_fraction,
-            state: NodeState::new(),
-        }
-    }
-
-    /// Returns the fractions as a point: `x` is the share of the width and `y` the share of the
-    /// height.
-    pub fn fractions(&self) -> Point {
-        Point {
-            x: self.x_fraction,
-            y: self.y_fraction,
         }
     }
 }
 
-impl DelegatableNode for FractionalOffsetNode {
-    fn node_state(&self) -> &NodeState {
-        &self.state
+impl PlainElement for FractionalOffsetElement {
+    const WORDS: usize = 2;
+    const CAPABILITIES: NodeCapabilities = NodeCapabilities::LAYOUT;
+    const UPDATE_INVALIDATION: Option<InvalidationKind> = Some(InvalidationKind::Layout);
+    const LAYOUT: Option<&'static PlainLayoutFns> = Some(&PlainLayoutFns::of::<Self>());
+
+    #[inline]
+    fn to_words(&self, words: &mut [u32]) {
+        words.copy_from_slice(&[self.x_fraction.to_bits(), self.y_fraction.to_bits()]);
+    }
+
+    #[inline]
+    fn from_words(words: &[u32]) -> Self {
+        match *words {
+            [x, y, ..] => Self::new(f32::from_bits(x), f32::from_bits(y)),
+            _ => Self::new(0.0, 0.0),
+        }
     }
 }
 
-impl_layout_modifier_node!(FractionalOffsetNode, invalidate = InvalidationKind::Layout);
-
-impl LayoutModifierNode for FractionalOffsetNode {
+impl PlainLayout for FractionalOffsetElement {
     fn measure_hold(
         &self,
         _density: f32,
@@ -199,58 +197,5 @@ impl LayoutModifierNode for FractionalOffsetNode {
         measure_pass_through(measurable, constraints, |size| {
             (self.x_fraction * size.width, self.y_fraction * size.height)
         })
-    }
-}
-
-/// Element that creates and updates fractional offset nodes.
-#[derive(Debug, Clone, PartialEq)]
-pub struct FractionalOffsetElement {
-    x_fraction: f32,
-    y_fraction: f32,
-}
-
-impl FractionalOffsetElement {
-    /// Creates an element for a node that moves its content by `x_fraction` of its own width and
-    /// `y_fraction` of its own height.
-    pub fn new(x_fraction: f32, y_fraction: f32) -> Self {
-        Self {
-            x_fraction,
-            y_fraction,
-        }
-    }
-}
-
-impl Hash for FractionalOffsetElement {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        "fractional_offset".hash(state);
-        hash_f32_value(state, self.x_fraction);
-        hash_f32_value(state, self.y_fraction);
-    }
-}
-
-impl ModifierNodeElement for FractionalOffsetElement {
-    type Node = FractionalOffsetNode;
-    const FROM_NODE: Option<fn(&FractionalOffsetNode) -> Self> = Some(|node| Self {
-        x_fraction: node.x_fraction,
-        y_fraction: node.y_fraction,
-    });
-
-    fn create(&self) -> Self::Node {
-        FractionalOffsetNode::new(self.x_fraction, self.y_fraction)
-    }
-
-    fn update(&self, node: &mut Self::Node) {
-        if node.x_fraction != self.x_fraction || node.y_fraction != self.y_fraction {
-            node.x_fraction = self.x_fraction;
-            node.y_fraction = self.y_fraction;
-        }
-    }
-
-    fn capabilities(&self) -> NodeCapabilities {
-        NodeCapabilities::LAYOUT
-    }
-
-    fn update_invalidation_kind(&self) -> Option<InvalidationKind> {
-        Some(InvalidationKind::Layout)
     }
 }

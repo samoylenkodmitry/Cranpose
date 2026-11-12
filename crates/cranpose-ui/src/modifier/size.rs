@@ -70,10 +70,11 @@ impl Modifier {
     ///
     /// Matches Kotlin: `Modifier.width(IntrinsicSize)`
     pub fn width_intrinsic(self, intrinsic: IntrinsicSize) -> Self {
-        let modifier = Self::with_element(IntrinsicSizeElement::width(intrinsic))
-            .with_inspector_metadata(inspector_metadata("widthIntrinsic", move |info| {
-                info.add_dimension("width", DimensionConstraint::Intrinsic(intrinsic));
-            }));
+        let modifier =
+            Self::from_dyn_element(plain_element(IntrinsicSizeElement::width(intrinsic)))
+                .with_inspector_metadata(inspector_metadata("widthIntrinsic", move |info| {
+                    info.add_dimension("width", DimensionConstraint::Intrinsic(intrinsic));
+                }));
         self.then(modifier)
     }
 
@@ -81,10 +82,11 @@ impl Modifier {
     ///
     /// Matches Kotlin: `Modifier.height(IntrinsicSize)`
     pub fn height_intrinsic(self, intrinsic: IntrinsicSize) -> Self {
-        let modifier = Self::with_element(IntrinsicSizeElement::height(intrinsic))
-            .with_inspector_metadata(inspector_metadata("heightIntrinsic", move |info| {
-                info.add_dimension("height", DimensionConstraint::Intrinsic(intrinsic));
-            }));
+        let modifier =
+            Self::from_dyn_element(plain_element(IntrinsicSizeElement::height(intrinsic)))
+                .with_inspector_metadata(inspector_metadata("heightIntrinsic", move |info| {
+                    info.add_dimension("height", DimensionConstraint::Intrinsic(intrinsic));
+                }));
         self.then(modifier)
     }
 

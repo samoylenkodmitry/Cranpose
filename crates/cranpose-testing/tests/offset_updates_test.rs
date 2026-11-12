@@ -93,3 +93,38 @@ fn an_offset_follows_a_changed_layout_direction() {
         "right to left, it moves it left of the end"
     );
 }
+
+#[test]
+fn a_changed_fractional_offset_moves_the_node_by_its_new_fraction() {
+    let mut rule = ComposeTestRule::new();
+    let fraction = MutableState::with_runtime(0.5f32, rule.runtime_handle());
+    rule.set_content(move || {
+        Box(
+            Modifier::empty().size(Size::new(200.0, 100.0)),
+            BoxSpec::default(),
+            move || {
+                Box(
+                    Modifier::empty()
+                        .offset_fraction(fraction.get(), 0.0)
+                        .size(Size::new(20.0, 20.0)),
+                    BoxSpec::default(),
+                    || {
+                        Box(
+                            tagged(Modifier::empty().size(Size::new(5.0, 5.0))),
+                            BoxSpec::default(),
+                            || {},
+                        );
+                    },
+                );
+            },
+        );
+    })
+    .expect("the content composes");
+    assert_eq!(left_of_moved(&mut rule), 10.0, "half of the 20 wide box");
+    fraction.set(1.5);
+    assert_eq!(
+        left_of_moved(&mut rule),
+        30.0,
+        "the content follows the new fraction of its own width"
+    );
+}
