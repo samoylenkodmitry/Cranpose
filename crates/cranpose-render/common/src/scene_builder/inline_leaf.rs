@@ -52,27 +52,33 @@ pub(super) fn lower_child(
     context: LowerContext,
 ) -> Option<Item> {
     read_placed_node_data(applier, node_id, Level::Child, |data| {
+        // The record takes the kind it is written as, so its insert is the
+        // only change a reader sees.
+        let kind = if lowers_inline(&data) {
+            RecordKind::Leaf
+        } else {
+            RecordKind::Layer
+        };
         let record = store.insert(RecordSeed {
-            kind: RecordKind::Layer,
+            kind,
             node: Some(node_id),
             parent: Some(parent),
         });
-        write_placed_child(applier, store, record, node_id, data, context);
+        write_placed_child(applier, store, (record, node_id), (data, kind), context);
         Item::child(record)
     })
 }
 
 // Writes the placed child `node_id` of `data` into `record`, whose items
-// are empty: as a leaf when it needs no layer of its own, else its layer.
+// are empty, as `kind`: a leaf when it lowers inline, else its layer.
 fn write_placed_child(
     applier: &MemoryApplier,
     store: &mut SceneStore,
-    record: RecordId,
-    node_id: NodeId,
-    data: SnapshotNodeData<'_>,
+    (record, node_id): (RecordId, NodeId),
+    (data, kind): (SnapshotNodeData<'_>, RecordKind),
     context: LowerContext,
 ) {
-    if !lowers_inline(&data) {
+    if kind != RecordKind::Leaf {
         write_node_layer(applier, store, node_id, data, context, record);
         return;
     }
@@ -242,7 +248,13 @@ pub(super) fn update_dirty_inline(
             return false;
         }
         store.drop_items(record);
-        write_placed_child(applier, store, record, node_id, data, context);
+        write_placed_child(
+            applier,
+            store,
+            (record, node_id),
+            (data, RecordKind::Layer),
+            context,
+        );
         remove_dirty_descendants(store, record, dirty_nodes);
         holds_hit_geometry(store.layer(record))
     })

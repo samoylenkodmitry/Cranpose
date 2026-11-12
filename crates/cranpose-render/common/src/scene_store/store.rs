@@ -756,17 +756,8 @@ impl SceneStore {
     // Writes the flags of `id` for the scene builder, which notes the
     // change itself.
     pub(crate) fn write_flags(&mut self, id: RecordId, flags: RecordFlags) {
-        let index = id.index();
-        let current = self.tree[index].flags;
-        let flags = flags
-            .without(RecordFlags::STORE_KEPT)
-            .with(current.only(RecordFlags::STORE_KEPT));
-        if flags != current {
-            self.tree[index].flags = flags;
-            if flags.only(RecordFlags::ORIGIN_SINKS) != current.only(RecordFlags::ORIGIN_SINKS) {
-                super::facts::forget_children(self, index);
-            }
-            self.stale_with_parent(index);
+        if self.write_flag_row(id.index(), flags) {
+            self.stale_with_parent(id.index());
         }
     }
 
