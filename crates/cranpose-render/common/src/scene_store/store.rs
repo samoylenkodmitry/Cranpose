@@ -480,9 +480,10 @@ impl SceneStore {
         self.geo.clear();
         self.warm.clear();
         // A record made after the clear takes a generation past every one
-        // given out before, so no handle taken before names it.
+        // given out before, so no handle taken before names it. The floor
+        // already counts the rows an update cut from the end.
         if let Some(&last) = self.generations.iter().max() {
-            self.generation_floor = last.wrapping_add(1);
+            self.generation_floor = self.generation_floor.max(last.wrapping_add(1));
         }
         self.generations.clear();
         self.free_rows.clear();

@@ -1,6 +1,6 @@
 use std::{cell::RefCell, rc::Rc};
 
-use cranpose_core::{MutableState, NodeId};
+use cranpose_core::{MutableState, NodeId, RecordRef};
 use cranpose_render_common::{
     graph::{DrawRunNode, LayerNode, PrimitivePhase, RenderNode},
     scene_store::{
@@ -16,6 +16,13 @@ use crate::scene_probe::{initial_graph, update_scene};
 // A store holding a root layer.
 fn rooted_store() -> SceneStore {
     let mut store = SceneStore::new();
+    insert_root(&mut store);
+    store
+}
+
+// Inserts a root layer into `store`, which holds no records, in its own
+// update.
+fn insert_root(store: &mut SceneStore) {
     store.begin_update();
     store.insert(RecordSeed {
         kind: RecordKind::Layer,
@@ -23,7 +30,6 @@ fn rooted_store() -> SceneStore {
         parent: None,
     });
     store.finish_update();
-    store
 }
 
 // Adds a layer for `node` under the root and removes it again, in one update
@@ -269,6 +275,43 @@ fn a_handle_taken_before_a_clear_names_no_record_after_it() {
         parent: None,
     });
     store.finish_update();
+
+    assert_eq!(store.resolve(held), None);
+}
+
+// Adds a layer under the root in its own update and returns its handle.
+fn add_child(store: &mut SceneStore, node: NodeId) -> RecordRef {
+    store.begin_update();
+    let child = store.insert(RecordSeed {
+        kind: RecordKind::Layer,
+        node: Some(node),
+        parent: store.root(),
+    });
+    store.finish_update();
+    store.record_ref(child)
+}
+
+// Removes the record `held` names in its own update: the last row, which the
+// update gives back.
+fn remove(store: &mut SceneStore, held: RecordRef) {
+    store.begin_update();
+    store.remove_subtree(store.resolve(held).expect("a live record"));
+    store.finish_update();
+}
+
+#[test]
+fn a_handle_to_a_removed_last_row_names_no_record_after_a_clear() {
+    let mut store = rooted_store();
+    let first = add_child(&mut store, NodeId(2));
+    remove(&mut store, first);
+    let held = add_child(&mut store, NodeId(3));
+    remove(&mut store, held);
+
+    store.clear();
+    insert_root(&mut store);
+    for node in 4..8 {
+        add_child(&mut store, NodeId(node));
+    }
 
     assert_eq!(store.resolve(held), None);
 }
