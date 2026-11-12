@@ -131,7 +131,7 @@ mod runtime_cell;
 #[cfg(test)]
 pub(crate) use runtime::{TestRuntime, TestScheduler};
 mod scene_records;
-pub use scene_records::{NodeRecords, RecordId, RecordRef, SceneUpdate, StoreId};
+pub use scene_records::{RecordId, RecordRef, SceneUpdate, StoreId};
 #[expect(clippy::multiple_inherent_impl, reason = "one file per concern")]
 mod slot;
 mod slots_host;

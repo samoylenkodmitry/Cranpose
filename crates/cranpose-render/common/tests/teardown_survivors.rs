@@ -17,7 +17,7 @@ use cranpose_ui::{
     run_test_composition,
 };
 
-use crate::scene_probe::{fresh_graph, initial_graph, update_scene};
+use crate::scene_probe::{fresh_graph, initial_graph, painted_text, update_scene};
 
 const VIEWPORT: Size = Size::new(800.0, 600.0);
 const LABELS: [&str; 3] = ["Counter App", "Recursive Layout", "Glass Tiles"];
@@ -115,7 +115,7 @@ fn texts_that_outlive_a_large_teardown_paint_as_before() {
     let root = composition.root().expect("root");
     let mut graph = initial_graph(&mut composition, root, VIEWPORT);
     let before = painted(&graph);
-    assert_eq!(graph.root_layer().expect("a scene").painted_text(), LABELS);
+    assert_eq!(labels(&graph), LABELS);
     let (selected, deep) = controls.get().expect("controls");
 
     for round in 1..=2 {
@@ -127,7 +127,7 @@ fn texts_that_outlive_a_large_teardown_paint_as_before() {
         update_scene(&mut composition, root, VIEWPORT, &mut graph);
 
         assert_eq!(
-            graph.root_layer().expect("a scene").painted_text(),
+            labels(&graph),
             LABELS,
             "round {round}: the labels paint after the teardown"
         );
@@ -142,4 +142,11 @@ fn texts_that_outlive_a_large_teardown_paint_as_before() {
             "round {round}: a fresh scene paints them there too"
         );
     }
+}
+
+// Every string the scene paints, in draw order.
+fn labels(graph: &Scene) -> Vec<String> {
+    let mut painted = Vec::new();
+    painted_text(graph.root_layer().expect("a scene"), &mut painted);
+    painted
 }

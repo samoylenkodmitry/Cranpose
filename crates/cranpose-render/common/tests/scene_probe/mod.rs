@@ -9,8 +9,22 @@ use cranpose_render_common::{
 use cranpose_ui::{LayoutEngine, Size, TestComposition};
 use cranpose_ui_graphics::{Brush, Color, DrawPrimitive, Rect};
 
+// Every string `layer` and the records beneath it paint, in draw order.
 pub(crate) fn painted_text(layer: LayerRef<'_>, out: &mut Vec<String>) {
-    out.extend(layer.painted_text());
+    for item in layer.items() {
+        match item {
+            ItemRef::Text(text) => out.push(text.render_text.text().to_owned()),
+            ItemRef::Run(run) => {
+                for primitive in run.primitives() {
+                    if let DrawPrimitive::Text(text) = primitive {
+                        out.push(text.text.to_string());
+                    }
+                }
+            }
+            ItemRef::Layer(child) | ItemRef::Leaf(child) => painted_text(child, out),
+            ItemRef::Draw(_) | ItemRef::Shape(_) => {}
+        }
+    }
 }
 
 pub(crate) fn initial_graph(

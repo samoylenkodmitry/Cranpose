@@ -1,9 +1,5 @@
 use cranpose_core::{NodeId, RecordId};
-use cranpose_render_common::{
-    graph::{DrawRunNode, PrimitivePhase},
-    scene_store::{RecordKind, RecordSeed, SceneStore},
-};
-use cranpose_ui_graphics::{Brush, Color, DrawPrimitive, Rect, Size};
+use cranpose_render_common::scene_store::{RecordKind, RecordSeed, SceneStore};
 
 // Adds a layer for `node` under `parent` in the update in progress.
 fn layer(store: &mut SceneStore, node: u32, parent: Option<RecordId>) -> RecordId {
@@ -65,32 +61,6 @@ fn an_update_that_changes_nothing_names_no_record() {
     store.finish_update();
 
     assert_eq!(touched(&store), Some(Vec::new()));
-}
-
-#[test]
-fn a_record_that_loses_an_item_is_named() {
-    let (mut store, root, _) = store_with_children(2);
-    let run = |store: &mut SceneStore, side: f32| {
-        store.add_run(DrawRunNode::new(
-            PrimitivePhase::BeforeChildren,
-            vec![DrawPrimitive::Rect {
-                rect: Rect::from_size(Size::new(side, side)),
-                brush: Brush::solid(Color::BLACK),
-                stroke: None,
-            }],
-        ))
-    };
-    store.begin_update();
-    let (first, second) = (run(&mut store, 10.0), run(&mut store, 20.0));
-    store.set_items(root, &[first, second]);
-    store.finish_update();
-
-    store.begin_update();
-    store.remove_item(second);
-    store.set_items(root, &[first]);
-    store.finish_update();
-
-    assert_eq!(touched(&store), Some(vec![root]));
 }
 
 #[test]

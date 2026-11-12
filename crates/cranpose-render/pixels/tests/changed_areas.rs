@@ -13,7 +13,7 @@ use cranpose_core::{
 use cranpose_macros::composable;
 use cranpose_render_common::{
     Renderer,
-    scene_store::{ItemRef, LayerRef, RecordFlags, RecordKind, SceneStore},
+    scene_store::{ItemRef, LayerRef, RecordKind, SceneStore},
 };
 use cranpose_render_pixels::{Picture, PixelRect, PixelsRenderer};
 use cranpose_ui::{
@@ -1528,26 +1528,6 @@ fn a_store_write_alone_keeps_the_frame_whole(
 }
 
 #[test]
-fn a_record_resized_alone_redraws() {
-    a_store_write_alone_keeps_the_frame_whole("set_size", Seen::Changed, |store| {
-        let record = record_of_size(store, CLIP);
-        store.set_size(record, 50.0, 40.0);
-    });
-}
-
-#[test]
-fn a_record_unclipped_alone_redraws() {
-    a_store_write_alone_keeps_the_frame_whole("set_flags", Seen::Changed, |store| {
-        let record = record_of_size(store, CLIP);
-        let flags = store
-            .layer(record)
-            .flags()
-            .without(RecordFlags::CLIP_TO_BOUNDS);
-        store.set_flags(record, flags);
-    });
-}
-
-#[test]
 fn a_record_moved_alone_redraws() {
     a_store_write_alone_keeps_the_frame_whole("set_placement", Seen::Changed, |store| {
         let record = record_of_size(store, SIDE);
@@ -1567,39 +1547,6 @@ fn a_record_turned_alone_redraws() {
 }
 
 #[test]
-fn a_record_given_other_layer_bounds_alone_redraws() {
-    a_store_write_alone_keeps_the_frame_whole("set_layer_bounds", Seen::Changed, |store| {
-        let record = record_of_size(store, CLIP);
-        store.set_layer_bounds(
-            record,
-            Some(Rect {
-                x: 0.0,
-                y: 0.0,
-                width: 50.0,
-                height: 30.0,
-            }),
-        );
-    });
-}
-
-#[test]
-fn a_record_stripped_of_its_properties_alone_redraws() {
-    a_store_write_alone_keeps_the_frame_whole("clear_props", Seen::Changed, |store| {
-        let record = record_of_size(store, FADED);
-        let root = store.root().expect("the scene has a root");
-        assert!(
-            store.layer(root).has_hit_targets(),
-            "the faded box handles clicks"
-        );
-        store.clear_props(record);
-        assert!(
-            !store.layer(root).has_hit_targets(),
-            "clear_props: no record handles clicks"
-        );
-    });
-}
-
-#[test]
 fn a_record_that_stops_handling_clicks_alone_keeps_its_pixels() {
     a_store_write_alone_keeps_the_frame_whole("set_hit_test", Seen::Same, |store| {
         let record = record_of_size(store, FADED);
@@ -1612,24 +1559,6 @@ fn a_record_that_stops_handling_clicks_alone_keeps_its_pixels() {
         assert!(
             !store.layer(root).has_hit_targets(),
             "set_hit_test: no record handles clicks"
-        );
-    });
-}
-
-#[test]
-fn a_record_that_publishes_its_origin_alone_keeps_its_pixels() {
-    a_store_write_alone_keeps_the_frame_whole("set_flags", Seen::Same, |store| {
-        let record = record_of_size(store, CLIP);
-        let root = store.root().expect("the scene has a root");
-        assert!(
-            !store.layer(root).has_origin_sinks(),
-            "no record publishes its origin"
-        );
-        let flags = store.layer(record).flags().with(RecordFlags::ORIGIN_SINKS);
-        store.set_flags(record, flags);
-        assert!(
-            store.layer(root).has_origin_sinks(),
-            "set_flags: the faded box publishes its origin"
         );
     });
 }
@@ -1674,22 +1603,6 @@ fn a_record_faded_alone_redraws() {
                 ..GraphicsLayer::default()
             }),
         );
-    });
-}
-
-#[test]
-fn a_record_emptied_alone_redraws() {
-    a_store_write_alone_keeps_the_frame_whole("clear_items", Seen::Changed, |store| {
-        let record = record_of_size(store, SIDE);
-        store.clear_items(record);
-    });
-}
-
-#[test]
-fn a_record_given_no_items_alone_redraws() {
-    a_store_write_alone_keeps_the_frame_whole("set_items", Seen::Changed, |store| {
-        let record = record_of_size(store, SIDE);
-        store.set_items(record, &[]);
     });
 }
 

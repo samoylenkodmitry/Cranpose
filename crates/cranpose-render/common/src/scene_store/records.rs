@@ -76,14 +76,7 @@ impl RecordFlags {
     pub(crate) const REDRAW_PENDING: Self = Self(1 << 10);
     // The record keeps properties in the store's side slab.
     pub(crate) const HAS_PROPS: Self = Self(1 << 11);
-    // The flags that change the pixels a record draws.
-    pub(crate) const DRAWN: Self = Self(
-        Self::CLIP_TO_BOUNDS.0
-            | Self::TRANSLATED_CONTENT.0
-            | Self::CASTS_SHADOW.0
-            | Self::AFTER_CHILDREN.0,
-    );
-    // The flags the store keeps itself, which `SceneStore::set_flags` leaves.
+    // The flags the store keeps itself, which a flag write leaves.
     pub(crate) const STORE_KEPT: Self = Self(
         Self::HAS_PROPS.0
             | Self::HAS_GRAPHICS_LAYER.0

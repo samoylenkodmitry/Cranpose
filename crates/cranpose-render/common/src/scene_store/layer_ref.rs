@@ -4,7 +4,7 @@
 
 use cranpose_core::{NodeId, RecordId, RecordRef, SceneUpdate, StoreId};
 use cranpose_ui::{GraphicsLayer, Point, Rect, RenderEffect, Size};
-use cranpose_ui_graphics::{BlendMode, ColorFilter, CompositingStrategy, DrawPrimitive};
+use cranpose_ui_graphics::{BlendMode, ColorFilter, CompositingStrategy};
 
 #[cfg(feature = "window-damage")]
 use super::{Extent, OwnDrawFacts, Reach};
@@ -576,31 +576,6 @@ impl<'a> LayerRef<'a> {
             .iter()
             .filter(|item| item.kind() != ItemKind::Child)
             .map(move |item| ItemRef::of(store, *item))
-    }
-
-    /// Every string the record and the records beneath it paint, in draw
-    /// order.
-    pub fn painted_text(self) -> Vec<String> {
-        fn collect(layer: LayerRef<'_>, out: &mut Vec<String>) {
-            for item in layer.items() {
-                match item {
-                    ItemRef::Text(text) => out.push(text.render_text.text().to_owned()),
-                    ItemRef::Run(run) => {
-                        for primitive in run.primitives() {
-                            if let DrawPrimitive::Text(text) = primitive {
-                                out.push(text.text.to_string());
-                            }
-                        }
-                    }
-                    ItemRef::Layer(child) | ItemRef::Leaf(child) => collect(child, out),
-                    ItemRef::Draw(_) | ItemRef::Shape(_) => {}
-                }
-            }
-        }
-
-        let mut out = Vec::new();
-        collect(self, &mut out);
-        out
     }
 
     /// The child records among the items, in draw order.

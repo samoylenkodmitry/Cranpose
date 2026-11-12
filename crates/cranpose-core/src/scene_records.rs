@@ -48,19 +48,6 @@ pub struct RecordRef {
     pub generation: u32,
 }
 
-/// The records of a layout node in a scene store: the record that draws
-/// the node, and the record that holds the draws chained before its
-/// graphics layer when it has any.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct NodeRecords {
-    /// The store that holds the records.
-    pub store: StoreId,
-    /// The record of the node.
-    pub node: RecordRef,
-    /// The record around it with the draws chained before its graphics layer.
-    pub wrapper: Option<RecordRef>,
-}
-
 /// A scene update's number. It wraps: of two numbers less than 2^31 apart,
 /// the one reached by counting on from the other is the newer.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]

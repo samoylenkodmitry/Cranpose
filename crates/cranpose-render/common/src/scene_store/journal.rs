@@ -252,13 +252,6 @@ impl Journal {
         self.refresh_wanted();
     }
 
-    pub(super) fn close(&mut self, cursor: &JournalCursor) {
-        if let Some(reader) = self.readers.get_mut(cursor.slot) {
-            *reader = None;
-        }
-        self.refresh_wanted();
-    }
-
     fn refresh_wanted(&mut self) {
         self.wanted = self
             .readers

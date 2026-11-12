@@ -197,11 +197,6 @@ impl SceneStore {
         cursor
     }
 
-    /// Stops following the changes of the store's records.
-    pub fn close_journal(&mut self, cursor: &JournalCursor) {
-        self.journal.close(cursor);
-    }
-
     /// Makes the reader of `cursor` follow `events` from the next update
     /// on.
     pub fn follow_journal(&mut self, cursor: &mut JournalCursor, events: RecordEvents) {
@@ -637,18 +632,6 @@ impl SceneStore {
         self.items.span(self.tree[id.index()].items)
     }
 
-    /// Replaces the items of `id` with `items`. The draws and children no
-    /// longer among them stay in the store: the caller removes them. A
-    /// caller that changes the record's own draws notes it with
-    /// [`Self::note_content_change`].
-    pub fn set_items(&mut self, id: RecordId, items: &[Item]) {
-        if self.items.span(self.tree[id.index()].items) != items {
-            // The note stamps the record, so the write lists it once.
-            self.note_content_change(id);
-            self.write_items(id, items);
-        }
-    }
-
     // Writes the items of `id` for the scene builder, which notes the
     // change itself.
     pub(crate) fn write_items(&mut self, id: RecordId, items: &[Item]) {
@@ -770,15 +753,6 @@ impl SceneStore {
         self.tree[id.index()].flags
     }
 
-    /// Sets the flags of `id`.
-    pub fn set_flags(&mut self, id: RecordId, flags: RecordFlags) {
-        let drawn = self.tree[id.index()].flags.only(RecordFlags::DRAWN);
-        self.write_flags(id, flags);
-        if self.tree[id.index()].flags.only(RecordFlags::DRAWN) != drawn {
-            self.note_property_change(id);
-        }
-    }
-
     // Writes the flags of `id` for the scene builder, which notes the
     // change itself.
     pub(crate) fn write_flags(&mut self, id: RecordId, flags: RecordFlags) {
@@ -800,13 +774,6 @@ impl SceneStore {
     #[inline]
     pub fn node_rect(&self, id: RecordId) -> Rect {
         self.geo[id.index()].node_rect()
-    }
-
-    /// Sets the node rect size of `id`.
-    pub fn set_size(&mut self, id: RecordId, width: f32, height: f32) {
-        if self.write_size(id, width, height) {
-            self.note_property_change(id);
-        }
     }
 
     // Writes the node rect size of `id` for the scene builder, which notes
@@ -842,15 +809,6 @@ impl SceneStore {
         self.stale_with_parent(index);
         self.log(RecordEvent::Claimed, id);
         self.touch(index);
-    }
-
-    /// Removes every item of `id`: its draws and the records beneath it.
-    pub fn clear_items(&mut self, id: RecordId) {
-        if self.tree[id.index()].items.len() != 0 {
-            // The note stamps the record, so the removal lists it once.
-            self.note_content_change(id);
-            self.drop_items(id);
-        }
     }
 
     // Removes every item of `id` for the scene builder, which notes the
