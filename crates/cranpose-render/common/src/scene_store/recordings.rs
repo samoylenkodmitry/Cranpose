@@ -7,7 +7,7 @@
 
 use std::rc::Rc;
 
-use cranpose_core::NodeId;
+use cranpose_core::{NodeId, collections::growth_slack::GrowthSlack};
 use cranpose_ui_graphics::{CommandRecording, FxHashMap};
 
 use crate::graph::DrawCommandId;
@@ -91,6 +91,28 @@ impl Recordings {
         let update = self.update;
         self.slots
             .retain(|_, slot| update.wrapping_sub(slot.update) <= 64);
+    }
+
+    // Gives back at rest the slots of the commands of nodes the store no
+    // longer draws, which a store at rest never sweeps, and the room past
+    // the slots it keeps.
+    pub(super) fn trim(&mut self, draws: impl Fn(NodeId) -> bool) {
+        self.slots.retain(|key, _| draws(key.node_id));
+        self.slots.trim_growth_slack();
+    }
+
+    // The slot table and the recordings only its slots hold.
+    pub(super) fn heap_bytes(&self) -> usize {
+        // A table keeps one control byte beside each slot.
+        let table = self.slots.capacity() * (size_of::<(RecorderKey, RecorderSlot)>() + 1);
+        let kept = self
+            .slots
+            .values()
+            .flat_map(|slot| slot.handles.iter().flatten())
+            .filter(|recording| Rc::strong_count(recording) == 1)
+            .map(|recording| recording.pod_heap_bytes() + size_of_val(recording.others()))
+            .sum::<usize>();
+        table + kept
     }
 
     // Records the command `id` anew through `record`, which takes storage

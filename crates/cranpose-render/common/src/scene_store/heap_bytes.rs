@@ -57,6 +57,8 @@ pub(super) fn store_heap_bytes(store: &SceneStore) -> usize {
         + texts
         + runs
         + store.shapes_heap_bytes()
+        + store.recordings.heap_bytes()
+        + store.journal.heap_bytes()
 }
 
 fn draw_primitive_heap_bytes(primitive: &DrawPrimitive) -> usize {

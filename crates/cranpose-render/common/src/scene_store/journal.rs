@@ -229,6 +229,18 @@ impl Journal {
         self.changed = update;
     }
 
+    // Gives back at rest the changes and the stamps it keeps: every reader
+    // that draws read the latest update before the rest ended, and one
+    // further behind works from the store as it is.
+    pub(super) fn trim(&mut self) {
+        self.entries.trim();
+        self.stamps.trim();
+    }
+
+    pub(super) fn heap_bytes(&self) -> usize {
+        self.entries.heap_bytes() + self.stamps.heap_bytes()
+    }
+
     // The changes of the updates after `read`, the update a reader read
     // last, when the store's update is `now`.
     pub(super) fn since(&self, read: SceneUpdate, now: SceneUpdate) -> JournalRead<'_> {

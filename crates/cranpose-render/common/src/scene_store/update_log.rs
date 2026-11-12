@@ -37,6 +37,11 @@ impl<T> UpdateLog<T> {
         if self.updates.len() >= updates.most || self.items.len() - self.start(0) > most_items {
             self.forget_oldest(updates.kept, most_items);
         }
+        // The log holds `most` updates at most: it takes their room once.
+        if self.updates.capacity() < updates.most {
+            self.updates
+                .reserve_exact(updates.most - self.updates.len());
+        }
         self.updates.push((update, Some(self.items.len())));
     }
 
@@ -106,6 +111,22 @@ impl<T> UpdateLog<T> {
     pub(super) fn clear(&mut self) {
         self.items.clear();
         self.updates.clear();
+    }
+
+    // Gives back at rest the items of the kept updates: a reader that read
+    // the latest update reads nothing more, and one further behind finds
+    // them lost.
+    pub(super) fn trim(&mut self) {
+        self.items = Vec::new();
+        for (_, start) in &mut self.updates {
+            *start = None;
+        }
+        self.updates.trim_growth_slack();
+    }
+
+    pub(super) fn heap_bytes(&self) -> usize {
+        self.items.capacity() * size_of::<T>()
+            + self.updates.capacity() * size_of::<(SceneUpdate, Option<usize>)>()
     }
 
     // The items of the updates after `read`, when the store's update is

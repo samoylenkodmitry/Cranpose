@@ -54,7 +54,7 @@ pub struct SceneStore {
     pub(crate) lists: ItemLists,
     root: Option<RecordId>,
     update: SceneUpdate,
-    journal: Journal,
+    pub(super) journal: Journal,
     pub(super) order: ChildOrder,
     pub(crate) recordings: Recordings,
 }

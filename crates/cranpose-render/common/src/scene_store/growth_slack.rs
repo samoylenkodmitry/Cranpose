@@ -5,8 +5,9 @@
 // free entries at the end of the other arrays with them, so a scene that
 // shrank gives back the room of its peak. The item spans move together once
 // free spans hold more than half of their room, and the shape chunks drop
-// the shapes no item draws. Free lists keep their room, which the next
-// removals take again.
+// the shapes no item draws. The kept recordings of nodes the store no longer
+// draws go, and the journal's logs give back their room. Free lists keep
+// their room, which the next removals take again.
 
 use cranpose_core::collections::growth_slack::GrowthSlack;
 
@@ -26,6 +27,9 @@ pub(super) fn trim(store: &mut SceneStore) {
         .pool
         .pack(store.warm.iter_mut().map(|row| &mut row.own_marks));
     store.trim_shapes();
+    let records = &store.node_records;
+    store.recordings.trim(|node| records.get(node).is_some());
+    store.journal.trim();
     store.tree.trim_growth_slack();
     store.geo.trim_growth_slack();
     store.warm.trim_growth_slack();
