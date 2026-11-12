@@ -9,7 +9,8 @@ files:
   - crates/cranpose/src/watchos_heart_rate.rs
   - crates/cranpose/src/android_entry.rs
   - crates/cranpose-audio/src/ring.rs
-  - crates/cranpose-audio/src/backend/aaudio.rs
+  - crates/cranpose-audio/src/backend/aaudio/library.rs
+  - crates/cranpose-audio/src/backend/aaudio/output_stream.rs
   - crates/cranpose-audio/src/backend/avaudio.rs
   - crates/cranpose-render/wgpu/src/pipeline_disk_cache.rs
 utils:

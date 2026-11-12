@@ -676,6 +676,26 @@ fn effects_written_once_in_a_loop_each_keep_their_place() {
     );
 }
 
+#[test]
+fn effects_that_leave_together_stop_from_the_last() {
+    let mut composition = composition();
+    let key = location_key(file!(), line!(), column!());
+    let count = mutableStateOf(5usize);
+    let log = Rc::new(RefCell::new(Vec::new()));
+    let mut content = {
+        let log = Rc::clone(&log);
+        move || EffectRow(count, Rc::clone(&log))
+    };
+    composition.render(key, &mut content).expect("first render");
+
+    log.borrow_mut().clear();
+    count.set(1);
+    composition
+        .reconcile(key, &mut content)
+        .expect("four fewer effects");
+    assert_eq!(*log.borrow(), ["stop 4", "stop 3", "stop 2", "stop 1"]);
+}
+
 // A reader of `derivedStateOf(source / 10)` that counts the derivations,
 // spelled out as `#[composable]` expands it.
 fn counting_derived_reader(

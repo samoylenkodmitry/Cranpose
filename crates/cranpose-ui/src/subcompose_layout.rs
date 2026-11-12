@@ -1216,9 +1216,8 @@ impl cranpose_core::Node for SubcomposeLayoutNode {
 
     fn remove_child(&mut self, child: NodeId) -> bool {
         let mut inner = self.inner.borrow_mut();
-        let before = inner.children.len();
-        inner.children.retain(|&id| id != child);
-        inner.children.len() < before
+        let at = inner.children.iter().rposition(|&id| id == child);
+        at.map(|at| inner.children.remove(at)).is_some()
     }
 
     fn move_child(&mut self, from: usize, to: usize) {

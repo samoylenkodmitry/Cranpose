@@ -4,7 +4,7 @@
 
 ## Setup
 
-For Cranpose apps, enable `cranpose/audio` on Android, watchOS and the web and `cranpose/audio-desktop` on desktop. Android and Wear OS use AAudio, watchOS uses `AVAudioEngine`, and a browser uses Web Audio. Desktop uses `cpal` and needs the host audio development libraries; Linux builds require ALSA development headers. Direct users of `cranpose-audio` can select the `aaudio`, `avaudio`, `web-audio` or `cpal-backend` crate feature.
+For Cranpose apps, enable `cranpose/audio` on Android, watchOS and the web and `cranpose/audio-desktop` on desktop. Android and Wear OS use AAudio, watchOS uses `AVAudioEngine`, and a browser uses Web Audio. The backend loads AAudio when the first stream opens. An app with any `minSdk` links. On Android older than 8.0 (API 26) the app runs with no sound. Desktop uses `cpal` and needs the host audio development libraries; Linux builds require ALSA development headers. Direct users of `cranpose-audio` can select the `aaudio`, `avaudio`, `web-audio` or `cpal-backend` crate feature.
 
 Install the engine once on the UI thread before composition:
 

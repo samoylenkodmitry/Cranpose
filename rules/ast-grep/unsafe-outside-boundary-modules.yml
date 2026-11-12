@@ -18,7 +18,8 @@ rule:
     - kind: inner_attribute_item
       regex: \b(allow|expect)\s*\([^)]*\bunsafe_code\b
 ignores:
-  - crates/cranpose-audio/src/backend/aaudio.rs
+  - crates/cranpose-audio/src/backend/aaudio/library.rs
+  - crates/cranpose-audio/src/backend/aaudio/output_stream.rs
   - crates/cranpose-audio/src/backend/avaudio.rs
   - crates/cranpose-audio/src/ring.rs
   - crates/cranpose-macros/src/branch_groups.rs
