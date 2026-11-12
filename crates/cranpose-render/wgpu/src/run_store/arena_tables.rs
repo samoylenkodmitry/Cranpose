@@ -291,15 +291,13 @@ impl ArenaTables {
             }
             return;
         }
-        let keep = self.generations.len().saturating_sub(1);
-        self.generations.drain(..keep);
-        if self
+        let last_oversized = self
             .generations
             .last()
-            .is_some_and(|generation| oversized(generation, &self.recent))
-        {
-            self.generations.clear();
-        }
+            .is_some_and(|generation| oversized(generation, &self.recent));
+        let kept = usize::from(!last_oversized && !self.generations.is_empty());
+        let cut = self.generations.len() - kept;
+        self.generations.drain(..cut);
         for generation in &mut self.generations {
             generation.clear();
         }
@@ -326,6 +324,7 @@ fn bytes(size: u64) -> usize {
 
 // Whether `generation` holds more than four times what `recent` frames
 // placed in one of its tables, past the size a table opens at.
+#[inline(never)]
 fn oversized(generation: &ArenaGeneration, recent: &[RecentPeak; BUFFER_COUNT]) -> bool {
     (0..BUFFER_COUNT).any(|table| {
         let least = (INITIAL_ARENA_CAPACITIES[table] * ELEMENT_SIZES[table])
