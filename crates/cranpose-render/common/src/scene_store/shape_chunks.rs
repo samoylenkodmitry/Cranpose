@@ -296,6 +296,29 @@ impl ShapeChunks {
         self.empty.trim_growth_slack();
     }
 
+    // Drops from each chunk no packet holds the shapes no item draws, and
+    // gives back the room of the most shapes it held: a store that cut most
+    // of its records keeps its shapes in chunks of its peak's room.
+    #[cold]
+    #[inline(never)]
+    pub(super) fn compact(&mut self, runs: &mut Slab<ShapeRun>) {
+        let Self { chunks, live, .. } = self;
+        for (index, chunk) in chunks.iter_mut().enumerate() {
+            let Some(chunk) = chunk.as_mut() else {
+                continue;
+            };
+            let Some(recorder) = Arc::get_mut(&mut chunk.recorder) else {
+                continue;
+            };
+            if (chunk.shapes as usize) < recorder.tables().shapes.len() {
+                keep_live_runs(ChunkId::at(index), recorder, runs, live);
+            }
+            recorder.trim_growth();
+        }
+        live.clear();
+        live.trim_growth_slack();
+    }
+
     // The heap the chunks hold: their lists and every chunk's recorder.
     fn heap_bytes(&self) -> usize {
         self.chunks.capacity() * size_of::<Option<ShapeChunk>>()

@@ -3,8 +3,9 @@
 // ends by giving back room past a quarter of the entries. An update that
 // removed the record of the last row cuts the free rows at the end, and the
 // free entries at the end of the other arrays with them, so a scene that
-// shrank gives back the room of its peak. Free lists keep their room, which
-// the next removals take again.
+// shrank gives back the room of its peak. A cut of most of the rows
+// compacts the shape chunks too. Free lists keep their room, which the next
+// removals take again.
 
 use cranpose_core::collections::growth_slack::GrowthSlack;
 
@@ -34,9 +35,16 @@ fn trim_resized(store: &mut SceneStore) {
     // A record's four rows and its facts grow, clear and give back room
     // together, so the facts speak for the rows' length and the tree row's
     // room for all four.
-    let cut = store.facts.resized() && cut_free_rows(store);
-    if cut {
+    let cut = if store.facts.resized() {
+        cut_free_rows(store)
+    } else {
+        0
+    };
+    if cut > 0 {
         cut_free_tails(store);
+        if cut > store.tree.len() {
+            store.shape_chunks.compact(&mut store.shape_runs);
+        }
     }
     if store.facts.resized() {
         let rows = store.tree.capacity();
@@ -78,8 +86,8 @@ fn cut_free_tails(store: &mut SceneStore) {
 // Cuts the free rows at the end of the row arrays, one search of the free
 // list a row: an update frees few rows, and a shrink that frees many cuts
 // them once. A row made past the cut starts at a generation past those of
-// the rows cut.
-fn cut_free_rows(store: &mut SceneStore) -> bool {
+// the rows cut. Returns how many rows it cut.
+fn cut_free_rows(store: &mut SceneStore) -> usize {
     let rows = store.tree.len();
     let mut keep = rows;
     while let Some(at) = store
@@ -91,7 +99,7 @@ fn cut_free_rows(store: &mut SceneStore) -> bool {
         keep -= 1;
     }
     if keep == rows {
-        return false;
+        return 0;
     }
     if let Some(&last) = store.generations[keep..].iter().max() {
         store.generation_floor = store.generation_floor.max(last);
@@ -102,5 +110,5 @@ fn cut_free_rows(store: &mut SceneStore) -> bool {
     store.warm.truncate(keep);
     store.generations.truncate(keep);
     store.facts.truncate_rows(keep);
-    true
+    rows - keep
 }
