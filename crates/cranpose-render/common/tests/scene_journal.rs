@@ -115,6 +115,22 @@ fn a_reader_further_behind_than_the_journal_keeps_loses_the_changes() {
 }
 
 #[test]
+fn a_reader_that_reads_once_in_three_updates_keeps_the_changes() {
+    let mut store = rooted_store();
+    let mut reader = Reader::of(&store);
+
+    for round in 0..20 {
+        add_child(&mut store, NodeId(2 + 2 * round));
+        add_and_remove(&mut store, NodeId(3 + 2 * round));
+        assert_eq!(
+            reader.events(&store).map(|events| events.len()),
+            Some(3),
+            "round {round}: a window that draws once in three updates reads the changes of all three"
+        );
+    }
+}
+
+#[test]
 fn a_cleared_store_loses_the_changes() {
     let mut store = rooted_store();
     let mut reader = Reader::of(&store);
