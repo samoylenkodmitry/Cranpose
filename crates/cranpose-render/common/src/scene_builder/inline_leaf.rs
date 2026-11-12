@@ -186,7 +186,7 @@ fn place_inline(
 // The flags of the leaf of the node of `data` under `context`: whether it
 // lies in a motion context.
 fn leaf_flags(data: &SnapshotNodeData<'_>, context: LowerContext) -> RecordFlags {
-    if context.inherited_motion_context_animated || data.modifier_slices.motion_context_animated() {
+    if context.inherited.motion_context_animated || data.modifier_slices.motion_context_animated() {
         RecordFlags::MOTION_ANIMATED
     } else {
         RecordFlags::default()

@@ -188,10 +188,8 @@ impl ParentPass {
     // geometry.
     fn lower_context(self, children: Option<AbsOrigin>) -> LowerContext {
         LowerContext {
-            inherited_motion_context_animated: self.inherited.motion_context_animated,
-            inherited_translated_content_context: self.inherited.translated_content_context,
+            inherited: self.inherited,
             parent_abs: children,
-            parent_content_offset: self.inherited.parent_content_offset,
         }
     }
 }

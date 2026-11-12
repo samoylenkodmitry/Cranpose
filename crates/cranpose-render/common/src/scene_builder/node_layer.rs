@@ -9,8 +9,8 @@ use cranpose_ui::{ModifierNodeSlices, Point, Rect, Size, widgets::LayoutState};
 use cranpose_ui_graphics::{CompositingStrategy, DrawPlacement, GraphicsLayer, LayerShape};
 
 use super::{
-    DrawPass, DrawTarget, GroupPaint, Level, NodeCommands, NodeDraws, OwnDraws, SnapshotNodeData,
-    TranslateAncestorContext, TranslateGeometry, append_draw_nodes, draw_nodes,
+    DrawPass, DrawTarget, GroupPaint, Inherited, Level, NodeCommands, NodeDraws, OwnDraws,
+    SnapshotNodeData, TranslateAncestorContext, TranslateGeometry, append_draw_nodes, draw_nodes,
     inline_leaf::lower_child, layer_node_capacity, note_space_change, read_placed_node_data,
     shaped_graphics_layer, text_item,
 };
@@ -24,27 +24,25 @@ use crate::{
 
 #[derive(Clone, Copy)]
 pub(super) struct LowerContext {
-    pub(super) inherited_motion_context_animated: bool,
-    pub(super) inherited_translated_content_context: bool,
+    pub(super) inherited: Inherited,
     pub(super) parent_abs: Option<AbsOrigin>,
-    pub(super) parent_content_offset: Point,
 }
 
 impl LowerContext {
     pub(super) const ROOT: Self = Self {
-        inherited_motion_context_animated: false,
-        inherited_translated_content_context: false,
+        inherited: Inherited {
+            motion_context_animated: false,
+            translated_content_context: false,
+            parent_content_offset: Point { x: 0.0, y: 0.0 },
+        },
         parent_abs: Some(AbsOrigin::ROOT),
-        parent_content_offset: Point { x: 0.0, y: 0.0 },
     };
 
     // What a child lowers with beneath `ancestors`.
     pub(super) fn beneath(ancestors: TranslateAncestorContext) -> Self {
         Self {
-            inherited_motion_context_animated: ancestors.inherited.motion_context_animated,
-            inherited_translated_content_context: ancestors.inherited.translated_content_context,
+            inherited: ancestors.inherited,
             parent_abs: Some(ancestors.parent_abs),
-            parent_content_offset: ancestors.inherited.parent_content_offset,
         }
     }
 
@@ -54,13 +52,16 @@ impl LowerContext {
         content_offset: Point,
         parent_abs: Option<AbsOrigin>,
     ) -> Self {
+        let inherited = self.inherited;
         Self {
-            inherited_motion_context_animated: self.inherited_motion_context_animated
-                || slices.motion_context_animated(),
-            inherited_translated_content_context: self.inherited_translated_content_context
-                || slices.translated_content_context(),
+            inherited: Inherited {
+                motion_context_animated: inherited.motion_context_animated
+                    || slices.motion_context_animated(),
+                translated_content_context: inherited.translated_content_context
+                    || slices.translated_content_context(),
+                parent_content_offset: content_offset,
+            },
             parent_abs,
-            parent_content_offset: content_offset,
         }
     }
 }
@@ -92,10 +93,10 @@ fn node_layer_head(
             frame.local_bounds,
             frame.placement,
             graphics_layer.as_ref(),
-            context.parent_content_offset,
+            context.inherited.parent_content_offset,
         ),
         content_offset: frame.content_offset,
-        motion_context_animated: context.inherited_motion_context_animated
+        motion_context_animated: context.inherited.motion_context_animated
             || slices.motion_context_animated(),
         translated_content_context,
         translated_content_offset: if translated_content_context {
@@ -503,7 +504,7 @@ pub(super) fn write_node_layer(
         target,
         head,
         outer,
-        context.parent_content_offset,
+        context.inherited.parent_content_offset,
         |store, record, list, layer| {
             let draws = DrawTarget {
                 paint: layer.map(GroupPaint::Layer),
