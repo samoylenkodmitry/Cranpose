@@ -13,7 +13,7 @@ use cranpose_core::{
 use cranpose_macros::composable;
 use cranpose_render_common::{
     Renderer,
-    scene_store::{ItemRef, LayerRef, RecordFlags, SceneStore},
+    scene_store::{ItemRef, LayerRef, RecordFlags, RecordKind, SceneStore},
 };
 use cranpose_render_pixels::{Picture, PixelRect, PixelsRenderer};
 use cranpose_ui::{
@@ -1539,5 +1539,15 @@ fn a_record_given_no_items_alone_redraws() {
     a_store_write_alone_keeps_the_frame_whole("set_items", |store| {
         let record = record_of_size(store, SIDE);
         store.set_items(record, &[]);
+    });
+}
+
+#[test]
+fn a_record_of_another_kind_alone_redraws() {
+    a_store_write_alone_keeps_the_frame_whole("set_kind", |store| {
+        let record = record_of_size(store, SIDE);
+        let layer = store.layer(record);
+        assert_eq!(layer.kind(), RecordKind::Leaf, "the plain box is a leaf");
+        store.set_kind(record, RecordKind::Layer, layer.node_id());
     });
 }

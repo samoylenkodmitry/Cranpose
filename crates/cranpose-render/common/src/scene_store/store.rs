@@ -823,7 +823,8 @@ impl SceneStore {
         true
     }
 
-    /// Sets what `id` draws for and the layout node it draws for.
+    /// Sets what `id` draws for and the layout node it draws for. A
+    /// [`RecordKind::Leaf`] holds no layer properties and no child layers.
     #[inline]
     pub fn set_kind(&mut self, id: RecordId, kind: RecordKind, node: Option<NodeId>) {
         let index = id.index();
