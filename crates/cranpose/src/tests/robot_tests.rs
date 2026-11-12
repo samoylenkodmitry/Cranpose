@@ -39,6 +39,7 @@ fn presentation_info_reports_constraints_and_channel_errors() {
                 supported_modes: vec![mode],
                 frame_pacing_mode: pacing,
                 refresh_rate_hz: 60.0,
+                surface_size: (1200, 800),
             };
             let expected = pacing == FramePacingMode::NoVsync
                 && matches!(

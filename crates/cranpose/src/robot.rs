@@ -26,6 +26,9 @@ pub struct RobotPresentationInfo {
     pub frame_pacing_mode: cranpose_app_shell::FramePacingMode,
     /// Display refresh estimate used by the window scheduler.
     pub refresh_rate_hz: f64,
+    /// The window surface's width and height in physical pixels, the unit
+    /// of the rects of a frame's window damage.
+    pub surface_size: (u32, u32),
 }
 
 #[cfg(feature = "renderer-wgpu")]
@@ -1102,10 +1105,7 @@ impl Robot {
 
     /// Reset the owning app shell's FPS monitor.
     pub fn reset_fps_stats(&self) -> Result<(), String> {
-        self.tx
-            .send(RobotCommand::ResetFpsStats)
-            .map_err(|e| format!("Failed to send FPS stats reset command: {e}"))?;
-        self.recv_ack()
+        self.send_and_ack(RobotCommand::ResetFpsStats, "FPS stats reset command")
     }
 
     /// Query the owning app context's latest recorded fling velocity.

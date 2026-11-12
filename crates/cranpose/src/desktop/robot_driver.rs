@@ -373,6 +373,7 @@ fn robot_frame_diagnostics(
                     supported_modes: caps.present_modes.clone(),
                     frame_pacing_mode: app.frame_pacing_mode(),
                     refresh_rate_hz: 1.0 / interval.as_secs_f64(),
+                    surface_size: (config.width, config.height),
                 })
             }
             _ => RobotResponse::Error("Window presentation is not configured".into()),

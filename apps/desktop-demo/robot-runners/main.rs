@@ -60,6 +60,7 @@ runners! {
     robot_composition_local_disappear,
     robot_conditional_infinite_transition_busy,
     robot_content_type_reuse,
+    robot_controls_after_room,
     robot_controls_grid,
     robot_copy_paste,
     robot_counter_button_release_external_visual,
