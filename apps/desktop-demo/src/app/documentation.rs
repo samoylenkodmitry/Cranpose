@@ -5,7 +5,7 @@ use cranpose_animation::{animate_float_as_state_with_initial, tween, Easing};
 use cranpose_core::{
     mutableStateOf, remember, rememberMutableStateOf, with_key, MutableState, SideEffect,
 };
-use cranpose_foundation::lazy::{LazyListScope, LazyListState};
+use cranpose_foundation::lazy::{LazyLayoutKey, LazyListScope, LazyListState};
 use cranpose_services::local_uri_handler;
 use cranpose_ui::{
     composable, rememberScrollableState, text::FontWeight, Alignment, Axis, Box, BoxSpec, Button,
@@ -144,15 +144,25 @@ impl DocumentationState {
             .clamp(0.0, (chapters().len() - 1) as f32)
     }
 
+    // The size the page measured for `item`: the header, keyed 0, then the
+    // reader's items, keyed by their indices.
+    fn item_size(self, item: usize) -> Option<f32> {
+        let key = if item == 0 {
+            LazyLayoutKey::User(0)
+        } else {
+            LazyLayoutKey::Index(item)
+        };
+        self.page.cached_item_size(item, key.to_slot_id())
+    }
+
     fn reader_position(self) -> f32 {
         let item = self.page.first_visible_item_index();
         let offset = self.page.first_visible_item_scroll_offset();
         if item == 0 {
-            return -1.0 + offset / self.page.get_cached_size(0).unwrap_or(1.0).max(1.0);
+            return -1.0 + offset / self.item_size(0).unwrap_or(1.0).max(1.0);
         }
         let fraction = self
-            .page
-            .get_cached_size(item)
+            .item_size(item)
             .map_or(0.0, |height| offset / height.max(1.0));
         DOCUMENT.with(|document| document.position(item, fraction))
     }
@@ -183,12 +193,12 @@ impl DocumentationState {
 
     fn scroll_to_position(self, position: f32) {
         if position < 0.0 {
-            let offset = (position + 1.0) * self.page.get_cached_size(0).unwrap_or(0.0);
+            let offset = (position + 1.0) * self.item_size(0).unwrap_or(0.0);
             self.page.scroll_to_item(0, offset.max(0.0));
             return;
         }
         let (item, fraction) = DOCUMENT.with(|document| document.item(position));
-        let offset = self.page.get_cached_size(item).unwrap_or(0.0) * fraction;
+        let offset = self.item_size(item).unwrap_or(0.0) * fraction;
         self.page.scroll_to_item(item, offset);
     }
 

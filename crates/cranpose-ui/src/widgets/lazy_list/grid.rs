@@ -728,6 +728,11 @@ impl LazyItemSource for LazyGridLines<'_, '_, '_> {
         Ok(self.line(index))
     }
 
+    fn key(&self, index: usize) -> u64 {
+        let first = self.lines.line(index).first;
+        self.items.inputs.content.get_key(first).to_slot_id()
+    }
+
     fn keep_beyond(&mut self, index: usize, distance: f32) -> Result<BeyondItem, Infallible> {
         let (lines, content) = (self.lines, self.items.inputs.content);
         let line = lines.line(index);

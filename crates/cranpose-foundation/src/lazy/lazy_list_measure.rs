@@ -101,6 +101,10 @@ pub trait LazyItemSource {
     /// Composes and measures the item at `index`, which the pass places.
     fn measure(&mut self, index: usize) -> Result<LazyListMeasuredItem, Self::Refusal>;
 
+    /// The key of the item at `index`, as its measured item carries it: a
+    /// size the list cached for the index holds only for that key.
+    fn key(&self, index: usize) -> u64;
+
     /// Keeps the item at `index`, which lies beyond the viewport, composed
     /// ahead of a scroll. `distance` says how far past the viewport's edge
     /// the item starts: measured for the items between, estimated from the
@@ -126,6 +130,10 @@ where
         Ok((self.0)(index))
     }
 
+    fn key(&self, index: usize) -> u64 {
+        index as u64
+    }
+
     fn keep_beyond(&mut self, index: usize, _distance: f32) -> Result<BeyondItem, Infallible> {
         (self.0)(index);
         Ok(BeyondItem::Kept)
@@ -148,7 +156,9 @@ where
 /// * `viewport_size` - Size of the viewport in main axis
 /// * `cross_axis_size` - Size of the viewport in cross axis
 /// * `config` - Measurement configuration
-/// * `measure_item` - Callback to compose and measure an item at given index
+/// * `measure_item` - Callback to compose and measure an item at given index.
+///   The list knows its items by their indices: a size cached for an index
+///   holds for the key that is the index.
 ///
 /// # Returns
 /// A [`LazyListMeasureResult`] containing the items to place.
@@ -345,13 +355,8 @@ where
 
     let pending_scroll_delta = measure_state.pending_scroll_delta;
     let window_scroll_delta = measure_state.window_scroll_delta;
-    let resolver = ScrollPositionResolver::new(
-        state,
-        measure_state,
-        config,
-        items_count,
-        effective_viewport_size,
-    );
+    let resolver =
+        ScrollPositionResolver::new(measure_state, config, items_count, effective_viewport_size);
     let (first_index, first_offset, pre_measured) =
         resolve_start(&resolver, state, config, items_count, source)?;
 
@@ -454,7 +459,9 @@ where
 
     first_index = first_index.min(items_count.saturating_sub(1));
     first_offset = first_offset.max(0.0);
-    (first_index, first_offset) = resolver.normalize_forward_with_cache(first_index, first_offset);
+    let known_size = |index| known_item_size(state, &*source, &pre_measured, index);
+    (first_index, first_offset) =
+        resolver.normalize_forward_with_known_sizes(first_index, first_offset, known_size);
     let item_extent_at = |index: usize, item_size: f32| {
         let spacing_after = if index + 1 < items_count {
             config.spacing
@@ -463,8 +470,7 @@ where
         };
         item_size + spacing_after
     };
-    let mut offset_known_within_current_item = state
-        .get_cached_size(first_index)
+    let mut offset_known_within_current_item = known_size(first_index)
         .is_some_and(|size| first_offset + 0.001 < item_extent_at(first_index, size));
 
     if !offset_known_within_current_item && first_offset > 0.0 && first_index < items_count {
@@ -487,6 +493,20 @@ where
         pre_measured.push_front(item);
     }
     Ok((first_index, first_offset, pre_measured))
+}
+
+// The size of the item at `index`: as the pass `measured` it, or as the
+// cache knows it while the index holds the item it was measured for.
+fn known_item_size<S: LazyItemSource>(
+    state: &LazyListState,
+    source: &S,
+    measured: &VecDeque<LazyListMeasuredItem>,
+    index: usize,
+) -> Option<f32> {
+    match measured.iter().find(|item| item.index == index) {
+        Some(item) => Some(item.main_axis_size),
+        None => state.cached_item_size(index, source.key(index)),
+    }
 }
 
 // Where a pass leaves the list: its first visible item, how far it is

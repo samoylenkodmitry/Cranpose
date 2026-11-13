@@ -326,7 +326,7 @@
   *(.literal._RNvM*NtCs*_18cranpose_app_shell11shell_frameINt*8AppShellNtCs*_22cranpose_render_pixels14PixelsRendererE13compose_phase* .text._RNvM*NtCs*_18cranpose_app_shell11shell_frameINt*8AppShellNtCs*_22cranpose_render_pixels14PixelsRendererE13compose_phase*)
   *(.literal._RNvM*NtNtCs*_13cranpose_core8composer13runtime_stateNt*20ComposerRuntimeState20host_for_storage_key* .text._RNvM*NtNtCs*_13cranpose_core8composer13runtime_stateNt*20ComposerRuntimeState20host_for_storage_key*)
   *(.literal._RNvNtCs*_13cranpose_text9paragraph25resolve_content_direction* .text._RNvNtCs*_13cranpose_text9paragraph25resolve_content_direction*)
-  *(.literal._RNvM*NtNtCs*_19cranpose_foundation4lazy15lazy_list_stateNt*13LazyListState15get_cached_size* .text._RNvM*NtNtCs*_19cranpose_foundation4lazy15lazy_list_stateNt*13LazyListState15get_cached_size*)
+  *(.literal._RNvM*NtNtCs*_19cranpose_foundation4lazy15lazy_list_stateNt*13LazyListState16cached_item_size* .text._RNvM*NtNtCs*_19cranpose_foundation4lazy15lazy_list_stateNt*13LazyListState16cached_item_size*)
   *(.literal._RNvM*NtCs*_13cranpose_core8composerNt*8Composer4park* .text._RNvM*NtCs*_13cranpose_core8composerNt*8Composer4park*)
   *(.literal._RNvM*NtNtCs*_11cranpose_ui8modifier6slicesNt*18ModifierNodeSlices23publish_window_geometry* .text._RNvM*NtNtCs*_11cranpose_ui8modifier6slicesNt*18ModifierNodeSlices23publish_window_geometry*)
   *(.literal._RNvM*Cs*_8smallvecINt*8SmallVecANtNtCs*_13cranpose_text11text_layout10LayoutLinej1_E21reserve_one_unchecked* .text._RNvM*Cs*_8smallvecINt*8SmallVecANtNtCs*_13cranpose_text11text_layout10LayoutLinej1_E21reserve_one_unchecked*)

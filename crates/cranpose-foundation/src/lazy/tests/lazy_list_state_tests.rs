@@ -284,17 +284,22 @@ fn begin_measure_pass_takes_coherent_snapshot_and_consumes_pending_inputs() {
 fn item_size_cache_refresh_keeps_recent_entry_and_evicts_oldest_live_entry() {
     with_test_runtime(|| {
         let state = new_lazy_list_state();
-        for index in 0..super::ITEM_SIZE_CACHE_CAPACITY {
-            state.cache_item_size(index, index as f32 + 10.0);
-        }
+        state.cache_item_sizes(
+            (0..super::ITEM_SIZE_CACHE_CAPACITY)
+                .map(|index| (index, index as u64, index as f32 + 10.0)),
+        );
 
-        state.cache_item_size(0, 999.0);
-        state.cache_item_size(super::ITEM_SIZE_CACHE_CAPACITY, 123.0);
+        state.cache_item_sizes([(0, 0, 999.0)]);
+        let beyond = super::ITEM_SIZE_CACHE_CAPACITY;
+        state.cache_item_sizes([(beyond, beyond as u64, 123.0)]);
 
-        assert_eq!(state.get_cached_size(0), Some(999.0));
-        assert_eq!(state.get_cached_size(1), None);
+        assert_eq!(state.cached_item_size(0, 0), Some(999.0));
+        assert_eq!(state.cached_item_size(1, 1), None);
         assert_eq!(
-            state.get_cached_size(super::ITEM_SIZE_CACHE_CAPACITY),
+            state.cached_item_size(
+                super::ITEM_SIZE_CACHE_CAPACITY,
+                super::ITEM_SIZE_CACHE_CAPACITY as u64
+            ),
             Some(123.0),
         );
     });
@@ -304,18 +309,20 @@ fn item_size_cache_refresh_keeps_recent_entry_and_evicts_oldest_live_entry() {
 fn item_size_cache_read_promotes_entry_for_large_scroll_reuse() {
     with_test_runtime(|| {
         let state = new_lazy_list_state();
-        for index in 0..super::ITEM_SIZE_CACHE_CAPACITY {
-            state.cache_item_size(index, index as f32 + 10.0);
-        }
+        state.cache_item_sizes(
+            (0..super::ITEM_SIZE_CACHE_CAPACITY)
+                .map(|index| (index, index as u64, index as f32 + 10.0)),
+        );
 
-        assert_eq!(state.get_cached_size(0), Some(10.0));
-        state.cache_item_size(super::ITEM_SIZE_CACHE_CAPACITY, 123.0);
+        assert_eq!(state.cached_item_size(0, 0), Some(10.0));
+        let beyond = super::ITEM_SIZE_CACHE_CAPACITY;
+        state.cache_item_sizes([(beyond, beyond as u64, 123.0)]);
 
-        assert_eq!(state.get_cached_size(0), Some(10.0));
-        assert_eq!(state.get_cached_size(1), None);
+        assert_eq!(state.cached_item_size(0, 0), Some(10.0));
+        assert_eq!(state.cached_item_size(1, 1), None);
         let last = super::ITEM_SIZE_CACHE_CAPACITY - 1;
         assert_eq!(
-            state.get_cached_size(last),
+            state.cached_item_size(last, last as u64),
             Some(last as f32 + 10.0),
             "a full cache keeps the sizes used last"
         );
@@ -327,10 +334,10 @@ fn cache_item_sizes_updates_average_only_for_new_entries() {
     with_test_runtime(|| {
         let state = new_lazy_list_state();
 
-        let average = state.cache_item_sizes([(0, 10.0), (1, 20.0), (0, 12.0)]);
+        let average = state.cache_item_sizes([(0, 0, 10.0), (1, 1, 20.0), (0, 0, 12.0)]);
 
-        assert_eq!(state.get_cached_size(0), Some(12.0));
-        assert_eq!(state.get_cached_size(1), Some(20.0));
+        assert_eq!(state.cached_item_size(0, 0), Some(12.0));
+        assert_eq!(state.cached_item_size(1, 1), Some(20.0));
         assert!((average - 15.0).abs() < 0.001);
     });
 }

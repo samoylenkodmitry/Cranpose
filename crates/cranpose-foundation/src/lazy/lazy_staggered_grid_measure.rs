@@ -568,7 +568,11 @@ fn publish<S: LazyStaggeredItemSource>(
         Some(item) => state.update_scroll_position_with_key(first, first_offset, item.key),
         None => state.update_scroll_position(first, first_offset),
     }
-    state.cache_item_sizes(visible.iter().map(|item| (item.index, item.main_axis_size)));
+    state.cache_item_sizes(
+        visible
+            .iter()
+            .map(|item| (item.index, item.key, item.main_axis_size)),
+    );
     let content = end.unwrap_or_else(|| lanes.estimated_extent(pass.items_count, pass.estimate));
     let total_content_size = content + pass.before + pass.after;
     let viewport = if pass.unbounded {

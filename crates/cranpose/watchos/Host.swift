@@ -403,6 +403,15 @@ final class CranposeModel: ObservableObject {
         if active { wake() }
     }
 
+    /// Tells the composition the scene's phase. An inactive scene is out of
+    /// the foreground and may still be on the screen, as with the wrist down
+    /// in Always On. The app sees it as paused. A scene in the background is
+    /// off the screen. The app sees it as stopped.
+    func enter(_ phase: ScenePhase) {
+        CPVisible(phase != .background)
+        activate(phase == .active)
+    }
+
     /// Stops the frame loop for `nanos`, or until a wake when it is `UInt64.max`.
     func rest(for nanos: UInt64) {
         alarm?.cancel()
@@ -470,10 +479,10 @@ struct CranposeView: View {
                     touching = false
                     model.wake()
                 })
-            .onAppear { model.resize(geometry.size, safeArea: safe.safeAreaInsets); model.activate(phase == .active) }
+            .onAppear { model.resize(geometry.size, safeArea: safe.safeAreaInsets); model.enter(phase) }
             .onChange(of: geometry.size) { _, size in model.resize(size, safeArea: safe.safeAreaInsets) }
             .onChange(of: safe.safeAreaInsets) { _, insets in model.resize(geometry.size, safeArea: insets) }
-            .onChange(of: phase) { _, phase in touching = false; model.activate(phase == .active) }
+            .onChange(of: phase) { _, phase in touching = false; model.enter(phase) }
             .onDisappear { touching = false; model.activate(false) }
         }
         .ignoresSafeArea() }
