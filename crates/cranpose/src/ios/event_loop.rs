@@ -399,6 +399,11 @@ impl<F: FnMut() + 'static> IosApp<F> {
             if !gpu.present.publish(shell.renderer(), &gpu.config, times) {
                 return Redraw::Settled;
             }
+            // The present thread holds the frame of an app off the screen
+            // until it comes back: no further frame is owed till then.
+            if gpu.present.occluded() {
+                return Redraw::Settled;
+            }
             gpu.surface_dirty = false;
             return Redraw::Presented;
         };
@@ -738,6 +743,11 @@ impl<F: FnMut() + 'static> ApplicationHandler for IosApp<F> {
             WindowEvent::RedrawRequested => {
                 self.redraw();
                 self.schedule_wake(event_loop);
+            }
+            WindowEvent::Occluded(_) => {
+                if let (Some(gpu), Some(shell)) = (self.gpu.as_mut(), self.shell.as_mut()) {
+                    gpu.present.observe_occlusion(shell.renderer(), &event);
+                }
             }
             WindowEvent::CloseRequested => {
                 event_loop.exit();
