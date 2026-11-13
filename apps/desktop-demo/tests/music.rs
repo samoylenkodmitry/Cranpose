@@ -5,7 +5,10 @@ use std::{
     cell::RefCell,
     f32::consts::TAU,
     rc::Rc,
-    sync::{Mutex, MutexGuard, PoisonError},
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, Mutex, MutexGuard, PoisonError,
+    },
 };
 
 use cranpose_audio::{
@@ -35,14 +38,39 @@ fn count(frames: f32) -> usize {
     usize::try_from(cranpose_ui_graphics::whole::to_i32(frames)).unwrap_or(0)
 }
 
-struct KeptSink;
+// How often the player suspended and resumed its sink.
+#[derive(Default)]
+struct SinkCalls {
+    suspends: AtomicUsize,
+    resumes: AtomicUsize,
+}
 
-impl AudioSink for KeptSink {}
+impl SinkCalls {
+    fn counts(&self) -> (usize, usize) {
+        (
+            self.suspends.load(Ordering::Relaxed),
+            self.resumes.load(Ordering::Relaxed),
+        )
+    }
+}
+
+struct KeptSink(Arc<SinkCalls>);
+
+impl AudioSink for KeptSink {
+    fn suspend(&self) {
+        self.0.suspends.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn resume(&self) {
+        self.0.resumes.fetch_add(1, Ordering::Relaxed);
+    }
+}
 
 // An output that keeps the renderer of the player that opens it.
 struct KeptOutput {
     output: MusicOutput,
     renderer: Rc<RefCell<Option<Box<dyn Renderer>>>>,
+    sink: Arc<SinkCalls>,
 }
 
 impl KeptOutput {
@@ -55,15 +83,21 @@ impl KeptOutput {
     fn rendering_as_it_opens(frames: usize) -> Self {
         let renderer = Rc::new(RefCell::new(None));
         let kept = Rc::clone(&renderer);
+        let sink = Arc::new(SinkCalls::default());
+        let calls = Arc::clone(&sink);
         let output = MusicOutput::new(move |mut renderer| {
             if frames > 0 {
                 renderer.set_device_format(SAMPLE_RATE, CHANNELS);
                 let _: RenderStatus = renderer.render(&mut vec![0.0; frames * CHANNELS]);
             }
             *kept.borrow_mut() = Some(renderer);
-            Ok(Box::new(KeptSink))
+            Ok(Box::new(KeptSink(Arc::clone(&calls))))
         });
-        Self { output, renderer }
+        Self {
+            output,
+            renderer,
+            sink,
+        }
     }
 
     // The left channel of the next `seconds` of sound.
@@ -237,6 +271,23 @@ fn clair_de_lune_reads_as_two_hands() {
         .filter(|note| note.ring > note.held)
         .count();
     assert!(pedalled > 300, "{pedalled} notes ring under the pedal");
+}
+
+#[test]
+fn a_resting_player_suspends_its_device_and_the_next_play_resumes_it() {
+    let stage = Stage::new();
+    stage.player.play();
+    assert_eq!(stage.output.sink.counts(), (0, 0));
+    stage.player.rest();
+    assert_eq!(stage.output.sink.counts(), (1, 0));
+    stage.player.rest();
+    assert_eq!(
+        stage.output.sink.counts(),
+        (1, 0),
+        "a resting device rests once"
+    );
+    stage.player.play();
+    assert_eq!(stage.output.sink.counts(), (1, 1));
 }
 
 #[test]
