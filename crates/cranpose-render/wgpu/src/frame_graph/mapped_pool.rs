@@ -37,9 +37,12 @@ impl MapRequests {
     // is the frame's submit; `None` when the caller does not know it.
     pub(crate) fn recall(&mut self, submission: Option<&wgpu::SubmissionIndex>) {
         self.recalls += 1;
+        let recall = self.recalls;
         for (buffer, progress) in self.pending.drain(..) {
             if let Some(submission) = submission {
-                let _ = progress.recalled.set((self.recalls, submission.clone()));
+                progress
+                    .recalled
+                    .get_or_init(|| (recall, submission.clone()));
             }
             buffer.map_async(wgpu::MapMode::Write, .., move |result| match result {
                 Ok(()) => {
@@ -117,10 +120,13 @@ impl<T: MappedBuffers> MappedPool<T> {
             return Some(item);
         }
         let submission = self.older_submission()?;
-        let _ = device.poll(wgpu::PollType::Wait {
+        let waited = device.poll(wgpu::PollType::Wait {
             submission_index: Some(submission),
             timeout: None,
         });
+        if waited.is_err() {
+            return None;
+        }
         self.collect();
         choose(&mut self.free)
     }
