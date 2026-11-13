@@ -7,14 +7,18 @@ use std::{
 use cranpose_render_wgpu::{
     CancelReason, GpuTarget, PresentOutcome, PresentTimings, PublishOutcome, WgpuRenderer,
 };
-use winit::{event_loop::EventLoopProxy, window::Window};
+use winit::{event::WindowEvent, event_loop::EventLoopProxy, window::Window};
 
 // Where a window's frames present: on the loop's thread, into the surface
 // the loop holds, or on the window renderer's present thread, which holds
-// the surface, with the frames handed to it and not handed back.
+// the surface, with the frames handed to it and not handed back and whether
+// the window server shows none of the window.
 pub(crate) enum WindowPresent {
     OnLoop(wgpu::Surface<'static>),
-    OnPresentThread(FramesInFlight),
+    OnPresentThread {
+        frames: FramesInFlight,
+        occluded: bool,
+    },
 }
 
 // A frame handed to the present thread: its id, when its redraw started and
@@ -139,8 +143,9 @@ impl WindowPresent {
             renderer.init_gpu(target);
             return Self::OnLoop(surface);
         }
+        let occluded = window_occluded(window);
         if let Some(thread) = renderer.present_thread() {
-            thread.set_occluded(window_occluded(window));
+            thread.set_occluded(occluded);
         }
         let config = config.clone();
         if !renderer
@@ -149,10 +154,13 @@ impl WindowPresent {
         {
             log::error!("[present-thread] the present thread took no surface");
         }
-        Self::OnPresentThread(FramesInFlight {
-            frames: VecDeque::new(),
-            clock_origin,
-        })
+        Self::OnPresentThread {
+            frames: FramesInFlight {
+                frames: VecDeque::new(),
+                clock_origin,
+            },
+            occluded,
+        }
     }
 
     // Configures the surface with `config`; false when `renderer` has no
@@ -171,7 +179,7 @@ impl WindowPresent {
                 }
                 device.is_some()
             }
-            Self::OnPresentThread(_) => renderer
+            Self::OnPresentThread { .. } => renderer
                 .present_thread()
                 .is_some_and(|thread| thread.resize(config.clone())),
         };
@@ -194,12 +202,32 @@ impl WindowPresent {
                 surface.configure(&target.device, config);
                 renderer.init_gpu(target);
             }
-            Self::OnPresentThread(_) => {
+            Self::OnPresentThread { .. } => {
                 if let Some(thread) = renderer.present_thread() {
                     thread.replace_device(target);
                 }
             }
         }
+    }
+
+    // Notes whether an `event` says the window server shows none of the
+    // window, and tells the present thread of `renderer`: AppKit answers
+    // that on the main thread only.
+    pub(crate) fn observe_occlusion(&mut self, renderer: &mut WgpuRenderer, event: &WindowEvent) {
+        if let (Self::OnPresentThread { occluded, .. }, WindowEvent::Occluded(now)) = (self, event)
+        {
+            *occluded = *now;
+            if let Some(thread) = renderer.present_thread() {
+                thread.set_occluded(*now);
+            }
+        }
+    }
+
+    // Whether the window server shows none of a window whose frames present
+    // on a thread of their own: a frame for it would wait unseen, as a loop's
+    // surface gives no image then.
+    pub(crate) fn occluded(&self) -> bool {
+        matches!(self, Self::OnPresentThread { occluded: true, .. })
     }
 
     // Hands the frame `renderer` holds to the present thread, which draws
@@ -212,7 +240,7 @@ impl WindowPresent {
         config: &wgpu::SurfaceConfiguration,
         (started_at, after_update): (Instant, Instant),
     ) -> bool {
-        let Self::OnPresentThread(frames) = self else {
+        let Self::OnPresentThread { frames, .. } = self else {
             return false;
         };
         let outcome = renderer.publish_frame(config.width, config.height);
@@ -232,7 +260,7 @@ impl WindowPresent {
     // which frees their room, and says what became of them.
     pub(crate) fn drain(&mut self, renderer: &mut WgpuRenderer) -> PresentReturns {
         let mut returns = PresentReturns::default();
-        let Self::OnPresentThread(frames) = self else {
+        let Self::OnPresentThread { frames, .. } = self else {
             return returns;
         };
         renderer.drain_present_returns_with(&mut |frame_id, outcome, timings| {

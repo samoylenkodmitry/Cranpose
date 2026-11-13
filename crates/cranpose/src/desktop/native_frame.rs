@@ -81,14 +81,24 @@ impl App {
             return false;
         }
         let times = (frame_started_at, after_update);
-        if matches!(native.present, WindowPresent::OnPresentThread(_)) {
+        if matches!(native.present, WindowPresent::OnPresentThread { .. }) {
             // Wayland asks for the frame callback before the surface commits.
             native.window.pre_present_notify();
             let published =
                 native
                     .present
                     .publish(surface.renderer(), &native.surface_config, times);
-            if published {
+            // The present thread holds the frame of a window the window
+            // server shows none of: the next waits a frame interval, as
+            // after a loop's surface gave no image.
+            if published && native.present.occluded() {
+                pace_after_empty_redraw(
+                    &mut native.last_frame_start_time,
+                    &mut native.last_redraw_empty,
+                    frame_started_at,
+                    false,
+                );
+            } else if published {
                 native.surface_dirty = false;
                 native.last_frame_start_time = Some(frame_started_at);
             }
@@ -191,7 +201,7 @@ impl App {
         app: &mut AppShell<WgpuRenderer>,
         native: &mut NativeWindowSurface,
     ) {
-        if !matches!(native.present, WindowPresent::OnPresentThread(_)) {
+        if !matches!(native.present, WindowPresent::OnPresentThread { .. }) {
             return;
         }
         let Some(mut surface) = native_surface(app, native) else {

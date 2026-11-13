@@ -442,8 +442,12 @@ impl<F: FnMut() + 'static> IosApp<F> {
         };
         let returns = gpu.present.drain(shell.renderer());
         gpu.surface_dirty |= returns.redraw || returns.unavailable;
-        if returns.redraw {
-            shell.mark_dirty();
+        // The renderer lowers the next frame from the scene it holds: a
+        // refused frame owes a frame, not a new scene.
+        if returns.redraw
+            && let Some(window) = &self.window
+        {
+            window.request_redraw();
         }
         if returns.presented.is_some() {
             self.device_loss.presented();
