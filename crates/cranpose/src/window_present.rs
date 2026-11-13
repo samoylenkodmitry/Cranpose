@@ -222,9 +222,17 @@ impl WindowPresent {
         if let (Self::OnPresentThread { occluded, .. }, WindowEvent::Occluded(now)) = (self, event)
         {
             *occluded = *now;
-            if let Some(thread) = renderer.present_thread() {
-                thread.set_occluded(*now);
+            let Some(thread) = renderer.present_thread() else {
+                return;
+            };
+            // An iOS app that enters the background submits no GPU work
+            // after: the thread ends its frame first.
+            #[cfg(target_os = "ios")]
+            if *now {
+                thread.hide_and_wait();
+                return;
             }
+            thread.set_occluded(*now);
         }
     }
 

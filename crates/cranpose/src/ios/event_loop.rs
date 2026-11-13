@@ -7,7 +7,7 @@ use std::{
 
 use cranpose_app_shell::{AppShell, default_root_key};
 use cranpose_platform_desktop_winit::DesktopWinitPlatform;
-use cranpose_render_wgpu::{PresentThread, WgpuRenderer};
+use cranpose_render_wgpu::WgpuRenderer;
 use cranpose_ui::EdgeInsets;
 use winit::{
     application::ApplicationHandler,
@@ -33,9 +33,6 @@ use crate::{
 
 struct GpuResources {
     present: WindowPresent,
-    // The surface the present thread handed back while the app is off the
-    // screen.
-    parked: Option<wgpu::Surface<'static>>,
     /// Where a lost device's successor opens.
     adapter: wgpu::Adapter,
     config: wgpu::SurfaceConfiguration,
@@ -527,30 +524,15 @@ impl<F: FnMut() + 'static> IosApp<F> {
 
 impl<F: FnMut() + 'static> ApplicationHandler for IosApp<F> {
     fn resumed(&mut self, _event_loop: &dyn ActiveEventLoop) {
-        if let (Some(gpu), Some(shell)) = (self.gpu.as_mut(), self.shell.as_mut())
-            && let Some(surface) = gpu.parked.take()
-            && let Some(thread) = shell.renderer().present_thread()
-        {
-            thread.replace_surface(surface, gpu.config.clone());
-            gpu.surface_dirty = true;
-        }
         if let Some(window) = &self.window {
             window.request_redraw();
         }
         cranpose_services::advance_lifecycle(cranpose_services::LifecycleState::Resumed);
     }
 
-    // An app on its way off the screen may draw no more: the present thread
-    // hands the surface back before the app leaves.
+    // An inactive app stays on the screen, under Control Center or an alert,
+    // and keeps drawing: the background starts with the window's occlusion.
     fn suspended(&mut self, _event_loop: &dyn ActiveEventLoop) {
-        if let (Some(gpu), Some(shell)) = (self.gpu.as_mut(), self.shell.as_mut())
-            && gpu.parked.is_none()
-        {
-            gpu.parked = shell
-                .renderer()
-                .present_thread()
-                .and_then(PresentThread::take_surface);
-        }
         cranpose_services::advance_lifecycle(cranpose_services::LifecycleState::Stopped);
     }
 
@@ -668,7 +650,6 @@ impl<F: FnMut() + 'static> ApplicationHandler for IosApp<F> {
 
         self.gpu = Some(GpuResources {
             present,
-            parked: None,
             adapter,
             config,
             surface_dirty: true,
