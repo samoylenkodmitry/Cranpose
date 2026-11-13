@@ -6,7 +6,9 @@ pub use render::presentable_root_usages;
 mod ablation;
 mod arc_trig_fill;
 mod capture_hash;
+mod captured_frame;
 mod collect;
+mod cpu_allocation_stats;
 mod depth_gate;
 mod draw_pass;
 mod effect_renderer;
@@ -40,6 +42,8 @@ mod glyph_run;
 mod glyph_run_arena;
 pub(crate) mod gpu_stats;
 mod initial_present;
+#[cfg(not(target_arch = "wasm32"))]
+mod inline_present_runtime;
 mod instant_triangles;
 mod lazy_resource;
 mod mesh_fallback;
@@ -55,6 +59,8 @@ mod pipeline_compiler;
 pub mod pipeline_disk_cache;
 mod pipeline_recorder;
 mod pipeline_records;
+#[cfg(not(target_arch = "wasm32"))]
+mod present_observer;
 #[cfg(not(target_arch = "wasm32"))]
 mod present_runtime;
 mod record_columns;
@@ -78,25 +84,11 @@ mod window_packets;
 
 use std::sync::Arc;
 
+pub use captured_frame::CapturedFrame;
+pub use cpu_allocation_stats::DebugCpuAllocationStats;
 use cranpose_render_common::text_fonts::TextFonts;
 use cranpose_ui_graphics::Rect;
 pub use frame_packet::PresentTimings;
-pub use text_system::WgpuTextSystem;
-
-/// Platform code the present thread runs around every present to a surface,
-/// for what only the platform can do with its swapchain, such as asking the
-/// display when earlier frames reached the screen.
-#[cfg(not(target_arch = "wasm32"))]
-pub trait PresentObserver: Send {
-    /// Runs just before `surface` presents a frame.
-    fn before_present(&mut self, surface: &wgpu::Surface<'static>);
-    /// Runs just after `surface` presented it.
-    fn after_present(&mut self, surface: &wgpu::Surface<'static>);
-
-    /// Runs before `surface` is configured anew, while its current swapchain
-    /// still stands. Does nothing unless the platform needs it to.
-    fn before_reconfigure(&mut self, _surface: &wgpu::Surface<'static>) {}
-}
 use frame_packet::RenderReturns;
 #[doc(hidden)]
 pub use frame_packet::{CancelReason, PresentOutcome};
@@ -104,18 +96,21 @@ use frontend::RendererFrontend;
 pub use gpu_stats::{FrameDamage, FrameStatsSnapshot as RenderStatsSnapshot, WindowRects};
 pub use gpu_target::{GpuTarget, optional_device_features};
 pub use initial_present::{clear_to_background, clear_to_default_background};
+#[cfg(not(target_arch = "wasm32"))]
+pub use inline_present_runtime::InlinePresentRuntime;
 pub use pass_timing::{GpuPassTimingEntry, GpuPassTimingReport};
 use pipeline_compiler::PipelineCompilation;
 #[cfg(not(target_arch = "wasm32"))]
-use present_runtime::{
-    PresentControl, PresentHandle, PresentMsg, PresentRuntimeInit, PresentState,
-};
+pub use present_observer::PresentObserver;
+#[cfg(not(target_arch = "wasm32"))]
+use present_runtime::{PresentControl, PresentHandle, PresentRuntimeInit};
 use render::{FrameOutput, FrameSubmit, GpuRenderer, GpuRendererInit};
 pub use render::{
     frame_clear_color, frames_presented, pipelines_created, pipelines_created_off_frame,
 };
 pub use scene::{HitRegion, Scene};
 pub use shared_shader::{shader_stages_flattened, shader_stages_folded};
+pub use text_system::WgpuTextSystem;
 
 pub(crate) fn rect_to_quad(rect: Rect) -> [[f32; 2]; 4] {
     [
@@ -132,38 +127,6 @@ pub enum WgpuRendererError {
     /// The renderer could not draw, with the reason: no GPU was initialized for synchronous
     /// rendering, there is no scene graph, or the GPU reported an error.
     Wgpu(String),
-}
-
-/// CPU-readable RGBA frame captured from the renderer output.
-#[derive(Debug, Clone)]
-pub struct CapturedFrame {
-    /// Width of the frame in device pixels.
-    pub width: u32,
-    /// Height of the frame in device pixels.
-    pub height: u32,
-    /// The pixels as 8-bit RGBA, row by row from the top left, `width * height * 4` bytes.
-    pub pixels: Vec<u8>,
-}
-
-#[doc(hidden)]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct DebugCpuAllocationStats {
-    pub scene_graph_node_count: usize,
-    pub scene_graph_heap_bytes: usize,
-    pub scene_hits: cranpose_render_common::graph_scene::HitStorage,
-    pub text_renderer_pool_len: usize,
-    pub text_renderer_pool_cap: usize,
-    pub image_texture_cache_len: usize,
-    pub image_texture_cache_cap: usize,
-    pub run_arena_staging_bytes: usize,
-    pub run_store_bytes: usize,
-    pub run_store_runs: usize,
-    pub scratch_image_vertices_cap: usize,
-    pub scratch_image_indices_cap: usize,
-    pub scratch_image_cmds_cap: usize,
-    pub scratch_glyph_instances_cap: usize,
-    pub layer_cache_len: usize,
-    pub layer_cache_bytes: u64,
 }
 
 // A renderer that draws on the calling thread, and the executor its frames go
@@ -384,11 +347,7 @@ impl WgpuRenderer {
         };
         let (handle, state, msg_rx) = PresentHandle::new_inline(init, Arc::new(|| {}));
         self.backend = PresentBackend::Threaded(handle);
-        InlinePresentRuntime {
-            state,
-            msg_rx,
-            shutdown_seen: false,
-        }
+        InlinePresentRuntime::new(state, msg_rx)
     }
 
     /// Record that the surface was reconfigured (resize, format change,
@@ -1098,54 +1057,6 @@ impl WgpuRenderer {
 
 #[doc(hidden)]
 pub struct HeldFramePacket(frame_packet::FramePacket);
-
-#[cfg(not(target_arch = "wasm32"))]
-#[doc(hidden)]
-pub struct InlinePresentRuntime {
-    state: PresentState,
-    msg_rx: std::sync::mpsc::Receiver<PresentMsg>,
-    shutdown_seen: bool,
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-impl InlinePresentRuntime {
-    pub fn pump(&mut self) -> bool {
-        if self.shutdown_seen {
-            return false;
-        }
-        while let Ok(msg) = self.msg_rx.try_recv() {
-            if !self.state.run_once(msg) {
-                self.shutdown_seen = true;
-                return false;
-            }
-        }
-        self.state.consume_waiting();
-        true
-    }
-
-    pub fn has_waiting_packet(&self) -> bool {
-        self.state.has_waiting_packet()
-    }
-
-    pub fn step_one_message(&mut self) -> bool {
-        if self.shutdown_seen {
-            return false;
-        }
-        match self.msg_rx.try_recv() {
-            Ok(msg) => {
-                if !self.state.run_once(msg) {
-                    self.shutdown_seen = true;
-                }
-                true
-            }
-            Err(_) => false,
-        }
-    }
-
-    pub fn consume_waiting(&mut self) {
-        self.state.consume_waiting();
-    }
-}
 
 impl Default for WgpuRenderer {
     fn default() -> Self {
