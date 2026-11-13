@@ -167,13 +167,20 @@ impl PresentThread<'_> {
     }
 
     #[doc(hidden)]
-    pub fn attach_offscreen_for_tests(self, width: u32, height: u32, images: TestImages) -> bool {
+    pub fn attach_offscreen_for_tests(
+        mut self,
+        width: u32,
+        height: u32,
+        images: TestImages,
+    ) -> bool {
+        let surface_epoch = self.next_surface_epoch();
         self.handle
             .send_control_and_wait(
                 move |ack| PresentControl::AttachOffscreenTargetForTests {
                     width,
                     height,
                     images,
+                    surface_epoch,
                     ack,
                 },
                 "attach offscreen target",
@@ -183,16 +190,18 @@ impl PresentThread<'_> {
 
     #[doc(hidden)]
     pub fn send_attach_offscreen_unacked_for_tests(
-        self,
+        mut self,
         width: u32,
         height: u32,
         images: TestImages,
     ) -> Option<Receiver<()>> {
+        let surface_epoch = self.next_surface_epoch();
         self.handle
             .send_control_unacked(move |ack| PresentControl::AttachOffscreenTargetForTests {
                 width,
                 height,
                 images,
+                surface_epoch,
                 ack,
             })
     }

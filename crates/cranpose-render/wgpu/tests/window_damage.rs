@@ -883,9 +883,13 @@ fn draw(
     let queue = renderer.try_queue_for_tests().expect("queue").clone();
     match how {
         Draw::Untracked => renderer.render(&image.texture, &image.view, WIDTH, HEIGHT),
-        Draw::Swapchain(index, kept) => {
-            renderer.render_swapchain_image_for_tests(&image.texture, &image.view, index, kept)
-        }
+        Draw::Swapchain(index, kept) => renderer.render_swapchain_image_for_tests(
+            &image.texture,
+            &image.view,
+            index,
+            u32::try_from(SWAPCHAIN_IMAGES).expect("a swapchain holds few images"),
+            kept,
+        ),
         Draw::Cleared => {
             clear(&device, &queue, image);
             renderer.render_cleared_image_for_tests(&image.texture, &image.view)

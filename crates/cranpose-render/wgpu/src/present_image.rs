@@ -58,9 +58,11 @@ impl TestSwapchain {
 
     // The texture of `image` and what it holds.
     pub(crate) fn target(&self, index: usize) -> (&wgpu::Texture, ImageContent) {
+        let few = |count: usize| u32::try_from(count).expect("a test swapchain holds few images");
         let image = PresentedImage {
-            index: u32::try_from(index).expect("a test swapchain holds few images"),
+            index: few(index),
             kept: self.kept[index],
+            images: few(self.images.len()),
         };
         (&self.images[index], ImageContent::Numbered(image))
     }

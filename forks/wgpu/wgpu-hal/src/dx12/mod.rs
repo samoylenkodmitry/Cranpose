@@ -1772,6 +1772,7 @@ impl crate::Surface for Surface {
         Ok(crate::AcquiredSurfaceTexture {
             texture,
             suboptimal: false,
+            images: u32::try_from(sc.resources.len()).unwrap_or(u32::MAX),
         })
     }
     unsafe fn discard_texture(&self, _texture: Texture) {

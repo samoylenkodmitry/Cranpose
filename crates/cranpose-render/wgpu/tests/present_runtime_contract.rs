@@ -746,8 +746,13 @@ fn MovingSpot(step: MutableState<u32>) {
     );
 }
 
+// A window starts on a surface whose images keep what they presented, two
+// frames in flight. Each image the surface has not handed out yet holds no
+// frame: the producer collects the whole page until every image took a
+// frame, so the present thread refuses no frame, and the frames after go
+// while another is in flight.
 #[test]
-fn an_image_a_refused_frame_left_undrawn_takes_the_next_frame_and_no_frame_is_refused_after() {
+fn a_new_surface_refuses_no_frame() {
     let Ok((_lock, mut renderer, target)) = threaded_parts(wgpu::TextureFormat::Rgba8Unorm) else {
         eprintln!("skipping kept images: headless WGPU init failed");
         return;
@@ -783,8 +788,11 @@ fn an_image_a_refused_frame_left_undrawn_takes_the_next_frame_and_no_frame_is_re
         shell.renderer().publish_frame(WIDTH, HEIGHT)
     };
 
-    // The pipelines of whole and of partial frames land first: a frame
-    // that draws a stand-in leaves its image holding no frame.
+    // The pipelines of whole and of partial frames land first, and the
+    // frames come to draw only the part of the window they change, as a
+    // window's frames do once it runs: a frame that draws a stand-in leaves
+    // its image holding no frame, and frames that draw whole skip working
+    // out their damage for a while.
     let ack = attach(&mut shell, TestImages::Kept(3));
     runtime.pump();
     ack.try_recv().expect("the warm-up swapchain is attached");
@@ -794,29 +802,31 @@ fn an_image_a_refused_frame_left_undrawn_takes_the_next_frame_and_no_frame_is_re
         assert_eq!(next_frame(&mut shell), PublishOutcome::Published);
         runtime.pump();
         drain_outcomes(shell.renderer());
-        let stand_ins = shell.renderer().last_frame_stats().is_none_or(|stats| {
-            stats.placeholder_draws + stats.shape_pipeline_fallback_draws + stats.instant_draws > 0
+        let part = shell.renderer().last_frame_stats().is_some_and(|stats| {
+            stats.placeholder_draws + stats.shape_pipeline_fallback_draws + stats.instant_draws == 0
+                && stats.repainted_pixels < u64::from(WIDTH * HEIGHT)
         });
-        settled = if stand_ins || shell.renderer().awaits_pipelines() {
-            0
-        } else {
+        settled = if part && !shell.renderer().awaits_pipelines() {
             settled + 1
+        } else {
+            0
         };
     }
+    assert_eq!(settled, 6, "the warm-up frames come to draw a part");
 
-    // Two frames in flight, as on a window: the thread draws a frame only
-    // once the next is published, so the producer culls each frame before
-    // the frame before it comes back. An image that held no frame when the
-    // frames started to cull refuses the culled frames that find it, until
-    // the frame drawn whole after a refusal draws into it.
-    let ack = attach(&mut shell, TestImages::Kept(3));
+    // A new surface of four images, two frames in flight as on a window: the
+    // thread draws a frame only once the next is published, so the producer
+    // collects each frame before the frame before it comes back.
+    let ack = attach(&mut shell, TestImages::Kept(4));
     runtime.pump();
     ack.try_recv().expect("the test swapchain is attached");
     let mut outcomes = Vec::new();
-    for _ in 0..60 {
-        if next_frame(&mut shell) == PublishOutcome::NoCredit {
-            // The frame after a refusal draws whole and waits for the frame
-            // in flight, as a window's loop waits for its hand back.
+    let mut waits = Vec::new();
+    for _ in 0..24 {
+        let waited = next_frame(&mut shell) == PublishOutcome::NoCredit;
+        if waited {
+            // A frame that collects the whole page waits for the frame in
+            // flight, as a window's loop waits for its hand back.
             runtime.consume_waiting();
             outcomes.extend(drain_outcomes(shell.renderer()));
             assert_eq!(
@@ -824,34 +834,21 @@ fn an_image_a_refused_frame_left_undrawn_takes_the_next_frame_and_no_frame_is_re
                 PublishOutcome::Published
             );
         }
+        waits.push(waited);
         runtime.step_one_message();
-        let drained = drain_outcomes(shell.renderer());
-        if runtime.has_waiting_packet()
-            && drained
-                .iter()
-                .any(|(_, outcome)| *outcome == PresentOutcome::Cancelled(CancelReason::NeedsWhole))
-        {
-            assert!(
-                !shell.renderer().has_frame_credit(),
-                "the frame after a refusal draws whole, and waits for the frame in flight"
-            );
-        }
-        outcomes.extend(drained);
+        outcomes.extend(drain_outcomes(shell.renderer()));
     }
     runtime.consume_waiting();
     outcomes.extend(drain_outcomes(shell.renderer()));
 
-    let refused = |outcomes: &[(u64, PresentOutcome)]| {
+    assert!(
         outcomes
             .iter()
-            .filter(|(_, outcome)| matches!(outcome, PresentOutcome::Cancelled(_)))
-            .count()
-    };
-    // A frame that drew a stand-in for a pipeline that landed late leaves
-    // its image holding no frame, which refuses one culled frame.
+            .all(|(_, outcome)| *outcome == PresentOutcome::Presented),
+        "every frame of the new surface draws: {outcomes:?}"
+    );
     assert!(
-        refused(&outcomes[outcomes.len() - 24..]) <= 1,
-        "the frame after a refused one draws into the image it left undrawn, which then holds \
-         a frame like the others: no refusal repeats {outcomes:?}"
+        !waits[waits.len() - 12..].contains(&true),
+        "once every image holds a frame, each frame goes while another is in flight: {waits:?}"
     );
 }

@@ -499,6 +499,14 @@ gives `None`. For such a canvas Cranpose's renderer keeps the frame in a
 texture of its own while frames change a small part of a heavy window, and
 copies it into each image.
 
+`SurfaceImage::images` gives how many images the surface hands out
+(`AcquiredSurfaceTexture::images`): the Vulkan swapchain's image count, the
+DXGI buffer count, the Metal layer's `maximumDrawableCount`, one for GL.
+Until a surface has handed out that many since it was configured, or one
+image twice, the next image may be one that holds nothing. Cranpose's
+renderer then collects the whole page for it, where a page collected for
+the part an image redraws would be refused and collected again.
+
 Keeping images also tells the backend at configure
 (`SurfaceConfiguration::keep_presented`): a Vulkan swapchain is made
 unclipped, since a clipped one may leave the pixels other windows cover

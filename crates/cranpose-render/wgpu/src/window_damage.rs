@@ -289,6 +289,8 @@ pub(crate) struct PresentedImage {
     pub(crate) index: u32,
     /// Whether it holds what it last presented.
     pub(crate) kept: bool,
+    // How many images the surface hands out.
+    pub(crate) images: u32,
 }
 
 /// What the renderer knows of the pixels a presentable image holds when a
@@ -312,6 +314,7 @@ impl ImageContent {
             Self::Numbered(PresentedImage {
                 index: image.index,
                 kept: image.kept,
+                images: image.images,
             })
         })
     }

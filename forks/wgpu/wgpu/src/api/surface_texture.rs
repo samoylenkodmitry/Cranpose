@@ -28,6 +28,10 @@ pub struct SurfaceImage {
     /// this one was presented since the surface was configured. Otherwise its
     /// contents are undefined.
     pub kept: bool,
+    /// How many images the swapchain hands out: until it has handed out that
+    /// many since it was configured, or one twice, the next may be one it
+    /// never handed out, which holds nothing.
+    pub images: u32,
 }
 
 impl SurfaceTexture {

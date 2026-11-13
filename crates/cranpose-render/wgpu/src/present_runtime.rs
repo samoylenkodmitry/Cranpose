@@ -78,11 +78,13 @@ pub(crate) enum PresentControl {
     TakeSurface {
         reply: SyncSender<Option<wgpu::Surface<'static>>>,
     },
+    // Draws the frames into a test target, a new surface of `surface_epoch`.
     #[doc(hidden)]
     AttachOffscreenTargetForTests {
         width: u32,
         height: u32,
         images: crate::TestImages,
+        surface_epoch: u64,
         ack: SyncSender<()>,
     },
     // Destroys the device between two frames and waits for its loss to be
@@ -392,8 +394,10 @@ impl PresentState {
                 width,
                 height,
                 images,
+                surface_epoch,
                 ack,
             } => {
+                self.surface_epoch = surface_epoch;
                 self.attach_offscreen((width, height), images);
                 answer(&ack, ());
             }

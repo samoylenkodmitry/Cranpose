@@ -17,6 +17,11 @@ pub(crate) struct SwapchainHistory {
     held: [Option<Held>; IMAGES],
     // By image index, a bit for each image the surface handed out.
     seen: u8,
+    // How many images the surface hands out, and whether it handed one out
+    // a second time: until it handed out that many, or one twice, the next
+    // image may be one it never handed out, which holds no frame.
+    images: u32,
+    cycled: bool,
     /// The frame presented last, when it went into an image the history
     /// follows and holds.
     presented: Option<Held>,
@@ -38,13 +43,18 @@ impl SwapchainHistory {
     pub(crate) fn forget(&mut self) {
         self.held = [None; IMAGES];
         self.seen = 0;
+        self.cycled = false;
         self.presented = None;
     }
 
     // The oldest frame the images the surface handed out hold, and the
     // parts of their frames drawn with stand-ins; `None` while one of them
-    // holds none known.
+    // holds none known, or while the next image may be one the surface never
+    // handed out.
     pub(crate) fn held(&self) -> Option<HeldWindow> {
+        if !self.cycled && self.seen.count_ones() < self.images.min(u8::BITS) {
+            return None;
+        }
         let mut window: Option<HeldWindow> = None;
         for (index, held) in self.held.iter().enumerate() {
             if self.seen & (1 << index) == 0 {
@@ -66,7 +76,9 @@ impl SwapchainHistory {
     }
 
     fn see(&mut self, image: PresentedImage) {
+        self.images = image.images;
         if let Some(bit) = 1u8.checked_shl(image.index) {
+            self.cycled |= self.seen & bit != 0;
             self.seen |= bit;
         }
     }

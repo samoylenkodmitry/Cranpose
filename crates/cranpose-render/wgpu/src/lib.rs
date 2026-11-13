@@ -456,23 +456,27 @@ impl WgpuRenderer {
     }
 
     /// Draws a swapchain image the way the present runtime does on a surface
-    /// that keeps presented images: `index` is its place in the swapchain and
-    /// `kept` says it holds the frame drawn into it last.
+    /// that keeps presented images: `index` is its place in a swapchain of
+    /// `images` and `kept` says it holds the frame drawn into it last.
     #[doc(hidden)]
     pub fn render_swapchain_image_for_tests(
         &mut self,
         texture: &wgpu::Texture,
         view: &wgpu::TextureView,
         index: u32,
+        images: u32,
         kept: bool,
     ) -> Result<(), WgpuRendererError> {
-        let image = frame::PresentedImage { index, kept };
         self.render_frame(
             texture,
             view,
             texture.width(),
             texture.height(),
-            frame::ImageContent::Numbered(image),
+            frame::ImageContent::Numbered(frame::PresentedImage {
+                index,
+                kept,
+                images,
+            }),
         )
     }
 
@@ -517,17 +521,13 @@ impl WgpuRenderer {
             renderer: gpu_renderer,
             submit,
         } = self.backend.sync_mut()?;
-        let (epochs, output) = (
-            (self.renderer_epoch, self.surface_epoch),
-            FrameOutput::display(texture, view, image),
-        );
+        let epochs = (self.renderer_epoch, self.surface_epoch);
+        let output = FrameOutput::display(texture, view, image);
         let draw = |packet, returns: &mut RenderReturns| {
             gpu_renderer.render(submit, (width, height), packet, epochs.1, returns, output)
         };
-        let result = self
-            .frontend
-            .draw_window((width, height), epochs, image, draw);
-        result
+        self.frontend
+            .draw_window((width, height), epochs, image, draw)
             .ok_or_else(|| WgpuRendererError::Wgpu("scene graph is missing".to_string()))?
             .map_err(WgpuRendererError::Wgpu)
     }
