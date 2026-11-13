@@ -17,6 +17,10 @@ if [ "$#" -ne 1 ]; then
     exit 2
 fi
 module=$1
+if [ ! -f "$module" ]; then
+    echo "wasm feature floor: no module at $module; build it first" >&2
+    exit 2
+fi
 version=1.263.0
 features=wasm1,bulk-memory,mutable-global,multi-value,reference-types,saturating-float-to-int,sign-extension
 

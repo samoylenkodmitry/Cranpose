@@ -462,7 +462,7 @@ _size-ceiling path max what:
     fi
     echo "size budget: the {{what}} is $size bytes, within {{max}}"
 
-# The web demo's wasm after `just web`: 13.4 MiB. It was 13.3 MiB and 13.25 MiB
+# The web demo's wasm after `just web`: 14.7 MiB. It was 13.3 MiB and 13.25 MiB
 # before, the size of 2026-10-29 (13,784,385 bytes) and about 0.8%; the
 # Backrooms tab of #2118 took the demo to about 13,923,000 bytes with its
 # rooms, shader and HUD. The Performance tab of #2162 (hover, pick and
@@ -474,8 +474,12 @@ _size-ceiling path max what:
 # of its spinner and the GIF decoder of its picture. The Music tab took it to
 # 14,480,645 bytes, about 237 KB: its composables and synth, the MIDI reader
 # with its 17 KB song, and the Web Audio backend. Its two rain shaders add
-# their WGSL sources, 27,026 bytes.
-web-size-budget: (_size-ceiling "apps/desktop-demo/pkg/desktop_app_bg.wasm" "14522000" "web demo wasm")
+# their WGSL sources, 27,026 bytes. The module took 906,317 bytes more, from
+# 14,507,657 to 15,413,974, when wasm-opt kept to the features of Safari 15:
+# without typed function references, its merge-similar-functions pass merges
+# no function whose copies call different targets. WebKit before Safari 18
+# rejects a module with those references, in every iOS browser.
+web-size-budget: (_size-ceiling "apps/desktop-demo/pkg/desktop_app_bg.wasm" "15428000" "web demo wasm")
 
 # Fail when a built wasm module needs a WebAssembly feature past Safari 15.
 # WebKit rejects such a module whole, in Safari and in every other iOS browser.

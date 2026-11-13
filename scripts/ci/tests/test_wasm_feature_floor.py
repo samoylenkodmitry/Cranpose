@@ -20,9 +20,11 @@ GC_FEATURES_SECTION = b"\x00\x15\x0ftarget_features\x01\x2b\x02gc"
 
 
 def check(module):
+    """Runs the check on `module` bytes, or on a path with no file for None."""
     with tempfile.TemporaryDirectory() as scratch:
         path = Path(scratch) / "module.wasm"
-        path.write_bytes(module)
+        if module is not None:
+            path.write_bytes(module)
         return subprocess.run(
             ["bash", str(CHECK), str(path)],
             stdout=subprocess.PIPE,
@@ -41,6 +43,12 @@ class WasmFeatureFloor(unittest.TestCase):
         result = check(HEADER + TYPED_REFERENCE_FUNCTION + EMPTY_BODY + GC_FEATURES_SECTION)
         self.assertNotEqual(result.returncode, 0, result.stdout)
         self.assertIn("needs a WebAssembly feature past", result.stdout)
+
+    def test_a_missing_module_is_not_reported_as_a_feature_failure(self):
+        result = check(None)
+        self.assertEqual(result.returncode, 2, result.stdout)
+        self.assertIn("no module at", result.stdout)
+        self.assertNotIn("needs a WebAssembly feature past", result.stdout)
 
 
 if __name__ == "__main__":
