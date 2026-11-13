@@ -34,7 +34,6 @@ pub(crate) struct PrefixContext<'a> {
 
 struct Candidate<'a> {
     run: &'a RunDraw,
-    command: DrawCommandId,
     record: ShapeRecord,
     brush: Option<&'a BrushRecord>,
     stops: &'a [GradientStopRecord],
@@ -112,7 +111,6 @@ fn candidate<'a>(scene: &'a CompositorScene, op: &DrawOp) -> Option<Candidate<'a
         return None;
     };
     let run = &scene.runs[index];
-    let command = run.command?;
     if run.placement.paints() || run.placement.clip_rounded() {
         return None;
     }
@@ -135,7 +133,6 @@ fn candidate<'a>(scene: &'a CompositorScene, op: &DrawOp) -> Option<Candidate<'a
     };
     Some(Candidate {
         run,
-        command,
         record,
         brush,
         stops,
@@ -346,6 +343,9 @@ pub(crate) fn opaque_prefix(context: &PrefixContext<'_>, ops: &[DrawOp]) -> Opti
     if candidate.brush.is_none() || !is_opaque(&candidate) {
         return None;
     }
+    // The prefix's admission gate follows its draw command from frame to
+    // frame.
+    let command = candidate.run.command?;
     let scale = context.scale;
     let (edges, snap) = placed_edges(&candidate, scale)?;
     let edges = clamp_to_page(edges, context)?;
@@ -365,7 +365,7 @@ pub(crate) fn opaque_prefix(context: &PrefixContext<'_>, ops: &[DrawOp]) -> Opti
             (width as u32, height as u32),
             RasterScale::from_scale(scale),
         ),
-        command: candidate.command,
+        command,
         z_index: op.z_index,
         device_rect: (edges.left, edges.top, width, height),
     })

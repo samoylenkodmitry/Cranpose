@@ -1274,7 +1274,7 @@ pub(crate) const SIZE: u32 = 256;
 pub(crate) const CENTER: f32 = 128.0;
 
 /// The dark background every parity scene draws first.
-fn draw_scene_background(scope: &mut DrawScopeDefault) {
+pub(crate) fn draw_scene_background(scope: &mut DrawScopeDefault) {
     scope.draw_rect_at(
         Rect {
             x: 0.0,

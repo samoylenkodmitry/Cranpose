@@ -44,11 +44,17 @@ fn rect(x: f32, y: f32, width: f32, height: f32) -> Rect {
     }
 }
 
-// An opaque page holding `children`: its fill gives a pass interiors to lay
-// down first.
+// An opaque page holding `children`. The pass clears to its fill, which
+// covers the page; a panel of the fill's color a pixel inside the page
+// gives the pass interiors to lay down first.
 fn page(children: Vec<RenderNode>) -> LayerNode {
     let frame = Rect::from_size(Size::new(WIDTH as f32, HEIGHT as f32));
-    let mut nodes = vec![support::solid_rect(frame, Color(0.1, 0.12, 0.2, 1.0))];
+    let fill = Color(0.1, 0.12, 0.2, 1.0);
+    let panel = rect(1.0, 1.0, WIDTH as f32 - 2.0, HEIGHT as f32 - 2.0);
+    let mut nodes = vec![
+        support::solid_rect(frame, fill),
+        support::solid_rect(panel, fill),
+    ];
     nodes.extend(children);
     shared_test_support::layer_node(
         frame,
