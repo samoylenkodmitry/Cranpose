@@ -739,6 +739,11 @@ impl CompositorScene {
         self.backdrop_layers.trim_growth_slack();
     }
 
+    // The bytes of room the lists keep.
+    pub(crate) fn kept_room(&self) -> usize {
+        self.room().1
+    }
+
     // Whether the lists keep more than four times the room the frame's
     // draws take, and more than `ROOM_KEPT`.
     fn roomy(&self) -> bool {

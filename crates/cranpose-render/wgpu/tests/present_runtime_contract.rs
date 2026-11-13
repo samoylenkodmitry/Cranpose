@@ -20,8 +20,8 @@ use cranpose_ui_graphics::{Color, Rect};
 
 use crate::support;
 
-const WIDTH: u32 = 128;
-const HEIGHT: u32 = 96;
+pub(crate) const WIDTH: u32 = 128;
+pub(crate) const HEIGHT: u32 = 96;
 
 fn test_layer(node_id: Option<NodeId>, children: Vec<RenderNode>) -> LayerNode {
     support::contract_layer(
@@ -38,7 +38,7 @@ fn test_layer(node_id: Option<NodeId>, children: Vec<RenderNode>) -> LayerNode {
     )
 }
 
-fn direct_graph() -> LayerNode {
+pub(crate) fn direct_graph() -> LayerNode {
     test_layer(
         Some(NodeId(7_700)),
         vec![support::solid_rect(
@@ -53,7 +53,7 @@ fn direct_graph() -> LayerNode {
     )
 }
 
-fn shadowed_child_graph() -> LayerNode {
+pub(crate) fn shadowed_child_graph() -> LayerNode {
     let bounds = Rect {
         x: 24.0,
         y: 20.0,
@@ -72,7 +72,7 @@ fn shadowed_child_graph() -> LayerNode {
     )
 }
 
-fn surface_config(width: u32, height: u32) -> wgpu::SurfaceConfiguration {
+pub(crate) fn surface_config(width: u32, height: u32) -> wgpu::SurfaceConfiguration {
     wgpu::SurfaceConfiguration {
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
         format: wgpu::TextureFormat::Bgra8UnormSrgb,
@@ -86,7 +86,7 @@ fn surface_config(width: u32, height: u32) -> wgpu::SurfaceConfiguration {
     }
 }
 
-fn threaded_parts(
+pub(crate) fn threaded_parts(
     surface_format: wgpu::TextureFormat,
 ) -> Result<(MutexGuard<'static, ()>, WgpuRenderer, GpuTarget), String> {
     let lock = support::gpu_test_lock();
@@ -98,7 +98,7 @@ fn threaded_parts(
 }
 
 // A target on a device of its own, as one that replaces a lost device is.
-fn gpu_target(surface_format: wgpu::TextureFormat) -> Result<GpuTarget, String> {
+pub(crate) fn gpu_target(surface_format: wgpu::TextureFormat) -> Result<GpuTarget, String> {
     let adapter = support::device::headless_adapter(wgpu::Backends::all())?;
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
         label: Some("Present Runtime Contract Test Device"),
@@ -129,7 +129,27 @@ macro_rules! inline_runtime_or_skip {
     }};
 }
 
-fn drain_outcomes(renderer: &mut WgpuRenderer) -> Vec<(u64, PresentOutcome)> {
+// Publishes the scene at the test size, which the present thread takes.
+pub(crate) fn publish(renderer: &mut WgpuRenderer) {
+    assert_eq!(
+        renderer.publish_frame(WIDTH, HEIGHT),
+        PublishOutcome::Published,
+        "the present thread takes the frame"
+    );
+}
+
+// Hands the present thread `replacement`, then publishes a frame for it.
+pub(crate) fn replace_device_then_publish(renderer: &mut WgpuRenderer, replacement: GpuTarget) {
+    assert!(
+        renderer
+            .present_thread()
+            .is_some_and(|thread| thread.replace_device(replacement)),
+        "the new device reaches the present thread"
+    );
+    publish(renderer);
+}
+
+pub(crate) fn drain_outcomes(renderer: &mut WgpuRenderer) -> Vec<(u64, PresentOutcome)> {
     let mut outcomes = Vec::new();
     renderer.drain_present_returns_with(&mut |frame_id, outcome, _| {
         outcomes.push((frame_id, outcome));
@@ -190,118 +210,6 @@ fn a_surface_never_sits_configured_with_nothing_presented_to_it() {
     assert_eq!(
         placeholder_frames, 1,
         "a real frame publishing must not fire another placeholder clear"
-    );
-}
-
-#[test]
-fn depth_one_credit_gates_publish_before_lowering() {
-    let (_lock, mut renderer, target) = inline_runtime_or_skip!("depth-one credit");
-    let mut runtime = renderer.init_gpu_inline_for_tests(target);
-    let ack = renderer
-        .present_thread()
-        .and_then(|thread| {
-            thread.send_attach_offscreen_unacked_for_tests(WIDTH, HEIGHT, TestImages::Fresh)
-        })
-        .expect("inline runtime must accept controls");
-    runtime.pump();
-    ack.try_recv().expect("attach must ack after the pump");
-
-    renderer.scene_mut().describe(&direct_graph());
-    assert!(renderer.has_frame_credit());
-    assert_eq!(
-        renderer.publish_frame(WIDTH, HEIGHT),
-        PublishOutcome::Published
-    );
-    assert_eq!(renderer.last_published_frame_id(), 1);
-    assert!(
-        renderer.has_frame_credit(),
-        "one rendering plus one waiting: the second credit is what makes \
-         the producer and present stages overlap"
-    );
-    assert_eq!(
-        renderer.publish_frame(WIDTH, HEIGHT),
-        PublishOutcome::Published
-    );
-    assert_eq!(renderer.last_published_frame_id(), 2);
-    assert!(
-        !renderer.has_frame_credit(),
-        "two packets in flight is the bound; the producer stalls here so \
-         it can never run away from the screen"
-    );
-    assert_eq!(
-        renderer.publish_frame(WIDTH, HEIGHT),
-        PublishOutcome::NoCredit,
-        "both slots are occupied"
-    );
-    assert_eq!(
-        renderer.last_published_frame_id(),
-        2,
-        "a NoCredit publish must not build a packet: backpressure lands \
-         before the lowering work"
-    );
-
-    runtime.pump();
-    runtime.pump();
-    assert_eq!(
-        drain_outcomes(&mut renderer),
-        vec![
-            (1, PresentOutcome::Presented),
-            (2, PresentOutcome::Presented)
-        ],
-        "the offscreen surrogate must render both packets, in publish order"
-    );
-    assert!(
-        renderer.has_frame_credit(),
-        "drained returns free the publish credit"
-    );
-    assert_eq!(
-        renderer.publish_frame(WIDTH, HEIGHT),
-        PublishOutcome::Published
-    );
-    assert_eq!(renderer.last_published_frame_id(), 3);
-}
-
-#[test]
-fn a_returned_frame_frees_a_credit_it_reports_until_drained() {
-    let (_lock, mut renderer, target) = inline_runtime_or_skip!("returned credit");
-    let mut runtime = renderer.init_gpu_inline_for_tests(target);
-    let ack = renderer
-        .present_thread()
-        .and_then(|thread| {
-            thread.send_attach_offscreen_unacked_for_tests(WIDTH, HEIGHT, TestImages::Fresh)
-        })
-        .expect("inline runtime must accept controls");
-    runtime.pump();
-    ack.try_recv().expect("attach must ack after the pump");
-
-    renderer.scene_mut().describe(&direct_graph());
-    assert!(!renderer.frame_credit_returned(), "nothing published yet");
-    for _ in 0..2 {
-        assert_eq!(
-            renderer.publish_frame(WIDTH, HEIGHT),
-            PublishOutcome::Published
-        );
-    }
-    assert!(!renderer.has_frame_credit());
-    assert!(
-        !renderer.frame_credit_returned(),
-        "a packet not yet rendered holds its credit"
-    );
-
-    runtime.pump();
-    assert!(
-        !renderer.has_frame_credit(),
-        "a return frees its credit only once drained"
-    );
-    assert!(
-        renderer.frame_credit_returned(),
-        "the rendered packet's return is waiting to be drained"
-    );
-    assert!(renderer.drain_present_returns() >= 1);
-    assert!(renderer.has_frame_credit());
-    assert!(
-        !renderer.frame_credit_returned(),
-        "a drained return is no longer reported"
     );
 }
 
@@ -738,149 +646,6 @@ fn queued_packets_keep_complete_pixels_while_the_producer_changes_the_scene() {
 }
 
 #[test]
-fn a_resize_waits_for_nothing_and_the_frames_after_it_draw_at_the_new_size() {
-    let (_lock, mut renderer, target) = inline_runtime_or_skip!("resize");
-    let mut runtime = renderer.init_gpu_inline_for_tests(target);
-    let ack = renderer
-        .present_thread()
-        .and_then(|thread| {
-            thread.send_attach_offscreen_unacked_for_tests(WIDTH, HEIGHT, TestImages::Fresh)
-        })
-        .expect("inline runtime must accept controls");
-    runtime.pump();
-    ack.try_recv().expect("the offscreen target is attached");
-    renderer.scene_mut().describe(&direct_graph());
-    assert_eq!(
-        renderer.publish_frame(WIDTH, HEIGHT),
-        PublishOutcome::Published
-    );
-
-    // Nothing pumps the inline runtime here: a resize that waited for the
-    // present thread would not return.
-    assert!(
-        renderer
-            .present_thread()
-            .is_some_and(|thread| thread.resize(surface_config(WIDTH * 2, HEIGHT * 2))),
-        "the resize reaches the present thread"
-    );
-    assert_eq!(
-        renderer.publish_frame(WIDTH * 2, HEIGHT * 2),
-        PublishOutcome::Published
-    );
-    runtime.pump();
-    assert_eq!(
-        drain_outcomes(&mut renderer),
-        vec![
-            (1, PresentOutcome::Cancelled(CancelReason::SurfaceEpoch)),
-            (2, PresentOutcome::Presented),
-        ],
-        "the frame built for the old size is refused and the next draws"
-    );
-}
-
-#[test]
-fn an_occluded_window_holds_the_newest_frame_and_draws_it_once_shown() {
-    let (_lock, mut renderer, target) = inline_runtime_or_skip!("occlusion");
-    let mut runtime = renderer.init_gpu_inline_for_tests(target);
-    let ack = renderer
-        .present_thread()
-        .and_then(|thread| {
-            thread.send_attach_offscreen_unacked_for_tests(WIDTH, HEIGHT, TestImages::Fresh)
-        })
-        .expect("inline runtime must accept controls");
-    runtime.pump();
-    ack.try_recv().expect("the offscreen target is attached");
-    renderer.scene_mut().describe(&direct_graph());
-
-    assert!(
-        renderer
-            .present_thread()
-            .is_some_and(|thread| thread.set_occluded(true))
-    );
-    assert_eq!(
-        renderer.publish_frame(WIDTH, HEIGHT),
-        PublishOutcome::Published
-    );
-    runtime.pump();
-    assert!(
-        drain_outcomes(&mut renderer).is_empty(),
-        "an occluded window draws nothing"
-    );
-    renderer.scene_mut().describe(&shadowed_child_graph());
-    assert_eq!(
-        renderer.publish_frame(WIDTH, HEIGHT),
-        PublishOutcome::Published
-    );
-    runtime.pump();
-    assert_eq!(
-        drain_outcomes(&mut renderer),
-        vec![(
-            1,
-            PresentOutcome::Cancelled(CancelReason::SurfaceUnavailable)
-        )],
-        "a newer frame stands in for the one held back"
-    );
-
-    assert!(
-        renderer
-            .present_thread()
-            .is_some_and(|thread| thread.set_occluded(false))
-    );
-    runtime.pump();
-    assert_eq!(
-        drain_outcomes(&mut renderer),
-        vec![(2, PresentOutcome::Presented)],
-        "the held frame draws once the window shows the surface"
-    );
-}
-
-#[test]
-fn a_new_device_takes_over_the_present_thread_and_refuses_older_frames() {
-    let (_lock, mut renderer, target) = inline_runtime_or_skip!("device replacement");
-    let replacement = match gpu_target(wgpu::TextureFormat::Bgra8UnormSrgb) {
-        Ok(target) => target,
-        Err(err) => {
-            eprintln!("skipping device replacement: no second device: {err}");
-            return;
-        }
-    };
-    let mut runtime = renderer.init_gpu_inline_for_tests(target);
-    let ack = renderer
-        .present_thread()
-        .and_then(|thread| {
-            thread.send_attach_offscreen_unacked_for_tests(WIDTH, HEIGHT, TestImages::Fresh)
-        })
-        .expect("inline runtime must accept controls");
-    runtime.pump();
-    ack.try_recv().expect("the offscreen target is attached");
-    renderer.scene_mut().describe(&direct_graph());
-    assert_eq!(
-        renderer.publish_frame(WIDTH, HEIGHT),
-        PublishOutcome::Published
-    );
-
-    assert!(
-        renderer
-            .present_thread()
-            .is_some_and(|thread| thread.replace_device(replacement)),
-        "the new device reaches the present thread"
-    );
-    assert_eq!(
-        renderer.publish_frame(WIDTH, HEIGHT),
-        PublishOutcome::Published
-    );
-    runtime.pump();
-    assert_eq!(
-        drain_outcomes(&mut renderer),
-        vec![
-            (1, PresentOutcome::Cancelled(CancelReason::RendererEpoch)),
-            (2, PresentOutcome::Presented),
-        ],
-        "the frame built for the old device is refused and the next draws on the new one"
-    );
-}
-
-#[test]
 fn a_lost_device_refuses_frames_until_a_new_device_takes_over() {
     let (_lock, mut renderer, target) = inline_runtime_or_skip!("device loss");
     let replacement = match gpu_target(wgpu::TextureFormat::Bgra8UnormSrgb) {
@@ -917,16 +682,7 @@ fn a_lost_device_refuses_frames_until_a_new_device_takes_over() {
         "a frame after the loss is refused, not encoded on the lost device"
     );
 
-    assert!(
-        renderer
-            .present_thread()
-            .is_some_and(|thread| thread.replace_device(replacement)),
-        "the new device reaches the present thread"
-    );
-    assert_eq!(
-        renderer.publish_frame(WIDTH, HEIGHT),
-        PublishOutcome::Published
-    );
+    replace_device_then_publish(&mut renderer, replacement);
     runtime.pump();
     assert_eq!(
         drain_outcomes(&mut renderer),
@@ -1024,10 +780,7 @@ fn an_image_a_refused_frame_left_undrawn_takes_the_next_frame_and_no_frame_is_re
         frame += 1;
         shell.debug_enter_app_context(|| state.set(frame));
         shell.update();
-        assert_eq!(
-            shell.renderer().publish_frame(WIDTH, HEIGHT),
-            PublishOutcome::Published
-        );
+        shell.renderer().publish_frame(WIDTH, HEIGHT)
     };
 
     // The pipelines of whole and of partial frames land first: a frame
@@ -1038,7 +791,7 @@ fn an_image_a_refused_frame_left_undrawn_takes_the_next_frame_and_no_frame_is_re
     let deadline = Instant::now() + Duration::from_secs(30);
     let mut settled = 0;
     while settled < 6 && Instant::now() < deadline {
-        next_frame(&mut shell);
+        assert_eq!(next_frame(&mut shell), PublishOutcome::Published);
         runtime.pump();
         drain_outcomes(shell.renderer());
         let stand_ins = shell.renderer().last_frame_stats().is_none_or(|stats| {
@@ -1061,9 +814,29 @@ fn an_image_a_refused_frame_left_undrawn_takes_the_next_frame_and_no_frame_is_re
     ack.try_recv().expect("the test swapchain is attached");
     let mut outcomes = Vec::new();
     for _ in 0..60 {
-        next_frame(&mut shell);
+        if next_frame(&mut shell) == PublishOutcome::NoCredit {
+            // The frame after a refusal draws whole and waits for the frame
+            // in flight, as a window's loop waits for its hand back.
+            runtime.consume_waiting();
+            outcomes.extend(drain_outcomes(shell.renderer()));
+            assert_eq!(
+                shell.renderer().publish_frame(WIDTH, HEIGHT),
+                PublishOutcome::Published
+            );
+        }
         runtime.step_one_message();
-        outcomes.extend(drain_outcomes(shell.renderer()));
+        let drained = drain_outcomes(shell.renderer());
+        if runtime.has_waiting_packet()
+            && drained
+                .iter()
+                .any(|(_, outcome)| *outcome == PresentOutcome::Cancelled(CancelReason::NeedsWhole))
+        {
+            assert!(
+                !shell.renderer().has_frame_credit(),
+                "the frame after a refusal draws whole, and waits for the frame in flight"
+            );
+        }
+        outcomes.extend(drained);
     }
     runtime.consume_waiting();
     outcomes.extend(drain_outcomes(shell.renderer()));

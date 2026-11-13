@@ -29,6 +29,12 @@ pub(crate) struct WindowPackets {
 }
 
 impl WindowPackets {
+    // Whether the window's targets hold a packet a walk can cull against.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn holds_packet(&self) -> bool {
+        self.held.is_some()
+    }
+
     // The window packet built last.
     pub(crate) fn last(&self) -> Option<u64> {
         self.last.map(|(frame, _)| frame)

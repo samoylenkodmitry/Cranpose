@@ -8,7 +8,9 @@ use std::sync::{
 };
 
 use crate::{
-    frame_packet::{CancelReason, CaptureReply, FramePacket, RenderReturns},
+    frame_packet::{
+        CancelReason, CaptureReply, FramePacket, MAX_FRAMES_IN_FLIGHT, PacketOverlap, RenderReturns,
+    },
     present_runtime::{
         CAPTURE_TIMEOUT, CONTROL_ACK_TIMEOUT, PresentControl, PresentMsg, PresentRuntimeInit,
         PresentState, PresentStatus, PresentWaker,
@@ -30,8 +32,7 @@ const PRESENT_THREAD_STACK_BYTES: usize = 8 * 1024 * 1024;
 impl PresentHandle {
     pub(crate) fn spawn(init: PresentRuntimeInit, waker: PresentWaker) -> Result<Self, String> {
         let (msg_tx, msg_rx) = channel::<PresentMsg>();
-        let (returns_tx, returns_rx) =
-            sync_channel::<RenderReturns>(crate::frame_packet::MAX_FRAMES_IN_FLIGHT);
+        let (returns_tx, returns_rx) = sync_channel::<RenderReturns>(MAX_FRAMES_IN_FLIGHT);
         let status = Arc::new(PresentStatus::default());
         let thread_status = Arc::clone(&status);
         let thread = std::thread::Builder::new()
@@ -60,8 +61,7 @@ impl PresentHandle {
         waker: PresentWaker,
     ) -> (Self, PresentState, Receiver<PresentMsg>) {
         let (msg_tx, msg_rx) = channel::<PresentMsg>();
-        let (returns_tx, returns_rx) =
-            sync_channel::<RenderReturns>(crate::frame_packet::MAX_FRAMES_IN_FLIGHT);
+        let (returns_tx, returns_rx) = sync_channel::<RenderReturns>(MAX_FRAMES_IN_FLIGHT);
         let status = Arc::new(PresentStatus::default());
         let state = PresentState::new(init, returns_tx, Arc::clone(&status), waker);
         (
@@ -82,8 +82,11 @@ impl PresentHandle {
         &self.status
     }
 
-    pub(crate) fn has_credit(&self) -> bool {
-        self.outstanding < crate::frame_packet::MAX_FRAMES_IN_FLIGHT
+    pub(crate) fn has_credit(&self, overlap: PacketOverlap) -> bool {
+        match overlap {
+            PacketOverlap::WithFramesInFlight => self.outstanding < MAX_FRAMES_IN_FLIGHT,
+            PacketOverlap::Alone => self.outstanding == 0,
+        }
     }
 
     /// Whether the present thread has handed back a frame that
@@ -93,7 +96,10 @@ impl PresentHandle {
     }
 
     pub(crate) fn publish(&mut self, packet: FramePacket) -> Result<(), Box<FramePacket>> {
-        debug_assert!(self.has_credit(), "publish without credit");
+        debug_assert!(
+            self.has_credit(PacketOverlap::WithFramesInFlight),
+            "publish without credit"
+        );
         match self.msg_tx.send(PresentMsg::Packet(packet)) {
             Ok(()) => {
                 self.outstanding += 1;

@@ -75,6 +75,7 @@ mod pass_timing_report;
 mod path_fill;
 mod pipeline_cache_lifecycle;
 mod pixel_sensitive_collection;
+mod present_frames_in_flight;
 mod present_runtime_contract;
 mod probe_passes;
 mod projected_layer_near_eye;

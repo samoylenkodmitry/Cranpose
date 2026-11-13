@@ -12,6 +12,18 @@ use crate::{
 
 pub(crate) const MAX_FRAMES_IN_FLIGHT: usize = 2;
 
+// Whether the next window packet may go to the present thread while other
+// packets are in flight.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Copy)]
+pub(crate) enum PacketOverlap {
+    WithFramesInFlight,
+    // A walk that draws whole as the targets hold no frame to build on
+    // waits for the frames in flight, so one scene holds such walks, as
+    // without the thread: at a window's start and after a refusal.
+    Alone,
+}
+
 /// Why the present stage refused a packet without drawing it. Each reason
 /// names the expectation the packet no longer matches; the frame is not an
 /// error, its scene travels back through `RenderReturns` for recycling.

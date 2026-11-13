@@ -42,6 +42,13 @@ impl LayerSceneRecycler {
         self.scenes.clear();
     }
 
+    // The bytes of room kept by the root scene that the next take hands out.
+    pub(crate) fn root_room(&self) -> usize {
+        self.scenes
+            .last()
+            .map_or(0, |scene| scene.scene.kept_room())
+    }
+
     // Gives back at rest the room the kept scenes took: each dropped scene
     // leaves its lists for the next on the thread, which keep room for a
     // few draws.

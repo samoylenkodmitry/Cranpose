@@ -634,14 +634,17 @@ impl WgpuRenderer {
         })
     }
 
-    /// Threaded mode: whether the depth-one slot has room for a packet.
+    /// Threaded mode: whether the present thread takes a packet now. Two
+    /// packets go in flight at most. A packet that draws whole because the
+    /// window's images hold no frame to build on, as at the window's start
+    /// and after a refused frame, goes only with none in flight.
     /// The Android loop checks this BEFORE `shell.update()` so
     /// backpressure lands before the expensive update/lowering work.
     /// Always `true` on the sync path, which has no slot to fill.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn has_frame_credit(&self) -> bool {
         match &self.backend {
-            PresentBackend::Threaded(handle) => handle.has_credit(),
+            PresentBackend::Threaded(handle) => handle.has_credit(self.frontend.next_overlap()),
             PresentBackend::Sync(_) | PresentBackend::None => true,
         }
     }
@@ -670,7 +673,7 @@ impl WgpuRenderer {
             log::error!("publish_frame called without a threaded present runtime");
             return PublishOutcome::NoCredit;
         };
-        if !handle.has_credit() {
+        if !handle.has_credit(self.frontend.next_overlap()) {
             return PublishOutcome::NoCredit;
         }
         let Some(packet) = self.frontend.build_frame_packet(

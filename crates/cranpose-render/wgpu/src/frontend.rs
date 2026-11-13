@@ -9,6 +9,8 @@ use cranpose_render_common::{
 };
 use web_time::Instant;
 
+#[cfg(not(target_arch = "wasm32"))]
+use crate::frame_packet::PacketOverlap;
 use crate::{
     collect::{
         LayerMotion, LayerScene, LayerSceneRecycler, ShownRecord, collect_overlay, collect_root,
@@ -213,6 +215,14 @@ impl RendererFrontend {
             });
         }
         self.scene.root_layer()?;
+        if self.returned_scenes == MAX_FRAMES_IN_FLIGHT {
+            // With no packet in flight the walk takes the roomier scene: a
+            // whole walk then draws into the scene of the last whole walk.
+            let [older, newer] = &mut self.scene_recyclers;
+            if older.root_room() > newer.root_room() {
+                std::mem::swap(older, newer);
+            }
+        }
         self.returned_scenes = self.returned_scenes.saturating_sub(1);
         let (overlay, overlay_damage) = self.collect_overlays(root_scale, purpose);
         let (root, damage, cull) = self.collect_scene(
@@ -419,6 +429,18 @@ impl RendererFrontend {
         }
         if self.overlay_target.records() {
             self.dev_overlay.refresh_reach();
+        }
+    }
+
+    // Whether the next window packet may go while others are in flight. A
+    // walk made whole by targets that hold no frame to build on waits for
+    // them. A walk made whole by its damage goes with them.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn next_overlap(&self) -> PacketOverlap {
+        if self.uncull_next || !self.window.holds_packet() {
+            PacketOverlap::Alone
+        } else {
+            PacketOverlap::WithFramesInFlight
         }
     }
 
