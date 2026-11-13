@@ -1,9 +1,8 @@
 use std::sync::{atomic::Ordering, mpsc::Receiver};
 
 use crate::{
-    DeviceLostHandler, GpuTarget,
-    pipeline_compiler::PipelineCompilation,
-    present_runtime::{PresentControl, PresentHandle},
+    DeviceLostHandler, GpuTarget, pipeline_compiler::PipelineCompilation,
+    present_handle::PresentHandle, present_runtime::PresentControl,
 };
 
 /// How a test target hands out the images its frames draw into.
