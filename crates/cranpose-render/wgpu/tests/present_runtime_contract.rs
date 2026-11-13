@@ -1,16 +1,21 @@
 use std::{
+    cell::RefCell,
+    rc::Rc,
     sync::{Arc, MutexGuard},
     time::{Duration, Instant},
 };
 
-use cranpose_core::NodeId;
+use cranpose_app_shell::AppShell;
+use cranpose_core::{MutableState, NodeId, location_key, rememberMutableStateOf};
 use cranpose_render_common::{
     Renderer,
     graph::{CachePolicy, LayerNode, ProjectiveTransform, RenderNode},
 };
 use cranpose_render_wgpu::{
-    CancelReason, GpuTarget, PresentOutcome, PresentThread, PublishOutcome, WgpuRenderer,
+    CancelReason, GpuTarget, PresentOutcome, PresentThread, PublishOutcome, TestImages,
+    WgpuRenderer,
 };
+use cranpose_ui::{Box, BoxSpec, Modifier, composable};
 use cranpose_ui_graphics::{Color, Rect};
 
 use crate::support;
@@ -149,7 +154,9 @@ fn a_surface_never_sits_configured_with_nothing_presented_to_it() {
 
     let ack = renderer
         .present_thread()
-        .and_then(|thread| thread.send_attach_offscreen_unacked_for_tests(WIDTH, HEIGHT))
+        .and_then(|thread| {
+            thread.send_attach_offscreen_unacked_for_tests(WIDTH, HEIGHT, TestImages::Fresh)
+        })
         .expect("inline runtime must accept controls");
     runtime.pump();
     ack.try_recv()
@@ -192,7 +199,9 @@ fn depth_one_credit_gates_publish_before_lowering() {
     let mut runtime = renderer.init_gpu_inline_for_tests(target);
     let ack = renderer
         .present_thread()
-        .and_then(|thread| thread.send_attach_offscreen_unacked_for_tests(WIDTH, HEIGHT))
+        .and_then(|thread| {
+            thread.send_attach_offscreen_unacked_for_tests(WIDTH, HEIGHT, TestImages::Fresh)
+        })
         .expect("inline runtime must accept controls");
     runtime.pump();
     ack.try_recv().expect("attach must ack after the pump");
@@ -258,7 +267,9 @@ fn a_returned_frame_frees_a_credit_it_reports_until_drained() {
     let mut runtime = renderer.init_gpu_inline_for_tests(target);
     let ack = renderer
         .present_thread()
-        .and_then(|thread| thread.send_attach_offscreen_unacked_for_tests(WIDTH, HEIGHT))
+        .and_then(|thread| {
+            thread.send_attach_offscreen_unacked_for_tests(WIDTH, HEIGHT, TestImages::Fresh)
+        })
         .expect("inline runtime must accept controls");
     runtime.pump();
     ack.try_recv().expect("attach must ack after the pump");
@@ -300,7 +311,9 @@ fn reconfigure_cancels_waiting_packet_before_ack() {
     let mut runtime = renderer.init_gpu_inline_for_tests(target);
     let ack = renderer
         .present_thread()
-        .and_then(|thread| thread.send_attach_offscreen_unacked_for_tests(WIDTH, HEIGHT))
+        .and_then(|thread| {
+            thread.send_attach_offscreen_unacked_for_tests(WIDTH, HEIGHT, TestImages::Fresh)
+        })
         .expect("inline runtime must accept controls");
     runtime.pump();
     ack.try_recv().expect("attach must ack after the pump");
@@ -349,7 +362,9 @@ fn take_surface_cancels_waiting_packet_with_buffers_returned() {
     let mut runtime = renderer.init_gpu_inline_for_tests(target);
     let ack = renderer
         .present_thread()
-        .and_then(|thread| thread.send_attach_offscreen_unacked_for_tests(WIDTH, HEIGHT))
+        .and_then(|thread| {
+            thread.send_attach_offscreen_unacked_for_tests(WIDTH, HEIGHT, TestImages::Fresh)
+        })
         .expect("inline runtime must accept controls");
     runtime.pump();
     ack.try_recv().expect("attach must ack after the pump");
@@ -400,7 +415,9 @@ fn needs_frame_warmup_reads_present_thread_atomic() {
     let mut runtime = renderer.init_gpu_inline_for_tests(target);
     let ack = renderer
         .present_thread()
-        .and_then(|thread| thread.send_attach_offscreen_unacked_for_tests(WIDTH, HEIGHT))
+        .and_then(|thread| {
+            thread.send_attach_offscreen_unacked_for_tests(WIDTH, HEIGHT, TestImages::Fresh)
+        })
         .expect("inline runtime must accept controls");
     runtime.pump();
     ack.try_recv().expect("attach must ack after the pump");
@@ -510,7 +527,11 @@ fn real_thread_runtime_smoke() {
     assert!(
         renderer
             .present_thread()
-            .is_some_and(|thread| thread.attach_offscreen_for_tests(WIDTH, HEIGHT)),
+            .is_some_and(|thread| thread.attach_offscreen_for_tests(
+                WIDTH,
+                HEIGHT,
+                TestImages::Fresh
+            )),
         "offscreen attach must be acknowledged"
     );
     assert_eq!(
@@ -578,7 +599,11 @@ fn a_present_observer_sees_only_surface_presents_and_leaves_with_the_runtime() {
     assert!(
         renderer
             .present_thread()
-            .is_some_and(|thread| thread.attach_offscreen_for_tests(WIDTH, HEIGHT))
+            .is_some_and(|thread| thread.attach_offscreen_for_tests(
+                WIDTH,
+                HEIGHT,
+                TestImages::Fresh
+            ))
     );
     assert_eq!(
         renderer.publish_frame(WIDTH, HEIGHT),
@@ -718,7 +743,9 @@ fn a_resize_waits_for_nothing_and_the_frames_after_it_draw_at_the_new_size() {
     let mut runtime = renderer.init_gpu_inline_for_tests(target);
     let ack = renderer
         .present_thread()
-        .and_then(|thread| thread.send_attach_offscreen_unacked_for_tests(WIDTH, HEIGHT))
+        .and_then(|thread| {
+            thread.send_attach_offscreen_unacked_for_tests(WIDTH, HEIGHT, TestImages::Fresh)
+        })
         .expect("inline runtime must accept controls");
     runtime.pump();
     ack.try_recv().expect("the offscreen target is attached");
@@ -757,7 +784,9 @@ fn an_occluded_window_holds_the_newest_frame_and_draws_it_once_shown() {
     let mut runtime = renderer.init_gpu_inline_for_tests(target);
     let ack = renderer
         .present_thread()
-        .and_then(|thread| thread.send_attach_offscreen_unacked_for_tests(WIDTH, HEIGHT))
+        .and_then(|thread| {
+            thread.send_attach_offscreen_unacked_for_tests(WIDTH, HEIGHT, TestImages::Fresh)
+        })
         .expect("inline runtime must accept controls");
     runtime.pump();
     ack.try_recv().expect("the offscreen target is attached");
@@ -818,7 +847,9 @@ fn a_new_device_takes_over_the_present_thread_and_refuses_older_frames() {
     let mut runtime = renderer.init_gpu_inline_for_tests(target);
     let ack = renderer
         .present_thread()
-        .and_then(|thread| thread.send_attach_offscreen_unacked_for_tests(WIDTH, HEIGHT))
+        .and_then(|thread| {
+            thread.send_attach_offscreen_unacked_for_tests(WIDTH, HEIGHT, TestImages::Fresh)
+        })
         .expect("inline runtime must accept controls");
     runtime.pump();
     ack.try_recv().expect("the offscreen target is attached");
@@ -863,7 +894,9 @@ fn a_lost_device_refuses_frames_until_a_new_device_takes_over() {
     let mut runtime = renderer.init_gpu_inline_for_tests(target);
     let ack = renderer
         .present_thread()
-        .and_then(|thread| thread.send_attach_offscreen_unacked_for_tests(WIDTH, HEIGHT))
+        .and_then(|thread| {
+            thread.send_attach_offscreen_unacked_for_tests(WIDTH, HEIGHT, TestImages::Fresh)
+        })
         .expect("inline runtime must accept controls");
     runtime.pump();
     ack.try_recv().expect("the offscreen target is attached");
@@ -926,4 +959,124 @@ fn a_capture_on_the_present_thread_shows_the_picture_a_capture_in_place_shows() 
         "both captures draw the same picture"
     );
     threaded.shutdown_present_runtime();
+}
+
+// Where the spot of each step sits: elsewhere each step, as the cursor of
+// the still wall.
+const SPOTS: [[f32; 4]; 5] = [
+    [8.0, 8.0, 8.0, 8.0],
+    [100.0, 10.0, 8.0, 8.0],
+    [20.0, 70.0, 8.0, 8.0],
+    [90.0, 60.0, 8.0, 8.0],
+    [56.0, 40.0, 8.0, 8.0],
+];
+
+// A dark page with a light spot that sits elsewhere at each `step`.
+#[composable]
+fn MovingSpot(step: MutableState<u32>) {
+    Box(
+        Modifier::empty().fill_max_size().background(Color::BLACK),
+        BoxSpec::default(),
+        move || {
+            let spot = SPOTS[step.value() as usize % SPOTS.len()];
+            Box(
+                support::rect_modifier(spot).background(Color::WHITE),
+                BoxSpec::default(),
+                || {},
+            );
+        },
+    );
+}
+
+#[test]
+fn an_image_a_refused_frame_left_undrawn_takes_the_next_frame_and_no_frame_is_refused_after() {
+    let Ok((_lock, mut renderer, target)) = threaded_parts(wgpu::TextureFormat::Rgba8Unorm) else {
+        eprintln!("skipping kept images: headless WGPU init failed");
+        return;
+    };
+    let mut runtime = renderer.init_gpu_inline_for_tests(target);
+    let attach = |shell: &mut AppShell<WgpuRenderer>, images| {
+        shell
+            .renderer()
+            .present_thread()
+            .and_then(|thread| {
+                thread.send_attach_offscreen_unacked_for_tests(WIDTH, HEIGHT, images)
+            })
+            .expect("inline runtime must accept controls")
+    };
+    let step: Rc<RefCell<Option<MutableState<u32>>>> = Rc::new(RefCell::new(None));
+    let slot = Rc::clone(&step);
+    let mut shell = AppShell::new(renderer, location_key(file!(), line!(), column!()), {
+        move || {
+            let state = rememberMutableStateOf(|| 0u32);
+            *slot.borrow_mut() = Some(state);
+            MovingSpot(state);
+        }
+    });
+    shell.set_buffer_size(WIDTH, HEIGHT);
+    shell.set_viewport(WIDTH as f32, HEIGHT as f32);
+    shell.update();
+    let state = step.borrow().expect("the page remembers its step");
+    let mut frame = 0;
+    let mut next_frame = |shell: &mut AppShell<WgpuRenderer>| {
+        frame += 1;
+        shell.debug_enter_app_context(|| state.set(frame));
+        shell.update();
+        assert_eq!(
+            shell.renderer().publish_frame(WIDTH, HEIGHT),
+            PublishOutcome::Published
+        );
+    };
+
+    // The pipelines of whole and of partial frames land first: a frame
+    // that draws a stand-in leaves its image holding no frame.
+    let ack = attach(&mut shell, TestImages::Kept(3));
+    runtime.pump();
+    ack.try_recv().expect("the warm-up swapchain is attached");
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut settled = 0;
+    while settled < 6 && Instant::now() < deadline {
+        next_frame(&mut shell);
+        runtime.pump();
+        drain_outcomes(shell.renderer());
+        let stand_ins = shell.renderer().last_frame_stats().is_none_or(|stats| {
+            stats.placeholder_draws + stats.shape_pipeline_fallback_draws + stats.instant_draws > 0
+        });
+        settled = if stand_ins || shell.renderer().awaits_pipelines() {
+            0
+        } else {
+            settled + 1
+        };
+    }
+
+    // Two frames in flight, as on a window: the thread draws a frame only
+    // once the next is published, so the producer culls each frame before
+    // the frame before it comes back. An image that held no frame when the
+    // frames started to cull refuses the culled frames that find it, until
+    // the frame drawn whole after a refusal draws into it.
+    let ack = attach(&mut shell, TestImages::Kept(3));
+    runtime.pump();
+    ack.try_recv().expect("the test swapchain is attached");
+    let mut outcomes = Vec::new();
+    for _ in 0..60 {
+        next_frame(&mut shell);
+        runtime.step_one_message();
+        outcomes.extend(drain_outcomes(shell.renderer()));
+    }
+    runtime.consume_waiting();
+    outcomes.extend(drain_outcomes(shell.renderer()));
+
+    let refused = |outcomes: &[(u64, PresentOutcome)]| {
+        outcomes
+            .iter()
+            .filter(|(_, outcome)| matches!(outcome, PresentOutcome::Cancelled(_)))
+            .count()
+    };
+    // A frame that drew a stand-in for a pipeline that landed late leaves
+    // its image holding no frame, which refuses one culled frame.
+    assert!(
+        refused(&outcomes[outcomes.len() - 24..]) <= 1,
+        "the frame after a refused one draws into the image it left undrawn, which then holds \
+         a frame like the others: no refusal repeats {outcomes:?}"
+    );
 }

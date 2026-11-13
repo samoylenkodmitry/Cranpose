@@ -6,6 +6,17 @@ use crate::{
     present_runtime::{PresentControl, PresentHandle},
 };
 
+/// How a test target hands out the images its frames draw into.
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TestImages {
+    /// A new texture for each frame, which holds nothing known.
+    Fresh,
+    /// So many images in turn, each holding what it presented, as a
+    /// swapchain that keeps presented images does.
+    Kept(usize),
+}
+
 /// The thread a [`WgpuRenderer`](crate::WgpuRenderer) hands its frames to,
 /// from [`WgpuRenderer::present_thread`](crate::WgpuRenderer::present_thread).
 /// The thread takes the surface's images, draws the frames into them and
@@ -121,10 +132,15 @@ impl PresentThread<'_> {
     }
 
     #[doc(hidden)]
-    pub fn attach_offscreen_for_tests(self, width: u32, height: u32) -> bool {
+    pub fn attach_offscreen_for_tests(self, width: u32, height: u32, images: TestImages) -> bool {
         self.handle
             .send_control_and_wait(
-                move |ack| PresentControl::AttachOffscreenTargetForTests { width, height, ack },
+                move |ack| PresentControl::AttachOffscreenTargetForTests {
+                    width,
+                    height,
+                    images,
+                    ack,
+                },
                 "attach offscreen target",
             )
             .is_some()
@@ -135,11 +151,13 @@ impl PresentThread<'_> {
         self,
         width: u32,
         height: u32,
+        images: TestImages,
     ) -> Option<Receiver<()>> {
         self.handle
             .send_control_unacked(move |ack| PresentControl::AttachOffscreenTargetForTests {
                 width,
                 height,
+                images,
                 ack,
             })
     }

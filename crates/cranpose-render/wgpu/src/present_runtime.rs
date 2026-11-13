@@ -15,6 +15,7 @@ use crate::{
         CancelReason, CaptureReply, FramePacket, FrameSceneStorage, PresentOutcome, PresentTimings,
         RenderReturns,
     },
+    present_image::{PresentImage, TestSwapchain},
     render::{FrameOutput, FrameSubmit, GpuRenderer, GpuRendererInit},
 };
 
@@ -71,6 +72,7 @@ pub(crate) enum PresentControl {
     AttachOffscreenTargetForTests {
         width: u32,
         height: u32,
+        images: crate::TestImages,
         ack: SyncSender<()>,
     },
     // Destroys the device between two frames and waits for its loss to be
@@ -79,6 +81,23 @@ pub(crate) enum PresentControl {
         ack: SyncSender<()>,
     },
     Shutdown,
+}
+
+impl PresentControl {
+    // Whether the control changes the surface or the device: an image a
+    // refused packet left undrawn goes back unshown first.
+    fn changes_surface(&self) -> bool {
+        matches!(
+            self,
+            Self::ReplaceSurface { .. }
+                | Self::Reconfigure { .. }
+                | Self::ReplaceDevice(_)
+                | Self::TakeSurface { .. }
+                | Self::AttachOffscreenTargetForTests { .. }
+                | Self::LoseDevice { .. }
+                | Self::Shutdown
+        )
+    }
 }
 
 pub(crate) enum PresentMsg {
@@ -149,9 +168,14 @@ pub(crate) struct PresentState {
     gpu_renderer: GpuRenderer,
     submit: FrameSubmit,
     device: Arc<wgpu::Device>,
+    // The image a packet the renderer refused left undrawn: the next packet
+    // draws into it, as presenting it would show the frame it held.
+    undrawn: Option<PresentImage>,
     surface: Option<wgpu::Surface<'static>>,
     config: Option<wgpu::SurfaceConfiguration>,
     offscreen_target: Option<(u32, u32)>,
+    // The images of a test target that draws as into a surface.
+    test_swapchain: Option<TestSwapchain>,
     renderer_epoch: u64,
     surface_epoch: u64,
     waiting_packet: Option<FramePacket>,
@@ -183,9 +207,11 @@ impl PresentState {
             renderer_epoch,
             gpu_renderer,
             submit,
+            undrawn: None,
             surface: None,
             config: None,
             offscreen_target: None,
+            test_swapchain: None,
             surface_epoch: 0,
             waiting_packet: None,
             occluded: false,
@@ -280,6 +306,9 @@ impl PresentState {
     }
 
     fn handle_control(&mut self, control: PresentControl) -> bool {
+        if control.changes_surface() {
+            self.undrawn = None;
+        }
         match control {
             PresentControl::ReplaceSurface {
                 surface,
@@ -319,14 +348,7 @@ impl PresentState {
                 true
             }
             PresentControl::ReplaceDevice(gpu) => {
-                self.renderer_epoch = gpu.renderer_epoch;
-                self.cancel_waiting(CancelReason::RendererEpoch);
-                (self.gpu_renderer, self.submit) = Self::renderer(*gpu, &self.status, &self.waker);
-                self.device = Arc::clone(&self.gpu_renderer.device);
-                if let (Some(surface), Some(config)) = (&self.surface, &self.config) {
-                    surface.configure(&self.device, config);
-                }
-                self.present_placeholder_frame();
+                self.replace_device(*gpu);
                 true
             }
             PresentControl::Capture {
@@ -359,12 +381,13 @@ impl PresentState {
                 let _ = ack.send(());
                 true
             }
-            PresentControl::AttachOffscreenTargetForTests { width, height, ack } => {
-                self.cancel_waiting(CancelReason::SurfaceEpoch);
-                self.surface = None;
-                self.config = None;
-                self.offscreen_target = Some((width, height));
-                self.present_placeholder_frame();
+            PresentControl::AttachOffscreenTargetForTests {
+                width,
+                height,
+                images,
+                ack,
+            } => {
+                self.attach_offscreen((width, height), images);
                 let _ = ack.send(());
                 true
             }
@@ -373,6 +396,38 @@ impl PresentState {
                 false
             }
         }
+    }
+
+    // Moves the renderer to the new device of `gpu`: the surface is
+    // configured on it, and frames built for the renderer before go back.
+    fn replace_device(&mut self, gpu: GpuRendererInit) {
+        self.renderer_epoch = gpu.renderer_epoch;
+        self.cancel_waiting(CancelReason::RendererEpoch);
+        (self.gpu_renderer, self.submit) = Self::renderer(gpu, &self.status, &self.waker);
+        self.device = Arc::clone(&self.gpu_renderer.device);
+        if let (Some(surface), Some(config)) = (&self.surface, &self.config) {
+            surface.configure(&self.device, config);
+        }
+        self.present_placeholder_frame();
+    }
+
+    // Draws the frames into a test target of `size` that hands out `images`
+    // in place of a surface.
+    fn attach_offscreen(&mut self, size: (u32, u32), images: crate::TestImages) {
+        self.cancel_waiting(CancelReason::SurfaceEpoch);
+        self.surface = None;
+        self.config = None;
+        self.offscreen_target = Some(size);
+        self.test_swapchain = match images {
+            crate::TestImages::Fresh => None,
+            crate::TestImages::Kept(count) => Some(TestSwapchain::new(
+                &self.device,
+                self.gpu_renderer.surface_format(),
+                size,
+                count.max(1),
+            )),
+        };
+        self.present_placeholder_frame();
     }
 
     fn validate(&self, packet: &FramePacket) -> Option<CancelReason> {
@@ -416,8 +471,8 @@ impl PresentState {
             return;
         }
         let (width, height) = packet.viewport;
-        if self.surface.is_some() {
-            self.render_to_surface(packet, width, height);
+        if self.surface.is_some() || self.test_swapchain.is_some() {
+            self.render_to_image(packet, width, height);
         } else if self.offscreen_target.is_some() {
             self.render_offscreen(packet, width, height);
         } else {
@@ -425,7 +480,7 @@ impl PresentState {
         }
     }
 
-    fn render_to_surface(&mut self, packet: FramePacket, width: u32, height: u32) {
+    fn render_to_image(&mut self, packet: FramePacket, width: u32, height: u32) {
         if self.gpu_renderer.shows(&packet, (width, height)) {
             self.finish_returns(RenderReturns {
                 scene: Some(FrameSceneStorage {
@@ -438,7 +493,7 @@ impl PresentState {
             });
             return;
         }
-        let Some(frame) = self.acquire_with_one_retry() else {
+        let Some(image) = self.undrawn.take().or_else(|| self.acquire_image()) else {
             self.cancel_packet(packet, CancelReason::SurfaceUnavailable);
             return;
         };
@@ -446,11 +501,17 @@ impl PresentState {
         if let Some(delay) = cranpose_core::DIAGNOSTICS.encode_delay_ms.parse::<u64>() {
             std::thread::sleep(Duration::from_millis(delay));
         }
-        let view = frame.texture.create_view(&wgpu::TextureViewDescriptor {
+        let (texture, content) = match (&image, &self.test_swapchain) {
+            (PresentImage::Test(index), Some(test)) => test.target(*index),
+            (PresentImage::Surface(frame), _) => {
+                (&frame.texture, crate::frame::ImageContent::of(frame))
+            }
+            (PresentImage::Test(_), None) => unreachable!("a test image needs its swapchain"),
+        };
+        let view = texture.create_view(&wgpu::TextureViewDescriptor {
             format: Some(self.gpu_renderer.surface_format().remove_srgb_suffix()),
             ..Default::default()
         });
-        let image = crate::frame::ImageContent::of(&frame);
         let mut returns = RenderReturns::default();
         let result = self.gpu_renderer.render(
             &mut self.submit,
@@ -458,10 +519,14 @@ impl PresentState {
             packet,
             self.surface_epoch,
             &mut returns,
-            FrameOutput::display(&frame.texture, &view, image),
+            FrameOutput::display(texture, &view, content),
         );
         let after_render_ns = self.now();
-        self.present(frame);
+        if matches!(returns.outcome, PresentOutcome::Cancelled(_)) {
+            self.undrawn = Some(image);
+        } else {
+            self.present_image(image);
+        }
         returns.timings = PresentTimings {
             after_acquire_ns,
             after_render_ns,
@@ -518,6 +583,25 @@ impl PresentState {
             self.status
                 .placeholder_frames
                 .fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    // The next image of the test swapchain, or else of the surface.
+    fn acquire_image(&mut self) -> Option<PresentImage> {
+        match self.test_swapchain.as_mut() {
+            Some(test) => Some(test.acquire()),
+            None => self.acquire_with_one_retry().map(PresentImage::Surface),
+        }
+    }
+
+    fn present_image(&mut self, image: PresentImage) {
+        match image {
+            PresentImage::Surface(frame) => self.present(frame),
+            PresentImage::Test(index) => {
+                if let Some(test) = self.test_swapchain.as_mut() {
+                    test.present(index);
+                }
+            }
         }
     }
 

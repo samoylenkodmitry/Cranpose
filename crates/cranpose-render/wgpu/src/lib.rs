@@ -61,6 +61,8 @@ pub mod pipeline_disk_cache;
 mod pipeline_recorder;
 mod pipeline_records;
 #[cfg(not(target_arch = "wasm32"))]
+mod present_image;
+#[cfg(not(target_arch = "wasm32"))]
 mod present_observer;
 #[cfg(not(target_arch = "wasm32"))]
 mod present_runtime;
@@ -108,7 +110,7 @@ pub use present_observer::PresentObserver;
 #[cfg(not(target_arch = "wasm32"))]
 use present_runtime::{PresentHandle, PresentRuntimeInit};
 #[cfg(not(target_arch = "wasm32"))]
-pub use present_thread::PresentThread;
+pub use present_thread::{PresentThread, TestImages};
 use render::{FrameOutput, FrameSubmit, GpuRenderer, GpuRendererInit};
 pub use render::{
     frame_clear_color, frames_presented, pipelines_created, pipelines_created_off_frame,
