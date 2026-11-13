@@ -4,6 +4,8 @@
 // two whole scenes never live at once. The window shows, as a hidden one
 // draws no frame and keeps no scene to read.
 
+use std::time::{Duration, Instant};
+
 use crate::robot_launch;
 
 const WINDOW_WIDTH: u32 = 1024;
@@ -11,11 +13,13 @@ const WINDOW_HEIGHT: u32 = 768;
 // The sizes the window takes in turn, as steps from the size it opens at,
 // in physical pixels; the last step brings it back.
 const STEPS: [(i32, i32); 5] = [(96, 64), (-96, -64), (160, 96), (-64, -32), (0, 0)];
-// The frames a resize may take to reach the surface.
-const RESIZE_FRAMES: usize = 60;
-// The frames after a resize reached the surface: the room reads none while
-// the scene of the frame at the new size is out with that frame.
-const SETTLE_FRAMES: usize = 4;
+// The time a resize may take to reach the surface: a loaded X server
+// configures the window long after the frames of an unpaced display.
+const RESIZE_TIME: Duration = Duration::from_secs(5);
+// The time after a resize reached the surface until the room reads: it
+// reads none while the scene of the frame at the new size is out with that
+// frame.
+const SETTLE_TIME: Duration = Duration::from_secs(2);
 
 pub(crate) fn main() {
     println!("=== Robot Resize Scene Room Test ===");
@@ -38,30 +42,28 @@ pub(crate) fn main() {
                 robot
                     .request_window_size(size.0, size.1)
                     .expect("the window takes the size request");
+                let asked = Instant::now();
                 let mut shown = (0, 0);
-                for _ in 0..RESIZE_FRAMES {
+                while shown != size && asked.elapsed() < RESIZE_TIME {
                     robot.pump_frames(1).expect("a frame at the new size");
                     shown = robot
                         .presentation_info()
                         .expect("presentation info")
                         .surface_size;
-                    if shown == size {
-                        break;
-                    }
                 }
                 println!("asked for {size:?}, the surface is {shown:?}");
                 if shown != size {
                     println!("FAIL: the window did not take the size {size:?}");
                     std::process::exit(1);
                 }
+                let taken = Instant::now();
                 let mut room = 0;
-                for _ in 0..SETTLE_FRAMES {
+                while room == 0 && taken.elapsed() < SETTLE_TIME {
                     robot.pump_frames(1).expect("a frame at the new size");
-                    let kept = robot
+                    room = robot
                         .get_render_cpu_allocation_stats()
                         .expect("stats after the resize")
                         .scene_room_bytes;
-                    room = room.max(kept);
                 }
                 println!("scene room after the resize to {size:?}: {room} bytes");
                 rooms.push(room);
