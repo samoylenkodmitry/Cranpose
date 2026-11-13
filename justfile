@@ -477,6 +477,11 @@ _size-ceiling path max what:
 # their WGSL sources, 27,026 bytes.
 web-size-budget: (_size-ceiling "apps/desktop-demo/pkg/desktop_app_bg.wasm" "14522000" "web demo wasm")
 
+# Fail when a built wasm module needs a WebAssembly feature past Safari 15.
+# WebKit rejects such a module whole, in Safari and in every other iOS browser.
+wasm-feature-floor module="apps/desktop-demo/pkg/desktop_app_bg.wasm":
+    scripts/ci/wasm_feature_floor.sh {{quote(module)}}
+
 # The ESP32-S3 app image after `just esp32-build`: 3.3 MiB, the image of
 # 2026-10-29 (3,366,944 bytes) and about 2.4%. The text engine of #1961 added
 # 500 KB: HarfRust shapes every script and read-fonts reads every outline
@@ -671,6 +676,7 @@ _benchmark-python:
 # The shell helpers agents run by hand, pinned so they cannot rot.
 test-shell-helpers: _benchmark-python ci-contract-gates
     python3 scripts/ci/tests/test_rustup_lock.py
+    python3 scripts/ci/tests/test_wasm_feature_floor.py
     scripts/ci/clippy_budget_test.sh
     scripts/ci/source_budgets_test.sh
     bash scripts/ci/sccache_lifetime_test.sh
@@ -1324,7 +1330,7 @@ ci: fmt-check typos versions twin-matrix-check check-forks test clippy clippy-re
 # Needs a Linux box with the X11 stack, an Android SDK and (on macOS) Xcode.
 
 # Every gate, including the platform builds and the robot suite.
-ci-full: ci clippy-ios clippy-android web-backends web-size-budget android watchos robot vulkan-sync test-emscripten
+ci-full: ci clippy-ios clippy-android web-backends web-size-budget wasm-feature-floor android watchos robot vulkan-sync test-emscripten
 
 liquid-reference-traces output bundle="io.cranpose.liquid-reference" device="booted":
     python3 apps/liquid-reference/collect-traces.py '{{output}}' --bundle '{{bundle}}' --device '{{device}}'

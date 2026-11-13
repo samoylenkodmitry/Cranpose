@@ -7,7 +7,7 @@ too_many_arguments = 10
 private_docs = 13272
 for_test_fns = 40
 cranpose_env_names = 77
-source_text_checks = 328
+source_text_checks = 324
 half_state_words = 0
 
 [ast_grep]

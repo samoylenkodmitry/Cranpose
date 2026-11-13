@@ -177,23 +177,8 @@ fi
 # Show resulting binary size
 if [ -f "pkg/desktop_app_bg.wasm" ]; then
     SIZE=$(du -h pkg/desktop_app_bg.wasm | cut -f1)
-    SIZE_BYTES=$(wc -c < pkg/desktop_app_bg.wasm | tr -d '[:space:]')
     echo ""
     echo "WASM binary size: $SIZE"
-    if [ "$BUILD_MODE" = "release" ]; then
-        MAX_WASM_BYTES="${CRANPOSE_WEB_RELEASE_MAX_WASM_BYTES:-14680064}"
-        case "$MAX_WASM_BYTES" in
-            ''|*[!0-9]*)
-                echo "Invalid CRANPOSE_WEB_RELEASE_MAX_WASM_BYTES: $MAX_WASM_BYTES"
-                exit 1
-                ;;
-        esac
-        echo "WASM release size budget: $SIZE_BYTES / $MAX_WASM_BYTES bytes"
-        if [ "$SIZE_BYTES" -gt "$MAX_WASM_BYTES" ]; then
-            echo "WASM release size budget failed: $SIZE_BYTES bytes exceeds $MAX_WASM_BYTES bytes"
-            exit 1
-        fi
-    fi
 fi
 
 echo ""
