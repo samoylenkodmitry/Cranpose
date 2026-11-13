@@ -36,7 +36,7 @@ use crate::{
     },
     wgpu_surface::{
         PresentStep, SurfaceFrame, current_surface_texture, present_initial_placeholder_frame,
-        present_initial_placeholder_frame_cleared_to, surface_present_step,
+        surface_present_step,
     },
     winit_pointer::{
         is_primary_pointer_button, other_mouse_button, pointer_source_from_button,
@@ -177,6 +177,8 @@ fn open_urls(_urls: &[String]) -> Result<(), String> {
 
 #[path = "device_loss.rs"]
 mod device_loss;
+#[path = "native_frame.rs"]
+mod native_frame;
 #[path = "native_window_wakes.rs"]
 mod native_window_wakes;
 #[path = "present_thread.rs"]
@@ -192,12 +194,14 @@ mod robot_driver;
 mod robot_seat;
 use native_window_wakes::native_window_wakes;
 use primary_surface::{
-    PrimaryPresent, PrimarySurface, apply_primary_surface_resize, headless_requested_viewport,
+    PrimarySurface, apply_primary_surface_resize, headless_requested_viewport,
     primary_viewport_for_surface_size, surface_logical_viewport_size,
 };
 #[cfg(feature = "robot")]
 use robot_driver::{RobotController, RobotTurn};
 use robot_seat::RobotSeat;
+
+use crate::window_present::{PresentSite, WindowPresent};
 
 struct DesktopGpuContext {
     gpu: crate::GpuContext,
@@ -212,7 +216,7 @@ struct NativeWindowSurface {
     events: NativeWindowEvents,
     state: Option<WindowState>,
     window: Arc<dyn Window>,
-    surface: wgpu::Surface<'static>,
+    present: WindowPresent,
     surface_config: wgpu::SurfaceConfiguration,
     surface_caps: wgpu::SurfaceCapabilities,
     surface_dirty: bool,
@@ -443,7 +447,7 @@ struct App {
     platform_env: Rc<crate::platform_env::PlatformEnvironment>,
     content: Option<Box<dyn FnMut()>>,
     window: Option<Arc<dyn Window>>,
-    surface: Option<PrimaryPresent>,
+    surface: Option<WindowPresent>,
     surface_config: Option<wgpu::SurfaceConfiguration>,
     surface_caps: Option<wgpu::SurfaceCapabilities>,
     app: Option<AppShell<WgpuRenderer>>,
@@ -622,21 +626,14 @@ impl App {
         }
         self.applied_frame_pacing_mode = mode;
 
-        if let Some(app) = &mut self.app {
-            app.set_frame_pacing_mode(mode);
-        }
-        let Some(device) = self
-            .gpu_context
-            .as_ref()
-            .map(|context| Arc::clone(&context.gpu.device))
-        else {
+        let Some(app) = &mut self.app else {
             return;
         };
-        let surface = self.surface.as_ref().and_then(PrimaryPresent::surface);
-        if let (Some(surface), Some(surface_config)) = (surface, &mut self.surface_config) {
+        app.set_frame_pacing_mode(mode);
+        if let (Some(present), Some(surface_config)) = (&self.surface, &mut self.surface_config) {
             apply_frame_pacing_mode(
-                &device,
-                surface,
+                app.renderer(),
+                present,
                 surface_config,
                 self.surface_caps.as_ref(),
                 mode,
@@ -649,14 +646,16 @@ impl App {
         }
 
         for native in self.native_windows.values_mut() {
-            apply_frame_pacing_mode(
-                &device,
-                &native.surface,
-                &mut native.surface_config,
-                Some(&native.surface_caps),
-                mode,
-                native.vsync_interval,
-            );
+            if let Some(mut surface) = native_surface(app, native) {
+                apply_frame_pacing_mode(
+                    surface.renderer(),
+                    &native.present,
+                    &mut native.surface_config,
+                    Some(&native.surface_caps),
+                    mode,
+                    native.vsync_interval,
+                );
+            }
             native.last_frame_start_time = None;
             native.window.request_redraw();
         }
@@ -1566,47 +1565,46 @@ impl App {
             options.title,
             create_started.elapsed().as_millis()
         );
-        let surface_caps = surface.get_capabilities(&context.gpu.adapter);
-        let surface_format = select_surface_format(&surface_caps)?;
-        let present_mode = desktop_present_mode(&surface_caps, self.frame_pacing_mode());
-        log_desktop_present_mode(self.frame_pacing_mode(), present_mode, &surface_caps);
-        let size = window.surface_size();
-        let surface_config = surface_config_for_window(
-            &surface_caps,
-            surface_format,
-            size.width.max(1),
-            size.height.max(1),
-            present_mode,
-            options.transparent,
-            desired_frame_latency(self.frame_pacing_mode(), monitor_refresh_interval(&window)),
-        )?;
-        surface.configure(&context.gpu.device, &surface_config);
-        let placeholder_presented = present_initial_placeholder_frame_cleared_to(
+        let (surface_caps, surface_config) = window_surface_config(
             &surface,
-            &context.gpu.device,
-            &context.gpu.queue,
-            surface_format,
-            "native window initial present",
-            cranpose_render_wgpu::frame_clear_color(options.transparent),
-        );
+            &context.gpu.adapter,
+            window.surface_size(),
+            self.frame_pacing_mode(),
+            monitor_refresh_interval(&window),
+            options.transparent,
+        )?;
+        let present_site = PresentSite::of_this_device();
+        if present_site == PresentSite::Loop {
+            native_frame::show_native_surface_cleared(context, &surface, &surface_config, options);
+        }
         trace_native_window_timing!(
-            "{} configure {}ms placeholder_presented={placeholder_presented} alpha={:?}",
+            "{} configure {}ms alpha={:?}",
             options.title,
             create_started.elapsed().as_millis(),
             surface_config.alpha_mode
         );
 
         let scale_factor = window.scale_factor();
-        let mut renderer = wgpu_renderer_for_surface(
+        let mut renderer = wgpu_renderer(
             context.text_system.clone(),
-            &context.gpu.adapter,
-            Arc::clone(&context.gpu.device),
-            Arc::clone(&context.gpu.queue),
-            crate::surface_format::display_surface_view_format(surface_format),
             scale_factor,
             self.device_loss.handler(&self.event_proxy),
         );
         renderer.set_transparent_background(options.transparent);
+        let present = WindowPresent::start(
+            present_site,
+            &mut renderer,
+            GpuTarget::on_adapter(
+                &context.gpu.adapter,
+                Arc::clone(&context.gpu.device),
+                Arc::clone(&context.gpu.queue),
+                crate::surface_format::display_surface_view_format(surface_config.format),
+            ),
+            surface,
+            &surface_config,
+            window.as_ref(),
+            &self.event_proxy,
+        );
         trace_native_window_timing!(
             "{} renderer {}ms",
             options.title,
@@ -1652,7 +1650,7 @@ impl App {
             events: request.events.clone(),
             state: request.state,
             window,
-            surface,
+            present,
             surface_config,
             surface_caps,
             surface_dirty: true,
@@ -1787,20 +1785,22 @@ impl App {
             return;
         }
         let viewport = surface_logical_viewport_size(width, height, native.window.scale_factor());
-        let Some(device) = app.renderer().try_device() else {
-            log::error!("native surface resize skipped: GPU renderer is not initialized");
+        let Some(mut surface) = native_surface(app, native) else {
             return;
         };
         native.surface_config.width = width;
         native.surface_config.height = height;
-        native.surface.configure(device, &native.surface_config);
+        if !native
+            .present
+            .configure(surface.renderer(), &native.surface_config)
+        {
+            return;
+        }
         native
             .root
             .set_size(cranpose_ui::Size::new(viewport.0, viewport.1));
-        if let Some(mut surface) = native_surface(app, native) {
-            surface.set_buffer_size(width, height);
-            surface.set_viewport(viewport.0, viewport.1);
-        }
+        surface.set_buffer_size(width, height);
+        surface.set_viewport(viewport.0, viewport.1);
         native.surface_dirty = surface_reconfigure_requires_redraw(width, height);
     }
 
@@ -2947,114 +2947,13 @@ impl App {
         }
     }
 
-    fn redraw_native_window(
-        app: &mut AppShell<WgpuRenderer>,
-        native: &mut NativeWindowSurface,
-        registry: &Rc<native_window::NativeWindowRegistry>,
-    ) -> bool {
-        if native_window_redraw_held_while_hidden(native.presentable()) {
-            return false;
-        }
-        let frame_started_at = Instant::now();
-        update_app_with_native_window_registry(app, registry);
-        let after_update = Instant::now();
-        let Some(mut surface) = native_surface(app, native) else {
-            return false;
-        };
-        let frame_owed = surface.take_frame_owed();
-        let present = surface_present_step(native.surface_dirty, frame_owed, &mut surface);
-        pace_after_empty_redraw(
-            &mut native.last_frame_start_time,
-            &mut native.last_redraw_empty,
-            frame_started_at,
-            present == PresentStep::Present,
-        );
-        if present != PresentStep::Present {
-            return false;
-        }
-        native.surface_dirty = true;
-
-        let acquire_started_at = Instant::now();
-        let output = match current_surface_texture(&native.surface, "native window") {
-            SurfaceFrame::Ready(output) => output,
-            SurfaceFrame::Reconfigure => {
-                trace_native_window!("redraw surface outdated key={:?}", native.key);
-                let size = native.window.surface_size();
-                Self::resize_native_surface(app, native, size.width, size.height);
-                if surface_reconfigure_requires_redraw(size.width, size.height) {
-                    native.window.request_redraw();
-                }
-                return false;
-            }
-            SurfaceFrame::Skip => {
-                trace_native_window!("redraw surface unavailable key={:?}", native.key);
-                pace_after_empty_redraw(
-                    &mut native.last_frame_start_time,
-                    &mut native.last_redraw_empty,
-                    frame_started_at,
-                    false,
-                );
-                return false;
-            }
-        };
-        let after_acquire = Instant::now();
-
-        let Some(mut surface) = native_surface(app, native) else {
-            return false;
-        };
-        let config = &native.surface_config;
-        if let Err(error) = crate::wgpu_surface::render_surface_frame(
-            surface.renderer(),
-            &output,
-            config.format,
-            (config.width, config.height),
-        ) {
-            log::error!("native window render failed: {error:?}");
-            return false;
-        }
-        let after_render = Instant::now();
-
-        native.window.pre_present_notify();
-        surface.renderer().present(output);
-        note_native_window_presented(native.state, true);
-        let after_present = Instant::now();
-        trace_native_window_timing!(
-            "{} presented {}x{} key={:?}",
-            native.options.title,
-            native.surface_config.width,
-            native.surface_config.height,
-            native.key
-        );
-        native.surface_dirty = false;
-        app.record_presented_frame(frame_started_at, after_render);
-        log_desktop_frame_telemetry(
-            frame_started_at,
-            after_update,
-            after_acquire,
-            after_render,
-            after_present,
-            "native",
-        );
-        native.last_frame_start_time = Some(presented_frame_anchor(
-            frame_started_at,
-            native.frame_interval(app.frame_pacing_mode()),
-            after_acquire.duration_since(acquire_started_at),
-        ));
-        let needs_frame =
-            native_surface(app, native).is_some_and(|surface| surface.frame_schedule().needs_frame);
-        if should_chain_no_vsync_redraw(native.frame_interval(app.frame_pacing_mode()), needs_frame)
-        {
-            native.window.request_redraw();
-        }
-        true
-    }
-
     #[cfg(feature = "robot")]
     fn set_robot_controller(&mut self, controller: RobotController) {
         self.robot.controller = Some(controller);
     }
 
     fn observe_presence(&mut self, window_id: WinitWindowId, event: &WindowEvent) {
+        self.hand_over_occlusion(window_id, event);
         if let Some(native) = self.native_windows.get_mut(&window_id) {
             match event {
                 WindowEvent::Occluded(occluded) => native.occluded = *occluded,
@@ -3081,8 +2980,8 @@ impl App {
 }
 
 fn apply_frame_pacing_mode(
-    device: &wgpu::Device,
-    surface: &wgpu::Surface<'static>,
+    renderer: &mut WgpuRenderer,
+    present: &WindowPresent,
     surface_config: &mut wgpu::SurfaceConfiguration,
     surface_caps: Option<&wgpu::SurfaceCapabilities>,
     mode: FramePacingMode,
@@ -3104,7 +3003,7 @@ fn apply_frame_pacing_mode(
     }
     surface_config.present_mode = present_mode;
     surface_config.desired_maximum_frame_latency = frame_latency;
-    surface.configure(device, surface_config);
+    present.configure(renderer, surface_config);
     log_desktop_present_mode(mode, present_mode, caps);
 }
 
@@ -3604,42 +3503,30 @@ fn desktop_present_mode(
     }
 }
 
-fn surface_config_for_window(
-    surface_caps: &wgpu::SurfaceCapabilities,
-    surface_format: wgpu::TextureFormat,
-    width: u32,
-    height: u32,
-    present_mode: wgpu::PresentMode,
-    transparent: bool,
-    frame_latency: u32,
-) -> Result<wgpu::SurfaceConfiguration, LaunchError> {
-    Ok(crate::wgpu_surface::root_surface_config(
-        surface_caps,
-        surface_format,
-        (width, height),
-        present_mode,
-        select_alpha_mode(surface_caps, transparent)?,
-        frame_latency,
-    ))
-}
-
-fn wgpu_renderer_for_surface(
-    text_system: WgpuTextSystem,
+// What a window's `surface` on `adapter` offers, and the configuration it
+// starts with: the window's `size`, the present mode and frame latency of
+// the pacing `mode` at `vsync_interval`, and a `transparent` alpha.
+fn window_surface_config(
+    surface: &wgpu::Surface<'static>,
     adapter: &wgpu::Adapter,
-    device: Arc<wgpu::Device>,
-    queue: Arc<wgpu::Queue>,
-    surface_format: wgpu::TextureFormat,
-    scale_factor: f64,
-    on_device_lost: cranpose_render_wgpu::DeviceLostHandler,
-) -> WgpuRenderer {
-    let mut renderer = wgpu_renderer(text_system, scale_factor, on_device_lost);
-    renderer.init_gpu(GpuTarget::on_adapter(
-        adapter,
-        device,
-        queue,
+    size: PhysicalSize<u32>,
+    mode: FramePacingMode,
+    vsync_interval: Duration,
+    transparent: bool,
+) -> Result<(wgpu::SurfaceCapabilities, wgpu::SurfaceConfiguration), LaunchError> {
+    let surface_caps = surface.get_capabilities(adapter);
+    let surface_format = select_surface_format(&surface_caps)?;
+    let present_mode = desktop_present_mode(&surface_caps, mode);
+    log_desktop_present_mode(mode, present_mode, &surface_caps);
+    let config = crate::wgpu_surface::root_surface_config(
+        &surface_caps,
         surface_format,
-    ));
-    renderer
+        (size.width.max(1), size.height.max(1)),
+        present_mode,
+        select_alpha_mode(&surface_caps, transparent)?,
+        desired_frame_latency(mode, vsync_interval),
+    );
+    Ok((surface_caps, config))
 }
 
 fn wgpu_renderer(
@@ -4923,10 +4810,15 @@ impl cranpose_app_shell::PlatformTextInputHandler for DesktopTextInput {
 
 impl Drop for App {
     fn drop(&mut self) {
-        // The present thread holds the surface, which holds the window: the
+        // A present thread holds its surface, which holds the window: each
         // thread ends while the loop still holds the window.
         if let Some(app) = &mut self.app {
             app.renderer().shutdown_present_runtime();
+            for native in self.native_windows.values() {
+                if let Some(mut surface) = native_surface(app, native) {
+                    surface.renderer().shutdown_present_runtime();
+                }
+            }
         }
         cranpose_services::advance_lifecycle(cranpose_services::LifecycleState::Destroyed);
     }
@@ -4995,44 +4887,35 @@ impl ApplicationHandler for App {
         self.vsync_interval = monitor_refresh_interval(&window);
 
         let size = window.surface_size();
-        let surface_caps = surface.get_capabilities(&adapter);
-        let surface_format = match select_surface_format(&surface_caps) {
-            Ok(format) => format,
-            Err(error) => {
-                self.abort_launch(event_loop, error);
-                return;
-            }
-        };
-
-        let present_mode = desktop_present_mode(&surface_caps, self.frame_pacing_mode());
-        log_desktop_present_mode(self.frame_pacing_mode(), present_mode, &surface_caps);
-        let surface_config = match surface_config_for_window(
-            &surface_caps,
-            surface_format,
-            size.width.max(1),
-            size.height.max(1),
-            present_mode,
+        let (surface_caps, surface_config) = match window_surface_config(
+            &surface,
+            &adapter,
+            size,
+            self.frame_pacing_mode(),
+            self.vsync_interval,
             false,
-            desired_frame_latency(self.frame_pacing_mode(), self.vsync_interval),
         ) {
-            Ok(config) => config,
+            Ok(configured) => configured,
             Err(error) => {
                 self.abort_launch(event_loop, error);
                 return;
             }
         };
+        let surface_format = surface_config.format;
 
         let device = Arc::new(device);
         let queue = Arc::new(queue);
-
-        surface.configure(&device, &surface_config);
-        present_initial_placeholder_frame(
-            &surface,
-            &device,
-            &queue,
-            surface_format,
-            "primary window initial present",
-        );
+        let present_site = PresentSite::of_this_device();
+        if present_site == PresentSite::Loop {
+            surface.configure(&device, &surface_config);
+            present_initial_placeholder_frame(
+                &surface,
+                &device,
+                &queue,
+                surface_format,
+                "primary window initial present",
+            );
+        }
 
         // The first composition reads the window's theme. Without it the
         // theme is detected by running a system command (`defaults` on
@@ -5049,13 +4932,20 @@ impl ApplicationHandler for App {
             initial_scale,
             self.device_loss.handler(&self.event_proxy),
         );
-        let target = GpuTarget::on_adapter(
-            &adapter,
-            Arc::clone(&device),
-            Arc::clone(&queue),
-            crate::surface_format::display_surface_view_format(surface_format),
+        let present = WindowPresent::start(
+            present_site,
+            &mut renderer,
+            GpuTarget::on_adapter(
+                &adapter,
+                Arc::clone(&device),
+                Arc::clone(&queue),
+                crate::surface_format::display_surface_view_format(surface_format),
+            ),
+            surface,
+            &surface_config,
+            window.as_ref(),
+            &self.event_proxy,
         );
-        let present = self.start_primary_renderer(&mut renderer, target, surface, &surface_config);
 
         let viewport = primary_viewport_for_surface_size(
             &self.settings,
@@ -5524,7 +5414,7 @@ impl ApplicationHandler for App {
         }
         self.serve_platform_before_waiting(event_loop);
         self.serve_app_requests();
-        self.drain_primary_present_returns();
+        self.drain_present_returns();
         let now = Instant::now();
         if self.poll_native_window_global_primary_press() {
             self.refresh_native_window_requests();

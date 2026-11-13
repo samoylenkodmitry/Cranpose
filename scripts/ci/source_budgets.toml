@@ -4,7 +4,7 @@
 
 [counts]
 too_many_arguments = 10
-private_docs = 12473
+private_docs = 12472
 for_test_fns = 38
 cranpose_env_names = 76
 source_text_checks = 328
@@ -85,7 +85,7 @@ limit = 1000
 "crates/cranpose/src/android/event_loop.rs" = 2224
 "crates/cranpose/src/app_launcher.rs" = 1469
 "crates/cranpose/src/desktop/accessibility.rs" = 1237
-"crates/cranpose/src/desktop/event_loop.rs" = 5916
+"crates/cranpose/src/desktop/event_loop.rs" = 5806
 "crates/cranpose/src/embed.rs" = 1015
 "crates/cranpose/src/ios/accessibility.rs" = 1143
 "crates/cranpose/src/native_window.rs" = 1052

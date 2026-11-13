@@ -19,6 +19,12 @@ pub mod android;
 pub mod embedded_view;
 #[cfg(all(feature = "renderer-wgpu", not(target_arch = "wasm32")))]
 mod present_thread;
+#[cfg(all(
+    feature = "renderer-wgpu",
+    not(target_arch = "wasm32"),
+    any(feature = "desktop-shell", all(feature = "ios", target_os = "ios"))
+))]
+mod window_present;
 #[cfg(all(feature = "renderer-wgpu", not(target_arch = "wasm32")))]
 pub use cranpose_app_shell::TouchRouter;
 #[cfg(feature = "renderer-wgpu")]

@@ -102,13 +102,15 @@ impl App {
             match request_primary_device(&context.gpu.adapter, requirements) {
                 Ok(opened) => (context.gpu.adapter.clone(), opened),
                 Err(_) => {
-                    let adapter = crate::wgpu_surface::request_adapter(
-                        &context.gpu.instance,
-                        self.surface
-                            .as_ref()
-                            .and_then(super::PrimaryPresent::surface),
-                    )
-                    .map_err(LaunchError::NoAdapter)?;
+                    // A surface on the present thread stays there: the
+                    // adapter is chosen without it.
+                    let surface = match &self.surface {
+                        Some(super::WindowPresent::OnLoop(surface)) => Some(surface),
+                        _ => None,
+                    };
+                    let adapter =
+                        crate::wgpu_surface::request_adapter(&context.gpu.instance, surface)
+                            .map_err(LaunchError::NoAdapter)?;
                     let opened = request_primary_device(&adapter, requirements)
                         .map_err(LaunchError::DeviceCreate)?;
                     (adapter, opened)
@@ -123,32 +125,25 @@ impl App {
         context.adapter_backend = backend;
         let handler = self.device_loss.handler(&self.event_proxy);
         let gpu = &context.gpu;
-        let hand_over = |renderer: &mut cranpose_render_wgpu::WgpuRenderer, format| {
+        let hand_over = |renderer: &mut cranpose_render_wgpu::WgpuRenderer,
+                         present: &super::WindowPresent,
+                         config: &wgpu::SurfaceConfiguration| {
             renderer.set_device_lost_handler(Arc::clone(&handler));
-            renderer.init_gpu(cranpose_render_wgpu::GpuTarget {
+            let target = cranpose_render_wgpu::GpuTarget {
                 device: Arc::clone(&gpu.device),
                 queue: Arc::clone(&gpu.queue),
-                surface_format: crate::surface_format::display_surface_view_format(format),
+                surface_format: crate::surface_format::display_surface_view_format(config.format),
                 adapter_backend: backend,
                 adapter_downlevel: downlevel,
-            });
+            };
+            present.replace_device(renderer, target, config);
         };
-        // A primary window that presents on the present thread keeps the
-        // lost device: its surface sits on that thread.
-        let surface = self
-            .surface
-            .as_ref()
-            .and_then(super::PrimaryPresent::surface);
-        if let (Some(surface), Some(config)) = (surface, &self.surface_config) {
-            surface.configure(&gpu.device, config);
-            hand_over(app.renderer(), config.format);
+        if let (Some(present), Some(config)) = (&self.surface, &self.surface_config) {
+            hand_over(app.renderer(), present, config);
         }
         for native in self.native_windows.values() {
-            native
-                .surface
-                .configure(&gpu.device, &native.surface_config);
             if let Some(mut surface) = super::native_surface(app, native) {
-                hand_over(surface.renderer(), native.surface_config.format);
+                hand_over(surface.renderer(), &native.present, &native.surface_config);
             }
         }
         if let Some(content) = &self.device_loss.content {

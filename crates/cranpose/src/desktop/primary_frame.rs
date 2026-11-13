@@ -7,7 +7,7 @@ use std::{
 use winit::event_loop::ActiveEventLoop;
 
 use super::{
-    App, PrimaryPresent, PrimarySurface, SurfaceFrame, current_surface_texture,
+    App, PrimarySurface, SurfaceFrame, WindowPresent, current_surface_texture,
     headless_requested_viewport, log_desktop_frame_telemetry, native_window_trace_enabled,
     next_frame_anchor, pace_after_empty_redraw, presented_frame_anchor,
     primary_declaration_host_needs_direct_update, print_native_window_trace, record_pacing_event,
@@ -40,8 +40,8 @@ impl App {
         ) else {
             return ControlFlow::Break(());
         };
-        let PrimaryPresent::OnLoop(surface) = present else {
-            return self.publish_primary_frame(frame_started_at, frame_interval);
+        let WindowPresent::OnLoop(surface) = present else {
+            return self.publish_primary_frame((frame_started_at, after_update), frame_interval);
         };
         let mut primary = PrimarySurface {
             window,

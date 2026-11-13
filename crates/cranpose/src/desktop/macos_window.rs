@@ -2,7 +2,7 @@
 #![expect(unsafe_code, reason = "Objective-C messages to AppKit")]
 
 use objc2::rc::Retained;
-use objc2_app_kit::{NSView, NSWindow, NSWindowAnimationBehavior};
+use objc2_app_kit::{NSView, NSWindow, NSWindowAnimationBehavior, NSWindowOcclusionState};
 use objc2_quartz_core::CATransaction;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use winit::window::Window;
@@ -36,6 +36,17 @@ pub(crate) fn stage(window: &dyn Window) {
     ns_window.setAlphaValue(0.0);
     let _ = window.set_cursor_hittest(false);
     set_visible_without_open_animation(&ns_window, window);
+}
+
+// Whether the window server shows no part of `window`. A present thread
+// learns it from here and from the window's occlusion events: AppKit answers
+// on the main thread only.
+pub(crate) fn occluded(window: &dyn Window) -> bool {
+    ns_window(window).is_some_and(|ns_window| {
+        !ns_window
+            .occlusionState()
+            .contains(NSWindowOcclusionState::Visible)
+    })
 }
 
 /// Makes a window [`stage`] put on the screen opaque and reachable by the

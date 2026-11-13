@@ -4,33 +4,14 @@ use cranpose_app_shell::AppShell;
 use cranpose_render_wgpu::WgpuRenderer;
 use winit::window::Window;
 
-use super::{present_thread::FramesInFlight, request_redraw_once};
-use crate::app_launcher::AppSettings;
-
-// Where the primary window's frames present: on the loop's thread, into
-// the surface the loop holds, or on the renderer's present thread, which
-// holds the surface, with the frames handed to it and not handed back.
-pub(super) enum PrimaryPresent {
-    OnLoop(wgpu::Surface<'static>),
-    OnPresentThread(FramesInFlight),
-}
-
-impl PrimaryPresent {
-    // The surface the loop presents into; `None` while the present thread
-    // holds it.
-    pub(super) fn surface(&self) -> Option<&wgpu::Surface<'static>> {
-        match self {
-            Self::OnLoop(surface) => Some(surface),
-            Self::OnPresentThread(_) => None,
-        }
-    }
-}
+use super::request_redraw_once;
+use crate::{app_launcher::AppSettings, window_present::WindowPresent};
 
 // The primary window's surface, its configuration and the viewport a
 // headless run asks for in place of the window's.
 pub(super) struct PrimarySurface<'a> {
     pub(super) window: &'a Arc<dyn Window>,
-    pub(super) present: &'a PrimaryPresent,
+    pub(super) present: &'a WindowPresent,
     pub(super) config: &'a mut wgpu::SurfaceConfiguration,
     pub(super) viewport_override: Option<(f32, f32)>,
 }
@@ -51,7 +32,7 @@ impl PrimarySurface<'_> {
 
 fn configure_app_surface_size(
     app: &mut AppShell<WgpuRenderer>,
-    present: &PrimaryPresent,
+    present: &WindowPresent,
     surface_config: &mut wgpu::SurfaceConfiguration,
     width: u32,
     height: u32,
@@ -60,25 +41,12 @@ fn configure_app_surface_size(
     if width == 0 || height == 0 {
         return;
     }
-
-    match present {
-        PrimaryPresent::OnLoop(surface) => {
-            let Some(device) = app.renderer().try_device() else {
-                log::error!("desktop surface resize skipped: GPU renderer is not initialized");
-                return;
-            };
-            surface_config.width = width;
-            surface_config.height = height;
-            surface.configure(device, surface_config);
-        }
-        // Frames drawn for the old size are refused by their surface epoch.
-        PrimaryPresent::OnPresentThread(_) => {
-            surface_config.width = width;
-            surface_config.height = height;
-            if let Some(thread) = app.renderer().present_thread() {
-                thread.resize(surface_config.clone());
-            }
-        }
+    let previous = (surface_config.width, surface_config.height);
+    surface_config.width = width;
+    surface_config.height = height;
+    if !present.configure(app.renderer(), surface_config) {
+        (surface_config.width, surface_config.height) = previous;
+        return;
     }
     update_app_viewport(app, width, height, viewport);
 }
