@@ -18,10 +18,13 @@
 //! How deep the queue is meant to be depends on the frames. A loop that
 //! cannot keep up with the display needs frames to overlap; such a loop
 //! runs unpaced, starting frames as soon as the renderer takes them. A loop that
-//! can keep up shows a full observation window without missing a refresh
-//! while keeping at least two frames behind the shown one. Then it is paced
-//! with two frames queued, and with one once the display shows that frames
-//! at two keep more than a period to spare, or after a while. One gets frames to the screen soonest, but leaves nothing to show
+//! can keep up shows a full observation window without missing a refresh.
+//! When it kept at least two frames behind the shown one, it is paced with
+//! two frames queued, and with one once the display shows that frames at two
+//! keep more than a period to spare, or after a while. When it left the
+//! queue shallow, it is paced with one at once: the display itself misses a
+//! refresh now and then, which leaves one more frame queued behind every
+//! later one, and only a paced loop drains it. One gets frames to the screen soonest, but leaves nothing to show
 //! when a frame runs late, which the display reports as a vsync no new frame
 //! reached. Missed vsyncs move the loop up a level: a few of them from one
 //! frame queued, which Compose's own renderer holds through far more, and
@@ -424,9 +427,9 @@ impl FramePacer {
             .map(|next_slot_ns| next_slot_ns - lead_ns)
     }
 
-    /// The level frames run at now, trying the level below once the hold
-    /// is over: from unpaced only once the queue has filled, since a loop
-    /// that leaves it shallow has nothing to gain from pacing.
+    /// The level frames run at now, trying the level below once the hold is
+    /// over: an unpaced loop that kept up for a window comes down to two
+    /// frames queued from a full queue, and to one from a shallow one.
     fn level(&mut self, now_ns: i64, vsync_period_ns: i64) -> Option<Level> {
         let stage = self.stage?;
         let hold_over = stage.until_ns.is_none_or(|until| now_ns >= until);
@@ -435,9 +438,6 @@ impl FramePacer {
                 hold_over
                     && vsync_period_ns > 0
                     && self.shown_recently(now_ns, vsync_period_ns)
-                    && Level::Shallow
-                        .depth()
-                        .is_some_and(|depth| self.queue_deeper_than(depth, FULL_HISTORY))
                     && self.misses.len() == MISS_WINDOW
                     && !self.misses.iter().any(|missed| *missed)
             }
@@ -449,7 +449,13 @@ impl FramePacer {
         if !step_down {
             return Some(stage.level);
         }
-        let below = stage.level.below();
+        let filled = Level::Shallow
+            .depth()
+            .is_some_and(|depth| self.queue_deeper_than(depth, FULL_HISTORY));
+        let below = match stage.level {
+            Level::Unpaced if !filled => Level::Shallow,
+            level => level.below(),
+        };
         let until_ns = (below == Level::Buffered).then(|| now_ns + self.holds_ns[0]);
         self.enter(below, now_ns, until_ns);
         Some(below)
