@@ -40,6 +40,7 @@ impl super::Surface {
             render_layer: Mutex::new(layer),
             swapchain_format: RwLock::new(None),
             extent: RwLock::new(wgt::Extent3d::default()),
+            present_queue: super::present_queue::PresentQueue::new(),
         }
     }
 
@@ -251,6 +252,7 @@ impl crate::Surface for super::Surface {
         config: &crate::SurfaceConfiguration,
     ) -> Result<(), crate::SurfaceError> {
         log::debug!("build swapchain {config:?}");
+        self.present_queue.reconfigured();
 
         let caps = &device.shared.private_texture_format_caps;
         *self.swapchain_format.write() = Some(config.format);
@@ -349,6 +351,7 @@ impl crate::Surface for super::Surface {
         _timeout: Option<core::time::Duration>, // TODO
         _fence: &super::Fence,
     ) -> Result<crate::AcquiredSurfaceTexture<super::Api>, crate::SurfaceError> {
+        self.present_queue.before_acquire();
         let render_layer = self.render_layer.lock();
 
         #[cfg(target_os = "macos")]
