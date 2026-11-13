@@ -97,6 +97,12 @@ impl App {
         }
     }
 
+    // Whether the present thread refused the primary window's last frame:
+    // the loop owes the window a frame the shell does not ask for.
+    pub(super) fn primary_owes_frame(&self) -> bool {
+        self.surface.as_ref().is_some_and(WindowPresent::owes_frame)
+    }
+
     // Folds the frames each window's present thread handed back into its
     // renderer, which frees their room.
     pub(super) fn drain_present_returns(&mut self) {
@@ -104,9 +110,9 @@ impl App {
         let Some(app) = self.app.as_mut() else {
             return;
         };
-        for native in self.native_windows.values_mut() {
-            Self::drain_native_present_returns(app, native);
-        }
+        self.native_windows
+            .values_mut()
+            .for_each(|native| Self::drain_native_present_returns(app, native));
     }
 
     // A frame of the primary window on the screen ends as one the loop
@@ -129,6 +135,9 @@ impl App {
         if returns.unavailable {
             self.primary_surface_dirty = true;
             self.robot.note_unpresentable();
+        }
+        if returns.shown {
+            self.robot.note_presented();
         }
         let Some(frame) = returns.presented else {
             return;

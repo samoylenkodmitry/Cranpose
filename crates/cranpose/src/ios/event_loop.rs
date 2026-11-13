@@ -454,7 +454,7 @@ impl<F: FnMut() + 'static> IosApp<F> {
         {
             window.request_redraw();
         }
-        if returns.presented.is_some() {
+        if returns.presented.is_some() || returns.shown {
             self.device_loss.presented();
             self.device_loss_drill.presented();
         }

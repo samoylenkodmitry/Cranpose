@@ -4814,11 +4814,11 @@ impl Drop for App {
         // thread ends while the loop still holds the window.
         if let Some(app) = &mut self.app {
             app.renderer().shutdown_present_runtime();
-            for native in self.native_windows.values() {
+            self.native_windows.values().for_each(|native| {
                 if let Some(mut surface) = native_surface(app, native) {
                     surface.renderer().shutdown_present_runtime();
                 }
-            }
+            });
         }
         cranpose_services::advance_lifecycle(cranpose_services::LifecycleState::Destroyed);
     }
@@ -5473,8 +5473,8 @@ impl ApplicationHandler for App {
         let has_active_animations =
             frames_enabled && app.has_active_animations() && !waits_for_present;
         let needs_update = frame_schedule.needs_update;
-        let needs_redraw =
-            primary_frames_enabled && (frame_schedule.needs_frame || app.frame_owed());
+        let needs_redraw = primary_frames_enabled
+            && (frame_schedule.needs_frame || app.frame_owed() || self.primary_owes_frame());
         if needs_redraw {
             log::trace!(
                 target: "cranpose::input",

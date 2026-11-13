@@ -11,13 +11,15 @@ use winit::{event::WindowEvent, event_loop::EventLoopProxy, window::Window};
 
 // Where a window's frames present: on the loop's thread, into the surface
 // the loop holds, or on the window renderer's present thread, which holds
-// the surface, with the frames handed to it and not handed back and whether
-// the window server shows none of the window.
+// the surface, with the frames handed to it and not handed back, whether
+// the window server shows none of the window, and whether the thread
+// refused the last frame with no newer one to stand in for it.
 pub(crate) enum WindowPresent {
     OnLoop(wgpu::Surface<'static>),
     OnPresentThread {
         frames: FramesInFlight,
         occluded: bool,
+        owes_frame: bool,
     },
 }
 
@@ -86,8 +88,10 @@ pub(crate) struct PresentedFrame {
 pub(crate) struct PresentReturns {
     // The newest frame that reached the screen.
     pub(crate) presented: Option<PresentedFrame>,
-    // A frame went back undrawn for a reason the next frame fixes: it draws
-    // at once.
+    // A frame the surface showed already: it counts as shown.
+    pub(crate) shown: bool,
+    // A frame went back undrawn for a reason the next frame fixes, and no
+    // newer frame is on its way: one draws at once.
     pub(crate) redraw: bool,
     // A frame found no image to draw into: the window is occluded or
     // minimized, or the app is off the screen.
@@ -160,6 +164,7 @@ impl WindowPresent {
                 clock_origin,
             },
             occluded,
+            owes_frame: false,
         }
     }
 
@@ -230,6 +235,24 @@ impl WindowPresent {
         matches!(self, Self::OnPresentThread { occluded: true, .. })
     }
 
+    // Whether the present thread refused the last frame it took and no newer
+    // frame is on its way, while the window server shows the window: the
+    // loop draws one, whether or not the app changed.
+    #[cfg_attr(
+        not(feature = "desktop-shell"),
+        expect(dead_code, reason = "the desktop loop schedules the frame owed")
+    )]
+    pub(crate) fn owes_frame(&self) -> bool {
+        matches!(
+            self,
+            Self::OnPresentThread {
+                occluded: false,
+                owes_frame: true,
+                ..
+            }
+        )
+    }
+
     // Hands the frame `renderer` holds to the present thread, which draws
     // it into the surface's next image of `config`'s size and presents it.
     // The frame started at `started_at` and its update ended at
@@ -240,7 +263,10 @@ impl WindowPresent {
         config: &wgpu::SurfaceConfiguration,
         (started_at, after_update): (Instant, Instant),
     ) -> bool {
-        let Self::OnPresentThread { frames, .. } = self else {
+        let Self::OnPresentThread {
+            frames, owes_frame, ..
+        } = self
+        else {
             return false;
         };
         let outcome = renderer.publish_frame(config.width, config.height);
@@ -248,6 +274,7 @@ impl WindowPresent {
             log::debug!("[present-thread] no frame published: {outcome:?}");
             return false;
         }
+        *owes_frame = false;
         frames.frames.push_back(FrameInFlight {
             id: renderer.last_published_frame_id(),
             started_at,
@@ -260,7 +287,10 @@ impl WindowPresent {
     // which frees their room, and says what became of them.
     pub(crate) fn drain(&mut self, renderer: &mut WgpuRenderer) -> PresentReturns {
         let mut returns = PresentReturns::default();
-        let Self::OnPresentThread { frames, .. } = self else {
+        let Self::OnPresentThread {
+            frames, owes_frame, ..
+        } = self
+        else {
             return returns;
         };
         renderer.drain_present_returns_with(&mut |frame_id, outcome, timings| {
@@ -271,13 +301,16 @@ impl WindowPresent {
                         returns.presented = Some(frames.presented(&frame, timings));
                     }
                 }
-                PresentOutcome::Unchanged => {}
+                PresentOutcome::Unchanged => returns.shown = true,
                 PresentOutcome::Cancelled(CancelReason::SurfaceUnavailable) => {
                     returns.unavailable = true;
                 }
                 PresentOutcome::Cancelled(_) | PresentOutcome::NotRun => returns.redraw = true,
             }
         });
+        // A newer frame on its way stands in for a refused one.
+        returns.redraw &= frames.frames.is_empty();
+        *owes_frame |= returns.redraw;
         returns
     }
 }
