@@ -12,7 +12,7 @@ use cranpose_core::collections::growth_slack::RoomAtRest;
 use cranpose_render_common::{RenderScene, Renderer};
 use web_time::Instant;
 
-use crate::{AppShell, FrameSchedule, FrameUpdateResult};
+use crate::{AppShell, FrameSchedule, FrameUpdateResult, RootSurface, ShellApp};
 
 // How long the shell rests before it trims: a frame within it, such as the
 // next frame of a hover, finds the room of the last one.
@@ -96,8 +96,32 @@ where
                 list.keep_room_at_rest();
             }
             surface.scene_updates.keep_room_at_rest();
-            surface.renderer.scene_mut().trim();
+            if surface.renderer.scene_mut().trim() {
+                rebuild_cleared_scene(&mut self.app, surface);
+            }
             surface.renderer.trim();
         }
+    }
+}
+
+// Builds the scene of `surface` anew once its trim let every record go:
+// input reads its hit targets before the next frame does. The window keeps
+// what it shows, and the next frame draws all of it.
+fn rebuild_cleared_scene<R>(app: &mut ShellApp, surface: &mut RootSurface<R>)
+where
+    R: Renderer,
+    R::Error: Debug,
+{
+    let Some(root) = surface.root_node(app) else {
+        return;
+    };
+    let viewport = surface.viewport_size();
+    let mut applier = app.composition.applier_mut();
+    if let Err(err) = surface
+        .renderer
+        .rebuild_scene_from_applier(&mut applier, root, viewport)
+    {
+        log::error!("renderer rebuild at rest failed: {err:?}");
+        surface.scene_dirty = true;
     }
 }

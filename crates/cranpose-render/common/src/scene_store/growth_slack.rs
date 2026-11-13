@@ -7,15 +7,28 @@
 // free spans hold more than half of their room, and the shape chunks drop
 // the shapes no item draws. The kept recordings of nodes the store no longer
 // draws go, and the journal's logs give back their room. Free lists keep
-// their room, which the next removals take again.
+// their room, which the next removals take again. A tree that replaced
+// another in one update made its records past the rows of the one it
+// replaced, which free only after: past REBUILT_FREE_ROWS free rows that
+// no cut reaches, the store is better built anew.
 
 use cranpose_core::collections::growth_slack::GrowthSlack;
 
 use super::SceneStore;
 
-pub(super) fn trim(store: &mut SceneStore) {
+// Free rows past which a store that no cut can shrink is built anew: a row
+// takes about 120 bytes over the store's arrays, so these hold a quarter of
+// a megabyte, more than a rebuild of the records left costs at rest.
+const REBUILT_FREE_ROWS: usize = 2048;
+
+// Returns whether more than half of the rows and `REBUILT_FREE_ROWS` stay
+// free past the cut, which only a store built anew gives back.
+pub(super) fn trim(store: &mut SceneStore) -> bool {
     if 2 * store.free_rows.len() > store.tree.len() && cut_free_rows(store) {
         cut_free_tails(store);
+    }
+    if 2 * store.free_rows.len() > store.tree.len() && store.free_rows.len() > REBUILT_FREE_ROWS {
+        return true;
     }
     store
         .items
@@ -46,6 +59,7 @@ pub(super) fn trim(store: &mut SceneStore) {
     store.texts.trim_growth_slack();
     store.runs.trim_growth_slack();
     store.shape_runs.trim_growth_slack();
+    false
 }
 
 // Cuts the free entries at the end of the arrays the records of the cut

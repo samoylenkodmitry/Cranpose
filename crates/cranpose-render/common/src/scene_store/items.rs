@@ -175,9 +175,11 @@ impl<T: Copy> SpanPool<T> {
                 .sum::<usize>()
     }
 
+    // Lets go of every span, and of the room of the free lists, which no
+    // removal takes again.
     pub(crate) fn clear(&mut self) {
         self.items.clear();
-        self.free.iter_mut().for_each(Vec::clear);
+        self.free.clear();
     }
 
     // The entries the spans hold room for, free ones among them.

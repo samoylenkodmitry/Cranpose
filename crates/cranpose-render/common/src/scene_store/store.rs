@@ -287,9 +287,11 @@ impl SceneStore {
     /// Gives back the room the store's arrays hold past their records and
     /// draws: the room a burst took, such as a first build's or a long
     /// list's. The store's owner calls it at rest, when no frame waits, as
-    /// a frame would take the room again.
-    pub fn trim(&mut self) {
-        super::growth_slack::trim(self);
+    /// a frame would take the room again. Returns whether most rows stay
+    /// free past records made after them, room that only a store cleared
+    /// and built anew gives back.
+    pub fn trim(&mut self) -> bool {
+        super::growth_slack::trim(self)
     }
 
     // Leaves the own draws of the record at `index` to be compared with what
@@ -469,7 +471,7 @@ impl SceneStore {
             self.generation_floor = self.generation_floor.max(last.wrapping_add(1));
         }
         self.generations.clear();
-        self.free_rows.clear();
+        self.free_rows = Vec::new();
         self.items.clear();
         #[cfg(feature = "window-damage")]
         self.marks.clear();

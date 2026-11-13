@@ -771,9 +771,14 @@ impl RenderScene for Scene {
         self.clear_hits();
     }
 
-    fn trim(&mut self) {
-        self.store.trim();
+    fn trim(&mut self) -> bool {
         crate::scene_builder::trim_dirty_room();
+        let rebuild = self.store.trim();
+        if rebuild {
+            self.clear();
+            self.store.trim();
+        }
+        rebuild
     }
 
     fn hit_test(&self, x: f32, y: f32) -> Vec<Self::HitTarget> {

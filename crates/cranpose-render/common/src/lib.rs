@@ -261,8 +261,12 @@ pub trait RenderScene {
     }
 
     /// Gives back the room the scene's storage holds past what it draws. Its
-    /// owner calls it at rest, when no frame waits.
-    fn trim(&mut self) {}
+    /// owner calls it at rest, when no frame waits. Returns whether the scene
+    /// let every record go to give that room back: the owner builds it anew
+    /// before anything reads it.
+    fn trim(&mut self) -> bool {
+        false
+    }
 
     /// Whether the scene draws `node`. A scene that keeps no record of the nodes it draws says
     /// it does.

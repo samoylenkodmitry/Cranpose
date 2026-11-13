@@ -79,9 +79,11 @@ impl<T> Slab<T> {
         self.entries.capacity() * size_of::<Option<T>>() + self.free.capacity() * size_of::<u32>()
     }
 
+    // Lets go of every entry, and of the room of the free list, which no
+    // removal takes again.
     pub(crate) fn clear(&mut self) {
         self.entries.clear();
-        self.free.clear();
+        self.free = Vec::new();
     }
 
     pub(crate) fn trim_growth_slack(&mut self) {
