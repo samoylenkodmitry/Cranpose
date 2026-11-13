@@ -403,6 +403,18 @@ check-forks base="origin/main":
         cargo check --manifest-path "forks/$crate/Cargo.toml" --target-dir target/forks
     done
 
+# The wgpu fork's own tests, the Metal backend's among them, which only a Mac
+# compiles: the workspace leaves the forks out, so `test` runs none of them.
+# Runs when the diff against `base` touches `forks/`.
+test-forks base="origin/main":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if git diff --quiet "$(git merge-base HEAD {{quote(base)}})" -- forks; then
+        echo "test-forks: forks/ unchanged against {{base}}"
+        exit 0
+    fi
+    cargo test --manifest-path forks/wgpu/wgpu-hal/Cargo.toml --features metal --target-dir target/forks --lib
+
 # Copy-paste budget for a block the diff adds, at either end of the copy.
 # Same on-demand install as above, through the same pinned-path resolver.
 duplication-gate base="origin/main":
@@ -1328,7 +1340,7 @@ _disk-guard:
 # all seven on every pull request.
 
 # What a pull request is gated on. Run this before pushing.
-ci: fmt-check typos versions twin-matrix-check check-forks test clippy clippy-release clippy-optional-backends clippy-svg clippy-hyphenation clippy-robot clippy-no-atomic64 clippy-wasm doc budgets complexity-gate duplication-gate source-budgets deny shear public-api-diff test-robot-discovery test-shell-helpers test-host-lock test-ci-filters test-features test-property bench-smoke test-ci-gate-reachability test-layout platform-contracts test-robot-suite-partition test-android-accessibility-contract test-ide
+ci: fmt-check typos versions twin-matrix-check check-forks test-forks test clippy clippy-release clippy-optional-backends clippy-svg clippy-hyphenation clippy-robot clippy-no-atomic64 clippy-wasm doc budgets complexity-gate duplication-gate source-budgets deny shear public-api-diff test-robot-discovery test-shell-helpers test-host-lock test-ci-filters test-features test-property bench-smoke test-ci-gate-reachability test-layout platform-contracts test-robot-suite-partition test-android-accessibility-contract test-ide
 
 # Needs a Linux box with the X11 stack, an Android SDK and (on macOS) Xcode.
 
