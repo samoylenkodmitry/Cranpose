@@ -48,12 +48,12 @@ pub(super) struct FrameDamagePlan {
 impl FrameDamagePlan {
     // The frame as its target holds it once drawn; while it may show
     // `stand_ins`, with the parts it drew marked for the next frame to draw
-    // again, and none when it drew whole, as the next frame does then too.
-    pub(super) fn held_with(self, stand_ins: bool) -> Option<Held> {
+    // again, the whole window when it drew whole.
+    pub(super) fn held_with(self, stand_ins: bool) -> Held {
         match self.repaint {
-            Repaint::Window(rects) if stand_ins => Some(self.held.with_stand_ins(rects)),
-            Repaint::Whole if stand_ins => None,
-            _ => Some(self.held),
+            Repaint::Window(rects) if stand_ins => self.held.with_stand_ins(Damage::Part(rects)),
+            Repaint::Whole if stand_ins => self.held.with_stand_ins(Damage::Full),
+            _ => self.held,
         }
     }
 

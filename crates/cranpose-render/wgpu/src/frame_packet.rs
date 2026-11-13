@@ -2,7 +2,7 @@ use cranpose_render_common::scene_store::SceneVersion;
 
 use crate::{
     collect::{ChildLayer, LayerScene},
-    frame::{DamageRects, PacketDamage},
+    frame::{Damage, DamageRects, PacketDamage},
     scene::{
         BackdropLayer, CompositorScene, DrawOp, EffectLayer, ImageDraw, RunDraw, ShadowDraw,
         TextDraw,
@@ -167,7 +167,7 @@ impl RenderReturns {
             }),
             held: Some(HeldWindow {
                 oldest: packet.frame_id,
-                stand_ins: DamageRects::default(),
+                stand_ins: Damage::Part(DamageRects::default()),
             }),
             scene: Some(FrameSceneStorage {
                 root: packet.root,
@@ -189,11 +189,11 @@ pub(crate) struct CaptureReply {
 
 // The oldest frame a window's targets hold, and the parts of their frames
 // drawn with stand-ins: a window frame draws the damages since that frame
-// and those parts again.
+// and those parts again, or whole when a frame may show one anywhere.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct HeldWindow {
     pub(crate) oldest: u64,
-    pub(crate) stand_ins: DamageRects,
+    pub(crate) stand_ins: Damage,
 }
 
 #[derive(Default)]

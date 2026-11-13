@@ -1940,7 +1940,7 @@ impl GpuRenderer {
             swapchain: &mut self.swapchain,
             cleared: &mut self.cleared,
         };
-        plan.keep(drawn.then(|| plan.held_with(stand_ins)).flatten(), keepers)
+        plan.keep(drawn.then(|| plan.held_with(stand_ins)), keepers)
     }
 
     /// Lets go of the copy of the last frame the renderer keeps for a

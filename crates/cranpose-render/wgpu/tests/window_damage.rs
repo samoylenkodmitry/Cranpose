@@ -116,6 +116,10 @@ enum Scene {
     // changes a step, read in its item as the demo's lazy pulse reads its
     // animation: only that label draws again.
     LazyLabel,
+    // A layer painted by another shader no other test draws, at the spot
+    // from the first frame on: the window's first frames draw whole with
+    // its placeholder.
+    EarlyShader,
 }
 
 // The lazy list of `Scene::LazyLabel`, its padding, its rows' height and the
@@ -393,7 +397,7 @@ fn changing_box(scene: Scene, step: MutableState<u32>) -> Option<Modifier> {
         Scene::BlurredContent => spot().blur(Dp(3.0)),
         Scene::Shadow => shadowed(step),
         Scene::Appearing if step.get() % 2 == 1 => spot().background(Color(0.9, 0.2, 0.2, 1.0)),
-        Scene::PaintedLayer | Scene::ReplacingLayer | Scene::LateShader => {
+        Scene::PaintedLayer | Scene::ReplacingLayer | Scene::LateShader | Scene::EarlyShader => {
             return empty_layer(scene, step);
         }
         Scene::Spinner | Scene::BareSpinner => arc_drawn_again(SPINNER, step, 12.0),
@@ -411,12 +415,12 @@ fn changing_box(scene: Scene, step: MutableState<u32>) -> Option<Modifier> {
     })
 }
 
-// A shader no other test draws, painting its rect green, filled red while
-// it compiles.
-fn late_shader() -> RenderEffect {
+// The shader `name`, which no other test draws, painting its rect green,
+// filled red while it compiles.
+fn unseen_shader(name: &str) -> RenderEffect {
     let mut shader = RuntimeShader::new(&format!(
         "{RUNTIME_SHADER_PRELUDE_WGSL}
-         // window damage late shader {}
+         // window damage {name} shader {}
          @fragment fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {{
              return vec4<f32>(0.1, 0.8, input.uv.y, 1.0);
          }}",
@@ -514,8 +518,9 @@ fn Changing(scene: Scene, step: MutableState<u32>) {
 
 // The box of a layer with nothing to draw: one a shader paints, its colour
 // read in the layer's block as a control's stage reads its animation; one a
-// shader no other test draws paints from step 1 on; and one that replaces
-// what lies beneath it every other step.
+// shader no other test draws paints from step 1 on, and one another paints
+// from the start; and one that replaces what lies beneath it every other
+// step.
 fn empty_layer(scene: Scene, step: MutableState<u32>) -> Option<Modifier> {
     match scene {
         Scene::PaintedLayer => Some(spot().graphics_layer(move || GraphicsLayer {
@@ -523,10 +528,14 @@ fn empty_layer(scene: Scene, step: MutableState<u32>) -> Option<Modifier> {
             ..Default::default()
         })),
         Scene::LateShader if step.get() >= 1 => Some(spot().graphics_layer(|| GraphicsLayer {
-            render_effect: Some(late_shader()),
+            render_effect: Some(unseen_shader("late")),
             ..Default::default()
         })),
         Scene::LateShader => None,
+        Scene::EarlyShader => Some(spot().graphics_layer(|| GraphicsLayer {
+            render_effect: Some(unseen_shader("early")),
+            ..Default::default()
+        })),
         _ if step.get() % 2 == 1 => Some(spot().graphics_layer(|| GraphicsLayer {
             blend_mode: BlendMode::Src,
             ..Default::default()
@@ -1057,21 +1066,33 @@ fn a_frame_drawn_with_a_stand_in_keeps_its_image_with_the_stand_in_marked() {
         "the shader's first frame draws its placeholder over a part of the window: {:?}",
         shown.stats
     );
-    // Frames of the page as it is until the shader landed and every image
-    // drew it.
-    let mut settled = 0;
-    let mut last = shown.stats;
-    for index in 0.. {
-        let frame = harness.frame(1);
-        let label = format!("frame {index} after the stand-in: {:?}", frame.stats.damage);
+    frames_until_the_shader_is_drawn(&mut harness, 1, |label, stats| {
         assert!(
-            frame.stats.repainted_pixels < whole,
+            stats.repainted_pixels < whole,
             "{label}: an image drew the whole window"
         );
+    });
+}
+
+// Frames of the page at `step` as it is, each checked by `check`, until the
+// shader landed and every image drew it: every frame drawn with every
+// pipeline equals the frame drawn whole, and the images end holding the page
+// with the shader drawn.
+fn frames_until_the_shader_is_drawn(
+    harness: &mut Harness,
+    step: u32,
+    check: impl Fn(&str, &RenderStatsSnapshot),
+) {
+    let mut settled = 0;
+    let mut last = None;
+    for index in 0.. {
+        let frame = harness.frame(step);
+        let label = format!("frame {index} after the stand-in: {:?}", frame.stats.damage);
+        check(&label, &frame.stats);
         if support::pipelines_settled(&frame.stats) {
             support::assert_same_bytes(&label, WIDTH, &frame.kept, &frame.direct);
             settled += 1;
-            last = frame.stats;
+            last = Some(frame.stats);
         } else {
             assert!(index < 16, "{label}: the shader never landed");
             settled = 0;
@@ -1081,10 +1102,35 @@ fn a_frame_drawn_with_a_stand_in_keeps_its_image_with_the_stand_in_marked() {
             break;
         }
     }
-    assert_eq!(
-        last.repainted_pixels, 0,
+    assert!(
+        last.is_some_and(|last| last.repainted_pixels == 0),
         "every image holds the frame with the shader drawn: {last:?}"
     );
+}
+
+// A window's first frames draw whole while a shader compiles, its
+// placeholder in its place, and each image keeps its frame with the whole
+// window marked: every frame over such an image draws whole until the
+// shader landed and the image drew it. Every frame equals the frame drawn
+// whole, and the images end holding the page with the shader drawn.
+#[test]
+fn a_frame_drawn_whole_with_a_stand_in_is_drawn_whole_again_over_its_image() {
+    let Some((_lock, renderer)) = support::headless_renderer_parts_compiling_in_background_for(
+        wgpu::TextureFormat::Rgba8Unorm,
+    )
+    .map_err(|err| eprintln!("skipping (headless WGPU init failed): {err}"))
+    .ok() else {
+        return;
+    };
+    let mut harness = Harness::new(renderer, Scene::EarlyShader, 1.0, Keeper::Swapchain(DIRECT));
+    let whole = u64::from(WIDTH * HEIGHT);
+    let first = harness.frame(0);
+    assert!(
+        first.stats.placeholder_draws > 0 && first.stats.repainted_pixels == whole,
+        "the window's first frame draws whole with the placeholder: {:?}",
+        first.stats
+    );
+    frames_until_the_shader_is_drawn(&mut harness, 0, |_, _| {});
 }
 
 /// Draws each frame of `scene` twice: over the frame `keeper` holds, which

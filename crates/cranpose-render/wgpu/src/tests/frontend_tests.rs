@@ -108,7 +108,7 @@ fn returned(packet: FramePacket, outcome: PresentOutcome) -> RenderReturns {
         }),
         held: presented.then_some(HeldWindow {
             oldest: packet.frame_id,
-            stand_ins: DamageRects::default(),
+            stand_ins: Damage::Part(DamageRects::default()),
         }),
         scene: Some(FrameSceneStorage {
             root: packet.root,

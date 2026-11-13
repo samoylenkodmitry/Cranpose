@@ -56,12 +56,15 @@ impl WindowPackets {
     }
 
     // The damages from `at` back to the oldest packet the window's targets
-    // hold, and the parts they draw again; `None` when one of the damages is
-    // not a part of the window.
+    // hold, and the parts they draw again; `None` when one of the damages or
+    // those parts is not a part of the window.
     fn held_since(&self, at: u64) -> Option<DamageRects> {
         let held = self.held?;
+        let Damage::Part(stand_ins) = held.stand_ins else {
+            return None;
+        };
         let mut region = self.damages.union_back(at, held.oldest).ok()?;
-        region.add_all(&held.stand_ins);
+        region.add_all(&stand_ins);
         Some(region)
     }
 

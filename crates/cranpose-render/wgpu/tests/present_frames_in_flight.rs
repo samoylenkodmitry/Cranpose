@@ -87,39 +87,46 @@ fn hold_frames(renderer: &mut WgpuRenderer, runtime: &mut InlinePresentRuntime) 
     }
 }
 
+// Images that hold nothing take the frames through the composition target,
+// which keeps them: only the window's first frame, which no target holds a
+// frame for, draws whole and waits for the frame in flight.
 #[test]
-fn a_frame_drawn_whole_for_images_that_hold_nothing_goes_alone() {
+fn a_window_first_frame_goes_alone() {
     let Some((_lock, mut renderer, mut runtime)) = attached("whole frames", TestImages::Fresh)
     else {
         return;
     };
     renderer.scene_mut().describe(&direct_graph());
-    for frame in 1..=3 {
-        assert_eq!(
-            renderer.publish_frame(WIDTH, HEIGHT),
-            PublishOutcome::Published
-        );
-        assert!(
-            !renderer.has_frame_credit(),
-            "images that hold nothing take each frame whole, and a whole frame waits for the \
-             frame in flight: one scene then holds every whole frame"
-        );
-        assert_eq!(
-            renderer.publish_frame(WIDTH, HEIGHT),
-            PublishOutcome::NoCredit
-        );
-        assert_eq!(
-            renderer.last_published_frame_id(),
-            frame,
-            "a frame that waits is not built"
-        );
-        runtime.pump();
-        assert_eq!(
-            drain_outcomes(&mut renderer),
-            vec![(frame, PresentOutcome::Presented)]
-        );
-        assert!(renderer.has_frame_credit(), "with none in flight it goes");
-    }
+    assert_eq!(
+        renderer.publish_frame(WIDTH, HEIGHT),
+        PublishOutcome::Published
+    );
+    assert!(
+        !renderer.has_frame_credit(),
+        "the first frame draws whole, and the next waits for it: one scene then holds every \
+         whole frame"
+    );
+    assert_eq!(
+        renderer.publish_frame(WIDTH, HEIGHT),
+        PublishOutcome::NoCredit
+    );
+    assert_eq!(
+        renderer.last_published_frame_id(),
+        1,
+        "a frame that waits is not built"
+    );
+    runtime.pump();
+    assert_eq!(
+        drain_outcomes(&mut renderer),
+        vec![(1, PresentOutcome::Presented)]
+    );
+    assert!(renderer.has_frame_credit(), "with none in flight it goes");
+    renderer.scene_mut().describe(&shadowed_child_graph());
+    publish(&mut renderer);
+    assert!(
+        renderer.has_frame_credit(),
+        "the composition target holds the first frame: the next goes while one is in flight"
+    );
 }
 
 #[test]
@@ -338,15 +345,17 @@ fn a_new_device_takes_over_the_present_thread_and_refuses_older_frames() {
     );
 }
 
-// A page with a rect of `color` and a small pane drawn by a shader no other
-// test draws, filled red while it compiles, when `pane`.
-fn shader_page(color: Color, pane: bool) -> LayerNode {
+// A page with a rect of `color` and, when `pane` names one, a small pane
+// drawn by that shader, which no other test draws, filled red while it
+// compiles.
+fn shader_page(color: Color, pane: Option<&str>) -> LayerNode {
     let mut shader = RuntimeShader::new(&format!(
         "{RUNTIME_SHADER_PRELUDE_WGSL}
-         // frames in flight stand-in {}
+         // frames in flight stand-in {} {}
          @fragment fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {{
              return vec4<f32>(0.1, 0.8, input.uv.y, 1.0);
          }}",
+        pane.unwrap_or_default(),
         std::process::id()
     ));
     shader.set_placeholder(Some(ShaderPlaceholder {
@@ -371,7 +380,7 @@ fn shader_page(color: Color, pane: bool) -> LayerNode {
         height: 48.0,
     };
     let mut nodes = vec![support::solid_rect(rect, color)];
-    if pane {
+    if pane.is_some() {
         let transform = ProjectiveTransform::translation(96.0, 64.0);
         let pane = shared_test_support::layer_node(bounds, transform, layer, Vec::new());
         nodes.push(RenderNode::Layer(Box::new(pane)));
@@ -414,7 +423,7 @@ fn the_frames_after_a_stand_in_go_while_another_is_in_flight() {
         return;
     };
     let colors = [Color(0.2, 0.7, 0.3, 1.0), Color(0.7, 0.2, 0.3, 1.0)];
-    let pages = colors.map(|color| shader_page(color, false));
+    let pages = colors.map(|color| shader_page(color, None));
     // From the window's start until the page's own pipelines landed and its
     // frames overlap, each drawing the part of the window it changes.
     let mut overlapped = 0;
@@ -435,7 +444,9 @@ fn the_frames_after_a_stand_in_go_while_another_is_in_flight() {
         overlapped, 3,
         "the page's frames overlap, each drawing a part"
     );
-    renderer.scene_mut().describe(&shader_page(colors[0], true));
+    renderer
+        .scene_mut()
+        .describe(&shader_page(colors[0], Some("part")));
     publish(&mut renderer);
     runtime.pump();
     let stats = renderer.last_frame_stats().expect("frame statistics");
@@ -444,7 +455,7 @@ fn the_frames_after_a_stand_in_go_while_another_is_in_flight() {
         "the pane's first frame draws its placeholder over a part of the window: {stats:?}"
     );
     assert_eq!(drain_outcomes(&mut renderer).len(), 1);
-    let pages = colors.map(|color| shader_page(color, true));
+    let pages = colors.map(|color| shader_page(color, Some("part")));
     let mut settled = 0;
     for pair in 0.. {
         assert!(
@@ -463,4 +474,32 @@ fn the_frames_after_a_stand_in_go_while_another_is_in_flight() {
             break;
         }
     }
+}
+
+// A window's first frame draws whole while the shader of its pane compiles,
+// a stand-in in the pane's place. The image keeps that frame with the whole
+// window marked: the frame after it goes while another is in flight, and
+// none is refused for drawing more than its walk took.
+#[test]
+fn the_frames_after_a_whole_frame_with_a_stand_in_go_while_another_is_in_flight() {
+    let Some((_lock, mut renderer, mut runtime)) =
+        attached("whole stand-in frames", TestImages::Kept(1))
+    else {
+        return;
+    };
+    let colors = [Color(0.2, 0.7, 0.3, 1.0), Color(0.7, 0.2, 0.3, 1.0)];
+    let pages = colors.map(|color| shader_page(color, Some("whole")));
+    renderer.scene_mut().describe(&pages[0]);
+    publish(&mut renderer);
+    runtime.pump();
+    let stats = renderer.last_frame_stats().expect("frame statistics");
+    assert!(
+        stats.placeholder_draws > 0 && stats.repainted_pixels == u64::from(WIDTH * HEIGHT),
+        "the window's first frame draws whole with the pane's placeholder: {stats:?}"
+    );
+    assert_eq!(drain_outcomes(&mut renderer).len(), 1);
+    assert!(
+        overlapping_pair(&mut renderer, &mut runtime, [&pages[1], &pages[0]]),
+        "after the whole frame with a stand-in, a frame waited, or one was refused"
+    );
 }

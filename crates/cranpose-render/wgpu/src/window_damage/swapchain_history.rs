@@ -54,7 +54,10 @@ impl SwapchainHistory {
             match &mut window {
                 Some(window) => {
                     window.oldest = window.oldest.min(image.oldest);
-                    window.stand_ins.add_all(&image.stand_ins);
+                    match (&mut window.stand_ins, image.stand_ins) {
+                        (Damage::Part(parts), Damage::Part(more)) => parts.add_all(&more),
+                        (stand_ins, _) => *stand_ins = Damage::Full,
+                    }
                 }
                 None => window = Some(image),
             }

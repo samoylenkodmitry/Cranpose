@@ -82,8 +82,8 @@ impl ClearedImages {
     }
 
     /// Hands the frame just copied into the composition target to the
-    /// target's `kept`. A frame that drew a stand-in leaves none, so the
-    /// next frame draws whole and the target goes.
+    /// target's `kept`. Over a frame drawn whole with a stand-in, the next
+    /// frame draws whole and the target goes.
     pub(crate) fn hand_over(&mut self, target: &mut Option<Held>) {
         *target = self.kept.take();
         self.copied = true;
