@@ -16,6 +16,8 @@ use cranpose_ui::{PointerButton, SemanticsAction, SemanticsNode, SemanticsRole};
 mod presentation_info;
 #[cfg(feature = "renderer-wgpu")]
 pub use presentation_info::RobotPresentationInfo;
+mod screenshot;
+pub use screenshot::RobotScreenshot;
 
 /// Serializable semantic element combining semantics + geometry
 ///
@@ -73,21 +75,6 @@ pub(crate) struct SemanticQueryResult {
 }
 
 pub(crate) type TextMatchBounds = (f32, f32, f32, f32, String);
-
-/// RGBA screenshot captured from the current render scene.
-#[derive(Debug, Clone)]
-pub struct RobotScreenshot {
-    /// Screenshot width in pixels.
-    pub width: u32,
-    /// Screenshot height in pixels.
-    pub height: u32,
-    /// Logical width covered by the screenshot.
-    pub logical_width: f32,
-    /// Logical height covered by the screenshot.
-    pub logical_height: f32,
-    /// Packed RGBA8 pixel buffer in row-major order.
-    pub pixels: Vec<u8>,
-}
 
 /// Input or fixture mutation performed at one exact-clock timeline step.
 #[derive(Debug, Clone, PartialEq)]
@@ -231,6 +218,7 @@ pub(crate) enum RobotCommand {
     LoseGpuDevice {
         times: u32,
     },
+    RequestWindowSize(u32, u32),
     InvokeAppHook {
         name: String,
         argument: String,
@@ -1172,6 +1160,17 @@ impl Robot {
         self.tx
             .send(RobotCommand::SetSemanticsEnabled(enabled))
             .map_err(|e| format!("Failed to send semantics toggle command: {e}"))?;
+        self.recv_ack()
+    }
+
+    /// Asks the window for a surface of `width` by `height` physical pixels,
+    /// as a user's resize does, and waits until the event loop sends the
+    /// request. The window takes that size, or the nearest one the platform
+    /// allows, in a later turn of the loop.
+    pub fn request_window_size(&self, width: u32, height: u32) -> Result<(), String> {
+        self.tx
+            .send(RobotCommand::RequestWindowSize(width, height))
+            .map_err(|e| format!("Failed to send window size request: {e}"))?;
         self.recv_ack()
     }
 

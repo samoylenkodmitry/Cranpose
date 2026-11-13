@@ -1971,9 +1971,6 @@ impl GpuRenderer {
 
     pub(crate) fn debug_cpu_allocation_stats(&self) -> DebugCpuAllocationStats {
         DebugCpuAllocationStats {
-            scene_graph_node_count: 0,
-            scene_graph_heap_bytes: 0,
-            scene_hits: cranpose_render_common::graph_scene::HitStorage::default(),
             text_renderer_pool_len: self.text.image_cache.len(),
             text_renderer_pool_cap: self.text.image_cache.cap().get(),
             image_texture_cache_len: self.images.len(),
@@ -1988,6 +1985,7 @@ impl GpuRenderer {
                 + self.pass_scratch.glyph_instances.turned.capacity(),
             layer_cache_len: self.layer_cache.len(),
             layer_cache_bytes: self.layer_cache.bytes(),
+            ..DebugCpuAllocationStats::default()
         }
     }
     pub(crate) fn render_to_rgba_pixels(

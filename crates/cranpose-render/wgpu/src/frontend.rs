@@ -76,6 +76,9 @@ pub(crate) struct RendererFrontend {
     // Whether the next window walk takes every record: an image refused a
     // culled packet.
     uncull_next: bool,
+    // The surface epoch of the window packet built last: the images of a
+    // newer surface hold no frame the window drew.
+    surface_epoch: u64,
     // Whether the last window walk that took every record found a backdrop,
     // whose reads a culled walk does not follow.
     backdrops: bool,
@@ -152,6 +155,7 @@ impl RendererFrontend {
             overlay_target: TargetState::default(),
             window: WindowPackets::default(),
             uncull_next: false,
+            surface_epoch: 0,
             backdrops: false,
         }
     }
@@ -208,6 +212,10 @@ impl RendererFrontend {
         let build_start = Instant::now();
         let window = purpose == PacketFor::Window;
         if window {
+            if surface_epoch != self.surface_epoch {
+                self.surface_epoch = surface_epoch;
+                self.window.hold(None);
+            }
             self.begin_targets(TargetSetting {
                 viewport: (width, height),
                 root_scale,
@@ -405,6 +413,14 @@ impl RendererFrontend {
         Some(region)
     }
 
+    // The bytes of room the lists of the kept layer scenes hold.
+    pub(crate) fn scene_room_bytes(&self) -> usize {
+        self.scene_recyclers
+            .iter()
+            .map(LayerSceneRecycler::kept_room)
+            .sum()
+    }
+
     // Gives back at rest the room the kept layer scenes took, and the
     // overlays' records past what they hold.
     pub(crate) fn trim(&mut self) {
@@ -432,12 +448,13 @@ impl RendererFrontend {
         }
     }
 
-    // Whether the next window packet may go while others are in flight. A
-    // walk made whole by targets that hold no frame to build on waits for
-    // them. A walk made whole by its damage goes with them.
+    // Whether the next window packet, for the surface of `surface_epoch`,
+    // may go while others are in flight. A walk made whole by targets that
+    // hold no frame to build on waits for them, as one for a new surface
+    // does. A walk made whole by its damage goes with them.
     #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn next_overlap(&self) -> PacketOverlap {
-        if self.uncull_next || !self.window.holds_packet() {
+    pub(crate) fn next_overlap(&self, surface_epoch: u64) -> PacketOverlap {
+        if surface_epoch != self.surface_epoch || self.uncull_next || !self.window.holds_packet() {
             PacketOverlap::Alone
         } else {
             PacketOverlap::WithFramesInFlight

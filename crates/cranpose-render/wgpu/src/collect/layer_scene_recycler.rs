@@ -42,6 +42,14 @@ impl LayerSceneRecycler {
         self.scenes.clear();
     }
 
+    // The bytes of room the lists of the kept scenes hold.
+    pub(crate) fn kept_room(&self) -> usize {
+        self.scenes
+            .iter()
+            .map(|scene| scene.scene.kept_room())
+            .sum()
+    }
+
     // The bytes of room kept by the root scene that the next take hands out.
     pub(crate) fn root_room(&self) -> usize {
         self.scenes

@@ -219,18 +219,27 @@ fn a_resize_waits_for_nothing_and_the_frames_after_it_draw_at_the_new_size() {
             .is_some_and(|thread| thread.resize(surface_config(WIDTH * 2, HEIGHT * 2))),
         "the resize reaches the present thread"
     );
-    assert_eq!(
-        renderer.publish_frame(WIDTH * 2, HEIGHT * 2),
-        PublishOutcome::Published
+    assert!(
+        !renderer.has_frame_credit(),
+        "the resized surface's images hold nothing the window drew, so its first frame draws \
+         whole and waits for the frame in flight"
     );
     runtime.pump();
     assert_eq!(
         drain_outcomes(&mut renderer),
-        vec![
-            (first, PresentOutcome::Cancelled(CancelReason::SurfaceEpoch)),
-            (first + 1, PresentOutcome::Presented),
-        ],
-        "the frame built for the old size is refused and the next draws"
+        vec![(first, PresentOutcome::Cancelled(CancelReason::SurfaceEpoch))],
+        "the frame built for the old size is refused"
+    );
+    assert_eq!(
+        renderer.publish_frame(WIDTH * 2, HEIGHT * 2),
+        PublishOutcome::Published,
+        "with no frame in flight the frame for the new size goes"
+    );
+    runtime.pump();
+    assert_eq!(
+        drain_outcomes(&mut renderer),
+        vec![(first + 1, PresentOutcome::Presented)],
+        "the frame for the new size draws"
     );
 }
 

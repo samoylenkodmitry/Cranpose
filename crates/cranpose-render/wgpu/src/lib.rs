@@ -644,7 +644,9 @@ impl WgpuRenderer {
     #[cfg(not(target_arch = "wasm32"))]
     pub fn has_frame_credit(&self) -> bool {
         match &self.backend {
-            PresentBackend::Threaded(handle) => handle.has_credit(self.frontend.next_overlap()),
+            PresentBackend::Threaded(handle) => {
+                handle.has_credit(self.frontend.next_overlap(self.surface_epoch))
+            }
             PresentBackend::Sync(_) | PresentBackend::None => true,
         }
     }
@@ -673,7 +675,7 @@ impl WgpuRenderer {
             log::error!("publish_frame called without a threaded present runtime");
             return PublishOutcome::NoCredit;
         };
-        if !handle.has_credit(self.frontend.next_overlap()) {
+        if !handle.has_credit(self.frontend.next_overlap(self.surface_epoch)) {
             return PublishOutcome::NoCredit;
         }
         let Some(packet) = self.frontend.build_frame_packet(
@@ -869,6 +871,7 @@ impl WgpuRenderer {
         stats.scene_graph_node_count = self.frontend.scene.store().node_count();
         stats.scene_graph_heap_bytes = self.frontend.scene.store().heap_bytes();
         stats.scene_hits = self.frontend.scene.hit_storage();
+        stats.scene_room_bytes = self.frontend.scene_room_bytes();
         stats
     }
 
