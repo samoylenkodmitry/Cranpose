@@ -850,6 +850,57 @@ fn a_new_device_takes_over_the_present_thread_and_refuses_older_frames() {
 }
 
 #[test]
+fn a_lost_device_refuses_frames_until_a_new_device_takes_over() {
+    let (_lock, mut renderer, target) = inline_runtime_or_skip!("device loss");
+    let replacement = match gpu_target(wgpu::TextureFormat::Bgra8UnormSrgb) {
+        Ok(target) => target,
+        Err(err) => {
+            eprintln!("skipping device loss: no second device: {err}");
+            return;
+        }
+    };
+    let lost = Arc::clone(&target.device);
+    let mut runtime = renderer.init_gpu_inline_for_tests(target);
+    let ack = renderer
+        .present_thread()
+        .and_then(|thread| thread.send_attach_offscreen_unacked_for_tests(WIDTH, HEIGHT))
+        .expect("inline runtime must accept controls");
+    runtime.pump();
+    ack.try_recv().expect("the offscreen target is attached");
+    renderer.scene_mut().describe(&direct_graph());
+
+    lost.destroy();
+    let _ = lost.poll(wgpu::PollType::wait_indefinitely());
+    assert_eq!(
+        renderer.publish_frame(WIDTH, HEIGHT),
+        PublishOutcome::Published
+    );
+    runtime.pump();
+    assert_eq!(
+        drain_outcomes(&mut renderer),
+        vec![(1, PresentOutcome::Cancelled(CancelReason::DeviceLost))],
+        "a frame after the loss is refused, not encoded on the lost device"
+    );
+
+    assert!(
+        renderer
+            .present_thread()
+            .is_some_and(|thread| thread.replace_device(replacement)),
+        "the new device reaches the present thread"
+    );
+    assert_eq!(
+        renderer.publish_frame(WIDTH, HEIGHT),
+        PublishOutcome::Published
+    );
+    runtime.pump();
+    assert_eq!(
+        drain_outcomes(&mut renderer),
+        vec![(2, PresentOutcome::Presented)],
+        "the next frame draws on the new device"
+    );
+}
+
+#[test]
 fn a_capture_on_the_present_thread_shows_the_picture_a_capture_in_place_shows() {
     let (_lock, mut threaded, target) = inline_runtime_or_skip!("threaded capture");
     let mut in_place = WgpuRenderer::new(&[support::TEST_FONT]);

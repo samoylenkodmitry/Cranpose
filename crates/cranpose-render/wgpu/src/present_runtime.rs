@@ -73,6 +73,11 @@ pub(crate) enum PresentControl {
         height: u32,
         ack: SyncSender<()>,
     },
+    // Destroys the device between two frames and waits for its loss to be
+    // reported, as a robot's loss drill asks.
+    LoseDevice {
+        ack: SyncSender<()>,
+    },
     Shutdown,
 }
 
@@ -346,6 +351,12 @@ impl PresentState {
                 self.config = None;
                 self.offscreen_target = None;
                 let _ = reply.send(self.surface.take());
+                true
+            }
+            PresentControl::LoseDevice { ack } => {
+                self.device.destroy();
+                let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
+                let _ = ack.send(());
                 true
             }
             PresentControl::AttachOffscreenTargetForTests { width, height, ack } => {

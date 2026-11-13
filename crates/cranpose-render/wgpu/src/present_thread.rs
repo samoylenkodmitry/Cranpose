@@ -110,6 +110,16 @@ impl PresentThread<'_> {
             .send_control(PresentControl::ReplaceDevice(Box::new(gpu)))
     }
 
+    /// Destroys the thread's device between two frames and waits until the
+    /// device reported its loss, as a driver reset would lose it: a robot's
+    /// device loss drill.
+    #[doc(hidden)]
+    pub fn lose_device(self) -> bool {
+        self.handle
+            .send_control_and_wait(|ack| PresentControl::LoseDevice { ack }, "lose device")
+            .is_some()
+    }
+
     #[doc(hidden)]
     pub fn attach_offscreen_for_tests(self, width: u32, height: u32) -> bool {
         self.handle

@@ -69,8 +69,18 @@ impl App {
             return;
         }
         for _ in 0..times {
-            if let Some(context) = &self.gpu_context {
-                crate::gpu_loss::lose_device(&context.gpu.device);
+            // A present thread loses its device between two frames: a
+            // device destroyed while a frame records panics in wgpu.
+            let present_thread = self
+                .app
+                .as_mut()
+                .and_then(|app| app.renderer().present_thread());
+            match (present_thread, &self.gpu_context) {
+                (Some(thread), _) => {
+                    thread.lose_device();
+                }
+                (None, Some(context)) => crate::gpu_loss::lose_device(&context.gpu.device),
+                (None, None) => {}
             }
             self.recover_lost_device(event_loop);
         }
