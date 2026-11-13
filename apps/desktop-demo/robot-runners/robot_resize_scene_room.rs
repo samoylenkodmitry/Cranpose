@@ -1,7 +1,8 @@
 // A window resized again and again keeps the scene room of the one whole
 // frame it kept before: each frame after a resize draws whole, and a whole
 // frame for images that hold nothing goes to the present thread alone, so
-// two whole scenes never live at once.
+// two whole scenes never live at once. The window shows, as a hidden one
+// draws no frame and keeps no scene to read.
 
 use crate::robot_launch;
 
@@ -12,6 +13,9 @@ const WINDOW_HEIGHT: u32 = 768;
 const STEPS: [(i32, i32); 5] = [(96, 64), (-96, -64), (160, 96), (-64, -32), (0, 0)];
 // The frames a resize may take to reach the surface.
 const RESIZE_FRAMES: usize = 60;
+// The frames after a resize reached the surface: the room reads none while
+// the scene of the frame at the new size is out with that frame.
+const SETTLE_FRAMES: usize = 4;
 
 pub(crate) fn main() {
     println!("=== Robot Resize Scene Room Test ===");
@@ -22,10 +26,10 @@ pub(crate) fn main() {
                 .presentation_info()
                 .expect("presentation info")
                 .surface_size;
-            let before = robot
-                .get_render_cpu_allocation_stats()
-                .expect("stats before the resizes")
-                .scene_room_bytes;
+            // The room right after each resize, read before the shell rests
+            // and trims it away: the first resize's is that of one whole
+            // frame.
+            let mut rooms = Vec::with_capacity(STEPS.len());
             for (dx, dy) in STEPS {
                 let size = (
                     width.saturating_add_signed(dx),
@@ -50,19 +54,33 @@ pub(crate) fn main() {
                     println!("FAIL: the window did not take the size {size:?}");
                     std::process::exit(1);
                 }
+                let mut room = 0;
+                for _ in 0..SETTLE_FRAMES {
+                    robot.pump_frames(1).expect("a frame at the new size");
+                    let kept = robot
+                        .get_render_cpu_allocation_stats()
+                        .expect("stats after the resize")
+                        .scene_room_bytes;
+                    room = room.max(kept);
+                }
+                println!("scene room after the resize to {size:?}: {room} bytes");
+                rooms.push(room);
             }
-            robot.wait_for_idle().expect("the demo settles after the resizes");
-            let after = robot
-                .get_render_cpu_allocation_stats()
-                .expect("stats after the resizes")
-                .scene_room_bytes;
-            println!("scene room before {before} bytes, after the resizes {after} bytes");
+            let first = rooms[0];
+            let most = rooms.iter().copied().max().unwrap_or(0);
+            if first == 0 {
+                println!(
+                    "FAIL: the stats read no scene room after a resize: the check compares \
+                     nothing"
+                );
+                std::process::exit(1);
+            }
             // A second whole scene would double the room; a frame of the
             // larger sizes may leave its scene a little roomier.
-            if after > before + before / 4 {
+            if most > first + first / 4 {
                 println!(
-                    "FAIL: the resizes left {after} bytes of scene room, more than 1.25 times the \
-                     {before} of one whole frame: two whole scenes lived at once"
+                    "FAIL: a resize left {most} bytes of scene room, more than 1.25 times the \
+                     {first} of one whole frame: two whole scenes lived at once"
                 );
                 std::process::exit(1);
             }
