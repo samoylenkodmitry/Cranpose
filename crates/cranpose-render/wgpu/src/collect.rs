@@ -86,6 +86,7 @@ impl LayerSceneRecycler {
         while let Some(child) = scene.children.pop() {
             self.recycle(child.content);
         }
+        scene.scene.settle_room();
         scene.scene.clear();
         scene.has_backdrop = false;
         scene.shown.clear();
@@ -436,7 +437,7 @@ fn rounding_within(layer_clip: Option<Rect>, context: &WalkContext<'_>) -> Optio
 
 pub(crate) fn collect_root(
     root: LayerRef<'_>,
-    (update, records_shown): (SceneUpdate, bool),
+    (update, shown): (SceneUpdate, Option<&mut Vec<ShownRecord>>),
     cull: Option<&Cull<'_>>,
     motion: &mut LayerMotion,
     capacity: SceneCapacityHint,
@@ -444,6 +445,11 @@ pub(crate) fn collect_root(
     recycler: &mut LayerSceneRecycler,
 ) -> Box<LayerScene> {
     let mut out = recycler.take(capacity);
+    let records_shown = shown.is_some();
+    if let Some(shown) = shown {
+        shown.clear();
+        out.shown = std::mem::take(shown);
+    }
     let settings = WalkSettings {
         raster_scale: RasterScale::Exact(root_scale),
         light: ShadowLight::for_window(
@@ -478,12 +484,12 @@ pub(crate) fn collect_root(
 
 pub(crate) fn collect_overlay(
     root: LayerRef<'_>,
-    (root_scale, records_shown): (f32, bool),
+    (root_scale, shown): (f32, Option<&mut Vec<ShownRecord>>),
     recycler: &mut LayerSceneRecycler,
 ) -> Box<LayerScene> {
     collect_root(
         root,
-        (root.store().update(), records_shown),
+        (root.store().update(), shown),
         None,
         &mut LayerMotion::default(),
         SceneCapacityHint::default(),

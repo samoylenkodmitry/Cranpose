@@ -23,7 +23,7 @@ fn collect_layer(
     let layer = store.root_layer().expect("the store holds the layer");
     collect_root(
         layer,
-        (store.update(), false),
+        (store.update(), None),
         None,
         motion,
         capacity,

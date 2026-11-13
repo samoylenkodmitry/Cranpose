@@ -10,7 +10,9 @@ use cranpose_render_common::{
 use web_time::Instant;
 
 use crate::{
-    collect::{LayerMotion, LayerScene, LayerSceneRecycler, collect_overlay, collect_root},
+    collect::{
+        LayerMotion, LayerScene, LayerSceneRecycler, ShownRecord, collect_overlay, collect_root,
+    },
     frame::{Damage, DamageRects, ImageContent, PacketDamage},
     frame_packet::{
         CancelReason, FramePacket, FrameSceneStorage, MAX_FRAMES_IN_FLIGHT, PresentOutcome,
@@ -48,6 +50,11 @@ pub(crate) struct RendererFrontend {
     pub(crate) root_scene_capacity: SceneCapacityHint,
     scene_recyclers: [LayerSceneRecycler; MAX_FRAMES_IN_FLIGHT],
     returned_scenes: usize,
+    // How a window walk of the root and one of the overlays drew each
+    // record, which their targets read as the walk ends: the lists stay
+    // here, as no packet in flight needs them.
+    root_shown: Vec<ShownRecord>,
+    overlay_shown: Vec<ShownRecord>,
     pub(crate) layer_motion: LayerMotion,
     pub(crate) frame_sequence: u64,
     pub(crate) transparent_background: bool,
@@ -131,6 +138,8 @@ impl RendererFrontend {
             root_scene_capacity: SceneCapacityHint::default(),
             scene_recyclers: std::array::from_fn(|_| LayerSceneRecycler::default()),
             returned_scenes: 0,
+            root_shown: Vec::new(),
+            overlay_shown: Vec::new(),
             layer_motion: LayerMotion::default(),
             frame_sequence: 0,
             transparent_background: false,
@@ -260,13 +269,11 @@ impl RendererFrontend {
         purpose: PacketFor,
     ) -> (Option<Box<LayerScene>>, Damage) {
         let window = purpose == PacketFor::Window;
+        let records = window && self.overlay_target.records();
         let recycler = &mut self.scene_recyclers[self.returned_scenes];
-        let overlay = self.dev_overlay.root_layer().map(|overlay| {
-            collect_overlay(
-                overlay,
-                (root_scale, window && self.overlay_target.records()),
-                recycler,
-            )
+        let shown = &mut self.overlay_shown;
+        let mut overlay = self.dev_overlay.root_layer().map(|overlay| {
+            collect_overlay(overlay, (root_scale, records.then_some(shown)), recycler)
         });
         let damage = if window {
             self.overlay_target
@@ -274,6 +281,9 @@ impl RendererFrontend {
         } else {
             Damage::Full
         };
+        if let Some(overlay) = overlay.as_mut().filter(|_| records) {
+            self.overlay_shown = std::mem::take(&mut overlay.shown);
+        }
         (overlay, damage)
     }
 
@@ -310,13 +320,14 @@ impl RendererFrontend {
         let root_layer = store.root_layer().expect("the scene has a root");
         let recycler = &mut self.scene_recyclers[self.returned_scenes];
         let overlay_backdrops = overlay.is_some_and(LayerScene::contains_backdrop);
-        let records = (store.update(), window && self.target.records());
+        let records = window && self.target.records();
         let mut widened = false;
         let (root, damage) = loop {
             let culled = cull.map(|region| self.target.cull(store, region));
-            let root = collect_root(
+            let shown = records.then_some(&mut self.root_shown);
+            let mut root = collect_root(
                 root_layer,
-                records,
+                (store.update(), shown),
                 culled.as_ref(),
                 &mut self.layer_motion,
                 self.root_scene_capacity,
@@ -330,6 +341,9 @@ impl RendererFrontend {
                 .target
                 .end(store, Some(&root))
                 .union(overlay_damage, (width, height));
+            if records {
+                self.root_shown = std::mem::take(&mut root.shown);
+            }
             let Some(region) = cull else {
                 break (root, damage);
             };
