@@ -2079,7 +2079,7 @@ impl GpuRenderer {
             Ok(())
         });
         let execution = submit.execute(graph);
-        self.recall_frame_uploads();
+        self.recall_frame_uploads(execution.as_ref().ok().map(|done| &done.submission));
         let execution = execution.map_err(|error| error.to_string())?;
         let submission_index = execution.submission;
         let copy_stats = execution.stats;
@@ -2126,10 +2126,10 @@ impl GpuRenderer {
         self.convert_surface_pixels_to_rgba(&pixels)
     }
 
-    /// Asks the buffers the submitted frame unmapped back for later frames.
-    fn recall_frame_uploads(&mut self) {
-        self.viewport_uniforms.uploads.recall();
-        self.run_store.recall();
+    // Asks the frame's unmapped buffers back after `submission`, its submit.
+    fn recall_frame_uploads(&mut self, submission: Option<&wgpu::SubmissionIndex>) {
+        self.viewport_uniforms.uploads.recall(submission);
+        self.run_store.recall(submission);
     }
 
     /// Records and submits the frame: whether it submitted anything.
@@ -2229,7 +2229,7 @@ impl GpuRenderer {
         let after_build = Instant::now();
         let execution = submit.execute(frame_graph);
         let after_execute = Instant::now();
-        self.recall_frame_uploads();
+        self.recall_frame_uploads(execution.as_ref().ok().map(|done| &done.submission));
         if let Some(total_ms) = should_log_wgpu_render_stage(graph_start, after_execute) {
             log::warn!(
                 "[wgpu-render-stage:graph] total_ms={total_ms:.2} build_ms={:.2} execute_ms={:.2}",

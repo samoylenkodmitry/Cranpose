@@ -694,7 +694,7 @@ impl WgpuFrameGraphExecutor {
         }
         let (submission, upload_writes) =
             Self::submit_frame(queue, encoder, before_passes, self.pass_timer.as_ref());
-        self.upload_allocators.recall();
+        self.upload_allocators.recall(Some(&submission));
         release_pending_transients(&mut self.transient_textures, tally.releases);
         let retained_texture_bytes = self.retained_texture_bytes();
         let (transient_acquires, transient_news) = self.transient_textures.take_counts();
@@ -1213,7 +1213,7 @@ impl WgpuFrameEncoder<'_> {
             before_passes,
             self.pass_timer,
         );
-        self.uploads.recall();
+        self.uploads.recall(Some(&submission));
         transient_releases.release_pending();
         let retained_texture_bytes = transient_releases.retained_texture_bytes();
         let (transient_acquires, transient_news) = transient_releases.take_counts();
@@ -1984,8 +1984,8 @@ impl UploadRing {
         self.reset();
     }
 
-    fn recall(&mut self) {
-        self.requests.recall();
+    fn recall(&mut self, submission: Option<&wgpu::SubmissionIndex>) {
+        self.requests.recall(submission);
     }
 
     /// Opens a frame. Buffers of a frame that never finished stay usable:
@@ -2267,11 +2267,11 @@ impl FrameUploadAllocators {
         }
     }
 
-    /// Asks the frame's buffers back after its submit.
-    pub(crate) fn recall(&mut self) {
+    // Asks the frame's buffers back after `submission`, its submit.
+    pub(crate) fn recall(&mut self, submission: Option<&wgpu::SubmissionIndex>) {
         self.buffers.recall();
         for ring in self.rings.iter_mut().flatten() {
-            ring.recall();
+            ring.recall(submission);
         }
     }
 

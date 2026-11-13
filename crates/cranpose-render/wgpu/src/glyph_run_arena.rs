@@ -326,7 +326,8 @@ impl GlyphRunArena {
                 index += 1;
             }
         }
-        self.requests.recall();
+        // The maps cover the last submit, which the arena does not see.
+        self.requests.recall(None);
         self.evacuating.clear();
         self.evacuating.extend(
             self.chunks
