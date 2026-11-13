@@ -1,10 +1,13 @@
 // The window packets a producer built last: what each changed, the one the
 // next changes against, and the oldest one the window's targets hold, which
-// a window walk culls against.
+// a window walk culls against with the parts they draw again.
 
 use cranpose_render_common::scene_store::SceneVersion;
 
-use crate::frame::{Damage, DamageRects, FrameDamages, PacketDamage};
+use crate::{
+    frame::{Damage, DamageRects, FrameDamages, PacketDamage},
+    frame_packet::HeldWindow,
+};
 
 // What a packet draws: two packets of the same draw the same frame.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -25,7 +28,7 @@ pub(crate) struct WindowPackets {
     // The damage of the window packet built last when it went back unshown:
     // the next window packet changes against what it changed against.
     carried: Option<PacketDamage>,
-    held: Option<u64>,
+    held: Option<HeldWindow>,
 }
 
 impl WindowPackets {
@@ -40,14 +43,25 @@ impl WindowPackets {
         self.last.map(|(frame, _)| frame)
     }
 
-    // The damages since the oldest packet the window's targets hold, and
-    // the rects of `begun`: a region a window walk may cull to. `None` when
-    // one of the damages is not a part of the window.
+    // The damages since the oldest packet the window's targets hold, the
+    // parts they draw again and the rects of `begun`: a region a window walk
+    // may cull to. `None` when one of the damages is not a part of the
+    // window.
     pub(crate) fn cull_region(&self, begun: [DamageRects; 2]) -> Option<DamageRects> {
-        let mut region = self.damages.union_back(self.last()?, self.held?).ok()?;
-        for rect in begun.iter().flat_map(DamageRects::as_slice) {
-            region.add(*rect);
+        let mut region = self.held_since(self.last()?)?;
+        for rects in &begun {
+            region.add_all(rects);
         }
+        Some(region)
+    }
+
+    // The damages from `at` back to the oldest packet the window's targets
+    // hold, and the parts they draw again; `None` when one of the damages is
+    // not a part of the window.
+    fn held_since(&self, at: u64) -> Option<DamageRects> {
+        let held = self.held?;
+        let mut region = self.damages.union_back(at, held.oldest).ok()?;
+        region.add_all(&held.stand_ins);
         Some(region)
     }
 
@@ -75,7 +89,7 @@ impl WindowPackets {
     // part of it. `None` when it is not a part of the window.
     pub(crate) fn repaint(&mut self, next: u64, packet: PacketDamage) -> Option<DamageRects> {
         self.damages.note(next, packet);
-        self.damages.union_back(next, self.held?).ok()
+        self.held_since(next)
     }
 
     // Notes the window packet `frame` built with `damage`, drawing `draws`.
@@ -105,9 +119,9 @@ impl WindowPackets {
         }
     }
 
-    // Notes the oldest window packet the window's targets hold; `None` when
-    // one holds none known.
-    pub(crate) fn hold(&mut self, held: Option<u64>) {
+    // Notes the oldest window packet the window's targets hold, and the
+    // parts they draw again; `None` when one holds none known.
+    pub(crate) fn hold(&mut self, held: Option<HeldWindow>) {
         self.held = held;
     }
 }

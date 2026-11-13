@@ -30,7 +30,7 @@ use cranpose_ui::{
 use cranpose_ui_graphics::{
     BlendMode, Brush, CornerRadii, Dp, DrawPlacement, DrawPrimitive, DrawScope, DrawStyle,
     ImageBitmap, Path, Point, RUNTIME_SHADER_PRELUDE_WGSL, Rect, RoundedCornerShape, RuntimeShader,
-    Stroke,
+    ShaderPlaceholder, Stroke,
 };
 
 use crate::support::{self, rect_modifier};
@@ -107,6 +107,9 @@ enum Scene {
     // A layer with nothing to draw that replaces what lies beneath it,
     // showing every other step: its blend writes its whole surface.
     ReplacingLayer,
+    // A layer painted by a shader no other test draws, at the spot from step
+    // 1 on: while the shader compiles, its frames draw the placeholder.
+    LateShader,
 }
 
 /// A caret near the bottom, far from the spinner.
@@ -369,7 +372,9 @@ fn changing_box(scene: Scene, step: MutableState<u32>) -> Option<Modifier> {
         Scene::BlurredContent => spot().blur(Dp(3.0)),
         Scene::Shadow => shadowed(step),
         Scene::Appearing if step.get() % 2 == 1 => spot().background(Color(0.9, 0.2, 0.2, 1.0)),
-        Scene::PaintedLayer | Scene::ReplacingLayer => return empty_layer(scene, step),
+        Scene::PaintedLayer | Scene::ReplacingLayer | Scene::LateShader => {
+            return empty_layer(scene, step);
+        }
         Scene::Spinner | Scene::BareSpinner => arc_drawn_again(SPINNER, step, 12.0),
         Scene::TurnedSpinner => arc_turned(SPINNER, step, 12.0),
         Scene::Label
@@ -382,6 +387,24 @@ fn changing_box(scene: Scene, step: MutableState<u32>) -> Option<Modifier> {
         | Scene::TurnedSurface
         | Scene::ShrunkParent => return None,
     })
+}
+
+// A shader no other test draws, painting its rect green, filled red while
+// it compiles.
+fn late_shader() -> RenderEffect {
+    let mut shader = RuntimeShader::new(&format!(
+        "{RUNTIME_SHADER_PRELUDE_WGSL}
+         // window damage late shader {}
+         @fragment fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {{
+             return vec4<f32>(0.1, 0.8, input.uv.y, 1.0);
+         }}",
+        std::process::id()
+    ));
+    shader.set_placeholder(Some(ShaderPlaceholder {
+        color: Color(1.0, 0.0, 0.0, 1.0),
+        shape: None,
+    }));
+    RenderEffect::runtime_shader(shader)
 }
 
 #[composable]
@@ -468,14 +491,20 @@ fn Changing(scene: Scene, step: MutableState<u32>) {
 }
 
 // The box of a layer with nothing to draw: one a shader paints, its colour
-// read in the layer's block as a control's stage reads its animation, and
-// one that replaces what lies beneath it every other step.
+// read in the layer's block as a control's stage reads its animation; one a
+// shader no other test draws paints from step 1 on; and one that replaces
+// what lies beneath it every other step.
 fn empty_layer(scene: Scene, step: MutableState<u32>) -> Option<Modifier> {
     match scene {
         Scene::PaintedLayer => Some(spot().graphics_layer(move || GraphicsLayer {
             render_effect: Some(painted(step.get())),
             ..Default::default()
         })),
+        Scene::LateShader if step.get() >= 1 => Some(spot().graphics_layer(|| GraphicsLayer {
+            render_effect: Some(late_shader()),
+            ..Default::default()
+        })),
+        Scene::LateShader => None,
         _ if step.get() % 2 == 1 => Some(spot().graphics_layer(|| GraphicsLayer {
             blend_mode: BlendMode::Src,
             ..Default::default()
@@ -932,6 +961,76 @@ fn renderer() -> Option<(MutexGuard<'static, ()>, WgpuRenderer)> {
             None
         }
     }
+}
+
+// A frame that draws a stand-in while a pipeline compiles keeps its frame in
+// its swapchain image, the part it drew marked: once the pipeline lands,
+// each image draws only what changed since its frame and that part, never
+// the whole window, and every frame equals the frame drawn whole.
+#[test]
+fn a_frame_drawn_with_a_stand_in_keeps_its_image_with_the_stand_in_marked() {
+    let Some((_lock, renderer)) = support::headless_renderer_parts_compiling_in_background_for(
+        wgpu::TextureFormat::Rgba8Unorm,
+    )
+    .map_err(|err| eprintln!("skipping (headless WGPU init failed): {err}"))
+    .ok() else {
+        return;
+    };
+    let mut harness = Harness::new(renderer, Scene::LateShader, 1.0, Keeper::Swapchain(DIRECT));
+    let whole = u64::from(WIDTH * HEIGHT);
+    // Still frames until every image holds the page drawn with every
+    // pipeline: one in a row for each image draws nothing.
+    let mut held = 0;
+    for frame in 0.. {
+        let still = harness.frame(0);
+        let settled = support::pipelines_settled(&still.stats);
+        held = if settled && still.stats.repainted_pixels == 0 {
+            held + 1
+        } else {
+            0
+        };
+        if held == SWAPCHAIN_IMAGES {
+            break;
+        }
+        if !settled {
+            support::wait_for_background_compiler_idle();
+        }
+        assert!(frame < 64, "the images never held the still page");
+    }
+    let shown = harness.frame(1);
+    assert!(
+        shown.stats.placeholder_draws > 0 && shown.stats.repainted_pixels < whole,
+        "the shader's first frame draws its placeholder over a part of the window: {:?}",
+        shown.stats
+    );
+    // Frames of the page as it is until the shader landed and every image
+    // drew it.
+    let mut settled = 0;
+    let mut last = shown.stats;
+    for index in 0.. {
+        let frame = harness.frame(1);
+        let label = format!("frame {index} after the stand-in: {:?}", frame.stats.damage);
+        assert!(
+            frame.stats.repainted_pixels < whole,
+            "{label}: an image drew the whole window"
+        );
+        if support::pipelines_settled(&frame.stats) {
+            support::assert_same_bytes(&label, WIDTH, &frame.kept, &frame.direct);
+            settled += 1;
+            last = frame.stats;
+        } else {
+            assert!(index < 16, "{label}: the shader never landed");
+            settled = 0;
+            support::wait_for_background_compiler_idle();
+        }
+        if settled > 2 * SWAPCHAIN_IMAGES {
+            break;
+        }
+    }
+    assert_eq!(
+        last.repainted_pixels, 0,
+        "every image holds the frame with the shader drawn: {last:?}"
+    );
 }
 
 /// Draws each frame of `scene` twice: over the frame `keeper` holds, which

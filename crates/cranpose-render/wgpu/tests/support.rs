@@ -231,6 +231,21 @@ pub(crate) fn headless_renderer_parts_compiling_in_background()
     Ok((lock, compiling_renderer(device::Pipelines::Background)?))
 }
 
+// A renderer whose pipelines compile in the background, as an app's do,
+// displaying frames of `format`.
+pub(crate) fn headless_renderer_parts_compiling_in_background_for(
+    format: wgpu::TextureFormat,
+) -> Result<(MutexGuard<'static, ()>, WgpuRenderer), String> {
+    let lock = lock_gpu_test();
+    let renderer = create_headless_renderer_configured(
+        format,
+        wgpu::Limits::default(),
+        wgpu::Backends::all(),
+        device::Pipelines::Background,
+    )?;
+    Ok((lock, renderer))
+}
+
 pub(crate) fn headless_renderer_with_display_format(
     format: wgpu::TextureFormat,
 ) -> Result<LockedRenderer, String> {

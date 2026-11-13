@@ -978,6 +978,7 @@ impl GpuRenderer {
                 #[cfg(not(target_arch = "wasm32"))]
                 built_at_frame_start: 0,
                 drew_placeholder: Cell::new(false),
+                stand_ins_kept: Cell::new(false),
                 shape_pipelines,
                 image_pipeline: IMAGE_SRC_OVER_PIPELINES.map(FixedPipeline::new),
                 image_pipeline_dst_out: IMAGE_DST_OUT_PIPELINES.map(FixedPipeline::new),
@@ -1792,15 +1793,13 @@ impl GpuRenderer {
         self.drop_kept_drawing();
     }
 
-    /// Drops the layers, the blurred shadows and the window earlier frames
-    /// drew and kept.
+    // Drops the layers and the blurred shadows earlier frames drew and
+    // kept. The frames the targets keep hold the parts they drew while these
+    // held stand-ins, and the next frame draws those parts again.
     fn drop_kept_drawing(&mut self) {
         self.layer_cache.clear();
         self.shadow_surfaces.clear();
-        if let Some(composition) = self.composition_target.as_mut() {
-            composition.kept = None;
-        }
-        self.swapchain.forget();
+        self.pipelines.stand_ins_kept.set(false);
     }
 
     /// What `packet` changes against the frame `frame_root` kept: a frame
@@ -1919,19 +1918,20 @@ impl GpuRenderer {
         }
     }
 
-    /// Keeps the frame of `plan` just drawn into its target when it was
-    /// drawn whole, with no stand-in. A frame that draws nothing into a
-    /// presentable image submits nothing, and is drawn all the same.
+    /// Keeps the frame of `plan` just drawn into its target, with the parts
+    /// it drew marked while it may show a stand-in. A frame that draws
+    /// nothing into a presentable image submits nothing, and is drawn.
     fn keep_window(
         &mut self,
         plan: Option<FrameDamagePlan>,
         submitted: &Result<bool, String>,
-    ) -> Option<u64> {
+    ) -> Option<crate::frame_packet::HeldWindow> {
         let plan = plan?;
         let drawn = match submitted {
             Ok(submitted) => *submitted || plan.repaint == Repaint::Nothing,
             Err(_) => false,
-        } && !self.frame_stats.drew_stand_in();
+        };
+        let stand_ins = self.frame_stats.drew_stand_in() || self.pipelines.stand_ins_kept.get();
         let keepers = Keepers {
             composition: self
                 .composition_target
@@ -1940,7 +1940,7 @@ impl GpuRenderer {
             swapchain: &mut self.swapchain,
             cleared: &mut self.cleared,
         };
-        plan.keep(drawn.then_some(plan.held), keepers)
+        plan.keep(drawn.then(|| plan.held_with(stand_ins)).flatten(), keepers)
     }
 
     /// Lets go of the copy of the last frame the renderer keeps for a

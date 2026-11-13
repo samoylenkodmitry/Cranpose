@@ -5,7 +5,7 @@
 
 use super::DeviceRect;
 use crate::{
-    frame_packet::FramePacket,
+    frame_packet::{FramePacket, HeldWindow},
     geometry::snap_delta_for_anchor,
     gpu_stats::{FrameDamage, WindowRects},
     scene::SnapAnchor,
@@ -263,6 +263,13 @@ impl DamageRects {
         rect
     }
 
+    // Adds every rect of `rects`.
+    pub(crate) fn add_all(&mut self, rects: &Self) {
+        for rect in rects.as_slice() {
+            self.add(*rect);
+        }
+    }
+
     /// The rects cut to `window`.
     pub(crate) fn within(&self, window: DeviceRect) -> Self {
         let mut within = Self::default();
@@ -320,9 +327,21 @@ pub(crate) struct FrameWindow<'a> {
 }
 
 impl Held {
-    // The packet of the frame held.
-    pub(crate) fn frame(self) -> u64 {
-        self.frame
+    // The frame held with `rects` drawn with stand-ins, which the next frame
+    // drawn over it draws again.
+    pub(crate) fn with_stand_ins(self, rects: DamageRects) -> Self {
+        Self {
+            stand_ins: rects,
+            ..self
+        }
+    }
+
+    // What a window whose one target holds this frame holds.
+    pub(crate) fn window(self) -> HeldWindow {
+        HeldWindow {
+            oldest: self.frame,
+            stand_ins: self.stand_ins,
+        }
     }
 }
 
@@ -333,6 +352,7 @@ impl FrameWindow<'_> {
             frame: self.packet.frame_id,
             setting: self.setting,
             viewport: self.viewport,
+            stand_ins: DamageRects::default(),
         }
     }
 }
@@ -354,13 +374,15 @@ impl PacketDamage {
     };
 }
 
-/// The frame a target's pixels hold, drawn whole of the scene with no
-/// stand-in.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// The frame a target's pixels hold, drawn whole of the scene.
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Held {
     frame: u64,
     setting: u64,
     viewport: (u32, u32),
+    // The parts drawn with stand-ins while pipelines compiled, or over kept
+    // layers that may hold them.
+    stand_ins: DamageRects,
 }
 
 /// What a frame changes in a target, and whether a frame between, which
@@ -400,9 +422,9 @@ impl FrameDamages {
     }
 
     /// What `frame` changes in a target that holds `held`: the union of the
-    /// damages of the packets since the held one; the whole window when the
-    /// target holds none, holds one of another setting, or one of the
-    /// damages since is not known.
+    /// damages of the packets since the held one and the parts it drew with
+    /// stand-ins; the whole window when the target holds none, holds one of
+    /// another setting, or one of the damages since is not known.
     pub(crate) fn since(&self, held: Option<Held>, frame: &FrameWindow<'_>) -> Since {
         let changed = |damage| Since {
             damage,
@@ -425,7 +447,10 @@ impl FrameDamages {
             return changed(Damage::Full);
         }
         match self.union_back(frame.packet.frame_id, held.frame) {
-            Ok(union) => changed(Damage::Part(union)),
+            Ok(mut union) => {
+                union.add_all(&held.stand_ins);
+                changed(Damage::Part(union))
+            }
             Err(since) => since,
         }
     }

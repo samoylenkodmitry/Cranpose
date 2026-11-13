@@ -4,14 +4,14 @@
 
 [counts]
 too_many_arguments = 10
-private_docs = 12465
+private_docs = 12462
 for_test_fns = 38
 cranpose_env_names = 76
 source_text_checks = 324
 half_state_words = 0
 
 [ast_grep]
-"bool-parameter" = 121
+"bool-parameter" = 120
 "cfg-on-robot-app-feature" = 0
 "drain-collect" = 10
 "get-prefix" = 69

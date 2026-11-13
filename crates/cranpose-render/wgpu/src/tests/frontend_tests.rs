@@ -3,7 +3,9 @@ use cranpose_ui_graphics::{GraphicsLayer, Rect};
 
 use super::*;
 use crate::{
-    WgpuTextSystem, frame_packet::FrameSceneStorage, target_state::TargetDrawn,
+    WgpuTextSystem,
+    frame_packet::{FrameSceneStorage, HeldWindow},
+    target_state::TargetDrawn,
     test_support::layer_node,
 };
 
@@ -104,7 +106,10 @@ fn returned(packet: FramePacket, outcome: PresentOutcome) -> RenderReturns {
             unheld: true,
             cleared: false,
         }),
-        held: presented.then_some(packet.frame_id),
+        held: presented.then_some(HeldWindow {
+            oldest: packet.frame_id,
+            stand_ins: DamageRects::default(),
+        }),
         scene: Some(FrameSceneStorage {
             root: packet.root,
             overlay: packet.overlay,

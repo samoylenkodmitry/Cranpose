@@ -4,7 +4,7 @@
 use super::FrameRoot;
 use crate::{
     frame::{ClearedImages, Damage, Held, PresentedImage, Repaint, SwapchainHistory},
-    frame_packet::FramePacket,
+    frame_packet::{FramePacket, HeldWindow},
     gpu_stats::{FrameDamage, FrameStats},
     target_state::TargetDrawn,
 };
@@ -46,10 +46,22 @@ pub(super) struct FrameDamagePlan {
 }
 
 impl FrameDamagePlan {
-    // Keeps the frame of the plan in its target, `held` when it drew there
-    // whole of the scene; returns the oldest packet the window's next frame
-    // finds in its target, `None` when a target holds none known.
-    pub(super) fn keep(self, held: Option<Held>, keepers: Keepers<'_>) -> Option<u64> {
+    // The frame as its target holds it once drawn; while it may show
+    // `stand_ins`, with the parts it drew marked for the next frame to draw
+    // again, and none when it drew whole, as the next frame does then too.
+    pub(super) fn held_with(self, stand_ins: bool) -> Option<Held> {
+        match self.repaint {
+            Repaint::Window(rects) if stand_ins => Some(self.held.with_stand_ins(rects)),
+            Repaint::Whole if stand_ins => None,
+            _ => Some(self.held),
+        }
+    }
+
+    // Keeps the frame of the plan in its target as `held`, none when it did
+    // not draw there; returns the oldest packet the window's next frame
+    // finds in its target with the parts it draws again, `None` when a
+    // target holds none known.
+    pub(super) fn keep(self, held: Option<Held>, keepers: Keepers<'_>) -> Option<HeldWindow> {
         let Keepers {
             composition,
             swapchain,
@@ -59,11 +71,11 @@ impl FrameDamagePlan {
             Keeper::Composition => {
                 let kept = composition?;
                 *kept = held;
-                held.map(Held::frame)
+                held.map(Held::window)
             }
             Keeper::Image(image) => {
-                swapchain.record(image, self.held, held.is_some());
-                swapchain.oldest()
+                swapchain.record(image, held);
+                swapchain.held()
             }
             Keeper::Cleared { keeping } => {
                 cleared.kept = held;
@@ -71,7 +83,7 @@ impl FrameDamagePlan {
                 if keeping {
                     cleared.hand_over(kept);
                 }
-                cleared.copied.then_some(*kept).flatten().map(Held::frame)
+                cleared.copied.then_some(*kept).flatten().map(Held::window)
             }
         }
     }

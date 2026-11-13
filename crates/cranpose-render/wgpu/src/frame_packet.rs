@@ -165,7 +165,10 @@ impl RenderReturns {
                 unheld: false,
                 cleared: false,
             }),
-            held: Some(packet.frame_id),
+            held: Some(HeldWindow {
+                oldest: packet.frame_id,
+                stand_ins: DamageRects::default(),
+            }),
             scene: Some(FrameSceneStorage {
                 root: packet.root,
                 overlay: packet.overlay,
@@ -184,6 +187,15 @@ pub(crate) struct CaptureReply {
     pub(crate) stats: Option<crate::gpu_stats::FrameStatsSnapshot>,
 }
 
+// The oldest frame a window's targets hold, and the parts of their frames
+// drawn with stand-ins: a window frame draws the damages since that frame
+// and those parts again.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct HeldWindow {
+    pub(crate) oldest: u64,
+    pub(crate) stand_ins: DamageRects,
+}
+
 #[derive(Default)]
 pub(crate) struct RenderReturns {
     pub(crate) scene: Option<FrameSceneStorage>,
@@ -192,9 +204,9 @@ pub(crate) struct RenderReturns {
     // How the frame went into a target that keeps its frames; `None` for a
     // frame drawn into a texture that keeps none.
     pub(crate) target: Option<TargetDrawn>,
-    // The oldest packet the window's next frame finds in its target; `None`
-    // when a target holds none known.
-    pub(crate) held: Option<u64>,
+    // The oldest packet the window's next frame finds in its target, and
+    // the parts it draws again; `None` when a target holds none known.
+    pub(crate) held: Option<HeldWindow>,
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) timings: PresentTimings,
 }

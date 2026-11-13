@@ -3,6 +3,7 @@ use super::{
     captures::{collect, widen},
     settle,
 };
+use crate::frame_packet::HeldWindow;
 
 /// The images of a swapchain the history follows.
 const IMAGES: usize = 8;
@@ -40,17 +41,25 @@ impl SwapchainHistory {
         self.presented = None;
     }
 
-    // The oldest frame the images the surface handed out hold; `None`
-    // while one of them holds none known.
-    pub(crate) fn oldest(&self) -> Option<u64> {
-        let mut oldest = None;
+    // The oldest frame the images the surface handed out hold, and the
+    // parts of their frames drawn with stand-ins; `None` while one of them
+    // holds none known.
+    pub(crate) fn held(&self) -> Option<HeldWindow> {
+        let mut window: Option<HeldWindow> = None;
         for (index, held) in self.held.iter().enumerate() {
-            if self.seen & (1 << index) != 0 {
-                let frame = held.as_ref()?.frame();
-                oldest = Some(oldest.map_or(frame, |oldest: u64| oldest.min(frame)));
+            if self.seen & (1 << index) == 0 {
+                continue;
+            }
+            let image = held.as_ref()?.window();
+            match &mut window {
+                Some(window) => {
+                    window.oldest = window.oldest.min(image.oldest);
+                    window.stand_ins.add_all(&image.stand_ins);
+                }
+                None => window = Some(image),
             }
         }
-        oldest
+        window
     }
 
     fn see(&mut self, image: PresentedImage) {
@@ -106,11 +115,10 @@ impl SwapchainHistory {
         settle(rects, frame.viewport)
     }
 
-    /// Ends the frame `held` drawn into `image`: the image holds it when it
-    /// was `drawn` whole.
-    pub(crate) fn record(&mut self, image: PresentedImage, held: Held, drawn: bool) {
+    /// Ends the frame drawn into `image`, which holds `held`: none when the
+    /// frame did not draw there whole.
+    pub(crate) fn record(&mut self, image: PresentedImage, held: Option<Held>) {
         self.see(image);
-        let held = drawn.then_some(held);
         if let Some(slot) = self.held.get_mut(image.index as usize) {
             *slot = held;
         }
