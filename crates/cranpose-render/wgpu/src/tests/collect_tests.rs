@@ -136,7 +136,7 @@ fn walk_settings() -> WalkSettings {
         wants_pixel_sensitive: false,
         update: SceneUpdate::default(),
         in_space: false,
-        records_shown: false,
+        shown: None,
     }
 }
 
@@ -280,8 +280,8 @@ fn isolated_layers_snap_their_own_text_and_translating_text_descendants() {
                     settings: &walk_settings(),
                     cull: None,
                 },
-                None,
-                &mut CompositorScene::new(),
+                (None, None),
+                &mut LayerScene::new(CompositorScene::new(), Vec::new()),
                 &mut LayerSceneRecycler::default(),
             );
             assert_eq!(child.snap_anchor.is_some(), expected);

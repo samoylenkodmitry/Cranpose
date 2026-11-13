@@ -81,8 +81,8 @@ enum Area {
     Unknown,
     Hidden,
     Drawn(PixelBox),
-    // Through the record's own surface: a change beneath it changes all of
-    // it.
+    // Through the record's own surface, with no areas of what lies beneath
+    // it: a change there changes all of it.
     Composite(PixelBox),
 }
 

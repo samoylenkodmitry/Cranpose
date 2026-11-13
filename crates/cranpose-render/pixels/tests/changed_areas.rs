@@ -17,7 +17,8 @@ use cranpose_render_common::{
 };
 use cranpose_render_pixels::{Picture, PixelRect, PixelsRenderer};
 use cranpose_ui::{
-    Box, BoxSpec, Column, ColumnSpec, Modifier, Size, Text, TextStyle,
+    Box, BoxSpec, Column, ColumnSpec, LazyColumn, LazyColumnSpec, LazyListScope, LinearArrangement,
+    Modifier, Size, Text, TextStyle, rememberLazyListState,
     space::{Camera, LayerSpace, Mat4, Material, Mesh, MeshSurface, Scene3d, Vec3},
 };
 use cranpose_ui_graphics::{
@@ -1082,6 +1083,81 @@ fn a_still_frame_changes_nothing_and_a_new_count_changes_only_its_text() {
         changed < WIDTH * HEIGHT / 10,
         "the count's area is small: {changed} pixels in {areas:?}"
     );
+}
+
+// A lazy list of three labels that rounds its corners at the padded rect
+// the labels start at, as the demo's animations tab does: its middle label
+// shows a count its item reads.
+const LIST_TOP: u16 = 40;
+const LIST_PADDING: u16 = 8;
+const LIST_ROW: u16 = 20;
+const LIST_GAP: u16 = 6;
+
+#[composable]
+fn ListLabel(text: String) {
+    Text(
+        text,
+        Modifier::empty().height(f32::from(LIST_ROW)),
+        TextStyle::default(),
+    );
+}
+
+#[composable]
+fn LazyCounter(captured: Step) {
+    let step = rememberMutableStateOf(|| 0u32);
+    *captured.borrow_mut() = Some(step);
+    let state = rememberLazyListState();
+    LazyColumn(
+        Modifier::empty()
+            .offset(20.0, f32::from(LIST_TOP))
+            .width(180.0)
+            .height(100.0)
+            .background(Color::from_rgb_u8(40, 40, 60))
+            .rounded_corners(6.0)
+            .padding(f32::from(LIST_PADDING)),
+        state,
+        LazyColumnSpec::new()
+            .vertical_arrangement(LinearArrangement::SpacedBy(f32::from(LIST_GAP))),
+        move |scope| {
+            scope.item_keyed(Some(0), None, || {
+                ListLabel("Static item: ready".to_owned());
+            });
+            scope.item_keyed(Some(1), None, move || {
+                ListLabel(format!("Lazy Pulse: {}", step.value()));
+            });
+            scope.item_keyed(Some(2), None, || {
+                ListLabel("Static item: complete".to_owned());
+            });
+        },
+    );
+}
+
+#[test]
+fn a_new_count_in_a_lazy_list_changes_only_its_label() {
+    let (mut shell, captured) = shell(1.0, LazyCounter);
+    let mut picture = Picture::default();
+    let mut frame = |shell: &mut AppShell<PixelsRenderer>, areas: &mut Vec<PixelRect>| {
+        shell.update();
+        shell.primary().with_renderer(|renderer| {
+            renderer.update_picture(&mut picture, WIDTH, HEIGHT, 1.0, areas);
+        });
+    };
+    let mut areas = Vec::new();
+    frame(&mut shell, &mut areas);
+    let step = (*captured.borrow()).expect("the composition remembered the step");
+    let label_top = u32::from(LIST_TOP + LIST_PADDING + LIST_ROW + LIST_GAP);
+    let rows = label_top - u32::from(LIST_GAP / 2)..label_top + u32::from(LIST_ROW + LIST_GAP / 2);
+    for count in [7, 80, 900] {
+        step.set(count);
+        frame(&mut shell, &mut areas);
+        assert!(!areas.is_empty(), "count {count}: the label changed");
+        assert!(
+            areas
+                .iter()
+                .all(|area| rows.start <= area.y && area.y + area.height <= rows.end),
+            "count {count}: only the label's rows {rows:?} change: {areas:?}"
+        );
+    }
 }
 
 #[composable]
