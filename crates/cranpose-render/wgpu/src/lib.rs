@@ -10,6 +10,7 @@ mod captured_frame;
 mod collect;
 mod cpu_allocation_stats;
 mod depth_gate;
+mod device_error_sentry;
 mod draw_pass;
 mod effect_renderer;
 mod fast_cores;

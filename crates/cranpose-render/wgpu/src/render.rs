@@ -17,6 +17,7 @@ use crate::{
     ablation::Ablation,
     arc_trig_fill::ArcTrigFill,
     collect::LayerScene,
+    device_error_sentry::{DeviceErrorSentry, survive_gpu_errors_enabled},
     draw_pass::{
         PassSegment, PassTarget, ResolvedComposite, ResolvedCompositeKind, RunCalls, SegmentLayout,
         SourceContent, TrackedPass,
@@ -105,32 +106,6 @@ pub(crate) fn anchored_rect_to_device(
 
 fn mask_rect(rect: Rect) -> [f32; 4] {
     [rect.x, rect.y, rect.width, rect.height]
-}
-
-#[derive(Default)]
-struct DeviceErrorSentry {
-    errors: std::sync::atomic::AtomicU64,
-    poisoned: std::sync::atomic::AtomicBool,
-}
-
-impl DeviceErrorSentry {
-    fn record(&self, error: &wgpu::Error) {
-        use std::sync::atomic::Ordering;
-        self.poisoned.store(true, Ordering::Release);
-        let count = self.errors.fetch_add(1, Ordering::Relaxed) + 1;
-        if count.is_power_of_two() {
-            log::error!("[gpu-device] uncaptured wgpu error #{count}: {error}");
-        }
-    }
-
-    fn take_poison(&self) -> bool {
-        self.poisoned
-            .swap(false, std::sync::atomic::Ordering::AcqRel)
-    }
-
-    fn error_count(&self) -> u64 {
-        self.errors.load(std::sync::atomic::Ordering::Relaxed)
-    }
 }
 
 fn is_blend_mode_supported(mode: BlendMode) -> bool {
@@ -400,10 +375,6 @@ const PASS_DEPTH_STEP: f32 = 1.0 / 1_048_576.0;
 /// `record_depth` and `batch_depth` place it: later draws nearer.
 pub(crate) fn pass_order_depth(index: u32) -> f32 {
     (1.0 - (index as f32 + 1.0) * PASS_DEPTH_STEP).max(0.0)
-}
-
-fn survive_gpu_errors_enabled() -> bool {
-    !cranpose_core::DIAGNOSTICS.survive_gpu_errors.equals("0")
 }
 
 #[derive(Default)]
