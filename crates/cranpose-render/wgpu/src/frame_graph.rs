@@ -561,19 +561,9 @@ impl WgpuFrameGraphExecutor {
     }
 
     pub(crate) fn end_pass_timing_frame(&self, device: &wgpu::Device, queue: &wgpu::Queue) {
-        let Some(timer) = &self.pass_timer else {
-            return;
-        };
-        let _ = device.poll(wgpu::PollType::Poll);
-        timer.harvest_completed();
-        if timer.has_completed_queries() {
-            let mut encoder =
-                Self::create_command_encoder(device, Some("Pass Timing Resolve Encoder"));
-            timer.resolve_completed_queries(&mut encoder);
-            Self::submit(queue, encoder, None);
-            timer.map_resolved_queries();
+        if let Some(timer) = &self.pass_timer {
+            timer.end_frame(device, queue);
         }
-        timer.finish_frame();
     }
 
     pub(crate) fn pass_timing_report(&self) -> GpuPassTimingReport {
@@ -749,7 +739,7 @@ impl WgpuFrameGraphExecutor {
     }
 
     /// Submits the frame and returns how many buffer writes it carried.
-    fn submit(
+    pub(crate) fn submit(
         queue: &wgpu::Queue,
         encoder: wgpu::CommandEncoder,
         before_passes: Option<wgpu::CommandEncoder>,

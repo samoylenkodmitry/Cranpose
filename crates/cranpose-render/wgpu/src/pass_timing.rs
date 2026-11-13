@@ -6,6 +6,8 @@ use std::{
     },
 };
 
+use crate::frame_graph::WgpuFrameGraphExecutor;
+
 const QUERY_CAPACITY: u32 = 512;
 
 const READBACK_SLOTS: usize = 4;
@@ -199,7 +201,26 @@ impl PassTimer {
         (labels.len() - 1) as u16
     }
 
-    pub(crate) fn harvest_completed(&self) {
+    // Ends a frame of timed passes: reads the timings the GPU wrote and
+    // resolves the ones it finished. It runs only when pass timing was
+    // asked for, so it stays out of the code of every frame.
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn end_frame(&self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        let _ = device.poll(wgpu::PollType::Poll);
+        self.harvest_completed();
+        if self.has_completed_queries() {
+            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Pass Timing Resolve Encoder"),
+            });
+            self.resolve_completed_queries(&mut encoder);
+            WgpuFrameGraphExecutor::submit(queue, encoder, None);
+            self.map_resolved_queries();
+        }
+        self.finish_frame();
+    }
+
+    fn harvest_completed(&self) {
         for slot in &self.slots {
             match slot.state.load(Ordering::Acquire) {
                 SLOT_MAPPED => {
@@ -271,13 +292,13 @@ impl PassTimer {
         queue.on_submitted_work_done(move || state.store(SLOT_READY, Ordering::Release));
     }
 
-    pub(crate) fn has_completed_queries(&self) -> bool {
+    fn has_completed_queries(&self) -> bool {
         self.slots
             .iter()
             .any(|slot| slot.state.load(Ordering::Acquire) == SLOT_READY)
     }
 
-    pub(crate) fn resolve_completed_queries(&self, encoder: &mut wgpu::CommandEncoder) {
+    fn resolve_completed_queries(&self, encoder: &mut wgpu::CommandEncoder) {
         for slot in &self.slots {
             if slot.state.load(Ordering::Acquire) != SLOT_READY {
                 continue;
@@ -301,7 +322,7 @@ impl PassTimer {
         }
     }
 
-    pub(crate) fn map_resolved_queries(&self) {
+    fn map_resolved_queries(&self) {
         for slot in &self.slots {
             if slot.state.load(Ordering::Acquire) != SLOT_RESOLVING {
                 continue;
@@ -321,7 +342,7 @@ impl PassTimer {
         }
     }
 
-    pub(crate) fn finish_frame(&self) {
+    fn finish_frame(&self) {
         if let Some(slot_index) = self.recording_slot.take() {
             let slot = &self.slots[slot_index];
             if slot.state.load(Ordering::Acquire) == SLOT_RECORDING {
