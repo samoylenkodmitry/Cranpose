@@ -463,10 +463,10 @@ fn test_large_offset_inside_cached_tall_item_does_not_skip_forward_without_forwa
             spacing: 8.0,
             ..Default::default()
         };
-        for index in 0..20 {
-            state.cache_item_size(index, 60.0 + (index % 3) as f32 * 8.0);
-        }
-        state.cache_item_size(20, 1_200.0);
+        state.cache_item_sizes(
+            (0..20).map(|index| (index, index as u64, 60.0 + (index % 3) as f32 * 8.0)),
+        );
+        state.cache_item_sizes([(20, 20, 1_200.0)]);
 
         let item_sizes: Vec<f32> = (0..64usize)
             .map(|index| {

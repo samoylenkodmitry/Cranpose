@@ -8,14 +8,13 @@
 use std::{
     any::Any,
     cell::{Cell, RefCell},
-    convert::Infallible,
     rc::Rc,
 };
 
 use cranpose_core::{NodeId, SlotId};
 use cranpose_foundation::lazy::{
-    BeyondItem, LazyItemRoots, LazyItemSource, LazyListIntervalContent, LazyListMeasureConfig,
-    LazyListMeasureResult, LazyListMeasuredItem, LazyListState, SmallNodeVec, SmallOffsetVec,
+    LazyItemRoots, LazyListIntervalContent, LazyListMeasureConfig, LazyListMeasureResult,
+    LazyListMeasuredItem, LazyListState, SmallNodeVec, SmallOffsetVec,
     measure_lazy_list_with_beyond_bounds_policy,
 };
 pub use cranpose_foundation::lazy::{LazyListItemInfo, LazyListLayoutInfo};
@@ -31,7 +30,7 @@ use crate::{
     modifier::{Modifier, Size},
     scroll::{OverscrollEffect, ScrollMotionContextKey, scroll_motion_context_for_key},
     subcompose_layout::{
-        MeasurePolicy, PlacedRootsScope, Placement, RetainedMeasurePolicy, RetainedMeasureScope,
+        MeasurePolicy, PlacedRootsScope, RetainedMeasurePolicy, RetainedMeasureScope,
         RetainedSlotChildren, SubcomposeChild, SubcomposeLayoutNode, SubcomposeMeasureScope,
         SubcomposeMeasureScopeImpl,
     },
@@ -188,6 +187,8 @@ mod focused_item;
 mod frame;
 mod grid;
 mod item_cache;
+mod item_source;
+mod placements;
 mod retained;
 mod skipped_slots;
 mod staggered;
@@ -199,6 +200,7 @@ pub use grid::{
     LazyVerticalGridSpec, rememberLazyGridState,
 };
 use item_cache::{LazyMeasuredItemCache, log_lazy_cache_telemetry};
+use placements::push_lazy_list_placements;
 use skipped_slots::{recycle_out_of_reach, recycle_skipped_active_slots};
 pub use staggered::{
     LazyHorizontalStaggeredGrid, LazyHorizontalStaggeredGridSpec, LazyStaggeredGridState,
@@ -748,7 +750,7 @@ fn place_lazy_list(
         result
             .visible_items
             .iter()
-            .map(|item| (item.index, item.main_axis_size)),
+            .map(|item| (item.index, item.key, item.main_axis_size)),
     );
     let truly_visible_count = result
         .visible_items
@@ -861,26 +863,6 @@ impl LazyListItems<'_, '_, '_> {
             crate::lazy_prefetch::note_prefetched_item(&item.roots.node_ids);
         }
         item
-    }
-}
-
-impl LazyItemSource for LazyListItems<'_, '_, '_> {
-    type Refusal = Infallible;
-
-    fn measure(&mut self, index: usize) -> Result<LazyListMeasuredItem, Infallible> {
-        Ok(self.item(index))
-    }
-
-    fn keep_beyond(&mut self, index: usize, distance: f32) -> Result<BeyondItem, Infallible> {
-        let composed = self.composed(index);
-        if !self.admits(composed, distance) {
-            return Ok(BeyondItem::Declined);
-        }
-        if self.place_beyond {
-            return Ok(BeyondItem::Placed(self.item(index)));
-        }
-        self.keep(index, composed);
-        Ok(BeyondItem::Kept)
     }
 }
 
@@ -1130,144 +1112,6 @@ impl LazyListContentHandle {
 impl PartialEq for LazyListContentHandle {
     fn eq(&self, other: &Self) -> bool {
         Rc::ptr_eq(&self.0, &other.0)
-    }
-}
-
-fn push_lazy_list_placements(
-    placements: &mut Vec<Placement>,
-    density: f32,
-    visible_items: &[LazyListMeasuredItem],
-    items_count: usize,
-    frame: &LazyFrame,
-    viewport_size: f32,
-    layout_config: &LazyListLayoutConfig,
-) {
-    use cranpose_ui_layout::Arrangement;
-
-    let axis = frame.axis;
-    let config = &layout_config.measure;
-
-    placements.clear();
-    placements.reserve(
-        visible_items
-            .iter()
-            .map(|item| item.roots.node_ids.len())
-            .sum(),
-    );
-
-    let arrangement = if axis.is_vertical() {
-        config
-            .vertical_arrangement
-            .unwrap_or(LinearArrangement::Start)
-    } else {
-        config
-            .horizontal_arrangement
-            .unwrap_or(LinearArrangement::Start)
-    };
-
-    let spacing = config.spacing;
-    let total_item_size: f32 = visible_items.iter().map(|i| i.main_axis_size).sum::<f32>()
-        + (items_count.saturating_sub(1) as f32) * spacing;
-    let available_main_axis =
-        (viewport_size - config.before_content_padding - config.after_content_padding).max(0.0);
-    let has_spare_space =
-        total_item_size < available_main_axis && visible_items.len() == items_count;
-    let should_apply_arrangement = has_spare_space
-        && !matches!(
-            arrangement,
-            LinearArrangement::Start | LinearArrangement::SpacedBy(_)
-        );
-
-    if should_apply_arrangement {
-        let content_offset = config.before_content_padding;
-
-        let sizes: SmallVec<[f32; 32]> = visible_items.iter().map(|i| i.main_axis_size).collect();
-        let mut positions: SmallVec<[f32; 32]> = SmallVec::from_elem(0.0, sizes.len());
-        arrangement.arrange(density, available_main_axis, &sizes, &mut positions);
-
-        for (item, &pos) in visible_items.iter().zip(positions.iter()) {
-            let offset = content_offset + pos;
-            push_lazy_item_placements(
-                placements,
-                item,
-                offset,
-                frame,
-                viewport_size,
-                layout_config,
-            );
-        }
-    } else {
-        for item in visible_items {
-            push_lazy_item_placements(
-                placements,
-                item,
-                item.offset,
-                frame,
-                viewport_size,
-                layout_config,
-            );
-        }
-    }
-}
-
-fn push_lazy_item_placements(
-    placements: &mut Vec<Placement>,
-    item: &LazyListMeasuredItem,
-    offset: f32,
-    frame: &LazyFrame,
-    viewport_size: f32,
-    layout_config: &LazyListLayoutConfig,
-) {
-    let (axis, cross_axis_size) = (frame.axis, frame.cross_axis_size);
-    let config = &layout_config.measure;
-    let (cross_start, cross_end) = layout_config.cross_padding;
-    let start = if config.reverse_layout {
-        viewport_size - offset - item.main_axis_size
-    } else {
-        offset
-    };
-    for (index, (&node_id, &offset)) in item
-        .roots
-        .node_ids
-        .iter()
-        .zip(&item.roots.child_offsets)
-        .enumerate()
-    {
-        let main = start + offset;
-        let cell = item.child_cross_offsets.get(index).copied().unwrap_or(0.0);
-        let (mut x, y) = if axis.is_vertical() {
-            (cross_start + cell, main)
-        } else {
-            (main, cross_start + cell)
-        };
-        if config.is_rtl {
-            x = if axis.is_vertical() {
-                cross_axis_size
-                    - cross_end
-                    - cell
-                    - item
-                        .roots
-                        .child_cross_axis_sizes
-                        .get(index)
-                        .copied()
-                        .unwrap_or(item.cross_axis_size)
-            } else {
-                let extent = item
-                    .child_main_sizes
-                    .get(index)
-                    .copied()
-                    .unwrap_or_else(|| {
-                        item.roots
-                            .child_offsets
-                            .get(index + 1)
-                            .copied()
-                            .unwrap_or(item.main_axis_size)
-                            - offset
-                    });
-                viewport_size - x - extent
-            };
-        }
-        placements.push(Placement::new(node_id, x, y, 0.0));
     }
 }
 

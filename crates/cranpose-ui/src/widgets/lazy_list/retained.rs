@@ -136,6 +136,10 @@ impl RetainedListItems<'_, '_, '_> {
 impl LazyItemSource for RetainedListItems<'_, '_, '_> {
     type Refusal = NeedsComposition;
 
+    fn key(&self, index: usize) -> u64 {
+        self.slot(index).raw()
+    }
+
     fn measure(&mut self, index: usize) -> Result<LazyListMeasuredItem, NeedsComposition> {
         if self.leaves_slots_behind(index) {
             return Err(NeedsComposition);

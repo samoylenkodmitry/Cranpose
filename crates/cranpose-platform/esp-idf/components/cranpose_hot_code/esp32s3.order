@@ -384,7 +384,7 @@
   *(.literal._RNvM*NtNtCs*_22cranpose_render_pixels8pipeline8in_placeNt*6Repush10push_again* .text._RNvM*NtNtCs*_22cranpose_render_pixels8pipeline8in_placeNt*6Repush10push_again*)
   *(.literal._RNvM*NtCs*_20cranpose_ui_graphics6recordNt*15CommandRecorder10push_other* .text._RNvM*NtCs*_20cranpose_ui_graphics6recordNt*15CommandRecorder10push_other*)
   *(.literal._RINvYINtNtCs*_13cranpose_core5state12MutableStatefEINt*16StateArenaHandlefE10with_innerfNCNvM***16get_non_reactive0E* .text._RINvYINtNtCs*_13cranpose_core5state12MutableStatefEINt*16StateArenaHandlefE10with_innerfNCNvM***16get_non_reactive0E*)
-  *(.literal._RNvM*NtNtCs*_19cranpose_foundation4lazy15lazy_list_stateNt*13LazyListState15get_cached_size* .text._RNvM*NtNtCs*_19cranpose_foundation4lazy15lazy_list_stateNt*13LazyListState15get_cached_size*)
+  *(.literal._RNvM*NtNtCs*_19cranpose_foundation4lazy15lazy_list_stateNt*13LazyListState16cached_item_size* .text._RNvM*NtNtCs*_19cranpose_foundation4lazy15lazy_list_stateNt*13LazyListState16cached_item_size*)
   *(.literal._RINvM*NtNtCs*_13cranpose_core7runtime11state_arenaNt*10StateArena9get_typedjE* .text._RINvM*NtNtCs*_13cranpose_core7runtime11state_arenaNt*10StateArena9get_typedjE*)
   *(.literal._RNvM*NtNtCs*_19cranpose_foundation4lazy15lazy_list_stateNt*13LazyListState20update_scroll_bounds* .text._RNvM*NtNtCs*_19cranpose_foundation4lazy15lazy_list_stateNt*13LazyListState20update_scroll_bounds*)
   *(.literal._RINvNtCs*_4core3ptr9drop_glueINtNtCs*_5alloc3vec3VecNtNtCs*_13cranpose_core18composition_locals13ProvidedValueEE* .text._RINvNtCs*_4core3ptr9drop_glueINtNtCs*_5alloc3vec3VecNtNtCs*_13cranpose_core18composition_locals13ProvidedValueEE*)

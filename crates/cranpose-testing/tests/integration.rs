@@ -22,6 +22,7 @@ mod layer_translation_hit_test;
 mod layout_modifier_test;
 mod lazy_content_padding_test;
 mod lazy_grid_test;
+mod lazy_moved_items_test;
 mod lazy_staggered_grid_test;
 mod lazy_sticky_header_test;
 mod linked_text_test;
