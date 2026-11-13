@@ -819,14 +819,11 @@ fn drain_present_returns_into_loop(
                 }
             }
         });
-    if presented && let Some(resources) = gpu_resources.as_mut() {
-        resources.surface_dirty = false;
-    }
-    if refused {
-        if let Some(resources) = gpu_resources.as_mut() {
-            resources.surface_dirty = true;
-        }
-        shell.mark_dirty();
+    // A refused frame draws again from the scene the frontend keeps.
+    if let Some(resources) = gpu_resources.as_mut()
+        && (presented || refused)
+    {
+        resources.surface_dirty = refused;
     }
     presented.then(|| {
         let now = Instant::now();
