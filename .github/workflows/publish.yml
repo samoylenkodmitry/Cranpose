@@ -366,6 +366,7 @@ jobs:
           scripts/ci/rustup_locked.sh target add wasm32-unknown-unknown
           cargo install wasm-pack --version 0.15.0 --locked
           apps/isolated-demo/build-web.sh
+          scripts/ci/wasm_feature_floor.sh apps/isolated-demo/pkg/isolated_demo_bg.wasm
 
       # The Gradle plugin has no Maven coordinate: apps/isolated-demo/android's
       # settings.gradle.kts locates the `cranpose` crate cargo just resolved

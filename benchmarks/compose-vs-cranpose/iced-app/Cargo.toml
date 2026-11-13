@@ -8,7 +8,7 @@ publish = false
 
 # wasm-pack's wasm-opt reads the instructions rustc emits for the browser.
 [package.metadata.wasm-pack.profile.release]
-wasm-opt = ["-O3", "--all-features"]
+wasm-opt = ["-O3", "--mvp-features", "--enable-bulk-memory", "--enable-multivalue", "--enable-mutable-globals", "--enable-nontrapping-float-to-int", "--enable-reference-types", "--enable-sign-ext"]
 
 [lib]
 name = "perf_iced"

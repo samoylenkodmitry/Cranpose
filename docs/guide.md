@@ -459,15 +459,17 @@ and keeps the frame rate and the work time.
 ([source](https://github.com/samoylenkodmitry/cranpose-markets)) shows it on
 a screen of live market data.
 
-Give wasm-opt a limit for functions with a single caller in `Cargo.toml`:
+Give wasm-opt a limit for functions with a single caller and the WebAssembly features of the browsers you support in `Cargo.toml`:
 
 ```toml
 [package.metadata.wasm-pack.profile.release]
-wasm-opt = ["-O3", "-ocimfs=100", "--all-features"]
+wasm-opt = ["-O3", "-ocimfs=100", "--mvp-features", "--enable-bulk-memory", "--enable-multivalue", "--enable-mutable-globals", "--enable-nontrapping-float-to-int", "--enable-reference-types", "--enable-sign-ext"]
 ```
 
 By default wasm-opt folds every function that has one caller into that
 caller. The browser compiles a function whole at its first call. A page then compiled large functions whose branches its first screen never ran. With the limit, the first frame of a heavy page on a Mate 20 X came 110-170 ms sooner. The frames after it cost the same.
+
+The `--enable-*` features are the ones rustc emits for `wasm32-unknown-unknown`. Safari 15 and every later browser has them. wasm-bindgen removes the module's own list of features, so wasm-opt uses only the features you name. With `--all-features`, wasm-opt writes typed function references. WebKit before Safari 18 then rejects the whole module, in Safari and in every other iOS browser.
 
 Build a release page with [cranpose-build](https://github.com/samoylenkodmitry/cranpose-build)
 0.3.0 or later:

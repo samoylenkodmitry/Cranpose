@@ -76,9 +76,14 @@ jobs:
           set -e
           cd apps/desktop-demo
           ./build-web.sh --release
-          # Report binary size
-          echo "WASM binary size:"
-          ls -lh pkg/desktop_app_bg.wasm
+
+      - name: Check the wasm size
+        run: just web-size-budget
+
+      - name: Check the wasm features
+        # WebKit rejects a module with a feature it lacks, in every iOS
+        # browser, so such a module must not replace the deployed site.
+        run: just wasm-feature-floor
 
       - name: Package content-addressed deployment
         run: |
