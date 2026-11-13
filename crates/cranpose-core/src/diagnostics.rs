@@ -185,8 +185,9 @@ pub struct Diagnostics {
     /// `CRANPOSE_PIPELINE_DISK_CACHE`: `0` or `1` turns the pipeline disk
     /// cache off or on.
     pub pipeline_disk_cache: Diagnostic,
-    /// `CRANPOSE_PRESENT_THREAD`: chooses whether Android presents on a
-    /// thread of its own; on macOS, `1` presents the primary window on one.
+    /// `CRANPOSE_PRESENT_THREAD`: `1` or `0` turns presenting on a thread of
+    /// its own on or off; unset, a device with four cores or more presents on
+    /// one.
     pub present_thread: Diagnostic,
     /// `CRANPOSE_PROBE_DRAW_PASSES`: draws the first this many draw passes.
     pub probe_draw_passes: Diagnostic,

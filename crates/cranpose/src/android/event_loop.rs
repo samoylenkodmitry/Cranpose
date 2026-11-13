@@ -1434,14 +1434,11 @@ pub fn run(
 
     super::frame_telemetry::seed_env_from_system_properties();
 
-    let machine_parallelism =
-        std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get);
-
     cranpose_render_wgpu::pin_current_thread_to_fast_cores("producer");
 
     keep_pipeline_cache(&app);
 
-    let present_thread = super::present_thread::android_present_thread(machine_parallelism);
+    let present_thread = crate::present_thread::presents_on_thread();
     if present_thread {
         log::info!("[present-runtime] threaded present enabled");
     }

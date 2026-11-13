@@ -33,13 +33,13 @@ impl FramesInFlight {
 )]
 impl App {
     // Whether the primary window presents on a thread of its own: on macOS,
-    // with the CRANPOSE_PRESENT_THREAD diagnostic on, for a window on the
-    // screen that no robot drives.
+    // for a window on the screen that no robot drives, by the rule Android
+    // takes.
     fn presents_primary_on_thread(&self) -> bool {
         cfg!(target_os = "macos")
             && !self.settings.headless
             && !self.robot.drives()
-            && cranpose_core::DIAGNOSTICS.present_thread.flag()
+            && crate::present_thread::presents_on_thread()
     }
 
     // Starts the primary window's `renderer` on `target` and says where its

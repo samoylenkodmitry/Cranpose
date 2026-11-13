@@ -73,8 +73,6 @@ pub(crate) mod pipeline_update;
 mod pointer_icon;
 #[cfg(any(test, feature = "renderer-wgpu"))]
 pub(crate) mod poll;
-#[cfg(any(test, feature = "renderer-wgpu"))]
-pub(crate) mod present_thread;
 #[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
 pub(crate) mod process;
 #[cfg(any(test, feature = "playbilling"))]
