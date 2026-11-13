@@ -44,7 +44,7 @@ use rounded_clip_corners::{
     content_admits_rounded_clip, content_takes_rounded_clip, rounded_clip_for_layer,
 };
 pub(crate) use shown::{ShownArea, ShownRecord};
-use shown::{culled, record_drawn, record_hidden};
+use shown::{ShownSpace, culled, record_drawn, record_hidden, surface_space};
 use space_children::collect_space_children;
 
 const AFFINE_TOLERANCE: f32 = 1e-4;
@@ -195,9 +195,10 @@ struct WalkSettings {
     /// layers there that are scenes, surfaces or 3D transforms: the walk
     /// leaves them out.
     in_space: bool,
-    // Whether the walk records how it draws each record in place: a window's
-    // walk of its root does.
-    records_shown: bool,
+    // Where the walk lies in its root's space when it records how it draws
+    // each record in place: a window's walk of its root does, and so does
+    // the walk of a surface's content the surface composites in place.
+    shown: Option<ShownSpace>,
 }
 
 pub(crate) fn direct_translation(transform: ProjectiveTransform) -> Option<Point> {
@@ -395,7 +396,7 @@ pub(crate) fn collect_root(
 ) -> Box<LayerScene> {
     // A culled walk draws a part of a whole walk's draws.
     let mut out = recycler.take(cull.map_or(capacity, |_| SceneCapacityHint::default()));
-    let records_shown = shown.is_some();
+    let shown_space = shown.is_some().then_some(ShownSpace::ROOT);
     if let Some(shown) = shown {
         shown.clear();
         out.shown = std::mem::take(shown);
@@ -411,7 +412,7 @@ pub(crate) fn collect_root(
         wants_pixel_sensitive: false,
         update,
         in_space: false,
-        records_shown,
+        shown: shown_space,
     };
     let context = WalkContext {
         offset: Point::default(),
@@ -516,12 +517,44 @@ fn content_key(layer: LayerRef<'_>, update: SceneUpdate) -> u64 {
     layer.target_content_hash()
 }
 
+// The content of the layer of `visit`, walked under `settings` from the
+// origin of a surface of its own, translated or not, into a scene of its
+// own, and whether it draws text or an image. The walk records how it draws
+// each record into `shown`, the list of its parent's walk.
+fn surface_content(
+    visit: &Visit<'_>,
+    motion: &mut LayerMotion,
+    (settings, translated): (&WalkSettings, bool),
+    shown: &mut Vec<ShownRecord>,
+    recycler: &mut LayerSceneRecycler,
+) -> (Box<LayerScene>, bool) {
+    let context = WalkContext {
+        offset: Point::default(),
+        visual_clip: None,
+        rounding: None,
+        snap_anchor: None,
+        translated,
+        settings,
+        cull: None,
+    };
+    let mut content = recycler.take(SceneCapacityHint::default());
+    std::mem::swap(&mut content.shown, shown);
+    let has_pixel_sensitive_subtree = collect_into(visit, motion, &context, &mut content, recycler);
+    std::mem::swap(&mut content.shown, shown);
+    content.scene.flush_loose();
+    content.refresh_backdrop_summary();
+    (content, has_pixel_sensitive_subtree)
+}
+
+// The child that draws `layer` through a surface of its own, and whether
+// its content draws text or an image. The walk of its content records how
+// it draws each record into `parent`'s list when `shown` places it.
 fn isolated_child(
     layer: LayerRef<'_>,
     motion: &mut LayerMotion,
     context: &WalkContext<'_>,
-    mesh: Option<Arc<MeshChild>>,
-    parent_scene: &mut CompositorScene,
+    (mesh, shown): (Option<Arc<MeshChild>>, Option<ShownSpace>),
+    parent: &mut LayerScene,
     recycler: &mut LayerSceneRecycler,
 ) -> (ChildLayer, bool) {
     let visit = Visit::of(layer);
@@ -550,22 +583,16 @@ fn isolated_child(
             || (!context.translated && context.snap_anchor.is_none()),
         update: context.settings.update,
         in_space: context.settings.in_space || mesh.is_some(),
-        records_shown: false,
+        shown,
     };
-    let content_context = WalkContext {
-        offset: Point::default(),
-        visual_clip: None,
-        rounding: None,
-        snap_anchor: None,
-        translated: context.translated || layer.translated_content_context(),
-        settings: &content_settings,
-        cull: None,
-    };
-    let mut content = recycler.take(SceneCapacityHint::default());
-    let has_pixel_sensitive_subtree =
-        collect_into(&visit, motion, &content_context, &mut content, recycler);
-    content.scene.flush_loose();
-    content.refresh_backdrop_summary();
+    let translated = context.translated || layer.translated_content_context();
+    let (content, has_pixel_sensitive_subtree) = surface_content(
+        &visit,
+        motion,
+        (&content_settings, translated),
+        &mut parent.shown,
+        recycler,
+    );
     let transform = layer
         .transform_to_parent()
         .then(ProjectiveTransform::translation(
@@ -594,7 +621,7 @@ fn isolated_child(
     let in_place = mesh.is_none() && can_draw_in_place(layer, transform, surface_scale, &content);
     (
         ChildLayer {
-            z_index: parent_scene.next_z(),
+            z_index: parent.scene.next_z(),
             node_id: layer.node_id(),
             local_bounds: visit.bounds,
             transform,
@@ -898,14 +925,17 @@ fn collect_isolated_child(
         shadow_clip,
         context.settings.light,
     );
+    let shown = surface_space(child, transform, context);
     let (isolated, has_pixel_sensitive_subtree) =
-        isolated_child(child, motion, context, mesh, &mut out.scene, recycler);
+        isolated_child(child, motion, context, (mesh, shown), out, recycler);
     let mut isolated = with_backdrop_in_own_space(isolated, recycler);
     assign_shadow_anchor(&mut out.scene, shadows_before, isolated.snap_anchor);
     detach_flat_backdrop(&mut isolated, &mut out.scene);
     out.children.push(isolated);
     out.scene.next_z += 1;
-    record_drawn(child, context, (true, shadows_before), out);
+    // A surface whose content's walk recorded how it drew each record draws
+    // as in place does: a change beneath it changes what it changes there.
+    record_drawn(child, context, (shown.is_none(), shadows_before), out);
     direct_translation(child.transform_to_parent()).is_some() && has_pixel_sensitive_subtree
 }
 

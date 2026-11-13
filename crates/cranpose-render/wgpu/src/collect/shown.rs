@@ -1,8 +1,13 @@
-// The areas a window's walk records of the records it draws in place: the
+// The areas a window's walk records of the records it draws in place, and
+// of those beneath a surface that composites each pixel where it lies: the
 // frontend keeps them per target and works each frame's damage out of them.
 
 use cranpose_core::RecordRef;
-use cranpose_render_common::scene_store::{LayerRef, Reach};
+use cranpose_render_common::{
+    graph::ProjectiveTransform,
+    primitive_emit::resolve_clip,
+    scene_store::{LayerRef, Reach},
+};
 use cranpose_ui_graphics::{Point, Rect};
 
 use super::{LayerScene, WalkContext};
@@ -12,13 +17,63 @@ use crate::{
     target_state::{Cull, Visit},
 };
 
+// Where a walk that records how it draws each record lies in the space of
+// the walk's root: the origin of its space there, and what of the root's
+// space the clips above it leave.
+#[derive(Clone, Copy)]
+pub(super) struct ShownSpace {
+    origin: Point,
+    clip: Option<Rect>,
+}
+
+impl ShownSpace {
+    // The space of the walk of a root.
+    pub(super) const ROOT: Self = Self {
+        origin: Point { x: 0.0, y: 0.0 },
+        clip: None,
+    };
+
+    // `reach`, in the walk's space, in the root's, within the clips above
+    // the walk.
+    fn place(self, reach: Reach) -> Reach {
+        reach
+            .mapped(|rect| rect.translate(self.origin.x, self.origin.y))
+            .within(self.clip)
+    }
+}
+
+// Where the walk of `layer`'s content, which `transform` places in the
+// space of the walk of `context` and draws into a surface of its own,
+// records how it draws each record: the surface composites each of its
+// pixels where it lies, as the layer only moves and draws no effect. `None`
+// when the walk of `context` records nothing, or a change beneath `layer`
+// changes all its surface writes.
+pub(super) fn surface_space(
+    layer: LayerRef<'_>,
+    transform: ProjectiveTransform,
+    context: &WalkContext<'_>,
+) -> Option<ShownSpace> {
+    let space = context.settings.shown?;
+    let origin = transform
+        .as_translation()
+        .filter(|_| !context.settings.in_space && layer.effect().is_none())?;
+    let clip = context
+        .visual_clip
+        .map(|clip| clip.translate(space.origin.x, space.origin.y));
+    Some(ShownSpace {
+        origin: Point::new(space.origin.x + origin.x, space.origin.y + origin.y),
+        clip: resolve_clip(space.clip, clip),
+    })
+}
+
 // How a walk drew a record's subtree, in the space of the walk's root.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum ShownArea {
-    // In place, within the rect.
+    // In place, or through a surface that composites each pixel where it
+    // lies, within the rect.
     Drawn(Rect),
-    // Through its own surface, composited within the rect: a change beneath
-    // it changes all of it.
+    // Through its own surface, composited within the rect, with no areas of
+    // what lies beneath it: a change there changes all of it.
     Composite(Rect),
     // Not at all.
     Hidden,
@@ -62,7 +117,7 @@ fn visit<'s>(layer: LayerRef<'_>, cull: &'s Cull<'s>) -> Option<Option<&'s Cull<
 // Records that the walk drew nothing of `layer`.
 #[inline]
 pub(super) fn record_hidden(layer: LayerRef<'_>, context: &WalkContext<'_>, out: &mut LayerScene) {
-    if context.settings.records_shown && !context.settings.in_space {
+    if context.settings.shown.is_some() && !context.settings.in_space {
         out.shown.push(ShownRecord {
             record: layer.store().record_ref(layer.id()),
             area: ShownArea::Hidden,
@@ -73,7 +128,8 @@ pub(super) fn record_hidden(layer: LayerRef<'_>, context: &WalkContext<'_>, out:
 }
 
 // Records that the walk drew `layer`, placed at the walk's offset, in place
-// or as a composite, with the shadows it pushed from `shadows_from` on.
+// or as a composite whose content the walk keeps no areas of, with the
+// shadows it pushed from `shadows_from` on.
 #[inline]
 pub(super) fn record_drawn(
     layer: LayerRef<'_>,
@@ -81,15 +137,17 @@ pub(super) fn record_drawn(
     drawn: (bool, usize),
     out: &mut LayerScene,
 ) {
-    if context.settings.records_shown && !context.settings.in_space {
-        record_drawn_area(layer, context, drawn, out);
+    if let Some(space) = context.settings.shown
+        && !context.settings.in_space
+    {
+        record_drawn_area(layer, (context, space), drawn, out);
     }
 }
 
 #[inline(never)]
 fn record_drawn_area(
     layer: LayerRef<'_>,
-    context: &WalkContext<'_>,
+    (context, space): (&WalkContext<'_>, ShownSpace),
     (composite, shadows_from): (bool, usize),
     out: &mut LayerScene,
 ) {
@@ -104,7 +162,7 @@ fn record_drawn_area(
             context.settings.raster_scale.nominal(),
         ))
         .within(context.visual_clip);
-    let area = shown_area(reach, composite);
+    let area = shown_area(space.place(reach), composite);
     let (own, origin) = if composite {
         (area, None)
     } else {
@@ -117,10 +175,13 @@ fn record_drawn_area(
                     .translate(offset.x, offset.y)
             })
             .within(context.visual_clip);
-        let origin = to_parent
-            .as_translation()
-            .map(|origin| Point::new(origin.x + offset.x, origin.y + offset.y));
-        (shown_area(own, false), origin)
+        let origin = to_parent.as_translation().map(|origin| {
+            Point::new(
+                origin.x + offset.x + space.origin.x,
+                origin.y + offset.y + space.origin.y,
+            )
+        });
+        (shown_area(space.place(own), false), origin)
     };
     out.shown.push(ShownRecord {
         record: layer.store().record_ref(layer.id()),

@@ -15,6 +15,7 @@ use std::{
 
 use cranpose_app_shell::AppShell;
 use cranpose_core::{MutableState, NodeId, location_key, remember};
+use cranpose_foundation::lazy::{LazyListScope, rememberLazyListState};
 use cranpose_liquid::{Glass, GlassSurface};
 use cranpose_render_common::{
     Renderer,
@@ -23,7 +24,8 @@ use cranpose_render_common::{
 use cranpose_render_wgpu::{FrameDamage, RenderStatsSnapshot, WgpuRenderer};
 use cranpose_ui::{
     Alignment, Box, BoxSpec, Color, Column, ColumnSpec, ContentScale, GraphicsLayer, Image,
-    LayerShape, Modifier, RenderEffect, Row, RowSpec, Size, Text, TextStyle, composable,
+    LayerShape, LazyColumn, LazyColumnSpec, LinearArrangement, Modifier, RenderEffect, Row,
+    RowSpec, Size, Text, TextStyle, composable,
     space::{Camera, Mat4, Material, Mesh, MeshSurface, Scene3d, Vec3},
     text::{SpanStyle, TextUnit},
 };
@@ -110,7 +112,26 @@ enum Scene {
     // A layer painted by a shader no other test draws, at the spot from step
     // 1 on: while the shader compiles, its frames draw the placeholder.
     LateShader,
+    // A lazy list of three labels whose middle one shows a number that
+    // changes a step, read in its item as the demo's lazy pulse reads its
+    // animation: only that label draws again.
+    LazyLabel,
 }
+
+// The lazy list of `Scene::LazyLabel`, its padding, its rows' height and the
+// space between them.
+const LAZY_LIST: [f32; 4] = [40.0, 140.0, 200.0, 100.0];
+const LAZY_PADDING: f32 = 8.0;
+const LAZY_ROW: f32 = 20.0;
+const LAZY_GAP: f32 = 6.0;
+
+// The label of the lazy list's middle row, the one that changes.
+const LAZY_LABEL: [f32; 4] = [
+    LAZY_LIST[0] + LAZY_PADDING,
+    LAZY_LIST[1] + LAZY_PADDING + LAZY_ROW + LAZY_GAP,
+    LAZY_LIST[2] - 2.0 * LAZY_PADDING,
+    LAZY_ROW,
+];
 
 /// A caret near the bottom, far from the spinner.
 const CARET: [f32; 4] = [40.0, 372.0, 2.0, 16.0];
@@ -385,7 +406,8 @@ fn changing_box(scene: Scene, step: MutableState<u32>) -> Option<Modifier> {
         | Scene::SpinnerAndCaret
         | Scene::FiveSpots
         | Scene::TurnedSurface
-        | Scene::ShrunkParent => return None,
+        | Scene::ShrunkParent
+        | Scene::LazyLabel => return None,
     })
 }
 
@@ -458,7 +480,7 @@ fn Changing(scene: Scene, step: MutableState<u32>) {
                 },
             );
         }
-        Scene::TurnedSurface | Scene::ShrunkParent => TreeScene(scene, step),
+        Scene::TurnedSurface | Scene::ShrunkParent | Scene::LazyLabel => TreeScene(scene, step),
         Scene::Picture => {
             let picture = PICTURES.with(|pictures| pictures[(step.get() % 2) as usize].clone());
             Image(
@@ -513,12 +535,42 @@ fn empty_layer(scene: Scene, step: MutableState<u32>) -> Option<Modifier> {
     }
 }
 
+#[composable]
+fn ListLabel(text: String) {
+    Text(text, Modifier::empty().height(LAZY_ROW), label_style(14.0));
+}
+
+#[composable]
+fn LazyLabels(step: MutableState<u32>) {
+    let state = rememberLazyListState();
+    LazyColumn(
+        rect_modifier(LAZY_LIST)
+            .background(Color(0.15, 0.15, 0.2, 1.0))
+            .rounded_corners(6.0)
+            .padding(LAZY_PADDING),
+        state,
+        LazyColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(LAZY_GAP)),
+        move |scope| {
+            scope.item_keyed(Some(0), None, || {
+                ListLabel("Static item: ready".to_owned());
+            });
+            scope.item_keyed(Some(1), None, move || {
+                ListLabel(format!("Lazy Pulse: {}", step.get() * 7));
+            });
+            scope.item_keyed(Some(2), None, || {
+                ListLabel("Static item: complete".to_owned());
+            });
+        },
+    );
+}
+
 // The scenes that compose a tree of their own: a plane turning in a 3D
-// scene, and a box shrinking around its child.
+// scene, a box shrinking around its child, and a lazy list.
 #[composable]
 fn TreeScene(scene: Scene, step: MutableState<u32>) {
     match scene {
         Scene::ShrunkParent => ShrinkingParent(step),
+        Scene::LazyLabel => LazyLabels(step),
         _ => TurningSurface(step),
     }
 }
@@ -918,6 +970,8 @@ impl Scene {
             Self::TurnedLayer => around(SPOT, 12.0),
             Self::Spinner | Self::TurnedSpinner => around(SPINNER, 12.0),
             Self::TurnedSurface => around(TURNING_SCENE, 8.0),
+            // Less than the gap to the rows above and below.
+            Self::LazyLabel => around(LAZY_LABEL, LAZY_GAP / 2.0),
             _ => around(SPOT, 8.0),
         }
     }
@@ -1151,6 +1205,11 @@ fn a_path_changing_size() {
 #[test]
 fn a_label_changing_text() {
     assert_damage_holds_the_changes(Scene::Label);
+}
+
+#[test]
+fn a_label_in_a_lazy_list_changing_text() {
+    assert_damage_holds_the_changes(Scene::LazyLabel);
 }
 
 #[test]
