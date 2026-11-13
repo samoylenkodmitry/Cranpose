@@ -168,6 +168,8 @@ impl RenderReturns {
 pub(crate) struct CaptureReply {
     pub(crate) returns: RenderReturns,
     pub(crate) pixels: Result<Vec<u8>, String>,
+    // The renderer's account of the frame it drew for the capture.
+    pub(crate) stats: Option<crate::gpu_stats::FrameStatsSnapshot>,
 }
 
 #[derive(Default)]

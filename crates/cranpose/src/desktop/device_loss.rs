@@ -113,14 +113,32 @@ impl App {
                 Ok(opened) => (context.gpu.adapter.clone(), opened),
                 Err(_) => {
                     // A surface on the present thread stays there: the
-                    // adapter is chosen without it.
-                    let surface = match &self.surface {
-                        Some(super::WindowPresent::OnLoop(surface)) => Some(surface),
-                        _ => None,
-                    };
-                    let adapter =
-                        crate::wgpu_surface::request_adapter(&context.gpu.instance, surface)
-                            .map_err(LaunchError::NoAdapter)?;
+                    // thread chooses the adapter for it.
+                    let adapter = match &self.surface {
+                        Some(super::WindowPresent::OnLoop(surface)) => {
+                            crate::wgpu_surface::request_adapter(
+                                &context.gpu.instance,
+                                Some(surface),
+                            )
+                        }
+                        _ => {
+                            let instance = context.gpu.instance.clone();
+                            app.renderer()
+                                .present_thread()
+                                .and_then(|thread| {
+                                    thread.with_surface(move |surface| {
+                                        crate::wgpu_surface::request_adapter(&instance, surface)
+                                    })
+                                })
+                                .unwrap_or_else(|| {
+                                    crate::wgpu_surface::request_adapter(
+                                        &context.gpu.instance,
+                                        None,
+                                    )
+                                })
+                        }
+                    }
+                    .map_err(LaunchError::NoAdapter)?;
                     let opened = request_primary_device(&adapter, requirements)
                         .map_err(LaunchError::DeviceCreate)?;
                     (adapter, opened)

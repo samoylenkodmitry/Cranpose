@@ -903,7 +903,9 @@ fn a_lost_device_refuses_frames_until_a_new_device_takes_over() {
     renderer.scene_mut().describe(&direct_graph());
 
     lost.destroy();
-    let _ = lost.poll(wgpu::PollType::wait_indefinitely());
+    if let Err(error) = lost.poll(wgpu::PollType::wait_indefinitely()) {
+        eprintln!("the lost device polled: {error}");
+    }
     assert_eq!(
         renderer.publish_frame(WIDTH, HEIGHT),
         PublishOutcome::Published

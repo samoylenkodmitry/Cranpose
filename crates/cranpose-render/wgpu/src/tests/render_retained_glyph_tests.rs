@@ -22,9 +22,10 @@ use crate::{
 fn test_renderer() -> (std::sync::MutexGuard<'static, ()>, GpuRenderer) {
     let (lock, device, queue) = crate::frame_graph::upload_test_device();
     let backend = device.adapter_info().backend;
+    let device = Arc::new(device);
     let device_errors = DeviceErrorSentry::watching(&device, None);
     let renderer = GpuRenderer::new(GpuRendererInit {
-        device: Arc::new(device),
+        device,
         queue: Arc::new(queue),
         surface_format: wgpu::TextureFormat::Rgba8Unorm,
         adapter_backend: backend,

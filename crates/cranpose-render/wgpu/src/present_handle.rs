@@ -167,11 +167,11 @@ impl PresentHandle {
                 unreachable!("capture only sends a capture");
             };
             let mut returns = RenderReturns::default();
-            let _ =
-                GpuRenderer::cancel_packet(packet, CancelReason::SurfaceUnavailable, &mut returns);
+            GpuRenderer::cancel_packet(packet, CancelReason::SurfaceUnavailable, &mut returns);
             return CaptureReply {
                 returns,
                 pixels: Err("the present thread is gone".to_string()),
+                stats: None,
             };
         }
         reply_rx
@@ -179,6 +179,7 @@ impl PresentHandle {
             .unwrap_or_else(|error| CaptureReply {
                 returns: RenderReturns::default(),
                 pixels: Err(format!("the present thread sent no capture: {error}")),
+                stats: None,
             })
     }
 

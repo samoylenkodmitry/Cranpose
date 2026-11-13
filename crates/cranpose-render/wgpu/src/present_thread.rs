@@ -103,7 +103,43 @@ impl PresentThread<'_> {
     /// it shows none, the thread takes no image and holds the newest frame
     /// back until the window shows it again.
     pub fn set_occluded(self, occluded: bool) -> bool {
-        self.handle.send_control(PresentControl::Occluded(occluded))
+        self.handle.send_control(PresentControl::Occluded {
+            occluded,
+            ack: None,
+        })
+    }
+
+    /// Tells the thread that the window shows none of the surface and waits
+    /// until the frame the thread draws, if any, ends: the thread submits no
+    /// GPU work after, as an iOS app that enters the background must not.
+    pub fn hide_and_wait(self) -> bool {
+        self.handle
+            .send_control_and_wait(
+                |ack| PresentControl::Occluded {
+                    occluded: true,
+                    ack: Some(ack),
+                },
+                "hide",
+            )
+            .is_some()
+    }
+
+    /// Runs `call` on the thread with the surface it holds, `None` when it
+    /// holds none, between two frames, and hands back what `call` returned:
+    /// a new adapter after a device loss must present to that surface.
+    /// `None` when the thread is gone or gave no answer.
+    pub fn with_surface<T: Send + 'static>(
+        self,
+        call: impl FnOnce(Option<&wgpu::Surface<'static>>) -> T + Send + 'static,
+    ) -> Option<T> {
+        self.handle.send_control_and_wait(
+            |reply| {
+                PresentControl::WithSurface(Box::new(move |surface| {
+                    crate::present_runtime::answer(&reply, call(surface));
+                }))
+            },
+            "with surface",
+        )
     }
 
     /// Moves the thread's renderer to `target`, a new device after the last

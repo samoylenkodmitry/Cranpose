@@ -175,26 +175,30 @@ impl PresentBackend {
         surface_epoch: u64,
     ) -> CaptureReply {
         let mut returns = RenderReturns::default();
-        let pixels = match self {
-            Self::Sync(sync) => sync.renderer.render_to_rgba_pixels(
-                &mut sync.submit,
-                viewport,
-                packet,
-                surface_epoch,
-                &mut returns,
+        let (pixels, stats) = match self {
+            Self::Sync(sync) => (
+                sync.renderer.render_to_rgba_pixels(
+                    &mut sync.submit,
+                    viewport,
+                    packet,
+                    surface_epoch,
+                    &mut returns,
+                ),
+                sync.renderer.last_frame_stats(),
             ),
             #[cfg(not(target_arch = "wasm32"))]
             Self::Threaded(handle) => return handle.capture(packet, viewport),
             Self::None => {
-                let _ = GpuRenderer::cancel_packet(
-                    packet,
-                    CancelReason::SurfaceUnavailable,
-                    &mut returns,
-                );
-                Err("GPU renderer not initialized. Call init_gpu() first.".to_string())
+                GpuRenderer::cancel_packet(packet, CancelReason::SurfaceUnavailable, &mut returns);
+                let error = "GPU renderer not initialized. Call init_gpu() first.";
+                (Err(error.to_string()), None)
             }
         };
-        CaptureReply { returns, pixels }
+        CaptureReply {
+            returns,
+            pixels,
+            stats,
+        }
     }
 }
 
@@ -613,15 +617,20 @@ impl WgpuRenderer {
                 frontend::PacketFor::Capture,
             )
             .ok_or_else(|| WgpuRendererError::Wgpu("scene graph is missing".to_string()))?;
-        let CaptureReply { returns, pixels } =
-            self.backend
-                .capture(packet, (width, height), self.surface_epoch);
+        let CaptureReply {
+            returns,
+            pixels,
+            stats,
+        } = self
+            .backend
+            .capture(packet, (width, height), self.surface_epoch);
         self.frontend.apply_returns(returns);
         let pixels = pixels.map_err(WgpuRendererError::Wgpu)?;
         Ok(CapturedFrame {
             width,
             height,
             pixels,
+            stats,
         })
     }
 
@@ -676,11 +685,7 @@ impl WgpuRenderer {
             Ok(()) => PublishOutcome::Published,
             Err(packet) => {
                 let mut returns = RenderReturns::default();
-                let _ = GpuRenderer::cancel_packet(
-                    *packet,
-                    CancelReason::SurfaceUnavailable,
-                    &mut returns,
-                );
+                GpuRenderer::cancel_packet(*packet, CancelReason::SurfaceUnavailable, &mut returns);
                 self.frontend.apply_returns(returns);
                 log::error!("present runtime unavailable; frame recovered, not published");
                 PublishOutcome::NoCredit
@@ -844,13 +849,20 @@ impl WgpuRenderer {
     }
 
     /// The sizes and capacities of the renderer's CPU-side scene data, scratch buffers and
-    /// caches, for memory diagnostics. The members of a renderer that does not draw on the
-    /// calling thread cover the scene only.
+    /// caches, for memory diagnostics. A renderer that draws on a present thread asks that
+    /// thread for its members and waits for the answer.
     pub fn debug_cpu_allocation_stats(&self) -> DebugCpuAllocationStats {
-        let mut stats = self
-            .sync_gpu_renderer()
-            .map(GpuRenderer::debug_cpu_allocation_stats)
-            .unwrap_or_default();
+        let mut stats = match &self.backend {
+            PresentBackend::Sync(sync) => sync.renderer.debug_cpu_allocation_stats(),
+            #[cfg(not(target_arch = "wasm32"))]
+            PresentBackend::Threaded(handle) => handle
+                .send_control_and_wait(
+                    |reply| present_runtime::PresentControl::CpuAllocationStats { reply },
+                    "cpu allocation stats",
+                )
+                .unwrap_or_default(),
+            PresentBackend::None => DebugCpuAllocationStats::default(),
+        };
         stats.scene_graph_node_count = self.frontend.scene.store().node_count();
         stats.scene_graph_heap_bytes = self.frontend.scene.store().heap_bytes();
         stats.scene_hits = self.frontend.scene.hit_storage();

@@ -706,7 +706,7 @@ impl<'a> FrameOutput<'a> {
 pub(crate) struct GpuRenderer {
     pub(crate) device: Arc<wgpu::Device>,
     pub(crate) queue: Arc<wgpu::Queue>,
-    device_errors: Arc<DeviceErrorSentry>,
+    pub(crate) device_errors: Arc<DeviceErrorSentry>,
     renderer_epoch: u64,
     #[cfg(not(target_arch = "wasm32"))]
     display_format: wgpu::TextureFormat,
@@ -1611,17 +1611,16 @@ impl GpuRenderer {
             Some(CancelReason::SurfaceEpoch)
         } else if packet.viewport != (width, height) {
             Some(CancelReason::Viewport)
+        } else if self.device_errors.lost() {
+            Some(CancelReason::DeviceLost)
+        } else if self.device_errors.take_poison() {
+            Some(CancelReason::DeviceError)
         } else {
             None
         };
         if let Some(reason) = cancel_reason {
-            return Self::cancel_packet(packet, reason, returns);
-        }
-        if self.device_errors.lost() {
-            return Self::cancel_packet(packet, CancelReason::DeviceLost, returns);
-        }
-        if self.device_errors.take_poison() {
-            return Self::cancel_packet(packet, CancelReason::DeviceError, returns);
+            Self::cancel_packet(packet, reason, returns);
+            return Ok(());
         }
         returns.frame_id = packet.frame_id;
         let render_start = Instant::now();
@@ -1648,7 +1647,8 @@ impl GpuRenderer {
             if let Some(composition) = frame_root.into_composition() {
                 self.composition_target = Some(composition);
             }
-            return Self::cancel_packet(packet, CancelReason::NeedsWhole, returns);
+            Self::cancel_packet(packet, CancelReason::NeedsWhole, returns);
+            return Ok(());
         }
         returns.target = plan.map(|plan| plan.drawn(&packet, &frame_root));
         let repaint = count_damage(plan, (width, height), &self.frame_stats);
@@ -1740,14 +1740,13 @@ impl GpuRenderer {
         packet: FramePacket,
         reason: CancelReason,
         returns: &mut RenderReturns,
-    ) -> Result<(), String> {
+    ) {
         returns.scene = Some(FrameSceneStorage {
             root: packet.root,
             overlay: packet.overlay,
         });
         returns.frame_id = packet.frame_id;
         returns.outcome = PresentOutcome::Cancelled(reason);
-        Ok(())
     }
 
     // The parts a draw of text or an image borrows apart.

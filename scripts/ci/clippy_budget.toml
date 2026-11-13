@@ -10,8 +10,8 @@
 "clippy::fn_params_excessive_bools" = 5
 "clippy::inline_always" = 63
 "clippy::iter_over_hash_type" = 30
-"clippy::let_underscore_must_use" = 262
-"clippy::let_underscore_untyped" = 672
+"clippy::let_underscore_must_use" = 256
+"clippy::let_underscore_untyped" = 666
 "clippy::missing_assert_message" = 181
 "clippy::needless_pass_by_value" = 166
 "clippy::ref_option" = 16
