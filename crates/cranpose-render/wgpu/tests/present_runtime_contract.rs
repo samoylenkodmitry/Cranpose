@@ -344,7 +344,7 @@ fn reconfigure_cancels_waiting_packet_before_ack() {
 }
 
 #[test]
-fn drop_surface_cancels_waiting_packet_with_buffers_returned() {
+fn take_surface_cancels_waiting_packet_with_buffers_returned() {
     let (_lock, mut renderer, target) = inline_runtime_or_skip!("drop-surface cancel");
     let mut runtime = renderer.init_gpu_inline_for_tests(target);
     let ack = renderer
@@ -363,7 +363,7 @@ fn drop_surface_cancels_waiting_packet_with_buffers_returned() {
     renderer.note_surface_reconfigured();
     let ack = renderer
         .present_thread()
-        .and_then(PresentThread::send_drop_surface_unacked_for_tests)
+        .and_then(PresentThread::send_take_surface_unacked_for_tests)
         .expect("inline runtime must accept controls");
     runtime.pump();
     assert_eq!(
@@ -374,7 +374,12 @@ fn drop_surface_cancels_waiting_packet_with_buffers_returned() {
         )],
         "a packet waiting when the surface died cancels as SurfaceUnavailable"
     );
-    ack.try_recv().expect("drop must ack after the cancel");
+    assert!(
+        ack.try_recv()
+            .expect("the take must answer after the cancel")
+            .is_none(),
+        "an offscreen target holds no surface to hand back"
+    );
 
     assert_eq!(
         renderer.publish_frame(WIDTH, HEIGHT),
@@ -384,8 +389,8 @@ fn drop_surface_cancels_waiting_packet_with_buffers_returned() {
     assert_eq!(
         drain_outcomes(&mut renderer),
         vec![(2, PresentOutcome::Cancelled(CancelReason::SurfaceEpoch))],
-        "after the drop the producer's epoch is ahead of the runtime's \
-         (DropSurface carries none), so the next packet cancels for it"
+        "after the take the producer's epoch is ahead of the runtime's \
+         (TakeSurface carries none), so the next packet cancels for it"
     );
 }
 

@@ -16,6 +16,7 @@ pub struct PresentThread<'a> {
     pub(crate) renderer_epoch: &'a mut u64,
     pub(crate) surface_epoch: &'a mut u64,
     pub(crate) on_device_lost: Option<&'a DeviceLostHandler>,
+    pub(crate) background: wgpu::Color,
 }
 
 impl PresentThread<'_> {
@@ -24,9 +25,10 @@ impl PresentThread<'_> {
         *self.surface_epoch
     }
 
-    /// Gives the thread a (re)created surface, configured as `config`.
-    /// Nothing waits for the thread to set it up: frames published
-    /// afterwards queue behind it. False when the thread is gone.
+    /// Gives the thread a (re)created surface, configured as `config`,
+    /// which first shows the renderer's background. Nothing waits for the
+    /// thread to set it up: frames published afterwards queue behind it.
+    /// False when the thread is gone.
     pub fn replace_surface(
         mut self,
         surface: wgpu::Surface<'static>,
@@ -37,6 +39,7 @@ impl PresentThread<'_> {
             surface,
             config,
             surface_epoch,
+            background: self.background,
         });
         if !sent {
             log::error!("[present-runtime] replace surface: runtime is gone");
@@ -48,14 +51,16 @@ impl PresentThread<'_> {
     /// thread has done it, as a surface the platform hands over anew needs.
     pub fn reconfigure(mut self, config: wgpu::SurfaceConfiguration) -> bool {
         let surface_epoch = self.next_surface_epoch();
-        self.handle.send_control_and_wait(
-            move |ack| PresentControl::Reconfigure {
-                config,
-                surface_epoch,
-                ack: Some(ack),
-            },
-            "reconfigure surface",
-        )
+        self.handle
+            .send_control_and_wait(
+                move |ack| PresentControl::Reconfigure {
+                    config,
+                    surface_epoch,
+                    ack: Some(ack),
+                },
+                "reconfigure surface",
+            )
+            .is_some()
     }
 
     /// Configures the thread's surface as `config`, a new size or present
@@ -70,13 +75,18 @@ impl PresentThread<'_> {
         })
     }
 
-    /// Drops the thread's surface, as the window that showed it is gone, and
-    /// waits until the thread has let it go; the renderer stays for the
-    /// next surface.
-    pub fn drop_surface(mut self) -> bool {
+    /// Takes the thread's surface back and waits until the thread hands it
+    /// over, as when the window that showed it is gone or the app leaves the
+    /// screen: the thread draws nothing more into it. The renderer stays for
+    /// the next surface. `None` when the thread had no surface or is gone.
+    pub fn take_surface(mut self) -> Option<wgpu::Surface<'static>> {
         self.next_surface_epoch();
         self.handle
-            .send_control_and_wait(|ack| PresentControl::DropSurface { ack }, "drop surface")
+            .send_control_and_wait(
+                |reply| PresentControl::TakeSurface { reply },
+                "take surface",
+            )
+            .flatten()
     }
 
     /// Tells the thread whether the window shows none of the surface. While
@@ -102,10 +112,12 @@ impl PresentThread<'_> {
 
     #[doc(hidden)]
     pub fn attach_offscreen_for_tests(self, width: u32, height: u32) -> bool {
-        self.handle.send_control_and_wait(
-            move |ack| PresentControl::AttachOffscreenTargetForTests { width, height, ack },
-            "attach offscreen target",
-        )
+        self.handle
+            .send_control_and_wait(
+                move |ack| PresentControl::AttachOffscreenTargetForTests { width, height, ack },
+                "attach offscreen target",
+            )
+            .is_some()
     }
 
     #[doc(hidden)]
@@ -137,9 +149,11 @@ impl PresentThread<'_> {
     }
 
     #[doc(hidden)]
-    pub fn send_drop_surface_unacked_for_tests(self) -> Option<Receiver<()>> {
+    pub fn send_take_surface_unacked_for_tests(
+        self,
+    ) -> Option<Receiver<Option<wgpu::Surface<'static>>>> {
         self.handle
-            .send_control_unacked(|ack| PresentControl::DropSurface { ack })
+            .send_control_unacked(|reply| PresentControl::TakeSurface { reply })
     }
 
     #[doc(hidden)]

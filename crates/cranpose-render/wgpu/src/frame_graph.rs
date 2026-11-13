@@ -2035,18 +2035,16 @@ pub(crate) fn create_filled_buffer(
     usage: wgpu::BufferUsages,
     contents: &[u8],
 ) -> wgpu::Buffer {
-    use wgpu::util::DeviceExt;
-    if mode == UploadMode::Copied {
-        return device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some(label),
-            contents,
-            usage,
-        });
-    }
+    // A buffer mapped at its creation with no CPU-writable usage is filled
+    // through a staging buffer of wgpu's own.
+    let usage = match mode {
+        UploadMode::Copied => usage,
+        UploadMode::Mapped => mode.writable(usage),
+    };
     let buffer = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some(label),
         size: align_u64_to(contents.len().max(1) as u64, wgpu::COPY_BUFFER_ALIGNMENT),
-        usage: mode.writable(usage),
+        usage,
         mapped_at_creation: true,
     });
     write_mapped(&buffer, 0, contents);
@@ -2061,10 +2059,12 @@ pub(crate) fn write_mapped(buffer: &wgpu::Buffer, offset: u64, bytes: &[u8]) -> 
         return FrameCommandStats::default();
     }
     let span = align_u64_to(bytes.len() as u64, wgpu::COPY_BUFFER_ALIGNMENT);
-    let mut view = buffer
-        .slice(offset..offset + span)
-        .get_mapped_range_mut()
-        .expect("a mapped ring's buffer stays mapped until its frame is finished");
+    // A device lost while a frame records leaves its new buffers invalid and
+    // unmapped. The loss replaces the device before the next frame.
+    let Ok(mut view) = buffer.slice(offset..offset + span).get_mapped_range_mut() else {
+        log::debug!("[gpu-device] a buffer of a lost device has no mapped range");
+        return FrameCommandStats::default();
+    };
     view.slice(..bytes.len()).copy_from_slice(bytes);
     view.slice(bytes.len()..).fill(0);
     FrameCommandStats {

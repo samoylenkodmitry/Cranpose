@@ -732,6 +732,7 @@ impl WgpuRenderer {
             renderer_epoch: &mut self.renderer_epoch,
             surface_epoch: &mut self.surface_epoch,
             on_device_lost: self.on_device_lost.as_ref(),
+            background: frame_clear_color(self.frontend.transparent_background),
         })
     }
 

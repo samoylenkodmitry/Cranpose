@@ -37,11 +37,13 @@ pub(crate) struct PresentRuntimeInit {
 }
 
 pub(crate) enum PresentControl {
-    /// Nothing waits for it: packets sent after it run on the new surface.
+    // Nothing waits for it: packets sent after it run on the new surface,
+    // which first shows `background`.
     ReplaceSurface {
         surface: wgpu::Surface<'static>,
         config: wgpu::SurfaceConfiguration,
         surface_epoch: u64,
+        background: wgpu::Color,
     },
     // `ack`, when given, hears once the surface has the new configuration.
     Reconfigure {
@@ -61,8 +63,9 @@ pub(crate) enum PresentControl {
         viewport: (u32, u32),
         reply: SyncSender<CaptureReply>,
     },
-    DropSurface {
-        ack: SyncSender<()>,
+    // Hands the surface back through `reply`; `None` when there was none.
+    TakeSurface {
+        reply: SyncSender<Option<wgpu::Surface<'static>>>,
     },
     #[doc(hidden)]
     AttachOffscreenTargetForTests {
@@ -132,6 +135,7 @@ pub(crate) fn encode_present_outcome(outcome: PresentOutcome, frame_id: u64) -> 
         PresentOutcome::Cancelled(CancelReason::DeviceError) => 6,
         PresentOutcome::Unchanged => 7,
         PresentOutcome::Cancelled(CancelReason::NeedsWhole) => 8,
+        PresentOutcome::Cancelled(CancelReason::DeviceLost) => 9,
     };
     (frame_id << 8) | code
 }
@@ -147,6 +151,7 @@ pub(crate) struct PresentState {
     surface_epoch: u64,
     waiting_packet: Option<FramePacket>,
     occluded: bool,
+    background: wgpu::Color,
     returns_tx: SyncSender<RenderReturns>,
     status: Arc<PresentStatus>,
     waker: PresentWaker,
@@ -179,6 +184,7 @@ impl PresentState {
             surface_epoch: 0,
             waiting_packet: None,
             occluded: false,
+            background: crate::render::CLEAR_COLOR,
             returns_tx,
             status,
             waker,
@@ -274,8 +280,10 @@ impl PresentState {
                 surface,
                 config,
                 surface_epoch,
+                background,
             } => {
                 self.surface_epoch = surface_epoch;
+                self.background = background;
                 self.cancel_waiting(CancelReason::SurfaceEpoch);
                 surface.configure(&self.device, &config);
                 self.surface = Some(surface);
@@ -333,12 +341,11 @@ impl PresentState {
                 let _ = reply.send(CaptureReply { returns, pixels });
                 true
             }
-            PresentControl::DropSurface { ack } => {
+            PresentControl::TakeSurface { reply } => {
                 self.cancel_waiting(CancelReason::SurfaceUnavailable);
-                self.surface = None;
                 self.config = None;
                 self.offscreen_target = None;
-                let _ = ack.send(());
+                let _ = reply.send(self.surface.take());
                 true
             }
             PresentControl::AttachOffscreenTargetForTests { width, height, ack } => {
@@ -465,10 +472,11 @@ impl PresentState {
                     format: Some(self.gpu_renderer.surface_format().remove_srgb_suffix()),
                     ..Default::default()
                 });
-                crate::initial_present::clear_to_default_background(
+                crate::initial_present::clear_to_background(
                     &self.device,
                     &self.gpu_renderer.queue,
                     &view,
+                    self.background,
                 );
                 self.gpu_renderer.queue.present(frame);
                 self.status
@@ -762,27 +770,29 @@ impl PresentHandle {
         }
     }
 
-    pub(crate) fn send_control_and_wait(
+    // Sends the control `build` makes and waits for the thread's answer to
+    // it; `None` when no answer came.
+    pub(crate) fn send_control_and_wait<T>(
         &self,
-        build: impl FnOnce(SyncSender<()>) -> PresentControl,
+        build: impl FnOnce(SyncSender<T>) -> PresentControl,
         what: &str,
-    ) -> bool {
+    ) -> Option<T> {
         let Some(ack_rx) = self.send_control_unacked(build) else {
             log::error!("[present-runtime] {what}: runtime is gone");
-            return false;
+            return None;
         };
         match ack_rx.recv_timeout(CONTROL_ACK_TIMEOUT) {
-            Ok(()) => true,
+            Ok(answer) => Some(answer),
             Err(RecvTimeoutError::Timeout) => {
                 log::error!(
                     "[present-runtime] {what}: no ack within {CONTROL_ACK_TIMEOUT:?}; \
                      present thread wedged?"
                 );
-                false
+                None
             }
             Err(RecvTimeoutError::Disconnected) => {
                 log::error!("[present-runtime] {what}: runtime exited before ack");
-                false
+                None
             }
         }
     }
@@ -823,11 +833,11 @@ impl PresentHandle {
             })
     }
 
-    pub(crate) fn send_control_unacked(
+    pub(crate) fn send_control_unacked<T>(
         &self,
-        build: impl FnOnce(SyncSender<()>) -> PresentControl,
-    ) -> Option<Receiver<()>> {
-        let (ack_tx, ack_rx) = sync_channel::<()>(1);
+        build: impl FnOnce(SyncSender<T>) -> PresentControl,
+    ) -> Option<Receiver<T>> {
+        let (ack_tx, ack_rx) = sync_channel::<T>(1);
         self.msg_tx
             .send(PresentMsg::Control(build(ack_tx)))
             .ok()

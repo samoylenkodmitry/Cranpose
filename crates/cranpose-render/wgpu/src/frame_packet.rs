@@ -36,6 +36,9 @@ pub enum CancelReason {
     /// suspect device. One cancel per poisoning; the gate clears as it
     /// fires, so the next packet renders (see `DeviceErrorSentry`).
     DeviceError,
+    /// The device reported its loss: nothing is encoded on it until the
+    /// renderer moves to a new device.
+    DeviceLost,
     /// The packet holds the draws of a part of the window, and the image it
     /// went into needs more: the next packet holds every draw.
     NeedsWhole,

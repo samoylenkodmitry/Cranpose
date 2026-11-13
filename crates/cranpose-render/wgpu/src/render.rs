@@ -17,7 +17,7 @@ use crate::{
     ablation::Ablation,
     arc_trig_fill::ArcTrigFill,
     collect::LayerScene,
-    device_error_sentry::{DeviceErrorSentry, survive_gpu_errors_enabled},
+    device_error_sentry::DeviceErrorSentry,
     draw_pass::{
         PassSegment, PassTarget, ResolvedComposite, ResolvedCompositeKind, RunCalls, SegmentLayout,
         SourceContent, TrackedPass,
@@ -780,7 +780,7 @@ pub(crate) struct GpuRendererInit {
     pub(crate) adapter_downlevel: wgpu::DownlevelFlags,
     pub(crate) renderer_epoch: u64,
     pub(crate) pipeline_compilation: PipelineCompilation,
-    pub(crate) on_device_lost: Option<crate::DeviceLostHandler>,
+    pub(crate) device_errors: Arc<DeviceErrorSentry>,
 }
 
 #[expect(clippy::multiple_inherent_impl, reason = "draw passes in draw_pass")]
@@ -794,21 +794,10 @@ impl GpuRenderer {
             adapter_downlevel,
             renderer_epoch,
             pipeline_compilation,
-            on_device_lost,
+            device_errors,
         } = init;
         let construction_started = Instant::now();
-        let device_errors = Arc::new(DeviceErrorSentry::default());
-        if survive_gpu_errors_enabled() {
-            let sentry = Arc::clone(&device_errors);
-            device.on_uncaptured_error(Arc::new(move |error| sentry.record(&error)));
-        }
         let composition_format = crate::offscreen::composition_format(display_format);
-        device.set_device_lost_callback(move |reason, message| {
-            log::error!("[gpu-device] device lost ({reason:?}): {message}");
-            if let Some(on_device_lost) = &on_device_lost {
-                on_device_lost();
-            }
-        });
         let copy_free = UploadMode::copy_free(&device, adapter_backend);
         let mut run_store = RunStore::new(
             &device,
@@ -1627,6 +1616,9 @@ impl GpuRenderer {
         };
         if let Some(reason) = cancel_reason {
             return Self::cancel_packet(packet, reason, returns);
+        }
+        if self.device_errors.lost() {
+            return Self::cancel_packet(packet, CancelReason::DeviceLost, returns);
         }
         if self.device_errors.take_poison() {
             return Self::cancel_packet(packet, CancelReason::DeviceError, returns);

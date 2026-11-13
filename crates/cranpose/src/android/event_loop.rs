@@ -1014,7 +1014,7 @@ fn drop_android_surface(
     match (gpu_resources.as_mut(), app_shell.as_mut()) {
         (Some(resources), Some(shell)) => {
             if present_thread && let Some(thread) = shell.renderer().present_thread() {
-                thread.drop_surface();
+                drop(thread.take_surface());
             }
             resources.surface = None;
             resources.native_window_ptr = None;

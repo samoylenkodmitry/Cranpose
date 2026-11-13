@@ -42,6 +42,10 @@ impl GpuTarget {
         on_device_lost: Option<crate::DeviceLostHandler>,
     ) -> crate::render::GpuRendererInit {
         crate::render::GpuRendererInit {
+            device_errors: crate::device_error_sentry::DeviceErrorSentry::watching(
+                &self.device,
+                on_device_lost,
+            ),
             device: self.device,
             queue: self.queue,
             surface_format: self.surface_format,
@@ -49,7 +53,6 @@ impl GpuTarget {
             adapter_downlevel: self.adapter_downlevel,
             renderer_epoch,
             pipeline_compilation,
-            on_device_lost,
         }
     }
 }
