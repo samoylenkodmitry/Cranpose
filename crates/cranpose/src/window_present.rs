@@ -294,6 +294,17 @@ impl WindowPresent {
     // Folds the frames the present thread handed back into `renderer`,
     // which frees their room, and says what became of them.
     pub(crate) fn drain(&mut self, renderer: &mut WgpuRenderer) -> PresentReturns {
+        self.drain_from(|on_return| {
+            renderer.drain_present_returns_with(on_return);
+        })
+    }
+
+    // Folds the frames `hand_back` hands to its callback, each with its id,
+    // its outcome and its timings, as `drain` folds a renderer's.
+    fn drain_from(
+        &mut self,
+        hand_back: impl FnOnce(&mut dyn FnMut(u64, PresentOutcome, PresentTimings)),
+    ) -> PresentReturns {
         let mut returns = PresentReturns::default();
         let Self::OnPresentThread {
             frames, owes_frame, ..
@@ -301,7 +312,7 @@ impl WindowPresent {
         else {
             return returns;
         };
-        renderer.drain_present_returns_with(&mut |frame_id, outcome, timings| {
+        hand_back(&mut |frame_id, outcome, timings| {
             let frame = frames.take(frame_id);
             match outcome {
                 PresentOutcome::Presented => {
@@ -334,3 +345,7 @@ fn window_occluded(window: &dyn Window) -> bool {
         false
     }
 }
+
+#[cfg(test)]
+#[path = "tests/window_present_tests.rs"]
+mod tests;
