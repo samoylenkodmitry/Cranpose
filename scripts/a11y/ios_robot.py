@@ -21,22 +21,33 @@ def command(*args, **kwargs):
                                    timeout=kwargs.pop('timeout', 120), **kwargs)
 
 
-def boot(device_id, report):
-    """Boots the simulator and waits until it is ready. A cold boot on the
-    hosted macOS runner took over 120 seconds twice on 2026-10-15, so the
-    wait is five minutes, and a boot that hangs past it is shut down and
-    started once more."""
-    for attempt in (1, 2):
-        devices = json.loads(command('xcrun', 'simctl', 'list', 'devices', 'available', '--json'))
-        device = next(d for group in devices['devices'].values() for d in group if d['udid'] == device_id)
-        if device['state'] != 'Booted':
-            command('xcrun', 'simctl', 'boot', device_id)
+# The hosted runner's simulator is slow at times. A cold boot took over 120 seconds twice on
+# 2026-10-15. On 2026-11-13 (nightly 43360157573) a first boot hung past five minutes; booted
+# again, the simulator left the app's install unanswered for 120 seconds. Booting and installing
+# therefore wait five minutes each, and a hang shuts the simulator down and starts both again.
+PREPARE_ATTEMPTS = 3
+STEP_SECONDS = 300
+
+
+def boot(device_id):
+    """Boots the simulator, unless it runs already, and waits until it is ready."""
+    devices = json.loads(command('xcrun', 'simctl', 'list', 'devices', 'available', '--json'))
+    device = next(d for group in devices['devices'].values() for d in group if d['udid'] == device_id)
+    if device['state'] != 'Booted':
+        command('xcrun', 'simctl', 'boot', device_id)
+    command('xcrun', 'simctl', 'bootstatus', device_id, '-b', timeout=STEP_SECONDS)
+
+
+def prepare(device_id, app, report):
+    """Boots the simulator and installs the app on it."""
+    for attempt in range(1, PREPARE_ATTEMPTS + 1):
         try:
-            command('xcrun', 'simctl', 'bootstatus', device_id, '-b', timeout=300)
-            report['boot_attempts'] = attempt
+            boot(device_id)
+            command('xcrun', 'simctl', 'install', device_id, str(app), timeout=STEP_SECONDS)
+            report['prepare_attempts'] = attempt
             return
         except subprocess.TimeoutExpired:
-            if attempt == 2:
+            if attempt == PREPARE_ATTEMPTS:
                 raise
             subprocess.run(['xcrun', 'simctl', 'shutdown', device_id], check=False, timeout=120)
 
@@ -78,8 +89,7 @@ def main():
     report = {'platform': 'ios-simulator', 'device': args.device, 'status': 'running',
               'binary_sha256': hashlib.sha256(binary.read_bytes()).hexdigest()}
     try:
-        boot(args.device, report)
-        command('xcrun', 'simctl', 'install', args.device, str(args.app.resolve()))
+        prepare(args.device, args.app.resolve(), report)
         earlier_failures = []
         for attempt in range(1, ATTEMPTS + 1):
             result, summary = run_tests(args.device, args.output, attempt)

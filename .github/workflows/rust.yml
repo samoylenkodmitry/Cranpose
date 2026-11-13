@@ -382,6 +382,9 @@ jobs:
       - name: Check the web demo's wasm size
         if: ${{ !cancelled() && steps.provision.conclusion == 'success' && steps.changes.outputs.docs_only != 'true' && steps.memo.outputs.passed != 'true' }}
         run: just web-size-budget
+      - name: Check the web demo's wasm features
+        if: ${{ !cancelled() && steps.provision.conclusion == 'success' && steps.changes.outputs.docs_only != 'true' && steps.memo.outputs.passed != 'true' }}
+        run: just wasm-feature-floor
       - name: Package the web demo for a check in a browser
         if: ${{ !cancelled() && steps.provision.conclusion == 'success' && steps.changes.outputs.docs_only != 'true' && steps.memo.outputs.passed != 'true' }}
         run: apps/desktop-demo/package-web.sh "$RUNNER_TEMP/web-demo"

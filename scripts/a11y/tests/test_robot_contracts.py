@@ -236,5 +236,48 @@ class IosRepeatTests(unittest.TestCase):
         self.assertEqual((report['status'], runs), ('passed', 2))
 
 
+class IosPrepareTests(unittest.TestCase):
+    """The robot's boot and install with simctl replaced: `hangs` installs time out before one works."""
+
+    @staticmethod
+    def prepare(hangs):
+        installs = []
+
+        def simctl(*args, **kwargs):
+            if args[2] == 'install':
+                installs.append(kwargs.get('timeout'))
+                if len(installs) <= hangs:
+                    raise subprocess.TimeoutExpired(list(args), kwargs.get('timeout'))
+            return ''
+
+        report = {}
+        raised = None
+        with patch.object(ios_robot, 'boot') as boot, \
+                patch.object(ios_robot, 'command', side_effect=simctl), \
+                patch.object(ios_robot.subprocess, 'run') as shutdown:
+            try:
+                ios_robot.prepare('UDID', Path('Demo.app'), report)
+            except subprocess.TimeoutExpired as error:
+                raised = error
+        return report, installs, boot.call_count, shutdown.call_count, raised
+
+    def test_an_install_that_works_at_once_boots_once(self):
+        report, installs, boots, shutdowns, raised = self.prepare(hangs=0)
+        self.assertIsNone(raised)
+        self.assertEqual((report['prepare_attempts'], installs, boots, shutdowns),
+                         (1, [ios_robot.STEP_SECONDS], 1, 0))
+
+    def test_a_hung_install_shuts_the_simulator_down_and_boots_it_again(self):
+        report, installs, boots, shutdowns, raised = self.prepare(hangs=1)
+        self.assertIsNone(raised)
+        self.assertEqual((report['prepare_attempts'], len(installs), boots, shutdowns), (2, 2, 2, 1))
+
+    def test_a_hang_in_every_attempt_fails_the_robot(self):
+        report, installs, boots, shutdowns, raised = self.prepare(hangs=ios_robot.PREPARE_ATTEMPTS)
+        self.assertIsInstance(raised, subprocess.TimeoutExpired)
+        self.assertNotIn('prepare_attempts', report)
+        self.assertEqual((len(installs), shutdowns), (ios_robot.PREPARE_ATTEMPTS, ios_robot.PREPARE_ATTEMPTS - 1))
+
+
 if __name__ == '__main__':
     unittest.main()

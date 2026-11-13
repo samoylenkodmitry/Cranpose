@@ -12,8 +12,11 @@ publish = false
 # at its first call, so those folds made functions of over 100 KB whose unused
 # branches a first visit compiled: on a Mate 20 X the gauntlet's first frame
 # came 110-170 ms sooner without them.
+# The `--enable-*` features are the ones rustc emits for wasm32. Safari 15 has
+# all of them. Any feature past them, such as the typed function references of
+# `--all-features`, makes WebKit before Safari 18 reject the whole module.
 [package.metadata.wasm-pack.profile.release]
-wasm-opt = ["-Oz", "-ocimfs=100", "--all-features"]
+wasm-opt = ["-Oz", "-ocimfs=100", "--mvp-features", "--enable-bulk-memory", "--enable-multivalue", "--enable-mutable-globals", "--enable-nontrapping-float-to-int", "--enable-reference-types", "--enable-sign-ext"]
 
 [lib]
 crate-type = ["cdylib", "staticlib", "rlib"]
@@ -34,16 +37,16 @@ web = ["cranpose/web", "dep:wasm-bindgen", "dep:wasm-logger"]
 logging = ["dep:env_logger"]
 
 [dependencies]
-coroflow = "0.22.4"
-cranpose = { version = "0.22.4" }
+coroflow = "0.23.0"
+cranpose = { version = "0.23.0" }
 log = "0.4"
 wasm-bindgen = { version = "0.2", optional = true }
 wasm-logger = { version = "0.2", optional = true }
-cranpose-core = "0.22.4"
-cranpose-coroflow = "0.22.4"
-cranpose-navigation = "0.22.4"
-cranpose-ui = "0.22.4"
-cranpose-foundation = "0.22.4"
+cranpose-core = "0.23.0"
+cranpose-coroflow = "0.23.0"
+cranpose-navigation = "0.23.0"
+cranpose-ui = "0.23.0"
+cranpose-foundation = "0.23.0"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 env_logger = { version = "0.11", optional = true }
