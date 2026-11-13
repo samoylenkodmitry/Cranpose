@@ -312,7 +312,7 @@ fn a_landing_keeps_a_frame_due_over_a_present_account_read_before_it() {
         .landing()
         .expect("a spawned compiler reports landings");
     let status = PresentStatus::default();
-    assert!(status.landing.set(Arc::clone(&landing)).is_ok());
+    *status.landing.lock().expect("a new status is not poisoned") = Some(Arc::clone(&landing));
     landing.await_since(landing.built());
     status.needs_frame_warmup.store(false, Ordering::Relaxed);
     assert!(!status.warmup_due(), "nothing has landed yet");

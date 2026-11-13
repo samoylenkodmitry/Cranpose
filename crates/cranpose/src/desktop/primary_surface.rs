@@ -72,14 +72,12 @@ fn configure_app_surface_size(
             surface.configure(device, surface_config);
         }
         // Frames drawn for the old size are refused by their surface epoch.
-        // The present thread acknowledges the new configuration once its
-        // frame in progress ends.
         PrimaryPresent::OnPresentThread(_) => {
             surface_config.width = width;
             surface_config.height = height;
-            let renderer = app.renderer();
-            renderer.note_surface_reconfigured();
-            renderer.present_reconfigure(surface_config.clone());
+            if let Some(thread) = app.renderer().present_thread() {
+                thread.resize(surface_config.clone());
+            }
         }
     }
     update_app_viewport(app, width, height, viewport);

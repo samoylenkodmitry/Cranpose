@@ -161,6 +161,12 @@ impl RenderReturns {
     }
 }
 
+// A capture's pixels and what its packet hands back to the producer.
+pub(crate) struct CaptureReply {
+    pub(crate) returns: RenderReturns,
+    pub(crate) pixels: Result<Vec<u8>, String>,
+}
+
 #[derive(Default)]
 pub(crate) struct RenderReturns {
     pub(crate) scene: Option<FrameSceneStorage>,

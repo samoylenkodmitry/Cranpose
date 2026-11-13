@@ -8,7 +8,9 @@ use cranpose_render_common::{
     Renderer,
     graph::{CachePolicy, LayerNode, ProjectiveTransform, RenderNode},
 };
-use cranpose_render_wgpu::{CancelReason, GpuTarget, PresentOutcome, PublishOutcome, WgpuRenderer};
+use cranpose_render_wgpu::{
+    CancelReason, GpuTarget, PresentOutcome, PresentThread, PublishOutcome, WgpuRenderer,
+};
 use cranpose_ui_graphics::{Color, Rect};
 
 use crate::support;
@@ -83,6 +85,15 @@ fn threaded_parts(
     surface_format: wgpu::TextureFormat,
 ) -> Result<(MutexGuard<'static, ()>, WgpuRenderer, GpuTarget), String> {
     let lock = support::gpu_test_lock();
+    Ok((
+        lock,
+        WgpuRenderer::new(&[support::TEST_FONT]),
+        gpu_target(surface_format)?,
+    ))
+}
+
+// A target on a device of its own, as one that replaces a lost device is.
+fn gpu_target(surface_format: wgpu::TextureFormat) -> Result<GpuTarget, String> {
     let adapter = support::device::headless_adapter(wgpu::Backends::all())?;
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
         label: Some("Present Runtime Contract Test Device"),
@@ -93,10 +104,11 @@ fn threaded_parts(
         trace: wgpu::Trace::Off,
     }))
     .map_err(|err| format!("device request failed: {err:?}"))?;
-    Ok((
-        lock,
-        WgpuRenderer::new(&[support::TEST_FONT]),
-        GpuTarget::on_adapter(&adapter, Arc::new(device), Arc::new(queue), surface_format),
+    Ok(GpuTarget::on_adapter(
+        &adapter,
+        Arc::new(device),
+        Arc::new(queue),
+        surface_format,
     ))
 }
 
@@ -126,7 +138,8 @@ fn a_surface_never_sits_configured_with_nothing_presented_to_it() {
     let mut runtime = renderer.init_gpu_inline_for_tests(target);
 
     let (_, presented_before, placeholder_before) = renderer
-        .present_status_snapshot_for_tests()
+        .present_thread()
+        .map(|thread| thread.status_snapshot_for_tests())
         .expect("threaded mode must expose the status snapshot");
     assert_eq!(
         (presented_before, placeholder_before),
@@ -135,14 +148,16 @@ fn a_surface_never_sits_configured_with_nothing_presented_to_it() {
     );
 
     let ack = renderer
-        .send_attach_offscreen_unacked_for_tests(WIDTH, HEIGHT)
+        .present_thread()
+        .and_then(|thread| thread.send_attach_offscreen_unacked_for_tests(WIDTH, HEIGHT))
         .expect("inline runtime must accept controls");
     runtime.pump();
     ack.try_recv()
         .expect("the attach must ack only after the placeholder clear runs");
 
     let (_, presented_frames, placeholder_frames) = renderer
-        .present_status_snapshot_for_tests()
+        .present_thread()
+        .map(|thread| thread.status_snapshot_for_tests())
         .expect("threaded mode must expose the status snapshot");
     assert_eq!(
         placeholder_frames, 1,
@@ -161,7 +176,8 @@ fn a_surface_never_sits_configured_with_nothing_presented_to_it() {
     runtime.pump();
     assert_eq!(renderer.drain_present_returns(), 1);
     let (_, presented_frames, placeholder_frames) = renderer
-        .present_status_snapshot_for_tests()
+        .present_thread()
+        .map(|thread| thread.status_snapshot_for_tests())
         .expect("threaded mode must expose the status snapshot");
     assert_eq!(presented_frames, 1);
     assert_eq!(
@@ -175,7 +191,8 @@ fn depth_one_credit_gates_publish_before_lowering() {
     let (_lock, mut renderer, target) = inline_runtime_or_skip!("depth-one credit");
     let mut runtime = renderer.init_gpu_inline_for_tests(target);
     let ack = renderer
-        .send_attach_offscreen_unacked_for_tests(WIDTH, HEIGHT)
+        .present_thread()
+        .and_then(|thread| thread.send_attach_offscreen_unacked_for_tests(WIDTH, HEIGHT))
         .expect("inline runtime must accept controls");
     runtime.pump();
     ack.try_recv().expect("attach must ack after the pump");
@@ -240,7 +257,8 @@ fn a_returned_frame_frees_a_credit_it_reports_until_drained() {
     let (_lock, mut renderer, target) = inline_runtime_or_skip!("returned credit");
     let mut runtime = renderer.init_gpu_inline_for_tests(target);
     let ack = renderer
-        .send_attach_offscreen_unacked_for_tests(WIDTH, HEIGHT)
+        .present_thread()
+        .and_then(|thread| thread.send_attach_offscreen_unacked_for_tests(WIDTH, HEIGHT))
         .expect("inline runtime must accept controls");
     runtime.pump();
     ack.try_recv().expect("attach must ack after the pump");
@@ -281,7 +299,8 @@ fn reconfigure_cancels_waiting_packet_before_ack() {
     let (_lock, mut renderer, target) = inline_runtime_or_skip!("invalidation-before-ack");
     let mut runtime = renderer.init_gpu_inline_for_tests(target);
     let ack = renderer
-        .send_attach_offscreen_unacked_for_tests(WIDTH, HEIGHT)
+        .present_thread()
+        .and_then(|thread| thread.send_attach_offscreen_unacked_for_tests(WIDTH, HEIGHT))
         .expect("inline runtime must accept controls");
     runtime.pump();
     ack.try_recv().expect("attach must ack after the pump");
@@ -293,7 +312,10 @@ fn reconfigure_cancels_waiting_packet_before_ack() {
     );
     renderer.note_surface_reconfigured();
     let ack = renderer
-        .send_reconfigure_unacked_for_tests(surface_config(WIDTH * 2, HEIGHT * 2))
+        .present_thread()
+        .and_then(|thread| {
+            thread.send_reconfigure_unacked_for_tests(surface_config(WIDTH * 2, HEIGHT * 2))
+        })
         .expect("inline runtime must accept controls");
     assert!(
         ack.try_recv().is_err(),
@@ -326,7 +348,8 @@ fn drop_surface_cancels_waiting_packet_with_buffers_returned() {
     let (_lock, mut renderer, target) = inline_runtime_or_skip!("drop-surface cancel");
     let mut runtime = renderer.init_gpu_inline_for_tests(target);
     let ack = renderer
-        .send_attach_offscreen_unacked_for_tests(WIDTH, HEIGHT)
+        .present_thread()
+        .and_then(|thread| thread.send_attach_offscreen_unacked_for_tests(WIDTH, HEIGHT))
         .expect("inline runtime must accept controls");
     runtime.pump();
     ack.try_recv().expect("attach must ack after the pump");
@@ -339,7 +362,8 @@ fn drop_surface_cancels_waiting_packet_with_buffers_returned() {
 
     renderer.note_surface_reconfigured();
     let ack = renderer
-        .send_drop_surface_unacked_for_tests()
+        .present_thread()
+        .and_then(PresentThread::send_drop_surface_unacked_for_tests)
         .expect("inline runtime must accept controls");
     runtime.pump();
     assert_eq!(
@@ -370,7 +394,8 @@ fn needs_frame_warmup_reads_present_thread_atomic() {
     let (_lock, mut renderer, target) = inline_runtime_or_skip!("warmup atomic");
     let mut runtime = renderer.init_gpu_inline_for_tests(target);
     let ack = renderer
-        .send_attach_offscreen_unacked_for_tests(WIDTH, HEIGHT)
+        .present_thread()
+        .and_then(|thread| thread.send_attach_offscreen_unacked_for_tests(WIDTH, HEIGHT))
         .expect("inline runtime must accept controls");
     runtime.pump();
     ack.try_recv().expect("attach must ack after the pump");
@@ -400,7 +425,8 @@ fn needs_frame_warmup_reads_present_thread_atomic() {
         std::thread::sleep(Duration::from_millis(5));
     }
     let (atomic_warmup, _, _) = renderer
-        .present_status_snapshot_for_tests()
+        .present_thread()
+        .map(|thread| thread.status_snapshot_for_tests())
         .expect("threaded mode must expose the status snapshot");
     assert!(atomic_warmup);
     assert_eq!(
@@ -422,7 +448,8 @@ fn needs_frame_warmup_reads_present_thread_atomic() {
         std::thread::sleep(Duration::from_millis(5));
     }
     let (atomic_warmup, _, _) = renderer
-        .present_status_snapshot_for_tests()
+        .present_thread()
+        .map(|thread| thread.status_snapshot_for_tests())
         .expect("threaded mode must expose the status snapshot");
     assert_eq!(renderer.needs_frame_warmup(), atomic_warmup);
     assert!(
@@ -469,13 +496,16 @@ fn real_thread_runtime_smoke() {
         "a started present thread names itself where scheduler hints take thread ids"
     );
 
-    renderer.note_surface_reconfigured();
     assert!(
-        renderer.present_reconfigure(surface_config(WIDTH, HEIGHT)),
+        renderer
+            .present_thread()
+            .is_some_and(|thread| thread.reconfigure(surface_config(WIDTH, HEIGHT))),
         "reconfigure must be acknowledged"
     );
     assert!(
-        renderer.present_attach_offscreen_for_tests(WIDTH, HEIGHT),
+        renderer
+            .present_thread()
+            .is_some_and(|thread| thread.attach_offscreen_for_tests(WIDTH, HEIGHT)),
         "offscreen attach must be acknowledged"
     );
     assert_eq!(
@@ -489,7 +519,8 @@ fn real_thread_runtime_smoke() {
         "the real present thread must render against the offscreen target"
     );
     let (_, presented_frames, _) = renderer
-        .present_status_snapshot_for_tests()
+        .present_thread()
+        .map(|thread| thread.status_snapshot_for_tests())
         .expect("threaded mode must expose the status snapshot");
     assert_eq!(presented_frames, 1);
 
@@ -539,7 +570,11 @@ fn a_present_observer_sees_only_surface_presents_and_leaves_with_the_runtime() {
         )
         .expect("present thread must spawn");
     renderer.scene_mut().describe(&direct_graph());
-    assert!(renderer.present_attach_offscreen_for_tests(WIDTH, HEIGHT));
+    assert!(
+        renderer
+            .present_thread()
+            .is_some_and(|thread| thread.attach_offscreen_for_tests(WIDTH, HEIGHT))
+    );
     assert_eq!(
         renderer.publish_frame(WIDTH, HEIGHT),
         PublishOutcome::Published
@@ -670,4 +705,169 @@ fn queued_packets_keep_complete_pixels_while_the_producer_changes_the_scene() {
         drop(start);
         worker.join().expect("consumer thread");
     });
+}
+
+#[test]
+fn a_resize_waits_for_nothing_and_the_frames_after_it_draw_at_the_new_size() {
+    let (_lock, mut renderer, target) = inline_runtime_or_skip!("resize");
+    let mut runtime = renderer.init_gpu_inline_for_tests(target);
+    let ack = renderer
+        .present_thread()
+        .and_then(|thread| thread.send_attach_offscreen_unacked_for_tests(WIDTH, HEIGHT))
+        .expect("inline runtime must accept controls");
+    runtime.pump();
+    ack.try_recv().expect("the offscreen target is attached");
+    renderer.scene_mut().describe(&direct_graph());
+    assert_eq!(
+        renderer.publish_frame(WIDTH, HEIGHT),
+        PublishOutcome::Published
+    );
+
+    // Nothing pumps the inline runtime here: a resize that waited for the
+    // present thread would not return.
+    assert!(
+        renderer
+            .present_thread()
+            .is_some_and(|thread| thread.resize(surface_config(WIDTH * 2, HEIGHT * 2))),
+        "the resize reaches the present thread"
+    );
+    assert_eq!(
+        renderer.publish_frame(WIDTH * 2, HEIGHT * 2),
+        PublishOutcome::Published
+    );
+    runtime.pump();
+    assert_eq!(
+        drain_outcomes(&mut renderer),
+        vec![
+            (1, PresentOutcome::Cancelled(CancelReason::SurfaceEpoch)),
+            (2, PresentOutcome::Presented),
+        ],
+        "the frame built for the old size is refused and the next draws"
+    );
+}
+
+#[test]
+fn an_occluded_window_holds_the_newest_frame_and_draws_it_once_shown() {
+    let (_lock, mut renderer, target) = inline_runtime_or_skip!("occlusion");
+    let mut runtime = renderer.init_gpu_inline_for_tests(target);
+    let ack = renderer
+        .present_thread()
+        .and_then(|thread| thread.send_attach_offscreen_unacked_for_tests(WIDTH, HEIGHT))
+        .expect("inline runtime must accept controls");
+    runtime.pump();
+    ack.try_recv().expect("the offscreen target is attached");
+    renderer.scene_mut().describe(&direct_graph());
+
+    assert!(
+        renderer
+            .present_thread()
+            .is_some_and(|thread| thread.set_occluded(true))
+    );
+    assert_eq!(
+        renderer.publish_frame(WIDTH, HEIGHT),
+        PublishOutcome::Published
+    );
+    runtime.pump();
+    assert!(
+        drain_outcomes(&mut renderer).is_empty(),
+        "an occluded window draws nothing"
+    );
+    renderer.scene_mut().describe(&shadowed_child_graph());
+    assert_eq!(
+        renderer.publish_frame(WIDTH, HEIGHT),
+        PublishOutcome::Published
+    );
+    runtime.pump();
+    assert_eq!(
+        drain_outcomes(&mut renderer),
+        vec![(
+            1,
+            PresentOutcome::Cancelled(CancelReason::SurfaceUnavailable)
+        )],
+        "a newer frame stands in for the one held back"
+    );
+
+    assert!(
+        renderer
+            .present_thread()
+            .is_some_and(|thread| thread.set_occluded(false))
+    );
+    runtime.pump();
+    assert_eq!(
+        drain_outcomes(&mut renderer),
+        vec![(2, PresentOutcome::Presented)],
+        "the held frame draws once the window shows the surface"
+    );
+}
+
+#[test]
+fn a_new_device_takes_over_the_present_thread_and_refuses_older_frames() {
+    let (_lock, mut renderer, target) = inline_runtime_or_skip!("device replacement");
+    let replacement = match gpu_target(wgpu::TextureFormat::Bgra8UnormSrgb) {
+        Ok(target) => target,
+        Err(err) => {
+            eprintln!("skipping device replacement: no second device: {err}");
+            return;
+        }
+    };
+    let mut runtime = renderer.init_gpu_inline_for_tests(target);
+    let ack = renderer
+        .present_thread()
+        .and_then(|thread| thread.send_attach_offscreen_unacked_for_tests(WIDTH, HEIGHT))
+        .expect("inline runtime must accept controls");
+    runtime.pump();
+    ack.try_recv().expect("the offscreen target is attached");
+    renderer.scene_mut().describe(&direct_graph());
+    assert_eq!(
+        renderer.publish_frame(WIDTH, HEIGHT),
+        PublishOutcome::Published
+    );
+
+    assert!(
+        renderer
+            .present_thread()
+            .is_some_and(|thread| thread.replace_device(replacement)),
+        "the new device reaches the present thread"
+    );
+    assert_eq!(
+        renderer.publish_frame(WIDTH, HEIGHT),
+        PublishOutcome::Published
+    );
+    runtime.pump();
+    assert_eq!(
+        drain_outcomes(&mut renderer),
+        vec![
+            (1, PresentOutcome::Cancelled(CancelReason::RendererEpoch)),
+            (2, PresentOutcome::Presented),
+        ],
+        "the frame built for the old device is refused and the next draws on the new one"
+    );
+}
+
+#[test]
+fn a_capture_on_the_present_thread_shows_the_picture_a_capture_in_place_shows() {
+    let (_lock, mut threaded, target) = inline_runtime_or_skip!("threaded capture");
+    let mut in_place = WgpuRenderer::new(&[support::TEST_FONT]);
+    in_place.init_gpu(target.clone());
+    in_place.scene_mut().describe(&shadowed_child_graph());
+    let expected = in_place
+        .capture_frame(WIDTH, HEIGHT)
+        .expect("a capture in place");
+
+    threaded
+        .init_gpu_threaded(target, Arc::new(|| {}), None, None)
+        .expect("present thread must spawn");
+    threaded.scene_mut().describe(&shadowed_child_graph());
+    let captured = threaded
+        .capture_frame(WIDTH, HEIGHT)
+        .expect("a capture on the present thread");
+    assert_eq!(
+        (captured.width, captured.height),
+        (expected.width, expected.height)
+    );
+    assert!(
+        captured.pixels == expected.pixels,
+        "both captures draw the same picture"
+    );
+    threaded.shutdown_present_runtime();
 }

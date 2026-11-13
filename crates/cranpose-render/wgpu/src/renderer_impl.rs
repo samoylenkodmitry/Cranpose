@@ -144,10 +144,7 @@ impl Renderer for WgpuRenderer {
                 status
                     .drew_placeholder
                     .load(std::sync::atomic::Ordering::Relaxed)
-                    && status
-                        .landing
-                        .get()
-                        .is_some_and(|landing| landing.in_flight())
+                    && status.landing_is(crate::pipeline_compiler::Landing::in_flight)
             }
             PresentBackend::None => false,
         }

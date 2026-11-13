@@ -711,9 +711,9 @@ fn resize_android_surface(
     resources.config.width = width;
     resources.config.height = height;
     if present_thread {
-        let renderer = shell.renderer();
-        renderer.note_surface_reconfigured();
-        renderer.present_reconfigure(resources.config.clone());
+        if let Some(thread) = shell.renderer().present_thread() {
+            thread.reconfigure(resources.config.clone());
+        }
         resources.surface_dirty = true;
     } else if let Some(surface) = resources.surface.as_ref() {
         surface.configure(&resources.device, &resources.config);
@@ -1013,10 +1013,8 @@ fn drop_android_surface(
 ) {
     match (gpu_resources.as_mut(), app_shell.as_mut()) {
         (Some(resources), Some(shell)) => {
-            if present_thread {
-                let renderer = shell.renderer();
-                renderer.note_surface_reconfigured();
-                renderer.present_drop_surface();
+            if present_thread && let Some(thread) = shell.renderer().present_thread() {
+                thread.drop_surface();
             }
             resources.surface = None;
             resources.native_window_ptr = None;
@@ -1032,14 +1030,12 @@ fn drop_android_surface(
 /// Gives the present thread the window's new surface, or the new size of
 /// the one it has. Frames published afterwards queue behind it.
 fn hand_surface_to_present_thread(renderer: &mut WgpuRenderer, setup: &mut AndroidGpuSetup) {
-    renderer.note_surface_reconfigured();
-    match setup.surface.take() {
-        Some(surface) => {
-            renderer.present_replace_surface(surface, setup.resources.config.clone());
-        }
-        None => {
-            renderer.present_reconfigure(setup.resources.config.clone());
-        }
+    if let Some(thread) = renderer.present_thread() {
+        let config = setup.resources.config.clone();
+        match setup.surface.take() {
+            Some(surface) => thread.replace_surface(surface, config),
+            None => thread.reconfigure(config),
+        };
     }
     setup.resources.surface_dirty = true;
 }

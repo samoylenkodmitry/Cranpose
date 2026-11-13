@@ -64,7 +64,11 @@ impl App {
             renderer.init_gpu(target);
             return PrimaryPresent::OnLoop(surface);
         }
-        if !renderer.present_replace_surface(surface, config.clone()) {
+        let config = config.clone();
+        if !renderer
+            .present_thread()
+            .is_some_and(|thread| thread.replace_surface(surface, config))
+        {
             log::error!("[present-thread] the present thread took no surface");
         }
         log::info!("[present-thread] the primary window presents on a thread of its own");

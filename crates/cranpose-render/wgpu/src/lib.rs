@@ -63,6 +63,8 @@ mod pipeline_records;
 mod present_observer;
 #[cfg(not(target_arch = "wasm32"))]
 mod present_runtime;
+#[cfg(not(target_arch = "wasm32"))]
+mod present_thread;
 mod record_columns;
 mod render;
 mod rrect_shadow;
@@ -89,9 +91,9 @@ pub use cpu_allocation_stats::DebugCpuAllocationStats;
 use cranpose_render_common::text_fonts::TextFonts;
 use cranpose_ui_graphics::Rect;
 pub use frame_packet::PresentTimings;
-use frame_packet::RenderReturns;
 #[doc(hidden)]
 pub use frame_packet::{CancelReason, PresentOutcome};
+use frame_packet::{CaptureReply, RenderReturns};
 use frontend::RendererFrontend;
 pub use gpu_stats::{FrameDamage, FrameStatsSnapshot as RenderStatsSnapshot, WindowRects};
 pub use gpu_target::{GpuTarget, optional_device_features};
@@ -103,7 +105,9 @@ use pipeline_compiler::PipelineCompilation;
 #[cfg(not(target_arch = "wasm32"))]
 pub use present_observer::PresentObserver;
 #[cfg(not(target_arch = "wasm32"))]
-use present_runtime::{PresentControl, PresentHandle, PresentRuntimeInit};
+use present_runtime::{PresentHandle, PresentRuntimeInit};
+#[cfg(not(target_arch = "wasm32"))]
+pub use present_thread::PresentThread;
 use render::{FrameOutput, FrameSubmit, GpuRenderer, GpuRendererInit};
 pub use render::{
     frame_clear_color, frames_presented, pipelines_created, pipelines_created_off_frame,
@@ -153,6 +157,37 @@ impl PresentBackend {
                     .to_string(),
             )),
         }
+    }
+
+    // Draws `packet` into an image of `viewport` and gives its pixels, with
+    // what the packet hands back.
+    fn capture(
+        &mut self,
+        packet: frame_packet::FramePacket,
+        viewport: (u32, u32),
+        surface_epoch: u64,
+    ) -> CaptureReply {
+        let mut returns = RenderReturns::default();
+        let pixels = match self {
+            Self::Sync(sync) => sync.renderer.render_to_rgba_pixels(
+                &mut sync.submit,
+                viewport,
+                packet,
+                surface_epoch,
+                &mut returns,
+            ),
+            #[cfg(not(target_arch = "wasm32"))]
+            Self::Threaded(handle) => return handle.capture(packet, viewport),
+            Self::None => {
+                let _ = GpuRenderer::cancel_packet(
+                    packet,
+                    CancelReason::SurfaceUnavailable,
+                    &mut returns,
+                );
+                Err("GPU renderer not initialized. Call init_gpu() first.".to_string())
+            }
+        };
+        CaptureReply { returns, pixels }
     }
 }
 
@@ -227,14 +262,6 @@ impl WgpuRenderer {
         }
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
-    fn present_handle_mut(&mut self) -> Option<&mut PresentHandle> {
-        match &mut self.backend {
-            PresentBackend::Threaded(handle) => Some(handle),
-            _ => None,
-        }
-    }
-
     fn retire_live_backend(&mut self) {
         #[allow(unused_mut, reason = "only native targets change the backend")]
         let mut backend = std::mem::replace(&mut self.backend, PresentBackend::None);
@@ -291,16 +318,11 @@ impl WgpuRenderer {
     ) -> GpuRendererInit {
         self.retire_live_backend();
         self.renderer_epoch = self.renderer_epoch.wrapping_add(1);
-        GpuRendererInit {
-            device: target.device,
-            queue: target.queue,
-            surface_format: target.surface_format,
-            adapter_backend: target.adapter_backend,
-            adapter_downlevel: target.adapter_downlevel,
-            renderer_epoch: self.renderer_epoch,
+        target.renderer_init(
+            self.renderer_epoch,
             pipeline_compilation,
-            on_device_lost: self.on_device_lost.clone(),
-        }
+            self.on_device_lost.clone(),
+        )
     }
 
     /// [`init_gpu`][Self::init_gpu] for the threaded present runtime
@@ -567,17 +589,14 @@ impl WgpuRenderer {
     /// Render the current scene into an RGBA pixel buffer with an explicit scale.
     ///
     /// `width` and `height` are in device pixels and `root_scale` is the scale from logical to
-    /// device pixels. Needs a renderer initialized for synchronous rendering.
+    /// device pixels. A renderer that presents on a thread of its own draws it on that thread,
+    /// after the frames handed to it before, and this waits for the pixels.
     pub fn capture_frame_with_scale(
         &mut self,
         width: u32,
         height: u32,
         root_scale: f32,
     ) -> Result<CapturedFrame, WgpuRendererError> {
-        let SyncPresenter {
-            renderer: gpu_renderer,
-            submit,
-        } = self.backend.sync_mut()?;
         let packet = self
             .frontend
             .build_frame_packet_with_scale(
@@ -587,16 +606,11 @@ impl WgpuRenderer {
                 frontend::PacketFor::Capture,
             )
             .ok_or_else(|| WgpuRendererError::Wgpu("scene graph is missing".to_string()))?;
-        let mut returns = RenderReturns::default();
-        let result = gpu_renderer.render_to_rgba_pixels(
-            submit,
-            (width, height),
-            packet,
-            self.surface_epoch,
-            &mut returns,
-        );
+        let CaptureReply { returns, pixels } =
+            self.backend
+                .capture(packet, (width, height), self.surface_epoch);
         self.frontend.apply_returns(returns);
-        let pixels = result.map_err(WgpuRendererError::Wgpu)?;
+        let pixels = pixels.map_err(WgpuRendererError::Wgpu)?;
         Ok(CapturedFrame {
             width,
             height,
@@ -704,66 +718,20 @@ impl WgpuRenderer {
         drained
     }
 
-    /// Threaded mode: install a (re)created surface on the present thread.
-    /// Nothing waits for the present thread to set it up: frames published
-    /// afterwards queue behind it, so the caller composes its next frame
-    /// while the surface is configured. The caller must have bumped the
-    /// surface epoch first (`note_surface_reconfigured`
-    /// [Self::note_surface_reconfigured]) when the message invalidates
-    /// in-flight packets; the message carries the current epoch. Returns
-    /// false when the present thread is gone.
+    /// The thread this renderer hands its frames to, when it presents on one
+    /// ([`init_gpu_threaded`][Self::init_gpu_threaded]); `None` when it
+    /// draws on the calling thread.
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn present_replace_surface(
-        &mut self,
-        surface: wgpu::Surface<'static>,
-        config: wgpu::SurfaceConfiguration,
-    ) -> bool {
-        let surface_epoch = self.surface_epoch;
-        let Some(handle) = self.present_handle_mut() else {
-            log::error!("present_replace_surface called without a threaded present runtime");
-            return false;
+    pub fn present_thread(&mut self) -> Option<PresentThread<'_>> {
+        let PresentBackend::Threaded(handle) = &mut self.backend else {
+            return None;
         };
-        let sent = handle.send_control(PresentControl::ReplaceSurface {
-            surface,
-            config,
-            surface_epoch,
-        });
-        if !sent {
-            log::error!("[present-runtime] replace surface: runtime is gone");
-        }
-        sent
-    }
-
-    /// Threaded mode: reconfigure the present thread's surface (resize)
-    /// and wait for the acknowledgement. Same epoch contract as
-    /// [`present_replace_surface`][Self::present_replace_surface].
-    #[cfg(not(target_arch = "wasm32"))]
-    pub fn present_reconfigure(&mut self, config: wgpu::SurfaceConfiguration) -> bool {
-        let surface_epoch = self.surface_epoch;
-        let Some(handle) = self.present_handle_mut() else {
-            log::error!("present_reconfigure called without a threaded present runtime");
-            return false;
-        };
-        handle.send_control_and_wait(
-            move |ack| PresentControl::Reconfigure {
-                config,
-                surface_epoch,
-                ack,
-            },
-            "reconfigure surface",
-        )
-    }
-
-    /// Threaded mode: drop the present thread's surface (the window died;
-    /// the renderer survives for the next one) and wait for the
-    /// acknowledgement. Bump the epoch first so in-flight packets cancel.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub fn present_drop_surface(&mut self) -> bool {
-        let Some(handle) = self.present_handle_mut() else {
-            log::error!("present_drop_surface called without a threaded present runtime");
-            return false;
-        };
-        handle.send_control_and_wait(|ack| PresentControl::DropSurface { ack }, "drop surface")
+        Some(PresentThread {
+            handle,
+            renderer_epoch: &mut self.renderer_epoch,
+            surface_epoch: &mut self.surface_epoch,
+            on_device_lost: self.on_device_lost.as_ref(),
+        })
     }
 
     /// Threaded mode: drain outstanding returns, stop the present thread
@@ -773,55 +741,6 @@ impl WgpuRenderer {
         if matches!(self.backend, PresentBackend::Threaded(_)) {
             self.retire_live_backend();
         }
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    #[doc(hidden)]
-    pub fn present_attach_offscreen_for_tests(&mut self, width: u32, height: u32) -> bool {
-        let Some(handle) = self.present_handle_mut() else {
-            return false;
-        };
-        handle.send_control_and_wait(
-            move |ack| PresentControl::AttachOffscreenTargetForTests { width, height, ack },
-            "attach offscreen target",
-        )
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    #[doc(hidden)]
-    pub fn send_attach_offscreen_unacked_for_tests(
-        &mut self,
-        width: u32,
-        height: u32,
-    ) -> Option<std::sync::mpsc::Receiver<()>> {
-        let handle = self.present_handle_mut()?;
-        handle.send_control_unacked(move |ack| PresentControl::AttachOffscreenTargetForTests {
-            width,
-            height,
-            ack,
-        })
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    #[doc(hidden)]
-    pub fn send_reconfigure_unacked_for_tests(
-        &mut self,
-        config: wgpu::SurfaceConfiguration,
-    ) -> Option<std::sync::mpsc::Receiver<()>> {
-        let surface_epoch = self.surface_epoch;
-        let handle = self.present_handle_mut()?;
-        handle.send_control_unacked(move |ack| PresentControl::Reconfigure {
-            config,
-            surface_epoch,
-            ack,
-        })
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    #[doc(hidden)]
-    pub fn send_drop_surface_unacked_for_tests(&mut self) -> Option<std::sync::mpsc::Receiver<()>> {
-        let handle = self.present_handle_mut()?;
-        handle.send_control_unacked(|ack| PresentControl::DropSurface { ack })
     }
 
     /// The OS id of the thread that presents frames, once that thread has
@@ -849,26 +768,6 @@ impl WgpuRenderer {
         self.frontend.frame_sequence
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
-    #[doc(hidden)]
-    pub fn present_status_snapshot_for_tests(&self) -> Option<(bool, u64, u64)> {
-        match &self.backend {
-            PresentBackend::Threaded(handle) => {
-                let status = handle.status();
-                Some((
-                    status.warmup_due(),
-                    status
-                        .presented_frames
-                        .load(std::sync::atomic::Ordering::Relaxed),
-                    status
-                        .placeholder_frames
-                        .load(std::sync::atomic::Ordering::Relaxed),
-                ))
-            }
-            _ => None,
-        }
-    }
-
     /// The counters of the most recent frame the renderer drew, or `None` before it drew one.
     pub fn last_frame_stats(&self) -> Option<RenderStatsSnapshot> {
         match &self.backend {
@@ -886,12 +785,18 @@ impl WgpuRenderer {
     /// Whether the pipeline cache file held an earlier launch's first screen,
     /// whose pipelines build ahead of this renderer's first frame; `false`
     /// for a first launch or emptied caches, whose first frame builds its
-    /// pipelines, and for a renderer that does not draw on the calling
-    /// thread.
+    /// pipelines. A present thread answers once it has built its renderer,
+    /// `false` before.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn first_screen_recorded(&self) -> bool {
-        self.sync_gpu_renderer()
-            .is_some_and(GpuRenderer::first_screen_recorded)
+        match &self.backend {
+            PresentBackend::Sync(sync) => sync.renderer.first_screen_recorded(),
+            PresentBackend::Threaded(handle) => handle
+                .status()
+                .first_screen_recorded
+                .load(std::sync::atomic::Ordering::Relaxed),
+            PresentBackend::None => false,
+        }
     }
 
     /// The pipelines this renderer's first screen drew with, encoded for
