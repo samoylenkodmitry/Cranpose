@@ -36,7 +36,8 @@ pub struct Application {
 impl Application {
     /// Composes shared application content at the display's physical resolution.
     /// `density` is physical pixels per point, as reported by the watch.
-    /// The host calls [`Self::set_active`] when the scene enters the foreground.
+    /// The host calls [`Self::set_active`] when the scene enters the foreground
+    /// and [`Self::set_visible`] when it goes to the background or returns.
     pub fn new(
         width: u32,
         height: u32,
@@ -199,7 +200,18 @@ impl Application {
     }
 
     /// Suspends frame production and cancels held touches when leaving the foreground.
+    /// Content sees [`LifecycleState::Paused`](cranpose_services::LifecycleState::Paused)
+    /// while the scene is inactive. The app may still be on the screen then,
+    /// as with the wrist down in Always On.
     pub fn set_active(&mut self, active: bool) {
         self.framebuffer.set_active(active);
+    }
+
+    /// Marks whether the app is on the screen. The host passes `false` when
+    /// the scene goes to the background. Content sees that as
+    /// [`LifecycleState::Stopped`](cranpose_services::LifecycleState::Stopped).
+    /// The host passes `true` when the scene comes back.
+    pub fn set_visible(&mut self, visible: bool) {
+        self.framebuffer.set_visible(visible);
     }
 }

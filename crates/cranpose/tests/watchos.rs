@@ -2,7 +2,7 @@ use std::{
     cell::Cell,
     rc::Rc,
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
     time::Duration,
@@ -117,6 +117,37 @@ fn invalid_surface_and_input_are_rejected() {
     assert_eq!(app.width(), 10);
     assert!(!app.crown(f32::NAN, 0));
     app.touch(99, 0.0, 0.0);
+}
+
+#[test]
+fn an_app_out_of_the_foreground_is_paused_and_one_off_the_screen_is_stopped() {
+    use LifecycleState::{Paused, Resumed, Started, Stopped};
+    let mut app = Application::new(10, 10, 1.0, || {}).expect("surface");
+    // The lifecycle state is the process's: off the screen it is known.
+    app.set_visible(false);
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let sink = Arc::clone(&seen);
+    let _observer = observe_lifecycle(move |event| {
+        sink.lock().expect("events").push(event.to);
+    });
+    let expect = |app: &mut Application, step: fn(&mut Application), states: &[_]| {
+        step(app);
+        let mut seen = seen.lock().expect("events");
+        assert_eq!(seen.as_slice(), states);
+        seen.clear();
+    };
+    // The app comes back to the foreground from the background.
+    expect(&mut app, |app| app.set_active(true), &[Started, Resumed]);
+    // The wrist goes down: the app stays on the screen, and comes back.
+    expect(&mut app, |app| app.set_active(false), &[Paused]);
+    expect(&mut app, |app| app.set_active(true), &[Resumed]);
+    // The watch returns to the clock from the foreground.
+    expect(&mut app, |app| app.set_visible(false), &[Paused, Stopped]);
+    expect(&mut app, |app| app.set_active(false), &[]);
+    // The scene comes back inactive, then active.
+    expect(&mut app, |app| app.set_visible(true), &[Started]);
+    expect(&mut app, |app| app.set_visible(true), &[]);
+    expect(&mut app, |app| app.set_active(true), &[Resumed]);
 }
 
 #[test]

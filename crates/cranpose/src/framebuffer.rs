@@ -57,6 +57,14 @@ pub enum NextTick {
     OnWake,
 }
 
+// Where the display stands, from off the screen to the foreground.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum Presence {
+    Hidden,
+    Shown,
+    Active,
+}
+
 /// One composition that the CPU draws, area by area, for a display the host
 /// owns.
 ///
@@ -67,7 +75,7 @@ pub struct Framebuffer {
     width: u32,
     height: u32,
     density: f32,
-    active: bool,
+    presence: Presence,
     needs_present: bool,
     picture: u64,
     drawn_picture: Option<u64>,
@@ -132,7 +140,7 @@ impl Framebuffer {
             width,
             height,
             density,
-            active: false,
+            presence: Presence::Shown,
             needs_present: true,
             picture: 0,
             drawn_picture: None,
@@ -178,7 +186,7 @@ impl Framebuffer {
     /// Advances the frame clock to `elapsed_nanos` since launch. Returns
     /// whether the picture changed, so the host should present a new frame.
     pub fn tick(&mut self, elapsed_nanos: u64) -> bool {
-        if !self.active {
+        if !self.active() {
             return false;
         }
         let result = self.shell.update_at_frame_time_nanos(elapsed_nanos);
@@ -200,7 +208,7 @@ impl Framebuffer {
     /// Runs the tasks woken since they last ran and says when the host must
     /// tick next. An inactive composition needs no tick.
     pub fn next_tick(&mut self) -> NextTick {
-        if !self.active {
+        if !self.active() {
             return NextTick::OnWake;
         }
         self.run_pending_tasks();
@@ -290,7 +298,7 @@ impl Framebuffer {
     /// Routes one touch sample at `x`, `y` in display points. Non-finite
     /// coordinates are ignored.
     pub fn touch(&mut self, phase: TouchPhase, x: f32, y: f32) {
-        if !self.active || !x.is_finite() || !y.is_finite() {
+        if !self.active() || !x.is_finite() || !y.is_finite() {
             return;
         }
         match phase {
@@ -312,25 +320,58 @@ impl Framebuffer {
     /// conversion. `elapsed_millis` is the time since launch. Returns whether
     /// a scrollable took the input.
     pub fn rotary(&mut self, delta: f32, elapsed_millis: u64) -> bool {
-        if !self.active || !delta.is_finite() {
+        if !self.active() || !delta.is_finite() {
             return false;
         }
         self.shell.rotary_scrolled_by_detents(delta, elapsed_millis)
     }
 
     /// Suspends frame production and cancels held touches when the display
-    /// leaves the foreground, and resumes it when it returns.
+    /// leaves the foreground. Frames resume when it returns. Content sees
+    /// [`LifecycleState::Paused`] and [`LifecycleState::Resumed`]. A display
+    /// that enters the foreground is also on the screen again.
     pub fn set_active(&mut self, active: bool) {
-        if self.active == active {
-            return;
+        match (active, self.presence) {
+            (true, _) => self.present(Presence::Active),
+            (false, Presence::Active) => self.present(Presence::Shown),
+            (false, Presence::Shown | Presence::Hidden) => {}
         }
-        self.active = active;
-        if active {
-            self.needs_present = true;
-            dispatch_lifecycle_state(LifecycleState::Resumed);
-        } else {
-            self.shell.cancel_gesture();
-            dispatch_lifecycle_state(LifecycleState::Paused);
+    }
+
+    /// Marks whether the display shows the composition. A display out of
+    /// the foreground may stay on the screen, as a watch app does with the
+    /// wrist down. Content sees [`LifecycleState::Stopped`] once the display
+    /// leaves the screen and [`LifecycleState::Started`] when it returns. A
+    /// display that leaves the screen also leaves the foreground. A display
+    /// starts on the screen.
+    pub fn set_visible(&mut self, visible: bool) {
+        match (visible, self.presence) {
+            (false, _) => self.present(Presence::Hidden),
+            (true, Presence::Hidden) => self.present(Presence::Shown),
+            (true, Presence::Shown | Presence::Active) => {}
+        }
+    }
+
+    fn active(&self) -> bool {
+        self.presence == Presence::Active
+    }
+
+    // One step at a time, so content sees each lifecycle state in between.
+    fn present(&mut self, to: Presence) {
+        while self.presence != to {
+            let (next, state) = match (self.presence, to > self.presence) {
+                (Presence::Hidden, _) => (Presence::Shown, LifecycleState::Started),
+                (Presence::Shown, true) => (Presence::Active, LifecycleState::Resumed),
+                (Presence::Shown, false) => (Presence::Hidden, LifecycleState::Stopped),
+                (Presence::Active, _) => (Presence::Shown, LifecycleState::Paused),
+            };
+            match next {
+                Presence::Active => self.needs_present = true,
+                Presence::Shown if self.presence == Presence::Active => self.shell.cancel_gesture(),
+                Presence::Shown | Presence::Hidden => {}
+            }
+            self.presence = next;
+            dispatch_lifecycle_state(state);
         }
     }
 

@@ -51,6 +51,21 @@ generated workspace at a checkout. Published app manifests use the resolved
 published dependency. The generated runner starts with app features disabled;
 pass `--features` to select app features.
 
+## Lifecycle
+
+The host passes the SwiftUI scene phase to the composition as a lifecycle
+state. An active scene is `LifecycleState::Resumed`. An inactive scene is
+`Paused`: the app is out of the foreground and may still be on the screen.
+With the wrist down the app stays in front, dimmed in Always On or with the
+screen off, until the watch returns to the clock. That takes two minutes by
+default and at most an hour, as the wearer sets under Return to Clock. While
+paused, frames stop and touches go nowhere, so the screen keeps the last
+picture. A scene in the background is `Stopped`: the wearer pressed the
+Digital Crown, opened another app or the watch returned to the clock. Coming
+back, the app passes through `Started` to `Resumed`. watchOS suspends an app
+in the background unless the app runs a background session, such as a
+workout.
+
 ## Crown
 
 The crown reaches the app through SwiftUI's `digitalCrownRotation`, at medium
