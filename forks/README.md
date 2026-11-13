@@ -23,18 +23,19 @@ while it gains enough to justify the fork; each one is offered upstream.
 
 Upstream: <https://github.com/gfx-rs/wgpu>, commit
 `40f4a34ebaf56f9a046231f54125ad046239d3f3` (`wgpu-hal` 30.0.1).
-`cranpose-wgpu-hal` is at 30.0.21 for the catch-up barrier, the Metal
+`cranpose-wgpu-hal` is at 30.0.22 for the catch-up barrier, the Metal
 pipeline switch, the dedicated Vulkan allocations, the GL point size, the
 GL state tracker, the web surface usages, the boxed GL copy commands, the
 Vulkan command pools that give a burst's memory back, the GL shaders
 without the branches their constants decide, the GL program status read
 only on failure, the GLSL templates, the GL link reads, the WebGL
-extensions, the GL varying minimum, the presentable image identities and
-the WebGL frames drawn into the canvas below. `cranpose-wgpu-core` is at
-30.0.23 to require those, to make
+extensions, the GL varying minimum, the presentable image identities, the
+WebGL frames drawn into the canvas and the Metal occlusion check on the
+main thread below. `cranpose-wgpu-core` is at
+30.0.24 to require those, to make
 template modules, to configure a surface while another thread submits, to
 let Vulkan pipelines drop their shader modules and to hand presented
-images back as they presented. `cranpose-wgpu` is at 30.0.26 for
+images back as they presented. `cranpose-wgpu` is at 30.0.27 for
 the WebGPU pipeline discovery, the background compiles, the pipeline
 readiness and the kept swapchain images below and to require them.
 
@@ -512,6 +513,17 @@ yet.
 On a Mate 20 X (Mali-G76, 4 images, FIFO) every frame of a probe that drew
 a part of the window into a kept image read back equal to the frame drawn
 whole (36 of 36).
+
+### Metal reads a window's occlusion only on the main thread
+
+Upstream's Metal `acquire_texture` asks the window that hosts the layer
+whether it is visible before it takes a drawable (gfx-rs/wgpu#8309: an
+occluded window's `nextDrawable` can stall a second). It reaches the
+window through the layer's `NSView` and reads `NSWindow.occlusionState`,
+and both belong to AppKit's main thread. Cranpose presents from a thread
+of its own, so the check runs only on the main thread. A caller that
+acquires on another thread reads the occlusion on the main thread and
+takes no image while the window is occluded.
 
 ### Update the fork
 

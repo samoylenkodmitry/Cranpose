@@ -357,11 +357,20 @@ impl crate::Surface for super::Surface {
             // When the window is occluded on macOS, presented drawables get stuck waiting
             // for vsync. Check the window's occlusion state and skip acquisition if
             // the window is not visible - this avoids a 1-second hang in nextDrawable().
+            //
+            // `NSView` and `NSWindow` belong to the main thread. A surface that
+            // presents from another thread leaves the check to its caller, which
+            // reads the window's occlusion on the main thread and takes no image
+            // while the window is occluded.
             use objc2::rc::Retained;
 
             // The CAMetalLayer is typically a sublayer; find the hosting window
             // and skip acquisition while it is occluded.
-            if let Some(window) = hosting_window(Retained::into_super(render_layer.clone())) {
+            let main_thread = objc2::MainThreadMarker::new().is_some();
+            if let Some(window) = main_thread
+                .then(|| hosting_window(Retained::into_super(render_layer.clone())))
+                .flatten()
+            {
                 const NS_WINDOW_OCCLUSION_STATE_VISIBLE: usize = 1 << 1;
                 let occlusion_state: usize = unsafe { objc2::msg_send![&*window, occlusionState] };
                 if occlusion_state & NS_WINDOW_OCCLUSION_STATE_VISIBLE == 0 {
