@@ -558,6 +558,9 @@ pub(crate) struct CompositorScene {
     pub effect_layers: Vec<EffectLayer>,
     pub backdrop_layers: Vec<BackdropLayer>,
     pub next_z: usize,
+    // The frames in a row whose draws took less than a quarter of the
+    // lists' room.
+    roomy_frames: u8,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -573,6 +576,8 @@ pub(crate) struct SceneCapacityHint {
 }
 
 const SCENE_BUFFER_POOL_LIMIT: usize = 4;
+const ROOMY_FRAMES: u8 = 8;
+const ROOM_KEPT: usize = 64 * 1024;
 
 pub(crate) struct SceneBuffers {
     runs: Vec<RunDraw>,
@@ -621,6 +626,11 @@ impl Drop for CompositorScene {
             if pool.len() >= SCENE_BUFFER_POOL_LIMIT {
                 pool.remove(0);
             }
+            // The next scene takes the room recent frames took, not the room
+            // of the largest frame the lists ever held.
+            if self.roomy() {
+                self.give_back_room();
+            }
             self.clear();
             pool.push(SceneBuffers {
                 runs: std::mem::take(&mut self.runs),
@@ -662,6 +672,7 @@ impl CompositorScene {
                 effect_layers: buffers.effect_layers,
                 backdrop_layers: buffers.backdrop_layers,
                 next_z: 0,
+                roomy_frames: 0,
             };
         }
         Self {
@@ -679,6 +690,7 @@ impl CompositorScene {
             effect_layers: Vec::with_capacity(hint.effect_layers),
             backdrop_layers: Vec::with_capacity(hint.backdrop_layers),
             next_z: 0,
+            roomy_frames: 0,
         }
     }
 
@@ -693,6 +705,63 @@ impl CompositorScene {
             effect_layers: self.effect_layers.len(),
             backdrop_layers: self.backdrop_layers.len(),
         }
+    }
+
+    // Gives back the room a burst of draws left in the lists, once eight
+    // frames in a row drew into less than a quarter of it: a scene kept
+    // while frames go on, which no rest trims, would hold for good the room
+    // of the largest frame it ever carried. Called with the frame's draws
+    // still in the lists.
+    pub(crate) fn settle_room(&mut self) {
+        if !self.roomy() {
+            self.roomy_frames = 0;
+            return;
+        }
+        self.roomy_frames += 1;
+        if self.roomy_frames < ROOMY_FRAMES {
+            return;
+        }
+        self.roomy_frames = 0;
+        self.give_back_room();
+    }
+
+    // Gives back the room past the lists' draws, past an eighth of them.
+    fn give_back_room(&mut self) {
+        self.runs.trim_growth_slack();
+        self.images.trim_growth_slack();
+        self.texts.trim_growth_slack();
+        self.shadow_draws.trim_growth_slack();
+        self.rrect_shadows.trim_growth_slack();
+        self.draw_ops.trim_growth_slack();
+        self.effect_layers.trim_growth_slack();
+        self.backdrop_layers.trim_growth_slack();
+    }
+
+    // Whether the lists keep more than four times the room the frame's
+    // draws take, and more than `ROOM_KEPT`.
+    fn roomy(&self) -> bool {
+        let (used, kept) = self.room();
+        kept > ROOM_KEPT && kept > used.saturating_mul(4)
+    }
+
+    // The bytes the lists' draws take, and the bytes of room they keep.
+    fn room(&self) -> (usize, usize) {
+        fn bytes<T>(list: &Vec<T>) -> (usize, usize) {
+            let size = size_of::<T>();
+            (list.len() * size, list.capacity() * size)
+        }
+        [
+            bytes(&self.runs),
+            bytes(&self.images),
+            bytes(&self.texts),
+            bytes(&self.shadow_draws),
+            bytes(&self.rrect_shadows),
+            bytes(&self.draw_ops),
+            bytes(&self.effect_layers),
+            bytes(&self.backdrop_layers),
+        ]
+        .into_iter()
+        .fold((0, 0), |(used, kept), (u, k)| (used + u, kept + k))
     }
 
     pub(crate) fn clear(&mut self) {

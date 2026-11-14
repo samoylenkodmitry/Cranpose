@@ -33,6 +33,7 @@ impl LayerSceneRecycler {
         while let Some(child) = scene.children.pop() {
             self.recycle(child.content);
         }
+        scene.scene.settle_room();
         scene.scene.clear();
         scene.has_backdrop = false;
         scene.shown.clear();
