@@ -13,10 +13,7 @@ pub(super) fn image_rect(draw: &ImageDraw) -> Rect {
     if let Some(transform) = draw.transform {
         return transform.bounds_for_rect(draw.rect);
     }
-    let snap_delta = draw
-        .snap_anchor
-        .map(snap_delta_for_anchor)
-        .unwrap_or_default();
+    let snap_delta = draw.snap_anchor.map_or_default(snap_delta_for_anchor);
     draw.rect.translate(snap_delta.x, snap_delta.y)
 }
 

@@ -1435,8 +1435,7 @@ impl Composer {
             }
             let retention_mode = subtree
                 .root_scope()
-                .map(RecomposeScope::retention_mode)
-                .unwrap_or_default();
+                .map_or_default(RecomposeScope::retention_mode);
             match retention_mode {
                 RetentionMode::DisposeWhenInactive => {
                     self.dispose_detached_subtree_in_host(slots_host, subtree)?;

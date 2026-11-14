@@ -280,9 +280,7 @@ where
     /// Answers whether focus moved.
     pub fn move_focus_in_context(&mut self, direction: FocusDirection) -> bool {
         let order = self.with_layout_tree(|layout_tree| {
-            layout_tree
-                .map(cranpose_ui::collect_focus_order)
-                .unwrap_or_default()
+            layout_tree.map_or_default(cranpose_ui::collect_focus_order)
         });
         self.move_focus_in_order(order, direction)
     }

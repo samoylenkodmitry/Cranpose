@@ -125,11 +125,10 @@ fn initial_destination() -> usize {
 fn initial_tint_amount() -> GlassTintAmount {
     std::env::var("REFERENCE_MATERIAL_PROFILE")
         .ok()
-        .map(|value| {
+        .map_or_default(|value| {
             GlassTintAmount::from_percent(value.parse().expect("numeric tint percentage"))
                 .expect("valid tint percentage")
         })
-        .unwrap_or_default()
 }
 
 #[composable]

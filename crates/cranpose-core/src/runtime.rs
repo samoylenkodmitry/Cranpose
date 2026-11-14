@@ -1057,23 +1057,19 @@ impl RuntimeHandle {
     pub fn debug_stats(&self) -> RuntimeDebugStats {
         self.inner
             .upgrade()
-            .map(|inner| inner.debug_stats())
-            .unwrap_or_default()
+            .map_or_default(|inner| inner.debug_stats())
     }
 
     /// Returns the id and label of every spawned UI task that has not finished.
     pub fn live_ui_task_labels(&self) -> Vec<(u64, String)> {
-        self.inner
-            .upgrade()
-            .map(|inner| {
-                inner
-                    .tasks
-                    .borrow()
-                    .iter()
-                    .map(|(id, entry)| (id, entry.label.to_string()))
-                    .collect()
-            })
-            .unwrap_or_default()
+        self.inner.upgrade().map_or_default(|inner| {
+            inner
+                .tasks
+                .borrow()
+                .iter()
+                .map(|(id, entry)| (id, entry.label.to_string()))
+                .collect()
+        })
     }
 
     /// Marks the runtime as needing a frame and asks its scheduler for one.
@@ -1249,8 +1245,7 @@ impl RuntimeHandle {
     pub(crate) fn take_updates(&self) -> Vec<Command> {
         self.inner
             .upgrade()
-            .map(|inner| inner.take_updates())
-            .unwrap_or_default()
+            .map_or_default(|inner| inner.take_updates())
     }
 
     /// Returns `true` if node updates are queued or any recompose scope is invalid.
@@ -1319,16 +1314,14 @@ impl RuntimeHandle {
     fn live_recompose_scope_count(&self) -> usize {
         self.inner
             .upgrade()
-            .map(|inner| inner.live_recompose_scope_count())
-            .unwrap_or_default()
+            .map_or_default(|inner| inner.live_recompose_scope_count())
     }
 
     #[doc(hidden)]
     pub fn debug_invalid_scope_ids(&self) -> Vec<usize> {
         self.inner
             .upgrade()
-            .map(|inner| inner.queued_invalid_scope_ids())
-            .unwrap_or_default()
+            .map_or_default(|inner| inner.queued_invalid_scope_ids())
     }
 
     /// Returns `true` if any frame callback, transient or perpetual, is waiting.

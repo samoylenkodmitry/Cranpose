@@ -29,7 +29,7 @@ pub fn set_rare<T: RareProperties>(slot: &mut Option<Box<T>>, properties: T) {
 /// Changes the properties `slot` holds in place, then stores them the way
 /// [`set_rare`] does.
 pub fn update_rare<T: RareProperties>(slot: &mut Option<Box<T>>, update: impl FnOnce(&mut T)) {
-    let mut properties = slot.as_deref_mut().map(std::mem::take).unwrap_or_default();
+    let mut properties = slot.as_deref_mut().map_or_default(std::mem::take);
     update(&mut properties);
     set_rare(slot, properties);
 }

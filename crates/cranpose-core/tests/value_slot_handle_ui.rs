@@ -38,13 +38,22 @@ fn run_compile_fail_case(test_name: &str, fixture: &str, expected_fragments: &[&
     let wrapped_source = format!("pub use cranpose_core::*;\n{source}");
     let temp_source_path = temp.dir.join("case.rs");
     fs::write(&temp_source_path, wrapped_source).expect("write wrapped compile-fail source");
-    let deps_dir = resolve_deps_dir();
-    let core_artifact = find_artifact(&deps_dir, "libcranpose_core-", &["rlib"]);
+    let unit_dirs = build_unit_dirs();
+    let core_artifact = find_artifact(&unit_dirs, "libcranpose_core-", &["rlib"]);
     let macros_artifact = find_artifact(
-        &deps_dir,
+        &unit_dirs,
         "libcranpose_macros-",
         &[env::consts::DLL_EXTENSION],
     );
+    let search_paths = temp.dir.join("search_paths.rustc");
+    fs::write(
+        &search_paths,
+        unit_dirs
+            .iter()
+            .map(|dir| format!("-Ldependency={}\n", dir.display()))
+            .collect::<String>(),
+    )
+    .expect("write the dependency search paths");
 
     let rustc = env::var("RUSTC").unwrap_or_else(|_| "rustc".to_owned());
     let output = Command::new(rustc)
@@ -56,8 +65,7 @@ fn run_compile_fail_case(test_name: &str, fixture: &str, expected_fragments: &[&
         .arg("bin")
         .arg("--out-dir")
         .arg(temp.dir.join("out"))
-        .arg("-L")
-        .arg(format!("dependency={}", deps_dir.display()))
+        .arg(format!("@{}", search_paths.display()))
         .arg("--extern")
         .arg(format!("cranpose_core={}", core_artifact.display()))
         .arg("--extern")
@@ -84,9 +92,13 @@ fn run_compile_fail_case(test_name: &str, fixture: &str, expected_fragments: &[&
     }
 }
 
-fn find_artifact(dir: &Path, prefix: &str, extensions: &[&str]) -> PathBuf {
-    let mut candidates = fs::read_dir(dir)
-        .unwrap_or_else(|err| panic!("read artifact dir `{}`: {err}", dir.display()))
+fn find_artifact(dirs: &[PathBuf], prefix: &str, extensions: &[&str]) -> PathBuf {
+    let mut candidates = dirs
+        .iter()
+        .flat_map(|dir| {
+            fs::read_dir(dir)
+                .unwrap_or_else(|err| panic!("read artifact dir `{}`: {err}", dir.display()))
+        })
         .filter_map(Result::ok)
         .map(|entry| entry.path())
         .filter(|path| {
@@ -113,21 +125,36 @@ fn find_artifact(dir: &Path, prefix: &str, extensions: &[&str]) -> PathBuf {
     });
     candidates
         .pop()
-        .unwrap_or_else(|| panic!("missing artifact `{prefix}*` in `{}`", dir.display()))
+        .unwrap_or_else(|| panic!("missing artifact `{prefix}*` in the build directory"))
 }
 
-fn resolve_deps_dir() -> PathBuf {
+// Cargo puts each compilation unit's output in `<profile>/build/<package>/<hash>/out`, and
+// this test executable is one of those units.
+fn build_unit_dirs() -> Vec<PathBuf> {
     let current_exe = env::current_exe().expect("resolve current test executable");
-    let deps_dir = current_exe
-        .parent()
-        .expect("current test executable has a parent directory")
-        .to_path_buf();
-    assert!(
-        deps_dir.file_name().and_then(|name| name.to_str()) == Some("deps"),
-        "test executable `{}` is not in a Cargo deps directory",
-        current_exe.display()
-    );
-    deps_dir
+    let build_dir = current_exe
+        .ancestors()
+        .nth(4)
+        .filter(|dir| dir.file_name().and_then(|name| name.to_str()) == Some("build"))
+        .unwrap_or_else(|| {
+            panic!(
+                "test executable `{}` is not in a Cargo build directory",
+                current_exe.display()
+            )
+        });
+    let subdirs = |dir: &Path| {
+        fs::read_dir(dir)
+            .unwrap_or_else(|err| panic!("read build dir `{}`: {err}", dir.display()))
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .collect::<Vec<_>>()
+    };
+    subdirs(build_dir)
+        .iter()
+        .flat_map(|package| subdirs(package))
+        .map(|unit| unit.join("out"))
+        .filter(|out| out.is_dir())
+        .collect()
 }
 
 #[test]

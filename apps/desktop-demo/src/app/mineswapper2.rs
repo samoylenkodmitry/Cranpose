@@ -475,15 +475,12 @@ pub fn mineswapper2_tab() {
                                                 game_state.update(|game| game.reveal(x, y));
                                             }
                                         },
-                                        {
-                                            let display_text = display.clone();
-                                            move || {
-                                                Text(
-                                                    display_text.clone(),
-                                                    Modifier::empty().padding(4.0),
-                                                    TextStyle::default(),
-                                                );
-                                            }
+                                        move || {
+                                            Text(
+                                                display.clone(),
+                                                Modifier::empty().padding(4.0),
+                                                TextStyle::default(),
+                                            );
                                         },
                                     );
                                 }

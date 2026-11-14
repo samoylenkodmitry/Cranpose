@@ -188,7 +188,7 @@ fn observers() -> &'static Mutex<Vec<(u64, Observer)>> {
 
 /// The latest reading.
 pub fn heart_rate() -> HeartRate {
-    slot().lock().map(|reading| *reading).unwrap_or_default()
+    slot().lock().map_or_default(|reading| *reading)
 }
 
 /// Publishes a reading. Backends call this from whichever thread the
@@ -205,8 +205,7 @@ pub fn publish_heart_rate(reading: HeartRate) {
     }
     let listeners: Vec<Observer> = observers()
         .lock()
-        .map(|observers| observers.iter().map(|(_, o)| Arc::clone(o)).collect())
-        .unwrap_or_default();
+        .map_or_default(|observers| observers.iter().map(|(_, o)| Arc::clone(o)).collect());
     for observer in listeners {
         observer(reading);
     }

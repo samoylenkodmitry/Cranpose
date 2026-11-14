@@ -353,8 +353,7 @@ impl<'a> SubcomposeMeasureScopeImpl<'a> {
                     compose_subcompose_slot_content(content_holder);
                 })
             })
-            .map(|((), scopes)| scopes)
-            .unwrap_or_default();
+            .map_or_default(|((), scopes)| scopes);
         self.pending_commands_applied = false;
 
         let owner_epoch = self.owner_chain_deactivation_epoch();

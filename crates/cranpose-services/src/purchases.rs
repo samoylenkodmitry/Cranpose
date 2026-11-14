@@ -357,15 +357,12 @@ pub fn observe_store_news(listener: impl Fn() + 'static) -> StoreObserver {
 /// Tells the app that the store has news. Called by a purchase backend.
 pub fn note_store_news() {
     #[cfg(not(target_arch = "wasm32"))]
-    let listeners = store_listeners()
-        .lock()
-        .map(|listeners| {
-            listeners
-                .iter()
-                .map(|(_, listener)| Arc::clone(listener))
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
+    let listeners = store_listeners().lock().map_or_default(|listeners| {
+        listeners
+            .iter()
+            .map(|(_, listener)| Arc::clone(listener))
+            .collect::<Vec<_>>()
+    });
     #[cfg(target_arch = "wasm32")]
     let listeners = crate::thread_state::with(|state| state.store_listeners.all());
     for listener in listeners {

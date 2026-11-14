@@ -45,8 +45,7 @@ pub(crate) fn run_draw_bounds(run: &RunDraw, root_scale: f32) -> Option<Rect> {
     let snap_delta = run
         .placement
         .snap_anchor
-        .map(|anchor| snap_delta_for_anchor(anchor, root_scale))
-        .unwrap_or_default();
+        .map_or_default(|anchor| snap_delta_for_anchor(anchor, root_scale));
     clipped_bounds(
         run.bounds.translate(snap_delta.x, snap_delta.y),
         run.placement.clip,

@@ -169,7 +169,7 @@ pub(crate) fn hide_from_reader() {
 
 /// Reads the mirror in place. `f` must not lock it again.
 fn with_mirror<R: Default>(f: impl FnOnce(&Mirror) -> R) -> R {
-    mirror().lock().map(|m| f(&m)).unwrap_or_default()
+    mirror().lock().map_or_default(|m| f(&m))
 }
 
 type CaretGeom = cranpose_ui::text_field_focus::ImeCaretGeometry;
@@ -186,7 +186,7 @@ pub(crate) fn set_caret_geometry(geometry: CaretGeom) {
 }
 
 fn read_caret_geom() -> CaretGeom {
-    caret_geom().lock().map(|g| g.clone()).unwrap_or_default()
+    caret_geom().lock().map_or_default(|g| g.clone())
 }
 
 fn character_for_byte(text: &str, byte: usize) -> usize {
@@ -222,10 +222,7 @@ fn ops() -> &'static Mutex<Vec<ImeOp>> {
 }
 
 pub(crate) fn take_ime_ops() -> Vec<ImeOp> {
-    ops()
-        .lock()
-        .map(|mut q| std::mem::take(&mut *q))
-        .unwrap_or_default()
+    ops().lock().map_or_default(|mut q| std::mem::take(&mut *q))
 }
 
 type WakeFn = Box<dyn Fn() + Send + Sync>;
@@ -587,7 +584,7 @@ define_class!(
 
         #[unsafe(method(setMarkedText:selectedRange:))]
         fn set_marked_text_selected_range(&self, marked: Option<&NSString>, _sel: NSRange) {
-            let text = marked.map(ToString::to_string).unwrap_or_default();
+            let text = marked.map_or_default(ToString::to_string);
             let sel = with_mirror(|m| m.sel);
             apply_replace(sel.0, sel.1, &text);
         }

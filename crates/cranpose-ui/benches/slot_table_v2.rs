@@ -455,8 +455,7 @@ impl LazyListScrollFixture {
         let first_visible = layout_info
             .visible_items_info
             .first()
-            .map(|item| item.index)
-            .unwrap_or_default();
+            .map_or_default(|item| item.index);
         black_box((
             first_visible,
             stats.items_in_use,

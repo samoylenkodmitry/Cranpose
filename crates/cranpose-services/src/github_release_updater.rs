@@ -113,13 +113,12 @@ impl GitHubRelease {
         let assets = value
             .get("assets")
             .and_then(serde_json::Value::as_array)
-            .map(|assets| {
+            .map_or_default(|assets| {
                 assets
                     .iter()
                     .filter_map(GitHubReleaseAsset::from_json)
                     .collect()
-            })
-            .unwrap_or_default();
+            });
         Some(Self {
             tag_name,
             notes,

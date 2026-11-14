@@ -214,8 +214,7 @@ impl PixelsRenderer {
         let mut raster = picture
             .rewrite
             .as_mut()
-            .map(|rewrite| rewrite.take_storage())
-            .unwrap_or_default();
+            .map_or_default(|rewrite| rewrite.take_storage());
         self.fill_raster_scene(&mut raster, scale, picture.raster.as_ref());
         changed.clear();
         match picture.raster.as_ref() {

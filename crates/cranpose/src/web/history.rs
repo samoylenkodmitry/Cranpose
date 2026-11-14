@@ -34,8 +34,7 @@ impl BrowserHistory for WebHistory {
     fn fragment(&self) -> String {
         web_sys::window()
             .and_then(|window| window.location().hash().ok())
-            .map(|hash| hash.strip_prefix('#').unwrap_or(&hash).to_owned())
-            .unwrap_or_default()
+            .map_or_default(|hash| hash.strip_prefix('#').unwrap_or(&hash).to_owned())
     }
 
     fn depth(&self) -> Option<usize> {

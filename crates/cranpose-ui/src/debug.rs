@@ -160,11 +160,7 @@ pub fn format_modifier_chain(
     .ok();
     for node in nodes {
         let indent = "  ".repeat(node.depth);
-        let inspector = node
-            .inspector
-            .as_ref()
-            .map(describe_inspector)
-            .unwrap_or_default();
+        let inspector = node.inspector.as_ref().map_or_default(describe_inspector);
         let inspector_suffix = if inspector.is_empty() {
             String::new()
         } else {

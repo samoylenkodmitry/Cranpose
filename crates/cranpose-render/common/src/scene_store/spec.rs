@@ -101,12 +101,10 @@ fn restyled(
     resized_or_flagged(store, record, layer.size, flags)
         || store.graphics_layer(record) != layer.graphics_layer.get()
         || props.and_then(|props| props.layer_bounds) != layer_bounds
-        || props
-            .map(|props| props.translated_content_offset)
-            .unwrap_or_default()
+        || props.map_or_default(|props| props.translated_content_offset)
             != layer.translated_content_offset
-        || props.map(|props| props.isolation).unwrap_or_default() != layer.isolation
-        || props.map(|props| props.cache_policy).unwrap_or_default() != layer.cache_policy
+        || props.map_or_default(|props| props.isolation) != layer.isolation
+        || props.map_or_default(|props| props.cache_policy) != layer.cache_policy
 }
 
 // Whether `record` takes another size or other flags than `size` and `flags`.

@@ -566,10 +566,7 @@ impl WgpuFrameGraphExecutor {
     }
 
     pub(crate) fn pass_timing_report(&self) -> GpuPassTimingReport {
-        self.pass_timer
-            .as_ref()
-            .map(PassTimer::report)
-            .unwrap_or_default()
+        self.pass_timer.as_ref().map_or_default(PassTimer::report)
     }
 
     pub(crate) fn retained_texture_count(&self) -> usize {

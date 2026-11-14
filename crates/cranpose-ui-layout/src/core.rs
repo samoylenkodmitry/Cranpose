@@ -161,7 +161,7 @@ pub trait Measurable {
     /// The default preserves the older `flex_parent_data` customization
     /// point so existing custom measurables continue to provide weights.
     fn parent_data(&self) -> ParentData {
-        self.flex_parent_data().map(Into::into).unwrap_or_default()
+        self.flex_parent_data().map_or_default(Into::into)
     }
 }
 

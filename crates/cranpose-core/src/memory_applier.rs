@@ -808,8 +808,7 @@ impl MemoryApplier {
                 .state
                 .physical_warm_recycled_origins
                 .get_mut(physical_id)
-                .map(std::mem::take)
-                .unwrap_or_default();
+                .map_or_default(std::mem::take);
             self.push_recycled_node(
                 key,
                 recycle_pool_limit,

@@ -195,8 +195,7 @@ pub(crate) fn ime_key_event(
             .ok()
             .and_then(char::from_u32)
             .filter(|ch| *ch != '\0' && !ch.is_control())
-            .map(|ch| ch.to_string())
-            .unwrap_or_default()
+            .map_or_default(|ch| ch.to_string())
     } else {
         String::new()
     };

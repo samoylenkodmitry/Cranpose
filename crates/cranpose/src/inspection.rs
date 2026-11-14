@@ -148,9 +148,7 @@ pub fn snapshot(tree: Option<&LayoutTree>, request_id: u64, node_budget: usize) 
         truncated: false,
         nodes: Vec::new(),
     };
-    let mut stack = tree
-        .map(|tree| vec![(tree.root(), None)])
-        .unwrap_or_default();
+    let mut stack = tree.map_or_default(|tree| vec![(tree.root(), None)]);
     while let Some((layout, parent)) = stack.pop() {
         if result.nodes.len() == node_budget {
             result.truncated = true;
@@ -171,8 +169,7 @@ fn capture(layout: &LayoutBox, parent: Option<String>) -> Node {
         .node_data
         .modifier_slices
         .text_content()
-        .map(|text| text.to_string())
-        .unwrap_or_default();
+        .map_or_default(|text| text.to_string());
     let kind = if text.is_empty() {
         format!("{:?}", layout.node_data.kind)
     } else {

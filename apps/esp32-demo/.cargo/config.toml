@@ -17,3 +17,7 @@ build-std-features = []
 MCU = "esp32s3"
 ESP_IDF_VERSION = "v5.5.5"
 ESP_IDF_TOOLS_INSTALL_DIR = "global"
+# esp-idf-sys reads the libclang of `~/.espup/esp-clang` instead of
+# LIBCLANG_PATH, and every `espup install` repoints that link to the toolchain
+# it installed. The build takes the libclang of the exported toolchain.
+ESP_IDF_ESPUP_CLANG_SYMLINK = "ignore"

@@ -2148,13 +2148,10 @@ fn shader_rect_like_effect_layers_app(
                                         width: 96.0,
                                         height: 48.0,
                                     })
-                                    .graphics_layer({
-                                        let effect = effect.clone();
-                                        move || GraphicsLayer {
-                                            render_effect: Some(effect.clone()),
-                                            compositing_strategy: CompositingStrategy::Offscreen,
-                                            ..Default::default()
-                                        }
+                                    .graphics_layer(move || GraphicsLayer {
+                                        render_effect: Some(effect.clone()),
+                                        compositing_strategy: CompositingStrategy::Offscreen,
+                                        ..Default::default()
                                     })
                                     .draw_behind(move |scope| {
                                         scope.draw_rect_at(

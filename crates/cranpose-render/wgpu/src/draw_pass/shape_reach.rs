@@ -84,8 +84,7 @@ fn shape_reach(draw: &RunDraw, bounds: Rect, run: &SegmentRun<'_, '_>) -> Option
     let snapped = placement.snap_anchor.is_some();
     let delta = placement
         .snap_anchor
-        .map(|anchor| snap_delta_for_anchor(anchor, scale))
-        .unwrap_or_default();
+        .map_or_default(|anchor| snap_delta_for_anchor(anchor, scale));
     let shapes = draw.bounds;
     let logical = [
         shapes.x + delta.x,

@@ -35,7 +35,7 @@ so the bus carries the same bytes as with those drivers.
 
 This directory is its own cargo workspace with the ESP-IDF configuration:
 `.cargo/config.toml` selects `xtensa-esp32s3-espidf`, `rust-toolchain.toml`
-the `esp-1.98.1` toolchain, `sdkconfig.defaults` the ESP-IDF settings, and
+the `esp-1.100.0` toolchain, `sdkconfig.defaults` the ESP-IDF settings, and
 `partitions.csv` the flash layout. The workspace also holds
 [`cranpose-platform-esp-idf`](../../crates/cranpose-platform/esp-idf), whose
 README explains the runtime and the toolchain traps.

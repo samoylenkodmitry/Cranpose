@@ -277,8 +277,7 @@ fn statement_name(expr: &Expr) -> String {
                 .path
                 .segments
                 .last()
-                .map(|segment| segment.ident.to_string())
-                .unwrap_or_default(),
+                .map_or_default(|segment| segment.ident.to_string()),
             other => source_name(other),
         },
         Expr::MethodCall(call) => call.method.to_string(),

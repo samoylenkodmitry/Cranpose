@@ -173,7 +173,7 @@ clippy-no-atomic64:
     scripts/ci/with_host_lock.sh --shared \
       cargo clippy --target armv5te-unknown-linux-gnueabi -p cranpose --no-default-features --features framebuffer,embedded-default-font -- -D warnings
 
-esp32_toolchain := "esp-1.98.1"
+esp32_toolchain := "esp-1.100.0"
 esp32_demo := "apps/esp32-demo"
 esp32_elf := esp32_demo + "/target/xtensa-esp32s3-espidf/release/esp32-demo"
 
@@ -199,11 +199,11 @@ esp32-build-e32r35t: _disk-guard
 # does not. Its header says DIO, as ESP-IDF writes it for a QIO app.
 # Flashes the ES3C35P demo with its bootloader to the board on `port`, shows the log.
 esp32-flash-es3c35p port: esp32-build-es3c35p
-    . "$HOME/export-{{esp32_toolchain}}.sh" && cd {{esp32_demo}} && espflash flash --monitor --port {{port}} --flash-mode dio --flash-freq 80mhz --bootloader target/xtensa-esp32s3-espidf/release/bootloader.bin --partition-table partitions.csv target/xtensa-esp32s3-espidf/release/esp32-demo
+    . "$HOME/export-{{esp32_toolchain}}.sh" && cd {{esp32_demo}} && espflash flash --monitor --port {{port}} --flash-mode dio --flash-freq 80mhz --bootloader target/xtensa-esp32s3-espidf/release/build/bootloader.bin --partition-table partitions.csv target/xtensa-esp32s3-espidf/release/esp32-demo
 
 # Flashes the E32R35T demo with its bootloader to the board on `port`, shows the log.
 esp32-flash-e32r35t port: esp32-build-e32r35t
-    . "$HOME/export-{{esp32_toolchain}}.sh" && cd {{esp32_demo}} && espflash flash --monitor --baud 460800 --port {{port}} --flash-mode dio --flash-freq 80mhz --bootloader target/xtensa-esp32-espidf/release/bootloader.bin --partition-table partitions_4mb.csv target/xtensa-esp32-espidf/release/esp32-demo
+    . "$HOME/export-{{esp32_toolchain}}.sh" && cd {{esp32_demo}} && espflash flash --monitor --baud 460800 --port {{port}} --flash-mode dio --flash-freq 80mhz --bootloader target/xtensa-esp32-espidf/release/build/bootloader.bin --partition-table partitions_4mb.csv target/xtensa-esp32-espidf/release/esp32-demo
 
 # Compares revisions of the demo on a board, every screen over 4 placements
 # of the code, the base first: `just esp32-ab e32r35t origin/main HEAD`.
@@ -239,13 +239,13 @@ esp32-profile board mode="demo" seconds="40" port="": _disk-guard
 # with cache="data", by the data cache's misses at the code that made them,
 # into target/esp32/sim-<mode>-data.log.
 esp32-sim-profile mode="demo" cache="instructions": (_esp32-sim-build mode)
-    . "$HOME/export-{{esp32_toolchain}}.sh" && python3 scripts/esp32/sim_profile.py target/esp32/sim-{{mode}}.elf target/esp32/sim-{{mode}}{{ if cache == "data" { "-data" } else { "" } }}.log --cache {{cache}} --bootloader target/esp32-sim/xtensa-esp32s3-espidf/release/bootloader.bin
+    . "$HOME/export-{{esp32_toolchain}}.sh" && python3 scripts/esp32/sim_profile.py target/esp32/sim-{{mode}}.elf target/esp32/sim-{{mode}}{{ if cache == "data" { "-data" } else { "" } }}.log --cache {{cache}} --bootloader target/esp32-sim/xtensa-esp32s3-espidf/release/build/bootloader.bin
 
 # Profiles the five screens of the ES3C35P's lists as esp32-sim-profile does:
 # builds them one after another, then runs their QEMUs at once, a core each,
 # so the set takes about as long as its slowest screen.
 esp32-sim-profiles cache="instructions": (_esp32-sim-build "demo") (_esp32-sim-build "drawn") (_esp32-sim-build "composed") (_esp32-sim-build "workload") (_esp32-sim-build "dashboard")
-    . "$HOME/export-{{esp32_toolchain}}.sh" && pids="" && for mode in demo drawn composed workload dashboard; do python3 scripts/esp32/sim_profile.py target/esp32/sim-$mode.elf target/esp32/sim-$mode{{ if cache == "data" { "-data" } else { "" } }}.log --cache {{cache}} --bootloader target/esp32-sim/xtensa-esp32s3-espidf/release/bootloader.bin > target/esp32/sim-$mode.out 2>&1 & pids="$pids $!"; done; status=0; for pid in $pids; do wait $pid || status=1; done; exit $status
+    . "$HOME/export-{{esp32_toolchain}}.sh" && pids="" && for mode in demo drawn composed workload dashboard; do python3 scripts/esp32/sim_profile.py target/esp32/sim-$mode.elf target/esp32/sim-$mode{{ if cache == "data" { "-data" } else { "" } }}.log --cache {{cache}} --bootloader target/esp32-sim/xtensa-esp32s3-espidf/release/build/bootloader.bin > target/esp32/sim-$mode.out 2>&1 & pids="$pids $!"; done; status=0; for pid in $pids; do wait $pid || status=1; done; exit $status
 
 _esp32-sim-build mode: _disk-guard
     . "$HOME/export-{{esp32_toolchain}}.sh" && cd {{esp32_demo}} && ESP_IDF_SDKCONFIG_DEFAULTS="sdkconfig.defaults;{{justfile_directory()}}/scripts/esp32/sdkconfig.no_hot_code" CARGO_WORKSPACE_DIR={{justfile_directory()}}/{{esp32_demo}} CARGO_TARGET_DIR={{justfile_directory()}}/target/esp32-sim cargo build --release {{ if mode == "demo" { "" } else if mode == "workload" { "--features workload" } else if mode == "dashboard" { "--features dashboard" } else if mode == "paths" { "--features changing-paths" } else if mode == "moves" { "--features deep-moves" } else { "--features text-" + mode } }}

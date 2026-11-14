@@ -411,8 +411,7 @@ fn described(task: &Retained<NSURLSessionDownloadTask>) -> Option<Transfer> {
         .originalRequest()
         .and_then(|request| request.URL())
         .and_then(|url| url.absoluteString())
-        .map(|url| url.to_string())
-        .unwrap_or_default();
+        .map_or_default(|url| url.to_string());
     Some(Transfer {
         task: task.clone(),
         url,

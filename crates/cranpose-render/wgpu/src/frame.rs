@@ -1081,8 +1081,7 @@ fn plan_backdrop<'a>(
     }
     let snap = backdrop
         .snap_anchor
-        .map(|anchor| snap_delta_for_anchor(anchor, scale))
-        .unwrap_or_default();
+        .map_or_default(|anchor| snap_delta_for_anchor(anchor, scale));
     let rect = backdrop.rect.translate(snap.x, snap.y);
     let clip = backdrop.clip.map(|clip| clip.translate(snap.x, snap.y));
     // The effect writes past its rect by the output padding it declares: the
@@ -2027,8 +2026,7 @@ struct ChildFrame {
 fn child_snap(child: &ChildLayer, scale: f32) -> Point {
     child
         .snap_anchor
-        .map(|anchor| snap_delta_for_anchor(anchor, scale))
-        .unwrap_or_default()
+        .map_or_default(|anchor| snap_delta_for_anchor(anchor, scale))
 }
 
 /// Where a flush draws the children it draws in place: its page's scale,
@@ -3930,8 +3928,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         let scene = &pass.layer.scene;
         let snap = effect
             .snap_anchor
-            .map(|anchor| snap_delta_for_anchor(anchor, scale))
-            .unwrap_or_default();
+            .map_or_default(|anchor| snap_delta_for_anchor(anchor, scale));
         let rect = effect.rect.translate(snap.x, snap.y);
         let output_padding = effect
             .effect
@@ -5065,8 +5062,7 @@ fn projected_placement(
 ) -> Result<PagePlacement, String> {
     let snap = child
         .snap_anchor
-        .map(|anchor| snap_delta_for_anchor(anchor, scale))
-        .unwrap_or_default();
+        .map_or_default(|anchor| snap_delta_for_anchor(anchor, scale));
     let parent_rect = pass.window().bounds;
     let surface_scale = scale * child.surface_scale;
     let child_device_to_parent_device = ProjectiveTransform::uniform_scale(1.0 / surface_scale)

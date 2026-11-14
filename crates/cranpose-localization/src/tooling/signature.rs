@@ -51,8 +51,7 @@ pub fn catalog_signatures(source: &str) -> Result<BTreeMap<String, MessageSignat
                         message
                             .comment
                             .as_ref()
-                            .map(|comment| comment.content.join("\n"))
-                            .unwrap_or_default(),
+                            .map_or_default(|comment| comment.content.join("\n")),
                     );
                 }
             }

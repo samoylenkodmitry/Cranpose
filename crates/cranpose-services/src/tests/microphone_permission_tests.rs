@@ -159,7 +159,7 @@ fn observers_see_the_permission_at_once_and_each_answer() {
     platform.answer(MicrophonePermission::Granted);
     drop(observer);
     platform.answer(MicrophonePermission::Blocked);
-    let seen = seen.lock().map(|seen| seen.clone()).unwrap_or_default();
+    let seen = seen.lock().map_or_default(|seen| seen.clone());
     assert_eq!(
         seen,
         [

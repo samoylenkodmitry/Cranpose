@@ -135,7 +135,7 @@ pub(crate) fn decode_first_screen(
         }
         bytes = rest;
     }
-    nearest.map(|(_, set)| set).unwrap_or_default()
+    nearest.map_or_default(|(_, set)| set)
 }
 
 /// How far apart two target sizes are: by how many times wider and how many

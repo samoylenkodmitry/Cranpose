@@ -129,7 +129,7 @@ pub(super) fn tab_flight_dynamics(
             let edge_gap = (*x - geometry.center.0).abs() - size.width * 0.5 - BAR_HEIGHT * 0.5;
             accessory_surfaces_touch(edge_gap)
         })
-        .map(|(x, y)| {
+        .map_or_default(|(x, y)| {
             vec![(
                 x - node.origin.0,
                 y - node.origin.1,
@@ -137,8 +137,7 @@ pub(super) fn tab_flight_dynamics(
                 BAR_HEIGHT,
                 -1.0,
             )]
-        })
-        .unwrap_or_default();
+        });
     GlassDynamics {
         edge_return_depth_dp: Some(7.0 * activity),
         optical_projection: Some((deformed.width / size.width, deformed.height / size.height)),

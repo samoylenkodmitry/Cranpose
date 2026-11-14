@@ -593,8 +593,7 @@ pub(crate) fn hash_run_item_with_clip<H: Hasher>(
     let placement = &run.placement;
     let snap = placement
         .snap_anchor
-        .map(|anchor| snap_delta_for_anchor(anchor, root_scale))
-        .unwrap_or_default();
+        .map_or_default(|anchor| snap_delta_for_anchor(anchor, root_scale));
     let offset = Point::new(placement.offset.x + snap.x, placement.offset.y + snap.y);
     let canonicalize = placement.snap_anchor.is_some();
     canonicalize.hash(state);
@@ -640,8 +639,7 @@ pub(crate) fn hash_run_item_with_clip<H: Hasher>(
     {
         let dither = placement
             .snap_anchor
-            .map(|anchor| snapped_anchor_device_origin(anchor, root_scale))
-            .unwrap_or_default();
+            .map_or_default(|anchor| snapped_anchor_device_origin(anchor, root_scale));
         hash_f32_for_cache(dither.x - origin_x, state);
         hash_f32_for_cache(dither.y - origin_y, state);
     }

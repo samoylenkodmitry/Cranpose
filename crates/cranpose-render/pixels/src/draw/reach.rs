@@ -25,10 +25,7 @@ impl RasterScene {
             RenderItem::Image(index) => Some(image_rect(&self.images[index])),
             RenderItem::Shadow(index) => {
                 let draw = &self.shadows[index];
-                let snap = draw
-                    .snap_anchor
-                    .map(snap_delta_for_anchor)
-                    .unwrap_or_default();
+                let snap = draw.snap_anchor.map_or_default(snap_delta_for_anchor);
                 Some(draw.shadow.bounds.translate(snap.x, snap.y))
             }
             RenderItem::Text(_) => None,

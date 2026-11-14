@@ -102,7 +102,7 @@ pub(crate) fn load(device: &wgpu::Device) -> Loaded {
     Loaded {
         first_screen,
         cache,
-        records: Arc::new(contents.map(Contents::into_records).unwrap_or_default()),
+        records: Arc::new(contents.map_or_default(Contents::into_records)),
         updated,
     }
 }

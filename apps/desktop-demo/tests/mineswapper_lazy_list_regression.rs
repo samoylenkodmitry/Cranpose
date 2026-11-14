@@ -193,7 +193,7 @@ fn advance_async_runtime_to_second_forward_half(
         });
         let direction_owned = direction.to_string();
         last_progress = Some(progress);
-        last_direction = Some(direction_owned.clone());
+        last_direction = Some(direction_owned);
         last_texts = texts;
 
         if progress >= 95 {
