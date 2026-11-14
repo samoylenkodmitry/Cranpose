@@ -16,10 +16,12 @@ pub(crate) const TAGS: [(&str, &str); 3] = [
     ("Undo", "undo-button"),
 ];
 
+// A fixed size keeps each button visible to readers in builds without a
+// font, where its text measures nothing.
 #[composable]
 fn TaggedButton(label: &'static str, tag: &'static str) {
     Button(
-        Modifier::empty().height(48.0).test_tag(tag),
+        Modifier::empty().size_points(120.0, 48.0).test_tag(tag),
         ButtonSpec::default(),
         || {},
         move || {
