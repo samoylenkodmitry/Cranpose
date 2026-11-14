@@ -20,6 +20,10 @@ cranpose::android_main! {
 use wasm_bindgen::prelude::*;
 
 #[cfg(all(feature = "web", target_arch = "wasm32"))]
+#[global_allocator]
+static HEAP: cranpose::web::Heap = cranpose::web::Heap::new();
+
+#[cfg(all(feature = "web", target_arch = "wasm32"))]
 #[wasm_bindgen(start)]
 pub fn web_init() {
     wasm_logger::init(wasm_logger::Config::new(log::Level::Info));

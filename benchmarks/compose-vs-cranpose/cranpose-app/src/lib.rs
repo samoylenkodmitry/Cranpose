@@ -8,6 +8,10 @@ mod screens;
 #[cfg(all(feature = "web", target_arch = "wasm32"))]
 mod web;
 
+#[cfg(all(feature = "web", target_arch = "wasm32"))]
+#[global_allocator]
+static HEAP: cranpose::web::Heap = cranpose::web::Heap::new();
+
 use std::cell::Cell;
 
 use cranpose::prelude::*;

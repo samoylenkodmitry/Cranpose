@@ -161,13 +161,14 @@ const START_FRAMES: u32 = 1;
 // each of its images, which first hold no frame.
 const SWAPCHAIN_START_FRAMES: u32 = SWAPCHAIN_IMAGES as u32;
 
-/// The frames in a row that change a small part of the window before the
-/// renderer keeps a copy of the frame for images that come cleared.
-const COPY_AFTER: u32 = 3;
+/// The frames that change a small part of the window before the renderer
+/// keeps a copy of the frame for images that come cleared: the first, which
+/// it copies.
+const COPY_AFTER: u32 = 1;
 
 /// The frames images that come cleared take whole before one takes a part:
-/// the first, which the next compares with, then the small changes before
-/// the renderer keeps a copy, the last of which it copies.
+/// the first, which the next compares with, then the first small change,
+/// which the renderer copies.
 const CLEARED_START_FRAMES: u32 = START_FRAMES + COPY_AFTER;
 
 // The steps `Scene::MovedThenStill` moves the page: enough frames in a row
@@ -1135,6 +1136,46 @@ fn a_frame_drawn_whole_with_a_stand_in_is_drawn_whole_again_over_its_image() {
         first.stats
     );
     frames_until_the_shader_is_drawn(&mut harness, 0, |_, _| {});
+}
+
+// A still page whose first frames draw a stand-in while a shader compiles,
+// in images that come cleared: the renderer keeps a copy from the first
+// small change after the shader landed, and no frame after that draws the
+// window again. A frame drawn whole over a stand-in is no change of the
+// page that would skip working out the damage of the frames after it.
+#[test]
+fn a_still_page_over_stand_ins_draws_nothing_once_it_keeps_a_copy() {
+    let Some((_lock, renderer)) = support::headless_renderer_parts_compiling_in_background_for(
+        wgpu::TextureFormat::Rgba8Unorm,
+    )
+    .map_err(|err| eprintln!("skipping (headless WGPU init failed): {err}"))
+    .ok() else {
+        return;
+    };
+    let mut harness = Harness::new(renderer, Scene::EarlyShader, 1.0, Keeper::Cleared);
+    let mut landed = None;
+    let mut copied = None;
+    for index in 0..16 {
+        let frame = harness.frame(0);
+        let label = format!("frame {index}: {:?}", frame.stats);
+        if !support::pipelines_settled(&frame.stats) {
+            support::wait_for_background_compiler_idle();
+            continue;
+        }
+        support::assert_same_bytes(&label, WIDTH, &frame.kept, &frame.direct);
+        landed.get_or_insert(index);
+        if copied.is_some() {
+            assert_eq!(frame.stats.repainted_pixels, 0, "{label}: drawn again");
+        } else if copies_a_window(&frame.stats) {
+            copied = Some(index);
+        }
+    }
+    let landed = landed.expect("the shader landed");
+    let copied = copied.expect("the renderer kept a copy");
+    assert!(
+        copied <= landed + START_FRAMES + COPY_AFTER,
+        "the copy started at frame {copied}, the shader landed at frame {landed}"
+    );
 }
 
 /// Draws each frame of `scene` twice: over the frame `keeper` holds, which
