@@ -36,6 +36,8 @@ public final class CranposeAccessibilityInteractionTest {
             scenario.onActivity(activity -> activity.cranposeSetKeepScreenOn(true));
             awaitNode(automation, "Accessibility robot");
             awaitNode(automation, "Account, Account");
+            // UI Automator's By.res finds a control by its test tag.
+            assertEquals("increase-button", awaitNode(automation, "Increase").getViewIdResourceName());
             assertFalse(publishedText(automation).contains("robot-secret-value"));
             assertFalse(publishedText(automation).contains("Decorative secret"));
             String[] actions = {"Increase", "Remove", "Decrease"};

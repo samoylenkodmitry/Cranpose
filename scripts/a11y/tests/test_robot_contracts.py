@@ -26,15 +26,17 @@ class FixtureAdapter(NativeAdapter):
         self.disabled_enabled = False
         self.progress_role = 'progress'
         self.modal = 0
+        self.increase_id = 'increase-button'
 
     def nodes(self):
         if self.modal:
             names = ['Close confirmation'] if self.modal == 2 else ['Close preferences', 'Open confirmation']
             return [{'name': name, 'enabled': True} for name in names]
-        names = ['Accessibility robot', 'Account, Account', 'Remove', 'Increase', 'Decrease',
+        names = ['Accessibility robot', 'Account, Account', 'Remove', 'Decrease',
                  'Rear action', 'Front action', f'Overlap count: {self.overlap_count}',
                  'Open preferences', f'Action count: {self.count}', f'Volume value: {self.volume}', f'Edited: {self.text}']
         return ([{'name': name, 'enabled': True} for name in names] + self.extra
+                + [{'name': 'Increase', 'id': self.increase_id, 'enabled': True}]
                 + [{'name': 'Disabled action', 'enabled': self.disabled_enabled},
                    {'name': 'Loading', 'role': self.progress_role, 'value': 40},
                    {'name': 'Volume', 'role': 'slider', 'value': self.volume},
@@ -104,14 +106,15 @@ class DesktopContractTests(unittest.TestCase):
     def test_all_native_scenarios_must_execute(self):
         report = {'passed': []}
         run_checks(FixtureAdapter(), report)
-        self.assertEqual(len(report['passed']), 7)
+        self.assertEqual(len(report['passed']), 8)
 
     def test_rejects_sensitive_text_disabled_actions_and_wrong_roles(self):
         for attribute, value, message in [
                 ('extra', [{'name': 'robot-secret-value'}], 'private text'),
                 ('extra', [{'name': 'Decorative secret'}], 'private text'),
                 ('disabled_enabled', True, 'reported enabled'),
-                ('progress_role', 'slider', 'passive progress role')]:
+                ('progress_role', 'slider', 'passive progress role'),
+                ('increase_id', '', 'test tag is not the native identifier')]:
             with self.subTest(attribute=attribute, value=value):
                 adapter = FixtureAdapter()
                 setattr(adapter, attribute, value)
@@ -142,7 +145,7 @@ class DesktopContractTests(unittest.TestCase):
             with self.subTest(platform=platform):
                 report = {'platform': platform, 'passed': []}
                 run_checks(FixtureAdapter(), report)
-                self.assertEqual(len(report['passed']), 7)
+                self.assertEqual(len(report['passed']), 8)
 
     def test_rejects_a_disabled_action_that_claims_success(self):
         adapter = FixtureAdapter()

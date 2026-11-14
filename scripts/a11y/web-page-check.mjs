@@ -80,6 +80,7 @@ try {
   const loading = accessible.find(node => node.name?.value === 'Loading' && node.role?.value === 'progressbar');
   assert.equal(loading?.value?.value, 40, 'native passive progress range');
   report.push('the browser accessibility tree preserves names, roles, and private content boundaries');
+  await check("a test tag is the id browser test tools find the control by", `document.getElementById('increase-button')?.getAttribute('aria-label') === 'Increase'`);
   for (const [name, count] of [['Rear action', 1], ['Front action', 11]]) {
     await evaluate(`document.querySelector('[data-cranpose-node][aria-label="${name}"]').click()`);
     await until(`document.querySelector('[data-cranpose-accessibility]').textContent.includes('Overlap count: ${count}')`);

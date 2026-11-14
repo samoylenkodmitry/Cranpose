@@ -42,6 +42,7 @@ class MacAdapter(NativeAdapter):
             if role == 'AXStaticText' and not name:
                 name = value or ''
             result.append({'native': native, 'name': str(name),
+                           'id': str(self.attribute(native, 'AXIdentifier') or ''),
                            'role': {'AXProgressIndicator': 'progress', 'AXSlider': 'slider'}.get(role, role),
                            'value': value if isinstance(value, (str, int, float)) else None,
                            'enabled': self.attribute(native, 'AXEnabled') is not False})
@@ -102,6 +103,7 @@ class LinuxAdapter(NativeAdapter):
                 value = self.api.Text.get_text(native, 0, -1)
             role = native.get_role_name()
             result.append({'native': native, 'name': native.get_name(),
+                           'id': native.get_accessible_id() or '',
                            'description': native.get_description(),
                            'role': {'progress bar': 'progress', 'slider': 'slider'}.get(role, role),
                            'value': value,
