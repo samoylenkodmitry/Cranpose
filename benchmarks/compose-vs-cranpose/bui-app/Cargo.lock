@@ -4,15 +4,16 @@ version = 4
 
 [[package]]
 name = "blenderui"
-version = "0.5.0"
+version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8be7f10974f3057fe0ef3b2ea4e406b2963bcf66ee1bb938361ef39ac74d1116"
+checksum = "068c0b113d75caa47a6465ab634574b1865eedcbf59e7e221a626aaa99c677e9"
 dependencies = [
  "blenderui-macros",
  "blenderui-sys",
  "blenderui-table",
  "blenderui-tailwind",
  "blenderui-vlist",
+ "foldhash",
  "paste",
  "smallvec",
  "taffy",
@@ -20,57 +21,57 @@ dependencies = [
 
 [[package]]
 name = "blenderui-macros"
-version = "0.5.0"
+version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "86878093d0fb3504a6934366e31f8f14b17328e3faa17799dc3cadfac62678fa"
+checksum = "3e60bb153b12f9e129f737bb38aa61d14d21a386f8dacb6b5245ef21b75739b5"
 dependencies = [
  "blenderui-tailwind",
 ]
 
 [[package]]
 name = "blenderui-paint"
-version = "0.5.0"
+version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4b975b99afe5c38d8861dc374a1cc16a8185a24fda9daf0feb1c6f5af9028102"
+checksum = "204dfaab4713f423a975906ac22b722e963be2658f5f32d9daed9a50c7846c12"
 
 [[package]]
 name = "blenderui-sys"
-version = "0.5.0"
+version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0d81f641d81003f8819f377cdcf320660ca016c7a4c96896aeb6f8c6f28cc2f4"
+checksum = "6ed952c99d6c459dd90c4315378a8e9ed9f1ce47e888af3c8c00e44f86f706ad"
 dependencies = [
  "cmake",
 ]
 
 [[package]]
 name = "blenderui-table"
-version = "0.5.0"
+version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1309362e597f7563ea656222a218920aa2e2e5df805965df3bbf4ddb659e4f6e"
+checksum = "3a4d9dbc68bb3dbb46777f936ab1530fdeb20bebed8f6b058d1a4b324ab21b65"
 dependencies = [
  "blenderui-paint",
 ]
 
 [[package]]
 name = "blenderui-tailwind"
-version = "0.5.0"
+version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2e4f6bbd711b00ee46e4cea9b0ebc449074af15f99465c4a28f14f2c3cf39710"
+checksum = "6cdb5c839bd4f8613609f2104665d5663a31fb13defb0b6c146017e453bfee3a"
 
 [[package]]
 name = "blenderui-vlist"
-version = "0.5.0"
+version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5f64096c069cb8d78feeefe62f3aaf456c33ddadd37413081730d6c6591719ad"
+checksum = "7db8527f5253e9c69ed4fd4b97ceb8b9866a53c9c80175a05afdee4a87759092"
 dependencies = [
  "blenderui-paint",
 ]
 
 [[package]]
 name = "cc"
-version = "1.11.1"
+version = "1.11.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4ff2a8126fff0f8c839080d619675a585e61720bb12d2baceae45769fd66f155"
+checksum = "33ef9e3e8154a45c7a95cff4c1299702106ad94062d7bb85fdc5d3a5afd91d45"
 dependencies = [
  "find-msvc-tools",
  "shlex",
@@ -90,6 +91,12 @@ name = "find-msvc-tools"
 version = "0.1.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1c66915cc5391097de7a2b0b972e8505aa33c0df401fd3a6811dbdb32881ba48"
+
+[[package]]
+name = "foldhash"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
 
 [[package]]
 name = "log"
@@ -190,9 +197,9 @@ checksum = "149309498a5f7334b12ddae0cad8aba81ce785fe91755068867e017cf98fee46"
 
 [[package]]
 name = "syn"
-version = "3.0.9"
+version = "3.0.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d78c8dee4c7bf0e14673097256fed6142ce9d3b85a408189d07482442145823b"
+checksum = "4ae9ccbea3a7b0b09443036490c8f34a8b1b760fd345e5c0dae0aac718faea79"
 dependencies = [
  "proc-macro2",
  "quote",
