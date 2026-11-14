@@ -46,7 +46,7 @@ use crate::{
         admission_gate::{AdmissionGate, NodeGate},
     },
     scene::{BackdropLayer, CompositorScene, DrawOp, DrawOpKind, EffectLayer, LayerRoundedClip},
-    scissor::{intersect_scissors, scissor_in_target},
+    scissor::scissor_in_target,
 };
 
 const MAX_SURFACE_PIXELS: u64 = 16 * 1024 * 1024;
@@ -286,39 +286,6 @@ fn fill_segments<'a>(
         transform: SegmentTransform::IDENTITY,
         scale,
     })
-}
-
-/// Cuts `segments` to each scissor of `parts`, in their order: each
-/// segment's part in the first, then in the next. The parts share no pixel,
-/// so no pixel draws twice.
-fn cut_segments(
-    segments: &mut Vec<PassSegment<'_>>,
-    parts: impl Iterator<Item = (u32, u32, u32, u32)> + Clone,
-) {
-    let mut first_two = parts.clone();
-    if let (Some(only), None) = (first_two.next(), first_two.next()) {
-        segments.retain_mut(
-            |segment| match intersect_scissors(segment.scissor, Some(only)) {
-                Some(scissor) => {
-                    segment.scissor = scissor;
-                    true
-                }
-                None => false,
-            },
-        );
-        return;
-    }
-    *segments = segments
-        .iter()
-        .flat_map(|segment| {
-            parts.clone().filter_map(move |part| {
-                intersect_scissors(segment.scissor, Some(part)).map(|scissor| PassSegment {
-                    scissor,
-                    ..segment.clone()
-                })
-            })
-        })
-        .collect();
 }
 
 /// A kept prefix drawn back where the page drew it.
@@ -2951,8 +2918,9 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         let mut segments =
             flush_segments(&pass.layer.scene, &parts, &flush, place.offset, pass.scale);
         let (load_op, fill) = self.window_base(&pass.page, load_op);
+        let mut window_cut = std::mem::take(&mut self.renderer.pass_scratch.window_cut);
         if pass.page.window.is_some() {
-            cut_segments(&mut segments, pass.page.window_scissors());
+            segments = window_cut.cut(&segments, pass.page.window_scissors(), target);
         }
         if let Some(fill) = &fill {
             segments.splice(
@@ -2962,15 +2930,16 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         }
         let label = LAYER_PASS_LABELS[pass.segments.min(LAYER_PASS_LABELS.len() - 1)];
         pass.segments += 1;
-        self.renderer
-            .encode_pass(
-                self.recorder,
-                target,
-                (&segments, SegmentLayout::Stacked),
-                load_op,
-                label,
-            )
-            .map(drop)
+        let encoded = self.renderer.encode_pass(
+            self.recorder,
+            target,
+            (&segments, SegmentLayout::Stacked),
+            load_op,
+            label,
+        );
+        drop(segments);
+        self.renderer.pass_scratch.window_cut = window_cut;
+        encoded.map(drop)
     }
 
     /// The load op a pass into `page` starts with, and the fill it draws

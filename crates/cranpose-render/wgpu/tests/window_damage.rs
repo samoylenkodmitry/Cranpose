@@ -83,9 +83,8 @@ enum Scene {
     /// The spinner at the top and a caret changing at the bottom, far apart,
     /// with the two liquid glass panes between them.
     SpinnerAndCaret,
-    /// Five spots far apart changing colour, one more than the rects a
-    /// frame's damage keeps apart.
-    FiveSpots,
+    /// Ten small spots scattered over the window changing colour.
+    TenSpots,
     // The page moving for `MOVES` steps, then a shape changing colour over
     // the page held still.
     MovedThenStill,
@@ -140,13 +139,18 @@ const LAZY_LABEL: [f32; 4] = [
 /// A caret near the bottom, far from the spinner.
 const CARET: [f32; 4] = [40.0, 372.0, 2.0, 16.0];
 
-/// Spots in the corners and the middle of the window.
-const SPOTS: [[f32; 4]; 5] = [
-    [8.0, 8.0, 20.0, 20.0],
-    [292.0, 8.0, 20.0, 20.0],
-    [8.0, 372.0, 20.0, 20.0],
-    [292.0, 372.0, 20.0, 20.0],
-    [150.0, 190.0, 20.0, 20.0],
+/// Small spots scattered over the window, no two in a row or a column.
+const SPOTS: [[f32; 4]; 10] = [
+    [10.0, 14.0, 12.0, 12.0],
+    [150.0, 40.0, 12.0, 12.0],
+    [290.0, 70.0, 12.0, 12.0],
+    [60.0, 120.0, 12.0, 12.0],
+    [230.0, 150.0, 12.0, 12.0],
+    [20.0, 230.0, 12.0, 12.0],
+    [170.0, 262.0, 12.0, 12.0],
+    [280.0, 300.0, 12.0, 12.0],
+    [92.0, 344.0, 12.0, 12.0],
+    [204.0, 380.0, 12.0, 12.0],
 ];
 
 /// The frames a target draws whole before one can draw a part: the first,
@@ -408,7 +412,7 @@ fn changing_box(scene: Scene, step: MutableState<u32>) -> Option<Modifier> {
         | Scene::MovedPage
         | Scene::MovedCaster
         | Scene::SpinnerAndCaret
-        | Scene::FiveSpots
+        | Scene::TenSpots
         | Scene::TurnedSurface
         | Scene::ShrunkParent
         | Scene::LazyLabel => return None,
@@ -455,7 +459,7 @@ fn Changing(scene: Scene, step: MutableState<u32>) {
                 || {},
             );
         }
-        Scene::FiveSpots => {
+        Scene::TenSpots => {
             for spot in SPOTS {
                 Box(
                     rect_modifier(spot).background(shade(step.get())),
@@ -1443,37 +1447,58 @@ fn two_small_animations_far_apart_repaint_only_their_areas() {
     }
 }
 
-/// Five small changes far apart, one more than the rects a frame's damage
-/// keeps apart, draw in four rects, the two that join with the fewest
-/// pixels sharing one, and every frame equals the whole frame.
+/// Ten small changes scattered over the window, as a dashboard's clock,
+/// counters and spinners change, draw only their own areas: a rect each, a
+/// small share of the window, in no more passes than the whole frame, and
+/// every frame equals the whole frame.
 #[test]
-fn five_small_changes_far_apart_draw_in_four_rects() {
-    let Some((_lock, renderer)) = renderer() else {
-        return;
-    };
-    let mut harness = Harness::new(renderer, Scene::FiveSpots, 1.0, Keeper::Composition);
-    let mut before: Option<Vec<u8>> = None;
-    for step in 0..START_FRAMES + 6 {
-        let frame = harness.frame(step);
-        let stats = frame.stats;
-        let label = format!("frame {step}: {stats:?}");
-        support::assert_same_bytes(&label, WIDTH, &frame.kept, &frame.direct);
-        if step >= START_FRAMES {
-            let FrameDamage::Part(rects) = stats.damage else {
-                panic!("{label}: five small changes report rects");
-            };
-            assert_eq!(rects.rects().len(), 4, "{label}");
-            if let Some(before) = &before {
-                assert_covers(&label, stats.damage, before, &frame.direct);
+fn ten_small_changes_scattered_over_the_window_draw_only_their_areas() {
+    const PARTIAL_FRAMES: u32 = 6;
+    // A spot's 12 by 12 pixels with the 2 past them all around that its
+    // area takes.
+    const SPOT_AREA: u64 = 16 * 16;
+    let spots = SPOT_AREA * SPOTS.len() as u64;
+    for keeper in KEEPERS {
+        let Some((_lock, renderer)) = renderer() else {
+            return;
+        };
+        let mut harness = Harness::new(renderer, Scene::TenSpots, 1.0, keeper);
+        let start = keeper.start_frames();
+        let mut whole_pass_pixels = 0;
+        let mut before: Option<Vec<u8>> = None;
+        for step in 0..start + PARTIAL_FRAMES {
+            let frame = harness.frame(step);
+            let stats = frame.stats;
+            let label = format!("{keeper:?} frame {step}: {stats:?}");
+            support::assert_same_bytes(&label, WIDTH, &frame.kept, &frame.direct);
+            if step == 0 {
+                whole_pass_pixels = stats.pass_pixels;
             }
-            // The two top spots share a rect as wide as the window.
-            assert!(
-                stats.repainted_pixels < u64::from(WIDTH) * 40,
-                "{label}: {} pixels",
-                stats.repainted_pixels
-            );
+            if step >= start {
+                let FrameDamage::Part(rects) = stats.damage else {
+                    panic!("{label}: ten small changes draw a part of the window");
+                };
+                assert_eq!(
+                    rects.rects().len(),
+                    SPOTS.len(),
+                    "{label}: a rect for each change"
+                );
+                if let Some(before) = &before {
+                    assert_covers(&label, stats.damage, before, &frame.direct);
+                }
+                assert!(
+                    stats.repainted_pixels <= 2 * spots,
+                    "{label}: {} pixels drawn again for {spots} that change",
+                    stats.repainted_pixels
+                );
+                assert!(
+                    stats.pass_pixels <= whole_pass_pixels,
+                    "{label}: {} pass pixels against {whole_pass_pixels} for the whole frame",
+                    stats.pass_pixels
+                );
+            }
+            before = Some(frame.direct);
         }
-        before = Some(frame.direct);
     }
 }
 

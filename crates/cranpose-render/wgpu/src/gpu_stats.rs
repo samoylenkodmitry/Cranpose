@@ -60,6 +60,10 @@ impl Default for IsolatedLayerStat {
 /// The window pixels a frame changes against the frame the renderer's
 /// composition target kept.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "a frame's statistics keep its damage inline; a box would allocate every frame"
+)]
 pub enum FrameDamage {
     /// The frame drew straight into the presentable image, which keeps no
     /// earlier frame, or was a screenshot, drawn whole.
@@ -75,7 +79,7 @@ pub enum FrameDamage {
     Part(WindowRects),
 }
 
-/// Up to four rects of window pixels that share no pixel, each as
+/// Up to 32 rects of window pixels that share no pixel, each as
 /// `[x, y, width, height]`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct WindowRects {

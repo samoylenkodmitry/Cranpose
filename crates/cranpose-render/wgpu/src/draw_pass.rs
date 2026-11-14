@@ -53,6 +53,7 @@ mod pass_scratch;
 mod segment_run;
 mod shape_reach;
 mod target_space;
+mod window_cut;
 pub(crate) use interiors_first::lays_interiors_first;
 use interiors_first::takes_depth;
 use mixed_turns::turns_mixed;
@@ -61,6 +62,7 @@ pub(crate) use pass_scratch::PassScratch;
 use segment_run::{ArenaClip, SegmentBinding, SegmentRun};
 use shape_reach::RunReach;
 use target_space::{dest_in_target, mask_in_target, translate_inverse};
+pub(crate) use window_cut::WindowCut;
 
 impl GpuRenderer {
     /// Uploads the quads a prepared pass drew into its scratch: image
@@ -216,18 +218,7 @@ impl GpuRenderer {
     }
 
     fn take_pass_scratch(&mut self) -> PassScratch {
-        let mut scratch = std::mem::take(&mut self.pass_scratch);
-        scratch.meshes.clear();
-        scratch.arena_draws.clear();
-        scratch.images.vertices.clear();
-        scratch.images.indices.clear();
-        scratch.images.cmds.clear();
-        scratch.images.clips.clear();
-        scratch.glyph_instances.clear();
-        scratch.glyph_cmds.clear();
-        scratch.shadow_instances.clear();
-        scratch.instant.clear();
-        scratch
+        std::mem::take(&mut self.pass_scratch).cleared()
     }
 
     /// Starts on `lane` the builds of the image, glyph and shadow pipelines a

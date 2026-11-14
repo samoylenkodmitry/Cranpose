@@ -17,6 +17,8 @@ pub(crate) struct PassScratch {
     pub(super) held: HeldDraws,
     pub(crate) meshes: crate::mesh_fallback::PassMeshes,
     pub(super) instant: InstantTriangles,
+    // The ops of each part of a page drawn in several parts.
+    pub(crate) window_cut: super::WindowCut,
 }
 
 /// Where the image draws an item appends start in a pass's scratch.
@@ -28,6 +30,21 @@ pub(super) struct ImageMark {
 }
 
 impl PassScratch {
+    // The scratch with what a pass drew last cleared, its storage kept.
+    pub(super) fn cleared(mut self) -> Self {
+        self.meshes.clear();
+        self.arena_draws.clear();
+        self.images.vertices.clear();
+        self.images.indices.clear();
+        self.images.cmds.clear();
+        self.images.clips.clear();
+        self.glyph_instances.clear();
+        self.glyph_cmds.clear();
+        self.shadow_instances.clear();
+        self.instant.clear();
+        self
+    }
+
     // Opens a frame: stand-in triangles keep their storage only while
     // frames lay them.
     pub(crate) fn begin_frame(&mut self) {

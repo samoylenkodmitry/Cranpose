@@ -21,8 +21,14 @@ pub(crate) use cleared_images::ClearedImages;
 mod swapchain_history;
 pub(crate) use swapchain_history::SwapchainHistory;
 
-/// The share of the window past which a frame draws all of it: a larger
-/// part costs about what the whole does.
+// The share of the window past which a frame draws all of it. A part
+// costs more a pixel than the whole: its walk tests each record against
+// the parts, its draws break into batches at them, and an image that comes
+// cleared takes a copy of the kept frame. Measured on an Apple M3: the
+// patchwork's frames at tier 17 that change 29 to 49% of the window draw
+// in 8.5 ms in parts and in 12.7 ms whole. The gauntlet's frames at tier
+// 16 that change 87 to 93% cost 1.1 to 1.7 ms more CPU and 1.5 ms more
+// wait in a part than whole.
 pub(crate) const FULL_SHARE: f32 = 0.5;
 /// The windows of pixels a frame's draws must cover before a presentable
 /// image that comes cleared takes the frame from a kept copy: the copy reads
@@ -37,13 +43,26 @@ const COPY_AFTER: u32 = 3;
 pub(crate) const COPY_HOLD_OFF: u32 = 64;
 /// The packets back whose damages the renderer keeps.
 const HISTORY: usize = 8;
-/// The most rects a frame's damage keeps apart: changes far apart, such as
-/// a spinner at the top and a caret at the bottom, each draw their own part
-/// of the window, not a part spanning both.
-pub(crate) const MAX_DAMAGE_RECTS: usize = 4;
+// The most rects a frame's damage keeps apart: changes far apart, such as
+// a clock at the top, counters over a dashboard and a caret at the bottom,
+// each draw their own part of the window, not a part spanning them.
+pub(crate) const MAX_DAMAGE_RECTS: usize = 32;
+// The pixels two rects of a frame's damage may add to theirs to draw as
+// one. One more rect costs its scissor, the batches that break at it and a
+// test of each of its pass's draws. Measured on an Apple M3 with the
+// patchwork at tier 17: 33 to 43 microseconds a rect and 2.8 to 4.1 ms a
+// million pixels. A merge that takes the damage past FULL_SHARE draws the
+// whole window, so rects merge only where they almost touch. At 4096
+// pixels some patchwork frames drew whole and the steady frame rate fell
+// from 60 to 58.7. At 16384 every frame drew whole and it fell to 50.
+const RECT_COST: f32 = 1024.0;
 
 /// What a frame changes against the frame before.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "a frame's damage moves a few times a frame; a box would allocate every frame"
+)]
 pub(crate) enum Damage {
     /// Recent frames changed most of the window, so this one skipped working
     /// out what it changes.
@@ -98,6 +117,10 @@ impl Damage {
 
 /// What of the page a frame draws.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "a frame's repaint moves a few times a frame; a box would allocate every frame"
+)]
 pub(crate) enum Repaint {
     Whole,
     /// Only these rects inside the page; the rest keeps the frame before's
@@ -200,9 +223,11 @@ impl DamageRects {
         })
     }
 
-    /// Adds `rect`, grown out to whole pixels. It merges with every rect it
-    /// shares a pixel with; past [`MAX_DAMAGE_RECTS`], the two rects whose
-    /// bounds add the fewest pixels merge.
+    // Adds `rect`, grown out to whole pixels. It merges with every rect it
+    // shares a pixel with, and with the rect whose bounds with it add the
+    // fewest pixels while they cost less than one more rect; past
+    // MAX_DAMAGE_RECTS, the two rects whose bounds add the fewest pixels
+    // merge.
     pub(crate) fn add(&mut self, rect: DeviceRect) {
         let mut rect = rect.snap_out();
         loop {
@@ -212,6 +237,10 @@ impl DamageRects {
                 .position(|part| part.intersect(rect).is_some())
             {
                 rect = rect.union(self.remove(at));
+            }
+            if let Some((at, _)) = self.nearest(rect).filter(|&(_, added)| added < RECT_COST) {
+                rect = rect.union(self.remove(at));
+                continue;
             }
             if self.len < MAX_DAMAGE_RECTS {
                 self.rects[self.len] = rect;
@@ -232,6 +261,16 @@ impl DamageRects {
         }
     }
 
+    // The rect whose bounds with `rect` add the fewest pixels to theirs, and
+    // those pixels.
+    fn nearest(&self, rect: DeviceRect) -> Option<(usize, f32)> {
+        self.as_slice()
+            .iter()
+            .map(|part| added_pixels(*part, rect))
+            .enumerate()
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+    }
+
     /// The two of the rects and `rect`, at index `len`, whose bounds add the
     /// fewest pixels to theirs.
     fn cheapest_pair(&self, rect: DeviceRect) -> (usize, usize) {
@@ -242,12 +281,10 @@ impl DamageRects {
                 rect
             }
         };
-        let area = |rect: DeviceRect| rect.width * rect.height;
         let mut best = (0, 1, f32::INFINITY);
         for first in 0..=self.len {
             for second in first + 1..=self.len {
-                let (a, b) = (candidate(first), candidate(second));
-                let added = area(a.union(b)) - area(a) - area(b);
+                let added = added_pixels(candidate(first), candidate(second));
                 if added < best.2 {
                     best = (first, second, added);
                 }
@@ -454,19 +491,17 @@ impl FrameDamages {
                 union.add_all(&stand_ins);
                 changed(Damage::Part(union))
             }
-            Err(since) => since,
+            Err(no_part) => Since {
+                baseline: no_part == NoPart::Baseline,
+                ..changed(Damage::Full)
+            },
         }
     }
 
     // The union of the damages of the packets from `at` back to the one
-    // after `held`; what a target that holds `held` takes from them when
-    // one of them is not a part of the window.
-    pub(crate) fn union_back(&self, at: u64, held: u64) -> Result<DamageRects, Since> {
-        let unknown = |baseline| Since {
-            damage: Damage::Full,
-            baseline,
-            unheld: false,
-        };
+    // after `held`; why they make no part of the window when one of them is
+    // not a part.
+    pub(crate) fn union_back(&self, at: u64, held: u64) -> Result<DamageRects, NoPart> {
         // A frame that changed nothing against the one before is that one.
         let mut held_frame = held;
         for _ in 0..HISTORY {
@@ -485,21 +520,31 @@ impl FrameDamages {
                 return Ok(union);
             }
             let Some(packet) = self.noted(at) else {
-                return Err(unknown(false));
+                return Err(NoPart::Unknown);
             };
             let Some(since) = packet.since else {
-                return Err(unknown(true));
+                return Err(NoPart::Baseline);
             };
             let Damage::Part(part) = packet.damage else {
-                return Err(unknown(false));
+                return Err(NoPart::Unknown);
             };
             for rect in part.as_slice() {
                 union.add(*rect);
             }
             at = since;
         }
-        Err(unknown(false))
+        Err(NoPart::Unknown)
     }
+}
+
+// Why the damages back to a held frame make no part of the window.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum NoPart {
+    // A frame between knew no frame before it and drew whole: the frames
+    // after it compare with it.
+    Baseline,
+    // A damage is not known, or it is not a part of the window.
+    Unknown,
 }
 
 pub(crate) fn snap_delta(anchor: Option<SnapAnchor>, scale: f32) -> cranpose_ui_graphics::Point {
@@ -527,6 +572,12 @@ pub(crate) fn settle(rects: DamageRects, viewport: (u32, u32)) -> Damage {
     } else {
         Damage::Part(rects)
     }
+}
+
+// The pixels the bounds of `a` and `b` add to theirs.
+fn added_pixels(a: DeviceRect, b: DeviceRect) -> f32 {
+    let area = |rect: DeviceRect| rect.width * rect.height;
+    area(a.union(b)) - area(a) - area(b)
 }
 
 fn holds(outer: DeviceRect, inner: DeviceRect) -> bool {

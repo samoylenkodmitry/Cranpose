@@ -36,6 +36,10 @@ pub(crate) struct PresentRuntimeInit {
     pub(crate) observer: Option<BoxedPresentObserver>,
 }
 
+#[expect(
+    clippy::large_enum_variant,
+    reason = "a capture carries its frame's packet inline, as a frame does"
+)]
 pub(crate) enum PresentControl {
     // Nothing waits for it: packets sent after it run on the new surface,
     // which first shows `background`.
