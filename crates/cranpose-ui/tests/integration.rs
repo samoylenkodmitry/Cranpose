@@ -34,6 +34,7 @@ mod semantics_hint;
 mod shadow_api_integration;
 mod static_density_integration;
 mod subcompose_disposal;
+mod subcomposed_parents;
 #[cfg(feature = "svg")]
 mod svg_painter_integration;
 mod text_cache_headroom;
