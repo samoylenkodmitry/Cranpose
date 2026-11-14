@@ -7,8 +7,8 @@ use cranpose_core::{
 };
 use cranpose_render_common::Renderer;
 use cranpose_ui::{
-    Announcement, CollectionInfo, LiveRegionMode, ProgressBarRangeInfo, SemanticsAction,
-    SemanticsNode, SemanticsRole, SemanticsTree, SemanticsWidgetRole, ToggleableState,
+    Announcement, CollectionInfo, LiveRegionMode, SemanticsAction, SemanticsNode, SemanticsRole,
+    SemanticsTree, SemanticsWidgetRole, ToggleableState,
 };
 
 #[path = "accessibility_details.rs"]
@@ -1611,7 +1611,7 @@ pub(crate) fn expansion_word(element: &AccessibilityElement) -> Option<&'static 
     all(feature = "desktop-shell", feature = "renderer-wgpu"),
     all(feature = "ios", feature = "renderer-wgpu", target_os = "ios")
 ))]
-pub(crate) fn stepped_value(progress: &ProgressBarRangeInfo, up: bool) -> f32 {
+pub(crate) fn stepped_value(progress: &cranpose_ui::ProgressBarRangeInfo, up: bool) -> f32 {
     let step = progress.step();
     let next = if up {
         progress.current + step
@@ -2003,7 +2003,7 @@ pub(crate) fn log_spoken_tree(elements: &[AccessibilityElement]) {
 }
 
 #[cfg(any(test, feature = "robot", target_os = "ios"))]
-fn spoken_percent(progress: &ProgressBarRangeInfo) -> Option<String> {
+fn spoken_percent(progress: &cranpose_ui::ProgressBarRangeInfo) -> Option<String> {
     let span = progress.end - progress.start;
     (span > 0.0).then(|| {
         let percent = ((progress.current - progress.start) / span * 100.0).round();
