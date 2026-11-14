@@ -1,23 +1,38 @@
 #![expect(unsafe_code, reason = "Objective-C messages to UIKit")]
 
+use std::borrow::Cow;
+
 use objc2::{MainThreadMarker, MainThreadOnly, rc::Retained, runtime::AnyObject, sel};
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 use objc2_foundation::{NSArray, NSObject, NSString};
 use objc2_ui_kit::{
     NSObjectUIAccessibility, NSObjectUIAccessibilityAction, UIAccessibilityCustomAction,
-    UIAccessibilityTraitAdjustable, UIAccessibilityTraitButton, UIAccessibilityTraitHeader,
-    UIAccessibilityTraitImage, UIAccessibilityTraitLink, UIAccessibilityTraitNone,
-    UIAccessibilityTraitNotEnabled, UIAccessibilityTraitSearchField, UIAccessibilityTraitSelected,
-    UIAccessibilityTraitStaticText, UIAccessibilityTraitUpdatesFrequently, UIAccessibilityTraits,
-    UITextField,
+    UIAccessibilityIdentification, UIAccessibilityTraitAdjustable, UIAccessibilityTraitButton,
+    UIAccessibilityTraitHeader, UIAccessibilityTraitImage, UIAccessibilityTraitLink,
+    UIAccessibilityTraitNone, UIAccessibilityTraitNotEnabled, UIAccessibilityTraitSearchField,
+    UIAccessibilityTraitSelected, UIAccessibilityTraitStaticText,
+    UIAccessibilityTraitUpdatesFrequently, UIAccessibilityTraits, UITextField,
 };
 
 use super::NativeAccessibilityElement;
 use crate::accessibility::{self, AccessibilityElement, AccessibilityRole};
 
+// XCUITest finds an element by its accessibility identifier, which carries the
+// test tag as Compose Multiplatform's iOS host does.
+pub(super) fn automation_identifier(
+    element: &AccessibilityElement,
+    element_id: i32,
+) -> Cow<'_, str> {
+    match &element.details().test_tag {
+        Some(tag) => Cow::Borrowed(tag),
+        None => Cow::Owned(format!("cranpose-node-{element_id}")),
+    }
+}
+
 pub(super) fn update_native_element(
     native: &NativeAccessibilityElement,
     element: &AccessibilityElement,
+    element_id: i32,
     elements: &[AccessibilityElement],
     mtm: MainThreadMarker,
 ) {
@@ -49,6 +64,9 @@ pub(super) fn update_native_element(
     }
     native.setIsAccessibilityElement(!element.label.is_empty() || element.role.is_text_field());
     native.setAccessibilityLabel(Some(&NSString::from_str(&element.label)));
+    native.setAccessibilityIdentifier(Some(&NSString::from_str(&automation_identifier(
+        element, element_id,
+    ))));
     let value = accessibility::voiceover_value(element);
     native.setAccessibilityValue(value.as_deref().map(NSString::from_str).as_deref());
     let hint = [details.click_label.as_deref(), details.hint_text.as_deref()]

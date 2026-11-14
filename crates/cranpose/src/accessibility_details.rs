@@ -42,6 +42,9 @@ pub(crate) struct AccessibilityDetails {
     /// the element's `value`. A field that holds a secret publishes none.
     pub(crate) text_selection: Option<(usize, usize)>,
     pub(crate) multiline: bool,
+    // The name tests find the control by (`Modifier::test_tag`), which a
+    // platform publishes where its UI tests look for one.
+    pub(crate) test_tag: Option<String>,
 }
 
 impl AccessibilityDetails {
@@ -69,6 +72,7 @@ impl AccessibilityDetails {
         is_modal: false,
         text_selection: None,
         multiline: false,
+        test_tag: None,
     };
 }
 
@@ -130,6 +134,7 @@ pub(super) fn fill_node_details(
             .filter(|_| details.editable_text && !details.password)
             .map(|range| (range.start, range.end)),
         multiline: details.multiline,
+        test_tag: reuse_text(held.test_tag.take(), details.test_tag.as_deref()),
     };
 }
 

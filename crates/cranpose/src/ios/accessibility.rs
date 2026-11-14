@@ -21,12 +21,11 @@ use objc2_ui_kit::{
     NSObjectUIAccessibility, NSObjectUIAccessibilityContainer,
     UIAccessibilityAnnouncementNotification, UIAccessibilityCustomAction,
     UIAccessibilityDarkerSystemColorsEnabled, UIAccessibilityElement,
-    UIAccessibilityIdentification, UIAccessibilityIsBoldTextEnabled,
-    UIAccessibilityIsInvertColorsEnabled, UIAccessibilityIsReduceMotionEnabled,
-    UIAccessibilityIsReduceTransparencyEnabled, UIAccessibilityIsVoiceOverRunning,
-    UIAccessibilityLayoutChangedNotification, UIAccessibilityPostNotification,
-    UIAccessibilityScreenChangedNotification, UIApplication, UIContentSizeCategory,
-    UIContentSizeCategoryAccessibilityExtraExtraExtraLarge,
+    UIAccessibilityIsBoldTextEnabled, UIAccessibilityIsInvertColorsEnabled,
+    UIAccessibilityIsReduceMotionEnabled, UIAccessibilityIsReduceTransparencyEnabled,
+    UIAccessibilityIsVoiceOverRunning, UIAccessibilityLayoutChangedNotification,
+    UIAccessibilityPostNotification, UIAccessibilityScreenChangedNotification, UIApplication,
+    UIContentSizeCategory, UIContentSizeCategoryAccessibilityExtraExtraExtraLarge,
     UIContentSizeCategoryAccessibilityExtraExtraLarge,
     UIContentSizeCategoryAccessibilityExtraLarge, UIContentSizeCategoryAccessibilityLarge,
     UIContentSizeCategoryAccessibilityMedium, UIContentSizeCategoryExtraExtraExtraLarge,
@@ -34,7 +33,7 @@ use objc2_ui_kit::{
     UIContentSizeCategoryExtraSmall, UIContentSizeCategoryLarge, UIContentSizeCategoryMedium,
     UIContentSizeCategorySmall, UIView,
 };
-use properties::update_native_element;
+use properties::{automation_identifier, update_native_element};
 use winit::event_loop::EventLoopProxy;
 
 use super::file_picker::root_view_controller;
@@ -449,7 +448,7 @@ impl IosAccessibilityBridge {
                 .native_elements
                 .get(element_id)
                 .expect("accessibility element inserted above");
-            update_native_element(native, element, next, mtm);
+            update_native_element(native, element, *element_id, next, mtm);
         }
         let reader_view_changed = self.update_reader_view(next, next_ids);
 
@@ -769,9 +768,6 @@ impl IosAccessibilityBridge {
             mtm,
         );
         native.setIsAccessibilityElement(true);
-        native.setAccessibilityIdentifier(Some(&NSString::from_str(&format!(
-            "cranpose-node-{element_id}"
-        ))));
         native
     }
 
@@ -792,7 +788,7 @@ impl IosAccessibilityBridge {
                     .filter(|_| !element.details().password),
                 frame,
                 &self.host_view,
-                &format!("cranpose-node-{id}"),
+                &automation_identifier(element, id),
             )
             .map(|view| (id, view))
         });

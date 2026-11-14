@@ -2232,8 +2232,7 @@ fn a_test_tag_reaches_no_screen_reader() {
         vec![pay, tag_only],
     );
 
-    let elements = project_test_tree(&root);
-    let published = format!("{elements:?}");
+    let mut elements = project_test_tree(&root);
     assert_eq!(
         elements
             .iter()
@@ -2242,9 +2241,18 @@ fn a_test_tag_reaches_no_screen_reader() {
         ["Pay"],
         "a node with only a tag publishes nothing"
     );
+    assert_eq!(
+        elements[0].details().test_tag.as_deref(),
+        Some("pay-button"),
+        "the tag goes where the platform's UI tests look for it"
+    );
+    for element in &mut elements {
+        element.update_details(|details| details.test_tag = None);
+    }
+    let spoken = format!("{elements:?}");
     assert!(
-        !published.contains("pay-button") && !published.contains("spacer-tag"),
-        "a tag reached the accessibility tree: {published}"
+        !spoken.contains("pay-button") && !spoken.contains("spacer-tag"),
+        "a tag reached what a screen reader reads: {spoken}"
     );
 }
 
