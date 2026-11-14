@@ -6,7 +6,7 @@ use std::{
     },
 };
 
-use crate::frame_graph::WgpuFrameGraphExecutor;
+use super::WgpuFrameGraphExecutor;
 
 const QUERY_CAPACITY: u32 = 512;
 
@@ -21,10 +21,6 @@ const SLOT_READY: u8 = 5;
 const SLOT_RESOLVING: u8 = 6;
 
 const PRINT_CADENCE_FRAMES: u64 = 60;
-
-pub(crate) fn pass_timing_requested() -> bool {
-    cranpose_core::DIAGNOSTICS.gpu_pass_timing.flag()
-}
 
 /// One label's aggregate inside the current print window.
 #[derive(Clone, Debug, PartialEq)]
@@ -97,6 +93,9 @@ pub(crate) struct PassTimer {
 impl PassTimer {
     #[expect(clippy::print_stderr, reason = "explains why no timings come")]
     pub(crate) fn for_device(device: &wgpu::Device, queue: &wgpu::Queue) -> Option<Self> {
+        if !cranpose_core::DIAGNOSTICS.gpu_pass_timing.flag() {
+            return None;
+        }
         if !device.features().contains(wgpu::Features::TIMESTAMP_QUERY) {
             eprintln!(
                 "[GPU-PASS] CRANPOSE_GPU_PASS_TIMING is set but the adapter lacks TIMESTAMP_QUERY; passes will not be timed"

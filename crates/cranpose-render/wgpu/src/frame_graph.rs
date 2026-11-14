@@ -1,6 +1,7 @@
 mod buffer_uploads;
 pub(crate) mod fence_profile;
 mod mapped_pool;
+pub(crate) mod pass_timing;
 #[cfg(any(target_arch = "wasm32", test))]
 pub(crate) mod submit_nothing;
 
@@ -8,12 +9,12 @@ use std::fmt;
 
 use buffer_uploads::{BeforePassWriter, BufferUploads};
 pub(crate) use mapped_pool::{MapRequests, MappedBuffers, MappedPool, take_largest_fitting};
+use pass_timing::{GpuPassTimingReport, PassTimer};
 use web_time::Instant;
 
 use crate::{
     idle_pool::{IdlePool, RecentPeak},
     offscreen::OffscreenTarget,
-    pass_timing::{GpuPassTimingReport, PassTimer},
 };
 
 #[derive(Default)]
@@ -555,9 +556,7 @@ impl WgpuFrameGraphExecutor {
     }
 
     pub(crate) fn init_pass_timing(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
-        if crate::pass_timing::pass_timing_requested() {
-            self.pass_timer = PassTimer::for_device(device, queue);
-        }
+        self.pass_timer = PassTimer::for_device(device, queue);
     }
 
     pub(crate) fn end_pass_timing_frame(&self, device: &wgpu::Device, queue: &wgpu::Queue) {
@@ -739,7 +738,7 @@ impl WgpuFrameGraphExecutor {
     }
 
     /// Submits the frame and returns how many buffer writes it carried.
-    pub(crate) fn submit(
+    fn submit(
         queue: &wgpu::Queue,
         encoder: wgpu::CommandEncoder,
         before_passes: Option<wgpu::CommandEncoder>,
@@ -1090,7 +1089,7 @@ impl FrameCommandRecorder for PassContext<'_> {
             let bucket = fence_profile::bucket_label(descriptor);
             fence_profile::split(self.device, self.encoder, Some(&bucket));
         }
-        crate::pass_timing::begin_timed_render_pass(self.pass_timer, self.encoder, descriptor)
+        pass_timing::begin_timed_render_pass(self.pass_timer, self.encoder, descriptor)
     }
 
     fn begin_compute_pass(&mut self, label: &'static str) -> wgpu::ComputePass<'_> {
@@ -1314,7 +1313,7 @@ impl FrameCommandRecorder for WgpuFrameEncoder<'_> {
         &mut self,
         descriptor: &wgpu::RenderPassDescriptor<'_>,
     ) -> wgpu::RenderPass<'_> {
-        crate::pass_timing::begin_timed_render_pass(self.pass_timer, &mut self.encoder, descriptor)
+        pass_timing::begin_timed_render_pass(self.pass_timer, &mut self.encoder, descriptor)
     }
 
     fn begin_compute_pass(&mut self, label: &'static str) -> wgpu::ComputePass<'_> {

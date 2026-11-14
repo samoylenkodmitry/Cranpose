@@ -51,7 +51,6 @@ mod mesh_fallback;
 mod offscreen;
 mod opaque_prefix;
 mod output_conversion;
-pub(crate) mod pass_timing;
 mod pipeline;
 mod pipeline_compiler;
 /// The file in which the driver's compiled pipelines, and a record of the pipelines the first
@@ -95,6 +94,7 @@ pub use captured_frame::CapturedFrame;
 pub use cpu_allocation_stats::DebugCpuAllocationStats;
 use cranpose_render_common::text_fonts::TextFonts;
 use cranpose_ui_graphics::Rect;
+pub use frame_graph::pass_timing::{GpuPassTimingEntry, GpuPassTimingReport};
 pub use frame_packet::PresentTimings;
 #[doc(hidden)]
 pub use frame_packet::{CancelReason, PresentOutcome};
@@ -105,7 +105,6 @@ pub use gpu_target::{GpuTarget, optional_device_features};
 pub use initial_present::{clear_to_background, clear_to_default_background};
 #[cfg(not(target_arch = "wasm32"))]
 pub use inline_present_runtime::InlinePresentRuntime;
-pub use pass_timing::{GpuPassTimingEntry, GpuPassTimingReport};
 use pipeline_compiler::PipelineCompilation;
 #[cfg(not(target_arch = "wasm32"))]
 use present_handle::PresentHandle;
