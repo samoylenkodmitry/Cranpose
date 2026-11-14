@@ -256,19 +256,20 @@ pub(crate) fn headless_renderer_with_display_format(
 pub(crate) fn headless_renderer_with_limits(
     limits: wgpu::Limits,
 ) -> Result<LockedRenderer, String> {
-    headless_renderer_configured(limits, wgpu::Backends::all())
+    headless_renderer_configured(limits, wgpu::Backends::all(), device::Pipelines::Inline)
 }
 
 pub(crate) fn headless_renderer_configured(
     limits: wgpu::Limits,
     backends: wgpu::Backends,
+    pipelines: device::Pipelines,
 ) -> Result<LockedRenderer, String> {
     let lock = lock_gpu_test();
     let renderer = create_headless_renderer_configured(
         wgpu::TextureFormat::Bgra8UnormSrgb,
         limits,
         backends,
-        device::Pipelines::Inline,
+        pipelines,
     )?;
     Ok(with_app_context(renderer, Some(lock)))
 }
