@@ -1146,10 +1146,10 @@ impl RunStore {
         self.arena.reset();
     }
 
-    // Asks the frame's replaced tables back after `submission`, its submit.
-    pub(crate) fn recall(&mut self, submission: Option<&wgpu::SubmissionIndex>) {
-        self.requests.recall(submission);
-        self.arena.requests.recall(submission);
+    // Asks the frame's replaced tables back once the frame is submitted.
+    pub(crate) fn recall(&mut self) {
+        self.requests.recall();
+        self.arena.requests.recall();
     }
 
     pub(crate) fn stage_pending(

@@ -1,9 +1,6 @@
 use std::sync::{atomic::Ordering, mpsc::Receiver};
 
-use crate::{
-    DeviceLostHandler, GpuTarget, pipeline_compiler::PipelineCompilation,
-    present_handle::PresentHandle, present_runtime::PresentControl,
-};
+use crate::{present_handle::PresentHandle, present_runtime::PresentControl};
 
 /// How a test target hands out the images its frames draw into.
 #[doc(hidden)]
@@ -23,10 +20,7 @@ pub enum TestImages {
 /// a frame built for the surface as it was is refused instead of drawn.
 pub struct PresentThread<'a> {
     pub(crate) handle: &'a mut PresentHandle,
-    pub(crate) renderer_epoch: &'a mut u64,
     pub(crate) surface_epoch: &'a mut u64,
-    pub(crate) on_device_lost: Option<&'a DeviceLostHandler>,
-    pub(crate) background: wgpu::Color,
 }
 
 impl PresentThread<'_> {
@@ -36,7 +30,7 @@ impl PresentThread<'_> {
     }
 
     /// Gives the thread a (re)created surface, configured as `config`,
-    /// which first shows the renderer's background. Nothing waits for the
+    /// which first shows the default background. Nothing waits for the
     /// thread to set it up: frames published afterwards queue behind it.
     /// False when the thread is gone.
     pub fn replace_surface(
@@ -49,7 +43,6 @@ impl PresentThread<'_> {
             surface,
             config,
             surface_epoch,
-            background: self.background,
         });
         if !sent {
             log::error!("[present-runtime] replace surface: runtime is gone");
@@ -61,109 +54,23 @@ impl PresentThread<'_> {
     /// thread has done it, as a surface the platform hands over anew needs.
     pub fn reconfigure(mut self, config: wgpu::SurfaceConfiguration) -> bool {
         let surface_epoch = self.next_surface_epoch();
-        self.handle
-            .send_control_and_wait(
-                move |ack| PresentControl::Reconfigure {
-                    config,
-                    surface_epoch,
-                    ack: Some(ack),
-                },
-                "reconfigure surface",
-            )
-            .is_some()
-    }
-
-    /// Configures the thread's surface as `config`, a new size or present
-    /// mode of a window, waiting for nothing: frames published afterwards
-    /// draw on the surface so configured.
-    pub fn resize(mut self, config: wgpu::SurfaceConfiguration) -> bool {
-        let surface_epoch = self.next_surface_epoch();
-        self.handle.send_control(PresentControl::Reconfigure {
-            config,
-            surface_epoch,
-            ack: None,
-        })
-    }
-
-    /// Takes the thread's surface back and waits until the thread hands it
-    /// over, as when the window that showed it is gone or the app leaves the
-    /// screen: the thread draws nothing more into it. The renderer stays for
-    /// the next surface. `None` when the thread had no surface or is gone.
-    pub fn take_surface(mut self) -> Option<wgpu::Surface<'static>> {
-        self.next_surface_epoch();
-        self.handle
-            .send_control_and_wait(
-                |reply| PresentControl::TakeSurface { reply },
-                "take surface",
-            )
-            .flatten()
-    }
-
-    /// Tells the thread whether the window shows none of the surface. While
-    /// it shows none, the thread takes no image and holds the newest frame
-    /// back until the window shows it again.
-    pub fn set_occluded(self, occluded: bool) -> bool {
-        self.handle.send_control(PresentControl::Occluded {
-            occluded,
-            ack: None,
-        })
-    }
-
-    /// Tells the thread that the window shows none of the surface and waits
-    /// until the frame the thread draws, if any, ends: the thread submits no
-    /// GPU work after, as an iOS app that enters the background must not.
-    pub fn hide_and_wait(self) -> bool {
-        self.handle
-            .send_control_and_wait(
-                |ack| PresentControl::Occluded {
-                    occluded: true,
-                    ack: Some(ack),
-                },
-                "hide",
-            )
-            .is_some()
-    }
-
-    /// Runs `call` on the thread with the surface it holds, `None` when it
-    /// holds none, between two frames, and hands back what `call` returned:
-    /// a new adapter after a device loss must present to that surface.
-    /// `None` when the thread is gone or gave no answer.
-    pub fn with_surface<T: Send + 'static>(
-        self,
-        call: impl FnOnce(Option<&wgpu::Surface<'static>>) -> T + Send + 'static,
-    ) -> Option<T> {
         self.handle.send_control_and_wait(
-            |reply| {
-                PresentControl::WithSurface(Box::new(move |surface| {
-                    crate::present_runtime::answer(&reply, call(surface));
-                }))
+            move |ack| PresentControl::Reconfigure {
+                config,
+                surface_epoch,
+                ack,
             },
-            "with surface",
+            "reconfigure surface",
         )
     }
 
-    /// Moves the thread's renderer to `target`, a new device after the last
-    /// was lost. The surface stays, configured on the new device; frames
-    /// built for the old renderer are refused.
-    pub fn replace_device(self, target: GpuTarget) -> bool {
-        *self.renderer_epoch = self.renderer_epoch.wrapping_add(1);
-        let gpu = target.renderer_init(
-            *self.renderer_epoch,
-            PipelineCompilation::Background,
-            self.on_device_lost.cloned(),
-        );
+    /// Drops the thread's surface and waits until the thread has done it,
+    /// as when the window that showed it is gone: the thread draws nothing
+    /// more into it. The renderer stays for the next surface.
+    pub fn drop_surface(mut self) -> bool {
+        self.next_surface_epoch();
         self.handle
-            .send_control(PresentControl::ReplaceDevice(Box::new(gpu)))
-    }
-
-    /// Destroys the thread's device between two frames and waits until the
-    /// device reported its loss, as a driver reset would lose it: a robot's
-    /// device loss drill.
-    #[doc(hidden)]
-    pub fn lose_device(self) -> bool {
-        self.handle
-            .send_control_and_wait(|ack| PresentControl::LoseDevice { ack }, "lose device")
-            .is_some()
+            .send_control_and_wait(|ack| PresentControl::DropSurface { ack }, "drop surface")
     }
 
     #[doc(hidden)]
@@ -174,18 +81,16 @@ impl PresentThread<'_> {
         images: TestImages,
     ) -> bool {
         let surface_epoch = self.next_surface_epoch();
-        self.handle
-            .send_control_and_wait(
-                move |ack| PresentControl::AttachOffscreenTargetForTests {
-                    width,
-                    height,
-                    images,
-                    surface_epoch,
-                    ack,
-                },
-                "attach offscreen target",
-            )
-            .is_some()
+        self.handle.send_control_and_wait(
+            move |ack| PresentControl::AttachOffscreenTargetForTests {
+                width,
+                height,
+                images,
+                surface_epoch,
+                ack,
+            },
+            "attach offscreen target",
+        )
     }
 
     #[doc(hidden)]
@@ -216,16 +121,14 @@ impl PresentThread<'_> {
             .send_control_unacked(move |ack| PresentControl::Reconfigure {
                 config,
                 surface_epoch,
-                ack: Some(ack),
+                ack,
             })
     }
 
     #[doc(hidden)]
-    pub fn send_take_surface_unacked_for_tests(
-        self,
-    ) -> Option<Receiver<Option<wgpu::Surface<'static>>>> {
+    pub fn send_drop_surface_unacked_for_tests(self) -> Option<Receiver<()>> {
         self.handle
-            .send_control_unacked(|reply| PresentControl::TakeSurface { reply })
+            .send_control_unacked(|ack| PresentControl::DropSurface { ack })
     }
 
     #[doc(hidden)]

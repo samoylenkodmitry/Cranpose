@@ -5,13 +5,13 @@ use cranpose_render_wgpu::WgpuRenderer;
 use winit::window::Window;
 
 use super::request_redraw_once;
-use crate::{app_launcher::AppSettings, window_present::WindowPresent};
+use crate::app_launcher::AppSettings;
 
 // The primary window's surface, its configuration and the viewport a
 // headless run asks for in place of the window's.
 pub(super) struct PrimarySurface<'a> {
     pub(super) window: &'a Arc<dyn Window>,
-    pub(super) present: &'a WindowPresent,
+    pub(super) surface: &'a wgpu::Surface<'static>,
     pub(super) config: &'a mut wgpu::SurfaceConfiguration,
     pub(super) viewport_override: Option<(f32, f32)>,
 }
@@ -26,13 +26,13 @@ impl PrimarySurface<'_> {
             height,
             self.window.scale_factor(),
         );
-        configure_app_surface_size(app, self.present, self.config, width, height, viewport);
+        configure_app_surface_size(app, self.surface, self.config, width, height, viewport);
     }
 }
 
 fn configure_app_surface_size(
     app: &mut AppShell<WgpuRenderer>,
-    present: &WindowPresent,
+    surface: &wgpu::Surface<'static>,
     surface_config: &mut wgpu::SurfaceConfiguration,
     width: u32,
     height: u32,
@@ -41,13 +41,14 @@ fn configure_app_surface_size(
     if width == 0 || height == 0 {
         return;
     }
-    let previous = (surface_config.width, surface_config.height);
+
+    let Some(device) = app.renderer().try_device() else {
+        log::error!("desktop surface resize skipped: GPU renderer is not initialized");
+        return;
+    };
     surface_config.width = width;
     surface_config.height = height;
-    if !present.configure(app.renderer(), surface_config) {
-        (surface_config.width, surface_config.height) = previous;
-        return;
-    }
+    surface.configure(device, surface_config);
     update_app_viewport(app, width, height, viewport);
 }
 

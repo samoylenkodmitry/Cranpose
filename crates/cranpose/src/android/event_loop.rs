@@ -1011,7 +1011,7 @@ fn drop_android_surface(
     match (gpu_resources.as_mut(), app_shell.as_mut()) {
         (Some(resources), Some(shell)) => {
             if present_thread && let Some(thread) = shell.renderer().present_thread() {
-                drop(thread.take_surface());
+                thread.drop_surface();
             }
             resources.surface = None;
             resources.native_window_ptr = None;
@@ -1435,7 +1435,7 @@ pub fn run(
 
     keep_pipeline_cache(&app);
 
-    let present_thread = crate::present_thread::presents_on_thread();
+    let present_thread = super::present_thread::presents_on_thread();
     if present_thread {
         log::info!("[present-runtime] threaded present enabled");
     }

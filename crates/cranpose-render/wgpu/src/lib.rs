@@ -96,9 +96,9 @@ use cranpose_render_common::text_fonts::TextFonts;
 use cranpose_ui_graphics::Rect;
 pub use frame_graph::pass_timing::{GpuPassTimingEntry, GpuPassTimingReport};
 pub use frame_packet::PresentTimings;
+use frame_packet::RenderReturns;
 #[doc(hidden)]
 pub use frame_packet::{CancelReason, PresentOutcome};
-use frame_packet::{CaptureReply, RenderReturns};
 use frontend::RendererFrontend;
 pub use gpu_stats::{FrameDamage, FrameStatsSnapshot as RenderStatsSnapshot, WindowRects};
 pub use gpu_target::{GpuTarget, optional_device_features};
@@ -162,41 +162,6 @@ impl PresentBackend {
                 "GPU renderer not initialized for synchronous rendering. Call init_gpu() first."
                     .to_string(),
             )),
-        }
-    }
-
-    // Draws `packet` into an image of `viewport` and gives its pixels, with
-    // what the packet hands back.
-    fn capture(
-        &mut self,
-        packet: frame_packet::FramePacket,
-        viewport: (u32, u32),
-        surface_epoch: u64,
-    ) -> CaptureReply {
-        let mut returns = RenderReturns::default();
-        let (pixels, stats) = match self {
-            Self::Sync(sync) => (
-                sync.renderer.render_to_rgba_pixels(
-                    &mut sync.submit,
-                    viewport,
-                    packet,
-                    surface_epoch,
-                    &mut returns,
-                ),
-                sync.renderer.last_frame_stats(),
-            ),
-            #[cfg(not(target_arch = "wasm32"))]
-            Self::Threaded(handle) => return handle.capture(packet, viewport),
-            Self::None => {
-                GpuRenderer::cancel_packet(packet, CancelReason::SurfaceUnavailable, &mut returns);
-                let error = "GPU renderer not initialized. Call init_gpu() first.";
-                (Err(error.to_string()), None)
-            }
-        };
-        CaptureReply {
-            returns,
-            pixels,
-            stats,
         }
     }
 }
@@ -599,14 +564,17 @@ impl WgpuRenderer {
     /// Render the current scene into an RGBA pixel buffer with an explicit scale.
     ///
     /// `width` and `height` are in device pixels and `root_scale` is the scale from logical to
-    /// device pixels. A renderer that presents on a thread of its own draws it on that thread,
-    /// after the frames handed to it before, and this waits for the pixels.
+    /// device pixels. Needs a renderer initialized for synchronous rendering.
     pub fn capture_frame_with_scale(
         &mut self,
         width: u32,
         height: u32,
         root_scale: f32,
     ) -> Result<CapturedFrame, WgpuRendererError> {
+        let SyncPresenter {
+            renderer: gpu_renderer,
+            submit,
+        } = self.backend.sync_mut()?;
         let packet = self
             .frontend
             .build_frame_packet_with_scale(
@@ -616,36 +584,33 @@ impl WgpuRenderer {
                 frontend::PacketFor::Capture,
             )
             .ok_or_else(|| WgpuRendererError::Wgpu("scene graph is missing".to_string()))?;
-        let CaptureReply {
-            returns,
-            pixels,
-            stats,
-        } = self
-            .backend
-            .capture(packet, (width, height), self.surface_epoch);
+        let mut returns = RenderReturns::default();
+        let result = gpu_renderer.render_to_rgba_pixels(
+            submit,
+            (width, height),
+            packet,
+            self.surface_epoch,
+            &mut returns,
+        );
         self.frontend.apply_returns(returns);
-        let pixels = pixels.map_err(WgpuRendererError::Wgpu)?;
+        let pixels = result.map_err(WgpuRendererError::Wgpu)?;
         Ok(CapturedFrame {
             width,
             height,
             pixels,
-            stats,
+            stats: gpu_renderer.last_frame_stats(),
         })
     }
 
     /// Threaded mode: whether the present thread takes a packet now. Two
-    /// packets go in flight at most. A packet that draws whole because the
-    /// window's images hold no frame to build on, as at the window's start
-    /// and after a refused frame, goes only with none in flight.
+    /// packets go in flight at most.
     /// The Android loop checks this BEFORE `shell.update()` so
     /// backpressure lands before the expensive update/lowering work.
     /// Always `true` on the sync path, which has no slot to fill.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn has_frame_credit(&self) -> bool {
         match &self.backend {
-            PresentBackend::Threaded(handle) => {
-                handle.has_credit(self.frontend.next_overlap(self.surface_epoch))
-            }
+            PresentBackend::Threaded(handle) => handle.has_credit(),
             PresentBackend::Sync(_) | PresentBackend::None => true,
         }
     }
@@ -674,7 +639,7 @@ impl WgpuRenderer {
             log::error!("publish_frame called without a threaded present runtime");
             return PublishOutcome::NoCredit;
         };
-        if !handle.has_credit(self.frontend.next_overlap(self.surface_epoch)) {
+        if !handle.has_credit() {
             return PublishOutcome::NoCredit;
         }
         let Some(packet) = self.frontend.build_frame_packet(
@@ -744,10 +709,7 @@ impl WgpuRenderer {
         };
         Some(PresentThread {
             handle,
-            renderer_epoch: &mut self.renderer_epoch,
             surface_epoch: &mut self.surface_epoch,
-            on_device_lost: self.on_device_lost.as_ref(),
-            background: frame_clear_color(self.frontend.transparent_background),
         })
     }
 
@@ -802,18 +764,12 @@ impl WgpuRenderer {
     /// Whether the pipeline cache file held an earlier launch's first screen,
     /// whose pipelines build ahead of this renderer's first frame; `false`
     /// for a first launch or emptied caches, whose first frame builds its
-    /// pipelines. A present thread answers once it has built its renderer,
-    /// `false` before.
+    /// pipelines, and for a renderer that does not draw on the calling
+    /// thread.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn first_screen_recorded(&self) -> bool {
-        match &self.backend {
-            PresentBackend::Sync(sync) => sync.renderer.first_screen_recorded(),
-            PresentBackend::Threaded(handle) => handle
-                .status()
-                .first_screen_recorded
-                .load(std::sync::atomic::Ordering::Relaxed),
-            PresentBackend::None => false,
-        }
+        self.sync_gpu_renderer()
+            .is_some_and(GpuRenderer::first_screen_recorded)
     }
 
     /// The pipelines this renderer's first screen drew with, encoded for
@@ -853,20 +809,13 @@ impl WgpuRenderer {
     }
 
     /// The sizes and capacities of the renderer's CPU-side scene data, scratch buffers and
-    /// caches, for memory diagnostics. A renderer that draws on a present thread asks that
-    /// thread for its members and waits for the answer.
+    /// caches, for memory diagnostics. The members of a renderer that does not draw on the
+    /// calling thread cover the scene only.
     pub fn debug_cpu_allocation_stats(&self) -> DebugCpuAllocationStats {
-        let mut stats = match &self.backend {
-            PresentBackend::Sync(sync) => sync.renderer.debug_cpu_allocation_stats(),
-            #[cfg(not(target_arch = "wasm32"))]
-            PresentBackend::Threaded(handle) => handle
-                .send_control_and_wait(
-                    |reply| present_runtime::PresentControl::CpuAllocationStats { reply },
-                    "cpu allocation stats",
-                )
-                .unwrap_or_default(),
-            PresentBackend::None => DebugCpuAllocationStats::default(),
-        };
+        let mut stats = self
+            .sync_gpu_renderer()
+            .map(GpuRenderer::debug_cpu_allocation_stats)
+            .unwrap_or_default();
         stats.scene_graph_node_count = self.frontend.scene.store().node_count();
         stats.scene_graph_heap_bytes = self.frontend.scene.store().heap_bytes();
         stats.scene_hits = self.frontend.scene.hit_storage();
