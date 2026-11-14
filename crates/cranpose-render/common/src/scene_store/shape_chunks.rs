@@ -373,15 +373,13 @@ fn keep_live_runs(
     recorder.keep_segments(|segment| owners.get(segment as usize).is_some_and(Option::is_some));
     // A run's segments lie together: each run now starts where the live
     // segments before it end.
-    let mut next = 0;
     let mut last = None;
-    for &owner in owners.iter().flatten() {
+    for (next, &owner) in (0..).zip(owners.iter().flatten()) {
         if last != Some(owner) {
             let run = &mut runs[owner.index()];
             run.segments = next..next + (run.segments.end - run.segments.start);
             last = Some(owner);
         }
-        next += 1;
     }
     owners.retain(Option::is_some);
 }
