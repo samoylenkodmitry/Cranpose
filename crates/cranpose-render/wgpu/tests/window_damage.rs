@@ -165,14 +165,10 @@ const SWAPCHAIN_START_FRAMES: u32 = SWAPCHAIN_IMAGES as u32;
 /// renderer keeps a copy of the frame for images that come cleared.
 const COPY_AFTER: u32 = 3;
 
-/// The frames images that come cleared take before they first summarize.
-const COPY_HOLD_OFF: u32 = 64;
-
 /// The frames images that come cleared take whole before one takes a part:
-/// the frames before they summarize, the one summarized as the frame the
-/// next compares with, then the small changes before the renderer keeps a
-/// copy, the last of which it copies.
-const CLEARED_START_FRAMES: u32 = COPY_HOLD_OFF + 1 + COPY_AFTER;
+/// the first, which the next compares with, then the small changes before
+/// the renderer keeps a copy, the last of which it copies.
+const CLEARED_START_FRAMES: u32 = START_FRAMES + COPY_AFTER;
 
 // The steps `Scene::MovedThenStill` moves the page: enough frames in a row
 // that change most of the window for the back-off to skip 64 frames, on a
@@ -1638,11 +1634,12 @@ fn an_image_that_comes_cleared_lets_the_copy_go_while_the_app_holds_still() {
 
 /// A page that costs less drawn whole than copied, a spinner over the
 /// background alone, draws straight into images that come cleared, keeps no
-/// copy, and summarizes seldom: not in its first frames, and then two
-/// frames, the one compared with and the one comparing, after each skip.
+/// copy, and summarizes seldom: two frames, the one compared with and the
+/// one comparing, at the start and after each skip of 4, 16 and 64 frames.
 #[test]
 fn a_light_page_draws_whole_into_images_that_come_cleared() {
-    const FRAMES: u32 = 3 * CLEARED_START_FRAMES;
+    const FRAMES: u32 = 200;
+    const SUMMARIZED: u32 = 2 * 4;
     let Some((_lock, renderer)) = renderer() else {
         return;
     };
@@ -1655,13 +1652,10 @@ fn a_light_page_draws_whole_into_images_that_come_cleared() {
         support::assert_same_bytes(&label, WIDTH, &frame.kept, &frame.direct);
         assert_eq!(stats.repainted_pixels, u64::from(WIDTH * HEIGHT), "{label}");
         assert!(!copies_a_window(&stats), "{label}: no copy");
-        if step < COPY_HOLD_OFF {
-            assert_eq!(stats.damage, FrameDamage::Skipped, "{label}: held off");
-        }
         summarized += u32::from(stats.damage != FrameDamage::Skipped);
     }
     assert!(
-        summarized <= 4,
+        summarized <= SUMMARIZED,
         "{summarized} of {FRAMES} frames summarized"
     );
 }

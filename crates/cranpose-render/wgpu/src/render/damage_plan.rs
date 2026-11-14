@@ -1,7 +1,6 @@
 // What a frame changes against the frame its target kept, and what it draws
 // for that.
 
-use super::FrameRoot;
 use crate::{
     frame::{ClearedImages, Damage, Held, PresentedImage, Repaint, SwapchainHistory},
     frame_packet::{FramePacket, HeldWindow},
@@ -88,22 +87,13 @@ impl FrameDamagePlan {
         }
     }
 
-    // How `packet` went into the target the plan draws it into, through
-    // `root`.
-    pub(super) fn drawn(self, packet: &FramePacket, root: &FrameRoot) -> TargetDrawn {
+    // How `packet` went into the target the plan draws it into.
+    pub(super) fn drawn(self, packet: &FramePacket) -> TargetDrawn {
         TargetDrawn {
             damage: self.damage,
             skipped: packet.skipped,
             knew_before: !self.baseline,
             unheld: self.unheld,
-            cleared: matches!(self.keeper, Keeper::Cleared { .. })
-                || matches!(
-                    root,
-                    FrameRoot::Composition {
-                        cleared: Some(_),
-                        ..
-                    }
-                ),
         }
     }
 }

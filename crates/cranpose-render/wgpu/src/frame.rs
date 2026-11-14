@@ -5410,8 +5410,8 @@ mod scene_surfaces;
 mod window_damage;
 
 pub(crate) use window_damage::{
-    COPY_HOLD_OFF, Capture, ClearedImages, Damage, DamageRects, FrameDamages, FrameWindow, Held,
-    ImageContent, MAX_DAMAGE_RECTS, PacketDamage, PresentedImage, Repaint, Since, SwapchainHistory,
+    Capture, ClearedImages, Damage, DamageRects, FrameDamages, FrameWindow, Held, ImageContent,
+    MAX_DAMAGE_RECTS, PacketDamage, PresentedImage, Repaint, Since, SwapchainHistory,
     collect_captures, settle, widen,
 };
 

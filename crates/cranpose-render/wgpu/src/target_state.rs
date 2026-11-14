@@ -16,9 +16,7 @@ use cranpose_ui_graphics::{Point, Rect};
 
 use crate::{
     collect::{LayerScene, ShownArea},
-    frame::{
-        COPY_HOLD_OFF, Capture, Damage, DamageRects, DeviceRect, collect_captures, settle, widen,
-    },
+    frame::{Capture, Damage, DamageRects, DeviceRect, collect_captures, settle, widen},
 };
 
 // The pixels a record's area takes in a target, whole pixels from the
@@ -233,9 +231,6 @@ pub(crate) struct TargetDrawn {
     // Whether the target held no frame, so it took this one whole for its
     // own sake.
     pub(crate) unheld: bool,
-    /// Whether the target is images that come cleared, whose frames the
-    /// renderer's copy keeps.
-    pub(crate) cleared: bool,
 }
 
 #[derive(Default)]
@@ -469,9 +464,9 @@ impl TargetState {
     /// frames. A frame skipped counts towards the frames to skip. After a
     /// frame that changed the whole target, though its packet knew the frame
     /// before, frames skip working out their damage: 1, 4, 16, 64 and then
-    /// [`MAX_SKIPPED`] frames, each such frame in a row quadrupling them,
-    /// from 64 frames on for images that come cleared; past
-    /// [`RELEASE_SKIPS`], the areas go until a frame records them again.
+    /// [`MAX_SKIPPED`] frames, each such frame in a row quadrupling them;
+    /// past [`RELEASE_SKIPS`], the areas go until a frame records them
+    /// again.
     pub(crate) fn drawn(&mut self, drawn: TargetDrawn) {
         if drawn.skipped {
             self.skipped = self.skipped.saturating_sub(1);
@@ -492,12 +487,7 @@ impl TargetState {
         if run == 0 {
             return;
         }
-        let first = if drawn.cleared {
-            COPY_HOLD_OFF.trailing_zeros()
-        } else {
-            0
-        };
-        let doublings = 2 * (run - 1) + first;
+        let doublings = 2 * (run - 1);
         self.skipped = 1u32 << doublings.min(MAX_SKIPPED.trailing_zeros());
         self.stale = true;
         if self.skipped >= RELEASE_SKIPS {
