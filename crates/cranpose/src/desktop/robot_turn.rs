@@ -157,7 +157,9 @@ impl RobotTurn<'_> {
             command @ (RobotCommand::GetScreenshot
             | RobotCommand::GetScreenshotWithScale(..)
             | RobotCommand::CaptureKeyframes { .. }) => self.capture(command),
-            command @ (RobotCommand::LoseGpuDevice { .. } | RobotCommand::InvokeAppHook { .. }) => {
+            command @ (RobotCommand::LoseGpuDevice { .. }
+            | RobotCommand::InvokeAppHook { .. }
+            | RobotCommand::RequestWindowSize(..)) => {
                 self.session(command);
             }
             command @ (RobotCommand::TypeText(..) | RobotCommand::SendKey { .. }) => {
@@ -384,6 +386,13 @@ impl RobotTurn<'_> {
 
     fn session(&mut self, command: RobotCommand) {
         match command {
+            RobotCommand::RequestWindowSize(width, height) => {
+                let size = winit::dpi::PhysicalSize::new(width, height);
+                if let Some(taken) = self.window.request_surface_size(size.into()) {
+                    log::debug!("robot: the window took the size {taken:?} at once");
+                }
+                drop(self.controller.tx.send(RobotResponse::Ok));
+            }
             RobotCommand::LoseGpuDevice { times } => {
                 // The pass before the next wait loses the devices.
                 self.device_loss.lose_for_robot(times);

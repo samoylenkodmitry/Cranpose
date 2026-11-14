@@ -1,16 +1,37 @@
 use std::rc::Weak;
 
+#[cfg(feature = "layer-tree")]
+use cranpose_render_common::graph::{LayerNode, RenderNode};
 use cranpose_render_common::{
-    dev_overlay::DevOverlayKey, graph::RenderGraph, text_fonts::TextFonts,
+    dev_overlay::{DevOverlayKey, FpsOverlay},
+    scene_store::{OverlayLayer, SceneStore},
+    text_fonts::TextFonts,
 };
 use web_time::Instant;
 
 use crate::{
-    collect::{LayerMotion, LayerSceneRecycler, collect_overlay, collect_root},
-    frame_packet::{FramePacket, FrameSceneStorage, MAX_FRAMES_IN_FLIGHT, RenderReturns},
+    collect::{
+        LayerMotion, LayerScene, LayerSceneRecycler, ShownRecord, collect_overlay, collect_root,
+    },
+    frame::{Damage, DamageRects, ImageContent, PacketDamage},
+    frame_packet::{
+        CancelReason, FramePacket, FrameSceneStorage, MAX_FRAMES_IN_FLIGHT, PresentOutcome,
+        RenderReturns,
+    },
     render::{frame_clear_color, instant_ms, should_log_wgpu_render_stage},
     scene::{Scene, SceneCapacityHint},
+    target_state::{TargetSetting, TargetState},
+    window_packets::{PacketDraws, WindowPackets},
 };
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PacketFor {
+    // The window: its frame changes the window's frame before, which the
+    // window's target state follows.
+    Window,
+    // A capture at a scale of its own, drawn whole.
+    Capture,
+}
 
 /// The producer side of a frame: owns the scene graph and the fonts the app
 /// lays its text out with, and collects each frame into the packet the
@@ -21,12 +42,18 @@ pub(crate) struct RendererFrontend {
     pub(crate) app_context: Option<Weak<cranpose_ui::AppContext>>,
     pub(crate) root_scale: f32,
     pub(crate) dev_overlay_cache: Option<DevOverlayKey>,
-    pub(crate) dev_overlay_graph: Option<RenderGraph>,
-    pub(crate) fps_overlay_graph: Option<RenderGraph>,
-    pub(crate) inspector_overlay_graph: Option<RenderGraph>,
+    // The overlays' records; empty while no overlay shows.
+    pub(crate) dev_overlay: SceneStore,
+    pub(crate) fps_overlay: Option<FpsOverlay>,
+    pub(crate) inspector_overlay: Option<OverlayLayer>,
     pub(crate) root_scene_capacity: SceneCapacityHint,
     scene_recyclers: [LayerSceneRecycler; MAX_FRAMES_IN_FLIGHT],
     returned_scenes: usize,
+    // How a window walk of the root and one of the overlays drew each
+    // record, which their targets read as the walk ends: the lists stay
+    // here, as no packet in flight needs them.
+    root_shown: Vec<ShownRecord>,
+    overlay_shown: Vec<ShownRecord>,
     pub(crate) layer_motion: LayerMotion,
     pub(crate) frame_sequence: u64,
     pub(crate) transparent_background: bool,
@@ -34,33 +61,69 @@ pub(crate) struct RendererFrontend {
     pub(crate) held_still: bool,
     // Whether a pointer is held for the next packet's frame.
     pub(crate) pointer_held: bool,
-    // The packet a surface did not show yet, kept by `keep_packet` with the
-    // scene update it was built from, for the frame drawn next.
-    kept_packet: Option<(u64, FramePacket)>,
+    // The packet a surface did not show yet, kept by `keep_packet` for the
+    // frame drawn next.
+    kept_packet: Option<FramePacket>,
+    // What the window drew of each record of the scene and of the overlays,
+    // which each window frame's damage is worked out against.
+    target: TargetState,
+    overlay_target: TargetState,
+    // The window packets built last, which a window walk culls against.
+    window: WindowPackets,
+    // Whether the next window walk takes every record: an image refused a
+    // culled packet.
+    uncull_next: bool,
+    // The surface epoch of the window packet built last: the images of a
+    // newer surface hold no frame the window drew.
+    surface_epoch: u64,
+    // Whether the last window walk that took every record found a backdrop,
+    // whose reads a culled walk does not follow.
+    backdrops: bool,
 }
 
 impl RendererFrontend {
     pub(crate) fn refresh_dev_overlay(&mut self) {
-        if let Some((_, packet)) = self.kept_packet.take() {
-            self.recycle(packet);
+        self.recycle_kept_packet();
+        if self.fps_overlay.is_none() && self.inspector_overlay.is_none() {
+            self.dev_overlay.clear();
+            return;
         }
-        self.dev_overlay_graph = self.fps_overlay_graph.clone();
-        if let Some(inspector) = &self.inspector_overlay_graph {
-            let graph = self.dev_overlay_graph.get_or_insert_with(|| {
-                RenderGraph::new(cranpose_render_common::graph::LayerNode::default())
-            });
-            graph
-                .root
-                .children
-                .push(cranpose_render_common::graph::RenderNode::Layer(Box::new(
-                    inspector.root.clone(),
-                )));
-            graph.root.forget_raster_cache_hashes();
+        let window = self
+            .fps_overlay
+            .as_ref()
+            .map_or_else(Default::default, |fps| fps.window);
+        // The inspector draws over the frame counter, as the last layer of
+        // the overlay's root.
+        let layers = self
+            .fps_overlay
+            .iter()
+            .map(|fps| &fps.layer)
+            .chain(&self.inspector_overlay);
+        self.dev_overlay.describe_overlay(window, layers);
+    }
+
+    // Replaces the overlay with the records of `overlay`, a layer tree, in a
+    // root of its own.
+    #[cfg(feature = "layer-tree")]
+    pub(crate) fn describe_overlay_tree(&mut self, overlay: Option<LayerNode>) {
+        self.recycle_kept_packet();
+        match overlay {
+            Some(layer) => self.dev_overlay.describe(&LayerNode {
+                children: vec![RenderNode::Layer(Box::new(layer))],
+                ..Default::default()
+            }),
+            None => self.dev_overlay.clear(),
+        }
+    }
+
+    fn recycle_kept_packet(&mut self) {
+        if let Some(packet) = self.kept_packet.take() {
+            self.recycle(packet);
         }
     }
 
     pub(crate) fn clear_fps_overlay(&mut self) {
-        self.fps_overlay_graph = None;
+        self.fps_overlay = None;
         self.dev_overlay_cache = None;
         self.refresh_dev_overlay();
     }
@@ -71,18 +134,26 @@ impl RendererFrontend {
             app_context: None,
             root_scale: 1.0,
             dev_overlay_cache: None,
-            dev_overlay_graph: None,
-            fps_overlay_graph: None,
-            inspector_overlay_graph: None,
+            dev_overlay: SceneStore::new(),
+            fps_overlay: None,
+            inspector_overlay: None,
             root_scene_capacity: SceneCapacityHint::default(),
             scene_recyclers: std::array::from_fn(|_| LayerSceneRecycler::default()),
             returned_scenes: 0,
+            root_shown: Vec::new(),
+            overlay_shown: Vec::new(),
             layer_motion: LayerMotion::default(),
             frame_sequence: 0,
             transparent_background: false,
             held_still: false,
             pointer_held: false,
             kept_packet: None,
+            target: TargetState::default(),
+            overlay_target: TargetState::default(),
+            window: WindowPackets::default(),
+            uncull_next: false,
+            surface_epoch: 0,
+            backdrops: false,
         }
     }
 
@@ -94,72 +165,86 @@ impl RendererFrontend {
         surface_epoch: u64,
     ) -> Option<FramePacket> {
         self.build_frame_packet_with_scale(
-            width,
-            height,
-            self.root_scale,
+            (width, height, self.root_scale),
             renderer_epoch,
             surface_epoch,
+            PacketFor::Window,
         )
     }
 
     pub(crate) fn build_frame_packet_with_scale(
         &mut self,
-        width: u32,
-        height: u32,
-        root_scale: f32,
+        (width, height, root_scale): (u32, u32, f32),
         renderer_epoch: u64,
         surface_epoch: u64,
+        purpose: PacketFor,
     ) -> Option<FramePacket> {
-        self.scene.graph.as_ref()?;
+        self.scene.root_layer()?;
         let app_context = self.app_context.as_ref().and_then(Weak::upgrade);
         match app_context {
             Some(app_context) => app_context.enter(|| {
                 self.build_frame_packet_inner(
-                    width,
-                    height,
-                    root_scale,
+                    (width, height, root_scale),
                     renderer_epoch,
                     surface_epoch,
+                    purpose,
                 )
             }),
             None => self.build_frame_packet_inner(
-                width,
-                height,
-                root_scale,
+                (width, height, root_scale),
                 renderer_epoch,
                 surface_epoch,
+                purpose,
             ),
         }
     }
 
     fn build_frame_packet_inner(
         &mut self,
-        width: u32,
-        height: u32,
-        root_scale: f32,
+        (width, height, root_scale): (u32, u32, f32),
         renderer_epoch: u64,
         surface_epoch: u64,
+        purpose: PacketFor,
     ) -> Option<FramePacket> {
         let build_start = Instant::now();
-        let graph = self.scene.graph.as_ref()?;
+        let window = purpose == PacketFor::Window;
+        let debug_toggles = cranpose_core::debug_toggles::debug_toggle_generation();
+        if window {
+            if surface_epoch != self.surface_epoch {
+                self.surface_epoch = surface_epoch;
+                self.window.hold(None);
+            }
+            self.begin_targets(TargetSetting {
+                viewport: (width, height),
+                root_scale,
+                clear: frame_clear_color(self.transparent_background),
+                debug_toggles,
+            });
+        }
+        self.scene.root_layer()?;
         self.returned_scenes = self.returned_scenes.saturating_sub(1);
-        let recycler = &mut self.scene_recyclers[self.returned_scenes];
-        let root = collect_root(
-            &graph.root,
-            graph.update,
-            &mut self.layer_motion,
-            self.root_scene_capacity,
-            root_scale,
-            recycler,
+        let (overlay, overlay_damage) = self.collect_overlays(root_scale, purpose);
+        let (root, damage, cull) = self.collect_scene(
+            (width, height, root_scale),
+            purpose,
+            (overlay.as_deref(), overlay_damage),
         );
-        self.root_scene_capacity = root.scene.capacity_hint();
         let after_root_collect = Instant::now();
-        let overlay = self
-            .dev_overlay_graph
-            .as_ref()
-            .map(|overlay| collect_overlay(&overlay.root, root_scale, recycler));
-        recycler.clear();
+        self.scene_recyclers[self.returned_scenes].clear();
         self.frame_sequence = self.frame_sequence.wrapping_add(1);
+        let scene_update = self.scene.store().version();
+        let draws = PacketDraws {
+            scene: scene_update,
+            overlay: self.dev_overlay.version(),
+            viewport: (width, height),
+            root_scale: root_scale.to_bits(),
+            transparent: self.transparent_background,
+        };
+        let damage = if window {
+            self.window_packet_damage(damage, draws)
+        } else {
+            self.window.capture_damage(draws)
+        };
         let packet = FramePacket {
             frame_id: self.frame_sequence,
             viewport: (width, height),
@@ -169,9 +254,12 @@ impl RendererFrontend {
             root,
             overlay,
             clear: frame_clear_color(self.transparent_background),
-            held_still: std::mem::take(&mut self.held_still),
+            debug_toggles,
             pointer_held: std::mem::take(&mut self.pointer_held),
-            scene_update: graph.update,
+            scene_update,
+            damage,
+            skipped: window && !self.target.records(),
+            culled: cull,
         };
         let after_build = Instant::now();
         if let Some(total_ms) = should_log_wgpu_render_stage(build_start, after_build) {
@@ -183,9 +271,214 @@ impl RendererFrontend {
         Some(packet)
     }
 
-    // The packet of the current scene at `width` by `height`: the one kept
-    // by `keep_packet` while the scene and the frame's setting stay as they
-    // were, else a new one.
+    // The overlays' scene for a frame at `root_scale` for `purpose`, and
+    // what a window frame changes of them.
+    fn collect_overlays(
+        &mut self,
+        root_scale: f32,
+        purpose: PacketFor,
+    ) -> (Option<Box<LayerScene>>, Damage) {
+        let window = purpose == PacketFor::Window;
+        let records = window && self.overlay_target.records();
+        let recycler = &mut self.scene_recyclers[self.returned_scenes];
+        let shown = &mut self.overlay_shown;
+        let mut overlay = self.dev_overlay.root_layer().map(|overlay| {
+            collect_overlay(overlay, (root_scale, records.then_some(shown)), recycler)
+        });
+        let damage = if window {
+            self.overlay_target
+                .end(&self.dev_overlay, overlay.as_deref())
+        } else {
+            Damage::Full
+        };
+        if let Some(overlay) = overlay.as_mut().filter(|_| records) {
+            self.overlay_shown = std::mem::take(&mut overlay.shown);
+        }
+        (overlay, damage)
+    }
+
+    // The scene's root scene for a frame of `viewport` at `root_scale` for
+    // `purpose`, over
+    // `overlay` that changes `overlay_damage`: what a window frame changes,
+    // and the region a window walk culled the root to. A culled walk an
+    // image repaints past is taken again over what it repaints once, and
+    // then over every record.
+    fn collect_scene(
+        &mut self,
+        (width, height, root_scale): (u32, u32, f32),
+        purpose: PacketFor,
+        (overlay, overlay_damage): (Option<&LayerScene>, Damage),
+    ) -> (Box<LayerScene>, Damage, Option<DamageRects>) {
+        let window = purpose == PacketFor::Window;
+        let since = self.since();
+        let next = self.frame_sequence.wrapping_add(1);
+        let mut cull = window
+            .then(|| self.cull_region())
+            .flatten()
+            .and_then(|region| {
+                self.widen_by_predicted_repaint(
+                    region,
+                    (since, next),
+                    overlay_damage,
+                    (width, height),
+                )
+            });
+        let store = self.scene.store();
+        let root_layer = store.root_layer().expect("the scene has a root");
+        let recycler = &mut self.scene_recyclers[self.returned_scenes];
+        let overlay_backdrops = overlay.is_some_and(LayerScene::contains_backdrop);
+        let records = window && self.target.records();
+        let mut widened = false;
+        let (root, damage) = loop {
+            let culled = cull.map(|region| self.target.cull(store, region));
+            let shown = records.then_some(&mut self.root_shown);
+            let mut root = collect_root(
+                root_layer,
+                (store.update(), shown),
+                culled.as_ref(),
+                &mut self.layer_motion,
+                self.root_scene_capacity,
+                root_scale,
+                recycler,
+            );
+            if !window {
+                break (root, Damage::Full);
+            }
+            let damage = self
+                .target
+                .end(store, Some(&root))
+                .union(overlay_damage, (width, height));
+            if records {
+                self.root_shown = std::mem::take(&mut root.shown);
+            }
+            let Some(region) = cull else {
+                break (root, damage);
+            };
+            let repaint = if overlay_backdrops || root.contains_backdrop() {
+                None
+            } else {
+                let packet = self.window.next_damage(damage, since, (width, height));
+                self.window.repaint(next, packet)
+            };
+            if repaint.is_some_and(|repaint| region.covers(&repaint)) {
+                break (root, damage);
+            }
+            recycler.recycle(root);
+            cull = repaint.filter(|_| !widened).map(|repaint| {
+                let mut wider = region;
+                wider.add_all(&repaint);
+                wider
+            });
+            widened = true;
+        };
+        if cull.is_none() {
+            self.root_scene_capacity = root.scene.capacity_hint();
+            self.backdrops = window && (overlay_backdrops || root.contains_backdrop());
+        }
+        (root, damage, cull)
+    }
+
+    // `region`, which a window walk culls to, widened by what the next image
+    // repaints when the frame changes what the target predicts, so the walk
+    // takes in the repaint without walking again; `None`, a walk of every
+    // record, when that image repaints whole.
+    fn widen_by_predicted_repaint(
+        &mut self,
+        mut region: DamageRects,
+        (since, next): (Option<u64>, u64),
+        overlay_damage: Damage,
+        viewport: (u32, u32),
+    ) -> Option<DamageRects> {
+        let Some(predicted) = self.target.predicted_damage(self.scene.store()) else {
+            return Some(region);
+        };
+        let damage = predicted.union(overlay_damage, viewport);
+        let packet = self.window.next_damage(damage, since, viewport);
+        region.add_all(&self.window.repaint(next, packet)?);
+        Some(region)
+    }
+
+    // Gives back at rest the room the kept layer scenes took, and the
+    // overlays' records past what they hold.
+    pub(crate) fn trim(&mut self) {
+        for recycler in &mut self.scene_recyclers {
+            recycler.trim();
+        }
+        self.dev_overlay.trim();
+    }
+
+    // Starts a window frame of `setting` in the targets of the scene and of
+    // the overlays.
+    fn begin_targets(&mut self, setting: TargetSetting) {
+        if std::mem::take(&mut self.held_still) {
+            self.target.held_still();
+        }
+        self.target.begin(self.scene.store(), setting);
+        self.scene.follow(self.target.followed());
+        self.overlay_target.begin(&self.dev_overlay, setting);
+        self.dev_overlay.follow(self.overlay_target.followed());
+        if self.target.records() {
+            self.scene.refresh_reach();
+        }
+        if self.overlay_target.records() {
+            self.dev_overlay.refresh_reach();
+        }
+    }
+
+    // The region a window walk may cull to: the damages since the oldest
+    // packet the window's targets hold, and the areas the targets drew the
+    // changed records in; `None` when the walk takes every record.
+    fn cull_region(&mut self) -> Option<DamageRects> {
+        if std::mem::take(&mut self.uncull_next) || self.backdrops {
+            return None;
+        }
+        let begun = [self.target.begun()?, self.overlay_target.begun()?];
+        self.window.cull_region(begun)
+    }
+
+    // The last window packet, when the targets knew what the images held
+    // before this frame: the packet the next one changes against.
+    fn since(&self) -> Option<u64> {
+        self.window
+            .last()
+            .filter(|_| self.target.knew_before() && self.overlay_target.knew_before())
+    }
+
+    // The damage of the window packet that draws `draws` with `damage`.
+    fn window_packet_damage(&mut self, damage: Damage, draws: PacketDraws) -> PacketDamage {
+        let since = self.since();
+        let damage = self.window.next_damage(damage, since, draws.viewport);
+        self.window.built(self.frame_sequence, damage, draws);
+        damage
+    }
+
+    // Takes the window packet at `width` by `height` and draws it with
+    // `draw` into `image`; a packet an image refused as culled past what it
+    // needs is built again with every draw and drawn again, as is one for a
+    // texture that keeps no frame. `None` when the scene has no root.
+    pub(crate) fn draw_window(
+        &mut self,
+        (width, height): (u32, u32),
+        (renderer_epoch, surface_epoch): (u64, u64),
+        image: ImageContent,
+        mut draw: impl FnMut(FramePacket, &mut RenderReturns) -> Result<(), String>,
+    ) -> Option<Result<(), String>> {
+        self.uncull_next |= image == ImageContent::Untracked;
+        loop {
+            let packet = self.take_packet(width, height, renderer_epoch, surface_epoch)?;
+            let mut returns = RenderReturns::default();
+            let result = draw(packet, &mut returns);
+            let refused = returns.outcome == PresentOutcome::Cancelled(CancelReason::NeedsWhole);
+            self.apply_returns(returns);
+            if !refused {
+                return Some(result);
+            }
+        }
+    }
+
+    // The window packet of the current scene at `width` by `height`: the one
+    // kept by `keep_packet` while the scene and the frame's setting stay as
+    // they were, else a new one.
     pub(crate) fn take_packet(
         &mut self,
         width: u32,
@@ -193,9 +486,10 @@ impl RendererFrontend {
         renderer_epoch: u64,
         surface_epoch: u64,
     ) -> Option<FramePacket> {
-        let update = self.scene.graph.as_ref()?.update;
-        if let Some((built_at, packet)) = self.kept_packet.take() {
-            if built_at == update
+        self.scene.root_layer()?;
+        let version = self.scene.store().version();
+        if let Some(packet) = self.kept_packet.take() {
+            if packet.scene_update == version
                 && packet.viewport == (width, height)
                 && (packet.renderer_epoch, packet.surface_epoch) == (renderer_epoch, surface_epoch)
                 && packet.root_scale.to_bits() == self.root_scale.to_bits()
@@ -210,12 +504,13 @@ impl RendererFrontend {
 
     // Keeps `packet`, which no surface showed yet, for the next `take_packet`.
     pub(crate) fn keep_packet(&mut self, packet: FramePacket) {
-        let update = self.scene.graph.as_ref().map_or(0, |graph| graph.update);
-        self.kept_packet = Some((update, packet));
+        self.kept_packet = Some(packet);
     }
 
-    // Gives the scene of a packet nothing drew back to the recyclers.
+    // Gives the scene of a packet nothing drew back to the recyclers. The
+    // next window packet changes against what the packet changed against.
     pub(crate) fn recycle(&mut self, packet: FramePacket) {
+        self.window.went_back(packet.frame_id, packet.damage);
         self.apply_returns(RenderReturns {
             scene: Some(FrameSceneStorage {
                 root: packet.root,
@@ -225,7 +520,20 @@ impl RendererFrontend {
         });
     }
 
+    // Forgets the frames the window's targets hold: the renderer let a
+    // target's frame go.
+    pub(crate) fn forget_held(&mut self) {
+        self.window.hold(None);
+    }
+
     pub(crate) fn apply_returns(&mut self, returns: RenderReturns) {
+        if let Some(drawn) = returns.target {
+            self.target.drawn(drawn);
+            self.window.hold(returns.held);
+        }
+        if returns.outcome == PresentOutcome::Cancelled(CancelReason::NeedsWhole) {
+            self.uncull_next = true;
+        }
         if let Some(frame) = returns.scene {
             self.root_scene_capacity = frame.root.scene.capacity_hint();
             if self.returned_scenes == MAX_FRAMES_IN_FLIGHT {
@@ -238,7 +546,6 @@ impl RendererFrontend {
                 recycler.recycle(overlay);
             }
             recycler.recycle(frame.root);
-            recycler.returned_packet();
             self.returned_scenes += 1;
         }
     }

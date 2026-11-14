@@ -2,12 +2,13 @@
 
 use std::{ops::Range, sync::Arc};
 
-use cranpose_core::NodeId;
+use cranpose_core::{NodeId, collections::growth_slack::GrowthSlack};
 pub use cranpose_render_common::graph_scene::{HitRegion, Scene};
 use cranpose_render_common::{
     glyph_reach::{InkSpread, glyph_part},
     graph::DrawCommandId,
     layer_shadow::ShadowRRect,
+    scene_store::ShapeRef,
     text_paint::TextPaint,
     text_raster::TextRasterRequest,
 };
@@ -192,6 +193,10 @@ impl Placement {
 #[derive(Clone)]
 pub(crate) struct RunDraw {
     pub recorder: Arc<ShapeRecorder>,
+    /// A hash of the run's own records, for a run of a recorder that holds
+    /// other items' records too: the recorder's fingerprint changes with
+    /// theirs. `None` keys the run by the fingerprint and its segments.
+    pub print: Option<u64>,
     pub command: Option<DrawCommandId>,
     pub segments: Range<u32>,
     pub records: u32,
@@ -218,6 +223,22 @@ impl RunDraw {
         )
     }
 
+    // A run of the shapes of a shape item, in the chunk the store shares
+    // among its shape items.
+    pub(crate) fn of_shapes(shape: ShapeRef<'_>, placement: Placement) -> Self {
+        Self {
+            print: Some(shape.print()),
+            ..Self::with_bounds_and_records(
+                Arc::clone(shape.recorder()),
+                None,
+                shape.segments(),
+                shape.shape_count(),
+                shape.coverage(),
+                placement,
+            )
+        }
+    }
+
     fn with_bounds_and_records(
         recorder: Arc<ShapeRecorder>,
         command: Option<DrawCommandId>,
@@ -237,6 +258,7 @@ impl RunDraw {
         );
         Self {
             recorder,
+            print: None,
             command,
             segments,
             records,
@@ -269,6 +291,15 @@ impl RunDraw {
 
     pub(crate) fn record_count(&self) -> u32 {
         self.records
+    }
+
+    // Whether every record of the run is a rect or a rounded rect, filled or
+    // stroked: no line, path slice or arc.
+    pub(crate) fn holds_only_rects(&self) -> bool {
+        const RECTS: u8 = (1 << cranpose_ui_graphics::FRAGMENT_KIND_FILL)
+            | (1 << cranpose_ui_graphics::FRAGMENT_KIND_STROKE);
+        self.segment_records()
+            .all(|segment| segment.kinds & !RECTS == 0)
     }
 }
 
@@ -335,9 +366,9 @@ impl DrawnText {
     /// gradient, in its style or in a span.
     pub(crate) fn plain(string: Arc<RenderString>, paint: &TextPaint) -> Self {
         Self {
+            hash: string.render_hash(),
+            empty: string.is_empty(),
             string,
-            hash: paint.text_hash,
-            empty: paint.text_empty,
             gradient: false,
             static_motion: paint.static_motion,
             spread: paint.spread,
@@ -527,6 +558,9 @@ pub(crate) struct CompositorScene {
     pub effect_layers: Vec<EffectLayer>,
     pub backdrop_layers: Vec<BackdropLayer>,
     pub next_z: usize,
+    // The frames in a row whose draws took less than a quarter of the
+    // lists' room.
+    roomy_frames: u8,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -542,6 +576,8 @@ pub(crate) struct SceneCapacityHint {
 }
 
 const SCENE_BUFFER_POOL_LIMIT: usize = 4;
+const ROOMY_FRAMES: u8 = 8;
+const ROOM_KEPT: usize = 64 * 1024;
 
 pub(crate) struct SceneBuffers {
     runs: Vec<RunDraw>,
@@ -556,6 +592,31 @@ pub(crate) struct SceneBuffers {
     backdrop_layers: Vec<BackdropLayer>,
 }
 
+// Gives back the room a burst of draws took in the lists the dropped scenes
+// of the thread left for the next.
+pub(crate) fn trim_scene_buffer_pool() {
+    crate::thread_state::with(|state| {
+        for buffers in state.scene_buffer_pool.borrow_mut().iter_mut() {
+            buffers.trim();
+        }
+    });
+}
+
+impl SceneBuffers {
+    fn trim(&mut self) {
+        self.runs.trim_growth_slack();
+        self.images.trim_growth_slack();
+        self.texts.trim_growth_slack();
+        self.shadow_draws.trim_growth_slack();
+        self.shadow_recorders.clear();
+        self.shadow_recorders.trim_growth_slack();
+        self.rrect_shadows.trim_growth_slack();
+        self.draw_ops.trim_growth_slack();
+        self.effect_layers.trim_growth_slack();
+        self.backdrop_layers.trim_growth_slack();
+    }
+}
+
 impl Drop for CompositorScene {
     fn drop(&mut self) {
         crate::thread_state::try_with(|state| {
@@ -564,6 +625,11 @@ impl Drop for CompositorScene {
             };
             if pool.len() >= SCENE_BUFFER_POOL_LIMIT {
                 pool.remove(0);
+            }
+            // The next scene takes the room recent frames took, not the room
+            // of the largest frame the lists ever held.
+            if self.roomy() {
+                self.give_back_room();
             }
             self.clear();
             pool.push(SceneBuffers {
@@ -606,6 +672,7 @@ impl CompositorScene {
                 effect_layers: buffers.effect_layers,
                 backdrop_layers: buffers.backdrop_layers,
                 next_z: 0,
+                roomy_frames: 0,
             };
         }
         Self {
@@ -623,6 +690,7 @@ impl CompositorScene {
             effect_layers: Vec::with_capacity(hint.effect_layers),
             backdrop_layers: Vec::with_capacity(hint.backdrop_layers),
             next_z: 0,
+            roomy_frames: 0,
         }
     }
 
@@ -637,6 +705,63 @@ impl CompositorScene {
             effect_layers: self.effect_layers.len(),
             backdrop_layers: self.backdrop_layers.len(),
         }
+    }
+
+    // Gives back the room a burst of draws left in the lists, once eight
+    // frames in a row drew into less than a quarter of it: a scene kept
+    // while frames go on, which no rest trims, would hold for good the room
+    // of the largest frame it ever carried. Called with the frame's draws
+    // still in the lists.
+    pub(crate) fn settle_room(&mut self) {
+        if !self.roomy() {
+            self.roomy_frames = 0;
+            return;
+        }
+        self.roomy_frames += 1;
+        if self.roomy_frames < ROOMY_FRAMES {
+            return;
+        }
+        self.roomy_frames = 0;
+        self.give_back_room();
+    }
+
+    // Gives back the room past the lists' draws, past an eighth of them.
+    fn give_back_room(&mut self) {
+        self.runs.trim_growth_slack();
+        self.images.trim_growth_slack();
+        self.texts.trim_growth_slack();
+        self.shadow_draws.trim_growth_slack();
+        self.rrect_shadows.trim_growth_slack();
+        self.draw_ops.trim_growth_slack();
+        self.effect_layers.trim_growth_slack();
+        self.backdrop_layers.trim_growth_slack();
+    }
+
+    // Whether the lists keep more than four times the room the frame's
+    // draws take, and more than `ROOM_KEPT`.
+    fn roomy(&self) -> bool {
+        let (used, kept) = self.room();
+        kept > ROOM_KEPT && kept > used.saturating_mul(4)
+    }
+
+    // The bytes the lists' draws take, and the bytes of room they keep.
+    fn room(&self) -> (usize, usize) {
+        fn bytes<T>(list: &Vec<T>) -> (usize, usize) {
+            let size = size_of::<T>();
+            (list.len() * size, list.capacity() * size)
+        }
+        [
+            bytes(&self.runs),
+            bytes(&self.images),
+            bytes(&self.texts),
+            bytes(&self.shadow_draws),
+            bytes(&self.rrect_shadows),
+            bytes(&self.draw_ops),
+            bytes(&self.effect_layers),
+            bytes(&self.backdrop_layers),
+        ]
+        .into_iter()
+        .fold((0, 0), |(used, kept), (u, k)| (used + u, kept + k))
     }
 
     pub(crate) fn clear(&mut self) {

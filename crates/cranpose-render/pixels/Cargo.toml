@@ -36,7 +36,7 @@ cranpose-ui-graphics = { workspace = true }
 log = "0.4"
 
 [dev-dependencies]
-cranpose-render-common = { workspace = true, features = ["embedded-default-font"] }
+cranpose-render-common = { workspace = true, features = ["embedded-default-font", "layer-tree"] }
 # Path-only dev-deps: stripped from the published manifest (publish order ignores dev edges).
 cranpose-app-shell = { path = "../../cranpose-app-shell" }
 cranpose-macros = { path = "../../cranpose-macros" }

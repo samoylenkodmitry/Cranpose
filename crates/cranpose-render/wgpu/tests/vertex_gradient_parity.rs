@@ -1,7 +1,7 @@
 use cranpose_render_common::{
     graph::{
         DrawCommandId, DrawPrimitiveNode, DrawRunNode, LayerNode, PrimitiveEntry, PrimitiveNode,
-        PrimitivePhase, RenderGraph, RenderNode,
+        PrimitivePhase, RenderNode,
     },
     layer_transform::layer_transform_to_parent,
 };
@@ -95,18 +95,18 @@ fn scene(side: f32, columns: usize, rows: usize) -> Vec<DrawPrimitive> {
     primitives
 }
 
-fn layer(node_id: Option<cranpose_core::NodeId>, children: Vec<RenderNode>) -> RenderGraph {
-    RenderGraph::new(LayerNode {
+fn layer_root(node_id: Option<cranpose_core::NodeId>, children: Vec<RenderNode>) -> LayerNode {
+    LayerNode {
         node_id,
-        local_bounds: full(SIDE as f32),
+        size: Size::new(SIDE as f32, SIDE as f32),
         children,
         translated_content_context: true,
         ..LayerNode::default()
-    })
+    }
 }
 
-fn arena_graph(primitives: Vec<DrawPrimitive>) -> RenderGraph {
-    layer(
+fn arena_root(primitives: Vec<DrawPrimitive>) -> LayerNode {
+    layer_root(
         None,
         vec![RenderNode::DrawRun(DrawRunNode::new(
             PrimitivePhase::BeforeChildren,
@@ -115,7 +115,7 @@ fn arena_graph(primitives: Vec<DrawPrimitive>) -> RenderGraph {
     )
 }
 
-fn clipped_graph(primitives: Vec<DrawPrimitive>, clip: Rect) -> RenderGraph {
+fn clipped_graph(primitives: Vec<DrawPrimitive>, clip: Rect) -> LayerNode {
     let children = primitives
         .into_iter()
         .map(|primitive| {
@@ -128,11 +128,11 @@ fn clipped_graph(primitives: Vec<DrawPrimitive>, clip: Rect) -> RenderGraph {
             })
         })
         .collect();
-    layer(None, children)
+    layer_root(None, children)
 }
 
-fn stored_graph(primitives: Vec<DrawPrimitive>) -> RenderGraph {
-    layer(
+fn stored_graph(primitives: Vec<DrawPrimitive>) -> LayerNode {
+    layer_root(
         Some(support::STORED_RUN_NODE),
         vec![RenderNode::DrawRun(DrawRunNode::for_command(
             PrimitivePhase::BeforeChildren,
@@ -146,7 +146,7 @@ fn stored_graph(primitives: Vec<DrawPrimitive>) -> RenderGraph {
     )
 }
 
-fn turned_graph(primitives: Vec<DrawPrimitive>, degrees: f32) -> RenderGraph {
+fn turned_graph(primitives: Vec<DrawPrimitive>, degrees: f32) -> LayerNode {
     let bounds = Rect {
         x: 0.0,
         y: 0.0,
@@ -169,7 +169,7 @@ fn turned_graph(primitives: Vec<DrawPrimitive>, degrees: f32) -> RenderGraph {
     let mut page_recording = CommandRecording::default();
     let mut page = DrawScopeDefault::new(Size::new(SIDE as f32, SIDE as f32), &mut page_recording);
     page.draw_rect_at(full(SIDE as f32), Brush::solid(PAGE));
-    layer(
+    layer_root(
         None,
         vec![
             RenderNode::DrawRun(DrawRunNode::new(
@@ -182,7 +182,7 @@ fn turned_graph(primitives: Vec<DrawPrimitive>, degrees: f32) -> RenderGraph {
 }
 
 fn vertex_and_fragment_frames(
-    graph: &RenderGraph,
+    graph: &LayerNode,
     scale: f32,
     in_place: bool,
 ) -> Option<(Vec<u8>, Vec<u8>)> {
@@ -196,8 +196,7 @@ fn vertex_and_fragment_frames(
     let mut frame = |toggle: Option<&str>| {
         cranpose_core::debug_toggles::set_debug_toggle(TOGGLE, toggle);
         support::stable_settled_capture(&mut renderer, |renderer| {
-            let captured =
-                support::capture_graph_with_scale(renderer, graph.clone(), SIDE, SIDE, scale);
+            let captured = support::capture_graph_with_scale(renderer, graph, SIDE, SIDE, scale);
             let stats = renderer.last_frame_stats().expect("frame statistics");
             assert!(
                 !in_place || stats.isolated_layer_renders == 0,
@@ -214,11 +213,11 @@ fn vertex_and_fragment_frames(
 
 fn assert_shades_as_the_fragment_gradient(
     name: &str,
-    graph: RenderGraph,
+    graph: &LayerNode,
     scale: f32,
     (in_place, max_bytes): (bool, usize),
 ) {
-    let Some((vertex, fragment)) = vertex_and_fragment_frames(&graph, scale, in_place) else {
+    let Some((vertex, fragment)) = vertex_and_fragment_frames(graph, scale, in_place) else {
         return;
     };
     assert!(
@@ -248,7 +247,7 @@ fn assert_shades_as_the_fragment_gradient(
 fn vertex_gradients_over_rects_and_rounded_rects_shade_as_the_fragment_gradient() {
     assert_shades_as_the_fragment_gradient(
         "rects",
-        arena_graph(scene(SIDE as f32, 4, 3)),
+        &arena_root(scene(SIDE as f32, 4, 3)),
         1.0,
         (false, MAX_DIVERGING_BYTES),
     );
@@ -264,7 +263,7 @@ fn clipped_vertex_gradients_shade_as_the_fragment_gradient() {
     };
     assert_shades_as_the_fragment_gradient(
         "clipped",
-        clipped_graph(scene(SIDE as f32, 4, 3), clip),
+        &clipped_graph(scene(SIDE as f32, 4, 3), clip),
         1.0,
         (false, MAX_DIVERGING_BYTES),
     );
@@ -274,7 +273,7 @@ fn clipped_vertex_gradients_shade_as_the_fragment_gradient() {
 fn scaled_vertex_gradients_shade_as_the_fragment_gradient() {
     assert_shades_as_the_fragment_gradient(
         "scaled",
-        arena_graph(scene(SIDE as f32, 4, 3)),
+        &arena_root(scene(SIDE as f32, 4, 3)),
         1.75,
         (false, MAX_DIVERGING_BYTES),
     );
@@ -282,16 +281,16 @@ fn scaled_vertex_gradients_shade_as_the_fragment_gradient() {
 
 #[test]
 fn unaligned_gradient_geometry_keeps_fragment_sampling() {
-    let mut graph = arena_graph(scene(SIDE as f32, 4, 3));
-    graph.root.translated_content_context = false;
-    assert_shades_as_the_fragment_gradient("unaligned", graph, 1.0, (false, 0));
+    let mut root = arena_root(scene(SIDE as f32, 4, 3));
+    root.translated_content_context = false;
+    assert_shades_as_the_fragment_gradient("unaligned", &root, 1.0, (false, 0));
 }
 
 #[test]
 fn stored_vertex_gradients_shade_as_the_fragment_gradient() {
     assert_shades_as_the_fragment_gradient(
         "stored",
-        stored_graph(scene(SIDE as f32, 8, 9)),
+        &stored_graph(scene(SIDE as f32, 8, 9)),
         1.0,
         (false, MAX_DIVERGING_BYTES),
     );
@@ -301,7 +300,7 @@ fn stored_vertex_gradients_shade_as_the_fragment_gradient() {
 fn turned_vertex_gradients_shade_as_the_fragment_gradient() {
     assert_shades_as_the_fragment_gradient(
         "turned",
-        turned_graph(scene(160.0, 3, 3), 23.0),
+        &turned_graph(scene(160.0, 3, 3), 23.0),
         1.0,
         (true, 0),
     );

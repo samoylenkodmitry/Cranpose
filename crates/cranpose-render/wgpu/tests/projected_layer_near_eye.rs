@@ -26,14 +26,15 @@ fn a_wall_reaching_behind_the_eye_draws_only_its_part_in_front() {
         }
     };
     let wall = LayerNode {
-        local_bounds: WALL,
+        size: WALL.size(),
+        layer_bounds: Some(WALL),
         transform_to_parent: wall_beside_the_eye(),
         children: vec![support::solid_rect(WALL, Color::from_rgb_u8(220, 30, 30))],
         ..Default::default()
     };
     let frame = support::capture_graph(
         &mut renderer,
-        support::page_graph(FRAME, FRAME, vec![RenderNode::Layer(Box::new(wall))]),
+        &support::page_graph(FRAME, FRAME, vec![RenderNode::Layer(Box::new(wall))]),
         FRAME,
         FRAME,
     );

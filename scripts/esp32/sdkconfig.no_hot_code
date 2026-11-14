@@ -1,2 +1,4 @@
-# Builds without the per-frame code in IRAM, to profile what the cache costs.
+# Builds without the per-frame code in IRAM: to profile what the cache
+# costs, and for board_ab.py --no-hot-code, which compares revisions with
+# neither side's hot-code lists.
 CONFIG_CRANPOSE_HOT_CODE_IN_IRAM=n

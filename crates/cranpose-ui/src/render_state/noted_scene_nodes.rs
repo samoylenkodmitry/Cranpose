@@ -1,4 +1,4 @@
-use cranpose_core::PackedU64;
+use cranpose_core::{PackedU64, collections::growth_slack::GrowthSlack};
 
 /// The nodes a layout pass names to the scene, each once a take: a node
 /// keeps the take it was last noted in, so a second note in the same take
@@ -29,14 +29,18 @@ impl<T> NotedSceneNodes<T> {
         self.nodes.push(node);
     }
 
-    /// Moves the nodes into `output` and keeps the storage `output` held
-    /// for the next take.
+    pub(super) fn trim(&mut self) {
+        self.nodes.trim_growth_slack();
+    }
+
+    // Moves the nodes into `output`, dropping what `output` held: the two
+    // storages take turns.
     pub(super) fn take_into(&mut self, output: &mut Vec<T>) {
-        output.clear();
         if !self.nodes.is_empty() {
-            std::mem::swap(&mut self.nodes, output);
             self.take = next_moved_scene_node_take();
         }
+        output.clear();
+        std::mem::swap(&mut self.nodes, output);
     }
 }
 

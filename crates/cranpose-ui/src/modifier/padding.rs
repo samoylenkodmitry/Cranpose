@@ -1,3 +1,5 @@
+use cranpose_foundation::plain_element;
+
 use super::{EdgeInsets, InspectorMetadata, Modifier, inspector_metadata};
 use crate::modifier_nodes::PaddingElement;
 
@@ -7,7 +9,7 @@ impl Modifier {
     /// Example: `Modifier::empty().padding(16.0)`
     pub fn padding(self, p: f32) -> Self {
         let padding = EdgeInsets::uniform(p);
-        let modifier = Self::with_element(PaddingElement::new(padding))
+        let modifier = Self::from_dyn_element(plain_element(PaddingElement::new(padding)))
             .with_inspector_metadata(padding_metadata(padding));
         self.then(modifier)
     }
@@ -17,7 +19,7 @@ impl Modifier {
     /// Example: `Modifier::empty().padding_horizontal(16.0)`
     pub fn padding_horizontal(self, horizontal: f32) -> Self {
         let padding = EdgeInsets::horizontal(horizontal);
-        let modifier = Self::with_element(PaddingElement::new(padding))
+        let modifier = Self::from_dyn_element(plain_element(PaddingElement::new(padding)))
             .with_inspector_metadata(padding_metadata(padding));
         self.then(modifier)
     }
@@ -27,7 +29,7 @@ impl Modifier {
     /// Example: `Modifier::empty().padding_vertical(8.0)`
     pub fn padding_vertical(self, vertical: f32) -> Self {
         let padding = EdgeInsets::vertical(vertical);
-        let modifier = Self::with_element(PaddingElement::new(padding))
+        let modifier = Self::from_dyn_element(plain_element(PaddingElement::new(padding)))
             .with_inspector_metadata(padding_metadata(padding));
         self.then(modifier)
     }
@@ -37,7 +39,7 @@ impl Modifier {
     /// Example: `Modifier::empty().padding_symmetric(16.0, 8.0)`
     pub fn padding_symmetric(self, horizontal: f32, vertical: f32) -> Self {
         let padding = EdgeInsets::symmetric(horizontal, vertical);
-        let modifier = Self::with_element(PaddingElement::new(padding))
+        let modifier = Self::from_dyn_element(plain_element(PaddingElement::new(padding)))
             .with_inspector_metadata(padding_metadata(padding));
         self.then(modifier)
     }
@@ -47,7 +49,7 @@ impl Modifier {
     /// Example: `Modifier::empty().padding_each(8.0, 4.0, 8.0, 4.0)`
     pub fn padding_each(self, left: f32, top: f32, right: f32, bottom: f32) -> Self {
         let padding = EdgeInsets::from_components(left, top, right, bottom);
-        let modifier = Self::with_element(PaddingElement::new(padding))
+        let modifier = Self::from_dyn_element(plain_element(PaddingElement::new(padding)))
             .with_inspector_metadata(padding_metadata(padding));
         self.then(modifier)
     }

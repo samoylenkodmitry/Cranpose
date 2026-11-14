@@ -29,6 +29,14 @@ pub fn local_selection_registrar() -> CompositionLocal<Option<SelectionRegistrar
     )
 }
 
+// The container a text composed here selects in. Out of line: the read of a
+// composition local is 3 KB of wasm, and each text function that asked took a
+// copy of it.
+#[inline(never)]
+pub(crate) fn current_selection_registrar() -> Option<SelectionRegistrar> {
+    local_selection_registrar().current()
+}
+
 /// Lets users select and copy text across the content. A mouse drag selects a
 /// range; double and triple clicks select a word and a line. A touch hold starts
 /// selection and a release opens the text menu. Ctrl+C and Ctrl+A use the copy and
@@ -149,7 +157,7 @@ pub fn DisableSelection(content: impl FnOnce()) {
 #[composable]
 pub(crate) fn selectable_text(
     registrar: SelectionRegistrar,
-    text: Rc<AnnotatedString>,
+    text: AnnotatedString,
     style: Arc<TextStyle>,
     options: TextLayoutOptions,
 ) -> Modifier {

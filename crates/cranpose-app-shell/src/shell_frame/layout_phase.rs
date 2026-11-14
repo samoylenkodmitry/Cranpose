@@ -4,13 +4,33 @@
 use std::fmt::Debug;
 
 use cranpose_core::{MemoryApplier, NodeError, NodeId};
-use cranpose_render_common::Renderer;
+use cranpose_render_common::{RenderScene, Renderer};
 use cranpose_ui::{
     LayoutNode, MeasureLayoutOptions, SubcomposeLayoutNode, request_render_invalidation,
 };
 
 use super::{Composed, FrameStages, LaidOut};
-use crate::{AppShell, surface::route_geometry_scene_nodes};
+use crate::{
+    AppShell,
+    surface::{RootSurface, route_geometry_scene_nodes},
+};
+
+// Names as reshaped the node each scene draws an unplaced node within: drawn
+// again, it drops what it drew for that node. Out of line: a pass rarely
+// unplaces nodes.
+#[inline(never)]
+fn reshape_unplaced_parents<R: Renderer>(
+    surfaces: &[RootSurface<R>],
+    nodes: &mut cranpose_ui::GeometrySceneNodes,
+) {
+    for &node in &nodes.unplaced {
+        nodes.reshaped.extend(
+            surfaces
+                .iter()
+                .filter_map(|surface| surface.renderer.scene().drawn_parent(node)),
+        );
+    }
+}
 
 fn pending_repass_nodes(context: &cranpose_ui::AppContext) -> Vec<NodeId> {
     let mut nodes = if context.has_pending_layout_repasses() {
@@ -160,6 +180,9 @@ where
             .app_context
             .take_geometry_scene_nodes_into(&mut self.geometry_scene_nodes);
         self.app.content_moved |= !self.geometry_scene_nodes.is_empty();
+        if !self.geometry_scene_nodes.unplaced.is_empty() {
+            reshape_unplaced_parents(&self.surfaces, &mut self.geometry_scene_nodes);
+        }
         if global {
             for surface in &mut self.surfaces {
                 surface.invalidate_scene_root(surface.root_node(&self.app));

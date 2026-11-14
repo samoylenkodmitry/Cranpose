@@ -75,22 +75,40 @@ where
     F: FnMut() + 'static,
     P: MeasurePolicy + Clone + PartialEq,
 {
+    compose_layout_node(modifier, measure_policy, environment, &mut content)
+}
+
+// The layout node of `compose_layout` and its children's bracket, compiled
+// once: inlined, it puts the modifier's drop and the bracket into the body of
+// every widget call, about 200 bytes of wasm a call.
+#[inline(never)]
+fn compose_layout_node(
+    mut modifier: Modifier,
+    policy: &dyn PolicyUpdate,
+    environment: LayoutEnvironment,
+    content: &mut dyn FnMut(),
+) -> NodeId {
     // One composer lookup for the node and its children's bracket: each
     // lookup reads a thread-local.
     cranpose_core::with_current_composer(|composer| {
-        let (id, provided, _) = emit_layout_node(composer, modifier, measure_policy, environment);
+        let (id, provided, _) = emit_layout_node(composer, &mut modifier, policy, environment);
         composer.push_parent(id);
-        compose_under_locals(provided, &mut content);
+        compose_under_locals(provided, content);
         composer.pop_parent();
         id
     })
 }
 
-pub(crate) fn compose_empty_layout(modifier: Modifier, environment: LayoutEnvironment) -> NodeId {
+// A layout node with no children, compiled once for each kind of modifier.
+#[inline(never)]
+pub(crate) fn compose_empty_layout(
+    mut modifier: impl NodeModifier,
+    environment: LayoutEnvironment,
+) -> NodeId {
     cranpose_core::with_current_composer(|composer| {
         let (id, provided, holds_children) = emit_layout_node(
             composer,
-            modifier,
+            &mut modifier,
             &crate::layout::policies::EmptyMeasurePolicy,
             environment,
         );
@@ -120,8 +138,12 @@ impl<P: MeasurePolicy + Clone + PartialEq> PolicyUpdate for P {
     }
 
     fn update(&self, node: &mut LayoutNode) {
-        let current: &dyn std::any::Any = &*node.measure_policy;
-        if current.downcast_ref::<P>() != Some(self) {
+        let held = {
+            let runtime_state = node.layout_runtime_state().borrow();
+            let current: &dyn std::any::Any = runtime_state.measure_policy();
+            current.downcast_ref::<P>() == Some(self)
+        };
+        if !held {
             node.set_measure_policy(held_policy(self));
         }
     }
@@ -138,25 +160,51 @@ fn held_policy<P: MeasurePolicy + Clone>(policy: &P) -> Rc<dyn MeasurePolicy> {
     Rc::new(policy.clone())
 }
 
+// What a layout node's modifier is set from: a modifier, or what makes one
+// only when the node does not hold it already.
+pub(crate) trait NodeModifier {
+    // The composition locals the modifier provides.
+    fn provided_locals(&self) -> Vec<cranpose_core::ProvidedValue>;
+    // The modifier, for a node made new.
+    fn to_modifier(&self) -> Modifier;
+    // Sets the modifier on `node`; a modifier may give its value to the node
+    // and stay empty.
+    fn set_on(&mut self, node: &mut LayoutNode);
+}
+
+impl NodeModifier for Modifier {
+    fn provided_locals(&self) -> Vec<cranpose_core::ProvidedValue> {
+        self.provided_composition_locals()
+    }
+
+    fn to_modifier(&self) -> Modifier {
+        self.clone()
+    }
+
+    fn set_on(&mut self, node: &mut LayoutNode) {
+        node.set_modifier(std::mem::take(self));
+    }
+}
+
 // Emits and updates a layout node; returns it, the composition locals its
 // modifier provides and whether it holds children. The node keeps the policy
-// it holds while `policy` equals it. Out of line, one function for every
-// policy type.
-#[inline(never)]
+// it holds while `policy` equals it. One body for every policy and modifier,
+// inlined into its two callers, which are out of line themselves.
+#[inline]
 fn emit_layout_node(
     composer: &cranpose_core::Composer,
-    modifier: Modifier,
+    modifier: &mut dyn NodeModifier,
     policy: &dyn PolicyUpdate,
     environment: LayoutEnvironment,
 ) -> (NodeId, Vec<cranpose_core::ProvidedValue>, bool) {
-    let provided = modifier.provided_composition_locals();
+    let provided = modifier.provided_locals();
     let id = composer.emit_recyclable_node(
-        || policy.new_node(modifier.clone()),
-        |node| *node = policy.new_node(modifier.clone()),
+        || policy.new_node(modifier.to_modifier()),
+        |node| *node = policy.new_node(modifier.to_modifier()),
     );
     let holds_children = composer
         .with_node_mut(id, |node: &mut LayoutNode| {
-            node.set_modifier(modifier);
+            modifier.set_on(node);
             policy.update(node);
             node.set_density(environment.density);
             node.set_layout_direction(environment.direction);

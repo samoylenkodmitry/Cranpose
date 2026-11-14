@@ -58,7 +58,7 @@ fn source_url(tab: DemoTab) -> String {
 #[derive(Clone, PartialEq)]
 enum SourceState {
     Loading,
-    Ready(Rc<Vec<Rc<AnnotatedString>>>),
+    Ready(Rc<Vec<AnnotatedString>>),
     Error(String),
 }
 
@@ -69,11 +69,10 @@ fn language_for(path: &str) -> Language {
     }
 }
 
-fn highlighted_lines(path: &str, body: &str) -> Rc<Vec<Rc<AnnotatedString>>> {
+fn highlighted_lines(path: &str, body: &str) -> Rc<Vec<AnnotatedString>> {
     Rc::new(
         highlight_lines(language_for(path), body)
             .into_iter()
-            .map(Rc::new)
             .collect(),
     )
 }
@@ -171,7 +170,7 @@ pub(crate) fn SourcePanel(tab: DemoTab) {
                             scope.items(
                                 LazyItems::new(count).key(|index: usize| index as u64),
                                 move |index| {
-                                    SourceLine(index + 1, Rc::clone(&lines[index]));
+                                    SourceLine(index + 1, lines[index].clone());
                                 },
                             );
                         },
@@ -183,7 +182,7 @@ pub(crate) fn SourcePanel(tab: DemoTab) {
 }
 
 #[composable]
-fn SourceLine(number: usize, line: Rc<AnnotatedString>) {
+fn SourceLine(number: usize, line: AnnotatedString) {
     Row(
         Modifier::empty().fill_max_width(),
         RowSpec::new().horizontal_arrangement(LinearArrangement::SpacedBy(10.0)),
@@ -199,7 +198,7 @@ fn SourceLine(number: usize, line: Rc<AnnotatedString>) {
                     ..Default::default()
                 },
             );
-            Text(Rc::clone(&line), Modifier::empty(), TextStyle::default());
+            Text(line.clone(), Modifier::empty(), TextStyle::default());
         },
     );
 }

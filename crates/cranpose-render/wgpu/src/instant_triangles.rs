@@ -20,7 +20,6 @@
 use std::ops::Range;
 
 use cranpose_render_common::layer_shadow::ShadowRRect;
-use wgpu::util::DeviceExt;
 
 use crate::{
     draw_pass::TrackedPass, frame_graph::BufferUpload, offscreen::OffscreenTarget, render::Vertex,
@@ -45,8 +44,6 @@ pub(crate) enum InstantTexels {
 #[cfg(not(target_arch = "wasm32"))]
 mod pipelines {
     use std::{borrow::Cow, sync::Arc};
-
-    use wgpu::util::DeviceExt;
 
     use super::{InstantStandIn, InstantTexels};
     use crate::{
@@ -124,11 +121,13 @@ mod pipelines {
                 }],
             });
             let texels = TEXELS.map(|texels| {
-                let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("Instant Texels Buffer"),
-                    contents: bytemuck::bytes_of(&[texels as u32, 0, 0, 0]),
-                    usage: wgpu::BufferUsages::UNIFORM,
-                });
+                let buffer = crate::frame_graph::create_filled_buffer(
+                    device,
+                    crate::frame_graph::UploadMode::Copied,
+                    "Instant Texels Buffer",
+                    wgpu::BufferUsages::UNIFORM,
+                    bytemuck::bytes_of(&[texels as u32, 0, 0, 0]),
+                );
                 device.create_bind_group(&wgpu::BindGroupDescriptor {
                     label: Some("Instant Texels Bind Group"),
                     layout: &texels_layout,
@@ -408,11 +407,13 @@ impl InstantTriangles {
     // the gauntlet's at tier 12 laid 0.5 MB in one frame.
     pub(crate) fn upload(&self, device: &wgpu::Device) -> Option<InstantBuffers> {
         let buffer = |label, contents: &[u8], usage| {
-            let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some(label),
-                contents,
+            let buffer = crate::frame_graph::create_filled_buffer(
+                device,
+                crate::frame_graph::UploadMode::Copied,
+                label,
                 usage,
-            });
+                contents,
+            );
             let len = buffer.size();
             BufferUpload {
                 buffer,

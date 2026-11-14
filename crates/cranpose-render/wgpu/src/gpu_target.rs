@@ -33,6 +33,28 @@ impl GpuTarget {
             adapter_downlevel: adapter.get_downlevel_capabilities().flags,
         }
     }
+
+    // What a renderer of `renderer_epoch` on this target is built from.
+    pub(crate) fn renderer_init(
+        self,
+        renderer_epoch: u64,
+        pipeline_compilation: crate::pipeline_compiler::PipelineCompilation,
+        on_device_lost: Option<crate::DeviceLostHandler>,
+    ) -> crate::render::GpuRendererInit {
+        crate::render::GpuRendererInit {
+            device_errors: crate::device_error_sentry::DeviceErrorSentry::watching(
+                &self.device,
+                on_device_lost,
+            ),
+            device: self.device,
+            queue: self.queue,
+            surface_format: self.surface_format,
+            adapter_backend: self.adapter_backend,
+            adapter_downlevel: self.adapter_downlevel,
+            renderer_epoch,
+            pipeline_compilation,
+        }
+    }
 }
 
 /// The optional device features the renderer exploits when the adapter

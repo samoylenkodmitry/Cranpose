@@ -49,7 +49,7 @@ impl Composer {
 
     /// The current scope's id and debug label, for a trace line.
     fn trace_scope(&self) -> (usize, Option<&'static str>) {
-        self.current_recompose_scope().map_or((0, None), |scope| {
+        self.peek_recompose_scope().map_or((0, None), |scope| {
             (scope.id(), debug_scope_label(scope.id()))
         })
     }

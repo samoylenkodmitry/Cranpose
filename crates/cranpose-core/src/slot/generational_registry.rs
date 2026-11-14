@@ -1,5 +1,5 @@
 use super::dense_id_map::DenseIdMap;
-use crate::collections::{growth_slack::GrowthSlack, map::HashMap};
+use crate::collections::growth_slack::GrowthSlack;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct GenerationalSlot<S> {
@@ -12,9 +12,10 @@ pub(crate) trait RegistryState: Copy {
     fn is_detached(self) -> bool;
 }
 
+// The states of a registry's ids, by id: ids are handed out lowest free
+// first, so they stay as many as the most ids alive at once.
 pub(crate) struct GenerationalRegistryStorage<S> {
-    dense_states: DenseIdMap<GenerationalSlot<S>>,
-    sparse_states: HashMap<usize, GenerationalSlot<S>>,
+    states: DenseIdMap<GenerationalSlot<S>>,
     active_count: usize,
     detached_count: usize,
 }
@@ -22,76 +23,59 @@ pub(crate) struct GenerationalRegistryStorage<S> {
 impl<S> Default for GenerationalRegistryStorage<S> {
     fn default() -> Self {
         Self {
-            dense_states: DenseIdMap::new(),
-            sparse_states: HashMap::default(),
+            states: DenseIdMap::new(),
             active_count: 0,
             detached_count: 0,
         }
     }
 }
 
-impl<S> GenerationalRegistryStorage<S> {
-    const DENSE_STORAGE_ID_LIMIT: usize = 65_536;
+// The room below which an emptied registry keeps its storage.
+const SHRINK_FLOOR: usize = 1_024;
 
+impl<S> GenerationalRegistryStorage<S> {
     pub(crate) fn new() -> Self {
         Self::default()
     }
 
     pub(crate) fn slot(&self, id: usize) -> Option<&GenerationalSlot<S>> {
-        if Self::uses_dense_storage(id) {
-            self.dense_states.get(id)
-        } else {
-            self.sparse_states.get(&id)
-        }
+        self.states.get(id)
     }
+
     pub(crate) fn slot_mut(&mut self, id: usize) -> Option<&mut GenerationalSlot<S>> {
-        if Self::uses_dense_storage(id) {
-            self.dense_states.get_mut(id)
-        } else {
-            self.sparse_states.get_mut(&id)
-        }
+        self.states.get_mut(id)
     }
 
     pub(crate) fn slots(&self) -> impl Iterator<Item = (usize, &GenerationalSlot<S>)> + '_ {
-        self.dense_states
-            .iter()
-            .chain(self.sparse_states.iter().map(|(&id, slot)| (id, slot)))
+        self.states.iter()
     }
 
     pub(crate) fn slot_len(&self) -> usize {
-        self.dense_states.len() + self.sparse_states.len()
-    }
-
-    pub(crate) fn sparse_slot_len(&self) -> usize {
-        self.sparse_states.len()
+        self.states.len()
     }
 
     pub(crate) fn capacity(&self) -> usize {
-        self.dense_states.capacity() + self.sparse_states.capacity()
+        self.states.capacity()
     }
 
     pub(crate) fn heap_bytes(&self) -> usize {
-        self.dense_states.capacity() * size_of::<Option<GenerationalSlot<S>>>()
-            + self.sparse_states.capacity() * size_of::<(usize, GenerationalSlot<S>)>()
+        self.states.capacity() * size_of::<Option<GenerationalSlot<S>>>()
     }
 
     pub(crate) fn clear(&mut self) {
-        self.dense_states.clear();
-        self.sparse_states.clear();
+        self.states.clear();
         self.active_count = 0;
         self.detached_count = 0;
     }
 
     pub(crate) fn shrink_to_fit(&mut self) {
-        self.dense_states.shrink_to_fit();
-        self.sparse_states.shrink_to_fit();
+        self.states.shrink_to_fit();
     }
 
-    pub(crate) fn maybe_shrink_sparse_storage(&mut self) -> bool {
-        if self.capacity() <= Self::DENSE_STORAGE_ID_LIMIT {
-            return false;
-        }
-        if self.slot_len().saturating_mul(4) >= self.capacity() {
+    // Gives back the room of a registry left at a quarter of its ids or
+    // less, and says whether it did.
+    pub(crate) fn maybe_shrink(&mut self) -> bool {
+        if self.capacity() <= SHRINK_FLOOR || self.slot_len().saturating_mul(4) >= self.capacity() {
             return false;
         }
         self.shrink_to_fit();
@@ -100,35 +84,22 @@ impl<S> GenerationalRegistryStorage<S> {
 
     #[cfg(test)]
     pub(crate) fn dense_capacity(&self) -> usize {
-        self.dense_states.capacity()
+        self.states.capacity()
     }
 
     fn insert_slot(&mut self, id: usize, generation: u32, state: S) -> Option<GenerationalSlot<S>> {
-        let slot = GenerationalSlot { generation, state };
-        if Self::uses_dense_storage(id) {
-            self.dense_states.insert(id, slot)
-        } else {
-            self.sparse_states.insert(id, slot)
-        }
+        self.states
+            .insert(id, GenerationalSlot { generation, state })
     }
 
     fn remove_slot(&mut self, id: usize) -> Option<GenerationalSlot<S>> {
-        if Self::uses_dense_storage(id) {
-            self.dense_states.remove(id)
-        } else {
-            self.sparse_states.remove(&id)
-        }
-    }
-
-    fn uses_dense_storage(id: usize) -> bool {
-        id <= Self::DENSE_STORAGE_ID_LIMIT
+        self.states.remove(id)
     }
 }
 
 impl<S> GrowthSlack for GenerationalRegistryStorage<S> {
     fn trim_growth_slack(&mut self) {
-        self.dense_states.trim_growth_slack();
-        self.sparse_states.trim_growth_slack();
+        self.states.trim_growth_slack();
     }
 }
 

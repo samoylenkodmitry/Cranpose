@@ -264,12 +264,13 @@ impl SpanStyle {
 
     /// Returns the font size in sp. An `Sp` size is used as is, an `Em` size multiplies
     /// `default_size`, and an unspecified, non-positive or non-finite size gives `default_size`.
-    /// A `default_size` that is not positive and finite counts as 14.0.
+    /// A `default_size` that is not positive and finite counts as
+    /// [`cranpose_ui_graphics::DEFAULT_FONT_SIZE`].
     pub fn resolve_font_size(&self, default_size: f32) -> f32 {
         let fallback = if default_size.is_finite() && default_size > 0.0 {
             default_size
         } else {
-            14.0
+            cranpose_ui_graphics::DEFAULT_FONT_SIZE
         };
         match self.font_size {
             TextUnit::Sp(value) if value.is_finite() && value > 0.0 => value,

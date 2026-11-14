@@ -82,29 +82,68 @@ fn frames_start_unpaced_until_the_display_reports_one() {
 }
 
 #[test]
-fn a_loop_that_leaves_the_queue_shallow_stays_unpaced() {
+fn a_loop_that_keeps_up_with_a_shallow_queue_is_paced_at_one_frame_queued() {
     for depth in [0, 1] {
         let mut pacer = FramePacer::default();
-        let now = shown_run(&mut pacer, 0, 60, depth);
+        let now = shown_run(&mut pacer, 0, READY_FRAMES - 1, depth);
         assert!(begin_at(&mut pacer, now));
-        assert!(pacer.begin_frame(now + VSYNC / 2, now, VSYNC));
-        assert_eq!(pacer.current_level(), Some(Level::Unpaced));
+        assert!(
+            pacer.begin_frame(now + VSYNC / 2, now, VSYNC),
+            "until a full window shows the loop keeps up, it runs unpaced"
+        );
+        let now = shown_run(&mut pacer, now, 1, depth);
+        assert!(begin_at(&mut pacer, now));
+        assert_eq!(pacer.current_level(), Some(Level::Shallow));
+        assert!(!pacer.begin_frame(now + VSYNC / 2, now, VSYNC));
     }
 }
 
 #[test]
-fn a_loop_that_fills_the_queue_is_paced_at_two_frames_queued() {
+fn a_loop_with_a_shallow_queue_that_misses_vsyncs_stays_unpaced() {
     let mut pacer = FramePacer::default();
     let now = shown_run(&mut pacer, 0, READY_FRAMES, 1);
-    let now = shown_run(&mut pacer, now, FULL_HISTORY as i64 - 1, 3);
-    let now = shown_run(&mut pacer, now, 1, 1);
-    let now = shown_run(&mut pacer, now, FULL_HISTORY as i64 - 1, 3);
+    let now = missed_run(&mut pacer, now, 1);
+    let now = shown_run(&mut pacer, now + VSYNC, READY_FRAMES - 2, 1);
+    assert!(begin_at(&mut pacer, now));
+    assert!(pacer.begin_frame(now + VSYNC / 2, now, VSYNC));
+    assert_eq!(pacer.current_level(), Some(Level::Unpaced));
+}
+
+// A loop whose queue holds one frame keeps up. The display then misses a
+// refresh: it shows the frame before again, and every later frame a vsync
+// later, with one more queued behind it. A paced loop gives up a slot, and
+// the frames after reach the screen as soon as before.
+#[test]
+fn a_frame_the_display_adds_to_a_shallow_queue_is_drained() {
+    let mut pacer = FramePacer::default();
+    let now = shown_run(&mut pacer, 0, READY_FRAMES, 1);
+    assert!(begin_at(&mut pacer, now));
+    let now = shown_run(&mut pacer, now + VSYNC, HISTORY as i64, 2);
+    assert!(
+        !begin_at(&mut pacer, now),
+        "the slot is given up for the frame the display added"
+    );
+    assert_eq!(pacer.current_level(), Some(Level::Shallow));
+}
+
+#[test]
+fn a_loop_that_fills_the_queue_is_paced_at_two_frames_queued() {
+    // A window that kept up, the last frame with `last` queued behind it.
+    let kept_up = |last| {
+        let full = FULL_HISTORY as i64;
+        let mut pacer = FramePacer::default();
+        let now = shown_run(&mut pacer, 0, READY_FRAMES - full, 1);
+        let now = shown_run(&mut pacer, now, full - 1, 3);
+        let now = shown_run(&mut pacer, now, 1, last);
+        (pacer, now)
+    };
+    let (mut pacer, now) = kept_up(1);
     assert_eq!(
         level(&mut pacer, now),
-        Some(Level::Unpaced),
+        Some(Level::Shallow),
         "a queue that fell to one has not stayed ahead of the display"
     );
-    let now = shown_run(&mut pacer, now, 1, 3);
+    let (mut pacer, now) = kept_up(3);
     assert_eq!(level(&mut pacer, now), Some(Level::Buffered));
     assert!(
         !begin_at(&mut pacer, now),
@@ -137,9 +176,10 @@ fn a_swapchain_capped_at_two_queued_frames_can_drain_to_one() {
 }
 
 #[test]
-fn an_intermittently_two_deep_queue_keeps_starting_due_frames() {
+fn an_intermittently_two_deep_queue_that_keeps_up_drains_to_one() {
     let mut pacer = FramePacer::default();
-    for frame in 0..120 {
+    let mut drained = false;
+    for frame in 0..READY_FRAMES + HISTORY as i64 {
         let now = (frame + 1) * VSYNC;
         let depth = if frame % (FULL_HISTORY as i64 - 1) == 0 {
             1
@@ -147,10 +187,20 @@ fn an_intermittently_two_deep_queue_keeps_starting_due_frames() {
             2
         };
         pacer.record_shown(now, depth, VSYNC);
-        assert!(begin_at(&mut pacer, now));
-        assert!(pacer.begin_frame(now + VSYNC / 2, now, VSYNC));
-        assert_eq!(pacer.current_level(), Some(Level::Unpaced));
+        let started = begin_at(&mut pacer, now);
+        if frame < READY_FRAMES - 1 {
+            assert!(started);
+            assert!(pacer.begin_frame(now + VSYNC / 2, now, VSYNC));
+            assert_eq!(pacer.current_level(), Some(Level::Unpaced));
+        } else {
+            assert_eq!(pacer.current_level(), Some(Level::Shallow));
+            drained |= !started;
+        }
     }
+    assert!(
+        drained,
+        "a slot is given up once three frames had two behind"
+    );
 }
 
 #[test]

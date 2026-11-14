@@ -34,7 +34,7 @@ pub(super) fn push_text_effect<S: TextStyleDrawSink>(
         rect: text_rect,
         snap_anchor: None,
         text: DrawnText::of(
-            Arc::new(mask_text.render_string()),
+            Arc::clone(mask_text.render_string()),
             &style,
             node.paint().spread,
         ),

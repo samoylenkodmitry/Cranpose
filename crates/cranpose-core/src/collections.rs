@@ -5,6 +5,7 @@
 /// A least-recently-used cache with a fixed bound on its entry count.
 pub mod bounded_lru;
 pub mod growth_slack;
+pub mod id_pages;
 pub mod pass_aged;
 pub mod perfect_map;
 pub mod rare;

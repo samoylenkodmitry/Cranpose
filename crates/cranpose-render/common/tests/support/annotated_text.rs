@@ -1,14 +1,13 @@
-use std::{rc::Rc, sync::Arc};
+use std::sync::Arc;
 
 use cranpose_core::NodeId;
 use cranpose_render_common::{
     graph::{
-        LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, RenderGraph, RenderNode,
-        TextPrimitiveNode,
+        LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, RenderNode, TextPrimitiveNode,
     },
     text_fonts::TextFonts,
 };
-use cranpose_ui::text::{AnnotatedString, RangeStyle, SpanStyle, TextStyle, TextUnit};
+use cranpose_ui::text::{AnnotatedString, SpanStyle, TextStyle, TextUnit};
 use cranpose_ui_graphics::{Color, Rect};
 
 pub(crate) fn mixed_size_pairs() -> AnnotatedString {
@@ -19,14 +18,17 @@ pub(crate) fn mixed_size_pairs() -> AnnotatedString {
         (3..4, 10.0, Color::RED),
         (4..5, 30.0, Color::GREEN),
     ] {
-        text.span_styles.push(RangeStyle {
-            range,
-            item: SpanStyle {
-                font_size: TextUnit::Sp(size),
-                color: Some(color),
-                ..Default::default()
-            },
-        });
+        text = AnnotatedString::builder()
+            .append_annotated(&text)
+            .add_style(
+                SpanStyle {
+                    font_size: TextUnit::Sp(size),
+                    color: Some(color),
+                    ..Default::default()
+                },
+                range,
+            )
+            .to_annotated_string();
     }
     text
 }
@@ -38,7 +40,7 @@ pub(crate) fn text_graph(
     style: TextStyle,
     text_rect: Rect,
     viewport: Rect,
-) -> RenderGraph {
+) -> LayerNode {
     let prepared = cranpose_ui::AppContext::new().enter(|| {
         cranpose_ui::text::set_text_fonts(TextFonts::from_fonts_or_default(&[]).resolver());
         cranpose_ui::text::prepare_text_layout(
@@ -48,8 +50,9 @@ pub(crate) fn text_graph(
             Some(text_rect.width),
         )
     });
-    RenderGraph::new(LayerNode {
-        local_bounds: viewport,
+    LayerNode {
+        size: viewport.size(),
+        layer_bounds: Some(viewport),
         children: vec![RenderNode::Primitive(PrimitiveEntry {
             phase: PrimitivePhase::AfterChildren,
             node: PrimitiveNode::Text(Box::new(TextPrimitiveNode {
@@ -57,7 +60,6 @@ pub(crate) fn text_graph(
                 rect: text_rect,
                 render_text: prepared.render_text(),
                 layout: prepared.layout.clone(),
-                text: Rc::new(text),
                 font_size: style.resolve_font_size(10.0),
                 text_style: Arc::new(style),
                 overflow: cranpose_ui::TextLayoutOptions::default().overflow,
@@ -66,5 +68,5 @@ pub(crate) fn text_graph(
             })),
         })],
         ..Default::default()
-    })
+    }
 }

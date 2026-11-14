@@ -1,21 +1,24 @@
 #![allow(clippy::print_stdout, reason = "a test prints what it measured")]
 
-use std::{alloc::System, cell::RefCell, rc::Rc};
+use std::{
+    alloc::System,
+    cell::{Cell, RefCell},
+    rc::Rc,
+};
 
-use cranpose_core::{MemoryApplier, NodeId};
+use cranpose_core::{MemoryApplier, MutableState, NodeId, rememberMutableStateOf};
 use cranpose_foundation::lazy::{LazyListScope, LazyListState, rememberLazyListState};
 use cranpose_render_common::{
     NodeUpdate,
-    graph::{LayerNode, RenderGraph, RenderNode},
-    scene_builder::{
-        build_graph_from_applier, rebuild_graph_from_applier, update_graph_from_applier,
-    },
+    graph_scene::Scene,
+    scene_store::{ItemRef, LayerRef},
 };
 use cranpose_ui::{
-    Color, GraphicsLayer, LayoutEngine, LazyColumn, LazyColumnSpec, Modifier, Size, Text,
-    TextStyle,
+    Brush, Color, CornerRadii, GraphicsLayer, LayoutEngine, LayoutNode, LazyColumn, LazyColumnSpec,
+    MeasureLayoutOptions, Modifier, Size, Text, TextStyle, measure_layout_with_options,
     widgets::{Box, BoxSpec, Column, ColumnSpec},
 };
+use cranpose_ui_graphics::{CommandRecording, DrawScope, Rect};
 use stats_alloc::{INSTRUMENTED_SYSTEM, Region, StatsAlloc};
 
 #[macro_use]
@@ -27,16 +30,14 @@ static GLOBAL: &StatsAlloc<System> = &INSTRUMENTED_SYSTEM;
 
 const PASSES: usize = 10;
 
-/// The ids of the layers directly under `layer`, the cells of the column.
-fn cell_ids(layer: &LayerNode) -> Vec<NodeId> {
-    layer
-        .children
-        .iter()
-        .filter_map(|child| match child {
-            RenderNode::Layer(cell) => cell.node_id.or(cell.wraps),
-            RenderNode::Inline(cell) => Some(cell.node_id),
-            RenderNode::Primitive(_) | RenderNode::DrawRun(_) => None,
-        })
+// The ids of the records directly under the root of `graph`, the cells
+// of the column.
+fn cell_ids(graph: &Scene) -> Vec<NodeId> {
+    graph
+        .root_layer()
+        .into_iter()
+        .flat_map(LayerRef::children)
+        .filter_map(LayerRef::owner)
         .collect()
 }
 
@@ -44,7 +45,7 @@ fn cell_ids(layer: &LayerNode) -> Vec<NodeId> {
 /// tilted, filled and labelled cells, like the cells of the grid benchmark.
 fn allocations_per_pass(
     cells: usize,
-    mut pass: impl FnMut(&mut MemoryApplier, NodeId, &mut RenderGraph),
+    mut pass: impl FnMut(&mut MemoryApplier, NodeId, &mut Scene),
 ) -> usize {
     let mut composition = cranpose_ui::run_test_composition(move || {
         Column(Modifier::empty(), ColumnSpec::default(), move || {
@@ -78,8 +79,10 @@ fn allocations_per_pass(
     applier
         .compute_layout(root, Size::new(400.0, 4000.0))
         .expect("layout");
-    let mut graph = build_graph_from_applier(&applier, root, 1.0).expect("render graph");
-    assert_eq!(cell_ids(&graph.root).len(), cells, "every cell is a layer");
+    let mut graph = Scene::new();
+    graph.rebuild_from_applier(&applier, root);
+    assert!(graph.root_layer().is_some(), "render graph");
+    assert_eq!(cell_ids(&graph).len(), cells, "every cell is a layer");
     pass(&mut applier, root, &mut graph);
     pass(&mut applier, root, &mut graph);
     let region = Region::new(GLOBAL);
@@ -93,7 +96,7 @@ fn allocations_per_pass(
 
 /// Allocations per cell of `pass`, past what a pass costs whatever the
 /// number of cells.
-fn allocations_per_cell(mut pass: impl FnMut(&mut MemoryApplier, NodeId, &mut RenderGraph)) -> f64 {
+fn allocations_per_cell(mut pass: impl FnMut(&mut MemoryApplier, NodeId, &mut Scene)) -> f64 {
     let few = allocations_per_pass(10, &mut pass);
     let many = allocations_per_pass(110, &mut pass);
     (many - few) as f64 / 100.0
@@ -102,13 +105,13 @@ fn allocations_per_cell(mut pass: impl FnMut(&mut MemoryApplier, NodeId, &mut Re
 /// Rebuilding a layer takes the allocations of the layer it replaces, so a
 /// cell rebuilt with the same content allocates nothing of its own.
 fn rebuilding_a_cell_reuses_the_cell_it_replaces() {
-    let per_cell = allocations_per_cell(|applier, _, graph| {
-        let dirty: Vec<_> = cell_ids(&graph.root)
+    let per_cell = allocations_per_cell(|applier, root, graph| {
+        let dirty: Vec<_> = cell_ids(graph)
             .into_iter()
             .map(|id| (id, NodeUpdate::Content))
             .collect();
         assert!(
-            update_graph_from_applier(applier, graph, &dirty, 1.0),
+            graph.update_from_applier(applier, root, &dirty),
             "the cells rebuild in place"
         );
     });
@@ -120,9 +123,7 @@ fn rebuilding_a_cell_reuses_the_cell_it_replaces() {
 /// replaces.
 fn rebuilding_the_graph_reuses_the_graph_it_replaces() {
     let per_cell = allocations_per_cell(|applier, root, graph| {
-        let previous = std::mem::replace(graph, RenderGraph::new(LayerNode::default()));
-        *graph =
-            rebuild_graph_from_applier(applier, root, 1.0, Some(previous)).expect("render graph");
+        graph.rebuild_from_applier(applier, root);
     });
     println!("allocations per cell of a rebuilt graph: {per_cell}");
     assert!(
@@ -134,10 +135,10 @@ fn rebuilding_the_graph_reuses_the_graph_it_replaces() {
 /// A scene update keeps the map of its dirty nodes from the update before:
 /// updating one cell allocates what the cell's rebuild allocates alone.
 fn updating_one_cell_reuses_the_dirty_node_map() {
-    let allocations = allocations_per_pass(10, |applier, _, graph| {
-        let dirty = [(cell_ids(&graph.root)[0], NodeUpdate::Content)];
+    let allocations = allocations_per_pass(10, |applier, root, graph| {
+        let dirty = [(cell_ids(graph)[0], NodeUpdate::Content)];
         assert!(
-            update_graph_from_applier(applier, graph, &dirty, 1.0),
+            graph.update_from_applier(applier, root, &dirty),
             "the cell rebuilds in place"
         );
     });
@@ -188,7 +189,9 @@ fn scroll_step_allocations() -> usize {
     let mut applier = composition.applier_mut();
     applier.set_runtime_handle(handle);
     applier.compute_layout(root, viewport).expect("layout");
-    let mut graph = build_graph_from_applier(&applier, root, 1.0).expect("render graph");
+    let mut graph = Scene::new();
+    graph.rebuild_from_applier(&applier, root);
+    assert!(graph.root_layer().is_some(), "render graph");
     let _ = applier.take_structural_change_parents_attached_to(root);
     applier.clear_runtime_handle();
     drop(applier);
@@ -207,7 +210,7 @@ fn scroll_step_allocations() -> usize {
         let updates: Vec<_> = dirty.iter().map(|&id| (id, NodeUpdate::Content)).collect();
         let region = Region::new(GLOBAL);
         assert!(
-            update_graph_from_applier(&applier, &mut graph, &updates, 1.0),
+            graph.update_from_applier(&applier, root, &updates),
             "the scroll updates the scene in place"
         );
         let allocations = region.change().allocations;
@@ -231,6 +234,203 @@ fn a_row_scrolling_in_reuses_the_row_that_scrolled_out() {
     );
 }
 
+// Allocations a frame of `texts` texts that all change each frame:
+// through four words, as a ticker's do, or to a new number, as a
+// counter's do, when `numbers`: numbers of five digits, as a counter shows
+// between the steps that lengthen it. Composition, the layout an app runs
+// while no screen reader is connected and the scene update together.
+fn ticker_frame_allocations(texts: usize, numbers: bool) -> usize {
+    const WORDS: [&str; 4] = ["alpha", "bravo", "charlie", "delta"];
+    const FRAME_LAYOUT: MeasureLayoutOptions = MeasureLayoutOptions {
+        collect_semantics: false,
+        build_layout_tree: false,
+    };
+    let tick_holder: Rc<RefCell<Option<MutableState<usize>>>> = Rc::default();
+    let holder = Rc::clone(&tick_holder);
+    let mut composition = cranpose_ui::run_test_composition(move || {
+        let tick = rememberMutableStateOf(|| 0usize);
+        *holder.borrow_mut() = Some(tick);
+        Column(Modifier::empty(), ColumnSpec::default(), move || {
+            for index in 0..texts {
+                let style = TextStyle::default();
+                if numbers {
+                    Text(
+                        format!("{}", 10_000 + tick.get() * 1000 + index),
+                        Modifier::empty(),
+                        style,
+                    );
+                } else {
+                    Text(
+                        WORDS[(tick.get() + index) % WORDS.len()],
+                        Modifier::empty(),
+                        style,
+                    );
+                }
+            }
+        });
+    });
+    let root = composition.root().expect("a composed root");
+    let viewport = Size::new(400.0, 4000.0);
+    let tick = (*tick_holder.borrow()).expect("the tick state");
+    let mut graph = Scene::new();
+    let mut updates = Vec::new();
+    let mut frame = |count: usize| {
+        tick.set(count);
+        composition
+            .process_invalid_scopes()
+            .expect("the texts recompose");
+        let handle = composition.runtime_handle();
+        let mut applier = composition.applier_mut();
+        applier.set_runtime_handle(handle);
+        measure_layout_with_options(&mut applier, root, viewport, FRAME_LAYOUT).expect("layout");
+        if graph.root_layer().is_none() {
+            graph.rebuild_from_applier(&applier, root);
+        }
+        updates.clear();
+        applier
+            .with_node::<LayoutNode, _>(root, |column| {
+                let children = column.children().iter();
+                updates.extend(children.map(|&id| (id, NodeUpdate::Content)));
+            })
+            .expect("the column");
+        assert!(
+            graph.update_from_applier(&applier, root, &updates),
+            "the scene takes the update in place"
+        );
+        applier.clear_runtime_handle();
+    };
+    for count in 1..=8 {
+        frame(count);
+    }
+    let region = Region::new(GLOBAL);
+    for count in 9..9 + PASSES {
+        frame(count);
+    }
+    region.change().allocations / PASSES
+}
+
+// A fixed text that shows another string each frame takes the room of a
+// string and a layout it gave up before: it allocates nothing of its own.
+// A counter's text allocates the string the app formats.
+fn a_text_changing_each_frame_reuses_its_string_and_layout() {
+    for (numbers, own) in [(false, 0.0), (true, 1.0)] {
+        let few = ticker_frame_allocations(10, numbers);
+        let many = ticker_frame_allocations(110, numbers);
+        let per_text = many.saturating_sub(few) as f64 / 100.0;
+        println!("allocations per changing text a frame, numbers {numbers}: {per_text}");
+        assert!(
+            per_text <= own + 0.1,
+            "{per_text} allocations per changing text a frame, numbers {numbers}"
+        );
+    }
+}
+
+// The recordings the runs under `layer` draw from, as a reader holds them.
+fn recordings(layer: LayerRef<'_>, held: &mut Vec<Rc<CommandRecording>>) {
+    for item in layer.items() {
+        match item {
+            ItemRef::Run(run) => held.push(Rc::clone(&run.recording)),
+            ItemRef::Layer(child) | ItemRef::Leaf(child) => recordings(child, held),
+            ItemRef::Draw(_) | ItemRef::Text(_) | ItemRef::Shape(_) => {}
+        }
+    }
+}
+
+// A node that draws behind its content and then around it.
+fn drawn_around_content(modifier: Modifier, width: Rc<Cell<f32>>) -> Modifier {
+    modifier
+        .draw_behind(|scope| {
+            let bounds = Rect::from_size(scope.size());
+            scope.draw_round_rect_at(bounds, Brush::solid(Color::RED), CornerRadii::uniform(4.0));
+        })
+        .draw_with_content(move |scope| {
+            scope.draw_content();
+            let bar = Rect::from_size(Size::new(width.get(), 16.0));
+            scope.draw_round_rect_at(bar, Brush::solid(Color::BLUE), CornerRadii::uniform(4.0));
+        })
+}
+
+// A node that draws inside a clip, which the scene places as a draw group.
+fn drawn_inside_a_clip(modifier: Modifier, width: Rc<Cell<f32>>) -> Modifier {
+    modifier.draw_behind(move |scope| {
+        let bounds = Rect::from_size(scope.size());
+        let shown = Rect::from_size(Size::new(width.get(), 16.0));
+        scope.clip_rect(shown, &mut |scope| {
+            scope.draw_round_rect_at(bounds, Brush::solid(Color::BLUE), CornerRadii::uniform(4.0));
+        });
+    })
+}
+
+// A node that draws around its content, behind it inside a clip every other
+// update: the behind half of the command turns from a run into a draw group
+// and back.
+fn drawn_around_content_in_a_clip_in_turn(modifier: Modifier, width: Rc<Cell<f32>>) -> Modifier {
+    modifier.draw_with_content(move |scope| {
+        let bar = Rect::from_size(Size::new(width.get(), 16.0));
+        let mut fill = |scope: &mut dyn DrawScope| {
+            scope.draw_round_rect_at(bar, Brush::solid(Color::RED), CornerRadii::uniform(4.0));
+        };
+        if width.get().rem_euclid(2.0) < 1.0 {
+            scope.clip_rect(bar, &mut fill);
+        } else {
+            fill(scope);
+        }
+        scope.draw_content();
+        scope.draw_round_rect_at(bar, Brush::solid(Color::BLUE), CornerRadii::uniform(4.0));
+    })
+}
+
+// A node with the draws of `draws`, drawn again each update while a reader
+// holds the recordings of the update before, as a picture does: each new
+// recording takes the storage of one the reader let go of, so a steady
+// update allocates nothing.
+fn redraws_reuse_their_recordings(draws: fn(Modifier, Rc<Cell<f32>>) -> Modifier, what: &str) {
+    let width = Rc::new(Cell::new(10.0f32));
+    let drawn = Rc::clone(&width);
+    let mut composition = cranpose_ui::run_test_composition(move || {
+        Box(
+            draws(
+                Modifier::empty().size(Size::new(64.0, 16.0)),
+                Rc::clone(&drawn),
+            ),
+            BoxSpec::default(),
+            || {},
+        );
+    });
+    let root = composition.root().expect("a composed root");
+    let handle = composition.runtime_handle();
+    let mut applier = composition.applier_mut();
+    applier.set_runtime_handle(handle);
+    applier
+        .compute_layout(root, Size::new(400.0, 400.0))
+        .expect("layout");
+    let mut graph = Scene::new();
+    graph.rebuild_from_applier(&applier, root);
+    let mut held = Vec::with_capacity(16);
+    let update = |graph: &mut Scene, held: &mut Vec<Rc<CommandRecording>>| {
+        width.set(width.get() + 1.0);
+        assert!(
+            graph.update_from_applier(&applier, root, &[(root, NodeUpdate::Draws)]),
+            "the node draws again in place"
+        );
+        held.clear();
+        recordings(graph.root_layer().expect("a scene"), held);
+    };
+    for _ in 0..6 {
+        update(&mut graph, &mut held);
+    }
+    assert!(held.len() >= 2, "the node draws runs: {}", held.len());
+    let region = Region::new(GLOBAL);
+    for _ in 0..PASSES {
+        update(&mut graph, &mut held);
+    }
+    let allocations = region.change().allocations;
+    drop(held);
+    applier.clear_runtime_handle();
+    println!("allocations of {PASSES} redraws {what}: {allocations}");
+    assert_eq!(allocations, 0, "a redraw {what} allocates");
+}
+
 /// One test, so no other test's allocations land in these regions: the
 /// counting allocator counts every thread.
 fn scene_rebuilds_stay_within_their_allocation_budgets() {
@@ -238,6 +438,13 @@ fn scene_rebuilds_stay_within_their_allocation_budgets() {
     rebuilding_the_graph_reuses_the_graph_it_replaces();
     updating_one_cell_reuses_the_dirty_node_map();
     a_row_scrolling_in_reuses_the_row_that_scrolled_out();
+    a_text_changing_each_frame_reuses_its_string_and_layout();
+    redraws_reuse_their_recordings(drawn_around_content, "around content");
+    redraws_reuse_their_recordings(drawn_inside_a_clip, "inside a clip");
+    redraws_reuse_their_recordings(
+        drawn_around_content_in_a_clip_in_turn,
+        "around content, in a clip in turn",
+    );
 }
 
 main_thread_test!(scene_rebuilds_stay_within_their_allocation_budgets);

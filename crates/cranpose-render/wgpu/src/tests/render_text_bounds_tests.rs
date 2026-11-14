@@ -1,6 +1,6 @@
 use cranpose_core::NodeId;
 use cranpose_ui::text::TextMotion;
-use cranpose_ui_graphics::Color;
+use cranpose_ui_graphics::{Color, Point};
 
 use super::*;
 use crate::{render::glyph_draws::glyph_clip_edges, scene::DrawnText};

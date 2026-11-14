@@ -3,27 +3,34 @@
 
 use std::cell::RefCell;
 
+use cranpose_core::NodeId;
 use cranpose_ui_graphics::{Rect, Size};
 use cranpose_ui_layout::Placement;
 
-use super::{LayoutState, NodeCache};
-use crate::layout::LayoutRuntimeState;
+use super::{ChildPlacement, LayoutCells, NodeCache};
+use crate::{
+    layout::{LayoutChildMeasureState, LayoutRuntimeState},
+    render_state::AppContext,
+};
 
 // What layout reaches of a node without the applier, and what its parent's
 // record of it, its kept measurement and its draws' coordinator rects share:
 // one allocation, so the measure path that reads them fetches them together.
 pub(crate) struct LayoutParts {
     cache: NodeCache,
-    layout_state: RefCell<LayoutState>,
+    layout_state: LayoutCells,
     runtime_state: RefCell<LayoutRuntimeState>,
+    // The record the node's parent keeps of it.
+    record: LayoutChildMeasureState,
 }
 
 impl LayoutParts {
     pub(crate) fn new(runtime_state: LayoutRuntimeState) -> Self {
         Self {
             cache: NodeCache::default(),
-            layout_state: RefCell::default(),
+            layout_state: LayoutCells::default(),
             runtime_state: RefCell::new(runtime_state),
+            record: LayoutChildMeasureState::default(),
         }
     }
 
@@ -39,17 +46,41 @@ impl LayoutParts {
         &self.cache
     }
 
-    pub(crate) fn layout_state(&self) -> &RefCell<LayoutState> {
+    pub(crate) fn layout_state(&self) -> &LayoutCells {
         &self.layout_state
+    }
+
+    pub(crate) fn record(&self) -> &LayoutChildMeasureState {
+        &self.record
+    }
+
+    // Places node `node_id`, whose parts these are, where `placer` placed it
+    // with `at`.
+    pub(crate) fn place(
+        &self,
+        node_id: Option<NodeId>,
+        at: ChildPlacement,
+        placer: Option<NodeId>,
+        context: &AppContext,
+    ) {
+        self.layout_state.place_child(node_id, at, placer, context);
+    }
+
+    pub(crate) fn set_size(&self, node_id: Option<NodeId>, size: Size, context: &AppContext) {
+        self.layout_state.set_size(node_id, size, context);
+    }
+
+    // Clears the placed flag of node `node_id`, whose parts these are, at the
+    // start of a layout pass.
+    pub(crate) fn clear_placed(&self, node_id: Option<NodeId>, context: &AppContext) {
+        self.layout_state.clear_placed(node_id, context);
     }
 
     // Notes whether `placements`, the node's latest, give a child a z index
     // other than 0.
     pub(crate) fn note_child_placements(&self, placements: &[Placement]) {
         let with_z = placements.iter().any(|placement| placement.z_index != 0.0);
-        self.layout_state
-            .borrow_mut()
-            .set_places_children_with_z_index(with_z);
+        self.layout_state.set_places_children_with_z_index(with_z);
     }
 
     pub(crate) fn runtime_state(&self) -> &RefCell<LayoutRuntimeState> {
@@ -70,7 +101,7 @@ impl LayoutParts {
 // scene's reasons to order siblings until its parts end.
 impl Drop for LayoutParts {
     fn drop(&mut self) {
-        if self.layout_state.get_mut().places_children_with_z_index() {
+        if self.layout_state.places_children_with_z_index() {
             super::layout_state::count_z_index_placer(false);
         }
     }

@@ -69,7 +69,7 @@ fn profiled_frames_keep_current_uniforms_and_geometry() {
             &mut renderer,
             160,
             64,
-            support::page_graph(160, 64, children),
+            &support::page_graph(160, 64, children),
         );
         for column in 0..3 {
             let offset = ((28 + frame) * 160 + 28 + column * 48) * 4;

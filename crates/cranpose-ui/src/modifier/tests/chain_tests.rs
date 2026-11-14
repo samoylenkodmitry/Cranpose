@@ -1,7 +1,7 @@
-use cranpose_foundation::{InvalidationKind, ModifierInvalidation, ModifierNode, NodeCapabilities};
+use cranpose_foundation::{InvalidationKind, ModifierInvalidation, NodeCapabilities};
 
 use super::*;
-use crate::{modifier::Color, modifier_nodes::PaddingNode};
+use crate::{modifier::Color, modifier_nodes::PaddingElement};
 
 #[test]
 fn attaches_padding_node_and_invalidates_layout() {
@@ -21,16 +21,20 @@ fn attaches_padding_node_and_invalidates_layout() {
 }
 
 #[test]
-fn reuses_nodes_between_updates() {
+fn an_equal_modifier_set_again_invalidates_nothing() {
     let mut handle = ModifierChainHandle::new();
 
     let _ = handle.update(&Modifier::empty().padding(12.0));
-    let first_ptr = node_ptr::<PaddingNode>(&handle);
 
     let invalidations = handle.update(&Modifier::empty().padding(12.0));
-    let second_ptr = node_ptr::<PaddingNode>(&handle);
 
-    assert_eq!(first_ptr, second_ptr, "expected the node to be reused");
+    assert_eq!(
+        handle
+            .chain()
+            .plain::<PaddingElement>(0)
+            .map(|element| element.padding()),
+        Some(EdgeInsets::uniform(12.0))
+    );
     assert!(
         invalidations.is_empty(),
         "no additional invalidations should be issued for a pure update"
@@ -108,14 +112,6 @@ fn offset_update_invalidates_layout_for_retained_placement() {
         "offset value changes must not leave retained geometry stale through a draw-only invalidation"
     );
     assert_eq!(handle.resolved_modifiers().offset(), Point::new(12.0, 0.0));
-}
-
-fn node_ptr<N: ModifierNode + 'static>(handle: &ModifierChainHandle) -> *const N {
-    handle
-        .chain()
-        .node::<N>(0)
-        .map(|node| &*node as *const N)
-        .expect("expected node to exist")
 }
 
 #[test]

@@ -19,12 +19,17 @@ mod recompose_child_order;
 #[cfg(feature = "inspection")]
 mod recomposition_inspection;
 mod returned_values;
+mod runtimes_on_one_thread;
 mod scene_attachment_scratch;
+mod scopes_on_demand;
 mod snapshot_observation;
 mod snapshot_runtime_thread_isolation;
 mod stage_times;
 mod state_hooks;
 mod static_locals;
+mod subtree_inserts;
 mod task_wakes;
+#[path = "support/tracked_parent.rs"]
+mod tracked_parent;
 mod value_slot_handle_ui;
 mod worker_jobs;

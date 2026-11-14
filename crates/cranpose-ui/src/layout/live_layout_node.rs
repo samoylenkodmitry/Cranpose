@@ -23,6 +23,13 @@ impl LiveLayoutNode<'_> {
         }
     }
 
+    fn id(&self) -> Option<NodeId> {
+        match self {
+            Self::Layout(node) => node.node_id(),
+            Self::Subcompose(node) => node.id(),
+        }
+    }
+
     pub(super) fn parent(&self) -> Option<NodeId> {
         match self {
             Self::Layout(node) => node.parent(),
@@ -67,10 +74,10 @@ impl LiveLayoutNode<'_> {
     }
 
     pub(super) fn is_placed(&self) -> bool {
-        self.parts().layout_state().borrow().is_placed()
+        self.parts().layout_state().is_placed()
     }
 
-    pub(super) fn parent_data(&self) -> cranpose_ui_layout::ParentData {
+    pub(super) fn parent_data(&self) -> crate::modifier::SharedParentData {
         match self {
             Self::Layout(node) => node.parent_data(),
             Self::Subcompose(node) => node.parent_data(),
@@ -81,15 +88,14 @@ impl LiveLayoutNode<'_> {
     pub(super) fn place(&self, at: ChildPlacement, placer: NodeId, context: &AppContext) {
         self.parts()
             .layout_state()
-            .borrow_mut()
-            .place_child(at, Some(placer), context);
+            .place_child(self.id(), at, Some(placer), context);
     }
 
     // Places the node again where `placer` last placed it.
     pub(super) fn stay_placed(&self, placer: NodeId, context: &AppContext) {
-        let mut state = self.parts().layout_state().borrow_mut();
+        let state = self.parts().layout_state();
         let position = state.position();
-        state.place(position, Some(placer), context);
+        state.place(self.id(), position, Some(placer), context);
     }
 }
 

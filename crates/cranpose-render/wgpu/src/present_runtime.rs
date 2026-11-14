@@ -1,21 +1,29 @@
 use std::{
     sync::{
-        Arc, Mutex, PoisonError,
+        Arc, Mutex, OnceLock, PoisonError,
         atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering},
-        mpsc::{
-            Receiver, RecvTimeoutError, Sender, SyncSender, TryRecvError, TrySendError, channel,
-            sync_channel,
-        },
+        mpsc::{Receiver, SyncSender, TryRecvError, TrySendError},
     },
     time::Duration,
 };
 
+#[cfg(feature = "test-support")]
+use crate::{TestImages, test_target::TestTarget};
 use crate::{
     frame_packet::{
         CancelReason, FramePacket, FrameSceneStorage, PresentOutcome, PresentTimings, RenderReturns,
     },
     render::{FrameOutput, FrameSubmit, GpuRenderer, GpuRendererInit},
 };
+
+// The image a present thread's frame draws into: the surface's next image,
+// or one of a test swapchain.
+enum PresentImage {
+    Surface(wgpu::SurfaceTexture),
+    // The image of the test swapchain at this place.
+    #[cfg(feature = "test-support")]
+    Test(usize),
+}
 
 pub(crate) type PresentWaker = Arc<dyn Fn() + Send + Sync>;
 
@@ -32,7 +40,7 @@ pub(crate) struct PresentRuntimeInit {
 }
 
 pub(crate) enum PresentControl {
-    /// Nothing waits for it: packets sent after it run on the new surface.
+    // Nothing waits for it: packets sent after it run on the new surface.
     ReplaceSurface {
         surface: wgpu::Surface<'static>,
         config: wgpu::SurfaceConfiguration,
@@ -46,15 +54,22 @@ pub(crate) enum PresentControl {
     DropSurface {
         ack: SyncSender<()>,
     },
-    #[doc(hidden)]
+    // Draws the frames into a test target, a new surface of `surface_epoch`.
+    #[cfg(feature = "test-support")]
     AttachOffscreenTargetForTests {
         width: u32,
         height: u32,
+        images: TestImages,
+        surface_epoch: u64,
         ack: SyncSender<()>,
     },
     Shutdown,
 }
 
+#[expect(
+    clippy::large_enum_variant,
+    reason = "a frame's packet goes inline: a box would allocate each frame"
+)]
 pub(crate) enum PresentMsg {
     Control(PresentControl),
     Packet(FramePacket),
@@ -67,9 +82,9 @@ pub(crate) struct PresentStatus {
     /// Whether the last frame drew a placeholder for an effect whose
     /// pipelines compile.
     pub(crate) drew_placeholder: AtomicBool,
-    /// The renderer's compiler account, to tell whether pipelines a
-    /// placeholder waits for still compile.
-    pub(crate) landing: std::sync::OnceLock<Arc<crate::pipeline_compiler::Landing>>,
+    // The renderer's compiler account, to tell whether pipelines a
+    // placeholder waits for still compile.
+    pub(crate) landing: OnceLock<Arc<crate::pipeline_compiler::Landing>>,
     pub(crate) presented_frames: AtomicU64,
     /// Frames handed back to the producer, whatever their outcome.
     pub(crate) returned_frames: AtomicU64,
@@ -88,7 +103,12 @@ impl PresentStatus {
     // the landing, and the app it woke reads it there.
     pub(crate) fn warmup_due(&self) -> bool {
         self.needs_frame_warmup.load(Ordering::Relaxed)
-            || self.landing.get().is_some_and(|landing| landing.landed())
+            || self.landing_is(crate::pipeline_compiler::Landing::landed)
+    }
+
+    // Whether the renderer's compiler account says `ask`.
+    pub(crate) fn landing_is(&self, ask: fn(&crate::pipeline_compiler::Landing) -> bool) -> bool {
+        self.landing.get().is_some_and(|landing| ask(landing))
     }
 }
 
@@ -102,17 +122,31 @@ pub(crate) fn encode_present_outcome(outcome: PresentOutcome, frame_id: u64) -> 
         PresentOutcome::Cancelled(CancelReason::SurfaceUnavailable) => 5,
         PresentOutcome::Cancelled(CancelReason::DeviceError) => 6,
         PresentOutcome::Unchanged => 7,
+        PresentOutcome::Cancelled(CancelReason::NeedsWhole) => 8,
+        PresentOutcome::Cancelled(CancelReason::DeviceLost) => 9,
     };
     (frame_id << 8) | code
+}
+
+// Hands `answer` to the caller that waits on `reply`; a caller that stopped
+// waiting finds nothing.
+pub(crate) fn answer<T>(reply: &SyncSender<T>, answer: T) {
+    if reply.send(answer).is_err() {
+        log::debug!("[present-runtime] the caller stopped waiting for its answer");
+    }
 }
 
 pub(crate) struct PresentState {
     gpu_renderer: GpuRenderer,
     submit: FrameSubmit,
     device: Arc<wgpu::Device>,
+    // The image a packet the renderer refused left undrawn: the next packet
+    // draws into it, as presenting it would show the frame it held.
+    undrawn: Option<PresentImage>,
     surface: Option<wgpu::Surface<'static>>,
     config: Option<wgpu::SurfaceConfiguration>,
-    offscreen_target: Option<(u32, u32)>,
+    #[cfg(feature = "test-support")]
+    test_target: Option<TestTarget>,
     renderer_epoch: u64,
     surface_epoch: u64,
     waiting_packet: Option<FramePacket>,
@@ -140,7 +174,7 @@ impl PresentState {
         let submit = FrameSubmit::new(&gpu);
         let gpu_renderer = GpuRenderer::new(gpu);
         if let Some(landing) = gpu_renderer.pipelines.landing() {
-            let _ = status.landing.set(landing);
+            status.landing.get_or_init(|| landing);
         }
         // The landing tells the app the frame is due: the present thread
         // alone writes its account.
@@ -152,9 +186,11 @@ impl PresentState {
             gpu_renderer,
             submit,
             device,
+            undrawn: None,
             surface: None,
             config: None,
-            offscreen_target: None,
+            #[cfg(feature = "test-support")]
+            test_target: None,
             renderer_epoch,
             surface_epoch: 0,
             waiting_packet: None,
@@ -204,6 +240,7 @@ impl PresentState {
         }
     }
 
+    #[cfg(feature = "test-support")]
     pub(crate) fn has_waiting_packet(&self) -> bool {
         self.waiting_packet.is_some()
     }
@@ -215,6 +252,9 @@ impl PresentState {
     }
 
     fn handle_control(&mut self, control: PresentControl) -> bool {
+        // Each control changes the surface: an image a refused packet left
+        // undrawn goes back unshown first.
+        self.undrawn = None;
         match control {
             PresentControl::ReplaceSurface {
                 surface,
@@ -226,9 +266,11 @@ impl PresentState {
                 surface.configure(&self.device, &config);
                 self.surface = Some(surface);
                 self.config = Some(config);
-                self.offscreen_target = None;
+                #[cfg(feature = "test-support")]
+                {
+                    self.test_target = None;
+                }
                 self.present_placeholder_frame();
-                true
             }
             PresentControl::Reconfigure {
                 config,
@@ -238,35 +280,53 @@ impl PresentState {
                 self.surface_epoch = surface_epoch;
                 self.cancel_waiting(CancelReason::SurfaceEpoch);
                 self.reconfigure(&config);
-                if self.offscreen_target.is_some() {
-                    self.offscreen_target = Some((config.width, config.height));
+                #[cfg(feature = "test-support")]
+                if let Some(test) = self.test_target.as_mut() {
+                    test.size = (config.width, config.height);
                 }
                 self.config = Some(config);
-                let _ = ack.send(());
-                true
+                answer(&ack, ());
             }
             PresentControl::DropSurface { ack } => {
                 self.cancel_waiting(CancelReason::SurfaceUnavailable);
                 self.surface = None;
                 self.config = None;
-                self.offscreen_target = None;
-                let _ = ack.send(());
-                true
+                #[cfg(feature = "test-support")]
+                {
+                    self.test_target = None;
+                }
+                answer(&ack, ());
             }
-            PresentControl::AttachOffscreenTargetForTests { width, height, ack } => {
-                self.cancel_waiting(CancelReason::SurfaceEpoch);
-                self.surface = None;
-                self.config = None;
-                self.offscreen_target = Some((width, height));
-                self.present_placeholder_frame();
-                let _ = ack.send(());
-                true
+            #[cfg(feature = "test-support")]
+            PresentControl::AttachOffscreenTargetForTests {
+                width,
+                height,
+                images,
+                surface_epoch,
+                ack,
+            } => {
+                self.surface_epoch = surface_epoch;
+                self.attach_offscreen((width, height), images);
+                answer(&ack, ());
             }
             PresentControl::Shutdown => {
                 self.cancel_waiting(CancelReason::SurfaceUnavailable);
-                false
+                return false;
             }
         }
+        true
+    }
+
+    // Draws the frames into a test target of `size` that hands out `images`
+    // in place of a surface.
+    #[cfg(feature = "test-support")]
+    fn attach_offscreen(&mut self, size: (u32, u32), images: TestImages) {
+        self.cancel_waiting(CancelReason::SurfaceEpoch);
+        self.surface = None;
+        self.config = None;
+        let format = self.gpu_renderer.surface_format();
+        self.test_target = Some(TestTarget::new(&self.device, format, size, images));
+        self.present_placeholder_frame();
     }
 
     fn validate(&self, packet: &FramePacket) -> Option<CancelReason> {
@@ -283,12 +343,16 @@ impl PresentState {
 
     fn target_size(&self) -> Option<(u32, u32)> {
         if self.surface.is_some() {
-            self.config
+            return self
+                .config
                 .as_ref()
-                .map(|config| (config.width, config.height))
-        } else {
-            self.offscreen_target
+                .map(|config| (config.width, config.height));
         }
+        #[cfg(feature = "test-support")]
+        if let Some(test) = &self.test_target {
+            return Some(test.size);
+        }
+        None
     }
 
     fn cancel_waiting(&mut self, fallback: CancelReason) {
@@ -300,7 +364,7 @@ impl PresentState {
 
     fn cancel_packet(&mut self, packet: FramePacket, reason: CancelReason) {
         let mut returns = RenderReturns::default();
-        let _ = GpuRenderer::cancel_packet(packet, reason, &mut returns);
+        GpuRenderer::cancel_packet(packet, reason, &mut returns);
         self.finish_returns(returns);
     }
 
@@ -309,17 +373,26 @@ impl PresentState {
             self.cancel_packet(packet, reason);
             return;
         }
+        // A packet `validate` let through has a surface or a test target.
         let (width, height) = packet.viewport;
-        if self.surface.is_some() {
-            self.render_to_surface(packet, width, height);
-        } else if self.offscreen_target.is_some() {
-            self.render_offscreen(packet, width, height);
-        } else {
-            self.cancel_packet(packet, CancelReason::SurfaceUnavailable);
+        #[cfg(feature = "test-support")]
+        if self.surface.is_none()
+            && let Some(test) = self.test_target.as_mut()
+            && test.swapchain().is_none()
+        {
+            let texture = test.fresh_texture(&self.device, self.gpu_renderer.surface_format());
+            self.render_offscreen(packet, (width, height), &texture);
+            return;
         }
+        self.render_to_image(packet, width, height);
     }
 
-    fn render_to_surface(&mut self, packet: FramePacket, width: u32, height: u32) {
+    fn render_to_image(&mut self, packet: FramePacket, width: u32, height: u32) {
+        // A lost device takes no image and configures no surface.
+        if self.gpu_renderer.device_errors.lost() {
+            self.cancel_packet(packet, CancelReason::DeviceLost);
+            return;
+        }
         if self.gpu_renderer.shows(&packet, (width, height)) {
             self.finish_returns(RenderReturns {
                 scene: Some(FrameSceneStorage {
@@ -332,7 +405,7 @@ impl PresentState {
             });
             return;
         }
-        let Some(frame) = self.acquire_with_one_retry() else {
+        let Some(image) = self.undrawn.take().or_else(|| self.acquire_image()) else {
             self.cancel_packet(packet, CancelReason::SurfaceUnavailable);
             return;
         };
@@ -340,11 +413,19 @@ impl PresentState {
         if let Some(delay) = cranpose_core::DIAGNOSTICS.encode_delay_ms.parse::<u64>() {
             std::thread::sleep(Duration::from_millis(delay));
         }
-        let view = frame.texture.create_view(&wgpu::TextureViewDescriptor {
+        let (texture, content) = match &image {
+            PresentImage::Surface(frame) => (&frame.texture, crate::frame::ImageContent::of(frame)),
+            #[cfg(feature = "test-support")]
+            PresentImage::Test(index) => self
+                .test_target
+                .as_ref()
+                .expect("a test image needs its target")
+                .image(*index),
+        };
+        let view = texture.create_view(&wgpu::TextureViewDescriptor {
             format: Some(self.gpu_renderer.surface_format().remove_srgb_suffix()),
             ..Default::default()
         });
-        let image = crate::frame::ImageContent::of(&frame);
         let mut returns = RenderReturns::default();
         let result = self.gpu_renderer.render(
             &mut self.submit,
@@ -352,10 +433,14 @@ impl PresentState {
             packet,
             self.surface_epoch,
             &mut returns,
-            FrameOutput::display(&frame.texture, &view, image),
+            FrameOutput::display(texture, &view, content),
         );
         let after_render_ns = self.now();
-        self.present(frame);
+        if matches!(returns.outcome, PresentOutcome::Cancelled(_)) {
+            self.undrawn = Some(image);
+        } else {
+            self.present_image(image);
+        }
         returns.timings = PresentTimings {
             after_acquire_ns,
             after_render_ns,
@@ -371,46 +456,57 @@ impl PresentState {
     }
 
     fn present_placeholder_frame(&mut self) {
-        if self.surface.is_some() {
-            if let Some(frame) = self.acquire_with_one_retry() {
-                let view = frame.texture.create_view(&wgpu::TextureViewDescriptor {
-                    format: Some(self.gpu_renderer.surface_format().remove_srgb_suffix()),
-                    ..Default::default()
-                });
+        if self.surface.is_none() {
+            #[cfg(feature = "test-support")]
+            if let Some(test) = &self.test_target {
+                let texture = test.fresh_texture(&self.device, self.gpu_renderer.surface_format());
+                let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
                 crate::initial_present::clear_to_default_background(
                     &self.device,
                     &self.gpu_renderer.queue,
                     &view,
                 );
-                self.gpu_renderer.queue.present(frame);
                 self.status
                     .placeholder_frames
                     .fetch_add(1, Ordering::Relaxed);
             }
-        } else if let Some((width, height)) = self.offscreen_target {
-            let texture = self.device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("Present Runtime Placeholder Offscreen Target"),
-                size: wgpu::Extent3d {
-                    width,
-                    height,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: self.gpu_renderer.surface_format(),
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-                view_formats: &[],
+            return;
+        }
+        if let Some(frame) = self.acquire_with_one_retry() {
+            let view = frame.texture.create_view(&wgpu::TextureViewDescriptor {
+                format: Some(self.gpu_renderer.surface_format().remove_srgb_suffix()),
+                ..Default::default()
             });
-            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
             crate::initial_present::clear_to_default_background(
                 &self.device,
                 &self.gpu_renderer.queue,
                 &view,
             );
+            self.gpu_renderer.queue.present(frame);
             self.status
                 .placeholder_frames
                 .fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    // The next image of the test swapchain, or else of the surface.
+    fn acquire_image(&mut self) -> Option<PresentImage> {
+        #[cfg(feature = "test-support")]
+        if let Some(swapchain) = self.test_target.as_mut().and_then(TestTarget::swapchain) {
+            return Some(PresentImage::Test(swapchain.acquire()));
+        }
+        self.acquire_with_one_retry().map(PresentImage::Surface)
+    }
+
+    fn present_image(&mut self, image: PresentImage) {
+        match image {
+            PresentImage::Surface(frame) => self.present(frame),
+            #[cfg(feature = "test-support")]
+            PresentImage::Test(index) => {
+                if let Some(swapchain) = self.test_target.as_mut().and_then(TestTarget::swapchain) {
+                    swapchain.present(index);
+                }
+            }
         }
     }
 
@@ -456,21 +552,13 @@ impl PresentState {
         }
     }
 
-    fn render_offscreen(&mut self, packet: FramePacket, width: u32, height: u32) {
-        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("Present Runtime Offscreen Test Target"),
-            size: wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: self.gpu_renderer.surface_format(),
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            view_formats: &[],
-        });
+    #[cfg(feature = "test-support")]
+    fn render_offscreen(
+        &mut self,
+        packet: FramePacket,
+        (width, height): (u32, u32),
+        texture: &wgpu::Texture,
+    ) {
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         let after_acquire_ns = self.now();
         let mut returns = RenderReturns::default();
@@ -480,7 +568,7 @@ impl PresentState {
             packet,
             self.surface_epoch,
             &mut returns,
-            FrameOutput::display(&texture, &view, crate::frame::ImageContent::Untracked),
+            FrameOutput::display(texture, &view, crate::frame::ImageContent::Untracked),
         );
         let after_render_ns = self.now();
         returns.timings = PresentTimings {
@@ -563,169 +651,6 @@ enum AcquireOutcome {
     Ready(wgpu::SurfaceTexture),
     Reconfigure,
     Skip,
-}
-
-pub(crate) struct PresentHandle {
-    msg_tx: Sender<PresentMsg>,
-    returns_rx: Receiver<RenderReturns>,
-    status: Arc<PresentStatus>,
-    thread: Option<std::thread::JoinHandle<()>>,
-    outstanding: usize,
-    drained: u64,
-}
-
-const PRESENT_THREAD_STACK_BYTES: usize = 8 * 1024 * 1024;
-
-impl PresentHandle {
-    pub(crate) fn spawn(init: PresentRuntimeInit, waker: PresentWaker) -> Result<Self, String> {
-        let (msg_tx, msg_rx) = channel::<PresentMsg>();
-        let (returns_tx, returns_rx) =
-            sync_channel::<RenderReturns>(crate::frame_packet::MAX_FRAMES_IN_FLIGHT);
-        let status = Arc::new(PresentStatus::default());
-        let thread_status = Arc::clone(&status);
-        let thread = std::thread::Builder::new()
-            .name("cranpose-present".to_string())
-            .stack_size(PRESENT_THREAD_STACK_BYTES)
-            .spawn(move || {
-                crate::fast_cores::pin_current_thread_to_fast_cores("present");
-                if let Some(id) = crate::fast_cores::current_thread_id() {
-                    thread_status.thread_id.store(id, Ordering::Relaxed);
-                }
-                PresentState::new(init, returns_tx, thread_status, waker).run(msg_rx);
-            })
-            .map_err(|error| format!("failed to spawn present thread: {error}"))?;
-        Ok(Self {
-            msg_tx,
-            returns_rx,
-            status,
-            thread: Some(thread),
-            outstanding: 0,
-            drained: 0,
-        })
-    }
-
-    pub(crate) fn new_inline(
-        init: PresentRuntimeInit,
-        waker: PresentWaker,
-    ) -> (Self, PresentState, Receiver<PresentMsg>) {
-        let (msg_tx, msg_rx) = channel::<PresentMsg>();
-        let (returns_tx, returns_rx) =
-            sync_channel::<RenderReturns>(crate::frame_packet::MAX_FRAMES_IN_FLIGHT);
-        let status = Arc::new(PresentStatus::default());
-        let state = PresentState::new(init, returns_tx, Arc::clone(&status), waker);
-        (
-            Self {
-                msg_tx,
-                returns_rx,
-                status,
-                thread: None,
-                outstanding: 0,
-                drained: 0,
-            },
-            state,
-            msg_rx,
-        )
-    }
-
-    pub(crate) fn status(&self) -> &PresentStatus {
-        &self.status
-    }
-
-    pub(crate) fn has_credit(&self) -> bool {
-        self.outstanding < crate::frame_packet::MAX_FRAMES_IN_FLIGHT
-    }
-
-    /// Whether the present thread has handed back a frame that
-    /// [`Self::try_drain`] has not taken yet, which frees a credit.
-    pub(crate) fn has_undrained_return(&self) -> bool {
-        self.status.returned_frames.load(Ordering::Acquire) > self.drained
-    }
-
-    pub(crate) fn publish(&mut self, packet: FramePacket) -> Result<(), Box<FramePacket>> {
-        debug_assert!(self.has_credit(), "publish without credit");
-        match self.msg_tx.send(PresentMsg::Packet(packet)) {
-            Ok(()) => {
-                self.outstanding += 1;
-                Ok(())
-            }
-            Err(error) => {
-                let PresentMsg::Packet(packet) = error.0 else {
-                    unreachable!("publish only sends packets");
-                };
-                Err(Box::new(packet))
-            }
-        }
-    }
-
-    pub(crate) fn try_drain(&mut self) -> Option<RenderReturns> {
-        match self.returns_rx.try_recv() {
-            Ok(returns) => {
-                self.outstanding = self.outstanding.saturating_sub(1);
-                self.drained += 1;
-                Some(returns)
-            }
-            Err(_) => None,
-        }
-    }
-
-    pub(crate) fn send_control_and_wait(
-        &self,
-        build: impl FnOnce(SyncSender<()>) -> PresentControl,
-        what: &str,
-    ) -> bool {
-        let Some(ack_rx) = self.send_control_unacked(build) else {
-            log::error!("[present-runtime] {what}: runtime is gone");
-            return false;
-        };
-        match ack_rx.recv_timeout(CONTROL_ACK_TIMEOUT) {
-            Ok(()) => true,
-            Err(RecvTimeoutError::Timeout) => {
-                log::error!(
-                    "[present-runtime] {what}: no ack within {CONTROL_ACK_TIMEOUT:?}; \
-                     present thread wedged?"
-                );
-                false
-            }
-            Err(RecvTimeoutError::Disconnected) => {
-                log::error!("[present-runtime] {what}: runtime exited before ack");
-                false
-            }
-        }
-    }
-
-    /// Sends `control` behind the packets already sent, waiting for
-    /// nothing. False when the runtime is gone.
-    pub(crate) fn send_control(&self, control: PresentControl) -> bool {
-        self.msg_tx.send(PresentMsg::Control(control)).is_ok()
-    }
-
-    pub(crate) fn send_control_unacked(
-        &self,
-        build: impl FnOnce(SyncSender<()>) -> PresentControl,
-    ) -> Option<Receiver<()>> {
-        let (ack_tx, ack_rx) = sync_channel::<()>(1);
-        self.msg_tx
-            .send(PresentMsg::Control(build(ack_tx)))
-            .ok()
-            .map(|()| ack_rx)
-    }
-
-    pub(crate) fn shutdown(&mut self) {
-        let _ = self
-            .msg_tx
-            .send(PresentMsg::Control(PresentControl::Shutdown));
-        if let Some(thread) = self.thread.take()
-            && thread.join().is_err()
-        {
-            log::error!("[present-runtime] present thread panicked");
-        }
-    }
-}
-
-impl Drop for PresentHandle {
-    fn drop(&mut self) {
-        self.shutdown();
-    }
 }
 
 const _: () = {

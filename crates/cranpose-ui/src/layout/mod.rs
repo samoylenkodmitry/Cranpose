@@ -8,6 +8,7 @@ pub(crate) mod grid;
 mod layout_child_measurable;
 mod layout_child_measure_state;
 mod layout_node_data;
+mod layout_runtime_state;
 mod live_layout_node;
 mod measure_telemetry;
 mod measured_spare;
@@ -21,6 +22,7 @@ mod semantics_labels;
 mod semantics_tree;
 mod semantics_update;
 mod subcompose_measure;
+mod unplaced_nodes;
 
 use std::{cell::RefCell, mem::size_of, rc::Rc};
 
@@ -34,10 +36,10 @@ use cranpose_ui_graphics::ProjectiveTransform;
 use cranpose_ui_layout::{AlignmentLines, Constraints, MeasurePolicy, PlaceTarget};
 pub(crate) use frame_layout_arena::FrameLayoutArena;
 use frame_layout_arena::VecPools;
-use layout_child_measure_state::{
-    ChildPass, LayoutChildMeasureState, LayoutChildren, inherited_alignment_lines, read_cell,
-};
+pub(crate) use layout_child_measure_state::LayoutChildMeasureState;
+use layout_child_measure_state::{ChildPass, inherited_alignment_lines, read_cell};
 use layout_node_data::{role_from_modifier_slices, snapshot_node_data};
+pub(crate) use layout_runtime_state::LayoutRuntimeState;
 use live_layout_node::{LiveLayoutNode, read_live_layout_node};
 use measured_spare::MeasuredSpare;
 use placed_root_measurements::PlacedRootMeasurements;
@@ -46,12 +48,13 @@ pub use semantics_tree::{
     SemanticsText, SemanticsTree,
 };
 use semantics_tree::{modal_takes_space, top_modal_path};
+use unplaced_nodes::record_unplaced_nodes;
 use web_time::Instant;
 
 #[cfg(test)]
 use self::core::{HorizontalAlignment, VerticalAlignment};
 use self::{
-    coordinator_chain::{CoordinatorChain, CoordinatorFrame},
+    coordinator_chain::CoordinatorFrame,
     core::Measurable,
     measure_telemetry::{
         LayoutStages, layout_measure_telemetry_threshold_ms, log_layout_measure_telemetry,
@@ -538,37 +541,7 @@ fn finish_placement(applier: &mut MemoryApplier, root: NodeId, context: &AppCont
         });
     }
     if let Some(pass) = context.placement_pass().with_unplaced_nodes() {
-        record_unplaced_parents(applier, root, pass, context);
-    }
-}
-
-/// Names to the scene phase the parent of every node `pass` found placed and
-/// left unplaced: no geometry setter reported those, yet their layers leave
-/// the scene. Out of line: a pass rarely unplaces nodes.
-#[inline(never)]
-fn record_unplaced_parents(
-    applier: &mut MemoryApplier,
-    root: NodeId,
-    pass: u64,
-    context: &AppContext,
-) {
-    let mut parents = vec![root];
-    let mut children = Vec::new();
-    while let Some(parent) = parents.pop() {
-        children.clear();
-        if !matches!(
-            read_layout_node(applier, parent, |_, ids| children.extend_from_slice(ids)),
-            Ok(Some(()))
-        ) {
-            continue;
-        }
-        for &child in &children {
-            match read_layout_node(applier, child, |state, _| state.unplaced_in(pass)) {
-                Ok(Some(true)) => context.record_geometry_scene_node(parent),
-                Ok(Some(false)) => parents.push(child),
-                Ok(None) | Err(_) => {}
-            }
-        }
+        record_unplaced_nodes(applier, pass, context);
     }
 }
 
@@ -850,16 +823,16 @@ pub fn measure_layout_with_options(
     let (layout_tree, semantics) = {
         let mut applier_ref = applier_host.borrow_typed();
         let layout_tree = if options.build_layout_tree {
-            Some(build_layout_tree(&mut applier_ref, &measured)?)
+            Some(build_layout_tree(&mut applier_ref, root, &measured)?)
         } else {
             None
         };
         let semantics = if options.collect_semantics {
             let semantics_tree = if let Some(layout_tree) = layout_tree.as_ref() {
-                clear_semantics_dirty_flags(&mut applier_ref, &measured)?;
+                clear_semantics_dirty_flags(&mut applier_ref, root, &measured)?;
                 build_semantics_tree_from_layout_tree(layout_tree)
             } else {
-                build_semantics_tree_from_live_nodes(&mut applier_ref, &measured)?
+                build_semantics_tree_from_live_nodes(&mut applier_ref, root, &measured)?
             };
             Some(semantics_tree)
         } else {
@@ -1017,7 +990,7 @@ struct ChildView {
     self_dirty: bool,
     /// The child's parent data, read only when the child changed itself:
     /// only its own modifiers give it.
-    parent_data: Option<cranpose_ui_layout::ParentData>,
+    parent_data: Option<crate::modifier::SharedParentData>,
     /// The constraints the child's own cache holds.
     cached_constraints: Option<Constraints>,
     read_intrinsics: bool,
@@ -1105,7 +1078,6 @@ impl LayoutBuilderState {
             None => (
                 "fallback",
                 Rc::new(MeasuredNode::new(
-                    node_id,
                     Size::default(),
                     Point { x: 0.0, y: 0.0 },
                     Point::default(),
@@ -1151,6 +1123,7 @@ impl LayoutBuilderState {
         cached: &Rc<MeasuredNode>,
     ) -> Result<Option<Rc<MeasuredNode>>, NodeError> {
         let kept = self.remeasure_changed_children(
+            node_id,
             cached,
             false,
             |child_id| self.subcompose_child_change(child_id),
@@ -1410,7 +1383,11 @@ impl LayoutBuilderState {
                 });
             }
 
-            children.push(MeasuredChild::new(child, policy_position));
+            children.push(MeasuredChild::new(
+                placement.node_id,
+                child,
+                policy_position,
+            ));
         }
         drop(applier);
 
@@ -1418,19 +1395,13 @@ impl LayoutBuilderState {
         node_handle.recycle_placement_scratch(placements);
 
         Ok(Some(
-            MeasuredNode::new(
-                node_id,
-                Size { width, height },
-                offset,
-                Point::default(),
-                children,
-            )
-            .with_alignment_lines(
-                alignment_lines
-                    .with_overrides(explicit_lines.translated(padding.top))
-                    .translated(offset.y),
-            )
-            .into_rc(spare),
+            MeasuredNode::new(Size { width, height }, offset, Point::default(), children)
+                .with_alignment_lines(
+                    alignment_lines
+                        .with_overrides(explicit_lines.translated(padding.top))
+                        .translated(offset.y),
+                )
+                .into_rc(spare),
         ))
     }
 
@@ -1451,7 +1422,7 @@ impl LayoutBuilderState {
                 Ok(LayoutNodeVisit::Cached(measured)) => return Ok(Some(measured)),
                 Ok(LayoutNodeVisit::Keep(node)) => {
                     drop(applier);
-                    if let Some(kept) = self.keep_measurement(constraints, node)? {
+                    if let Some(kept) = self.keep_measurement(node_id, constraints, node)? {
                         return Ok(Some(kept));
                     }
                     keep = false;
@@ -1489,11 +1460,11 @@ impl LayoutBuilderState {
         );
 
         if let Some(err) = runtime_state.take_child_error() {
-            for child_state in runtime_state.child_states() {
-                child_state.measured.take();
+            for child in runtime_state.child_states() {
+                child.record().measured.take();
             }
             if runtime_state.take_moved_coordinators() {
-                let mut layout_state = parts.layout_state().borrow_mut();
+                let layout_state = parts.layout_state();
                 layout_state.note_geometry_change(node_id, &self.context);
             }
             return Err(err);
@@ -1510,7 +1481,6 @@ impl LayoutBuilderState {
             &mut children,
         );
         let measured = MeasuredNode::new(
-            node_id,
             measurement.size,
             measurement.offset,
             measurement.content_offset,
@@ -1528,14 +1498,14 @@ impl LayoutBuilderState {
             measurement.hold,
             measurement.ignores_child_sizes,
         );
-        let mut layout_state = parts.layout_state().borrow_mut();
+        let layout_state = parts.layout_state();
         if runtime_state.take_moved_coordinators() {
             layout_state.note_geometry_change(node_id, &self.context);
         }
         cache.clear_needs_measure();
         cache.clear_layout_dirt();
-        layout_state.set_size(measurement.size, &self.context);
-        layout_state.set_content_offset(measurement.content_offset);
+        layout_state.set_size(Some(node_id), measurement.size, &self.context);
+        layout_state.set_content_offset(Some(node_id), measurement.content_offset);
 
         Ok(Some(measured))
     }
@@ -1626,6 +1596,7 @@ impl LayoutBuilderState {
     #[inline(never)]
     fn keep_measurement(
         self: &Rc<Self>,
+        node_id: NodeId,
         constraints: Constraints,
         node: KeptNode,
     ) -> Result<Option<Rc<MeasuredNode>>, NodeError> {
@@ -1636,6 +1607,7 @@ impl LayoutBuilderState {
         } = node;
         let mut next_state = 0;
         let kept = self.remeasure_changed_children(
+            node_id,
             &measured,
             ignores_child_sizes,
             |child_id| self.layout_child_change(parts.runtime_state(), &mut next_state, child_id),
@@ -1666,6 +1638,7 @@ impl LayoutBuilderState {
     /// its parent.
     fn remeasure_changed_children(
         self: &Rc<Self>,
+        node_id: NodeId,
         cached: &Rc<MeasuredNode>,
         ignores_child_sizes: bool,
         mut change: impl FnMut(NodeId) -> Result<ChildChange, NodeError>,
@@ -1688,7 +1661,7 @@ impl LayoutBuilderState {
                 resized = true;
             }
             if child.placed {
-                self.place_where_it_was(cached.node_id, previous.node_id);
+                self.place_where_it_was(node_id, previous.node_id);
             }
         }
         Ok(Some(KeptChildren {
@@ -1714,19 +1687,16 @@ impl LayoutBuilderState {
             .unwrap_or_default()
             .iter()
             .enumerate()
-            .find(|(_, state)| state.node_id == child_id)
+            .find(|(_, state)| state.record().child_id() == child_id)
         else {
             return Ok(ChildChange::Refuse);
         };
         *next_state += offset + 1;
-        // A clean child's flags sit in the cache its record shares with it.
-        if read_cell(&state.parts, |parts| {
-            parts
-                .as_ref()
-                .is_some_and(|parts| !parts.cache().dirt().any())
-        }) {
+        // A clean child's flags sit in the cache of its parts.
+        if !state.cache().dirt().any() {
             return Ok(ChildChange::Unchanged);
         }
+        let state = state.record();
         self.child_change(child_id, |view| {
             let parent_data_changed = view.parent_data.as_ref().is_some_and(|data| {
                 state.reads_parent_data_change(&*runtime_state.measure_policy, data)
@@ -1811,7 +1781,6 @@ impl LayoutBuilderState {
 
 #[derive(Debug, Clone)]
 pub(crate) struct MeasuredNode {
-    node_id: NodeId,
     size: Size,
     offset: Point,
     content_offset: Point,
@@ -1821,15 +1790,8 @@ pub(crate) struct MeasuredNode {
 }
 
 impl MeasuredNode {
-    fn new(
-        node_id: NodeId,
-        size: Size,
-        offset: Point,
-        content_offset: Point,
-        children: Vec<MeasuredChild>,
-    ) -> Self {
+    fn new(size: Size, offset: Point, content_offset: Point, children: Vec<MeasuredChild>) -> Self {
         Self {
-            node_id,
             size,
             offset,
             content_offset,
@@ -1895,9 +1857,9 @@ struct MeasuredChild {
 }
 
 impl MeasuredChild {
-    fn new(measured: &MeasuredNode, offset: Point) -> Self {
+    fn new(node_id: NodeId, measured: &MeasuredNode, offset: Point) -> Self {
         Self {
-            node_id: measured.node_id,
+            node_id,
             offset,
             for_parent: ForParent::of(measured),
         }
@@ -1950,86 +1912,10 @@ fn policy_intrinsic(
     }
 }
 
-pub(crate) struct LayoutRuntimeState {
-    /// `None` until the node first binds a child: most nodes are leaves.
-    children: Option<Box<LayoutChildren>>,
-    coordinator_chain: CoordinatorChain,
-    measure_policy: Rc<dyn MeasurePolicy>,
-}
-
-impl LayoutRuntimeState {
-    pub(crate) fn new(measure_policy: Rc<dyn MeasurePolicy>) -> Self {
-        Self {
-            children: None,
-            coordinator_chain: CoordinatorChain::default(),
-            measure_policy,
-        }
-    }
-
-    fn bind_node(&mut self, node: &LayoutNode) -> ModifierChainInputs {
-        if !Rc::ptr_eq(&self.measure_policy, &node.measure_policy) {
-            self.measure_policy = Rc::clone(&node.measure_policy);
-        }
-        self.coordinator_chain.sync(node)
-    }
-
-    // Notes that a measure placed the node's coordinators, and says whether
-    // one of them moved since the scene last heard of the node. A node
-    // without layout modifiers moves only with its size, which the node
-    // reports itself.
-    fn take_moved_coordinators(&self) -> bool {
-        self.coordinator_chain.take_moved()
-    }
-
-    pub(crate) fn placed_coordinator_rect(
-        &self,
-        ordinal: usize,
-        node_size: Size,
-    ) -> Option<GeometryRect> {
-        self.coordinator_chain.placed_rect(ordinal, node_size)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn debug_stats(&self) -> LayoutRuntimeDebugStats {
-        LayoutRuntimeDebugStats {
-            child_ids: self
-                .children
-                .as_ref()
-                .map(|children| children.ids.clone())
-                .unwrap_or_default(),
-            child_state_ptrs: self
-                .child_states()
-                .iter()
-                .map(|state| Rc::as_ptr(state) as *const () as usize)
-                .collect(),
-            child_measurable_ptrs: self
-                .child_measurables()
-                .iter()
-                .map(|measurable| {
-                    measurable.as_ref() as *const dyn Measurable as *const () as usize
-                })
-                .collect(),
-            child_measurable_count: self.child_measurables().len(),
-            coordinator_node_ptrs: self.coordinator_chain.debug_ptrs(),
-            coordinator_node_count: self.coordinator_chain.debug_ptrs().len(),
-        }
-    }
-}
-
-#[cfg(test)]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct LayoutRuntimeDebugStats {
-    pub(crate) child_ids: Vec<NodeId>,
-    pub(crate) child_state_ptrs: Vec<usize>,
-    pub(crate) child_measurable_ptrs: Vec<usize>,
-    pub(crate) child_measurable_count: usize,
-    pub(crate) coordinator_node_ptrs: Vec<usize>,
-    pub(crate) coordinator_node_count: usize,
-}
-
-impl PlaceTarget for LayoutChildMeasureState {
+// A child's parts take the place its parent's policy gives the child.
+impl PlaceTarget for LayoutParts {
     fn place(&self, x: f32, y: f32) {
-        let internal_offset = read_cell(&self.measured, |measured| {
+        let internal_offset = read_cell(&self.record().measured, |measured| {
             measured
                 .as_ref()
                 .map(|measured| measured.offset)
@@ -2048,7 +1934,7 @@ impl PlaceTarget for LayoutChildMeasureState {
 fn visit_child<R>(
     applier: &mut MemoryApplier,
     child: &MeasuredChild,
-    visit: impl FnOnce(&mut MemoryApplier, &MeasuredNode) -> R,
+    visit: impl FnOnce(&mut MemoryApplier, NodeId, &MeasuredNode) -> R,
 ) -> R {
     let held = applier.get_mut(child.node_id).ok().and_then(|node| {
         let any = node.as_any_mut();
@@ -2059,11 +1945,11 @@ fn visit_child<R>(
             .and_then(|subcompose| subcompose.cache().held_measurement())
     });
     match held {
-        Some(held) => visit(applier, &held),
+        Some(held) => visit(applier, child.node_id, &held),
         None => visit(
             applier,
+            child.node_id,
             &MeasuredNode::new(
-                child.node_id,
                 Size::default(),
                 Point::default(),
                 Point::default(),
@@ -2075,15 +1961,16 @@ fn visit_child<R>(
 
 fn clear_semantics_dirty_flags(
     applier: &mut MemoryApplier,
+    node_id: NodeId,
     node: &MeasuredNode,
 ) -> Result<(), NodeError> {
-    match applier.with_node::<LayoutNode, _>(node.node_id, |layout| {
+    match applier.with_node::<LayoutNode, _>(node_id, |layout| {
         layout.clear_needs_semantics();
     }) {
         Ok(()) => {}
         Err(NodeError::Missing { .. }) => {}
         Err(NodeError::TypeMismatch { .. }) => {
-            match applier.with_node::<SubcomposeLayoutNode, _>(node.node_id, |subcompose| {
+            match applier.with_node::<SubcomposeLayoutNode, _>(node_id, |subcompose| {
                 subcompose.clear_needs_semantics();
             }) {
                 Ok(()) | Err(NodeError::Missing { .. } | NodeError::TypeMismatch { .. }) => {}
@@ -2102,10 +1989,11 @@ fn clear_semantics_dirty_flags(
 
 fn build_semantics_tree_from_live_nodes(
     applier: &mut MemoryApplier,
+    node_id: NodeId,
     node: &MeasuredNode,
 ) -> Result<SemanticsTree, NodeError> {
     Ok(SemanticsTree::new(build_semantics_node_from_live_nodes(
-        applier, node, None,
+        applier, node_id, node, None,
     )?))
 }
 
@@ -2172,11 +2060,12 @@ fn semantics_node_from_parts(
 #[inline(never)]
 fn build_semantics_node_from_live_nodes(
     applier: &mut MemoryApplier,
+    node_id: NodeId,
     node: &MeasuredNode,
     origin: Option<Point>,
 ) -> Result<SemanticsNode, NodeError> {
     let (role, config, (bounds, content), placement) =
-        match applier.with_node::<LayoutNode, _>(node.node_id, |layout| {
+        match applier.with_node::<LayoutNode, _>(node_id, |layout| {
             let role = role_from_modifier_slices(&layout.modifier_slices_snapshot());
             let config = layout.semantics_configuration();
             layout.clear_needs_semantics();
@@ -2190,7 +2079,7 @@ fn build_semantics_node_from_live_nodes(
         }) {
             Ok(data) => data,
             Err(NodeError::TypeMismatch { .. } | NodeError::Missing { .. }) => {
-                match applier.with_node::<SubcomposeLayoutNode, _>(node.node_id, |subcompose| {
+                match applier.with_node::<SubcomposeLayoutNode, _>(node_id, |subcompose| {
                     subcompose.clear_needs_semantics();
                     let state = subcompose.layout_state();
                     (
@@ -2221,16 +2110,16 @@ fn build_semantics_node_from_live_nodes(
 
     let mut children = Vec::with_capacity(node.children.len());
     for child in &node.children {
-        children.push(visit_child(applier, child, |applier, child| {
-            build_semantics_node_from_live_nodes(applier, child, Some(content))
+        children.push(visit_child(applier, child, |applier, child_id, child| {
+            build_semantics_node_from_live_nodes(applier, child_id, child, Some(content))
         })?);
     }
 
     Ok(SemanticsNode {
         placement,
         ..semantics_node_from_parts(
-            node.node_id,
-            applier.node_generation(node.node_id),
+            node_id,
+            applier.node_generation(node_id),
             role,
             config,
             children,
@@ -2280,10 +2169,12 @@ fn record_layout_box_allocation_stats(
 
 fn build_layout_tree(
     applier: &mut MemoryApplier,
+    node_id: NodeId,
     node: &MeasuredNode,
 ) -> Result<LayoutTree, NodeError> {
     fn place(
         applier: &mut MemoryApplier,
+        node_id: NodeId,
         node: &MeasuredNode,
         origin: Point,
         parent_transform: ProjectiveTransform,
@@ -2299,7 +2190,7 @@ fn build_layout_tree(
             height: node.size.height,
         };
         let (data, window_transform) =
-            snapshot_node_data(applier, node.node_id, top_left, node.size, parent_transform)?;
+            snapshot_node_data(applier, node_id, top_left, node.size, parent_transform)?;
         let mut children = Vec::with_capacity(node.children.len());
         for child in &node.children {
             if crate::modifier::is_window_root(applier, child.node_id) {
@@ -2309,18 +2200,19 @@ fn build_layout_tree(
                 x: top_left.x + child.offset.x,
                 y: top_left.y + child.offset.y,
             };
-            children.push(visit_child(applier, child, |applier, child| {
-                place(applier, child, child_origin, window_transform)
+            children.push(visit_child(applier, child, |applier, child_id, child| {
+                place(applier, child_id, child, child_origin, window_transform)
             })?);
         }
         Ok(LayoutBox {
-            node_generation: applier.node_generation(node.node_id),
-            ..LayoutBox::new(node.node_id, rect, node.content_offset, data, children)
+            node_generation: applier.node_generation(node_id),
+            ..LayoutBox::new(node_id, rect, node.content_offset, data, children)
         })
     }
 
     Ok(LayoutTree::new(place(
         applier,
+        node_id,
         node,
         Point { x: 0.0, y: 0.0 },
         ProjectiveTransform::identity(),

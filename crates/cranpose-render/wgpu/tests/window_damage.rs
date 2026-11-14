@@ -7,24 +7,32 @@
 //! damage each frame reports holds every pixel the whole frames change, and
 //! a frame that moves the whole page draws the whole window.
 
-use std::{cell::RefCell, rc::Rc, sync::MutexGuard};
+use std::{
+    cell::RefCell,
+    rc::Rc,
+    sync::{Arc, MutexGuard},
+};
 
 use cranpose_app_shell::AppShell;
-use cranpose_core::{MutableState, NodeId, location_key};
+use cranpose_core::{MutableState, NodeId, location_key, remember};
+use cranpose_foundation::lazy::{LazyListScope, rememberLazyListState};
 use cranpose_liquid::{Glass, GlassSurface};
 use cranpose_render_common::{
     Renderer,
-    graph::{DrawCommandId, DrawRunNode, PrimitivePhase, RenderGraph, RenderNode},
+    graph::{DrawCommandId, DrawRunNode, LayerNode, PrimitivePhase, RenderNode},
 };
 use cranpose_render_wgpu::{FrameDamage, RenderStatsSnapshot, WgpuRenderer};
 use cranpose_ui::{
     Alignment, Box, BoxSpec, Color, Column, ColumnSpec, ContentScale, GraphicsLayer, Image,
-    LayerShape, Modifier, RenderEffect, Row, RowSpec, Text, TextStyle, composable,
+    LayerShape, LazyColumn, LazyColumnSpec, LinearArrangement, Modifier, RenderEffect, Row,
+    RowSpec, Size, Text, TextStyle, composable,
+    space::{Camera, Mat4, Material, Mesh, MeshSurface, Scene3d, Vec3},
     text::{SpanStyle, TextUnit},
 };
 use cranpose_ui_graphics::{
-    Brush, CornerRadii, Dp, DrawPlacement, DrawPrimitive, DrawScope, DrawStyle, ImageBitmap, Path,
-    Point, Rect, RoundedCornerShape, Stroke,
+    BlendMode, Brush, CornerRadii, Dp, DrawPlacement, DrawPrimitive, DrawScope, DrawStyle,
+    ImageBitmap, Path, Point, RUNTIME_SHADER_PRELUDE_WGSL, Rect, RoundedCornerShape, RuntimeShader,
+    ShaderPlaceholder, Stroke,
 };
 
 use crate::support::{self, rect_modifier};
@@ -41,6 +49,8 @@ const GLASS: [f32; 4] = [60.0, 80.0, 200.0, 100.0];
 const UPPER_GLASS: [f32; 4] = [140.0, 140.0, 140.0, 90.0];
 /// A spinner beside the glass, over the cards.
 const SPINNER: [f32; 4] = [180.0, 10.0, 24.0, 24.0];
+// A small 3D scene over the cards, below the glass.
+const TURNING_SCENE: [f32; 4] = [100.0, 220.0, 120.0, 120.0];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Scene {
@@ -73,35 +83,83 @@ enum Scene {
     /// The spinner at the top and a caret changing at the bottom, far apart,
     /// with the two liquid glass panes between them.
     SpinnerAndCaret,
-    /// Five spots far apart changing colour, one more than the rects a
-    /// frame's damage keeps apart.
-    FiveSpots,
+    // Ten small spots scattered over the window changing colour.
+    TenSpots,
     // The page moving for `MOVES` steps, then a shape changing colour over
     // the page held still.
     MovedThenStill,
+    // A box moving down a pixel a step, holding a card that casts an
+    // elevation shadow: the reach of the moved box is not known.
+    MovedCaster,
+    // A plane turning in a small 3D scene by a state its mesh surface's
+    // closure reads, as a globe spins: its record lies in the scene's space,
+    // whose reach is not known, so the frame may draw whole.
+    TurnedSurface,
+    // A fill that stays inside a clip that shrinks a step: the draw group's
+    // bounds change and its draws do not.
+    ShrunkClip,
+    // A box that clips a child wider than it and shrinks a step: the box's
+    // bounds change and its draws and its child do not.
+    ShrunkParent,
+    // A layer with nothing to draw, painted whole by a runtime shader whose
+    // colour changes a step, as a control's stage is: the shader writes its
+    // rect over the layer's empty content.
+    PaintedLayer,
+    // A layer with nothing to draw that replaces what lies beneath it,
+    // showing every other step: its blend writes its whole surface.
+    ReplacingLayer,
+    // A layer painted by a shader no other test draws, at the spot from step
+    // 1 on: while the shader compiles, its frames draw the placeholder.
+    LateShader,
+    // A lazy list of three labels whose middle one shows a number that
+    // changes a step, read in its item as the demo's lazy pulse reads its
+    // animation: only that label draws again.
+    LazyLabel,
+    // A layer painted by another shader no other test draws, at the spot
+    // from the first frame on: the window's first frames draw whole with
+    // its placeholder.
+    EarlyShader,
 }
+
+// The lazy list of `Scene::LazyLabel`, its padding, its rows' height and the
+// space between them.
+const LAZY_LIST: [f32; 4] = [40.0, 140.0, 200.0, 100.0];
+const LAZY_PADDING: f32 = 8.0;
+const LAZY_ROW: f32 = 20.0;
+const LAZY_GAP: f32 = 6.0;
+
+// The label of the lazy list's middle row, the one that changes.
+const LAZY_LABEL: [f32; 4] = [
+    LAZY_LIST[0] + LAZY_PADDING,
+    LAZY_LIST[1] + LAZY_PADDING + LAZY_ROW + LAZY_GAP,
+    LAZY_LIST[2] - 2.0 * LAZY_PADDING,
+    LAZY_ROW,
+];
 
 /// A caret near the bottom, far from the spinner.
 const CARET: [f32; 4] = [40.0, 372.0, 2.0, 16.0];
 
-/// Spots in the corners and the middle of the window.
-const SPOTS: [[f32; 4]; 5] = [
-    [8.0, 8.0, 20.0, 20.0],
-    [292.0, 8.0, 20.0, 20.0],
-    [8.0, 372.0, 20.0, 20.0],
-    [292.0, 372.0, 20.0, 20.0],
-    [150.0, 190.0, 20.0, 20.0],
+// Small spots scattered over the window, no two in a row or a column.
+const SPOTS: [[f32; 4]; 10] = [
+    [10.0, 14.0, 12.0, 12.0],
+    [150.0, 40.0, 12.0, 12.0],
+    [290.0, 70.0, 12.0, 12.0],
+    [60.0, 120.0, 12.0, 12.0],
+    [230.0, 150.0, 12.0, 12.0],
+    [20.0, 230.0, 12.0, 12.0],
+    [170.0, 262.0, 12.0, 12.0],
+    [280.0, 300.0, 12.0, 12.0],
+    [92.0, 344.0, 12.0, 12.0],
+    [204.0, 380.0, 12.0, 12.0],
 ];
 
-/// The frames a target draws whole before one can draw a part: the first,
-/// with nothing to compare with; one the back-off skips; and the next,
-/// summarized as the frame the one after compares with.
-const START_FRAMES: u32 = 3;
+// The frames a target draws whole before one can draw a part: the first,
+// with nothing to draw over.
+const START_FRAMES: u32 = 1;
 
-/// The frames a swapchain draws whole before one draws a part: its images
-/// first hold no frame, then the target's start frames, until the image of
-/// the last of those comes back.
-const SWAPCHAIN_START_FRAMES: u32 = 2 * SWAPCHAIN_IMAGES as u32 + START_FRAMES - 1;
+// The frames a swapchain draws whole before one draws a part: one into
+// each of its images, which first hold no frame.
+const SWAPCHAIN_START_FRAMES: u32 = SWAPCHAIN_IMAGES as u32;
 
 /// The frames in a row that change a small part of the window before the
 /// renderer keeps a copy of the frame for images that come cleared.
@@ -285,11 +343,32 @@ fn shadowed(step: MutableState<u32>) -> Modifier {
         .rounded_corners(6.0)
 }
 
+// A shader that paints its whole rect, red by the step: it writes over
+// transparent content.
+fn painted(step: u32) -> RenderEffect {
+    let mut shader = RuntimeShader::new(&format!(
+        "{RUNTIME_SHADER_PRELUDE_WGSL}
+         @fragment fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {{
+             return vec4<f32>(u[0].x, input.uv.y, 0.4, 1.0);
+         }}"
+    ));
+    shader.set_float(0, (step % 4) as f32 * 0.25);
+    RenderEffect::runtime_shader(shader)
+}
+
 fn gradient(scope: &mut dyn DrawScope, step: u32) {
     scope.draw_round_rect(
         Brush::linear_gradient(vec![shade(step), Color(0.1, 0.2, 0.6, 1.0)]),
         CornerRadii::uniform(6.0),
     );
+}
+
+fn shrunk_clip(scope: &mut dyn DrawScope, step: u32) {
+    let whole = Rect::from_size(scope.size());
+    let shown = Rect::from_size(Size::new(whole.width - step as f32 * 3.0, whole.height));
+    scope.clip_rect(shown, &mut |scope| {
+        scope.draw_rect_at(whole, Brush::solid(shade(0)));
+    });
 }
 
 fn growing_star(scope: &mut dyn DrawScope, step: u32) {
@@ -312,6 +391,7 @@ fn changing_box(scene: Scene, step: MutableState<u32>) -> Option<Modifier> {
         | Scene::MovedThenStill => spot().background(shade(step.get())),
         Scene::Arc => arc_drawn_again(SPOT, step, 30.0),
         Scene::Gradient => spot().draw_behind(move |scope| gradient(scope, step.get())),
+        Scene::ShrunkClip => spot().draw_behind(move |scope| shrunk_clip(scope, step.get())),
         Scene::Star => spot().draw_behind(move |scope| growing_star(scope, step.get())),
         Scene::TurnedLayer => arc_turned(SPOT, step, 15.0),
         Scene::FadedLayer => spot().graphics_layer(|| GraphicsLayer {
@@ -321,15 +401,40 @@ fn changing_box(scene: Scene, step: MutableState<u32>) -> Option<Modifier> {
         Scene::BlurredContent => spot().blur(Dp(3.0)),
         Scene::Shadow => shadowed(step),
         Scene::Appearing if step.get() % 2 == 1 => spot().background(Color(0.9, 0.2, 0.2, 1.0)),
+        Scene::PaintedLayer | Scene::ReplacingLayer | Scene::LateShader | Scene::EarlyShader => {
+            return empty_layer(scene, step);
+        }
         Scene::Spinner | Scene::BareSpinner => arc_drawn_again(SPINNER, step, 12.0),
         Scene::TurnedSpinner => arc_turned(SPINNER, step, 12.0),
         Scene::Label
         | Scene::Picture
         | Scene::Appearing
         | Scene::MovedPage
+        | Scene::MovedCaster
         | Scene::SpinnerAndCaret
-        | Scene::FiveSpots => return None,
+        | Scene::TenSpots
+        | Scene::TurnedSurface
+        | Scene::ShrunkParent
+        | Scene::LazyLabel => return None,
     })
+}
+
+// The shader `name`, which no other test draws, painting its rect green,
+// filled red while it compiles.
+fn unseen_shader(name: &str) -> RenderEffect {
+    let mut shader = RuntimeShader::new(&format!(
+        "{RUNTIME_SHADER_PRELUDE_WGSL}
+         // window damage {name} shader {}
+         @fragment fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {{
+             return vec4<f32>(0.1, 0.8, input.uv.y, 1.0);
+         }}",
+        std::process::id()
+    ));
+    shader.set_placeholder(Some(ShaderPlaceholder {
+        color: Color(1.0, 0.0, 0.0, 1.0),
+        shape: None,
+    }));
+    RenderEffect::runtime_shader(shader)
 }
 
 #[composable]
@@ -354,7 +459,7 @@ fn Changing(scene: Scene, step: MutableState<u32>) {
                 || {},
             );
         }
-        Scene::FiveSpots => {
+        Scene::TenSpots => {
             for spot in SPOTS {
                 Box(
                     rect_modifier(spot).background(shade(step.get())),
@@ -363,6 +468,27 @@ fn Changing(scene: Scene, step: MutableState<u32>) {
                 );
             }
         }
+        Scene::MovedCaster => {
+            let [x, y, width, height] = SPOT;
+            Box(
+                rect_modifier([x, y + step.get() as f32, width, height]),
+                BoxSpec::default(),
+                move || {
+                    Box(
+                        Modifier::empty()
+                            .size_points(width, height)
+                            .graphics_layer(|| GraphicsLayer {
+                                shadow_elevation: 6.0,
+                                ..Default::default()
+                            })
+                            .background(Color::WHITE),
+                        BoxSpec::default(),
+                        || {},
+                    );
+                },
+            );
+        }
+        Scene::TurnedSurface | Scene::ShrunkParent | Scene::LazyLabel => TreeScene(scene, step),
         Scene::Picture => {
             let picture = PICTURES.with(|pictures| pictures[(step.get() % 2) as usize].clone());
             Image(
@@ -392,6 +518,139 @@ fn Changing(scene: Scene, step: MutableState<u32>) {
             }
         }
     }
+}
+
+// The box of a layer with nothing to draw: one a shader paints, its colour
+// read in the layer's block as a control's stage reads its animation; one a
+// shader no other test draws paints from step 1 on, and one another paints
+// from the start; and one that replaces what lies beneath it every other
+// step.
+fn empty_layer(scene: Scene, step: MutableState<u32>) -> Option<Modifier> {
+    match scene {
+        Scene::PaintedLayer => Some(spot().graphics_layer(move || GraphicsLayer {
+            render_effect: Some(painted(step.get())),
+            ..Default::default()
+        })),
+        Scene::LateShader if step.get() >= 1 => Some(spot().graphics_layer(|| GraphicsLayer {
+            render_effect: Some(unseen_shader("late")),
+            ..Default::default()
+        })),
+        Scene::LateShader => None,
+        Scene::EarlyShader => Some(spot().graphics_layer(|| GraphicsLayer {
+            render_effect: Some(unseen_shader("early")),
+            ..Default::default()
+        })),
+        _ if step.get() % 2 == 1 => Some(spot().graphics_layer(|| GraphicsLayer {
+            blend_mode: BlendMode::Src,
+            ..Default::default()
+        })),
+        _ => None,
+    }
+}
+
+#[composable]
+fn ListLabel(text: String) {
+    Text(text, Modifier::empty().height(LAZY_ROW), label_style(14.0));
+}
+
+#[composable]
+fn LazyLabels(step: MutableState<u32>) {
+    let state = rememberLazyListState();
+    LazyColumn(
+        rect_modifier(LAZY_LIST)
+            .background(Color(0.15, 0.15, 0.2, 1.0))
+            .rounded_corners(6.0)
+            .padding(LAZY_PADDING),
+        state,
+        LazyColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(LAZY_GAP)),
+        move |scope| {
+            scope.item_keyed(Some(0), None, || {
+                ListLabel("Static item: ready".to_owned());
+            });
+            scope.item_keyed(Some(1), None, move || {
+                ListLabel(format!("Lazy Pulse: {}", step.get() * 7));
+            });
+            scope.item_keyed(Some(2), None, || {
+                ListLabel("Static item: complete".to_owned());
+            });
+        },
+    );
+}
+
+// The scenes that compose a tree of their own: a plane turning in a 3D
+// scene, a box shrinking around its child, and a lazy list.
+#[composable]
+fn TreeScene(scene: Scene, step: MutableState<u32>) {
+    match scene {
+        Scene::ShrunkParent => ShrinkingParent(step),
+        Scene::LazyLabel => LazyLabels(step),
+        _ => TurningSurface(step),
+    }
+}
+
+// The scene of `Scene::ShrunkParent`: a box that clips a child of the spot's
+// size and loses three points of width a step.
+#[composable]
+fn ShrinkingParent(step: MutableState<u32>) {
+    let [x, y, width, height] = SPOT;
+    let shrunk = Size::new(width - step.get() as f32 * 3.0, height);
+    Box(
+        Modifier::empty().offset(x, y).size(shrunk).clip_to_bounds(),
+        BoxSpec::default(),
+        move || {
+            Box(
+                Modifier::empty()
+                    .required_size(Size::new(width, height))
+                    .background(shade(0)),
+                BoxSpec::default(),
+                || {},
+            );
+        },
+    );
+}
+
+// The scene of `Scene::TurnedSurface`: a plane seen from 300 points away,
+// turned a fifth of a radian about the vertical a step.
+#[composable]
+fn TurningSurface(step: MutableState<u32>) {
+    let plane = remember(|| Arc::new(Mesh::plane())).with(Arc::clone);
+    Box(
+        rect_modifier(TURNING_SCENE)
+            .background(Color(0.1, 0.1, 0.16, 1.0))
+            .scene3d(|| Scene3d {
+                camera: Camera::look_at(
+                    Vec3::new(0.0, 0.0, -300.0),
+                    Vec3::ZERO,
+                    Vec3::new(0.0, 1.0, 0.0),
+                    300.0,
+                ),
+                light: None,
+                eye: None,
+            }),
+        BoxSpec::default(),
+        move || {
+            let plane = Arc::clone(&plane);
+            Box(
+                Modifier::empty()
+                    .required_size(Size {
+                        width: 64.0,
+                        height: 64.0,
+                    })
+                    .mesh_surface(move || MeshSurface {
+                        mesh: Arc::clone(&plane),
+                        transform: Mat4::translation(Vec3::new(-0.5, -0.5, 0.0))
+                            .then(&Mat4::scaling(Vec3::new(80.0, 80.0, 1.0)))
+                            .then(&Mat4::rotation_y(step.get() as f32 * 0.2)),
+                        material: Material::Unlit,
+                        casts_shadow: false,
+                        solid: true,
+                    })
+                    .background(Color(0.9, 0.6, 0.1, 1.0)),
+                BoxSpec::default(),
+                || {},
+            );
+        },
+    );
 }
 
 #[composable]
@@ -628,9 +887,13 @@ fn draw(
     let queue = renderer.try_queue_for_tests().expect("queue").clone();
     match how {
         Draw::Untracked => renderer.render(&image.texture, &image.view, WIDTH, HEIGHT),
-        Draw::Swapchain(index, kept) => {
-            renderer.render_swapchain_image_for_tests(&image.texture, &image.view, index, kept)
-        }
+        Draw::Swapchain(index, kept) => renderer.render_swapchain_image_for_tests(
+            &image.texture,
+            &image.view,
+            index,
+            u32::try_from(SWAPCHAIN_IMAGES).expect("a swapchain holds few images"),
+            kept,
+        ),
         Draw::Cleared => {
             clear(&device, &queue, image);
             renderer.render_cleared_image_for_tests(&image.texture, &image.view)
@@ -723,6 +986,9 @@ impl Scene {
             // A turned square reaches past its box by a fifth of its side.
             Self::TurnedLayer => around(SPOT, 12.0),
             Self::Spinner | Self::TurnedSpinner => around(SPINNER, 12.0),
+            Self::TurnedSurface => around(TURNING_SCENE, 8.0),
+            // Less than the gap to the rows above and below.
+            Self::LazyLabel => around(LAZY_LABEL, LAZY_GAP / 2.0),
             _ => around(SPOT, 8.0),
         }
     }
@@ -766,6 +1032,113 @@ fn renderer() -> Option<(MutexGuard<'static, ()>, WgpuRenderer)> {
             None
         }
     }
+}
+
+// A frame that draws a stand-in while a pipeline compiles keeps its frame in
+// its swapchain image, the part it drew marked: once the pipeline lands,
+// each image draws only what changed since its frame and that part, never
+// the whole window, and every frame equals the frame drawn whole.
+#[test]
+fn a_frame_drawn_with_a_stand_in_keeps_its_image_with_the_stand_in_marked() {
+    let Some((_lock, renderer)) = support::headless_renderer_parts_compiling_in_background_for(
+        wgpu::TextureFormat::Rgba8Unorm,
+    )
+    .map_err(|err| eprintln!("skipping (headless WGPU init failed): {err}"))
+    .ok() else {
+        return;
+    };
+    let mut harness = Harness::new(renderer, Scene::LateShader, 1.0, Keeper::Swapchain(DIRECT));
+    let whole = u64::from(WIDTH * HEIGHT);
+    // Still frames until every image holds the page drawn with every
+    // pipeline: one in a row for each image draws nothing.
+    let mut held = 0;
+    for frame in 0.. {
+        let still = harness.frame(0);
+        let settled = support::pipelines_settled(&still.stats);
+        held = if settled && still.stats.repainted_pixels == 0 {
+            held + 1
+        } else {
+            0
+        };
+        if held == SWAPCHAIN_IMAGES {
+            break;
+        }
+        if !settled {
+            support::wait_for_background_compiler_idle();
+        }
+        assert!(frame < 64, "the images never held the still page");
+    }
+    let shown = harness.frame(1);
+    assert!(
+        shown.stats.placeholder_draws > 0 && shown.stats.repainted_pixels < whole,
+        "the shader's first frame draws its placeholder over a part of the window: {:?}",
+        shown.stats
+    );
+    frames_until_the_shader_is_drawn(&mut harness, 1, |label, stats| {
+        assert!(
+            stats.repainted_pixels < whole,
+            "{label}: an image drew the whole window"
+        );
+    });
+}
+
+// Frames of the page at `step` as it is, each checked by `check`, until the
+// shader landed and every image drew it: every frame drawn with every
+// pipeline equals the frame drawn whole, and the images end holding the page
+// with the shader drawn.
+fn frames_until_the_shader_is_drawn(
+    harness: &mut Harness,
+    step: u32,
+    check: impl Fn(&str, &RenderStatsSnapshot),
+) {
+    let mut settled = 0;
+    let mut last = None;
+    for index in 0.. {
+        let frame = harness.frame(step);
+        let label = format!("frame {index} after the stand-in: {:?}", frame.stats.damage);
+        check(&label, &frame.stats);
+        if support::pipelines_settled(&frame.stats) {
+            support::assert_same_bytes(&label, WIDTH, &frame.kept, &frame.direct);
+            settled += 1;
+            last = Some(frame.stats);
+        } else {
+            assert!(index < 16, "{label}: the shader never landed");
+            settled = 0;
+            support::wait_for_background_compiler_idle();
+        }
+        if settled > 2 * SWAPCHAIN_IMAGES {
+            break;
+        }
+    }
+    assert!(
+        last.is_some_and(|last| last.repainted_pixels == 0),
+        "every image holds the frame with the shader drawn: {last:?}"
+    );
+}
+
+// A window's first frames draw whole while a shader compiles, its
+// placeholder in its place, and each image keeps its frame with the whole
+// window marked: every frame over such an image draws whole until the
+// shader landed and the image drew it. Every frame equals the frame drawn
+// whole, and the images end holding the page with the shader drawn.
+#[test]
+fn a_frame_drawn_whole_with_a_stand_in_is_drawn_whole_again_over_its_image() {
+    let Some((_lock, renderer)) = support::headless_renderer_parts_compiling_in_background_for(
+        wgpu::TextureFormat::Rgba8Unorm,
+    )
+    .map_err(|err| eprintln!("skipping (headless WGPU init failed): {err}"))
+    .ok() else {
+        return;
+    };
+    let mut harness = Harness::new(renderer, Scene::EarlyShader, 1.0, Keeper::Swapchain(DIRECT));
+    let whole = u64::from(WIDTH * HEIGHT);
+    let first = harness.frame(0);
+    assert!(
+        first.stats.placeholder_draws > 0 && first.stats.repainted_pixels == whole,
+        "the window's first frame draws whole with the placeholder: {:?}",
+        first.stats
+    );
+    frames_until_the_shader_is_drawn(&mut harness, 0, |_, _| {});
 }
 
 /// Draws each frame of `scene` twice: over the frame `keeper` holds, which
@@ -833,7 +1206,7 @@ fn assert_damage_holds_the_changes_at(scene: Scene, scale: f32, keeper: Keeper) 
                     matches!(damage, FrameDamage::Full | FrameDamage::Skipped),
                     "{label}: a frame moving the page changes most of the window"
                 );
-            } else {
+            } else if !matches!(scene, Scene::MovedCaster | Scene::TurnedSurface) {
                 assert_within(&label, damage, reach);
                 partial_frames += usize::from((1..whole).contains(&repainted));
             }
@@ -841,7 +1214,10 @@ fn assert_damage_holds_the_changes_at(scene: Scene, scale: f32, keeper: Keeper) 
         before = Some(frame.direct);
     }
     assert!(
-        scene == Scene::MovedPage || partial_frames > 0,
+        matches!(
+            scene,
+            Scene::MovedPage | Scene::MovedCaster | Scene::TurnedSurface
+        ) || partial_frames > 0,
         "{scene:?} {keeper:?} at {scale}: no frame drew a part of the window"
     );
     assert!(
@@ -861,6 +1237,16 @@ fn an_arc_drawn_at_a_new_angle() {
 }
 
 #[test]
+fn a_clip_shrinking_around_a_still_fill() {
+    assert_damage_holds_the_changes(Scene::ShrunkClip);
+}
+
+#[test]
+fn a_box_shrinking_around_a_still_child() {
+    assert_damage_holds_the_changes(Scene::ShrunkParent);
+}
+
+#[test]
 fn a_gradient_changing_colour() {
     assert_damage_holds_the_changes(Scene::Gradient);
 }
@@ -876,13 +1262,33 @@ fn a_label_changing_text() {
 }
 
 #[test]
+fn a_label_in_a_lazy_list_changing_text() {
+    assert_damage_holds_the_changes(Scene::LazyLabel);
+}
+
+#[test]
 fn an_image_changing_bitmap() {
     assert_damage_holds_the_changes(Scene::Picture);
 }
 
 #[test]
+fn a_surface_turning_in_a_3d_scene() {
+    assert_damage_holds_the_changes(Scene::TurnedSurface);
+}
+
+#[test]
 fn a_layer_turning() {
     assert_damage_holds_the_changes(Scene::TurnedLayer);
+}
+
+#[test]
+fn a_layer_painted_by_a_shader_over_no_content() {
+    assert_damage_holds_the_changes(Scene::PaintedLayer);
+}
+
+#[test]
+fn a_layer_replacing_what_lies_beneath_appearing_and_going() {
+    assert_damage_holds_the_changes(Scene::ReplacingLayer);
 }
 
 #[test]
@@ -925,6 +1331,13 @@ fn the_whole_page_moving_one_pixel() {
     assert_damage_holds_the_changes(Scene::MovedPage);
 }
 
+// The moved box's reach is not known, so the frame takes every record in
+// one walk.
+#[test]
+fn a_box_holding_a_shadow_caster_moving() {
+    assert_damage_holds_the_changes(Scene::MovedCaster);
+}
+
 /// The frames of a spinner that turns for as long as it shows, beside two
 /// liquid glass panes over a page of cards: once its target holds a frame,
 /// each draws only the spinner's part of the window, with a few draws and
@@ -949,8 +1362,11 @@ fn assert_spinner_repaints_only_itself_over(scene: Scene, keeper: Keeper) {
         let stats = frame.stats;
         let label = format!("{scene:?} {keeper:?} frame {step}: {stats:?}");
         support::assert_same_bytes(&label, WIDTH, &frame.kept, &frame.direct);
-        if step < whole_frames {
+        // The first frame draws whole: the target holds no frame before.
+        if step == 0 {
             whole_draws = stats.draw_calls;
+        }
+        if step < whole_frames {
             continue;
         }
         assert!(
@@ -959,7 +1375,7 @@ fn assert_spinner_repaints_only_itself_over(scene: Scene, keeper: Keeper) {
             stats.repainted_pixels
         );
         assert!(
-            stats.draw_calls * 10 < whole_draws,
+            stats.draw_calls * 5 < whole_draws,
             "{label}: {} draws against {whole_draws} for the whole window",
             stats.draw_calls
         );
@@ -1001,12 +1417,15 @@ fn two_small_animations_far_apart_repaint_only_their_areas() {
             let stats = frame.stats;
             let label = format!("{keeper:?} frame {step}: {stats:?}");
             support::assert_same_bytes(&label, WIDTH, &frame.kept, &frame.direct);
-            if step < start {
+            // The first frame draws whole: the target holds no frame before.
+            if step == 0 {
                 whole_draws = stats.draw_calls;
+            }
+            if step < start {
                 continue;
             }
             assert!(
-                stats.draw_calls * 10 < whole_draws,
+                stats.draw_calls * 5 < whole_draws,
                 "{label}: {} draws against {whole_draws} for the whole window",
                 stats.draw_calls
             );
@@ -1028,37 +1447,58 @@ fn two_small_animations_far_apart_repaint_only_their_areas() {
     }
 }
 
-/// Five small changes far apart, one more than the rects a frame's damage
-/// keeps apart, draw in four rects, the two that join with the fewest
-/// pixels sharing one, and every frame equals the whole frame.
+// Ten small changes scattered over the window, as a dashboard's clock,
+// counters and spinners change, draw only their own areas: a rect each, a
+// small share of the window, in no more passes than the whole frame, and
+// every frame equals the whole frame.
 #[test]
-fn five_small_changes_far_apart_draw_in_four_rects() {
-    let Some((_lock, renderer)) = renderer() else {
-        return;
-    };
-    let mut harness = Harness::new(renderer, Scene::FiveSpots, 1.0, Keeper::Composition);
-    let mut before: Option<Vec<u8>> = None;
-    for step in 0..START_FRAMES + 6 {
-        let frame = harness.frame(step);
-        let stats = frame.stats;
-        let label = format!("frame {step}: {stats:?}");
-        support::assert_same_bytes(&label, WIDTH, &frame.kept, &frame.direct);
-        if step >= START_FRAMES {
-            let FrameDamage::Part(rects) = stats.damage else {
-                panic!("{label}: five small changes report rects");
-            };
-            assert_eq!(rects.rects().len(), 4, "{label}");
-            if let Some(before) = &before {
-                assert_covers(&label, stats.damage, before, &frame.direct);
+fn ten_small_changes_scattered_over_the_window_draw_only_their_areas() {
+    const PARTIAL_FRAMES: u32 = 6;
+    // A spot's 12 by 12 pixels with the 2 past them all around that its
+    // area takes.
+    const SPOT_AREA: u64 = 16 * 16;
+    let spots = SPOT_AREA * SPOTS.len() as u64;
+    for keeper in KEEPERS {
+        let Some((_lock, renderer)) = renderer() else {
+            return;
+        };
+        let mut harness = Harness::new(renderer, Scene::TenSpots, 1.0, keeper);
+        let start = keeper.start_frames();
+        let mut whole_pass_pixels = 0;
+        let mut before: Option<Vec<u8>> = None;
+        for step in 0..start + PARTIAL_FRAMES {
+            let frame = harness.frame(step);
+            let stats = frame.stats;
+            let label = format!("{keeper:?} frame {step}: {stats:?}");
+            support::assert_same_bytes(&label, WIDTH, &frame.kept, &frame.direct);
+            if step == 0 {
+                whole_pass_pixels = stats.pass_pixels;
             }
-            // The two top spots share a rect as wide as the window.
-            assert!(
-                stats.repainted_pixels < u64::from(WIDTH) * 40,
-                "{label}: {} pixels",
-                stats.repainted_pixels
-            );
+            if step >= start {
+                let FrameDamage::Part(rects) = stats.damage else {
+                    panic!("{label}: ten small changes draw a part of the window");
+                };
+                assert_eq!(
+                    rects.rects().len(),
+                    SPOTS.len(),
+                    "{label}: a rect for each change"
+                );
+                if let Some(before) = &before {
+                    assert_covers(&label, stats.damage, before, &frame.direct);
+                }
+                assert!(
+                    stats.repainted_pixels <= 2 * spots,
+                    "{label}: {} pixels drawn again for {spots} that change",
+                    stats.repainted_pixels
+                );
+                assert!(
+                    stats.pass_pixels <= whole_pass_pixels,
+                    "{label}: {} pass pixels against {whole_pass_pixels} for the whole frame",
+                    stats.pass_pixels
+                );
+            }
+            before = Some(frame.direct);
         }
-        before = Some(frame.direct);
     }
 }
 
@@ -1226,6 +1666,41 @@ fn a_light_page_draws_whole_into_images_that_come_cleared() {
     );
 }
 
+// The frames of `keeper`'s first `frames` steps that draw the whole window,
+// each step changing a small part of the page.
+fn whole_frames_at_a_start(keeper: Keeper, frames: u32) -> Option<u32> {
+    let (_lock, renderer) = renderer()?;
+    let mut harness = Harness::new(renderer, Scene::Shape, 1.0, keeper);
+    let whole = u64::from(WIDTH * HEIGHT);
+    let mut drawn_whole = 0;
+    for step in 0..frames {
+        let frame = harness.frame(step);
+        let label = format!("step {step}: {:?}", frame.stats);
+        support::assert_same_bytes(&label, WIDTH, &frame.kept, &frame.direct);
+        drawn_whole += u32::from(frame.stats.repainted_pixels == whole);
+    }
+    Some(drawn_whole)
+}
+
+// A window draws whole once into each image of its swapchain, as each
+// arrives holding no frame; every frame after draws what it changes.
+#[test]
+fn a_start_draws_each_swapchain_image_whole_once() {
+    let frames = 4 * SWAPCHAIN_START_FRAMES;
+    if let Some(drawn_whole) = whole_frames_at_a_start(Keeper::Swapchain(DIRECT), frames) {
+        assert_eq!(drawn_whole, SWAPCHAIN_START_FRAMES);
+    }
+}
+
+// A target that keeps its frame draws whole once, with nothing to draw
+// over; every frame after draws what it changes.
+#[test]
+fn a_start_draws_a_kept_target_whole_once() {
+    if let Some(drawn_whole) = whole_frames_at_a_start(Keeper::Composition, 8) {
+        assert_eq!(drawn_whole, START_FRAMES);
+    }
+}
+
 /// Once every image of a swapchain holds the frame, a frame that changes
 /// nothing draws nothing.
 #[test]
@@ -1314,7 +1789,7 @@ fn rect_array(rect: Rect) -> [f32; 4] {
     [rect.x, rect.y, rect.width, rect.height]
 }
 
-fn page_with_dot(dot: Color) -> RenderGraph {
+fn page_with_dot(dot: Color) -> LayerNode {
     support::page_graph(
         WIDTH,
         HEIGHT,
@@ -1345,10 +1820,11 @@ fn page_with_dot(dot: Color) -> RenderGraph {
     )
 }
 
-fn overlay_graph() -> RenderGraph {
-    support::page_graph(
-        WIDTH,
-        HEIGHT,
+fn overlay_layer() -> LayerNode {
+    support::layer_node(
+        None,
+        WIDTH as f32,
+        HEIGHT as f32,
         vec![support::solid_rect(OVERLAY, Color(0.9, 0.9, 0.2, 1.0))],
     )
 }
@@ -1359,11 +1835,11 @@ fn overlay_graph() -> RenderGraph {
 fn overlay_frame(
     renderer: &mut support::LockedRenderer,
     images: &[Image; 2],
-    overlay: Option<RenderGraph>,
+    overlay: Option<LayerNode>,
     dot: Color,
 ) -> (FrameDamage, Vec<u8>, Vec<u8>) {
-    renderer.set_inspector_overlay(overlay);
-    renderer.scene_mut().graph = Some(page_with_dot(dot));
+    renderer.set_overlay_tree(overlay);
+    renderer.scene_mut().describe(&page_with_dot(dot));
     let [composed, direct] = images.each_ref().map(|image| {
         renderer
             .display_into(&image.texture, &image.view)
@@ -1401,9 +1877,9 @@ fn an_overlay_appearing_and_going() {
     let overlay = around(rect_array(OVERLAY), 8.0);
     let dot = around(rect_array(DOT), 8.0);
     let frames = [
-        (Some(overlay_graph()), red, overlay, "overlay shown"),
+        (Some(overlay_layer()), red, overlay, "overlay shown"),
         (
-            Some(overlay_graph()),
+            Some(overlay_layer()),
             Color::WHITE,
             dot,
             "page changed under it",

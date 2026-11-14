@@ -39,7 +39,7 @@ pub(super) fn parts_segment_primitives<'a>(
             (markers == ContentMarkers::Included).then_some(DrawPrimitive::Content)
         }
         RecordLane::GroupStart => Some(DrawPrimitive::Group(GroupMarker::Start(
-            content.groups[index],
+            content.groups.list()[index],
         ))),
         RecordLane::GroupEnd => Some(DrawPrimitive::Group(GroupMarker::End)),
     })
@@ -118,7 +118,7 @@ pub(super) fn brush_of(shapes: &ShapeRecorder, record: &ShapeRecord) -> Brush {
         ));
     }
     let index = record.brush as usize - 1;
-    let brush = &shapes.tables.brushes[index];
+    let brush = &shapes.tables.brushes()[index];
     let GradientLists { colors, stops } = shapes.gradient_lists[index].clone();
     let [a, b, c, d] = brush.params;
     let tile_mode = TILE_MODES[brush.tile_mode as usize];

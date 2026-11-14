@@ -452,6 +452,12 @@ fn spot_stray(caster: Rect, spot: Rect, caster_radius: f32, spot_radius: f32) ->
     length(upper).max(length(lower)).sqrt() + grown
 }
 
+// How far above the window a layer casts its elevation shadow: its
+// elevation, scaled by the layer's own scale.
+pub(crate) fn shadow_height(layer: &GraphicsLayer) -> f32 {
+    layer.shadow_elevation * layer_uniform_scale(layer).max(MIN_LAYER_SHADOW_SCALE)
+}
+
 /// The ambient and spot passes of `layer`'s shadow over `transformed_bounds`
 /// with the corners `caster` rounds it at, lit by `light`. Matches Skia's
 /// `SurfaceDrawContext::drawFastShadow` and `SkDrawShadowMetrics`.
@@ -465,8 +471,7 @@ pub fn layer_shadow_geometry(
         return LayerShadowGeometry::default();
     }
 
-    let scale = layer_uniform_scale(layer).max(MIN_LAYER_SHADOW_SCALE);
-    let height = layer.shadow_elevation * scale;
+    let height = shadow_height(layer);
     let caster_alpha = layer.alpha.clamp(0.0, 1.0);
     let radii = caster.map_or([0.0; 4], |shape| corner_radii(shape.radii()));
     let occludes = caster_occludes(layer);

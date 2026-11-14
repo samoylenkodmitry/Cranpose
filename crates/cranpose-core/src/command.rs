@@ -55,6 +55,18 @@ impl DirtyBubble {
         self.walk(applier, parent, false);
     }
 
+    // Carries on, from `parent_id` up, the bubbles that passed a node
+    // before it became a child of `parent_id`: `flags` are theirs, as
+    // `Applier::bubble_passes_of` gives them.
+    pub(crate) fn carry_on(applier: &mut dyn Applier, parent_id: NodeId, flags: u8) {
+        let carried = Self {
+            layout: flags & 1 != 0,
+            measure: flags & 2 != 0,
+            semantics: flags & 4 != 0,
+        };
+        carried.walk(applier, Some(parent_id), false);
+    }
+
     /// Visits each node once for all the flags. The walk goes on past an
     /// ancestor that is already dirty: a scoped layout repass can leave a
     /// dirty node under a clean ancestor. It stops at one an earlier walk of

@@ -1,6 +1,6 @@
 use std::{
     any::{Any, TypeId, type_name_of_val},
-    cell::RefCell,
+    cell::{Cell, RefCell},
     rc::Rc,
 };
 
@@ -8,20 +8,26 @@ use cranpose_core::{NodeId, PackedU64};
 #[expect(unused_imports, reason = "only some cfgs read it")]
 use cranpose_foundation::InvalidationKind;
 use cranpose_foundation::{
-    BasicModifierNodeContext, ModifierInvalidations, ModifierNodeChain, ModifierNodeContext,
-    NodeCapabilities,
+    BasicModifierNodeContext, ModifierInvalidations, ModifierNode, ModifierNodeChain,
+    ModifierNodeContext, NodeCapabilities, PlainElement as _,
 };
 
 use super::{
-    DimensionConstraint, EdgeInsets, LayoutProperties, Modifier, ModifierInspectorRecord,
-    ModifierLocalAncestorResolver, ModifierLocalToken, Point, ResolvedModifiers,
-    layout_data::LayoutDataNode, local::ModifierLocalManager, modifier_debug_enabled,
+    DimensionConstraint, EdgeInsets, Elements, LayoutProperties, Modifier, ModifierInspectorRecord,
+    ModifierKind, ModifierLocalAncestorResolver, ModifierLocalToken, Point, ResolvedModifiers,
+    element_match::{self, ElementMatch},
+    layout_data::LayoutDataNode,
+    local::ModifierLocalManager,
+    modifier_debug_enabled,
     offset::OffsetPxNode,
 };
+mod shared_parent_data;
+pub(crate) use shared_parent_data::SharedParentData;
+
 use crate::{
     modifier_nodes::{
-        AlignmentNode, FillDirection, FillElement, FillNode, OffsetNode, PaddingNode, SizeElement,
-        SizeNode, WeightNode,
+        AlignmentElement, FillDirection, FillElement, OffsetElement, PaddingElement, SizeElement,
+        WeightElement,
     },
     text_modifier_node::TextModifierElement,
 };
@@ -50,9 +56,7 @@ pub struct ModifierChainHandle {
     /// What the chain tells the parent's measure policy, which reads it on
     /// every pass. The resolved modifiers, which only a subcompose node's
     /// measure and on-request readers take, are worked out when read.
-    parent_data: cranpose_ui_layout::ParentData,
-    capabilities: NodeCapabilities,
-    aggregate_child_capabilities: NodeCapabilities,
+    parent_data: SharedParentData,
     /// `None` until the chain first provides or reads a modifier local, as
     /// most chains never do.
     modifier_locals: Option<ModifierLocalsHandle>,
@@ -62,6 +66,24 @@ pub struct ModifierChainHandle {
     /// attachment: a reader that keeps what it derived from a chain knows
     /// when to derive it again, also after its node takes a new chain.
     revision: PackedU64,
+    // The entries whose values layout reads and an update in place changed
+    // since the node's coordinators last took them, one bit an entry: such
+    // an update leaves the revision as it is, and a coordinator keeps a
+    // copy of a plain element's value.
+    changed_in_place: Cell<u64>,
+    // The inspector metadata of the modifier last set, which the layout
+    // tree's inspection reads.
+    #[cfg(feature = "inspection")]
+    inspector: Option<Rc<Vec<super::InspectorMetadata>>>,
+}
+
+// The inspector metadata `modifier` carries.
+#[cfg(feature = "inspection")]
+fn inspector_of(modifier: &Modifier) -> Option<Rc<Vec<super::InspectorMetadata>>> {
+    match &modifier.kind {
+        ModifierKind::Empty => None,
+        ModifierKind::Single { inspector, .. } => inspector.clone(),
+    }
 }
 
 /// What an update in place of a modifier element changes beyond its own
@@ -73,7 +95,10 @@ pub(crate) enum InPlaceReach {
     /// Nothing else: a text's slices read its layout through a handle that
     /// the update changes in place.
     Node,
-    /// The chain's resolved layout properties and the parent data they give.
+    // The node's own measure, which reads the element's new value: a size
+    // enters nothing the node's parent reads.
+    Measure,
+    // The node's measure and the parent data the chain gives its parent.
     Resolved,
 }
 
@@ -92,9 +117,9 @@ impl InPlaceReach {
     pub(crate) fn of(element_type: TypeId) -> Option<Self> {
         if element_type == TypeId::of::<TextModifierElement>() {
             Some(Self::Node)
-        } else if element_type == TypeId::of::<SizeElement>()
-            || element_type == TypeId::of::<FillElement>()
-        {
+        } else if element_type == TypeId::of::<SizeElement>() {
+            Some(Self::Measure)
+        } else if element_type == TypeId::of::<FillElement>() {
             Some(Self::Resolved)
         } else {
             None
@@ -126,12 +151,13 @@ impl ModifierChainHandle {
             chain,
             layout_direction: crate::LayoutDirection::Ltr,
             pending_invalidations: None,
-            parent_data: cranpose_ui_layout::ParentData::default(),
-            capabilities: NodeCapabilities::default(),
-            aggregate_child_capabilities: NodeCapabilities::default(),
+            parent_data: SharedParentData::default(),
             modifier_locals: None,
             debug_logging: false,
             revision: PackedU64::new(next_revision()),
+            changed_in_place: Cell::new(0),
+            #[cfg(feature = "inspection")]
+            inspector: None,
         }
     }
 
@@ -157,6 +183,12 @@ impl ModifierChainHandle {
         self.revision.get()
     }
 
+    // The entries an update in place changed since the last call, one bit
+    // an entry; see the field.
+    pub(crate) fn take_changed_in_place(&self) -> u64 {
+        self.changed_in_place.take()
+    }
+
     pub(crate) fn set_layout_direction(&mut self, direction: crate::LayoutDirection) -> bool {
         if self.layout_direction == direction {
             return false;
@@ -171,11 +203,7 @@ impl ModifierChainHandle {
     fn update_offset_direction(&mut self) {
         let direction = self.layout_direction;
         self.chain.visit_nodes_mut(|node, capabilities| {
-            if capabilities.contains(NodeCapabilities::LAYOUT)
-                && let Some(offset) = node.as_any_mut().downcast_mut::<OffsetNode>()
-            {
-                offset.set_layout_direction(direction);
-            } else if capabilities.contains(NodeCapabilities::DRAW)
+            if capabilities.contains(NodeCapabilities::DRAW)
                 && let Some(offset) = node.as_any_mut().downcast_mut::<OffsetPxNode>()
             {
                 offset.set_layout_direction(direction);
@@ -234,7 +262,8 @@ impl ModifierChainHandle {
     ) -> bool {
         // A chain that reads modifier locals syncs them on every update.
         if self
-            .capabilities
+            .chain
+            .capabilities()
             .contains(NodeCapabilities::MODIFIER_LOCALS)
         {
             return false;
@@ -245,10 +274,24 @@ impl ModifierChainHandle {
             update.elements,
             context,
         );
+        #[cfg(feature = "inspection")]
+        if updated {
+            self.inspector = inspector_of(modifier);
+        }
+        if updated && update.reach != InPlaceReach::Node {
+            self.changed_in_place
+                .set(self.changed_in_place.get() | update.elements);
+        }
         if updated && update.reach == InPlaceReach::Resolved {
-            self.resolve();
+            self.resolve_fills();
         }
         updated
+    }
+
+    // Asks `context` for what an update of the last node's values
+    // invalidates, after its caller updated the node in place.
+    pub(crate) fn invalidate_last(&self, context: &mut BasicModifierNodeContext) {
+        self.chain.invalidate_last(context);
     }
 
     /// Reconciles the chain with `modifier`, its nodes asking `context` for
@@ -262,11 +305,13 @@ impl ModifierChainHandle {
         self.revision = PackedU64::new(next_revision());
         self.chain
             .update_from_ref_iter(modifier.iter_elements(), context);
+        #[cfg(feature = "inspection")]
+        {
+            self.inspector = inspector_of(modifier);
+        }
         if self.layout_direction.is_rtl() {
             self.update_offset_direction();
         }
-        self.capabilities = self.chain.capabilities();
-        self.aggregate_child_capabilities = self.chain.head().aggregate_child_capabilities();
         let modifier_local_invalidations = self.sync_modifier_locals(resolver);
 
         if !context.invalidations().is_empty() {
@@ -333,22 +378,76 @@ impl ModifierChainHandle {
         &mut self.chain
     }
 
+    // Whether the chain holds `modifier`'s elements, as `rule` compares them.
+    pub(crate) fn holds(&self, modifier: &Modifier, rule: ElementMatch) -> bool {
+        element_match::elements_match(self.chain.held_elements(), modifier, rule)
+    }
+
+    // The node after `modifier`'s elements, when the chain holds them, as
+    // they compare equal, and that one node more.
+    pub(crate) fn node_after(&self, modifier: &Modifier) -> Option<&Rc<RefCell<dyn ModifierNode>>> {
+        element_match::elements_match_but_last(
+            self.chain.held_elements(),
+            modifier,
+            ElementMatch::Equal,
+        )
+        .then(|| self.chain.get_node_rc(modifier.element_count()))
+        .flatten()
+    }
+
+    // How `modifier`'s elements compare with the chain's, for a set of it.
+    pub(crate) fn match_for_set(&self, modifier: &Modifier) -> element_match::SetMatch {
+        element_match::match_for_set(self.chain.held_elements(), modifier)
+    }
+
+    // A modifier of the chain's elements, equal to the one the chain was last
+    // updated from. It carries the modifier's inspector metadata only where
+    // inspection is built in.
+    pub(crate) fn modifier(&self) -> Modifier {
+        let mut held = self.chain.held_elements();
+        let Some(first) = held.next() else {
+            return Modifier::empty();
+        };
+        let elements = if held.len() == 0 {
+            Elements::One(first.to_element())
+        } else {
+            Elements::Many(Rc::new(
+                std::iter::once(first)
+                    .chain(held)
+                    .map(|element| element.to_element())
+                    .collect(),
+            ))
+        };
+        Modifier {
+            provides_composition_locals: elements
+                .iter()
+                .any(|element| element.provides_composition_locals()),
+            kind: ModifierKind::Single {
+                elements,
+                #[cfg(feature = "inspection")]
+                inspector: self.inspector.clone(),
+                #[cfg(not(feature = "inspection"))]
+                inspector: None,
+            },
+        }
+    }
+
     /// Returns the aggregated capability mask for the reconciled chain.
     pub fn capabilities(&self) -> NodeCapabilities {
-        self.capabilities
+        self.chain.capabilities()
     }
 
     /// Returns the aggregate child capability mask rooted at the sentinel head.
     pub fn aggregate_child_capabilities(&self) -> NodeCapabilities {
-        self.aggregate_child_capabilities
+        self.chain.head().aggregate_child_capabilities()
     }
 
     pub fn has_layout_nodes(&self) -> bool {
-        self.capabilities.contains(NodeCapabilities::LAYOUT)
+        self.capabilities().contains(NodeCapabilities::LAYOUT)
     }
 
     pub fn has_draw_nodes(&self) -> bool {
-        self.capabilities.contains(NodeCapabilities::DRAW)
+        self.capabilities().contains(NodeCapabilities::DRAW)
     }
 
     /// The padding, layout properties and offset of the chain, worked out
@@ -365,7 +464,7 @@ impl ModifierChainHandle {
     /// What the chain tells the parent's measure policy about its node.
     /// The outermost node of each kind wins, as Compose folds
     /// `modifyParentData` from the innermost node out.
-    pub(crate) fn parent_data(&self) -> cranpose_ui_layout::ParentData {
+    pub(crate) fn parent_data(&self) -> SharedParentData {
         self.parent_data.clone()
     }
 
@@ -404,24 +503,30 @@ impl ModifierChainHandle {
             .collect();
         let mut snapshot = Vec::with_capacity(chain_len);
         self.chain.for_each_forward(|node_ref| {
-            node_ref.with_node(|node| {
-                let depth = node_ref.delegate_depth();
-                let entry_index = node_ref.entry_index();
-                let inspector = if depth == 0 {
-                    entry_index
-                        .and_then(|idx| records.get_mut(idx))
-                        .and_then(Option::take)
-                } else {
-                    None
-                };
-                snapshot.push(ModifierChainInspectorNode {
-                    depth,
-                    entry_index,
-                    type_name: type_name_of_val(node),
-                    capabilities: node_ref.kind_set(),
-                    aggregate_child_capabilities: node_ref.aggregate_child_capabilities(),
-                    inspector,
-                });
+            // A plain element has no node: its element type names it.
+            let type_name = match node_ref.plain_words() {
+                Some((fns, _)) => Some(fns.type_name()),
+                None => node_ref.with_node(type_name_of_val),
+            };
+            let Some(type_name) = type_name else {
+                return;
+            };
+            let depth = node_ref.delegate_depth();
+            let entry_index = node_ref.entry_index();
+            let inspector = if depth == 0 {
+                entry_index
+                    .and_then(|idx| records.get_mut(idx))
+                    .and_then(Option::take)
+            } else {
+                None
+            };
+            snapshot.push(ModifierChainInspectorNode {
+                depth,
+                entry_index,
+                type_name,
+                capabilities: node_ref.kind_set(),
+                aggregate_child_capabilities: node_ref.aggregate_child_capabilities(),
+                inspector,
             });
         });
         snapshot
@@ -429,12 +534,54 @@ impl ModifierChainHandle {
 
     // One walk over the chain's layout nodes, from the outermost in.
     fn resolution(&self) -> Resolution {
-        let mut resolution = Resolution::default();
+        let mut resolution = Resolution {
+            direction: self.layout_direction,
+            ..Resolution::default()
+        };
         self.chain
             .for_each_forward_matching(NodeCapabilities::LAYOUT, |node_ref| {
-                node_ref.with_node(|node| resolution.take(node.as_any()));
+                match node_ref.plain_words() {
+                    Some((fns, words)) => resolution.take_plain(fns, words),
+                    None => {
+                        node_ref.with_node(|node| resolution.take(node.as_any()));
+                    }
+                }
             });
         resolution
+    }
+
+    // Works out again the fill fractions of the chain's parent data, after
+    // an update in place: of the elements one takes, only a fill enters the
+    // parent data, so every other part of the data stands.
+    fn resolve_fills(&mut self) {
+        let mut fill_width = None;
+        let mut fill_height = None;
+        self.chain
+            .for_each_forward_matching(NodeCapabilities::LAYOUT, |node_ref| {
+                if let Some(fill) = node_ref.plain::<FillElement>() {
+                    let (horizontal, vertical) = fill.fills();
+                    if horizontal {
+                        fill_width.get_or_insert_with(|| fill.fraction());
+                    }
+                    if vertical {
+                        fill_height.get_or_insert_with(|| fill.fraction());
+                    }
+                }
+            });
+        let width = fill_width.unwrap_or_default();
+        let height = fill_height.unwrap_or_default();
+        let data = self.parent_data.read(|current| {
+            (current.fill_width_fraction != width || current.fill_height_fraction != height).then(
+                || cranpose_ui_layout::ParentData {
+                    fill_width_fraction: width,
+                    fill_height_fraction: height,
+                    ..current.clone()
+                },
+            )
+        });
+        if let Some(data) = data {
+            self.parent_data.set(data);
+        }
     }
 
     /// Works out the chain's parent data again.
@@ -447,7 +594,7 @@ impl ModifierChainHandle {
             ..
         } = self.resolution();
         let weight = layout.weight.unwrap_or_default();
-        self.parent_data = cranpose_ui_layout::ParentData {
+        let data = cranpose_ui_layout::ParentData {
             weight: weight.weight,
             fill: weight.fill,
             box_alignment: layout.box_alignment,
@@ -458,6 +605,9 @@ impl ModifierChainHandle {
             fill_height_fraction: fill_height.unwrap_or_default(),
             layout_data,
         };
+        if !self.parent_data.read(|current| *current == data) {
+            self.parent_data.set(data);
+        }
     }
 }
 
@@ -469,6 +619,8 @@ impl ModifierChainHandle {
 struct Resolution {
     layout: LayoutProperties,
     padding: EdgeInsets,
+    // The direction the chain's node reads, which mirrors its offsets.
+    direction: crate::LayoutDirection,
     offset: Point,
     fill_width: Option<f32>,
     fill_height: Option<f32>,
@@ -476,53 +628,42 @@ struct Resolution {
 }
 
 impl Resolution {
+    // Takes in the next plain element of the walk, of the type `fns`
+    // tells, from its `words`.
+    fn take_plain(&mut self, fns: &cranpose_foundation::PlainFns, words: &[u32]) {
+        // One type lookup an element: each `read` asks for it again.
+        let kind = fns.element_type();
+        if kind == TypeId::of::<PaddingElement>() {
+            self.padding += PaddingElement::from_words(words).padding();
+        } else if kind == TypeId::of::<SizeElement>() {
+            apply_size_node(&mut self.layout, &SizeElement::from_words(words));
+        } else if kind == TypeId::of::<FillElement>() {
+            self.take_fill(&FillElement::from_words(words));
+        } else if kind == TypeId::of::<WeightElement>() {
+            self.layout
+                .weight
+                .get_or_insert_with(|| WeightElement::from_words(words).layout_weight());
+        } else if kind == TypeId::of::<AlignmentElement>() {
+            apply_alignment(&mut self.layout, &AlignmentElement::from_words(words));
+        } else if kind == TypeId::of::<OffsetElement>() {
+            let delta = OffsetElement::from_words(words).offset(self.direction);
+            self.offset.x += delta.x;
+            self.offset.y += delta.y;
+        }
+    }
+
     /// Takes in the next node of the walk.
     fn take(&mut self, node: &dyn Any) {
-        // One type lookup a node: each `downcast_ref` asks for it again.
-        let kind = Any::type_id(node);
-        if kind == TypeId::of::<PaddingNode>() {
-            if let Some(padding) = node.downcast_ref::<PaddingNode>() {
-                self.padding += padding.padding();
-            }
-        } else if kind == TypeId::of::<SizeNode>() {
-            if let Some(size) = node.downcast_ref::<SizeNode>() {
-                apply_size_node(&mut self.layout, size);
-            }
-        } else if kind == TypeId::of::<FillNode>() {
-            if let Some(fill) = node.downcast_ref::<FillNode>() {
-                self.take_fill(fill);
-            }
-        } else if kind == TypeId::of::<WeightNode>() {
-            if let Some(weight) = node.downcast_ref::<WeightNode>() {
-                self.layout
-                    .weight
-                    .get_or_insert_with(|| weight.layout_weight());
-            }
-        } else if kind == TypeId::of::<AlignmentNode>() {
-            if let Some(alignment) = node.downcast_ref::<AlignmentNode>() {
-                apply_alignment_node(&mut self.layout, alignment);
-            }
-        } else if kind == TypeId::of::<OffsetNode>() {
-            if let Some(offset) = node.downcast_ref::<OffsetNode>() {
-                let delta = offset.offset();
-                self.offset.x += delta.x;
-                self.offset.y += delta.y;
-            }
-        } else if kind == TypeId::of::<LayoutDataNode>()
-            && self.layout_data.is_none()
+        if self.layout_data.is_none()
             && let Some(data) = node.downcast_ref::<LayoutDataNode>()
         {
             self.layout_data = Some(Rc::clone(data.data()));
         }
     }
 
-    fn take_fill(&mut self, fill: &FillNode) {
+    fn take_fill(&mut self, fill: &FillElement) {
         apply_fill_node(&mut self.layout, fill);
-        let (horizontal, vertical) = match fill.direction() {
-            FillDirection::Horizontal => (true, false),
-            FillDirection::Vertical => (false, true),
-            FillDirection::Both => (true, true),
-        };
+        let (horizontal, vertical) = fill.fills();
         if horizontal {
             self.fill_width.get_or_insert_with(|| fill.fraction());
         }
@@ -531,23 +672,23 @@ impl Resolution {
         }
     }
 }
-/// Sets the alignments a parent reads from `node` that no outer node set.
-fn apply_alignment_node(layout: &mut LayoutProperties, node: &AlignmentNode) {
+// Sets the alignments a parent reads from `element` that no outer one set.
+fn apply_alignment(layout: &mut LayoutProperties, element: &AlignmentElement) {
     if layout.box_alignment.is_none() {
-        layout.box_alignment = node.box_alignment();
+        layout.box_alignment = element.in_box();
     }
     if layout.column_alignment.is_none() {
-        layout.column_alignment = node.column_alignment();
+        layout.column_alignment = element.in_column();
     }
     // A row alignment and a baseline alignment both set where a Row child
     // sits across it: the outer one of either kind wins.
     if layout.row_alignment.is_none() && !layout.row_baseline {
-        layout.row_alignment = node.row_alignment();
-        layout.row_baseline = node.row_baseline();
+        layout.row_alignment = element.in_row();
+        layout.row_baseline = element.on_row_baseline();
     }
 }
 
-fn apply_size_node(layout: &mut LayoutProperties, node: &SizeNode) {
+fn apply_size_node(layout: &mut LayoutProperties, node: &SizeElement) {
     apply_size_axis(
         node.min_width(),
         node.max_width(),
@@ -591,7 +732,7 @@ fn apply_size_axis(
     }
 }
 
-fn apply_fill_node(layout: &mut LayoutProperties, node: &FillNode) {
+fn apply_fill_node(layout: &mut LayoutProperties, node: &FillElement) {
     let fraction = node.fraction();
     match node.direction() {
         FillDirection::Horizontal => {

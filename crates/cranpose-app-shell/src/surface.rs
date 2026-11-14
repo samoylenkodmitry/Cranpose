@@ -12,7 +12,10 @@
 
 use std::{cell::RefCell, fmt::Debug, rc::Rc};
 
-use cranpose_core::{MemoryApplier, NodeId, collections::map::HashSet};
+use cranpose_core::{
+    MemoryApplier, NodeId, NodeMarks, SceneNodeAttachmentScratch,
+    collections::{growth_slack::GrowthSlack, map::HashSet},
+};
 use cranpose_foundation::{
     PointerButton, PointerButtons, PointerId, PointerSource, RotaryScrollEvent,
 };
@@ -25,8 +28,8 @@ use cranpose_ui_graphics::{Point, PointerIcon, Size};
 
 use crate::{
     AppShell, FramePacingMode, FrameRatePreference, FrameSchedule, FrameScheduler,
-    FrameUpdateResult, PlatformFrameDriver, ShellApp, SurfaceRoutingScratch,
-    hit_path_tracker::HitPathTracker, shell_frame::DevOverlay,
+    FrameUpdateResult, PlatformFrameDriver, ShellApp, hit_path_tracker::HitPathTracker,
+    shell_frame::DevOverlay,
 };
 
 /// Names a root surface of the app: the primary window, or a window root
@@ -85,10 +88,6 @@ pub struct RootSurface<R: Renderer> {
     pub(crate) scoped_layer_property_nodes: Vec<NodeId>,
     pub(crate) structural_scene_nodes: Vec<NodeId>,
     pub(crate) scene_updates: Vec<(NodeId, NodeUpdate)>,
-    /// The nodes the retained redraw walk has yet to visit, empty between
-    /// frames; kept for its storage.
-    pub(crate) redraw_walk: Vec<NodeId>,
-    pub(crate) retained_visual_nodes: HashSet<NodeId>,
     pub(crate) is_dirty: bool,
     pub(crate) buttons_pressed: PointerButtons,
     pub(crate) pointer_source: PointerSource,
@@ -136,8 +135,6 @@ impl<R: Renderer> RootSurface<R> {
             scoped_layer_property_nodes: Vec::new(),
             structural_scene_nodes: Vec::new(),
             scene_updates: Vec::new(),
-            redraw_walk: Vec::new(),
-            retained_visual_nodes: HashSet::default(),
             is_dirty: true,
             buttons_pressed: PointerButtons::NONE,
             pointer_source: PointerSource::Unknown,
@@ -195,7 +192,6 @@ impl<R: Renderer> RootSurface<R> {
         self.root = root;
         self.forget_snapshots();
         self.invalidate_scene_root(root);
-        self.retained_visual_nodes.clear();
         self.hit_path_tracker.clear();
         self.hovered_nodes.clear();
         self.buttons_pressed = PointerButtons::NONE;
@@ -439,6 +435,31 @@ pub(crate) enum SurfaceDirtyLane {
     Draw,
     LayerProperties,
     Structural,
+}
+
+#[derive(Default)]
+pub(crate) struct SurfaceRoutingScratch {
+    pub(crate) attached: Vec<Option<NodeId>>,
+    pub(crate) owners: Vec<Option<NodeId>>,
+    pub(crate) seen: HashSet<(usize, NodeId)>,
+    pub(crate) attachment: SceneNodeAttachmentScratch,
+    pub(crate) window_roots: cranpose_ui::WindowRootRoutingScratch,
+    // The nodes a layout lane routing gave the surfaces, while the moved
+    // lane after it is routed.
+    pub(crate) laid_out: NodeMarks,
+    // Each surface's count of layout lane nodes before that routing.
+    pub(crate) laid_out_starts: Vec<usize>,
+    pub(crate) moved: Vec<NodeId>,
+}
+
+impl SurfaceRoutingScratch {
+    // Gives back the room a burst of routed nodes took.
+    pub(crate) fn trim(&mut self) {
+        self.attached.trim_growth_slack();
+        self.owners.trim_growth_slack();
+        self.moved.trim_growth_slack();
+        self.seen.trim_growth_slack();
+    }
 }
 
 fn append_surface_dirty_node(
@@ -916,16 +937,18 @@ where
         primary.focus_check_due = dpad;
     }
 
-    // Ends an update: the surfaces are clean, and after a layout the primary
-    // window keeps a focused target when it is set to.
-    pub(crate) fn end_update(&mut self, laid_out: bool) {
+    // Ends the update at `frame_time` that made `result`: the surfaces are
+    // clean, after a layout the primary window keeps a focused target when
+    // it is set to, and the rest before a trim starts or ends.
+    pub(crate) fn end_update(&mut self, result: FrameUpdateResult, frame_time: Option<u64>) {
         for surface in &mut self.surfaces {
             surface.is_dirty = false;
         }
         let primary = &mut self.surfaces[0];
-        if primary.dpad_navigation && (laid_out || primary.focus_check_due) {
+        if primary.dpad_navigation && (result.structure_changed || primary.focus_check_due) {
             primary.focus_check_due = false;
             self.primary().keep_focus();
         }
+        self.trim_at_rest(result, frame_time);
     }
 }

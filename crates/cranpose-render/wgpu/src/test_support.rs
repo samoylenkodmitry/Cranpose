@@ -2,21 +2,44 @@ use cranpose_render_common::{
     graph::{LayerNode, ProjectiveTransform, RenderNode},
     text_fonts::TextFonts,
 };
-use cranpose_ui_graphics::{GraphicsLayer, Rect};
+use cranpose_ui_graphics::{GraphicsLayer, Point, Rect};
 
 pub(crate) fn layer_node(
-    local_bounds: Rect,
+    rect: Rect,
     transform_to_parent: ProjectiveTransform,
     graphics_layer: GraphicsLayer,
     children: Vec<RenderNode>,
 ) -> LayerNode {
-    LayerNode {
-        local_bounds,
-        transform_to_parent,
-        graphics_layer: graphics_layer.into(),
-        children,
-        ..Default::default()
+    moved_to(
+        Point::new(rect.x, rect.y),
+        LayerNode {
+            size: rect.size(),
+            transform_to_parent,
+            graphics_layer: graphics_layer.into(),
+            children,
+            ..Default::default()
+        },
+    )
+}
+
+// Moves `layer`'s rect and draws to `origin` of its space, where its child
+// layers and inline nodes keep their place.
+pub(crate) fn moved_to(origin: Point, mut layer: LayerNode) -> LayerNode {
+    layer.transform_to_parent =
+        ProjectiveTransform::translation(origin.x, origin.y).then(layer.transform_to_parent);
+    let back = ProjectiveTransform::translation(-origin.x, -origin.y);
+    for child in &mut layer.children {
+        match child {
+            RenderNode::Layer(child) => {
+                child.transform_to_parent = child.transform_to_parent.then(back);
+            }
+            RenderNode::Inline(inline) => {
+                inline.origin = Point::new(inline.origin.x - origin.x, inline.origin.y - origin.y);
+            }
+            RenderNode::Primitive(_) | RenderNode::DrawRun(_) => {}
+        }
     }
+    layer
 }
 
 // Runs `block` in an app context whose text lays out with the font a
@@ -33,7 +56,7 @@ pub(crate) fn with_layout(
 ) -> cranpose_render_common::graph::TextPrimitiveNode {
     node.layout = in_layout_context(|| {
         cranpose_ui::text::prepare_text_layout(
-            &node.text,
+            &std::sync::Arc::clone(&node.render_text).into(),
             &node.text_style,
             cranpose_ui::TextLayoutOptions {
                 overflow: node.overflow,

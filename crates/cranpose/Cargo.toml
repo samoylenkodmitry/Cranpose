@@ -115,6 +115,9 @@ embed = [
     "native-windows",
     "cranpose-app-shell/clipboard-native",
     "cranpose-services/uri-native",
+    # The host's inspector reads each node's modifier, which the layout tree
+    # keeps only where inspection is built in.
+    "cranpose-ui/inspection",
 ]
 # Internal: the registry behind `Modifier::window`, serviced by the desktop
 # shell (winit windows) and by `embed` (windows the host creates). Use

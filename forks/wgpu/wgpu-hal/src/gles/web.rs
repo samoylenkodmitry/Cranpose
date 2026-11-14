@@ -426,6 +426,7 @@ impl crate::Surface for Surface {
         Ok(crate::AcquiredSurfaceTexture {
             texture,
             suboptimal: false,
+            images: 1,
         })
     }
 

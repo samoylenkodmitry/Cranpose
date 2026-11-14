@@ -119,6 +119,7 @@ impl SlotWriteSession<'_> {
             log::error!(
                 "slot writer discarded stale value-slot group frame for anchor {group_anchor:?}"
             );
+            self.table.settle_insert_run();
             self.state.pop_group_frame()?;
         }
     }

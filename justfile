@@ -207,6 +207,8 @@ esp32-flash-e32r35t port: esp32-build-e32r35t
 
 # Compares revisions of the demo on a board, every screen over 4 placements
 # of the code, the base first: `just esp32-ab e32r35t origin/main HEAD`.
+# `--no-hot-code` among the revisions compares them with the hot-code lists
+# off; `--null NAME` names the null leg and adds each screen's verdict.
 # `--port <port>` among the revisions names the board's serial port when
 # another device's name matches it. See benchmarks/esp32/README.md.
 esp32-ab board +args: _disk-guard
@@ -401,6 +403,18 @@ check-forks base="origin/main":
         cargo check --manifest-path "forks/$crate/Cargo.toml" --target-dir target/forks
     done
 
+# The wgpu fork's own tests, the Metal backend's among them, which only a Mac
+# compiles: the workspace leaves the forks out, so `test` runs none of them.
+# Runs when the diff against `base` touches `forks/`.
+test-forks base="origin/main":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if git diff --quiet "$(git merge-base HEAD {{quote(base)}})" -- forks; then
+        echo "test-forks: forks/ unchanged against {{base}}"
+        exit 0
+    fi
+    cargo test --manifest-path forks/wgpu/wgpu-hal/Cargo.toml --features metal --target-dir target/forks --lib
+
 # Copy-paste budget for a block the diff adds, at either end of the copy.
 # Same on-demand install as above, through the same pinned-path resolver.
 duplication-gate base="origin/main":
@@ -478,8 +492,11 @@ _size-ceiling path max what:
 # 14,507,657 to 15,413,974, when wasm-opt kept to the features of Safari 15:
 # without typed function references, its merge-similar-functions pass merges
 # no function whose copies call different targets. WebKit before Safari 18
-# rejects a module with those references, in every iOS browser.
-web-size-budget: (_size-ceiling "apps/desktop-demo/pkg/desktop_app_bg.wasm" "15428000" "web demo wasm")
+# rejects a module with those references, in every iOS browser. The scene
+# store of #2158 adds about 30 KB over main's demo: the store's records, draw
+# specs, layer references, reach and content hashes. The owner allowed that
+# growth of 30 KB.
+web-size-budget: (_size-ceiling "apps/desktop-demo/pkg/desktop_app_bg.wasm" "15458000" "web demo wasm")
 
 # Fail when a built wasm module needs a WebAssembly feature past Safari 15.
 # WebKit rejects such a module whole, in Safari and in every other iOS browser.
@@ -623,6 +640,8 @@ test-features: test-watchos test-localization
     cargo clippy -p cranpose-text -p cranpose-ui --all-targets --features cranpose-text/hyphenation-embedded,cranpose-ui/text-hyphenation-embedded -- -D warnings
     cargo test --profile ci -p cranpose-ui --features southeast-asian-line-breaks --test integration thai_line_breaks
     cargo clippy -p cranpose-ui --all-targets --features southeast-asian-line-breaks -- -D warnings
+    # The pixel host alone builds the scene store without window damage.
+    cargo test --profile ci -p cranpose-render-pixels
     cargo test --profile ci -p cranpose-render-pixels --features installed-fonts,cranpose-app-shell/installed-fonts --test installed_fonts
     cargo test --profile ci -p cranpose-render-wgpu --features installed-fonts,cranpose-app-shell/installed-fonts --test installed_fonts
     cargo clippy -p cranpose-render-pixels -p cranpose-render-wgpu --all-targets --features cranpose-render-pixels/installed-fonts,cranpose-render-wgpu/installed-fonts,cranpose-app-shell/installed-fonts -- -D warnings
@@ -697,6 +716,8 @@ test-shell-helpers: _benchmark-python ci-contract-gates
     python3 benchmarks/compose-vs-cranpose/tests/test_run_samples.py
     python3 benchmarks/compose-vs-cranpose/tests/test_ab_decisions.py
     python3 benchmarks/compose-vs-cranpose/tests/test_desktop_accounting.py
+    python3 scripts/esp32/board_ab_test.py
+    python3 scripts/esp32/hot_code_test.py
     python3 benchmarks/compose-vs-cranpose/tests/test_display_state.py
     python3 benchmarks/compose-vs-cranpose/tests/test_adb_recovery.py
     python3 benchmarks/compose-vs-cranpose/tests/test_chrome_first_run.py
@@ -1329,7 +1350,7 @@ _disk-guard:
 # all seven on every pull request.
 
 # What a pull request is gated on. Run this before pushing.
-ci: fmt-check typos versions twin-matrix-check check-forks test clippy clippy-release clippy-optional-backends clippy-svg clippy-hyphenation clippy-robot clippy-no-atomic64 clippy-wasm doc budgets complexity-gate duplication-gate source-budgets deny shear public-api-diff test-robot-discovery test-shell-helpers test-host-lock test-ci-filters test-features test-property bench-smoke test-ci-gate-reachability test-layout platform-contracts test-robot-suite-partition test-android-accessibility-contract test-ide
+ci: fmt-check typos versions twin-matrix-check check-forks test-forks test clippy clippy-release clippy-optional-backends clippy-svg clippy-hyphenation clippy-robot clippy-no-atomic64 clippy-wasm doc budgets complexity-gate duplication-gate source-budgets deny shear public-api-diff test-robot-discovery test-shell-helpers test-host-lock test-ci-filters test-features test-property bench-smoke test-ci-gate-reachability test-layout platform-contracts test-robot-suite-partition test-android-accessibility-contract test-ide
 
 # Needs a Linux box with the X11 stack, an Android SDK and (on macOS) Xcode.
 

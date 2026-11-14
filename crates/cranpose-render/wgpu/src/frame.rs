@@ -14,7 +14,7 @@ use cranpose_render_common::{
 };
 use cranpose_ui_graphics::{
     BlendMode, Color, FrontPolygon, MAX_SUBSTRATES, Point, Rect, RenderEffect, RenderHash,
-    RuntimeShader, ShaderPlaceholder, ShaderTarget, SubstrateSpec, TileMode,
+    RuntimeShader, ShaderPlaceholder, ShaderTarget, SubstrateSpec, TileMode, expand_rect,
 };
 use smallvec::SmallVec;
 
@@ -46,7 +46,7 @@ use crate::{
         admission_gate::{AdmissionGate, NodeGate},
     },
     scene::{BackdropLayer, CompositorScene, DrawOp, DrawOpKind, EffectLayer, LayerRoundedClip},
-    scissor::{intersect_scissors, scissor_in_target},
+    scissor::scissor_in_target,
 };
 
 const MAX_SURFACE_PIXELS: u64 = 16 * 1024 * 1024;
@@ -286,39 +286,6 @@ fn fill_segments<'a>(
         transform: SegmentTransform::IDENTITY,
         scale,
     })
-}
-
-/// Cuts `segments` to each scissor of `parts`, in their order: each
-/// segment's part in the first, then in the next. The parts share no pixel,
-/// so no pixel draws twice.
-fn cut_segments(
-    segments: &mut Vec<PassSegment<'_>>,
-    parts: impl Iterator<Item = (u32, u32, u32, u32)> + Clone,
-) {
-    let mut first_two = parts.clone();
-    if let (Some(only), None) = (first_two.next(), first_two.next()) {
-        segments.retain_mut(
-            |segment| match intersect_scissors(segment.scissor, Some(only)) {
-                Some(scissor) => {
-                    segment.scissor = scissor;
-                    true
-                }
-                None => false,
-            },
-        );
-        return;
-    }
-    *segments = segments
-        .iter()
-        .flat_map(|segment| {
-            parts.clone().filter_map(move |part| {
-                intersect_scissors(segment.scissor, Some(part)).map(|scissor| PassSegment {
-                    scissor,
-                    ..segment.clone()
-                })
-            })
-        })
-        .collect();
 }
 
 /// A kept prefix drawn back where the page drew it.
@@ -1376,28 +1343,6 @@ fn rendered_surface(whole: DeviceRect, shown: DeviceRect, reach: f32) -> DeviceR
         .expand(reach)
         .intersect(whole)
         .map_or(whole, DeviceRect::snap_out)
-}
-
-/// Whether a child's runtime shader can draw in the final pass over the
-/// child's content: the shader must apply the child's clip and alpha itself
-/// unless the child has neither.
-/// Whether the layer's content puts nothing on its surface.
-fn draws_nothing(content: &LayerScene) -> bool {
-    content.scene.draw_ops.is_empty()
-        && content.scene.shadow_draws.is_empty()
-        && content.children.is_empty()
-        && content.scene.backdrop_layers.is_empty()
-        && content.scene.effect_layers.is_empty()
-}
-
-fn composites_nothing(child: &ChildLayer) -> bool {
-    child.blend_mode == BlendMode::SrcOver
-        && (child.alpha == 0.0
-            || (draws_nothing(&child.content)
-                && child
-                    .effect
-                    .as_ref()
-                    .is_none_or(RenderEffect::preserves_transparency)))
 }
 
 /// The child's layer bounds in the pixels of a surface at `surface_rect`.
@@ -2973,8 +2918,9 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         let mut segments =
             flush_segments(&pass.layer.scene, &parts, &flush, place.offset, pass.scale);
         let (load_op, fill) = self.window_base(&pass.page, load_op);
+        let mut window_cut = std::mem::take(&mut self.renderer.pass_scratch.window_cut);
         if pass.page.window.is_some() {
-            cut_segments(&mut segments, pass.page.window_scissors());
+            window_cut.cut(&mut segments, pass.page.window_scissors(), target);
         }
         if let Some(fill) = &fill {
             segments.splice(
@@ -2984,15 +2930,16 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         }
         let label = LAYER_PASS_LABELS[pass.segments.min(LAYER_PASS_LABELS.len() - 1)];
         pass.segments += 1;
-        self.renderer
-            .encode_pass(
-                self.recorder,
-                target,
-                (&segments, SegmentLayout::Stacked),
-                load_op,
-                label,
-            )
-            .map(drop)
+        let encoded = self.renderer.encode_pass(
+            self.recorder,
+            target,
+            (&segments, SegmentLayout::Stacked),
+            load_op,
+            label,
+        );
+        drop(segments);
+        self.renderer.pass_scratch.window_cut = window_cut;
+        encoded.map(drop)
     }
 
     /// The load op a pass into `page` starts with, and the fill it draws
@@ -4367,6 +4314,9 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         Ok(Some(CompositeSource { texture, content }))
     }
 
+    // Whether a child's runtime shader can draw in the final pass over the
+    // child's content: the shader must apply the child's clip and alpha
+    // itself unless the child has neither.
     fn shader_tail_composites(&mut self, child: &ChildLayer, shader: &RuntimeShader) -> bool {
         let plain = child.alpha >= 1.0 && child.rounded_clip.is_none();
         shader.substrates().is_empty()
@@ -5307,18 +5257,6 @@ fn child_surface_rect(child: &ChildLayer, scale: f32) -> Option<Rect> {
     (rect.width > 0.0 && rect.height > 0.0).then_some(rect)
 }
 
-fn expand_rect(rect: Rect, padding: f32) -> Rect {
-    if padding <= 0.0 {
-        return rect;
-    }
-    Rect {
-        x: rect.x - padding,
-        y: rect.y - padding,
-        width: rect.width + padding * 2.0,
-        height: rect.height + padding * 2.0,
-    }
-}
-
 fn surface_pixels(rect: Rect, scale: f32) -> u64 {
     let width = (rect.width * scale).ceil().max(0.0) as u64;
     let height = (rect.height * scale).ceil().max(0.0) as u64;
@@ -5461,6 +5399,10 @@ mod surface_atlas;
 pub(crate) use surface_atlas::SurfaceAtlasSizes;
 use surface_atlas::{AtlasPacker, AtlasPlacement};
 
+#[path = "frame_composites.rs"]
+mod composites;
+use composites::{composites_nothing, draws_nothing};
+
 #[path = "frame_scene.rs"]
 mod scene_surfaces;
 
@@ -5468,8 +5410,9 @@ mod scene_surfaces;
 mod window_damage;
 
 pub(crate) use window_damage::{
-    ClearedImages, Damage, DamageRects, FrameWindow, ImageContent, KeptWindow, MAX_DAMAGE_RECTS,
-    PresentedImage, Repaint, Summaries, SwapchainHistory, WindowDamage,
+    COPY_HOLD_OFF, Capture, ClearedImages, Damage, DamageRects, FrameDamages, FrameWindow, Held,
+    ImageContent, MAX_DAMAGE_RECTS, PacketDamage, PresentedImage, Repaint, Since, SwapchainHistory,
+    collect_captures, settle, widen,
 };
 
 #[cfg(test)]

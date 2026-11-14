@@ -19,7 +19,7 @@ use cranpose_render_common::{
     Renderer,
     graph::{
         CachePolicy, DrawCommandId, DrawPrimitiveNode, DrawRunNode, LayerNode, PrimitiveEntry,
-        PrimitiveNode, PrimitivePhase, ProjectiveTransform, RenderGraph, RenderNode,
+        PrimitiveNode, PrimitivePhase, ProjectiveTransform, RenderNode,
     },
     text_fonts::DEFAULT_FONT_BYTES,
 };
@@ -36,7 +36,9 @@ use cranpose_ui_graphics::{
 
 pub(crate) static TEST_FONT: &[u8] = DEFAULT_FONT_BYTES;
 
-pub(crate) use crate::shared_test_support::{draw_text_layout, prepared_text, with_layout};
+pub(crate) use crate::shared_test_support::{
+    draw_text_layout, moved_to, prepared_text, with_layout,
+};
 
 pub(crate) fn layer_node(
     node_id: Option<NodeId>,
@@ -46,12 +48,7 @@ pub(crate) fn layer_node(
 ) -> LayerNode {
     LayerNode {
         node_id,
-        local_bounds: Rect {
-            x: 0.0,
-            y: 0.0,
-            width,
-            height,
-        },
+        size: Size::new(width, height),
         children,
         ..Default::default()
     }
@@ -234,6 +231,21 @@ pub(crate) fn headless_renderer_parts_compiling_in_background()
     Ok((lock, compiling_renderer(device::Pipelines::Background)?))
 }
 
+// A renderer whose pipelines compile in the background, as an app's do,
+// displaying frames of `format`.
+pub(crate) fn headless_renderer_parts_compiling_in_background_for(
+    format: wgpu::TextureFormat,
+) -> Result<(MutexGuard<'static, ()>, WgpuRenderer), String> {
+    let lock = lock_gpu_test();
+    let renderer = create_headless_renderer_configured(
+        format,
+        wgpu::Limits::default(),
+        wgpu::Backends::all(),
+        device::Pipelines::Background,
+    )?;
+    Ok((lock, renderer))
+}
+
 pub(crate) fn headless_renderer_with_display_format(
     format: wgpu::TextureFormat,
 ) -> Result<LockedRenderer, String> {
@@ -244,19 +256,20 @@ pub(crate) fn headless_renderer_with_display_format(
 pub(crate) fn headless_renderer_with_limits(
     limits: wgpu::Limits,
 ) -> Result<LockedRenderer, String> {
-    headless_renderer_configured(limits, wgpu::Backends::all())
+    headless_renderer_configured(limits, wgpu::Backends::all(), device::Pipelines::Inline)
 }
 
 pub(crate) fn headless_renderer_configured(
     limits: wgpu::Limits,
     backends: wgpu::Backends,
+    pipelines: device::Pipelines,
 ) -> Result<LockedRenderer, String> {
     let lock = lock_gpu_test();
     let renderer = create_headless_renderer_configured(
         wgpu::TextureFormat::Bgra8UnormSrgb,
         limits,
         backends,
-        device::Pipelines::Inline,
+        pipelines,
     )?;
     Ok(with_app_context(renderer, Some(lock)))
 }
@@ -445,7 +458,7 @@ pub(crate) mod page {
 pub(crate) mod graph {
     pub(crate) use cranpose_render_common::{
         Renderer,
-        graph::{RenderGraph, RenderNode},
+        graph::{LayerNode, RenderNode},
     };
     pub(crate) use cranpose_ui_graphics::{
         Brush, Color, CornerRadii, DrawScope, DrawScopeDefault, Point, Rect, Stroke, TileMode,
@@ -454,10 +467,10 @@ pub(crate) mod graph {
     pub(crate) use super::draw_run_graph;
 }
 
-pub(crate) fn draw_run_graph(size: u32, scope: DrawScopeDefault<'_>) -> RenderGraph {
+pub(crate) fn draw_run_graph(size: u32, scope: DrawScopeDefault<'_>) -> LayerNode {
     use cranpose_render_common::graph::{DrawRunNode, PrimitivePhase};
     use cranpose_ui_graphics::DrawScope;
-    RenderGraph::new(layer_node(
+    layer_node(
         None,
         size as f32,
         size as f32,
@@ -465,7 +478,7 @@ pub(crate) fn draw_run_graph(size: u32, scope: DrawScopeDefault<'_>) -> RenderGr
             PrimitivePhase::BeforeChildren,
             scope.into_primitives(),
         ))],
-    ))
+    )
 }
 
 pub(crate) fn read_texture(
@@ -783,12 +796,12 @@ pub(crate) fn describe_differing(differing: &[(usize, usize, [u8; 4], [u8; 4])])
 
 pub(crate) fn stable_capture(
     renderer: &mut LockedRenderer,
-    graph: &RenderGraph,
+    graph: &LayerNode,
     size: u32,
 ) -> Vec<u8> {
     let mut passes = Vec::new();
     for _ in 0..3 {
-        renderer.scene_mut().graph = Some(graph.clone());
+        renderer.scene_mut().describe(graph);
         let captured = renderer
             .capture_frame(size, size)
             .unwrap_or_else(|err| panic!("capture failed: {err:?}"));
@@ -863,21 +876,24 @@ pub(crate) fn substrate_probe(spec: SubstrateSpec, read: SubstrateProbeRead) -> 
     RenderEffect::runtime_shader(shader)
 }
 
-pub(crate) fn page_graph(width: u32, height: u32, children: Vec<RenderNode>) -> RenderGraph {
-    RenderGraph::new(layer_node(None, width as f32, height as f32, children))
+pub(crate) fn page_graph(width: u32, height: u32, children: Vec<RenderNode>) -> LayerNode {
+    layer_node(None, width as f32, height as f32, children)
 }
 
-pub(crate) fn shader_probe_graph(bounds: Rect, shader: RuntimeShader) -> RenderGraph {
-    RenderGraph::new(LayerNode {
-        local_bounds: bounds,
-        graphics_layer: cranpose_ui_graphics::GraphicsLayer {
-            render_effect: Some(RenderEffect::runtime_shader(shader)),
+pub(crate) fn shader_probe_graph(bounds: Rect, shader: RuntimeShader) -> LayerNode {
+    moved_to(
+        Point::new(bounds.x, bounds.y),
+        LayerNode {
+            size: bounds.size(),
+            graphics_layer: cranpose_ui_graphics::GraphicsLayer {
+                render_effect: Some(RenderEffect::runtime_shader(shader)),
+                ..Default::default()
+            }
+            .into(),
+            children: vec![solid_rect(bounds, Color::WHITE)],
             ..Default::default()
-        }
-        .into(),
-        children: vec![solid_rect(bounds, Color::WHITE)],
-        ..Default::default()
-    })
+        },
+    )
 }
 
 pub(crate) mod clip_band {
@@ -899,21 +915,17 @@ pub(crate) mod clip_band {
         layer: GraphicsLayer,
         placement: Point,
         children: Vec<RenderNode>,
-    ) -> RenderGraph {
+    ) -> LayerNode {
         let child = LayerNode {
-            local_bounds: CHILD,
+            size: CHILD.size(),
+            layer_bounds: Some(CHILD),
             transform_to_parent: layer_transform_to_parent(CHILD, placement, &layer),
             graphics_layer: layer.into(),
             children,
             ..Default::default()
         };
         let band = LayerNode {
-            local_bounds: Rect {
-                x: 0.0,
-                y: 0.0,
-                width: FRAME as f32,
-                height: FRAME as f32 - CLIP_TOP as f32,
-            },
+            size: Size::new(FRAME as f32, FRAME as f32 - CLIP_TOP as f32),
             transform_to_parent: ProjectiveTransform::translation(0.0, CLIP_TOP as f32),
             graphics_layer: GraphicsLayer {
                 clip: true,
@@ -945,7 +957,7 @@ pub(crate) mod clip_band {
 
 pub(crate) fn capture_graph(
     renderer: &mut LockedRenderer,
-    graph: RenderGraph,
+    graph: &LayerNode,
     width: u32,
     height: u32,
 ) -> CapturedFrame {
@@ -954,7 +966,7 @@ pub(crate) fn capture_graph(
 
 pub(crate) fn capture_waits(
     renderer: &mut LockedRenderer,
-    graph: RenderGraph,
+    graph: &LayerNode,
     width: u32,
     height: u32,
 ) -> (RenderStatsSnapshot, u64) {
@@ -964,7 +976,7 @@ pub(crate) fn capture_waits(
 
 pub(crate) fn capture_with_waits(
     renderer: &mut LockedRenderer,
-    graph: RenderGraph,
+    graph: &LayerNode,
     width: u32,
     height: u32,
 ) -> (CapturedFrame, RenderStatsSnapshot, u64) {
@@ -981,13 +993,13 @@ pub(crate) fn capture_with_waits(
 
 pub(crate) fn capture_drawn(
     renderer: &mut LockedRenderer,
-    graph: &RenderGraph,
+    graph: &LayerNode,
     width: u32,
     height: u32,
 ) -> (CapturedFrame, RenderStatsSnapshot) {
     let deadline = std::time::Instant::now() + Duration::from_secs(30);
     loop {
-        let frame = capture_graph(renderer, graph.clone(), width, height);
+        let frame = capture_graph(renderer, graph, width, height);
         let stats = renderer.last_frame_stats().expect("frame statistics");
         if stats.placeholder_draws == 0 && stats.instant_draws == 0 {
             return (frame, stats);
@@ -1002,12 +1014,12 @@ pub(crate) fn capture_drawn(
 
 pub(crate) fn capture_graph_with_scale(
     renderer: &mut LockedRenderer,
-    graph: RenderGraph,
+    graph: &LayerNode,
     width: u32,
     height: u32,
     root_scale: f32,
 ) -> CapturedFrame {
-    renderer.scene_mut().graph = Some(graph);
+    renderer.scene_mut().describe(graph);
     renderer
         .capture_frame_with_scale(width, height, root_scale)
         .expect("capture should succeed")
@@ -1081,18 +1093,18 @@ pub(crate) fn settle<T>(mut frame: impl FnMut() -> (RenderStatsSnapshot, T)) -> 
 
 pub(crate) fn capture_graph_settled(
     renderer: &mut LockedRenderer,
-    graph: &RenderGraph,
+    graph: &LayerNode,
     width: u32,
     height: u32,
 ) -> CapturedFrame {
     capture_settled(renderer, |renderer| {
-        capture_graph(renderer, graph.clone(), width, height)
+        capture_graph(renderer, graph, width, height)
     })
 }
 
-pub(crate) fn settled_capture(renderer: &mut LockedRenderer, graph: &RenderGraph) -> Vec<u8> {
+pub(crate) fn settled_capture(renderer: &mut LockedRenderer, graph: &LayerNode) -> Vec<u8> {
     stable_settled_capture(renderer, |renderer| {
-        renderer.scene_mut().graph = Some(graph.clone());
+        renderer.scene_mut().describe(graph);
         let captured = renderer
             .capture_frame(SIZE, SIZE)
             .unwrap_or_else(|err| panic!("capture failed: {err:?}"));
@@ -1209,7 +1221,6 @@ pub(crate) fn text_node(node_id: usize, text: &str, rect: Rect, font_size: f32) 
             cranpose_render_common::graph::TextPrimitiveNode {
                 node_id: NodeId(node_id),
                 rect,
-                text: cranpose_ui::text::shared_plain_annotated_string(text),
                 render_text: cranpose_ui::text::shared_plain_render_string(text),
                 text_style: std::sync::Arc::new(style),
                 font_size,
@@ -1264,7 +1275,7 @@ pub(crate) const SIZE: u32 = 256;
 pub(crate) const CENTER: f32 = 128.0;
 
 /// The dark background every parity scene draws first.
-fn draw_scene_background(scope: &mut DrawScopeDefault) {
+pub(crate) fn draw_scene_background(scope: &mut DrawScopeDefault) {
     scope.draw_rect_at(
         Rect {
             x: 0.0,
@@ -1520,18 +1531,21 @@ pub(crate) fn record_gradient_fill_scene(scope: &mut DrawScopeDefault) {
 pub(crate) fn contract_layer(
     node_id: Option<NodeId>,
     cache_policy: CachePolicy,
-    local_bounds: Rect,
+    rect: Rect,
     transform_to_parent: ProjectiveTransform,
     children: Vec<RenderNode>,
 ) -> LayerNode {
-    LayerNode {
-        node_id,
-        local_bounds,
-        transform_to_parent,
-        cache_policy,
-        children,
-        ..Default::default()
-    }
+    moved_to(
+        Point::new(rect.x, rect.y),
+        LayerNode {
+            node_id,
+            size: rect.size(),
+            transform_to_parent,
+            cache_policy,
+            children,
+            ..Default::default()
+        },
+    )
 }
 
 pub(crate) const STORED_RUN_NODE: NodeId = NodeId(7_200);
@@ -1545,7 +1559,7 @@ pub(crate) fn stored_run_rect(index: usize) -> Rect {
     }
 }
 
-pub(crate) fn stored_run_graph(width: u32, height: u32, colors: &[Color]) -> RenderGraph {
+pub(crate) fn stored_run_graph(width: u32, height: u32, colors: &[Color]) -> LayerNode {
     stored_run_graph_of(width, height, colors.iter().copied().map(Brush::solid))
 }
 
@@ -1553,7 +1567,7 @@ pub(crate) fn stored_run_graph_of(
     width: u32,
     height: u32,
     brushes: impl IntoIterator<Item = Brush>,
-) -> RenderGraph {
+) -> LayerNode {
     stored_runs_graph_of(width, height, [brushes.into_iter().collect()])
 }
 
@@ -1561,7 +1575,7 @@ pub(crate) fn stored_runs_graph_of<const RUNS: usize>(
     width: u32,
     height: u32,
     runs: [Vec<Brush>; RUNS],
-) -> RenderGraph {
+) -> LayerNode {
     let mut first_record = 0;
     let commands = runs
         .into_iter()
@@ -1589,7 +1603,7 @@ pub(crate) fn stored_runs_graph_of<const RUNS: usize>(
             ))
         })
         .collect();
-    RenderGraph::new(contract_layer(
+    contract_layer(
         Some(STORED_RUN_NODE),
         CachePolicy::None,
         Rect {
@@ -1600,14 +1614,14 @@ pub(crate) fn stored_runs_graph_of<const RUNS: usize>(
         },
         ProjectiveTransform::identity(),
         commands,
-    ))
+    )
 }
 
 pub(crate) fn present_and_read(
     renderer: &mut LockedRenderer,
     width: u32,
     height: u32,
-    graph: RenderGraph,
+    graph: &LayerNode,
 ) -> Vec<u8> {
     let texture = present(renderer, width, height, graph);
     read_presented(renderer, &texture)
@@ -1617,9 +1631,9 @@ pub(crate) fn present(
     renderer: &mut LockedRenderer,
     width: u32,
     height: u32,
-    graph: RenderGraph,
+    graph: &LayerNode,
 ) -> wgpu::Texture {
-    renderer.scene_mut().graph = Some(graph);
+    renderer.scene_mut().describe(graph);
     let packet = renderer
         .build_frame_packet_for_tests(width, height)
         .expect("the graph must lower into a packet");
@@ -1724,7 +1738,7 @@ pub(crate) mod glass_page {
     pub(crate) const GLASS_RADIUS: f32 = 12.0;
     pub(crate) const BLUR_RADIUS: f32 = 6.0;
 
-    pub(crate) fn panes_page(effects: impl IntoIterator<Item = RenderEffect>) -> RenderGraph {
+    pub(crate) fn panes_page(effects: impl IntoIterator<Item = RenderEffect>) -> LayerNode {
         let mut children = striped_page(FRAME_WIDTH, FRAME_HEIGHT);
         for (index, effect) in effects.into_iter().enumerate() {
             children.push(RenderNode::Layer(Box::new(

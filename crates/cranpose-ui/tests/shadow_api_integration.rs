@@ -1,13 +1,13 @@
 use cranpose_ui::{
-    AppContext, BlendMode, Brush, Dp, DpOffset, DrawCommand, DrawCommandFn, LayerShape, Modifier,
-    Point, RoundedCornerShape, Shadow, Size, collect_slices_from_modifier, command_draw_scope,
+    AppContext, BlendMode, Brush, Dp, DpOffset, DrawCommand, LayerShape, Modifier, Point,
+    RoundedCornerShape, Shadow, Size, collect_slices_from_modifier, command_draw_scope,
 };
 use cranpose_ui_graphics::{DrawPrimitive, DrawScope as _, ShadowPrimitive};
 
-fn record(func: &DrawCommandFn, size: Size) -> Vec<DrawPrimitive> {
+fn record(command: &DrawCommand, size: Size) -> Vec<DrawPrimitive> {
     let mut recording = cranpose_ui_graphics::CommandRecording::default();
     let mut scope = command_draw_scope(size, &mut recording);
-    func(&mut scope);
+    command.draw(&mut scope);
     scope.into_primitives()
 }
 
@@ -65,9 +65,9 @@ fn behind_command_tags(modifier: &Modifier) -> Vec<&'static str> {
         .draw_commands()
         .iter()
         .filter_map(|command| match command {
-            DrawCommand::Behind(draw) => {
+            DrawCommand::Behind(_) | DrawCommand::Background(_) => {
                 let primitives = record(
-                    draw,
+                    command,
                     Size {
                         width: 64.0,
                         height: 36.0,
@@ -121,7 +121,7 @@ fn drop_and_inner_shadow_emit_expected_draw_layers() {
         .draw_commands()
         .iter()
         .find_map(|command| match command {
-            DrawCommand::Overlay(draw) => Some(record(draw, draw_size)),
+            DrawCommand::Overlay(_) => Some(record(command, draw_size)),
             _ => None,
         })
         .expect("overlay command expected");
@@ -187,8 +187,8 @@ fn static_shadow_uses_density_when_converted_to_px() {
             .draw_commands()
             .iter()
             .find_map(|command| match command {
-                DrawCommand::Overlay(draw) => Some(record(
-                    draw,
+                DrawCommand::Overlay(_) => Some(record(
+                    command,
                     Size {
                         width: 40.0,
                         height: 20.0,
@@ -236,8 +236,8 @@ fn shadow_brush_and_blend_mode_are_applied() {
         .draw_commands()
         .iter()
         .find_map(|command| match command {
-            DrawCommand::Behind(draw) => Some(record(
-                draw,
+            DrawCommand::Behind(_) => Some(record(
+                command,
                 Size {
                     width: 64.0,
                     height: 36.0,

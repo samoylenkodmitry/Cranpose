@@ -181,7 +181,7 @@ impl NodeReads {
         if seen.is_empty() {
             return;
         }
-        seen.sort_unstable_by_key(|&(node, state)| (node, state.0));
+        // A node that reads one state again and again notes it once.
         seen.dedup();
         {
             let mut by_node = self.by_node.borrow_mut();

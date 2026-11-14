@@ -3,10 +3,10 @@
 
 use cranpose_core::key;
 use cranpose_render_common::{
-    graph::{LayerNode, RenderNode},
-    scene_builder::build_graph_from_applier,
+    scene_builder::build_from_applier,
+    scene_store::{ItemRef, LayerRef},
 };
-use cranpose_ui::Layout;
+use cranpose_ui::{BoxWithConstraints, Layout};
 use cranpose_ui_layout::{
     Constraints, Measurable, MeasurePolicy, MeasureResult, MeasureScope, Placement,
 };
@@ -187,45 +187,51 @@ fn PeekBox() {
 /// window positions carried by the layers' transforms and offsets: what a
 /// frame puts on screen, and nothing a scoped update may legitimately leave
 /// different from a rebuild (cache hashes, recording identities).
-fn scene_picture(layer: &LayerNode, depth: usize, out: &mut Vec<String>) {
+fn scene_picture(layer: LayerRef<'_>, depth: usize, out: &mut Vec<String>) {
     out.push(format!(
         "{depth} layer {:?} wraps {:?} bounds {:?} node {:?} transform {:?} content {:?} \
          origin {:?} clip {} shadow {:?} graphics {:?} translated {} {:?}",
-        layer.node_id,
-        layer.wraps,
-        layer.local_bounds,
-        layer.node_bounds,
-        layer.transform_to_parent,
-        layer.content_offset,
-        layer.origin_in_parent,
-        layer.clip_to_bounds,
+        layer.node_id(),
+        layer.wraps(),
+        layer.local_bounds(),
+        layer.node_bounds(),
+        layer.transform_to_parent(),
+        layer.content_offset(),
+        layer.origin_in_parent(),
+        layer.clip_to_bounds(),
         layer.shadow_clip(),
-        layer.graphics_layer,
-        layer.translated_content_context,
-        layer.translated_content_offset,
+        layer.graphics_layer(),
+        layer.translated_content_context(),
+        layer.translated_content_offset(),
     ));
-    picture_nodes(&layer.children, depth, out);
+    picture_items(layer, depth, out);
 }
 
-fn picture_nodes(nodes: &[RenderNode], depth: usize, out: &mut Vec<String>) {
-    for child in nodes {
-        match child {
-            RenderNode::Layer(child) => scene_picture(child, depth + 1, out),
-            RenderNode::Inline(inline) => {
+fn picture_items(layer: LayerRef<'_>, depth: usize, out: &mut Vec<String>) {
+    for item in layer.items() {
+        match item {
+            ItemRef::Layer(child) => scene_picture(child, depth + 1, out),
+            ItemRef::Leaf(leaf) => {
                 out.push(format!(
                     "{} inline {:?} origin {:?} size {:?} motion {}",
                     depth + 1,
-                    inline.node_id,
-                    inline.origin,
-                    inline.size,
-                    inline.motion_context_animated,
+                    leaf.node_id(),
+                    leaf.origin(),
+                    leaf.size(),
+                    leaf.motion_context_animated(),
                 ));
-                picture_nodes(&inline.content, depth + 1, out);
+                picture_items(leaf, depth + 1, out);
             }
-            RenderNode::Primitive(entry) => out.push(format!("{depth} primitive {entry:?}")),
-            RenderNode::DrawRun(run) => {
+            ItemRef::Draw(draw) => out.push(format!("{depth} draw {draw:?}")),
+            ItemRef::Text(text) => out.push(format!("{depth} text {text:?}")),
+            ItemRef::Run(run) => {
                 for primitive in run.primitives() {
                     out.push(format!("{depth} run {:?} {primitive:?}", run.phase));
+                }
+            }
+            ItemRef::Shape(shape) => {
+                for primitive in shape.primitives() {
+                    out.push(format!("{depth} shapes {primitive:?}"));
                 }
             }
         }
@@ -233,14 +239,13 @@ fn picture_nodes(nodes: &[RenderNode], depth: usize, out: &mut Vec<String>) {
 }
 
 fn drawn_picture(shell: &AppShell<ScopedUpdateCountingRenderer>) -> Vec<String> {
-    let graph = shell.surfaces[0]
+    let root = shell.surfaces[0]
         .renderer
         .scene()
-        .graph
-        .as_ref()
+        .root_layer()
         .expect("the frame should have built a scene");
     let mut picture = Vec::new();
-    scene_picture(&graph.root, 0, &mut picture);
+    scene_picture(root, 0, &mut picture);
     picture
 }
 
@@ -249,10 +254,10 @@ fn rebuilt_picture(shell: &mut AppShell<ScopedUpdateCountingRenderer>) -> Vec<St
     let graph = shell
         .app
         .app_context
-        .enter(|| build_graph_from_applier(&shell.app.composition.applier_mut(), root, 1.0))
+        .enter(|| build_from_applier(&shell.app.composition.applier_mut(), root))
         .expect("a whole-scene rebuild should lower the root");
     let mut picture = Vec::new();
-    scene_picture(&graph.root, 0, &mut picture);
+    scene_picture(graph.root_layer().expect("a scene"), 0, &mut picture);
     picture
 }
 
@@ -368,18 +373,37 @@ fn an_unchanged_layout_pass_preserves_the_scene_without_recording_it() {
     assert_scene_matches_rebuild(&mut host.shell, "unchanged layout");
 }
 
+// The peeking box under a subcompose node, whose slot host lies between
+// that node and the box.
+#[composable]
+fn PeekBoxUnderConstraints() {
+    BoxWithConstraints(Modifier::empty().fill_max_size(), |_| {
+        PeekBox();
+    });
+}
+
 #[test]
 fn a_node_its_parent_stops_placing_leaves_the_scene_and_returns_where_it_was() {
+    assert_an_unplaced_child_leaves_and_returns(PeekBox);
+}
+
+#[test]
+fn a_node_under_a_subcompose_node_leaves_the_scene_when_its_parent_stops_placing_it() {
+    assert_an_unplaced_child_leaves_and_returns(PeekBoxUnderConstraints);
+}
+
+fn assert_an_unplaced_child_leaves_and_returns(content: fn()) {
     let _guard = test_guard();
     PEEK_SHOWN.with(|slot| slot.borrow_mut().take());
-    let mut peek = CountedShell::settled(location_key(file!(), line!(), column!()), PeekBox);
+    let mut peek = CountedShell::settled(location_key(file!(), line!(), column!()), content);
     let shown = PEEK_SHOWN
         .with(|slot| *slot.borrow())
         .expect("the box exposes whether it shows its second child");
     let settled = drawn_picture(&peek.shell);
     for show in [false, true, false, true] {
         shown.set_value(show);
-        peek.frame();
+        let (rebuilds, _) = peek.frame();
+        assert_eq!(rebuilds, 0, "the scene takes the change in place");
         assert_scene_matches_rebuild(
             &mut peek.shell,
             if show {

@@ -15,6 +15,9 @@ pub struct DynAcquiredSurfaceTexture {
     /// the surface properties exactly, but can still be used to present
     /// to the surface successfully.
     pub suboptimal: bool,
+    /// How many presentable images the surface hands out
+    /// ([`crate::AcquiredSurfaceTexture::images`]).
+    pub images: u32,
 }
 
 pub trait DynSurface: DynResource {
@@ -62,6 +65,7 @@ impl<S: Surface + DynResource> DynSurface for S {
             DynAcquiredSurfaceTexture {
                 texture,
                 suboptimal,
+                images: ast.images,
             }
         })
     }

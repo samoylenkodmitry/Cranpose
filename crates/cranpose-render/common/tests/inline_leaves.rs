@@ -6,13 +6,15 @@
 use std::cell::Cell;
 
 use cranpose_core::MutableState;
-use cranpose_render_common::graph::{
-    LayerNode, PrimitiveNode, ProjectiveTransform, RenderGraph, RenderNode,
+use cranpose_render_common::{
+    graph::ProjectiveTransform,
+    graph_scene::Scene,
+    scene_store::{ItemRef, LayerRef},
 };
 use cranpose_ui::{
     Box, BoxSpec, Color, Column, ColumnSpec, Modifier, Size, Text, TextStyle, run_test_composition,
 };
-use cranpose_ui_graphics::{CompositingStrategy, DrawPrimitive, GraphicsLayer};
+use cranpose_ui_graphics::{CompositingStrategy, DrawPrimitive, GraphicsLayer, RoundedCornerShape};
 
 use crate::scene_probe::{fresh_graph, initial_graph, update_scene};
 
@@ -22,71 +24,77 @@ const FILL: Color = Color(0.3, 0.5, 0.9, 1.0);
 // Each node the scene draws, whether it draws through a layer of its own or
 // in its parent's, where it lands in the window, and each rectangle and text
 // it paints there.
-fn picture(graph: &RenderGraph) -> Vec<String> {
-    fn nodes(children: &[RenderNode], transform: ProjectiveTransform, out: &mut Vec<String>) {
-        for child in children {
-            match child {
-                RenderNode::Layer(layer) => walk_layer(layer, transform, out),
-                RenderNode::Inline(inline) => {
-                    let transform = inline.transform_to_parent().then(transform);
+fn picture(graph: &Scene) -> Vec<String> {
+    fn items(layer: LayerRef<'_>, transform: ProjectiveTransform, out: &mut Vec<String>) {
+        for item in layer.items() {
+            match item {
+                ItemRef::Layer(layer) => walk_layer(layer, transform, out),
+                ItemRef::Leaf(leaf) => {
+                    let transform = leaf.transform_to_parent().then(transform);
                     out.push(format!(
                         "inline {:?} at {:?}",
-                        inline.node_id,
-                        transform.bounds_for_rect(inline.node_rect())
+                        leaf.node_id(),
+                        transform.bounds_for_rect(leaf.node_rect())
                     ));
-                    nodes(&inline.content, transform, out);
+                    items(leaf, transform, out);
                 }
-                RenderNode::DrawRun(run) => {
-                    for primitive in run.primitives() {
-                        if let DrawPrimitive::Rect { rect, brush, .. } = primitive {
-                            out.push(format!(
-                                "rect {:?} {brush:?}",
-                                transform.bounds_for_rect(rect)
-                            ));
-                        }
-                    }
+                ItemRef::Run(run) => rect_lines(run.primitives(), transform, out),
+                ItemRef::Shape(shape) => rect_lines(shape.primitives(), transform, out),
+                ItemRef::Text(text) => {
+                    out.push(format!(
+                        "text {} at {:?}",
+                        text.render_text.text(),
+                        transform.bounds_for_rect(text.rect)
+                    ));
                 }
-                RenderNode::Primitive(entry) => {
-                    if let PrimitiveNode::Text(text) = &entry.node {
-                        out.push(format!(
-                            "text {} at {:?}",
-                            text.text.text,
-                            transform.bounds_for_rect(text.rect)
-                        ));
-                    }
-                }
+                ItemRef::Draw(_) => {}
             }
         }
     }
-    fn walk_layer(layer: &LayerNode, parent: ProjectiveTransform, out: &mut Vec<String>) {
-        let transform = layer.transform_to_parent.then(parent);
+    fn rect_lines(
+        primitives: impl Iterator<Item = DrawPrimitive>,
+        transform: ProjectiveTransform,
+        out: &mut Vec<String>,
+    ) {
+        for primitive in primitives {
+            if let DrawPrimitive::Rect { rect, brush, .. } = primitive {
+                out.push(format!(
+                    "rect {:?} {brush:?}",
+                    transform.bounds_for_rect(rect)
+                ));
+            }
+        }
+    }
+    fn walk_layer(layer: LayerRef<'_>, parent: ProjectiveTransform, out: &mut Vec<String>) {
+        let transform = layer.transform_to_parent().then(parent);
         out.push(format!(
             "layer {:?} at {:?} alpha {}",
-            layer.node_id,
+            layer.node_id(),
             transform.bounds_for_rect(layer.node_rect()),
             layer.opacity()
         ));
-        nodes(&layer.children, transform, out);
+        items(layer, transform, out);
     }
     let mut out = Vec::new();
-    walk_layer(&graph.root, ProjectiveTransform::identity(), &mut out);
+    walk_layer(
+        graph.root_layer().expect("a scene"),
+        ProjectiveTransform::identity(),
+        &mut out,
+    );
     out
 }
 
 // Whether the scene draws `text` through a layer of its own.
-fn text_has_layer(graph: &RenderGraph, text: &str) -> bool {
-    fn search(children: &[RenderNode], text: &str, in_layer: bool) -> Option<bool> {
-        children.iter().find_map(|child| match child {
-            RenderNode::Layer(layer) => search(&layer.children, text, layer.node_id.is_some()),
-            RenderNode::Inline(inline) => search(&inline.content, text, false),
-            RenderNode::Primitive(entry) => match &entry.node {
-                PrimitiveNode::Text(drawn) if drawn.text.text == text => Some(in_layer),
-                _ => None,
-            },
-            RenderNode::DrawRun(_) => None,
+fn text_has_layer(graph: &Scene, text: &str) -> bool {
+    fn search(layer: LayerRef<'_>, text: &str, in_layer: bool) -> Option<bool> {
+        layer.items().find_map(|item| match item {
+            ItemRef::Layer(layer) => search(layer, text, layer.node_id().is_some()),
+            ItemRef::Leaf(leaf) => search(leaf, text, false),
+            ItemRef::Text(drawn) if drawn.render_text.text() == text => Some(in_layer),
+            ItemRef::Text(_) | ItemRef::Draw(_) | ItemRef::Run(_) | ItemRef::Shape(_) => None,
         })
     }
-    search(&graph.root.children, text, true).expect("the text draws")
+    search(graph.root_layer().expect("a scene"), text, true).expect("the text draws")
 }
 
 #[test]
@@ -177,6 +185,69 @@ fn a_leaf_that_gains_and_loses_a_child_draws_as_a_fresh_scene_does() {
     }
 }
 
+// The key the cached pixels of the offscreen column of `graph` go by.
+fn cached(graph: &Scene) -> u64 {
+    fn find(layer: LayerRef<'_>) -> Option<LayerRef<'_>> {
+        if layer.isolation().explicit_offscreen {
+            return Some(layer);
+        }
+        layer.children().find_map(find)
+    }
+    find(graph.root_layer().expect("a scene"))
+        .expect("the offscreen column")
+        .target_content_hash()
+}
+
+const OFFSCREEN: GraphicsLayer = GraphicsLayer {
+    compositing_strategy: CompositingStrategy::Offscreen,
+    ..GraphicsLayer::DEFAULT
+};
+
+#[test]
+fn a_cached_layer_misses_when_a_leaf_it_draws_gains_a_child() {
+    let state: std::rc::Rc<Cell<Option<MutableState<bool>>>> = std::rc::Rc::new(Cell::new(None));
+    let slot = std::rc::Rc::clone(&state);
+    let mut composition = run_test_composition(move || {
+        let nested = cranpose_core::rememberMutableStateOf(|| false);
+        slot.set(Some(nested));
+        Column(
+            Modifier::empty().graphics_layer_value(OFFSCREEN),
+            ColumnSpec::default(),
+            move || {
+                Box(
+                    Modifier::empty().size_points(100.0, 40.0).background(FILL),
+                    BoxSpec::default(),
+                    move || {
+                        if nested.get() {
+                            Box(
+                                Modifier::empty()
+                                    .size_points(10.0, 10.0)
+                                    .background(Color::RED),
+                                BoxSpec::default(),
+                                || {},
+                            );
+                        }
+                    },
+                );
+            },
+        );
+    });
+    let root = composition.root().expect("root");
+    let mut graph = initial_graph(&mut composition, root, VIEWPORT);
+    let before = cached(&graph);
+    state.get().expect("state").set(true);
+    update_scene(&mut composition, root, VIEWPORT, &mut graph);
+    assert_ne!(
+        cached(&graph),
+        before,
+        "the column's cached pixels lack the new child, so its key changes"
+    );
+    assert_eq!(
+        picture(&graph),
+        picture(&fresh_graph(&mut composition, root))
+    );
+}
+
 #[test]
 fn a_cached_layer_misses_when_a_leaf_it_draws_changes_its_text() {
     let state: std::rc::Rc<Cell<Option<MutableState<&'static str>>>> =
@@ -186,10 +257,7 @@ fn a_cached_layer_misses_when_a_leaf_it_draws_changes_its_text() {
         let label = cranpose_core::rememberMutableStateOf(|| "alpha");
         slot.set(Some(label));
         Column(
-            Modifier::empty().graphics_layer_value(GraphicsLayer {
-                compositing_strategy: CompositingStrategy::Offscreen,
-                ..GraphicsLayer::default()
-            }),
+            Modifier::empty().graphics_layer_value(OFFSCREEN),
             ColumnSpec::default(),
             move || {
                 Text(label.get(), Modifier::empty(), TextStyle::default());
@@ -199,20 +267,6 @@ fn a_cached_layer_misses_when_a_leaf_it_draws_changes_its_text() {
     });
     let root = composition.root().expect("root");
     let mut graph = initial_graph(&mut composition, root, VIEWPORT);
-    let cached = |graph: &RenderGraph| {
-        fn find(layer: &LayerNode) -> Option<&LayerNode> {
-            if layer.isolation.explicit_offscreen {
-                return Some(layer);
-            }
-            layer.children.iter().find_map(|child| match child {
-                RenderNode::Layer(child) => find(child),
-                _ => None,
-            })
-        }
-        find(&graph.root)
-            .expect("the offscreen column")
-            .target_content_hash()
-    };
     let before = cached(&graph);
     let label = state.get().expect("state");
     // A text of the same width: only what the leaf draws changes.
@@ -234,4 +288,55 @@ fn a_cached_layer_misses_when_a_leaf_it_draws_changes_its_text() {
         picture(&graph),
         picture(&fresh_graph(&mut composition, root))
     );
+}
+
+// Labels that draw a background under their text and a border over it, one
+// in its parent's layer and one through a layer of its own. A change of the
+// string, the tint or both, an empty string and the way back draw as a
+// fresh scene does.
+#[test]
+fn a_label_between_its_own_draws_redraws_as_a_fresh_scene_does() {
+    type States = (MutableState<&'static str>, MutableState<Color>);
+    const GREEN: Color = Color(0.1, 0.6, 0.2, 1.0);
+    let states: std::rc::Rc<Cell<Option<States>>> = std::rc::Rc::new(Cell::new(None));
+    let slot = std::rc::Rc::clone(&states);
+    let mut composition = run_test_composition(move || {
+        let label = cranpose_core::rememberMutableStateOf(|| "label");
+        let tint = cranpose_core::rememberMutableStateOf(|| FILL);
+        slot.set(Some((label, tint)));
+        Column(Modifier::empty(), ColumnSpec::default(), move || {
+            let framed = |modifier: Modifier| {
+                modifier.background(tint.get()).border(
+                    1.0,
+                    Color(0.9, 0.2, 0.1, 1.0),
+                    RoundedCornerShape::uniform(2.0),
+                )
+            };
+            Text(label.get(), framed(Modifier::empty()), TextStyle::default());
+            let faded = Modifier::empty().graphics_layer_value(GraphicsLayer {
+                alpha: 0.5,
+                ..GraphicsLayer::default()
+            });
+            Text(label.get(), framed(faded), TextStyle::default());
+        });
+    });
+    let root = composition.root().expect("root");
+    let mut graph = initial_graph(&mut composition, root, VIEWPORT);
+    let (label, tint) = states.get().expect("label states");
+    for (text, color) in [
+        ("label", GREEN),
+        ("a longer label", GREEN),
+        ("short", FILL),
+        ("", FILL),
+        ("label", GREEN),
+    ] {
+        label.set(text);
+        tint.set(color);
+        update_scene(&mut composition, root, VIEWPORT, &mut graph);
+        assert_eq!(
+            picture(&graph),
+            picture(&fresh_graph(&mut composition, root)),
+            "{text:?}"
+        );
+    }
 }

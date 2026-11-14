@@ -97,35 +97,6 @@ fn group_anchor_disposal_keeps_dense_storage_for_hot_path_reuse() {
 }
 
 #[test]
-fn sparse_group_anchor_ids_do_not_grow_dense_registry_storage() {
-    let mut registry = AnchorRegistry::new();
-    let anchor = AnchorId {
-        id: 2_500_000,
-        generation: 1,
-    };
-    registry.next_anchor = anchor.id as usize + 1;
-
-    assert!(
-        registry
-            .set_state(anchor, AnchorState::Invalidated)
-            .is_none()
-    );
-    registry.set_active(anchor, 4);
-
-    assert_eq!(registry.active_index(anchor), Some(4));
-    assert_eq!(registry.slot_len(), 1);
-    assert_eq!(registry.active_len(), 1);
-    assert_eq!(registry.detached_len(), 0);
-    assert_eq!(registry.invalidated_len(), 0);
-    assert!(
-        registry.capacity() < 128,
-        "sparse group ids must not allocate dense registry storage: capacity={}",
-        registry.capacity()
-    );
-    assert_eq!(registry.validate_integrity(), Ok(()));
-}
-
-#[test]
 fn registry_integrity_rejects_free_active_anchor_id() {
     let mut registry = AnchorRegistry::new();
     let anchor = registry.allocate();

@@ -38,6 +38,14 @@ impl CoordinatorRect {
         }
     }
 
+    // Whether `other` names the same coordinator of the same node, with the
+    // same padding before it.
+    pub(crate) fn same_as(&self, other: &Self) -> bool {
+        Weak::ptr_eq(&self.parts, &other.parts)
+            && self.ordinal == other.ordinal
+            && self.padding == other.padding
+    }
+
     fn placed_rect(&self, node_size: Size) -> Option<Rect> {
         self.parts
             .upgrade()?

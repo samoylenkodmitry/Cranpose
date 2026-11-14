@@ -5,7 +5,7 @@
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use cranpose_render_common::graph::{DrawRunNode, PrimitivePhase, RenderGraph, RenderNode};
+use cranpose_render_common::graph::{DrawRunNode, PrimitivePhase, RenderNode};
 use cranpose_render_wgpu::{CapturedFrame, RenderStatsSnapshot};
 use cranpose_ui::{
     Alignment, ContentScale, Image,
@@ -217,7 +217,7 @@ fn an_image_of_another_blend_mode_draws_after_the_held_image_below_it() {
         sampling: ImageSampling::Nearest,
         src_rect: None,
     };
-    let graph = RenderGraph::new(support::layer_node(
+    let graph = support::layer_node(
         None,
         SIZE as f32,
         SIZE as f32,
@@ -241,7 +241,7 @@ fn an_image_of_another_blend_mode_draws_after_the_held_image_below_it() {
                 },
             ],
         ))],
-    ));
+    );
     for interiors_first in [true, false] {
         let Ok(mut renderer) = support::headless_renderer() else {
             return;
@@ -250,8 +250,8 @@ fn an_image_of_another_blend_mode_draws_after_the_held_image_below_it() {
             NO_INTERIORS_FIRST,
             (!interiors_first).then_some("1"),
         );
-        support::capture_graph(&mut renderer, graph.clone(), SIZE, SIZE);
-        let frame = support::capture_graph(&mut renderer, graph.clone(), SIZE, SIZE);
+        support::capture_graph(&mut renderer, &graph, SIZE, SIZE);
+        let frame = support::capture_graph(&mut renderer, &graph, SIZE, SIZE);
         cranpose_core::debug_toggles::set_debug_toggle(NO_INTERIORS_FIRST, None);
         assert_eq!(
             pixel(&frame, 20, 30),

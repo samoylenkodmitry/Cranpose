@@ -87,6 +87,27 @@ revision run takes about a minute; a base and one revision take about 10.
 Builds go in a worktree for each board beside the checkout, as two
 worktrees of one commit build different code, and stay there by commit.
 
+The hot-code lists name functions. A change that renames, inlines or
+removes a listed function leaves its code in flash until the lists are
+made again, and the frame reads slower at fewer instructions. Compare such
+a change with `--no-hot-code` among the revisions: every revision then
+builds with the lists off (`scripts/esp32/sdkconfig.no_hot_code`), all
+code runs from flash, and a placement shifts the whole of the flash code
+by a gap a seed picks. The run stops when two placements of a revision
+link to one image.
+
+A verdict needs a null leg: the base with one function no code calls,
+which moves code and changes no behaviour. `--null NAME` names it among
+the revisions (`NAME=COMMIT` names a leg). A screen's tolerance is the
+larger of the timer's step, 0.01 ms, and the largest difference of the null
+leg from the base. A revision loses on a screen when every placement reads
+above the base and the mean lies above the tolerance; it wins on the mirror
+of that; it holds when the mean lies inside the tolerance; otherwise the
+screen stays open and takes more placements. A run that lacks a screen, an
+instruction count or a placement decides nothing and exits with an error.
+`--unpaired` serves sides whose order files differ: a revision then loses
+when all its readings lie above all of the base's.
+
 ## Results
 
 2026-10-26. Frame is the time a frame takes from its start to its last

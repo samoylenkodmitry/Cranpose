@@ -1,9 +1,13 @@
+use cranpose_render_common::scene_store::SceneVersion;
+
 use crate::{
     collect::{ChildLayer, LayerScene},
+    frame::{Damage, DamageRects, PacketDamage},
     scene::{
         BackdropLayer, CompositorScene, DrawOp, EffectLayer, ImageDraw, RunDraw, ShadowDraw,
         TextDraw,
     },
+    target_state::TargetDrawn,
 };
 
 pub(crate) const MAX_FRAMES_IN_FLIGHT: usize = 2;
@@ -32,6 +36,12 @@ pub enum CancelReason {
     /// suspect device. One cancel per poisoning; the gate clears as it
     /// fires, so the next packet renders (see `DeviceErrorSentry`).
     DeviceError,
+    /// The device reported its loss: nothing is encoded on it until the
+    /// renderer moves to a new device.
+    DeviceLost,
+    /// The packet holds the draws of a part of the window, and the image it
+    /// went into needs more: the next packet holds every draw.
+    NeedsWhole,
 }
 
 /// What the present stage did with a packet. `NotRun` is the `Default` so a
@@ -59,20 +69,29 @@ pub(crate) struct FramePacket {
     pub(crate) root: Box<LayerScene>,
     pub(crate) overlay: Option<Box<LayerScene>>,
     pub(crate) clear: wgpu::Color,
-    // Whether the app held still, asking for no frame, between the frame
-    // before and this one.
-    pub(crate) held_still: bool,
+    // The generation of the debug toggles at the build. The present side
+    // compares frames by the value the producer culled by, so a toggle
+    // flipped before the draw refuses no packet.
+    pub(crate) debug_toggles: u64,
     // Whether a pointer was held on the app's controls for this frame.
     pub(crate) pointer_held: bool,
     // The scene update the packet was collected from: a frame drawn from the
     // update the frame before drew shows nothing new of the app's.
-    pub(crate) scene_update: u64,
+    pub(crate) scene_update: SceneVersion,
+    // What the frame changes against the packet before it.
+    pub(crate) damage: PacketDamage,
+    // Whether the frame was one to skip working out what it changes, while
+    // frames keep changing most of the window.
+    pub(crate) skipped: bool,
+    // The window rects the packet holds every draw within; `None` when it
+    // holds every draw of the scene.
+    pub(crate) culled: Option<DamageRects>,
 }
 
 impl FramePacket {
     // How the packet's scene moved since the frame that drew `drawn`, the
     // scene update before.
-    pub(crate) fn scene_motion(&self, drawn: Option<u64>) -> SceneMotion {
+    pub(crate) fn scene_motion(&self, drawn: Option<SceneVersion>) -> SceneMotion {
         if self.pointer_held {
             SceneMotion::Held
         } else if drawn == Some(self.scene_update) {
@@ -80,6 +99,15 @@ impl FramePacket {
         } else {
             SceneMotion::Moving
         }
+    }
+
+    // Whether a backdrop of the packet reads the page beneath it.
+    pub(crate) fn reads_page(&self) -> bool {
+        self.root.contains_backdrop()
+            || self
+                .overlay
+                .as_ref()
+                .is_some_and(|overlay| overlay.contains_backdrop())
     }
 }
 
@@ -117,11 +145,52 @@ pub struct PresentTimings {
     pub after_present_ns: i64,
 }
 
+impl RenderReturns {
+    // What a target that keeps its frames returns for `packet` once it drew
+    // the packet's damage over the frame before.
+    pub(crate) fn drawn_in_place(packet: FramePacket) -> Self {
+        Self {
+            target: Some(TargetDrawn {
+                damage: packet.damage.damage,
+                skipped: packet.skipped,
+                knew_before: packet.damage.since.is_some(),
+                unheld: false,
+                cleared: false,
+            }),
+            held: Some(HeldWindow {
+                oldest: packet.frame_id,
+                stand_ins: Damage::Part(DamageRects::default()),
+            }),
+            scene: Some(FrameSceneStorage {
+                root: packet.root,
+                overlay: packet.overlay,
+            }),
+            frame_id: packet.frame_id,
+            ..Self::default()
+        }
+    }
+}
+
+// The oldest frame a window's targets hold, and the parts of their frames
+// drawn with stand-ins: a window frame draws the damages since that frame
+// and those parts again, or whole when a frame may show one anywhere.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct HeldWindow {
+    pub(crate) oldest: u64,
+    pub(crate) stand_ins: Damage,
+}
+
 #[derive(Default)]
 pub(crate) struct RenderReturns {
     pub(crate) scene: Option<FrameSceneStorage>,
     pub(crate) frame_id: u64,
     pub(crate) outcome: PresentOutcome,
+    // How the frame went into a target that keeps its frames; `None` for a
+    // frame drawn into a texture that keeps none.
+    pub(crate) target: Option<TargetDrawn>,
+    // The oldest packet the window's next frame finds in its target, and
+    // the parts it draws again; `None` when a target holds none known.
+    pub(crate) held: Option<HeldWindow>,
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) timings: PresentTimings,
 }

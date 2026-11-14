@@ -1,6 +1,7 @@
 #![deny(missing_docs)]
 #![doc = include_str!("../README.md")]
 
+mod dev_options;
 mod focus_reveal;
 mod fps_monitor;
 mod frame_rate_boost;
@@ -26,8 +27,8 @@ use std::{
 };
 
 use cranpose_core::{
-    Applier, Composition, MemoryApplier, NodeError, NodeId, NodeMarks, SceneNodeAttachmentScratch,
-    collections::map::HashSet, enter_event_handler_scope, location_key, run_in_mutable_snapshot,
+    Applier, Composition, MemoryApplier, NodeError, NodeId, collections::map::HashSet,
+    enter_event_handler_scope, location_key, run_in_mutable_snapshot,
 };
 pub use cranpose_foundation::{
     DEFAULT_ROTARY_SCROLL_FACTOR_DP, Modifiers, PointerId, PointerSource, RotaryScrollEvent,
@@ -44,6 +45,7 @@ use cranpose_ui::{
 };
 pub use cranpose_ui::{Key, KeyEvent, KeyEventType, NativeKeyEvent};
 use cranpose_ui_graphics::{Point, PointerIcon, Rect, Size};
+pub use dev_options::{DevOptions, FramePacingMode};
 pub use fps_monitor::FpsStats;
 pub use frame_rate_boost::FrameRateBoost;
 pub use frame_scheduler::FrameScheduler;
@@ -217,8 +219,8 @@ pub(crate) struct ShellApp {
     pub(crate) text_input_routes: Rc<RefCell<TextInputRoutes>>,
     pub(crate) text_input_router_installed: bool,
     pub(crate) window_roots_seen: Option<u64>,
-    /// Frames with a rebuilt scene since draw observations were last pruned.
-    pub(crate) rebuilt_frames_since_observation_prune: u32,
+    // Room for the nodes whose records the scenes dropped in a frame.
+    pub(crate) left_nodes: Vec<NodeId>,
     /// The installed-font generation the renderers last took in.
     #[cfg(feature = "installed-fonts")]
     pub(crate) installed_fonts: usize,
@@ -237,26 +239,11 @@ where
 {
     pub(crate) app: ShellApp,
     pub(crate) surfaces: Vec<RootSurface<R>>,
-    pub(crate) routing_scratch: SurfaceRoutingScratch,
+    pub(crate) routing_scratch: surface::SurfaceRoutingScratch,
     pub(crate) pending_dirty_nodes: Vec<NodeId>,
     pub(crate) pending_layer_property_nodes: Vec<NodeId>,
     pub(crate) geometry_scene_nodes: cranpose_ui::GeometrySceneNodes,
-}
-
-#[derive(Default)]
-pub(crate) struct SurfaceRoutingScratch {
-    pub(crate) attached: Vec<Option<NodeId>>,
-    pub(crate) owners: Vec<Option<NodeId>>,
-    pub(crate) seen: HashSet<(usize, NodeId)>,
-    pub(crate) attachment: SceneNodeAttachmentScratch,
-    pub(crate) window_roots: cranpose_ui::WindowRootRoutingScratch,
-    /// The nodes a layout lane routing gave the surfaces, while the moved
-    /// lane after it is routed.
-    pub(crate) laid_out: NodeMarks,
-    /// Each surface's count of layout lane nodes before that routing.
-    pub(crate) laid_out_starts: Vec<usize>,
-    /// The moved nodes the moved lane routes.
-    pub(crate) moved: Vec<NodeId>,
+    pub(crate) rest: shell_frame::RestTrim,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -322,47 +309,6 @@ fn report_update_stages(threshold_ms: f64, stages: &UpdateStages, outcome: Updat
         outcome.reconcile_attempted,
         outcome.reconcile_changed
     );
-}
-
-/// How the shell paces its frames against the display.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum FramePacingMode {
-    /// Pace frames to the display refresh interval. The production default:
-    /// animations advance once per vsync instead of re-rendering uncapped.
-    #[default]
-    Vsync,
-    /// Cap frames at 60 per second with a timer, whatever the display refresh rate is.
-    Hard60,
-    /// Cap frames at 120 per second with a timer, whatever the display refresh rate is.
-    Hard120,
-    /// Render as fast as possible. For perf harnesses and robot drivers that
-    /// measure work throughput; saturates the GPU if used in a real app.
-    NoVsync,
-}
-
-impl FramePacingMode {
-    /// Every pacing mode, in the order the dev overlay lists them.
-    pub const ALL: [Self; 4] = [Self::Vsync, Self::Hard60, Self::Hard120, Self::NoVsync];
-
-    /// Returns the short name the dev overlay shows for this mode.
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Vsync => "VSync",
-            Self::Hard60 => "60fps",
-            Self::Hard120 => "120fps",
-            Self::NoVsync => "NoVSync",
-        }
-    }
-
-    /// Returns the frames per second this mode caps at with a timer, or `None` when the mode sets
-    /// no cap.
-    pub fn target_fps(self) -> Option<u32> {
-        match self {
-            Self::Hard60 => Some(60),
-            Self::Hard120 => Some(120),
-            Self::Vsync | Self::NoVsync => None,
-        }
-    }
 }
 
 /// What the shell needs from the platform loop next: an update now, a display frame, or a wake at a
@@ -432,24 +378,6 @@ impl FrameSchedule {
             driver.clear_wake();
         }
     }
-}
-
-/// Development options for debugging and performance monitoring.
-///
-/// These are rendered directly by the renderer (not via composition)
-/// to avoid affecting performance measurements.
-#[derive(Clone, Debug, Default)]
-pub struct DevOptions {
-    /// Show FPS counter overlay
-    pub fps_counter: bool,
-    /// Show recomposition count
-    pub recomposition_counter: bool,
-    /// Show layout timing breakdown
-    pub layout_timing: bool,
-    /// Show buttons in the dev overlay that switch the frame pacing mode.
-    pub frame_pacing_controls: bool,
-    /// How the shell paces its frames.
-    pub frame_pacing_mode: FramePacingMode,
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -653,7 +581,7 @@ where
             text_input_routes: Rc::new(RefCell::new(TextInputRoutes::default())),
             text_input_router_installed: false,
             window_roots_seen: None,
-            rebuilt_frames_since_observation_prune: 0,
+            left_nodes: Vec::new(),
             #[cfg(feature = "installed-fonts")]
             installed_fonts: 0,
         };
@@ -665,10 +593,11 @@ where
                 buffer_size,
                 viewport,
             )],
-            routing_scratch: SurfaceRoutingScratch::default(),
+            routing_scratch: surface::SurfaceRoutingScratch::default(),
             pending_dirty_nodes: Vec::new(),
             pending_layer_property_nodes: Vec::new(),
             geometry_scene_nodes: cranpose_ui::GeometrySceneNodes::default(),
+            rest: shell_frame::RestTrim::begun(),
         };
         shell.process_frame();
         shell
@@ -815,11 +744,8 @@ where
             .ok()
     }
 
-    /// The `drag_and_drop_target` under `point` and where the point falls in
-    /// that target's surface. A point on the screen is looked up in every
-    /// surface whose window position the platform told, later windows
-    /// first and the primary last; a point without one only in `source`,
-    /// the surface holding the press.
+    // The `drag_and_drop_target` under `point` and where it falls in that target's surface: in
+    // surfaces with a window position, later ones first and the primary last; else in `source`.
     pub(crate) fn drag_and_drop_target_at(
         &self,
         point: cranpose_ui::DragAndDropPoint,
@@ -898,27 +824,6 @@ where
         }
     }
 
-    /// Set development options for debugging and performance monitoring.
-    ///
-    /// The FPS counter and other overlays are rendered directly by the renderer
-    /// (not via composition) to avoid affecting performance measurements.
-    pub fn set_dev_options(&mut self, options: DevOptions) {
-        self.app.dev_options = options;
-        self.invalidate_dev_overlay_text();
-        self.app.app_context.enter(request_render_invalidation);
-        self.mark_all_dirty();
-    }
-
-    /// Get a reference to the current dev options.
-    pub fn dev_options(&self) -> &DevOptions {
-        &self.app.dev_options
-    }
-
-    /// Returns the frame pacing mode set in the dev options.
-    pub fn frame_pacing_mode(&self) -> FramePacingMode {
-        self.app.dev_options.frame_pacing_mode
-    }
-
     /// Returns the presented-frame cadence in frames per second, as the dev overlay shows it.
     pub fn current_fps(&self) -> f32 {
         self.app.fps_monitor.current_fps()
@@ -957,18 +862,6 @@ where
         let started = self.app.start_time + std::time::Duration::from_nanos(frame_started_nanos);
         let finished = self.app.start_time + std::time::Duration::from_nanos(frame_finished_nanos);
         self.record_presented_frame(started, finished);
-    }
-
-    /// Sets the frame pacing mode and redraws the dev overlay. Platforms read the mode back with
-    /// `frame_pacing_mode`.
-    pub fn set_frame_pacing_mode(&mut self, mode: FramePacingMode) {
-        if self.app.dev_options.frame_pacing_mode == mode {
-            return;
-        }
-        self.app.dev_options.frame_pacing_mode = mode;
-        self.invalidate_dev_overlay_text();
-        self.app.app_context.enter(request_render_invalidation);
-        self.mark_all_dirty();
     }
 
     /// Where the dev overlay draws the control for `mode`, in logical pixels.
@@ -1050,17 +943,17 @@ where
         })
     }
 
-    /// Returns whether the shell has work to run: queued UI tasks, state changes, layout, semantics
-    /// or an active animation.
+    /// Returns whether the shell has work to run: queued UI tasks, state changes, layout, semantics,
+    /// an active animation or the trim at rest, once its rest has passed.
     pub fn needs_update(&self) -> bool {
         self.app.app_context.enter(|| {
             self.app
                 .needs_ui_update_in_context(self.any_surface_dirty())
-        })
+        }) || self.rest.passed()
     }
 
-    /// Returns whether queued UI, state, layout, semantics, or due cursor work can be processed
-    /// without advancing the frame clock. Awaiting a display frame alone is false.
+    /// Returns whether queued UI, state, layout, semantics, due cursor work or a due trim at rest can
+    /// be processed without advancing the frame clock. Awaiting a display frame alone is false.
     pub fn needs_update_without_frame(&self) -> bool {
         self.app.app_context.enter(|| {
             self.any_surface_dirty()
@@ -1073,7 +966,7 @@ where
                     .surfaces
                     .iter()
                     .any(|surface| surface.renderer_warmup_due(&self.app))
-        })
+        }) || self.rest.passed()
     }
 
     /// Returns true when the runtime holds work for the UI thread: posted tasks,
@@ -1250,7 +1143,8 @@ where
     }
 
     fn compute_frame_schedule(&self) -> FrameSchedule {
-        self.surfaces[0].compute_frame_schedule(&self.app, self.any_surface_dirty())
+        let schedule = self.surfaces[0].compute_frame_schedule(&self.app, self.any_surface_dirty());
+        self.rest.schedule(schedule)
     }
 
     /// Computes the frame schedule of the primary surface, stores it in the surface's scheduler and
@@ -1393,7 +1287,7 @@ where
             let result = self.process_frame_in_context(composed);
             stages.reached();
             log_update_stage_telemetry(&stages, outcome);
-            self.end_update(result.structure_changed);
+            self.end_update(result, frame_time);
             result
         })
     }

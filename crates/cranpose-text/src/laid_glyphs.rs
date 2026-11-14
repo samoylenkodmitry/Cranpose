@@ -140,6 +140,33 @@ impl LaidGlyphs {
         }
     }
 
+    // Keeps `shaped` in the storage of `spare` when nothing else holds that,
+    // it holds as many glyphs and every glyph packs and draws at its pen, as
+    // a counter's text keeps its length from one number to the next.
+    pub(crate) fn new_in(shaped: &ShapedGlyphs, spare: Self) -> Self {
+        if let Glyphs::Packed(mut packed) = spare.glyphs
+            && packed.len() == shaped.len()
+            && shaped
+                .offsets()
+                .iter()
+                .all(|offset| *offset == GlyphOffset::default())
+            && let Some(slots) = Arc::get_mut(&mut packed)
+        {
+            let mut fits = true;
+            for (slot, glyph) in slots.iter_mut().zip(shaped.iter()) {
+                let (glyph, fit) = PackedGlyph::pack(glyph);
+                (*slot, fits) = (glyph, fits & fit);
+            }
+            if fits {
+                return Self {
+                    glyphs: Glyphs::Packed(packed),
+                    offsets: None,
+                };
+            }
+        }
+        Self::new(shaped)
+    }
+
     pub(crate) fn len(&self) -> usize {
         self.all().len()
     }

@@ -216,6 +216,21 @@ impl ProjectiveTransform {
         }
     }
 
+    /// Returns the transform that translates positions by (`tx`, `ty`) and
+    /// then applies `self`: `ProjectiveTransform::translation(tx, ty).then(self)`.
+    pub fn after_translation(self, tx: f32, ty: f32) -> Self {
+        // The sums run in `multiply_matrices`' order; the other cells keep
+        // their values, which the product would only add zeros to.
+        let [[a, b, c], [d, e, f], [g, h, i]] = self.matrix;
+        Self {
+            matrix: [
+                [a, b, a * tx + b * ty + c],
+                [d, e, d * tx + e * ty + f],
+                [g, h, g * tx + h * ty + i],
+            ],
+        }
+    }
+
     /// Maps destination coordinates back to the source, unless the matrix is singular.
     pub fn inverse(self) -> Option<Self> {
         let m = self.matrix;
@@ -269,6 +284,17 @@ impl ProjectiveTransform {
     /// Returns the row-major homogeneous matrix.
     pub fn matrix(self) -> [[f32; 3]; 3] {
         self.matrix
+    }
+
+    /// The translation this transform moves by, when it does nothing else.
+    pub fn as_translation(self) -> Option<Point> {
+        let [[a, b, x], [c, d, y], [p, q, w]] = self.matrix;
+        // `abs() <= 0.0` holds for exactly the values that equal zero, both
+        // signs, as an exact compare with the identity's entries would.
+        [a - 1.0, b, c, d - 1.0, p, q, w - 1.0]
+            .iter()
+            .all(|entry| entry.abs() <= 0.0)
+            .then_some(Point { x, y })
     }
 
     /// Maps a position into destination coordinates.
@@ -403,9 +429,6 @@ impl ProjectiveTransform {
         }
     }
 
-    /// [`Self::bounds_for_rect`] for a transform that skews, turns or has a
-    /// perspective, kept out of line: a rectangle that stays a rectangle
-    /// pays for one check.
     #[inline(never)]
     fn turned_bounds_for_rect(&self, rect: Rect) -> Rect {
         let [_, _, [px, py, w]] = self.matrix;

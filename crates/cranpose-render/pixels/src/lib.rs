@@ -3,6 +3,7 @@
 
 mod damage;
 mod draw;
+mod frame;
 mod growth_trim;
 mod pipeline;
 mod pixel;
@@ -10,6 +11,7 @@ mod rewrite;
 /// The retained scene and hit regions of the pixel renderer.
 pub mod scene;
 mod scene_item;
+mod shift;
 pub mod sprites;
 mod style;
 mod surface;
@@ -19,11 +21,11 @@ mod text_draws;
 
 pub use cranpose_render_common::rgb565::Rgb565Order;
 use cranpose_render_common::{
-    RenderScene, Renderer, SceneUpdates,
+    Renderer, SceneUpdates,
     rgb565::{Rgb565Be, Rgb565Le},
+    scene_store::{RecordEvents, SceneVersion},
     text_fonts::TextFonts,
 };
-use cranpose_ui::LayoutTree;
 use cranpose_ui_graphics::{MemoryHeadroom, Size};
 pub use draw::draw_scene;
 use pixel::Pixel;
@@ -67,6 +69,10 @@ pub struct Picture {
     // Where each item of `raster` can draw in the frame, in its order: each
     // strip a host draws passes over the items that miss it.
     reach: Vec<Option<draw::ClipBounds>>,
+    // The version of the store the scene was brought up to.
+    synced: Option<SceneVersion>,
+    // The subtrees an update in place pushes again, kept for its room.
+    roots: Vec<pipeline::PushRoot>,
 }
 
 fn valid_scale(scale: f32) -> f32 {
@@ -102,8 +108,10 @@ impl PixelsRenderer {
     /// the embedded default font when the `embedded-default-font` feature is
     /// on, and draws no text otherwise.
     pub fn with_fonts(fonts: &[&'static [u8]]) -> Self {
+        let mut scene = Scene::new();
+        scene.follow(RecordEvents::STAMPS);
         Self {
-            scene: Scene::new(),
+            scene,
             text: draw::TextRaster::new(TextFonts::from_fonts_or_default(fonts)),
             app_context: None,
         }
@@ -136,16 +144,17 @@ impl PixelsRenderer {
         scale: f32,
         previous: Option<&scene::RasterScene>,
     ) {
-        match self.scene.graph.as_ref() {
-            Some(graph) => pipeline::fill_raster_scene(
+        if self.scene.root_layer().is_some() {
+            pipeline::fill_raster_scene(
                 raster,
-                graph,
+                self.scene.store(),
                 self.scene.diagnostics(),
                 scale,
                 previous,
                 &self.text,
-            ),
-            None => raster.clear(),
+            );
+        } else {
+            raster.clear();
         }
     }
 
@@ -162,7 +171,10 @@ impl PixelsRenderer {
         changed: &mut Vec<PixelRect>,
     ) {
         let scale = valid_scale(scale);
+        let store = self.scene.store();
+        let now = Some(store.version());
         if let Some(reach) = self.update_picture_in_place(picture, width, height, scale) {
+            picture.synced = now;
             changed.clear();
             changed.extend(picture.changed.iter().copied().map(pixel_rect));
             match reach {
@@ -180,6 +192,22 @@ impl PixelsRenderer {
             }
             return;
         }
+        self.redraw_picture(picture, width, height, scale, changed);
+        picture.synced = now;
+    }
+
+    // Builds `picture`'s scene again and puts into `changed` the areas that
+    // differ from the scene before. Out of line: most frames update the
+    // scene in place.
+    #[inline(never)]
+    fn redraw_picture(
+        &self,
+        picture: &mut Picture,
+        width: u32,
+        height: u32,
+        scale: f32,
+        changed: &mut Vec<PixelRect>,
+    ) {
         // An update in place that gave up after it changed part of the scene
         // left the areas it changed: the scene holds those changes already.
         let updated = (!picture.changed.is_empty()).then(|| std::mem::take(&mut picture.changed));
@@ -228,9 +256,10 @@ impl PixelsRenderer {
     // Brings `picture`'s scene up to the current scene in place, and puts
     // the areas the changed layers changed into `picture.changed`. `None`
     // when the scene must be built again: the first time, after a change of
-    // size, scale or light, or of the root layer, or when a layer's records
-    // no longer lie in one run, with the areas the update changed before it
-    // stopped in `picture.changed`.
+    // size, scale or light, or of the root layer, when the picture holds
+    // another scene than the one before the store's last update, or when a
+    // layer's records no longer lie in one run, with the areas the update
+    // changed before it stopped in `picture.changed`.
     fn update_picture_in_place(
         &self,
         picture: &mut Picture,
@@ -239,13 +268,19 @@ impl PixelsRenderer {
         scale: f32,
     ) -> Option<pipeline::UpdatedReach> {
         picture.changed.clear();
-        let (Some(raster), Some(graph)) = (picture.raster.as_mut(), self.scene.graph.as_ref())
-        else {
+        let (Some(raster), Some(_)) = (picture.raster.as_mut(), self.scene.root_layer()) else {
             return None;
         };
         if (picture.width, picture.height, picture.scale) != (width, height, scale) {
             return None;
         }
+        let store = self.scene.store();
+        let synced = picture.synced?;
+        let changed = pipeline::Changed {
+            store,
+            records: store.stamps_since(Some(synced))?,
+            updates: store.update().since(synced.update()),
+        };
         let window = draw::ClipBounds {
             min_x: 0,
             min_y: 0,
@@ -256,9 +291,10 @@ impl PixelsRenderer {
             scene: raster,
             reach: &mut picture.reach,
             rewrite: &mut picture.rewrite,
+            roots: &mut picture.roots,
         }
         .run(
-            graph,
+            changed,
             self.scene.diagnostics(),
             scale,
             &self.text,
@@ -412,16 +448,6 @@ impl Renderer for PixelsRenderer {
 
     fn scene_mut(&mut self) -> &mut Self::Scene {
         &mut self.scene
-    }
-
-    fn rebuild_scene(
-        &mut self,
-        layout_tree: &LayoutTree,
-        _viewport: Size,
-    ) -> Result<(), Self::Error> {
-        self.scene.clear();
-        pipeline::render_layout_tree(layout_tree.root(), &mut self.scene);
-        Ok(())
     }
 
     fn rebuild_scene_from_applier(

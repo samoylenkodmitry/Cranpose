@@ -4,7 +4,7 @@
 //! at half opacity and the projective blit of a turned one.
 
 use cranpose_render_common::{
-    graph::{DrawRunNode, PrimitivePhase, ProjectiveTransform, RenderGraph, RenderNode},
+    graph::{DrawRunNode, LayerNode, PrimitivePhase, ProjectiveTransform, RenderNode},
     layer_transform::layer_transform_to_parent,
 };
 use cranpose_ui_graphics::{DrawScope, DrawScopeDefault, GraphicsLayer, Point, Rect, Size};
@@ -28,7 +28,7 @@ fn shapes() -> RenderNode {
 
 /// The shapes on the page, again in a layer at half opacity, and again in
 /// that layer turned about its centre.
-fn scene() -> RenderGraph {
+fn scene() -> LayerNode {
     let bounds = Rect::from_size(Size::new(SIZE as f32, SIZE as f32));
     let faded = GraphicsLayer {
         alpha: 0.5,
@@ -68,7 +68,7 @@ fn folded_stages_draw_what_stages_the_device_specializes_draw() {
         let Ok(mut renderer) = support::headless_renderer() else {
             return;
         };
-        support::capture_graph(&mut renderer, scene(), SIZE, SIZE).pixels
+        support::capture_graph(&mut renderer, &scene(), SIZE, SIZE).pixels
     };
     assert!(
         cranpose_render_wgpu::shader_stages_folded() > before,
@@ -82,7 +82,7 @@ fn folded_stages_draw_what_stages_the_device_specializes_draw() {
     // drawing while this one is on.
     let shared = support::headless_renderer().map(|mut renderer| {
         cranpose_core::debug_toggles::set_debug_toggle(NO_SHADER_FOLD, Some("1"));
-        let pixels = support::capture_graph(&mut renderer, scene(), SIZE, SIZE).pixels;
+        let pixels = support::capture_graph(&mut renderer, &scene(), SIZE, SIZE).pixels;
         cranpose_core::debug_toggles::set_debug_toggle(NO_SHADER_FOLD, None);
         pixels
     });

@@ -187,6 +187,12 @@ A budget of 0 leaves every sampled function to the order file, the ones of
 the IRAM list too, which stay in IRAM. The E32R35T's busier screen joins the
 order's profiles, which its IRAM list has no room for.
 
+The lists name functions, so a change that renames, inlines or removes a
+listed function leaves its code in flash. `hot_code.py --check BASE_ELF ELF
+LIST...` names the patterns of the given list and order files that matched
+a function of the base image and match none of the other image, and exits
+with an error when it finds one.
+
 The budget counts the functions' code; their literals take a few KB more in
 the section, 7 KB on the ES3C35P. The board profiles run without this
 component (`scripts/esp32/sdkconfig.no_hot_code`), so their samples show what

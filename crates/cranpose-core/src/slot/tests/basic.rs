@@ -381,7 +381,6 @@ fn debug_stats_report_explicit_v2_table_local_counts() {
         stats.group_capacity * stats.group_record_size
     );
     assert_eq!(stats.anchor_slot_count, 1);
-    assert_eq!(stats.anchor_sparse_count, 0);
     assert_eq!(stats.detached_anchor_count, 0);
     assert_eq!(stats.invalidated_anchor_count, 0);
     assert_eq!(stats.free_anchor_count, 0);

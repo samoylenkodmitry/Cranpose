@@ -1,4 +1,8 @@
-pub(crate) fn android_uses_present_thread(requested: Option<&str>, available_cores: usize) -> bool {
+// Whether a device's frames present on a thread of their own: four cores or
+// more leave a core for the present thread while the UI prepares the next
+// frame. The CRANPOSE_PRESENT_THREAD diagnostic decides when set.
+
+pub(crate) fn uses_present_thread(requested: Option<&str>, available_cores: usize) -> bool {
     match requested.map(str::trim) {
         Some("1" | "true" | "on") => true,
         Some("0" | "false" | "off") => false,
@@ -6,13 +10,13 @@ pub(crate) fn android_uses_present_thread(requested: Option<&str>, available_cor
     }
 }
 
-// Whether this device presents on a thread of its own: the
-// CRANPOSE_PRESENT_THREAD diagnostic decides when set, else the core count.
+// The rule on this device.
 #[cfg(target_os = "android")]
-pub(crate) fn android_present_thread(available_cores: usize) -> bool {
+pub(crate) fn presents_on_thread() -> bool {
+    let cores = std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get);
     cranpose_core::DIAGNOSTICS
         .present_thread
-        .with(|requested| android_uses_present_thread(requested, available_cores))
+        .with(|requested| uses_present_thread(requested, cores))
 }
 
 #[cfg(test)]

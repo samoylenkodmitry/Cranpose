@@ -1,4 +1,7 @@
-use cranpose_core::{NodeId, collections::map::HashSet};
+use cranpose_core::{
+    NodeId,
+    collections::{growth_slack::GrowthSlack, map::HashSet},
+};
 
 pub(super) struct DirtyNodeSet {
     pub(super) dirty_nodes: HashSet<NodeId>,
@@ -34,6 +37,11 @@ impl DirtyNodeSet {
             return;
         }
         output.extend(self.dirty_nodes.drain());
+    }
+
+    // Gives back the room a burst of nodes took.
+    pub(super) fn trim(&mut self) {
+        self.dirty_nodes.trim_growth_slack();
     }
 
     pub(super) fn dirty_nodes_snapshot(&self) -> Vec<NodeId> {

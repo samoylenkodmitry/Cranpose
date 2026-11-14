@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use cranpose_core::NodeId;
-use cranpose_ui::{LayoutNodeData, LayoutNodeKind, Modifier, Point, Rect};
+use cranpose_ui::{LayoutNodeData, LayoutNodeKind, Point, Rect};
 
 use super::*;
 
@@ -16,7 +16,6 @@ fn layout(id: NodeId, children: Vec<LayoutBox>) -> LayoutBox {
         },
         Point::default(),
         LayoutNodeData::new(
-            Modifier::empty().padding(8.0),
             Default::default(),
             Rc::new(Default::default()),
             None,

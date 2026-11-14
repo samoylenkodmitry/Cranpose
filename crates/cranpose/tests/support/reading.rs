@@ -9,7 +9,7 @@ use cranpose_animation::{
 
 /// A number that counts up one every frame.
 #[composable]
-fn reading() -> State<f32> {
+pub fn reading() -> State<f32> {
     let transition = rememberInfiniteTransition("reading");
     let spec = infiniteRepeatable(
         AnimationSpec::linear(100_000),
@@ -26,6 +26,20 @@ pub fn ComposedReading(style: TextStyle) {
     Text(
         format!("Reading {}", count as u32),
         Modifier::empty(),
+        style,
+    );
+}
+
+// The number in a `Text` in `style` over a background inside a border, as
+// a badge or a price tag shows it, composed again each frame.
+#[composable]
+pub fn FramedReading(style: TextStyle) {
+    let count = reading().value();
+    Text(
+        format!("Reading {}", count as u32),
+        Modifier::empty()
+            .background(Color::from_rgb_u8(30, 70, 140))
+            .border(1.0, Color::WHITE, RoundedCornerShape::uniform(4.0)),
         style,
     );
 }

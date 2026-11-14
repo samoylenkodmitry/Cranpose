@@ -387,7 +387,9 @@ impl SlotsHost {
     }
 
     pub(crate) fn abandon_active_pass(&self) {
-        self.inner.borrow_mut().active_pass = None;
+        let mut inner = self.inner.borrow_mut();
+        inner.active_pass = None;
+        inner.table.settle_insert_run();
     }
 
     pub(crate) fn with_write_session<R>(

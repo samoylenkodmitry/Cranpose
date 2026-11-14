@@ -105,7 +105,7 @@ fn paint_text_over_target<P: Pixel>(
 fn raster_request(draw: &TextDraw, part: Rect, raster_rect: Rect) -> TextRasterRequest<'_> {
     TextRasterRequest::new(
         &draw.layout,
-        draw.text.as_ref(),
+        &*draw.text,
         part,
         &draw.text_style,
         draw.color,

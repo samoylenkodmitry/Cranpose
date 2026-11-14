@@ -4,7 +4,7 @@ use cranpose_ui_graphics::{Point, Rect};
 use crate::{offscreen::COMPOSITION_BYTES_PER_PIXEL, scene::SnapAnchor};
 
 const QUAD_AXIS_ALIGNMENT_TOLERANCE: f32 = 1e-4;
-const DEVICE_SNAP_SUBPIXEL_STEPS: f64 = 16.0;
+pub(crate) const DEVICE_SNAP_SUBPIXEL_STEPS: f32 = 16.0;
 
 pub(crate) fn offscreen_byte_size(width: u32, height: u32) -> u64 {
     (width as u64) * (height as u64) * COMPOSITION_BYTES_PER_PIXEL
@@ -80,7 +80,7 @@ pub(crate) fn canonicalize_device_coordinate(value: f32) -> f32 {
     // and the scaled value rounds exactly through `f64`, so this is the
     // `f64` snap's value, without its multiply and divide, for every value
     // whose scaled form is finite.
-    let steps = DEVICE_SNAP_SUBPIXEL_STEPS as f32;
+    let steps = DEVICE_SNAP_SUBPIXEL_STEPS;
     let scaled = value * steps;
     if !scaled.is_finite() {
         return value;
@@ -175,8 +175,8 @@ pub(crate) fn snapped_anchor_device_origin(anchor: SnapAnchor, root_scale: f32) 
     let device_pixel_step = anchor_device_pixel_step(anchor);
     let snapped = |origin: f32| {
         let snap_units = f64::from(origin) * f64::from(root_scale) / f64::from(device_pixel_step);
-        let canonical_snap_units =
-            round_half_away(snap_units * DEVICE_SNAP_SUBPIXEL_STEPS) / DEVICE_SNAP_SUBPIXEL_STEPS;
+        let steps = f64::from(DEVICE_SNAP_SUBPIXEL_STEPS);
+        let canonical_snap_units = round_half_away(snap_units * steps) / steps;
         (round_half_away(canonical_snap_units) * f64::from(device_pixel_step)) as f32
     };
     Point::new(snapped(anchor.origin.x), snapped(anchor.origin.y))
@@ -199,8 +199,8 @@ pub(crate) fn snap_delta_for_anchor(anchor: SnapAnchor, root_scale: f32) -> Poin
         let root_scale = f64::from(root_scale);
         let device_pixel_step = f64::from(device_pixel_step);
         let snap_units = f64::from(origin) * root_scale / device_pixel_step;
-        let canonical_snap_units =
-            round_half_away(snap_units * DEVICE_SNAP_SUBPIXEL_STEPS) / DEVICE_SNAP_SUBPIXEL_STEPS;
+        let steps = f64::from(DEVICE_SNAP_SUBPIXEL_STEPS);
+        let canonical_snap_units = round_half_away(snap_units * steps) / steps;
         let snapped_logical =
             round_half_away(canonical_snap_units) * device_pixel_step / root_scale;
         (snapped_logical - f64::from(origin)) as f32

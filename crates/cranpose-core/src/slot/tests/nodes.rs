@@ -281,7 +281,7 @@ fn node_record(id: NodeId, parent_id: Option<NodeId>) -> NodeRecord {
     NodeRecord {
         owner: AnchorId::INVALID,
         id,
-        parent_id,
+        parent_id: crate::PackedNodeId::from(parent_id),
         generation: 0,
         source: crate::slot::BRANCH_PATH_ROOT,
         lifecycle: NodeLifecycle::Active,

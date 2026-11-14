@@ -1,7 +1,7 @@
 //! Read-only handles on the positions of a [`ModifierNodeChain`], and the
 //! iterator over them.
 
-use super::{ModifierNode, ModifierNodeChain, NodeCapabilities, NodePath};
+use super::{ModifierNode, ModifierNodeChain, NodeCapabilities, NodePath, PlainElement, PlainFns};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TraversalDirection {
@@ -90,8 +90,25 @@ impl ModifierChainNodeRef<'_> {
         }
     }
 
+    /// The table and the words of the plain element at this position.
+    #[inline]
+    pub fn plain_words(&self) -> Option<(&'static PlainFns, &[u32])> {
+        let path = self.path()?;
+        path.delegates()
+            .is_empty()
+            .then(|| self.chain.plain_words(path.entry()))
+            .flatten()
+    }
+
+    /// The value of the plain element at this position, when it is an `E`.
+    #[inline]
+    pub fn plain<E: PlainElement>(&self) -> Option<E> {
+        let (fns, words) = self.plain_words()?;
+        fns.read(words)
+    }
+
     /// Provides access to the node via a closure, properly handling RefCell borrows.
-    /// Returns None for sentinel nodes.
+    /// Returns None for sentinel nodes and for plain elements, which have no node.
     pub fn with_node<R>(&self, f: impl FnOnce(&dyn ModifierNode) -> R) -> Option<R> {
         self.chain.with_path(self.path()?, f)
     }

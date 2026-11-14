@@ -2349,3 +2349,45 @@ fn a_bubble_after_a_move_in_the_same_batch_marks_the_new_ancestors() {
         "the moved node's new parent holds a dirty descendant"
     );
 }
+
+#[test]
+fn a_bubble_after_a_first_attach_in_the_same_batch_marks_the_new_ancestors() {
+    let mut applier = test_applier();
+    let (grandparent, parent, _) = dirty_flag_tree(&mut applier);
+    let top = applier.create(Box::new(DirtyFlagNode::default()));
+    let under = applier.create(Box::new(DirtyFlagNode::default()));
+    insert_child_with_reparenting(&mut applier, top, under);
+    for id in [grandparent, parent, top, under] {
+        applier
+            .with_node::<DirtyFlagNode, _>(id, |node| node.needs_semantics.set(false))
+            .expect("tree node exists");
+    }
+
+    // One batch: a semantics bubble passes `top`, which has no parent yet,
+    // `top` becomes a child of `parent`, and a second semantics bubble from
+    // `under` stops at `top`, which the first one passed: the attach has
+    // carried the first bubble on from `parent`.
+    let mut commands = CommandQueue::default();
+    commands.push(Command::BubbleDirty {
+        node_id: under,
+        bubble: DirtyBubble::SEMANTICS,
+    });
+    commands.push(Command::AttachChild {
+        parent_id: parent,
+        child_id: top,
+        insert_index: None,
+        bubble: DirtyBubble::LAYOUT_AND_MEASURE,
+    });
+    commands.push(Command::BubbleDirty {
+        node_id: under,
+        bubble: DirtyBubble::SEMANTICS,
+    });
+    commands.apply(&mut applier).expect("the batch applies");
+
+    for (id, label) in [(parent, "the new parent"), (grandparent, "its parent")] {
+        let marked = applier
+            .with_node::<DirtyFlagNode, _>(id, |node| node.needs_semantics.get())
+            .expect("the ancestor exists");
+        assert!(marked, "{label} holds a dirty descendant");
+    }
+}

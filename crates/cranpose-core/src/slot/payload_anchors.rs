@@ -345,8 +345,8 @@ impl PayloadAnchorRegistry {
         self.reused_generations.shrink_to_fit();
     }
 
-    fn maybe_shrink_sparse_storage(&mut self) {
-        if self.storage.maybe_shrink_sparse_storage() {
+    fn maybe_shrink(&mut self) {
+        if self.storage.maybe_shrink() {
             self.coalesce_free_id_ranges();
             self.free_ids.shrink_to_fit();
             self.reused_generations.shrink_to_fit();
@@ -431,15 +431,9 @@ impl PayloadAnchorRegistry {
             return;
         }
 
-        let mut ranges = self
-            .free_ids
-            .drain()
-            .map(|Reverse(range)| range)
-            .collect::<Vec<_>>();
-        ranges.sort_unstable();
-
+        // The heap gives the ranges up in order, the lowest first.
         let mut merged = Vec::<FreePayloadAnchorIdRange>::new();
-        for range in ranges {
+        while let Some(Reverse(range)) = self.free_ids.pop() {
             if range.is_empty() {
                 continue;
             }
@@ -517,7 +511,7 @@ impl SlotTable {
             removed |= self.payload_anchors.invalidate(payload.anchor);
         }
         if removed {
-            self.payload_anchors.maybe_shrink_sparse_storage();
+            self.payload_anchors.maybe_shrink();
         }
     }
 }

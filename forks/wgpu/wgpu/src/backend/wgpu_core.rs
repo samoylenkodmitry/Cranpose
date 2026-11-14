@@ -4055,6 +4055,7 @@ impl dispatch::SurfaceInterface for CoreSurface {
                 image: image.map(|image| crate::SurfaceImage {
                     index: image.index,
                     kept: image.kept,
+                    images: image.images,
                 }),
             }
             .into()

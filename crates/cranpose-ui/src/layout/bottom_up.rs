@@ -557,14 +557,15 @@ impl LayoutBuilderState {
         parent: &LayoutNode,
         child: NodeId,
         measured: &MeasuredNode,
-        parent_data: Option<&cranpose_ui_layout::ParentData>,
+        parent_data: Option<&crate::modifier::SharedParentData>,
     ) -> bool {
         {
             let runtime_state = parent.layout_runtime_state().borrow();
             let Some(record) = runtime_state
                 .child_states()
                 .iter()
-                .find(|state| state.node_id == child)
+                .map(|state| state.record())
+                .find(|record| record.child_id() == child)
             else {
                 return false;
             };
@@ -611,8 +612,9 @@ fn given_constraints(parent: &LayoutNode, child: NodeId) -> Option<Constraints> 
         .borrow()
         .child_states()
         .iter()
-        .find(|state| state.node_id == child)
-        .and_then(|state| state.measured_constraints.get())
+        .map(|state| state.record())
+        .find(|record| record.child_id() == child)
+        .and_then(|record| record.measured_constraints.get())
 }
 
 // The constraints a node's cache holds, while no parent read its intrinsic

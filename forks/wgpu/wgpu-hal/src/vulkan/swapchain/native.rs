@@ -551,6 +551,7 @@ impl Swapchain for NativeSwapchain {
         Ok(crate::AcquiredSurfaceTexture {
             texture,
             suboptimal,
+            images: u32::try_from(self.images.len()).unwrap_or(u32::MAX),
         })
     }
 

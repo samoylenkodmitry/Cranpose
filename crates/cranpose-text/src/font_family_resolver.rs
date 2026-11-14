@@ -1,5 +1,7 @@
 use std::{cmp::Ordering, ops::Range};
 
+use cranpose_ui_graphics::shared_sort;
+
 use crate::{
     font::{FontFamily, FontStyle, FontWeight},
     font_fallback::{FallbackChain, draws_plainly},
@@ -86,7 +88,7 @@ impl FontFamilyResolver {
                 });
             numbered.push((family, typeface));
         }
-        numbered.sort_by_key(|(family, _)| *family);
+        shared_sort::sort_by(&mut numbered, |a, b| a.0.cmp(&b.0));
         let mut families = Vec::with_capacity(first_of_family.len());
         let mut start = 0;
         for members in numbered.chunk_by(|a, b| a.0 == b.0) {

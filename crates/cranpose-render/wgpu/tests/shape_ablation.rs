@@ -1,4 +1,4 @@
-use cranpose_render_common::graph::RenderGraph;
+use cranpose_render_common::graph::LayerNode;
 use cranpose_ui_graphics::{DrawScopeDefault, Size};
 use support::{LockedRenderer, SIZE, record_mixed_scene};
 
@@ -6,7 +6,7 @@ use crate::support;
 
 const TOGGLE: &str = "CRANPOSE_ABLATE";
 
-fn graph_of(record: fn(&mut DrawScopeDefault)) -> RenderGraph {
+fn graph_of(record: fn(&mut DrawScopeDefault)) -> LayerNode {
     let mut recording = cranpose_ui_graphics::CommandRecording::default();
     let mut scope = DrawScopeDefault::new(Size::new(SIZE as f32, SIZE as f32), &mut recording);
     record(&mut scope);
@@ -15,7 +15,7 @@ fn graph_of(record: fn(&mut DrawScopeDefault)) -> RenderGraph {
 
 fn capture_under(
     renderer: &mut LockedRenderer,
-    graph: &RenderGraph,
+    graph: &LayerNode,
     switch: Option<&str>,
 ) -> Vec<u8> {
     cranpose_core::debug_toggles::set_debug_toggle(TOGGLE, switch);
@@ -37,7 +37,11 @@ fn the_shape_switches_remove_the_fragment_program_and_then_the_fill() {
     let base = capture_under(&mut renderer, &mixed, None);
     let flat = capture_under(&mut renderer, &mixed, Some("shape"));
     let discarded = capture_under(&mut renderer, &mixed, Some("shape_fill"));
-    let cleared = capture_under(&mut renderer, &graph_of(|_| {}), None);
+    let cleared = capture_under(
+        &mut renderer,
+        &graph_of(support::draw_scene_background),
+        None,
+    );
 
     assert!(
         support::distinct_colors(&base) > 8,
@@ -52,5 +56,8 @@ fn the_shape_switches_remove_the_fragment_program_and_then_the_fill() {
         discarded, flat,
         "`shape_fill` must remove the fill `shape` keeps"
     );
-    assert_eq!(discarded, cleared, "`shape_fill` must leave only the clear");
+    assert_eq!(
+        discarded, cleared,
+        "`shape_fill` must leave only the clear to the scene's background"
+    );
 }

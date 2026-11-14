@@ -406,6 +406,7 @@ impl crate::Surface for super::Surface {
         Ok(crate::AcquiredSurfaceTexture {
             texture: suf_texture,
             suboptimal: false,
+            images: u32::try_from(render_layer.maximumDrawableCount()).unwrap_or(u32::MAX),
         })
     }
 

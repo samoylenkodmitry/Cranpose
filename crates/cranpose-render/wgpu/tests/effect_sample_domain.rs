@@ -1,4 +1,4 @@
-use cranpose_render_common::graph::{ProjectiveTransform, RenderGraph, RenderNode};
+use cranpose_render_common::graph::{LayerNode, ProjectiveTransform, RenderNode};
 use cranpose_render_wgpu::CapturedFrame;
 use cranpose_ui_graphics::{
     Color, GraphicsLayer, RUNTIME_SHADER_PRELUDE_WGSL, Rect, RenderEffect, RuntimeShader, TileMode,
@@ -148,7 +148,7 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {{
     )))
 }
 
-fn padded_sample_page(glass: Option<RenderNode>) -> RenderGraph {
+fn padded_sample_page(glass: Option<RenderNode>) -> LayerNode {
     let sample_x = GLASS.x + GLASS.width * 0.25 + 0.5 * (GLASS.width + SAMPLE_OUTSET);
     let sample_y = GLASS.y + GLASS.height * 0.25 + 0.5 * (GLASS.height * 0.5);
     let mut children = vec![solid_rect(
@@ -201,7 +201,7 @@ fn far_corner_glass(alpha: f32) -> RenderNode {
     )))
 }
 
-fn page(glass: RenderNode) -> RenderGraph {
+fn page(glass: RenderNode) -> LayerNode {
     let mut children = vec![solid_rect(
         rect(0.0, 0.0, FRAME_WIDTH as f32, FRAME_HEIGHT as f32),
         Color::from_rgb_u8(20, 24, 40),
@@ -223,7 +223,7 @@ fn capture(
     whole: bool,
 ) -> (CapturedFrame, u64) {
     cranpose_core::debug_toggles::set_debug_toggle(TOGGLE, whole.then_some("1"));
-    let frame = support::capture_graph(renderer, page(glass()), FRAME_WIDTH, FRAME_HEIGHT);
+    let frame = support::capture_graph(renderer, &page(glass()), FRAME_WIDTH, FRAME_HEIGHT);
     cranpose_core::debug_toggles::set_debug_toggle(TOGGLE, None);
     let blur_pixels = renderer
         .last_frame_stats()
@@ -368,7 +368,7 @@ fn a_scaled_child_backdrop_can_read_inside_its_declared_input_padding() {
     };
     let frame = support::capture_graph(
         &mut renderer,
-        padded_sample_page(Some(padded_sample_glass())),
+        &padded_sample_page(Some(padded_sample_glass())),
         FRAME_WIDTH,
         FRAME_HEIGHT,
     );

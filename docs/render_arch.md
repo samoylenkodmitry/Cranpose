@@ -1,9 +1,10 @@
 # Renderer architecture
 
-The WGPU renderer turns a `RenderGraph` into ordered GPU passes. The graph
-stores draw runs, primitives and layer nodes. The collector builds a
-`LayerScene` for each root and child layer. See
-[`graph.rs`](../crates/cranpose-render/common/src/graph.rs),
+The WGPU renderer turns a scene's records into ordered GPU passes. A
+`SceneStore` holds one record per layer, wrapper, draw group and leaf, with
+their draws and draw runs in side arenas. The collector builds a `LayerScene`
+for each root and child layer. See
+[`scene_store`](../crates/cranpose-render/common/src/scene_store/store.rs),
 [`collect.rs`](../crates/cranpose-render/wgpu/src/collect.rs) and
 [`render.rs`](../crates/cranpose-render/wgpu/src/render.rs).
 

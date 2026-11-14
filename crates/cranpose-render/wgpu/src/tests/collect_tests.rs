@@ -1,5 +1,8 @@
-use cranpose_render_common::graph::{DrawRunNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase};
-use cranpose_ui_graphics::{DrawPrimitive, LayerShape, RoundedCornerShape};
+use cranpose_render_common::{
+    graph::{DrawRunNode, LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, RenderNode},
+    scene_store::SceneStore,
+};
+use cranpose_ui_graphics::{DrawPrimitive, LayerShape, RoundedCornerShape, Size};
 
 use super::{
     layer_motion::{ANIMATED_RASTER_STEPS_PER_OCTAVE, animated_raster_scale},
@@ -7,7 +10,37 @@ use super::{
     *,
 };
 
-fn rect(x: f32, y: f32, width: f32, height: f32) -> Rect {
+// Collects `root` written into a store of its own, as a frame collects its
+// scene's root.
+fn collect_layer(
+    root: &LayerNode,
+    motion: &mut LayerMotion,
+    capacity: SceneCapacityHint,
+    root_scale: f32,
+    recycler: &mut LayerSceneRecycler,
+) -> Box<LayerScene> {
+    let store = SceneStore::from_layer(root);
+    let layer = store.root_layer().expect("the store holds the layer");
+    collect_root(
+        layer,
+        (store.update(), None),
+        None,
+        motion,
+        capacity,
+        root_scale,
+        recycler,
+    )
+}
+
+fn placement_of(layer: &LayerNode, raster_scale: RasterScale) -> Placement {
+    let store = SceneStore::from_layer(layer);
+    child_placement(
+        store.root_layer().expect("the store holds the layer"),
+        raster_scale,
+    )
+}
+
+const fn rect(x: f32, y: f32, width: f32, height: f32) -> Rect {
     Rect {
         x,
         y,
@@ -28,7 +61,15 @@ fn raster_scale(
     } else {
         scale
     };
-    motion.record_scale(node_id, raster, content_hash);
+    let store = SceneStore::from_layer(&LayerNode {
+        node_id,
+        ..Default::default()
+    });
+    motion.record_scale(
+        store.root_layer().expect("the store holds the layer"),
+        raster,
+        content_hash,
+    );
     raster
 }
 
@@ -93,8 +134,9 @@ fn walk_settings() -> WalkSettings {
         raster_scale: RasterScale::Exact(1.0),
         light: ShadowLight::for_window(100.0, 100.0, 1.0, 1.0),
         wants_pixel_sensitive: false,
-        update: 0,
+        update: SceneUpdate::default(),
         in_space: false,
+        shown: None,
     }
 }
 
@@ -103,7 +145,7 @@ fn deferred_draws_keep_their_order_after_interleaved_children() {
     let before = PrimitivePhase::BeforeChildren;
     let after = PrimitivePhase::AfterChildren;
     let layer = |children| LayerNode {
-        local_bounds: rect(0.0, 0.0, 20.0, 20.0),
+        size: Size::new(20.0, 20.0),
         children,
         ..Default::default()
     };
@@ -132,9 +174,8 @@ fn deferred_draws_keep_their_order_after_interleaved_children() {
         ),
     ];
     for (children, expected) in cases {
-        let collected = collect_root(
+        let collected = collect_layer(
             &layer(children),
-            0,
             &mut LayerMotion::default(),
             SceneCapacityHint::default(),
             1.0,
@@ -192,8 +233,13 @@ fn rigid_snap_distinguishes_own_draws_from_descendant_text() {
         ),
     ];
     for (children, stationary, translated) in cases {
-        assert_eq!(content_needs_rigid_snap(&children, false), stationary);
-        assert_eq!(content_needs_rigid_snap(&children, true), translated);
+        let store = SceneStore::from_layer(&LayerNode {
+            children,
+            ..LayerNode::default()
+        });
+        let layer = store.root_layer().expect("the store holds the layer");
+        assert_eq!(content_needs_rigid_snap(layer, false), stationary);
+        assert_eq!(content_needs_rigid_snap(layer, true), translated);
     }
 }
 
@@ -205,7 +251,7 @@ fn isolated_layers_snap_their_own_text_and_translating_text_descendants() {
             (drawn_node(snap_test_text()), false, true),
             (
                 RenderNode::Layer(Box::new(LayerNode {
-                    local_bounds: rect(0.0, 0.0, 60.0, 20.0),
+                    size: Size::new(60.0, 20.0),
                     transform_to_parent: ProjectiveTransform::translation(2.5, 3.5),
                     children: vec![drawn_node(snap_test_text())],
                     ..Default::default()
@@ -217,23 +263,25 @@ fn isolated_layers_snap_their_own_text_and_translating_text_descendants() {
             (drawn_node(snap_test_rect()), true, true),
         ] {
             let layer = LayerNode {
-                local_bounds: rect(0.0, 0.0, 100.0, 60.0),
+                size: Size::new(100.0, 60.0),
                 children: vec![node],
                 ..Default::default()
             };
+            let store = SceneStore::from_layer(&layer);
             let (child, _) = isolated_child(
-                &layer,
+                store.root_layer().expect("the store holds the layer"),
                 &mut LayerMotion::default(),
-                WalkContext {
+                &WalkContext {
                     offset: Point::new(0.3, 0.7),
                     visual_clip: None,
                     rounding: None,
                     snap_anchor: None,
                     translated,
                     settings: &walk_settings(),
+                    cull: None,
                 },
-                None,
-                &mut CompositorScene::new(),
+                (None, None),
+                &mut LayerScene::new(CompositorScene::new(), Vec::new()),
                 &mut LayerSceneRecycler::default(),
             );
             assert_eq!(child.snap_anchor.is_some(), expected);
@@ -263,7 +311,7 @@ fn content_touching_the_edge_between_corners_is_admitted() {
 
 fn rounded_layer(radius: f32, content: RenderNode) -> LayerNode {
     LayerNode {
-        local_bounds: rect(0.0, 0.0, 200.0, 100.0),
+        size: Size::new(200.0, 100.0),
         graphics_layer: GraphicsLayer {
             clip: true,
             shape: LayerShape::Rounded(RoundedCornerShape::uniform(radius)),
@@ -294,12 +342,12 @@ fn a_rounded_layer_whose_shapes_enter_a_corner_draws_in_place_rounded() {
         shapes_run(vec![white_rect(rect(0.0, 0.0, 200.0, 100.0))]),
     );
     assert!(matches!(
-        child_placement(&full, RasterScale::Exact(1.0)),
+        placement_of(&full, RasterScale::Exact(1.0)),
         Placement::DirectRounded(_, radius) if radius == 20.0
     ));
     let loose = rounded_layer(20.0, drawn_node(white_rect(rect(0.0, 0.0, 120.0, 100.0))));
     assert!(matches!(
-        child_placement(&loose, RasterScale::Exact(1.0)),
+        placement_of(&loose, RasterScale::Exact(1.0)),
         Placement::DirectRounded(..)
     ));
     let inside = rounded_layer(
@@ -308,7 +356,7 @@ fn a_rounded_layer_whose_shapes_enter_a_corner_draws_in_place_rounded() {
     );
     assert!(
         matches!(
-            child_placement(&inside, RasterScale::Exact(1.0)),
+            placement_of(&inside, RasterScale::Exact(1.0)),
             Placement::Direct(_)
         ),
         "content clear of the corners needs no rounding at all"
@@ -332,7 +380,7 @@ fn image_over(bounds: Rect) -> DrawPrimitive {
 fn a_rounded_layer_whose_image_enters_a_corner_draws_in_place_rounded() {
     let loose = rounded_layer(20.0, drawn_node(image_over(rect(0.0, 0.0, 200.0, 100.0))));
     assert!(matches!(
-        child_placement(&loose, RasterScale::Exact(1.0)),
+        placement_of(&loose, RasterScale::Exact(1.0)),
         Placement::DirectRounded(_, radius) if radius == 20.0
     ));
     let in_a_run = rounded_layer(
@@ -343,7 +391,7 @@ fn a_rounded_layer_whose_image_enters_a_corner_draws_in_place_rounded() {
         ]),
     );
     assert!(matches!(
-        child_placement(&in_a_run, RasterScale::Exact(1.0)),
+        placement_of(&in_a_run, RasterScale::Exact(1.0)),
         Placement::DirectRounded(..)
     ));
 }
@@ -352,7 +400,7 @@ fn a_rounded_layer_whose_image_enters_a_corner_draws_in_place_rounded() {
 fn a_rounded_layer_whose_text_enters_a_corner_isolates() {
     let text = rounded_layer(20.0, drawn_node(snap_test_text()));
     assert!(matches!(
-        child_placement(&text, RasterScale::Exact(1.0)),
+        placement_of(&text, RasterScale::Exact(1.0)),
         Placement::Isolated
     ));
     let mut mixed = rounded_layer(
@@ -361,14 +409,14 @@ fn a_rounded_layer_whose_text_enters_a_corner_isolates() {
     );
     mixed.children.push(drawn_node(snap_test_text()));
     assert!(matches!(
-        child_placement(&mixed, RasterScale::Exact(1.0)),
+        placement_of(&mixed, RasterScale::Exact(1.0)),
         Placement::Isolated
     ));
 }
 
 fn child_at(x: f32, y: f32, width: f32, height: f32, content: RenderNode) -> RenderNode {
     RenderNode::Layer(Box::new(LayerNode {
-        local_bounds: rect(0.0, 0.0, width, height),
+        size: Size::new(width, height),
         transform_to_parent: ProjectiveTransform::translation(x, y),
         children: vec![content],
         ..Default::default()
@@ -388,11 +436,11 @@ fn text_in_a_child_at(x: f32, y: f32) -> LayerNode {
 #[test]
 fn a_rounded_layer_finds_text_its_child_layers_put_in_a_corner() {
     assert!(matches!(
-        child_placement(&text_in_a_child_at(0.0, 0.0), RasterScale::Exact(1.0)),
+        placement_of(&text_in_a_child_at(0.0, 0.0), RasterScale::Exact(1.0)),
         Placement::Isolated
     ));
     assert!(matches!(
-        child_placement(&text_in_a_child_at(60.0, 40.0), RasterScale::Exact(1.0)),
+        placement_of(&text_in_a_child_at(60.0, 40.0), RasterScale::Exact(1.0)),
         Placement::DirectRounded(..)
     ));
 }
@@ -405,7 +453,7 @@ fn a_rounded_layer_with_uneven_corners_isolates_shapes_in_a_corner() {
     );
     layer.graphics_layer.shape = LayerShape::Rounded(RoundedCornerShape::new(20.0, 20.0, 4.0, 4.0));
     assert!(matches!(
-        child_placement(&layer, RasterScale::Exact(1.0)),
+        placement_of(&layer, RasterScale::Exact(1.0)),
         Placement::Isolated
     ));
 }
@@ -416,7 +464,7 @@ fn a_rounded_layer_its_parent_clip_holds_draws_in_place_whatever_the_float_sums(
     // clip, but the panel clip met with the bar's rect sums its width an
     // ulp away from the bar's own.
     let bar = LayerNode {
-        local_bounds: rect(0.0, 0.0, 218.33333, 4.0),
+        size: Size::new(218.33333, 4.0),
         graphics_layer: GraphicsLayer {
             clip: true,
             shape: LayerShape::Rounded(RoundedCornerShape::uniform(2.0)),
@@ -434,9 +482,10 @@ fn a_rounded_layer_its_parent_clip_holds_draws_in_place_whatever_the_float_sums(
         snap_anchor: None,
         translated: false,
         settings: &walk_settings(),
+        cull: None,
     };
     assert!(matches!(
-        child_placement(&bar, panel.settings.raster_scale),
+        placement_of(&bar, panel.settings.raster_scale),
         Placement::DirectRounded(..)
     ));
     let rounding = Some(ClipRounding {
@@ -467,7 +516,7 @@ fn a_rounded_layer_its_parent_clip_holds_draws_in_place_whatever_the_float_sums(
 #[test]
 fn shapes_of_a_rounded_layer_drawn_in_place_take_its_radius_and_nothing_else_does() {
     let mut parent = LayerNode {
-        local_bounds: rect(0.0, 0.0, 400.0, 300.0),
+        size: Size::new(400.0, 300.0),
         ..Default::default()
     };
     parent
@@ -479,9 +528,8 @@ fn shapes_of_a_rounded_layer_drawn_in_place_take_its_radius_and_nothing_else_doe
     parent
         .children
         .push(shapes_run(vec![white_rect(rect(0.0, 200.0, 50.0, 50.0))]));
-    let scene = collect_root(
+    let scene = collect_layer(
         &parent,
-        0,
         &mut LayerMotion::default(),
         SceneCapacityHint::default(),
         1.0,
@@ -615,7 +663,7 @@ fn turned_layer(
     children: Vec<RenderNode>,
 ) -> LayerNode {
     LayerNode {
-        local_bounds: rect(0.0, 0.0, 60.0, 40.0),
+        size: Size::new(60.0, 40.0),
         transform_to_parent: transform,
         graphics_layer: graphics_layer.into(),
         children,
@@ -626,13 +674,12 @@ fn turned_layer(
 /// The isolated child `layer` collects into under an unturned root.
 fn collected(layer: LayerNode) -> ChildLayer {
     let root = LayerNode {
-        local_bounds: rect(0.0, 0.0, 200.0, 200.0),
+        size: Size::new(200.0, 200.0),
         children: vec![RenderNode::Layer(Box::new(layer))],
         ..Default::default()
     };
-    let mut scene = collect_root(
+    let mut scene = collect_layer(
         &root,
-        0,
         &mut LayerMotion::default(),
         SceneCapacityHint::default(),
         1.0,
@@ -849,14 +896,13 @@ fn a_detached_backdrop_keeps_its_original_capture_reach_and_paint_order() {
     layer.graphics_layer.alpha = 1.0;
     layer.graphics_layer.render_effect = Some(RenderEffect::blur(1.0));
     let root = LayerNode {
-        local_bounds: rect(0.0, 0.0, 100.0, 100.0),
+        size: Size::new(100.0, 100.0),
         clip_to_bounds: true,
         children: vec![RenderNode::Layer(Box::new(layer))],
         ..Default::default()
     };
-    let collected = collect_root(
+    let collected = collect_layer(
         &root,
-        0,
         &mut LayerMotion::default(),
         SceneCapacityHint::default(),
         1.0,
@@ -883,14 +929,13 @@ fn a_detached_backdrop_keeps_its_original_capture_reach_and_paint_order() {
 /// The draw ops a root clipped to 100×100 collects around `child`.
 fn draw_ops_under_clip(child: LayerNode) -> usize {
     let root = LayerNode {
-        local_bounds: rect(0.0, 0.0, 100.0, 100.0),
+        size: Size::new(100.0, 100.0),
         clip_to_bounds: true,
         children: vec![RenderNode::Layer(Box::new(child))],
         ..Default::default()
     };
-    collect_root(
+    collect_layer(
         &root,
-        0,
         &mut LayerMotion::default(),
         SceneCapacityHint::default(),
         1.0,
@@ -901,17 +946,20 @@ fn draw_ops_under_clip(child: LayerNode) -> usize {
     .len()
 }
 
-fn row_at(y: f32, draws_within_bounds: bool, shadow_elevation: f32) -> LayerNode {
+const ROW: Rect = rect(0.0, 0.0, 100.0, 40.0);
+
+// A row of bounds `ROW` at `y` that fills `fill`.
+fn row_at(y: f32, fill: Rect, shadow_elevation: f32) -> LayerNode {
     LayerNode {
-        local_bounds: rect(0.0, 0.0, 100.0, 40.0),
+        size: ROW.size(),
+        layer_bounds: Some(ROW),
         transform_to_parent: ProjectiveTransform::translation(0.0, y),
         graphics_layer: GraphicsLayer {
             shadow_elevation,
             ..Default::default()
         }
         .into(),
-        contained: Some(draws_within_bounds).into(),
-        children: vec![run(vec![solid(rect(0.0, 0.0, 100.0, 40.0))])],
+        children: vec![run(vec![solid(fill)])],
         ..Default::default()
     }
 }
@@ -919,20 +967,20 @@ fn row_at(y: f32, draws_within_bounds: bool, shadow_elevation: f32) -> LayerNode
 #[test]
 fn a_contained_row_the_clip_leaves_out_is_not_collected() {
     assert!(
-        draw_ops_under_clip(row_at(30.0, true, 0.0)) > 0,
+        draw_ops_under_clip(row_at(30.0, ROW, 0.0)) > 0,
         "a visible row draws"
     );
-    assert_eq!(draw_ops_under_clip(row_at(300.0, true, 0.0)), 0);
+    assert_eq!(draw_ops_under_clip(row_at(300.0, ROW, 0.0)), 0);
 }
 
 #[test]
 fn a_row_that_may_draw_past_its_bounds_is_collected_offscreen() {
     assert!(
-        draw_ops_under_clip(row_at(300.0, false, 0.0)) > 0,
-        "without the promise its draws may reach the clip"
+        draw_ops_under_clip(row_at(300.0, rect(0.0, -250.0, 100.0, 290.0), 0.0)) > 0,
+        "a fill past the row's bounds reaches the clip"
     );
     assert!(
-        draw_ops_under_clip(row_at(101.5, true, 4.0)) > 0,
+        draw_ops_under_clip(row_at(101.5, ROW, 4.0)) > 0,
         "a shadow reaches past the row's bounds"
     );
 }
@@ -942,7 +990,6 @@ fn text_root(style: cranpose_ui::TextStyle) -> (LayerNode, Arc<cranpose_ui::Text
     let text = crate::test_support::with_layout(cranpose_render_common::graph::TextPrimitiveNode {
         node_id: NodeId(5),
         rect: rect(0.0, 0.0, 80.0, 20.0),
-        text: cranpose_ui::text::shared_plain_annotated_string("shared"),
         render_text: cranpose_ui::text::shared_plain_render_string("shared"),
         layout: Default::default(),
         text_style: Arc::clone(&style),
@@ -952,7 +999,7 @@ fn text_root(style: cranpose_ui::TextStyle) -> (LayerNode, Arc<cranpose_ui::Text
         paint: Default::default(),
     });
     let root = LayerNode {
-        local_bounds: rect(0.0, 0.0, 100.0, 100.0),
+        size: Size::new(100.0, 100.0),
         children: vec![RenderNode::Primitive(PrimitiveEntry {
             phase: PrimitivePhase::BeforeChildren,
             node: PrimitiveNode::Text(Box::new(text)),
@@ -965,9 +1012,8 @@ fn text_root(style: cranpose_ui::TextStyle) -> (LayerNode, Arc<cranpose_ui::Text
 #[test]
 fn a_plain_texts_draw_carries_its_nodes_style() {
     let (root, style) = text_root(cranpose_ui::TextStyle::default());
-    let scene = collect_root(
+    let scene = collect_layer(
         &root,
-        0,
         &mut LayerMotion::default(),
         SceneCapacityHint::default(),
         1.0,

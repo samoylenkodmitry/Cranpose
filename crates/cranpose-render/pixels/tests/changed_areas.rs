@@ -1,19 +1,35 @@
-//! A frame kept by a host and redrawn only in the areas
-//! `PixelsRenderer::update_picture` reports stays equal to a full redraw, frame
-//! after frame, while content moves, resizes, changes color, text, alpha,
-//! shadow and stacking order, scrolls under a clip, appears and disappears,
-//! and arcs sweep.
+// A frame kept by a host and redrawn only in the areas
+// `PixelsRenderer::update_picture` reports stays equal to a full redraw while
+// content moves, resizes, changes color, text, alpha, shadow and stacking
+// order, scrolls under a clip, appears and disappears, arcs sweep, and one
+// public setter of the scene store changes one record alone.
 
-use std::{cell::RefCell, rc::Rc};
+use std::{cell::RefCell, rc::Rc, sync::Arc};
 
 use cranpose_app_shell::AppShell;
-use cranpose_core::{MutableState, location_key, rememberMutableStateOf};
-use cranpose_macros::composable;
-use cranpose_render_pixels::{Picture, PixelRect, PixelsRenderer};
-use cranpose_ui::{Box, BoxSpec, Column, ColumnSpec, Modifier, Text, TextStyle};
-use cranpose_ui_graphics::{
-    Brush, Color, ColorFilter, DrawScope, GraphicsLayer, Point, Stroke, StrokeCap, TAU,
+use cranpose_core::{
+    MutableState, RecordId, location_key, rememberMovableContentOf, rememberMutableStateOf,
 };
+use cranpose_macros::composable;
+use cranpose_render_common::{
+    Renderer,
+    scene_store::{ItemRef, LayerRef, RecordKind, SceneStore},
+};
+use cranpose_render_pixels::{Picture, PixelRect, PixelsRenderer};
+use cranpose_ui::{
+    Box, BoxSpec, Column, ColumnSpec, LazyColumn, LazyColumnSpec, LazyListScope, LinearArrangement,
+    Modifier, Size, Text, TextStyle, rememberLazyListState,
+    space::{Camera, LayerSpace, Mat4, Material, Mesh, MeshSurface, Scene3d, Vec3},
+};
+use cranpose_ui_graphics::{
+    Brush, Color, ColorFilter, DrawScope, GraphicsLayer, Point, ProjectiveTransform, Rect, Stroke,
+    StrokeCap, TAU,
+};
+
+#[path = "support/kept_frames.rs"]
+mod kept_frames;
+
+use kept_frames::KeptFrames;
 
 const WIDTH: u32 = 240;
 const HEIGHT: u32 = 180;
@@ -387,33 +403,513 @@ fn first_difference(kept: &[u8], full: &[u8]) -> Option<(usize, usize)> {
 }
 
 fn kept_frames_match_full_redraws(scale: f32, scenes: fn(Step)) {
+    kept_frames_match_full_redraws_taken(scale, scenes, 1);
+}
+
+// The kept frame takes the picture at each `every`-th update alone, as a
+// host does that draws slower than its scene changes.
+fn kept_frames_match_full_redraws_taken(scale: f32, scenes: fn(Step), every: u32) {
     let (mut shell, captured) = shell(scale, scenes);
+    KeptFrames::new((WIDTH, HEIGHT), scale).check(&mut shell, (FRAMES, every), |frame| {
+        let step = (*captured.borrow()).expect("the composition remembered the step");
+        step.set(frame);
+    });
+}
+
+// Nodes that change by turns among nodes that hold still: two bars under
+// still rows, each on its own frames; a box under a still parent whose
+// layer comes and goes; and a line that leaves and comes back.
+#[composable]
+fn Turns(captured: Step) {
+    let step = rememberMutableStateOf(|| 0u32);
+    *captured.borrow_mut() = Some(step);
+    let n = step.value();
+    Column(
+        Modifier::empty().fill_max_size(),
+        ColumnSpec::default(),
+        move || {
+            for row in 0..5u32 {
+                cranpose_core::with_key(&row, || {
+                    Text(
+                        format!("Still row {row}"),
+                        Modifier::empty(),
+                        TextStyle::default(),
+                    );
+                });
+            }
+            for bar in 0..2u32 {
+                cranpose_core::with_key(&(100 + bar), || {
+                    // Each frame gives one of the two bars its next width.
+                    let turn = (n + 1 - bar) / 2;
+                    Box(
+                        Modifier::empty()
+                            .width(20.0 + (turn * 13 % 150) as f32)
+                            .height(8.0)
+                            .background(color(turn, bar)),
+                        BoxSpec::default(),
+                        || {},
+                    );
+                });
+            }
+            Box(
+                Modifier::empty()
+                    .width(120.0)
+                    .height(20.0)
+                    .background(Color::from_rgb_u8(20, 20, 20)),
+                BoxSpec::default(),
+                move || {
+                    let inner = Modifier::empty()
+                        .width(40.0 + (n % 5) as f32 * 4.0)
+                        .height(12.0)
+                        .background(color(n / 3, 7));
+                    let inner = if (n / 3) % 2 == 1 {
+                        inner.graphics_layer(|| GraphicsLayer {
+                            alpha: 0.5,
+                            ..GraphicsLayer::default()
+                        })
+                    } else {
+                        inner
+                    };
+                    Box(inner, BoxSpec::default(), || {});
+                },
+            );
+            if n % 4 != 3 {
+                Text("Comes and goes", Modifier::empty(), TextStyle::default());
+            }
+        },
+    );
+}
+
+#[test]
+fn kept_frames_match_full_redraws_while_nodes_change_by_turns() {
+    kept_frames_match_full_redraws(1.0, Turns);
+    kept_frames_match_full_redraws(1.5, Turns);
+}
+
+// The lags lie on both sides of the updates a renderer follows a store
+// through before it reads the store whole.
+#[test]
+fn a_kept_frame_that_skips_updates_matches_a_full_redraw() {
+    for every in [2, 3, 7, 8, 9] {
+        kept_frames_match_full_redraws_taken(1.0, Turns, every);
+        kept_frames_match_full_redraws_taken(1.5, Scenes, every);
+    }
+}
+
+// How many of the boxes of `ManyBoxes` change at `frame`: counts on both
+// sides of the records a store lists as changed in one update, and of half
+// that many, as a record may come twice.
+fn changing_boxes(frame: u32) -> u32 {
+    [126, 127, 128, 129, 130, 254, 255, 256, 257, 258, 300, 3][frame as usize % 12]
+}
+
+// 300 boxes, of which the first `changing_boxes` take their next color each
+// frame.
+#[composable]
+fn ManyBoxes(captured: Step) {
+    let step = rememberMutableStateOf(|| 0u32);
+    *captured.borrow_mut() = Some(step);
+    let n = step.value();
+    Box(
+        Modifier::empty().fill_max_size(),
+        BoxSpec::default(),
+        move || {
+            for index in 0..300u32 {
+                cranpose_core::with_key(&index, || {
+                    let changes: u32 = (1..=n)
+                        .map(|frame| u32::from(index < changing_boxes(frame)))
+                        .sum();
+                    Box(
+                        Modifier::empty()
+                            .offset((index % 30) as f32 * 8.0, (index / 30) as f32 * 6.0)
+                            .width(6.0)
+                            .height(4.0)
+                            .background(color(changes, index)),
+                        BoxSpec::default(),
+                        || {},
+                    );
+                });
+            }
+        },
+    );
+}
+
+#[test]
+fn kept_frames_match_full_redraws_while_hundreds_of_nodes_change_at_once() {
+    kept_frames_match_full_redraws(1.0, ManyBoxes);
+    kept_frames_match_full_redraws_taken(1.0, ManyBoxes, 2);
+}
+
+// Siblings that take their next color each frame, the first three also gaining
+// and losing a child in turns, so that an update pushes several subtrees and
+// the splice of each of the first three moves the records after it.
+#[composable]
+fn SplicedSiblings(captured: Step) {
+    let step = rememberMutableStateOf(|| 0u32);
+    *captured.borrow_mut() = Some(step);
+    let n = step.value();
+    Box(
+        Modifier::empty().fill_max_size(),
+        BoxSpec::default(),
+        move || {
+            for sibling in 0..5u32 {
+                cranpose_core::with_key(&sibling, || {
+                    Box(
+                        Modifier::empty()
+                            .offset(sibling as f32 * 44.0, 10.0)
+                            .width(40.0)
+                            .height(30.0)
+                            .background(color(n, sibling)),
+                        BoxSpec::default(),
+                        move || {
+                            if sibling > 2 || (n + sibling) % 3 != 0 {
+                                Box(
+                                    Modifier::empty()
+                                        .width(10.0 + ((n + sibling) % 4) as f32 * 6.0)
+                                        .height(12.0)
+                                        .background(color(n / 2, sibling + 7)),
+                                    BoxSpec::default(),
+                                    || {},
+                                );
+                            }
+                        },
+                    );
+                });
+            }
+        },
+    );
+}
+
+#[test]
+fn kept_frames_match_full_redraws_while_several_subtrees_splice_in_one_update() {
+    kept_frames_match_full_redraws(1.0, SplicedSiblings);
+    kept_frames_match_full_redraws(1.5, SplicedSiblings);
+}
+
+// Content that moves between a parent that shifts and stretches it and a
+// parent that fades it, in updates that also put a sibling before it, take
+// one away, and give a keyed box's place to a box of another key.
+#[composable]
+fn Movers(captured: Step) {
+    let step = rememberMutableStateOf(|| 0u32);
+    *captured.borrow_mut() = Some(step);
+    let n = step.value();
+    let mover = rememberMovableContentOf(move || {
+        Box(
+            Modifier::empty()
+                .width(30.0)
+                .height(10.0)
+                .background(color(step.value() / 5, 3)),
+            BoxSpec::default(),
+            || {},
+        );
+    });
+    let (stretched, faded) = (mover.clone(), mover);
+    Column(
+        Modifier::empty().fill_max_size(),
+        ColumnSpec::default(),
+        move || {
+            let stretched = stretched.clone();
+            Column(
+                Modifier::empty()
+                    .width(120.0)
+                    .height(40.0)
+                    .graphics_layer(|| GraphicsLayer {
+                        translation_x: 12.0,
+                        scale_x: 1.5,
+                        ..GraphicsLayer::default()
+                    }),
+                ColumnSpec::default(),
+                move || {
+                    if n % 3 == 1 {
+                        Box(
+                            Modifier::empty()
+                                .width(20.0)
+                                .height(6.0)
+                                .background(color(1, 5)),
+                            BoxSpec::default(),
+                            || {},
+                        );
+                    }
+                    if n % 2 == 0 {
+                        stretched.show();
+                    }
+                },
+            );
+            let faded = faded.clone();
+            Column(
+                Modifier::empty()
+                    .width(120.0)
+                    .height(40.0)
+                    .graphics_layer(|| GraphicsLayer {
+                        alpha: 0.5,
+                        ..GraphicsLayer::default()
+                    }),
+                ColumnSpec::default(),
+                move || {
+                    if n % 2 == 1 {
+                        faded.show();
+                    }
+                    let key = n % 4;
+                    cranpose_core::with_key(&key, || {
+                        Box(
+                            Modifier::empty()
+                                .width(10.0 + key as f32 * 5.0)
+                                .height(6.0)
+                                .background(color(key, 9)),
+                            BoxSpec::default(),
+                            || {},
+                        );
+                    });
+                },
+            );
+        },
+    );
+}
+
+#[test]
+fn kept_frames_match_full_redraws_while_content_moves_between_parents() {
+    for every in [1, 2, 3] {
+        kept_frames_match_full_redraws_taken(1.0, Movers, every);
+        kept_frames_match_full_redraws_taken(1.5, Movers, every);
+    }
+}
+
+// A 3D scene with two panels turned in depth and a flat box; one panel
+// changes each frame, the other and the flat box by turns.
+#[composable]
+fn Surfaces(captured: Step) {
+    let step = rememberMutableStateOf(|| 0u32);
+    *captured.borrow_mut() = Some(step);
+    let n = step.value();
+    let plane = Arc::new(Mesh::plane());
+    Box(
+        Modifier::empty().fill_max_size().scene3d(|| Scene3d {
+            camera: Camera::look_at(
+                Vec3::new(0.0, 0.0, -400.0),
+                Vec3::ZERO,
+                Vec3::new(0.0, 1.0, 0.0),
+                400.0,
+            ),
+            light: None,
+            eye: None,
+        }),
+        BoxSpec::default(),
+        move || {
+            for panel in 0..2u32 {
+                let plane = Arc::clone(&plane);
+                cranpose_core::with_key(&panel, || {
+                    let turn = if panel == 0 { n } else { n / 3 };
+                    Box(
+                        Modifier::empty()
+                            .required_size(Size {
+                                width: 60.0,
+                                height: 40.0,
+                            })
+                            .mesh_surface(move || MeshSurface {
+                                mesh: Arc::clone(&plane),
+                                transform: Mat4::translation(Vec3::new(-0.5, -0.5, 0.0))
+                                    .then(&Mat4::scaling(Vec3::new(60.0, 40.0, 1.0)))
+                                    .then(&Mat4::rotation_y(0.5))
+                                    .then(&Mat4::translation(Vec3::new(
+                                        panel as f32 * 110.0 - 55.0,
+                                        20.0,
+                                        0.0,
+                                    ))),
+                                material: Material::Unlit,
+                                casts_shadow: false,
+                                solid: true,
+                            })
+                            .background(color(turn, panel)),
+                        BoxSpec::default(),
+                        move || {
+                            Box(
+                                Modifier::empty()
+                                    .width(20.0 + (turn % 4) as f32 * 8.0)
+                                    .height(10.0)
+                                    .background(color(turn, panel + 4)),
+                                BoxSpec::default(),
+                                || {},
+                            );
+                        },
+                    );
+                });
+            }
+            Box(
+                Modifier::empty()
+                    .width(60.0 + (n / 4 % 3) as f32 * 10.0)
+                    .height(20.0)
+                    .background(color(n / 4, 11)),
+                BoxSpec::default(),
+                || {},
+            );
+        },
+    );
+}
+
+#[test]
+fn kept_frames_match_full_redraws_while_a_surface_turned_in_depth_changes() {
+    for every in [1, 2] {
+        kept_frames_match_full_redraws_taken(1.0, Surfaces, every);
+        kept_frames_match_full_redraws_taken(1.5, Surfaces, every);
+    }
+}
+
+// Two bars whose fills a draw callback draws: the first inside a clip of
+// its width every frame, the second inside a clip on two frames of three and
+// bare on the third, with a second clip inside the first on every fourth.
+#[composable]
+fn ClippedBars(captured: Step) {
+    let step = rememberMutableStateOf(|| 0u32);
+    *captured.borrow_mut() = Some(step);
+    let n = step.value();
+    Column(
+        Modifier::empty().fill_max_size(),
+        ColumnSpec::default(),
+        move || {
+            for bar in 0..2u32 {
+                cranpose_core::with_key(&bar, || {
+                    Box(
+                        Modifier::empty()
+                            .width(200.0)
+                            .height(16.0)
+                            .background(Color::from_rgb_u8(40, 44, 64))
+                            .draw_behind(move |scope| {
+                                let size = scope.size();
+                                let whole = Rect {
+                                    x: 0.0,
+                                    y: 0.0,
+                                    width: size.width,
+                                    height: size.height,
+                                };
+                                let shown = Rect {
+                                    width: 20.0 + (n * 13 % 170) as f32,
+                                    ..whole
+                                };
+                                let fill = Brush::solid(color(n, bar));
+                                if bar == 1 && n % 3 == 2 {
+                                    scope.draw_rect_at(shown, fill);
+                                    return;
+                                }
+                                scope.clip_rect(shown, &mut |scope| {
+                                    scope.draw_rect_at(whole, fill.clone());
+                                    if bar == 1 && n % 4 == 0 {
+                                        let inner = Rect {
+                                            height: size.height / 2.0,
+                                            ..whole
+                                        };
+                                        scope.clip_rect(inner, &mut |scope| {
+                                            scope.draw_rect_at(whole, Brush::solid(color(n, 7)));
+                                        });
+                                    }
+                                });
+                            }),
+                        BoxSpec::default(),
+                        || {},
+                    );
+                });
+            }
+        },
+    );
+}
+
+#[test]
+fn kept_frames_match_full_redraws_while_clipped_draws_change() {
+    for every in [1, 2] {
+        kept_frames_match_full_redraws_taken(1.0, ClippedBars, every);
+        kept_frames_match_full_redraws_taken(1.5, ClippedBars, every);
+    }
+}
+
+// A fill that stays while the clip around it shrinks a few points each
+// frame: the draw group's bounds change and the draws do not.
+#[composable]
+fn ShrinkingClip(captured: Step) {
+    let step = rememberMutableStateOf(|| 0u32);
+    *captured.borrow_mut() = Some(step);
+    let shown = 180.0 - step.value() as f32 * 7.0;
+    Box(
+        Modifier::empty()
+            .offset(20.0, 50.0)
+            .width(200.0)
+            .height(16.0)
+            .draw_behind(move |scope| {
+                let whole = Rect::from_size(scope.size());
+                let fill = Brush::solid(Color::from_rgb_u8(98, 160, 255));
+                scope.clip_rect(
+                    Rect::from_size(Size::new(shown, whole.height)),
+                    &mut |scope| {
+                        scope.draw_rect_at(whole, fill.clone());
+                    },
+                );
+            }),
+        BoxSpec::default(),
+        || {},
+    );
+}
+
+#[test]
+fn kept_frames_match_full_redraws_while_a_clip_shrinks_around_a_still_fill() {
+    kept_frames_match_full_redraws(1.0, ShrinkingClip);
+    kept_frames_match_full_redraws(1.5, ShrinkingClip);
+}
+
+#[test]
+fn a_clip_shrinking_around_a_still_fill_changes_the_strip_it_uncovers() {
+    let (mut shell, captured) = shell(1.0, ShrinkingClip);
     let mut picture = Picture::default();
     let mut areas = Vec::new();
-    let mut kept = vec![0u8; (WIDTH * HEIGHT * 4) as usize];
-    let mut full = vec![0u8; (WIDTH * HEIGHT * 4) as usize];
-    let mut area_pixels = Vec::new();
-    for frame in 0..FRAMES {
-        if frame > 0 {
-            let step = (*captured.borrow()).expect("the composition remembered the step");
-            step.set(frame);
-        }
-        shell.update();
-        shell.primary().with_renderer(|renderer| {
-            renderer.update_picture(&mut picture, WIDTH, HEIGHT, scale, &mut areas);
-            for area in &areas {
-                area_pixels.resize(area.width as usize * area.height as usize * 4, 0);
-                renderer.draw_picture_area(&picture, *area, &mut area_pixels);
-                apply(&mut kept, *area, &area_pixels);
-            }
-            renderer.draw_scaled(&mut full, WIDTH, HEIGHT, scale);
-        });
-        assert_eq!(
-            first_difference(&kept, &full),
-            None,
-            "frame {frame} at scale {scale}: the kept frame differs from a full redraw at (x, y); areas {areas:?}"
-        );
-    }
+    shell.update();
+    shell.primary().with_renderer(|renderer| {
+        renderer.update_picture(&mut picture, WIDTH, HEIGHT, 1.0, &mut areas);
+    });
+    let step = (*captured.borrow()).expect("the composition remembered the step");
+    step.set(1);
+    shell.update();
+    shell.primary().with_renderer(|renderer| {
+        renderer.update_picture(&mut picture, WIDTH, HEIGHT, 1.0, &mut areas);
+    });
+    // The clip's end moves from x = 200 to 193 in the box at x = 20.
+    assert!(
+        areas.iter().any(|area| {
+            area.x <= 193
+                && area.x + area.width >= 200
+                && area.y <= 50
+                && area.y + area.height >= 66
+        }),
+        "the strip the clip uncovered lies in one area of {areas:?}"
+    );
+}
+
+// A box that clips a child wider than it and shrinks a few points each
+// frame: its bounds change and nothing it draws does.
+#[composable]
+fn ShrinkingParent(captured: Step) {
+    let step = rememberMutableStateOf(|| 0u32);
+    *captured.borrow_mut() = Some(step);
+    let shown = 180.0 - step.value() as f32 * 7.0;
+    Box(
+        Modifier::empty()
+            .offset(20.0, 50.0)
+            .size(Size::new(shown, 16.0))
+            .clip_to_bounds(),
+        BoxSpec::default(),
+        || {
+            Box(
+                Modifier::empty()
+                    .required_size(Size::new(200.0, 16.0))
+                    .background(Color::from_rgb_u8(98, 160, 255)),
+                BoxSpec::default(),
+                || {},
+            );
+        },
+    );
+}
+
+#[test]
+fn kept_frames_match_full_redraws_while_a_clipping_box_shrinks_around_a_still_child() {
+    kept_frames_match_full_redraws(1.0, ShrinkingParent);
+    kept_frames_match_full_redraws(1.5, ShrinkingParent);
 }
 
 #[test]
@@ -444,6 +940,68 @@ fn a_parent_clip_its_layer_alone_reads_reaches_a_child_that_did_not_change() {
 #[test]
 fn layers_that_change_under_a_still_parent_keep_its_alpha_tint_and_clip() {
     kept_frames_match_full_redraws(1.5, StillParent);
+}
+
+// A parent whose padding changes every frame and whose rows hold still:
+// a leaf child and a child layer move with the parent's content. A box
+// beside the parent comes and goes every other frame, so the picture is
+// also built anew from the rows it held.
+#[composable]
+fn PaddedParent(captured: Step) {
+    let step = rememberMutableStateOf(|| 0u32);
+    *captured.borrow_mut() = Some(step);
+    let inset = (step.value() % 4) as f32 * 3.0;
+    let beside = step.value() % 2 == 1;
+    Column(Modifier::empty(), ColumnSpec::default(), move || {
+        Box(
+            Modifier::empty()
+                .offset(16.0, 12.0)
+                .width(150.0)
+                .height(90.0)
+                .background(Color::from_rgb_u8(40, 44, 64))
+                .padding(inset),
+            BoxSpec::default(),
+            || {
+                Column(Modifier::empty(), ColumnSpec::default(), || {
+                    Box(
+                        Modifier::empty()
+                            .width(60.0)
+                            .height(14.0)
+                            .background(Color::from_rgb_u8(200, 90, 60)),
+                        BoxSpec::default(),
+                        || {},
+                    );
+                    Box(
+                        Modifier::empty()
+                            .width(40.0)
+                            .height(14.0)
+                            .graphics_layer(|| GraphicsLayer {
+                                alpha: 0.7,
+                                ..GraphicsLayer::default()
+                            })
+                            .background(Color::from_rgb_u8(60, 160, 220)),
+                        BoxSpec::default(),
+                        || {},
+                    );
+                });
+            },
+        );
+        if beside {
+            Box(
+                Modifier::empty()
+                    .width(30.0)
+                    .height(10.0)
+                    .background(Color::from_rgb_u8(90, 200, 90)),
+                BoxSpec::default(),
+                || {},
+            );
+        }
+    });
+}
+
+#[test]
+fn children_move_with_a_parent_whose_padding_changes() {
+    kept_frames_match_full_redraws(1.0, PaddedParent);
 }
 
 #[composable]
@@ -525,6 +1083,81 @@ fn a_still_frame_changes_nothing_and_a_new_count_changes_only_its_text() {
         changed < WIDTH * HEIGHT / 10,
         "the count's area is small: {changed} pixels in {areas:?}"
     );
+}
+
+// A lazy list of three labels that rounds its corners at the padded rect
+// the labels start at, as the demo's animations tab does: its middle label
+// shows a count its item reads.
+const LIST_TOP: u16 = 40;
+const LIST_PADDING: u16 = 8;
+const LIST_ROW: u16 = 20;
+const LIST_GAP: u16 = 6;
+
+#[composable]
+fn ListLabel(text: String) {
+    Text(
+        text,
+        Modifier::empty().height(f32::from(LIST_ROW)),
+        TextStyle::default(),
+    );
+}
+
+#[composable]
+fn LazyCounter(captured: Step) {
+    let step = rememberMutableStateOf(|| 0u32);
+    *captured.borrow_mut() = Some(step);
+    let state = rememberLazyListState();
+    LazyColumn(
+        Modifier::empty()
+            .offset(20.0, f32::from(LIST_TOP))
+            .width(180.0)
+            .height(100.0)
+            .background(Color::from_rgb_u8(40, 40, 60))
+            .rounded_corners(6.0)
+            .padding(f32::from(LIST_PADDING)),
+        state,
+        LazyColumnSpec::new()
+            .vertical_arrangement(LinearArrangement::SpacedBy(f32::from(LIST_GAP))),
+        move |scope| {
+            scope.item_keyed(Some(0), None, || {
+                ListLabel("Static item: ready".to_owned());
+            });
+            scope.item_keyed(Some(1), None, move || {
+                ListLabel(format!("Lazy Pulse: {}", step.value()));
+            });
+            scope.item_keyed(Some(2), None, || {
+                ListLabel("Static item: complete".to_owned());
+            });
+        },
+    );
+}
+
+#[test]
+fn a_new_count_in_a_lazy_list_changes_only_its_label() {
+    let (mut shell, captured) = shell(1.0, LazyCounter);
+    let mut picture = Picture::default();
+    let mut frame = |shell: &mut AppShell<PixelsRenderer>, areas: &mut Vec<PixelRect>| {
+        shell.update();
+        shell.primary().with_renderer(|renderer| {
+            renderer.update_picture(&mut picture, WIDTH, HEIGHT, 1.0, areas);
+        });
+    };
+    let mut areas = Vec::new();
+    frame(&mut shell, &mut areas);
+    let step = (*captured.borrow()).expect("the composition remembered the step");
+    let label_top = u32::from(LIST_TOP + LIST_PADDING + LIST_ROW + LIST_GAP);
+    let rows = label_top - u32::from(LIST_GAP / 2)..label_top + u32::from(LIST_ROW + LIST_GAP / 2);
+    for count in [7, 80, 900] {
+        step.set(count);
+        frame(&mut shell, &mut areas);
+        assert!(!areas.is_empty(), "count {count}: the label changed");
+        assert!(
+            areas
+                .iter()
+                .all(|area| rows.start <= area.y && area.y + area.height <= rows.end),
+            "count {count}: only the label's rows {rows:?} change: {areas:?}"
+        );
+    }
 }
 
 #[composable]
@@ -937,4 +1570,241 @@ fn many_changed_boxes_join_into_the_same_areas_frame_after_frame() {
         first,
     ];
     assert_eq!(seen, expected);
+}
+
+// A box that clips a wider child, a box of its own and a faded box with a
+// child that handles clicks: records that a write of the scene store
+// changes alone.
+#[composable]
+fn ClippedPair(_captured: Step) {
+    Box(
+        Modifier::empty().fill_max_size(),
+        BoxSpec::default(),
+        || {
+            Box(
+                Modifier::empty()
+                    .offset(20.0, 20.0)
+                    .width(80.0)
+                    .height(60.0)
+                    .clip_to_bounds()
+                    .background(color(1, 2)),
+                BoxSpec::default(),
+                || {
+                    Box(
+                        Modifier::empty()
+                            .offset(10.0, 10.0)
+                            .width(120.0)
+                            .height(30.0)
+                            .background(color(3, 4)),
+                        BoxSpec::default(),
+                        || {},
+                    );
+                },
+            );
+            Box(
+                Modifier::empty()
+                    .offset(140.0, 100.0)
+                    .width(40.0)
+                    .height(40.0)
+                    .background(color(5, 6)),
+                BoxSpec::default(),
+                || {},
+            );
+            Box(
+                Modifier::empty()
+                    .offset(20.0, 100.0)
+                    .width(60.0)
+                    .height(50.0)
+                    .graphics_layer(|| GraphicsLayer {
+                        alpha: FADED_ALPHA,
+                        ..GraphicsLayer::default()
+                    })
+                    .clickable(|_| {})
+                    .background(color(7, 8)),
+                BoxSpec::default(),
+                || {
+                    Box(
+                        Modifier::empty()
+                            .offset(5.0, 5.0)
+                            .width(30.0)
+                            .height(20.0)
+                            .background(color(9, 10)),
+                        BoxSpec::default(),
+                        || {},
+                    );
+                },
+            );
+        },
+    );
+}
+
+// The record of `ClippedPair` that draws `size`.
+fn record_of_size(store: &SceneStore, size: Size) -> RecordId {
+    fn find(layer: LayerRef<'_>, size: Size) -> Option<RecordId> {
+        if layer.size() == size {
+            return Some(layer.id());
+        }
+        layer.items().find_map(|item| match item {
+            ItemRef::Layer(child) | ItemRef::Leaf(child) => find(child, size),
+            _ => None,
+        })
+    }
+    let root = store.root_layer().expect("the scene has a root layer");
+    find(root, size).expect("a record draws that size")
+}
+
+const CLIP: Size = Size {
+    width: 80.0,
+    height: 60.0,
+};
+const SIDE: Size = Size {
+    width: 40.0,
+    height: 40.0,
+};
+const FADED: Size = Size {
+    width: 60.0,
+    height: 50.0,
+};
+const FADED_ALPHA: f32 = 0.8;
+
+// What a store write alone does to the picture.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Seen {
+    // Some pixel changes.
+    Changed,
+    // Every pixel stays.
+    Same,
+}
+
+// Draws `ClippedPair` into a kept frame, runs `write` alone in an update of
+// the scene's records, and asserts that the write does to the picture what
+// `seen` says and that the frame kept from the areas the renderer reports
+// equals a full redraw.
+fn a_store_write_alone_keeps_the_frame_whole(
+    label: &str,
+    seen: Seen,
+    write: impl FnOnce(&mut SceneStore),
+) {
+    let (mut shell, _) = shell(1.0, ClippedPair);
+    shell.update();
+    let mut picture = Picture::default();
+    let mut areas = Vec::new();
+    let mut kept = vec![0u8; (WIDTH * HEIGHT * 4) as usize];
+    let mut full = vec![0u8; (WIDTH * HEIGHT * 4) as usize];
+    let mut before = vec![0u8; (WIDTH * HEIGHT * 4) as usize];
+    let mut area_pixels = Vec::new();
+    shell.primary().with_renderer(|renderer| {
+        let mut keep = |renderer: &mut PixelsRenderer, kept: &mut [u8]| {
+            renderer.update_picture(&mut picture, WIDTH, HEIGHT, 1.0, &mut areas);
+            for area in &areas {
+                area_pixels.resize(area.width as usize * area.height as usize * 4, 0);
+                renderer.draw_picture_area(&picture, *area, &mut area_pixels);
+                apply(kept, *area, &area_pixels);
+            }
+        };
+        keep(renderer, &mut kept);
+        before.copy_from_slice(&kept);
+        renderer.scene_mut().edit_store(write);
+        keep(renderer, &mut kept);
+        renderer.draw_scaled(&mut full, WIDTH, HEIGHT, 1.0);
+    });
+    assert_eq!(
+        first_difference(&before, &full).map_or(Seen::Same, |_| Seen::Changed),
+        seen,
+        "{label}: what the write does to the picture"
+    );
+    assert_eq!(
+        first_difference(&kept, &full),
+        None,
+        "{label}: the kept frame differs from a full redraw at (x, y); areas {areas:?}"
+    );
+}
+
+#[test]
+fn a_record_moved_alone_redraws() {
+    a_store_write_alone_keeps_the_frame_whole("set_placement", Seen::Changed, |store| {
+        let record = record_of_size(store, SIDE);
+        let origin = store.layer(record).origin_in_parent();
+        store.set_placement(record, Point::new(origin.x - 30.0, origin.y + 10.0), None);
+    });
+}
+
+#[test]
+fn a_record_turned_alone_redraws() {
+    a_store_write_alone_keeps_the_frame_whole("set_placement", Seen::Changed, |store| {
+        let record = record_of_size(store, CLIP);
+        let origin = store.layer(record).origin_in_parent();
+        let transform = ProjectiveTransform::translation(origin.x + 25.0, origin.y + 5.0);
+        store.set_placement(record, origin, Some(transform));
+    });
+}
+
+#[test]
+fn a_record_that_stops_handling_clicks_alone_keeps_its_pixels() {
+    a_store_write_alone_keeps_the_frame_whole("set_hit_test", Seen::Same, |store| {
+        let record = record_of_size(store, FADED);
+        let root = store.root().expect("the scene has a root");
+        assert!(
+            store.layer(root).has_hit_targets(),
+            "the faded box handles clicks"
+        );
+        store.set_hit_test(record, None);
+        assert!(
+            !store.layer(root).has_hit_targets(),
+            "set_hit_test: no record handles clicks"
+        );
+    });
+}
+
+#[test]
+fn a_record_that_opens_a_space_alone_keeps_its_pixels() {
+    a_store_write_alone_keeps_the_frame_whole("set_graphics_layer", Seen::Same, |store| {
+        let record = record_of_size(store, FADED);
+        let root = store.root().expect("the scene has a root");
+        assert!(!store.layer(root).has_space(), "no record holds a space");
+        store.set_graphics_layer(
+            record,
+            Some(GraphicsLayer {
+                alpha: FADED_ALPHA,
+                space: Some(Arc::new(LayerSpace::Transform(Mat4::IDENTITY))),
+                ..GraphicsLayer::default()
+            }),
+        );
+        assert!(
+            store.layer(root).has_space(),
+            "set_graphics_layer: the faded box holds a space"
+        );
+    });
+}
+
+#[test]
+fn a_record_whose_content_shifts_alone_redraws() {
+    a_store_write_alone_keeps_the_frame_whole("set_content_offset", Seen::Changed, |store| {
+        let record = record_of_size(store, CLIP);
+        store.set_content_offset(record, Point::new(-6.0, 8.0));
+    });
+}
+
+#[test]
+fn a_record_faded_alone_redraws() {
+    a_store_write_alone_keeps_the_frame_whole("set_graphics_layer", Seen::Changed, |store| {
+        let record = record_of_size(store, CLIP);
+        store.set_graphics_layer(
+            record,
+            Some(GraphicsLayer {
+                alpha: 0.5,
+                ..GraphicsLayer::default()
+            }),
+        );
+    });
+}
+
+#[test]
+fn a_record_of_another_kind_alone_redraws() {
+    a_store_write_alone_keeps_the_frame_whole("set_kind", Seen::Same, |store| {
+        let record = record_of_size(store, SIDE);
+        let layer = store.layer(record);
+        assert_eq!(layer.kind(), RecordKind::Leaf, "the plain box is a leaf");
+        store.set_kind(record, RecordKind::Layer, layer.node_id());
+    });
 }

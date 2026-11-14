@@ -185,8 +185,9 @@ pub struct Diagnostics {
     /// `CRANPOSE_PIPELINE_DISK_CACHE`: `0` or `1` turns the pipeline disk
     /// cache off or on.
     pub pipeline_disk_cache: Diagnostic,
-    /// `CRANPOSE_PRESENT_THREAD`: chooses whether Android presents on a
-    /// thread of its own.
+    /// `CRANPOSE_PRESENT_THREAD`: `1` or `0` turns Android's presenting on a
+    /// thread of its own on or off; unset, a device with four cores or more
+    /// presents on one.
     pub present_thread: Diagnostic,
     /// `CRANPOSE_PROBE_DRAW_PASSES`: draws the first this many draw passes.
     pub probe_draw_passes: Diagnostic,
@@ -203,8 +204,6 @@ pub struct Diagnostics {
     /// `CRANPOSE_ROBOT_BUTTON_HELPER_DIAG`: prints the robot's button
     /// lookups.
     pub robot_button_helper_diag: Diagnostic,
-    /// `CRANPOSE_SCENE_UPDATE_DIAG`: logs scene updates.
-    pub scene_update_diag: Diagnostic,
     /// `CRANPOSE_SHAPE_VARIANTS`: `0` draws shapes with the general
     /// pipeline.
     pub shape_variants: Diagnostic,
@@ -290,7 +289,6 @@ pub static DIAGNOSTICS: Diagnostics = Diagnostics {
     recomp_diag: Diagnostic::new("CRANPOSE_RECOMP_DIAG"),
     render_phase_dirty_diag: Diagnostic::new("CRANPOSE_RENDER_PHASE_DIRTY_DIAG"),
     robot_button_helper_diag: Diagnostic::new("CRANPOSE_ROBOT_BUTTON_HELPER_DIAG"),
-    scene_update_diag: Diagnostic::new("CRANPOSE_SCENE_UPDATE_DIAG"),
     shape_variants: Diagnostic::new("CRANPOSE_SHAPE_VARIANTS"),
     skip_shadows: Diagnostic::new("CRANPOSE_SKIP_SHADOWS"),
     structural_diag: Diagnostic::new("CRANPOSE_STRUCTURAL_DIAG"),

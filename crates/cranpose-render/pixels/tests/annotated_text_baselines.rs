@@ -23,7 +23,7 @@ fn pixels_renderer_aligns_small_and_large_spans_on_each_visible_line() {
             });
         }
         let mut scene = Scene::new();
-        scene.replace_graph(annotated_fixture::text_graph(
+        scene.describe(&annotated_fixture::text_graph(
             annotated_fixture::mixed_size_pairs(),
             style,
             Rect {

@@ -5,7 +5,7 @@ use cranpose_core::NodeId;
 use super::*;
 use crate::{
     layout::{LayoutBox, LayoutNodeData, LayoutNodeKind},
-    modifier::{Modifier, Point, Rect, ResolvedModifiers},
+    modifier::{Point, Rect, ResolvedModifiers},
 };
 
 #[test]
@@ -19,7 +19,6 @@ fn test_count_nodes() {
 
     let node_data = || {
         LayoutNodeData::new(
-            Modifier::empty(),
             ResolvedModifiers::default(),
             Rc::default(),
             None,

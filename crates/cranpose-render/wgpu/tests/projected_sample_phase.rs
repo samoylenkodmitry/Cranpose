@@ -1,11 +1,11 @@
 use cranpose_render_common::{
-    graph::{CachePolicy, LayerNode, ProjectiveTransform, RenderGraph, RenderNode},
+    graph::{CachePolicy, LayerNode, ProjectiveTransform, RenderNode},
     layer_transform::layer_transform_to_parent,
 };
 use cranpose_render_wgpu::{CapturedFrame, RenderStatsSnapshot};
 use cranpose_ui_graphics::{
     Color, CompositingStrategy, GraphicsLayer, Point, RUNTIME_SHADER_PRELUDE_WGSL, Rect,
-    RenderEffect, RuntimeShader,
+    RenderEffect, RuntimeShader, Size,
 };
 
 use crate::support;
@@ -43,10 +43,10 @@ fn transparent_surface_extent_does_not_shift_projected_source_samples() {
     .enumerate()
     {
         let inner =
-            support::capture_graph(&mut renderer, graph(INNER_BOUNDS, transform), FRAME, FRAME);
+            support::capture_graph(&mut renderer, &graph(INNER_BOUNDS, transform), FRAME, FRAME);
         let expanded = support::capture_graph(
             &mut renderer,
-            graph(EXPANDED_BOUNDS, transform),
+            &graph(EXPANDED_BOUNDS, transform),
             FRAME,
             FRAME,
         );
@@ -109,7 +109,7 @@ fn projected_transform(
     ])
 }
 
-fn graph(bounds: Rect, transform: ProjectiveTransform) -> RenderGraph {
+fn graph(bounds: Rect, transform: ProjectiveTransform) -> LayerNode {
     let painted = [
         (26.0, 25.0, 2.4, Color(0.95, 0.12, 0.72, 1.0)),
         (30.1, 25.0, 3.1, Color(0.15, 0.82, 0.92, 1.0)),
@@ -131,22 +131,18 @@ fn graph(bounds: Rect, transform: ProjectiveTransform) -> RenderGraph {
     })
     .collect();
     let child = LayerNode {
-        local_bounds: bounds,
+        size: bounds.size(),
+        layer_bounds: Some(bounds),
         transform_to_parent: transform,
         cache_policy: CachePolicy::None,
         children: painted,
         ..LayerNode::default()
     };
-    RenderGraph::new(LayerNode {
-        local_bounds: Rect {
-            x: 0.0,
-            y: 0.0,
-            width: FRAME as f32,
-            height: FRAME as f32,
-        },
+    LayerNode {
+        size: Size::new(FRAME as f32, FRAME as f32),
         children: vec![RenderNode::Layer(Box::new(child))],
         ..LayerNode::default()
-    })
+    }
 }
 
 #[test]
@@ -263,7 +259,8 @@ fn capture_scaled_backdrop(
     let backdrop = RenderEffect::blur(9.0);
     let children = if explicit_parent {
         let inner = LayerNode {
-            local_bounds: bounds,
+            size: bounds.size(),
+            layer_bounds: Some(bounds),
             graphics_layer: GraphicsLayer {
                 compositing_strategy: CompositingStrategy::Offscreen,
                 backdrop_effect: Some(backdrop),
@@ -279,7 +276,8 @@ fn capture_scaled_backdrop(
         content()
     };
     let group = LayerNode {
-        local_bounds: bounds,
+        size: bounds.size(),
+        layer_bounds: Some(bounds),
         transform_to_parent: transform,
         graphics_layer: graphics.into(),
         children,
@@ -308,16 +306,11 @@ fn capture_scaled_backdrop(
     page.push(RenderNode::Layer(Box::new(group)));
     let frame = support::capture_graph(
         renderer,
-        RenderGraph::new(LayerNode {
-            local_bounds: Rect {
-                x: 0.0,
-                y: 0.0,
-                width: FRAME as f32,
-                height: FRAME as f32,
-            },
+        &LayerNode {
+            size: Size::new(FRAME as f32, FRAME as f32),
             children: page,
             ..LayerNode::default()
-        }),
+        },
         FRAME,
         FRAME,
     );
@@ -350,12 +343,7 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     ));
     shader.set_input_padding(15.0);
     let pane = LayerNode {
-        local_bounds: Rect {
-            x: 0.0,
-            y: 0.0,
-            width: 20.0,
-            height: 20.0,
-        },
+        size: Size::new(20.0, 20.0),
         transform_to_parent: ProjectiveTransform::from_homogeneous([
             [1.0, 0.0, 0.0],
             [0.0, 1.0, 0.0],
@@ -369,13 +357,8 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
         cache_policy: CachePolicy::None,
         ..LayerNode::default()
     };
-    let graph = RenderGraph::new(LayerNode {
-        local_bounds: Rect {
-            x: 0.0,
-            y: 0.0,
-            width: FRAME as f32,
-            height: FRAME as f32,
-        },
+    let graph = LayerNode {
+        size: Size::new(FRAME as f32, FRAME as f32),
         children: vec![
             support::solid_rect(
                 Rect {
@@ -398,8 +381,8 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
             RenderNode::Layer(Box::new(pane)),
         ],
         ..LayerNode::default()
-    });
-    let frame = support::capture_graph(&mut renderer, graph, FRAME, FRAME);
+    };
+    let frame = support::capture_graph(&mut renderer, &graph, FRAME, FRAME);
     let pixel_x = 9usize;
     let pixel_y = 9usize;
     let pixel = &frame.pixels[(pixel_y * frame.width as usize + pixel_x) * 4..][..4];

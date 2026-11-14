@@ -1,12 +1,13 @@
-use std::{ops::Range, rc::Rc, sync::Arc};
+use std::{ops::Range, sync::Arc};
 
-use cranpose_core::NodeId;
+use cranpose_core::{NodeId, RecordRef};
 pub use cranpose_render_common::graph_scene::{HitRegion, Scene};
 use cranpose_render_common::{
     glyph_reach::{InkSpread, glyph_part},
-    graph::{InlineNode, LayerChange, LayerNode, ProjectiveTransform, RenderNode},
-    layer_shadow::{ShadowLight, ShadowRRect},
+    graph::ProjectiveTransform,
+    layer_shadow::ShadowRRect,
     primitive_emit::ShapeDrawParams,
+    scene_store::{ItemRef as RecordItem, LayerRef, RecordChanges, RecordKind},
 };
 use cranpose_ui::TextStyle;
 use cranpose_ui_graphics::{
@@ -16,8 +17,11 @@ use cranpose_ui_graphics::{
 
 use crate::{
     draw::RenderItem,
+    frame::Frames,
+    pipeline::LightSource,
     rewrite::Rewrite,
     scene_item::{ItemRef, SceneItem},
+    shift::Shift,
 };
 
 #[derive(Clone, Debug)]
@@ -53,6 +57,16 @@ impl Outline {
         }
     }
 
+    // The geometry `shift` moves, as the pixels of a frame draw it.
+    pub(crate) fn shifted(self, shift: Shift) -> Self {
+        let (dx, dy) = shift.offset();
+        if shift.is_none() {
+            self
+        } else {
+            self.translated(dx, dy)
+        }
+    }
+
     fn translated(self, dx: f32, dy: f32) -> Self {
         match self {
             Self::Arc(arc) => Self::Arc(ArcGeometry {
@@ -80,13 +94,11 @@ impl Outline {
     }
 }
 
-/// A point moved by `dx`, `dy`.
 fn shifted(point: Point, dx: f32, dy: f32) -> Point {
     Point::new(point.x + dx, point.y + dy)
 }
 
 impl DrawShape {
-    /// The shape moved by `dx`, `dy`, with no clip.
     pub(crate) fn translated(&self, dx: f32, dy: f32) -> Self {
         Self {
             rect: self.rect.translate(dx, dy),
@@ -97,7 +109,13 @@ impl DrawShape {
         }
     }
 
-    /// The shape `params` resolved.
+    // Moves the shape by `shift`, where it keeps its clip.
+    pub(crate) fn shift_by(&mut self, shift: Shift) {
+        self.rect = shift.rect(self.rect);
+        self.snap_anchor = self.snap_anchor.map(|anchor| shift.point(anchor));
+        self.outline = self.outline.shifted(shift);
+    }
+
     pub(crate) fn of_params(params: ShapeDrawParams) -> Self {
         Self {
             rect: params.rect,
@@ -115,7 +133,7 @@ impl DrawShape {
 pub(crate) struct TextDraw {
     pub rect: Rect,
     pub snap_anchor: Option<Point>,
-    pub text: Rc<cranpose_ui::text::AnnotatedString>,
+    pub text: Arc<cranpose_ui::text::RenderString>,
     // The lines and glyphs, from `rect`'s top left corner.
     pub layout: cranpose_text::TextLayout,
     // Whether the glyphs paint or only their shadows.
@@ -143,8 +161,6 @@ pub(crate) struct ImageDraw {
     pub transform: Option<ProjectiveTransform>,
 }
 
-/// One pass of a layer's elevation shadow: Skia's round rect shadow in
-/// device pixels, its color and the clip it is cut to.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct ShadowDraw {
     pub shadow: ShadowRRect,
@@ -154,14 +170,19 @@ pub(crate) struct ShadowDraw {
 }
 
 impl TextDraw {
+    // Moves the text by `shift`, where it keeps its clip.
+    pub(crate) fn shift_by(&mut self, shift: Shift) {
+        self.rect = shift.rect(self.rect);
+        self.snap_anchor = self.snap_anchor.map(|anchor| shift.point(anchor));
+    }
+
     // The part of `rect`, where the text draws from its top left corner,
     // in which its glyphs and their shadows draw.
     pub(crate) fn glyph_reach(&self, rect: Rect) -> Rect {
-        let spread = InkSpread::of_text(&self.text_style, &self.text.span_styles, &self.layout);
+        let spread = InkSpread::of_text(&self.text_style, self.text.span_styles(), &self.layout);
         glyph_part(rect, &self.layout, self.scale, spread)
     }
 
-    /// The text moved by `dx`, `dy`, with no clip.
     pub(crate) fn translated(&self, dx: f32, dy: f32) -> Self {
         Self {
             rect: self.rect.translate(dx, dy),
@@ -173,7 +194,18 @@ impl TextDraw {
 }
 
 impl ImageDraw {
-    /// The image moved by `dx`, `dy`, with no clip.
+    // Moves the image by `shift`, where it keeps its clip.
+    pub(crate) fn shift_by(&mut self, shift: Shift) {
+        let (dx, dy) = shift.offset();
+        match &mut self.transform {
+            Some(transform) => {
+                *transform = transform.then(ProjectiveTransform::translation(dx, dy));
+            }
+            None => self.rect = shift.rect(self.rect),
+        }
+        self.snap_anchor = self.snap_anchor.map(|anchor| shift.point(anchor));
+    }
+
     pub(crate) fn translated(&self, dx: f32, dy: f32) -> Self {
         let (rect, transform) = match self.transform {
             Some(transform) => (
@@ -193,7 +225,6 @@ impl ImageDraw {
 }
 
 impl ShadowDraw {
-    /// The shadow moved by `dx`, `dy`, with no clip.
     pub(crate) fn translated(&self, dx: f32, dy: f32) -> Self {
         Self {
             shadow: self.shadow.translated(dx, dy),
@@ -204,8 +235,6 @@ impl ShadowDraw {
     }
 }
 
-/// How many items of each kind a scene holds where a run of its items starts
-/// or stops.
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct ItemCounts {
     pub order: usize,
@@ -216,7 +245,6 @@ pub(crate) struct ItemCounts {
 }
 
 impl ItemCounts {
-    /// How many items of each kind lie from `start` up to `self`.
     pub(crate) fn since(self, start: Self) -> Self {
         Self {
             order: self.order - start.order,
@@ -239,8 +267,6 @@ impl ItemCounts {
         }
     }
 
-    /// The counts of a run copied from where `from` began in one scene to
-    /// where `to` begins in another.
     pub(crate) fn moved(self, from: Self, to: Self) -> Self {
         Self {
             order: to.order + self.order.saturating_sub(from.order),
@@ -252,9 +278,6 @@ impl ItemCounts {
     }
 }
 
-/// How much of a scene a layer's subtree holds: its records, its items of
-/// each kind, and the entries of what its layers passed down. Subtrees of
-/// one extent fit each other's places wherever each lies in its scene.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) struct SubtreeExtent {
     pub records: usize,
@@ -262,7 +285,6 @@ pub(crate) struct SubtreeExtent {
     pub passed_down: usize,
 }
 
-/// What a layer passes down to the walks of its child layers.
 #[derive(Clone, PartialEq)]
 pub(crate) struct PassedDown {
     pub transform: ProjectiveTransform,
@@ -271,72 +293,66 @@ pub(crate) struct PassedDown {
     pub clip: Option<Rect>,
     pub snap_anchor: Option<Point>,
     pub translated: bool,
+    // Whether the container's subtree can move as a frame when only the
+    // offset it moves its children by changes.
+    pub framed: bool,
 }
 
 // A node of the graph a scene keeps a record of: a layer with its subtree,
 // or a node drawn in its parent's layer.
 #[derive(Clone, Copy)]
 pub(crate) enum Subtree<'a> {
-    Layer(&'a LayerNode),
-    Inline(&'a InlineNode),
+    Layer(LayerRef<'a>),
+    Inline(LayerRef<'a>),
 }
 
 impl<'a> Subtree<'a> {
-    // The node `child`, a child of a layer, draws, when it draws one.
-    pub(crate) fn of_child(child: &'a RenderNode) -> Option<Self> {
+    // The node `child`, an item of a record, draws, when it draws one.
+    // The subtree of `record`, a child record of a layer.
+    pub(crate) fn of_record(record: LayerRef<'a>) -> Self {
+        match record.kind() {
+            RecordKind::Leaf => Self::Inline(record),
+            RecordKind::Layer | RecordKind::Wrapper | RecordKind::DrawGroup => Self::Layer(record),
+        }
+    }
+
+    pub(crate) fn of_child(child: RecordItem<'a>) -> Option<Self> {
         match child {
-            RenderNode::Layer(layer) => Some(Self::Layer(layer)),
-            RenderNode::Inline(inline) => Some(Self::Inline(inline)),
-            RenderNode::Primitive(_) | RenderNode::DrawRun(_) => None,
+            RecordItem::Layer(layer) => Some(Self::Layer(layer)),
+            RecordItem::Leaf(leaf) => Some(Self::Inline(leaf)),
+            RecordItem::Draw(_)
+            | RecordItem::Text(_)
+            | RecordItem::Run(_)
+            | RecordItem::Shape(_) => None,
         }
     }
 
     // The node and the node whose outer draws it wraps.
+    #[inline]
     pub(crate) fn identity(self) -> (Option<NodeId>, Option<NodeId>) {
         match self {
-            Self::Layer(layer) => (layer.node_id, layer.wraps),
-            Self::Inline(inline) => (Some(inline.node_id), None),
+            Self::Layer(layer) => layer.identity(),
+            Self::Inline(leaf) => (leaf.owner(), None),
         }
     }
 
-    // The change number, which covers the subtree.
-    pub(crate) fn change(self) -> LayerChange {
+    // What the subtree and its node were at their last changes.
+    #[inline]
+    pub(crate) fn changes(self) -> RecordChanges {
         match self {
-            Self::Layer(layer) => layer.change,
-            Self::Inline(inline) => inline.change,
-        }
-    }
-
-    // The node's own change number, which a change beneath it leaves.
-    pub(crate) fn own_change(self) -> LayerChange {
-        match self {
-            Self::Layer(layer) => layer.own_change,
-            Self::Inline(inline) => inline.change,
-        }
-    }
-
-    // The node's placement in its parent's layer.
-    pub(crate) fn transform_to_parent(self) -> ProjectiveTransform {
-        match self {
-            Self::Layer(layer) => layer.transform_to_parent,
-            Self::Inline(inline) => inline.transform_to_parent(),
+            Self::Layer(layer) | Self::Inline(layer) => layer.changes(),
         }
     }
 }
 
-/// The items a layer's subtree pushed into a scene, in a run of each list,
-/// so the next scene can copy them when nothing they depend on changed.
 #[derive(Clone, Copy)]
 pub(crate) struct SubtreeItems {
     /// The layer's node and the node whose outer draws it wraps.
     pub identity: (Option<NodeId>, Option<NodeId>),
-    /// The layer's change number, which covers its subtree, when it pushed
-    /// the items.
-    pub change: LayerChange,
-    /// The layer's own change number, which a change beneath it leaves.
-    pub own_change: LayerChange,
-    /// The layer's placement in its parent, which the number leaves out.
-    pub transform: ProjectiveTransform,
+    /// The layer's change numbers when it pushed the items: its subtree's,
+    /// its own, which a change beneath it leaves, and its place in its
+    /// parent's layer.
+    pub changes: RecordChanges,
     /// Where [`RasterScene::passed_down`] holds what the layer passed to its
     /// child layers, when it has any.
     pub passed_down: Option<usize>,
@@ -359,16 +375,29 @@ pub(crate) struct RasterScene {
     pub subtrees: Vec<SubtreeItems>,
     /// What the layers with child layers passed down to them.
     pub passed_down: Vec<PassedDown>,
-    /// The scale and the shadow light the walk started from.
-    pub start: Option<(f32, ShadowLight)>,
-    /// The runs of `order` copied in place from the scene the walk started
-    /// from, ascending: their items equal that scene's at the same indices.
+    // The subtrees whose items draw shifted from where they were pushed.
+    pub(crate) frames: Frames,
+    // How many times a push passed over a node whose clip left nothing of it
+    // to draw: the node's items are not in the scene, and where it moves to
+    // they would show.
+    pub(crate) culled: u32,
+    /// The scale and the root's size the walk started from, which the
+    /// shadow light comes from.
+    pub start: Option<LightSource>,
     pub(crate) kept: Vec<Range<usize>>,
     // The snap anchor of the layer whose draws push now, which their items
     // take.
     pub(crate) snap_anchor: Option<Point>,
     // While a changed subtree pushes again over its old items: where.
     pub(crate) rewrite: Option<Box<Rewrite>>,
+    // By record row, one past the place of the record's entry in `subtrees`
+    // and zero for none: where the update of a changed record starts, with
+    // no walk to it. An entry may name a place another record took since;
+    // `route` checks.
+    routes: Vec<u32>,
+    // Whether `subtrees` changed its records' places since `routes` was
+    // filled.
+    pub(crate) routes_stale: bool,
 }
 
 #[expect(clippy::multiple_inherent_impl, reason = "item reach in draw/reach")]
@@ -382,14 +411,17 @@ impl RasterScene {
             order: Vec::new(),
             subtrees: Vec::new(),
             passed_down: Vec::new(),
+            frames: Frames::default(),
+            culled: 0,
             start: None,
             kept: Vec::new(),
             snap_anchor: None,
             rewrite: None,
+            routes: Vec::new(),
+            routes_stale: true,
         }
     }
 
-    /// Empties the scene and keeps its storage.
     pub(crate) fn clear(&mut self) {
         self.shapes.clear();
         self.images.clear();
@@ -398,8 +430,40 @@ impl RasterScene {
         self.order.clear();
         self.subtrees.clear();
         self.passed_down.clear();
+        self.frames.clear();
         self.start = None;
         self.kept.clear();
+        self.routes_stale = true;
+    }
+
+    // The place in `subtrees` of the entry of `record`, when the scene
+    // holds one.
+    pub(crate) fn route(&self, record: RecordRef) -> Option<usize> {
+        let place = (*self.routes.get(record.id.index())? as usize).checked_sub(1)?;
+        (self.subtrees.get(place)?.changes.record() == record).then_some(place)
+    }
+
+    // Fills the routes again when the records' places changed.
+    pub(crate) fn refresh_routes(&mut self) {
+        if self.routes_stale {
+            self.routes.clear();
+            self.route_records(0..self.subtrees.len());
+            self.routes_stale = false;
+        }
+    }
+
+    // Notes the places of the records `places` holds.
+    pub(crate) fn route_records(&mut self, places: Range<usize>) {
+        for place in places {
+            let Some(entry) = self.subtrees.get(place) else {
+                return;
+            };
+            let row = entry.changes.record().id.index();
+            if row >= self.routes.len() {
+                self.routes.resize(row + 1, 0);
+            }
+            self.routes[row] = u32::try_from(place + 1).unwrap_or(0);
+        }
     }
 
     pub(crate) fn counts(&self) -> ItemCounts {
@@ -425,15 +489,11 @@ impl RasterScene {
         }
     }
 
-    /// Opens the record of `subtree`, whose items come next, and returns its
-    /// index for [`Self::close_subtree`].
     pub(crate) fn open_subtree(&mut self, subtree: Subtree<'_>) -> usize {
         let counts = self.counts();
         let record = SubtreeItems {
             identity: subtree.identity(),
-            change: subtree.change(),
-            own_change: subtree.own_change(),
-            transform: subtree.transform_to_parent(),
+            changes: subtree.changes(),
             passed_down: None,
             end: 0,
             start: counts,
@@ -450,7 +510,36 @@ impl RasterScene {
         index
     }
 
-    /// Notes in the record `index` what its layer passes down.
+    // Notes that a push passed over a node whose clip left nothing of it.
+    pub(crate) fn note_culled(&mut self) {
+        self.culled = self.culled.wrapping_add(1);
+    }
+
+    // Ends the subtree's chance to be a frame, when a push passed over a node
+    // since `culled`, the count when a frame root's push began: its items lack the
+    // nodes the clip cut away, which a shift would bring into view.
+    #[inline]
+    pub(crate) fn forget_frame_if_culled(&mut self, index: usize, culled: Option<u32>) {
+        if culled.is_some_and(|culled| self.culled != culled) {
+            self.forget_frame(index);
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn forget_frame(&mut self, index: usize) {
+        let Some(at) = self.record_mut(index).and_then(|record| record.passed_down) else {
+            return;
+        };
+        let entry = match self.rewrite.as_deref_mut() {
+            Some(rewrite) => rewrite.passed_down_mut(&mut self.passed_down, at),
+            None => self.passed_down.get_mut(at),
+        };
+        if let Some(entry) = entry {
+            entry.framed = false;
+        }
+    }
+
     pub(crate) fn note_passed_down(&mut self, index: usize, passed_down: PassedDown) {
         let at = match self.rewrite.as_deref_mut() {
             Some(rewrite) => rewrite.place_passed_down(&mut self.passed_down, passed_down),
@@ -464,8 +553,6 @@ impl RasterScene {
         }
     }
 
-    /// Closes the record `index`: the subtree pushed everything since it
-    /// opened.
     pub(crate) fn close_subtree(&mut self, index: usize) {
         let end = self
             .rewrite
@@ -486,9 +573,6 @@ impl RasterScene {
         }
     }
 
-    /// Pushes the items and records of the subtrees `old` recorded at
-    /// `records`, siblings one after another, which pushed their items there
-    /// up to `stop`.
     pub(crate) fn copy_subtrees(&mut self, old: &Self, records: Range<usize>, stop: ItemCounts) {
         let Some(from) = old.subtrees.get(records.start).map(|first| first.start) else {
             return;
@@ -562,9 +646,6 @@ impl RasterScene {
         }
     }
 
-    /// The extent of the subtree whose record is `record`, and the index of
-    /// its first entry of what its layers passed down; `None` when its
-    /// layers' entries of what they passed down do not lie in one run.
     pub(crate) fn subtree_span(&self, record: usize) -> Option<(SubtreeExtent, usize)> {
         let head = self.subtrees.get(record)?;
         let records = self.subtrees.get(record..head.end)?;
@@ -585,7 +666,6 @@ impl RasterScene {
         Some((extent, first.unwrap_or(0)))
     }
 
-    /// Queues `shape` to draw over everything queued before.
     pub(crate) fn push_draw_shape(&mut self, shape: DrawShape) {
         self.push_item(shape);
     }
@@ -665,9 +745,6 @@ impl RasterScene {
         });
     }
 
-    /// Queues the pixels a layer drew into a surface of its own: `image`
-    /// over `rect`, which `transform` maps to device pixels when the surface
-    /// is turned, cut to `clip` and drawn at `alpha`.
     pub(crate) fn push_surface_image(
         &mut self,
         image: ImageBitmap,

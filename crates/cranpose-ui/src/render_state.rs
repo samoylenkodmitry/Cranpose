@@ -16,6 +16,7 @@ mod draw_observation;
 mod geometry_scene_nodes;
 pub(crate) mod measure_reads;
 mod noted_scene_nodes;
+mod trim;
 
 use dirty_node_set::DirtyNodeSet;
 use display_scale::normalize_density;
@@ -28,7 +29,7 @@ use draw_observation::new_draw_observer;
 pub(crate) use draw_observation::{
     DrawObservationScope, clear_draw_observations_for_node, observe_draw_reads,
 };
-pub use draw_observation::{prune_draw_observations_to_nodes, request_current_draw_redraw};
+pub use draw_observation::{request_current_draw_redraw, retire_draw_observations};
 pub use geometry_scene_nodes::{GeometrySceneNodes, MovedSceneNode};
 use noted_scene_nodes::NotedSceneNodes;
 
@@ -42,9 +43,6 @@ struct RenderState {
     moved_scene_nodes: RefCell<NotedSceneNodes<MovedSceneNode>>,
     /// Nodes whose z index changed: their parents' layers hold the order.
     z_order_changes: RefCell<DirtyNodeSet>,
-    /// Nodes whose redraw flag was set before they had an id, so no draw
-    /// repass names them: each surface's frame takes those under its root.
-    retained_redraws: RefCell<Vec<NodeId>>,
     render_invalidated: Cell<bool>,
     pointer_invalidated: Cell<bool>,
     focus_invalidated: Cell<bool>,
@@ -66,7 +64,7 @@ pub struct AppContext {
     draw_observer: SnapshotStateObserver,
     // What each node's last measure read: a change measures the node again.
     pub(crate) measure_reads: Rc<cranpose_core::internal::NodeReads>,
-    text: crate::text::measure::TextService,
+    pub(crate) text: crate::text::measure::TextService,
     layout_frame_arena: RefCell<crate::layout::FrameLayoutArena>,
     /// The host the next layout pass lends its applier to; `None` while a
     /// pass has it.
@@ -115,7 +113,6 @@ impl RenderState {
             geometry_scene_nodes: RefCell::new(NotedSceneNodes::new()),
             moved_scene_nodes: RefCell::new(NotedSceneNodes::new()),
             z_order_changes: RefCell::new(DirtyNodeSet::new()),
-            retained_redraws: RefCell::new(Vec::new()),
             render_invalidated: Cell::new(false),
             pointer_invalidated: Cell::new(false),
             focus_invalidated: Cell::new(false),
@@ -150,6 +147,7 @@ impl Drop for AppContextScope {
     }
 }
 
+#[expect(clippy::multiple_inherent_impl, reason = "one file per concern")]
 impl AppContext {
     pub fn new() -> Rc<Self> {
         Self::new_with_density(1.0, None)
@@ -228,8 +226,7 @@ impl AppContext {
         self.mouse_input.take()
     }
 
-    /// Asks the shell to give the rest of the held press to `node` alone: the
-    /// other targets under the press see it cancelled.
+    // Gives the rest of the held press to `node` alone: other targets see it cancelled.
     pub(crate) fn claim_pointer(&self, node: NodeId) {
         self.pointer_claim.set(Some(node));
     }
@@ -401,19 +398,6 @@ impl AppContext {
             .take_dirty_nodes_into(output);
     }
 
-    /// Moves into `output` the nodes whose redraw flag was set before they
-    /// had an id, for a surface's frame to take those under its root.
-    pub fn take_retained_redraw_nodes_into(&self, output: &mut Vec<NodeId>) {
-        output.append(&mut self.state.retained_redraws.borrow_mut());
-    }
-
-    /// Gives back a node [`Self::take_retained_redraw_nodes_into`] moved out
-    /// that the surface did not take: one under another window root or not
-    /// attached yet.
-    pub fn keep_retained_redraw_node(&self, node_id: NodeId) {
-        self.state.retained_redraws.borrow_mut().push(node_id);
-    }
-
     /// Appends the nodes whose z index changed since the last call to
     /// `output`, as [`append_z_order_changes`] does in the current context.
     pub fn append_z_order_changes(&self, output: &mut Vec<NodeId>) {
@@ -476,17 +460,16 @@ impl AppContext {
             .moved_scene_nodes
             .borrow_mut()
             .take_into(&mut output.moved);
+        self.placement_pass().take_unplaced(&mut output.unplaced);
     }
 
-    /// Notes that the layout pass changed `node_id`'s geometry. A node
-    /// whose layout state is at hand notes it with
-    /// [`Self::note_geometry_scene_node`] instead, once a take.
+    // Notes that the layout pass changed `node_id`'s geometry; a node whose
+    // layout state is at hand uses `note_geometry_scene_node`, once a take.
     pub(crate) fn record_geometry_scene_node(&self, node_id: NodeId) {
         self.state.geometry_scene_nodes.borrow_mut().push(node_id);
     }
 
-    /// Notes that the layout pass changed `node_id`'s geometry. `noted_in`
-    /// is the node's own record of the take it was last noted in.
+    // Notes a geometry change of `node_id`, last noted in the take `noted_in`.
     pub(crate) fn note_geometry_scene_node(&self, node_id: NodeId, noted_in: &mut PackedU64) {
         self.state
             .geometry_scene_nodes
@@ -1021,14 +1004,6 @@ fn schedule_layer_property_repass_in_context(context: &AppContext, node_id: Node
         .borrow_mut()
         .schedule_repass(node_id);
     context.state.render_invalidated.set(true);
-}
-
-/// Notes `node_id`, whose redraw flag was set before it had an id, in the
-/// current context: no draw repass names it, so a surface's frame takes it.
-pub(crate) fn note_retained_redraw(node_id: NodeId) {
-    if let Some(context) = current_app_context() {
-        context.keep_retained_redraw_node(node_id);
-    }
 }
 
 /// Returns true if any draw repasses are pending.

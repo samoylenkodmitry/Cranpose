@@ -882,8 +882,8 @@ impl TextFieldModifierNode {
     }
 
     /// The field's text as shown, shared rather than copied.
-    pub(crate) fn shown_text(&self) -> Rc<crate::text::AnnotatedString> {
-        Rc::clone(&self.refs.presentation.get(self.state).shown)
+    pub(crate) fn shown_text(&self) -> crate::text::AnnotatedString {
+        self.refs.presentation.get(self.state).shown.clone()
     }
 
     /// Returns the text style the field lays out and draws with.
@@ -919,7 +919,7 @@ impl TextFieldModifierNode {
 
     fn measure_text_content(&self, wrap_width: Option<f32>) -> crate::text::TextMetrics {
         let presentation = self.refs.presentation.get(self.state);
-        let annotated = &*presentation.shown;
+        let annotated = &presentation.shown;
         let metrics = match wrap_width {
             Some(max_width) => crate::text::measure_text_with_options(
                 annotated,

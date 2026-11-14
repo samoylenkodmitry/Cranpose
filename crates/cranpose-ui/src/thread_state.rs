@@ -79,6 +79,8 @@ pub(crate) struct UiThreadState {
     pub(crate) app_contexts: RefCell<FixedHashMap<AppContextId, Weak<AppContext>>>,
     pub(crate) active_selection: RefCell<Weak<RegistrarInner>>,
     pub(crate) recent_text_styles: RefCell<RecentTextStyles>,
+    #[cfg(feature = "localization")]
+    pub(crate) localized_text_styles: RefCell<crate::localization::LocalizedTextStyles>,
     pub(crate) drawn_text_styles: RefCell<DrawnTextStyles>,
     pub(crate) shared_plain_texts: RefCell<cranpose_ui_graphics::ContentPool<SharedPlainText>>,
     // Each icon's path data parsed once, for every icon that draws it.
@@ -94,6 +96,9 @@ pub(crate) struct UiThreadState {
     // whether the chain gives any.
     pub(crate) spare_slices: Cell<Option<ModifierNodeSlices>>,
     pub(crate) empty_measure_policy: OnceCell<Rc<dyn MeasurePolicy>>,
+    // The parts every layout node shell of the thread shares.
+    pub(crate) shell_parts: OnceCell<Rc<crate::widgets::nodes::LayoutParts>>,
+    pub(crate) node_densities: RefCell<[Option<Rc<crate::density::Density>>; 2]>,
     pub(crate) draw_text_measurer: OnceCell<Rc<dyn DrawTextMeasurer>>,
     pub(crate) spare_flex_children: SpareFlexChildren,
 }
@@ -107,6 +112,8 @@ impl UiThreadState {
             app_contexts: RefCell::new(fixed_hash_map()),
             active_selection: RefCell::new(Weak::new()),
             recent_text_styles: RefCell::new(RecentTextStyles::new()),
+            #[cfg(feature = "localization")]
+            localized_text_styles: RefCell::new(crate::localization::LocalizedTextStyles::new()),
             drawn_text_styles: RefCell::new(DrawnTextStyles::new()),
             shared_plain_texts: RefCell::new(cranpose_ui_graphics::ContentPool::new()),
             icon_paths: RefCell::new(Vec::new()),
@@ -119,6 +126,8 @@ impl UiThreadState {
             empty_slices: OnceCell::new(),
             spare_slices: Cell::new(None),
             empty_measure_policy: OnceCell::new(),
+            shell_parts: OnceCell::new(),
+            node_densities: RefCell::new([None, None]),
             draw_text_measurer: OnceCell::new(),
             spare_flex_children: SpareFlexChildren::new(),
         }

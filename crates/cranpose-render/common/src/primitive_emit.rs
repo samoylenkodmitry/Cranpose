@@ -1,4 +1,4 @@
-use std::{rc::Rc, sync::Arc};
+use std::sync::Arc;
 
 use cranpose_ui::text::{AnnotatedString, TextStyle, drawn_text_style};
 use cranpose_ui_graphics::{
@@ -124,7 +124,7 @@ pub struct TextDrawParams {
     /// draw scope already resolved alignment into it.
     pub rect: Rect,
     /// The text to draw.
-    pub text: Rc<AnnotatedString>,
+    pub text: AnnotatedString,
     /// The lines and glyphs, from `rect`'s top left corner.
     pub layout: cranpose_text::TextLayout,
     /// Color that fills the glyphs.

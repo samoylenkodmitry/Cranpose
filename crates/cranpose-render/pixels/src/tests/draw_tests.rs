@@ -1,13 +1,12 @@
 use cranpose_render_common::{
     byte_blend::blend_byte_pixel,
     graph::{
-        DrawPrimitiveNode, LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, RenderGraph,
-        RenderNode,
+        DrawPrimitiveNode, LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, RenderNode,
     },
     text_fonts::TextFonts,
 };
 use cranpose_ui::{Brush, text::TextMotion};
-use cranpose_ui_graphics::Color;
+use cranpose_ui_graphics::{Color, Size};
 
 use super::*;
 use crate::{
@@ -286,13 +285,8 @@ fn multiline_text_renders_second_line_pixels() {
 #[test]
 fn draw_scene_renders_graph_backed_scene_without_flat_primitives() {
     let mut scene = Scene::new();
-    scene.graph = Some(RenderGraph::new(LayerNode {
-        local_bounds: Rect {
-            x: 0.0,
-            y: 0.0,
-            width: 16.0,
-            height: 16.0,
-        },
+    scene.describe(&LayerNode {
+        size: Size::new(16.0, 16.0),
         children: vec![RenderNode::Primitive(PrimitiveEntry {
             phase: PrimitivePhase::BeforeChildren,
             node: PrimitiveNode::Draw(Box::new(DrawPrimitiveNode {
@@ -310,7 +304,7 @@ fn draw_scene_renders_graph_backed_scene_without_flat_primitives() {
             })),
         })],
         ..Default::default()
-    }));
+    });
 
     let width = 20;
     let height = 20;

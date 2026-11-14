@@ -8,9 +8,9 @@ use cranpose_ui_graphics::{
     Brush, Color, DrawPlacement, DrawScope, DrawScopeDefault, DrawTextStyle, Size,
 };
 
-use super::{RenderFixture, build_fixture, is_background_like};
+use super::{RenderFixture, build_fixture_with, is_background_like};
 use crate::{
-    graph::PrimitivePhase, image_compare::sample_pixel, scene_builder::draw_command_nodes_for_tests,
+    graph::PrimitivePhase, image_compare::sample_pixel, scene_builder::draw_command_items,
 };
 
 const WIDTH: u32 = 200;
@@ -25,14 +25,16 @@ fn gradient_text(scope: &mut DrawScopeDefault) {
 }
 
 pub(super) fn gradient_text_fixture() -> RenderFixture {
-    let nodes = draw_command_nodes_for_tests(
-        NodeId(1),
-        &[DrawCommand::Behind(Rc::new(gradient_text))],
-        DrawPlacement::Behind,
-        Size::new(WIDTH as f32, HEIGHT as f32),
-        PrimitivePhase::BeforeChildren,
-    );
-    build_fixture(WIDTH, HEIGHT, nodes)
+    build_fixture_with(WIDTH, HEIGHT, |store, root| {
+        draw_command_items(
+            store,
+            root,
+            (NodeId(1), Size::new(WIDTH as f32, HEIGHT as f32)),
+            &[DrawCommand::Behind(Rc::new(gradient_text))],
+            DrawPlacement::Behind,
+            PrimitivePhase::BeforeChildren,
+        )
+    })
 }
 
 /// The summed red and blue of the ink in `columns`.

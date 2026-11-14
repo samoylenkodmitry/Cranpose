@@ -253,7 +253,7 @@ fn zero_opacity_skips_source_over_effects_but_keeps_destructive_blending() {
         layer.graphics_layer.blend_mode = blend_mode;
         layer.children.push(RenderNode::Layer(Box::new(
             shared_test_support::layer_node(
-                BAR,
+                Rect::from_size(BAR.size()),
                 ProjectiveTransform::identity(),
                 GraphicsLayer {
                     backdrop_effect: Some(RenderEffect::blur(8.0)),
@@ -420,7 +420,6 @@ fn cached_backdrop_uses_the_current_modulated_opacity() {
             layer.node_id = Some(NodeId(83));
             layer.cache_policy = CachePolicy::Auto;
             layer.graphics_layer.compositing_strategy = CompositingStrategy::ModulateAlpha;
-            layer.forget_raster_cache_hashes();
             page
         };
         let mut renderer = support::headless_renderer().expect("GPU required for opacity probe");

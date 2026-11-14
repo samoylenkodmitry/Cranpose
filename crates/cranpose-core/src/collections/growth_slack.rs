@@ -18,7 +18,10 @@ pub trait GrowthSlack {
     fn trim_growth_slack(&mut self);
 }
 
+// The trims run out of line: one copy for each collection type serves every
+// collection of it.
 impl<T> GrowthSlack for Vec<T> {
+    #[inline(never)]
     fn trim_growth_slack(&mut self) {
         if let Some(target) = slack_target(self.len(), self.capacity()) {
             self.shrink_to(target);
@@ -31,9 +34,25 @@ impl<T> GrowthSlack for Vec<T> {
     reason = "every hash map trims alike, whatever it hashes with"
 )]
 impl<K: Eq + Hash, V, S: BuildHasher> GrowthSlack for std::collections::HashMap<K, V, S> {
+    #[inline(never)]
     fn trim_growth_slack(&mut self) {
-        if let Some(target) = slack_target(self.len(), self.capacity()) {
-            self.shrink_to(target);
+        // A map rounds its buckets up to a power of two, which leaves room
+        // past the items: asked for room past them, it may keep twice that.
+        if slack_target(self.len(), self.capacity()).is_some() {
+            self.shrink_to(self.len());
+        }
+    }
+}
+
+#[expect(
+    clippy::disallowed_types,
+    reason = "every hash set trims alike, whatever it hashes with"
+)]
+impl<T: Eq + Hash, S: BuildHasher> GrowthSlack for std::collections::HashSet<T, S> {
+    #[inline(never)]
+    fn trim_growth_slack(&mut self) {
+        if slack_target(self.len(), self.capacity()).is_some() {
+            self.shrink_to(self.len());
         }
     }
 }

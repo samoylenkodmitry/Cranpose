@@ -373,6 +373,7 @@ fn robot_frame_diagnostics(
                     supported_modes: caps.present_modes.clone(),
                     frame_pacing_mode: app.frame_pacing_mode(),
                     refresh_rate_hz: 1.0 / interval.as_secs_f64(),
+                    surface_size: (config.width, config.height),
                 })
             }
             _ => RobotResponse::Error("Window presentation is not configured".into()),
@@ -431,7 +432,7 @@ fn capture_final_frame(
             .renderer()
             .capture_frame_with_scale(width, height, scale)
             .map_err(|err| format!("Failed to capture GPU screenshot: {err:?}"))?;
-        let drew_stand_ins = app.renderer().last_frame_stats().is_some_and(|stats| {
+        let drew_stand_ins = captured.stats.is_some_and(|stats| {
             stats.placeholder_draws > 0
                 || stats.shape_pipeline_fallback_draws > 0
                 || stats.instant_draws > 0

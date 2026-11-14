@@ -492,8 +492,8 @@ fn refresh_with<R: Renderer>(
         return false;
     }
     let area = surface.inspector.area();
-    let graph = draw::build(&mut surface.inspector.state, viewport, area);
-    surface.renderer.set_inspector_overlay(Some(graph));
+    let layer = draw::build(&mut surface.inspector.state, viewport, area);
+    surface.renderer.set_inspector_overlay(Some(layer));
     surface.inspector.installed = true;
     surface.inspector.dirty = false;
     true

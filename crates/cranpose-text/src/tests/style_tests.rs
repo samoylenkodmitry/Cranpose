@@ -292,13 +292,11 @@ fn font_feature_settings_reach_every_text_cache_hash() {
         ..Default::default()
     };
     let plain = SpanStyle::default();
-    let spanned = |span: SpanStyle| crate::AnnotatedString {
-        text: "0123".to_owned(),
-        span_styles: vec![crate::RangeStyle {
-            item: span,
-            range: 0..2,
-        }],
-        ..Default::default()
+    let spanned = |span: SpanStyle| {
+        crate::AnnotatedString::builder()
+            .append("0123")
+            .add_style(span, 0..2)
+            .to_annotated_string()
     };
     for (a, b) in [
         (&plain, &featured("zero")),
@@ -362,13 +360,11 @@ fn text_style_render_hash_includes_visual_attributes() {
 
 #[test]
 fn span_measurement_hash_ignores_paint_and_follows_metrics() {
-    let spanned = |span: SpanStyle| crate::AnnotatedString {
-        text: "0123".to_owned(),
-        span_styles: vec![crate::RangeStyle {
-            item: span,
-            range: 0..2,
-        }],
-        ..Default::default()
+    let spanned = |span: SpanStyle| {
+        crate::AnnotatedString::builder()
+            .append("0123")
+            .add_style(span, 0..2)
+            .to_annotated_string()
     };
     let plain = spanned(SpanStyle::default());
     let painted = spanned(SpanStyle {

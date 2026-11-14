@@ -208,6 +208,8 @@ where
     // target now where the last focused one was, or the first one. The
     // search builds the whole layout tree, and with no target registered it
     // can find none, so a screen with no target skips it after each layout.
+    // Out of line: only a window navigated by arrow keys keeps focus.
+    #[inline(never)]
     pub(crate) fn keep_focus(&mut self) {
         if cranpose_ui::active_focus_target().is_none() && cranpose_ui::has_focus_targets() {
             self.move_focus_by_arrow(FocusDirection::Down);

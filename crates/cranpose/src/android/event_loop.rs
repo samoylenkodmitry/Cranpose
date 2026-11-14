@@ -711,9 +711,9 @@ fn resize_android_surface(
     resources.config.width = width;
     resources.config.height = height;
     if present_thread {
-        let renderer = shell.renderer();
-        renderer.note_surface_reconfigured();
-        renderer.present_reconfigure(resources.config.clone());
+        if let Some(thread) = shell.renderer().present_thread() {
+            thread.reconfigure(resources.config.clone());
+        }
         resources.surface_dirty = true;
     } else if let Some(surface) = resources.surface.as_ref() {
         surface.configure(&resources.device, &resources.config);
@@ -819,14 +819,11 @@ fn drain_present_returns_into_loop(
                 }
             }
         });
-    if presented && let Some(resources) = gpu_resources.as_mut() {
-        resources.surface_dirty = false;
-    }
-    if refused {
-        if let Some(resources) = gpu_resources.as_mut() {
-            resources.surface_dirty = true;
-        }
-        shell.mark_dirty();
+    // A refused frame draws again from the scene the frontend keeps.
+    if let Some(resources) = gpu_resources.as_mut()
+        && (presented || refused)
+    {
+        resources.surface_dirty = refused;
     }
     presented.then(|| {
         let now = Instant::now();
@@ -1013,10 +1010,8 @@ fn drop_android_surface(
 ) {
     match (gpu_resources.as_mut(), app_shell.as_mut()) {
         (Some(resources), Some(shell)) => {
-            if present_thread {
-                let renderer = shell.renderer();
-                renderer.note_surface_reconfigured();
-                renderer.present_drop_surface();
+            if present_thread && let Some(thread) = shell.renderer().present_thread() {
+                thread.drop_surface();
             }
             resources.surface = None;
             resources.native_window_ptr = None;
@@ -1032,14 +1027,12 @@ fn drop_android_surface(
 /// Gives the present thread the window's new surface, or the new size of
 /// the one it has. Frames published afterwards queue behind it.
 fn hand_surface_to_present_thread(renderer: &mut WgpuRenderer, setup: &mut AndroidGpuSetup) {
-    renderer.note_surface_reconfigured();
-    match setup.surface.take() {
-        Some(surface) => {
-            renderer.present_replace_surface(surface, setup.resources.config.clone());
-        }
-        None => {
-            renderer.present_reconfigure(setup.resources.config.clone());
-        }
+    if let Some(thread) = renderer.present_thread() {
+        let config = setup.resources.config.clone();
+        match setup.surface.take() {
+            Some(surface) => thread.replace_surface(surface, config),
+            None => thread.reconfigure(config),
+        };
     }
     setup.resources.surface_dirty = true;
 }
@@ -1438,14 +1431,11 @@ pub fn run(
 
     super::frame_telemetry::seed_env_from_system_properties();
 
-    let machine_parallelism =
-        std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get);
-
     cranpose_render_wgpu::pin_current_thread_to_fast_cores("producer");
 
     keep_pipeline_cache(&app);
 
-    let present_thread = super::present_thread::android_present_thread(machine_parallelism);
+    let present_thread = super::present_thread::presents_on_thread();
     if present_thread {
         log::info!("[present-runtime] threaded present enabled");
     }

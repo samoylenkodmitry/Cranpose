@@ -1,4 +1,4 @@
-use std::rc::Rc;
+use std::{collections::hash_map::Entry, rc::Rc, sync::Arc};
 
 use crate::{FxBuildHasher, FxHashMap};
 
@@ -10,6 +10,12 @@ pub trait PooledValue {
 }
 
 impl<T: ?Sized> PooledValue for Rc<T> {
+    fn is_held(&self) -> bool {
+        Self::strong_count(self) > 1
+    }
+}
+
+impl<T: ?Sized> PooledValue for Arc<T> {
     fn is_held(&self) -> bool {
         Self::strong_count(self) > 1
     }
@@ -60,14 +66,20 @@ impl<V: PooledValue> ContentPool<V> {
         make: impl FnOnce() -> V,
         read: impl FnOnce(&V) -> R,
     ) -> R {
-        if let Some(value) = self.values.get(&hash)
-            && matches(value)
-        {
-            return read(value);
+        // One probe finds the value or the room for it: a text that changes
+        // every frame misses each time.
+        let full = self.values.len() >= self.sweep_at;
+        match self.values.entry(hash) {
+            Entry::Occupied(mut entry) => {
+                if !matches(entry.get()) {
+                    entry.insert(make());
+                }
+                return read(entry.get());
+            }
+            Entry::Vacant(entry) if !full => return read(entry.insert(make())),
+            Entry::Vacant(_) => {}
         }
-        if self.values.len() >= self.sweep_at {
-            self.sweep();
-        }
+        self.sweep();
         read(self.values.entry(hash).insert_entry(make()).get())
     }
 

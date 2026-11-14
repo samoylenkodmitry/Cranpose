@@ -1,7 +1,7 @@
 use cranpose_core::NodeId;
 use cranpose_render_common::{
     Renderer,
-    graph::{CachePolicy, ProjectiveTransform, RenderGraph, RenderNode},
+    graph::{CachePolicy, LayerNode, ProjectiveTransform, RenderNode},
 };
 use cranpose_ui_graphics::{Color, GraphicsLayer, Rect, RenderEffect};
 
@@ -28,7 +28,7 @@ fn layer(node_id: usize, color: Color, rect: Rect) -> RenderNode {
     RenderNode::Layer(Box::new(layer))
 }
 
-fn backdrop_graph(enabled: bool) -> RenderGraph {
+fn backdrop_graph(enabled: bool) -> LayerNode {
     let bounds = Rect {
         x: 0.0,
         y: 0.0,
@@ -84,16 +84,11 @@ fn backdrop_graph(enabled: bool) -> RenderGraph {
         ..Default::default()
     }
     .into();
-    graph(vec![RenderNode::Layer(Box::new(outer))])
+    page(vec![RenderNode::Layer(Box::new(outer))])
 }
 
-fn graph(children: Vec<RenderNode>) -> RenderGraph {
-    RenderGraph::new(support::layer_node(
-        None,
-        WIDTH as f32,
-        HEIGHT as f32,
-        children,
-    ))
+fn page(children: Vec<RenderNode>) -> LayerNode {
+    support::layer_node(None, WIDTH as f32, HEIGHT as f32, children)
 }
 
 #[test]
@@ -106,7 +101,7 @@ fn returned_packet_storage_reuses_both_slots_after_topology_shrinks() {
         }
     };
 
-    let next_graph = graph(vec![layer(
+    let next_graph = page(vec![layer(
         9_302,
         Color::from_rgb_u8(25, 180, 230),
         Rect {
@@ -154,22 +149,22 @@ fn returned_packet_storage_reuses_both_slots_after_topology_shrinks() {
         ..Default::default()
     }
     .into();
-    let stale_graph = graph(vec![RenderNode::Layer(Box::new(shadowed))]);
-    renderer.scene_mut().graph = Some(stale_graph.clone());
-    renderer.set_inspector_overlay(Some(stale_graph.clone()));
+    let stale_root = page(vec![RenderNode::Layer(Box::new(shadowed))]);
+    renderer.scene_mut().describe(&stale_root);
+    renderer.set_overlay_tree(Some(stale_root.clone()));
     let older_packet = renderer
         .build_frame_packet_for_tests(WIDTH, HEIGHT)
         .expect("first shadowed root and overlay packet builds");
-    renderer.scene_mut().graph = Some(stale_graph.clone());
-    renderer.set_inspector_overlay(Some(stale_graph));
+    renderer.scene_mut().describe(&stale_root);
+    renderer.set_overlay_tree(Some(stale_root));
     let newer_packet = renderer
         .build_frame_packet_for_tests(WIDTH, HEIGHT)
         .expect("second shadowed root and overlay packet builds");
     renderer.return_held_packet_for_tests(older_packet);
     renderer.return_held_packet_for_tests(newer_packet);
 
-    renderer.set_inspector_overlay(None);
-    renderer.scene_mut().graph = Some(next_graph.clone());
+    renderer.set_overlay_tree(None);
+    renderer.scene_mut().describe(&next_graph);
     let first_small = renderer
         .build_frame_packet_for_tests(WIDTH, HEIGHT)
         .expect("first small packet builds from a returned slot");
@@ -184,7 +179,7 @@ fn returned_packet_storage_reuses_both_slots_after_topology_shrinks() {
         wgpu::TextureFormat::Bgra8UnormSrgb,
         wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
     );
-    let expected = support::present_and_read(&mut renderer, WIDTH, HEIGHT, next_graph);
+    let expected = support::present_and_read(&mut renderer, WIDTH, HEIGHT, &next_graph);
     for (index, packet) in [first_small, second_small].into_iter().enumerate() {
         let outcome = renderer
             .render_held_packet_for_tests(&texture, &view, WIDTH, HEIGHT, packet)
@@ -213,15 +208,15 @@ fn reused_deep_scene_updates_backdrop_presence() {
     };
 
     let plain = backdrop_graph(false);
-    let expected = support::present_and_read(&mut renderer, WIDTH, HEIGHT, plain.clone());
+    let expected = support::present_and_read(&mut renderer, WIDTH, HEIGHT, &plain);
     let with_backdrop =
-        support::present_and_read(&mut renderer, WIDTH, HEIGHT, backdrop_graph(true));
+        support::present_and_read(&mut renderer, WIDTH, HEIGHT, &backdrop_graph(true));
     assert!(
         with_backdrop != expected,
         "the deepest layer's backdrop must affect the picture"
     );
 
-    let actual = support::present_and_read(&mut renderer, WIDTH, HEIGHT, plain);
+    let actual = support::present_and_read(&mut renderer, WIDTH, HEIGHT, &plain);
     assert_eq!(
         actual, expected,
         "a returned deep backdrop must not remain active after its shell is reused"

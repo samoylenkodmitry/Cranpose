@@ -841,8 +841,8 @@ fn unit_return_composable_skips_without_return_value_slot() {
         "unit-return composable should store 1 Value (parameter state)",
     );
     assert_eq!(
-        scoped_group_count, 2,
-        "unit-return composable should store 2 scoped groups (root + child scopes)",
+        scoped_group_count, 1,
+        "a composable that reads no state keeps no scope: only the root has one",
     );
     UNIT_INVOCATIONS.with(|calls| assert_eq!(calls.get(), 1));
 

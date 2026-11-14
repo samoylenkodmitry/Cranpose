@@ -1,4 +1,4 @@
-use std::{rc::Rc, sync::Arc};
+use std::sync::Arc;
 
 use cranpose_core::collections::map::HashSet;
 use cranpose_ui::text::{AnnotatedString, TextStyle, font::FontWeight};
@@ -45,23 +45,11 @@ fn shadow_draw() -> ShadowDraw {
 }
 
 fn text_key(draw: TextDraw) -> u64 {
-    let mut scene = RasterScene::new();
-    scene.texts.push(draw);
-    Canonical {
-        scene,
-        item: RenderItem::Text(0),
-    }
-    .key()
+    Canonical::Text(draw).key()
 }
 
 fn shadow_key(draw: ShadowDraw) -> u64 {
-    let mut scene = RasterScene::new();
-    scene.shadows.push(draw);
-    Canonical {
-        scene,
-        item: RenderItem::Shadow(0),
-    }
-    .key()
+    Canonical::Shadow(draw).key()
 }
 
 // Asserts every key differs from every other.
@@ -94,7 +82,7 @@ fn a_text_sprite_key_changes_with_each_setting_of_its_draw() {
             ..text_draw()
         }),
         text_key(TextDraw {
-            text: Rc::new(AnnotatedString::from("73 bpm")),
+            text: Arc::clone(AnnotatedString::from("73 bpm").render_string()),
             ..text_draw()
         }),
         text_key(TextDraw {

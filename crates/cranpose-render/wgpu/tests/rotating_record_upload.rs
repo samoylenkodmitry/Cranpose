@@ -1,11 +1,11 @@
 use std::rc::Rc;
 
 use cranpose_render_common::graph::{
-    DrawCommandId, DrawRunNode, LayerNode, PrimitivePhase, RenderGraph, RenderNode,
+    DrawCommandId, DrawRunNode, LayerNode, PrimitivePhase, RenderNode,
 };
 use cranpose_ui_graphics::{
     ArcRecordArgs, BlendMode, Brush, Color, CommandRecording, DrawPlacement, DrawScope,
-    DrawScopeDefault, Point, Rect, Size, normalized_band,
+    DrawScopeDefault, Point, Size, normalized_band,
 };
 
 use crate::support;
@@ -14,7 +14,7 @@ const SIDE: u32 = 256;
 const COLUMNS: usize = 16;
 const RECORDS: usize = COLUMNS * COLUMNS;
 
-fn rotating_arcs(angle: f32, color: Color) -> RenderGraph {
+fn rotating_arcs(angle: f32, color: Color) -> LayerNode {
     let mut scope_recording = CommandRecording::default();
     let mut scope =
         DrawScopeDefault::new(Size::new(SIDE as f32, SIDE as f32), &mut scope_recording);
@@ -36,17 +36,12 @@ fn rotating_arcs(angle: f32, color: Color) -> RenderGraph {
     recording_graph(scope_recording, SIDE)
 }
 
-fn recording_graph(recording: CommandRecording, side: u32) -> RenderGraph {
+fn recording_graph(recording: CommandRecording, side: u32) -> LayerNode {
     let recording = Rc::new(recording);
     let segments = recording.all_segments();
-    RenderGraph::new(LayerNode {
+    LayerNode {
         node_id: Some(support::STORED_RUN_NODE),
-        local_bounds: Rect {
-            x: 0.0,
-            y: 0.0,
-            width: side as f32,
-            height: side as f32,
-        },
+        size: Size::new(side as f32, side as f32),
         children: vec![RenderNode::DrawRun(DrawRunNode::for_command_shared(
             PrimitivePhase::BeforeChildren,
             Some(DrawCommandId {
@@ -58,10 +53,10 @@ fn recording_graph(recording: CommandRecording, side: u32) -> RenderGraph {
             segments,
         ))],
         ..LayerNode::default()
-    })
+    }
 }
 
-fn large_arc_run(count: usize, phase: usize, scope_recorded: bool) -> RenderGraph {
+fn large_arc_run(count: usize, phase: usize, scope_recorded: bool) -> LayerNode {
     const COLUMNS: usize = 104;
     const CELL: f32 = 5.0;
     let mut scope_recording = CommandRecording::default();
@@ -122,14 +117,14 @@ fn large_rotating_runs_preserve_pixels_when_lengths_change() {
     let actual: Vec<_> = frames
         .iter()
         .map(|&(count, phase)| {
-            support::present_and_read(&mut renderer, 520, 520, large_arc_run(count, phase, true))
+            support::present_and_read(&mut renderer, 520, 520, &large_arc_run(count, phase, true))
         })
         .collect();
     drop(renderer);
     for ((count, phase), pixels) in frames.into_iter().zip(actual) {
         let mut fresh = support::headless_renderer().expect("fresh renderer");
         let expected =
-            support::present_and_read(&mut fresh, 520, 520, large_arc_run(count, phase, false));
+            support::present_and_read(&mut fresh, 520, 520, &large_arc_run(count, phase, false));
         assert!(
             pixels == expected,
             "draw-scope frame {phase} with {count} inputs differs from fresh serial pixels"
@@ -141,9 +136,9 @@ fn large_rotating_runs_preserve_pixels_when_lengths_change() {
 fn rotating_arcs_upload_motion_and_preserve_changed_pixels() {
     let mut renderer = support::headless_renderer().expect("headless renderer");
     let color = Color(0.8, 0.3, 0.1, 1.0);
-    let before = support::present_and_read(&mut renderer, SIDE, SIDE, rotating_arcs(0.0, color));
-    support::present_and_read(&mut renderer, SIDE, SIDE, rotating_arcs(0.4, color));
-    let after = support::present_and_read(&mut renderer, SIDE, SIDE, rotating_arcs(0.8, color));
+    let before = support::present_and_read(&mut renderer, SIDE, SIDE, &rotating_arcs(0.0, color));
+    support::present_and_read(&mut renderer, SIDE, SIDE, &rotating_arcs(0.4, color));
+    let after = support::present_and_read(&mut renderer, SIDE, SIDE, &rotating_arcs(0.8, color));
     let stats = renderer.last_frame_stats().expect("frame stats");
     assert!(
         before != after,
@@ -160,7 +155,7 @@ fn rotating_arcs_upload_motion_and_preserve_changed_pixels() {
     drop(renderer);
 
     let mut fresh = support::headless_renderer().expect("fresh headless renderer");
-    let expected = support::present_and_read(&mut fresh, SIDE, SIDE, rotating_arcs(0.8, color));
+    let expected = support::present_and_read(&mut fresh, SIDE, SIDE, &rotating_arcs(0.8, color));
     assert!(
         after == expected,
         "the updated table must match a fresh render"
@@ -169,7 +164,7 @@ fn rotating_arcs_upload_motion_and_preserve_changed_pixels() {
         &mut fresh,
         SIDE,
         SIDE,
-        rotating_arcs(0.8, Color(0.1, 0.7, 0.3, 1.0)),
+        &rotating_arcs(0.8, Color(0.1, 0.7, 0.3, 1.0)),
     );
     assert!(
         expected != recolored,

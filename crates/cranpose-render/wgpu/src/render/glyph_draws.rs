@@ -279,6 +279,59 @@ impl<'a> TurnedGlyphs<'a> {
 pub(crate) struct GlyphInstances {
     pub(crate) plain: FrameScratch<GlyphInstance>,
     pub(crate) turned: FrameScratch<TurnedGlyph>,
+    behind: HeldGlyphs,
+    parked: HeldGlyphs,
+}
+
+// The draws of texts that wait apart from the pass's lists, and their plain
+// quads: a draw needs one run of quads in the shared buffer, so texts held
+// behind the held shapes wait here, and a text appended while the pass draws
+// what is held.
+#[derive(Default)]
+struct HeldGlyphs {
+    cmds: Vec<GlyphDrawCmd>,
+    quads: FrameScratch<GlyphInstance>,
+}
+
+impl HeldGlyphs {
+    // Moves the commands from `cmds_from` on and the plain quads from
+    // `quads_from` on of the pass's lists here.
+    fn take(
+        &mut self,
+        plain: &mut FrameScratch<GlyphInstance>,
+        cmds: &mut Vec<GlyphDrawCmd>,
+        (quads_from, cmds_from): (usize, usize),
+    ) {
+        let at = self.quads.len();
+        let first = self.cmds.len();
+        self.quads.extend(plain.drain(quads_from..));
+        self.cmds.extend(cmds.drain(cmds_from..));
+        for cmd in &mut self.cmds[first..] {
+            cmd.move_quads(quads_from, at);
+        }
+    }
+
+    // Appends what `take` moved here to the pass's lists, in order. Returns
+    // where the commands lie in `cmds`.
+    fn release(
+        &mut self,
+        plain: &mut FrameScratch<GlyphInstance>,
+        cmds: &mut Vec<GlyphDrawCmd>,
+    ) -> std::ops::Range<usize> {
+        let first = cmds.len();
+        let at = plain.len();
+        plain.extend(self.quads.drain(..));
+        for mut cmd in self.cmds.drain(..) {
+            cmd.move_quads(0, at);
+            cmds.push(cmd);
+        }
+        first..cmds.len()
+    }
+
+    fn clear(&mut self) {
+        self.cmds.clear();
+        self.quads.clear();
+    }
 }
 
 impl GlyphInstances {
@@ -294,6 +347,8 @@ impl GlyphInstances {
     pub(crate) fn clear(&mut self) {
         self.plain.clear();
         self.turned.clear();
+        self.behind.clear();
+        self.parked.clear();
     }
 
     /// Ends a frame: see [`FrameScratch::end_frame`]. Passes need the
@@ -301,6 +356,42 @@ impl GlyphInstances {
     pub(crate) fn end_frame(&mut self) {
         self.plain.end_frame();
         self.turned.end_frame();
+        self.behind.cmds.clear();
+        self.behind.quads.end_frame();
+        self.parked.cmds.clear();
+        self.parked.quads.end_frame();
+    }
+
+    // Moves the commands and plain quads of the text just appended, which
+    // start at `from`, to wait behind the held shapes.
+    pub(crate) fn hold_behind(&mut self, cmds: &mut Vec<GlyphDrawCmd>, from: (usize, usize)) {
+        self.behind.take(&mut self.plain, cmds, from);
+    }
+
+    // Whether texts wait behind the held shapes.
+    pub(crate) fn holds_behind(&self) -> bool {
+        !self.behind.cmds.is_empty()
+    }
+
+    // Appends the commands and quads held behind to the pass's lists, in
+    // order. Returns where the commands lie in `cmds`.
+    pub(crate) fn release_behind(
+        &mut self,
+        cmds: &mut Vec<GlyphDrawCmd>,
+    ) -> std::ops::Range<usize> {
+        self.behind.release(&mut self.plain, cmds)
+    }
+
+    // Sets the text just appended aside, from `from` on, while the pass draws
+    // what is held: that appends the commands held behind after it.
+    pub(crate) fn park(&mut self, cmds: &mut Vec<GlyphDrawCmd>, from: (usize, usize)) {
+        self.parked.take(&mut self.plain, cmds, from);
+    }
+
+    // Appends the text set aside to the lists again, after what the pass
+    // drew. Returns where its commands lie in `cmds`.
+    pub(crate) fn unpark(&mut self, cmds: &mut Vec<GlyphDrawCmd>) -> std::ops::Range<usize> {
+        self.parked.release(&mut self.plain, cmds)
     }
 
     pub(super) fn lens(&self) -> (usize, usize) {
@@ -541,6 +632,29 @@ impl GlyphDrawCmd {
     pub(crate) fn confine(&mut self, slot: TargetRect) {
         if !target_rect_within(self.bounds, slot) {
             self.scissor = Some(confined_scissor(self.scissor, slot));
+        }
+    }
+
+    // Whether the draw takes plain quads of the shared buffer, which can wait
+    // in `GlyphInstances::hold_behind`: a retained run claims a place of its
+    // own, and turned quads live in a buffer of their own.
+    pub(crate) fn takes_shared_plain(&self) -> bool {
+        self.kind() == Some(GlyphKind::Plain)
+    }
+
+    // Moves the plain quads the draw reads, which start at or after `from`,
+    // to start at `to` instead. Turned quads and retained runs stay.
+    fn move_quads(&mut self, from: usize, to: usize) {
+        if let GlyphDrawSource::Shared {
+            instance_start,
+            quads: GlyphQuads::Plain | GlyphQuads::Aligned,
+            ..
+        } = &mut self.source
+        {
+            let moved = (*instance_start as usize)
+                .saturating_sub(from)
+                .saturating_add(to);
+            *instance_start = u32::try_from(moved).unwrap_or(u32::MAX);
         }
     }
 

@@ -30,15 +30,6 @@ impl Renderer for EmptyRenderer {
         &mut self.0
     }
 
-    fn rebuild_scene(
-        &mut self,
-        _layout_tree: &cranpose_ui::LayoutTree,
-        _viewport: Size,
-    ) -> Result<(), Self::Error> {
-        self.0.clear();
-        Ok(())
-    }
-
     fn rebuild_scene_from_applier(
         &mut self,
         _applier: &mut cranpose_core::MemoryApplier,

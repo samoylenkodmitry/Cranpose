@@ -56,8 +56,8 @@ impl<'a> From<&'a str> for StyledTextRef<'a> {
 impl<'a> From<&'a cranpose_ui::text::AnnotatedString> for StyledTextRef<'a> {
     fn from(text: &'a cranpose_ui::text::AnnotatedString) -> Self {
         Self {
-            text: text.text.as_str(),
-            span_styles: &text.span_styles,
+            text: text.text(),
+            span_styles: text.span_styles(),
         }
     }
 }

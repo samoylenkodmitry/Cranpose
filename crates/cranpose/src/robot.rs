@@ -12,35 +12,12 @@ use cranpose_render_common::{RenderScene, Renderer};
 use cranpose_render_wgpu::{DebugCpuAllocationStats, RenderStatsSnapshot};
 use cranpose_ui::{PointerButton, SemanticsAction, SemanticsNode, SemanticsRole};
 
-/// Presentation constraints of the window controlled by a robot.
 #[cfg(feature = "renderer-wgpu")]
-#[derive(Debug, Clone)]
-pub struct RobotPresentationInfo {
-    /// Explicit environment request, if one was provided.
-    pub requested_mode: Option<String>,
-    /// Concrete surface mode after resolving automatic fallback choices.
-    pub present_mode: wgpu::PresentMode,
-    /// Concrete modes advertised by this surface.
-    pub supported_modes: Vec<wgpu::PresentMode>,
-    /// Application scheduling policy.
-    pub frame_pacing_mode: cranpose_app_shell::FramePacingMode,
-    /// Display refresh estimate used by the window scheduler.
-    pub refresh_rate_hz: f64,
-}
-
+mod presentation_info;
 #[cfg(feature = "renderer-wgpu")]
-impl RobotPresentationInfo {
-    /// Whether the configured scheduling and presentation modes request unpaced rendering.
-    ///
-    /// This does not establish measured throughput; surface acquisition can still block.
-    pub fn uses_unpaced_configuration(&self) -> bool {
-        self.frame_pacing_mode == cranpose_app_shell::FramePacingMode::NoVsync
-            && matches!(
-                self.present_mode,
-                wgpu::PresentMode::Immediate | wgpu::PresentMode::Mailbox
-            )
-    }
-}
+pub use presentation_info::RobotPresentationInfo;
+mod screenshot;
+pub use screenshot::RobotScreenshot;
 
 /// Serializable semantic element combining semantics + geometry
 ///
@@ -98,21 +75,6 @@ pub(crate) struct SemanticQueryResult {
 }
 
 pub(crate) type TextMatchBounds = (f32, f32, f32, f32, String);
-
-/// RGBA screenshot captured from the current render scene.
-#[derive(Debug, Clone)]
-pub struct RobotScreenshot {
-    /// Screenshot width in pixels.
-    pub width: u32,
-    /// Screenshot height in pixels.
-    pub height: u32,
-    /// Logical width covered by the screenshot.
-    pub logical_width: f32,
-    /// Logical height covered by the screenshot.
-    pub logical_height: f32,
-    /// Packed RGBA8 pixel buffer in row-major order.
-    pub pixels: Vec<u8>,
-}
 
 /// Input or fixture mutation performed at one exact-clock timeline step.
 #[derive(Debug, Clone, PartialEq)]
@@ -256,6 +218,7 @@ pub(crate) enum RobotCommand {
     LoseGpuDevice {
         times: u32,
     },
+    RequestWindowSize(u32, u32),
     InvokeAppHook {
         name: String,
         argument: String,
@@ -1102,10 +1065,7 @@ impl Robot {
 
     /// Reset the owning app shell's FPS monitor.
     pub fn reset_fps_stats(&self) -> Result<(), String> {
-        self.tx
-            .send(RobotCommand::ResetFpsStats)
-            .map_err(|e| format!("Failed to send FPS stats reset command: {e}"))?;
-        self.recv_ack()
+        self.send_and_ack(RobotCommand::ResetFpsStats, "FPS stats reset command")
     }
 
     /// Query the owning app context's latest recorded fling velocity.
@@ -1174,7 +1134,7 @@ impl Robot {
     ) -> Result<cranpose_ui::text::TextMetrics, String> {
         self.tx
             .send(RobotCommand::MeasureText {
-                text: text.text.clone(),
+                text: text.text().to_owned(),
                 style: Box::new(style.clone()),
             })
             .map_err(|e| format!("Failed to send measure_text command: {e}"))?;
@@ -1200,6 +1160,17 @@ impl Robot {
         self.tx
             .send(RobotCommand::SetSemanticsEnabled(enabled))
             .map_err(|e| format!("Failed to send semantics toggle command: {e}"))?;
+        self.recv_ack()
+    }
+
+    /// Asks the window for a surface of `width` by `height` physical pixels,
+    /// as a user's resize does, and waits until the event loop sends the
+    /// request. The window takes that size, or the nearest one the platform
+    /// allows, in a later turn of the loop.
+    pub fn request_window_size(&self, width: u32, height: u32) -> Result<(), String> {
+        self.tx
+            .send(RobotCommand::RequestWindowSize(width, height))
+            .map_err(|e| format!("Failed to send window size request: {e}"))?;
         self.recv_ack()
     }
 

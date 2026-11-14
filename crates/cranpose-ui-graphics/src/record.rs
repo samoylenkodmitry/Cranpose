@@ -2,7 +2,7 @@ use std::{
     cell::OnceCell,
     hash::{Hash, Hasher},
     ops::Range,
-    sync::{Arc, OnceLock},
+    sync::Arc,
 };
 
 use bytemuck::{Pod, Zeroable};
@@ -17,13 +17,18 @@ use crate::{
 };
 
 mod band_ring;
+mod draw_groups;
 mod materialize;
+mod record_tables;
+mod shape_spans;
 
 use band_ring::{BandRing, vertex_pixels};
+use draw_groups::DrawGroups;
 use materialize::{
     ContentMarkers, brush_of, materialize_shape, parts_primitives_with_markers,
     parts_segment_primitives,
 };
+pub use record_tables::RecordTables;
 
 /// The kind bits of [`ShapeRecord::flags`]: a plain rect.
 pub const RECORD_KIND_RECT: u32 = 0;
@@ -752,94 +757,6 @@ impl RecordSegment {
     }
 }
 
-/// The POD half of a recording: what the GPU reads, shared with the
-/// renderer behind an `Arc` so a packet carries it without a copy.
-#[derive(Clone, Debug, Default)]
-pub struct RecordTables {
-    /// The shape records, stored in columns.
-    pub shapes: ShapeRecords,
-    /// Gradient brushes, which shape records refer to by index.
-    pub brushes: Vec<BrushRecord>,
-    /// Gradient stops of all brushes, which brush records refer to by index.
-    pub stops: Vec<GradientStopRecord>,
-    /// Stop positions the app gave explicitly, which brush records refer to by index.
-    pub explicit_stops: Vec<f32>,
-    /// Runs of consecutive entries that one draw can take, in recorded order.
-    pub segments: Vec<RecordSegment>,
-    fingerprint: OnceLock<u64>,
-}
-
-impl PartialEq for RecordTables {
-    fn eq(&self, other: &Self) -> bool {
-        self.shapes == other.shapes
-            && self.brushes == other.brushes
-            && self.stops == other.stops
-            && self.explicit_stops == other.explicit_stops
-            && self.segments == other.segments
-    }
-}
-
-impl RecordTables {
-    fn clear(&mut self) {
-        self.shapes.clear();
-        self.brushes.clear();
-        self.stops.clear();
-        self.explicit_stops.clear();
-        self.segments.clear();
-        self.fingerprint.take();
-    }
-
-    /// Gives back the room growth left in every table; see
-    /// [`crate::shape_records::trim_growth`]. The content, and so the
-    /// fingerprint, stay.
-    fn trim_growth(&mut self) {
-        use crate::shape_records::trim_growth;
-        self.shapes.trim_growth();
-        trim_growth(&mut self.brushes);
-        trim_growth(&mut self.stops);
-        trim_growth(&mut self.explicit_stops);
-        trim_growth(&mut self.segments);
-    }
-
-    /// Empty tables with this one's capacities, so a recording that starts
-    /// while a scene still holds the last one grows nothing.
-    fn with_capacity_of(&self) -> Self {
-        Self {
-            shapes: ShapeRecords::with_capacity(self.shapes.capacity()),
-            brushes: Vec::with_capacity(self.brushes.capacity()),
-            stops: Vec::with_capacity(self.stops.capacity()),
-            explicit_stops: Vec::with_capacity(self.explicit_stops.capacity()),
-            segments: Vec::with_capacity(self.segments.capacity()),
-            fingerprint: OnceLock::new(),
-        }
-    }
-
-    /// A hash of everything the GPU reads and of the segments, computed
-    /// the first time a cache asks and kept while the tables stand.
-    pub fn fingerprint(&self) -> u64 {
-        *self.fingerprint.get_or_init(|| {
-            let mut hasher = FxHasher::default();
-            hasher.write(bytemuck::cast_slice(self.shapes.bodies()));
-            hasher.write(bytemuck::cast_slice(self.shapes.curves()));
-            hasher.write(self.shapes.source_bytes());
-            hasher.write(bytemuck::cast_slice(&self.brushes));
-            hasher.write(bytemuck::cast_slice(&self.stops));
-            hasher.write(bytemuck::cast_slice(&self.explicit_stops));
-            self.segments.hash(&mut hasher);
-            hasher.finish()
-        })
-    }
-
-    /// The heap the tables hold, capacity included.
-    pub fn heap_bytes(&self) -> usize {
-        self.shapes.heap_bytes()
-            + self.brushes.capacity() * size_of::<BrushRecord>()
-            + self.stops.capacity() * size_of::<GradientStopRecord>()
-            + self.explicit_stops.capacity() * size_of::<f32>()
-            + self.segments.capacity() * size_of::<RecordSegment>()
-    }
-}
-
 /// What a recording contains, answered once while recording so no consumer
 /// rescans it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -953,7 +870,7 @@ pub struct ShapeRecorder {
     // The colour and stop lists of each brush record's gradient as the app
     // gave them, shared: a materialized shape takes them, not copies the
     // tables hold.
-    gradient_lists: Vec<GradientLists>,
+    gradient_lists: crate::rare_list::RareList<GradientLists>,
     last_segment_key: u32,
     segment_waste: u32,
     min: [f32; 2],
@@ -964,7 +881,7 @@ impl Default for ShapeRecorder {
     fn default() -> Self {
         Self {
             tables: RecordTables::default(),
-            gradient_lists: Vec::new(),
+            gradient_lists: crate::rare_list::RareList::default(),
             last_segment_key: NO_SEGMENT_KEY,
             segment_waste: 0,
             min: [f32::INFINITY; 2],
@@ -1018,7 +935,7 @@ impl ShapeRecorder {
 
     fn tables_mut(&mut self) -> &mut RecordTables {
         let tables = &mut self.tables;
-        tables.fingerprint.take();
+        tables.forget_fingerprint();
         tables
     }
 
@@ -1453,7 +1370,7 @@ impl ShapeRecorder {
         let brush_bit = 1u8
             << match body.brush {
                 0 => 0,
-                index => self.tables.brushes[index as usize - 1].kind,
+                index => self.tables.brushes()[index as usize - 1].kind,
             };
         let kind_bit = 1u8 << record_fragment_kind(body.flags);
         let band_class = band_bucket.unwrap_or(0) as u8;
@@ -1629,14 +1546,14 @@ impl ShapeRecorder {
             return BrushShading::Solid;
         }
         let tables = &self.tables;
-        let Some(brush) = tables.brushes.get(body.brush as usize - 1) else {
+        let Some(brush) = tables.brushes().get(body.brush as usize - 1) else {
             return BrushShading::Fragment;
         };
         let vertex = if is_trapezoid(body.flags) {
-            vertex_gradient::clamps_between_two_stops(brush, &tables.stops, curve.radii)
+            vertex_gradient::clamps_between_two_stops(brush, tables.stops(), curve.radii)
         } else {
             body.flags & RECT_FILL_MASK == 0
-                && vertex_gradient::spans_quad(brush, &tables.stops, body.rect)
+                && vertex_gradient::spans_quad(brush, tables.stops(), body.rect)
         };
         if vertex {
             BrushShading::Vertex
@@ -1699,7 +1616,7 @@ impl ShapeRecorder {
                 stops,
             ),
         };
-        let tables = self.tables_mut();
+        let tables = self.tables_mut().gradients_mut();
         let stop_start = tables.stops.len() as u32;
         let count = colors.len();
         let positions = stops.as_deref().filter(|values| values.len() == count);
@@ -1761,15 +1678,10 @@ pub struct CommandRecording {
 
 #[derive(Clone, Debug)]
 struct RecordingContent {
-    others: Vec<DrawPrimitive>,
-    /// The groups that [`RecordLane::GroupStart`] segments open.
-    groups: Vec<DrawGroup>,
-    /// While recording, the groups open now, outermost first, as indices
-    /// into `groups`. Empty once the recording is finished.
-    open_groups: Vec<u32>,
+    others: crate::rare_list::RareList<DrawPrimitive>,
+    groups: DrawGroups,
     min: [f32; 2],
     max: [f32; 2],
-    shape_bounds: Option<Rect>,
     shape_count: u32,
     segment_count: u32,
     summary: RecordingSummary,
@@ -1779,12 +1691,10 @@ struct RecordingContent {
 impl Default for RecordingContent {
     fn default() -> Self {
         Self {
-            others: Vec::new(),
-            groups: Vec::new(),
-            open_groups: Vec::new(),
+            others: crate::rare_list::RareList::default(),
+            groups: DrawGroups::default(),
             min: [f32::INFINITY; 2],
             max: [f32::NEG_INFINITY; 2],
-            shape_bounds: None,
             shape_count: 0,
             segment_count: 0,
             summary: RecordingSummary::default(),
@@ -1809,7 +1719,7 @@ impl PartialEq for CommandRecording {
     fn eq(&self, other: &Self) -> bool {
         self.shapes == other.shapes
             && self.content.others == other.content.others
-            && self.content.groups == other.content.groups
+            && self.content.groups.list() == other.content.groups.list()
             && self.content.content_markers == other.content.content_markers
     }
 }
@@ -1931,10 +1841,9 @@ impl CommandRecording {
             .sum()
     }
 
-    /// The rect every recorded shape's pixels lie within; `None` when no
-    /// shape was recorded.
+    /// Where every recorded shape's pixels lie; `None` when none was recorded.
     pub fn shape_bounds(&self) -> Option<Rect> {
-        self.content.shape_bounds
+        self.shapes.bounds()
     }
 
     /// The shape columns, with complete records available on demand.
@@ -1944,12 +1853,12 @@ impl CommandRecording {
 
     /// The gradient brush table that shape records index into.
     pub fn brushes(&self) -> &[BrushRecord] {
-        &self.shapes.tables.brushes
+        self.shapes.tables.brushes()
     }
 
     /// The gradient stop table that brush records index into.
     pub fn stops(&self) -> &[GradientStopRecord] {
-        &self.shapes.tables.stops
+        self.shapes.tables.stops()
     }
 
     /// The primitives that are not shapes, such as images, text and shadows, in recorded order.
@@ -1959,7 +1868,7 @@ impl CommandRecording {
 
     /// The groups that [`RecordLane::GroupStart`] segments open, in recorded order.
     pub fn groups(&self) -> &[DrawGroup] {
-        &self.content.groups
+        self.content.groups.list()
     }
 
     /// The segments in recorded order.
@@ -1983,7 +1892,7 @@ impl CommandRecording {
                 width: self.content.max[0] - self.content.min[0],
                 height: self.content.max[1] - self.content.min[1],
             });
-        match (self.content.shape_bounds, others) {
+        match (self.shapes.bounds(), others) {
             (Some(shapes), Some(others)) => Some(union_rect(shapes, others)),
             (shapes, others) => shapes.or(others),
         }
@@ -2019,10 +1928,10 @@ impl CommandRecording {
         *self.fingerprint.get_or_init(|| {
             let mut hasher = FxHasher::default();
             hasher.write_u64(self.shapes.fingerprint());
-            for primitive in &self.content.others {
+            for primitive in self.content.others.iter() {
                 hasher.write_u64(primitive.render_hash());
             }
-            for group in &self.content.groups {
+            for group in self.content.groups.list() {
                 crate::render_hash::hash_draw_group(group, &mut hasher);
             }
             hasher.write_u32(self.content.content_markers);
@@ -2042,7 +1951,7 @@ impl CommandRecording {
 
     /// Iterates over the segments in the index range `segments`.
     pub fn segments_in(&self, segments: &Range<u32>) -> std::slice::Iter<'_, RecordSegment> {
-        self.shapes.tables.segments[segments.start as usize..segments.end as usize].iter()
+        self.shapes.segments_in(segments)
     }
 
     /// The summary of the entries inside `segments` only.
@@ -2130,7 +2039,7 @@ impl CommandRecording {
                 RecordLane::Content => {}
                 RecordLane::GroupStart => entries.for_each(|index| {
                     visit(DrawPrimitive::Group(GroupMarker::Start(
-                        self.content.groups[index],
+                        self.content.groups.list()[index],
                     )));
                 }),
                 RecordLane::GroupEnd => {
@@ -2200,13 +2109,12 @@ impl<'a> CommandRecorder<'a> {
     }
 
     fn finish_parts(mut self) -> (&'a ShapeRecorder, &'a RecordingContent) {
-        while !self.content.open_groups.is_empty() {
+        while !self.content.groups.open().is_empty() {
             self.push_group_end();
         }
         if self.fresh_shapes {
             self.shapes.tables.trim_growth();
         }
-        self.content.shape_bounds = self.shapes.bounds();
         self.content.shape_count = self.shapes.tables.shapes.len() as u32;
         self.content.segment_count = self.shapes.tables.segments.len() as u32;
         (self.shapes, self.content)
@@ -2235,10 +2143,8 @@ impl<'a> CommandRecorder<'a> {
         self.shapes.clear();
         self.content.others.clear();
         self.content.groups.clear();
-        self.content.open_groups.clear();
         self.content.min = [f32::INFINITY; 2];
         self.content.max = [f32::NEG_INFINITY; 2];
-        self.content.shape_bounds = None;
         self.content.shape_count = 0;
         self.content.segment_count = 0;
         self.content.summary = RecordingSummary::default();
@@ -2256,11 +2162,11 @@ impl<'a> CommandRecorder<'a> {
     pub fn push_content(&mut self) {
         self.content.content_markers += 1;
         self.content.summary.has_content_markers = true;
-        for _ in &self.content.open_groups {
+        for _ in self.content.groups.open() {
             self.shapes.push_marker_segment(RecordLane::GroupEnd, 0);
         }
         self.shapes.push_marker_segment(RecordLane::Content, 0);
-        for &group in &self.content.open_groups {
+        for &group in self.content.groups.open() {
             self.shapes
                 .push_marker_segment(RecordLane::GroupStart, group);
         }
@@ -2269,9 +2175,7 @@ impl<'a> CommandRecorder<'a> {
     /// Starts a group of draws that `group` places: what is recorded until
     /// the matching [`Self::push_group_end`] is in the group's coordinates.
     pub fn push_group_start(&mut self, group: DrawGroup) {
-        let index = self.content.groups.len() as u32;
-        self.content.groups.push(group);
-        self.content.open_groups.push(index);
+        let index = self.content.groups.start(group);
         self.content.summary.has_groups = true;
         self.shapes
             .push_marker_segment(RecordLane::GroupStart, index);
@@ -2279,7 +2183,7 @@ impl<'a> CommandRecorder<'a> {
 
     /// Ends the group started last; nothing when no group is open.
     pub fn push_group_end(&mut self) {
-        if self.content.open_groups.pop().is_some() {
+        if self.content.groups.end() {
             self.shapes.push_marker_segment(RecordLane::GroupEnd, 0);
         }
     }

@@ -58,7 +58,7 @@ fn basic_text_recomposes_when_dynamic_source_changes() {
                 BasicText(
                     DynamicTextSource::new(move || {
                         resolutions.set(resolutions.get() + 1);
-                        Rc::new(crate::text::AnnotatedString::from(text_state.value()))
+                        crate::text::AnnotatedString::from(text_state.value())
                     }),
                     Modifier::empty(),
                     TextStyle::default(),

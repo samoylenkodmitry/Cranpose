@@ -53,6 +53,10 @@ pub struct SurfaceImage {
     /// keeps presented images and this one was presented since the surface
     /// was configured. Otherwise its contents are undefined.
     pub kept: bool,
+    /// How many presentable images the surface hands out: until it has
+    /// handed out that many since it was configured, or one twice, the next
+    /// may be one it never handed out.
+    pub images: u32,
 }
 
 /// The images a surface followed at once; a surface with more hands the
@@ -338,7 +342,11 @@ impl Surface {
                 }
                 present.acquired_texture = Some(texture.clone());
                 present.acquired_image = slot.map(|(index, _)| index);
-                image = slot.map(|(index, _)| SurfaceImage { index, kept });
+                image = slot.map(|(index, _)| SurfaceImage {
+                    index,
+                    kept,
+                    images: ast.images,
+                });
 
                 let status = if ast.suboptimal {
                     Status::Suboptimal

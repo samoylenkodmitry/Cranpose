@@ -1,28 +1,28 @@
+use cranpose_core::RecordId;
 use cranpose_ui::Rect;
 use cranpose_ui_graphics::LayerShape;
 
 use super::graph_changes::GraphChanges;
-use crate::graph::{LayerNode, ProjectiveTransform, RenderNode};
+use crate::{
+    graph::ProjectiveTransform,
+    scene_store::{LayerRef, SceneStore},
+};
 
-/// Rebuilds `layer` with `rebuild`, which reports whether it succeeded, and
-/// returns whether the hit geometry of the layer or of a layer under it
-/// changed; `None` when the rebuild failed. A rebuild takes in the moves and
-/// layer changes of the nodes under the layer, which its own state does not
-/// show: a sheet that slides inside a container that redraws keeps the
-/// container's state.
 pub(super) fn rebuild_tracking_hits(
-    layer: &mut LayerNode,
-    rebuild: impl FnOnce(&mut LayerNode) -> bool,
+    store: &mut SceneStore,
+    layer: RecordId,
+    rebuild: impl FnOnce(&mut SceneStore, RecordId) -> bool,
 ) -> Option<bool> {
-    let previous = HitGraphState::of(layer);
+    let previous = HitGraphState::of(store.layer(layer));
     let mut descendants = crate::thread_state::with(|state| state.hit_geometry_scratch.take());
     descendants.clear();
-    visit_hit_layers(layer, &mut |child| {
+    visit_hit_layers(store.layer(layer), &mut |child| {
         descendants.push(HitGraphState::of(child));
         true
     });
-    let dirty = rebuild(layer).then(|| {
+    let dirty = rebuild(store, layer).then(|| {
         let mut expected = descendants.iter();
+        let layer = store.layer(layer);
         previous.dirty_against(&HitGraphState::of(layer))
             || !visit_hit_layers(layer, &mut |child| {
                 expected.next() == Some(&HitGraphState::of(child))
@@ -33,14 +33,9 @@ pub(super) fn rebuild_tracking_hits(
     dirty
 }
 
-/// Visits the layers under `layer` that are hit targets or hold one, in draw
-/// order, while `visit` returns true; returns whether every visit did.
-fn visit_hit_layers(layer: &LayerNode, visit: &mut impl FnMut(&LayerNode) -> bool) -> bool {
-    for child in &layer.children {
-        let RenderNode::Layer(child) = child else {
-            continue;
-        };
-        if child.hit_test.is_none() && !child.has_hit_targets {
+fn visit_hit_layers<'a>(layer: LayerRef<'a>, visit: &mut impl FnMut(LayerRef<'a>) -> bool) -> bool {
+    for child in layer.children() {
+        if child.hit_test().is_none() && !child.has_hit_targets() {
             continue;
         }
         if !visit(child) || !visit_hit_layers(child, visit) {
@@ -59,23 +54,20 @@ pub(crate) struct HitGraphState {
     transform_to_parent: ProjectiveTransform,
     clip_rect: Option<Rect>,
     shape: LayerShape,
-    /// Whether the layer is a scene, a mesh surface or a 3D transform. Each
-    /// update of such a layer runs its closure again, which may move where
-    /// the surfaces of its scene take input or hide one another.
     space: bool,
 }
 
 impl HitGraphState {
-    pub(super) fn of(layer: &LayerNode) -> Self {
+    pub(super) fn of(layer: LayerRef<'_>) -> Self {
         Self {
-            hit_test: layer.hit_test.is_some(),
-            has_hit_targets: layer.has_hit_targets,
-            local_bounds: layer.local_bounds,
-            node_bounds: layer.node_bounds,
-            transform_to_parent: layer.transform_to_parent,
+            hit_test: layer.hit_test().is_some(),
+            has_hit_targets: layer.has_hit_targets(),
+            local_bounds: layer.local_bounds(),
+            node_bounds: layer.node_bounds(),
+            transform_to_parent: layer.transform_to_parent(),
             clip_rect: layer.clip_rect(),
-            shape: layer.graphics_layer.shape,
-            space: layer.graphics_layer.space.is_some(),
+            shape: layer.graphics_layer().shape,
+            space: layer.graphics_layer().space.is_some(),
         }
     }
 

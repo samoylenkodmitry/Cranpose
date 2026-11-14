@@ -1,7 +1,8 @@
 // The raster scales of animated layers, held from frame to frame while
 // their content stays.
 
-use cranpose_core::{NodeId, collections::map::HashMap};
+use cranpose_core::{NodeId, RecordRef, collections::map::HashMap};
+use cranpose_render_common::scene_store::{LayerRef, SceneStore};
 
 pub(super) const ANIMATED_RASTER_STEPS_PER_OCTAVE: f32 = 8.0;
 
@@ -13,6 +14,7 @@ pub(crate) struct LayerMotion {
 
 #[derive(Clone, Copy)]
 struct Motion {
+    record: RecordRef,
     content_hash: u64,
     raster: f32,
 }
@@ -31,17 +33,26 @@ impl LayerMotion {
             .map_or(scale, |previous| held_raster_scale(previous.raster, scale))
     }
 
-    pub(super) fn record_scale(&mut self, node_id: Option<NodeId>, raster: f32, content_hash: u64) {
-        let Some(node_id) = node_id else {
+    pub(super) fn record_scale(&mut self, layer: LayerRef<'_>, raster: f32, content_hash: u64) {
+        let Some(node_id) = layer.node_id() else {
             return;
         };
         self.current.insert(
             node_id,
             Motion {
+                record: layer.store().record_ref(layer.id()),
                 content_hash,
                 raster,
             },
         );
+    }
+
+    // Ends a frame whose walk left layers of `store` out: their scales stay
+    // while their records stand.
+    pub(super) fn end_culled_frame(&mut self, store: &SceneStore) {
+        self.previous
+            .retain(|_, motion| store.resolve(motion.record).is_some());
+        self.previous.extend(self.current.drain());
     }
 
     pub(crate) fn end_frame(&mut self) {

@@ -210,6 +210,6 @@ fn text_of_mixed_font_sizes_wraps_without_losing_text() {
 
     let layout = &prepared.layout;
     assert!(layout.line_count() > 1);
-    assert_eq!(layout.line_end(layout.line_count() - 1), text.text.len());
+    assert_eq!(layout.line_end(layout.line_count() - 1), text.text().len());
     assert!(!prepared.did_overflow());
 }

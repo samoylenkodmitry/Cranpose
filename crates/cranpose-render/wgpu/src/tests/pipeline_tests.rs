@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use cranpose_ui::{
-    TextLayoutOptions,
+    Size, TextLayoutOptions,
     text::{TextDecoration, TextMotion},
 };
 
@@ -47,7 +47,7 @@ fn with_test_app_context<R>(block: impl FnOnce() -> R) -> R {
 }
 
 fn prepare_text_layout_for_test(
-    text: &cranpose_ui::text::AnnotatedString,
+    text: &AnnotatedString,
     style: &TextStyle,
     options: TextLayoutOptions,
     max_width: Option<f32>,
@@ -55,16 +55,13 @@ fn prepare_text_layout_for_test(
     with_test_app_context(|| prepare_text_layout(text, style, options, max_width))
 }
 
-fn measure_text_for_test(
-    text: &cranpose_ui::text::AnnotatedString,
-    style: &TextStyle,
-) -> cranpose_ui::TextMetrics {
+fn measure_text_for_test(text: &AnnotatedString, style: &TextStyle) -> cranpose_ui::TextMetrics {
     with_test_app_context(|| measure_text(text, style))
 }
 
 fn text_node(
     node_id: NodeId,
-    text: &cranpose_ui::text::AnnotatedString,
+    text: &AnnotatedString,
     text_style: &TextStyle,
     font_size: f32,
     layout_options: TextLayoutOptions,
@@ -73,7 +70,6 @@ fn text_node(
     TextPrimitiveNode {
         node_id,
         rect: Rect::EMPTY,
-        text: Rc::new(text.clone()),
         render_text: prepared.render_text(),
         layout: prepared.layout.clone(),
         text_style: Arc::new(text_style.clone()),
@@ -250,15 +246,10 @@ fn clip_to_bounds_clips_shadow_and_content() {
 }
 
 #[test]
-fn collect_hits_from_graph_only_populates_hit_regions() {
+fn a_described_layer_with_a_click_handler_is_the_scenes_one_hit_target() {
     let layer = cranpose_render_common::graph::LayerNode {
         node_id: Some(NodeId(7)),
-        local_bounds: Rect {
-            x: 0.0,
-            y: 0.0,
-            width: 40.0,
-            height: 24.0,
-        },
+        size: Size::new(40.0, 24.0),
         transform_to_parent: cranpose_render_common::graph::ProjectiveTransform::translation(
             12.0, 8.0,
         ),
@@ -267,20 +258,12 @@ fn collect_hits_from_graph_only_populates_hit_regions() {
                 &cranpose_ui::Modifier::empty().clickable(|_point| {}),
             )),
         }),
-        has_hit_targets: true,
         ..Default::default()
     };
     let mut scene = crate::scene::Scene::new();
-
-    collect_hits_from_graph(
-        &layer,
-        cranpose_render_common::graph::ProjectiveTransform::identity(),
-        &mut scene,
-        None,
-    );
+    scene.describe(&layer);
 
     assert_eq!(scene.hit_targets().len(), 1);
-    assert!(scene.graph.is_none());
 }
 
 #[test]
@@ -316,7 +299,7 @@ fn push_text_style_draws_emits_background_shadow_and_main_text() {
         &mut scene,
         &text_node(
             NodeId(7),
-            &cranpose_ui::text::AnnotatedString::from("Decorated shadow text"),
+            &AnnotatedString::from("Decorated shadow text"),
             &style,
             14.0,
             TextLayoutOptions::default(),
@@ -378,7 +361,7 @@ fn push_text_style_draws_hard_shadow_does_not_emit_effect_layer() {
         &mut scene,
         &text_node(
             NodeId(7),
-            &cranpose_ui::text::AnnotatedString::from("Hard shadow"),
+            &AnnotatedString::from("Hard shadow"),
             &style,
             14.0,
             TextLayoutOptions::default(),
@@ -423,7 +406,7 @@ fn estimate_text_style_draw_bounds_matches_scene_emission() {
             ..Default::default()
         },
     };
-    let text = cranpose_ui::text::AnnotatedString::from("Layer text bounds");
+    let text = AnnotatedString::from("Layer text bounds");
     let rect = Rect {
         x: 8.25,
         y: 12.5,
@@ -487,7 +470,7 @@ fn push_text_style_draws_emits_decoration_shapes() {
         &mut scene,
         &text_node(
             NodeId(7),
-            &cranpose_ui::text::AnnotatedString::from("Decorated"),
+            &AnnotatedString::from("Decorated"),
             &style,
             14.0,
             TextLayoutOptions::default(),
@@ -512,7 +495,7 @@ fn push_text_style_draws_preserves_subpixel_decoration_y() {
         },
         ..Default::default()
     };
-    let text = cranpose_ui::text::AnnotatedString::from("Underlined");
+    let text = AnnotatedString::from("Underlined");
     let base_rect = Rect {
         x: 8.0,
         y: 10.10,
@@ -570,7 +553,7 @@ fn push_text_style_draws_emits_multiline_decoration_shapes_per_visual_line() {
         },
         ..Default::default()
     };
-    let text = cranpose_ui::text::AnnotatedString::from("One\nTwo\nThree");
+    let text = AnnotatedString::from("One\nTwo\nThree");
     let rect = Rect {
         x: 8.0,
         y: 10.0,
@@ -611,7 +594,7 @@ fn push_text_style_draws_emits_multiline_decoration_shapes_per_visual_line() {
 fn push_text_style_draws_resolves_decoration_brush_with_span_alpha_and_layer_alpha() {
     let mut scene = Scene::new();
     let style = TextStyle::default();
-    let text = cranpose_ui::text::AnnotatedString::builder()
+    let text = AnnotatedString::builder()
         .push_style(cranpose_ui::text::SpanStyle {
             color: Some(Color::RED),
             alpha: Some(0.4),
@@ -681,7 +664,7 @@ fn push_text_style_draws_baseline_shift_offsets_decoration_y_position() {
         width: 180.0,
         height: 28.0,
     };
-    let text = cranpose_ui::text::AnnotatedString::from("Shifted");
+    let text = AnnotatedString::from("Shifted");
     let base_node = text_node(
         NodeId(24),
         &text,
@@ -746,7 +729,7 @@ fn push_text_style_draws_applies_baseline_shift() {
         &mut scene,
         &text_node(
             NodeId(7),
-            &cranpose_ui::text::AnnotatedString::from("Shifted"),
+            &AnnotatedString::from("Shifted"),
             &style,
             14.0,
             TextLayoutOptions::default(),
@@ -789,7 +772,7 @@ fn push_text_style_draws_non_solid_brush_contract_uses_gpu_shader_mask() {
         &mut scene,
         &text_node(
             NodeId(7),
-            &cranpose_ui::text::AnnotatedString::from("Gradient text"),
+            &AnnotatedString::from("Gradient text"),
             &style,
             14.0,
             TextLayoutOptions::default(),
@@ -864,7 +847,7 @@ fn push_text_style_draws_default_linear_gradient_fill_resolves_infinite_endpoint
         &mut scene,
         &text_node(
             NodeId(13),
-            &cranpose_ui::text::AnnotatedString::from("Gradient fill"),
+            &AnnotatedString::from("Gradient fill"),
             &style,
             14.0,
             TextLayoutOptions::default(),
@@ -920,7 +903,7 @@ fn push_text_style_draws_stroke_contract_uses_gpu_shader_mask() {
         &mut scene,
         &text_node(
             NodeId(8),
-            &cranpose_ui::text::AnnotatedString::from("Stroke text"),
+            &AnnotatedString::from("Stroke text"),
             &style,
             14.0,
             TextLayoutOptions::default(),
@@ -1003,7 +986,7 @@ fn push_text_style_draws_stroke_material_scales_width_with_layer_scale() {
         &mut scene,
         &text_node(
             NodeId(18),
-            &cranpose_ui::text::AnnotatedString::from("Scaled stroke"),
+            &AnnotatedString::from("Scaled stroke"),
             &style,
             14.0,
             TextLayoutOptions::default(),
@@ -1073,7 +1056,7 @@ fn push_text_style_draws_gradient_stroke_contract_uses_gpu_shader_mask() {
         &mut scene,
         &text_node(
             NodeId(12),
-            &cranpose_ui::text::AnnotatedString::from("Gradient stroke"),
+            &AnnotatedString::from("Gradient stroke"),
             &style,
             14.0,
             TextLayoutOptions::default(),
@@ -1137,7 +1120,7 @@ fn push_text_style_draws_span_gradient_without_paint_override_uses_gpu_shader_ma
         },
         ..Default::default()
     };
-    let text = cranpose_ui::text::AnnotatedString::builder()
+    let text = AnnotatedString::builder()
         .append("GPU ")
         .push_style(cranpose_ui::text::SpanStyle {
             font_weight: Some(cranpose_ui::text::FontWeight::BOLD),
@@ -1210,7 +1193,7 @@ fn push_text_style_draws_span_gradient_with_paint_override_uses_gpu_shader_mask_
         },
         ..Default::default()
     };
-    let text = cranpose_ui::text::AnnotatedString::builder()
+    let text = AnnotatedString::builder()
         .append("GPU ")
         .push_style(cranpose_ui::text::SpanStyle {
             color: Some(Color::RED),
@@ -1321,7 +1304,7 @@ fn push_text_style_draws_span_gradient_with_paint_override_uses_gpu_shader_mask_
 fn push_text_style_draws_adjacent_span_color_overrides_use_direct_path() {
     let mut scene = Scene::new();
     let style = TextStyle::default();
-    let text = cranpose_ui::text::AnnotatedString::builder()
+    let text = AnnotatedString::builder()
         .push_style(cranpose_ui::text::SpanStyle {
             color: Some(Color::RED),
             ..Default::default()
@@ -1378,7 +1361,7 @@ fn push_text_style_draws_adjacent_span_color_overrides_use_direct_path() {
 fn push_text_style_draws_span_color_override_uses_direct_per_glyph_color() {
     let mut scene = Scene::new();
     let style = TextStyle::default();
-    let text = cranpose_ui::text::AnnotatedString::builder()
+    let text = AnnotatedString::builder()
         .push_style(cranpose_ui::text::SpanStyle {
             color: Some(Color::RED),
             ..Default::default()
@@ -1433,7 +1416,7 @@ fn push_text_style_draws_span_alpha_override_modulates_gpu_material_alpha() {
         },
         ..Default::default()
     };
-    let text = cranpose_ui::text::AnnotatedString::builder()
+    let text = AnnotatedString::builder()
         .push_style(cranpose_ui::text::SpanStyle {
             alpha: Some(0.25),
             ..Default::default()
@@ -1481,7 +1464,7 @@ fn push_text_style_draws_span_alpha_override_modulates_gpu_material_alpha() {
 fn push_text_style_draws_wrap_newline_gap_color_spans_use_direct_path() {
     let mut scene = Scene::new();
     let style = TextStyle::default();
-    let text = cranpose_ui::text::AnnotatedString::builder()
+    let text = AnnotatedString::builder()
         .push_style(cranpose_ui::text::SpanStyle {
             color: Some(Color::RED),
             ..Default::default()
@@ -1541,7 +1524,7 @@ fn push_text_style_draws_wrap_newline_gap_color_spans_use_direct_path() {
 fn push_text_style_draws_mixed_bidi_wrapped_color_spans_use_direct_path() {
     let mut scene = Scene::new();
     let style = TextStyle::default();
-    let source_text = cranpose_ui::text::AnnotatedString::builder()
+    let source_text = AnnotatedString::builder()
         .push_style(cranpose_ui::text::SpanStyle {
             color: Some(Color::RED),
             ..Default::default()
@@ -1572,7 +1555,13 @@ fn push_text_style_draws_mixed_bidi_wrapped_color_spans_use_direct_path() {
         &mut scene,
         &TextPrimitiveNode {
             layout: prepared.layout.clone(),
-            ..text_node(NodeId(27), &prepared.text, &style, 14.0, options)
+            ..text_node(
+                NodeId(27),
+                &AnnotatedString::from(Arc::clone(&prepared.text)),
+                &style,
+                14.0,
+                options,
+            )
         },
         placement(rect, rect, &GraphicsLayer::default(), None),
     );
@@ -1617,7 +1606,7 @@ fn push_text_style_draws_keeps_static_and_animated_text_geometry_in_scene_space(
         &mut static_scene,
         &text_node(
             NodeId(9),
-            &cranpose_ui::text::AnnotatedString::from("Motion"),
+            &AnnotatedString::from("Motion"),
             &static_style,
             14.0,
             TextLayoutOptions::default(),
@@ -1630,7 +1619,7 @@ fn push_text_style_draws_keeps_static_and_animated_text_geometry_in_scene_space(
         &mut animated_scene,
         &text_node(
             NodeId(10),
-            &cranpose_ui::text::AnnotatedString::from("Motion"),
+            &AnnotatedString::from("Motion"),
             &animated_style,
             14.0,
             TextLayoutOptions::default(),
@@ -1677,7 +1666,7 @@ fn push_text_style_draws_stroke_keeps_mask_and_effect_bounds_in_scene_space() {
         &mut static_scene,
         &text_node(
             NodeId(22),
-            &cranpose_ui::text::AnnotatedString::from("Stroke Motion"),
+            &AnnotatedString::from("Stroke Motion"),
             &static_style,
             14.0,
             TextLayoutOptions::default(),
@@ -1690,7 +1679,7 @@ fn push_text_style_draws_stroke_keeps_mask_and_effect_bounds_in_scene_space() {
         &mut animated_scene,
         &text_node(
             NodeId(23),
-            &cranpose_ui::text::AnnotatedString::from("Stroke Motion"),
+            &AnnotatedString::from("Stroke Motion"),
             &animated_style,
             14.0,
             TextLayoutOptions::default(),
@@ -1755,7 +1744,7 @@ fn push_text_style_draws_gradient_keeps_mask_and_effect_bounds_in_scene_space() 
         &mut scene,
         &text_node(
             NodeId(11),
-            &cranpose_ui::text::AnnotatedString::from("Gradient static"),
+            &AnnotatedString::from("Gradient static"),
             &style,
             14.0,
             TextLayoutOptions::default(),

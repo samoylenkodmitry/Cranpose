@@ -5,7 +5,7 @@
 use cranpose_core::NodeId;
 use cranpose_foundation::{ModifierInvalidation, NodeCapabilities};
 
-use crate::modifier::Modifier;
+use crate::modifier::ModifierChainHandle;
 
 #[derive(Clone, Copy)]
 enum LayoutInvalidationDispatchDiag {
@@ -32,7 +32,7 @@ pub(super) fn log_layout_invalidation_dispatch(
     invalidation: &ModifierInvalidation,
     curr_caps: NodeCapabilities,
     prev_caps: NodeCapabilities,
-    modifier: &Modifier,
+    chain: &ModifierChainHandle,
 ) {
     let enabled = match layout_invalidation_dispatch_diag() {
         LayoutInvalidationDispatchDiag::Disabled => false,
@@ -40,6 +40,7 @@ pub(super) fn log_layout_invalidation_dispatch(
         LayoutInvalidationDispatchDiag::Node(target) => target == id,
     };
     if enabled {
+        let modifier = chain.modifier();
         log::warn!(
             "[layout-invalidation-dispatch] node={id} invalidation={invalidation:?} curr_caps={curr_caps:?} prev_caps={prev_caps:?} modifier={modifier}"
         );

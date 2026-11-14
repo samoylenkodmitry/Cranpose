@@ -91,7 +91,7 @@ struct TextPreparedLayoutOwner {
 /// What a text is laid out from.
 #[derive(Debug)]
 struct TextLayoutSource {
-    text: Rc<AnnotatedString>,
+    text: AnnotatedString,
     style: Arc<TextStyle>,
     style_hash: PackedU64,
     options: TextLayoutOptions,
@@ -118,7 +118,7 @@ pub(crate) struct TextPreparedLayoutHandle {
 }
 
 impl TextPreparedLayoutOwner {
-    fn new(text: Rc<AnnotatedString>, style: Arc<TextStyle>, options: TextLayoutOptions) -> Self {
+    fn new(text: AnnotatedString, style: Arc<TextStyle>, options: TextLayoutOptions) -> Self {
         let style_hash = PackedU64::new(style.render_hash());
         Self {
             source: RefCell::new(TextLayoutSource {
@@ -139,12 +139,7 @@ impl TextPreparedLayoutOwner {
     /// takes the element's style even when it equals the current one, so
     /// the element, the source and the layouts prepared next share one
     /// copy; the old one leaves with the layouts that hold it.
-    fn update(
-        &self,
-        text: &Rc<AnnotatedString>,
-        style: &Arc<TextStyle>,
-        options: TextLayoutOptions,
-    ) {
+    fn update(&self, text: &AnnotatedString, style: &Arc<TextStyle>, options: TextLayoutOptions) {
         let mut source = self.source.borrow_mut();
         let shared_style = Arc::ptr_eq(&source.style, style);
         let same_style = shared_style || *source.style == **style;
@@ -157,15 +152,23 @@ impl TextPreparedLayoutOwner {
         if !shared_style {
             source.style = Arc::clone(style);
         }
-        source.text = Rc::clone(text);
+        let replaced = std::mem::replace(&mut source.text, text.clone());
         source.options = options;
         source.admission = CacheAdmission::Changed;
         drop(source);
-        self.cache.borrow_mut().clear();
+        let mut cache = self.cache.borrow_mut();
+        let retired = crate::render_state::current_app_context().map(|context| {
+            let layouts = cache.drain(..).map(|entry| entry.layout);
+            context.text.retire(replaced, layouts);
+        });
+        if retired.is_none() {
+            cache.clear();
+        }
+        drop(cache);
         self.changed.set(true);
     }
 
-    fn annotated_text(&self) -> Ref<'_, Rc<AnnotatedString>> {
+    fn annotated_text(&self) -> Ref<'_, AnnotatedString> {
         Ref::map(self.source.borrow(), |source| &source.text)
     }
 
@@ -314,7 +317,7 @@ impl TextPreparedLayoutHandle {
         Self { owner }
     }
 
-    pub(crate) fn annotated_text(&self) -> Ref<'_, Rc<AnnotatedString>> {
+    pub(crate) fn annotated_text(&self) -> Ref<'_, AnnotatedString> {
         self.owner.annotated_text()
     }
 
@@ -332,9 +335,38 @@ impl TextPreparedLayoutHandle {
 }
 
 impl TextModifierNode {
+    // Whether the node shows `text` in `style` with `options` on `density`,
+    // as a node made from an element of them does.
+    pub(crate) fn shows(
+        &self,
+        text: crate::widgets::StaticText<'_>,
+        style: &Arc<TextStyle>,
+        options: TextLayoutOptions,
+        density: Density,
+    ) -> bool {
+        let source = self.layout.source.borrow();
+        text.is(&source.text)
+            && (Arc::ptr_eq(&source.style, style) || *source.style == **style)
+            && source.options == options
+            && self.density == density
+    }
+
+    // Shows `text` in `style` with `options` on `density`'s grid in place
+    // of what the node showed, as an equal element's update does.
+    pub(crate) fn show(
+        &mut self,
+        text: &AnnotatedString,
+        style: &Arc<TextStyle>,
+        options: TextLayoutOptions,
+        density: Density,
+    ) {
+        self.density = density;
+        self.layout.update(text, style, options);
+    }
+
     /// A text node sized on `density`'s device pixel grid.
     pub fn new(
-        text: Rc<AnnotatedString>,
+        text: AnnotatedString,
         style: impl Into<Arc<TextStyle>>,
         options: TextLayoutOptions,
         density: Density,
@@ -358,12 +390,12 @@ impl TextModifierNode {
 
     /// Returns the plain text of the node.
     pub fn text(&self) -> Ref<'_, str> {
-        Ref::map(self.layout.annotated_text(), |text| text.text.as_str())
+        Ref::map(self.layout.annotated_text(), AnnotatedString::text)
     }
 
     /// Returns the node's text with its span styles and annotations.
-    pub fn annotated_text(&self) -> Rc<AnnotatedString> {
-        Rc::clone(&self.layout.annotated_text())
+    pub fn annotated_text(&self) -> AnnotatedString {
+        self.layout.annotated_text().clone()
     }
 
     /// Returns the style the text lays out with.
@@ -542,7 +574,7 @@ impl SemanticsNode for TextModifierNode {
 /// Matches Jetpack Compose: `TextStringSimpleElement` in BasicText.kt
 #[derive(Debug, Clone)]
 pub struct TextModifierElement {
-    text: Rc<AnnotatedString>,
+    text: AnnotatedString,
     /// One copy for every text composed with an equal style: see
     /// [`shared_text_style`].
     style: Arc<TextStyle>,
@@ -554,7 +586,7 @@ impl TextModifierElement {
     /// A text laid out on `density`'s device pixel grid, the composition's
     /// [`crate::density::density`] where a `Text` is composed.
     pub fn new(
-        text: Rc<AnnotatedString>,
+        text: AnnotatedString,
         style: TextStyle,
         options: TextLayoutOptions,
         density: Density,
@@ -564,7 +596,7 @@ impl TextModifierElement {
 
     /// [`Self::new`] for a style [`shared_text_style`] already shared.
     pub(crate) fn with_shared_style(
-        text: Rc<AnnotatedString>,
+        text: AnnotatedString,
         style: Arc<TextStyle>,
         options: TextLayoutOptions,
         density: Density,
@@ -576,14 +608,25 @@ impl TextModifierElement {
             density,
         }
     }
+
+    // Whether the element shows `text` in `style` with `options` on `density`.
+    fn shows(
+        &self,
+        text: &AnnotatedString,
+        style: &Arc<TextStyle>,
+        options: TextLayoutOptions,
+        density: Density,
+    ) -> bool {
+        self.text == *text
+            && (Arc::ptr_eq(&self.style, style) || self.style == *style)
+            && self.options == options
+            && self.density == density
+    }
 }
 
 impl PartialEq for TextModifierElement {
     fn eq(&self, other: &Self) -> bool {
-        self.text == other.text
-            && (Arc::ptr_eq(&self.style, &other.style) || self.style == other.style)
-            && self.options == other.options
-            && self.density == other.density
+        self.shows(&other.text, &other.style, other.options, other.density)
     }
 }
 
@@ -618,10 +661,19 @@ impl Hash for TextModifierElement {
 
 impl ModifierNodeElement for TextModifierElement {
     type Node = TextModifierNode;
+    const FROM_NODE: Option<fn(&TextModifierNode) -> Self> = Some(|node| {
+        let source = node.layout.source.borrow();
+        Self {
+            text: source.text.clone(),
+            style: Arc::clone(&source.style),
+            options: source.options,
+            density: node.density,
+        }
+    });
 
     fn create(&self) -> Self::Node {
         TextModifierNode::new(
-            Rc::clone(&self.text),
+            self.text.clone(),
             Arc::clone(&self.style),
             self.options,
             self.density,
@@ -629,8 +681,12 @@ impl ModifierNodeElement for TextModifierElement {
     }
 
     fn update(&self, node: &mut Self::Node) {
-        node.density = self.density;
-        node.layout.update(&self.text, &self.style, self.options);
+        node.show(&self.text, &self.style, self.options, self.density);
+    }
+
+    fn equals_node(&self, node: &TextModifierNode) -> bool {
+        let source = node.layout.source.borrow();
+        self.shows(&source.text, &source.style, source.options, node.density)
     }
 
     fn capabilities(&self) -> NodeCapabilities {

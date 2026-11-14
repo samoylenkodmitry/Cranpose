@@ -42,11 +42,7 @@ fn recorded(command: &DrawCommand, size: Size) -> Vec<DrawPrimitive> {
     use cranpose_ui_graphics::DrawScope as _;
     let mut recording = cranpose_ui_graphics::CommandRecording::default();
     let mut scope = crate::draw::command_draw_scope(size, &mut recording);
-    match command {
-        DrawCommand::Behind(draw) | DrawCommand::WithContent(draw) | DrawCommand::Overlay(draw) => {
-            draw(&mut scope);
-        }
-    }
+    command.draw(&mut scope);
     scope.into_primitives()
 }
 
@@ -280,21 +276,14 @@ fn a_texts_slices_read_its_string_style_and_options_from_its_layout() {
         max_lines: 2,
         ..Default::default()
     };
-    let text = Rc::new(crate::text::AnnotatedString::from("Shared"));
     let modifier = Modifier::with_element(crate::text_modifier_node::TextModifierElement::new(
-        Rc::clone(&text),
+        crate::text::AnnotatedString::from("Shared"),
         style.clone(),
         options,
         crate::density::Density::new(2.0, 1.0),
     ));
     let slices = collect_slices_from_modifier(&modifier);
     assert_eq!(slices.text_content().as_deref(), Some("Shared"));
-    assert!(Rc::ptr_eq(
-        &slices
-            .annotated_text()
-            .expect("a text node's slices hold its text"),
-        &text
-    ));
     assert_eq!(slices.text_style().as_deref(), Some(&style));
     assert_eq!(slices.text_layout_options(), Some(options.normalized()));
     assert!(slices.text_pan_resolver().is_none());

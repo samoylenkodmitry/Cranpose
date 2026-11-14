@@ -1,25 +1,32 @@
-use super::{Damage, DamageRects, FrameWindow, KeptWindow, PresentedImage, WindowDamage};
+use super::{
+    Capture, Damage, FrameDamages, FrameWindow, Held, PresentedImage, Since,
+    captures::{collect, widen},
+    settle,
+};
+use crate::frame_packet::HeldWindow;
 
-/// The frames back a kept swapchain image can be drawn again from, and the
-/// images the history follows.
-const IMAGE_HISTORY: usize = 8;
+/// The images of a swapchain the history follows.
+const IMAGES: usize = 8;
 
-/// The frames a swapchain's images hold and each frame's damage against the
-/// frame before: a frame drawn into an image that holds an older frame draws
-/// the union of the damages since that frame.
+/// The frames a swapchain's images hold: a frame drawn into an image that
+/// holds an older frame draws the union of the damages since that frame.
 #[derive(Default)]
 pub(crate) struct SwapchainHistory {
     surface_epoch: u64,
-    frame: u64,
     /// By image index, the frame the image holds.
-    held: [Option<u64>; IMAGE_HISTORY],
-    /// By frame modulo [`IMAGE_HISTORY`], the frame and its damage.
-    damages: [Option<(u64, Damage)>; IMAGE_HISTORY],
-    /// The summary of the frame presented last.
-    pub(crate) kept: KeptWindow,
-    // Whether the surface shows the frame `kept` summarizes: the frame
-    // presented last drew into an image the history follows.
-    shows_kept: bool,
+    held: [Option<Held>; IMAGES],
+    // By image index, a bit for each image the surface handed out.
+    seen: u8,
+    // How many images the surface hands out, and whether it handed one out
+    // a second time: until it handed out that many, or one twice, the next
+    // image may be one it never handed out, which holds no frame.
+    images: u32,
+    cycled: bool,
+    /// The frame presented last, when it went into an image the history
+    /// follows and holds.
+    presented: Option<Held>,
+    // What the backdrops of the frame in progress read and write.
+    captures: Vec<Capture>,
 }
 
 impl SwapchainHistory {
@@ -34,59 +41,102 @@ impl SwapchainHistory {
 
     // Forgets what the images hold.
     pub(crate) fn forget(&mut self) {
-        self.held = [None; IMAGE_HISTORY];
-        self.kept.forget();
+        self.held = [None; IMAGES];
+        self.seen = 0;
+        self.cycled = false;
+        self.presented = None;
     }
 
-    /// Forgets what `image` holds: a frame the history does not follow
-    /// draws into it.
-    pub(crate) fn drop_image(&mut self, image: PresentedImage) {
-        if let Some(held) = self.held.get_mut(image.index as usize) {
-            *held = None;
+    // The oldest frame the images the surface handed out hold, and the
+    // parts of their frames drawn with stand-ins; `None` while one of them
+    // holds none known, or while the next image may be one the surface never
+    // handed out.
+    pub(crate) fn held(&self) -> Option<HeldWindow> {
+        if !self.cycled && self.seen.count_ones() < self.images.min(u8::BITS) {
+            return None;
         }
-        self.shows_kept = false;
+        let mut window: Option<HeldWindow> = None;
+        for (index, held) in self.held.iter().enumerate() {
+            if self.seen & (1 << index) == 0 {
+                continue;
+            }
+            let image = held.as_ref()?.window();
+            match &mut window {
+                Some(window) => {
+                    window.oldest = window.oldest.min(image.oldest);
+                    match (&mut window.stand_ins, image.stand_ins) {
+                        (Damage::Part(parts), Damage::Part(more)) => parts.add_all(&more),
+                        (stand_ins, _) => *stand_ins = Damage::Full,
+                    }
+                }
+                None => window = Some(image),
+            }
+        }
+        window
+    }
+
+    fn see(&mut self, image: PresentedImage) {
+        self.images = image.images;
+        if let Some(bit) = 1u8.checked_shl(image.index) {
+            self.cycled |= self.seen & bit != 0;
+            self.seen |= bit;
+        }
     }
 
     // Whether `frame` draws what the surface shows: the frame presented last
-    // on the frame's surface, into an image the history follows, with no
-    // item changed since. Such a frame needs no image and no present.
-    pub(crate) fn shows(&self, frame: &FrameWindow<'_>, damage: &mut WindowDamage) -> bool {
-        self.shows_kept
-            && frame.packet.surface_epoch == self.surface_epoch
-            && damage.shows(frame, &self.kept)
+    // on the frame's surface, into an image the history follows, with
+    // nothing changed since. Such a frame needs no image and no present.
+    pub(crate) fn shows(&self, frame: &FrameWindow<'_>, damages: &FrameDamages) -> bool {
+        frame.packet.surface_epoch == self.surface_epoch
+            && matches!(
+                damages.since(self.presented, frame).damage,
+                Damage::Part(changed) if changed.is_empty()
+            )
     }
 
-    /// The pixels that differ between the frame the kept `image` holds and a
-    /// frame of `damage`, none when none does; `None` unless the image holds
-    /// a frame whose damages since are all known.
-    pub(crate) fn changed_since(
+    /// What `frame` changes against the frame presented last.
+    pub(crate) fn presented_damage(
         &self,
-        image: PresentedImage,
-        damage: Damage,
-    ) -> Option<DamageRects> {
-        let held = self.held.get(image.index as usize).copied().flatten()?;
-        let Damage::Part(mut union) = damage else {
-            return None;
-        };
-        for frame in held + 1..=self.frame {
-            let entry = self.damages[(frame % IMAGE_HISTORY as u64) as usize];
-            let (_, Damage::Part(part)) = entry.filter(|(at, _)| *at == frame)? else {
-                return None;
-            };
-            for rect in part.as_slice() {
-                union.add(*rect);
-            }
-        }
-        Some(union)
+        frame: &FrameWindow<'_>,
+        damages: &FrameDamages,
+    ) -> Since {
+        damages.since(self.presented, frame)
     }
 
-    /// Ends a frame of `damage`: `image` holds it when it was `drawn` whole.
-    pub(crate) fn record(&mut self, image: PresentedImage, damage: Damage, drawn: bool) {
-        self.frame += 1;
-        self.shows_kept = true;
-        self.damages[(self.frame % IMAGE_HISTORY as u64) as usize] = Some((self.frame, damage));
-        if let Some(held) = self.held.get_mut(image.index as usize) {
-            *held = drawn.then_some(self.frame);
+    /// What `frame` changes in `image`: the union of the damages since the
+    /// frame the image holds, grown by what the frame's backdrops read and
+    /// write, as a backdrop over a pixel an earlier frame changed changes
+    /// what it writes.
+    pub(crate) fn changed_since(
+        &mut self,
+        image: PresentedImage,
+        frame: &FrameWindow<'_>,
+        damages: &FrameDamages,
+    ) -> Damage {
+        let held = self.held.get(image.index as usize).copied().flatten();
+        let damage = damages.since(held.filter(|_| image.kept), frame).damage;
+        let Damage::Part(mut rects) = damage else {
+            return damage;
+        };
+        if rects.is_empty() || !frame.packet.root.contains_backdrop() {
+            return damage;
         }
+        self.captures.clear();
+        let place = (frame.packet.root_scale, frame.viewport);
+        if !collect(&frame.packet.root, place, &mut self.captures) {
+            return Damage::Full;
+        }
+        widen(&self.captures, &mut rects);
+        settle(rects, frame.viewport)
+    }
+
+    /// Ends the frame drawn into `image`, which holds `held`: none when the
+    /// frame did not draw there whole.
+    pub(crate) fn record(&mut self, image: PresentedImage, held: Option<Held>) {
+        self.see(image);
+        if let Some(slot) = self.held.get_mut(image.index as usize) {
+            *slot = held;
+        }
+        self.presented = held;
     }
 }

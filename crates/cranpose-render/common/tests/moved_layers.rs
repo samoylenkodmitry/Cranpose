@@ -9,8 +9,9 @@ use std::{
 
 use cranpose_core::{MutableState, NodeId};
 use cranpose_render_common::{
-    graph::{LayerNode, PrimitiveNode, ProjectiveTransform, RenderGraph, RenderNode},
-    scene_builder::{build_graph_from_applier, clear_command_recordings_for_tests},
+    graph::ProjectiveTransform,
+    graph_scene::Scene,
+    scene_store::{ItemRef, LayerRef},
 };
 use cranpose_ui::{
     Box, BoxSpec, Brush, Canvas, Color, Column, ColumnSpec, GraphicsLayer, LayoutEngine, Modifier,
@@ -91,10 +92,12 @@ fn moving_column(probe: Rc<RefCell<Probe>>, draws: Rc<Cell<usize>>) -> TestCompo
     })
 }
 
-fn initial_graph(composition: &mut TestComposition, root: NodeId) -> RenderGraph {
+fn initial_graph(composition: &mut TestComposition, root: NodeId) -> Scene {
     crate::scene_probe::with_applier(composition, |applier| {
         applier.compute_layout(root, VIEWPORT).expect("layout");
-        let graph = build_graph_from_applier(applier, root, 1.0).expect("initial graph");
+        let mut graph = Scene::new();
+        graph.rebuild_from_applier(applier, root);
+        assert!(graph.root_layer().is_some(), "initial graph");
         let _ = cranpose_ui::take_geometry_scene_nodes();
         let _ = cranpose_ui::take_draw_repass_nodes();
         let _ = applier.take_structural_change_parents_attached_to(root);
@@ -102,73 +105,57 @@ fn initial_graph(composition: &mut TestComposition, root: NodeId) -> RenderGraph
     })
 }
 
-fn update_frame(
-    composition: &mut TestComposition,
-    root: NodeId,
-    graph: &mut RenderGraph,
-) -> Vec<NodeId> {
+fn update_frame(composition: &mut TestComposition, root: NodeId, graph: &mut Scene) -> Vec<NodeId> {
     crate::scene_probe::update_scene(composition, root, VIEWPORT, graph)
 }
 
 /// Every solid rectangle and text the graph paints, in window space.
-fn painted(layer: &LayerNode, parent: ProjectiveTransform, out: &mut Vec<(Rect, String)>) {
-    let transform = layer.transform_to_parent.then(parent);
-    painted_nodes(&layer.children, transform, out);
-}
-
-fn painted_nodes(
-    nodes: &[RenderNode],
-    transform: ProjectiveTransform,
-    out: &mut Vec<(Rect, String)>,
-) {
-    for child in nodes {
-        match child {
-            RenderNode::Layer(child) => painted(child, transform, out),
-            RenderNode::Inline(inline) => {
-                painted_nodes(
-                    &inline.content,
-                    inline.transform_to_parent().then(transform),
-                    out,
-                );
+fn painted(layer: LayerRef<'_>, parent: ProjectiveTransform, out: &mut Vec<(Rect, String)>) {
+    let transform = layer.transform_to_parent().then(parent);
+    for item in layer.items() {
+        let primitives: Vec<DrawPrimitive> = match item {
+            ItemRef::Layer(child) | ItemRef::Leaf(child) => {
+                painted(child, transform, out);
+                continue;
             }
-            RenderNode::DrawRun(run) => {
-                out.extend(run.primitives().filter_map(|primitive| match primitive {
+            ItemRef::Run(run) => run.primitives().collect(),
+            ItemRef::Shape(shape) => shape.primitives().collect(),
+            ItemRef::Draw(draw) => vec![draw.primitive.clone()],
+            ItemRef::Text(text) => {
+                out.push((
+                    transform.bounds_for_rect(text.rect),
+                    text.render_text.text().to_owned(),
+                ));
+                continue;
+            }
+        };
+        out.extend(
+            primitives
+                .into_iter()
+                .filter_map(|primitive| match primitive {
                     DrawPrimitive::Rect {
                         rect,
                         brush: Brush::Solid(color),
                         ..
                     } => Some((transform.bounds_for_rect(rect), format!("{color:?}"))),
                     _ => None,
-                }));
-            }
-            RenderNode::Primitive(entry) => match &entry.node {
-                PrimitiveNode::Draw(draw) => {
-                    if let DrawPrimitive::Rect {
-                        rect,
-                        brush: Brush::Solid(color),
-                        ..
-                    } = &draw.primitive
-                    {
-                        out.push((transform.bounds_for_rect(*rect), format!("{color:?}")));
-                    }
-                }
-                PrimitiveNode::Text(text) => {
-                    out.push((transform.bounds_for_rect(text.rect), text.text.text.clone()));
-                }
-            },
-        }
+                }),
+        );
     }
 }
 
-fn painted_output(graph: &RenderGraph) -> Vec<(Rect, String)> {
+fn painted_output(graph: &Scene) -> Vec<(Rect, String)> {
     let mut out = Vec::new();
-    painted(&graph.root, ProjectiveTransform::identity(), &mut out);
+    painted(
+        graph.root_layer().expect("a scene"),
+        ProjectiveTransform::identity(),
+        &mut out,
+    );
     out
 }
 
 #[test]
 fn a_node_that_only_moved_keeps_what_it_drew() {
-    clear_command_recordings_for_tests();
     let probe = Rc::new(RefCell::new(Probe::default()));
     let draws = Rc::new(Cell::new(0));
     let mut composition = moving_column(Rc::clone(&probe), Rc::clone(&draws));
@@ -207,7 +194,6 @@ fn a_node_that_only_moved_keeps_what_it_drew() {
 
 #[test]
 fn a_node_that_moved_and_changed_what_it_draws_draws_again() {
-    clear_command_recordings_for_tests();
     let probe = Rc::new(RefCell::new(Probe::default()));
     let draws = Rc::new(Cell::new(0));
     let mut composition = moving_column(Rc::clone(&probe), Rc::clone(&draws));
@@ -237,7 +223,6 @@ fn a_node_that_moved_and_changed_what_it_draws_draws_again() {
 
 #[test]
 fn a_node_that_moved_and_turned_keeps_what_it_drew() {
-    clear_command_recordings_for_tests();
     let probe = Rc::new(RefCell::new(Probe::default()));
     let draws = Rc::new(Cell::new(0));
     let mut composition = moving_column(Rc::clone(&probe), Rc::clone(&draws));
@@ -268,5 +253,40 @@ fn a_node_that_moved_and_turned_keeps_what_it_drew() {
         painted_output(&graph),
         painted_output(&fresh),
         "the scene paints the canvas moved and turned"
+    );
+}
+
+// A scene description that only moves a child changes its parent's
+// subtree, so a reader that skips unchanged subtrees draws the child at its
+// new place.
+#[test]
+fn a_described_child_that_only_moves_changes_its_parents_subtree() {
+    use cranpose_render_common::{
+        graph::{LayerNode, RenderNode},
+        scene_store::SceneStore,
+    };
+    use cranpose_ui_graphics::Point;
+
+    let root_with_child_at = |x: f32| LayerNode {
+        node_id: Some(NodeId(1)),
+        size: Size::new(100.0, 100.0),
+        children: vec![RenderNode::Layer(Box::new(LayerNode {
+            node_id: Some(NodeId(2)),
+            size: Size::new(10.0, 10.0),
+            origin_in_parent: Point::new(x, 0.0),
+            transform_to_parent: ProjectiveTransform::translation(x, 0.0),
+            ..Default::default()
+        }))],
+        ..Default::default()
+    };
+    let mut store = SceneStore::from_layer(&root_with_child_at(10.0));
+    let root = store.root().expect("a root");
+    let before = store.layer(root).changes();
+
+    store.describe(&root_with_child_at(20.0));
+
+    assert!(
+        !before.same_subtree(store.layer(root).changes()),
+        "the root's subtree holds the moved child"
     );
 }

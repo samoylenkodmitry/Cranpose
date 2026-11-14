@@ -4,26 +4,25 @@
 use std::sync::Arc;
 
 use cranpose_render_common::{
-    graph::{LayerNode, RenderNode, for_each_in_draw_order},
+    scene_store::{ItemRef, LayerRef},
     space::{EyeView, SpaceTree},
 };
 
 use super::{
     LayerMotion, LayerScene, LayerSceneRecycler, MeshChild, SceneDraw, SeenDraw, WalkContext,
-    WalkSettings, collect_child, collect_inline, collect_isolated_child, node_is_pixel_sensitive,
-    push_content,
+    WalkSettings, collect_child, collect_inline, collect_isolated_child, push_content,
 };
 use crate::scene::ContentContext;
 
 /// The scene `layer` shows to the window, as the eye of the scene sees it,
 /// with `context` the walk of its children; `None` when it shows none.
 fn window_scene<'a>(
-    layer: &'a LayerNode,
+    layer: LayerRef<'a>,
     context: &WalkContext<'_>,
 ) -> Option<(Arc<SceneDraw>, EyeView<'a>)> {
     let tree = SpaceTree::of(layer)?;
     // The scene fills its layer's bounds.
-    let bounds = layer.local_bounds;
+    let bounds = layer.local_bounds();
     let view = EyeView::of(&tree, bounds.size());
     let scene = SceneDraw {
         camera: view.camera,
@@ -51,16 +50,16 @@ fn window_scene<'a>(
 #[cold]
 #[inline(never)]
 pub(super) fn collect_space_children(
-    layer: &LayerNode,
+    layer: LayerRef<'_>,
     motion: &mut LayerMotion,
-    (context, content): (WalkContext<'_>, &ContentContext<'_>),
+    (context, content): (&WalkContext<'_>, &ContentContext<'_>),
     out: &mut LayerScene,
     recycler: &mut LayerSceneRecycler,
 ) -> bool {
     // Only a scene outside every other scene's space shows to the window;
     // one inside is a doorway its window scene draws.
     let mut pending = (!context.settings.in_space)
-        .then(|| window_scene(layer, &context))
+        .then(|| window_scene(layer, context))
         .flatten();
     let in_space = context.settings.in_space || pending.is_some();
     let settings = WalkSettings {
@@ -69,25 +68,28 @@ pub(super) fn collect_space_children(
     };
     let context = WalkContext {
         settings: &settings,
-        ..context
+        cull: None,
+        ..*context
     };
-    let mut has_pixel_sensitive_subtree = false;
-    for_each_in_draw_order(&layer.children, |child| {
+    let content_offset = layer.content_offset();
+    let mut has_pixel_sensitive_subtree =
+        context.settings.wants_pixel_sensitive && layer.own_draw_facts().pixel_sensitive;
+    for child in layer.items() {
         has_pixel_sensitive_subtree |= match child {
-            RenderNode::Layer(child_layer) => {
+            ItemRef::Layer(child_layer) => {
                 if let Some((draw, view)) = pending.take_if(|_| child_layer.has_space()) {
-                    collect_seen_surfaces(&draw, view, motion, context, out, recycler);
+                    collect_seen_surfaces(&draw, view, motion, &context, out, recycler);
                 }
-                !(in_space && child_layer.graphics_layer.space.is_some())
-                    && collect_child(child_layer, motion, context, out, recycler)
+                !(in_space && child_layer.graphics_layer().space.is_some())
+                    && collect_child(child_layer, motion, &context, out, recycler)
             }
-            RenderNode::Inline(inline) => collect_inline(inline, context, out),
-            RenderNode::Primitive(_) | RenderNode::DrawRun(_) => {
+            ItemRef::Leaf(inline) => collect_inline(inline, content_offset, &context, out),
+            ItemRef::Draw(_) | ItemRef::Text(_) | ItemRef::Run(_) | ItemRef::Shape(_) => {
                 push_content(out, child, content);
-                context.settings.wants_pixel_sensitive && node_is_pixel_sensitive(child)
+                false
             }
         };
-    });
+    }
     has_pixel_sensitive_subtree
 }
 
@@ -97,7 +99,7 @@ fn collect_seen_surfaces(
     draw: &Arc<SceneDraw>,
     view: EyeView<'_>,
     motion: &mut LayerMotion,
-    context: WalkContext<'_>,
+    context: &WalkContext<'_>,
     out: &mut LayerScene,
     recycler: &mut LayerSceneRecycler,
 ) {

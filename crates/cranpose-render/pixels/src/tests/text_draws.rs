@@ -34,7 +34,7 @@ pub(crate) fn text_draw(
     TextDraw {
         rect,
         snap_anchor: None,
-        text: Rc::clone(&prepared.text),
+        text: prepared.render_text(),
         layout: prepared.layout.clone(),
         ink: GlyphInk::Painted,
         color,

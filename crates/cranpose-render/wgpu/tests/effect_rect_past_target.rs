@@ -4,7 +4,7 @@
 //! viewport stays inside the target and the prelude's vertex stage places
 //! the rect in it.
 
-use cranpose_render_common::graph::{ProjectiveTransform, RenderGraph, RenderNode};
+use cranpose_render_common::graph::{LayerNode, ProjectiveTransform, RenderNode};
 use cranpose_ui_graphics::{
     Color, GraphicsLayer, RUNTIME_SHADER_PRELUDE_WGSL, Rect, RenderEffect, RuntimeShader,
 };
@@ -28,7 +28,7 @@ fn uv_effect() -> RenderEffect {
 }
 
 /// A page of `width` by `height` with the shader's layer at `origin`.
-fn page(width: u32, height: u32, origin: (f32, f32), size: (f32, f32)) -> RenderGraph {
+fn page(width: u32, height: u32, origin: (f32, f32), size: (f32, f32)) -> LayerNode {
     let bounds = Rect {
         x: 0.0,
         y: 0.0,

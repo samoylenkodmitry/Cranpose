@@ -13,8 +13,8 @@ use cranpose_text::{CaretDirection, Typeface};
 use cranpose_ui::{
     PreparedTextLayout,
     text::{
-        AnnotatedString, FontFamily, FontStyle, FontWeight, RangeStyle, SpanStyle,
-        TextLayoutOptions, TextStyle, TextUnit,
+        AnnotatedString, FontFamily, FontStyle, FontWeight, SpanStyle, TextLayoutOptions,
+        TextStyle, TextUnit,
     },
 };
 use cranpose_ui_graphics::{Brush, BrushSampler, Color, Point, Rect};
@@ -145,22 +145,12 @@ fn atlas_placements(
 }
 
 fn explicit_reference(bold: &SpanStyle, regular: &SpanStyle) -> AnnotatedString {
-    let mut text = AnnotatedString::from("A→B");
-    text.span_styles.extend([
-        RangeStyle {
-            range: 0..1,
-            item: bold.clone(),
-        },
-        RangeStyle {
-            range: 1..4,
-            item: regular.clone(),
-        },
-        RangeStyle {
-            range: 4..5,
-            item: bold.clone(),
-        },
-    ]);
-    text
+    AnnotatedString::builder()
+        .append("A→B")
+        .add_style(bold.clone(), 0..1)
+        .add_style(regular.clone(), 1..4)
+        .add_style(bold.clone(), 4..5)
+        .to_annotated_string()
 }
 
 fn assert_matches_reference(
@@ -234,18 +224,18 @@ fn check_global_gradient(
     if scaled_style.span_style.brush.is_some() {
         scaled_style.span_style.brush = Some(gradient_brush(0.0, width));
     }
-    for range in &mut scaled_text.span_styles {
-        if range.item.brush.is_some() {
-            range.item.brush = Some(gradient_brush(0.0, width));
+    scaled_text = scaled_text.map_span_styles(|span| {
+        if span.brush.is_some() {
+            span.brush = Some(gradient_brush(0.0, width));
         }
-    }
+    });
     let actual = render_at_scale(&scaled_text, &scaled_style, fonts, scale);
     let mut mask_text = scaled_text;
     let mut mask_style = scaled_style;
     mask_style.span_style.brush = Some(Brush::solid(Color::WHITE));
-    for range in &mut mask_text.span_styles {
-        range.item.brush = Some(Brush::solid(Color::WHITE));
-    }
+    mask_text = mask_text.map_span_styles(|span| {
+        span.brush = Some(Brush::solid(Color::WHITE));
+    });
     let mask = render_at_scale(&mask_text, &mask_style, fonts, scale);
     let height = 48.0 * scale;
     let brush = Brush::linear_gradient_range(
@@ -314,10 +304,10 @@ fn bold_text_uses_a_covering_face_for_missing_glyphs_across_layout_and_renderers
     let bold = style(&family, FontWeight::BOLD);
     let regular = style(&regular_only, FontWeight::BOLD);
     let mut actual = AnnotatedString::from("A→B");
-    actual.span_styles.push(RangeStyle {
-        range: 0..actual.text.len(),
-        item: bold.clone(),
-    });
+    actual = AnnotatedString::builder()
+        .append_annotated(&actual)
+        .add_style(bold.clone(), 0..actual.text().len())
+        .to_annotated_string();
     let expected = explicit_reference(&bold, &regular);
     let base_style = TextStyle::default();
 
@@ -344,10 +334,10 @@ fn bold_text_fallback_keeps_one_gradient_extent_across_font_runs() {
     let (fonts, family, _) = font_set();
     let bold = gradient(&family, 0.0, 180.0);
     let mut actual = AnnotatedString::from("A→B");
-    actual.span_styles.push(RangeStyle {
-        range: 0..actual.text.len(),
-        item: bold,
-    });
+    actual = AnnotatedString::builder()
+        .append_annotated(&actual)
+        .add_style(bold, 0..actual.text().len())
+        .to_annotated_string();
     let base_style = TextStyle::default();
     assert_global_gradient_at_scales(&actual, &base_style, &fonts);
 }

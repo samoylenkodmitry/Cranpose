@@ -66,8 +66,8 @@ impl<T: MappedBuffers> MappedPool<T> {
         self.mapping.push((item, progress));
     }
 
-    /// The free item `choose` takes from the free ones, after a poll when
-    /// it takes none the first time and maps are pending.
+    // The free item `choose` takes from the free ones, after a poll when
+    // it takes none the first time and maps are pending.
     pub(crate) fn take(
         &mut self,
         device: &wgpu::Device,

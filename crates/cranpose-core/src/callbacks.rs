@@ -216,7 +216,11 @@ struct CallbackScopeGuard {
 
 impl CallbackScopeGuard {
     fn push(composer: &Composer, scope: RecomposeScope) -> Self {
-        composer.core.scope_stack.borrow_mut().push(scope);
+        composer
+            .core
+            .scope_stack
+            .borrow_mut()
+            .push(crate::composer::ScopeFrame::Made(scope));
         Self {
             core: composer.clone_core(),
         }
@@ -237,7 +241,7 @@ fn callback_owner_is_active(scope: &CallbackScopeCell) -> bool {
 }
 
 fn callback_owner_scope(composer: &Composer) -> Option<RecomposeScope> {
-    composer.core.scope_stack.borrow().last().cloned()
+    composer.current_recompose_scope()
 }
 
 /// Keeps a composable's callback parameter across recompositions: its forwarders always call the

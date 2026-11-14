@@ -26,7 +26,7 @@ pub(crate) fn layout_lines(prepared: &PreparedTextLayout) -> Vec<String> {
         .map(|line| {
             prepared
                 .text
-                .text
+                .text()
                 .get(layout.line_start(line)..layout.line_visible_end(line))
                 .unwrap_or_default()
                 .to_owned()
@@ -60,7 +60,7 @@ fn drawn_line(
     line: usize,
     keep: impl Fn(&cranpose_text::GlyphRun<'_>) -> bool,
 ) -> String {
-    let text = &prepared.text.text;
+    let text = &prepared.text.text();
     let drawn: String = prepared
         .layout
         .glyph_runs(line)

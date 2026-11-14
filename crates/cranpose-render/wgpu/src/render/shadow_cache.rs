@@ -6,8 +6,9 @@ use std::{
 use cranpose_core::collections::bounded_lru::BoundedLruCache;
 use cranpose_ui_graphics::{BlendMode, FxHasher, Rect};
 
-use super::{expand_rect, hash_run_item_with_clip, mask_rect};
+use super::{expand_rect, mask_rect};
 use crate::{
+    capture_hash::hash_run_item_with_clip,
     effect_renderer::RoundedCompositeMask,
     geometry::{DevicePixelBounds, anchored_device_rect, offscreen_byte_size},
     offscreen::OffscreenTarget,

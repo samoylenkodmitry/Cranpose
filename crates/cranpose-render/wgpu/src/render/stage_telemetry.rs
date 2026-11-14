@@ -19,6 +19,18 @@ pub(crate) fn instant_ms(start: Instant, end: Instant) -> f64 {
     end.duration_since(start).as_secs_f64() * 1000.0
 }
 
+// The start of a stage that runs many times a frame: `None` while stage
+// telemetry is off, so the stage reads no clock.
+pub(crate) fn timed_stage_start() -> Option<Instant> {
+    wgpu_render_stage_telemetry_threshold_ms().map(|_| Instant::now())
+}
+
+// The milliseconds of a stage that `timed_stage_start` began, when it took
+// long enough to log.
+pub(crate) fn timed_stage_ms(start: Option<Instant>) -> Option<f64> {
+    should_log_wgpu_render_stage(start?, Instant::now())
+}
+
 pub(crate) fn should_log_wgpu_render_stage(start: Instant, end: Instant) -> Option<f64> {
     let threshold_ms = wgpu_render_stage_telemetry_threshold_ms()?;
     let total_ms = instant_ms(start, end);

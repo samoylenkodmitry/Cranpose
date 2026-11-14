@@ -2172,6 +2172,11 @@ pub struct AcquiredSurfaceTexture<A: Api> {
     /// the surface properties exactly, but can still be used to present
     /// to the surface successfully.
     pub suboptimal: bool,
+    /// How many presentable images the surface hands out, where the backend
+    /// tells them apart ([`DynSurfaceTexture::image_id`]): one for a GL
+    /// surface, which draws every frame into the same texture (Cranpose
+    /// fork).
+    pub images: u32,
 }
 
 /// An open connection to a device and a queue.

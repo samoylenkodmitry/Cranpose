@@ -1,14 +1,17 @@
 use super::*;
 
 mod dev_overlay;
+mod draw_observations;
 mod frame_telemetry;
 mod layout_phase;
+mod trim;
 pub(crate) use dev_overlay::{DevOverlay, draw_dev_overlay};
 use frame_telemetry::{
     FrameStages, RenderPhaseDirtyDiagnostics, frame_stage_telemetry_threshold_ms,
     log_frame_stage_telemetry, log_render_phase_dirty_diagnostics,
     render_phase_dirty_diagnostics_enabled,
 };
+pub(crate) use trim::RestTrim;
 
 // A frame runs its phases in order: composition, layout, render. Each phase
 // takes the token of the phase before it, and only that phase makes its
@@ -55,7 +58,6 @@ struct FrameDirt {
     render_dirty: bool,
     pointer_dirty: bool,
     attributed: bool,
-    layer_properties_pending: bool,
     recomposed_this_frame: bool,
 }
 
@@ -254,18 +256,17 @@ where
     R: Renderer,
     R::Error: Debug,
 {
-    /// Turns semantics tracking on or off. Turning it on forces a layout pass and marks every
-    /// surface dirty. Turning it off drops the cached semantics trees.
+    /// Turns semantics tracking on or off. A surface builds its semantics
+    /// tree from the laid-out nodes when it is first asked for it, so turning
+    /// tracking on lays out and draws nothing again. Turning it off drops the
+    /// cached semantics trees.
     pub fn set_semantics_enabled(&mut self, enabled: bool) {
         if self.app.semantics_enabled == enabled {
             return;
         }
         self.app.semantics_enabled = enabled;
         self.app.semantics_snapshot_revision = self.app.semantics_snapshot_revision.wrapping_add(1);
-        if enabled {
-            self.app.request_forced_layout_pass();
-            self.mark_all_dirty();
-        } else {
+        if !enabled {
             for surface in &mut self.surfaces {
                 surface.semantics_tree = None;
             }
@@ -550,15 +551,10 @@ where
                 || !surface.scoped_layout_scene_nodes.is_empty()
                 || !surface.scoped_moved_scene_nodes.is_empty()
         });
-        let layer_properties_pending = self
-            .surfaces
-            .iter()
-            .any(|surface| !surface.scoped_layer_property_nodes.is_empty());
         let frame = FrameDirt {
             render_dirty,
             pointer_dirty,
             attributed,
-            layer_properties_pending,
             recomposed_this_frame: laid_out.recomposed,
         };
 
@@ -573,42 +569,11 @@ where
             result.structure_changed |= frame.result.structure_changed;
             result.content_redrawn |= frame.rebuilt;
         }
-        if result.content_redrawn {
-            self.prune_stale_draw_observations();
-        }
+        self.retire_draw_observations();
         result.content_moved = std::mem::take(&mut self.app.content_moved);
         result
     }
-
-    /// Drops the draw observations of nodes no surface's render graph holds
-    /// any more, once every [`OBSERVATION_PRUNE_INTERVAL`] rebuilt frames:
-    /// finding them walks every node of every graph, and an observation
-    /// left behind in between costs no more than a redraw request for a
-    /// node nothing draws.
-    fn prune_stale_draw_observations(&mut self) {
-        self.app.rebuilt_frames_since_observation_prune += 1;
-        if self.app.rebuilt_frames_since_observation_prune < OBSERVATION_PRUNE_INTERVAL {
-            return;
-        }
-        self.app.rebuilt_frames_since_observation_prune = 0;
-        let mut retained_visual_nodes = HashSet::default();
-        let mut any_graph = false;
-        for surface in &mut self.surfaces {
-            any_graph |= surface
-                .renderer
-                .scene()
-                .collect_retained_visual_observation_nodes(&mut surface.retained_visual_nodes);
-            retained_visual_nodes.extend(surface.retained_visual_nodes.iter().copied());
-        }
-        if any_graph {
-            cranpose_ui::prune_draw_observations_to_nodes(&retained_visual_nodes);
-        }
-    }
 }
-
-/// Rebuilt frames between prunes of stale draw observations: once a second
-/// at 60 Hz.
-pub(crate) const OBSERVATION_PRUNE_INTERVAL: u32 = 60;
 
 fn render_surface<R>(
     app: &mut ShellApp,
@@ -624,10 +589,7 @@ where
     let layer_property_nodes = std::mem::take(&mut surface.scoped_layer_property_nodes);
     let structural_parents = std::mem::take(&mut surface.structural_scene_nodes);
     let draw_repass_pending = !draw_dirty_nodes.is_empty();
-    let mut draw_dirty_nodes = refresh_draw_nodes(app, surface, draw_dirty_nodes);
-    if frame.render_dirty && !frame.layer_properties_pending && !draw_repass_pending {
-        draw_dirty_nodes = refresh_retained_redraw_nodes(app, surface, draw_dirty_nodes);
-    }
+    let draw_dirty_nodes = refresh_draw_nodes(app, surface, draw_dirty_nodes);
     let layout = ScopedLayoutNodes {
         reshaped: std::mem::take(&mut surface.scoped_layout_scene_nodes),
         moved: std::mem::take(&mut surface.scoped_moved_scene_nodes),
@@ -648,31 +610,7 @@ where
     );
 
     if !dirt.needs_scene_rebuild {
-        dirt.log(
-            frame,
-            scene_dirty,
-            if dirt.render_only_dirty {
-                "present-retained"
-            } else {
-                "skip"
-            },
-        );
-        surface.scoped_layout_scene_nodes = dirt.layout_dirty_nodes;
-        surface.scoped_moved_scene_nodes = dirt.moved_nodes;
-        surface.scoped_draw_nodes = dirt.draw_dirty_nodes;
-        surface.scoped_layer_property_nodes = dirt.layer_property_nodes;
-        surface.structural_scene_nodes = dirt.structural_parents;
-        surface.scene_updates = dirt.scene_updates;
-        if dirt.render_only_dirty && app.dev_options.fps_counter {
-            draw_dev_overlay(app, surface);
-        }
-        return SurfaceFrame {
-            result: FrameUpdateResult {
-                visual_changed: dirt.render_only_dirty,
-                ..FrameUpdateResult::default()
-            },
-            rebuilt: false,
-        };
+        return keep_surface_scene(app, surface, (frame, scene_dirty), dirt);
     }
 
     surface.scene_dirty = false;
@@ -696,6 +634,47 @@ where
             ..FrameUpdateResult::default()
         },
         rebuilt: true,
+    }
+}
+
+// Keeps the surface's scene for a frame that changed none of it, and hands
+// the frame's dirty lists back to the surface for the next frame. Out of
+// line: a frame that draws something rebuilds the scene.
+#[inline(never)]
+fn keep_surface_scene<R>(
+    app: &mut ShellApp,
+    surface: &mut RootSurface<R>,
+    (frame, scene_dirty): (&FrameDirt, bool),
+    dirt: SurfaceDirt,
+) -> SurfaceFrame
+where
+    R: Renderer,
+    R::Error: Debug,
+{
+    dirt.log(
+        frame,
+        scene_dirty,
+        if dirt.render_only_dirty {
+            "present-retained"
+        } else {
+            "skip"
+        },
+    );
+    surface.scoped_layout_scene_nodes = dirt.layout_dirty_nodes;
+    surface.scoped_moved_scene_nodes = dirt.moved_nodes;
+    surface.scoped_draw_nodes = dirt.draw_dirty_nodes;
+    surface.scoped_layer_property_nodes = dirt.layer_property_nodes;
+    surface.structural_scene_nodes = dirt.structural_parents;
+    surface.scene_updates = dirt.scene_updates;
+    if dirt.render_only_dirty && app.dev_options.fps_counter {
+        draw_dev_overlay(app, surface);
+    }
+    SurfaceFrame {
+        result: FrameUpdateResult {
+            visual_changed: dirt.render_only_dirty,
+            ..FrameUpdateResult::default()
+        },
+        rebuilt: false,
     }
 }
 
@@ -750,15 +729,26 @@ fn dev_overlay_belongs_on(id: RootId, fps_counter: bool) -> bool {
 fn refresh_draw_nodes<R: Renderer>(
     app: &mut ShellApp,
     surface: &mut RootSurface<R>,
-    mut dirty_nodes: Vec<NodeId>,
+    dirty_nodes: Vec<NodeId>,
 ) -> Vec<NodeId> {
-    if dirty_nodes.is_empty() {
+    if dirty_nodes.is_empty() || surface.layout_tree.is_none() {
         return dirty_nodes;
     }
+    refresh_layout_tree_draws(app, surface, dirty_nodes)
+}
+
+// Brings the boxes of `dirty_nodes` in the surface's layout tree up to date.
+// Out of line: a surface that keeps no layout tree, such as a framebuffer's,
+// does none of it.
+#[inline(never)]
+fn refresh_layout_tree_draws<R: Renderer>(
+    app: &mut ShellApp,
+    surface: &mut RootSurface<R>,
+    mut dirty_nodes: Vec<NodeId>,
+) -> Vec<NodeId> {
     let Some(layout_tree) = surface.layout_tree.as_mut() else {
         return dirty_nodes;
     };
-
     dirty_nodes.sort_unstable();
     dirty_nodes.dedup();
     let dirty_set: HashSet<NodeId> = dirty_nodes.iter().copied().collect();
@@ -771,28 +761,6 @@ fn refresh_draw_nodes<R: Renderer>(
         &dirty_set,
     );
     dirty_nodes
-}
-
-fn refresh_retained_redraw_nodes<R: Renderer>(
-    app: &mut ShellApp,
-    surface: &mut RootSurface<R>,
-    mut dirty_nodes: Vec<NodeId>,
-) -> Vec<NodeId> {
-    dirty_nodes.clear();
-    let Some(root) = surface.root_node(app) else {
-        return dirty_nodes;
-    };
-    {
-        let mut applier = app.composition.applier_mut();
-        collect_retained_redraw_nodes(
-            &mut applier,
-            &app.app_context,
-            root,
-            &mut dirty_nodes,
-            &mut surface.redraw_walk,
-        );
-    }
-    refresh_draw_nodes(app, surface, dirty_nodes)
 }
 
 fn clear_dispatch_invalidation(
@@ -862,93 +830,6 @@ pub(crate) fn build_draw_refresh_scope(
     refresh_scope
 }
 
-/// Collects into `dirty_nodes` the nodes under `root` whose redraw flag was
-/// set before they had an id, clearing the flags: a draw repass names every
-/// other node whose content changed. A node under another window root, or
-/// not attached yet, stays noted in `context` for a later frame. `pending`
-/// keeps its storage for the next frame.
-fn collect_retained_redraw_nodes(
-    applier: &mut MemoryApplier,
-    context: &AppContext,
-    root: NodeId,
-    dirty_nodes: &mut Vec<NodeId>,
-    pending: &mut Vec<NodeId>,
-) {
-    pending.clear();
-    context.take_retained_redraw_nodes_into(pending);
-    for &id in pending.iter() {
-        match redraw_place(applier, id, root) {
-            RedrawPlace::Here => {
-                if take_redraw_flag(applier, id) {
-                    dirty_nodes.push(id);
-                }
-            }
-            RedrawPlace::Elsewhere => context.keep_retained_redraw_node(id),
-            RedrawPlace::Gone => {}
-        }
-    }
-}
-
-/// Where a node noted for a redraw lies for the surface of `root`.
-enum RedrawPlace {
-    /// Under `root` and under no other window root: the surface takes it.
-    Here,
-    /// Under another window root, or not attached to a root yet.
-    Elsewhere,
-    /// The node is gone.
-    Gone,
-}
-
-fn redraw_place(applier: &mut MemoryApplier, id: NodeId, root: NodeId) -> RedrawPlace {
-    let mut current = id;
-    loop {
-        if current == root {
-            return RedrawPlace::Here;
-        }
-        let Ok(node) = applier.get_mut(current) else {
-            return if current == id {
-                RedrawPlace::Gone
-            } else {
-                RedrawPlace::Elsewhere
-            };
-        };
-        let parent = node.parent();
-        if node
-            .as_any_mut()
-            .downcast_mut::<LayoutNode>()
-            .is_some_and(|layout| layout.is_window_root())
-        {
-            return RedrawPlace::Elsewhere;
-        }
-        let Some(parent) = parent else {
-            return RedrawPlace::Elsewhere;
-        };
-        current = parent;
-    }
-}
-
-/// Clears the redraw flag of the layout or subcompose node `id`, and returns
-/// whether it was set.
-fn take_redraw_flag(applier: &mut MemoryApplier, id: NodeId) -> bool {
-    let Ok(node) = applier.get_mut(id) else {
-        return false;
-    };
-    let any = node.as_any_mut();
-    if let Some(layout) = any.downcast_mut::<LayoutNode>() {
-        let redraw = layout.needs_redraw();
-        layout.clear_needs_redraw();
-        return redraw;
-    }
-    match any.downcast_mut::<SubcomposeLayoutNode>() {
-        Some(subcompose) => {
-            let redraw = subcompose.needs_redraw();
-            subcompose.clear_needs_redraw();
-            redraw
-        }
-        None => false,
-    }
-}
-
 fn refresh_layout_box_data(
     applier: &mut MemoryApplier,
     layout: &mut LayoutBox,
@@ -960,32 +841,15 @@ fn refresh_layout_box_data(
     }
 
     if dirty_nodes.contains(&layout.node_id) {
-        let refreshed = applier
-            .with_node::<LayoutNode, _>(layout.node_id, |node| {
-                node.clear_needs_redraw();
-                (
-                    node.modifier(),
-                    node.resolved_modifiers(),
-                    node.modifier_slices_snapshot(),
-                    node.semantics_configuration(),
-                )
-            })
+        let found = applier
+            .with_node::<LayoutNode, _>(layout.node_id, |node| node.clear_needs_redraw())
             .or_else(|_| {
                 applier.with_node::<SubcomposeLayoutNode, _>(layout.node_id, |node| {
                     node.clear_needs_redraw();
-                    (
-                        node.modifier(),
-                        node.resolved_modifiers(),
-                        node.modifier_slices_snapshot(),
-                        node.semantics_configuration(),
-                    )
                 })
             });
-        if let Ok((modifier, resolved_modifiers, slices, semantics)) = refreshed {
-            layout.node_data.modifier = modifier;
-            layout.node_data.resolved_modifiers = resolved_modifiers;
-            layout.node_data.modifier_slices = slices;
-            layout.node_data.semantics = semantics.map(Rc::new);
+        if found.is_ok() {
+            layout.node_data.refresh(applier, layout.node_id);
         }
     }
 

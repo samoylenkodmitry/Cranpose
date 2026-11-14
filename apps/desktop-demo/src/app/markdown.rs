@@ -28,7 +28,7 @@ mod table;
 
 #[derive(Clone, Debug, PartialEq)]
 pub(super) enum MarkdownBlock {
-    Text(Rc<AnnotatedString>),
+    Text(AnnotatedString),
     Image {
         url: String,
         alt: String,
@@ -36,7 +36,7 @@ pub(super) enum MarkdownBlock {
     Rule,
     Table(Rc<table::Table>),
     Example {
-        code: Rc<AnnotatedString>,
+        code: AnnotatedString,
         preview: usize,
     },
 }
@@ -231,9 +231,8 @@ impl BlockBuilder {
 
     fn flush_block(&mut self) {
         if let Some(b) = self.builder_raw.take() {
-            let s = b.to_annotated_string();
-            if !s.text.is_empty() {
-                let code = Rc::new(s);
+            let code = b.to_annotated_string();
+            if !code.text().is_empty() {
                 self.blocks.push(match self.code_preview.take() {
                     Some(preview) => MarkdownBlock::Example { code, preview },
                     None => MarkdownBlock::Text(code),
@@ -359,7 +358,7 @@ fn end_tag(b: &mut BlockBuilder, tag: TagEnd) {
                 .unwrap_or_else(AnnotatedString::builder)
                 .to_annotated_string();
             if let Some(row) = b.table.as_mut().and_then(|table| table.rows.last_mut()) {
-                row.push(Rc::new(cell));
+                row.push(cell);
             }
         }
         TagEnd::TableHead => b.style.bold = false,
@@ -458,7 +457,7 @@ pub(super) fn split_large_markdown_blocks(blocks: Vec<MarkdownBlock>) -> Vec<Mar
     let mut normalized = Vec::with_capacity(blocks.len());
     for block in blocks {
         match block {
-            MarkdownBlock::Text(annotated) if annotated.text.len() > MAX_MARKDOWN_BLOCK_BYTES => {
+            MarkdownBlock::Text(annotated) if annotated.text().len() > MAX_MARKDOWN_BLOCK_BYTES => {
                 split_large_text_block(&annotated, &mut normalized);
             }
             other => normalized.push(other),
@@ -468,7 +467,7 @@ pub(super) fn split_large_markdown_blocks(blocks: Vec<MarkdownBlock>) -> Vec<Mar
 }
 
 fn split_large_text_block(annotated: &AnnotatedString, out: &mut Vec<MarkdownBlock>) {
-    let text = annotated.text.as_str();
+    let text = annotated.text();
     let mut start = 0usize;
 
     while start < text.len() {
@@ -492,9 +491,7 @@ fn split_large_text_block(annotated: &AnnotatedString, out: &mut Vec<MarkdownBlo
             }
         }
 
-        out.push(MarkdownBlock::Text(Rc::new(
-            annotated.subsequence(start..end),
-        )));
+        out.push(MarkdownBlock::Text(annotated.subsequence(start..end)));
         start = end;
     }
 }
@@ -831,22 +828,22 @@ pub(super) fn render_markdown_block(
     width: f32,
 ) {
     match block {
-        MarkdownBlock::Text(annotated) => render_text_block(Rc::clone(annotated), appearance),
+        MarkdownBlock::Text(annotated) => render_text_block(annotated.clone(), appearance),
         MarkdownBlock::Image { url, alt } => MarkdownImage(url.clone(), alt.clone()),
         MarkdownBlock::Rule => render_rule(),
         MarkdownBlock::Table(table) => table::MarkdownTable(Rc::clone(table), appearance),
         MarkdownBlock::Example { code, preview } => {
             if appearance == MarkdownAppearance::Reader {
-                MarkdownExample(Rc::clone(code), *preview, width);
+                MarkdownExample(code.clone(), *preview, width);
             } else {
-                render_text_block(Rc::clone(code), appearance);
+                render_text_block(code.clone(), appearance);
             }
         }
     }
 }
 
 #[composable]
-fn MarkdownExample(code: Rc<AnnotatedString>, preview: usize, width: f32) {
+fn MarkdownExample(code: AnnotatedString, preview: usize, width: f32) {
     let code = cranpose_core::rememberUpdatedState(code);
     let (code_width, preview_width) = if width >= 720.0 {
         (width - 256.0, 240.0)
@@ -914,19 +911,19 @@ fn render_markdown_blocks_with_state(
 }
 
 #[composable]
-fn render_text_block(annotated: Rc<AnnotatedString>, appearance: MarkdownAppearance) {
+fn render_text_block(annotated: AnnotatedString, appearance: MarkdownAppearance) {
     render_text_block_aligned(annotated, appearance, TextAlign::Start);
 }
 
 fn render_text_block_aligned(
-    annotated: Rc<AnnotatedString>,
+    annotated: AnnotatedString,
     appearance: MarkdownAppearance,
     alignment: TextAlign,
 ) {
     let code_panel = appearance == MarkdownAppearance::Reader
-        && annotated.span_styles.iter().any(|span| {
+        && annotated.span_styles().iter().any(|span| {
             span.range.start == 0
-                && span.range.end == annotated.text.len()
+                && span.range.end == annotated.text().len()
                 && span.item.font_family == Some(FontFamily::Monospace)
         });
     let modifier = Modifier::empty().fill_max_width();
@@ -960,7 +957,7 @@ fn render_text_block_aligned(
         },
     };
 
-    if !annotated.link_annotations.is_empty() {
+    if annotated.has_link_annotations(0, annotated.len()) {
         let uri_handler = local_uri_handler().current();
         LinkedText(annotated, modifier, text_style, move |url| {
             if let Err(err) = uri_handler.open_uri(url) {

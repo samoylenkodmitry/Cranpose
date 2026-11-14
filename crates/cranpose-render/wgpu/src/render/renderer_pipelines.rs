@@ -123,6 +123,9 @@ pub(crate) struct RendererPipelines {
     /// Whether this frame drew a placeholder in place of an effect whose
     /// pipelines were compiling, or left out a draw whose pipeline was.
     pub(crate) drew_placeholder: Cell<bool>,
+    // Whether a frame drew a stand-in since the kept layers and blurred
+    // shadows were last dropped, so they may hold it.
+    pub(crate) stand_ins_kept: Cell<bool>,
     pub(crate) shape_pipelines: ShapePipelines,
     /// Image and glyph pipelines for passes without and with a depth buffer.
     pub(crate) image_pipeline: [FixedPipeline; 8],
@@ -688,6 +691,7 @@ impl RendererPipelines {
     /// something in place of what that pipeline draws.
     fn await_landing(&self) {
         self.drew_placeholder.set(true);
+        self.stand_ins_kept.set(true);
         self.recorder.hold_first_screen();
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(landing) = &self.landing {

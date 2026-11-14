@@ -1,45 +1,33 @@
-use std::cell::{Cell, RefCell};
+use std::{
+    cell::{Cell, RefCell},
+    sync::Arc,
+};
 
-use cranpose_core::collections::map::HashMap as NodeMap;
-use cranpose_ui_graphics::FxHashMap;
+use cranpose_ui_graphics::ContentPool;
 
 use crate::{
-    NodeUpdate,
-    layer_recycling::Pool,
-    scene_builder::{HitGraphState, RecorderKey, RecorderSlot, TranslateScratch},
+    scene_builder::{DirtyRoom, HitGraphState, TranslateScratch},
+    text_paint::TextPaint,
 };
 
 pub(crate) struct RenderThreadState {
-    pub(crate) layer_pool: RefCell<Pool>,
     pub(crate) translate_scratch: RefCell<TranslateScratch>,
-    /// The hit geometry a subtree had before its rebuild, kept from one
-    /// rebuild to the next so no frame allocates it.
     pub(crate) hit_geometry_scratch: Cell<Vec<HitGraphState>>,
-    /// The dirty nodes of a scene update, kept empty between updates so no
-    /// frame makes or allocates the map.
-    pub(crate) dirty_node_scratch: Cell<Option<NodeMap<cranpose_core::NodeId, NodeUpdate>>>,
-    pub(crate) command_recordings: RefCell<FxHashMap<RecorderKey, RecorderSlot>>,
-    pub(crate) recording_generation: Cell<u64>,
-    /// Whether a scene update or build changed a layer in 3D since the
-    /// window's scenes last published where their layers show and their
-    /// eyes' worlds.
+    pub(crate) dirty_node_scratch: Cell<Option<DirtyRoom>>,
     pub(crate) space_changed: Cell<bool>,
-    #[cfg(test)]
-    pub(crate) lowered_layer_count: Cell<usize>,
+    // The paints of the texts the thread made, shared by those that paint
+    // the same.
+    pub(crate) text_paints: RefCell<ContentPool<Arc<TextPaint>>>,
 }
 
 impl RenderThreadState {
     fn new() -> Self {
         Self {
-            layer_pool: RefCell::new(Pool::default()),
             translate_scratch: RefCell::new(TranslateScratch::default()),
             hit_geometry_scratch: Cell::new(Vec::new()),
             dirty_node_scratch: Cell::new(None),
-            command_recordings: RefCell::new(FxHashMap::default()),
-            recording_generation: Cell::new(0),
             space_changed: Cell::new(false),
-            #[cfg(test)]
-            lowered_layer_count: Cell::new(0),
+            text_paints: RefCell::new(ContentPool::new()),
         }
     }
 }

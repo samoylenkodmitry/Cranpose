@@ -6,7 +6,10 @@
 use std::{cell::Cell, rc::Rc};
 
 use cranpose_core::MutableState;
-use cranpose_render_common::graph::{LayerNode, PrimitiveNode, RenderGraph, RenderNode};
+use cranpose_render_common::{
+    graph_scene::Scene,
+    scene_store::{ItemRef, LayerRef},
+};
 use cranpose_ui::{
     Box as UiBox, BoxSpec, Color, Column, ColumnSpec, LayoutDirection, Modifier,
     ProvideLayoutDirection, Row, RowSpec, Size, Spacer, Text, TextStyle,
@@ -14,7 +17,7 @@ use cranpose_ui::{
     run_test_composition,
 };
 
-use crate::scene_probe::{fresh_graph, initial_graph, update_scene};
+use crate::scene_probe::{fresh_graph, initial_graph, painted_text, update_scene};
 
 const VIEWPORT: Size = Size::new(800.0, 600.0);
 const LABELS: [&str; 3] = ["Counter App", "Recursive Layout", "Glass Tiles"];
@@ -22,38 +25,45 @@ const DROPPED_NODES: usize = 17 * 1024;
 
 type Controls = (MutableState<usize>, MutableState<bool>);
 
-fn geometry(layer: &LayerNode, out: &mut Vec<String>) {
+fn geometry(layer: LayerRef<'_>, out: &mut Vec<String>) {
     out.push(format!(
         "layer {:?} at {:?} bounds {:?} content {:?}",
-        layer.node_id, layer.origin_in_parent, layer.local_bounds, layer.content_offset
+        layer.node_id(),
+        layer.origin_in_parent(),
+        layer.local_bounds(),
+        layer.content_offset()
     ));
-    nodes_geometry(&layer.children, out);
+    items_geometry(layer, out);
 }
 
-fn nodes_geometry(nodes: &[RenderNode], out: &mut Vec<String>) {
-    for child in nodes {
-        match child {
-            RenderNode::Layer(child) => geometry(child, out),
-            RenderNode::Inline(inline) => {
+fn items_geometry(layer: LayerRef<'_>, out: &mut Vec<String>) {
+    for item in layer.items() {
+        match item {
+            ItemRef::Layer(child) => geometry(child, out),
+            ItemRef::Leaf(leaf) => {
                 out.push(format!(
                     "inline {:?} at {:?} size {:?}",
-                    inline.node_id, inline.origin, inline.size
+                    leaf.node_id(),
+                    leaf.origin(),
+                    leaf.size()
                 ));
-                nodes_geometry(&inline.content, out);
+                items_geometry(leaf, out);
             }
-            RenderNode::Primitive(entry) => {
-                if let PrimitiveNode::Text(text) = &entry.node {
-                    out.push(format!("text {:?} at {:?}", text.text.text, text.rect));
-                }
+            ItemRef::Text(text) => {
+                out.push(format!(
+                    "text {:?} at {:?}",
+                    text.render_text.text(),
+                    text.rect
+                ));
             }
-            RenderNode::DrawRun(_) => {}
+            ItemRef::Draw(_) | ItemRef::Run(_) | ItemRef::Shape(_) => {}
         }
     }
 }
 
-fn painted(graph: &RenderGraph) -> Vec<String> {
+fn painted(scene: &Scene) -> Vec<String> {
     let mut out = Vec::new();
-    geometry(&graph.root, &mut out);
+    geometry(scene.root_layer().expect("a scene"), &mut out);
     out
 }
 
@@ -105,7 +115,7 @@ fn texts_that_outlive_a_large_teardown_paint_as_before() {
     let root = composition.root().expect("root");
     let mut graph = initial_graph(&mut composition, root, VIEWPORT);
     let before = painted(&graph);
-    assert_eq!(graph.root.painted_text(), LABELS);
+    assert_eq!(labels(&graph), LABELS);
     let (selected, deep) = controls.get().expect("controls");
 
     for round in 1..=2 {
@@ -117,7 +127,7 @@ fn texts_that_outlive_a_large_teardown_paint_as_before() {
         update_scene(&mut composition, root, VIEWPORT, &mut graph);
 
         assert_eq!(
-            graph.root.painted_text(),
+            labels(&graph),
             LABELS,
             "round {round}: the labels paint after the teardown"
         );
@@ -132,4 +142,11 @@ fn texts_that_outlive_a_large_teardown_paint_as_before() {
             "round {round}: a fresh scene paints them there too"
         );
     }
+}
+
+// Every string the scene paints, in draw order.
+fn labels(graph: &Scene) -> Vec<String> {
+    let mut painted = Vec::new();
+    painted_text(graph.root_layer().expect("a scene"), &mut painted);
+    painted
 }

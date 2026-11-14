@@ -8,7 +8,6 @@ use cranpose_render_common::primitive_emit::resolve_clip;
 use cranpose_render_common::{
     Brush,
     graph::TextPrimitiveNode,
-    hit_graph::collect_hits_from_graph,
     layer_shadow::{ShadowLight, layer_shadow_geometry},
     layer_transform::{apply_layer_to_rect, layer_uniform_scale},
     primitive_emit::{
@@ -21,10 +20,7 @@ use cranpose_ui::TextOverflow;
 use cranpose_ui::measure_text;
 #[cfg(test)]
 use cranpose_ui::prepare_text_layout;
-use cranpose_ui::{
-    LayoutBox,
-    text::{TextDrawStyle, TextStyle, shared_plain_render_string},
-};
+use cranpose_ui::text::{AnnotatedString, TextDrawStyle, TextStyle, shared_plain_render_string};
 use cranpose_ui_graphics::{
     BlendMode, Color, DrawPrimitive, GraphicsLayer, LayerShape, Point, Recorded, Rect,
     RenderEffect, RoundedCornerShape, RuntimeShader, ShapeRecorder, TileMode,
@@ -32,7 +28,7 @@ use cranpose_ui_graphics::{
 
 use crate::scene::{
     ClipRounding, CompositorScene, ContentContext, DrawnText, EffectLayer, ImageDraw, Placement,
-    RRectShadowDraw, RunDraw, Scene, ShadowDraw, SnapAnchor, TextDraw,
+    RRectShadowDraw, RunDraw, ShadowDraw, SnapAnchor, TextDraw,
 };
 
 mod style;
@@ -53,9 +49,6 @@ const GPU_TEXT_BRUSH_EFFECT_FIRST_STOP_SLOT: usize = 8;
 pub(crate) const GPU_TEXT_BRUSH_EFFECT_SHADER: &str =
     cranpose_ui_graphics::framework_shaders::GPU_TEXT_BRUSH_EFFECT_WGSL;
 
-/// `layer`'s elevation shadow over `transformed_bounds`, cut to `clip`: its
-/// ambient and spot passes as Skia draws them, each a round rect shadow the
-/// pass draws straight into its target.
 pub(crate) fn layer_casts_shadow(layer: &GraphicsLayer) -> bool {
     layer.shadow_elevation > 0.0
 }
@@ -90,21 +83,6 @@ pub(crate) fn push_layer_shadow(
             snap_anchor: None,
         });
     }
-}
-
-pub(crate) fn render_layout_tree(root: &LayoutBox, scene: &mut Scene) {
-    render_layout_tree_with_scale(root, scene, 1.0);
-}
-
-pub(crate) fn render_layout_tree_with_scale(root: &LayoutBox, scene: &mut Scene, scale: f32) {
-    let graph = cranpose_render_common::scene_builder::build_graph_from_layout_tree(root, scale);
-    collect_hits_from_graph(
-        &graph.root,
-        cranpose_render_common::graph::ProjectiveTransform::identity(),
-        scene,
-        None,
-    );
-    scene.replace_graph(graph);
 }
 
 fn tile_mode_to_shader_uniform(tile_mode: TileMode) -> f32 {
@@ -403,55 +381,48 @@ fn gpu_text_effect_for_style(
     build_gpu_text_effect(&material, text_rect)
 }
 
-fn text_for_gpu_mask(
-    text: &cranpose_ui::text::AnnotatedString,
-) -> cranpose_ui::text::AnnotatedString {
-    if text.span_styles.is_empty() {
-        return text.clone();
+fn text_for_gpu_mask(text: impl Into<AnnotatedString>) -> AnnotatedString {
+    let text = text.into();
+    if text.span_styles().is_empty() {
+        return text;
     }
 
-    let mut mask_text = text.clone();
-    for span in &mut mask_text.span_styles {
-        span.item.color = None;
-        span.item.brush = None;
-        span.item.alpha = None;
-        span.item.draw_style = None;
-        span.item.shadow = None;
-    }
-    mask_text
+    text.map_span_styles(|span| {
+        span.color = None;
+        span.brush = None;
+        span.alpha = None;
+        span.draw_style = None;
+        span.shadow = None;
+    })
 }
 
 fn text_with_layer_transformed_span_paint(
-    text: &cranpose_ui::text::AnnotatedString,
+    text: &AnnotatedString,
     content_layer: &GraphicsLayer,
-) -> cranpose_ui::text::AnnotatedString {
-    if text.span_styles.is_empty() {
+) -> AnnotatedString {
+    if text.span_styles().is_empty() {
         return text.clone();
     }
 
-    let mut transformed_text = text.clone();
-    for span in &mut transformed_text.span_styles {
-        span.item.color = span
-            .item
+    text.map_span_styles(|span| {
+        span.color = span
             .color
             .map(|color| apply_layer_to_color(color, content_layer));
-        span.item.brush = span
-            .item
+        span.brush = span
             .brush
-            .clone()
+            .take()
             .map(|brush| apply_layer_to_brush(brush, content_layer));
-    }
-    transformed_text
+    })
 }
 
 fn merged_span_style_for_range(
-    text: &cranpose_ui::text::AnnotatedString,
+    text: &AnnotatedString,
     base_span_style: &cranpose_ui::text::SpanStyle,
     start: usize,
     end: usize,
 ) -> cranpose_ui::text::SpanStyle {
     let mut merged_style = base_span_style.clone();
-    for span in &text.span_styles {
+    for span in text.span_styles() {
         if span.range.start <= start && span.range.end >= end {
             merged_style = merged_style.merge(&span.item);
         }
@@ -460,7 +431,7 @@ fn merged_span_style_for_range(
 }
 
 fn gpu_text_material_batches_for_text(
-    text: &cranpose_ui::text::AnnotatedString,
+    text: &AnnotatedString,
     text_style: &TextStyle,
     fallback_color: Color,
     text_scale: f32,
@@ -472,7 +443,7 @@ fn gpu_text_material_batches_for_text(
         if start == end {
             continue;
         }
-        let Some(range_text) = text.text.get(start..end) else {
+        let Some(range_text) = text.text().get(start..end) else {
             continue;
         };
         if !range_text.chars().any(|ch| ch != '\n' && ch != '\r') {
@@ -507,30 +478,26 @@ fn gpu_text_material_batches_for_text(
 }
 
 fn text_for_gpu_mask_batch(
-    text: &cranpose_ui::text::AnnotatedString,
+    text: &AnnotatedString,
     visible_ranges: &[Range<usize>],
-) -> cranpose_ui::text::AnnotatedString {
-    let mut mask_text = text_for_gpu_mask(text);
+) -> AnnotatedString {
     let visible_style = cranpose_ui::text::SpanStyle {
         color: Some(Color::WHITE),
         ..Default::default()
     };
-    for range in visible_ranges {
-        if range.start >= range.end {
-            continue;
-        }
-        mask_text.span_styles.push(cranpose_ui::text::RangeStyle {
-            item: visible_style.clone(),
-            range: range.clone(),
-        });
-    }
-    mask_text
+    visible_ranges
+        .iter()
+        .filter(|range| range.start < range.end)
+        .fold(
+            AnnotatedString::builder().append_annotated(&text_for_gpu_mask(text.clone())),
+            |builder, range| builder.add_style(visible_style.clone(), range.clone()),
+        )
+        .to_annotated_string()
 }
 
 trait TextStyleDrawSink {
     fn current_z(&mut self) -> usize;
 
-    /// A decoration shape in scene space, painted already.
     fn push_shape(
         &mut self,
         primitive: DrawPrimitive,
@@ -636,7 +603,7 @@ fn push_span_gpu_text_material_draws<S: TextStyleDrawSink>(
     transformed_text_style: &TextStyle,
     fallback_color: Color,
 ) -> bool {
-    let text = &*node.text;
+    let text = &AnnotatedString::from(Arc::clone(&node.render_text));
     let text_scale = layer_uniform_scale(placement.layer);
     let transformed_span_text = text_with_layer_transformed_span_paint(text, placement.layer);
     let material_batches = gpu_text_material_batches_for_text(
@@ -686,7 +653,6 @@ fn emit_text_style_draws<S: TextStyleDrawSink>(
     } = placement;
     let TextPrimitiveNode {
         node_id,
-        text,
         render_text,
         layout,
         text_style,
@@ -741,7 +707,7 @@ fn emit_text_style_draws<S: TextStyleDrawSink>(
         shadow_text_style.span_style.color = Some(shadow_color);
         let blur_radius = shadow.blur_radius.max(0.0) * text_scale;
         let shadow_style_hash = shadow_text_style.render_hash();
-        let shadow_text = Arc::new(text_for_gpu_mask(text).render_string());
+        let shadow_text = Arc::clone(text_for_gpu_mask(Arc::clone(render_text)).render_string());
         sink.push_shadow_text(
             TextDraw {
                 node_id,
@@ -808,11 +774,12 @@ fn emit_text_glyph_draws<S: TextStyleDrawSink>(
         }
 
         let (mask, color) = mask_style(style, Color::WHITE);
+        let mask_text = text_for_gpu_mask(Arc::clone(&node.render_text));
         push_text_effect(
             sink,
             node,
             (text_rect, text_scale, text_clip),
-            (&text_for_gpu_mask(&node.text), mask, color),
+            (&mask_text, mask, color),
             (effect, effect_rect),
         );
         return;
@@ -844,9 +811,6 @@ pub(crate) struct TextPlacement<'a> {
     pub(crate) snap_anchor: Option<SnapAnchor>,
 }
 
-/// Pushes a text's draws: its glyphs in the paint's colour when the paint
-/// is plain, without reading the style, and every draw its style asks for
-/// otherwise; each anchored to the placement's snap anchor.
 pub(crate) fn push_text_style_draws(
     scene: &mut CompositorScene,
     node: &TextPrimitiveNode,
@@ -887,10 +851,6 @@ pub(crate) fn estimate_text_style_draw_bounds(
 
 const DRAW_PRIMITIVE_TEXT_NODE_ID: NodeId = NodeId(0);
 
-/// The primitive with the layer's paint folded into its brushes, for a
-/// shape that joins the layer's loose run; `None` for text, images,
-/// shadows, content and group markers, which take their own paths. The layer's affine
-/// part is identity for anything drawn direct, so only the paint applies.
 fn loose_shape(primitive: &DrawPrimitive, layer: &GraphicsLayer) -> Option<DrawPrimitive> {
     let painted = |brush: &Brush| resolve_layer_brush(brush, layer).into_brush();
     Some(match primitive {
@@ -1046,7 +1006,7 @@ pub(crate) fn push_draw_primitive(
         }
 
         fn push_text(&mut self, params: TextDrawParams) {
-            let render_text = shared_plain_render_string(&params.text.text);
+            let render_text = shared_plain_render_string(params.text.text());
             self.scene.push_text(TextDraw {
                 node_id: DRAW_PRIMITIVE_TEXT_NODE_ID,
                 rect: params.rect,
@@ -1079,9 +1039,6 @@ pub(crate) fn push_draw_primitive(
     );
 }
 
-/// Records a shadow primitive's caster or cutout into `recorder` in the
-/// layer's record space, painted by the layer, under `blend_mode`; false
-/// when the primitive is not a shape.
 fn record_shadow_caster(
     recorder: &mut Arc<ShapeRecorder>,
     primitive: &DrawPrimitive,

@@ -5,14 +5,15 @@ use std::{
 };
 
 use cranpose_foundation::{
-    BasicModifierNodeContext, ModifierNodeChain, NodeCapabilities, PointerButton, PointerButtons,
-    PointerEvent, PointerEventKind, modifier_element,
+    BasicModifierNodeContext, ModifierNodeChain, NodeCapabilities, PlainIntrinsic, PlainLayout,
+    PointerButton, PointerButtons, PointerEvent, PointerEventKind, modifier_element, plain_element,
 };
 use cranpose_ui_layout::Placeable;
 
 use super::*;
 use crate::modifier::{
-    Modifier, PointerInputScope, collect_modifier_slices, collect_slices_from_modifier,
+    Color, EdgeInsets, Modifier, Point, PointerInputScope, collect_modifier_slices,
+    collect_slices_from_modifier,
 };
 
 #[test]
@@ -76,13 +77,13 @@ fn padding_node_adds_space_to_content() {
     let mut context = BasicModifierNodeContext::new();
 
     let padding = EdgeInsets::uniform(10.0);
-    let elements = vec![modifier_element(PaddingElement::new(padding))];
+    let elements = vec![plain_element(PaddingElement::new(padding))];
     chain.update_from_slice(&elements, &mut context);
 
     assert_eq!(chain.len(), 1);
     assert!(chain.has_nodes_for_invalidation(InvalidationKind::Layout));
 
-    let node = chain.node_mut::<PaddingNode>(0).unwrap();
+    let node = chain.plain::<PaddingElement>(0).unwrap();
     let measurable = TestMeasurable {
         intrinsic_width: 50.0,
         intrinsic_height: 50.0,
@@ -103,7 +104,7 @@ fn padding_node_adds_space_to_content() {
 fn padding_node_clamps_to_constraints() {
     let _app_context = crate::render_state::app_context_test_scope();
     let mut context = BasicModifierNodeContext::new();
-    let node = PaddingNode::new(EdgeInsets::uniform(12.0));
+    let node = PaddingElement::new(EdgeInsets::uniform(12.0));
     let measurable = TestMeasurable {
         intrinsic_width: 100.0,
         intrinsic_height: 100.0,
@@ -122,10 +123,10 @@ fn padding_node_clamps_to_constraints() {
 }
 
 #[test]
-fn fractional_offset_node_places_content_by_fraction_of_measured_size() {
+fn fractional_offset_places_content_by_fraction_of_measured_size() {
     let _app_context = crate::render_state::app_context_test_scope();
     let mut context = BasicModifierNodeContext::new();
-    let node = FractionalOffsetNode::new(0.25, -0.5);
+    let node = FractionalOffsetElement::new(0.25, -0.5);
     let measurable = TestMeasurable {
         intrinsic_width: 80.0,
         intrinsic_height: 40.0,
@@ -146,34 +147,50 @@ fn fractional_offset_node_places_content_by_fraction_of_measured_size() {
 }
 
 #[test]
-fn fractional_offset_node_passes_intrinsics_through() {
-    let node = FractionalOffsetNode::new(0.0, 1.0);
+fn fractional_offset_passes_intrinsics_through() {
+    let node = FractionalOffsetElement::new(0.0, 1.0);
     let measurable = TestMeasurable {
         intrinsic_width: 64.0,
         intrinsic_height: 32.0,
     };
 
-    assert_eq!(node.min_intrinsic_width(&measurable, 32.0, 1.0), 64.0);
-    assert_eq!(node.max_intrinsic_width(&measurable, 32.0, 1.0), 64.0);
-    assert_eq!(node.min_intrinsic_height(&measurable, 64.0, 1.0), 32.0);
-    assert_eq!(node.max_intrinsic_height(&measurable, 64.0, 1.0), 32.0);
+    for (kind, expected) in [
+        (PlainIntrinsic::MinWidth(32.0), 64.0),
+        (PlainIntrinsic::MaxWidth(32.0), 64.0),
+        (PlainIntrinsic::MinHeight(64.0), 32.0),
+        (PlainIntrinsic::MaxHeight(64.0), 32.0),
+    ] {
+        assert_eq!(node.intrinsic(&measurable, kind, 1.0), expected);
+    }
 }
 
 #[test]
 fn padding_node_respects_intrinsics() {
     let _app_context = crate::render_state::app_context_test_scope();
     let padding = EdgeInsets::uniform(10.0);
-    let node = PaddingNode::new(padding);
+    let node = PaddingElement::new(padding);
     let measurable = TestMeasurable {
         intrinsic_width: 50.0,
         intrinsic_height: 30.0,
     };
 
-    assert_eq!(node.min_intrinsic_width(&measurable, 100.0, 1.0), 70.0);
-    assert_eq!(node.max_intrinsic_width(&measurable, 100.0, 1.0), 70.0);
+    assert_eq!(
+        node.intrinsic(&measurable, PlainIntrinsic::MinWidth(100.0), 1.0),
+        70.0
+    );
+    assert_eq!(
+        node.intrinsic(&measurable, PlainIntrinsic::MaxWidth(100.0), 1.0),
+        70.0
+    );
 
-    assert_eq!(node.min_intrinsic_height(&measurable, 100.0, 1.0), 50.0);
-    assert_eq!(node.max_intrinsic_height(&measurable, 100.0, 1.0), 50.0);
+    assert_eq!(
+        node.intrinsic(&measurable, PlainIntrinsic::MinHeight(100.0), 1.0),
+        50.0
+    );
+    assert_eq!(
+        node.intrinsic(&measurable, PlainIntrinsic::MaxHeight(100.0), 1.0),
+        50.0
+    );
 }
 
 #[test]
@@ -183,7 +200,7 @@ fn background_node_is_draw_only() {
     let mut context = BasicModifierNodeContext::new();
 
     let color = Color(1.0, 0.0, 0.0, 1.0);
-    let elements = vec![modifier_element(BackgroundElement::new(color))];
+    let elements = vec![plain_element(BackgroundElement::new(color))];
     chain.update_from_slice(&elements, &mut context);
 
     assert_eq!(chain.len(), 1);
@@ -197,7 +214,7 @@ fn corner_shape_node_is_draw_only() {
     let mut chain = ModifierNodeChain::new();
     let mut context = BasicModifierNodeContext::new();
 
-    let elements = vec![modifier_element(CornerShapeElement::new(
+    let elements = vec![plain_element(CornerShapeElement::new(
         RoundedCornerShape::uniform(6.0),
     ))];
     chain.update_from_slice(&elements, &mut context);
@@ -207,36 +224,26 @@ fn corner_shape_node_is_draw_only() {
 }
 
 #[test]
-fn modifier_chain_reuses_padding_nodes() {
+fn a_padding_takes_its_new_insets_in_its_place() {
     let _app_context = crate::render_state::app_context_test_scope();
     let mut chain = ModifierNodeChain::new();
     let mut context = BasicModifierNodeContext::new();
 
-    let elements = vec![modifier_element(PaddingElement::new(EdgeInsets::uniform(
+    let elements = vec![plain_element(PaddingElement::new(EdgeInsets::uniform(
         10.0,
     )))];
     chain.update_from_slice(&elements, &mut context);
-    let initial_node = {
-        let node_ref = chain.node::<PaddingNode>(0).unwrap();
-        &*node_ref as *const _
-    };
 
     context.clear_invalidations();
 
-    let elements = vec![modifier_element(PaddingElement::new(EdgeInsets::uniform(
+    let elements = vec![plain_element(PaddingElement::new(EdgeInsets::uniform(
         20.0,
     )))];
     chain.update_from_slice(&elements, &mut context);
-    let updated_node = {
-        let node_ref = chain.node::<PaddingNode>(0).unwrap();
-        &*node_ref as *const _
-    };
 
-    assert_eq!(initial_node, updated_node);
-    {
-        let node_ref = chain.node::<PaddingNode>(0).unwrap();
-        assert_eq!(node_ref.padding.left, 20.0);
-    }
+    assert_eq!(chain.len(), 1);
+    let padding = chain.plain::<PaddingElement>(0).expect("a padding");
+    assert_eq!(padding.padding().left, 20.0);
 }
 
 /// A layout pass's context whose grid has the given device pixels a point.
@@ -251,7 +258,7 @@ impl ModifierNodeContext for GridContext {
 #[test]
 fn a_size_node_measured_on_another_grid_rounds_its_size_for_that_grid() {
     let _app_context = crate::render_state::app_context_test_scope();
-    let node = SizeNode::new(Some(10.3), Some(10.3), Some(10.3), Some(10.3), true);
+    let node = SizeElement::with_constraints(Some(10.3), Some(10.3), Some(10.3), Some(10.3), true);
     let measurable = TestMeasurable {
         intrinsic_width: 50.0,
         intrinsic_height: 50.0,
@@ -279,10 +286,10 @@ fn size_node_enforces_dimensions() {
     let mut chain = ModifierNodeChain::new();
     let mut context = BasicModifierNodeContext::new();
 
-    let elements = vec![modifier_element(SizeElement::new(Some(100.0), Some(200.0)))];
+    let elements = vec![plain_element(SizeElement::new(Some(100.0), Some(200.0)))];
     chain.update_from_slice(&elements, &mut context);
 
-    let node = chain.node_mut::<SizeNode>(0).unwrap();
+    let node = chain.plain::<SizeElement>(0).unwrap();
     let measurable = TestMeasurable {
         intrinsic_width: 50.0,
         intrinsic_height: 50.0,
@@ -460,12 +467,12 @@ fn mixed_modifier_chain_tracks_all_capabilities() {
     let clicked = Rc::new(Cell::new(false));
 
     let elements = vec![
-        modifier_element(PaddingElement::new(EdgeInsets::uniform(10.0))),
+        plain_element(PaddingElement::new(EdgeInsets::uniform(10.0))),
         modifier_element(AlphaElement::new(0.8)),
         modifier_element(ClickableElement::new(move |_| {
             clicked.set(true);
         })),
-        modifier_element(BackgroundElement::new(Color(1.0, 0.0, 0.0, 1.0))),
+        plain_element(BackgroundElement::new(Color(1.0, 0.0, 0.0, 1.0))),
     ];
     chain.update_from_slice(&elements, &mut context);
 
@@ -494,38 +501,26 @@ fn mixed_modifier_chain_tracks_all_capabilities() {
 }
 
 #[test]
-fn toggling_background_color_reuses_node() {
+fn a_background_takes_its_new_color_in_its_place() {
     let _app_context = crate::render_state::app_context_test_scope();
     let mut chain = ModifierNodeChain::new();
     let mut context = BasicModifierNodeContext::new();
 
     let red = Color(1.0, 0.0, 0.0, 1.0);
-    let elements = vec![modifier_element(BackgroundElement::new(red))];
+    let elements = vec![plain_element(BackgroundElement::new(red))];
     chain.update_from_slice(&elements, &mut context);
-
-    let initial_node_ptr = {
-        let node_ref = chain.node::<BackgroundNode>(0).unwrap();
-        &*node_ref as *const _
-    };
 
     let blue = Color(0.0, 0.0, 1.0, 1.0);
-    let elements = vec![modifier_element(BackgroundElement::new(blue))];
+    let elements = vec![plain_element(BackgroundElement::new(blue))];
     chain.update_from_slice(&elements, &mut context);
 
-    let updated_node_ptr = {
-        let node_ref = chain.node::<BackgroundNode>(0).unwrap();
-        &*node_ref as *const _
-    };
-    assert_eq!(initial_node_ptr, updated_node_ptr, "Node should be reused");
-
-    {
-        let node_ref = chain.node::<BackgroundNode>(0).unwrap();
-        assert_eq!(node_ref.color, blue);
-    }
+    assert_eq!(chain.len(), 1);
+    let background = chain.plain::<BackgroundElement>(0).expect("a background");
+    assert_eq!(background.color(), blue);
 }
 
 #[test]
-fn reordering_modifiers_with_stable_reuse() {
+fn reordered_plain_modifiers_keep_their_values() {
     let _app_context = crate::render_state::app_context_test_scope();
     let mut chain = ModifierNodeChain::new();
     let mut context = BasicModifierNodeContext::new();
@@ -534,36 +529,30 @@ fn reordering_modifiers_with_stable_reuse() {
     let color = Color(1.0, 0.0, 0.0, 1.0);
 
     let elements = vec![
-        modifier_element(PaddingElement::new(padding)),
-        modifier_element(BackgroundElement::new(color)),
+        plain_element(PaddingElement::new(padding)),
+        plain_element(BackgroundElement::new(color)),
     ];
     chain.update_from_slice(&elements, &mut context);
-
-    let (padding_ptr, background_ptr) = {
-        let padding_ref = chain.node::<PaddingNode>(0).unwrap();
-        let background_ref = chain.node::<BackgroundNode>(1).unwrap();
-        (&*padding_ref as *const _, &*background_ref as *const _)
-    };
 
     let elements = vec![
-        modifier_element(BackgroundElement::new(color)),
-        modifier_element(PaddingElement::new(padding)),
+        plain_element(BackgroundElement::new(color)),
+        plain_element(PaddingElement::new(padding)),
     ];
     chain.update_from_slice(&elements, &mut context);
 
-    let (new_background_ptr, new_padding_ptr) = {
-        let background_ref = chain.node::<BackgroundNode>(0).unwrap();
-        let padding_ref = chain.node::<PaddingNode>(1).unwrap();
-        (&*background_ref as *const _, &*padding_ref as *const _)
-    };
-
     assert_eq!(
-        background_ptr, new_background_ptr,
-        "Background node should be reused"
+        chain
+            .plain::<BackgroundElement>(0)
+            .map(|background| background.color()),
+        Some(color),
+        "the background moves before the padding"
     );
     assert_eq!(
-        padding_ptr, new_padding_ptr,
-        "Padding node should be reused"
+        chain
+            .plain::<PaddingElement>(1)
+            .map(|element| element.padding()),
+        Some(padding),
+        "the padding moves after the background"
     );
 }
 

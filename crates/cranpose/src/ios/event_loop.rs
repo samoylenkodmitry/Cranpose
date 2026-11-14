@@ -165,10 +165,16 @@ impl<F: FnMut() + 'static> IosApp<F> {
             .accessibility
             .as_ref()
             .and_then(super::accessibility::IosAccessibilityBridge::wake_deadline);
+        // The shell's timed events, its trim at rest among them.
+        let timed = self
+            .shell
+            .as_ref()
+            .and_then(|shell| shell.frame_schedule().next_deadline);
         let wake = self
             .next_off_screen_render
             .into_iter()
             .chain(accessibility)
+            .chain(timed)
             .min();
         event_loop.set_control_flow(wake.map_or(ControlFlow::Wait, ControlFlow::WaitUntil));
     }
@@ -445,6 +451,12 @@ impl<F: FnMut() + 'static> ApplicationHandler for IosApp<F> {
     fn new_events(&mut self, event_loop: &dyn ActiveEventLoop, cause: winit::event::StartCause) {
         if matches!(cause, winit::event::StartCause::ResumeTimeReached { .. }) {
             self.publish_held_accessibility();
+            // A timed event came due: the next redraw updates the shell.
+            if let (Some(shell), Some(window)) = (&self.shell, &self.window)
+                && shell.frame_schedule().needs_update
+            {
+                window.request_redraw();
+            }
             self.pump_off_screen(event_loop);
         }
     }

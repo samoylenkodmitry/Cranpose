@@ -26,16 +26,22 @@ use crate::{
     thread_state,
 };
 
+mod debug_stats;
+mod registered_runtime;
 mod scope_runtime;
 mod state_arena;
 mod state_owners;
 mod task_slots;
+mod ui_task;
 
+pub use debug_stats::RuntimeDebugStats;
+pub(crate) use registered_runtime::{runtime_handle_by_id, with_state_arena_by_id};
 pub(crate) use scope_runtime::ScopeRuntime;
 pub(crate) use state_arena::{DerivedRefresh, StateArena};
 pub use state_arena::{StateArenaDebugStats, StateId};
 pub(crate) use state_owners::collecting_states;
 use state_owners::hand_to_current_owner;
+use ui_task::UiTask;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FrameCallbackKind {
@@ -50,44 +56,6 @@ enum UiMessage {
 
 type UiContinuation = Box<dyn Fn(Box<dyn Any>) -> bool + 'static>;
 type UiContinuationMap = HashMap<u64, UiContinuation>;
-
-/// Sizes of a runtime's queues and tables, for leak and memory checks. A `_len` field counts
-/// entries and a `_cap` field the capacity reserved.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct RuntimeDebugStats {
-    /// Node updates queued and not yet applied.
-    pub node_updates_len: usize,
-    /// Capacity reserved for the node updates.
-    pub node_updates_cap: usize,
-    /// Recompose scopes that were invalidated and not yet recomposed.
-    pub invalid_scopes_len: usize,
-    /// Entries in the queue of invalidated scopes.
-    pub scope_queue_len: usize,
-    /// Capacity reserved for the invalid scope queue.
-    pub scope_queue_cap: usize,
-    /// Frame callbacks waiting for the next frame.
-    pub frame_callbacks_len: usize,
-    /// Capacity reserved for the frame callbacks.
-    pub frame_callbacks_cap: usize,
-    /// UI-thread closures queued by `enqueue_ui_task` and not yet run.
-    pub local_tasks_len: usize,
-    /// Capacity reserved for the local tasks.
-    pub local_tasks_cap: usize,
-    /// UI continuations registered and waiting for a value.
-    pub ui_conts_len: usize,
-    /// Capacity reserved for the UI continuations.
-    pub ui_conts_cap: usize,
-    /// Futures from `spawn_ui` that have not finished.
-    pub tasks_len: usize,
-    /// Capacity reserved for the spawned tasks.
-    pub tasks_cap: usize,
-    /// States kept alive on behalf of the runtime itself, not of a Rust owner.
-    pub external_state_owners_len: usize,
-    /// Capacity reserved for the external state owners.
-    pub external_state_owners_cap: usize,
-    /// Messages posted from other threads that the UI thread has not run yet.
-    pub ui_dispatcher_pending: usize,
-}
 
 /// Identifies a runtime within its thread.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
@@ -224,7 +192,7 @@ struct RuntimeInner {
     last_frame_time_nanos: Cell<Option<u64>>,
     ui_dispatcher: UiDispatcherRef,
     ui_rx: RefCell<mpsc::Receiver<UiMessage>>,
-    local_tasks: RefCell<VecDeque<Box<dyn FnOnce() + 'static>>>,
+    local_tasks: RefCell<VecDeque<UiTask>>,
     ui_conts: RefCell<UiContinuationMap>,
     next_cont_id: Cell<u64>,
     ui_thread_id: ThreadId,
@@ -416,7 +384,7 @@ impl RuntimeInner {
             .any(|entry| entry.kind == FrameCallbackKind::Transient)
     }
 
-    fn enqueue_ui_task(&self, task: Box<dyn FnOnce() + 'static>) {
+    fn enqueue_ui_task(&self, task: UiTask) {
         self.local_tasks.borrow_mut().push_back(task);
         self.schedule();
     }
@@ -448,11 +416,11 @@ impl RuntimeInner {
             .map_or(true, |tasks| tasks.contains(id))
     }
 
+    // Polls the woken tasks; the drain calls it once a wake is set. Without
+    // a wake no task can make progress, and the order stays. Out of line:
+    // the poll is large and most drains find no wake.
+    #[inline(never)]
     fn poll_async_tasks(&self) -> bool {
-        // Without a wake no task can make progress, and the order stays.
-        if !self.task_woken.load(Ordering::Acquire) {
-            return false;
-        }
         // The tasks still pending move to the front of `order`, which goes
         // back as the task order, after any task spawned while polling.
         let mut order = std::mem::take(&mut *self.task_order.borrow_mut());
@@ -525,7 +493,6 @@ impl RuntimeInner {
         crate::concurrency::fire_due_alarms();
         loop {
             let mut executed = false;
-
             // A message counts as pending from before it is sent until it
             // ran, so none waits while none is pending.
             if self.ui_dispatcher.has_pending() {
@@ -544,21 +511,20 @@ impl RuntimeInner {
                 }
             }
 
-            if self.run_local_tasks() {
-                executed = true;
+            // Most drains find nothing: each queue is tested here before its call.
+            if !self.local_tasks.borrow().is_empty() {
+                executed |= self.run_local_tasks();
             }
-
-            if self.poll_async_tasks() {
-                executed = true;
+            if self.task_woken.load(Ordering::Acquire) {
+                executed |= self.poll_async_tasks();
+                // The tasks just polled may have queued work of their own,
+                // such as a state observer's change notice for a state they
+                // wrote. It belongs to this drain, or a frame that resumed an
+                // animation would draw the value it wrote only on the next
+                // frame. It does not count as progress: a task writing state
+                // on every poll must not keep the drain polling it.
+                self.run_local_tasks();
             }
-            // The tasks just polled may have queued work of their own, such
-            // as a state observer's change notice for a state they wrote. It
-            // belongs to this drain, or a frame that resumed an animation
-            // would draw the value it wrote only on the next frame. It does
-            // not count as progress: a task writing state on every poll must
-            // not keep the drain polling it.
-            self.run_local_tasks();
-
             if !executed {
                 break;
             }
@@ -575,7 +541,7 @@ impl RuntimeInner {
                 return ran;
             };
             ran = true;
-            task();
+            task.run();
         }
     }
 
@@ -1123,20 +1089,6 @@ impl RuntimeHandle {
         }
     }
 
-    /// Schedules work that must run on the runtime thread.
-    ///
-    /// The closure executes on the UI thread immediately when the runtime
-    /// drains its local queue, so it may capture `Rc`/`RefCell` values. Calling
-    /// this from any other thread is a logic error and will panic in debug
-    /// builds via the inner assertion.
-    pub fn enqueue_ui_task(&self, task: Box<dyn FnOnce() + 'static>) {
-        if let Some(inner) = self.inner.upgrade() {
-            inner.enqueue_ui_task(task);
-        } else {
-            task();
-        }
-    }
-
     /// Spawns `fut` on the UI thread, where `drain_ui` polls it whenever it is woken. Returns
     /// `None` if the runtime is gone.
     pub fn spawn_ui<F>(&self, fut: F) -> Option<TaskHandle>
@@ -1532,28 +1484,6 @@ pub fn current_runtime_handle() -> Option<RuntimeHandle> {
     .flatten()
 }
 
-pub(crate) fn runtime_handle_by_id(id: RuntimeId) -> Option<RuntimeHandle> {
-    with_registered_runtime(id, |handle| Some(handle.clone()))
-}
-
-/// Runs `f` on this thread's handle of the runtime `id`: the active
-/// runtime's, which most lookups name, without hashing the id, or else the
-/// registered one.
-fn with_registered_runtime<R>(
-    id: RuntimeId,
-    f: impl FnOnce(&RuntimeHandle) -> Option<R>,
-) -> Option<R> {
-    thread_state::try_runtimes(|state| {
-        if let Some(handle) = state.active_runtimes.borrow().last()
-            && handle.id == id
-        {
-            return f(handle);
-        }
-        state.registered_runtimes.borrow().get(&id).and_then(f)
-    })
-    .flatten()
-}
-
 #[cfg(target_os = "android")]
 pub(crate) fn share_rescue<'a>(
     handles: impl Iterator<Item = &'a RuntimeHandle>,
@@ -1569,14 +1499,6 @@ pub(crate) fn share_rescue<'a>(
         *inner.rescued.borrow_mut() = Some(Rc::clone(&shared));
     }
     Some(shared)
-}
-
-pub(crate) fn with_state_arena_by_id<R>(
-    id: RuntimeId,
-    f: impl FnOnce(&StateArena) -> R,
-) -> Option<R> {
-    let inner = with_registered_runtime(id, |handle| handle.inner.upgrade())?;
-    Some(f(&inner.state_arena))
 }
 
 pub(crate) fn live_recompose_scope_count() -> usize {

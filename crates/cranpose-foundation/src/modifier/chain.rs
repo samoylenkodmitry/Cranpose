@@ -3,50 +3,23 @@
 
 use std::{any::TypeId, cell::RefCell, rc::Rc};
 
-use cranpose_core::{PackedU64, collections::map::HashMap};
-
 use super::{
-    AnyModifierElement, DynModifierElement, InvalidationKind, MAX_DELEGATE_DEPTH,
+    AnyModifierElement, DynModifierElement, ElementMaker, InvalidationKind, MAX_DELEGATE_DEPTH,
     ModifierChainIter, ModifierChainNodeRef, ModifierNode, ModifierNodeContext, NodeCapabilities,
-    NodePath, chain_node_ref::ChainPosition,
+    NodeMaker, NodePath, chain_node_ref::ChainPosition,
 };
-
-/// One node of a chain and the element it last took. The element's hash,
-/// which matches entries when a chain rebuilds, is worked out then: an
-/// element updated in place on every frame is not hashed for it.
-#[derive(Debug)]
-struct ModifierNodeEntry {
-    key: Option<PackedU64>,
-    element: DynModifierElement,
-    node: Rc<RefCell<dyn ModifierNode>>,
-    capabilities: NodeCapabilities,
-    // The union of the node's capabilities and those of every node after it,
-    // while no node of the chain delegates.
-    aggregate: NodeCapabilities,
-}
-
-impl ModifierNodeEntry {
-    fn new(
-        key: Option<PackedU64>,
-        element: DynModifierElement,
-        node: Rc<RefCell<dyn ModifierNode>>,
-        capabilities: NodeCapabilities,
-    ) -> Self {
-        let entry = Self {
-            key,
-            element,
-            node,
-            capabilities,
-            aggregate: NodeCapabilities::empty(),
-        };
-        entry
-            .node
-            .borrow()
-            .node_state()
-            .set_capabilities(entry.capabilities);
-        entry
-    }
-}
+mod entry;
+mod entry_element;
+mod in_place;
+mod plain;
+use entry::ModifierNodeEntry;
+use entry_element::EntryElement;
+pub use entry_element::HeldElement;
+use in_place::{InPlace, update_entry_in_place};
+pub use plain::{
+    PLAIN_WORDS_MAX, PlainElement, PlainFns, PlainIntrinsic, PlainLayout, PlainLayoutFns,
+    PlainValue, PrepareAt, plain_element,
+};
 
 fn visit_node_tree_mut(
     node: &mut dyn ModifierNode,
@@ -172,9 +145,13 @@ pub struct ModifierNodeChain {
     // While a node of the chain delegates: the chain's nodes in order,
     // delegates after the node that delegates to them, each with its
     // capabilities and the union of its own and those of every node after
-    // it. Empty otherwise, when the entries are the order and keep the
-    // unions: most chains delegate nowhere and allocate none.
-    delegated_order: Vec<(NodePath, NodeCapabilities, NodeCapabilities)>,
+    // it. `None` otherwise, when the entries are the order and keep the
+    // unions: most chains delegate nowhere, and the list sits out of line.
+    #[expect(
+        clippy::box_collection,
+        reason = "one word in every chain, where a vector takes three"
+    )]
+    delegated_order: Option<Box<Vec<(NodePath, NodeCapabilities, NodeCapabilities)>>>,
     /// Whether the chain's nodes are attached. A node that joins an attached
     /// chain attaches as it joins; one that joins a detached chain waits for
     /// [`Self::attach_nodes`].
@@ -203,12 +180,6 @@ impl Default for ModifierNodeChain {
     }
 }
 
-struct EntryIndex {
-    keyed: HashMap<(TypeId, TypeId, u64), Vec<usize>>,
-    hashed: HashMap<(TypeId, TypeId, u64), Vec<usize>>,
-    typed: HashMap<(TypeId, TypeId), Vec<usize>>,
-}
-
 struct EntryMatchQuery<'a> {
     element_type: TypeId,
     node_type: TypeId,
@@ -217,217 +188,139 @@ struct EntryMatchQuery<'a> {
     element: &'a DynModifierElement,
 }
 
-impl EntryIndex {
-    fn build(entries: &[ModifierNodeEntry]) -> Self {
-        let mut keyed = HashMap::default();
-        let mut hashed = HashMap::default();
-        let mut typed = HashMap::default();
-
-        for (i, entry) in entries.iter().enumerate() {
-            let (element_type, node_type) =
-                (entry.element.element_type(), entry.element.node_type());
-            if let Some(key_value) = entry.key {
-                keyed
-                    .entry((element_type, node_type, key_value.get()))
-                    .or_insert_with(Vec::new)
-                    .push(i);
-            } else {
-                hashed
-                    .entry((element_type, node_type, entry.element.hash_code()))
-                    .or_insert_with(Vec::new)
-                    .push(i);
-                typed
-                    .entry((element_type, node_type))
-                    .or_insert_with(Vec::new)
-                    .push(i);
-            }
-        }
-
-        Self {
-            keyed,
-            hashed,
-            typed,
-        }
-    }
-
-    fn find_match(
-        &self,
-        entries: &[ModifierNodeEntry],
-        used: &[bool],
-        query: EntryMatchQuery<'_>,
-    ) -> Option<usize> {
-        if let Some(key_value) = query.key {
-            if let Some(candidates) =
-                self.keyed
-                    .get(&(query.element_type, query.node_type, key_value))
-            {
-                for &i in candidates {
-                    if !used[i] {
-                        return Some(i);
-                    }
-                }
-            }
-        } else {
-            if let Some(candidates) =
-                self.hashed
-                    .get(&(query.element_type, query.node_type, query.hash_code))
-            {
-                for &i in candidates {
-                    if !used[i]
-                        && entries[i]
-                            .element
-                            .as_ref()
-                            .equals_element(query.element.as_ref())
-                    {
-                        return Some(i);
-                    }
-                }
-            }
-
-            if let Some(candidates) = self.typed.get(&(query.element_type, query.node_type)) {
-                for &i in candidates {
-                    if !used[i] {
-                        return Some(i);
-                    }
-                }
-            }
-        }
-
-        None
-    }
-}
-
-/// What updating an entry in place did to the chain's links.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum InPlace {
-    /// The links and capability aggregates stand as they were.
-    LinksHold,
-    /// The entry's capabilities changed, or its updated node delegates and
-    /// may have changed its delegates: the chain links again.
-    Relink,
-}
-
-/// Updates `entry` for `element` where it is, when the element is of the
-/// entry's type and key and its node can take it: an element of a node's
-/// type and key updates the node whatever its content, as Compose does.
-/// `None` leaves the entry as it was.
-fn update_entry_in_place(
-    entry: &mut ModifierNodeEntry,
-    element: &DynModifierElement,
-    context: &mut dyn ModifierNodeContext,
-) -> Option<InPlace> {
-    if entry.element.element_type() != element.element_type()
-        || entry.element.node_type() != element.node_type()
-        || entry.key.map(PackedU64::get) != element.key()
-        || !element.can_update_node(&*entry.node.borrow())
-    {
-        return None;
-    }
-    let same_element = entry.element.as_ref().equals_element(element.as_ref());
-    let capabilities = element.capabilities();
-    let mut outcome = if capabilities == entry.capabilities {
-        InPlace::LinksHold
-    } else {
-        InPlace::Relink
+// The first old entry no element took yet that `query` may take over: one
+// of its types and key, or, for an unkeyed element, an equal unkeyed one of
+// its types, else any unkeyed one of its types. A chain holds a few entries,
+// so a scan takes less than an index would.
+fn find_match(
+    entries: &[ModifierNodeEntry],
+    used: &[bool],
+    query: &EntryMatchQuery<'_>,
+) -> Option<usize> {
+    let candidates = || {
+        entries
+            .iter()
+            .zip(used)
+            .enumerate()
+            .filter(|(_, (entry, used))| {
+                let held = entry.held();
+                !**used
+                    && held.element_type() == query.element_type
+                    && held.node_type() == query.node_type
+            })
+            .map(|(index, (entry, _))| (index, entry))
     };
-    if !same_element || element.requires_update() {
-        element.update_node(&mut *entry.node.borrow_mut());
-        entry.element = Rc::clone(element);
-        request_update_auto_invalidations(element.as_ref(), context, capabilities);
-        entry
-            .node
-            .borrow()
-            .for_each_delegate(&mut |_| outcome = InPlace::Relink);
+    match query.key {
+        Some(key) => candidates()
+            .find(|(_, entry)| entry.key() == Some(key))
+            .map(|(index, _)| index),
+        None => {
+            let mut unkeyed = candidates().filter(|(_, entry)| entry.key().is_none());
+            let first = unkeyed.next()?;
+            std::iter::once(first)
+                .chain(unkeyed)
+                .find(|(_, entry)| {
+                    let held = entry.held();
+                    held.hash_code() == query.hash_code && held.equals(query.element.as_ref())
+                })
+                .map_or(Some(first.0), |(index, _)| Some(index))
+        }
     }
-    entry.capabilities = capabilities;
-    entry
-        .node
-        .borrow()
-        .node_state()
-        .set_capabilities(capabilities);
-    Some(outcome)
 }
 
-/// A new entry for `element` and its node, updated, and attached when
-/// `attach`, as it joins an attached chain.
+// A new entry for `element`: its node, updated, and attached when `attach`,
+// as it joins an attached chain, or its words.
 fn fresh_entry(
     element: DynModifierElement,
     context: &mut dyn ModifierNodeContext,
     attach: bool,
 ) -> ModifierNodeEntry {
     let capabilities = element.capabilities();
-    let entry = ModifierNodeEntry::new(
-        element.key().map(PackedU64::new),
-        Rc::clone(&element),
-        element.create_node(),
-        capabilities,
-    );
-    if attach {
-        attach_node_tree(&mut *entry.node.borrow_mut(), context);
-    }
-    element.update_node(&mut *entry.node.borrow_mut());
+    let entry = match element.maker() {
+        ElementMaker::Plain(value) => ModifierNodeEntry::of_plain(value),
+        ElementMaker::Node(maker) => {
+            let entry = ModifierNodeEntry::of_node(Rc::clone(&element), maker, capabilities);
+            if let Some(node) = entry.node() {
+                if attach {
+                    attach_node_tree(&mut *node.borrow_mut(), context);
+                }
+                maker.update_node(&mut *node.borrow_mut());
+            }
+            entry
+        }
+    };
     request_auto_invalidations(context, capabilities);
     entry
 }
 
 /// Matches `element`, at `new_pos` of the rebuilt tail, against the old
-/// entries: one of its type and key whose node can take it is updated and
-/// marked for `new_pos`, and `None` is returned; otherwise the element's
-/// new entry is, attached when `attach`.
+/// entries: one of its type and key that can
+/// take it is updated and marked for `new_pos`, and `None` is returned;
+/// otherwise the element's new entry is, attached when `attach`.
 fn reconcile_element(
     element: DynModifierElement,
     new_pos: usize,
-    (old_entries, index): (&mut [ModifierNodeEntry], &EntryIndex),
+    old_entries: &mut [ModifierNodeEntry],
     (used, match_order): (&mut [bool], &mut [Option<usize>]),
     context: &mut dyn ModifierNodeContext,
     attach: bool,
 ) -> Option<ModifierNodeEntry> {
-    let element_type = element.element_type();
-    let node_type = element.node_type();
+    let maker = element.maker();
     let key = element.key();
-    // Only an unkeyed element is matched by its hash.
-    let hash_code = if key.is_none() {
-        element.hash_code()
-    } else {
-        0
+    let query = EntryMatchQuery {
+        element_type: element.element_type(),
+        node_type: match maker {
+            ElementMaker::Node(maker) => maker.node_type(),
+            ElementMaker::Plain(value) => value.fns().element_type(),
+        },
+        key,
+        // Only an unkeyed element is matched by its hash.
+        hash_code: if key.is_none() {
+            element.hash_code()
+        } else {
+            0
+        },
+        element: &element,
     };
     let capabilities = element.capabilities();
-    let Some(idx) = index.find_match(
-        old_entries,
-        used,
-        EntryMatchQuery {
-            element_type,
-            node_type,
-            key,
-            hash_code,
-            element: &element,
-        },
-    ) else {
+    let Some(idx) = find_match(old_entries, used, &query) else {
         return Some(fresh_entry(element, context, attach));
     };
     let entry = &mut old_entries[idx];
-    if !element.can_update_node(&*entry.node.borrow()) {
-        return Some(fresh_entry(element, context, attach));
+    match (&mut *entry, maker) {
+        (ModifierNodeEntry::Plain { fns, words, .. }, ElementMaker::Plain(value)) => {
+            let held = &mut words[..fns.words()];
+            if !value.equals_words(held) {
+                value.write_words(held);
+                request_update_auto_invalidations(element.as_ref(), context, capabilities);
+            }
+        }
+        (
+            ModifierNodeEntry::Node {
+                element: held,
+                node,
+                capabilities: held_capabilities,
+                ..
+            },
+            ElementMaker::Node(maker),
+        ) if maker.can_update_node(&*node.borrow()) => {
+            let same_element = held.view(node, *held_capabilities).equals(element.as_ref());
+            if !same_element || element.requires_update() {
+                maker.update_node(&mut *node.borrow_mut());
+                request_update_auto_invalidations(element.as_ref(), context, capabilities);
+                *held = EntryElement::new(Rc::clone(&element), maker);
+            }
+            *held_capabilities = capabilities;
+            node.borrow().node_state().set_capabilities(capabilities);
+        }
+        _ => return Some(fresh_entry(element, context, attach)),
     }
 
     used[idx] = true;
     match_order[idx] = Some(new_pos);
-    let same_element = entry.element.as_ref().equals_element(element.as_ref());
-    if !same_element || element.requires_update() {
-        element.update_node(&mut *entry.node.borrow_mut());
-        entry.element = element;
-        request_update_auto_invalidations(entry.element.as_ref(), context, capabilities);
-    }
     if idx != new_pos {
         request_auto_invalidations(context, capabilities);
     }
-    entry.key = key.map(PackedU64::new);
-    entry.capabilities = capabilities;
-    entry
-        .node
-        .borrow()
-        .node_state()
-        .set_capabilities(capabilities);
     None
 }
 
@@ -445,7 +338,7 @@ impl ModifierNodeChain {
         Self {
             entries: Vec::new(),
             aggregated_capabilities: NodeCapabilities::empty(),
-            delegated_order: Vec::new(),
+            delegated_order: None,
             attached: false,
         }
     }
@@ -457,7 +350,7 @@ impl ModifierNodeChain {
         }
         self.attached = false;
         for entry in &self.entries {
-            detach_node_tree(&mut *entry.node.borrow_mut());
+            entry.detach();
         }
     }
 
@@ -467,8 +360,8 @@ impl ModifierNodeChain {
             return;
         }
         self.attached = true;
-        for entry in &self.entries {
-            attach_node_tree(&mut *entry.node.borrow_mut(), context);
+        for node in self.entries.iter().filter_map(ModifierNodeEntry::node) {
+            attach_node_tree(&mut *node.borrow_mut(), context);
         }
     }
 
@@ -531,6 +424,15 @@ impl ModifierNodeChain {
         updated
     }
 
+    /// Asks `context` for what an update of the last node's values
+    /// invalidates, by the node's capabilities, after its caller updated the
+    /// node in place and left its capabilities as they were.
+    pub fn invalidate_last(&self, context: &mut dyn ModifierNodeContext) {
+        if let Some(entry) = self.entries.last() {
+            request_auto_invalidations(context, entry.capabilities());
+        }
+    }
+
     /// Reconciles the chain against the elements that `elements` yields, without collecting them
     /// first. See `update_from_slice`.
     pub fn update_from_ref_iter<'a, I>(
@@ -585,8 +487,8 @@ impl ModifierNodeChain {
         if fast_path_failed_at.is_none() && scratch.elements.is_empty() {
             if elements_count < self.entries.len() {
                 for entry in self.entries.drain(elements_count..) {
-                    request_auto_invalidations(context, entry.capabilities);
-                    detach_node_tree(&mut *entry.node.borrow_mut());
+                    request_auto_invalidations(context, entry.capabilities());
+                    entry.detach();
                 }
                 relink = true;
             }
@@ -608,6 +510,17 @@ impl ModifierNodeChain {
         context: &mut dyn ModifierNodeContext,
         scratch: &mut ReconcileScratch,
     ) {
+        // No old entry to take over, as at a new node's first sync: every
+        // element gets an entry of its own, with no query for a match.
+        if fail_idx == self.entries.len() {
+            self.entries.reserve_exact(scratch.elements.len());
+            for element in scratch.elements.drain(..) {
+                self.entries
+                    .push(fresh_entry(element, context, self.attached));
+            }
+            self.sync_chain_links();
+            return;
+        }
         let mut old_entries: Vec<ModifierNodeEntry> = self.entries.drain(fail_idx..).collect();
         let processed_entries_len = self.entries.len();
         let old_len = old_entries.len();
@@ -618,8 +531,6 @@ impl ModifierNodeChain {
         scratch.match_order.clear();
         scratch.match_order.resize(old_len, None);
 
-        let index = EntryIndex::build(&old_entries);
-
         let new_elements_count = scratch.elements.len();
         scratch.final_slots.clear();
         scratch.final_slots.reserve(new_elements_count);
@@ -628,7 +539,7 @@ impl ModifierNodeChain {
             let fresh = reconcile_element(
                 element,
                 new_pos,
-                (&mut old_entries, &index),
+                &mut old_entries,
                 (&mut scratch.old_used, &mut scratch.match_order),
                 context,
                 self.attached,
@@ -640,8 +551,8 @@ impl ModifierNodeChain {
             match scratch.match_order[i] {
                 Some(pos) if scratch.old_used[i] => scratch.final_slots[pos] = Some(entry),
                 _ => {
-                    request_auto_invalidations(context, entry.capabilities);
-                    detach_node_tree(&mut *entry.node.borrow_mut());
+                    request_auto_invalidations(context, entry.capabilities());
+                    entry.detach();
                 }
             }
         }
@@ -679,25 +590,25 @@ impl ModifierNodeChain {
     /// Resets all nodes in the chain. This mirrors the behaviour of
     /// Jetpack Compose's `onReset` callback.
     pub fn reset(&mut self) {
-        for entry in &mut self.entries {
-            reset_node_tree(&mut *entry.node.borrow_mut());
+        for node in self.entries.iter().filter_map(ModifierNodeEntry::node) {
+            reset_node_tree(&mut *node.borrow_mut());
         }
     }
 
     /// Detaches every node in the chain and clears internal storage.
     pub fn detach_all(&mut self) {
         for entry in std::mem::take(&mut self.entries) {
-            detach_node_tree(&mut *entry.node.borrow_mut());
-            {
-                let node_borrow = entry.node.borrow();
-                let state = node_borrow.node_state();
-                state.set_capabilities(NodeCapabilities::empty());
+            entry.detach();
+            if let Some(node) = entry.node() {
+                node.borrow()
+                    .node_state()
+                    .set_capabilities(NodeCapabilities::empty());
             }
         }
         self.sync_chain_links();
     }
 
-    /// The number of nodes in the chain.
+    /// The number of entries in the chain: its nodes and its plain elements.
     pub fn len(&self) -> usize {
         self.entries.len()
     }
@@ -705,6 +616,13 @@ impl ModifierNodeChain {
     /// Whether the chain holds no nodes.
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
+    }
+
+    /// The elements of the chain's nodes, one for each in chain order: those
+    /// the chain was last updated from, or equal ones it kept, or the nodes
+    /// that hold every value of them.
+    pub fn held_elements(&self) -> impl ExactSizeIterator<Item = HeldElement<'_>> {
+        self.entries.iter().map(ModifierNodeEntry::held)
     }
 
     /// Returns the aggregated capability mask for the entire chain.
@@ -808,8 +726,8 @@ impl ModifierNodeChain {
     /// Downcasts the node at `index` to the requested type.
     /// Returns a `Ref` guard that dereferences to the node type.
     pub fn node<N: ModifierNode + 'static>(&self, index: usize) -> Option<std::cell::Ref<'_, N>> {
-        self.entries.get(index).and_then(|entry| {
-            std::cell::Ref::filter_map(entry.node.borrow(), |boxed_node| {
+        self.get_node_rc(index).and_then(|node| {
+            std::cell::Ref::filter_map(node.borrow(), |boxed_node| {
                 boxed_node.as_any().downcast_ref::<N>()
             })
             .ok()
@@ -822,18 +740,41 @@ impl ModifierNodeChain {
         &self,
         index: usize,
     ) -> Option<std::cell::RefMut<'_, N>> {
-        self.entries.get(index).and_then(|entry| {
-            std::cell::RefMut::filter_map(entry.node.borrow_mut(), |boxed_node| {
+        self.get_node_rc(index).and_then(|node| {
+            std::cell::RefMut::filter_map(node.borrow_mut(), |boxed_node| {
                 boxed_node.as_any_mut().downcast_mut::<N>()
             })
             .ok()
         })
     }
 
-    /// Returns the shared node at the given index. Coordinators compare it
-    /// with the node they hold and clone it only to hold a new one.
+    /// Returns the shared node at the given index, `None` for a plain
+    /// element, which has none. Coordinators compare it with the node they
+    /// hold and clone it only to hold a new one.
     pub fn get_node_rc(&self, index: usize) -> Option<&Rc<RefCell<dyn ModifierNode>>> {
-        self.entries.get(index).map(|entry| &entry.node)
+        self.entries.get(index).and_then(ModifierNodeEntry::node)
+    }
+
+    /// The table and the words of the plain element at `index`.
+    #[inline]
+    pub fn plain_words(&self, index: usize) -> Option<(&'static PlainFns, &[u32])> {
+        self.entries.get(index)?.plain_words()
+    }
+
+    /// How the plain element at `index` measures, with every word of its
+    /// entry: the words past the element's own are zero.
+    #[inline]
+    pub fn plain_layout(
+        &self,
+        index: usize,
+    ) -> Option<(Option<&'static PlainLayoutFns>, &[u32; PLAIN_WORDS_MAX])> {
+        self.entries.get(index)?.plain_layout()
+    }
+
+    /// The value of the plain element at `index`, when it is an `E`.
+    #[inline]
+    pub fn plain<E: PlainElement>(&self, index: usize) -> Option<E> {
+        self.entries.get(index)?.held().plain()
     }
 
     /// Returns true if the chain contains any nodes matching the given invalidation kind.
@@ -849,7 +790,10 @@ impl ModifierNodeChain {
     {
         for index in 0..self.order_len() {
             let (path, cached_caps, _agg) = self.order_at(index);
-            let mut node_borrow = self.entries[path.entry()].node.borrow_mut();
+            let Some(node) = self.entries[path.entry()].node() else {
+                continue;
+            };
+            let mut node_borrow = node.borrow_mut();
             let mut current: &mut dyn ModifierNode = &mut *node_borrow;
             for &delegate_index in path.delegates() {
                 match nth_delegate_mut(current, delegate_index as usize) {
@@ -874,7 +818,7 @@ impl ModifierNodeChain {
         path: NodePath,
         f: impl FnOnce(&dyn ModifierNode) -> R,
     ) -> Option<R> {
-        let node_borrow = self.entries[path.entry()].node.borrow();
+        let node_borrow = self.entries[path.entry()].node()?.borrow();
         let mut current: &dyn ModifierNode = &*node_borrow;
         for &delegate_index in path.delegates() {
             current = nth_delegate(current, delegate_index as usize)?;
@@ -884,21 +828,24 @@ impl ModifierNodeChain {
 
     // How many nodes the chain's order holds, delegates included.
     pub(super) fn order_len(&self) -> usize {
-        if self.delegated_order.is_empty() {
-            self.entries.len()
-        } else {
-            self.delegated_order.len()
-        }
+        self.delegated_order
+            .as_deref()
+            .map_or(self.entries.len(), Vec::len)
     }
 
     // The node at `index` of the chain's order: its path, its capabilities
     // and the union of capabilities from it to the tail.
     pub(super) fn order_at(&self, index: usize) -> (NodePath, NodeCapabilities, NodeCapabilities) {
-        if self.delegated_order.is_empty() {
-            let entry = &self.entries[index];
-            (NodePath::root(index), entry.capabilities, entry.aggregate)
-        } else {
-            self.delegated_order[index]
+        match self.delegated_order.as_deref() {
+            Some(order) => order[index],
+            None => {
+                let entry = &self.entries[index];
+                (
+                    NodePath::root(index),
+                    entry.capabilities(),
+                    entry.aggregate(),
+                )
+            }
         }
     }
 
@@ -907,44 +854,48 @@ impl ModifierNodeChain {
     fn sync_chain_links(&mut self) {
         self.rebuild_delegated_order();
         let mut aggregate = NodeCapabilities::empty();
-        if self.delegated_order.is_empty() {
-            for entry in self.entries.iter_mut().rev() {
-                aggregate |= entry.capabilities;
-                entry.aggregate = aggregate;
-            }
-        } else {
-            for (_, caps, aggregate_child) in self.delegated_order.iter_mut().rev() {
+        if let Some(order) = self.delegated_order.as_deref_mut() {
+            for (_, caps, aggregate_child) in order.iter_mut().rev() {
                 aggregate |= *caps;
                 *aggregate_child = aggregate;
+            }
+        } else {
+            for entry in self.entries.iter_mut().rev() {
+                aggregate |= entry.capabilities();
+                entry.set_aggregate(aggregate);
             }
         }
         self.aggregated_capabilities = aggregate;
     }
 
     fn rebuild_delegated_order(&mut self) {
-        let delegates = self.entries.iter().any(|entry| {
-            let mut delegates = false;
-            entry
-                .node
-                .borrow()
-                .for_each_delegate(&mut |_| delegates = true);
-            delegates
-        });
+        let delegates = self
+            .entries
+            .iter()
+            .filter_map(ModifierNodeEntry::node)
+            .any(|node| {
+                let mut delegates = false;
+                node.borrow().for_each_delegate(&mut |_| delegates = true);
+                delegates
+            });
         if !delegates {
-            self.delegated_order = Vec::new();
+            self.delegated_order = None;
             return;
         }
-        self.delegated_order.clear();
+        let order = self.delegated_order.get_or_insert_default();
+        order.clear();
         let mut path_buf = [0usize; MAX_DELEGATE_DEPTH];
         for (index, entry) in self.entries.iter().enumerate() {
-            let node_borrow = entry.node.borrow();
-            Self::enumerate_link_order(
-                &*node_borrow,
-                index,
-                &mut path_buf,
-                0,
-                &mut self.delegated_order,
-            );
+            match entry.node() {
+                Some(node) => {
+                    Self::enumerate_link_order(&*node.borrow(), index, &mut path_buf, 0, order);
+                }
+                None => order.push((
+                    NodePath::root(index),
+                    entry.capabilities(),
+                    NodeCapabilities::empty(),
+                )),
+            }
         }
     }
 

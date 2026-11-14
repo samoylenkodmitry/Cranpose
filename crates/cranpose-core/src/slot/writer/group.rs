@@ -4,6 +4,7 @@ use super::{
         GroupStart, GroupStartKind, SlotTable, SlotWriteSession,
     },
     SlotWriteSessionState,
+    frames::GroupFrame,
 };
 use crate::{AnchorId, NodeId, RecomposeScope};
 
@@ -91,6 +92,8 @@ impl SlotWriteSession<'_> {
             log::error!(
                 "slot writer discarded stale group frame before beginning a child for anchor {group_anchor:?}"
             );
+            // A frame closed without its body's finish may root the insert run.
+            self.table.settle_insert_run();
             if self.state.pop_group_frame().is_none() {
                 return;
             }
@@ -160,6 +163,7 @@ impl SlotWriteSession<'_> {
             return started;
         }
 
+        self.table.settle_insert_run();
         while self.state.pop_group_frame().is_some() {}
         let root_insert_index = self.table.group_count();
         self.state.restart_parent_children(root_insert_index);
@@ -322,8 +326,29 @@ impl SlotWriteSession<'_> {
 
         let resolution = resolution.unwrap_or_else(|| self.resolve_active_child(cursor, key));
         let started = self.materialize_group_at_cursor(cursor, key, resolution);
-        self.open_started_group(started.anchor, cursor.index(), started.kind)
-            .unwrap_or_else(|| self.recover_malformed_group_start(key, started.anchor))
+        let Some(start) = self.open_started_group(started.anchor, cursor.index(), started.kind)
+        else {
+            return self.recover_malformed_group_start(key, started.anchor);
+        };
+        // A group appended at the end, as every group of a first
+        // composition is, moves no record.
+        if start.kind == GroupStartKind::Inserted
+            && start.group.index() + 1 < self.table.group_count()
+        {
+            self.root_insert_run(start.group.index());
+        }
+        start
+    }
+
+    // Starts an insert run rooted at the new group at `index`, whose frame is
+    // the top one, unless one is open.
+    #[inline(never)]
+    fn root_insert_run(&mut self, index: usize) {
+        if self.table.open_insert_run(index)
+            && let Some(frame) = self.state.group_stack.last_mut()
+        {
+            frame.root_insert_run();
+        }
     }
 
     /// Opens the group at the writer's cursor when it is the one `key`
@@ -376,6 +401,16 @@ impl SlotWriteSession<'_> {
     }
 
     pub(crate) fn end_group(&mut self) {
+        #[cfg(any(test, debug_assertions))]
+        debug_assert!(
+            !(self.table.insert_run_is_parked()
+                && self
+                    .state
+                    .group_stack
+                    .last()
+                    .is_some_and(GroupFrame::roots_insert_run)),
+            "the body's finish ends the insert run its group roots"
+        );
         let Some((group_anchor, opened_index)) = self.state.pop_group_frame() else {
             log::error!("slot writer end_group called with an empty group stack");
             return;
@@ -414,6 +449,14 @@ impl SlotWriteSession<'_> {
     /// `finish_group_body` and `end_group` would one after another, and
     /// gives `attach_root` each of the group's root nodes.
     pub(crate) fn skip_and_end_group(&mut self, attach_root: impl FnMut(NodeId)) {
+        debug_assert!(
+            !self
+                .state
+                .group_stack
+                .last()
+                .is_some_and(GroupFrame::roots_insert_run),
+            "a group skips only once it composed, so it never roots an insert run"
+        );
         let Some((group_anchor, opened_index)) = self.state.pop_group_frame() else {
             log::error!("slot writer skip_and_end_group called with an empty group stack");
             return;

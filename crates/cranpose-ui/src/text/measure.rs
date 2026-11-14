@@ -1,24 +1,23 @@
 use std::{
-    cell::{Cell, OnceCell, RefCell},
+    cell::{Cell, RefCell},
     ops::Range,
     rc::Rc,
     sync::Arc,
 };
 
-use cranpose_core::{
-    PackedU64,
-    collections::pass_aged::{IDLE_PASSES, PassAgedCache},
-};
+use cranpose_core::collections::pass_aged::{IDLE_PASSES, PassAgedCache};
 use cranpose_text::{
     CaretDirection, FontExtent, FontFamily, FontFamilyResolver, FontRequest, FontStyle, FontWeight,
-    LayoutInput, ParagraphIntrinsics, TextLayout, TextLayouter, paragraph_line_box,
+    LayoutInput, ParagraphIntrinsics, RenderString, Retired, TextLayout, TextLayouter,
+    paragraph_line_box,
 };
-use cranpose_ui_graphics::{MemoryHeadroom, Point, Size, TextLayoutHandle};
+use cranpose_ui_graphics::{DEFAULT_FONT_SIZE, MemoryHeadroom, Point};
 
+pub use super::prepared_text_layout::PreparedTextLayout;
 use super::{
-    AnnotatedString, LineBox, RenderString, SpanStyle, TextAlign, TextDrawStyle, TextUnit,
-    layout_cache::{CacheAdmission, Cached, LayoutCache},
-    layout_input::{DEFAULT_FONT_SIZE_SP, ParagraphSpans, TextUnits},
+    AnnotatedString, LineBox, SpanStyle, TextDrawStyle, TextUnit,
+    layout_cache::{CacheAdmission, Cached, LayoutCache, Miss},
+    layout_input::{ParagraphSpans, TextUnits},
     layout_options::{TextLayoutOptions, TextOverflow},
     style::TextStyle,
     text_key::TextKey,
@@ -26,6 +25,9 @@ use super::{
 use crate::{density::Density, font_scale::FontScaleCurve, text_layout_result::TextLayoutResult};
 
 const TEXT_INTRINSICS_CACHE_CAPACITY: usize = 1024;
+// The most retired layouts and strings kept.
+const RETIRED_LAYOUTS: usize = 512;
+const RETIRED_STRINGS: usize = 4096;
 const SCALE_DOWN_SEARCH_STEPS: usize = 14;
 
 /// Size of a laid-out text. Distances are in logical pixels.
@@ -39,239 +41,6 @@ pub struct TextMetrics {
     pub line_height: f32,
     /// Number of lines, at least the minimum the options ask for.
     pub line_count: usize,
-}
-
-/// A text laid out between two widths: its glyphs and lines, which every
-/// query, measurement and renderer reads, and the size it measures.
-#[derive(Clone, Debug)]
-pub struct PreparedTextLayout {
-    /// The text that was laid out.
-    pub text: Rc<AnnotatedString>,
-    /// The style the text draws in, shared with every render node drawn
-    /// from this layout.
-    pub visual_style: Arc<TextStyle>,
-    /// The lines and glyphs.
-    pub layout: TextLayout,
-    // The widest the text could be, and the fewest lines its height covers,
-    // which its metrics follow from with its layout.
-    max_width: f32,
-    min_lines: u32,
-    /// `text` as a renderer draws it, and its
-    /// [`RenderString::render_hash`](crate::text::RenderString::render_hash),
-    /// converted on first use: see [`PreparedTextLayout::render_text`].
-    pub render_text: OnceCell<(Arc<RenderString>, PackedU64)>,
-    pub(crate) visual_style_hash: OnceCell<PackedU64>,
-    // The layout as a draw scope carries it, made on first use.
-    layout_handle: OnceCell<TextLayoutHandle>,
-}
-
-impl PreparedTextLayout {
-    // The prepared layout of `text` in `style` laid out as `layout`, `max_width`
-    // the widest it could be.
-    fn new(
-        text: Rc<AnnotatedString>,
-        style: Arc<TextStyle>,
-        layout: TextLayout,
-        (max_width, min_lines): (f32, usize),
-    ) -> Self {
-        Self {
-            max_width,
-            min_lines: u32::try_from(min_lines).unwrap_or(u32::MAX),
-            text,
-            visual_style: style,
-            layout,
-            render_text: OnceCell::new(),
-            visual_style_hash: OnceCell::new(),
-            layout_handle: OnceCell::new(),
-        }
-    }
-
-    /// The paragraph's width, within the widths it was laid out between, and
-    /// the height of all its lines together.
-    pub fn size(&self) -> Size {
-        Size::new(
-            self.layout.width().min(self.max_width),
-            self.layout.height(),
-        )
-    }
-
-    // The max widths at which the text laid out from `min_width` gives this
-    // layout again: its lines, its width and its size the same.
-    pub(crate) fn max_widths_kept(&self, min_width: f32) -> cranpose_ui_layout::BoundRange {
-        let width = self.layout.width();
-        // A paragraph wider than its max measures as the max, which moves
-        // with it.
-        if self.max_width < width {
-            return cranpose_ui_layout::BoundRange::exactly(self.max_width);
-        }
-        let (low, high) = self.layout.max_widths_kept(min_width);
-        cranpose_ui_layout::BoundRange {
-            low: low.max(width),
-            high,
-        }
-    }
-
-    /// Size and line count.
-    pub fn metrics(&self) -> TextMetrics {
-        let layout = &self.layout;
-        let size = self.size();
-        TextMetrics {
-            width: size.width,
-            height: size.height,
-            line_height: layout.line_advance(),
-            line_count: layout
-                .line_count()
-                .max(usize::try_from(self.min_lines).unwrap_or(usize::MAX)),
-        }
-    }
-
-    /// The first and last baselines.
-    pub fn alignment_lines(&self) -> cranpose_ui_layout::AlignmentLines {
-        let layout = &self.layout;
-        cranpose_ui_layout::AlignmentLines::new(
-            Some(layout.line_baseline(0)),
-            Some(layout.line_baseline(layout.line_count() - 1)),
-        )
-    }
-
-    /// True when the text did not fit: it had more lines than the line limit,
-    /// or was wider than the widest it could be.
-    pub fn did_overflow(&self) -> bool {
-        self.layout.did_overflow_height() || self.layout.did_overflow_width()
-    }
-
-    // The layout as a draw scope carries it to a renderer, made once for
-    // every frame that draws the same text.
-    pub(crate) fn layout_handle(&self) -> TextLayoutHandle {
-        self.layout_handle
-            .get_or_init(|| TextLayoutHandle::from(Arc::new(self.layout.clone())))
-            .clone()
-    }
-
-    // This layout at `widths`, at which it breaks into the same lines: itself when its width there is its own, else a copy whose
-    // lines `align` places across that width. The copy keeps the text as a
-    // renderer draws it and the style's hash, and takes the allocation of
-    // `spare` when nothing else holds it.
-    pub(crate) fn at_widths(
-        self: &Rc<Self>,
-        widths: (f32, f32),
-        align: TextAlign,
-        spare: Option<Rc<Self>>,
-    ) -> Rc<Self> {
-        let width = self.layout.width_between(widths.0, widths.1);
-        if width.to_bits() == self.layout.width().to_bits() {
-            return Rc::clone(self);
-        }
-        self.aligned_at(widths, align, spare)
-    }
-
-    // The copy `at_widths` makes. Out of line: the copy costs more than the
-    // call, and a layout held at its own width takes none.
-    #[inline(never)]
-    fn aligned_at(
-        self: &Rc<Self>,
-        widths: (f32, f32),
-        align: TextAlign,
-        spare: Option<Rc<Self>>,
-    ) -> Rc<Self> {
-        let mut aligned = Self {
-            min_lines: self.min_lines,
-            render_text: self.render_text.clone(),
-            visual_style_hash: self.visual_style_hash.clone(),
-            ..Self::new(
-                Rc::clone(&self.text),
-                Arc::clone(&self.visual_style),
-                self.layout.clone(),
-                (self.max_width, 0),
-            )
-        };
-        aligned.realign(widths, align);
-        if let Some(mut spare) = spare
-            && let Some(slot) = Rc::get_mut(&mut spare)
-        {
-            *slot = aligned;
-            return spare;
-        }
-        Rc::new(aligned)
-    }
-
-    // Places the lines across `(min_width, max_width)`, at which the layout
-    // breaks into the same lines, as `align` says.
-    pub(crate) fn realign(&mut self, (min_width, max_width): (f32, f32), align: TextAlign) {
-        self.layout.align(min_width, max_width, align);
-        self.max_width = max_width;
-        self.layout_handle = OnceCell::new();
-    }
-
-    // `realign` when the layout breaks into the same lines between
-    // `(min_width, max_width)`; `false`, leaving it as it was, when not.
-    pub(crate) fn try_realign(
-        &mut self,
-        (min_width, max_width): (f32, f32),
-        align: TextAlign,
-    ) -> bool {
-        let held = self.layout.try_align(min_width, max_width, align);
-        if held {
-            self.max_width = max_width;
-            self.layout_handle = OnceCell::new();
-        }
-        held
-    }
-
-    /// The display text as a renderer draws it. Converted once for the layout
-    /// and shared after, so every frame and scene rebuild drawing this layout
-    /// hands over the same allocation.
-    pub fn render_text(&self) -> Arc<RenderString> {
-        if let Some((converted, _)) = self.render_text.get() {
-            return Arc::clone(converted);
-        }
-        self.convert_render_text().0
-    }
-
-    /// [`RenderString::render_hash`](crate::text::RenderString::render_hash)
-    /// of [`PreparedTextLayout::render_text`], kept beside it so that reading
-    /// it never loads the string.
-    pub fn render_text_hash(&self) -> u64 {
-        if let Some((_, hash)) = self.render_text.get() {
-            return hash.get();
-        }
-        self.convert_render_text().1
-    }
-
-    fn convert_render_text(&self) -> (Arc<RenderString>, u64) {
-        let converted = Arc::new(self.text.render_string());
-        let hash = converted.render_hash();
-        let _ = self
-            .render_text
-            .set((Arc::clone(&converted), PackedU64::new(hash)));
-        (converted, hash)
-    }
-
-    /// [`TextStyle::render_hash`] of `visual_style`, hashed once for the
-    /// layout, or handed over by the node that knows its style's hash.
-    pub fn visual_style_hash(&self) -> u64 {
-        if let Some(hash) = self.visual_style_hash.get() {
-            return hash.get();
-        }
-        let hash = self.visual_style.render_hash();
-        let _ = self.visual_style_hash.set(PackedU64::new(hash));
-        hash
-    }
-
-    /// The layout's queries, as Compose's `TextLayoutResult` gives them.
-    pub fn result(&self) -> TextLayoutResult {
-        TextLayoutResult::new(self.layout.clone())
-    }
-}
-
-impl PartialEq for PreparedTextLayout {
-    fn eq(&self, other: &Self) -> bool {
-        self.text == other.text
-            && self.visual_style == other.visual_style
-            && self.metrics() == other.metrics()
-            && self.alignment_lines() == other.alignment_lines()
-            && self.did_overflow() == other.did_overflow()
-    }
 }
 
 /// The text and style a layout is prepared from: borrowed, which the layout
@@ -292,7 +61,7 @@ enum LayoutSource<'a> {
 
 // A text and style a node holds, and the style's render hash.
 pub(crate) struct SharedText<'a> {
-    pub(crate) text: &'a Rc<AnnotatedString>,
+    pub(crate) text: &'a AnnotatedString,
     pub(crate) style: &'a Arc<TextStyle>,
     pub(crate) style_hash: u64,
 }
@@ -312,12 +81,10 @@ impl LayoutSource<'_> {
         }
     }
 
-    fn shared(&self) -> (Rc<AnnotatedString>, Arc<TextStyle>) {
+    fn shared_style(&self) -> Arc<TextStyle> {
         match self {
-            Self::Borrowed { text, style } => {
-                (Rc::new((*text).clone()), Arc::new((*style).clone()))
-            }
-            Self::Shared { text, .. } => (Rc::clone(text.text), Arc::clone(text.style)),
+            Self::Borrowed { style, .. } => Arc::new((*style).clone()),
+            Self::Shared { text, .. } => Arc::clone(text.style),
         }
     }
 
@@ -391,6 +158,11 @@ pub(crate) struct TextService {
     layouter: RefCell<TextLayouter>,
     layouts: RefCell<LayoutCache>,
     intrinsics: RefCell<PassAgedCache<TextKey, ParagraphIntrinsics>>,
+    // The prepared layouts of texts that changed: a layout whose lines no
+    // scene or packet holds any more takes a new text in its allocation and
+    // in its lines' storage.
+    retired: RefCell<Retired<Rc<PreparedTextLayout>>>,
+    retired_strings: RefCell<Retired<Arc<RenderString>>>,
 }
 
 impl TextService {
@@ -404,6 +176,8 @@ impl TextService {
             intrinsics: RefCell::new(PassAgedCache::with_capacity_at_least_one(
                 TEXT_INTRINSICS_CACHE_CAPACITY,
             )),
+            retired: RefCell::new(Retired::new(RETIRED_LAYOUTS)),
+            retired_strings: RefCell::new(Retired::new(RETIRED_STRINGS)),
         }
     }
 
@@ -443,8 +217,26 @@ impl TextService {
             Some((key, Cached::Missed(miss))) => Some((key, miss)),
             None => None,
         };
-        let (text, style) = source.shared();
-        let prepared = Rc::new(self.lay_out(text, style, frame, (units, source.shaped())));
+        self.prepare_missed(source, frame, (units, admission), missed)
+    }
+
+    // Lays out `source` the cache did not hold and keeps it as `missed`
+    // says. Out of line: a text that shows what it showed before stops
+    // before it, and inlined it takes room in the cache's lookup.
+    #[inline(never)]
+    fn prepare_missed(
+        &self,
+        source: LayoutSource<'_>,
+        frame: TextFrame,
+        (units, admission): (TextUnits, CacheAdmission),
+        missed: Option<(TextKey, Miss)>,
+    ) -> Rc<PreparedTextLayout> {
+        let prepared = self
+            .lay_out_retired(&source, frame, units)
+            .unwrap_or_else(|| {
+                let style = source.shared_style();
+                Rc::new(self.lay_out(source.text(), style, frame, (units, source.shaped())))
+            });
         if let Some((key, miss)) = missed {
             self.layouts
                 .borrow_mut()
@@ -453,11 +245,61 @@ impl TextService {
         prepared
     }
 
+    // Keeps `text` and `layouts`, what a text that changed gave up, for the
+    // next changed texts.
+    pub(crate) fn retire(
+        &self,
+        text: AnnotatedString,
+        layouts: impl IntoIterator<Item = Rc<PreparedTextLayout>>,
+    ) {
+        self.retired_strings.borrow_mut().retire_text(text);
+        let mut retired = self.retired.borrow_mut();
+        for mut layout in layouts {
+            // A layout the shared cache keeps stays there. A kept layout lets
+            // go of its string, which the next changed text may take.
+            if let Some(free) = Rc::get_mut(&mut layout) {
+                free.text = Arc::clone(AnnotatedString::default().render_string());
+                retired.retire(layout);
+            }
+        }
+    }
+
+    // A plain string of `text`, in the room of a retired one nothing holds.
+    pub(crate) fn plain_text(&self, text: &str) -> AnnotatedString {
+        self.retired_strings.borrow_mut().plain(text)
+    }
+
+    // `source` laid out in the allocation of a retired layout nothing holds
+    // and in its lines' storage; `None` when no retired layout is free, or
+    // `source` takes glyphs shaped before or sizes itself down.
+    fn lay_out_retired(
+        &self,
+        source: &LayoutSource<'_>,
+        frame: TextFrame,
+        units: TextUnits,
+    ) -> Option<Rc<PreparedTextLayout>> {
+        let scales = frame.options.overflow.scale_down_min_font_size_sp();
+        if source.shaped().is_some() || scales.is_some() {
+            return None;
+        }
+        let mut spare = self
+            .retired
+            .borrow_mut()
+            .take(|layout| Rc::get_mut(layout).is_some_and(|free| !free.layout.shares_lines()))?;
+        let slot = Rc::get_mut(&mut spare)?;
+        let (text, style) = (source.text(), source.shared_style());
+        self.with_input(text, &style, frame, units, |layouter, input, fonts| {
+            layouter.layout_into(input, fonts, &mut slot.layout);
+        });
+        slot.retext(text, style, frame);
+        Some(spare)
+    }
+
     // Lays `text` out in `style`, auto-sizing it when its options ask, with
     // the glyphs of `shaped` when given.
     fn lay_out(
         &self,
-        text: Rc<AnnotatedString>,
+        text: &AnnotatedString,
         style: Arc<TextStyle>,
         frame: TextFrame,
         (units, shaped): (TextUnits, Option<&TextLayout>),
@@ -465,7 +307,7 @@ impl TextService {
         let options = frame.options.normalized();
         let min_lines = options.min_lines;
         let Some(min_font_size_sp) = options.overflow.scale_down_min_font_size_sp() else {
-            let layout = self.layout(&text, &style, frame, (units, shaped));
+            let layout = self.layout(text, &style, frame, (units, shaped));
             return PreparedTextLayout::new(text, style, layout, (frame.max_width, min_lines));
         };
         self.lay_out_scaled_down(text, style, frame, (units, shaped), min_font_size_sp)
@@ -477,7 +319,7 @@ impl TextService {
     #[inline(never)]
     fn lay_out_scaled_down(
         &self,
-        text: Rc<AnnotatedString>,
+        text: &AnnotatedString,
         style: Arc<TextStyle>,
         frame: TextFrame,
         (units, shaped): (TextUnits, Option<&TextLayout>),
@@ -494,8 +336,8 @@ impl TextService {
         };
         let fits =
             |layout: &TextLayout| !layout.did_overflow_height() && !layout.did_overflow_width();
-        let full = self.layout(&text, &style, frame, (units, shaped));
-        let base = style.resolve_font_size(DEFAULT_FONT_SIZE_SP);
+        let full = self.layout(text, &style, frame, (units, shaped));
+        let base = style.resolve_font_size(DEFAULT_FONT_SIZE);
         let min_factor = (min_font_size_sp.min(base) / base).clamp(0.0, 1.0);
         if fits(&full) || !frame.max_width.is_finite() || min_factor >= 1.0 {
             return PreparedTextLayout::new(text, style, full, (frame.max_width, min_lines));
@@ -507,7 +349,7 @@ impl TextService {
                 factor: units.factor * factor,
                 ..units
             };
-            self.layout(&text, &style, frame, (units, Some(&full)))
+            self.layout(text, &style, frame, (units, Some(&full)))
         };
         let (mut best, mut factor) = (at(min_factor), min_factor);
         if fits(&best) {
@@ -523,8 +365,8 @@ impl TextService {
                 }
             }
         }
-        let (text, style) = scaled_drawing(&text, &style, factor);
-        PreparedTextLayout::new(text, style, best, (frame.max_width, min_lines))
+        let (text, style) = scaled_drawing(text, &style, factor);
+        PreparedTextLayout::new(&text, style, best, (frame.max_width, min_lines))
     }
 
     // One layout of `text` in `style` in `frame`, with sizes in `units`, with
@@ -536,11 +378,33 @@ impl TextService {
         frame: TextFrame,
         (units, shaped): (TextUnits, Option<&TextLayout>),
     ) -> TextLayout {
+        self.with_input(
+            text,
+            style,
+            frame,
+            units,
+            |layouter, input, fonts| match shaped {
+                Some(shaped) => layouter.relayout(input, fonts, shaped),
+                None => layouter.layout(input, fonts),
+            },
+        )
+    }
+
+    // Runs `lay_out` on the layouter with the input of `text` in `style` in
+    // `frame`, with sizes in `units`.
+    fn with_input<R>(
+        &self,
+        text: &AnnotatedString,
+        style: &TextStyle,
+        frame: TextFrame,
+        units: TextUnits,
+        lay_out: impl FnOnce(&mut TextLayouter, &LayoutInput<'_>, &FontFamilyResolver) -> R,
+    ) -> R {
         let paragraph = ParagraphSpans::new(text, style, units);
         let fonts = self.fonts.borrow();
         let spans = paragraph.spans(&fonts);
         let input = LayoutInput {
-            text: &text.text,
+            text: text.text(),
             spans: &spans,
             paragraph: &style.paragraph_style,
             lengths: paragraph.lengths,
@@ -548,11 +412,7 @@ impl TextService {
             max_width: frame.max_width,
             options: frame.options,
         };
-        let mut layouter = self.layouter.borrow_mut();
-        match shaped {
-            Some(shaped) => layouter.relayout(&input, &fonts, shaped),
-            None => layouter.layout(&input, &fonts),
-        }
+        lay_out(&mut self.layouter.borrow_mut(), &input, &fonts)
     }
 
     // The intrinsic widths of `text` in `style`, with sizes in `units`.
@@ -573,19 +433,10 @@ impl TextService {
         {
             return found;
         }
-        let paragraph = ParagraphSpans::new(text, style, units);
-        let fonts = self.fonts.borrow();
-        let spans = paragraph.spans(&fonts);
-        let input = LayoutInput {
-            text: &text.text,
-            spans: &spans,
-            paragraph: &style.paragraph_style,
-            lengths: paragraph.lengths,
-            min_width: 0.0,
-            max_width: f32::INFINITY,
-            options: TextLayoutOptions::default(),
-        };
-        let found = self.layouter.borrow_mut().intrinsics(&input, &fonts);
+        let frame = TextFrame::unbounded(TextLayoutOptions::default());
+        let found = self.with_input(text, style, frame, units, |layouter, input, fonts| {
+            layouter.intrinsics(input, fonts)
+        });
         if let Some(key) = key {
             self.intrinsics.borrow_mut().push(key, found);
         }
@@ -599,7 +450,7 @@ impl TextService {
         let size = units
             .density
             .font_scale_curve()
-            .sp_to_dp(style.resolve_font_size(DEFAULT_FONT_SIZE_SP))
+            .sp_to_dp(style.resolve_font_size(DEFAULT_FONT_SIZE))
             * units.factor;
         let fonts = self.fonts.borrow();
         let typeface = fonts.resolve(FontRequest {
@@ -645,6 +496,12 @@ impl TextService {
         self.layouter.borrow_mut().set_memory_headroom(headroom);
     }
 
+    // Drops the retired layouts and strings: the texts rest.
+    pub(crate) fn trim(&self) {
+        self.retired.borrow_mut().clear();
+        self.retired_strings.borrow_mut().clear();
+    }
+
     /// A frame starts: the first use of the service in it outside a layout
     /// pass begins a pass.
     pub(crate) fn owe_pass(&self) {
@@ -677,25 +534,23 @@ fn default_fonts() -> FontFamilyResolver {
 // shadows and strokes `factor` of what they say, as its glyphs are. A text
 // whose spans scale nothing keeps its own string.
 fn scaled_drawing(
-    text: &Rc<AnnotatedString>,
+    text: &AnnotatedString,
     style: &TextStyle,
     factor: f32,
-) -> (Rc<AnnotatedString>, Arc<TextStyle>) {
+) -> (AnnotatedString, Arc<TextStyle>) {
     let mut scaled_style = style.clone();
     scaled_style.span_style.font_size =
-        TextUnit::Sp(style.resolve_font_size(DEFAULT_FONT_SIZE_SP) * factor);
+        TextUnit::Sp(style.resolve_font_size(DEFAULT_FONT_SIZE) * factor);
     scale_span_drawing(&mut scaled_style.span_style, factor);
-    let text = if text.span_styles.is_empty() {
-        Rc::clone(text)
+    let text = if text.span_styles().is_empty() {
+        text.clone()
     } else {
-        let mut scaled = AnnotatedString::clone(text);
-        for span in &mut scaled.span_styles {
-            if let TextUnit::Sp(size) = span.item.font_size {
-                span.item.font_size = TextUnit::Sp(size * factor);
+        text.map_span_styles(|span| {
+            if let TextUnit::Sp(size) = span.font_size {
+                span.font_size = TextUnit::Sp(size * factor);
             }
-            scale_span_drawing(&mut span.item, factor);
-        }
-        Rc::new(scaled)
+            scale_span_drawing(span, factor);
+        })
     };
     (text, Arc::new(scaled_style))
 }
@@ -923,7 +778,7 @@ pub fn wrapped_line_ranges(
     (0..layout.line_count())
         .map(|line| {
             let (start, end) = (layout.line_start(line), layout.line_end(line));
-            let line_text = text.text.get(start..end).unwrap_or_default();
+            let line_text = text.text().get(start..end).unwrap_or_default();
             let without_break = line_text.trim_end_matches(['\n', '\r', '\u{2028}', '\u{2029}']);
             start..start + without_break.len()
         })

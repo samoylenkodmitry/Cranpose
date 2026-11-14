@@ -673,17 +673,9 @@ fn a_draw_change_in_a_window_updates_only_that_windows_scene() {
     shell.update();
     assert_eq!(
         (primary.scene_work(), window_counts.scene_work()),
-        ((0, 0, 1), (0, 0, 1)),
-        "a bare render invalidation lets each surface take its own nodes' redraw flags"
-    );
-    let primary_nodes = primary.last_dirty_nodes.borrow().clone();
-    assert!(
-        !window_counts
-            .last_dirty_nodes
-            .borrow()
-            .iter()
-            .any(|node| primary_nodes.contains(node)),
-        "the window's nodes are not the primary's"
+        ((0, 0, 0), (0, 0, 0)),
+        "a bare render invalidation draws nothing again: the frames that built each scene drew \
+         every node"
     );
     let (primary_offset, window_offset) = (*offsets.borrow()).expect("offsets");
     primary.reset();

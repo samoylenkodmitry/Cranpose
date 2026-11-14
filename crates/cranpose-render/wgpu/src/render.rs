@@ -8,10 +8,8 @@ use std::{
 
 use bytemuck::{Pod, Zeroable};
 use cranpose_core::collections::{bounded_lru::BoundedLruCache, map::HashMap};
-use cranpose_render_common::{geometry::blur_reach, graph::quad_bounds};
-use cranpose_ui_graphics::{
-    BlendMode, FRAGMENT_KIND_ARC, ImageSampling, Point, RecordLane, Rect, RenderHash, TileMode,
-};
+use cranpose_render_common::{geometry::blur_reach, graph::quad_bounds, scene_store::SceneVersion};
+use cranpose_ui_graphics::{BlendMode, ImageSampling, Rect, RenderHash, TileMode};
 use web_time::Instant;
 
 use crate::{
@@ -19,6 +17,7 @@ use crate::{
     ablation::Ablation,
     arc_trig_fill::ArcTrigFill,
     collect::LayerScene,
+    device_error_sentry::DeviceErrorSentry,
     draw_pass::{
         PassSegment, PassTarget, ResolvedComposite, ResolvedCompositeKind, RunCalls, SegmentLayout,
         SourceContent, TrackedPass,
@@ -26,9 +25,9 @@ use crate::{
     effect_renderer::{BlurDest, BlurSpec, CompositeSampleMode, EffectRenderer},
     fixed_pipeline::{FixedPipeline, FixedPipelineJob},
     frame::{
-        ClearedImages, Damage, DeviceRect, FrameExecutor, FrameRecording, FrameWindow,
-        ImageContent, KeptWindow, PresentedImage, Repaint, StageSideScratch, Summaries,
-        SwapchainHistory, Window, WindowDamage,
+        ClearedImages, Damage, DeviceRect, FrameDamages, FrameExecutor, FrameRecording,
+        FrameWindow, Held, ImageContent, Repaint, Since, StageSideScratch, SwapchainHistory,
+        Window,
     },
     frame_graph::{
         BufferUpload, FrameCommandRecorder, FrameCommandStats, FrameTextureDescriptor,
@@ -38,8 +37,7 @@ use crate::{
     frame_packet::{CancelReason, FramePacket, FrameSceneStorage, PresentOutcome, RenderReturns},
     geometry::{
         DevicePixelBounds, SegmentTransform, anchored_device_rect, canonicalize_device_coordinate,
-        snap_delta_for_anchor, snapped_anchor_device_origin, translate_quad,
-        translation_stable_anchored_device_pixel_bounds,
+        snap_delta_for_anchor, translate_quad, translation_stable_anchored_device_pixel_bounds,
     },
     glyph_run_arena::GlyphRunArena,
     gpu_stats::{self, gpu_stats_enabled},
@@ -51,7 +49,7 @@ use crate::{
     rrect_shadow::{SHADOW_QUAD_CORNERS, ShadowInstance},
     run_store::{ArenaBinding, PlacementData, RunBufferMode, RunDrawCall, RunStore, StoredTables},
     scene::{ImageDraw, RunDraw, ShadowDraw, SnapAnchor, TextDraw},
-    scissor::intersect_target_rects,
+    scissor::{intersect_target_rects, target_rect_between},
     shape_pipelines::{PipelineDemand, ShapePipelineFactory, ShapePipelines},
     shared_shader::SharedShader,
 };
@@ -108,32 +106,6 @@ pub(crate) fn anchored_rect_to_device(
 
 fn mask_rect(rect: Rect) -> [f32; 4] {
     [rect.x, rect.y, rect.width, rect.height]
-}
-
-#[derive(Default)]
-struct DeviceErrorSentry {
-    errors: std::sync::atomic::AtomicU64,
-    poisoned: std::sync::atomic::AtomicBool,
-}
-
-impl DeviceErrorSentry {
-    fn record(&self, error: &wgpu::Error) {
-        use std::sync::atomic::Ordering;
-        self.poisoned.store(true, Ordering::Release);
-        let count = self.errors.fetch_add(1, Ordering::Relaxed) + 1;
-        if count.is_power_of_two() {
-            log::error!("[gpu-device] uncaptured wgpu error #{count}: {error}");
-        }
-    }
-
-    fn take_poison(&self) -> bool {
-        self.poisoned
-            .swap(false, std::sync::atomic::Ordering::AcqRel)
-    }
-
-    fn error_count(&self) -> u64 {
-        self.errors.load(std::sync::atomic::Ordering::Relaxed)
-    }
 }
 
 fn is_blend_mode_supported(mode: BlendMode) -> bool {
@@ -329,7 +301,7 @@ fn snapped_quad_bounds(quad: [[f32; 2]; 4], anchor: Option<SnapAnchor>, root_sca
 
 /// The logical rect a draw may touch: its snapped bounds within its clip,
 /// `None` when the clip leaves nothing.
-fn clipped_bounds(rect: Rect, clip: Option<Rect>) -> Option<Rect> {
+pub(crate) fn clipped_bounds(rect: Rect, clip: Option<Rect>) -> Option<Rect> {
     match clip {
         Some(clip) => rect.intersect(clip),
         None => Some(rect),
@@ -353,18 +325,6 @@ pub(crate) fn image_draw_bounds(image: &ImageDraw, root_scale: f32) -> Option<Re
     )
 }
 
-pub(crate) fn run_draw_bounds(run: &RunDraw, root_scale: f32) -> Option<Rect> {
-    let snap_delta = run
-        .placement
-        .snap_anchor
-        .map(|anchor| snap_delta_for_anchor(anchor, root_scale))
-        .unwrap_or_default();
-    clipped_bounds(
-        run.bounds.translate(snap_delta.x, snap_delta.y),
-        run.placement.clip,
-    )
-}
-
 /// The logical geometry of `text` (see [`text_logical_geometry_for_draw`])
 /// when it draws any pixel inside `viewport_rect`.
 pub(crate) fn text_draw_geometry_in_rect(
@@ -376,138 +336,6 @@ pub(crate) fn text_draw_geometry_in_rect(
         text_reach_bounds(text, *logical_rect)
             .is_some_and(|bounds| bounds.intersect(viewport_rect).is_some())
     })
-}
-
-pub(crate) fn hash_device_offset<H: Hasher>(
-    value: f32,
-    origin: f32,
-    root_scale: f32,
-    state: &mut H,
-) {
-    hash_f32_for_cache((value - origin) * root_scale, state);
-}
-
-pub(crate) fn hash_device_rect<H: Hasher>(
-    rect: Rect,
-    origin_x: f32,
-    origin_y: f32,
-    root_scale: f32,
-    state: &mut H,
-) {
-    hash_device_offset(rect.x, origin_x, root_scale, state);
-    hash_device_offset(rect.y, origin_y, root_scale, state);
-    hash_device_offset(rect.width, 0.0, root_scale, state);
-    hash_device_offset(rect.height, 0.0, root_scale, state);
-}
-
-/// Hashes the rect `placement` is clipped to, `clip`, and its rounding, in
-/// device pixels from `origin`.
-fn hash_placement_clips<H: Hasher>(
-    placement: &crate::scene::Placement,
-    clip: Option<Rect>,
-    (origin_x, origin_y): (f32, f32),
-    root_scale: f32,
-    state: &mut H,
-) {
-    let rounding = placement.rounding;
-    for (rect, radius) in [
-        (clip, 0.0),
-        (
-            rounding.map(|rounding| rounding.rect),
-            rounding.map_or(0.0, |rounding| rounding.radius),
-        ),
-    ] {
-        rect.is_some().hash(state);
-        if let Some(rect) = rect {
-            let [x, y, width, height] = placement.device_rect(rect, root_scale);
-            for value in [
-                x - origin_x,
-                y - origin_y,
-                width,
-                height,
-                radius * root_scale,
-            ] {
-                hash_f32_for_cache(value, state);
-            }
-        }
-    }
-}
-
-pub(crate) fn hash_run_item_with_clip<H: Hasher>(
-    run: &RunDraw,
-    clip: Option<Rect>,
-    origin_x: f32,
-    origin_y: f32,
-    root_scale: f32,
-    state: &mut H,
-) {
-    let tables = run.tables();
-    tables.fingerprint().hash(state);
-    run.segments.start.hash(state);
-    run.segments.end.hash(state);
-    let placement = &run.placement;
-    let snap = placement
-        .snap_anchor
-        .map(|anchor| snap_delta_for_anchor(anchor, root_scale))
-        .unwrap_or_default();
-    let offset = Point::new(placement.offset.x + snap.x, placement.offset.y + snap.y);
-    let canonicalize = placement.snap_anchor.is_some();
-    canonicalize.hash(state);
-    for segment in &tables.segments[run.segments.start as usize..run.segments.end as usize] {
-        if segment.lane != RecordLane::Shapes {
-            continue;
-        }
-        let exact_placement =
-            !canonicalize || segment.kinds & ((1u8 << FRAGMENT_KIND_ARC) | LINE_KINDS) != 0;
-        exact_placement.hash(state);
-        if exact_placement {
-            for value in [offset.x, offset.y, origin_x, origin_y, root_scale] {
-                hash_f32_for_cache(value, state);
-            }
-            continue;
-        }
-        for index in segment.start..segment.start + segment.count {
-            let record = tables
-                .shapes
-                .get(index as usize)
-                .expect("shape segment record");
-            let half_width = if record.is_stroked() {
-                record.stroke_width * 0.5
-            } else {
-                0.0
-            };
-            let [left, top, right, bottom] = crate::run_geometry::device_shape_edges(
-                record.rect,
-                half_width,
-                offset,
-                root_scale,
-                canonicalize,
-            );
-            for value in [left - origin_x, top - origin_y, right - left, bottom - top] {
-                hash_f32_for_cache(value, state);
-            }
-        }
-    }
-    hash_placement_clips(placement, clip, (origin_x, origin_y), root_scale, state);
-    if tables.segments[run.segments.start as usize..run.segments.end as usize]
-        .iter()
-        .any(|segment| segment.gradient || segment.vertex_gradient)
-    {
-        let dither = placement
-            .snap_anchor
-            .map(|anchor| snapped_anchor_device_origin(anchor, root_scale))
-            .unwrap_or_default();
-        hash_f32_for_cache(dither.x - origin_x, state);
-        hash_f32_for_cache(dither.y - origin_y, state);
-    }
-    hash_f32_for_cache(placement.alpha, state);
-    match &placement.color_filter {
-        Some(filter) => {
-            1u8.hash(state);
-            filter.render_hash().hash(state);
-        }
-        None => 0u8.hash(state),
-    }
 }
 
 /// The vertex entry point of every fullscreen strip.
@@ -547,10 +375,6 @@ const PASS_DEPTH_STEP: f32 = 1.0 / 1_048_576.0;
 /// `record_depth` and `batch_depth` place it: later draws nearer.
 pub(crate) fn pass_order_depth(index: u32) -> f32 {
     (1.0 - (index as f32 + 1.0) * PASS_DEPTH_STEP).max(0.0)
-}
-
-fn survive_gpu_errors_enabled() -> bool {
-    !cranpose_core::DIAGNOSTICS.survive_gpu_errors.equals("0")
 }
 
 #[derive(Default)]
@@ -700,7 +524,7 @@ struct CompositionTarget {
     target: Rc<OffscreenTarget>,
     output_bind_group: wgpu::BindGroup,
     /// The frame the target's pixels show.
-    kept: KeptWindow,
+    kept: Option<Held>,
 }
 
 /// Where a frame renders: straight into the presentable image, or into the
@@ -879,31 +703,10 @@ impl<'a> FrameOutput<'a> {
     }
 }
 
-/// The kept frame a frame's damage is measured against.
-#[derive(Clone, Copy)]
-enum Keeper {
-    /// The renderer's composition target.
-    Composition,
-    /// A swapchain image.
-    Image(PresentedImage),
-    /// The frame drawn last into an image that comes cleared; `keeping`
-    /// when the composition target takes a copy of this frame to keep.
-    Cleared { keeping: bool },
-}
-
-/// What a frame changes against the frame its target kept, what it draws
-/// for that, and which target kept it.
-#[derive(Clone, Copy)]
-struct FrameDamagePlan {
-    damage: Damage,
-    repaint: Repaint,
-    keeper: Keeper,
-}
-
 pub(crate) struct GpuRenderer {
     pub(crate) device: Arc<wgpu::Device>,
     pub(crate) queue: Arc<wgpu::Queue>,
-    device_errors: Arc<DeviceErrorSentry>,
+    pub(crate) device_errors: Arc<DeviceErrorSentry>,
     renderer_epoch: u64,
     #[cfg(not(target_arch = "wasm32"))]
     display_format: wgpu::TextureFormat,
@@ -934,7 +737,7 @@ pub(crate) struct GpuRenderer {
     pub(crate) ablation: Ablation,
     pub(crate) ablation_frames: u32,
     pub(crate) nesting_overflow_reported: bool,
-    window_damage: WindowDamage,
+    frame_damages: FrameDamages,
     /// The frames the swapchain's images hold.
     swapchain: SwapchainHistory,
     /// The frames drawn into images that come cleared.
@@ -954,7 +757,7 @@ pub(crate) struct GpuRenderer {
     /// How many requested shader warm-ups this renderer has queued.
     shader_warm_ups_queued: usize,
     // The scene update of the frame drawn last.
-    drawn_scene_update: Option<u64>,
+    drawn_scene_update: Option<SceneVersion>,
 }
 
 /// What a frame clears to before it draws: nothing for a transparent
@@ -977,7 +780,7 @@ pub(crate) struct GpuRendererInit {
     pub(crate) adapter_downlevel: wgpu::DownlevelFlags,
     pub(crate) renderer_epoch: u64,
     pub(crate) pipeline_compilation: PipelineCompilation,
-    pub(crate) on_device_lost: Option<crate::DeviceLostHandler>,
+    pub(crate) device_errors: Arc<DeviceErrorSentry>,
 }
 
 #[expect(clippy::multiple_inherent_impl, reason = "draw passes in draw_pass")]
@@ -991,21 +794,10 @@ impl GpuRenderer {
             adapter_downlevel,
             renderer_epoch,
             pipeline_compilation,
-            on_device_lost,
+            device_errors,
         } = init;
         let construction_started = Instant::now();
-        let device_errors = Arc::new(DeviceErrorSentry::default());
-        if survive_gpu_errors_enabled() {
-            let sentry = Arc::clone(&device_errors);
-            device.on_uncaptured_error(Arc::new(move |error| sentry.record(&error)));
-        }
         let composition_format = crate::offscreen::composition_format(display_format);
-        device.set_device_lost_callback(move |reason, message| {
-            log::error!("[gpu-device] device lost ({reason:?}): {message}");
-            if let Some(on_device_lost) = &on_device_lost {
-                on_device_lost();
-            }
-        });
         let copy_free = UploadMode::copy_free(&device, adapter_backend);
         let mut run_store = RunStore::new(
             &device,
@@ -1186,6 +978,7 @@ impl GpuRenderer {
                 #[cfg(not(target_arch = "wasm32"))]
                 built_at_frame_start: 0,
                 drew_placeholder: Cell::new(false),
+                stand_ins_kept: Cell::new(false),
                 shape_pipelines,
                 image_pipeline: IMAGE_SRC_OVER_PIPELINES.map(FixedPipeline::new),
                 image_pipeline_dst_out: IMAGE_DST_OUT_PIPELINES.map(FixedPipeline::new),
@@ -1225,7 +1018,7 @@ impl GpuRenderer {
             ablation: Ablation::default(),
             ablation_frames: 0,
             nesting_overflow_reported: false,
-            window_damage: WindowDamage::default(),
+            frame_damages: FrameDamages::default(),
             swapchain: SwapchainHistory::default(),
             cleared: ClearedImages::default(),
             window_fill: None,
@@ -1578,8 +1371,8 @@ impl GpuRenderer {
         let records = crate::mesh_fallback::MeshRecords {
             bodies: tables.shapes.bodies(),
             curves: tables.shapes.curves(),
-            brushes: &tables.brushes,
-            stops: &tables.stops,
+            brushes: tables.brushes(),
+            stops: tables.stops(),
         };
         let placement = PlacementData::of(
             &run.placement,
@@ -1728,7 +1521,7 @@ impl GpuRenderer {
         CompositionTarget {
             target,
             output_bind_group,
-            kept: KeptWindow::default(),
+            kept: None,
         }
     }
 
@@ -1811,26 +1604,24 @@ impl GpuRenderer {
         output: FrameOutput<'_>,
     ) -> Result<(), String> {
         let (width, height) = viewport;
-        let FrameOutput {
-            mode: output_mode,
-            view: output_view,
-            image,
-            ..
-        } = output;
+        let (output_mode, output_view, image) = (output.mode, output.view, output.image);
+        self.frame_damages.note(packet.frame_id, packet.damage);
         let cancel_reason = if packet.renderer_epoch != self.renderer_epoch {
             Some(CancelReason::RendererEpoch)
         } else if packet.surface_epoch != surface_epoch {
             Some(CancelReason::SurfaceEpoch)
         } else if packet.viewport != (width, height) {
             Some(CancelReason::Viewport)
+        } else if self.device_errors.lost() {
+            Some(CancelReason::DeviceLost)
+        } else if self.device_errors.take_poison() {
+            Some(CancelReason::DeviceError)
         } else {
             None
         };
         if let Some(reason) = cancel_reason {
-            return Self::cancel_packet(packet, reason, returns);
-        }
-        if self.device_errors.take_poison() {
-            return Self::cancel_packet(packet, CancelReason::DeviceError, returns);
+            Self::cancel_packet(packet, reason, returns);
+            return Ok(());
         }
         returns.frame_id = packet.frame_id;
         let render_start = Instant::now();
@@ -1845,12 +1636,7 @@ impl GpuRenderer {
         self.text.begin_text_glyph_run_frame();
         self.pass_scratch.begin_frame();
 
-        let reads_page = packet.root.contains_backdrop()
-            || packet
-                .overlay
-                .as_ref()
-                .is_some_and(|overlay| overlay.contains_backdrop());
-        let mut frame_root = self.frame_root(output, (width, height), reads_page);
+        let mut frame_root = self.frame_root(output, (width, height), packet.reads_page());
         let plan = self.damage_of(
             &packet,
             &mut frame_root,
@@ -1858,7 +1644,15 @@ impl GpuRenderer {
             (width, height),
             (surface_epoch, image),
         );
-        let repaint = self.count_damage(plan, (width, height));
+        if !admits(plan.as_ref(), &packet) {
+            if let Some(composition) = frame_root.into_composition() {
+                self.composition_target = Some(composition);
+            }
+            Self::cancel_packet(packet, CancelReason::NeedsWhole, returns);
+            return Ok(());
+        }
+        returns.target = plan.map(|plan| plan.drawn(&packet, &frame_root));
+        let repaint = count_damage(plan, (width, height), &self.frame_stats);
         let root = frame_root.target();
         let screenshot_bind_group = output_view.and_then(|_| {
             matches!(output_mode, OutputMode::Screenshot).then(|| {
@@ -1885,7 +1679,7 @@ impl GpuRenderer {
         self.record_pool_sizes(&submit.executor);
         self.effect_renderer
             .merge_and_reset_debug_counters(&self.frame_stats);
-        self.keep_window(plan, &submitted);
+        returns.held = self.keep_window(plan, &submitted);
         let result = submitted.map(drop);
         submit.executor.reset_upload_allocators();
         self.close_frame_stats(submit);
@@ -1947,14 +1741,13 @@ impl GpuRenderer {
         packet: FramePacket,
         reason: CancelReason,
         returns: &mut RenderReturns,
-    ) -> Result<(), String> {
+    ) {
         returns.scene = Some(FrameSceneStorage {
             root: packet.root,
             overlay: packet.overlay,
         });
         returns.frame_id = packet.frame_id;
         returns.outcome = PresentOutcome::Cancelled(reason);
-        Ok(())
     }
 
     // The parts a draw of text or an image borrows apart.
@@ -2000,15 +1793,13 @@ impl GpuRenderer {
         self.drop_kept_drawing();
     }
 
-    /// Drops the layers, the blurred shadows and the window earlier frames
-    /// drew and kept.
+    // Drops the layers and the blurred shadows earlier frames drew and
+    // kept. The frames the targets keep hold the parts they drew while these
+    // held stand-ins, and the next frame draws those parts again.
     fn drop_kept_drawing(&mut self) {
         self.layer_cache.clear();
         self.shadow_surfaces.clear();
-        if let Some(composition) = self.composition_target.as_mut() {
-            composition.kept.forget();
-        }
-        self.swapchain.forget();
+        self.pipelines.stand_ins_kept.set(false);
     }
 
     /// What `packet` changes against the frame `frame_root` kept: a frame
@@ -2025,27 +1816,32 @@ impl GpuRenderer {
         viewport: (u32, u32),
         (surface_epoch, image): (u64, ImageContent),
     ) -> Option<FrameDamagePlan> {
+        let frame = self.frame_window(packet, viewport);
+        let held = frame.held();
+        let plan = |since: Since, keeper| FrameDamagePlan {
+            damage: since.damage,
+            repaint: since.damage.repaint(),
+            keeper,
+            held,
+            baseline: since.baseline,
+            unheld: since.unheld,
+        };
         match frame_root {
             FrameRoot::Composition { composition, .. }
                 if matches!(output_mode, OutputMode::Screenshot) =>
             {
-                composition.kept.forget();
+                composition.kept = None;
                 None
             }
             FrameRoot::Composition {
                 composition,
                 cleared: Some(cleared),
             } => {
-                let frame = self.frame_window(packet, viewport);
                 let damage =
-                    self.window_damage
-                        .begin_as(&frame, &mut composition.kept, Summaries::COPIED);
-                if matches!(damage, Damage::Part(_)) {
-                    return Some(FrameDamagePlan {
-                        damage,
-                        repaint: damage.repaint(),
-                        keeper: Keeper::Composition,
-                    });
+                    self.cleared
+                        .copied_damage(&self.frame_damages, composition.kept, &frame);
+                if matches!(damage.damage, Damage::Part(_)) {
+                    return Some(plan(damage, Keeper::Composition));
                 }
                 // The frame changes most of the window, or costs less drawn
                 // whole than copied: it draws straight into the image, and
@@ -2056,31 +1852,23 @@ impl GpuRenderer {
                     keep: None,
                 };
                 Some(FrameDamagePlan {
-                    damage,
                     repaint: Repaint::Whole,
-                    keeper: Keeper::Cleared { keeping: false },
+                    ..plan(damage, Keeper::Cleared { keeping: false })
                 })
             }
             FrameRoot::Composition { composition, .. } => {
                 // The swapchain image the frame is copied into holds a frame
                 // the history does not follow.
                 self.swapchain.forget();
-                let frame = self.frame_window(packet, viewport);
-                let damage = self.window_damage.begin(&frame, &mut composition.kept);
-                Some(FrameDamagePlan {
-                    damage,
-                    repaint: damage.repaint(),
-                    keeper: Keeper::Composition,
-                })
+                let damage = self.frame_damages.since(composition.kept, &frame);
+                Some(plan(damage, Keeper::Composition))
             }
             FrameRoot::Surface { image: target, .. } => {
                 let image = match image {
                     ImageContent::Untracked => return None,
                     ImageContent::Numbered(image) => image,
                     ImageContent::Cleared => {
-                        let frame = self.frame_window(packet, viewport);
-                        let (damage, keeping) =
-                            self.cleared.damage(&mut self.window_damage, &frame);
+                        let (damage, keeping) = self.cleared.damage(&self.frame_damages, &frame);
                         if keeping {
                             *frame_root = FrameRoot::Surface {
                                 image: Rc::clone(target),
@@ -2088,32 +1876,23 @@ impl GpuRenderer {
                             };
                         }
                         return Some(FrameDamagePlan {
-                            damage,
                             repaint: Repaint::Whole,
-                            keeper: Keeper::Cleared { keeping },
+                            ..plan(damage, Keeper::Cleared { keeping })
                         });
                     }
                 };
                 self.swapchain.begin(surface_epoch);
-                if !image.kept {
-                    // Drawn whole, and only a frame a lap of images later
-                    // could draw over it, so the first frames of a surface
-                    // take no summary.
-                    self.swapchain.drop_image(image);
-                    return None;
-                }
-                let frame = self.frame_window(packet, viewport);
-                let damage = self.window_damage.begin(&frame, &mut self.swapchain.kept);
-                let repaint = self
+                // The frame changes what the frame presented last showed by
+                // its damage; it draws over what its image holds by the
+                // damages since that image's frame, and whole into an image
+                // that comes without the frame it held.
+                let damage = self.swapchain.presented_damage(&frame, &self.frame_damages);
+                let held = self
                     .swapchain
-                    .changed_since(image, damage)
-                    .map_or(Repaint::Whole, |changed| {
-                        self.window_damage.repaint(changed, viewport)
-                    });
+                    .changed_since(image, &frame, &self.frame_damages);
                 Some(FrameDamagePlan {
-                    damage,
-                    repaint,
-                    keeper: Keeper::Image(image),
+                    repaint: held.repaint(),
+                    ..plan(damage, Keeper::Image(image))
                 })
             }
         }
@@ -2122,8 +1901,9 @@ impl GpuRenderer {
     // Whether `packet` draws what the surface shows, so it takes no image and
     // no present; the frame then closes as drawn for the renderer's warm-up.
     pub(crate) fn shows(&mut self, packet: &FramePacket, viewport: (u32, u32)) -> bool {
+        self.frame_damages.note(packet.frame_id, packet.damage);
         let frame = self.frame_window(packet, viewport);
-        let shown = self.swapchain.shows(&frame, &mut self.window_damage);
+        let shown = self.swapchain.shows(&frame, &self.frame_damages);
         if shown {
             self.history.skip_frame();
         }
@@ -2134,53 +1914,33 @@ impl GpuRenderer {
         FrameWindow {
             packet,
             viewport,
-            setting: self.text.frame_setting(packet.clear),
+            setting: self.text.frame_setting(packet.clear, packet.debug_toggles),
         }
     }
 
-    /// Counts what a frame of `plan` changes and draws of a page of
-    /// `viewport` in the frame's stats, and returns what it draws.
-    fn count_damage(&self, plan: Option<FrameDamagePlan>, viewport: (u32, u32)) -> Repaint {
-        self.frame_stats
-            .damage
-            .set(plan.map_or(gpu_stats::FrameDamage::Untracked, |plan| {
-                plan.damage.stats()
-            }));
-        let repaint = plan.map_or(Repaint::Whole, |plan| plan.repaint);
-        self.frame_stats
-            .repainted_pixels
-            .set(repaint.pixels(viewport));
-        repaint
-    }
-
-    /// Keeps the summary of the frame of `plan` just drawn into its target
-    /// when it was drawn whole, with no stand-in. A frame that draws nothing
-    /// into a presentable image submits nothing, and is drawn all the same.
-    fn keep_window(&mut self, plan: Option<FrameDamagePlan>, submitted: &Result<bool, String>) {
-        let Some(plan) = plan else {
-            return;
-        };
+    // Keeps the frame of `plan` just drawn into its target, with the parts
+    // it drew marked while it may show a stand-in. A frame that draws
+    // nothing into a presentable image submits nothing, and is drawn.
+    fn keep_window(
+        &mut self,
+        plan: Option<FrameDamagePlan>,
+        submitted: &Result<bool, String>,
+    ) -> Option<crate::frame_packet::HeldWindow> {
+        let plan = plan?;
         let drawn = match submitted {
             Ok(submitted) => *submitted || plan.repaint == Repaint::Nothing,
             Err(_) => false,
-        } && !self.frame_stats.drew_stand_in();
-        match plan.keeper {
-            Keeper::Composition => {
-                if let Some(composition) = self.composition_target.as_mut() {
-                    self.window_damage.end(&mut composition.kept, drawn);
-                }
-            }
-            Keeper::Image(image) => {
-                self.swapchain.record(image, plan.damage, drawn);
-                self.window_damage.end(&mut self.swapchain.kept, drawn);
-            }
-            Keeper::Cleared { keeping } => {
-                self.window_damage.end(&mut self.cleared.kept, drawn);
-                if keeping && let Some(composition) = self.composition_target.as_mut() {
-                    self.cleared.hand_over(&mut composition.kept);
-                }
-            }
-        }
+        };
+        let stand_ins = self.frame_stats.drew_stand_in() || self.pipelines.stand_ins_kept.get();
+        let keepers = Keepers {
+            composition: self
+                .composition_target
+                .as_mut()
+                .map(|target| &mut target.kept),
+            swapchain: &mut self.swapchain,
+            cleared: &mut self.cleared,
+        };
+        plan.keep(drawn.then(|| plan.held_with(stand_ins)), keepers)
     }
 
     /// Lets go of the copy of the last frame the renderer keeps for a
@@ -2211,9 +1971,6 @@ impl GpuRenderer {
 
     pub(crate) fn debug_cpu_allocation_stats(&self) -> DebugCpuAllocationStats {
         DebugCpuAllocationStats {
-            scene_graph_node_count: 0,
-            scene_graph_heap_bytes: 0,
-            scene_hits: cranpose_render_common::graph_scene::HitStorage::default(),
             text_renderer_pool_len: self.text.image_cache.len(),
             text_renderer_pool_cap: self.text.image_cache.cap().get(),
             image_texture_cache_len: self.images.len(),
@@ -2228,6 +1985,7 @@ impl GpuRenderer {
                 + self.pass_scratch.glyph_instances.turned.capacity(),
             layer_cache_len: self.layer_cache.len(),
             layer_cache_bytes: self.layer_cache.bytes(),
+            ..DebugCpuAllocationStats::default()
         }
     }
     pub(crate) fn render_to_rgba_pixels(
@@ -2366,7 +2124,7 @@ impl GpuRenderer {
         self.convert_surface_pixels_to_rgba(&pixels)
     }
 
-    /// Asks the buffers the submitted frame unmapped back for later frames.
+    // Asks the buffers the submitted frame unmapped back for later frames.
     fn recall_frame_uploads(&mut self) {
         self.viewport_uniforms.uploads.recall();
         self.run_store.recall();
@@ -2950,7 +2708,7 @@ impl GpuRenderer {
         );
         window_draws(draws, start, window);
         let run_draws = &draws[start..];
-        let upload_start = Instant::now();
+        let upload_start = stage_telemetry::timed_stage_start();
         let (upload, fill, tables) = self.run_store.upload_stored(
             &self.device,
             recorder,
@@ -2959,7 +2717,7 @@ impl GpuRenderer {
             window,
             run_draws,
         );
-        if let Some(total_ms) = should_log_wgpu_render_stage(upload_start, Instant::now()) {
+        if let Some(total_ms) = stage_telemetry::timed_stage_ms(upload_start) {
             log::warn!(
                 "[wgpu-render-stage:run-upload] total_ms={total_ms:.2} bytes={} records={}",
                 upload.upload_bytes,
@@ -3444,8 +3202,6 @@ pub(crate) fn scissor_rect_for_rect(
     root_scale: f32,
     viewport: ViewportUniformParams,
 ) -> Option<(u32, u32, u32, u32)> {
-    let width = viewport.width as f32;
-    let height = viewport.height as f32;
     let mut left = canonicalize_device_coordinate(rect.x * root_scale);
     let mut top = canonicalize_device_coordinate(rect.y * root_scale);
     let mut right = canonicalize_device_coordinate((rect.x + rect.width) * root_scale);
@@ -3460,19 +3216,15 @@ pub(crate) fn scissor_rect_for_rect(
         (left, top) = (bounds.x, bounds.y);
         (right, bottom) = (bounds.x + bounds.width, bounds.y + bounds.height);
     }
-    let left = (left - viewport.offset[0]).clamp(0.0, width).floor();
-    let top = (top - viewport.offset[1]).clamp(0.0, height).floor();
-    let right = (right - viewport.offset[0]).clamp(0.0, width).ceil();
-    let bottom = (bottom - viewport.offset[1]).clamp(0.0, height).ceil();
-    if right <= left || bottom <= top {
-        return None;
-    }
-    Some((
-        left as u32,
-        top as u32,
-        (right - left) as u32,
-        (bottom - top) as u32,
-    ))
+    target_rect_between(
+        [
+            (left - viewport.offset[0]).floor(),
+            (top - viewport.offset[1]).floor(),
+            (right - viewport.offset[0]).ceil(),
+            (bottom - viewport.offset[1]).ceil(),
+        ],
+        (viewport.width, viewport.height),
+    )
 }
 
 fn scissor_rect_for_layer(
@@ -3628,9 +3380,11 @@ mod viewport_uniform;
 use depth_targets::DepthTargets;
 pub(crate) use pass_depth::PassDepth;
 use viewport_uniform::Uniforms;
+mod damage_plan;
 mod frame_history;
 mod frame_submit;
 mod frame_uploads;
+use damage_plan::{FrameDamagePlan, Keeper, Keepers, admits, count_damage};
 use frame_history::FrameHistory;
 pub use frame_history::frames_presented;
 pub(crate) use frame_submit::FrameSubmit;
@@ -3657,9 +3411,10 @@ use shadow_cache::{
 };
 #[cfg(test)]
 pub(crate) use shape_pipeline::ShapeVariant;
-use shape_pipeline::{LINE_KINDS, shape_shader_code};
+use shape_pipeline::shape_shader_code;
 pub(crate) use shape_pipeline::{
-    RunTier, SegmentClip, ShapeDepth, ShapePipelineKey, ShapeTurns, create_shape_pipeline,
+    LINE_KINDS, RunTier, SegmentClip, ShapeDepth, ShapePipelineKey, ShapeTurns,
+    create_shape_pipeline,
 };
 use text_glyph_cache::{
     CachedGpuTextGlyphRun, GlyphRunBounds, GlyphRunQuads, MAX_TEXT_GLYPH_GPU_RUN_CACHE_ITEMS,

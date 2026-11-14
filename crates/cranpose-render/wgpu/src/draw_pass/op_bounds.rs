@@ -1,9 +1,10 @@
 use cranpose_ui_graphics::Rect;
 
 use crate::{
-    render::{image_draw_bounds, run_draw_bounds, text_draw_bounds},
+    geometry::snap_delta_for_anchor,
+    render::{clipped_bounds, image_draw_bounds, text_draw_bounds},
     rrect_shadow::rrect_shadow_bounds,
-    scene::{CompositorScene, DrawOp, DrawOpKind},
+    scene::{CompositorScene, DrawOp, DrawOpKind, RunDraw},
 };
 
 /// The logical rect `op` may draw into: a shape, image or text by its
@@ -38,6 +39,18 @@ pub(crate) fn op_draw_bounds(
                 .reduce(|a, b| a.union(b))
         }
     }
+}
+
+pub(crate) fn run_draw_bounds(run: &RunDraw, root_scale: f32) -> Option<Rect> {
+    let snap_delta = run
+        .placement
+        .snap_anchor
+        .map(|anchor| snap_delta_for_anchor(anchor, root_scale))
+        .unwrap_or_default();
+    clipped_bounds(
+        run.bounds.translate(snap_delta.x, snap_delta.y),
+        run.placement.clip,
+    )
 }
 
 /// The snapped bounds of an unblurred shadow's casters, within the

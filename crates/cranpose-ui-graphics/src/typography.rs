@@ -208,10 +208,13 @@ pub struct DrawTextStyle {
     pub vertical_align: TextVerticalAlign,
 }
 
+/// The text size, in sp, of a style that names none: Compose's default.
+pub const DEFAULT_FONT_SIZE: f32 = 14.0;
+
 impl DrawTextStyle {
-    /// The size used when a style carries a non-positive or non-finite one.
-    /// Matches the framework-wide text default.
-    pub const DEFAULT_FONT_SIZE: f32 = 14.0;
+    /// The size used when a style carries a non-positive or non-finite one:
+    /// the framework-wide [`DEFAULT_FONT_SIZE`].
+    pub const DEFAULT_FONT_SIZE: f32 = DEFAULT_FONT_SIZE;
 
     /// Creates a style with the given font size, in scope units, and defaults for every other
     /// field.

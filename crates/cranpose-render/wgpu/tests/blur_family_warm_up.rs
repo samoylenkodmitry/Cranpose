@@ -1,4 +1,4 @@
-use cranpose_render_common::graph::{ProjectiveTransform, RenderGraph, RenderNode};
+use cranpose_render_common::graph::{LayerNode, ProjectiveTransform, RenderNode};
 use cranpose_ui_graphics::{Color, GraphicsLayer, Rect, RenderEffect};
 
 use crate::{shared_test_support, support};
@@ -15,7 +15,7 @@ const GLASS: Rect = Rect {
     height: 80.0,
 };
 
-fn blurred_page(radius: f32) -> RenderGraph {
+fn blurred_page(radius: f32) -> LayerNode {
     let full = Rect {
         x: 0.0,
         y: 0.0,
@@ -58,7 +58,7 @@ fn blurred_page(radius: f32) -> RenderGraph {
 /// What the frame drawing a blur of `radius` waited for, with the blur
 /// asserted so no waits means ready pipelines.
 fn frame_waits_for(renderer: &mut support::LockedRenderer, radius: f32) -> u64 {
-    let (stats, waits) = support::capture_waits(renderer, blurred_page(radius), FRAME, FRAME);
+    let (stats, waits) = support::capture_waits(renderer, &blurred_page(radius), FRAME, FRAME);
     assert!(
         stats.blur_passes > 0 || stats.placeholder_draws > 0,
         "the backdrop must blur, or wait for its blur"

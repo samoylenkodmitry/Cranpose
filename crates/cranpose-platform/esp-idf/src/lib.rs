@@ -449,16 +449,22 @@ impl FrameStats {
     ) {
         match stats.as_mut() {
             Some(stats) => stats.record(window, phases, presented),
-            None => {
-                log::info!(
-                    "first frame after {} ms: update {} ms, draw and send {} ms",
-                    presented.duration_since(start).as_millis(),
-                    phases.update.as_millis(),
-                    phases.present.as_millis(),
-                );
-                *stats = Some(Self::new(presented));
-            }
+            None => *stats = Some(Self::first(start, phases, presented)),
         }
+    }
+
+    // Logs the first frame and starts counting after it. Cold, as the
+    // reports below: the loop runs every frame, a report seldom.
+    #[cold]
+    #[inline(never)]
+    fn first(start: Instant, phases: FramePhases, presented: Instant) -> Self {
+        log::info!(
+            "first frame after {} ms: update {} ms, draw and send {} ms",
+            presented.duration_since(start).as_millis(),
+            phases.update.as_millis(),
+            phases.present.as_millis(),
+        );
+        Self::new(presented)
     }
 
     fn record(&mut self, length: Duration, phases: FramePhases, presented: Instant) {
@@ -468,9 +474,15 @@ impl FrameStats {
         self.sent += phases.sent;
         self.slowest = self.slowest.max(phases.update + phases.present);
         let window = presented.duration_since(self.window_start);
-        if window < length {
-            return;
+        if window >= length {
+            self.report(window, presented);
         }
+    }
+
+    // Logs the window that ended at `presented` and starts the next one.
+    #[cold]
+    #[inline(never)]
+    fn report(&mut self, window: Duration, presented: Instant) {
         let average = |total: Duration| total.as_secs_f32() * 1000.0 / self.frames as f32;
         let memory = memory::MemoryReport::now();
         log::info!(

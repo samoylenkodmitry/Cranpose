@@ -11,7 +11,6 @@ pub(crate) struct ReturningCall<'a> {
     pub(crate) core_path: &'a TokenStream2,
     pub(crate) composer: &'a Ident,
     pub(crate) group: &'a Ident,
-    pub(crate) current_scope: &'a Ident,
     pub(crate) scope_label: &'a Ident,
     pub(crate) return_ty: &'a Type,
     pub(crate) slot_key: &'a TokenStream2,
@@ -73,8 +72,7 @@ impl ReturningCall<'_> {
         recompose_setter: &TokenStream2,
     ) -> TokenStream2 {
         let (core_path, composer, scope_label) = (self.core_path, self.composer, self.scope_label);
-        let (current_scope, return_ty, body_call) =
-            (self.current_scope, self.return_ty, self.body_call);
+        let (group, return_ty, body_call) = (self.group, self.return_ty, self.body_call);
         let (previous, value, slot) = (Self::previous(), Self::value(), Self::return_slot());
         let lookup = (!self.packed.holds_return()).then(|| {
             let (slot_key, slot_type) = (self.slot_key, self.slot_type());
@@ -89,7 +87,7 @@ impl ReturningCall<'_> {
         let (skip, store) = (self.skip(), self.store());
         quote! {
             #core_path::debug_label_current_scope(stringify!(#scope_label));
-            let mut __changed = #current_scope.should_recompose();
+            let mut __changed = #group.should_recompose();
             #(#param_setup)*
             #recompose_setter
             #lookup

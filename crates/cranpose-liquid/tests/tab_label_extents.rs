@@ -1,20 +1,17 @@
 use cranpose_liquid::prelude::*;
 use cranpose_render_common::{
-    graph::{PrimitiveNode, RenderNode, TextPrimitiveNode},
+    graph::TextPrimitiveNode,
+    scene_store::{ItemRef, LayerRef},
     text_fonts::TextFonts,
 };
 use cranpose_testing::create_headless_robot_test_with_fonts;
 use cranpose_ui::Modifier;
 
-fn find_text<'a>(nodes: &'a [RenderNode], label: &str) -> Option<&'a TextPrimitiveNode> {
-    nodes.iter().find_map(|node| match node {
-        RenderNode::Primitive(entry) => match &entry.node {
-            PrimitiveNode::Text(text) if text.text.text == label => Some(text.as_ref()),
-            _ => None,
-        },
-        RenderNode::Layer(layer) => find_text(&layer.children, label),
-        RenderNode::Inline(inline) => find_text(&inline.content, label),
-        RenderNode::DrawRun(_) => None,
+fn find_text<'a>(layer: LayerRef<'a>, label: &str) -> Option<&'a TextPrimitiveNode> {
+    layer.items().find_map(|item| match item {
+        ItemRef::Text(text) if text.render_text.text() == label => Some(text),
+        ItemRef::Layer(child) | ItemRef::Leaf(child) => find_text(child, label),
+        ItemRef::Text(_) | ItemRef::Draw(_) | ItemRef::Run(_) | ItemRef::Shape(_) => None,
     })
 }
 
@@ -41,9 +38,9 @@ fn multilingual_tab_labels_fit_their_text_area() {
         });
     });
     robot.wait_for_idle();
-    let graph = robot.shell_mut().scene().graph.as_ref().expect("tab scene");
+    let root = robot.shell_mut().scene().root_layer().expect("tab scene");
     for label in ["Settings", "الإعدادات", "सेटिंग्स"] {
-        let text = find_text(&graph.root.children, label).expect("visible tab label");
+        let text = find_text(root, label).expect("visible tab label");
         let height = text.layout.height();
         assert!(
             height <= text.rect.height + 0.01,

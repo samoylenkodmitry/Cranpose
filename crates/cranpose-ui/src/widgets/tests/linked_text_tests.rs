@@ -29,7 +29,7 @@ fn a_reader_opens_each_link_from_the_actions_menu() {
     };
     let mut config = cranpose_foundation::SemanticsConfiguration::default();
 
-    link_actions(Rc::new(text_with_links()), open_url)(&mut config);
+    link_actions(text_with_links(), open_url)(&mut config);
     let labels: Vec<_> = config
         .custom_actions
         .iter()
@@ -54,7 +54,7 @@ fn a_link_with_no_shown_text_is_named_by_its_target() {
         .to_annotated_string();
     let mut config = cranpose_foundation::SemanticsConfiguration::default();
 
-    link_actions(Rc::new(text), Rc::new(|_: &str| {}))(&mut config);
+    link_actions(text, Rc::new(|_: &str| {}))(&mut config);
 
     assert_eq!(config.custom_actions[0].label, "Open https://example.test/");
 }

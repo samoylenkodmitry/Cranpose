@@ -1,8 +1,10 @@
+use std::sync::Arc;
+
 use cranpose_ui_graphics::{Brush, Color, DrawPrimitive, Point, ShapeRecorder};
 
 use super::{held_draws::held_cells, *};
 use crate::{
-    scene::{Placement, ShadowDraw},
+    scene::{CompositorScene, Placement, ShadowDraw},
     scissor::target_rects_overlap,
 };
 

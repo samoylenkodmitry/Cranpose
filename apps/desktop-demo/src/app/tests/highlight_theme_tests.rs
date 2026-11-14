@@ -3,7 +3,7 @@ use super::*;
 fn joined(lines: &[AnnotatedString]) -> String {
     lines
         .iter()
-        .map(|line| line.text.as_str())
+        .map(AnnotatedString::text)
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -19,29 +19,29 @@ fn lines_reconstruct_the_source_without_terminators() {
 fn a_source_without_a_trailing_newline_keeps_its_last_line() {
     let lines = highlight_lines(Language::Rust, "let a = 1;");
     assert_eq!(lines.len(), 1);
-    assert_eq!(lines[0].text, "let a = 1;");
+    assert_eq!(lines[0].text(), "let a = 1;");
 }
 
 #[test]
 fn empty_source_is_one_empty_line() {
     let lines = highlight_lines(Language::Rust, "");
     assert_eq!(lines.len(), 1);
-    assert!(lines[0].text.is_empty());
+    assert!(lines[0].text().is_empty());
 }
 
 #[test]
 fn carriage_returns_are_not_rendered() {
     let lines = highlight_lines(Language::Rust, "let a = 1;\r\nlet b = 2;\r\n");
-    assert_eq!(lines[0].text, "let a = 1;");
-    assert_eq!(lines[1].text, "let b = 2;");
+    assert_eq!(lines[0].text(), "let a = 1;");
+    assert_eq!(lines[1].text(), "let b = 2;");
 }
 
 #[test]
 fn non_ascii_source_survives_the_split() {
     let code = "let s = \"héllo wörld — ok\";\n// comment with 🌍\n";
     let lines = highlight_lines(Language::Rust, code);
-    assert_eq!(lines[0].text, "let s = \"héllo wörld — ok\";");
-    assert_eq!(lines[1].text, "// comment with 🌍");
+    assert_eq!(lines[0].text(), "let s = \"héllo wörld — ok\";");
+    assert_eq!(lines[1].text(), "// comment with 🌍");
 }
 
 #[test]
@@ -50,9 +50,9 @@ fn a_multi_line_comment_is_coloured_on_every_line() {
     let lines = highlight_lines(Language::Rust, code);
     for (index, line) in lines.iter().take(3).enumerate() {
         assert!(
-            !line.span_styles.is_empty(),
+            !line.span_styles().is_empty(),
             "line {index} lost the comment colour: {:?}",
-            line.text
+            line.text()
         );
     }
 }
@@ -62,7 +62,7 @@ fn appending_preserves_the_exact_code_text() {
     let code = "fn main() { println!(\"hi\"); }";
     let annotated =
         append_highlighted(AnnotatedString::builder(), Language::Rust, code).to_annotated_string();
-    assert_eq!(annotated.text, code);
+    assert_eq!(annotated.text(), code);
 }
 
 /// How far a colour sits inside the nearest ink range the markdown visual
@@ -109,8 +109,8 @@ fn plain_language_appends_one_unstyled_run() {
     let code = "no language here";
     let annotated =
         append_highlighted(AnnotatedString::builder(), Language::Plain, code).to_annotated_string();
-    assert_eq!(annotated.text, code);
-    assert!(annotated.span_styles.is_empty());
+    assert_eq!(annotated.text(), code);
+    assert!(annotated.span_styles().is_empty());
 }
 
 #[test]
@@ -146,7 +146,7 @@ fn highlighting_real_source_preserves_every_line() {
     assert!(lines.len() >= original.len());
     for (index, expected) in original.iter().enumerate() {
         assert_eq!(
-            lines[index].text,
+            lines[index].text(),
             *expected,
             "line {} differs after highlighting",
             index + 1

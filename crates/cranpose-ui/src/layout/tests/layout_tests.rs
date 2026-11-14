@@ -1502,46 +1502,6 @@ fn measure_layout_returns_frame_arena_after_retained_child_measure() -> Result<(
 }
 
 #[test]
-fn layout_reuses_child_measurables_across_measure_passes() -> Result<(), NodeError> {
-    let _app_context = crate::render_state::app_context_test_scope();
-    let mut applier = MemoryApplier::new();
-
-    let leaf_id = applier.create(Box::new(LayoutNode::new(
-        Modifier::empty(),
-        Rc::new(LeafMeasurePolicy::new(Size {
-            width: 10.0,
-            height: 10.0,
-        })),
-    )));
-
-    let mut root = LayoutNode::new(Modifier::empty(), Rc::new(VerticalStackPolicy));
-    root.children.push(leaf_id);
-    let root_id = applier.create(Box::new(root));
-
-    measure_layout(&mut applier, root_id, Size::new(100.0, 100.0))?;
-    let first_stats =
-        applier.with_node::<LayoutNode, _>(root_id, |node| node.layout_runtime_debug_stats())?;
-
-    applier.with_node::<LayoutNode, _>(root_id, |node| node.mark_needs_measure())?;
-    measure_layout(&mut applier, root_id, Size::new(100.0, 100.0))?;
-    let second_stats =
-        applier.with_node::<LayoutNode, _>(root_id, |node| node.layout_runtime_debug_stats())?;
-
-    assert_eq!(first_stats.child_ids, vec![leaf_id]);
-    assert_eq!(first_stats.child_measurable_count, 1);
-    assert_eq!(
-        first_stats.child_state_ptrs, second_stats.child_state_ptrs,
-        "layout should retain child measure state across repeated measure passes"
-    );
-    assert_eq!(
-        first_stats.child_measurable_ptrs, second_stats.child_measurable_ptrs,
-        "layout should retain child measurable wrappers across repeated measure passes"
-    );
-
-    Ok(())
-}
-
-#[test]
 fn layout_reconciles_child_measurables_by_child_identity() -> Result<(), NodeError> {
     let _app_context = crate::render_state::app_context_test_scope();
     let mut applier = MemoryApplier::new();
@@ -1567,34 +1527,24 @@ fn layout_reconciles_child_measurables_by_child_identity() -> Result<(), NodeErr
     let root_id = applier.create(Box::new(root));
 
     measure_layout(&mut applier, root_id, Size::new(100.0, 100.0))?;
-    let initial_stats =
-        applier.with_node::<LayoutNode, _>(root_id, |node| node.layout_runtime_debug_stats())?;
 
     applier.with_node::<LayoutNode, _>(root_id, |node| {
         node.children = vec![second_child, first_child];
         node.mark_needs_measure();
     })?;
     measure_layout(&mut applier, root_id, Size::new(100.0, 100.0))?;
-    let reordered_stats =
-        applier.with_node::<LayoutNode, _>(root_id, |node| node.layout_runtime_debug_stats())?;
 
-    assert_eq!(initial_stats.child_ids, vec![first_child, second_child]);
-    assert_eq!(reordered_stats.child_ids, vec![second_child, first_child]);
+    let position = |applier: &mut MemoryApplier, id| {
+        applier.with_node::<LayoutNode, _>(id, |node| (node.position(), node.measured_size()))
+    };
     assert_eq!(
-        reordered_stats.child_state_ptrs,
-        vec![
-            initial_stats.child_state_ptrs[1],
-            initial_stats.child_state_ptrs[0]
-        ],
-        "child measure states should follow child ids when order changes"
+        position(&mut applier, second_child)?,
+        (Point { x: 0.0, y: 0.0 }, Size::new(20.0, 10.0)),
+        "the child moved first is placed first, at its own size"
     );
     assert_eq!(
-        reordered_stats.child_measurable_ptrs,
-        vec![
-            initial_stats.child_measurable_ptrs[1],
-            initial_stats.child_measurable_ptrs[0]
-        ],
-        "child measurable wrappers should follow child ids when order changes"
+        position(&mut applier, first_child)?,
+        (Point { x: 0.0, y: 10.0 }, Size::new(10.0, 10.0))
     );
 
     Ok(())
@@ -1625,29 +1575,14 @@ fn layout_binds_inserted_children_and_drops_removed_and_missing_ones() -> Result
 
     let measured = measure_layout(&mut applier, root_id, Size::new(100.0, 200.0))?;
     assert_eq!(measured.root_size().height, 30.0);
-    let initial_stats =
-        applier.with_node::<LayoutNode, _>(root_id, |node| node.layout_runtime_debug_stats())?;
 
     applier.with_node::<LayoutNode, _>(root_id, |node| {
         node.children = vec![inserted, missing, first];
         node.mark_needs_measure();
     })?;
     let measured = measure_layout(&mut applier, root_id, Size::new(100.0, 200.0))?;
-    let stats =
-        applier.with_node::<LayoutNode, _>(root_id, |node| node.layout_runtime_debug_stats())?;
 
     assert_eq!(measured.root_size().height, 50.0);
-    assert_eq!(stats.child_ids, vec![inserted, first]);
-    assert_eq!(stats.child_measurable_count, 2);
-    assert_eq!(
-        stats.child_state_ptrs[1], initial_stats.child_state_ptrs[0],
-        "a kept child keeps its measure state when a child is inserted before it"
-    );
-    assert!(
-        !initial_stats
-            .child_state_ptrs
-            .contains(&stats.child_state_ptrs[0])
-    );
     assert_eq!(
         applier.with_node::<LayoutNode, _>(first, |node| node.position())?,
         Point { x: 0.0, y: 40.0 },
@@ -1713,8 +1648,7 @@ fn layout_measures_with_a_replaced_measure_policy() -> Result<(), NodeError> {
 }
 
 #[test]
-fn layout_reuses_modifier_coordinator_chain_until_modifier_identity_changes()
--> Result<(), NodeError> {
+fn a_measure_after_a_modifier_change_reads_the_new_modifier() -> Result<(), NodeError> {
     let _app_context = crate::render_state::app_context_test_scope();
     let mut applier = MemoryApplier::new();
 
@@ -1726,33 +1660,17 @@ fn layout_reuses_modifier_coordinator_chain_until_modifier_identity_changes()
         })),
     )));
 
-    measure_layout(&mut applier, root_id, Size::new(100.0, 100.0))?;
-    let first_stats =
-        applier.with_node::<LayoutNode, _>(root_id, |node| node.layout_runtime_debug_stats())?;
-
+    let first = measure_layout(&mut applier, root_id, Size::new(100.0, 100.0))?;
     applier.with_node::<LayoutNode, _>(root_id, |node| node.mark_needs_measure())?;
-    measure_layout(&mut applier, root_id, Size::new(100.0, 100.0))?;
-    let second_stats =
-        applier.with_node::<LayoutNode, _>(root_id, |node| node.layout_runtime_debug_stats())?;
-
-    assert_eq!(first_stats.coordinator_node_count, 1);
-    assert_eq!(
-        first_stats.coordinator_node_ptrs, second_stats.coordinator_node_ptrs,
-        "layout should retain the modifier coordinator chain across repeated measure passes"
-    );
-
+    let again = measure_layout(&mut applier, root_id, Size::new(100.0, 100.0))?;
     applier.with_node::<LayoutNode, _>(root_id, |node| {
         node.set_modifier(Modifier::empty().width(40.0));
     })?;
-    measure_layout(&mut applier, root_id, Size::new(100.0, 100.0))?;
-    let changed_stats =
-        applier.with_node::<LayoutNode, _>(root_id, |node| node.layout_runtime_debug_stats())?;
+    let changed = measure_layout(&mut applier, root_id, Size::new(100.0, 100.0))?;
 
-    assert_eq!(changed_stats.coordinator_node_count, 1);
-    assert_ne!(
-        first_stats.coordinator_node_ptrs, changed_stats.coordinator_node_ptrs,
-        "changing the layout modifier identity should reconcile the retained coordinator chain"
-    );
+    assert_eq!(first.root_size(), Size::new(18.0, 18.0));
+    assert_eq!(again.root_size(), Size::new(18.0, 18.0));
+    assert_eq!(changed.root_size(), Size::new(40.0, 10.0));
 
     Ok(())
 }
@@ -2170,23 +2088,26 @@ fn parent_data_uses_resolved_layout_properties() {
     let context = crate::render_state::require_current_app_context("a layout test");
     let builder =
         LayoutBuilder::new_with_epoch(Rc::new(ConcreteApplierHost::new(applier)), 1, &context);
-    let frame = Rc::new(LayoutChildFrame::default());
-    let state = LayoutChildMeasureState::new(node_id, Rc::clone(&frame));
-    builder
+    let frame = Rc::new(LayoutChildFrame::new(std::rc::Weak::new()));
+    let state = builder
         .state
         .applier
         .borrow_typed()
         .with_node::<LayoutNode, _>(node_id, |node| {
-            state.bind(
-                LayoutChildBinding {
-                    parts: node.layout_parts(),
+            let parts = Rc::clone(node.layout_parts());
+            parts.bind_child(
+                node_id,
+                &LayoutChildBinding {
+                    parts: &parts,
                     layout_node: true,
-                    parent_data: Some(node.parent_data()),
+                    parent_data: node.parent_data(),
                     dirty: false,
                     descendant_dirty: false,
                 },
+                &frame,
                 &builder.state,
             );
+            parts
         })
         .expect("node available");
     let measurable = LayoutChildMeasurable::new(state);
@@ -3415,25 +3336,13 @@ fn semantics_bounds_are_the_layout_rects_on_every_path() -> Result<(), NodeError
 }
 
 #[test]
-fn semantics_text_is_shared_with_the_text_nodes_slices() -> Result<(), NodeError> {
+fn semantics_from_the_applier_and_the_layout_tree_hold_the_text() -> Result<(), NodeError> {
     fn text_role(node: &SemanticsNode) -> Option<&SemanticsText> {
         match &node.role {
             SemanticsRole::Text { value } => Some(value),
             _ => node.children.iter().find_map(text_role),
         }
     }
-    fn text_box(layout_box: &LayoutBox) -> Option<&LayoutBox> {
-        if layout_box
-            .node_data
-            .modifier_slices()
-            .annotated_text()
-            .is_some()
-        {
-            return Some(layout_box);
-        }
-        layout_box.children.iter().find_map(text_box)
-    }
-
     let mut composition = crate::run_test_composition(|| {
         crate::Text("shared", Modifier::empty(), crate::TextStyle::default());
     });
@@ -3446,9 +3355,6 @@ fn semantics_text_is_shared_with_the_text_nodes_slices() -> Result<(), NodeError
         build_semantics_tree_from_applier(&mut applier, root)?.expect("semantics from the applier");
     applier.clear_runtime_handle();
 
-    let slices_text = text_box(layout.root())
-        .and_then(|text| text.node_data.modifier_slices().annotated_text())
-        .expect("a laid-out text node");
     for (path, tree) in [
         ("applier", &semantics),
         (
@@ -3458,10 +3364,6 @@ fn semantics_text_is_shared_with_the_text_nodes_slices() -> Result<(), NodeError
     ] {
         let value = text_role(tree.root()).expect("a text role");
         assert_eq!(value.as_str(), "shared", "{path}");
-        assert!(
-            Rc::ptr_eq(&value.0, &slices_text),
-            "the {path} semantics share the slices' text instead of copying it"
-        );
     }
     assert_eq!(
         SemanticsText::from("shared"),

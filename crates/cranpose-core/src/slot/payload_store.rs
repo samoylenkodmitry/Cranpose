@@ -7,6 +7,10 @@ use crate::collections::growth_slack::GrowthSlack;
 
 const ORDER_ENTRY_BYTES: usize = size_of::<u32>();
 
+// The order entries from some index on, aside from the store while an insert
+// run fills the order before them.
+pub(in crate::slot) struct ParkedOrder(Vec<u32>);
+
 #[derive(Default)]
 pub(in crate::slot) struct PayloadStore {
     order: Vec<u32>,
@@ -65,6 +69,17 @@ impl PayloadStore {
             .for_each(sink);
         slots.clear();
         free.clear();
+    }
+
+    pub(in crate::slot) fn split_off_order(&mut self, index: usize) -> ParkedOrder {
+        let parked = self.order.split_off(index);
+        self.note_shift(parked.len());
+        ParkedOrder(parked)
+    }
+
+    pub(in crate::slot) fn append_order(&mut self, ParkedOrder(mut parked): ParkedOrder) {
+        self.note_shift(parked.len());
+        self.order.append(&mut parked);
     }
 
     pub(in crate::slot) fn compact(&mut self) {

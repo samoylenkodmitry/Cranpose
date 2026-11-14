@@ -35,6 +35,7 @@ pub use ui_strings::UiString;
 /// Screen reader announcements for events that have no control on screen.
 pub mod announce;
 mod arrow_focus;
+mod background_draw;
 pub mod bring_into_view;
 mod bring_into_view_spec;
 pub mod clipboard_session;
@@ -113,6 +114,7 @@ pub mod zoom;
 pub use announce::{Announcement, Announcer, announce, drain_announcements, local_announcer};
 #[doc(hidden)]
 pub use arrow_focus::arrow_focus_target;
+pub use background_draw::BackgroundDraw;
 pub use bring_into_view::{
     BringIntoViewResponder, local_bring_into_view_responder, scroll_delta_to_reveal,
 };
@@ -236,10 +238,9 @@ pub use modifier::{
 #[cfg(feature = "test-helpers")]
 pub use modifier::{last_fling_velocity, reset_last_fling_velocity};
 pub use modifier_nodes::{
-    AlphaElement, AlphaNode, BackgroundElement, BackgroundNode, ClickableElement, ClickableNode,
-    CornerShapeElement, CornerShapeNode, FillDirection, FillElement, FillNode,
-    FractionalOffsetElement, FractionalOffsetNode, OffsetElement, OffsetNode, PaddingElement,
-    PaddingNode, SizeElement, SizeNode,
+    AlphaElement, AlphaNode, BackgroundElement, ClickableElement, ClickableNode,
+    CornerShapeElement, FillDirection, FillElement, FractionalOffsetElement, OffsetElement,
+    PaddingElement, SizeElement,
 };
 pub use nested_scroll::{NestedScroll, NestedScrollConnection, NestedScrollSource};
 pub use nine_patch::{
@@ -282,14 +283,14 @@ pub use render_state::{
     has_pending_layer_property_repasses, has_pending_layout_repasses, has_pending_measure_repasses,
     peek_focus_invalidation, peek_layout_invalidation, peek_pointer_invalidation,
     peek_render_invalidation, pending_layout_repass_nodes_snapshot,
-    pending_measure_repass_nodes_snapshot, prune_draw_observations_to_nodes,
-    request_current_draw_redraw, request_focus_invalidation, request_layout_invalidation,
-    request_pointer_invalidation, request_render_invalidation, schedule_draw_repass,
-    schedule_layout_repass, schedule_measure_repass, schedule_z_order_change,
-    take_draw_repass_nodes, take_draw_repass_nodes_into, take_focus_invalidation,
-    take_geometry_scene_nodes, take_geometry_scene_nodes_into,
-    take_layer_property_repass_nodes_into, take_layout_invalidation, take_layout_repass_nodes,
-    take_measure_repass_nodes, take_pointer_invalidation, take_render_invalidation,
+    pending_measure_repass_nodes_snapshot, request_current_draw_redraw, request_focus_invalidation,
+    request_layout_invalidation, request_pointer_invalidation, request_render_invalidation,
+    retire_draw_observations, schedule_draw_repass, schedule_layout_repass,
+    schedule_measure_repass, schedule_z_order_change, take_draw_repass_nodes,
+    take_draw_repass_nodes_into, take_focus_invalidation, take_geometry_scene_nodes,
+    take_geometry_scene_nodes_into, take_layer_property_repass_nodes_into,
+    take_layout_invalidation, take_layout_repass_nodes, take_measure_repass_nodes,
+    take_pointer_invalidation, take_render_invalidation,
 };
 pub use renderer::{HeadlessRenderer, PaintLayer, RecordedRenderScene, RenderOp};
 pub use safe_area::{WindowInsets, local_ime_insets, local_safe_area_insets, window_insets};

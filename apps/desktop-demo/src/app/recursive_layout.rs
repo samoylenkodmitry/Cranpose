@@ -1,4 +1,4 @@
-use std::{cell::RefCell, rc::Rc};
+use std::cell::RefCell;
 
 use cranpose_ui::{
     composable, Axis, Color, Column, ColumnSpec, LinearArrangement, Modifier, Row, RowSpec, Text,
@@ -76,19 +76,19 @@ pub(super) fn recursive_layout_node(modifier: Modifier, depth: usize, axis: Axis
     );
 }
 
-fn cached_depth_text(depth: usize) -> Rc<cranpose_ui::text::AnnotatedString> {
+fn cached_depth_text(depth: usize) -> cranpose_ui::text::AnnotatedString {
     thread_local! {
-        static TEXTS: RefCell<Vec<Rc<cranpose_ui::text::AnnotatedString>>> = const { RefCell::new(Vec::new()) };
+        static TEXTS: RefCell<Vec<cranpose_ui::text::AnnotatedString>> = const { RefCell::new(Vec::new()) };
     }
 
     TEXTS.with(|texts| {
         let mut texts = texts.borrow_mut();
         while texts.len() <= depth {
             let next_depth = texts.len();
-            texts.push(Rc::new(cranpose_ui::text::AnnotatedString::from(format!(
+            texts.push(cranpose_ui::text::AnnotatedString::from(format!(
                 "Depth {next_depth}"
-            ))));
+            )));
         }
-        Rc::clone(&texts[depth])
+        texts[depth].clone()
     })
 }

@@ -17,7 +17,10 @@ use web_time::Instant;
 
 use crate::{
     layout::MeasuredNode,
-    modifier::{Modifier, ModifierChainHandle, ModifierNodeSlices, Point, ResolvedModifiers, Size},
+    modifier::{
+        ElementMatch, Modifier, ModifierChainHandle, ModifierNodeSlices, Point, ResolvedModifiers,
+        Size,
+    },
     render_state::AppContext,
     widgets::nodes::{ChildPlacement, LayoutNode, LayoutParts, LayoutState, NodeCache},
 };
@@ -897,13 +900,13 @@ impl SubcomposeLayoutNode {
     }
 
     /// What the chain tells the parent's measure policy about this node.
-    pub(crate) fn parent_data(&self) -> cranpose_ui_layout::ParentData {
+    pub(crate) fn parent_data(&self) -> crate::modifier::SharedParentData {
         self.inner.borrow().modifier_chain.parent_data()
     }
 
     /// Returns a clone of the current layout state.
     pub fn layout_state(&self) -> LayoutState {
-        *self.parts.layout_state().borrow()
+        self.parts.layout_state().snapshot()
     }
 
     pub(crate) fn cache(&self) -> &NodeCache {
@@ -918,25 +921,18 @@ impl SubcomposeLayoutNode {
     // during placement. `LayoutState::place` self-reports actual moves to
     // the scene phase.
     pub(crate) fn place(&self, at: ChildPlacement, placer: Option<NodeId>, context: &AppContext) {
-        self.parts
-            .layout_state()
-            .borrow_mut()
-            .place_child(at, placer, context);
+        self.parts.place(self.id.get(), at, placer, context);
     }
 
-    /// Updates the measured size of this node. Called during measurement.
-    /// [`LayoutState::set_size`] self-reports actual changes to the scene
-    /// phase.
+    /// Updates the measured size of this node. Called during measurement. An
+    /// actual change reports itself to the scene phase.
     pub fn set_measured_size(&self, size: Size, context: &AppContext) {
-        self.parts
-            .layout_state()
-            .borrow_mut()
-            .set_size(size, context);
+        self.parts.set_size(self.id.get(), size, context);
     }
 
     /// Clears the is_placed flag. Called at the start of a layout pass.
     pub fn clear_placed(&self, context: &AppContext) {
-        self.parts.layout_state().borrow_mut().clear_placed(context);
+        self.parts.clear_placed(self.id.get(), context);
     }
 
     /// Semantics reported by this node's live modifier chain.
@@ -1266,13 +1262,7 @@ impl cranpose_core::Node for SubcomposeLayoutNode {
     }
 
     fn set_node_id(&mut self, id: NodeId) {
-        // A redraw asked for before the node had an id went to no draw
-        // repass.
-        if self.needs_redraw.get() {
-            crate::render_state::note_retained_redraw(id);
-        }
         self.id.set(Some(id));
-        self.parts.layout_state().borrow_mut().set_node_id(id);
         {
             let mut inner = self.inner.borrow_mut();
             let previous = inner.node_id.replace(id);
@@ -1371,7 +1361,7 @@ impl SubcomposeLayoutNodeHandle {
     }
 
     pub fn modifier(&self) -> Modifier {
-        self.inner.borrow().modifier.clone()
+        self.inner.borrow().modifier_chain.modifier()
     }
 
     pub fn layout_properties(&self) -> crate::modifier::LayoutProperties {
@@ -1583,7 +1573,6 @@ impl SubcomposeLayoutNodeHandle {
 }
 
 struct SubcomposeLayoutNodeInner {
-    modifier: Modifier,
     modifier_chain: ModifierChainHandle,
     modifier_capabilities: NodeCapabilities,
     state: SubcomposeState,
@@ -1645,7 +1634,6 @@ impl SubcomposeLayoutNodeInner {
 
     fn new(measure_policy: Rc<MeasurePolicy>) -> Self {
         Self {
-            modifier: Modifier::empty(),
             modifier_chain: ModifierChainHandle::detached(),
             modifier_capabilities: NodeCapabilities::default(),
             state: SubcomposeState::default(),
@@ -1674,12 +1662,11 @@ impl SubcomposeLayoutNodeInner {
     }
 
     fn set_modifier_collect(&mut self, modifier: Modifier) -> (ModifierInvalidations, bool) {
-        let modifier_changed = !self.modifier.structural_eq(&modifier);
-        self.modifier = modifier;
-        self.modifier_chain.set_debug_logging(self.debug_modifiers);
-        let invalidations = self
+        let modifier_changed = !self
             .modifier_chain
-            .update_on_node(self.node_id, &self.modifier);
+            .holds(&modifier, ElementMatch::Structural);
+        self.modifier_chain.set_debug_logging(self.debug_modifiers);
+        let invalidations = self.modifier_chain.update_on_node(self.node_id, &modifier);
         self.modifier_capabilities = self.modifier_chain.capabilities();
 
         (invalidations, modifier_changed)

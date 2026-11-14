@@ -19,6 +19,7 @@ mod clickable;
 mod coordinator_rect;
 mod drag_and_drop;
 mod draw_cache;
+mod element_match;
 mod fill;
 pub(crate) mod focus;
 mod focus_ring;
@@ -49,12 +50,12 @@ mod z_index;
 
 pub(crate) use chain::{
     InPlaceReach, InPlaceUpdate, ModifierChainHandle, ModifierChainInspectorNode,
-    ModifierLocalsHandle,
+    ModifierLocalsHandle, SharedParentData,
 };
 pub(crate) use coordinator_rect::CoordinatorRect;
 use cranpose_foundation::{
-    DynModifierElement, ModifierNodeElement, NodeCapabilities, ProgressBarRangeInfo,
-    SemanticsConfiguration, modifier_element,
+    DynModifierElement, ModifierNodeElement, ProgressBarRangeInfo, SemanticsConfiguration,
+    modifier_element, plain_element,
 };
 pub use cranpose_foundation::{
     PointerButton, PointerButtons, PointerEvent, PointerEventKind, PointerSource, RotaryScrollEvent,
@@ -70,6 +71,7 @@ pub use drag_and_drop::{
     DragAndDropSourceElement, DragAndDropSourceNode, DragAndDropState, DragAndDropTarget,
     DragAndDropTargetElement, DragAndDropTargetNode,
 };
+pub(crate) use element_match::ElementMatch;
 #[cfg(test)]
 pub(crate) use focus::FocusRequesterElement;
 pub use focus::{FocusDirection, FocusRequestError, FocusRequester};
@@ -202,8 +204,8 @@ fn describe_dimension(constraint: DimensionConstraint) -> String {
     }
 }
 
-fn inspector_slice(inspector: &Option<Rc<[InspectorMetadata]>>) -> &[InspectorMetadata] {
-    inspector.as_deref().unwrap_or(&[])
+fn inspector_slice(inspector: &Option<Rc<Vec<InspectorMetadata>>>) -> &[InspectorMetadata] {
+    inspector.as_deref().map_or(&[], Vec::as_slice)
 }
 
 /// The inspector metadata of two modifiers joined, first `first`'s, or
@@ -211,17 +213,11 @@ fn inspector_slice(inspector: &Option<Rc<[InspectorMetadata]>>) -> &[InspectorMe
 fn merged_inspector(
     first: &[InspectorMetadata],
     second: &[InspectorMetadata],
-) -> Option<Rc<[InspectorMetadata]>> {
+) -> Option<Rc<Vec<InspectorMetadata>>> {
     if first.is_empty() && second.is_empty() {
         return None;
     }
-    Some(first.iter().chain(second).cloned().collect())
-}
-
-/// Whether `a` and `b` are equal elements: one element, as a kept chain
-/// shares them, or two that compare equal.
-fn same_element(a: &DynModifierElement, b: &DynModifierElement) -> bool {
-    Rc::ptr_eq(a, b) || a.equals_element(&**b)
+    Some(Rc::new(first.iter().chain(second).cloned().collect()))
 }
 
 pub(crate) fn inspector_metadata<F>(name: &'static str, recorder: F) -> InspectorMetadata
@@ -324,7 +320,7 @@ enum ModifierKind {
         elements: Elements,
         /// `None` when no element records inspector metadata, which is
         /// always outside tests and modifier debugging: no allocation.
-        inspector: Option<Rc<[InspectorMetadata]>>,
+        inspector: Option<Rc<Vec<InspectorMetadata>>>,
     },
 }
 
@@ -389,7 +385,6 @@ impl ExactSizeIterator for ModifierInspectorIterator<'_> {}
 #[must_use = "a modifier does nothing until a composable receives it"]
 pub struct Modifier {
     kind: ModifierKind,
-    element_count: usize,
     provides_composition_locals: bool,
 }
 
@@ -397,7 +392,6 @@ impl Default for Modifier {
     fn default() -> Self {
         Self {
             kind: ModifierKind::Empty,
-            element_count: 0,
             provides_composition_locals: false,
         }
     }
@@ -424,7 +418,7 @@ impl Modifier {
         let modifier = crate::thread_state::with(|state| {
             state
                 .clip_to_bounds
-                .get_or_init(|| Self::with_element(ClipToBoundsElement::new()))
+                .get_or_init(|| Self::from_dyn_element(plain_element(ClipToBoundsElement)))
                 .clone()
         });
         let modifier =
@@ -918,7 +912,6 @@ impl Modifier {
                 elements: elements.joined(next_elements),
                 inspector,
             },
-            element_count: self.element_count + next.element_count,
             provides_composition_locals: self.provides_composition_locals
                 || next.provides_composition_locals,
         }
@@ -926,15 +919,15 @@ impl Modifier {
 
     /// How many elements the modifier holds.
     pub(crate) fn element_count(&self) -> usize {
-        self.element_count
+        match &self.kind {
+            ModifierKind::Empty => 0,
+            ModifierKind::Single { elements, .. } => elements.len(),
+        }
     }
 
     pub(crate) fn iter_elements(&self) -> ModifierElementIterator<'_> {
-        match &self.kind {
-            ModifierKind::Empty => ModifierElementIterator { inner: [].iter() },
-            ModifierKind::Single { elements, .. } => ModifierElementIterator {
-                inner: elements.iter(),
-            },
+        ModifierElementIterator {
+            inner: self.as_elements().iter(),
         }
     }
 
@@ -968,7 +961,7 @@ impl Modifier {
         match &self.kind {
             ModifierKind::Empty => Vec::new(),
             ModifierKind::Single { inspector, .. } => {
-                inspector.as_deref().map(<[_]>::to_vec).unwrap_or_default()
+                inspector.as_deref().cloned().unwrap_or_default()
             }
         }
     }
@@ -1061,7 +1054,6 @@ impl Modifier {
                 elements: Elements::One(element),
                 inspector: None,
             },
-            element_count: 1,
         }
     }
 
@@ -1075,17 +1067,14 @@ impl Modifier {
                 elements,
                 inspector,
             } => {
-                let new_inspector = inspector_slice(&inspector)
-                    .iter()
-                    .cloned()
-                    .chain(std::iter::once(metadata))
-                    .collect();
+                let mut list = inspector.as_deref().cloned().unwrap_or_default();
+                list.push(metadata);
+                let new_inspector = Rc::new(list);
                 Self {
                     kind: ModifierKind::Single {
                         elements,
                         inspector: Some(new_inspector),
                     },
-                    element_count: self.element_count,
                     provides_composition_locals: self.provides_composition_locals,
                 }
             }
@@ -1097,109 +1086,20 @@ impl Modifier {
     /// This ignores identity-sensitive modifier elements (e.g., draw closures) so
     /// draw-only updates do not force measure/layout invalidation.
     pub fn structural_eq(&self, other: &Self) -> bool {
-        self.eq_internal(other, false)
+        element_match::modifiers_match(self, other, ElementMatch::Structural)
     }
 
-    /// The update in place to `other`, when `other` has this modifier's
-    /// elements in the same order, equal except elements that
-    /// [`InPlaceReach::of`] accepts: how far it reaches, and the elements it
-    /// updates. `None` when another element differs, or the chain is too
-    /// long to name its elements; an element that asks for an update on
-    /// every set counts as different.
-    pub(crate) fn in_place_update(&self, other: &Self) -> Option<InPlaceUpdate> {
-        if self.element_count != other.element_count || self.element_count > u64::BITS as usize {
-            return None;
-        }
-        let mut update = InPlaceUpdate {
-            reach: InPlaceReach::Node,
-            elements: 0,
-        };
-        for (index, (a, b)) in self.iter_elements().zip(other.iter_elements()).enumerate() {
-            if a.requires_update() || b.requires_update() {
-                return None;
-            }
-            let element_type = a.element_type();
-            match InPlaceReach::of(element_type) {
-                // A text updates in place whether it changed or not.
-                Some(InPlaceReach::Node) if b.element_type() == element_type => {
-                    update.elements |= 1 << index;
-                }
-                Some(InPlaceReach::Resolved) if b.element_type() == element_type => {
-                    if !same_element(a, b) {
-                        update.reach = InPlaceReach::Resolved;
-                        update.elements |= 1 << index;
-                    }
-                }
-                _ => {
-                    if !same_element(a, b) {
-                        return None;
-                    }
-                }
-            }
-        }
-        Some(update)
-    }
-
-    fn eq_internal(&self, other: &Self, consider_always_update: bool) -> bool {
-        if self.element_count != other.element_count {
-            return false;
-        }
-
-        match (&self.kind, &other.kind) {
-            (ModifierKind::Empty, ModifierKind::Empty) => true,
-            (
-                ModifierKind::Single {
-                    elements: e1,
-                    inspector: _,
-                },
-                ModifierKind::Single {
-                    elements: e2,
-                    inspector: _,
-                },
-            ) => {
-                if e1.shares_storage(e2) {
-                    return true;
-                }
-
-                if e1.len() != e2.len() {
-                    return false;
-                }
-
-                for (a, b) in e1.iter().zip(e2.iter()) {
-                    // One element in both, as a kept chain shares them.
-                    if Rc::ptr_eq(a, b) {
-                        continue;
-                    }
-                    if !consider_always_update
-                        && a.element_type() == b.element_type()
-                        && a.capabilities() == NodeCapabilities::DRAW
-                        && b.capabilities() == NodeCapabilities::DRAW
-                    {
-                        continue;
-                    }
-
-                    if consider_always_update && (a.requires_update() || b.requires_update()) {
-                        if !Rc::ptr_eq(a, b) {
-                            return false;
-                        }
-                        continue;
-                    }
-
-                    if !a.equals_element(&**b) {
-                        return false;
-                    }
-                }
-
-                true
-            }
-            _ => false,
+    fn as_elements(&self) -> &[DynModifierElement] {
+        match &self.kind {
+            ModifierKind::Empty => &[],
+            ModifierKind::Single { elements, .. } => elements,
         }
     }
 }
 
 impl PartialEq for Modifier {
     fn eq(&self, other: &Self) -> bool {
-        self.eq_internal(other, true)
+        element_match::modifiers_match(self, other, ElementMatch::Equal)
     }
 }
 

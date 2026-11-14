@@ -1,3 +1,5 @@
+use std::ops::Range;
+
 use bytemuck::{Pod, Zeroable};
 
 use crate::ShapeRecord;
@@ -62,7 +64,7 @@ pub struct ShapeRecords {
     bodies: Vec<ShapeRecordBody>,
     curves: Vec<ShapeRecordCurve>,
     /// By record index.
-    sources: Vec<RecordSource>,
+    sources: crate::rare_list::RareList<RecordSource>,
 }
 
 impl ShapeRecords {
@@ -70,7 +72,7 @@ impl ShapeRecords {
         Self {
             bodies: Vec::with_capacity(capacity),
             curves: Vec::with_capacity(capacity),
-            sources: Vec::new(),
+            sources: crate::rare_list::RareList::default(),
         }
     }
 
@@ -138,11 +140,11 @@ impl ShapeRecords {
     pub(crate) fn heap_bytes(&self) -> usize {
         self.bodies.capacity() * size_of::<ShapeRecordBody>()
             + self.curves.capacity() * size_of::<ShapeRecordCurve>()
-            + self.sources.capacity() * size_of::<RecordSource>()
+            + self.sources.heap_bytes()
     }
 
     pub(crate) fn source_bytes(&self) -> &[u8] {
-        bytemuck::cast_slice(&self.sources)
+        bytemuck::cast_slice(&self.sources[..])
     }
 
     pub(crate) fn clear(&mut self) {
@@ -154,12 +156,60 @@ impl ShapeRecords {
     pub(crate) fn trim_growth(&mut self) {
         trim_growth(&mut self.bodies);
         trim_growth(&mut self.curves);
-        trim_growth(&mut self.sources);
+        if let Some(sources) = self.sources.storage_mut() {
+            trim_growth(sources);
+        }
     }
 
     pub(crate) fn reserve(&mut self, additional: usize) {
         self.bodies.reserve(additional);
         self.curves.reserve(additional);
+    }
+
+    // Drops the records from `len` on.
+    pub(crate) fn truncate(&mut self, len: usize) {
+        self.bodies.truncate(len);
+        self.curves.truncate(len);
+        if let Some(sources) = self.sources.storage_mut() {
+            let kept = sources.partition_point(|source| (source.index as usize) < len);
+            sources.truncate(kept);
+        }
+    }
+
+    // Keeps the records of `kept`, ascending ranges of record indexes that
+    // do not overlap, moved to the front in order, and drops the others.
+    pub(crate) fn keep(&mut self, kept: impl Iterator<Item = Range<usize>>) {
+        let Self {
+            bodies,
+            curves,
+            sources,
+        } = self;
+        let mut sources = sources.storage_mut();
+        let (mut to, mut source_from, mut source_to) = (0, 0, 0);
+        for range in kept {
+            bodies.copy_within(range.clone(), to);
+            curves.copy_within(range.clone(), to);
+            if let Some(sources) = sources.as_deref_mut() {
+                while let Some(&source) = sources.get(source_from)
+                    && (source.index as usize) < range.end
+                {
+                    if source.index as usize >= range.start {
+                        sources[source_to] = RecordSource {
+                            index: (source.index as usize - range.start + to) as u32,
+                            ..source
+                        };
+                        source_to += 1;
+                    }
+                    source_from += 1;
+                }
+            }
+            to += range.len();
+        }
+        bodies.truncate(to);
+        curves.truncate(to);
+        if let Some(sources) = sources {
+            sources.truncate(source_to);
+        }
     }
 
     pub(crate) fn push(

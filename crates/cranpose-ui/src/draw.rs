@@ -2,7 +2,7 @@ use std::rc::Rc;
 
 use cranpose_ui_graphics::{CommandRecording, DrawPrimitive, DrawScope, DrawScopeDefault};
 
-use crate::{modifier::Size, text::AppContextTextMeasurer};
+use crate::{BackgroundDraw, modifier::Size, text::AppContextTextMeasurer};
 
 /// A draw command records into a scope the CONSUMER provides, instead of
 /// returning a freshly allocated primitive vector. This is the boundary that
@@ -21,6 +21,31 @@ pub enum DrawCommand {
     WithContent(DrawCommandFn),
     /// Records drawing that appears in front of the node's content.
     Overlay(DrawCommandFn),
+    /// A background modifier's fill, behind the node's content.
+    Background(BackgroundDraw),
+}
+
+impl DrawCommand {
+    /// Records the command's drawing into `scope`: the whole command, its
+    /// content marker included.
+    pub fn draw(&self, scope: &mut DrawScopeDefault) {
+        match self {
+            Self::Behind(f) | Self::WithContent(f) | Self::Overlay(f) => f(scope),
+            Self::Background(background) => background.draw(scope),
+        }
+    }
+
+    // Whether `other` is the same command: the same closure, or a background
+    // that draws the same.
+    pub(crate) fn same_as(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Behind(a), Self::Behind(b))
+            | (Self::WithContent(a), Self::WithContent(b))
+            | (Self::Overlay(a), Self::Overlay(b)) => Rc::ptr_eq(a, b),
+            (Self::Background(a), Self::Background(b)) => a.same_as(b),
+            _ => false,
+        }
+    }
 }
 
 /// The scope every framework-run draw command records into: sized by the
@@ -61,13 +86,9 @@ pub fn execute_draw_commands(commands: &[DrawCommand], size: Size) -> Vec<DrawPr
     let mut primitives = Vec::new();
     let mut recording = CommandRecording::default();
     for command in commands {
-        match command {
-            DrawCommand::Behind(f) | DrawCommand::WithContent(f) | DrawCommand::Overlay(f) => {
-                let mut scope = command_draw_scope(size, &mut recording);
-                f(&mut scope);
-                primitives.extend(scope.into_primitives());
-            }
-        }
+        let mut scope = command_draw_scope(size, &mut recording);
+        command.draw(&mut scope);
+        primitives.extend(scope.into_primitives());
     }
     primitives
 }

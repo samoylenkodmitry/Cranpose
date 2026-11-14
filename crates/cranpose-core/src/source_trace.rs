@@ -132,6 +132,8 @@ fn record_composition(
         return None;
     }
     crate::with_current_composer_opt(|composer| {
+        // A body counts its runs on its scope, which it makes when its group
+        // has none yet.
         let scope = composer.current_recompose_scope()?;
         let counter = scope.inner.recompositions.get_or_init(|| {
             crate::thread_state::runtimes(|state| {
@@ -225,6 +227,12 @@ fn enter_source(
     )]
     composes: Composes,
 ) -> SourceScope {
+    // The count comes first: a scope it makes reads the stack for its trace.
+    #[cfg(all(feature = "inspection", debug_assertions))]
+    let recompositions = match composes {
+        Composes::InOwnScope => record_composition(name, file, line, manifest_dir),
+        Composes::InCallerScope => None,
+    };
     #[cfg(feature = "inspection")]
     let depth = crate::thread_state::runtimes(|state| {
         let mut stack = state.source_stack.borrow_mut();
@@ -235,10 +243,7 @@ fn enter_source(
             line,
             manifest_dir,
             #[cfg(debug_assertions)]
-            recompositions: match composes {
-                Composes::InOwnScope => record_composition(name, file, line, manifest_dir),
-                Composes::InCallerScope => None,
-            },
+            recompositions,
         });
         depth
     });

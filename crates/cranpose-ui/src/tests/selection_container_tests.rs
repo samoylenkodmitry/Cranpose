@@ -40,7 +40,7 @@ fn page_styled(texts: &[(&str, Rect)], style: TextStyle) -> Page {
             });
             registrar.update(
                 key,
-                Rc::new(AnnotatedString::from(*text)),
+                AnnotatedString::from(*text),
                 std::sync::Arc::new(style.clone()),
                 TextLayoutOptions::default(),
                 geometry,

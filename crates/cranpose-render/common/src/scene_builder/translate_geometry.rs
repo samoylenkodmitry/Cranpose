@@ -1,15 +1,16 @@
-use cranpose_core::{MemoryApplier, NodeId, collections::map::HashMap};
+use cranpose_core::{MemoryApplier, NodeId, RecordId, collections::map::HashMap};
 use cranpose_ui::{Point, Rect};
 use cranpose_ui_graphics::GraphicsLayer;
 
 use super::{
-    AbsOrigin, LowerContext, TranslateAncestorContext, inline_leaf::retext_kept_inline,
-    placed_transform, publish_retained_window_geometry, text_node, translate_layer::PlacedChild,
+    AbsOrigin, Inherited, LowerContext, TranslateAncestorContext, inline_leaf::retext_kept_inline,
+    placing_transform, publish_retained_window_geometry, text_node, translate_layer::PlacedChild,
 };
 use crate::{
     NodeUpdate,
-    graph::{LayerNode, ProjectiveTransform, RenderNode},
+    graph::ProjectiveTransform,
     layer_transform::layer_transform_to_window,
+    scene_store::{LayerRef, RecordKind, SceneStore},
 };
 
 #[derive(Clone, Copy)]
@@ -53,15 +54,16 @@ impl TranslateGeometry {
     // `ancestors`, take from it.
     pub(super) fn children_context(
         self,
-        container: &LayerNode,
+        container: LayerRef<'_>,
         ancestors: TranslateAncestorContext,
     ) -> TranslateAncestorContext {
         TranslateAncestorContext {
-            inherited_motion_context_animated: container.motion_context_animated,
-            update: ancestors.update,
-            inherited_translated_content_context: ancestors.inherited_translated_content_context
-                || container.translated_content_context,
-            parent_content_offset: self.content_offset,
+            inherited: Inherited {
+                motion_context_animated: container.motion_context_animated(),
+                translated_content_context: ancestors.inherited.translated_content_context
+                    || container.translated_content_context(),
+                parent_content_offset: self.content_offset,
+            },
             parent_abs: self.child_abs(),
         }
     }
@@ -75,17 +77,18 @@ impl TranslateGeometry {
 }
 
 pub(super) fn translate_retained_child(
-    layer: &mut LayerNode,
+    store: &mut SceneStore,
+    layer: RecordId,
     position: Point,
     content_offset: Point,
 ) {
-    layer.transform_to_parent = placed_transform(
-        layer.local_bounds,
+    let transform = placing_transform(
+        store.layer(layer).local_bounds(),
         position,
-        layer.graphics_layer.get(),
+        store.graphics_layer(layer),
         content_offset,
     );
-    layer.origin_in_parent = position;
+    store.set_placement(layer, position, transform);
 }
 
 // What a translated container does with the layer of a previous child it
@@ -110,27 +113,43 @@ pub(super) enum KeptChild {
 #[inline]
 pub(super) fn move_kept_child(
     applier: &MemoryApplier,
-    node: &mut RenderNode,
+    store: &mut SceneStore,
+    record: RecordId,
     placed: &PlacedChild,
     children: TranslateAncestorContext,
     dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
 ) {
     let position = placed.geometry.position;
-    match (placed.kept, node) {
-        (KeptChild::Left, _) | (_, RenderNode::Primitive(_) | RenderNode::DrawRun(_)) => {}
-        (KeptChild::Moved, RenderNode::Layer(layer)) => {
-            translate_retained_child(layer, position, children.parent_content_offset);
-            if layer.has_origin_sinks {
-                publish_retained_window_geometry(applier, layer, children.parent_abs);
-            }
+    match placed.kept {
+        KeptChild::Left => {}
+        KeptChild::Moved if store.layer(record).kind() == RecordKind::Leaf => {
+            store.move_leaf(record, position);
         }
-        (KeptChild::Moved, RenderNode::Inline(inline)) => {
-            let offset = children.parent_content_offset;
-            inline.origin = Point::new(position.x + offset.x, position.y + offset.y);
+        KeptChild::Moved => move_kept_layer(applier, store, record, position, children),
+        KeptChild::Retexted => {
+            write_kept_label(applier, store, record, placed, children, dirty_nodes);
         }
-        (KeptChild::Retexted, node) => {
-            write_kept_label(applier, node, placed, children, dirty_nodes);
-        }
+    }
+}
+
+// Moves `record`, a layer the step keeps, to `position`; a subtree that
+// publishes window origins publishes them again from there.
+#[inline(never)]
+fn move_kept_layer(
+    applier: &MemoryApplier,
+    store: &mut SceneStore,
+    record: RecordId,
+    position: Point,
+    children: TranslateAncestorContext,
+) {
+    translate_retained_child(
+        store,
+        record,
+        position,
+        children.inherited.parent_content_offset,
+    );
+    if store.layer(record).has_origin_sinks() {
+        publish_retained_window_geometry(applier, store.layer(record), children.parent_abs);
     }
 }
 
@@ -139,19 +158,19 @@ pub(super) fn move_kept_child(
 #[inline(never)]
 fn write_kept_label(
     applier: &MemoryApplier,
-    node: &mut RenderNode,
+    store: &mut SceneStore,
+    record: RecordId,
     placed: &PlacedChild,
     children: TranslateAncestorContext,
     dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
 ) {
-    let written = match node {
-        RenderNode::Layer(layer) => {
-            text_node::retext_kept_leaf(applier, layer, children) == Some(true)
+    let written = match store.layer(record).kind() {
+        RecordKind::Leaf => {
+            retext_kept_inline(applier, store, record, LowerContext::beneath(children))
         }
-        RenderNode::Inline(inline) => {
-            retext_kept_inline(applier, inline, LowerContext::beneath(children))
+        RecordKind::Layer | RecordKind::Wrapper | RecordKind::DrawGroup => {
+            text_node::retext_kept_leaf(applier, store, record, children) == Some(true)
         }
-        RenderNode::Primitive(_) | RenderNode::DrawRun(_) => false,
     };
     if written {
         dirty_nodes.remove(&placed.id);

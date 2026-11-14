@@ -2,8 +2,9 @@
 // the layer's content context.
 
 use cranpose_render_common::{
-    graph::{DrawRunNode, PrimitiveEntry, PrimitiveNode, RenderNode},
+    graph::{DrawPrimitiveNode, DrawRunNode, TextPrimitiveNode},
     primitive_emit::{PrimitiveClipSpace, resolve_primitive_clip},
+    scene_store::{ItemRef, ShapeRef},
 };
 use cranpose_ui_graphics::{Point, RecordLane};
 
@@ -15,15 +16,17 @@ use crate::{
     },
 };
 
-pub(super) fn push_content(out: &mut LayerScene, node: &RenderNode, content: &ContentContext<'_>) {
+pub(super) fn push_content(out: &mut LayerScene, node: ItemRef<'_>, content: &ContentContext<'_>) {
     match node {
-        RenderNode::Primitive(entry) => push_primitive(out, entry, content),
-        RenderNode::DrawRun(run) => push_draw_run(out, run, content),
-        RenderNode::Layer(_) | RenderNode::Inline(_) => {}
+        ItemRef::Draw(draw) => push_draw(out, draw, content),
+        ItemRef::Text(text) => push_text(out, text, content),
+        ItemRef::Run(run) => push_draw_run(out, run, content),
+        ItemRef::Shape(shape) => push_shapes(out, shape, content),
+        ItemRef::Layer(_) | ItemRef::Leaf(_) => {}
     }
 }
 
-fn push_primitive(out: &mut LayerScene, entry: &PrimitiveEntry, content: &ContentContext<'_>) {
+fn push_draw(out: &mut LayerScene, draw: &DrawPrimitiveNode, content: &ContentContext<'_>) {
     let ContentContext {
         layer_bounds,
         local_layer,
@@ -32,81 +35,100 @@ fn push_primitive(out: &mut LayerScene, entry: &PrimitiveEntry, content: &Conten
         anchor: snap_anchor,
         ..
     } = *content;
-    match &entry.node {
-        PrimitiveNode::Draw(draw) => {
-            let counts = scene_counts(&out.scene);
-            let clip = resolve_primitive_clip(
-                draw.clip,
-                layer_bounds,
-                local_layer,
-                visual_clip,
-                PrimitiveClipSpace::Local,
-            );
-            if clip.is_some_and(|clip| clip.is_empty()) {
-                return;
-            }
-            push_draw_primitive(
-                &draw.primitive,
-                &ContentContext {
-                    visual_clip: clip,
-                    rounding: rounding.filter(|_| clip == visual_clip),
-                    ..*content
-                },
-                &mut out.scene,
-                None,
-            );
-            assign_snap_anchor_since(&mut out.scene, counts, snap_anchor);
-        }
-        PrimitiveNode::Text(text) => {
-            let text_rect = text.rect.translate(layer_bounds.x, layer_bounds.y);
-            let text_clip = resolve_primitive_clip(
-                text.clip,
-                layer_bounds,
-                local_layer,
-                visual_clip,
-                PrimitiveClipSpace::Local,
-            );
-            if text_clip.is_some_and(|clip| clip.is_empty()) {
-                return;
-            }
-            push_text_style_draws(
-                &mut out.scene,
-                text,
-                TextPlacement {
-                    bounds: layer_bounds,
-                    text_rect,
-                    layer: local_layer,
-                    clip: text_clip,
-                    snap_anchor,
-                },
-            );
-        }
+    let counts = scene_counts(&out.scene);
+    let clip = resolve_primitive_clip(
+        draw.clip,
+        layer_bounds,
+        local_layer,
+        visual_clip,
+        PrimitiveClipSpace::Local,
+    );
+    if clip.is_some_and(|clip| clip.is_empty()) {
+        return;
     }
+    push_draw_primitive(
+        &draw.primitive,
+        &ContentContext {
+            visual_clip: clip,
+            rounding: rounding.filter(|_| clip == visual_clip),
+            ..*content
+        },
+        &mut out.scene,
+        None,
+    );
+    assign_snap_anchor_since(&mut out.scene, counts, snap_anchor);
+}
+
+fn push_text(out: &mut LayerScene, text: &TextPrimitiveNode, content: &ContentContext<'_>) {
+    let ContentContext {
+        layer_bounds,
+        local_layer,
+        visual_clip,
+        anchor: snap_anchor,
+        ..
+    } = *content;
+    let text_rect = text.rect.translate(layer_bounds.x, layer_bounds.y);
+    let text_clip = resolve_primitive_clip(
+        text.clip,
+        layer_bounds,
+        local_layer,
+        visual_clip,
+        PrimitiveClipSpace::Local,
+    );
+    if text_clip.is_some_and(|clip| clip.is_empty()) {
+        return;
+    }
+    push_text_style_draws(
+        &mut out.scene,
+        text,
+        TextPlacement {
+            bounds: layer_bounds,
+            text_rect,
+            layer: local_layer,
+            clip: text_clip,
+            snap_anchor,
+        },
+    );
 }
 
 /// Places a recorded run: every maximal stretch of shape segments becomes
 /// one run draw under the layer's placement, and the primitives of the
 /// other lane (text, images, shadows) take their own item paths between
 /// them, in the order the command drew.
-fn push_draw_run(out: &mut LayerScene, run: &DrawRunNode, content: &ContentContext<'_>) {
-    if !run.summary.has_shapes && !run.summary.has_others {
-        return;
-    }
+// Where a run of the layer's content draws: at the layer's origin, painted
+// by its layer and cut by its visual clip.
+fn run_placement(content: &ContentContext<'_>) -> RunPlacement {
     let ContentContext {
         layer_bounds,
         local_layer,
         visual_clip,
         rounding,
-        anchor: snap_anchor,
+        anchor,
         ..
     } = *content;
-    let placement = RunPlacement::painted(
+    RunPlacement::painted(
         Point::new(layer_bounds.x, layer_bounds.y),
-        snap_anchor,
+        anchor,
         visual_clip,
         local_layer,
     )
-    .with_rounding(rounding);
+    .with_rounding(rounding)
+}
+
+// Places a shape item: its shapes draw as one run of the chunk they sit in.
+fn push_shapes(out: &mut LayerScene, shape: ShapeRef<'_>, content: &ContentContext<'_>) {
+    if shape.shape_count() > 0 {
+        out.scene
+            .push_run(RunDraw::of_shapes(shape, run_placement(content)));
+    }
+}
+
+fn push_draw_run(out: &mut LayerScene, run: &DrawRunNode, content: &ContentContext<'_>) {
+    if !run.summary.has_shapes && !run.summary.has_others {
+        return;
+    }
+    let snap_anchor = content.anchor;
+    let placement = run_placement(content);
     let recording = &*run.recording;
     // A run of shapes alone draws as one run, read without its segments.
     if run.summary.shapes_only() {

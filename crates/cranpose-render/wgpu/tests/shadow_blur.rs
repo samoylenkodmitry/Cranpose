@@ -3,12 +3,12 @@ use cranpose_render_common::{
     geometry::blur_reach_px,
     graph::{
         DrawPrimitiveNode, DrawRunNode, LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase,
-        ProjectiveTransform, RenderGraph, RenderNode,
+        ProjectiveTransform, RenderNode,
     },
 };
 use cranpose_render_wgpu::CapturedFrame;
 use cranpose_ui_graphics::{
-    BlendMode, Brush, Color, DrawPrimitive, GraphicsLayer, Rect, ShadowPrimitive,
+    BlendMode, Brush, Color, DrawPrimitive, GraphicsLayer, Rect, ShadowPrimitive, Size,
 };
 use support::{ReferenceEdge, region_pixels, solid_rect};
 
@@ -41,7 +41,7 @@ fn caster() -> DrawPrimitive {
     }
 }
 
-fn disjoint_inner_shadow_graph(recorded: bool, include_shadow: bool) -> RenderGraph {
+fn disjoint_inner_shadow_graph(recorded: bool, include_shadow: bool) -> LayerNode {
     let mut content = Vec::new();
     if include_shadow {
         let shape = |bounds, color| {
@@ -77,7 +77,7 @@ fn disjoint_inner_shadow_graph(recorded: bool, include_shadow: bool) -> RenderGr
         }
     }
     let clipped_layer = LayerNode {
-        local_bounds: rect(0.0, 0.0, 40.0, FRAME as f32),
+        size: Size::new(40.0, FRAME as f32),
         transform_to_parent: ProjectiveTransform::identity(),
         graphics_layer: GraphicsLayer {
             clip: true,
@@ -97,7 +97,7 @@ fn disjoint_inner_shadow_graph(recorded: bool, include_shadow: bool) -> RenderGr
     )
 }
 
-fn clipped_offscreen_shadow_graph(recorded: bool) -> RenderGraph {
+fn clipped_offscreen_shadow_graph(recorded: bool) -> LayerNode {
     let shadow = DrawPrimitive::Shadow(ShadowPrimitive::Drop {
         shape: Box::new(DrawPrimitive::Rect {
             rect: rect(0.0, 0.0, 20.0, 20.0),
@@ -123,13 +123,13 @@ fn clipped_offscreen_shadow_graph(recorded: bool) -> RenderGraph {
         })
     };
     let child = LayerNode {
-        local_bounds: rect(0.0, 0.0, 20.0, 20.0),
+        size: Size::new(20.0, 20.0),
         transform_to_parent: ProjectiveTransform::translation(52.0, 25.0),
         children: vec![draw],
         ..LayerNode::default()
     };
     let clipped_parent = LayerNode {
-        local_bounds: rect(0.0, 0.0, 50.0, FRAME as f32),
+        size: Size::new(50.0, FRAME as f32),
         graphics_layer: GraphicsLayer {
             clip: true,
             ..GraphicsLayer::default()
@@ -157,13 +157,13 @@ fn disjoint_inner_shadow_clip_does_not_turn_unbounded_through_blend_wrappers() {
     for recorded in [false, true] {
         let actual = support::capture_graph(
             &mut renderer,
-            disjoint_inner_shadow_graph(recorded, true),
+            &disjoint_inner_shadow_graph(recorded, true),
             FRAME,
             FRAME,
         );
         let expected = support::capture_graph(
             &mut renderer,
-            disjoint_inner_shadow_graph(recorded, false),
+            &disjoint_inner_shadow_graph(recorded, false),
             FRAME,
             FRAME,
         );
@@ -188,13 +188,13 @@ fn recorded_drop_shadow_reaches_into_parent_clip_from_offscreen_caster() {
     };
     let loose = support::capture_graph(
         &mut renderer,
-        clipped_offscreen_shadow_graph(false),
+        &clipped_offscreen_shadow_graph(false),
         FRAME,
         FRAME,
     );
     let recorded = support::capture_graph(
         &mut renderer,
-        clipped_offscreen_shadow_graph(true),
+        &clipped_offscreen_shadow_graph(true),
         FRAME,
         FRAME,
     );
@@ -258,7 +258,7 @@ fn changing_shadow_casters_and_cutouts_preserves_the_painted_region() {
             };
             let actual = support::capture_graph(
                 &mut renderer,
-                support::page_graph(
+                &support::page_graph(
                     FRAME,
                     FRAME,
                     vec![
@@ -297,7 +297,7 @@ fn changing_shadow_casters_and_cutouts_preserves_the_painted_region() {
             );
             let reference = support::capture_graph(
                 &mut renderer,
-                support::page_graph(FRAME, FRAME, reference),
+                &support::page_graph(FRAME, FRAME, reference),
                 FRAME,
                 FRAME,
             );
@@ -316,7 +316,7 @@ fn changing_shadow_casters_and_cutouts_preserves_the_painted_region() {
 
 /// A page with one black drop shadow of `CASTER` and no caster drawn over
 /// it, so the whole blurred shape shows; `cutout` clears the shape itself.
-fn page(radius: Option<f32>, cutout: bool) -> RenderGraph {
+fn page(radius: Option<f32>, cutout: bool) -> LayerNode {
     let mut children = vec![solid_rect(
         rect(0.0, 0.0, FRAME as f32, FRAME as f32),
         BACKGROUND,
@@ -403,7 +403,8 @@ fn a_wide_drop_shadow_matches_its_kernel_within_the_downscale_budget() {
         eprintln!("skipping (headless WGPU init failed)");
         return;
     };
-    let frame = support::capture_graph(&mut renderer, page(Some(WIDE_RADIUS), false), FRAME, FRAME);
+    let frame =
+        support::capture_graph(&mut renderer, &page(Some(WIDE_RADIUS), false), FRAME, FRAME);
     let (worst, at) = worst_deviation(
         &frame,
         &reference_alpha(WIDE_RADIUS),
@@ -423,8 +424,8 @@ fn a_wide_drop_shadow_with_a_cutout_is_clear_under_its_caster_and_blurred_around
         eprintln!("skipping (headless WGPU init failed)");
         return;
     };
-    let frame = support::capture_graph(&mut renderer, page(Some(WIDE_RADIUS), true), FRAME, FRAME);
-    let plain = support::capture_graph(&mut renderer, page(None, false), FRAME, FRAME);
+    let frame = support::capture_graph(&mut renderer, &page(Some(WIDE_RADIUS), true), FRAME, FRAME);
+    let plain = support::capture_graph(&mut renderer, &page(None, false), FRAME, FRAME);
     let interior = rect(
         CASTER.x + 1.0,
         CASTER.y + 1.0,
@@ -461,7 +462,7 @@ fn a_wide_drop_shadow_blurs_at_the_scratch_size() {
         return;
     };
     let pass_pixels = |renderer: &mut support::LockedRenderer, radius: Option<f32>, cutout| {
-        support::capture_graph(renderer, page(radius, cutout), FRAME, FRAME);
+        support::capture_graph(renderer, &page(radius, cutout), FRAME, FRAME);
         renderer.last_frame_stats().expect("stats").pass_pixels
     };
     let none = pass_pixels(&mut renderer, None, false);
@@ -488,7 +489,9 @@ fn a_shadow_surface_ends_where_its_kernel_does() {
         eprintln!("skipping (headless WGPU init failed)");
         return;
     };
-    renderer.scene_mut().graph = Some(page(Some(WIDE_RADIUS), false));
+    renderer
+        .scene_mut()
+        .describe(&page(Some(WIDE_RADIUS), false));
     let stats = renderer
         .render_current_scene_to_texture(FRAME, FRAME)
         .expect("render should succeed");
@@ -501,9 +504,10 @@ fn a_shadow_surface_ends_where_its_kernel_does() {
     );
     assert_eq!(blur_reach_px(WIDE_RADIUS), reach);
 
-    let frame = support::capture_graph(&mut renderer, page(Some(WIDE_RADIUS), false), FRAME, FRAME);
+    let frame =
+        support::capture_graph(&mut renderer, &page(Some(WIDE_RADIUS), false), FRAME, FRAME);
     let background = region_pixels(
-        &support::capture_graph(&mut renderer, page(None, false), FRAME, FRAME),
+        &support::capture_graph(&mut renderer, &page(None, false), FRAME, FRAME),
         rect(0.0, 0.0, 1.0, 1.0),
     );
     let outer = reach + 1.0;

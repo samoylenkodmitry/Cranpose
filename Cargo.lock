@@ -1548,6 +1548,7 @@ dependencies = [
  "bytemuck",
  "cranpose-core",
  "cranpose-foundation",
+ "cranpose-render-common",
  "cranpose-text",
  "cranpose-ui",
  "cranpose-ui-graphics",
@@ -1585,6 +1586,7 @@ dependencies = [
  "cranpose-liquid",
  "cranpose-macros",
  "cranpose-render-common",
+ "cranpose-render-wgpu",
  "cranpose-shader-passes",
  "cranpose-text",
  "cranpose-ui",
@@ -1739,7 +1741,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-wgpu"
-version = "30.0.26"
+version = "30.0.27"
 dependencies = [
  "arrayvec",
  "bitflags 2.13.2",
@@ -1767,7 +1769,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-wgpu-core"
-version = "30.0.23"
+version = "30.0.24"
 dependencies = [
  "arrayvec",
  "bit-set 0.10.0",
@@ -1828,7 +1830,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-wgpu-hal"
-version = "30.0.21"
+version = "30.0.22"
 dependencies = [
  "android_system_properties",
  "arrayvec",

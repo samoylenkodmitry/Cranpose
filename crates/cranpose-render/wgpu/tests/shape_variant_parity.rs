@@ -1,6 +1,6 @@
 use cranpose_render_common::graph::{
     DrawPrimitiveNode, DrawRunNode, LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase,
-    RenderGraph, RenderNode,
+    RenderNode,
 };
 use cranpose_ui_graphics::{CommandRecording, DrawScope, DrawScopeDefault, Rect};
 use support::{
@@ -10,7 +10,7 @@ use support::{
 
 use crate::support;
 
-fn graph_for(record: fn(&mut DrawScopeDefault), clip: Option<Rect>) -> RenderGraph {
+fn graph_for(record: fn(&mut DrawScopeDefault), clip: Option<Rect>) -> LayerNode {
     let mut recording = CommandRecording::default();
     let mut scope = DrawScopeDefault::new(
         cranpose_ui_graphics::Size::new(SIZE as f32, SIZE as f32),
@@ -42,11 +42,12 @@ fn graph_for(record: fn(&mut DrawScopeDefault), clip: Option<Rect>) -> RenderGra
             primitives,
         ))],
     };
-    RenderGraph::new(LayerNode {
-        local_bounds: bounds,
+    LayerNode {
+        size: bounds.size(),
+        layer_bounds: Some(bounds),
         children,
         ..LayerNode::default()
-    })
+    }
 }
 
 const TOGGLE: &str = "CRANPOSE_SHAPE_VARIANTS";
@@ -54,13 +55,13 @@ const ABLATE: &str = "CRANPOSE_ABLATE";
 const MAX_DIVERGING_BYTES: usize = 16;
 const MAX_DIVERGING_LEVEL: u8 = 2;
 
-fn assert_variants_match_general(name: &str, graph: RenderGraph) {
+fn assert_variants_match_general(name: &str, graph: &LayerNode) {
     assert_variants_match_general_under(name, graph, None, 8);
 }
 
 fn assert_variants_match_general_under(
     name: &str,
-    graph: RenderGraph,
+    graph: &LayerNode,
     switch: Option<&str>,
     min_colors: usize,
 ) {
@@ -73,9 +74,9 @@ fn assert_variants_match_general_under(
     };
     cranpose_core::debug_toggles::set_debug_toggle(ABLATE, switch);
     cranpose_core::debug_toggles::set_debug_toggle(TOGGLE, None);
-    let specialized = support::settled_capture(&mut renderer, &graph);
+    let specialized = support::settled_capture(&mut renderer, graph);
     cranpose_core::debug_toggles::set_debug_toggle(TOGGLE, Some("0"));
-    let general = support::settled_capture(&mut renderer, &graph);
+    let general = support::settled_capture(&mut renderer, graph);
     cranpose_core::debug_toggles::set_debug_toggle(TOGGLE, None);
     cranpose_core::debug_toggles::set_debug_toggle(ABLATE, None);
 
@@ -105,12 +106,12 @@ fn assert_variants_match_general_under(
 
 #[test]
 fn solid_batches_shade_as_the_general_pipeline_does() {
-    assert_variants_match_general("solid", graph_for(record_solid_scene, None));
+    assert_variants_match_general("solid", &graph_for(record_solid_scene, None));
 }
 
 #[test]
 fn solid_fill_batches_shade_as_the_general_pipeline_does() {
-    assert_variants_match_general("solid fill", graph_for(record_solid_fill_scene, None));
+    assert_variants_match_general("solid fill", &graph_for(record_solid_fill_scene, None));
 }
 
 #[test]
@@ -123,13 +124,13 @@ fn clipped_solid_fill_batches_shade_as_the_general_pipeline_does() {
     };
     assert_variants_match_general(
         "clipped solid fill",
-        graph_for(record_solid_fill_scene, Some(clip)),
+        &graph_for(record_solid_fill_scene, Some(clip)),
     );
 }
 
 #[test]
 fn gradient_and_stroke_batches_shade_as_the_general_pipeline_does() {
-    assert_variants_match_general("mixed", graph_for(record_mixed_scene, None));
+    assert_variants_match_general("mixed", &graph_for(record_mixed_scene, None));
 }
 
 #[test]
@@ -140,12 +141,15 @@ fn clipped_batches_shade_as_the_general_pipeline_does() {
         width: 200.0,
         height: 190.0,
     };
-    assert_variants_match_general("clipped", graph_for(record_mixed_scene, Some(clip)));
+    assert_variants_match_general("clipped", &graph_for(record_mixed_scene, Some(clip)));
 }
 
 #[test]
 fn gradient_fill_batches_shade_as_the_general_pipeline_does() {
-    assert_variants_match_general("gradient fill", graph_for(record_gradient_fill_scene, None));
+    assert_variants_match_general(
+        "gradient fill",
+        &graph_for(record_gradient_fill_scene, None),
+    );
 }
 
 #[test]
@@ -158,7 +162,7 @@ fn clipped_gradient_fill_batches_shade_as_the_general_pipeline_does() {
     };
     assert_variants_match_general(
         "clipped gradient fill",
-        graph_for(record_gradient_fill_scene, Some(clip)),
+        &graph_for(record_gradient_fill_scene, Some(clip)),
     );
 }
 
@@ -166,7 +170,7 @@ fn clipped_gradient_fill_batches_shade_as_the_general_pipeline_does() {
 fn gradient_fill_batches_under_the_material_switch_shade_as_the_general_pipeline_does() {
     assert_variants_match_general_under(
         "gradient fill under shape",
-        graph_for(record_gradient_fill_scene, None),
+        &graph_for(record_gradient_fill_scene, None),
         Some("shape"),
         1,
     );

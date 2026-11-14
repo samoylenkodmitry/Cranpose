@@ -1,6 +1,7 @@
 mod buffer_uploads;
 pub(crate) mod fence_profile;
 mod mapped_pool;
+pub(crate) mod pass_timing;
 #[cfg(any(target_arch = "wasm32", test))]
 pub(crate) mod submit_nothing;
 
@@ -8,12 +9,12 @@ use std::fmt;
 
 use buffer_uploads::{BeforePassWriter, BufferUploads};
 pub(crate) use mapped_pool::{MapRequests, MappedBuffers, MappedPool, take_largest_fitting};
+use pass_timing::{GpuPassTimingReport, PassTimer};
 use web_time::Instant;
 
 use crate::{
     idle_pool::{IdlePool, RecentPeak},
     offscreen::OffscreenTarget,
-    pass_timing::{GpuPassTimingReport, PassTimer},
 };
 
 #[derive(Default)]
@@ -555,25 +556,13 @@ impl WgpuFrameGraphExecutor {
     }
 
     pub(crate) fn init_pass_timing(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
-        if crate::pass_timing::pass_timing_requested() {
-            self.pass_timer = PassTimer::for_device(device, queue);
-        }
+        self.pass_timer = PassTimer::for_device(device, queue);
     }
 
     pub(crate) fn end_pass_timing_frame(&self, device: &wgpu::Device, queue: &wgpu::Queue) {
-        let Some(timer) = &self.pass_timer else {
-            return;
-        };
-        let _ = device.poll(wgpu::PollType::Poll);
-        timer.harvest_completed();
-        if timer.has_completed_queries() {
-            let mut encoder =
-                Self::create_command_encoder(device, Some("Pass Timing Resolve Encoder"));
-            timer.resolve_completed_queries(&mut encoder);
-            Self::submit(queue, encoder, None);
-            timer.map_resolved_queries();
+        if let Some(timer) = &self.pass_timer {
+            timer.end_frame(device, queue);
         }
-        timer.finish_frame();
     }
 
     pub(crate) fn pass_timing_report(&self) -> GpuPassTimingReport {
@@ -1100,7 +1089,7 @@ impl FrameCommandRecorder for PassContext<'_> {
             let bucket = fence_profile::bucket_label(descriptor);
             fence_profile::split(self.device, self.encoder, Some(&bucket));
         }
-        crate::pass_timing::begin_timed_render_pass(self.pass_timer, self.encoder, descriptor)
+        pass_timing::begin_timed_render_pass(self.pass_timer, self.encoder, descriptor)
     }
 
     fn begin_compute_pass(&mut self, label: &'static str) -> wgpu::ComputePass<'_> {
@@ -1324,7 +1313,7 @@ impl FrameCommandRecorder for WgpuFrameEncoder<'_> {
         &mut self,
         descriptor: &wgpu::RenderPassDescriptor<'_>,
     ) -> wgpu::RenderPass<'_> {
-        crate::pass_timing::begin_timed_render_pass(self.pass_timer, &mut self.encoder, descriptor)
+        pass_timing::begin_timed_render_pass(self.pass_timer, &mut self.encoder, descriptor)
     }
 
     fn begin_compute_pass(&mut self, label: &'static str) -> wgpu::ComputePass<'_> {
@@ -1602,7 +1591,7 @@ impl UploadAllocatorSpec {
     }
 }
 
-const MIN_UPLOAD_BUFFER_BYTES: u64 = 64 * 1024;
+pub(crate) const MIN_UPLOAD_BUFFER_BYTES: u64 = 64 * 1024;
 
 /// Where an upload lands in a ring: at an offset of the ring's current
 /// buffer, or at the start of a larger buffer the ring opens for it.
@@ -2035,18 +2024,16 @@ pub(crate) fn create_filled_buffer(
     usage: wgpu::BufferUsages,
     contents: &[u8],
 ) -> wgpu::Buffer {
-    use wgpu::util::DeviceExt;
-    if mode == UploadMode::Copied {
-        return device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some(label),
-            contents,
-            usage,
-        });
-    }
+    // A buffer mapped at its creation with no CPU-writable usage is filled
+    // through a staging buffer of wgpu's own.
+    let usage = match mode {
+        UploadMode::Copied => usage,
+        UploadMode::Mapped => mode.writable(usage),
+    };
     let buffer = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some(label),
         size: align_u64_to(contents.len().max(1) as u64, wgpu::COPY_BUFFER_ALIGNMENT),
-        usage: mode.writable(usage),
+        usage,
         mapped_at_creation: true,
     });
     write_mapped(&buffer, 0, contents);
@@ -2061,10 +2048,12 @@ pub(crate) fn write_mapped(buffer: &wgpu::Buffer, offset: u64, bytes: &[u8]) -> 
         return FrameCommandStats::default();
     }
     let span = align_u64_to(bytes.len() as u64, wgpu::COPY_BUFFER_ALIGNMENT);
-    let mut view = buffer
-        .slice(offset..offset + span)
-        .get_mapped_range_mut()
-        .expect("a mapped ring's buffer stays mapped until its frame is finished");
+    // A device lost while a frame records leaves its new buffers invalid and
+    // unmapped. The loss replaces the device before the next frame.
+    let Ok(mut view) = buffer.slice(offset..offset + span).get_mapped_range_mut() else {
+        log::debug!("[gpu-device] a buffer of a lost device has no mapped range");
+        return FrameCommandStats::default();
+    };
     view.slice(..bytes.len()).copy_from_slice(bytes);
     view.slice(bytes.len()..).fill(0);
     FrameCommandStats {
@@ -2267,7 +2256,7 @@ impl FrameUploadAllocators {
         }
     }
 
-    /// Asks the frame's buffers back after its submit.
+    // Asks the frame's buffers back after its submit.
     pub(crate) fn recall(&mut self) {
         self.buffers.recall();
         for ring in self.rings.iter_mut().flatten() {

@@ -1,10 +1,9 @@
 use std::{
-    any::TypeId,
     cell::{Cell, RefCell},
     rc::Rc,
 };
 
-use cranpose_core::{Node, NodeId, NodeIdCell};
+use cranpose_core::{NodeId, NodeIdCell};
 use cranpose_foundation::{
     InvalidationKind, ModifierInvalidation, ModifierInvalidations, NodeCapabilities,
     SemanticsConfiguration,
@@ -12,8 +11,8 @@ use cranpose_foundation::{
 use cranpose_ui_layout::MeasurePolicy;
 
 use super::layout_invalidation_diag::log_layout_invalidation_dispatch;
-#[cfg(test)]
-use crate::layout::LayoutRuntimeDebugStats;
+
+mod tree_node;
 use crate::{
     layout::LayoutRuntimeState,
     modifier::{
@@ -41,12 +40,9 @@ pub struct LayoutNode {
     // The actual children of this node (folded view - includes virtual nodes as-is)
     pub(crate) children: Vec<NodeId>,
 
-    // Policy that measures and places the children of this node. Change it through
-    // `set_measure_policy` so that a measure is scheduled.
-    pub(crate) measure_policy: Rc<dyn MeasurePolicy>,
     /// Where the chain's layout modifiers put their content, written by
     /// layout and read by the draws and text the slices collect.
-    density: crate::density::Density,
+    density: Rc<crate::density::Density>,
     is_virtual: bool,
     needs_semantics: Cell<bool>,
     /// The semantics tree has to read this node again, though its own
@@ -69,10 +65,9 @@ pub struct LayoutNode {
     /// invalidated, the two ways its semantics change.
     semantics_reach: Cell<Option<cranpose_foundation::SemanticsReach>>,
     owner_context_id: Cell<Option<crate::render_state::AppContextId>>,
+    // The node's modifier nodes, with the elements of the modifier last set:
+    // the node keeps no modifier of its own.
     modifier_chain: ModifierChainHandle,
-    // The modifier of this node. Change it through `set_modifier` so that the modifier chain
-    // updates.
-    pub(crate) modifier: Modifier,
     /// Composable definitions responsible for this node, captured only for inspection builds.
     #[cfg(feature = "inspection")]
     pub source_trace: Rc<[cranpose_core::source_trace::SourceLocation]>,
@@ -100,21 +95,20 @@ impl LayoutNode {
         Self::new_with_virtual(Modifier::empty(), empty_measure_policy(), true)
     }
 
+    // A node that waits in a recycle pool for the node that takes its place
+    // whole. It holds no parts of its own and no chain: the shells of a
+    // thread share one clean, empty block of parts.
     fn new_recycled_shell(is_virtual: bool) -> Self {
-        let mut shell =
-            Self::new_with_virtual(Modifier::empty(), empty_measure_policy(), is_virtual);
-        shell.parts.cache().set_dirt(LayoutDirt::CLEAN);
+        let parts = crate::thread_state::with(|state| {
+            Rc::clone(state.shell_parts.get_or_init(|| {
+                let parts = Rc::new(LayoutParts::empty());
+                parts.cache().set_dirt(LayoutDirt::CLEAN);
+                parts
+            }))
+        });
+        let shell = Self::without_modifier(parts, is_virtual);
         shell.needs_semantics.set(false);
-        shell.descendant_needs_semantics.set(false);
         shell.needs_redraw.set(false);
-        shell.needs_pointer_pass.set(false);
-        shell.needs_focus_sync.set(false);
-        shell.parent.set(None);
-        shell.folded_parent.set(None);
-        shell.id.set(None);
-        shell.owner_context_id.set(None);
-        shell.debug_modifiers.set(false);
-        shell.modifier_slices_dirty = Cell::new(true);
         shell
     }
 
@@ -123,16 +117,19 @@ impl LayoutNode {
         measure_policy: Rc<dyn MeasurePolicy>,
         is_virtual: bool,
     ) -> Self {
-        let parts = Rc::new(LayoutParts::new(LayoutRuntimeState::new(Rc::clone(
-            &measure_policy,
-        ))));
-        let mut node = Self {
+        let parts = Rc::new(LayoutParts::new(LayoutRuntimeState::new(measure_policy)));
+        let mut node = Self::without_modifier(parts, is_virtual);
+        node.sync_modifier_chain(&modifier, None);
+        node
+    }
+
+    // A node with `parts` whose chain no modifier has reached yet.
+    fn without_modifier(parts: Rc<LayoutParts>, is_virtual: bool) -> Self {
+        Self {
             #[cfg(feature = "inspection")]
             source_trace: cranpose_core::source_trace::current_source_trace(),
-            modifier,
             modifier_chain: ModifierChainHandle::detached(),
-            measure_policy,
-            density: crate::density::Density::default(),
+            density: crate::density::shared_density(crate::density::Density::default()),
             children: Vec::new(),
             needs_semantics: Cell::new(true),
             descendant_needs_semantics: Cell::new(false),
@@ -149,9 +146,7 @@ impl LayoutNode {
             modifier_slices_snapshot: crate::modifier::SlicesSnapshot::default(),
             modifier_slices_dirty: Cell::new(true),
             parts,
-        };
-        node.sync_modifier_chain(None);
-        node
+        }
     }
 
     /// The node's children, in the order they were inserted, virtual nodes as they are.
@@ -161,7 +156,7 @@ impl LayoutNode {
 
     /// Returns the modifier that was last set on this node.
     pub fn modifier(&self) -> Modifier {
-        self.modifier.clone()
+        self.modifier_chain.modifier()
     }
 
     /// Replaces the node's modifier and updates its modifier chain, invalidating the work that the
@@ -177,7 +172,8 @@ impl LayoutNode {
         // An equal modifier leaves every element's node as it was. Only a
         // chain reading modifier locals resyncs, since its parent may now
         // provide others.
-        if self.modifier == modifier
+        let matched = self.modifier_chain.match_for_set(&modifier);
+        if matched.equal
             && !self
                 .modifier_capabilities()
                 .contains(NodeCapabilities::MODIFIER_LOCALS)
@@ -186,20 +182,36 @@ impl LayoutNode {
         }
         // A change only in elements nothing else reads, as a ticker's text
         // or an animated size, keeps the slices the chain gave.
-        let update = self.modifier.in_place_update(&modifier);
-        let modifier_changed = update.is_some() || !self.modifier.structural_eq(&modifier);
-        self.modifier = modifier;
-        self.sync_modifier_chain(update);
+        let update = matched.in_place;
+        let modifier_changed = update.is_some() || !matched.structural;
+        self.sync_modifier_chain(&modifier, update);
         if modifier_changed {
             self.parts.cache().clear();
             self.request_semantics_update();
         }
     }
 
-    /// Reconciles the chain with the node's modifier. `in_place` says how
-    /// far the change reaches when the modifier changed only in elements the
-    /// chain can update in place: when it does, the current slices are kept.
-    fn sync_modifier_chain(&mut self, in_place: Option<InPlaceUpdate>) {
+    // The node after `modifier`'s elements in the node's chain, when the
+    // chain holds them and that one node more, and a set of an equal
+    // modifier would leave the chain as it is: `None` too for a chain that
+    // reads modifier locals, which a set syncs again.
+    pub(crate) fn node_after(
+        &self,
+        modifier: &Modifier,
+    ) -> Option<&Rc<RefCell<dyn cranpose_foundation::ModifierNode>>> {
+        if self
+            .modifier_capabilities()
+            .contains(NodeCapabilities::MODIFIER_LOCALS)
+        {
+            return None;
+        }
+        self.modifier_chain.node_after(modifier)
+    }
+
+    // Reconciles the chain with `modifier`. `in_place` says how far the
+    // change reaches when the modifier changed only in elements the chain can
+    // update in place: when it does, the current slices are kept.
+    fn sync_modifier_chain(&mut self, modifier: &Modifier, in_place: Option<InPlaceUpdate>) {
         let prev_caps = self.modifier_capabilities();
         let start_parent = self.parent();
         let mut resolver = move |token: &ModifierLocalToken| {
@@ -210,13 +222,13 @@ impl LayoutNode {
         let mut context = self.modifier_chain.context(self.id.get());
         let in_place = in_place.is_some_and(|update| {
             self.modifier_chain
-                .update_elements_in_place(&self.modifier, update, &mut context)
+                .update_elements_in_place(modifier, update, &mut context)
         });
         let modifier_local_invalidations = if in_place {
             ModifierInvalidations::new()
         } else {
             self.modifier_chain
-                .update_with_resolver(&self.modifier, &mut resolver, &mut context)
+                .update_with_resolver(modifier, &mut resolver, &mut context)
         };
         if prev_caps.contains(NodeCapabilities::WINDOW_ROOT)
             != self
@@ -231,19 +243,42 @@ impl LayoutNode {
         if !in_place {
             self.forget_semantics_reach();
         }
-        let keep_slices = in_place && !self.modifier_slices_dirty.get();
-        if !keep_slices {
-            self.modifier_slices_dirty.set(true);
-        }
-
         let mut invalidations = context.take_invalidations();
         invalidations.extend(modifier_local_invalidations);
-        self.dispatch_modifier_invalidations_with_prev(&invalidations, prev_caps, keep_slices);
+        self.dispatch_chain_update(&invalidations, prev_caps, in_place);
         // An update in place leaves the node's parent, capabilities and
         // modifier locals as the registry holds them.
         if !in_place {
             self.refresh_registry_state();
         }
+    }
+
+    // Dispatches `invalidations`, what an update of the chain asked for. An
+    // update in place keeps the slices the chain gave, unless they are stale
+    // already.
+    fn dispatch_chain_update(
+        &self,
+        invalidations: &[ModifierInvalidation],
+        prev_caps: NodeCapabilities,
+        in_place: bool,
+    ) {
+        let keep_slices = in_place && !self.modifier_slices_dirty.get();
+        if !keep_slices {
+            self.modifier_slices_dirty.set(true);
+        }
+        self.dispatch_modifier_invalidations_with_prev(invalidations, prev_caps, keep_slices);
+    }
+
+    // Takes an update its caller made in place to the values of the chain's
+    // last node, whose capabilities stay: what the node's capabilities
+    // invalidate, a new measurement and new semantics.
+    pub(crate) fn note_last_node_updated(&mut self) {
+        let prev_caps = self.modifier_capabilities();
+        let mut context = self.modifier_chain.context(self.id.get());
+        self.modifier_chain.invalidate_last(&mut context);
+        self.dispatch_chain_update(&context.take_invalidations(), prev_caps, true);
+        self.parts.cache().clear();
+        self.request_semantics_update();
     }
 
     fn update_modifier_slices_cache(&self) {
@@ -299,7 +334,7 @@ impl LayoutNode {
                                 invalidation,
                                 curr_caps,
                                 prev_caps,
-                                &self.modifier,
+                                &self.modifier_chain,
                             );
                             let inside_composition =
                                 cranpose_core::composer_context::try_with_composer(|_| ())
@@ -346,13 +381,13 @@ impl LayoutNode {
 
     /// The grid this node was composed against.
     pub fn density(&self) -> crate::density::Density {
-        self.density
+        *self.density
     }
 
     /// Records the grid the composition provided, re-measuring if it moved.
     pub fn set_density(&mut self, density: crate::density::Density) {
-        if self.density != density {
-            self.density = density;
+        if *self.density != density {
+            self.density = crate::density::shared_density(density);
             self.parts.cache().clear();
             self.modifier_slices_dirty.set(true);
             self.mark_needs_measure();
@@ -371,8 +406,12 @@ impl LayoutNode {
     /// Replaces the measure policy and schedules a measure. Does nothing if `policy` is the same
     /// `Rc` as the current one.
     pub fn set_measure_policy(&mut self, policy: Rc<dyn MeasurePolicy>) {
-        if !Rc::ptr_eq(&self.measure_policy, &policy) {
-            self.measure_policy = policy;
+        if self
+            .parts
+            .runtime_state()
+            .borrow_mut()
+            .replace_measure_policy(policy)
+        {
             self.parts.cache().clear();
             self.mark_needs_measure();
             if let Some(id) = self.id.get() {
@@ -496,18 +535,12 @@ impl LayoutNode {
 
     /// Set this node's ID (called by applier after creation).
     pub fn set_node_id(&mut self, id: NodeId) {
-        // A redraw asked for before the node had an id went to no draw
-        // repass.
-        if self.needs_redraw.get() {
-            crate::render_state::note_retained_redraw(id);
-        }
         let previous = self.id.replace(Some(id));
         if let Some(existing) = previous
             && let Some(owner_context_id) = self.owner_context_id.take()
         {
             unregister_layout_node(owner_context_id, existing);
         }
-        self.parts.layout_state().borrow_mut().set_node_id(id);
         // The new entry holds the node's parent, capabilities and modifier
         // locals as they are now.
         let owner_context_id = register_layout_node(id, self);
@@ -570,7 +603,7 @@ impl LayoutNode {
     }
 
     /// What the chain tells the parent's measure policy about this node.
-    pub(crate) fn parent_data(&self) -> cranpose_ui_layout::ParentData {
+    pub(crate) fn parent_data(&self) -> crate::modifier::SharedParentData {
         self.modifier_chain.parent_data()
     }
 
@@ -665,61 +698,53 @@ impl LayoutNode {
 
     /// Returns a clone of the current layout state.
     pub fn layout_state(&self) -> LayoutState {
-        *self.parts.layout_state().borrow()
+        self.parts.layout_state().snapshot()
     }
 
     /// Returns the measured size of this node.
     pub fn measured_size(&self) -> Size {
-        self.parts.layout_state().borrow().size()
+        self.parts.layout_state().size()
     }
 
     /// Returns the position of this node relative to its parent.
     pub fn position(&self) -> Point {
-        self.parts.layout_state().borrow().position()
+        self.parts.layout_state().position()
     }
 
     /// Returns true if this node has been placed in the current layout pass.
     pub fn is_placed(&self) -> bool {
-        self.parts.layout_state().borrow().is_placed()
+        self.parts.layout_state().is_placed()
     }
 
-    /// Updates the measured size of this node. Called during measurement.
-    /// [`LayoutState::set_size`] self-reports actual changes to the scene
-    /// phase.
+    /// Updates the measured size of this node. Called during measurement. An
+    /// actual change reports itself to the scene phase.
     pub fn set_measured_size(&self, size: Size, context: &AppContext) {
-        self.parts
-            .layout_state()
-            .borrow_mut()
-            .set_size(size, context);
+        self.parts.set_size(self.id.get(), size, context);
     }
 
     // Updates the position of this node, which `placer` placed. Called
     // during placement. `LayoutState::place` self-reports actual moves to
     // the scene phase.
     pub(crate) fn place(&self, at: ChildPlacement, placer: Option<NodeId>, context: &AppContext) {
-        self.parts
-            .layout_state()
-            .borrow_mut()
-            .place_child(at, placer, context);
+        self.parts.place(self.id.get(), at, placer, context);
     }
 
     /// Records the content offset (e.g. from padding).
     pub fn set_content_offset(&self, offset: Point) {
         self.parts
             .layout_state()
-            .borrow_mut()
-            .set_content_offset(offset);
+            .set_content_offset(self.id.get(), offset);
     }
 
     /// Clears the is_placed flag. Called at the start of a layout pass.
     pub fn clear_placed(&self, context: &AppContext) {
-        self.parts.layout_state().borrow_mut().clear_placed(context);
+        self.parts.clear_placed(self.id.get(), context);
     }
 
     fn note_semantics_layout_change(&self) {
-        if let Ok(mut state) = self.parts.layout_state().try_borrow_mut() {
-            state.note_semantics_change();
-        }
+        self.parts
+            .layout_state()
+            .note_semantics_change(self.id.get());
     }
 
     /// Returns the semantics that the modifier chain reports, or `None` if it reports none.
@@ -754,9 +779,9 @@ impl LayoutNode {
         &self.modifier_chain
     }
 
-    /// Runs `read` on the node's layout state, without a copy of it.
+    /// Runs `read` on the node's layout state.
     pub fn with_layout_state<R>(&self, read: impl FnOnce(&LayoutState) -> R) -> R {
-        read(&self.parts.layout_state().borrow())
+        read(&self.parts.layout_state().snapshot())
     }
 
     pub(crate) fn layout_parts(&self) -> &Rc<LayoutParts> {
@@ -766,23 +791,16 @@ impl LayoutNode {
     pub(crate) fn layout_runtime_state(&self) -> &RefCell<LayoutRuntimeState> {
         self.parts.runtime_state()
     }
-
-    #[cfg(test)]
-    pub(crate) fn layout_runtime_debug_stats(&self) -> LayoutRuntimeDebugStats {
-        self.parts.runtime_state().borrow().debug_stats()
-    }
 }
 impl Clone for LayoutNode {
     fn clone(&self) -> Self {
         let mut node = Self {
             #[cfg(feature = "inspection")]
             source_trace: Rc::clone(&self.source_trace),
-            modifier: self.modifier.clone(),
             modifier_chain: ModifierChainHandle::for_layout_direction(
                 self.modifier_chain.layout_direction(),
             ),
-            measure_policy: Rc::clone(&self.measure_policy),
-            density: self.density,
+            density: Rc::clone(&self.density),
             children: self.children.clone(),
             needs_semantics: Cell::new(self.needs_semantics.get()),
             descendant_needs_semantics: Cell::new(self.descendant_needs_semantics.get()),
@@ -800,172 +818,8 @@ impl Clone for LayoutNode {
             modifier_slices_dirty: Cell::new(true),
             parts: Rc::clone(&self.parts),
         };
-        node.sync_modifier_chain(None);
+        node.sync_modifier_chain(&self.modifier(), None);
         node
-    }
-}
-
-impl Node for LayoutNode {
-    fn mount(&mut self) {
-        self.modifier_chain.remount(self.id.get());
-        crate::modal_nodes::reach_changed(self.id.get());
-    }
-
-    fn unmount(&mut self) {
-        self.modifier_chain.chain_mut().detach_nodes();
-    }
-
-    fn set_node_id(&mut self, id: NodeId) {
-        Self::set_node_id(self, id);
-    }
-
-    fn insert_child(&mut self, child: NodeId) -> bool {
-        if self.children.contains(&child) {
-            return false;
-        }
-        self.children.push(child);
-        self.parts.cache().clear();
-        self.mark_needs_measure();
-        self.note_semantics_layout_change();
-        true
-    }
-
-    fn remove_child(&mut self, child: NodeId) -> bool {
-        // A child is listed once, and a child sync removes children from
-        // the last: the search from the end finds it at once.
-        let at = self.children.iter().rposition(|&id| id == child);
-        let removed = at.map(|at| self.children.remove(at)).is_some();
-        if removed {
-            self.parts.cache().clear();
-            self.mark_needs_measure();
-            self.note_semantics_layout_change();
-        }
-        removed
-    }
-
-    fn move_child(&mut self, from: usize, to: usize) {
-        if from == to || from >= self.children.len() {
-            return;
-        }
-        let child = self.children.remove(from);
-        let target = to.min(self.children.len());
-        self.children.insert(target, child);
-        self.parts.cache().clear();
-        self.mark_needs_measure();
-        self.note_semantics_layout_change();
-    }
-
-    fn update_children(&mut self, children: &[NodeId]) {
-        self.children.clear();
-        self.children.extend_from_slice(children);
-        self.parts.cache().clear();
-        self.mark_needs_measure();
-        self.note_semantics_layout_change();
-    }
-
-    fn collect_children_into(&self, out: &mut smallvec::SmallVec<[NodeId; 8]>) {
-        out.clear();
-        out.extend_from_slice(&self.children);
-    }
-
-    fn for_each_child(&self, f: &mut dyn FnMut(NodeId)) {
-        for &child in &self.children {
-            f(child);
-        }
-    }
-
-    fn owned_child_index(&self, child: NodeId) -> Option<usize> {
-        self.children.iter().position(|&id| id == child)
-    }
-
-    fn on_attached_to_parent(&mut self, parent: NodeId) {
-        self.set_parent(parent);
-    }
-
-    fn on_removed_from_parent(&mut self) {
-        self.clear_parent();
-    }
-
-    fn parent(&self) -> Option<NodeId> {
-        self.parent.get()
-    }
-
-    fn mark_needs_layout(&self) {
-        Self::mark_needs_layout(self);
-    }
-
-    fn needs_layout(&self) -> bool {
-        Self::needs_layout(self)
-    }
-
-    fn mark_needs_measure(&self) {
-        Self::mark_needs_measure(self);
-    }
-
-    fn needs_measure(&self) -> bool {
-        Self::needs_measure(self)
-    }
-
-    fn mark_descendant_needs_layout(&self, measure: bool) {
-        self.parts.cache().mark_descendant_needs_layout(measure);
-    }
-
-    fn descendant_needs_layout(&self) -> bool {
-        self.parts.cache().dirt().descendant.layout
-    }
-
-    fn is_virtual(&self) -> bool {
-        self.is_virtual
-    }
-
-    fn descendant_needs_measure(&self) -> bool {
-        self.parts.cache().dirt().descendant.measure
-    }
-
-    fn mark_needs_semantics(&self) {
-        self.needs_semantics.set(true);
-        self.forget_semantics_reach();
-    }
-
-    fn mark_descendant_needs_semantics(&self) {
-        self.descendant_needs_semantics.set(true);
-    }
-
-    fn needs_semantics(&self) -> bool {
-        Self::needs_semantics(self)
-    }
-
-    fn set_parent_for_bubbling(&mut self, parent: NodeId) {
-        if self.parent.get().is_none() {
-            self.parent.set(Some(parent));
-        }
-    }
-
-    fn recycle_key(&self) -> Option<TypeId> {
-        Some(TypeId::of::<Self>())
-    }
-
-    fn recycle_pool_limit(&self) -> Option<usize> {
-        Some(super::node_pool_limit::node_pool_limit())
-    }
-
-    fn prepare_for_recycle(&mut self) {
-        *self = Self::new_recycled_shell(self.is_virtual);
-    }
-
-    fn rehouse_for_recycle(&self) -> Option<Box<dyn Node>> {
-        Some(Box::new(Self::new_recycled_shell(self.is_virtual)))
-    }
-
-    fn rehouse_for_live_compaction(&mut self) -> Option<Box<dyn Node>> {
-        // The whole node moves into the new box. Its modifier nodes keep
-        // what the user is doing with it, such as a focus, a held press or an
-        // IME composition, and its caches and registry entry stay true for
-        // it. Only its child list, which a spike of children may have grown,
-        // is cut to size. The shell left behind has no id to unregister.
-        let mut node = std::mem::replace(self, Self::new_recycled_shell(self.is_virtual));
-        node.children.shrink_to_fit();
-        Some(Box::new(node))
     }
 }
 

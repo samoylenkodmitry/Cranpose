@@ -24,7 +24,8 @@ impl TextKey {
         options: TextLayoutOptions,
         units: TextUnits,
     ) -> Option<Self> {
-        (text.string_annotations.is_empty() && text.link_annotations.is_empty()).then(|| Self {
+        let content = text.render_string();
+        (content.string_annotations().is_empty() && content.links().is_empty()).then(|| Self {
             text_hash: text.render_hash(),
             style_hash,
             options: options.normalized(),

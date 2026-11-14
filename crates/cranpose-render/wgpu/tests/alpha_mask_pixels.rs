@@ -1,5 +1,5 @@
 use cranpose_render_common::graph::{
-    DrawRunNode, LayerNode, PrimitivePhase, ProjectiveTransform, RenderGraph, RenderNode,
+    DrawRunNode, LayerNode, PrimitivePhase, ProjectiveTransform, RenderNode,
 };
 use cranpose_ui_graphics::{
     BlendMode, Brush, Color, ColorFilter, DrawPrimitive, ImageBitmap, ImageSampling, Rect,
@@ -13,7 +13,7 @@ fn graph(
     filter: Option<ColorFilter>,
     blend_mode: BlendMode,
     transformed: bool,
-) -> RenderGraph {
+) -> LayerNode {
     let bounds = Rect {
         x: 0.0,
         y: 0.0,
@@ -44,7 +44,8 @@ fn graph(
     };
     let rgba = ImageBitmap::from_rgba8(16, 16, image.rgba8_pixels().into_owned()).expect("rgba");
     let images = LayerNode {
-        local_bounds: bounds,
+        size: bounds.size(),
+        layer_bounds: Some(bounds),
         transform_to_parent: if transformed {
             ProjectiveTransform::from_rect_to_quad(
                 bounds,
@@ -68,8 +69,9 @@ fn graph(
         ))],
         ..LayerNode::default()
     };
-    RenderGraph::new(LayerNode {
-        local_bounds: bounds,
+    LayerNode {
+        size: bounds.size(),
+        layer_bounds: Some(bounds),
         children: vec![
             RenderNode::DrawRun(DrawRunNode::new(
                 PrimitivePhase::BeforeChildren,
@@ -82,7 +84,7 @@ fn graph(
             RenderNode::Layer(Box::new(images)),
         ],
         ..LayerNode::default()
-    })
+    }
 }
 
 #[test]
@@ -97,8 +99,12 @@ fn alpha_masks_match_rgba_pixels_on_gl() {
 }
 
 fn assert_alpha_mask_parity(backends: wgpu::Backends) {
-    let mut renderer = support::headless_renderer_configured(wgpu::Limits::default(), backends)
-        .expect("GPU for alpha-mask parity");
+    let mut renderer = support::headless_renderer_configured(
+        wgpu::Limits::default(),
+        backends,
+        support::device::Pipelines::Inline,
+    )
+    .expect("GPU for alpha-mask parity");
     let mask = ImageBitmap::from_alpha8(16, 16, [19, 127, 239], (0..=255).collect()).expect("mask");
     let rgba = ImageBitmap::from_rgba8(16, 16, mask.rgba8_pixels().into_owned()).expect("rgba");
     let matrix = ColorFilter::matrix([

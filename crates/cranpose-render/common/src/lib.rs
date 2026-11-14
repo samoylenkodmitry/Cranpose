@@ -5,6 +5,7 @@
 pub mod byte_blend;
 /// Debug switches read from environment variables, with programmatic overrides.
 pub mod dev_overlay;
+mod left_nodes;
 
 /// The frame background every renderer clears to (linear values; sRGB
 /// surfaces display this as rgb(75, 75, 86)). One definition so backends
@@ -18,12 +19,11 @@ pub mod geometry;
 /// Glyph masks and the cache renderers keep them in.
 pub mod glyph_mask;
 pub mod glyph_reach;
-/// The render graph: the layers and primitives that a scene builds for a renderer to draw.
+/// The draws a scene holds.
 pub mod graph;
-mod graph_hash;
-/// The retained scene: the render graph together with the hit targets built from it.
+/// The retained scene: its records together with the hit targets built from them.
 pub mod graph_scene;
-/// Collecting hit targets from a render graph.
+/// Collecting hit targets from a scene's records.
 pub mod hit_graph;
 /// Pixel comparison and resampling of RGBA images, for renderer tests.
 pub mod image_compare;
@@ -31,7 +31,6 @@ pub mod image_compare;
 pub mod installed_fonts;
 /// Rules for when a graphics layer is drawn into its own offscreen buffer and with which alpha.
 pub mod layer_composition;
-mod layer_recycling;
 pub mod layer_shadow;
 /// Transform math of a graphics layer, re-exported from `cranpose_ui_graphics`.
 pub mod layer_transform;
@@ -41,13 +40,15 @@ pub mod primitive_emit;
 /// Keys of the cached rasters of layers.
 pub mod raster_cache;
 /// Shared cases that every renderer backend is checked against.
+#[cfg(feature = "layer-tree")]
 pub mod render_contract;
 /// 16-bit pixels of the format most small displays take.
 pub mod rgb565;
-/// Building and updating the render graph from the layout tree.
+/// Building and updating the scene's records from the layout tree.
 pub mod scene_builder;
 /// Which mesh surface of a 3D scene a window point shows.
 pub mod scene_pick;
+pub mod scene_store;
 pub mod shape_sdf;
 /// Where a window's scenes put their 3D layers: frames, spaces, doorways
 /// and what the eye sees.
@@ -75,9 +76,8 @@ mod thread_state;
 #[path = "tests/pointer_slices.rs"]
 mod pointer_slices;
 
-use cranpose_core::{MemoryApplier, collections::map::HashSet};
+use cranpose_core::MemoryApplier;
 use cranpose_foundation::nodes::input::PointerEvent;
-use cranpose_ui::LayoutTree;
 pub use cranpose_ui_graphics::Brush;
 use cranpose_ui_graphics::Size;
 
@@ -88,8 +88,9 @@ pub enum NodeUpdate {
     /// Its layout, children or draw commands changed: the scene records it
     /// again.
     Content,
-    /// Only state its draws read changed: its layer keeps its children and
-    /// records the node's draws again.
+    /// Only its draws changed: state they read, or a draw modifier updated
+    /// in place, such as a background's color. Its layer keeps its children
+    /// and records the node's draws again.
     Draws,
     /// Its graphics-layer properties changed and it drew the same.
     Layer,
@@ -178,7 +179,7 @@ pub trait RenderScene {
     /// The hit target type that hit testing returns.
     type HitTarget: HitTestTarget + Clone;
 
-    /// Removes the render graph and all hit targets.
+    /// Removes the scene's records and all hit targets.
     fn clear(&mut self);
 
     /// Performs hit testing at the given coordinates.
@@ -259,20 +260,39 @@ pub trait RenderScene {
         0
     }
 
-    /// Replaces the set with retained visual observation owners, preserving its capacity.
-    /// Returns whether the scene provides this information.
-    fn collect_retained_visual_observation_nodes(
-        &self,
-        nodes: &mut HashSet<cranpose_core::NodeId>,
-    ) -> bool {
-        nodes.clear();
+    /// Gives back the room the scene's storage holds past what it draws. Its
+    /// owner calls it at rest, when no frame waits. Returns whether the scene
+    /// let every record go to give that room back: the owner builds it anew
+    /// before anything reads it.
+    fn trim(&mut self) -> bool {
         false
+    }
+
+    /// Whether the scene draws `node`. A scene that keeps no record of the nodes it draws says
+    /// it does.
+    fn draws(&self, _node: cranpose_core::NodeId) -> bool {
+        true
+    }
+
+    /// The node whose record holds what the scene draws for `node`: the node the scene draws
+    /// again for `node` to leave it. `None` when the scene draws no record for `node`, or that
+    /// record is its root.
+    fn drawn_parent(&self, _node: cranpose_core::NodeId) -> Option<cranpose_core::NodeId> {
+        None
+    }
+
+    /// Adds to `left` the layout nodes whose records the scene dropped since the last call; a
+    /// node may draw through another record since, as [`Self::draws`] tells. Returns whether the
+    /// scene can tell: a scene handed a store built from scratch since cannot, and the caller
+    /// asks [`Self::draws`] of every node instead.
+    fn read_left_nodes(&mut self, _left: &mut Vec<cranpose_core::NodeId>) -> bool {
+        true
     }
 }
 
 /// Abstraction implemented by concrete renderer backends.
 pub trait Renderer {
-    /// The scene type that holds the render graph and the hit targets of this renderer.
+    /// The scene type that holds the records and the hit targets of this renderer.
     type Scene: RenderScene;
     /// Error returned when the scene cannot be rebuilt or updated.
     type Error;
@@ -283,6 +303,10 @@ pub trait Renderer {
     /// Renderers that provide text measurement or other per-app services should install
     /// them here rather than as constructor side effects.
     fn attach_app_context_services(&mut self, _app_context: &cranpose_ui::AppContext) {}
+
+    /// Gives back the room the renderer's storage holds past what it draws,
+    /// beside its scene's. AppShell calls it at rest, when no frame waits.
+    fn trim(&mut self) {}
 
     /// Takes in the fonts installed since the renderer last looked (see
     /// `installed_fonts::install_font_file`). A renderer that installed the
@@ -301,17 +325,10 @@ pub trait Renderer {
     /// the scale with each draw ignore it.
     fn set_root_scale(&mut self, _scale: f32) {}
 
-    /// The scene that holds the render graph and the hit targets.
+    /// The scene that holds the records and the hit targets.
     fn scene(&self) -> &Self::Scene;
     /// Mutable access to the scene.
     fn scene_mut(&mut self) -> &mut Self::Scene;
-
-    /// Rebuilds the scene from `layout_tree` for a viewport of the given size.
-    fn rebuild_scene(
-        &mut self,
-        layout_tree: &LayoutTree,
-        viewport: Size,
-    ) -> Result<(), Self::Error>;
 
     /// Rebuilds the scene by traversing the LayoutNode tree directly via Applier.
     ///
@@ -351,18 +368,25 @@ pub trait Renderer {
 
     /// Draw a development overlay (e.g., FPS counter) on top of the scene.
     ///
-    /// This is called after rebuild_scene when dev options are enabled.
+    /// This is called after the scene is built when dev options are enabled.
     /// The text, laid out in `overlay`, is drawn directly by the renderer
     /// without affecting composition.
     ///
     /// Default implementation does nothing.
     fn draw_dev_overlay(&mut self, _overlay: &cranpose_ui::PreparedTextLayout, _viewport: Size) {}
 
-    /// Replaces the developer inspector graph outside the application scene.
+    /// Replaces the developer inspector layer drawn over the application scene.
     ///
     /// Passing `None` removes the inspector. Its primitives must not participate
     /// in application hit testing, layout, or accessibility.
-    fn set_inspector_overlay(&mut self, _graph: Option<graph::RenderGraph>) {}
+    fn set_inspector_overlay(&mut self, _overlay: Option<scene_store::OverlayLayer>) {}
+
+    /// Replaces the overlay with the layer tree `overlay` describes, as a
+    /// renderer's tests describe an overlay by hand.
+    ///
+    /// Passing `None` removes the overlay. Default implementation does nothing.
+    #[cfg(feature = "layer-tree")]
+    fn set_overlay_tree(&mut self, _overlay: Option<graph::LayerNode>) {}
 
     /// Tells the renderer that its app held still between the last frame and the next one: the
     /// shell asked the platform for no frame and no update. A renderer that compares frames to

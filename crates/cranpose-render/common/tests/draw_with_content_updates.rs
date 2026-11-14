@@ -4,13 +4,7 @@ use std::{
 };
 
 use cranpose_core::NodeId;
-use cranpose_render_common::{
-    graph::RenderGraph,
-    scene_builder::{
-        clear_command_recordings_for_tests, rebuild_graph_from_applier,
-        update_graph_from_applier_report,
-    },
-};
+use cranpose_render_common::graph_scene::Scene;
 use cranpose_ui::{
     Box, BoxSpec, Brush, Canvas, Color, GraphicsLayer, Modifier, RoundedCornerShape, Size,
     TestComposition, Text, TextStyle, run_test_composition,
@@ -62,12 +56,11 @@ fn with_content_modifier(
     }
 }
 
-fn initial_graph(composition: &mut TestComposition, root: NodeId) -> RenderGraph {
+fn initial_graph(composition: &mut TestComposition, root: NodeId) -> Scene {
     crate::scene_probe::initial_graph(composition, root, VIEWPORT)
 }
 
 fn assert_callback_once_per_update(outer_wrapper: bool, around: Around) {
-    clear_command_recordings_for_tests();
     let calls = Rc::new(Cell::new(0));
     let before = Rc::new(Cell::new(Color::BLUE));
     let after = Rc::new(Cell::new(Color::WHITE));
@@ -101,8 +94,7 @@ fn assert_callback_once_per_update(outer_wrapper: bool, around: Around) {
     let parent = parent_slot.get().expect("parent Box node");
     let mut graph = initial_graph(&mut composition, root);
     assert_eq!(calls.get(), 1, "initial scene records with-content once");
-    let mut colors = Vec::new();
-    crate::scene_probe::painted_solid_rect_colors(&graph.root, &mut colors);
+    let colors = crate::scene_probe::solid_rect_colors(&graph);
     assert_eq!(colors, [Color::BLUE, Color::RED, Color::WHITE]);
 
     before.set(Color(0.0, 1.0, 1.0, 1.0));
@@ -110,16 +102,14 @@ fn assert_callback_once_per_update(outer_wrapper: bool, around: Around) {
     let runtime = composition.runtime_handle();
     let mut applier = composition.applier_mut();
     applier.set_runtime_handle(runtime);
-    let report = update_graph_from_applier_report(
+    let applied = graph.update_from_applier(
         &applier,
-        &mut graph,
+        root,
         &[(parent, cranpose_render_common::NodeUpdate::Content)],
-        1.0,
     );
-    assert!(report.applied(), "content update applies to retained graph");
+    assert!(applied, "content update applies to retained graph");
     assert_eq!(calls.get(), 2, "one content update records once");
-    colors.clear();
-    crate::scene_probe::painted_solid_rect_colors(&graph.root, &mut colors);
+    let colors = crate::scene_probe::solid_rect_colors(&graph);
     assert_eq!(
         colors,
         [Color(0.0, 1.0, 1.0, 1.0), Color::RED, Color::GREEN]
@@ -129,16 +119,14 @@ fn assert_callback_once_per_update(outer_wrapper: bool, around: Around) {
     // children the layer keeps.
     before.set(Color(0.5, 0.5, 1.0, 1.0));
     after.set(Color::BLACK);
-    let report = update_graph_from_applier_report(
+    let applied = graph.update_from_applier(
         &applier,
-        &mut graph,
+        root,
         &[(parent, cranpose_render_common::NodeUpdate::Draws)],
-        1.0,
     );
-    assert!(report.applied(), "draw update applies to retained graph");
+    assert!(applied, "draw update applies to retained graph");
     assert_eq!(calls.get(), 3, "one draw update records once");
-    colors.clear();
-    crate::scene_probe::painted_solid_rect_colors(&graph.root, &mut colors);
+    let colors = crate::scene_probe::solid_rect_colors(&graph);
     assert_eq!(
         colors,
         [Color(0.5, 0.5, 1.0, 1.0), Color::RED, Color::BLACK]
@@ -146,11 +134,13 @@ fn assert_callback_once_per_update(outer_wrapper: bool, around: Around) {
 
     before.set(Color(1.0, 1.0, 0.0, 1.0));
     after.set(Color(1.0, 0.0, 1.0, 1.0));
-    graph = rebuild_graph_from_applier(&applier, root, 1.0, Some(graph))
-        .expect("full scene update rebuilds graph");
+    graph.rebuild_from_applier(&applier, root);
+    assert!(
+        graph.root_layer().is_some(),
+        "full scene update rebuilds graph"
+    );
     assert_eq!(calls.get(), 4, "one full rebuild records once");
-    colors.clear();
-    crate::scene_probe::painted_solid_rect_colors(&graph.root, &mut colors);
+    let colors = crate::scene_probe::solid_rect_colors(&graph);
     assert_eq!(
         colors,
         [
@@ -184,7 +174,6 @@ fn grouped_with_content_draws_once_per_scene_update_and_keeps_child_order() {
 
 #[test]
 fn nested_scene_build_does_not_replace_parent_with_content_recording() {
-    clear_command_recordings_for_tests();
     let nested_calls = Rc::new(Cell::new(0));
     let nested_before = Rc::new(Cell::new(Color(1.0, 1.0, 0.0, 1.0)));
     let nested_after = Rc::new(Cell::new(Color(1.0, 0.0, 1.0, 1.0)));
@@ -260,8 +249,7 @@ fn nested_scene_build_does_not_replace_parent_with_content_recording() {
     let mut graph = initial_graph(&mut composition, root);
     assert_eq!(parent_calls.get(), 1, "parent command runs once");
     assert_eq!(nested_calls.get(), 1, "nested scene was built once");
-    let mut colors = Vec::new();
-    crate::scene_probe::painted_solid_rect_colors(&graph.root, &mut colors);
+    let colors = crate::scene_probe::solid_rect_colors(&graph);
     assert_eq!(colors, [Color::BLUE, Color::RED, Color::WHITE]);
 
     parent_before.set(Color(0.0, 1.0, 1.0, 1.0));
@@ -272,12 +260,14 @@ fn nested_scene_build_does_not_replace_parent_with_content_recording() {
     let runtime = composition.runtime_handle();
     let mut applier = composition.applier_mut();
     applier.set_runtime_handle(runtime);
-    graph = rebuild_graph_from_applier(&applier, root, 1.0, Some(graph))
-        .expect("full scene rebuild after nested build");
+    graph.rebuild_from_applier(&applier, root);
+    assert!(
+        graph.root_layer().is_some(),
+        "full scene rebuild after nested build"
+    );
     assert_eq!(parent_calls.get(), 2, "parent command runs once on rebuild");
     assert_eq!(nested_calls.get(), 2, "nested scene rebuilds once");
-    colors.clear();
-    crate::scene_probe::painted_solid_rect_colors(&graph.root, &mut colors);
+    let colors = crate::scene_probe::solid_rect_colors(&graph);
     assert_eq!(
         colors,
         [Color(0.0, 1.0, 1.0, 1.0), Color::RED, Color::GREEN]

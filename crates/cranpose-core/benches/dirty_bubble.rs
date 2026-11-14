@@ -9,7 +9,7 @@
 use std::hint::black_box;
 
 use cranpose_core::{
-    Composition, MemoryApplier, MutableState, Node, NodeId, location_key, pop_parent, push_parent,
+    Composition, MemoryApplier, MutableState, location_key, pop_parent, push_parent,
     with_current_composer,
 };
 use cranpose_macros::composable;
@@ -17,7 +17,11 @@ use cranpose_macros::composable;
 #[path = "../tests/support/ordered_parent.rs"]
 mod ordered_parent;
 
-use ordered_parent::{FixtureLeaf, OrderedParent, ParentTracked};
+#[path = "../tests/support/tracked_parent.rs"]
+mod tracked_parent;
+
+use ordered_parent::{FixtureLeaf, ParentTracked};
+use tracked_parent::TrackedParent;
 
 /// A node about the size of a layout node, so the chain spreads over memory
 /// as a screen's nodes do.
@@ -26,52 +30,6 @@ struct Leaf {
 }
 
 impl FixtureLeaf for Leaf {}
-
-/// An [`OrderedParent`] that tracks its own parent, so a structural change
-/// below it marks the whole chain.
-#[derive(Default)]
-struct TrackedParent {
-    inner: OrderedParent,
-    parent: Option<NodeId>,
-}
-
-impl Node for TrackedParent {
-    fn insert_child(&mut self, child: NodeId) -> bool {
-        self.inner.insert_child(child)
-    }
-
-    fn remove_child(&mut self, child: NodeId) -> bool {
-        self.inner.remove_child(child)
-    }
-
-    fn move_child(&mut self, from: usize, to: usize) {
-        self.inner.move_child(from, to);
-    }
-
-    fn collect_children_into(&self, out: &mut smallvec::SmallVec<[NodeId; 8]>) {
-        self.inner.collect_children_into(out);
-    }
-
-    fn collect_owned_children_into(&self, out: &mut smallvec::SmallVec<[NodeId; 8]>) {
-        self.inner.collect_owned_children_into(out);
-    }
-
-    fn owned_child_index(&self, child: NodeId) -> Option<usize> {
-        self.inner.owned_child_index(child)
-    }
-
-    fn on_attached_to_parent(&mut self, parent: NodeId) {
-        self.parent = Some(parent);
-    }
-
-    fn on_removed_from_parent(&mut self) {
-        self.parent = None;
-    }
-
-    fn parent(&self) -> Option<NodeId> {
-        self.parent
-    }
-}
 
 #[composable]
 fn Chain(tick: MutableState<usize>, depth: usize) {

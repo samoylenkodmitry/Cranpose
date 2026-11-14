@@ -1,4 +1,5 @@
 use super::*;
+use crate::collections::id_pages::PAGE_LEN;
 
 #[test]
 fn an_unseen_id_has_no_slot_and_generation_zero() {
@@ -108,10 +109,8 @@ fn a_page_frees_when_its_last_id_retires_and_is_reused_for_a_new_range() {
     index.retain_retired(|_| false);
     assert_eq!(index.capacity(), 0, "an empty page is freed");
     assert_eq!(index.occupied(), 0);
-    assert!(index.spare.is_some(), "the freed page waits as the spare");
 
     index.insert_fresh(NodeId(PAGE_LEN * 3), 0);
-    assert!(index.spare.is_none(), "a new range takes the spare page");
     assert_eq!(index.capacity(), PAGE_LEN);
     assert_eq!(index.slot(NodeId(PAGE_LEN * 3)), Some(0));
     assert_eq!(
@@ -137,9 +136,5 @@ fn ids_far_apart_share_nothing_and_free_their_directories() {
     index.retain_retired(|_| false);
     assert_eq!(index.slot(NodeId(far)), None);
     assert_eq!(index.generation(NodeId(far)), 0);
-    assert!(
-        index.directories[split(NodeId(far)).0].is_none(),
-        "an empty directory is freed"
-    );
     assert_eq!(index.capacity(), PAGE_LEN);
 }

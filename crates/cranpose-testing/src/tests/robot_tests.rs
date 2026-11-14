@@ -95,14 +95,6 @@ impl Renderer for NeverWarmRenderer {
         self.inner.scene_mut()
     }
 
-    fn rebuild_scene(
-        &mut self,
-        layout_tree: &LayoutTree,
-        viewport: Size,
-    ) -> Result<(), Self::Error> {
-        self.inner.rebuild_scene(layout_tree, viewport)
-    }
-
     fn rebuild_scene_from_applier(
         &mut self,
         applier: &mut MemoryApplier,

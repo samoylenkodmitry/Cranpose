@@ -15,7 +15,9 @@ use std::{
 };
 
 use cranpose_core::MutableState;
-use cranpose_ui_graphics::{Point, ProjectiveTransform, Rect, Size, WindowCoordinates};
+use cranpose_ui_graphics::{
+    Point, ProjectiveTransform, Rect, Size, WindowCoordinates, shared_sort,
+};
 
 use crate::{
     text::{
@@ -95,7 +97,7 @@ impl SelectableGeometry {
 
 struct Selectable {
     key: u64,
-    text: Rc<AnnotatedString>,
+    text: AnnotatedString,
     style: Arc<TextStyle>,
     options: TextLayoutOptions,
     geometry: Rc<SelectableGeometry>,
@@ -103,7 +105,7 @@ struct Selectable {
 
 impl Selectable {
     fn len(&self) -> usize {
-        self.text.text.len()
+        self.text.text().len()
     }
 
     // The text laid out as the renderer draws it: as wide as its content.
@@ -172,7 +174,7 @@ impl SelectionRegistrar {
     pub(crate) fn update(
         &self,
         key: u64,
-        text: Rc<AnnotatedString>,
+        text: AnnotatedString,
         style: Arc<TextStyle>,
         options: TextLayoutOptions,
         geometry: Rc<SelectableGeometry>,
@@ -227,7 +229,9 @@ impl SelectionRegistrar {
             .iter()
             .map(|held| (held.key, held.geometry.rect()))
             .collect();
-        order.sort_by(|(_, a), (_, b)| a.y.total_cmp(&b.y).then(a.x.total_cmp(&b.x)));
+        shared_sort::sort_by(&mut order, |(_, a), (_, b)| {
+            a.y.total_cmp(&b.y).then(a.x.total_cmp(&b.x))
+        });
         order.into_iter().map(|(key, _)| key).collect()
     }
 
@@ -376,7 +380,7 @@ impl SelectionRegistrar {
             .into_iter()
             .filter_map(|key| {
                 let range = self.covered(selection, key)?;
-                self.with_selectable(key, |held| held.text.text[range].to_string())
+                self.with_selectable(key, |held| held.text.text()[range].to_string())
             })
             .collect::<Vec<_>>()
             .join("\n")
@@ -407,7 +411,7 @@ impl SelectionRegistrar {
     fn unit_at(&self, edge: SelectionEdge, granularity: SelectionGranularity) -> Option<Unit> {
         self.with_selectable(edge.selectable, |held| Unit {
             selectable: edge.selectable,
-            anchor: SelectionAnchor::at(&held.text.text, edge.offset, granularity),
+            anchor: SelectionAnchor::at(held.text.text(), edge.offset, granularity),
         })
     }
 
@@ -418,7 +422,7 @@ impl SelectionRegistrar {
         let granularity = unit.anchor.granularity;
         if edge.selectable == unit.selectable {
             let range = self.with_selectable(edge.selectable, |held| {
-                unit.anchor.dragged_to(&held.text.text, edge.offset)
+                unit.anchor.dragged_to(held.text.text(), edge.offset)
             })?;
             return Some(TextSelection {
                 anchor: SelectionEdge {
@@ -432,7 +436,7 @@ impl SelectionRegistrar {
             });
         }
         let (unit_start, unit_end) = self.with_selectable(edge.selectable, |held| {
-            granularity_boundaries(&held.text.text, edge.offset, granularity)
+            granularity_boundaries(held.text.text(), edge.offset, granularity)
         })?;
         let pressed_start = SelectionEdge {
             selectable: unit.selectable,
