@@ -5,7 +5,7 @@ use std::{
 
 use cranpose_core::{NodeId, collections::map::HashMap};
 use cranpose_ui::{
-    CanvasSemanticsNode, ScrollAxisRange, SemanticsAction, SemanticsCallback,
+    CanvasSemanticsNode, ProgressBarRangeInfo, ScrollAxisRange, SemanticsAction, SemanticsCallback,
     SemanticsCustomAction, SemanticsDetails, SemanticsNode, SemanticsRole, SemanticsWidgetRole,
 };
 
