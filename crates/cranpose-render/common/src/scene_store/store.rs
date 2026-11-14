@@ -160,7 +160,6 @@ impl SceneStore {
 
     /// Starts a scene update and returns its number.
     pub fn begin_update(&mut self) -> SceneUpdate {
-        self.recordings.begin_update();
         self.update = self.update.next();
         self.journal.begin(self.update, self.tree.len());
         self.update

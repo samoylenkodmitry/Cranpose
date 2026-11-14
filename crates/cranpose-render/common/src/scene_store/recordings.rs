@@ -15,12 +15,11 @@ use crate::graph::DrawCommandId;
 #[derive(Default)]
 pub(crate) struct Recordings {
     slots: FxHashMap<RecorderKey, RecorderSlot>,
-    update: u64,
 }
 
 struct RecorderSlot {
-    // The update that last recorded the command or let go of its run.
-    update: u64,
+    // Whether the command recorded or let go of a run since the last trim.
+    used: bool,
     handles: [Option<Rc<CommandRecording>>; 3],
 }
 
@@ -64,8 +63,8 @@ impl RecorderSlot {
     // Keeps `recording`, once: the runs of a command let go of one recording
     // in any order, and a recording held twice reads as held by a reader for
     // as long as the slot keeps it.
-    fn hold(&mut self, update: u64, recording: &Rc<CommandRecording>) {
-        self.update = update;
+    fn hold(&mut self, recording: &Rc<CommandRecording>) {
+        self.used = true;
         if (self.handles.iter().flatten()).any(|held| Rc::ptr_eq(held, recording)) {
             return;
         }
@@ -76,28 +75,12 @@ impl RecorderSlot {
 }
 
 impl Recordings {
-    // Starts an update. Every 512 updates the commands that neither recorded
-    // nor let go of a run for 64 leave.
-    pub(super) fn begin_update(&mut self) {
-        self.update = self.update.wrapping_add(1);
-        if self.update.is_multiple_of(512) {
-            self.sweep();
-        }
-    }
-
-    #[cold]
-    #[inline(never)]
-    fn sweep(&mut self) {
-        let update = self.update;
-        self.slots
-            .retain(|_, slot| update.wrapping_sub(slot.update) <= 64);
-    }
-
-    // Gives back at rest the slots of the commands of nodes the store no
-    // longer draws, which a store at rest never sweeps, and the room past
-    // the slots it keeps.
+    // Gives back at rest the slots of the commands that neither recorded
+    // nor let go of a run since the last trim, and of nodes the store no
+    // longer draws, and the room past the slots it keeps.
     pub(super) fn trim(&mut self, draws: impl Fn(NodeId) -> bool) {
-        self.slots.retain(|key, _| draws(key.node_id));
+        self.slots
+            .retain(|key, slot| std::mem::take(&mut slot.used) && draws(key.node_id));
         self.slots.trim_growth_slack();
     }
 
@@ -126,11 +109,10 @@ impl Recordings {
             &mut dyn FnMut() -> Rc<CommandRecording>,
         ) -> Option<(Rc<CommandRecording>, T)>,
     ) -> Option<(Rc<CommandRecording>, T)> {
-        let update = self.update;
         let mut slot = self.slots.get_mut(&RecorderKey::from(id));
         let made = record(&mut || {
             slot.as_deref_mut().map_or_else(Rc::default, |slot| {
-                slot.update = update;
+                slot.used = true;
                 slot.lend()
             })
         })?;
@@ -140,13 +122,12 @@ impl Recordings {
     // Keeps `recording`, which `id` recorded and which the store lets go
     // of, for the command's next recording once no reader holds it.
     pub(super) fn keep(&mut self, id: DrawCommandId, recording: &Rc<CommandRecording>) {
-        let update = self.update;
         self.slots
             .entry(RecorderKey::from(id))
             .or_insert_with(|| RecorderSlot {
-                update,
+                used: true,
                 handles: [None, None, None],
             })
-            .hold(update, recording);
+            .hold(recording);
     }
 }
