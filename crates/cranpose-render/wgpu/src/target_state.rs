@@ -371,12 +371,13 @@ impl TargetState {
     // in the reach of the topmost of them, placed at its parent's origin. A
     // record that draws its own draws again takes the part of the change's
     // reach its own draws reach now, placed at its own origin: its draws may
-    // reach past the area the frame before drew them in. The whole window
-    // when a moved record's reach is not known: the walk finds that record's
-    // area unknown too. `None` when the frame works out no damage, an old
-    // area is not known, or a moved record casts an elevation shadow or lies
-    // under a parent the frame before drew through a surface or under a
-    // turn: the walk then works the areas out.
+    // reach past the area the frame before drew them in. A moved record
+    // whose reach is not known takes the clip of its nearest ancestor that
+    // clips, and the whole window under none: the walk finds that record's
+    // area unknown too, cut by the clips above it. `None` when the frame
+    // works out no damage, an old area is not known, or a moved record casts
+    // an elevation shadow or lies under a parent the frame before drew
+    // through a surface or under a turn: the walk then works the areas out.
     pub(crate) fn predicted_damage(&self, store: &SceneStore) -> Option<Damage> {
         let setting = self.setting?;
         let mut damage = self.begun()?;
@@ -423,7 +424,7 @@ impl TargetState {
     ) -> Predicted {
         let extent = store.layer(top).extent();
         let rect = match (extent.reach, extent.caster) {
-            (Reach::Unknown, _) => return Predicted::Whole,
+            (Reach::Unknown, _) => return self.clipped_area(store, parent),
             (Reach::Finite(rect), None) => rect,
             (Reach::Empty, None) => return Predicted::Nothing,
             (_, Some(_)) => return Predicted::Unknown,
@@ -434,6 +435,24 @@ impl TargetState {
             .map_or(Predicted::Unknown, |origin| {
                 Predicted::Area(rect.translate(origin.x, origin.y))
             })
+    }
+
+    // Where a record of unknown reach under `ancestor` draws now: within the
+    // clip of its nearest ancestor that clips, placed at the origin the frame
+    // before drew that one's space at; anywhere when none clips.
+    fn clipped_area(&self, store: &SceneStore, mut ancestor: Option<RecordId>) -> Predicted {
+        while let Some(id) = ancestor {
+            if let Some(clip) = store.layer(id).visual_clip_rect() {
+                return self
+                    .shown(store.record_ref(id))
+                    .and_then(|shown| shown.origin)
+                    .map_or(Predicted::Unknown, |origin| {
+                        Predicted::Area(clip.translate(origin.x, origin.y))
+                    });
+            }
+            ancestor = store.parent(id);
+        }
+        Predicted::Whole
     }
 
     // Where `record`, at `id`, draws now the own draws it drew again within
