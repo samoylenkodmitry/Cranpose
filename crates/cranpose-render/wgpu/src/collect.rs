@@ -394,8 +394,7 @@ pub(crate) fn collect_root(
     root_scale: f32,
     recycler: &mut LayerSceneRecycler,
 ) -> Box<LayerScene> {
-    // A culled walk draws a part of a whole walk's draws.
-    let mut out = recycler.take(cull.map_or(capacity, |_| SceneCapacityHint::default()));
+    let mut out = recycler.take(capacity);
     let shown_space = shown.is_some().then_some(ShownSpace::ROOT);
     if let Some(shown) = shown {
         shown.clear();

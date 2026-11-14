@@ -17,5 +17,4 @@ pub struct DebugCpuAllocationStats {
     pub scratch_glyph_instances_cap: usize,
     pub layer_cache_len: usize,
     pub layer_cache_bytes: u64,
-    pub scene_room_bytes: usize,
 }

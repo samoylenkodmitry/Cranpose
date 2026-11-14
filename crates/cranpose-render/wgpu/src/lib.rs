@@ -819,7 +819,6 @@ impl WgpuRenderer {
         stats.scene_graph_node_count = self.frontend.scene.store().node_count();
         stats.scene_graph_heap_bytes = self.frontend.scene.store().heap_bytes();
         stats.scene_hits = self.frontend.scene.hit_storage();
-        stats.scene_room_bytes = self.frontend.scene_room_bytes();
         stats
     }
 

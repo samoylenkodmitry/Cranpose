@@ -2,7 +2,7 @@ use cranpose_render_common::graph::ProjectiveTransform;
 use cranpose_ui_graphics::{GraphicsLayer, Rect};
 
 use super::*;
-use crate::{WgpuTextSystem, frame_packet::FrameSceneStorage, test_support::layer_node};
+use crate::{WgpuTextSystem, test_support::layer_node};
 
 fn frontend() -> RendererFrontend {
     RendererFrontend::new(WgpuTextSystem::from_fonts(&[]).fonts().clone())
@@ -65,24 +65,4 @@ fn dev_overlay_collects_into_packet() {
         .as_ref()
         .expect("the dev overlay is collected producer-side");
     assert!(overlay.children.is_empty());
-}
-
-#[test]
-fn apply_returns_seeds_the_next_collect_capacity() {
-    let mut frontend = frontend();
-    frontend.scene.describe(&graph());
-    let packet = frontend
-        .build_frame_packet(320, 240, 0, 0)
-        .expect("a graph collects into a packet");
-    let mut root = packet.root;
-    root.scene.runs.reserve(64);
-    let hint = root.scene.capacity_hint();
-    frontend.apply_returns(RenderReturns {
-        scene: Some(FrameSceneStorage {
-            root,
-            overlay: packet.overlay,
-        }),
-        ..RenderReturns::default()
-    });
-    assert_eq!(frontend.root_scene_capacity, hint);
 }

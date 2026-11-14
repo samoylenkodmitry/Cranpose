@@ -221,14 +221,6 @@ impl RendererFrontend {
             });
         }
         self.scene.root_layer()?;
-        if self.returned_scenes == MAX_FRAMES_IN_FLIGHT {
-            // With no packet in flight the walk takes the roomier scene: a
-            // whole walk then draws into the scene of the last whole walk.
-            let [older, newer] = &mut self.scene_recyclers;
-            if older.root_room() > newer.root_room() {
-                std::mem::swap(older, newer);
-            }
-        }
         self.returned_scenes = self.returned_scenes.saturating_sub(1);
         let (overlay, overlay_damage) = self.collect_overlays(root_scale, purpose);
         let (root, damage, cull) = self.collect_scene(
@@ -411,14 +403,6 @@ impl RendererFrontend {
         Some(region)
     }
 
-    // The bytes of room the lists of the kept layer scenes hold.
-    pub(crate) fn scene_room_bytes(&self) -> usize {
-        self.scene_recyclers
-            .iter()
-            .map(LayerSceneRecycler::kept_room)
-            .sum()
-    }
-
     // Gives back at rest the room the kept layer scenes took, and the
     // overlays' records past what they hold.
     pub(crate) fn trim(&mut self) {
@@ -562,7 +546,6 @@ impl RendererFrontend {
                 recycler.recycle(overlay);
             }
             recycler.recycle(frame.root);
-            recycler.returned_packet();
             self.returned_scenes += 1;
         }
     }
