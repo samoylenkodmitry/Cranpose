@@ -276,9 +276,8 @@ fn a_texts_slices_read_its_string_style_and_options_from_its_layout() {
         max_lines: 2,
         ..Default::default()
     };
-    let text = crate::text::AnnotatedString::from("Shared");
     let modifier = Modifier::with_element(crate::text_modifier_node::TextModifierElement::new(
-        text.clone(),
+        crate::text::AnnotatedString::from("Shared"),
         style.clone(),
         options,
         crate::density::Density::new(2.0, 1.0),
