@@ -8,7 +8,6 @@ use super::{
     RECORD_CHUNK, RunBufferMode, STOP_CHUNK, UploadMode, UploadPlacement, align_u64_to,
     place_upload,
 };
-use crate::idle_pool::RecentPeak;
 
 // A copied arena keeps its last generation from frame to frame, since the
 // copies into it queue behind the draws that read it. A mapped arena writes
@@ -32,10 +31,6 @@ pub(super) struct ArenaTables {
     sealed: bool,
     // The frame's mapped writes so far, reported when it is staged.
     written: FrameCommandStats,
-    // The most bytes of each table a frame placed lately: a generation far
-    // larger than recent frames fill goes, so the first frame of a screen,
-    // which places every run, does not hold its size for the frames after.
-    recent: [RecentPeak; BUFFER_COUNT],
 }
 
 fn grown_capacities(
@@ -84,7 +79,6 @@ impl ArenaTables {
             last_totals: [0; BUFFER_COUNT],
             sealed: false,
             written: FrameCommandStats::default(),
-            recent: std::array::from_fn(|_| RecentPeak::default()),
         }
     }
 
@@ -145,8 +139,7 @@ impl ArenaTables {
     // A generation of at least `capacities` bytes per table: a mapped arena
     // reuses a free one, which at a frame's start holds the last frame's
     // tables with room to grow, and makes one when none is free. Free
-    // generations that do not hold the frame's tables go, and those far
-    // larger than recent frames fill.
+    // generations that do not hold the frame's tables go.
     fn open(
         &mut self,
         device: &wgpu::Device,
@@ -165,9 +158,8 @@ impl ArenaTables {
         } else {
             capacities
         };
-        let recent = &self.recent;
         let taken = self.pool.take(device, |free| {
-            free.retain(|generation| generation.holds(wanted) && !oversized(generation, recent));
+            free.retain(|generation| generation.holds(wanted));
             free.pop()
         });
         match taken {
@@ -264,39 +256,17 @@ impl ArenaTables {
 
     // Ends the frame: a mapped arena's staged generations go to the pool,
     // to map again once the frame is submitted; otherwise the last
-    // generation stays for the next frame, unless it is far larger than
-    // recent frames fill. A mapped generation the frame never staged is
-    // still mapped and stays writable.
+    // generation stays for the next frame. A mapped generation the frame
+    // never staged is still mapped and stays writable.
     pub(super) fn reset(&mut self) {
         self.written = FrameCommandStats::default();
-        let first = first_bindings(self.mode);
-        for (table, recent) in self.recent.iter_mut().enumerate() {
-            let placed: u64 = self
-                .generations
-                .iter()
-                .map(|generation| generation.cursors[table])
-                .sum();
-            recent.reach(placed);
-            recent.end_frame();
-            // A storage binding grows to the largest table a frame placed;
-            // far above recent frames it goes back, and grows again on
-            // demand, so new generations open at what frames now place.
-            if far_above(self.bindings[table], recent, first[table]) {
-                self.bindings[table] = first[table];
-            }
-        }
         if std::mem::take(&mut self.sealed) {
             for generation in self.generations.drain(..) {
                 self.pool.recycle(generation, &mut self.requests);
             }
             return;
         }
-        let last_oversized = self
-            .generations
-            .last()
-            .is_some_and(|generation| oversized(generation, &self.recent));
-        let kept = usize::from(!last_oversized && !self.generations.is_empty());
-        let cut = self.generations.len() - kept;
+        let cut = self.generations.len().saturating_sub(1);
         self.generations.drain(..cut);
         for generation in &mut self.generations {
             generation.clear();
@@ -316,25 +286,4 @@ fn first_bindings(mode: RunBufferMode) -> [u64; BUFFER_COUNT] {
         };
         (elements * ELEMENT_SIZES[index]) as u64
     })
-}
-
-fn bytes(size: u64) -> usize {
-    usize::try_from(size).unwrap_or(usize::MAX)
-}
-
-// Whether `generation` holds more than four times what `recent` frames
-// placed in one of its tables, past the size a table opens at.
-#[inline(never)]
-fn oversized(generation: &ArenaGeneration, recent: &[RecentPeak; BUFFER_COUNT]) -> bool {
-    (0..BUFFER_COUNT).any(|table| {
-        let least = (INITIAL_ARENA_CAPACITIES[table] * ELEMENT_SIZES[table])
-            .max(bytes(crate::frame_graph::MIN_UPLOAD_BUFFER_BYTES));
-        far_above(generation.capacities[table], &recent[table], least as u64)
-    })
-}
-
-// Whether `size` lies above four times what `recent` frames placed, and four
-// times `least`.
-fn far_above(size: u64, recent: &RecentPeak, least: u64) -> bool {
-    size > 4 * recent.value().max(least)
 }

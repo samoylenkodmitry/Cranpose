@@ -1591,7 +1591,7 @@ impl UploadAllocatorSpec {
     }
 }
 
-pub(crate) const MIN_UPLOAD_BUFFER_BYTES: u64 = 64 * 1024;
+const MIN_UPLOAD_BUFFER_BYTES: u64 = 64 * 1024;
 
 /// Where an upload lands in a ring: at an offset of the ring's current
 /// buffer, or at the start of a larger buffer the ring opens for it.
