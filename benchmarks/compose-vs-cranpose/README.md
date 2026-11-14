@@ -1032,7 +1032,7 @@ night which state the page took.
 
 The `first_screen` bench of `cranpose-app` does what the app does between its
 launch and its first frame, with no window and no GPU: it composes the wall
-at tier 20, or the gauntlet at tier 16 with `SCREEN=gauntlet`, lays it out,
+at tier 20, or the gauntlet at tier 16 with `-- --scenario=gauntlet`, lays it out,
 builds its scene and the first frame's packet. It prints the start's time and
 allocations, then the time of a few frames after it. Under callgrind it
 counts the instructions of the start or of the frames after it; its doc

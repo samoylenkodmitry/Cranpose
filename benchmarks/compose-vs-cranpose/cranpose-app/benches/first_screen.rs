@@ -5,13 +5,15 @@
 //! while it measures them, so a cost per node of composition, subcomposition,
 //! layout or scene building shows large here.
 //!
-//! `SCREEN=wall` (default) or `SCREEN=gauntlet` names the screen and `TIER`
-//! its tier (default 20 for the wall and 16 for the gauntlet, the tiers of
-//! the nightly), in the 1280 by 820 point window of the desktop apps at
-//! `DENSITY` (default 2). The run prints the start's time, its allocations
-//! and the bytes they asked for, then the time of each of `FRAMES` frames
-//! after it (default 3). `cargo bench --bench first_screen` runs it. Under
-//! callgrind, `--toggle-collect=*first_screen*` counts the start alone and
+//! `--scenario=wall` (default) or `--scenario=gauntlet` names the screen, as
+//! on the app's command line, and `--tier` its tier (default 20 for the wall
+//! and 16 for the gauntlet, the tiers of the nightly), in the 1280 by 820
+//! point window of the desktop apps at `--density` (default 2). The run
+//! prints the start's time, its allocations and the bytes they asked for,
+//! then the time of each of `--frames` frames after it (default 3).
+//! `cargo bench --bench first_screen -- --scenario=gauntlet` runs it. Under
+//! callgrind,
+//! `--toggle-collect=*first_screen*` counts the start alone and
 //! `--toggle-collect=*steady_frames*` the frames after it.
 
 use std::{
@@ -37,9 +39,13 @@ const FACES: [&[u8]; 3] = [
     include_bytes!("../../fonts/Roboto-Bold.ttf"),
 ];
 
-fn env_or<T: std::str::FromStr>(name: &str, default: T) -> T {
-    std::env::var(name)
-        .ok()
+fn arg(name: &str) -> Option<String> {
+    let prefix = format!("--{name}=");
+    std::env::args().find_map(|arg| arg.strip_prefix(&prefix).map(str::to_owned))
+}
+
+fn arg_or<T: std::str::FromStr>(name: &str, default: T) -> T {
+    arg(name)
         .and_then(|value| value.parse().ok())
         .unwrap_or(default)
 }
@@ -80,11 +86,11 @@ fn steady_frames(shell: &mut AppShell<WgpuRenderer>, size: (u32, u32), frames: u
 }
 
 fn main() {
-    let screen = std::env::var("SCREEN").unwrap_or_else(|_| "wall".to_owned());
+    let screen = arg("scenario").unwrap_or_else(|| "wall".to_owned());
     let default_tier = if screen == "gauntlet" { 16 } else { 20 };
-    let tier: usize = env_or("TIER", default_tier);
-    let frames: usize = env_or("FRAMES", 3);
-    let density: f32 = env_or("DENSITY", 2.0);
+    let tier: usize = arg_or("tier", default_tier);
+    let frames: usize = arg_or("frames", 3);
+    let density: f32 = arg_or("density", 2.0);
     set_platform_launch_args(Arc::new(launch_args_from_command_line(
         [format!("--scenario={screen}"), format!("--tier={tier}")],
         false,
