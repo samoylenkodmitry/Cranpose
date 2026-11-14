@@ -242,3 +242,52 @@ fn a_cancelled_packet_leaves_the_run_store_at_its_last_upload() {
     );
     support::assert_same_bytes("after a cancelled packet", WIDTH, &after_cancel, &reference);
 }
+
+// Sets and clears a debug toggle the frames of these tests do not read: the
+// toggles' generation moves on, as when another thread flips any toggle.
+fn flip_a_debug_toggle() {
+    const UNREAD: &str = "CRANPOSE_NO_BACKDROP_CACHE";
+    cranpose_core::debug_toggles::set_debug_toggle(UNREAD, Some("1"));
+    cranpose_core::debug_toggles::set_debug_toggle(UNREAD, None);
+}
+
+#[test]
+fn a_debug_toggle_flipped_between_frames_refuses_no_packet() {
+    let mut renderer = match support::headless_renderer() {
+        Ok(renderer) => renderer,
+        Err(err) => {
+            eprintln!("skipping debug-toggle frames: headless WGPU init failed: {err}");
+            return;
+        }
+    };
+    renderer.scene_mut().describe(&direct_graph());
+    let (texture, view) = target_view(&renderer, WIDTH, HEIGHT);
+    let draw = |renderer: &mut support::LockedRenderer, before_draw: fn()| {
+        let packet = renderer
+            .build_frame_packet_for_tests(WIDTH, HEIGHT)
+            .expect("direct graph must lower into a packet");
+        before_draw();
+        renderer
+            .render_held_packet_for_tests(&texture, &view, WIDTH, HEIGHT, packet)
+            .expect("a refusal is a protocol outcome, not a draw error")
+    };
+    let first = draw(&mut renderer, || {});
+    let flipped_before_draw = draw(&mut renderer, flip_a_debug_toggle);
+    let built_after_flip = draw(&mut renderer, || {});
+    drop(renderer);
+    assert_eq!(
+        first,
+        PresentOutcome::Presented,
+        "the first packet must draw"
+    );
+    assert_eq!(
+        flipped_before_draw,
+        PresentOutcome::Presented,
+        "a packet whose toggles flipped between its build and its draw must draw, not be refused"
+    );
+    assert_eq!(
+        built_after_flip,
+        PresentOutcome::Presented,
+        "a packet built after a toggle flipped must draw, not be refused"
+    );
+}

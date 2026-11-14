@@ -69,6 +69,10 @@ pub(crate) struct FramePacket {
     pub(crate) root: Box<LayerScene>,
     pub(crate) overlay: Option<Box<LayerScene>>,
     pub(crate) clear: wgpu::Color,
+    // The generation of the debug toggles at the build. The present side
+    // compares frames by the value the producer culled by, so a toggle
+    // flipped before the draw refuses no packet.
+    pub(crate) debug_toggles: u64,
     // Whether a pointer was held on the app's controls for this frame.
     pub(crate) pointer_held: bool,
     // The scene update the packet was collected from: a frame drawn from the

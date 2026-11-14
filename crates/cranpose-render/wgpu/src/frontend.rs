@@ -208,6 +208,7 @@ impl RendererFrontend {
     ) -> Option<FramePacket> {
         let build_start = Instant::now();
         let window = purpose == PacketFor::Window;
+        let debug_toggles = cranpose_core::debug_toggles::debug_toggle_generation();
         if window {
             if surface_epoch != self.surface_epoch {
                 self.surface_epoch = surface_epoch;
@@ -217,6 +218,7 @@ impl RendererFrontend {
                 viewport: (width, height),
                 root_scale,
                 clear: frame_clear_color(self.transparent_background),
+                debug_toggles,
             });
         }
         self.scene.root_layer()?;
@@ -252,6 +254,7 @@ impl RendererFrontend {
             root,
             overlay,
             clear: frame_clear_color(self.transparent_background),
+            debug_toggles,
             pointer_held: std::mem::take(&mut self.pointer_held),
             scene_update,
             damage,
