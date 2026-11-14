@@ -99,8 +99,12 @@ fn alpha_masks_match_rgba_pixels_on_gl() {
 }
 
 fn assert_alpha_mask_parity(backends: wgpu::Backends) {
-    let mut renderer = support::headless_renderer_configured(wgpu::Limits::default(), backends)
-        .expect("GPU for alpha-mask parity");
+    let mut renderer = support::headless_renderer_configured(
+        wgpu::Limits::default(),
+        backends,
+        support::device::Pipelines::Inline,
+    )
+    .expect("GPU for alpha-mask parity");
     let mask = ImageBitmap::from_alpha8(16, 16, [19, 127, 239], (0..=255).collect()).expect("mask");
     let rgba = ImageBitmap::from_rgba8(16, 16, mask.rgba8_pixels().into_owned()).expect("rgba");
     let matrix = ColorFilter::matrix([
