@@ -75,7 +75,7 @@ cranpose-services = { path = "../../crates/cranpose-services", default-features 
 # The Gauntlet tab: the screen the framework comparison measures.
 perf-compare-cranpose = { path = "../../benchmarks/compose-vs-cranpose/cranpose-app", default-features = false, features = ["chat"] }
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
-zip = { version = "9.2.0", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+zip = { version = "9.5.1", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 cranpose-ui-graphics = { workspace = true }
 pulldown-cmark = { version = "0.13.6", default-features = false }
 # The Music tab: its synth renders through the audio backend, and it reads its
