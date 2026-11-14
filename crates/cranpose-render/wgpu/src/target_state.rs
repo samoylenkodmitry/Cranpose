@@ -209,6 +209,8 @@ pub(crate) struct TargetSetting {
     pub(crate) viewport: (u32, u32),
     pub(crate) root_scale: f32,
     pub(crate) clear: wgpu::Color,
+    // The generation of the debug toggles, which any thread may flip.
+    pub(crate) debug_toggles: u64,
 }
 
 /// The most frames in a row a target whose frames keep changing most of

@@ -1914,7 +1914,7 @@ impl GpuRenderer {
         FrameWindow {
             packet,
             viewport,
-            setting: self.text.frame_setting(packet.clear),
+            setting: self.text.frame_setting(packet.clear, packet.debug_toggles),
         }
     }
 

@@ -121,13 +121,13 @@ impl TextResources {
 
     /// What every pixel of a frame depends on besides its items: the clear
     /// colour, the glyph atlas and the debug switches.
-    pub(super) fn frame_setting(&self, clear: wgpu::Color) -> u64 {
+    pub(super) fn frame_setting(&self, clear: wgpu::Color, debug_toggles: u64) -> u64 {
         let mut state = FxHasher::default();
         for channel in [clear.r, clear.g, clear.b, clear.a] {
             state.write_u64(channel.to_bits());
         }
         state.write_u64(self.glyph_atlas.generation());
-        state.write_u64(cranpose_core::debug_toggles::debug_toggle_generation());
+        state.write_u64(debug_toggles);
         state.finish()
     }
 
