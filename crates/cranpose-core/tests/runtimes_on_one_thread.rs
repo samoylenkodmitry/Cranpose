@@ -1,5 +1,5 @@
-//! A thread may hold several runtimes: a state finds its own runtime's
-//! value, whichever runtime started its work last.
+// A thread may hold several runtimes: a state finds its own runtime's
+// value, whichever runtime started its work last.
 
 use cranpose_core::{DefaultScheduler, OwnedMutableState, Runtime, scheduler_ref};
 

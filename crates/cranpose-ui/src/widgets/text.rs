@@ -73,7 +73,6 @@ pub enum StaticText<'a> {
 }
 
 impl StaticText<'_> {
-    /// Whether `shown` is this text.
     pub(crate) fn is(self, shown: &crate::text::AnnotatedString) -> bool {
         match self {
             Self::Plain(text) => shown.is_plain(text),
@@ -222,7 +221,6 @@ impl StaticTextModifier<'_> {
         }
     }
 
-    // The element of the text's node.
     fn element(&self) -> TextModifierElement {
         TextModifierElement::with_shared_style(
             self.shared_text(),

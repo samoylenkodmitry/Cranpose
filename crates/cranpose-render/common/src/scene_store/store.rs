@@ -328,7 +328,6 @@ impl SceneStore {
         );
     }
 
-    // The reach of the record at `index`.
     #[cfg(feature = "window-damage")]
     pub(super) fn reach(&self, index: usize) -> Reach {
         match self.tree[index].reach_state {

@@ -143,9 +143,9 @@ impl RecordTables {
         drop_unused_gradients(shapes, gradients);
     }
 
-    /// Gives back the room growth left in every table; see
-    /// [`crate::shape_records::trim_growth`]. The content, and so the
-    /// fingerprint, stay.
+    // Gives back the room growth left in every table; see
+    // [`crate::shape_records::trim_growth`]. The content, and so the
+    // fingerprint, stay.
     pub(super) fn trim_growth(&mut self) {
         use crate::shape_records::trim_growth;
         self.shapes.trim_growth();
@@ -157,8 +157,8 @@ impl RecordTables {
         trim_growth(&mut self.segments);
     }
 
-    /// Empty tables with this one's capacities, so a recording that starts
-    /// while a scene still holds the last one grows nothing.
+    // Empty tables with this one's capacities, so a recording that starts
+    // while a scene still holds the last one grows nothing.
     pub(super) fn with_capacity_of(&self) -> Self {
         Self {
             shapes: ShapeRecords::with_capacity(self.shapes.capacity()),

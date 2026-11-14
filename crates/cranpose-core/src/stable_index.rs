@@ -128,7 +128,7 @@ impl StableIndex {
         self.entries.capacity()
     }
 
-    /// Changes `id`'s entry and counts the ids with a node.
+    // Changes `id`'s entry and counts the ids with a node.
     fn update(&mut self, id: NodeId, change: impl FnOnce(&mut Entry)) {
         let mut had_slot = false;
         let mut has_slot = false;

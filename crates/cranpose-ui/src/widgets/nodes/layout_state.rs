@@ -72,8 +72,8 @@ impl PlacementPass {
         (self.unplaced.get() > 0).then(|| self.id.get())
     }
 
-    /// Counts placed node `node_id`, which the running pass cleared, and
-    /// returns the pass.
+    // Counts placed node `node_id`, which the running pass cleared, and
+    // returns the pass.
     pub(super) fn clear(&self, node_id: Option<NodeId>) -> u64 {
         self.unplaced.set(self.unplaced.get() + 1);
         if let Some(node_id) = node_id {

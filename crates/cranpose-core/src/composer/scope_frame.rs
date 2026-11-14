@@ -31,7 +31,6 @@ pub(crate) struct DeferredScope {
     // Whether the body runs whatever its parameters: a changed static
     // composition local, or reused content around it.
     pub(crate) forced: bool,
-    // Whether the group composed before this pass.
     pub(crate) composed_once: bool,
     // The scope the body made.
     pub(crate) made: Option<RecomposeScope>,
@@ -311,7 +310,6 @@ impl Composer {
         depth.set(depth.get().saturating_sub(1));
     }
 
-    // Pops the frame of a group that closed.
     pub(crate) fn pop_closed_scope(&self) {
         if self.scope_stack().pop().is_none() {
             log::error!("scope stack underflow while closing a group");

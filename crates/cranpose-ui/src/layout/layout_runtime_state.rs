@@ -15,7 +15,7 @@ use crate::{
 };
 
 pub(crate) struct LayoutRuntimeState {
-    /// `None` until the node first binds a child: most nodes are leaves.
+    // `None` until the node first binds a child: most nodes are leaves.
     pub(super) children: Option<Box<LayoutChildren>>,
     pub(super) coordinator_chain: CoordinatorChain,
     pub(super) measure_policy: Rc<dyn MeasurePolicy>,

@@ -318,8 +318,8 @@ pub(crate) struct ComposerCore {
     /// Whether a static composition local provided around what composes
     /// now changed: every group opened meanwhile runs its body.
     locals_changed: Cell<bool>,
-    /// How many open groups compose reused or restored content, under which
-    /// every group runs its body.
+    // How many open groups compose reused or restored content, under which
+    // every group runs its body.
     reused_depth: Cell<u32>,
     pub(crate) _not_send: PhantomData<*const ()>,
 }

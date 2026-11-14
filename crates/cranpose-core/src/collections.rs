@@ -9,7 +9,7 @@ pub mod id_pages;
 pub mod pass_aged;
 pub mod perfect_map;
 pub mod rare;
-/// The room a reused collection keeps between frames.
+
 mod word_hash;
 
 pub use word_hash::WordHasher;

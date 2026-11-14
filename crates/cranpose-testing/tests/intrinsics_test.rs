@@ -326,8 +326,8 @@ fn a_weighted_row_is_wide_enough_for_each_weighted_child() {
     assert_eq!(bounds(&root, "wide").0, 50.0);
 }
 
-/// A layout as wide as it is asked to be, whose min intrinsic width is 10
-/// and max intrinsic width is 100.
+// A layout as wide as it is asked to be, whose min intrinsic width is 10
+// and max intrinsic width is 100.
 #[derive(Clone, PartialEq)]
 struct Stretchy;
 
@@ -364,8 +364,8 @@ impl MeasurePolicy for Stretchy {
     }
 }
 
-/// A rule that composes a row of `Stretchy` whose intrinsic modifier is what
-/// `modifier` makes of the state it returns.
+// A rule that composes a row of `Stretchy` whose intrinsic modifier is what
+// `modifier` makes of the state it returns.
 fn stretchy_row<T: Clone + PartialEq + 'static>(
     initial: T,
     modifier: fn(T) -> Modifier,

@@ -427,9 +427,9 @@ impl FramePacer {
             .map(|next_slot_ns| next_slot_ns - lead_ns)
     }
 
-    /// The level frames run at now, trying the level below once the hold is
-    /// over: an unpaced loop that kept up for a window comes down to two
-    /// frames queued from a full queue, and to one from a shallow one.
+    // The level frames run at now, trying the level below once the hold is
+    // over: an unpaced loop that kept up for a window comes down to two
+    // frames queued from a full queue, and to one from a shallow one.
     fn level(&mut self, now_ns: i64, vsync_period_ns: i64) -> Option<Level> {
         let stage = self.stage?;
         let hold_over = stage.until_ns.is_none_or(|until| now_ns >= until);

@@ -83,7 +83,7 @@ enum Scene {
     /// The spinner at the top and a caret changing at the bottom, far apart,
     /// with the two liquid glass panes between them.
     SpinnerAndCaret,
-    /// Ten small spots scattered over the window changing colour.
+    // Ten small spots scattered over the window changing colour.
     TenSpots,
     // The page moving for `MOVES` steps, then a shape changing colour over
     // the page held still.
@@ -139,7 +139,7 @@ const LAZY_LABEL: [f32; 4] = [
 /// A caret near the bottom, far from the spinner.
 const CARET: [f32; 4] = [40.0, 372.0, 2.0, 16.0];
 
-/// Small spots scattered over the window, no two in a row or a column.
+// Small spots scattered over the window, no two in a row or a column.
 const SPOTS: [[f32; 4]; 10] = [
     [10.0, 14.0, 12.0, 12.0],
     [150.0, 40.0, 12.0, 12.0],
@@ -153,12 +153,12 @@ const SPOTS: [[f32; 4]; 10] = [
     [204.0, 380.0, 12.0, 12.0],
 ];
 
-/// The frames a target draws whole before one can draw a part: the first,
-/// with nothing to draw over.
+// The frames a target draws whole before one can draw a part: the first,
+// with nothing to draw over.
 const START_FRAMES: u32 = 1;
 
-/// The frames a swapchain draws whole before one draws a part: one into
-/// each of its images, which first hold no frame.
+// The frames a swapchain draws whole before one draws a part: one into
+// each of its images, which first hold no frame.
 const SWAPCHAIN_START_FRAMES: u32 = SWAPCHAIN_IMAGES as u32;
 
 /// The frames in a row that change a small part of the window before the
@@ -1447,10 +1447,10 @@ fn two_small_animations_far_apart_repaint_only_their_areas() {
     }
 }
 
-/// Ten small changes scattered over the window, as a dashboard's clock,
-/// counters and spinners change, draw only their own areas: a rect each, a
-/// small share of the window, in no more passes than the whole frame, and
-/// every frame equals the whole frame.
+// Ten small changes scattered over the window, as a dashboard's clock,
+// counters and spinners change, draw only their own areas: a rect each, a
+// small share of the window, in no more passes than the whole frame, and
+// every frame equals the whole frame.
 #[test]
 fn ten_small_changes_scattered_over_the_window_draw_only_their_areas() {
     const PARTIAL_FRAMES: u32 = 6;
@@ -1682,8 +1682,8 @@ fn whole_frames_at_a_start(keeper: Keeper, frames: u32) -> Option<u32> {
     Some(drawn_whole)
 }
 
-/// A window draws whole once into each image of its swapchain, as each
-/// arrives holding no frame; every frame after draws what it changes.
+// A window draws whole once into each image of its swapchain, as each
+// arrives holding no frame; every frame after draws what it changes.
 #[test]
 fn a_start_draws_each_swapchain_image_whole_once() {
     let frames = 4 * SWAPCHAIN_START_FRAMES;
@@ -1692,8 +1692,8 @@ fn a_start_draws_each_swapchain_image_whole_once() {
     }
 }
 
-/// A target that keeps its frame draws whole once, with nothing to draw
-/// over; every frame after draws what it changes.
+// A target that keeps its frame draws whole once, with nothing to draw
+// over; every frame after draws what it changes.
 #[test]
 fn a_start_draws_a_kept_target_whole_once() {
     if let Some(drawn_whole) = whole_frames_at_a_start(Keeper::Composition, 8) {

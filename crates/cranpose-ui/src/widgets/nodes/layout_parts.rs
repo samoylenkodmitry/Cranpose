@@ -66,7 +66,6 @@ impl LayoutParts {
         self.layout_state.place_child(node_id, at, placer, context);
     }
 
-    // Writes the measured size of node `node_id`, whose parts these are.
     pub(crate) fn set_size(&self, node_id: Option<NodeId>, size: Size, context: &AppContext) {
         self.layout_state.set_size(node_id, size, context);
     }

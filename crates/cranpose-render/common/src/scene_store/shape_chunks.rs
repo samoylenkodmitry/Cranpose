@@ -415,12 +415,10 @@ impl SceneStore {
         self.shape_chunks.trim(&mut self.shape_runs);
     }
 
-    // How many shape items the store holds.
     pub(super) fn shape_item_count(&self) -> usize {
         self.shape_runs.values().count()
     }
 
-    // Lets go of every shape item and chunk.
     pub(super) fn clear_shapes(&mut self) {
         self.shape_runs.clear();
         self.shape_chunks = ShapeChunks::default();

@@ -240,8 +240,8 @@ pub(crate) fn draws_in(command: &DrawCommand, placement: DrawPlacement) -> bool 
     placement_split(command, placement).is_some()
 }
 
-/// Whether `command` draws in `placement`, and for a with-content command
-/// the half of it `placement` takes.
+// Whether `command` draws in `placement`, and for a with-content command
+// the half of it `placement` takes.
 fn placement_split(
     command: &DrawCommand,
     placement: DrawPlacement,

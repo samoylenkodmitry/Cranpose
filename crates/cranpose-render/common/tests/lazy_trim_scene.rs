@@ -56,10 +56,10 @@ fn TrimmableList(dropped: MutableState<usize>) {
     );
 }
 
-/// The scope the app shell hands the scoped scene update of `scene`: the
-/// content of every node the layout pass reshaped or placed anew, of every
-/// node `scene` draws an unplaced node within and of every parent whose
-/// child set changed, and the nodes it only moved.
+// The scope the app shell hands the scoped scene update of `scene`: the
+// content of every node the layout pass reshaped or placed anew, of every
+// node `scene` draws an unplaced node within and of every parent whose
+// child set changed, and the nodes it only moved.
 fn scoped_scene_nodes(
     applier: &mut MemoryApplier,
     root: NodeId,

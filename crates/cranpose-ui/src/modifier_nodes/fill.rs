@@ -64,7 +64,6 @@ impl FillElement {
         self.fraction
     }
 
-    // Whether the element fills the width, and whether the height.
     pub(crate) fn fills(&self) -> (bool, bool) {
         match self.direction {
             FillDirection::Horizontal => (true, false),
@@ -116,9 +115,9 @@ impl PlainElement for FillElement {
 }
 
 impl PlainLayout for FillElement {
-    /// A filled axis holds while the same max fills it the same; an axis
-    /// the node leaves alone passes the bounds on and holds what its content
-    /// holds.
+    // A filled axis holds while the same max fills it the same; an axis
+    // the node leaves alone passes the bounds on and holds what its content
+    // holds.
     fn measure_hold(
         &self,
         density: f32,
@@ -223,8 +222,8 @@ impl PlainLayout for FillElement {
     }
 }
 
-/// One axis of what a fill modifier holds for: see
-/// `FillElement::measure_hold`.
+// One axis of what a fill modifier holds for: see
+// `FillElement::measure_hold`.
 fn fill_axis_hold(
     fills: bool,
     (max, size): (f32, f32),

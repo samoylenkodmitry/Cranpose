@@ -28,7 +28,6 @@ pub struct Leaf {
 struct LeafRows {
     // The leaf moved in its parent, or its content within it.
     moved: bool,
-    // The parent's containment and reach no longer hold.
     parent_stale: bool,
 }
 

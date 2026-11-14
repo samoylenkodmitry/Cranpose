@@ -30,8 +30,8 @@ static GLOBAL: &StatsAlloc<System> = &INSTRUMENTED_SYSTEM;
 
 const PASSES: usize = 10;
 
-/// The ids of the records directly under the root of `graph`, the cells
-/// of the column.
+// The ids of the records directly under the root of `graph`, the cells
+// of the column.
 fn cell_ids(graph: &Scene) -> Vec<NodeId> {
     graph
         .root_layer()

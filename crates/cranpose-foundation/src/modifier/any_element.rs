@@ -184,9 +184,9 @@ impl<E: ModifierNodeElement> HeldBy<E> {
 
 struct TypedModifierElement<E: ModifierNodeElement> {
     element: E,
-    /// The element's hash, worked out the first time a chain rebuilding
-    /// asks for it: most elements are built for a recomposition and only
-    /// compared with the last ones.
+    // The element's hash, worked out the first time a chain rebuilding
+    // asks for it: most elements are built for a recomposition and only
+    // compared with the last ones.
     hash: Cell<Option<PackedU64>>,
     provides_locals: bool,
 }

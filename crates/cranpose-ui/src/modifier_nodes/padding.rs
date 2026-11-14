@@ -161,7 +161,7 @@ impl PlainLayout for PaddingElement {
 }
 
 // `padding` with each side on a whole device pixel of `density`, as
-/// Compose's `roundToPx` puts every padding side.
+// Compose's `roundToPx` puts every padding side.
 pub(crate) fn device_padding(padding: EdgeInsets, density: f32) -> EdgeInsets {
     use cranpose_ui_layout::round_to_px;
     EdgeInsets {

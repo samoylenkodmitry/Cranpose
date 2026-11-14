@@ -5,13 +5,13 @@ use super::{
     request_update_auto_invalidations,
 };
 
-/// What updating an entry in place did to the chain's links.
+// What updating an entry in place did to the chain's links.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum InPlace {
-    /// The links and capability aggregates stand as they were.
+    // The links and capability aggregates stand as they were.
     LinksHold,
-    /// The entry's capabilities changed, or its updated node delegates and
-    /// may have changed its delegates: the chain links again.
+    // The entry's capabilities changed, or its updated node delegates and
+    // may have changed its delegates: the chain links again.
     Relink,
 }
 

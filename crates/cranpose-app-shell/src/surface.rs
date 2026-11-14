@@ -444,12 +444,11 @@ pub(crate) struct SurfaceRoutingScratch {
     pub(crate) seen: HashSet<(usize, NodeId)>,
     pub(crate) attachment: SceneNodeAttachmentScratch,
     pub(crate) window_roots: cranpose_ui::WindowRootRoutingScratch,
-    /// The nodes a layout lane routing gave the surfaces, while the moved
-    /// lane after it is routed.
+    // The nodes a layout lane routing gave the surfaces, while the moved
+    // lane after it is routed.
     pub(crate) laid_out: NodeMarks,
-    /// Each surface's count of layout lane nodes before that routing.
+    // Each surface's count of layout lane nodes before that routing.
     pub(crate) laid_out_starts: Vec<usize>,
-    /// The moved nodes the moved lane routes.
     pub(crate) moved: Vec<NodeId>,
 }
 

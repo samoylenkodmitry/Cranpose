@@ -544,8 +544,8 @@ pub(crate) fn hash_device_rect<H: Hasher>(
     hash_device_offset(rect.height, 0.0, root_scale, state);
 }
 
-/// Hashes the rect `placement` is clipped to, `clip`, and its rounding, in
-/// device pixels from `origin`.
+// Hashes the rect `placement` is clipped to, `clip`, and its rounding, in
+// device pixels from `origin`.
 fn hash_placement_clips<H: Hasher>(
     placement: &Placement,
     clip: Option<Rect>,

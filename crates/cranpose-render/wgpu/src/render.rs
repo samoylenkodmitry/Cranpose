@@ -1918,9 +1918,9 @@ impl GpuRenderer {
         }
     }
 
-    /// Keeps the frame of `plan` just drawn into its target, with the parts
-    /// it drew marked while it may show a stand-in. A frame that draws
-    /// nothing into a presentable image submits nothing, and is drawn.
+    // Keeps the frame of `plan` just drawn into its target, with the parts
+    // it drew marked while it may show a stand-in. A frame that draws
+    // nothing into a presentable image submits nothing, and is drawn.
     fn keep_window(
         &mut self,
         plan: Option<FrameDamagePlan>,

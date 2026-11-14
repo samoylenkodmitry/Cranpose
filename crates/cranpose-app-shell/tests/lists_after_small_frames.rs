@@ -1,5 +1,5 @@
-//! A screen that names hundreds of nodes in one frame, after many frames that
-//! each name one, updates its scene as a scene built from scratch would be.
+// A screen that names hundreds of nodes in one frame, after many frames that
+// each name one, updates its scene as a scene built from scratch would be.
 
 use std::{cell::RefCell, rc::Rc};
 

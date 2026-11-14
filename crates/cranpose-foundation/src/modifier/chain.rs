@@ -228,8 +228,8 @@ fn find_match(
     }
 }
 
-/// A new entry for `element`: its node, updated, and attached when `attach`,
-/// as it joins an attached chain, or its words.
+// A new entry for `element`: its node, updated, and attached when `attach`,
+// as it joins an attached chain, or its words.
 fn fresh_entry(
     element: DynModifierElement,
     context: &mut dyn ModifierNodeContext,

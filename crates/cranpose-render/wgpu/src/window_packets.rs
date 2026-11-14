@@ -32,7 +32,6 @@ pub(crate) struct WindowPackets {
 }
 
 impl WindowPackets {
-    // The window packet built last.
     pub(crate) fn last(&self) -> Option<u64> {
         self.last.map(|(frame, _)| frame)
     }

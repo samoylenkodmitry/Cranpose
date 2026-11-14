@@ -1,5 +1,5 @@
-//! What a built scene actually paints, for tests that need to compare the
-//! scene against the tree it was built from.
+// What a built scene actually paints, for tests that need to compare the
+// scene against the tree it was built from.
 
 use cranpose_core::{MemoryApplier, NodeId};
 use cranpose_render_common::{

@@ -52,7 +52,6 @@ impl Frames {
         self.list[position].anchor = anchor;
     }
 
-    // Keeps the frames whose container `keep` names.
     pub(crate) fn retain(&mut self, mut keep: impl FnMut(RecordRef) -> bool) {
         self.list.retain(|frame| keep(frame.record));
     }

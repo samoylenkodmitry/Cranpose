@@ -98,7 +98,7 @@ pub(crate) enum InPlaceReach {
     // The node's own measure, which reads the element's new value: a size
     // enters nothing the node's parent reads.
     Measure,
-    /// The node's measure and the parent data the chain gives its parent.
+    // The node's measure and the parent data the chain gives its parent.
     Resolved,
 }
 
@@ -628,8 +628,8 @@ struct Resolution {
 }
 
 impl Resolution {
-    /// Takes in the next plain element of the walk, of the type `fns`
-    /// tells, from its `words`.
+    // Takes in the next plain element of the walk, of the type `fns`
+    // tells, from its `words`.
     fn take_plain(&mut self, fns: &cranpose_foundation::PlainFns, words: &[u32]) {
         // One type lookup an element: each `read` asks for it again.
         let kind = fns.element_type();
@@ -672,7 +672,7 @@ impl Resolution {
         }
     }
 }
-/// Sets the alignments a parent reads from `element` that no outer one set.
+// Sets the alignments a parent reads from `element` that no outer one set.
 fn apply_alignment(layout: &mut LayoutProperties, element: &AlignmentElement) {
     if layout.box_alignment.is_none() {
         layout.box_alignment = element.in_box();

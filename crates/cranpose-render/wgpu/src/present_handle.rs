@@ -84,8 +84,8 @@ impl PresentHandle {
         self.outstanding < MAX_FRAMES_IN_FLIGHT
     }
 
-    /// Whether the present thread has handed back a frame that
-    /// [`Self::try_drain`] has not taken yet, which frees a credit.
+    // Whether the present thread has handed back a frame that
+    // [`Self::try_drain`] has not taken yet, which frees a credit.
     pub(crate) fn has_undrained_return(&self) -> bool {
         self.status.returned_frames.load(Ordering::Acquire) > self.drained
     }
@@ -144,8 +144,8 @@ impl PresentHandle {
         }
     }
 
-    /// Sends `control` behind the packets already sent, waiting for
-    /// nothing. False when the runtime is gone.
+    // Sends `control` behind the packets already sent, waiting for
+    // nothing. False when the runtime is gone.
     pub(crate) fn send_control(&self, control: PresentControl) -> bool {
         self.msg_tx.send(PresentMsg::Control(control)).is_ok()
     }

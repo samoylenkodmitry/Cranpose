@@ -24,13 +24,12 @@ use crate::{
     window_packets::{PacketDraws, WindowPackets},
 };
 
-/// What a packet is built for.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PacketFor {
-    /// The window: its frame changes the window's frame before, which the
-    /// window's target state follows.
+    // The window: its frame changes the window's frame before, which the
+    // window's target state follows.
     Window,
-    /// A capture at a scale of its own, drawn whole.
+    // A capture at a scale of its own, drawn whole.
     Capture,
 }
 

@@ -1,9 +1,9 @@
-//! `Box`, `Row` and `Column` compose in their caller's group, as Compose's
-//! inline widgets do, and so does a `Text` of a fixed text. The node tree
-//! stays as the code nests them while a composable around them skips, and a
-//! loop of them that shrinks and grows again keeps the nodes and remembered
-//! values of the items that stay. A composable that skips keeps its nodes in
-//! the order it emitted them. A text read from a state recomposes alone.
+// `Box`, `Row` and `Column` compose in their caller's group, as Compose's
+// inline widgets do, and so does a `Text` of a fixed text. The node tree
+// stays as the code nests them while a composable around them skips, and a
+// loop of them that shrinks and grows again keeps the nodes and remembered
+// values of the items that stay. A composable that skips keeps its nodes in
+// the order it emitted them. A text read from a state recomposes alone.
 
 use std::{
     cell::{Cell, RefCell},

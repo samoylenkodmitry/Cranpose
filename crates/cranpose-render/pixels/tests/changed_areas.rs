@@ -1,8 +1,8 @@
-//! A frame kept by a host and redrawn only in the areas
-//! `PixelsRenderer::update_picture` reports stays equal to a full redraw while
-//! content moves, resizes, changes color, text, alpha, shadow and stacking
-//! order, scrolls under a clip, appears and disappears, arcs sweep, and one
-//! public setter of the scene store changes one record alone.
+// A frame kept by a host and redrawn only in the areas
+// `PixelsRenderer::update_picture` reports stays equal to a full redraw while
+// content moves, resizes, changes color, text, alpha, shadow and stacking
+// order, scrolls under a clip, appears and disappears, arcs sweep, and one
+// public setter of the scene store changes one record alone.
 
 use std::{cell::RefCell, rc::Rc, sync::Arc};
 

@@ -1,6 +1,6 @@
-//! A composable whose body reads no state keeps no restart scope, and makes
-//! one when a body of it first reads a state: from then on a change of the
-//! state recomposes it alone, as when it read the state from its first body.
+// A composable whose body reads no state keeps no restart scope, and makes
+// one when a body of it first reads a state: from then on a change of the
+// state recomposes it alone, as when it read the state from its first body.
 
 use std::{cell::Cell, rc::Rc};
 
