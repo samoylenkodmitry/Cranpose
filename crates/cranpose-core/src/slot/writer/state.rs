@@ -1,7 +1,9 @@
 use std::rc::Rc;
 
 use super::{
-    super::{BranchFolds, DetachedSubtree, SlotPassMode, SlotTable, branch_folds::mix_fold},
+    super::{
+        BranchFolds, DetachedSubtree, NodeRecord, SlotPassMode, SlotTable, branch_folds::mix_fold,
+    },
     frames::{GroupFrameStack, RootFrame},
 };
 use crate::{AnchorId, collections::map::HashMap};
@@ -9,6 +11,15 @@ use crate::{AnchorId, collections::map::HashMap};
 pub(crate) struct SlotWriteSessionState {
     pub(in crate::slot) root: RootFrame,
     pub(in crate::slot) group_stack: GroupFrameStack,
+    // The node records open groups emitted after records of their child
+    // groups, in emission order: the last ones are the top frame's, as many
+    // as its node cursor stands past its group's records. A group's own
+    // records sit ahead of its children's, so one such record put in place
+    // moves every record of those children, and a group that emits a node
+    // among each of many children, as a column of rows does, would move them
+    // all again for each. The records join their group's segment together
+    // when its body finishes.
+    pub(in crate::slot) late_nodes: Vec<NodeRecord>,
     payload_location_refreshes: HashMap<AnchorId, usize>,
     rejected_restore_subtrees: Vec<DetachedSubtree>,
     /// The composer's open branch guards; the pass's root-level groups fold
@@ -39,6 +50,7 @@ impl SlotWriteSessionState {
         Self {
             root: RootFrame::default(),
             group_stack: GroupFrameStack::default(),
+            late_nodes: Vec::new(),
             payload_location_refreshes: HashMap::default(),
             rejected_restore_subtrees: Vec::new(),
             folds,
@@ -72,6 +84,7 @@ impl SlotWriteSessionState {
     pub(crate) fn reset_for_pass(&mut self, mode: SlotPassMode) {
         self.root.reset(matches!(mode, SlotPassMode::Compose));
         self.group_stack.clear();
+        self.late_nodes.clear();
         self.payload_location_refreshes.clear();
         if !self.rejected_restore_subtrees.is_empty() {
             log::error!(

@@ -10,7 +10,7 @@ use cranpose_foundation::lazy::{
 use cranpose_macros::composable;
 use cranpose_ui::{
     AppContext, AppContextScope, Column, ColumnSpec, LazyColumn, LazyColumnSpec, LinearArrangement,
-    Modifier, Size, Text, TextStyle, measure_layout,
+    Modifier, Row, RowSpec, Size, Text, TextStyle, measure_layout,
 };
 use criterion::{Bencher, Criterion, criterion_group, criterion_main};
 
@@ -45,6 +45,9 @@ const LAZY_LIST_SCROLL_BENCH_STEPS: usize = LAZY_LIST_SCROLL_PATTERN.len();
 const ANIMATION_FRAME_SECTIONS: usize = 16;
 const ANIMATION_FRAME_ITEMS_PER_SECTION: usize = 8;
 const ANIMATION_FRAME_BENCH_STEPS: usize = 16;
+// A first composition of rows of cells: each row's node joins the group of
+// the column around them after the cells of the rows before it.
+const FIRST_COMPOSE_GRIDS: [(usize, usize); 2] = [(64, 64), (256, 64)];
 
 #[composable]
 fn KeyedItem(id: u64) {
@@ -66,6 +69,24 @@ fn ConditionalToggleContent(item_count: usize, toggle_index: usize, include_togg
             cranpose_core::with_key(&id, || KeyedItem(id));
         }
     }
+}
+
+#[composable]
+fn GridCell() {
+    Column(Modifier::empty(), ColumnSpec::default(), || {});
+}
+
+#[composable]
+fn RowsOfCells(rows: usize, cells: usize) {
+    Column(Modifier::empty(), ColumnSpec::default(), move || {
+        for _ in 0..rows {
+            Row(Modifier::empty(), RowSpec::default(), move || {
+                for _ in 0..cells {
+                    GridCell();
+                }
+            });
+        }
+    });
 }
 
 #[composable]
@@ -714,6 +735,23 @@ fn bench_animation_frame_recomposition(c: &mut Criterion) {
     });
 }
 
+fn bench_first_compose_grid(c: &mut Criterion) {
+    for (rows, cells) in FIRST_COMPOSE_GRIDS {
+        let name = format!("slot_table_v2_first_compose_rows_{rows}x{cells}");
+        c.bench_function(&name, |b| {
+            let _app_context = BenchAppContext::new();
+            let root_key = location_key(file!(), line!(), column!());
+            b.iter(|| {
+                let mut composition = Composition::new(MemoryApplier::new());
+                composition
+                    .render(root_key, || RowsOfCells(rows, cells))
+                    .expect("first compose render");
+                black_box(composition)
+            });
+        });
+    }
+}
+
 criterion_group!(
     name = benches;
     config = Criterion::default()
@@ -726,6 +764,7 @@ criterion_group!(
         bench_tab_switching_matrix,
         bench_subcompose_scrolling,
         bench_lazy_list_matrix,
-        bench_animation_frame_recomposition
+        bench_animation_frame_recomposition,
+        bench_first_compose_grid
 );
 criterion_main!(benches);

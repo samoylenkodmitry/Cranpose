@@ -97,6 +97,7 @@ impl SlotWriteSession<'_> {
             if self.state.pop_group_frame().is_none() {
                 return;
             }
+            self.table.drop_unowned_late_nodes(self.state);
         }
     }
 
@@ -270,6 +271,7 @@ impl SlotWriteSession<'_> {
         #[cfg(any(test, debug_assertions))]
         self.state
             .debug_assert_no_pending_payload_location_refreshes("begin_recompose_at_scope");
+        self.table.join_all_late_nodes(self.state);
         let group = self.table.active_group_for_scope(scope)?;
         let anchor = self.table.try_active_group_anchor(group)?;
         self.table
