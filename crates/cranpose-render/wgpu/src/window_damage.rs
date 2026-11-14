@@ -37,10 +37,6 @@ const COPY_COVERAGE: f32 = 2.0;
 /// The frames in a row that change a small part of the window before the
 /// composition target starts keeping the frame for images that come cleared.
 const COPY_AFTER: u32 = 3;
-/// The frames images that come cleared take before a kept copy may start,
-/// about a second at 60 Hz: a page starting up keeps changing, and a copy
-/// is worth little that early.
-pub(crate) const COPY_HOLD_OFF: u32 = 64;
 /// The packets back whose damages the renderer keeps.
 const HISTORY: usize = 8;
 // The most rects a frame's damage keeps apart: changes far apart, such as

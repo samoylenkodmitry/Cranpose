@@ -1,6 +1,5 @@
 use super::{
-    COPY_AFTER, COPY_COVERAGE, COPY_HOLD_OFF, Damage, DeviceRect, FrameDamages, FrameWindow, Held,
-    Since,
+    COPY_AFTER, COPY_COVERAGE, Damage, DeviceRect, FrameDamages, FrameWindow, Held, Since,
 };
 use crate::{collect::LayerScene, draw_pass::op_draw_bounds};
 
@@ -8,8 +7,7 @@ use crate::{collect::LayerScene, draw_pass::op_draw_bounds};
 /// whose draws cover the window more than twice changes a small part of it,
 /// the composition target keeps the frame, draws only what changes, and is
 /// copied whole into each image; the first frame that changes most of the
-/// window draws straight into its image again and lets the target go. A
-/// copy starts at the earliest after [`COPY_HOLD_OFF`] frames.
+/// window draws straight into its image again and lets the target go.
 #[derive(Default)]
 pub(crate) struct ClearedImages {
     /// The frame drawn straight into an image last.
@@ -17,8 +15,6 @@ pub(crate) struct ClearedImages {
     /// The frames in a row drawn straight into an image that changed a
     /// small part of the window.
     small_frames: u32,
-    /// The frames these images took, up to past [`COPY_HOLD_OFF`].
-    frames: u32,
     /// Whether the composition target keeps the frame for these images.
     pub(crate) copied: bool,
 }
@@ -31,23 +27,6 @@ impl ClearedImages {
         damages: &FrameDamages,
         frame: &FrameWindow<'_>,
     ) -> (Since, bool) {
-        // The images hold off for [`COPY_HOLD_OFF`] frames; the frame after
-        // draws whole, as the one the next compares with.
-        if self.frames <= COPY_HOLD_OFF {
-            self.frames += 1;
-            let baseline = self.frames > COPY_HOLD_OFF;
-            let damage = if baseline {
-                Damage::Full
-            } else {
-                Damage::Skipped
-            };
-            let since = Since {
-                damage,
-                baseline,
-                unheld: false,
-            };
-            return (since, false);
-        }
         let since = self.copied_damage(damages, self.kept, frame);
         if !matches!(since.damage, Damage::Part(_)) {
             self.small_frames = 0;
