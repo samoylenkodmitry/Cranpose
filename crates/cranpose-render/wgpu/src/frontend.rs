@@ -308,10 +308,7 @@ impl RendererFrontend {
         (overlay, overlay_damage): (Option<&LayerScene>, Damage),
     ) -> (Box<LayerScene>, Damage, Option<DamageRects>) {
         let window = purpose == PacketFor::Window;
-        let since = self
-            .window
-            .last()
-            .filter(|_| self.target.knew_before() && self.overlay_target.knew_before());
+        let since = self.since();
         let next = self.frame_sequence.wrapping_add(1);
         let mut cull = window
             .then(|| self.cull_region())
@@ -367,9 +364,7 @@ impl RendererFrontend {
             recycler.recycle(root);
             cull = repaint.filter(|_| !widened).map(|repaint| {
                 let mut wider = region;
-                for rect in repaint.as_slice() {
-                    wider.add(*rect);
-                }
+                wider.add_all(&repaint);
                 wider
             });
             widened = true;
@@ -397,9 +392,7 @@ impl RendererFrontend {
         };
         let damage = predicted.union(overlay_damage, viewport);
         let packet = self.window.next_damage(damage, since, viewport);
-        for rect in self.window.repaint(next, packet)?.as_slice() {
-            region.add(*rect);
-        }
+        region.add_all(&self.window.repaint(next, packet)?);
         Some(region)
     }
 
@@ -441,12 +434,17 @@ impl RendererFrontend {
         self.window.cull_region(begun)
     }
 
+    // The last window packet, when the targets knew what the images held
+    // before this frame: the packet the next one changes against.
+    fn since(&self) -> Option<u64> {
+        self.window
+            .last()
+            .filter(|_| self.target.knew_before() && self.overlay_target.knew_before())
+    }
+
     // The damage of the window packet that draws `draws` with `damage`.
     fn window_packet_damage(&mut self, damage: Damage, draws: PacketDraws) -> PacketDamage {
-        let since = self
-            .window
-            .last()
-            .filter(|_| self.target.knew_before() && self.overlay_target.knew_before());
+        let since = self.since();
         let damage = self.window.next_damage(damage, since, draws.viewport);
         self.window.built(self.frame_sequence, damage, draws);
         damage
