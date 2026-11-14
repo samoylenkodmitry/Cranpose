@@ -275,6 +275,10 @@ pub(crate) struct TargetState {
     recording: bool,
     // Whether the frame in progress, skipped, changes nothing at all.
     still: bool,
+    // Whether the last frame that worked out its change against a frame it
+    // knew changed the whole window.
+    #[cfg(not(target_arch = "wasm32"))]
+    changed_whole: bool,
     // The root the frame before drew.
     last_root: Option<RecordRef>,
     // When the records' changes since the frame before are lost, the area
@@ -425,14 +429,49 @@ impl TargetState {
     // Puts the area the frame before drew the record of `entry` in into the
     // damage, and keeps the record to add its area after the collect.
     fn note(&mut self, store: &SceneStore, entry: &JournalEntry) {
-        let scope = Scope::of(entry.event);
-        if !matches!(entry.event, RecordEvent::Inserted | RecordEvent::Claimed) {
-            let area = self.area_of(store, (entry.record, scope), entry.parent);
+        if let Some(area) = self.old_area(store, entry) {
             self.add(area);
         }
         if entry.event != RecordEvent::Removed {
-            self.changed.push((entry.record, scope));
+            self.changed.push((entry.record, Scope::of(entry.event)));
         }
+    }
+
+    // The area the frame before drew the record of `entry` in; `None` for a
+    // record new since.
+    fn old_area(&mut self, store: &SceneStore, entry: &JournalEntry) -> Option<Area> {
+        (!matches!(entry.event, RecordEvent::Inserted | RecordEvent::Claimed))
+            .then(|| self.area_of(store, (entry.record, Scope::of(entry.event)), entry.parent))
+    }
+
+    // Whether the records' changes since the frame before cover the whole
+    // window of `setting`, by the areas the frame before drew them in: the
+    // next frame's walk takes the whole page by its damage. It reads the
+    // changes without taking them, as the frame that takes them reads them
+    // again. The store keeps no changes for a frame that skips working out
+    // its damage, nor for the frame after skipped ones: those go by the last
+    // frame that worked its change out. A frame of another setting knows no
+    // frame before.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn changes_whole(&mut self, store: &SceneStore, setting: TargetSetting) -> bool {
+        if self.skipped > 0 || self.stale {
+            return self.changed_whole;
+        }
+        if self.setting != Some(setting) {
+            return false;
+        }
+        let JournalRead::Changes(entries) = store.changes_since(self.read) else {
+            return true;
+        };
+        let mut damage = DamageRects::default();
+        for entry in entries {
+            match self.old_area(store, entry) {
+                Some(Area::Drawn(pixels) | Area::Composite(pixels)) => damage.add(pixels.rect()),
+                Some(Area::Unknown) => return true,
+                Some(Area::Hidden) | None => {}
+            }
+        }
+        matches!(settle(damage, setting.viewport), Damage::Full)
     }
 
     /// Whether the frame records how it draws each record: a frame skipped
@@ -454,6 +493,10 @@ impl TargetState {
         }
         let damage = self.ended(store, root);
         self.last_root = store.root().map(|root| store.record_ref(root));
+        #[cfg(not(target_arch = "wasm32"))]
+        if !self.unknown_before {
+            self.changed_whole = damage == Damage::Full;
+        }
         damage
     }
 

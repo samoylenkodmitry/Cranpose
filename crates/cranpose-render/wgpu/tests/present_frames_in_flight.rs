@@ -70,7 +70,9 @@ fn hold_frames(renderer: &mut WgpuRenderer, runtime: &mut InlinePresentRuntime) 
             PublishOutcome::Published,
             "with no frame in flight every frame goes"
         );
-        let overlaps = renderer.has_frame_credit();
+        // A frame that changes nothing goes while this one is in flight
+        // once the images hold a frame to build on, and waits before.
+        let overlaps = renderer.publish_frame(WIDTH, HEIGHT) == PublishOutcome::Published;
         runtime.pump();
         drain_outcomes(renderer);
         let settled = renderer
@@ -87,50 +89,96 @@ fn hold_frames(renderer: &mut WgpuRenderer, runtime: &mut InlinePresentRuntime) 
     }
 }
 
-// A page that changes the whole window from frame to frame draws each frame
-// whole by its damage, as the frames in flight do. On a new surface, whose
-// images hold no frame yet, its frames go while another is in flight from
-// the first frame that changed the whole window against the frame before.
-#[test]
-fn the_frames_of_a_page_that_changes_whole_go_together_on_a_new_surface() {
-    let Some((_lock, mut renderer, mut runtime)) = attached("whole pages", TestImages::Kept(4))
-    else {
-        return;
+// Publishes the frames of `pages` in turn, as a window does with two frames
+// in flight: the thread draws a frame once the next one comes. Whether each
+// frame went at once, the first with none in flight and each later one while
+// the one before was in flight; a frame that waits goes once that one drew.
+// Leaves no frame in flight.
+fn frames_alongside(
+    renderer: &mut WgpuRenderer,
+    runtime: &mut InlinePresentRuntime,
+    pages: &[LayerNode; 2],
+) -> Vec<bool> {
+    let drawn = |outcomes: Vec<(u64, PresentOutcome)>| {
+        outcomes
+            .iter()
+            .all(|(_, outcome)| *outcome == PresentOutcome::Presented)
     };
-    let window = Rect {
-        x: 0.0,
-        y: 0.0,
-        width: WIDTH as f32,
-        height: HEIGHT as f32,
-    };
-    let pages = [Color(0.2, 0.7, 0.3, 1.0), Color(0.7, 0.2, 0.3, 1.0)]
-        .map(|color| support::page_graph(WIDTH, HEIGHT, vec![support::solid_rect(window, color)]));
-    let mut overlaps = Vec::new();
+    let mut alongside = Vec::new();
     for frame in 0..6 {
         renderer.scene_mut().describe(&pages[frame % pages.len()]);
-        publish(&mut renderer);
-        overlaps.push(renderer.has_frame_credit());
-        runtime.pump();
-        assert_eq!(
-            drain_outcomes(&mut renderer),
-            vec![(
-                renderer.last_published_frame_id(),
-                PresentOutcome::Presented
-            )],
-            "frame {frame} draws"
+        let went = renderer.publish_frame(WIDTH, HEIGHT) == PublishOutcome::Published;
+        if !went {
+            runtime.consume_waiting();
+            assert!(
+                drawn(drain_outcomes(renderer)),
+                "frame {frame}: a frame is refused"
+            );
+            publish(renderer);
+        }
+        alongside.push(went);
+        runtime.step_one_message();
+        assert!(
+            drawn(drain_outcomes(renderer)),
+            "frame {frame}: a frame is refused"
         );
     }
+    runtime.consume_waiting();
+    assert!(drawn(drain_outcomes(renderer)), "the last frame is refused");
+    alongside
+}
+
+// A new surface's images hold no frame, so each takes a whole walk. A frame
+// whose own change covers the whole window takes a whole walk by its damage
+// too, as the frames in flight do: from the second frame on, each goes while
+// the one before is in flight. A frame that changes a part waits for the
+// frame in flight until every image took a frame, so one whole scene lives
+// at a time.
+#[test]
+fn a_new_surface_overlaps_the_frames_that_change_the_whole_window() {
+    let rect = |x: f32, y: f32, width: f32, height: f32| Rect {
+        x,
+        y,
+        width,
+        height,
+    };
+    let page =
+        |rect, color| support::page_graph(WIDTH, HEIGHT, vec![support::solid_rect(rect, color)]);
+    let spot = Color(0.9, 0.9, 0.9, 1.0);
+    let part = [rect(8.0, 8.0, 8.0, 8.0), rect(100.0, 10.0, 8.0, 8.0)].map(|at| page(at, spot));
+    let Some(part_frames) = frames_on_new_surface("part pages", &part) else {
+        return;
+    };
     assert_eq!(
-        overlaps,
-        [false, true, true, true, true, true],
-        "the first frame knows no frame before it and waits; each frame after it changes the \
-         whole window, and the next goes while it is in flight"
+        part_frames,
+        [true, false, false, false, false, true],
+        "a frame that changes a part waits for the frame in flight until each of the four \
+         images took a frame"
     );
+
+    let window = rect(0.0, 0.0, WIDTH as f32, HEIGHT as f32);
+    let whole =
+        [Color(0.2, 0.7, 0.3, 1.0), Color(0.7, 0.2, 0.3, 1.0)].map(|color| page(window, color));
+    let Some(whole_frames) = frames_on_new_surface("whole pages", &whole) else {
+        return;
+    };
+    assert_eq!(
+        whole_frames, [true; 6],
+        "each frame changes the whole window and goes while the one before is in flight"
+    );
+}
+
+// Whether each frame of `pages` went while the one before was in flight, on
+// a new window whose surface hands out four images; `None` without a GPU.
+fn frames_on_new_surface(name: &str, pages: &[LayerNode; 2]) -> Option<Vec<bool>> {
+    let (_lock, mut renderer, mut runtime) = attached(name, TestImages::Kept(4))?;
+    Some(frames_alongside(&mut renderer, &mut runtime, pages))
 }
 
 // Images that hold nothing take the frames through the composition target,
 // which keeps them: only the window's first frame, which no target holds a
-// frame for, draws whole and waits for the frame in flight.
+// frame for, draws whole. The frame after it changes a part of the window,
+// so it waits for the first and stays owed meanwhile.
 #[test]
 fn a_window_first_frame_goes_alone() {
     let Some((_lock, mut renderer, mut runtime)) = attached("whole frames", TestImages::Fresh)
@@ -143,18 +191,27 @@ fn a_window_first_frame_goes_alone() {
         PublishOutcome::Published
     );
     assert!(
-        !renderer.has_frame_credit(),
-        "the first frame draws whole, and the next waits for it: one scene then holds every \
-         whole frame"
+        renderer.has_frame_credit(),
+        "the update of the next frame may run while the first is in flight"
     );
     assert_eq!(
         renderer.publish_frame(WIDTH, HEIGHT),
-        PublishOutcome::NoCredit
+        PublishOutcome::NoCredit,
+        "the next frame changes less than the window, so it waits for the first: one scene \
+         then holds every whole frame"
     );
     assert_eq!(
         renderer.last_published_frame_id(),
         1,
         "a frame that waits is not built"
+    );
+    assert!(
+        !renderer.has_frame_credit(),
+        "the frame that waits holds back the next update"
+    );
+    assert!(
+        renderer.needs_frame_warmup(),
+        "the frame that waits is owed"
     );
     runtime.pump();
     assert_eq!(
@@ -438,11 +495,8 @@ fn overlapping_pair(
 ) -> bool {
     renderer.scene_mut().describe(pages[0]);
     publish(renderer);
-    let overlaps = renderer.has_frame_credit();
-    if overlaps {
-        renderer.scene_mut().describe(pages[1]);
-        publish(renderer);
-    }
+    renderer.scene_mut().describe(pages[1]);
+    let overlaps = renderer.publish_frame(WIDTH, HEIGHT) == PublishOutcome::Published;
     runtime.pump();
     runtime.pump();
     let outcomes = drain_outcomes(renderer);

@@ -130,7 +130,10 @@ impl Renderer for WgpuRenderer {
         match &self.backend {
             PresentBackend::Sync(sync) => sync.renderer.needs_frame_warmup(),
             #[cfg(not(target_arch = "wasm32"))]
-            PresentBackend::Threaded(handle) => handle.status().warmup_due(),
+            // A frame that waits for the frames in flight is owed too.
+            PresentBackend::Threaded(handle) => {
+                handle.status().warmup_due() || self.frontend.waits_for_flight()
+            }
             PresentBackend::None => false,
         }
     }

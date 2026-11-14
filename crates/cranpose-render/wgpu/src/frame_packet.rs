@@ -18,6 +18,11 @@ pub(crate) const MAX_FRAMES_IN_FLIGHT: usize = 2;
 #[derive(Clone, Copy)]
 pub(crate) enum PacketOverlap {
     WithFramesInFlight,
+    // A walk whole for images that hold no frame, as a new surface's are,
+    // goes with the frames in flight when its own change covers the whole
+    // window, and waits for them otherwise: the producer may update, and
+    // the change it made decides before the walk.
+    ByItsChange,
     // A walk that draws whole as the targets hold no frame to build on
     // waits for the frames in flight, so one scene holds such walks, as
     // without the thread: at a window's start and after a refusal.

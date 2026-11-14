@@ -125,8 +125,8 @@ fn a_walk_the_targets_make_whole_waits_for_the_frames_in_flight() {
     let mut frontend = frontend();
     frontend.scene.describe(&graph());
     assert!(
-        matches!(frontend.next_overlap(0), PacketOverlap::Alone),
-        "a window's images hold nothing at its start"
+        matches!(frontend.next_overlap(0), PacketOverlap::ByItsChange),
+        "a window's images hold nothing at its start, so a walk goes by its own change"
     );
     let packet = frontend
         .build_frame_packet(320, 240, 0, 0)
@@ -178,8 +178,8 @@ fn a_walk_for_a_new_surface_waits_for_the_frames_in_flight() {
         .build_frame_packet(320, 240, 0, 1)
         .expect("a graph collects into a packet");
     assert!(
-        matches!(frontend.next_overlap(1), PacketOverlap::Alone),
-        "the frames wait until a frame drawn into the new images comes back"
+        matches!(frontend.next_overlap(1), PacketOverlap::ByItsChange),
+        "until a frame drawn into the new images comes back, a frame goes by its own change"
     );
     frontend.apply_returns(returned(packet, PresentOutcome::Presented));
     assert!(

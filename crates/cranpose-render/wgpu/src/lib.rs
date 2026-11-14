@@ -635,8 +635,8 @@ impl WgpuRenderer {
 
     /// Threaded mode: whether the present thread takes a packet now. Two
     /// packets go in flight at most. A packet that draws whole because the
-    /// window's images hold no frame to build on, as at the window's start
-    /// and after a refused frame, goes only with none in flight.
+    /// window's images hold no frame goes with none in flight; one for a new
+    /// surface's images may go with them once its update covers the window.
     /// The Android loop checks this BEFORE `shell.update()` so
     /// backpressure lands before the expensive update/lowering work.
     /// Always `true` on the sync path, which has no slot to fill.
@@ -664,25 +664,24 @@ impl WgpuRenderer {
     }
 
     /// Threaded mode: lower the current scene into a packet and hand it to
-    /// the present runtime. Credit is checked FIRST — a `NoCredit` return
-    /// means no packet was built at all (`frame_sequence` does not
-    /// advance). Returns `NoCredit` (with an error log) when the renderer
-    /// is not in threaded mode.
+    /// the present runtime. Credit is checked FIRST: a `NoCredit` return
+    /// builds no packet. A frame for images that hold nothing whose update
+    /// changed a part of the window waits for the frames in flight, and
+    /// stays owed. `NoCredit` (with an error log) when not in threaded mode.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn publish_frame(&mut self, width: u32, height: u32) -> PublishOutcome {
         let PresentBackend::Threaded(handle) = &mut self.backend else {
             log::error!("publish_frame called without a threaded present runtime");
             return PublishOutcome::NoCredit;
         };
-        if !handle.has_credit(self.frontend.next_overlap(self.surface_epoch)) {
+        let epochs = (self.renderer_epoch, self.surface_epoch);
+        if !self.frontend.walk_goes(handle, epochs.1, (width, height)) {
             return PublishOutcome::NoCredit;
         }
-        let Some(packet) = self.frontend.build_frame_packet(
-            width,
-            height,
-            self.renderer_epoch,
-            self.surface_epoch,
-        ) else {
+        let Some(packet) = self
+            .frontend
+            .build_frame_packet(width, height, epochs.0, epochs.1)
+        else {
             return PublishOutcome::NoGraph;
         };
         match handle.publish(packet) {

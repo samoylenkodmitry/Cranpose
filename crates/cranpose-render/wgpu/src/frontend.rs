@@ -9,8 +9,6 @@ use cranpose_render_common::{
 };
 use web_time::Instant;
 
-#[cfg(not(target_arch = "wasm32"))]
-use crate::frame_packet::PacketOverlap;
 use crate::{
     collect::{
         LayerMotion, LayerScene, LayerSceneRecycler, ShownRecord, collect_overlay, collect_root,
@@ -25,6 +23,8 @@ use crate::{
     target_state::{TargetSetting, TargetState},
     window_packets::{PacketDraws, WindowPackets},
 };
+#[cfg(not(target_arch = "wasm32"))]
+use crate::{frame_packet::PacketOverlap, present_handle::PresentHandle};
 
 /// What a packet is built for.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -76,6 +76,10 @@ pub(crate) struct RendererFrontend {
     // Whether the next window walk takes every record: an image refused a
     // culled packet.
     uncull_next: bool,
+    // Whether the next window walk waits for the frames in flight: its
+    // images hold no frame, and the change of the frame it walks covers a
+    // part of the window. The frame stays owed to the renderer meanwhile.
+    waits_for_flight: bool,
     // The surface epoch of the window packet built last: the images of a
     // newer surface hold no frame the window drew.
     surface_epoch: u64,
@@ -155,6 +159,7 @@ impl RendererFrontend {
             overlay_target: TargetState::default(),
             window: WindowPackets::default(),
             uncull_next: false,
+            waits_for_flight: false,
             surface_epoch: 0,
             backdrops: false,
         }
@@ -216,11 +221,8 @@ impl RendererFrontend {
                 self.surface_epoch = surface_epoch;
                 self.window.hold(None);
             }
-            self.begin_targets(TargetSetting {
-                viewport: (width, height),
-                root_scale,
-                clear: frame_clear_color(self.transparent_background),
-            });
+            self.waits_for_flight = false;
+            self.begin_targets(self.window_setting((width, height), root_scale));
         }
         self.scene.root_layer()?;
         if self.returned_scenes == MAX_FRAMES_IN_FLIGHT {
@@ -450,17 +452,56 @@ impl RendererFrontend {
 
     // Whether the next window packet, for the surface of `surface_epoch`,
     // may go while others are in flight. A walk made whole by targets that
-    // hold no frame to build on waits for them, as one for a new surface
-    // does: one whole scene lives at a time. A walk made whole by its damage
-    // goes with them, as does one after a packet that changed the whole
-    // window: the frames in flight hold whole scenes already.
+    // hold no frame to build on waits for them, as one for a new surface or
+    // after a refused frame does, so one whole scene lives at a time; for
+    // images that hold no frame, its own change decides once the producer
+    // made it (`walk_goes`). A walk made whole by its damage goes with them.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn next_overlap(&self, surface_epoch: u64) -> PacketOverlap {
-        let builds_on = self.window.holds_packet() || self.window.changed_whole();
-        if surface_epoch != self.surface_epoch || self.uncull_next || !builds_on {
+        if surface_epoch != self.surface_epoch || self.uncull_next || self.waits_for_flight {
             PacketOverlap::Alone
-        } else {
+        } else if self.window.holds_packet() {
             PacketOverlap::WithFramesInFlight
+        } else {
+            PacketOverlap::ByItsChange
+        }
+    }
+
+    // Whether the present thread of `handle` takes the window packet of
+    // `viewport` now, the producer's update made: a walk whole for images
+    // that hold no frame goes with the frames in flight when its own change
+    // covers the whole window, as their walks took the whole page too.
+    // Otherwise it waits for them, and the frame stays owed.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn walk_goes(
+        &mut self,
+        handle: &PresentHandle,
+        surface_epoch: u64,
+        viewport: (u32, u32),
+    ) -> bool {
+        let overlap = self.next_overlap(surface_epoch);
+        if !matches!(overlap, PacketOverlap::ByItsChange) || !handle.in_flight() {
+            return handle.has_credit(overlap);
+        }
+        let setting = self.window_setting(viewport, self.root_scale);
+        let whole = self.target.changes_whole(self.scene.store(), setting);
+        self.waits_for_flight = !whole;
+        whole && handle.has_credit(overlap)
+    }
+
+    // Whether the next window walk waits for the frames in flight, its frame
+    // owed to the renderer.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn waits_for_flight(&self) -> bool {
+        self.waits_for_flight
+    }
+
+    // The setting of a window frame of `viewport` at `root_scale`.
+    fn window_setting(&self, viewport: (u32, u32), root_scale: f32) -> TargetSetting {
+        TargetSetting {
+            viewport,
+            root_scale,
+            clear: frame_clear_color(self.transparent_background),
         }
     }
 

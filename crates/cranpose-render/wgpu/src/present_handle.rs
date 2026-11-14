@@ -84,9 +84,16 @@ impl PresentHandle {
 
     pub(crate) fn has_credit(&self, overlap: PacketOverlap) -> bool {
         match overlap {
-            PacketOverlap::WithFramesInFlight => self.outstanding < MAX_FRAMES_IN_FLIGHT,
+            PacketOverlap::WithFramesInFlight | PacketOverlap::ByItsChange => {
+                self.outstanding < MAX_FRAMES_IN_FLIGHT
+            }
             PacketOverlap::Alone => self.outstanding == 0,
         }
+    }
+
+    // Whether a packet is with the present thread.
+    pub(crate) fn in_flight(&self) -> bool {
+        self.outstanding > 0
     }
 
     /// Whether the present thread has handed back a frame that
