@@ -13,6 +13,8 @@ use frame_telemetry::{
 };
 pub(crate) use trim::RestTrim;
 
+use crate::surface::SceneRecords;
+
 // A frame runs its phases in order: composition, layout, render. Each phase
 // takes the token of the phase before it, and only that phase makes its
 // token, so a frame that renders before it lays out does not compile.
@@ -691,6 +693,7 @@ fn rebuild_surface_scene<R>(
     let viewport_size = surface.viewport_size();
     let Some(root) = surface.root_node(app) else {
         surface.renderer.scene_mut().clear();
+        surface.scene_records = SceneRecords::Owed;
         return;
     };
     let mut applier = app.composition.applier_mut();
@@ -716,10 +719,14 @@ fn rebuild_surface_scene<R>(
             .renderer
             .rebuild_scene_from_applier(&mut applier, root, viewport_size)
     };
-    if let Err(err) = rebuild_result {
-        log::error!("renderer rebuild failed: {err:?}");
-        surface.renderer.scene_mut().clear();
-    }
+    surface.scene_records = match rebuild_result {
+        Ok(()) => SceneRecords::Held,
+        Err(err) => {
+            log::error!("renderer rebuild failed: {err:?}");
+            surface.renderer.scene_mut().clear();
+            SceneRecords::Owed
+        }
+    };
 }
 
 fn dev_overlay_belongs_on(id: RootId, fps_counter: bool) -> bool {

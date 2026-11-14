@@ -81,6 +81,7 @@ pub struct RootSurface<R: Renderer> {
     pub(crate) key_press: Option<crate::shell_input::key_activation::KeyPress>,
     pub(crate) frame_rate_preference: FrameRatePreference,
     pub(crate) scene_dirty: bool,
+    pub(crate) scene_records: SceneRecords,
     pub(crate) scoped_layout_scene_nodes: Vec<NodeId>,
     /// Nodes the layout pass only moved: the scene moves their layers.
     pub(crate) scoped_moved_scene_nodes: Vec<NodeId>,
@@ -129,6 +130,7 @@ impl<R: Renderer> RootSurface<R> {
             key_press: None,
             frame_rate_preference: FrameRatePreference::default(),
             scene_dirty: true,
+            scene_records: SceneRecords::Owed,
             scoped_layout_scene_nodes: Vec::new(),
             scoped_moved_scene_nodes: Vec::new(),
             scoped_draw_nodes: Vec::new(),
@@ -196,6 +198,16 @@ impl<R: Renderer> RootSurface<R> {
         self.hovered_nodes.clear();
         self.buttons_pressed = PointerButtons::NONE;
         self.is_dirty = true;
+    }
+
+    // Takes the dirt of nodes under `root` for a scene that records nothing
+    // yet: `root` alone stands for them, as the update that builds the
+    // scene records the whole tree under it.
+    fn take_whole_scene_dirt(&mut self, root: NodeId) {
+        self.scene_dirty = true;
+        if !self.scoped_layout_scene_nodes.contains(&root) {
+            self.scoped_layout_scene_nodes.push(root);
+        }
     }
 
     pub(crate) fn invalidate_scene_root(&mut self, root: Option<NodeId>) {
@@ -428,6 +440,17 @@ impl PlatformTextInputHandler for TextInputRouter {
     }
 }
 
+// What a surface's scene holds of the surface's tree.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SceneRecords {
+    // Nothing yet: its next scene update records the whole tree, so the
+    // dirt of single nodes tells it nothing.
+    Owed,
+    // The records of the tree as the last render left it, which the dirt
+    // of single nodes updates.
+    Held,
+}
+
 #[derive(Clone, Copy)]
 pub(crate) enum SurfaceDirtyLane {
     Layout,
@@ -523,6 +546,22 @@ fn route_batch_by_surface<R: Renderer>(
         scratch.owners.clear();
         return;
     };
+    let single_window = app.app_context.window_roots().is_empty();
+    let primary = surfaces
+        .iter()
+        .position(|surface| surface.id == RootId::Primary);
+    if single_window && let Some(index) = primary {
+        let surface = &mut surfaces[index];
+        if surface.scene_records == SceneRecords::Owed {
+            scratch.attached.clear();
+            scratch.owners.clear();
+            let mut nodes = nodes;
+            if nodes.next().is_some() {
+                surface.take_whole_scene_dirt(primary_root);
+            }
+            return;
+        }
+    }
     let mut applier = app.composition.applier_mut();
     applier.scene_nodes_attached_to_into(
         nodes,
@@ -535,12 +574,9 @@ fn route_batch_by_surface<R: Renderer>(
         return;
     }
     scratch.seen.clear();
-    if app.app_context.window_roots().is_empty() {
+    if single_window {
         scratch.owners.clear();
-        if let Some(index) = surfaces
-            .iter()
-            .position(|surface| surface.id == RootId::Primary)
-        {
+        if let Some(index) = primary {
             let surface = &mut surfaces[index];
             for node in scratch.attached.iter().flatten().copied() {
                 append_surface_dirty_node(surface, index, node, lane, &mut scratch.seen);
@@ -561,7 +597,12 @@ fn route_batch_by_surface<R: Renderer>(
             .position(|surface| surface.owns_nodes_under(*owner))
         {
             let surface = &mut surfaces[index];
-            append_surface_dirty_node(surface, index, node, lane, &mut scratch.seen);
+            match surface.scene_records {
+                SceneRecords::Held => {
+                    append_surface_dirty_node(surface, index, node, lane, &mut scratch.seen);
+                }
+                SceneRecords::Owed => surface.take_whole_scene_dirt(owner.unwrap_or(primary_root)),
+            }
         }
     }
 }
