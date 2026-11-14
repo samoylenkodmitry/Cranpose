@@ -1824,7 +1824,7 @@ impl GpuRenderer {
             keeper,
             held,
             baseline: since.baseline,
-            unheld: since.unheld,
+            own_sake: since.own_sake,
         };
         match frame_root {
             FrameRoot::Composition { composition, .. }

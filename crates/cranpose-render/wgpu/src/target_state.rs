@@ -16,7 +16,7 @@ use cranpose_ui_graphics::{Point, Rect};
 
 use crate::{
     collect::{LayerScene, ShownArea},
-    frame::{Capture, Damage, DamageRects, DeviceRect, collect_captures, settle, widen},
+    frame::{Capture, Damage, DamageRects, DeviceRect, OwnSake, collect_captures, settle, widen},
 };
 
 // The pixels a record's area takes in a target, whole pixels from the
@@ -228,9 +228,8 @@ pub(crate) struct TargetDrawn {
     pub(crate) skipped: bool,
     /// Whether the packet knew the frame before it.
     pub(crate) knew_before: bool,
-    // Whether the target held no frame, so it took this one whole for its
-    // own sake.
-    pub(crate) unheld: bool,
+    // Why the frame drew whole for the target's sake.
+    pub(crate) own_sake: Option<OwnSake>,
 }
 
 #[derive(Default)]
@@ -472,10 +471,13 @@ impl TargetState {
             self.skipped = self.skipped.saturating_sub(1);
             return;
         }
-        match drawn.damage {
-            Damage::Full if drawn.knew_before => {}
-            Damage::Full | Damage::Skipped => return,
-            Damage::Part(_) => {
+        match (drawn.damage, drawn.own_sake) {
+            // Stand-ins go once their pipelines land: a frame drawn whole
+            // over them says nothing of what the page changes.
+            (Damage::Full, Some(OwnSake::StandIns)) => return,
+            (Damage::Full, _) if drawn.knew_before => {}
+            (Damage::Full | Damage::Skipped, _) => return,
+            (Damage::Part(_), _) => {
                 self.full_frames = 0;
                 return;
             }
@@ -483,7 +485,7 @@ impl TargetState {
         self.full_frames = self.full_frames.saturating_add(1);
         // A target that held no frame took this one whole for its own sake:
         // the skips start with the second such frame in a row.
-        let run = self.full_frames - u32::from(drawn.unheld);
+        let run = self.full_frames - u32::from(drawn.own_sake == Some(OwnSake::NoFrame));
         if run == 0 {
             return;
         }

@@ -1,20 +1,16 @@
-use super::{
-    COPY_AFTER, COPY_COVERAGE, Damage, DeviceRect, FrameDamages, FrameWindow, Held, Since,
-};
+use super::{COPY_COVERAGE, Damage, DeviceRect, FrameDamages, FrameWindow, Held, Since};
 use crate::{collect::LayerScene, draw_pass::op_draw_bounds};
 
-/// The frames drawn into presentable images that come cleared. While a page
-/// whose draws cover the window more than twice changes a small part of it,
-/// the composition target keeps the frame, draws only what changes, and is
-/// copied whole into each image; the first frame that changes most of the
-/// window draws straight into its image again and lets the target go.
+/// The frames drawn into presentable images that come cleared. From the
+/// first frame that changes a small part of a page whose draws cover the
+/// window more than twice, the composition target keeps the frame, draws
+/// only what changes, and is copied whole into each image; the first frame
+/// that changes most of the window draws straight into its image again and
+/// lets the target go.
 #[derive(Default)]
 pub(crate) struct ClearedImages {
     /// The frame drawn straight into an image last.
     pub(crate) kept: Option<Held>,
-    /// The frames in a row drawn straight into an image that changed a
-    /// small part of the window.
-    small_frames: u32,
     /// Whether the composition target keeps the frame for these images.
     pub(crate) copied: bool,
 }
@@ -28,15 +24,7 @@ impl ClearedImages {
         frame: &FrameWindow<'_>,
     ) -> (Since, bool) {
         let since = self.copied_damage(damages, self.kept, frame);
-        if !matches!(since.damage, Damage::Part(_)) {
-            self.small_frames = 0;
-            return (since, false);
-        }
-        self.small_frames += 1;
-        let keeps = self.small_frames >= COPY_AFTER;
-        if keeps {
-            self.small_frames = 0;
-        }
+        let keeps = matches!(since.damage, Damage::Part(_));
         (since, keeps)
     }
 
@@ -73,7 +61,6 @@ impl ClearedImages {
     pub(crate) fn take_back(&mut self, target: &mut Option<Held>) {
         self.kept = target.take();
         self.copied = false;
-        self.small_frames = 0;
     }
 }
 

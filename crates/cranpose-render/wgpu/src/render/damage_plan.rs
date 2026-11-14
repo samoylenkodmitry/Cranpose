@@ -2,7 +2,7 @@
 // for that.
 
 use crate::{
-    frame::{ClearedImages, Damage, Held, PresentedImage, Repaint, SwapchainHistory},
+    frame::{ClearedImages, Damage, Held, OwnSake, PresentedImage, Repaint, SwapchainHistory},
     frame_packet::{FramePacket, HeldWindow},
     gpu_stats::{FrameDamage, FrameStats},
     target_state::TargetDrawn,
@@ -40,8 +40,8 @@ pub(super) struct FrameDamagePlan {
     /// Whether the frame draws whole as the first of its target's frames
     /// whose frame before is known.
     pub(super) baseline: bool,
-    // Whether the target held no frame before this one.
-    pub(super) unheld: bool,
+    // Why the frame draws whole for the target's sake.
+    pub(super) own_sake: Option<OwnSake>,
 }
 
 impl FrameDamagePlan {
@@ -93,7 +93,7 @@ impl FrameDamagePlan {
             damage: self.damage,
             skipped: packet.skipped,
             knew_before: !self.baseline,
-            unheld: self.unheld,
+            own_sake: self.own_sake,
         }
     }
 }
