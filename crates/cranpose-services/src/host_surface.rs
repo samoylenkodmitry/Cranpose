@@ -126,10 +126,7 @@ pub fn host_surface() -> HostSurfaceRef {
 /// yet — so a caller that needs the real value observes
 /// [`rememberHostSurfaceSize`] rather than sampling once at startup.
 pub fn host_surface_size() -> HostSurfaceSize {
-    last_published()
-        .lock()
-        .map(|size| *size)
-        .unwrap_or_default()
+    last_published().lock().map_or_default(|size| *size)
 }
 
 fn last_published() -> &'static Mutex<HostSurfaceSize> {
@@ -185,15 +182,12 @@ pub fn publish_host_surface_size(size: HostSurfaceSize) {
         }
         *last = size;
     }
-    let observers = observers()
-        .lock()
-        .map(|observers| {
-            observers
-                .iter()
-                .map(|(_, observer)| Arc::clone(observer))
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
+    let observers = observers().lock().map_or_default(|observers| {
+        observers
+            .iter()
+            .map(|(_, observer)| Arc::clone(observer))
+            .collect::<Vec<_>>()
+    });
     for observer in observers {
         observer(size);
     }

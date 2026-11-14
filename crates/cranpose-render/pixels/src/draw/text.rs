@@ -161,10 +161,7 @@ pub(super) fn text_raster_rect(draw: &TextDraw) -> Option<Rect> {
     if !is_static_text(draw) {
         return Some(draw.rect);
     }
-    let snap_delta = draw
-        .snap_anchor
-        .map(snap_delta_for_anchor)
-        .unwrap_or_default();
+    let snap_delta = draw.snap_anchor.map_or_default(snap_delta_for_anchor);
     Some(on_pixel_grid(
         draw.rect.translate(snap_delta.x, snap_delta.y),
     ))

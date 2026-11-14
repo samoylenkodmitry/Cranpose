@@ -459,15 +459,9 @@ fn on_pixel_grid(rect: Rect) -> Rect {
 
 /// `draw` where its snap puts it; `None` when it covers nothing.
 pub(crate) fn place_shape(draw: &crate::scene::DrawShape) -> Option<PlacedShape> {
-    let snap_delta = draw
-        .snap_anchor
-        .map(snap_delta_for_anchor)
-        .unwrap_or_default();
+    let snap_delta = draw.snap_anchor.map_or_default(snap_delta_for_anchor);
     let rect = draw.rect.translate(snap_delta.x, snap_delta.y);
-    let dither_origin = draw
-        .snap_anchor
-        .map(snapped_anchor_origin)
-        .unwrap_or_default();
+    let dither_origin = draw.snap_anchor.map_or_default(snapped_anchor_origin);
     let rect = if draw.snap_to_pixel_grid {
         on_pixel_grid(rect)
     } else {
@@ -653,10 +647,7 @@ impl ShapeCoverage {
 }
 
 fn placed_shadow(draw: &crate::scene::ShadowDraw) -> (ShadowRRect, Option<Rect>) {
-    let snap_delta = draw
-        .snap_anchor
-        .map(snap_delta_for_anchor)
-        .unwrap_or_default();
+    let snap_delta = draw.snap_anchor.map_or_default(snap_delta_for_anchor);
     (
         draw.shadow.translated(snap_delta.x, snap_delta.y),
         draw.clip

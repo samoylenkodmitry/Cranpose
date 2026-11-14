@@ -318,10 +318,7 @@ pub(crate) struct LightSource {
 
 impl LightSource {
     fn of(store: &SceneStore, scale: f32) -> Self {
-        let bounds = store
-            .root_layer()
-            .map(LayerRef::local_bounds)
-            .unwrap_or_default();
+        let bounds = store.root_layer().map_or_default(LayerRef::local_bounds);
         Self {
             width: bounds.width * scale,
             height: bounds.height * scale,

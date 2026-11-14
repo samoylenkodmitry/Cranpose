@@ -459,10 +459,7 @@ impl Canonical {
             }
             RenderItem::Shadow(index) => {
                 let draw = &scene.shadows[index];
-                let snap = draw
-                    .snap_anchor
-                    .map(snap_delta_for_anchor)
-                    .unwrap_or_default();
+                let snap = draw.snap_anchor.map_or_default(snap_delta_for_anchor);
                 (
                     Point::new(draw.shadow.bounds.x, draw.shadow.bounds.y),
                     draw.clip.map(|clip| clip.translate(snap.x, snap.y)),

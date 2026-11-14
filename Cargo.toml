@@ -63,7 +63,7 @@ version = "0.24.0"
 edition = "2024"
 # The oldest toolchain the crates build with: the ESP32 firmware's toolchain
 # (scripts/ci/msrv_toolchain_test.sh); `just msrv-check` builds with it nightly.
-rust-version = "1.98"
+rust-version = "1.100"
 license = "Apache-2.0 OR MIT"
 repository = "https://github.com/samoylenkodmitry/cranpose"
 homepage = "https://samoylenkodmitry.github.io/cranpose/"
@@ -145,6 +145,13 @@ unused_qualifications = "warn"
 # profile or feature-set one -- see TIME_WASTERS.md for how to attribute the
 # section back to the object files that filled it.
 linker_messages = "deny"
+
+# Cargo judges a dependency by the one target it builds for. A dependency that
+# only Android, the web or one desktop OS compiles looks unused on every other
+# host. `cargo shear` (`just shear`) reads the sources of every platform and
+# owns the unused-dependency check.
+[workspace.lints.cargo]
+unused_dependencies = "allow"
 
 # "don't put unfinished parts here" and "never leave debug logs", as gates.
 [workspace.lints.clippy]

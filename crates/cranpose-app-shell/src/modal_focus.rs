@@ -44,8 +44,7 @@ where
             let current = self.app.app_context.active_focus_target();
             let order = surface
                 .layout_tree_in_context(&mut self.app)
-                .map(cranpose_ui::collect_focus_order)
-                .unwrap_or_default();
+                .map_or_default(cranpose_ui::collect_focus_order);
             let previous = previous_modal_focus(&mut surface.modal_focus, modal, current);
             let target = previous
                 .filter(|previous| order.iter().any(|entry| entry.node_id == *previous))

@@ -897,16 +897,19 @@ impl<T: SpringScalar + 'static> Animatable<T> {
         Self::schedule_frame(&self.inner);
     }
 
+    fn seed_velocity(&self, velocity: &T) {
+        let mut inner = self.inner.borrow_mut();
+        let dimensions = T::DIMENSIONS.min(SPRING_MAX_DIMENSIONS);
+        for (index, slot) in inner.velocity.iter_mut().enumerate().take(dimensions) {
+            *slot = velocity.dimension(index);
+        }
+    }
+
     /// Animate to `target`, seeding the spring with `velocity` (value units
     /// per second, per dimension) — the gesture-handoff entry point: pass the
     /// release velocity so the animation continues the finger's motion.
     pub fn animate_to_with_velocity(&mut self, target: T, velocity: T, animation: AnimationType) {
-        {
-            let mut inner = self.inner.borrow_mut();
-            for index in 0..T::DIMENSIONS.min(SPRING_MAX_DIMENSIONS) {
-                inner.velocity[index] = velocity.dimension(index);
-            }
-        }
+        self.seed_velocity(&velocity);
         self.animateTo(target, animation);
     }
 
@@ -921,12 +924,7 @@ impl<T: SpringScalar + 'static> Animatable<T> {
         animation: AnimationType,
         start_time_nanos: u64,
     ) {
-        {
-            let mut inner = self.inner.borrow_mut();
-            for index in 0..T::DIMENSIONS.min(SPRING_MAX_DIMENSIONS) {
-                inner.velocity[index] = velocity.dimension(index);
-            }
-        }
+        self.seed_velocity(&velocity);
         self.start_animation(target, animation, Some(start_time_nanos));
     }
 

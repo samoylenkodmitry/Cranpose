@@ -86,8 +86,7 @@ fn swipe_to_dismiss_rows_render_inside_lazy_column() {
 
     let texts = shell
         .layout_tree()
-        .map(|tree| layout_texts(tree.root()))
-        .unwrap_or_default();
+        .map_or_default(|tree| layout_texts(tree.root()));
     assert!(
         texts.iter().any(|text| text == "Row 0"),
         "SwipeToDismiss content must compose inside a LazyColumn item, got {texts:?}"

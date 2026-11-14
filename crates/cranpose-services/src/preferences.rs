@@ -221,8 +221,7 @@ impl PreferencesStore for MemoryPreferences {
     fn keys(&self) -> Vec<String> {
         self.entries
             .lock()
-            .map(|entries| entries.keys().cloned().collect())
-            .unwrap_or_default()
+            .map_or_default(|entries| entries.keys().cloned().collect())
     }
 
     fn clear(&self) -> Result<(), PreferencesError> {

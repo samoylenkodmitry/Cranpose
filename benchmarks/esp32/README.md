@@ -54,7 +54,7 @@ flashes it and saves the log; `summary.py` turns logs into per-frame
 figures.
 
 ```sh
-. ~/export-esp-1.98.1.sh
+. ~/export-esp-1.100.0.sh
 run() { python3 scripts/esp32/board_run.py --board $1 --component benchmarks/esp32/perfstats --seconds 27 --log target/esp32/bench-$2-$1.log "${@:3}"; }
 for board in es3c35p e32r35t; do
   run $board demo --app demo

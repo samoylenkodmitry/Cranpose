@@ -381,8 +381,7 @@ pub fn clear_platform_app_updater() {
 pub fn app_update_capabilities() -> AppUpdateCapabilities {
     PLATFORM_UPDATER
         .get()
-        .map(|updater| updater.capabilities())
-        .unwrap_or_default()
+        .map_or_default(|updater| updater.capabilities())
 }
 
 /// Returns whether this host can install application updates.
@@ -529,15 +528,12 @@ pub fn set_app_update_status(status: AppUpdateStatus) {
         *current = status.clone();
     }
     #[cfg(not(target_arch = "wasm32"))]
-    let observers = observers()
-        .lock()
-        .map(|observers| {
-            observers
-                .iter()
-                .map(|(_, observer)| Arc::clone(observer))
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
+    let observers = observers().lock().map_or_default(|observers| {
+        observers
+            .iter()
+            .map(|(_, observer)| Arc::clone(observer))
+            .collect::<Vec<_>>()
+    });
     #[cfg(target_arch = "wasm32")]
     let observers = crate::thread_state::with(|state| state.app_update_observers.all());
     for observer in observers {

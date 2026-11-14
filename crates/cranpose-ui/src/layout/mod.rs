@@ -392,8 +392,7 @@ impl LayoutMeasurements {
         let mut stats = self
             .layout_tree
             .as_deref()
-            .map(LayoutTree::debug_allocation_stats)
-            .unwrap_or_default();
+            .map_or_default(LayoutTree::debug_allocation_stats);
         if let Some(semantics) = &self.semantics {
             record_semantics_allocation_stats(semantics.root(), &mut stats);
         }
@@ -1916,10 +1915,7 @@ fn policy_intrinsic(
 impl PlaceTarget for LayoutParts {
     fn place(&self, x: f32, y: f32) {
         let internal_offset = read_cell(&self.record().measured, |measured| {
-            measured
-                .as_ref()
-                .map(|measured| measured.offset)
-                .unwrap_or_default()
+            measured.as_ref().map_or_default(|measured| measured.offset)
         });
         self.place_retained(Point {
             x: x + internal_offset.x,

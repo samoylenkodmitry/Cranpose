@@ -169,8 +169,7 @@ impl GlassBackdropScrollRun<'_> {
                     mismatching_pixels(&steps[*previous].screenshot, &step.screenshot, GLASS_BAR)
                         == 0
                 })
-                .map(|_| " (identical to the previous incremental step)")
-                .unwrap_or_default();
+                .map_or_default(|_| " (identical to the previous incremental step)");
             println!(
                 "step {:02}: bar pixels differing from the cold render: {mismatching}{stale_hint}",
                 index + 1

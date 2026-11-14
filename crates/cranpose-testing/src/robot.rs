@@ -249,11 +249,8 @@ where
     pub fn get_all_text(&mut self) -> Vec<String> {
         self.wait_for_idle();
 
-        self.shell.with_layout_tree(|layout_tree| {
-            layout_tree
-                .map(extract_text_from_layout)
-                .unwrap_or_default()
-        })
+        self.shell
+            .with_layout_tree(|layout_tree| layout_tree.map_or_default(extract_text_from_layout))
     }
 
     /// Get all rectangles (bounds) of UI elements on screen.
@@ -262,11 +259,8 @@ where
     pub fn get_all_rects(&mut self) -> Vec<(Rect, Option<String>)> {
         self.wait_for_idle();
 
-        self.shell.with_layout_tree(|layout_tree| {
-            layout_tree
-                .map(extract_rects_from_layout)
-                .unwrap_or_default()
-        })
+        self.shell
+            .with_layout_tree(|layout_tree| layout_tree.map_or_default(extract_rects_from_layout))
     }
 
     /// Print debug information about the current screen state.

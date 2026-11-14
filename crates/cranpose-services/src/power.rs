@@ -230,15 +230,12 @@ pub fn observe_power_state(
 /// Publishes a new power state. Platform backends call this whenever the OS
 /// reports a thermal or battery change, from whatever thread delivered it.
 pub fn publish_power_state(state: PowerState) {
-    let observers = power_observers()
-        .lock()
-        .map(|observers| {
-            observers
-                .iter()
-                .map(|(_, observer)| Arc::clone(observer))
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
+    let observers = power_observers().lock().map_or_default(|observers| {
+        observers
+            .iter()
+            .map(|(_, observer)| Arc::clone(observer))
+            .collect::<Vec<_>>()
+    });
     for observer in observers {
         observer(state);
     }

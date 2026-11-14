@@ -259,8 +259,7 @@ impl<'a> LayerRef<'a> {
     #[inline]
     pub fn translated_content_offset(self) -> Point {
         self.props()
-            .map(|props| props.translated_content_offset)
-            .unwrap_or_default()
+            .map_or_default(|props| props.translated_content_offset)
     }
 
     /// The graphics layer properties; defaults when none were set.
@@ -351,9 +350,7 @@ impl<'a> LayerRef<'a> {
     /// The reasons the record is drawn through its own offscreen buffer.
     #[inline]
     pub fn isolation(self) -> IsolationReasons {
-        self.props()
-            .map(|props| props.isolation)
-            .unwrap_or_default()
+        self.props().map_or_default(|props| props.isolation)
     }
 
     /// Whether the record's own composition needs its content on a texture
@@ -396,9 +393,7 @@ impl<'a> LayerRef<'a> {
     /// Whether a renderer may keep the record's pixels between frames.
     #[inline]
     pub fn cache_policy(self) -> CachePolicy {
-        self.props()
-            .map(|props| props.cache_policy)
-            .unwrap_or_default()
+        self.props().map_or_default(|props| props.cache_policy)
     }
 
     #[expect(

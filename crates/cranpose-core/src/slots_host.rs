@@ -343,8 +343,7 @@ impl SlotsHost {
         let retention = inner
             .runtime_state
             .clone()
-            .map(|state| state.slot_retention_debug_stats(self))
-            .unwrap_or_default();
+            .map_or_default(|state| state.slot_retention_debug_stats(self));
         SlotTableDebugStats::from_parts(local, lifecycle, retention)
     }
 

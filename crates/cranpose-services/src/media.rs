@@ -674,9 +674,7 @@ pub fn media_playback_supported() -> bool {
 /// What the installed backend can do, or [`MediaCapabilities::default`] — every
 /// capability absent — when there is none.
 pub fn media_capabilities() -> MediaCapabilities {
-    media_player()
-        .map(|player| player.capabilities())
-        .unwrap_or_default()
+    media_player().map_or_default(|player| player.capabilities())
 }
 
 static STATE: Mutex<PlaybackState> = Mutex::new(PlaybackState::Idle);
@@ -1076,9 +1074,7 @@ pub fn media_equalizer_bands() -> Vec<EqualizerBand> {
 /// Empty where there is no backend, or where the backend has no opinion. See
 /// [`MediaPlayer::audio_extensions`].
 pub fn media_audio_extensions() -> Vec<&'static str> {
-    media_player()
-        .map(|player| player.audio_extensions())
-        .unwrap_or_default()
+    media_player().map_or_default(|player| player.audio_extensions())
 }
 
 /// The equalizer setting last applied.

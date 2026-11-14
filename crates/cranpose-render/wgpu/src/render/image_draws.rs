@@ -129,8 +129,7 @@ impl ImageBatch {
         let (viewport, root_scale) = (space.viewport, space.scale);
         let snap_delta = image_draw
             .snap_anchor
-            .map(|anchor| snap_delta_for_anchor(anchor, root_scale))
-            .unwrap_or_default();
+            .map_or_default(|anchor| snap_delta_for_anchor(anchor, root_scale));
         let rect = image_draw.rect.translate(snap_delta.x, snap_delta.y);
         if rect.width <= 0.0 || rect.height <= 0.0 || image_draw.alpha <= 0.0 {
             return Ok(());
@@ -514,8 +513,7 @@ pub(crate) struct ResolvedImageGeometry {
 pub(crate) fn resolve_image_geometry(image: &ImageDraw, root_scale: f32) -> ResolvedImageGeometry {
     let snap_delta = image
         .snap_anchor
-        .map(|anchor| snap_delta_for_anchor(anchor, root_scale))
-        .unwrap_or_default();
+        .map_or_default(|anchor| snap_delta_for_anchor(anchor, root_scale));
     resolve_image_geometry_with_delta(image, root_scale, snap_delta)
 }
 

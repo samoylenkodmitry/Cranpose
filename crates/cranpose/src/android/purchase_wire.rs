@@ -80,8 +80,8 @@ fn decode_product<'a>(fields: &mut impl Iterator<Item = &'a str>) -> Option<Prod
     Some(Product {
         id,
         display_price: unescape(fields.next()?),
-        title: fields.next().map(unescape).unwrap_or_default(),
-        description: fields.next().map(unescape).unwrap_or_default(),
+        title: fields.next().map_or_default(unescape),
+        description: fields.next().map_or_default(unescape),
     })
 }
 

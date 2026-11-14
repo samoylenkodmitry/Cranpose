@@ -215,8 +215,7 @@ pub(crate) fn text_logical_geometry_for_draw(
 
     let snap_delta = text_draw
         .snap_anchor
-        .map(|anchor| snap_delta_for_anchor(anchor, root_scale))
-        .unwrap_or_default();
+        .map_or_default(|anchor| snap_delta_for_anchor(anchor, root_scale));
     let logical_rect = text_draw.rect.translate(snap_delta.x, snap_delta.y);
     Some((logical_rect, text_scale))
 }
@@ -293,9 +292,7 @@ fn rect_is_visible_in_rect(rect: Rect, clip: Option<Rect>, viewport_rect: Rect) 
 }
 
 fn snapped_quad_bounds(quad: [[f32; 2]; 4], anchor: Option<SnapAnchor>, root_scale: f32) -> Rect {
-    let snap_delta = anchor
-        .map(|anchor| snap_delta_for_anchor(anchor, root_scale))
-        .unwrap_or_default();
+    let snap_delta = anchor.map_or_default(|anchor| snap_delta_for_anchor(anchor, root_scale));
     quad_bounds(translate_quad(quad, snap_delta))
 }
 

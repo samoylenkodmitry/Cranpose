@@ -407,7 +407,6 @@ impl ComposerRuntimeState {
         self.retention_by_host
             .borrow()
             .get(&host_key)
-            .map(RetentionManager::debug_stats)
-            .unwrap_or_default()
+            .map_or_default(RetentionManager::debug_stats)
     }
 }

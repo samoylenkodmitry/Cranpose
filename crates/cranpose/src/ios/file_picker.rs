@@ -246,8 +246,7 @@ pub(crate) fn root_view_controller(mtm: MainThreadMarker) -> Option<Retained<UIV
 
 fn url_path(url: &NSURL) -> PathBuf {
     url.path()
-        .map(|path| PathBuf::from(path.to_string()))
-        .unwrap_or_default()
+        .map_or_default(|path| PathBuf::from(path.to_string()))
 }
 
 struct SecurityScope {

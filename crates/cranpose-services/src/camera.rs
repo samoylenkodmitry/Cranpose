@@ -595,14 +595,12 @@ fn retain_without<T>(slot: &'static Mutex<Vec<(u64, T)>>, id: u64) {
 }
 
 fn snapshot<T: Clone>(slot: &'static Mutex<Vec<(u64, T)>>) -> Vec<T> {
-    slot.lock()
-        .map(|observers| {
-            observers
-                .iter()
-                .map(|(_, observer)| observer.clone())
-                .collect()
-        })
-        .unwrap_or_default()
+    slot.lock().map_or_default(|observers| {
+        observers
+            .iter()
+            .map(|(_, observer)| observer.clone())
+            .collect()
+    })
 }
 
 /// The last frame the session produced, or `None` before the first one.
@@ -617,10 +615,7 @@ pub fn latest_camera_frame() -> Option<CameraFrame> {
 
 /// What the session is doing.
 pub fn camera_state() -> CameraState {
-    state_slot()
-        .lock()
-        .map(|state| state.clone())
-        .unwrap_or_default()
+    state_slot().lock().map_or_default(|state| state.clone())
 }
 
 /// How many frames were produced while every observer was still busy.
@@ -704,10 +699,7 @@ pub fn publish_camera_lenses(lenses: CameraLenses) {
 /// The devices the application may pick between, as the backend last published
 /// them.
 pub fn camera_lenses() -> CameraLenses {
-    lenses_slot()
-        .lock()
-        .map(|lenses| lenses.clone())
-        .unwrap_or_default()
+    lenses_slot().lock().map_or_default(|lenses| lenses.clone())
 }
 
 /// Registers `observer` for frames. Applications collect

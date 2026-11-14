@@ -69,12 +69,7 @@ fn click(input: &EmbedInput, shell: &mut AppShell<WgpuRenderer>, x: f32, y: f32)
 }
 
 fn field_text() -> String {
-    FIELD.with(|slot| {
-        slot.borrow()
-            .as_ref()
-            .map(TextFieldState::text)
-            .unwrap_or_default()
-    })
+    FIELD.with(|slot| slot.borrow().as_ref().map_or_default(TextFieldState::text))
 }
 
 #[test]

@@ -92,7 +92,7 @@ fn published_names_matching(prefix: &'static str) -> (Arc<Mutex<Vec<String>>>, I
 }
 
 fn snapshot(names: &Mutex<Vec<String>>) -> Vec<String> {
-    names.lock().map(|names| names.clone()).unwrap_or_default()
+    names.lock().map_or_default(|names| names.clone())
 }
 
 #[test]

@@ -907,9 +907,8 @@ pub(crate) extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeO
     token: jlong,
     entries: JString<'local>,
 ) -> jboolean {
-    let documents = read_optional_jstring(&mut env, entries)
-        .map(|rows| parse_documents(&rows))
-        .unwrap_or_default();
+    let documents =
+        read_optional_jstring(&mut env, entries).map_or_default(|rows| parse_documents(&rows));
     let mut registry = folder_walks()
         .lock()
         .expect("folder walk registry poisoned");

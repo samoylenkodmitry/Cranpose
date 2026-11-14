@@ -39,8 +39,7 @@ fn dump_layout_tree(layout_box: &LayoutBox, depth: usize) -> String {
         .node_data
         .modifier_slices()
         .text_content()
-        .map(|s| format!(" text=\"{s}\""))
-        .unwrap_or_default();
+        .map_or_default(|s| format!(" text=\"{s}\""));
 
     let mut output = format!(
         "{}[{}] pos=({:.1}, {:.1}) size=({:.1}x{:.1}){}\n",

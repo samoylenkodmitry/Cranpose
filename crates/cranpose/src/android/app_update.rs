@@ -83,8 +83,7 @@ impl AppUpdater for AndroidAppUpdater {
         let digest = package
             .digest
             .as_ref()
-            .map(PackageDigest::to_feed_string)
-            .unwrap_or_default();
+            .map_or_default(PackageDigest::to_feed_string);
         self.call(|env, activity, class| {
             let download_url = env.new_string(&package.download_url)?;
             let digest = env.new_string(&digest)?;
