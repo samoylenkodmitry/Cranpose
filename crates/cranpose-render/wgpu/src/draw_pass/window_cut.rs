@@ -27,15 +27,29 @@ struct Cut {
 }
 
 impl WindowCut {
-    // `segments` cut to each of `parts` in turn, in their order: each
+    // Cuts `segments` to each of `parts` in turn, in their order: each
     // segment's part in the first, then in the next. The parts share no
-    // pixel, so no pixel draws twice.
+    // pixel, so no pixel draws twice. A single part only narrows each
+    // segment's scissor: the pass tests each op against it once anyway.
     pub(crate) fn cut<'a>(
         &'a mut self,
-        segments: &[PassSegment<'a>],
+        segments: &mut Vec<PassSegment<'a>>,
         parts: impl Iterator<Item = (u32, u32, u32, u32)> + Clone,
         target: PassTarget<'_>,
-    ) -> Vec<PassSegment<'a>> {
+    ) {
+        let mut first_two = parts.clone();
+        if let (Some(only), None) = (first_two.next(), first_two.next()) {
+            segments.retain_mut(
+                |segment| match intersect_scissors(segment.scissor, Some(only)) {
+                    Some(scissor) => {
+                        segment.scissor = scissor;
+                        true
+                    }
+                    None => false,
+                },
+            );
+            return;
+        }
         self.ops.clear();
         self.cuts.clear();
         for (source, segment) in segments.iter().enumerate() {
@@ -76,17 +90,16 @@ impl WindowCut {
             }
         }
         let this: &'a Self = self;
-        this.cuts
-            .iter()
-            .map(|cut| {
-                let segment = &segments[cut.source];
-                PassSegment {
-                    ops: &this.ops[cut.ops.clone()],
-                    scissor: Some(cut.scissor),
-                    first_run_window: segment.first_run_window.clone().filter(|_| cut.first),
-                    ..segment.clone()
-                }
-            })
-            .collect()
+        let sources = segments.len();
+        for cut in &this.cuts {
+            let segment = segments[cut.source].clone();
+            segments.push(PassSegment {
+                ops: &this.ops[cut.ops.clone()],
+                scissor: Some(cut.scissor),
+                first_run_window: segment.first_run_window.filter(|_| cut.first),
+                ..segment
+            });
+        }
+        segments.drain(..sources);
     }
 }

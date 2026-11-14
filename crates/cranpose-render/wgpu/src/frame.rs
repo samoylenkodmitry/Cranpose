@@ -2920,7 +2920,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         let (load_op, fill) = self.window_base(&pass.page, load_op);
         let mut window_cut = std::mem::take(&mut self.renderer.pass_scratch.window_cut);
         if pass.page.window.is_some() {
-            segments = window_cut.cut(&segments, pass.page.window_scissors(), target);
+            window_cut.cut(&mut segments, pass.page.window_scissors(), target);
         }
         if let Some(fill) = &fill {
             segments.splice(
