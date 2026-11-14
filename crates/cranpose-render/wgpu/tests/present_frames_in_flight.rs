@@ -87,6 +87,47 @@ fn hold_frames(renderer: &mut WgpuRenderer, runtime: &mut InlinePresentRuntime) 
     }
 }
 
+// A page that changes the whole window from frame to frame draws each frame
+// whole by its damage, as the frames in flight do. On a new surface, whose
+// images hold no frame yet, its frames go while another is in flight from
+// the first frame that changed the whole window against the frame before.
+#[test]
+fn the_frames_of_a_page_that_changes_whole_go_together_on_a_new_surface() {
+    let Some((_lock, mut renderer, mut runtime)) = attached("whole pages", TestImages::Kept(4))
+    else {
+        return;
+    };
+    let window = Rect {
+        x: 0.0,
+        y: 0.0,
+        width: WIDTH as f32,
+        height: HEIGHT as f32,
+    };
+    let pages = [Color(0.2, 0.7, 0.3, 1.0), Color(0.7, 0.2, 0.3, 1.0)]
+        .map(|color| support::page_graph(WIDTH, HEIGHT, vec![support::solid_rect(window, color)]));
+    let mut overlaps = Vec::new();
+    for frame in 0..6 {
+        renderer.scene_mut().describe(&pages[frame % pages.len()]);
+        publish(&mut renderer);
+        overlaps.push(renderer.has_frame_credit());
+        runtime.pump();
+        assert_eq!(
+            drain_outcomes(&mut renderer),
+            vec![(
+                renderer.last_published_frame_id(),
+                PresentOutcome::Presented
+            )],
+            "frame {frame} draws"
+        );
+    }
+    assert_eq!(
+        overlaps,
+        [false, true, true, true, true, true],
+        "the first frame knows no frame before it and waits; each frame after it changes the \
+         whole window, and the next goes while it is in flight"
+    );
+}
+
 // Images that hold nothing take the frames through the composition target,
 // which keeps them: only the window's first frame, which no target holds a
 // frame for, draws whole and waits for the frame in flight.

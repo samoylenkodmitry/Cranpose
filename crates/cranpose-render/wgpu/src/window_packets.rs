@@ -38,6 +38,18 @@ impl WindowPackets {
         self.held.is_some()
     }
 
+    // Whether the window packet built last changed the whole window against
+    // the packet before it, or skipped working out what it changed after
+    // such packets: the next walk takes the whole page by its damage.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn changed_whole(&self) -> bool {
+        self.last()
+            .and_then(|frame| self.damages.noted(frame))
+            .is_some_and(|packet| {
+                packet.since.is_some() && !matches!(packet.damage, Damage::Part(_))
+            })
+    }
+
     // The window packet built last.
     pub(crate) fn last(&self) -> Option<u64> {
         self.last.map(|(frame, _)| frame)

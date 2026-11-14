@@ -411,7 +411,8 @@ impl FrameDamages {
         (frame % HISTORY as u64) as usize
     }
 
-    fn noted(&self, frame: u64) -> Option<PacketDamage> {
+    // The damage of the packet of `frame`, while the damages keep it.
+    pub(crate) fn noted(&self, frame: u64) -> Option<PacketDamage> {
         self.entries[Self::slot(frame)]
             .filter(|(noted, _)| *noted == frame)
             .map(|(_, damage)| damage)

@@ -451,10 +451,13 @@ impl RendererFrontend {
     // Whether the next window packet, for the surface of `surface_epoch`,
     // may go while others are in flight. A walk made whole by targets that
     // hold no frame to build on waits for them, as one for a new surface
-    // does. A walk made whole by its damage goes with them.
+    // does: one whole scene lives at a time. A walk made whole by its damage
+    // goes with them, as does one after a packet that changed the whole
+    // window: the frames in flight hold whole scenes already.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn next_overlap(&self, surface_epoch: u64) -> PacketOverlap {
-        if surface_epoch != self.surface_epoch || self.uncull_next || !self.window.holds_packet() {
+        let builds_on = self.window.holds_packet() || self.window.changed_whole();
+        if surface_epoch != self.surface_epoch || self.uncull_next || !builds_on {
             PacketOverlap::Alone
         } else {
             PacketOverlap::WithFramesInFlight
