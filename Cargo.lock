@@ -1094,7 +1094,7 @@ dependencies = [
  "futures-core",
  "futures-util",
  "log",
- "pollster 1.0.1",
+ "pollster",
  "stats_alloc",
  "thiserror 2.0.21",
  "tokio",
@@ -1259,7 +1259,7 @@ dependencies = [
  "objc2-watch-connectivity",
  "objc2-watch-kit",
  "oslog",
- "pollster 1.0.1",
+ "pollster",
  "raw-window-handle",
  "serde",
  "serde_json",
@@ -1348,7 +1348,7 @@ dependencies = [
  "hashbrown 0.17.1",
  "js-sys",
  "log",
- "pollster 1.0.1",
+ "pollster",
  "portable-atomic",
  "smallvec",
  "stats_alloc",
@@ -1367,7 +1367,7 @@ dependencies = [
  "cranpose-foundation",
  "cranpose-services",
  "log",
- "pollster 1.0.1",
+ "pollster",
  "thiserror 2.0.21",
 ]
 
@@ -1481,7 +1481,7 @@ dependencies = [
  "filmcraft-ac3",
  "log",
  "parking_lot 0.13.0",
- "pollster 1.0.1",
+ "pollster",
  "symphonia",
 ]
 
@@ -1491,7 +1491,7 @@ version = "0.24.0"
 dependencies = [
  "cranpose",
  "cranpose-core",
- "pollster 1.0.1",
+ "pollster",
  "thiserror 2.0.21",
  "tokio",
  "uniffi",
@@ -1505,7 +1505,7 @@ dependencies = [
  "cranpose",
  "cranpose-core",
  "cranpose-native",
- "pollster 1.0.1",
+ "pollster",
  "uniffi",
 ]
 
@@ -1605,7 +1605,7 @@ dependencies = [
  "log",
  "naga",
  "png",
- "pollster 1.0.1",
+ "pollster",
  "rustix",
  "smallvec",
  "stats_alloc",
@@ -1635,7 +1635,7 @@ dependencies = [
  "log",
  "open",
  "parking_lot 0.13.0",
- "pollster 1.0.1",
+ "pollster",
  "portable-atomic",
  "reqwest",
  "rfd",
@@ -2094,7 +2094,7 @@ dependencies = [
  "log",
  "midly",
  "perf-compare-cranpose",
- "pollster 1.0.1",
+ "pollster",
  "pulldown-cmark",
  "serde",
  "serde_json",
@@ -4382,6 +4382,7 @@ dependencies = [
  "objc2-core-foundation",
  "objc2-core-graphics",
  "objc2-foundation 0.3.2",
+ "objc2-uniform-type-identifiers",
 ]
 
 [[package]]
@@ -5146,12 +5147,6 @@ dependencies = [
 
 [[package]]
 name = "pollster"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2f3a9f18d041e6d0e102a0a46750538147e5e8992d3b4873aaafee2520b00ce3"
-
-[[package]]
-name = "pollster"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bc6355899e1c9462875b6757c79f3caa011a1fdae12bbb1a2e72dd1f234f8336"
@@ -5595,9 +5590,9 @@ dependencies = [
 
 [[package]]
 name = "rfd"
-version = "0.17.2"
+version = "0.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "20dafead71c16a34e1ff357ddefc8afc11e7d51d6d2b9fbd07eaa48e3e540220"
+checksum = "c4b9d4857b10297ffb0f64cae711e983a7aeaee561848d56d429d3858bd8ed93"
 dependencies = [
  "block2 0.6.2",
  "dispatch2",
@@ -5608,8 +5603,9 @@ dependencies = [
  "objc2-app-kit 0.3.2",
  "objc2-core-foundation",
  "objc2-foundation 0.3.2",
+ "objc2-uniform-type-identifiers",
  "percent-encoding",
- "pollster 0.4.0",
+ "pollster",
  "raw-window-handle",
  "wasm-bindgen",
  "wasm-bindgen-futures",

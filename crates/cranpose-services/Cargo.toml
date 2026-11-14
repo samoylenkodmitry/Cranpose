@@ -87,13 +87,13 @@ open = { version = "5.4.5", optional = true }
 # Desktop file picker (Linux/macOS/Windows). xdg-portal exposes mounted
 # locations (GVFS/WebDAV) on Linux. iOS uses its own backend, so exclude it.
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android"), not(target_os = "ios")))'.dependencies]
-rfd = { version = "0.17.2", default-features = false, features = ["xdg-portal"], optional = true }
+rfd = { version = "0.18.0", default-features = false, features = ["xdg-portal"], optional = true }
 
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
 js-sys = { version = "0.3.107", optional = true }
 wasm-bindgen = { version = "0.2", optional = true }
 wasm-bindgen-futures = { version = "0.4.80", optional = true }
-rfd = { version = "0.17.2", default-features = false, optional = true, features = ["file-handle-inner"] }
+rfd = { version = "0.18.0", default-features = false, optional = true, features = ["file-handle-inner"] }
 web-sys = { version = "0.3", features = [
     "Blob",
     "BlobPropertyBag",
