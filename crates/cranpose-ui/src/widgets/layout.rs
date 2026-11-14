@@ -149,32 +149,15 @@ impl<P: MeasurePolicy + Clone + PartialEq> PolicyUpdate for P {
     }
 }
 
-// The thread's one empty policy, which every leaf shares; a held immutable
-// policy equal to `policy`; or else `policy` in an allocation of its own.
-fn held_policy<P: MeasurePolicy + Clone + PartialEq>(policy: &P) -> Rc<dyn MeasurePolicy> {
+// `policy` in an allocation of its own, or the thread's one empty policy,
+// which every leaf shares.
+fn held_policy<P: MeasurePolicy + Clone>(policy: &P) -> Rc<dyn MeasurePolicy> {
     if std::any::TypeId::of::<P>()
         == std::any::TypeId::of::<crate::layout::policies::EmptyMeasurePolicy>()
     {
         return crate::widgets::nodes::layout_node::empty_measure_policy();
     }
-    if policy.is_immutable() {
-        return shared_policy(
-            &|held: &dyn std::any::Any| held.downcast_ref::<P>() == Some(policy),
-            &|| Rc::new(policy.clone()),
-        );
-    }
     Rc::new(policy.clone())
-}
-
-// The held immutable policy `equal` finds, or the one `make` makes. One body
-// for every policy type: a generic body that reads the thread's state takes
-// the state's first-read code into every crate that compiles it.
-#[inline(never)]
-fn shared_policy(
-    equal: &dyn Fn(&dyn std::any::Any) -> bool,
-    make: &dyn Fn() -> Rc<dyn MeasurePolicy>,
-) -> Rc<dyn MeasurePolicy> {
-    crate::thread_state::with(|state| state.shared_policies.borrow_mut().shared(equal, make))
 }
 
 // What a layout node's modifier is set from: a modifier, or what makes one
