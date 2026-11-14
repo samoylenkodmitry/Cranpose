@@ -105,7 +105,8 @@ the tools; the steps for this app are:
 2. The runner. Build `tools/runner` for the iPhone as its README says. Its
    XCUITest finds the app's elements by accessibility identifier, which
    Cranpose's iOS host sets from `Modifier::test_tag` once the test-tag
-   change lands; until then the runner cannot find them.
+   change ([#2203](https://github.com/samoylenkodmitry/Cranpose/pull/2203))
+   lands; until then the runner cannot find them.
 3. Add the app to `APPS` in `tools/measure.py`:
 
    ```python
