@@ -59,7 +59,7 @@ impl Content for WebDavItem {
                 .send(&request, HttpControl::new())
                 .await
                 .and_then(HttpResponse::error_for_status)
-                .map_err(|e| ContentError::Io(e.to_string()))?;
+                .map_err(super::http_error::content_error)?;
             Ok(Rc::new(Reader(response)) as ContentReaderRef)
         })
     }
@@ -73,7 +73,7 @@ impl ContentReader for Reader {
             self.0
                 .read_chunk()
                 .await
-                .map_err(|e| ContentError::Io(e.to_string()))
+                .map_err(super::http_error::content_error)
         })
     }
 }

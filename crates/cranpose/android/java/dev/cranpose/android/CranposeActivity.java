@@ -2146,6 +2146,20 @@ public class CranposeActivity extends NativeActivity {
         }
     }
 
+    /** Whether the app still holds the persisted grant on the tree. Only the
+     * read flag counts: rclone through RoundSync writes to trees whose grant
+     * reads back without the write flag. Called from the Rust worker thread
+     * after a folder call fails, to tell a lost grant from other failures. */
+    public boolean cranposeFolderAccessible(String treeUriString) {
+        Uri tree = Uri.parse(treeUriString);
+        for (UriPermission permission : getContentResolver().getPersistedUriPermissions()) {
+            if (permission.isReadPermission() && tree.equals(permission.getUri())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /** Creates a document, retrying a slow/flaky network provider (a WebDAV /
      * cloud share mounted through RoundSync can transiently return {@code null}
      * or throw before it settles, just like a folder listing). Returns the new

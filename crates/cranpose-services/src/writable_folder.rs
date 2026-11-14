@@ -20,7 +20,9 @@
 //! chunked [`FolderReader`]/[`FolderWriter`] streams for payloads that should
 //! not be buffered. Read-only or unreachable folders surface as
 //! [`FolderError::ReadOnly`] / [`FolderError::Io`] so callers can degrade
-//! gracefully. Backends: desktop (`std::fs`), Android (SAF tree URIs), iOS
+//! gracefully. A folder whose grant the system took back surfaces as
+//! [`FolderError::AccessLost`], so the app can ask the user to pick it
+//! again. Backends: desktop (`std::fs`), Android (SAF tree URIs), iOS
 //! (security-scoped bookmarks). The web has no writable-folder concept and
 //! returns [`FolderError::Unsupported`].
 
@@ -38,6 +40,10 @@ pub enum FolderError {
     /// Writable folders are not available on this platform/build.
     #[error("writable folders are not supported on this platform")]
     Unsupported,
+    /// The app no longer holds the grant for the folder, so the user has to
+    /// pick it again. The text is the folder handle.
+    #[error("access to the folder {0} is lost")]
+    AccessLost(String),
     /// Any other I/O failure.
     #[error("{0}")]
     Io(String),
