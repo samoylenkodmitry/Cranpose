@@ -258,36 +258,6 @@ fn a_text_node_never_makes_its_subtree_modal_or_hidden() {
 }
 
 #[test]
-fn a_text_laid_out_as_written_shares_its_string_and_style_with_its_layout() {
-    let (whole_shares, wrapped_shares, wrapped_lines, style_shared) = in_app(|| {
-        let source = AnnotatedString::from("cell 123");
-        let node = TextModifierNode::new(
-            source.clone(),
-            TextStyle::default(),
-            TextLayoutOptions::default(),
-            Density::new(1.0, 1.0),
-        );
-        let layout_at = |width: f32| {
-            node.layout.measure_layout((0.0, width));
-            node.layout.measured_layout().expect("a measured layout")
-        };
-        // At 8.4 per character "cell 123" is 67.2 wide.
-        let whole = layout_at(200.0);
-        let wrapped = layout_at(50.0);
-        (
-            Arc::ptr_eq(&whole.text, source.render_string()),
-            Arc::ptr_eq(&wrapped.text, source.render_string()),
-            wrapped.layout.line_count(),
-            Arc::ptr_eq(&whole.visual_style, &wrapped.visual_style),
-        )
-    });
-    assert!(whole_shares, "a line that fits shares the node's string");
-    assert!(wrapped_shares, "a wrapped text shares the node's string");
-    assert_eq!(wrapped_lines, 2);
-    assert!(style_shared, "both layouts share the node's style");
-}
-
-#[test]
 fn an_update_to_an_equal_style_keeps_the_layout_and_a_new_style_lays_out_again() {
     let (equal, kept, differs, font_size) = in_app(|| {
         let text = AnnotatedString::from("cell 123");

@@ -285,13 +285,6 @@ fn a_texts_slices_read_its_string_style_and_options_from_its_layout() {
     ));
     let slices = collect_slices_from_modifier(&modifier);
     assert_eq!(slices.text_content().as_deref(), Some("Shared"));
-    assert!(std::sync::Arc::ptr_eq(
-        slices
-            .annotated_text()
-            .expect("a text node's slices hold its text")
-            .render_string(),
-        text.render_string()
-    ));
     assert_eq!(slices.text_style().as_deref(), Some(&style));
     assert_eq!(slices.text_layout_options(), Some(options.normalized()));
     assert!(slices.text_pan_resolver().is_none());

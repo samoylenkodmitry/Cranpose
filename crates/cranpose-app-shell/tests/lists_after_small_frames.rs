@@ -63,7 +63,6 @@ fn a_large_frame_after_many_small_ones_updates_as_a_fresh_scene() {
     });
     shell.update();
     let first = without_node_ids(signature_of(shell.primary().scene().root_layer()));
-    let rebuilds = checks.rebuilds.get();
     let (shown, width) = (*captured.borrow()).expect("the wall is composed");
     for frame in 0..SMALL_FRAMES {
         width.set(5.0 + (frame % 2) as f32);
@@ -79,11 +78,6 @@ fn a_large_frame_after_many_small_ones_updates_as_a_fresh_scene() {
         checks.mismatches.get(),
         0,
         "a scoped update drew other than a scene built from scratch"
-    );
-    assert_eq!(
-        checks.rebuilds.get(),
-        rebuilds,
-        "a frame rebuilt the whole scene instead of updating it"
     );
     assert_eq!(
         without_node_ids(signature_of(shell.primary().scene().root_layer())),

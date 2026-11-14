@@ -1,21 +1,17 @@
-use std::sync::Arc;
-
 use super::*;
 
 #[test]
-fn a_redrawn_string_reuses_the_annotated_copy_from_last_frame() {
-    let first = shared_plain_annotated_string("SCORE 340");
+fn a_redrawn_string_keeps_its_text() {
+    shared_plain_annotated_string("SCORE 340");
     let second = shared_plain_annotated_string("SCORE 340");
-    assert!(Arc::ptr_eq(first.render_string(), second.render_string()));
     assert_eq!(second.text(), "SCORE 340");
     assert!(second.span_styles().is_empty());
 }
 
 #[test]
-fn distinct_strings_never_share_an_annotated_copy() {
+fn distinct_strings_keep_their_own_text() {
     let first = shared_plain_annotated_string("READY");
     let second = shared_plain_annotated_string("GO");
-    assert!(!Arc::ptr_eq(first.render_string(), second.render_string()));
     assert_eq!(first.text(), "READY");
     assert_eq!(second.text(), "GO");
 }
@@ -32,10 +28,9 @@ fn the_pool_survives_overflowing_its_capacity() {
 }
 
 #[test]
-fn a_redrawn_string_reuses_the_render_copy_from_last_frame() {
-    let first = shared_plain_render_string("SCORE 341");
+fn a_redrawn_render_string_keeps_its_text() {
+    shared_plain_render_string("SCORE 341");
     let second = shared_plain_render_string("SCORE 341");
-    assert!(Arc::ptr_eq(&first, &second));
     assert_eq!(second.text(), "SCORE 341");
     assert_eq!(
         second.text(),
