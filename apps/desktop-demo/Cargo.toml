@@ -97,7 +97,7 @@ cranpose-text = { path = "../../crates/cranpose-text" }
 cranpose-render-wgpu = { path = "../../crates/cranpose-render/wgpu" }
 cranpose-navigation = { path = "../../crates/cranpose-navigation" }
 cranpose-testing = { path = "../../crates/cranpose-testing", features = ["desktop-robot"] }
-pollster = "0.4.0"
+pollster = "1.0.1"
 
 wgpu = { workspace = true }
 

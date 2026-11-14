@@ -168,7 +168,7 @@ cranpose-macros = { path = "../../cranpose-macros" }
 cranpose-render-common = { path = "../common", features = ["embedded-default-font"] }
 naga = { version = "30.0.2", features = ["wgsl-in", "glsl-out"] }
 png = "0.18.1"
-pollster = "0.4.0"
+pollster = "1.0.1"
 stats_alloc = "0.1.10"
 # The GL lowering of the fork the web and Android draw with, which the
 # `gles_lowering` tests run on every host.

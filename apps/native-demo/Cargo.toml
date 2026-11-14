@@ -28,7 +28,7 @@ path = "src/bin/bindgen.rs"
 required-features = ["bindings"]
 
 [dev-dependencies]
-pollster = "0.4.0"
+pollster = "1.0.1"
 
 [[test]]
 name = "integration"
