@@ -43,7 +43,7 @@ mod glyph_run;
 mod glyph_run_arena;
 pub(crate) mod gpu_stats;
 mod initial_present;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "test-support"))]
 mod inline_present_runtime;
 mod instant_triangles;
 mod lazy_resource;
@@ -61,8 +61,6 @@ mod pipeline_recorder;
 mod pipeline_records;
 #[cfg(not(target_arch = "wasm32"))]
 mod present_handle;
-#[cfg(not(target_arch = "wasm32"))]
-mod present_image;
 #[cfg(not(target_arch = "wasm32"))]
 mod present_observer;
 #[cfg(not(target_arch = "wasm32"))]
@@ -84,6 +82,8 @@ mod shared_shader;
 mod target_state;
 #[cfg(test)]
 mod test_support;
+#[cfg(all(not(target_arch = "wasm32"), feature = "test-support"))]
+mod test_target;
 mod text_system;
 mod thread_state;
 mod window_packets;
@@ -103,7 +103,7 @@ use frontend::RendererFrontend;
 pub use gpu_stats::{FrameDamage, FrameStatsSnapshot as RenderStatsSnapshot, WindowRects};
 pub use gpu_target::{GpuTarget, optional_device_features};
 pub use initial_present::{clear_to_background, clear_to_default_background};
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "test-support"))]
 pub use inline_present_runtime::InlinePresentRuntime;
 use pipeline_compiler::PipelineCompilation;
 #[cfg(not(target_arch = "wasm32"))]
@@ -113,13 +113,15 @@ pub use present_observer::PresentObserver;
 #[cfg(not(target_arch = "wasm32"))]
 use present_runtime::PresentRuntimeInit;
 #[cfg(not(target_arch = "wasm32"))]
-pub use present_thread::{PresentThread, TestImages};
+pub use present_thread::PresentThread;
 use render::{FrameOutput, FrameSubmit, GpuRenderer, GpuRendererInit};
 pub use render::{
     frame_clear_color, frames_presented, pipelines_created, pipelines_created_off_frame,
 };
 pub use scene::{HitRegion, Scene};
 pub use shared_shader::{shader_stages_flattened, shader_stages_folded};
+#[cfg(all(not(target_arch = "wasm32"), feature = "test-support"))]
+pub use test_target::TestImages;
 pub use text_system::WgpuTextSystem;
 
 pub(crate) fn rect_to_quad(rect: Rect) -> [[f32; 2]; 4] {
@@ -334,7 +336,7 @@ impl WgpuRenderer {
         Ok(())
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(all(not(target_arch = "wasm32"), feature = "test-support"))]
     #[doc(hidden)]
     pub fn init_gpu_inline_for_tests(&mut self, target: GpuTarget) -> InlinePresentRuntime {
         let init = PresentRuntimeInit {

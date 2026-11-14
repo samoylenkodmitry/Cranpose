@@ -53,6 +53,7 @@ impl PresentHandle {
         })
     }
 
+    #[cfg(feature = "test-support")]
     pub(crate) fn new_inline(
         init: PresentRuntimeInit,
         waker: PresentWaker,

@@ -7,13 +7,23 @@ use std::{
     time::Duration,
 };
 
+#[cfg(feature = "test-support")]
+use crate::{TestImages, test_target::TestTarget};
 use crate::{
     frame_packet::{
         CancelReason, FramePacket, FrameSceneStorage, PresentOutcome, PresentTimings, RenderReturns,
     },
-    present_image::{PresentImage, TestSwapchain},
     render::{FrameOutput, FrameSubmit, GpuRenderer, GpuRendererInit},
 };
+
+// The image a present thread's frame draws into: the surface's next image,
+// or one of a test swapchain.
+enum PresentImage {
+    Surface(wgpu::SurfaceTexture),
+    // The image of the test swapchain at this place.
+    #[cfg(feature = "test-support")]
+    Test(usize),
+}
 
 pub(crate) type PresentWaker = Arc<dyn Fn() + Send + Sync>;
 
@@ -45,11 +55,11 @@ pub(crate) enum PresentControl {
         ack: SyncSender<()>,
     },
     // Draws the frames into a test target, a new surface of `surface_epoch`.
-    #[doc(hidden)]
+    #[cfg(feature = "test-support")]
     AttachOffscreenTargetForTests {
         width: u32,
         height: u32,
-        images: crate::TestImages,
+        images: TestImages,
         surface_epoch: u64,
         ack: SyncSender<()>,
     },
@@ -135,9 +145,8 @@ pub(crate) struct PresentState {
     undrawn: Option<PresentImage>,
     surface: Option<wgpu::Surface<'static>>,
     config: Option<wgpu::SurfaceConfiguration>,
-    offscreen_target: Option<(u32, u32)>,
-    // The images of a test target that draws as into a surface.
-    test_swapchain: Option<TestSwapchain>,
+    #[cfg(feature = "test-support")]
+    test_target: Option<TestTarget>,
     renderer_epoch: u64,
     surface_epoch: u64,
     waiting_packet: Option<FramePacket>,
@@ -180,8 +189,8 @@ impl PresentState {
             undrawn: None,
             surface: None,
             config: None,
-            offscreen_target: None,
-            test_swapchain: None,
+            #[cfg(feature = "test-support")]
+            test_target: None,
             renderer_epoch,
             surface_epoch: 0,
             waiting_packet: None,
@@ -231,6 +240,7 @@ impl PresentState {
         }
     }
 
+    #[cfg(feature = "test-support")]
     pub(crate) fn has_waiting_packet(&self) -> bool {
         self.waiting_packet.is_some()
     }
@@ -256,7 +266,10 @@ impl PresentState {
                 surface.configure(&self.device, &config);
                 self.surface = Some(surface);
                 self.config = Some(config);
-                self.offscreen_target = None;
+                #[cfg(feature = "test-support")]
+                {
+                    self.test_target = None;
+                }
                 self.present_placeholder_frame();
             }
             PresentControl::Reconfigure {
@@ -267,8 +280,9 @@ impl PresentState {
                 self.surface_epoch = surface_epoch;
                 self.cancel_waiting(CancelReason::SurfaceEpoch);
                 self.reconfigure(&config);
-                if self.offscreen_target.is_some() {
-                    self.offscreen_target = Some((config.width, config.height));
+                #[cfg(feature = "test-support")]
+                if let Some(test) = self.test_target.as_mut() {
+                    test.size = (config.width, config.height);
                 }
                 self.config = Some(config);
                 answer(&ack, ());
@@ -277,9 +291,13 @@ impl PresentState {
                 self.cancel_waiting(CancelReason::SurfaceUnavailable);
                 self.surface = None;
                 self.config = None;
-                self.offscreen_target = None;
+                #[cfg(feature = "test-support")]
+                {
+                    self.test_target = None;
+                }
                 answer(&ack, ());
             }
+            #[cfg(feature = "test-support")]
             PresentControl::AttachOffscreenTargetForTests {
                 width,
                 height,
@@ -301,20 +319,13 @@ impl PresentState {
 
     // Draws the frames into a test target of `size` that hands out `images`
     // in place of a surface.
-    fn attach_offscreen(&mut self, size: (u32, u32), images: crate::TestImages) {
+    #[cfg(feature = "test-support")]
+    fn attach_offscreen(&mut self, size: (u32, u32), images: TestImages) {
         self.cancel_waiting(CancelReason::SurfaceEpoch);
         self.surface = None;
         self.config = None;
-        self.offscreen_target = Some(size);
-        self.test_swapchain = match images {
-            crate::TestImages::Fresh => None,
-            crate::TestImages::Kept(count) => Some(TestSwapchain::new(
-                &self.device,
-                self.gpu_renderer.surface_format(),
-                size,
-                count.max(1),
-            )),
-        };
+        let format = self.gpu_renderer.surface_format();
+        self.test_target = Some(TestTarget::new(&self.device, format, size, images));
         self.present_placeholder_frame();
     }
 
@@ -332,12 +343,16 @@ impl PresentState {
 
     fn target_size(&self) -> Option<(u32, u32)> {
         if self.surface.is_some() {
-            self.config
+            return self
+                .config
                 .as_ref()
-                .map(|config| (config.width, config.height))
-        } else {
-            self.offscreen_target
+                .map(|config| (config.width, config.height));
         }
+        #[cfg(feature = "test-support")]
+        if let Some(test) = &self.test_target {
+            return Some(test.size);
+        }
+        None
     }
 
     fn cancel_waiting(&mut self, fallback: CancelReason) {
@@ -358,14 +373,18 @@ impl PresentState {
             self.cancel_packet(packet, reason);
             return;
         }
+        // A packet `validate` let through has a surface or a test target.
         let (width, height) = packet.viewport;
-        if self.surface.is_some() || self.test_swapchain.is_some() {
-            self.render_to_image(packet, width, height);
-        } else if self.offscreen_target.is_some() {
-            self.render_offscreen(packet, width, height);
-        } else {
-            self.cancel_packet(packet, CancelReason::SurfaceUnavailable);
+        #[cfg(feature = "test-support")]
+        if self.surface.is_none()
+            && let Some(test) = self.test_target.as_mut()
+            && test.swapchain().is_none()
+        {
+            let texture = test.fresh_texture(&self.device, self.gpu_renderer.surface_format());
+            self.render_offscreen(packet, (width, height), &texture);
+            return;
         }
+        self.render_to_image(packet, width, height);
     }
 
     fn render_to_image(&mut self, packet: FramePacket, width: u32, height: u32) {
@@ -394,12 +413,14 @@ impl PresentState {
         if let Some(delay) = cranpose_core::DIAGNOSTICS.encode_delay_ms.parse::<u64>() {
             std::thread::sleep(Duration::from_millis(delay));
         }
-        let (texture, content) = match (&image, &self.test_swapchain) {
-            (PresentImage::Test(index), Some(test)) => test.target(*index),
-            (PresentImage::Surface(frame), _) => {
-                (&frame.texture, crate::frame::ImageContent::of(frame))
-            }
-            (PresentImage::Test(_), None) => unreachable!("a test image needs its swapchain"),
+        let (texture, content) = match &image {
+            PresentImage::Surface(frame) => (&frame.texture, crate::frame::ImageContent::of(frame)),
+            #[cfg(feature = "test-support")]
+            PresentImage::Test(index) => self
+                .test_target
+                .as_ref()
+                .expect("a test image needs its target")
+                .image(*index),
         };
         let view = texture.create_view(&wgpu::TextureViewDescriptor {
             format: Some(self.gpu_renderer.surface_format().remove_srgb_suffix()),
@@ -435,43 +456,33 @@ impl PresentState {
     }
 
     fn present_placeholder_frame(&mut self) {
-        if self.surface.is_some() {
-            if let Some(frame) = self.acquire_with_one_retry() {
-                let view = frame.texture.create_view(&wgpu::TextureViewDescriptor {
-                    format: Some(self.gpu_renderer.surface_format().remove_srgb_suffix()),
-                    ..Default::default()
-                });
+        if self.surface.is_none() {
+            #[cfg(feature = "test-support")]
+            if let Some(test) = &self.test_target {
+                let texture = test.fresh_texture(&self.device, self.gpu_renderer.surface_format());
+                let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
                 crate::initial_present::clear_to_default_background(
                     &self.device,
                     &self.gpu_renderer.queue,
                     &view,
                 );
-                self.gpu_renderer.queue.present(frame);
                 self.status
                     .placeholder_frames
                     .fetch_add(1, Ordering::Relaxed);
             }
-        } else if let Some((width, height)) = self.offscreen_target {
-            let texture = self.device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("Present Runtime Placeholder Offscreen Target"),
-                size: wgpu::Extent3d {
-                    width,
-                    height,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: self.gpu_renderer.surface_format(),
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-                view_formats: &[],
+            return;
+        }
+        if let Some(frame) = self.acquire_with_one_retry() {
+            let view = frame.texture.create_view(&wgpu::TextureViewDescriptor {
+                format: Some(self.gpu_renderer.surface_format().remove_srgb_suffix()),
+                ..Default::default()
             });
-            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
             crate::initial_present::clear_to_default_background(
                 &self.device,
                 &self.gpu_renderer.queue,
                 &view,
             );
+            self.gpu_renderer.queue.present(frame);
             self.status
                 .placeholder_frames
                 .fetch_add(1, Ordering::Relaxed);
@@ -480,18 +491,20 @@ impl PresentState {
 
     // The next image of the test swapchain, or else of the surface.
     fn acquire_image(&mut self) -> Option<PresentImage> {
-        match self.test_swapchain.as_mut() {
-            Some(test) => Some(test.acquire()),
-            None => self.acquire_with_one_retry().map(PresentImage::Surface),
+        #[cfg(feature = "test-support")]
+        if let Some(swapchain) = self.test_target.as_mut().and_then(TestTarget::swapchain) {
+            return Some(PresentImage::Test(swapchain.acquire()));
         }
+        self.acquire_with_one_retry().map(PresentImage::Surface)
     }
 
     fn present_image(&mut self, image: PresentImage) {
         match image {
             PresentImage::Surface(frame) => self.present(frame),
+            #[cfg(feature = "test-support")]
             PresentImage::Test(index) => {
-                if let Some(test) = self.test_swapchain.as_mut() {
-                    test.present(index);
+                if let Some(swapchain) = self.test_target.as_mut().and_then(TestTarget::swapchain) {
+                    swapchain.present(index);
                 }
             }
         }
@@ -539,21 +552,13 @@ impl PresentState {
         }
     }
 
-    fn render_offscreen(&mut self, packet: FramePacket, width: u32, height: u32) {
-        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("Present Runtime Offscreen Test Target"),
-            size: wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: self.gpu_renderer.surface_format(),
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            view_formats: &[],
-        });
+    #[cfg(feature = "test-support")]
+    fn render_offscreen(
+        &mut self,
+        packet: FramePacket,
+        (width, height): (u32, u32),
+        texture: &wgpu::Texture,
+    ) {
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         let after_acquire_ns = self.now();
         let mut returns = RenderReturns::default();
@@ -563,7 +568,7 @@ impl PresentState {
             packet,
             self.surface_epoch,
             &mut returns,
-            FrameOutput::display(&texture, &view, crate::frame::ImageContent::Untracked),
+            FrameOutput::display(texture, &view, crate::frame::ImageContent::Untracked),
         );
         let after_render_ns = self.now();
         returns.timings = PresentTimings {

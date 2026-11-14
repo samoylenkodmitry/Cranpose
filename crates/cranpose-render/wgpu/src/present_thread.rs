@@ -1,17 +1,9 @@
+#[cfg(feature = "test-support")]
 use std::sync::{atomic::Ordering, mpsc::Receiver};
 
+#[cfg(feature = "test-support")]
+use crate::TestImages;
 use crate::{present_handle::PresentHandle, present_runtime::PresentControl};
-
-/// How a test target hands out the images its frames draw into.
-#[doc(hidden)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TestImages {
-    /// A new texture for each frame, which holds nothing known.
-    Fresh,
-    /// So many images in turn, each holding what it presented, as a
-    /// swapchain that keeps presented images does.
-    Kept(usize),
-}
 
 /// The thread a [`WgpuRenderer`](crate::WgpuRenderer) hands its frames to,
 /// from [`WgpuRenderer::present_thread`](crate::WgpuRenderer::present_thread).
@@ -73,6 +65,7 @@ impl PresentThread<'_> {
             .send_control_and_wait(|ack| PresentControl::DropSurface { ack }, "drop surface")
     }
 
+    #[cfg(feature = "test-support")]
     #[doc(hidden)]
     pub fn attach_offscreen_for_tests(
         mut self,
@@ -93,6 +86,7 @@ impl PresentThread<'_> {
         )
     }
 
+    #[cfg(feature = "test-support")]
     #[doc(hidden)]
     pub fn send_attach_offscreen_unacked_for_tests(
         mut self,
@@ -111,6 +105,7 @@ impl PresentThread<'_> {
             })
     }
 
+    #[cfg(feature = "test-support")]
     #[doc(hidden)]
     pub fn send_reconfigure_unacked_for_tests(
         self,
@@ -125,12 +120,14 @@ impl PresentThread<'_> {
             })
     }
 
+    #[cfg(feature = "test-support")]
     #[doc(hidden)]
     pub fn send_drop_surface_unacked_for_tests(self) -> Option<Receiver<()>> {
         self.handle
             .send_control_unacked(|ack| PresentControl::DropSurface { ack })
     }
 
+    #[cfg(feature = "test-support")]
     #[doc(hidden)]
     pub fn status_snapshot_for_tests(&self) -> (bool, u64, u64) {
         let status = self.handle.status();
