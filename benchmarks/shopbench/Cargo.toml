@@ -1,0 +1,55 @@
+[package]
+name = "everbloom"
+version = "0.1.0"
+edition = "2024"
+description = "Everbloom, the shop app of the whiskerrs/benchmarks frameworks comparison, written with Cranpose"
+license = "MIT"
+publish = false
+
+[[bin]]
+name = "everbloom"
+path = "src/main.rs"
+
+[features]
+default = ["desktop"]
+# A window on the developer's computer, to work on the screens.
+desktop = ["cranpose/desktop"]
+# The iPhone app the benchmark measures: `ios/build-app.sh`.
+ios = ["cranpose/ios"]
+# Extra `SHOPBENCH_DIAG` log lines around `SHOPBENCH home_ready`, to check the
+# marker against the system's record of the frames. Never in a measured build.
+diag = []
+
+[dependencies]
+anyhow = "1.0.104"
+coroflow = { version = "0.23.0", path = "../../crates/coroflow" }
+cranpose = { path = "../../crates/cranpose", default-features = false, features = ["renderer-wgpu", "image-loading"] }
+cranpose-core = { version = "0.23.0", path = "../../crates/cranpose-core" }
+cranpose-coroflow = { path = "../../crates/cranpose-coroflow" }
+cranpose-navigation = { path = "../../crates/cranpose-navigation" }
+cranpose-services = { path = "../../crates/cranpose-services", default-features = false, features = ["http-native"] }
+cranpose-ui-layout = { version = "0.23.0", path = "../../crates/cranpose-ui-layout" }
+log = "0.4.35"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+
+[target.'cfg(target_os = "ios")'.dependencies]
+oslog = { version = "0.2.0", default-features = false }
+
+# Its own workspace, like an application: the release profile below is what
+# the iPhone runs. It is the release profile of the Cranpose workspace, which
+# its own iOS demo ships with.
+[workspace]
+
+# The framework's wgpu fork from this checkout, as the framework workspace
+# builds it (its root Cargo.toml).
+[patch.crates-io]
+cranpose-wgpu = { path = "../../forks/wgpu/wgpu" }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
+debug = 0
