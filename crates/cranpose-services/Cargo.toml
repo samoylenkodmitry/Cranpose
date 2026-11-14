@@ -26,7 +26,7 @@ cranpose-macros = { workspace = true }
 cranpose-ui-graphics.workspace = true
 directories = "6.0.0"
 log = "0.4"
-parking_lot = "0.13.0"
+parking_lot = "0.12.5"
 portable-atomic.workspace = true
 sha2 = "0.11.1"
 thiserror = "2.0.21"

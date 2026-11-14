@@ -476,7 +476,7 @@ wgpu = { workspace = true, optional = true, features = [
 # own footprint from, so the Linux/Android path's `/proc/self/statm` has no
 # Apple equivalent short of the same kernel call every Instruments memory
 # gauge uses.
-mach2 = "0.7.0"
+mach2 = "0.6.0"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 accesskit_macos = "0.27.2"
