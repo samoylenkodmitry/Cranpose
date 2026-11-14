@@ -46,46 +46,63 @@ fn string_err(error: impl std::fmt::Display) -> String {
 
 const STAGING_SUFFIX: &str = ".tmp";
 
+fn checked<T>(tree: &str, call: impl FnOnce() -> Result<T, FolderError>) -> Result<T, FolderError> {
+    call().map_err(|error| match call_folder_accessible(tree) {
+        Ok(false) => FolderError::AccessLost(tree.to_string()),
+        _ => error,
+    })
+}
+
 struct AndroidWritableFolder {
     tree: String,
 }
 
 impl WritableFolderStore for AndroidWritableFolder {
     fn write(&self, name: &str, contents: &[u8]) -> Result<(), FolderError> {
-        match call_folder_write(&self.tree, name, contents).map_err(FolderError::Io)? {
-            0 => Ok(()),
-            1 => Err(FolderError::ReadOnly),
-            _ => Err(FolderError::Io("SAF write failed".to_string())),
-        }
+        checked(&self.tree, || {
+            match call_folder_write(&self.tree, name, contents).map_err(FolderError::Io)? {
+                0 => Ok(()),
+                1 => Err(FolderError::ReadOnly),
+                _ => Err(FolderError::Io("SAF write failed".to_string())),
+            }
+        })
     }
 
     fn read(&self, name: &str) -> Result<Vec<u8>, FolderError> {
-        match call_folder_read(&self.tree, name).map_err(FolderError::Io)? {
-            Some(bytes) => Ok(bytes),
-            None => Err(FolderError::NotFound(name.to_string())),
-        }
+        checked(&self.tree, || {
+            call_folder_read(&self.tree, name)
+                .map_err(FolderError::Io)?
+                .ok_or_else(|| FolderError::NotFound(name.to_string()))
+        })
     }
 
     fn list(&self) -> Result<Vec<FolderEntry>, FolderError> {
-        match call_folder_list(&self.tree).map_err(FolderError::Io)? {
-            Some(text) => Ok(text.lines().filter_map(parse_entry).collect()),
-            None => Err(FolderError::Io("SAF list failed".to_string())),
-        }
+        checked(&self.tree, || {
+            let text = call_folder_list(&self.tree)
+                .map_err(FolderError::Io)?
+                .ok_or_else(|| FolderError::Io("SAF list failed".to_string()))?;
+            Ok(text.lines().filter_map(parse_entry).collect())
+        })
     }
 
     fn remove(&self, name: &str) -> Result<(), FolderError> {
-        match call_folder_remove(&self.tree, name).map_err(FolderError::Io)? {
-            0 => Ok(()),
-            _ => Err(FolderError::Io("SAF remove failed".to_string())),
-        }
+        checked(&self.tree, || {
+            match call_folder_remove(&self.tree, name).map_err(FolderError::Io)? {
+                0 => Ok(()),
+                _ => Err(FolderError::Io("SAF remove failed".to_string())),
+            }
+        })
     }
 
     fn open_read(&self, name: &str) -> Result<Box<dyn FolderReader>, FolderError> {
-        let fd =
-            call_folder_descriptor(&self.tree, name, Descriptor::Read).map_err(FolderError::Io)?;
-        if fd < 0 {
-            return Err(FolderError::NotFound(name.to_string()));
-        }
+        let fd = checked(&self.tree, || {
+            match call_folder_descriptor(&self.tree, name, Descriptor::Read)
+                .map_err(FolderError::Io)?
+            {
+                fd if fd < 0 => Err(FolderError::NotFound(name.to_string())),
+                fd => Ok(fd),
+            }
+        })?;
         // SAFETY: the Java side detaches the descriptor from its
         // `ParcelFileDescriptor`, transferring ownership to this process; the
         // `File` closes it on drop.
@@ -96,11 +113,14 @@ impl WritableFolderStore for AndroidWritableFolder {
 
     fn open_write(&self, name: &str) -> Result<Box<dyn FolderWriter>, FolderError> {
         let staging = format!("{name}{STAGING_SUFFIX}");
-        let fd = call_folder_descriptor(&self.tree, &staging, Descriptor::Write)
-            .map_err(FolderError::Io)?;
-        if fd < 0 {
-            return Err(FolderError::ReadOnly);
-        }
+        let fd = checked(&self.tree, || {
+            match call_folder_descriptor(&self.tree, &staging, Descriptor::Write)
+                .map_err(FolderError::Io)?
+            {
+                fd if fd < 0 => Err(FolderError::ReadOnly),
+                fd => Ok(fd),
+            }
+        })?;
         // SAFETY: as above — ownership of the detached descriptor moves here.
         Ok(Box::new(AndroidFolderWriter {
             tree: self.tree.clone(),
@@ -186,13 +206,15 @@ impl FolderWriter for AndroidFolderWriter {
         file.sync_all()
             .map_err(|error| FolderError::Io(error.to_string()))?;
         drop(file);
-        match call_folder_commit(&self.tree, &self.staging, &self.target)
-            .map_err(FolderError::Io)?
-        {
-            0 => Ok(()),
-            1 => Err(FolderError::ReadOnly),
-            _ => Err(FolderError::Io("SAF commit failed".to_string())),
-        }
+        checked(&self.tree, || {
+            match call_folder_commit(&self.tree, &self.staging, &self.target)
+                .map_err(FolderError::Io)?
+            {
+                0 => Ok(()),
+                1 => Err(FolderError::ReadOnly),
+                _ => Err(FolderError::Io("SAF commit failed".to_string())),
+            }
+        })
     }
 }
 
@@ -348,12 +370,20 @@ fn call_folder_remove(tree: &str, name: &str) -> Result<i32, String> {
 }
 
 fn call_folder_writable(tree: &str) -> Result<bool, String> {
+    call_tree_check(tree, jni_str!("cranposeFolderWritable"))
+}
+
+fn call_folder_accessible(tree: &str) -> Result<bool, String> {
+    call_tree_check(tree, jni_str!("cranposeFolderAccessible"))
+}
+
+fn call_tree_check(tree: &str, method: &'static jni::strings::JNIStr) -> Result<bool, String> {
     with_env(|env, activity| {
         let tree = env.new_string(tree).map_err(string_err)?;
         let tree_obj: &JObject = tree.as_ref();
         env.call_method(
             &activity,
-            jni_str!("cranposeFolderWritable"),
+            method,
             jni_sig!("(Ljava/lang/String;)Z"),
             &[JValue::Object(tree_obj)],
         )

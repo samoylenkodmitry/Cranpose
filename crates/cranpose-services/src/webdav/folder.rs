@@ -1,12 +1,13 @@
 use std::{rc::Rc, sync::Arc};
 
 use super::{
+    http_error::content_error,
     item::{WebDavItem, metadata},
     listing::{self, EntryKind},
 };
 use crate::{
     ContentEntry, ContentError, ContentFolder, ContentFolderRef, ContentFuture, ContentMetadata,
-    HttpClientRef, HttpControl, HttpMethod, HttpRequest,
+    HttpClientRef, HttpControl, HttpError, HttpMethod, HttpRequest,
 };
 
 const MAX_LISTING_BYTES: usize = 16 * 1024 * 1024;
@@ -58,19 +59,15 @@ impl ContentFolder for WebDavFolder {
                 .client
                 .send(&request, control.clone())
                 .await
-                .map_err(|e| ContentError::Io(e.to_string()))?;
+                .map_err(content_error)?;
             if response.status != 207 {
-                return Err(ContentError::Io(format!(
-                    "WebDAV folder returned HTTP {}",
-                    response.status
-                )));
+                return Err(content_error(HttpError::HttpStatus {
+                    url: self.url.to_string(),
+                    status: response.status,
+                }));
             }
             let mut bytes = Vec::new();
-            while let Some(chunk) = response
-                .read_chunk()
-                .await
-                .map_err(|e| ContentError::Io(e.to_string()))?
-            {
+            while let Some(chunk) = response.read_chunk().await.map_err(content_error)? {
                 if chunk.len() > MAX_LISTING_BYTES - bytes.len() {
                     control.cancel();
                     return Err(ContentError::Io(
