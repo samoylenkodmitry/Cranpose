@@ -36,6 +36,9 @@ pub enum ContentError {
     /// The provider refused the read or write.
     #[error("content access denied: {0}")]
     PermissionDenied(String),
+    /// The server or provider did not answer, so the content is out of reach.
+    #[error("content unreachable: {0}")]
+    Unreachable(String),
     /// Any other provider failure.
     #[error("content i/o failed: {0}")]
     Io(String),

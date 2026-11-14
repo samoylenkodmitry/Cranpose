@@ -1,8 +1,8 @@
 use std::sync::{Arc, Mutex};
 
 use cranpose_services::{
-    BytesBody, ContentError, HttpMethod, HttpResponse, StubHttpClient, WebDavFolder, folder_files,
-    http_body_ref,
+    BytesBody, ContentError, HttpError, HttpMethod, HttpResponse, StubHttpClient, WebDavFolder,
+    folder_files, http_body_ref,
 };
 
 #[test]
@@ -59,6 +59,47 @@ fn failed_listing_is_an_error_instead_of_an_empty_folder() {
         .err()
         .expect("listing must fail");
     assert!(matches!(error, ContentError::Io(_)));
+}
+
+fn listing_error(
+    answer: impl Fn(&cranpose_services::HttpRequest) -> Result<HttpResponse, HttpError>
+    + Send
+    + Sync
+    + 'static,
+) -> ContentError {
+    let stream = folder_files(
+        WebDavFolder::new(
+            "https://music.example/library/",
+            Arc::new(StubHttpClient::new(answer)),
+        )
+        .expect("an http address is a WebDAV folder")
+        .handle(),
+    );
+    pollster::block_on(stream.next())
+        .err()
+        .expect("listing must fail")
+}
+
+#[test]
+fn a_listing_the_server_refuses_is_denied() {
+    for status in [401, 403] {
+        let error = listing_error(move |request| Ok(HttpResponse::empty(&request.url, status)));
+        assert!(
+            matches!(error, ContentError::PermissionDenied(_)),
+            "{status}: {error}"
+        );
+    }
+}
+
+#[test]
+fn a_listing_with_no_answer_is_unreachable() {
+    let error = listing_error(|request| {
+        Err(HttpError::RequestFailed {
+            url: request.url.clone(),
+            message: "connection refused".into(),
+        })
+    });
+    assert!(matches!(error, ContentError::Unreachable(_)), "{error}");
 }
 
 fn listing(href: &str, properties: &str) -> String {

@@ -5411,7 +5411,7 @@ mod window_damage;
 
 pub(crate) use window_damage::{
     Capture, ClearedImages, Damage, DamageRects, FrameDamages, FrameWindow, Held, ImageContent,
-    MAX_DAMAGE_RECTS, PacketDamage, PresentedImage, Repaint, Since, SwapchainHistory,
+    MAX_DAMAGE_RECTS, OwnSake, PacketDamage, PresentedImage, Repaint, Since, SwapchainHistory,
     collect_captures, settle, widen,
 };
 

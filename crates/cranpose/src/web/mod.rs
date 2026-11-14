@@ -29,6 +29,8 @@ pub(crate) mod floating_window;
 #[cfg(target_arch = "wasm32")]
 pub(crate) mod frame_host;
 #[cfg(target_arch = "wasm32")]
+mod heap;
+#[cfg(target_arch = "wasm32")]
 pub(crate) mod history;
 #[cfg(target_arch = "wasm32")]
 pub(crate) mod host_surface;
@@ -58,3 +60,5 @@ pub(crate) mod wheel;
 
 #[cfg(target_arch = "wasm32")]
 pub use event_loop::*;
+#[cfg(target_arch = "wasm32")]
+pub use heap::Heap;

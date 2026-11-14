@@ -34,9 +34,6 @@ pub(crate) const FULL_SHARE: f32 = 0.5;
 /// image that comes cleared takes the frame from a kept copy: the copy reads
 /// one window and writes one, so a lighter frame costs less drawn whole.
 const COPY_COVERAGE: f32 = 2.0;
-/// The frames in a row that change a small part of the window before the
-/// composition target starts keeping the frame for images that come cleared.
-const COPY_AFTER: u32 = 3;
 /// The packets back whose damages the renderer keeps.
 const HISTORY: usize = 8;
 // The most rects a frame's damage keeps apart: changes far apart, such as
@@ -426,9 +423,17 @@ pub(crate) struct Held {
 pub(crate) struct Since {
     pub(crate) damage: Damage,
     pub(crate) baseline: bool,
-    // Whether the target held no frame, so the frame draws whole for the
-    // target's sake, whatever it changes.
-    pub(crate) unheld: bool,
+    // Why the frame draws whole for the target's sake, whatever it changes.
+    pub(crate) own_sake: Option<OwnSake>,
+}
+
+// Why a frame draws the whole window for its target's sake.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum OwnSake {
+    // The target holds no frame.
+    NoFrame,
+    // The frame the target holds may show a stand-in anywhere.
+    StandIns,
 }
 
 /// The damages of the packets the renderer took last, by frame.
@@ -463,7 +468,7 @@ impl FrameDamages {
         let changed = |damage| Since {
             damage,
             baseline: false,
-            unheld: false,
+            own_sake: None,
         };
         if self
             .noted(frame.packet.frame_id)
@@ -473,11 +478,15 @@ impl FrameDamages {
         }
         // A target that holds no frame, or one that may show a stand-in
         // anywhere, takes the frame whole for its own sake.
-        let Some((held, Damage::Part(stand_ins))) = held.map(|held| (held, held.stand_ins)) else {
-            return Since {
-                unheld: true,
-                ..changed(Damage::Full)
-            };
+        let own_sake = |own_sake| Since {
+            own_sake: Some(own_sake),
+            ..changed(Damage::Full)
+        };
+        let Some(held) = held else {
+            return own_sake(OwnSake::NoFrame);
+        };
+        let Damage::Part(stand_ins) = held.stand_ins else {
+            return own_sake(OwnSake::StandIns);
         };
         if (held.setting, held.viewport) != (frame.setting, frame.viewport) {
             return changed(Damage::Full);

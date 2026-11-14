@@ -154,7 +154,7 @@ impl RenderReturns {
                 damage: packet.damage.damage,
                 skipped: packet.skipped,
                 knew_before: packet.damage.since.is_some(),
-                unheld: false,
+                own_sake: None,
             }),
             held: Some(HeldWindow {
                 oldest: packet.frame_id,

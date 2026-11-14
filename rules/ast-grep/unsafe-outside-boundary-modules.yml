@@ -97,5 +97,6 @@ ignores:
   - crates/cranpose/src/process_info.rs
   - crates/cranpose/src/watchos_heart_rate.rs
   - crates/cranpose/src/watchos_services.rs
+  - crates/cranpose/src/web/heap.rs
   - crates/cranpose/src/desktop/windows_cursor.rs
   - crates/cranpose/src/desktop/windows_menu.rs
