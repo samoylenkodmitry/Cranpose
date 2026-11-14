@@ -268,6 +268,7 @@ impl RendererFrontend {
             damage,
             skipped: window && !self.target.records(),
             culled: cull,
+            walks: if window { self.target.walks() } else { 1 },
         };
         let after_build = Instant::now();
         if let Some(total_ms) = should_log_wgpu_render_stage(build_start, after_build) {

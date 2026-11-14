@@ -66,6 +66,7 @@ pub(crate) struct FrameStats {
     pub draw_calls: Cell<u32>,
     pub damage: Cell<FrameDamage>,
     pub repainted_pixels: Cell<u64>,
+    pub scene_walks: Cell<u32>,
     pub text_image_cache_hits: Cell<u32>,
     pub text_image_cache_misses: Cell<u32>,
     pub text_image_cache_hit_pixels: Cell<u64>,
@@ -466,6 +467,7 @@ impl FrameStats {
             draw_calls: self.draw_calls.get(),
             damage: self.damage.get(),
             repainted_pixels: self.repainted_pixels.get(),
+            scene_walks: self.scene_walks.get(),
             text_image_cache_hits: self.text_image_cache_hits.get(),
             text_image_cache_misses: self.text_image_cache_misses.get(),
             text_image_cache_hit_pixels: self.text_image_cache_hit_pixels.get(),
@@ -543,6 +545,7 @@ impl FrameStats {
         self.draw_calls.set(0);
         self.damage.set(FrameDamage::default());
         self.repainted_pixels.set(0);
+        self.scene_walks.set(0);
         self.text_image_cache_hits.set(0);
         self.text_image_cache_misses.set(0);
         self.text_image_cache_hit_pixels.set(0);

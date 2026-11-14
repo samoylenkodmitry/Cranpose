@@ -14,7 +14,7 @@ use std::{
 };
 
 use cranpose_app_shell::AppShell;
-use cranpose_core::{MutableState, NodeId, location_key, remember};
+use cranpose_core::{MutableState, NodeId, key, location_key, remember};
 use cranpose_foundation::lazy::{LazyListScope, rememberLazyListState};
 use cranpose_liquid::{Glass, GlassSurface};
 use cranpose_render_common::{
@@ -85,6 +85,9 @@ enum Scene {
     SpinnerAndCaret,
     /// Ten small spots scattered over the window changing colour.
     TenSpots,
+    // A tile holding a dot that appears at another place each step, made
+    // anew: the tile and its dot are new records.
+    NewTile,
     // The page moving for `MOVES` steps, then a shape changing colour over
     // the page held still.
     MovedThenStill,
@@ -413,6 +416,7 @@ fn changing_box(scene: Scene, step: MutableState<u32>) -> Option<Modifier> {
         | Scene::MovedCaster
         | Scene::SpinnerAndCaret
         | Scene::TenSpots
+        | Scene::NewTile
         | Scene::TurnedSurface
         | Scene::ShrunkParent
         | Scene::LazyLabel => return None,
@@ -459,15 +463,8 @@ fn Changing(scene: Scene, step: MutableState<u32>) {
                 || {},
             );
         }
-        Scene::TenSpots => {
-            for spot in SPOTS {
-                Box(
-                    rect_modifier(spot).background(shade(step.get())),
-                    BoxSpec::default(),
-                    || {},
-                );
-            }
-        }
+        Scene::NewTile => NewTile(step),
+        Scene::TenSpots => TenSpots(step),
         Scene::MovedCaster => {
             let [x, y, width, height] = SPOT;
             Box(
@@ -518,6 +515,41 @@ fn Changing(scene: Scene, step: MutableState<u32>) {
             }
         }
     }
+}
+
+// The scene of `Scene::TenSpots`: the spots, shaded by the step.
+#[composable]
+fn TenSpots(step: MutableState<u32>) {
+    for spot in SPOTS {
+        Box(
+            rect_modifier(spot).background(shade(step.get())),
+            BoxSpec::default(),
+            || {},
+        );
+    }
+}
+
+// The scene of `Scene::NewTile`: a tile holding a dot, made anew a step at
+// the next of six places in a row.
+#[composable]
+fn NewTile(step: MutableState<u32>) {
+    let at = step.get();
+    key(at, move || {
+        let tile = [20.0 + (at % 6) as f32 * 48.0, 330.0, 30.0, 30.0];
+        Box(
+            rect_modifier(tile).background(shade(at)),
+            BoxSpec::default(),
+            || {
+                Box(
+                    Modifier::empty()
+                        .size_points(8.0, 8.0)
+                        .background(Color::WHITE),
+                    BoxSpec::default(),
+                    || {},
+                );
+            },
+        );
+    });
 }
 
 // The box of a layer with nothing to draw: one a shader paints, its colour
@@ -1500,6 +1532,42 @@ fn ten_small_changes_scattered_over_the_window_draw_only_their_areas() {
             before = Some(frame.direct);
         }
     }
+}
+
+// Once the target of `scene` holds a frame, each frame walks the scene
+// once, the walk culled to what the frame's image repaints, and equals the
+// whole frame.
+fn assert_walks_the_scene_once(scene: Scene) {
+    const PARTIAL_FRAMES: u32 = 12;
+    for keeper in KEEPERS {
+        let Some((_lock, renderer)) = renderer() else {
+            return;
+        };
+        let mut harness = Harness::new(renderer, scene, 1.0, keeper);
+        let start = keeper.start_frames();
+        for step in 0..start + PARTIAL_FRAMES {
+            let frame = harness.frame(step);
+            let stats = frame.stats;
+            let label = format!("{scene:?} {keeper:?} frame {step}: {stats:?}");
+            support::assert_same_bytes(&label, WIDTH, &frame.kept, &frame.direct);
+            if step >= start {
+                assert_eq!(
+                    stats.scene_walks, 1,
+                    "{label}: the frame walked its scene again"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn a_tile_made_anew_at_another_place_each_step_walks_the_scene_once() {
+    assert_walks_the_scene_once(Scene::NewTile);
+}
+
+#[test]
+fn a_star_drawn_again_past_its_area_walks_the_scene_once() {
+    assert_walks_the_scene_once(Scene::Star);
 }
 
 /// A page that moves for long enough that its target stops summarizing for

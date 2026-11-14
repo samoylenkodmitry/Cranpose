@@ -115,17 +115,19 @@ pub(super) fn admits(plan: Option<&FrameDamagePlan>, packet: &FramePacket) -> bo
         .is_none_or(|region| plan.is_some_and(|plan| plan.repaint.within(&region)))
 }
 
-// Counts what a frame of `plan` changes and draws of a page of `viewport`
-// in `stats`, and returns what it draws.
+// Counts what a frame of `plan` changes and draws of the page of `packet`,
+// and the walks of the scene the packet took, in `stats`, and returns what
+// it draws.
 pub(super) fn count_damage(
     plan: Option<FrameDamagePlan>,
-    viewport: (u32, u32),
+    packet: &FramePacket,
     stats: &FrameStats,
 ) -> Repaint {
     stats
         .damage
         .set(plan.map_or(FrameDamage::Untracked, |plan| plan.damage.stats()));
+    stats.scene_walks.set(packet.walks);
     let repaint = plan.map_or(Repaint::Whole, |plan| plan.repaint);
-    stats.repainted_pixels.set(repaint.pixels(viewport));
+    stats.repainted_pixels.set(repaint.pixels(packet.viewport));
     repaint
 }

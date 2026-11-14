@@ -264,6 +264,9 @@ pub struct FrameStatsSnapshot {
     /// The window pixels the frame drew again: all of them, or those of the
     /// damage, over what the frame before left in the rest.
     pub repainted_pixels: u64,
+    /// The walks of the scene the frame took: a walk culled to a part of
+    /// the window that the frame's image repaints past walks again.
+    pub scene_walks: u32,
     /// Texts drawn from the cache of rasterized text images.
     pub text_image_cache_hits: u32,
     /// Texts rasterized into an image because the cache held none.

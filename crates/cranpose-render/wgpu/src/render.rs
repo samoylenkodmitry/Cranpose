@@ -1652,7 +1652,7 @@ impl GpuRenderer {
             return Ok(());
         }
         returns.target = plan.map(|plan| plan.drawn(&packet, &frame_root));
-        let repaint = count_damage(plan, (width, height), &self.frame_stats);
+        let repaint = count_damage(plan, &packet, &self.frame_stats);
         let root = frame_root.target();
         let screenshot_bind_group = output_view.and_then(|_| {
             matches!(output_mode, OutputMode::Screenshot).then(|| {

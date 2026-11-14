@@ -202,6 +202,18 @@ impl Scope {
     }
 }
 
+// What the frame before tells of where a changed record draws now.
+enum Predicted {
+    Area(Rect),
+    // Nowhere past the area the frame before drew it in.
+    Nothing,
+    // Anywhere: its reach is not known, so the frame changes the whole
+    // window.
+    Whole,
+    // It does not tell: the walk works the areas out.
+    Unknown,
+}
+
 /// What draws every pixel of a frame beside its records: a frame of another
 /// setting than the frame before draws whole.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -280,6 +292,8 @@ pub(crate) struct TargetState {
     // When the records' changes since the frame before are lost, the area
     // the frame before drew the root in.
     lost_root: Option<Area>,
+    // The walks of the records the frame in progress ended.
+    walks: u32,
 }
 
 impl TargetState {
@@ -296,6 +310,7 @@ impl TargetState {
     pub(crate) fn begin(&mut self, store: &SceneStore, setting: TargetSetting) {
         self.damage = DamageRects::default();
         self.changed.clear();
+        self.walks = 0;
         let read = self.read.replace(store.version());
         self.recording = self.skipped == 0;
         if !self.recording {
@@ -351,36 +366,109 @@ impl TargetState {
 
     // The damage the frame takes when each moved and new record takes the
     // area the frame before tells for it: its reach, placed at the origin
-    // the frame before drew its parent's space at. The whole window when a
-    // moved record's reach is not known: the walk finds that record's area
-    // unknown too. `None` when the frame works out no damage, an old area is
-    // not known, or a moved record casts an elevation shadow or lies under a
-    // parent the frame before drew through a surface or under a turn: the
-    // walk then works the areas out.
+    // the frame before drew its parent's space at. A record under ancestors
+    // the frame before did not draw, as a new subtree's records are, lies
+    // in the reach of the topmost of them, placed at its parent's origin. A
+    // record that draws its own draws again takes the part of the change's
+    // reach its own draws reach now, placed at its own origin: its draws may
+    // reach past the area the frame before drew them in. The whole window
+    // when a moved record's reach is not known: the walk finds that record's
+    // area unknown too. `None` when the frame works out no damage, an old
+    // area is not known, or a moved record casts an elevation shadow or lies
+    // under a parent the frame before drew through a surface or under a
+    // turn: the walk then works the areas out.
     pub(crate) fn predicted_damage(&self, store: &SceneStore) -> Option<Damage> {
         let setting = self.setting?;
         let mut damage = self.begun()?;
+        let mut last_top = None;
         for &(record, scope) in &self.changed {
-            let (Scope::Placed, Some(id)) = (scope, store.resolve(record)) else {
+            let Some(id) = store.resolve(record) else {
                 continue;
             };
-            let extent = store.layer(id).extent();
-            let rect = match (extent.reach, extent.caster) {
-                (Reach::Unknown, _) => return Some(Damage::Full),
-                (Reach::Finite(rect), None) => rect,
-                (Reach::Empty, None) => continue,
-                (_, Some(_)) => return None,
+            let predicted = match scope {
+                Scope::Placed => {
+                    let (top, parent) = self.unshown_top(store, id);
+                    // The records of a new subtree come one after another,
+                    // and the reach of its top holds them all.
+                    if last_top.replace(top) == Some(top) {
+                        continue;
+                    }
+                    self.placed_area(store, top, parent)
+                }
+                Scope::Own(Reach::Finite(within)) => self.redrawn_area(store, (record, id), within),
+                Scope::Own(_) | Scope::Subtree => continue,
             };
-            let origin = store
-                .parent(id)
-                .and_then(|parent| self.shown(store.record_ref(parent)))
-                .and_then(|shown| shown.origin)?;
-            let placed = rect.translate(origin.x, origin.y);
-            if let Some(pixels) = PixelBox::of(placed, setting.root_scale, setting.viewport) {
-                damage.add(pixels.rect());
+            match predicted {
+                Predicted::Area(area) => {
+                    if let Some(pixels) = PixelBox::of(area, setting.root_scale, setting.viewport) {
+                        damage.add(pixels.rect());
+                    }
+                }
+                Predicted::Nothing => {}
+                Predicted::Whole => return Some(Damage::Full),
+                Predicted::Unknown => return None,
             }
         }
         Some(settle(damage, setting.viewport))
+    }
+
+    // Where `top`, a moved or new record or the topmost new ancestor of one,
+    // draws now: its reach, placed at the origin the frame before drew the
+    // space of `parent`, its parent, at.
+    fn placed_area(
+        &self,
+        store: &SceneStore,
+        top: RecordId,
+        parent: Option<RecordId>,
+    ) -> Predicted {
+        let extent = store.layer(top).extent();
+        let rect = match (extent.reach, extent.caster) {
+            (Reach::Unknown, _) => return Predicted::Whole,
+            (Reach::Finite(rect), None) => rect,
+            (Reach::Empty, None) => return Predicted::Nothing,
+            (_, Some(_)) => return Predicted::Unknown,
+        };
+        parent
+            .and_then(|parent| self.shown(store.record_ref(parent)))
+            .and_then(|shown| shown.origin)
+            .map_or(Predicted::Unknown, |origin| {
+                Predicted::Area(rect.translate(origin.x, origin.y))
+            })
+    }
+
+    // Where `record`, at `id`, draws now the own draws it drew again within
+    // `within` of its space: the part of `within` its own draws reach,
+    // placed at its origin. A record the frame before drew through a
+    // surface has no origin, and the area of that surface holds its draws.
+    fn redrawn_area(
+        &self,
+        store: &SceneStore,
+        (record, id): (RecordRef, RecordId),
+        within: Rect,
+    ) -> Predicted {
+        let Some(origin) = self.shown(record).and_then(|shown| shown.origin) else {
+            return Predicted::Nothing;
+        };
+        let drawn = match store.layer(id).own_reach() {
+            Reach::Empty => None,
+            Reach::Finite(own) => within.intersect(own),
+            Reach::Unknown => Some(within),
+        };
+        drawn.map_or(Predicted::Nothing, |drawn| {
+            Predicted::Area(drawn.translate(origin.x, origin.y))
+        })
+    }
+
+    // `id`, or its topmost ancestor the target drew no frame of, and that
+    // one's parent.
+    fn unshown_top(&self, store: &SceneStore, id: RecordId) -> (RecordId, Option<RecordId>) {
+        let mut top = id;
+        loop {
+            match store.parent(top) {
+                Some(parent) if self.shown(store.record_ref(parent)).is_none() => top = parent,
+                parent => return (top, parent),
+            }
+        }
     }
 
     // What a walk of the frame leaves out of `region` of the records of
@@ -441,10 +529,17 @@ impl TargetState {
         self.recording
     }
 
+    // The walks of the records the frame in progress ended: a culled walk
+    // the frame's image repaints past walks again.
+    pub(crate) fn walks(&self) -> u32 {
+        self.walks
+    }
+
     /// Ends the frame whose collect drew `root`: keeps how it drew each
     /// record, adds the areas the changed records are drawn in now, and
     /// returns the frame's damage.
     pub(crate) fn end(&mut self, store: &SceneStore, root: Option<&LayerScene>) -> Damage {
+        self.walks += 1;
         if !self.recording {
             return if self.still {
                 Damage::Part(DamageRects::default())

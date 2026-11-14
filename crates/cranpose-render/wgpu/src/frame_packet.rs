@@ -94,6 +94,8 @@ pub(crate) struct FramePacket {
     // The window rects the packet holds every draw within; `None` when it
     // holds every draw of the scene.
     pub(crate) culled: Option<DamageRects>,
+    // The walks of the scene the packet took.
+    pub(crate) walks: u32,
 }
 
 impl FramePacket {
