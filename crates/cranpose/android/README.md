@@ -115,7 +115,7 @@ Declare mandatory hardware through `Demand`, or add an Android feature name to
 | `defaultFeatures` | `false` |
 | `debugProfile` / `releaseProfile` | `dev` / `release` |
 | `debugAbis` | `x86_64` |
-| `releaseAbis` | All four Android ABIs; `cranposeReleaseAbis` can override the set |
+| `releaseAbis` | `arm64-v8a`; `cranposeReleaseAbis` can override the set |
 | `debugAbiFeatures` / `releaseAbiFeatures` | Extra Cargo features per ABI |
 | `libraryName` | Cargo package name with dashes replaced by underscores |
 | `androidApiLevel` | Lowest effective `minSdk` among enabled app variants |

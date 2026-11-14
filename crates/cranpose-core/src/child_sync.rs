@@ -59,41 +59,7 @@ pub(crate) fn insert_child_with_reparenting(
         return false;
     }
 
-    let old_parent = applier
-        .get_mut(child_id)
-        .ok()
-        .and_then(|node| node.parent());
-    // The bubbles that passed a child with no parent stopped at it: one
-    // bubble with their flags goes on from its new parent, and the batch
-    // keeps what its walks passed. A child that leaves another parent, or
-    // one whose passes the applier cannot tell, makes the batch forget.
-    let carried = match old_parent {
-        Some(old_parent_id) if old_parent_id == parent_id => 0,
-        None => applier.bubble_passes_of(child_id).unwrap_or_else(|| {
-            applier.forget_bubble_passes();
-            0
-        }),
-        Some(_) => {
-            applier.forget_bubble_passes();
-            0
-        }
-    };
-    if let Some(old_parent_id) = old_parent
-        && old_parent_id != parent_id
-    {
-        let removed = applier
-            .get_mut(old_parent_id)
-            .is_ok_and(|old_parent_node| old_parent_node.remove_child(child_id));
-        if let Ok(child_node) = applier.get_mut(child_id) {
-            child_node.on_removed_from_parent();
-        }
-        if removed {
-            DirtyBubble::LAYOUT_AND_MEASURE.apply(applier, old_parent_id);
-            note_structural("reparent-detach", old_parent_id, child_id);
-            applier.record_structural_change(old_parent_id);
-        }
-    }
-
+    let carried = release_from_other_parent(applier, parent_id, child_id);
     let inserted = applier
         .get_mut(parent_id)
         .is_ok_and(|parent_node| parent_node.insert_child(child_id));
@@ -108,6 +74,65 @@ pub(crate) fn insert_child_with_reparenting(
         DirtyBubble::carry_on(applier, parent_id, carried);
     }
     inserted
+}
+
+// Takes `child_id` from its parent when that is another than `parent_id`,
+// and returns the flags of the bubbles that passed it while it had no
+// parent, which go on from `parent_id` once it takes the child. The bubbles
+// that passed a child with no parent stopped at it: one bubble with their
+// flags goes on from its new parent, and the batch keeps what its walks
+// passed. A child that leaves another parent, or one whose passes the
+// applier cannot tell, makes the batch forget.
+fn release_from_other_parent(applier: &mut dyn Applier, parent_id: NodeId, child_id: NodeId) -> u8 {
+    let old_parent = applier
+        .get_mut(child_id)
+        .ok()
+        .and_then(|node| node.parent());
+    match old_parent {
+        Some(old_parent_id) if old_parent_id == parent_id => 0,
+        None => applier.bubble_passes_of(child_id).unwrap_or_else(|| {
+            applier.forget_bubble_passes();
+            0
+        }),
+        Some(old_parent_id) => {
+            applier.forget_bubble_passes();
+            let removed = applier
+                .get_mut(old_parent_id)
+                .is_ok_and(|old_parent_node| old_parent_node.remove_child(child_id));
+            if let Ok(child_node) = applier.get_mut(child_id) {
+                child_node.on_removed_from_parent();
+            }
+            if removed {
+                DirtyBubble::LAYOUT_AND_MEASURE.apply(applier, old_parent_id);
+                note_structural("reparent-detach", old_parent_id, child_id);
+                applier.record_structural_change(old_parent_id);
+            }
+            0
+        }
+    }
+}
+
+// Gives `parent_id`, which holds no children, `children` in their order:
+// the parent takes the whole list at once, and one bubble from it marks it
+// and its ancestors for all of them, where one a child would walk the same
+// path for each.
+fn attach_children(applier: &mut dyn Applier, parent_id: NodeId, children: &[NodeId]) {
+    let mut carried = 0;
+    for &child_id in children {
+        carried |= release_from_other_parent(applier, parent_id, child_id);
+        if let Ok(child_node) = applier.get_mut(child_id) {
+            child_node.on_attached_to_parent(parent_id);
+        }
+        note_structural("attach", parent_id, child_id);
+    }
+    if let Ok(parent_node) = applier.get_mut(parent_id) {
+        parent_node.update_children(children);
+    }
+    applier.record_structural_change(parent_id);
+    if carried != 0 {
+        DirtyBubble::carry_on(applier, parent_id, carried);
+    }
+    DirtyBubble::LAYOUT_AND_MEASURE.apply(applier, parent_id);
 }
 
 pub(crate) fn apply_remove_child(
@@ -221,6 +246,11 @@ fn sync_children(
     let children_changed = current.as_slice() != expected_children;
 
     if children_changed {
+        if current.is_empty() {
+            // Each child names the parent now, so none needs the repair below.
+            attach_children(applier, parent_id, expected_children);
+            return Ok(());
+        }
         if current.len().max(expected_children.len()) <= SMALL_CHILD_SYNC_LINEAR_THRESHOLD {
             sync_children_small(
                 applier,

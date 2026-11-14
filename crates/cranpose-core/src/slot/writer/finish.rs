@@ -56,7 +56,9 @@ impl SlotTable {
         let children_end = index.saturating_add(group.subtree_len as usize);
         GroupLeftovers {
             payloads: payload_cursor < group.payload_len as usize,
-            nodes: node_cursor < group.node_len as usize,
+            // A cursor short of the records leaves a tail to drop; one past
+            // them counts the records that wait to join the group.
+            nodes: node_cursor != group.node_len as usize,
             children: index < next_child_index && next_child_index < children_end,
         }
     }
@@ -114,6 +116,10 @@ impl SlotTable {
             }
             return None;
         }
+        let tail_nodes = leftovers.nodes
+            && !self
+                .open_group_index(group_anchor, group_index)
+                .is_some_and(|index| self.join_late_nodes(state, index, node_cursor));
         if matches!(body, FrameBody::RootsInsertRun) {
             // Every record of the run is in: the records after it return.
             self.settle_insert_run();
@@ -126,7 +132,7 @@ impl SlotTable {
         self.flush_payload_location_refreshes(state);
         #[cfg(any(test, debug_assertions))]
         state.debug_assert_no_pending_payload_location_refreshes("finish_group_body");
-        if !(leftovers.nodes | leftovers.children | was_skipped) {
+        if !(tail_nodes | leftovers.children | was_skipped) {
             // Nothing is left for the composer: the body dropped payloads
             // only, or it ended an insert run.
             #[cfg(any(test, debug_assertions))]
@@ -137,7 +143,7 @@ impl SlotTable {
         }
 
         let mut direct_nodes = Vec::new();
-        if leftovers.nodes {
+        if tail_nodes {
             let removed = self.remove_group_node_tail_at_cursor(group_anchor, node_cursor);
             direct_nodes.extend(removed.into_iter().map(|node| node.id));
         }

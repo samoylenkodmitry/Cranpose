@@ -1,14 +1,23 @@
 use super::{
     GroupNodeRange, GroupRecord, NodeRange, NodeRecord, NodeSlotUpdate, SlotTable,
-    checked_usize_to_i64,
+    checked_usize_to_i64, checked_usize_to_u32,
     segments::{
-        NodeSegment, extract_subtree_segment, group_segment_len, group_segment_len_checked,
-        group_segment_range_checked, group_segment_start, group_segment_subrange_at,
-        insert_group_segment_item, move_subtree_segment_to_earlier_group,
-        remove_group_segment_range, restore_subtree_segment,
+        GroupSegment, NodeSegment, add_group_segment_len, extract_subtree_segment,
+        group_segment_len, group_segment_len_checked, group_segment_range_checked,
+        group_segment_start, group_segment_subrange_at, insert_group_segment_item,
+        move_subtree_segment_to_earlier_group, remove_group_segment_range, restore_subtree_segment,
+        shift_group_segment_starts_from,
     },
 };
 use crate::{AnchorId, NodeId};
+
+// A record past its group's last one waits to join the group with the ones
+// after it only past this many records of other groups. Each later record
+// in place would move them all again, where the join moves them once; with
+// fewer the join costs more than a move in place, and in a group that puts
+// one such record, as a tile emits a node after its label, it costs more
+// than the move it saves.
+const LATE_PAST_RECORDS: usize = 64;
 
 impl SlotTable {
     pub(in crate::slot) fn group_node_start_at(&self, group_index: usize) -> usize {
@@ -58,6 +67,48 @@ impl SlotTable {
             node_index,
             node,
         );
+    }
+
+    // Moves the last `count` records of `late`, the group's own, to the end
+    // of the segment of the group at `group_index`, moving the records after
+    // it once for all of them.
+    pub(in crate::slot) fn append_group_nodes(
+        &mut self,
+        group_index: usize,
+        late: &mut Vec<NodeRecord>,
+        count: usize,
+    ) {
+        let from = late.len() - count;
+        let Some(range) = self.group_node_range_checked_at(group_index) else {
+            log::error!(
+                "slot table dropped {count} node records for corrupt node segment at group index {group_index}"
+            );
+            late.truncate(from);
+            return;
+        };
+        let end = range.as_range().end;
+        self.note_run_insert();
+        self.record_segment_range_update_from(group_index);
+        self.nodes.extend_from_slice(&late[from..]);
+        late.truncate(from);
+        self.nodes[end..].rotate_right(count);
+        let owner = self.groups[group_index].anchor;
+        self.count_appended_group_nodes(
+            group_index,
+            owner,
+            checked_usize_to_u32(count, NodeSegment::NAME),
+        );
+    }
+
+    // Counts `count` records just put at the end of the segment of the group
+    // at `group_index`, whose anchor is `owner`, in that segment, in the
+    // starts of the segments after it and in the spans of the group and its
+    // ancestors.
+    fn count_appended_group_nodes(&mut self, group_index: usize, owner: AnchorId, count: u32) {
+        let count = i64::from(count);
+        add_group_segment_len::<NodeSegment>(&mut self.groups, group_index, count);
+        shift_group_segment_starts_from::<NodeSegment>(&mut self.groups, group_index + 1, count);
+        self.adjust_ancestor_group_spans(owner, 0, count);
     }
 
     fn remove_node_range(&mut self, node_range: GroupNodeRange) -> Vec<NodeRecord> {
@@ -146,48 +197,6 @@ impl SlotTable {
         self.nodes.capacity()
     }
 
-    fn record_group_node(
-        &mut self,
-        group_index: usize,
-        node_index: usize,
-        record: NodeRecord,
-    ) -> NodeSlotUpdate {
-        let node_len = self.group_node_len_checked_at(group_index, "node cursor");
-        let node_index = if node_index > node_len {
-            log::error!(
-                "slot table clamped node cursor {node_index} to node length {node_len} for owner {:?}",
-                record.owner
-            );
-            node_len
-        } else {
-            node_index
-        };
-        let id = record.id;
-        let generation = record.generation;
-        if node_index < node_len {
-            let existing = *self.group_node_record_at(group_index, node_index);
-            if existing.id == id {
-                *self.group_node_record_at_mut(group_index, node_index) = record;
-                if existing.generation == generation {
-                    NodeSlotUpdate::Reused { id, generation }
-                } else {
-                    NodeSlotUpdate::Replaced {
-                        old_id: existing.id,
-                        old_generation: existing.generation,
-                        new_id: id,
-                        new_generation: generation,
-                    }
-                }
-            } else {
-                self.insert_group_node(group_index, node_index, record);
-                NodeSlotUpdate::Inserted { id, generation }
-            }
-        } else {
-            self.insert_group_node(group_index, node_index, record);
-            NodeSlotUpdate::Inserted { id, generation }
-        }
-    }
-
     #[cfg(test)]
     pub(super) fn record_node_at_cursor(
         &mut self,
@@ -208,24 +217,57 @@ impl SlotTable {
             group_index,
             node_index,
             NodeRecord::active(owner, id, parent_id, generation, source, 0),
+            &mut Vec::new(),
         )
     }
 
-    /// Records `record` at `node_index` of its owner's group, which sits at
-    /// `group_index`.
+    // Records `record` at `node_index` of its owner's group, which sits at
+    // `group_index`. A record past the group's last one, while many records
+    // of other groups follow the group's segment, waits in `late` for the
+    // group's body to finish, and so does each record after it: the node
+    // cursor then stands past the group's records.
     pub(super) fn record_node_at(
         &mut self,
         group_index: usize,
         node_index: usize,
         record: NodeRecord,
+        late: &mut Vec<NodeRecord>,
     ) -> NodeSlotUpdate {
-        let owner = record.owner;
-        let update = self.record_group_node(group_index, node_index, record);
-        if matches!(update, NodeSlotUpdate::Inserted { .. }) {
-            self.adjust_ancestor_group_spans(owner, 0, 1);
+        let node_len = self.group_node_len_checked_at(group_index, "node cursor");
+        let (id, generation) = (record.id, record.generation);
+        if node_index < node_len {
+            let existing = *self.group_node_record_at(group_index, node_index);
+            if existing.id == id {
+                *self.group_node_record_at_mut(group_index, node_index) = record;
+                return if existing.generation == generation {
+                    NodeSlotUpdate::Reused { id, generation }
+                } else {
+                    NodeSlotUpdate::Replaced {
+                        old_id: existing.id,
+                        old_generation: existing.generation,
+                        new_id: id,
+                        new_generation: generation,
+                    }
+                };
+            }
+        } else {
+            let end = self.group_node_start_at(group_index) + node_len;
+            match self.nodes.len().checked_sub(end) {
+                Some(past) if node_index == node_len && past <= LATE_PAST_RECORDS => {
+                    let owner = record.owner;
+                    self.note_run_insert();
+                    self.record_segment_range_update_from(group_index);
+                    self.nodes.insert(end, record);
+                    self.count_appended_group_nodes(group_index, owner, 1);
+                }
+                _ => late.push(record),
+            }
+            return NodeSlotUpdate::Inserted { id, generation };
         }
-
-        update
+        let owner = record.owner;
+        self.insert_group_node(group_index, node_index, record);
+        self.adjust_ancestor_group_spans(owner, 0, 1);
+        NodeSlotUpdate::Inserted { id, generation }
     }
 
     pub(super) fn find_node_record_by_source_at(

@@ -1028,6 +1028,21 @@ about 55 fps with a few such frames and the GPU at about 480 MHz, or about
 legs). The second state is a loss to fix, issue #2059. The card shows each
 night which state the page took.
 
+### A start without a window
+
+The `first_screen` bench of `cranpose-app` does what the app does between its
+launch and its first frame, with no window and no GPU: it composes the wall
+at tier 20, or the gauntlet at tier 16 with `SCREEN=gauntlet`, lays it out,
+builds its scene and the first frame's packet. It prints the start's time and
+allocations, then the time of a few frames after it. Under callgrind it
+counts the instructions of the start or of the frames after it; its doc
+comment names the functions to collect.
+
+```bash
+cd benchmarks/compose-vs-cranpose/cranpose-app
+cargo bench --bench first_screen --no-default-features --features renderer-wgpu
+```
+
 ## Findings
 
 What the comparisons find is filed as issues, not kept here. Re-run

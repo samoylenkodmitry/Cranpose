@@ -298,6 +298,7 @@ Package the executable in an app bundle. Create `ios/Info.plist`:
     <key>CFBundleShortVersionString</key><string>1.0</string>
     <key>LSRequiresIPhoneOS</key><true/>
     <key>UILaunchScreen</key><dict/>
+    <key>CADisableMinimumFrameDurationOnPhone</key><true/>
     <key>UIApplicationSceneManifest</key>
     <dict>
         <key>UIApplicationSupportsMultipleScenes</key><false/>
@@ -315,6 +316,9 @@ Package the executable in an app bundle. Create `ios/Info.plist`:
 ```
 
 `CranposeSceneDelegate` connects the Cranpose window to the UIKit scene.
+An iPhone with a ProMotion display draws the app at up to 120 Hz only with
+`CADisableMinimumFrameDurationOnPhone`. The app draws at most 60 frames a
+second without it.
 With an Apple Silicon simulator open, run from `my-app`:
 
 ```sh
@@ -408,15 +412,27 @@ Add `web` under `[features]` in `Cargo.toml`:
 web = ["cranpose/web", "dep:wasm-bindgen", "dep:wasm-bindgen-futures"]
 ```
 
-Add the browser entry point at the end of `src/lib.rs`:
+Add the browser entry point and the page's global allocator at the end of
+`src/lib.rs`:
 
 ```rust
+#[cfg(all(feature = "web", target_arch = "wasm32"))]
+#[global_allocator]
+static HEAP: cranpose::web::Heap = cranpose::web::Heap::new();
+
 #[cfg(all(feature = "web", target_arch = "wasm32"))]
 #[wasm_bindgen::prelude::wasm_bindgen]
 pub async fn run_app() -> Result<(), wasm_bindgen::JsValue> {
     cranpose::AppLauncher::new().run_web("app", Counter).await
 }
 ```
+
+`Heap` grows the WebAssembly memory ahead of need. The standard library's
+allocator grows it one 64 KiB page at a time. Each growth costs the browser
+tens of microseconds. A heavy page grew its memory 3,903 times while it
+composed its first screen: 205 ms in Chrome on an Apple M3 Pro. The same page
+grew its memory 26 times with `Heap`. A library never installs a global
+allocator, so the app installs it.
 
 Create `index.html` in `my-app`:
 
@@ -478,7 +494,55 @@ Build a release page with [cranpose-build](https://github.com/samoylenkodmitry/c
 cranpose-build build --platform web --release
 ```
 
-It builds the module with wasm-pack and opens the page in headless Chrome. Chrome draws the first screen at a phone's viewport and at a desktop's, on WebGL and on WebGPU where Chrome has it. The build records the pipelines of that first screen. It then builds the module again with those pipelines embedded. As it starts, the page builds the pipelines recorded at the size nearest its canvas. The browser compiles them while the page composes its first screen. The first frame then waits for no compile. On a Mate 20 X on WebGL, the first screen of a heavy page showed about 0.3 s sooner. On an Apple M5 on WebGPU with no shader cached, it showed about 0.15 s sooner. The build writes the page directory to the `application` directory under `dist/cranpose/web/release`. It holds the HTML page, `pkg/` and the assets. `CHROME` names the Chrome executable when it is not in a usual place. Without Chrome, the build keeps the page it built first.
+It builds the module with wasm-pack and opens the page in headless Chrome. Chrome draws the first screen at a phone's viewport and at a desktop's, on WebGL and on WebGPU where Chrome has it. The build records the pipelines of that first screen. It then builds the module again with those pipelines embedded. As it starts, the page builds the pipelines recorded at the size nearest its canvas. The browser compiles them while the page composes its first screen. The first frame then waits for no compile. On a Mate 20 X on WebGL, the first screen of a heavy page showed about 0.3 s sooner. On an Apple M5 on WebGPU with no shader cached, it showed about 0.15 s sooner. The build also writes `pkg/first_screen_glsl.txt`: the exact GLSL of each WebGL stage of that first screen. The program `cranpose-first-screen-glsl` of the app's own Cranpose version writes it. A page on WebGL fetches the file as it loads and compiles each first-screen program from its own GLSL. A shape program compiled and linked on a Mate 20 X in 36-38 ms from its exact GLSL, against 53-56 ms from its template. The build writes the page directory to the `application` directory under `dist/cranpose/web/release`. It holds the HTML page, `pkg/` and the assets. `CHROME` names the Chrome executable when it is not in a usual place. Without Chrome, the build keeps the page it built first.
+
+### Get the optimizations of the measured apps
+
+Cranpose measures its speed on its benchmark and demo apps. A new project gets
+the optimizations of those apps. The framework applies most of them in every
+app. The [project template](https://github.com/samoylenkodmitry/cranpose-showcase)
+carries the lines that an app writes itself. [Cranpose Build](https://github.com/samoylenkodmitry/cranpose-build)
+runs the build steps.
+
+The framework does this work in every app:
+
+| Platform | Work |
+| --- | --- |
+| Desktop, Android and iOS | A launch keeps the driver's compiled pipelines in `pipeline-cache.bin` in the app's data directory, with the list of the pipelines it drew. The next launch builds those pipelines before its first frame. |
+| Android | The app builds the pipelines of its last launches as soon as Android installs an update, before the first launch of the new version. The app asks the display for its fastest refresh rate during input and animation. It reports the work time of each frame to Android's performance hint service. The Gradle plugin supplies the activity, its manifest entries and the R8 rules of the framework's Java code. |
+| ESP32 | `cranpose-platform-esp-idf` installs `SmallBlockAllocator` as the global allocator through its default `small-block-alloc` feature. |
+
+The app carries these lines. The project template has them:
+
+| Platform | Line | Effect |
+| --- | --- | --- |
+| Web | `static HEAP: cranpose::web::Heap` as the `#[global_allocator]` of `src/lib.rs`, as in [Run in a browser](#run-in-a-browser) | The first screen of a heavy page grew the WebAssembly memory 26 times in place of 3,903. |
+| iOS | `CADisableMinimumFrameDurationOnPhone` set to true in `Info.plist`, as in [Run on iOS](#run-on-ios) | An iPhone with a ProMotion display draws the app at up to 120 Hz in place of 60. |
+
+Cranpose Build runs these steps:
+
+| Platform | Step |
+| --- | --- |
+| Web | A release build records the pipelines of the first screen in headless Chrome and embeds them. It writes the exact GLSL of the first screen's WebGL stages beside the module. |
+| iOS | A package whose `Info.plist` lacks `CADisableMinimumFrameDurationOnPhone` gets the key set to true. |
+
+Build settings are the app's choice. Cranpose never sets them. The table lists
+the settings of Cranpose's measured apps as recommendations:
+
+| Setting | Cranpose's apps with it | Template |
+| --- | --- | --- |
+| `lto = true` and `codegen-units = 1` in `[profile.release]` | Benchmark app, desktop demo | Set |
+| `panic = "abort"` in `[profile.release]` | Benchmark app, desktop demo | Not set |
+| wasm-opt `-ocimfs=100` with the features of [Run in a browser](#run-in-a-browser) | Benchmark app, desktop demo, isolated demo | Set |
+| The `release-log-info` feature of `cranpose` for Android | Benchmark app | Set |
+| R8 (`isMinifyEnabled = true`) in the Android release build type | Benchmark app | Not set |
+| `opt-level = 3` for `cranpose-wgpu` and `naga` in `[profile.dev]` | Desktop demo | Not set |
+
+`release-log-info` compiles the debug and trace log calls out of release
+builds. The logger that Cranpose installs on Android prints Info and above, so
+those calls never print there. The library of the Android benchmark got 150 KB
+smaller. The Gradle plugin supplies the keep rules that R8 needs for the
+framework's Java code.
 
 ## Ownership
 

@@ -20,6 +20,8 @@
     <string>1</string>
     <key>LSRequiresIPhoneOS</key>
     <true/>
+    <key>CADisableMinimumFrameDurationOnPhone</key>
+    <true/>
     <key>UIRequiresFullScreen</key>
     <true/>
     <key>UIStatusBarHidden</key>
