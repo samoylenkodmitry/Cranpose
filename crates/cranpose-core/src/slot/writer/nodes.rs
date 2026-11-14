@@ -1,11 +1,79 @@
 use std::ops::ControlFlow;
 
-use super::super::{
-    GroupRecord, NodeRecord, NodeSlotUpdate, RootNodeIds, SlotTable, SlotWriteSession,
+use super::{
+    super::{GroupRecord, NodeRecord, NodeSlotUpdate, RootNodeIds, SlotTable, SlotWriteSession},
+    SlotWriteSessionState,
 };
 use crate::NodeId;
 
 impl SlotTable {
+    // Puts the records waiting in `state` of the group at `group_index`,
+    // whose open frame's node cursor stands at `node_cursor`, into its
+    // segment; false when none wait. The frame's cursor counts them past
+    // the group's records, and they are the last ones waiting.
+    pub(in crate::slot) fn join_late_nodes(
+        &mut self,
+        state: &mut SlotWriteSessionState,
+        group_index: usize,
+        node_cursor: usize,
+    ) -> bool {
+        let waiting = node_cursor.saturating_sub(self.group_node_len_at(group_index));
+        if waiting == 0 {
+            return false;
+        }
+        let waiting = waiting.min(state.late_nodes.len());
+        self.append_group_nodes(group_index, &mut state.late_nodes, waiting);
+        true
+    }
+
+    // Puts the records waiting for every open group into its segment, for a
+    // reader of records outside the open group. Records wait only in a first
+    // composition of many nodes, so a reader seldom finds any.
+    #[inline]
+    pub(in crate::slot) fn join_all_late_nodes(&mut self, state: &mut SlotWriteSessionState) {
+        if !state.late_nodes.is_empty() {
+            self.join_late_nodes_of_open_groups(state);
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn join_late_nodes_of_open_groups(&mut self, state: &mut SlotWriteSessionState) {
+        for depth in (0..state.group_stack.len()).rev() {
+            if state.late_nodes.is_empty() {
+                return;
+            }
+            let frame = &state.group_stack[depth];
+            let (anchor, index, cursor) =
+                (frame.group_anchor, frame.group_index, frame.node_cursor);
+            let Some(group_index) = self.open_group_index(anchor, index) else {
+                log::error!(
+                    "slot table dropped the waiting node records below stale group frame anchor {anchor:?}"
+                );
+                state.late_nodes.clear();
+                return;
+            };
+            self.join_late_nodes(state, group_index, cursor);
+        }
+    }
+
+    // Drops the waiting records no open frame counts, as those of a frame
+    // whose group left the table, which closed without its body's finish.
+    pub(in crate::slot) fn drop_unowned_late_nodes(&self, state: &mut SlotWriteSessionState) {
+        let owned = (0..state.group_stack.len())
+            .map(|depth| {
+                let frame = &state.group_stack[depth];
+                self.open_group_index(frame.group_anchor, frame.group_index)
+                    .map_or(0, |group_index| {
+                        frame
+                            .node_cursor
+                            .saturating_sub(self.group_node_len_at(group_index))
+                    })
+            })
+            .sum();
+        state.late_nodes.truncate(owned);
+    }
+
     pub(in crate::slot) fn subtree_root_node_ids_at(&self, group_index: usize) -> RootNodeIds {
         let mut roots = RootNodeIds::new();
         self.for_each_subtree_root_node_id_at(group_index, |id| roots.push(id));
@@ -220,6 +288,7 @@ impl SlotWriteSession<'_> {
                     source,
                     frame.ended_children,
                 ),
+                &mut self.state.late_nodes,
             ),
             None => {
                 log::error!(

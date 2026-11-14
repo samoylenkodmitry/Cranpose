@@ -52,8 +52,18 @@ pub trait Node: Any {
     }
     /// Moves the child at the first index to the second index in the child list.
     fn move_child(&mut self, _from: usize, _to: usize) {}
-    /// Replaces the child list with `children`, in order.
-    fn update_children(&mut self, _children: &[NodeId]) {}
+    /// Replaces the child list with `children`, in order. The default takes
+    /// out each child the node holds and puts in each of `children`.
+    fn update_children(&mut self, children: &[NodeId]) {
+        let mut held = SmallVec::<[NodeId; 8]>::new();
+        self.collect_children_into(&mut held);
+        for child in held {
+            self.remove_child(child);
+        }
+        for &child in children {
+            self.insert_child(child);
+        }
+    }
     /// Whether the node adds and drops its children itself, as a
     /// subcomposition host does with its slot hosts: the child sync a
     /// composition pass ends with then leaves its list alone. The default

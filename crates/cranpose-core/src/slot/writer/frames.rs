@@ -80,7 +80,6 @@ impl GroupFrameStack {
             .and_then(|index| self.frames.get_mut(index))
     }
 
-    #[cfg(any(test, debug_assertions))]
     pub(in crate::slot) fn len(&self) -> usize {
         self.depth
     }

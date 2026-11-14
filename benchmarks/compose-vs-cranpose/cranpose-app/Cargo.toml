@@ -25,6 +25,11 @@ name = "perf-compare"
 path = "src/main.rs"
 required-features = ["desktop"]
 
+[[bench]]
+name = "first_screen"
+harness = false
+required-features = ["renderer-wgpu"]
+
 [features]
 default = ["renderer-wgpu", "desktop", "entry", "chat"]
 # Exports the Android entry symbol. An app that links this crate as a library turns it off and exports its own.
@@ -62,7 +67,9 @@ web-sys = { version = "0.3", features = ["Window", "Location"] }
 [dev-dependencies]
 cranpose-app-shell = { path = "../../../crates/cranpose-app-shell" }
 cranpose-render-pixels = { path = "../../../crates/cranpose-render/pixels" }
+cranpose-render-wgpu = { path = "../../../crates/cranpose-render/wgpu" }
 cranpose-testing = { path = "../../../crates/cranpose-testing" }
+stats_alloc = "0.1.10"
 
 # Its own workspace, like a real application: the release profile below is
 # what the device runs, not the framework repository's.
