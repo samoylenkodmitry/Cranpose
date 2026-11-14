@@ -206,12 +206,6 @@ impl PreparedTextLayout {
         Arc::clone(&self.text)
     }
 
-    /// [`RenderString::render_hash`](crate::text::RenderString::render_hash)
-    /// of [`PreparedTextLayout::render_text`].
-    pub fn render_text_hash(&self) -> u64 {
-        self.text.render_hash()
-    }
-
     /// [`TextStyle::render_hash`] of `visual_style`, hashed once for the
     /// layout, or handed over by the node that knows its style's hash.
     pub fn visual_style_hash(&self) -> u64 {

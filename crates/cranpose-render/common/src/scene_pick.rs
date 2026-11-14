@@ -8,7 +8,7 @@ use cranpose_ui_graphics::{
 
 use crate::{
     graph::ProjectiveTransform,
-    scene_store::{LayerRef, RecordKind},
+    scene_store::LayerRef,
     space::{EyeView, SpaceTree},
 };
 
@@ -270,16 +270,4 @@ impl ScenePick {
         self.nearest_in(ray, door, distance * (1.0 + PAST_DOORWAY))
             .or(surface)
     }
-}
-
-/// The mesh surface layer a child of a scene layer is, or holds as the
-/// wrapper of its outer draws.
-pub fn surface_layer(child: LayerRef<'_>) -> Option<LayerRef<'_>> {
-    let layer = match child.wraps() {
-        None => child,
-        Some(node_id) => child
-            .children()
-            .find(|inner| inner.kind() == RecordKind::Layer && inner.node_id() == Some(node_id))?,
-    };
-    cranpose_ui_graphics::layer_transform::layer_surface(layer.graphics_layer()).map(|_| layer)
 }

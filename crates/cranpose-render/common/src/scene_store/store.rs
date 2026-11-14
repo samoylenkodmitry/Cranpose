@@ -958,14 +958,4 @@ impl SceneStore {
     pub fn content_rev(&self, id: RecordId) -> SceneUpdate {
         self.tree[id.index()].content_rev
     }
-
-    /// The latest update that changed `id` or a record beneath it.
-    pub fn subtree_rev(&self, id: RecordId) -> SceneUpdate {
-        self.tree[id.index()].subtree_rev
-    }
-
-    /// The update that last moved `id` in its parent.
-    pub fn place_rev(&self, id: RecordId) -> SceneUpdate {
-        self.tree[id.index()].place_rev
-    }
 }
