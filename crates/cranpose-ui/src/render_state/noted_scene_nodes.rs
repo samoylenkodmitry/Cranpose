@@ -1,13 +1,11 @@
-use cranpose_core::PackedU64;
-
-use super::taken_list::TakenList;
+use cranpose_core::{PackedU64, collections::growth_slack::RoomAtRest};
 
 /// The nodes a layout pass names to the scene, each once a take: a node
 /// keeps the take it was last noted in, so a second note in the same take
 /// is dropped with one comparison instead of a hash. A node pushed without
 /// that record may come twice, which the scene's routing marks absorb.
 pub(super) struct NotedSceneNodes<T> {
-    nodes: TakenList<T>,
+    nodes: Vec<T>,
     /// The take the list fills: a number no other list on the thread uses.
     take: u64,
 }
@@ -15,7 +13,7 @@ pub(super) struct NotedSceneNodes<T> {
 impl<T> NotedSceneNodes<T> {
     pub(super) fn new() -> Self {
         Self {
-            nodes: TakenList::default(),
+            nodes: Vec::new(),
             take: next_moved_scene_node_take(),
         }
     }
@@ -32,15 +30,17 @@ impl<T> NotedSceneNodes<T> {
     }
 
     pub(super) fn trim(&mut self) {
-        self.nodes.trim();
+        self.nodes.keep_room_at_rest();
     }
 
-    // Moves the nodes into `output`, dropping what `output` held.
+    // Moves the nodes into `output`, dropping what `output` held: the two
+    // storages take turns.
     pub(super) fn take_into(&mut self, output: &mut Vec<T>) {
         if !self.nodes.is_empty() {
             self.take = next_moved_scene_node_take();
         }
-        self.nodes.take_into(output);
+        output.clear();
+        std::mem::swap(&mut self.nodes, output);
     }
 }
 

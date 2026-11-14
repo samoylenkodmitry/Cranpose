@@ -16,7 +16,6 @@ mod draw_observation;
 mod geometry_scene_nodes;
 pub(crate) mod measure_reads;
 mod noted_scene_nodes;
-mod taken_list;
 mod trim;
 
 use dirty_node_set::DirtyNodeSet;
