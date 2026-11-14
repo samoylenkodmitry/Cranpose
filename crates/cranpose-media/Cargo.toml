@@ -29,7 +29,7 @@ wav = ["symphonia/wav", "symphonia/pcm"]
 [dependencies]
 cranpose-services = { workspace = true }
 log = "0.4"
-parking_lot = "0.12.5"
+parking_lot = "0.13.0"
 
 # The output device, the real-time callback and the queue that feeds it all come
 # from the audio engine, so the workspace has one device per platform rather

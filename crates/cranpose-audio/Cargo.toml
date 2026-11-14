@@ -22,7 +22,7 @@ workspace = true
 [dependencies]
 cranpose-services = { workspace = true }
 log = "0.4"
-parking_lot = "0.12.5"
+parking_lot = "0.13.0"
 
 [features]
 # The AAudio output device. Costs nothing off Android: `libc` is only declared

@@ -372,12 +372,12 @@ fn elements(path: &Path) -> Result<Vec<Element>, String> {
                         .normalized_value(XmlVersion::Implicit1_0)
                         .map_err(|error| format!("{}: {error}", path.display()))?;
                     attributes.push((
-                        String::from_utf8_lossy(attribute.key.as_ref()).into_owned(),
+                        attribute.key.as_ref().to_owned(),
                         value.into_owned(),
                     ));
                 }
                 elements.push(Element {
-                    name: String::from_utf8_lossy(element.name().as_ref()).into_owned(),
+                    name: element.name().as_ref().to_owned(),
                     attributes,
                 });
             }
