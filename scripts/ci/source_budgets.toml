@@ -84,7 +84,6 @@ limit = 1000
 "crates/cranpose/src/accessibility.rs" = 2101
 "crates/cranpose/src/android/event_loop.rs" = 2221
 "crates/cranpose/src/app_launcher.rs" = 1469
-"crates/cranpose/src/desktop/accessibility.rs" = 1237
 "crates/cranpose/src/desktop/event_loop.rs" = 5762
 "crates/cranpose/src/embed.rs" = 1015
 "crates/cranpose/src/native_window.rs" = 1052
