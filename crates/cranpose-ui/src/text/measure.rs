@@ -8,7 +8,8 @@ use std::{
 use cranpose_core::collections::pass_aged::{IDLE_PASSES, PassAgedCache};
 use cranpose_text::{
     CaretDirection, FontExtent, FontFamily, FontFamilyResolver, FontRequest, FontStyle, FontWeight,
-    LayoutInput, ParagraphIntrinsics, RetiredStrings, TextLayout, TextLayouter, paragraph_line_box,
+    LayoutInput, ParagraphIntrinsics, RenderString, Retired, TextLayout, TextLayouter,
+    paragraph_line_box,
 };
 use cranpose_ui_graphics::{DEFAULT_FONT_SIZE, MemoryHeadroom, Point};
 
@@ -18,13 +19,15 @@ use super::{
     layout_cache::{CacheAdmission, Cached, LayoutCache, Miss},
     layout_input::{ParagraphSpans, TextUnits},
     layout_options::{TextLayoutOptions, TextOverflow},
-    retired_layouts::RetiredLayouts,
     style::TextStyle,
     text_key::TextKey,
 };
 use crate::{density::Density, font_scale::FontScaleCurve, text_layout_result::TextLayoutResult};
 
 const TEXT_INTRINSICS_CACHE_CAPACITY: usize = 1024;
+// The most retired layouts and strings kept.
+const RETIRED_LAYOUTS: usize = 512;
+const RETIRED_STRINGS: usize = 4096;
 const SCALE_DOWN_SEARCH_STEPS: usize = 14;
 
 /// Size of a laid-out text. Distances are in logical pixels.
@@ -155,11 +158,11 @@ pub(crate) struct TextService {
     layouter: RefCell<TextLayouter>,
     layouts: RefCell<LayoutCache>,
     intrinsics: RefCell<PassAgedCache<TextKey, ParagraphIntrinsics>>,
-    retired: RefCell<RetiredLayouts>,
-    retired_strings: RefCell<RetiredStrings>,
-    // Whether a text retired or took a layout or a string since both pools
-    // were last found empty: a pass ages the pools only then.
-    retired_live: Cell<bool>,
+    // The prepared layouts of texts that changed: a layout whose lines no
+    // scene or packet holds any more takes a new text in its allocation and
+    // in its lines' storage.
+    retired: RefCell<Retired<Rc<PreparedTextLayout>>>,
+    retired_strings: RefCell<Retired<Arc<RenderString>>>,
 }
 
 impl TextService {
@@ -173,9 +176,8 @@ impl TextService {
             intrinsics: RefCell::new(PassAgedCache::with_capacity_at_least_one(
                 TEXT_INTRINSICS_CACHE_CAPACITY,
             )),
-            retired: RefCell::default(),
-            retired_strings: RefCell::default(),
-            retired_live: Cell::new(false),
+            retired: RefCell::new(Retired::new(RETIRED_LAYOUTS)),
+            retired_strings: RefCell::new(Retired::new(RETIRED_STRINGS)),
         }
     }
 
@@ -250,17 +252,20 @@ impl TextService {
         text: AnnotatedString,
         layouts: impl IntoIterator<Item = Rc<PreparedTextLayout>>,
     ) {
-        self.retired_live.set(true);
-        self.retired_strings.borrow_mut().retire(text);
+        self.retired_strings.borrow_mut().retire_text(text);
         let mut retired = self.retired.borrow_mut();
-        layouts
-            .into_iter()
-            .for_each(|layout| retired.retire(layout));
+        for mut layout in layouts {
+            // A layout the shared cache keeps stays there. A kept layout lets
+            // go of its string, which the next changed text may take.
+            if let Some(free) = Rc::get_mut(&mut layout) {
+                free.text = Arc::clone(AnnotatedString::default().render_string());
+                retired.retire(layout);
+            }
+        }
     }
 
     // A plain string of `text`, in the room of a retired one nothing holds.
     pub(crate) fn plain_text(&self, text: &str) -> AnnotatedString {
-        self.retired_live.set(true);
         self.retired_strings.borrow_mut().plain(text)
     }
 
@@ -277,8 +282,10 @@ impl TextService {
         if source.shaped().is_some() || scales.is_some() {
             return None;
         }
-        self.retired_live.set(true);
-        let mut spare = self.retired.borrow_mut().take()?;
+        let mut spare = self
+            .retired
+            .borrow_mut()
+            .take(|layout| Rc::get_mut(layout).is_some_and(|free| !free.layout.shares_lines()))?;
         let slot = Rc::get_mut(&mut spare)?;
         let (text, style) = (source.text(), source.shared_style());
         self.with_input(text, &style, frame, units, |layouter, input, fonts| {
@@ -486,24 +493,13 @@ impl TextService {
         };
         self.layouts.borrow_mut().begin_pass(idle_passes, headroom);
         self.intrinsics.borrow_mut().begin_pass(idle_passes, drop);
-        if self.retired_live.get() {
-            self.age_retired();
-        }
         self.layouter.borrow_mut().set_memory_headroom(headroom);
     }
 
-    // Starts a pass of the retired layouts and strings, which stay live
-    // while either pool holds any. Out of line: no pass of a screen whose
-    // texts stand comes here.
-    #[cold]
-    #[inline(never)]
-    fn age_retired(&self) {
-        let (mut layouts, mut strings) =
-            (self.retired.borrow_mut(), self.retired_strings.borrow_mut());
-        layouts.begin_pass();
-        strings.begin_pass();
-        self.retired_live
-            .set(!(layouts.is_empty() && strings.is_empty()));
+    // Drops the retired layouts and strings: the texts rest.
+    pub(crate) fn trim(&self) {
+        self.retired.borrow_mut().clear();
+        self.retired_strings.borrow_mut().clear();
     }
 
     /// A frame starts: the first use of the service in it outside a layout

@@ -47,8 +47,8 @@ mod paragraph_measures;
 mod plain_chars;
 mod plain_glyphs;
 mod plain_kerning;
-/// Plain strings that texts gave up, kept for the plain strings made next.
-pub mod retired_strings;
+/// What texts gave up, kept for the texts that change next.
+pub mod retired;
 /// Writing systems and the script runs of text.
 pub mod script;
 mod script_lookups;
@@ -101,7 +101,7 @@ pub use paragraph::{
     resolve_text_direction,
 };
 pub use paragraph_intrinsics::ParagraphIntrinsics;
-pub use retired_strings::RetiredStrings;
+pub use retired::Retired;
 pub use script::Script;
 pub use shaped_glyphs::{GlyphOffset, ShapedGlyph, ShapedGlyphs};
 pub use shaper::Shaper;
