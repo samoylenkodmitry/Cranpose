@@ -16,9 +16,6 @@ default = ["desktop"]
 desktop = ["cranpose/desktop"]
 # The iPhone app the benchmark measures: `ios/build-app.sh`.
 ios = ["cranpose/ios"]
-# Extra `SHOPBENCH_DIAG` log lines around `SHOPBENCH home_ready`, to check the
-# marker against the system's record of the frames. Never in a measured build.
-diag = []
 
 [dependencies]
 anyhow = "1.0.104"

@@ -9,7 +9,6 @@
 #   ios/build-app.sh [target]
 #     target: aarch64-apple-ios (default, the device) | aarch64-apple-ios-sim
 #   PROFILE=debug ios/build-app.sh ...      # unoptimized (default: release)
-#   EXTRA_FEATURES=diag ios/build-app.sh    # the marker's check lines (never measured)
 #   CODESIGN_IDENTITY=<identity> PROVISIONING_PROFILE=<file.mobileprovision> \
 #     ios/build-app.sh                      # signed for an iPhone
 #
@@ -37,7 +36,7 @@ esac
 
 # shellcheck disable=SC2086
 cargo build --manifest-path "$ROOT/Cargo.toml" --bin everbloom \
-  --target "$TARGET" --no-default-features --features "ios${EXTRA_FEATURES:+,$EXTRA_FEATURES}" \
+  --target "$TARGET" --no-default-features --features ios \
   $PROFILE_FLAG >&2
 
 OUT="${CARGO_TARGET_DIR:-$ROOT/target}/$TARGET/$PROFILE"
