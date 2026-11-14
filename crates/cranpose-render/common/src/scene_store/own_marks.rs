@@ -8,7 +8,9 @@ use std::mem::size_of_val;
 
 use cranpose_core::{RecordId, RecordRef};
 
-use super::{LayerRef, Reach, RecordEvent, RecordFlags, SceneStore, SpanPool, content_hash, reach};
+use super::{
+    ItemRef, LayerRef, Reach, RecordEvent, RecordFlags, SceneStore, SpanPool, content_hash, reach,
+};
 
 // One own draw of a record: a hash of what it draws, whether a child lies
 // beneath it, and where it draws in the record's space.
@@ -155,6 +157,18 @@ fn remark(store: &mut SceneStore, id: RecordId) -> Reach {
     marks.clear();
     let mut over_children = false;
     for item in LayerRef::new(store, id).items() {
+        // A text of lines told apart takes a mark a line, so a change to a
+        // word marks its lines alone.
+        if let ItemRef::Text(text) = item
+            && let Some(lines) = text.marked_lines()
+        {
+            marks.extend((0..lines).map(|line| OwnMark {
+                print: content_hash::text_line_print(text, line),
+                over_children,
+                reach: text.line_reach(line),
+            }));
+            continue;
+        }
         match (
             content_hash::own_draw_print(item),
             reach::own_draw_reach(item),

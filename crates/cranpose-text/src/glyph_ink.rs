@@ -201,6 +201,47 @@ pub(crate) fn find_ink_past_lines(
     past.ink
 }
 
+// How far up and down the ink of the glyphs of line `index` of `body`
+// reaches, from the line's top, or the ink above it, to its bottom, or the
+// ink below it; `reach` tells whether a glyph may ink past its line. A
+// glyph inks within its typeface's ascent and descent about its run's
+// baseline, unless its own ink leaves them or its run moves it off its pen:
+// then its outline tells.
+pub(crate) fn line_ink(body: &LayoutBody, index: usize, reach: InkReach) -> (f32, f32) {
+    let line = &body.lines[index];
+    let mut span = (line.top, line.bottom);
+    if !may_ink_past_lines(body, reach) {
+        return span;
+    }
+    let runs = &body.runs[line.runs.range()];
+    for (run, glyph_run) in runs.iter().zip(body.glyph_runs(index)) {
+        let face = glyph_run.typeface;
+        let inks = face.glyph_inks();
+        let scale = glyph_run.size / f32::from(face.units_per_em());
+        let baseline = line.baseline - run.baseline_shift;
+        span.0 = span.0.min(baseline - inks.ascent * scale);
+        span.1 = span.1.max(baseline - inks.descent * scale);
+        let moved = moves_glyphs(body, run);
+        if !moved && reach != InkReach::Glyphs {
+            continue;
+        }
+        for glyph in glyph_run.positions() {
+            if !moved && inks.state(face, glyph.id) != OUT {
+                continue;
+            }
+            let Some(extents) = face.glyph_extents(glyph.id) else {
+                continue;
+            };
+            if extents.width > 0.0 && extents.height > 0.0 {
+                let top = glyph.y - extents.y_bearing * scale;
+                span.0 = span.0.min(top);
+                span.1 = span.1.max(top + extents.height * scale);
+            }
+        }
+    }
+    span
+}
+
 // The ink the glyphs of a layout put past the visible text of its lines,
 // which reaches across `lines`, or past its box, `height` tall. Only when
 // `glyphs_leave` does a glyph inked within its advance and the band need its

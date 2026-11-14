@@ -11,7 +11,7 @@ use cranpose_ui_graphics::Rect;
 use crate::{
     bidi_level::BidiLevel,
     glyph_id::GlyphId,
-    glyph_ink::{InkReach, find_ink_past_lines, may_ink_past_lines},
+    glyph_ink::{InkReach, find_ink_past_lines, line_ink, may_ink_past_lines},
     index_range::{IndexRange, widen},
     laid_glyphs::RunGlyphs,
     layout_body::LayoutBody,
@@ -600,6 +600,13 @@ impl TextLayout {
     /// The bottom of `line`.
     pub fn line_bottom(&self, line: usize) -> f32 {
         self.body.lines[line].bottom
+    }
+
+    /// How far up and down the ink of the glyphs of `line` reaches, in
+    /// pixels from the layout's top: from the line's top, or the ink above
+    /// it, to its bottom, or the ink below it.
+    pub fn line_ink(&self, line: usize) -> (f32, f32) {
+        line_ink(&self.body, line, self.body.ink_reach)
     }
 
     /// The baseline of `line`.

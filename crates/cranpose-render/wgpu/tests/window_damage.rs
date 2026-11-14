@@ -88,6 +88,9 @@ enum Scene {
     // A tile holding a dot that appears at another place each step, made
     // anew: the tile and its dot are new records.
     NewTile,
+    // A paragraph of four lines whose second line shows a number that
+    // changes a step, as wide each step.
+    Paragraph,
     // The page moving for `MOVES` steps, then a shape changing colour over
     // the page held still.
     MovedThenStill,
@@ -417,6 +420,7 @@ fn changing_box(scene: Scene, step: MutableState<u32>) -> Option<Modifier> {
         | Scene::SpinnerAndCaret
         | Scene::TenSpots
         | Scene::NewTile
+        | Scene::Paragraph
         | Scene::TurnedSurface
         | Scene::ShrunkParent
         | Scene::LazyLabel => return None,
@@ -464,6 +468,7 @@ fn Changing(scene: Scene, step: MutableState<u32>) {
             );
         }
         Scene::NewTile => NewTile(step),
+        Scene::Paragraph => ChangingParagraph(step),
         Scene::TenSpots => TenSpots(step),
         Scene::MovedCaster => {
             let [x, y, width, height] = SPOT;
@@ -527,6 +532,22 @@ fn TenSpots(step: MutableState<u32>) {
             || {},
         );
     }
+}
+
+// The size of the paragraph of `Scene::Paragraph`.
+const PARAGRAPH: [u16; 2] = [220, 90];
+
+// The scene of `Scene::Paragraph`.
+#[composable]
+fn ChangingParagraph(step: MutableState<u32>) {
+    Text(
+        format!(
+            "The first line stays\nThe second one shows {:04}\nThe third line stays\nThe last line stays",
+            step.get() * 7
+        ),
+        rect_modifier([20.0, 60.0, f32::from(PARAGRAPH[0]), f32::from(PARAGRAPH[1])]),
+        label_style(14.0),
+    );
 }
 
 // The scene of `Scene::NewTile`: a tile holding a dot, made anew a step at
@@ -1568,6 +1589,35 @@ fn a_tile_made_anew_at_another_place_each_step_walks_the_scene_once() {
 #[test]
 fn a_star_drawn_again_past_its_area_walks_the_scene_once() {
     assert_walks_the_scene_once(Scene::Star);
+}
+
+// A paragraph whose second line changes a word a step: once its target
+// holds a frame, each frame draws that line again, not the paragraph, and
+// equals the whole frame.
+#[test]
+fn a_paragraph_changing_a_word_draws_only_its_line() {
+    const PARTIAL_FRAMES: u32 = 8;
+    let paragraph = u64::from(PARAGRAPH[0]) * u64::from(PARAGRAPH[1]);
+    for keeper in KEEPERS {
+        let Some((_lock, renderer)) = renderer() else {
+            return;
+        };
+        let mut harness = Harness::new(renderer, Scene::Paragraph, 1.0, keeper);
+        let start = keeper.start_frames();
+        for step in 0..start + PARTIAL_FRAMES {
+            let frame = harness.frame(step);
+            let stats = frame.stats;
+            let label = format!("{keeper:?} frame {step}: {stats:?}");
+            support::assert_same_bytes(&label, WIDTH, &frame.kept, &frame.direct);
+            if step >= start {
+                assert!(
+                    stats.repainted_pixels * 2 <= paragraph,
+                    "{label}: the frame drew {} pixels again for one line of a paragraph of {paragraph}",
+                    stats.repainted_pixels
+                );
+            }
+        }
+    }
 }
 
 /// A page that moves for long enough that its target stops summarizing for

@@ -119,6 +119,22 @@ pub(crate) fn glyph_bounds(rect: Rect, layout: &TextLayout, spread: InkSpread) -
     })
 }
 
+// The part of `glyph_bounds` in which the glyphs of line `line` of
+// `layout`, drawn from the top left corner of `rect` and spread by
+// `spread`, put ink: across the whole text's, and down from the line's ink.
+#[cfg(feature = "window-damage")]
+pub(crate) fn line_bounds(rect: Rect, layout: &TextLayout, line: usize, spread: InkSpread) -> Rect {
+    let whole = glyph_bounds(rect, layout, spread);
+    let (top, bottom) = layout.line_ink(line);
+    let top = (rect.y + top - spread.around).max(whole.y);
+    let bottom = (rect.y + bottom + spread.around).min(whole.y + whole.height);
+    Rect {
+        y: top,
+        height: (bottom - top).max(0.0),
+        ..whole
+    }
+}
+
 // Where the glyphs of `layout`, drawn from the top left corner of `rect` at
 // `scale` units of `rect` a layout pixel and spread by `spread`, put ink,
 // in units of `rect` from that corner, unrounded: down at least to the

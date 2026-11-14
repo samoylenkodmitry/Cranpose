@@ -161,6 +161,28 @@ impl TextPrimitiveNode {
         self.draw_bounds()
             .is_some_and(|drawn| rect_within(drawn, bounds))
     }
+
+    // The lines a window's damage tells apart: those of a text of more than
+    // one line that draws only its glyphs, in its colour, within bounds it
+    // knows; `None` for a text it takes whole.
+    #[cfg(feature = "window-damage")]
+    pub(crate) fn marked_lines(&self) -> Option<usize> {
+        let lines = self.layout.line_count();
+        (lines > 1 && self.paint().plain && self.draw_bounds().is_some()).then_some(lines)
+    }
+
+    // Where line `line` of a text whose lines `marked_lines` tells apart
+    // draws.
+    #[cfg(feature = "window-damage")]
+    pub(crate) fn line_reach(&self, line: usize) -> crate::scene_store::Reach {
+        use crate::scene_store::Reach;
+        let Some(bounds) = self.draw_bounds() else {
+            return Reach::Unknown;
+        };
+        crate::glyph_reach::line_bounds(self.rect, &self.layout, line, self.paint().spread)
+            .intersect(bounds)
+            .map_or(Reach::Empty, Reach::Finite)
+    }
 }
 
 /// Whether a primitive draws before or after the children of its layer.

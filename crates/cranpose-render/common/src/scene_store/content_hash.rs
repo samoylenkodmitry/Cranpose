@@ -37,6 +37,30 @@ pub(super) fn own_draw_print(item: ItemRef<'_>) -> Option<u64> {
     Some(print)
 }
 
+// A hash of what line `line` of `text`, a text that draws only its glyphs
+// in its colour, draws: its glyphs where they lie, in the text's style.
+#[cfg(feature = "window-damage")]
+pub(super) fn text_line_print(text: &TextPrimitiveNode, line: usize) -> u64 {
+    finish_hash(|state| {
+        text.paint().style_hash.hash(state);
+        hash_point(Point::new(text.rect.x, text.rect.y), state);
+        hash_optional_rect(text.clip, state);
+        text.overflow.hash(state);
+        let synthesized = text.layout.synthesized_style();
+        synthesized.bold_size.map(f32::to_bits).hash(state);
+        synthesized.italic.hash(state);
+        for run in text.layout.glyph_runs(line) {
+            run.typeface.content_hash().hash(state);
+            hash_f32_bits(run.size, state);
+            for glyph in run.positions() {
+                glyph.id.hash(state);
+                hash_f32_bits(glyph.x, state);
+                hash_f32_bits(glyph.y, state);
+            }
+        }
+    })
+}
+
 fn hash_content<H: Hasher>(layer: LayerRef<'_>, state: &mut H, with_translated_offset: bool) {
     layer.local_bounds().render_hash().hash(state);
     let translated = layer.translated_content_context();
