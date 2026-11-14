@@ -237,7 +237,9 @@ jobs:
       - name: Provision toolchain
         id: provision
         if: steps.memo.outputs.passed != 'true'
-        run: scripts/ci/provision_toolchain.sh
+        run: |
+          scripts/ci/provision_toolchain.sh
+          scripts/ci/rustup_locked.sh target add wasm32-unknown-unknown
 
       - name: Run feature permutations the default build skips
         if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
