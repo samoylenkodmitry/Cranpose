@@ -8,7 +8,7 @@
 
 use std::{cell::Cell, fmt::Debug, time::Duration};
 
-use cranpose_core::collections::growth_slack::RoomAtRest;
+use cranpose_core::collections::growth_slack::GrowthSlack;
 use cranpose_render_common::{RenderScene, Renderer};
 use web_time::Instant;
 
@@ -78,13 +78,13 @@ where
     fn trim(&mut self) {
         self.app.app_context.trim();
         self.routing_scratch.trim();
-        self.pending_dirty_nodes.keep_room_at_rest();
-        self.pending_layer_property_nodes.keep_room_at_rest();
+        self.pending_dirty_nodes.trim_growth_slack();
+        self.pending_layer_property_nodes.trim_growth_slack();
         let geometry = &mut self.geometry_scene_nodes;
-        geometry.reshaped.keep_room_at_rest();
-        geometry.moved.keep_room_at_rest();
-        geometry.unplaced.keep_room_at_rest();
-        self.app.left_nodes.keep_room_at_rest();
+        geometry.reshaped.trim_growth_slack();
+        geometry.moved.trim_growth_slack();
+        geometry.unplaced.trim_growth_slack();
+        self.app.left_nodes.trim_growth_slack();
         for surface in &mut self.surfaces {
             for list in [
                 &mut surface.scoped_layout_scene_nodes,
@@ -93,9 +93,9 @@ where
                 &mut surface.scoped_layer_property_nodes,
                 &mut surface.structural_scene_nodes,
             ] {
-                list.keep_room_at_rest();
+                list.trim_growth_slack();
             }
-            surface.scene_updates.keep_room_at_rest();
+            surface.scene_updates.trim_growth_slack();
             if surface.renderer.scene_mut().trim() {
                 rebuild_cleared_scene(&mut self.app, surface);
             }

@@ -1,4 +1,4 @@
-use cranpose_core::{PackedU64, collections::growth_slack::RoomAtRest};
+use cranpose_core::{PackedU64, collections::growth_slack::GrowthSlack};
 
 /// The nodes a layout pass names to the scene, each once a take: a node
 /// keeps the take it was last noted in, so a second note in the same take
@@ -30,7 +30,7 @@ impl<T> NotedSceneNodes<T> {
     }
 
     pub(super) fn trim(&mut self) {
-        self.nodes.keep_room_at_rest();
+        self.nodes.trim_growth_slack();
     }
 
     // Moves the nodes into `output`, dropping what `output` held: the two

@@ -2,7 +2,7 @@ use std::{any::Any, rc::Rc};
 
 use cranpose_core::{
     MemoryApplier, NodeId, RecordId,
-    collections::{growth_slack::RoomAtRest, map::HashMap},
+    collections::{growth_slack::GrowthSlack, map::HashMap},
 };
 use cranpose_ui::{ModifierNodeSlices, Point, Rect, SubcomposeLayoutNode};
 
@@ -141,12 +141,11 @@ pub(crate) struct DirtyRoom {
 }
 
 impl DirtyRoom {
-    // Gives back the room a burst of dirty nodes took, keeping room for a
-    // few.
+    // Gives back the room a burst of dirty nodes took.
     fn trim(&mut self) {
-        self.nodes.keep_room_at_rest();
-        self.order.keep_room_at_rest();
-        self.ancestors.keep_room_at_rest();
+        self.nodes.trim_growth_slack();
+        self.order.trim_growth_slack();
+        self.ancestors.trim_growth_slack();
     }
 }
 

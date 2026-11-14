@@ -1,6 +1,8 @@
 // The layer scenes of returned packets, which the next collect takes with
 // their lists.
 
+use cranpose_core::collections::growth_slack::GrowthSlack;
+
 use super::LayerScene;
 use crate::scene::{CompositorScene, SceneCapacityHint};
 
@@ -42,10 +44,11 @@ impl LayerSceneRecycler {
     }
 
     // Gives back at rest the room the kept scenes took: each dropped scene
-    // leaves its lists for the next on the thread, which keep room for a
-    // few draws.
+    // leaves its lists for the next on the thread, which give back their
+    // room too.
     pub(crate) fn trim(&mut self) {
         self.scenes.clear();
+        self.scenes.trim_growth_slack();
         crate::scene::trim_scene_buffer_pool();
     }
 }
