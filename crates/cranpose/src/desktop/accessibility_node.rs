@@ -34,6 +34,12 @@ pub(super) fn accesskit_node(element: &AccessibilityElement) -> Node {
     if let Some(title) = &element.details().pane_title {
         node.set_label(title.as_str());
     }
+    // AccessKit gives the author id to UI test tools as macOS's
+    // accessibilityIdentifier, Windows's AutomationId and AT-SPI's
+    // accessible id.
+    if let Some(tag) = &element.details().test_tag {
+        node.set_author_id(tag.name.as_str());
+    }
     node.set_bounds(Rect {
         x0: element.bounds.x as f64,
         y0: element.bounds.y as f64,

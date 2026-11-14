@@ -94,9 +94,20 @@ pub struct SemanticsConfiguration {
     /// smaller number comes first, and nodes left at zero keep the order the
     /// app laid them out in. Compose's `traversalIndex`.
     pub traversal_index: f32,
-    /// A name tests find this node by. Screen readers never receive it.
-    /// Compose's `testTag`.
+    /// A name tests find this node by. Screen readers never read it. UI test
+    /// tools find it in the platform's accessibility tree: the accessibility
+    /// identifier on iOS and macOS, the UI Automation `AutomationId` on
+    /// Windows, the AT-SPI accessible id on Linux, the `id` of the web
+    /// mirror's node, and on Android the view id resource name where
+    /// [`Self::test_tags_as_resource_id`] holds. Only a node a screen reader
+    /// reaches carries it there. Compose's `testTag`.
     pub test_tag: Option<String>,
+    /// Whether Android publishes the test tags of this node and of the nodes
+    /// under it as their view id resource names, where UI Automator's
+    /// `By.res` finds them. `None` takes the value of the nearest node above
+    /// that sets one, and a tree that sets none keeps the tags off. Compose's
+    /// `testTagsAsResourceId`.
+    pub test_tags_as_resource_id: Option<bool>,
     /// Compose's `liveRegion`. When set, a screen reader reads this node again
     /// whenever its text changes, without the user moving to it.
     pub live_region: Option<LiveRegionMode>,
@@ -173,6 +184,7 @@ impl Default for SemanticsConfiguration {
             password: false,
             traversal_index: 0.0,
             test_tag: None,
+            test_tags_as_resource_id: None,
             live_region: None,
             progress: None,
             set_progress: None,
@@ -418,6 +430,9 @@ impl SemanticsConfiguration {
         if let Some(live_region) = other.live_region {
             self.live_region = Some(live_region);
         }
+        self.test_tags_as_resource_id = other
+            .test_tags_as_resource_id
+            .or(self.test_tags_as_resource_id);
         self.merge_words(other);
         self.merge_actions(other);
         self.merge_ranges(other);

@@ -18,7 +18,7 @@ mod identity;
 #[path = "accessibility_window_bounds.rs"]
 mod window_bounds;
 pub(crate) use details::AccessibilityDetails;
-use details::fill_node_details;
+use details::{Inherited, fill_node_details};
 #[cfg(any(
     test,
     all(feature = "android", feature = "renderer-wgpu", target_os = "android")
@@ -550,16 +550,17 @@ where
     let Some(semantics_tree) = shell.semantics_tree() else {
         return projection.finish();
     };
-    project_node(semantics_tree.root(), false, None, None, &mut projection);
+    let root = semantics_tree.root();
+    project_node(root, false, Inherited::default(), None, &mut projection);
     let elements = projection.finish();
     #[cfg(debug_assertions)]
-    assert_same_elements(&elements, &project_semantics(semantics_tree.root(), bounds));
+    assert_same_elements(&elements, &project_semantics(root, bounds));
     elements
 }
 
 fn project_semantics(root: &SemanticsNode, bounds: &WindowBounds) -> Vec<AccessibilityElement> {
     let mut projection = Projection::new(Vec::new(), bounds);
-    project_node(root, false, None, None, &mut projection);
+    project_node(root, false, Inherited::default(), None, &mut projection);
     projection.finish()
 }
 
@@ -727,14 +728,14 @@ fn inspector_node(element: AccessibilityElement) -> InspectorNode {
 fn project_node(
     node: &SemanticsNode,
     suppress_static_text: bool,
-    inherited_live_region: Option<LiveRegionMode>,
+    inherited: Inherited,
     inherited_scroll: Option<NodeId>,
     out: &mut Projection,
 ) {
     if node.hidden {
         return;
     }
-    let live_region = node.details().live_region.or(inherited_live_region);
+    let inherited = inherited.at(node);
     let first_new = out.written;
     let clickable = node
         .actions
@@ -747,14 +748,14 @@ fn project_node(
     let container = is_container(node);
     if rect.is_visible() {
         let named = boundary || !suppress_static_text;
-        if !write_node_element(node, rect, named, container, clickable, live_region, out)
+        if !write_node_element(node, rect, named, container, clickable, inherited, out)
             && actionable
         {
             warn_unlabeled(node.node_id);
         }
     }
 
-    project_canvas_children(node, rect, live_region, out);
+    project_canvas_children(node, rect, inherited.live_region, out);
     for element in &mut out.written()[first_new..] {
         element.node_generation = node.node_generation;
         element.scroll_parent = inherited_scroll;
@@ -766,13 +767,7 @@ fn project_node(
     } else {
         inherited_scroll
     };
-    project_children(
-        node,
-        suppress_children,
-        live_region,
-        scroll_for_children,
-        out,
-    );
+    project_children(node, suppress_children, inherited, scroll_for_children, out);
 }
 
 fn write_node_element(
@@ -781,7 +776,7 @@ fn write_node_element(
     named: bool,
     container: bool,
     clickable: bool,
-    live_region: Option<LiveRegionMode>,
+    inherited: Inherited,
     out: &mut Projection,
 ) -> bool {
     let slot = out.next_slot();
@@ -795,7 +790,7 @@ fn write_node_element(
     if !labelled {
         label.clear();
     }
-    fill_node_element(slot, node, rect, label, clickable, live_region);
+    fill_node_element(slot, node, rect, label, clickable, inherited);
     out.commit();
     true
 }
@@ -831,7 +826,7 @@ pub(crate) fn checked_state(element: &AccessibilityElement) -> Option<Toggleable
 fn project_children(
     node: &SemanticsNode,
     suppress_static_text: bool,
-    live_region: Option<LiveRegionMode>,
+    inherited: Inherited,
     scroll_for_children: Option<NodeId>,
     out: &mut Projection,
 ) {
@@ -840,7 +835,7 @@ fn project_children(
         project_node(
             child,
             suppress_static_text,
-            live_region,
+            inherited,
             scroll_for_children,
             out,
         );
@@ -969,7 +964,7 @@ fn fill_node_element(
     rect: AccessibilityRect,
     label: String,
     clickable: bool,
-    live_region: Option<LiveRegionMode>,
+    inherited: Inherited,
 ) {
     let details = node.details();
     let role = if details.is_modal {
@@ -996,7 +991,7 @@ fn fill_node_element(
     );
     let mut element_details = spare.details;
     update_rare(&mut element_details, |held| {
-        fill_node_details(held, node, live_region);
+        fill_node_details(held, node, inherited);
     });
     *slot = AccessibilityElement {
         node_id: node.node_id,

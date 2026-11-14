@@ -4,7 +4,7 @@ use cranpose_ui::{
     SemanticsNode, SemanticsWidgetRole,
 };
 
-use super::{reuse_text, reuse_texts};
+use super::{reuse_string, reuse_text, reuse_texts};
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct AccessibilityDetails {
@@ -42,9 +42,37 @@ pub(crate) struct AccessibilityDetails {
     /// the element's `value`. A field that holds a secret publishes none.
     pub(crate) text_selection: Option<(usize, usize)>,
     pub(crate) multiline: bool,
-    // The name tests find the control by (`Modifier::test_tag`), which a
-    // platform publishes where its UI tests look for one.
-    pub(crate) test_tag: Option<String>,
+    pub(crate) test_tag: Option<TestTag>,
+}
+
+// The name tests find a control by (`Modifier::test_tag`). Each platform
+// publishes it where its UI test tools look for one.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct TestTag {
+    pub(crate) name: String,
+    // Compose's `testTagsAsResourceId` as the node or the nearest node above
+    // it sets it: Android publishes the tag as the view id resource name only
+    // when it holds.
+    pub(crate) as_resource_id: bool,
+}
+
+// What a node takes from the nodes above it, worked out for the node itself.
+#[derive(Clone, Copy, Default)]
+pub(super) struct Inherited {
+    pub(super) live_region: Option<LiveRegionMode>,
+    pub(super) test_tags_as_resource_id: bool,
+}
+
+impl Inherited {
+    pub(super) fn at(self, node: &SemanticsNode) -> Self {
+        let details = node.details();
+        Self {
+            live_region: details.live_region.or(self.live_region),
+            test_tags_as_resource_id: details
+                .test_tags_as_resource_id
+                .unwrap_or(self.test_tags_as_resource_id),
+        }
+    }
 }
 
 impl AccessibilityDetails {
@@ -89,7 +117,7 @@ impl RareProperties for AccessibilityDetails {
 pub(super) fn fill_node_details(
     held: &mut AccessibilityDetails,
     node: &SemanticsNode,
-    live_region: Option<LiveRegionMode>,
+    inherited: Inherited,
 ) {
     let details = node.details();
     *held = AccessibilityDetails {
@@ -112,7 +140,7 @@ pub(super) fn fill_node_details(
                 .iter()
                 .map(|action| action.label.as_str()),
         ),
-        live_region: live_region.or_else(|| {
+        live_region: inherited.live_region.or_else(|| {
             (node.widget_role == Some(SemanticsWidgetRole::Alert))
                 .then_some(LiveRegionMode::Assertive)
         }),
@@ -134,7 +162,10 @@ pub(super) fn fill_node_details(
             .filter(|_| details.editable_text && !details.password)
             .map(|range| (range.start, range.end)),
         multiline: details.multiline,
-        test_tag: reuse_text(held.test_tag.take(), details.test_tag.as_deref()),
+        test_tag: details.test_tag.as_deref().map(|name| TestTag {
+            name: reuse_string(held.test_tag.take().map_or_default(|tag| tag.name), name),
+            as_resource_id: inherited.test_tags_as_resource_id,
+        }),
     };
 }
 

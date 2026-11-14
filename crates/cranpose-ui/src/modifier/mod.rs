@@ -745,7 +745,7 @@ impl Modifier {
     }
 
     /// Names this component for tests, which find it by the name instead of its text or
-    /// position. On iOS it is the accessibility identifier. Screen readers never read it.
+    /// position. [`SemanticsConfiguration::test_tag`] lists where each platform publishes it.
     ///
     /// This is Compose's `Modifier.testTag(tag)`.
     pub fn test_tag(self, tag: impl Into<String>) -> Self {

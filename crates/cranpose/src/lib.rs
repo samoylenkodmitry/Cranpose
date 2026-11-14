@@ -87,6 +87,9 @@ mod app_launcher;
 pub mod framebuffer;
 #[cfg(feature = "preview")]
 pub mod preview;
+#[cfg(all(test, feature = "renderer-wgpu"))]
+#[path = "tests/tagged_controls.rs"]
+mod tagged_controls;
 #[cfg(feature = "watchos")]
 pub mod watchos;
 #[cfg(feature = "preview")]

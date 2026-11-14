@@ -24,7 +24,7 @@ pub(super) fn automation_identifier(
     element_id: i32,
 ) -> Cow<'_, str> {
     match &element.details().test_tag {
-        Some(tag) => Cow::Borrowed(tag),
+        Some(tag) => Cow::Borrowed(&tag.name),
         None => Cow::Owned(format!("cranpose-node-{element_id}")),
     }
 }

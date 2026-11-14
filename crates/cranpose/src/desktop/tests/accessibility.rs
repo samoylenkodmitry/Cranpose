@@ -943,3 +943,17 @@ fn the_description_ends_with_the_hint_after_the_state_and_the_error() {
         Some("double tap to choose")
     );
 }
+
+#[test]
+fn every_test_tag_is_the_author_id_ui_test_tools_find_the_control_by() {
+    let update = tree_update(&crate::tagged_controls::tagged_elements(), None, false);
+    for (label, tag) in crate::tagged_controls::TAGS {
+        let node = update
+            .nodes
+            .iter()
+            .map(|(_, node)| node)
+            .find(|node| node.label() == Some(label))
+            .unwrap_or_else(|| panic!("{label} is published"));
+        assert_eq!(node.author_id(), Some(tag), "{label}");
+    }
+}

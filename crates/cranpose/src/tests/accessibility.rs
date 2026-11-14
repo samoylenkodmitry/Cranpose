@@ -2113,7 +2113,7 @@ fn project_over(
 ) -> Vec<AccessibilityElement> {
     let bounds = WindowBounds::default();
     let mut projection = Projection::new(spare, &bounds);
-    project_node(root, false, None, None, &mut projection);
+    project_node(root, false, Inherited::default(), None, &mut projection);
     projection.finish()
 }
 
@@ -2232,7 +2232,7 @@ fn a_test_tag_reaches_no_screen_reader() {
         vec![pay, tag_only],
     );
 
-    let mut elements = project_test_tree(&root);
+    let elements = project_test_tree(&root);
     assert_eq!(
         elements
             .iter()
@@ -2242,16 +2242,17 @@ fn a_test_tag_reaches_no_screen_reader() {
         "a node with only a tag publishes nothing"
     );
     assert_eq!(
-        elements[0].details().test_tag.as_deref(),
+        elements[0]
+            .details()
+            .test_tag
+            .as_ref()
+            .map(|tag| tag.name.as_str()),
         Some("pay-button"),
         "the tag goes where the platform's UI tests look for it"
     );
-    for element in &mut elements {
-        element.update_details(|details| details.test_tag = None);
-    }
-    let spoken = format!("{elements:?}");
+    let spoken = spoken_line(&elements[0]);
     assert!(
-        !spoken.contains("pay-button") && !spoken.contains("spacer-tag"),
+        !spoken.contains("pay-button"),
         "a tag reached what a screen reader reads: {spoken}"
     );
 }

@@ -5,11 +5,11 @@ use crate::accessibility::AccessibilityDetails;
 
 /// The fields in one record, as `CranposeAccessibilityElement.read` in
 /// `CranposeActivity` reads them.
-const RECORD_FIELDS: usize = 42;
+const RECORD_FIELDS: usize = 43;
 
 /// Each field's kind in wire order: N a little-endian `i32`, F an `f32`, T
 /// UTF-8 text after its `u32` length, A a count of labels, then each.
-const FIELD_KINDS: &[u8; RECORD_FIELDS] = b"NNNNNNFFNTTTTNNNANNNFFFNNNNNNNNNTTNNTNNNNT";
+const FIELD_KINDS: &[u8; RECORD_FIELDS] = b"NNNNNNFFNTTTTNNNANNNFFFNNNNNNNNNTTNNTNNNNTT";
 
 /// Reads a payload the way the host does, field by field.
 struct PayloadReader<'a> {
@@ -421,11 +421,12 @@ fn records_carry_every_field_java_reads() {
                 "-1",
                 "-1",
                 "Pick one",
+                "",
             ]),
             strings(&[
                 "2", "2", "0", "0", "15", "15", "5", "5", "0", "Row", "", "", "", "-1", "-1", "1",
                 "", "0", "0", "0", "0", "0", "0", "0", "0", "0", "-1", "0", "0", "0", "-1", "-1",
-                "", "", "0", "-1", "", "0", "0", "-1", "-1", "",
+                "", "", "0", "-1", "", "0", "0", "-1", "-1", "", "",
             ]),
         ]
     );
@@ -766,7 +767,7 @@ fn the_record_carries_the_title_of_a_pane() {
 }
 
 #[test]
-fn the_record_carries_the_hint_last() {
+fn the_record_carries_the_hint_before_the_resource_name() {
     let mut picker = save_button(NodeId(8));
     picker
         .update_details(|details| details.hint_text = Some("double tap to choose a color".into()));
@@ -775,10 +776,10 @@ fn the_record_carries_the_hint_last() {
     let records: Vec<_> = payload.split('\n').collect();
 
     assert_eq!(
-        records[0].split('\t').nth(RECORD_FIELDS - 1),
+        records[0].split('\t').nth(RECORD_FIELDS - 2),
         Some("double tap to choose a color")
     );
-    assert_eq!(records[1].split('\t').nth(RECORD_FIELDS - 1), Some(""));
+    assert_eq!(records[1].split('\t').nth(RECORD_FIELDS - 2), Some(""));
 }
 
 #[test]
@@ -857,6 +858,26 @@ fn the_record_says_whether_a_list_takes_a_row_number() {
         records[1].split('\t').nth(38),
         Some("0"),
         "a plain button takes no row number"
+    );
+}
+
+// Compose's default leaves a tag out of the resource name; the nearest node
+// above that sets `test_tags_as_resource_id` decides.
+#[cfg(feature = "renderer-wgpu")]
+#[test]
+fn a_test_tag_is_the_resource_name_only_where_test_tags_as_resource_id_holds() {
+    let payload = encode_payload(&[], &crate::tagged_controls::tagged_elements(), 1.0);
+    let names: Vec<(String, String)> = fields(&payload)
+        .into_iter()
+        .map(|record| (record[9].clone(), record[RECORD_FIELDS - 1].clone()))
+        .collect();
+    assert_eq!(
+        names,
+        [
+            ("Pay".to_owned(), String::new()),
+            ("Save".to_owned(), "save-button".to_owned()),
+            ("Undo".to_owned(), String::new()),
+        ]
     );
 }
 
