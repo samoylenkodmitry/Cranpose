@@ -109,17 +109,17 @@ pub(crate) fn register_class() {
     }
 }
 
+pub(crate) fn winit_view(window: &dyn Window) -> Option<Retained<UIView>> {
+    let handle = window.window_handle().ok()?;
+    let RawWindowHandle::UiKit(uikit) = handle.as_raw() else {
+        return None;
+    };
+    unsafe { Retained::retain(uikit.ui_view.as_ptr().cast::<UIView>()) }
+}
+
 pub(crate) fn hold_window(window: Arc<dyn Window>) {
     super::host::hold_window(Arc::clone(&window));
-    let Ok(handle) = window.window_handle() else {
-        return;
-    };
-    let RawWindowHandle::UiKit(uikit) = handle.as_raw() else {
-        return;
-    };
-    let view: *mut UIView = uikit.ui_view.as_ptr().cast();
-    let ui_window = unsafe { (*view).window() };
-    let Some(ui_window) = ui_window else {
+    let Some(ui_window) = winit_view(&*window).and_then(|view| view.window()) else {
         return;
     };
     crate::thread_state::with(|state| *state.ios.window.borrow_mut() = Some(ui_window));

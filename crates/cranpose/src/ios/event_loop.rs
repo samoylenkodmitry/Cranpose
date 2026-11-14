@@ -548,7 +548,7 @@ impl<F: FnMut() + 'static> ApplicationHandler for IosApp<F> {
 
         shell.app_context().enter(super::clipboard::register);
         shell.app_context().enter(super::keyboard::register);
-        shell.app_context().enter(super::back_gesture::register);
+        super::back_gesture::register(&*window);
         shell.set_semantics_enabled(true);
         crate::accessibility::install_inspector(&mut shell, self.settings.developer_inspector);
         shell.set_safe_area(self.platform_env.safe_area());
