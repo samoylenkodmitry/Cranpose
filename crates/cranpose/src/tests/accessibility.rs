@@ -5,8 +5,8 @@ use std::{
 
 use cranpose_core::{NodeId, collections::map::HashMap};
 use cranpose_ui::{
-    CanvasSemanticsNode, SemanticsAction, SemanticsCallback, SemanticsCustomAction, SemanticsNode,
-    SemanticsRole, SemanticsWidgetRole,
+    CanvasSemanticsNode, ScrollAxisRange, SemanticsAction, SemanticsCallback,
+    SemanticsCustomAction, SemanticsDetails, SemanticsNode, SemanticsRole, SemanticsWidgetRole,
 };
 
 use super::*;
