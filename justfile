@@ -593,6 +593,13 @@ bench-app-check:
     cargo clippy --manifest-path benchmarks/compose-vs-cranpose/cranpose-app/Cargo.toml --all-targets -- -D warnings
     cargo test --manifest-path benchmarks/compose-vs-cranpose/cranpose-app/Cargo.toml
 
+# The shop app benchmark's Everbloom app (benchmarks/shopbench), a Cargo
+# project of its own: Everbloom.app for an iPhone, or for the Simulator with
+# target=aarch64-apple-ios-sim. CODESIGN_IDENTITY and PROVISIONING_PROFILE
+# sign it for a device.
+shopbench-ios target="aarch64-apple-ios":
+    benchmarks/shopbench/ios/build-app.sh {{target}}
+
 msrv-check:
     #!/usr/bin/env bash
     set -euo pipefail

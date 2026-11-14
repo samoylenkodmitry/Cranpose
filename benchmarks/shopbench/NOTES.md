@@ -3,11 +3,11 @@
 Decisions where the benchmark's prompt is silent, and what differs from it.
 
 - **Element names.** `Modifier::test_tag` names every element the runner
-  looks for. Cranpose's iOS host publishes a node's test tag as its
-  accessibility identifier, as Compose Multiplatform's iOS host does, so
-  XCUITest finds `best-seller-0` and the others. Containers that are not
-  accessibility elements (the scroll views) reach XCUITest through the host's
-  automation elements.
+  looks for. XCUITest finds them once Cranpose's iOS host publishes a node's
+  test tag as its accessibility identifier, as Compose Multiplatform's iOS
+  host does. The test-tag change brings that for every platform. Containers
+  that are not accessibility elements (the scroll views) reach XCUITest
+  through the host's automation elements.
 - **Tabs and stacks.** Home and Search each have a `NavController` with its
   own `NavHost`; Cart has one screen. Only the selected tab is composed. The
   back stacks, the view models of their screens and their saved scroll
