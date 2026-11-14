@@ -624,7 +624,7 @@ fn upload_frame(
         .execute_recorded_graph(device, queue, graph)
         .expect("the frame submits");
     store.finish_frame();
-    store.recall(Some(&execution.submission));
+    store.recall();
     (readbacks, execution.submission)
 }
 

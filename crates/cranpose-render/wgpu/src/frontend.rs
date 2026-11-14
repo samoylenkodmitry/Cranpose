@@ -9,8 +9,6 @@ use cranpose_render_common::{
 };
 use web_time::Instant;
 
-#[cfg(not(target_arch = "wasm32"))]
-use crate::frame_packet::PacketOverlap;
 use crate::{
     collect::{
         LayerMotion, LayerScene, LayerSceneRecycler, ShownRecord, collect_overlay, collect_root,
@@ -445,19 +443,6 @@ impl RendererFrontend {
         }
         if self.overlay_target.records() {
             self.dev_overlay.refresh_reach();
-        }
-    }
-
-    // Whether the next window packet, for the surface of `surface_epoch`,
-    // may go while others are in flight. A walk made whole by targets that
-    // hold no frame to build on waits for them, as one for a new surface
-    // does. A walk made whole by its damage goes with them.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn next_overlap(&self, surface_epoch: u64) -> PacketOverlap {
-        if surface_epoch != self.surface_epoch || self.uncull_next || !self.window.holds_packet() {
-            PacketOverlap::Alone
-        } else {
-            PacketOverlap::WithFramesInFlight
         }
     }
 

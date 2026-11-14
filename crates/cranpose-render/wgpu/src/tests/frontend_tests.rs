@@ -2,12 +2,7 @@ use cranpose_render_common::graph::ProjectiveTransform;
 use cranpose_ui_graphics::{GraphicsLayer, Rect};
 
 use super::*;
-use crate::{
-    WgpuTextSystem,
-    frame_packet::{FrameSceneStorage, HeldWindow},
-    target_state::TargetDrawn,
-    test_support::layer_node,
-};
+use crate::{WgpuTextSystem, frame_packet::FrameSceneStorage, test_support::layer_node};
 
 fn frontend() -> RendererFrontend {
     RendererFrontend::new(WgpuTextSystem::from_fonts(&[]).fonts().clone())
@@ -90,100 +85,4 @@ fn apply_returns_seeds_the_next_collect_capacity() {
         ..RenderReturns::default()
     });
     assert_eq!(frontend.root_scene_capacity, hint);
-}
-
-// What came back of `packet` with `outcome`, drawn whole into a target that
-// then holds it when it presented.
-#[cfg(not(target_arch = "wasm32"))]
-fn returned(packet: FramePacket, outcome: PresentOutcome) -> RenderReturns {
-    let presented = outcome == PresentOutcome::Presented;
-    RenderReturns {
-        frame_id: packet.frame_id,
-        target: presented.then_some(TargetDrawn {
-            damage: Damage::Full,
-            skipped: false,
-            knew_before: false,
-            unheld: true,
-            cleared: false,
-        }),
-        held: presented.then_some(HeldWindow {
-            oldest: packet.frame_id,
-            stand_ins: Damage::Part(DamageRects::default()),
-        }),
-        scene: Some(FrameSceneStorage {
-            root: packet.root,
-            overlay: packet.overlay,
-        }),
-        outcome,
-        ..RenderReturns::default()
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-#[test]
-fn a_walk_the_targets_make_whole_waits_for_the_frames_in_flight() {
-    let mut frontend = frontend();
-    frontend.scene.describe(&graph());
-    assert!(
-        matches!(frontend.next_overlap(0), PacketOverlap::Alone),
-        "a window's images hold nothing at its start"
-    );
-    let packet = frontend
-        .build_frame_packet(320, 240, 0, 0)
-        .expect("a graph collects into a packet");
-    frontend.apply_returns(returned(packet, PresentOutcome::Presented));
-    assert!(
-        matches!(frontend.next_overlap(0), PacketOverlap::WithFramesInFlight),
-        "a walk culled against the frame the images hold goes with others"
-    );
-
-    let packet = frontend
-        .build_frame_packet(320, 240, 0, 0)
-        .expect("a graph collects into a packet");
-    frontend.apply_returns(returned(
-        packet,
-        PresentOutcome::Cancelled(CancelReason::NeedsWhole),
-    ));
-    assert!(
-        matches!(frontend.next_overlap(0), PacketOverlap::Alone),
-        "the walk after a refusal draws whole, and waits for the frames in flight"
-    );
-    frontend
-        .build_frame_packet(320, 240, 0, 0)
-        .expect("a graph collects into a packet");
-    assert!(
-        matches!(frontend.next_overlap(0), PacketOverlap::WithFramesInFlight),
-        "the whole walk ends the wait"
-    );
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-#[test]
-fn a_walk_for_a_new_surface_waits_for_the_frames_in_flight() {
-    let mut frontend = frontend();
-    frontend.scene.describe(&graph());
-    let packet = frontend
-        .build_frame_packet(320, 240, 0, 0)
-        .expect("a graph collects into a packet");
-    frontend.apply_returns(returned(packet, PresentOutcome::Presented));
-    assert!(
-        matches!(frontend.next_overlap(0), PacketOverlap::WithFramesInFlight),
-        "the images hold the frame drawn into them"
-    );
-    assert!(
-        matches!(frontend.next_overlap(1), PacketOverlap::Alone),
-        "a resized or new surface hands out images that hold nothing the window drew"
-    );
-    let packet = frontend
-        .build_frame_packet(320, 240, 0, 1)
-        .expect("a graph collects into a packet");
-    assert!(
-        matches!(frontend.next_overlap(1), PacketOverlap::Alone),
-        "the frames wait until a frame drawn into the new images comes back"
-    );
-    frontend.apply_returns(returned(packet, PresentOutcome::Presented));
-    assert!(
-        matches!(frontend.next_overlap(1), PacketOverlap::WithFramesInFlight),
-        "the new images hold that frame"
-    );
 }

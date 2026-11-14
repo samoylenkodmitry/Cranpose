@@ -1,6 +1,6 @@
 use std::{
     sync::{
-        Arc, Mutex, PoisonError,
+        Arc, Mutex, OnceLock, PoisonError,
         atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering},
         mpsc::{Receiver, SyncSender, TryRecvError, TrySendError},
     },
@@ -9,8 +9,7 @@ use std::{
 
 use crate::{
     frame_packet::{
-        CancelReason, CaptureReply, FramePacket, FrameSceneStorage, PresentOutcome, PresentTimings,
-        RenderReturns,
+        CancelReason, FramePacket, FrameSceneStorage, PresentOutcome, PresentTimings, RenderReturns,
     },
     present_image::{PresentImage, TestSwapchain},
     render::{FrameOutput, FrameSubmit, GpuRenderer, GpuRendererInit},
@@ -22,13 +21,7 @@ pub(crate) type PresentClock = Arc<dyn Fn() -> i64 + Send + Sync>;
 
 pub(crate) type BoxedPresentObserver = Box<dyn crate::PresentObserver>;
 
-pub(crate) type SurfaceCall = Box<dyn FnOnce(Option<&wgpu::Surface<'static>>) + Send>;
-
 pub(crate) const CONTROL_ACK_TIMEOUT: Duration = Duration::from_secs(5);
-
-// A capture waits behind the frames before it, the pipelines its effects
-// build included.
-pub(crate) const CAPTURE_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub(crate) struct PresentRuntimeInit {
     pub(crate) gpu: GpuRendererInit,
@@ -36,51 +29,20 @@ pub(crate) struct PresentRuntimeInit {
     pub(crate) observer: Option<BoxedPresentObserver>,
 }
 
-#[expect(
-    clippy::large_enum_variant,
-    reason = "a capture carries its frame's packet inline, as a frame does"
-)]
 pub(crate) enum PresentControl {
-    // Nothing waits for it: packets sent after it run on the new surface,
-    // which first shows `background`.
+    // Nothing waits for it: packets sent after it run on the new surface.
     ReplaceSurface {
         surface: wgpu::Surface<'static>,
         config: wgpu::SurfaceConfiguration,
         surface_epoch: u64,
-        background: wgpu::Color,
     },
-    // `ack`, when given, hears once the surface has the new configuration.
     Reconfigure {
         config: wgpu::SurfaceConfiguration,
         surface_epoch: u64,
-        ack: Option<SyncSender<()>>,
+        ack: SyncSender<()>,
     },
-    // Whether the window shows nothing of the surface. While it does, the
-    // thread takes no image: a Metal drawable can stall a second then.
-    // `ack`, when given, hears once the frame in progress ended.
-    Occluded {
-        occluded: bool,
-        ack: Option<SyncSender<()>>,
-    },
-    // The renderer moves to a new device, the last one lost; the surface
-    // stays and is configured on the new device.
-    ReplaceDevice(Box<GpuRendererInit>),
-    // Draws `packet` into an image of `viewport` and hands its pixels back.
-    Capture {
-        packet: FramePacket,
-        viewport: (u32, u32),
-        reply: SyncSender<CaptureReply>,
-    },
-    // Runs a call with the thread's surface, `None` when it has none.
-    WithSurface(SurfaceCall),
-    // Hands the sizes of the renderer's CPU-side caches and scratch back
-    // through `reply`.
-    CpuAllocationStats {
-        reply: SyncSender<crate::DebugCpuAllocationStats>,
-    },
-    // Hands the surface back through `reply`; `None` when there was none.
-    TakeSurface {
-        reply: SyncSender<Option<wgpu::Surface<'static>>>,
+    DropSurface {
+        ack: SyncSender<()>,
     },
     // Draws the frames into a test target, a new surface of `surface_epoch`.
     #[doc(hidden)]
@@ -91,31 +53,13 @@ pub(crate) enum PresentControl {
         surface_epoch: u64,
         ack: SyncSender<()>,
     },
-    // Destroys the device between two frames and waits for its loss to be
-    // reported, as a robot's loss drill asks.
-    LoseDevice {
-        ack: SyncSender<()>,
-    },
     Shutdown,
 }
 
-impl PresentControl {
-    // Whether the control changes the surface or the device: an image a
-    // refused packet left undrawn goes back unshown first.
-    fn changes_surface(&self) -> bool {
-        matches!(
-            self,
-            Self::ReplaceSurface { .. }
-                | Self::Reconfigure { .. }
-                | Self::ReplaceDevice(_)
-                | Self::TakeSurface { .. }
-                | Self::AttachOffscreenTargetForTests { .. }
-                | Self::LoseDevice { .. }
-                | Self::Shutdown
-        )
-    }
-}
-
+#[expect(
+    clippy::large_enum_variant,
+    reason = "a frame's packet goes inline: a box would allocate each frame"
+)]
 pub(crate) enum PresentMsg {
     Control(PresentControl),
     Packet(FramePacket),
@@ -128,11 +72,9 @@ pub(crate) struct PresentStatus {
     /// Whether the last frame drew a placeholder for an effect whose
     /// pipelines compile.
     pub(crate) drew_placeholder: AtomicBool,
-    // The current renderer's compiler account, to tell whether pipelines a
+    // The renderer's compiler account, to tell whether pipelines a
     // placeholder waits for still compile.
-    pub(crate) landing: Mutex<Option<Arc<crate::pipeline_compiler::Landing>>>,
-    // Whether the pipeline cache file held an earlier launch's first screen.
-    pub(crate) first_screen_recorded: AtomicBool,
+    pub(crate) landing: OnceLock<Arc<crate::pipeline_compiler::Landing>>,
     pub(crate) presented_frames: AtomicU64,
     /// Frames handed back to the producer, whatever their outcome.
     pub(crate) returned_frames: AtomicU64,
@@ -154,13 +96,9 @@ impl PresentStatus {
             || self.landing_is(crate::pipeline_compiler::Landing::landed)
     }
 
-    // Whether the current renderer's compiler account says `ask`.
+    // Whether the renderer's compiler account says `ask`.
     pub(crate) fn landing_is(&self, ask: fn(&crate::pipeline_compiler::Landing) -> bool) -> bool {
-        self.landing
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .as_deref()
-            .is_some_and(ask)
+        self.landing.get().is_some_and(|landing| ask(landing))
     }
 }
 
@@ -203,8 +141,6 @@ pub(crate) struct PresentState {
     renderer_epoch: u64,
     surface_epoch: u64,
     waiting_packet: Option<FramePacket>,
-    occluded: bool,
-    background: wgpu::Color,
     returns_tx: SyncSender<RenderReturns>,
     status: Arc<PresentStatus>,
     waker: PresentWaker,
@@ -224,22 +160,31 @@ impl PresentState {
             clock,
             observer,
         } = init;
+        let device = Arc::clone(&gpu.device);
         let renderer_epoch = gpu.renderer_epoch;
-        let (gpu_renderer, submit) = Self::renderer(gpu, &status, &waker);
+        let submit = FrameSubmit::new(&gpu);
+        let gpu_renderer = GpuRenderer::new(gpu);
+        if let Some(landing) = gpu_renderer.pipelines.landing() {
+            status.landing.get_or_init(|| landing);
+        }
+        // The landing tells the app the frame is due: the present thread
+        // alone writes its account.
+        gpu_renderer.pipelines.wake_on_landing(Box::new({
+            let waker = Arc::clone(&waker);
+            move || waker()
+        }));
         Self {
-            device: Arc::clone(&gpu_renderer.device),
-            renderer_epoch,
             gpu_renderer,
             submit,
+            device,
             undrawn: None,
             surface: None,
             config: None,
             offscreen_target: None,
             test_swapchain: None,
+            renderer_epoch,
             surface_epoch: 0,
             waiting_packet: None,
-            occluded: false,
-            background: crate::render::CLEAR_COLOR,
             returns_tx,
             status,
             waker,
@@ -248,33 +193,9 @@ impl PresentState {
         }
     }
 
-    // The renderer `gpu` describes, its compiler account in `status`.
-    fn renderer(
-        gpu: GpuRendererInit,
-        status: &PresentStatus,
-        waker: &PresentWaker,
-    ) -> (GpuRenderer, FrameSubmit) {
-        let submit = FrameSubmit::new(&gpu);
-        let gpu_renderer = GpuRenderer::new(gpu);
-        *status
-            .landing
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner) = gpu_renderer.pipelines.landing();
-        status
-            .first_screen_recorded
-            .store(gpu_renderer.first_screen_recorded(), Ordering::Relaxed);
-        // The landing tells the app the frame is due: the present thread
-        // alone writes its account.
-        gpu_renderer.pipelines.wake_on_landing(Box::new({
-            let waker = Arc::clone(waker);
-            move || waker()
-        }));
-        (gpu_renderer, submit)
-    }
-
     pub(crate) fn run(mut self, rx: Receiver<PresentMsg>) {
         loop {
-            let msg = if self.waiting_packet.is_some() && !self.occluded {
+            let msg = if self.waiting_packet.is_some() {
                 match rx.try_recv() {
                     Ok(msg) => Some(msg),
                     Err(TryRecvError::Empty) => None,
@@ -301,14 +222,8 @@ impl PresentState {
         match msg {
             PresentMsg::Control(control) => self.handle_control(control),
             PresentMsg::Packet(packet) => {
-                // While occluded, a newer packet stands in for the one that
-                // waits, which goes back undrawn.
-                match self.waiting_packet.take() {
-                    Some(older) if self.occluded => {
-                        self.cancel_packet(older, CancelReason::SurfaceUnavailable);
-                    }
-                    Some(older) => self.consume_packet(older),
-                    None => {}
+                if self.waiting_packet.is_some() {
+                    self.consume_waiting();
                 }
                 self.waiting_packet = Some(packet);
                 true
@@ -321,27 +236,22 @@ impl PresentState {
     }
 
     pub(crate) fn consume_waiting(&mut self) {
-        if self.occluded {
-            return;
-        }
         if let Some(packet) = self.waiting_packet.take() {
             self.consume_packet(packet);
         }
     }
 
     fn handle_control(&mut self, control: PresentControl) -> bool {
-        if control.changes_surface() {
-            self.undrawn = None;
-        }
+        // Each control changes the surface: an image a refused packet left
+        // undrawn goes back unshown first.
+        self.undrawn = None;
         match control {
             PresentControl::ReplaceSurface {
                 surface,
                 config,
                 surface_epoch,
-                background,
             } => {
                 self.surface_epoch = surface_epoch;
-                self.background = background;
                 self.cancel_waiting(CancelReason::SurfaceEpoch);
                 surface.configure(&self.device, &config);
                 self.surface = Some(surface);
@@ -361,37 +271,13 @@ impl PresentState {
                     self.offscreen_target = Some((config.width, config.height));
                 }
                 self.config = Some(config);
-                if let Some(ack) = ack {
-                    answer(&ack, ());
-                }
+                answer(&ack, ());
             }
-            PresentControl::Occluded { occluded, ack } => {
-                self.occluded = occluded;
-                if let Some(ack) = ack {
-                    answer(&ack, ());
-                }
-            }
-            PresentControl::ReplaceDevice(gpu) => self.replace_device(*gpu),
-            PresentControl::Capture {
-                packet,
-                viewport,
-                reply,
-            } => self.capture(packet, viewport, &reply),
-            PresentControl::WithSurface(call) => call(self.surface.as_ref()),
-            PresentControl::CpuAllocationStats { reply } => {
-                answer(&reply, self.gpu_renderer.debug_cpu_allocation_stats());
-            }
-            PresentControl::TakeSurface { reply } => {
+            PresentControl::DropSurface { ack } => {
                 self.cancel_waiting(CancelReason::SurfaceUnavailable);
+                self.surface = None;
                 self.config = None;
                 self.offscreen_target = None;
-                answer(&reply, self.surface.take());
-            }
-            PresentControl::LoseDevice { ack } => {
-                self.device.destroy();
-                if let Err(error) = self.device.poll(wgpu::PollType::wait_indefinitely()) {
-                    log::debug!("[present-runtime] the lost device polled: {error}");
-                }
                 answer(&ack, ());
             }
             PresentControl::AttachOffscreenTargetForTests {
@@ -411,47 +297,6 @@ impl PresentState {
             }
         }
         true
-    }
-
-    // Moves the renderer to the new device of `gpu`: the surface is
-    // configured on it, and frames built for the renderer before go back.
-    fn replace_device(&mut self, gpu: GpuRendererInit) {
-        self.renderer_epoch = gpu.renderer_epoch;
-        self.cancel_waiting(CancelReason::RendererEpoch);
-        (self.gpu_renderer, self.submit) = Self::renderer(gpu, &self.status, &self.waker);
-        self.device = Arc::clone(&self.gpu_renderer.device);
-        if let (Some(surface), Some(config)) = (&self.surface, &self.config) {
-            surface.configure(&self.device, config);
-        }
-        self.present_placeholder_frame();
-    }
-
-    // Draws `packet` into an image of `viewport` and hands its pixels back
-    // through `reply`, with the renderer's account of the frame.
-    fn capture(
-        &mut self,
-        packet: FramePacket,
-        viewport: (u32, u32),
-        reply: &SyncSender<CaptureReply>,
-    ) {
-        let mut returns = RenderReturns::default();
-        let pixels = self.gpu_renderer.render_to_rgba_pixels(
-            &mut self.submit,
-            viewport,
-            packet,
-            self.surface_epoch,
-            &mut returns,
-        );
-        self.record_status();
-        let stats = self.gpu_renderer.last_frame_stats();
-        answer(
-            reply,
-            CaptureReply {
-                returns,
-                pixels,
-                stats,
-            },
-        );
     }
 
     // Draws the frames into a test target of `size` that hands out `images`
@@ -590,17 +435,16 @@ impl PresentState {
     }
 
     fn present_placeholder_frame(&mut self) {
-        if self.surface.is_some() && !self.occluded {
+        if self.surface.is_some() {
             if let Some(frame) = self.acquire_with_one_retry() {
                 let view = frame.texture.create_view(&wgpu::TextureViewDescriptor {
                     format: Some(self.gpu_renderer.surface_format().remove_srgb_suffix()),
                     ..Default::default()
                 });
-                crate::initial_present::clear_to_background(
+                crate::initial_present::clear_to_default_background(
                     &self.device,
                     &self.gpu_renderer.queue,
                     &view,
-                    self.background,
                 );
                 self.gpu_renderer.queue.present(frame);
                 self.status
@@ -736,9 +580,7 @@ impl PresentState {
         self.finish_returns(returns);
     }
 
-    // Writes the renderer's account of its last frame where the producer
-    // reads it.
-    fn record_status(&self) {
+    fn finish_returns(&mut self, returns: RenderReturns) {
         *self
             .status
             .last_frame_stats
@@ -751,10 +593,6 @@ impl PresentState {
             self.gpu_renderer.pipelines.drew_placeholder.get(),
             Ordering::Relaxed,
         );
-    }
-
-    fn finish_returns(&mut self, returns: RenderReturns) {
-        self.record_status();
         if returns.outcome == PresentOutcome::Presented {
             self.status.presented_frames.fetch_add(1, Ordering::Relaxed);
         }

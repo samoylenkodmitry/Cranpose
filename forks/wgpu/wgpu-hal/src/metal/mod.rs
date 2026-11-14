@@ -25,7 +25,6 @@ mod command;
 mod conv;
 mod device;
 mod library_from_metallib;
-mod present_queue;
 mod surface;
 mod time;
 
@@ -645,7 +644,6 @@ pub struct Surface {
     render_layer: Mutex<Retained<CAMetalLayer>>,
     swapchain_format: RwLock<Option<wgt::TextureFormat>>,
     extent: RwLock<wgt::Extent3d>,
-    present_queue: present_queue::PresentQueue,
 }
 
 unsafe impl Send for Surface {}
@@ -811,10 +809,9 @@ impl crate::Queue for Queue {
     }
     unsafe fn present(
         &self,
-        surface: &Surface,
+        _surface: &Surface,
         texture: SurfaceTexture,
     ) -> Result<(), crate::SurfaceError> {
-        surface.present_queue.presenting(&texture.drawable);
         autoreleasepool(|_| {
             // We do not bother adjusting `command_buffer_created_not_submitted`
             // because we immediately commit this buffer.

@@ -69,18 +69,8 @@ impl App {
             return;
         }
         for _ in 0..times {
-            // A present thread loses its device between two frames: a
-            // device destroyed while a frame records panics in wgpu.
-            let present_thread = self
-                .app
-                .as_mut()
-                .and_then(|app| app.renderer().present_thread());
-            match (present_thread, &self.gpu_context) {
-                (Some(thread), _) => {
-                    thread.lose_device();
-                }
-                (None, Some(context)) => crate::gpu_loss::lose_device(&context.gpu.device),
-                (None, None) => {}
+            if let Some(context) = &self.gpu_context {
+                crate::gpu_loss::lose_device(&context.gpu.device);
             }
             self.recover_lost_device(event_loop);
         }
@@ -112,32 +102,10 @@ impl App {
             match request_primary_device(&context.gpu.adapter, requirements) {
                 Ok(opened) => (context.gpu.adapter.clone(), opened),
                 Err(_) => {
-                    // A surface on the present thread stays there: the
-                    // thread chooses the adapter for it.
-                    let adapter = match &self.surface {
-                        Some(super::WindowPresent::OnLoop(surface)) => {
-                            crate::wgpu_surface::request_adapter(
-                                &context.gpu.instance,
-                                Some(surface),
-                            )
-                        }
-                        _ => {
-                            let instance = context.gpu.instance.clone();
-                            app.renderer()
-                                .present_thread()
-                                .and_then(|thread| {
-                                    thread.with_surface(move |surface| {
-                                        crate::wgpu_surface::request_adapter(&instance, surface)
-                                    })
-                                })
-                                .unwrap_or_else(|| {
-                                    crate::wgpu_surface::request_adapter(
-                                        &context.gpu.instance,
-                                        None,
-                                    )
-                                })
-                        }
-                    }
+                    let adapter = crate::wgpu_surface::request_adapter(
+                        &context.gpu.instance,
+                        self.surface.as_ref(),
+                    )
                     .map_err(LaunchError::NoAdapter)?;
                     let opened = request_primary_device(&adapter, requirements)
                         .map_err(LaunchError::DeviceCreate)?;
@@ -153,25 +121,26 @@ impl App {
         context.adapter_backend = backend;
         let handler = self.device_loss.handler(&self.event_proxy);
         let gpu = &context.gpu;
-        let hand_over = |renderer: &mut cranpose_render_wgpu::WgpuRenderer,
-                         present: &super::WindowPresent,
-                         config: &wgpu::SurfaceConfiguration| {
+        let hand_over = |renderer: &mut cranpose_render_wgpu::WgpuRenderer, format| {
             renderer.set_device_lost_handler(Arc::clone(&handler));
-            let target = cranpose_render_wgpu::GpuTarget {
+            renderer.init_gpu(cranpose_render_wgpu::GpuTarget {
                 device: Arc::clone(&gpu.device),
                 queue: Arc::clone(&gpu.queue),
-                surface_format: crate::surface_format::display_surface_view_format(config.format),
+                surface_format: crate::surface_format::display_surface_view_format(format),
                 adapter_backend: backend,
                 adapter_downlevel: downlevel,
-            };
-            present.replace_device(renderer, target, config);
+            });
         };
-        if let (Some(present), Some(config)) = (&self.surface, &self.surface_config) {
-            hand_over(app.renderer(), present, config);
+        if let (Some(surface), Some(config)) = (&self.surface, &self.surface_config) {
+            surface.configure(&gpu.device, config);
+            hand_over(app.renderer(), config.format);
         }
         for native in self.native_windows.values() {
+            native
+                .surface
+                .configure(&gpu.device, &native.surface_config);
             if let Some(mut surface) = super::native_surface(app, native) {
-                hand_over(surface.renderer(), &native.present, &native.surface_config);
+                hand_over(surface.renderer(), native.surface_config.format);
             }
         }
         if let Some(content) = &self.device_loss.content {
