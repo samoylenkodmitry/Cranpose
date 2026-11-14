@@ -4,6 +4,7 @@ use cranpose_services::{BackEdge, BackEvent, BackGesture, push_back_gesture, pus
 use objc2::{MainThreadMarker, MainThreadOnly, define_class, msg_send, rc::Retained, sel};
 use objc2_foundation::{NSObject, NSObjectProtocol};
 use objc2_ui_kit::{UIGestureRecognizerState, UIRectEdge, UIScreenEdgePanGestureRecognizer};
+use winit::window::Window;
 
 define_class!(
     #[unsafe(super(NSObject))]
@@ -68,14 +69,12 @@ impl BackGestureTarget {
     }
 }
 
-pub(crate) fn register() {
+pub(crate) fn register(window: &dyn Window) {
     let Some(mtm) = MainThreadMarker::new() else {
         return;
     };
-    let Some(root) = super::file_picker::root_view_controller(mtm) else {
-        return;
-    };
-    let Some(root_view) = root.view() else {
+    let Some(root_view) = super::scene::winit_view(window) else {
+        log::warn!("the iOS back swipe is off: the window has no UIKit view");
         return;
     };
     let target = BackGestureTarget::new(mtm);
