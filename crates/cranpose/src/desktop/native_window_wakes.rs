@@ -20,9 +20,8 @@ pub(super) struct NativeWindowWakes {
     pub(super) next_event: Option<Instant>,
 }
 
-// Asks each native window of `app` that owes a frame, waits for no frame cap
-// at `now` and has room for a frame for a redraw, and gives when the loop
-// wakes for them next;
+// Asks each native window of `app` that owes a frame and waits for no frame
+// cap at `now` for a redraw, and gives when the loop wakes for them next;
 // their positions are polled next at `position_poll_at`.
 pub(super) fn native_window_wakes(
     app: &mut AppShell<WgpuRenderer>,
@@ -48,7 +47,7 @@ pub(super) fn native_window_wakes(
         if !native.presentable() {
             continue;
         }
-        let Some(mut surface) = native_surface(app, native) else {
+        let Some(surface) = native_surface(app, native) else {
             continue;
         };
 
@@ -67,9 +66,7 @@ pub(super) fn native_window_wakes(
         let waiting_for_frame_cap =
             needs_redraw && next_frame_time.is_some_and(|deadline| deadline > now);
 
-        // A window whose present thread holds every frame it takes waits
-        // for the wake of a hand back.
-        if needs_redraw && !waiting_for_frame_cap && surface.renderer().has_frame_credit() {
+        if needs_redraw && !waiting_for_frame_cap {
             native.window.request_redraw();
         }
         if let Some(next_poll_at) = native.active_drag.and_then(|active_drag| {

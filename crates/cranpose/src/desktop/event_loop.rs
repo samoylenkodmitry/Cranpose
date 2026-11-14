@@ -181,8 +181,6 @@ mod device_loss;
 mod native_frame;
 #[path = "native_window_wakes.rs"]
 mod native_window_wakes;
-#[path = "present_thread.rs"]
-mod present_thread;
 #[path = "primary_frame.rs"]
 mod primary_frame;
 #[path = "primary_surface.rs"]
@@ -201,8 +199,6 @@ use primary_surface::{
 use robot_driver::{RobotController, RobotTurn};
 use robot_seat::RobotSeat;
 
-use crate::window_present::{PresentSite, WindowPresent};
-
 struct DesktopGpuContext {
     gpu: crate::GpuContext,
     adapter_backend: wgpu::Backend,
@@ -216,7 +212,7 @@ struct NativeWindowSurface {
     events: NativeWindowEvents,
     state: Option<WindowState>,
     window: Arc<dyn Window>,
-    present: WindowPresent,
+    surface: wgpu::Surface<'static>,
     surface_config: wgpu::SurfaceConfiguration,
     surface_caps: wgpu::SurfaceCapabilities,
     surface_dirty: bool,
@@ -447,7 +443,7 @@ struct App {
     platform_env: Rc<crate::platform_env::PlatformEnvironment>,
     content: Option<Box<dyn FnMut()>>,
     window: Option<Arc<dyn Window>>,
-    surface: Option<WindowPresent>,
+    surface: Option<wgpu::Surface<'static>>,
     surface_config: Option<wgpu::SurfaceConfiguration>,
     surface_caps: Option<wgpu::SurfaceCapabilities>,
     app: Option<AppShell<WgpuRenderer>>,
@@ -626,14 +622,20 @@ impl App {
         }
         self.applied_frame_pacing_mode = mode;
 
-        let Some(app) = &mut self.app else {
+        if let Some(app) = &mut self.app {
+            app.set_frame_pacing_mode(mode);
+        }
+        let Some(device) = self
+            .gpu_context
+            .as_ref()
+            .map(|context| Arc::clone(&context.gpu.device))
+        else {
             return;
         };
-        app.set_frame_pacing_mode(mode);
-        if let (Some(present), Some(surface_config)) = (&self.surface, &mut self.surface_config) {
+        if let (Some(surface), Some(surface_config)) = (&self.surface, &mut self.surface_config) {
             apply_frame_pacing_mode(
-                app.renderer(),
-                present,
+                &device,
+                surface,
                 surface_config,
                 self.surface_caps.as_ref(),
                 mode,
@@ -646,16 +648,14 @@ impl App {
         }
 
         for native in self.native_windows.values_mut() {
-            if let Some(mut surface) = native_surface(app, native) {
-                apply_frame_pacing_mode(
-                    surface.renderer(),
-                    &native.present,
-                    &mut native.surface_config,
-                    Some(&native.surface_caps),
-                    mode,
-                    native.vsync_interval,
-                );
-            }
+            apply_frame_pacing_mode(
+                &device,
+                &native.surface,
+                &mut native.surface_config,
+                Some(&native.surface_caps),
+                mode,
+                native.vsync_interval,
+            );
             native.last_frame_start_time = None;
             native.window.request_redraw();
         }
@@ -1573,10 +1573,7 @@ impl App {
             monitor_refresh_interval(&window),
             options.transparent,
         )?;
-        let present_site = PresentSite::of_this_device();
-        if present_site == PresentSite::Loop {
-            native_frame::show_native_surface_cleared(context, &surface, &surface_config, options);
-        }
+        native_frame::show_native_surface_cleared(context, &surface, &surface_config, options);
         trace_native_window_timing!(
             "{} configure {}ms alpha={:?}",
             options.title,
@@ -1589,22 +1586,14 @@ impl App {
             context.text_system.clone(),
             scale_factor,
             self.device_loss.handler(&self.event_proxy),
-        );
-        renderer.set_transparent_background(options.transparent);
-        let present = WindowPresent::start(
-            present_site,
-            &mut renderer,
             GpuTarget::on_adapter(
                 &context.gpu.adapter,
                 Arc::clone(&context.gpu.device),
                 Arc::clone(&context.gpu.queue),
                 crate::surface_format::display_surface_view_format(surface_config.format),
             ),
-            surface,
-            &surface_config,
-            window.as_ref(),
-            &self.event_proxy,
         );
+        renderer.set_transparent_background(options.transparent);
         trace_native_window_timing!(
             "{} renderer {}ms",
             options.title,
@@ -1650,7 +1639,7 @@ impl App {
             events: request.events.clone(),
             state: request.state,
             window,
-            present,
+            surface,
             surface_config,
             surface_caps,
             surface_dirty: true,
@@ -1785,22 +1774,20 @@ impl App {
             return;
         }
         let viewport = surface_logical_viewport_size(width, height, native.window.scale_factor());
-        let Some(mut surface) = native_surface(app, native) else {
+        let Some(device) = app.renderer().try_device() else {
+            log::error!("native surface resize skipped: GPU renderer is not initialized");
             return;
         };
         native.surface_config.width = width;
         native.surface_config.height = height;
-        if !native
-            .present
-            .configure(surface.renderer(), &native.surface_config)
-        {
-            return;
-        }
+        native.surface.configure(device, &native.surface_config);
         native
             .root
             .set_size(cranpose_ui::Size::new(viewport.0, viewport.1));
-        surface.set_buffer_size(width, height);
-        surface.set_viewport(viewport.0, viewport.1);
+        if let Some(mut surface) = native_surface(app, native) {
+            surface.set_buffer_size(width, height);
+            surface.set_viewport(viewport.0, viewport.1);
+        }
         native.surface_dirty = surface_reconfigure_requires_redraw(width, height);
     }
 
@@ -2953,7 +2940,6 @@ impl App {
     }
 
     fn observe_presence(&mut self, window_id: WinitWindowId, event: &WindowEvent) {
-        self.hand_over_occlusion(window_id, event);
         if let Some(native) = self.native_windows.get_mut(&window_id) {
             match event {
                 WindowEvent::Occluded(occluded) => native.occluded = *occluded,
@@ -2980,8 +2966,8 @@ impl App {
 }
 
 fn apply_frame_pacing_mode(
-    renderer: &mut WgpuRenderer,
-    present: &WindowPresent,
+    device: &wgpu::Device,
+    surface: &wgpu::Surface<'static>,
     surface_config: &mut wgpu::SurfaceConfiguration,
     surface_caps: Option<&wgpu::SurfaceCapabilities>,
     mode: FramePacingMode,
@@ -3003,7 +2989,7 @@ fn apply_frame_pacing_mode(
     }
     surface_config.present_mode = present_mode;
     surface_config.desired_maximum_frame_latency = frame_latency;
-    present.configure(renderer, surface_config);
+    surface.configure(device, surface_config);
     log_desktop_present_mode(mode, present_mode, caps);
 }
 
@@ -3533,10 +3519,12 @@ fn wgpu_renderer(
     text_system: WgpuTextSystem,
     scale_factor: f64,
     on_device_lost: cranpose_render_wgpu::DeviceLostHandler,
+    target: GpuTarget,
 ) -> WgpuRenderer {
     let mut renderer = WgpuRenderer::with_text_system(text_system);
     renderer.set_root_scale(scale_factor as f32);
     renderer.set_device_lost_handler(on_device_lost);
+    renderer.init_gpu(target);
     renderer
 }
 
@@ -4810,16 +4798,6 @@ impl cranpose_app_shell::PlatformTextInputHandler for DesktopTextInput {
 
 impl Drop for App {
     fn drop(&mut self) {
-        // A present thread holds its surface, which holds the window: each
-        // thread ends while the loop still holds the window.
-        if let Some(app) = &mut self.app {
-            app.renderer().shutdown_present_runtime();
-            self.native_windows.values().for_each(|native| {
-                if let Some(mut surface) = native_surface(app, native) {
-                    surface.renderer().shutdown_present_runtime();
-                }
-            });
-        }
         cranpose_services::advance_lifecycle(cranpose_services::LifecycleState::Destroyed);
     }
 }
@@ -4905,17 +4883,14 @@ impl ApplicationHandler for App {
 
         let device = Arc::new(device);
         let queue = Arc::new(queue);
-        let present_site = PresentSite::of_this_device();
-        if present_site == PresentSite::Loop {
-            surface.configure(&device, &surface_config);
-            present_initial_placeholder_frame(
-                &surface,
-                &device,
-                &queue,
-                surface_format,
-                "primary window initial present",
-            );
-        }
+        surface.configure(&device, &surface_config);
+        present_initial_placeholder_frame(
+            &surface,
+            &device,
+            &queue,
+            surface_format,
+            "primary window initial present",
+        );
 
         // The first composition reads the window's theme. Without it the
         // theme is detected by running a system command (`defaults` on
@@ -4927,24 +4902,16 @@ impl ApplicationHandler for App {
 
         let text_system = WgpuTextSystem::from_text_fonts(self.settings.resolve_fonts());
         let initial_scale = window.scale_factor();
-        let mut renderer = wgpu_renderer(
+        let renderer = wgpu_renderer(
             text_system.clone(),
             initial_scale,
             self.device_loss.handler(&self.event_proxy),
-        );
-        let present = WindowPresent::start(
-            present_site,
-            &mut renderer,
             GpuTarget::on_adapter(
                 &adapter,
                 Arc::clone(&device),
                 Arc::clone(&queue),
                 crate::surface_format::display_surface_view_format(surface_format),
             ),
-            surface,
-            &surface_config,
-            window.as_ref(),
-            &self.event_proxy,
         );
 
         let viewport = primary_viewport_for_surface_size(
@@ -5026,7 +4993,7 @@ impl ApplicationHandler for App {
             primary_launch_requires_initial_redraw(self.primary_visible(), self.settings.headless);
 
         self.window = Some(window);
-        self.surface = Some(present);
+        self.surface = Some(surface);
         self.surface_config = Some(surface_config);
         self.surface_caps = Some(surface_caps);
         self.app = Some(app);
@@ -5076,9 +5043,6 @@ impl ApplicationHandler for App {
             return;
         }
         self.relay_primary_held_press(event_loop, &event);
-        if matches!(event, WindowEvent::RedrawRequested) {
-            self.drain_primary_present_returns();
-        }
         let primary_frames_enabled = self.primary_frames_enabled();
         let Some(window) = &self.window else {
             return;
@@ -5108,13 +5072,13 @@ impl ApplicationHandler for App {
         let Some(platform) = &mut self.platform else {
             return;
         };
-        let Some(present) = &self.surface else { return };
+        let Some(surface) = &self.surface else { return };
         let Some(surface_config) = &mut self.surface_config else {
             return;
         };
         let mut primary = PrimarySurface {
             window,
-            present,
+            surface,
             config: surface_config,
             viewport_override: primary_viewport_override,
         };
@@ -5340,9 +5304,7 @@ impl ApplicationHandler for App {
             WindowEvent::RedrawRequested => {
                 record_pacing_event(|diag| &mut diag.redraw_events);
                 self.wakes.redraw_taken(&mut self.primary_redraw_pending);
-                if defer_window_redraw(event_loop, primary_frames_enabled, frame_cap_deadline)
-                    || !app.renderer().has_frame_credit()
-                {
+                if defer_window_redraw(event_loop, primary_frames_enabled, frame_cap_deadline) {
                     return;
                 }
                 log::trace!(target: "cranpose::input", "desktop redraw requested");
@@ -5414,7 +5376,6 @@ impl ApplicationHandler for App {
         }
         self.serve_platform_before_waiting(event_loop);
         self.serve_app_requests();
-        self.drain_present_returns();
         let now = Instant::now();
         if self.poll_native_window_global_primary_press() {
             self.refresh_native_window_requests();
@@ -5467,14 +5428,10 @@ impl ApplicationHandler for App {
             self.last_redraw_empty,
         );
         let frame_schedule = app.frame_schedule();
-        // The present thread holds every frame it takes: the next one waits
-        // for the wake of its hand back, not on a deadline or a poll.
-        let waits_for_present = !app.renderer().has_frame_credit();
-        let has_active_animations =
-            frames_enabled && app.has_active_animations() && !waits_for_present;
+        let has_active_animations = frames_enabled && app.has_active_animations();
         let needs_update = frame_schedule.needs_update;
-        let needs_redraw = primary_frames_enabled
-            && (frame_schedule.needs_frame || app.frame_owed() || self.primary_owes_frame());
+        let needs_redraw =
+            primary_frames_enabled && (frame_schedule.needs_frame || app.frame_owed());
         if needs_redraw {
             log::trace!(
                 target: "cranpose::input",
@@ -5483,8 +5440,8 @@ impl ApplicationHandler for App {
         }
         let next_frame_time = last_frame_start_time
             .and_then(|started_at| frame_interval.map(|interval| started_at + interval));
-        let waiting_for_frame_cap = needs_redraw
-            && (waits_for_present || next_frame_time.is_some_and(|deadline| deadline > now));
+        let waiting_for_frame_cap =
+            needs_redraw && next_frame_time.is_some_and(|deadline| deadline > now);
         let primary_next_event_time = primary_frames_enabled
             .then_some(frame_schedule.next_deadline)
             .flatten();
@@ -5530,7 +5487,6 @@ impl ApplicationHandler for App {
             LoopControlInputs {
                 robot_needs_poll,
                 free_running: primary_frames_enabled
-                    && !waits_for_present
                     && free_running_frame(
                         frame_interval,
                         needs_redraw,
@@ -5540,7 +5496,7 @@ impl ApplicationHandler for App {
                 drag_poll_deadline: native.drag_poll,
                 position_poll_deadline: native.position_poll,
                 frame_cap_deadline: [
-                    next_frame_time.filter(|deadline| waiting_for_frame_cap && *deadline > now),
+                    next_frame_time.filter(|_| waiting_for_frame_cap),
                     native.frame_cap,
                 ]
                 .into_iter()

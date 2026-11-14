@@ -23,7 +23,6 @@ use crate::{
         PresentStep, SurfaceFrame, current_surface_texture, present_initial_placeholder_frame,
         surface_present_step,
     },
-    window_present::{PresentSite, WindowPresent},
     winit_pointer::{
         is_primary_pointer_button, other_mouse_button, pointer_source_from_button,
         pointer_source_from_winit,
@@ -32,9 +31,10 @@ use crate::{
 };
 
 struct GpuResources {
-    present: WindowPresent,
+    surface: wgpu::Surface<'static>,
     /// Where a lost device's successor opens.
     adapter: wgpu::Adapter,
+    device: Arc<wgpu::Device>,
     config: wgpu::SurfaceConfiguration,
     surface_dirty: bool,
 }
@@ -221,16 +221,18 @@ impl<F: FnMut() + 'static> IosApp<F> {
         let (Some(gpu), Some(shell)) = (self.gpu.as_mut(), self.shell.as_mut()) else {
             return;
         };
+        let device = Arc::new(device);
+        gpu.surface.configure(&device, &gpu.config);
         let loss_proxy = self.event_proxy.clone();
         let renderer = shell.renderer();
         renderer.set_device_lost_handler(self.device_loss.handler(move || loss_proxy.wake_up()));
-        let target = cranpose_render_wgpu::GpuTarget::on_adapter(
+        renderer.init_gpu(cranpose_render_wgpu::GpuTarget::on_adapter(
             &gpu.adapter,
-            Arc::new(device),
+            Arc::clone(&device),
             Arc::new(queue),
             crate::surface_format::display_surface_view_format(gpu.config.format),
-        );
-        gpu.present.replace_device(renderer, target, &gpu.config);
+        ));
+        gpu.device = device;
         gpu.surface_dirty = true;
         shell.mark_dirty();
         log::warn!("[gpu-device] opened a new device after the last one was lost");
@@ -264,7 +266,7 @@ impl<F: FnMut() + 'static> IosApp<F> {
         if let (Some(gpu), Some(shell)) = (self.gpu.as_mut(), self.shell.as_mut()) {
             gpu.config.width = width;
             gpu.config.height = height;
-            gpu.present.configure(shell.renderer(), &gpu.config);
+            gpu.surface.configure(&gpu.device, &gpu.config);
             gpu.surface_dirty = true;
 
             let density = (scale_factor as f32).max(f32::EPSILON);
@@ -300,7 +302,6 @@ impl<F: FnMut() + 'static> IosApp<F> {
     }
 
     fn render(&mut self) -> Redraw {
-        let frame_started_at = Instant::now();
         #[cfg(feature = "webview")]
         self.webviews.dispatch(&self.platform_env.native_views);
         self.follow_keyboard();
@@ -319,15 +320,9 @@ impl<F: FnMut() + 'static> IosApp<F> {
             accessibility.drain_focus(shell);
         }
 
-        self.drain_present_returns();
         let (Some(gpu), Some(shell)) = (self.gpu.as_mut(), self.shell.as_mut()) else {
             return Redraw::Settled;
         };
-        // The present thread holds every frame it takes: it wakes the loop
-        // as it hands one back.
-        if !shell.renderer().has_frame_credit() {
-            return Redraw::Settled;
-        }
         for op in super::keyboard::take_ime_ops() {
             match op {
                 super::keyboard::ImeOp::Replace(start, end, text) => {
@@ -351,7 +346,6 @@ impl<F: FnMut() + 'static> IosApp<F> {
 
         let dirty_before = gpu.surface_dirty;
         let update_result = shell.update();
-        let after_update = Instant::now();
         #[cfg(feature = "webview")]
         crate::wry_webview::sync(
             &mut self.webviews,
@@ -382,29 +376,8 @@ impl<F: FnMut() + 'static> IosApp<F> {
         ) else {
             return Redraw::Settled;
         };
-        self.present_frame((frame_started_at, after_update))
-    }
 
-    // Draws the frame the shell holds into the surface's next image and
-    // presents it, or hands it to the present thread to do that. The frame
-    // started at `times.0` and its update ended at `times.1`.
-    fn present_frame(&mut self, times: (Instant, Instant)) -> Redraw {
-        let (Some(gpu), Some(shell)) = (self.gpu.as_mut(), self.shell.as_mut()) else {
-            return Redraw::Settled;
-        };
-        let WindowPresent::OnLoop(surface) = &gpu.present else {
-            if !gpu.present.publish(shell.renderer(), &gpu.config, times) {
-                return Redraw::Settled;
-            }
-            // The present thread holds the frame of an app off the screen
-            // until it comes back: no further frame is owed till then.
-            if gpu.present.occluded() {
-                return Redraw::Settled;
-            }
-            gpu.surface_dirty = false;
-            return Redraw::Presented;
-        };
-        match current_surface_texture(surface, "ios") {
+        match current_surface_texture(&gpu.surface, "ios") {
             SurfaceFrame::Ready(frame) => {
                 let size = shell.buffer_size();
                 if let Err(error) = crate::wgpu_surface::render_surface_frame(
@@ -422,7 +395,7 @@ impl<F: FnMut() + 'static> IosApp<F> {
                 Redraw::Presented
             }
             SurfaceFrame::Reconfigure => {
-                gpu.present.configure(shell.renderer(), &gpu.config);
+                gpu.surface.configure(&gpu.device, &gpu.config);
                 gpu.surface_dirty = true;
                 shell.mark_dirty();
                 Redraw::Owed
@@ -433,73 +406,6 @@ impl<F: FnMut() + 'static> IosApp<F> {
                 Redraw::Owed
             }
         }
-    }
-
-    // Folds the frames the present thread handed back into the renderer,
-    // which frees their room. A frame it refused leaves the surface owing
-    // one.
-    fn drain_present_returns(&mut self) {
-        let (Some(gpu), Some(shell)) = (self.gpu.as_mut(), self.shell.as_mut()) else {
-            return;
-        };
-        let returns = gpu.present.drain(shell.renderer());
-        gpu.surface_dirty |= returns.redraw || returns.unavailable;
-        // The renderer lowers the next frame from the scene it holds: a
-        // refused frame owes a frame, not a new scene.
-        if returns.redraw
-            && let Some(window) = &self.window
-        {
-            window.request_redraw();
-        }
-        if returns.presented.is_some() || returns.shown {
-            self.device_loss.presented();
-            self.device_loss_drill.presented();
-        }
-    }
-
-    // Starts the renderer on `device` of `adapter`, with its frames
-    // presenting on `surface` of `window`, configured as `config`: on a
-    // thread of its own when the device has the cores for it.
-    fn start_renderer(
-        &self,
-        window: &Arc<dyn Window>,
-        surface: wgpu::Surface<'static>,
-        adapter: &wgpu::Adapter,
-        (device, queue): (wgpu::Device, wgpu::Queue),
-        config: &wgpu::SurfaceConfiguration,
-    ) -> (WgpuRenderer, WindowPresent) {
-        let device = Arc::new(device);
-        let queue = Arc::new(queue);
-        let present_site = PresentSite::of_this_device();
-        if present_site == PresentSite::Loop {
-            surface.configure(&device, config);
-            present_initial_placeholder_frame(
-                &surface,
-                &device,
-                &queue,
-                config.format,
-                "ios initial present",
-            );
-        }
-        let fonts = self.settings.resolve_fonts();
-        let mut renderer = WgpuRenderer::with_text_fonts(fonts);
-        let loss_proxy = self.event_proxy.clone();
-        renderer.set_device_lost_handler(self.device_loss.handler(move || loss_proxy.wake_up()));
-        let present = WindowPresent::start(
-            present_site,
-            &mut renderer,
-            cranpose_render_wgpu::GpuTarget::on_adapter(
-                adapter,
-                device,
-                queue,
-                crate::surface_format::display_surface_view_format(config.format),
-            ),
-            surface,
-            config,
-            window.as_ref(),
-            &self.event_proxy,
-        );
-        (renderer, present)
     }
 
     fn redraw(&mut self) {
@@ -524,14 +430,9 @@ impl<F: FnMut() + 'static> IosApp<F> {
 
 impl<F: FnMut() + 'static> ApplicationHandler for IosApp<F> {
     fn resumed(&mut self, _event_loop: &dyn ActiveEventLoop) {
-        if let Some(window) = &self.window {
-            window.request_redraw();
-        }
         cranpose_services::advance_lifecycle(cranpose_services::LifecycleState::Resumed);
     }
 
-    // An inactive app stays on the screen, under Control Center or an alert,
-    // and keeps drawing: the background starts with the window's occlusion.
     fn suspended(&mut self, _event_loop: &dyn ActiveEventLoop) {
         cranpose_services::advance_lifecycle(cranpose_services::LifecycleState::Stopped);
     }
@@ -601,12 +502,32 @@ impl<F: FnMut() + 'static> ApplicationHandler for IosApp<F> {
             }
         };
 
+        let device = Arc::new(device);
+        let queue = Arc::new(queue);
+        surface.configure(&device, &config);
+        present_initial_placeholder_frame(
+            &surface,
+            &device,
+            &queue,
+            config.format,
+            "ios initial present",
+        );
+
         let scale_factor = window.scale_factor();
         let density = (scale_factor as f32).max(f32::EPSILON);
         self.platform.set_scale_factor(scale_factor);
         self.refresh_environment(&window);
-        let (renderer, present) =
-            self.start_renderer(&window, surface, &adapter, (device, queue), &config);
+
+        let fonts = self.settings.resolve_fonts();
+        let mut renderer = WgpuRenderer::with_text_fonts(fonts);
+        let loss_proxy = self.event_proxy.clone();
+        renderer.set_device_lost_handler(self.device_loss.handler(move || loss_proxy.wake_up()));
+        renderer.init_gpu(cranpose_render_wgpu::GpuTarget::on_adapter(
+            &adapter,
+            Arc::clone(&device),
+            Arc::clone(&queue),
+            crate::surface_format::display_surface_view_format(config.format),
+        ));
 
         let Some(content) = self.content.take() else {
             self.abort(event_loop, LaunchError::ContentUnavailable);
@@ -649,8 +570,9 @@ impl<F: FnMut() + 'static> ApplicationHandler for IosApp<F> {
         super::keyboard::set_wake(Box::new(move || keyboard_proxy.wake_up()));
 
         self.gpu = Some(GpuResources {
-            present,
+            surface,
             adapter,
+            device,
             config,
             surface_dirty: true,
         });
@@ -725,11 +647,6 @@ impl<F: FnMut() + 'static> ApplicationHandler for IosApp<F> {
                 self.redraw();
                 self.schedule_wake(event_loop);
             }
-            WindowEvent::Occluded(_) => {
-                if let (Some(gpu), Some(shell)) = (self.gpu.as_mut(), self.shell.as_mut()) {
-                    gpu.present.observe_occlusion(shell.renderer(), &event);
-                }
-            }
             WindowEvent::CloseRequested => {
                 event_loop.exit();
             }
@@ -740,11 +657,6 @@ impl<F: FnMut() + 'static> ApplicationHandler for IosApp<F> {
 
 impl<F: FnMut() + 'static> Drop for IosApp<F> {
     fn drop(&mut self) {
-        // The present thread holds the surface, which holds the window: the
-        // thread ends while the app still holds the window.
-        if let Some(shell) = self.shell.as_mut() {
-            shell.renderer().shutdown_present_runtime();
-        }
         cranpose_services::advance_lifecycle(cranpose_services::LifecycleState::Destroyed);
     }
 }

@@ -1,13 +1,12 @@
-// How many frames a producer hands the present thread at once: two while
-// the window's images hold a frame to build on, one while a frame draws
-// whole for images that hold none.
+// How many frames a producer hands the present thread at once, and the
+// frames that go while another is in flight.
 
 use cranpose_render_common::{
     Renderer,
     graph::{LayerNode, ProjectiveTransform, RenderNode},
 };
 use cranpose_render_wgpu::{
-    CancelReason, InlinePresentRuntime, PresentOutcome, PublishOutcome, TestImages, WgpuRenderer,
+    InlinePresentRuntime, PresentOutcome, PublishOutcome, TestImages, WgpuRenderer,
 };
 use cranpose_ui_graphics::{
     Color, GraphicsLayer, RUNTIME_SHADER_PRELUDE_WGSL, Rect, RenderEffect, RuntimeShader,
@@ -16,8 +15,7 @@ use cranpose_ui_graphics::{
 
 use crate::{
     present_runtime_contract::{
-        HEIGHT, WIDTH, direct_graph, drain_outcomes, gpu_target, publish,
-        replace_device_then_publish, shadowed_child_graph, surface_config, threaded_parts,
+        HEIGHT, WIDTH, direct_graph, drain_outcomes, publish, shadowed_child_graph, threaded_parts,
     },
     shared_test_support, support,
 };
@@ -53,16 +51,13 @@ fn attach(renderer: &mut WgpuRenderer, runtime: &mut InlinePresentRuntime, image
     ack.try_recv().expect("the test swapchain is attached");
 }
 
-// Draws changing frames until the images hold a frame to build on, as a
-// window's do past its start, so a frame goes while another is in flight.
-// That holds once two frames in a row went while the images held one and
-// drew with every pipeline: the pipelines land on the background compiler
-// whenever they do, and a frame drawn whole while a stand-in may show leaves
-// its image holding nothing. Leaves no frame in flight and the shadowed
-// child described, so a frame of the direct graph draws next.
+// Draws changing frames until two frames in a row drew with every pipeline:
+// the pipelines land on the background compiler whenever they do. Leaves no
+// frame in flight and the shadowed child described, so a frame of the
+// direct graph draws next.
 fn hold_frames(renderer: &mut WgpuRenderer, runtime: &mut InlinePresentRuntime) {
     let graphs = [direct_graph(), shadowed_child_graph()];
-    let mut held = 0;
+    let mut settled_frames = 0;
     for frame in 0.. {
         renderer.scene_mut().describe(&graphs[frame % graphs.len()]);
         assert_eq!(
@@ -70,63 +65,20 @@ fn hold_frames(renderer: &mut WgpuRenderer, runtime: &mut InlinePresentRuntime) 
             PublishOutcome::Published,
             "with no frame in flight every frame goes"
         );
-        let overlaps = renderer.has_frame_credit();
         runtime.pump();
         drain_outcomes(renderer);
         let settled = renderer
             .last_frame_stats()
             .is_some_and(|stats| support::pipelines_settled(&stats));
-        held = if overlaps && settled { held + 1 } else { 0 };
-        if held >= 2 && frame % graphs.len() == 1 {
+        settled_frames = if settled { settled_frames + 1 } else { 0 };
+        if settled_frames >= 2 && frame % graphs.len() == 1 {
             return;
         }
         if !settled {
             support::wait_for_background_compiler_idle();
         }
-        assert!(frame < 64, "the images never held a frame to build on");
+        assert!(frame < 64, "the pipelines never settled");
     }
-}
-
-// Images that hold nothing take the frames through the composition target,
-// which keeps them: only the window's first frame, which no target holds a
-// frame for, draws whole and waits for the frame in flight.
-#[test]
-fn a_window_first_frame_goes_alone() {
-    let Some((_lock, mut renderer, mut runtime)) = attached("whole frames", TestImages::Fresh)
-    else {
-        return;
-    };
-    renderer.scene_mut().describe(&direct_graph());
-    assert_eq!(
-        renderer.publish_frame(WIDTH, HEIGHT),
-        PublishOutcome::Published
-    );
-    assert!(
-        !renderer.has_frame_credit(),
-        "the first frame draws whole, and the next waits for it: one scene then holds every \
-         whole frame"
-    );
-    assert_eq!(
-        renderer.publish_frame(WIDTH, HEIGHT),
-        PublishOutcome::NoCredit
-    );
-    assert_eq!(
-        renderer.last_published_frame_id(),
-        1,
-        "a frame that waits is not built"
-    );
-    runtime.pump();
-    assert_eq!(
-        drain_outcomes(&mut renderer),
-        vec![(1, PresentOutcome::Presented)]
-    );
-    assert!(renderer.has_frame_credit(), "with none in flight it goes");
-    renderer.scene_mut().describe(&shadowed_child_graph());
-    publish(&mut renderer);
-    assert!(
-        renderer.has_frame_credit(),
-        "the composition target holds the first frame: the next goes while one is in flight"
-    );
 }
 
 #[test]
@@ -220,128 +172,6 @@ fn a_returned_frame_frees_a_credit_it_reports_until_drained() {
     assert!(
         !renderer.frame_credit_returned(),
         "a drained return is no longer reported"
-    );
-}
-
-#[test]
-fn a_resize_waits_for_nothing_and_the_frames_after_it_draw_at_the_new_size() {
-    let Some((_lock, mut renderer, mut runtime)) = attached("resize", TestImages::Kept(3)) else {
-        return;
-    };
-    hold_frames(&mut renderer, &mut runtime);
-    let first = renderer.last_published_frame_id() + 1;
-    renderer.scene_mut().describe(&direct_graph());
-    publish(&mut renderer);
-
-    // Nothing pumps the inline runtime here: a resize that waited for the
-    // present thread would not return.
-    assert!(
-        renderer
-            .present_thread()
-            .is_some_and(|thread| thread.resize(surface_config(WIDTH * 2, HEIGHT * 2))),
-        "the resize reaches the present thread"
-    );
-    assert!(
-        !renderer.has_frame_credit(),
-        "the resized surface's images hold nothing the window drew, so its first frame draws \
-         whole and waits for the frame in flight"
-    );
-    runtime.pump();
-    assert_eq!(
-        drain_outcomes(&mut renderer),
-        vec![(first, PresentOutcome::Cancelled(CancelReason::SurfaceEpoch))],
-        "the frame built for the old size is refused"
-    );
-    assert_eq!(
-        renderer.publish_frame(WIDTH * 2, HEIGHT * 2),
-        PublishOutcome::Published,
-        "with no frame in flight the frame for the new size goes"
-    );
-    runtime.pump();
-    assert_eq!(
-        drain_outcomes(&mut renderer),
-        vec![(first + 1, PresentOutcome::Presented)],
-        "the frame for the new size draws"
-    );
-}
-
-#[test]
-fn an_occluded_window_holds_the_newest_frame_and_draws_it_once_shown() {
-    let Some((_lock, mut renderer, mut runtime)) = attached("occlusion", TestImages::Kept(3))
-    else {
-        return;
-    };
-    hold_frames(&mut renderer, &mut runtime);
-    let first = renderer.last_published_frame_id() + 1;
-    renderer.scene_mut().describe(&direct_graph());
-
-    assert!(
-        renderer
-            .present_thread()
-            .is_some_and(|thread| thread.set_occluded(true))
-    );
-    publish(&mut renderer);
-    runtime.pump();
-    assert!(
-        drain_outcomes(&mut renderer).is_empty(),
-        "an occluded window draws nothing"
-    );
-    renderer.scene_mut().describe(&shadowed_child_graph());
-    publish(&mut renderer);
-    runtime.pump();
-    assert_eq!(
-        drain_outcomes(&mut renderer),
-        vec![(
-            first,
-            PresentOutcome::Cancelled(CancelReason::SurfaceUnavailable)
-        )],
-        "a newer frame stands in for the one held back"
-    );
-
-    assert!(
-        renderer
-            .present_thread()
-            .is_some_and(|thread| thread.set_occluded(false))
-    );
-    runtime.pump();
-    assert_eq!(
-        drain_outcomes(&mut renderer),
-        vec![(first + 1, PresentOutcome::Presented)],
-        "the held frame draws once the window shows the surface"
-    );
-}
-
-#[test]
-fn a_new_device_takes_over_the_present_thread_and_refuses_older_frames() {
-    let Some((_lock, mut renderer, mut runtime)) =
-        attached("device replacement", TestImages::Kept(3))
-    else {
-        return;
-    };
-    let replacement = match gpu_target(wgpu::TextureFormat::Bgra8UnormSrgb) {
-        Ok(target) => target,
-        Err(err) => {
-            eprintln!("skipping device replacement: no second device: {err}");
-            return;
-        }
-    };
-    hold_frames(&mut renderer, &mut runtime);
-    let first = renderer.last_published_frame_id() + 1;
-    renderer.scene_mut().describe(&direct_graph());
-    publish(&mut renderer);
-
-    replace_device_then_publish(&mut renderer, replacement);
-    runtime.pump();
-    assert_eq!(
-        drain_outcomes(&mut renderer),
-        vec![
-            (
-                first,
-                PresentOutcome::Cancelled(CancelReason::RendererEpoch)
-            ),
-            (first + 1, PresentOutcome::Presented),
-        ],
-        "the frame built for the old device is refused and the next draws on the new one"
     );
 }
 

@@ -4,11 +4,11 @@ use cranpose_app_shell::AppShell;
 use cranpose_render_wgpu::WgpuRenderer;
 
 use super::{
-    App, DesktopGpuContext, NativeWindowSurface, WindowPresent, log_desktop_frame_telemetry,
-    native_surface, native_window_redraw_held_while_hidden, native_window_timing_enabled,
+    App, DesktopGpuContext, NativeWindowSurface, log_desktop_frame_telemetry, native_surface,
+    native_window_redraw_held_while_hidden, native_window_timing_enabled,
     native_window_trace_enabled, note_native_window_presented, pace_after_empty_redraw,
-    present_thread::log_presented_frame, presented_frame_anchor, print_native_window_timing,
-    print_native_window_trace, should_chain_no_vsync_redraw, surface_reconfigure_requires_redraw,
+    presented_frame_anchor, print_native_window_timing, print_native_window_trace,
+    should_chain_no_vsync_redraw, surface_reconfigure_requires_redraw,
     update_app_with_native_window_registry,
 };
 use crate::{
@@ -19,8 +19,8 @@ use crate::{
     },
 };
 
-// Configures a native window's `surface` with `config` on the loop's
-// thread and shows the window's background on it until its first frame.
+// Configures a native window's `surface` with `config` and shows the
+// window's background on it until its first frame.
 pub(super) fn show_native_surface_cleared(
     context: &DesktopGpuContext,
     surface: &wgpu::Surface<'static>,
@@ -47,20 +47,15 @@ pub(super) fn show_native_surface_cleared(
     reason = "native window frames in their module"
 )]
 impl App {
-    // Updates `app` and draws the frame of `native` it owes, on the loop's
-    // thread or on the window's present thread. True when a frame went.
+    // Updates `app`, then takes the next image of the surface `native`
+    // holds, draws the frame it owes into it and presents it. True when a
+    // frame went.
     pub(super) fn redraw_native_window(
         app: &mut AppShell<WgpuRenderer>,
         native: &mut NativeWindowSurface,
         registry: &Rc<native_window::NativeWindowRegistry>,
     ) -> bool {
         if native_window_redraw_held_while_hidden(native.presentable()) {
-            return false;
-        }
-        Self::drain_native_present_returns(app, native);
-        if !native_surface(app, native)
-            .is_some_and(|mut surface| surface.renderer().has_frame_credit())
-        {
             return false;
         }
         let frame_started_at = Instant::now();
@@ -80,47 +75,10 @@ impl App {
         if present != PresentStep::Present {
             return false;
         }
-        let times = (frame_started_at, after_update);
-        if matches!(native.present, WindowPresent::OnPresentThread { .. }) {
-            // Wayland asks for the frame callback before the surface commits.
-            native.window.pre_present_notify();
-            let published =
-                native
-                    .present
-                    .publish(surface.renderer(), &native.surface_config, times);
-            // The present thread holds the frame of a window the window
-            // server shows none of: the next waits a frame interval, as
-            // after a loop's surface gave no image.
-            if published && native.present.occluded() {
-                pace_after_empty_redraw(
-                    &mut native.last_frame_start_time,
-                    &mut native.last_redraw_empty,
-                    frame_started_at,
-                    false,
-                );
-            } else if published {
-                native.surface_dirty = false;
-                native.last_frame_start_time = Some(frame_started_at);
-            }
-            return published;
-        }
         native.surface_dirty = true;
-        Self::present_native_frame_on_loop(app, native, times)
-    }
 
-    // Takes the next image of the surface `native` holds, draws the frame
-    // into it and presents it. The frame started at `times.0` and its
-    // update ended at `times.1`.
-    fn present_native_frame_on_loop(
-        app: &mut AppShell<WgpuRenderer>,
-        native: &mut NativeWindowSurface,
-        (frame_started_at, after_update): (Instant, Instant),
-    ) -> bool {
-        let WindowPresent::OnLoop(loop_surface) = &native.present else {
-            return false;
-        };
         let acquire_started_at = Instant::now();
-        let output = match current_surface_texture(loop_surface, "native window") {
+        let output = match current_surface_texture(&native.surface, "native window") {
             SurfaceFrame::Ready(output) => output,
             SurfaceFrame::Reconfigure => {
                 trace_native_window!("redraw surface outdated key={:?}", native.key);
@@ -192,27 +150,5 @@ impl App {
             native.window.request_redraw();
         }
         true
-    }
-
-    // Folds the frames the present thread of `native` handed back into its
-    // renderer, which frees their room. A frame the thread refused leaves
-    // the surface owing one.
-    pub(super) fn drain_native_present_returns(
-        app: &mut AppShell<WgpuRenderer>,
-        native: &mut NativeWindowSurface,
-    ) {
-        if !matches!(native.present, WindowPresent::OnPresentThread { .. }) {
-            return;
-        }
-        let Some(mut surface) = native_surface(app, native) else {
-            return;
-        };
-        let returns = native.present.drain(surface.renderer());
-        native.surface_dirty |= returns.redraw || returns.unavailable;
-        if let Some(frame) = returns.presented {
-            log_presented_frame(&frame, "native");
-            note_native_window_presented(native.state, true);
-            app.record_presented_frame(frame.started_at, frame.after_render);
-        }
     }
 }

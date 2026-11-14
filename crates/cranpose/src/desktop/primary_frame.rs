@@ -7,11 +7,11 @@ use std::{
 use winit::event_loop::ActiveEventLoop;
 
 use super::{
-    App, PrimarySurface, SurfaceFrame, WindowPresent, current_surface_texture,
-    headless_requested_viewport, log_desktop_frame_telemetry, native_window_trace_enabled,
-    next_frame_anchor, pace_after_empty_redraw, presented_frame_anchor,
-    primary_declaration_host_needs_direct_update, print_native_window_trace, record_pacing_event,
-    request_redraw_once, should_chain_no_vsync_redraw, surface_reconfigure_requires_redraw,
+    App, PrimarySurface, SurfaceFrame, current_surface_texture, headless_requested_viewport,
+    log_desktop_frame_telemetry, native_window_trace_enabled, next_frame_anchor,
+    pace_after_empty_redraw, presented_frame_anchor, primary_declaration_host_needs_direct_update,
+    print_native_window_trace, record_pacing_event, request_redraw_once,
+    should_chain_no_vsync_redraw, surface_reconfigure_requires_redraw,
     update_declaration_host_frame,
 };
 
@@ -21,18 +21,17 @@ use super::{
 )]
 impl App {
     // Takes the primary window's next image, draws the frame into it and
-    // presents it, or hands the frame to the present thread to do that.
-    // The frame started at `frame_started_at` and its update ended at
-    // `after_update`. `Break` when the redraw ends without the work that
-    // follows a frame: the surface needs a new configuration, gives no
-    // image or the draw failed.
+    // presents it. The frame started at `frame_started_at` and its update
+    // ended at `after_update`. `Break` when the redraw ends without the
+    // work that follows a frame: the surface needs a new configuration,
+    // gives no image or the draw failed.
     pub(super) fn present_primary_frame(
         &mut self,
         (frame_started_at, after_update): (Instant, Instant),
         frame_interval: Option<Duration>,
     ) -> ControlFlow<()> {
         let viewport_override = headless_requested_viewport(&self.settings);
-        let (Some(app), Some(window), Some(present), Some(config)) = (
+        let (Some(app), Some(window), Some(surface), Some(config)) = (
             self.app.as_mut(),
             self.window.as_ref(),
             self.surface.as_ref(),
@@ -40,18 +39,15 @@ impl App {
         ) else {
             return ControlFlow::Break(());
         };
-        let WindowPresent::OnLoop(surface) = present else {
-            return self.publish_primary_frame((frame_started_at, after_update), frame_interval);
-        };
         let mut primary = PrimarySurface {
             window,
-            present,
+            surface,
             config,
             viewport_override,
         };
         self.primary_surface_dirty = true;
         let acquire_started_at = Instant::now();
-        let output = match current_surface_texture(surface, "primary window") {
+        let output = match current_surface_texture(primary.surface, "primary window") {
             SurfaceFrame::Ready(output) => output,
             SurfaceFrame::Reconfigure => {
                 let size = window.surface_size();
@@ -110,31 +106,23 @@ impl App {
             frame_interval,
             after_acquire.duration_since(acquire_started_at),
         ));
+        #[cfg(target_os = "macos")]
+        self.application_menu.frame_presented();
+        #[cfg(target_os = "macos")]
+        super::reveal_staged_primary(
+            &mut self.primary_staged,
+            self.primary_shown
+                .load(std::sync::atomic::Ordering::Relaxed),
+            window.as_ref(),
+        );
+        self.device_loss.presented();
+        self.robot.note_presented();
         if !self.robot.drives()
             && should_chain_no_vsync_redraw(frame_interval, app.frame_schedule().needs_frame)
         {
             request_redraw_once(window, &mut self.primary_redraw_pending);
         }
-        self.primary_frame_shown();
         ControlFlow::Continue(())
-    }
-
-    // What follows a frame of the primary window that reached the screen.
-    pub(super) fn primary_frame_shown(&mut self) {
-        #[cfg(target_os = "macos")]
-        {
-            self.application_menu.frame_presented();
-            if let Some(window) = &self.window {
-                super::reveal_staged_primary(
-                    &mut self.primary_staged,
-                    self.primary_shown
-                        .load(std::sync::atomic::Ordering::Relaxed),
-                    window.as_ref(),
-                );
-            }
-        }
-        self.device_loss.presented();
-        self.robot.note_presented();
     }
 
     pub(super) fn handle_primary_frame_requested(&mut self, event_loop: &dyn ActiveEventLoop) {

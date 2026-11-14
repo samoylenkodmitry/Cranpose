@@ -8,14 +8,11 @@ use std::sync::{
 };
 
 use crate::{
-    frame_packet::{
-        CancelReason, CaptureReply, FramePacket, MAX_FRAMES_IN_FLIGHT, PacketOverlap, RenderReturns,
-    },
+    frame_packet::{FramePacket, MAX_FRAMES_IN_FLIGHT, RenderReturns},
     present_runtime::{
-        CAPTURE_TIMEOUT, CONTROL_ACK_TIMEOUT, PresentControl, PresentMsg, PresentRuntimeInit,
-        PresentState, PresentStatus, PresentWaker,
+        CONTROL_ACK_TIMEOUT, PresentControl, PresentMsg, PresentRuntimeInit, PresentState,
+        PresentStatus, PresentWaker,
     },
-    render::GpuRenderer,
 };
 
 pub(crate) struct PresentHandle {
@@ -82,11 +79,8 @@ impl PresentHandle {
         &self.status
     }
 
-    pub(crate) fn has_credit(&self, overlap: PacketOverlap) -> bool {
-        match overlap {
-            PacketOverlap::WithFramesInFlight => self.outstanding < MAX_FRAMES_IN_FLIGHT,
-            PacketOverlap::Alone => self.outstanding == 0,
-        }
+    pub(crate) fn has_credit(&self) -> bool {
+        self.outstanding < MAX_FRAMES_IN_FLIGHT
     }
 
     /// Whether the present thread has handed back a frame that
@@ -96,10 +90,7 @@ impl PresentHandle {
     }
 
     pub(crate) fn publish(&mut self, packet: FramePacket) -> Result<(), Box<FramePacket>> {
-        debug_assert!(
-            self.has_credit(PacketOverlap::WithFramesInFlight),
-            "publish without credit"
-        );
+        debug_assert!(self.has_credit(), "publish without credit");
         match self.msg_tx.send(PresentMsg::Packet(packet)) {
             Ok(()) => {
                 self.outstanding += 1;
@@ -125,29 +116,29 @@ impl PresentHandle {
         }
     }
 
-    // Sends the control `build` makes and waits for the thread's answer to
-    // it; `None` when no answer came.
-    pub(crate) fn send_control_and_wait<T>(
+    // Sends the control `build` makes and waits for the thread's ack of
+    // it; false when no ack came.
+    pub(crate) fn send_control_and_wait(
         &self,
-        build: impl FnOnce(SyncSender<T>) -> PresentControl,
+        build: impl FnOnce(SyncSender<()>) -> PresentControl,
         what: &str,
-    ) -> Option<T> {
+    ) -> bool {
         let Some(ack_rx) = self.send_control_unacked(build) else {
             log::error!("[present-runtime] {what}: runtime is gone");
-            return None;
+            return false;
         };
         match ack_rx.recv_timeout(CONTROL_ACK_TIMEOUT) {
-            Ok(answer) => Some(answer),
+            Ok(()) => true,
             Err(RecvTimeoutError::Timeout) => {
                 log::error!(
                     "[present-runtime] {what}: no ack within {CONTROL_ACK_TIMEOUT:?}; \
                      present thread wedged?"
                 );
-                None
+                false
             }
             Err(RecvTimeoutError::Disconnected) => {
                 log::error!("[present-runtime] {what}: runtime exited before ack");
-                None
+                false
             }
         }
     }
@@ -158,42 +149,11 @@ impl PresentHandle {
         self.msg_tx.send(PresentMsg::Control(control)).is_ok()
     }
 
-    // Draws `packet` into an image of `viewport` on the present thread,
-    // behind the packets already sent, and waits for its pixels: a robot's
-    // capture, which the frame loop never asks for.
-    pub(crate) fn capture(&self, packet: FramePacket, viewport: (u32, u32)) -> CaptureReply {
-        let (reply, reply_rx) = sync_channel(1);
-        let capture = PresentControl::Capture {
-            packet,
-            viewport,
-            reply,
-        };
-        if let Err(error) = self.msg_tx.send(PresentMsg::Control(capture)) {
-            let PresentMsg::Control(PresentControl::Capture { packet, .. }) = error.0 else {
-                unreachable!("capture only sends a capture");
-            };
-            let mut returns = RenderReturns::default();
-            GpuRenderer::cancel_packet(packet, CancelReason::SurfaceUnavailable, &mut returns);
-            return CaptureReply {
-                returns,
-                pixels: Err("the present thread is gone".to_string()),
-                stats: None,
-            };
-        }
-        reply_rx
-            .recv_timeout(CAPTURE_TIMEOUT)
-            .unwrap_or_else(|error| CaptureReply {
-                returns: RenderReturns::default(),
-                pixels: Err(format!("the present thread sent no capture: {error}")),
-                stats: None,
-            })
-    }
-
-    pub(crate) fn send_control_unacked<T>(
+    pub(crate) fn send_control_unacked(
         &self,
-        build: impl FnOnce(SyncSender<T>) -> PresentControl,
-    ) -> Option<Receiver<T>> {
-        let (ack_tx, ack_rx) = sync_channel::<T>(1);
+        build: impl FnOnce(SyncSender<()>) -> PresentControl,
+    ) -> Option<Receiver<()>> {
+        let (ack_tx, ack_rx) = sync_channel::<()>(1);
         self.msg_tx
             .send(PresentMsg::Control(build(ack_tx)))
             .ok()

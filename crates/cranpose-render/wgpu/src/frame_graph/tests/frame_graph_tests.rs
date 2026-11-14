@@ -272,7 +272,7 @@ fn check_staged_uploads(
         [&small[..], &large[..16], &last[..]].concat(),
         "{mode:?}"
     );
-    ring.recall(None);
+    ring.recall();
     // A second frame fits one buffer; the third writes the same buffer:
     // a copied ring kept it, a mapped ring got it back once the GPU
     // was done with it.
@@ -294,7 +294,7 @@ fn check_staged_uploads(
             next[..16],
             "{mode:?}"
         );
-        ring.recall(None);
+        ring.recall();
         buffers.push(buffer);
     }
     assert_eq!(
@@ -372,7 +372,7 @@ fn check_written_uploads(
         [&odd_word[..], &large[..16], &last[..]].concat(),
         "{mode:?}"
     );
-    allocators.recall(None);
+    allocators.recall();
 }
 
 #[test]

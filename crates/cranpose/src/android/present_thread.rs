@@ -1,7 +1,6 @@
-// Whether a device's frames present on a thread of their own. Android,
-// desktop windows and iOS take the same rule: four cores or more leave a
-// core for the present thread while the UI prepares the next frame. The
-// CRANPOSE_PRESENT_THREAD diagnostic decides when set, to compare both.
+// Whether a device's frames present on a thread of their own: four cores or
+// more leave a core for the present thread while the UI prepares the next
+// frame. The CRANPOSE_PRESENT_THREAD diagnostic decides when set.
 
 pub(crate) fn uses_present_thread(requested: Option<&str>, available_cores: usize) -> bool {
     match requested.map(str::trim) {
@@ -12,6 +11,7 @@ pub(crate) fn uses_present_thread(requested: Option<&str>, available_cores: usiz
 }
 
 // The rule on this device.
+#[cfg(target_os = "android")]
 pub(crate) fn presents_on_thread() -> bool {
     let cores = std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get);
     cranpose_core::DIAGNOSTICS

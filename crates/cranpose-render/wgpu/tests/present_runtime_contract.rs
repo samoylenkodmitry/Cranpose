@@ -97,7 +97,7 @@ pub(crate) fn threaded_parts(
     ))
 }
 
-// A target on a device of its own, as one that replaces a lost device is.
+// A target on a device of its own.
 pub(crate) fn gpu_target(surface_format: wgpu::TextureFormat) -> Result<GpuTarget, String> {
     let adapter = support::device::headless_adapter(wgpu::Backends::all())?;
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
@@ -136,17 +136,6 @@ pub(crate) fn publish(renderer: &mut WgpuRenderer) {
         PublishOutcome::Published,
         "the present thread takes the frame"
     );
-}
-
-// Hands the present thread `replacement`, then publishes a frame for it.
-pub(crate) fn replace_device_then_publish(renderer: &mut WgpuRenderer, replacement: GpuTarget) {
-    assert!(
-        renderer
-            .present_thread()
-            .is_some_and(|thread| thread.replace_device(replacement)),
-        "the new device reaches the present thread"
-    );
-    publish(renderer);
 }
 
 pub(crate) fn drain_outcomes(renderer: &mut WgpuRenderer) -> Vec<(u64, PresentOutcome)> {
@@ -265,7 +254,7 @@ fn reconfigure_cancels_waiting_packet_before_ack() {
 }
 
 #[test]
-fn take_surface_cancels_waiting_packet_with_buffers_returned() {
+fn drop_surface_cancels_waiting_packet_with_buffers_returned() {
     let (_lock, mut renderer, target) = inline_runtime_or_skip!("drop-surface cancel");
     let mut runtime = renderer.init_gpu_inline_for_tests(target);
     let ack = renderer
@@ -286,7 +275,7 @@ fn take_surface_cancels_waiting_packet_with_buffers_returned() {
     renderer.note_surface_reconfigured();
     let ack = renderer
         .present_thread()
-        .and_then(PresentThread::send_take_surface_unacked_for_tests)
+        .and_then(PresentThread::send_drop_surface_unacked_for_tests)
         .expect("inline runtime must accept controls");
     runtime.pump();
     assert_eq!(
@@ -297,12 +286,7 @@ fn take_surface_cancels_waiting_packet_with_buffers_returned() {
         )],
         "a packet waiting when the surface died cancels as SurfaceUnavailable"
     );
-    assert!(
-        ack.try_recv()
-            .expect("the take must answer after the cancel")
-            .is_none(),
-        "an offscreen target holds no surface to hand back"
-    );
+    ack.try_recv().expect("drop must ack after the cancel");
 
     assert_eq!(
         renderer.publish_frame(WIDTH, HEIGHT),
@@ -312,8 +296,8 @@ fn take_surface_cancels_waiting_packet_with_buffers_returned() {
     assert_eq!(
         drain_outcomes(&mut renderer),
         vec![(2, PresentOutcome::Cancelled(CancelReason::SurfaceEpoch))],
-        "after the take the producer's epoch is ahead of the runtime's \
-         (TakeSurface carries none), so the next packet cancels for it"
+        "after the drop the producer's epoch is ahead of the runtime's \
+         (DropSurface carries none), so the next packet cancels for it"
     );
 }
 
@@ -646,15 +630,8 @@ fn queued_packets_keep_complete_pixels_while_the_producer_changes_the_scene() {
 }
 
 #[test]
-fn a_lost_device_refuses_frames_until_a_new_device_takes_over() {
+fn a_lost_device_refuses_frames() {
     let (_lock, mut renderer, target) = inline_runtime_or_skip!("device loss");
-    let replacement = match gpu_target(wgpu::TextureFormat::Bgra8UnormSrgb) {
-        Ok(target) => target,
-        Err(err) => {
-            eprintln!("skipping device loss: no second device: {err}");
-            return;
-        }
-    };
     let lost = Arc::clone(&target.device);
     let mut runtime = renderer.init_gpu_inline_for_tests(target);
     let ack = renderer
@@ -681,42 +658,6 @@ fn a_lost_device_refuses_frames_until_a_new_device_takes_over() {
         vec![(1, PresentOutcome::Cancelled(CancelReason::DeviceLost))],
         "a frame after the loss is refused, not encoded on the lost device"
     );
-
-    replace_device_then_publish(&mut renderer, replacement);
-    runtime.pump();
-    assert_eq!(
-        drain_outcomes(&mut renderer),
-        vec![(2, PresentOutcome::Presented)],
-        "the next frame draws on the new device"
-    );
-}
-
-#[test]
-fn a_capture_on_the_present_thread_shows_the_picture_a_capture_in_place_shows() {
-    let (_lock, mut threaded, target) = inline_runtime_or_skip!("threaded capture");
-    let mut in_place = WgpuRenderer::new(&[support::TEST_FONT]);
-    in_place.init_gpu(target.clone());
-    in_place.scene_mut().describe(&shadowed_child_graph());
-    let expected = in_place
-        .capture_frame(WIDTH, HEIGHT)
-        .expect("a capture in place");
-
-    threaded
-        .init_gpu_threaded(target, Arc::new(|| {}), None, None)
-        .expect("present thread must spawn");
-    threaded.scene_mut().describe(&shadowed_child_graph());
-    let captured = threaded
-        .capture_frame(WIDTH, HEIGHT)
-        .expect("a capture on the present thread");
-    assert_eq!(
-        (captured.width, captured.height),
-        (expected.width, expected.height)
-    );
-    assert!(
-        captured.pixels == expected.pixels,
-        "both captures draw the same picture"
-    );
-    threaded.shutdown_present_runtime();
 }
 
 // Where the spot of each step sits: elsewhere each step, as the cursor of
@@ -749,8 +690,7 @@ fn MovingSpot(step: MutableState<u32>) {
 // A window starts on a surface whose images keep what they presented, two
 // frames in flight. Each image the surface has not handed out yet holds no
 // frame: the producer collects the whole page until every image took a
-// frame, so the present thread refuses no frame, and the frames after go
-// while another is in flight.
+// frame, so the present thread refuses no frame.
 #[test]
 fn a_new_surface_refuses_no_frame() {
     let Ok((_lock, mut renderer, target)) = threaded_parts(wgpu::TextureFormat::Rgba8Unorm) else {
@@ -821,20 +761,8 @@ fn a_new_surface_refuses_no_frame() {
     runtime.pump();
     ack.try_recv().expect("the test swapchain is attached");
     let mut outcomes = Vec::new();
-    let mut waits = Vec::new();
     for _ in 0..24 {
-        let waited = next_frame(&mut shell) == PublishOutcome::NoCredit;
-        if waited {
-            // A frame that collects the whole page waits for the frame in
-            // flight, as a window's loop waits for its hand back.
-            runtime.consume_waiting();
-            outcomes.extend(drain_outcomes(shell.renderer()));
-            assert_eq!(
-                shell.renderer().publish_frame(WIDTH, HEIGHT),
-                PublishOutcome::Published
-            );
-        }
-        waits.push(waited);
+        assert_eq!(next_frame(&mut shell), PublishOutcome::Published);
         runtime.step_one_message();
         outcomes.extend(drain_outcomes(shell.renderer()));
     }
@@ -846,9 +774,5 @@ fn a_new_surface_refuses_no_frame() {
             .iter()
             .all(|(_, outcome)| *outcome == PresentOutcome::Presented),
         "every frame of the new surface draws: {outcomes:?}"
-    );
-    assert!(
-        !waits[waits.len() - 12..].contains(&true),
-        "once every image holds a frame, each frame goes while another is in flight: {waits:?}"
     );
 }

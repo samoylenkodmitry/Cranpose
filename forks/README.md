@@ -29,9 +29,8 @@ GL state tracker, the web surface usages, the boxed GL copy commands, the
 Vulkan command pools that give a burst's memory back, the GL shaders
 without the branches their constants decide, the GL program status read
 only on failure, the GLSL templates, the GL link reads, the WebGL
-extensions, the GL varying minimum, the presentable image identities, the
-WebGL frames drawn into the canvas, the Metal occlusion check on the
-main thread and the Metal present queue kept short below. `cranpose-wgpu-core` is at
+extensions, the GL varying minimum, the presentable image identities and
+the WebGL frames drawn into the canvas below. `cranpose-wgpu-core` is at
 30.0.24 to require those, to make
 template modules, to configure a surface while another thread submits, to
 let Vulkan pipelines drop their shader modules and to hand presented
@@ -521,34 +520,6 @@ yet.
 On a Mate 20 X (Mali-G76, 4 images, FIFO) every frame of a probe that drew
 a part of the window into a kept image read back equal to the frame drawn
 whole (36 of 36).
-
-### Metal reads a window's occlusion only on the main thread
-
-Upstream's Metal `acquire_texture` asks the window that hosts the layer
-whether it is visible before it takes a drawable (gfx-rs/wgpu#8309: an
-occluded window's `nextDrawable` can stall a second). It reaches the
-window through the layer's `NSView` and reads `NSWindow.occlusionState`,
-and both belong to AppKit's main thread. Cranpose presents from a thread
-of its own, so the check runs only on the main thread. A caller that
-acquires on another thread reads the occlusion on the main thread and
-takes no image while the window is occluded.
-
-### Metal keeps a render thread's present queue short
-
-A drawable presented in time for the window server's next composite
-reaches the display a fixed number of refresh periods after its present:
-two on the 60 Hz display of an Apple M3. A thread that presents one
-drawable each period keeps the queue it started with. When its first
-frames came faster than the display took them, one drawable more waits in
-Core Animation's queue for good. Each frame then reaches the display a
-period later, and the window server spent about three times the CPU on
-each frame. Off the main thread, the Metal surface asks each drawable when
-it reached the display. After three in a row that took three periods or
-more, the next acquire waits one period, and the queue gives that drawable
-back. A wait that gives nothing back makes the surface rest 60 shows before
-it counts late drawables again, twice as many after each such wait, up to
-3840. Drawables that cannot say when they reached the display, as the iOS
-simulator's, and presents on the main thread take no part.
 
 ### Update the fork
 
