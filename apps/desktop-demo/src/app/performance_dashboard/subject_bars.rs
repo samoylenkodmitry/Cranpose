@@ -19,8 +19,9 @@ use super::{
     text_style, Dot, Palette, PerfRun, PerfSubject, Selection, SOURCE_URL,
 };
 
-const ROW_HEIGHT: f32 = 22.0;
-const ROW_GAP: f32 = 10.0;
+// A row holds two lines of its name, which a narrow card wraps.
+const ROW_HEIGHT: f32 = 32.0;
+const BAR_HEIGHT: f32 = 22.0;
 
 /// Every subject's metric of the `selection` as a bar in its line's colour,
 /// best first, alphabetical among equals: its dot, its name, which opens its
@@ -52,9 +53,7 @@ pub(super) fn SubjectBars(
     // The rows stand at places of their own, so that each moves to its new
     // place when the metric changes their order.
     Box(
-        Modifier::empty()
-            .fill_max_width()
-            .height((rows * (ROW_HEIGHT + ROW_GAP) - ROW_GAP).max(0.0)),
+        Modifier::empty().fill_max_width().height(rows * ROW_HEIGHT),
         BoxSpec::default(),
         move || {
             for (position, subject_at) in order.iter().copied().enumerate() {
@@ -118,12 +117,7 @@ fn SubjectBar(palette: Palette, focus: Focus, row: SubjectRow, position: usize) 
     let weight = animateFloatAsState(focus.weight(row.subject), fade(), "bar_weight").value();
     let picked = focus.picked.get().contains(&row.subject);
     let outline = animateFloatAsState(f32::from(picked), fade(), "bar_picked").value();
-    let place = animateFloatAsState(
-        position as f32 * (ROW_HEIGHT + ROW_GAP),
-        settle(),
-        "bar_place",
-    )
-    .value();
+    let place = animateFloatAsState(position as f32 * ROW_HEIGHT, settle(), "bar_place").value();
     let length = animateFloatAsState(row.share.unwrap_or(0.0), settle(), "bar_length").value();
     Row(
         row_hover(
@@ -164,27 +158,28 @@ struct BarLook {
 fn RowName(palette: Palette, row: SubjectRow, weight: f32) {
     let uri_handler = local_uri_handler().current();
     let name = Modifier::empty().weight(0.44);
-    let style = text_style(
-        12.0,
-        faded(palette.text, weight),
-        row.emphasized.then_some(FontWeight::BOLD),
+    let name = match row.url {
+        Some(url) => name.clickable(move |_| {
+            if let Err(error) = uri_handler.open_uri(&url) {
+                log::error!("Could not open {url}: {error:#}");
+            }
+        }),
+        None => name,
+    };
+    TextWithOptions(
+        row.label,
+        name,
+        text_style(
+            12.0,
+            faded(palette.text, weight),
+            row.emphasized.then_some(FontWeight::BOLD),
+        ),
+        TextOptions {
+            overflow: TextOverflow::Ellipsis,
+            max_lines: Some(2),
+            ..TextOptions::default()
+        },
     );
-    match row.url {
-        Some(url) => {
-            Text(
-                row.label,
-                name.clickable(move |_| {
-                    if let Err(error) = uri_handler.open_uri(&url) {
-                        log::error!("Could not open {url}: {error:#}");
-                    }
-                }),
-                style,
-            );
-        }
-        None => {
-            Text(row.label, name, style);
-        }
-    }
 }
 
 // A subject's value on its bar, which a click picks; with no bar, why it has
@@ -203,7 +198,7 @@ fn RowBar(palette: Palette, focus: Focus, row: SubjectRow, look: BarLook, picked
         Modifier::empty()
     };
     Box(
-        toggling.weight(0.56).height(ROW_HEIGHT),
+        toggling.weight(0.56).height(BAR_HEIGHT),
         BoxSpec::new().content_alignment(Alignment::CENTER_START),
         move || {
             if row.share.is_none() {

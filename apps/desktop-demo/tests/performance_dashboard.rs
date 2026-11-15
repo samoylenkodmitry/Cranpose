@@ -411,6 +411,43 @@ fn frames_that_alternate_short_and_long_read_their_average_rate() {
     }
 }
 
+// A browser run whose Cranpose name takes two lines on a phone.
+const PHONE_INDEX: &str = r#"{"runs": [
+ {"file": "runs/f.json", "kind": "browser", "started_at": "2026-11-14T06:10:00+00:00",
+  "device": "Apple M3 Pro · Chrome 157", "main": "b600bd70e", "protocol": {"run_s": 10, "starts": ["first", "second"]},
+  "subjects": [
+   {"name": "cranpose", "label": "Cranpose 0.24.0 main b600bd70e"},
+   {"name": "egui", "label": "egui 0.37.0"}],
+  "scenarios": {"wall": {"legs": 4, "starts": {
+    "first": {"summary": {"cranpose": {"fps": 43.2}, "egui": {"fps": 20.0}}},
+    "second": {"summary": {"cranpose": {"fps": 44.0}, "egui": {"fps": 20.1}}}}}}}
+]}"#;
+
+#[test]
+fn a_framework_name_that_wraps_on_a_phone_shows_both_of_its_lines() {
+    let index = Rc::new(PerfIndex::parse(PHONE_INDEX).expect("the fixture parses"));
+    let mut robot = create_headless_robot_test(393, 1200, move || {
+        PerformanceDashboard(Rc::clone(&index), None, FrameSource::Files(Rc::default()));
+    });
+    let rects = robot.get_all_rects();
+    let name = |text: &str| {
+        rects
+            .iter()
+            .find_map(|(bounds, label)| (label.as_deref() == Some(text)).then_some(*bounds))
+            .unwrap_or_else(|| panic!("no {text}: {rects:?}"))
+    };
+    let long = name("Cranpose 0.24.0 main b600bd70e");
+    let short = name("egui 0.37.0");
+    assert!(
+        long.height >= 2.0 * short.height - 0.5,
+        "two lines tall: {long:?} against one line {short:?}"
+    );
+    assert!(
+        long.y + long.height <= short.y,
+        "the second line ends above the next row: {long:?} {short:?}"
+    );
+}
+
 fn dashboard() -> RobotTestRule<TestRenderer> {
     dashboard_of(INDEX, frames())
 }
