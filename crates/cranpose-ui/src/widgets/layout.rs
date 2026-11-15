@@ -110,14 +110,19 @@ pub(crate) fn compose_empty_layout(
     environment: LayoutEnvironment,
 ) -> NodeId {
     cranpose_core::with_current_composer(|composer| {
-        let (id, provided, holds_children) = emit_layout_node(
+        let (id, provided, held) = emit_layout_node(
             composer,
             &mut modifier,
             &crate::layout::policies::EmptyMeasurePolicy,
             environment,
         );
         if provided.is_empty() {
-            composer.compose_no_children(id, holds_children);
+            // A made node has no children to sync. Inside a subcomposition
+            // its empty sync would settle its layout dirt, which its parent's
+            // sync of its new child carries up already.
+            if held != HeldChildren::Made {
+                composer.compose_no_children(id, held == HeldChildren::Some);
+            }
         } else {
             composer.push_parent(id);
             compose_under_locals(provided, &mut || {});
@@ -213,7 +218,7 @@ fn emit_layout_node(
     modifier: &mut dyn NodeModifier,
     policy: &dyn PolicyUpdate,
     environment: LayoutEnvironment,
-) -> (NodeId, Vec<cranpose_core::ProvidedValue>, bool) {
+) -> (NodeId, Vec<cranpose_core::ProvidedValue>, HeldChildren) {
     let provided = modifier.provided_locals();
     let emitted = Cell::new(Emitted::Kept);
     let make = || {
@@ -230,7 +235,7 @@ fn emit_layout_node(
     };
     let id = composer.emit_recyclable_node(make, |node| *node = make());
     if emitted.get() == Emitted::Made {
-        return (id, provided, false);
+        return (id, provided, HeldChildren::Made);
     }
     let holds_children = composer
         .with_node_mut(id, |node: &mut LayoutNode| {
@@ -244,7 +249,24 @@ fn emit_layout_node(
             debug_assert!(false, "failed to update Layout node: {err}");
             true
         });
-    (id, provided, holds_children)
+    let held = match (emitted.get(), holds_children) {
+        (Emitted::MadeReadingLocals, _) => HeldChildren::Made,
+        (Emitted::Kept | Emitted::Made, true) => HeldChildren::Some,
+        (Emitted::Kept | Emitted::Made, false) => HeldChildren::None,
+    };
+    (id, provided, held)
+}
+
+// The children a node holds when its emit returns.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum HeldChildren {
+    // Children of its last composition.
+    Some,
+    // None.
+    None,
+    // None, and none ever: the emit made the node, so its composition
+    // closes no list of children it held.
+    Made,
 }
 
 fn compose_under_locals(provided: Vec<cranpose_core::ProvidedValue>, content: &mut dyn FnMut()) {
