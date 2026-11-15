@@ -23,7 +23,7 @@ use cranpose_render_wgpu::{DeviceLostHandler, WgpuRenderer};
 use wasm_bindgen::{JsCast, prelude::*};
 use web_sys::HtmlCanvasElement;
 
-use super::pipeline_discovery::{GpuTarget, PipelineDiscovery};
+use super::pipeline_landing::{GpuTarget, PipelineLanding};
 use crate::{GpuContext, GpuRequirements, gpu_loss::LossSignal};
 
 /// How long the page draws before the drill loses its device.
@@ -224,7 +224,7 @@ impl WebDeviceLoss {
         let config = recovery.config.borrow();
         let view_format = crate::surface_format::display_surface_view_format(config.format);
         recovery.surface.configure(&device, &config);
-        recovery.discovery.recovered(GpuTarget {
+        recovery.landing.recovered(GpuTarget {
             device: Arc::clone(&device),
             queue: Arc::clone(&queue),
             surface_format: view_format,
@@ -264,7 +264,7 @@ pub(crate) struct Recovery {
     pub(crate) config: Rc<RefCell<wgpu::SurfaceConfiguration>>,
     pub(crate) surface_dirty: Rc<Cell<bool>>,
     pub(crate) request_frame: Rc<dyn Fn()>,
-    pub(crate) discovery: Rc<PipelineDiscovery>,
+    pub(crate) landing: Rc<PipelineLanding>,
 }
 
 /// Gives the canvas its WebGL context back through `extension` once the loss

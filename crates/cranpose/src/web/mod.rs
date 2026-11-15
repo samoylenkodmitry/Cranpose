@@ -12,6 +12,8 @@ pub(crate) mod accessibility_order;
 mod backend_preference;
 pub(crate) mod canvas_layout;
 #[cfg(target_arch = "wasm32")]
+mod canvas_presenter;
+#[cfg(target_arch = "wasm32")]
 pub(crate) mod canvas_watch;
 #[cfg(target_arch = "wasm32")]
 pub(crate) mod clipboard;
@@ -43,7 +45,7 @@ pub(crate) mod lifecycle;
 #[cfg(target_arch = "wasm32")]
 pub(crate) mod media;
 #[cfg(target_arch = "wasm32")]
-pub(crate) mod pipeline_discovery;
+pub(crate) mod pipeline_landing;
 #[cfg(target_arch = "wasm32")]
 pub(crate) mod pointer;
 #[cfg(target_arch = "wasm32")]

@@ -4,7 +4,7 @@
 
 [counts]
 too_many_arguments = 10
-private_docs = 12342
+private_docs = 12291
 for_test_fns = 38
 cranpose_env_names = 76
 source_text_checks = 324
@@ -89,5 +89,4 @@ limit = 1000
 "crates/cranpose/src/native_window.rs" = 1052
 "crates/cranpose/src/robot.rs" = 1875
 "crates/cranpose/src/web/accessibility.rs" = 1254
-"crates/cranpose/src/web/event_loop.rs" = 1100
 "xtask/src/main.rs" = 3777

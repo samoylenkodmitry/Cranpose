@@ -31,8 +31,8 @@ impl RenderPipeline {
 
     /// Whether draws with this pipeline draw: `false` while the browser
     /// still compiles it in the background
-    /// ([`Device::compile_pipelines_in_background`]) and for one pipeline
-    /// discovery created, which never draws; `true` on every other backend.
+    /// ([`Device::compile_pipelines_in_background`]); `true` on every other
+    /// backend.
     pub fn is_ready(&self) -> bool {
         #[cfg(webgpu)]
         if let Some(pipeline) = self.inner.as_webgpu_opt() {

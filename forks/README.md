@@ -34,9 +34,9 @@ the WebGL frames drawn into the canvas below. `cranpose-wgpu-core` is at
 30.0.24 to require those, to make
 template modules, to configure a surface while another thread submits, to
 let Vulkan pipelines drop their shader modules and to hand presented
-images back as they presented. `cranpose-wgpu` is at 30.0.27 for
-the WebGPU pipeline discovery, the background compiles, the pipeline
-readiness and the kept swapchain images below and to require them.
+images back as they presented. `cranpose-wgpu` is at 30.0.28 for
+the background compiles, the pipeline readiness and the kept swapchain
+images below and to require them.
 
 | fork | upstream |
 | --- | --- |
@@ -365,45 +365,34 @@ median render took 2.88 and 2.98 ms a frame against 3.13 and 3.28 ms
 before (two legs each). Giving the memory back at every reset reached
 142 MiB but cost the present thread 0.2 to 0.3 ms a frame.
 
-### A WebGPU frame can learn its pipelines while they compile together
+### WebGPU pipelines compile in the background
 
 On the WebGPU backend `createRenderPipeline` hands the browser each
 pipeline as it is created, and Chrome's GPU process compiles them one after
-another on its main thread, presenting nothing meanwhile. On a first visit
+another on its main thread while nothing it is given draws. On a first visit
 to the gauntlet on an Apple M5, with no Metal shader cached, the twelve
 pipelines of the first frame held it for 0.85 to 0.96 s; created through
 `createRenderPipelineAsync` the same twelve compiled side by side in 0.21
-to 0.25 s, and creating them again with `createRenderPipeline` afterwards
-took 3 ms in all, since the browser hands back the one it compiled.
-
-`Device::begin_pipeline_discovery` starts that on a WebGPU device: every
-render pipeline created until `Device::end_pipeline_discovery` goes to
-`createRenderPipelineAsync` and never draws, and every pass or bundle begun
-meanwhile records no draw. The future `end_pipeline_discovery` returns
-resolves, with the compiled pipelines to keep, once all of them compiled or
-failed. Cranpose's web shell draws its first frame this way, then installs
-a new renderer and draws the frame again once they compiled. On the M5
-the gauntlet's first frame showed after 0.5 to 0.75 s instead of 1.0 to
-1.25 s, the same to the pixel.
-
-### WebGPU pipelines compile in the background after the first frame
-
-A pipeline the page creates after its first frame went to the browser's
-`createRenderPipeline`, which Chrome compiles in its GPU process one after
-another while nothing it is given draws. On an Apple M5 with no Metal shader
-cached, the 19 pipelines the desktop demo's Liquid UI tab first needed held
-every frame of the page 1.4 s, and another 0.2 s after.
+to 0.25 s. The 19 pipelines the desktop demo's Liquid UI tab first needed
+held every frame of the page 1.4 s, and another 0.2 s after.
 
 `Device::compile_pipelines_in_background` sends every render pipeline the
 device creates from then on to `createRenderPipelineAsync`. The pipeline
 object exists at once; its draws are left out until the browser compiled
-it, as a pipeline discovery leaves them out, and from then on it draws.
-`Device::take_background_pipelines` returns a future for the pipelines
-whose draws a pass left out since the last call, which a renderer awaits to
-drop what it drew without them and draw again. A pipeline created ahead of
-its first draw that compiles before a pass needs it is never taken, so it
-causes no redraw. Cranpose's web shell turns background compiles on after
-the first frame, whose pipelines discovery compiles.
+it, and from then on it draws. `Device::take_background_pipelines` returns
+a future for the pipelines whose draws a pass left out since the last call,
+which a renderer awaits to drop what it drew without them and draw again. A
+pipeline created ahead of its first draw that compiles before a pass needs
+it is never taken, so it causes no redraw. Cranpose's web shell turns
+background compiles on as its renderer starts, and shows its first frame
+only once it drew whole.
+
+Chrome hands the page a compiled pipeline only after the page sent its GPU
+process a call. A frame drawn right after a long task finds pipelines
+compiled long before still compiling. `Device::deliver_background_pipelines`
+sends such a call: it asks when the queue's work ended. Its future resolves
+once the answer came, with every pipeline compiled before it. Cranpose's
+web shell awaits it before its first frame draws.
 
 `Device::compiles_in_background` tells whether a pipeline still compiles in
 the background, taken or not. Chrome compiles several beside each other, on
@@ -414,8 +403,8 @@ its vsync. Cranpose's renderer starts its next warm-up only when none
 compiles.
 
 `RenderPipeline::is_ready` tells whether a pipeline's draws draw: `false`
-while the browser compiles it in the background and for one pipeline
-discovery created, `true` on every other backend. Cranpose's renderer draws
+while the browser compiles it in the background, `true` on every other
+backend. Cranpose's renderer draws
 with a general pipeline that already compiled until a specialized one is
 ready.
 

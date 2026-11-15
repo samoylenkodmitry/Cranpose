@@ -408,6 +408,26 @@ impl WgpuRenderer {
         self.render_frame(&frame.texture, view, width, height, image)
     }
 
+    /// Clears `view` to the color a frame clears to before it draws. `view`
+    /// is the image of a surface that just took a frame through
+    /// [`render_surface_texture`](Self::render_surface_texture). The
+    /// renderer drops its copy of that frame, so the next frame draws whole.
+    /// A web page hides so a first frame that left out the draws of
+    /// pipelines still compiling in the browser.
+    #[cfg(target_arch = "wasm32")]
+    pub fn hide_drawn_frame(&mut self, view: &wgpu::TextureView) {
+        let Some(gpu_renderer) = self.sync_gpu_renderer() else {
+            return;
+        };
+        clear_to_background(
+            &gpu_renderer.device,
+            &gpu_renderer.queue,
+            view,
+            frame_clear_color(self.frontend.transparent_background),
+        );
+        self.release_kept_copy();
+    }
+
     /// Presents a surface image this renderer drew with
     /// [`render_surface_texture`](Self::render_surface_texture), on the queue
     /// that recorded it.
@@ -823,15 +843,13 @@ impl WgpuRenderer {
         stats
     }
 
-    /// Starts a frame that takes its pipelines from a pipeline discovery:
-    /// the frame that discovers them, or the one that creates them again
-    /// while the browser holds them compiled. Such a frame also builds the
-    /// pipelines it expects a later frame to need, at its end, so the browser
-    /// compiles them behind the frame's own or holds them with those.
+    /// Starts a frame drawn while none has shown whole yet. Such a frame
+    /// builds the pipelines it expects a later frame to need at its end, so
+    /// the browser compiles them behind the frame's own.
     #[cfg(target_arch = "wasm32")]
-    pub fn begin_discovery_frame(&self) {
+    pub fn begin_first_frame(&self) {
         if let Some(gpu_renderer) = self.sync_gpu_renderer() {
-            gpu_renderer.pipelines.compiler.begin_discovery_frame();
+            gpu_renderer.pipelines.compiler.begin_first_frame();
         }
     }
 
