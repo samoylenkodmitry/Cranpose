@@ -65,7 +65,26 @@ class DisplayProblemsTest(unittest.TestCase):
     def test_a_display_that_is_as_calibrated_and_quiet_leaves_nothing_to_refuse(self):
         observed, problems = self.observed(state(), 0.0)
         self.assertEqual(problems, [])
-        self.assertEqual(observed['ambient_fps'], 0.0, 'the run records how quiet it was')
+        self.assertEqual(observed['ambient_fps'], [0.0], 'the run records how quiet it was')
+
+    def test_a_display_that_moved_for_one_read_is_read_again_and_not_refused(self):
+        # 2026-11-15 15:12 on macm3: the read after the last leg counted 10.7
+        # composites a second; every leg before it had seen a quiet display.
+        reads = iter([10.7, 2.1])
+        with patch.object(desktop, 'display_state', return_value=state()), \
+                patch.object(desktop, 'ambient_fps', side_effect=lambda stage, label: next(reads)):
+            observed, problems = desktop.observe_display(Path("stage"), "end")
+        self.assertEqual(problems, [])
+        self.assertEqual(observed['ambient_fps'], [10.7, 2.1], 'the run keeps every read')
+
+    def test_a_display_that_moves_in_every_read_is_refused_with_its_quietest_rate(self):
+        reads = iter([59.8, 31.0, 44.0])
+        with patch.object(desktop, 'display_state', return_value=state()), \
+                patch.object(desktop, 'ambient_fps', side_effect=lambda stage, label: next(reads)):
+            observed, problems = desktop.observe_display(Path("stage"), "start")
+        self.assertEqual(observed['ambient_fps'], [59.8, 31.0, 44.0])
+        self.assertEqual(len(problems), 1)
+        self.assertIn('31.0 times a second', problems[0])
 
     def test_the_quiet_of_macm3s_television_is_not_refused(self):
         # 2026-10-18 on macm3: a window that never changes was composited 2.3

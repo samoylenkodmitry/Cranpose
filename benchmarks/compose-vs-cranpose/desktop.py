@@ -604,6 +604,10 @@ def display_state(stage, label):
 # movement.
 AMBIENT_MAX_FPS = 5.0
 AMBIENT_SECONDS = 3.0
+# How many times the ambient rate is read before the display counts as moving.
+# A notification that slides in or the Dock's animation moves the display for
+# a second or two; a video or an animated wallpaper moves it in every read.
+AMBIENT_READS = 3
 
 
 def ambient_fps(stage, label):
@@ -634,14 +638,25 @@ def quiet_problem(fps):
     return None
 
 
+def ambient_reads(stage, label):
+    """The ambient rate, read again while it is above `AMBIENT_MAX_FPS`, up
+    to `AMBIENT_READS` times."""
+    reads = []
+    while len(reads) < AMBIENT_READS:
+        reads.append(ambient_fps(stage, f'{label}-{len(reads) + 1}'))
+        if quiet_problem(reads[-1]) is None:
+            break
+    return reads
+
+
 def observe_display(stage, label):
-    """The display state with the rate at which the window server composites
+    """The display state with the rates at which the window server composited
     the display for a window that never changes, and every reason that is not
     the state a run is calibrated for."""
     state = display_state(stage, label)
     problems = display_problems(state)
-    state['ambient_fps'] = ambient_fps(stage, label)
-    if problem := quiet_problem(state['ambient_fps']):
+    state['ambient_fps'] = ambient_reads(stage, label)
+    if problem := quiet_problem(min(state['ambient_fps'])):
         problems.append(problem)
     return state, problems
 
