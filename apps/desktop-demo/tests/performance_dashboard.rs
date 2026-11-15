@@ -448,6 +448,64 @@ fn a_framework_name_that_wraps_on_a_phone_shows_both_of_its_lines() {
     );
 }
 
+// A nightly's 3 s first starts: the release's two launches draw from 300 ms;
+// two of main's four draw from 300 ms, two from 2200 ms, all at 60 fps.
+const LATE_INDEX: &str = r#"{"runs": [
+ {"file": "runs/late.json", "kind": "nightly", "started_at": "2026-11-15T03:30:00+00:00",
+  "device": "EVR-AL00", "main": "faa5dd089", "release": "v0.24.0", "protocol": {"run_s": 3, "starts": ["first", "second"]},
+  "subjects": [{"name": "cranpose-release", "label": "v0.24.0"}, {"name": "cranpose", "label": "faa5dd089"}],
+  "scenarios": {"gauntlet": {"legs": 6, "starts": {
+    "first": {"summary": {"cranpose-release": {"fps": 54.0}, "cranpose": {"fps": 47.5}},
+              "verdicts": {"fps": "inconclusive"}}}}}}
+]}"#;
+
+#[test]
+fn a_chart_line_is_one_launch_and_never_an_average_of_two() {
+    let steady = |first: f64| -> Vec<f64> {
+        (0..)
+            .map(|frame| first + f64::from(frame) * 1000.0 / 60.0)
+            .take_while(|time| *time < 3000.0)
+            .collect()
+    };
+    let run = serde_json::json!({"scenarios": [{"scenario": "gauntlet", "legs": [
+        {"subject": "cranpose-release", "start": "first", "frame_ms": steady(300.0)},
+        {"subject": "cranpose-release", "start": "first", "frame_ms": steady(300.0)},
+        {"subject": "cranpose", "start": "first", "frame_ms": steady(300.0)},
+        {"subject": "cranpose", "start": "first", "frame_ms": steady(2200.0)},
+        {"subject": "cranpose", "start": "first", "frame_ms": steady(300.0)},
+        {"subject": "cranpose", "start": "first", "frame_ms": steady(2200.0)}
+    ]}]});
+    let source = FrameSource::Files(Rc::new(BTreeMap::from([(
+        "runs/late.json".to_string(),
+        run.to_string(),
+    )])));
+    let mut robot = dashboard_of(LATE_INDEX, source);
+    let rects = robot.get_all_rects();
+    let labelled = |text: &str| {
+        rects
+            .iter()
+            .find_map(|(bounds, label)| (label.as_deref() == Some(text)).then_some(*bounds))
+            .unwrap_or_else(|| panic!("no {text}: {rects:?}"))
+    };
+    // The nightly's chart comes first, the trend's after it.
+    let top = labelled("60");
+    let end = labelled("3000 ms");
+    let at = top.x + (end.x + end.width - top.x) * 0.5;
+    robot.move_to(at, top.y + BETWEEN_Y);
+    robot.wait_for_motion();
+    let texts = robot.get_all_text();
+    assert!(
+        !texts.iter().any(|text| text == "30.0 fps"),
+        "no launch drew 30 fps at 1.5 s: {texts:?}"
+    );
+    robot.move_to(at, top.y + COMPOSE_Y);
+    let texts = robot.get_all_text();
+    assert!(
+        texts.iter().any(|text| text == "0.0 fps"),
+        "the line is the lower of the two middle launches, a late one: {texts:?}"
+    );
+}
+
 fn dashboard() -> RobotTestRule<TestRenderer> {
     dashboard_of(INDEX, frames())
 }

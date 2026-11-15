@@ -1,5 +1,5 @@
 // The launch chart of the Performance tab: every subject's metric since the
-// launch, each as the median of its launches over a band.
+// launch, each as its median launch over a band.
 
 use std::rc::Rc;
 
@@ -141,39 +141,46 @@ fn leg_trace(leg: &PerfFramesLeg, curve: Curve, run_ms: f64) -> Option<Vec<f64>>
     }
 }
 
-/// The median, the lowest and the highest of `traces` at each step, leaving
-/// out the launches that read nothing there; not a number where none did.
+/// The median launch of `traces`, then the lowest and the highest of `traces`
+/// at each step, leaving out the launches that read nothing there; not a
+/// number where none did.
 fn across(traces: &[Vec<f64>]) -> [Vec<f64>; 3] {
     let steps = traces.iter().map(Vec::len).min().unwrap_or(0);
-    let mut read: [Vec<f64>; 3] = std::array::from_fn(|_| Vec::with_capacity(steps));
-    let mut values = Vec::with_capacity(traces.len());
+    let mut lowest = Vec::with_capacity(steps);
+    let mut highest = Vec::with_capacity(steps);
     for step in 0..steps {
-        values.clear();
-        values.extend(
-            traces
-                .iter()
-                .map(|trace| trace[step])
-                .filter(|value| value.is_finite()),
-        );
-        values.sort_by(f64::total_cmp);
-        let picked = match (values.first(), values.last()) {
-            (Some(lowest), Some(highest)) => [middle(&values), *lowest, *highest],
-            _ => [f64::NAN; 3],
-        };
-        for (series, value) in read.iter_mut().zip(picked) {
-            series.push(value);
-        }
+        let (low, high) = traces
+            .iter()
+            .map(|trace| trace[step])
+            .filter(|value| value.is_finite())
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(low, high), value| {
+                (low.min(value), high.max(value))
+            });
+        let read = low <= high;
+        lowest.push(if read { low } else { f64::NAN });
+        highest.push(if read { high } else { f64::NAN });
     }
-    read
+    let median = median_launch(traces).map_or_else(Vec::new, |trace| trace[..steps].to_vec());
+    [median, lowest, highest]
 }
 
-/// The median of sorted `values`.
-fn middle(values: &[f64]) -> f64 {
-    match values.len() {
-        0 => 0.0,
-        length if length % 2 == 1 => values[length / 2],
-        length => (values[length / 2 - 1] + values[length / 2]) / 2.0,
-    }
+// The launch in the middle of `traces` by its mean over the steps it read,
+// the lower of the two middle ones for an even count. The median at each step
+// of an even count averages two launches into a curve that no launch drew.
+fn median_launch(traces: &[Vec<f64>]) -> Option<&Vec<f64>> {
+    let mut ranked: Vec<(f64, &Vec<f64>)> =
+        traces.iter().map(|trace| (mean(trace), trace)).collect();
+    ranked.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let middle = ranked.len().checked_sub(1)? / 2;
+    ranked.get(middle).map(|(_, trace)| *trace)
+}
+
+fn mean(trace: &[f64]) -> f64 {
+    let (sum, count) = trace
+        .iter()
+        .filter(|value| value.is_finite())
+        .fold((0.0, 0.0), |(sum, count), value| (sum + value, count + 1.0));
+    sum / count
 }
 
 /// What a chart says in place of its curves while its run's frames are not
@@ -187,7 +194,7 @@ fn frames_note(frames: &FramesState) -> Option<(String, bool)> {
 }
 
 /// `metric` against the milliseconds since the launch, for every subject:
-/// each line is the median of its launches, over a band from the lowest to
+/// each line is its median launch, over a band from the lowest to
 /// the highest. The frame rate's grid is every 30 fps; a sampled metric's
 /// fits its values, without the subjects far above its leaders.
 #[composable]
