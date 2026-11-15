@@ -12,6 +12,8 @@ pub(crate) mod accessibility_order;
 mod backend_preference;
 pub(crate) mod canvas_layout;
 #[cfg(target_arch = "wasm32")]
+mod canvas_presenter;
+#[cfg(target_arch = "wasm32")]
 pub(crate) mod canvas_watch;
 #[cfg(target_arch = "wasm32")]
 pub(crate) mod clipboard;
