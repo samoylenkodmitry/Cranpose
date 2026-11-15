@@ -258,8 +258,10 @@ PINS = {
                  cargo_update('floem-app')),
     'bui': Pin(['bui-app/Cargo.toml'], r'blenderui = "([^"]+)"', lambda: crates_io('blenderui'),
                cargo_update('bui-app')),
-    'ferro': Pin(['ferro-app/Cargo.toml'], r'ferroui-view = \{ version = "([^"]+)"', lambda: crates_io('ferroui-view'),
-                 cargo_update('ferro-app')),
+    # FerroUI's crates link one native library, so they move as one.
+    'ferro': Pin(['ferro-app/Cargo.toml'],
+                 r'ferroui-(?:view|base|controls|themes-simple) = (?:\{ version = )?"([^"]+)"',
+                 lambda: crates_io('ferroui-view'), cargo_update('ferro-app')),
     'rune': Pin(['rune-app/Cargo.toml'], r'github\.com/anomalyco/rune", rev = "([0-9a-f]+)"',
                 lambda: github_head('anomalyco/rune'), cargo_update('rune-app'), git=True),
     'zgui': Pin(['zgui-app/Cargo.toml'], r'github\.com/zortax/zgui", rev = "([0-9a-f]+)"',
@@ -383,7 +385,18 @@ def main():
         print(f'{name:16} {current:>12}  latest {latest}{"  <- behind" if behind else ""}'
               f'{", moves with --git-pins" if held else ""}')
         if args.command == 'bump' and behind and not held:
-            pin.set(latest)
+            texts = {file: read(file) for file in pin.files}
+            try:
+                pin.set(latest)
+            except subprocess.CalledProcessError as error:
+                # A release that does not resolve keeps its pin where it was,
+                # so the rest of the night still runs.
+                for file, text in texts.items():
+                    (HERE / file).write_text(text)
+                why = ' '.join((error.stderr or '').strip().splitlines()[-3:])
+                print(f'{name}: stays at {current}, as {latest} did not resolve: {why}')
+                record[name] = {'from': current, 'to': latest, 'files': pin.files, 'reverted': True}
+                continue
             record[name] = {'from': current, 'to': latest, 'files': pin.files, 'reverted': False}
     if args.record:
         args.record.write_text(json.dumps(record, indent=1))
