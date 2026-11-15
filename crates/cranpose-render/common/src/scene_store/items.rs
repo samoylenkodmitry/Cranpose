@@ -126,20 +126,27 @@ impl<T: Copy> SpanPool<T> {
             return Span::default();
         };
         let len = u32::try_from(items.len()).expect("a record holds fewer than 2^32 entries");
-        let span = if span.len > 0 && class_of(span.len) == class_of(len) {
-            Span {
+        if span.len > 0 && class_of(span.len) == class_of(len) {
+            let span = Span {
                 start: span.start,
                 len,
-            }
-        } else {
-            self.free_span(span);
-            Span {
-                start: self.take_room(len, first),
-                len,
-            }
-        };
-        self.items[span.range()].copy_from_slice(items);
-        span
+            };
+            self.items[span.range()].copy_from_slice(items);
+            return span;
+        }
+        self.free_span(span);
+        let class = class_of(len);
+        if let Some(start) = self.free.get_mut(class).and_then(Vec::pop) {
+            let span = Span { start, len };
+            self.items[span.range()].copy_from_slice(items);
+            return span;
+        }
+        // New room at the end: the entries, then the rest of their size
+        // class's room filled with the first.
+        let start = u32::try_from(self.items.len()).expect("fewer than 2^32 items");
+        self.items.extend_from_slice(items);
+        self.items.resize(start as usize + (1usize << class), first);
+        Span { start, len }
     }
 
     pub(crate) fn free_span(&mut self, span: Span) {
@@ -151,18 +158,6 @@ impl<T: Copy> SpanPool<T> {
             self.free.resize_with(class + 1, Vec::new);
         }
         self.free[class].push(span.start);
-    }
-
-    // Room for `len` entries, new room filled with `filler`.
-    fn take_room(&mut self, len: u32, filler: T) -> u32 {
-        let class = class_of(len);
-        if let Some(start) = self.free.get_mut(class).and_then(Vec::pop) {
-            return start;
-        }
-        let start = u32::try_from(self.items.len()).expect("fewer than 2^32 items");
-        let room = 1usize << class;
-        self.items.resize(self.items.len() + room, filler);
-        start
     }
 
     pub(crate) fn heap_bytes(&self) -> usize {

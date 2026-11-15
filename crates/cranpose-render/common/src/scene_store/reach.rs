@@ -112,26 +112,35 @@ pub(super) fn refresh(store: &mut SceneStore, id: RecordId) {
         return;
     }
     let span = store.tree[index].items;
+    let mut children = Reach::Empty;
     for position in 0..span.len() {
         if let Some(child) = store.items.span(span)[position].as_child() {
             refresh(store, child);
+            children = children.union(child_reach(LayerRef::new(store, child)));
         }
     }
-    let layer = LayerRef::new(store, id);
-    let clip = layer.visual_clip_rect();
     let own = own_marks::reach(store.marks.pool.span(store.warm[index].own_marks));
-    let children = layer
-        .children()
-        .map(|child| {
-            let extent = child.extent();
-            match extent.caster {
-                Some(_) => Reach::Unknown,
-                None => extent.reach,
-            }
-        })
-        .fold(Reach::Empty, Reach::union);
-    let reach = own.union(children).within(clip);
-    store.set_reach(index, reach);
+    settle(store, id, own.union(children));
+}
+
+// Where `child`, whose reach is worked out, draws in its parent's space; an
+// elevation shadow may reach anywhere.
+#[cfg(feature = "window-damage")]
+pub(super) fn child_reach(child: LayerRef<'_>) -> Reach {
+    let extent = child.extent();
+    match extent.caster {
+        Some(_) => Reach::Unknown,
+        None => extent.reach,
+    }
+}
+
+// Keeps `drawn`, where the own draws and the children of `id` reach, within
+// its clip as its reach.
+#[cfg(feature = "window-damage")]
+pub(super) fn settle(store: &mut SceneStore, id: RecordId, drawn: Reach) {
+    let index = id.index();
+    let clip = LayerRef::new(store, id).visual_clip_rect();
+    store.set_reach(index, drawn.within(clip));
     let flags = &mut store.tree[index].flags;
     *flags = flags.without(RecordFlags::REACH_STALE);
 }
@@ -195,10 +204,10 @@ pub const BLUR_PIXEL_SLACK: f32 = 17.0;
 // The extent of `layer` in its parent's space.
 #[cfg(feature = "window-damage")]
 pub(super) fn extent(layer: LayerRef<'_>) -> Extent {
-    let to_parent = layer.transform_to_parent();
+    let placement = layer.placement();
     let Some(graphics_layer) = layer.store().graphics_layer(layer.id()) else {
         return Extent {
-            reach: layer.reach().mapped(|rect| to_parent.bounds_for_rect(rect)),
+            reach: layer.reach().mapped(|rect| placement.bounds_for_rect(rect)),
             caster: None,
         };
     };
@@ -233,10 +242,10 @@ pub(super) fn extent(layer: LayerRef<'_>) -> Extent {
             .mapped(|rect| expand_rect(rect, effect))
             .union(surface)
             .union(backdrop)
-            .mapped(|rect| to_parent.bounds_for_rect(rect))
+            .mapped(|rect| placement.bounds_for_rect(rect))
     };
     let caster = (graphics_layer.shadow_elevation > 0.0).then(|| ShadowCaster {
-        bounds: to_parent.bounds_for_rect(layer.local_bounds()),
+        bounds: placement.bounds_for_rect(layer.local_bounds()),
         height: crate::layer_shadow::shadow_height(graphics_layer),
     });
     Extent { reach, caster }

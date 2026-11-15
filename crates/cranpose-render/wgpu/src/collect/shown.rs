@@ -6,7 +6,7 @@ use cranpose_core::RecordRef;
 use cranpose_render_common::{
     graph::ProjectiveTransform,
     primitive_emit::resolve_clip,
-    scene_store::{LayerRef, Reach},
+    scene_store::{LayerRef, Reach, RecordFlags},
 };
 use cranpose_ui_graphics::{Point, Rect};
 
@@ -127,14 +127,26 @@ pub(super) fn record_hidden(layer: LayerRef<'_>, context: &WalkContext<'_>, out:
     }
 }
 
-// Records that the walk drew `layer`, placed at the walk's offset, in place
-// or as a composite whose content the walk keeps no areas of, with the
-// shadows it pushed from `shadows_from` on.
+// How a walk drew a record.
+#[derive(Clone, Copy)]
+pub(super) enum Drawn {
+    // In place, with the shadows it pushed from the index on.
+    InPlace(usize),
+    // Through a surface of its own whose content the walk keeps no areas
+    // of, with the shadows it pushed from the index on.
+    Composite(usize),
+    // In place, as a leaf: a record that holds no records and pushes no
+    // shadow.
+    Leaf,
+}
+
+// Records that the walk drew `layer`, placed at the walk's offset, as
+// `drawn` tells.
 #[inline]
 pub(super) fn record_drawn(
     layer: LayerRef<'_>,
     context: &WalkContext<'_>,
-    drawn: (bool, usize),
+    drawn: Drawn,
     out: &mut LayerScene,
 ) {
     if let Some(space) = context.settings.shown
@@ -148,9 +160,15 @@ pub(super) fn record_drawn(
 fn record_drawn_area(
     layer: LayerRef<'_>,
     (context, space): (&WalkContext<'_>, ShownSpace),
-    (composite, shadows_from): (bool, usize),
+    drawn: Drawn,
     out: &mut LayerScene,
 ) {
+    let (composite, shadows_from) = match drawn {
+        Drawn::InPlace(from) => (false, from),
+        Drawn::Composite(from) => (true, from),
+        Drawn::Leaf => (false, out.scene.rrect_shadows.len()),
+    };
+    let leaf = matches!(drawn, Drawn::Leaf);
     let offset = context.offset;
     let reach = layer
         .extent()
@@ -166,22 +184,29 @@ fn record_drawn_area(
     let (own, origin) = if composite {
         (area, None)
     } else {
-        let to_parent = layer.transform_to_parent();
-        let own = layer
-            .own_reach()
-            .mapped(|rect| {
-                to_parent
-                    .bounds_for_rect(rect)
-                    .translate(offset.x, offset.y)
-            })
-            .within(context.visual_clip);
-        let origin = to_parent.as_translation().map(|origin| {
+        let placement = layer.placement();
+        // A leaf without a graphics layer draws nothing beside its own
+        // draws, where its reach lies: its own area is its area.
+        let own = if leaf && !layer.flags().contains(RecordFlags::HAS_GRAPHICS_LAYER) {
+            area
+        } else {
+            let own = layer
+                .own_reach()
+                .mapped(|rect| {
+                    placement
+                        .bounds_for_rect(rect)
+                        .translate(offset.x, offset.y)
+                })
+                .within(context.visual_clip);
+            shown_area(space.place(own), false)
+        };
+        let origin = placement.as_translation().map(|origin| {
             Point::new(
                 origin.x + offset.x + space.origin.x,
                 origin.y + offset.y + space.origin.y,
             )
         });
-        (shown_area(space.place(own), false), origin)
+        (own, origin)
     };
     out.shown.push(ShownRecord {
         record: layer.store().record_ref(layer.id()),

@@ -43,8 +43,8 @@ use rigid_snap::{layer_has_pixel_sensitive_subtree, rigid_snap_anchor};
 use rounded_clip_corners::{
     content_admits_rounded_clip, content_takes_rounded_clip, rounded_clip_for_layer,
 };
+use shown::{Drawn, ShownSpace, culled, record_drawn, record_hidden, surface_space};
 pub(crate) use shown::{ShownArea, ShownRecord};
-use shown::{ShownSpace, culled, record_drawn, record_hidden, surface_space};
 use space_children::collect_space_children;
 
 const AFFINE_TOLERANCE: f32 = 1e-4;
@@ -784,7 +784,7 @@ fn collect_child(
             &mut out.scene,
         );
     }
-    record_drawn(child, context, (false, shadows_from), out);
+    record_drawn(child, context, Drawn::InPlace(shadows_from), out);
     let (visual_clip, rounding) = match radius {
         Some(radius) => {
             let clip = visit
@@ -841,7 +841,7 @@ fn collect_inline(
         record_hidden(inline, context, out);
         return context.settings.wants_pixel_sensitive && inline.own_draw_facts().pixel_sensitive;
     }
-    record_drawn(inline, context, (false, out.scene.rrect_shadows.len()), out);
+    record_drawn(inline, context, Drawn::Leaf, out);
     let translated = context.translated;
     let rigid = || rigid_snap_anchor(bounds, &GraphicsLayer::DEFAULT);
     let inherited = context
@@ -934,7 +934,11 @@ fn collect_isolated_child(
     out.scene.next_z += 1;
     // A surface whose content's walk recorded how it drew each record draws
     // as in place does: a change beneath it changes what it changes there.
-    record_drawn(child, context, (shown.is_none(), shadows_before), out);
+    let drawn = match shown {
+        Some(_) => Drawn::InPlace(shadows_before),
+        None => Drawn::Composite(shadows_before),
+    };
+    record_drawn(child, context, drawn, out);
     direct_translation(child.transform_to_parent()).is_some() && has_pixel_sensitive_subtree
 }
 
