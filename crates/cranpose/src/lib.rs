@@ -112,6 +112,11 @@ mod window_local;
     not(target_arch = "wasm32")
 ))]
 mod window_node;
+#[cfg(any(
+    all(feature = "desktop-shell", feature = "renderer-wgpu"),
+    feature = "embed"
+))]
+mod window_shell;
 /// Android activity state passed to the [`android_main!`] entry point.
 #[cfg(all(feature = "android", target_os = "android"))]
 pub use android_activity::AndroidApp;

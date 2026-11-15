@@ -36,7 +36,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use cranpose_app_shell::{AppShell, FrameSchedule, RootId, default_root_key};
+use cranpose_app_shell::{AppShell, FrameSchedule, RootId};
 use cranpose_core::{NodeId, collections::map::HashMap};
 use cranpose_render_common::Renderer;
 use cranpose_render_wgpu::{WgpuRenderer, WgpuTextSystem};
@@ -274,17 +274,14 @@ impl EmbeddedHost {
         let registry = Rc::new(NativeWindowRegistry::default());
         let env_for_content = Rc::clone(&platform_env);
         let mut content = content;
-        let mut shell = with_native_window_registry(&registry, || {
-            AppShell::new_with_size_and_density(
-                renderer,
-                default_root_key(),
-                move || env_for_content.compose_root(&mut content),
-                (size.width, size.height),
-                size.viewport(),
-                size.scale,
-            )
-        });
-        shell.set_semantics_enabled(true);
+        let shell = crate::window_shell::window_shell(
+            renderer,
+            &registry,
+            move || env_for_content.compose_root(&mut content),
+            (size.width, size.height),
+            size.viewport(),
+            size.scale,
+        );
         publish_surface_size(size);
         let primary = SurfaceSlot::new(
             PRIMARY_SURFACE,

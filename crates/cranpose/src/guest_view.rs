@@ -69,6 +69,7 @@ impl GuestView {
             (width as f32 / density, height as f32 / density),
             density,
         );
+        shell.use_system_clipboard();
         Ok(Self {
             shell,
             max_dimension,

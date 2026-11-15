@@ -4,7 +4,7 @@
 
 [counts]
 too_many_arguments = 10
-private_docs = 12291
+private_docs = 12290
 for_test_fns = 38
 cranpose_env_names = 76
 source_text_checks = 324
@@ -42,7 +42,7 @@ limit = 1000
 "apps/desktop-demo/src/app/wsz/mod.rs" = 1966
 "apps/desktop-demo/src/test_screens/compose_twin_matrix.rs" = 5083
 "crates/cranpose-animation/src/animation.rs" = 1188
-"crates/cranpose-app-shell/src/lib.rs" = 1345
+"crates/cranpose-app-shell/src/lib.rs" = 1285
 "crates/cranpose-app-shell/src/shell_input.rs" = 2067
 "crates/cranpose-capabilities/src/lib.rs" = 1069
 "crates/cranpose-core/src/composer.rs" = 1995
@@ -84,8 +84,8 @@ limit = 1000
 "crates/cranpose/src/accessibility.rs" = 2096
 "crates/cranpose/src/android/event_loop.rs" = 2221
 "crates/cranpose/src/app_launcher.rs" = 1469
-"crates/cranpose/src/desktop/event_loop.rs" = 5762
-"crates/cranpose/src/embed.rs" = 1015
+"crates/cranpose/src/desktop/event_loop.rs" = 5757
+"crates/cranpose/src/embed.rs" = 1012
 "crates/cranpose/src/native_window.rs" = 1052
 "crates/cranpose/src/robot.rs" = 1875
 "crates/cranpose/src/web/accessibility.rs" = 1254

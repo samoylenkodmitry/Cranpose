@@ -6,9 +6,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use cranpose_app_shell::{
-    AppShell, FramePacingMode, FrameUpdateResult, RootId, SurfaceMut, default_root_key,
-};
+use cranpose_app_shell::{AppShell, FramePacingMode, FrameUpdateResult, RootId, SurfaceMut};
 use cranpose_core::collections::map::{HashMap, HashSet};
 use cranpose_platform_desktop_winit::DesktopWinitPlatform;
 use cranpose_render_common::Renderer;
@@ -4942,17 +4940,14 @@ impl ApplicationHandler for App {
             content,
         );
         let registry = Rc::clone(&self.native_window_registry);
-        let mut app = native_window::with_native_window_registry(&registry, || {
-            AppShell::new_with_size_and_density(
-                renderer,
-                default_root_key(),
-                content,
-                (size.width, size.height),
-                viewport,
-                initial_scale as f32,
-            )
-        });
-        app.set_semantics_enabled(true);
+        let mut app = crate::window_shell::window_shell(
+            renderer,
+            &registry,
+            content,
+            (size.width, size.height),
+            viewport,
+            initial_scale as f32,
+        );
         crate::accessibility::install_inspector(&mut app, self.settings.developer_inspector);
 
         let mut accessibility = super::accessibility::DesktopAccessibilityBridge::new(
