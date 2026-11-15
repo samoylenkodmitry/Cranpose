@@ -429,7 +429,7 @@ impl Drop for Workers {
 /// only, or demanded ones first and then `warm_ups`.
 #[cfg(not(target_arch = "wasm32"))]
 fn spawn_thread(
-    name: &str,
+    name: &'static str,
     warm_ups: bool,
     pool: &Arc<Pool>,
     finished: &Sender<()>,
@@ -442,6 +442,7 @@ fn spawn_thread(
         .name(name.into())
         .spawn(move || {
             crate::render::mark_thread_off_frame();
+            crate::fast_cores::run_current_thread_in_background(name);
             while let Some(job) = pool.take(warm_ups) {
                 job();
                 landing.after_build();

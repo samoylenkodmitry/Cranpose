@@ -5,6 +5,17 @@ pub fn pin_current_thread_to_fast_cores(role: &str) {
     imp::pin(role);
 }
 
+// Lets the calling thread, which no frame waits on, run on every CPU below
+// the priority of the threads that make frames. A thread starts on its
+// creator's CPUs at its creator's priority, so a thread the producer made
+// after it pinned itself would take the fast cores from the frame threads.
+// Threads the calling thread makes, as a GPU driver's compiler does, start
+// where it runs now.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn run_current_thread_in_background(role: &str) {
+    imp::run_in_background(role);
+}
+
 /// The calling thread's id in the OS scheduler, where scheduler hints
 /// name threads by one.
 #[cfg(not(target_arch = "wasm32"))]
@@ -40,6 +51,33 @@ mod imp {
         match rustix::thread::sched_setaffinity(None, &set) {
             Ok(()) => log::info!("[core-pin] {role}: eligible cpus {fast:?}"),
             Err(error) => log::warn!("[core-pin] {role}: sched_setaffinity failed: {error}"),
+        }
+    }
+
+    // The nice value of Android's `THREAD_PRIORITY_BACKGROUND`: a thread at
+    // 0 takes about nine tenths of a CPU it shares with one at this value.
+    const BACKGROUND_NICE: i32 = 10;
+
+    pub(super) fn run_in_background(role: &str) {
+        let capacities = read_cpu_capacities(Path::new("/sys/devices/system/cpu"));
+        // Only a machine with fast cores pins threads to them.
+        if fast_cpus(&capacities).is_some()
+            && capacities
+                .iter()
+                .all(|&(cpu, _)| cpu < rustix::thread::CpuSet::MAX_CPU)
+        {
+            let mut set = rustix::thread::CpuSet::new();
+            for &(cpu, _) in &capacities {
+                set.set(cpu);
+            }
+            if let Err(error) = rustix::thread::sched_setaffinity(None, &set) {
+                log::warn!("[core-pin] {role}: sched_setaffinity failed: {error}");
+            }
+        }
+        // On Linux a thread's priority is its own: `None` names the caller.
+        match rustix::process::setpriority_process(None, BACKGROUND_NICE) {
+            Ok(()) => log::info!("[core-pin] {role}: every cpu, nice {BACKGROUND_NICE}"),
+            Err(error) => log::warn!("[core-pin] {role}: setpriority failed: {error}"),
         }
     }
 
@@ -91,6 +129,9 @@ mod imp {
 #[cfg(not(any(target_os = "android", target_os = "linux")))]
 mod imp {
     pub(super) fn pin(_role: &str) {}
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn run_in_background(_role: &str) {}
 
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn thread_id() -> Option<i32> {

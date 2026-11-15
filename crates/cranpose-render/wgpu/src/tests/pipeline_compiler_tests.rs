@@ -32,6 +32,29 @@ fn each_lane_runs_its_jobs_off_the_calling_thread() {
     }
 }
 
+// A compile runs below the priority of the threads that make frames, at
+// Android's background priority, on either lane; the thread that queued it
+// keeps its own. A test process started below that priority keeps its own,
+// since only a privileged thread may raise its priority.
+#[cfg(any(target_os = "android", target_os = "linux"))]
+#[test]
+fn compiles_run_below_the_threads_that_queue_them() {
+    let caller = rustix::process::getpriority_process(None).unwrap();
+    let compiler = PipelineCompiler::spawn(wgpu::Backend::Vulkan);
+    for lane in [CompileLane::Demanded, CompileLane::WarmUp] {
+        let (sent, received) = mpsc::channel();
+        compiler.enqueue(lane, move || {
+            sent.send(rustix::process::getpriority_process(None).unwrap())
+                .unwrap();
+        });
+        assert_eq!(
+            received.recv_timeout(Duration::from_secs(5)),
+            Ok(caller.max(10))
+        );
+    }
+    assert_eq!(rustix::process::getpriority_process(None).unwrap(), caller);
+}
+
 #[test]
 fn a_demanded_job_runs_while_a_warm_up_is_still_compiling() {
     let compiler = PipelineCompiler::spawn(wgpu::Backend::Vulkan);
