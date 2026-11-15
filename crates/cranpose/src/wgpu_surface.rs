@@ -85,11 +85,19 @@ pub(crate) fn render_surface_frame(
     format: wgpu::TextureFormat,
     (width, height): (u32, u32),
 ) -> Result<(), cranpose_render_wgpu::WgpuRendererError> {
-    let view = frame.texture.create_view(&wgpu::TextureViewDescriptor {
+    renderer.render_surface_texture(frame, &surface_view(frame, format), width, height)
+}
+
+// The view a frame draws into the surface `frame` through: in the display
+// format of the surface's `format`.
+pub(crate) fn surface_view(
+    frame: &wgpu::SurfaceTexture,
+    format: wgpu::TextureFormat,
+) -> wgpu::TextureView {
+    frame.texture.create_view(&wgpu::TextureViewDescriptor {
         format: Some(crate::surface_format::display_surface_view_format(format)),
         ..Default::default()
-    });
-    renderer.render_surface_texture(frame, &view, width, height)
+    })
 }
 
 pub(crate) fn current_surface_texture(surface: &wgpu::Surface<'_>, context: &str) -> SurfaceFrame {

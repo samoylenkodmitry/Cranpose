@@ -1048,7 +1048,6 @@ fn future_request_device(
                     inner: device,
                     ident: crate::cmp::Identifier::create(),
                     error_scope_count: Rc::new(Cell::new(0)),
-                    pipeline_discovery: Rc::default(),
                     background_pipelines: Rc::default(),
                     background_compiles: Rc::default(),
                     #[cfg(feature = "portable-wgsl")]
@@ -1279,9 +1278,6 @@ pub struct WebDevice {
     ident: crate::cmp::Identifier,
     /// Current number of error scopes that have been pushed on the device.
     error_scope_count: Rc<Cell<u32>>,
-    /// The `createRenderPipelineAsync` promises of the pipelines created
-    /// while pipeline discovery is on, or `None` while it is off.
-    pipeline_discovery: Rc<RefCell<Option<js_sys::Array>>>,
     /// The pipelines compiling in the background that no taking has taken,
     /// while background compiles are on, or `None` while they are off.
     background_pipelines: Rc<RefCell<Option<Vec<BackgroundPipeline>>>>,
@@ -1449,8 +1445,7 @@ pub struct WebPipelineLayout {
 
 #[derive(Debug, Clone)]
 pub struct WebRenderPipeline {
-    /// Empty for a pipeline created during pipeline discovery, which never
-    /// draws, and for one compiling in the background until it compiled.
+    /// Empty for a pipeline compiling in the background until it compiled.
     pub(crate) inner: Rc<OnceCell<webgpu_sys::GpuRenderPipeline>>,
     /// Whether a pass left out a draw while the pipeline compiled in the
     /// background.
@@ -1484,9 +1479,6 @@ pub struct WebPipelineCache {
 #[derive(Debug, Clone)]
 pub struct WebCommandEncoder {
     pub(crate) inner: webgpu_sys::GpuCommandEncoder,
-    /// The device's pipeline discovery, which a pass begun while it is on
-    /// records no draw for.
-    pipeline_discovery: Rc<RefCell<Option<js_sys::Array>>>,
     /// Unique identifier for this CommandEncoder.
     ident: crate::cmp::Identifier,
 }
@@ -1501,8 +1493,7 @@ pub struct WebComputePassEncoder {
 #[derive(Debug)]
 pub struct WebRenderPassEncoder {
     pub(crate) inner: webgpu_sys::GpuRenderPassEncoder,
-    /// Draws left out: the pass began during pipeline discovery, or its
-    /// pipeline was created during it.
+    /// Draws left out while its pipeline compiles in the background.
     draws: PipelineDraws,
     /// Unique identifier for this RenderPassEncoder.
     ident: crate::cmp::Identifier,
@@ -1897,22 +1888,13 @@ impl Drop for WebAdapter {
 }
 
 /// Whether an encoder records the draws that follow its last pipeline.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 struct PipelineDraws {
-    /// The encoder began during pipeline discovery: it records no draw.
-    discovering: bool,
-    /// Its last pipeline was created during pipeline discovery.
+    /// Its last pipeline still compiles in the background.
     skipping: bool,
 }
 
 impl PipelineDraws {
-    fn new(discovering: bool) -> Self {
-        Self {
-            discovering,
-            skipping: false,
-        }
-    }
-
     /// The JS pipeline to set, or `None` when the draws that follow are
     /// left out.
     fn set<'a>(
@@ -1920,39 +1902,16 @@ impl PipelineDraws {
         pipeline: &'a dispatch::DispatchRenderPipeline,
     ) -> Option<&'a webgpu_sys::GpuRenderPipeline> {
         let pipeline = pipeline.as_webgpu();
-        let set = pipeline.inner.get().filter(|_| !self.discovering);
+        let set = pipeline.inner.get();
         self.skipping = set.is_none();
-        if self.skipping && !self.discovering {
+        if self.skipping {
             pipeline.left_out.set(true);
         }
         set
     }
 }
 
-/// The pipelines a pipeline discovery compiled, kept so the browser keeps
-/// them cached until they are created again.
-#[derive(Debug)]
-pub struct DiscoveredPipelines(#[allow(dead_code)] JsValue);
-
 impl WebDevice {
-    /// Starts pipeline discovery: see `Device::begin_pipeline_discovery`.
-    pub(crate) fn begin_pipeline_discovery(&self) {
-        *self.pipeline_discovery.borrow_mut() = Some(js_sys::Array::new());
-    }
-
-    /// Ends pipeline discovery: see `Device::end_pipeline_discovery`.
-    pub(crate) fn end_pipeline_discovery(
-        &self,
-    ) -> impl Future<Output = DiscoveredPipelines> + 'static {
-        let pending = self
-            .pipeline_discovery
-            .borrow_mut()
-            .take()
-            .unwrap_or_else(js_sys::Array::new);
-        let settled = wasm_bindgen_futures::JsFuture::from(Promise::all_settled(&pending));
-        async move { DiscoveredPipelines(settled.await.unwrap_or_else(|error| error)) }
-    }
-
     /// See `Device::compiles_in_background`.
     pub(crate) fn compiles_in_background(&self) -> bool {
         self.background_compiles.get() > 0
@@ -1988,6 +1947,23 @@ impl WebDevice {
         let settled = wasm_bindgen_futures::JsFuture::from(Promise::all_settled(&taken));
         Some(async move {
             let _ = settled.await;
+        })
+    }
+
+    /// The future of `Device::deliver_background_pipelines`.
+    pub(crate) fn deliver_background_pipelines(
+        &self,
+    ) -> Option<impl Future<Output = ()> + 'static> {
+        let background = self.background_pipelines.borrow();
+        if background.as_ref()?.iter().all(|pipeline| pipeline.settled.get()) {
+            return None;
+        }
+        // Chrome's GPU process sends the pipelines it compiled before this
+        // call ahead of the call's answer, or with it.
+        let answered =
+            wasm_bindgen_futures::JsFuture::from(self.inner.queue().on_submitted_work_done());
+        Some(async move {
+            let _ = answered.await;
         })
     }
 
@@ -2533,15 +2509,11 @@ impl dispatch::DeviceInterface for WebDevice {
         let mapped_primitive = map_primitive_state(&desc.primitive);
         mapped_desc.set_primitive(&mapped_primitive);
 
-        // During pipeline discovery the browser compiles the pipeline in the
-        // background, beside the others, and this one never draws. In the
-        // background it compiles the same way, and this one draws once it
-        // compiled.
+        // In the background the browser compiles the pipeline beside the
+        // others, and this one draws once it compiled.
         let render_pipeline = Rc::new(OnceCell::new());
         let left_out = Rc::new(Cell::new(false));
-        if let Some(pending) = self.pipeline_discovery.borrow().as_ref() {
-            pending.push(&self.inner.create_render_pipeline_async(&mapped_desc));
-        } else if let Some(pending) = self.background_pipelines.borrow_mut().as_mut() {
+        if let Some(pending) = self.background_pipelines.borrow_mut().as_mut() {
             let compiling = self.inner.create_render_pipeline_async(&mapped_desc);
             let compiled = Rc::clone(&render_pipeline);
             let settled = Rc::new(Cell::new(false));
@@ -2746,7 +2718,6 @@ impl dispatch::DeviceInterface for WebDevice {
 
         WebCommandEncoder {
             inner: command_encoder,
-            pipeline_discovery: Rc::clone(&self.pipeline_discovery),
             ident: crate::cmp::Identifier::create(),
         }
         .into()
@@ -2786,7 +2757,7 @@ impl dispatch::DeviceInterface for WebDevice {
 
         WebRenderBundleEncoder {
             inner: render_bundle_encoder,
-            draws: PipelineDraws::new(self.pipeline_discovery.borrow().is_some()),
+            draws: PipelineDraws::default(),
             ident: crate::cmp::Identifier::create(),
         }
         .into()
@@ -3512,7 +3483,7 @@ impl dispatch::CommandEncoderInterface for WebCommandEncoder {
 
         WebRenderPassEncoder {
             inner: render_pass,
-            draws: PipelineDraws::new(self.pipeline_discovery.borrow().is_some()),
+            draws: PipelineDraws::default(),
             ident: crate::cmp::Identifier::create(),
         }
         .into()

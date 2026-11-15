@@ -169,7 +169,7 @@ pub(crate) struct PipelineCompiler {
     #[cfg(not(target_arch = "wasm32"))]
     workers: Option<Arc<Workers>>,
     #[cfg(target_arch = "wasm32")]
-    discovery: std::rc::Rc<DiscoveryFrame>,
+    first_frame: std::rc::Rc<FirstFrame>,
     // On WebGL, the builds that link one a frame (see `paced`), and on
     // WebGPU the warm-ups built in idle periods, shared by every handle, and
     // how this handle builds.
@@ -187,8 +187,8 @@ pub(crate) struct PipelineCompiler {
 #[cfg(target_arch = "wasm32")]
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
 enum WebBuilds {
-    // At their first use, or at the end of a frame that takes its pipelines
-    // from a pipeline discovery.
+    // At their first use, or at the end of a frame that has not shown whole
+    // yet.
     #[default]
     AtFirstUse,
     // On WebGL, one at a time between frames (see `PipelineCompiler::paced`).
@@ -273,11 +273,11 @@ impl PacedLanding {
     }
 }
 
-/// On the web, the frame drawn while it takes its pipelines from a pipeline
-/// discovery, and the builds it holds back to its end.
+/// On the web, the frame drawn while none has shown whole yet, and the builds
+/// it holds back to its end.
 #[cfg(target_arch = "wasm32")]
 #[derive(Default)]
-struct DiscoveryFrame {
+struct FirstFrame {
     drawing: std::cell::Cell<bool>,
     held: std::cell::RefCell<Vec<Job>>,
 }
@@ -611,7 +611,7 @@ impl PipelineCompiler {
 
     /// Whether a pipeline queued now is built ahead of the draw that needs it: on the
     /// compiler's threads where they run, on WebGL at a frame's end, and elsewhere on the
-    /// web at the end of a frame that takes its pipelines from a pipeline discovery.
+    /// web at the end of a frame drawn while none has shown whole yet.
     pub(crate) fn builds_ahead(&self) -> bool {
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -619,7 +619,7 @@ impl PipelineCompiler {
         }
         #[cfg(target_arch = "wasm32")]
         {
-            self.builds == WebBuilds::Paced || self.discovery.drawing.get()
+            self.builds == WebBuilds::Paced || self.first_frame.drawing.get()
         }
     }
 
@@ -642,16 +642,16 @@ impl PipelineCompiler {
         self.background_warm_ups.compiling_in_background.set(true);
     }
 
-    /// Starts a frame that takes its pipelines from a pipeline discovery:
-    /// the jobs queued until [`Self::end_frame`] run there, after the frame's
-    /// own builds, so the browser compiles those first.
+    /// Starts a frame drawn while none has shown whole yet: the jobs queued
+    /// until [`Self::end_frame`] run there, after the frame's own builds, so
+    /// the browser compiles those first.
     #[cfg(target_arch = "wasm32")]
-    pub(crate) fn begin_discovery_frame(&self) {
-        self.discovery.drawing.set(true);
+    pub(crate) fn begin_first_frame(&self) {
+        self.first_frame.drawing.set(true);
     }
 
     /// Ends the drawing frame: queues the jobs it held on [`CompileLane::Later`] behind the
-    /// warm-ups, or on the web runs the jobs a discovery frame held, and on WebGL the next one
+    /// warm-ups, or on the web runs the jobs a first frame held, and on WebGL the next one
     /// waiting as the frame's `scene_motion` allows (see [`Self::paced`]).
     #[cfg_attr(
         not(target_arch = "wasm32"),
@@ -674,8 +674,8 @@ impl PipelineCompiler {
         }
         #[cfg(target_arch = "wasm32")]
         {
-            if self.discovery.drawing.replace(false) {
-                let held = std::mem::take(&mut *self.discovery.held.borrow_mut());
+            if self.first_frame.drawing.replace(false) {
+                let held = std::mem::take(&mut *self.first_frame.held.borrow_mut());
                 for job in held {
                     job();
                 }
@@ -786,8 +786,8 @@ impl PipelineCompiler {
 
     /// Queues `job` on `lane`'s thread, behind the jobs already waiting there, or holds
     /// it to the frame's end on [`CompileLane::Later`]; on WebGL it waits for its turn at
-    /// a frame's end, and elsewhere on the web for the end of a frame that takes its
-    /// pipelines from a pipeline discovery. An inactive compiler drops it, and the
+    /// a frame's end, and elsewhere on the web for the end of a frame drawn while none
+    /// has shown whole yet. An inactive compiler drops it, and the
     /// caller compiles at first use as before.
     pub(crate) fn enqueue(&self, lane: CompileLane, job: impl FnOnce() + CompilerSend + 'static) {
         #[cfg(not(target_arch = "wasm32"))]
@@ -823,8 +823,8 @@ impl PipelineCompiler {
         #[cfg(target_arch = "wasm32")]
         match self.builds {
             WebBuilds::Paced => self.paced.borrow_mut().push(lane, Box::new(job)),
-            _ if self.discovery.drawing.get() => {
-                self.discovery.held.borrow_mut().push(Box::new(job));
+            _ if self.first_frame.drawing.get() => {
+                self.first_frame.held.borrow_mut().push(Box::new(job));
             }
             WebBuilds::WarmsInBackground if lane == CompileLane::WarmUp => {
                 self.background_warm_ups

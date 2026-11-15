@@ -453,33 +453,13 @@ impl Device {
         }
     }
 
-    /// Starts pipeline discovery when this `Device` is on the WebGPU backend,
-    /// and returns whether it did. Until [`Self::end_pipeline_discovery`],
-    /// every render pipeline it creates compiles through the browser's
-    /// `createRenderPipelineAsync`, in the background and beside the others
-    /// instead of one after another, and every encoder begun meanwhile
-    /// records no draw. A pipeline created during discovery never draws.
-    ///
-    /// A renderer draws a frame this way to learn the pipelines the frame
-    /// needs, drops what it drew, and draws the frame again once the future
-    /// [`Self::end_pipeline_discovery`] returns has resolved: creating the
-    /// same pipelines again then takes the ones the browser compiled.
-    #[cfg(webgpu)]
-    pub fn begin_pipeline_discovery(&self) -> bool {
-        self.inner
-            .as_webgpu_opt()
-            .map(crate::backend::webgpu::WebDevice::begin_pipeline_discovery)
-            .is_some()
-    }
-
     /// Compiles every render pipeline this `Device` creates from now on in
     /// the background, when it is on the WebGPU backend, and returns whether
     /// it does. The browser compiles each through `createRenderPipelineAsync`,
     /// beside the others; until it has, the draws that use the pipeline are
     /// left out, and from then on they draw. Created one after another
     /// instead, new pipelines hold the browser's GPU process, and every
-    /// frame of the page, until each compiled. Pipeline discovery takes
-    /// precedence while it is on.
+    /// frame of the page, until each compiled.
     #[cfg(webgpu)]
     pub fn compile_pipelines_in_background(&self) -> bool {
         self.inner
@@ -515,24 +495,21 @@ impl Device {
             .and_then(crate::backend::webgpu::WebDevice::take_background_pipelines)
     }
 
-    /// Ends pipeline discovery. The future resolves once every pipeline
-    /// created during it compiled or failed, to those pipelines: keep them
-    /// until the same pipelines are created again, so the browser still has
-    /// them cached.
+    /// Asks the browser for the render pipelines that compile in the
+    /// background ([`Self::compile_pipelines_in_background`]). Returns a
+    /// future that resolves once the page holds every one of them compiled
+    /// before the browser's GPU process answered; `None` when none
+    /// compiles. Chrome hands the page a compiled pipeline only after the
+    /// page sent its GPU process a call. A frame drawn right after a long
+    /// task finds pipelines compiled long before still compiling, unless
+    /// the page awaited this future first.
     #[cfg(webgpu)]
-    pub fn end_pipeline_discovery(
+    pub fn deliver_background_pipelines(
         &self,
-    ) -> impl core::future::Future<Output = Option<webgpu::DiscoveredPipelines>> + 'static {
-        let settled = self
-            .inner
+    ) -> Option<impl core::future::Future<Output = ()> + 'static> {
+        self.inner
             .as_webgpu_opt()
-            .map(crate::backend::webgpu::WebDevice::end_pipeline_discovery);
-        async move {
-            match settled {
-                Some(settled) => Some(settled.await),
-                None => None,
-            }
-        }
+            .and_then(crate::backend::webgpu::WebDevice::deliver_background_pipelines)
     }
 
     /// Returns the underlying [`webgpu::GpuDevice`] handle if this `Device`
