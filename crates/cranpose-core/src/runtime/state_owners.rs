@@ -48,8 +48,7 @@ fn take_owned_states(state: &thread_state::RuntimeThreadState) -> Vec<Rc<StateHa
         .state_owners
         .borrow_mut()
         .last_mut()
-        .map(std::mem::take)
-        .unwrap_or_default()
+        .map_or_default(std::mem::take)
 }
 
 pub(super) fn hand_to_current_owner(lease: &Rc<StateHandleLease>) -> bool {

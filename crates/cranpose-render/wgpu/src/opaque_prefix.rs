@@ -247,8 +247,7 @@ fn placed_edges(candidate: &Candidate<'_>, scale: f32) -> Option<(Edges, Point)>
     let placement = &candidate.run.placement;
     let snap = placement
         .snap_anchor
-        .map(|anchor| snap_delta_for_anchor(anchor, scale))
-        .unwrap_or_default();
+        .map_or_default(|anchor| snap_delta_for_anchor(anchor, scale));
     let canonicalize = placement.snap_anchor.is_some();
     let offset = Point {
         x: placement.offset.x + snap.x,
@@ -310,8 +309,7 @@ pub(crate) fn capture_solid_rect(
     let placement = &run.placement;
     let snap = placement
         .snap_anchor
-        .map(|anchor| snap_delta_for_anchor(anchor, scale))
-        .unwrap_or_default();
+        .map_or_default(|anchor| snap_delta_for_anchor(anchor, scale));
     let painted = device_edges(
         candidate.record.rect,
         Point::new(placement.offset.x + snap.x, placement.offset.y + snap.y),

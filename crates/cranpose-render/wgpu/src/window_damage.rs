@@ -553,9 +553,7 @@ pub(crate) enum NoPart {
 }
 
 pub(crate) fn snap_delta(anchor: Option<SnapAnchor>, scale: f32) -> cranpose_ui_graphics::Point {
-    anchor
-        .map(|anchor| snap_delta_for_anchor(anchor, scale))
-        .unwrap_or_default()
+    anchor.map_or_default(|anchor| snap_delta_for_anchor(anchor, scale))
 }
 
 pub(crate) fn window_rect((width, height): (u32, u32)) -> DeviceRect {

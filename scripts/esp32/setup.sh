@@ -2,13 +2,10 @@
 # Installs what ESP32-S3 builds need: the Xtensa Rust toolchain, ldproxy,
 # espflash and Espressif's QEMU. ESP-IDF itself downloads into ~/.espressif on
 # the first build.
-#
-# The toolchain stays on esp 1.98.1: the std of esp 1.99.0.0 calls
-# libc::fchmodat on ESP-IDF, which its libc does not define.
 set -euo pipefail
 
-toolchain=esp-1.98.1
-toolchain_version=1.98.1.0
+toolchain=esp-1.100.0
+toolchain_version=1.100.0.0
 qemu_tag=esp-develop-9.2.2-20260417
 qemu_version=esp_develop_9.2.2_20260417
 qemu_dir="$HOME/.local/esp-qemu"

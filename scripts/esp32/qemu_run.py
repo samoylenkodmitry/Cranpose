@@ -183,7 +183,7 @@ def main():
     parser.add_argument("--flash-image", type=pathlib.Path,
                         help="a merged flash image to boot instead of building one from the ELF")
     parser.add_argument("--bootloader", type=pathlib.Path,
-                        help="defaults to the bootloader.bin beside the ELF")
+                        help="defaults to the bootloader.bin in the build directory beside the ELF")
     parser.add_argument("--partitions", type=pathlib.Path)
     parser.add_argument("--flash-size", default="8mb")
     parser.add_argument("--psram", default="8M")
@@ -210,7 +210,7 @@ def main():
         if args.partitions is None:
             parser.error("--partitions is required to build the flash image")
         image = workdir / "flash.bin"
-        bootloader = args.bootloader or args.elf.parent / "bootloader.bin"
+        bootloader = args.bootloader or args.elf.parent / "build" / "bootloader.bin"
         flash_image(args.chip, args.elf, bootloader, args.partitions, args.flash_size, image)
     monitor_path = workdir / "monitor.sock"
     pump_path = workdir / "pump.sock"

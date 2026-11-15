@@ -148,8 +148,7 @@ pub fn publish_microphone_permission() {
     let permission = microphone_permission();
     let listeners: Vec<Observer> = observers()
         .lock()
-        .map(|observers| observers.iter().map(|(_, o)| Arc::clone(o)).collect())
-        .unwrap_or_default();
+        .map_or_default(|observers| observers.iter().map(|(_, o)| Arc::clone(o)).collect());
     for observer in listeners {
         observer(permission);
     }

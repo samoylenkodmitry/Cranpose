@@ -100,8 +100,7 @@ impl SceneStore {
     fn parent_content_offset(&self, index: usize) -> Point {
         self.tree[index]
             .parent
-            .map(|parent| self.content_offset(parent))
-            .unwrap_or_default()
+            .map_or_default(|parent| self.content_offset(parent))
     }
 
     #[expect(

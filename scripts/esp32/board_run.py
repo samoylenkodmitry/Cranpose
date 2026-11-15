@@ -7,7 +7,7 @@ either, with the settings of its sdkconfig.defaults, such as
 scripts/esp32/sampler or benchmarks/esp32/perfstats. The ELF
 is copied beside the log, so a profile in the log can be read later.
 
-Run it in the Xtensa Rust environment (`. ~/export-esp-1.98.1.sh`); the LVGL
+Run it in the Xtensa Rust environment (`. ~/export-esp-1.100.0.sh`); the LVGL
 build takes ESP-IDF from ~/.espressif, where the demo's first build put it.
 """
 
@@ -78,7 +78,9 @@ def build_rust(app, binary, board, components, extra_sdkconfig, features, log, d
         command += ["--features", ",".join(features)]
     run(command, app, env, log.with_suffix(".build"))
     release = app / "target" / target / "release"
-    return release / binary, release / "bootloader.bin", demo / config["partitions"]
+    # esp-idf-sys copies the bootloader three directories above its out directory,
+    # which cargo's per-unit build layout makes `<profile>/build`.
+    return release / binary, release / "build" / "bootloader.bin", demo / config["partitions"]
 
 
 SLINT_CORE = "i-slint-core-1.18.1"

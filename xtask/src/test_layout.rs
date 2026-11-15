@@ -203,14 +203,13 @@ fn runner_table(source: &str) -> Vec<String> {
     source
         .split_once("runners! {")
         .and_then(|(_, rest)| rest.split_once('}'))
-        .map(|(body, _)| {
+        .map_or_default(|(body, _)| {
             body.split(',')
                 .map(str::trim)
                 .filter(|name| !name.is_empty())
                 .map(str::to_owned)
                 .collect()
         })
-        .unwrap_or_default()
 }
 
 pub(crate) fn unlinked_integration_tests(root: &Path) -> Result<Vec<PathBuf>, String> {
@@ -300,7 +299,7 @@ fn test_target_paths(manifest: &toml::Value) -> Vec<PathBuf> {
     manifest
         .get("test")
         .and_then(toml::Value::as_array)
-        .map(|targets| {
+        .map_or_default(|targets| {
             targets
                 .iter()
                 .filter_map(
@@ -314,7 +313,6 @@ fn test_target_paths(manifest: &toml::Value) -> Vec<PathBuf> {
                 )
                 .collect()
         })
-        .unwrap_or_default()
 }
 
 fn read_toml(path: &Path) -> Result<toml::Value, String> {

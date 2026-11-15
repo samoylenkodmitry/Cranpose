@@ -39,7 +39,7 @@ decides nothing and exits with an error.
 A revision is a commit, or `NAME=COMMIT` to give its leg a name; one commit
 may run as two legs.
 
-Run it in the Xtensa Rust environment (`. ~/export-esp-1.98.1.sh`).
+Run it in the Xtensa Rust environment (`. ~/export-esp-1.100.0.sh`).
 
 Usage: board_ab.py --board e32r35t [--no-hot-code] [--null NAME] BASE REVISION [REVISION...]
 """

@@ -639,7 +639,6 @@ impl CoordinatorChain {
     fn total_content_offset_from(&self, index: usize) -> Point {
         self.nodes
             .get(index)
-            .map(|node| node.accumulated_offset.get())
-            .unwrap_or_default()
+            .map_or_default(|node| node.accumulated_offset.get())
     }
 }

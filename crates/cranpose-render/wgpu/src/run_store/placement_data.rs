@@ -70,8 +70,7 @@ impl PlacementData {
     ) -> Self {
         let snap_delta = placement
             .snap_anchor
-            .map(|anchor| snap_delta_for_anchor(anchor, root_scale))
-            .unwrap_or_default();
+            .map_or_default(|anchor| snap_delta_for_anchor(anchor, root_scale));
         let mut flags = placement.data_flags();
         let clip = match placement.tested_device_clip(root_scale) {
             Some([x, y, width, height]) => {
@@ -82,8 +81,7 @@ impl PlacementData {
         };
         let dither_origin = placement
             .snap_anchor
-            .map(|anchor| snapped_anchor_device_origin(anchor, root_scale))
-            .unwrap_or_default();
+            .map_or_default(|anchor| snapped_anchor_device_origin(anchor, root_scale));
         if !turn.is_identity() {
             flags |= PLACEMENT_TURNED;
         }

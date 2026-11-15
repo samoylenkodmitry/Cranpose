@@ -1344,8 +1344,7 @@ impl Robot {
                 let text_info = elem
                     .text
                     .as_ref()
-                    .map(|t| format!(" text=\"{t}\""))
-                    .unwrap_or_default();
+                    .map_or_default(|t| format!(" text=\"{t}\""));
                 let clickable = if elem.clickable { " [CLICKABLE]" } else { "" };
                 let _ = std::fmt::Write::write_fmt(
                     output,

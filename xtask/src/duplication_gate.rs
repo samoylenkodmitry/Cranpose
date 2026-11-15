@@ -51,13 +51,12 @@ pub(crate) fn load_duplication_config(config_path: &Path) -> Result<DuplicationC
     let ignore_globs = table
         .get("ignore_globs")
         .and_then(toml::Value::as_array)
-        .map(|globs| {
+        .map_or_default(|globs| {
             globs
                 .iter()
                 .filter_map(|v| v.as_str().map(str::to_owned))
                 .collect()
-        })
-        .unwrap_or_default();
+        });
     Ok(DuplicationConfig {
         min_lines,
         min_tokens,
@@ -81,8 +80,7 @@ fn duplicate_from_json(value: &Value) -> Option<Duplicate> {
         fragment: value
             .get("fragment")
             .and_then(Value::as_str)
-            .map(str::to_owned)
-            .unwrap_or_default(),
+            .map_or_default(str::to_owned),
     })
 }
 
@@ -155,16 +153,10 @@ pub(crate) fn touches_diff(dup: &Duplicate, ranges: &gate_diff::RangesByFile) ->
     let (first_file, first_span) = side_span(&dup.first_file);
     let (second_file, second_span) = side_span(&dup.second_file);
     gate_diff::any_intersect(
-        ranges
-            .get(first_file)
-            .map(Vec::as_slice)
-            .unwrap_or_default(),
+        ranges.get(first_file).map_or_default(Vec::as_slice),
         first_span,
     ) || gate_diff::any_intersect(
-        ranges
-            .get(second_file)
-            .map(Vec::as_slice)
-            .unwrap_or_default(),
+        ranges.get(second_file).map_or_default(Vec::as_slice),
         second_span,
     )
 }
@@ -248,25 +240,18 @@ pub(crate) fn find_violations(
         }
         let comparable = old_by_pair
             .get(&file_pair(dup))
-            .map(Vec::as_slice)
-            .unwrap_or_default();
+            .map_or_default(Vec::as_slice);
         if already_duplicated_before(dup, comparable) || text_existed_before(dup, old_sources) {
             continue;
         }
         let (first_file, first_span) = side_span(&dup.first_file);
         let (second_file, second_span) = side_span(&dup.second_file);
         let first_hit = gate_diff::any_intersect(
-            ranges
-                .get(first_file)
-                .map(Vec::as_slice)
-                .unwrap_or_default(),
+            ranges.get(first_file).map_or_default(Vec::as_slice),
             first_span,
         );
         let second_hit = gate_diff::any_intersect(
-            ranges
-                .get(second_file)
-                .map(Vec::as_slice)
-                .unwrap_or_default(),
+            ranges.get(second_file).map_or_default(Vec::as_slice),
             second_span,
         );
         violations.push(format!(

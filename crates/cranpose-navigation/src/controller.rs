@@ -303,8 +303,7 @@ impl<R: Clone + PartialEq + 'static> NavController<R> {
         let forgotten = self.stack.update(|stack| {
             let popped = options
                 .pop_up_to
-                .map(|(target, inclusive)| stack.split_above(&target, inclusive))
-                .unwrap_or_default();
+                .map_or_default(|(target, inclusive)| stack.split_above(&target, inclusive));
             let forgotten = if options.save_state && !popped.is_empty() {
                 stack.keep(popped)
             } else {

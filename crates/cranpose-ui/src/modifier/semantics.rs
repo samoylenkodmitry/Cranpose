@@ -336,8 +336,7 @@ pub(crate) fn collect_semantics_from_chain(
 fn reach_of_node(node: &dyn ModifierNode) -> cranpose_foundation::SemanticsReach {
     let mut reach = node
         .as_semantics_node()
-        .map(cranpose_foundation::SemanticsNode::reach)
-        .unwrap_or_default();
+        .map_or_default(cranpose_foundation::SemanticsNode::reach);
     node.for_each_delegate(&mut |delegate| {
         reach = reach.union(reach_of_node(delegate));
     });

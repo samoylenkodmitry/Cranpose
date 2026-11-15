@@ -214,8 +214,7 @@ The demo firmware takes about 2.7 MB of flash: 2.4 MB of code at
 Latin subset of Noto Sans in `DisplayConfig::fonts`; the embedded default font
 would add 1.3 MB.
 
-The toolchain is `esp-1.98.1`. The `std` of esp 1.99.0.0 does not build for
-ESP-IDF: it calls `libc::fchmodat`, which its `libc` does not define there.
+The toolchain is `esp-1.100.0`.
 
 An application's release profile takes the demo's `opt-level = 2`,
 `lto = "fat"` and `codegen-units = 1`: the measurements behind them are in

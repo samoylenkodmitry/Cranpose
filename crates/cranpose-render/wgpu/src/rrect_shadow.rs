@@ -69,8 +69,7 @@ impl ShadowInstance {
 pub(crate) fn device_shadow(draw: &RRectShadowDraw, root_scale: f32) -> ShadowRRect {
     let snap = draw
         .snap_anchor
-        .map(|anchor| snap_delta_for_anchor(anchor, root_scale))
-        .unwrap_or_default();
+        .map_or_default(|anchor| snap_delta_for_anchor(anchor, root_scale));
     draw.shadow.translated(snap.x, snap.y).scaled(root_scale)
 }
 
@@ -79,8 +78,7 @@ pub(crate) fn device_shadow(draw: &RRectShadowDraw, root_scale: f32) -> ShadowRR
 pub(crate) fn rrect_shadow_bounds(draw: &RRectShadowDraw, root_scale: f32) -> Option<Rect> {
     let snap = draw
         .snap_anchor
-        .map(|anchor| snap_delta_for_anchor(anchor, root_scale))
-        .unwrap_or_default();
+        .map_or_default(|anchor| snap_delta_for_anchor(anchor, root_scale));
     let bounds = draw.shadow.bounds.translate(snap.x, snap.y);
     match draw.clip {
         Some(clip) => clip.translate(snap.x, snap.y).intersect(bounds),
@@ -93,8 +91,7 @@ pub(crate) fn rrect_shadow_bounds(draw: &RRectShadowDraw, root_scale: f32) -> Op
 pub(crate) fn device_clip(draw: &RRectShadowDraw, root_scale: f32) -> Option<[f32; 4]> {
     let snap = draw
         .snap_anchor
-        .map(|anchor| snap_delta_for_anchor(anchor, root_scale))
-        .unwrap_or_default();
+        .map_or_default(|anchor| snap_delta_for_anchor(anchor, root_scale));
     draw.clip.map(|clip| {
         let clip = clip.translate(snap.x, snap.y);
         let edge = |value: f32| canonicalize_device_coordinate(value * root_scale);

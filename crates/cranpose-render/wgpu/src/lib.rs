@@ -816,8 +816,7 @@ impl WgpuRenderer {
     pub fn debug_cpu_allocation_stats(&self) -> DebugCpuAllocationStats {
         let mut stats = self
             .sync_gpu_renderer()
-            .map(GpuRenderer::debug_cpu_allocation_stats)
-            .unwrap_or_default();
+            .map_or_default(GpuRenderer::debug_cpu_allocation_stats);
         stats.scene_graph_node_count = self.frontend.scene.store().node_count();
         stats.scene_graph_heap_bytes = self.frontend.scene.store().heap_bytes();
         stats.scene_hits = self.frontend.scene.hit_storage();

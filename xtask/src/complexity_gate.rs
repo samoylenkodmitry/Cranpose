@@ -210,11 +210,10 @@ pub(crate) fn find_violations(
 ) -> Vec<String> {
     let mut violations = Vec::new();
     for (file, functions) in new_functions_by_file {
-        let file_ranges = ranges.get(file).map(Vec::as_slice).unwrap_or_default();
+        let file_ranges = ranges.get(file).map_or_default(Vec::as_slice);
         let old_functions = old_functions_by_file
             .get(file)
-            .map(Vec::as_slice)
-            .unwrap_or_default();
+            .map_or_default(Vec::as_slice);
         for measure in Measure::ALL {
             let old_by_name = old_values_by_name(old_functions, measure);
             let limit = measure.limit(limits);

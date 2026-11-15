@@ -298,14 +298,11 @@ pub fn dispatch_lifecycle(event: LifecycleEvent) {
     LIFECYCLE_STATE.store(event.to as u8, Ordering::Release);
     crate::media::on_lifecycle(event);
     #[cfg(not(target_arch = "wasm32"))]
-    let callbacks = observers()
-        .lock()
-        .map(|list| {
-            list.iter()
-                .map(|(_, cb)| Arc::clone(cb))
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
+    let callbacks = observers().lock().map_or_default(|list| {
+        list.iter()
+            .map(|(_, cb)| Arc::clone(cb))
+            .collect::<Vec<_>>()
+    });
     #[cfg(target_arch = "wasm32")]
     let callbacks = crate::thread_state::with(|state| state.lifecycle_observers.all());
     for callback in callbacks {
