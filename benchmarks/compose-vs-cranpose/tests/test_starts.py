@@ -54,15 +54,13 @@ class Launcher(measure.Device):
         self.answer = answer
 
     def shell(self, *args, timeout=120, check=True):
-        if args[:2] == ('am', 'start'):
-            return self.answer
+        if args[:2] == ('sh', '-c') and 'am start' in args[2]:
+            # The device's clock, read in the same shell right before the start.
+            return '1000.0 2000.0\n' + self.answer
         return '4321' if args[:1] == ('pidof',) else ''
 
     def adb(self, *args, **kwargs):
         return ''
-
-    def uptime(self):
-        return 1000.0
 
 
 class LaunchTest(unittest.TestCase):
@@ -96,6 +94,7 @@ class ChromeResetTest(unittest.TestCase):
 def leg(fps):
     """What `measure_run` reports of a leg, at `fps`."""
     return {'fps': fps, 'frames': int(fps * 10), 'run_s': 10.0, 'stopped': False, 'first_frame_s': 0.4,
+            'launch': {'TotalTime': 150, 'WaitTime': 152, 'uptime_s': 1000.0},
             'frame_ms': [400.0],
             'fps_by_second': [fps] * 10, 'first_poll_full': False, 'janky_pct': 0.0, 'interval_p99_ms': 20.0,
             'cpu_ms_per_frame': 30.0, 'cpu_cores': 1.5, 'samples': {'t_ms': [500]},

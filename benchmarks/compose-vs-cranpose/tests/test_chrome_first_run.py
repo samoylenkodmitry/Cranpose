@@ -1,8 +1,7 @@
 """Chrome on a phone against a stand-in `adb`: `reset_chrome` passes the
 screens of Chrome's first run that newer Chrome shows (the choice of a
-search engine, then the question about notifications), a page's surface is
-found under the name newer Android gives it, and the window with the focus
-at a run's end is read as each device prints it."""
+search engine, then the question about notifications), and the window with
+the focus at a run's end is read as each device prints it."""
 
 import os
 import stat
@@ -18,7 +17,7 @@ sys.path.insert(0, str(BENCHMARK))
 import measure  # noqa: E402
 
 # Serves the screens in $SCREENS one after another, each tap moving to the
-# next, and the layers in $LAYERS one listing a call; records every call.
+# next, and the window list in $LAYERS/window.txt; records every call.
 FAKE_ADB = """#!/bin/sh
 echo "$*" >> "$ADB_CALLS"
 step=$(cat "$ADB_CALLS.step" 2>/dev/null || echo 0)
@@ -26,10 +25,6 @@ case "$*" in
   *" pm clear "*) echo Success ;;
   *" input tap "*) echo $((step + 1)) > "$ADB_CALLS.step" ;;
   *" cat /sdcard/window.xml"*) cat "$SCREENS/$step.xml" ;;
-  *" dumpsys SurfaceFlinger --list"*)
-    listing=$(cat "$ADB_CALLS.listing" 2>/dev/null || echo 0)
-    echo $((listing + 1)) > "$ADB_CALLS.listing"
-    cat "$LAYERS/$listing.txt" 2>/dev/null || cat "$LAYERS/last.txt" ;;
   *" dumpsys window"*) cat "$LAYERS/window.txt" ;;
 esac
 """
@@ -91,20 +86,6 @@ class ChromeFirstRunTest(unittest.TestCase):
         # The first engine and "Set as default" together, then "No thanks".
         self.assertEqual(taps, ['1397 338', '1961 1547', '1514 1127'], lines)
         self.assertEqual(lines[-1], '-s SERIAL shell am force-stop com.android.chrome', lines)
-
-    def test_a_page_surface_named_by_its_layer_id_is_found_once_it_is_there(self):
-        layers = {
-            '0': 'RequestedLayerState{com.android.chrome/com.google.android.apps.chrome.Main#62777 parentId=1}\n',
-            'last': ('RequestedLayerState{com.android.chrome/com.google.android.apps.chrome.Main#62777 parentId=1}\n'
-                     'RequestedLayerState{com.android.chrome/ChromeChildSurface#62791 parentId=62789}\n'),
-        }
-        layer, _ = self.run_with([], layers, measure.PageTarget(None, 'cranpose', 8).layer)
-        self.assertEqual(layer, 'com.android.chrome/ChromeChildSurface#62791')
-
-    def test_the_older_surface_name_is_found_as_before(self):
-        layers = {'last': 'com.android.chrome/ChromeChildSurface#0\n'}
-        layer, _ = self.run_with([], layers, measure.PageTarget(None, 'cranpose', 8).layer)
-        self.assertEqual(layer, 'com.android.chrome/ChromeChildSurface#0')
 
     def test_the_focused_window_is_read_as_each_device_prints_it(self):
         # As the Mate (Android 10) and the Galaxy Tab S7+ (Android 13) print it.
