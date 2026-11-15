@@ -229,28 +229,48 @@ fn find_match(
 }
 
 // A new entry for `element`: its node, updated, and attached when `attach`,
-// as it joins an attached chain, or its words.
+// as it joins an attached chain, or its words. The flag tells whether the
+// node delegates, asked while the node is borrowed for its update.
+fn new_entry(
+    element: &DynModifierElement,
+    context: &mut dyn ModifierNodeContext,
+    attach: bool,
+) -> (ModifierNodeEntry, bool) {
+    match element.maker() {
+        ElementMaker::Plain(value) => (ModifierNodeEntry::of_plain(value), false),
+        ElementMaker::Node(maker) => {
+            let entry =
+                ModifierNodeEntry::of_node(Rc::clone(element), maker, element.capabilities());
+            let delegating = entry.node().is_some_and(|node| {
+                let mut node = node.borrow_mut();
+                if attach {
+                    attach_node_tree(&mut *node, context);
+                }
+                maker.update_node(&mut *node);
+                delegates(&*node)
+            });
+            (entry, delegating)
+        }
+    }
+}
+
+// `new_entry` for an element that joins a chain of entries already there:
+// the stages its node takes part in are invalidated.
 fn fresh_entry(
-    element: DynModifierElement,
+    element: &DynModifierElement,
     context: &mut dyn ModifierNodeContext,
     attach: bool,
 ) -> ModifierNodeEntry {
-    let capabilities = element.capabilities();
-    let entry = match element.maker() {
-        ElementMaker::Plain(value) => ModifierNodeEntry::of_plain(value),
-        ElementMaker::Node(maker) => {
-            let entry = ModifierNodeEntry::of_node(Rc::clone(&element), maker, capabilities);
-            if let Some(node) = entry.node() {
-                if attach {
-                    attach_node_tree(&mut *node.borrow_mut(), context);
-                }
-                maker.update_node(&mut *node.borrow_mut());
-            }
-            entry
-        }
-    };
-    request_auto_invalidations(context, capabilities);
+    let (entry, _) = new_entry(element, context, attach);
+    request_auto_invalidations(context, entry.capabilities());
     entry
+}
+
+// Whether `node` delegates to another node.
+fn delegates(node: &dyn ModifierNode) -> bool {
+    let mut delegates = false;
+    node.for_each_delegate(&mut |_| delegates = true);
+    delegates
 }
 
 /// Matches `element`, at `new_pos` of the rebuilt tail, against the old
@@ -284,7 +304,7 @@ fn reconcile_element(
     };
     let capabilities = element.capabilities();
     let Some(idx) = find_match(old_entries, used, &query) else {
-        return Some(fresh_entry(element, context, attach));
+        return Some(fresh_entry(&element, context, attach));
     };
     let entry = &mut old_entries[idx];
     match (&mut *entry, maker) {
@@ -313,7 +333,7 @@ fn reconcile_element(
             *held_capabilities = capabilities;
             node.borrow().node_state().set_capabilities(capabilities);
         }
-        _ => return Some(fresh_entry(element, context, attach)),
+        _ => return Some(fresh_entry(&element, context, attach)),
     }
 
     used[idx] = true;
@@ -442,6 +462,12 @@ impl ModifierNodeChain {
     ) where
         I: Iterator<Item = &'a DynModifierElement>,
     {
+        // No element of a chain without entries, as a new node's, can take
+        // over an entry: the reconciliation's buffers stay unused.
+        if self.entries.is_empty() {
+            self.build(elements, context);
+            return;
+        }
         // Taken out for the reconciliation, so one that reconciles another
         // chain inside it works on buffers of its own.
         let mut scratch = RECONCILE_SCRATCH
@@ -451,6 +477,32 @@ impl ModifierNodeChain {
         scratch.elements.clear();
         scratch.final_slots.clear();
         let _ = RECONCILE_SCRATCH.try_with(|slot| *slot.borrow_mut() = scratch);
+    }
+
+    // Makes an entry of each of `elements` for a chain that holds none, in
+    // one pass, which also finds the union of their capabilities and whether
+    // a node delegates. The union is invalidated once for the whole chain:
+    // a node's invalidations reach every stage its chain takes part in.
+    fn build<'a, I>(&mut self, elements: I, context: &mut dyn ModifierNodeContext)
+    where
+        I: Iterator<Item = &'a DynModifierElement>,
+    {
+        self.entries.reserve_exact(elements.size_hint().0);
+        let mut capabilities = NodeCapabilities::empty();
+        let mut delegating = false;
+        for element in elements {
+            let (entry, delegated) = new_entry(element, context, self.attached);
+            capabilities |= entry.capabilities();
+            delegating |= delegated;
+            self.entries.push(entry);
+        }
+        request_auto_invalidations(context, capabilities);
+        if delegating {
+            self.order_with_delegates();
+        } else {
+            self.delegated_order = None;
+        }
+        self.link_aggregates();
     }
 
     fn reconcile<'a, I>(
@@ -510,13 +562,14 @@ impl ModifierNodeChain {
         context: &mut dyn ModifierNodeContext,
         scratch: &mut ReconcileScratch,
     ) {
-        // No old entry to take over, as at a new node's first sync: every
-        // element gets an entry of its own, with no query for a match.
+        // No old entry to take over, as for elements that join the end of a
+        // chain: every element gets an entry of its own, with no query for a
+        // match.
         if fail_idx == self.entries.len() {
             self.entries.reserve_exact(scratch.elements.len());
             for element in scratch.elements.drain(..) {
                 self.entries
-                    .push(fresh_entry(element, context, self.attached));
+                    .push(fresh_entry(&element, context, self.attached));
             }
             self.sync_chain_links();
             return;
@@ -852,7 +905,21 @@ impl ModifierNodeChain {
     // Orders the nodes again and works out the union of capabilities from
     // each node to the tail.
     fn sync_chain_links(&mut self) {
-        self.rebuild_delegated_order();
+        let delegating = self
+            .entries
+            .iter()
+            .filter_map(ModifierNodeEntry::node)
+            .any(|node| delegates(&*node.borrow()));
+        if delegating {
+            self.order_with_delegates();
+        } else {
+            self.delegated_order = None;
+        }
+        self.link_aggregates();
+    }
+
+    // Works out the union of capabilities from each node to the tail.
+    fn link_aggregates(&mut self) {
         let mut aggregate = NodeCapabilities::empty();
         if let Some(order) = self.delegated_order.as_deref_mut() {
             for (_, caps, aggregate_child) in order.iter_mut().rev() {
@@ -868,20 +935,9 @@ impl ModifierNodeChain {
         self.aggregated_capabilities = aggregate;
     }
 
-    fn rebuild_delegated_order(&mut self) {
-        let delegates = self
-            .entries
-            .iter()
-            .filter_map(ModifierNodeEntry::node)
-            .any(|node| {
-                let mut delegates = false;
-                node.borrow().for_each_delegate(&mut |_| delegates = true);
-                delegates
-            });
-        if !delegates {
-            self.delegated_order = None;
-            return;
-        }
+    // Orders the nodes of a chain of which a node delegates, each delegate
+    // after the node that delegates to it.
+    fn order_with_delegates(&mut self) {
         let order = self.delegated_order.get_or_insert_default();
         order.clear();
         let mut path_buf = [0usize; MAX_DELEGATE_DEPTH];
