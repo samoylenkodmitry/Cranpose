@@ -1,0 +1,5 @@
+# floem 0.2.0 reaches objc2 0.4.1 through icrate and block2, and Rust 1.100
+# rejects objc2 0.4.1 (E0277 in its ivar forwarding impls). The app builds
+# with the last Rust that compiles it until floem moves off objc2 0.4.
+[toolchain]
+channel = "1.99.0"

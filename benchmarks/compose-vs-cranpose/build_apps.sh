@@ -167,7 +167,9 @@ stamp() {
 # Runs COMMAND, which makes OUTPUT (a file or a folder, from this folder),
 # unless the last build of NAME read the same PATHS and toolchains: then puts
 # that build's OUTPUT back. The stamp is taken again after COMMAND, as a pin
-# `attempt` put back changed what the build read.
+# `attempt` put back changed what the build read. A COMMAND that fails leaves
+# no OUTPUT, so no older build stands in for it: the night measures the apps
+# that built, and the run page warns of the one that did not.
 build() {
     local name=$1 output=$here/$2
     shift 2
@@ -185,7 +187,11 @@ build() {
         return
     fi
     step "$name"
-    "$@"
+    if ! "$@"; then
+        echo "::warning title=$name did not build::$name did not build, so the night measures the other apps without it"
+        rm -rf "$output"
+        return
+    fi
     mkdir -p "$cache/built"
     rm -rf "$kept"
     ditto "$output" "$kept"
@@ -193,11 +199,12 @@ build() {
 }
 
 # A bundle around a Rust app's program, in the app's build folder: the least
-# Launch Services needs to start it.
+# Launch Services needs to start it. An app that did not build gets none.
 bundled() {
     local app=$1 program=perf-compare-$1
     local bundle=$here/$app-app/build/$program.app
     rm -rf "$bundle"
+    [[ -e $here/$app-app/target/release/$program ]] || return 0
     mkdir -p "$bundle/Contents/MacOS"
     cp "$here/$app-app/target/release/$program" "$bundle/Contents/MacOS/$program"
     cat > "$bundle/Contents/Info.plist" <<PLIST
