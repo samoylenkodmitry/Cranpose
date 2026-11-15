@@ -7,9 +7,6 @@
 //! `tr!` reads the value with `let _`, which names it without a capture, so a
 //! content closure that uses `tr!` stays `'static`.
 
-use proc_macro2::TokenStream;
-use quote::quote;
-
 pub(crate) fn declared(body: &syn::Block) -> Box<syn::Block> {
     let mut body = body.clone();
     body.stmts.insert(
@@ -22,8 +19,9 @@ pub(crate) fn declared(body: &syn::Block) -> Box<syn::Block> {
     Box::new(body)
 }
 
-pub(crate) fn check() -> TokenStream {
-    quote! {
+#[cfg(feature = "localization")]
+pub(crate) fn check() -> proc_macro2::TokenStream {
+    quote::quote! {
         let _ = tr_runs_only_in_composables;
     }
 }
