@@ -25,7 +25,6 @@ use ferroui_base::{
         imaging::Bitmap,
     },
     platform::{AlphaFormat, PixelFormats},
-    utilities::Uri,
 };
 use ferroui_controls::{Border, ColumnDefinitions, Grid, StackPanel};
 use ferroui_view::prelude::*;
@@ -49,7 +48,7 @@ fn palette(index: usize) -> String {
 /// Roboto and the monospaced face from the files the other apps load.
 struct DeviceRoboto {
     base: FontCollectionBase,
-    key: Uri,
+    key: url::Url,
 }
 
 impl FontCollectionBaseImpl for DeviceRoboto {
@@ -57,7 +56,7 @@ impl FontCollectionBaseImpl for DeviceRoboto {
         &this.base
     }
 
-    fn key(this: &Self) -> Uri {
+    fn key(this: &Self) -> url::Url {
         this.key.clone()
     }
 }
@@ -65,7 +64,7 @@ impl FontCollectionBaseImpl for DeviceRoboto {
 fn register_fonts() {
     let collection = Rc::new(DeviceRoboto {
         base: FontCollectionBase::new(),
-        key: Uri::absolute("fonts:Device").expect("a font collection key"),
+        key: url::Url::parse("fonts:Device").expect("a font collection key"),
     });
     for file in [
         "Roboto-Regular.ttf",

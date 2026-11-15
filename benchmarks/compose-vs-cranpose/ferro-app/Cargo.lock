@@ -125,7 +125,7 @@ checksum = "4f8abc12baad266b1c8cec146854c195b5864b4221d4b2ca7296a7ae82d9e451"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.9",
+ "syn 3.0.10",
 ]
 
 [[package]]
@@ -160,7 +160,7 @@ checksum = "82f6aeea286b8eb4dd3431a1be1b59d290ace00f5bfd8e2a159bc2a05e2c1667"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.9",
+ "syn 3.0.10",
 ]
 
 [[package]]
@@ -216,15 +216,15 @@ dependencies = [
 
 [[package]]
 name = "bumpalo"
-version = "3.20.3"
+version = "3.20.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "72f5acc6cb2ba439de613abc23857ec3d78374d8ed5ac84e9d11336e87da8649"
+checksum = "87a0cf66fd1eb2fb7b822cb78370d82303750809bc6ba855f3f58e517d3238db"
 
 [[package]]
 name = "cc"
-version = "1.11.1"
+version = "1.11.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4ff2a8126fff0f8c839080d619675a585e61720bb12d2baceae45769fd66f155"
+checksum = "33ef9e3e8154a45c7a95cff4c1299702106ad94062d7bb85fdc5d3a5afd91d45"
 dependencies = [
  "find-msvc-tools",
  "jobserver",
@@ -275,9 +275,9 @@ dependencies = [
 
 [[package]]
 name = "crc32fast"
-version = "1.5.4"
+version = "1.5.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5f97d3416d5337d15c4b0d78c8c91df922ca143f57ec20e2d1c188333047ef04"
+checksum = "2b929dd2a135771f40afabd1073f85eed59c800b7c61901e5c254270497dad64"
 dependencies = [
  "cfg-if",
 ]
@@ -302,7 +302,7 @@ checksum = "c6232dd377dcc64799954cbd3a9bb882e9cdc1308ccd87b1c098f1fb2eaf82a8"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.9",
+ "syn 3.0.10",
 ]
 
 [[package]]
@@ -346,9 +346,9 @@ checksum = "00d174d5400e5e8fd687ad1049e2f578285fa914201b1af7e8b112a4546bd826"
 
 [[package]]
 name = "errno"
-version = "0.3.14"
+version = "0.3.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
+checksum = "e35d6e78f4cebb90e51d543db8fe41528851d6deeef6ef21ebd4bfdc1e784776"
 dependencies = [
  "libc",
  "windows-sys",
@@ -382,26 +382,28 @@ checksum = "da7c62ceae207dd37ea5b845da6a0696c799f85e97da1ab5b7910be3c1c80223"
 
 [[package]]
 name = "ferroui-base"
-version = "0.4.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dc68bff58a4ae9ac88b1aea2ee2816d3c2b5bd96228a31e3c2ba1def5fc05d8b"
+checksum = "0deb2a31d1981b111abffee4a2c4c4b16cb6d753d486f0c770bc87b187ac8d11"
 dependencies = [
  "bitflags",
  "ferroui-build-scan",
  "ferroui-system",
+ "icu_locale_core",
  "libc",
  "paste",
  "rust_decimal",
  "rustc-hash",
  "smallvec",
  "time",
+ "url",
 ]
 
 [[package]]
 name = "ferroui-build"
-version = "0.4.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2ac9e8a30f72644f753bbb4a0cdad81c34d936d1b328ccd514fef40a2bd93d25"
+checksum = "8cc094bf0162816813587e07e9ca8b0b9a0d9c2c73ad6c31cd651487fcecd729"
 dependencies = [
  "ferroui-base",
  "ferroui-build-scan",
@@ -413,9 +415,9 @@ dependencies = [
 
 [[package]]
 name = "ferroui-build-scan"
-version = "0.4.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9646b1cbde6c84d9c2a5c57509a5b902070d0bab4b3a1c8028718bfb3c2e579e"
+checksum = "3f41ce0e0216114cad9e843cffc4f1f454c8efc0cd8ec44e8a3368c2184d3678"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -424,9 +426,9 @@ dependencies = [
 
 [[package]]
 name = "ferroui-controls"
-version = "0.4.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "23a9b3cd7d800989d64f1cf455cf70231a06bb538857bdcc09ae4fb887b09dab"
+checksum = "6c18cc49d48d7c054ccbfaa493ffc9c59c81e0851d595b3e859a924999235b72"
 dependencies = [
  "bitflags",
  "ferroui-base",
@@ -434,13 +436,14 @@ dependencies = [
  "ferroui-remote-protocol",
  "ferroui-system",
  "rustc-hash",
+ "url",
 ]
 
 [[package]]
 name = "ferroui-desktop"
-version = "0.4.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "75185024e5bccbe0853936c6fc71dae29931be90056619f4bc6edb52585549f5"
+checksum = "a058a3bb7f7e5d182f55aa0931eb4da83cd7616970a10187d92364830e74a5db"
 dependencies = [
  "ferroui-base",
  "ferroui-controls",
@@ -453,35 +456,39 @@ dependencies = [
 
 [[package]]
 name = "ferroui-dialogs"
-version = "0.4.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ab82079937ef990bfd15493e0bcda5ccff7ad59347604ac9caa8fdae74d4a438"
+checksum = "c0d272e1a4f476b0e6182e10b19be52f57a8c854b2fc52073fddbcc4d6ae095b"
 dependencies = [
  "ferroui-base",
  "ferroui-build",
  "ferroui-controls",
  "ferroui-markup-xaml",
+ "ferroui-system",
  "sysinfo",
 ]
 
 [[package]]
 name = "ferroui-freedesktop"
-version = "0.4.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fca3a0b95020e8aa12847ea52a32a029dae37723f79a38efa8db3cfd0992f9b2"
+checksum = "427e3a64c27e6aee558285c4d4777ab64a16792134fef40d368603d167fb9e7a"
 dependencies = [
  "bitflags",
  "ferroui-base",
  "ferroui-controls",
+ "ferroui-system",
  "futures-util",
+ "url",
+ "uuid",
  "zbus",
 ]
 
 [[package]]
 name = "ferroui-harfbuzz"
-version = "0.4.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "448b712ccff792bfa0731230fe7755295797fd4bd45266fa73a56973c793d0b7"
+checksum = "0d4f28b6c81d3349a1178e4fddca829308754af34411657f8f177d619cdc8637"
 dependencies = [
  "ferroui-base",
  "ferroui-controls",
@@ -490,73 +497,79 @@ dependencies = [
 
 [[package]]
 name = "ferroui-markup"
-version = "0.4.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1174116f4d5ffed929cbeef72ea3116adb87c6316f7f3957a0155b290af71079"
+checksum = "910240b2378921781bc65cb4c936d6fb36ac088a0af2ad6980b93e2b66712f3a"
 dependencies = [
  "ferroui-base",
 ]
 
 [[package]]
 name = "ferroui-markup-xaml"
-version = "0.4.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5ea1f245da6d2cffa5e483ccc335c6706bbeb71c46a1bb18e3b6d08dce5ba640"
+checksum = "c8408c544a5e669049d9a1d2a393719a27efcb4668d0b5ca18b9a5eaf9b83d04"
 dependencies = [
  "ferroui-base",
  "ferroui-build-scan",
  "ferroui-controls",
  "ferroui-markup",
+ "url",
 ]
 
 [[package]]
 name = "ferroui-markup-xaml-loader"
-version = "0.4.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7f5a2d3c24157e0162cbfa33f4a05f5af4873b36a55d7abb50e784d828cff336"
+checksum = "5f0750d097ff27d6cfa9ba27d2d965324410e20145640919a247f3b4ddf8415e"
 dependencies = [
  "ferroui-base",
  "ferroui-build-scan",
  "ferroui-markup",
+ "roxmltree",
+ "url",
  "xamlx",
 ]
 
 [[package]]
 name = "ferroui-metal"
-version = "0.4.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aabf1da15c095638478e26b4f53a055eb0b6275c7774c800f6b8bdd3345a8814"
+checksum = "f6ea160e3eb2e9a170837fce97dbd9f1f09e87205f9dfa393968cf4718a91ce6"
 dependencies = [
  "ferroui-base",
 ]
 
 [[package]]
 name = "ferroui-microcom"
-version = "0.4.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bdde668f73ea7a279b108fb62cf4f8400afbbd7c23b362168170e77bc8efc7e0"
+checksum = "fabb6963b3334e848f973380651be94de0ccf6417cfcb1ef9da2e7187827820f"
+dependencies = [
+ "uuid",
+]
 
 [[package]]
 name = "ferroui-native"
-version = "0.4.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b1c7d20b453e730e3701455dc0331893c8cd5b1fa915b4853d53904c607bd0c9"
+checksum = "442cbd2ecfb10f8953fb7c31fb86d9520ceb014b8b9812184f8f9550138c6690"
 dependencies = [
  "cc",
  "ferroui-base",
  "ferroui-controls",
- "ferroui-dialogs",
  "ferroui-metal",
  "ferroui-microcom",
  "ferroui-opengl",
  "microcom-codegen",
+ "url",
 ]
 
 [[package]]
 name = "ferroui-opengl"
-version = "0.4.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "253f137aab871766729b4dd68a09ea2e258dbd2992229202cf4bb08c014524ab"
+checksum = "c295faf9262691565a239edd098a9135918341bbcf011951d7a9a7daf181b662"
 dependencies = [
  "ferroui-base",
  "ferroui-build-scan",
@@ -567,15 +580,19 @@ dependencies = [
 
 [[package]]
 name = "ferroui-remote-protocol"
-version = "0.4.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c13f5ce1b6af781a208ba565da70099706b87093fb64f56346799dd2b8570b2e"
+checksum = "919f8e344617a7dd89b6a962a137eafd838418ac0e3a80b1a2f84425c09d6391"
+dependencies = [
+ "ferroui-system",
+ "uuid",
+]
 
 [[package]]
 name = "ferroui-skia"
-version = "0.4.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a0cc345632db7a9380e0419b1817a3a57f808b55591b505738e2e34db4cae813"
+checksum = "89c8ac527e42b8545f6c2ae9f6648e97841efc5f1cd3a22de25508be03756640"
 dependencies = [
  "cc",
  "ferroui-base",
@@ -583,23 +600,24 @@ dependencies = [
  "ferroui-metal",
  "ferroui-opengl",
  "ferroui-vulkan",
+ "skia-bindings",
  "skia-safe",
 ]
 
 [[package]]
 name = "ferroui-system"
-version = "0.4.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "62d3b984084e1641d4424bc0c43eaf60f001f6abf80eeea57ee9a27d51e472f9"
+checksum = "b981d74618fa2624756da8d5029e4ebbf569a0738c8ddc73e2d782fc6aa9aacd"
 dependencies = [
  "smallvec",
 ]
 
 [[package]]
 name = "ferroui-themes-fluent"
-version = "0.4.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "29f0543bad46246dc78ca0a275796ec378aefc4005003a4dd7a53f29be83a473"
+checksum = "e94c0b1a3f2510f4d0bd622601df5deaf7e7f751bca31e63764df9c8220272fc"
 dependencies = [
  "ferroui-base",
  "ferroui-build",
@@ -610,9 +628,9 @@ dependencies = [
 
 [[package]]
 name = "ferroui-themes-simple"
-version = "0.4.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "52692e2d852df88053ad5e6dd0384c6eeddb6c3478910bd3cc6bcb153b63c6e5"
+checksum = "d37c65aeb2b98e3b89054e8ae8fbfc2ec329eeea4a07605df5864672e55f9448"
 dependencies = [
  "ferroui-base",
  "ferroui-build",
@@ -623,25 +641,24 @@ dependencies = [
 
 [[package]]
 name = "ferroui-view"
-version = "0.4.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9b040e6a29600f352b9bed6f017c11bc531c981cc29e8c8d350aac22ebaa1b27"
+checksum = "ef39454900b5e3ad6ba02e3797f633c09b1966b14762db81522e0e87e3894b3c"
 dependencies = [
  "ferroui-base",
  "ferroui-build-scan",
  "ferroui-controls",
  "ferroui-desktop",
  "ferroui-markup",
- "ferroui-system",
  "ferroui-themes-fluent",
  "ferroui-view-macros",
 ]
 
 [[package]]
 name = "ferroui-view-macros"
-version = "0.4.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4cca5efbbef0f743d61a70787934233a156fe9c03affab0977041491bd7b57d1"
+checksum = "30a8d6bd00d329cf71b99328e314372b23c8769ba49bd6d525e0f2a44716eba4"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -650,9 +667,9 @@ dependencies = [
 
 [[package]]
 name = "ferroui-vulkan"
-version = "0.4.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bf408041d2e065d6dc6aa85d933560a82f7ffa56cd1cf5d202f57ccebe0cd49d"
+checksum = "e4fd694f45e979bf86abcd6d922563aa7933764ac281c8c1acd1bd7e7066626e"
 dependencies = [
  "ash",
  "ferroui-base",
@@ -660,9 +677,9 @@ dependencies = [
 
 [[package]]
 name = "ferroui-win32"
-version = "0.4.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "71a89d83ddd717a96da3ab444788403ce0a5facd032d026c8d6d0f50cb303e90"
+checksum = "c513461cb488a66d7d72bebb39c1aac03590eb8c81e8c3811c458da5920a4d0a"
 dependencies = [
  "bitflags",
  "ferroui-base",
@@ -672,14 +689,15 @@ dependencies = [
  "ferroui-vulkan",
  "microcom-codegen",
  "mozangle",
+ "url",
  "windows-sys",
 ]
 
 [[package]]
 name = "ferroui-x11"
-version = "0.4.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0bf6827382e640a2148bd0dbb9b9fab88175e4561182d68ccb0ad946014348a6"
+checksum = "5869b2a83def2f69329068469a24bdf5d0d56e5e5d51d3d292a34629af8f9b5c"
 dependencies = [
  "bitflags",
  "ferroui-base",
@@ -687,8 +705,10 @@ dependencies = [
  "ferroui-dialogs",
  "ferroui-freedesktop",
  "ferroui-opengl",
+ "ferroui-system",
  "ferroui-vulkan",
  "libc",
+ "url",
  "x11-dl",
 ]
 
@@ -865,6 +885,7 @@ checksum = "25d29b57c17c6528d0dc4c2141cfa2d08200465acb537a3909c8b9b8a4a984c0"
 dependencies = [
  "displaydoc",
  "litemap",
+ "serde",
  "tinystr",
  "writeable",
  "zerovec",
@@ -968,9 +989,9 @@ dependencies = [
 
 [[package]]
 name = "itoa"
-version = "1.0.18"
+version = "1.0.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
+checksum = "3bd1574e617a9a6c1f8f8181bd7e841e1f20e4277607ef28945765188d6284d4"
 
 [[package]]
 name = "jobserver"
@@ -1017,9 +1038,9 @@ dependencies = [
 
 [[package]]
 name = "libz-sys"
-version = "1.1.32"
+version = "1.1.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "69965d2409bff8c8cea3829009fff66a86f05a0570656552ef70f616e8e4bd85"
+checksum = "fee3f59f4321dab0c78d828942e7aa09d0bd8ad6e78a501977e6bf3d02938045"
 dependencies = [
  "cc",
  "libc",
@@ -1062,9 +1083,9 @@ dependencies = [
 
 [[package]]
 name = "microcom-codegen"
-version = "0.4.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "36f5a6b129a47b8d5909bb1e4574ad7bb8cdb6dfc3ce48a9978475c662ad8159"
+checksum = "5dc17a068cebdd715d62a83b8fea3492d620b5a6fda80fb11920434e6cee68be"
 
 [[package]]
 name = "minimal-lexical"
@@ -1395,7 +1416,7 @@ checksum = "e7a5d71263a5a7d47b41f6b3f06ba276f10cc18b0931f1799f710578e2309348"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.9",
+ "syn 3.0.10",
 ]
 
 [[package]]
@@ -1419,7 +1440,7 @@ checksum = "8d3b1629de253c70a0508c3899572da79ca359fdab27c7920ff00406df418906"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.9",
+ "syn 3.0.10",
 ]
 
 [[package]]
@@ -1517,9 +1538,9 @@ dependencies = [
 
 [[package]]
 name = "syn"
-version = "3.0.9"
+version = "3.0.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d78c8dee4c7bf0e14673097256fed6142ce9d3b85a408189d07482442145823b"
+checksum = "4ae9ccbea3a7b0b09443036490c8f34a8b1b760fd345e5c0dae0aac718faea79"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1534,7 +1555,7 @@ checksum = "901704edd0dfe137f1987838ee4f259e4e063c31371bdb423f7ae38ec6f77f02"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.9",
+ "syn 3.0.10",
 ]
 
 [[package]]
@@ -1598,6 +1619,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "abc840c238154d58f9e86b2792261edfde565a17696e1cda1a449de27979801a"
 dependencies = [
  "displaydoc",
+ "serde_core",
  "zerovec",
 ]
 
@@ -1729,10 +1751,11 @@ checksum = "3a3b425286980a367278453f3b6d28cdcb134b574e5a35824a6ff5eebad50bb6"
 
 [[package]]
 name = "uuid"
-version = "1.29.1"
+version = "1.29.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4a06f08a856b009bc7bbaf7d3e79808595d032dd19074c0c2ef26e49e03e6bdc"
+checksum = "bed99139f7dac9b5cfe5f17be4d66dc7079a34dee1d74bcc77217119240e267c"
 dependencies = [
+ "getrandom",
  "js-sys",
  "serde_core",
  "wasm-bindgen",
@@ -1785,7 +1808,7 @@ dependencies = [
  "bumpalo",
  "proc-macro2",
  "quote",
- "syn 3.0.9",
+ "syn 3.0.10",
  "wasm-bindgen-shared",
 ]
 
@@ -1967,9 +1990,9 @@ dependencies = [
 
 [[package]]
 name = "xamlx"
-version = "0.4.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b3d30a15b6890ed7edce5250c7e2bf0a8e0929a0508138d64345b92756e943b0"
+checksum = "ce1a00bef6f36c444a961364a95f74588b31014004b0d16d80b3fe5b4af83d45"
 dependencies = [
  "roxmltree",
 ]
@@ -2009,7 +2032,7 @@ checksum = "ec8ebde2db3681e8c9980cc27822030e68752690ddfa9473e739aeb4dbde6d71"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.9",
+ "syn 3.0.10",
  "synstructure",
 ]
 
@@ -2057,7 +2080,7 @@ dependencies = [
  "proc-macro-crate",
  "proc-macro2",
  "quote",
- "syn 3.0.9",
+ "syn 3.0.10",
  "zbus_names",
  "zvariant",
  "zvariant_utils",
@@ -2100,7 +2123,7 @@ checksum = "f75b4683f6c7f45248d4d64056a24298c6281e0993356d7d1b4a1a962ef10d4a"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.9",
+ "syn 3.0.10",
  "synstructure",
 ]
 
@@ -2121,6 +2144,7 @@ version = "0.11.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f58a2799cfe9a1670c7ea8edbd52ef8edb93cb37a7f83bf31ba9e35d9dae6a40"
 dependencies = [
+ "serde",
  "yoke",
  "zerofrom",
  "zerovec-derive",
@@ -2134,7 +2158,7 @@ checksum = "c3743ddbf47738d929cd1ae2e199d40d0162979dfe31aef8ae646d2bf00bf97a"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.9",
+ "syn 3.0.10",
 ]
 
 [[package]]
@@ -2173,7 +2197,7 @@ dependencies = [
  "proc-macro-crate",
  "proc-macro2",
  "quote",
- "syn 3.0.9",
+ "syn 3.0.10",
  "zvariant_utils",
 ]
 
@@ -2186,6 +2210,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "serde",
- "syn 3.0.9",
+ "syn 3.0.10",
  "winnow",
 ]
