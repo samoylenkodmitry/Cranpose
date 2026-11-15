@@ -86,7 +86,7 @@ fn settle_redrawn(store: &mut SceneStore, follow: bool) {
         let changed = if store.marks.lost {
             Reach::Unknown
         } else {
-            remark(store, id)
+            remark(store, id, changed)
         };
         let changed = if flags.contains(RecordFlags::INSERTED) {
             Reach::Empty
@@ -137,19 +137,36 @@ pub(super) fn refresh_lost(store: &mut SceneStore) {
     }
 }
 
+// Works out anew the marks of `id` and of every record beneath it, and the
+// reach of each that a change left stale: one walk of the records where a
+// refresh of their marks and one of their reach would take two.
 fn remark_subtree(store: &mut SceneStore, id: RecordId) {
-    remark(store, id);
+    let stale = store.tree[id.index()]
+        .flags
+        .contains(RecordFlags::REACH_STALE);
     let span = store.tree[id.index()].items;
+    let mut children = Reach::Empty;
     for position in 0..span.len() {
         if let Some(child) = store.items.span(span)[position].as_child() {
             remark_subtree(store, child);
+            if stale {
+                children = children.union(reach::child_reach(LayerRef::new(store, child)));
+            }
         }
+    }
+    let own = remark(store, id, |_, marks| reach(marks));
+    if stale {
+        reach::settle(store, id, own.union(children));
     }
 }
 
-// Works out the marks of the own draws of `id` anew; returns where they
-// differ from the marks before.
-fn remark(store: &mut SceneStore, id: RecordId) -> Reach {
+// Works out the marks of the own draws of `id` anew; returns what `read`
+// reads of the marks before and the new ones.
+fn remark<R>(
+    store: &mut SceneStore,
+    id: RecordId,
+    read: impl FnOnce(&[OwnMark], &[OwnMark]) -> R,
+) -> R {
     let index = id.index();
     let mut marks = std::mem::take(&mut store.marks.scratch);
     marks.clear();
@@ -168,10 +185,10 @@ fn remark(store: &mut SceneStore, id: RecordId) -> Reach {
         }
     }
     let span = store.warm[index].own_marks;
-    let changed = changed(store.marks.pool.span(span), &marks);
+    let read = read(store.marks.pool.span(span), &marks);
     store.warm[index].own_marks = store.marks.pool.write(span, &marks);
     store.marks.scratch = marks;
-    changed
+    read
 }
 
 // Where the draws of `old` and `new` differ: those past the run they start

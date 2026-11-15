@@ -29,13 +29,43 @@ struct PixelBox {
     y1: u16,
 }
 
+// The pixels of a target that logical rects take: `scale` pixels a unit, a
+// `margin` of pixels past a rect all around, in a window `width` by `height`
+// pixels, clamped to 65,535.
+#[derive(Clone, Copy)]
+struct PixelGrid {
+    scale: f32,
+    margin: f32,
+    width: f32,
+    height: f32,
+}
+
+impl PixelGrid {
+    // The grid of `setting`: a pixel past a rect for filtering and
+    // snapping, and under a scale of one the blur pixels a reach leaves out.
+    fn of(setting: TargetSetting) -> Self {
+        let scale = setting.root_scale;
+        let (width, height) = setting.viewport;
+        let most = |pixels: u32| pixels.min(u32::from(u16::MAX)) as f32;
+        Self {
+            scale,
+            margin: 2.0 + BLUR_PIXEL_SLACK * (1.0 - scale).max(0.0),
+            width: most(width),
+            height: most(height),
+        }
+    }
+}
+
 impl PixelBox {
-    // The pixels of `viewport` that `rect`, in logical units at `scale`
-    // pixels each, may touch: a pixel past it all around for filtering and
-    // snapping, and under a scale of one the blur pixels a reach leaves out;
-    // `None` when it touches none.
-    fn of(rect: Rect, scale: f32, (width, height): (u32, u32)) -> Option<Self> {
-        let margin = 2.0 + BLUR_PIXEL_SLACK * (1.0 - scale).max(0.0);
+    // The pixels of `grid` that `rect`, in logical units, may touch; `None`
+    // when it touches none.
+    fn of(rect: Rect, grid: PixelGrid) -> Option<Self> {
+        let PixelGrid {
+            scale,
+            margin,
+            width,
+            height,
+        } = grid;
         let x0 = pixel((rect.x * scale - margin).floor(), width);
         let y0 = pixel((rect.y * scale - margin).floor(), height);
         let x1 = pixel(((rect.x + rect.width) * scale + margin).ceil(), width);
@@ -65,10 +95,10 @@ impl PixelBox {
 #[expect(
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
-    reason = "the value is clamped to 0..=most, and a window is under 65,536 pixels long"
+    reason = "the value is clamped to 0..=most, and most is at most 65,535"
 )]
-fn pixel(value: f32, most: u32) -> u16 {
-    value.clamp(0.0, most.min(u32::from(u16::MAX)) as f32) as u16
+fn pixel(value: f32, most: f32) -> u16 {
+    value.clamp(0.0, most) as u16
 }
 
 // How the target drew a record's subtree.
@@ -85,8 +115,8 @@ enum Area {
 }
 
 impl Area {
-    fn of(shown: ShownArea, scale: f32, viewport: (u32, u32)) -> Self {
-        let pixels = |rect| PixelBox::of(rect, scale, viewport);
+    fn of(shown: ShownArea, grid: PixelGrid) -> Self {
+        let pixels = |rect| PixelBox::of(rect, grid);
         match shown {
             ShownArea::Drawn(rect) => pixels(rect).map_or(Self::Hidden, Self::Drawn),
             ShownArea::Composite(rect) => pixels(rect).map_or(Self::Hidden, Self::Composite),
@@ -118,11 +148,7 @@ impl Shown {
                 self.own
             };
         };
-        let part = PixelBox::of(
-            rect.translate(origin.x, origin.y),
-            setting.root_scale,
-            setting.viewport,
-        );
+        let part = PixelBox::of(rect.translate(origin.x, origin.y), PixelGrid::of(setting));
         match (self.own, part) {
             (_, None) | (Area::Hidden, _) => Area::Hidden,
             (Area::Drawn(own), Some(part)) => part.intersect(own).map_or(Area::Hidden, Area::Drawn),
@@ -372,7 +398,7 @@ impl TargetState {
                 .and_then(|parent| self.shown(store.record_ref(parent)))
                 .and_then(|shown| shown.origin)?;
             let placed = rect.translate(origin.x, origin.y);
-            if let Some(pixels) = PixelBox::of(placed, setting.root_scale, setting.viewport) {
+            if let Some(pixels) = PixelBox::of(placed, PixelGrid::of(setting)) {
                 damage.add(pixels.rect());
             }
         }
@@ -506,15 +532,24 @@ impl TargetState {
         };
         (self.damage, self.whole) = self.begun;
         let shown = root.map_or(&[][..], |root| &root.shown);
+        let grid = PixelGrid::of(setting);
         for shown in shown {
             let row = shown.record.id.index();
             if row >= self.shown.len() {
                 self.shown.resize(row + 1, Shown::default());
             }
+            let area = Area::of(shown.area, grid);
+            // Most records draw all they draw themselves: a leaf, and a
+            // record drawn through its own surface.
+            let own = if shown.own == shown.area {
+                area
+            } else {
+                Area::of(shown.own, grid)
+            };
             self.shown[row] = Shown {
                 generation: shown.record.generation,
-                area: Area::of(shown.area, setting.root_scale, setting.viewport),
-                own: Area::of(shown.own, setting.root_scale, setting.viewport),
+                area,
+                own,
                 origin: shown.origin,
             };
         }

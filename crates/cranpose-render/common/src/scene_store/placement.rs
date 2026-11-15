@@ -2,7 +2,7 @@
 // its content offset, as the store keeps and reads them.
 
 use cranpose_core::RecordId;
-use cranpose_ui::Point;
+use cranpose_ui::{Point, Rect};
 use cranpose_ui_graphics::ProjectiveTransform;
 
 use super::{RecordKind, SceneStore, TransformId};
@@ -26,6 +26,40 @@ impl Placement {
         match self {
             Self::At(origin) => parent.after_translation(origin.x, origin.y),
             Self::By(transform) => transform.then(parent),
+        }
+    }
+
+    /// The bounds in the parent's layer of `rect`, in the record's space:
+    /// [`ProjectiveTransform::bounds_for_rect`] of the placement's
+    /// transform, to the bit.
+    #[inline]
+    pub fn bounds_for_rect(self, rect: Rect) -> Rect {
+        match self {
+            // The arithmetic of a translation's transform, whose unit scale
+            // leaves each coordinate as it is.
+            Self::At(origin) => {
+                let x0 = rect.x + origin.x;
+                let x1 = (rect.x + rect.width) + origin.x;
+                let y0 = rect.y + origin.y;
+                let y1 = (rect.y + rect.height) + origin.y;
+                Rect {
+                    x: x0.min(x1),
+                    y: y0.min(y1),
+                    width: (x1 - x0).abs(),
+                    height: (y1 - y0).abs(),
+                }
+            }
+            Self::By(transform) => transform.bounds_for_rect(rect),
+        }
+    }
+
+    /// The point the placement moves the record's origin to, when it only
+    /// moves the record.
+    #[inline]
+    pub fn as_translation(self) -> Option<Point> {
+        match self {
+            Self::At(origin) => Some(origin),
+            Self::By(transform) => transform.as_translation(),
         }
     }
 }
