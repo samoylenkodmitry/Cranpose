@@ -105,7 +105,7 @@ fn nested_providers_restore_language_and_direction_and_allow_overrides() {
         let seen = Rc::clone(&seen);
         move || {
             ProvideLocalization(&catalog(), locale("fr"), || {
-                let save = tr!("Save", id = "save").to_string();
+                let save = SaveText();
                 seen.borrow_mut().push((save, layout_direction()));
                 ProvideLocalization(&catalog(), locale("ar"), || {
                     let search = UiString::Search.resolve();
@@ -114,7 +114,7 @@ fn nested_providers_restore_language_and_direction_and_allow_overrides() {
                         assert_eq!(layout_direction(), LayoutDirection::Ltr);
                     });
                 });
-                let save = tr!("Save", id = "save").to_string();
+                let save = SaveText();
                 seen.borrow_mut().push((save, layout_direction()));
             });
         }
@@ -172,7 +172,7 @@ fn generated_accessors_and_borrowed_arguments_work_without_a_provider() {
         move || {
             let name = "Ana".to_owned();
             let mut seen = seen.borrow_mut();
-            seen.push(tr!("Hello, {name}!", name = name.as_str()).to_string());
+            seen.push(Greeting(name));
             seen.push(messages::files(2).to_string());
             seen.push(messages::save().to_string());
         }
@@ -361,4 +361,14 @@ fn literal_ui_text_remains_literal_inside_a_language_provider() {
             Text(literal.clone(), Modifier::empty(), TextStyle::default());
         });
     });
+}
+
+#[composable]
+fn SaveText() -> String {
+    tr!("Save", id = "save").to_string()
+}
+
+#[composable]
+fn Greeting(name: String) -> String {
+    tr!("Hello, {name}!", name = name.as_str()).to_string()
 }
