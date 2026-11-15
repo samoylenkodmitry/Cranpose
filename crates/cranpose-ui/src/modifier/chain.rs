@@ -361,6 +361,11 @@ impl ModifierChainHandle {
     /// Attaches the chain's nodes again on a remount of node `node_id`; what
     /// they ask for, its next chain operation reports.
     pub(crate) fn remount(&mut self, node_id: Option<NodeId>) {
+        // A chain whose nodes are attached, as a new node's are when it
+        // mounts, stays as it is.
+        if self.chain.is_attached() {
+            return;
+        }
         self.revision = PackedU64::new(next_revision());
         let mut context = self.context(node_id);
         self.chain.attach_nodes(&mut context);

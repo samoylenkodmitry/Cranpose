@@ -3079,6 +3079,30 @@ fn window_root_registers_while_attached_and_leaves_with_its_node() -> Result<(),
 }
 
 #[test]
+fn a_window_root_mounted_again_after_an_unmount_registers_again() -> Result<(), NodeError> {
+    let _app_context = crate::render_state::app_context_test_scope();
+    let mut applier = MemoryApplier::new();
+    let window = Rc::new(TestWindow {
+        size: Cell::new(Size::new(300.0, 200.0)),
+    });
+    let (root, window_node, _) = window_root_tree(&mut applier, window)?;
+    measure_layout(&mut applier, root, Size::new(100.0, 100.0))?;
+
+    applier.get_mut(window_node)?.mount();
+    assert_eq!(
+        crate::window_roots().len(),
+        1,
+        "a mount of an attached root keeps it registered once"
+    );
+    applier.get_mut(window_node)?.unmount();
+    applier.get_mut(window_node)?.mount();
+    let roots = crate::window_roots();
+    assert_eq!(roots.len(), 1, "the mount attaches the root again");
+    assert_eq!(roots[0].node, window_node);
+    Ok(())
+}
+
+#[test]
 fn window_owners_are_looked_up_only_while_a_window_root_is_attached() -> Result<(), NodeError> {
     let _app_context = crate::render_state::app_context_test_scope();
     let registry_empty = || {
