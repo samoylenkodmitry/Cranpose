@@ -2510,7 +2510,7 @@ impl dispatch::DeviceInterface for WebDevice {
         mapped_desc.set_primitive(&mapped_primitive);
 
         // In the background the browser compiles the pipeline beside the
-        // others, and this one draws once it compiled.
+        // others. The pipeline draws once it compiled.
         let render_pipeline = Rc::new(OnceCell::new());
         let left_out = Rc::new(Cell::new(false));
         if let Some(pending) = self.background_pipelines.borrow_mut().as_mut() {

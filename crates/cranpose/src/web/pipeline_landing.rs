@@ -33,7 +33,11 @@
 // without waiting for the next animation frame and the update that runs
 // first.
 
-use std::{cell::RefCell, rc::Rc, sync::Arc};
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+    sync::Arc,
+};
 
 use cranpose_render_wgpu::WgpuRenderer;
 
@@ -68,7 +72,7 @@ enum Stage {
     Cold,
     // The first frame waits until the page holds the pipelines compiled so
     // far.
-    Yielding,
+    Delivering,
     // No frame showed whole yet: a frame that leaves out a draw shows none
     // of itself.
     Unshown,
@@ -77,6 +81,17 @@ enum Stage {
     Waiting,
     // A frame showed whole.
     Shown,
+}
+
+impl Stage {
+    // Moves `stage` from the wait `from` to `Unshown`. A device recovery
+    // that came during the wait put the first screen behind the page.
+    fn leave(stage: &RefCell<Self>, from: Self) {
+        let mut stage = stage.borrow_mut();
+        if *stage == from {
+            *stage = Self::Unshown;
+        }
+    }
 }
 
 // Builds the first screen's recorded pipelines as the page starts. Keeps the
@@ -88,9 +103,9 @@ pub(crate) struct PipelineLanding {
     stage: Rc<RefCell<Stage>>,
     // Whether this is a recording run whose first screen is still to be
     // left in `RECORDED`.
-    recording: std::cell::Cell<bool>,
+    recording: Cell<bool>,
     // Whether pipelines left out of a frame landed since the last frame.
-    landed: Rc<std::cell::Cell<bool>>,
+    landed: Rc<Cell<bool>>,
 }
 
 impl PipelineLanding {
@@ -106,7 +121,7 @@ impl PipelineLanding {
         Self {
             target: RefCell::new(target),
             stage: Rc::new(RefCell::new(Stage::Shown)),
-            recording: std::cell::Cell::new(recording),
+            recording: Cell::new(recording),
             landed: Rc::default(),
         }
     }
@@ -166,7 +181,7 @@ impl PipelineLanding {
     // pipelines compiled so far, nor while a frame that showed none of
     // itself waits for the pipelines left out of it.
     pub(crate) fn may_draw(&self) -> bool {
-        !matches!(*self.stage.borrow(), Stage::Yielding | Stage::Waiting)
+        !matches!(*self.stage.borrow(), Stage::Delivering | Stage::Waiting)
     }
 
     // Whether the first frame, about to draw while pipelines compile, waits.
@@ -181,12 +196,12 @@ impl PipelineLanding {
             *stage = Stage::Unshown;
             return false;
         };
-        *stage = Stage::Yielding;
+        *stage = Stage::Delivering;
         let waiting = Rc::clone(&self.stage);
         let draw_now = Rc::clone(draw_now);
         wasm_bindgen_futures::spawn_local(async move {
             delivered.await;
-            *waiting.borrow_mut() = Stage::Unshown;
+            Stage::leave(&waiting, Stage::Delivering);
             draw_now();
         });
         true
@@ -201,7 +216,7 @@ impl PipelineLanding {
         match *self.stage.borrow() {
             Stage::Cold | Stage::Unshown => renderer.begin_first_frame(),
             Stage::Shown => renderer.compile_pipelines_in_background(),
-            Stage::Yielding | Stage::Waiting => {}
+            Stage::Delivering | Stage::Waiting => {}
         }
         if self.landed.take() {
             renderer.background_pipelines_landed();
@@ -261,9 +276,7 @@ impl PipelineLanding {
             wasm_bindgen_futures::spawn_local(async move {
                 compiling.await;
                 landed.set(true);
-                if hides {
-                    *waiting.borrow_mut() = Stage::Unshown;
-                }
+                Stage::leave(&waiting, Stage::Waiting);
                 again();
             });
         }
