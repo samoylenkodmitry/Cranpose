@@ -84,6 +84,10 @@ pub struct SemanticsDetails {
     pub collection: Option<CollectionInfo>,
     /// The name tests find this node by; never published to screen readers.
     pub test_tag: Option<String>,
+    /// Whether Android publishes the test tags of this node and of the nodes
+    /// under it as view id resource names; `None` leaves it to the nodes
+    /// above. Compose's `testTagsAsResourceId`.
+    pub test_tags_as_resource_id: Option<bool>,
 }
 
 impl SemanticsDetails {
@@ -122,6 +126,7 @@ impl SemanticsDetails {
         scroll_to_index: None,
         collection: None,
         test_tag: None,
+        test_tags_as_resource_id: None,
     };
 
     pub(super) fn from_configuration(
@@ -163,6 +168,7 @@ impl SemanticsDetails {
             scroll_to_index: config.scroll_to_index,
             collection: config.collection,
             test_tag: config.test_tag,
+            test_tags_as_resource_id: config.test_tags_as_resource_id,
         }
     }
 }

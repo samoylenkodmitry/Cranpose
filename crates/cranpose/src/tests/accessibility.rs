@@ -5,8 +5,8 @@ use std::{
 
 use cranpose_core::{NodeId, collections::map::HashMap};
 use cranpose_ui::{
-    CanvasSemanticsNode, SemanticsAction, SemanticsCallback, SemanticsCustomAction, SemanticsNode,
-    SemanticsRole, SemanticsWidgetRole,
+    CanvasSemanticsNode, ProgressBarRangeInfo, ScrollAxisRange, SemanticsAction, SemanticsCallback,
+    SemanticsCustomAction, SemanticsDetails, SemanticsNode, SemanticsRole, SemanticsWidgetRole,
 };
 
 use super::*;
@@ -2113,7 +2113,7 @@ fn project_over(
 ) -> Vec<AccessibilityElement> {
     let bounds = WindowBounds::default();
     let mut projection = Projection::new(spare, &bounds);
-    project_node(root, false, None, None, &mut projection);
+    project_node(root, false, Inherited::default(), None, &mut projection);
     projection.finish()
 }
 
@@ -2233,7 +2233,6 @@ fn a_test_tag_reaches_no_screen_reader() {
     );
 
     let elements = project_test_tree(&root);
-    let published = format!("{elements:?}");
     assert_eq!(
         elements
             .iter()
@@ -2242,9 +2241,19 @@ fn a_test_tag_reaches_no_screen_reader() {
         ["Pay"],
         "a node with only a tag publishes nothing"
     );
+    assert_eq!(
+        elements[0]
+            .details()
+            .test_tag
+            .as_ref()
+            .map(|tag| tag.name.as_str()),
+        Some("pay-button"),
+        "the tag goes where the platform's UI tests look for it"
+    );
+    let spoken = spoken_line(&elements[0]);
     assert!(
-        !published.contains("pay-button") && !published.contains("spacer-tag"),
-        "a tag reached the accessibility tree: {published}"
+        !spoken.contains("pay-button"),
+        "a tag reached what a screen reader reads: {spoken}"
     );
 }
 

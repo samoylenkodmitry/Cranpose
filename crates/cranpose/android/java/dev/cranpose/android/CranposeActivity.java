@@ -766,6 +766,11 @@ public class CranposeActivity extends NativeActivity {
          */
         int selectionStart;
         int selectionEnd;
+        /**
+         * The view id resource name UI Automator finds this control by:
+         * its test tag under Compose's testTagsAsResourceId, or empty.
+         */
+        String resourceName = "";
         /** The update whose tree last held this control. */
         int update;
 
@@ -816,6 +821,7 @@ public class CranposeActivity extends NativeActivity {
             selectionStart = in.getInt();
             selectionEnd = in.getInt();
             hintText = text(in, hintText);
+            resourceName = text(in, resourceName);
         }
 
         /**
@@ -1279,6 +1285,7 @@ public class CranposeActivity extends NativeActivity {
             if (Build.VERSION.SDK_INT >= 26 && !element.hintText.isEmpty()) {
                 info.setHintText(element.hintText);
             }
+            if (!element.resourceName.isEmpty()) info.setViewIdResourceName(element.resourceName);
             // Compose's stateDescription. TalkBack speaks it after the label
             // and, unlike the label, re-speaks it on its own when only the
             // state changed — which is what makes a settings toggle usable.

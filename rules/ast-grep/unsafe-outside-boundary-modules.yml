@@ -72,6 +72,7 @@ ignores:
   - crates/cranpose/src/desktop/media_controls/windows.rs
   - crates/cranpose/src/desktop/tests/now_playing_tests.rs
   - crates/cranpose/src/ios/accessibility.rs
+  - crates/cranpose/src/ios/accessibility_properties.rs
   - crates/cranpose/src/ios/back_gesture.rs
   - crates/cranpose/src/ios/background.rs
   - crates/cranpose/src/ios/clipboard.rs

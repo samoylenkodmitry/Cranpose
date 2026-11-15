@@ -744,8 +744,8 @@ impl Modifier {
         self.stable_semantics(move |config| config.content_description = Some(description.clone()))
     }
 
-    /// Names this component for tests, which find it by the name instead of
-    /// its text or position. Screen readers never receive the name.
+    /// Names this component for tests, which find it by the name instead of its text or
+    /// position. [`SemanticsConfiguration::test_tag`] lists where each platform publishes it.
     ///
     /// This is Compose's `Modifier.testTag(tag)`.
     pub fn test_tag(self, tag: impl Into<String>) -> Self {

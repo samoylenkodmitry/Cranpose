@@ -39,15 +39,17 @@ public final class CranposeAccessibilityParserTest {
      * float, T UTF-8 text after its length, A a count of labels, then each.
      */
     private static final class Record {
-        private static final String KINDS = "NNNNNNFFNTTTTNNNANNNFFFNNNNNNNNNTTNNTNNNNT";
-        /** The index of the hint text, the last field. */
+        private static final String KINDS = "NNNNNNFFNTTTTNNNANNNFFFNNNNNNNNNTTNNTNNNNTT";
+        /** The index of the hint text. */
         static final int HINT = 41;
+        /** The index of the view id resource name, the last field. */
+        static final int RESOURCE_NAME = 42;
         final Object[] fields;
 
         Record(int id, String label, String... actions) {
             fields = new Object[]{id, 5, 2, 4, 62, 84, 16f, 22f, 1, label, "", "On", "Toggle", -1,
                     1, 1, actions, 1, 0, 0, 0f, 0f, 0f, 0, 0, 0, -1, 0, 0, 0, -1, -1, "", "", 0,
-                    -1, "Remove receipt", 0, 0, -1, -1, ""};
+                    -1, "Remove receipt", 0, 0, -1, -1, "", ""};
         }
 
         Record set(int index, Object value) {
@@ -181,12 +183,16 @@ public final class CranposeAccessibilityParserTest {
     }
 
     @Test
-    public void theLastFieldIsTheHintText() throws Exception {
-        AccessibilityNodeInfo hinted = provider(record(23, "Notes").set(Record.HINT, "Type a note"))
+    public void theHintTextAndTheResourceNameCloseTheRecord() throws Exception {
+        AccessibilityNodeInfo hinted = provider(record(23, "Notes")
+                .set(Record.HINT, "Type a note")
+                .set(Record.RESOURCE_NAME, "notes-field"))
                 .createAccessibilityNodeInfo(23);
         assertEquals("Type a note", String.valueOf(hinted.getHintText()));
+        assertEquals("notes-field", hinted.getViewIdResourceName());
         AccessibilityNodeInfo plain = provider(record(24, "Title")).createAccessibilityNodeInfo(24);
         assertEquals(null, plain.getHintText());
+        assertEquals(null, plain.getViewIdResourceName());
     }
 
     @Test

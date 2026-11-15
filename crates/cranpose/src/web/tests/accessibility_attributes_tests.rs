@@ -51,6 +51,26 @@ fn attributes_a_control_loses_are_removed_and_listener_attributes_stay() {
     }
 }
 
+#[cfg(feature = "renderer-wgpu")]
+#[test]
+fn every_test_tag_is_the_id_browser_test_tools_find_the_node_by() {
+    let elements = crate::tagged_controls::tagged_elements();
+    for (label, tag) in crate::tagged_controls::TAGS {
+        let element = elements
+            .iter()
+            .find(|element| element.label == label)
+            .unwrap_or_else(|| panic!("{label} is published"));
+        let mut attributes = MirrorAttributes::default();
+        attributes.describe(1, element, None);
+        assert!(
+            attributes
+                .iter()
+                .any(|(name, value)| name == "id" && value == tag),
+            "{label} has no id {tag}"
+        );
+    }
+}
+
 #[test]
 fn a_partly_checked_box_is_aria_checked_mixed() {
     let element = AccessibilityElement {

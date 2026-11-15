@@ -107,6 +107,8 @@ final class AccessibilityRobotTests: XCTestCase {
         defer { capture(app, "names-state-ranges") }
         XCTAssertTrue(named("Account, Account", in: app).exists)
         XCTAssertTrue(app.buttons["Remove"].exists)
+        // XCUITest finds a control by its test tag, the accessibility identifier.
+        XCTAssertEqual(app.buttons.matching(identifier: "increase-button").firstMatch.label, "Increase")
         XCTAssertFalse(app.buttons["Disabled action"].isEnabled)
         XCTAssertFalse(app.debugDescription.contains("robot-secret-value"))
         XCTAssertFalse(named("Decorative secret", in: app).exists)

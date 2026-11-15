@@ -3,19 +3,22 @@ use std::fmt::Debug;
 use cranpose_app_shell::{AppShell, inspector::InspectorNode};
 use cranpose_core::{
     NodeId,
-    collections::rare::{RareProperties, rare, update_rare},
+    collections::rare::{rare, update_rare},
 };
 use cranpose_render_common::Renderer;
 use cranpose_ui::{
-    Announcement, CollectionInfo, LiveRegionMode, ProgressBarRangeInfo, ScrollAxisRange,
-    SemanticsAction, SemanticsDetails, SemanticsNode, SemanticsRole, SemanticsTree,
-    SemanticsWidgetRole, ToggleableState,
+    Announcement, CollectionInfo, LiveRegionMode, SemanticsAction, SemanticsNode, SemanticsRole,
+    SemanticsTree, SemanticsWidgetRole, ToggleableState,
 };
 
+#[path = "accessibility_details.rs"]
+mod details;
 #[path = "accessibility_identity.rs"]
 mod identity;
 #[path = "accessibility_window_bounds.rs"]
 mod window_bounds;
+pub(crate) use details::AccessibilityDetails;
+use details::{Inherited, fill_node_details};
 #[cfg(any(
     test,
     all(feature = "android", feature = "renderer-wgpu", target_os = "android")
@@ -376,82 +379,6 @@ pub(crate) struct AccessibilityElement {
     pub(crate) details: Option<Box<AccessibilityDetails>>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) struct AccessibilityDetails {
-    pub(crate) state_description: Option<String>,
-    pub(crate) click_label: Option<String>,
-    /// What a long press on the control does, named for a reader. Present
-    /// only when the control declared a long press at all.
-    pub(crate) long_click_label: Option<String>,
-    /// What the magic tap does, named for a reader. Present only when the
-    /// control declared one.
-    pub(crate) magic_tap_label: Option<String>,
-    /// The short names Voice Control shows for the control.
-    pub(crate) input_labels: Vec<String>,
-    /// The language of the control's text, as a BCP 47 tag.
-    pub(crate) language: Option<String>,
-    pub(crate) custom_actions: Vec<String>,
-    pub(crate) live_region: Option<LiveRegionMode>,
-    pub(crate) progress: Option<ProgressBarRangeInfo>,
-    pub(crate) adjustable: bool,
-    pub(crate) vertical_scroll: Option<ScrollAxisRange>,
-    pub(crate) horizontal_scroll: Option<ScrollAxisRange>,
-    /// Whether a screen reader may ask this list for the row at an index.
-    pub(crate) scroll_to_index: bool,
-    pub(crate) collection: Option<CollectionInfo>,
-    pub(crate) pane_title: Option<String>,
-    pub(crate) error: Option<String>,
-    /// What using the control does or what it wants, read after the rest.
-    pub(crate) hint_text: Option<String>,
-    pub(crate) password: bool,
-    pub(crate) expanded: Option<bool>,
-    pub(crate) dismissable: bool,
-    pub(crate) is_modal: bool,
-    /// Where the caret of an editable field sits, or which stretch of its
-    /// text is picked: the anchor and the end that moves, as byte offsets into
-    /// the element's `value`. A field that holds a secret publishes none.
-    pub(crate) text_selection: Option<(usize, usize)>,
-    pub(crate) multiline: bool,
-}
-
-impl AccessibilityDetails {
-    const NONE: Self = Self {
-        state_description: None,
-        click_label: None,
-        long_click_label: None,
-        magic_tap_label: None,
-        input_labels: Vec::new(),
-        language: None,
-        custom_actions: Vec::new(),
-        live_region: None,
-        progress: None,
-        adjustable: false,
-        vertical_scroll: None,
-        horizontal_scroll: None,
-        scroll_to_index: false,
-        collection: None,
-        pane_title: None,
-        error: None,
-        hint_text: None,
-        password: false,
-        expanded: None,
-        dismissable: false,
-        is_modal: false,
-        text_selection: None,
-        multiline: false,
-    };
-}
-
-impl Default for AccessibilityDetails {
-    fn default() -> Self {
-        Self::NONE
-    }
-}
-
-impl RareProperties for AccessibilityDetails {
-    const EMPTY: &'static Self = &Self::NONE;
-}
-
 impl AccessibilityElement {
     fn identity_key(&self) -> (NodeId, u32, Option<u64>) {
         (self.node_id, self.node_generation, self.canvas_key)
@@ -623,16 +550,17 @@ where
     let Some(semantics_tree) = shell.semantics_tree() else {
         return projection.finish();
     };
-    project_node(semantics_tree.root(), false, None, None, &mut projection);
+    let root = semantics_tree.root();
+    project_node(root, false, Inherited::default(), None, &mut projection);
     let elements = projection.finish();
     #[cfg(debug_assertions)]
-    assert_same_elements(&elements, &project_semantics(semantics_tree.root(), bounds));
+    assert_same_elements(&elements, &project_semantics(root, bounds));
     elements
 }
 
 fn project_semantics(root: &SemanticsNode, bounds: &WindowBounds) -> Vec<AccessibilityElement> {
     let mut projection = Projection::new(Vec::new(), bounds);
-    project_node(root, false, None, None, &mut projection);
+    project_node(root, false, Inherited::default(), None, &mut projection);
     projection.finish()
 }
 
@@ -800,14 +728,14 @@ fn inspector_node(element: AccessibilityElement) -> InspectorNode {
 fn project_node(
     node: &SemanticsNode,
     suppress_static_text: bool,
-    inherited_live_region: Option<LiveRegionMode>,
+    inherited: Inherited,
     inherited_scroll: Option<NodeId>,
     out: &mut Projection,
 ) {
     if node.hidden {
         return;
     }
-    let live_region = node.details().live_region.or(inherited_live_region);
+    let inherited = inherited.at(node);
     let first_new = out.written;
     let clickable = node
         .actions
@@ -820,14 +748,14 @@ fn project_node(
     let container = is_container(node);
     if rect.is_visible() {
         let named = boundary || !suppress_static_text;
-        if !write_node_element(node, rect, named, container, clickable, live_region, out)
+        if !write_node_element(node, rect, named, container, clickable, inherited, out)
             && actionable
         {
             warn_unlabeled(node.node_id);
         }
     }
 
-    project_canvas_children(node, rect, live_region, out);
+    project_canvas_children(node, rect, inherited.live_region, out);
     for element in &mut out.written()[first_new..] {
         element.node_generation = node.node_generation;
         element.scroll_parent = inherited_scroll;
@@ -839,13 +767,7 @@ fn project_node(
     } else {
         inherited_scroll
     };
-    project_children(
-        node,
-        suppress_children,
-        live_region,
-        scroll_for_children,
-        out,
-    );
+    project_children(node, suppress_children, inherited, scroll_for_children, out);
 }
 
 fn write_node_element(
@@ -854,7 +776,7 @@ fn write_node_element(
     named: bool,
     container: bool,
     clickable: bool,
-    live_region: Option<LiveRegionMode>,
+    inherited: Inherited,
     out: &mut Projection,
 ) -> bool {
     let slot = out.next_slot();
@@ -868,7 +790,7 @@ fn write_node_element(
     if !labelled {
         label.clear();
     }
-    fill_node_element(slot, node, rect, label, clickable, live_region);
+    fill_node_element(slot, node, rect, label, clickable, inherited);
     out.commit();
     true
 }
@@ -904,7 +826,7 @@ pub(crate) fn checked_state(element: &AccessibilityElement) -> Option<Toggleable
 fn project_children(
     node: &SemanticsNode,
     suppress_static_text: bool,
-    live_region: Option<LiveRegionMode>,
+    inherited: Inherited,
     scroll_for_children: Option<NodeId>,
     out: &mut Projection,
 ) {
@@ -913,7 +835,7 @@ fn project_children(
         project_node(
             child,
             suppress_static_text,
-            live_region,
+            inherited,
             scroll_for_children,
             out,
         );
@@ -1009,41 +931,6 @@ fn number_group(
     }
 }
 
-/// Whether a control reads as open or as closed: one that says what closing
-/// it does is open now, and one that says what opening it does is closed.
-/// A control that says neither is not a thing a reader opens at all.
-fn expansion(details: &SemanticsDetails) -> Option<bool> {
-    details
-        .collapse
-        .is_some()
-        .then_some(true)
-        .or_else(|| details.expand.is_some().then_some(false))
-}
-
-/// What a reader reads out for a control's long press: the verb phrase the
-/// app gave, and for a control that declared the action with no phrase the
-/// plain words for what it is. A control with no long press gets nothing.
-fn long_click_label(details: &SemanticsDetails) -> Option<&str> {
-    details.on_long_click.as_ref()?;
-    let named = details
-        .on_long_click_label
-        .as_deref()
-        .filter(|label| !label.trim().is_empty());
-    Some(named.unwrap_or("long press"))
-}
-
-/// What a reader lists for a control's magic tap: the verb phrase the app
-/// gave, or the plain words for the gesture. A control with no magic tap
-/// gets nothing.
-fn magic_tap_label(details: &SemanticsDetails) -> Option<&str> {
-    details.on_magic_tap.as_ref()?;
-    let named = details
-        .on_magic_tap_label
-        .as_deref()
-        .filter(|label| !label.trim().is_empty());
-    Some(named.unwrap_or("magic tap"))
-}
-
 #[cfg(debug_assertions)]
 fn warn_unlabeled(node_id: NodeId) {
     if crate::thread_state::with(|state| {
@@ -1077,7 +964,7 @@ fn fill_node_element(
     rect: AccessibilityRect,
     label: String,
     clickable: bool,
-    live_region: Option<LiveRegionMode>,
+    inherited: Inherited,
 ) {
     let details = node.details();
     let role = if details.is_modal {
@@ -1104,7 +991,7 @@ fn fill_node_element(
     );
     let mut element_details = spare.details;
     update_rare(&mut element_details, |held| {
-        fill_node_details(held, node, live_region);
+        fill_node_details(held, node, inherited);
     });
     *slot = AccessibilityElement {
         node_id: node.node_id,
@@ -1124,57 +1011,6 @@ fn fill_node_element(
         scroll_parent: None,
         collection_item: None,
         details: element_details,
-    };
-}
-
-fn fill_node_details(
-    held: &mut AccessibilityDetails,
-    node: &SemanticsNode,
-    live_region: Option<LiveRegionMode>,
-) {
-    let details = node.details();
-    *held = AccessibilityDetails {
-        state_description: reuse_text(
-            held.state_description.take(),
-            details.state_description.as_deref(),
-        ),
-        click_label: reuse_text(held.click_label.take(), details.on_click_label.as_deref()),
-        long_click_label: reuse_text(held.long_click_label.take(), long_click_label(details)),
-        magic_tap_label: reuse_text(held.magic_tap_label.take(), magic_tap_label(details)),
-        input_labels: reuse_texts(
-            std::mem::take(&mut held.input_labels),
-            details.input_labels.iter().map(String::as_str),
-        ),
-        language: reuse_text(held.language.take(), details.language.as_deref()),
-        custom_actions: reuse_texts(
-            std::mem::take(&mut held.custom_actions),
-            details
-                .custom_actions
-                .iter()
-                .map(|action| action.label.as_str()),
-        ),
-        live_region: live_region.or_else(|| {
-            (node.widget_role == Some(SemanticsWidgetRole::Alert))
-                .then_some(LiveRegionMode::Assertive)
-        }),
-        progress: details.progress,
-        adjustable: details.set_progress.is_some(),
-        vertical_scroll: details.vertical_scroll,
-        horizontal_scroll: details.horizontal_scroll,
-        scroll_to_index: details.scroll_to_index.is_some(),
-        collection: details.collection,
-        pane_title: reuse_text(held.pane_title.take(), details.pane_title.as_deref()),
-        error: reuse_text(held.error.take(), details.error.as_deref()),
-        hint_text: reuse_text(held.hint_text.take(), details.hint_text.as_deref()),
-        password: details.password,
-        expanded: expansion(details),
-        dismissable: details.dismiss.is_some(),
-        is_modal: details.is_modal,
-        text_selection: details
-            .text_selection
-            .filter(|_| details.editable_text && !details.password)
-            .map(|range| (range.start, range.end)),
-        multiline: details.multiline,
     };
 }
 
@@ -1775,7 +1611,7 @@ pub(crate) fn expansion_word(element: &AccessibilityElement) -> Option<&'static 
     all(feature = "desktop-shell", feature = "renderer-wgpu"),
     all(feature = "ios", feature = "renderer-wgpu", target_os = "ios")
 ))]
-pub(crate) fn stepped_value(progress: &ProgressBarRangeInfo, up: bool) -> f32 {
+pub(crate) fn stepped_value(progress: &cranpose_ui::ProgressBarRangeInfo, up: bool) -> f32 {
     let step = progress.step();
     let next = if up {
         progress.current + step
@@ -2167,7 +2003,7 @@ pub(crate) fn log_spoken_tree(elements: &[AccessibilityElement]) {
 }
 
 #[cfg(any(test, feature = "robot", target_os = "ios"))]
-fn spoken_percent(progress: &ProgressBarRangeInfo) -> Option<String> {
+fn spoken_percent(progress: &cranpose_ui::ProgressBarRangeInfo) -> Option<String> {
     let span = progress.end - progress.start;
     (span > 0.0).then(|| {
         let percent = ((progress.current - progress.start) / span * 100.0).round();

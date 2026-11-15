@@ -42,6 +42,9 @@ def run_checks(adapter, report):
     for secret in ['robot-secret-value', 'Decorative secret']:
         require(secret not in published, f'private text published: {secret}')
     passed('merged names preserve repeated words and independent controls; secrets stay hidden')
+    increase = node('Increase')
+    require(increase['id'] == 'increase-button', f'test tag is not the native identifier: {increase}')
+    passed('a test tag is the native identifier UI test tools find the control by')
     for name, expected in [('Increase', 1), ('Remove', 2), ('Decrease', 1)]:
         require(adapter.activate(node(name)), f'{name} has no native activation action')
         node(f'Action count: {expected}')

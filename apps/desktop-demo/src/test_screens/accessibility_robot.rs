@@ -20,7 +20,9 @@ pub fn AccessibilityRobotScreen() {
         Modifier::empty()
             .fill_max_size()
             .background(Color::WHITE)
-            .padding(12.0),
+            .padding(12.0)
+            // Android's UI Automator finds a tag as the view id resource name.
+            .semantics(|config| config.test_tags_as_resource_id = Some(true)),
         ColumnSpec::default().vertical_arrangement(LinearArrangement::SpacedBy(8.0)),
         move || {
             Text("Accessibility robot", Modifier::empty(), robot_text_style());
@@ -58,13 +60,23 @@ fn RobotActionControls(count: MutableState<i32>) {
         move || {
             Text("Account", Modifier::empty(), robot_text_style());
             Text("Account", Modifier::empty(), robot_text_style());
-            RobotButton("Remove", true, move || count.set(count.get() + 1));
+            RobotButton("Remove", true, Modifier::empty(), move || {
+                count.set(count.get() + 1);
+            });
         },
     );
     Row(Modifier::empty(), RowSpec::default(), move || {
-        RobotButton("Increase", true, move || count.set(count.get() + 1));
-        RobotButton("Decrease", true, move || count.set(count.get() - 1));
-        RobotButton("Disabled action", false, move || {
+        // UI test tools find this button by its tag.
+        RobotButton(
+            "Increase",
+            true,
+            Modifier::empty().test_tag("increase-button"),
+            move || count.set(count.get() + 1),
+        );
+        RobotButton("Decrease", true, Modifier::empty(), move || {
+            count.set(count.get() - 1);
+        });
+        RobotButton("Disabled action", false, Modifier::empty(), move || {
             count.set(count.get() + 100);
         });
     });
@@ -143,7 +155,9 @@ fn RobotDialog(
                     Text(title, Modifier::empty(), robot_text_style());
                     content();
                     BasicTextField(notes, field_modifier("Dialog notes"), robot_text_style());
-                    RobotButton(close_label, true, move || visible.set(false));
+                    RobotButton(close_label, true, Modifier::empty(), move || {
+                        visible.set(false);
+                    });
                 },
             );
         },
@@ -191,9 +205,14 @@ fn field_modifier(name: &str) -> Modifier {
 }
 
 #[composable]
-fn RobotButton(label: &'static str, enabled: bool, action: impl FnMut() + 'static) {
+fn RobotButton(
+    label: &'static str,
+    enabled: bool,
+    modifier: Modifier,
+    action: impl FnMut() + 'static,
+) {
     Button(
-        Modifier::empty()
+        modifier
             .height(48.0)
             .padding_horizontal(8.0)
             .semantics(move |config| {
@@ -234,10 +253,14 @@ fn RobotNavigationControls() {
             }
         },
     );
-    RobotButton("Open preferences", true, move || preferences.set(true));
+    RobotButton("Open preferences", true, Modifier::empty(), move || {
+        preferences.set(true);
+    });
     if preferences.get() {
         RobotDialog("Preferences", "Close preferences", preferences, move || {
-            RobotButton("Open confirmation", true, move || confirmation.set(true));
+            RobotButton("Open confirmation", true, Modifier::empty(), move || {
+                confirmation.set(true);
+            });
             if confirmation.get() {
                 RobotDialog("Confirmation", "Close confirmation", confirmation, || {});
             }

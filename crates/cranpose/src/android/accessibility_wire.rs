@@ -208,6 +208,18 @@ fn encode_record(
     record.number(selection_start);
     record.number(selection_end);
     record.text(details.hint_text.as_deref().unwrap_or(""));
+    record.text(resource_name(element));
+}
+
+// The view id resource name UI Automator's `By.res` finds the control by: its
+// test tag under Compose's `testTagsAsResourceId`, or nothing.
+fn resource_name(element: &AccessibilityElement) -> &str {
+    element
+        .details()
+        .test_tag
+        .as_ref()
+        .filter(|tag| tag.as_resource_id)
+        .map_or("", |tag| tag.name.as_str())
 }
 
 /// Writes a record's fields straight into the update, in the order the host

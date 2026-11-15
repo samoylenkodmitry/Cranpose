@@ -77,6 +77,11 @@ impl MirrorAttributes {
             self.set("disabled", "");
         }
         self.set_number("data-cranpose-node", id);
+        // Compose Multiplatform's web mirror puts the test tag in the id,
+        // where browser test tools find the node.
+        if let Some(tag) = &details.test_tag {
+            self.set("id", &tag.name);
+        }
         if element.clickable {
             self.set("data-cranpose-clickable", "");
         }
