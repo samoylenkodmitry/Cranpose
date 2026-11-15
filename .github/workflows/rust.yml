@@ -444,6 +444,11 @@ jobs:
           name: music-check
           path: ${{ runner.temp }}/music-check
           retention-days: 3
+      - name: Open the web demo without WebAssembly and without scripts
+        if: ${{ !cancelled() && steps.provision.conclusion == 'success' && steps.changes.outputs.docs_only != 'true' && steps.memo.outputs.passed != 'true' }}
+        # Safari's Lockdown Mode removes WebAssembly, and a reader can turn
+        # scripts off: the page must say why the demo cannot start.
+        run: just web-boot-check "$RUNNER_TEMP/web-demo" "$RUNNER_TEMP/boot-check"
 
       - name: Remember that this tree passed
         if: ${{ success() && steps.memo.outputs.passed != 'true' }}

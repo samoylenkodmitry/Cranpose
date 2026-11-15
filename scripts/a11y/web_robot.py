@@ -16,6 +16,7 @@ CHECKS = {
     'webgpu': ('scripts/a11y/tests/gpu-smoke.mjs', ['webgpu'], 300),
     'webgl': ('scripts/a11y/tests/gpu-smoke.mjs', ['gl'], 300),
     'music': ('scripts/a11y/tests/music-sound.mjs', [], 120),
+    'boot': ('scripts/a11y/tests/boot-messages.mjs', [], 60),
 }
 
 

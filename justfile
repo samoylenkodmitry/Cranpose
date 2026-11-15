@@ -917,6 +917,12 @@ web-webgl-smoke site output:
 web-music-check site output:
     python3 scripts/a11y/web_robot.py --check music --site {{quote(site)}} --output {{quote(output)}}
 
+# Open a packaged web demo in headless Chrome without WebAssembly, as Safari's
+# Lockdown Mode leaves it, and without scripts; check the page says why the
+# demo cannot start.
+web-boot-check site output:
+    python3 scripts/a11y/web_robot.py --check boot --site {{quote(site)}} --output {{quote(output)}}
+
 # Build and package the web demo, then open every page on WebGPU and on WebGL2
 # and play the Music tab.
 web-backends: web
