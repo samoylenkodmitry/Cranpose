@@ -9,22 +9,25 @@ use std::{
 use smallvec::SmallVec;
 
 use crate::{
-    AnchorId, Applier, ApplierGuard, ApplierHost, COMMAND_FLUSH_THRESHOLD, ChildList, Command,
-    CommandQueue, CompositionLocal, ComputedLocalEntry, DirtyBubble, Key, LocalKey,
-    LocalStackSnapshot, LocalStateEntry, MutableState, Node, NodeError, NodeId, Owned,
-    ProvidedValue, RecomposeOptions, RecomposeScope, RecomposeScopeInner, RecycledNode,
-    RetentionMode, RuntimeHandle, ScopeId, SlotId, SlotPassOutcome, SlotTable, SlotsHost,
-    SnapshotStateList, SnapshotStateMap, StaticCompositionLocal, SubcomposeState, composer_context,
+    AnchorId, Applier, ApplierGuard, ApplierHost, COMMAND_FLUSH_THRESHOLD, Command, CommandQueue,
+    CompositionLocal, ComputedLocalEntry, DirtyBubble, Key, LocalKey, LocalStackSnapshot,
+    LocalStateEntry, MutableState, Node, NodeError, NodeId, Owned, ProvidedValue, RecomposeOptions,
+    RecomposeScope, RecomposeScopeInner, RecycledNode, RetentionMode, RuntimeHandle, ScopeId,
+    SlotId, SlotPassOutcome, SlotTable, SlotsHost, SnapshotStateList, SnapshotStateMap,
+    StaticCompositionLocal, SubcomposeState, composer_context,
     retention::RetainKey,
     runtime,
     slot::{FinishGroupResult, GroupStart, GroupStartKind, PayloadKind, RootNodeIds, ValueSlotId},
 };
 
 mod composable_group;
+mod parent_frame;
 mod runtime_state;
 mod scope_frame;
 mod subcompose_slot;
 pub use composable_group::{ComposableGroup, ParameterChange};
+use parent_frame::{InitialParentFrame, push_root_frame};
+pub(crate) use parent_frame::{ParentAttachMode, ParentFrame};
 pub(crate) use runtime_state::ComposerRuntimeState;
 pub(crate) use scope_frame::ScopeFrame;
 use subcompose_slot::{measure_slot_state, subcompose_slot_at};
@@ -242,26 +245,6 @@ pub(crate) fn recycle_commands(commands: CommandQueue) {
             spare.push(commands);
         }
     });
-}
-
-pub(crate) struct ParentFrame {
-    pub(crate) id: NodeId,
-    pub(crate) previous: ChildList,
-    pub(crate) new_children: ChildList,
-    pub(crate) attach_mode: ParentAttachMode,
-    pub(crate) synthetic_root: bool,
-}
-
-#[derive(Clone, Copy)]
-pub(crate) enum InitialParentFrame {
-    SyntheticRoot,
-    RealParent,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ParentAttachMode {
-    ImmediateAppend,
-    DeferredSync,
 }
 
 #[derive(Default)]
@@ -520,23 +503,6 @@ impl ComposerCore {
         *self.subcomposition_owner_scope.get_mut() = None;
         *self.local_stack.get_mut() = None;
         self.side_effects.get_mut().clear();
-    }
-}
-
-/// Opens the parent frame of a pass's top-level nodes under `root`.
-fn push_root_frame(
-    parent_stack: &mut Vec<ParentFrame>,
-    root: Option<NodeId>,
-    initial_parent_frame: InitialParentFrame,
-) {
-    if let Some(root_id) = root {
-        parent_stack.push(ParentFrame {
-            id: root_id,
-            previous: ChildList::new(),
-            new_children: ChildList::new(),
-            attach_mode: ParentAttachMode::DeferredSync,
-            synthetic_root: matches!(initial_parent_frame, InitialParentFrame::SyntheticRoot),
-        });
     }
 }
 
