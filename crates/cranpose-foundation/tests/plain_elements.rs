@@ -42,6 +42,22 @@ impl PlainElement for Span {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Hash)]
+struct Inset(u32);
+
+impl PlainElement for Inset {
+    const WORDS: usize = 1;
+    const CAPABILITIES: NodeCapabilities = NodeCapabilities::LAYOUT;
+
+    fn to_words(&self, words: &mut [u32]) {
+        words[0] = self.0;
+    }
+
+    fn from_words(words: &[u32]) -> Self {
+        Self(words[0])
+    }
+}
+
 #[derive(Debug)]
 struct Marker {
     state: NodeState,
@@ -155,6 +171,22 @@ fn a_plain_element_moved_past_a_node_leaves_the_chain_its_capabilities() {
     chain.update_from_slice(&[tint(1), mark(7)], &mut context);
     chain.update_from_slice(&[mark(7), tint(2)], &mut context);
     assert_eq!(chain.capabilities(), NodeCapabilities::DRAW);
+}
+
+#[test]
+fn a_new_chain_asks_for_every_stage_one_of_its_elements_takes_part_in() {
+    let mut chain = ModifierNodeChain::new();
+    let mut context = BasicModifierNodeContext::new();
+    chain.update_from_slice(&[tint(1), mark(7), plain_element(Inset(2))], &mut context);
+    let asked = |kind: InvalidationKind| {
+        context
+            .invalidations()
+            .iter()
+            .any(|invalidation| invalidation.kind() == kind)
+    };
+    assert!(asked(InvalidationKind::Draw), "the tint draws");
+    assert!(asked(InvalidationKind::Layout), "the inset lays out");
+    assert_eq!(context.invalidations().len(), 2, "no other stage");
 }
 
 #[test]
