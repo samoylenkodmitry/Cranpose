@@ -917,8 +917,14 @@ web-webgl-smoke site output:
 web-music-check site output:
     python3 scripts/a11y/web_robot.py --check music --site {{quote(site)}} --output {{quote(output)}}
 
-# Build and package the web demo, then open every page on WebGPU and on WebGL2
-# and play the Music tab.
+# Open a packaged web demo in headless Chrome without WebAssembly, as Safari's
+# Lockdown Mode leaves it, and without scripts; check the page says why the
+# demo cannot start.
+web-boot-check site output:
+    python3 scripts/a11y/web_robot.py --check boot --site {{quote(site)}} --output {{quote(output)}}
+
+# Build and package the web demo, then open every page on WebGPU and on WebGL2,
+# play the Music tab and open the page without WebAssembly and without scripts.
 web-backends: web
     #!/usr/bin/env bash
     set -euo pipefail
@@ -927,6 +933,7 @@ web-backends: web
     just web-webgpu-smoke "$run/site" "$run/webgpu"
     just web-webgl-smoke "$run/site" "$run/webgl"
     just web-music-check "$run/site" "$run/music"
+    just web-boot-check "$run/site" "$run/boot"
 
 test-web-ime-webdriver endpoint browser url output *args:
     python3 scripts/a11y/web_ime_robot.py --endpoint {{quote(endpoint)}} --browser {{quote(browser)}} --url {{quote(url)}} --output {{quote(output)}} {{args}}

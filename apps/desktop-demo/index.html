@@ -113,6 +113,7 @@
             align-items: center;
         }
 
+        body[data-phase="error"] .boot-title,
         body[data-phase="error"] .boot-status {
             display: none;
         }
@@ -181,6 +182,14 @@
             }
         }
     </style>
+    <noscript>
+        <style>
+            .boot-symbol,
+            #boot-status {
+                display: none;
+            }
+        </style>
+    </noscript>
 </head>
 <body data-phase="booting">
     <canvas id="cranpose-canvas" width="800" height="600"></canvas>
@@ -190,6 +199,9 @@
             <div class="boot-symbol" aria-hidden="true"></div>
             <p class="boot-title">Cranpose</p>
             <p id="boot-status" class="boot-status">Preparing the demo…</p>
+            <noscript>
+                <p class="boot-status">The demo needs JavaScript. Turn JavaScript on in the browser’s settings, then reload the page.</p>
+            </noscript>
             <div class="boot-error" role="alert">
                 <p class="boot-error-title">Cranpose couldn’t start</p>
                 <p id="error-message" class="boot-error-message"></p>
@@ -343,6 +355,11 @@
                 const initialShaderSection = params.get('shader_section');
                 updateAppState('initializing', { backend, initialTab, initialShaderSection });
 
+                // Safari's Lockdown Mode removes WebAssembly together with WebGL
+                // and WebGPU, so the missing WebAssembly names the cause.
+                if (typeof WebAssembly !== 'object') {
+                    throw new Error('This browser runs no WebAssembly. Safari turns WebAssembly off in Lockdown Mode. Turn Lockdown Mode off for this site in Safari’s Website Settings.');
+                }
                 const hasWebGpu = 'gpu' in navigator;
                 const probeCanvas = document.createElement('canvas');
                 const hasWebGl2 = !!probeCanvas.getContext('webgl2');
