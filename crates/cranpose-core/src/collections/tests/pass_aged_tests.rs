@@ -51,8 +51,7 @@ fn the_bound_still_pushes_out_the_least_recently_used() {
         Some((3, "three")),
         "a replaced value"
     );
-    assert_eq!(cache.pop_lru(), Some((1, "one")));
-    assert_eq!(cache.len(), 1);
+    assert_eq!(cache.len(), 2);
 }
 
 #[test]
@@ -67,4 +66,50 @@ fn clear_drops_every_entry() {
     assert!(cache.is_empty());
     assert!(cache.get(&1).is_none());
     assert!(passes(&mut cache, IDLE_PASSES + 1).is_empty());
+}
+
+#[test]
+fn a_key_a_pass_asks_for_again_outlasts_the_keys_it_asks_for_once() {
+    let mut cache = PassAgedCache::with_capacity_at_least_one(4);
+    cache.push(0, "asked for twice");
+    assert!(cache.get(&0).is_some());
+
+    for key in 1..100 {
+        cache.push(key, "asked for once");
+    }
+
+    assert_eq!(cache.get(&0), Some(&"asked for twice"));
+    assert_eq!(cache.len(), 4);
+}
+
+#[test]
+fn a_key_that_comes_back_after_it_left_for_room_outlasts_the_keys_seen_once() {
+    let mut cache = PassAgedCache::with_capacity_at_least_one(4);
+    for key in 0..5 {
+        cache.push(key, "seen once");
+    }
+    assert!(cache.get(&0).is_none(), "the oldest key left for room");
+
+    cache.push(0, "came back");
+    for key in 5..100 {
+        cache.push(key, "seen once");
+    }
+
+    assert_eq!(cache.get(&0), Some(&"came back"));
+}
+
+#[test]
+fn a_new_pass_ends_the_standing_of_the_keys_the_last_one_asked_for_again() {
+    let mut cache = PassAgedCache::with_capacity_at_least_one(2);
+    cache.push(1, "asked for twice");
+    assert!(cache.get(&1).is_some());
+    cache.push(2, "asked for once");
+
+    cache.begin_pass(IDLE_PASSES, drop);
+    cache.push(3, "new");
+    cache.push(4, "newer");
+
+    assert!(cache.get(&1).is_none(), "the least recently used leaves");
+    assert_eq!(cache.get(&3), Some(&"new"));
+    assert_eq!(cache.get(&4), Some(&"newer"));
 }

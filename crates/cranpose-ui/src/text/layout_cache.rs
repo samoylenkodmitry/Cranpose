@@ -1,6 +1,6 @@
-use std::{num::NonZeroU32, rc::Rc};
+use std::rc::Rc;
 
-use cranpose_core::collections::pass_aged::PassAgedCache;
+use cranpose_core::collections::{pass_aged::PassAgedCache, recent_hashes::RecentHashes};
 use cranpose_ui_graphics::MemoryHeadroom;
 use smallvec::SmallVec;
 
@@ -62,7 +62,7 @@ pub(super) struct LayoutCache {
     drawn: DrawnLayouts,
     // The texts changed in place or drawn lately: one laid out again while
     // here came back, and goes into `kept`.
-    returning: ReturningKeys,
+    returning: RecentHashes,
     // The host's memory headroom when the pass began. A tight heap keeps
     // no layout of a text that changes in place.
     headroom: MemoryHeadroom,
@@ -73,7 +73,7 @@ impl LayoutCache {
         Self {
             kept: PassAgedCache::with_capacity_at_least_one(TEXT_PREPARED_CACHE_CAPACITY),
             drawn: DrawnLayouts::default(),
-            returning: ReturningKeys::default(),
+            returning: RecentHashes::new(RETURNING_SLOTS),
             headroom: MemoryHeadroom::default(),
         }
     }
@@ -82,7 +82,7 @@ impl LayoutCache {
     pub(super) fn clear(&mut self) {
         self.kept.clear();
         self.drawn = DrawnLayouts::default();
-        self.returning = ReturningKeys::default();
+        self.returning.clear();
     }
 
     // What the cache holds of `key` for `frame`, laid out as `admission`
@@ -241,35 +241,4 @@ impl DrawnLayouts {
 #[inline(never)]
 fn drop_undrawn(slots: &mut Vec<DrawnLayout>, pass: u64) {
     slots.retain(|slot| pass - slot.pass <= 1);
-}
-
-// The tags of hashes, each in the slot its hash picks, the newest in place
-// of the one before it.
-#[derive(Default)]
-struct ReturningKeys {
-    tags: Vec<Option<NonZeroU32>>,
-}
-
-impl ReturningKeys {
-    fn contains(&self, hash: u64) -> bool {
-        let (slot, tag) = slot_and_tag(hash);
-        self.tags.get(slot) == Some(&Some(tag))
-    }
-
-    fn put(&mut self, hash: u64) {
-        if self.tags.is_empty() {
-            self.tags = vec![None; RETURNING_SLOTS];
-        }
-        let (slot, tag) = slot_and_tag(hash);
-        if let Some(kept) = self.tags.get_mut(slot) {
-            *kept = Some(tag);
-        }
-    }
-}
-
-// The slot of `hash`, from its top bits, and its tag, from its low bits.
-fn slot_and_tag(hash: u64) -> (usize, NonZeroU32) {
-    let slot = usize::try_from(hash >> (u64::BITS - RETURNING_SLOTS.ilog2())).unwrap_or(0);
-    let low = u32::try_from(hash & u64::from(u32::MAX)).unwrap_or(0);
-    (slot, NonZeroU32::MIN | low)
 }
