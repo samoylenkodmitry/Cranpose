@@ -105,8 +105,8 @@ impl ClipboardSessionState {
 }
 
 /// Installs the platform OS clipboard for the current app context, replacing any
-/// previously installed one. Platform runtimes call this
-/// (`AppShell::set_platform_clipboard`).
+/// previously installed one. Platform runtimes call this; on desktop
+/// `AppShell::use_system_clipboard` does.
 pub fn set_platform_clipboard(clipboard: Rc<dyn PlatformClipboard>) {
     crate::render_state::with_clipboard_session(|state| state.set_platform(Some(clipboard)));
 }

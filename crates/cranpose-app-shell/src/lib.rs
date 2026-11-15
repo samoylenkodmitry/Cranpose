@@ -18,6 +18,7 @@ mod shell_frame;
 #[expect(clippy::multiple_inherent_impl, reason = "one file per shell concern")]
 mod shell_input;
 mod surface;
+mod system_clipboard;
 mod touch_router;
 mod wheel;
 use std::{
@@ -29,6 +30,14 @@ use std::{
 use cranpose_core::{
     Applier, Composition, MemoryApplier, NodeError, NodeId, collections::map::HashSet,
     enter_event_handler_scope, location_key, run_in_mutable_snapshot,
+};
+#[cfg(any(test, feature = "test-support"))]
+use cranpose_core::{
+    CompositionPassDebugStats, MemoryApplierDebugStats, RecomposeScopeRegistryDebugStats, SlotId,
+    SlotTableDebugStats, debug_recompose_scope_registry_stats,
+    runtime::{RuntimeDebugStats, StateArenaDebugStats},
+    snapshot_pinning::{SnapshotPinningDebugStats, debug_snapshot_pinning_stats},
+    snapshot_v2::{SnapshotV2DebugStats, debug_snapshot_v2_stats},
 };
 pub use cranpose_foundation::{
     DEFAULT_ROTARY_SCROLL_FACTOR_DP, Modifiers, PointerId, PointerSource, RotaryScrollEvent,
@@ -43,7 +52,9 @@ use cranpose_ui::{
     format_screen_summary, process_focus_invalidations, process_pointer_repasses,
     process_semantics_invalidations, request_render_invalidation,
 };
-pub use cranpose_ui::{Key, KeyEvent, KeyEventType, NativeKeyEvent};
+pub use cranpose_ui::{
+    ImeEditorState, Key, KeyEvent, KeyEventType, NativeKeyEvent, PlatformTextInputHandler,
+};
 use cranpose_ui_graphics::{Point, PointerIcon, Rect, Size};
 pub use dev_options::{DevOptions, FramePacingMode};
 pub use fps_monitor::FpsStats;
@@ -57,66 +68,6 @@ use surface::{SurfaceDirtyLane, TextInputRouter, TextInputRoutes, route_nodes_by
 pub use touch_router::TouchRouter;
 use web_time::Instant;
 pub use wheel::WheelScroll;
-
-#[cfg(all(
-    feature = "clipboard-native",
-    not(target_arch = "wasm32"),
-    not(target_os = "android"),
-    not(target_os = "ios")
-))]
-#[derive(Default)]
-struct ShellClipboard {
-    /// The system clipboard, opened at the first copy or paste: opened at
-    /// launch, it held the main thread ~0.8 ms on an Apple M5, for apps that
-    /// never touch it too.
-    inner: std::cell::OnceCell<RefCell<Option<arboard::Clipboard>>>,
-}
-
-#[cfg(all(
-    feature = "clipboard-native",
-    not(target_arch = "wasm32"),
-    not(target_os = "android"),
-    not(target_os = "ios")
-))]
-impl ShellClipboard {
-    /// `use_clipboard`'s answer for the system clipboard, opened on first
-    /// use; `None` when it cannot be opened.
-    fn with<T>(
-        &self,
-        use_clipboard: impl FnOnce(&mut arboard::Clipboard) -> Option<T>,
-    ) -> Option<T> {
-        self.inner
-            .get_or_init(|| RefCell::new(arboard::Clipboard::new().ok()))
-            .borrow_mut()
-            .as_mut()
-            .and_then(use_clipboard)
-    }
-}
-
-#[cfg(all(
-    feature = "clipboard-native",
-    not(target_arch = "wasm32"),
-    not(target_os = "android"),
-    not(target_os = "ios")
-))]
-impl cranpose_ui::clipboard_session::PlatformClipboard for ShellClipboard {
-    fn write_text(&self, text: &str) {
-        self.with(|clipboard| clipboard.set_text(text).ok());
-    }
-
-    fn read_text(&self) -> Option<String> {
-        self.with(|clipboard| clipboard.get_text().ok())
-    }
-}
-#[cfg(any(test, feature = "test-support"))]
-use cranpose_core::{
-    CompositionPassDebugStats, MemoryApplierDebugStats, RecomposeScopeRegistryDebugStats, SlotId,
-    SlotTableDebugStats, debug_recompose_scope_registry_stats,
-    runtime::{RuntimeDebugStats, StateArenaDebugStats},
-    snapshot_pinning::{SnapshotPinningDebugStats, debug_snapshot_pinning_stats},
-    snapshot_v2::{SnapshotV2DebugStats, debug_snapshot_v2_stats},
-};
-pub use cranpose_ui::{ImeEditorState, PlatformTextInputHandler};
 // How long a frame composes before content that a change brings, such as a
 // new screen, waits for later frames: a quarter of a 60 Hz frame.
 const PAUSABLE_BUDGET: std::time::Duration = std::time::Duration::from_millis(4);
@@ -542,17 +493,6 @@ where
         });
         renderer.attach_app_context_services(&app_context);
         app_context.enter(|| {
-            #[cfg(all(
-                feature = "clipboard-native",
-                not(target_arch = "wasm32"),
-                not(target_os = "android"),
-                not(target_os = "ios")
-            ))]
-            {
-                cranpose_ui::clipboard_session::set_platform_clipboard(Rc::new(
-                    ShellClipboard::default(),
-                ));
-            }
             if let Err(err) = composition.render_stable(root_key, &mut *build) {
                 log::error!("initial render failed: {err}");
             }
