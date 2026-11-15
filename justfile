@@ -733,6 +733,7 @@ test-shell-helpers: _benchmark-python ci-contract-gates
     python3 benchmarks/compose-vs-cranpose/tests/test_browser_server.py
     python3 benchmarks/compose-vs-cranpose/tests/test_browser_tiers.py
     python3 benchmarks/compose-vs-cranpose/tests/test_starts.py
+    python3 benchmarks/compose-vs-cranpose/tests/test_window_launch.py
     python3 benchmarks/compose-vs-cranpose/tests/test_release_tree.py
     python3 benchmarks/compose-vs-cranpose/tests/test_git_pins.py
     {{benchmark_python}} benchmarks/compose-vs-cranpose/tests/test_parity_compare.py

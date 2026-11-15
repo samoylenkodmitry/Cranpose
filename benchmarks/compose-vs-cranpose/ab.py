@@ -85,6 +85,11 @@ def leg_record(run, subject, order, start):
         'run_s': run['run_s'],
         'stopped': run['stopped'],
         'first_frame_s': run['first_frame_s'],
+        # What `am start -W` reported, in milliseconds: TotalTime, from the
+        # start command to the window the system counts as drawn, and
+        # WaitTime, the command's own wait. A first frame far past them was
+        # the app's to draw.
+        'launch': {key: run['launch'][key] for key in ('TotalTime', 'WaitTime') if key in run['launch']},
         # When each frame was presented, in milliseconds since the launch.
         'frame_ms': run['frame_ms'],
         'fps_by_second': run['fps_by_second'],

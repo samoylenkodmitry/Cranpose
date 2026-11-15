@@ -227,11 +227,6 @@ class Device:
     def temperatures(self):
         return thermal_reading(self.shell('dumpsys', 'thermalservice'))
 
-    def uptime(self):
-        """The device's /proc/uptime in seconds: the clock the window script
-        stamps its samples with."""
-        return float(self.shell('cat', '/proc/uptime').split()[0])
-
     def screen(self):
         """The views on the screen, as `uiautomator dump` writes them."""
         self.shell('uiautomator', 'dump', '/sdcard/window.xml', timeout=30, check=False)
@@ -328,23 +323,33 @@ def layer_names(device):
         yield name
 
 
-def app_layer(device, app):
-    """The app's buffer layer: the window's `package/activity#N`, without a
-    handle prefix, or the layer named with the app's `layer` prefix when it
-    draws into a SurfaceView. Newer Android gives the window's buffers to
-    its `VRI-package/activity#N` layer."""
-    package = APPS[app]['package']
+def literal(text):
+    """A regular expression that matches `text` alone, read alike by the
+    device shell's awk and by Python's `re`: no backslash, which awk would
+    read as an escape in a `-v` value."""
+    if any(c in text for c in '[]\\^'):
+        raise ValueError(f'no layer pattern names {text!r}')
+    return ''.join(f'[{c}]' if c in '.+*?()|{}$' else c for c in text)
+
+
+def app_layer_pattern(app):
+    """The pattern the whole name of the app's buffer layer matches: the
+    window's `package/activity#N`, without a handle prefix, or the layer
+    named with the app's `layer` prefix when it draws into a SurfaceView.
+    Newer Android gives the window's buffers to its `VRI-package/activity#N`
+    layer."""
+    package = literal(APPS[app]['package'])
     prefix = APPS[app].get('layer')
-    layers = []
-    for name in layer_names(device):
-        if prefix:
-            found = name.startswith(f'{prefix}{package}/')
-        else:
-            found = ' ' not in name and (name.startswith(package + '/') or name.startswith(f'VRI-{package}/'))
-        if found:
-            layers.append(name)
+    return f'{literal(prefix)}{package}/.*' if prefix else f'(VRI-)?{package}/[^ ]*'
+
+
+def app_layer(device, app):
+    """The app's buffer layer, the one layer whose name matches
+    `app_layer_pattern`."""
+    pattern = re.compile(app_layer_pattern(app))
+    layers = [name for name in layer_names(device) if pattern.fullmatch(name)]
     if len(layers) != 1:
-        raise ValueError(f'expected one buffer layer for {package}: {layers}')
+        raise ValueError(f'expected one buffer layer for {APPS[app]["package"]}: {layers}')
     return layers[0]
 
 
@@ -395,12 +400,14 @@ LATENCY_HISTORY = 128
 
 def first_poll_full(output):
     """Whether the window's first latency poll already held a full history:
-    presents older than it, from the run's first seconds, may be lost."""
+    presents older than it, from the run's first seconds, may be lost. A
+    frame whose present is still pending fills its place in the history as
+    a presented one does."""
     block = output.split('LAT_BEGIN ', 1)[1] if 'LAT_BEGIN ' in output else ''
     lines = block.split('LAT_END', 1)[0].splitlines()[2:]
-    presented = sum(1 for fields in (line.split() for line in lines)
-                    if len(fields) == 3 and fields[1].isdigit() and 0 < int(fields[1]) < PENDING)
-    return presented >= LATENCY_HISTORY - 1
+    held = sum(1 for fields in (line.split() for line in lines)
+               if len(fields) == 3 and fields[1].isdigit() and int(fields[1]) > 0)
+    return held >= LATENCY_HISTORY - 1
 
 
 def frame_stats(frames, t0, t1, vsync_ms):
@@ -484,16 +491,29 @@ def memory_mb(memory):
             'gpu_ram_mb': (memory.get('GL mtrack', 0) + memory.get('EGL mtrack', 0)) / 1024}
 
 
-def launch(device, app, scenario, extra=()):
-    for spec in APPS.values():
-        device.shell('am', 'force-stop', spec['package'])
+def ready_to_launch(device):
+    """Stops every app of the comparison, wakes the screen and empties the
+    log, as each launch starts."""
+    device.shell('sh', '-c', '; '.join(f'am force-stop {spec["package"]}' for spec in APPS.values()))
     time.sleep(1.0)
     device.shell('input', 'keyevent', 'KEYCODE_WAKEUP')
     device.adb('logcat', '-c')
-    started = device.uptime()
-    out = device.shell('am', 'start', '-W', '-n', APPS[app]['activity'], '--es', 'scenario', scenario,
-                       *extra)
-    return start_times(out, started), device.pid(APPS[app]['package'])
+
+
+def app_start_args(app, scenario, extra):
+    """What `am start -W` takes to start `app` on `scenario`."""
+    return ['-n', APPS[app]['activity'], '--es', 'scenario', scenario, *extra]
+
+
+def launch(device, app, scenario, extra=()):
+    """Starts `app` on `scenario`: the times `am start -W` reported, with the
+    device clock read in the same shell right before it, and the app's
+    process id."""
+    ready_to_launch(device)
+    out = device.shell('sh', '-c', 'cat /proc/uptime; exec am start -W "$@"', 'sh',
+                       *app_start_args(app, scenario, extra))
+    clock, _, out = out.partition('\n')
+    return start_times(out, float(clock.split()[0])), device.pid(APPS[app]['package'])
 
 
 def start_times(out, started):
@@ -507,6 +527,25 @@ def start_times(out, started):
     times = {key: int(value) for key, value in re.findall(r'(TotalTime|WaitTime): (\d+)', out)}
     times['uptime_s'] = started
     return times
+
+
+def window_start(output, target):
+    """What `perf_window.sh` found of its launch in `output`: the times `am
+    start -W` reported with the device clock read just before it, the app's
+    process ids and its buffer layer. Raises as the start failed or the app's
+    processes or layer never showed."""
+    first, _, rest = output.partition('\n')
+    if not first.startswith('LAUNCH '):
+        raise RuntimeError('the window did not start: ' + output[:300])
+    times = start_times(rest.split('\nPIDS ', 1)[0], float(first.split()[1]))
+    lines = rest.splitlines()
+    if 'NO_PROCESS' in lines:
+        raise RuntimeError(f'{target.package} did not start')
+    layers = [line[len('LAYER '):] for line in lines if line.startswith('LAYER ')]
+    if not layers or (target.one_layer and len(layers) != 1):
+        raise ValueError(f'expected one buffer layer for {target.package}: {layers}')
+    pids = [int(pid) for pid in next(line for line in lines if line.startswith('PIDS ')).split()[1:]]
+    return times, pids, layers[0]
 
 
 def figure(value, spec):
@@ -637,19 +676,22 @@ def frame_rate(device, layer):
 
 
 class AppTarget:
-    """An installed Android app, started by its activity."""
+    """An installed Android app, started by its activity. Its own process is
+    measured, in its one buffer layer."""
+    processes = 'main'
+    one_layer = True
 
     def __init__(self, app):
         self.name = app
         self.package = APPS[app]['package']
         self.gfx = app == 'compose'
+        self.layer_pattern = app_layer_pattern(app)
 
-    def launch(self, device, scenario, extras):
-        times, pid = launch(device, self.name, scenario, extras)
-        return times, [pid]
+    def prepare(self, device):
+        ready_to_launch(device)
 
-    def layer(self, device):
-        return app_layer(device, self.name)
+    def start_args(self, scenario, extras):
+        return app_start_args(self.name, scenario, extras)
 
     def memory(self, device, pids):
         return meminfo(device, self.package)
@@ -670,7 +712,6 @@ CHROME = 'com.android.chrome'
 # holds the toolbar. Older Android names it `#0`. Newer Android numbers each
 # layer, as the Galaxy Tab S7+ names the page's `ChromeChildSurface#64743`.
 CHROME_LAYER_PREFIX = 'com.android.chrome/ChromeChildSurface#'
-CHROME_LAYER_TIMEOUT_S = 10
 # How long a page gets to download, compile and draw its first frame.
 PAGE_TIMEOUT_S = 120
 # The buttons Chrome's first run shows after its data is cleared, each tapped
@@ -748,51 +789,35 @@ class PageTarget:
     process are the app."""
     package = CHROME
     gfx = False
+    # Every one of Chrome's processes, the browser's own first; the zygote
+    # that forks them does no work.
+    processes = 'every'
+    # The page's layer, once the launched tab shows it: the page presents no
+    # frame before it does.
+    layer_pattern = literal(CHROME_LAYER_PREFIX) + '.*'
+    one_layer = False
 
     def __init__(self, server, app, tier):
         self.server = server
         self.name = app
         self.tier = tier
 
-    def launch(self, device, scenario, extras):
+    def prepare(self, device):
         device.shell('am', 'force-stop', CHROME)
         time.sleep(1.0)
         device.shell('input', 'keyevent', 'KEYCODE_WAKEUP')
         self.mark = self.server.mark()
-        url = f'http://localhost:{self.server.port}/{self.name}/index.html?tier={self.tier}&freeze=0'
-        started = device.uptime()
-        out = device.shell('am', 'start', '-W', '-a', 'android.intent.action.VIEW', '-d', url,
-                           '-n', f'{CHROME}/com.google.android.apps.chrome.Main')
+
+    def start_args(self, scenario, extras):
         # The page downloads, compiles and draws inside the run.
-        return start_times(out, started), self.pids(device)
+        url = f'http://localhost:{self.server.port}/{self.name}/index.html?tier={self.tier}&freeze=0'
+        return ['-a', 'android.intent.action.VIEW', '-d', url, '-n', f'{CHROME}/com.google.android.apps.chrome.Main']
 
     def check_page(self):
         """Raises when the page logged no first frame since its launch, or a
         GPU device error."""
         self.server.wait_for('PERF first_frame', 0, self.mark)
         self.server.check_device(self.mark)
-
-    def pids(self, device):
-        """Chrome's processes, the browser's own first; the zygote that
-        forks them does no work."""
-        found = {}
-        for line in device.shell('ps', '-A', '-o', 'PID,NAME').splitlines()[1:]:
-            pid, _, name = line.strip().partition(' ')
-            if name.startswith(CHROME) and not name.endswith('_zygote'):
-                found[name] = int(pid)
-        if CHROME not in found:
-            raise RuntimeError('Chrome did not start')
-        return [found.pop(CHROME), *found.values()]
-
-    def layer(self, device):
-        """The page's layer, once the launched tab shows it. The page
-        presents no frame before it does."""
-        deadline = time.monotonic() + CHROME_LAYER_TIMEOUT_S
-        while time.monotonic() < deadline:
-            if name := next((name for name in layer_names(device) if name.startswith(CHROME_LAYER_PREFIX)), None):
-                return name
-            time.sleep(0.2)
-        raise RuntimeError(f'no {CHROME_LAYER_PREFIX} layer showed')
 
     def memory(self, device, pids):
         """What every one of Chrome's processes holds, summed."""
@@ -829,14 +854,15 @@ def measure_run(device, app, scenario, args, destination, run_s=None):
     extras = (HEAVY.get(scenario, '') + ' ' + args.extra).strip() if args.load == 'heavy' else args.extra.strip()
     run['extras'] = extras
     launched_host = time.monotonic()
-    run['launch'], pids = target.launch(device, scenario, extras.split())
+    target.prepare(device)
+    output = device.shell('sh', REMOTE_WINDOW, target.package, target.processes, target.layer_pattern,
+                          f'{run_s:.2f}', str(args.interval), '1' if target.gfx else '0',
+                          str(SLOW_FPS), str(SLOW_SECONDS), *target.start_args(scenario, extras.split()),
+                          timeout=run_s + 60)
+    (destination / f'{target.name}-{scenario}-{int(time.time())}.txt').write_text(output)
+    run['launch'], pids, layer = window_start(output, target)
     launched = run['launch']['uptime_s']
     run['started_s'] = round(launched_host - args.started, 1)
-    layer = target.layer(device)
-    output = device.shell('sh', REMOTE_WINDOW, ','.join(map(str, pids)), target.package, layer,
-                          f'{launched + run_s:.2f}', str(args.interval), '1' if target.gfx else '0',
-                          str(SLOW_FPS), str(SLOW_SECONDS), timeout=run_s + 60)
-    (destination / f'{target.name}-{scenario}-{int(time.time())}.txt').write_text(output)
     lines = output.splitlines()
     t1 = float(next(line for line in lines if line.startswith('T1 ')).split()[1])
     whole_index = next(i for i, line in enumerate(lines) if line == 'WHOLE')

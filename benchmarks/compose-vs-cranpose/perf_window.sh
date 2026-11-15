@@ -1,13 +1,22 @@
 #!/system/bin/sh
-# One measurement window, run on the device so no adb round trip lands inside it.
-# Usage: perf_window.sh PIDS PACKAGE LAYER END INTERVAL_S GFXINFO(0|1) SLOW_FPS SLOW_SECONDS
-# END is the run's end on /proc/uptime's clock: the launch plus the run's
-# length, so every run lasts the same from its launch. A run whose layer
-# presented fewer than SLOW_FPS frames in each of SLOW_SECONDS seconds in a
-# row since its first frame ends there, with a SLOW line: the rest of it
-# would only repeat that the app is slow.
-# PIDS is one process id, or a comma-separated list for an app that runs in
-# several (a browser): the first is the one that must stay alive.
+# One launch and its measurement window, run on the device so no adb round
+# trip lands inside them.
+# Usage: perf_window.sh PACKAGE PROCESSES LAYER RUN_S INTERVAL_S GFXINFO(0|1) SLOW_FPS SLOW_SECONDS START...
+# The script reads the clock (a LAUNCH line), runs `am start -W START...`,
+# finds the app's processes (a PIDS line) and its buffer layer (LAYER lines),
+# and measures until RUN_S seconds after the start command on /proc/uptime's
+# clock, so every run lasts the same from its launch. A start the system
+# refused ends the script with LAUNCH_FAILED; an app whose processes or layer
+# are not there FIND_S seconds after the start command returned, with
+# NO_PROCESS or NO_LAYER. A run whose layer presented fewer than SLOW_FPS
+# frames in each of SLOW_SECONDS seconds in a row since its first frame ends
+# there, with a SLOW line: the rest of it would only repeat that the app is
+# slow.
+# PROCESSES is `main`, the process named PACKAGE, or `every`, every process
+# whose name starts with PACKAGE but its zygote, the one named PACKAGE first
+# (a browser): the first is the one that must stay alive.
+# LAYER is an extended regular expression that a layer's whole name matches;
+# the first layer that matches is measured.
 # At the end, WHOLE lists every process of PACKAGE (named PACKAGE, or
 # PACKAGE:name for its other processes), with the CPU it spent since it
 # started: the app's whole run from its launch.
@@ -17,18 +26,70 @@
 # the samples cost the device next to nothing.
 #
 # SurfaceFlinger keeps only the last frames of a layer: 128 on Android 10, 64
-# on Android 17, which is half a second at 120 Hz. A poller of its own reads
-# the layer every INTERVAL_S, so pick it below that span; the slower clock and
+# on Android 17, which is half a second at 120 Hz. The poller starts as soon
+# as the layer is there, before anything else the window does, and reads the
+# layer every INTERVAL_S, so pick it below that span; the slower clock and
 # thermal samples run beside it and never delay a poll. The host merges the
-# polls and counts any two that fail to overlap.
-PIDS=$(echo "$1" | tr ',' ' ')
-PKG=$2
-LAYER=$3
-END=$4
+# polls and counts any two that fail to overlap. A host that polls after the
+# start command comes too late when adb answers slowly: on the Huawei Mate 20
+# X on 2026-11-15 the first frames had left the history by then, and
+# launches read as 2 to 3.6 s without a frame.
+PKG=$1
+PROCESSES=$2
+LAYER_PATTERN=$3
+RUN_S=$4
 INTERVAL=$5
 GFX=$6
 SLOW_FPS=$7
 SLOW_SECONDS=$8
+shift 8
+FIND_S=10
+
+read -r LAUNCHED idle < /proc/uptime
+echo "LAUNCH $LAUNCHED"
+started=$(am start -W "$@" 2>&1)
+echo "$started"
+case "$started" in
+  *"Status: ok"* | *"Status: timeout"*) ;;
+  *) echo LAUNCH_FAILED; exit 0 ;;
+esac
+END=$(awk -v launched="$LAUNCHED" -v run="$RUN_S" 'BEGIN { printf "%.2f", launched + run }')
+
+app_pids() {
+  if [ "$PROCESSES" = main ]; then
+    pidof "$PKG" | cut -d' ' -f1
+  else
+    ps -A -o PID,NAME | awk -v package="$PKG" '
+      index($2, package) == 1 && $2 !~ /_zygote$/ { if ($2 == package) main = $1; else rest = rest " " $1 }
+      END { if (main) print main rest }'
+  fi
+}
+
+# Newer Android lists each layer as `RequestedLayerState{name parentId=...}`.
+app_layers() {
+  dumpsys SurfaceFlinger --list | awk -v pattern="$LAYER_PATTERN" '
+    { sub(/^ +/, ""); sub(/^RequestedLayerState[{]/, ""); sub(/ parentId=.*/, "") }
+    $0 ~ ("^(" pattern ")$") { print }'
+}
+
+before() { awk -v now="$(cut -d' ' -f1 /proc/uptime)" -v end="$1" 'BEGIN { exit !(now < end) }'; }
+
+found_by=$(awk -v now="$(cut -d' ' -f1 /proc/uptime)" -v wait="$FIND_S" 'BEGIN { printf "%.2f", now + wait }')
+PIDS=
+LAYERS=
+while :; do
+  [ -n "$PIDS" ] || PIDS=$(app_pids)
+  [ -n "$LAYERS" ] || LAYERS=$(app_layers)
+  if [ -n "$PIDS" ] && [ -n "$LAYERS" ]; then break; fi
+  if ! before "$found_by"; then
+    if [ -z "$PIDS" ]; then echo NO_PROCESS; else echo NO_LAYER; fi
+    exit 0
+  fi
+  sleep 0.1
+done
+echo "PIDS $PIDS"
+echo "$LAYERS" | sed 's/^/LAYER /'
+LAYER=$(echo "$LAYERS" | head -n 1)
 # The Mali GPU clock where the kernel exposes it (kHz on the Pixel 9 Pro);
 # the Kirin 980 reports its clocks on the F line instead.
 MALI_CLOCK=/sys/class/misc/mali0/device/cur_freq
@@ -61,10 +122,6 @@ latency() {
   echo "LAT_END"
 }
 
-if [ "$GFX" = 1 ]; then dumpsys gfxinfo $PKG reset > /dev/null; fi
-thermal
-echo "T0 $(cat /proc/uptime)"
-snap
 (
   # The newest present counted, and the presents counted so far. A frame
   # whose present is still pending reads INT64_MAX and is counted later; a
@@ -85,9 +142,10 @@ snap
   done
 ) > "$LATENCY_LOG" &
 POLLER=$!
+if [ "$GFX" = 1 ]; then dumpsys gfxinfo $PKG reset > /dev/null; fi
+thermal
 i=0
 read_node() { cat "$1" 2>/dev/null || echo -; }
-before_end() { awk -v now="$(cut -d' ' -f1 /proc/uptime)" -v end="$END" 'BEGIN { exit !(now < end) }'; }
 # Whether, at the newest poll, each of the last SLOW_SECONDS whole seconds
 # since the first frame held fewer presents than SLOW_FPS. The first poll that
 # found a present stands for the first frame. A second's presents are the
@@ -107,7 +165,7 @@ slow() {
       exit 0
     }' "$COUNTS" 2>/dev/null
 }
-while before_end; do
+while before "$END"; do
   sleep $INTERVAL
   read -r up idle < /proc/uptime
   echo "PU $up"
