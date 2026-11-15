@@ -64,6 +64,17 @@ pub(crate) fn shell_with_keyboard(
     (shell, keyboard)
 }
 
+// The width of `text` in the default style, measured where `shell` measures.
+pub(crate) fn text_width(shell: &AppShell<TestRenderer>, text: &str) -> f32 {
+    shell.app_context().enter(|| {
+        cranpose_ui::text::measure_text(
+            &cranpose_ui::text::AnnotatedString::from(text),
+            &cranpose_ui::TextStyle::default(),
+        )
+        .width
+    })
+}
+
 /// One focused text field in a shell, driven through the shell's key and
 /// IME entry points.
 pub(crate) struct FocusedField {
@@ -152,13 +163,7 @@ impl FocusedField {
 
     /// Taps the field just after `shown_prefix`, the start of what it shows.
     pub(crate) fn tap_after(&mut self, shown_prefix: &str) -> &mut Self {
-        let x = self.shell.app_context().enter(|| {
-            cranpose_ui::text::measure_text(
-                &cranpose_ui::text::AnnotatedString::from(shown_prefix),
-                &cranpose_ui::TextStyle::default(),
-            )
-            .width
-        });
+        let x = text_width(&self.shell, shown_prefix);
         assert!(self.shell.set_cursor(x, 10.0));
         assert!(self.shell.pointer_pressed());
         assert!(self.shell.pointer_released());

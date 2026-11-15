@@ -14,7 +14,7 @@
 use std::{cell::Cell, rc::Rc};
 
 use cranpose_core::remember;
-use cranpose_foundation::{PointerEvent, PointerEventKind};
+use cranpose_foundation::{PointerEvent, PointerEventKind, PointerUptime};
 use cranpose_ui_graphics::{Brush, Color, DrawScope, Point, Rect, Size, VectorPath};
 
 use crate::{
@@ -338,7 +338,7 @@ pub(crate) fn selection_handle_pointer_input(
         async move {
             scope
                 .await_pointer_event_scope(|await_scope| async move {
-                    let mut down_time: Option<i64> = None;
+                    let mut down_time: Option<PointerUptime> = None;
                     let mut down_pos = Point { x: 0.0, y: 0.0 };
                     let mut pressed = false;
                     let mut long_press_fired = false;
@@ -347,7 +347,7 @@ pub(crate) fn selection_handle_pointer_input(
                         let event = await_scope.await_pointer_event().await;
                         match event.kind {
                             PointerEventKind::Down => {
-                                down_time = event.time_ms;
+                                down_time = Some(event.uptime());
                                 down_pos = event.global_position;
                                 pressed = true;
                                 long_press_fired = false;
@@ -427,7 +427,7 @@ fn moved_beyond(origin: Point, now: Point, slop: f32) -> bool {
 /// a drag).
 fn maybe_fire_long_press(
     event: &PointerEvent,
-    down_time: Option<i64>,
+    down_time: Option<PointerUptime>,
     down_pos: Point,
     long_press_fired: &mut bool,
     on_long_press: &Rc<dyn Fn()>,
@@ -435,10 +435,10 @@ fn maybe_fire_long_press(
     if *long_press_fired {
         return;
     }
-    let (Some(down_ms), Some(now_ms)) = (down_time, event.time_ms) else {
+    let Some(held_ms) = down_time.and_then(|down| event.uptime().millis_since(down)) else {
         return;
     };
-    if is_handle_long_press(down_ms, now_ms, down_pos, event.global_position) {
+    if is_handle_long_press(held_ms, down_pos, event.global_position) {
         *long_press_fired = true;
         on_long_press();
     }
@@ -446,16 +446,11 @@ fn maybe_fire_long_press(
 
 /// Pure predicate for a handle long-press: held long enough and moved little
 /// enough to be a rest rather than a drag.
-pub(crate) fn is_handle_long_press(
-    down_ms: i64,
-    now_ms: i64,
-    down_pos: Point,
-    now_pos: Point,
-) -> bool {
+pub(crate) fn is_handle_long_press(held_ms: i64, down_pos: Point, now_pos: Point) -> bool {
     let dx = now_pos.x - down_pos.x;
     let dy = now_pos.y - down_pos.y;
     let moved = (dx * dx + dy * dy).sqrt();
-    now_ms - down_ms >= HANDLE_LONG_PRESS_TIMEOUT_MS && moved <= HANDLE_LONG_PRESS_SLOP_PX
+    held_ms >= HANDLE_LONG_PRESS_TIMEOUT_MS && moved <= HANDLE_LONG_PRESS_SLOP_PX
 }
 
 #[cfg(test)]

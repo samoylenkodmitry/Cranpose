@@ -1,43 +1,6 @@
 use super::*;
 
 #[test]
-fn tap_classification_escalates_within_time_and_slop() {
-    assert_eq!(classify_tap_count(None, 0, 10.0, 10.0, 500, 24.0), 1);
-    assert_eq!(
-        classify_tap_count(Some((1, 10.0, 10.0)), 100, 11.0, 12.0, 500, 24.0),
-        2
-    );
-    assert_eq!(
-        classify_tap_count(Some((2, 10.0, 10.0)), 100, 11.0, 12.0, 500, 24.0),
-        3
-    );
-    assert_eq!(
-        classify_tap_count(Some((3, 10.0, 10.0)), 100, 11.0, 12.0, 500, 24.0),
-        4
-    );
-    assert_eq!(
-        classify_tap_count(Some((4, 10.0, 10.0)), 100, 11.0, 12.0, 500, 24.0),
-        5
-    );
-}
-
-#[test]
-fn tap_classification_resets_past_timeout_or_slop() {
-    assert_eq!(
-        classify_tap_count(Some((1, 10.0, 10.0)), 600, 10.0, 10.0, 500, 24.0),
-        1
-    );
-    assert_eq!(
-        classify_tap_count(Some((1, 10.0, 10.0)), 50, 100.0, 10.0, 500, 24.0),
-        1
-    );
-    assert_eq!(
-        classify_tap_count(Some((3, 10.0, 10.0)), 600, 10.0, 10.0, 500, 24.0),
-        1
-    );
-}
-
-#[test]
 fn tap_inside_selection_cycles_word_line_paragraph_by_location() {
     use SelectionGranularity::*;
 

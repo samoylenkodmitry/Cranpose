@@ -28,6 +28,54 @@ impl std::fmt::Display for PointerId {
     }
 }
 
+/// When a pointer sample happened, in the clock that timed it, as Compose's
+/// `PointerInputChange.uptimeMillis`. [`PointerEvent::uptime`] gives it.
+///
+/// Times of one clock compare with each other and with no other clock, so a
+/// gesture that measures the time between two events never mixes clocks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PointerUptime {
+    /// The platform's sample time: Android's `MotionEvent` time or the
+    /// browser's event time stamp.
+    Platform {
+        /// Milliseconds in the platform's clock.
+        millis: i64,
+    },
+    /// The frame-clock time at which the shell took the event, on a platform
+    /// that gives no sample time: desktop, iOS and watchOS.
+    FrameClock {
+        /// Nanoseconds in the frame clock.
+        nanos: u64,
+    },
+    /// The time at which a handler read an event that carries neither time,
+    /// such as one built by a test and passed straight to a handler.
+    Delivery {
+        /// Nanoseconds since the first event that a handler timed this way.
+        nanos: u64,
+    },
+}
+
+impl PointerUptime {
+    /// The milliseconds from `earlier` to this time, negative when `earlier`
+    /// is the later one. `None` when the two times come from different clocks.
+    pub fn millis_since(self, earlier: Self) -> Option<i64> {
+        match (self, earlier) {
+            (Self::Platform { millis }, Self::Platform { millis: from }) => Some(millis - from),
+            (Self::FrameClock { nanos }, Self::FrameClock { nanos: from })
+            | (Self::Delivery { nanos }, Self::Delivery { nanos: from }) => {
+                Some(nanos.wrapping_sub(from) as i64 / 1_000_000)
+            }
+            _ => None,
+        }
+    }
+}
+
+fn delivery_nanos() -> u64 {
+    static EPOCH: std::sync::OnceLock<web_time::Instant> = std::sync::OnceLock::new();
+    let elapsed = EPOCH.get_or_init(web_time::Instant::now).elapsed();
+    u64::try_from(elapsed.as_nanos()).unwrap_or(u64::MAX)
+}
+
 type PostDispatchAction = Box<dyn FnOnce() -> bool>;
 
 #[derive(Clone)]
@@ -423,6 +471,21 @@ impl PointerEvent {
     pub fn with_animation_time_nanos(mut self, time_nanos: u64) -> Self {
         self.animation_time_nanos = Some(time_nanos);
         self
+    }
+
+    /// When this sample happened: the platform's sample time where the
+    /// platform gives one, else the frame-clock time at which the shell took
+    /// the event, else the time of this call. A gesture that counts taps or
+    /// measures a hold compares these, so a busy main thread that delivers
+    /// events late or in a batch does not change what the gesture was.
+    pub fn uptime(&self) -> PointerUptime {
+        match (self.time_ms, self.animation_time_nanos) {
+            (Some(millis), _) => PointerUptime::Platform { millis },
+            (None, Some(nanos)) => PointerUptime::FrameClock { nanos },
+            (None, None) => PointerUptime::Delivery {
+                nanos: delivery_nanos(),
+            },
+        }
     }
 
     /// Set where the pointer is on the screen, when the platform knows.

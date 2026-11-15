@@ -30,10 +30,14 @@ where
             };
             if let Some(mut surface) = self.surface(root) {
                 surface.set_pointer_source(PointerSource::Mouse);
-                surface.set_cursor_at_event_time(request.position.x, request.position.y, PointerEventTime {
-                    platform_time_ms: Some((frame_time / 1_000_000).min(i64::MAX as u64) as i64),
-                    animation_time_nanos: frame_time,
-                });
+                surface.set_cursor_at_event_time(
+                    request.position.x,
+                    request.position.y,
+                    PointerEventTime {
+                        platform_time_ms: None,
+                        animation_time_nanos: frame_time,
+                    },
+                );
             }
         }
         // The moves came after the frame's UI tasks ran, and what they

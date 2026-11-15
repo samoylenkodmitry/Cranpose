@@ -352,10 +352,12 @@ fn a_mouse_drag_selects_characters_and_a_double_click_a_word() {
         gesture.on_up();
         assert_eq!(page.registrar.selected_text(), "ell");
 
-        gesture.on_down(&mouse(crate::PointerEventKind::Down, CHAR * 7.2, 5.0));
-        gesture.on_up();
-        gesture.on_down(&mouse(crate::PointerEventKind::Down, CHAR * 7.2, 5.0));
-        gesture.on_up();
+        for time_ms in [1_000, 1_150] {
+            gesture.on_down(
+                &mouse(crate::PointerEventKind::Down, CHAR * 7.2, 5.0).with_time_ms(Some(time_ms)),
+            );
+            gesture.on_up();
+        }
         assert_eq!(page.registrar.selected_text(), "world");
         assert_eq!(
             page.registrar

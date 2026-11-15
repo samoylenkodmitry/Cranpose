@@ -91,6 +91,7 @@ pub mod selection_container;
 mod semantics_dispatch;
 mod semantics_layout_log;
 mod subcompose_layout;
+mod tap_counter;
 /// Text styling, measurement and layout.
 pub mod text;
 mod text_field_decorator_node;
@@ -122,7 +123,7 @@ pub use bring_into_view_spec::local_bring_into_view_spec;
 pub use configuration::{Configuration, UiModeType, local_configuration};
 pub use cranpose_foundation::{
     BringIntoViewSpec, CanvasSemanticsNode, CollectionInfo, DelegatableNode, LiveRegionMode,
-    ModifierNode, ModifierNodeElement, NodeCapabilities, NodeState, PointerId,
+    ModifierNode, ModifierNodeElement, NodeCapabilities, NodeState, PointerId, PointerUptime,
     ProgressBarRangeInfo, ScrollAxisRange, SemanticsConfiguration, SemanticsCustomAction,
     SemanticsDismiss, SemanticsExpand, SemanticsLongClick, SemanticsMagicTap, SemanticsScrollBy,
     SemanticsScrollToIndex, SemanticsSetProgress, SemanticsSetSelection, SemanticsSetText,

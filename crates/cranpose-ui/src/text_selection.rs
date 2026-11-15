@@ -12,7 +12,9 @@
 use cranpose_foundation::text::TextRange;
 
 /// Maximum time between taps that still counts as a multi-tap, in milliseconds.
-pub const MULTI_TAP_TIMEOUT_MS: u128 = 500;
+/// The taps are timed by their pointer events'
+/// [`uptime`](cranpose_foundation::PointerEvent::uptime).
+pub const MULTI_TAP_TIMEOUT_MS: i64 = 500;
 
 /// Maximum distance (px) between consecutive taps that still counts as a
 /// multi-tap. A tap that lands far from the previous one starts a fresh
@@ -40,43 +42,15 @@ pub enum SelectionGranularity {
     Paragraph,
 }
 
-/// Classifies a press into a 1-based tap count from the previous tap's count,
-/// the time since it, and the distance from it.
-///
-/// `previous` is the last tap's `(count, x, y)` or `None` for the first tap. A
-/// tap increments the count only when it lands within both the timeout and the
-/// slop radius; otherwise it restarts at `1`. The count is **not** wrapped here
-/// — the granularity mapping ([`tap_selection_granularity`]) cycles instead, so
-/// the field can keep escalating (word → line → paragraph → word …) as long as
-/// the finger keeps tapping in place.
-pub fn classify_tap_count(
-    previous: Option<(u8, f32, f32)>,
-    elapsed_ms: u128,
-    x: f32,
-    y: f32,
-    timeout_ms: u128,
-    slop_px: f32,
-) -> u8 {
-    let Some((prev_count, prev_x, prev_y)) = previous else {
-        return 1;
-    };
-    let within_time = elapsed_ms <= timeout_ms;
-    let dx = x - prev_x;
-    let dy = y - prev_y;
-    let within_slop = dx * dx + dy * dy <= slop_px * slop_px;
-    if !within_time || !within_slop {
-        return 1;
-    }
-    prev_count.saturating_add(1)
-}
-
 /// Resolves the effective tap count for a press, folding in the "tap inside an
 /// existing selection" gesture so it drives the same word → line → paragraph
 /// granularity ladder ([`tap_selection_granularity`]) as a rapid multi-tap.
 ///
 /// Inputs:
-/// * `raw_tap_count` — the time-and-slop-gated multi-tap count from
-///   [`classify_tap_count`] (2+ means a genuine rapid multi-tap in progress);
+/// * `raw_tap_count` — the multi-tap count: one more than the previous press's
+///   when the press comes within [`MULTI_TAP_TIMEOUT_MS`] and lands within
+///   [`MULTI_TAP_SLOP_PX`] of it, else `1` (2+ means a genuine rapid multi-tap
+///   in progress);
 /// * `previous_count` — the effective count the *previous* press resolved to
 ///   (the field remembers it as its click count);
 /// * `tap_in_selection` — the press landed inside the current, non-collapsed
@@ -118,7 +92,8 @@ pub fn resolve_selection_tap_count(
 /// A single tap places the caret; two taps select the word, three the line,
 /// four the paragraph, and every further tap cycles back through
 /// word → line → paragraph so a resting finger keeps toggling between the three
-/// range granularities (matching desktop editors and iOS).
+/// range granularities (matching desktop editors and iOS). The count itself
+/// never wraps.
 pub fn tap_selection_granularity(tap_count: u8) -> SelectionGranularity {
     match tap_count {
         0 | 1 => SelectionGranularity::Caret,

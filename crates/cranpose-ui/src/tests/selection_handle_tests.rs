@@ -276,6 +276,30 @@ mod long_press {
     }
 
     #[test]
+    fn a_held_handle_reports_the_long_press_by_frame_clock_times() {
+        let _app_context = crate::render_state::app_context_test_scope();
+        let h = Harness::new();
+        let at = |kind, millis: u64| {
+            PointerEvent::new(kind, point(100.0, 100.0), point(100.0, 100.0))
+                .with_buttons(PointerButtons::new().with(PointerButton::Primary))
+                .with_animation_time_nanos(millis * 1_000_000)
+        };
+
+        h.send(at(PointerEventKind::Down, 1_000));
+        h.send(at(
+            PointerEventKind::Up,
+            1_000 + HANDLE_LONG_PRESS_TIMEOUT_MS as u64 + 5,
+        ));
+
+        assert_eq!(
+            h.long_presses.get(),
+            1,
+            "a platform with no sample time still reports a held handle"
+        );
+        assert_eq!(h.taps.get(), 0);
+    }
+
+    #[test]
     fn a_quick_tap_is_not_a_long_press() {
         let _app_context = crate::render_state::app_context_test_scope();
         let h = Harness::new();
@@ -339,19 +363,16 @@ mod long_press {
     #[test]
     fn is_handle_long_press_classifies_hold_vs_tap_vs_drag() {
         assert!(is_handle_long_press(
-            0,
             HANDLE_LONG_PRESS_TIMEOUT_MS,
             point(10.0, 10.0),
             point(14.0, 12.0),
         ));
         assert!(!is_handle_long_press(
-            0,
             HANDLE_LONG_PRESS_TIMEOUT_MS - 1,
             point(10.0, 10.0),
             point(10.0, 10.0),
         ));
         assert!(!is_handle_long_press(
-            0,
             HANDLE_LONG_PRESS_TIMEOUT_MS + 100,
             point(10.0, 10.0),
             point(60.0, 10.0),

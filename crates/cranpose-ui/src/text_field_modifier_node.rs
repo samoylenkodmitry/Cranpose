@@ -467,9 +467,7 @@ pub(crate) struct TextFieldRefs {
     /// placed the field at, after every layout modifier before it.
     pub content_origin: Rc<RefCell<crate::modifier::CoordinatorRect>>,
     pub drag_anchor: Rc<Cell<Option<crate::text_selection::SelectionAnchor>>>,
-    pub last_click_time: Rc<Cell<Option<web_time::Instant>>>,
-    pub last_click_pos: Rc<Cell<Option<(f32, f32)>>>,
-    pub click_count: Rc<Cell<u8>>,
+    pub taps: Rc<crate::tap_counter::TapCounter>,
     pub node_id: Rc<Cell<Option<cranpose_core::NodeId>>>,
     /// The node focus and semantics know the field by: the decoration box
     /// around a decorated field, else the field's own node.
@@ -505,9 +503,7 @@ impl TextFieldRefs {
             is_focused: Rc::new(RefCell::new(false)),
             content_origin: Rc::default(),
             drag_anchor: Rc::new(Cell::new(None)),
-            last_click_time: Rc::new(Cell::new(None::<web_time::Instant>)),
-            last_click_pos: Rc::new(Cell::new(None::<(f32, f32)>)),
-            click_count: Rc::new(Cell::new(0_u8)),
+            taps: Rc::default(),
             node_id: Rc::new(Cell::new(None::<cranpose_core::NodeId>)),
             focus_node: Rc::new(Cell::new(None::<cranpose_core::NodeId>)),
             scroll_offset: Rc::new(Cell::new(0.0_f32)),
@@ -719,8 +715,7 @@ impl TextFieldModifierNode {
         modal_depth: usize,
     ) -> Rc<dyn Fn(PointerEvent)> {
         use crate::text_selection::{
-            MULTI_TAP_SLOP_PX, MULTI_TAP_TIMEOUT_MS, SelectionGranularity, classify_tap_count,
-            resolve_selection_tap_count, tap_selection_granularity,
+            SelectionGranularity, resolve_selection_tap_count, tap_selection_granularity,
         };
 
         Rc::new(move |event: PointerEvent| {
@@ -739,39 +734,16 @@ impl TextFieldModifierNode {
 
                     request_pointer_focus(state, &refs, line_limits, &style, modal_depth);
 
-                    let now = web_time::Instant::now();
+                    let uptime = event.uptime();
                     let pos = hit_test_offset(state, &refs, &style, click_x, click_y);
-
-                    let previous = refs.last_click_pos.get().and_then(|(px, py)| {
-                        let count = refs.click_count.get();
-                        (count > 0).then_some((count, px, py))
-                    });
-                    let elapsed_ms = refs
-                        .last_click_time
-                        .get()
-                        .map_or(u128::MAX, |last| now.duration_since(last).as_millis());
-                    let tap_count = classify_tap_count(
-                        previous,
-                        elapsed_ms,
-                        event.position.x,
-                        event.position.y,
-                        MULTI_TAP_TIMEOUT_MS,
-                        MULTI_TAP_SLOP_PX,
-                    );
-
                     let selection = state.selection();
                     let tap_in_selection =
                         !selection.collapsed() && pos >= selection.min() && pos <= selection.max();
-                    let repeat_in_place = refs.last_click_pos.get().is_some_and(|(px, py)| {
-                        let dx = event.position.x - px;
-                        let dy = event.position.y - py;
-                        dx * dx + dy * dy <= MULTI_TAP_SLOP_PX * MULTI_TAP_SLOP_PX
-                    });
                     let effective_count = resolve_selection_tap_count(
-                        tap_count,
-                        refs.click_count.get(),
+                        refs.taps.count_at(uptime, event.position),
+                        refs.taps.last_count(),
                         tap_in_selection,
-                        repeat_in_place,
+                        refs.taps.in_place(event.position),
                     );
 
                     let granularity = tap_selection_granularity(effective_count);
@@ -782,10 +754,7 @@ impl TextFieldModifierNode {
                         _ => buffer.select(TextRange::new(anchor.start, anchor.end)),
                     });
 
-                    refs.click_count.set(effective_count);
-                    refs.last_click_time.set(Some(now));
-                    refs.last_click_pos
-                        .set(Some((event.position.x, event.position.y)));
+                    refs.taps.record(uptime, event.position, effective_count);
                     event.consume();
                 }
                 PointerEventKind::Move => {
