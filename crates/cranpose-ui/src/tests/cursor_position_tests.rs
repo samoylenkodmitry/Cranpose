@@ -344,16 +344,15 @@ fn tap_count_selects_cursor_word_and_line() {
         let tap_x =
             crate::text::measure_text(&crate::text::AnnotatedString::from("hello wor"), &style)
                 .width;
-        let tap = || {
+        let tap = |time_ms: i64| {
             let position = Point { x: tap_x, y: 0.0 };
-            handler(PointerEvent::new(
-                PointerEventKind::Down,
-                position,
-                position,
-            ));
+            handler(
+                PointerEvent::new(PointerEventKind::Down, position, position)
+                    .with_time_ms(Some(time_ms)),
+            );
         };
 
-        tap();
+        tap(0);
         let single = state.selection();
         assert!(single.collapsed(), "single tap must collapse the selection");
         assert!(
@@ -361,10 +360,10 @@ fn tap_count_selects_cursor_word_and_line() {
             "single tap must land inside 'world', got {single:?}"
         );
 
-        tap();
+        tap(150);
         assert_eq!(state.selection(), TextRange::new(6, 11));
 
-        tap();
+        tap(300);
         assert_eq!(state.selection(), TextRange::new(0, 11));
 
         crate::text_field_focus::clear_focus();

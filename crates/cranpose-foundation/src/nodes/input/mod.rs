@@ -11,7 +11,7 @@ pub use rotary::{
 };
 pub use types::{
     Modifiers, PointerButton, PointerButtons, PointerEvent, PointerEventKind, PointerId,
-    PointerPhase, PointerSource,
+    PointerPhase, PointerSource, PointerUptime,
 };
 
 /// The input types and gesture recognizers that modifier nodes use most.
@@ -25,7 +25,7 @@ pub mod prelude {
         rotary::{RotaryScrollEvent, RotaryStepAccumulator},
         types::{
             Modifiers, PointerButton, PointerButtons, PointerEvent, PointerEventKind, PointerId,
-            PointerPhase, PointerSource,
+            PointerPhase, PointerSource, PointerUptime,
         },
     };
 }

@@ -210,12 +210,13 @@ fn double_tap_selects_the_word_under_the_finger() {
             .expect("field exposes a pointer handler");
 
         let at = Point { x: 2.0, y: 8.0 };
-        handler(
-            PointerEvent::new(PointerEventKind::Down, at, at).with_source(PointerSource::Touch),
-        );
-        handler(
-            PointerEvent::new(PointerEventKind::Down, at, at).with_source(PointerSource::Touch),
-        );
+        for time_ms in [0, 120] {
+            handler(
+                PointerEvent::new(PointerEventKind::Down, at, at)
+                    .with_source(PointerSource::Touch)
+                    .with_time_ms(Some(time_ms)),
+            );
+        }
 
         let selection = state.selection();
         assert!(
@@ -256,9 +257,11 @@ fn repeated_taps_escalate_word_line_paragraph_then_cycle() {
             .expect("field exposes a pointer handler");
 
         let at = Point { x: 2.0, y: 4.0 };
-        let tap = || {
+        let tap = |time_ms: i64| {
             handler(
-                PointerEvent::new(PointerEventKind::Down, at, at).with_source(PointerSource::Touch),
+                PointerEvent::new(PointerEventKind::Down, at, at)
+                    .with_source(PointerSource::Touch)
+                    .with_time_ms(Some(time_ms)),
             );
         };
         let selected = |state: &TextFieldState| {
@@ -266,23 +269,23 @@ fn repeated_taps_escalate_word_line_paragraph_then_cycle() {
             state.text()[s.min()..s.max()].to_string()
         };
 
-        tap();
+        tap(0);
         assert!(state.selection().collapsed(), "first tap places the caret");
-        tap();
+        tap(150);
         assert_eq!(selected(&state), "alpha", "double tap selects the word");
-        tap();
+        tap(300);
         assert_eq!(
             selected(&state),
             "alpha beta",
             "triple tap selects the line"
         );
-        tap();
+        tap(450);
         assert_eq!(
             selected(&state),
             "alpha beta\ngamma delta",
             "fourth tap grows to the paragraph"
         );
-        tap();
+        tap(600);
         assert_eq!(
             selected(&state),
             "alpha",
@@ -363,32 +366,33 @@ fn slow_taps_inside_selection_cycle_word_line_paragraph_by_location() {
             let s = state.selection();
             state.text()[s.min()..s.max()].to_string()
         };
-        let slow_tap = || {
-            node.refs.last_click_time.set(None);
+        let tap = |time_ms: i64| {
             handler(
-                PointerEvent::new(PointerEventKind::Down, at, at).with_source(PointerSource::Touch),
+                PointerEvent::new(PointerEventKind::Down, at, at)
+                    .with_source(PointerSource::Touch)
+                    .with_time_ms(Some(time_ms)),
             );
         };
 
-        slow_tap();
+        tap(0);
         assert_eq!(
             selected(&state),
             "alpha",
             "tap inside selection grabs the word"
         );
-        slow_tap();
+        tap(1_000);
         assert_eq!(
             selected(&state),
             "alpha beta",
             "same-spot tap grows to the line even after the timeout"
         );
-        slow_tap();
+        tap(2_000);
         assert_eq!(
             selected(&state),
             "alpha beta\ngamma delta",
             "same-spot tap grows to the paragraph"
         );
-        slow_tap();
+        tap(3_000);
         assert_eq!(
             selected(&state),
             "alpha",
@@ -672,17 +676,19 @@ fn a_mouse_double_click_keeps_the_word_through_its_release_and_a_jitter() {
         let handler = node
             .pointer_input_handler()
             .expect("field exposes a pointer handler");
-        let event = |kind, x: f32| {
+        let event = |kind, x: f32, time_ms: i64| {
             let at = Point { x, y: 8.0 };
-            PointerEvent::new(kind, at, at).with_source(PointerSource::Mouse)
+            PointerEvent::new(kind, at, at)
+                .with_source(PointerSource::Mouse)
+                .with_time_ms(Some(time_ms))
         };
 
-        handler(event(PointerEventKind::Down, 60.0));
-        handler(event(PointerEventKind::Up, 60.0));
-        handler(event(PointerEventKind::Down, 60.0));
-        handler(event(PointerEventKind::Move, 60.0));
-        handler(event(PointerEventKind::Move, 61.0));
-        handler(event(PointerEventKind::Up, 61.0));
+        handler(event(PointerEventKind::Down, 60.0, 0));
+        handler(event(PointerEventKind::Up, 60.0, 60));
+        handler(event(PointerEventKind::Down, 60.0, 150));
+        handler(event(PointerEventKind::Move, 60.0, 170));
+        handler(event(PointerEventKind::Move, 61.0, 190));
+        handler(event(PointerEventKind::Up, 61.0, 210));
 
         let selection = state.selection();
         assert_eq!(

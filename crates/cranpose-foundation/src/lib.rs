@@ -16,7 +16,7 @@ pub use gesture_constants::{DRAG_THRESHOLD, MAX_FLING_VELOCITY, MINIMUM_TOUCH_TA
 pub use modifier::*;
 pub use nodes::input::{
     DEFAULT_ROTARY_SCROLL_FACTOR_DP, Modifiers, PointerButton, PointerButtons, PointerEvent,
-    PointerEventKind, PointerId, PointerPhase, PointerSource, RotaryScrollEvent,
+    PointerEventKind, PointerId, PointerPhase, PointerSource, PointerUptime, RotaryScrollEvent,
     RotaryStepAccumulator, rotary_scroll_pixels_from_detents,
 };
 pub use velocity_tracker::VelocityTracker1D;

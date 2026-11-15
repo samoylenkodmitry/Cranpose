@@ -20,14 +20,14 @@ use cranpose_ui_graphics::{
 };
 
 use crate::{
+    tap_counter::TapCounter,
     text::{
         AnnotatedString, PreparedTextLayout, TextLayoutOptions, TextStyle,
         layout_cache::CacheAdmission,
         measure::{SharedText, TextFrame, prepare_shared},
     },
     text_selection::{
-        MULTI_TAP_SLOP_PX, MULTI_TAP_TIMEOUT_MS, SelectionAnchor, SelectionGranularity,
-        classify_tap_count, granularity_boundaries, tap_selection_granularity,
+        SelectionAnchor, SelectionGranularity, granularity_boundaries, tap_selection_granularity,
     },
 };
 
@@ -509,7 +509,7 @@ struct Press {
 pub(crate) struct SelectionGesture {
     registrar: SelectionRegistrar,
     press: Cell<Option<Press>>,
-    last_tap: Cell<Option<(web_time::Instant, Point, u8)>>,
+    taps: TapCounter,
     frame_clock: cranpose_core::internal::FrameClock,
     long_press: RefCell<Option<cranpose_core::internal::FrameCallbackRegistration>>,
     long_press_start: Cell<Option<u64>>,
@@ -525,7 +525,7 @@ impl SelectionGesture {
         Self {
             registrar,
             press: Cell::new(None),
-            last_tap: Cell::new(None),
+            taps: TapCounter::default(),
             frame_clock,
             long_press: RefCell::new(None),
             long_press_start: Cell::new(None),
@@ -576,7 +576,10 @@ impl SelectionGesture {
             self.arm_long_press();
             return;
         }
-        let granularity = tap_selection_granularity(self.tap_count(point));
+        let uptime = event.uptime();
+        let count = self.taps.count_at(uptime, point);
+        self.taps.record(uptime, point, count);
+        let granularity = tap_selection_granularity(count);
         press.unit = self
             .registrar
             .edge_at(point)
@@ -587,23 +590,6 @@ impl SelectionGesture {
             .map(Unit::selection);
         self.registrar.set_selection(selection);
         self.press.set(Some(press));
-    }
-
-    fn tap_count(&self, point: Point) -> u8 {
-        let now = web_time::Instant::now();
-        let previous = self.last_tap.get();
-        let count = classify_tap_count(
-            previous.map(|(_, at, count)| (count, at.x, at.y)),
-            previous.map_or(u128::MAX, |(time, _, _)| {
-                now.duration_since(time).as_millis()
-            }),
-            point.x,
-            point.y,
-            MULTI_TAP_TIMEOUT_MS,
-            MULTI_TAP_SLOP_PX,
-        );
-        self.last_tap.set(Some((now, point, count)));
-        count
     }
 
     /// Grows the selection with the pointer. Says whether the move belongs to

@@ -49,11 +49,10 @@ use std::{
 
 use cranpose_core::{OwnedMutableState, RuntimeCell};
 use cranpose_foundation::{
-    DRAG_THRESHOLD,
+    DRAG_THRESHOLD, PointerUptime,
     nodes::input::gestures::{TransformGesture, TransformGestureEvent},
 };
 use cranpose_ui_graphics::{GraphicsLayer, Point, TransformOrigin};
-use web_time::Instant;
 
 use crate::modifier::{Modifier, PointerEventKind};
 
@@ -262,31 +261,23 @@ impl ZoomState {
     }
 }
 
+#[derive(Default)]
 struct ZoomGestureState {
     tracker: TransformGesture,
     active: bool,
     travel: f32,
     tap_down: Option<Point>,
-    last_tap: Option<(i64, Point)>,
-    fallback_epoch: Instant,
-}
-
-impl Default for ZoomGestureState {
-    fn default() -> Self {
-        Self {
-            tracker: TransformGesture::default(),
-            active: false,
-            travel: 0.0,
-            tap_down: None,
-            last_tap: None,
-            fallback_epoch: Instant::now(),
-        }
-    }
+    last_tap: Option<(PointerUptime, Point)>,
 }
 
 impl ZoomGestureState {
-    fn timestamp_ms(&self, time_ms: Option<i64>) -> i64 {
-        time_ms.unwrap_or_else(|| self.fallback_epoch.elapsed().as_millis() as i64)
+    fn is_double_tap(&self, uptime: PointerUptime, position: Point) -> bool {
+        self.last_tap.is_some_and(|(tap_uptime, tap_position)| {
+            uptime
+                .millis_since(tap_uptime)
+                .is_some_and(|millis| millis <= DOUBLE_TAP_TIMEOUT_MS)
+                && distance(tap_position, position) <= DOUBLE_TAP_SLOP
+        })
     }
 
     fn abandon_tap(&mut self) {
@@ -368,7 +359,6 @@ impl Modifier {
                                     }
 
                                     if event.kind == PointerEventKind::Up && event.id.is_primary() {
-                                        let now_ms = gs.timestamp_ms(event.time_ms);
                                         let up_position = event.global_position;
                                         let is_tap = !gs.active
                                             && gs.tap_down.is_some_and(|down| {
@@ -376,22 +366,15 @@ impl Modifier {
                                             });
                                         gs.tap_down = None;
                                         if is_tap {
-                                            let is_double_tap = gs.last_tap.is_some_and(
-                                                |(tap_ms, tap_position)| {
-                                                    now_ms.saturating_sub(tap_ms)
-                                                        <= DOUBLE_TAP_TIMEOUT_MS
-                                                        && distance(tap_position, up_position)
-                                                            <= DOUBLE_TAP_SLOP
-                                                },
-                                            );
-                                            if is_double_tap {
+                                            let uptime = event.uptime();
+                                            if gs.is_double_tap(uptime, up_position) {
                                                 gs.last_tap = None;
                                                 if state.is_transformed() {
                                                     state.reset();
                                                     event.consume();
                                                 }
                                             } else {
-                                                gs.last_tap = Some((now_ms, up_position));
+                                                gs.last_tap = Some((uptime, up_position));
                                             }
                                         } else {
                                             gs.last_tap = None;
