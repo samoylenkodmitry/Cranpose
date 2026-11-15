@@ -1092,9 +1092,9 @@ def run(args, apps, server, stage):
         return {'kind': 'desktop-parity', 'tier': args.tier, 'freeze': args.freeze,
                 'reference': reference, 'changed_pct': results}
     started_at = datetime.now(timezone.utc).isoformat(timespec='seconds')
-    # The versions `build_apps.sh desktop` built with, the Flutter SDK's
-    # among them.
-    built_file = HERE / 'desktop-versions.json'
+    # The versions `build_apps.sh desktop` or `build_apps.sh browser` built
+    # with, the Flutter SDK's among them.
+    built_file = args.browser / 'versions.json' if args.browser else HERE / 'desktop-versions.json'
     built = json.loads(built_file.read_text()) if built_file.exists() else {}
     if args.browser:
         warm_chrome(args, server, stage)
