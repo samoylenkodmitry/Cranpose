@@ -104,7 +104,8 @@ impl AlignmentElement {
 
 impl PlainElement for AlignmentElement {
     const WORDS: usize = 1;
-    const CAPABILITIES: NodeCapabilities = NodeCapabilities::LAYOUT;
+    const CAPABILITIES: NodeCapabilities =
+        NodeCapabilities::LAYOUT.union(NodeCapabilities::PARENT_DATA);
 
     fn to_words(&self, words: &mut [u32]) {
         let in_box = self.box_alignment;

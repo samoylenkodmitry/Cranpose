@@ -453,7 +453,7 @@ impl ModifierChainHandle {
     /// The padding, layout properties and offset of the chain, worked out
     /// from its layout nodes.
     pub fn resolved_modifiers(&self) -> ResolvedModifiers {
-        let resolution = self.resolution();
+        let resolution = self.resolution(NodeCapabilities::LAYOUT);
         let mut resolved = ResolvedModifiers::default();
         resolved.set_padding(resolution.padding);
         resolved.set_layout_properties(resolution.layout);
@@ -532,19 +532,17 @@ impl ModifierChainHandle {
         snapshot
     }
 
-    // One walk over the chain's layout nodes, from the outermost in.
-    fn resolution(&self) -> Resolution {
+    // One walk over the chain's nodes of `kind`, from the outermost in.
+    fn resolution(&self, kind: NodeCapabilities) -> Resolution {
         let mut resolution = Resolution {
             direction: self.layout_direction,
             ..Resolution::default()
         };
         self.chain
-            .for_each_forward_matching(NodeCapabilities::LAYOUT, |node_ref| {
-                match node_ref.plain_words() {
-                    Some((fns, words)) => resolution.take_plain(fns, words),
-                    None => {
-                        node_ref.with_node(|node| resolution.take(node.as_any()));
-                    }
+            .for_each_forward_matching(kind, |node_ref| match node_ref.plain_words() {
+                Some((fns, words)) => resolution.take_plain(fns, words),
+                None => {
+                    node_ref.with_node(|node| resolution.take(node.as_any()));
                 }
             });
         resolution
@@ -557,7 +555,7 @@ impl ModifierChainHandle {
         let mut fill_width = None;
         let mut fill_height = None;
         self.chain
-            .for_each_forward_matching(NodeCapabilities::LAYOUT, |node_ref| {
+            .for_each_forward_matching(NodeCapabilities::PARENT_DATA, |node_ref| {
                 if let Some(fill) = node_ref.plain::<FillElement>() {
                     let (horizontal, vertical) = fill.fills();
                     if horizontal {
@@ -584,15 +582,20 @@ impl ModifierChainHandle {
         }
     }
 
-    /// Works out the chain's parent data again.
+    /// Works out the chain's parent data again, from its parent data nodes.
     fn resolve(&mut self) {
+        // Most chains hold none: theirs is the default data, kept as none.
+        if !self.chain.has_capability(NodeCapabilities::PARENT_DATA) {
+            self.parent_data = SharedParentData::default();
+            return;
+        }
         let Resolution {
             layout,
             fill_width,
             fill_height,
             layout_data,
             ..
-        } = self.resolution();
+        } = self.resolution(NodeCapabilities::PARENT_DATA);
         let weight = layout.weight.unwrap_or_default();
         let data = cranpose_ui_layout::ParentData {
             weight: weight.weight,

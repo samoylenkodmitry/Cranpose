@@ -84,7 +84,8 @@ impl FillElement {
 
 impl PlainElement for FillElement {
     const WORDS: usize = 2;
-    const CAPABILITIES: NodeCapabilities = NodeCapabilities::LAYOUT;
+    const CAPABILITIES: NodeCapabilities =
+        NodeCapabilities::LAYOUT.union(NodeCapabilities::PARENT_DATA);
     const LAYOUT: Option<&'static PlainLayoutFns> = Some(&PlainLayoutFns::of::<Self>());
 
     #[inline]
