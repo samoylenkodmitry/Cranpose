@@ -814,8 +814,11 @@ server composites the display for a window that never changes (`--ambient`: 2 a
 second on a quiet television). It will not measure, and exits with an error
 after a run so that nothing is published, when the display is asleep, locked,
 not 60 Hz or not 2x, when its display link ticks under 97% of its rate, or when
-the ambient rate is above 5 a second. A report keeps both states under
-`display`, and each leg the rate and the longest gap of its display's link.
+the ambient rate is above 5 a second in each of three reads. A notification
+that slides in or the Dock's animation moves the display for a second or two,
+so a read above 5 is followed by another one. A report keeps both states under
+`display` with every ambient read, and each leg the rate and the longest gap of
+its display's link.
 
 At tier 5 against Compose Multiplatform, SwiftUI and AppKit change 0.0% of
 tiles, Flutter 0.1%, the web page and Tauri 0.2%, Dioxus and egui 0.3%,
