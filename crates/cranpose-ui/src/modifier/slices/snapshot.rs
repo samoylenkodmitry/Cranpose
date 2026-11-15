@@ -330,6 +330,9 @@ impl Backgrounds {
     /// of those before it still hold.
     fn insert_into(self, slices: &mut ModifierNodeSlices) {
         slices.set_corner_shape(self.last_shape);
+        // Room for them all at once: an insert into a full list makes room
+        // for four, which the shrink after the walk gives back.
+        slices.draw_commands.reserve_exact(self.slots.len());
         for slot in self.slots.into_iter().rev() {
             let BackgroundSlot {
                 color,
