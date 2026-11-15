@@ -384,11 +384,7 @@ impl LayoutNode {
                 }
                 InvalidationKind::PointerInput => {
                     if has_capability(NodeCapabilities::POINTER_INPUT) {
-                        self.mark_needs_pointer_pass();
-                        crate::request_pointer_invalidation();
-                        if let Some(id) = self.id.get() {
-                            crate::schedule_pointer_repass(id);
-                        }
+                        self.request_pointer_pass();
                     }
                 }
                 InvalidationKind::Semantics => {
@@ -396,14 +392,60 @@ impl LayoutNode {
                 }
                 InvalidationKind::Focus => {
                     if has_capability(NodeCapabilities::FOCUS) {
-                        self.mark_needs_focus_sync();
-                        crate::request_focus_invalidation();
-                        if let Some(id) = self.id.get() {
-                            crate::schedule_focus_invalidation(id);
-                        }
+                        self.request_focus_sync();
                     }
                 }
             }
+        }
+    }
+
+    // Applies `invalidations`, which the chain of a node made under a parent
+    // made with it asked for as the node took its id. Such a node needs
+    // measure, draw and semantics as it is made, and the attach of its new
+    // subtree's root carries layout dirt and a structural change above it:
+    // only pointer input and focus have passes of their own to tell, and the
+    // frame a draw to request.
+    fn dispatch_made_node_invalidations(&self, invalidations: &[ModifierInvalidation]) {
+        let caps = self.modifier_capabilities();
+        for invalidation in invalidations {
+            match invalidation.kind() {
+                InvalidationKind::Draw => {
+                    if caps.contains(NodeCapabilities::DRAW)
+                        || invalidation.capabilities().contains(NodeCapabilities::DRAW)
+                    {
+                        crate::request_render_invalidation();
+                    }
+                }
+                InvalidationKind::PointerInput => {
+                    if caps.contains(NodeCapabilities::POINTER_INPUT) {
+                        self.request_pointer_pass();
+                    }
+                }
+                InvalidationKind::Focus => {
+                    if caps.contains(NodeCapabilities::FOCUS) {
+                        self.request_focus_sync();
+                    }
+                }
+                InvalidationKind::Layout | InvalidationKind::Semantics => {}
+            }
+        }
+    }
+
+    // Has the pointer pass read the node's pointer input again.
+    fn request_pointer_pass(&self) {
+        self.mark_needs_pointer_pass();
+        crate::request_pointer_invalidation();
+        if let Some(id) = self.id.get() {
+            crate::schedule_pointer_repass(id);
+        }
+    }
+
+    // Has the focus manager read the node's focus nodes again.
+    fn request_focus_sync(&self) {
+        self.mark_needs_focus_sync();
+        crate::request_focus_invalidation();
+        if let Some(id) = self.id.get() {
+            crate::schedule_focus_invalidation(id);
         }
     }
 
@@ -563,6 +605,27 @@ impl LayoutNode {
 
     /// Set this node's ID (called by applier after creation).
     pub fn set_node_id(&mut self, id: NodeId) {
+        let invalidations = self.take_node_id(id);
+        self.dispatch_modifier_invalidations_with_prev(
+            &invalidations,
+            NodeCapabilities::empty(),
+            false,
+        );
+    }
+
+    // Takes `id` and `parent` at once, as a node a pass made under a parent
+    // it made takes them: the registry entry holds the parent from the
+    // start, and the node joins the parent's children with no update of it.
+    fn mount_under_made_parent(&mut self, parent: NodeId, id: NodeId) {
+        self.parent.set(Some(parent));
+        self.folded_parent.set(Some(parent));
+        let invalidations = self.take_node_id(id);
+        self.dispatch_made_node_invalidations(&invalidations);
+    }
+
+    // Takes `id` as the node's id: the node registers under it and its chain
+    // moves to it. Returns what the chain asks to invalidate for the move.
+    fn take_node_id(&mut self, id: NodeId) -> ModifierInvalidations {
         let previous = self.id.replace(Some(id));
         if let Some(existing) = previous
             && let Some(owner_context_id) = self.owner_context_id.take()
@@ -576,14 +639,9 @@ impl LayoutNode {
 
         let mut context = self.modifier_chain.context(Some(id));
         self.modifier_chain.move_to_node(previous, &mut context);
-        let invalidations = context.take_invalidations();
-        self.dispatch_modifier_invalidations_with_prev(
-            &invalidations,
-            NodeCapabilities::empty(),
-            false,
-        );
         // The slices carry the node's id; they are collected again when next read.
         self.modifier_slices_dirty.set(true);
+        context.take_invalidations()
     }
 
     /// Get this node's ID.

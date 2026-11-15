@@ -131,13 +131,13 @@ fn apply_pending_commands_makes_subcomposed_nodes_available() {
         composer.emit_node(|| MountTrackingNode { mounted })
     });
     assert_eq!(nodes.len(), 1);
-    assert_eq!(mounted.get(), 0);
+    assert_eq!(mounted.get(), 1, "a node mounts as the pass makes it");
 
     composer
         .apply_pending_commands()
         .expect("apply_pending_commands failed");
 
-    assert_eq!(mounted.get(), 1);
+    assert_eq!(mounted.get(), 1, "the apply mounts no node again");
 
     drop(composer);
     teardown_composer(&mut slots, &mut applier, slots_host, applier_host);
