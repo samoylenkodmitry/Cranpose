@@ -18,6 +18,11 @@ impl Node for LayoutNode {
         Self::set_node_id(self, id);
     }
 
+    fn mount_under(&mut self, parent: NodeId, id: NodeId) {
+        self.mount_under_made_parent(parent, id);
+        Node::mount(self);
+    }
+
     fn insert_child(&mut self, child: NodeId) -> bool {
         if self.children.contains(&child) {
             return false;

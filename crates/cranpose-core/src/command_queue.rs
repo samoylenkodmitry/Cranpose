@@ -13,7 +13,6 @@ pub(crate) const SMALL_CHILD_SYNC_LINEAR_THRESHOLD: usize = 8;
 pub(crate) enum CommandTag {
     BubbleDirty,
     RemoveNode,
-    MountNode,
     AttachChild,
     InsertChild,
     MoveChild,
@@ -28,7 +27,6 @@ impl CommandTag {
         match self {
             Self::BubbleDirty => "BubbleDirty",
             Self::RemoveNode => "RemoveNode",
-            Self::MountNode => "MountNode",
             Self::AttachChild => "AttachChild",
             Self::InsertChild => "InsertChild",
             Self::MoveChild => "MoveChild",
@@ -98,7 +96,6 @@ pub(crate) struct CommandQueue {
     pub(crate) tags: Vec<CommandTag>,
     pub(crate) bubble_dirty: Vec<BubbleDirtyCommand>,
     pub(crate) remove_nodes: Vec<NodeId>,
-    pub(crate) mount_nodes: Vec<NodeId>,
     pub(crate) attach_children: Vec<AttachChildCommand>,
     pub(crate) insert_children: Vec<InsertChildCommand>,
     pub(crate) move_children: Vec<MoveChildCommand>,
@@ -125,10 +122,6 @@ impl CommandQueue {
             Command::RemoveNode { id } => {
                 self.remove_nodes.push(id);
                 self.push_tag(CommandTag::RemoveNode);
-            }
-            Command::MountNode { id } => {
-                self.mount_nodes.push(id);
-                self.push_tag(CommandTag::MountNode);
             }
             Command::AttachChild {
                 parent_id,
@@ -230,7 +223,6 @@ impl CommandQueue {
             .len()
             .saturating_mul(size_of::<BubbleDirtyCommand>())
             .saturating_add(self.remove_nodes.len().saturating_mul(size_of::<NodeId>()))
-            .saturating_add(self.mount_nodes.len().saturating_mul(size_of::<NodeId>()))
             .saturating_add(
                 self.attach_children
                     .len()
@@ -280,11 +272,6 @@ impl CommandQueue {
             .saturating_mul(size_of::<BubbleDirtyCommand>())
             .saturating_add(
                 self.remove_nodes
-                    .capacity()
-                    .saturating_mul(size_of::<NodeId>()),
-            )
-            .saturating_add(
-                self.mount_nodes
                     .capacity()
                     .saturating_mul(size_of::<NodeId>()),
             )
@@ -345,7 +332,6 @@ impl CommandQueue {
             tags,
             bubble_dirty,
             remove_nodes,
-            mount_nodes,
             attach_children,
             insert_children,
             move_children,
@@ -359,7 +345,6 @@ impl CommandQueue {
         tags.clear();
         bubble_dirty.clear();
         remove_nodes.clear();
-        mount_nodes.clear();
         attach_children.clear();
         insert_children.clear();
         move_children.clear();
@@ -375,7 +360,6 @@ impl CommandQueue {
         let mut payloads = CommandPayloads {
             bubble_dirty: self.bubble_dirty.drain(..),
             remove_nodes: self.remove_nodes.drain(..),
-            mount_nodes: self.mount_nodes.drain(..),
             attach_children: self.attach_children.drain(..),
             insert_children: self.insert_children.drain(..),
             move_children: self.move_children.drain(..),
@@ -398,7 +382,6 @@ impl CommandQueue {
 struct CommandPayloads<'a> {
     bubble_dirty: std::vec::Drain<'a, BubbleDirtyCommand>,
     remove_nodes: std::vec::Drain<'a, NodeId>,
-    mount_nodes: std::vec::Drain<'a, NodeId>,
     attach_children: std::vec::Drain<'a, AttachChildCommand>,
     insert_children: std::vec::Drain<'a, InsertChildCommand>,
     move_children: std::vec::Drain<'a, MoveChildCommand>,
@@ -417,10 +400,9 @@ impl CommandPayloads<'_> {
         cleanup: &mut DeferredChildCleanupQueue,
     ) -> Result<(), NodeError> {
         match tag {
-            CommandTag::BubbleDirty
-            | CommandTag::RemoveNode
-            | CommandTag::MountNode
-            | CommandTag::Callback => self.apply_node_command(tag, applier, cleanup),
+            CommandTag::BubbleDirty | CommandTag::RemoveNode | CommandTag::Callback => {
+                self.apply_node_command(tag, applier, cleanup)
+            }
             CommandTag::AttachChild
             | CommandTag::InsertChild
             | CommandTag::MoveChild
@@ -445,10 +427,6 @@ impl CommandPayloads<'_> {
             CommandTag::RemoveNode => {
                 let id = next_command_payload(&mut self.remove_nodes, tag)?;
                 Command::RemoveNode { id }.apply_with_cleanup(applier, cleanup)?;
-            }
-            CommandTag::MountNode => {
-                let id = next_command_payload(&mut self.mount_nodes, tag)?;
-                Command::MountNode { id }.apply_with_cleanup(applier, cleanup)?;
             }
             CommandTag::Callback => {
                 let callback = next_command_payload(&mut self.callbacks, tag)?;
@@ -542,10 +520,9 @@ impl CommandPayloads<'_> {
                 .apply_with_cleanup(applier, cleanup)?;
             }
             CommandTag::SyncChildren => self.sync_children(applier, cleanup)?,
-            CommandTag::BubbleDirty
-            | CommandTag::RemoveNode
-            | CommandTag::MountNode
-            | CommandTag::Callback => return Err(command_payload_error(tag)),
+            CommandTag::BubbleDirty | CommandTag::RemoveNode | CommandTag::Callback => {
+                return Err(command_payload_error(tag));
+            }
         }
         Ok(())
     }
@@ -574,7 +551,6 @@ impl CommandPayloads<'_> {
     fn assert_all_taken(&mut self) {
         debug_assert!(self.bubble_dirty.next().is_none());
         debug_assert!(self.remove_nodes.next().is_none());
-        debug_assert!(self.mount_nodes.next().is_none());
         debug_assert!(self.attach_children.next().is_none());
         debug_assert!(self.insert_children.next().is_none());
         debug_assert!(self.move_children.next().is_none());

@@ -17,7 +17,8 @@ pub(crate) use child_positions::{
 };
 pub(crate) use child_sync::{
     apply_remove_child, attach_child_at, cleanup_detached_child, detach_child_from_parent,
-    insert_child_with_reparenting, remove_child_and_cleanup_now, sync_or_settle_children,
+    insert_child_with_reparenting, join_made_children, remove_child_and_cleanup_now,
+    sync_or_settle_children,
 };
 mod command;
 pub(crate) use command::{

@@ -3,7 +3,7 @@ use std::any::TypeId;
 use crate::{
     Applier, ChildList, Command, CommandQueue, Composer, DirtyBubble, EmittedNode, MutableState,
     Node, NodeError, NodeId, OwnedMutableState, ParentAttachMode, ParentFrame, debug_scope_label,
-    recompose::RecomposeChildCursor, slot::NodeSlotUpdate,
+    join_made_children, recompose::RecomposeChildCursor, slot::NodeSlotUpdate,
 };
 
 #[expect(clippy::multiple_inherent_impl, reason = "one file per concern")]
@@ -176,8 +176,7 @@ impl Composer {
                 scope_label,
             );
         }
-        self.commands_mut().push(Command::MountNode { id });
-        self.attach_to_parent(id);
+        self.mount_made_node(id);
         let parent_id = self.planned_node_parent(id);
         let recorded = self.with_slot_session_mut(|slots| {
             slots.record_node_with_parent(id, generation, parent_id, source)
@@ -208,6 +207,39 @@ impl Composer {
             }
         }
         id
+    }
+
+    // Mounts node `id`, which the pass just made, under the frame it is made
+    // in: a frame the pass made takes it as it is, and joins it when it
+    // closes; any other frame attaches it as it attaches a kept node.
+    fn mount_made_node(&self, id: NodeId) {
+        let made_parent = {
+            let mut parent_stack = self.parent_stack();
+            parent_stack
+                .last_mut()
+                .filter(|frame| frame.id != id)
+                .and_then(|frame| {
+                    frame.last_made = Some(id);
+                    (frame.attach_mode == ParentAttachMode::Made).then(|| {
+                        frame.new_children.push(id);
+                        frame.id
+                    })
+                })
+        };
+        if made_parent.is_none() {
+            self.attach_to_parent(id);
+        }
+        let mut applier = self.borrow_applier();
+        let Ok(node) = applier.get_mut(id) else {
+            return;
+        };
+        match made_parent {
+            Some(parent) => node.mount_under(parent, id),
+            None => {
+                node.set_node_id(id);
+                node.mount();
+            }
+        }
     }
 
     /// Emits a node of type `N` as a child of the current parent and returns its id. The first
@@ -294,10 +326,15 @@ impl Composer {
                 let Some(frame) = parent_stack.last_mut() else {
                     return false;
                 };
-                let attach_mode = frame.attach_mode;
                 if parent_id == id {
                     return true;
                 }
+                // A node the pass did not make joins a frame the pass made:
+                // the frame syncs its children as a kept node's frame does.
+                if frame.attach_mode == ParentAttachMode::Made {
+                    frame.attach_mode = ParentAttachMode::DeferredSync;
+                }
+                let attach_mode = frame.attach_mode;
                 // A child where the parent held it before is already attached
                 // to the parent: its node needs no visit.
                 let attached_before = frame.previous.get(frame.new_children.len()) == Some(&id);
@@ -417,6 +454,21 @@ impl Composer {
     /// Makes the node `id` the parent of the nodes emitted next. Each call needs a matching
     /// `pop_parent`.
     pub fn push_parent(&self, id: NodeId) {
+        let made = self
+            .parent_stack()
+            .last_mut()
+            .is_some_and(|frame| frame.last_made.take() == Some(id));
+        if made {
+            self.parent_stack().push(ParentFrame {
+                id,
+                previous: ChildList::new(),
+                new_children: ChildList::new(),
+                attach_mode: ParentAttachMode::Made,
+                synthetic_root: false,
+                last_made: None,
+            });
+            return;
+        }
         let in_subcompose = !self.core.subcompose_stack.borrow().is_empty();
 
         let children = self.get_node_children(id);
@@ -437,6 +489,7 @@ impl Composer {
             new_children: ChildList::new(),
             attach_mode,
             synthetic_root: false,
+            last_made: None,
         });
     }
 
@@ -466,6 +519,7 @@ impl Composer {
                 new_children,
                 attach_mode,
                 synthetic_root: _synthetic_root,
+                last_made: _,
             } = frame;
 
             log::trace!(target: "cranpose::compose::parent", "pop_parent: node #{id}");
@@ -477,17 +531,23 @@ impl Composer {
                 target: "cranpose::compose::parent",
                 "new children: {new_children:?}"
             );
-            if matches!(attach_mode, ParentAttachMode::DeferredSync) {
-                // Children composed as the parent held them need no sync of
-                // their list, only the parent's settling. An empty list still
-                // syncs: it removes what the parent took since, as a
-                // subcomposition's slot host may.
-                let kept = !previous.is_empty() && new_children == previous;
-                let expected_children = (!kept).then_some(new_children);
-                self.commands_mut().push(Command::SyncChildren {
-                    parent_id: id,
-                    expected_children,
-                });
+            match attach_mode {
+                ParentAttachMode::Made => {
+                    join_made_children(&mut *self.borrow_applier(), id, &new_children);
+                }
+                ParentAttachMode::DeferredSync => {
+                    // Children composed as the parent held them need no sync
+                    // of their list, only the parent's settling. An empty
+                    // list still syncs: it removes what the parent took
+                    // since, as a subcomposition's slot host may.
+                    let kept = !previous.is_empty() && new_children == previous;
+                    let expected_children = (!kept).then_some(new_children);
+                    self.commands_mut().push(Command::SyncChildren {
+                        parent_id: id,
+                        expected_children,
+                    });
+                }
+                ParentAttachMode::ImmediateAppend => {}
             }
         }
     }

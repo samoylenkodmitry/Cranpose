@@ -135,6 +135,34 @@ fn attach_children(applier: &mut dyn Applier, parent_id: NodeId, children: &[Nod
     DirtyBubble::LAYOUT_AND_MEASURE.apply(applier, parent_id);
 }
 
+// Gives `parent_id`, a node the pass made, the `children` the pass made under
+// it, each mounted under it already: the list goes in as it is, with no diff.
+// The parent takes the marks an attach's bubble starts with, and the walk
+// stops there: the nodes above it up to the made subtree's root are made and
+// dirty too, and the attach of that root carries the dirt on.
+pub(crate) fn join_made_children(
+    applier: &mut dyn Applier,
+    parent_id: NodeId,
+    children: &[NodeId],
+) {
+    if children.is_empty() {
+        return;
+    }
+    let Ok(parent) = applier.get_mut(parent_id) else {
+        return;
+    };
+    if parent.keeps_own_children() {
+        return;
+    }
+    parent.update_children(children);
+    parent.mark_needs_layout();
+    parent.mark_needs_measure();
+    for &child_id in children {
+        note_structural("attach", parent_id, child_id);
+    }
+    applier.record_structural_change(parent_id);
+}
+
 pub(crate) fn apply_remove_child(
     applier: &mut dyn Applier,
     parent_id: NodeId,

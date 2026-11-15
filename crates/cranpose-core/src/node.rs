@@ -31,7 +31,7 @@ pub fn pop_parent() {
 /// A node of the tree that a composition builds. An applier stores the nodes by id. Every method
 /// has a default, so a simple node implements none of them.
 pub trait Node: Any {
-    /// Called once the node has its id, when the composition applies the node's creation.
+    /// Called once the node has its id, as the composition makes the node.
     fn mount(&mut self) {}
     /// Called just before the node is removed from the applier.
     fn unmount(&mut self) {}
@@ -112,6 +112,17 @@ pub trait Node: Any {
     /// Called after the node is created to record its own ID.
     /// Useful for nodes that need to store their ID for later operations.
     fn set_node_id(&mut self, _id: NodeId) {}
+    /// Called once, in place of [`Node::set_node_id`] and [`Node::mount`],
+    /// for a node a composition pass made under a `parent` the same pass
+    /// made: the node takes its parent, its `id` and its mount at once, and
+    /// joins the parent's children when the parent's composition closes. The
+    /// pass bubbles no dirt from the node: it is new, as is the parent, and
+    /// the attach of the new subtree's root carries the dirt above it.
+    fn mount_under(&mut self, parent: NodeId, id: NodeId) {
+        self.on_attached_to_parent(parent);
+        self.set_node_id(id);
+        self.mount();
+    }
     /// Called when this node is attached to a parent.
     /// Nodes with parent tracking should set their parent reference here.
     fn on_attached_to_parent(&mut self, _parent: NodeId) {}
