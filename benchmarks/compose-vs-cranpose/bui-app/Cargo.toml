@@ -8,7 +8,7 @@ publish = false
 
 [dependencies]
 # Blender's interface as a library: its C kit rasterizes on the CPU on macOS.
-blenderui = "0.5.0"
+blenderui = "0.5.1"
 log = "0.4"
 perf-data = { path = "../perf-data" }
 
