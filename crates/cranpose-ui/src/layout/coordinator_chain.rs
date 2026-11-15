@@ -13,6 +13,7 @@ use cranpose_foundation::{
     PlainLayoutFns, PrepareAt,
 };
 use cranpose_ui_layout::{AlignmentLines, Constraints, MeasurePolicy, Placement};
+use smallvec::SmallVec;
 
 use super::{
     LayoutNodeContext, ModifierChainInputs,
@@ -364,19 +365,15 @@ impl CoordinatorChain {
         }
 
         let chain = chain_handle.chain();
-        let mut len = 0;
-        let mut matches = true;
+        // The layout modifiers of the chain in order, with their entries,
+        // which a rebuild reads again: a chain holds a few.
+        let mut layouts: SmallVec<[(usize, Found<'_>); 8]> = SmallVec::new();
         chain.for_each_forward_matching(NodeCapabilities::LAYOUT, |node_ref| {
             let Some(index) = node_ref.entry_index() else {
                 return;
             };
             if let Some(found) = Found::at(chain, index) {
-                matches = matches
-                    && self
-                        .nodes
-                        .get_mut(len)
-                        .is_some_and(|candidate| candidate.takes(index, &found, at));
-                len += 1;
+                layouts.push((index, found));
             }
             if let Some(offset) = node_ref.plain::<crate::modifier_nodes::OffsetElement>() {
                 let delta = offset.placed(at);
@@ -385,40 +382,35 @@ impl CoordinatorChain {
             }
         });
 
-        inputs.uses_chain = len > 0;
-        if inputs.uses_chain && !(matches && len == self.nodes.len()) {
-            self.rebuild(chain, len, at);
+        inputs.uses_chain = !layouts.is_empty();
+        let matches = layouts.len() == self.nodes.len()
+            && self
+                .nodes
+                .iter_mut()
+                .zip(&layouts)
+                .all(|(candidate, (index, found))| candidate.takes(*index, found, at));
+        if inputs.uses_chain && !matches {
+            self.rebuild(&layouts, at);
         }
         inputs
     }
 
-    fn rebuild(
-        &mut self,
-        chain: &cranpose_foundation::ModifierNodeChain,
-        len: usize,
-        at: PrepareAt,
-    ) {
+    fn rebuild(&mut self, layouts: &[(usize, Found<'_>)], at: PrepareAt) {
         let mut previous_nodes = std::mem::take(&mut self.nodes);
         // Exactly: most chains hold one layout modifier, where growth would
         // make room for four.
-        self.nodes.reserve_exact(len);
-        chain.for_each_forward_matching(NodeCapabilities::LAYOUT, |node_ref| {
-            let Some((index, found)) = node_ref
-                .entry_index()
-                .and_then(|index| Found::at(chain, index).map(|found| (index, found)))
-            else {
-                return;
-            };
+        self.nodes.reserve_exact(layouts.len());
+        for (index, found) in layouts {
             match previous_nodes
                 .iter_mut()
-                .position(|candidate| candidate.takes(index, &found, at))
+                .position(|candidate| candidate.takes(*index, found, at))
             {
                 Some(position) => self.nodes.push(previous_nodes.swap_remove(position)),
                 None => self
                     .nodes
-                    .push(CoordinatorNode::new(index, found.source(at))),
+                    .push(CoordinatorNode::new(*index, found.source(at))),
             }
-        });
+        }
     }
 
     /// What the last measure through this chain holds for: the policy's own
