@@ -268,7 +268,11 @@ impl LayoutNode {
             self.forget_semantics_reach();
         }
         let mut invalidations = context.take_invalidations();
-        invalidations.extend(modifier_local_invalidations);
+        // Most chains read no modifier locals: an extend by an empty list
+        // still moves the list.
+        if !modifier_local_invalidations.is_empty() {
+            invalidations.extend(modifier_local_invalidations);
+        }
         self.dispatch_chain_update(&invalidations, prev_caps, in_place);
         // An update in place leaves the node's parent, capabilities and
         // modifier locals as the registry holds them.

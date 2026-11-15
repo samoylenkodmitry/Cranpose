@@ -374,6 +374,11 @@ impl ModifierNodeChain {
         }
     }
 
+    /// Whether the chain's nodes are attached.
+    pub fn is_attached(&self) -> bool {
+        self.attached
+    }
+
     /// Attaches all nodes in the chain.
     pub fn attach_nodes(&mut self, context: &mut dyn ModifierNodeContext) {
         if self.attached {
