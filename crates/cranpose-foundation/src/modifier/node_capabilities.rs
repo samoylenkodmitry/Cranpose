@@ -33,10 +33,18 @@ impl NodeCapabilities {
     pub const WINDOW_ROOT: Self = Self(1 << 6);
     /// Modifier handles hardware keyboard events.
     pub const KEY_INPUT: Self = Self(1 << 7);
+    /// Modifier tells the parent's layout about its node, as a weight or an
+    /// alignment does: Compose's `ParentDataModifierNode`.
+    pub const PARENT_DATA: Self = Self(1 << 8);
 
     /// Returns an empty capability set.
     pub const fn empty() -> Self {
         Self::NONE
+    }
+
+    /// The capabilities of `self` and those of `other`.
+    pub const fn union(self, other: Self) -> Self {
+        Self(self.0 | other.0)
     }
 
     /// Returns whether all bits in `other` are present in `self`.
@@ -93,6 +101,7 @@ impl fmt::Debug for NodeCapabilities {
             .field("focus", &self.contains(Self::FOCUS))
             .field("window_root", &self.contains(Self::WINDOW_ROOT))
             .field("key_input", &self.contains(Self::KEY_INPUT))
+            .field("parent_data", &self.contains(Self::PARENT_DATA))
             .finish()
     }
 }

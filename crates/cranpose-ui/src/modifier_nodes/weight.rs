@@ -26,7 +26,8 @@ impl WeightElement {
 
 impl PlainElement for WeightElement {
     const WORDS: usize = 2;
-    const CAPABILITIES: NodeCapabilities = NodeCapabilities::LAYOUT;
+    const CAPABILITIES: NodeCapabilities =
+        NodeCapabilities::LAYOUT.union(NodeCapabilities::PARENT_DATA);
 
     fn to_words(&self, words: &mut [u32]) {
         words.copy_from_slice(&[self.weight.to_bits(), u32::from(self.fill)]);

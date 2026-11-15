@@ -87,6 +87,6 @@ impl ModifierNodeElement for LayoutDataElement {
     }
 
     fn capabilities(&self) -> NodeCapabilities {
-        NodeCapabilities::LAYOUT
+        NodeCapabilities::LAYOUT | NodeCapabilities::PARENT_DATA
     }
 }

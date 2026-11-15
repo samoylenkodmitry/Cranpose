@@ -1,3 +1,6 @@
+use std::{cell::Cell, rc::Rc};
+
+use cranpose_core::MutableState;
 use cranpose_ui::{
     Alignment, Box, BoxSpec, Column, ColumnSpec, Modifier, Row, RowSpec, Size, VerticalAlignment,
 };
@@ -30,6 +33,45 @@ fn the_outermost_weight_of_a_row_child_wins() {
         });
     });
     assert_eq!(tagged(layout.root(), "first").rect.width, 100.0);
+}
+
+#[test]
+fn a_row_child_that_drops_its_weight_takes_its_own_width() {
+    let state: Rc<Cell<Option<MutableState<bool>>>> = Rc::default();
+    let state_handle = Rc::clone(&state);
+    let mut composition = cranpose_ui::run_test_composition(move || {
+        let weighted =
+            cranpose_core::remember(|| cranpose_core::mutableStateOf(true)).with(|state| *state);
+        state_handle.set(Some(weighted));
+        Row(
+            Modifier::empty().width(200.0),
+            RowSpec::default(),
+            move || {
+                let modifier = if weighted.value() {
+                    Modifier::empty().weight(1.0)
+                } else {
+                    Modifier::empty().width(30.0)
+                };
+                Box(
+                    modifier.height(10.0).content_description("child"),
+                    BoxSpec::default(),
+                    || {},
+                );
+            },
+        );
+    });
+    let width = |composition: &mut cranpose_ui::TestComposition| {
+        let layout = layout_composition(composition, Size::new(200.0, 200.0));
+        tagged(layout.root(), "child").rect.width
+    };
+    assert_eq!(width(&mut composition), 200.0, "the weight fills the row");
+    state.get().expect("the weighted state").set(false);
+    while composition.process_invalid_scopes().expect("recompose") {}
+    assert_eq!(
+        width(&mut composition),
+        30.0,
+        "the parent data has no weight"
+    );
 }
 
 #[test]
