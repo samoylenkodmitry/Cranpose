@@ -11,7 +11,19 @@ LiquidMenuItem::new(tr!("Open", context = "file action"));
 Modifier::empty().content_description(tr!("Close dialog"));
 ```
 
-`tr!` runs during composition. Its `LocalizedText` result shares immutable
+`tr!` runs during composition, and the compiler checks that. `#[composable]`
+puts the value `tr_runs_only_in_composables` at the top of each composable
+body, and `tr!` reads it. A `tr!` in a plain function, such as a helper that a
+task callback calls, fails to build with "cannot find value
+`tr_runs_only_in_composables`". Such a helper either becomes `#[composable]`
+or returns a `message!`. A closure written inside a composable sees the value,
+so the check cannot tell a content closure from a click handler there: a
+`tr!` in a handler or a task callback still compiles and panics at run time
+with "no active composer". Use `message!` in those closures. The check reads
+the value with `let _`, so a closure that uses `tr!` captures nothing for it
+and stays `'static`.
+
+The `LocalizedText` result of `tr!` shares immutable
 annotated text with `Text` and converts to `String` for APIs that own strings.
 Borrowed argument strings need live only through the call. Numeric arguments
 stay numeric, so translators can choose plural forms. Do not translate pieces

@@ -4,7 +4,9 @@ use cranpose_core::{MutableState, rememberMutableStateOf};
 use cranpose_foundation::text::TextFieldState;
 use cranpose_liquid::prelude::*;
 use cranpose_testing::{create_headless_robot_test, placed_semantics_from_shell};
-use cranpose_ui::{Catalog, Column, ColumnSpec, Locale, Modifier, ProvideLocalization, tr};
+use cranpose_ui::{
+    Catalog, Column, ColumnSpec, Locale, Modifier, ProvideLocalization, composable, tr,
+};
 
 #[test]
 fn changing_language_updates_tab_search_and_action_accessibility_labels() {
@@ -23,40 +25,7 @@ fn changing_language_updates_tab_search_and_action_accessibility_labels() {
         let language = rememberMutableStateOf(|| Locale::parse("en").expect("locale"));
         capture.set(Some(language));
         ProvideLocalization(&catalog, language.value(), || {
-            LiquidTheme(LiquidThemeSpec::default(), || {
-                Column(
-                    Modifier::empty().fill_max_size(),
-                    ColumnSpec::default(),
-                    || {
-                        LiquidSearchField(
-                            Modifier::empty().width(320.0),
-                            cranpose_core::remember(|| TextFieldState::new(""))
-                                .with(|state| *state),
-                            LiquidSearchFieldSpec::default(),
-                        );
-                        GlassButton(
-                            Modifier::empty(),
-                            GlassButtonSpec::glass(),
-                            || {},
-                            || {
-                                GlassButtonLabel(
-                                    tr!("Save", id = "save"),
-                                    GlassButtonSpec::glass(),
-                                );
-                            },
-                        );
-                        LiquidTabBar(
-                            Modifier::empty().width(320.0),
-                            LiquidTabBarSpec::default(),
-                            0,
-                            |_| {},
-                            |scope| {
-                                scope.tab(icons::SEARCH, tr!("Home", id = "home"));
-                            },
-                        );
-                    },
-                );
-            });
+            LiquidTheme(LiquidThemeSpec::default(), LocalizedControls);
         });
     });
     robot.shell_mut().set_semantics_enabled(true);
@@ -117,4 +86,36 @@ fn rtl_tabs_remain_visible_and_select_the_logical_index() {
         robot.find_by_text(label).click();
         assert_eq!(selected.get(), index, "{label} selects its logical index");
     }
+}
+
+#[composable]
+fn LocalizedControls() {
+    Column(
+        Modifier::empty().fill_max_size(),
+        ColumnSpec::default(),
+        || {
+            LiquidSearchField(
+                Modifier::empty().width(320.0),
+                cranpose_core::remember(|| TextFieldState::new("")).with(|state| *state),
+                LiquidSearchFieldSpec::default(),
+            );
+            GlassButton(
+                Modifier::empty(),
+                GlassButtonSpec::glass(),
+                || {},
+                || {
+                    GlassButtonLabel(tr!("Save", id = "save"), GlassButtonSpec::glass());
+                },
+            );
+            LiquidTabBar(
+                Modifier::empty().width(320.0),
+                LiquidTabBarSpec::default(),
+                0,
+                |_| {},
+                |scope| {
+                    scope.tab(icons::SEARCH, tr!("Home", id = "home"));
+                },
+            );
+        },
+    );
 }

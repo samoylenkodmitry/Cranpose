@@ -1,22 +1,39 @@
 //! Reactive localization that composes with existing text and string-taking APIs.
 //!
 //! ```
-//! cranpose_ui::run_test_composition(|| {
+//! #[cranpose_ui::composable]
+//! fn Greeting() {
 //!     let text = cranpose_ui::tr!("Hello, {name}!", name = "Ana");
 //!     assert!(text.as_str().contains("Ana"));
-//! });
+//! }
+//! cranpose_ui::run_test_composition(Greeting);
 //! ```
 //!
 //! Missing arguments are compile errors:
 //!
 //! ```compile_fail
-//! let _ = cranpose_ui::tr!("Hello, {name}!");
+//! #[cranpose_ui::composable]
+//! fn Greeting() {
+//!     let _ = cranpose_ui::tr!("Hello, {name}!");
+//! }
 //! ```
 //!
 //! Extra arguments are compile errors:
 //!
 //! ```compile_fail
-//! let _ = cranpose_ui::tr!("Save", unused = 42);
+//! #[cranpose_ui::composable]
+//! fn Save() {
+//!     let _ = cranpose_ui::tr!("Save", unused = 42);
+//! }
+//! ```
+//!
+//! `tr!` outside a composable is a compile error. A task callback or a
+//! helper that runs outside composition uses `message!`:
+//!
+//! ```compile_fail,E0425
+//! fn greeting() {
+//!     let _ = cranpose_ui::tr!("Hello");
+//! }
 //! ```
 
 use std::cell::RefCell;

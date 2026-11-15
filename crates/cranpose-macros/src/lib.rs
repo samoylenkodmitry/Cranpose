@@ -13,6 +13,7 @@ use syn::{FnArg, Ident, ItemFn, Pat, PatType, ReturnType, Type, parse_macro_inpu
 
 mod branch_groups;
 mod callback_param;
+mod composable_marker;
 mod constant_modifiers;
 mod held_callback;
 #[cfg(feature = "localization")]
@@ -25,6 +26,10 @@ mod worker_job;
 /// Localizes readable source text using the nearest localization provider.
 /// Named arguments use `name = expression`; optional literal metadata is
 /// `id`, `context`, `comment`, and `source_locale` (default `en`).
+///
+/// `tr!` compiles only inside a `#[composable]` function or a closure written
+/// in one. Elsewhere the build fails with "cannot find value
+/// `tr_runs_only_in_composables`": use [`message!`] there.
 #[cfg(feature = "localization")]
 #[proc_macro]
 pub fn tr(input: TokenStream) -> TokenStream {
@@ -416,7 +421,7 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
     ));
 
     let scope_label_ident = func.sig.ident.clone();
-    let original_block = func.block.clone();
+    let original_block = composable_marker::declared(&func.block);
     let body_end = func.block.brace_token.span.close();
     let composer_ident = Ident::new("__composer", Span::mixed_site());
     let slot_key = slot_key(&core_path);

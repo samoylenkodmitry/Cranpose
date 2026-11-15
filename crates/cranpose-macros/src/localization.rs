@@ -34,7 +34,12 @@ fn ui_path() -> syn::Result<TokenStream> {
 
 pub(crate) fn translate(input: TokenStream) -> syn::Result<TokenStream> {
     let call: TranslationCall = syn::parse2(input)?;
-    Ok(call.expand(&ui_path()?))
+    let check = crate::composable_marker::check();
+    let text = call.expand(&ui_path()?);
+    Ok(quote!({
+        #check
+        #text
+    }))
 }
 
 pub(crate) fn message(input: TokenStream) -> syn::Result<TokenStream> {

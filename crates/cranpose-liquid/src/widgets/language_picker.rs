@@ -117,6 +117,7 @@ pub fn LiquidLanguagePicker(controller: LocalizationController) {
     });
 }
 
+#[composable]
 fn preference_name(preference: &LanguagePreference) -> cranpose_ui::SharedText {
     match preference {
         LanguagePreference::System => cranpose_ui::tr!("System default", id = "system-language"),
