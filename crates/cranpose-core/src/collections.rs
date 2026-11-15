@@ -6,9 +6,11 @@
 pub mod bounded_lru;
 pub mod growth_slack;
 pub mod id_pages;
+mod linked_slots;
 pub mod pass_aged;
 pub mod perfect_map;
 pub mod rare;
+pub mod recent_hashes;
 
 mod word_hash;
 
