@@ -1633,7 +1633,7 @@ impl SubcomposeLayoutNodeInner {
 
     fn new(measure_policy: Rc<MeasurePolicy>) -> Self {
         Self {
-            modifier_chain: ModifierChainHandle::detached(),
+            modifier_chain: ModifierChainHandle::detached(crate::LayoutDirection::Ltr),
             modifier_capabilities: NodeCapabilities::default(),
             state: SubcomposeState::default(),
             measure_policy,

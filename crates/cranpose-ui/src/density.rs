@@ -153,8 +153,8 @@ impl Default for Density {
 
 // `density` behind a pointer that every layout node of the same density
 // shares: a node keeps a word where the density takes three. The thread
-// keeps the two densities its nodes took last, as a new node starts at the
-// default density before its composition gives it the screen's.
+// keeps the two densities its nodes took last, as a recycled shell takes the
+// default density and a composed node the screen's.
 pub(crate) fn shared_density(density: Density) -> std::rc::Rc<Density> {
     crate::thread_state::with(|state| {
         let mut held = state.node_densities.borrow_mut();

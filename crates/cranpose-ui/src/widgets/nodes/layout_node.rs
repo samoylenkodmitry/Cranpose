@@ -20,10 +20,14 @@ use crate::{
         ModifierNodeSlices, Point, ResolvedModifiers, Size,
     },
     render_state::AppContext,
-    widgets::nodes::{
-        ChildPlacement, LayoutDirt, LayoutParts, LayoutState, NodeCache,
-        layout_node_registry::{
-            register_layout_node, resolve_modifier_local_from_parent_chain, unregister_layout_node,
+    widgets::{
+        layout::LayoutEnvironment,
+        nodes::{
+            ChildPlacement, LayoutDirt, LayoutParts, LayoutState, NodeCache,
+            layout_node_registry::{
+                register_layout_node, resolve_modifier_local_from_parent_chain,
+                unregister_layout_node,
+            },
         },
     },
 };
@@ -86,13 +90,28 @@ pub(crate) fn empty_measure_policy() -> Rc<dyn MeasurePolicy> {
 impl LayoutNode {
     /// Creates a node with `modifier` whose children `measure_policy` measures and places.
     pub fn new(modifier: Modifier, measure_policy: Rc<dyn MeasurePolicy>) -> Self {
-        Self::new_with_virtual(modifier, measure_policy, false)
+        Self::new_in(modifier, measure_policy, LayoutEnvironment::default())
+    }
+
+    // A node at the density and in the layout direction of `environment`,
+    // where a composition makes it.
+    pub(crate) fn new_in(
+        modifier: Modifier,
+        measure_policy: Rc<dyn MeasurePolicy>,
+        environment: LayoutEnvironment,
+    ) -> Self {
+        Self::new_with_virtual(modifier, measure_policy, false, environment)
     }
 
     /// Create a virtual LayoutNode for subcomposition slot containers.
     /// Virtual nodes are transparent - their children are flattened into parent's children list.
     pub fn new_virtual() -> Self {
-        Self::new_with_virtual(Modifier::empty(), empty_measure_policy(), true)
+        Self::new_with_virtual(
+            Modifier::empty(),
+            empty_measure_policy(),
+            true,
+            LayoutEnvironment::default(),
+        )
     }
 
     // A node that waits in a recycle pool for the node that takes its place
@@ -106,7 +125,7 @@ impl LayoutNode {
                 parts
             }))
         });
-        let shell = Self::without_modifier(parts, is_virtual);
+        let shell = Self::without_modifier(parts, is_virtual, LayoutEnvironment::default());
         shell.needs_semantics.set(false);
         shell.needs_redraw.set(false);
         shell
@@ -116,20 +135,25 @@ impl LayoutNode {
         modifier: Modifier,
         measure_policy: Rc<dyn MeasurePolicy>,
         is_virtual: bool,
+        environment: LayoutEnvironment,
     ) -> Self {
         let parts = Rc::new(LayoutParts::new(LayoutRuntimeState::new(measure_policy)));
-        let mut node = Self::without_modifier(parts, is_virtual);
+        let mut node = Self::without_modifier(parts, is_virtual, environment);
         node.sync_modifier_chain(&modifier, None);
         node
     }
 
     // A node with `parts` whose chain no modifier has reached yet.
-    fn without_modifier(parts: Rc<LayoutParts>, is_virtual: bool) -> Self {
+    fn without_modifier(
+        parts: Rc<LayoutParts>,
+        is_virtual: bool,
+        environment: LayoutEnvironment,
+    ) -> Self {
         Self {
             #[cfg(feature = "inspection")]
             source_trace: cranpose_core::source_trace::current_source_trace(),
-            modifier_chain: ModifierChainHandle::detached(),
-            density: crate::density::shared_density(crate::density::Density::default()),
+            modifier_chain: ModifierChainHandle::detached(environment.direction),
+            density: crate::density::shared_density(environment.density),
             children: Vec::new(),
             needs_semantics: Cell::new(true),
             descendant_needs_semantics: Cell::new(false),

@@ -129,7 +129,7 @@ impl InPlaceReach {
 
 impl Default for ModifierChainHandle {
     fn default() -> Self {
-        Self::with_chain(ModifierNodeChain::new())
+        Self::with_chain(ModifierNodeChain::new(), crate::LayoutDirection::Ltr)
     }
 }
 
@@ -146,10 +146,10 @@ impl ModifierChainHandle {
         Self::default()
     }
 
-    fn with_chain(chain: ModifierNodeChain) -> Self {
+    fn with_chain(chain: ModifierNodeChain, layout_direction: crate::LayoutDirection) -> Self {
         Self {
             chain,
-            layout_direction: crate::LayoutDirection::Ltr,
+            layout_direction,
             pending_invalidations: None,
             parent_data: SharedParentData::default(),
             modifier_locals: None,
@@ -163,8 +163,8 @@ impl ModifierChainHandle {
 
     /// The handle of a layout node's chain: the chain's nodes attach once
     /// the node has its id, at [`Self::move_to_node`].
-    pub(crate) fn detached() -> Self {
-        Self::with_chain(ModifierNodeChain::detached())
+    pub(crate) fn detached(layout_direction: crate::LayoutDirection) -> Self {
+        Self::with_chain(ModifierNodeChain::detached(), layout_direction)
     }
 
     pub(crate) fn for_layout_direction(layout_direction: crate::LayoutDirection) -> Self {
