@@ -5,6 +5,11 @@ use std::rc::Rc;
 use cranpose_render_common::{glyph_mask::GlyphMaskKey, text_atlas::AtlasGlyph};
 use cranpose_ui_graphics::Color;
 
+use crate::rc_slice_pool::RcSlicePool;
+
+// The most face lists of recent runs kept for the next runs to share.
+const RECENT_FACES: usize = 8;
+
 /// What the glyphs of one segment of a run share: face, size and synthesis
 /// (an atlas key but for its glyph id) and color.
 #[derive(Clone, Copy, PartialEq)]
@@ -70,13 +75,40 @@ pub(crate) struct RunGlyphs {
     glyphs: Rc<[RunGlyph]>,
 }
 
-/// Buffers a renderer reuses while it builds runs, and the faces of the
-/// last run built, which the next run shares when its own are the same.
+// Buffers a renderer reuses while it builds runs, the faces of recent runs,
+// which the next run shares when its own are the same, and the glyph slices
+// of runs the cache let go of.
 #[derive(Default)]
 pub(crate) struct RunGlyphScratch {
     faces: Vec<RunFace>,
     glyphs: Vec<RunGlyph>,
-    last_faces: Rc<[RunFace]>,
+    recent_faces: Vec<Rc<[RunFace]>>,
+    spare_glyphs: RcSlicePool<RunGlyph>,
+}
+
+impl RunGlyphScratch {
+    // The recent face list equal to the faces just collected, or a new one
+    // that joins the recent lists.
+    fn shared_faces(&mut self) -> Rc<[RunFace]> {
+        if let Some(faces) = self
+            .recent_faces
+            .iter()
+            .find(|faces| ***faces == *self.faces)
+        {
+            return Rc::clone(faces);
+        }
+        let faces: Rc<[RunFace]> = Rc::from(self.faces.as_slice());
+        if self.recent_faces.len() == RECENT_FACES {
+            self.recent_faces.remove(0);
+        }
+        self.recent_faces.push(Rc::clone(&faces));
+        faces
+    }
+
+    // Drops the glyph slices kept for later runs, and their room.
+    pub(crate) fn clear_spares(&mut self) {
+        self.spare_glyphs.clear();
+    }
 }
 
 impl RunGlyphs {
@@ -98,13 +130,16 @@ impl RunGlyphs {
             let glyph = RunGlyph::of(&placement, scratch.faces.len() - 1)?;
             scratch.glyphs.push(glyph);
         }
-        if *scratch.last_faces != *scratch.faces {
-            scratch.last_faces = Rc::from(scratch.faces.as_slice());
-        }
         Some(Self {
-            faces: Rc::clone(&scratch.last_faces),
-            glyphs: Rc::from(scratch.glyphs.as_slice()),
+            faces: scratch.shared_faces(),
+            glyphs: scratch.spare_glyphs.filled(&scratch.glyphs),
         })
+    }
+
+    // Gives this run's glyph slice to `scratch` for a later run of its
+    // length, when nothing else holds it.
+    pub(crate) fn give_back(self, scratch: &mut RunGlyphScratch) {
+        scratch.spare_glyphs.give(self.glyphs);
     }
 
     /// Each glyph's box and color.
