@@ -7,7 +7,7 @@ use std::{
 };
 
 use bytemuck::{Pod, Zeroable};
-use cranpose_core::collections::{bounded_lru::BoundedLruCache, map::HashMap};
+use cranpose_core::collections::map::HashMap;
 use cranpose_render_common::{geometry::blur_reach, graph::quad_bounds, scene_store::SceneVersion};
 use cranpose_ui_graphics::{BlendMode, ImageSampling, Rect, RenderHash, TileMode};
 use web_time::Instant;
@@ -3103,23 +3103,6 @@ impl PlannedRunDraw {
             indices: draw.indices(),
             records: draw.records.clone(),
         }
-    }
-}
-
-/// Drops the entries of `cache` no frame drew for more than `idle_frames`
-/// before `frame`: the least recently used first, which is the order they
-/// were last drawn in.
-fn evict_idle<K: Clone + Eq + Hash, V>(
-    cache: &mut BoundedLruCache<K, V>,
-    frame: u64,
-    idle_frames: u64,
-    last_frame: impl Fn(&V) -> u64,
-) {
-    while cache
-        .peek_lru()
-        .is_some_and(|(_, value)| frame.saturating_sub(last_frame(value)) > idle_frames)
-    {
-        cache.pop_lru();
     }
 }
 

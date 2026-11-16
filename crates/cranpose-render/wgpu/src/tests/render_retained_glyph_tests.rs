@@ -1,4 +1,4 @@
-use cranpose_core::NodeId;
+use cranpose_core::{NodeId, collections::bounded_lru::BoundedLruCache};
 use cranpose_render_common::{
     glyph_mask::{GlyphMaskKey, GlyphRaster},
     text_atlas::AtlasGlyph,
