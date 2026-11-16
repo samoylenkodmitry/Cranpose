@@ -1,12 +1,14 @@
-use super::{COPY_COVERAGE, Damage, DeviceRect, FrameDamages, FrameWindow, Held, Since};
+use super::{COPY_COVERAGE, Damage, DeviceRect, FrameDamages, FrameWindow, Held, OwnSake, Since};
 use crate::{collect::LayerScene, draw_pass::op_draw_bounds};
 
-/// The frames drawn into presentable images that come cleared. From the
-/// first frame that changes a small part of a page whose draws cover the
-/// window more than twice, the composition target keeps the frame, draws
-/// only what changes, and is copied whole into each image; the first frame
-/// that changes most of the window draws straight into its image again and
-/// lets the target go.
+// The frames drawn into presentable images whose pixels the renderer does
+// not know: images that come cleared, and the images a swapchain hands out
+// while one may come holding no frame. From the first frame of a page whose
+// draws cover the window more than twice, and from the first frame that
+// changes a small part of such a page, the composition target keeps the
+// frame, draws only what changes, and is copied whole into each image; the
+// first frame that changes most of the window draws straight into its image
+// again and lets the target go.
 #[derive(Default)]
 pub(crate) struct ClearedImages {
     /// The frame drawn straight into an image last.
@@ -24,8 +26,7 @@ impl ClearedImages {
         frame: &FrameWindow<'_>,
     ) -> (Since, bool) {
         let since = self.copied_damage(damages, self.kept, frame);
-        let keeps = matches!(since.damage, Damage::Part(_));
-        (since, keeps)
+        (since, keeps_copy(since, frame))
     }
 
     /// What `frame`, drawn into the composition target that keeps the frame
@@ -38,14 +39,7 @@ impl ClearedImages {
         kept: Option<Held>,
         frame: &FrameWindow<'_>,
     ) -> Since {
-        let since = damages.since(kept, frame);
-        match since.damage {
-            Damage::Part(_) if frame.packet.culled.is_none() && covers_less(frame) => Since {
-                damage: Damage::Full,
-                ..since
-            },
-            _ => since,
-        }
+        whole_when_lighter(damages.since(kept, frame), frame)
     }
 
     /// Hands the frame just copied into the composition target to the
@@ -61,6 +55,34 @@ impl ClearedImages {
     pub(crate) fn take_back(&mut self, target: &mut Option<Held>) {
         self.kept = target.take();
         self.copied = false;
+    }
+}
+
+// `since`, or the whole window for a frame whose draws cover less than
+// COPY_COVERAGE windows: it costs less drawn whole than copied, unless its
+// packet holds the draws of a part of the window only.
+pub(crate) fn whole_when_lighter(since: Since, frame: &FrameWindow<'_>) -> Since {
+    match since.damage {
+        Damage::Part(_) if frame.packet.culled.is_none() && covers_less(frame) => Since {
+            damage: Damage::Full,
+            ..since
+        },
+        _ => since,
+    }
+}
+
+// Whether the composition target keeps a copy of `frame`, drawn whole
+// straight into an image whose pixels the renderer does not know, for such
+// images after it, the frame changing `since` against the frame before, as
+// `whole_when_lighter` has it: it changes a small part of a page that costs
+// more drawn whole than copied, or it is the first frame of such a page. A
+// start draws its first frame whole once and copies it into the images that
+// follow, where each image would otherwise take the whole window again.
+pub(crate) fn keeps_copy(since: Since, frame: &FrameWindow<'_>) -> bool {
+    match since.damage {
+        Damage::Part(_) => true,
+        Damage::Full => since.own_sake == Some(OwnSake::NoFrame) && !covers_less(frame),
+        Damage::Skipped => false,
     }
 }
 

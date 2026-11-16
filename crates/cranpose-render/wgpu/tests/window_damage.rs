@@ -157,19 +157,20 @@ const SPOTS: [[f32; 4]; 10] = [
 // with nothing to draw over.
 const START_FRAMES: u32 = 1;
 
-// The frames a swapchain draws whole before one draws a part: one into
-// each of its images, which first hold no frame.
+// The most frames a swapchain draws whole before one draws a part: one into
+// each of its images, which first hold no frame, for a page that costs less
+// drawn whole than copied. A heavier page draws the first frame whole and
+// copies it into the images that follow.
 const SWAPCHAIN_START_FRAMES: u32 = SWAPCHAIN_IMAGES as u32;
 
-/// The frames that change a small part of the window before the renderer
-/// keeps a copy of the frame for images that come cleared: the first, which
-/// it copies.
+// The frames that change a small part of the window, after the renderer let
+// its copy go, before it keeps a copy of the frame for images that come
+// cleared again: the first, which it copies.
 const COPY_AFTER: u32 = 1;
 
-/// The frames images that come cleared take whole before one takes a part:
-/// the first, which the next compares with, then the first small change,
-/// which the renderer copies.
-const CLEARED_START_FRAMES: u32 = START_FRAMES + COPY_AFTER;
+// The frames images that come cleared take whole before one takes a part:
+// the first, which the renderer copies.
+const CLEARED_START_FRAMES: u32 = START_FRAMES;
 
 // The steps `Scene::MovedThenStill` moves the page: enough frames in a row
 // that change most of the window for the back-off to skip 64 frames, on a
@@ -768,6 +769,11 @@ struct Harness {
     /// The frame, by its place among the frames drawn into the swapchain,
     /// whose image comes without the frame it held.
     unkept: Option<usize>,
+    // The images the swapchain hands out first, by index, before it hands
+    // them out in turn.
+    order: &'static [usize],
+    // By index, whether the swapchain handed the image out.
+    handed_out: [bool; SWAPCHAIN_IMAGES],
     direct: Image,
 }
 
@@ -820,6 +826,8 @@ impl Harness {
             swapchain,
             presented: 0,
             unkept: None,
+            order: &[],
+            handed_out: [false; SWAPCHAIN_IMAGES],
             direct,
         }
     }
@@ -849,9 +857,13 @@ impl Harness {
         let (kept, stats) = match self.keeper {
             Keeper::Composition => draw(&mut self.shell, &self.composed, Draw::Untracked),
             Keeper::Swapchain(_) => {
-                let index = self.presented % SWAPCHAIN_IMAGES;
-                let kept =
-                    self.presented >= SWAPCHAIN_IMAGES && self.unkept != Some(self.presented);
+                let index = self
+                    .order
+                    .get(self.presented)
+                    .copied()
+                    .unwrap_or(self.presented % SWAPCHAIN_IMAGES);
+                let kept = self.handed_out[index] && self.unkept != Some(self.presented);
+                self.handed_out[index] = true;
                 self.presented += 1;
                 let image = Draw::Swapchain(index as u32, kept);
                 draw(&mut self.shell, &self.swapchain[index], image)
@@ -1616,10 +1628,9 @@ fn keep_a_copy(harness: &mut Harness) -> u64 {
         let stats = frame.stats;
         let label = format!("still frame {index}: {stats:?}");
         support::assert_same_bytes(&label, WIDTH, &frame.kept, &frame.direct);
-        assert_eq!(
+        assert!(
             copies_a_window(&stats),
-            index + 1 >= CLEARED_START_FRAMES,
-            "{label}: the copy starts after {COPY_AFTER} small changes"
+            "{label}: the copy starts with the first frame"
         );
         pool = stats.offscreen_pool_bytes;
     }
@@ -1701,29 +1712,86 @@ fn a_light_page_draws_whole_into_images_that_come_cleared() {
     );
 }
 
-// The frames of `keeper`'s first `frames` steps that draw the whole window,
-// each step changing a small part of the page.
-fn whole_frames_at_a_start(keeper: Keeper, frames: u32) -> Option<u32> {
+// How the first frames of a start draw: those that draw the whole window,
+// and whether the last one copied a window.
+struct Start {
+    drawn_whole: u32,
+    last_copies: bool,
+}
+
+// The first `frames` steps of `scene` over `keeper`, each changing a small
+// part of the page, the swapchain handing out the images of `order` first.
+fn start(scene: Scene, keeper: Keeper, order: &'static [usize], frames: u32) -> Option<Start> {
     let (_lock, renderer) = renderer()?;
-    let mut harness = Harness::new(renderer, Scene::Shape, 1.0, keeper);
+    let mut harness = Harness::new(renderer, scene, 1.0, keeper);
+    harness.order = order;
     let whole = u64::from(WIDTH * HEIGHT);
-    let mut drawn_whole = 0;
+    let mut start = Start {
+        drawn_whole: 0,
+        last_copies: false,
+    };
     for step in 0..frames {
         let frame = harness.frame(step);
         let label = format!("step {step}: {:?}", frame.stats);
         support::assert_same_bytes(&label, WIDTH, &frame.kept, &frame.direct);
-        drawn_whole += u32::from(frame.stats.repainted_pixels == whole);
+        start.drawn_whole += u32::from(frame.stats.repainted_pixels == whole);
+        start.last_copies = copies_a_window(&frame.stats);
     }
-    Some(drawn_whole)
+    Some(start)
 }
 
-// A window draws whole once into each image of its swapchain, as each
-// arrives holding no frame; every frame after draws what it changes.
+// A page that costs more drawn whole than copied draws its first frame
+// whole and copies it into the swapchain images that arrive holding no
+// frame; once every image holds a frame, frames draw what they change
+// straight into their images and the copy goes.
 #[test]
-fn a_start_draws_each_swapchain_image_whole_once() {
+fn a_start_draws_a_heavy_page_whole_once_into_a_swapchain() {
     let frames = 4 * SWAPCHAIN_START_FRAMES;
-    if let Some(drawn_whole) = whole_frames_at_a_start(Keeper::Swapchain(DIRECT), frames) {
-        assert_eq!(drawn_whole, SWAPCHAIN_START_FRAMES);
+    if let Some(start) = start(Scene::Shape, Keeper::Swapchain(DIRECT), &[], frames) {
+        assert_eq!(start.drawn_whole, START_FRAMES);
+        assert!(!start.last_copies, "the copy goes");
+    }
+}
+
+// A page that costs less drawn whole than copied draws whole once into
+// each image of its swapchain, as each arrives holding no frame, and keeps
+// no copy.
+#[test]
+fn a_start_draws_a_light_page_whole_into_each_swapchain_image() {
+    let frames = 4 * SWAPCHAIN_START_FRAMES;
+    if let Some(start) = start(Scene::BareSpinner, Keeper::Swapchain(DIRECT), &[], frames) {
+        assert_eq!(start.drawn_whole, SWAPCHAIN_START_FRAMES);
+        assert!(!start.last_copies);
+    }
+}
+
+// A swapchain that hands an image out again before it hands out its last
+// one, as a Metal layer that makes its drawables as frames need them does,
+// still copies the frame into the last one.
+#[test]
+fn a_swapchain_that_hands_out_its_last_image_late_takes_the_copy() {
+    let frames = 4 * SWAPCHAIN_START_FRAMES;
+    if let Some(start) = start(
+        Scene::Shape,
+        Keeper::Swapchain(DIRECT),
+        &[0, 1, 0, 2],
+        frames,
+    ) {
+        assert_eq!(start.drawn_whole, START_FRAMES);
+        assert!(!start.last_copies, "the copy goes");
+    }
+}
+
+// A swapchain that never hands out one of its images lets the copy go
+// after as many frames as it holds images: frames then draw what they
+// change straight into their images.
+#[test]
+fn a_swapchain_that_never_hands_out_an_image_lets_the_copy_go() {
+    const FRAMES: u32 = 12;
+    const TWO_IMAGES: [usize; FRAMES as usize] = [0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1];
+    if let Some(start) = start(Scene::Shape, Keeper::Swapchain(DIRECT), &TWO_IMAGES, FRAMES) {
+        assert_eq!(start.drawn_whole, START_FRAMES);
+        assert!(!start.last_copies, "the copy goes");
     }
 }
 
@@ -1731,7 +1799,11 @@ fn a_start_draws_each_swapchain_image_whole_once() {
 // over; every frame after draws what it changes.
 #[test]
 fn a_start_draws_a_kept_target_whole_once() {
-    if let Some(drawn_whole) = whole_frames_at_a_start(Keeper::Composition, 8) {
+    if let Some(Start {
+        drawn_whole,
+        last_copies: _,
+    }) = start(Scene::Shape, Keeper::Composition, &[], 8)
+    {
         assert_eq!(drawn_whole, START_FRAMES);
     }
 }
