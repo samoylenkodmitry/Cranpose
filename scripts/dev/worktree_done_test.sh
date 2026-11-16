@@ -90,6 +90,32 @@ kill "$sleeper" 2>/dev/null || true
 wait "$sleeper" 2>/dev/null || true
 sleeper=""
 
+wt="$(new_worktree named)"
+set -m
+(cd "$root" && exec tail -f "$wt/seed.txt") &
+sleeper=$!
+set +m
+sleep 1
+check "a worktree a live process names is refused" "$(status_of "$DONE" "$wt")" "1"
+kill "$sleeper" 2>/dev/null || true
+wait "$sleeper" 2>/dev/null || true
+sleeper=""
+
+wt="$(new_worktree short)"
+longer="$(new_worktree short-web)"
+set -m
+(cd "$longer" && exec tail -f "$longer/seed.txt") &
+sleeper=$!
+set +m
+sleep 1
+check "a process of a sibling whose name extends the path does not block it" \
+    "$(status_of "$DONE" "$wt")" "0"
+check "the shorter-named worktree is gone" "$(present "$wt")" "gone"
+check "the longer-named sibling survives" "$(present "$longer")" "present"
+kill "$sleeper" 2>/dev/null || true
+wait "$sleeper" 2>/dev/null || true
+sleeper=""
+
 wt="$(new_worktree dry)"
 check "a dry run succeeds" "$(status_of "$DONE" --dry-run "$wt")" "0"
 check "a dry run removes nothing" "$(present "$wt")" "present"
