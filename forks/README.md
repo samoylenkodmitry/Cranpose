@@ -31,10 +31,11 @@ without the branches their constants decide, the GL program status read
 only on failure, the GLSL templates, the GL link reads, the WebGL
 extensions, the GL varying minimum, the presentable image identities and
 the WebGL frames drawn into the canvas below. `cranpose-wgpu-core` is at
-30.0.24 to require those, to make
+30.0.25 to require those, to make
 template modules, to configure a surface while another thread submits, to
-let Vulkan pipelines drop their shader modules and to hand presented
-images back as they presented. `cranpose-wgpu` is at 30.0.28 for
+let Vulkan pipelines drop their shader modules, to hand presented
+images back as they presented and to encode a buffer copy without a heap
+list. `cranpose-wgpu` is at 30.0.29 for
 the background compiles, the pipeline readiness and the kept swapchain
 images below and to require them.
 
@@ -509,6 +510,15 @@ yet.
 On a Mate 20 X (Mali-G76, 4 images, FIFO) every frame of a probe that drew
 a part of the window into a kept image read back equal to the frame drawn
 whole (36 of 36).
+
+### A buffer copy encodes its barriers without a heap list
+
+`copy_buffer_to_buffer` collected its source and destination barriers,
+at most two, into a `Vec` for each copy it encoded. A copy now keeps them
+in an `ArrayVec` of two. Cranpose's uploads encode one copy for each
+changed piece of shape data: about 325 copies in each steady frame of the
+gauntlet, and as many heap allocations, now gone. Every backend gets the
+same barriers.
 
 ### Update the fork
 
