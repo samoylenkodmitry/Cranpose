@@ -11,17 +11,26 @@ use khronos_egl as egl;
 use crate::support::{self, LockedRenderer};
 
 const SIZE: u32 = 64;
+// Mesa's display without a window system, which a test box without a display server has
+const PLATFORM_SURFACELESS_MESA: egl::Enum = 0x31DD;
 
 // An EGL context of the test's own, current on the test's thread.
 struct HostContext {
-    egl: egl::DynamicInstance<egl::EGL1_4>,
+    egl: egl::DynamicInstance<egl::EGL1_5>,
 }
 
 impl HostContext {
     fn make_current() -> Result<Self, String> {
-        let egl = unsafe { egl::DynamicInstance::<egl::EGL1_4>::load_required() }
+        let egl = unsafe { egl::DynamicInstance::<egl::EGL1_5>::load_required() }
             .map_err(|error| format!("libEGL: {error}"))?;
-        let display = unsafe { egl.get_display(egl::DEFAULT_DISPLAY) }.ok_or("no EGL display")?;
+        let display = unsafe {
+            egl.get_platform_display(
+                PLATFORM_SURFACELESS_MESA,
+                egl::DEFAULT_DISPLAY,
+                &[egl::ATTRIB_NONE],
+            )
+        }
+        .map_err(|error| format!("EGL display: {error}"))?;
         egl.initialize(display)
             .map_err(|error| format!("EGL: {error}"))?;
         egl.bind_api(egl::OPENGL_ES_API)
