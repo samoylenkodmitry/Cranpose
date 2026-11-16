@@ -1,6 +1,7 @@
 use super::*;
 use crate::{
-    DrawScope, DrawScopeDefault, DrawTextStyle, ImageBitmap, ImageSampling, Size, TextPrimitive,
+    DrawPlacement, DrawScope, DrawScopeDefault, DrawTextStyle, ImageBitmap, ImageSampling, Size,
+    TextPrimitive,
 };
 
 fn rect(x: f32, y: f32, width: f32, height: f32) -> Rect {
