@@ -1,4 +1,4 @@
-use super::{COPY_COVERAGE, Damage, DeviceRect, FrameDamages, FrameWindow, Held, OwnSake, Since};
+use super::{COPY_COVERAGE, Damage, DeviceRect, FrameDamages, FrameWindow, Held, Since};
 use crate::{collect::LayerScene, draw_pass::op_draw_bounds};
 
 // The frames drawn into presentable images whose pixels the renderer does
@@ -43,8 +43,8 @@ impl ClearedImages {
     }
 
     /// Hands the frame just copied into the composition target to the
-    /// target's `kept`. Over a frame drawn whole with a stand-in, the next
-    /// frame draws whole and the target goes.
+    /// target's `kept`. Over a frame drawn whole with a stand-in, the frame
+    /// after the next landing draws whole into the target.
     pub(crate) fn hand_over(&mut self, target: &mut Option<Held>) {
         *target = self.kept.take();
         self.copied = true;
@@ -71,17 +71,18 @@ pub(crate) fn whole_when_lighter(since: Since, frame: &FrameWindow<'_>) -> Since
     }
 }
 
-// Whether the composition target keeps a copy of `frame`, drawn whole
-// straight into an image whose pixels the renderer does not know, for such
-// images after it, the frame changing `since` against the frame before, as
-// `whole_when_lighter` has it: it changes a small part of a page that costs
-// more drawn whole than copied, or it is the first frame of such a page. A
-// start draws its first frame whole once and copies it into the images that
-// follow, where each image would otherwise take the whole window again.
+// Whether the composition target keeps a copy of `frame` for images whose
+// pixels the renderer does not know, the frame changing `since` against the
+// frame before, as `whole_when_lighter` has it: it changes a small part of
+// a page that costs more drawn whole than copied, or it draws such a page
+// whole for its target's sake: as the first frame, or over stand-ins once a
+// pipeline landed. A start draws its first frame whole once and copies it
+// into the images that follow, where each image would otherwise take the
+// whole window again.
 pub(crate) fn keeps_copy(since: Since, frame: &FrameWindow<'_>) -> bool {
     match since.damage {
         Damage::Part(_) => true,
-        Damage::Full => since.own_sake == Some(OwnSake::NoFrame) && !covers_less(frame),
+        Damage::Full => since.own_sake.is_some() && !covers_less(frame),
         Damage::Skipped => false,
     }
 }

@@ -56,6 +56,9 @@ pub(super) struct FrameDamagePlan {
     pub(super) baseline: bool,
     // Why the frame draws whole for the target's sake.
     pub(super) own_sake: Option<OwnSake>,
+    // The parts of the target's frame drawn with stand-ins that the frame
+    // leaves as they are until a pipeline lands.
+    pub(super) stand_ins: Damage,
 }
 
 impl FrameDamagePlan {
@@ -69,6 +72,7 @@ impl FrameDamagePlan {
             held,
             baseline: since.baseline,
             own_sake: since.own_sake,
+            stand_ins: kept_stand_ins(since),
         }
     }
 
@@ -76,19 +80,38 @@ impl FrameDamagePlan {
     pub(super) fn whole(self) -> Self {
         Self {
             repaint: Repaint::Whole,
+            stand_ins: Damage::NONE,
             ..self
         }
     }
 
-    // The frame as its target holds it once drawn; while it may show
-    // `stand_ins`, with the parts it drew marked for the next frame to draw
-    // again, the whole window when it drew whole.
-    pub(super) fn held_with(self, stand_ins: bool) -> Held {
-        match self.repaint {
-            Repaint::Window(rects) if stand_ins => self.held.with_stand_ins(Damage::Part(rects)),
-            Repaint::Whole if stand_ins => self.held.with_stand_ins(Damage::Full),
-            _ => self.held,
+    // The same frame drawn over a swapchain image, which changes `over`
+    // there.
+    fn over(self, over: Since) -> Self {
+        Self {
+            repaint: over.damage.repaint(),
+            stand_ins: kept_stand_ins(over),
+            ..self
         }
+    }
+
+    // Whether the frame leaves parts of its target drawn with stand-ins.
+    pub(super) fn keeps_stand_ins(&self) -> bool {
+        !self.stand_ins.is_none()
+    }
+
+    // The frame as its target holds it once drawn: with the stand-ins it
+    // kept and, while it may show `stand_ins`, the parts it drew, the whole
+    // window when it drew whole.
+    pub(super) fn held_with(self, stand_ins: bool) -> Held {
+        let drawn = match self.repaint {
+            Repaint::Window(rects) if stand_ins => Damage::Part(rects),
+            Repaint::Whole if stand_ins => Damage::Full,
+            _ => Damage::NONE,
+        };
+        self.held
+            .with_stand_ins(self.stand_ins)
+            .with_stand_ins(drawn)
     }
 
     // Keeps the frame of the plan in its target as `held`, none when it did
@@ -148,6 +171,15 @@ impl FrameDamagePlan {
     }
 }
 
+// The stand-ins a frame that changes `since` keeps: none when it draws
+// whole.
+fn kept_stand_ins(since: Since) -> Damage {
+    match since.damage {
+        Damage::Part(_) => since.stand_ins,
+        Damage::Full | Damage::Skipped => Damage::NONE,
+    }
+}
+
 // Whether `plan` draws only where `packet` holds every draw.
 pub(super) fn admits(plan: Option<&FrameDamagePlan>, packet: &FramePacket) -> bool {
     packet
@@ -167,6 +199,9 @@ pub(super) fn count_damage(
         .set(plan.map_or(FrameDamage::Untracked, |plan| plan.damage.stats()));
     let repaint = plan.map_or(Repaint::Whole, |plan| plan.repaint);
     stats.repainted_pixels.set(repaint.pixels(viewport));
+    stats
+        .kept_stand_in_pixels
+        .set(plan.map_or(0, |plan| plan.stand_ins.repaint().pixels(viewport)));
     repaint
 }
 
@@ -268,7 +303,10 @@ impl GpuRenderer {
                 let damage =
                     self.cleared
                         .copied_damage(&self.frame_damages, composition.kept, &frame);
-                if matches!(damage.damage, Damage::Part(_)) {
+                // A culled packet holds the draws of a part of the window:
+                // one that needs the whole window goes back unchanged, and
+                // the whole packet decides.
+                if keeps_copy(damage, &frame) || packet.culled.is_some() {
                     let keeper = Keeper::Composition {
                         image: swapchain_image,
                     };
@@ -327,10 +365,9 @@ impl GpuRenderer {
                     let over = self
                         .swapchain
                         .changed_since(image, frame, &self.frame_damages);
-                    return Some(FrameDamagePlan {
-                        repaint: over.repaint(),
-                        ..FrameDamagePlan::new(damage, Keeper::Image(image), held)
-                    });
+                    return Some(
+                        FrameDamagePlan::new(damage, Keeper::Image(image), held).over(over),
+                    );
                 }
                 // An image that comes without a frame while more such
                 // images may follow takes the frame whole.
@@ -367,6 +404,7 @@ impl GpuRenderer {
             packet,
             viewport,
             setting: self.text.frame_setting(packet.clear, packet.debug_toggles),
+            landings: self.pipelines.landings(),
         }
     }
 
@@ -379,6 +417,9 @@ impl GpuRenderer {
         submitted: &Result<bool, String>,
     ) -> Option<HeldWindow> {
         let plan = plan?;
+        if plan.keeps_stand_ins() {
+            self.pipelines.await_landing_over_stand_ins();
+        }
         let drawn = match submitted {
             Ok(submitted) => *submitted || plan.repaint == Repaint::Nothing,
             Err(_) => false,

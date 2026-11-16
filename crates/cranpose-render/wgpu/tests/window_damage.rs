@@ -119,6 +119,9 @@ enum Scene {
     // from the first frame on: the window's first frames draw whole with
     // its placeholder.
     EarlyShader,
+    // A layer painted by a shader whose compile outlasts a few frames, at
+    // the spot from the first frame on.
+    SlowShader,
 }
 
 // The lazy list of `Scene::LazyLabel`, its padding, its rows' height and the
@@ -399,7 +402,11 @@ fn changing_box(scene: Scene, step: MutableState<u32>) -> Option<Modifier> {
         Scene::BlurredContent => spot().blur(Dp(3.0)),
         Scene::Shadow => shadowed(step),
         Scene::Appearing if step.get() % 2 == 1 => spot().background(Color(0.9, 0.2, 0.2, 1.0)),
-        Scene::PaintedLayer | Scene::ReplacingLayer | Scene::LateShader | Scene::EarlyShader => {
+        Scene::PaintedLayer
+        | Scene::ReplacingLayer
+        | Scene::LateShader
+        | Scene::EarlyShader
+        | Scene::SlowShader => {
             return empty_layer(scene, step);
         }
         Scene::Spinner | Scene::BareSpinner => arc_drawn_again(SPINNER, step, 12.0),
@@ -434,6 +441,32 @@ fn unseen_shader(name: &str) -> RenderEffect {
     }));
     RenderEffect::runtime_shader(shader)
 }
+
+// A shader no other test draws, painting its rect green, filled red while
+// it compiles: a long chain of steps, so its compile outlasts a few frames.
+// Its steps hold the process's id, so no driver cache holds it.
+fn slow_shader() -> RenderEffect {
+    let process = std::process::id();
+    let steps: String = (0..SLOW_SHADER_STEPS)
+        .map(|step| format!("v = fract(sin(v * {step}.{process} + input.uv.x) * 43758.5453);\n"))
+        .collect();
+    let mut shader = RuntimeShader::new(&format!(
+        "{RUNTIME_SHADER_PRELUDE_WGSL}
+         @fragment fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {{
+             var v = input.uv.y;
+             {steps}
+             return vec4<f32>(0.1, 0.8, min(v, 0.0) + input.uv.y, 1.0);
+         }}"
+    ));
+    shader.set_placeholder(Some(ShaderPlaceholder {
+        color: Color(1.0, 0.0, 0.0, 1.0),
+        shape: None,
+    }));
+    RenderEffect::runtime_shader(shader)
+}
+
+// The steps of the slow shader.
+const SLOW_SHADER_STEPS: u32 = 2000;
 
 #[composable]
 fn Changing(scene: Scene, step: MutableState<u32>) {
@@ -536,6 +569,10 @@ fn empty_layer(scene: Scene, step: MutableState<u32>) -> Option<Modifier> {
         Scene::LateShader => None,
         Scene::EarlyShader => Some(spot().graphics_layer(|| GraphicsLayer {
             render_effect: Some(unseen_shader("early")),
+            ..Default::default()
+        })),
+        Scene::SlowShader => Some(spot().graphics_layer(|| GraphicsLayer {
+            render_effect: Some(slow_shader()),
             ..Default::default()
         })),
         _ if step.get() % 2 == 1 => Some(spot().graphics_layer(|| GraphicsLayer {
@@ -1125,13 +1162,14 @@ fn frames_until_the_shader_is_drawn(
     );
 }
 
-// A window's first frames draw whole while a shader compiles, its
+// A window's first frame draws whole while a shader compiles, its
 // placeholder in its place, and each image keeps its frame with the whole
-// window marked: every frame over such an image draws whole until the
-// shader landed and the image drew it. Every frame equals the frame drawn
-// whole, and the images end holding the page with the shader drawn.
+// window marked: a frame over such an image draws what the page changes
+// until a pipeline lands, and the image draws whole once after the landing.
+// Every frame equals the frame drawn whole, and the images end holding the
+// page with the shader drawn.
 #[test]
-fn a_frame_drawn_whole_with_a_stand_in_is_drawn_whole_again_over_its_image() {
+fn a_frame_drawn_whole_with_a_stand_in_is_drawn_whole_again_over_its_image_after_a_landing() {
     let Some((_lock, renderer)) = support::headless_renderer_parts_compiling_in_background_for(
         wgpu::TextureFormat::Rgba8Unorm,
     )
@@ -1147,7 +1185,68 @@ fn a_frame_drawn_whole_with_a_stand_in_is_drawn_whole_again_over_its_image() {
         "the window's first frame draws whole with the placeholder: {:?}",
         first.stats
     );
-    frames_until_the_shader_is_drawn(&mut harness, 0, |_, _| {});
+    frames_until_the_shader_is_drawn(&mut harness, 0, |label, stats| {
+        assert!(
+            stats.kept_stand_in_pixels == 0 || stats.repainted_pixels < whole,
+            "{label}: a frame that keeps the stand-ins drew the whole window"
+        );
+    });
+}
+
+// A still page whose first frame draws a placeholder while a shader
+// compiles: the frames before the shader lands draw nothing, their image
+// still showing the placeholder, and the first frame after the landing
+// draws the window again with the shader. Each equals the frame drawn whole
+// once no stand-in shows.
+#[test]
+fn a_still_page_over_a_stand_in_draws_nothing_until_a_pipeline_lands() {
+    let Some((_lock, renderer)) = support::headless_renderer_parts_compiling_in_background_for(
+        wgpu::TextureFormat::Rgba8Unorm,
+    )
+    .map_err(|err| eprintln!("skipping (headless WGPU init failed): {err}"))
+    .ok() else {
+        return;
+    };
+    let mut harness = Harness::new(renderer, Scene::SlowShader, 1.0, Keeper::Composition);
+    let whole = u64::from(WIDTH * HEIGHT);
+    let first = harness.frame(0);
+    assert!(
+        first.stats.placeholder_draws > 0 && first.stats.repainted_pixels == whole,
+        "the first frame draws whole with the placeholder: {:?}",
+        first.stats
+    );
+    let mut kept = 0;
+    let mut settled = 0;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    for index in 0.. {
+        let frame = harness.frame(0);
+        let stats = frame.stats;
+        let label = format!("frame {index} after the placeholder: {stats:?}");
+        if stats.kept_stand_in_pixels > 0 {
+            assert_eq!(
+                stats.repainted_pixels, 0,
+                "{label}: drawn again before a landing"
+            );
+            kept += 1;
+        } else if support::pipelines_settled(&stats) {
+            support::assert_same_bytes(&label, WIDTH, &frame.kept, &frame.direct);
+            if settled > 0 {
+                assert_eq!(
+                    stats.repainted_pixels, 0,
+                    "{label}: drawn again after the landing"
+                );
+            }
+            settled += 1;
+        }
+        if settled == 3 {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "{label}: the shader never landed"
+        );
+    }
+    assert!(kept > 0, "no frame came before the shader landed");
 }
 
 // A still page whose first frames draw a stand-in while a shader compiles,

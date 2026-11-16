@@ -68,6 +68,14 @@ pub(crate) enum Damage {
 }
 
 impl Damage {
+    // No pixel.
+    pub(crate) const NONE: Self = Self::Part(DamageRects::EMPTY);
+
+    // Whether the damage holds no pixel.
+    pub(crate) fn is_none(&self) -> bool {
+        matches!(self, Self::Part(rects) if rects.is_empty())
+    }
+
     // The pixels either damage changes, in a window of `viewport`.
     pub(crate) fn union(self, other: Self, viewport: (u32, u32)) -> Self {
         match (self, other) {
@@ -154,20 +162,21 @@ pub(crate) struct DamageRects {
 
 impl Default for DamageRects {
     fn default() -> Self {
-        let none = DeviceRect {
-            x: 0.0,
-            y: 0.0,
-            width: 0.0,
-            height: 0.0,
-        };
-        Self {
-            rects: [none; MAX_DAMAGE_RECTS],
-            len: 0,
-        }
+        Self::EMPTY
     }
 }
 
 impl DamageRects {
+    const EMPTY: Self = Self {
+        rects: [DeviceRect {
+            x: 0.0,
+            y: 0.0,
+            width: 0.0,
+            height: 0.0,
+        }; MAX_DAMAGE_RECTS],
+        len: 0,
+    };
+
     pub(crate) fn as_slice(&self) -> &[DeviceRect] {
         &self.rects[..self.len]
     }
@@ -357,14 +366,20 @@ pub(crate) struct FrameWindow<'a> {
     /// What every pixel depends on besides the scene, hashed: the clear
     /// colour, the glyph atlas and the debug switches.
     pub(crate) setting: u64,
+    // How many times pipelines a draw may stand in for landed: a stand-in
+    // drawn at the same count draws the same pixels.
+    pub(crate) landings: u64,
 }
 
 impl Held {
-    // The frame held with `stand_ins` drawn with stand-ins, which the next
-    // frame drawn over it draws again: the whole window when it may show
-    // one anywhere.
+    // The frame held with `stand_ins` drawn with stand-ins besides the parts
+    // it holds already, which a frame drawn over it after a landing draws
+    // again: the whole window when it may show one anywhere.
     pub(crate) fn with_stand_ins(self, stand_ins: Damage) -> Self {
-        Self { stand_ins, ..self }
+        Self {
+            stand_ins: self.stand_ins.union(stand_ins, self.viewport),
+            ..self
+        }
     }
 
     // What a window whose one target holds this frame holds.
@@ -372,6 +387,7 @@ impl Held {
         HeldWindow {
             oldest: self.frame,
             stand_ins: self.stand_ins,
+            landings: Some(self.landings),
         }
     }
 }
@@ -383,7 +399,8 @@ impl FrameWindow<'_> {
             frame: self.packet.frame_id,
             setting: self.setting,
             viewport: self.viewport,
-            stand_ins: Damage::Part(DamageRects::default()),
+            landings: self.landings,
+            stand_ins: Damage::NONE,
         }
     }
 }
@@ -411,6 +428,8 @@ pub(crate) struct Held {
     frame: u64,
     setting: u64,
     viewport: (u32, u32),
+    // The landings counted when the frame was drawn.
+    landings: u64,
     // The parts drawn with stand-ins while pipelines compiled, or over kept
     // layers that may hold them; the whole window for a frame drawn whole.
     stand_ins: Damage,
@@ -425,6 +444,9 @@ pub(crate) struct Since {
     pub(crate) baseline: bool,
     // Why the frame draws whole for the target's sake, whatever it changes.
     pub(crate) own_sake: Option<OwnSake>,
+    // The parts of the target's frame drawn with stand-ins that the frame
+    // leaves as they are: no pipeline landed since that frame.
+    pub(crate) stand_ins: Damage,
 }
 
 // Why a frame draws the whole window for its target's sake.
@@ -460,15 +482,16 @@ impl FrameDamages {
         self.entries[Self::slot(frame)] = Some((frame, damage));
     }
 
-    /// What `frame` changes in a target that holds `held`: the damages of the
-    /// packets since the held one and its parts drawn with stand-ins; the
-    /// whole window when the target holds none, one of another setting or one
-    /// that may show a stand-in anywhere, or a damage since is not known.
+    /// What `frame` changes in a target that holds `held`: the damages since
+    /// the held one and, after a landing, its parts drawn with stand-ins; the
+    /// whole window when the target holds none, one of another setting, one
+    /// that may show a stand-in anywhere after a landing, or no known damage.
     pub(crate) fn since(&self, held: Option<Held>, frame: &FrameWindow<'_>) -> Since {
         let changed = |damage| Since {
             damage,
             baseline: false,
             own_sake: None,
+            stand_ins: Damage::NONE,
         };
         if self
             .noted(frame.packet.frame_id)
@@ -485,16 +508,23 @@ impl FrameDamages {
         let Some(held) = held else {
             return own_sake(OwnSake::NoFrame);
         };
-        let Damage::Part(stand_ins) = held.stand_ins else {
-            return own_sake(OwnSake::StandIns);
+        // A stand-in drawn again before a landing draws the same pixels: the
+        // frame keeps the held frame's stand-ins until one.
+        let (redrawn, kept) = match held.stand_ins {
+            _ if held.landings == frame.landings => (DamageRects::default(), held.stand_ins),
+            Damage::Part(stand_ins) => (stand_ins, Damage::NONE),
+            _ => return own_sake(OwnSake::StandIns),
         };
         if (held.setting, held.viewport) != (frame.setting, frame.viewport) {
             return changed(Damage::Full);
         }
         match self.union_back(frame.packet.frame_id, held.frame) {
             Ok(mut union) => {
-                union.add_all(&stand_ins);
-                changed(Damage::Part(union))
+                union.add_all(&redrawn);
+                Since {
+                    stand_ins: kept,
+                    ..changed(Damage::Part(union))
+                }
             }
             Err(no_part) => Since {
                 baseline: no_part == NoPart::Baseline,
