@@ -28,6 +28,8 @@ ignores:
   - crates/cranpose-platform/esp-idf/src/panel.rs
   - crates/cranpose-platform/esp-idf/src/small_alloc.rs
   - crates/cranpose-platform/esp-idf/src/touch.rs
+  - crates/cranpose-render/wgpu/src/host_gl.rs
+  - crates/cranpose-render/wgpu/tests/host_gl_context.rs
   - crates/cranpose-render/wgpu/src/pipeline_disk_cache.rs
   - crates/cranpose-render/wgpu/src/run_entry.rs
   - crates/cranpose-render/wgpu/src/stage_executor.rs

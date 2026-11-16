@@ -41,6 +41,11 @@ impl GpuTarget {
         pipeline_compilation: crate::pipeline_compiler::PipelineCompilation,
         on_device_lost: Option<crate::DeviceLostHandler>,
     ) -> crate::render::GpuRendererInit {
+        let pipeline_compilation = if crate::host_gl::on_host_gl_context(&self.device) {
+            crate::pipeline_compiler::PipelineCompilation::Inline
+        } else {
+            pipeline_compilation
+        };
         crate::render::GpuRendererInit {
             device_errors: crate::device_error_sentry::DeviceErrorSentry::watching(
                 &self.device,

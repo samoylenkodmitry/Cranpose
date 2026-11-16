@@ -150,6 +150,10 @@ naga = { version = "30.0.2", features = ["wgsl-in", "glsl-out"] }
 wgpu = { workspace = true, features = ["std", "gles", "wgsl"] }
 naga = { version = "30.0.2", features = ["wgsl-in", "glsl-out"] }
 
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+# The host GL context test makes an EGL context of its own.
+khronos-egl = { version = "6", features = ["dynamic"] }
+
 [build-dependencies]
 cranpose-gl-templates = { workspace = true, optional = true }
 cranpose-ui-graphics = { workspace = true, optional = true }

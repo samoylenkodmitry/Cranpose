@@ -27,6 +27,7 @@ mod frame_graph;
 mod frame_packet;
 mod frontend;
 mod gpu_target;
+mod host_gl;
 #[cfg(all(target_arch = "wasm32", feature = "gl-templates"))]
 pub use first_screen_glsl::{
     FirstScreenGlslError, first_screen_stages, list_first_screen_stages, use_first_screen_glsl,

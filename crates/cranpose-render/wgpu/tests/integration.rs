@@ -56,6 +56,8 @@ mod gpu_fence_uploads;
 mod gradient_blur_reference;
 mod held_images;
 mod held_shapes;
+#[cfg(all(target_os = "linux", feature = "backend-gles"))]
+mod host_gl_context;
 mod in_place_layers;
 mod initial_present_contract;
 mod instant_draws;

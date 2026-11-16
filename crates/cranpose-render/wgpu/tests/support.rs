@@ -131,6 +131,28 @@ impl LockedRenderer {
         Ok(with_app_context(headless_renderer_beside_locked()?, None))
     }
 
+    // A renderer on a device of `adapter`, compiling as an app's renderer does.
+    #[cfg_attr(
+        not(all(target_os = "linux", feature = "backend-gles")),
+        expect(
+            dead_code,
+            reason = "only the host GL context test builds on an adapter"
+        )
+    )]
+    pub(crate) fn on_adapter(adapter: &wgpu::Adapter) -> Result<Self, String> {
+        let (device, queue) =
+            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
+                .map_err(|error| format!("device: {error}"))?;
+        let mut renderer = WgpuRenderer::new(&[TEST_FONT]);
+        renderer.init_gpu(cranpose_render_wgpu::GpuTarget::on_adapter(
+            adapter,
+            std::sync::Arc::new(device),
+            std::sync::Arc::new(queue),
+            wgpu::TextureFormat::Bgra8UnormSrgb,
+        ));
+        Ok(with_app_context(renderer, None))
+    }
+
     pub(crate) fn compiling_in_background_beside_locked() -> Result<Self, String> {
         Ok(with_app_context(
             compiling_renderer(device::Pipelines::Background)?,
