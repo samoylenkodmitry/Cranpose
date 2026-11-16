@@ -831,7 +831,23 @@ fn release_kept_copy_when_idle(app: &RefCell<AppShell<WgpuRenderer>>, schedule: 
     }
 }
 
+// Asks for the next frame: of the page's frame source when it set one, else of the window.
+//
+// A page sets `window.cranposeFrameSource` to an object with a `requestFrame(callback)`
+// function to drive frames itself. A WebXR page sets it while an immersive session runs: the
+// browser stops the window's frames then, and the session's frames follow the headset. A page
+// that removes its source must call the callback it holds, or ask the window for it, so the
+// app's next frame still comes.
 fn request_animation_frame(window: &web_sys::Window, f: &Closure<dyn FnMut()>) -> bool {
+    if let Some((source, request)) = page_frame_source(window) {
+        return match request.call1(&source, f.as_ref()) {
+            Ok(_) => true,
+            Err(error) => {
+                log::error!("cranposeFrameSource.requestFrame failed: {error:?}");
+                false
+            }
+        };
+    }
     match window.request_animation_frame(f.as_ref().unchecked_ref()) {
         Ok(_) => true,
         Err(error) => {
@@ -839,6 +855,16 @@ fn request_animation_frame(window: &web_sys::Window, f: &Closure<dyn FnMut()>) -
             false
         }
     }
+}
+
+fn page_frame_source(window: &web_sys::Window) -> Option<(JsValue, js_sys::Function)> {
+    let source = js_sys::Reflect::get(window, &JsValue::from_str("cranposeFrameSource")).ok()?;
+    if source.is_undefined() || source.is_null() {
+        return None;
+    }
+    let request = js_sys::Reflect::get(&source, &JsValue::from_str("requestFrame")).ok()?;
+    let request = request.dyn_into::<js_sys::Function>().ok()?;
+    Some((source, request))
 }
 
 /// The app's frame waker: a wake outside a frame asks the window for one; a

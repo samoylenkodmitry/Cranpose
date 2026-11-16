@@ -71,6 +71,7 @@ mod webview;
 mod window_snap;
 mod wsz;
 mod xkcd;
+pub mod xr;
 
 pub use chrome_tabs::chrome_tabs_app;
 use controls_ui::ControlsUiTab;
@@ -497,6 +498,10 @@ fn DemoApp(active_tab: MutableState<DemoTab>, startup: StartupSelection) {
             .report_size_state(window_size),
         BoxSpec::default(),
         move || {
+            if xr::presenting() {
+                xr::ImmersiveView();
+                return;
+            }
             let is_compact = window_size.get().width < COMPACT_WINDOW_SIZE_CLASS_MAX_WIDTH;
             if active_tab.get() == DemoTab::Guide && !showing_source.get() && !picker_open.get() {
                 documentation::GuideTab(Some(AppHeaderState {

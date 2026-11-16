@@ -55,6 +55,35 @@ pub fn web_init() {
     log::info!("Cranpose demo starting in browser");
 }
 
+#[cfg(all(feature = "web", target_arch = "wasm32"))]
+#[wasm_bindgen]
+extern "C" {
+    #[wasm_bindgen(js_namespace = cranposeXr, js_name = enter)]
+    fn page_enter_xr();
+}
+
+// Called by the page's script: whether this browser can start an immersive WebXR session.
+#[cfg(all(feature = "web", target_arch = "wasm32"))]
+#[wasm_bindgen]
+pub fn xr_supported(supported: bool) {
+    desktop_demo::app::xr::set_immersive_entry(supported.then_some(page_enter_xr as fn()));
+}
+
+// Called by the page's script when an immersive session starts or ends.
+#[cfg(all(feature = "web", target_arch = "wasm32"))]
+#[wasm_bindgen]
+pub fn xr_presenting(on: bool) {
+    desktop_demo::app::xr::set_presenting(on);
+}
+
+// Called by the page's script before each XR frame with both eyes' poses and fields of view;
+// see `desktop_demo::app::xr::set_views`.
+#[cfg(all(feature = "web", target_arch = "wasm32"))]
+#[wasm_bindgen]
+pub fn xr_views(data: &[f32]) {
+    desktop_demo::app::xr::set_views(data);
+}
+
 /// Every page the demo can start on, as URL queries, for the browser robots.
 #[cfg(all(feature = "web", target_arch = "wasm32"))]
 #[wasm_bindgen]
