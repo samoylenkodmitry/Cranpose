@@ -16,7 +16,7 @@ mod captures;
 pub(crate) use captures::{Capture, collect as collect_captures, widen};
 #[path = "window_damage/cleared_images.rs"]
 mod cleared_images;
-pub(crate) use cleared_images::ClearedImages;
+pub(crate) use cleared_images::{ClearedImages, keeps_copy, whole_when_lighter};
 #[path = "window_damage/swapchain_history.rs"]
 mod swapchain_history;
 pub(crate) use swapchain_history::SwapchainHistory;

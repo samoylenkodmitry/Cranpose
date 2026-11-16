@@ -7,7 +7,7 @@ use super::{FrameOutput, FrameRoot, GpuRenderer, OutputMode, surface_is_direct_r
 use crate::{
     frame::{
         ClearedImages, Damage, FrameWindow, Held, ImageContent, OwnSake, PresentedImage, Repaint,
-        Since, SwapchainHistory,
+        Since, SwapchainHistory, keeps_copy, whole_when_lighter,
     },
     frame_packet::{FramePacket, HeldWindow},
     gpu_stats::{FrameDamage, FrameStats},
@@ -26,13 +26,20 @@ pub(super) struct Keepers<'a> {
 /// The kept frame a frame's damage is measured against.
 #[derive(Clone, Copy)]
 pub(super) enum Keeper {
-    /// The renderer's composition target.
-    Composition,
+    // The renderer's composition target, copied whole into `image` when it
+    // takes the frame for a swapchain image.
+    Composition {
+        image: Option<PresentedImage>,
+    },
     /// A swapchain image.
     Image(PresentedImage),
-    /// The frame drawn last into an image that comes cleared; `keeping`
-    /// when the composition target takes a copy of this frame to keep.
-    Cleared { keeping: bool },
+    // The frame drawn last into an image whose pixels the renderer does not
+    // know: one that comes cleared, or `image` of a swapchain; `keeping`
+    // when the composition target takes a copy of this frame to keep.
+    Cleared {
+        keeping: bool,
+        image: Option<PresentedImage>,
+    },
 }
 
 /// What a frame changes against the frame its target kept, what it draws
@@ -52,6 +59,27 @@ pub(super) struct FrameDamagePlan {
 }
 
 impl FrameDamagePlan {
+    // A frame that changes `since` in the target `keeper` names, which
+    // holds `held` once the frame is drawn: it draws what it changes.
+    pub(super) fn new(since: Since, keeper: Keeper, held: Held) -> Self {
+        Self {
+            damage: since.damage,
+            repaint: since.damage.repaint(),
+            keeper,
+            held,
+            baseline: since.baseline,
+            own_sake: since.own_sake,
+        }
+    }
+
+    // The same frame drawn whole, whatever it changes.
+    pub(super) fn whole(self) -> Self {
+        Self {
+            repaint: Repaint::Whole,
+            ..self
+        }
+    }
+
     // The frame as its target holds it once drawn; while it may show
     // `stand_ins`, with the parts it drew marked for the next frame to draw
     // again, the whole window when it drew whole.
@@ -73,24 +101,39 @@ impl FrameDamagePlan {
             swapchain,
             cleared,
         } = keepers;
-        match self.keeper {
-            Keeper::Composition => {
-                let kept = composition?;
-                *kept = held;
-                held.map(Held::window)
-            }
+        let (window, image) = match self.keeper {
             Keeper::Image(image) => {
                 swapchain.record(image, held);
-                swapchain.held()
+                return swapchain.held();
             }
-            Keeper::Cleared { keeping } => {
+            Keeper::Composition { image } => {
+                let window = composition.and_then(|kept| {
+                    *kept = held;
+                    held.map(Held::window)
+                });
+                (window, image)
+            }
+            Keeper::Cleared { keeping, image } => {
                 cleared.kept = held;
-                let kept = composition?;
-                if keeping {
-                    cleared.hand_over(kept);
-                }
-                cleared.copied.then_some(*kept).flatten().map(Held::window)
+                let window = composition.and_then(|kept| {
+                    if keeping {
+                        cleared.hand_over(kept);
+                    }
+                    cleared.copied.then_some(*kept).flatten().map(Held::window)
+                });
+                (window, image)
             }
+        };
+        let Some(image) = image else {
+            return window;
+        };
+        swapchain.record(image, held);
+        // Once no image can come holding no frame, the next frame draws
+        // straight into its image, over the oldest frame they hold.
+        if swapchain.may_hand_out_unknown() {
+            window
+        } else {
+            swapchain.held()
         }
     }
 
@@ -132,15 +175,20 @@ pub(super) fn count_damage(
     reason = "the window frame plan in damage_plan"
 )]
 impl GpuRenderer {
-    /// Where the frame of `packet` renders: straight into an image that can
-    /// take it, unless the image comes cleared and the composition target
-    /// keeps the frame for it; else into the composition target.
+    // Where the frame of `packet` renders, into `image` of the surface of
+    // `surface_epoch`: straight into an image that can take it, unless the
+    // image's pixels may not be known to the renderer and the composition
+    // target keeps the frame for it; else into the composition target.
     pub(super) fn frame_root(
         &mut self,
         output: FrameOutput<'_>,
         viewport: (u32, u32),
         packet: &FramePacket,
+        surface_epoch: u64,
     ) -> FrameRoot {
+        if let ImageContent::Numbered(_) = output.image {
+            self.swapchain.begin(surface_epoch);
+        }
         if let (OutputMode::Display, Some(view), Some(texture)) =
             (output.mode, output.view, output.texture)
             && surface_is_direct_root(
@@ -151,11 +199,18 @@ impl GpuRenderer {
             )
         {
             let image = Rc::new(OffscreenTarget::from_surface(texture.clone(), view.clone()));
-            if output.image == ImageContent::Cleared && self.cleared.copied {
-                return FrameRoot::Composition {
-                    composition: self.take_composition_target(viewport.0, viewport.1),
-                    cleared: Some(image),
-                };
+            if self.cleared.copied {
+                if self.copy_serves(output.image) {
+                    return FrameRoot::Composition {
+                        composition: self.take_composition_target(viewport.0, viewport.1),
+                        cleared: Some(image),
+                    };
+                }
+                // Every image of the swapchain holds a frame it follows:
+                // frames draw straight into their images again.
+                if matches!(output.image, ImageContent::Numbered(_)) {
+                    self.release_kept_copy();
+                }
             }
             return FrameRoot::Surface { image, keep: None };
         }
@@ -165,29 +220,39 @@ impl GpuRenderer {
         }
     }
 
-    /// What `packet` changes against the frame `frame_root` kept: a frame
-    /// displayed through the composition target, or into a swapchain `image`
-    /// that holds an earlier frame, draws only that, while a screenshot is
-    /// drawn whole and so is a frame into any other presentable image. An
-    /// image that comes cleared takes the frame from the composition target
-    /// while the frames change a small part of a heavy window.
+    // Whether a frame into an image of `content` takes the frame from the
+    // composition target's copy while the target keeps one: an image that
+    // comes cleared, or any image of a swapchain that may still hand out
+    // one holding no frame, so the copy stays the frame presented last.
+    fn copy_serves(&self, content: ImageContent) -> bool {
+        match content {
+            ImageContent::Cleared => true,
+            ImageContent::Numbered(_) => self.swapchain.may_hand_out_unknown(),
+            ImageContent::Untracked => false,
+        }
+    }
+
+    // What `packet` changes against the frame `frame_root` kept: a frame
+    // displayed through the composition target, or into a swapchain `image`
+    // that holds an earlier frame, draws only that, while a screenshot is
+    // drawn whole and so is a frame into any other presentable image. An
+    // image whose pixels the renderer does not know, one that comes cleared
+    // or one a swapchain hands out before it holds a frame, takes the frame
+    // from the composition target while the frames change a small part of a
+    // heavy window.
     pub(super) fn damage_of(
         &mut self,
         packet: &FramePacket,
         frame_root: &mut FrameRoot,
         output_mode: OutputMode,
         viewport: (u32, u32),
-        (surface_epoch, image): (u64, ImageContent),
+        image: ImageContent,
     ) -> Option<FrameDamagePlan> {
         let frame = self.frame_window(packet, viewport);
         let held = frame.held();
-        let plan = |since: Since, keeper| FrameDamagePlan {
-            damage: since.damage,
-            repaint: since.damage.repaint(),
-            keeper,
-            held,
-            baseline: since.baseline,
-            own_sake: since.own_sake,
+        let swapchain_image = match image {
+            ImageContent::Numbered(image) => Some(image),
+            ImageContent::Cleared | ImageContent::Untracked => None,
         };
         match frame_root {
             FrameRoot::Composition { composition, .. }
@@ -204,7 +269,10 @@ impl GpuRenderer {
                     self.cleared
                         .copied_damage(&self.frame_damages, composition.kept, &frame);
                 if matches!(damage.damage, Damage::Part(_)) {
-                    return Some(plan(damage, Keeper::Composition));
+                    let keeper = Keeper::Composition {
+                        image: swapchain_image,
+                    };
+                    return Some(FrameDamagePlan::new(damage, keeper, held));
                 }
                 // The frame changes most of the window, or costs less drawn
                 // whole than copied: it draws straight into the image, and
@@ -214,51 +282,68 @@ impl GpuRenderer {
                     image: Rc::clone(cleared),
                     keep: None,
                 };
-                Some(FrameDamagePlan {
-                    repaint: Repaint::Whole,
-                    ..plan(damage, Keeper::Cleared { keeping: false })
-                })
+                let keeper = Keeper::Cleared {
+                    keeping: false,
+                    image: swapchain_image,
+                };
+                Some(FrameDamagePlan::new(damage, keeper, held).whole())
             }
             FrameRoot::Composition { composition, .. } => {
                 // The swapchain image the frame is copied into holds a frame
                 // the history does not follow.
                 self.swapchain.forget();
                 let damage = self.frame_damages.since(composition.kept, &frame);
-                Some(plan(damage, Keeper::Composition))
+                let keeper = Keeper::Composition { image: None };
+                Some(FrameDamagePlan::new(damage, keeper, held))
             }
-            FrameRoot::Surface { image: target, .. } => {
-                let image = match image {
-                    ImageContent::Untracked => return None,
-                    ImageContent::Numbered(image) => image,
-                    ImageContent::Cleared => {
-                        let (damage, keeping) = self.cleared.damage(&self.frame_damages, &frame);
-                        if keeping {
-                            *frame_root = FrameRoot::Surface {
-                                image: Rc::clone(target),
-                                keep: Some(self.take_composition_target(viewport.0, viewport.1)),
-                            };
-                        }
-                        return Some(FrameDamagePlan {
-                            repaint: Repaint::Whole,
-                            ..plan(damage, Keeper::Cleared { keeping })
-                        });
-                    }
-                };
-                self.swapchain.begin(surface_epoch);
-                // The frame changes what the frame presented last showed by
-                // its damage; it draws over what its image holds by the
-                // damages since that image's frame, and whole into an image
-                // that comes without the frame it held.
-                let damage = self.swapchain.presented_damage(&frame, &self.frame_damages);
-                let held = self
-                    .swapchain
-                    .changed_since(image, &frame, &self.frame_damages);
-                Some(FrameDamagePlan {
-                    repaint: held.repaint(),
-                    ..plan(damage, Keeper::Image(image))
-                })
+            FrameRoot::Surface { keep, .. } => {
+                let plan = self.straight_damage(&frame, image)?;
+                if let Keeper::Cleared { keeping: true, .. } = plan.keeper {
+                    *keep = Some(self.take_composition_target(viewport.0, viewport.1));
+                }
+                Some(plan)
             }
         }
+    }
+
+    // What `frame`, drawn straight into `image`, changes there: over the
+    // frame a swapchain image holds, or whole into an image whose pixels the
+    // renderer does not know, which the composition target may keep a copy
+    // of for the images that follow.
+    fn straight_damage(
+        &mut self,
+        frame: &FrameWindow<'_>,
+        image: ImageContent,
+    ) -> Option<FrameDamagePlan> {
+        let held = frame.held();
+        let (since, keeping, image) = match image {
+            ImageContent::Untracked => return None,
+            ImageContent::Numbered(image) => {
+                // The frame changes what the frame presented last showed by
+                // its damage; it draws over what its image holds by the
+                // damages since that image's frame.
+                let damage = self.swapchain.presented_damage(frame, &self.frame_damages);
+                if !(self.swapchain.holds_none(image) && self.swapchain.may_hand_out_unknown()) {
+                    let over = self
+                        .swapchain
+                        .changed_since(image, frame, &self.frame_damages);
+                    return Some(FrameDamagePlan {
+                        repaint: over.repaint(),
+                        ..FrameDamagePlan::new(damage, Keeper::Image(image), held)
+                    });
+                }
+                // An image that comes without a frame while more such
+                // images may follow takes the frame whole.
+                let keeping = keeps_copy(whole_when_lighter(damage, frame), frame);
+                (damage, keeping, Some(image))
+            }
+            ImageContent::Cleared => {
+                let (damage, keeping) = self.cleared.damage(&self.frame_damages, frame);
+                (damage, keeping, None)
+            }
+        };
+        let keeper = Keeper::Cleared { keeping, image };
+        Some(FrameDamagePlan::new(since, keeper, held).whole())
     }
 
     // Whether `packet` draws what the surface shows, so it takes no image and

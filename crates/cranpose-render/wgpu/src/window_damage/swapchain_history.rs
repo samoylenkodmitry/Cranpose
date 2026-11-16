@@ -22,6 +22,8 @@ pub(crate) struct SwapchainHistory {
     // image may be one it never handed out, which holds no frame.
     images: u32,
     cycled: bool,
+    // The frames since the surface handed an image out a second time.
+    reused: u32,
     /// The frame presented last, when it went into an image the history
     /// follows and holds.
     presented: Option<Held>,
@@ -44,7 +46,36 @@ impl SwapchainHistory {
         self.held = [None; IMAGES];
         self.seen = 0;
         self.cycled = false;
+        self.reused = 0;
         self.presented = None;
+    }
+
+    // Whether the surface may still hand out an image that holds no frame
+    // the history follows: one it never handed out, or one that holds none.
+    // A surface may hand an image out again before it handed out all of its
+    // images, as a Metal layer that makes its drawables as frames need them
+    // does: the history waits for the rest for as many frames as the
+    // surface holds images.
+    pub(crate) fn may_hand_out_unknown(&self) -> bool {
+        let images = self.images.min(u8::BITS);
+        let unseen = images == 0 || self.seen.count_ones() < images;
+        let unknown = self
+            .held
+            .iter()
+            .enumerate()
+            .any(|(index, held)| self.seen & (1 << index) != 0 && held.is_none());
+        (unseen || unknown) && self.reused < images.max(1)
+    }
+
+    // Whether `image` comes holding no frame the history follows.
+    pub(crate) fn holds_none(&self, image: PresentedImage) -> bool {
+        !image.kept
+            || self
+                .held
+                .get(image.index as usize)
+                .copied()
+                .flatten()
+                .is_none()
     }
 
     // The oldest frame the images the surface handed out hold, and the
@@ -80,6 +111,9 @@ impl SwapchainHistory {
         if let Some(bit) = 1u8.checked_shl(image.index) {
             self.cycled |= self.seen & bit != 0;
             self.seen |= bit;
+        }
+        if self.cycled {
+            self.reused = self.reused.saturating_add(1);
         }
     }
 

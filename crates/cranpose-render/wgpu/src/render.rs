@@ -1599,13 +1599,13 @@ impl GpuRenderer {
         self.text.begin_text_glyph_run_frame();
         self.pass_scratch.begin_frame();
 
-        let mut frame_root = self.frame_root(output, (width, height), &packet);
+        let mut frame_root = self.frame_root(output, (width, height), &packet, surface_epoch);
         let plan = self.damage_of(
             &packet,
             &mut frame_root,
             output_mode,
             (width, height),
-            (surface_epoch, image),
+            image,
         );
         if !admits(plan.as_ref(), &packet) {
             if let Some(composition) = frame_root.into_composition() {
