@@ -112,6 +112,39 @@ fn large_recordings_preserve_every_primitive_and_retained_snapshot() {
 }
 
 #[test]
+fn a_recording_into_columns_their_reader_let_go_holds_only_what_it_records() {
+    let gradient = primitive(37);
+    let mut recording = CommandRecording::from_primitives((1..300).map(primitive));
+    let first_reader = recording.clone();
+    let mut recorder = recording.record();
+    recorder.push_primitive(gradient.clone());
+    recorder.finish();
+    let second_reader = recording.clone();
+    drop(first_reader);
+    let mut recorder = recording.record();
+    recorder.push_primitive(primitive(1));
+    recorder.push_primitive(primitive(2));
+    recorder.finish();
+    let expected = CommandRecording::from_primitives([primitive(1), primitive(2)]);
+    assert_eq!(recording.tables(), expected.tables());
+    assert_eq!(
+        recording.tables().fingerprint(),
+        expected.tables().fingerprint()
+    );
+    assert_eq!(recording.bounds(), expected.bounds());
+    assert_eq!(recording.summary(), expected.summary());
+    assert_eq!(recording.fingerprint(), expected.fingerprint());
+    assert_eq!(
+        recording.primitives_with_markers().collect::<Vec<_>>(),
+        vec![primitive(1), primitive(2)]
+    );
+    assert_eq!(
+        second_reader.primitives_with_markers().collect::<Vec<_>>(),
+        vec![gradient]
+    );
+}
+
+#[test]
 fn recording_again_reuses_the_shapes_once_no_reader_holds_them() {
     let original = primitive(9);
     let mut recording = CommandRecording::from_primitives([original.clone()]);
