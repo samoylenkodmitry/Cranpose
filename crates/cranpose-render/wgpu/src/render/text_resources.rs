@@ -57,6 +57,7 @@ pub(crate) struct TextResources {
     pub(super) scratch_glyph_entries: Vec<GlyphAtlasEntry>,
     pub(super) run_glyph_scratch: RunGlyphScratch,
     spare_entries: RcSlicePool<GlyphAtlasEntry>,
+    glyph_runs_collected: usize,
 }
 
 impl TextResources {
@@ -80,6 +81,7 @@ impl TextResources {
             scratch_glyph_entries: Vec::new(),
             run_glyph_scratch: RunGlyphScratch::default(),
             spare_entries: RcSlicePool::default(),
+            glyph_runs_collected: 0,
         }
     }
 
@@ -108,6 +110,12 @@ impl TextResources {
             (TEXT_GLYPH_RUN_IDLE_FRAMES, |run| run.last_frame.get()),
             |run| keep_slices(run, scratch, entries),
         );
+        // After a frame that collected no run the texts rest: the slices kept
+        // for new runs go with the runs that left.
+        if std::mem::take(&mut self.glyph_runs_collected) == 0 {
+            self.run_glyph_scratch.clear_spares();
+            self.spare_entries.clear();
+        }
         self.glyph_run_arena.begin_frame();
         let evacuating = self.glyph_run_arena.evacuating();
         if !evacuating.is_empty() {
@@ -235,6 +243,7 @@ impl TextResources {
         };
         let bounds = GlyphRunBounds::of(glyphs.iter());
         frame_stats.record_text_glyph_run_collected();
+        self.glyph_runs_collected += 1;
         // A run this frame drew stays: the cache grows rather than evict it.
         let cache = &mut self.glyph_run_cache;
         if cache.len() == cache.cap().get()

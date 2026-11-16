@@ -36,6 +36,11 @@ impl<T: Copy> RcSlicePool<T> {
         }
     }
 
+    // Drops the kept slices and the room they took.
+    pub(crate) fn clear(&mut self) {
+        self.by_length = Vec::new();
+    }
+
     // `items` in a kept slice of their length, or in a new one.
     pub(crate) fn filled(&mut self, items: &[T]) -> Rc<[T]> {
         if let Some(mut spare) = self.by_length.get_mut(items.len()).and_then(Vec::pop)

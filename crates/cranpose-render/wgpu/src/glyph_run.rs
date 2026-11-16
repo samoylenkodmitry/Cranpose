@@ -104,6 +104,11 @@ impl RunGlyphScratch {
         self.recent_faces.push(Rc::clone(&faces));
         faces
     }
+
+    // Drops the glyph slices kept for later runs, and their room.
+    pub(crate) fn clear_spares(&mut self) {
+        self.spare_glyphs.clear();
+    }
 }
 
 impl RunGlyphs {
