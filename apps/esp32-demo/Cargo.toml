@@ -51,7 +51,7 @@ esp-idf-svc = "0.53"
 log = "0.4"
 
 [build-dependencies]
-embuild = "0.33.5"
+embuild = "0.33.7"
 
 # build.rs passes on esp-idf-sys's cfgs; the QEMU board reads the chip from
 # `esp_idf_idf_target_esp32`.
