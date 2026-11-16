@@ -81,3 +81,34 @@ fn a_compact_glyph_takes_sixteen_bytes() {
     assert_eq!(size_of::<RunGlyph>(), 16);
     assert!(size_of::<AtlasGlyph>() >= 48);
 }
+
+#[test]
+fn a_run_built_in_a_given_back_slice_holds_its_own_glyphs() {
+    let mut scratch = RunGlyphScratch::default();
+    let old = [placement(40, 0, 7, INK), placement(41, 8, 7, INK)];
+    let new = [placement(50, 1, 7, INK), placement(51, 9, 7, INK)];
+    RunGlyphs::of(old.iter().copied(), &mut scratch)
+        .expect("compact")
+        .give_back(&mut scratch);
+    let run = RunGlyphs::of(new.iter().copied(), &mut scratch).expect("compact");
+    assert_eq!(run.iter().len(), new.len());
+    for (glyph, placement) in run.iter().zip(new) {
+        assert_eq!(fields(glyph), fields(placement));
+    }
+}
+
+#[test]
+fn a_run_a_reader_still_holds_keeps_its_glyphs_when_given_back() {
+    let mut scratch = RunGlyphScratch::default();
+    let old = [placement(40, 0, 7, INK), placement(41, 8, 7, INK)];
+    let new = [placement(50, 1, 7, INK), placement(51, 9, 7, INK)];
+    let held = RunGlyphs::of(old.iter().copied(), &mut scratch).expect("compact");
+    held.clone().give_back(&mut scratch);
+    let run = RunGlyphs::of(new.iter().copied(), &mut scratch).expect("compact");
+    for (glyph, placement) in held.iter().zip(old) {
+        assert_eq!(fields(glyph), fields(placement));
+    }
+    for (glyph, placement) in run.iter().zip(new) {
+        assert_eq!(fields(glyph), fields(placement));
+    }
+}

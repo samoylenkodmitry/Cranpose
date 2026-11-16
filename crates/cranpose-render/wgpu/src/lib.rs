@@ -67,6 +67,7 @@ mod present_observer;
 mod present_runtime;
 #[cfg(not(target_arch = "wasm32"))]
 mod present_thread;
+mod rc_slice_pool;
 mod record_columns;
 mod render;
 mod rrect_shadow;

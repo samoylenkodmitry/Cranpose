@@ -25,8 +25,11 @@ use super::{
 use crate::{density::Density, font_scale::FontScaleCurve, text_layout_result::TextLayoutResult};
 
 const TEXT_INTRINSICS_CACHE_CAPACITY: usize = 1024;
-// The most retired layouts and strings kept.
-const RETIRED_LAYOUTS: usize = 512;
+// The most retired layouts and strings kept. A layout a text gave up stays
+// in the scene until the next frame is drawn, so the next frame's texts take
+// the layouts retired the frame before: the pool holds two frames of
+// changed texts, the gauntlet's 480 a frame among them.
+const RETIRED_LAYOUTS: usize = 4096;
 const RETIRED_STRINGS: usize = 4096;
 const SCALE_DOWN_SEARCH_STEPS: usize = 14;
 

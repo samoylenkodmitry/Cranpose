@@ -39,6 +39,7 @@ use crate::{
     glyph_run::{RunGlyphScratch, RunGlyphs},
     glyph_run_arena::GlyphRunArena,
     gpu_stats::FrameStats,
+    rc_slice_pool::RcSlicePool,
     scene::TextDraw,
 };
 
@@ -55,6 +56,7 @@ pub(crate) struct TextResources {
     pub(super) scratch_glyph_run: Vec<AtlasGlyph>,
     pub(super) scratch_glyph_entries: Vec<GlyphAtlasEntry>,
     pub(super) run_glyph_scratch: RunGlyphScratch,
+    spare_entries: RcSlicePool<GlyphAtlasEntry>,
 }
 
 impl TextResources {
@@ -77,6 +79,7 @@ impl TextResources {
             scratch_glyph_run: Vec::new(),
             scratch_glyph_entries: Vec::new(),
             run_glyph_scratch: RunGlyphScratch::default(),
+            spare_entries: RcSlicePool::default(),
         }
     }
 
@@ -95,14 +98,15 @@ impl TextResources {
         evict_idle(
             &mut self.glyph_gpu_run_cache,
             frame,
-            TEXT_GLYPH_GPU_RUN_IDLE_FRAMES,
-            |run| run.last_frame.get(),
+            (TEXT_GLYPH_GPU_RUN_IDLE_FRAMES, |run| run.last_frame.get()),
+            drop,
         );
+        let (scratch, entries) = (&mut self.run_glyph_scratch, &mut self.spare_entries);
         evict_idle(
             &mut self.glyph_run_cache,
             frame,
-            TEXT_GLYPH_RUN_IDLE_FRAMES,
-            |run| run.last_frame.get(),
+            (TEXT_GLYPH_RUN_IDLE_FRAMES, |run| run.last_frame.get()),
+            |run| keep_slices(run, scratch, entries),
         );
         self.glyph_run_arena.begin_frame();
         let evacuating = self.glyph_run_arena.evacuating();
@@ -240,7 +244,7 @@ impl TextResources {
         {
             cache.set_cap(cache.cap().saturating_add(cache.len()));
         }
-        self.glyph_run_cache.put(
+        if let Some(evicted) = self.glyph_run_cache.put(
             run_key,
             CachedTextGlyphRun {
                 glyphs: glyphs.clone(),
@@ -249,7 +253,13 @@ impl TextResources {
                 atlas_generation: 0,
                 last_frame: Cell::new(frame),
             },
-        );
+        ) {
+            keep_slices(
+                evicted,
+                &mut self.run_glyph_scratch,
+                &mut self.spare_entries,
+            );
+        }
         Some(TextGlyphRunLookup {
             glyphs,
             bounds,
@@ -371,7 +381,7 @@ impl TextResources {
             }
         }
 
-        let entries: Rc<[GlyphAtlasEntry]> = Rc::from(entries.as_slice());
+        let entries = self.spare_entries.filled(entries);
         if let Some(cached) = self.glyph_run_cache.get_mut(&run_key) {
             cached.atlas_entries = Some(Rc::clone(&entries));
             cached.atlas_generation = atlas_generation;
@@ -794,19 +804,34 @@ impl TextResources {
     }
 }
 
-// Drops the entries of `cache` no frame drew for more than `idle_frames`
-// before `frame`: the least recently used first, which is the order they
-// were last drawn in.
+// Hands `evicted` the entries of `cache` no frame drew for more than
+// `idle_frames` before `frame`: the least recently used first, which is the
+// order they were last drawn in.
 fn evict_idle<K: Clone + Eq + Hash, V>(
     cache: &mut BoundedLruCache<K, V>,
     frame: u64,
-    idle_frames: u64,
-    last_frame: impl Fn(&V) -> u64,
+    (idle_frames, last_frame): (u64, impl Fn(&V) -> u64),
+    mut evicted: impl FnMut(V),
 ) {
     while cache
         .peek_lru()
         .is_some_and(|(_, value)| frame.saturating_sub(last_frame(value)) > idle_frames)
     {
-        cache.pop_lru();
+        if let Some((_, value)) = cache.pop_lru() {
+            evicted(value);
+        }
+    }
+}
+
+// Keeps the glyph and atlas entry slices of `run`, which the cache let go
+// of, for the next runs of their lengths.
+fn keep_slices(
+    run: CachedTextGlyphRun,
+    scratch: &mut RunGlyphScratch,
+    entries: &mut RcSlicePool<GlyphAtlasEntry>,
+) {
+    run.glyphs.give_back(scratch);
+    if let Some(atlas_entries) = run.atlas_entries {
+        entries.give(atlas_entries);
     }
 }
