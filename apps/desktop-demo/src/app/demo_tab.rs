@@ -38,6 +38,7 @@ pub enum DemoTab {
     Rotary,
     Wear,
     Room,
+    Xr,
     Backrooms,
     Tv,
     Music,
@@ -64,7 +65,7 @@ pub struct DemoTabInfo {
     pub startup_aliases: &'static [&'static str],
 }
 
-pub const DEMO_TAB_INFO: [DemoTabInfo; 38] = [
+pub const DEMO_TAB_INFO: [DemoTabInfo; 39] = [
     DemoTabInfo {
         tab: DemoTab::Guide,
         label: "Cranpose Guide",
@@ -311,6 +312,13 @@ pub const DEMO_TAB_INFO: [DemoTabInfo; 38] = [
         startup_aliases: &["spatial"],
     },
     DemoTabInfo {
+        tab: DemoTab::Xr,
+        label: "XR",
+        slug: "xr",
+        source_path: "apps/desktop-demo/src/app/xr/tab.rs",
+        startup_aliases: &["vr", "ar", "webxr"],
+    },
+    DemoTabInfo {
         tab: DemoTab::Backrooms,
         label: "Backrooms",
         slug: "backrooms",
@@ -398,11 +406,12 @@ pub fn startup_tab_from_args(args: impl IntoIterator<Item = String>) -> DemoTab 
         .unwrap_or(DEFAULT_INITIAL_TAB)
 }
 
-pub const DEMO_TABS: [DemoTab; 38] = [
+pub const DEMO_TABS: [DemoTab; 39] = [
     DemoTab::Guide,
     DemoTab::Performance,
     DemoTab::Liquid,
     DemoTab::Room,
+    DemoTab::Xr,
     DemoTab::Backrooms,
     DemoTab::Tv,
     DemoTab::Music,

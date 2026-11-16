@@ -831,16 +831,6 @@ fn release_kept_copy_when_idle(app: &RefCell<AppShell<WgpuRenderer>>, schedule: 
     }
 }
 
-fn request_animation_frame(window: &web_sys::Window, f: &Closure<dyn FnMut()>) -> bool {
-    match window.request_animation_frame(f.as_ref().unchecked_ref()) {
-        Ok(_) => true,
-        Err(error) => {
-            log::error!("requestAnimationFrame registration failed: {error:?}");
-            false
-        }
-    }
-}
-
 /// The app's frame waker: a wake outside a frame asks the window for one; a
 /// wake inside a running frame only runs the woken tasks, since the frame asks
 /// for the next one at its end from what the app still needs.
@@ -903,7 +893,7 @@ fn request_web_frame(
         frame_pending.set(false);
         return;
     };
-    if request_animation_frame(&host, render_loop) {
+    if super::frame_host::request_frame(&host, render_loop) {
         super::frame_host::note_asked(&host);
     } else {
         frame_pending.set(false);

@@ -347,6 +347,263 @@
             errorMessage.textContent = message;
         }
 
+        // WebXR for the XR tab. The page owns the immersive session. While it runs, the session
+        // paces Cranpose's frames through window.cranposeFrameSource. The app draws both eyes side
+        // by side on its canvas. The page copies each half into the headset's layer for that eye.
+        // With ?xr=mock a fake headset turns its head on the window's frames, and the page shows
+        // what the headset would get in the corner.
+        const EYE_DATA_LENGTH = 11;
+        const BLIT_VERTEX = `#version 300 es
+            uniform vec4 rect;
+            out vec2 uv;
+            void main() {
+                vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2));
+                gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
+                // The texture holds the canvas top row first: the viewport's bottom takes rect.w.
+                uv = vec2(mix(rect.x, rect.z, p.x), mix(rect.w, rect.y, p.y));
+            }`;
+        const BLIT_FRAGMENT = `#version 300 es
+            precision mediump float;
+            uniform sampler2D image;
+            in vec2 uv;
+            out vec4 color;
+            void main() { color = texture(image, uv); }`;
+
+        function blitProgram(gl) {
+            const shader = (type, source) => {
+                const s = gl.createShader(type);
+                gl.shaderSource(s, source);
+                gl.compileShader(s);
+                if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+                    throw new Error(gl.getShaderInfoLog(s));
+                }
+                return s;
+            };
+            const program = gl.createProgram();
+            gl.attachShader(program, shader(gl.VERTEX_SHADER, BLIT_VERTEX));
+            gl.attachShader(program, shader(gl.FRAGMENT_SHADER, BLIT_FRAGMENT));
+            gl.linkProgram(program);
+            if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+                throw new Error(gl.getProgramInfoLog(program));
+            }
+            return { program, rect: gl.getUniformLocation(program, 'rect') };
+        }
+
+        // An eye for the app: position, orientation and the tangents of the view's left, right,
+        // up and down edges, read from the projection matrix.
+        function writeEye(data, offset, view) {
+            const { position: p, orientation: q } = view.transform;
+            const m = view.projectionMatrix;
+            data.set([p.x, p.y, p.z, q.x, q.y, q.z, q.w,
+                (m[8] - 1) / m[0], (1 + m[8]) / m[0], (1 + m[9]) / m[5], (m[9] - 1) / m[5]], offset);
+        }
+
+        // The part of a half of the canvas that the app fills with an eye's view: the view keeps
+        // square pixels and sits in the middle of the half. In texture coordinates.
+        function eyeRect(data, offset, half, width, height) {
+            const [l, r, u, d] = data.subarray(offset + 7, offset + EYE_DATA_LENGTH);
+            const halfWidth = width / 2;
+            const focal = Math.min(halfWidth / (r - l), height / (u - d));
+            const w = focal * (r - l);
+            const h = focal * (u - d);
+            const x = half * halfWidth + (halfWidth - w) / 2;
+            const y = (height - h) / 2;
+            return [x / width, y / height, (x + w) / width, (y + h) / height];
+        }
+
+        function projection(l, r, u, d) {
+            const m = new Float32Array(16);
+            m[0] = 2 / (r - l);
+            m[5] = 2 / (u - d);
+            m[8] = (r + l) / (r - l);
+            m[9] = (u + d) / (u - d);
+            m[10] = -1;
+            m[11] = -1;
+            m[14] = -0.1;
+            return m;
+        }
+
+        // A headset for tests: a Quest 3's views on a head that turns left and right.
+        function mockXr(output) {
+            const fov = { left: [-1.2, 0.95, 0.95, -1.15], right: [-0.95, 1.2, 0.95, -1.15] };
+            const size = { width: 1600, height: 880 };
+            return {
+                isSessionSupported: async () => true,
+                async requestSession() {
+                    const listeners = [];
+                    const session = {
+                        ended: false,
+                        requestReferenceSpace: async () => ({}),
+                        updateRenderState() {},
+                        requestAnimationFrame(callback) {
+                            window.requestAnimationFrame((time) => {
+                                if (!session.ended) {
+                                    callback(time, mockFrame(time));
+                                }
+                            });
+                        },
+                        addEventListener(_, listener) { listeners.push(listener); },
+                        async end() {
+                            session.ended = true;
+                            listeners.forEach((listener) => listener());
+                        },
+                    };
+                    return session;
+                },
+                Layer: class {
+                    constructor(_, gl) {
+                        this.framebuffer = null;
+                        this.framebufferWidth = size.width;
+                        this.framebufferHeight = size.height;
+                        gl.canvas.width = size.width;
+                        gl.canvas.height = size.height;
+                        output.append(gl.canvas);
+                    }
+                    getViewport(view) {
+                        const half = size.width / 2;
+                        return { x: view.eye === 'left' ? 0 : half, y: 0, width: half, height: size.height };
+                    }
+                },
+            };
+            function mockFrame(time) {
+                const yaw = 0.35 * Math.sin(time / 1500);
+                const orientation = { x: 0, y: Math.sin(yaw / 2), z: 0, w: Math.cos(yaw / 2) };
+                const eye = (name, side) => ({
+                    eye: name,
+                    transform: {
+                        position: { x: 0.032 * side * Math.cos(yaw), y: 1.6, z: -0.032 * side * Math.sin(yaw) },
+                        orientation,
+                    },
+                    projectionMatrix: projection(...fov[name]),
+                });
+                const views = [eye('left', -1), eye('right', 1)];
+                return { getViewerPose: () => ({ views }) };
+            }
+        }
+
+        function installXr(wasm, canvas, mock) {
+            let output = null;
+            if (mock) {
+                output = document.createElement('div');
+                output.id = 'xr-mock-output';
+                output.style.cssText = 'position:fixed;right:8px;bottom:8px;width:40%;z-index:2;'
+                    + 'outline:2px solid #3c6;background:#000';
+                document.body.append(output);
+            }
+            const xr = mock ? mockXr(output) : navigator.xr;
+            const Layer = mock ? xr.Layer : window.XRWebGLLayer;
+            window.cranposeXr = {
+                enter() {
+                    enter().catch((error) => console.error('WebXR session failed:', error));
+                },
+            };
+            if (!xr) {
+                return;
+            }
+            xr.isSessionSupported('immersive-vr')
+                .then((supported) => wasm.xr_supported(supported))
+                .catch(() => wasm.xr_supported(false));
+
+            async function enter() {
+                const glCanvas = document.createElement('canvas');
+                if (mock) {
+                    glCanvas.style.cssText = 'display:block;width:100%';
+                }
+                const gl = glCanvas.getContext('webgl2', {
+                    xrCompatible: true, alpha: false, antialias: false, depth: false,
+                });
+                // The session needs the button's user activation: ask for it before other awaits.
+                const session = await xr.requestSession('immersive-vr', { optionalFeatures: ['local-floor'] });
+                let space;
+                try {
+                    space = await session.requestReferenceSpace('local-floor');
+                } catch (_) {
+                    // A space at the head: the floor lies 1.6 meters below it.
+                    const local = await session.requestReferenceSpace('local');
+                    space = local.getOffsetReferenceSpace(new XRRigidTransform({ x: 0, y: -1.6, z: 0 }));
+                }
+                const layer = new Layer(session, gl, { antialias: false, depth: false });
+                session.updateRenderState({ baseLayer: layer });
+
+                const blit = blitProgram(gl);
+                const texture = gl.createTexture();
+                gl.bindTexture(gl.TEXTURE_2D, texture);
+                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+                // Chrome uploads the app's WebGL2 canvas bottom row first and its WebGPU canvas
+                // top row first. getContext returns the canvas's own context of that kind, or null.
+                const appUsesGl = canvas.getContext('webgl2') !== null;
+                gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, appUsesGl);
+                let hasImage = false;
+
+                // The canvas takes the layer's size, so each half lands pixel for pixel in its eye.
+                // The page does not render while the headset shows the session, so no resize
+                // observation comes: a resize event tells the app.
+                const savedStyle = canvas.style.cssText;
+                const ratio = window.devicePixelRatio || 1;
+                canvas.style.cssText = `position:absolute;left:0;top:0;`
+                    + `width:${layer.framebufferWidth / ratio}px;height:${layer.framebufferHeight / ratio}px`;
+                window.dispatchEvent(new Event('resize'));
+
+                let appFrame = null;
+                window.cranposeFrameSource = { requestFrame(callback) { appFrame = callback; } };
+                wasm.xr_presenting(true);
+                const data = new Float32Array(2 * EYE_DATA_LENGTH);
+
+                session.addEventListener('end', () => {
+                    delete window.cranposeFrameSource;
+                    canvas.style.cssText = savedStyle;
+                    wasm.xr_presenting(false);
+                    window.dispatchEvent(new Event('resize'));
+                    if (appFrame) {
+                        window.requestAnimationFrame(appFrame);
+                        appFrame = null;
+                    }
+                    if (output) {
+                        glCanvas.remove();
+                    }
+                });
+
+                const onFrame = (time, frame) => {
+                    session.requestAnimationFrame(onFrame);
+                    const pose = frame.getViewerPose(space);
+                    if (!pose) {
+                        return;
+                    }
+                    const left = pose.views.find((view) => view.eye === 'left') || pose.views[0];
+                    const right = pose.views.find((view) => view.eye === 'right') || pose.views[1] || left;
+                    writeEye(data, 0, left);
+                    writeEye(data, EYE_DATA_LENGTH, right);
+                    wasm.xr_views(data);
+                    const run = appFrame;
+                    appFrame = null;
+                    gl.bindTexture(gl.TEXTURE_2D, texture);
+                    if (run) {
+                        // The app draws both eyes now. Its canvas keeps the picture until this
+                        // task ends: the texture takes it here.
+                        run();
+                        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, canvas);
+                        hasImage = true;
+                    }
+                    if (!hasImage) {
+                        return;
+                    }
+                    gl.bindFramebuffer(gl.FRAMEBUFFER, layer.framebuffer);
+                    gl.useProgram(blit.program);
+                    for (const [half, view] of [[0, left], [1, right]]) {
+                        const viewport = layer.getViewport(view);
+                        gl.viewport(viewport.x, viewport.y, viewport.width, viewport.height);
+                        gl.uniform4fv(blit.rect, eyeRect(data, half * EYE_DATA_LENGTH, half, canvas.width, canvas.height));
+                        gl.drawArrays(gl.TRIANGLES, 0, 3);
+                    }
+                };
+                session.requestAnimationFrame(onFrame);
+                window.cranposeXr.session = session;
+            }
+        }
+
         async function init() {
             try {
                 const params = new URLSearchParams(window.location.search);
@@ -383,6 +640,7 @@
                 updateBootStatus('Starting Cranpose…');
                 updateAppState('starting_app', { bundle: moduleUrl.pathname });
                 await wasm.run_app(initialTab, initialShaderSection);
+                installXr(wasm, document.getElementById('cranpose-canvas'), params.get('xr') === 'mock');
                 updateAppState('running');
             } catch (error) {
                 console.error('Failed to initialize app:', error);

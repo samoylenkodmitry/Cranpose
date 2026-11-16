@@ -497,8 +497,10 @@ _size-ceiling path max what:
 # rejects a module with those references, in every iOS browser. The scene
 # store of #2158 adds about 30 KB over main's demo: the store's records, draw
 # specs, layer references, reach and content hashes. The owner allowed that
-# growth of 30 KB.
-web-size-budget: (_size-ceiling "apps/desktop-demo/pkg/desktop_app_bg.wasm" "15458000" "web demo wasm")
+# growth of 30 KB. The XR tab of #2240 took the module to 15,494,505 bytes:
+# its scene, its eye cameras and the WebXR frame source. The owner asked for
+# the XR tab.
+web-size-budget: (_size-ceiling "apps/desktop-demo/pkg/desktop_app_bg.wasm" "15500000" "web demo wasm")
 
 # Fail when a built wasm module needs a WebAssembly feature past Safari 15.
 # WebKit rejects such a module whole, in Safari and in every other iOS browser.

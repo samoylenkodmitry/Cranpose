@@ -15,7 +15,7 @@ use cranpose_ui::{
 };
 
 pub use super::compose_twin_matrix::{MATRIX_FRAMES, MATRIX_GRID};
-use crate::app::{
+use crate::app::modifier_showcase::{
     complex_chain_showcase, item_list_showcase, positioned_boxes_showcase, simple_card_showcase,
 };
 

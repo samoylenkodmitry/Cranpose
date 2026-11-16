@@ -18,7 +18,9 @@ use super::{
     interactive_anim::InteractiveAnimTab,
     lazy_list::lazy_list_example,
     liquid_ui::LiquidUiTab,
-    markdown_viewer_tab, mineswapper2, modifier_showcase_tab, performance_dashboard,
+    markdown_viewer_tab, mineswapper2,
+    modifier_showcase::modifier_showcase_tab,
+    performance_dashboard,
     recomposition_lab::RecompositionLabTab,
     recursive_layout_example, room,
     rotary::rotary_tab,
@@ -100,6 +102,7 @@ pub(super) fn tab_requires_scroll(tab: DemoTab) -> bool {
             | DemoTab::GlassFeed
             | DemoTab::GlassTiles
             | DemoTab::Room
+            | DemoTab::Xr
             | DemoTab::Backrooms
             | DemoTab::Tv
             | DemoTab::Music
@@ -148,6 +151,7 @@ pub(super) fn render_active_tab(
         | DemoTab::GlassFeed
         | DemoTab::GlassTiles
         | DemoTab::Room
+        | DemoTab::Xr
         | DemoTab::Backrooms
         | DemoTab::Tv
         | DemoTab::Music => render_showcase_tab(active, startup, wsz_tab_state),
@@ -175,7 +179,7 @@ fn render_showcase_tab(active: DemoTab, startup: StartupSelection, wsz_tab_state
         DemoTab::Liquid => LiquidUiTab(),
         DemoTab::GlassFeed => GlassFeedTab(),
         DemoTab::GlassTiles => GlassTilesTab(),
-        DemoTab::Room | DemoTab::Backrooms | DemoTab::Tv | DemoTab::Music => {
+        DemoTab::Room | DemoTab::Xr | DemoTab::Backrooms | DemoTab::Tv | DemoTab::Music => {
             render_scene_tab(active);
         }
         DemoTab::Guide
@@ -204,6 +208,7 @@ fn render_showcase_tab(active: DemoTab, startup: StartupSelection, wsz_tab_state
 fn render_scene_tab(active: DemoTab) {
     match active {
         DemoTab::Room => room::RoomTab(),
+        DemoTab::Xr => super::xr::XrTab(),
         DemoTab::Backrooms => BackroomsTab(),
         DemoTab::Tv => super::tv::TvTab(),
         DemoTab::Music => super::music::MusicTab(),
