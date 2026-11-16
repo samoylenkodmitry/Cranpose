@@ -8,7 +8,7 @@ use cranpose_core::{mutableStateOf, MutableState};
 
 use super::eye_view::EyeView;
 
-// The states live as long as the app's thread. A scene that reads the eyes when it is drawn is
+// The states live as long as the app's runtime. A scene that reads the eyes when it is drawn is
 // drawn again when the page sets new ones, without a new composition.
 #[derive(Clone, Copy)]
 struct Page {
@@ -22,8 +22,11 @@ thread_local! {
 }
 
 fn page() -> Page {
-    PAGE.with(|cell| {
-        cell.get().unwrap_or_else(|| {
+    // A thread can run one app after another, each with its own runtime: the states of an app
+    // that ended are gone with its runtime.
+    PAGE.with(|cell| match cell.get() {
+        Some(page) if page.presenting.is_alive() => page,
+        _ => {
             let page = Page {
                 views: mutableStateOf(None),
                 presenting: mutableStateOf(false),
@@ -31,7 +34,7 @@ fn page() -> Page {
             };
             cell.set(Some(page));
             page
-        })
+        }
     })
 }
 
