@@ -1750,7 +1750,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-wgpu"
-version = "30.0.29"
+version = "30.0.30"
 dependencies = [
  "arrayvec",
  "bitflags 2.13.2",
@@ -1778,7 +1778,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-wgpu-core"
-version = "30.0.25"
+version = "30.0.26"
 dependencies = [
  "arrayvec",
  "bit-set 0.10.0",
@@ -1839,7 +1839,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-wgpu-hal"
-version = "30.0.22"
+version = "30.0.23"
 dependencies = [
  "android_system_properties",
  "arrayvec",
