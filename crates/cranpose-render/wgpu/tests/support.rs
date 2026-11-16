@@ -246,6 +246,25 @@ pub(crate) fn headless_renderer_parts_compiling_in_background_for(
     Ok((lock, renderer))
 }
 
+// A renderer drawing to `format` as a browser's WebGPU page does before its
+// browser compiles in the background: shape draws take the universal
+// pipeline, and every other pipeline builds where it is first needed.
+pub(crate) fn browser_renderer_parts_for(
+    format: wgpu::TextureFormat,
+) -> Result<(MutexGuard<'static, ()>, WgpuRenderer), String> {
+    let lock = lock_gpu_test();
+    let device = device::HeadlessDevice::request(
+        wgpu::Backends::all(),
+        wgpu::Limits::default(),
+        "Browser Render Contract Test Device",
+    )?;
+    let mut renderer = WgpuRenderer::new(&[TEST_FONT]);
+    device
+        .into_browser()
+        .attach(&mut renderer, format, device::Pipelines::Inline);
+    Ok((lock, renderer))
+}
+
 pub(crate) fn headless_renderer_with_display_format(
     format: wgpu::TextureFormat,
 ) -> Result<LockedRenderer, String> {

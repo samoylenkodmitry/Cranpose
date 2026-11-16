@@ -71,6 +71,8 @@ pub(crate) struct ShapePipelines<B: KeyedBuild = ShapePipelineFactory> {
     // The specialized pipelines built to compile in the background that had
     // not landed at the last look.
     compiling: SmallVec<[ShapePipelineKey; 8]>,
+    // How many looks found such pipelines landed.
+    landings: u64,
 }
 
 impl<B: KeyedBuild> ShapePipelines<B> {
@@ -95,19 +97,13 @@ impl<B: KeyedBuild> ShapePipelines<B> {
             draws_when_ready: compiler.is_active(),
             recorder,
             compiling: SmallVec::new(),
+            landings: 0,
         }
     }
 
     /// Builds the specialized pipelines draws want from now on: the browser
     /// compiles what the device creates in the background
     /// (`wgpu::Device::compile_pipelines_in_background`).
-    #[cfg_attr(
-        not(any(test, target_arch = "wasm32")),
-        expect(
-            dead_code,
-            reason = "only the web backend builds pipelines in the background"
-        )
-    )]
     pub(crate) fn build_in_background(&mut self) {
         if !self.background_builds {
             self.background_builds = true;
@@ -117,23 +113,22 @@ impl<B: KeyedBuild> ShapePipelines<B> {
         }
     }
 
-    // Whether a specialized pipeline built to compile in the background
-    // landed since the last look. No draw waits for one: the universal
-    // pipeline stands in, so no pass leaves a draw out for the browser to
-    // report its landing.
-    #[cfg_attr(
-        not(any(test, target_arch = "wasm32")),
-        expect(
-            dead_code,
-            reason = "only the web backend builds pipelines in the background"
-        )
-    )]
-    pub(crate) fn take_landed(&mut self) -> bool {
+    // Counts a landing when a specialized pipeline built to compile in the
+    // background landed since the last look. No draw waits for one: the
+    // universal pipeline stands in, so no pass leaves a draw out for the
+    // browser to report its landing.
+    pub(crate) fn count_landings(&mut self) {
         let compiling = self.compiling.len();
         let slots = &self.slots;
         self.compiling
             .retain(|key| !slots.get(*key).is_some_and(B::landed));
-        self.compiling.len() != compiling
+        if self.compiling.len() != compiling {
+            self.landings += 1;
+        }
+    }
+
+    pub(crate) fn landings(&self) -> u64 {
+        self.landings
     }
 
     pub(crate) fn begin_frame(&mut self) {

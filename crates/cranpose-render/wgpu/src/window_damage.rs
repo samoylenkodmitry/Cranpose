@@ -382,14 +382,39 @@ impl Held {
         }
     }
 
-    // What a window whose one target holds this frame holds.
+    // The frame held with its stand-ins drawing `pixels`.
+    pub(crate) fn with_stand_in_pixels(self, pixels: StandInPixels) -> Self {
+        Self {
+            stand_in_pixels: pixels,
+            ..self
+        }
+    }
+
+    // What a window whose one target holds this frame holds: with the parts
+    // a frame after a landing draws again.
     pub(crate) fn window(self) -> HeldWindow {
         HeldWindow {
             oldest: self.frame,
-            stand_ins: self.stand_ins,
+            stand_ins: match self.stand_in_pixels {
+                StandInPixels::Final => Damage::NONE,
+                StandInPixels::Interim => self.stand_ins,
+            },
             landings: Some(self.landings),
         }
     }
+}
+
+// What the parts of a held frame drawn in place of their pipelines show.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum StandInPixels {
+    // The pipelines' own pixels: a general or universal pipeline draws the
+    // bytes of the specialization it stands in for, and a landing leaves
+    // them as they are.
+    Final,
+    // Other pixels, a placeholder's, fallback triangles' or an instant
+    // draw's, or kept layers that may hold them: a frame after a landing
+    // draws them again.
+    Interim,
 }
 
 impl FrameWindow<'_> {
@@ -401,6 +426,7 @@ impl FrameWindow<'_> {
             viewport: self.viewport,
             landings: self.landings,
             stand_ins: Damage::NONE,
+            stand_in_pixels: StandInPixels::Interim,
         }
     }
 }
@@ -433,6 +459,7 @@ pub(crate) struct Held {
     // The parts drawn with stand-ins while pipelines compiled, or over kept
     // layers that may hold them; the whole window for a frame drawn whole.
     stand_ins: Damage,
+    stand_in_pixels: StandInPixels,
 }
 
 /// What a frame changes in a target, and whether a frame between, which
@@ -512,6 +539,9 @@ impl FrameDamages {
         // frame keeps the held frame's stand-ins until one.
         let (redrawn, kept) = match held.stand_ins {
             _ if held.landings == frame.landings => (DamageRects::default(), held.stand_ins),
+            _ if held.stand_in_pixels == StandInPixels::Final => {
+                (DamageRects::default(), Damage::NONE)
+            }
             Damage::Part(stand_ins) => (stand_ins, Damage::NONE),
             _ => return own_sake(OwnSake::StandIns),
         };

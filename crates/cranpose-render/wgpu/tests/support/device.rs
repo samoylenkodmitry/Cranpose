@@ -79,6 +79,13 @@ impl HeadlessDevice {
         })
     }
 
+    // The device as a browser's WebGPU reports itself, whose draws take the
+    // universal shape pipeline until their own compiled.
+    pub(crate) fn into_browser(mut self) -> Self {
+        self.backend = wgpu::Backend::BrowserWebGpu;
+        self
+    }
+
     pub(crate) fn without(mut self, flags: wgpu::DownlevelFlags) -> Self {
         self.downlevel.remove(flags);
         self
