@@ -25,4 +25,4 @@ uniffi = { version = "0.32.2", default-features = false }
 web-time = "1.1"
 
 [dev-dependencies]
-pollster = "0.4.0"
+pollster = "1.0.1"
