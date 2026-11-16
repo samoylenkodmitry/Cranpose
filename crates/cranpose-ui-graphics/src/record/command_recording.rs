@@ -19,11 +19,27 @@ use crate::{
 /// non-shape primitives. Bounds and content metadata are recorded while drawing;
 /// the complete fingerprint is computed when a cache first requests it.
 /// [`Self::record`] records it anew in place, [`Self::edit`] records more after it.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct CommandRecording {
     shapes: Arc<ShapeRecorder>,
+    // The shape columns held before `shapes`, while a reader may still hold
+    // them: once it lets go, the next recording draws into them in place of
+    // new ones.
+    spare: Option<Arc<ShapeRecorder>>,
     content: RecordingContent,
     fingerprint: OnceCell<u64>,
+}
+
+// A copy shares the shape columns, not the spare: each copy keeps its own.
+impl Clone for CommandRecording {
+    fn clone(&self) -> Self {
+        Self {
+            shapes: Arc::clone(&self.shapes),
+            spare: None,
+            content: self.content.clone(),
+            fingerprint: self.fingerprint.clone(),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -59,6 +75,7 @@ impl Default for CommandRecording {
             shapes: crate::thread_state::with(|state| {
                 Arc::clone(state.no_shapes.get_or_init(Default::default))
             }),
+            spare: None,
             content: RecordingContent::default(),
             fingerprint: OnceCell::new(),
         }
@@ -77,8 +94,9 @@ impl PartialEq for CommandRecording {
 impl CommandRecording {
     /// Records into this recording anew, in the storage it holds: what it
     /// held is cleared and every buffer keeps its capacity. When a retained
-    /// reader still shares the shape columns, the recording takes new ones
-    /// with the same room and the reader keeps its own.
+    /// reader still shares the shape columns, the reader keeps them and the
+    /// recording takes the columns it held before them, once their reader
+    /// let them go, or else new ones with the same room.
     ///
     /// ```
     /// use cranpose_ui_graphics::{Brush, Color, CommandRecording, DrawPrimitive, Rect};
@@ -99,12 +117,23 @@ impl CommandRecording {
     /// assert_eq!(recording.len(), 1);
     /// ```
     pub fn record(&mut self) -> CommandRecorder<'_> {
-        let fresh_shapes = Arc::get_mut(&mut self.shapes).is_none();
-        if fresh_shapes {
-            self.shapes = Arc::new(ShapeRecorder {
-                tables: self.shapes.tables.with_capacity_of(),
-                ..ShapeRecorder::default()
-            });
+        let mut fresh_shapes = false;
+        if Arc::get_mut(&mut self.shapes).is_none() {
+            let unshared = self
+                .spare
+                .take()
+                .and_then(|mut spare| Arc::get_mut(&mut spare).is_some().then_some(spare));
+            let next = match unshared {
+                Some(spare) => spare,
+                None => {
+                    fresh_shapes = true;
+                    Arc::new(ShapeRecorder {
+                        tables: self.shapes.tables.with_capacity_of(),
+                        ..ShapeRecorder::default()
+                    })
+                }
+            };
+            self.spare = Some(std::mem::replace(&mut self.shapes, next));
         }
         let mut recorder = self.recorder(fresh_shapes);
         recorder.clear();
@@ -123,6 +152,7 @@ impl CommandRecording {
             shapes,
             content,
             fingerprint,
+            ..
         } = self;
         fingerprint.take();
         CommandRecorder {
