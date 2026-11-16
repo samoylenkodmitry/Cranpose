@@ -158,13 +158,17 @@ fn a_browser_builds_what_its_first_frames_stood_in_for_though_no_frame_draws_it_
         vec![plain.universal(), plain, gradient],
         "once the browser compiles in the background"
     );
-    assert!(!pipelines.take_landed(), "none landed yet");
+    pipelines.count_landings();
+    assert_eq!(pipelines.landings(), 0, "none landed yet");
 
     landed.lock().expect("landed keys").push(plain);
-    assert!(pipelines.take_landed());
-    assert!(!pipelines.take_landed(), "a landing is told once");
+    pipelines.count_landings();
+    assert_eq!(pipelines.landings(), 1);
+    pipelines.count_landings();
+    assert_eq!(pipelines.landings(), 1, "a landing is counted once");
     landed.lock().expect("landed keys").push(gradient);
-    assert!(pipelines.take_landed());
+    pipelines.count_landings();
+    assert_eq!(pipelines.landings(), 2);
 }
 
 #[test]

@@ -1289,6 +1289,53 @@ fn a_still_page_over_stand_ins_draws_nothing_once_it_keeps_a_copy() {
     );
 }
 
+// A browser draws a shape with the universal pipeline until the shape's own
+// pipeline compiled in the background, and the two draw the same bytes: the
+// images that hold the universal pipeline's draws hold the final picture,
+// so the frames after the landing draw nothing. A placeholder draws other
+// pixels, and the frame after its pipeline lands draws it again
+// (`a_still_page_over_a_stand_in_draws_nothing_until_a_pipeline_lands`).
+#[test]
+fn a_specialization_landing_over_universal_draws_draws_nothing_again() {
+    let Some((_lock, renderer)) =
+        support::browser_renderer_parts_for(wgpu::TextureFormat::Rgba8Unorm)
+            .map_err(|err| eprintln!("skipping (headless WGPU init failed): {err}"))
+            .ok()
+    else {
+        return;
+    };
+    let mut harness = Harness::new(renderer, Scene::Gradient, 1.0, Keeper::Swapchain(DIRECT));
+    for index in 0..SWAPCHAIN_IMAGES {
+        let frame = harness.frame(0);
+        assert!(
+            index > 0
+                || frame.stats.shape_pipeline_fallback_draws > 0
+                    && frame.stats.shape_specialized_draws == 0,
+            "the universal pipeline draws every shape of the first frame: {:?}",
+            frame.stats
+        );
+    }
+    harness.shell.renderer().compile_pipelines_in_background();
+    for index in 0..2 * SWAPCHAIN_IMAGES {
+        let frame = harness.frame(0);
+        let label = format!("frame {index} after the landing: {:?}", frame.stats);
+        assert_eq!(frame.stats.repainted_pixels, 0, "{label}: drawn again");
+        assert_eq!(
+            frame.stats.kept_stand_in_pixels, 0,
+            "{label}: stand-ins kept"
+        );
+        support::assert_same_bytes(&label, WIDTH, &frame.kept, &frame.direct);
+    }
+    let changed = harness.frame(1);
+    assert!(
+        changed.stats.shape_specialized_draws > 0
+            && changed.stats.shape_pipeline_fallback_draws == 0,
+        "a change draws with the shapes' own pipelines: {:?}",
+        changed.stats
+    );
+    support::assert_same_bytes("the change", WIDTH, &changed.kept, &changed.direct);
+}
+
 /// Draws each frame of `scene` twice: over the frame `keeper` holds, which
 /// draws its damage, and straight into an image that takes the whole frame.
 /// The first must equal the second byte for byte, and what the second

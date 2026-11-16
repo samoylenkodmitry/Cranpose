@@ -7,7 +7,7 @@ use super::{FrameOutput, FrameRoot, GpuRenderer, OutputMode, surface_is_direct_r
 use crate::{
     frame::{
         ClearedImages, Damage, FrameWindow, Held, ImageContent, OwnSake, PresentedImage, Repaint,
-        Since, SwapchainHistory, keeps_copy, whole_when_lighter,
+        Since, StandInPixels, SwapchainHistory, keeps_copy, whole_when_lighter,
     },
     frame_packet::{FramePacket, HeldWindow},
     gpu_stats::{FrameDamage, FrameStats},
@@ -425,6 +425,14 @@ impl GpuRenderer {
             Err(_) => false,
         };
         let stand_ins = self.frame_stats.drew_stand_in() || self.pipelines.stand_ins_kept.get();
+        // Without a placeholder, fallback triangles or an instant draw kept,
+        // the frame's stand-ins are general or universal pipelines, which
+        // draw the bytes of their specializations.
+        let pixels = if self.pipelines.stand_ins_kept.get() {
+            StandInPixels::Interim
+        } else {
+            StandInPixels::Final
+        };
         let keepers = Keepers {
             composition: self
                 .composition_target
@@ -433,7 +441,8 @@ impl GpuRenderer {
             swapchain: &mut self.swapchain,
             cleared: &mut self.cleared,
         };
-        plan.keep(drawn.then(|| plan.held_with(stand_ins)), keepers)
+        let held = drawn.then(|| plan.held_with(stand_ins).with_stand_in_pixels(pixels));
+        plan.keep(held, keepers)
     }
 
     /// Lets go of the copy of the last frame the renderer keeps for a

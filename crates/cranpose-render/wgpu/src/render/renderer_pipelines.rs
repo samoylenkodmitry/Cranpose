@@ -167,9 +167,9 @@ impl RendererPipelines {
     }
 
     /// See [`crate::WgpuRenderer::compile_pipelines_in_background`].
-    #[cfg(target_arch = "wasm32")]
     pub(crate) fn compile_pipelines_in_background(&mut self) {
         self.shape_pipelines.build_in_background();
+        #[cfg(target_arch = "wasm32")]
         self.compiler.compile_in_background();
     }
 
@@ -177,17 +177,14 @@ impl RendererPipelines {
     // stand-in drawn at the same count draws the same pixels. The
     // compiler's threads count their builds; on the web the compiler
     // counts WebGL's paced builds and the pipelines a WebGPU page compiled
-    // in the background, the shape pipelines among them as `count_landings`
-    // finds them landed.
+    // in the background. The specialized shape pipelines that the universal
+    // one drew for count as `count_landings` finds them landed.
     pub(crate) fn landings(&self) -> u64 {
         #[cfg(not(target_arch = "wasm32"))]
-        {
-            self.landing.as_ref().map_or(0, |landing| landing.built())
-        }
+        let built = self.landing.as_ref().map_or(0, |landing| landing.built());
         #[cfg(target_arch = "wasm32")]
-        {
-            self.compiler.landings()
-        }
+        let built = self.compiler.landings();
+        built + self.shape_pipelines.landings()
     }
 
     // Starts a frame's count of landings: whether a pipeline that a stand-in
@@ -216,10 +213,7 @@ impl RendererPipelines {
     // The count of landings for the frame about to be built, with the
     // specialized shape pipelines that landed since the last look counted.
     pub(crate) fn count_landings(&mut self) -> u64 {
-        #[cfg(target_arch = "wasm32")]
-        if self.shape_pipelines.take_landed() {
-            self.compiler.note_landing();
-        }
+        self.shape_pipelines.count_landings();
         self.landings()
     }
 
