@@ -1123,7 +1123,7 @@ pub(super) fn copy_buffer_to_buffer(
     let barriers = src_barrier
         .into_iter()
         .chain(dst_barrier)
-        .collect::<Vec<_>>();
+        .collect::<ArrayVec<_, 2>>();
     unsafe {
         state.raw_encoder.transition_buffers(&barriers);
         state
