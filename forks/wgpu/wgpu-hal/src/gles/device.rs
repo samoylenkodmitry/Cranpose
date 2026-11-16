@@ -753,6 +753,17 @@ impl PendingLink {
             for (ref name, (register, slot)) in self.name_binding_map {
                 log::trace!("Get binding {name:?} from program {program:?}");
                 match register {
+                    // A link puts every uniform block on binding point 0 and
+                    // every sampler on texture unit 0, so a binding at slot 0
+                    // needs no call. A program's first block lookup waits for
+                    // a reply from the GPU process; one whose blocks all sit
+                    // at slot 0 waits for none. On WebGL in Chrome on a
+                    // Huawei Mate 20 X, 7 of the 17 programs that the
+                    // gauntlet's first frame reads are such programs.
+                    super::BindingRegister::UniformBuffers
+                    | super::BindingRegister::Textures
+                    | super::BindingRegister::Images
+                        if slot == 0 => {}
                     super::BindingRegister::UniformBuffers => {
                         match unsafe { gl.get_uniform_block_index(program, name) } {
                             Some(index) => {
