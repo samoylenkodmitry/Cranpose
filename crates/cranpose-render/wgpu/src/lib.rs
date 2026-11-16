@@ -504,6 +504,7 @@ impl WgpuRenderer {
         height: u32,
         image: frame::ImageContent,
     ) -> Result<(), WgpuRendererError> {
+        self.frontend.landings = self.landings();
         let SyncPresenter {
             renderer: gpu_renderer,
             submit,
@@ -526,6 +527,7 @@ impl WgpuRenderer {
     /// the scene it takes no image, draws nothing and presents nothing.
     /// Otherwise the frame drawn next starts from the scene this collected.
     pub fn shows_scene(&mut self, width: u32, height: u32) -> bool {
+        self.frontend.landings = self.landings();
         let PresentBackend::Sync(sync) = &mut self.backend else {
             return false;
         };
@@ -658,6 +660,7 @@ impl WgpuRenderer {
     /// is not in threaded mode.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn publish_frame(&mut self, width: u32, height: u32) -> PublishOutcome {
+        self.frontend.landings = self.landings();
         let PresentBackend::Threaded(handle) = &mut self.backend else {
             log::error!("publish_frame called without a threaded present runtime");
             return PublishOutcome::NoCredit;
@@ -854,10 +857,10 @@ impl WgpuRenderer {
         }
     }
 
-    /// Drops what earlier frames drew and kept, once the pipelines the
-    /// browser compiled in the background landed
-    /// (`wgpu::Device::compile_pipelines_in_background`): those frames left
-    /// out the draws that use them.
+    /// Tells the renderer that the pipelines the browser compiled in the
+    /// background landed (`wgpu::Device::compile_pipelines_in_background`).
+    /// Earlier frames left out the draws that use them: the next frame drops
+    /// what those frames drew and kept, and draws again what they left out.
     #[cfg(target_arch = "wasm32")]
     pub fn background_pipelines_landed(&mut self) {
         if let PresentBackend::Sync(sync) = &mut self.backend {
@@ -901,9 +904,23 @@ impl WgpuRenderer {
         width: u32,
         height: u32,
     ) -> Option<HeldFramePacket> {
+        self.frontend.landings = self.landings();
         self.frontend
             .build_frame_packet(width, height, self.renderer_epoch, self.surface_epoch)
             .map(HeldFramePacket)
+    }
+
+    // The renderer's count of pipeline landings, which a window packet built
+    // now culls by.
+    fn landings(&mut self) -> Option<u64> {
+        match &mut self.backend {
+            PresentBackend::Sync(sync) => Some(sync.renderer.pipelines.count_landings()),
+            #[cfg(not(target_arch = "wasm32"))]
+            PresentBackend::Threaded(handle) => {
+                handle.status().landing.get().map(|landing| landing.built())
+            }
+            PresentBackend::None => None,
+        }
     }
 
     /// Return a producer-built packet without presenting it, as a target

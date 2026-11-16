@@ -37,11 +37,15 @@ impl WindowPackets {
     }
 
     // The damages since the oldest packet the window's targets hold, the
-    // parts they draw again and the rects of `begun`: a region a window walk
-    // may cull to. `None` when one of the damages is not a part of the
-    // window.
-    pub(crate) fn cull_region(&self, begun: [DamageRects; 2]) -> Option<DamageRects> {
-        let mut region = self.held_since(self.last()?)?;
+    // parts they draw again at `landings` and the rects of `begun`: a region
+    // a window walk may cull to. `None` when one of the damages is not a
+    // part of the window.
+    pub(crate) fn cull_region(
+        &self,
+        begun: [DamageRects; 2],
+        landings: Option<u64>,
+    ) -> Option<DamageRects> {
+        let mut region = self.held_since(self.last()?, landings)?;
         for rects in &begun {
             region.add_all(rects);
         }
@@ -49,15 +53,19 @@ impl WindowPackets {
     }
 
     // The damages from `at` back to the oldest packet the window's targets
-    // hold, and the parts they draw again; `None` when one of the damages or
-    // those parts is not a part of the window.
-    fn held_since(&self, at: u64) -> Option<DamageRects> {
+    // hold and, once the count of landings moved past `landings`, the parts
+    // they drew with stand-ins, which a frame draws again then; `None` when
+    // one of those is not a part of the window. The renderer refuses a
+    // culled packet when a landing it counted first makes it draw more.
+    fn held_since(&self, at: u64, landings: Option<u64>) -> Option<DamageRects> {
         let held = self.held?;
-        let Damage::Part(stand_ins) = held.stand_ins else {
-            return None;
-        };
         let mut region = self.damages.union_back(at, held.oldest).ok()?;
-        region.add_all(&stand_ins);
+        if held.landings.is_none() || held.landings != landings {
+            let Damage::Part(stand_ins) = held.stand_ins else {
+                return None;
+            };
+            region.add_all(&stand_ins);
+        }
         Some(region)
     }
 
@@ -80,12 +88,18 @@ impl WindowPackets {
     }
 
     // What an image that holds the oldest frame the window's targets hold
-    // repaints for `packet`, the next window packet `next`, merged as the
-    // present side merges it: an image that holds a later frame repaints a
-    // part of it. `None` when it is not a part of the window.
-    pub(crate) fn repaint(&mut self, next: u64, packet: PacketDamage) -> Option<DamageRects> {
+    // repaints for `packet`, the next window packet `next`, at `landings`,
+    // merged as the present side merges it: an image that holds a later
+    // frame repaints a part of it. `None` when it is not a part of the
+    // window.
+    pub(crate) fn repaint(
+        &mut self,
+        next: u64,
+        packet: PacketDamage,
+        landings: Option<u64>,
+    ) -> Option<DamageRects> {
         self.damages.note(next, packet);
-        self.held_since(next)
+        self.held_since(next, landings)
     }
 
     // Notes the window packet `frame` built with `damage`, drawing `draws`.

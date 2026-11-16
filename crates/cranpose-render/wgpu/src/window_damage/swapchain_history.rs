@@ -95,6 +95,13 @@ impl SwapchainHistory {
             match &mut window {
                 Some(window) => {
                     window.oldest = window.oldest.min(image.oldest);
+                    if !image.stand_ins.is_none() {
+                        if window.stand_ins.is_none() {
+                            window.landings = image.landings;
+                        } else if window.landings != image.landings {
+                            window.landings = None;
+                        }
+                    }
                     match (&mut window.stand_ins, image.stand_ins) {
                         (Damage::Part(parts), Damage::Part(more)) => parts.add_all(&more),
                         (stand_ins, _) => *stand_ins = Damage::Full,
@@ -140,28 +147,30 @@ impl SwapchainHistory {
     /// What `frame` changes in `image`: the union of the damages since the
     /// frame the image holds, grown by what the frame's backdrops read and
     /// write, as a backdrop over a pixel an earlier frame changed changes
-    /// what it writes.
+    /// what it writes; with the parts of that frame whose stand-ins it keeps.
     pub(crate) fn changed_since(
         &mut self,
         image: PresentedImage,
         frame: &FrameWindow<'_>,
         damages: &FrameDamages,
-    ) -> Damage {
+    ) -> Since {
         let held = self.held.get(image.index as usize).copied().flatten();
-        let damage = damages.since(held.filter(|_| image.kept), frame).damage;
-        let Damage::Part(mut rects) = damage else {
-            return damage;
+        let since = damages.since(held.filter(|_| image.kept), frame);
+        let Damage::Part(mut rects) = since.damage else {
+            return since;
         };
         if rects.is_empty() || !frame.packet.root.contains_backdrop() {
-            return damage;
+            return since;
         }
         self.captures.clear();
         let place = (frame.packet.root_scale, frame.viewport);
-        if !collect(&frame.packet.root, place, &mut self.captures) {
-            return Damage::Full;
-        }
-        widen(&self.captures, &mut rects);
-        settle(rects, frame.viewport)
+        let damage = if collect(&frame.packet.root, place, &mut self.captures) {
+            widen(&self.captures, &mut rects);
+            settle(rects, frame.viewport)
+        } else {
+            Damage::Full
+        };
+        Since { damage, ..since }
     }
 
     /// Ends the frame drawn into `image`, which holds `held`: none when the

@@ -133,6 +133,40 @@ fn browser_draws_take_the_universal_pipeline_until_their_own_compiled_in_the_bac
     assert_eq!(drawn(&pipelines, gradient), Some((general, true)));
 }
 
+// A frame that keeps the stand-ins of the frame before draws none of them
+// again: the pipelines they stand in for still build, and each landing is
+// told once, for a frame to draw the stand-ins again.
+#[test]
+fn a_browser_builds_what_its_first_frames_stood_in_for_though_no_frame_draws_it_again() {
+    let (mut pipelines, list, landed) = browser_pipelines();
+    let plain = fill(RunTier::Arena, false);
+    let gradient = fill(RunTier::Arena, true);
+
+    pipelines.begin_frame();
+    pipelines.ensure(plain);
+    pipelines.ensure(gradient);
+    pipelines.build_wanted();
+    pipelines.begin_frame();
+    pipelines.build_wanted();
+    assert_eq!(built(&list), vec![plain.universal()]);
+
+    pipelines.build_in_background();
+    pipelines.begin_frame();
+    pipelines.build_wanted();
+    assert_eq!(
+        built(&list),
+        vec![plain.universal(), plain, gradient],
+        "once the browser compiles in the background"
+    );
+    assert!(!pipelines.take_landed(), "none landed yet");
+
+    landed.lock().expect("landed keys").push(plain);
+    assert!(pipelines.take_landed());
+    assert!(!pipelines.take_landed(), "a landing is told once");
+    landed.lock().expect("landed keys").push(gradient);
+    assert!(pipelines.take_landed());
+}
+
 #[test]
 fn a_browser_builds_the_universal_pipeline_for_a_recorded_first_screen() {
     let (mut pipelines, list, _) = browser_pipelines();

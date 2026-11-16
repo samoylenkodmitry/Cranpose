@@ -79,6 +79,10 @@ pub(crate) struct RendererFrontend {
     // Whether the last window walk that took every record found a backdrop,
     // whose reads a culled walk does not follow.
     backdrops: bool,
+    // The renderer's count of pipeline landings as the next packet is built:
+    // a frame draws the stand-ins of the frame its target holds again only
+    // once the count moved. `None` while no renderer counts them.
+    pub(crate) landings: Option<u64>,
 }
 
 impl RendererFrontend {
@@ -154,6 +158,7 @@ impl RendererFrontend {
             uncull_next: false,
             surface_epoch: 0,
             backdrops: false,
+            landings: None,
         }
     }
 
@@ -358,7 +363,7 @@ impl RendererFrontend {
                 None
             } else {
                 let packet = self.window.next_damage(damage, since, (width, height));
-                self.window.repaint(next, packet)
+                self.window.repaint(next, packet, self.landings)
             };
             if repaint.is_some_and(|repaint| region.covers(&repaint)) {
                 break (root, damage);
@@ -394,7 +399,7 @@ impl RendererFrontend {
         };
         let damage = predicted.union(overlay_damage, viewport);
         let packet = self.window.next_damage(damage, since, viewport);
-        region.add_all(&self.window.repaint(next, packet)?);
+        region.add_all(&self.window.repaint(next, packet, self.landings)?);
         Some(region)
     }
 
@@ -433,7 +438,7 @@ impl RendererFrontend {
             return None;
         }
         let begun = [self.target.begun()?, self.overlay_target.begun()?];
-        self.window.cull_region(begun)
+        self.window.cull_region(begun, self.landings)
     }
 
     // The last window packet, when the targets knew what the images held

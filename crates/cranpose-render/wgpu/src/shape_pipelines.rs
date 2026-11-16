@@ -68,6 +68,9 @@ pub(crate) struct ShapePipelines<B: KeyedBuild = ShapePipelineFactory> {
     /// its draws take fallback triangles, instead of the frame building it.
     draws_when_ready: bool,
     recorder: crate::pipeline_recorder::PipelineRecorder,
+    // The specialized pipelines built to compile in the background that had
+    // not landed at the last look.
+    compiling: SmallVec<[ShapePipelineKey; 8]>,
 }
 
 impl<B: KeyedBuild> ShapePipelines<B> {
@@ -91,6 +94,7 @@ impl<B: KeyedBuild> ShapePipelines<B> {
             background_builds: false,
             draws_when_ready: compiler.is_active(),
             recorder,
+            compiling: SmallVec::new(),
         }
     }
 
@@ -105,11 +109,39 @@ impl<B: KeyedBuild> ShapePipelines<B> {
         )
     )]
     pub(crate) fn build_in_background(&mut self) {
-        self.background_builds = true;
+        if !self.background_builds {
+            self.background_builds = true;
+            // The frames before stood in for these. A frame that keeps their
+            // stand-ins draws none of them again to want them.
+            self.build_wanted();
+        }
+    }
+
+    // Whether a specialized pipeline built to compile in the background
+    // landed since the last look. No draw waits for one: the universal
+    // pipeline stands in, so no pass leaves a draw out for the browser to
+    // report its landing.
+    #[cfg_attr(
+        not(any(test, target_arch = "wasm32")),
+        expect(
+            dead_code,
+            reason = "only the web backend builds pipelines in the background"
+        )
+    )]
+    pub(crate) fn take_landed(&mut self) -> bool {
+        let compiling = self.compiling.len();
+        let slots = &self.slots;
+        self.compiling
+            .retain(|key| !slots.get(*key).is_some_and(B::landed));
+        self.compiling.len() != compiling
     }
 
     pub(crate) fn begin_frame(&mut self) {
-        self.slots.begin_frame();
+        // Until the browser compiles in the background, the wants wait for
+        // it with the stand-ins drawn on screen.
+        if self.background_builds {
+            self.slots.begin_frame();
+        }
     }
 
     /// Queues `key`'s build on the warm-up lane unless it is already queued
@@ -137,7 +169,8 @@ impl<B: KeyedBuild> ShapePipelines<B> {
     /// the browser compiles them in the background.
     pub(crate) fn build_wanted(&mut self) {
         if self.background_builds {
-            self.slots.build_wanted();
+            let compiling = &mut self.compiling;
+            self.slots.build_wanted(|key| compiling.push(key));
         }
     }
 
@@ -332,12 +365,15 @@ impl<B: KeyedBuild> Slots<B> {
         self.wanted.add(key);
     }
 
-    /// Builds here every pipeline draws wanted.
-    pub(crate) fn build_wanted(&mut self) {
+    // Builds here every pipeline draws wanted, handing `built` each key it
+    // built now.
+    pub(crate) fn build_wanted(&mut self, mut built: impl FnMut(ShapePipelineKey)) {
         for key in self.wanted.drain() {
-            Self::entry(&mut self.entries, key)
-                .value
-                .get_or_init(|| self.builder.build(key));
+            let value = &Self::entry(&mut self.entries, key).value;
+            if value.get().is_none() {
+                value.get_or_init(|| self.builder.build(key));
+                built(key);
+            }
         }
     }
 

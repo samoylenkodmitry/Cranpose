@@ -971,7 +971,6 @@ impl GpuRenderer {
                 #[cfg(not(target_arch = "wasm32"))]
                 landing: pipeline_compiler.landing(),
                 compiler: pipeline_compiler,
-                #[cfg(not(target_arch = "wasm32"))]
                 built_at_frame_start: 0,
                 drew_placeholder: Cell::new(false),
                 stand_ins_kept: Cell::new(false),
@@ -1739,26 +1738,21 @@ impl GpuRenderer {
     /// the retained layers, which may hold that placeholder, are dropped.
     fn begin_placeholder_frame(&mut self) {
         self.pipelines.drew_placeholder.set(false);
-        #[cfg(not(target_arch = "wasm32"))]
-        if let Some(landing) = &self.pipelines.landing {
-            self.pipelines.built_at_frame_start = landing.built();
-            if landing.take_landed() {
-                self.drop_kept_drawing();
-            }
+        if self.pipelines.take_landing_at_frame_start() {
+            self.drop_kept_drawing();
         }
     }
 
-    /// Drops what earlier frames drew and kept, the layers and the blurred
-    /// shadows: pipelines the browser compiled in the background landed, and
-    /// those were drawn while the draws that use them were left out.
+    /// Counts the landing of pipelines the browser compiled in the
+    /// background, whose draws earlier frames left out: the next frame drops
+    /// what those frames drew and kept, the layers and the blurred shadows.
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn background_pipelines_landed(&mut self) {
-        self.drop_kept_drawing();
+        self.pipelines.compiler.note_landing();
     }
 
     // Drops the layers and the blurred shadows earlier frames drew and
-    // kept. The frames the targets keep hold the parts they drew while these
-    // held stand-ins, and the next frame draws those parts again.
+    // kept, which may hold stand-ins, as pipelines landed.
     fn drop_kept_drawing(&mut self) {
         self.layer_cache.clear();
         self.shadow_surfaces.clear();
@@ -1993,6 +1987,10 @@ impl GpuRenderer {
             if let Some(execution) = &execution {
                 self.frame_stats.record_command_stats(execution.stats);
                 self.pipelines.compiler.watch_paced_landing(&self.queue);
+            } else {
+                self.pipelines
+                    .compiler
+                    .watch_paced_landing_unsubmitted(&self.device, &self.queue);
             }
             (result, execution.is_some())
         };

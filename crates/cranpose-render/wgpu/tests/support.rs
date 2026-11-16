@@ -1063,6 +1063,7 @@ pub(crate) fn pipelines_settled(stats: &RenderStatsSnapshot) -> bool {
         && stats.shader_pipeline_fallback_draws == 0
         && stats.placeholder_draws == 0
         && stats.instant_draws == 0
+        && stats.kept_stand_in_pixels == 0
 }
 
 pub(crate) fn capture_settled(

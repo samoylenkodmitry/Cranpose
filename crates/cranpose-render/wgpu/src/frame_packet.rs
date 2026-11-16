@@ -158,7 +158,8 @@ impl RenderReturns {
             }),
             held: Some(HeldWindow {
                 oldest: packet.frame_id,
-                stand_ins: Damage::Part(DamageRects::default()),
+                stand_ins: Damage::NONE,
+                landings: None,
             }),
             scene: Some(FrameSceneStorage {
                 root: packet.root,
@@ -170,13 +171,16 @@ impl RenderReturns {
     }
 }
 
-// The oldest frame a window's targets hold, and the parts of their frames
-// drawn with stand-ins: a window frame draws the damages since that frame
-// and those parts again, or whole when a frame may show one anywhere.
+// The oldest frame a window's targets hold, the parts of their frames drawn
+// with stand-ins, and the landings counted when those were drawn, `None`
+// when they were drawn at different counts: a window frame draws the
+// damages since that frame and, after a landing, those parts again, or
+// whole when a frame may show one anywhere.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct HeldWindow {
     pub(crate) oldest: u64,
     pub(crate) stand_ins: Damage,
+    pub(crate) landings: Option<u64>,
 }
 
 #[derive(Default)]

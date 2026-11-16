@@ -405,6 +405,23 @@ fn a_paced_build_between_frames_lands_without_a_frame() {
     assert!(landing.may_build());
 }
 
+// Frames that keep the stand-ins of the frame before submit nothing, and the
+// page draws them while it waits for the next landing: the frame that ran
+// the build and the frames after it must still tell when the GPU has done
+// it, or no build would run again and the stand-ins would stay.
+#[test]
+fn a_paced_build_lands_over_frames_that_submit_nothing() {
+    let (_lock, device, queue) = crate::frame_graph::upload_test_device();
+    let landing = PacedLanding::default();
+    landing.built();
+    landing.watch_unsubmitted(&device, &queue);
+    let started = Instant::now();
+    while !landing.may_build() && started.elapsed() < Duration::from_secs(5) {
+        landing.watch_unsubmitted(&device, &queue);
+    }
+    assert!(landing.may_build());
+}
+
 // A paced build waits for a frame whose scene stands still, and the demo's
 // glass tiles tab, whose clock never stops, drew its glass's stand-in for
 // good: a demanded build runs after a bounded number of moving frames, and

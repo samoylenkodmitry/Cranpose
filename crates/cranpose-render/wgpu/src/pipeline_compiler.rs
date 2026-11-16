@@ -177,6 +177,10 @@ pub(crate) struct PipelineCompiler {
     paced: std::rc::Rc<std::cell::RefCell<Queues>>,
     #[cfg(target_arch = "wasm32")]
     paced_landing: std::rc::Rc<PacedLanding>,
+    // The landings of the pipelines a draw may stand in for: paced builds
+    // and pipelines the browser compiled in the background.
+    #[cfg(target_arch = "wasm32")]
+    landings: std::rc::Rc<std::cell::Cell<u64>>,
     #[cfg(target_arch = "wasm32")]
     background_warm_ups: std::rc::Rc<BackgroundWarmUps>,
     #[cfg(target_arch = "wasm32")]
@@ -258,6 +262,19 @@ impl PacedLanding {
     pub(crate) fn built_between_frames(&self, queue: &wgpu::Queue) {
         self.built();
         crate::frame_graph::submit_nothing::submit_nothing(queue);
+        self.watch(queue);
+    }
+
+    // Called after a frame that submitted nothing, as one that keeps the
+    // stand-ins of the frame before: for a build it ran, an empty submit
+    // places the fence, and while a build is in flight a poll does the
+    // maintenance that no submit does then.
+    pub(crate) fn watch_unsubmitted(&self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        if self.watch.get() {
+            crate::frame_graph::submit_nothing::submit_nothing(queue);
+        } else if !self.may_build() && device.poll(wgpu::PollType::Poll).is_err() {
+            log::debug!("[pipeline-compiler] the poll for the last paced build failed");
+        }
         self.watch(queue);
     }
 
@@ -548,6 +565,20 @@ impl PipelineCompiler {
             .map(|workers| Arc::clone(&workers.landing))
     }
 
+    // How many of the pipelines this compiler builds landed: its paced
+    // builds and those the browser compiled in the background.
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn landings(&self) -> u64 {
+        self.landings.get()
+    }
+
+    // Counts the landing of pipelines the browser compiled in the
+    // background.
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn note_landing(&self) {
+        self.landings.set(self.landings.get().wrapping_add(1));
+    }
+
     pub(crate) fn is_active(&self) -> bool {
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -700,6 +731,7 @@ impl PipelineCompiler {
             if let Some(job) = paced {
                 job();
                 self.paced_landing.built();
+                self.note_landing();
             }
         }
     }
@@ -730,6 +762,7 @@ impl PipelineCompiler {
         if let Some(job) = job {
             job();
             self.paced_landing.built_between_frames(queue);
+            self.note_landing();
             return true;
         }
         let warm_ups = &self.background_warm_ups;
@@ -764,6 +797,17 @@ impl PipelineCompiler {
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn watch_paced_landing(&self, queue: &wgpu::Queue) {
         self.paced_landing.watch(queue);
+    }
+
+    // After a frame that submitted nothing, as one that keeps the stand-ins
+    // of the frame before: see `PacedLanding::watch_unsubmitted`.
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn watch_paced_landing_unsubmitted(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+    ) {
+        self.paced_landing.watch_unsubmitted(device, queue);
     }
 
     /// Whether the warm-up threads take demanded jobs before their own. A

@@ -116,9 +116,8 @@ pub(crate) struct RendererPipelines {
     /// for landed.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) landing: Option<Arc<crate::pipeline_compiler::Landing>>,
-    /// The pipelines the background threads had built when this frame
-    /// started.
-    #[cfg(not(target_arch = "wasm32"))]
+    // The landings counted when this frame started: on native, the
+    // pipelines the background threads had built.
     pub(crate) built_at_frame_start: u64,
     /// Whether this frame drew a placeholder in place of an effect whose
     /// pipelines were compiling, or left out a draw whose pipeline was.
@@ -172,6 +171,56 @@ impl RendererPipelines {
     pub(crate) fn compile_pipelines_in_background(&mut self) {
         self.shape_pipelines.build_in_background();
         self.compiler.compile_in_background();
+    }
+
+    // How many times pipelines landed that a draw may stand in for: a
+    // stand-in drawn at the same count draws the same pixels. The
+    // compiler's threads count their builds; on the web the compiler
+    // counts WebGL's paced builds and the pipelines a WebGPU page compiled
+    // in the background, the shape pipelines among them as `count_landings`
+    // finds them landed.
+    pub(crate) fn landings(&self) -> u64 {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.landing.as_ref().map_or(0, |landing| landing.built())
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.compiler.landings()
+        }
+    }
+
+    // Starts a frame's count of landings: whether a pipeline that a stand-in
+    // waited for landed, so the kept layers and blurred shadows, which may
+    // hold that stand-in, go. On native the compiler's threads tell it. On
+    // the web a landing counted since the last frame does while the kept
+    // drawing may hold stand-ins: WebGL's paced builds, the pipelines the
+    // browser compiled in the background, the shapes among them.
+    pub(crate) fn take_landing_at_frame_start(&mut self) -> bool {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let Some(landing) = &self.landing else {
+                return false;
+            };
+            self.built_at_frame_start = landing.built();
+            landing.take_landed()
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            let landings = self.landings();
+            let started = std::mem::replace(&mut self.built_at_frame_start, landings);
+            started != landings && self.stand_ins_kept.get()
+        }
+    }
+
+    // The count of landings for the frame about to be built, with the
+    // specialized shape pipelines that landed since the last look counted.
+    pub(crate) fn count_landings(&mut self) -> u64 {
+        #[cfg(target_arch = "wasm32")]
+        if self.shape_pipelines.take_landed() {
+            self.compiler.note_landing();
+        }
+        self.landings()
     }
 
     /// Whether the background compiler has a queued pipeline left to build.
@@ -690,8 +739,14 @@ impl RendererPipelines {
     /// Asks for the frame after the next pipeline lands: this one drew
     /// something in place of what that pipeline draws.
     fn await_landing(&self) {
-        self.drew_placeholder.set(true);
         self.stand_ins_kept.set(true);
+        self.await_landing_over_stand_ins();
+    }
+
+    // Asks for the frame after the next pipeline lands: this frame's image
+    // shows stand-ins, which that frame draws again.
+    pub(crate) fn await_landing_over_stand_ins(&self) {
+        self.drew_placeholder.set(true);
         self.recorder.hold_first_screen();
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(landing) = &self.landing {

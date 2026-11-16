@@ -264,6 +264,10 @@ pub struct FrameStatsSnapshot {
     /// The window pixels the frame drew again: all of them, or those of the
     /// damage, over what the frame before left in the rest.
     pub repainted_pixels: u64,
+    /// The window pixels the frame's image still shows as an earlier frame
+    /// drew them with stand-ins, which the frame did not draw again: no
+    /// pipeline landed since. A frame after the next landing draws them.
+    pub kept_stand_in_pixels: u64,
     /// Texts drawn from the cache of rasterized text images.
     pub text_image_cache_hits: u32,
     /// Texts rasterized into an image because the cache held none.
