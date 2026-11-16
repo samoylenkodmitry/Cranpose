@@ -13,7 +13,7 @@ path = "tests/vulkan_sync.rs"
 
 [dev-dependencies]
 log = "0.4"
-pollster = "0.4.0"
+pollster = "1.0.1"
 wgpu = { package = "cranpose-wgpu", path = "../wgpu", default-features = false, features = [
     "std",
     "vulkan",

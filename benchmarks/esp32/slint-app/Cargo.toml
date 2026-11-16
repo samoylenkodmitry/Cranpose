@@ -21,7 +21,7 @@ log = "0.4"
 slint = { version = "=1.18.1", default-features = false, features = ["compat-1-2", "unsafe-single-threaded", "libm", "renderer-software", "software-renderer-path"] }
 
 [build-dependencies]
-embuild = "0.33.5"
+embuild = "0.33.7"
 slint-build = "=1.18.1"
 
 # The display of the benchmark boards, which the LVGL benchmark draws

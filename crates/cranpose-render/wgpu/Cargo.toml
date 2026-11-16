@@ -50,10 +50,10 @@ cranpose-text = { workspace = true }
 cranpose-core = { workspace = true }
 bytemuck = { workspace = true }
 log = "0.4"
-naga = { version = "30.0.1", features = ["wgsl-in"] }
+naga = { version = "30.0.2", features = ["wgsl-in"] }
 thiserror = "2.0.21"
 web-time = { workspace = true }
-smallvec = "1.16.4"
+smallvec = "1.16.5"
 
 # Native pipelines take their stages specialized, folded and flattened.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
@@ -142,13 +142,13 @@ wgpu = { workspace = true, features = [
 ] }
 # The WebGL fallback is always compiled on web, so runtime-shader GL
 # portability validation needs naga's GLSL writer there unconditionally.
-naga = { version = "30.0.1", features = ["wgsl-in", "glsl-out"] }
+naga = { version = "30.0.2", features = ["wgsl-in", "glsl-out"] }
 
 # Emscripten builds, such as a Godot web export's extension, draw with the GL
 # backend on the WebGL2 context the host made current.
 [target.'cfg(target_os = "emscripten")'.dependencies]
 wgpu = { workspace = true, features = ["std", "gles", "wgsl"] }
-naga = { version = "30.0.1", features = ["wgsl-in", "glsl-out"] }
+naga = { version = "30.0.2", features = ["wgsl-in", "glsl-out"] }
 
 [build-dependencies]
 cranpose-gl-templates = { workspace = true, optional = true }
@@ -166,9 +166,9 @@ cranpose-macros = { path = "../../cranpose-macros" }
 # Unit tests exercise the embedded fallback font and GL portability validation
 # on every platform, independent of the production feature set.
 cranpose-render-common = { path = "../common", features = ["embedded-default-font"] }
-naga = { version = "30.0.1", features = ["wgsl-in", "glsl-out"] }
+naga = { version = "30.0.2", features = ["wgsl-in", "glsl-out"] }
 png = "0.18.1"
-pollster = "0.4.0"
+pollster = "1.0.1"
 stats_alloc = "0.1.10"
 # The GL lowering of the fork the web and Android draw with, which the
 # `gles_lowering` tests run on every host.

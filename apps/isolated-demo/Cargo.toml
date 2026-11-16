@@ -77,7 +77,7 @@ web-sys = { version = "0.3", features = [
 ] }
 
 [target.wasm32-unknown-unknown.dependencies]
-wasm-bindgen-futures = "0.4.79"
+wasm-bindgen-futures = "0.4.80"
 
 [workspace]
 

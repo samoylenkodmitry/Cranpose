@@ -41,7 +41,7 @@ web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlC
 eframe = { version = "0.37.0", default-features = false, features = ["glow", "default_fonts", "accesskit", "android-game-activity"] }
 # egui-winit leaves AccessKit's Android adapter out, so Android would get the
 # adapter that drops every tree; this feature turns the real one on.
-accesskit_winit = { version = "0.34.1", default-features = false, features = ["accesskit_android"] }
+accesskit_winit = { version = "0.34.2", default-features = false, features = ["accesskit_android"] }
 android_logger = "0.15"
 winit = { version = "0.30.13", default-features = false }
 
