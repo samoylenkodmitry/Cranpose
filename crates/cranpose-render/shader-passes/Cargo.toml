@@ -15,4 +15,4 @@ description = "Folds and flattens naga shader stages before a driver compiles th
 workspace = true
 
 [dependencies]
-naga = "30.0.1"
+naga = "30.0.2"
