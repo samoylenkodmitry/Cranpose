@@ -47,7 +47,7 @@ pub(crate) const WORKSPACE_DUPLICATE_DEBT: &[DuplicateDebt] = &[
     },
     DuplicateDebt {
         family: "miniz_oxide",
-        reason: "flate2 1.1.10 moved to ^0.9 while png 0.18.1 (latest) is still on ^0.8",
+        reason: "flate2 1.1.11 moved to ^0.9 while png 0.18.1 (latest) is still on ^0.8",
     },
     DuplicateDebt {
         family: "objc2",
@@ -75,8 +75,9 @@ pub(crate) const WORKSPACE_DUPLICATE_DEBT: &[DuplicateDebt] = &[
     },
     DuplicateDebt {
         family: "rustc-hash",
-        reason: "fluent-bundle 0.16.0 and type-map 0.5.1 require rustc-hash 2.x (Askama 0.16 in UniFFI's all-features graph also requires 2.x), while wgpu-core 30.0.7, naga 30.0.1, and naga-types 30.0.1 require 1.1.x; unifying these incompatible major-version constraints would require changing upstream dependencies",
-    },    DuplicateDebt {
+        reason: "fluent-bundle 0.16.0 and type-map 0.5.1 require rustc-hash 2.x (Askama 0.16 in UniFFI's all-features graph also requires 2.x), while cranpose-wgpu-core 30.0.24, naga 30.0.2, and naga-types 30.0.2 require 1.1.x; unifying these incompatible major-version constraints would require changing upstream dependencies",
+    },
+    DuplicateDebt {
         family: "x11rb",
         reason: "arboard 3.7.0 (latest) holds x11rb ^0.13 while winit-x11 0.31.0-beta.4 is on ^0.14",
     },
