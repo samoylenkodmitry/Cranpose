@@ -2,7 +2,13 @@
 // with its session's context, hands the renderer a device whose context wgpu does not own.
 #![expect(unsafe_code, reason = "makes an EGL context and hands it to wgpu")]
 
-use std::ffi::c_void;
+use std::{
+    ffi::c_void,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+};
 
 use cranpose_render_common::graph::{DrawRunNode, PrimitivePhase, RenderNode};
 use cranpose_ui_graphics::{Brush, Color, DrawPrimitive, Rect};
@@ -90,6 +96,19 @@ fn a_host_gl_context_draws_its_first_frame_whole() {
         Ok(host) => host,
         Err(error) => panic!("this test needs EGL with GLES 3: {error}"),
     };
+    // A compiler thread that calls GL with no context current fails and ends
+    let compiler_failures = Arc::new(AtomicUsize::new(0));
+    let failures = Arc::clone(&compiler_failures);
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        if std::thread::current()
+            .name()
+            .is_some_and(|name| name.starts_with("cranpose-"))
+        {
+            failures.fetch_add(1, Ordering::Relaxed);
+        }
+        previous(info);
+    }));
     let adapter = host.adapter().expect("GL adapter");
     let mut renderer = LockedRenderer::on_adapter(&adapter).expect("renderer");
     let bounds = Rect {
@@ -118,4 +137,6 @@ fn a_host_gl_context_draws_its_first_frame_whole() {
     let middle = ((SIZE / 2 * SIZE + SIZE / 2) * 4) as usize;
     let pixel = &frame.pixels[middle..middle + 4];
     assert!(pixel[0] > 200 && pixel[1] < 60, "{pixel:?}");
+    support::wait_for_background_compiler_idle();
+    assert_eq!(compiler_failures.load(Ordering::Relaxed), 0);
 }
