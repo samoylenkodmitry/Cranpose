@@ -1,5 +1,6 @@
 # Agent Notes for Cranpose
 
+- You are the repository's sole owner: nobody else finishes what you leave. Take every change from its root cause to merged, measured and cleaned up. Run the gates a change touches before you push it. Close open threads, such as an unpushed branch or a stale issue checkbox, without waiting to be asked.
 - Handle all platforms, always. A change is not done while any platform Cranpose ships lacks it: Android, iOS, watchOS, macOS, Windows, Linux and the web (WebGPU and WebGL).
 - Never write absurd, wasteful code, and remove any you spot in the codebase as soon as you spot it.
 - Tests: write only e2e and integration tests through public entry points, plus tests for corner cases that can break behavior. No unit tests of implementation details (private state or storage, internal structure, call order, type sizes, allocation capacities, pointer reuse): they test nothing and duplicate the code. Put integration tests in `tests/`. Test bodies go under `/test*/`, never beside implementation: declare them with `#[cfg(test)] #[path = "tests/<name>.rs"] mod tests;` (`scripts/dev/move_inline_tests.py <file>...` moves an inline module out). Measure performance with benchmarks and profiles.
