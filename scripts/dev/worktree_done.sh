@@ -95,9 +95,12 @@ fi
 #    directory is inside it. This script's own process group is skipped, since
 #    its git and ps calls carry the path.
 live_process() {
-    local pids pid pgid mine cwd
+    local pids pid pgid mine cwd named
     mine="$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ')"
-    pids="$(pgrep -f "$path" 2>/dev/null || true)"
+    # The path as a whole name: a sibling whose name extends it, such as
+    # `<path>-web`, names another worktree.
+    named="$(printf '%s' "$path" | sed 's/[][\.*^$+?(){}|]/\\&/g')"'($|[/[:space:]"'"'"'])'
+    pids="$(pgrep -f -- "$named" 2>/dev/null || true)"
     if command -v lsof >/dev/null 2>&1; then
         pids="$pids $(lsof -a -d cwd -Fpn 2>/dev/null | awk -v wt="$path" '
             /^p/ { pid = substr($0, 2) }
