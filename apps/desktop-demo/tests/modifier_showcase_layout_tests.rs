@@ -1,7 +1,7 @@
 use cranpose_core::MutableState;
 use cranpose_testing::ComposeTestRule;
 use cranpose_ui::{HeadlessRenderer, LayoutBox, LayoutEngine, LayoutTree, RenderOp, Size};
-use desktop_app::app::{
+use desktop_app::app::modifier_showcase::{
     complex_chain_showcase, dynamic_modifiers_showcase, item_list_showcase,
     positioned_boxes_showcase, simple_card_showcase,
 };
