@@ -21,7 +21,9 @@ const PANEL_PIXELS: Size = Size {
     height: 400.0,
 };
 const PANEL_METERS: (f32, f32) = (1.2, 0.75);
-const FLOOR_METERS: f32 = 8.0;
+// The floor's side in half meters: it has a line every half meter, a bright one every meter
+const FLOOR_HALF_METERS: u32 = 16;
+const FLOOR_METERS: f32 = FLOOR_HALF_METERS as f32 / 2.0;
 const GLOBE_RADIUS: f32 = 0.22;
 const SPIN_PER_SECOND: f32 = 0.6;
 
@@ -128,7 +130,7 @@ fn Floor(mesh: Arc<Mesh>) {
             .draw_behind(|scope| {
                 let size = scope.size();
                 scope.draw_rect(Brush::solid(Color(0.10, 0.11, 0.14, 1.0)));
-                let lines = (FLOOR_METERS * 2.0) as u32;
+                let lines = FLOOR_HALF_METERS;
                 for i in 0..=lines {
                     let t = i as f32 / lines as f32;
                     let (color, width) = if i % 2 == 0 {
