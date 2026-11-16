@@ -23,19 +23,20 @@ while it gains enough to justify the fork; each one is offered upstream.
 
 Upstream: <https://github.com/gfx-rs/wgpu>, commit
 `40f4a34ebaf56f9a046231f54125ad046239d3f3` (`wgpu-hal` 30.0.1).
-`cranpose-wgpu-hal` is at 30.0.22 for the catch-up barrier, the Metal
+`cranpose-wgpu-hal` is at 30.0.23 for the catch-up barrier, the Metal
 pipeline switch, the dedicated Vulkan allocations, the GL point size, the
 GL state tracker, the web surface usages, the boxed GL copy commands, the
 Vulkan command pools that give a burst's memory back, the GL shaders
 without the branches their constants decide, the GL program status read
 only on failure, the GLSL templates, the GL link reads, the WebGL
-extensions, the GL varying minimum, the presentable image identities and
-the WebGL frames drawn into the canvas below. `cranpose-wgpu-core` is at
-30.0.25 to require those, to make
+extensions, the GL varying minimum, the presentable image identities, the
+WebGL frames drawn into the canvas and the GL bindings a link already
+sets below. `cranpose-wgpu-core` is at
+30.0.26 to require those, to make
 template modules, to configure a surface while another thread submits, to
 let Vulkan pipelines drop their shader modules, to hand presented
 images back as they presented and to encode a buffer copy without a heap
-list. `cranpose-wgpu` is at 30.0.29 for
+list. `cranpose-wgpu` is at 30.0.30 for
 the background compiles, the pipeline readiness and the kept swapchain
 images below and to require them.
 
@@ -240,6 +241,18 @@ it draws no frames, calls it once the GPU has done the work submitted after
 the last one, and the first frame that draws with them reads none. In
 Chrome on the Mate a tab bar's first tap read 22 such links in its frame,
 113 ms of a 262 ms frame.
+
+### GL programs skip the bindings a link already sets
+
+Where shaders cannot name their bindings, the device binds each uniform
+block and sampler by name once a program links. A link puts every uniform
+block on binding point 0 and every sampler on texture unit 0, so the
+device now skips the bindings at slot 0. WebGL answers a program's first
+uniform block lookup only after the GPU process replies, so a program
+whose blocks all sit at slot 0 now waits for no reply. In Chrome on a
+Huawei Mate 20 X, 7 of the 17 programs read in the gauntlet's first frame
+are such programs. Its waits went from 34 to 27, and the frame took 60.8
+and 59.9 ms against 70.2 and 62.9 ms.
 
 ### The GL queue skips calls that set what the context holds
 
