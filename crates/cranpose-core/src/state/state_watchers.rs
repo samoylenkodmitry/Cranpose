@@ -8,9 +8,12 @@ use smallvec::SmallVec;
 use super::Subscribers;
 use crate::{
     RecomposeScope, RecomposeScopeInner, RuntimeHandle, ScopeId, StateId,
-    collections::map::HashMap, debug_trace::debug_record_scope_invalidation,
+    collections::map::HashMap, debug_trace::debug_record_scope_invalidation, runtime::StateArena,
     with_current_composer_opt,
 };
+
+// How many readers a state invalidates from a list on the stack.
+const INLINE_READERS: usize = 4;
 
 // The scopes that read a state and the runtime they recompose in, whatever
 // the state's value type, so that registering a reader and invalidating the
@@ -100,16 +103,34 @@ impl StateWatchers {
     }
 
     // Invalidates the live scopes that read the state, whose value type is
-    // named `type_name`, and drops the dead ones.
+    // named `type_name`, and drops the dead ones. The live ones are copied
+    // first: invalidating one may run any code. A few stay on the stack;
+    // more go to the arena's spare list.
     pub(super) fn invalidate(&self, subscribers: &Subscribers, type_name: &'static str) {
-        // A state has few watchers: their copy stays inline.
-        let (watchers, removed_count): (SmallVec<[RecomposeScope; 4]>, usize) = {
+        if self.scopes.borrow().len() <= INLINE_READERS {
+            let mut live = SmallVec::<[RecomposeScope; INLINE_READERS]>::new();
+            self.copy_live(subscribers, &mut live);
+            self.invalidate_each(&live, type_name);
+            return;
+        }
+        let mut live = self
+            .runtime
+            .try_with_state_arena(StateArena::take_reader_list)
+            .unwrap_or_default();
+        self.copy_live(subscribers, &mut live);
+        self.invalidate_each(&live, type_name);
+        self.runtime
+            .try_with_state_arena(|arena| arena.recycle_reader_list(live));
+    }
+
+    // Copies the live watchers to `live` and drops the dead ones.
+    fn copy_live(&self, subscribers: &Subscribers, live: &mut impl Extend<RecomposeScope>) {
+        let removed_count = {
             let mut watchers = self.scopes.borrow_mut();
             let before = watchers.len();
-            let mut live = SmallVec::new();
             watchers.retain(|_, scope| {
                 if let Some(inner) = scope.upgrade() {
-                    live.push(RecomposeScope { inner });
+                    live.extend([RecomposeScope { inner }]);
                     true
                 } else {
                     false
@@ -117,11 +138,13 @@ impl StateWatchers {
             });
             let removed_count = before - watchers.len();
             shrink_watchers_if_sparse(&mut watchers);
-            (live, removed_count)
+            removed_count
         };
         subscribers.remove_scope_observers(removed_count);
+    }
 
-        for watcher in watchers {
+    fn invalidate_each(&self, live: &[RecomposeScope], type_name: &'static str) {
+        for watcher in live {
             debug_record_scope_invalidation(watcher.id(), self.state_id.get(), type_name);
             if let Some(state_id) = self.state_id.get() {
                 watcher.invalidate_from_state(state_id);

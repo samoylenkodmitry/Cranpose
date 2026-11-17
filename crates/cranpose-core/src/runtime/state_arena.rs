@@ -6,7 +6,7 @@ use std::{
 
 use super::{RuntimeHandle, StateHandleLease};
 use crate::{
-    MutableStateInner, ScopeId,
+    MutableStateInner, RecomposeScope, ScopeId,
     collections::map::HashMap,
     state::{MutationPolicy, NeverEqual},
 };
@@ -74,9 +74,27 @@ pub struct StateArenaDebugStats {
 #[derive(Default)]
 pub(crate) struct StateArena {
     inner: RefCell<StateArenaInner>,
+    // The list a state with many readers copies them into while it
+    // invalidates them, kept from one state to the next.
+    spare_readers: RefCell<Vec<RecomposeScope>>,
 }
 
 impl StateArena {
+    // The spare list of readers, empty, for a state to copy its readers to.
+    pub(crate) fn take_reader_list(&self) -> Vec<RecomposeScope> {
+        std::mem::take(&mut *self.spare_readers.borrow_mut())
+    }
+
+    // Keeps the storage of `readers` for the next state, the larger of two.
+    pub(crate) fn recycle_reader_list(&self, mut readers: Vec<RecomposeScope>) {
+        // Cleared before the borrow: dropping a scope may run any code.
+        readers.clear();
+        let mut spare = self.spare_readers.borrow_mut();
+        if spare.capacity() < readers.capacity() {
+            *spare = readers;
+        }
+    }
+
     pub(crate) fn alloc<T: Clone + 'static>(&self, value: T, runtime: RuntimeHandle) -> StateId {
         self.alloc_with_policy(value, runtime, Rc::new(NeverEqual))
     }

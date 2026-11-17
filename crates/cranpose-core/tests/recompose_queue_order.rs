@@ -81,3 +81,43 @@ fn scopes_of_one_depth_recompose_in_the_order_they_were_invalidated() {
     let first_inner = log.iter().position(inner_only).expect("inner scopes ran");
     assert!(log[first_inner..].iter().all(|&run| run >= INNER));
 }
+
+#[cranpose_macros::composable]
+fn Reader(index: usize, shared: MutableState<u32>, log: Log) {
+    let _ = shared.value();
+    log.borrow_mut().push(index);
+}
+
+// A state that more scopes read than its list on the stack holds
+// invalidates each of them on every change.
+#[test]
+fn a_state_that_many_scopes_read_invalidates_each_on_every_change() {
+    const READERS: usize = 12;
+    let mut composition = Composition::new(MemoryApplier::new());
+    let log: Log = Rc::new(RefCell::new(Vec::new()));
+    let shared = Rc::new(RefCell::new(None));
+    let key = location_key(file!(), line!(), column!());
+    let mut content = {
+        let (log, shared) = (Rc::clone(&log), Rc::clone(&shared));
+        move || {
+            let state = rememberMutableStateOf(|| 0u32);
+            shared.replace(Some(state));
+            for index in 0..READERS {
+                cranpose_core::with_key(&index, || Reader(index, state, Rc::clone(&log)));
+            }
+        }
+    };
+    composition.render(key, &mut content).expect("first render");
+    let state = shared.borrow().expect("the shared state");
+
+    for change in 1..4 {
+        log.borrow_mut().clear();
+        state.set(change);
+        composition
+            .process_invalid_scopes()
+            .expect("the readers recompose");
+        let mut read = log.borrow().clone();
+        read.sort_unstable();
+        assert_eq!(read, (0..READERS).collect::<Vec<_>>(), "change {change}");
+    }
+}
