@@ -274,7 +274,6 @@ pub struct PlainFns {
     update_invalidation: Option<InvalidationKind>,
     layout: Option<&'static PlainLayoutFns>,
     type_name: fn() -> &'static str,
-    equals: fn(&[u32], &[u32]) -> bool,
     inspector_name: fn(&[u32]) -> &'static str,
     inspector_properties: fn(&[u32], &mut dyn FnMut(&'static str, String)),
 }
@@ -341,9 +340,6 @@ impl<E: PlainElement> FnsOf<E> {
         update_invalidation: E::UPDATE_INVALIDATION,
         layout: E::LAYOUT,
         type_name: type_name::<E>,
-        // Equal words are an equal value, as Compose's data classes compare
-        // a NaN field; other words decode to tell the two zeros equal.
-        equals: |a, b| a == b || E::from_words(a) == E::from_words(b),
         inspector_name: |words| E::from_words(words).inspector_name(),
         inspector_properties: |words, inspector| {
             E::from_words(words).inspector_properties(inspector);
@@ -352,15 +348,21 @@ impl<E: PlainElement> FnsOf<E> {
 }
 
 // The hash of a plain element: of its words, in one function for every
-// type. A chain's rebuild alone reads it, to pick an equal entry among
-// those of one type, so two equal values of other bits, as the two zeros,
-// may hash apart.
+// type, as two elements compare.
 fn hash_words(words: &[u32]) -> u64 {
     let mut hasher = default::new();
     for &word in words {
         hasher.write_u32(word);
     }
     hasher.finish()
+}
+
+// Whether two plain elements of one type hold an equal value: equal words,
+// as Compose's data classes compare a float by its bits (the two zeros
+// differ, a NaN equals itself). The words of a value number five at most,
+// so the comparison folds them inline rather than calling `memcmp`.
+fn same_words(a: &[u32], b: &[u32]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).fold(0, |differ, (&x, &y)| differ | (x ^ y)) == 0
 }
 
 /// A plain element as a chain reads it: its type's table, and its value as
@@ -444,7 +446,7 @@ impl PlainValue for PlainWords {
     }
 
     fn equals_words(&self, words: &[u32]) -> bool {
-        (self.fns.equals)(self.words(), words)
+        same_words(self.words(), words)
     }
 }
 
@@ -505,7 +507,7 @@ impl AnyModifierElement for PlainWords {
         // The same table tells the same type without a call; two tables of
         // one type may still differ in address.
         (std::ptr::eq(fns, self.fns) || fns.element_type() == self.fns.element_type())
-            && (self.fns.equals)(self.words(), words)
+            && same_words(self.words(), words)
     }
 }
 
