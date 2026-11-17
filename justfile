@@ -149,7 +149,7 @@ test-emscripten: check-emscripten
 # Lint the iOS simulator binary.
 clippy-ios:
     cargo clippy -p desktop-app --bin cranpose-ios --bin cranpose-liquid-reference --target aarch64-apple-ios-sim --no-default-features --features ios -- -D warnings
-    cargo clippy -p cranpose --target aarch64-apple-ios-sim --no-default-features --features ios,renderer-wgpu,storage-space -- -D warnings
+    cargo clippy -p cranpose --target aarch64-apple-ios-sim --no-default-features --features ios,renderer-wgpu,storage-space,device-auth -- -D warnings
 
 # The feature set `clippy-optional-backends` and `clippy-release` both lint.
 optional_backend_features := "desktop,renderer-wgpu,camera-desktop,robot,audio-desktop,media,storekit,playbilling,embed"

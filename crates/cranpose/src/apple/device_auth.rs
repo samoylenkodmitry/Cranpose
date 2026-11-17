@@ -10,6 +10,7 @@ use cranpose_services::{
     DeviceAuthAvailability, DeviceAuthOutcome, DeviceAuthRequest, DeviceAuthenticator,
     finish_device_auth, set_platform_device_authenticator,
 };
+use dispatch2::DispatchQueue;
 use objc2::runtime::Bool;
 use objc2_foundation::{NSError, NSString};
 use objc2_local_authentication::{LAContext, LAErrorDomain, LAPolicy};
@@ -70,9 +71,9 @@ impl DeviceAuthenticator for AppleDeviceAuth {
                 // SAFETY: the framework passes a valid error or null.
                 outcome(unsafe { error.as_ref() }.and_then(local_code))
             };
-            // The answer may come on any thread; the service wakes the
-            // future from there.
-            finish_device_auth(request, outcome);
+            // The answer comes on a queue of the framework; the application
+            // reads it on the main thread, as it reads every other answer.
+            DispatchQueue::main().exec_async(move || finish_device_auth(request, outcome));
             let _ = &held;
         });
         // SAFETY: the policy, the reason and the reply are valid for the
