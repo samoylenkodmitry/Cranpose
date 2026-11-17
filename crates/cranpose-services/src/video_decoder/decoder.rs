@@ -44,8 +44,8 @@ impl VideoDecoder {
 }
 
 /// The decoded pictures of a [`VideoDecoder`]. A clone receives from the same decoder, on any
-/// thread.
-#[derive(Clone)]
+/// thread. Two handles are equal when they receive from the same decoder.
+#[derive(Clone, PartialEq)]
 pub struct DecodedFrames {
     frames: Frames,
 }

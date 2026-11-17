@@ -23,10 +23,15 @@ openxr = [
     "cranpose/renderer-wgpu-gles",
     "dep:openxr",
     "dep:khronos-egl",
+    "dep:glow",
     "dep:wgpu",
     "dep:pollster",
     "dep:android-activity",
 ]
+
+# Times the streamed scenes' passes on the CPU and the GPU, and logs the cost once a second. Off, the
+# passes run with no timing.
+stream-costs = ["openxr"]
 
 [dependencies]
 cranpose = { workspace = true }
@@ -39,6 +44,7 @@ khronos-egl = { version = "6", features = ["dynamic"], optional = true }
 wgpu = { workspace = true, optional = true, features = ["gles", "std"] }
 pollster = { version = "1.0.1", optional = true }
 android-activity = { workspace = true, optional = true }
+glow = { version = "0.18", optional = true }
 
 [dev-dependencies]
 cranpose-testing = { path = "../cranpose-testing" }

@@ -27,7 +27,7 @@ required-features = ["desktop"]
 default = ["renderer-wgpu", "desktop"]
 renderer-wgpu = ["cranpose/renderer-wgpu"]
 desktop = ["cranpose/desktop"]
-android = ["renderer-wgpu", "cranpose/android", "cranpose-xr/openxr"]
+android = ["renderer-wgpu", "cranpose/android", "cranpose-xr/openxr", "cranpose-xr/stream-costs"]
 
 [dependencies]
 cranpose = { workspace = true, features = ["embedded-default-font"] }
