@@ -27,6 +27,33 @@ pixels once at the display's resolution, so its text stays sharp. A dp is a mill
 room. The controllers point at the panels, and their triggers press. Outside a headset the
 panels draw flat, side by side.
 
+A `SpatialCurvedRow` bends the panels inside it around the viewer, as a cylinder layer of the
+compositor. `local_spatial_environment()` gives the app the room around its panels: where the
+headset has passthrough, `set_preferred_passthrough_opacity(Some(1.0))` shows it. Check
+`local_spatial_capabilities().current().is_passthrough_control_enabled()` first.
+
+## Video and camera surfaces
+
+`SpatialExternalSurface` gives the app a surface that a hardware video decoder or a camera
+writes into. The headset's compositor shows the pictures directly as a layer, with no copy through
+Cranpose. `StereoMode` tells how a picture divides between the eyes.
+
+```rust,ignore
+use cranpose_xr::{SpatialExternalSurface, StereoMode, SubspaceModifier};
+
+SpatialExternalSurface(
+    StereoMode::SideBySide,
+    SubspaceModifier::new().size(960.0, 540.0),
+    |scope| {
+        scope.on_surface_created(|surface| start_decoder(surface));
+        scope.on_surface_destroyed(|_| stop_decoder());
+    },
+);
+```
+
+The callbacks receive an `ExternalSurface` from `cranpose-services`. Outside a headset the
+composable shows an empty box, and the callbacks never run.
+
 ## Android headsets
 
 The `openxr` feature adds the backend for Android headsets such as the Meta Quest. The app's
@@ -59,6 +86,12 @@ gets the flat window. On Linux the loader is `libopenxr_loader.so.1`, which the 
 OpenXR package installs. On Windows no runtime puts `openxr_loader.dll` on the DLL search path:
 the release ships the DLL from the Khronos OpenXR SDK beside the executable. With a logger such as
 `env_logger`, `RUST_LOG=cranpose_xr=debug` prints each second's frame count.
+
+Passthrough and curved panels work where the runtime has their extensions. `SpatialExternalSurface`
+is Android only: a desktop headset shows a surface panel as nothing. `just xr-smoke` runs the demo
+against Monado's simulated headset and its null compositor and prints the frames it ran. It finds
+Monado through `XR_MONADO_PREFIX`, the directory that holds `bin/monado-service`, or through
+`monado-service` on PATH.
 
 `apps/xr-demo` in the repository is a complete app. The names follow Jetpack XR Compose, and
 `docs/xr_architecture.md` describes the design and the steps that follow.

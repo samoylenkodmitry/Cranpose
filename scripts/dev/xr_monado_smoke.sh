@@ -1,15 +1,31 @@
 #!/usr/bin/env bash
 # Runs apps/xr-demo against Monado's simulated headset and its null compositor, and prints the
-# frames it ran. Needs `monado-service` on PATH and the OpenXR loader (`libopenxr_loader.so.1`).
-# Usage: scripts/dev/xr_monado_smoke.sh [seconds]
+# frames it ran. Needs the OpenXR loader (`libopenxr_loader.so.1`) and Monado.
+#
+# Monado comes from `XR_MONADO_PREFIX` (the directory that holds `bin/monado-service`,
+# `lib/libopenxr_monado.so` and `share/openxr/1/openxr_monado.json`), or else from the
+# `monado-service` on PATH, whose prefix is the parent of its `bin` directory.
+#
+# Usage: [XR_MONADO_PREFIX=<dir>] scripts/dev/xr_monado_smoke.sh [seconds]
 set -euo pipefail
 
 seconds="${1:-8}"
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
-if ! command -v monado-service >/dev/null; then
-  echo "xr-smoke: monado-service is not on PATH; install Monado first" >&2
+if [[ -n "${XR_MONADO_PREFIX:-}" ]]; then
+  export PATH="$XR_MONADO_PREFIX/bin:$PATH"
+fi
+if ! service_path="$(command -v monado-service)"; then
+  echo "xr-smoke: monado-service is not on PATH; set XR_MONADO_PREFIX or install Monado" >&2
   exit 2
+fi
+prefix="$(cd "$(dirname "$service_path")/.." && pwd)"
+runtime_json="$prefix/share/openxr/1/openxr_monado.json"
+if [[ -z "${XR_RUNTIME_JSON:-}" && -f "$runtime_json" ]]; then
+  export XR_RUNTIME_JSON="$runtime_json"
+fi
+if [[ -d "$prefix/lib" ]]; then
+  export LD_LIBRARY_PATH="$prefix/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 fi
 
 workdir="$(mktemp -d)"
@@ -17,6 +33,7 @@ service=""
 cleanup() {
   if [[ -n "$service" ]]; then
     kill "$service" 2>/dev/null || true
+    wait "$service" 2>/dev/null || true
   fi
 }
 trap cleanup EXIT
@@ -26,12 +43,12 @@ trap cleanup EXIT
 export SIMULATED_ENABLE=true
 export XRT_COMPOSITOR_NULL=true
 export XRT_COMPOSITOR_NULL_FPS=60
-runtime_json=/usr/share/openxr/1/openxr_monado.json
-if [[ -z "${XR_RUNTIME_JSON:-}" && -f "$runtime_json" ]]; then
-  export XR_RUNTIME_JSON="$runtime_json"
-fi
 
-monado-service >"$workdir/monado.log" 2>&1 &
+# Monado watches its standard input with epoll, which a file such as /dev/null refuses, so the
+# service reads a pipe that never carries data.
+mkfifo "$workdir/stdin"
+exec 3<>"$workdir/stdin"
+monado-service <&3 >"$workdir/monado.log" 2>&1 &
 service=$!
 socket="${XDG_RUNTIME_DIR:-/tmp}/monado_comp_ipc"
 for _ in $(seq 1 50); do
@@ -51,5 +68,7 @@ frames="$(grep -o 'cranpose xr: [0-9]* frames' "$workdir/demo.log" | awk '{sum +
 echo "xr-smoke: $frames frames in about $seconds s"
 if [[ "$frames" -eq 0 ]]; then
   echo "xr-smoke: the demo drew no frame" >&2
+  echo "xr-smoke: monado log:" >&2
+  tail -20 "$workdir/monado.log" >&2
   exit 1
 fi

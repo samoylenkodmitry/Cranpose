@@ -45,6 +45,48 @@ impl Ray {
             v,
         })
     }
+
+    /// Where the ray meets a panel of `size` meters bent around a cylinder of `radius` meters.
+    /// `panel` is the pose of the panel's center, which faces its +z, and the cylinder's upright
+    /// axis stands `radius` meters from the center along the panel's +z. The first size is the
+    /// panel's arc length, and `u` runs along the arc. Either side of the panel stops the ray.
+    /// A radius that is not positive or not finite makes the panel flat.
+    pub fn hit_cylinder(&self, panel: &Pose, size: [f32; 2], radius: f32) -> Option<PanelHit> {
+        if !(radius.is_finite() && radius > 0.0) {
+            return self.hit_panel(panel, size);
+        }
+        let start = panel.unrotate([
+            self.origin[0] - panel.position[0],
+            self.origin[1] - panel.position[1],
+            self.origin[2] - panel.position[2],
+        ]);
+        let direction = panel.unrotate(self.direction);
+        // The ray's distance from the axis, in the plane across the axis, equals the radius
+        let from_axis = [start[0], start[2] - radius];
+        let a = direction[0] * direction[0] + direction[2] * direction[2];
+        let b = 2.0 * (from_axis[0] * direction[0] + from_axis[1] * direction[2]);
+        let c = from_axis[0] * from_axis[0] + from_axis[1] * from_axis[1] - radius * radius;
+        let discriminant = b * b - 4.0 * a * c;
+        if a < 1e-12 || discriminant < 0.0 {
+            return None;
+        }
+        let root = discriminant.sqrt();
+        [(-b - root) / (2.0 * a), (-b + root) / (2.0 * a)]
+            .into_iter()
+            .filter(|distance| *distance > 0.0)
+            .find_map(|distance| {
+                let x = start[0] + distance * direction[0];
+                let y = start[1] + distance * direction[1];
+                let z = start[2] + distance * direction[2];
+                let arc = x.atan2(radius - z) * radius;
+                let (u, v) = (arc / size[0] + 0.5, 0.5 - y / size[1]);
+                ((0.0..=1.0).contains(&u) && (0.0..=1.0).contains(&v)).then_some(PanelHit {
+                    distance,
+                    u,
+                    v,
+                })
+            })
+    }
 }
 
 // A ray as shown: from its origin along its direction for `length` meters.

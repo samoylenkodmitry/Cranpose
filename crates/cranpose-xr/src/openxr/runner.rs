@@ -11,12 +11,14 @@ use super::{
     graphics::Graphics,
     handle_layers::HandleLayers,
     host::Host,
-    panel_layers::{DENSITY, PanelLayers},
+    panel_layers::{DENSITY, PanelFrame, PanelLayers},
     ray_layers::RayLayers,
     runtime::Runtime,
     session::{SessionStatus, XrSession},
+    surface_layers::SurfaceLayers,
 };
 use crate::{
+    SpatialCapabilities, SpatialEnvironment, local_spatial_capabilities, local_spatial_environment,
     pointer::{Pointer, PointerEvent},
     space::{Space, local_space},
 };
@@ -41,13 +43,14 @@ pub(crate) fn run_immersive(
         match status {
             SessionStatus::Exit => break,
             SessionStatus::Idle => {}
-            SessionStatus::Running => {
-                immersive.frame()?;
+            running => {
+                immersive.frame(running)?;
                 rate.tick();
             }
         }
     }
-    log::info!("cranpose xr: ends");
+    // The session ends when `immersive` drops, before the device it draws on
+    log::info!("cranpose xr: ends in {status:?}");
     Ok(())
 }
 
@@ -56,8 +59,10 @@ pub(crate) fn run_immersive(
 struct Immersive {
     guest: GuestView,
     space: Space,
+    environment: SpatialEnvironment,
     pointer: Pointer,
     layers: PanelLayers,
+    surfaces: SurfaceLayers,
     rays: RayLayers,
     handles: HandleLayers,
     controllers: Controllers,
@@ -79,25 +84,38 @@ impl Immersive {
         let format = layers.format();
         let rays = RayLayers::new(&xr_session, &gpu, format)?;
         let handles = HandleLayers::new(&xr_session, &gpu, format)?;
-        let composed = Rc::new(RefCell::new(None::<Space>));
+        let capabilities =
+            SpatialCapabilities::in_headset(xr_session.passthrough.is_controllable());
+        let composed = Rc::new(RefCell::new(None::<(Space, SpatialEnvironment)>));
         let held = Rc::clone(&composed);
         let mut guest = GuestView::new(settings, &gpu, format.wgpu, 16, 16, DENSITY, move || {
             let space = remember(Space::new).with(Clone::clone);
-            held.replace(Some(space.clone()));
-            CompositionLocalProvider([local_space().provides(Some(space))], &mut content);
+            let environment = remember(SpatialEnvironment::new).with(|environment| *environment);
+            held.replace(Some((space.clone(), environment)));
+            CompositionLocalProvider(
+                [
+                    local_space().provides(Some(space)),
+                    local_spatial_capabilities().provides(capabilities),
+                    local_spatial_environment().provides(Some(environment)),
+                ],
+                &mut content,
+            );
         })
         .map_err(|error| format!("composition: {error}"))?;
         guest.shell().renderer().set_transparent_background(true);
         // The view composes its content when it is made, and the space stays for the view's life
-        let space = composed
+        let (space, environment) = composed
             .borrow()
             .clone()
             .ok_or("the content did not compose")?;
+        space.set_curves_shown(xr_session.shows_cylinders());
         Ok(Self {
             guest,
             space,
+            environment,
             pointer: Pointer::default(),
             layers,
+            surfaces: SurfaceLayers::new(),
             rays,
             handles,
             controllers,
@@ -107,13 +125,20 @@ impl Immersive {
         })
     }
 
-    // One frame: the controllers move the pointer, the panels that changed draw and the rays
-    // follow the controllers.
-    fn frame(&mut self) -> Result<(), String> {
+    // One frame of a running session. The controllers move the pointer, the panels that changed
+    // draw and the rays follow the controllers. While the headset shows something over the app
+    // the controllers give no input: the pointer sees them lost, which ends a press. While the
+    // runtime shows none of the app's layers the app draws none and ends the frame empty. The
+    // app's state stays as it was.
+    fn frame(&mut self, status: SessionStatus) -> Result<(), String> {
         let frame = self.xr_session.begin_frame()?;
-        let aims = self
-            .controllers
-            .aims(&self.xr_session, frame.predicted_display_time);
+        let aims = if status.listens() {
+            self.controllers
+                .aims(&self.xr_session, frame.predicted_display_time)
+        } else {
+            [None, None]
+        };
+        let shown = status.shows() && frame.should_render;
         let time = Duration::from_nanos(
             frame
                 .predicted_display_time
@@ -127,27 +152,43 @@ impl Immersive {
         if let Some((panel, pose)) = self.pointer.moved() {
             self.space.move_panel(panel, pose);
         }
-        let mut quads = if frame.should_render {
+        self.follow_environment();
+        let PanelFrame {
+            mut quads,
+            cylinders,
+        } = if shown {
             self.layers
                 .draw(&mut self.guest, &self.gpu, &self.xr_session, &self.space)?
         } else {
-            Vec::new()
+            PanelFrame {
+                quads: Vec::new(),
+                cylinders: Vec::new(),
+            }
         };
         // The handles and the rays show over the panels: the rays end on them
         let panels = self.space.panels();
-        if frame.should_render {
+        self.surfaces.sync(&self.xr_session, &self.space, &panels);
+        if shown {
+            quads.extend(self.surfaces.layers(&panels));
             quads.extend(self.handles.layers(&panels, self.pointer.handle()));
             if let Some(head) = self.xr_session.head(frame.predicted_display_time) {
                 quads.extend(self.rays.layers(&self.pointer.beams(), head.position));
             }
         }
         self.xr_session
-            .end_frame(frame.predicted_display_time, &quads)?;
-        drop(quads);
+            .end_frame(frame.predicted_display_time, &cylinders, &quads)?;
+        drop((cylinders, quads));
         if let Err(error) = self.gpu.device.poll(wgpu::PollType::Poll) {
             log::warn!("cranpose xr: device poll: {error}");
         }
         Ok(())
+    }
+
+    // The room follows what the app prefers, and the app learns what the room shows.
+    fn follow_environment(&mut self) {
+        let passthrough = &mut self.xr_session.passthrough;
+        passthrough.set_opacity(self.environment.preference().unwrap_or(0.0));
+        self.environment.show(passthrough.opacity());
     }
 }
 

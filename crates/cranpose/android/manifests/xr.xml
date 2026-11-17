@@ -1,25 +1,102 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-    An immersive application for headsets, such as a Meta Quest, drawn by
-    cranpose-xr through OpenXR. The headset's library lists it, and opening it
-    starts it as an immersive app instead of a window. The Khronos OpenXR
-    loader, which the plugin adds as a dependency for this service, brings its
-    own permissions and the queries it asks the runtime broker with.
+    An immersive application for headsets, drawn by cranpose-xr through
+    OpenXR. One APK carries the entries of every Android OpenXR runtime. A
+    runtime reads its own entries and ignores the others. The headset's library
+    lists the app, and opening it starts it as an immersive app instead of a
+    window. The Khronos OpenXR loader, which the plugin adds as a dependency for
+    this service, brings its own permissions and the queries it asks the runtime
+    broker with.
 
-    `com.oculus.supportedDevices` names the headsets the Meta Horizon Store
-    offers the application to.
+    Two kinds of entry differ between stores, and the Gradle property
+    `cranposeXrStore` (or `cranpose { xrStore }`) picks the values:
+
+        meta        The Meta Horizon Store. The default.
+        android-xr  Google Play for Android XR.
+        open        Pico, HTC, Steam Frame and sideloading: every feature stays
+                    optional.
+
+    `adb install` reads no `uses-feature`. Only the stores filter by it.
+
+    Entries and their sources:
+
+    Every OpenXR runtime
+        `org.khronos.openxr.intent.category.IMMERSIVE_HMD` starts the activity
+        as an immersive app.
+        https://registry.khronos.org/OpenXR/specs/1.1/html/xrspec.html#android-runtime-category
+        Quest, Pico OS 5.9 and later, Wave and Android XR use the Khronos loader.
+
+    Meta Quest
+        https://developers.meta.com/horizon/distribute/publish-mobile-manifest/
+        `com.oculus.intent.category.VR`, `com.oculus.supportedDevices`, a
+        required `android.hardware.vr.headtracking` and
+        `android:excludeFromRecents` on the launching activity are what the
+        store's checks read (VRC.Quest.Packaging).
+        `com.oculus.vr.focusaware` is recommended by SDL's list of manifests:
+        https://wiki.libsdl.org/SDL3/README-xr
+
+    Pico 4 and Pico 4 Ultra
+        `pvr.app.type` is in Pico's own OpenXR SDK guide:
+        https://sdk.picovr.com/docs/OpenXRMobileSDKv2/en/chapter_four.html
+        `pvr.sdk.version` and `pxr.sdk.version_code` come from Godot's Pico
+        plugin, which pulled them in for the Pico Store and the Khronos loader
+        of PICO OS 5.9:
+        https://github.com/GodotVR/godot_openxr_vendors/pull/180
+        https://forum.godotengine.org/t/openxr-apk-is-missing-version-code-fields-pico-store-submission/68865
+        The Pico category `com.picovr.intent.category.VR` is from SDL's list.
+        Pico's documentation names no tracking mode entry to set for an
+        OpenXR app: `com.pvr.hmd.trackingmode` has no source and stays out.
+
+    HTC Vive Focus 3 and XR Elite
+        `com.htc.intent.category.VRAPP` is in SDL's list and in Godot's
+        Khronos plugin. The `com.htc.vr.content.*` entries are the Wave
+        capabilities that VIVEPORT filters apps by. HTC's page does not say
+        whether an OpenXR app reads them:
+        https://hub.vive.com/storage/docs/en-us/ConfigureAppCapabilities.html
+        The `wave.feature.*` entries (hand tracking and others) stay out: the
+        app uses the controllers, and a required unknown feature hides the app
+        on stores that filter by features.
+
+    Android XR (Samsung Galaxy XR)
+        https://developer.android.com/develop/xr/openxr/get-started
+        A full space app that draws through OpenXR starts as unmanaged. The
+        runtime library is declared with `uses-native-library`, as optional so
+        that the other headsets install the app. `android.software.xr.api.openxr`
+        is the feature that Google Play reads for the Android XR release track.
+        No permission is needed: the permissions of that page belong to hand,
+        eye and face tracking and to scene understanding, which this app does
+        not use.
+
+    Steam Frame and Play For Dream
+        No manifest entry of their own was found. Steam Frame runs an APK
+        in its Android container and shows the controllers as Oculus Touch:
+        https://partner.steamgames.com/doc/steamhardware/steamframe/engines/custom
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-feature
         android:name="android.hardware.vr.headtracking"
-        android:required="true"
+        android:required="${cranposeXrHeadtracking}"
         android:version="1" />
+    <uses-feature
+        android:name="android.software.xr.api.openxr"
+        android:required="${cranposeXrOpenxr}" />
     <uses-feature
         android:glEsVersion="0x00030002"
         android:required="true" />
+    <!-- The room around the panels shows through the headset's cameras, where it has them -->
+    <uses-feature
+        android:name="com.oculus.feature.PASSTHROUGH"
+        android:required="false" />
 
     <application>
+        <uses-native-library
+            android:name="libopenxr.google.so"
+            android:required="false" />
+        <property
+            android:name="android.window.PROPERTY_XR_ACTIVITY_START_MODE"
+            android:value="XR_ACTIVITY_START_MODE_FULL_SPACE_UNMANAGED" />
+
         <!-- Horizon OS opens the app as an immersive app, not in a panel window -->
         <meta-data
             android:name="com.oculus.intent.category.VR"
@@ -30,14 +107,38 @@
         <meta-data
             android:name="com.oculus.vr.focusaware"
             android:value="true" />
+
+        <meta-data
+            android:name="pvr.app.type"
+            android:value="vr" />
+        <meta-data
+            android:name="pvr.sdk.version"
+            android:value="OpenXR" />
+        <meta-data
+            android:name="pxr.sdk.version_code"
+            android:value="5800" />
+
+        <meta-data
+            android:name="com.htc.vr.content.NumDoFHmd"
+            android:value="6DoF" />
+        <meta-data
+            android:name="com.htc.vr.content.NumDoFController"
+            android:value="6DoF" />
+        <meta-data
+            android:name="com.htc.vr.content.NumController"
+            android:value="1,2" />
+
         <activity
             android:name="dev.cranpose.android.CranposeActivity"
+            android:excludeFromRecents="${cranposeXrExcludeFromRecents}"
             android:screenOrientation="landscape">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
-                <category android:name="com.oculus.intent.category.VR" />
                 <category android:name="org.khronos.openxr.intent.category.IMMERSIVE_HMD" />
+                <category android:name="com.oculus.intent.category.VR" />
+                <category android:name="com.picovr.intent.category.VR" />
+                <category android:name="com.htc.intent.category.VRAPP" />
             </intent-filter>
         </activity>
     </application>

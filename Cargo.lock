@@ -1633,7 +1633,10 @@ dependencies = [
  "futures-util",
  "image",
  "js-sys",
+ "libc",
  "log",
+ "ndk",
+ "ndk-sys",
  "open",
  "parking_lot",
  "pollster",
@@ -8280,6 +8283,8 @@ dependencies = [
  "cranpose-ui",
  "cranpose-xr",
  "env_logger",
+ "log",
+ "ndk",
 ]
 
 [[package]]

@@ -4,52 +4,104 @@
     reason = "layers made from raw structs with extension structs in their chain"
 )]
 
-use std::ptr;
+use std::{
+    ptr,
+    time::{Duration, Instant},
+};
 
 use openxr as xr;
 
 use super::{
+    cylinder_layers::{CylinderLayer, raw_layers},
     graphics::{Api, Graphics},
+    passthrough::Passthrough,
+    refresh_rate,
     runtime::Runtime,
 };
 use crate::Pose;
+#[cfg(target_os = "android")]
+use crate::stereo_mode::{Eye, EyeView};
 
 const VIEW_CONFIGURATION: xr::ViewConfigurationType = xr::ViewConfigurationType::PRIMARY_STEREO;
+// How long the app waits for the runtime to stop a running session as the app ends, and how
+// often it asks. An activity that is destroyed has few seconds before Android stops it.
+const STOP_WAIT: Duration = Duration::from_millis(1000);
+const STOP_POLL: Duration = Duration::from_millis(10);
 
 // Where the session stands after its events.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SessionStatus {
-    // The headset shows something else: the app waits.
+    // The session has not begun or has ended: the app waits.
     Idle,
-    // The app draws frames.
-    Running,
+    // The session runs and the runtime shows none of its layers: the app ends frames with no
+    // layers.
+    Hidden,
+    // The runtime shows the app's layers, with something over them such as the system menu. The
+    // app gets no input.
+    Visible,
+    // The runtime shows the app's layers and sends the headset's input to the app.
+    Focused,
     // The runtime ends the session: the app ends.
     Exit,
 }
 
-// A layer that shows a whole swapchain image on a flat panel.
+impl SessionStatus {
+    // Whether the session runs: the app begins and ends frames.
+    pub(crate) fn runs(self) -> bool {
+        matches!(self, Self::Hidden | Self::Visible | Self::Focused)
+    }
+
+    // Whether the runtime shows the app's layers.
+    pub(crate) fn shows(self) -> bool {
+        matches!(self, Self::Visible | Self::Focused)
+    }
+
+    // Whether the app gets the controllers' input.
+    pub(crate) fn listens(self) -> bool {
+        self == Self::Focused
+    }
+}
+
+// What a layer shows of its swapchain.
+#[derive(Clone, Copy)]
+pub(crate) enum LayerSource {
+    // The whole image of this size in pixels, which wgpu drew, to both eyes. The compositor
+    // blends its alpha.
+    Drawn((u32, u32)),
+    // The part of a picture that a decoder or a camera writes into a surface swapchain. The
+    // picture is opaque. Only an Android headset's compositor shows surfaces.
+    #[cfg(target_os = "android")]
+    Surface(EyeView),
+}
+
+// A layer that shows a swapchain image on a flat panel.
 pub(crate) struct QuadLayer<'a> {
     pub(crate) swapchain: &'a xr::Swapchain<Api>,
-    pub(crate) image_size: (u32, u32),
+    pub(crate) source: LayerSource,
     pub(crate) pose: Pose,
     // The panel's width and height in meters.
     pub(crate) size: [f32; 2],
 }
 
+// The fields drop in their order: the spaces and the frame ends, then the session, then the
+// instance.
 pub(crate) struct XrSession {
-    instance: xr::Instance,
-    pub(crate) session: xr::Session<Api>,
-    waiter: xr::FrameWaiter,
-    stream: xr::FrameStream<Api>,
+    // The room around the panels. Its handles end before the session does, so it comes first.
+    pub(crate) passthrough: Passthrough,
     // The room as the app sees it: its origin is where the head was when the app started
     pub(crate) local: xr::Space,
     // The head's own space, which the runtime locates for each frame
     view: xr::Space,
-    blend: xr::EnvironmentBlendMode,
+    waiter: xr::FrameWaiter,
+    stream: xr::FrameStream<Api>,
+    pub(crate) session: xr::Session<Api>,
+    instance: xr::Instance,
+    // Whether the runtime shows cylinder layers, which curved panels are
+    cylinders: bool,
     // Whether layers say that their images start with the top row, because the API's own first
     // row is the bottom one and the runtime can flip it
     flips_layers: bool,
-    running: bool,
+    status: SessionStatus,
 }
 
 impl XrSession {
@@ -59,6 +111,7 @@ impl XrSession {
             instance,
             system,
             flips_layers,
+            cylinders,
         } = runtime;
         if !Graphics::TOP_ROW_FIRST && !flips_layers {
             log::warn!("cranpose xr: the runtime cannot flip layers; panels show upside down");
@@ -70,26 +123,31 @@ impl XrSession {
         let view = session
             .create_reference_space(xr::ReferenceSpaceType::VIEW, xr::Posef::IDENTITY)
             .map_err(|error| format!("OpenXR view space: {error}"))?;
-        let blend = instance
+        let modes = instance
             .enumerate_environment_blend_modes(system, VIEW_CONFIGURATION)
-            .ok()
-            .and_then(|modes| modes.first().copied())
-            .unwrap_or(xr::EnvironmentBlendMode::OPAQUE);
+            .unwrap_or_default();
+        let passthrough = Passthrough::new(&session, &modes);
         Ok(Self {
-            instance,
-            session,
-            waiter,
-            stream,
+            passthrough,
             local,
             view,
-            blend,
+            waiter,
+            stream,
+            session,
+            instance,
+            cylinders,
             flips_layers: flips_layers && !Graphics::TOP_ROW_FIRST,
-            running: false,
+            status: SessionStatus::Idle,
         })
     }
 
     pub(crate) fn instance(&self) -> &xr::Instance {
         &self.instance
+    }
+
+    // Whether the runtime shows curved panels on cylinder layers. If not, they show flat.
+    pub(crate) fn shows_cylinders(&self) -> bool {
+        self.cylinders
     }
 
     // Whether layers show their images from the top row, which is how wgpu writes them. If not,
@@ -109,7 +167,8 @@ impl XrSession {
             .then(|| pose_of(&location.pose))
     }
 
-    // Handles the runtime's events: starts and stops the session as the headset asks.
+    // Handles the runtime's events: starts and stops the session as the headset asks, and
+    // returns where the session stands.
     pub(crate) fn poll_events(&mut self) -> Result<SessionStatus, String> {
         let mut buffer = xr::EventDataBuffer::new();
         while let Some(event) = self
@@ -118,36 +177,53 @@ impl XrSession {
             .map_err(|error| format!("OpenXR events: {error}"))?
         {
             match event {
-                xr::Event::SessionStateChanged(change) => {
-                    log::info!("cranpose xr: session {:?}", change.state());
-                    match change.state() {
-                        xr::SessionState::READY => {
-                            self.session
-                                .begin(VIEW_CONFIGURATION)
-                                .map_err(|error| format!("OpenXR begin: {error}"))?;
-                            self.running = true;
-                        }
-                        xr::SessionState::STOPPING => {
-                            self.session
-                                .end()
-                                .map_err(|error| format!("OpenXR end: {error}"))?;
-                            self.running = false;
-                        }
-                        xr::SessionState::EXITING | xr::SessionState::LOSS_PENDING => {
-                            return Ok(SessionStatus::Exit);
-                        }
-                        _ => {}
-                    }
+                xr::Event::SessionStateChanged(change) => self.on_state(change.state())?,
+                xr::Event::DisplayRefreshRateChangedFB(change) => log::info!(
+                    "cranpose xr: refresh rate {} Hz to {} Hz",
+                    change.from_display_refresh_rate(),
+                    change.to_display_refresh_rate()
+                ),
+                xr::Event::InstanceLossPending(_) => {
+                    log::info!("cranpose xr: the runtime loses the instance");
+                    self.status = SessionStatus::Exit;
                 }
-                xr::Event::InstanceLossPending(_) => return Ok(SessionStatus::Exit),
                 _ => {}
             }
+            if self.status == SessionStatus::Exit {
+                break;
+            }
         }
-        Ok(if self.running {
-            SessionStatus::Running
-        } else {
-            SessionStatus::Idle
-        })
+        Ok(self.status)
+    }
+
+    // Follows the session into `state`. The runtime moves it from READY through SYNCHRONIZED and
+    // VISIBLE to FOCUSED, and back down when something else takes the headset.
+    fn on_state(&mut self, state: xr::SessionState) -> Result<(), String> {
+        log::info!("cranpose xr: session {state:?}");
+        self.status = match state {
+            xr::SessionState::READY => {
+                self.session
+                    .begin(VIEW_CONFIGURATION)
+                    .map_err(|error| format!("OpenXR begin: {error}"))?;
+                if self.instance.exts().fb_display_refresh_rate.is_some() {
+                    refresh_rate::request_highest(&self.session);
+                }
+                SessionStatus::Hidden
+            }
+            xr::SessionState::SYNCHRONIZED => SessionStatus::Hidden,
+            xr::SessionState::VISIBLE => SessionStatus::Visible,
+            xr::SessionState::FOCUSED => SessionStatus::Focused,
+            xr::SessionState::STOPPING => {
+                self.session
+                    .end()
+                    .map_err(|error| format!("OpenXR end: {error}"))?;
+                SessionStatus::Idle
+            }
+            xr::SessionState::IDLE => SessionStatus::Idle,
+            xr::SessionState::EXITING | xr::SessionState::LOSS_PENDING => SessionStatus::Exit,
+            _ => self.status,
+        };
+        Ok(())
     }
 
     // Waits for the runtime's next frame and begins it.
@@ -162,10 +238,12 @@ impl XrSession {
         Ok(state)
     }
 
-    // Ends the frame begun last with `layers`, back to front.
+    // Ends the frame begun last. The room is the bottom layer while the runtime shows the app's
+    // layers. Then come the curved panels, then `layers`, back to front.
     pub(crate) fn end_frame(
         &mut self,
         display_time: xr::Time,
+        curved: &[CylinderLayer<'_>],
         layers: &[QuadLayer<'_>],
     ) -> Result<(), String> {
         let mut layouts: Vec<xr::sys::CompositionLayerImageLayoutFB> = layers
@@ -180,23 +258,42 @@ impl XrSession {
             .iter()
             .zip(layouts.iter_mut())
             .map(|(layer, layout)| {
+                let (eye_visibility, offset, extent, blends) = match layer.source {
+                    LayerSource::Drawn((width, height)) => {
+                        (xr::EyeVisibility::BOTH, [0_u32, 0], [width, height], true)
+                    }
+                    #[cfg(target_os = "android")]
+                    LayerSource::Surface(view) => {
+                        (eye_visibility(view.eye), view.offset, view.extent, false)
+                    }
+                };
                 let raw = xr::sys::CompositionLayerQuad {
                     ty: xr::sys::CompositionLayerQuad::TYPE,
+                    // The runtime reads the first row of any swapchain as the bottom one. The
+                    // images of wgpu and the pictures of a surface's producer start with the top
+                    // row.
                     next: if self.flips_layers {
                         ptr::from_mut(layout).cast_const().cast()
                     } else {
                         ptr::null()
                     },
-                    layer_flags: xr::CompositionLayerFlags::BLEND_TEXTURE_SOURCE_ALPHA,
+                    layer_flags: if blends {
+                        xr::CompositionLayerFlags::BLEND_TEXTURE_SOURCE_ALPHA
+                    } else {
+                        xr::CompositionLayerFlags::EMPTY
+                    },
                     space: self.local.as_raw(),
-                    eye_visibility: xr::EyeVisibility::BOTH,
+                    eye_visibility,
                     sub_image: xr::sys::SwapchainSubImage {
                         swapchain: layer.swapchain.as_raw(),
                         image_rect: xr::Rect2Di {
-                            offset: xr::Offset2Di { x: 0, y: 0 },
+                            offset: xr::Offset2Di {
+                                x: offset[0] as i32,
+                                y: offset[1] as i32,
+                            },
                             extent: xr::Extent2Di {
-                                width: layer.image_size.0 as i32,
-                                height: layer.image_size.1 as i32,
+                                width: extent[0] as i32,
+                                height: extent[1] as i32,
                             },
                         },
                         image_array_index: 0,
@@ -212,11 +309,55 @@ impl XrSession {
                 unsafe { xr::CompositionLayerQuad::from_raw(raw) }
             })
             .collect();
-        let references: Vec<&xr::CompositionLayerBase<'_, Api>> =
-            quads.iter().map(|quad| &**quad).collect();
+        let flip = xr::sys::CompositionLayerImageLayoutFB {
+            ty: xr::sys::CompositionLayerImageLayoutFB::TYPE,
+            next: ptr::null_mut(),
+            flags: xr::sys::CompositionLayerImageLayoutFlagsFB::VERTICAL_FLIP,
+        };
+        let cylinders = raw_layers(curved, &self.local, self.flips_layers.then_some(&flip));
+        let references: Vec<&xr::CompositionLayerBase<'_, Api>> = self
+            .passthrough
+            .layer()
+            .filter(|_| self.status.shows())
+            .into_iter()
+            .chain(cylinders.iter().map(|cylinder| &**cylinder))
+            .chain(quads.iter().map(|quad| &**quad))
+            .collect();
         self.stream
-            .end(display_time, self.blend, &references)
+            .end(display_time, self.passthrough.blend_mode(), &references)
             .map_err(|error| format!("OpenXR end frame: {error}"))
+    }
+}
+
+// A session that still runs when the app ends goes through the runtime's own steps: the app asks
+// to exit, the runtime moves it to STOPPING, and the app ends it. The session and the instance
+// drop after that.
+impl Drop for XrSession {
+    fn drop(&mut self) {
+        if !self.status.runs() {
+            return;
+        }
+        if let Err(error) = self.session.request_exit() {
+            log::warn!("cranpose xr: exit request: {error}");
+            return;
+        }
+        let deadline = Instant::now() + STOP_WAIT;
+        while self.status.runs() && Instant::now() < deadline {
+            if self.poll_events().is_err() {
+                break;
+            }
+            std::thread::sleep(STOP_POLL);
+        }
+        log::info!("cranpose xr: session ends in {:?}", self.status);
+    }
+}
+
+#[cfg(target_os = "android")]
+fn eye_visibility(eye: Eye) -> xr::EyeVisibility {
+    match eye {
+        Eye::Both => xr::EyeVisibility::BOTH,
+        Eye::Left => xr::EyeVisibility::LEFT,
+        Eye::Right => xr::EyeVisibility::RIGHT,
     }
 }
 

@@ -1,20 +1,24 @@
 use super::*;
-use crate::Pose;
+use crate::{Pose, StereoMode, space::Shape};
 
 // A panel of 800 by 500 dp a meter ahead, at the atlas's top.
 const PANEL: PanelSlot = PanelSlot {
     id: 1,
+    kind: PanelKind::Content,
     atlas: [0.0, 0.0, 800.0, 500.0],
     pose: Pose::at([0.0, 0.0, -1.0]),
     mobility: Mobility::Fixed,
+    shape: Shape::Flat,
 };
 
 // A panel of 200 by 100 dp behind the first one and below it in the atlas.
 const BEHIND: PanelSlot = PanelSlot {
     id: 2,
+    kind: PanelKind::Content,
     atlas: [0.0, 508.0, 200.0, 100.0],
     pose: Pose::at([0.0, 0.0, -2.0]),
     mobility: Mobility::Fixed,
+    shape: Shape::Flat,
 };
 
 // A controller at `x` meters that points straight ahead, turned right by `yaw` degrees.
@@ -185,6 +189,7 @@ fn a_ray_shows_up_to_the_panel_it_meets() {
 fn a_pull_on_a_handle_carries_the_panel() {
     let movable = PanelSlot {
         mobility: Mobility::Movable,
+        shape: Shape::Flat,
         ..PANEL
     };
     // A controller at `x` that points at the handle under the panel
@@ -215,4 +220,44 @@ fn a_pull_on_a_handle_carries_the_panel() {
     assert!((pose.position[0] - 0.1).abs() < 1e-4);
     frames.update([None, at_handle(0.1, 0.0)], &[movable]);
     assert_eq!(frames.pointer.moved(), None);
+}
+
+#[test]
+fn a_ray_moves_the_pointer_along_the_curve_of_a_curved_panel() {
+    // A meter-wide circle around the controller: 20 degrees are 349 mm of arc, where a flat
+    // panel would put the pointer 364 mm from the middle
+    let curved = PanelSlot {
+        shape: Shape::Curved { radius: 1.0 },
+        ..PANEL
+    };
+    let mut frames = Frames::default();
+    let (events, _) = frames.update([None, aim(0.0, 20.0, 0.0)], &[curved]);
+    let Some(PointerEvent::Move { x, y }) = events.first() else {
+        panic!("the ray meets the curved panel: {events:?}");
+    };
+    assert!((x - (400.0 + 349.07)).abs() < 0.1, "x {x}");
+    assert!((y - 250.0).abs() < 0.1, "y {y}");
+}
+
+#[test]
+fn a_surface_stops_the_ray_and_takes_no_pointer_events() {
+    // A video surface of 400 by 300 dp half a meter ahead, in front of the panel
+    let video = PanelSlot {
+        id: 3,
+        kind: PanelKind::Surface(StereoMode::Mono),
+        atlas: [0.0, 0.0, 400.0, 300.0],
+        pose: Pose::at([0.0, 0.0, -0.5]),
+        mobility: Mobility::Fixed,
+        shape: Shape::Flat,
+    };
+    let mut frames = Frames::default();
+    let panels = [PANEL, video];
+    let (events, cursor) = frames.update([None, aim(0.0, 0.0, 0.0)], &panels);
+    assert!(events.is_empty());
+    assert_eq!(cursor, None);
+    let [_, beam] = frames.pointer.beams();
+    assert!(beam.is_some_and(|beam| (beam.length - 0.5).abs() < 1e-4));
+    let (events, cursor) = frames.update([None, aim(0.0, 0.0, 1.0)], &panels);
+    assert!(events.is_empty());
+    assert_eq!(cursor, None);
 }

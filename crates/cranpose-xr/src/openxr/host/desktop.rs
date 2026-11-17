@@ -22,11 +22,16 @@ impl Host {
     pub(crate) fn platform(&self) {}
 
     // Adds the extensions that the platform needs: none.
-    pub(crate) fn require(&self, _extensions: &mut xr::ExtensionSet) {}
+    pub(crate) fn require(
+        &self,
+        _available: &xr::ExtensionSet,
+        _extensions: &mut xr::ExtensionSet,
+    ) {
+    }
 
     // Waits while the headset shows something else. The session alone ends a desktop run.
     pub(crate) fn ended(&self, status: SessionStatus) -> bool {
-        if status != SessionStatus::Running {
+        if !status.runs() {
             // No frame waits for this: the session has none to draw.
             thread::park_timeout(IDLE_WAIT);
         }

@@ -11,6 +11,8 @@ pub(crate) struct Runtime {
     pub(crate) system: xr::SystemId,
     // Whether layers can say that their images start with the top row
     pub(crate) flips_layers: bool,
+    // Whether the runtime shows cylinder layers, which curved panels are
+    pub(crate) cylinders: bool,
 }
 
 impl Runtime {
@@ -24,10 +26,14 @@ impl Runtime {
         let available = entry
             .enumerate_extensions()
             .map_err(|error| format!("OpenXR extensions: {error}"))?;
-        let mut extensions = input_extensions(&available);
-        extensions.fb_composition_layer_image_layout = available.fb_composition_layer_image_layout;
+        let mut extensions = wanted_extensions(&available);
         Graphics::require(&available, &mut extensions)?;
-        host.require(&mut extensions);
+        host.require(&available, &mut extensions);
+        log::info!(
+            "cranpose xr: cylinder layers {}, passthrough extension {}",
+            extensions.khr_composition_layer_cylinder,
+            extensions.fb_passthrough,
+        );
         let instance = entry
             .create_instance(
                 &xr::ApplicationInfo {
@@ -45,19 +51,28 @@ impl Runtime {
         let system = instance
             .system(xr::FormFactor::HEAD_MOUNTED_DISPLAY)
             .map_err(|error| format!("no headset: {error}"))?;
+        log_runtime(&instance, system);
         Ok(Self {
             instance,
             system,
             flips_layers: available.fb_composition_layer_image_layout,
+            cylinders: extensions.khr_composition_layer_cylinder,
         })
     }
 }
 
-// The extensions that the controllers of each maker bind through, where the runtime has them.
-// Hands tracked by cameras point and pinch as controllers do. The controllers of other makers
-// bind through their own profiles, each behind an extension.
-fn input_extensions(available: &xr::ExtensionSet) -> xr::ExtensionSet {
+// The extensions the app asks for, from those the runtime has.
+fn wanted_extensions(available: &xr::ExtensionSet) -> xr::ExtensionSet {
     let mut extensions = xr::ExtensionSet::default();
+    extensions.fb_composition_layer_image_layout = available.fb_composition_layer_image_layout;
+    // Curved panels show on cylinder layers
+    extensions.khr_composition_layer_cylinder = available.khr_composition_layer_cylinder;
+    // The room around the panels shows through a passthrough layer
+    extensions.fb_passthrough = available.fb_passthrough;
+    // The highest refresh rate the runtime offers
+    extensions.fb_display_refresh_rate = available.fb_display_refresh_rate;
+    // Hands tracked by cameras point and pinch as controllers do. The controllers of other
+    // makers bind through their own profiles, each behind an extension.
     extensions.ext_hand_interaction = available.ext_hand_interaction;
     extensions.khr_generic_controller = available.khr_generic_controller;
     extensions.htc_vive_focus3_controller_interaction =
@@ -71,4 +86,24 @@ fn input_extensions(available: &xr::ExtensionSet) -> xr::ExtensionSet {
     extensions.meta_touch_controller_plus = available.meta_touch_controller_plus;
     extensions.fb_touch_controller_pro = available.fb_touch_controller_pro;
     extensions
+}
+
+// Names the runtime and the headset once in the log, so a report says which runtime it came from.
+fn log_runtime(instance: &xr::Instance, system: xr::SystemId) {
+    match instance.properties() {
+        Ok(runtime) => log::info!(
+            "cranpose xr: runtime \"{}\" {}",
+            runtime.runtime_name,
+            runtime.runtime_version
+        ),
+        Err(error) => log::warn!("cranpose xr: runtime properties: {error}"),
+    }
+    match instance.system_properties(system) {
+        Ok(headset) => log::info!(
+            "cranpose xr: system \"{}\", vendor {:#x}",
+            headset.system_name,
+            headset.vendor_id
+        ),
+        Err(error) => log::warn!("cranpose xr: system properties: {error}"),
+    }
 }

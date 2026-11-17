@@ -4,7 +4,8 @@ use cranpose::prelude::*;
 
 use crate::{
     SubspaceModifier,
-    space::{Dot, SUBSPACE_ORIGIN, Space, local_space},
+    space::{Dot, SUBSPACE_ORIGIN, Shape, Space, local_space},
+    spatial_curved_row::local_curve,
     subspace_modifier::DEFAULT_PANEL_SIZE,
 };
 
@@ -18,6 +19,8 @@ const CURSOR_DOT: f32 = 12.0;
 /// pixels once at the display's resolution, so its text stays sharp. A controller that points
 /// at it moves the pointer over its content, and its trigger presses. Outside a headset the
 /// panel draws as a box of its size.
+///
+/// Inside a [`SpatialCurvedRow`](crate::SpatialCurvedRow) the panel is bent around the viewer.
 #[composable]
 pub fn SpatialPanel(modifier: SubspaceModifier, content: impl FnMut() + 'static) {
     let size = modifier.size_or(DEFAULT_PANEL_SIZE);
@@ -45,9 +48,14 @@ fn PlacedPanel(
         move || space.new_panel()
     })
     .with(|panel| *panel);
-    space.place(panel, size, SUBSPACE_ORIGIN.then(&modifier.pose()));
+    let (pose, shape) = match local_curve().current() {
+        Some(curve) => curve.place(&modifier),
+        None => (SUBSPACE_ORIGIN.then(&modifier.pose()), Shape::Flat),
+    };
+    space.place(panel, size, pose);
     let id = panel.id;
     space.set_mobility(id, modifier.mobility());
+    space.set_shape(id, shape);
     DisposableEffect(id, move |_| {
         DisposableEffectResult::new(move || space.remove(id))
     });

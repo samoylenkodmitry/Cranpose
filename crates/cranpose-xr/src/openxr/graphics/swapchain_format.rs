@@ -22,6 +22,7 @@ impl SwapchainFormat {
             .into_iter()
             .find(|format| offered.contains(&format.api))
             .ok_or_else(|| format!("no swapchain format Cranpose draws: {offered:x?}"))?;
+        log::info!("cranpose xr: swapchain format {:?}", format.wgpu);
         if !format.wgpu.is_srgb() {
             log::warn!("cranpose xr: no sRGB swapchains; colors show too dark");
         }

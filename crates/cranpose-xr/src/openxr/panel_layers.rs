@@ -9,12 +9,13 @@ use cranpose::{GpuContext, GuestView};
 use openxr as xr;
 
 use super::{
+    cylinder_layers::CylinderLayer,
     graphics::{Api, Graphics, SwapchainFormat},
-    session::{QuadLayer, XrSession},
+    session::{LayerSource, QuadLayer, XrSession},
 };
 use crate::{
     METERS_PER_DP,
-    space::{PanelSlot, Space},
+    space::{PanelKind, PanelSlot, Shape, Space},
 };
 
 // Pixels of a panel's image in one dp. A dp is a millimeter, and a millimeter a meter away
@@ -29,6 +30,12 @@ struct PanelImage {
     textures: Vec<wgpu::Texture>,
     // Whether the swapchain has an image to show
     shown: bool,
+}
+
+// The layers of the panels in a frame: the flat panels and the curved ones.
+pub(crate) struct PanelFrame<'a> {
+    pub(crate) quads: Vec<QuadLayer<'a>>,
+    pub(crate) cylinders: Vec<CylinderLayer<'a>>,
 }
 
 pub(crate) struct PanelLayers {
@@ -59,7 +66,7 @@ impl PanelLayers {
         gpu: &GpuContext,
         xr_session: &XrSession,
         space: &Space,
-    ) -> Result<Vec<QuadLayer<'a>>, String> {
+    ) -> Result<PanelFrame<'a>, String> {
         fit_atlas(guest, space)?;
         let (texture, view) = self.atlas_texture(gpu, guest.pixel_size());
         let drawn = guest
@@ -75,8 +82,9 @@ impl PanelLayers {
         self.atlas = Some((texture, view));
         // A panel that grew in this draw gets its room by the next frame
         fit_atlas(guest, space)?;
-        Ok(panels
+        let quads = panels
             .iter()
+            .filter(|slot| slot.shape == Shape::Flat)
             .filter_map(|slot| {
                 let image = self
                     .images
@@ -84,12 +92,16 @@ impl PanelLayers {
                     .find(|image| image.id == slot.id && image.shown)?;
                 Some(QuadLayer {
                     swapchain: &image.swapchain,
-                    image_size: image.size,
+                    source: LayerSource::Drawn(image.size),
                     pose: slot.pose,
-                    size: [slot.atlas[2], slot.atlas[3]].map(|dp| dp * METERS_PER_DP),
+                    size: slot.size().map(|dp| dp * METERS_PER_DP),
                 })
             })
-            .collect())
+            .collect();
+        Ok(PanelFrame {
+            quads,
+            cylinders: curved_layers(&panels, &self.images),
+        })
     }
 
     // The texture the composition draws the atlas into, made anew when the atlas's size changes.
@@ -134,7 +146,8 @@ impl PanelLayers {
                 label: Some("cranpose xr panels"),
             });
         let mut acquired = Vec::new();
-        for slot in panels {
+        // A surface has no part of the atlas
+        for slot in panels.iter().filter(|slot| slot.kind == PanelKind::Content) {
             let [x, y, width, height] = slot.atlas.map(|dp| (dp * DENSITY).round() as u32);
             let size = (width.max(1), height.max(1));
             if x + size.0 > atlas.width() || y + size.1 > atlas.height() {
@@ -241,6 +254,28 @@ impl PanelLayers {
             }
         })
     }
+}
+
+// The layers of the curved panels that have an image.
+fn curved_layers<'a>(panels: &[PanelSlot], images: &'a [PanelImage]) -> Vec<CylinderLayer<'a>> {
+    panels
+        .iter()
+        .filter_map(|slot| {
+            let Shape::Curved { radius } = slot.shape else {
+                return None;
+            };
+            let image = images
+                .iter()
+                .find(|image| image.id == slot.id && image.shown)?;
+            Some(CylinderLayer {
+                swapchain: &image.swapchain,
+                image_size: image.size,
+                pose: slot.pose,
+                radius,
+                size: slot.size().map(|dp| dp * METERS_PER_DP),
+            })
+        })
+        .collect()
 }
 
 // Sizes the composition's view to hold every panel's part of the atlas.

@@ -8,7 +8,7 @@ use openxr as xr;
 
 use super::{
     graphics::{Api, SwapchainFormat},
-    session::{QuadLayer, XrSession},
+    session::{LayerSource, QuadLayer, XrSession},
     static_image::{premultiplied, static_image},
 };
 use crate::{beam_pose::quad_pose, ray::Beam};
@@ -59,7 +59,7 @@ impl RayLayers {
             .filter(|beam| beam.length > 0.0)
             .map(move |beam| QuadLayer {
                 swapchain: &self.swapchain,
-                image_size: (ACROSS, ALONG),
+                source: LayerSource::Drawn((ACROSS, ALONG)),
                 pose: quad_pose(&beam, head),
                 size: [WIDTH, beam.length],
             })

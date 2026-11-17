@@ -6,11 +6,14 @@
 
 use std::time::Duration;
 
-use android_activity::{AndroidApp, MainEvent, PollEvent};
+use android_activity::{AndroidApp, InputStatus, MainEvent, PollEvent};
 use cranpose::{AppLauncher, LauncherFonts};
 use openxr as xr;
 
 use crate::openxr::{runner::run_immersive, runtime::Runtime, session::SessionStatus};
+
+// The most events that one pass of the loop takes from the activity's queue
+const MAX_INPUT_EVENTS_PER_LOOP: usize = 16;
 
 // The activity that the session belongs to.
 pub(crate) struct Host {
@@ -27,15 +30,17 @@ impl Host {
         unsafe { xr::AndroidPlatformInfo::new(self.app.vm_as_ptr(), self.app.activity_as_ptr()) }
     }
 
-    // Adds the extension that creates an instance for an activity.
-    pub(crate) fn require(&self, extensions: &mut xr::ExtensionSet) {
+    // Adds the extension that creates an instance for an activity, and the one that gives a
+    // decoder or a camera a surface that the compositor shows with no copy.
+    pub(crate) fn require(&self, available: &xr::ExtensionSet, extensions: &mut xr::ExtensionSet) {
         extensions.khr_android_create_instance = true;
+        extensions.khr_android_surface_swapchain = available.khr_android_surface_swapchain;
     }
 
     // Handles the activity's events and returns whether the activity ended. While the headset
     // shows something else, it waits for them.
     pub(crate) fn ended(&self, status: SessionStatus) -> bool {
-        let timeout = if status == SessionStatus::Running {
+        let timeout = if status.runs() {
             Duration::ZERO
         } else {
             Duration::from_millis(100)
@@ -46,7 +51,22 @@ impl Host {
                 destroyed = true;
             }
         });
+        self.leave_input_unhandled();
         destroyed
+    }
+
+    // Takes the activity's queued key and touch events and leaves them unhandled. The controllers
+    // reach the app through OpenXR. An event that nobody takes from the queue stops the activity
+    // from answering Android, which shows an "app is not responding" dialog five seconds later.
+    fn leave_input_unhandled(&self) {
+        let Ok(mut events) = self.app.input_events_iter() else {
+            return;
+        };
+        for _ in 0..MAX_INPUT_EVENTS_PER_LOOP {
+            if !events.next(|_| InputStatus::Unhandled) {
+                break;
+            }
+        }
     }
 }
 

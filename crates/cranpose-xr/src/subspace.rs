@@ -20,10 +20,16 @@ pub fn Subspace(content: impl FnMut() + 'static) {
             content,
         );
     } else {
-        Row(
-            Modifier::empty(),
-            RowSpec::default().horizontal_arrangement(LinearArrangement::spaced_by(FLAT_SPACING)),
-            content,
-        );
+        FlatRow(content);
     }
+}
+
+// The panels side by side, as they show outside a headset.
+#[composable]
+pub(crate) fn FlatRow(content: impl FnMut() + 'static) {
+    Row(
+        Modifier::empty(),
+        RowSpec::default().horizontal_arrangement(LinearArrangement::spaced_by(FLAT_SPACING)),
+        content,
+    );
 }

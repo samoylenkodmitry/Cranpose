@@ -35,6 +35,10 @@ cranpose = { workspace = true, features = ["embedded-default-font"] }
 cranpose-xr = { workspace = true }
 cranpose-ui = { workspace = true }
 env_logger = { version = "0.11", optional = true }
+log = "0.4"
 
 [build-dependencies]
 cranpose-capabilities = { path = "../../crates/cranpose-capabilities" }
+
+[target.'cfg(target_os = "android")'.dependencies]
+ndk = { version = "0.9.0", default-features = false }

@@ -45,8 +45,16 @@ Cranpose developers too:
 - `SpatialPanel(modifier, shape) { ... }`: 2D Cranpose content on a flat panel.
 - `SpatialRow`, `SpatialColumn`, `SpatialBox`, `SpatialCurvedRow`, `SpatialSpacer`: layouts in
   meters.
-- `SpatialExternalSurface(stereo_mode, modifier) { surface -> ... }`: hands the app a surface
-  that a decoder writes into.
+- `SpatialExternalSurface(stereo_mode, modifier) { scope }`: hands the app a surface that a
+  decoder writes into. The scope's `on_surface_created` and `on_surface_destroyed` receive an
+  `ExternalSurface`.
+- `SpatialCurvedRow(modifier, curve_radius) { ... }`: panels bent around the viewer at
+  `curve_radius` dp. Each panel is a cylinder layer, and a controller's ray follows its curve.
+  A runtime without `XR_KHR_composition_layer_cylinder` shows the panels flat.
+- `local_spatial_capabilities()` (Jetpack XR's `LocalSpatialCapabilities`):
+  `is_spatial_ui_enabled()` and `is_passthrough_control_enabled()`.
+- `local_spatial_environment()`: the `SpatialEnvironment` with `preferred_passthrough_opacity`
+  and `current_passthrough_opacity`, which control the room around the panels.
 - `Orbiter`: content attached to the edge of a panel, such as a handle or a toolbar.
 - `SubspaceModifier`: `width`, `height`, `depth`, `size`, `offset`, `rotate`, `movable`,
   `resizable`, `fill_max_size`, `padding`.
@@ -55,6 +63,53 @@ Cranpose developers too:
 Jetpack XR Compose shows 3D models through SceneCore entities. Cranpose has its own 3D: a
 `scene3d` box and `mesh_surface` content. In a `Subspace` such content draws into the
 projection layer, with a camera made from each eye's view.
+
+## The room around the panels
+
+An app asks for the room through `SpatialEnvironment` when `is_passthrough_control_enabled()` is
+on. The backend picks how the runtime shows it:
+
+- `XR_FB_passthrough` (Meta Quest): a passthrough layer under all other layers. The backend
+  makes and starts it once. It joins a frame while the opacity is above 0, and the opacity is
+  the layer's style.
+- The blend mode `ALPHA_BLEND` (Android XR, Pico, Magic Leap): the frame's blend mode is
+  `ALPHA_BLEND` while the opacity is above 0 and `OPAQUE` otherwise. This path has no dimming.
+- Neither: the capability is off and the app's own background shows.
+
+## External surfaces
+
+`SpatialExternalSurface` makes a surface swapchain with `XR_KHR_android_surface_swapchain`. The
+compositor shows what a producer posts into the surface as a quad layer at the composable's place
+and size. Cranpose never copies the pictures, and the frame loop does not acquire or release the
+swapchain's images. `StereoMode::SideBySide` and `StereoMode::TopBottom` make one layer for each
+eye, each with its half of the picture.
+
+The app receives the surface as an `ExternalSurface` of `cranpose-services`. The type sits
+there so that a service that produces pictures, such as a hardware video decoder, takes it
+without a dependency on `cranpose-xr`. On Android the type holds a reference to the surface's
+`ANativeWindow`, which `as_ptr` returns. The app needs no `ndk`, JNI or GL code of its own.
+Outside a headset the composable shows an empty box, and the callbacks never run.
+
+## Video decoding
+
+`VideoDecoder` of `cranpose-services` decodes H.264, HEVC and AV1 on the headset's hardware. On
+Android it drives `MediaCodec` with the keys for the least delay: no reordering wait, priority
+0 and the top operating rate. The app feeds access units from one thread. A thread of the
+decoder drains the pictures, and no thread sleeps. Each picture returns with the timestamp and
+the `u64` that the app gave its access unit, and with the decode time.
+
+The app chooses where the pictures go:
+
+- `DecoderOutput::Surface(ExternalSurface)`: the pictures go straight into the surface of a
+  `SpatialExternalSurface`. The compositor reads them with no copy. The desktop stream and
+  video players use this output.
+- `DecoderOutput::Frames { depth }`: each picture returns as a `VideoFrame`, which is an
+  `AHardwareBuffer` that an `AImageReader` of the private format and the GPU-sampled usage
+  holds. The headset's backend imports the buffer as an EGL image through
+  `VideoFrame::as_hardware_buffer_ptr`, and applies `VideoFrame::crop`. A frame that drops gives
+  its image back to the decoder.
+
+Platforms without a hardware decoder that Cranpose drives report `DecoderError::Unavailable`.
 
 ## Crates
 
@@ -71,7 +126,10 @@ uses today. On Linux and Windows the OpenXR runtime (SteamVR, Monado, Meta Link,
 creates the Vulkan instance and device through `XR_KHR_vulkan_enable2`, and wgpu wraps them. The
 backend keeps the difference in its `graphics` module: one file for GLES and one for Vulkan make
 the session and the wgpu device and wrap the swapchain images as wgpu textures. The panels, the
-rays and the handles do not change.
+rays, the handles, the passthrough layer and the cylinder layers do not change. Three things stay
+with Android: the surface swapchains of `SpatialExternalSurface` (a surface panel shows nothing
+in a desktop headset), the `XR_FB_composition_layer_image_layout` flip that GL's bottom-first rows
+need (a Vulkan image starts with its top row, as wgpu writes it), and the `VideoDecoder`.
 
 The `host` module holds the other difference. An Android activity polls its events between
 frames. A desktop process has none. `cranpose_xr::run` asks the OpenXR loader for a runtime and a
@@ -94,6 +152,60 @@ shows none of the app's frames. The `xr` service and the backend take care of th
   process's NDK context can hold the application context instead.
 - Each panel's swapchain image starts with its top row, as wgpu writes it, and the layer says
   so with `XR_FB_composition_layer_image_layout`.
+
+The backend also keeps these rules of every runtime and store:
+
+- A session that is VISIBLE but not FOCUSED, such as under the system menu, gets no controller
+  input. The pointer sees both controllers lost, which ends a press and drops a carried panel.
+  The panels still draw.
+- A session that is not VISIBLE gets frames with no layers and no drawing.
+- A session that is not running keeps its state: the composition, the panels' places and the
+  swapchains stay until the app ends.
+- After the session begins, the app asks `XR_FB_display_refresh_rate` for the highest rate the
+  runtime offers, and logs the offered rates, the current rate and each change. Panels draw only
+  when their content changes, so the frame cost stays low at any rate.
+- The log names the runtime and its version and the system once at the start, so a report from
+  any headset says which runtime it came from.
+- The app ends when the runtime asks (EXITING, LOSS_PENDING, a lost instance) or when the
+  activity is destroyed. A session that still runs goes through exit request, STOPPING and
+  `xrEndSession`. Then the session drops before the instance, and the instance before the GL
+  context.
+- The loop takes the activity's key and touch events from the queue and leaves them unhandled.
+  An event left in the queue makes Android show an "app is not responding" dialog five seconds
+  later.
+
+## Headsets
+
+One APK carries the manifest entries of every runtime below. A runtime reads its own entries and
+ignores the others. The comments of `crates/cranpose/android/manifests/xr.xml` cite the source of
+each entry. Every row also carries the Khronos category
+`org.khronos.openxr.intent.category.IMMERSIVE_HMD` and the `OPENXR` permissions of the Khronos
+loader.
+
+| Headset | Runtime | What the manifest adds | Tested |
+|---|---|---|---|
+| Meta Quest 3 | Meta, runtime name "Oculus" 209.174.0 | `com.oculus.intent.category.VR`, `com.oculus.supportedDevices`, `com.oculus.vr.focusaware`, `android.hardware.vr.headtracking`, `excludeFromRecents` | Yes: starts immersive, 120 Hz at 120/120 frames with no tear or stale frame, a focus loss under a system dialog, Home and a new start |
+| Meta Quest 2, Quest Pro, Quest 3S | Meta | The same entries | No |
+| Pico 4, Pico 4 Ultra | PICO OS 5.9 and later with the Khronos loader | `pvr.app.type`, `pvr.sdk.version`, `pxr.sdk.version_code`, `com.picovr.intent.category.VR` | No |
+| HTC Vive Focus 3, XR Elite | Wave OpenXR | `com.htc.intent.category.VRAPP`, `com.htc.vr.content.NumDoFHmd`, `NumDoFController` and `NumController` | No |
+| Samsung Galaxy XR | Android XR (`libopenxr.google.so`) | `PROPERTY_XR_ACTIVITY_START_MODE` set to the unmanaged full space, `uses-native-library`, `android.software.xr.api.openxr` | No |
+| Steam Frame | Valve's Android container (Lepton), controllers shown as Oculus Touch | The Khronos category only: no entry of its own was found | No |
+| Play For Dream | Not documented | The Khronos category only: no entry of its own was found | No |
+
+Entries without a source stay out. `com.pvr.hmd.trackingmode` has none, and the `wave.feature.*`
+entries would hide the app on stores that filter by features.
+
+The Gradle property `cranposeXrStore` (or `cranpose { xrStore }`) sets the values on which the
+stores disagree:
+
+| Store | `android.hardware.vr.headtracking` | `android.software.xr.api.openxr` | `excludeFromRecents` | Tested |
+|---|---|---|---|---|
+| `meta` (default): Meta Horizon Store | required | optional | true | The merged manifest only. No upload |
+| `android-xr`: Google Play for Android XR | optional | required | false | The merged manifest only |
+| `open`: Pico, HTC, Steam Frame, sideloading | optional | optional | false | The merged manifest only |
+
+`adb install` reads no feature, so the Quest run cannot show how a store filters by them. The
+Quest lists no `android.hardware.vr.headtracking` among its system features.
 
 ## Steps
 

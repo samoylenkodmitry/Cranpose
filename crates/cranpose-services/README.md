@@ -1,6 +1,6 @@
 # Cranpose services
 
-`cranpose-services` defines platform service contracts for Cranpose applications. The crate groups APIs for HTTP, files and folders, URI handlers, audio and media, camera, image pickers, haptics, heart rate, accessibility, device and power information, app updates, purchases, navigation, preferences, and shared content.
+`cranpose-services` defines platform service contracts for Cranpose applications. The crate groups APIs for HTTP, files and folders, URI handlers, audio and media, camera, hardware video decoding and the surfaces it writes into, image pickers, haptics, heart rate, accessibility, device and power information, app updates, purchases, navigation, preferences, and shared content.
 
 Most applications use these APIs through the `cranpose` facade. Add `cranpose-services` directly when an application provides a custom backend or needs a service contract outside the facade. Platform adapters register implementations through each module's `set_platform_*` function. Composition-local services use `local_*` functions and `Provide*` composables; process-wide services use plain functions.
 

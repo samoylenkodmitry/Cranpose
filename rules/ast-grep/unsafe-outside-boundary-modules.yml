@@ -36,12 +36,19 @@ ignores:
   - crates/cranpose-render/wgpu/src/worker_pool.rs
   - crates/cranpose-storekit/src/apple.rs
   - crates/cranpose-storekit/src/tests/apple_tests.rs
+  - apps/xr-demo/src/pattern_writer.rs
+  - crates/cranpose-services/src/external_surface.rs
+  - crates/cranpose-services/src/video_decoder/image_reader.rs
+  - crates/cranpose-services/src/video_decoder/media_codec.rs
   - crates/cranpose-xr/src/android_main.rs
+  - crates/cranpose-xr/src/openxr/cylinder_layers.rs
   - crates/cranpose-xr/src/openxr/graphics/gles.rs
   - crates/cranpose-xr/src/openxr/graphics/vulkan.rs
   - crates/cranpose-xr/src/openxr/host/android.rs
+  - crates/cranpose-xr/src/openxr/passthrough.rs
   - crates/cranpose-xr/src/openxr/runtime.rs
   - crates/cranpose-xr/src/openxr/session.rs
+  - crates/cranpose-xr/src/openxr/surface_swapchain.rs
   - crates/cranpose/src/android/accessibility.rs
   - crates/cranpose/src/android/aeabi_memory.rs
   - crates/cranpose/src/android/app_update.rs
