@@ -22,6 +22,8 @@ pub(crate) mod cursor;
 #[cfg(target_arch = "wasm32")]
 pub(crate) mod device_loss;
 #[cfg(target_arch = "wasm32")]
+pub(crate) mod device_motion;
+#[cfg(target_arch = "wasm32")]
 pub(crate) mod drop;
 #[cfg(target_arch = "wasm32")]
 pub(crate) mod event_loop;

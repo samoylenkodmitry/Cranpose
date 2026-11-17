@@ -22,6 +22,7 @@ pub(crate) fn register() {
     set_platform_device_info(Rc::new(WebDeviceInfo));
     super::media::install();
     super::power::register();
+    super::device_motion::register();
     register_network_monitor();
 }
 

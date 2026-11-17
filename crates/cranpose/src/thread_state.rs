@@ -188,6 +188,7 @@ pub(crate) struct WebThreadState {
     pub(crate) active_notifications: RefCell<
         cranpose_core::collections::map::HashMap<String, crate::web::services::ActiveNotification>,
     >,
+    pub(crate) device_motion: RefCell<Option<crate::web::device_motion::Listener>>,
 }
 
 #[cfg(all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32"))]
@@ -200,6 +201,7 @@ impl WebThreadState {
             host_surface_wake: RefCell::new(None),
             media_browser: RefCell::new(None),
             active_notifications: RefCell::new(cranpose_core::collections::map::HashMap::default()),
+            device_motion: RefCell::new(None),
         }
     }
 }

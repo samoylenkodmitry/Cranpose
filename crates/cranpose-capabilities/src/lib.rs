@@ -54,6 +54,9 @@ pub enum Service {
     /// Asking the owner of the device to unlock, with a face, a fingerprint
     /// or the screen lock.
     DeviceAuth,
+    /// The rotation of the device, from its motion sensors, at the rate the
+    /// sensors give it.
+    DeviceMotion,
 }
 
 impl Service {
@@ -77,6 +80,7 @@ impl Service {
             Self::MicrophoneStandby => "microphone-standby",
             Self::Wearable => "wearable",
             Self::DeviceAuth => "device-auth",
+            Self::DeviceMotion => "device-motion",
         }
     }
 
@@ -124,6 +128,10 @@ impl Service {
             // Android 9 and older ask with the screen lock alone, which
             // needs no permission.
             Self::DeviceAuth => &["android.permission.USE_BIOMETRIC"],
+            // Android 12 caps a sensor at 200 Hz for an application without
+            // it. The permission is a normal one: the system grants it at
+            // install and asks nobody. Reading the rotation needs no other.
+            Self::DeviceMotion => &["android.permission.HIGH_SAMPLING_RATE_SENSORS"],
         }
     }
 
