@@ -779,7 +779,6 @@ impl MeasurePolicy for SwipeMeasurePolicy {
             let placeable = measurable.measure(child_constraints);
             width = width.max(placeable.width());
             natural_height = natural_height.max(placeable.height());
-            placeable.place(0.0, 0.0);
             placements.push(Placement::new(placeable.node_id(), 0.0, 0.0, 0.0));
         }
         let width = width.clamp(constraints.min_width, constraints.max_width);

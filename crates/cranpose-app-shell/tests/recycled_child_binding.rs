@@ -54,7 +54,6 @@ impl MeasurePolicy for Policy {
             Self::Gate { open } => {
                 if open {
                     let child = measurables[0].measure(constraints);
-                    child.place(0.0, 0.0);
                     placements.push(Placement::new(child.node_id(), 0.0, 0.0, 0.0));
                 }
                 Size {

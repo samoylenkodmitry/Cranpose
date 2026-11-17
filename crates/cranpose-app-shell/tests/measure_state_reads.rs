@@ -124,7 +124,6 @@ impl MeasurePolicy for AsWideAsChild {
     ) -> MeasureResult {
         let width = measurables[0].max_intrinsic_width(10.0);
         let child = measurables[0].measure(Constraints::tight(width, 10.0));
-        child.place(0.0, 0.0);
         MeasureResult::new(
             Size {
                 width,

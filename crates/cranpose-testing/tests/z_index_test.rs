@@ -92,7 +92,6 @@ impl MeasurePolicy for Stack {
             .enumerate()
             .map(|(index, measurable)| {
                 let placeable = measurable.measure(constraints);
-                placeable.place(0.0, 0.0);
                 let z_index = if index == 0 { self.first_z } else { 0.0 };
                 Placement::new(placeable.node_id(), 0.0, 0.0, z_index)
             })

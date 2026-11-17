@@ -14,7 +14,6 @@ use crate::text_measured_layout_integration::{lay_out_in_column, layout_composit
 enum CustomBaselinePolicy {
     Explicit,
     Reordered,
-    DirectPlacement,
 }
 
 fn custom_baseline_result(constraints: cranpose_ui::Constraints) -> cranpose_ui::MeasureResult {
@@ -35,13 +34,9 @@ impl cranpose_ui_layout::MeasurePolicy for CustomBaselinePolicy {
             for (index, child) in measurables.iter().enumerate().rev() {
                 let placeable = child.measure(constraints);
                 let y = if index == 0 { 30.0 } else { 0.0 };
-                if matches!(self, Self::DirectPlacement) {
-                    placeable.place(0.0, y);
-                } else {
-                    placements.push(Placement::new(placeable.node_id(), 0.0, y, 0.0));
-                    if index == 0 {
-                        placements.push(Placement::new(placeable.node_id(), 0.0, -20.0, 0.0));
-                    }
+                placements.push(Placement::new(placeable.node_id(), 0.0, y, 0.0));
+                if index == 0 {
+                    placements.push(Placement::new(placeable.node_id(), 0.0, -20.0, 0.0));
                 }
             }
             return cranpose_ui::MeasureResult::new(Size::new(60.0, 40.0), placements);
@@ -420,30 +415,26 @@ fn custom_layouts_can_report_baselines_through_padding_and_parent_wrappers() {
 
 #[test]
 fn reordered_custom_placements_inherit_the_baselines_of_the_drawn_children() {
-    for policy in [
-        CustomBaselinePolicy::Reordered,
-        CustomBaselinePolicy::DirectPlacement,
-    ] {
-        lay_out_in_column(
-            move || {
-                Row(Modifier::empty(), RowSpec::default(), move || {
-                    cranpose_ui::Layout(Modifier::empty().align_by_baseline(), policy, || {
-                        Text("small", Modifier::empty(), style(10.0));
-                        Text("large", Modifier::empty(), style(20.0));
-                    });
-                    Text(
-                        "reference",
-                        Modifier::empty().align_by_baseline(),
-                        style(30.0),
-                    );
+    let policy = CustomBaselinePolicy::Reordered;
+    lay_out_in_column(
+        move || {
+            Row(Modifier::empty(), RowSpec::default(), move || {
+                cranpose_ui::Layout(Modifier::empty().align_by_baseline(), policy, || {
+                    Text("small", Modifier::empty(), style(10.0));
+                    Text("large", Modifier::empty(), style(20.0));
                 });
-            },
-            |layout| {
-                let row = layout.root().children.first().expect("row in column");
-                assert_eq!(text_top(row, "small"), 38.0);
-                assert_eq!(text_top(row, "large"), 8.0);
-                assert_eq!(text_top(row, "reference"), 0.0);
-            },
-        );
-    }
+                Text(
+                    "reference",
+                    Modifier::empty().align_by_baseline(),
+                    style(30.0),
+                );
+            });
+        },
+        |layout| {
+            let row = layout.root().children.first().expect("row in column");
+            assert_eq!(text_top(row, "small"), 38.0);
+            assert_eq!(text_top(row, "large"), 8.0);
+            assert_eq!(text_top(row, "reference"), 0.0);
+        },
+    );
 }

@@ -203,9 +203,10 @@ impl<M: Measurable + ?Sized> Measurable for &M {
     }
 }
 
-/// Result of running a measurement pass for a single child.
-///
-/// Carries measurement and alignment lines without allocating a trait object.
+/// Result of running a measurement pass for a single child: its size, node
+/// and alignment lines. A policy places the child with a [`Placement`] of
+/// that node in its [`MeasureResult`], where Compose calls
+/// `Placeable.place` in its `layout` block.
 pub struct Placeable {
     width: f32,
     height: f32,
@@ -213,23 +214,10 @@ pub struct Placeable {
     content_offset_x: f32,
     content_offset_y: f32,
     alignment_lines: crate::AlignmentLines,
-    place_target: Option<Rc<dyn PlaceTarget>>,
-}
-
-/// What a node-backed [`Placeable`] tells when its parent places it.
-pub trait PlaceTarget {
-    /// Places the node at `(x, y)` in its parent.
-    fn place(&self, x: f32, y: f32);
-}
-
-impl<F: Fn(f32, f32)> PlaceTarget for F {
-    fn place(&self, x: f32, y: f32) {
-        self(x, y);
-    }
 }
 
 impl Placeable {
-    /// Creates a pure-value placeable with no side effects on `place()`.
+    /// A placeable of `width` by `height` for the node `node_id`.
     pub fn value(width: f32, height: f32, node_id: NodeId) -> Self {
         Self {
             width,
@@ -238,7 +226,6 @@ impl Placeable {
             content_offset_x: 0.0,
             content_offset_y: 0.0,
             alignment_lines: crate::AlignmentLines::default(),
-            place_target: None,
         }
     }
 
@@ -256,34 +243,6 @@ impl Placeable {
             content_offset_x: content_offset.0,
             content_offset_y: content_offset.1,
             alignment_lines: crate::AlignmentLines::default(),
-            place_target: None,
-        }
-    }
-
-    /// Creates a node-backed placeable whose `place()` tells `target`. The
-    /// target is shared, so a node's own measure state can be it without an
-    /// allocation per measure.
-    pub fn with_place_target(
-        width: f32,
-        height: f32,
-        node_id: NodeId,
-        target: Rc<dyn PlaceTarget>,
-    ) -> Self {
-        Self {
-            width,
-            height,
-            node_id,
-            content_offset_x: 0.0,
-            content_offset_y: 0.0,
-            alignment_lines: crate::AlignmentLines::default(),
-            place_target: Some(target),
-        }
-    }
-
-    /// Places the child at the provided coordinates relative to its parent.
-    pub fn place(&self, x: f32, y: f32) {
-        if let Some(target) = &self.place_target {
-            target.place(x, y);
         }
     }
 
@@ -533,7 +492,3 @@ impl LayoutModifierMeasureResult {
         self
     }
 }
-
-#[cfg(test)]
-#[path = "tests/core_tests.rs"]
-mod tests;

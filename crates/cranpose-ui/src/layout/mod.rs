@@ -33,7 +33,7 @@ use cranpose_foundation::{
     InvalidationKind, ModifierNodeContext, SemanticsConfiguration, SemanticsWidgetRole,
 };
 use cranpose_ui_graphics::ProjectiveTransform;
-use cranpose_ui_layout::{AlignmentLines, Constraints, Measurables, MeasurePolicy, PlaceTarget};
+use cranpose_ui_layout::{AlignmentLines, Constraints, Measurables, MeasurePolicy};
 pub(crate) use frame_layout_arena::FrameLayoutArena;
 use frame_layout_arena::VecPools;
 pub(crate) use layout_child_measure_state::LayoutChildMeasureState;
@@ -1907,19 +1907,6 @@ fn policy_intrinsic(
         IntrinsicKind::MaxWidth(height) => policy.max_intrinsic_width(measurables, height),
         IntrinsicKind::MinHeight(width) => policy.min_intrinsic_height(measurables, width),
         IntrinsicKind::MaxHeight(width) => policy.max_intrinsic_height(measurables, width),
-    }
-}
-
-// A child's parts take the place its parent's policy gives the child.
-impl PlaceTarget for LayoutParts {
-    fn place(&self, x: f32, y: f32) {
-        let internal_offset = read_cell(&self.record().measured, |measured| {
-            measured.as_ref().map_or_default(|measured| measured.offset)
-        });
-        self.place_retained(Point {
-            x: x + internal_offset.x,
-            y: y + internal_offset.y,
-        });
     }
 }
 

@@ -182,9 +182,6 @@ impl MeasurePolicy for FlowMeasurePolicy {
                 0.0
             };
             let (x, y) = self.along(main, line_start);
-            if !self.layout_direction.is_rtl() {
-                placeable.place(x, y);
-            }
             placements.push(Placement::new(placeable.node_id(), x, y, 0.0));
 
             cursor = main + child_main;
@@ -200,7 +197,6 @@ impl MeasurePolicy for FlowMeasurePolicy {
                 placement.x = self
                     .layout_direction
                     .place_x(placement.x, width, placeable.width());
-                placeable.place(placement.x, placement.y);
             }
         }
         crate::modifier::Size { width, height }.into()

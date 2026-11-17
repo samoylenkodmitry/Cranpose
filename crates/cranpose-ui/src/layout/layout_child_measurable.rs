@@ -4,7 +4,7 @@
 
 use std::{ops::Deref, rc::Rc};
 
-use cranpose_ui_layout::{AlignmentLines, Constraints, FlexParentData, ParentData, PlaceTarget};
+use cranpose_ui_layout::{AlignmentLines, Constraints, FlexParentData, ParentData};
 
 use super::{
     core::{Measurable, Placeable},
@@ -121,13 +121,8 @@ impl Measurable for LayoutChildMeasurable {
             });
         parts.record().measured.set(measured);
 
-        Placeable::with_place_target(
-            size_for_parent.width,
-            size_for_parent.height,
-            child_id,
-            Rc::clone(&self.parts) as Rc<dyn PlaceTarget>,
-        )
-        .with_alignment_lines(alignment_lines)
+        Placeable::value(size_for_parent.width, size_for_parent.height, child_id)
+            .with_alignment_lines(alignment_lines)
     }
 
     fn min_intrinsic_width(&self, height: f32) -> f32 {

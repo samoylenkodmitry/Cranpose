@@ -833,7 +833,6 @@ impl MeasurePolicy for FlexBoxMeasurePolicy {
                     (item.cross_position, item.main_position)
                 };
                 let x = self.layout_direction.place_x(x, width, placeable.width());
-                placeable.place(x, y);
                 placements.push(Placement::new(placeable.node_id(), x, y, 0.0));
             };
             let line_items = &mut items[line.start..line.end];

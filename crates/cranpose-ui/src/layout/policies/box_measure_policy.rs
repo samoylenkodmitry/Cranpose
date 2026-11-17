@@ -150,7 +150,6 @@ impl MeasurePolicy for BoxMeasurePolicy {
                 .vertical
                 .align(height, child_height, scope.density());
 
-            placeable.place(x, y);
             placements.push(Placement::new(placeable.node_id(), x, y, 0.0));
         }
 

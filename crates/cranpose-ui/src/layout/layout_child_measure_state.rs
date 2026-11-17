@@ -433,14 +433,10 @@ impl LayoutParts {
         record.with_builder(|builder| f(self.layout_state(), &builder.context));
     }
 
-    // Places the child where its parent's placement says. A policy that
-    // placed its placeable there in this pass, as one that places its
-    // placeables does, left only the z index to set.
+    // Places the child where its parent's placement says.
     pub(super) fn place_at(&self, position: Point, z_index: f32) {
         let record = self.record();
-        if record.last_position.get() != Some(position) {
-            self.place_retained(position);
-        }
+        self.place_retained(position);
         if record.placed_z_index.get().to_bits() != z_index.to_bits() {
             record.note_z_index(z_index);
             self.layout_state()

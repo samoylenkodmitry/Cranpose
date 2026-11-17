@@ -188,7 +188,6 @@ impl MeasurePolicy for TooltipPlacement {
                 } else {
                     anchor.y + anchor.height + GAP
                 };
-                placeable.place(x, y);
                 Placement::new(placeable.node_id(), x, y, 0.0)
             })
             .collect();

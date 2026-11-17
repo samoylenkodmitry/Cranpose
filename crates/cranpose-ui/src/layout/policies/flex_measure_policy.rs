@@ -711,7 +711,6 @@ impl MeasurePolicy for FlexMeasurePolicy {
             };
             let x = self.layout_direction.place_x(x, width, placeable.width());
 
-            placeable.place(x, y);
             placements.push(Placement::new(placeable.node_id(), x, y, 0.0));
         }
         SpareFlexChildren::give(children);
