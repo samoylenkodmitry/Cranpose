@@ -10,7 +10,11 @@ use smallvec::SmallVec;
 use super::{InspectorMetadata, Modifier};
 
 fn inspector_slice(inspector: &Option<Rc<Vec<InspectorMetadata>>>) -> &[InspectorMetadata] {
-    inspector.as_deref().map_or(&[], Vec::as_slice)
+    inspector_slice_of(inspector.as_ref())
+}
+
+fn inspector_slice_of(inspector: Option<&Rc<Vec<InspectorMetadata>>>) -> &[InspectorMetadata] {
+    inspector.map_or(&[], |list| list.as_slice())
 }
 
 /// The inspector metadata of two modifiers joined, first `first`'s, or
@@ -25,83 +29,89 @@ fn merged_inspector(
     Some(Rc::new(first.iter().chain(second).cloned().collect()))
 }
 
-/// A modifier's elements: a chain of up to four lives inline in its one
-/// shared allocation.
+// A modifier's elements, when it holds several: a chain of up to four
+// lives inline in its one shared allocation.
 pub(super) type ModifierElements = SmallVec<[DynModifierElement; 4]>;
 
-/// The elements of a non-empty modifier. A lone element, as each link of a
-/// builder chain starts out, is held as it is; joining it to more moves the
-/// chain into one shared allocation, which the chain's later links extend
-/// in place while it is the only owner.
-#[derive(Clone)]
-pub(super) enum Elements {
-    One(DynModifierElement),
-    Many(Rc<ModifierElements>),
+// The elements of a modifier that holds several, or one with inspector
+// metadata, in one shared allocation, which the chain's later links extend
+// in place while it is the only owner.
+#[derive(Clone, Default)]
+pub(super) struct ManyElements {
+    elements: ModifierElements,
+    // `None` when no element records inspector metadata, which is always
+    // outside tests and modifier debugging: no allocation.
+    inspector: Option<Rc<Vec<InspectorMetadata>>>,
+    provides_composition_locals: bool,
 }
 
-impl Elements {
-    /// These elements followed by `more`. Elements move into the joined
-    /// chain; only those another modifier also holds are copied.
-    fn joined(self, more: Self) -> Self {
-        let mut chain = match self {
-            Self::One(first) => {
-                let mut chain = ModifierElements::new();
+impl ManyElements {
+    // `first` followed by `more`. Elements move into the joined chain;
+    // only those another modifier also holds are copied.
+    fn joined(first: ModifierKind, more: ModifierKind) -> Rc<Self> {
+        let mut chain = match first {
+            ModifierKind::Many(chain) => chain,
+            first => {
+                let mut chain = Self::default();
                 chain.push(first);
                 Rc::new(chain)
             }
-            Self::Many(chain) => chain,
         };
         match Rc::get_mut(&mut chain) {
-            Some(owned) => more.move_into(owned),
+            Some(owned) => owned.push(more),
             None => {
-                let mut copy: ModifierElements = chain.iter().cloned().collect();
-                more.move_into(&mut copy);
+                let mut copy = Self::clone(&chain);
+                copy.push(more);
                 chain = Rc::new(copy);
             }
         }
-        Self::Many(chain)
+        chain
     }
 
-    fn move_into(self, chain: &mut ModifierElements) {
-        match self {
-            Self::One(element) => chain.push(element),
-            Self::Many(shared) => match Rc::try_unwrap(shared) {
-                Ok(owned) => chain.extend(owned),
-                Err(shared) => chain.extend(shared.iter().cloned()),
-            },
+    // Takes in the elements of `more` after its own.
+    fn push(&mut self, more: ModifierKind) {
+        match more {
+            ModifierKind::Empty => {}
+            ModifierKind::One(element) => {
+                self.provides_composition_locals |= element.provides_composition_locals();
+                self.elements.push(element);
+            }
+            ModifierKind::Many(shared) => {
+                self.provides_composition_locals |= shared.provides_composition_locals;
+                if shared.inspector.is_some() {
+                    self.inspector = merged_inspector(
+                        inspector_slice(&self.inspector),
+                        inspector_slice(&shared.inspector),
+                    );
+                }
+                match Rc::try_unwrap(shared) {
+                    Ok(owned) => self.elements.extend(owned.elements),
+                    Err(shared) => self.elements.extend(shared.elements.iter().cloned()),
+                }
+            }
         }
     }
+}
 
+// What a modifier holds.
+#[derive(Clone)]
+pub(super) enum ModifierKind {
+    Empty,
+    // A lone element without inspector metadata, as each link of a builder
+    // chain starts out: a plain element takes no allocation.
+    One(DynModifierElement),
+    Many(Rc<ManyElements>),
+}
+
+impl ModifierKind {
     /// Whether both are the same storage, so equal without comparing.
     pub(super) fn shares_storage(&self, other: &Self) -> bool {
         match (self, other) {
-            (Self::One(a), Self::One(b)) => Rc::ptr_eq(a, b),
+            (Self::One(a), Self::One(b)) => a.is(b),
             (Self::Many(a), Self::Many(b)) => Rc::ptr_eq(a, b),
             _ => false,
         }
     }
-}
-
-impl std::ops::Deref for Elements {
-    type Target = [DynModifierElement];
-
-    fn deref(&self) -> &[DynModifierElement] {
-        match self {
-            Self::One(element) => std::slice::from_ref(element),
-            Self::Many(elements) => elements.as_slice(),
-        }
-    }
-}
-
-#[derive(Clone)]
-pub(super) enum ModifierKind {
-    Empty,
-    Single {
-        elements: Elements,
-        /// `None` when no element records inspector metadata, which is
-        /// always outside tests and modifier debugging: no allocation.
-        inspector: Option<Rc<Vec<InspectorMetadata>>>,
-    },
 }
 
 pub(crate) struct ModifierElementIterator<'a> {
@@ -151,51 +161,38 @@ impl Modifier {
     /// alone, so each link joins them in place instead of copying the chain.
     /// Clone a modifier first to keep using it; the join then copies it.
     pub fn then(self, next: Self) -> Self {
-        let ModifierKind::Single {
-            elements,
-            inspector,
-        } = self.kind
-        else {
-            return next;
+        let kind = match (self.kind, next.kind) {
+            (ModifierKind::Empty, kind) | (kind, ModifierKind::Empty) => kind,
+            (first, more) => ModifierKind::Many(ManyElements::joined(first, more)),
         };
-        let ModifierKind::Single {
-            elements: next_elements,
-            inspector: next_inspector,
-        } = next.kind
-        else {
-            return Self {
-                kind: ModifierKind::Single {
-                    elements,
-                    inspector,
-                },
-                ..self
-            };
-        };
+        Self { kind }
+    }
 
-        let inspector = if next_inspector.is_none() {
-            inspector
-        } else {
-            merged_inspector(
-                inspector_slice(&inspector),
-                inspector_slice(&next_inspector),
-            )
-        };
-        Self {
-            kind: ModifierKind::Single {
-                elements: elements.joined(next_elements),
-                inspector,
+    // A modifier of `elements`, with the inspector metadata `inspector`.
+    pub(super) fn of_elements(
+        mut elements: ModifierElements,
+        inspector: Option<Rc<Vec<InspectorMetadata>>>,
+    ) -> Self {
+        let kind = match (elements.len(), inspector) {
+            (0, _) => ModifierKind::Empty,
+            (1, None) => match elements.pop() {
+                Some(element) => ModifierKind::One(element),
+                None => ModifierKind::Empty,
             },
-            provides_composition_locals: self.provides_composition_locals
-                || next.provides_composition_locals,
-        }
+            (_, inspector) => ModifierKind::Many(Rc::new(ManyElements {
+                provides_composition_locals: elements
+                    .iter()
+                    .any(|element| element.provides_composition_locals()),
+                elements,
+                inspector,
+            })),
+        };
+        Self { kind }
     }
 
     /// How many elements the modifier holds.
     pub(crate) fn element_count(&self) -> usize {
-        match &self.kind {
-            ModifierKind::Empty => 0,
-            ModifierKind::Single { elements, .. } => elements.len(),
-        }
+        self.as_elements().len()
     }
 
     pub(crate) fn iter_elements(&self) -> ModifierElementIterator<'_> {
@@ -205,7 +202,12 @@ impl Modifier {
     }
 
     pub(crate) fn provided_composition_locals(&self) -> Vec<ProvidedValue> {
-        if !self.provides_composition_locals {
+        let provides = match &self.kind {
+            ModifierKind::Empty => false,
+            ModifierKind::One(element) => element.provides_composition_locals(),
+            ModifierKind::Many(chain) => chain.provides_composition_locals,
+        };
+        if !provides {
             return Vec::new();
         }
         self.iter_elements()
@@ -213,40 +215,33 @@ impl Modifier {
             .collect()
     }
 
-    pub(crate) fn iter_inspector_metadata(&self) -> ModifierInspectorIterator<'_> {
+    // The modifier's inspector metadata, `None` when it carries none.
+    pub(super) fn inspector(&self) -> Option<&Rc<Vec<InspectorMetadata>>> {
         match &self.kind {
-            ModifierKind::Empty => ModifierInspectorIterator { inner: [].iter() },
-            ModifierKind::Single { inspector, .. } => ModifierInspectorIterator {
-                inner: inspector_slice(inspector).iter(),
-            },
+            ModifierKind::Empty | ModifierKind::One(_) => None,
+            ModifierKind::Many(chain) => chain.inspector.as_ref(),
+        }
+    }
+
+    pub(crate) fn iter_inspector_metadata(&self) -> ModifierInspectorIterator<'_> {
+        ModifierInspectorIterator {
+            inner: inspector_slice_of(self.inspector()).iter(),
         }
     }
 
     #[cfg(test)]
     pub(crate) fn elements(&self) -> Vec<DynModifierElement> {
-        match &self.kind {
-            ModifierKind::Empty => Vec::new(),
-            ModifierKind::Single { elements, .. } => elements.to_vec(),
-        }
+        self.as_elements().to_vec()
     }
 
     pub(crate) fn inspector_metadata(&self) -> Vec<InspectorMetadata> {
-        match &self.kind {
-            ModifierKind::Empty => Vec::new(),
-            ModifierKind::Single { inspector, .. } => {
-                inspector.as_deref().cloned().unwrap_or_default()
-            }
-        }
+        inspector_slice_of(self.inspector()).to_vec()
     }
 
     /// A modifier of the one `element`.
     pub(crate) fn from_dyn_element(element: DynModifierElement) -> Self {
         Self {
-            provides_composition_locals: element.provides_composition_locals(),
-            kind: ModifierKind::Single {
-                elements: Elements::One(element),
-                inspector: None,
-            },
+            kind: ModifierKind::One(element),
         }
     }
 
@@ -254,30 +249,28 @@ impl Modifier {
         if metadata.is_empty() {
             return self;
         }
-        match self.kind {
-            ModifierKind::Empty => self,
-            ModifierKind::Single {
-                elements,
-                inspector,
-            } => {
-                let mut list = inspector.as_deref().cloned().unwrap_or_default();
-                list.push(metadata);
-                let new_inspector = Rc::new(list);
-                Self {
-                    kind: ModifierKind::Single {
-                        elements,
-                        inspector: Some(new_inspector),
-                    },
-                    provides_composition_locals: self.provides_composition_locals,
-                }
+        let mut chain = match self.kind {
+            ModifierKind::Empty => return self,
+            ModifierKind::One(element) => {
+                let mut chain = ManyElements::default();
+                chain.push(ModifierKind::One(element));
+                chain
             }
+            ModifierKind::Many(chain) => Rc::unwrap_or_clone(chain),
+        };
+        let mut list = chain.inspector.as_deref().cloned().unwrap_or_default();
+        list.push(metadata);
+        chain.inspector = Some(Rc::new(list));
+        Self {
+            kind: ModifierKind::Many(Rc::new(chain)),
         }
     }
 
     pub(super) fn as_elements(&self) -> &[DynModifierElement] {
         match &self.kind {
             ModifierKind::Empty => &[],
-            ModifierKind::Single { elements, .. } => elements,
+            ModifierKind::One(element) => std::slice::from_ref(element),
+            ModifierKind::Many(chain) => &chain.elements,
         }
     }
 }

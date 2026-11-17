@@ -70,7 +70,7 @@ pub use drag_and_drop::{
     DragAndDropTargetElement, DragAndDropTargetNode,
 };
 pub(crate) use element_match::ElementMatch;
-use elements::{Elements, ModifierKind};
+use elements::ModifierKind;
 #[cfg(test)]
 pub(crate) use focus::FocusRequesterElement;
 pub use focus::{FocusDirection, FocusRequestError, FocusRequester};
@@ -249,14 +249,12 @@ fn inspector_metadata_enabled() -> bool {
 #[must_use = "a modifier does nothing until a composable receives it"]
 pub struct Modifier {
     kind: ModifierKind,
-    provides_composition_locals: bool,
 }
 
 impl Default for Modifier {
     fn default() -> Self {
         Self {
             kind: ModifierKind::Empty,
-            provides_composition_locals: false,
         }
     }
 }
@@ -835,31 +833,27 @@ impl Eq for Modifier {}
 
 impl fmt::Display for Modifier {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match &self.kind {
-            ModifierKind::Empty => write!(f, "Modifier.empty"),
-            ModifierKind::Single { elements, .. } => {
-                if elements.is_empty() {
-                    return write!(f, "Modifier.empty");
-                }
-                write!(f, "Modifier[")?;
-                for (index, element) in elements.iter().enumerate() {
-                    if index > 0 {
-                        write!(f, ", ")?;
-                    }
-                    let name = element.inspector_name();
-                    let mut properties = Vec::new();
-                    element.record_inspector_properties(&mut |prop, value| {
-                        properties.push(format!("{prop}={value}"));
-                    });
-                    if properties.is_empty() {
-                        write!(f, "{name}")?;
-                    } else {
-                        write!(f, "{name}({})", properties.join(", "))?;
-                    }
-                }
-                write!(f, "]")
+        let elements = self.as_elements();
+        if elements.is_empty() {
+            return write!(f, "Modifier.empty");
+        }
+        write!(f, "Modifier[")?;
+        for (index, element) in elements.iter().enumerate() {
+            if index > 0 {
+                write!(f, ", ")?;
+            }
+            let name = element.inspector_name();
+            let mut properties = Vec::new();
+            element.record_inspector_properties(&mut |prop, value| {
+                properties.push(format!("{prop}={value}"));
+            });
+            if properties.is_empty() {
+                write!(f, "{name}")?;
+            } else {
+                write!(f, "{name}({})", properties.join(", "))?;
             }
         }
+        write!(f, "]")
     }
 }
 
