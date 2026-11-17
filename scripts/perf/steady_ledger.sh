@@ -76,9 +76,10 @@ readonly START_ROW=wall-t20
 readonly INSTRUCTION_ROWS=" gauntlet-t12 patchwork-t17 feed "
 
 # What the A/Bs of all lanes on a host share: the lock that lets one fat LTO
-# build run at a time, and the measured bases. FORMAT names the rows that
-# this script writes; a new one measures a kept base again.
-readonly SHARED="$HOME/hotpath"
+# build run at a time, and the measured bases (STEADY_LEDGER_SHARED moves
+# them on this host). FORMAT names the rows that this script writes; a new
+# one measures a kept base again.
+readonly SHARED="${STEADY_LEDGER_SHARED:-$HOME/hotpath}"
 readonly FORMAT=1
 
 self="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
@@ -276,9 +277,9 @@ ab_tars() {
 # which --host copies whole.
 tools=$(dirname "$self")
 readonly TOOL_FILES=(steady_ledger.sh steady_ledger.py steady_ledger_groups.txt steady_ledger_budget.txt)
-root="$(cd "$tools/../.." && pwd -P)"
-src=$root
-lock="$root/scripts/ci/with_host_lock.sh"
+root=""
+src=""
+lock=""
 dir=""
 host=""
 size=""
@@ -331,6 +332,22 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# The top of the repository around the current directory, else around this
+# script: `git archive` in a subdirectory archives only that subdirectory.
+repository_root() {
+    local top
+    top=$(git rev-parse --show-toplevel 2> /dev/null || git -C "$tools" rev-parse --show-toplevel 2> /dev/null) ||
+        die "no git repository around $(pwd) or $tools"
+    cd "$top" && pwd -P
+}
+
+case $mode in
+ab | base | check | repeats)
+    root=$(repository_root)
+    use_tree "$root"
+    ;;
+esac
+
 case $mode in
 ab | base)
     base_sha=$(git -C "$root" rev-parse "${args[0]}^{commit}")
@@ -352,13 +369,21 @@ archive() {
     local kept=$1 into=$2
     BASE_TAR=-
     if ! $kept; then
-        git -C "$root" archive "$base_sha" > "$into/base.tar"
+        archive_commit "$base_sha" "$into/base.tar"
         BASE_TAR=$into/base.tar
     fi
     if [ "$mode" = ab ]; then
-        git -C "$root" archive "$head_sha" > "$into/head.tar"
+        archive_commit "$head_sha" "$into/head.tar"
         HEAD_TAR=$into/head.tar
     fi
+}
+
+# Archives the tree of commit SHA at OUT; a tree with no Cargo.toml at its
+# top is no Cranpose tree.
+archive_commit() {
+    git -C "$root" archive "$1" > "$2"
+    tar -tf "$2" Cargo.toml > /dev/null 2>&1 ||
+        die "the archive of $1 from $root holds no Cargo.toml at its top"
 }
 
 if [ -n "$host" ]; then
