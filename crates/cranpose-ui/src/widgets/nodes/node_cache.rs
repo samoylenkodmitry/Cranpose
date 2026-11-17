@@ -223,6 +223,7 @@ impl NodeCache {
         let state = self.cache.borrow();
         state
             .measurement
+            .as_ref()
             .map(|entry| entry.measured)
             .or(state.retired)
     }
@@ -254,6 +255,7 @@ impl NodeCache {
         self.cache
             .borrow()
             .measurement
+            .as_ref()
             .filter(|entry| {
                 entry.constraints == constraints
                     || entry.hold.is_some_and(|hold| hold.contains(constraints))
@@ -266,6 +268,7 @@ impl NodeCache {
         self.cache
             .borrow()
             .measurement
+            .as_ref()
             .map(|entry| entry.constraints)
     }
 
@@ -279,7 +282,8 @@ impl NodeCache {
     pub(crate) fn held_with_hold(
         &self,
     ) -> Option<(MeasuredNode, cranpose_ui_layout::ConstraintsHold)> {
-        let entry = self.cache.borrow().measurement?;
+        let state = self.cache.borrow();
+        let entry = state.measurement.as_ref()?;
         Some((entry.measured, entry.hold?))
     }
 
@@ -288,18 +292,26 @@ impl NodeCache {
     /// children's sizes.
     pub(crate) fn store_measurement(&self, constraints: Constraints, measured: MeasuredNode) {
         let mut state = self.cache.borrow_mut();
-        let (hold, ignores_child_sizes) = state
-            .measurement
-            .filter(|entry| entry.measured == measured)
-            .map_or((None, false), |entry| {
-                (entry.hold, entry.ignores_child_sizes)
-            });
+        if let Some(entry) = state.measurement.as_mut()
+            && entry.measured == measured
+        {
+            entry.constraints = constraints;
+            return;
+        }
         state.measurement = Some(MeasurementCacheEntry {
             constraints,
             measured,
-            hold,
-            ignores_child_sizes,
+            hold: None,
+            ignores_child_sizes: false,
         });
+    }
+
+    // Keeps the measurement the cache holds, with its hold, for
+    // `constraints`: a walk over its children found it the same.
+    pub(crate) fn store_kept_measurement(&self, constraints: Constraints) {
+        if let Some(entry) = self.cache.borrow_mut().measurement.as_mut() {
+            entry.constraints = constraints;
+        }
     }
 
     /// Stores `measured` for `constraints` and the other constraints `hold`
@@ -348,6 +360,7 @@ impl NodeCache {
         self.cache
             .borrow()
             .measurement
+            .as_ref()
             .is_some_and(|entry| entry.ignores_child_sizes)
     }
 
