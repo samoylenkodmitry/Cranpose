@@ -2,8 +2,13 @@
 // cases need: the draws alone, one draw in place of a list, or a text with
 // the draws.
 
+use smallvec::SmallVec;
+
 use super::{super::coordinator_rect::CoordinatorRect, SliceText};
 use crate::draw::DrawCommand;
+
+// The draws a collection gathers: one stays in place, more go to a list.
+pub(super) type Draws = SmallVec<[DrawCommand; 1]>;
 
 #[derive(Clone)]
 pub(super) enum SliceBody {
@@ -26,36 +31,26 @@ impl Default for SliceBody {
 }
 
 impl SliceBody {
-    // What a collection of `draws` and `text` keeps. A list it does not
-    // keep goes back to the thread's spare, which the next collection takes.
-    pub(super) fn collected(
-        mut draws: Vec<DrawCommand>,
-        text: Option<(SliceText, CoordinatorRect)>,
-    ) -> Self {
+    // What a collection of `draws` and `text` keeps.
+    pub(super) fn collected(mut draws: Draws, text: Option<(SliceText, CoordinatorRect)>) -> Self {
         match text {
             Some((text, coordinator)) => Self::Text {
                 text,
                 coordinator,
-                draws: kept(draws),
+                draws: listed(draws),
             },
-            None if draws.len() > 1 => Self::Draws(kept(draws)),
-            None => {
-                let one = draws.pop();
-                spare(draws);
-                one.map_or_else(Self::default, Self::One)
-            }
+            None if draws.len() > 1 => Self::Draws(listed(draws)),
+            None => draws.pop().map_or_else(Self::default, Self::One),
         }
     }
 
-    // The list a collection into this body pushes its draws to: the body's
-    // own, emptied, or else the thread's spare. The body keeps nothing.
-    pub(super) fn take_draws(&mut self) -> Vec<DrawCommand> {
+    // What a collection into this body gathers its draws in: the body's own
+    // list, emptied, when it has room for more than one. The body keeps
+    // nothing.
+    pub(super) fn take_draws(&mut self) -> Draws {
         let mut draws = self.take_owned();
-        if draws.capacity() == 0 {
-            return crate::thread_state::with(|state| state.spare_draws.take());
-        }
         draws.clear();
-        draws
+        Draws::from_vec(draws)
     }
 
     pub(super) fn draws(&self) -> &[DrawCommand] {
@@ -107,38 +102,10 @@ impl SliceBody {
     }
 }
 
-// `draws` as a body keeps them: in a list of their exact length, which a
-// list collected into once again already is. A longer list goes back to the
-// thread's spare.
-fn kept(mut draws: Vec<DrawCommand>) -> Vec<DrawCommand> {
-    if draws.len() == draws.capacity() {
-        return draws;
-    }
-    let mut exact = Vec::with_capacity(draws.len());
-    exact.append(&mut draws);
-    spare(draws);
-    exact
-}
-
-// The most draws the thread's spare list keeps room for: a chain with more
-// gets a list of its own, which goes when its collection ends.
-const SPARE_DRAWS: usize = 8;
-
-// Gives the room of an emptied `draws` to the thread's spare, unless the
-// spare holds as much room already or `draws` has room for more than
-// `SPARE_DRAWS`.
-fn spare(draws: Vec<DrawCommand>) {
-    if draws.capacity() > SPARE_DRAWS {
-        return;
-    }
-    crate::thread_state::with(|state| {
-        let held = state.spare_draws.take();
-        state
-            .spare_draws
-            .set(if held.capacity() >= draws.capacity() {
-                held
-            } else {
-                draws
-            });
-    });
+// `draws` in a list of their exact length: the body keeps them for as long
+// as the chain stays, and a collection into it again mostly pushes as many.
+fn listed(draws: Draws) -> Vec<DrawCommand> {
+    let mut list = draws.into_vec();
+    list.shrink_to_fit();
+    list
 }
