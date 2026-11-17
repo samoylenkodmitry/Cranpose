@@ -29,6 +29,16 @@ def tolerance(metric):
     # The budget file rounds calls to 0.01 and bytes to 1.
     return 0.5 if metric in BYTES else 0.005
 
+
+# The share of a budget that copied bytes may move by beyond their spread:
+# inlining that an unrelated change shifts moves them a little.
+BYTES_SHARE = 0.02
+
+
+def slack(metric, budget):
+    """How far a value may pass its budget plus its spread."""
+    return max(tolerance(metric), BYTES_SHARE * abs(budget)) if metric in BYTES else tolerance(metric)
+
 # valgrind's `--trace-malloc=yes` prints a call, then ` = ADDRESS` once it
 # returns; another thread's calls, or the bench's own lines, can come
 # between the two, on the same line or on the next.
@@ -320,7 +330,8 @@ def group_line(row, values, groups, extra=lambda name: ""):
 
 def compare(rows_path, budget_path, groups_path):
     """Prints every row with its verdict; exits 1 when a value passes its
-    budget plus its spread, or a row and its budget do not match up."""
+    budget plus its spread and its slack, or a row and its budget do not
+    match up."""
     table, budget, groups = read_rows(rows_path), read_budget(budget_path), load_groups(groups_path)
     failed = False
     print(header() + "   verdict")
@@ -331,9 +342,9 @@ def compare(rows_path, budget_path, groups_path):
                 rose.append(f"{metric} (no budget)")
                 continue
             limit, spread = budget[row][metric]
-            if value > limit + spread + tolerance(metric):
+            if value > limit + spread + slack(metric, limit):
                 rose.append(metric)
-            elif value < limit - spread - tolerance(metric):
+            elif value < limit - spread - slack(metric, limit):
                 fell.append(metric)
         failed |= bool(rose)
         verdict = ("ROSE " + " ".join(rose) if rose

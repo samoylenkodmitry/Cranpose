@@ -14,7 +14,9 @@
 # One value a line: ROW METRIC BUDGET SPREAD. The budget is the highest value
 # of three runs of one build (`steady_ledger.sh --repeats 3`), the spread the
 # highest minus the lowest. A value fails when it passes its budget plus its
-# spread. Lower a budget in the commit that earns the cut.
+# spread; `copied` and `realloc_bytes` also get 2% of their budget, as
+# inlining that an unrelated change shifts moves them. Lower a budget in the
+# commit that earns the cut.
 #
 # Measured on samarch-1 (x86-64 Linux, valgrind 3.25.1), three runs.
 # row             metric                    budget     spread   (3 runs)
