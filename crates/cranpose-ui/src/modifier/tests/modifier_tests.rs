@@ -2,7 +2,8 @@ use std::{cell::Cell, rc::Rc};
 
 use cranpose_core::NodeId;
 use cranpose_foundation::{
-    DelegatableNode, ModifierNode, ModifierNodeElement, NodeCapabilities, NodeState,
+    DelegatableNode, DynModifierElement, ModifierNode, ModifierNodeElement, NodeCapabilities,
+    NodeState,
 };
 use cranpose_ui_graphics::{
     BlurredEdgeTreatment, Brush, ColorFilter, CutDirection, Dp, DrawPrimitive,
@@ -11,8 +12,8 @@ use cranpose_ui_graphics::{
 
 use super::{
     Alignment, BlendMode, Color, CompositingStrategy, DimensionConstraint, DpOffset, DrawCommand,
-    DynModifierElement, EdgeInsets, GlassMaterial, GraphicsLayer, HorizontalAlignment, LayerShape,
-    Modifier, ModifierChainHandle, Point, RenderEffect, RoundedCornerShape, RuntimeShader,
+    EdgeInsets, GlassMaterial, GraphicsLayer, HorizontalAlignment, LayerShape, Modifier,
+    ModifierChainHandle, Point, RenderEffect, RoundedCornerShape, RuntimeShader,
     SemanticsConfiguration, Shadow, Size, TransformOrigin, VerticalAlignment,
     collect_slices_from_modifier, inspector_metadata, modifier_element,
 };
