@@ -10,7 +10,7 @@ use super::*;
 use crate::frame_effects::FrameEffects;
 
 // What the effects saw: the effect's name and the frame's time in milliseconds.
-type Seen = Rc<RefCell<Vec<(&'static str, u64)>>>;
+type Seen = Rc<RefCell<Vec<(&'static str, Duration)>>>;
 
 // A headset's composition with two effects. The first one leaves while `shown` is off.
 struct Headset {
@@ -23,8 +23,7 @@ struct Headset {
 #[composable]
 fn Named(name: &'static str, seen: Seen) {
     SpatialFrameEffect(move |frame| {
-        seen.borrow_mut()
-            .push((name, frame.predicted_display_time.as_millis() as u64));
+        seen.borrow_mut().push((name, frame.predicted_display_time));
     });
 }
 
@@ -60,13 +59,17 @@ fn headset(provided: bool) -> Headset {
 
 impl Headset {
     // Runs one frame at `millis` and returns what the effects saw in it.
-    fn frame(&self, millis: u64) -> Vec<(&'static str, u64)> {
+    fn frame(&self, millis: u64) -> Vec<(&'static str, u128)> {
         let frame = XrFrame {
             predicted_display_time: Duration::from_millis(millis),
             ..XrFrame::default()
         };
         self.effects.run(&frame);
-        self.seen.take()
+        self.seen
+            .take()
+            .into_iter()
+            .map(|(name, time)| (name, time.as_millis()))
+            .collect()
     }
 }
 

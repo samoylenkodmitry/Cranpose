@@ -9,6 +9,9 @@ use crate::registry::ServiceRegistry;
 /// for one codec. A stream above a limit decodes with errors or not at all. An app reads the
 /// limits with [`VideoDecoder::capabilities`](super::VideoDecoder::capabilities) before it asks
 /// its host for a picture size.
+///
+/// Android reports every limit. VideoToolbox on macOS and iOS offers no query for sizes, rates or
+/// bit rates, so those limits are `None` there: the decoder takes a size until it fails.
 #[derive(Clone, Debug, PartialEq)]
 pub struct DecoderCapabilities {
     /// The codec that these limits belong to.
@@ -18,22 +21,24 @@ pub struct DecoderCapabilities {
     /// Whether the component runs on dedicated hardware, or `None` when the platform does not
     /// say.
     pub hardware_accelerated: Option<bool>,
-    /// The widest picture in pixels that the decoder takes at any height.
-    pub max_width: u32,
-    /// The tallest picture in pixels that the decoder takes at any width.
-    pub max_height: u32,
-    /// The highest bit rate in bits a second that the decoder takes.
-    pub max_bitrate: u32,
+    /// The widest picture in pixels that the decoder takes at any height, or `None` when the
+    /// platform does not say.
+    pub max_width: Option<u32>,
+    /// The tallest picture in pixels that the decoder takes at any width, or `None` when the
+    /// platform does not say.
+    pub max_height: Option<u32>,
+    /// The highest bit rate in bits a second that the decoder takes, or `None` when the platform
+    /// does not say.
+    pub max_bitrate: Option<u32>,
 }
 
 impl DecoderCapabilities {
     /// The highest frame rate in pictures a second at which the decoder takes pictures of `width`
-    /// by `height` pixels, or `None` when it takes no picture of that size. A size can lie
-    /// within both maximums and still fail: decoders also limit the number of pixels in a
-    /// picture.
+    /// by `height` pixels, or `None` when it takes no picture of that size or the platform gives
+    /// no rates, which [`max_width`](Self::max_width) being `None` tells. A size can lie within
+    /// both maximums and still fail: decoders also limit the number of pixels in a picture.
     pub fn max_frame_rate(&self, width: u32, height: u32) -> Option<f32> {
-        PLATFORM
-            .get()?
+        source()?
             .max_frame_rate(self.codec, width, height)
             .filter(|rate| *rate > 0.0)
     }
@@ -61,9 +66,17 @@ pub fn set_platform_decoder_capabilities(source: Option<Arc<dyn DecoderCapabilit
     }
 }
 
+// The source that a platform backend installed, or VideoToolbox's on Apple platforms, whose
+// decoder is part of this crate.
+fn source() -> Option<Arc<dyn DecoderCapabilitySource>> {
+    let installed = PLATFORM.get();
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    let installed = installed.or_else(|| Some(Arc::new(super::video_toolbox_capabilities::Limits)));
+    installed
+}
+
 pub(super) fn of(codec: VideoCodec) -> Result<DecoderCapabilities, DecoderError> {
-    PLATFORM
-        .get()
+    source()
         .ok_or(DecoderError::Unavailable)?
         .capabilities(codec)
         .ok_or(DecoderError::NoDecoder(codec))

@@ -72,7 +72,8 @@ impl SpatialEnvironment {
         expect(dead_code, reason = "the headset backend calls it")
     )]
     pub(crate) fn show(&self, opacity: f32) {
-        if self.current.get_non_reactive() != opacity {
+        // Any change of the value counts, so the comparison is of the exact bits
+        if self.current.get_non_reactive().to_bits() != opacity.to_bits() {
             self.current.set(opacity);
         }
     }

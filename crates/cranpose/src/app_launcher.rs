@@ -1288,7 +1288,7 @@ impl<Fonts: LauncherFonts> AppLauncher<Fonts> {
     ))]
     pub fn run(self, content: impl FnMut() + 'static) -> ! {
         self.try_run(content)
-            .unwrap_or_else(|error| exit_after_launch_error("desktop launch failed", error));
+            .unwrap_or_else(|error| exit_after_launch_error("desktop launch failed", &error));
         std::process::exit(0)
     }
 
@@ -1347,7 +1347,7 @@ impl<Fonts: LauncherFonts> AppLauncher<Fonts> {
     #[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]
     pub fn run(self, content: impl FnMut() + 'static) -> ! {
         self.try_run(content)
-            .unwrap_or_else(|error| exit_after_launch_error("iOS launch failed", error));
+            .unwrap_or_else(|error| exit_after_launch_error("iOS launch failed", &error));
         std::process::exit(0)
     }
 

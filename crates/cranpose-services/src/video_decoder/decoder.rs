@@ -1,9 +1,13 @@
 //! The decoder and the handle that receives its pictures.
 
+#[cfg(any(target_os = "android", target_os = "macos", target_os = "ios"))]
+use super::frame_queue::Frames;
 #[cfg(target_os = "android")]
-use super::media_codec::{Backend, Frames};
-#[cfg(not(target_os = "android"))]
+use super::media_codec::Backend;
+#[cfg(not(any(target_os = "android", target_os = "macos", target_os = "ios")))]
 use super::unavailable::{Backend, Frames};
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+use super::video_toolbox::Backend;
 use super::{
     AccessUnit, DecoderCapabilities, DecoderConfig, DecoderError, DecoderStats, FrameInfo,
     VideoCodec, VideoFrame, capabilities,
@@ -31,11 +35,12 @@ impl VideoDecoder {
     }
 
     /// The limits of the hardware decoder that [`new`](Self::new) opens for `codec`: its largest
-    /// picture and bit rate, and through
-    /// [`DecoderCapabilities::max_frame_rate`] its frame rate at a size. Android reads them from
-    /// the device's media codec list. The call costs a query of the platform, so an app makes it
-    /// once for each codec. It reports [`DecoderError::Unavailable`] where the platform gives no
-    /// limits and [`DecoderError::NoDecoder`] for a codec that the device cannot decode.
+    /// picture and bit rate, and through [`DecoderCapabilities::max_frame_rate`] its frame rate
+    /// at a size. Android reads them from the device's media codec list. VideoToolbox on macOS and
+    /// iOS tells only whether the codec decodes on dedicated hardware, and leaves the sizes and
+    /// rates `None`. The call costs a query of the platform, so an app makes it once for each
+    /// codec. It reports [`DecoderError::Unavailable`] where the platform gives no limits and
+    /// [`DecoderError::NoDecoder`] for a codec that the device cannot decode.
     pub fn capabilities(codec: VideoCodec) -> Result<DecoderCapabilities, DecoderError> {
         capabilities::of(codec)
     }
@@ -74,6 +79,14 @@ impl DecodedFrames {
     /// It drops the older pictures.
     pub fn latest_frame(&self) -> Option<VideoFrame> {
         self.frames.latest_frame()
+    }
+
+    /// Waits until a picture is ready for [`next_frame`](Self::next_frame) or
+    /// [`latest_frame`](Self::latest_frame), and returns at once if one is. The decoder's thread
+    /// wakes the task, so an app draws a picture in the frame that follows its output with no
+    /// polling. One task at a time waits: a second wait takes the place of the first.
+    pub async fn wait_for_frame(&self) {
+        std::future::poll_fn(|context| self.frames.poll_ready(context)).await;
     }
 
     /// The report of the oldest picture that the decoder sent to the surface, if the output is

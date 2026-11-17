@@ -15,11 +15,11 @@ use std::{
 
 use cranpose::{
     AccessUnit, CropRect, DecodedFrames, DecoderConfig, DecoderError, DecoderOutput, VideoCodec,
-    VideoDecoder,
+    VideoDecoder, split_access_units,
 };
 use cranpose_xr::{FieldOfView, FoveatedEncoding, Pose, StreamedView, StreamedViews};
 
-use crate::clip_player::{DEPTH, access_units, target_display_time};
+use crate::clip_player::{DEPTH, target_display_time};
 
 const CLIP: &[u8] = include_bytes!("../assets/foveated_test.h264");
 // The clip's size in pixels: two encoded eyes side by side
@@ -74,7 +74,7 @@ impl Drop for FoveatedPlayer {
 }
 
 fn play(decoder: &mut VideoDecoder, stop: &AtomicBool) {
-    let units = access_units(CLIP);
+    let units = split_access_units(VideoCodec::H264, CLIP);
     let step = Duration::from_secs(1) / RATE;
     let started = Instant::now();
     let mut index = 0_u64;

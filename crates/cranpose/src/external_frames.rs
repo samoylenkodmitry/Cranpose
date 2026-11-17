@@ -2,7 +2,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use cranpose_ui::{ExternalTexture, ImageBitmap};
 
-use crate::GpuContext;
+use crate::{GpuContext, cover_pipeline::cover_pipeline};
 
 /// The most textures one [`ExternalFrames`] holds: the frame a writer
 /// prepares, the one it renders, the one it published and the one shown. An
@@ -153,7 +153,9 @@ impl ExternalFrames {
         }
         let slot = &mut ring.slots[index];
         slot.state = State::Shown;
-        Some(slot.shown.frame(number))
+        let bitmap = slot.shown.frame(number);
+        drop(ring);
+        Some(bitmap)
     }
 }
 
@@ -186,11 +188,13 @@ impl FrameWriter {
         ring.next += 1;
         let slot = &mut ring.slots[index];
         slot.state = State::Writing(number);
-        Some(FrameTexture {
+        let target = FrameTexture {
             number,
             texture: slot.texture.clone(),
             view: slot.view.clone(),
-        })
+        };
+        drop(ring);
+        Some(target)
     }
 
     /// Hands frame `number` to the composition. Call it once the work that
@@ -343,32 +347,14 @@ impl SrgbEncoder {
                 count: None,
             }],
         });
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("external frame encode"),
-            bind_group_layouts: &[Some(&layout)],
-            immediate_size: 0,
-        });
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("external frame encode"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &module,
-                entry_point: Some("cover"),
-                compilation_options: Default::default(),
-                buffers: &[],
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &module,
-                entry_point: Some("encode"),
-                compilation_options: Default::default(),
-                targets: &[Some(target.into())],
-            }),
-            primitive: Default::default(),
-            depth_stencil: None,
-            multisample: Default::default(),
-            multiview_mask: None,
-            cache: None,
-        });
+        let pipeline = cover_pipeline(
+            device,
+            "external frame encode",
+            &layout,
+            &module,
+            "encode",
+            target,
+        );
         Self {
             device: (*gpu.device).clone(),
             queue: (*gpu.queue).clone(),

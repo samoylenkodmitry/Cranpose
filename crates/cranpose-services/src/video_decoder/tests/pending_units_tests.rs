@@ -39,3 +39,15 @@ fn a_full_list_keeps_the_newest_units() {
     assert_eq!(units.take(10), None);
     assert_eq!(units.take(11).map(|unit| unit.pts_us), Some(11));
 }
+
+#[test]
+fn a_removed_unit_leaves_the_units_before_it() {
+    let mut units = PendingUnits::new();
+    for pts in [100, 200, 300] {
+        units.push(unit(pts));
+    }
+    assert_eq!(units.remove(200).map(|unit| unit.metadata), Some(2000));
+    assert_eq!(units.len(), 2);
+    assert_eq!(units.remove(100).map(|unit| unit.metadata), Some(1000));
+    assert_eq!(units.remove(200), None);
+}
