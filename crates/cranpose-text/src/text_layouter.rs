@@ -123,15 +123,17 @@ impl TextLayouter {
         shaped: Option<&TextLayout>,
         faces: SmallVec<[Typeface; 1]>,
     ) -> TextLayout {
-        let mut body = LayoutBody {
-            faces,
-            ..LayoutBody::default()
-        };
-        let width = self.fill(input, resolver, shaped, &mut body);
-        // A layout kept holds each part in storage of its own length.
-        body.shrink_to_fit();
-        let reach = self.shaper.take_ink_reach();
-        TextLayout::new(body, width, (input.min_width, input.max_width), reach)
+        // The body fills in its own heap storage: a body filled on the stack
+        // would be copied into the layout's storage once laid out.
+        let mut layout = TextLayout::default();
+        layout.refill((input.min_width, input.max_width), |body| {
+            body.faces = faces;
+            let width = self.fill(input, resolver, shaped, body);
+            // A layout kept holds each part in storage of its own length.
+            body.shrink_to_fit();
+            (width, self.shaper.take_ink_reach())
+        });
+        layout
     }
 
     /// Lays `input` out into `layout` in place of what it held, in the
