@@ -4,12 +4,12 @@
 
 use std::{cell::RefCell, rc::Rc};
 
-use cranpose::prelude::*;
+use cranpose::{CropRect, DecodedFrames, prelude::*};
 use cranpose_ui::text::{FontWeight, TextUnit};
 use cranpose_xr::{
-    ExternalSurface, SpatialCurvedRow, SpatialExternalSurface, SpatialPanel, StereoMode, Subspace,
-    SubspaceModifier, local_headset_properties, local_spatial_capabilities,
-    local_spatial_environment,
+    FieldOfView, Pose, SpatialCurvedRow, SpatialExternalSurface, SpatialPanel, StereoMode,
+    StreamedScene, StreamedView, StreamedViews, Subspace, SubspaceModifier,
+    local_headset_properties, local_spatial_capabilities, local_spatial_environment,
 };
 
 mod clip_player;
@@ -24,38 +24,38 @@ cranpose::app_capabilities!();
 
 // The app: a panel with a counter, a smaller panel to the right and a 16:9 video surface to the
 // left, both turned toward the viewer, and a strip above them that is bent around the viewer.
-// The hardware decoder plays a clip into the video surface. A thread writes a moving test pattern
-// into a small side-by-side surface above the right panel and into a small top-bottom surface
-// below it. Each shows a different color to each eye.
+// The hardware decoder plays a clip into the video surface, and the same clip's frames go to a
+// streamed scene below the panels. A thread writes a moving test pattern into a small
+// side-by-side surface above the right panel and into a small top-bottom surface below it. Each
+// shows a different color to each eye.
 #[composable]
 pub fn XrDemo() {
     let presses = rememberMutableStateOf(|| 0_u32);
     let readout = rememberMutableStateOf(Readout::default);
     Subspace(move || {
         HeadsetReadout(presses, readout);
-        PlayedSurface(
+        ClipSurface(
             StereoMode::Mono,
             SubspaceModifier::new()
                 .size(640.0, 360.0)
                 .offset(-760.0, 0.0, 50.0)
                 .rotate(0.0, 25.0, 0.0),
-            Source::Clip,
         );
-        PlayedSurface(
+        PatternSurface(
             StereoMode::SideBySide,
             SubspaceModifier::new()
                 .size(320.0, 180.0)
                 .offset(600.0, 260.0, 100.0)
                 .rotate(0.0, -30.0, 0.0),
-            Source::Pattern(Split::LeftRight),
+            Split::LeftRight,
         );
-        PlayedSurface(
+        PatternSurface(
             StereoMode::TopBottom,
             SubspaceModifier::new()
                 .size(320.0, 180.0)
                 .offset(600.0, -260.0, 100.0)
                 .rotate(0.0, -30.0, 0.0),
-            Source::Pattern(Split::TopBottom),
+            Split::TopBottom,
         );
         CounterPanel(presses);
         CurvedStrip();
@@ -252,50 +252,74 @@ fn PassthroughButton() {
     );
 }
 
-// What fills a surface.
-#[derive(Clone, Copy, PartialEq)]
-enum Source {
-    // The hardware decoder plays the clip.
-    Clip,
-    // A thread writes the test pattern.
-    Pattern(Split),
-}
-
-// The thread that fills a surface. It stops when dropped.
-struct Writer {
-    _clip: Option<ClipPlayer>,
-    _pattern: Option<PatternWriter>,
-}
-
-impl Writer {
-    fn start(surface: ExternalSurface, source: Source) -> Self {
-        match source {
-            Source::Clip => Self {
-                _clip: Some(ClipPlayer::start(surface)),
-                _pattern: None,
-            },
-            Source::Pattern(split) => Self {
-                _clip: None,
-                _pattern: Some(PatternWriter::start(surface, split)),
-            },
-        }
-    }
-}
-
-// A surface that a thread fills from its creation to its end.
+// A surface that a thread fills with the test pattern from its creation to its end.
 #[composable]
-fn PlayedSurface(stereo_mode: StereoMode, modifier: SubspaceModifier, source: Source) {
-    let writer = remember(|| Rc::new(RefCell::new(None::<Writer>))).with(Clone::clone);
+fn PatternSurface(stereo_mode: StereoMode, modifier: SubspaceModifier, split: Split) {
+    let writer = remember(|| Rc::new(RefCell::new(None::<PatternWriter>))).with(Clone::clone);
     SpatialExternalSurface(stereo_mode, modifier, move |scope| {
         let started = Rc::clone(&writer);
         scope.on_surface_created(move |surface| {
-            started.borrow_mut().replace(Writer::start(surface, source));
+            started
+                .borrow_mut()
+                .replace(PatternWriter::start(surface, split));
         });
         let stopped = Rc::clone(&writer);
         scope.on_surface_destroyed(move |_| {
             stopped.borrow_mut().take();
         });
     });
+}
+
+// A surface that the hardware decoder plays the clip into. The decoder's second output, its
+// frames, goes to a streamed scene: the left half of the clip is the left eye's picture, and the
+// right half the right eye's, rendered from fixed poses.
+#[composable]
+fn ClipSurface(stereo_mode: StereoMode, modifier: SubspaceModifier) {
+    let frames = rememberMutableStateOf(|| None::<DecodedFrames>);
+    let player = remember(|| Rc::new(RefCell::new(None::<ClipPlayer>))).with(Clone::clone);
+    SpatialExternalSurface(stereo_mode, modifier, move |scope| {
+        let started = Rc::clone(&player);
+        scope.on_surface_created(move |surface| match ClipPlayer::start(surface) {
+            Ok((clip, decoded)) => {
+                started.borrow_mut().replace(clip);
+                frames.set(Some(decoded));
+            }
+            Err(error) => log::error!("xr demo: no clip: {error}"),
+        });
+        let stopped = Rc::clone(&player);
+        scope.on_surface_destroyed(move |_| {
+            stopped.borrow_mut().take();
+            frames.set(None);
+        });
+    });
+    if let Some(frames) = frames.get() {
+        StreamedScene(frames, clip_views);
+    }
+}
+
+// The views of a clip frame: both eyes look 30 degrees down from level, below the panels. The
+// eyes are 64 millimeters apart. The field of view of each has the shape of its half of the clip,
+// which is 320 by 360 pixels.
+fn clip_views(_frame: u64) -> StreamedViews {
+    const DOWN: f32 = 30.0 * std::f32::consts::PI / 180.0;
+    let (sin, cos) = (DOWN / 2.0).sin_cos();
+    let eye = |x: f32, left: u32| StreamedView {
+        pose: Pose {
+            position: [x, 0.0, 0.0],
+            orientation: [-sin, 0.0, 0.0, cos],
+        },
+        fov: FieldOfView::symmetric(0.4358, 0.4899),
+        rect: CropRect {
+            x: left,
+            y: 0,
+            width: 320,
+            height: 360,
+        },
+    };
+    StreamedViews {
+        left: eye(-0.032, 0),
+        right: eye(0.032, 320),
+    }
 }
 
 fn sized(size: f32, weight: Option<FontWeight>) -> TextStyle {

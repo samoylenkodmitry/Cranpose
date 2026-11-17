@@ -18,6 +18,7 @@ mod composition_locals;
 pub mod content;
 mod webdav;
 pub use webdav::WebDavFolder;
+pub mod device_auth;
 pub mod device_info;
 mod durable_save;
 pub mod external_surface;
@@ -137,6 +138,11 @@ pub use content::{
     ContentStream, ContentStreamRef, DEFAULT_CHUNK_LEN, ReadyFolder,
     clear_platform_content_resolver, collect_stream, drain_reader, folder_files, percent_decode,
     percent_decode_lossy, resolve_content, set_platform_content_resolver, write_all,
+};
+pub use device_auth::{
+    DeviceAuthAvailability, DeviceAuthFuture, DeviceAuthOutcome, DeviceAuthRequest,
+    DeviceAuthenticator, authenticate_device_owner, device_auth_availability, finish_device_auth,
+    rememberDeviceAuthAvailability, set_platform_device_authenticator,
 };
 pub use device_info::{
     DeviceInfo, DeviceInfoRef, clear_platform_device_info, device_info, release_free_memory,

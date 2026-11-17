@@ -1251,6 +1251,7 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "objc2-health-kit",
  "objc2-io-kit",
+ "objc2-local-authentication",
  "objc2-media-player",
  "objc2-quartz-core 0.3.2",
  "objc2-ui-kit",
@@ -1906,6 +1907,7 @@ dependencies = [
  "cranpose-core",
  "cranpose-testing",
  "cranpose-wgpu",
+ "glow",
  "khronos-egl",
  "libc",
  "log",
@@ -4604,6 +4606,17 @@ dependencies = [
  "bitflags 2.13.2",
  "objc2 0.6.5",
  "objc2-core-foundation",
+]
+
+[[package]]
+name = "objc2-local-authentication"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e48e0b8b339e0d9d2ed4416b7f93f9d4daadff7d4dd797f89867cde11aeac607"
+dependencies = [
+ "block2 0.6.2",
+ "objc2 0.6.5",
+ "objc2-foundation 0.3.2",
 ]
 
 [[package]]

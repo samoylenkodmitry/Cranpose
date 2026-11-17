@@ -58,11 +58,11 @@ composable shows an empty box, and the callbacks never run.
 
 `SpatialFrameEffect` runs a callback once in each frame of the headset, before the panels draw. It
 receives an `XrFrame`: the predicted display time on the monotonic clock, the head's pose, each
-eye's pose, pose relative to the head and field of view, both controllers with their poses, velocities, buttons, sticks and
-touches, and the runtime's recenter event. `local_haptics()` gives the `Haptics` handle that plays
-a `Vibration` on a hand's controller. `local_headset_properties()` gives the headset's name, its
-eyes' image sizes and its refresh rates. A streaming app sends the state to its host with them.
-Outside a headset the callback never runs.
+eye's pose, pose relative to the head and field of view, both controllers with their poses,
+velocities, buttons, sticks and touches, and the runtime's recenter event. `local_haptics()` gives
+the `Haptics` handle that plays a `Vibration` on a hand's controller. `local_headset_properties()`
+gives the headset's name, its eyes' image sizes and its refresh rates. A streaming app sends the
+state to its host with them. Outside a headset the callback never runs.
 
 ```rust,ignore
 use cranpose_xr::{Hand, SpatialFrameEffect, Vibration, local_haptics};
@@ -79,6 +79,21 @@ SpatialFrameEffect(move |frame| {
     }
 });
 ```
+
+## Streamed scenes
+
+`StreamedScene` shows frames that another machine rendered for both eyes. The app decodes the
+stream with a `VideoDecoder` in frames mode, and says for each frame where each eye was and which
+part of the frame is its picture. The headset's compositor shows each picture from the pose it was
+rendered for, and corrects it for the head's newer pose.
+
+```rust,ignore
+use cranpose_xr::{StreamedScene, StreamedViews};
+
+StreamedScene(frames, |metadata: u64| -> StreamedViews { views_of_frame(metadata) });
+```
+
+Outside a headset the composable shows nothing.
 
 ## Android headsets
 

@@ -16,7 +16,7 @@ use thiserror::Error;
 
 use crate::{
     composable,
-    layout::core::{Alignment, Measurable},
+    layout::core::{Alignment, Measurables},
     modifier::{Modifier, Rect, Size},
     nine_patch::{NinePatchInsets, PatchFill, PatchQuad, nine_patch_quads, tile_quads},
     widgets::Layout,
@@ -575,18 +575,18 @@ impl MeasurePolicy for ImageMeasurePolicy {
     fn measure(
         &self,
         scope: &dyn MeasureScope,
-        _measurables: &[Box<dyn Measurable>],
+        _measurables: Measurables<'_>,
         constraints: Constraints,
     ) -> MeasureResult {
         let mut placements = Vec::new();
-        let measurement = self.measure_into(scope, &[], constraints, &mut placements);
-        MeasureResult::new(measurement, placements)
+        let measured = self.measure_into(scope, Measurables::empty(), constraints, &mut placements);
+        MeasureResult::new(measured, placements)
     }
 
     fn measure_into(
         &self,
         _scope: &dyn MeasureScope,
-        _measurables: &[Box<dyn Measurable>],
+        _measurables: Measurables<'_>,
         constraints: Constraints,
         placements: &mut Vec<Placement>,
     ) -> cranpose_ui_layout::Measurement {
@@ -621,19 +621,19 @@ impl MeasurePolicy for ImageMeasurePolicy {
         Size { width, height }.into()
     }
 
-    fn min_intrinsic_width(&self, _measurables: &[Box<dyn Measurable>], _height: f32) -> f32 {
+    fn min_intrinsic_width(&self, _measurables: Measurables<'_>, _height: f32) -> f32 {
         self.intrinsic_size.width
     }
 
-    fn max_intrinsic_width(&self, _measurables: &[Box<dyn Measurable>], _height: f32) -> f32 {
+    fn max_intrinsic_width(&self, _measurables: Measurables<'_>, _height: f32) -> f32 {
         self.intrinsic_size.width
     }
 
-    fn min_intrinsic_height(&self, _measurables: &[Box<dyn Measurable>], _width: f32) -> f32 {
+    fn min_intrinsic_height(&self, _measurables: Measurables<'_>, _width: f32) -> f32 {
         self.intrinsic_size.height
     }
 
-    fn max_intrinsic_height(&self, _measurables: &[Box<dyn Measurable>], _width: f32) -> f32 {
+    fn max_intrinsic_height(&self, _measurables: Measurables<'_>, _width: f32) -> f32 {
         self.intrinsic_size.height
     }
 }

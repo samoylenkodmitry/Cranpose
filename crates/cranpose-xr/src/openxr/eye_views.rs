@@ -8,8 +8,8 @@ use std::{array, ptr};
 
 use openxr as xr;
 
-use super::session::pose_of;
-use crate::{FieldOfView, Pose, RenderViewpoint};
+use super::session::{field_of_view_of, pose_of};
+use crate::{Pose, RenderViewpoint};
 
 const VIEW_COUNT: usize = 2;
 
@@ -71,12 +71,7 @@ pub(crate) fn locate(
         Some(RenderViewpoint::seen_from(
             head,
             pose_of(&view.pose),
-            FieldOfView {
-                angle_left: view.fov.angle_left,
-                angle_right: view.fov.angle_right,
-                angle_up: view.fov.angle_up,
-                angle_down: view.fov.angle_down,
-            },
+            field_of_view_of(&view.fov),
         ))
     })
 }

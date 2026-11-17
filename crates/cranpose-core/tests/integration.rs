@@ -17,12 +17,14 @@ mod pausable_content;
 mod process_ids;
 mod recompose_ancestors_first;
 mod recompose_child_order;
+mod recompose_queue_order;
 #[cfg(feature = "inspection")]
 mod recomposition_inspection;
 mod returned_values;
 mod runtimes_on_one_thread;
 mod scene_attachment_scratch;
 mod scopes_on_demand;
+mod shadowed_names;
 mod snapshot_observation;
 mod snapshot_runtime_thread_isolation;
 mod stage_times;

@@ -79,8 +79,15 @@ fn paint(surface: ExternalSurface, split: Split, stop: &AtomicBool) {
     // clone takes a reference of its own.
     let window = unsafe { NativeWindow::clone_from_ptr(pointer) };
     drop(surface);
-    // The surface starts with the size that the headset gave it
+    // The surface starts with the size that the headset gave it. The side-by-side picture has
+    // buffers of half that size, so that the run shows how the compositor reads the halves of a
+    // picture whose size is not the size of its swapchain.
     let (width, height) = (window.width().max(2), window.height().max(2));
+    let (width, height) = if split == Split::LeftRight {
+        (width / 2, height / 2)
+    } else {
+        (width, height)
+    };
     if let Err(error) =
         window.set_buffers_geometry(width, height, Some(HardwareBufferFormat::R8G8B8A8_UNORM))
     {

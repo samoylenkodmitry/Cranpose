@@ -102,20 +102,25 @@ use cranpose_core::{
     rememberMutableStateOf,
 };
 use cranpose_foundation::{
-    DRAG_THRESHOLD, MAX_FLING_VELOCITY, VelocityTracker1D,
+    RunningScroll, ScrollId,
     lazy::{LazyItems, LazyLayoutKey},
 };
 use cranpose_ui_graphics::{CompositingStrategy, Point, Rect, Size};
 use cranpose_ui_layout::{
-    Constraints, Measurable, MeasurePolicy, MeasureResult, MeasureScope, Placement, round_to_px,
+    Constraints, Measurables, MeasurePolicy, MeasureResult, MeasureScope, Placement, round_to_px,
 };
+
+mod input;
+mod item_heights;
+use input::wear_scaling_list_input;
+use item_heights::ItemHeights;
 
 use crate::{
     composable,
     density::Density,
     fling_animation::FlingAnimation,
     layout_direction::LayoutDirection,
-    modifier::{GraphicsLayer, Modifier, PointerEventKind, PointerInputScope, TransformOrigin},
+    modifier::{GraphicsLayer, Modifier, TransformOrigin},
     round_scaling_list::{
         CentreAnchor, PlacedRow, ScaleAlpha, ScalingParams, leading_auto_centring_spacer,
         place_row_with, trailing_auto_centring_spacer,
@@ -259,6 +264,8 @@ struct WearScalingListInner {
     heights: Rc<RefCell<ItemHeights>>,
     indicator: Rc<RefCell<IndicatorState>>,
     scroll_animation: RefCell<Option<FrameCallbackRegistration>>,
+    // The fling of a swipe that moves the list now and how to stop it.
+    fling: RefCell<RunningScroll>,
     summary: MutableState<WearScalingListSummary>,
 }
 
@@ -364,69 +371,6 @@ impl IndicatorState {
     }
 }
 
-/// Every item height the list has measured so far, and a stand-in for the rest.
-///
-/// A virtualised list cannot know the height of an item it has never composed,
-/// and the scroll indicator's total extent is a sum over all of them. This is
-/// the same bargain `LazyListState` makes with `average_item_size`: remember
-/// what has been measured, and let the mean of it speak for what has not.
-///
-/// The cache is cleared when the item **count** changes and not otherwise. A
-/// row whose content changed is re-measured the next time it is composed, so a
-/// stale entry can only ever bias the estimate for rows that are off screen —
-/// never a placed row's geometry.
-#[derive(Default, Debug)]
-struct ItemHeights {
-    known: Vec<Option<f32>>,
-    sum: f32,
-    count: usize,
-}
-
-impl ItemHeights {
-    fn len(&self) -> usize {
-        self.known.len()
-    }
-
-    fn resize(&mut self, len: usize) {
-        if self.known.len() == len {
-            return;
-        }
-        self.known.clear();
-        self.known.resize(len, None);
-        self.sum = 0.0;
-        self.count = 0;
-    }
-
-    fn record(&mut self, index: usize, height: f32) {
-        let Some(slot) = self.known.get_mut(index) else {
-            return;
-        };
-        match slot.replace(height) {
-            Some(previous) => self.sum += height - previous,
-            None => {
-                self.sum += height;
-                self.count += 1;
-            }
-        }
-    }
-
-    fn estimate(&self) -> f32 {
-        if self.count == 0 {
-            0.0
-        } else {
-            self.sum / self.count as f32
-        }
-    }
-
-    fn height_of(&self, index: usize) -> f32 {
-        self.known
-            .get(index)
-            .copied()
-            .flatten()
-            .unwrap_or_else(|| self.estimate())
-    }
-}
-
 impl WearScalingListState {
     fn inner(&self) -> Rc<WearScalingListInner> {
         self.inner.get()
@@ -450,13 +394,41 @@ impl WearScalingListState {
         self.anchor.set(anchor);
     }
 
-    /// Stops a running [`Self::animate_scroll_to_item`].
+    /// Stops a running [`Self::animate_scroll_to_item`] and the fling of a
+    /// swipe.
     ///
     /// Every other way of moving the list calls this first: a finger, a rotary
     /// crown or a snap always wins against an animation the screen started, so
-    /// the list never fights the user.
+    /// the list never fights the user. A jump stops a fling too, as Compose's
+    /// `scrollToItem` does.
     pub fn cancel_scroll_animation(&self) {
         self.inner().scroll_animation.borrow_mut().take();
+        self.stop_fling();
+    }
+
+    // Makes the fling that `stop` stops the list's running fling. The fling
+    // that ran before stops.
+    fn hold_fling(&self, stop: impl FnOnce() + 'static) -> ScrollId {
+        let (id, previous) = self.inner().fling.borrow_mut().start(stop);
+        if let Some(previous) = previous {
+            previous.run();
+        }
+        id
+    }
+
+    // Forgets the fling `id` once it ended, while the state lives.
+    fn end_fling(&self, id: ScrollId) {
+        if let Some(inner) = self.inner.try_get() {
+            inner.fling.borrow_mut().end(id);
+        }
+    }
+
+    // Stops the list's running fling.
+    fn stop_fling(&self) {
+        let fling = self.inner().fling.borrow_mut().take();
+        if let Some(fling) = fling {
+            fling.run();
+        }
     }
 
     /// Scrolls by a distance in layout points, positive towards the end of the
@@ -752,6 +724,7 @@ pub fn rememberWearScalingListState(initial: CentreAnchor) -> WearScalingListSta
                 heights: Rc::new(RefCell::new(ItemHeights::default())),
                 indicator: Rc::new(RefCell::new(IndicatorState::default())),
                 scroll_animation: RefCell::new(None),
+                fling: RefCell::new(RunningScroll::default()),
                 summary: MutableState::with_runtime(
                     WearScalingListSummary::default(),
                     runtime.clone(),
@@ -952,119 +925,6 @@ impl Default for WearScalingListContent {
     }
 }
 
-fn wear_scaling_list_input(
-    modifier: Modifier,
-    state: WearScalingListState,
-    fling: Rc<FlingAnimation>,
-) -> Modifier {
-    let rotary_state = state;
-    let touch_state = state;
-    let touch_fling = Rc::clone(&fling);
-    modifier
-        .on_rotary_scroll_event(move |event| {
-            let delta = if event.vertical_scroll_pixels != 0.0 {
-                event.vertical_scroll_pixels
-            } else {
-                event.horizontal_scroll_pixels
-            };
-            rotary_state.dispatch_raw_delta(delta) != 0.0
-        })
-        .pointer_input(state.id(), move |scope: PointerInputScope| {
-            let fling = Rc::clone(&touch_fling);
-            async move {
-                scope
-                    .await_pointer_event_scope(|events| async move {
-                        let mut pointer = None;
-                        let mut down = Point::new(0.0, 0.0);
-                        let mut last = Point::new(0.0, 0.0);
-                        let mut dragging = false;
-                        let mut velocity = VelocityTracker1D::new();
-                        loop {
-                            let event = events.await_pointer_event().await;
-                            match event.kind {
-                                PointerEventKind::Down if pointer.is_none() => {
-                                    fling.cancel();
-                                    pointer = Some(event.id);
-                                    down = event.position;
-                                    last = event.position;
-                                    dragging = false;
-                                    velocity.reset();
-                                    if let Some(time) = event.time_ms {
-                                        velocity.add_data_point(time, event.position.y);
-                                    }
-                                }
-                                PointerEventKind::Move if pointer == Some(event.id) => {
-                                    if event.is_consumed() {
-                                        pointer = None;
-                                        dragging = false;
-                                        velocity.reset();
-                                        continue;
-                                    }
-                                    let dx = event.position.x - down.x;
-                                    let dy = event.position.y - down.y;
-                                    if !dragging && dy.abs() > DRAG_THRESHOLD && dy.abs() > dx.abs()
-                                    {
-                                        dragging = true;
-                                    } else if !dragging
-                                        && dx.abs() > DRAG_THRESHOLD
-                                        && dx.abs() >= dy.abs()
-                                    {
-                                        pointer = None;
-                                        velocity.reset();
-                                        continue;
-                                    }
-                                    if dragging {
-                                        let consumed = touch_state
-                                            .dispatch_raw_delta(last.y - event.position.y);
-                                        last = event.position;
-                                        if let Some(time) = event.time_ms {
-                                            velocity.add_data_point(time, event.position.y);
-                                        }
-                                        if consumed != 0.0 {
-                                            event.consume();
-                                        }
-                                    }
-                                }
-                                PointerEventKind::Up if pointer == Some(event.id) => {
-                                    if dragging {
-                                        let (y, cap) = (event.position.y, MAX_FLING_VELOCITY);
-                                        let speed = -event.time_ms.map_or(0.0, |at| {
-                                            velocity.release_velocity(at, y, cap)
-                                        });
-                                        let fling_state = touch_state;
-                                        fling.start_fling(
-                                            0.0,
-                                            speed,
-                                            move |delta| fling_state.dispatch_raw_delta(delta),
-                                            || {},
-                                        );
-                                        event.consume();
-                                    }
-                                    pointer = None;
-                                    dragging = false;
-                                    velocity.reset();
-                                }
-                                PointerEventKind::Cancel if pointer == Some(event.id) => {
-                                    pointer = None;
-                                    dragging = false;
-                                    velocity.reset();
-                                }
-                                PointerEventKind::Scroll => {
-                                    let consumed =
-                                        touch_state.dispatch_raw_delta(event.scroll_delta.y);
-                                    if consumed != 0.0 {
-                                        event.consume();
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
-                    })
-                    .await;
-            }
-        })
-}
-
 /// One item of a scaling list, wrapped in the layer that shrinks and fades it.
 ///
 /// `TransformOrigin` is `(0.5, 0.0)` — the horizontal centre and the top edge —
@@ -1104,7 +964,7 @@ impl MeasurePolicy for WearItemMeasurePolicy {
     fn measure(
         &self,
         scope: &dyn MeasureScope,
-        measurables: &[Box<dyn Measurable>],
+        measurables: Measurables<'_>,
         constraints: Constraints,
     ) -> MeasureResult {
         let mut placements = Vec::new();
@@ -1115,7 +975,7 @@ impl MeasurePolicy for WearItemMeasurePolicy {
     fn measure_into(
         &self,
         _scope: &dyn MeasureScope,
-        measurables: &[Box<dyn Measurable>],
+        measurables: Measurables<'_>,
         constraints: Constraints,
         placements: &mut Vec<Placement>,
     ) -> cranpose_ui_layout::Measurement {
@@ -1135,28 +995,28 @@ impl MeasurePolicy for WearItemMeasurePolicy {
         .into()
     }
 
-    fn min_intrinsic_width(&self, measurables: &[Box<dyn Measurable>], height: f32) -> f32 {
+    fn min_intrinsic_width(&self, measurables: Measurables<'_>, height: f32) -> f32 {
         measurables
             .iter()
             .map(|m| m.min_intrinsic_width(height))
             .fold(0.0, f32::max)
     }
 
-    fn max_intrinsic_width(&self, measurables: &[Box<dyn Measurable>], height: f32) -> f32 {
+    fn max_intrinsic_width(&self, measurables: Measurables<'_>, height: f32) -> f32 {
         measurables
             .iter()
             .map(|m| m.max_intrinsic_width(height))
             .fold(0.0, f32::max)
     }
 
-    fn min_intrinsic_height(&self, measurables: &[Box<dyn Measurable>], width: f32) -> f32 {
+    fn min_intrinsic_height(&self, measurables: Measurables<'_>, width: f32) -> f32 {
         measurables
             .iter()
             .map(|m| m.min_intrinsic_height(width))
             .fold(0.0, f32::max)
     }
 
-    fn max_intrinsic_height(&self, measurables: &[Box<dyn Measurable>], width: f32) -> f32 {
+    fn max_intrinsic_height(&self, measurables: Measurables<'_>, width: f32) -> f32 {
         measurables
             .iter()
             .map(|m| m.max_intrinsic_height(width))

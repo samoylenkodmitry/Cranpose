@@ -190,6 +190,12 @@ impl RenderString {
         self.hash = render_hash_impl(&self.text, &[], &[]);
     }
 
+    // Makes a plain string hold `text` in `text`'s own room.
+    pub(crate) fn replace_plain(&mut self, text: String) {
+        self.hash = render_hash_impl(&text, &[], &[]);
+        self.text = text;
+    }
+
     /// The characters.
     pub fn text(&self) -> &str {
         &self.text

@@ -1,6 +1,6 @@
 # Cranpose services
 
-`cranpose-services` defines platform service contracts for Cranpose applications. The crate groups APIs for HTTP, files and folders, URI handlers, audio and media, camera, hardware video decoding and the surfaces it writes into, image pickers, haptics, heart rate, accessibility, device and power information, app updates, purchases, navigation, preferences, and shared content.
+`cranpose-services` defines platform service contracts for Cranpose applications. The crate groups APIs for HTTP, files and folders, URI handlers, audio and media, camera, hardware video decoding and the surfaces it writes into, image pickers, haptics, heart rate, the device unlock, accessibility, device and power information, app updates, purchases, navigation, preferences, and shared content.
 
 Most applications use these APIs through the `cranpose` facade. Add `cranpose-services` directly when an application provides a custom backend or needs a service contract outside the facade. Platform adapters register implementations through each module's `set_platform_*` function. Composition-local services use `local_*` functions and `Provide*` composables; process-wide services use plain functions.
 
@@ -52,6 +52,39 @@ one that was refused sees `Denied`. `live_bpm()` is a reading only while the
 sensor is on the skin. On Android the service is compiled into the app only
 when declared, and the sensor pauses with the activity; other platforms report
 `Unavailable`.
+
+## Example: ask the owner to unlock
+
+An application can keep a screen, such as a history, from a person who holds
+the phone but does not own it. The system asks for a face, a fingerprint or
+the screen lock, and tells the application only whether the owner unlocked.
+The service is in a build only when its build script declares
+`cranpose_capabilities::Use::device_auth(reason)`; on iOS the `cranpose`
+feature `device-auth` links LocalAuthentication as well.
+
+```rust
+use cranpose_services::{
+    DeviceAuthOutcome, authenticate_device_owner, rememberDeviceAuthAvailability,
+};
+
+// Whether the device can lock the screen at all. Reading it never prompts,
+// and it is read again when the application comes back from the settings.
+fn can_lock() -> bool {
+    rememberDeviceAuthAvailability().can_authenticate()
+}
+
+// When the person opens the locked screen.
+async fn unlock() -> bool {
+    authenticate_device_owner("Open your history").await == DeviceAuthOutcome::Unlocked
+}
+```
+
+`DeviceAuthAvailability::NoScreenLock` means the person has to set a screen
+lock first. A call while a prompt is open shows no second prompt and gets the
+open one's outcome. Android 10 and newer show `BiometricPrompt` with the screen
+lock allowed, and Android 9 and older the confirm-credential screen. iOS
+evaluates `LAPolicy::DeviceOwnerAuthentication`. Desktop systems, watches and
+the web report `Unsupported`, and their prompts end with `Unavailable`.
 
 ## Saving state
 

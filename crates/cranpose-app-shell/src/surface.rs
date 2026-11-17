@@ -573,7 +573,10 @@ fn route_batch_by_surface<R: Renderer>(
         scratch.owners.clear();
         return;
     }
-    scratch.seen.clear();
+    // A clear writes every control byte of the table, even of an empty one.
+    if !scratch.seen.is_empty() {
+        scratch.seen.clear();
+    }
     if single_window {
         scratch.owners.clear();
         if let Some(index) = primary {

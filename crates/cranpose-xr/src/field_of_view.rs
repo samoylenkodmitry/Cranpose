@@ -17,3 +17,16 @@ pub struct FieldOfView {
     /// The angle of the bottom edge, negative for an ordinary view.
     pub angle_down: f32,
 }
+
+impl FieldOfView {
+    /// A field of view that surrounds the view's forward axis evenly, `horizontal` radians wide
+    /// and `vertical` radians high.
+    pub const fn symmetric(horizontal: f32, vertical: f32) -> Self {
+        Self {
+            angle_left: -horizontal / 2.0,
+            angle_right: horizontal / 2.0,
+            angle_up: vertical / 2.0,
+            angle_down: -vertical / 2.0,
+        }
+    }
+}

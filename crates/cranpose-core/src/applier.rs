@@ -108,14 +108,10 @@ pub trait Applier: Any {
     /// Marks whether a reinserted recycled node originated from the warm recycle path.
     fn set_recycled_node_origin(&mut self, _id: NodeId, _origin: RecycleOrigin) {}
 
-    /// Seeds a warm recyclable shell for future reuse without requiring a prior removal.
-    fn seed_recycled_node_shell(
-        &mut self,
-        _key: TypeId,
-        _recycle_pool_limit: Option<usize>,
-        _shell: Box<dyn Node>,
-    ) {
-    }
+    /// Seeds the pool of `key` with a warm shell of `node`'s type, made by
+    /// [`Node::rehouse_for_recycle`], for a later node to reuse without a prior removal. A pool
+    /// that holds as many warm shells as `node` lets it keep makes none.
+    fn seed_recycled_node_shell(&mut self, _key: TypeId, _node: &dyn Node) {}
 
     /// Records that the current apply pass had to allocate a fresh recyclable shell for this type.
     fn record_fresh_recyclable_creation(&mut self, _key: TypeId) {}

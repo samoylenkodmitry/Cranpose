@@ -302,7 +302,6 @@ pub fn derivedStateOf<T: 'static + Clone + PartialEq>(
     compute: impl Fn() -> T + 'static,
 ) -> State<T> {
     let source = crate::caller_location_key();
-    let compute: Rc<dyn Fn() -> T> = Rc::new(compute);
     composer_context::with_composer(|composer| {
         composer.with_group(source, |composer| {
             let derivation = composer.current_recompose_scope();
@@ -318,27 +317,41 @@ pub fn derivedStateOf<T: 'static + Clone + PartialEq>(
             let (state, rerun) = composer
                 .remember_at(source, || None::<DerivedState<T>>)
                 .update(|slot| {
-                    let derived = match slot.take() {
-                        Some(derived) => {
-                            derived.set_compute(compute);
-                            if restarted_for(composer, &derived) {
-                                // The derivation keeps the states it read.
-                                if let Some(scope) = &derivation {
-                                    scope.keep_reads();
-                                }
-                            } else {
-                                derived.recompute();
+                    let (derived, fresh) = match slot.take() {
+                        // The closure derives what the kept one does, and the
+                        // derivation keeps the states it read.
+                        Some(derived) if restarted_for(composer, &derived) => {
+                            if let Some(scope) = &derivation {
+                                scope.keep_reads();
                             }
-                            derived
+                            (derived, false)
                         }
-                        None => DerivedState::new(runtime, compute, derivation.as_ref()),
+                        Some(derived) => {
+                            derived.set_compute(Rc::new(compute));
+                            derived.recompute();
+                            (derived, false)
+                        }
+                        None => {
+                            let compute = Rc::new(compute);
+                            (
+                                DerivedState::new(runtime, compute, derivation.as_ref()),
+                                true,
+                            )
+                        }
                     };
                     let state = derived.state();
-                    let rerun = derived.rerun();
+                    // The scope keeps the callback its first composition gave it.
+                    let rerun = (fresh
+                        || derivation
+                            .as_ref()
+                            .is_some_and(|scope| !scope.has_recompose_callback()))
+                    .then(|| derived.rerun());
                     *slot = Some(derived);
                     (state, rerun)
                 });
-            composer.set_recompose_callback(rerun);
+            if let Some(rerun) = rerun {
+                composer.set_recompose_callback(rerun);
+            }
             state
         })
     })

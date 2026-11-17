@@ -3,7 +3,7 @@
 // no modifier for.
 
 use cranpose::{
-    Constraints, Layout, Measurable, MeasureResult, Modifier, Placement, Size, composable,
+    Constraints, Layout, Measurables, MeasureResult, Modifier, Placement, Size, composable,
 };
 use cranpose_ui_layout::{MeasurePolicy, MeasureScope};
 
@@ -28,7 +28,7 @@ impl MeasurePolicy for AspectRatioPolicy {
     fn measure(
         &self,
         _scope: &dyn MeasureScope,
-        measurables: &[Box<dyn Measurable>],
+        measurables: Measurables<'_>,
         constraints: Constraints,
     ) -> MeasureResult {
         let (width, height) = self.size(constraints);
@@ -42,19 +42,19 @@ impl MeasurePolicy for AspectRatioPolicy {
         MeasureResult::new(Size::new(width, height), placements)
     }
 
-    fn min_intrinsic_width(&self, _measurables: &[Box<dyn Measurable>], height: f32) -> f32 {
+    fn min_intrinsic_width(&self, _measurables: Measurables<'_>, height: f32) -> f32 {
         height * self.ratio
     }
 
-    fn max_intrinsic_width(&self, _measurables: &[Box<dyn Measurable>], height: f32) -> f32 {
+    fn max_intrinsic_width(&self, _measurables: Measurables<'_>, height: f32) -> f32 {
         height * self.ratio
     }
 
-    fn min_intrinsic_height(&self, _measurables: &[Box<dyn Measurable>], width: f32) -> f32 {
+    fn min_intrinsic_height(&self, _measurables: Measurables<'_>, width: f32) -> f32 {
         width / self.ratio
     }
 
-    fn max_intrinsic_height(&self, _measurables: &[Box<dyn Measurable>], width: f32) -> f32 {
+    fn max_intrinsic_height(&self, _measurables: Measurables<'_>, width: f32) -> f32 {
         width / self.ratio
     }
 }

@@ -6,7 +6,8 @@
 //! repository describes the design.
 //!
 //! A [`SpatialExternalSurface`] gives the app a surface that a hardware video decoder or a camera
-//! writes into. The compositor shows its pictures as a layer with no copy.
+//! writes into. The compositor shows its pictures as a layer with no copy. A [`StreamedScene`]
+//! shows frames that another machine rendered, from the head pose that each was rendered for.
 //!
 //! A [`SpatialFrameEffect`] gives an app the headset's state in each frame: the head, the eyes,
 //! the controllers and the recenter event, as an [`XrFrame`]. [`Haptics`] plays vibrations on the
@@ -45,6 +46,9 @@ mod spatial_external_surface;
 mod spatial_frame_effect;
 mod spatial_panel;
 mod stereo_mode;
+mod stream_source;
+mod streamed_scene;
+mod streamed_view;
 mod subspace;
 mod subspace_modifier;
 mod xr_frame;
@@ -76,6 +80,8 @@ pub use spatial_external_surface::{SpatialExternalSurface, SpatialExternalSurfac
 pub use spatial_frame_effect::SpatialFrameEffect;
 pub use spatial_panel::SpatialPanel;
 pub use stereo_mode::StereoMode;
+pub use streamed_scene::StreamedScene;
+pub use streamed_view::{StreamedView, StreamedViews};
 pub use subspace::Subspace;
 pub use subspace_modifier::{DEFAULT_PANEL_SIZE, METERS_PER_DP, SubspaceModifier};
 pub use xr_frame::XrFrame;

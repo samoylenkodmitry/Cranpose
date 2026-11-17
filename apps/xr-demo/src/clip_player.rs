@@ -1,7 +1,7 @@
 // Plays a short H.264 clip through Cranpose's hardware decoder from its own thread, in a loop.
 // The clip has no B-frames, an access unit delimiter before each picture, and the parameter sets
-// in front of each keyframe. A second decoder in frames mode takes the same pictures and is made
-// anew at every loop, as a self-test of its start, its images and its end.
+// in front of each keyframe. Two decoders take the pictures: one sends them to a surface, and one
+// returns them as frames for a streamed scene.
 
 use std::{
     sync::{
@@ -13,15 +13,16 @@ use std::{
 };
 
 use cranpose::{
-    AccessUnit, CropRect, DecodedFrames, DecoderConfig, DecoderError, DecoderOutput,
-    ExternalSurface, VideoCodec, VideoDecoder,
+    AccessUnit, DecodedFrames, DecoderConfig, DecoderError, DecoderOutput, ExternalSurface,
+    VideoCodec, VideoDecoder,
 };
 
 const CLIP: &[u8] = include_bytes!("../assets/test_clip.h264");
 // The clip's size in pixels and its rate in pictures a second
 const SIZE: (u32, u32) = (640, 360);
 const RATE: u32 = 30;
-// The pictures that the frames-mode decoder keeps
+// The pictures that the frames decoder may have in flight: the stream holds one, the decoder
+// queues some, and the rest are free for the decoder to write.
 const DEPTH: usize = 4;
 const REPORT_EVERY: Duration = Duration::from_secs(1);
 
@@ -31,16 +32,23 @@ pub(crate) struct ClipPlayer {
 }
 
 impl ClipPlayer {
-    pub(crate) fn start(surface: ExternalSurface) -> Self {
+    // Makes both decoders and starts the thread that feeds them. Returns the player and the
+    // frames of the second decoder.
+    pub(crate) fn start(surface: ExternalSurface) -> Result<(Self, DecodedFrames), DecoderError> {
+        let surface_decoder = decoder(DecoderOutput::Surface(surface))?;
+        let frames_decoder = decoder(DecoderOutput::Frames { depth: DEPTH })?;
+        let frames = frames_decoder.frames();
         let stop = Arc::new(AtomicBool::new(false));
         let flag = Arc::clone(&stop);
+        let reports = surface_decoder.frames();
+        let stats = frames.clone();
         let spawned = thread::Builder::new()
             .name("clip-player".into())
-            .spawn(move || play(surface, &flag));
+            .spawn(move || play([surface_decoder, frames_decoder], &reports, &stats, &flag));
         if let Err(error) = spawned {
             log::error!("xr demo: no clip thread: {error}");
         }
-        Self { stop }
+        Ok((Self { stop }, frames))
     }
 }
 
@@ -50,6 +58,10 @@ impl Drop for ClipPlayer {
     }
 }
 
+fn decoder(output: DecoderOutput) -> Result<VideoDecoder, DecoderError> {
+    VideoDecoder::new(DecoderConfig::new(VideoCodec::H264, SIZE.0, SIZE.1, output))
+}
+
 // What the player counts in one report interval.
 #[derive(Default)]
 struct Interval {
@@ -57,28 +69,14 @@ struct Interval {
     wrong_metadata: u32,
     decode: Duration,
     longest: Duration,
-    frames: u32,
-    frame_buffers_missing: u32,
-    wrong_frame_metadata: u32,
-    // The buffer size and the crop of the latest picture
-    buffer: Option<((u32, u32), CropRect)>,
 }
 
-fn play(surface: ExternalSurface, stop: &AtomicBool) {
-    let config = DecoderConfig::new(
-        VideoCodec::H264,
-        SIZE.0,
-        SIZE.1,
-        DecoderOutput::Surface(surface),
-    );
-    let mut decoder = match VideoDecoder::new(config) {
-        Ok(decoder) => decoder,
-        Err(error) => {
-            log::error!("xr demo: no decoder for the clip: {error}");
-            return;
-        }
-    };
-    let reports = decoder.frames();
+fn play(
+    mut decoders: [VideoDecoder; 2],
+    reports: &DecodedFrames,
+    frames: &DecodedFrames,
+    stop: &AtomicBool,
+) {
     let units = access_units(CLIP);
     let step = Duration::from_secs(1) / RATE;
     let started = Instant::now();
@@ -86,14 +84,6 @@ fn play(surface: ExternalSurface, stop: &AtomicBool) {
     let mut reported = Instant::now();
     let mut interval = Interval::default();
     while !stop.load(Ordering::Relaxed) {
-        // A new decoder for the frames output at every loop
-        let (mut frames_decoder, frames) = match frames_decoder() {
-            Ok(pair) => pair,
-            Err(error) => {
-                log::error!("xr demo: no frames decoder: {error}");
-                return;
-            }
-        };
         for unit in &units {
             if stop.load(Ordering::Relaxed) {
                 return;
@@ -103,16 +93,15 @@ fn play(surface: ExternalSurface, stop: &AtomicBool) {
                 timestamp: step * u32::try_from(index).unwrap_or(u32::MAX),
                 metadata: index,
             };
-            for decoder in [&mut decoder, &mut frames_decoder] {
+            for decoder in &mut decoders {
                 if let Err(error) = decoder.submit(access_unit) {
                     log::warn!("xr demo: picture {index} dropped: {error}");
                 }
             }
             index += 1;
-            interval.take_reports(&reports, step);
-            interval.take_frames(&frames, step);
+            interval.take_reports(reports, step);
             if reported.elapsed() >= REPORT_EVERY {
-                interval.log(&reports, &frames);
+                interval.log(reports, frames);
                 interval = Interval::default();
                 reported = Instant::now();
             }
@@ -121,18 +110,6 @@ fn play(surface: ExternalSurface, stop: &AtomicBool) {
             thread::sleep(due.saturating_duration_since(Instant::now()));
         }
     }
-}
-
-fn frames_decoder() -> Result<(VideoDecoder, DecodedFrames), DecoderError> {
-    let config = DecoderConfig::new(
-        VideoCodec::H264,
-        SIZE.0,
-        SIZE.1,
-        DecoderOutput::Frames { depth: DEPTH },
-    );
-    let decoder = VideoDecoder::new(config)?;
-    let frames = decoder.frames();
-    Ok((decoder, frames))
 }
 
 impl Interval {
@@ -149,43 +126,24 @@ impl Interval {
         }
     }
 
-    // Reads the frames decoder's pictures and drops them at once.
-    fn take_frames(&mut self, frames: &DecodedFrames, step: Duration) {
-        while let Some(frame) = frames.next_frame() {
-            self.frames += 1;
-            if frame.as_hardware_buffer_ptr().is_null() {
-                self.frame_buffers_missing += 1;
-            }
-            let info = frame.info();
-            if step * u32::try_from(info.metadata).unwrap_or(u32::MAX) != info.timestamp {
-                self.wrong_frame_metadata += 1;
-            }
-            self.buffer = Some((frame.size(), frame.crop()));
-        }
-    }
-
     fn log(&self, reports: &DecodedFrames, frames: &DecodedFrames) {
         let mean = self.decode / self.reports.max(1);
         let surface = reports.stats();
         let images = frames.stats();
         log::info!(
             "xr demo: surface decoder {} pictures, decode {:.2} ms mean {:.2} ms longest, \
-             {} wrong metadata, {} submitted, {} dropped | frames decoder {} pictures, \
-             {} without a buffer, {} wrong metadata, {} late, decode {:.2} ms mean, {} dropped, \
-             buffer and crop {:?}",
+             {} wrong metadata, {} submitted, {} dropped | frames decoder {} decoded, {} late, \
+             decode {:.2} ms mean, {} dropped",
             self.reports,
             mean.as_secs_f64() * 1000.0,
             self.longest.as_secs_f64() * 1000.0,
             self.wrong_metadata,
             surface.submitted,
             surface.dropped,
-            self.frames,
-            self.frame_buffers_missing,
-            self.wrong_frame_metadata,
+            images.decoded,
             images.late,
             images.mean_decode.as_secs_f64() * 1000.0,
             images.dropped,
-            self.buffer,
         );
     }
 }

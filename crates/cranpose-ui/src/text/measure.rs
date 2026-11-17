@@ -272,6 +272,12 @@ impl TextService {
         self.retired_strings.borrow_mut().plain(text)
     }
 
+    // `plain_text` of a string the caller gives up, which keeps its own room
+    // when no retired one is free.
+    pub(crate) fn plain_string(&self, text: String) -> AnnotatedString {
+        self.retired_strings.borrow_mut().plain_owned(text)
+    }
+
     // `source` laid out in the allocation of a retired layout nothing holds
     // and in its lines' storage; `None` when no retired layout is free, or
     // `source` takes glyphs shaped before or sizes itself down.

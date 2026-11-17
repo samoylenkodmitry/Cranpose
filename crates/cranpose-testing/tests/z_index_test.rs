@@ -9,7 +9,7 @@ use cranpose_testing::create_headless_robot_test;
 use cranpose_ui::{
     Box, BoxSpec, Layout, MeasureResult, Modifier, Placement, Size, widgets::Scaffold,
 };
-use cranpose_ui_layout::{Constraints, Measurable, MeasurePolicy, MeasureScope};
+use cranpose_ui_layout::{Constraints, Measurable, Measurables, MeasurePolicy, MeasureScope};
 
 /// Two boxes on one spot; returns which one each tap reached.
 fn overlapping(
@@ -76,18 +76,15 @@ struct Stack {
     first_z: f32,
 }
 
-fn largest(measurables: &[Box<dyn Measurable>], size: impl Fn(&dyn Measurable) -> f32) -> f32 {
-    measurables
-        .iter()
-        .map(|measurable| size(measurable.as_ref()))
-        .fold(0.0, f32::max)
+fn largest(measurables: Measurables<'_>, size: impl Fn(&dyn Measurable) -> f32) -> f32 {
+    measurables.iter().map(size).fold(0.0, f32::max)
 }
 
 impl MeasurePolicy for Stack {
     fn measure(
         &self,
         _scope: &dyn MeasureScope,
-        measurables: &[Box<dyn Measurable>],
+        measurables: Measurables<'_>,
         constraints: Constraints,
     ) -> MeasureResult {
         let placements = measurables
@@ -95,7 +92,6 @@ impl MeasurePolicy for Stack {
             .enumerate()
             .map(|(index, measurable)| {
                 let placeable = measurable.measure(constraints);
-                placeable.place(0.0, 0.0);
                 let z_index = if index == 0 { self.first_z } else { 0.0 };
                 Placement::new(placeable.node_id(), 0.0, 0.0, z_index)
             })
@@ -106,19 +102,19 @@ impl MeasurePolicy for Stack {
         )
     }
 
-    fn min_intrinsic_width(&self, measurables: &[Box<dyn Measurable>], height: f32) -> f32 {
+    fn min_intrinsic_width(&self, measurables: Measurables<'_>, height: f32) -> f32 {
         largest(measurables, |child| child.min_intrinsic_width(height))
     }
 
-    fn max_intrinsic_width(&self, measurables: &[Box<dyn Measurable>], height: f32) -> f32 {
+    fn max_intrinsic_width(&self, measurables: Measurables<'_>, height: f32) -> f32 {
         largest(measurables, |child| child.max_intrinsic_width(height))
     }
 
-    fn min_intrinsic_height(&self, measurables: &[Box<dyn Measurable>], width: f32) -> f32 {
+    fn min_intrinsic_height(&self, measurables: Measurables<'_>, width: f32) -> f32 {
         largest(measurables, |child| child.min_intrinsic_height(width))
     }
 
-    fn max_intrinsic_height(&self, measurables: &[Box<dyn Measurable>], width: f32) -> f32 {
+    fn max_intrinsic_height(&self, measurables: Measurables<'_>, width: f32) -> f32 {
         largest(measurables, |child| child.max_intrinsic_height(width))
     }
 }

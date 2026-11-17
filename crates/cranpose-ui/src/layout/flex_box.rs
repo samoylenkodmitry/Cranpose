@@ -9,7 +9,7 @@ use cranpose_ui_layout::{
 use smallvec::SmallVec;
 
 use crate::{
-    layout::core::Measurable,
+    layout::core::{Measurable, Measurables},
     widgets::flex_box::{
         FlexAlignContent, FlexAlignItems, FlexAlignSelf, FlexBasis, FlexBoxConfig, FlexConfig,
         FlexJustifyContent,
@@ -214,7 +214,7 @@ impl FlexBoxMeasurePolicy {
     fn build_lines(
         &self,
         items: &mut [Item],
-        measurables: &[Box<dyn Measurable>],
+        measurables: Measurables<'_>,
         axes: AxisConstraints,
         (main_gap, cross_gap): (f32, f32),
         upfront: bool,
@@ -383,12 +383,12 @@ impl FlexBoxMeasurePolicy {
         &self,
         line: &mut Line,
         items: &mut [Item],
-        measurables: &[Box<dyn Measurable>],
+        measurables: Measurables<'_>,
         remaining_cross: f32,
     ) {
         let (mut size, mut above, mut below) = (0.0_f32, 0.0_f32, 0.0_f32);
         for item in &mut items[line.start..line.end] {
-            let measurable = measurables[item.child].as_ref();
+            let measurable = &measurables[item.child];
             let contribution = if self.aligns_by_baseline(&item.config) {
                 self.measure_item(item, measurable, None, remaining_cross);
                 let baseline = item.placeable.as_ref().map_or(0.0, |placeable| {
@@ -459,7 +459,7 @@ impl FlexBoxMeasurePolicy {
         &self,
         lines: &mut [Line],
         items: &mut [Item],
-        measurables: &[Box<dyn Measurable>],
+        measurables: Measurables<'_>,
         (axes, cross_gap): (AxisConstraints, f32),
         (upfront, total_cross): (bool, f32),
     ) -> f32 {
@@ -477,12 +477,8 @@ impl FlexBoxMeasurePolicy {
                 }
                 let stretch = (self.stretches(&item.config) && line.cross_size > 0.0)
                     .then_some(line.cross_size);
-                let cross = self.measure_item(
-                    item,
-                    measurables[item.child].as_ref(),
-                    stretch,
-                    remaining_cross,
-                );
+                let cross =
+                    self.measure_item(item, &measurables[item.child], stretch, remaining_cross);
                 if !upfront {
                     line_cross = line_cross.max(cross);
                 }
@@ -636,7 +632,7 @@ impl FlexBoxMeasurePolicy {
     /// or shrink here.
     fn intrinsic_cross(
         &self,
-        measurables: &[Box<dyn Measurable>],
+        measurables: Measurables<'_>,
         available: f32,
         size: IntrinsicSize,
     ) -> f32 {
@@ -644,8 +640,8 @@ impl FlexBoxMeasurePolicy {
         let wraps = self.config.wrap.wraps();
         let (mut line_main, mut line_cross, mut total, mut in_line) = (0.0_f32, 0.0_f32, 0.0, 0);
         for measurable in measurables {
-            let main = self.main_intrinsic(measurable.as_ref(), f32::INFINITY, size);
-            let cross = self.cross_intrinsic(measurable.as_ref(), main, size);
+            let main = self.main_intrinsic(measurable, f32::INFINITY, size);
+            let cross = self.cross_intrinsic(measurable, main, size);
             let projected = if in_line == 0 {
                 main
             } else {
@@ -669,10 +665,10 @@ impl FlexBoxMeasurePolicy {
 
     /// The smallest main size: the widest child when the box wraps, all of
     /// them with their gaps when it does not.
-    fn min_intrinsic_main(&self, measurables: &[Box<dyn Measurable>], cross: f32) -> f32 {
+    fn min_intrinsic_main(&self, measurables: Measurables<'_>, cross: f32) -> f32 {
         let sizes = measurables
             .iter()
-            .map(|measurable| self.main_intrinsic(measurable.as_ref(), cross, IntrinsicSize::Min));
+            .map(|measurable| self.main_intrinsic(measurable, cross, IntrinsicSize::Min));
         if self.config.wrap.wraps() {
             sizes.fold(0.0, f32::max)
         } else {
@@ -683,7 +679,7 @@ impl FlexBoxMeasurePolicy {
     /// The preferred main size: one line, or the longest line when lines
     /// break after `max_items_in_each_line` children. Compose's
     /// `maxIntrinsicMainAxisSize`.
-    fn max_intrinsic_main(&self, measurables: &[Box<dyn Measurable>], cross: f32) -> f32 {
+    fn max_intrinsic_main(&self, measurables: Measurables<'_>, cross: f32) -> f32 {
         let gap = self.gaps().0;
         let per_line = if self.config.wrap.wraps() {
             self.config.max_items_in_each_line
@@ -692,7 +688,7 @@ impl FlexBoxMeasurePolicy {
         };
         let (mut longest, mut line, mut in_line) = (0.0_f32, 0.0_f32, 0);
         for measurable in measurables {
-            let size = self.main_intrinsic(measurable.as_ref(), cross, IntrinsicSize::Max);
+            let size = self.main_intrinsic(measurable, cross, IntrinsicSize::Max);
             line += if in_line == 0 { size } else { gap + size };
             in_line += 1;
             if in_line == per_line {
@@ -707,7 +703,7 @@ impl FlexBoxMeasurePolicy {
     // axis.
     fn intrinsic(
         &self,
-        measurables: &[Box<dyn Measurable>],
+        measurables: Measurables<'_>,
         axis: Axis,
         other: f32,
         size: IntrinsicSize,
@@ -727,7 +723,7 @@ impl MeasurePolicy for FlexBoxMeasurePolicy {
     fn measure(
         &self,
         scope: &dyn MeasureScope,
-        measurables: &[Box<dyn Measurable>],
+        measurables: Measurables<'_>,
         constraints: Constraints,
     ) -> MeasureResult {
         let mut placements = Vec::new();
@@ -738,7 +734,7 @@ impl MeasurePolicy for FlexBoxMeasurePolicy {
     fn measure_into(
         &self,
         _scope: &dyn MeasureScope,
-        measurables: &[Box<dyn Measurable>],
+        measurables: Measurables<'_>,
         constraints: Constraints,
         placements: &mut Vec<Placement>,
     ) -> cranpose_ui_layout::Measurement {
@@ -761,7 +757,7 @@ impl MeasurePolicy for FlexBoxMeasurePolicy {
         let mut items: Items = measurables
             .iter()
             .enumerate()
-            .map(|(child, measurable)| self.item(child, measurable.as_ref(), axes))
+            .map(|(child, measurable)| self.item(child, measurable, axes))
             .collect();
         upfront |= items.iter().any(|item| {
             matches!(
@@ -837,7 +833,6 @@ impl MeasurePolicy for FlexBoxMeasurePolicy {
                     (item.cross_position, item.main_position)
                 };
                 let x = self.layout_direction.place_x(x, width, placeable.width());
-                placeable.place(x, y);
                 placements.push(Placement::new(placeable.node_id(), x, y, 0.0));
             };
             let line_items = &mut items[line.start..line.end];
@@ -855,19 +850,19 @@ impl MeasurePolicy for FlexBoxMeasurePolicy {
         crate::modifier::Size { width, height }.into()
     }
 
-    fn min_intrinsic_width(&self, measurables: &[Box<dyn Measurable>], height: f32) -> f32 {
+    fn min_intrinsic_width(&self, measurables: Measurables<'_>, height: f32) -> f32 {
         self.intrinsic(measurables, Axis::Horizontal, height, IntrinsicSize::Min)
     }
 
-    fn max_intrinsic_width(&self, measurables: &[Box<dyn Measurable>], height: f32) -> f32 {
+    fn max_intrinsic_width(&self, measurables: Measurables<'_>, height: f32) -> f32 {
         self.intrinsic(measurables, Axis::Horizontal, height, IntrinsicSize::Max)
     }
 
-    fn min_intrinsic_height(&self, measurables: &[Box<dyn Measurable>], width: f32) -> f32 {
+    fn min_intrinsic_height(&self, measurables: Measurables<'_>, width: f32) -> f32 {
         self.intrinsic(measurables, Axis::Vertical, width, IntrinsicSize::Min)
     }
 
-    fn max_intrinsic_height(&self, measurables: &[Box<dyn Measurable>], width: f32) -> f32 {
+    fn max_intrinsic_height(&self, measurables: Measurables<'_>, width: f32) -> f32 {
         self.intrinsic(measurables, Axis::Vertical, width, IntrinsicSize::Max)
     }
 }

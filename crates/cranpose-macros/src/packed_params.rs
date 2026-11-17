@@ -99,7 +99,7 @@ impl PackedParams<'_> {
                 // Its callbacks, set up after this, can still change the call.
                 setup.push(quote! {
                     let #previous = if __changed {
-                        None
+                        ::core::option::Option::None
                     } else {
                         #composer.with_slot_value::<#state, _>(#slot, |#param_state| {
                             #param_state.returned()

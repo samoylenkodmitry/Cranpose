@@ -2,13 +2,13 @@
 
 use openxr as xr;
 
-use super::{hand_actions::failed, session::XrSession};
+use super::{hand_actions::failed, refresh_rate, session::XrSession};
 use crate::{EyeImageSize, HeadsetProperties};
 
 const VIEW_CONFIGURATION: xr::ViewConfigurationType = xr::ViewConfigurationType::PRIMARY_STEREO;
 
 // Asks the runtime for the headset's name, the size of the pictures that its eyes take and the
-// refresh rates that it offers. A runtime without the refresh rate extension offers none.
+// refresh rates that it offers.
 pub(crate) fn query(xr_session: &XrSession) -> Result<HeadsetProperties, String> {
     let instance = xr_session.instance();
     let system = instance
@@ -35,17 +35,7 @@ pub(crate) fn query(xr_session: &XrSession) -> Result<HeadsetProperties, String>
                 max: [view.max_image_rect_width, view.max_image_rect_height],
             })
     };
-    let refresh_rates = if instance.exts().fb_display_refresh_rate.is_some() {
-        xr_session
-            .session
-            .enumerate_display_refresh_rates()
-            .unwrap_or_else(|error| {
-                log::warn!("cranpose xr: refresh rates: {error}");
-                Vec::new()
-            })
-    } else {
-        Vec::new()
-    };
+    let refresh_rates = refresh_rate::offered(instance, &xr_session.session);
     Ok(HeadsetProperties {
         system_name,
         eye_image_sizes: [size(0), size(1)],

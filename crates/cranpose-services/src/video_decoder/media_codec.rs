@@ -83,6 +83,12 @@ pub(super) struct Backend {
 #[derive(Clone)]
 pub(super) struct Frames(Arc<Shared>);
 
+impl PartialEq for Frames {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
 impl Backend {
     pub(super) fn new(config: DecoderConfig) -> Result<Self, DecoderError> {
         let DecoderConfig {

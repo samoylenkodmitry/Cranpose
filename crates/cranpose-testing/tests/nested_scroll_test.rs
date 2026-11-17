@@ -22,14 +22,25 @@ struct Container {
     pre: f32,
     post: bool,
     fling: bool,
+    // Puts the column back at its top at the first move of a fling.
+    jump: bool,
     took_before: Cell<f32>,
     took_after: Cell<f32>,
     velocity: Cell<f32>,
+    column: Cell<Option<ScrollState>>,
+    jumped: Cell<bool>,
 }
 
 impl NestedScrollConnection for Container {
-    fn on_pre_scroll(&self, axis: Axis, available: f32, _: NestedScrollSource) -> f32 {
+    fn on_pre_scroll(&self, axis: Axis, available: f32, source: NestedScrollSource) -> f32 {
         assert_eq!(axis, Axis::Vertical);
+        if self.jump
+            && source == NestedScrollSource::Fling
+            && !self.jumped.replace(true)
+            && let Some(column) = self.column.get()
+        {
+            column.scroll_to(0.0);
+        }
         let took = available * self.pre;
         self.took_before.set(self.took_before.get() + took);
         took
@@ -82,6 +93,7 @@ fn screen(container: Container) -> Screen {
         });
     });
     let scroll = (*captured.borrow()).expect("the column is composed");
+    container.column.set(Some(scroll));
     Screen {
         robot,
         scroll,
@@ -156,4 +168,36 @@ fn the_container_takes_the_release_velocity_before_the_column_flings() {
         ..Container::default()
     });
     assert_eq!(flung, 0.0, "no fling with the velocity the container took");
+}
+
+// The container's jump runs inside the fling's own frame.
+#[test]
+fn a_jump_from_the_container_during_a_fling_stops_the_fling() {
+    let mut screen = screen(Container {
+        jump: true,
+        ..Container::default()
+    });
+    screen.robot.drag(100.0, 300.0, 100.0, 100.0);
+    for _ in 0..2 {
+        screen.robot.advance_time(16_000_000);
+        screen.robot.wait_for_idle();
+    }
+    assert!(
+        screen.container.jumped.get(),
+        "the fling moved through the container"
+    );
+    let after_jump = screen.scroll.value();
+    for _ in 0..30 {
+        screen.robot.advance_time(16_000_000);
+        screen.robot.wait_for_idle();
+    }
+    assert_eq!(
+        screen.scroll.value(),
+        after_jump,
+        "the fling stopped at the jump"
+    );
+    assert!(
+        !screen.scroll.is_scroll_in_progress(),
+        "nothing moves the column"
+    );
 }

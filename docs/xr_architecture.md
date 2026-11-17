@@ -48,6 +48,9 @@ Cranpose developers too:
 - `SpatialExternalSurface(stereo_mode, modifier) { scope }`: hands the app a surface that a
   decoder writes into. The scope's `on_surface_created` and `on_surface_destroyed` receive an
   `ExternalSurface`.
+- `StreamedScene(frames, views)`: frames that another machine rendered, shown as a projection
+  layer. Jetpack XR has no such composable. It has no `Spatial` prefix, because it is not placed
+  in a `Subspace`: it fills the viewer's view.
 - `SpatialCurvedRow(modifier, curve_radius) { ... }`: panels bent around the viewer at
   `curve_radius` dp. Each panel is a cylinder layer, and a controller's ray follows its curve.
   A runtime without `XR_KHR_composition_layer_cylinder` shows the panels flat.
@@ -136,8 +139,9 @@ changes. An `XrFrame` holds:
   count in `CLOCK_MONOTONIC` nanoseconds.
 - `device_pose`: the head, the OpenXR VIEW space located in the LOCAL space.
 - `left_eye` and `right_eye`: a `RenderViewpoint` with the eye's `pose` in LOCAL, its `local_pose`
-  relative to the head (Jetpack's `localPose`) and its `FieldOfView`, four angles in radians with OpenXR's signs (left and down are negative), from
-  `xrLocateViews`. The call fills a fixed array on the stack. `interpupillary_distance()` gives the
+  relative to the head (Jetpack's `localPose`) and its `FieldOfView`: four angles in radians with
+  OpenXR's signs (left and down are negative). They come from `xrLocateViews`, which fills a fixed
+  array on the stack. `interpupillary_distance()` gives the
   distance between the eyes.
 - `left_controller` and `right_controller`: a `Controller` with the aim pose and the grip pose,
   each with linear and angular velocity when the runtime gives them, the trigger, squeeze,
@@ -163,6 +167,38 @@ profiles bound which set.
 duration. It is `Send` and `Sync`, so a network thread plays what the host sends as it arrives.
 The frame loop applies the newest request of each hand after the frame effects, with
 `xrApplyHapticFeedback`.
+
+## Streamed scenes
+
+A game that a computer renders for both eyes arrives as a stream of frames, and each frame
+belongs to the head pose that it was rendered for. `StreamedScene(frames, views)` takes the
+`DecodedFrames` of a `VideoDecoder` in frames mode. `views` maps the `u64` that the app submitted
+with an access unit to a `StreamedViews`: for each eye, the render pose in the app's room, the
+`FieldOfView` and the rectangle of the eye's picture in the frame. A `RenderViewpoint` of
+`XrFrame` carries the same `FieldOfView`, so an app passes the field of view that the headset
+reports straight into a streamed view.
+
+At each of the headset's frames the backend takes the newest decoded frame. It imports the
+frame's `AHardwareBuffer` as an EGL image, binds it to an external texture, and draws each eye's
+rectangle into a swapchain of that eye's size. One pass of a small shader per eye does it, and
+the external sampler turns the decoder's YUV into RGB. The frame's two eyes become the views of
+an `XrCompositionLayerProjection`, with the poses and fields of view of the frame. The compositor
+reprojects each picture from the pose it was rendered for to the head's newer pose. While no
+newer frame comes, the layer shows its last pictures again. The scene lies over the room and under
+the curved panels, the panels, the surfaces, the handles and the rays.
+
+The backend keeps the drawn frame until the next one is drawn, because the GPU may still read its
+buffer. The swapchains have the `SRGB8_ALPHA8` format, and the shader turns the picture's encoded
+values into linear light, so that the swapchain keeps the picture's own bytes. A plain `RGBA8`
+swapchain has no such conversion: the compositor reads it as linear light, and a picture written
+into it as it is shows lighter than the same picture in a surface (a gray of 128 shows as
+191). The pass draws each picture's top at its image's last row, and the layer needs no
+`VERTICAL_FLIP` layout, which a quad of wgpu's images and a surface's quad need.
+
+On a Quest 3 the pass costs 0.4 ms of CPU and 0.03 ms of GPU for a frame of two 320 by 360 pixel
+pictures, and 0.4 ms and 0.3 ms for two 1920 by 1080 pixel pictures. A frame comes 30 times a
+second in the demo, and the headset runs at 120 Hz. The `stream-costs` feature of `cranpose-xr`
+times the passes and logs the costs once a second. Without it the passes run with no timing.
 
 ## Crates
 

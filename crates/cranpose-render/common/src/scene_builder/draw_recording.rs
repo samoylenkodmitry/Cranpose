@@ -208,11 +208,7 @@ impl<'a> GroupedDraws<'a> {
                 wrapper
             }
         };
-        assign_layer(
-            store,
-            wrapper,
-            self.head(&DrawGroup::plain(Rect::from_size(size))),
-        );
+        self.assign_head(store, wrapper, &DrawGroup::plain(Rect::from_size(size)));
         Item::child(wrapper)
     }
 
@@ -259,7 +255,7 @@ impl<'a> GroupedDraws<'a> {
                     .next()
                     .expect("segments in one lanes open as many groups");
                 self.redraw_in_place(store, child, groups);
-                assign_layer(store, child, self.head(&group));
+                self.assign_head(store, child, &group);
             } else {
                 store.swap_run_recording(item, Rc::clone(self.recording));
                 let segments = store.run(item).segments.clone();
@@ -324,7 +320,7 @@ impl<'a> GroupedDraws<'a> {
                         draws.write(store, record, (nested, inner), position + 1, end)
                     });
                     let group = self.recording.groups()[segment.start as usize];
-                    assign_layer(store, record, self.head(&group));
+                    self.assign_head(store, record, &group);
                     list.push(Item::child(record));
                     run_start = position;
                 }
@@ -390,7 +386,13 @@ impl<'a> GroupedDraws<'a> {
         Some(layer)
     }
 
-    fn head(&self, group: &DrawGroup) -> LayerHead {
+    // Writes the head of `group` into `record`.
+    fn assign_head(&self, store: &mut SceneStore, record: RecordId, group: &DrawGroup) {
+        let layer = self.group_layer(group);
+        assign_layer(store, record, &self.head(group, layer.as_ref()));
+    }
+
+    fn head<'l>(&self, group: &DrawGroup, layer: Option<&'l GraphicsLayer>) -> LayerHead<'l> {
         let bounds = group.bounds;
         // The group's draws sit in its coordinates, whose origin a clip's
         // bounds may leave, as a clip bounds a node's layer away from it.
@@ -414,7 +416,7 @@ impl<'a> GroupedDraws<'a> {
             translated_content_context: false,
             translated_content_offset: Point::default(),
             origin_in_parent: transform_to_parent.as_translation().unwrap_or_default(),
-            graphics_layer: self.group_layer(group),
+            graphics_layer: layer,
             clip_to_bounds: group.clip,
             hit_test: None,
             has_origin_sinks: false,

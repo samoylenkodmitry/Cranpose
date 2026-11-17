@@ -8,6 +8,7 @@ pub mod modifier;
 pub mod modifier_helpers;
 /// Modifier nodes that handle input.
 pub mod nodes;
+mod running_scroll;
 pub mod text;
 pub mod velocity_tracker;
 
@@ -19,6 +20,7 @@ pub use nodes::input::{
     PointerEventKind, PointerId, PointerPhase, PointerSource, PointerUptime, RotaryScrollEvent,
     RotaryStepAccumulator, rotary_scroll_pixels_from_detents,
 };
+pub use running_scroll::{RunningScroll, ScrollId, ScrollStop};
 pub use velocity_tracker::VelocityTracker1D;
 
 /// The traits, macros and types needed to implement a modifier node.

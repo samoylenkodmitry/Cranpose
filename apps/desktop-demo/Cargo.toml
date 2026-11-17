@@ -40,6 +40,7 @@ desktop-http = ["desktop", "cranpose-services/http-native"]
 ios = [
     "renderer-wgpu",
     "cranpose/ios",
+    "cranpose/device-auth",
     "cranpose-audio/cpal-backend",
     "cranpose-services/http-native",
 ]

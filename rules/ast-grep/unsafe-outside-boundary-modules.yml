@@ -44,6 +44,7 @@ ignores:
   - crates/cranpose-xr/src/openxr/clock.rs
   - crates/cranpose-xr/src/openxr/cylinder_layers.rs
   - crates/cranpose-xr/src/openxr/eye_views.rs
+  - crates/cranpose-xr/src/openxr/external_texture.rs
   - crates/cranpose-xr/src/openxr/gl_context.rs
   - crates/cranpose-xr/src/openxr/passthrough.rs
   - crates/cranpose-xr/src/openxr/session.rs
@@ -58,6 +59,7 @@ ignores:
   - crates/cranpose/src/android/frame_rate.rs
   - crates/cranpose/src/android/frame_telemetry.rs
   - crates/cranpose/src/android/heart_rate.rs
+  - crates/cranpose/src/android/device_auth.rs
   - crates/cranpose/src/android/host.rs
   - crates/cranpose/src/android/jni.rs
   - crates/cranpose/src/android/media.rs
@@ -78,6 +80,7 @@ ignores:
   - crates/cranpose/src/apple/camera.rs
   - crates/cranpose/src/apple/media_source.rs
   - crates/cranpose/src/apple/microphone.rs
+  - crates/cranpose/src/apple/device_auth.rs
   - crates/cranpose/src/apple/network.rs
   - crates/cranpose/src/apple/now_playing.rs
   - crates/cranpose/src/apple/wearable.rs

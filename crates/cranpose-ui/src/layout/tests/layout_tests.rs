@@ -7,7 +7,7 @@ use cranpose_core::{Applier, ConcreteApplierHost, MemoryApplier, Node};
 use cranpose_ui_layout::{MeasurePolicy, MeasureResult, MeasureScope, Placement};
 
 use super::{
-    core::{Alignment, Measurable},
+    core::{Alignment, Measurable, Measurables},
     layout_child_measurable::LayoutChildMeasurable,
     layout_child_measure_state::{LayoutChildBinding, LayoutChildFrame},
     *,
@@ -70,7 +70,7 @@ impl MeasurePolicy for VerticalStackPolicy {
     fn measure(
         &self,
         _scope: &dyn MeasureScope,
-        measurables: &[Box<dyn Measurable>],
+        measurables: Measurables<'_>,
         constraints: Constraints,
     ) -> MeasureResult {
         let mut y: f32 = 0.0;
@@ -88,28 +88,28 @@ impl MeasurePolicy for VerticalStackPolicy {
         MeasureResult::new(Size { width, height }, placements)
     }
 
-    fn min_intrinsic_width(&self, measurables: &[Box<dyn Measurable>], height: f32) -> f32 {
+    fn min_intrinsic_width(&self, measurables: Measurables<'_>, height: f32) -> f32 {
         measurables
             .iter()
             .map(|m| m.min_intrinsic_width(height))
             .fold(0.0, f32::max)
     }
 
-    fn max_intrinsic_width(&self, measurables: &[Box<dyn Measurable>], height: f32) -> f32 {
+    fn max_intrinsic_width(&self, measurables: Measurables<'_>, height: f32) -> f32 {
         measurables
             .iter()
             .map(|m| m.max_intrinsic_width(height))
             .fold(0.0, f32::max)
     }
 
-    fn min_intrinsic_height(&self, measurables: &[Box<dyn Measurable>], width: f32) -> f32 {
+    fn min_intrinsic_height(&self, measurables: Measurables<'_>, width: f32) -> f32 {
         measurables
             .iter()
             .map(|m| m.min_intrinsic_height(width))
             .fold(0.0, |acc, h| acc + h)
     }
 
-    fn max_intrinsic_height(&self, measurables: &[Box<dyn Measurable>], width: f32) -> f32 {
+    fn max_intrinsic_height(&self, measurables: Measurables<'_>, width: f32) -> f32 {
         measurables
             .iter()
             .map(|m| m.max_intrinsic_height(width))
@@ -124,7 +124,7 @@ impl MeasurePolicy for MaxSizePolicy {
     fn measure(
         &self,
         _scope: &dyn MeasureScope,
-        _measurables: &[Box<dyn Measurable>],
+        _measurables: Measurables<'_>,
         constraints: Constraints,
     ) -> MeasureResult {
         let width = if constraints.max_width.is_finite() {
@@ -140,19 +140,19 @@ impl MeasurePolicy for MaxSizePolicy {
         MeasureResult::new(Size { width, height }, Vec::new())
     }
 
-    fn min_intrinsic_width(&self, _measurables: &[Box<dyn Measurable>], _height: f32) -> f32 {
+    fn min_intrinsic_width(&self, _measurables: Measurables<'_>, _height: f32) -> f32 {
         0.0
     }
 
-    fn max_intrinsic_width(&self, _measurables: &[Box<dyn Measurable>], _height: f32) -> f32 {
+    fn max_intrinsic_width(&self, _measurables: Measurables<'_>, _height: f32) -> f32 {
         0.0
     }
 
-    fn min_intrinsic_height(&self, _measurables: &[Box<dyn Measurable>], _width: f32) -> f32 {
+    fn min_intrinsic_height(&self, _measurables: Measurables<'_>, _width: f32) -> f32 {
         0.0
     }
 
-    fn max_intrinsic_height(&self, _measurables: &[Box<dyn Measurable>], _width: f32) -> f32 {
+    fn max_intrinsic_height(&self, _measurables: Measurables<'_>, _width: f32) -> f32 {
         0.0
     }
 }
@@ -172,7 +172,7 @@ impl MeasurePolicy for RecordingPolicy {
     fn measure(
         &self,
         _scope: &dyn MeasureScope,
-        _measurables: &[Box<dyn Measurable>],
+        _measurables: Measurables<'_>,
         constraints: Constraints,
     ) -> MeasureResult {
         *self.seen.borrow_mut() = Some(constraints);
@@ -185,19 +185,19 @@ impl MeasurePolicy for RecordingPolicy {
         )
     }
 
-    fn min_intrinsic_width(&self, _measurables: &[Box<dyn Measurable>], _height: f32) -> f32 {
+    fn min_intrinsic_width(&self, _measurables: Measurables<'_>, _height: f32) -> f32 {
         0.0
     }
 
-    fn max_intrinsic_width(&self, _measurables: &[Box<dyn Measurable>], _height: f32) -> f32 {
+    fn max_intrinsic_width(&self, _measurables: Measurables<'_>, _height: f32) -> f32 {
         0.0
     }
 
-    fn min_intrinsic_height(&self, _measurables: &[Box<dyn Measurable>], _width: f32) -> f32 {
+    fn min_intrinsic_height(&self, _measurables: Measurables<'_>, _width: f32) -> f32 {
         0.0
     }
 
-    fn max_intrinsic_height(&self, _measurables: &[Box<dyn Measurable>], _width: f32) -> f32 {
+    fn max_intrinsic_height(&self, _measurables: Measurables<'_>, _width: f32) -> f32 {
         0.0
     }
 }
@@ -212,7 +212,7 @@ impl MeasurePolicy for MutableLeafPolicy {
     fn measure(
         &self,
         _scope: &dyn MeasureScope,
-        _measurables: &[Box<dyn Measurable>],
+        _measurables: Measurables<'_>,
         constraints: Constraints,
     ) -> MeasureResult {
         self.calls.set(self.calls.get() + 1);
@@ -230,19 +230,19 @@ impl MeasurePolicy for MutableLeafPolicy {
         )
     }
 
-    fn min_intrinsic_width(&self, _measurables: &[Box<dyn Measurable>], _height: f32) -> f32 {
+    fn min_intrinsic_width(&self, _measurables: Measurables<'_>, _height: f32) -> f32 {
         self.size.get().width
     }
 
-    fn max_intrinsic_width(&self, _measurables: &[Box<dyn Measurable>], _height: f32) -> f32 {
+    fn max_intrinsic_width(&self, _measurables: Measurables<'_>, _height: f32) -> f32 {
         self.size.get().width
     }
 
-    fn min_intrinsic_height(&self, _measurables: &[Box<dyn Measurable>], _width: f32) -> f32 {
+    fn min_intrinsic_height(&self, _measurables: Measurables<'_>, _width: f32) -> f32 {
         self.size.get().height
     }
 
-    fn max_intrinsic_height(&self, _measurables: &[Box<dyn Measurable>], _width: f32) -> f32 {
+    fn max_intrinsic_height(&self, _measurables: Measurables<'_>, _width: f32) -> f32 {
         self.size.get().height
     }
 }
@@ -323,7 +323,7 @@ impl MeasurePolicy for RecordingDensityPolicy {
     fn measure(
         &self,
         scope: &dyn MeasureScope,
-        _measurables: &[Box<dyn Measurable>],
+        _measurables: Measurables<'_>,
         constraints: Constraints,
     ) -> MeasureResult {
         self.recorded.set(scope.density());
@@ -331,19 +331,19 @@ impl MeasurePolicy for RecordingDensityPolicy {
         MeasureResult::new(Size { width, height }, Vec::new())
     }
 
-    fn min_intrinsic_width(&self, _measurables: &[Box<dyn Measurable>], _height: f32) -> f32 {
+    fn min_intrinsic_width(&self, _measurables: Measurables<'_>, _height: f32) -> f32 {
         0.0
     }
 
-    fn max_intrinsic_width(&self, _measurables: &[Box<dyn Measurable>], _height: f32) -> f32 {
+    fn max_intrinsic_width(&self, _measurables: Measurables<'_>, _height: f32) -> f32 {
         0.0
     }
 
-    fn min_intrinsic_height(&self, _measurables: &[Box<dyn Measurable>], _width: f32) -> f32 {
+    fn min_intrinsic_height(&self, _measurables: Measurables<'_>, _width: f32) -> f32 {
         0.0
     }
 
-    fn max_intrinsic_height(&self, _measurables: &[Box<dyn Measurable>], _width: f32) -> f32 {
+    fn max_intrinsic_height(&self, _measurables: Measurables<'_>, _width: f32) -> f32 {
         0.0
     }
 }
@@ -1529,7 +1529,7 @@ fn layout_reconciles_child_measurables_by_child_identity() -> Result<(), NodeErr
     measure_layout(&mut applier, root_id, Size::new(100.0, 100.0))?;
 
     applier.with_node::<LayoutNode, _>(root_id, |node| {
-        node.children = vec![second_child, first_child];
+        node.children = smallvec::smallvec![second_child, first_child];
         node.mark_needs_measure();
     })?;
     measure_layout(&mut applier, root_id, Size::new(100.0, 100.0))?;
@@ -1570,14 +1570,14 @@ fn layout_binds_inserted_children_and_drops_removed_and_missing_ones() -> Result
     applier.remove(missing)?;
 
     let mut root = LayoutNode::new(Modifier::empty(), Rc::new(VerticalStackPolicy));
-    root.children = vec![first, second];
+    root.children = smallvec::smallvec![first, second];
     let root_id = applier.create(Box::new(root));
 
     let measured = measure_layout(&mut applier, root_id, Size::new(100.0, 200.0))?;
     assert_eq!(measured.root_size().height, 30.0);
 
     applier.with_node::<LayoutNode, _>(root_id, |node| {
-        node.children = vec![inserted, missing, first];
+        node.children = smallvec::smallvec![inserted, missing, first];
         node.mark_needs_measure();
     })?;
     let measured = measure_layout(&mut applier, root_id, Size::new(100.0, 200.0))?;
@@ -2709,22 +2709,22 @@ impl MeasurePolicy for PanickingMeasurePolicy {
     fn measure(
         &self,
         _scope: &dyn MeasureScope,
-        _measurables: &[Box<dyn Measurable>],
+        _measurables: Measurables<'_>,
         _constraints: Constraints,
     ) -> MeasureResult {
         panic!("Deliberate panic in MeasurePolicy::measure")
     }
 
-    fn min_intrinsic_width(&self, _measurables: &[Box<dyn Measurable>], _height: f32) -> f32 {
+    fn min_intrinsic_width(&self, _measurables: Measurables<'_>, _height: f32) -> f32 {
         0.0
     }
-    fn max_intrinsic_width(&self, _measurables: &[Box<dyn Measurable>], _height: f32) -> f32 {
+    fn max_intrinsic_width(&self, _measurables: Measurables<'_>, _height: f32) -> f32 {
         0.0
     }
-    fn min_intrinsic_height(&self, _measurables: &[Box<dyn Measurable>], _width: f32) -> f32 {
+    fn min_intrinsic_height(&self, _measurables: Measurables<'_>, _width: f32) -> f32 {
         0.0
     }
-    fn max_intrinsic_height(&self, _measurables: &[Box<dyn Measurable>], _width: f32) -> f32 {
+    fn max_intrinsic_height(&self, _measurables: Measurables<'_>, _width: f32) -> f32 {
         0.0
     }
 }

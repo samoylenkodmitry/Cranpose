@@ -42,6 +42,11 @@ impl NodeRecords {
         self.records.clear();
     }
 
+    // Makes room for `more` records more.
+    pub(super) fn reserve(&mut self, more: usize) {
+        self.records.reserve(more);
+    }
+
     pub(super) fn trim_growth_slack(&mut self) {
         self.records.trim_growth_slack();
     }

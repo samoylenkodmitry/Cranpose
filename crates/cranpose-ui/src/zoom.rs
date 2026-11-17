@@ -62,12 +62,6 @@ const DOUBLE_TAP_TIMEOUT_MS: i64 = 300;
 
 const DOUBLE_TAP_SLOP: f32 = 100.0;
 
-fn distance(a: Point, b: Point) -> f32 {
-    let dx = b.x - a.x;
-    let dy = b.y - a.y;
-    (dx * dx + dy * dy).sqrt()
-}
-
 /// Shared zoom/pan transform state for `Modifier::zoomable`.
 ///
 /// Cloning shares the same underlying state (like `ScrollState`).
@@ -276,7 +270,7 @@ impl ZoomGestureState {
             uptime
                 .millis_since(tap_uptime)
                 .is_some_and(|millis| millis <= DOUBLE_TAP_TIMEOUT_MS)
-                && distance(tap_position, position) <= DOUBLE_TAP_SLOP
+                && (position - tap_position).distance() <= DOUBLE_TAP_SLOP
         })
     }
 
@@ -362,7 +356,7 @@ impl Modifier {
                                         let up_position = event.global_position;
                                         let is_tap = !gs.active
                                             && gs.tap_down.is_some_and(|down| {
-                                                distance(down, up_position) <= DRAG_THRESHOLD
+                                                (up_position - down).distance() <= DRAG_THRESHOLD
                                             });
                                         gs.tap_down = None;
                                         if is_tap {
@@ -391,7 +385,7 @@ impl Modifier {
                                             if pointer_count >= 2 {
                                                 gs.active = true;
                                             } else if !gs.active && state.is_zoomed_in() {
-                                                gs.travel += (pan.x * pan.x + pan.y * pan.y).sqrt();
+                                                gs.travel += pan.distance();
                                                 if gs.travel > DRAG_THRESHOLD {
                                                     gs.active = true;
                                                 }

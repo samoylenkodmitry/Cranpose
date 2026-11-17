@@ -580,16 +580,17 @@ impl MemoryApplier {
         pool.push(recycled);
     }
 
-    fn seed_recycled_node_shell_impl(
-        &mut self,
-        key: TypeId,
-        recycle_pool_limit: Option<usize>,
-        shell: Box<dyn Node>,
-    ) {
+    // The shell is made only when the pool keeps it: a pool with no room,
+    // as with little memory left, costs a fresh node nothing.
+    fn seed_recycled_node_shell_impl(&mut self, key: TypeId, node: &dyn Node) {
+        let recycle_pool_limit = node.recycle_pool_limit();
         let limit = recycle_pool_limit.unwrap_or(usize::MAX);
         if self.warm_recycled_pool_len(key) >= limit {
             return;
         }
+        let Some(shell) = node.rehouse_for_recycle() else {
+            return;
+        };
 
         self.remember_recycle_pool_limit(key, recycle_pool_limit);
         let stable_id = self.state.next_stable_id;

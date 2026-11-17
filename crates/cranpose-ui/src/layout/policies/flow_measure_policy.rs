@@ -3,7 +3,7 @@ use cranpose_ui_layout::{
 };
 use smallvec::SmallVec;
 
-use crate::layout::core::Measurable;
+use crate::layout::core::{Measurable, Measurables};
 
 /// MeasurePolicy for `FlowRow` and `FlowColumn`: children go along the main
 /// axis and wrap onto the next line when the available length runs out
@@ -75,7 +75,7 @@ impl FlowMeasurePolicy {
     /// `available_main`.
     fn wrapped_cross(
         &self,
-        measurables: &[Box<dyn Measurable>],
+        measurables: Measurables<'_>,
         available_main: f32,
         size: IntrinsicSize,
     ) -> f32 {
@@ -84,9 +84,8 @@ impl FlowMeasurePolicy {
         let mut line_cross = 0.0_f32;
 
         for measurable in measurables {
-            let child_main =
-                self.main_intrinsic(measurable.as_ref(), f32::INFINITY, IntrinsicSize::Max);
-            let child_cross = self.cross_intrinsic(measurable.as_ref(), child_main, size);
+            let child_main = self.main_intrinsic(measurable, f32::INFINITY, IntrinsicSize::Max);
+            let child_cross = self.cross_intrinsic(measurable, child_main, size);
 
             if cursor > 0.0 && cursor + self.main_axis_spacing + child_main > available_main {
                 line_start += line_cross + self.cross_axis_spacing;
@@ -105,20 +104,20 @@ impl FlowMeasurePolicy {
     }
 
     /// The main-axis length of every child on one line.
-    fn unwrapped_main(&self, measurables: &[Box<dyn Measurable>], cross: f32) -> f32 {
+    fn unwrapped_main(&self, measurables: Measurables<'_>, cross: f32) -> f32 {
         let total_spacing = self.main_axis_spacing * measurables.len().saturating_sub(1) as f32;
         measurables
             .iter()
-            .map(|m| self.main_intrinsic(m.as_ref(), cross, IntrinsicSize::Max))
+            .map(|m| self.main_intrinsic(m, cross, IntrinsicSize::Max))
             .sum::<f32>()
             + total_spacing
     }
 
     /// The longest child's smallest main-axis length: a line each.
-    fn narrowest_main(&self, measurables: &[Box<dyn Measurable>], cross: f32) -> f32 {
+    fn narrowest_main(&self, measurables: Measurables<'_>, cross: f32) -> f32 {
         measurables
             .iter()
-            .map(|m| self.main_intrinsic(m.as_ref(), cross, IntrinsicSize::Min))
+            .map(|m| self.main_intrinsic(m, cross, IntrinsicSize::Min))
             .fold(0.0, f32::max)
     }
 }
@@ -127,7 +126,7 @@ impl MeasurePolicy for FlowMeasurePolicy {
     fn measure(
         &self,
         scope: &dyn MeasureScope,
-        measurables: &[Box<dyn Measurable>],
+        measurables: Measurables<'_>,
         constraints: Constraints,
     ) -> MeasureResult {
         let mut placements = Vec::new();
@@ -138,7 +137,7 @@ impl MeasurePolicy for FlowMeasurePolicy {
     fn measure_into(
         &self,
         _scope: &dyn MeasureScope,
-        measurables: &[Box<dyn Measurable>],
+        measurables: Measurables<'_>,
         constraints: Constraints,
         placements: &mut Vec<Placement>,
     ) -> cranpose_ui_layout::Measurement {
@@ -183,9 +182,6 @@ impl MeasurePolicy for FlowMeasurePolicy {
                 0.0
             };
             let (x, y) = self.along(main, line_start);
-            if !self.layout_direction.is_rtl() {
-                placeable.place(x, y);
-            }
             placements.push(Placement::new(placeable.node_id(), x, y, 0.0));
 
             cursor = main + child_main;
@@ -201,34 +197,33 @@ impl MeasurePolicy for FlowMeasurePolicy {
                 placement.x = self
                     .layout_direction
                     .place_x(placement.x, width, placeable.width());
-                placeable.place(placement.x, placement.y);
             }
         }
         crate::modifier::Size { width, height }.into()
     }
 
-    fn min_intrinsic_width(&self, measurables: &[Box<dyn Measurable>], height: f32) -> f32 {
+    fn min_intrinsic_width(&self, measurables: Measurables<'_>, height: f32) -> f32 {
         match self.axis {
             Axis::Horizontal => self.narrowest_main(measurables, height),
             Axis::Vertical => self.wrapped_cross(measurables, height, IntrinsicSize::Min),
         }
     }
 
-    fn max_intrinsic_width(&self, measurables: &[Box<dyn Measurable>], height: f32) -> f32 {
+    fn max_intrinsic_width(&self, measurables: Measurables<'_>, height: f32) -> f32 {
         match self.axis {
             Axis::Horizontal => self.unwrapped_main(measurables, height),
             Axis::Vertical => self.wrapped_cross(measurables, height, IntrinsicSize::Max),
         }
     }
 
-    fn min_intrinsic_height(&self, measurables: &[Box<dyn Measurable>], width: f32) -> f32 {
+    fn min_intrinsic_height(&self, measurables: Measurables<'_>, width: f32) -> f32 {
         match self.axis {
             Axis::Horizontal => self.wrapped_cross(measurables, width, IntrinsicSize::Min),
             Axis::Vertical => self.narrowest_main(measurables, width),
         }
     }
 
-    fn max_intrinsic_height(&self, measurables: &[Box<dyn Measurable>], width: f32) -> f32 {
+    fn max_intrinsic_height(&self, measurables: Measurables<'_>, width: f32) -> f32 {
         match self.axis {
             Axis::Horizontal => self.wrapped_cross(measurables, width, IntrinsicSize::Max),
             Axis::Vertical => self.unwrapped_main(measurables, width),

@@ -7,15 +7,17 @@ use cranpose_animation::{
 };
 use cranpose_core::{mutableStateOf, remember};
 use cranpose_ui::{
-    Constraints, Layout, MeasureLayoutOptions, MeasureResult, Modifier, TestComposition,
-    measure_layout, measure_layout_with_options, run_test_composition,
+    Constraints, Layout, MeasureLayoutOptions, MeasureResult, MemoryHeadroom, Modifier,
+    TestComposition, measure_layout, measure_layout_with_options, run_test_composition,
+    set_memory_headroom,
     widgets::{
         box_widget::{Box, BoxSpec},
         column::{Column, ColumnSpec},
+        row::{Row, RowSpec},
     },
 };
 use cranpose_ui_graphics::{Color, Size};
-use cranpose_ui_layout::{Measurable, MeasurePolicy, MeasureScope, Placement};
+use cranpose_ui_layout::{Measurable, Measurables, MeasurePolicy, MeasureScope, Placement};
 use stats_alloc::{INSTRUMENTED_SYSTEM, Region, StatsAlloc};
 
 #[macro_use]
@@ -73,6 +75,92 @@ fn pass_allocations(mut composition: TestComposition) -> usize {
     allocations / PASSES
 }
 
+// Allocations of the first measure of a column of `count` rows.
+fn first_measure_allocations(count: usize) -> usize {
+    let mut composition = run_test_composition(move || {
+        Column(
+            Modifier::empty().fill_max_width(),
+            ColumnSpec::default(),
+            move || rows(count),
+        );
+    });
+    let root = composition.root().expect("a composed root");
+    let handle = composition.runtime_handle();
+    let mut applier = composition.applier_mut();
+    applier.set_runtime_handle(handle);
+    let region = Region::new(GLOBAL);
+    measure_layout(&mut applier, root, Size::new(100.0, 4000.0)).expect("the column measures");
+    let allocations = region.change().allocations;
+    applier.clear_runtime_handle();
+    allocations
+}
+
+// A parent measures a new child through its entry in the parent's one
+// list of children, which takes no allocation of its own, and the child's
+// measurement sits in its cache.
+fn a_first_measure_allocates_at_most_one_per_row() {
+    let few = first_measure_allocations(10);
+    let many = first_measure_allocations(110);
+    let per_row = many.saturating_sub(few) as f64 / 100.0;
+    println!("allocations per row at a first measure: {per_row}");
+    assert!(
+        per_row <= 1.0,
+        "{per_row} allocations per row at a first measure"
+    );
+}
+
+// A column over a row of three boxes.
+fn column_over_a_row(below: impl Fn() + 'static) {
+    Column(
+        Modifier::empty().fill_max_width(),
+        ColumnSpec::default(),
+        move || {
+            Row(
+                Modifier::empty().fill_max_width(),
+                RowSpec::default(),
+                || {
+                    for _ in 0..3 {
+                        Box(
+                            Modifier::empty().weight(1.0).height(10.0),
+                            BoxSpec::default(),
+                            || {},
+                        );
+                    }
+                },
+            );
+            below();
+        },
+    );
+}
+
+// `depth` more such columns nested inside one another.
+fn nested_columns(depth: usize) {
+    column_over_a_row(move || {
+        if depth > 0 {
+            nested_columns(depth - 1);
+        }
+    });
+}
+
+// As many columns, side by side under the first.
+fn sibling_columns(count: usize) {
+    column_over_a_row(move || {
+        for _ in 0..count {
+            column_over_a_row(|| {});
+        }
+    });
+}
+
+// Rows and columns nested deeper than any fixed count of spare lists
+// measure again with the lists of the measures before: a pass over 64
+// nested columns allocates what a pass over 64 sibling columns does.
+fn remeasuring_deeply_nested_rows_and_columns_allocates_nothing_more() {
+    let sibling = pass_allocations(run_test_composition(|| sibling_columns(63)));
+    let nested = pass_allocations(run_test_composition(|| nested_columns(63)));
+    println!("allocations a pass of 64 columns, siblings: {sibling}, nested: {nested}");
+    assert_eq!(nested, sibling, "a deep nest of rows and columns allocates");
+}
+
 /// Measuring a node again fills the memory of its last measurement: a
 /// remeasured row allocates nothing.
 fn remeasuring_a_row_allocates_nothing() {
@@ -93,7 +181,7 @@ impl MeasurePolicy for StackedRows {
     fn measure(
         &self,
         _: &dyn MeasureScope,
-        measurables: &[Box<dyn Measurable>],
+        measurables: Measurables<'_>,
         constraints: Constraints,
     ) -> MeasureResult {
         let mut placements = Vec::with_capacity(measurables.len());
@@ -111,31 +199,31 @@ impl MeasurePolicy for StackedRows {
                 .iter()
                 .enumerate()
                 .rev()
-                .for_each(|(index, child)| place(index, child.as_ref()));
+                .for_each(|(index, child)| place(index, child));
         } else {
             measurables
                 .iter()
                 .enumerate()
-                .for_each(|(index, child)| place(index, child.as_ref()));
+                .for_each(|(index, child)| place(index, child));
         }
         let (width, height) =
             constraints.constrain(constraints.max_width, 10.0 * measurables.len() as f32);
         MeasureResult::new(Size::new(width, height), placements)
     }
 
-    fn min_intrinsic_width(&self, _: &[Box<dyn Measurable>], _: f32) -> f32 {
+    fn min_intrinsic_width(&self, _: Measurables<'_>, _: f32) -> f32 {
         0.0
     }
 
-    fn max_intrinsic_width(&self, _: &[Box<dyn Measurable>], _: f32) -> f32 {
+    fn max_intrinsic_width(&self, _: Measurables<'_>, _: f32) -> f32 {
         0.0
     }
 
-    fn min_intrinsic_height(&self, _: &[Box<dyn Measurable>], _: f32) -> f32 {
+    fn min_intrinsic_height(&self, _: Measurables<'_>, _: f32) -> f32 {
         0.0
     }
 
-    fn max_intrinsic_height(&self, _: &[Box<dyn Measurable>], _: f32) -> f32 {
+    fn max_intrinsic_height(&self, _: Measurables<'_>, _: f32) -> f32 {
         0.0
     }
 }
@@ -301,10 +389,65 @@ fn an_animation_frame_allocates_only_its_recomposition() {
     assert!(allocations <= 6, "{allocations} allocations a frame");
 }
 
-/// A modifier chain built link by link keeps its elements in one shared
-/// allocation it extends in place, so each link costs its element alone.
-fn a_modifier_chain_allocates_its_elements_and_one_shared_box() {
+// Allocations of composing a column of `count` rows of two boxes each,
+// with `headroom` memory left.
+fn rows_of_boxes_allocations(count: usize, headroom: MemoryHeadroom) -> usize {
+    let region = Region::new(GLOBAL);
+    let composition = run_test_composition(move || {
+        set_memory_headroom(headroom);
+        Column(Modifier::empty(), ColumnSpec::default(), move || {
+            for _ in 0..count {
+                Row(Modifier::empty(), RowSpec::default(), || {
+                    Box(
+                        Modifier::empty().size_points(10.0, 10.0),
+                        BoxSpec::default(),
+                        || {},
+                    );
+                    Box(
+                        Modifier::empty().size_points(10.0, 10.0),
+                        BoxSpec::default(),
+                        || {},
+                    );
+                });
+            }
+        });
+    });
+    let allocations = region.change().allocations;
+    drop(composition);
+    allocations
+}
+
+// Composing a row of two boxes makes its three layout nodes, each with its
+// box and parts, and the size modifiers of the boxes. The rows and the boxes
+// share their measure policies, and a row keeps its two children in itself.
+// With little memory left the recycle pool keeps no shells, so a node made
+// fresh makes no shell to seed it with either.
+fn composing_a_row_of_boxes_allocates_within_its_budget() {
+    for headroom in [MemoryHeadroom::Ample, MemoryHeadroom::Tight] {
+        rows_of_boxes_allocations(4, headroom);
+        let per_row = (rows_of_boxes_allocations(40, headroom)
+            - rows_of_boxes_allocations(20, headroom))
+            / 20;
+        println!("allocations of composing a row of two boxes, {headroom:?} memory: {per_row}");
+        assert!(
+            per_row <= 8,
+            "{per_row} allocations a row, {headroom:?} memory"
+        );
+    }
+}
+
+// A modifier holds a plain element by value: one alone takes no
+// allocation. A chain of them built link by link extends one shared list in
+// place, and a chain built after the last one was let go takes that list
+// again: a body that composes again builds its modifiers with no allocation.
+fn a_modifier_chain_of_plain_elements_takes_the_list_of_the_last_one() {
     drop(Modifier::empty().padding(1.0).background(Color::RED));
+    let region = Region::new(GLOBAL);
+    let modifier = Modifier::empty().padding(1.0);
+    let change = region.change();
+    drop(modifier);
+    assert_eq!(change.allocations, 0, "{change:?}");
+
     let region = Region::new(GLOBAL);
     let modifier = Modifier::empty()
         .padding(1.0)
@@ -312,7 +455,27 @@ fn a_modifier_chain_allocates_its_elements_and_one_shared_box() {
         .rounded_corners(3.0);
     let change = region.change();
     drop(modifier);
-    assert_eq!(change.allocations, 4, "{change:?}");
+    assert_eq!(change.allocations, 0, "{change:?}");
+}
+
+// A node whose chain draws one background keeps that draw in the one block
+// of its slices: collecting them allocates the block alone.
+fn slices_of_one_background_allocate_one_block() {
+    let context = cranpose_ui::AppContext::new();
+    let _scope = context.enter_scope();
+    let node = || {
+        cranpose_ui::LayoutNode::new(
+            Modifier::empty().background(Color::RED).padding(1.0),
+            Rc::new(StackedRows { reversed: false }),
+        )
+    };
+    drop(node().modifier_slices_snapshot());
+    let fresh = node();
+    let region = Region::new(GLOBAL);
+    let slices = fresh.modifier_slices_snapshot();
+    let change = region.change();
+    assert_eq!(slices.draw_commands().len(), 1);
+    assert_eq!(change.allocations, 1, "{change:?}");
 }
 
 fn resolving_text_direction_does_not_allocate() {
@@ -404,14 +567,18 @@ fn a_thread_that_held_a_composition_frees_its_memory_at_exit() {
 /// One test, so no other test's allocations land in these regions: the
 /// counting allocator counts every thread.
 fn layout_and_modifiers_stay_within_their_allocation_budgets() {
+    a_first_measure_allocates_at_most_one_per_row();
     remeasuring_a_row_allocates_nothing();
+    remeasuring_deeply_nested_rows_and_columns_allocates_nothing_more();
     placing_children_out_of_order_allocates_nothing();
     a_layout_pass_lends_its_applier_without_rebuilding_it();
     a_kept_column_lets_its_changed_children_fill_their_measurements();
     an_animation_frame_allocates_only_its_recomposition();
+    composing_a_row_of_boxes_allocates_within_its_budget();
     if !cfg!(feature = "inspection") {
-        a_modifier_chain_allocates_its_elements_and_one_shared_box();
+        a_modifier_chain_of_plain_elements_takes_the_list_of_the_last_one();
     }
+    slices_of_one_background_allocate_one_block();
     resolving_text_direction_does_not_allocate();
     owned_bitmaps_allocate_only_metadata_and_clones_share_storage();
     owned_bitmaps_do_not_retain_spare_pixel_capacity();

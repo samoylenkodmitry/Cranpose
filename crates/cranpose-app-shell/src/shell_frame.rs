@@ -527,11 +527,11 @@ where
         );
         self.app
             .app_context
-            .take_layer_property_repass_nodes_into(&mut self.pending_layer_property_nodes);
+            .take_layer_property_repass_nodes_into(&mut self.pending_lane_nodes);
         route_nodes_by_surface(
             &mut self.app,
             &mut self.surfaces,
-            self.pending_layer_property_nodes.iter().copied(),
+            self.pending_lane_nodes.iter().copied(),
             SurfaceDirtyLane::LayerProperties,
             &mut self.routing_scratch,
         );
@@ -544,7 +544,7 @@ where
             &mut self.routing_scratch,
         );
         self.pending_dirty_nodes.clear();
-        self.pending_layer_property_nodes.clear();
+        self.pending_lane_nodes.clear();
         let _ = self.app.app_context.has_focused_field();
         let attributed = self.surfaces.iter().any(|surface| {
             !surface.scoped_draw_nodes.is_empty()

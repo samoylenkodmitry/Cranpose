@@ -3362,6 +3362,7 @@ Use `HorizontalScrollbar` for a horizontal track. `Scrollbar` accepts an explici
 
 Supply a measure policy for a custom container. This example reuses the box policy.
 Implement `cranpose_ui_layout::MeasurePolicy` for custom child sizes and positions.
+The policy gets its children as `Measurables`, Compose's `List<Measurable>`: index it or iterate it for each child.
 
 ```rust preview=layout
 use cranpose::widgets::*;

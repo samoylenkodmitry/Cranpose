@@ -1,0 +1,31 @@
+# The groups of the still wall's allocator calls at its start, a layout node,
+# for the `wall-t20-start` row of scripts/perf/steady_ledger.sh (#2247).
+#
+# One site pattern a line: GROUP TARGET REGEX. A call belongs to the first
+# group, in file order, with a pattern that matches its site: the first stack
+# frame whose source lies in the tree, written `FUNCTION @ PATH:LINE` with
+# PATH relative to the tree root. Calls that no pattern matches count as
+# `other`. TARGET is the group's goal in calls a node; every line of a group
+# repeats it.
+
+node 1.0 new_with_virtual.* @ crates/cranpose-ui/src/widgets/nodes/layout_node
+node 1.0 rehouse_for_recycle.* @ crates/cranpose-ui/src/widgets/nodes/layout_node
+node 1.0 @ crates/cranpose-core/src/emit\.rs:
+node 1.0 into_rc.* @ crates/cranpose-ui/src/layout/mod\.rs:
+node 1.0 bind_at.* @ crates/cranpose-ui/src/layout/layout_child_measure_state\.rs:
+
+parent-lists 0.4 @ crates/cranpose-ui/src/layout/layout_child_measure_state\.rs:
+parent-lists 0.4 update_children.* @ crates/cranpose-ui/src/widgets/nodes/layout_node/tree_node\.rs:
+
+policies 0 held_policy.* @ crates/cranpose-ui/src/widgets/layout\.rs:
+
+modifiers 2.0 @ crates/cranpose-foundation/src/modifier/
+modifiers 2.0 @ crates/cranpose-ui/src/modifier/
+modifiers 2.0 @ crates/cranpose-ui/src/modifier_nodes/
+modifiers 2.0 @ crates/cranpose-ui/src/layout/coordinator_chain\.rs:
+modifiers 2.0 @ crates/cranpose-ui/src/text_modifier_node\.rs:
+
+text 1.0 @ crates/cranpose-text/
+text 1.0 @ crates/cranpose-ui/src/text/
+
+app 0.4 @ benchmarks/

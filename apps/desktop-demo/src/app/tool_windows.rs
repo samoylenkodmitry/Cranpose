@@ -271,9 +271,7 @@ fn tear_grip(
 }
 
 fn tear_origin(pressed: Point, event: &PointerEvent) -> Option<Point> {
-    let dx = event.global_position.x - pressed.x;
-    let dy = event.global_position.y - pressed.y;
-    if (dx * dx + dy * dy).sqrt() <= TEAR_DISTANCE {
+    if (event.global_position - pressed).distance() <= TEAR_DISTANCE {
         return None;
     }
     let screen = event.screen_position?;

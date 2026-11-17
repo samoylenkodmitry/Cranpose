@@ -1859,7 +1859,7 @@ fn counter_app() {
 
                         Spacer(Modifier::empty().size_points(0.0, 20.0));
 
-                        background_work::FetchAsyncValue();
+                        background_work::WorkAndUnlock();
                     },
                 );
             },

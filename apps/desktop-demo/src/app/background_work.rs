@@ -6,6 +6,9 @@ use cranpose_ui::{
 
 use super::demo_random_u32;
 
+mod device_unlock;
+pub(super) use device_unlock::WorkAndUnlock;
+
 // What the line says while a fetch runs. A browser page has one thread, and
 // `launch_background` runs its work there.
 const FETCHING: &str = if cfg!(target_arch = "wasm32") {
