@@ -23,9 +23,11 @@ use cranpose_ui::{
 /// give the decoder a `depth` of 6 or more for a stream of 60 pictures a second. The decoder
 /// drops its oldest pictures first when the app falls behind, as it does while a window starts.
 ///
-/// Platforms: macOS and iOS draw through Metal. Other platforms draw nothing yet: Android's
-/// `AHardwareBuffer` pictures need a Vulkan import, and no other platform has a hardware decoder
-/// that Cranpose drives. A box with no picture draws nothing and keeps its size.
+/// Platforms: macOS and iOS draw through Metal. Android draws through Vulkan: the app's device
+/// is opened with the extensions that import a hardware buffer, which the GPU's driver offers on
+/// Android 8 and later. Where the device lacks them, or where Android renders with OpenGL ES, the
+/// surface draws nothing. No other platform has a hardware decoder that Cranpose drives. A box
+/// with no picture draws nothing and keeps its size.
 #[composable]
 pub fn PlayerSurface(frames: DecodedFrames, modifier: Modifier, content_scale: ContentScale) {
     let shown = rememberMutableStateOf(|| None::<ImageBitmap>);
@@ -55,12 +57,19 @@ pub fn PlayerSurface(frames: DecodedFrames, modifier: Modifier, content_scale: C
 }
 
 // Takes each picture that the decoder outputs and puts its bitmap in `shown`.
-#[cfg(all(feature = "renderer-wgpu", any(target_os = "macos", target_os = "ios")))]
+#[cfg(all(
+    feature = "renderer-wgpu",
+    any(
+        target_os = "macos",
+        target_os = "ios",
+        all(feature = "android", target_os = "android")
+    )
+))]
 #[composable]
 fn pump(frames: DecodedFrames, shown: MutableState<Option<ImageBitmap>>) {
     use cranpose_core::LaunchedEffect;
 
-    use crate::{apple::nv12_converter::Nv12Converter, gpu_context};
+    use crate::gpu_context;
 
     // A lost device gives a new context, which makes a new converter
     let gpu = gpu_context();
@@ -70,8 +79,7 @@ fn pump(frames: DecodedFrames, shown: MutableState<Option<ImageBitmap>>) {
         let Some(gpu) = gpu else {
             return;
         };
-        let Some(mut converter) = Nv12Converter::new(&gpu) else {
-            log::warn!("player surface: the renderer's device is not a Metal device");
+        let Some(mut converter) = Converter::new(&gpu) else {
             return;
         };
         loop {
@@ -85,6 +93,19 @@ fn pump(frames: DecodedFrames, shown: MutableState<Option<ImageBitmap>>) {
     });
 }
 
-#[cfg(not(all(feature = "renderer-wgpu", any(target_os = "macos", target_os = "ios"))))]
+// The converter of the platform's decoded pictures: one pass that turns a picture into RGB
+#[cfg(all(feature = "renderer-wgpu", feature = "android", target_os = "android"))]
+use crate::android::ycbcr_converter::YcbcrConverter as Converter;
+#[cfg(all(feature = "renderer-wgpu", any(target_os = "macos", target_os = "ios")))]
+use crate::apple::nv12_converter::Nv12Converter as Converter;
+
+#[cfg(not(all(
+    feature = "renderer-wgpu",
+    any(
+        target_os = "macos",
+        target_os = "ios",
+        all(feature = "android", target_os = "android")
+    )
+)))]
 #[composable]
 fn pump(_frames: DecodedFrames, _shown: MutableState<Option<ImageBitmap>>) {}

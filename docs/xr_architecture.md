@@ -228,35 +228,68 @@ write the IOSurface before the GPU has read it. The surface waits on `wait_for_f
 newest picture in the frame that follows the output, and drops the older ones. A frame with no
 new picture does no work.
 
-Android draws nothing yet. The pictures there are `AHardwareBuffer`s of a private format, which a
-renderer on Vulkan reads through a sampler with a YCbCr conversion. The import needs these steps:
+On Android the surface draws through the renderer's Vulkan device. The pictures there are
+`AHardwareBuffer`s of a private format, which Vulkan reads through a sampler with a YCbCr
+conversion. A device that renders with OpenGL ES, or a Vulkan device that lacks an extension below,
+draws nothing: `YcbcrConverter::new` answers `None`. The steps:
 
-1. The device is created with `VK_ANDROID_external_memory_android_hardware_buffer`,
+1. The device opens through `wgpu::hal::vulkan`'s `open_with_callback`, because wgpu's device
+   request has no field for an extension that it does not know. The callback adds
+   `VK_ANDROID_external_memory_android_hardware_buffer`, `VK_EXT_queue_family_foreign`,
    `VK_KHR_sampler_ycbcr_conversion`, `VK_KHR_external_memory`, `VK_KHR_dedicated_allocation`,
-   `VK_KHR_bind_memory2`, `VK_KHR_get_memory_requirements2` and `VK_EXT_queue_family_foreign`.
-   `GpuRequirements` asks for wgpu features only, so the Android device setup needs a list of
-   extensions of its own.
+   `VK_KHR_bind_memory2` and `VK_KHR_get_memory_requirements2` when the driver lists all of them.
+   It chains the `samplerYcbcrConversion` feature, which wgpu-hal leaves off. Any other adapter
+   opens as before. The Android shell now gives the composition its `GpuContext`, and gives it the
+   new one after a device loss.
 2. `vkGetAndroidHardwareBufferPropertiesANDROID` returns the buffer's memory requirements and its
    `VkAndroidHardwareBufferFormatPropertiesANDROID`. The format of a private buffer is
    `VK_FORMAT_UNDEFINED` with an `externalFormat`, and the properties suggest the model, the range
    and the chroma offsets.
 3. A `VkSamplerYcbcrConversion` takes the external format and the suggested values. An immutable
    `VkSampler` takes the conversion, and the descriptor set layout holds it as an immutable
-   sampler. The sampler's filters are nearest unless the format supports a linear chroma filter.
+   sampler. The sampler's filters are linear when the format supports a linear chroma filter, and
+   nearest otherwise. The pipeline belongs to this format, so the converter builds it when the
+   first picture comes and builds it again when a picture has another format.
 4. A `VkImage` is made with `VkExternalMemoryImageCreateInfo` and `VkExternalFormatANDROID`.
    Its memory is imported with `VkImportAndroidHardwareBufferInfoANDROID` and a dedicated
-   allocation. The image view carries `VkSamplerYcbcrConversionInfo`.
-5. The first use acquires the image from `VK_QUEUE_FAMILY_FOREIGN_EXT` with a barrier to the
-   shader read layout.
-6. The frame stays alive until the GPU has read it, as on Apple, and the `AImageReader` of the
-   decoder has `depth` plus the images in flight.
+   allocation. The image view carries `VkSamplerYcbcrConversionInfo`. The size of the image is the
+   size that `AHardwareBuffer_describe` reports, which is larger than the picture where the decoder
+   pads it: a picture of 360 rows lies in a buffer of 368 rows.
+5. The command buffer acquires the image from `VK_QUEUE_FAMILY_FOREIGN_EXT` with a barrier to the
+   shader read layout. One render pass draws a triangle that covers the target. The fragment shader
+   samples the picture at the picture's `CropRect`. The highest coordinate that it samples lies a
+   pixel inside the crop, so the filter of the chroma samples does not read the padding.
+6. The pass writes into a texture of an `ExternalFrames` ring, which `Image` draws. wgpu has no
+   binding for an immutable sampler with a conversion, so the pass is raw Vulkan. It records into a
+   wgpu command encoder through `CommandEncoder::as_hal_mut` and goes to the queue through
+   `wgpu::Queue::submit`, so the renderer's thread and the converter never use the `VkQueue` at the
+   same time. The ring makes its textures through the hal device and tells wgpu that each one is
+   sampled and initialized. The render pass leaves the texture in the layout of that state, so wgpu
+   inserts no barrier and no clear for it.
+7. The frame stays alive until the GPU has read it. The image, its memory, its view, the
+   framebuffer, the descriptor set and the `VideoFrame` go into the callback of the queue's
+   submission. wgpu runs the callback when it polls the queue's fences, which every submission does.
+   The `AImageReader` of the decoder has `depth` plus the images in flight.
 
-wgpu has no binding for an immutable sampler with a conversion, and no texture format for an
-external one. A pass of the Vulkan backend itself would sample the image and write RGB into a
-texture of the `ExternalFrames` ring: the same shape as the Apple pass. The work is about 700
-lines of Vulkan through `wgpu::hal::vulkan` and `ash`, and it needs a phone to test. A phone
-without the extension needs the GLES path of `cranpose-xr`, which binds the buffer as an EGL
-image.
+The shaders are GLSL, because a YCbCr sampler needs a combined image sampler, which WGSL cannot
+write. `scripts/dev/compile_ycbcr_shaders.sh` compiles them with the NDK's `glslc` and checks the
+result with `spirv-val`. The repository keeps the SPIR-V beside its source.
+
+The model and the range come from the driver's suggestion for each buffer. The range follows the
+decoder. The model does not always: on the Galaxy Tab S7+ (Adreno 650) the driver suggests BT.601
+for every buffer, and the decoder labels a BT.709 stream of 640 by 360 pixels as BT.601 as well
+(`color-standard` 75 and a BT.601 data space). That stream shows chroma that differs by up to 9
+levels of 255 from the encoder's colors. The BT.601 test stream with the limited range shows the
+encoder's colors within one level.
+
+The cost of one picture on that tablet, with two decoders running at 120 and at 60 pictures a
+second in release builds: the CPU takes 0.85 to 1.0 ms for a picture of 640 by 360 pixels and 1.2
+to 1.4 ms for a picture of 1920 by 1080 pixels. The import takes 0.2 and 0.4 ms of that, and
+`Queue::submit` takes 0.4 and 0.6 ms. The pass takes 0.31 ms on the GPU at 1920 by 1080 pixels,
+measured with timestamp queries around the commands.
+
+A device without the extensions needs the GLES path of `cranpose-xr`, which binds the buffer as an
+EGL image.
 
 ## Streamed scenes
 

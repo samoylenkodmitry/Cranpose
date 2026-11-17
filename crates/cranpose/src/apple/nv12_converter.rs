@@ -70,9 +70,12 @@ impl Nv12Converter {
     // Makes the converter, or `None` when the context's device is not a Metal device.
     pub(crate) fn new(gpu: &GpuContext) -> Option<Self> {
         // SAFETY: the guard only gives the Metal device's raw device, which this clones.
-        let metal = unsafe { gpu.device.as_hal::<wgpu::hal::api::Metal>() }?
-            .raw_device()
-            .clone();
+        let Some(hal) = (unsafe { gpu.device.as_hal::<wgpu::hal::api::Metal>() }) else {
+            log::warn!("player surface: the renderer's device is not a Metal device");
+            return None;
+        };
+        let metal = hal.raw_device().clone();
+        drop(hal);
         let device = &gpu.device;
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("nv12 to rgb"),

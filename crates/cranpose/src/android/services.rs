@@ -61,6 +61,18 @@ pub(crate) fn wake_native_loop() {
     }
 }
 
+// Hands the activity to the platform services that the app's capabilities select.
+pub(crate) fn register_all(
+    app: &android_activity::AndroidApp,
+    settings: &crate::app_launcher::AppSettings,
+) {
+    super::file_picker::register(app.clone());
+    super::writable_folder::register(app.clone());
+    register(app.clone(), &settings.capabilities);
+    super::host::install_activity(app.clone());
+    crate::process_info::install();
+}
+
 pub(crate) fn register(
     app: android_activity::AndroidApp,
     capabilities: &cranpose_capabilities::Capabilities<'_>,

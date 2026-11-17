@@ -1,9 +1,9 @@
-use std::rc::Rc;
+use std::{cell::RefCell, rc::Rc, sync::Arc};
 
 use cranpose_app_shell::{AppShell, default_root_key};
 use cranpose_render_wgpu::WgpuRenderer;
 
-use super::event_loop::{ShellInputs, android_platform_env};
+use super::event_loop::{GpuResources, ShellInputs, android_platform_env};
 
 pub(super) fn create<F: FnMut() + 'static>(
     renderer: WgpuRenderer,
@@ -13,6 +13,11 @@ pub(super) fn create<F: FnMut() + 'static>(
     density: f32,
 ) -> AppShell<WgpuRenderer> {
     let content_clone = Rc::clone(inputs.content);
+    let gpu = Rc::clone(inputs.gpu);
+    let mut content = crate::gpu_context::provide_optional_gpu_context(
+        move || gpu.borrow().clone(),
+        move || content_clone.borrow_mut()(),
+    );
     let density = density.max(f32::EPSILON);
     let platform_env = android_platform_env();
     // The frame loop runs idle prefetch passes while it waits for a frame
@@ -26,7 +31,7 @@ pub(super) fn create<F: FnMut() + 'static>(
                 renderer,
                 default_root_key(),
                 move || {
-                    platform_env.compose_root(|| content_clone.borrow_mut()());
+                    platform_env.compose_root(&mut content);
                 },
                 (width, height),
                 (width as f32 / density, height as f32 / density),
@@ -41,4 +46,27 @@ pub(super) fn create<F: FnMut() + 'static>(
         android_platform_env().configuration().ui_mode_type == cranpose_ui::UiModeType::Television;
     shell.set_dpad_navigation(tv);
     shell
+}
+
+// Gives the composition the device in use, so a replaced device reaches it, and has a shell that
+// exists draw its content again with it.
+pub(super) fn share_gpu_context(
+    shared: &RefCell<Option<crate::GpuContext>>,
+    instance: &wgpu::Instance,
+    resources: &GpuResources,
+    shell: Option<&mut AppShell<WgpuRenderer>>,
+) {
+    let gpu = crate::GpuContext {
+        instance: instance.clone(),
+        adapter: (*resources.adapter).clone(),
+        device: Arc::clone(&resources.device),
+        queue: Arc::clone(&resources.queue),
+    };
+    if shared.borrow().as_ref() == Some(&gpu) {
+        return;
+    }
+    *shared.borrow_mut() = Some(gpu);
+    if let Some(shell) = shell {
+        shell.request_root_render();
+    }
 }
