@@ -6,8 +6,32 @@ use std::{cell::RefCell, rc::Rc};
 use cranpose_core::{ApplierHost, NodeError, NodeId};
 use cranpose_ui_layout::Constraints;
 
-use super::{LayoutBuilderState, core::Placeable};
-use crate::subcompose_layout::{MeasureCallbacks, MeasuredChildren, SubcomposeLayoutNodeHandle};
+use super::{LayoutBuilderState, core::Placeable, normalize_constraints, subtract_padding};
+use crate::{
+    modifier::{DimensionConstraint, EdgeInsets, LayoutProperties},
+    subcompose_layout::{MeasureCallbacks, MeasuredChildren, SubcomposeLayoutNodeHandle},
+};
+
+// The constraints a subcompose node's policy measures under: `constraints`
+// less `padding`, and no wider or taller than a size in points of `props`.
+pub(super) fn policy_constraints(
+    constraints: Constraints,
+    padding: EdgeInsets,
+    props: LayoutProperties,
+) -> Constraints {
+    let mut inner = normalize_constraints(subtract_padding(constraints, padding));
+    if let DimensionConstraint::Points(width) = props.width() {
+        let constrained_width = width - padding.horizontal_sum();
+        inner.max_width = inner.max_width.min(constrained_width);
+        inner.min_width = inner.min_width.min(constrained_width);
+    }
+    if let DimensionConstraint::Points(height) = props.height() {
+        let constrained_height = height - padding.vertical_sum();
+        inner.max_height = inner.max_height.min(constrained_height);
+        inner.min_height = inner.min_height.min(constrained_height);
+    }
+    inner
+}
 
 #[expect(
     clippy::multiple_inherent_impl,

@@ -1265,18 +1265,7 @@ impl LayoutBuilderState {
         let props = resolved_modifiers.layout_properties();
         let padding = resolved_modifiers.padding();
         let offset = resolved_modifiers.offset();
-        let mut inner_constraints = normalize_constraints(subtract_padding(constraints, padding));
-
-        if let DimensionConstraint::Points(width) = props.width() {
-            let constrained_width = width - padding.horizontal_sum();
-            inner_constraints.max_width = inner_constraints.max_width.min(constrained_width);
-            inner_constraints.min_width = inner_constraints.min_width.min(constrained_width);
-        }
-        if let DimensionConstraint::Points(height) = props.height() {
-            let constrained_height = height - padding.vertical_sum();
-            inner_constraints.max_height = inner_constraints.max_height.min(constrained_height);
-            inner_constraints.min_height = inner_constraints.min_height.min(constrained_height);
-        }
+        let inner_constraints = subcompose_measure::policy_constraints(constraints, padding, props);
 
         let measure_error = RefCell::new(None);
         let measured_children = node_handle.measured_children_scratch();
