@@ -268,7 +268,7 @@ impl PlainLayoutFns {
 /// What a chain keeps of a plain element's type beside its words: how many
 /// they are, what the element takes part in, and how to read them.
 pub struct PlainFns {
-    element_type: fn() -> TypeId,
+    element_type: TypeId,
     words: u8,
     capabilities: NodeCapabilities,
     update_invalidation: Option<InvalidationKind>,
@@ -287,7 +287,7 @@ impl fmt::Debug for PlainFns {
 impl PlainFns {
     /// The type of the element the words hold.
     pub fn element_type(&self) -> TypeId {
-        (self.element_type)()
+        self.element_type
     }
 
     /// How many words the element's value takes.
@@ -334,7 +334,7 @@ impl<E: PlainElement> FnsOf<E> {
     };
 
     const FNS: PlainFns = PlainFns {
-        element_type: TypeId::of::<E>,
+        element_type: TypeId::of::<E>(),
         words: Self::WORDS,
         capabilities: E::CAPABILITIES,
         update_invalidation: E::UPDATE_INVALIDATION,
