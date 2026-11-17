@@ -53,6 +53,8 @@ mod offscreen_instance;
 mod scoped_weak_stack;
 #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
 pub use android::file_picker::open_content_uri;
+#[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
+pub use android::finish::finish_activity;
 #[cfg(any(
     test,
     all(feature = "desktop-shell", feature = "renderer-wgpu"),

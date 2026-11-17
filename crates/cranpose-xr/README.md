@@ -93,6 +93,11 @@ scope.on_pointer_event(|event| match event.kind {
 });
 ```
 
+## Closing the app
+
+`cranpose_services::request_exit()` closes a headset app as it closes a flat one. The backend ends
+the OpenXR session, then finishes the activity on Android or returns from `run` on a desktop.
+
 ## The headset's state
 
 `SpatialFrameEffect` runs a callback once in each frame of the headset, before the panels draw. It

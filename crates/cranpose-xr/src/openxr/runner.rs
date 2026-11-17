@@ -21,6 +21,7 @@ use super::{
 use crate::{
     SpatialCapabilities, SpatialEnvironment,
     depth_order::sort_back_to_front,
+    exit_request::{ExitRequest, ExitStep, leave},
     frame_effects::local_frame_effects,
     local_haptics, local_headset_properties, local_spatial_capabilities, local_spatial_environment,
     pointer::Pointer,
@@ -42,9 +43,20 @@ pub(crate) fn run_immersive(
     let mut immersive = Immersive::new(runtime, settings, content)?;
     let mut status = SessionStatus::Idle;
     let mut rate = FrameRate::new();
+    let mut exit = ExitRequest::default();
     log::info!("cranpose xr: ready");
     while !host.ended(status) {
         status = immersive.xr_session.poll_events()?;
+        match exit.poll(status.runs()) {
+            ExitStep::Wait => {}
+            ExitStep::EndSession => {
+                if let Err(error) = immersive.xr_session.request_exit() {
+                    log::warn!("cranpose xr: {error}");
+                    break;
+                }
+            }
+            ExitStep::Leave => break,
+        }
         match status {
             SessionStatus::Exit => break,
             SessionStatus::Idle => {}
@@ -54,8 +66,11 @@ pub(crate) fn run_immersive(
             }
         }
     }
-    // The session ends when `immersive` drops, before the device it draws on
     log::info!("cranpose xr: ends in {status:?}");
+    // The session ends when `immersive` drops, before the device it draws on. The host closes
+    // after that, when the app asked for it.
+    drop(immersive);
+    leave(|| host.finish());
     Ok(())
 }
 

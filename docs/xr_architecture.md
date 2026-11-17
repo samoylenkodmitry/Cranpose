@@ -444,6 +444,13 @@ The backend also keeps these rules of every runtime and store:
   input. The pointer sees both controllers lost, which ends a press and drops a carried panel.
   The panels still draw.
 - A session that is not VISIBLE gets frames with no layers and no drawing.
+- An app closes itself with `cranpose_services::request_exit()`, as in a flat app. On each turn the
+  loop reads `exit_requested()`. While the session runs, it calls `xrRequestExitSession` once. The
+  runtime moves the session to STOPPING, the backend ends it, and the loop leaves when the session
+  is no longer running. A request that comes while no session runs makes the loop leave at once.
+  After the session is gone the Android host finishes the activity with `cranpose::finish_activity`,
+  and the desktop host returns from `run`. The loop takes the request with `take_exit_request()`
+  only after that landed, so a failed close leaves the app's request recorded.
 - A session that is not running keeps its state: the composition, the panels' places and the
   swapchains stay until the app ends.
 - After the session begins, the app asks `XR_FB_display_refresh_rate` for the highest rate the

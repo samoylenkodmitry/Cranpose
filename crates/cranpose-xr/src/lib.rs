@@ -30,6 +30,8 @@ mod controller;
 mod controller_bindings;
 #[cfg(any(test, headset))]
 mod depth_order;
+#[cfg(any(test, headset))]
+mod exit_request;
 mod field_of_view;
 mod foveated_encoding;
 #[cfg(any(test, all(headset, target_os = "android")))]

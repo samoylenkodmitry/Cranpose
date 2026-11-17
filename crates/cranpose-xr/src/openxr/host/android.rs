@@ -55,6 +55,11 @@ impl Host {
         destroyed
     }
 
+    // Ends the activity, as the app asked. Returns whether the call landed.
+    pub(crate) fn finish(&self) -> bool {
+        cranpose::finish_activity(&self.app)
+    }
+
     // Takes the activity's queued key and touch events and leaves them unhandled. The controllers
     // reach the app through OpenXR. An event that nobody takes from the queue stops the activity
     // from answering Android, which shows an "app is not responding" dialog five seconds later.

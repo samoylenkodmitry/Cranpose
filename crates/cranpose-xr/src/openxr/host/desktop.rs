@@ -29,6 +29,12 @@ impl Host {
     ) {
     }
 
+    // Ends the process, as the app asked. Its run returns when the session ended, so there is
+    // nothing more to end.
+    pub(crate) fn finish(&self) -> bool {
+        true
+    }
+
     // Waits while the headset shows something else. The session alone ends a desktop run.
     pub(crate) fn ended(&self, status: SessionStatus) -> bool {
         if !status.runs() {
