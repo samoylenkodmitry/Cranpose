@@ -15,7 +15,7 @@ use cranpose_ui::{
 use super::{
     figure::{world_to_scene, Figure, Plan},
     lettering::strong,
-    sheet_mesh::sheet_mesh,
+    sheet_mesh::{label_surface, sheet_mesh},
     walk::{ease, ease_softly},
 };
 
@@ -103,13 +103,7 @@ fn FlatLabel(node: Size, plan: Plan, pose: impl Fn() -> Figure + Copy + 'static)
             };
             let (_, _, out) = figure.board_axes();
             let mesh = sheet_mesh(at, at, 1, |point| (figure.on_board(point, 0.6 * u), out));
-            MeshSurface {
-                mesh: Arc::new(mesh),
-                transform: world_to_scene(node),
-                material: Material::Unlit,
-                casts_shadow: false,
-                solid: false,
-            }
+            label_surface(mesh, node)
         }),
         BoxSpec::default(),
         move || {

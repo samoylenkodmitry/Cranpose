@@ -12,7 +12,7 @@ use cranpose_testing::robot::TestRenderer;
 use cranpose_ui::{
     Box, BoxSpec, Modifier, Point, Size, Text, TextStyle,
     selection_container::SelectionRegistrar,
-    space::{Camera, Mat4, Material, Mesh, MeshSurface, MeshSurfaces, Multisample, Scene3d, Vec3},
+    space::{Mat4, Material, Mesh, MeshSurface, MeshSurfaces, Vec3},
     text::TextUnit,
     widgets::{SelectionContainer, local_selection_registrar},
 };
@@ -80,17 +80,9 @@ fn shell_on_two_meshes(
             let middle = Vec3::new(WINDOW.width * 0.5, WINDOW.height * 0.5, 0.0);
             let content = content.clone();
             Box(
-                Modifier::empty().fill_max_size().scene3d(move || Scene3d {
-                    camera: Camera::look_at(
-                        middle + Vec3::new(0.0, 0.0, -600.0),
-                        middle,
-                        Vec3::new(0.0, 1.0, 0.0),
-                        600.0,
-                    ),
-                    light: None,
-                    eye: None,
-                    multisample: Multisample::Off,
-                }),
+                Modifier::empty()
+                    .fill_max_size()
+                    .scene3d(move || crate::scene_facing::facing(middle)),
                 BoxSpec::default(),
                 move || {
                     let content = content.clone();

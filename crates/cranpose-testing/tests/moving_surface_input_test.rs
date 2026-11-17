@@ -9,7 +9,7 @@ use cranpose_core::{MutableState, location_key, rememberMutableStateOf};
 use cranpose_testing::robot::TestRenderer;
 use cranpose_ui::{
     Box, BoxSpec, Modifier, Point, Size,
-    space::{Camera, Mat4, Material, Mesh, MeshSurface, Multisample, Scene3d, Vec3},
+    space::{Mat4, Material, Mesh, MeshSurface, Vec3},
 };
 
 const PANEL: Size = Size {
@@ -51,17 +51,9 @@ impl MovingPanel {
                 slot.replace(Some(shift));
                 let sink = Rc::clone(&sink);
                 Box(
-                    Modifier::empty().fill_max_size().scene3d(|| Scene3d {
-                        camera: Camera::look_at(
-                            Vec3::new(160.0, 100.0, -600.0),
-                            Vec3::new(160.0, 100.0, 0.0),
-                            Vec3::new(0.0, 1.0, 0.0),
-                            600.0,
-                        ),
-                        light: None,
-                        eye: None,
-                        multisample: Multisample::Off,
-                    }),
+                    Modifier::empty()
+                        .fill_max_size()
+                        .scene3d(|| crate::scene_facing::facing(Vec3::new(160.0, 100.0, 0.0))),
                     BoxSpec::default(),
                     move || {
                         let sink = Rc::clone(&sink);

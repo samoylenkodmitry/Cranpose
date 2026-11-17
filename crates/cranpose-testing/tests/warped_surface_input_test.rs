@@ -10,7 +10,7 @@ use cranpose_core::location_key;
 use cranpose_testing::robot::TestRenderer;
 use cranpose_ui::{
     Box, BoxSpec, Modifier, Point, Size,
-    space::{Camera, Mat4, Material, Mesh, MeshSurface, Multisample, Scene3d, Vec3},
+    space::{Mat4, Material, Mesh, MeshSurface, Vec3},
 };
 
 const PANEL: Size = Size {
@@ -76,17 +76,9 @@ fn a_click_on_bent_content_lands_on_the_point_shown_there() {
         move || {
             let (sink, mesh) = (Rc::clone(&sink), Arc::clone(&mesh));
             Box(
-                Modifier::empty().fill_max_size().scene3d(|| Scene3d {
-                    camera: Camera::look_at(
-                        Vec3::new(160.0, 100.0, -600.0),
-                        Vec3::new(160.0, 100.0, 0.0),
-                        Vec3::new(0.0, 1.0, 0.0),
-                        600.0,
-                    ),
-                    light: None,
-                    eye: None,
-                    multisample: Multisample::Off,
-                }),
+                Modifier::empty()
+                    .fill_max_size()
+                    .scene3d(|| crate::scene_facing::facing(Vec3::new(160.0, 100.0, 0.0))),
                 BoxSpec::default(),
                 move || {
                     let (sink, mesh) = (Rc::clone(&sink), Arc::clone(&mesh));
@@ -109,9 +101,7 @@ fn a_click_on_bent_content_lands_on_the_point_shown_there() {
             );
         },
     );
-    shell.set_viewport(320.0, 200.0);
-    shell.set_buffer_size(320, 200);
-    shell.update_at_frame_time_nanos(16_000_000);
+    crate::test_window::first_frame(&mut shell, Size::new(320.0, 200.0));
 
     // A vertex, and points inside cells, where the bend is strong and where
     // it is weak.

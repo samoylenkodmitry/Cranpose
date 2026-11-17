@@ -13,7 +13,7 @@ use cranpose_ui::{
 use super::{
     figure::{timeline, world_to_scene, Figure, Plan, PROFILE_SEGMENTS},
     lettering::strong,
-    sheet_mesh::sheet_mesh,
+    sheet_mesh::{label_surface, sheet_mesh},
     walk::ease,
 };
 
@@ -87,13 +87,7 @@ pub(super) fn PrintLabel(node: Size, plan: Plan, pose: impl Fn() -> Figure + Cop
                 height: size.height,
             };
             let mesh = sheet_mesh(at, at, 16, |point: Point| figure.on_print(point, 0.6 * u));
-            MeshSurface {
-                mesh: Arc::new(mesh),
-                transform: world_to_scene(node),
-                material: Material::Unlit,
-                casts_shadow: false,
-                solid: false,
-            }
+            label_surface(mesh, node)
         }),
         BoxSpec::default(),
         move || {

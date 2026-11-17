@@ -122,82 +122,8 @@ impl Cloth {
                 freedom.push(if held { 0.0 } else { 1.0 });
             }
         }
-        let index = |column: usize, row: usize| (row * columns + column) as u32;
-        let mut links = Vec::new();
-        let mut link = |a: (usize, usize), b: (usize, usize), rest: f32, stiffness: f32| {
-            links.push(Link {
-                a: index(a.0, a.1),
-                b: index(b.0, b.1),
-                rest,
-                stiffness,
-            });
-        };
-        let diagonal = (rest_x * rest_x + rest_y * rest_y).sqrt();
-        for row in 0..rows {
-            for column in 0..columns {
-                if column + 1 < columns {
-                    link((column, row), (column + 1, row), rest_x, STRETCH_STIFFNESS);
-                }
-                if row + 1 < rows {
-                    link((column, row), (column, row + 1), rest_y, STRETCH_STIFFNESS);
-                }
-                if column + 1 < columns && row + 1 < rows {
-                    link(
-                        (column, row),
-                        (column + 1, row + 1),
-                        diagonal,
-                        SHEAR_STIFFNESS,
-                    );
-                    link(
-                        (column + 1, row),
-                        (column, row + 1),
-                        diagonal,
-                        SHEAR_STIFFNESS,
-                    );
-                }
-                if column + 2 < columns {
-                    link(
-                        (column, row),
-                        (column + 2, row),
-                        rest_x * 2.0,
-                        BEND_STIFFNESS,
-                    );
-                }
-                if row + 2 < rows {
-                    link(
-                        (column, row),
-                        (column, row + 2),
-                        rest_y * 2.0,
-                        BEND_STIFFNESS,
-                    );
-                }
-            }
-        }
-        let (fine_columns, fine_rows) = fine_size(columns, rows);
-        let mut uvs = Vec::with_capacity(fine_columns * fine_rows);
-        for row in 0..fine_rows {
-            for column in 0..fine_columns {
-                uvs.push([
-                    column as f32 / (fine_columns - 1) as f32,
-                    row as f32 / (fine_rows - 1) as f32,
-                ]);
-            }
-        }
-        let mut indices = Vec::with_capacity((fine_columns - 1) * (fine_rows - 1) * 6);
-        for row in 0..fine_rows - 1 {
-            for column in 0..fine_columns - 1 {
-                let top_left = (row * fine_columns + column) as u32;
-                let bottom_left = top_left + fine_columns as u32;
-                indices.extend([
-                    top_left,
-                    bottom_left,
-                    top_left + 1,
-                    top_left + 1,
-                    bottom_left,
-                    bottom_left + 1,
-                ]);
-            }
-        }
+        let links = links((columns, rows), (rest_x, rest_y));
+        let (uvs, indices) = fine_grid(columns, rows);
         Self {
             hang,
             previous: positions.clone(),
@@ -305,6 +231,94 @@ impl Cloth {
         .expect("a grid of two or more points each way makes whole triangles")
         .with_texture_edges(TextureEdges::Outline)
     }
+}
+
+// The springs between the cloth's points: along each row and column, across
+// each cell and over every second point, which resists bending.
+fn links((columns, rows): (usize, usize), (rest_x, rest_y): (f32, f32)) -> Vec<Link> {
+    let index = |column: usize, row: usize| (row * columns + column) as u32;
+    let mut links = Vec::new();
+    let mut link = |a: (usize, usize), b: (usize, usize), rest: f32, stiffness: f32| {
+        links.push(Link {
+            a: index(a.0, a.1),
+            b: index(b.0, b.1),
+            rest,
+            stiffness,
+        });
+    };
+    let diagonal = (rest_x * rest_x + rest_y * rest_y).sqrt();
+    for row in 0..rows {
+        for column in 0..columns {
+            if column + 1 < columns {
+                link((column, row), (column + 1, row), rest_x, STRETCH_STIFFNESS);
+            }
+            if row + 1 < rows {
+                link((column, row), (column, row + 1), rest_y, STRETCH_STIFFNESS);
+            }
+            if column + 1 < columns && row + 1 < rows {
+                link(
+                    (column, row),
+                    (column + 1, row + 1),
+                    diagonal,
+                    SHEAR_STIFFNESS,
+                );
+                link(
+                    (column + 1, row),
+                    (column, row + 1),
+                    diagonal,
+                    SHEAR_STIFFNESS,
+                );
+            }
+            if column + 2 < columns {
+                link(
+                    (column, row),
+                    (column + 2, row),
+                    rest_x * 2.0,
+                    BEND_STIFFNESS,
+                );
+            }
+            if row + 2 < rows {
+                link(
+                    (column, row),
+                    (column, row + 2),
+                    rest_y * 2.0,
+                    BEND_STIFFNESS,
+                );
+            }
+        }
+    }
+    links
+}
+
+// The texture coordinates and the triangles of the fine grid the cloth is
+// drawn with.
+fn fine_grid(columns: usize, rows: usize) -> (Vec<[f32; 2]>, Vec<u32>) {
+    let (fine_columns, fine_rows) = fine_size(columns, rows);
+    let mut uvs = Vec::with_capacity(fine_columns * fine_rows);
+    for row in 0..fine_rows {
+        for column in 0..fine_columns {
+            uvs.push([
+                column as f32 / (fine_columns - 1) as f32,
+                row as f32 / (fine_rows - 1) as f32,
+            ]);
+        }
+    }
+    let mut indices = Vec::with_capacity((fine_columns - 1) * (fine_rows - 1) * 6);
+    for row in 0..fine_rows - 1 {
+        for column in 0..fine_columns - 1 {
+            let top_left = (row * fine_columns + column) as u32;
+            let bottom_left = top_left + fine_columns as u32;
+            indices.extend([
+                top_left,
+                bottom_left,
+                top_left + 1,
+                top_left + 1,
+                bottom_left,
+                bottom_left + 1,
+            ]);
+        }
+    }
+    (uvs, indices)
 }
 
 // The columns of the top row the clips hold, evenly spread from the first

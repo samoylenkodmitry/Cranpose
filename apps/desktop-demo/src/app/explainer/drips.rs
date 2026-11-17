@@ -179,28 +179,68 @@ pub(super) fn plant(
     ink: &Ink,
     (u, split, floor): (f32, f32, f32),
 ) -> Vec<DripPlan> {
-    let head_scale = (head.size / (226.0 * u)).clamp(0.2, 1.2);
-    let copy_scale = (copy.size / (41.0 * u)).clamp(0.4, 1.2);
-    let roots: Vec<Placed> = ink
-        .roots()
-        .into_iter()
-        .map(|root| Placed::new(root, (head, copy), (u, split)))
-        .collect();
-    let copy_top = copy.first_baseline() - copy.cap;
-    let copy_bottom = copy.last_baseline();
+    let bed = Bed::new((head, copy), ink, (u, split, floor));
+    let runners = bed.runners();
     let mut drips = Vec::new();
-    let add = |drips: &mut Vec<DripPlan>, placed: &Placed, change: &dyn Fn(&mut DripPlan)| {
-        let block = if placed.in_head { head } else { copy };
-        let z = u * if placed.in_head {
-            head_scale
-        } else {
-            copy_scale
-        };
+    bed.run_down(&runners, &mut drips);
+    bed.stop_in_head(&runners, &mut drips);
+    bed.bead_copy(&runners, &mut drips);
+    drips
+}
+
+// What every drip of the page reads: the two blocks of type, the ink, the
+// floor and the stroke ends the drips grow from.
+struct Bed<'a> {
+    head: &'a TypeBlock,
+    copy: &'a TypeBlock,
+    ink: &'a Ink,
+    u: f32,
+    floor: f32,
+    head_scale: f32,
+    copy_scale: f32,
+    copy_top: f32,
+    copy_bottom: f32,
+    roots: Vec<Placed>,
+}
+
+impl<'a> Bed<'a> {
+    fn new(
+        (head, copy): (&'a TypeBlock, &'a TypeBlock),
+        ink: &'a Ink,
+        (u, split, floor): (f32, f32, f32),
+    ) -> Self {
+        Self {
+            head,
+            copy,
+            ink,
+            u,
+            floor,
+            head_scale: (head.size / (226.0 * u)).clamp(0.2, 1.2),
+            copy_scale: (copy.size / (41.0 * u)).clamp(0.4, 1.2),
+            copy_top: copy.first_baseline() - copy.cap,
+            copy_bottom: copy.last_baseline(),
+            roots: ink
+                .roots()
+                .into_iter()
+                .map(|root| Placed::new(root, (head, copy), (u, split)))
+                .collect(),
+        }
+    }
+
+    // A drip rooted a little inside the stroke at `placed`, before its kind
+    // sets its length and its shape.
+    fn drip(&self, placed: &Placed) -> DripPlan {
+        let block = if placed.in_head { self.head } else { self.copy };
+        let z = self.u
+            * if placed.in_head {
+                self.head_scale
+            } else {
+                self.copy_scale
+            };
         let root = &placed.root;
         let r = placed.random;
-        let mut drip = DripPlan {
+        DripPlan {
             x: root.x,
-            // Rooted a little inside the stroke.
             y: root.y - (root.thickness * 0.5).min(block.size * 0.045),
             root: ((root.width * 0.5).min(block.size * 0.085) * 1.02).max(block.size * 0.03),
             neck: 3.0 * z,
@@ -215,125 +255,152 @@ pub(super) fn plant(
             power: 1.7,
             from_copy: !placed.in_head,
             spills: false,
-        };
-        change(&mut drip);
-        drips.push(drip);
-    };
-
-    // Runners: heading drips with a clear way down beside the paragraph.
-    let mut runners: Vec<&Placed> = Vec::new();
-    let mut candidates: Vec<&Placed> = roots
-        .iter()
-        .filter(|placed| {
-            placed.in_head
-                && placed.under > -head.cap * 0.2
-                && placed.under < head.size * 0.4
-                && placed.root.thickness > head.size * 0.04
-                && (placed.root.x > copy.right + 12.0 * u || placed.root.x < copy.left - 12.0 * u)
-                && ink
-                    .clear_below(placed.root.x, placed.root.y)
-                    .is_none_or(|clear| placed.root.y + clear > copy_bottom)
-        })
-        .collect();
-    candidates.sort_by(|a, b| b.random[1].total_cmp(&a.random[1]));
-    for placed in candidates {
-        if runners.len() >= RUNNERS {
-            break;
-        }
-        if runners
-            .iter()
-            .all(|runner| (runner.root.x - placed.root.x).abs() >= 34.0 * u)
-        {
-            runners.push(placed);
         }
     }
-    let fattest = runners
-        .iter()
-        .max_by(|a, b| a.random[0].total_cmp(&b.random[0]))
-        .map(|placed| placed.root.x);
-    for placed in &runners {
-        let r = placed.random;
-        let fat = fattest == Some(placed.root.x);
-        let floors = fat || r[0] > 0.55;
-        let z = u * head_scale.max(0.5);
-        add(&mut drips, placed, &|drip| {
+
+    // Whether a heading drip at `placed` has a clear way down beside the
+    // paragraph.
+    fn runs_clear(&self, placed: &Placed) -> bool {
+        let (head, copy, u) = (self.head, self.copy, self.u);
+        let beside = placed.root.x > copy.right + 12.0 * u || placed.root.x < copy.left - 12.0 * u;
+        placed.in_head
+            && placed.under > -head.cap * 0.2
+            && placed.under < head.size * 0.4
+            && placed.root.thickness > head.size * 0.04
+            && beside
+            && self
+                .ink
+                .clear_below(placed.root.x, placed.root.y)
+                .is_none_or(|clear| placed.root.y + clear > self.copy_bottom)
+    }
+
+    // The heading drips that run past the paragraph, apart from each other.
+    fn runners(&self) -> Vec<&Placed> {
+        let mut candidates: Vec<&Placed> = self
+            .roots
+            .iter()
+            .filter(|placed| self.runs_clear(placed))
+            .collect();
+        candidates.sort_by(|a, b| b.random[1].total_cmp(&a.random[1]));
+        let mut runners: Vec<&Placed> = Vec::new();
+        for placed in candidates {
+            if runners.len() >= RUNNERS {
+                break;
+            }
+            if runners
+                .iter()
+                .all(|runner| (runner.root.x - placed.root.x).abs() >= 34.0 * self.u)
+            {
+                runners.push(placed);
+            }
+        }
+        runners
+    }
+
+    // Runners: the fattest and some others reach the floor, the rest stop
+    // in the paragraph.
+    fn run_down(&self, runners: &[&Placed], drips: &mut Vec<DripPlan>) {
+        let fattest = runners
+            .iter()
+            .max_by(|a, b| a.random[0].total_cmp(&b.random[0]))
+            .map(|placed| placed.root.x);
+        let z = self.u * self.head_scale.max(0.5);
+        for placed in runners {
+            let r = placed.random;
+            let fat = fattest == Some(placed.root.x);
+            let floors = fat || r[0] > 0.55;
+            let mut drip = self.drip(placed);
             drip.spills = floors;
             drip.length = if floors {
-                floor + 6.0 * u - drip.y
+                self.floor + 6.0 * self.u - drip.y
             } else {
-                copy_top + (copy_bottom - copy_top) * (0.25 + 0.8 * r[3]) - drip.y
+                self.copy_top + (self.copy_bottom - self.copy_top) * (0.25 + 0.8 * r[3]) - drip.y
             };
             drip.neck = if fat { 4.4 } else { 2.1 + 1.7 * r[4] } * z;
             drip.tip = if fat { 10.5 } else { 5.2 + 3.6 * r[3] } * z;
             drip.delay = 0.06 + 0.2 * r[3];
             drip.power = 1.05 + 1.1 * r[2];
-        });
+            drips.push(drip);
+        }
     }
 
-    // The other heading drips stop above the paragraph, or run into the
-    // line of the headline below.
-    for placed in thin_out(&roots, head, true) {
-        if runners.iter().any(|runner| {
-            runner.line == placed.line && (runner.root.x - placed.root.x).abs() < head.size * 0.12
-        }) {
-            continue;
-        }
+    // How far a heading drip that is no runner falls, or `None` when it
+    // stays a bead: it stops above the paragraph or runs into the line of
+    // the headline below.
+    fn head_length(&self, placed: &Placed) -> Option<f32> {
+        let (head, copy, u) = (self.head, self.copy, self.u);
         let r = placed.random;
-        let clear = ink.clear_below(placed.root.x, placed.root.y);
+        let clear = self.ink.clear_below(placed.root.x, placed.root.y);
         let merges = placed.line + 1 < head.baselines.len()
-            && clear.is_some_and(|clear| placed.root.y + clear < copy_top - copy.size * 0.4);
-        let length = if merges {
+            && clear.is_some_and(|clear| placed.root.y + clear < self.copy_top - copy.size * 0.4);
+        if merges {
             let clear = clear.unwrap_or(0.0);
             if r[1] < 0.14 {
-                continue;
+                return None;
             }
-            if r[1] > 0.34 {
-                clear + 22.0 * u * head_scale
+            return Some(if r[1] > 0.34 {
+                clear + 22.0 * u * self.head_scale
             } else {
                 clear * (0.25 + 0.4 * r[2])
-            }
-        } else {
-            if r[0] < 0.12 {
-                continue;
-            }
-            let room = copy_top - placed.root.y - 5.0 * u;
-            (room * (0.14 + 0.8 * r[2] * r[2]) - 24.0 * u).max(6.0 * u)
-        };
-        add(&mut drips, placed, &|drip| {
-            drip.length = length;
-            drip.neck = (3.2 + 4.8 * r[4] * r[4]) * u * head_scale;
-            drip.tip = (4.6 + 6.6 * r[3] * r[3]) * u * head_scale;
-            drip.delay = 0.12 + 0.5 * r[3];
-            drip.power = 1.2 + 1.4 * r[0];
-        });
+            });
+        }
+        if r[0] < 0.12 {
+            return None;
+        }
+        let room = self.copy_top - placed.root.y - 5.0 * u;
+        Some((room * (0.14 + 0.8 * r[2] * r[2]) - 24.0 * u).max(6.0 * u))
     }
 
-    // The paragraph: short beads, and from its last line a few long ones.
-    let lanes: Vec<f32> = runners.iter().map(|runner| runner.root.x).collect();
-    for placed in thin_out(&roots, copy, false) {
-        let r = placed.random;
-        let last = placed.line + 1 == copy.baselines.len();
-        let long = last
-            && r[1] > 0.74
-            && lanes
-                .iter()
-                .all(|lane| (lane - placed.root.x).abs() > 22.0 * u)
-            && placed.root.y - copy_bottom > -copy.cap * 0.2;
-        let floors = long && r[2] > 0.55;
-        let mut length = if floors {
-            floor + 4.0 * u - placed.root.y
-        } else if long {
-            (24.0 + 46.0 * r[2]) * u
-        } else {
-            (4.0 + 15.0 * r[2] * r[1] + if last { 10.0 * r[3] } else { 0.0 }) * u
-        };
-        let clear = ink.clear_below(placed.root.x, placed.root.y);
-        if let (false, Some(clear)) = (last, clear) {
-            if length > clear - 3.0 * u {
-                length = clear * 0.6;
+    fn stop_in_head(&self, runners: &[&Placed], drips: &mut Vec<DripPlan>) {
+        for placed in thin_out(&self.roots, self.head, true) {
+            if runners.iter().any(|runner| {
+                runner.line == placed.line
+                    && (runner.root.x - placed.root.x).abs() < self.head.size * 0.12
+            }) {
+                continue;
             }
+            let Some(length) = self.head_length(placed) else {
+                continue;
+            };
+            let r = placed.random;
+            let mut drip = self.drip(placed);
+            drip.length = length;
+            drip.neck = (3.2 + 4.8 * r[4] * r[4]) * self.u * self.head_scale;
+            drip.tip = (4.6 + 6.6 * r[3] * r[3]) * self.u * self.head_scale;
+            drip.delay = 0.12 + 0.5 * r[3];
+            drip.power = 1.2 + 1.4 * r[0];
+            drips.push(drip);
         }
-        add(&mut drips, placed, &|drip| {
+    }
+
+    // The paragraph: short beads, and from its last line a few long ones
+    // away from the runners' lanes.
+    fn bead_copy(&self, runners: &[&Placed], drips: &mut Vec<DripPlan>) {
+        let (copy, u) = (self.copy, self.u);
+        for placed in thin_out(&self.roots, copy, false) {
+            let r = placed.random;
+            let last = placed.line + 1 == copy.baselines.len();
+            let long = last
+                && r[1] > 0.74
+                && runners
+                    .iter()
+                    .all(|runner| (runner.root.x - placed.root.x).abs() > 22.0 * u)
+                && placed.root.y - self.copy_bottom > -copy.cap * 0.2;
+            let floors = long && r[2] > 0.55;
+            let mut length = if floors {
+                self.floor + 4.0 * u - placed.root.y
+            } else if long {
+                (24.0 + 46.0 * r[2]) * u
+            } else {
+                (4.0 + 15.0 * r[2] * r[1] + if last { 10.0 * r[3] } else { 0.0 }) * u
+            };
+            let clear = self.ink.clear_below(placed.root.x, placed.root.y);
+            if let (false, Some(clear)) = (last, clear) {
+                if length > clear - 3.0 * u {
+                    length = clear * 0.6;
+                }
+            }
+            let mut drip = self.drip(placed);
             drip.spills = floors;
             drip.length = length;
             drip.neck = if long {
@@ -341,18 +408,18 @@ pub(super) fn plant(
             } else {
                 1.6 + 0.5 * r[4]
             } * u
-                * copy_scale;
+                * self.copy_scale;
             drip.tip = if long {
                 4.0 + 2.8 * r[4]
             } else {
                 2.6 + 1.1 * r[3]
             } * u
-                * copy_scale;
+                * self.copy_scale;
             drip.delay = 0.16 + 0.5 * r[3];
             drip.power = 1.3 + r[0];
-        });
+            drips.push(drip);
+        }
     }
-    drips
 }
 
 struct Placed {

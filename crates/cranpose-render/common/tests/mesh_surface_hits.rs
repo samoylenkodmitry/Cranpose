@@ -9,7 +9,7 @@ use cranpose_foundation::{PointerEvent, PointerEventKind};
 use cranpose_render_common::{HitTestTarget, RenderScene, graph_scene::Scene};
 use cranpose_ui::{
     LayoutEngine, Modifier, Point, Rect, Size,
-    space::{Camera, Mat4, Material, Mesh, MeshSurface, Multisample, Scene3d, Vec3},
+    space::{Camera, Mat4, Material, Mesh, MeshSurface, Scene3d, Vec3},
     widgets::{Box, BoxSpec},
 };
 
@@ -85,12 +85,9 @@ fn probe() -> Probe {
             );
         };
         Box(
-            Modifier::empty().fill_max_size().scene3d(|| Scene3d {
-                camera: camera(),
-                light: None,
-                eye: None,
-                multisample: Multisample::Off,
-            }),
+            Modifier::empty()
+                .fill_max_size()
+                .scene3d(|| Scene3d::new(camera())),
             BoxSpec::default(),
             move || {
                 panel("far", panel_transform(FAR, 0.0));
@@ -190,12 +187,9 @@ fn a_camera_that_moves_moves_where_its_surfaces_take_input() {
         let eye = Rc::clone(&eye);
         let plane = Arc::new(Mesh::plane());
         let id = Box(
-            Modifier::empty().fill_max_size().scene3d(move || Scene3d {
-                camera: camera_at(eye.get()),
-                light: None,
-                eye: None,
-                multisample: Multisample::Off,
-            }),
+            Modifier::empty()
+                .fill_max_size()
+                .scene3d(move || Scene3d::new(camera_at(eye.get()))),
             BoxSpec::default(),
             move || {
                 let plane = Arc::clone(&plane);
@@ -310,12 +304,9 @@ fn wall_scene(inside: impl Fn(&Pressable) + 'static) -> (Scene, Presses) {
         let wall = surface(("wall", WALL, centered(WALL, FAR)));
         let inside = Rc::clone(&inside);
         Box(
-            Modifier::empty().fill_max_size().scene3d(|| Scene3d {
-                camera: camera(),
-                light: None,
-                eye: None,
-                multisample: Multisample::Off,
-            }),
+            Modifier::empty()
+                .fill_max_size()
+                .scene3d(|| Scene3d::new(camera())),
             BoxSpec::default(),
             move || {
                 let (inside, surface) = (Rc::clone(&inside), Rc::clone(&surface));
@@ -494,16 +485,13 @@ pub(crate) fn nested_window() -> Modifier {
     Modifier::empty()
         .absolute_offset(x, y)
         .size(Size { width, height })
-        .scene3d(|| Scene3d {
-            camera: Camera::look_at(
+        .scene3d(|| {
+            Scene3d::new(Camera::look_at(
                 Vec3::new(0.0, 0.0, -NESTED.0),
                 Vec3::ZERO,
                 Vec3::new(0.0, 1.0, 0.0),
                 NESTED.0,
-            ),
-            light: None,
-            eye: None,
-            multisample: Multisample::Off,
+            ))
         })
 }
 

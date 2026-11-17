@@ -225,6 +225,19 @@ pub struct Scene3d {
     pub multisample: Multisample,
 }
 
+impl Scene3d {
+    /// A scene seen through `camera`, with no light, no eye and one sample
+    /// in each pixel.
+    pub fn new(camera: Camera) -> Self {
+        Self {
+            camera,
+            light: None,
+            eye: None,
+            multisample: Multisample::Off,
+        }
+    }
+}
+
 /// How many samples a scene's pass takes in each pixel.
 ///
 /// With one sample, each pixel shows the surface its middle falls on, so the

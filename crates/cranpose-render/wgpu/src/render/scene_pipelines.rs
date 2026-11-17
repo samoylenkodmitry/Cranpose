@@ -62,10 +62,7 @@ impl GpuRenderer {
                 crate::scene_pass::volume_pipeline_job(
                     &self.device,
                     self.pipelines.pipeline_cache.clone(),
-                    (
-                        self.pipelines.composition_format,
-                        self.pipelines.adapter_backend,
-                    ),
+                    self.scene_target(),
                     (variant, samples),
                     (self.scene_pipeline_parts(), kept),
                 )
@@ -89,14 +86,20 @@ impl GpuRenderer {
                 crate::scene_pass::shaded_pipeline_job(
                     &self.device,
                     self.pipelines.pipeline_cache.clone(),
-                    (
-                        self.pipelines.composition_format,
-                        self.pipelines.adapter_backend,
-                    ),
+                    self.scene_target(),
                     (variant, samples),
                     (self.scene_pipeline_parts(), kept),
                 )
             },
+        )
+    }
+
+    // The format the scene's surfaces draw into and the backend that draws
+    // them.
+    fn scene_target(&self) -> (wgpu::TextureFormat, wgpu::Backend) {
+        (
+            self.pipelines.composition_format,
+            self.pipelines.adapter_backend,
         )
     }
 

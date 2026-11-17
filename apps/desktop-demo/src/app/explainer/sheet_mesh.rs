@@ -4,10 +4,25 @@
 // what lies outside it, such as a border round a picture, takes texture
 // coordinates outside 0..1.
 
+use std::sync::Arc;
+
 use cranpose_ui::{
-    space::{Mesh, Vec3},
-    Point, Rect,
+    space::{Material, Mesh, MeshSurface, Vec3},
+    Point, Rect, Size,
 };
+
+use super::figure::world_to_scene;
+
+// A label on `mesh` in a node of size `node`, drawn in its own colours.
+pub(super) fn label_surface(mesh: Mesh, node: Size) -> MeshSurface {
+    MeshSurface {
+        mesh: Arc::new(mesh),
+        transform: world_to_scene(node),
+        material: Material::Unlit,
+        casts_shadow: false,
+        solid: false,
+    }
+}
 
 // A grid of `columns` by one quads over `rect`, its points placed by
 // `place`, which gives each its world position and the normal there.

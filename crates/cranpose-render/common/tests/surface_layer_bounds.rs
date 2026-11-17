@@ -7,7 +7,7 @@ use std::{cell::RefCell, rc::Rc, sync::Arc};
 
 use cranpose_ui::{
     Alignment, Modifier, Point, Size,
-    space::{Material, Mesh, MeshSurface, Multisample, Scene3d, Vec3},
+    space::{Material, Mesh, MeshSurface, Scene3d, Vec3},
     widgets::{Box, BoxSpec},
 };
 
@@ -33,12 +33,9 @@ fn pressed_on_wall(parent: Size, node: Modifier, uv: (f32, f32)) -> Option<Point
     let mut composition = cranpose_ui::run_test_composition(move || {
         let (wall, content) = (wall.clone(), content.clone());
         Box(
-            Modifier::empty().fill_max_size().scene3d(|| Scene3d {
-                camera: camera(),
-                light: None,
-                eye: None,
-                multisample: Multisample::Off,
-            }),
+            Modifier::empty()
+                .fill_max_size()
+                .scene3d(|| Scene3d::new(camera())),
             BoxSpec::default(),
             move || {
                 let (wall, content) = (wall.clone(), content.clone());

@@ -1233,16 +1233,13 @@ fn doorway(content: impl FnMut() + 'static) {
                 width: 128.0,
                 height: 64.0,
             })
-            .scene3d(|| Scene3d {
-                camera: Camera::look_at(
+            .scene3d(|| {
+                Scene3d::new(Camera::look_at(
                     Vec3::new(0.0, 0.0, -NESTED_FOCAL),
                     Vec3::ZERO,
                     Vec3::new(0.0, 1.0, 0.0),
                     NESTED_FOCAL,
-                ),
-                light: None,
-                eye: None,
-                multisample: Multisample::Off,
+                ))
             }),
         BoxSpec::default(),
         content,

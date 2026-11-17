@@ -850,7 +850,6 @@ impl GpuRenderer {
             },
             TEXT_GLYPH_ATLAS_MIN_SIZE,
         );
-        let viewport_uniforms = ViewportUniforms::default();
 
         if cranpose_core::DIAGNOSTICS.glass_material_folds.equals("1") {
             cranpose_ui_graphics::set_glass_material_folds(true);
@@ -1003,7 +1002,7 @@ impl GpuRenderer {
             depth_gate,
             surface_atlas_sizes: crate::frame::SurfaceAtlasSizes::for_backend(adapter_backend),
             text: TextResources::new(text_glyph_atlas, copy_free),
-            viewport_uniforms,
+            viewport_uniforms: ViewportUniforms::default(),
             run_store,
             images: ImageTextures::new(),
             copy_free,

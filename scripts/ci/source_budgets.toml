@@ -4,7 +4,7 @@
 
 [counts]
 too_many_arguments = 10
-private_docs = 12218
+private_docs = 12172
 for_test_fns = 38
 cranpose_env_names = 76
 source_text_checks = 324
@@ -60,7 +60,7 @@ limit = 1000
 "crates/cranpose-render/wgpu/src/frame_graph.rs" = 2346
 "crates/cranpose-render/wgpu/src/mesh_fallback.rs" = 1189
 "crates/cranpose-render/wgpu/src/pipeline.rs" = 1143
-"crates/cranpose-render/wgpu/src/render.rs" = 3126
+"crates/cranpose-render/wgpu/src/render.rs" = 3125
 "crates/cranpose-render/wgpu/src/run_store.rs" = 1574
 "crates/cranpose-render/wgpu/src/scene_pass.rs" = 1441
 "crates/cranpose-services/src/http.rs" = 1348

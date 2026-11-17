@@ -11,7 +11,7 @@ use cranpose_testing::robot::TestRenderer;
 use cranpose_ui::{
     BasicTextField, Box, BoxSpec, Column, ColumnSpec, Modifier, ScrollState, Size, TextFieldState,
     TextStyle,
-    space::{Camera, Mat4, Material, Mesh, MeshSurface, Multisample, Scene3d, Vec3},
+    space::{Mat4, Material, Mesh, MeshSurface, Vec3},
 };
 
 const WINDOW: Size = Size {
@@ -32,17 +32,7 @@ fn field() {
     Box(
         Modifier::empty()
             .required_size(WINDOW)
-            .scene3d(move || Scene3d {
-                camera: Camera::look_at(
-                    middle + Vec3::new(0.0, 0.0, -600.0),
-                    middle,
-                    Vec3::new(0.0, 1.0, 0.0),
-                    600.0,
-                ),
-                light: None,
-                eye: None,
-                multisample: Multisample::Off,
-            }),
+            .scene3d(move || crate::scene_facing::facing(middle)),
         BoxSpec::default(),
         move || {
             let plane = Arc::clone(&plane);
@@ -102,10 +92,7 @@ fn scroll_after_click() -> (f32, f32) {
             );
         },
     );
-    shell.set_viewport(WINDOW.width, WINDOW.height);
-    shell.set_buffer_size(WINDOW.width as u32, WINDOW.height as u32);
-    let mut frame = 16_000_000u64;
-    shell.update_at_frame_time_nanos(frame);
+    let mut frame = crate::test_window::first_frame(&mut shell, WINDOW);
     let scroll = slot.borrow().expect("the page composed");
     scroll.dispatch_raw_delta(WINDOW.height);
     for _ in 0..3 {

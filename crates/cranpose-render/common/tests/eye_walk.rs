@@ -10,7 +10,7 @@ use cranpose_foundation::{PointerEvent, PointerEventKind};
 use cranpose_render_common::{HitTestTarget, RenderScene};
 use cranpose_ui::{
     Modifier, Point,
-    space::{Camera, EyePose, Mat4, Multisample, Ray, Scene3d, Vec3},
+    space::{Camera, EyePose, Mat4, Ray, Scene3d, Vec3},
     widgets::{Box, BoxSpec},
 };
 
@@ -100,16 +100,13 @@ fn an_eye_sees_through_doorways_as_deep_as_they_show() {
     let mut composition = cranpose_ui::run_test_composition(move || {
         let surface = pressable(Rc::clone(&sink));
         Box(
-            Modifier::empty().fill_max_size().scene3d(|| Scene3d {
-                camera: Camera::look_at(
+            Modifier::empty().fill_max_size().scene3d(|| {
+                Scene3d::new(Camera::look_at(
                     Vec3::new(0.0, 0.0, -1000.0),
                     Vec3::ZERO,
                     Vec3::new(0.0, 1.0, 0.0),
                     FOCAL_LENGTH,
-                ),
-                light: None,
-                eye: None,
-                multisample: Multisample::Off,
+                ))
             }),
             BoxSpec::default(),
             move || {
@@ -142,14 +139,11 @@ fn a_doorway_off_screen_shows_nothing_of_its_space() {
         let turn = Rc::clone(&turn);
         let kept = Rc::clone(&kept);
         let id = Box(
-            Modifier::empty().fill_max_size().scene3d(move || Scene3d {
-                camera: camera_looking(
+            Modifier::empty().fill_max_size().scene3d(move || {
+                Scene3d::new(camera_looking(
                     Vec3::new(0.0, 0.0, -1000.0),
                     Vec3::new(turn.get().sin(), 0.0, turn.get().cos()),
-                ),
-                light: None,
-                eye: None,
-                multisample: Multisample::Off,
+                ))
             }),
             BoxSpec::default(),
             move || {

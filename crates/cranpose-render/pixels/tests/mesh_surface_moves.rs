@@ -7,7 +7,7 @@ use std::{cell::Cell, rc::Rc, sync::Arc};
 use cranpose_render_pixels::{Scene, draw_scene};
 use cranpose_ui::{
     Color, LayoutEngine, Modifier, Size,
-    space::{Camera, Mat4, Material, Mesh, MeshSurface, MeshSurfaces, Multisample, Scene3d, Vec3},
+    space::{Camera, Mat4, Material, Mesh, MeshSurface, MeshSurfaces, Scene3d, Vec3},
     widgets::{Box, BoxSpec},
 };
 
@@ -61,16 +61,13 @@ fn red_where_the_owner_moves(second: Option<f32>) -> [bool; 3] {
                     width: WIDTH as f32,
                     height: HEIGHT as f32,
                 })
-                .scene3d(|| Scene3d {
-                    camera: Camera::look_at(
+                .scene3d(|| {
+                    Scene3d::new(Camera::look_at(
                         Vec3::new(0.0, 0.0, -FOCAL_LENGTH),
                         Vec3::ZERO,
                         Vec3::new(0.0, 1.0, 0.0),
                         FOCAL_LENGTH,
-                    ),
-                    light: None,
-                    eye: None,
-                    multisample: Multisample::Off,
+                    ))
                 }),
             BoxSpec::default(),
             move || {

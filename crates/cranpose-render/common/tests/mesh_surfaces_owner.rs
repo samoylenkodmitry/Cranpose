@@ -7,7 +7,7 @@ use std::sync::Arc;
 use cranpose_render_common::{HitTestTarget, RenderScene};
 use cranpose_ui::{
     Modifier, Rect,
-    space::{Material, Mesh, MeshSurface, MeshSurfaces, Multisample, Scene3d, Vec3},
+    space::{Material, Mesh, MeshSurface, MeshSurfaces, Scene3d, Vec3},
     widgets::{Box, BoxSpec},
 };
 
@@ -41,12 +41,9 @@ fn the_owner_places_the_content_of_a_layer_on_two_meshes() {
     let mut composition = cranpose_ui::run_test_composition(move || {
         let plane = Arc::new(Mesh::plane());
         Box(
-            Modifier::empty().fill_max_size().scene3d(|| Scene3d {
-                camera: camera(),
-                light: None,
-                eye: None,
-                multisample: Multisample::Off,
-            }),
+            Modifier::empty()
+                .fill_max_size()
+                .scene3d(|| Scene3d::new(camera())),
             BoxSpec::default(),
             move || {
                 let plane = Arc::clone(&plane);

@@ -10,7 +10,7 @@ use cranpose_testing::robot::TestRenderer;
 use cranpose_ui::{
     Box, BoxSpec, Column, ColumnSpec, Modifier, Size, Text, TextStyle,
     selection_container::SelectionRegistrar,
-    space::{Camera, Mat4, Material, Mesh, MeshSurface, Multisample, Scene3d, Vec3},
+    space::{Mat4, Material, Mesh, MeshSurface, Vec3},
     text::TextUnit,
     widgets::{SelectionContainer, local_selection_registrar},
 };
@@ -138,17 +138,7 @@ fn selected_after_drag_over_first_line(shown: Shown, pace: Pace) -> String {
                     Box(
                         Modifier::empty()
                             .required_size(scene)
-                            .scene3d(move || Scene3d {
-                                camera: Camera::look_at(
-                                    middle + Vec3::new(0.0, 0.0, -600.0),
-                                    middle,
-                                    Vec3::new(0.0, 1.0, 0.0),
-                                    600.0,
-                                ),
-                                light: None,
-                                eye: None,
-                                multisample: Multisample::Off,
-                            }),
+                            .scene3d(move || crate::scene_facing::facing(middle)),
                         BoxSpec::default(),
                         move || {
                             let seen = Rc::clone(&seen);
@@ -170,10 +160,7 @@ fn selected_after_drag_over_first_line(shown: Shown, pace: Pace) -> String {
             );
         },
     );
-    shell.set_viewport(WINDOW.width, WINDOW.height);
-    shell.set_buffer_size(WINDOW.width as u32, WINDOW.height as u32);
-    let mut frame = 16_000_000u64;
-    shell.update_at_frame_time_nanos(frame);
+    let mut frame = crate::test_window::first_frame(&mut shell, WINDOW);
     let row = shown.row(LINE_HEIGHT * 0.5);
     let path: Vec<f32> = match pace {
         Pace::FramePerMove => vec![1.0, 80.0, 200.0],
