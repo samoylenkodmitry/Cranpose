@@ -29,5 +29,6 @@ mod surface_layer_bounds;
 mod teardown_survivors;
 mod text_decorations;
 mod text_glyph_fallback;
+mod text_ownership;
 mod text_updates;
 mod wear_faded_row_composite;
