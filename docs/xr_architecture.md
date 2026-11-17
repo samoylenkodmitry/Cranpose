@@ -62,8 +62,8 @@ Cranpose developers too:
   `XrFrame`, which holds the head, the eyes and the controllers. See "The headset's state".
 - `local_haptics()`: the `Haptics` handle that vibrates a hand's controller.
 - `Orbiter`: content attached to the edge of a panel, such as a handle or a toolbar.
-- `SubspaceModifier`: `width`, `height`, `depth`, `size`, `offset`, `rotate`, `movable`,
-  `resizable`, `fill_max_size`, `padding`.
+- `SubspaceModifier`: `width`, `height`, `depth`, `size`, `offset`, `rotate`, `with_pose`,
+  `movable`, `movable_with`, `resizable`, `fill_max_size`, `padding`.
 - `SpatialRoundedCornerShape`: the shape of a panel.
 
 Jetpack XR Compose shows 3D models through SceneCore entities. Cranpose has its own 3D: a
@@ -81,6 +81,26 @@ on. The backend picks how the runtime shows it:
 - The blend mode `ALPHA_BLEND` (Android XR, Pico, Magic Leap): the frame's blend mode is
   `ALPHA_BLEND` while the opacity is above 0 and `OPAQUE` otherwise. This path has no dimming.
 - Neither: the capability is off and the app's own background shows.
+
+## Carrying a panel
+
+A `movable` panel or surface has a handle under it. A controller's ray that points at the handle
+grabs the panel when its trigger goes down, and the panel follows the controller until the trigger
+goes up. The thumbstick pushes it away or pulls it near.
+
+`movable_with(MovePolicy)` follows Jetpack XR's `movable(movePolicy = ...)`. `MovePolicy::system`
+lets the headset move the panel and calls `on_move` with each step. `MovePolicy::custom` only
+reports the steps, and the app moves the panel by setting its `SubspaceModifier`. A
+`SpatialMoveEvent` has the phase (`Start`, `Moving` or `End`), the new pose and the pose of the
+event before. The pose is in meters and relative to the origin of the panel's subspace. In the frame
+loop the pointer makes one step for the grab, one for each frame in which the panel's pose changes
+and one for the release. A controller that the runtime stops tracking ends the carry with an `End`
+event at the last pose. The callbacks run on the thread of the composition, with no borrow of the
+space held.
+
+The panel keeps the pose that the user gave it, relative to its subspace's origin, until it leaves
+the composition. `SubspaceModifier::with_pose` takes the pose of an event, so an app that saves the
+last `End` pose places the panel there when it starts again.
 
 ## External surfaces
 

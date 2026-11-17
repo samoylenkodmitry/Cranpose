@@ -17,11 +17,12 @@ fn desktop_and_cursor(cursor: Pose) -> Space {
     let space = Space::new();
     cranpose_testing::run_test_composition(|_| {
         let (cursor_panel, surface) = (space.new_panel(), space.new_panel());
-        space.place(cursor_panel, [20.0, 20.0], cursor);
+        space.place(cursor_panel, [20.0, 20.0], Pose::IDENTITY, cursor);
         space.place_surface(
             surface,
             StereoMode::Mono,
             [2000.0, 1125.0],
+            Pose::IDENTITY,
             Pose::at([0.0, 0.0, -1.0]),
         );
     });

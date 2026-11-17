@@ -1,5 +1,17 @@
+use std::{cell::RefCell, rc::Rc};
+
+use cranpose_core::{CompositionLocalProvider, remember};
+use cranpose_testing::{
+    create_headless_robot_test,
+    robot::{RobotTestRule, TestRenderer},
+};
+
 use super::*;
-use crate::{Pose, StereoMode, space::Shape};
+use crate::{
+    MovePolicy, Pose, SpatialMoveEvent, SpatialMoveEventType, SpatialPanel, StereoMode,
+    SubspaceModifier,
+    space::{SUBSPACE_ORIGIN, Shape, Space, local_space},
+};
 
 // A panel of 800 by 500 dp a meter ahead, at the atlas's top.
 const PANEL: PanelSlot = PanelSlot {
@@ -28,6 +40,23 @@ fn aim(x: f32, yaw: f32, trigger: f32) -> Option<Aim> {
         ray: Ray {
             origin: [x, 0.0, 0.0],
             direction: [sin, 0.0, -cos],
+        },
+        pose: Pose::at([x, 0.0, 0.0]),
+        trigger,
+        stick: 0.0,
+    })
+}
+
+// A controller at `x` that points at the handle under `slot`'s panel, with its trigger pulled by
+// `trigger`.
+fn handle_aim(slot: &PanelSlot, x: f32, trigger: f32) -> Option<Aim> {
+    let (handle, _) = crate::carry::handle_pose(slot);
+    let [hx, hy, hz] = handle.position;
+    let length = (hx * hx + hy * hy + hz * hz).sqrt();
+    Some(Aim {
+        ray: Ray {
+            origin: [x, 0.0, 0.0],
+            direction: [hx / length, hy / length, hz / length],
         },
         pose: Pose::at([x, 0.0, 0.0]),
         trigger,
@@ -192,34 +221,42 @@ fn a_pull_on_a_handle_carries_the_panel() {
         shape: Shape::Flat,
         ..PANEL
     };
-    // A controller at `x` that points at the handle under the panel
-    let at_handle = |x: f32, trigger: f32| {
-        let (handle, _) = crate::carry::handle_pose(&movable);
-        let [hx, hy, hz] = handle.position;
-        let length = (hx * hx + hy * hy + hz * hz).sqrt();
-        Some(Aim {
-            ray: Ray {
-                origin: [x, 0.0, 0.0],
-                direction: [hx / length, hy / length, hz / length],
-            },
-            pose: Pose::at([x, 0.0, 0.0]),
-            trigger,
-            stick: 0.0,
-        })
-    };
+    let at_handle = |x: f32, trigger: f32| handle_aim(&movable, x, trigger);
     let mut frames = Frames::default();
     let (events, _) = frames.update([None, at_handle(0.0, 0.0)], &[movable]);
     assert!(events.is_empty());
     assert_eq!(frames.pointer.handle(), Some(1));
     frames.update([None, at_handle(0.0, 1.0)], &[movable]);
+    assert_eq!(
+        frames.pointer.moves(),
+        [PanelMove {
+            panel: 1,
+            event_type: SpatialMoveEventType::Start,
+            pose: movable.pose,
+        }]
+    );
     let (events, cursor) = frames.update([None, at_handle(0.1, 1.0)], &[movable]);
     assert!(events.is_empty());
     assert_eq!(cursor, None);
-    let (panel, pose) = frames.pointer.moved().expect("the panel moves");
-    assert_eq!(panel, 1);
-    assert!((pose.position[0] - 0.1).abs() < 1e-4);
+    let [moving] = *frames.pointer.moves() else {
+        panic!("the panel moves once: {:?}", frames.pointer.moves());
+    };
+    assert_eq!(moving.panel, 1);
+    assert_eq!(moving.event_type, SpatialMoveEventType::Moving);
+    assert!((moving.pose.position[0] - 0.1).abs() < 1e-4);
+    frames.update([None, at_handle(0.1, 1.0)], &[movable]);
+    assert!(
+        frames.pointer.moves().is_empty(),
+        "a still panel reports nothing"
+    );
     frames.update([None, at_handle(0.1, 0.0)], &[movable]);
-    assert_eq!(frames.pointer.moved(), None);
+    assert_eq!(
+        frames.pointer.moves(),
+        [PanelMove {
+            event_type: SpatialMoveEventType::End,
+            ..moving
+        }]
+    );
 }
 
 #[test]
@@ -260,4 +297,107 @@ fn a_surface_stops_the_ray_and_takes_no_pointer_events() {
     let (events, cursor) = frames.update([None, aim(0.0, 0.0, 1.0)], &panels);
     assert!(events.is_empty());
     assert_eq!(cursor, None);
+}
+
+// A headset with one panel of 400 by 300 dp that the content places with `modifier`. The panel
+// leaves with the composition, so the test holds the robot that runs it.
+fn headset(modifier: SubspaceModifier) -> (RobotTestRule<TestRenderer>, Space) {
+    let held = Rc::new(RefCell::new(None));
+    let keep = Rc::clone(&held);
+    let mut robot = create_headless_robot_test(500, 400, move || {
+        let space = remember(Space::new).with(Clone::clone);
+        keep.replace(Some(space.clone()));
+        let modifier = modifier.clone();
+        CompositionLocalProvider([local_space().provides(Some(space))], move || {
+            SpatialPanel(modifier, || {});
+        });
+    });
+    robot.wait_for_idle();
+    let space = held.take().expect("the content composed");
+    (robot, space)
+}
+
+// The user grabs the handle, carries the panel 10 cm to the right in two frames and lets go, as
+// the frame loop of the headset runs it.
+fn carry_right(space: &Space) {
+    let mut pointer = Pointer::default();
+    for (frame, (x, trigger)) in [(0.0, 0.0), (0.0, 1.0), (0.05, 1.0), (0.1, 1.0), (0.1, 0.0)]
+        .into_iter()
+        .enumerate()
+    {
+        let aim = handle_aim(&space.panels()[0], x, trigger);
+        let time = Duration::from_millis(10 * frame as u64);
+        pointer.update([None, aim], time, &space.panels());
+        for step in pointer.moves() {
+            space.carry(step);
+        }
+    }
+}
+
+fn close(a: &Pose, b: &Pose) -> bool {
+    let near = |x: &[f32], y: &[f32]| x.iter().zip(y).all(|(x, y)| (x - y).abs() < 1e-4);
+    near(&a.position, &b.position) && near(&a.orientation, &b.orientation)
+}
+
+#[test]
+fn a_carried_panel_tells_the_app_its_pose_and_takes_it_back_at_the_next_start() {
+    let events = Rc::new(RefCell::new(Vec::<SpatialMoveEvent>::new()));
+    let heard = Rc::clone(&events);
+    let policy = MovePolicy::system(move |event| heard.borrow_mut().push(event));
+    let (_robot, space) = headset(
+        SubspaceModifier::new()
+            .size(400.0, 300.0)
+            .movable_with(policy),
+    );
+    carry_right(&space);
+
+    let events = events.borrow();
+    let types: Vec<_> = events.iter().map(|event| event.event_type).collect();
+    assert_eq!(
+        types,
+        [
+            SpatialMoveEventType::Start,
+            SpatialMoveEventType::Moving,
+            SpatialMoveEventType::Moving,
+            SpatialMoveEventType::End,
+        ]
+    );
+    // The poses are relative to the subspace's origin, where the panel started
+    assert!(close(&events[0].pose, &Pose::IDENTITY));
+    assert_eq!(events[0].previous_pose, events[0].pose);
+    assert!((events[2].pose.position[0] - 0.1).abs() < 1e-4);
+    assert_eq!(events[2].previous_pose, events[1].pose);
+    assert_eq!(events[3].pose, events[2].pose);
+    let carried = space.panels()[0].pose;
+    assert!(close(&carried, &SUBSPACE_ORIGIN.then(&events[3].pose)));
+
+    // The next run of the app places the panel where the user left it, from the saved pose
+    let saved = events[3].pose;
+    let (_second, restored) = headset(
+        SubspaceModifier::new()
+            .size(400.0, 300.0)
+            .with_pose(saved)
+            .movable(),
+    );
+    assert!(close(&restored.panels()[0].pose, &carried));
+}
+
+#[test]
+fn a_custom_policy_leaves_the_pose_to_the_app() {
+    let events = Rc::new(RefCell::new(Vec::<SpatialMoveEvent>::new()));
+    let heard = Rc::clone(&events);
+    let policy = MovePolicy::custom(move |event| heard.borrow_mut().push(event));
+    let (_robot, space) = headset(
+        SubspaceModifier::new()
+            .size(400.0, 300.0)
+            .movable_with(policy),
+    );
+    let start = space.panels()[0].pose;
+    carry_right(&space);
+    assert_eq!(events.borrow().len(), 4);
+    assert_eq!(
+        space.panels()[0].pose,
+        start,
+        "the modifier still places the panel"
+    );
 }

@@ -6,7 +6,7 @@ use cranpose::{ExternalSurface, prelude::*};
 
 use crate::{
     StereoMode, SubspaceModifier,
-    space::{SUBSPACE_ORIGIN, Space, local_space},
+    space::{Space, local_space, local_subspace_origin},
     subspace_modifier::DEFAULT_PANEL_SIZE,
 };
 
@@ -109,14 +109,16 @@ fn PlacedSurface(
         move || space.new_panel()
     })
     .with(|panel| *panel);
+    let origin = local_subspace_origin().current();
     space.place_surface(
         panel,
         stereo_mode,
         size,
-        SUBSPACE_ORIGIN.then(&modifier.pose()),
+        origin,
+        origin.then(&modifier.pose()),
     );
     let id = panel.id;
-    space.set_mobility(id, modifier.mobility());
+    space.set_move_policy(id, modifier.move_policy());
     DisposableEffect(id, move |_| {
         DisposableEffectResult::new(move || space.remove(id))
     });

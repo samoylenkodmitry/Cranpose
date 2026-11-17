@@ -42,6 +42,7 @@ mod haptics;
 mod headset_properties;
 mod interaction_profile;
 mod locals;
+mod move_policy;
 #[cfg(any(test, headset))]
 mod pointer;
 mod pose;
@@ -54,6 +55,7 @@ mod spatial_curved_row;
 mod spatial_environment;
 mod spatial_external_surface;
 mod spatial_frame_effect;
+mod spatial_move_event;
 mod spatial_panel;
 mod stereo_mode;
 mod stream_source;
@@ -84,6 +86,7 @@ pub use hand::Hand;
 pub use haptics::{Haptics, Vibration, local_haptics};
 pub use headset_properties::{EyeImageSize, HeadsetProperties, local_headset_properties};
 pub use interaction_profile::InteractionProfile;
+pub use move_policy::MovePolicy;
 #[cfg(all(headset, target_os = "android"))]
 #[doc(hidden)]
 pub use openxr::run;
@@ -100,6 +103,7 @@ pub use spatial_curved_row::SpatialCurvedRow;
 pub use spatial_environment::{SpatialEnvironment, local_spatial_environment};
 pub use spatial_external_surface::{SpatialExternalSurface, SpatialExternalSurfaceScope};
 pub use spatial_frame_effect::SpatialFrameEffect;
+pub use spatial_move_event::{SpatialMoveEvent, SpatialMoveEventType};
 pub use spatial_panel::SpatialPanel;
 pub use stereo_mode::StereoMode;
 pub use stream_stats::{StreamCounts, StreamStats};

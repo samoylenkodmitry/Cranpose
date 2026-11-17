@@ -3,11 +3,11 @@
 use std::time::Duration;
 
 use crate::{
-    Pose, Ray,
+    Pose, Ray, SpatialMoveEventType,
     aim_filter::{AimFilter, angle_between},
     carry::{Carry, handle_hit},
     ray::Beam,
-    space::{Cursor, Mobility, PanelKind, PanelSlot},
+    space::{Cursor, Mobility, PanelKind, PanelMove, PanelSlot},
 };
 
 // A trigger counts as down above PRESS and as up below RELEASE, so a trigger held near one value
@@ -195,6 +195,9 @@ struct Press {
 struct Carried {
     panel: u64,
     carry: Carry,
+    // The panel's pose in the last step, which a step that ends the carry repeats when the
+    // controller is lost
+    pose: Pose,
 }
 
 // The pointer. One controller drives it at a time: the one whose trigger went down last, or
@@ -206,8 +209,8 @@ pub(crate) struct Pointer {
     hands: [Hand; 2],
     press: Option<Press>,
     carried: Option<Carried>,
-    // The carried panel's pose in this frame
-    moved: Option<(u64, Pose)>,
+    // The steps of the carry in this frame, kept so a frame does not allocate
+    moves: Vec<PanelMove>,
     // The time of the frame before
     time: Option<Duration>,
     position: Option<(f32, f32)>,
@@ -224,7 +227,7 @@ impl Pointer {
         panels: &[PanelSlot],
     ) -> (&[PointerEvent], Option<Cursor>) {
         self.events.clear();
-        self.moved = None;
+        self.moves.clear();
         let dt = self
             .time
             .map_or(0.0, |last| time.saturating_sub(last).as_secs_f32());
@@ -237,7 +240,7 @@ impl Pointer {
                 Some(slot) => self.grab(&hand, &slot),
                 None => self.pull(&hand, time, panels),
             },
-            Trigger::Up if self.carried.take().is_some() => self.hover(hand.content_hit),
+            Trigger::Up if self.carried.is_some() => self.put_down(&hand),
             Trigger::Up if self.press.is_some() => {
                 self.events.push(PointerEvent::Release);
                 self.press = None;
@@ -256,9 +259,10 @@ impl Pointer {
         (&self.events, cursor)
     }
 
-    // The panel that the user carries in this frame and its new pose.
-    pub(crate) fn moved(&self) -> Option<(u64, Pose)> {
-        self.moved
+    // The steps of the user's carry in this frame: the grab, the new pose of each frame in which
+    // the panel moved, and the release.
+    pub(crate) fn moves(&self) -> &[PanelMove] {
+        &self.moves
     }
 
     // The panel whose handle the pointer carries or would grab.
@@ -314,7 +318,9 @@ impl Pointer {
         self.carried = Some(Carried {
             panel: slot.id,
             carry: Carry::grab(&aim, &slot.pose),
+            pose: slot.pose,
         });
+        self.step(slot.id, SpatialMoveEventType::Start, slot.pose);
         self.hover(None);
     }
 
@@ -325,7 +331,28 @@ impl Pointer {
         };
         let carry = &mut carried.carry;
         carry.push(hand.stick * PUSH_SPEED * carry.distance() * dt);
-        self.moved = Some((carried.panel, carry.pose(&aim)));
+        let pose = carry.pose(&aim);
+        if pose != carried.pose {
+            carried.pose = pose;
+            let panel = carried.panel;
+            self.step(panel, SpatialMoveEventType::Moving, pose);
+        }
+    }
+
+    // The trigger went up while the user carried a panel, or the controller was lost.
+    fn put_down(&mut self, hand: &Hand) {
+        if let Some(carried) = self.carried.take() {
+            self.step(carried.panel, SpatialMoveEventType::End, carried.pose);
+        }
+        self.hover(hand.content_hit);
+    }
+
+    fn step(&mut self, panel: u64, event_type: SpatialMoveEventType, pose: Pose) {
+        self.moves.push(PanelMove {
+            panel,
+            event_type,
+            pose,
+        });
     }
 
     // Moves with the ray: while no press is on, or once a press drags.

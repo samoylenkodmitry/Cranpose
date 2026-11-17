@@ -27,6 +27,30 @@ pixels once at the display's resolution, so its text stays sharp. A dp is a mill
 room. The controllers point at the panels, and their triggers press. Outside a headset the
 panels draw flat, side by side.
 
+A panel or a surface with `SubspaceModifier::movable()` has a handle under it, which a controller
+grabs and carries. `movable_with(MovePolicy::system(...))` calls back with a `SpatialMoveEvent`
+for the grab (`Start`), each change of the pose (`Moving`) and the release (`End`). The event's
+pose is in meters, relative to the subspace's origin. An app that saves it places the panel there
+at its next start with `SubspaceModifier::with_pose`.
+
+```rust,ignore
+let pose = saved_pose.unwrap_or(Pose::IDENTITY);
+SpatialPanel(
+    SubspaceModifier::new()
+        .size(800.0, 500.0)
+        .with_pose(pose)
+        .movable_with(MovePolicy::system(move |event| {
+            if event.event_type == SpatialMoveEventType::End {
+                save(event.pose);
+            }
+        })),
+    || {},
+);
+```
+
+`MovePolicy::custom` leaves the pose to the app: the headset reports the steps, and the app feeds
+them into the panel's modifier.
+
 A `SpatialCurvedRow` bends the panels inside it around the viewer, as a cylinder layer of the
 compositor. `local_spatial_environment()` gives the app the room around its panels: where the
 headset has passthrough, `set_preferred_passthrough_opacity(Some(1.0))` shows it. Check

@@ -156,8 +156,8 @@ impl Immersive {
         let (events, cursor) = self.pointer.update(aims, time, &self.space.panels());
         send(&mut self.guest, events);
         self.space.set_cursor(cursor);
-        if let Some((panel, pose)) = self.pointer.moved() {
-            self.space.move_panel(panel, pose);
+        for step in self.pointer.moves() {
+            self.space.carry(step);
         }
         self.follow_environment();
         let PanelFrame {

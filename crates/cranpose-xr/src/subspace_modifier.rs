@@ -1,6 +1,6 @@
 //! The size, place and turn of a spatial composable.
 
-use crate::{Pose, pose::turn_degrees, space::Mobility};
+use crate::{MovePolicy, Pose, pose::turn_degrees};
 
 /// Meters in one dp. In a subspace one dp is a millimeter, so a panel of 800 by 500 dp is 80 by
 /// 50 centimeters.
@@ -18,12 +18,13 @@ pub const DEFAULT_PANEL_SIZE: [f32; 2] = [800.0, 500.0];
 ///     .size(800.0, 500.0)
 ///     .offset(0.0, 100.0, 0.0);
 /// ```
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct SubspaceModifier {
     size: [Option<f32>; 2],
+    // The place in meters
     offset: [f32; 3],
     orientation: [f32; 4],
-    mobility: Mobility,
+    move_policy: Option<MovePolicy>,
 }
 
 impl Default for SubspaceModifier {
@@ -39,7 +40,7 @@ impl SubspaceModifier {
             size: [None; 2],
             offset: [0.0; 3],
             orientation: [0.0, 0.0, 0.0, 1.0],
-            mobility: Mobility::Fixed,
+            move_policy: None,
         }
     }
 
@@ -62,7 +63,7 @@ impl SubspaceModifier {
 
     /// Moves the content by `x` to the right, `y` up and `z` toward the viewer, in dp.
     pub const fn offset(mut self, x: f32, y: f32, z: f32) -> Self {
-        self.offset = [x, y, z];
+        self.offset = [x * METERS_PER_DP, y * METERS_PER_DP, z * METERS_PER_DP];
         self
     }
 
@@ -74,17 +75,33 @@ impl SubspaceModifier {
         self
     }
 
-    /// Lets the user carry the content with a controller. A handle under the content grabs it. The
-    /// place that the user gives replaces the place of this modifier until the content leaves
-    /// the composition. Jetpack XR's `movable`.
-    pub const fn movable(mut self) -> Self {
-        self.mobility = Mobility::Movable;
+    /// Places the content at `pose` in its subspace, in meters. It replaces the offset and the
+    /// turn of this modifier. A [`SpatialMoveEvent`](crate::SpatialMoveEvent) reports poses in
+    /// this frame, so an app that saves the pose of its content restores it with this method.
+    pub const fn with_pose(mut self, pose: Pose) -> Self {
+        self.offset = pose.position;
+        self.orientation = pose.orientation;
         self
     }
 
-    // Whether the user may carry the content.
-    pub(crate) const fn mobility(&self) -> Mobility {
-        self.mobility
+    /// Lets the user carry the content with a controller. A handle under the content grabs it. The
+    /// place that the user gives replaces the place of this modifier until the content leaves
+    /// the composition. Jetpack XR's `movable`.
+    pub fn movable(self) -> Self {
+        self.movable_with(MovePolicy::default())
+    }
+
+    /// Lets the user carry the content as [`movable`](Self::movable) does, and applies `policy`
+    /// to the move: a callback that receives the pose of each step, and who sets the content's
+    /// pose. Jetpack XR's `movable` with a `movePolicy`.
+    pub fn movable_with(mut self, policy: MovePolicy) -> Self {
+        self.move_policy = Some(policy);
+        self
+    }
+
+    // What the content does when the user carries it, or `None` for content that stays.
+    pub(crate) fn move_policy(&self) -> Option<&MovePolicy> {
+        self.move_policy.as_ref()
     }
 
     /// The size in dp, with `fallback` for what the modifier leaves out.
@@ -98,7 +115,7 @@ impl SubspaceModifier {
     /// The pose this modifier gives in its parent's frame, in meters.
     pub fn pose(&self) -> Pose {
         Pose {
-            position: self.offset.map(|dp| dp * METERS_PER_DP),
+            position: self.offset,
             orientation: self.orientation,
         }
     }

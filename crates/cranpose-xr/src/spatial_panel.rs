@@ -4,7 +4,7 @@ use cranpose::prelude::*;
 
 use crate::{
     SubspaceModifier,
-    space::{Dot, SUBSPACE_ORIGIN, Shape, Space, local_space},
+    space::{Dot, Shape, Space, local_space, local_subspace_origin},
     spatial_curved_row::local_curve,
     subspace_modifier::DEFAULT_PANEL_SIZE,
 };
@@ -48,13 +48,14 @@ fn PlacedPanel(
         move || space.new_panel()
     })
     .with(|panel| *panel);
+    let origin = local_subspace_origin().current();
     let (pose, shape) = match local_curve().current() {
         Some(curve) => curve.place(&modifier),
-        None => (SUBSPACE_ORIGIN.then(&modifier.pose()), Shape::Flat),
+        None => (origin.then(&modifier.pose()), Shape::Flat),
     };
-    space.place(panel, size, pose);
+    space.place(panel, size, origin, pose);
     let id = panel.id;
-    space.set_mobility(id, modifier.mobility());
+    space.set_move_policy(id, modifier.move_policy());
     space.set_shape(id, shape);
     DisposableEffect(id, move |_| {
         DisposableEffectResult::new(move || space.remove(id))
