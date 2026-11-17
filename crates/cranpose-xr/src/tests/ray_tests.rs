@@ -71,3 +71,83 @@ fn a_turned_panel_takes_the_hit_in_its_own_axes() {
         .expect("the ray hits");
     assert!((hit.u - 0.75).abs() < 1e-5, "u {}", hit.u);
 }
+
+// A panel 1.2 m wide along its arc and 0.4 m tall, a meter ahead, on a cylinder of one meter
+// around the origin.
+const CURVED: [f32; 2] = [1.2, 0.4];
+
+fn curved_hit(ray: Ray) -> Option<PanelHit> {
+    ray.hit_cylinder(&PANEL, CURVED, 1.0)
+}
+
+fn toward(degrees: f32) -> Ray {
+    let (sin, cos) = degrees.to_radians().sin_cos();
+    Ray {
+        origin: [0.0; 3],
+        direction: [sin, 0.0, -cos],
+    }
+}
+
+#[test]
+fn a_ray_from_the_axis_meets_the_curve_at_the_radius_and_the_arc_length() {
+    let hit = curved_hit(toward(20.0)).expect("the ray hits");
+    assert!(
+        (hit.distance - 1.0).abs() < 1e-5,
+        "distance {}",
+        hit.distance
+    );
+    // 20 degrees of a meter-wide circle are 0.349 m of arc
+    assert!(
+        (hit.u - (0.5 + 0.349_066 / 1.2)).abs() < 1e-4,
+        "u {}",
+        hit.u
+    );
+    let flat = toward(20.0)
+        .hit_panel(&PANEL, CURVED)
+        .expect("the ray hits a flat panel");
+    assert!(
+        flat.u - hit.u > 0.01,
+        "a flat panel puts the hit farther out"
+    );
+}
+
+#[test]
+fn a_ray_from_beside_the_axis_meets_the_curve_in_front_of_it() {
+    let ray = Ray {
+        origin: [0.3, 0.1, 0.0],
+        direction: [0.0, 0.0, -1.0],
+    };
+    let hit = curved_hit(ray).expect("the ray hits");
+    // The cylinder is at z = 1 - sqrt(1 - 0.3^2), so the hit is that far down the ray
+    let expected = 1.0 - (1.0_f32 - 0.09).sqrt();
+    assert!((hit.distance - (1.0 - expected)).abs() < 1e-4);
+    assert!((hit.v - 0.25).abs() < 1e-4, "v {}", hit.v);
+}
+
+#[test]
+fn a_ray_past_the_arc_or_the_height_misses() {
+    // The arc ends at 0.6 rad, which is 34.4 degrees
+    assert!(curved_hit(toward(33.0)).is_some());
+    assert_eq!(curved_hit(toward(36.0)), None);
+    let above = Ray {
+        origin: [0.0, 0.3, 0.0],
+        direction: [0.0, 0.0, -1.0],
+    };
+    assert_eq!(curved_hit(above), None);
+    let backwards = Ray {
+        origin: [0.0; 3],
+        direction: [0.0, 0.0, 1.0],
+    };
+    assert_eq!(curved_hit(backwards), None);
+}
+
+#[test]
+fn a_curve_without_a_radius_is_flat() {
+    let ray = toward(20.0);
+    for radius in [0.0, -1.0, f32::INFINITY] {
+        assert_eq!(
+            ray.hit_cylinder(&PANEL, CURVED, radius),
+            ray.hit_panel(&PANEL, CURVED)
+        );
+    }
+}

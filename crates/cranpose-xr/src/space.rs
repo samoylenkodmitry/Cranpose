@@ -7,14 +7,14 @@
 //! panels stack again from the top, so the atlas needs no more room than its panels.
 
 use std::{
-    cell::{Cell, OnceCell, RefCell},
+    cell::{Cell, RefCell},
     rc::Rc,
 };
 
 use cranpose::{MutableState, mutableStateOf};
-use cranpose_core::{CompositionLocal, compositionLocalOf};
+use cranpose_core::CompositionLocal;
 
-use crate::Pose;
+use crate::{METERS_PER_DP, PanelHit, Pose, Ray, locals::with_locals};
 
 // The space between two panels in the atlas, in dp, so the compositor's filter never reaches a
 // neighbor's pixels.
@@ -37,6 +37,32 @@ pub(crate) struct PanelSlot {
     pub(crate) pose: Pose,
     // Whether the user may carry the panel with a controller.
     pub(crate) mobility: Mobility,
+    // The shape the panel's pixels show on.
+    pub(crate) surface: Surface,
+}
+
+impl PanelSlot {
+    #[cfg_attr(
+        not(any(test, all(feature = "openxr", target_os = "android"))),
+        expect(dead_code, reason = "the headset backend calls it")
+    )]
+    // Where `ray` meets the panel as it shows: flat or on its curve.
+    pub(crate) fn hit(&self, ray: &Ray) -> Option<PanelHit> {
+        let size = [self.atlas[2], self.atlas[3]].map(|dp| dp * METERS_PER_DP);
+        match self.surface {
+            Surface::Flat => ray.hit_panel(&self.pose, size),
+            Surface::Curved { radius } => ray.hit_cylinder(&self.pose, size, radius),
+        }
+    }
+}
+
+// The shape a panel's pixels show on.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum Surface {
+    Flat,
+    // A cylinder of `radius` meters. Its upright axis stands that far from the panel's center
+    // along the panel's +z, and the panel's width is arc length.
+    Curved { radius: f32 },
 }
 
 // Whether the user may carry a panel with a controller.
@@ -87,6 +113,8 @@ pub(crate) struct Space {
 struct Inner {
     entries: RefCell<Vec<Entry>>,
     next_id: Cell<u64>,
+    // Whether the headset shows curved panels. If not, they show and answer rays as flat ones.
+    curves: Cell<bool>,
 }
 
 // A registered panel as the space keeps it.
@@ -116,6 +144,7 @@ impl Space {
             inner: Rc::new(Inner {
                 entries: RefCell::new(Vec::new()),
                 next_id: Cell::new(1),
+                curves: Cell::new(true),
             }),
         }
     }
@@ -154,6 +183,7 @@ impl Space {
                         atlas: [0.0, 0.0, size[0], size[1]],
                         pose,
                         mobility: Mobility::Fixed,
+                        surface: Surface::Flat,
                     },
                     panel,
                     dot: None,
@@ -174,6 +204,24 @@ impl Space {
         if let Some(entry) = entries.iter_mut().find(|entry| entry.slot.id == id) {
             entry.slot.mobility = mobility;
         }
+    }
+
+    // Sets the shape of the panel `id`.
+    pub(crate) fn set_surface(&self, id: u64, surface: Surface) {
+        let mut entries = self.inner.entries.borrow_mut();
+        if let Some(entry) = entries.iter_mut().find(|entry| entry.slot.id == id) {
+            entry.slot.surface = surface;
+        }
+    }
+
+    #[cfg_attr(
+        not(any(test, all(feature = "openxr", target_os = "android"))),
+        expect(dead_code, reason = "the headset backend calls it")
+    )]
+    // Sets whether the headset shows curved panels. The panels of a headset that does not show
+    // them are flat.
+    pub(crate) fn set_curves_shown(&self, shown: bool) {
+        self.inner.curves.set(shown);
     }
 
     #[cfg_attr(
@@ -201,11 +249,19 @@ impl Space {
         expect(dead_code, reason = "the headset backend calls it")
     )]
     pub(crate) fn panels(&self) -> Vec<PanelSlot> {
+        let curves = self.inner.curves.get();
         self.inner
             .entries
             .borrow()
             .iter()
-            .map(|entry| entry.slot)
+            .map(|entry| PanelSlot {
+                surface: if curves {
+                    entry.slot.surface
+                } else {
+                    Surface::Flat
+                },
+                ..entry.slot
+            })
             .collect()
     }
 
@@ -269,13 +325,9 @@ fn dot_of(cursor: Cursor) -> Dot {
     }
 }
 
-thread_local! {
-    static LOCAL_SPACE: OnceCell<CompositionLocal<Option<Space>>> = const { OnceCell::new() };
-}
-
 // The space of the headset the content shows in, or `None` outside a headset.
 pub(crate) fn local_space() -> CompositionLocal<Option<Space>> {
-    LOCAL_SPACE.with(|cell| cell.get_or_init(|| compositionLocalOf(|| None)).clone())
+    with_locals(|locals| locals.space.clone())
 }
 
 #[cfg(test)]

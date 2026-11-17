@@ -12,11 +12,12 @@ use super::{
     controllers::Controllers,
     gl_context::GlContext,
     handle_layers::HandleLayers,
-    panel_layers::{DENSITY, PanelLayers},
+    panel_layers::{DENSITY, PanelFrame, PanelLayers},
     ray_layers::RayLayers,
     session::{SessionStatus, XrSession},
 };
 use crate::{
+    SpatialCapabilities, SpatialEnvironment, local_spatial_capabilities, local_spatial_environment,
     pointer::{Pointer, PointerEvent},
     space::{Space, local_space},
 };
@@ -81,6 +82,7 @@ fn activity_destroyed(app: &AndroidApp, status: SessionStatus) -> bool {
 struct Immersive {
     guest: GuestView,
     space: Space,
+    environment: SpatialEnvironment,
     pointer: Pointer,
     layers: PanelLayers,
     rays: RayLayers,
@@ -105,7 +107,9 @@ impl Immersive {
         let formats = (layers.gl_format(), layers.format());
         let rays = RayLayers::new(&xr_session, &gpu, formats)?;
         let handles = HandleLayers::new(&xr_session, &gpu, formats)?;
-        let composed = Rc::new(RefCell::new(None::<Space>));
+        let capabilities =
+            SpatialCapabilities::in_headset(xr_session.passthrough.is_controllable());
+        let composed = Rc::new(RefCell::new(None::<(Space, SpatialEnvironment)>));
         let held = Rc::clone(&composed);
         let mut guest = GuestView::new(
             settings,
@@ -116,20 +120,31 @@ impl Immersive {
             DENSITY,
             move || {
                 let space = remember(Space::new).with(Clone::clone);
-                held.replace(Some(space.clone()));
-                CompositionLocalProvider([local_space().provides(Some(space))], &mut content);
+                let environment =
+                    remember(SpatialEnvironment::new).with(|environment| *environment);
+                held.replace(Some((space.clone(), environment)));
+                CompositionLocalProvider(
+                    [
+                        local_space().provides(Some(space)),
+                        local_spatial_capabilities().provides(capabilities),
+                        local_spatial_environment().provides(Some(environment)),
+                    ],
+                    &mut content,
+                );
             },
         )
         .map_err(|error| format!("composition: {error}"))?;
         guest.shell().renderer().set_transparent_background(true);
         // The view composes its content when it is made, and the space stays for the view's life
-        let space = composed
+        let (space, environment) = composed
             .borrow()
             .clone()
             .ok_or("the content did not compose")?;
+        space.set_curves_shown(xr_session.shows_cylinders());
         Ok(Self {
             guest,
             space,
+            environment,
             pointer: Pointer::default(),
             layers,
             rays,
@@ -155,11 +170,18 @@ impl Immersive {
         if let Some((panel, pose)) = self.pointer.moved() {
             self.space.move_panel(panel, pose);
         }
-        let mut quads = if frame.should_render {
+        self.follow_environment();
+        let PanelFrame {
+            mut quads,
+            cylinders,
+        } = if frame.should_render {
             self.layers
                 .draw(&mut self.guest, &self.gpu, &self.xr_session, &self.space)?
         } else {
-            Vec::new()
+            PanelFrame {
+                quads: Vec::new(),
+                cylinders: Vec::new(),
+            }
         };
         // The handles and the rays show over the panels: the rays end on them
         let panels = self.space.panels();
@@ -170,10 +192,17 @@ impl Immersive {
             }
         }
         self.xr_session
-            .end_frame(frame.predicted_display_time, &quads)?;
-        drop(quads);
+            .end_frame(frame.predicted_display_time, &cylinders, &quads)?;
+        drop((cylinders, quads));
         self.gpu.device.poll(wgpu::PollType::Poll).ok();
         Ok(())
+    }
+
+    // The room follows what the app prefers, and the app learns what the room shows.
+    fn follow_environment(&mut self) {
+        let passthrough = &mut self.xr_session.passthrough;
+        passthrough.set_opacity(self.environment.preference().unwrap_or(0.0));
+        self.environment.show(passthrough.opacity());
     }
 }
 

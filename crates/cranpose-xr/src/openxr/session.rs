@@ -9,7 +9,11 @@ use std::ptr;
 use android_activity::AndroidApp;
 use openxr as xr;
 
-use super::gl_context::GlContext;
+use super::{
+    cylinder_layers::{CylinderLayer, raw_layers},
+    gl_context::GlContext,
+    passthrough::Passthrough,
+};
 use crate::Pose;
 
 const VIEW_CONFIGURATION: xr::ViewConfigurationType = xr::ViewConfigurationType::PRIMARY_STEREO;
@@ -35,6 +39,8 @@ pub(crate) struct QuadLayer<'a> {
 }
 
 pub(crate) struct XrSession {
+    // The room around the panels. Its handles end before the session does, so it comes first.
+    pub(crate) passthrough: Passthrough,
     instance: xr::Instance,
     pub(crate) session: xr::Session<xr::OpenGlEs>,
     waiter: xr::FrameWaiter,
@@ -43,7 +49,8 @@ pub(crate) struct XrSession {
     pub(crate) local: xr::Space,
     // The head's own space, which the runtime locates for each frame
     view: xr::Space,
-    blend: xr::EnvironmentBlendMode,
+    // Whether the runtime shows cylinder layers, which curved panels are
+    cylinders: bool,
     // Whether layers say their images start with the top row, which is how wgpu writes them
     flips_rows: bool,
     running: bool,
@@ -74,6 +81,8 @@ impl XrSession {
         extensions.khr_opengl_es_enable = true;
         extensions.khr_android_create_instance = true;
         extensions.fb_composition_layer_image_layout = available.fb_composition_layer_image_layout;
+        extensions.khr_composition_layer_cylinder = available.khr_composition_layer_cylinder;
+        extensions.fb_passthrough = available.fb_passthrough;
         // Hands tracked by cameras point and pinch as controllers do. The controllers of other
         // makers bind through their own profiles, each behind an extension.
         extensions.ext_hand_interaction = available.ext_hand_interaction;
@@ -88,6 +97,11 @@ impl XrSession {
         extensions.ml_ml2_controller_interaction = available.ml_ml2_controller_interaction;
         extensions.meta_touch_controller_plus = available.meta_touch_controller_plus;
         extensions.fb_touch_controller_pro = available.fb_touch_controller_pro;
+        log::info!(
+            "cranpose xr: cylinder layers {}, passthrough extension {}",
+            extensions.khr_composition_layer_cylinder,
+            extensions.fb_passthrough,
+        );
         if !available.fb_composition_layer_image_layout {
             log::warn!("cranpose xr: the runtime cannot flip layers; panels show upside down");
         }
@@ -131,19 +145,19 @@ impl XrSession {
         let view = session
             .create_reference_space(xr::ReferenceSpaceType::VIEW, xr::Posef::IDENTITY)
             .map_err(|error| format!("OpenXR view space: {error}"))?;
-        let blend = instance
+        let modes = instance
             .enumerate_environment_blend_modes(system, VIEW_CONFIGURATION)
-            .ok()
-            .and_then(|modes| modes.first().copied())
-            .unwrap_or(xr::EnvironmentBlendMode::OPAQUE);
+            .unwrap_or_default();
+        let passthrough = Passthrough::new(&session, &modes);
         Ok(Self {
+            passthrough,
             instance,
             session,
             waiter,
             stream,
             local,
             view,
-            blend,
+            cylinders: available.khr_composition_layer_cylinder,
             flips_rows: available.fb_composition_layer_image_layout,
             running: false,
         })
@@ -151,6 +165,11 @@ impl XrSession {
 
     pub(crate) fn instance(&self) -> &xr::Instance {
         &self.instance
+    }
+
+    // Whether the runtime shows curved panels on cylinder layers. If not, they show flat.
+    pub(crate) fn shows_cylinders(&self) -> bool {
+        self.cylinders
     }
 
     // Whether layers show their images from the top row, which is how wgpu writes them. If not,
@@ -223,10 +242,12 @@ impl XrSession {
         Ok(state)
     }
 
-    // Ends the frame begun last with `layers`, back to front.
+    // Ends the frame begun last. The room is the bottom layer, then come the curved panels, then
+    // `layers`, back to front.
     pub(crate) fn end_frame(
         &mut self,
         display_time: xr::Time,
+        curved: &[CylinderLayer<'_>],
         layers: &[QuadLayer<'_>],
     ) -> Result<(), String> {
         let mut layouts: Vec<xr::sys::CompositionLayerImageLayoutFB> = layers
@@ -273,10 +294,21 @@ impl XrSession {
                 unsafe { xr::CompositionLayerQuad::from_raw(raw) }
             })
             .collect();
-        let references: Vec<&xr::CompositionLayerBase<'_, xr::OpenGlEs>> =
-            quads.iter().map(|quad| &**quad).collect();
+        let flip = xr::sys::CompositionLayerImageLayoutFB {
+            ty: xr::sys::CompositionLayerImageLayoutFB::TYPE,
+            next: ptr::null_mut(),
+            flags: xr::sys::CompositionLayerImageLayoutFlagsFB::VERTICAL_FLIP,
+        };
+        let cylinders = raw_layers(curved, &self.local, self.flips_rows.then_some(&flip));
+        let references: Vec<&xr::CompositionLayerBase<'_, xr::OpenGlEs>> = self
+            .passthrough
+            .layer()
+            .into_iter()
+            .chain(cylinders.iter().map(|cylinder| &**cylinder))
+            .chain(quads.iter().map(|quad| &**quad))
+            .collect();
         self.stream
-            .end(display_time, self.blend, &references)
+            .end(display_time, self.passthrough.blend_mode(), &references)
             .map_err(|error| format!("OpenXR end frame: {error}"))
     }
 }

@@ -47,6 +47,13 @@ Cranpose developers too:
   meters.
 - `SpatialExternalSurface(stereo_mode, modifier) { surface -> ... }`: hands the app a surface
   that a decoder writes into.
+- `SpatialCurvedRow(modifier, curve_radius) { ... }`: panels bent around the viewer at
+  `curve_radius` dp. Each panel is a cylinder layer, and a controller's ray follows its curve.
+  A runtime without `XR_KHR_composition_layer_cylinder` shows the panels flat.
+- `local_spatial_capabilities()` (Jetpack XR's `LocalSpatialCapabilities`):
+  `is_spatial_ui_enabled()` and `is_passthrough_control_enabled()`.
+- `local_spatial_environment()`: the `SpatialEnvironment` with `preferred_passthrough_opacity`
+  and `current_passthrough_opacity`, which control the room around the panels.
 - `Orbiter`: content attached to the edge of a panel, such as a handle or a toolbar.
 - `SubspaceModifier`: `width`, `height`, `depth`, `size`, `offset`, `rotate`, `movable`,
   `resizable`, `fill_max_size`, `padding`.
@@ -55,6 +62,18 @@ Cranpose developers too:
 Jetpack XR Compose shows 3D models through SceneCore entities. Cranpose has its own 3D: a
 `scene3d` box and `mesh_surface` content. In a `Subspace` such content draws into the
 projection layer, with a camera made from each eye's view.
+
+## The room around the panels
+
+An app asks for the room through `SpatialEnvironment` when `is_passthrough_control_enabled()` is
+on. The backend picks how the runtime shows it:
+
+- `XR_FB_passthrough` (Meta Quest): a passthrough layer under all other layers. The backend
+  makes and starts it once. It joins a frame while the opacity is above 0, and the opacity is
+  the layer's style.
+- The blend mode `ALPHA_BLEND` (Android XR, Pico, Magic Leap): the frame's blend mode is
+  `ALPHA_BLEND` while the opacity is above 0 and `OPAQUE` otherwise. This path has no dimming.
+- Neither: the capability is off and the app's own background shows.
 
 ## Crates
 

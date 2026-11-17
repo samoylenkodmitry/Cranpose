@@ -14,11 +14,15 @@ mod aim_filter;
 mod beam_pose;
 #[cfg(any(test, all(feature = "openxr", target_os = "android")))]
 mod carry;
+mod locals;
 #[cfg(any(test, all(feature = "openxr", target_os = "android")))]
 mod pointer;
 mod pose;
 mod ray;
 mod space;
+mod spatial_capabilities;
+mod spatial_curved_row;
+mod spatial_environment;
 mod spatial_panel;
 mod subspace;
 mod subspace_modifier;
@@ -34,6 +38,9 @@ pub use cranpose as __cranpose;
 pub use openxr::run;
 pub use pose::Pose;
 pub use ray::{PanelHit, Ray};
+pub use spatial_capabilities::{SpatialCapabilities, local_spatial_capabilities};
+pub use spatial_curved_row::SpatialCurvedRow;
+pub use spatial_environment::{SpatialEnvironment, local_spatial_environment};
 pub use spatial_panel::SpatialPanel;
 pub use subspace::Subspace;
 pub use subspace_modifier::{DEFAULT_PANEL_SIZE, METERS_PER_DP, SubspaceModifier};

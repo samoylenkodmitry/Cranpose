@@ -379,8 +379,7 @@ fn nearest_hit(ray: &Ray, panels: &[PanelSlot]) -> Option<Hit> {
     panels
         .iter()
         .filter_map(|slot| {
-            let size = [slot.atlas[2], slot.atlas[3]].map(|dp| dp * crate::METERS_PER_DP);
-            let hit = ray.hit_panel(&slot.pose, size)?;
+            let hit = slot.hit(ray)?;
             Some(Hit {
                 slot: *slot,
                 x: hit.u * slot.atlas[2],

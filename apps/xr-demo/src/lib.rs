@@ -1,13 +1,18 @@
-// A Cranpose app for headsets. In a Meta Quest its two panels stand in the room, and a
-// controller's trigger presses the button. On the desktop the panels draw flat.
+// A Cranpose app for headsets. In a Meta Quest its panels stand in the room, and a controller's
+// trigger presses the buttons: one counts, the other shows or hides the room around the panels.
+// A strip above them is bent around the viewer. On the desktop the panels draw flat.
 
 use cranpose::prelude::*;
 use cranpose_ui::text::{FontWeight, TextUnit};
-use cranpose_xr::{SpatialPanel, Subspace, SubspaceModifier};
+use cranpose_xr::{
+    SpatialCurvedRow, SpatialPanel, Subspace, SubspaceModifier, local_spatial_capabilities,
+    local_spatial_environment,
+};
 
 cranpose::app_capabilities!();
 
-// The app: a panel with a counter and a smaller panel to the right, turned toward the viewer.
+// The app: a panel with a counter, a smaller panel to the right turned toward the viewer, and a
+// curved strip above them.
 #[composable]
 pub fn XrDemo() {
     let presses = rememberMutableStateOf(|| 0_u32);
@@ -48,10 +53,41 @@ pub fn XrDemo() {
                                 );
                             },
                         );
+                        PassthroughButton();
                     },
                 );
             },
         );
+        SpatialCurvedRow(SubspaceModifier::new(), 1000.0, || {
+            SpatialPanel(
+                SubspaceModifier::new()
+                    .size(1200.0, 220.0)
+                    .offset(0.0, 400.0, 0.0),
+                || {
+                    Column(
+                        Modifier::empty()
+                            .fill_max_size()
+                            .background(Color(0.1, 0.14, 0.12, 0.94))
+                            .rounded_corners(24.0)
+                            .padding(32.0),
+                        ColumnSpec::default()
+                            .vertical_arrangement(LinearArrangement::spaced_by(12.0)),
+                        || {
+                            Text(
+                                "A curved panel",
+                                Modifier::empty(),
+                                sized(34.0, Some(FontWeight::BOLD)),
+                            );
+                            Text(
+                                "A cylinder layer of the headset's compositor, bent around you at a radius of one meter. Its text stays as sharp as a flat panel's.",
+                                Modifier::empty(),
+                                sized(22.0, None),
+                            );
+                        },
+                    );
+                },
+            );
+        });
         SpatialPanel(
             SubspaceModifier::new()
                 .size(320.0, 200.0)
@@ -76,6 +112,52 @@ pub fn XrDemo() {
             },
         );
     });
+}
+
+// A button that shows or hides the room around the panels, or a note where the headset cannot.
+// The room shows from the start.
+#[composable]
+fn PassthroughButton() {
+    let Some(environment) = local_spatial_environment().current() else {
+        return;
+    };
+    if !local_spatial_capabilities()
+        .current()
+        .is_passthrough_control_enabled()
+    {
+        Text(
+            "This headset shows no room behind the panels.",
+            Modifier::empty(),
+            sized(20.0, None),
+        );
+        return;
+    }
+    DisposableEffect(true, move |_| {
+        environment.set_preferred_passthrough_opacity(Some(1.0));
+        DisposableEffectResult::new(|| {})
+    });
+    let shown = environment.current_passthrough_opacity() > 0.0;
+    Button(
+        Modifier::empty()
+            .background(Color(0.2, 0.55, 0.4, 1.0))
+            .rounded_corners(16.0)
+            .padding_symmetric(32.0, 18.0),
+        ButtonSpec::default(),
+        move || {
+            environment.set_preferred_passthrough_opacity(Some(if shown { 0.0 } else { 1.0 }));
+        },
+        move || {
+            Text(
+                if shown {
+                    "Hide the room"
+                } else {
+                    "Show the room"
+                },
+                Modifier::empty(),
+                sized(24.0, Some(FontWeight::BOLD)),
+            );
+        },
+    );
 }
 
 fn sized(size: f32, weight: Option<FontWeight>) -> TextStyle {

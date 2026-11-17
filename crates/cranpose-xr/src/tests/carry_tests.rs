@@ -1,5 +1,5 @@
 use super::*;
-use crate::space::Mobility;
+use crate::space::{Mobility, Surface};
 
 fn close(a: [f32; 3], b: [f32; 3]) -> bool {
     a.iter().zip(b).all(|(a, b)| (a - b).abs() < 1e-4)
@@ -19,6 +19,7 @@ fn slot() -> PanelSlot {
         atlas: [0.0, 0.0, 800.0, 500.0],
         pose: Pose::at([0.0, 0.0, -2.0]),
         mobility: Mobility::Movable,
+        surface: Surface::Flat,
     }
 }
 

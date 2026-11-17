@@ -18,6 +18,10 @@
     <uses-feature
         android:glEsVersion="0x00030002"
         android:required="true" />
+    <!-- The room around the panels shows through the headset's cameras, where it has them -->
+    <uses-feature
+        android:name="com.oculus.feature.PASSTHROUGH"
+        android:required="false" />
 
     <application>
         <!-- Horizon OS opens the app as an immersive app, not in a panel window -->

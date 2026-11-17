@@ -27,6 +27,11 @@ pixels once at the display's resolution, so its text stays sharp. A dp is a mill
 room. The controllers point at the panels, and their triggers press. Outside a headset the
 panels draw flat, side by side.
 
+A `SpatialCurvedRow` bends the panels inside it around the viewer, as a cylinder layer of the
+compositor. `local_spatial_environment()` gives the app the room around its panels: where the
+headset has passthrough, `set_preferred_passthrough_opacity(Some(1.0))` shows it. Check
+`local_spatial_capabilities().current().is_passthrough_control_enabled()` first.
+
 ## Android headsets
 
 The `openxr` feature adds the backend for Android headsets such as the Meta Quest. The app's
