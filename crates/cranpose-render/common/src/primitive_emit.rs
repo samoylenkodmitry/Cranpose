@@ -260,6 +260,7 @@ struct ShapePlacement<'a> {
 }
 
 // What a shape draws over its rect. A shape holds one geometry at a time.
+#[derive(Clone, Copy)]
 enum ShapeGeometry {
     Rect,
     Rounded(RoundedCornerShape),

@@ -13,7 +13,7 @@ const BRANCH: Key = Key(7);
 // A reader of `derivedStateOf(source >= 10)` in a group retained while it is
 // not shown, written as `#[composable]` expands it: the group's recompose
 // callback runs the body again. Each run records what it read.
-fn branch(source: MutableState<u32>, seen: Rc<Cell<Option<bool>>>) {
+fn branch(source: MutableState<u32>, seen: &Rc<Cell<Option<bool>>>) {
     fn body(source: MutableState<u32>, seen: &Cell<Option<bool>>) {
         let big = derivedStateOf(move || source.get() >= 10);
         seen.set(Some(big.get()));
@@ -22,9 +22,9 @@ fn branch(source: MutableState<u32>, seen: Rc<Cell<Option<bool>>>) {
     cranpose_core::with_current_composer(|composer| {
         composer.cranpose_with_reuse(BRANCH, RecomposeOptions::default(), |composer| {
             composer.with_group(key, |composer| {
-                let again = Rc::clone(&seen);
+                let again = Rc::clone(seen);
                 composer.set_recompose_callback(move |_| body(source, &again));
-                body(source, &seen);
+                body(source, seen);
             });
         });
     });
@@ -41,7 +41,7 @@ fn a_derived_state_of_a_returning_group_follows_its_source() {
         composition
             .render(key, move || {
                 if shown {
-                    branch(source, Rc::clone(&seen));
+                    branch(source, &seen);
                 }
             })
             .expect("render succeeds");
