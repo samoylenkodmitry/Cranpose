@@ -406,11 +406,14 @@ impl ModifierChainHandle {
     // updated from. It carries the modifier's inspector metadata only where
     // inspection is built in.
     pub(crate) fn modifier(&self) -> Modifier {
+        // Pushed one by one: a list collected from an iterator brings in a
+        // copy of the list's extension code.
+        let mut elements = smallvec::SmallVec::new();
+        for element in self.chain.held_elements() {
+            elements.push(element.to_element());
+        }
         Modifier::of_elements(
-            self.chain
-                .held_elements()
-                .map(|element| element.to_element())
-                .collect(),
+            elements,
             #[cfg(feature = "inspection")]
             self.inspector.clone(),
             #[cfg(not(feature = "inspection"))]
