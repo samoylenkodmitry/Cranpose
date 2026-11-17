@@ -13,6 +13,7 @@ use std::{
     cell::RefCell,
     ptr::NonNull,
     sync::atomic::{AtomicBool, Ordering},
+    time::Duration,
 };
 
 use block2::RcBlock;
@@ -41,25 +42,27 @@ type RenderBlock = RcBlock<
 >;
 
 pub(crate) fn open(renderer: Box<dyn Renderer>) -> Result<Box<dyn AudioSink>, AudioError> {
-    let device = run_on_main(move |mtm| start(renderer, mtm))?;
+    let (device, sample_rate) = run_on_main(move |mtm| start(renderer, mtm))?;
     Ok(Box::new(AvAudioSink {
         device,
+        sample_rate,
         wanted: AtomicBool::new(true),
     }))
 }
 
+// Starts the engine and returns it with the output rate that it runs at.
 fn start(
     mut renderer: Box<dyn Renderer>,
     mtm: MainThreadMarker,
-) -> Result<MainThreadBound<Device>, AudioError> {
+) -> Result<(MainThreadBound<Device>, f64), AudioError> {
     // SAFETY: the shared session is valid for the life of the process, and the
     // category constant is AVFAudio's own.
     unsafe {
         let session = AVAudioSession::sharedInstance();
-        if let Some(ambient) = AVAudioSessionCategoryAmbient {
-            if let Err(error) = session.setCategory_error(ambient) {
-                log::warn!("failed to put the audio session in the ambient category: {error}");
-            }
+        if let Some(ambient) = AVAudioSessionCategoryAmbient
+            && let Err(error) = session.setCategory_error(ambient)
+        {
+            log::warn!("failed to put the audio session in the ambient category: {error}");
         }
     }
 
@@ -124,14 +127,15 @@ fn start(
     .map_err(|error| AudioError::Backend(format!("failed to start the audio engine: {error}")))?;
 
     log::debug!("cranpose audio: AVAudioEngine at {sample_rate} Hz");
-    Ok(MainThreadBound::new(
+    let device = MainThreadBound::new(
         Device {
             engine,
             _source: source,
             _block: block,
         },
         mtm,
-    ))
+    );
+    Ok((device, sample_rate))
 }
 
 struct RenderState {
@@ -195,6 +199,8 @@ struct Device {
 /// the main thread to run it.
 struct AvAudioSink {
     device: MainThreadBound<Device>,
+    // The output rate that the engine runs at, in Hz
+    sample_rate: f64,
     /// Whether the engine is meant to be running: false after a suspend or a
     /// park, true after a start or a resume.
     wanted: AtomicBool,
@@ -242,6 +248,29 @@ impl AudioSink for AvAudioSink {
 
     fn park(&self) {
         self.pause();
+    }
+
+    // The session's hardware output latency plus its IO buffer, which is what Apple gives for
+    // the delay from a render call to the sound. The session answers from any thread.
+    fn output_latency(&self) -> Option<Duration> {
+        // SAFETY: the shared session is valid for the life of the process. Its properties are
+        // plain reads.
+        let seconds = unsafe {
+            let session = AVAudioSession::sharedInstance();
+            session.outputLatency() + session.IOBufferDuration()
+        };
+        Duration::try_from_secs_f64(seconds)
+            .ok()
+            .filter(|latency| !latency.is_zero())
+    }
+
+    // The session's IO buffer in frames of the engine's rate.
+    fn frames_per_burst(&self) -> Option<u32> {
+        // SAFETY: the shared session is valid for the life of the process. Its property is a
+        // plain read.
+        let seconds = unsafe { AVAudioSession::sharedInstance().IOBufferDuration() };
+        let frames = (seconds * self.sample_rate).round();
+        (frames >= 1.0 && frames <= f64::from(u32::MAX)).then_some(frames as u32)
     }
 }
 

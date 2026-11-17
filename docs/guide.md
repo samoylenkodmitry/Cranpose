@@ -2774,6 +2774,7 @@ An app that plays only WAV files of PCM samples, such as its own recordings, ena
 For game sounds, enable `audio`. On desktop, enable `audio-desktop`.
 In a browser `audio` plays through Web Audio, and the sound starts at the user's first press or key.
 An app that makes its own samples hands a `Renderer` to `cranpose_audio::backend::open`. The desktop demo's Music tab plays a piece this way: each note of the score is a composable in a lazy column that holds its note in the synth while it is composed. A runtime shader draws the note as a drop of rain on a window, as a backdrop effect with a batched source. The piece scrolls the column. A hand that scrolls it plays the notes that cross its lower edge.
+The `AudioSink` that `open` returns reports the device's timing. `output_latency` is the time from a render call to the sound. `frames_per_burst` is the frames of one render call. `underrun_count` is the times that the device had no frame to play. An app that sizes a jitter buffer or lines the sound up with a picture reads them. Each is `None` where the platform has no value. None of them waits for the audio thread.
 See [Cranamp](https://github.com/samoylenkodmitry/cranamp) for a player app.
 
 ### Show an image from the network

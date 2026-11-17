@@ -9,12 +9,26 @@
 //! decodes a track into the same kind of callback. One device per platform,
 //! several things to put through it.
 
+use std::time::Duration;
+
 use cranpose_services::AudioError;
 
 use crate::mixer::{Mixer, MixerSeed, RenderStatus};
 
 #[cfg(all(feature = "aaudio", target_os = "android"))]
 mod aaudio;
+
+#[cfg(any(
+    all(feature = "aaudio", target_os = "android"),
+    all(
+        feature = "cpal-backend",
+        not(any(target_os = "android", target_arch = "wasm32"))
+    )
+))]
+mod atomic_duration;
+
+#[cfg(any(test, all(feature = "aaudio", target_os = "android")))]
+mod hardware_position;
 
 #[cfg(all(feature = "avaudio", target_os = "watchos"))]
 mod avaudio;
@@ -109,6 +123,52 @@ pub trait AudioSink: Send + Sync {
     /// Called from the UI thread, at most once per idle stretch, and only
     /// after the mixer has published that it is no longer streaming.
     fn park(&self) {}
+
+    /// How long a frame takes from the renderer to the output hardware. The time runs from the
+    /// render call that writes the frame to the moment that the device presents it. It covers
+    /// the buffer of the device and the delay that the device adds. It leaves out
+    /// [`RENDER_LEAD_SECONDS`], which the Web Audio backend adds before the render call. It also
+    /// leaves out a link beyond the device, such as Bluetooth.
+    ///
+    /// `None` means that the platform has no value yet or has none at all. AAudio has a value a
+    /// moment after the stream starts. The value follows the device while the stream runs, so a
+    /// caller that sizes a buffer from it reads it again from time to time. The call does not
+    /// wait for the audio thread. AAudio and cpal return the value that the audio thread or the
+    /// owner of the stream published last. AVAudioSession and Web Audio read a property of the
+    /// platform on the calling thread, so a caller reads them now and then and not on every frame.
+    ///
+    /// Each backend takes the value from its platform:
+    /// - AAudio: `AAudioStream_getTimestamp` with `AAudioStream_getFramesWritten`, read by the
+    ///   thread that owns the stream. The estimate can read up to one burst high.
+    /// - Core Audio, WASAPI and ALSA, through cpal: the time from the callback to the playback
+    ///   of its buffer. Core Audio counts its buffer, its device latency and its safety offset.
+    /// - AVAudioSession: `outputLatency` plus `IOBufferDuration`.
+    /// - Web Audio: `baseLatency` plus `outputLatency`, which a browser may leave out.
+    fn output_latency(&self) -> Option<Duration> {
+        None
+    }
+
+    /// How many frames one render call fills, where the device fixes that number. AAudio reports
+    /// `AAudioStream_getFramesPerBurst`. The hosts of cpal report the buffer size of the stream
+    /// when it opened. AVAudioSession reports `IOBufferDuration` in frames. Web Audio reports the 1024 frames of
+    /// each block. A render call may ask for another number, so a renderer takes its sample count
+    /// from the length of its output slice.
+    ///
+    /// `None` means that the platform gives no number.
+    fn frames_per_burst(&self) -> Option<u32> {
+        None
+    }
+
+    /// How many times the device had no frame to play since the stream opened. Each one is an
+    /// audible glitch. A renderer that writes silence because its own queue is empty does not
+    /// raise the count, so the count tells an empty queue of the renderer from an empty buffer
+    /// of the device. AAudio reports `AAudioStream_getXRunCount`, as the thread that owns the
+    /// stream read it a fraction of a second ago.
+    ///
+    /// `None` means that the platform keeps no count.
+    fn underrun_count(&self) -> Option<u32> {
+        None
+    }
 }
 
 /// Whether this build has a real output device compiled in.
