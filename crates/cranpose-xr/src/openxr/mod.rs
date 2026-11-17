@@ -9,5 +9,7 @@ mod refresh_rate;
 mod runner;
 mod session;
 mod static_image;
+mod surface_layers;
+mod surface_swapchain;
 
 pub use runner::run;

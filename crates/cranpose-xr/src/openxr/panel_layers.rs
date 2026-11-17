@@ -10,11 +10,11 @@ use openxr as xr;
 
 use super::{
     gl_context::wrap_texture,
-    session::{QuadLayer, XrSession},
+    session::{LayerSource, QuadLayer, XrSession},
 };
 use crate::{
     METERS_PER_DP,
-    space::{PanelSlot, Space},
+    space::{PanelKind, PanelSlot, Space},
 };
 
 // Pixels of a panel's image in one dp. A dp is a millimeter, and a millimeter a meter away
@@ -106,9 +106,9 @@ impl PanelLayers {
                     .find(|image| image.id == slot.id && image.shown)?;
                 Some(QuadLayer {
                     swapchain: &image.swapchain,
-                    image_size: image.size,
+                    source: LayerSource::Drawn(image.size),
                     pose: slot.pose,
-                    size: [slot.atlas[2], slot.atlas[3]].map(|dp| dp * METERS_PER_DP),
+                    size: slot.size().map(|dp| dp * METERS_PER_DP),
                 })
             })
             .collect())
@@ -156,7 +156,8 @@ impl PanelLayers {
                 label: Some("cranpose xr panels"),
             });
         let mut acquired = Vec::new();
-        for slot in panels {
+        // A surface has no part of the atlas
+        for slot in panels.iter().filter(|slot| slot.kind == PanelKind::Content) {
             let [x, y, width, height] = slot.atlas.map(|dp| (dp * DENSITY).round() as u32);
             let size = (width.max(1), height.max(1));
             if x + size.0 > atlas.width() || y + size.1 > atlas.height() {

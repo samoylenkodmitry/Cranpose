@@ -41,6 +41,23 @@ fn panels_take_parts_of_the_atlas_one_under_the_other() {
 }
 
 #[test]
+fn a_surface_takes_no_room_in_the_atlas() {
+    with_space(|space| {
+        let (first, video, second) = (space.new_panel(), space.new_panel(), space.new_panel());
+        space.place(first, [800.0, 500.0], Pose::IDENTITY);
+        space.place_surface(video, StereoMode::Mono, [640.0, 360.0], Pose::IDENTITY);
+        assert_eq!(
+            space.place(second, [300.0, 200.0], Pose::IDENTITY),
+            [0.0, 508.0, 300.0, 200.0]
+        );
+        assert_eq!(space.atlas_size(), [800.0, 708.0]);
+        assert_eq!(space.panels()[1].size(), [640.0, 360.0]);
+        space.remove(video.id);
+        assert_eq!(space.panels().len(), 2);
+    });
+}
+
+#[test]
 fn a_panel_keeps_its_part_while_its_size_stays() {
     with_space(|space| {
         let (first, second) = (space.new_panel(), space.new_panel());

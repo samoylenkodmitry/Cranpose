@@ -45,8 +45,9 @@ Cranpose developers too:
 - `SpatialPanel(modifier, shape) { ... }`: 2D Cranpose content on a flat panel.
 - `SpatialRow`, `SpatialColumn`, `SpatialBox`, `SpatialCurvedRow`, `SpatialSpacer`: layouts in
   meters.
-- `SpatialExternalSurface(stereo_mode, modifier) { surface -> ... }`: hands the app a surface
-  that a decoder writes into.
+- `SpatialExternalSurface(stereo_mode, modifier) { scope }`: hands the app a surface that a
+  decoder writes into. The scope's `on_surface_created` and `on_surface_destroyed` receive an
+  `ExternalSurface`.
 - `Orbiter`: content attached to the edge of a panel, such as a handle or a toolbar.
 - `SubspaceModifier`: `width`, `height`, `depth`, `size`, `offset`, `rotate`, `movable`,
   `resizable`, `fill_max_size`, `padding`.
@@ -55,6 +56,20 @@ Cranpose developers too:
 Jetpack XR Compose shows 3D models through SceneCore entities. Cranpose has its own 3D: a
 `scene3d` box and `mesh_surface` content. In a `Subspace` such content draws into the
 projection layer, with a camera made from each eye's view.
+
+## External surfaces
+
+`SpatialExternalSurface` makes a surface swapchain with `XR_KHR_android_surface_swapchain`. The
+compositor shows what a producer posts into the surface as a quad layer at the composable's place
+and size. Cranpose never copies the pictures, and the frame loop does not acquire or release the
+swapchain's images. `StereoMode::SideBySide` and `StereoMode::TopBottom` make one layer for each
+eye, each with its half of the picture.
+
+The app receives the surface as an `ExternalSurface` of `cranpose-services`. The type sits
+there so that a service that produces pictures, such as a hardware video decoder, takes it
+without a dependency on `cranpose-xr`. On Android the type holds a reference to the surface's
+`ANativeWindow`, which `as_ptr` returns. The app needs no `ndk`, JNI or GL code of its own.
+Outside a headset the composable shows an empty box, and the callbacks never run.
 
 ## Crates
 

@@ -27,6 +27,28 @@ pixels once at the display's resolution, so its text stays sharp. A dp is a mill
 room. The controllers point at the panels, and their triggers press. Outside a headset the
 panels draw flat, side by side.
 
+## Video and camera surfaces
+
+`SpatialExternalSurface` gives the app a surface that a hardware video decoder or a camera
+writes into. The headset's compositor shows the pictures directly as a layer, with no copy through
+Cranpose. `StereoMode` tells how a picture divides between the eyes.
+
+```rust,ignore
+use cranpose_xr::{SpatialExternalSurface, StereoMode, SubspaceModifier};
+
+SpatialExternalSurface(
+    StereoMode::SideBySide,
+    SubspaceModifier::new().size(960.0, 540.0),
+    |scope| {
+        scope.on_surface_created(|surface| start_decoder(surface));
+        scope.on_surface_destroyed(|_| stop_decoder());
+    },
+);
+```
+
+The callbacks receive an `ExternalSurface` from `cranpose-services`. Outside a headset the
+composable shows an empty box, and the callbacks never run.
+
 ## Android headsets
 
 The `openxr` feature adds the backend for Android headsets such as the Meta Quest. The app's
