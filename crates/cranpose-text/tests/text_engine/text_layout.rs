@@ -410,18 +410,16 @@ fn an_arabic_word_broken_across_lines_takes_its_end_and_start_forms() {
     assert_ne!(rejoined, unbroken, "the letters at the break change form");
 }
 
-#[test]
-fn laying_out_into_an_earlier_layout_gives_what_a_new_one_gives() {
-    let resolver = FontFamilyResolver::new([typeface(ROBOTO), typeface(ARABIC_VF)]);
+// Lays each of `texts` out in turn into one layout and checks that it
+// gives what a new layout gives: its lines and glyphs where they draw.
+fn assert_laying_out_into_one_layout_matches_new_ones(
+    resolver: &FontFamilyResolver,
+    texts: &[&str],
+) {
     let family = FontFamily::Default;
     let paragraph = ParagraphStyle::default();
     let mut layouter = TextLayouter::default();
     let mut reused = TextLayout::default();
-    let texts = [
-        "The quick brown fox jumps over the lazy dog",
-        "مرحبا بالعالم",
-        "a\nb",
-    ];
     for text in texts {
         let spans = [span(0..text.len(), &family, 400)];
         let layout_input = LayoutInput {
@@ -433,8 +431,9 @@ fn laying_out_into_an_earlier_layout_gives_what_a_new_one_gives() {
             max_width: 120.0,
             options: TextLayoutOptions::default(),
         };
-        layouter.layout_into(&layout_input, &resolver, &mut reused);
-        let fresh = TextLayouter::default().layout(&layout_input, &resolver);
+        layouter.layout_into(&layout_input, resolver, &mut reused);
+        let fresh = TextLayouter::default().layout(&layout_input, resolver);
+        assert_eq!(reused, fresh, "{text}");
         assert_eq!(reused.line_count(), fresh.line_count(), "{text}");
         for line in 0..fresh.line_count() {
             let glyphs = |laid: &TextLayout| -> Vec<(u32, u32, u32)> {
@@ -450,6 +449,42 @@ fn laying_out_into_an_earlier_layout_gives_what_a_new_one_gives() {
             assert_eq!(reused.line_end(line), fresh.line_end(line));
         }
     }
+}
+
+#[test]
+fn laying_out_into_an_earlier_layout_gives_what_a_new_one_gives() {
+    let resolver = FontFamilyResolver::new([typeface(ROBOTO), typeface(ARABIC_VF)]);
+    assert_laying_out_into_one_layout_matches_new_ones(
+        &resolver,
+        &[
+            "The quick brown fox jumps over the lazy dog",
+            "مرحبا بالعالم",
+            "a\nb",
+        ],
+    );
+}
+
+// A layout kept across frames takes texts of fewer glyphs in the room of
+// more, as a counter does, and of more, and glyphs too wide to keep in
+// eight bytes (Cranpose Test Wide's `W`), and then narrow ones again.
+#[test]
+fn a_kept_layout_takes_shorter_longer_and_wider_glyphs() {
+    let resolver = FontFamilyResolver::new([typeface(TEST_WIDE), typeface(ROBOTO)]);
+    assert_laying_out_into_one_layout_matches_new_ones(
+        &resolver,
+        &[
+            "12345",
+            "1234",
+            "12345",
+            "1234567890",
+            "12",
+            "123456",
+            "aWb",
+            "ab",
+            "aWba",
+            "aa",
+        ],
+    );
 }
 
 #[test]

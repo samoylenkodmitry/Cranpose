@@ -336,29 +336,6 @@ impl GlyphRun<'_> {
 }
 
 impl TextLayout {
-    // The layout of `body`, whose lines wrap at `wrap`, laid out between
-    // `widths`, the narrowest and the widest it may be, of glyphs whose ink
-    // reaches as `reach` says that ask `synthesized` of their faces.
-    pub(crate) fn new(
-        mut body: LayoutBody,
-        wrap: f32,
-        widths: (f32, f32),
-        (reach, synthesized): (InkReach, SynthesizedStyle),
-    ) -> Self {
-        let width = body.width_between(widths.0, widths.1);
-        (body.ink_reach, body.synthesized) = (reach, synthesized);
-        let glyph_reach = glyph_reach(&body, reach);
-        Self {
-            did_overflow_width: body.widest > width || width > widths.1,
-            synthesizes: synthesized != SynthesizedStyle::default(),
-            body: Arc::new(body),
-            width,
-            wrap,
-            id: next_id(),
-            glyph_reach,
-        }
-    }
-
     // Lays the layout out again between `widths`: `fill` fills its body, in
     // the body's own storage when no copy shares it, and gives the width its
     // lines wrap at, how the ink of its glyphs reaches and what they ask of
