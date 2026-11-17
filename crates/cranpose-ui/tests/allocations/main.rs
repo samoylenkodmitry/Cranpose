@@ -418,8 +418,8 @@ fn rows_of_boxes_allocations(count: usize, headroom: MemoryHeadroom) -> usize {
 }
 
 // Composing a row of two boxes makes its three layout nodes, each with its
-// box and parts, the size modifiers of the boxes and the row's list of
-// children. The rows and the boxes share their measure policies.
+// box and parts, and the size modifiers of the boxes. The rows and the boxes
+// share their measure policies, and a row keeps its two children in itself.
 // With little memory left the recycle pool keeps no shells, so a node made
 // fresh makes no shell to seed it with either.
 fn composing_a_row_of_boxes_allocates_within_its_budget() {
@@ -430,7 +430,7 @@ fn composing_a_row_of_boxes_allocates_within_its_budget() {
             / 20;
         println!("allocations of composing a row of two boxes, {headroom:?} memory: {per_row}");
         assert!(
-            per_row <= 11,
+            per_row <= 8,
             "{per_row} allocations a row, {headroom:?} memory"
         );
     }
