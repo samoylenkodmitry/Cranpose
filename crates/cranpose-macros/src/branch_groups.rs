@@ -406,7 +406,7 @@ impl BranchGroupInjector<'_> {
                 if self.hot.enabled {
                     rebuilt.push(self.branch_guard_stmt(span, visited.hot));
                     rebuilt.push(stmt);
-                    rebuilt.push(syn::parse_quote! { drop(#guard); });
+                    rebuilt.push(syn::parse_quote! { ::core::mem::drop(#guard); });
                     continue;
                 }
                 let key = self.branch_key();
@@ -453,7 +453,7 @@ impl BranchGroupInjector<'_> {
             // and the advance that may replace it never run.
             rebuilt.push(syn::parse_quote! {
                 #[allow(unreachable_code, reason = "a branch may end the function before it")]
-                drop(#guard);
+                ::core::mem::drop(#guard);
             });
         }
         block.stmts = rebuilt;
@@ -814,7 +814,7 @@ impl BranchGroupInjector<'_> {
             if wants_sandwich(&stmt, index + 1 == count) {
                 rebuilt.push(self.branch_guard_stmt(stmt.span(), hot));
                 rebuilt.push(stmt);
-                rebuilt.push(syn::parse_quote! { drop(#guard); });
+                rebuilt.push(syn::parse_quote! { ::core::mem::drop(#guard); });
             } else if index + 1 == count && matches!(&stmt, Stmt::Expr(_, None)) {
                 rebuilt.push(self.branch_guard_stmt(stmt.span(), hot));
                 rebuilt.push(stmt);

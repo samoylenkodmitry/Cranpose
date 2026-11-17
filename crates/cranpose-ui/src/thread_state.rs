@@ -14,13 +14,14 @@ use cranpose_ui_layout::MeasurePolicy;
 use crate::{
     announce::Announcement,
     environment_locals::EnvironmentLocals,
-    layout::policies::SpareFlexChildren,
+    layout::policies::SpareFlexLists,
     modifier::{Modifier, ModifierNodeSlices},
     render_state::{AppContext, AppContextId},
     selection_container::RegistrarInner,
     text::{draw_scope_text::DrawnTextStyles, shared_plain_text::SharedPlainText},
     text_modifier_node::RecentTextStyles,
     unhandled_keys::KeyHandler,
+    widgets::held_policy::RecentPolicies,
 };
 
 // Each static path string with its parse, `None` when the data does not parse.
@@ -95,12 +96,18 @@ pub(crate) struct UiThreadState {
     // Where a node with no slices of its own collects its chain, to learn
     // whether the chain gives any.
     pub(crate) spare_slices: Cell<Option<ModifierNodeSlices>>,
+    // The list a chain's draws collect into, which slices that keep one draw
+    // or none give back.
+    pub(crate) spare_draws: Cell<Vec<crate::draw::DrawCommand>>,
+    // Emptied lists of modifiers the thread let go, for its next joins.
+    pub(crate) spare_modifier_lists: RefCell<Vec<Rc<crate::modifier::ManyElements>>>,
     pub(crate) empty_measure_policy: OnceCell<Rc<dyn MeasurePolicy>>,
+    pub(crate) recent_policies: RecentPolicies,
     // The parts every layout node shell of the thread shares.
     pub(crate) shell_parts: OnceCell<Rc<crate::widgets::nodes::LayoutParts>>,
     pub(crate) node_densities: RefCell<[Option<Rc<crate::density::Density>>; 2]>,
     pub(crate) draw_text_measurer: OnceCell<Rc<dyn DrawTextMeasurer>>,
-    pub(crate) spare_flex_children: SpareFlexChildren,
+    pub(crate) spare_flex_lists: SpareFlexLists,
 }
 
 impl UiThreadState {
@@ -125,11 +132,14 @@ impl UiThreadState {
             clip_to_bounds: OnceCell::new(),
             empty_slices: OnceCell::new(),
             spare_slices: Cell::new(None),
+            spare_draws: Cell::new(Vec::new()),
+            spare_modifier_lists: RefCell::new(Vec::new()),
             empty_measure_policy: OnceCell::new(),
+            recent_policies: RecentPolicies::new(),
             shell_parts: OnceCell::new(),
             node_densities: RefCell::new([None, None]),
             draw_text_measurer: OnceCell::new(),
-            spare_flex_children: SpareFlexChildren::new(),
+            spare_flex_lists: SpareFlexLists::new(),
         }
     }
 }

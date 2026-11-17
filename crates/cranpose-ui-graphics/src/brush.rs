@@ -3,9 +3,7 @@
 use std::sync::Arc;
 
 use crate::{
-    brush_sampler::BrushSampler,
-    color::Color,
-    geometry::{Point, Rect},
+    brush_sampler::BrushSampler, color::Color, geometry::Rect, point::Point,
     render_effect::TileMode,
 };
 

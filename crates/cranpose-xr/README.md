@@ -54,6 +54,21 @@ SpatialExternalSurface(
 The callbacks receive an `ExternalSurface` from `cranpose-services`. Outside a headset the
 composable shows an empty box, and the callbacks never run.
 
+## Streamed scenes
+
+`StreamedScene` shows frames that another machine rendered for both eyes. The app decodes the
+stream with a `VideoDecoder` in frames mode, and says for each frame where each eye was and which
+part of the frame is its picture. The headset's compositor shows each picture from the pose it was
+rendered for, and corrects it for the head's newer pose.
+
+```rust,ignore
+use cranpose_xr::{StreamedScene, StreamedViews};
+
+StreamedScene(frames, |metadata: u64| -> StreamedViews { views_of_frame(metadata) });
+```
+
+Outside a headset the composable shows nothing.
+
 ## Android headsets
 
 The `openxr` feature adds the backend for Android headsets such as the Meta Quest. The app's
@@ -88,7 +103,8 @@ the release ships the DLL from the Khronos OpenXR SDK beside the executable. Wit
 `env_logger`, `RUST_LOG=cranpose_xr=debug` prints each second's frame count.
 
 Passthrough and curved panels work where the runtime has their extensions. `SpatialExternalSurface`
-is Android only: a desktop headset shows a surface panel as nothing. `just xr-smoke` runs the demo
+and `StreamedScene` are Android only: a desktop headset shows a surface panel or a streamed scene
+as nothing, until the stream layer has a Vulkan import of the platform's decoded frames. `just xr-smoke` runs the demo
 against Monado's simulated headset and its null compositor and prints the frames it ran. It finds
 Monado through `XR_MONADO_PREFIX`, the directory that holds `bin/monado-service`, or through
 `monado-service` on PATH.

@@ -31,7 +31,7 @@
 //! `MeasurePolicy` returned. The scene the
 //! renderer is handed is not: the scene builder walks the retained
 //! node state and drops any node whose `is_placed` is false, and `is_placed` is
-//! set by `placeable.place(x, y)` — *not* by pushing a `Placement` into a vec.
+//! set where the layout pass applies a `Placement` to a child it measured.
 //! The two disagreed once and a whole widget set laid out correctly in every
 //! assertion while reaching the device as an empty screen.
 //!

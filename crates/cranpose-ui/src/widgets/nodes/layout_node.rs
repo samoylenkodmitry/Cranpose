@@ -9,6 +9,7 @@ use cranpose_foundation::{
     SemanticsConfiguration,
 };
 use cranpose_ui_layout::MeasurePolicy;
+use smallvec::SmallVec;
 
 use super::layout_invalidation_diag::log_layout_invalidation_dispatch;
 
@@ -41,8 +42,10 @@ use crate::{
 #[repr(C)]
 pub struct LayoutNode {
     parts: Rc<LayoutParts>,
-    // The actual children of this node (folded view - includes virtual nodes as-is)
-    pub(crate) children: Vec<NodeId>,
+    // The node's children, virtual nodes as they are. Two fit in the node:
+    // most parents hold one or two, and those take no allocation of their
+    // own.
+    pub(crate) children: SmallVec<[NodeId; 2]>,
 
     /// Where the chain's layout modifiers put their content, written by
     /// layout and read by the draws and text the slices collect.
@@ -90,17 +93,12 @@ pub(crate) fn empty_measure_policy() -> Rc<dyn MeasurePolicy> {
 impl LayoutNode {
     /// Creates a node with `modifier` whose children `measure_policy` measures and places.
     pub fn new(modifier: Modifier, measure_policy: Rc<dyn MeasurePolicy>) -> Self {
-        Self::new_in(modifier, measure_policy, LayoutEnvironment::default())
-    }
-
-    // A node at the density and in the layout direction of `environment`,
-    // where a composition makes it.
-    pub(crate) fn new_in(
-        modifier: Modifier,
-        measure_policy: Rc<dyn MeasurePolicy>,
-        environment: LayoutEnvironment,
-    ) -> Self {
-        Self::new_with_virtual(modifier, measure_policy, false, environment)
+        Self::new_with_virtual(
+            modifier,
+            measure_policy,
+            false,
+            LayoutEnvironment::default(),
+        )
     }
 
     /// Create a virtual LayoutNode for subcomposition slot containers.
@@ -131,6 +129,70 @@ impl LayoutNode {
         shell
     }
 
+    // A shell for an emit that finds none pooled to fill.
+    pub(crate) fn bare_shell() -> Self {
+        Self::new_recycled_shell(false)
+    }
+
+    // Makes this shell the node a composition makes in `environment` with
+    // `modifier` and `measure_policy`, in the place it lies, so its box takes
+    // no new node whole. A shell holds a made node's values in every field
+    // but these.
+    pub(crate) fn fill(
+        &mut self,
+        modifier: &Modifier,
+        measure_policy: Rc<dyn MeasurePolicy>,
+        environment: LayoutEnvironment,
+    ) {
+        let Self {
+            parts,
+            children,
+            density,
+            is_virtual,
+            needs_semantics,
+            descendant_needs_semantics,
+            needs_redraw,
+            needs_pointer_pass,
+            needs_focus_sync,
+            modifier_slices_dirty,
+            debug_modifiers,
+            id,
+            parent,
+            folded_parent,
+            modifier_slices_snapshot: _,
+            semantics_reach,
+            owner_context_id,
+            modifier_chain,
+            #[cfg(feature = "inspection")]
+            source_trace,
+        } = self;
+        debug_assert!(
+            children.is_empty()
+                && id.get().is_none()
+                && parent.get().is_none()
+                && folded_parent.get().is_none()
+                && owner_context_id.get().is_none()
+                && semantics_reach.get().is_none()
+                && !descendant_needs_semantics.get()
+                && !needs_pointer_pass.get()
+                && !needs_focus_sync.get()
+                && !debug_modifiers.get()
+                && modifier_slices_dirty.get(),
+            "only a shell fills"
+        );
+        *parts = Rc::new(LayoutParts::new(LayoutRuntimeState::new(measure_policy)));
+        *density = crate::density::shared_density(environment.density);
+        *is_virtual = false;
+        needs_semantics.set(true);
+        needs_redraw.set(true);
+        modifier_chain.set_layout_direction(environment.direction);
+        #[cfg(feature = "inspection")]
+        {
+            *source_trace = cranpose_core::source_trace::current_source_trace();
+        }
+        self.sync_modifier_chain(modifier, None);
+    }
+
     fn new_with_virtual(
         modifier: Modifier,
         measure_policy: Rc<dyn MeasurePolicy>,
@@ -154,7 +216,7 @@ impl LayoutNode {
             source_trace: cranpose_core::source_trace::current_source_trace(),
             modifier_chain: ModifierChainHandle::detached(environment.direction),
             density: crate::density::shared_density(environment.density),
-            children: Vec::new(),
+            children: SmallVec::new(),
             needs_semantics: Cell::new(true),
             descendant_needs_semantics: Cell::new(false),
             semantics_reach: Cell::new(None),

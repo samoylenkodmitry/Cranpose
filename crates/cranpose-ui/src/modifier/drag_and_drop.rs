@@ -385,9 +385,7 @@ impl SourceGesture {
             event.consume();
             return;
         }
-        let dx = event.global_position.x - press.x;
-        let dy = event.global_position.y - press.y;
-        if (dx * dx + dy * dy).sqrt() > DRAG_THRESHOLD {
+        if (event.global_position - press).distance() > DRAG_THRESHOLD {
             self.dragging = true;
             state.start(source.clone(), point);
             event.consume();

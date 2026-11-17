@@ -15,6 +15,7 @@ use super::{
     ray_layers::RayLayers,
     runtime::Runtime,
     session::{SessionStatus, XrSession},
+    stream_layers::StreamLayers,
     surface_layers::SurfaceLayers,
 };
 use crate::{
@@ -62,6 +63,7 @@ struct Immersive {
     environment: SpatialEnvironment,
     pointer: Pointer,
     layers: PanelLayers,
+    streams: StreamLayers,
     surfaces: SurfaceLayers,
     rays: RayLayers,
     handles: HandleLayers,
@@ -81,6 +83,7 @@ impl Immersive {
         let xr_session = XrSession::new(runtime, &graphics)?;
         let controllers = Controllers::new(&xr_session)?;
         let layers = PanelLayers::new(&xr_session)?;
+        let streams = StreamLayers::new(&graphics, &xr_session);
         let format = layers.format();
         let rays = RayLayers::new(&xr_session, &gpu, format)?;
         let handles = HandleLayers::new(&xr_session, &gpu, format)?;
@@ -115,6 +118,7 @@ impl Immersive {
             environment,
             pointer: Pointer::default(),
             layers,
+            streams,
             surfaces: SurfaceLayers::new(),
             rays,
             handles,
@@ -167,6 +171,11 @@ impl Immersive {
         };
         // The handles and the rays show over the panels: the rays end on them
         let panels = self.space.panels();
+        if shown {
+            self.streams.update(&self.xr_session, &self.space);
+        } else {
+            self.streams.skip(&self.space);
+        }
         self.surfaces.sync(&self.xr_session, &self.space, &panels);
         if shown {
             quads.extend(self.surfaces.layers(&panels));
@@ -175,9 +184,14 @@ impl Immersive {
                 quads.extend(self.rays.layers(&self.pointer.beams(), head.position));
             }
         }
+        let streams = if shown {
+            self.streams.layers()
+        } else {
+            Vec::new()
+        };
         self.xr_session
-            .end_frame(frame.predicted_display_time, &cylinders, &quads)?;
-        drop((cylinders, quads));
+            .end_frame(frame.predicted_display_time, &streams, &cylinders, &quads)?;
+        drop((streams, cylinders, quads));
         if let Err(error) = self.gpu.device.poll(wgpu::PollType::Poll) {
             log::warn!("cranpose xr: device poll: {error}");
         }

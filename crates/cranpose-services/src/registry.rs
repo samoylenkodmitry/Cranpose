@@ -66,6 +66,7 @@ impl Drop for TestServiceGuard {
     fn drop(&mut self) {
         crate::audio::clear_platform_audio();
         crate::camera::clear_platform_camera();
+        crate::device_auth::set_platform_device_authenticator(None);
         crate::haptics::clear_platform_haptics();
         crate::image_picker::clear_platform_image_picker();
         crate::media::clear_platform_media_player();

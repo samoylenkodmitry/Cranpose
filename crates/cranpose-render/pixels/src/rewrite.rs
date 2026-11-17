@@ -189,30 +189,39 @@ impl Rewrite {
         }
     }
 
-    // Pushes `item` in place of the old item where the subtree pushes next,
-    // when that one is of its kind, adding the areas the two draw
-    // differently; else, and from then on, into the spill.
-    pub(crate) fn place<T: SceneItem>(&mut self, scene: &mut RasterScene, item: T) {
+    // The place in `scene`'s list of `item`'s kind that `item` takes: the old
+    // item's where the subtree pushes next, when that one is of its kind,
+    // with the areas the two draw differently added. `None` when the item
+    // goes to the spill, as every one after it does.
+    pub(crate) fn place<T: SceneItem>(
+        &mut self,
+        scene: &mut RasterScene,
+        item: &T,
+    ) -> Option<usize> {
         if self.spilled_at.is_none() {
             let at = self.next.items.order;
             let slot = *T::count(&mut self.next.items);
             let (list, order) = T::lists(scene);
             if at < self.stop.items.order && T::index_of(order[at]) == Some(slot) {
-                let old = std::mem::replace(&mut list[slot], item);
                 let reach = reach_at(&mut self.reach, self.held, at);
                 add_changed_pair(
-                    old.as_ref(),
                     list[slot].as_ref(),
+                    item.as_ref(),
                     reach,
                     self.window,
                     &mut self.areas,
                 );
                 self.next.items.order += 1;
                 *T::count(&mut self.next.items) += 1;
-                return;
+                return Some(slot);
             }
             self.spilled_at = Some(self.next);
         }
+        None
+    }
+
+    // Pushes `item` into the spill, where `place` sent it.
+    pub(crate) fn spill<T: SceneItem>(&mut self, item: T) {
         self.spill.push_item(item);
     }
 

@@ -100,9 +100,11 @@ fn log_runtime(instance: &xr::Instance, system: xr::SystemId) {
     }
     match instance.system_properties(system) {
         Ok(headset) => log::info!(
-            "cranpose xr: system \"{}\", vendor {:#x}",
+            "cranpose xr: system \"{}\", vendor {:#x}, swapchains up to {} by {} pixels",
             headset.system_name,
-            headset.vendor_id
+            headset.vendor_id,
+            headset.graphics_properties.max_swapchain_image_width,
+            headset.graphics_properties.max_swapchain_image_height
         ),
         Err(error) => log::warn!("cranpose xr: system properties: {error}"),
     }

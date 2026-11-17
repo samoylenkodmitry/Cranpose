@@ -81,7 +81,7 @@ SECTIONS
     *(.literal._RNvM*NtCs*_13cranpose_core4emitNtNt*8composer8Composer11push_parent* .text._RNvM*NtCs*_13cranpose_core4emitNtNt*8composer8Composer11push_parent*)
     *(.literal._RNvM*NtCs*_13cranpose_core5stateINt*12MutableStatefE7replace* .text._RNvM*NtCs*_13cranpose_core5stateINt*12MutableStatefE7replace*)
     *(.literal._RNvM*NtCs*_13cranpose_core5stateNt*11WriteTarget19finish_global_write* .text._RNvM*NtCs*_13cranpose_core5stateNt*11WriteTarget19finish_global_write*)
-    *(.literal._RNvM*NtCs*_13cranpose_core5stateNt*13StateWatchers10invalidate* .text._RNvM*NtCs*_13cranpose_core5stateNt*13StateWatchers10invalidate*)
+    *(.literal._RNvM*NtNtCs*_13cranpose_core5state14state_watchersNt*13StateWatchers10invalidate* .text._RNvM*NtNtCs*_13cranpose_core5state14state_watchersNt*13StateWatchers10invalidate*)
     *(.literal._RNvM*NtCs*_13cranpose_core7commandNt*11DirtyBubble4walk* .text._RNvM*NtCs*_13cranpose_core7commandNt*11DirtyBubble4walk*)
     *(.literal._RNvM*NtCs*_13cranpose_core7runtimeNt*12RuntimeInner14recycle_scopes* .text._RNvM*NtCs*_13cranpose_core7runtimeNt*12RuntimeInner14recycle_scopes*)
     *(.literal._RNvM*NtCs*_13cranpose_core7runtimeNt*12RuntimeInner15enqueue_ui_task* .text._RNvM*NtCs*_13cranpose_core7runtimeNt*12RuntimeInner15enqueue_ui_task*)

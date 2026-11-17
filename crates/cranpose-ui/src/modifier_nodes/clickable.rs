@@ -98,10 +98,7 @@ impl ClickableNode {
                     let should_click = match press_position.replace(ClickPress::Idle) {
                         ClickPress::Pressed(press_pos, _) => {
                             let travelled_to = event.travelled_to();
-                            let dx = travelled_to.x - press_pos.x;
-                            let dy = travelled_to.y - press_pos.y;
-                            let distance = (dx * dx + dy * dy).sqrt();
-                            distance <= DRAG_THRESHOLD
+                            (travelled_to - press_pos).distance() <= DRAG_THRESHOLD
                         }
                         // A release with no press before it clicks for the
                         // primary pointer only: another finger's release after

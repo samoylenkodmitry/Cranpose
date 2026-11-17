@@ -213,13 +213,14 @@ pub trait Node: Any {
         None
     }
 
-    /// Clears live attachments before the node shell enters a recycle pool.
+    /// Clears the node where it lies as its removal hands it to the recycle pool of its type:
+    /// what it holds goes as a drop would let it go, and the pool keeps it in its own box as a
+    /// shell for a later node.
     fn prepare_for_recycle(&mut self) {}
 
-    /// Optionally provides a compact replacement box for this recycled shell.
-    ///
-    /// Returning `Some` lets nodes move pooled survivors onto fresh compact
-    /// storage so the recycle pool does not pin large spike-era allocations.
+    /// Returns a new shell of this node's type in a box of its own, or `None` when the type makes
+    /// none. A recycle pool keeps such shells for later nodes: the seed of a fresh node, and the
+    /// shells it makes ahead of demand.
     fn rehouse_for_recycle(&self) -> Option<Box<dyn Node>> {
         None
     }

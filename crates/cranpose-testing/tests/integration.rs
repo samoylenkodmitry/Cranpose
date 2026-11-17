@@ -64,3 +64,4 @@ mod text_modifier_updates_test;
 mod whole_pixel_layout_test;
 mod window_coordinates_test;
 mod z_index_test;
+mod zoom_tap_test;

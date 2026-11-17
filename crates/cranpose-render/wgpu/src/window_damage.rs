@@ -51,20 +51,22 @@ pub(crate) const MAX_DAMAGE_RECTS: usize = 32;
 const RECT_COST: f32 = 1024.0;
 
 /// What a frame changes against the frame before.
+// The part comes first: a damage of no pixel is then all zero bytes, which
+// a write fills in place of a copy from a constant.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[expect(
     clippy::large_enum_variant,
-    reason = "a frame's damage moves a few times a frame; a box would allocate every frame"
+    reason = "a frame's damage stays with its owners, which lend it; a box would allocate every frame"
 )]
 pub(crate) enum Damage {
+    /// Only the window pixels of these rects; none when no pixel changes.
+    Part(DamageRects),
     /// Recent frames changed most of the window, so this one skipped working
     /// out what it changes.
     Skipped,
     /// The whole window: the frame before is not known, or the frame changes
     /// most of it.
     Full,
-    /// Only the window pixels of these rects; none when no pixel changes.
-    Part(DamageRects),
 }
 
 impl Damage {
@@ -76,17 +78,45 @@ impl Damage {
         matches!(self, Self::Part(rects) if rects.is_empty())
     }
 
-    // The pixels either damage changes, in a window of `viewport`.
-    pub(crate) fn union(self, other: Self, viewport: (u32, u32)) -> Self {
-        match (self, other) {
-            (Self::Part(mut rects), Self::Part(more)) => {
-                for rect in more.as_slice() {
-                    rects.add(*rect);
-                }
-                settle(rects, viewport)
+    // Takes in the pixels `other` changes too, in a window of `viewport`.
+    pub(crate) fn add(&mut self, other: &Self, viewport: (u32, u32)) {
+        match (&mut *self, other) {
+            (Self::Part(rects), Self::Part(more)) => {
+                rects.add_all(more);
+                self.settle(viewport);
             }
-            (Self::Full, _) | (_, Self::Full) => Self::Full,
-            (Self::Skipped, _) | (_, Self::Skipped) => Self::Skipped,
+            (Self::Full, _) | (_, Self::Full) => *self = Self::Full,
+            (Self::Skipped, _) | (_, Self::Skipped) => *self = Self::Skipped,
+        }
+    }
+
+    // Cuts a part to a window of `viewport`, or takes the whole window for
+    // a part past [`FULL_SHARE`] of it.
+    pub(crate) fn settle(&mut self, viewport: (u32, u32)) {
+        let Self::Part(rects) = self else {
+            return;
+        };
+        let window = window_rect(viewport);
+        rects.keep_within(window);
+        if rects.pixels() > FULL_SHARE * window.width * window.height {
+            *self = Self::Full;
+        }
+    }
+
+    // Takes the value of `other`; a part copies only the rects it holds.
+    pub(crate) fn assign(&mut self, other: &Self) {
+        match other {
+            Self::Skipped => *self = Self::Skipped,
+            Self::Full => *self = Self::Full,
+            Self::Part(rects) => self.assign_part(rects),
+        }
+    }
+
+    // Takes the part `rects` make, copying only the rects they hold.
+    pub(crate) fn assign_part(&mut self, rects: &DamageRects) {
+        match self {
+            Self::Part(held) => held.assign(rects),
+            Self::Skipped | Self::Full => *self = Self::Part(*rects),
         }
     }
 
@@ -153,8 +183,8 @@ impl Repaint {
 }
 
 /// Window pixels as up to [`MAX_DAMAGE_RECTS`] rects of whole pixels that
-/// share no pixel.
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// share no pixel. Two are equal when they hold the same rects.
+#[derive(Clone, Copy, Debug)]
 pub(crate) struct DamageRects {
     rects: [DeviceRect; MAX_DAMAGE_RECTS],
     len: usize,
@@ -163,6 +193,12 @@ pub(crate) struct DamageRects {
 impl Default for DamageRects {
     fn default() -> Self {
         Self::EMPTY
+    }
+}
+
+impl PartialEq for DamageRects {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_slice() == other.as_slice()
     }
 }
 
@@ -309,16 +345,27 @@ impl DamageRects {
         }
     }
 
-    /// The rects cut to `window`.
-    pub(crate) fn within(&self, window: DeviceRect) -> Self {
-        let mut within = Self::default();
-        for part in self.as_slice() {
-            if let Some(part) = part.intersect(window) {
-                within.rects[within.len] = part;
-                within.len += 1;
+    // Keeps of each rect the part inside `window`.
+    fn keep_within(&mut self, window: DeviceRect) {
+        let mut kept = 0;
+        for at in 0..self.len {
+            if let Some(part) = self.rects[at].intersect(window) {
+                self.rects[kept] = part;
+                kept += 1;
             }
         }
-        within
+        self.len = kept;
+    }
+
+    // Takes the rects of `other` in place of its own.
+    pub(crate) fn assign(&mut self, other: &Self) {
+        self.rects[..other.len].copy_from_slice(other.as_slice());
+        self.len = other.len;
+    }
+
+    // Holds no rect.
+    pub(crate) fn clear(&mut self) {
+        self.len = 0;
     }
 }
 
@@ -375,11 +422,9 @@ impl Held {
     // The frame held with `stand_ins` drawn with stand-ins besides the parts
     // it holds already, which a frame drawn over it after a landing draws
     // again: the whole window when it may show one anywhere.
-    pub(crate) fn with_stand_ins(self, stand_ins: Damage) -> Self {
-        Self {
-            stand_ins: self.stand_ins.union(stand_ins, self.viewport),
-            ..self
-        }
+    pub(crate) fn with_stand_ins(mut self, stand_ins: Damage) -> Self {
+        self.stand_ins.add(&stand_ins, self.viewport);
+        self
     }
 
     // The frame held with its stand-ins drawing `pixels`.
@@ -446,6 +491,12 @@ impl PacketDamage {
         since: None,
         damage: Damage::Full,
     };
+
+    // Takes the value of `other`; a part copies only the rects it holds.
+    pub(crate) fn assign(&mut self, other: &Self) {
+        self.since = other.since;
+        self.damage.assign(&other.damage);
+    }
 }
 
 /// The frame a target's pixels hold, drawn whole of the scene.
@@ -498,15 +549,22 @@ impl FrameDamages {
         (frame % HISTORY as u64) as usize
     }
 
-    fn noted(&self, frame: u64) -> Option<PacketDamage> {
+    fn noted(&self, frame: u64) -> Option<&PacketDamage> {
         self.entries[Self::slot(frame)]
+            .as_ref()
             .filter(|(noted, _)| *noted == frame)
             .map(|(_, damage)| damage)
     }
 
     /// Keeps the damage of the packet of `frame`.
-    pub(crate) fn note(&mut self, frame: u64, damage: PacketDamage) {
-        self.entries[Self::slot(frame)] = Some((frame, damage));
+    pub(crate) fn note(&mut self, frame: u64, damage: &PacketDamage) {
+        match &mut self.entries[Self::slot(frame)] {
+            Some((noted, held)) => {
+                *noted = frame;
+                held.assign(damage);
+            }
+            empty => *empty = Some((frame, *damage)),
+        }
     }
 
     /// What `frame` changes in a target that holds `held`: the damages since
@@ -548,8 +606,9 @@ impl FrameDamages {
         if (held.setting, held.viewport) != (frame.setting, frame.viewport) {
             return changed(Damage::Full);
         }
-        match self.union_back(frame.packet.frame_id, held.frame) {
-            Ok(mut union) => {
+        let mut union = DamageRects::default();
+        match self.union_back(frame.packet.frame_id, held.frame, &mut union) {
+            Ok(()) => {
                 union.add_all(&redrawn);
                 Since {
                     stand_ins: kept,
@@ -563,26 +622,31 @@ impl FrameDamages {
         }
     }
 
-    // The union of the damages of the packets from `at` back to the one
-    // after `held`; why they make no part of the window when one of them is
-    // not a part.
-    pub(crate) fn union_back(&self, at: u64, held: u64) -> Result<DamageRects, NoPart> {
+    // Writes into `union` the union of the damages of the packets from `at`
+    // back to the one after `held`; why they make no part of the window when
+    // one of them is not a part.
+    pub(crate) fn union_back(
+        &self,
+        at: u64,
+        held: u64,
+        union: &mut DamageRects,
+    ) -> Result<(), NoPart> {
         // A frame that changed nothing against the one before is that one.
         let mut held_frame = held;
         for _ in 0..HISTORY {
             match self.noted(held_frame) {
-                Some(PacketDamage {
+                Some(&PacketDamage {
                     since: Some(since),
-                    damage: Damage::Part(changed),
+                    damage: Damage::Part(ref changed),
                 }) if changed.is_empty() => held_frame = since,
                 _ => break,
             }
         }
-        let mut union = DamageRects::default();
+        union.clear();
         let mut at = at;
         for _ in 0..=HISTORY {
             if at == held_frame || at == held {
-                return Ok(union);
+                return Ok(());
             }
             let Some(packet) = self.noted(at) else {
                 return Err(NoPart::Unknown);
@@ -590,12 +654,10 @@ impl FrameDamages {
             let Some(since) = packet.since else {
                 return Err(NoPart::Baseline);
             };
-            let Damage::Part(part) = packet.damage else {
+            let Damage::Part(part) = &packet.damage else {
                 return Err(NoPart::Unknown);
             };
-            for rect in part.as_slice() {
-                union.add(*rect);
-            }
+            union.add_all(part);
             at = since;
         }
         Err(NoPart::Unknown)
@@ -622,18 +684,6 @@ pub(crate) fn window_rect((width, height): (u32, u32)) -> DeviceRect {
         y: 0.0,
         width: width as f32,
         height: height as f32,
-    }
-}
-
-/// The damage `rects` make in a window of `viewport`: the rects cut to it,
-/// or the whole window past [`FULL_SHARE`] of it.
-pub(crate) fn settle(rects: DamageRects, viewport: (u32, u32)) -> Damage {
-    let window = window_rect(viewport);
-    let rects = rects.within(window);
-    if rects.pixels() > FULL_SHARE * window.width * window.height {
-        Damage::Full
-    } else {
-        Damage::Part(rects)
     }
 }
 

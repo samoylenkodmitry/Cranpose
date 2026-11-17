@@ -88,9 +88,9 @@ impl IntoTextSource for SharedText {
         }
     }
 
-    fn static_text(&self) -> Option<StaticText<'_>> {
-        Some(match &self.0 {
-            Storage::Static(text) => StaticText::Plain(text),
+    fn into_static_text(self) -> Result<StaticText, Self> {
+        Ok(match self.0 {
+            Storage::Static(text) => StaticText::Borrowed(text),
             Storage::Annotated(text) => StaticText::Annotated(text),
         })
     }

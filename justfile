@@ -149,7 +149,7 @@ test-emscripten: check-emscripten
 # Lint the iOS simulator binary.
 clippy-ios:
     cargo clippy -p desktop-app --bin cranpose-ios --bin cranpose-liquid-reference --target aarch64-apple-ios-sim --no-default-features --features ios -- -D warnings
-    cargo clippy -p cranpose --target aarch64-apple-ios-sim --no-default-features --features ios,renderer-wgpu,storage-space -- -D warnings
+    cargo clippy -p cranpose --target aarch64-apple-ios-sim --no-default-features --features ios,renderer-wgpu,storage-space,device-auth -- -D warnings
 
 # The feature set `clippy-optional-backends` and `clippy-release` both lint.
 optional_backend_features := "desktop,renderer-wgpu,camera-desktop,robot,audio-desktop,media,storekit,playbilling,embed"
@@ -525,7 +525,7 @@ features:
       --exclude desktop-app --exclude desktop-app-platform --exclude xtask \
       --exclude coroflow-demo --exclude coroflow-demo-web --exclude coroflow-demo-android \
       --exclude cranpose-native-demo --exclude perf-compare-cranpose --exclude perf-data \
-      --exclude-features android,ios,watchos,web,cranpose-platform-android,cranpose-platform-web,native-windows,uri-android,uri-web,file-picker-web,preferences-web,system-theme-web,web-http,wearable,heart-rate,storekit,playbilling,aaudio,avaudio
+      --exclude-features android,ios,watchos,web,cranpose-platform-android,cranpose-platform-web,native-windows,uri-android,uri-web,file-picker-web,preferences-web,system-theme-web,web-http,wearable,heart-rate,device-auth,storekit,playbilling,aaudio,avaudio
 
 # The generic functions that copy most LLVM IR into the desktop binary, the
 # 40 largest. A report for the nightly summary.
@@ -594,6 +594,18 @@ ci-contract-gates:
 bench-app-check:
     cargo clippy --manifest-path benchmarks/compose-vs-cranpose/cranpose-app/Cargo.toml --all-targets -- -D warnings
     cargo test --manifest-path benchmarks/compose-vs-cranpose/cranpose-app/Cargo.toml
+
+# The steady-frame ledger (#2247): the `malloc` and `realloc` calls, the
+# blocks left live and the bytes copied a steady frame of every bench layout,
+# and the still wall's start a layout node, against
+# scripts/perf/steady_ledger_budget.txt. It fails when a row rises past its
+# budget plus its spread (and 2% for bytes). Linux with valgrind; nightly
+# runs it. `--ab BASE HEAD` prints the difference a row between two commits
+# with the callgrind instructions of five windows, reusing BASE when the host
+# measured it before (`--base BASE` measures it alone); `--host H` runs that
+# on H; `--repeats 3` measures the spread for the budget file.
+steady-ledger *args:
+    scripts/perf/steady_ledger.sh {{args}}
 
 # The shop app benchmark's Everbloom app (benchmarks/shopbench), a Cargo
 # project of its own: Everbloom.app for an iPhone, or for the Simulator with
@@ -722,6 +734,7 @@ test-shell-helpers: _benchmark-python ci-contract-gates
     {{benchmark_python}} scripts/android_benchmark_test.py
     {{benchmark_python}} scripts/android_visual_contract_test.py
     python3 scripts/perf_report_test.py
+    scripts/perf/steady_ledger_test.sh
     python3 benchmarks/compose-vs-cranpose/tests/test_surfaceflinger_report.py
     python3 benchmarks/compose-vs-cranpose/tests/test_clock_samples.py
     python3 benchmarks/compose-vs-cranpose/tests/test_run_samples.py

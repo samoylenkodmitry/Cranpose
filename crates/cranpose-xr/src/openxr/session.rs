@@ -18,9 +18,9 @@ use super::{
     refresh_rate,
     runtime::Runtime,
 };
-use crate::Pose;
 #[cfg(target_os = "android")]
 use crate::stereo_mode::{Eye, EyeView};
+use crate::{Fov, Pose};
 
 const VIEW_CONFIGURATION: xr::ViewConfigurationType = xr::ViewConfigurationType::PRIMARY_STEREO;
 // How long the app waits for the runtime to stop a running session as the app ends, and how
@@ -72,6 +72,22 @@ pub(crate) enum LayerSource {
     // picture is opaque. Only an Android headset's compositor shows surfaces.
     #[cfg(target_os = "android")]
     Surface(EyeView),
+}
+
+// One eye of a projection layer: a swapchain image, drawn from the pose and with the field of
+// view that the layer says.
+pub(crate) struct ProjectionEye<'a> {
+    pub(crate) swapchain: &'a xr::Swapchain<Api>,
+    // The image's size in pixels. The eye shows all of it.
+    pub(crate) size: (u32, u32),
+    pub(crate) pose: Pose,
+    pub(crate) fov: Fov,
+}
+
+// A layer that shows the pictures that were rendered for both eyes, from the head poses that
+// they were rendered for. The compositor moves them to the head's newer pose.
+pub(crate) struct ProjectionLayer<'a> {
+    pub(crate) eyes: [ProjectionEye<'a>; 2],
 }
 
 // A layer that shows a swapchain image on a flat panel.
@@ -239,10 +255,11 @@ impl XrSession {
     }
 
     // Ends the frame begun last. The room is the bottom layer while the runtime shows the app's
-    // layers. Then come the curved panels, then `layers`, back to front.
+    // layers. Then come the streamed scenes, the curved panels, and `layers`, back to front.
     pub(crate) fn end_frame(
         &mut self,
         display_time: xr::Time,
+        streams: &[ProjectionLayer<'_>],
         curved: &[CylinderLayer<'_>],
         layers: &[QuadLayer<'_>],
     ) -> Result<(), String> {
@@ -315,11 +332,23 @@ impl XrSession {
             flags: xr::sys::CompositionLayerImageLayoutFlagsFB::VERTICAL_FLIP,
         };
         let cylinders = raw_layers(curved, &self.local, self.flips_layers.then_some(&flip));
+        let views: Vec<[xr::CompositionLayerProjectionView<'_, Api>; 2]> =
+            streams.iter().map(projection_views).collect();
+        let projections: Vec<xr::CompositionLayerProjection<'_, Api>> = views
+            .iter()
+            .map(|views| {
+                xr::CompositionLayerProjection::new()
+                    .layer_flags(xr::CompositionLayerFlags::EMPTY)
+                    .space(&self.local)
+                    .views(views)
+            })
+            .collect();
         let references: Vec<&xr::CompositionLayerBase<'_, Api>> = self
             .passthrough
             .layer()
             .filter(|_| self.status.shows())
             .into_iter()
+            .chain(projections.iter().map(|projection| &**projection))
             .chain(cylinders.iter().map(|cylinder| &**cylinder))
             .chain(quads.iter().map(|quad| &**quad))
             .collect();
@@ -350,6 +379,33 @@ impl Drop for XrSession {
         }
         log::info!("cranpose xr: session ends in {:?}", self.status);
     }
+}
+
+// The views of a projection layer, left then right. Each shows all of its image.
+fn projection_views<'a>(
+    layer: &ProjectionLayer<'a>,
+) -> [xr::CompositionLayerProjectionView<'a, Api>; 2] {
+    layer.eyes.each_ref().map(|eye| {
+        xr::CompositionLayerProjectionView::new()
+            .pose(posef(&eye.pose))
+            .fov(xr::Fovf {
+                angle_left: eye.fov.angle_left,
+                angle_right: eye.fov.angle_right,
+                angle_up: eye.fov.angle_up,
+                angle_down: eye.fov.angle_down,
+            })
+            .sub_image(
+                xr::SwapchainSubImage::new()
+                    .swapchain(eye.swapchain)
+                    .image_rect(xr::Rect2Di {
+                        offset: xr::Offset2Di { x: 0, y: 0 },
+                        extent: xr::Extent2Di {
+                            width: eye.size.0 as i32,
+                            height: eye.size.1 as i32,
+                        },
+                    }),
+            )
+    })
 }
 
 #[cfg(target_os = "android")]

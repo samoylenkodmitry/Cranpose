@@ -100,6 +100,11 @@ pub(crate) fn register(
     if capabilities.has(cranpose_capabilities::Service::Microphone) {
         super::microphone::register(app.clone());
     }
+    // Present only when the application declares the unlock, which brings
+    // `CranposeDeviceAuth`; anywhere else nothing can unlock.
+    if capabilities.has(cranpose_capabilities::Service::DeviceAuth) {
+        super::device_auth::register(app.clone());
+    }
     #[cfg(feature = "media-backend")]
     super::media::register(app.clone());
     set_platform_launch_args(Arc::new(read_launch_arguments(&app)));

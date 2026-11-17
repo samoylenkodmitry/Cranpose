@@ -678,7 +678,16 @@ impl RasterScene {
             item.snap_to(anchor);
         }
         if let Some(mut rewrite) = self.rewrite.take() {
-            rewrite.place(self, item);
+            // The old item in the place stays until the new one is compared
+            // with it; then the new one moves there once. An assignment
+            // would also copy the new item aside while the old one drops.
+            // A replace moves the old item out for its drop: a shape whole,
+            // as its brush drops out of line, another kind only the fields
+            // its drop reads.
+            match rewrite.place(self, &item) {
+                Some(slot) => drop(std::mem::replace(&mut T::lists(self).0[slot], item)),
+                None => rewrite.spill(item),
+            }
             self.rewrite = Some(rewrite);
             return;
         }

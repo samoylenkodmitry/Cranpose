@@ -41,8 +41,8 @@ mod node_layer;
 use node_layer::{
     AbsOrigin, LowerContext, assign_layer, hit_test_from_slices, layer_and_node_bounds,
     layer_identity, lower_root_into, modifier_slices_have_origin_sinks, outer_commands,
-    outer_draws, placing_transform, prepare_node_layer, set_bounds, slices_hit_something,
-    take_wrapped_layer, write_node_content, write_node_layer, write_wrapper,
+    outer_draws, placing_transform, set_bounds, slices_hit_something, take_wrapped_layer,
+    with_node_layer, write_node_content, write_node_layer, write_wrapper,
 };
 mod translate_layer;
 pub(crate) use translate_layer::TranslateScratch;
@@ -631,8 +631,10 @@ fn update_layer_properties(
         }
         let context = LowerContext::beneath(ancestors);
         let previous = HitGraphState::of(store.layer(target));
-        let (head, child_context) = prepare_node_layer(node_id, slices, state, context);
-        assign_layer(store, target, head);
+        let child_context = with_node_layer(node_id, slices, state, context, |head, children| {
+            assign_layer(store, target, head);
+            children
+        });
         if wrapped {
             let layer = store.layer(target);
             let transform = layer_transform_to_parent(

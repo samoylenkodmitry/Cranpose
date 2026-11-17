@@ -83,5 +83,7 @@
         <string>UIInterfaceOrientationLandscapeLeft</string>
         <string>UIInterfaceOrientationLandscapeRight</string>
     </array>
+    <key>NSFaceIDUsageDescription</key>
+    <string>Unlocks the demo with your face.</string>
 </dict>
 </plist>

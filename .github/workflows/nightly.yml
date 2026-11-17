@@ -67,7 +67,8 @@ jobs:
   # Two triggers would otherwise run the whole suite twice on the two Linux
   # slots, so whichever arrives second asks whether tonight is already covered
   # and becomes a fifteen-second no-op. A failed run is not covered -- a retry
-  # is what should happen.
+  # is what should happen. The schedule fires hours after the dispatch, on a
+  # main that moved, so a scheduled run counts tonight's run of any commit.
   decide:
     name: decide whether tonight's nightly already ran
     runs-on: ubuntu-latest
@@ -85,10 +86,11 @@ jobs:
           REPO: ${{ github.repository }}
           SHA: ${{ github.sha }}
           RUN_ID: ${{ github.run_id }}
+          EVENT: ${{ github.event_name }}
           FORCE: ${{ github.event_name == 'workflow_dispatch' && inputs.force }}
         run: |
           set -euo pipefail
-          args=(--repo "$REPO" --sha "$SHA" --run-id "$RUN_ID")
+          args=(--repo "$REPO" --sha "$SHA" --run-id "$RUN_ID" --event "$EVENT")
           if [ "$FORCE" = "true" ]; then
             args+=(--force)
           fi
@@ -274,6 +276,28 @@ jobs:
         run: scripts/ci/provision_toolchain.sh
       - name: Check the benchmark app
         run: just bench-app-check
+
+  # The steady-frame ledger (#2247): allocator calls and copied bytes a
+  # steady frame of every bench layout against their budgets. valgrind's DHAT
+  # counts the copies; the runners with these labels are samarch-1's, which
+  # have valgrind (the overflow runner carries no `cranpose-heavy`). The
+  # measurement takes about a minute on samarch-1; the fat LTO build takes
+  # up to about 12 minutes from a cold target.
+  steady-ledger:
+    name: steady-frame ledger (linux)
+    needs: decide
+    if: needs.decide.outputs.run == 'true'
+    runs-on: [self-hosted, Linux, cranpose-heavy]
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: ${{ github.workspace }}/scripts/ci/with_host_lock.sh --shared bash --noprofile --norc -eo pipefail {0}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Provision toolchain
+        run: scripts/ci/provision_toolchain.sh
+      - name: Measure the steady frames against their budgets
+        run: just steady-ledger
 
   # Each feature of the framework crates built alone (cargo-hack, about 12
   # minutes), and the generic functions that copy most IR into the desktop

@@ -15,7 +15,7 @@ use cranpose_ui::{
 };
 use cranpose_ui_graphics::{Brush, CornerRadii, Point};
 use cranpose_ui_layout::{
-    Constraints, Measurable, MeasurePolicy, MeasureResult, MeasureScope, Placement,
+    Constraints, Measurables, MeasurePolicy, MeasureResult, MeasureScope, Placement,
 };
 
 use crate::theme::{liquid_colors, liquid_typography};
@@ -164,7 +164,7 @@ impl MeasurePolicy for TooltipPlacement {
     fn measure(
         &self,
         _scope: &dyn MeasureScope,
-        measurables: &[Box<dyn Measurable>],
+        measurables: Measurables<'_>,
         _constraints: Constraints,
     ) -> MeasureResult {
         let Self { anchor, viewport } = *self;
@@ -188,26 +188,25 @@ impl MeasurePolicy for TooltipPlacement {
                 } else {
                     anchor.y + anchor.height + GAP
                 };
-                placeable.place(x, y);
                 Placement::new(placeable.node_id(), x, y, 0.0)
             })
             .collect();
         MeasureResult::new(viewport, placements)
     }
 
-    fn min_intrinsic_width(&self, _measurables: &[Box<dyn Measurable>], _height: f32) -> f32 {
+    fn min_intrinsic_width(&self, _measurables: Measurables<'_>, _height: f32) -> f32 {
         self.viewport.width
     }
 
-    fn max_intrinsic_width(&self, _measurables: &[Box<dyn Measurable>], _height: f32) -> f32 {
+    fn max_intrinsic_width(&self, _measurables: Measurables<'_>, _height: f32) -> f32 {
         self.viewport.width
     }
 
-    fn min_intrinsic_height(&self, _measurables: &[Box<dyn Measurable>], _width: f32) -> f32 {
+    fn min_intrinsic_height(&self, _measurables: Measurables<'_>, _width: f32) -> f32 {
         self.viewport.height
     }
 
-    fn max_intrinsic_height(&self, _measurables: &[Box<dyn Measurable>], _width: f32) -> f32 {
+    fn max_intrinsic_height(&self, _measurables: Measurables<'_>, _width: f32) -> f32 {
         self.viewport.height
     }
 }

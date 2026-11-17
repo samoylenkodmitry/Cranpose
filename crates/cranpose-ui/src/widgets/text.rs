@@ -5,7 +5,7 @@
 //! concerns: MeasurePolicy handles child layout, while TextModifierNode handles text content
 //! measurement, drawing, and semantics.
 
-use std::{rc::Rc, sync::Arc};
+use std::{cell::RefCell, rc::Rc, sync::Arc};
 
 use cranpose_core::{MutableState, NodeId, State};
 use cranpose_foundation::modifier_element;
@@ -53,30 +53,69 @@ pub enum TextSource {
 }
 
 impl TextSource {
-    fn resolve(&self) -> crate::text::AnnotatedString {
+    fn resolve(self) -> crate::text::AnnotatedString {
         match self {
-            Self::Static(text) => text.clone(),
+            Self::Static(text) => text,
             Self::Dynamic(dynamic) => dynamic.resolve(),
         }
     }
 }
 
+// The most bytes past its text that an owned string keeps in its room once a
+// text shows it: what `format!` and `to_string` leave past a short number.
+const SPARE_ROOM_KEPT: usize = 8;
+
 /// A fixed text as a widget was given it, which the widget compares with the
-/// text its node shows without making a copy.
+/// text its node shows without making a copy, and gives the node when the
+/// node shows another.
 #[doc(hidden)]
-#[derive(Clone, Copy)]
-pub enum StaticText<'a> {
-    /// Characters with no styles, annotations or links.
-    Plain(&'a str),
+#[derive(Clone, PartialEq)]
+pub enum StaticText {
+    /// Characters with no styles, annotations or links, whose room the
+    /// node takes.
+    Owned(String),
+    /// Characters with no styles, annotations or links, which the node
+    /// copies.
+    Borrowed(&'static str),
     /// An annotated string.
-    Annotated(&'a crate::text::AnnotatedString),
+    Annotated(crate::text::AnnotatedString),
 }
 
-impl StaticText<'_> {
-    pub(crate) fn is(self, shown: &crate::text::AnnotatedString) -> bool {
+impl Default for StaticText {
+    fn default() -> Self {
+        Self::Borrowed("")
+    }
+}
+
+impl StaticText {
+    pub(crate) fn is(&self, shown: &crate::text::AnnotatedString) -> bool {
         match self {
-            Self::Plain(text) => shown.is_plain(text),
+            Self::Owned(text) => shown.is_plain(text),
+            Self::Borrowed(text) => shown.is_plain(text),
             Self::Annotated(text) => shown == text,
+        }
+    }
+
+    // The text as an annotated string, in the room of a string a text gave
+    // up when the app context keeps one. An owned string keeps its room for
+    // as long as the text shows it, so a room with more than
+    // `SPARE_ROOM_KEPT` bytes past the text gives the rest back first.
+    fn into_annotated(self) -> crate::text::AnnotatedString {
+        let context = crate::render_state::current_app_context();
+        match self {
+            Self::Owned(mut text) => {
+                if text.capacity() - text.len() > SPARE_ROOM_KEPT {
+                    text.shrink_to_fit();
+                }
+                match context {
+                    Some(context) => context.text.plain_string(text),
+                    None => crate::text::AnnotatedString::new(text),
+                }
+            }
+            Self::Borrowed(text) => {
+                context.map_or_else(|| text.into(), |context| context.text.plain_text(text))
+            }
+            Self::Annotated(text) => text,
         }
     }
 }
@@ -85,10 +124,23 @@ impl StaticText<'_> {
 pub trait IntoTextSource {
     fn into_text_source(self) -> TextSource;
 
-    /// The text, when it is fixed: `None` for a text read from a state or
-    /// a callback each time it composes.
-    fn static_text(&self) -> Option<StaticText<'_>> {
-        None
+    /// The text, when it is fixed; the source itself, which a text reads
+    /// from a state or a callback each time it composes, when not.
+    fn into_static_text(self) -> Result<StaticText, Self>
+    where
+        Self: Sized,
+    {
+        Err(self)
+    }
+}
+
+impl IntoTextSource for StaticText {
+    fn into_text_source(self) -> TextSource {
+        TextSource::Static(self.into_annotated())
+    }
+
+    fn into_static_text(self) -> Result<StaticText, Self> {
+        Ok(self)
     }
 }
 
@@ -97,18 +149,18 @@ impl IntoTextSource for String {
         TextSource::Static(crate::text::AnnotatedString::from(self))
     }
 
-    fn static_text(&self) -> Option<StaticText<'_>> {
-        Some(StaticText::Plain(self))
+    fn into_static_text(self) -> Result<StaticText, Self> {
+        Ok(StaticText::Owned(self))
     }
 }
 
-impl IntoTextSource for &str {
+impl IntoTextSource for &'static str {
     fn into_text_source(self) -> TextSource {
         TextSource::Static(crate::text::AnnotatedString::from(self))
     }
 
-    fn static_text(&self) -> Option<StaticText<'_>> {
-        Some(StaticText::Plain(self))
+    fn into_static_text(self) -> Result<StaticText, Self> {
+        Ok(StaticText::Borrowed(self))
     }
 }
 
@@ -117,20 +169,19 @@ impl IntoTextSource for crate::text::AnnotatedString {
         TextSource::Static(self)
     }
 
-    fn static_text(&self) -> Option<StaticText<'_>> {
-        Some(StaticText::Annotated(self))
+    fn into_static_text(self) -> Result<StaticText, Self> {
+        Ok(StaticText::Annotated(self))
     }
 }
 
+// A state's and a callback's text is read as its widget composes, in the
+// widget's own group, so the read recomposes the widget alone.
 impl<T> IntoTextSource for State<T>
 where
     T: ToString + Clone + 'static,
 {
     fn into_text_source(self) -> TextSource {
-        let state = self;
-        TextSource::Dynamic(DynamicTextSource::new(move || {
-            crate::text::AnnotatedString::from(state.value().to_string())
-        }))
+        TextSource::Static(StaticText::Owned(self.read(T::to_string)).into_annotated())
     }
 }
 
@@ -139,10 +190,7 @@ where
     T: ToString + Clone + 'static,
 {
     fn into_text_source(self) -> TextSource {
-        let state = self;
-        TextSource::Dynamic(DynamicTextSource::new(move || {
-            crate::text::AnnotatedString::from(state.value().to_string())
-        }))
+        TextSource::Static(StaticText::Owned(self.read(T::to_string)).into_annotated())
     }
 }
 
@@ -151,9 +199,7 @@ where
     F: Fn() -> String + 'static,
 {
     fn into_text_source(self) -> TextSource {
-        TextSource::Dynamic(DynamicTextSource::new(move || {
-            crate::text::AnnotatedString::from(self())
-        }))
+        TextSource::Static(StaticText::Owned(self()).into_annotated())
     }
 }
 
@@ -192,33 +238,41 @@ fn compose_text<S>(
 where
     S: IntoTextSource + Clone + PartialEq + 'static,
 {
-    if let Some(fixed) = text.static_text()
-        && crate::widgets::selection_container::current_selection_registrar().is_none()
-    {
-        return static_text::Text(fixed, modifier, style, options);
+    match text.into_static_text() {
+        Ok(fixed)
+            if crate::widgets::selection_container::current_selection_registrar().is_none() =>
+        {
+            static_text::Text(fixed, modifier, style, options)
+        }
+        Ok(fixed) => text_group::Text(fixed, modifier, style, options),
+        Err(text) => text_group::Text(text, modifier, style, options),
     }
-    text_group::Text(text, modifier, style, options)
 }
 
-// The modifier of a fixed text's node as a text widget sets it: the
-// caller's modifier, then the text's element, made only when the node does
-// not show them already.
-struct StaticTextModifier<'a> {
+// The modifier of a text's node as a text widget sets it: the caller's
+// modifier, then the text's element, made only when the node does not show
+// them already. A node that shows another text takes the text in place.
+struct TextNodeModifier {
     modifier: Modifier,
-    text: StaticText<'a>,
+    // The text as the widget has it, until a node takes it: then the string
+    // the node shows.
+    text: RefCell<StaticText>,
     style: Arc<TextStyle>,
     options: TextLayoutOptions,
     density: Density,
 }
 
-impl StaticTextModifier<'_> {
-    // The text, shared with equal texts the app shows.
+impl TextNodeModifier {
+    // The text as a node shows it, which the modifier compares from then
+    // on: a node made for the modifier may take it once more.
     fn shared_text(&self) -> crate::text::AnnotatedString {
-        match self.text {
-            StaticText::Plain(text) => crate::render_state::current_app_context()
-                .map_or_else(|| text.into(), |context| context.text.plain_text(text)),
-            StaticText::Annotated(text) => text.clone(),
+        let mut text = self.text.borrow_mut();
+        if let StaticText::Annotated(shown) = &*text {
+            return shown.clone();
         }
+        let shown = std::mem::take(&mut *text).into_annotated();
+        *text = StaticText::Annotated(shown.clone());
+        shown
     }
 
     fn element(&self) -> TextModifierElement {
@@ -234,23 +288,26 @@ impl StaticTextModifier<'_> {
     // `node`'s chain, comparing it once: whether the node took another text,
     // or `None` when the chain holds no such node. An inspection build keeps
     // the inspector metadata of the whole modifier, so another text goes
-    // through the modifier.
-    fn show_in(&self, node: &LayoutNode) -> Option<bool> {
+    // through the modifier. The node takes the text: the modifier compares
+    // it no more.
+    fn show_in(&mut self, node: &LayoutNode) -> Option<bool> {
         let last = node.node_after(&self.modifier)?;
         let mut last = last.borrow_mut();
         let text_node = last.as_any_mut().downcast_mut::<TextModifierNode>()?;
-        if text_node.shows(self.text, &self.style, self.options, self.density) {
+        let text = self.text.get_mut();
+        if text_node.shows(text, &self.style, self.options, self.density) {
             return Some(false);
         }
         if cfg!(feature = "inspection") {
             return None;
         }
-        text_node.show(&self.shared_text(), &self.style, self.options, self.density);
+        let shown = std::mem::take(text).into_annotated();
+        text_node.show(shown, &self.style, self.options, self.density);
         Some(true)
     }
 }
 
-impl NodeModifier for StaticTextModifier<'_> {
+impl NodeModifier for TextNodeModifier {
     fn provided_locals(&self) -> Vec<cranpose_core::ProvidedValue> {
         self.modifier.provided_composition_locals()
     }
@@ -273,11 +330,11 @@ impl NodeModifier for StaticTextModifier<'_> {
 // The text widget of a fixed text, named `Text` for the source traces
 // inspection shows.
 mod static_text {
-    use std::sync::Arc;
+    use std::{cell::RefCell, sync::Arc};
 
     use cranpose_core::NodeId;
 
-    use super::{StaticText, StaticTextModifier, text_layout_inputs};
+    use super::{StaticText, TextNodeModifier, text_layout_inputs};
     use crate::{
         composable,
         modifier::Modifier,
@@ -290,7 +347,7 @@ mod static_text {
     // so it keeps no group, scope or parameters of its own.
     #[composable(no_skip)]
     pub(super) fn Text(
-        text: StaticText<'_>,
+        text: StaticText,
         modifier: Modifier,
         style: Arc<TextStyle>,
         options: TextLayoutOptions,
@@ -298,9 +355,9 @@ mod static_text {
         let (style, options) = text_layout_inputs(style, options);
         let environment = LayoutEnvironment::current();
         compose_empty_layout(
-            StaticTextModifier {
+            TextNodeModifier {
                 modifier,
-                text,
+                text: RefCell::new(text),
                 style,
                 options,
                 density: environment.density,
@@ -315,13 +372,11 @@ mod static_text {
 // read recomposes alone, or one in a selection container, which remembers
 // its place in the container's selection.
 mod text_group {
-    use std::sync::Arc;
+    use std::{cell::RefCell, sync::Arc};
 
     use cranpose_core::NodeId;
 
-    use super::{
-        IntoTextSource, TextModifierElement, TextSource, text_layout_inputs, text_node_modifier,
-    };
+    use super::{IntoTextSource, StaticText, TextNodeModifier, TextSource, text_layout_inputs};
     use crate::{
         composable,
         modifier::Modifier,
@@ -342,14 +397,14 @@ mod text_group {
     where
         S: IntoTextSource + Clone + PartialEq + 'static,
     {
-        text_node(&text.into_text_source(), modifier, style, options)
+        text_node(text.into_text_source(), modifier, style, options)
     }
 
     // What the group makes of any text type. Out of line, one copy: the group
     // of each text type would repeat it.
     #[inline(never)]
     fn text_node(
-        source: &TextSource,
+        source: TextSource,
         modifier: Modifier,
         style: Arc<TextStyle>,
         options: TextLayoutOptions,
@@ -367,10 +422,13 @@ mod text_group {
             None => modifier,
         };
         compose_empty_layout(
-            text_node_modifier(
+            TextNodeModifier {
                 modifier,
-                TextModifierElement::with_shared_style(text, style, options, environment.density),
-            ),
+                text: RefCell::new(StaticText::Annotated(text)),
+                style,
+                options,
+                density: environment.density,
+            },
             environment,
         )
     }
@@ -388,7 +446,7 @@ pub fn BasicTextWithOptions<S>(
 where
     S: IntoTextSource + Clone + PartialEq + 'static,
 {
-    compose_text(text, modifier, shared_text_style(style), options)
+    compose_text(text, modifier, shared_text_style(&style), options)
 }
 
 /// Displays `text` in `style` with the given overflow, wrapping and line limits. Compose's
@@ -410,7 +468,7 @@ where
     compose_text(
         text,
         modifier,
-        shared_text_style(style),
+        shared_text_style(&style),
         TextLayoutOptions {
             overflow,
             soft_wrap,
@@ -435,7 +493,7 @@ where
     compose_text(
         value,
         modifier,
-        shared_text_style(style),
+        shared_text_style(&style),
         TextLayoutOptions::from(options),
     )
 }
@@ -466,7 +524,7 @@ where
     compose_text(
         value,
         modifier,
-        shared_text_style(style),
+        shared_text_style(&style),
         TextLayoutOptions::from(TextOptions::default()),
     )
 }

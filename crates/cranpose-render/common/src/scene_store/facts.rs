@@ -76,6 +76,12 @@ impl Facts {
         self.rows.clear();
     }
 
+    // Makes room for `rows` rows in all.
+    pub(super) fn reserve_rows(&mut self, rows: usize) {
+        self.rows
+            .reserve_exact(rows.saturating_sub(self.rows.len()));
+    }
+
     pub(super) fn heap_bytes(&self) -> usize {
         self.rows.capacity() * size_of::<Cell<RowFacts>>()
     }
@@ -84,8 +90,8 @@ impl Facts {
         self.rows.trim_growth_slack();
     }
 
-    pub(super) fn truncate_rows(&mut self, len: usize) {
-        self.rows.truncate(len);
+    pub(super) fn cut_rows(&mut self, len: usize) {
+        super::growth_slack::cut_rows(&mut self.rows, len);
     }
 }
 

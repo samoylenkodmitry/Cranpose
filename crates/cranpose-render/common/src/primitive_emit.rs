@@ -259,24 +259,49 @@ struct ShapePlacement<'a> {
     motion_context_animated: bool,
 }
 
+// What a shape draws over its rect. A shape holds one geometry at a time.
+enum ShapeGeometry {
+    Rect,
+    Rounded(RoundedCornerShape),
+    Arc(ArcGeometry),
+    Line(LineGeometry),
+    Trapezoid(Trapezoid),
+}
+
 impl ShapePlacement<'_> {
-    // A shape over `draw_rect` with no geometry of its own; each builder sets its geometry.
-    fn fill(&self, draw_rect: Rect, brush: &Brush) -> ShapeDrawParams {
+    // A shape over `draw_rect` with `geometry`, its outline stroked when
+    // `stroke` says so. The builders pass their geometry in, so the shape
+    // is written once in place.
+    fn fill(
+        &self,
+        draw_rect: Rect,
+        brush: &Brush,
+        geometry: ShapeGeometry,
+        stroke: Option<Stroke>,
+    ) -> ShapeDrawParams {
         let quad = apply_layer_to_quad(draw_rect, self.layer_bounds, self.layer);
-        ShapeDrawParams {
+        let mut params = ShapeDrawParams {
             rect: quad_bounds(quad),
             local_rect: apply_layer_affine_to_rect(draw_rect, self.layer_bounds, self.layer),
             quad,
             brush: resolve_layer_brush(brush, self.layer),
             shape: None,
-            stroke: None,
+            stroke,
             arc: None,
             line: None,
             trapezoid: None,
             clip: self.clip,
             blend_mode: self.blend_mode,
             motion_context_animated: self.motion_context_animated,
+        };
+        match geometry {
+            ShapeGeometry::Rect => {}
+            ShapeGeometry::Rounded(shape) => params.shape = Some(shape),
+            ShapeGeometry::Arc(arc) => params.arc = Some(arc),
+            ShapeGeometry::Line(line) => params.line = Some(line),
+            ShapeGeometry::Trapezoid(trapezoid) => params.trapezoid = Some(trapezoid),
         }
+        params
     }
 
     fn translate(&self, rect: Rect) -> Rect {
@@ -300,10 +325,7 @@ fn rect_shape_params(
 ) -> Option<ShapeDrawParams> {
     let (draw_rect, stroke) =
         stroked_draw_rect(local_rect, stroke, placement.layer_bounds, placement.layer)?;
-    Some(ShapeDrawParams {
-        stroke,
-        ..placement.fill(draw_rect, brush)
-    })
+    Some(placement.fill(draw_rect, brush, ShapeGeometry::Rect, stroke))
 }
 
 fn round_rect_shape_params(
@@ -316,11 +338,8 @@ fn round_rect_shape_params(
     let (draw_rect, stroke) =
         stroked_draw_rect(local_rect, stroke, placement.layer_bounds, placement.layer)?;
     let radii = scale_corner_radii(radii, layer_uniform_scale(placement.layer));
-    Some(ShapeDrawParams {
-        shape: Some(RoundedCornerShape::with_radii(radii)),
-        stroke,
-        ..placement.fill(draw_rect, brush)
-    })
+    let shape = ShapeGeometry::Rounded(RoundedCornerShape::with_radii(radii));
+    Some(placement.fill(draw_rect, brush, shape, stroke))
 }
 
 // `arc` is in scope coordinates and `local_rect` is its tight bounds.
@@ -334,10 +353,8 @@ fn arc_shape_params(
         return None;
     }
     let scale = layer_uniform_scale(placement.layer);
-    Some(ShapeDrawParams {
-        arc: Some(arc.scaled_about(placement.place(arc.center), scale)),
-        ..placement.fill(placement.translate(local_rect), brush)
-    })
+    let arc = ShapeGeometry::Arc(arc.scaled_about(placement.place(arc.center), scale));
+    Some(placement.fill(placement.translate(local_rect), brush, arc, None))
 }
 
 // The segment's ends are placed by the layer's transform and its width is
@@ -354,10 +371,10 @@ fn line_shape_params(
         return None;
     }
     let scale = layer_uniform_scale(placement.layer);
-    Some(ShapeDrawParams {
-        line: Some(line.placed(placement.place(start), placement.place(end), scale)),
-        ..placement.fill(placement.translate(line.bounds()), brush)
-    })
+    let draw_rect = placement.translate(line.bounds());
+    let line =
+        ShapeGeometry::Line(line.placed(placement.place(start), placement.place(end), scale));
+    Some(placement.fill(draw_rect, brush, line, None))
 }
 
 // The brush rect is placed by the layer's transform as a rect is, and the
@@ -378,16 +395,14 @@ fn trapezoid_shape_params(
         place(trapezoid.left, trapezoid.bottom[0]),
         place(trapezoid.right, trapezoid.bottom[1]),
     ];
-    Some(ShapeDrawParams {
-        trapezoid: Some(Trapezoid {
-            left: top_left.x,
-            right: top_right.x,
-            top: [top_left.y, top_right.y],
-            bottom: [bottom_left.y, bottom_right.y],
-            ..trapezoid
-        }),
-        ..placement.fill(placement.translate(brush_rect), brush)
-    })
+    let placed = ShapeGeometry::Trapezoid(Trapezoid {
+        left: top_left.x,
+        right: top_right.x,
+        top: [top_left.y, top_right.y],
+        bottom: [bottom_left.y, bottom_right.y],
+        ..trapezoid
+    });
+    Some(placement.fill(placement.translate(brush_rect), brush, placed, None))
 }
 
 /// Lowers `primitive` to shape, image, shadow and text draw calls on `sink`, with the transform

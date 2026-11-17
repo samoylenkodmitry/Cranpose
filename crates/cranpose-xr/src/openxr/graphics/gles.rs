@@ -156,6 +156,18 @@ impl Graphics {
         })
     }
 
+    // The EGL display, as the raw handle that EGL functions of extensions take.
+    pub(crate) fn display(&self) -> *mut c_void {
+        self.display.as_ptr()
+    }
+
+    // The address of the GL or EGL function `name`, or `None` if the driver lacks it.
+    pub(crate) fn proc_address(&self, name: &str) -> Option<*const c_void> {
+        self.egl
+            .get_proc_address(name)
+            .map(|function| function as *const c_void)
+    }
+
     // A wgpu device that draws on this context.
     fn gpu(&self) -> Result<GpuContext, String> {
         let lookup = |name: &str| {

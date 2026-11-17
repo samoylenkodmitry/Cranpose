@@ -1,5 +1,5 @@
 use cranpose_core::NodeId;
-use cranpose_ui_layout::{Axis, Constraints, MeasurePolicy, ParentData, Placement};
+use cranpose_ui_layout::{Axis, Constraints, Measurables, MeasurePolicy, ParentData, Placement};
 
 use super::{flex_measure_policy::WeightShares, *};
 use crate::layout::core::{
@@ -99,15 +99,15 @@ impl Measurable for FillWidthMeasurable {
 fn width_offered_after(spacing: LinearArrangement, fixed_width: f32) -> f32 {
     let offered = std::rc::Rc::new(std::cell::Cell::new(f32::NAN));
     let policy = FlexMeasurePolicy::row(spacing, VerticalAlignment::Top, 1.0);
-    let measurables: Vec<Box<dyn Measurable>> = vec![
-        Box::new(MockMeasurable::new(fixed_width, 20.0, 1)),
-        Box::new(FillWidthMeasurable {
+    let measurables: [&dyn Measurable; 2] = [
+        &MockMeasurable::new(fixed_width, 20.0, 1),
+        &FillWidthMeasurable {
             offered: std::rc::Rc::clone(&offered),
-        }),
+        },
     ];
     policy.measure(
         &test_scope(),
-        &measurables,
+        Measurables::new(&measurables),
         Constraints {
             min_width: 0.0,
             max_width: 100.0,
@@ -138,14 +138,14 @@ fn row_spacing_after_a_child_shrinks_to_the_width_left() {
 #[test]
 fn box_measure_policy_takes_max_size() {
     let policy = BoxMeasurePolicy::new(Alignment::TOP_START, false);
-    let measurables: Vec<Box<dyn Measurable>> = vec![
-        Box::new(MockMeasurable::new(40.0, 20.0, 1)),
-        Box::new(MockMeasurable::new(60.0, 30.0, 2)),
+    let measurables = vec![
+        MockMeasurable::new(40.0, 20.0, 1),
+        MockMeasurable::new(60.0, 30.0, 2),
     ];
 
     let result = policy.measure(
         &test_scope(),
-        &measurables,
+        Measurables::new(&measurables),
         Constraints {
             min_width: 0.0,
             max_width: 100.0,
@@ -162,16 +162,16 @@ fn box_measure_policy_takes_max_size() {
 #[test]
 fn box_child_alignment_overrides_content_alignment() {
     let policy = BoxMeasurePolicy::new(Alignment::TOP_START, false);
-    let measurables: Vec<Box<dyn Measurable>> = vec![Box::new(
+    let measurables = vec![
         MockMeasurable::new(20.0, 10.0, 1).with_parent_data(ParentData {
             box_alignment: Some(Alignment::BOTTOM_END),
             ..Default::default()
         }),
-    )];
+    ];
 
     let result = policy.measure(
         &test_scope(),
-        &measurables,
+        Measurables::new(&measurables),
         Constraints::tight(100.0, 100.0),
     );
 
@@ -182,16 +182,16 @@ fn box_child_alignment_overrides_content_alignment() {
 #[test]
 fn row_child_alignment_overrides_vertical_alignment() {
     let policy = FlexMeasurePolicy::row(LinearArrangement::Start, VerticalAlignment::Top, 1.0);
-    let measurables: Vec<Box<dyn Measurable>> = vec![Box::new(
+    let measurables = vec![
         MockMeasurable::new(20.0, 10.0, 1).with_parent_data(ParentData {
             row_alignment: Some(VerticalAlignment::Bottom),
             ..Default::default()
         }),
-    )];
+    ];
 
     let result = policy.measure(
         &test_scope(),
-        &measurables,
+        Measurables::new(&measurables),
         Constraints::tight(100.0, 100.0),
     );
 
@@ -202,16 +202,16 @@ fn row_child_alignment_overrides_vertical_alignment() {
 fn column_child_alignment_overrides_horizontal_alignment() {
     let policy =
         FlexMeasurePolicy::column(LinearArrangement::Start, HorizontalAlignment::Start, 1.0);
-    let measurables: Vec<Box<dyn Measurable>> = vec![Box::new(
+    let measurables = vec![
         MockMeasurable::new(20.0, 10.0, 1).with_parent_data(ParentData {
             column_alignment: Some(HorizontalAlignment::End),
             ..Default::default()
         }),
-    )];
+    ];
 
     let result = policy.measure(
         &test_scope(),
-        &measurables,
+        Measurables::new(&measurables),
         Constraints::tight(100.0, 100.0),
     );
 
@@ -222,14 +222,14 @@ fn column_child_alignment_overrides_horizontal_alignment() {
 fn column_measure_policy_sums_heights() {
     let policy =
         FlexMeasurePolicy::column(LinearArrangement::Start, HorizontalAlignment::Start, 1.0);
-    let measurables: Vec<Box<dyn Measurable>> = vec![
-        Box::new(MockMeasurable::new(40.0, 20.0, 1)),
-        Box::new(MockMeasurable::new(60.0, 30.0, 2)),
+    let measurables = vec![
+        MockMeasurable::new(40.0, 20.0, 1),
+        MockMeasurable::new(60.0, 30.0, 2),
     ];
 
     let result = policy.measure(
         &test_scope(),
-        &measurables,
+        Measurables::new(&measurables),
         Constraints {
             min_width: 0.0,
             max_width: 100.0,
@@ -252,14 +252,14 @@ fn column_spaced_by_preserves_spacing_when_content_overflows() {
         HorizontalAlignment::Start,
         1.0,
     );
-    let measurables: Vec<Box<dyn Measurable>> = vec![
-        Box::new(MockMeasurable::new(80.0, 48.0, 1)),
-        Box::new(MockMeasurable::new(80.0, 200.0, 2)),
+    let measurables = vec![
+        MockMeasurable::new(80.0, 48.0, 1),
+        MockMeasurable::new(80.0, 200.0, 2),
     ];
 
     let result = policy.measure(
         &test_scope(),
-        &measurables,
+        Measurables::new(&measurables),
         Constraints {
             min_width: 0.0,
             max_width: 100.0,
@@ -284,14 +284,14 @@ fn row_measure_policy_sums_widths() {
         VerticalAlignment::CenterVertically,
         1.0,
     );
-    let measurables: Vec<Box<dyn Measurable>> = vec![
-        Box::new(MockMeasurable::new(40.0, 20.0, 1)),
-        Box::new(MockMeasurable::new(60.0, 30.0, 2)),
+    let measurables = vec![
+        MockMeasurable::new(40.0, 20.0, 1),
+        MockMeasurable::new(60.0, 30.0, 2),
     ];
 
     let result = policy.measure(
         &test_scope(),
-        &measurables,
+        Measurables::new(&measurables),
         Constraints {
             min_width: 0.0,
             max_width: 200.0,
@@ -315,9 +315,9 @@ fn built_in_policies_measure_into_reuses_caller_placements() {
         min_height: 0.0,
         max_height: 100.0,
     };
-    let measurables: Vec<Box<dyn Measurable>> = vec![
-        Box::new(MockMeasurable::new(40.0, 20.0, 1)),
-        Box::new(MockMeasurable::new(60.0, 30.0, 2)),
+    let measurables = vec![
+        MockMeasurable::new(40.0, 20.0, 1),
+        MockMeasurable::new(60.0, 30.0, 2),
     ];
     let mut placements = Vec::with_capacity(8);
     placements.push(Placement::new(NodeId(999), 1.0, 1.0, 0.0));
@@ -326,7 +326,12 @@ fn built_in_policies_measure_into_reuses_caller_placements() {
     let policy =
         FlexMeasurePolicy::column(LinearArrangement::Start, HorizontalAlignment::Start, 1.0);
     let size = policy
-        .measure_into(&test_scope(), &measurables, constraints, &mut placements)
+        .measure_into(
+            &test_scope(),
+            Measurables::new(&measurables),
+            constraints,
+            &mut placements,
+        )
         .size;
 
     assert_eq!(size.width, 60.0);
@@ -338,7 +343,12 @@ fn built_in_policies_measure_into_reuses_caller_placements() {
 
     let box_policy = BoxMeasurePolicy::new(Alignment::CENTER, false);
     let size = box_policy
-        .measure_into(&test_scope(), &measurables, constraints, &mut placements)
+        .measure_into(
+            &test_scope(),
+            Measurables::new(&measurables),
+            constraints,
+            &mut placements,
+        )
         .size;
 
     assert_eq!(size.width, 60.0);
@@ -351,7 +361,12 @@ fn built_in_policies_measure_into_reuses_caller_placements() {
         height: 10.0,
     });
     let size = leaf_policy
-        .measure_into(&test_scope(), &[], constraints, &mut placements)
+        .measure_into(
+            &test_scope(),
+            Measurables::empty(),
+            constraints,
+            &mut placements,
+        )
         .size;
 
     assert_eq!(size.width, 25.0);
@@ -361,7 +376,12 @@ fn built_in_policies_measure_into_reuses_caller_placements() {
 
     let empty_policy = EmptyMeasurePolicy::new();
     let size = empty_policy
-        .measure_into(&test_scope(), &[], constraints, &mut placements)
+        .measure_into(
+            &test_scope(),
+            Measurables::empty(),
+            constraints,
+            &mut placements,
+        )
         .size;
 
     assert_eq!(size.width, 0.0);
@@ -382,15 +402,19 @@ fn loose(max_width: f32, max_height: f32) -> Constraints {
 #[test]
 fn flow_row_wraps_children_of_varying_widths() {
     let policy = FlowMeasurePolicy::new(Axis::Horizontal, 0.0, 0.0);
-    let measurables: Vec<Box<dyn Measurable>> = vec![
-        Box::new(MockMeasurable::new(50.0, 20.0, 1)),
-        Box::new(MockMeasurable::new(20.0, 20.0, 2)),
-        Box::new(MockMeasurable::new(45.0, 20.0, 3)),
-        Box::new(MockMeasurable::new(80.0, 20.0, 4)),
-        Box::new(MockMeasurable::new(10.0, 20.0, 5)),
+    let measurables = vec![
+        MockMeasurable::new(50.0, 20.0, 1),
+        MockMeasurable::new(20.0, 20.0, 2),
+        MockMeasurable::new(45.0, 20.0, 3),
+        MockMeasurable::new(80.0, 20.0, 4),
+        MockMeasurable::new(10.0, 20.0, 5),
     ];
 
-    let result = policy.measure(&test_scope(), &measurables, loose(100.0, 500.0));
+    let result = policy.measure(
+        &test_scope(),
+        Measurables::new(&measurables),
+        loose(100.0, 500.0),
+    );
 
     assert_eq!((result.placements[0].x, result.placements[0].y), (0.0, 0.0));
     assert_eq!(
@@ -417,13 +441,17 @@ fn flow_row_wraps_children_of_varying_widths() {
 #[test]
 fn flow_row_respects_main_and_cross_axis_spacing() {
     let policy = FlowMeasurePolicy::new(Axis::Horizontal, 10.0, 5.0);
-    let measurables: Vec<Box<dyn Measurable>> = vec![
-        Box::new(MockMeasurable::new(30.0, 20.0, 1)),
-        Box::new(MockMeasurable::new(30.0, 25.0, 2)),
-        Box::new(MockMeasurable::new(30.0, 20.0, 3)),
+    let measurables = vec![
+        MockMeasurable::new(30.0, 20.0, 1),
+        MockMeasurable::new(30.0, 25.0, 2),
+        MockMeasurable::new(30.0, 20.0, 3),
     ];
 
-    let result = policy.measure(&test_scope(), &measurables, loose(100.0, 500.0));
+    let result = policy.measure(
+        &test_scope(),
+        Measurables::new(&measurables),
+        loose(100.0, 500.0),
+    );
 
     assert_eq!((result.placements[0].x, result.placements[0].y), (0.0, 0.0));
     assert_eq!(
@@ -442,13 +470,17 @@ fn flow_row_respects_main_and_cross_axis_spacing() {
 #[test]
 fn flow_row_children_share_line_top_when_heights_differ() {
     let policy = FlowMeasurePolicy::new(Axis::Horizontal, 0.0, 0.0);
-    let measurables: Vec<Box<dyn Measurable>> = vec![
-        Box::new(MockMeasurable::new(40.0, 10.0, 1)),
-        Box::new(MockMeasurable::new(40.0, 30.0, 2)),
-        Box::new(MockMeasurable::new(40.0, 20.0, 3)),
+    let measurables = vec![
+        MockMeasurable::new(40.0, 10.0, 1),
+        MockMeasurable::new(40.0, 30.0, 2),
+        MockMeasurable::new(40.0, 20.0, 3),
     ];
 
-    let result = policy.measure(&test_scope(), &measurables, loose(100.0, 500.0));
+    let result = policy.measure(
+        &test_scope(),
+        Measurables::new(&measurables),
+        loose(100.0, 500.0),
+    );
 
     assert_eq!(result.placements[0].y, 0.0);
     assert_eq!(result.placements[1].y, 0.0);
@@ -459,13 +491,17 @@ fn flow_row_children_share_line_top_when_heights_differ() {
 #[test]
 fn flow_row_gives_oversized_child_its_own_line() {
     let policy = FlowMeasurePolicy::new(Axis::Horizontal, 0.0, 0.0);
-    let measurables: Vec<Box<dyn Measurable>> = vec![
-        Box::new(MockMeasurable::new(60.0, 10.0, 1)),
-        Box::new(MockMeasurable::new(150.0, 10.0, 2)),
-        Box::new(MockMeasurable::new(30.0, 10.0, 3)),
+    let measurables = vec![
+        MockMeasurable::new(60.0, 10.0, 1),
+        MockMeasurable::new(150.0, 10.0, 2),
+        MockMeasurable::new(30.0, 10.0, 3),
     ];
 
-    let result = policy.measure(&test_scope(), &measurables, loose(100.0, 500.0));
+    let result = policy.measure(
+        &test_scope(),
+        Measurables::new(&measurables),
+        loose(100.0, 500.0),
+    );
 
     assert_eq!((result.placements[0].x, result.placements[0].y), (0.0, 0.0));
     assert_eq!(
@@ -484,13 +520,17 @@ fn flow_row_gives_oversized_child_its_own_line() {
 #[test]
 fn flow_row_with_unbounded_width_stays_on_one_line() {
     let policy = FlowMeasurePolicy::new(Axis::Horizontal, 4.0, 4.0);
-    let measurables: Vec<Box<dyn Measurable>> = vec![
-        Box::new(MockMeasurable::new(50.0, 20.0, 1)),
-        Box::new(MockMeasurable::new(60.0, 20.0, 2)),
-        Box::new(MockMeasurable::new(70.0, 20.0, 3)),
+    let measurables = vec![
+        MockMeasurable::new(50.0, 20.0, 1),
+        MockMeasurable::new(60.0, 20.0, 2),
+        MockMeasurable::new(70.0, 20.0, 3),
     ];
 
-    let result = policy.measure(&test_scope(), &measurables, loose(f32::INFINITY, 500.0));
+    let result = policy.measure(
+        &test_scope(),
+        Measurables::new(&measurables),
+        loose(f32::INFINITY, 500.0),
+    );
 
     assert!(result.placements.iter().all(|p| p.y == 0.0));
     assert_eq!(result.size.width, 50.0 + 4.0 + 60.0 + 4.0 + 70.0);
@@ -502,7 +542,7 @@ fn flow_row_empty_respects_min_constraints() {
     let policy = FlowMeasurePolicy::new(Axis::Horizontal, 8.0, 8.0);
     let result = policy.measure(
         &test_scope(),
-        &[],
+        Measurables::empty(),
         Constraints {
             min_width: 25.0,
             max_width: 100.0,
@@ -519,16 +559,28 @@ fn flow_row_empty_respects_min_constraints() {
 #[test]
 fn flow_row_intrinsics_follow_the_wrap() {
     let policy = FlowMeasurePolicy::new(Axis::Horizontal, 10.0, 5.0);
-    let measurables: Vec<Box<dyn Measurable>> = vec![
-        Box::new(MockMeasurable::new(30.0, 20.0, 1)),
-        Box::new(MockMeasurable::new(30.0, 25.0, 2)),
-        Box::new(MockMeasurable::new(30.0, 20.0, 3)),
+    let measurables = vec![
+        MockMeasurable::new(30.0, 20.0, 1),
+        MockMeasurable::new(30.0, 25.0, 2),
+        MockMeasurable::new(30.0, 20.0, 3),
     ];
 
-    assert_eq!(policy.min_intrinsic_width(&measurables, 100.0), 30.0);
-    assert_eq!(policy.max_intrinsic_width(&measurables, 100.0), 110.0);
-    assert_eq!(policy.max_intrinsic_height(&measurables, 100.0), 50.0);
-    assert_eq!(policy.max_intrinsic_height(&measurables, 110.0), 25.0);
+    assert_eq!(
+        policy.min_intrinsic_width(Measurables::new(&measurables), 100.0),
+        30.0
+    );
+    assert_eq!(
+        policy.max_intrinsic_width(Measurables::new(&measurables), 100.0),
+        110.0
+    );
+    assert_eq!(
+        policy.max_intrinsic_height(Measurables::new(&measurables), 100.0),
+        50.0
+    );
+    assert_eq!(
+        policy.max_intrinsic_height(Measurables::new(&measurables), 110.0),
+        25.0
+    );
 }
 
 #[test]

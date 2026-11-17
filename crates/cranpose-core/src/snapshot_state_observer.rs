@@ -141,6 +141,8 @@ struct SnapshotStateObserverInner {
     // The scopes whose states changed, which the flush task notifies, and
     // that task, with whether it is queued.
     pending: RefCell<Vec<Rc<RefCell<ScopeEntry>>>>,
+    // The scopes of one changed state in id order, while the apply takes them.
+    ordered_scope_ids: RefCell<Vec<usize>>,
     flush: Rc<dyn Fn() + 'static>,
     flush_queued: Cell<bool>,
     next_entry_id: Cell<usize>,
@@ -204,6 +206,7 @@ impl SnapshotStateObserverInner {
             read_snapshot: RefCell::new(None),
             apply_handle: RefCell::new(None),
             pending: RefCell::new(Vec::new()),
+            ordered_scope_ids: RefCell::new(Vec::new()),
             flush: Rc::new(move || {
                 if let Some(inner) = weak_self.upgrade() {
                     inner.notify_pending();
@@ -488,13 +491,14 @@ impl SnapshotStateObserverInner {
             let observed_to_scopes = self.observed_to_scopes.borrow();
             let indexed_scopes = self.indexed_scopes.borrow();
             let mut pending = self.pending.borrow_mut();
+            let mut ordered_scope_ids = self.ordered_scope_ids.borrow_mut();
             for state in modified {
                 if let Some(scope_ids) = observed_to_scopes.get(&state.object_id()) {
-                    let mut ordered_scope_ids: SmallVec<[usize; 8]> =
-                        scope_ids.iter().copied().collect();
+                    ordered_scope_ids.clear();
+                    ordered_scope_ids.extend(scope_ids.iter().copied());
                     ordered_scope_ids.sort_unstable();
                     pending.reserve(ordered_scope_ids.len());
-                    for scope_id in ordered_scope_ids {
+                    for &scope_id in ordered_scope_ids.iter() {
                         if (!several || seen_scope_ids.insert(scope_id))
                             && let Some(entry) = indexed_scopes.get(&scope_id)
                         {

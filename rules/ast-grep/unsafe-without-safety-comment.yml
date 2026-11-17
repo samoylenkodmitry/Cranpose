@@ -7,6 +7,7 @@ files:
   - crates/cranpose/src/android/surface.rs
   - crates/cranpose/src/ios/accessibility.rs
   - crates/cranpose/src/watchos_heart_rate.rs
+  - crates/cranpose/src/apple/device_auth.rs
   - crates/cranpose/src/android_entry.rs
   - crates/cranpose-audio/src/ring.rs
   - crates/cranpose-audio/src/backend/aaudio/library.rs
