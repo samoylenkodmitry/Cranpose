@@ -6,8 +6,10 @@ use cranpose_ui_graphics::{
     Size,
 };
 
+mod body;
 mod snapshot;
 
+use body::SliceBody;
 pub(crate) use snapshot::SlicesSnapshot;
 pub use snapshot::{collect_modifier_slices, collect_slices_from_modifier};
 
@@ -22,12 +24,11 @@ use crate::{
 /// Snapshot of modifier node slices that impact draw and pointer subsystems.
 #[derive(Clone, Default)]
 pub struct ModifierNodeSlices {
-    draw_commands: Vec<DrawCommand>,
+    // The draws and the text.
+    body: SliceBody,
     // What the chain's clips and graphics layers give, boxed: few nodes
     // carry either.
     layer: Option<Box<LayerSlices>>,
-    text: Option<SliceText>,
-    text_coordinator: Option<CoordinatorRect>,
     /// Boxed for the same reason: inline they took 150 bytes of every
     /// node's slices, and on the gauntlet's 5,600 nodes none sets them but the
     /// 44 animated layers' resolvers.
@@ -304,7 +305,7 @@ fn compose_color_filters(
 impl ModifierNodeSlices {
     /// Returns the node's draw commands in the order they draw.
     pub fn draw_commands(&self) -> &[DrawCommand] {
-        &self.draw_commands
+        self.body.draws()
     }
 
     /// How many leading [`draw_commands`](Self::draw_commands) come from
@@ -318,12 +319,12 @@ impl ModifierNodeSlices {
 
     fn insert_background_draw(
         &mut self,
-        insert_index: usize,
-        precedes_layer: bool,
+        draws: &mut Vec<DrawCommand>,
+        (insert_index, precedes_layer): (usize, bool),
         command: DrawCommand,
     ) {
-        let insert_index = insert_index.min(self.draw_commands.len());
-        self.draw_commands.insert(insert_index, command);
+        let insert_index = insert_index.min(draws.len());
+        draws.insert(insert_index, command);
         if let Some(layer) = self.layer.as_deref_mut()
             && precedes_layer
         {
@@ -332,9 +333,8 @@ impl ModifierNodeSlices {
     }
 
     // The layer part, made at the chain's outermost clip or layer, which
-    // the draw commands so far precede.
-    fn layer_mut(&mut self) -> &mut LayerSlices {
-        let draw_boundary = self.draw_commands.len();
+    // the `draw_boundary` draw commands so far precede.
+    fn layer_mut(&mut self, draw_boundary: usize) -> &mut LayerSlices {
         self.layer.get_or_insert_with(|| {
             Box::new(LayerSlices {
                 draw_boundary,
@@ -495,7 +495,7 @@ impl ModifierNodeSlices {
 
     /// Whether the node shows a `Text`'s or a text field's text.
     pub fn has_text(&self) -> bool {
-        self.text.is_some()
+        self.body.text().is_some()
     }
 
     /// Returns the plain text the node shows, or `None` when the node shows no text.
@@ -506,7 +506,7 @@ impl ModifierNodeSlices {
 
     /// Returns the text the node shows with its span styles, or `None` when the node shows no text.
     pub fn annotated_text(&self) -> Option<SliceTextRef<'_, crate::text::AnnotatedString>> {
-        Some(SliceTextRef(match self.text.as_ref()? {
+        Some(SliceTextRef(match self.body.text()? {
             SliceText::Text(layout) => TextBorrow::Layout(layout.annotated_text()),
             SliceText::Field(field) => TextBorrow::Field(&field.content),
         }))
@@ -515,7 +515,7 @@ impl ModifierNodeSlices {
     /// Where the text draws in a node of `node_size`: the rect its layout put
     /// the text in, after every layout modifier before it.
     pub fn text_content_rect(&self, node_size: Size) -> Rect {
-        self.text_coordinator.as_ref().map_or(
+        self.body.text_coordinator().map_or(
             Rect {
                 x: 0.0,
                 y: 0.0,
@@ -528,7 +528,7 @@ impl ModifierNodeSlices {
 
     /// Returns the style of the text the node shows, or `None` when the node shows no text.
     pub fn text_style(&self) -> Option<SliceTextRef<'_, TextStyle>> {
-        Some(SliceTextRef(match self.text.as_ref()? {
+        Some(SliceTextRef(match self.body.text()? {
             SliceText::Text(layout) => TextBorrow::Layout(layout.style()),
             SliceText::Field(field) => TextBorrow::Field(&field.style),
         }))
@@ -537,7 +537,7 @@ impl ModifierNodeSlices {
     /// Returns the layout options of the text the node shows, or `None` when the node shows no
     /// text. A text field reports the default options.
     pub fn text_layout_options(&self) -> Option<TextLayoutOptions> {
-        match self.text.as_ref()? {
+        match self.body.text()? {
             SliceText::Text(layout) => Some(layout.options()),
             SliceText::Field(_) => Some(TextLayoutOptions::default()),
         }
@@ -550,7 +550,7 @@ impl ModifierNodeSlices {
     /// subtract this offset from the text origin so the glyphs pan together
     /// with the cursor and selection.
     pub fn text_pan_resolver(&self) -> Option<TextPanResolver> {
-        match self.text.as_ref()? {
+        match self.body.text()? {
             SliceText::Field(field) => field.pan.clone(),
             SliceText::Text(_) => None,
         }
@@ -580,7 +580,7 @@ impl ModifierNodeSlices {
     /// caret and selection are placed on. `None` when the node carries no text,
     /// or carries a `Text` that has not been measured yet.
     pub fn measured_text_layout(&self) -> Option<Rc<crate::text::PreparedTextLayout>> {
-        match self.text.as_ref()? {
+        match self.body.text()? {
             SliceText::Text(layout) => layout.measured_layout(),
             SliceText::Field(field) => Some(field.layout.measured_layout(&field.style)),
         }
@@ -633,9 +633,9 @@ impl ModifierNodeSlices {
     }
 
     /// Records the layer's coordinator when this is the chain's outermost
-    /// clip or graphics layer.
-    fn enter_layer(&mut self, site: &DrawSite) {
-        let layer = self.layer_mut();
+    /// clip or graphics layer, after `draw_boundary` draw commands.
+    fn enter_layer(&mut self, site: &DrawSite, draw_boundary: usize) {
+        let layer = self.layer_mut(draw_boundary);
         if layer.coordinator.is_none() {
             layer.coordinator = Some(site.coordinator.clone());
         }
@@ -650,8 +650,8 @@ impl ModifierNodeSlices {
 
     fn push_graphics_layer(
         &mut self,
-        layer: GraphicsLayer,
-        resolver: Option<Rc<dyn Fn() -> GraphicsLayer>>,
+        (layer, resolver): (GraphicsLayer, Option<Rc<dyn Fn() -> GraphicsLayer>>),
+        draw_boundary: usize,
     ) {
         let existing_snapshot = self
             .layer
@@ -665,7 +665,7 @@ impl ModifierNodeSlices {
             .rare()
             .and_then(|rare| rare.graphics_layer_resolver.clone());
 
-        match &mut self.layer_mut().graphics_layer {
+        match &mut self.layer_mut(draw_boundary).graphics_layer {
             Some(held) => **held = next_snapshot,
             held @ None => *held = Some(Box::new(next_snapshot)),
         }
@@ -698,18 +698,18 @@ impl ModifierNodeSlices {
 
     /// Returns counts and capacities of the slices' data, for memory diagnostics.
     pub fn debug_stats(&self) -> ModifierNodeSlicesDebugStats {
-        let draw_command_bytes = self.draw_commands.capacity() * size_of::<DrawCommand>();
+        let draw_command_bytes = self.body.capacity() * size_of::<DrawCommand>();
         let pointer_input_capacity = self.rare().map_or(0, |rare| rare.pointer_inputs.capacity());
         let pointer_input_bytes = pointer_input_capacity * size_of::<Rc<dyn Fn(PointerEvent)>>();
         ModifierNodeSlicesDebugStats {
-            draw_command_count: self.draw_commands.len(),
-            draw_command_capacity: self.draw_commands.capacity(),
+            draw_command_count: self.draw_commands().len(),
+            draw_command_capacity: self.body.capacity(),
             pointer_input_count: self.pointer_inputs().len(),
             pointer_input_capacity,
-            has_text_content: self.text.is_some(),
-            has_text_style: self.text.is_some(),
-            has_text_layout_options: self.text.is_some(),
-            has_prepared_text_layout: self.text.is_some(),
+            has_text_content: self.has_text(),
+            has_text_style: self.has_text(),
+            has_text_layout_options: self.has_text(),
+            has_prepared_text_layout: self.has_text(),
             has_graphics_layer: self.held_graphics_layer(),
             has_graphics_layer_resolver: self
                 .rare()
@@ -721,19 +721,20 @@ impl ModifierNodeSlices {
     // Whether the chain gave nothing: no draws, text, layer, clip, shape or
     // rare part.
     fn is_empty(&self) -> bool {
-        self.draw_commands.is_empty()
+        self.body.is_empty()
             && self.layer.is_none()
-            && self.text.is_none()
-            && self.text_coordinator.is_none()
             && self.rare.as_deref().is_none_or(RareSlices::is_empty)
     }
 
     /// Resets the slice collection for reuse, retaining vector capacity.
     pub fn clear(&mut self) {
-        self.draw_commands.clear();
+        self.body.clear();
+        self.clear_parts();
+    }
+
+    // Leaves no layer and no rare part, keeping the rare part's room.
+    fn clear_parts(&mut self) {
         self.layer = None;
-        self.text = None;
-        self.text_coordinator = None;
         if let Some(rare) = self.rare.as_deref_mut() {
             rare.clear();
         }
@@ -743,7 +744,7 @@ impl ModifierNodeSlices {
 impl fmt::Debug for ModifierNodeSlices {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ModifierNodeSlices")
-            .field("draw_commands", &self.draw_commands.len())
+            .field("draw_commands", &self.draw_commands().len())
             .field("pointer_inputs", &self.pointer_inputs().len())
             .field("pointer_icon", &self.pointer_icon())
             .field("clip_to_bounds", &self.clip_to_bounds())

@@ -13,8 +13,8 @@ use cranpose_foundation::{
 };
 
 use super::{
-    DimensionConstraint, EdgeInsets, Elements, LayoutProperties, Modifier, ModifierInspectorRecord,
-    ModifierKind, ModifierLocalAncestorResolver, ModifierLocalToken, Point, ResolvedModifiers,
+    DimensionConstraint, EdgeInsets, LayoutProperties, Modifier, ModifierInspectorRecord,
+    ModifierLocalAncestorResolver, ModifierLocalToken, Point, ResolvedModifiers,
     element_match::{self, ElementMatch},
     layout_data::LayoutDataNode,
     local::ModifierLocalManager,
@@ -80,10 +80,7 @@ pub struct ModifierChainHandle {
 // The inspector metadata `modifier` carries.
 #[cfg(feature = "inspection")]
 fn inspector_of(modifier: &Modifier) -> Option<Rc<Vec<super::InspectorMetadata>>> {
-    match &modifier.kind {
-        ModifierKind::Empty => None,
-        ModifierKind::Single { inspector, .. } => inspector.clone(),
-    }
+    modifier.inspector().cloned()
 }
 
 /// What an update in place of a modifier element changes beyond its own
@@ -409,32 +406,16 @@ impl ModifierChainHandle {
     // updated from. It carries the modifier's inspector metadata only where
     // inspection is built in.
     pub(crate) fn modifier(&self) -> Modifier {
-        let mut held = self.chain.held_elements();
-        let Some(first) = held.next() else {
-            return Modifier::empty();
-        };
-        let elements = if held.len() == 0 {
-            Elements::One(first.to_element())
-        } else {
-            Elements::Many(Rc::new(
-                std::iter::once(first)
-                    .chain(held)
-                    .map(|element| element.to_element())
-                    .collect(),
-            ))
-        };
-        Modifier {
-            provides_composition_locals: elements
-                .iter()
-                .any(|element| element.provides_composition_locals()),
-            kind: ModifierKind::Single {
-                elements,
-                #[cfg(feature = "inspection")]
-                inspector: self.inspector.clone(),
-                #[cfg(not(feature = "inspection"))]
-                inspector: None,
-            },
-        }
+        Modifier::of_elements(
+            self.chain
+                .held_elements()
+                .map(|element| element.to_element())
+                .collect(),
+            #[cfg(feature = "inspection")]
+            self.inspector.clone(),
+            #[cfg(not(feature = "inspection"))]
+            None,
+        )
     }
 
     /// Returns the aggregated capability mask for the reconciled chain.
