@@ -277,6 +277,28 @@ jobs:
       - name: Check the benchmark app
         run: just bench-app-check
 
+  # The steady-frame ledger (#2247): allocator calls and copied bytes a
+  # steady frame of every bench layout against their budgets. valgrind's DHAT
+  # counts the copies; the runners with these labels are samarch-1's, which
+  # have valgrind (the overflow runner carries no `cranpose-heavy`). The
+  # measurement takes about a minute on samarch-1; the fat LTO build takes
+  # up to about 12 minutes from a cold target.
+  steady-ledger:
+    name: steady-frame ledger (linux)
+    needs: decide
+    if: needs.decide.outputs.run == 'true'
+    runs-on: [self-hosted, Linux, cranpose-heavy]
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: ${{ github.workspace }}/scripts/ci/with_host_lock.sh --shared bash --noprofile --norc -eo pipefail {0}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Provision toolchain
+        run: scripts/ci/provision_toolchain.sh
+      - name: Measure the steady frames against their budgets
+        run: just steady-ledger
+
   # Each feature of the framework crates built alone (cargo-hack, about 12
   # minutes), and the generic functions that copy most IR into the desktop
   # binary, as a report.

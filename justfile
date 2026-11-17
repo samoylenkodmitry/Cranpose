@@ -595,6 +595,16 @@ bench-app-check:
     cargo clippy --manifest-path benchmarks/compose-vs-cranpose/cranpose-app/Cargo.toml --all-targets -- -D warnings
     cargo test --manifest-path benchmarks/compose-vs-cranpose/cranpose-app/Cargo.toml
 
+# The steady-frame ledger (#2247): the `malloc` and `realloc` calls, the
+# blocks left live and the bytes copied a steady frame of every bench layout,
+# and the still wall's start a layout node, against
+# scripts/perf/steady_ledger_budget.txt. It fails when a row rises past its
+# budget plus its spread. Linux with valgrind; nightly runs it. `--ab BASE
+# HEAD` prints the difference a row between two commits, `--host H` runs that
+# on H, `--repeats 3` measures the spread for the budget file.
+steady-ledger *args:
+    scripts/perf/steady_ledger.sh {{args}}
+
 # The shop app benchmark's Everbloom app (benchmarks/shopbench), a Cargo
 # project of its own: Everbloom.app for an iPhone, or for the Simulator with
 # target=aarch64-apple-ios-sim. CODESIGN_IDENTITY and PROVISIONING_PROFILE
@@ -722,6 +732,7 @@ test-shell-helpers: _benchmark-python ci-contract-gates
     {{benchmark_python}} scripts/android_benchmark_test.py
     {{benchmark_python}} scripts/android_visual_contract_test.py
     python3 scripts/perf_report_test.py
+    scripts/perf/steady_ledger_test.sh
     python3 benchmarks/compose-vs-cranpose/tests/test_surfaceflinger_report.py
     python3 benchmarks/compose-vs-cranpose/tests/test_clock_samples.py
     python3 benchmarks/compose-vs-cranpose/tests/test_run_samples.py

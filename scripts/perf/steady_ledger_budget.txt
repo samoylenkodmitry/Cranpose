@@ -1,0 +1,97 @@
+# The budgets of the steady-frame ledger, scripts/perf/steady_ledger.sh (#2247).
+#
+# One row a layout of the bench app in the desktop window, a frame of the 60
+# frames counted after 60 warm-up frames: `malloc` calls (`calloc` and
+# aligned allocations with them), `realloc` calls, blocks left live
+# (allocations minus frees), the bytes that memcpy calls copy (`copied`) and
+# the bytes that `realloc` calls keep (`realloc_bytes`), which a `realloc`
+# copies when it moves the block. `wall-t20-start` is the still wall's start
+# at tier 20 (composition, layout, scene and the first frame packet), the
+# same values divided by the nodes that the applier holds after it, and its
+# allocator calls a node by group (scripts/perf/steady_ledger_groups.txt).
+# `dashboard` is the ESP32 dashboard of the framebuffer bench.
+#
+# One value a line: ROW METRIC BUDGET SPREAD. The budget is the highest value
+# of three runs of one build (`steady_ledger.sh --repeats 3`), the spread the
+# highest minus the lowest. A value fails when it passes its budget plus its
+# spread. Lower a budget in the commit that earns the cut.
+#
+# Measured on samarch-1 (x86-64 Linux, valgrind 3.25.1), three runs.
+# row             metric                    budget     spread   (3 runs)
+wall-t20         malloc                       2.00       0.00
+wall-t20         realloc                      0.13       0.00
+wall-t20         live                         0.00       0.00
+wall-t20         copied                      31556          0
+wall-t20         realloc_bytes                  68          0
+wall-t20-start   malloc                      14.93       0.00
+wall-t20-start   realloc                      0.04       0.00
+wall-t20-start   live                        12.33       0.00
+wall-t20-start   copied                       1012          1
+wall-t20-start   realloc_bytes                1011          0
+wall-t20-start   group:node                   4.00       0.00
+wall-t20-start   group:parent-lists           2.40       0.00
+wall-t20-start   group:policies               0.60       0.00
+wall-t20-start   group:modifiers              5.80       0.00
+wall-t20-start   group:text                   1.45       0.01
+wall-t20-start   group:app                    0.40       0.00
+wall-t20-start   group:other                  0.31       0.00
+patchwork-t17    malloc                    9659.02       2.17
+patchwork-t17    realloc                     98.40       3.75
+patchwork-t17    live                        39.87       4.95
+patchwork-t17    copied                    1258471      39660
+patchwork-t17    realloc_bytes              159789      10018
+gauntlet-t16     malloc                    1984.93       0.63
+gauntlet-t16     realloc                    155.12       0.50
+gauntlet-t16     live                       -83.27       0.38
+gauntlet-t16     copied                     904615        500
+gauntlet-t16     realloc_bytes              102833          8
+gauntlet-t12     malloc                     859.63       2.93
+gauntlet-t12     realloc                     98.07       0.47
+gauntlet-t12     live                       106.60       1.75
+gauntlet-t12     copied                     379867        173
+gauntlet-t12     realloc_bytes               50641        148
+feed             malloc                     601.92       0.00
+feed             realloc                     20.72       0.00
+feed             live                         8.80       0.00
+feed             copied                      97581          0
+feed             realloc_bytes                2498          0
+ticker           malloc                     533.88       1.70
+ticker           realloc                      5.90       0.17
+ticker           live                        20.07       1.77
+ticker           copied                     142600         57
+ticker           realloc_bytes                3162          1
+particles        malloc                       0.05       0.00
+particles        realloc                      0.02       0.00
+particles        live                         0.00       0.00
+particles        copied                       9410          0
+particles        realloc_bytes                   2          0
+layers           malloc                       1.05       0.00
+layers           realloc                      0.28       0.00
+layers           live                         0.00       0.00
+layers           copied                     399569        152
+layers           realloc_bytes                1462          0
+grid             malloc                      70.05       0.00
+grid             realloc                      3.32       0.00
+grid             live                         0.00       0.00
+grid             copied                      26223          0
+grid             realloc_bytes                2332          0
+grid-layer       malloc                      70.05       0.00
+grid-layer       realloc                      3.32       0.00
+grid-layer       live                         0.00       0.00
+grid-layer       copied                     252461          0
+grid-layer       realloc_bytes                2331          0
+deep             malloc                      15.05       0.00
+deep             realloc                      0.33       0.00
+deep             live                         0.00       0.00
+deep             copied                      17499          0
+deep             realloc_bytes                1009          0
+deep-layer       malloc                      15.05       0.00
+deep-layer       realloc                      0.22       0.00
+deep-layer       live                         0.00       0.00
+deep-layer       copied                      47576          0
+deep-layer       realloc_bytes                 482          0
+dashboard        malloc                      37.22       0.03
+dashboard        realloc                      0.42       0.22
+dashboard        live                         0.00       0.00
+dashboard        copied                      50928         15
+dashboard        realloc_bytes                 378         93

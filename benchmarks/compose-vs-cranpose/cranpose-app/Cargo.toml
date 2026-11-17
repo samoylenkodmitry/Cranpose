@@ -30,6 +30,10 @@ name = "first_screen"
 harness = false
 required-features = ["renderer-wgpu"]
 
+[[example]]
+name = "steady_frames"
+required-features = ["renderer-wgpu"]
+
 [features]
 default = ["renderer-wgpu", "desktop", "entry", "chat"]
 # Exports the Android entry symbol. An app that links this crate as a library turns it off and exports its own.
@@ -65,7 +69,7 @@ wasm-bindgen-futures = "0.4"
 web-sys = { version = "0.3", features = ["Window", "Location"] }
 
 [dev-dependencies]
-cranpose-app-shell = { path = "../../../crates/cranpose-app-shell" }
+cranpose-app-shell = { path = "../../../crates/cranpose-app-shell", features = ["test-support"] }
 cranpose-render-pixels = { path = "../../../crates/cranpose-render/pixels" }
 cranpose-render-wgpu = { path = "../../../crates/cranpose-render/wgpu" }
 cranpose-testing = { path = "../../../crates/cranpose-testing" }
