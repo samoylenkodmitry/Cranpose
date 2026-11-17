@@ -585,6 +585,10 @@ pub struct TextModifierElement {
 impl TextModifierElement {
     /// A text laid out on `density`'s device pixel grid, the composition's
     /// [`crate::density::density`] where a `Text` is composed.
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "Compose's Text takes its style by value; the function shares it without a copy"
+    )]
     pub fn new(
         text: AnnotatedString,
         style: TextStyle,

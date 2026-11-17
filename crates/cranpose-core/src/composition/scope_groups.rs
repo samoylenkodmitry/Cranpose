@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use crate::{RecomposeScope, SlotsHost, collections::map::HashMap};
+use crate::{RecomposeScope, SlotsHost, collections::map::HashMap, scope_order::ScopeOrder};
 
 // The scopes of a pass grouped by the slots host each recomposes in, in the
 // order each host first appears. The scopes stay in one list, each group's
@@ -10,12 +10,10 @@ use crate::{RecomposeScope, SlotsHost, collections::map::HashMap};
 pub(super) struct ScopeGroups {
     // Each group's host and the end of its scopes in the list.
     hosts: Vec<(Rc<SlotsHost>, usize)>,
-    // The group of each scope, in the pass's order.
-    group_of: Vec<usize>,
     // Each group by its host's storage key.
     by_key: HashMap<usize, usize>,
-    // The scopes at their places in group order.
-    placed: Vec<Option<RecomposeScope>>,
+    // Places the scopes in group order.
+    order: ScopeOrder,
 }
 
 impl ScopeGroups {
@@ -39,41 +37,28 @@ impl ScopeGroups {
             self.hosts.push((host_of(first), scopes.len()));
             return;
         }
-        // Each group counts its scopes, then holds where its next scope goes,
-        // then where its scopes end.
+        let (hosts, by_key) = (&mut self.hosts, &mut self.by_key);
         let mut previous = None;
-        for scope in scopes.iter() {
+        self.order.order_by(scopes, |scope| {
             let identity = scope.slots_host_identity();
-            let group = match previous {
+            match previous {
                 Some((previous_identity, group)) if previous_identity == identity => group,
                 _ => {
                     let host = host_of(scope);
-                    let next = self.hosts.len();
-                    let group = *self.by_key.entry(host.storage_key()).or_insert(next);
+                    let next = hosts.len();
+                    let group = *by_key.entry(host.storage_key()).or_insert(next);
                     if group == next {
-                        self.hosts.push((host, 0));
+                        hosts.push((host, 0));
                     }
                     previous = Some((identity, group));
                     group
                 }
-            };
-            self.hosts[group].1 += 1;
-            self.group_of.push(group);
-        }
+            }
+        });
         self.by_key.clear();
-        let mut start = 0;
-        for (_, place) in &mut self.hosts {
-            let count = *place;
-            *place = start;
-            start += count;
+        for ((_, end), &placed_end) in self.hosts.iter_mut().zip(self.order.ends()) {
+            *end = placed_end;
         }
-        self.placed.resize_with(scopes.len(), || None);
-        for (scope, group) in scopes.drain(..).zip(self.group_of.drain(..)) {
-            let place = &mut self.hosts[group].1;
-            self.placed[*place] = Some(scope);
-            *place += 1;
-        }
-        scopes.extend(self.placed.drain(..).flatten());
     }
 
     // Each group's host and the range of its scopes in the grouped list.

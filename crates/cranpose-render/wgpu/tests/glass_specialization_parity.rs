@@ -485,7 +485,7 @@ fn expand_content_masks(store: &mut SceneStore, record: RecordId) -> usize {
         let shader = std::sync::Arc::make_mut(shader);
         shader.set_output_support(None);
         shader.set_output_padding(64.0);
-        store.set_graphics_layer(record, layer);
+        store.set_graphics_layer(record, layer.as_ref());
         expanded += 1;
     }
     let children: Vec<RecordId> = store.layer(record).children().map(LayerRef::id).collect();

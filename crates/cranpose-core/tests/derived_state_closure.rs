@@ -10,7 +10,7 @@ use cranpose_core::{
 // A reader of `derivedStateOf(source + offset)`, written as `#[composable]`
 // expands it. The offset is a plain value that the body reads when it builds
 // the closure, so only a new composition hands the derived state a new one.
-fn reader(source: MutableState<u32>, offset: Rc<Cell<u32>>, seen: Rc<Cell<u32>>) {
+fn reader(source: MutableState<u32>, offset: &Rc<Cell<u32>>, seen: &Rc<Cell<u32>>) {
     fn body(source: MutableState<u32>, offset: &Cell<u32>, seen: &Cell<u32>) {
         let offset = offset.get();
         let sum = derivedStateOf(move || source.get() + offset);
@@ -19,9 +19,9 @@ fn reader(source: MutableState<u32>, offset: Rc<Cell<u32>>, seen: Rc<Cell<u32>>)
     let key = location_key(file!(), line!(), column!());
     cranpose_core::with_current_composer(|composer| {
         composer.with_group(key, |composer| {
-            let (again_offset, again_seen) = (Rc::clone(&offset), Rc::clone(&seen));
+            let (again_offset, again_seen) = (Rc::clone(offset), Rc::clone(seen));
             composer.set_recompose_callback(move |_| body(source, &again_offset, &again_seen));
-            body(source, &offset, &seen);
+            body(source, offset, seen);
         });
     });
 }
@@ -37,7 +37,7 @@ fn a_derived_state_takes_the_closure_of_its_readers_latest_composition() {
         let (offset, seen) = (Rc::clone(&offset), Rc::clone(&seen));
         composition
             .render(key, move || {
-                reader(source, Rc::clone(&offset), Rc::clone(&seen));
+                reader(source, &offset, &seen);
             })
             .expect("render succeeds");
     }

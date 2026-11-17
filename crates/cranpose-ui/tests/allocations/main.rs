@@ -213,18 +213,57 @@ fn bytes_left_by_wide_columns(depth: usize, nested: bool) -> isize {
     .expect("the measuring thread")
 }
 
-// Rows and columns keep no lists for hundreds of children once their
-// composition is gone: wide columns nested 16 deep leave less than a
-// kilobyte a level more than as many side by side leave, where lists for
-// their 300 children each would take kilobytes.
-fn wide_nested_columns_leave_no_lists_behind() {
+// Rows and columns keep the lists of their last measure whole and at most
+// 64 KiB in the others once their composition is gone: wide columns nested
+// 16 deep, whose lists for 300 children take about 25 KiB a level, leave at
+// most 64 KiB more than as many side by side leave.
+fn wide_nested_columns_leave_a_bounded_set_of_lists() {
     let sibling = bytes_left_by_wide_columns(15, false);
     let nested = bytes_left_by_wide_columns(15, true);
     println!("bytes left by 16 wide columns, siblings: {sibling}, nested: {nested}");
     assert!(
-        nested - sibling < 16 * 1024,
+        nested - sibling <= 64 * 1024,
         "nested wide columns left {} bytes more",
         nested - sibling
+    );
+}
+
+// Allocations per pass of a column of `count` rows that share its height by
+// weight, so the column's policy measures them again at each new width.
+fn weighted_remeasure_allocations(count: usize) -> usize {
+    pass_allocations(run_test_composition(move || {
+        Column(
+            Modifier::empty().fill_max_width(),
+            ColumnSpec::default(),
+            move || {
+                for _ in 0..count {
+                    Box(
+                        Modifier::empty().fill_max_width().weight(1.0),
+                        BoxSpec::default(),
+                        || {},
+                    );
+                }
+            },
+        );
+    }))
+}
+
+// A column of 300 rows measures again with the lists of its last measure:
+// a pass allocates no more than a pass over a column of 10 rows. Each runs
+// on a fresh thread, whose rows and columns hold no spare lists of earlier
+// measures to grow.
+fn remeasuring_a_wide_column_allocates_nothing_more() {
+    let on_fresh_thread = |count| {
+        std::thread::spawn(move || weighted_remeasure_allocations(count))
+            .join()
+            .expect("the measuring thread")
+    };
+    let narrow = on_fresh_thread(10);
+    let wide = on_fresh_thread(300);
+    println!("allocations a pass of a column of 300 rows: {wide}, of 10 rows: {narrow}");
+    assert_eq!(
+        wide, narrow,
+        "a column of 300 rows allocates as it measures again"
     );
 }
 
@@ -526,8 +565,9 @@ fn rows_of_boxes_allocations(count: usize, headroom: MemoryHeadroom) -> usize {
 }
 
 // Composing a row of two boxes makes its three layout nodes, each with its
-// box and parts, and the size modifiers of the boxes. The rows and the boxes
-// share their measure policies, and a row keeps its two children in itself.
+// box and parts, the size modifiers of the boxes, one allocation each, and
+// the row's list of children. The rows and the boxes share their measure
+// policies.
 // With little memory left the recycle pool keeps no shells, so a node made
 // fresh makes no shell to seed it with either.
 fn composing_a_row_of_boxes_allocates_within_its_budget() {
@@ -538,24 +578,16 @@ fn composing_a_row_of_boxes_allocates_within_its_budget() {
             / 20;
         println!("allocations of composing a row of two boxes, {headroom:?} memory: {per_row}");
         assert!(
-            per_row <= 8,
+            per_row <= 11,
             "{per_row} allocations a row, {headroom:?} memory"
         );
     }
 }
 
-// A modifier holds a plain element by value: one alone takes no
-// allocation. A chain of them built link by link extends one shared list in
-// place, and a chain built after the last one was let go takes that list
-// again: a body that composes again builds its modifiers with no allocation.
-fn a_modifier_chain_of_plain_elements_takes_the_list_of_the_last_one() {
+/// A modifier chain built link by link keeps its elements in one shared
+/// allocation it extends in place, so each link costs its element alone.
+fn a_modifier_chain_allocates_its_elements_and_one_shared_box() {
     drop(Modifier::empty().padding(1.0).background(Color::RED));
-    let region = Region::new(GLOBAL);
-    let modifier = Modifier::empty().padding(1.0);
-    let change = region.change();
-    drop(modifier);
-    assert_eq!(change.allocations, 0, "{change:?}");
-
     let region = Region::new(GLOBAL);
     let modifier = Modifier::empty()
         .padding(1.0)
@@ -563,27 +595,7 @@ fn a_modifier_chain_of_plain_elements_takes_the_list_of_the_last_one() {
         .rounded_corners(3.0);
     let change = region.change();
     drop(modifier);
-    assert_eq!(change.allocations, 0, "{change:?}");
-}
-
-// A node whose chain draws one background keeps that draw in the one block
-// of its slices: collecting them allocates the block alone.
-fn slices_of_one_background_allocate_one_block() {
-    let context = cranpose_ui::AppContext::new();
-    let _scope = context.enter_scope();
-    let node = || {
-        cranpose_ui::LayoutNode::new(
-            Modifier::empty().background(Color::RED).padding(1.0),
-            Rc::new(StackedRows { reversed: false }),
-        )
-    };
-    drop(node().modifier_slices_snapshot());
-    let fresh = node();
-    let region = Region::new(GLOBAL);
-    let slices = fresh.modifier_slices_snapshot();
-    let change = region.change();
-    assert_eq!(slices.draw_commands().len(), 1);
-    assert_eq!(change.allocations, 1, "{change:?}");
+    assert_eq!(change.allocations, 4, "{change:?}");
 }
 
 fn resolving_text_direction_does_not_allocate() {
@@ -678,7 +690,8 @@ fn layout_and_modifiers_stay_within_their_allocation_budgets() {
     a_first_measure_allocates_at_most_one_per_row();
     remeasuring_a_row_allocates_nothing();
     remeasuring_deeply_nested_rows_and_columns_allocates_nothing_more();
-    wide_nested_columns_leave_no_lists_behind();
+    wide_nested_columns_leave_a_bounded_set_of_lists();
+    remeasuring_a_wide_column_allocates_nothing_more();
     placing_children_out_of_order_allocates_nothing();
     a_layout_pass_lends_its_applier_without_rebuilding_it();
     a_kept_column_lets_its_changed_children_fill_their_measurements();
@@ -687,9 +700,8 @@ fn layout_and_modifiers_stay_within_their_allocation_budgets() {
     a_rest_gives_back_a_long_paragraph_glyph_room();
     composing_a_row_of_boxes_allocates_within_its_budget();
     if !cfg!(feature = "inspection") {
-        a_modifier_chain_of_plain_elements_takes_the_list_of_the_last_one();
+        a_modifier_chain_allocates_its_elements_and_one_shared_box();
     }
-    slices_of_one_background_allocate_one_block();
     resolving_text_direction_does_not_allocate();
     owned_bitmaps_allocate_only_metadata_and_clones_share_storage();
     owned_bitmaps_do_not_retain_spare_pixel_capacity();

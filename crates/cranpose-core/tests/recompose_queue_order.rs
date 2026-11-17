@@ -14,14 +14,14 @@ const INNER: usize = 1_000;
 
 #[cranpose_macros::composable]
 fn Outer(index: usize, outer: MutableState<u32>, inner: MutableState<u32>, log: Log) {
-    let _ = outer.value();
+    let _: u32 = outer.value();
     log.borrow_mut().push(index);
     Inner(index, inner, log);
 }
 
 #[cranpose_macros::composable]
 fn Inner(index: usize, inner: MutableState<u32>, log: Log) {
-    let _ = inner.value();
+    let _: u32 = inner.value();
     log.borrow_mut().push(INNER + index);
 }
 
@@ -84,7 +84,7 @@ fn scopes_of_one_depth_recompose_in_the_order_they_were_invalidated() {
 
 #[cranpose_macros::composable]
 fn Reader(index: usize, shared: MutableState<u32>, log: Log) {
-    let _ = shared.value();
+    let _: u32 = shared.value();
     log.borrow_mut().push(index);
 }
 

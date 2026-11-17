@@ -27,7 +27,9 @@ pub struct Composition<A: Applier + 'static> {
     pub(crate) root: Option<NodeId>,
     pub(crate) root_key: Option<Key>,
     pub(crate) root_render_requested: bool,
-    scope_groups: ScopeGroups,
+    // Boxed: a pass takes it out and puts it back, and a move of the box
+    // copies a pointer where a move of the groups copies their storage.
+    scope_groups: Option<Box<ScopeGroups>>,
     #[cfg(any(test, feature = "leak-debug"))]
     last_pass_stats: CompositionPassDebugStats,
     teardown: Option<runtime::StateTeardownScope>,
@@ -86,7 +88,7 @@ impl<A: Applier + 'static> Composition<A> {
             root: None,
             root_key: None,
             root_render_requested: false,
-            scope_groups: ScopeGroups::default(),
+            scope_groups: None,
             #[cfg(any(test, feature = "leak-debug"))]
             last_pass_stats: CompositionPassDebugStats::default(),
             teardown: None,
@@ -455,7 +457,7 @@ impl<A: Applier + 'static> Composition<A> {
                 continue;
             };
             did_recompose = true;
-            let mut groups = std::mem::take(&mut self.scope_groups);
+            let mut groups = self.scope_groups.take().unwrap_or_default();
             groups.group(&mut scopes, |scope| self.host_for_scope(scope, &self.slots));
             for (host, range) in groups.iter() {
                 let side_effects = self.recompose_host_scopes(
@@ -476,7 +478,7 @@ impl<A: Applier + 'static> Composition<A> {
                 }
             }
             groups.clear();
-            self.scope_groups = groups;
+            self.scope_groups = Some(groups);
             runtime_handle.recycle_scopes(scopes);
             if let Batch::Waiting(content) = batch {
                 self.composer_state.pausing.finish_resumed(content);

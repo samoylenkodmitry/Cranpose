@@ -446,7 +446,11 @@ fn assert_laying_out_into_one_layout_matches_new_ones(
                     .collect()
             };
             assert_eq!(glyphs(&reused), glyphs(&fresh), "{text} line {line}");
-            assert_eq!(reused.line_end(line), fresh.line_end(line));
+            assert_eq!(
+                reused.line_end(line),
+                fresh.line_end(line),
+                "{text} line {line} end"
+            );
         }
     }
 }
