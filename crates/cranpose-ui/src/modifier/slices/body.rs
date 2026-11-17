@@ -31,26 +31,36 @@ impl Default for SliceBody {
 }
 
 impl SliceBody {
-    // What a collection of `draws` and `text` keeps.
-    pub(super) fn collected(mut draws: Draws, text: Option<(SliceText, CoordinatorRect)>) -> Self {
+    // What a collection of `draws` and `text` keeps. `room` is the list the
+    // body held, which a list of the draws takes when it fits them.
+    pub(super) fn collected(
+        mut draws: Draws,
+        room: Vec<DrawCommand>,
+        text: Option<(SliceText, CoordinatorRect)>,
+    ) -> Self {
         match text {
             Some((text, coordinator)) => Self::Text {
                 text,
                 coordinator,
-                draws: listed(draws),
+                draws: listed(draws, room),
             },
-            None if draws.len() > 1 => Self::Draws(listed(draws)),
+            None if draws.len() > 1 => Self::Draws(listed(draws, room)),
             None => draws.pop().map_or_else(Self::default, Self::One),
         }
     }
 
-    // What a collection into this body gathers its draws in: the body's own
-    // list, emptied, when it has room for more than one. The body keeps
-    // nothing.
-    pub(super) fn take_draws(&mut self) -> Draws {
-        let mut draws = self.take_owned();
-        draws.clear();
-        Draws::from_vec(draws)
+    // What a collection into this body gathers its draws in, and the room it
+    // keeps aside: the body's own list, emptied, gathers them when it has
+    // room for more than one; a list of one waits aside for a text's draw.
+    // The body keeps nothing.
+    pub(super) fn take_draws(&mut self) -> (Draws, Vec<DrawCommand>) {
+        let mut list = self.take_owned();
+        list.clear();
+        if list.capacity() > 1 {
+            (Draws::from_vec(list), Vec::new())
+        } else {
+            (Draws::new(), list)
+        }
     }
 
     pub(super) fn draws(&self) -> &[DrawCommand] {
@@ -102,10 +112,21 @@ impl SliceBody {
     }
 }
 
-// `draws` in a list of their exact length: the body keeps them for as long
-// as the chain stays, and a collection into it again mostly pushes as many.
-fn listed(draws: Draws) -> Vec<DrawCommand> {
-    let mut list = draws.into_vec();
-    list.shrink_to_fit();
-    list
+// `draws` in a list of their exact length, in `room` when it fits them: the
+// body keeps them for as long as the chain stays, and a collection into it
+// again mostly gathers as many.
+fn listed(draws: Draws, mut room: Vec<DrawCommand>) -> Vec<DrawCommand> {
+    if draws.spilled() {
+        let mut list = draws.into_vec();
+        list.shrink_to_fit();
+        return list;
+    }
+    if draws.is_empty() {
+        return Vec::new();
+    }
+    if room.capacity() < draws.len() {
+        room = Vec::with_capacity(draws.len());
+    }
+    room.extend(draws);
+    room
 }
