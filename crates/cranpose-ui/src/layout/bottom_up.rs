@@ -533,7 +533,10 @@ impl LayoutBuilderState {
                     Self::lays_out_as_before(node, child, measured, parent_data.as_ref())
                 }
                 LiveLayoutNode::Subcompose(node) => {
-                    keeps_measurement(node.cache(), in_parent, measured)
+                    // The record of a child the last measure did not place
+                    // is from an earlier measure.
+                    let placed = node.with_active_children(|children| children.contains(&child));
+                    keeps_measurement(node.cache(), in_parent.filter(|_| placed), measured)
                 }
             };
             if !unaffected {
