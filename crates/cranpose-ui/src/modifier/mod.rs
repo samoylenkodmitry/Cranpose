@@ -324,45 +324,9 @@ enum ModifierKind {
     },
 }
 
-pub(crate) struct ModifierElementIterator<'a> {
-    inner: std::slice::Iter<'a, DynModifierElement>,
-}
-
-impl<'a> Iterator for ModifierElementIterator<'a> {
-    type Item = &'a DynModifierElement;
-
-    #[inline]
-    fn next(&mut self) -> Option<Self::Item> {
-        self.inner.next()
-    }
-
-    #[inline]
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        self.inner.size_hint()
-    }
-}
-
-impl ExactSizeIterator for ModifierElementIterator<'_> {}
-
-pub(crate) struct ModifierInspectorIterator<'a> {
-    inner: std::slice::Iter<'a, InspectorMetadata>,
-}
-
-impl<'a> Iterator for ModifierInspectorIterator<'a> {
-    type Item = &'a InspectorMetadata;
-
-    #[inline]
-    fn next(&mut self) -> Option<Self::Item> {
-        self.inner.next()
-    }
-
-    #[inline]
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        self.inner.size_hint()
-    }
-}
-
-impl ExactSizeIterator for ModifierInspectorIterator<'_> {}
+// A modifier's elements and its inspector metadata, in order.
+pub(crate) type ModifierElementIterator<'a> = std::slice::Iter<'a, DynModifierElement>;
+pub(crate) type ModifierInspectorIterator<'a> = std::slice::Iter<'a, InspectorMetadata>;
 
 /// A modifier chain that can be applied to composable elements.
 ///
@@ -926,9 +890,7 @@ impl Modifier {
     }
 
     pub(crate) fn iter_elements(&self) -> ModifierElementIterator<'_> {
-        ModifierElementIterator {
-            inner: self.as_elements().iter(),
-        }
+        self.as_elements().iter()
     }
 
     pub(crate) fn provided_composition_locals(&self) -> Vec<ProvidedValue> {
@@ -942,10 +904,8 @@ impl Modifier {
 
     pub(crate) fn iter_inspector_metadata(&self) -> ModifierInspectorIterator<'_> {
         match &self.kind {
-            ModifierKind::Empty => ModifierInspectorIterator { inner: [].iter() },
-            ModifierKind::Single { inspector, .. } => ModifierInspectorIterator {
-                inner: inspector_slice(inspector).iter(),
-            },
+            ModifierKind::Empty => [].iter(),
+            ModifierKind::Single { inspector, .. } => inspector_slice(inspector).iter(),
         }
     }
 
