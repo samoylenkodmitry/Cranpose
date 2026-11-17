@@ -186,10 +186,10 @@ fn hidden_then_shown_content_enters_the_composition() {
 fn enter_and_exit_transitions_combine_with_plus() {
     let enter = fade_in() + slide_in_vertically(-0.5);
     assert_eq!(enter, slide_in_vertically(-0.5) + fade_in());
-    assert_eq!(EnterTransition::none() + enter, enter);
+    assert_eq!(EnterTransition::none() + enter.clone(), enter);
     let exit = slide_out_vertically(0.25) + fade_out();
     assert_eq!(exit, fade_out() + slide_out_vertically(0.25));
-    assert_eq!(ExitTransition::none() + exit, exit);
+    assert_eq!(ExitTransition::none() + exit.clone(), exit);
 
     let spec_a = tween(100, Easing::LinearEasing);
     let spec_b = tween(200, Easing::EaseIn);

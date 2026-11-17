@@ -2,8 +2,8 @@
 //!
 //! Mirrors Jetpack Compose's `EnterTransition`/`ExitTransition` from
 //! `androidx.compose.animation`: fades, slides along either axis by a
-//! fraction of the content's own size or across the container's edge, and
-//! scales, combined with `+`.
+//! fraction of the content's own size or across the container's edge,
+//! scales, and expands or shrinks the content's size, combined with `+`.
 
 use cranpose_animation::AnimationType;
 use cranpose_ui_graphics::Size;
@@ -11,7 +11,10 @@ use cranpose_ui_graphics::Size;
 use crate::{
     composable,
     modifier::GraphicsLayer,
-    widgets::animated_content::{ContentTransform, SeekableAnimatedContent},
+    widgets::{
+        animated_content::{ContentTransform, SeekableAnimatedContent},
+        size_change::SizeChange,
+    },
 };
 
 /// Which way content slides across the edge of an
@@ -102,41 +105,79 @@ pub(crate) struct ContainerFrame {
 
 /// What a transition does to its content at full strength; progress `1.0`
 /// shows the content at rest.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct TransitionEffects {
     fade: bool,
     slide_x: Option<Slide>,
     slide_y: Option<Slide>,
     scale: Option<f32>,
+    size: Option<SizeChange>,
 }
 
 impl TransitionEffects {
+    // The effects of a transition that changes the content's size.
+    pub(crate) fn sized(change: SizeChange) -> Self {
+        Self {
+            size: Some(change),
+            ..Self::default()
+        }
+    }
+
     fn merged(self, other: Self) -> Self {
         Self {
             fade: self.fade || other.fade,
             slide_x: self.slide_x.or(other.slide_x),
             slide_y: self.slide_y.or(other.slide_y),
             scale: self.scale.or(other.scale),
+            size: self.size.or(other.size),
         }
+    }
+
+    fn set_clip(&mut self, clip: bool) {
+        if let Some(change) = &mut self.size {
+            change.clip = clip;
+        }
+    }
+
+    // The size change of these effects, which a layout node of the content
+    // carries out.
+    pub(crate) fn size_change(&self) -> Option<&SizeChange> {
+        self.size.as_ref()
     }
 
     /// Whether a slide toward the start or the end needs the layout
     /// direction.
-    pub(crate) fn uses_direction(self) -> bool {
+    pub(crate) fn uses_direction(&self) -> bool {
         self.slide_x.is_some_and(Slide::uses_direction)
     }
 
-    /// The layer that shows content of `size` in `container` at `progress`
-    /// of the way to rest.
+    // How far content of `size` in `container` is from where it rests at
+    // `progress` of the way to rest, along each axis.
+    pub(crate) fn slide(&self, progress: f32, size: Size, container: ContainerFrame) -> (f32, f32) {
+        let away = 1.0 - progress;
+        let offset = |slide: Option<Slide>, own: f32, extent: f32| {
+            slide.map_or(0.0, |slide| slide.offset(own, extent, container.rtl) * away)
+        };
+        (
+            offset(self.slide_x, size.width, container.size.width),
+            offset(self.slide_y, size.height, container.size.height),
+        )
+    }
+
+    // The layer that shows content of `size` in `container` at `progress`
+    // of the way to rest. Content with a size change slides inside the
+    // size, so its layer does not move; it clips while the size is on its
+    // way.
     pub(crate) fn layer(
-        self,
+        &self,
         progress: f32,
         size: Size,
         container: ContainerFrame,
     ) -> GraphicsLayer {
-        let away = 1.0 - progress;
-        let offset = |slide: Option<Slide>, own: f32, extent: f32| {
-            slide.map_or(0.0, |slide| slide.offset(own, extent, container.rtl) * away)
+        let (translation_x, translation_y) = if self.size.is_some() {
+            (0.0, 0.0)
+        } else {
+            self.slide(progress, size, container)
         };
         GraphicsLayer {
             alpha: if self.fade {
@@ -144,11 +185,13 @@ impl TransitionEffects {
             } else {
                 1.0
             },
-            translation_x: offset(self.slide_x, size.width, container.size.width),
-            translation_y: offset(self.slide_y, size.height, container.size.height),
+            translation_x,
+            translation_y,
             scale: self
                 .scale
                 .map_or(1.0, |scale| scale + (1.0 - scale) * progress),
+            clip: self.size.as_ref().is_some_and(|change| change.clip)
+                && (progress - 1.0).abs() > f32::EPSILON,
             ..GraphicsLayer::default()
         }
     }
@@ -158,7 +201,7 @@ impl TransitionEffects {
 ///
 /// Mirrors Jetpack Compose's `EnterTransition`. Transitions are combined
 /// with `+`, like Compose's `fadeIn() + slideInVertically()`.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct EnterTransition {
     effects: TransitionEffects,
     animation: Option<AnimationType>,
@@ -184,6 +227,14 @@ impl EnterTransition {
         self
     }
 
+    /// Whether content outside the animating size is clipped while an
+    /// expand transition runs: Compose's `clip` argument of `expandIn`,
+    /// `true` by default. A transition without an expand ignores it.
+    pub fn with_clip(mut self, clip: bool) -> Self {
+        self.effects.set_clip(clip);
+        self
+    }
+
     /// This transition for the content that comes in, and `exit` for the
     /// content that goes, as an [`AnimatedContent`](crate::AnimatedContent)
     /// change. Compose's `enter togetherWith exit`.
@@ -195,8 +246,8 @@ impl EnterTransition {
         }
     }
 
-    pub(crate) fn effects(&self) -> TransitionEffects {
-        self.effects
+    pub(crate) fn effects(&self) -> &TransitionEffects {
+        &self.effects
     }
 
     pub(crate) fn animation(&self) -> AnimationType {
@@ -219,7 +270,7 @@ impl std::ops::Add for EnterTransition {
 ///
 /// Mirrors Jetpack Compose's `ExitTransition`. Transitions are combined
 /// with `+`, like Compose's `fadeOut() + slideOutVertically()`.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ExitTransition {
     effects: TransitionEffects,
     animation: Option<AnimationType>,
@@ -243,8 +294,16 @@ impl ExitTransition {
         self
     }
 
-    pub(crate) fn effects(&self) -> TransitionEffects {
-        self.effects
+    /// Whether content outside the animating size is clipped while a shrink
+    /// transition runs: Compose's `clip` argument of `shrinkOut`, `true` by
+    /// default. A transition without a shrink ignores it.
+    pub fn with_clip(mut self, clip: bool) -> Self {
+        self.effects.set_clip(clip);
+        self
+    }
+
+    pub(crate) fn effects(&self) -> &TransitionEffects {
+        &self.effects
     }
 
     pub(crate) fn animation(&self) -> AnimationType {
@@ -392,14 +451,14 @@ pub fn scale_out(target_scale: f32) -> ExitTransition {
     })
 }
 
-fn enter(effects: TransitionEffects) -> EnterTransition {
+pub(crate) fn enter(effects: TransitionEffects) -> EnterTransition {
     EnterTransition {
         effects,
         animation: None,
     }
 }
 
-fn exit(effects: TransitionEffects) -> ExitTransition {
+pub(crate) fn exit(effects: TransitionEffects) -> ExitTransition {
     ExitTransition {
         effects,
         animation: None,
@@ -415,10 +474,12 @@ fn exit(effects: TransitionEffects) -> ExitTransition {
 /// Compose semantics: content that is visible on first composition appears
 /// without an animation; when `visible` turns `false` the content stays
 /// composed for the whole exit transition and leaves the composition once it
-/// completes, keeping its size until then; toggling `visible`
-/// mid-transition retargets the running animation from its current value.
-/// The animation moves the content's layer only: nothing recomposes while it
-/// runs.
+/// completes, keeping its size until then unless the exit shrinks it;
+/// toggling `visible` mid-transition retargets the running animation from
+/// its current value. The animation moves the content's layer, or measures
+/// its size again when the transition expands or shrinks it, so the parent
+/// lays out again on each frame that changes the size: nothing recomposes
+/// while it runs.
 ///
 /// Divergence from Compose: enter and exit each drive a single shared
 /// progress (instead of one `Transition` animation per effect), so all
@@ -437,11 +498,13 @@ pub fn AnimatedVisibility<F>(
         None,
         move |_, &shown| {
             if shown {
-                enter.together_with(ExitTransition::none().with_animation(enter.animation()))
+                enter
+                    .clone()
+                    .together_with(ExitTransition::none().with_animation(enter.animation()))
             } else {
                 EnterTransition::none()
                     .with_animation(exit.animation())
-                    .together_with(exit)
+                    .together_with(exit.clone())
             }
         },
         move |shown| {
