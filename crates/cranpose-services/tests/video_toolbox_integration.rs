@@ -175,3 +175,34 @@ fn an_app_that_holds_every_picture_makes_the_decoder_drop_the_new_ones() {
     }
     assert!(frames.next_frame().is_some());
 }
+
+#[test]
+fn a_task_wakes_when_the_decoder_outputs_a_picture() {
+    let units = split_access_units(VideoCodec::H264, H264_CLIP);
+    let mut decoder = decoder(VideoCodec::H264, DEPTH);
+    let frames = decoder.frames();
+    let feeder = thread::spawn(move || {
+        thread::sleep(Duration::from_millis(50));
+        decoder.submit(unit(units[0], 0)).expect("the keyframe");
+        decoder
+    });
+    pollster::block_on(frames.wait_for_frame());
+    assert_eq!(
+        frames.next_frame().map(|frame| frame.info().metadata),
+        Some(0)
+    );
+    // With no picture waiting, the wait does not end until one comes
+    let mut decoder = feeder.join().expect("the feeder");
+    let units = split_access_units(VideoCodec::H264, H264_CLIP);
+    let feeder = thread::spawn(move || {
+        thread::sleep(Duration::from_millis(50));
+        decoder.submit(unit(units[1], 1)).expect("the next picture");
+        decoder
+    });
+    pollster::block_on(frames.wait_for_frame());
+    assert_eq!(
+        frames.next_frame().map(|frame| frame.info().metadata),
+        Some(7)
+    );
+    drop(feeder.join().expect("the feeder"));
+}

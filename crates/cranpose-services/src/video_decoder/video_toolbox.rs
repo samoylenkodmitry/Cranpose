@@ -282,6 +282,8 @@ impl Shared {
             }
         }
         frames.push_back(frame);
+        drop(frames);
+        self.queue.wake();
     }
 }
 

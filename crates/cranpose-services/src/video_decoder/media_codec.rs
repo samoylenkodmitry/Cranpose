@@ -298,6 +298,8 @@ impl Output {
                         self.shared.queue.stats.dropped();
                     }
                     frames.push_back(frame);
+                    drop(frames);
+                    self.shared.queue.wake();
                 }
                 Acquired::Empty => break,
                 Acquired::Full => {

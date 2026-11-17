@@ -3,6 +3,7 @@
 fn main() {
     if let Err(error) = cranpose::AppLauncher::new()
         .with_title("Cranpose XR")
+        .with_size(960, 540)
         .try_run(xr_demo::XrDemo)
     {
         eprintln!("the XR demo failed to start: {error}");

@@ -112,7 +112,76 @@ The app chooses where the pictures go:
   `VideoFrame::as_hardware_buffer_ptr`, and applies `VideoFrame::crop`. A frame that drops gives
   its image back to the decoder.
 
+On macOS and iOS the decoder drives a `VTDecompressionSession` of VideoToolbox. It decodes H.264
+and HEVC, takes `DecoderOutput::Frames` only, and reports AV1 as `DecoderError::NoDecoder`. The
+backend reads the parameter sets from the Annex-B stream into a `CMVideoFormatDescription`, and
+builds the session at the first keyframe. It builds the session again when a keyframe brings
+other parameter sets, or when the system ends the session, as iOS does when an app goes to the
+background. Until a keyframe arrives, `submit` answers `DecoderError::NeedsKeyframe`, and the
+app asks the sender for one. The session decodes in real time, with no reordering wait. Each
+picture is an IOSurface-backed `CVPixelBuffer` in NV12, which is the hardware decoder's own
+format: a request for BGRA made VideoToolbox convert each picture, and a picture of 2560 by 1440
+pixels took 2.0 to 2.7 ms instead of 1.0 to 1.2 ms. `VideoFrame::as_pixel_buffer_ptr` gives the
+buffer. The frame holds one reference count of the buffer until it drops, and at most `depth`
+pictures are in the queue and in the app's hands together.
+
+An app that waits for pictures awaits `DecodedFrames::wait_for_frame`. The decoder's thread wakes
+the task when it queues a picture, so no frame loop polls.
+
 Platforms without a hardware decoder that Cranpose drives report `DecoderError::Unavailable`.
+
+## Flat video
+
+`PlayerSurface(frames, modifier, content_scale)` of `cranpose` draws the pictures of a decoder in
+a normal layout, such as a window on a Mac or a phone's screen. Media3 has `PlayerSurface` and
+`ContentFrame`. Both take a `Player`, which Cranpose does not have, so the composable takes the
+`DecodedFrames` of the decoder that the app feeds. The `content_scale` is the parameter of
+`ContentFrame` and of `Image`.
+
+On macOS and iOS the surface draws through the renderer's Metal device. For each picture it
+makes two Metal textures of the picture's IOSurface with `newTextureWithDescriptor:iosurface:plane:`:
+the luma plane as `R8Unorm`, and the blue and red differences as `RG8Unorm` at half the size.
+`wgpu::hal::metal::Device::texture_from_raw` and `create_texture_from_hal` turn them into wgpu
+textures. One render pass converts them to RGB in a texture of an `ExternalFrames` ring, which
+`Image` draws as it draws any other bitmap. The pass reads the picture's range, which the pixel
+format tells, and its color matrix, which the picture's attachment names: BT.601, BT.709 or
+BT.2020. The shader samples the differences with a linear filter, and writes the picture's
+encoded values. The decoder's buffer is the only source. No copy goes through the CPU.
+
+The wgpu textures hold the `VideoFrame` in their drop callback, so the decoder's pool does not
+write the IOSurface before the GPU has read it. The surface waits on `wait_for_frame`, takes the
+newest picture in the frame that follows the output, and drops the older ones. A frame with no
+new picture does no work.
+
+Android draws nothing yet. The pictures there are `AHardwareBuffer`s of a private format, which a
+renderer on Vulkan reads through a sampler with a YCbCr conversion. The import needs these steps:
+
+1. The device is created with `VK_ANDROID_external_memory_android_hardware_buffer`,
+   `VK_KHR_sampler_ycbcr_conversion`, `VK_KHR_external_memory`, `VK_KHR_dedicated_allocation`,
+   `VK_KHR_bind_memory2`, `VK_KHR_get_memory_requirements2` and `VK_EXT_queue_family_foreign`.
+   `GpuRequirements` asks for wgpu features only, so the Android device setup needs a list of
+   extensions of its own.
+2. `vkGetAndroidHardwareBufferPropertiesANDROID` returns the buffer's memory requirements and its
+   `VkAndroidHardwareBufferFormatPropertiesANDROID`. The format of a private buffer is
+   `VK_FORMAT_UNDEFINED` with an `externalFormat`, and the properties suggest the model, the range
+   and the chroma offsets.
+3. A `VkSamplerYcbcrConversion` takes the external format and the suggested values. An immutable
+   `VkSampler` takes the conversion, and the descriptor set layout holds it as an immutable
+   sampler. The sampler's filters are nearest unless the format supports a linear chroma filter.
+4. A `VkImage` is made with `VkExternalMemoryImageCreateInfo` and `VkExternalFormatANDROID`.
+   Its memory is imported with `VkImportAndroidHardwareBufferInfoANDROID` and a dedicated
+   allocation. The image view carries `VkSamplerYcbcrConversionInfo`.
+5. The first use acquires the image from `VK_QUEUE_FAMILY_FOREIGN_EXT` with a barrier to the
+   shader read layout.
+6. The frame stays alive until the GPU has read it, as on Apple, and the `AImageReader` of the
+   decoder has `depth` plus the images in flight.
+
+wgpu has no binding for an immutable sampler with a conversion, and no texture format for an
+external one. A pass of the Vulkan backend itself would sample the image and write RGB into a
+texture of the `ExternalFrames` ring: the same shape as the Apple pass. The work is about 700
+lines of Vulkan through `wgpu::hal::vulkan` and `ash`, and it needs a phone to test. A phone
+without the extension needs the GLES path of `cranpose-xr`, which binds the buffer as an EGL
+image.
 
 ## Streamed scenes
 

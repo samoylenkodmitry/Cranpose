@@ -51,6 +51,10 @@ pub(super) struct Format {
     sets: Vec<Vec<u8>>,
 }
 
+// SAFETY: a format description is immutable after its creation, and CoreFoundation changes its
+// reference count atomically.
+unsafe impl Send for Format {}
+
 impl Format {
     // Makes the format that `sets` describe. The sets come in the order of the stream.
     pub(super) fn new<'a>(
@@ -199,6 +203,10 @@ fn invalid_time() -> CMTime {
 pub(super) struct Session {
     raw: CFRetained<VTDecompressionSession>,
 }
+
+// SAFETY: VideoToolbox serializes the calls on a session, and CoreFoundation changes its
+// reference count atomically. A session moves between the threads that feed it.
+unsafe impl Send for Session {}
 
 impl Session {
     // Makes a session for `format` that calls `callback` with `refcon` for each picture. The

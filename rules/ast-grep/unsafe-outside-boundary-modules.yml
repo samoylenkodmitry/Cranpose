@@ -80,6 +80,7 @@ ignores:
   - crates/cranpose/src/apple/audio_session.rs
   - crates/cranpose/src/apple/camera.rs
   - crates/cranpose/src/apple/media_source.rs
+  - crates/cranpose/src/apple/nv12_converter.rs
   - crates/cranpose/src/apple/microphone.rs
   - crates/cranpose/src/apple/device_auth.rs
   - crates/cranpose/src/apple/network.rs

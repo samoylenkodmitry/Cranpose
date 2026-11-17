@@ -1,6 +1,10 @@
 //! The pictures that a decoder has output and the app has not taken.
 
-use std::{collections::VecDeque, sync::Arc};
+use std::{
+    collections::VecDeque,
+    sync::Arc,
+    task::{Context, Poll, Waker},
+};
 
 use parking_lot::Mutex;
 
@@ -11,6 +15,8 @@ pub(super) struct FrameQueue {
     pub(super) frames: Mutex<VecDeque<VideoFrame>>,
     pub(super) reports: Mutex<VecDeque<FrameInfo>>,
     pub(super) stats: StatsCounters,
+    // The task that waits for a picture
+    waker: Mutex<Option<Waker>>,
 }
 
 impl FrameQueue {
@@ -19,6 +25,15 @@ impl FrameQueue {
             frames: Mutex::new(VecDeque::with_capacity(frames)),
             reports: Mutex::new(VecDeque::with_capacity(reports)),
             stats: StatsCounters::default(),
+            waker: Mutex::new(None),
+        }
+    }
+
+    // Wakes the task that waits for a picture. A decoder calls it after a picture joined
+    // `frames` and the lock is free.
+    pub(super) fn wake(&self) {
+        if let Some(waker) = self.waker.lock().take() {
+            waker.wake();
         }
     }
 }
@@ -45,6 +60,17 @@ impl Frames {
             self.0.stats.dropped();
         }
         frames.pop_front()
+    }
+
+    // Ready when a picture waits. Otherwise the task wakes when the decoder queues one. The
+    // waker is stored under the queue's lock, so a picture that arrives at once is not missed.
+    pub(super) fn poll_ready(&self, context: &mut Context<'_>) -> Poll<()> {
+        let frames = self.0.frames.lock();
+        if !frames.is_empty() {
+            return Poll::Ready(());
+        }
+        *self.0.waker.lock() = Some(context.waker().clone());
+        Poll::Pending
     }
 
     pub(super) fn next_report(&self) -> Option<FrameInfo> {

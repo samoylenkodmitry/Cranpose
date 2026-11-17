@@ -67,6 +67,14 @@ impl DecodedFrames {
         self.frames.latest_frame()
     }
 
+    /// Waits until a picture is ready for [`next_frame`](Self::next_frame) or
+    /// [`latest_frame`](Self::latest_frame), and returns at once if one is. The decoder's thread
+    /// wakes the task, so an app draws a picture in the frame that follows its output with no
+    /// polling. One task at a time waits: a second wait takes the place of the first.
+    pub async fn wait_for_frame(&self) {
+        std::future::poll_fn(|context| self.frames.poll_ready(context)).await;
+    }
+
     /// The report of the oldest picture that the decoder sent to the surface, if the output is
     /// [`DecoderOutput::Surface`](super::DecoderOutput::Surface). The decoder keeps the latest 32
     /// reports.
