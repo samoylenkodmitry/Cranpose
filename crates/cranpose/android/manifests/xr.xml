@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    An immersive application for headsets, such as a Meta Quest, drawn by
+    cranpose-xr through OpenXR. The headset's library lists it, and opening it
+    starts it as an immersive app instead of a window. The Khronos OpenXR
+    loader, which the plugin adds as a dependency for this service, brings its
+    own permissions and the queries it asks the runtime broker with.
+
+    `com.oculus.supportedDevices` names the headsets the Meta Horizon Store
+    offers the application to.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-feature
+        android:name="android.hardware.vr.headtracking"
+        android:required="true"
+        android:version="1" />
+    <uses-feature
+        android:glEsVersion="0x00030002"
+        android:required="true" />
+
+    <application>
+        <meta-data
+            android:name="com.oculus.supportedDevices"
+            android:value="quest2|questpro|quest3|quest3s" />
+        <meta-data
+            android:name="com.oculus.vr.focusaware"
+            android:value="true" />
+        <activity
+            android:name="dev.cranpose.android.CranposeActivity"
+            android:screenOrientation="landscape">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+                <category android:name="com.oculus.intent.category.VR" />
+                <category android:name="org.khronos.openxr.intent.category.IMMERSIVE_HMD" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

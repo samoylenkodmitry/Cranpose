@@ -1361,6 +1361,20 @@ impl<Fonts: LauncherFonts> AppLauncher<Fonts> {
         crate::android::run(app, self.into_settings(), content);
     }
 
+    /// Starts the process for an activity that draws Cranpose itself, with no
+    /// window of Cranpose's: the logger, the services and the app's process
+    /// start, as [`run`](Self::run) does before its first frame. Returns the
+    /// settings for the activity's [`GuestView`](crate::GuestView), such as
+    /// the one the OpenXR backend of `cranpose-xr` draws.
+    #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
+    pub fn start_android_host(self, app: &android_activity::AndroidApp) -> AppSettings {
+        let settings = self.into_settings();
+        crate::android::process::start_for_activity(app, &settings);
+        crate::android::services::register(app.clone(), &settings.capabilities);
+        crate::android::app_info::install_app_info(app);
+        settings
+    }
+
     /// Starts the process for a service the system started it for, with no
     /// activity. The export [`android_main!`](crate::android_main) writes
     /// calls it.

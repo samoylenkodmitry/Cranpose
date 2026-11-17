@@ -275,7 +275,13 @@ class CranposeAndroidPlugin : Plugin<Project> {
         }.toMap()
         task.configure {
             description = "Checks ${variant.name}'s permissions and the features they carry"
-            requiredFeatures.set(cranpose.requiredFeatures)
+            requiredFeatures.set(
+                cranpose.requiredFeatures.map { named ->
+                    named + requireKnownServices(cranpose).flatMap { service ->
+                        SERVICE_REQUIRED_FEATURES[service].orEmpty()
+                    }
+                }
+            )
             servicePermissions.set(needed)
             serviceManifests.set(manifests.mapValues { (_, file) -> file.absolutePath })
             serviceManifestFiles.from(manifests.values)
@@ -589,6 +595,7 @@ class CranposeAndroidPlugin : Plugin<Project> {
             "overlay",
             "television",
             "wearable",
+            "xr",
         )
 
         /**
@@ -605,6 +612,15 @@ class CranposeAndroidPlugin : Plugin<Project> {
             "wearable" to "java-wearable",
         )
 
+        /**
+         * Hardware a service cannot work without, which its manifest
+         * requires: an immersive app has no use on a device that tracks no
+         * head, so the store offers it only to headsets.
+         */
+        val SERVICE_REQUIRED_FEATURES = mapOf(
+            "xr" to listOf("android.hardware.vr.headtracking"),
+        )
+
         /** Third-party dependencies a service needs beyond the framework's own. */
         val SERVICE_DEPENDENCIES = mapOf(
             "billing" to listOf("com.android.billingclient:billing:9.1.0"),
@@ -612,6 +628,8 @@ class CranposeAndroidPlugin : Plugin<Project> {
                 "com.google.android.gms:play-services-wearable:20.0.1",
                 "androidx.wear:wear-remote-interactions:1.1.0",
             ),
+            // The Khronos loader, which finds the headset's OpenXR runtime
+            "xr" to listOf("org.khronos.openxr:openxr_loader_for_android:1.1.65"),
         )
 
         /**
@@ -640,6 +658,7 @@ class CranposeAndroidPlugin : Plugin<Project> {
             ),
             "notifications" to listOf("android.permission.POST_NOTIFICATIONS"),
             "overlay" to listOf("android.permission.SYSTEM_ALERT_WINDOW"),
+            "xr" to listOf("org.khronos.openxr.permission.OPENXR"),
         )
 
         /** Written by this plugin's build, relative to this class's package. */

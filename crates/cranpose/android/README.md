@@ -92,6 +92,7 @@ The Gradle `services` set also supports manually maintained app manifests:
 | `overlay` | Surface above other apps | `SYSTEM_ALERT_WINDOW` |
 | `television` | A Leanback launcher entry on `CranposeActivity`; `android.software.leanback` and `android.hardware.touchscreen` optional. The app supplies its 320 by 180 banner as `@drawable/tv_banner` | none |
 | `wearable` | Messages and streams to the app on the paired phone or watch (Wear OS Data Layer, `cranpose_services::wearable`) | none |
+| `xr` | An immersive app for headsets such as a Meta Quest (`cranpose_xr::android_main!`): the headset's launcher categories on `CranposeActivity`, `android.hardware.vr.headtracking` required and the Khronos OpenXR loader, which brings its own permissions | `org.khronos.openxr.permission.OPENXR` |
 
 `Use::update()` also selects the package installer, its receiver and
 `REQUEST_INSTALL_PACKAGES`. The launcher registers the updater when the declared

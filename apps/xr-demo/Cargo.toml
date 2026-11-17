@@ -1,0 +1,38 @@
+[package]
+name = "xr-demo"
+description = "A Cranpose app for headsets: two spatial panels that a controller presses."
+publish = false
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[lib]
+name = "xr_demo"
+crate-type = ["cdylib", "rlib"]
+path = "src/lib.rs"
+
+[[bin]]
+name = "xr-demo"
+path = "src/main.rs"
+required-features = ["desktop"]
+
+# The Gradle plugin builds the Android library with `android` and
+# `renderer-wgpu`; there the panels stand in the headset. On the desktop they
+# draw flat.
+[features]
+default = ["renderer-wgpu", "desktop"]
+renderer-wgpu = ["cranpose/renderer-wgpu"]
+desktop = ["cranpose/desktop"]
+android = ["renderer-wgpu", "cranpose/android", "cranpose-xr/openxr"]
+
+[dependencies]
+cranpose = { workspace = true, features = ["embedded-default-font"] }
+cranpose-xr = { workspace = true }
+cranpose-ui = { workspace = true }
+
+[build-dependencies]
+cranpose-capabilities = { path = "../../crates/cranpose-capabilities" }

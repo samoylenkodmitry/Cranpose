@@ -5,8 +5,10 @@ use crate::test_layout::{collect_sources, workspace_members};
 const FRAMEWORK_CRATES: &str = "crates/";
 // 19 with the open streams of cranpose-audio's Web Audio backend, that
 // crate's one thread-local. A page's values stay on the thread that made
-// them, and a sink, which is `Send`, names its stream there.
-const BUDGET: usize = 19;
+// them, and a sink, which is `Send`, names its stream there. 20 with the
+// composition local of cranpose-xr's panels, that crate's one thread-local:
+// a composition local holds an `Rc`, so no process-wide static can.
+const BUDGET: usize = 20;
 
 pub(crate) fn run_at(root: &Path) -> Result<(), String> {
     check(root, BUDGET)

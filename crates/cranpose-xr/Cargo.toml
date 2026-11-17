@@ -1,0 +1,46 @@
+[package]
+name = "cranpose-xr"
+version.workspace = true
+rust-version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme = "README.md"
+description = "Cranpose composables for headsets: panels in 3D through OpenXR"
+
+[lints]
+workspace = true
+
+[features]
+# The OpenXR backend: an Android app that starts as an immersive app on a
+# headset, such as a Meta Quest. Off Android the composables draw flat.
+openxr = [
+    "cranpose/android",
+    "cranpose/renderer-wgpu-gles",
+    "dep:openxr",
+    "dep:khronos-egl",
+    "dep:wgpu",
+    "dep:pollster",
+    "dep:ndk-context",
+    "dep:android-activity",
+]
+
+[dependencies]
+cranpose = { workspace = true }
+cranpose-core = { workspace = true }
+log = "0.4"
+
+[target.'cfg(target_os = "android")'.dependencies]
+openxr = { version = "0.22", optional = true }
+khronos-egl = { version = "6", features = ["dynamic"], optional = true }
+wgpu = { workspace = true, optional = true, features = ["gles", "std"] }
+pollster = { version = "1.0.1", optional = true }
+ndk-context = { version = "0.1", optional = true }
+android-activity = { workspace = true, optional = true }
+
+[dev-dependencies]
+cranpose-testing = { path = "../cranpose-testing" }

@@ -1022,6 +1022,15 @@ android-coroflow: _disk-guard
       -PcranposeLabel="Coroflow Notes" -PcranposeApplicationId=io.cranpose.coroflow \
       -PcranposeServices=
 
+# Build the XR demo for headsets such as a Meta Quest: apps/xr-demo through the
+# same Android project, as an immersive app.
+android-xr: _disk-guard
+    cd apps/android-demo/android && ../../../scripts/ci/with_host_lock.sh --shared \
+      ./gradlew --no-daemon :app:assembleRelease \
+      -PcranposeCargoPackage=xr-demo -PcranposeLibraryName=xr_demo \
+      -PcranposeLabel="Cranpose XR" -PcranposeApplicationId=dev.cranpose.xrdemo \
+      -PcranposeServices=xr
+
 # Build the shippable Android release artifact: every architecture it carries.
 # `android` above builds the one a development device runs, because each extra
 # architecture is another full native build of the workspace, run in turn.
