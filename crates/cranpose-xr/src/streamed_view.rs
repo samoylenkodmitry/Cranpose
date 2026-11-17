@@ -2,7 +2,7 @@
 
 use cranpose::CropRect;
 
-use crate::{Fov, Pose};
+use crate::{FieldOfView, Pose};
 
 #[cfg_attr(
     not(any(test, all(headset, target_os = "android"))),
@@ -20,7 +20,7 @@ pub struct StreamedView {
     /// started.
     pub pose: Pose,
     /// The field of view that the frame was rendered with.
-    pub fov: Fov,
+    pub fov: FieldOfView,
     /// The part of the frame that holds this eye's picture, in pixels from the frame's top left
     /// corner.
     pub rect: CropRect,
@@ -66,7 +66,7 @@ impl StreamedView {
         }
         let length = squared.sqrt();
         self.pose.orientation = self.pose.orientation.map(|v| v / length);
-        let Fov {
+        let FieldOfView {
             angle_left,
             angle_right,
             angle_up,

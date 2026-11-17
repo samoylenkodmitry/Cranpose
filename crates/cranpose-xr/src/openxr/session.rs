@@ -15,12 +15,13 @@ use super::{
     cylinder_layers::{CylinderLayer, raw_layers},
     graphics::{Api, Graphics},
     passthrough::Passthrough,
+    recenter_events::RecenterEvents,
     refresh_rate,
     runtime::Runtime,
 };
 #[cfg(target_os = "android")]
 use crate::stereo_mode::{Eye, EyeView};
-use crate::{Fov, Pose};
+use crate::{FieldOfView, Pose};
 
 const VIEW_CONFIGURATION: xr::ViewConfigurationType = xr::ViewConfigurationType::PRIMARY_STEREO;
 // How long the app waits for the runtime to stop a running session as the app ends, and how
@@ -81,7 +82,7 @@ pub(crate) struct ProjectionEye<'a> {
     // The image's size in pixels. The eye shows all of it.
     pub(crate) size: (u32, u32),
     pub(crate) pose: Pose,
-    pub(crate) fov: Fov,
+    pub(crate) fov: FieldOfView,
 }
 
 // A layer that shows the pictures that were rendered for both eyes, from the head poses that
@@ -104,6 +105,8 @@ pub(crate) struct QuadLayer<'a> {
 pub(crate) struct XrSession {
     // The room around the panels. Its handles end before the session does, so it comes first.
     pub(crate) passthrough: Passthrough,
+    // The runtime's recenter events that no frame has reported yet
+    pub(crate) recenters: RecenterEvents,
     // The room as the app sees it: its origin is where the head was when the app started
     pub(crate) local: xr::Space,
     // The head's own space, which the runtime locates for each frame
@@ -145,6 +148,7 @@ impl XrSession {
         let passthrough = Passthrough::new(&session, &modes);
         Ok(Self {
             passthrough,
+            recenters: RecenterEvents::default(),
             local,
             view,
             waiter,
@@ -199,6 +203,9 @@ impl XrSession {
                     change.from_display_refresh_rate(),
                     change.to_display_refresh_rate()
                 ),
+                xr::Event::ReferenceSpaceChangePending(change) => {
+                    self.recenters.record(&self.instance, change);
+                }
                 xr::Event::InstanceLossPending(_) => {
                     log::info!("cranpose xr: the runtime loses the instance");
                     self.status = SessionStatus::Exit;
@@ -221,9 +228,7 @@ impl XrSession {
                 self.session
                     .begin(VIEW_CONFIGURATION)
                     .map_err(|error| format!("OpenXR begin: {error}"))?;
-                if self.instance.exts().fb_display_refresh_rate.is_some() {
-                    refresh_rate::request_highest(&self.session);
-                }
+                refresh_rate::request_highest(&self.instance, &self.session);
                 SessionStatus::Hidden
             }
             xr::SessionState::SYNCHRONIZED => SessionStatus::Hidden,
@@ -388,12 +393,7 @@ fn projection_views<'a>(
     layer.eyes.each_ref().map(|eye| {
         xr::CompositionLayerProjectionView::new()
             .pose(posef(&eye.pose))
-            .fov(xr::Fovf {
-                angle_left: eye.fov.angle_left,
-                angle_right: eye.fov.angle_right,
-                angle_up: eye.fov.angle_up,
-                angle_down: eye.fov.angle_down,
-            })
+            .fov(fovf(&eye.fov))
             .sub_image(
                 xr::SwapchainSubImage::new()
                     .swapchain(eye.swapchain)
@@ -428,6 +428,24 @@ pub(crate) fn posef(pose: &Pose) -> xr::Posef {
             w: qw,
         },
         position: xr::Vector3f { x, y, z },
+    }
+}
+
+pub(crate) fn fovf(fov: &FieldOfView) -> xr::Fovf {
+    xr::Fovf {
+        angle_left: fov.angle_left,
+        angle_right: fov.angle_right,
+        angle_up: fov.angle_up,
+        angle_down: fov.angle_down,
+    }
+}
+
+pub(crate) fn field_of_view_of(fov: &xr::Fovf) -> FieldOfView {
+    FieldOfView {
+        angle_left: fov.angle_left,
+        angle_right: fov.angle_right,
+        angle_up: fov.angle_up,
+        angle_down: fov.angle_down,
     }
 }
 

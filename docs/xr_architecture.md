@@ -58,6 +58,9 @@ Cranpose developers too:
   `is_spatial_ui_enabled()` and `is_passthrough_control_enabled()`.
 - `local_spatial_environment()`: the `SpatialEnvironment` with `preferred_passthrough_opacity`
   and `current_passthrough_opacity`, which control the room around the panels.
+- `SpatialFrameEffect(on_frame)`: runs a callback once in each frame of the headset with an
+  `XrFrame`, which holds the head, the eyes and the controllers. See "The headset's state".
+- `local_haptics()`: the `Haptics` handle that vibrates a hand's controller.
 - `Orbiter`: content attached to the edge of a panel, such as a handle or a toolbar.
 - `SubspaceModifier`: `width`, `height`, `depth`, `size`, `offset`, `rotate`, `movable`,
   `resizable`, `fill_max_size`, `padding`.
@@ -114,13 +117,68 @@ The app chooses where the pictures go:
 
 Platforms without a hardware decoder that Cranpose drives report `DecoderError::Unavailable`.
 
+## The headset's state
+
+A streaming app sends the head, the eyes and the controllers to a host that renders the game.
+Jetpack XR reaches the head through ARCore (`ArDevice`, `RenderViewpoint`) and has no controller
+type, so Cranpose takes the names `ArDevice`'s `devicePose`, `RenderViewpoint` and `FieldOfView`
+from it and names the controller types itself.
+
+`SpatialFrameEffect(on_frame)` runs `on_frame` once in each frame of a running session, on the
+thread of the frame loop, before the panels draw. A state that it sets shows in the same frame.
+Outside a headset it never runs. The callback receives `&XrFrame`, which the backend fills in
+place: the frame loop allocates nothing for it. An app that sets a state in each frame draws
+the panels that read it in each frame, so the callback sets a state only when a rounded value
+changes. An `XrFrame` holds:
+
+- `predicted_display_time`, `now` and `period`. The times are `Duration`s on the platform's
+  monotonic clock. `now` is the clock's reading when the backend sampled the frame, so an app sets
+  the runtime's times against its own readings. `refresh_rate()` gives the rate that follows from
+  `period`. On Android and Linux that is `CLOCK_MONOTONIC`, which `XR_KHR_convert_timespec_time`
+  maps the runtime's time to. On Windows it is the performance counter, which
+  `XR_KHR_win32_convert_performance_counter_time` maps the runtime's time to. A runtime without
+  the extension passes its own time, which Android runtimes count in `CLOCK_MONOTONIC`
+  nanoseconds.
+- `device_pose`: the head, the OpenXR VIEW space located in the LOCAL space.
+- `left_eye` and `right_eye`: a `RenderViewpoint` with the eye's `pose` in LOCAL, its `local_pose`
+  relative to the head (Jetpack's `localPose`) and its `FieldOfView`: four angles in radians with
+  OpenXR's signs (left and down are negative). They come from `xrLocateViews`, which fills a fixed
+  array on the stack. `interpupillary_distance()` gives the
+  distance between the eyes.
+- `left_controller` and `right_controller`: a `Controller` with the aim pose and the grip pose,
+  each with linear and angular velocity when the runtime gives them, the trigger, squeeze,
+  thumbstick, face buttons `primary` (A or X) and `secondary` (B or Y), the menu button, the touch
+  states and the active `InteractionProfile`. An input that a profile lacks stays at rest. While
+  the session has no input focus every controller is at rest, and `focused` is `false`.
+- `recenter`: the runtime's `ReferenceSpaceChangePending` event for the LOCAL space, for one
+  frame. Its `change_time` tells from which frame on the poses use the new origin. A streaming app
+  tells its host.
+
+`local_headset_properties()` gives the `HeadsetProperties` that the runtime reports once for the
+session: the system name, each eye's recommended and maximum image size
+(`xrEnumerateViewConfigurationViews`) and the refresh rates that `XR_FB_display_refresh_rate`
+offers.
+
+The action set binds the trigger, squeeze, stick, buttons, touches, grip pose and haptic output
+of each interaction profile from the OpenXR specification's profile sections. A runtime rejects a
+whole profile when one path is wrong, so a profile whose full list is rejected binds the aim,
+the trigger and the stick's forward axis, which the pointer uses. The log says at the start which
+profiles bound which set.
+
+`Haptics` takes a vibration for a hand: amplitude from 0 to 1, an optional frequency and a
+duration. It is `Send` and `Sync`, so a network thread plays what the host sends as it arrives.
+The frame loop applies the newest request of each hand after the frame effects, with
+`xrApplyHapticFeedback`.
+
 ## Streamed scenes
 
 A game that a computer renders for both eyes arrives as a stream of frames, and each frame
 belongs to the head pose that it was rendered for. `StreamedScene(frames, views)` takes the
 `DecodedFrames` of a `VideoDecoder` in frames mode. `views` maps the `u64` that the app submitted
 with an access unit to a `StreamedViews`: for each eye, the render pose in the app's room, the
-field of view and the rectangle of the eye's picture in the frame.
+`FieldOfView` and the rectangle of the eye's picture in the frame. A `RenderViewpoint` of
+`XrFrame` carries the same `FieldOfView`, so an app passes the field of view that the headset
+reports straight into a streamed view.
 
 At each of the headset's frames the backend takes the newest decoded frame. It imports the
 frame's `AHardwareBuffer` as an EGL image, binds it to an external texture, and draws each eye's

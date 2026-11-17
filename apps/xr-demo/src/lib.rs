@@ -7,15 +7,17 @@ use std::{cell::RefCell, rc::Rc};
 use cranpose::{CropRect, DecodedFrames, prelude::*};
 use cranpose_ui::text::{FontWeight, TextUnit};
 use cranpose_xr::{
-    Fov, Pose, SpatialCurvedRow, SpatialExternalSurface, SpatialPanel, StereoMode, StreamedScene,
-    StreamedView, StreamedViews, Subspace, SubspaceModifier, local_spatial_capabilities,
-    local_spatial_environment,
+    FieldOfView, Pose, SpatialCurvedRow, SpatialExternalSurface, SpatialPanel, StereoMode,
+    StreamedScene, StreamedView, StreamedViews, Subspace, SubspaceModifier,
+    local_headset_properties, local_spatial_capabilities, local_spatial_environment,
 };
 
 mod clip_player;
+mod headset_readout;
 mod pattern_writer;
 
 use clip_player::ClipPlayer;
+use headset_readout::{HeadsetReadout, Readout};
 use pattern_writer::{PatternWriter, Split};
 
 cranpose::app_capabilities!();
@@ -29,7 +31,9 @@ cranpose::app_capabilities!();
 #[composable]
 pub fn XrDemo() {
     let presses = rememberMutableStateOf(|| 0_u32);
+    let readout = rememberMutableStateOf(Readout::default);
     Subspace(move || {
+        HeadsetReadout(presses, readout);
         ClipSurface(
             StereoMode::Mono,
             SubspaceModifier::new()
@@ -55,7 +59,7 @@ pub fn XrDemo() {
         );
         CounterPanel(presses);
         CurvedStrip();
-        PressesPanel(presses);
+        PressesPanel(presses, readout);
     });
 }
 
@@ -139,12 +143,13 @@ fn CurvedStrip() {
     });
 }
 
-// A smaller panel to the right, turned toward the viewer, that counts the presses too.
+// A smaller panel to the right, turned toward the viewer, that counts the presses too and shows
+// what the frame effect reads of the headset.
 #[composable]
-fn PressesPanel(presses: MutableState<u32>) {
+fn PressesPanel(presses: MutableState<u32>, readout: MutableState<Readout>) {
     SpatialPanel(
         SubspaceModifier::new()
-            .size(320.0, 200.0)
+            .size(320.0, 260.0)
             .offset(600.0, 0.0, 100.0)
             .rotate(0.0, -30.0, 0.0),
         move || {
@@ -156,15 +161,51 @@ fn PressesPanel(presses: MutableState<u32>) {
                     .padding(24.0),
                 BoxSpec::default(),
                 move || {
-                    Text(
-                        format!("{} presses", presses.get()),
+                    Column(
                         Modifier::empty(),
-                        sized(28.0, Some(FontWeight::BOLD)),
+                        ColumnSpec::default()
+                            .vertical_arrangement(LinearArrangement::spaced_by(6.0)),
+                        move || {
+                            Text(
+                                format!("{} presses", presses.get()),
+                                Modifier::empty(),
+                                sized(28.0, Some(FontWeight::BOLD)),
+                            );
+                            ReadoutLines(readout);
+                        },
                     );
                 },
             );
         },
     );
+}
+
+// The lines of the headset's readout. Outside a headset the frame effect never runs, and they
+// stay at their start.
+#[composable]
+fn ReadoutLines(readout: MutableState<Readout>) {
+    let Readout {
+        head_cm,
+        trigger_percent,
+        frames_per_second,
+    } = readout.get();
+    let head = head_cm.map_or_else(|| "not tracked".to_owned(), |cm| format!("{cm} cm"));
+    let (system, eye) = local_headset_properties().current().map_or_else(
+        || (String::new(), String::new()),
+        |headset| {
+            let [width, height] = headset.eye_image_sizes[0].recommended;
+            (headset.system_name, format!("Eye image {width}x{height}"))
+        },
+    );
+    for line in [
+        system,
+        eye,
+        format!("Head y {head}"),
+        format!("Right trigger {trigger_percent}%"),
+        format!("Frame effect {frames_per_second} Hz"),
+    ] {
+        Text(line, Modifier::empty(), sized(18.0, None));
+    }
 }
 
 // A button that shows or hides the room around the panels, or a note where the headset cannot.
@@ -269,7 +310,7 @@ fn clip_views(_frame: u64) -> StreamedViews {
             position: [x, 0.0, 0.0],
             orientation: [-sin, 0.0, 0.0, cos],
         },
-        fov: Fov::symmetric(0.4358, 0.4899),
+        fov: FieldOfView::symmetric(0.4358, 0.4899),
         rect: CropRect {
             x: left,
             y: 0,

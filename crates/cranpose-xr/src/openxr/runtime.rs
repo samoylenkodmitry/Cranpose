@@ -69,6 +69,16 @@ fn wanted_extensions(available: &xr::ExtensionSet) -> xr::ExtensionSet {
     extensions.khr_composition_layer_cylinder = available.khr_composition_layer_cylinder;
     // The room around the panels shows through a passthrough layer
     extensions.fb_passthrough = available.fb_passthrough;
+    // The runtime's times on the platform's monotonic clock
+    #[cfg(unix)]
+    {
+        extensions.khr_convert_timespec_time = available.khr_convert_timespec_time;
+    }
+    #[cfg(windows)]
+    {
+        extensions.khr_win32_convert_performance_counter_time =
+            available.khr_win32_convert_performance_counter_time;
+    }
     // The highest refresh rate the runtime offers
     extensions.fb_display_refresh_rate = available.fb_display_refresh_rate;
     // Hands tracked by cameras point and pinch as controllers do. The controllers of other

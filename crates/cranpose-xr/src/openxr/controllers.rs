@@ -1,208 +1,166 @@
-//! The controllers' aim and trigger, as OpenXR actions.
+//! The controllers' action set: its bindings, and what the hands report in each frame.
 
 use openxr as xr;
 
-use super::session::{XrSession, pose_of};
-use crate::{Ray, pointer::Aim};
+use super::{
+    hand_actions::{HandActions, HandInput, failed},
+    session::{SessionStatus, XrSession},
+};
+use crate::{
+    Controller, Hand, InteractionProfile, XrFrame, controller_bindings::bindings,
+    haptics::HapticCommand,
+};
 
-// The input paths of each hand, left then right.
-const HANDS: [&str; 2] = ["/user/hand/left", "/user/hand/right"];
-// Each profile: its trigger, and its thumbstick's or trackpad's forward axis if it has one.
-// Hands tracked by cameras point and pinch through the hand interaction profile. A runtime that
-// lacks a profile's extension rejects its bindings, and the others still bind.
-const PROFILES: [(&str, &str, Option<&str>); 18] = [
-    (
-        "oculus/touch_controller",
-        "trigger/value",
-        Some("thumbstick/y"),
-    ),
-    (
-        "meta/touch_controller_plus",
-        "trigger/value",
-        Some("thumbstick/y"),
-    ),
-    (
-        "facebook/touch_controller_pro",
-        "trigger/value",
-        Some("thumbstick/y"),
-    ),
-    (
-        "valve/index_controller",
-        "trigger/value",
-        Some("thumbstick/y"),
-    ),
-    ("htc/vive_controller", "trigger/value", Some("trackpad/y")),
-    (
-        "htc/vive_cosmos_controller",
-        "trigger/value",
-        Some("thumbstick/y"),
-    ),
-    (
-        "htc/vive_focus3_controller",
-        "trigger/value",
-        Some("thumbstick/y"),
-    ),
-    (
-        "microsoft/motion_controller",
-        "trigger/value",
-        Some("thumbstick/y"),
-    ),
-    (
-        "hp/mixed_reality_controller",
-        "trigger/value",
-        Some("thumbstick/y"),
-    ),
-    (
-        "samsung/odyssey_controller",
-        "trigger/value",
-        Some("thumbstick/y"),
-    ),
-    (
-        "bytedance/pico4_controller",
-        "trigger/value",
-        Some("thumbstick/y"),
-    ),
-    (
-        "bytedance/pico4s_controller",
-        "trigger/value",
-        Some("thumbstick/y"),
-    ),
-    (
-        "bytedance/pico_neo3_controller",
-        "trigger/value",
-        Some("thumbstick/y"),
-    ),
-    ("ml/ml2_controller", "trigger/value", Some("trackpad/y")),
-    (
-        "khr/generic_controller",
-        "trigger/value",
-        Some("thumbstick/y"),
-    ),
-    ("ext/hand_interaction_ext", "aim_activate_ext/value", None),
-    ("microsoft/hand_interaction", "select/value", None),
-    ("khr/simple_controller", "select/click", None),
-];
+// The user path of each hand, left then right.
+const USERS: [&str; 2] = ["/user/hand/left", "/user/hand/right"];
 
-// Where each controller points and how far its trigger is pulled.
+// The hands' inputs and outputs, as OpenXR actions. Hands tracked by cameras point and pinch
+// through the hand interaction profiles. A runtime that lacks a profile's extension rejects its
+// bindings, and the others still bind.
 pub(crate) struct Controllers {
     set: xr::ActionSet,
-    triggers: [xr::Action<f32>; 2],
-    sticks: [xr::Action<f32>; 2],
-    aims: [xr::Space; 2],
+    hands: [HandInput; 2],
+    users: [xr::Path; 2],
+    // The path of each profile, to name the one that the runtime reports for a hand
+    profiles: Vec<(xr::Path, InteractionProfile)>,
 }
 
 impl Controllers {
     pub(crate) fn new(xr_session: &XrSession) -> Result<Self, String> {
-        let set = xr_session
-            .instance()
-            .create_action_set("pointer", "Pointer", 0)
+        let instance = xr_session.instance();
+        let set = instance
+            .create_action_set("controllers", "Controllers", 0)
             .map_err(failed("action set"))?;
-        let poses = pair::<xr::Posef>(&set, "aim", "aim")?;
-        let triggers = pair::<f32>(&set, "trigger", "trigger")?;
-        let sticks = pair::<f32>(&set, "stick", "thumbstick")?;
-        for (profile, select, stick) in PROFILES {
-            let profile = format!("/interaction_profiles/{profile}");
-            if let Err(error) = suggest(xr_session.instance(), &profile, |hand, path| {
-                let mut bindings = vec![
-                    xr::Binding::new(&poses[hand], path("aim/pose")?),
-                    xr::Binding::new(&triggers[hand], path(select)?),
-                ];
-                if let Some(stick) = stick {
-                    bindings.push(xr::Binding::new(&sticks[hand], path(stick)?));
-                }
-                Ok(bindings)
-            }) {
-                log::debug!("cranpose xr: no bindings for {profile}: {error}");
-            }
-        }
+        let actions = [
+            HandActions::new(&set, "left")?,
+            HandActions::new(&set, "right")?,
+        ];
+        bind_profiles(instance, &actions);
         xr_session
             .session
             .attach_action_sets(&[&set])
             .map_err(failed("attach actions"))?;
-        let space = |pose: &xr::Action<xr::Posef>| {
-            pose.create_space(&xr_session.session, xr::Path::NULL, xr::Posef::IDENTITY)
-                .map_err(failed("aim space"))
-        };
-        let aims = [space(&poses[0])?, space(&poses[1])?];
+        let [left, right] = actions;
+        let path = |path: &str| instance.string_to_path(path).map_err(failed("path"));
+        let mut profiles = Vec::with_capacity(InteractionProfile::ALL.len());
+        for profile in InteractionProfile::ALL {
+            profiles.push((path(profile.path())?, profile));
+        }
         Ok(Self {
             set,
-            triggers,
-            sticks,
-            aims,
+            hands: [
+                HandInput::new(left, &xr_session.session)?,
+                HandInput::new(right, &xr_session.session)?,
+            ],
+            users: [path(USERS[0])?, path(USERS[1])?],
+            profiles,
         })
     }
 
-    // The controllers at `time`, left then right. A controller the runtime does not track has
-    // none.
-    pub(crate) fn aims(&self, xr_session: &XrSession, time: xr::Time) -> [Option<Aim>; 2] {
-        if let Err(error) = xr_session
+    // Writes the controllers of `frame` at `time`. While the app has no input focus, or the
+    // runtime does not sync the actions, the controllers stay at rest.
+    pub(crate) fn sample(
+        &self,
+        xr_session: &XrSession,
+        time: xr::Time,
+        status: SessionStatus,
+        frame: &mut XrFrame,
+    ) {
+        let synced = status.listens() && self.sync(xr_session);
+        let controllers = [&mut frame.left_controller, &mut frame.right_controller];
+        for ((hand, user), controller) in self.hands.iter().zip(self.users).zip(controllers) {
+            *controller = Controller::default();
+            if synced {
+                hand.read(xr_session, time, controller);
+                controller.profile = self.profile_of(xr_session, user);
+            }
+        }
+    }
+
+    // Plays or stops the vibrations that the app asked for, left hand first. A hand that the
+    // runtime does not track drops its request.
+    pub(crate) fn vibrate(&self, xr_session: &XrSession, commands: [Option<HapticCommand>; 2]) {
+        for ((hand, command), side) in self.hands.iter().zip(commands).zip(Hand::BOTH) {
+            let result = match command {
+                Some(HapticCommand::Vibrate(vibration)) => {
+                    hand.vibrate(&xr_session.session, Some(&vibration))
+                }
+                Some(HapticCommand::Stop) => hand.vibrate(&xr_session.session, None),
+                None => continue,
+            };
+            if let Err(error) = result {
+                log::debug!("cranpose xr: haptics of the {side:?} hand: {error}");
+            }
+        }
+    }
+
+    fn sync(&self, xr_session: &XrSession) -> bool {
+        match xr_session
             .session
             .sync_actions(&[xr::ActiveActionSet::new(&self.set)])
         {
-            log::debug!("cranpose xr: actions: {error}");
-            return [None, None];
-        }
-        [0, 1].map(|hand| {
-            let location = self.aims[hand].locate(&xr_session.local, time).ok()?;
-            let tracked =
-                xr::SpaceLocationFlags::POSITION_VALID | xr::SpaceLocationFlags::ORIENTATION_VALID;
-            if !location.location_flags.contains(tracked) {
-                return None;
+            Ok(()) => true,
+            Err(error) => {
+                log::debug!("cranpose xr: actions: {error}");
+                false
             }
-            let value = |action: &xr::Action<f32>| {
-                action
-                    .state(&xr_session.session, xr::Path::NULL)
-                    .ok()
-                    .filter(|state| state.is_active)
-                    .map_or(0.0, |state| state.current_state)
-            };
-            let pose = pose_of(&location.pose);
-            Some(Aim {
-                ray: Ray::of_aim(&pose),
-                pose,
-                trigger: value(&self.triggers[hand]),
-                stick: value(&self.sticks[hand]),
-            })
-        })
+        }
+    }
+
+    // The profile that the runtime reports for the hand at `user`, or `None` while it reports
+    // none or one that the backend did not suggest.
+    fn profile_of(&self, xr_session: &XrSession, user: xr::Path) -> Option<InteractionProfile> {
+        let reported = xr_session.session.current_interaction_profile(user).ok()?;
+        self.profiles
+            .iter()
+            .find(|(path, _)| *path == reported)
+            .map(|&(_, profile)| profile)
     }
 }
 
-fn failed(what: &str) -> impl Fn(xr::sys::Result) -> String + use<> {
-    let what = what.to_owned();
-    move |error| format!("OpenXR {what}: {error}")
+// Suggests the bindings of every profile. A runtime rejects a profile's whole list when one path
+// is not the profile's, so a rejected profile binds the pointer's inputs only. A table mistake
+// then cannot cost the pointer. A profile that the runtime does not know, because its extension
+// is off, binds nothing.
+fn bind_profiles(instance: &xr::Instance, actions: &[HandActions; 2]) {
+    let (mut all, mut pointer_only, mut none) = (Vec::new(), Vec::new(), Vec::new());
+    for profile in InteractionProfile::ALL {
+        match suggest(instance, actions, profile, false) {
+            Ok(()) => all.push(profile),
+            Err(error) => match suggest(instance, actions, profile, true) {
+                Ok(()) => {
+                    log::warn!("cranpose xr: {profile:?} rejects its inputs: {error}");
+                    pointer_only.push(profile);
+                }
+                Err(_) => none.push(profile),
+            },
+        }
+    }
+    log::info!(
+        "cranpose xr: bindings: all inputs of {all:?}; the pointer's inputs of {pointer_only:?}; none for {} unknown profiles",
+        none.len()
+    );
 }
 
-// An action for each hand, named `left_{name}` and `right_{name}`.
-fn pair<T: xr::ActionTy>(
-    set: &xr::ActionSet,
-    name: &str,
-    label: &str,
-) -> Result<[xr::Action<T>; 2], String> {
-    let action = |side: &str, title: &str| {
-        set.create_action::<T>(&format!("{side}_{name}"), &format!("{title} {label}"), &[])
-            .map_err(failed("action"))
-    };
-    Ok([action("left", "Left")?, action("right", "Right")?])
-}
-
-// Suggests the bindings of `profile` that `bindings` gives for each hand, from a function that
-// turns an input's name into its path on that hand.
-fn suggest<'a>(
+// Suggests the bindings of `profile` for both hands: every input, or the pointer's only.
+fn suggest(
     instance: &xr::Instance,
-    profile: &str,
-    bindings: impl Fn(
-        usize,
-        &dyn Fn(&str) -> Result<xr::Path, String>,
-    ) -> Result<Vec<xr::Binding<'a>>, String>,
+    actions: &[HandActions; 2],
+    profile: InteractionProfile,
+    pointer_only: bool,
 ) -> Result<(), String> {
     let path = |path: &str| instance.string_to_path(path).map_err(failed("path"));
-    let mut all = Vec::new();
-    for (hand, side) in HANDS.iter().enumerate() {
-        all.extend(bindings(hand, &|name| {
-            path(&format!("{side}/input/{name}"))
-        })?);
+    let mut suggested = Vec::new();
+    for (hand, user) in Hand::BOTH.into_iter().zip(USERS) {
+        let lists = bindings(profile, hand);
+        for &(input, name) in lists.iter().flat_map(|list| list.iter()) {
+            if !pointer_only || input.points() {
+                suggested
+                    .push(actions[hand.index()].binding(input, path(&format!("{user}/{name}"))?));
+            }
+        }
     }
     instance
-        .suggest_interaction_profile_bindings(path(profile)?, &all)
+        .suggest_interaction_profile_bindings(path(profile.path())?, &suggested)
         .map_err(failed("bindings"))
 }

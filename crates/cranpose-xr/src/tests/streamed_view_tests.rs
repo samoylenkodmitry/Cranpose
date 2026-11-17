@@ -1,9 +1,10 @@
 use super::*;
+use crate::RenderViewpoint;
 
 fn view() -> StreamedView {
     StreamedView {
         pose: Pose::IDENTITY,
-        fov: Fov::symmetric(1.0, 1.0),
+        fov: FieldOfView::symmetric(1.0, 1.0),
         rect: CropRect {
             x: 0,
             y: 0,
@@ -51,12 +52,12 @@ fn a_view_that_the_compositor_would_refuse_is_rejected() {
         let left = StreamedView { pose, ..view() };
         assert!(views(left).checked((640, 360)).is_err(), "{pose:?}");
     }
-    let flat = Fov {
+    let flat = FieldOfView {
         angle_left: 0.5,
         angle_right: -0.5,
-        ..Fov::symmetric(1.0, 1.0)
+        ..FieldOfView::symmetric(1.0, 1.0)
     };
-    let wide = Fov::symmetric(3.2, 1.0);
+    let wide = FieldOfView::symmetric(3.2, 1.0);
     for fov in [flat, wide] {
         let left = StreamedView { fov, ..view() };
         assert!(views(left).checked((640, 360)).is_err(), "{fov:?}");
@@ -79,4 +80,28 @@ fn a_rectangle_must_lie_inside_the_picture() {
     }
     assert!(views(view()).checked((640, 360)).is_ok());
     assert!(views(view()).checked((639, 360)).is_err());
+}
+
+#[test]
+fn an_eye_of_the_headset_gives_its_pose_and_field_of_view_to_a_streamed_view() {
+    // The values that the Quest 3 reported for its left eye
+    let eye = RenderViewpoint {
+        pose: Pose::at([0.0, 1.6, 0.0]),
+        local_pose: Pose::at([-0.032, 0.0, 0.0]),
+        field_of_view: FieldOfView {
+            angle_left: -0.942_477_8,
+            angle_right: 0.698_131_7,
+            angle_up: 0.767_944_9,
+            angle_down: -0.959_931_1,
+        },
+    };
+    let from_eye = StreamedView {
+        pose: eye.pose,
+        fov: eye.field_of_view,
+        ..view()
+    };
+    let checked = views(from_eye)
+        .checked((640, 360))
+        .expect("the headset's own view");
+    assert_eq!(checked.left.fov, eye.field_of_view);
 }
