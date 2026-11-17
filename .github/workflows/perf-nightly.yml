@@ -13,9 +13,10 @@ name: perf nightly
 
 on:
   # GitHub's schedule did not fire this workflow on its first nights, so a
-  # crontab on samarch-1 dispatches it at 02:00 UTC as well. Whichever trigger
-  # arrives second does next to nothing: each job skips a main it already
-  # measured.
+  # crontab on samarch-1 dispatches it at 02:00 UTC as well. The schedule
+  # fires hours late, when macm3's exclusive measurements would starve the
+  # mac jobs of the working day, so a scheduled run skips once tonight's
+  # dispatch succeeded. A dispatch skips a main this Mac already measured.
   schedule:
     - cron: '30 1 * * *'
   workflow_dispatch:
@@ -27,10 +28,12 @@ on:
         type: boolean
         default: false
 
+# `decide` reads this workflow's own run history.
 permissions:
   contents: write
   issues: write
   pull-requests: write
+  actions: read
 
 concurrency:
   group: perf-nightly
@@ -46,8 +49,37 @@ env:
   GIT_CONFIG_VALUE_0: "false"
 
 jobs:
+  decide:
+    name: decide whether tonight's nightly already ran
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.check.outputs.run }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check whether tonight's nightly already ran
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+          RUN_ID: ${{ github.run_id }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          args=(--repo "$REPO" --sha "$SHA" --run-id "$RUN_ID" --workflow perf-nightly.yml --event "$EVENT")
+          # Only the late schedule is a duplicate; a dispatch always measures.
+          if [ "$EVENT" != "schedule" ]; then
+            args+=(--force)
+          fi
+          bash scripts/ci/nightly_should_run.sh "${args[@]}" >> "$GITHUB_OUTPUT"
+
   desktop:
     name: frameworks on a Mac desktop (macm3)
+    needs: decide
+    if: needs.decide.outputs.run == 'true'
     # macm3's runners carry `recent-repo`; the Mac the phone is attached to
     # does not.
     runs-on: [self-hosted, macOS, ARM64, recent-repo]
@@ -196,9 +228,9 @@ jobs:
 
   android:
     name: release against main, and the frameworks (Mate 20 X)
-    needs: desktop
+    needs: [decide, desktop]
     # The release against main runs whatever became of the desktop job.
-    if: ${{ !cancelled() }}
+    if: ${{ !cancelled() && needs.decide.outputs.run == 'true' }}
     # The Mac the Mate 20 X is attached to; its runner takes jobs while the
     # Mac sits idle on power.
     runs-on: [self-hosted, macOS, ARM64, idle-mac]

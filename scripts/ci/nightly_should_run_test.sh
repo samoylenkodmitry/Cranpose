@@ -29,17 +29,26 @@ trap 'rm -r -- "$work_dir" 2>/dev/null || true' EXIT
 bin_dir="$work_dir/bin"
 mkdir -p "$bin_dir"
 runs_file="$work_dir/runs.json"
+jobs_file="$work_dir/jobs.json"
 calls_file="$work_dir/calls"
 
 cat > "$bin_dir/gh" <<'GH'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$NIGHTLY_TEST_CALLS"
-cat "$NIGHTLY_TEST_RUNS"
+case "$*" in
+    */jobs*) cat "$NIGHTLY_TEST_JOBS" ;;
+    *) cat "$NIGHTLY_TEST_RUNS" ;;
+esac
 GH
 chmod +x "$bin_dir/gh"
 
 export NIGHTLY_TEST_CALLS="$calls_file"
 export NIGHTLY_TEST_RUNS="$runs_file"
+export NIGHTLY_TEST_JOBS="$jobs_file"
+
+# Every earlier run below did the night's work, unless a check says otherwise.
+worked='{"jobs": [{"conclusion": "success"}, {"conclusion": "success"}]}'
+printf '%s\n' "$worked" > "$jobs_file"
 
 SHA=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 OTHER=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
@@ -128,6 +137,57 @@ out="$(verdict --force)"
 check "a forced run happens even when tonight is already covered" test "$out" = "run=true"
 check "and a forced run does not call the api at all" \
     bash -c '! [ -s "$1" ]' _ "$calls_file"
+
+# GitHub's schedule arrives hours after the crontab dispatch, on a main that moved.
+cat > "$runs_file" <<JSON
+{"workflow_runs": [
+  {"id": 7, "head_sha": "$OTHER", "status": "completed", "conclusion": "success", "created_at": "$(recent 8)"}
+]}
+JSON
+out="$(verdict --event schedule)"
+check "a late scheduled run stops once tonight's dispatch succeeded on another commit" \
+    test "$out" = "run=false"
+
+cat > "$runs_file" <<JSON
+{"workflow_runs": [
+  {"id": 8, "head_sha": "$OTHER", "status": "completed", "conclusion": "success", "created_at": "$(recent 14)"}
+]}
+JSON
+out="$(verdict --event schedule)"
+check "a scheduled run does not take yesterday's daytime run for tonight's" test "$out" = "run=true"
+
+cat > "$runs_file" <<JSON
+{"workflow_runs": [
+  {"id": 9, "head_sha": "$OTHER", "status": "completed", "conclusion": "failure", "created_at": "$(recent 7)"}
+]}
+JSON
+out="$(verdict --event schedule)"
+check "a scheduled run retries after tonight's dispatch failed" test "$out" = "run=true"
+
+# A run that only decided to skip succeeded without testing anything.
+cat > "$runs_file" <<JSON
+{"workflow_runs": [
+  {"id": 10, "head_sha": "$SHA", "status": "completed", "conclusion": "success", "created_at": "$(recent 2)"}
+]}
+JSON
+printf '%s\n' '{"jobs": [{"conclusion": "success"}, {"conclusion": "skipped"}, {"conclusion": "skipped"}]}' > "$jobs_file"
+out="$(verdict)"
+printf '%s\n' "$worked" > "$jobs_file"
+check "a run that only decided to skip does not cover the night" test "$out" = "run=true"
+
+# A run queued behind this one asks the same question once this one ends.
+cat > "$runs_file" <<JSON
+{"workflow_runs": [
+  {"id": $((SELF + 1)), "head_sha": "$SHA", "status": "queued", "conclusion": null, "created_at": "$(recent 0.1)"}
+]}
+JSON
+out="$(verdict)"
+check "a run that arrived later does not stop this one" test "$out" = "run=true"
+
+printf '{"workflow_runs": []}\n' > "$runs_file"
+out="$(verdict --workflow perf-nightly.yml)"
+check "the history read is the one of the workflow named" \
+    grep -q "workflows/perf-nightly.yml/runs" "$calls_file"
 
 status=0
 PATH="$bin_dir:$PATH" bash "$SCRIPT" --repo owner/repo --sha "$SHA" > /dev/null 2>&1 || status=$?

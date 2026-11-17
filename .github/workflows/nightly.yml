@@ -67,7 +67,8 @@ jobs:
   # Two triggers would otherwise run the whole suite twice on the two Linux
   # slots, so whichever arrives second asks whether tonight is already covered
   # and becomes a fifteen-second no-op. A failed run is not covered -- a retry
-  # is what should happen.
+  # is what should happen. The schedule fires hours after the dispatch, on a
+  # main that moved, so a scheduled run counts tonight's run of any commit.
   decide:
     name: decide whether tonight's nightly already ran
     runs-on: ubuntu-latest
@@ -85,10 +86,11 @@ jobs:
           REPO: ${{ github.repository }}
           SHA: ${{ github.sha }}
           RUN_ID: ${{ github.run_id }}
+          EVENT: ${{ github.event_name }}
           FORCE: ${{ github.event_name == 'workflow_dispatch' && inputs.force }}
         run: |
           set -euo pipefail
-          args=(--repo "$REPO" --sha "$SHA" --run-id "$RUN_ID")
+          args=(--repo "$REPO" --sha "$SHA" --run-id "$RUN_ID" --event "$EVENT")
           if [ "$FORCE" = "true" ]; then
             args+=(--force)
           fi
