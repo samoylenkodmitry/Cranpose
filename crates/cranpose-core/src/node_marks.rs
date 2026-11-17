@@ -24,15 +24,63 @@ use crate::{MemoryApplier, NodeId, collections::map::HashMap};
 #[derive(Clone, Default)]
 pub struct NodeMarks {
     dense: Vec<u8>,
+    marked: MarkedSlots,
     elsewhere: HashMap<NodeId, u8>,
+}
+
+// A reset clears the slots it listed while they are at most one in this many
+// of all, and at most `MAX_LISTED`; past that, it clears every slot, and the
+// list keeps no more room than that for a walk that marked most nodes.
+const LISTED_SHARE: usize = 32;
+const MAX_LISTED: usize = 2048;
+
+// The dense slots given a mark since the last reset: a reset clears those
+// alone, so its work follows the marks a walk set, not the applier's node
+// count. A walk that marks more than `room` slots stops the list, and the
+// reset clears every slot.
+#[derive(Clone, Default)]
+struct MarkedSlots {
+    slots: Vec<usize>,
+    room: usize,
+    overflowed: bool,
+}
+
+impl MarkedSlots {
+    #[inline]
+    fn note(&mut self, slot: usize) {
+        if self.slots.len() < self.room {
+            self.slots.push(slot);
+        } else {
+            self.overflowed = true;
+        }
+    }
+
+    fn clear(&mut self, dense: &mut [u8]) {
+        if self.overflowed {
+            dense.fill(0);
+        } else {
+            for &slot in &self.slots {
+                dense[slot] = 0;
+            }
+        }
+        self.slots.clear();
+        self.overflowed = false;
+    }
 }
 
 impl NodeMarks {
     /// Unmarks every node, with room for every node `applier` holds now.
     pub fn reset(&mut self, applier: &MemoryApplier) {
-        self.dense.clear();
-        self.dense.resize(applier.state.nodes.len(), 0);
-        self.elsewhere.clear();
+        self.marked.clear(&mut self.dense);
+        let nodes = applier.state.nodes.len();
+        if self.dense.len() < nodes {
+            self.dense.resize(nodes, 0);
+        }
+        self.marked.room = (self.dense.len() / LISTED_SHARE).min(MAX_LISTED);
+        // A clear writes every control byte of the map, even of an empty one.
+        if !self.elsewhere.is_empty() {
+            self.elsewhere.clear();
+        }
     }
 
     /// The mark of `id`: `0` while it has none.
@@ -102,7 +150,13 @@ impl NodeMarks {
     #[inline]
     pub(crate) fn entry_at(&mut self, place: MarkPlace) -> &mut u8 {
         match place {
-            MarkPlace::Dense(slot) if slot < self.dense.len() => &mut self.dense[slot],
+            MarkPlace::Dense(slot) if slot < self.dense.len() => {
+                let entry = &mut self.dense[slot];
+                if *entry == 0 {
+                    self.marked.note(slot);
+                }
+                entry
+            }
             _ => self.grown_entry_at(place),
         }
     }
@@ -114,6 +168,7 @@ impl NodeMarks {
         match place {
             MarkPlace::Dense(slot) => {
                 self.dense.resize(slot + 1, 0);
+                self.marked.note(slot);
                 &mut self.dense[slot]
             }
             MarkPlace::Elsewhere(id) => self.elsewhere.entry(id).or_insert(0),
