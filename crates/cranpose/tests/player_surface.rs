@@ -92,7 +92,7 @@ impl Player {
     // surface's task do. Returns the time from the unit to the drawn picture.
     fn show_next(&mut self) -> Duration {
         let before = self.decoder.frames().stats().decoded;
-        let unit = self.units[self.fed as usize % self.units.len()];
+        let unit = self.units[usize::try_from(self.fed).expect("small") % self.units.len()];
         let started = Instant::now();
         self.decoder
             .submit(AccessUnit {
@@ -102,11 +102,11 @@ impl Player {
             })
             .expect("a unit");
         self.fed += 1;
-        let deadline = started + Duration::from_secs(5);
-        while self.decoder.frames().stats().decoded == before {
-            assert!(Instant::now() < deadline, "the decoder output no picture");
-            std::thread::sleep(Duration::from_micros(200));
-        }
+        let frames = self.decoder.frames();
+        assert!(
+            wait_until(|| frames.stats().decoded > before),
+            "the decoder output no picture"
+        );
         let drawn = self.view.draw(&mut self.pixels).expect("frame");
         assert!(drawn, "the picture's frame drew nothing");
         draw_settled(&mut self.view, &mut self.pixels);
@@ -117,6 +117,22 @@ impl Player {
         let pixel = pixel(&self.pixels, self.width, x, y);
         [pixel[0], pixel[1], pixel[2]]
     }
+}
+
+// Polls `done` until it is true, for five seconds at most, and tells whether it became true.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test waits for a thread of the decoder, and a poll is the way to see its counts"
+)]
+fn wait_until(done: impl Fn() -> bool) -> bool {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !done() {
+        if Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_micros(200));
+    }
+    true
 }
 
 // Checks that each point of `points` has its color, within `tolerance`.

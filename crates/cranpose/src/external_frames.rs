@@ -153,7 +153,9 @@ impl ExternalFrames {
         }
         let slot = &mut ring.slots[index];
         slot.state = State::Shown;
-        Some(slot.shown.frame(number))
+        let bitmap = slot.shown.frame(number);
+        drop(ring);
+        Some(bitmap)
     }
 }
 
@@ -186,11 +188,13 @@ impl FrameWriter {
         ring.next += 1;
         let slot = &mut ring.slots[index];
         slot.state = State::Writing(number);
-        Some(FrameTexture {
+        let target = FrameTexture {
             number,
             texture: slot.texture.clone(),
             view: slot.view.clone(),
-        })
+        };
+        drop(ring);
+        Some(target)
     }
 
     /// Hands frame `number` to the composition. Call it once the work that

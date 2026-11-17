@@ -70,6 +70,7 @@ impl Frames {
             return Poll::Ready(());
         }
         *self.0.waker.lock() = Some(context.waker().clone());
+        drop(frames);
         Poll::Pending
     }
 
