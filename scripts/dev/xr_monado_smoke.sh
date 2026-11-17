@@ -43,7 +43,7 @@ done
 cd "$root"
 cargo build -q -p xr-demo
 set +e
-RUST_LOG=info timeout "$seconds" "${CARGO_TARGET_DIR:-target}/debug/xr-demo" >"$workdir/demo.log" 2>&1
+RUST_LOG=info,cranpose_xr=debug timeout "$seconds" "${CARGO_TARGET_DIR:-target}/debug/xr-demo" >"$workdir/demo.log" 2>&1
 set -e
 cat "$workdir/demo.log"
 

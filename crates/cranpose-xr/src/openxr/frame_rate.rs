@@ -1,4 +1,4 @@
-//! The count of drawn frames, logged once a second.
+//! The count of drawn frames, logged at debug level once a second.
 
 use std::time::{Duration, Instant};
 
@@ -22,7 +22,7 @@ impl FrameRate {
         self.frames += 1;
         let elapsed = self.since.elapsed();
         if elapsed >= INTERVAL {
-            log::info!(
+            log::debug!(
                 "cranpose xr: {} frames in {:.1} s",
                 self.frames,
                 elapsed.as_secs_f32()

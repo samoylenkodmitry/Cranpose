@@ -39,7 +39,7 @@ impl Host {
 /// machine has no OpenXR loader, no runtime or no headset, it opens the flat window of
 /// [`AppLauncher::try_run`] instead, which draws the panels side by side.
 ///
-/// It takes the arguments of [`android_main!`] on Android, so an app has one launcher and one
+/// It takes the arguments of [`android_main!`](crate::android_main) on Android, so an app has one launcher and one
 /// content for both. It returns when the headset ends the session or the window closes.
 ///
 /// # Errors

@@ -77,7 +77,11 @@ The `host` module holds the other difference. An Android activity polls its even
 frames. A desktop process has none. `cranpose_xr::run` asks the OpenXR loader for a runtime and a
 head-mounted display first. It starts the headset session when both exist and opens the flat
 window when one is missing. The OpenXR loader is found at run time (the `openxr` crate's `loaded`
-feature): the binary links no loader, so a machine without one runs the flat window.
+feature): the binary links no loader, so a machine without one runs the flat window. A Linux
+distribution installs the loader with its OpenXR package. A Windows release ships
+`openxr_loader.dll` beside the executable, because no runtime puts it on the DLL search path. The
+`static` feature would build the loader from source with CMake and a C++ compiler for each
+target, which the Android build and the cross checks from a Mac do not need.
 
 ## What the backend handles for the app
 

@@ -30,10 +30,9 @@ pub(crate) type Api = xr::Vulkan;
 // A swapchain image: its Vulkan image.
 type Image = <Api as xr::Graphics>::SwapchainImage;
 
-// The newest Vulkan version that wgpu supports. A runtime that stops at an older one gets that.
-const NEWEST: xr::Version = xr::Version::new(1, 3, 0);
-// The oldest Vulkan version that wgpu supports.
-const OLDEST: xr::Version = xr::Version::new(1, 1, 0);
+// The newest Vulkan version that wgpu supports, and the oldest.
+const NEWEST: u32 = vk::API_VERSION_1_3;
+const OLDEST: u32 = vk::API_VERSION_1_1;
 
 // The Vulkan objects of the session. wgpu owns them and destroys them with its last device, so
 // the session ends before the runner lets the device go.
@@ -83,10 +82,10 @@ impl Graphics {
         instance: &xr::Instance,
         system: xr::SystemId,
     ) -> Result<(Self, GpuContext), String> {
-        let version = api_version(instance, system)?;
         // SAFETY: the library is the system's Vulkan loader, which the entry keeps loaded.
         let entry =
             unsafe { ash::Entry::load() }.map_err(|error| format!("the Vulkan loader: {error}"))?;
+        let version = api_version(instance, system, &entry)?;
         let created = create_instance(instance, system, &entry, version)?;
         let physical = physical_device(instance, system, &created.raw)?;
         let exposed = created
@@ -182,24 +181,35 @@ const fn format(vulkan: vk::Format, wgpu: wgpu::TextureFormat) -> SwapchainForma
     }
 }
 
-// The Vulkan version to make the instance with: the newest that both the runtime and wgpu take.
-fn api_version(instance: &xr::Instance, system: xr::SystemId) -> Result<u32, String> {
+// The Vulkan version to make the instance with: the newest that wgpu and the loader take. The
+// runtime's newest version is the one it was tested on, and a newer one may work, so only its
+// oldest version and its major version limit the choice.
+fn api_version(
+    instance: &xr::Instance,
+    system: xr::SystemId,
+    entry: &ash::Entry,
+) -> Result<u32, String> {
     let requirements = instance
         .graphics_requirements::<Api>(system)
         .map_err(|error| format!("OpenXR Vulkan requirements: {error}"))?;
-    let version = requirements.max_api_version_supported.min(NEWEST);
-    if version < OLDEST || version < requirements.min_api_version_supported {
+    // SAFETY: asking for the loader's version needs no instance.
+    let loader = unsafe { entry.try_enumerate_instance_version() }
+        .map_err(|error| format!("Vulkan loader version: {error}"))?
+        .unwrap_or(vk::API_VERSION_1_0);
+    let version = loader.min(NEWEST);
+    let oldest = requirements.min_api_version_supported;
+    let oldest = vk::make_api_version(0, oldest.major().into(), oldest.minor().into(), 0);
+    let major = u32::from(requirements.max_api_version_supported.major());
+    if version < OLDEST || version < oldest || vk::api_version_major(version) > major {
         return Err(format!(
-            "the OpenXR runtime takes Vulkan {} to {}, and Cranpose needs {OLDEST} or newer",
-            requirements.min_api_version_supported, requirements.max_api_version_supported,
+            "the OpenXR runtime takes Vulkan {} to {}, and the Vulkan loader offers {}.{}",
+            requirements.min_api_version_supported,
+            requirements.max_api_version_supported,
+            vk::api_version_major(loader),
+            vk::api_version_minor(loader),
         ));
     }
-    Ok(vk::make_api_version(
-        0,
-        version.major().into(),
-        version.minor().into(),
-        version.patch(),
-    ))
+    Ok(version)
 }
 
 // OpenXR's `xrGetInstanceProcAddr`-style function that finds Vulkan's entry points.

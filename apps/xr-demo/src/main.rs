@@ -1,7 +1,7 @@
 #![allow(clippy::print_stderr, reason = "a command-line tool prints its output")]
 
 // In a headset where the machine has an OpenXR runtime with one, and in a flat window elsewhere.
-// `RUST_LOG=info` shows which, and the frames drawn each second.
+// `RUST_LOG=info` shows which, and `RUST_LOG=cranpose_xr=debug` the frames drawn each second.
 fn main() {
     env_logger::init();
     let launcher = cranpose::AppLauncher::new().with_title("Cranpose XR");

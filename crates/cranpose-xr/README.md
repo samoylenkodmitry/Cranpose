@@ -54,9 +54,11 @@ fn main() -> Result<(), cranpose_xr::RunError> {
 }
 ```
 
-The app finds the OpenXR loader (`libopenxr_loader.so.1` or `openxr_loader.dll`) at run time, so
-a build needs no loader and a machine without one gets the flat window. `RUST_LOG=info` with a
-logger such as `env_logger` prints each second's frame count.
+The app finds the OpenXR loader at run time, so a build needs no loader and a machine without one
+gets the flat window. On Linux the loader is `libopenxr_loader.so.1`, which the distribution's
+OpenXR package installs. On Windows no runtime puts `openxr_loader.dll` on the DLL search path:
+the release ships the DLL from the Khronos OpenXR SDK beside the executable. With a logger such as
+`env_logger`, `RUST_LOG=cranpose_xr=debug` prints each second's frame count.
 
 `apps/xr-demo` in the repository is a complete app. The names follow Jetpack XR Compose, and
 `docs/xr_architecture.md` describes the design and the steps that follow.
