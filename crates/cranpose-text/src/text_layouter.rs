@@ -8,6 +8,7 @@ use crate::{
     ellipsis_at::{ELLIPSIS, EllipsisAt, ellipsis_at, take_rest_of_paragraph},
     font_family_resolver::FontFamilyResolver,
     glyph_ink::{InkReach, line_band},
+    glyph_scratch::GlyphScratch,
     index_range::narrow,
     itemizer::{Itemizer, TextItem},
     laid_glyphs::LaidGlyphs,
@@ -26,7 +27,6 @@ use crate::{
     paragraph_intrinsics::ParagraphIntrinsics,
     paragraph_measures::ParagraphMeasures,
     script::Script,
-    shaped_glyphs::ShapedGlyphs,
     shaped_item::{
         Piece, ShapedItem, face_index, hyphen, item_at, part_glyphs, scale, set_cluster,
         shape_inserted, spaced_width,
@@ -56,9 +56,9 @@ pub struct TextLayouter {
     measures: ParagraphMeasures,
     lines: Vec<BrokenLine>,
     pieces: Vec<Piece>,
-    // The glyphs of the text being laid out, which keep their storage from
-    // one text to the next; a layout takes them once they are all placed.
-    glyphs: ShapedGlyphs,
+    // The glyphs of the text being laid out; a layout takes them once they
+    // are all placed.
+    glyphs: GlyphScratch,
     // The glyphs of the layout laid out into last, whose storage its text
     // takes when it fits.
     spare_glyphs: LaidGlyphs,
@@ -76,9 +76,6 @@ pub struct TextLayouter {
     points: Vec<usize>,
 }
 
-// The most glyphs the layouter keeps room for between texts: the storage of
-// a longer text goes once the text is laid out.
-const SCRATCH_GLYPHS: usize = 4096;
 // How much the free width of a paragraph's last line counts in even breaking
 // for `LineBreak.Paragraph`, which lets the last line stay short.
 const PARAGRAPH_LAST_LINE: f32 = 0.16;
@@ -316,7 +313,7 @@ impl TextLayouter {
         self.shape(input, resolver, None, &mut faces);
         self.measure_widths(input, &faces);
         self.faces = faces;
-        self.keep_glyph_room();
+        self.glyphs.end_text();
         let text = input.text;
         self.breaker
             .opportunities(text, input.paragraph.line_break, &mut self.measures.breaks);
@@ -356,14 +353,6 @@ impl TextLayouter {
             .measure(&self.items, input, faces, &self.glyphs);
     }
 
-    // Gives back the storage of the glyphs when it grew past what a label or
-    // a paragraph needs.
-    fn keep_glyph_room(&mut self) {
-        if self.glyphs.capacity() > SCRATCH_GLYPHS {
-            self.glyphs = ShapedGlyphs::default();
-        }
-    }
-
     // Ends a layout whose lines reach down to `top`: the layout takes the
     // glyphs, a text short of its minimum lines takes the height of that
     // many of its first line, and its lines align across the paragraph's
@@ -380,7 +369,7 @@ impl TextLayouter {
             layout.glyphs =
                 LaidGlyphs::new_in(&self.glyphs, std::mem::take(&mut self.spare_glyphs));
         }
-        self.keep_glyph_room();
+        self.glyphs.end_text();
         // Each missing line adds a line's advance, whole pixels, as Compose's
         // `heightInLines` adds the distance between two lines' baselines.
         let grid = input.lengths.grid;
@@ -426,6 +415,21 @@ impl TextLayouter {
     /// has left: tight memory takes them back to their least.
     pub fn set_memory_headroom(&mut self, headroom: MemoryHeadroom) {
         self.shaper.words.set_headroom(headroom);
+    }
+
+    /// Begins a layout pass, as a frame's first layout does: sizes the
+    /// caches as [`TextLayouter::set_memory_headroom`] does, and gives back
+    /// the storage for shaped glyphs past twice what the last pass needed,
+    /// so a long paragraph laid out each frame keeps it.
+    pub fn begin_pass(&mut self, headroom: MemoryHeadroom) {
+        self.set_memory_headroom(headroom);
+        self.glyphs.begin_pass(headroom);
+    }
+
+    /// The texts rest: gives back the storage for shaped glyphs that a long
+    /// text took.
+    pub fn rest(&mut self) {
+        self.glyphs.rest();
     }
 
     /// The dictionaries `Hyphens.Auto` hyphenates words by.
