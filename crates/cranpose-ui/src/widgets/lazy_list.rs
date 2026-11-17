@@ -31,8 +31,7 @@ use crate::{
     scroll::{OverscrollEffect, ScrollMotionContextKey, scroll_motion_context_for_key},
     subcompose_layout::{
         MeasurePolicy, PlacedRootsScope, RetainedMeasurePolicy, RetainedMeasureScope,
-        RetainedSlotChildren, SubcomposeChild, SubcomposeLayoutNode, SubcomposeMeasureScope,
-        SubcomposeMeasureScopeImpl,
+        RetainedSlotChildren, SubcomposeLayoutNode, SubcomposeMeasureScopeImpl,
     },
 };
 
@@ -400,17 +399,15 @@ fn measure_lazy_list_item(
     let was_reused = scope.was_last_slot_reused().unwrap_or(false);
     inputs.state.record_composition(was_reused);
 
-    let root_node_ids: SmallNodeVec = root_children.iter().map(SubcomposeChild::node_id).collect();
-
     let cache = inputs.measured_item_cache.borrow();
-    let has_cached_item = cache.get(&item_context, &root_node_ids).is_some();
+    let has_cached_item = cache.get(&item_context, &root_children).is_some();
     let mut remove_cache_entry = !has_cached_item && cache.contains_index(index);
     drop(cache);
 
     if has_cached_item {
         if !scope.children_need_relayout(&root_children) {
             let cache = inputs.measured_item_cache.borrow();
-            if let Some(cached) = cache.get(&item_context, &root_node_ids) {
+            if let Some(cached) = cache.get(&item_context, &root_children) {
                 let item = cached.item.clone();
                 drop(cache);
                 return item;
@@ -449,7 +446,7 @@ fn subcompose_lazy_list_item(
     index: usize,
     key: cranpose_foundation::lazy::LazyLayoutKey,
     inputs: &LazyListItemMeasureInputs<'_>,
-) -> Option<Vec<SubcomposeChild>> {
+) -> Option<SmallNodeVec> {
     let key_slot_id = key.to_slot_id();
     let item_identity = key.is_user_key().then_some(key_slot_id);
     let item_content = inputs
@@ -460,7 +457,7 @@ fn subcompose_lazy_list_item(
                 crate::lazy_item::ProvideLazyItemKey(item_identity, || (content)(local_index));
             }
         })?;
-    Some(scope.subcompose(SlotId(key_slot_id), (), item_content))
+    Some(scope.subcompose_roots(SlotId(key_slot_id), (), item_content))
 }
 
 fn keep_lazy_list_item(
@@ -496,7 +493,7 @@ fn lazy_list_child_constraints(axis: Axis, cross_axis_size: f32) -> Constraints 
 
 fn measure_lazy_list_children(
     scope: &mut SubcomposeMeasureScopeImpl<'_>,
-    root_children: Vec<SubcomposeChild>,
+    node_ids: SmallNodeVec,
     measured_item_cache: &Rc<RefCell<LazyMeasuredItemCache>>,
     context: LazyItemMeasureContext,
     measure_start: Instant,
@@ -505,14 +502,13 @@ fn measure_lazy_list_children(
 
     let mut total_main_size: f32 = 0.0;
     let mut max_cross_size: f32 = 0.0;
-    let mut node_ids: SmallNodeVec = SmallVec::with_capacity(root_children.len());
     let mut child_offsets: SmallOffsetVec = SmallVec::new();
     let mut child_cross_axis_sizes: SmallOffsetVec = SmallVec::new();
-    let roots = root_children.len();
+    let roots = node_ids.len();
     let mut measurements = RootMeasurements::with_capacity(roots);
 
-    for child in root_children {
-        let (placeable, retained) = scope.measure_retained(child, child_constraints);
+    for &node_id in &node_ids {
+        let (placeable, retained) = scope.measure_retained(node_id, child_constraints);
         let size = retained.as_ref().map_or_else(
             || Size {
                 width: placeable.width(),
@@ -528,7 +524,6 @@ fn measure_lazy_list_children(
 
         child_offsets.push(total_main_size);
         child_cross_axis_sizes.push(cross);
-        node_ids.push(child.node_id());
         if let Some(retained) = retained {
             measurements.push(retained);
         }

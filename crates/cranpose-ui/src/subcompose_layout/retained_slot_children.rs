@@ -2,14 +2,15 @@
 // it: a clean slot, and an exact slot whose children a lazy item knows.
 
 use cranpose_core::{Composer, NodeId, SlotId, SubcomposeState};
+use cranpose_foundation::lazy::SmallNodeVec;
 
-use super::{SubcomposeChild, SubcomposeMeasureScopeImpl, record_clean_slot_skip};
+use super::{SubcomposeMeasureScopeImpl, record_clean_slot_skip};
 use crate::widgets::nodes::LayoutNode;
 
 pub(crate) enum RetainedSlotChildren {
     Clean,
     Remeasure {
-        children: Vec<SubcomposeChild>,
+        children: SmallNodeVec,
         children_match: bool,
     },
 }
@@ -65,14 +66,37 @@ impl SubcomposeMeasureScopeImpl<'_> {
         kept
     }
 
-    pub(super) fn activate_clean_retained_slot(&mut self, slot_id: SlotId) -> Option<Vec<NodeId>> {
+    // `SubcomposeMeasureScope::subcompose`, with the slot's root nodes in an
+    // inline list.
+    pub(crate) fn subcompose_roots<K, Content>(
+        &mut self,
+        slot_id: SlotId,
+        key: K,
+        content: Content,
+    ) -> SmallNodeVec
+    where
+        K: PartialEq + 'static,
+        Content: FnMut() + 'static,
+    {
+        if self.state.retained_capture_key_matches(slot_id, &key)
+            && let Some(children) = self.activate_clean_retained_slot(slot_id)
+        {
+            #[cfg(debug_assertions)]
+            self.shadow_verify_clean_slot(slot_id, content);
+            return children;
+        }
+        self.state.store_retained_capture_key(slot_id, key);
+        self.perform_subcompose(slot_id, content)
+    }
+
+    fn activate_clean_retained_slot(&mut self, slot_id: SlotId) -> Option<SmallNodeVec> {
         if !self.clean_slot_ready(slot_id) {
             return None;
         }
         let virtual_node_ids =
             activate_slot_hosts(&mut *self.state, &self.composer, self.root_id, slot_id)?;
 
-        let mut children = Vec::new();
+        let mut children = SmallNodeVec::new();
         for virtual_node_id in virtual_node_ids {
             children.extend(self.composer.get_node_children(*virtual_node_id));
         }
@@ -87,7 +111,7 @@ impl SubcomposeMeasureScopeImpl<'_> {
     }
 
     #[cfg(debug_assertions)]
-    pub(super) fn shadow_verify_clean_slot<Content>(&mut self, slot_id: SlotId, content: Content)
+    fn shadow_verify_clean_slot<Content>(&mut self, slot_id: SlotId, content: Content)
     where
         Content: FnMut() + 'static,
     {
@@ -143,14 +167,9 @@ impl SubcomposeMeasureScopeImpl<'_> {
             return Some(RetainedSlotChildren::Clean);
         }
 
-        let mut children = Vec::with_capacity(known_children.len());
+        let mut children = SmallNodeVec::new();
         for &virtual_node_id in activation.nodes {
-            children.extend(
-                self.composer
-                    .get_node_children(virtual_node_id)
-                    .into_iter()
-                    .map(SubcomposeChild::new),
-            );
+            children.extend(self.composer.get_node_children(virtual_node_id));
         }
         Some(RetainedSlotChildren::Remeasure {
             children,
