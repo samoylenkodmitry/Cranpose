@@ -76,6 +76,8 @@ fn register(context: &'static AndroidContext) {
     super::wearable::register(context);
     // Present only when the application declares `microphone-standby`.
     super::microphone_standby::register(context);
+    // The decoder limits are read when an app asks for them.
+    super::decoder_capabilities::register(context);
 }
 
 /// Starts the process for the activity `app` runs, if no service started it.

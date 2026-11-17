@@ -4,7 +4,10 @@
 use super::media_codec::{Backend, Frames};
 #[cfg(not(target_os = "android"))]
 use super::unavailable::{Backend, Frames};
-use super::{AccessUnit, DecoderConfig, DecoderError, DecoderStats, FrameInfo, VideoFrame};
+use super::{
+    AccessUnit, DecoderCapabilities, DecoderConfig, DecoderError, DecoderStats, FrameInfo,
+    VideoCodec, VideoFrame, capabilities,
+};
 
 /// A hardware video decoder for one stream.
 ///
@@ -25,6 +28,16 @@ impl VideoDecoder {
         Ok(Self {
             backend: Backend::new(config)?,
         })
+    }
+
+    /// The limits of the hardware decoder that [`new`](Self::new) opens for `codec`: its largest
+    /// picture and bit rate, and through
+    /// [`DecoderCapabilities::max_frame_rate`] its frame rate at a size. Android reads them from
+    /// the device's media codec list. The call costs a query of the platform, so an app makes it
+    /// once for each codec. It reports [`DecoderError::Unavailable`] where the platform gives no
+    /// limits and [`DecoderError::NoDecoder`] for a codec that the device cannot decode.
+    pub fn capabilities(codec: VideoCodec) -> Result<DecoderCapabilities, DecoderError> {
+        capabilities::of(codec)
     }
 
     /// Gives the decoder one access unit. It waits up to

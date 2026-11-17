@@ -20,6 +20,8 @@ pub(crate) mod camera;
 #[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
 mod configuration;
 #[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
+pub(crate) mod decoder_capabilities;
+#[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
 pub(crate) mod device_auth;
 #[cfg(any(test, feature = "renderer-wgpu"))]
 pub(crate) mod device_auth_wire;

@@ -28,5 +28,6 @@ mod surface_layers;
 #[cfg(target_os = "android")]
 mod surface_swapchain;
 mod system_properties;
+mod tracked_pose;
 
 pub use host::run;

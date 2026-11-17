@@ -48,7 +48,7 @@ Cranpose developers too:
 - `SpatialExternalSurface(stereo_mode, modifier) { scope }`: hands the app a surface that a
   decoder writes into. The scope's `on_surface_created` and `on_surface_destroyed` receive an
   `ExternalSurface`.
-- `StreamedScene(frames, views)`: frames that another machine rendered, shown as a projection
+- `StreamedScene(frames, views, stats)`: frames that another machine rendered, shown as a projection
   layer. Jetpack XR has no such composable. It has no `Spatial` prefix, because it is not placed
   in a `Subspace`: it fills the viewer's view.
 - `SpatialCurvedRow(modifier, curve_radius) { ... }`: panels bent around the viewer at
@@ -115,6 +115,16 @@ The app chooses where the pictures go:
   `VideoFrame::as_hardware_buffer_ptr`, and applies `VideoFrame::crop`. A frame that drops gives
   its image back to the decoder.
 
+`VideoDecoder::capabilities(codec)` gives the limits of the decoder that `VideoDecoder::new`
+opens for a codec: its name, whether it runs on dedicated hardware, its largest width and height,
+its highest bit rate, and through `DecoderCapabilities::max_frame_rate(width, height)` its frame
+rate at a size. A picture beyond a limit decodes with errors, so a streaming app reads the
+limits before it asks its host for a size. On Android the limits come from `MediaCodecList` and
+`MediaCodecInfo.VideoCapabilities` through the `CranposeVideoCodecs` Java class, because the NDK
+has no codec list at the API levels that headsets run. The query runs when an app asks for it.
+The first decoder of the list that supports the MIME type is the one that `MediaCodec` opens, so
+the limits are its own, and not the largest of all decoders.
+
 Platforms without a hardware decoder that Cranpose drives report `DecoderError::Unavailable`.
 
 ## The headset's state
@@ -140,6 +150,12 @@ changes. An `XrFrame` holds:
   the extension passes its own time, which Android runtimes count in `CLOCK_MONOTONIC`
   nanoseconds.
 - `device_pose`: the head, the OpenXR VIEW space located in the LOCAL space.
+- `device_linear_velocity` and `device_angular_velocity`: how fast the head moves and turns, from
+  the same location of the VIEW space, along the axes of the LOCAL space. Each is `None` while
+  the runtime marks it invalid.
+- `stage_pose`: the OpenXR STAGE space located in the LOCAL space, or `None` when the runtime
+  lists no STAGE space or does not locate it. The stage's origin is on the floor at the center of
+  the play area, so `floor_height()` gives the floor's height in the room.
 - `left_eye` and `right_eye`: a `RenderViewpoint` with the eye's `pose` in LOCAL, its `local_pose`
   relative to the head (Jetpack's `localPose`) and its `FieldOfView`: four angles in radians with
   OpenXR's signs (left and down are negative). They come from `xrLocateViews`, which fills a fixed
@@ -173,21 +189,46 @@ The frame loop applies the newest request of each hand after the frame effects, 
 ## Streamed scenes
 
 A game that a computer renders for both eyes arrives as a stream of frames, and each frame
-belongs to the head pose that it was rendered for. `StreamedScene(frames, views)` takes the
+belongs to the head pose that it was rendered for. `StreamedScene(frames, views, stats)` takes the
 `DecodedFrames` of a `VideoDecoder` in frames mode. `views` maps the `u64` that the app submitted
 with an access unit to a `StreamedViews`: for each eye, the render pose in the app's room, the
 `FieldOfView` and the rectangle of the eye's picture in the frame. A `RenderViewpoint` of
 `XrFrame` carries the same `FieldOfView`, so an app passes the field of view that the headset
 reports straight into a streamed view.
 
-At each of the headset's frames the backend takes the newest decoded frame. It imports the
-frame's `AHardwareBuffer` as an EGL image, binds it to an external texture, and draws each eye's
-rectangle into a swapchain of that eye's size. One pass of a small shader per eye does it, and
-the external sampler turns the decoder's YUV into RGB. The frame's two eyes become the views of
-an `XrCompositionLayerProjection`, with the poses and fields of view of the frame. The compositor
-reprojects each picture from the pose it was rendered for to the head's newer pose. While no
-newer frame comes, the layer shows its last pictures again. The scene lies over the room and under
-the curved panels, the panels, the surfaces, the handles and the rays.
+The backend takes each decoded frame into a queue of up to three frames when the frame comes out of
+the decoder, and asks `views` for its views once. Each frame holds an image of the decoder, so the
+decoder's `depth` is at least 5: the three queued frames, the frame shown last, and one for the
+decoder to write. At each of the headset's frames the queue picks the frame to show. A frame's
+`StreamedViews::target_display_time` is the time at which the host wants its pictures on the
+display, on the clock of `XrFrame::predicted_display_time`. The queue chooses the frame whose target
+lies closest to the predicted display time of the frame that the backend submits, among the queued
+frames and the frame shown last. It drops the frames that came before the one it chose, so the
+picture never goes back. The frame shown last stays while no queued frame is closer, and a full
+queue takes it out of the choice, so a host whose targets run far ahead of the display cannot freeze
+the picture. Frames with no target follow the newest-frame rule. A `StreamStats` handle that the
+app gives to `StreamedScene` counts the frames shown, the frames skipped and the headset frames that
+repeated a picture: a 30 Hz stream on a 120 Hz headset shows 30 and repeats 90 each second.
+
+The backend imports the chosen frame's `AHardwareBuffer` as an EGL image, binds it to an external
+texture, and draws each eye's rectangle into a swapchain of that eye's size. One pass of a small
+shader per eye does it, and the external sampler turns the decoder's YUV into RGB. The frame's two
+eyes become the views of an `XrCompositionLayerProjection`, with the poses and fields of view of
+the frame. The compositor reprojects each picture from the pose it was rendered for to the head's
+newer pose. While no other frame is chosen, the layer shows its last pictures again. The scene lies
+over the room and under the curved panels, the panels, the surfaces, the handles and the rays.
+
+A host may send each eye with full density in a center and compressed edges, which lets its encoder
+code a third of the pixels. `StreamedView::foveation` describes ALVR's axis-aligned foveated
+encoding: the aligned center size and shift, the edge ratio, the share of the rectangle that the
+eye fills, the full size of the eye and whether the picture is stored mirrored, which ALVR does for
+the right eye. A foveated view takes a second shader, which the backend links when the first
+foveated frame comes, so an app with no foveated stream pays nothing for it. For each pixel of the
+eye's full view the shader computes where the compressed picture holds it: the center is a line,
+and each edge is the root of a quadratic. The swapchain has the full size, so the projection layer
+shows the picture as the host rendered it. `FoveatedUnwarp` computes the constants of the three
+pieces on the CPU, and its `sample` function holds the same formulas as the shader, so the host test
+that warps a point and unwarps it covers the shipped math.
 
 The backend keeps the drawn frame until the next one is drawn, because the GPU may still read its
 buffer. The swapchains have the `SRGB8_ALPHA8` format, and the shader turns the picture's encoded

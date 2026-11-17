@@ -10,6 +10,7 @@
 //! so the stream must have no B-frames. Android decodes through `MediaCodec`. Other platforms
 //! report the decoder as unavailable.
 
+mod capabilities;
 mod codec;
 mod config;
 mod decoder;
@@ -25,6 +26,9 @@ mod stats;
 #[cfg(not(target_os = "android"))]
 mod unavailable;
 
+pub use capabilities::{
+    DecoderCapabilities, DecoderCapabilitySource, set_platform_decoder_capabilities,
+};
 pub use codec::VideoCodec;
 pub use config::{AccessUnit, DecoderConfig, DecoderOutput};
 pub use decoder::{DecodedFrames, VideoDecoder};

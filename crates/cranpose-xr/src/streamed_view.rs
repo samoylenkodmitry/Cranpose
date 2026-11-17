@@ -1,8 +1,10 @@
 //! What a streamed scene says about the pictures of its frames.
 
+use std::time::Duration;
+
 use cranpose::CropRect;
 
-use crate::{FieldOfView, Pose};
+use crate::{FieldOfView, FoveatedEncoding, Pose};
 
 #[cfg_attr(
     not(any(test, all(headset, target_os = "android"))),
@@ -22,8 +24,13 @@ pub struct StreamedView {
     /// The field of view that the frame was rendered with.
     pub fov: FieldOfView,
     /// The part of the frame that holds this eye's picture, in pixels from the frame's top left
-    /// corner.
+    /// corner. A foveated picture fills the rectangle as the host encoded it, with its padding.
     pub rect: CropRect,
+    /// How the host compressed the picture's edges, or `None` for a picture that has the same
+    /// density everywhere. The headset undoes the compression, so the compositor receives the
+    /// eye's full view, whose size is [`FoveatedEncoding::full_size`], and the `fov` is the field
+    /// of view of that full view.
+    pub foveation: Option<FoveatedEncoding>,
 }
 
 /// The views of a streamed frame, one for each eye.
@@ -33,6 +40,12 @@ pub struct StreamedViews {
     pub left: StreamedView,
     /// The right eye's view.
     pub right: StreamedView,
+    /// The time at which the host wants the frame's pictures to reach the display, on the clock
+    /// of [`XrFrame::predicted_display_time`](crate::XrFrame::predicted_display_time), or `None`
+    /// when the host gives none. The headset shows the waiting frame whose target lies closest to
+    /// the display time of the frame that it submits. Frames with no target follow the newest
+    /// frame.
+    pub target_display_time: Option<Duration>,
 }
 
 impl StreamedViews {
@@ -47,6 +60,7 @@ impl StreamedViews {
         Ok(Self {
             left: self.left.checked(picture)?,
             right: self.right.checked(picture)?,
+            ..self
         })
     }
 }
@@ -91,7 +105,23 @@ impl StreamedView {
         if width == 0 || height == 0 || !inside {
             return Err("a rectangle is empty or lies outside the picture");
         }
+        if let Some(foveation) = &self.foveation {
+            foveation.checked()?;
+        }
         Ok(self)
+    }
+
+    #[cfg_attr(
+        not(any(test, all(headset, target_os = "android"))),
+        expect(dead_code, reason = "the headset backend calls it")
+    )]
+    // The size in pixels of the picture that the compositor receives: the full view of a foveated
+    // picture, or the rectangle itself.
+    pub(crate) fn output_size(&self) -> (u32, u32) {
+        self.foveation
+            .map_or((self.rect.width, self.rect.height), |foveation| {
+                foveation.full_size
+            })
     }
 }
 

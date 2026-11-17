@@ -174,7 +174,8 @@ impl Immersive {
         // The handles and the rays show over the panels: the rays end on them
         let panels = self.space.panels();
         if shown {
-            self.streams.update(&self.xr_session, &self.space);
+            self.streams
+                .update(&self.xr_session, &self.space, self.headset.display_time());
         } else {
             self.streams.skip(&self.space);
         }

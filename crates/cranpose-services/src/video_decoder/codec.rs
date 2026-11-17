@@ -12,9 +12,9 @@ pub enum VideoCodec {
 }
 
 impl VideoCodec {
-    // The MIME type that Android's media codecs use.
-    #[cfg(target_os = "android")]
-    pub(super) fn mime(self) -> &'static str {
+    /// The codec's MIME type, which Android's media codecs name it by: `video/avc` for H.264,
+    /// `video/hevc` for HEVC and `video/av01` for AV1.
+    pub fn mime(self) -> &'static str {
         match self {
             Self::H264 => "video/avc",
             Self::Hevc => "video/hevc",

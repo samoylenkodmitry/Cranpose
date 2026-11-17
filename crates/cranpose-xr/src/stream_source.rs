@@ -4,7 +4,7 @@ use std::rc::Rc;
 
 use cranpose::DecodedFrames;
 
-use crate::StreamedViews;
+use crate::{StreamStats, StreamedViews};
 
 // The frames of a scene and the function that says each frame's views.
 pub(crate) struct StreamSource {
@@ -18,4 +18,9 @@ pub(crate) struct StreamSource {
         expect(dead_code, reason = "the headset backend reads it")
     )]
     pub(crate) views: Rc<dyn Fn(u64) -> StreamedViews>,
+    #[cfg_attr(
+        not(all(headset, target_os = "android")),
+        expect(dead_code, reason = "the headset backend reads it")
+    )]
+    pub(crate) stats: StreamStats,
 }

@@ -17,6 +17,7 @@ use std::{ffi::c_void, mem, num::NonZeroU32};
 use glow::HasContext;
 
 use super::graphics::Graphics;
+use crate::foveated_unwarp::FoveatedUnwarp;
 
 // `EGL_NATIVE_BUFFER_ANDROID`: the target of an EGL image made from an `AHardwareBuffer`.
 const EGL_NATIVE_BUFFER_ANDROID: u32 = 0x3140;
@@ -40,6 +41,9 @@ type DestroyImage = unsafe extern "C" fn(display: *mut c_void, image: *mut c_voi
 type NativeClientBuffer = unsafe extern "C" fn(buffer: *const c_void) -> *mut c_void;
 type TargetTexture = unsafe extern "C" fn(target: u32, image: *mut c_void);
 
+// The corner of the target as a coordinate: `origin + corner * step`. The plain shader reads the
+// picture there. The foveated shader reads the point of the eye's full view, which its unwarp
+// turns into a point of the picture.
 const VERTEX: &str = r"#version 300 es
 uniform vec2 origin;
 uniform vec2 step;
@@ -51,7 +55,7 @@ void main() {
 }
 ";
 
-const FRAGMENT: &str = r"#version 300 es
+const FRAGMENT_HEAD: &str = r"#version 300 es
 #extension GL_OES_EGL_image_external_essl3 : require
 precision highp float;
 uniform samplerExternalOES picture;
@@ -63,8 +67,40 @@ out vec4 color;
 vec3 linear(vec3 encoded) {
     return mix(encoded / 12.92, pow((encoded + 0.055) / 1.055, vec3(2.4)), step(0.04045, encoded));
 }
+";
+
+const FRAGMENT_PLAIN: &str = r"
 void main() {
     color = vec4(linear(texture(picture, uv).rgb), 1.0);
+}
+";
+
+// The unwarp of a foveated picture: `FoveatedUnwarp::sample` holds the same formulas. `part` is
+// the picture's rectangle in the buffer, as fractions of the buffer from its top left corner,
+// and `unwarp` holds the constants of both axes, which `FoveatedUnwarp::axes` packs.
+const FRAGMENT_FOVEATED: &str = r"
+uniform vec4 part;
+uniform vec4 unwarp[6];
+uniform float mirror;
+float unwarp_axis(float view, vec4 bounds, vec4 lower, vec4 upper) {
+    float position;
+    if (view < bounds.x) {
+        position = (sqrt(max(lower.y * lower.y + 4.0 * lower.x * view, 0.0)) - lower.y) / (2.0 * lower.x);
+    } else if (view > bounds.y) {
+        position = (sqrt(max(upper.y * upper.y - 4.0 * (upper.z - upper.x * view), 0.0)) - upper.y) / (2.0 * upper.x);
+    } else {
+        position = (view - bounds.z) * bounds.w;
+    }
+    return position * lower.z;
+}
+void main() {
+    float x = mix(uv.x, 1.0 - uv.x, mirror);
+    vec2 encoded = vec2(
+        unwarp_axis(x, unwarp[0], unwarp[1], unwarp[2]),
+        unwarp_axis(uv.y, unwarp[3], unwarp[4], unwarp[5])
+    );
+    encoded.x = mix(encoded.x, 1.0 - encoded.x, mirror);
+    color = vec4(linear(texture(picture, part.xy + encoded * part.zw).rgb), 1.0);
 }
 ";
 
@@ -75,6 +111,9 @@ pub(crate) struct Pass<'a> {
     pub(crate) size: (u32, u32),
     // The part: left, top, width and height in pixels from the buffer's top left corner
     pub(crate) part: [u32; 4],
+    // How to undo the compression of a foveated part, or `None` for a part that has the same
+    // density everywhere. The part fills the target either way.
+    pub(crate) unwarp: Option<&'a FoveatedUnwarp>,
 }
 
 // A texture that a pass draws into, with the framebuffer that holds it.
@@ -87,13 +126,25 @@ pub(crate) struct ExternalTexture {
     destroy_image: DestroyImage,
     native_client_buffer: NativeClientBuffer,
     target_texture: TargetTexture,
-    program: glow::Program,
-    origin: Option<glow::UniformLocation>,
-    step: Option<glow::UniformLocation>,
+    plain: Shader,
+    // Linked when the first foveated pass needs it, so that an app with no foveated picture pays
+    // nothing for it
+    foveated: Option<Shader>,
     texture: glow::Texture,
     array: glow::VertexArray,
     #[cfg(feature = "stream-costs")]
     timers: Option<Timers>,
+}
+
+// A linked program with the locations of its uniforms.
+struct Shader {
+    program: glow::Program,
+    origin: Option<glow::UniformLocation>,
+    step: Option<glow::UniformLocation>,
+    // The uniforms of the foveated unwarp, which only that program has
+    part: Option<glow::UniformLocation>,
+    unwarp: Option<glow::UniformLocation>,
+    mirror: Option<glow::UniformLocation>,
 }
 
 // Queries of the GPU time that the passes take, read without waiting.
@@ -143,9 +194,7 @@ impl ExternalTexture {
         let display = context.display();
         // SAFETY: the context is current on this thread.
         unsafe {
-            let program = link(&gl)?;
-            let origin = gl.get_uniform_location(program, "origin");
-            let step = gl.get_uniform_location(program, "step");
+            let plain = Shader::new(&gl, FRAGMENT_PLAIN)?;
             let texture = gl.create_texture()?;
             gl.bind_texture(TEXTURE_EXTERNAL_OES, Some(texture));
             for (parameter, value) in [
@@ -165,9 +214,8 @@ impl ExternalTexture {
                 destroy_image,
                 native_client_buffer,
                 target_texture,
-                program,
-                origin,
-                step,
+                plain,
+                foveated: None,
                 texture,
                 array,
                 #[cfg(feature = "stream-costs")]
@@ -214,6 +262,15 @@ impl ExternalTexture {
         size: (u32, u32),
         passes: &[Pass<'_>],
     ) -> Result<(), String> {
+        if self.foveated.is_none() && passes.iter().any(|pass| pass.unwarp.is_some()) {
+            let started = std::time::Instant::now();
+            // SAFETY: the context is current on this thread.
+            self.foveated = Some(unsafe { Shader::new(&self.gl, FRAGMENT_FOVEATED)? });
+            log::info!(
+                "cranpose xr: the foveated stream shader compiled in {:?}",
+                started.elapsed()
+            );
+        }
         let gl = &self.gl;
         // SAFETY: the buffer is a live AHardwareBuffer that the frame holds, and the function
         // pointers match their extensions.
@@ -254,22 +311,44 @@ impl ExternalTexture {
                 gl.disable(state);
             }
             gl.color_mask(true, true, true, true);
-            gl.use_program(Some(self.program));
             gl.bind_vertex_array(Some(self.array));
             for pass in passes {
                 let [left, top, width, height] = pass.part.map(|pixels| pixels as f32);
+                let part = [
+                    left / buffer_width,
+                    top / buffer_height,
+                    width / buffer_width,
+                    height / buffer_height,
+                ];
+                gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, Some(pass.target.0));
+                gl.viewport(0, 0, pass.size.0 as i32, pass.size.1 as i32);
                 // The shader maps a target's first row to the lowest value of the vertical
                 // coordinate. The buffer's first row is the picture's top at a coordinate of
                 // zero.
-                let (y, rise) = if FLIP_ROWS {
-                    ((top + height) / buffer_height, -height / buffer_height)
-                } else {
-                    (top / buffer_height, height / buffer_height)
-                };
-                gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, Some(pass.target.0));
-                gl.viewport(0, 0, pass.size.0 as i32, pass.size.1 as i32);
-                gl.uniform_2_f32(self.origin.as_ref(), left / buffer_width, y);
-                gl.uniform_2_f32(self.step.as_ref(), width / buffer_width, rise);
+                match (pass.unwarp, &self.foveated) {
+                    (Some(unwarp), Some(foveated)) => {
+                        gl.use_program(Some(foveated.program));
+                        // The view's coordinate runs down from its top, which is the target's
+                        // last row
+                        let (y, rise) = if FLIP_ROWS { (1.0, -1.0) } else { (0.0, 1.0) };
+                        gl.uniform_2_f32(foveated.origin.as_ref(), 0.0, y);
+                        gl.uniform_2_f32(foveated.step.as_ref(), 1.0, rise);
+                        gl.uniform_4_f32_slice(foveated.part.as_ref(), &part);
+                        gl.uniform_4_f32_slice(foveated.unwarp.as_ref(), &unwarp.axes());
+                        gl.uniform_1_f32(foveated.mirror.as_ref(), unwarp.mirror());
+                    }
+                    _ => {
+                        gl.use_program(Some(self.plain.program));
+                        let [left, top, width, height] = part;
+                        let (y, rise) = if FLIP_ROWS {
+                            (top + height, -height)
+                        } else {
+                            (top, height)
+                        };
+                        gl.uniform_2_f32(self.plain.origin.as_ref(), left, y);
+                        gl.uniform_2_f32(self.plain.step.as_ref(), width, rise);
+                    }
+                }
                 gl.draw_arrays(glow::TRIANGLE_STRIP, 0, 4);
             }
             gl.bind_vertex_array(NonZeroU32::new(array as u32).map(glow::NativeVertexArray));
@@ -387,19 +466,46 @@ impl Drop for ExternalTexture {
             }
             self.gl.delete_vertex_array(self.array);
             self.gl.delete_texture(self.texture);
-            self.gl.delete_program(self.program);
+            self.gl.delete_program(self.plain.program);
+            if let Some(foveated) = &self.foveated {
+                self.gl.delete_program(foveated.program);
+            }
         }
     }
 }
 
-// Compiles and links the shader program.
-unsafe fn link(gl: &glow::Context) -> Result<glow::Program, String> {
+impl Shader {
+    // Compiles and links the vertex shader with the fragment shader that `main` completes.
+    //
+    // # Safety
+    //
+    // The caller has the context current.
+    unsafe fn new(gl: &glow::Context, main: &str) -> Result<Self, String> {
+        let fragment = [FRAGMENT_HEAD, main].concat();
+        // SAFETY: the caller has the context current.
+        unsafe {
+            let program = link(gl, &fragment)?;
+            let location = |name: &str| gl.get_uniform_location(program, name);
+            Ok(Self {
+                program,
+                origin: location("origin"),
+                step: location("step"),
+                part: location("part"),
+                unwarp: location("unwarp"),
+                mirror: location("mirror"),
+            })
+        }
+    }
+}
+
+// Compiles and links the shader program from the fragment shader's source.
+unsafe fn link(gl: &glow::Context, fragment: &str) -> Result<glow::Program, String> {
     // SAFETY: the caller has the context current.
     unsafe {
         let program = gl.create_program()?;
         for (kind, source) in [
             (glow::VERTEX_SHADER, VERTEX),
-            (glow::FRAGMENT_SHADER, FRAGMENT),
+            (glow::FRAGMENT_SHADER, fragment),
         ] {
             let shader = gl.create_shader(kind)?;
             gl.shader_source(shader, source);

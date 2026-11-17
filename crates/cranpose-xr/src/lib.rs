@@ -29,7 +29,12 @@ mod controller;
 #[cfg(any(test, headset))]
 mod controller_bindings;
 mod field_of_view;
+mod foveated_encoding;
+#[cfg(any(test, all(headset, target_os = "android")))]
+mod foveated_unwarp;
 mod frame_effects;
+#[cfg(any(test, all(headset, target_os = "android")))]
+mod frame_queue;
 mod hand;
 mod haptics;
 mod headset_properties;
@@ -50,6 +55,7 @@ mod spatial_frame_effect;
 mod spatial_panel;
 mod stereo_mode;
 mod stream_source;
+mod stream_stats;
 mod streamed_scene;
 mod streamed_view;
 mod subspace;
@@ -71,6 +77,7 @@ pub use cranpose::ExternalSurface;
 pub use field_of_view::FieldOfView;
 #[cfg(all(desktop_run, not(headset)))]
 pub use flat_run::run;
+pub use foveated_encoding::FoveatedEncoding;
 pub use hand::Hand;
 pub use haptics::{Haptics, Vibration, local_haptics};
 pub use headset_properties::{EyeImageSize, HeadsetProperties, local_headset_properties};
@@ -93,6 +100,7 @@ pub use spatial_external_surface::{SpatialExternalSurface, SpatialExternalSurfac
 pub use spatial_frame_effect::SpatialFrameEffect;
 pub use spatial_panel::SpatialPanel;
 pub use stereo_mode::StereoMode;
+pub use stream_stats::{StreamCounts, StreamStats};
 pub use streamed_scene::StreamedScene;
 pub use streamed_view::{StreamedView, StreamedViews};
 pub use subspace::Subspace;

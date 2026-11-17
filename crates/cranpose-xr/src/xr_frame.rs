@@ -34,6 +34,18 @@ pub struct XrFrame {
     /// The pose of the head, or `None` while the runtime does not track it. Jetpack XR's
     /// `ArDevice` state `devicePose`.
     pub device_pose: Option<Pose>,
+    /// How fast the head moves, in meters per second along the axes of the app's room, or `None`
+    /// while the runtime gives no velocity of the head. A host uses it to predict the head's pose
+    /// beyond the frame's display time.
+    pub device_linear_velocity: Option<[f32; 3]>,
+    /// How fast the head turns, in radians per second about the axes of the app's room, or `None`
+    /// while the runtime gives no velocity of the head.
+    pub device_angular_velocity: Option<[f32; 3]>,
+    /// The pose of the OpenXR STAGE space in the app's room, or `None` when the runtime has no
+    /// stage or does not locate it. The stage's origin lies on the floor at the center of the play
+    /// area, with its y axis up, so the y of its position is the floor's height in the room.
+    /// A streamed game takes its floor from it.
+    pub stage_pose: Option<Pose>,
     /// The left eye's viewpoint, or `None` while the runtime does not track the head.
     pub left_eye: Option<RenderViewpoint>,
     /// The right eye's viewpoint, or `None` while the runtime does not track the head.
@@ -61,6 +73,13 @@ impl XrFrame {
         let (left, right) = (self.left_eye?, self.right_eye?);
         let [x, y, z] = [0, 1, 2].map(|axis| left.pose.position[axis] - right.pose.position[axis]);
         Some((x * x + y * y + z * z).sqrt())
+    }
+
+    /// The height of the floor in the app's room in meters, or `None` while the runtime gives no
+    /// [`stage_pose`](Self::stage_pose). It is negative when the floor lies below where the app
+    /// started.
+    pub fn floor_height(&self) -> Option<f32> {
+        self.stage_pose.map(|stage| stage.position[1])
     }
 
     /// The controller of `hand`.

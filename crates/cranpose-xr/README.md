@@ -58,8 +58,9 @@ composable shows an empty box, and the callbacks never run.
 
 `SpatialFrameEffect` runs a callback once in each frame of the headset, before the panels draw. It
 receives an `XrFrame`: the predicted display time on the monotonic clock, the head's pose, each
-eye's pose, pose relative to the head and field of view, both controllers with their poses,
-velocities, buttons, sticks and touches, and the runtime's recenter event. `local_haptics()` gives
+eye's pose, pose relative to the head and field of view, the head's linear and angular velocity,
+the floor (the pose of the runtime's stage space, `floor_height()`), both controllers with their
+poses, velocities, buttons, sticks and touches, and the runtime's recenter event. `local_haptics()` gives
 the `Haptics` handle that plays a `Vibration` on a hand's controller. `local_headset_properties()`
 gives the headset's name, its eyes' image sizes and its refresh rates. A streaming app sends the
 state to its host with them. Outside a headset the callback never runs.
@@ -87,10 +88,20 @@ stream with a `VideoDecoder` in frames mode, and says for each frame where each 
 part of the frame is its picture. The headset's compositor shows each picture from the pose it was
 rendered for, and corrects it for the head's newer pose.
 
-```rust,ignore
-use cranpose_xr::{StreamedScene, StreamedViews};
+The host stamps each frame with the time at which it wants the frame on the display
+(`StreamedViews::target_display_time`, on the clock of `XrFrame::predicted_display_time`). The
+headset keeps up to three decoded frames and shows the one whose time lies closest to the display
+time of the frame that it submits. Without times it shows the newest frame. A `StreamStats` handle
+counts the frames shown, skipped and repeated. The decoder's `depth` must be at least 5. A host
+that encodes each eye with full density in the center and compressed edges describes the encoding in
+`StreamedView::foveation`, and the headset unwarps it, so the compositor shows the full eye.
 
-StreamedScene(frames, |metadata: u64| -> StreamedViews { views_of_frame(metadata) });
+```rust,ignore
+use cranpose_xr::{StreamStats, StreamedScene, StreamedViews};
+
+let stats = StreamStats::new();
+StreamedScene(frames, |metadata: u64| -> StreamedViews { views_of_frame(metadata) }, stats.clone());
+// Any thread: stats.counts() gives the shown, skipped and repeated frames.
 ```
 
 Outside a headset the composable shows nothing.

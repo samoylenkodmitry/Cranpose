@@ -2,22 +2,25 @@
 // trigger presses the buttons: one counts, the other shows or hides the room around the panels.
 // A strip above them is bent around the viewer. On the desktop the panels draw flat.
 
-use std::{cell::RefCell, rc::Rc};
+use std::{cell::RefCell, rc::Rc, time::Duration};
 
 use cranpose::{CropRect, DecodedFrames, prelude::*};
 use cranpose_ui::text::{FontWeight, TextUnit};
 use cranpose_xr::{
     FieldOfView, Pose, SpatialCurvedRow, SpatialExternalSurface, SpatialPanel, StereoMode,
-    StreamedScene, StreamedView, StreamedViews, Subspace, SubspaceModifier,
+    StreamStats, StreamedScene, StreamedView, StreamedViews, Subspace, SubspaceModifier,
     local_headset_properties, local_spatial_capabilities, local_spatial_environment,
 };
 
 mod clip_player;
+mod decoder_limits;
+mod foveated_player;
 mod headset_readout;
 mod pattern_writer;
 
-use clip_player::ClipPlayer;
-use headset_readout::{HeadsetReadout, Readout};
+use clip_player::{ClipPlayer, target_display_time};
+use foveated_player::FoveatedPlayer;
+use headset_readout::{HeadsetClock, HeadsetReadout, Readout, StreamLogs};
 use pattern_writer::{PatternWriter, Split};
 
 cranpose::app_capabilities!();
@@ -32,15 +35,21 @@ cranpose::app_capabilities!();
 pub fn XrDemo() {
     let presses = rememberMutableStateOf(|| 0_u32);
     let readout = rememberMutableStateOf(Readout::default);
+    let clock = remember(HeadsetClock::default).with(Clone::clone);
+    let logs = remember(StreamLogs::default).with(Clone::clone);
+    remember(decoder_limits::log_in_background);
     Subspace(move || {
-        HeadsetReadout(presses, readout);
+        HeadsetReadout(presses, readout, clock.clone(), logs.clone());
         ClipSurface(
             StereoMode::Mono,
             SubspaceModifier::new()
                 .size(640.0, 360.0)
                 .offset(-760.0, 0.0, 50.0)
                 .rotate(0.0, 25.0, 0.0),
+            clock.clone(),
+            logs.clip.clone(),
         );
+        FoveatedScene(clock.clone(), logs.foveated.clone());
         PatternSurface(
             StereoMode::SideBySide,
             SubspaceModifier::new()
@@ -274,17 +283,24 @@ fn PatternSurface(stereo_mode: StereoMode, modifier: SubspaceModifier, split: Sp
 
 // A surface that the hardware decoder plays the clip into. The decoder's second output, its
 // frames, goes to a streamed scene: the left half of the clip is the left eye's picture, and the
-// right half the right eye's, rendered from fixed poses.
+// right half the right eye's, rendered from fixed poses. Each frame carries the time at which it
+// should reach the display.
 #[composable]
-fn ClipSurface(stereo_mode: StereoMode, modifier: SubspaceModifier) {
-    let frames = rememberMutableStateOf(|| None::<DecodedFrames>);
+fn ClipSurface(
+    stereo_mode: StereoMode,
+    modifier: SubspaceModifier,
+    clock: HeadsetClock,
+    stats: StreamStats,
+) {
+    let frames = rememberMutableStateOf(|| None::<(DecodedFrames, Duration)>);
     let player = remember(|| Rc::new(RefCell::new(None::<ClipPlayer>))).with(Clone::clone);
     SpatialExternalSurface(stereo_mode, modifier, move |scope| {
         let started = Rc::clone(&player);
+        let clock = clock.clone();
         scope.on_surface_created(move |surface| match ClipPlayer::start(surface) {
             Ok((clip, decoded)) => {
                 started.borrow_mut().replace(clip);
-                frames.set(Some(decoded));
+                frames.set(Some((decoded, clock.read())));
             }
             Err(error) => log::error!("xr demo: no clip: {error}"),
         });
@@ -294,15 +310,34 @@ fn ClipSurface(stereo_mode: StereoMode, modifier: SubspaceModifier) {
             frames.set(None);
         });
     });
-    if let Some(frames) = frames.get() {
-        StreamedScene(frames, clip_views);
+    if let Some((frames, base)) = frames.get() {
+        StreamedScene(frames, move |index| clip_views(index, base), stats);
+    }
+}
+
+// A streamed scene of a foveated clip, which the headset unwarps. It lies above the panels.
+#[composable]
+fn FoveatedScene(clock: HeadsetClock, stats: StreamStats) {
+    let started = remember(|| {
+        FoveatedPlayer::start()
+            .map(|(player, frames)| (Rc::new(player), frames, clock.read()))
+            .map_err(|error| log::error!("xr demo: no foveated clip: {error}"))
+            .ok()
+    })
+    .with(Clone::clone);
+    if let Some((_player, frames, base)) = started {
+        StreamedScene(
+            frames,
+            move |index| foveated_player::views(index, base),
+            stats,
+        );
     }
 }
 
 // The views of a clip frame: both eyes look 30 degrees down from level, below the panels. The
 // eyes are 64 millimeters apart. The field of view of each has the shape of its half of the clip,
 // which is 320 by 360 pixels.
-fn clip_views(_frame: u64) -> StreamedViews {
+fn clip_views(index: u64, base: Duration) -> StreamedViews {
     const DOWN: f32 = 30.0 * std::f32::consts::PI / 180.0;
     let (sin, cos) = (DOWN / 2.0).sin_cos();
     let eye = |x: f32, left: u32| StreamedView {
@@ -317,10 +352,12 @@ fn clip_views(_frame: u64) -> StreamedViews {
             width: 320,
             height: 360,
         },
+        foveation: None,
     };
     StreamedViews {
         left: eye(-0.032, 0),
         right: eye(0.032, 320),
+        target_display_time: Some(target_display_time(base, index)),
     }
 }
 

@@ -57,3 +57,13 @@ fn the_refresh_rate_follows_from_the_frame_period() {
     assert!((frame.refresh_rate().expect("a period") - 120.0).abs() < 0.01);
     assert_eq!(XrFrame::default().refresh_rate(), None);
 }
+
+#[test]
+fn the_floor_height_is_the_height_of_the_stage_in_the_room() {
+    let frame = XrFrame {
+        stage_pose: Some(Pose::at([0.1, -1.62, 0.3])),
+        ..XrFrame::default()
+    };
+    assert_eq!(frame.floor_height(), Some(-1.62));
+    assert_eq!(XrFrame::default().floor_height(), None);
+}

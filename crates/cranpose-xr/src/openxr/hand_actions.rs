@@ -2,11 +2,8 @@
 
 use openxr as xr;
 
-use super::{
-    graphics::Api,
-    session::{XrSession, pose_of},
-};
-use crate::{Button, Controller, Thumbstick, TrackedPose, Trigger, controller_bindings::Input};
+use super::{graphics::Api, session::XrSession, tracked_pose::tracked};
+use crate::{Button, Controller, Thumbstick, Trigger, controller_bindings::Input};
 
 pub(crate) fn failed(what: &str) -> impl Fn(xr::sys::Result) -> String + use<> {
     let what = what.to_owned();
@@ -175,27 +172,4 @@ impl HandInput {
             None => self.actions.haptic.stop_feedback(session, xr::Path::NULL),
         }
     }
-}
-
-// Where `space` is in `local` at `time` and how it moves, or `None` while the runtime does not
-// track it.
-fn tracked(space: &xr::Space, local: &xr::Space, time: xr::Time) -> Option<TrackedPose> {
-    let (location, velocity) = space.relate(local, time).ok()?;
-    // A pose and its velocities count only when the runtime says they are valid
-    let valid = xr::SpaceLocationFlags::POSITION_VALID | xr::SpaceLocationFlags::ORIENTATION_VALID;
-    if !location.location_flags.contains(valid) {
-        return None;
-    }
-    let vector = |v: xr::Vector3f| [v.x, v.y, v.z];
-    Some(TrackedPose {
-        pose: pose_of(&location.pose),
-        linear_velocity: velocity
-            .velocity_flags
-            .contains(xr::SpaceVelocityFlags::LINEAR_VALID)
-            .then(|| vector(velocity.linear_velocity)),
-        angular_velocity: velocity
-            .velocity_flags
-            .contains(xr::SpaceVelocityFlags::ANGULAR_VALID)
-            .then(|| vector(velocity.angular_velocity)),
-    })
 }

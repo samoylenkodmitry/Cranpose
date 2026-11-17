@@ -18,10 +18,11 @@ use super::{
     recenter_events::RecenterEvents,
     refresh_rate,
     runtime::Runtime,
+    tracked_pose::tracked,
 };
 #[cfg(target_os = "android")]
 use crate::stereo_mode::{Eye, EyeView};
-use crate::{FieldOfView, Pose};
+use crate::{FieldOfView, Pose, TrackedPose};
 
 const VIEW_CONFIGURATION: xr::ViewConfigurationType = xr::ViewConfigurationType::PRIMARY_STEREO;
 // How long the app waits for the runtime to stop a running session as the app ends, and how
@@ -111,6 +112,8 @@ pub(crate) struct XrSession {
     pub(crate) local: xr::Space,
     // The head's own space, which the runtime locates for each frame
     view: xr::Space,
+    // The floor: the runtime's STAGE space, when it has one
+    stage: Option<xr::Space>,
     waiter: xr::FrameWaiter,
     stream: xr::FrameStream<Api>,
     pub(crate) session: xr::Session<Api>,
@@ -142,6 +145,18 @@ impl XrSession {
         let view = session
             .create_reference_space(xr::ReferenceSpaceType::VIEW, xr::Posef::IDENTITY)
             .map_err(|error| format!("OpenXR view space: {error}"))?;
+        // A runtime that has no stage rejects the space, so the app asks only for what it lists
+        let has_stage = session
+            .enumerate_reference_spaces()
+            .is_ok_and(|spaces| spaces.contains(&xr::ReferenceSpaceType::STAGE));
+        let stage = if has_stage {
+            session
+                .create_reference_space(xr::ReferenceSpaceType::STAGE, xr::Posef::IDENTITY)
+                .map_err(|error| log::warn!("cranpose xr: no stage space: {error}"))
+                .ok()
+        } else {
+            None
+        };
         let modes = instance
             .enumerate_environment_blend_modes(system, VIEW_CONFIGURATION)
             .unwrap_or_default();
@@ -151,6 +166,7 @@ impl XrSession {
             recenters: RecenterEvents::default(),
             local,
             view,
+            stage,
             waiter,
             stream,
             session,
@@ -176,15 +192,17 @@ impl XrSession {
         Graphics::TOP_ROW_FIRST || self.flips_layers
     }
 
-    // The head at `time`, in the `local` space. A head the runtime does not track has none.
-    pub(crate) fn head(&self, time: xr::Time) -> Option<Pose> {
-        let location = self.view.locate(&self.local, time).ok()?;
-        let tracked =
-            xr::SpaceLocationFlags::POSITION_VALID | xr::SpaceLocationFlags::ORIENTATION_VALID;
-        location
-            .location_flags
-            .contains(tracked)
-            .then(|| pose_of(&location.pose))
+    // The head at `time`, in the `local` space, with its velocities. A head that the runtime does
+    // not track has none.
+    pub(crate) fn head(&self, time: xr::Time) -> Option<TrackedPose> {
+        tracked(&self.view, &self.local, time)
+    }
+
+    // The pose of the stage at `time` in the `local` space: the floor at the center of the play
+    // area. A runtime with no stage, or one that does not locate it now, gives `None`.
+    pub(crate) fn stage(&self, time: xr::Time) -> Option<Pose> {
+        let stage = self.stage.as_ref()?;
+        tracked(stage, &self.local, time).map(|located| located.pose)
     }
 
     // Handles the runtime's events: starts and stops the session as the headset asks, and

@@ -4,7 +4,7 @@ use std::rc::Rc;
 
 use cranpose::{DecodedFrames, prelude::*};
 
-use crate::{StreamedViews, space::local_space, stream_source::StreamSource};
+use crate::{StreamStats, StreamedViews, space::local_space, stream_source::StreamSource};
 
 /// A scene that another machine renders for both eyes, streams to the headset and a
 /// [`VideoDecoder`](cranpose::VideoDecoder) decodes into `frames`. The headset's compositor
@@ -18,13 +18,26 @@ use crate::{StreamedViews, space::local_space, stream_source::StreamSource};
 /// `views` gives the views of a frame from the metadata that the app submitted with the
 /// frame's access unit, such as a frame index that maps to a render pose. The frames must come
 /// from a decoder whose output is [`DecoderOutput::Frames`](cranpose::DecoderOutput::Frames).
-/// The headset takes the newest frame at each of its own frames, and shows the last one again
-/// while no newer frame comes. It drops the frames that it did not show. Frames with views that
-/// the compositor cannot show are dropped, and the log says why.
+///
+/// The headset keeps up to three decoded frames in a queue. Each frame is held by an image of the
+/// decoder, so the decoder's `depth` must be at least 5: the queue's three frames, the frame
+/// shown last, and one for the decoder to write. At each of its own frames the headset shows the
+/// frame whose [`StreamedViews::target_display_time`] lies closest to the predicted display time
+/// of the frame that it submits. It never goes back to a frame older than the one shown, and it
+/// drops the frames that came before the one it picked. While no waiting frame is closer than the
+/// frame shown last, the layer shows that frame's picture again. When the queue is full, the
+/// frame shown last no longer competes, so a host whose targets run far ahead cannot freeze the
+/// picture. A frame whose views give no target follows the newest-frame rule: the headset shows
+/// the newest decoded frame. Frames with views that the compositor cannot show are dropped, and
+/// the log says why. `stats` receives how many frames the scene showed, skipped and repeated.
 ///
 /// Outside a headset the composable shows nothing.
 #[composable]
-pub fn StreamedScene(frames: DecodedFrames, views: impl Fn(u64) -> StreamedViews + 'static) {
+pub fn StreamedScene(
+    frames: DecodedFrames,
+    views: impl Fn(u64) -> StreamedViews + 'static,
+    stats: StreamStats,
+) {
     let Some(space) = local_space().current() else {
         return;
     };
@@ -38,6 +51,7 @@ pub fn StreamedScene(frames: DecodedFrames, views: impl Fn(u64) -> StreamedViews
         Rc::new(StreamSource {
             frames,
             views: Rc::new(views),
+            stats,
         }),
     );
     DisposableEffect(id, move |_| {

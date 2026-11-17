@@ -11,6 +11,7 @@ fn view() -> StreamedView {
             width: 320,
             height: 360,
         },
+        foveation: None,
     }
 }
 
@@ -24,6 +25,7 @@ fn views(left: StreamedView) -> StreamedViews {
             },
             ..view()
         },
+        target_display_time: None,
     }
 }
 
@@ -104,4 +106,32 @@ fn an_eye_of_the_headset_gives_its_pose_and_field_of_view_to_a_streamed_view() {
         .checked((640, 360))
         .expect("the headset's own view");
     assert_eq!(checked.left.fov, eye.field_of_view);
+}
+
+#[test]
+fn a_foveated_view_is_shown_at_the_full_size_and_checked_with_its_description() {
+    let foveation = FoveatedEncoding {
+        full_size: (2064, 2208),
+        center_size: [0.4477, 0.3977],
+        center_shift: [0.4035, 0.105],
+        edge_ratio: [4.0, 5.0],
+        eye_size_ratio: [0.97, 0.94],
+        mirrored: false,
+    };
+    let left = StreamedView {
+        foveation: Some(foveation),
+        ..view()
+    };
+    assert_eq!(left.output_size(), (2064, 2208));
+    assert_eq!(view().output_size(), (320, 360));
+    assert!(views(left).checked((640, 360)).is_ok());
+    let flat = FoveatedEncoding {
+        edge_ratio: [1.0, 5.0],
+        ..foveation
+    };
+    let left = StreamedView {
+        foveation: Some(flat),
+        ..view()
+    };
+    assert!(views(left).checked((640, 360)).is_err());
 }

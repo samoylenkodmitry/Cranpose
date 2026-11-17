@@ -55,6 +55,11 @@ impl HeadsetInput {
         self.properties.clone()
     }
 
+    // The time at which the frame sampled last reaches the display, on the monotonic clock.
+    pub(crate) fn display_time(&self) -> Duration {
+        self.frame.predicted_display_time
+    }
+
     // The head's pose in the frame sampled last.
     pub(crate) fn device_pose(&self) -> Option<Pose> {
         self.frame.device_pose
@@ -76,7 +81,11 @@ impl HeadsetInput {
         frame.period =
             Duration::from_nanos(state.predicted_display_period.as_nanos().max(0) as u64);
         frame.focused = status.listens();
-        frame.device_pose = xr_session.head(time);
+        let head = xr_session.head(time);
+        frame.device_pose = head.map(|head| head.pose);
+        frame.device_linear_velocity = head.and_then(|head| head.linear_velocity);
+        frame.device_angular_velocity = head.and_then(|head| head.angular_velocity);
+        frame.stage_pose = xr_session.stage(time);
         [frame.left_eye, frame.right_eye] = eye_views::locate(
             frame.device_pose.as_ref(),
             xr_session.instance(),

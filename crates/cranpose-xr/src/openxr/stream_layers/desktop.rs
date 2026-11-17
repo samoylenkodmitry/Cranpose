@@ -1,5 +1,7 @@
 //! The streamed scenes on a desktop: they have no layers.
 
+use std::time::Duration;
+
 use crate::{
     openxr::{
         graphics::Graphics,
@@ -19,9 +21,15 @@ impl StreamLayers {
         Self
     }
 
-    pub(crate) fn skip(&self, _space: &Space) {}
+    pub(crate) fn skip(&mut self, _space: &Space) {}
 
-    pub(crate) fn update(&mut self, _xr_session: &XrSession, _space: &Space) {}
+    pub(crate) fn update(
+        &mut self,
+        _xr_session: &XrSession,
+        _space: &Space,
+        _display_time: Duration,
+    ) {
+    }
 
     pub(crate) fn layers(&self) -> Vec<ProjectionLayer<'_>> {
         Vec::new()

@@ -21,14 +21,23 @@ const CLIP: &[u8] = include_bytes!("../assets/test_clip.h264");
 // The clip's size in pixels and its rate in pictures a second
 const SIZE: (u32, u32) = (640, 360);
 const RATE: u32 = 30;
-// The pictures that the frames decoder may have in flight: the stream holds one, the decoder
-// queues some, and the rest are free for the decoder to write.
-const DEPTH: usize = 4;
+// The pictures that the frames decoder may have in flight. A streamed scene holds up to three
+// waiting frames and the frame shown last, and the decoder needs one more to write, and one more
+// to keep its output moving.
+pub(crate) const DEPTH: usize = 6;
 const REPORT_EVERY: Duration = Duration::from_secs(1);
 
 // A player of the clip. It stops when dropped. The thread ends at its next picture.
 pub(crate) struct ClipPlayer {
     stop: Arc<AtomicBool>,
+}
+
+// The time at which the frame with metadata `index` should reach the display, for a stream that
+// began at `base` on the headset's clock: the clip's rate times the index, and the delay that a
+// host would estimate for its encoder, its network and the display.
+pub(crate) fn target_display_time(base: Duration, index: u64) -> Duration {
+    const DELAY: Duration = Duration::from_millis(20);
+    base + Duration::from_secs(1) * u32::try_from(index).unwrap_or(u32::MAX) / RATE + DELAY
 }
 
 impl ClipPlayer {
@@ -150,7 +159,7 @@ impl Interval {
 
 // The access units of an Annex-B stream. Each begins at an access unit delimiter, which is the
 // NAL unit of type 9.
-fn access_units(stream: &[u8]) -> Vec<&[u8]> {
+pub(crate) fn access_units(stream: &[u8]) -> Vec<&[u8]> {
     let mut starts = Vec::new();
     let mut at = 0;
     while at + 3 < stream.len() {
