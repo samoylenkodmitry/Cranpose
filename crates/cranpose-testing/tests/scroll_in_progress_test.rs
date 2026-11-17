@@ -1,20 +1,30 @@
-//! `ScrollState::is_scroll_in_progress` through the headless robot: a drag
-//! and the fling after it keep the scroll in progress, and it ends when the
-//! column stops.
+//! Scrolls through the headless robot. A drag and the fling after it keep the
+//! scroll in progress until the content stops. A jump or an animation that the
+//! app starts stops the fling, as Compose's `scrollToItem` and `scrollTo` do.
 
-use std::{cell::RefCell, rc::Rc};
-
-use cranpose_foundation::lazy::{LazyListScope, LazyListState, rememberLazyListState};
-use cranpose_testing::create_headless_robot_test;
-use cranpose_ui::{
-    Box, BoxSpec, Column, ColumnSpec, LazyColumn, LazyColumnSpec, Modifier, ScrollState, Size,
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
 };
 
-#[test]
-fn a_drag_and_its_fling_keep_the_scroll_in_progress_until_the_column_stops() {
+use cranpose_core::{MutableState, rememberMutableStateOf};
+use cranpose_foundation::lazy::{LazyListScope, LazyListState, rememberLazyListState};
+use cranpose_testing::{RobotTestRule, TestRenderer, create_headless_robot_test};
+use cranpose_ui::{
+    AnimateScroll, Box, BoxSpec, Column, ColumnSpec, LazyColumn, LazyColumnSpec, Modifier,
+    ScrollState, Size,
+};
+
+const FRAME_NANOS: u64 = 16_000_000;
+
+type Robot = RobotTestRule<TestRenderer>;
+
+// A column of `rows` rows, 40 points tall each, that scrolls in a 200 by 400
+// window.
+fn scrolling_column(rows: usize) -> (Robot, ScrollState) {
     let captured: Rc<RefCell<Option<ScrollState>>> = Rc::default();
     let installed = Rc::clone(&captured);
-    let mut robot = create_headless_robot_test(200, 400, move || {
+    let robot = create_headless_robot_test(200, 400, move || {
         let scroll = cranpose_ui::rememberScrollState!(0.0);
         *installed.borrow_mut() = Some(scroll);
         Column(
@@ -22,8 +32,8 @@ fn a_drag_and_its_fling_keep_the_scroll_in_progress_until_the_column_stops() {
                 .fill_max_size()
                 .vertical_scroll(scroll, false),
             ColumnSpec::default(),
-            || {
-                for _ in 0..40 {
+            move || {
+                for _ in 0..rows {
                     Box(
                         Modifier::empty().size(Size::new(200.0, 40.0)),
                         BoxSpec::default(),
@@ -34,14 +44,66 @@ fn a_drag_and_its_fling_keep_the_scroll_in_progress_until_the_column_stops() {
         );
     });
     let scroll = (*captured.borrow()).expect("the column is composed");
+    (robot, scroll)
+}
+
+// `items` items of `list`, 40 points tall each, in a lazy column that
+// fills its window.
+fn lazy_rows(list: LazyListState, items: usize, spec: LazyColumnSpec) {
+    LazyColumn(Modifier::empty().fill_max_size(), list, spec, |scope| {
+        scope.items(items, |_| {
+            Box(
+                Modifier::empty().fill_max_width().height(40.0),
+                BoxSpec::default(),
+                || {},
+            );
+        });
+    });
+}
+
+// A lazy column of `items` items in a 200 by 400 window.
+fn lazy_column(items: usize, spec: LazyColumnSpec) -> (Robot, LazyListState) {
+    let captured: Rc<RefCell<Option<LazyListState>>> = Rc::default();
+    let installed = Rc::clone(&captured);
+    let robot = create_headless_robot_test(200, 400, move || {
+        let list = rememberLazyListState();
+        *installed.borrow_mut() = Some(list);
+        lazy_rows(list, items, spec.clone());
+    });
+    let list = (*captured.borrow()).expect("the list is composed");
+    (robot, list)
+}
+
+fn run_frames(robot: &mut Robot, frames: usize) {
+    for _ in 0..frames {
+        robot.advance_time(FRAME_NANOS);
+        robot.wait_for_idle();
+    }
+}
+
+// A quick drag up that lets go into a fling toward the end. Two frames of
+// the fling follow.
+fn fling_toward_the_end(robot: &mut Robot) {
+    robot.drag(100.0, 300.0, 100.0, 100.0);
+    run_frames(robot, 2);
+}
+
+// Where the list stands: its first visible item and how far it is scrolled.
+fn position(list: LazyListState) -> (usize, f32) {
+    (
+        list.first_visible_item_index(),
+        list.first_visible_item_scroll_offset(),
+    )
+}
+
+#[test]
+fn a_drag_and_its_fling_keep_the_scroll_in_progress_until_the_column_stops() {
+    let (mut robot, scroll) = scrolling_column(40);
     assert!(!scroll.is_scroll_in_progress(), "nothing moves it yet");
 
     robot.drag(100.0, 300.0, 100.0, 100.0);
     assert!(scroll.is_scroll_in_progress(), "the fling moves it on");
-    for _ in 0..120 {
-        robot.advance_time(16_000_000);
-        robot.wait_for_idle();
-    }
+    run_frames(&mut robot, 120);
     assert!(scroll.value() > 200.0, "the drag and fling scrolled it");
     assert!(!scroll.is_scroll_in_progress(), "the fling came to rest");
 }
@@ -50,34 +112,14 @@ fn a_drag_and_its_fling_keep_the_scroll_in_progress_until_the_column_stops() {
 // a pull down brings the next items in.
 #[test]
 fn a_reversed_list_at_its_start_takes_a_pull_toward_its_items_as_a_drag() {
-    let captured: Rc<RefCell<Option<LazyListState>>> = Rc::default();
-    let installed = Rc::clone(&captured);
-    let mut robot = create_headless_robot_test(200, 400, move || {
-        let list = rememberLazyListState();
-        *installed.borrow_mut() = Some(list);
-        LazyColumn(
-            Modifier::empty().fill_max_size(),
-            list,
-            LazyColumnSpec::new().reverse_layout(true),
-            |scope| {
-                scope.items(40, |_| {
-                    Box(
-                        Modifier::empty().fill_max_width().height(40.0),
-                        BoxSpec::default(),
-                        || {},
-                    );
-                });
-            },
-        );
-    });
-    let list = (*captured.borrow()).expect("the list is composed");
+    let (mut robot, list) = lazy_column(40, LazyColumnSpec::new().reverse_layout(true));
     assert!(!list.is_dragged(), "no finger is down yet");
 
     robot.mouse_move(100.0, 100.0);
     robot.mouse_down();
     for step in 1..=10 {
         robot.mouse_move(100.0, 100.0 + 20.0 * step as f32);
-        robot.advance_time(16_000_000);
+        robot.advance_time(FRAME_NANOS);
         let scrolled =
             list.first_visible_item_index() > 0 || list.first_visible_item_scroll_offset() > 0.0;
         assert_eq!(
@@ -93,6 +135,102 @@ fn a_reversed_list_at_its_start_takes_a_pull_toward_its_items_as_a_drag() {
     );
 
     robot.mouse_up();
-    robot.advance_time(16_000_000);
+    robot.advance_time(FRAME_NANOS);
     assert!(!list.is_dragged(), "the finger is up");
+}
+
+#[test]
+fn scroll_to_item_stops_a_fling() {
+    let (mut robot, list) = lazy_column(400, LazyColumnSpec::new());
+    fling_toward_the_end(&mut robot);
+    assert!(list.is_scroll_in_progress(), "the fling moves the list");
+
+    list.scroll_to_item(0, 0.0);
+    run_frames(&mut robot, 120);
+
+    assert_eq!(
+        position(list),
+        (0, 0.0),
+        "the list stays where the jump put it"
+    );
+    assert!(!list.is_scroll_in_progress(), "nothing moves the list");
+}
+
+#[test]
+fn stop_scroll_animation_stops_a_fling() {
+    let (mut robot, list) = lazy_column(400, LazyColumnSpec::new());
+    fling_toward_the_end(&mut robot);
+
+    assert!(list.stop_scroll_animation(), "the fling ran");
+    run_frames(&mut robot, 1);
+    let stopped_at = position(list);
+    run_frames(&mut robot, 120);
+
+    assert_eq!(
+        position(list),
+        stopped_at,
+        "the list stays where the fling stopped"
+    );
+    assert!(!list.is_scroll_in_progress(), "nothing moves the list");
+}
+
+#[test]
+fn an_animated_scroll_takes_the_list_from_a_fling() {
+    let (mut robot, list) = lazy_column(400, LazyColumnSpec::new());
+    fling_toward_the_end(&mut robot);
+
+    list.animate_scroll_to_item(2, 0.0);
+    run_frames(&mut robot, 240);
+
+    assert_eq!(position(list), (2, 0.0), "the animation lands on its item");
+    assert!(!list.is_scroll_in_progress(), "nothing moves the list");
+}
+
+#[test]
+fn scroll_to_stops_a_fling() {
+    let (mut robot, scroll) = scrolling_column(400);
+    fling_toward_the_end(&mut robot);
+    assert!(scroll.is_scroll_in_progress(), "the fling moves the column");
+
+    scroll.scroll_to(0.0);
+    run_frames(&mut robot, 120);
+
+    assert_eq!(
+        scroll.value(),
+        0.0,
+        "the column stays where the jump put it"
+    );
+    assert!(!scroll.is_scroll_in_progress(), "nothing moves the column");
+}
+
+// The state outlives its list: a list that leaves the screen during its fling
+// leaves the state at rest.
+#[test]
+fn a_list_that_leaves_during_its_fling_leaves_its_state_at_rest() {
+    // The list's state and whether the list shows, both kept above the list.
+    #[derive(Clone, Copy)]
+    struct Above {
+        list: LazyListState,
+        shown: MutableState<bool>,
+    }
+    let captured: Rc<Cell<Option<Above>>> = Rc::default();
+    let installed = Rc::clone(&captured);
+    let mut robot = create_headless_robot_test(200, 400, move || {
+        let list = rememberLazyListState();
+        let shown = rememberMutableStateOf(|| true);
+        installed.set(Some(Above { list, shown }));
+        if shown.get() {
+            lazy_rows(list, 400, LazyColumnSpec::new());
+        }
+    });
+    let Above { list, shown } = captured.get().expect("the list is composed");
+    fling_toward_the_end(&mut robot);
+    assert!(list.is_scroll_in_progress(), "the fling moves the list");
+
+    shown.set(false);
+    run_frames(&mut robot, 2);
+    assert!(
+        !list.is_scroll_in_progress(),
+        "the fling ended with its list"
+    );
 }

@@ -1,7 +1,7 @@
-//! What the drag of a scroller moves: a scroll, a lazy list, a draggable or a
-//! scrollable state, and the nested scroll containers around it.
+//! The state that the drag of a scroller moves. A nested scroll container
+//! around the scroller takes its part of each move first.
 
-use cranpose_foundation::lazy::LazyListState;
+use cranpose_foundation::{ScrollId, lazy::LazyListState};
 use cranpose_ui_layout::Axis;
 
 use crate::{
@@ -56,6 +56,16 @@ pub(super) trait ScrollTarget: Clone {
         let _ = velocity;
         0.0
     }
+
+    // Makes the motion that `stop` stops the target's running scroll. A jump
+    // or a press stops it as it stops an animation. `None` for a target that
+    // keeps no running scroll.
+    fn start_scroll(&self, _stop: impl FnOnce() + 'static) -> Option<ScrollId> {
+        None
+    }
+
+    // Forgets the running scroll `id` once its motion ended.
+    fn end_scroll(&self, _id: ScrollId) {}
 }
 
 /// A scroller inside [`crate::NestedScroll`] containers: every move goes
@@ -126,6 +136,14 @@ impl<S: ScrollTarget> ScrollTarget for NestedTarget<S> {
     fn pre_fling(&self, velocity: f32) -> f32 {
         self.parent.pre_fling(self.axis, velocity)
     }
+
+    fn start_scroll(&self, stop: impl FnOnce() + 'static) -> Option<ScrollId> {
+        self.target.start_scroll(stop)
+    }
+
+    fn end_scroll(&self, id: ScrollId) {
+        self.target.end_scroll(id);
+    }
 }
 
 impl ScrollTarget for ScrollState {
@@ -158,6 +176,18 @@ impl ScrollTarget for ScrollState {
 
     fn settle_policy(&self) -> Option<ScrollSettlePolicy> {
         Self::settle_policy(self)
+    }
+
+    fn stop_animation(&self) -> bool {
+        self.stop_scroll_animation()
+    }
+
+    fn start_scroll(&self, stop: impl FnOnce() + 'static) -> Option<ScrollId> {
+        Some(self.start_scroll_animation(stop))
+    }
+
+    fn end_scroll(&self, id: ScrollId) {
+        self.end_scroll_animation(id);
     }
 }
 
@@ -211,6 +241,14 @@ impl ScrollTarget for LazyListState {
 
     fn stop_animation(&self) -> bool {
         self.stop_scroll_animation()
+    }
+
+    fn start_scroll(&self, stop: impl FnOnce() + 'static) -> Option<ScrollId> {
+        self.start_scroll_animation(stop)
+    }
+
+    fn end_scroll(&self, id: ScrollId) {
+        self.end_scroll_animation(id);
     }
 }
 

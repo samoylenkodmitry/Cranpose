@@ -1,11 +1,11 @@
-//! What a scroller's release starts: the fling, the settle on the target's
-//! policy, or the bounce back from an overscroll.
+//! The motion after the release of a scroller's drag: a fling or a settle.
 
 use cranpose_core::current_runtime_handle;
+use cranpose_foundation::ScrollId;
 
 use super::{
-    FlingAnimation, MIN_FLING_VELOCITY, ScrollGestureDetector, ScrollTarget, SettleAnimation,
-    SpringParams, fling_rest_position, set_last_fling_velocity,
+    FlingAnimation, MIN_FLING_VELOCITY, ScrollGestureDetector, ScrollMotionContext, ScrollTarget,
+    SettleAnimation, SpringParams, fling_rest_position, set_last_fling_velocity,
 };
 
 impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
@@ -18,7 +18,7 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
     }
 
     fn finish_gesture(&self, allow_fling: bool, release_time_ms: Option<i64>) -> bool {
-        let (was_dragging, interrupted, gesture_owned, velocity, start_fling) = {
+        let (was_dragging, interrupted, gesture_owned, velocity, start_fling, replaced_scroll) = {
             let mut gs = self.gesture_state.borrow_mut();
             let was_dragging = gs.is_dragging;
             let interrupted = std::mem::take(&mut gs.interrupted_animation);
@@ -31,8 +31,10 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
 
             let start_fling = allow_fling && was_dragging && velocity.abs() > MIN_FLING_VELOCITY;
             // Whatever the release starts replaces a fling still running.
+            let mut replaced_scroll = None;
             if start_fling && let Some(fling) = gs.fling_animation.take() {
                 fling.cancel();
+                replaced_scroll = gs.running_scroll.take();
             }
 
             if was_dragging {
@@ -53,8 +55,10 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
                 gesture_owned,
                 velocity,
                 start_fling,
+                replaced_scroll,
             )
         };
+        self.release_running_scroll(replaced_scroll);
 
         if allow_fling && gesture_owned {
             log::debug!(
@@ -112,9 +116,13 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
             self.motion_context.set_active(false);
             return;
         };
+        let fling = FlingAnimation::new(runtime);
+        let running_scroll = self.hold_running_scroll({
+            let fling = fling.clone();
+            move || fling.cancel()
+        });
         self.motion_context.set_active(true);
         let scroll_target = self.scroll_target.clone();
-        let fling = FlingAnimation::new(runtime);
         let motion_context = self.motion_context.clone();
         let initial_value = scroll_target.current_offset();
         let scroll_target_for_fling = scroll_target.clone();
@@ -133,6 +141,7 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
             },
             move || {
                 scroll_target.invalidate();
+                detector_for_end.release_running_scroll(running_scroll);
                 let settle_running = detector_for_end
                     .gesture_state
                     .borrow()
@@ -148,6 +157,7 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
 
         let mut gs = self.gesture_state.borrow_mut();
         gs.fling_animation = Some(fling);
+        gs.running_scroll = running_scroll;
     }
 
     pub(super) fn start_settle_animation(&self, target: f32, initial_velocity: f32) {
@@ -155,8 +165,12 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
             self.motion_context.set_active(false);
             return;
         };
-        self.motion_context.set_active(true);
         let settle = SettleAnimation::new(runtime, SpringParams::SETTLE_POLICY);
+        let running_scroll = self.hold_running_scroll({
+            let settle = settle.clone();
+            move || settle.cancel()
+        });
+        self.motion_context.set_active(true);
         let scroll_target_for_settle = self.scroll_target.clone();
         let scroll_target_for_end = self.scroll_target.clone();
         let detector_for_end = self.clone_for_watcher();
@@ -172,11 +186,38 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
             },
             move |_| {
                 scroll_target_for_end.invalidate();
+                detector_for_end.release_running_scroll(running_scroll);
                 detector_for_end.update_motion_active(&motion_context);
             },
         );
         let mut gs = self.gesture_state.borrow_mut();
         gs.settle_animation = Some(settle);
+        gs.running_scroll = running_scroll;
+    }
+
+    // Makes the motion that `cancel` stops the target's running scroll. A
+    // jump or a press then stops it as it stops an animation.
+    fn hold_running_scroll(&self, cancel: impl FnOnce() + 'static) -> Option<ScrollId> {
+        let detector = self.clone_for_watcher();
+        self.scroll_target.start_scroll(move || {
+            cancel();
+            detector.update_motion_active(&detector.motion_context);
+        })
+    }
+
+    // Lets go of the running scroll `id` that a motion held, once it ended.
+    fn release_running_scroll(&self, id: Option<ScrollId>) {
+        if let Some(id) = id {
+            self.scroll_target.end_scroll(id);
+        }
+    }
+
+    // Marks the scroll at rest once no motion of the gesture runs.
+    pub(super) fn update_motion_active(&self, motion_context: &ScrollMotionContext) {
+        let running = self.gesture_state.borrow().is_active();
+        if !running {
+            motion_context.set_active(false);
+        }
     }
 
     pub(super) fn start_overscroll_settle(&self, initial_velocity: f32) {

@@ -34,78 +34,48 @@ fn schedule_next_frame<F, G>(
     F: Fn(f32) -> f32 + 'static,
     G: FnOnce() + 'static,
 {
+    let Some(run) = state
+        .borrow()
+        .as_ref()
+        .map(|anim_state| Rc::clone(&anim_state.is_running))
+    else {
+        return;
+    };
     let state_for_closure = Rc::clone(&state);
     let frame_clock_for_closure = frame_clock.clone();
     let on_end = RefCell::new(Some(on_end));
 
     let registration = frame_clock.with_frame_nanos(move |frame_time_nanos| {
-        let should_continue = {
-            let state_guard = state_for_closure.borrow();
-            let Some(anim_state) = state_guard.as_ref() else {
-                return;
-            };
-
-            if !anim_state.is_running.get() {
-                return;
-            }
-
-            let start_time = match anim_state.start_frame_time_nanos.get() {
-                Some(value) => value,
-                None => {
-                    anim_state
-                        .start_frame_time_nanos
-                        .set(Some(frame_time_nanos));
-                    frame_time_nanos
-                }
-            };
-
-            let play_time_nanos = frame_time_nanos.saturating_sub(start_time) as i64;
-
-            let new_value = anim_state.decay_spec.get_value_from_nanos(
-                play_time_nanos,
-                anim_state.initial_value,
-                anim_state.initial_velocity,
-            );
-
-            let last = anim_state.last_value.get();
-            let delta = new_value - last;
-            anim_state.last_value.set(new_value);
-            anim_state
-                .total_delta
-                .set(anim_state.total_delta.get() + delta);
-
-            let duration_nanos = anim_state
-                .decay_spec
-                .get_duration_nanos(anim_state.initial_value, anim_state.initial_velocity);
-
-            let current_velocity = anim_state.decay_spec.get_velocity_from_nanos(
-                play_time_nanos,
-                anim_state.initial_value,
-                anim_state.initial_velocity,
-            );
-
-            let is_finished = play_time_nanos >= duration_nanos
-                || current_velocity.abs() < anim_state.decay_spec.abs_velocity_threshold();
-
-            if is_finished {
-                anim_state.is_running.set(false);
-            }
-
-            let consumed = if delta.abs() > 0.001 {
-                on_scroll(delta)
-            } else {
-                0.0
-            };
-
-            let boundary_hit = (delta - consumed).abs() > BOUNDARY_EPSILON;
-            if boundary_hit {
-                anim_state.is_running.set(false);
-            }
-
-            !is_finished && !boundary_hit
+        let Some((delta, is_finished)) = state_for_closure
+            .borrow()
+            .as_ref()
+            .filter(|anim_state| anim_state.is_running.get())
+            .map(|anim_state| anim_state.advance(frame_time_nanos))
+        else {
+            return;
         };
 
-        if should_continue {
+        // The scroll runs with the state free. A callback that the scroll
+        // reaches may stop the fling. A stopped fling neither goes on nor ends.
+        let consumed = if delta.abs() > 0.001 {
+            on_scroll(delta)
+        } else {
+            0.0
+        };
+        let still_this_run = state_for_closure
+            .borrow()
+            .as_ref()
+            .is_some_and(|anim_state| Rc::ptr_eq(&anim_state.is_running, &run));
+        if !still_this_run {
+            return;
+        }
+
+        let boundary_hit = (delta - consumed).abs() > BOUNDARY_EPSILON;
+        if boundary_hit {
+            run.set(false);
+        }
+
+        if !is_finished && !boundary_hit {
             if let Some(on_end_fn) = on_end.borrow_mut().take() {
                 schedule_next_frame(
                     Rc::clone(&state_for_closure),
@@ -131,8 +101,55 @@ struct FlingAnimationState {
     start_frame_time_nanos: Cell<Option<u64>>,
     decay_spec: ExponentialDecaySpec,
     registration: Option<FrameCallbackRegistration>,
-    is_running: Cell<bool>,
+    // The run's frame callback keeps a handle to it: a stop during the
+    // callback's scroll ends the run.
+    is_running: Rc<Cell<bool>>,
     total_delta: Cell<f32>,
+}
+
+impl FlingAnimationState {
+    // Moves the fling to `frame_time_nanos`. Returns the scroll delta of the
+    // frame and whether the fling ends with it.
+    fn advance(&self, frame_time_nanos: u64) -> (f32, bool) {
+        let start_time = match self.start_frame_time_nanos.get() {
+            Some(value) => value,
+            None => {
+                self.start_frame_time_nanos.set(Some(frame_time_nanos));
+                frame_time_nanos
+            }
+        };
+
+        let play_time_nanos = frame_time_nanos.saturating_sub(start_time) as i64;
+
+        let new_value = self.decay_spec.get_value_from_nanos(
+            play_time_nanos,
+            self.initial_value,
+            self.initial_velocity,
+        );
+
+        let last = self.last_value.get();
+        let delta = new_value - last;
+        self.last_value.set(new_value);
+        self.total_delta.set(self.total_delta.get() + delta);
+
+        let duration_nanos = self
+            .decay_spec
+            .get_duration_nanos(self.initial_value, self.initial_velocity);
+
+        let current_velocity = self.decay_spec.get_velocity_from_nanos(
+            play_time_nanos,
+            self.initial_value,
+            self.initial_velocity,
+        );
+
+        let is_finished = play_time_nanos >= duration_nanos
+            || current_velocity.abs() < self.decay_spec.abs_velocity_threshold();
+
+        if is_finished {
+            self.is_running.set(false);
+        }
+        (delta, is_finished)
+    }
 }
 
 /// Drives a fling (decay) animation on a scroll target.
@@ -181,7 +198,7 @@ impl FlingAnimation {
             start_frame_time_nanos: Cell::new(None),
             decay_spec,
             registration: None,
-            is_running: Cell::new(true),
+            is_running: Rc::new(Cell::new(true)),
             total_delta: Cell::new(0.0),
         };
 
@@ -282,7 +299,42 @@ struct SettleAnimationState {
     params: SpringParams,
     last_frame_time_nanos: Cell<Option<u64>>,
     registration: Option<FrameCallbackRegistration>,
-    is_running: Cell<bool>,
+    // The run's frame callback keeps a handle to it: a stop during the
+    // callback's scroll ends the run.
+    is_running: Rc<Cell<bool>>,
+}
+
+impl SettleAnimationState {
+    // Moves the spring to `frame_time_nanos`. Returns the scroll delta of the
+    // frame and whether the settle comes to rest with it.
+    fn advance(&self, frame_time_nanos: u64) -> (f32, bool) {
+        let dt = match self.last_frame_time_nanos.get() {
+            Some(last) => (frame_time_nanos.saturating_sub(last) as f32) / 1_000_000_000.0,
+            None => 0.0,
+        };
+        self.last_frame_time_nanos.set(Some(frame_time_nanos));
+
+        let displacement = self.displacement.get();
+        let (mut next_displacement, next_velocity) =
+            cranpose_animation::advance_spring_displacement(
+                displacement,
+                self.velocity.get(),
+                self.params.damping_ratio,
+                self.params.stiffness,
+                dt.max(0.0),
+            );
+
+        let is_finished = next_displacement.abs() < SETTLE_REST_DISTANCE
+            && next_velocity.abs() < SETTLE_REST_VELOCITY;
+        if is_finished {
+            next_displacement = 0.0;
+            self.is_running.set(false);
+        }
+
+        self.displacement.set(next_displacement);
+        self.velocity.set(next_velocity);
+        (next_displacement - displacement, is_finished)
+    }
 }
 
 pub(crate) struct SettleEnd {
@@ -329,7 +381,7 @@ impl SettleAnimation {
             params: self.params,
             last_frame_time_nanos: Cell::new(None),
             registration: None,
-            is_running: Cell::new(true),
+            is_running: Rc::new(Cell::new(true)),
         });
         schedule_next_settle_frame(
             Rc::clone(&self.state),
@@ -375,63 +427,50 @@ fn schedule_next_settle_frame<F, G>(
     F: Fn(f32) -> f32 + 'static,
     G: FnOnce(SettleEnd) + 'static,
 {
+    let Some(run) = state
+        .borrow()
+        .as_ref()
+        .map(|anim_state| Rc::clone(&anim_state.is_running))
+    else {
+        return;
+    };
     let state_for_closure = Rc::clone(&state);
     let frame_clock_for_closure = frame_clock.clone();
     let on_end = RefCell::new(Some(on_end));
-    let hit_boundary = Cell::new(false);
 
     let registration = frame_clock.with_frame_nanos(move |frame_time_nanos| {
-        let should_continue = {
-            let state_guard = state_for_closure.borrow();
-            let Some(anim_state) = state_guard.as_ref() else {
-                return;
-            };
-            if !anim_state.is_running.get() {
-                return;
-            }
-
-            let dt = match anim_state.last_frame_time_nanos.get() {
-                Some(last) => (frame_time_nanos.saturating_sub(last) as f32) / 1_000_000_000.0,
-                None => 0.0,
-            };
-            anim_state.last_frame_time_nanos.set(Some(frame_time_nanos));
-
-            let displacement = anim_state.displacement.get();
-            let (mut next_displacement, next_velocity) =
-                cranpose_animation::advance_spring_displacement(
-                    displacement,
-                    anim_state.velocity.get(),
-                    anim_state.params.damping_ratio,
-                    anim_state.params.stiffness,
-                    dt.max(0.0),
-                );
-
-            let is_finished = next_displacement.abs() < SETTLE_REST_DISTANCE
-                && next_velocity.abs() < SETTLE_REST_VELOCITY;
-            if is_finished {
-                next_displacement = 0.0;
-                anim_state.is_running.set(false);
-            }
-
-            let delta = next_displacement - displacement;
-            anim_state.displacement.set(next_displacement);
-            anim_state.velocity.set(next_velocity);
-
-            let consumed = if delta.abs() > 0.0001 {
-                on_scroll(delta)
-            } else {
-                delta
-            };
-            let boundary_hit = (delta - consumed).abs() > BOUNDARY_EPSILON;
-            if boundary_hit {
-                anim_state.is_running.set(false);
-                hit_boundary.set(true);
-            }
-
-            !is_finished && !boundary_hit
+        let Some((delta, is_finished)) = state_for_closure
+            .borrow()
+            .as_ref()
+            .filter(|anim_state| anim_state.is_running.get())
+            .map(|anim_state| anim_state.advance(frame_time_nanos))
+        else {
+            return;
         };
 
-        if should_continue {
+        // The scroll runs with the state free. A callback that the scroll
+        // reaches may stop the settle. A stopped settle neither goes on nor
+        // ends.
+        let consumed = if delta.abs() > 0.0001 {
+            on_scroll(delta)
+        } else {
+            delta
+        };
+        let Some(velocity) = state_for_closure
+            .borrow()
+            .as_ref()
+            .filter(|anim_state| Rc::ptr_eq(&anim_state.is_running, &run))
+            .map(|anim_state| anim_state.velocity.get())
+        else {
+            return;
+        };
+
+        let boundary_hit = (delta - consumed).abs() > BOUNDARY_EPSILON;
+        if boundary_hit {
+            run.set(false);
+        }
+
+        if !is_finished && !boundary_hit {
             if let Some(on_end_fn) = on_end.borrow_mut().take() {
                 schedule_next_settle_frame(
                     Rc::clone(&state_for_closure),
@@ -441,13 +480,9 @@ fn schedule_next_settle_frame<F, G>(
                 );
             }
         } else if let Some(end_fn) = on_end.borrow_mut().take() {
-            let state_guard = state_for_closure.borrow();
-            let velocity = state_guard
-                .as_ref()
-                .map_or(0.0, |anim_state| anim_state.velocity.get());
             end_fn(SettleEnd {
                 velocity,
-                hit_boundary: hit_boundary.get(),
+                hit_boundary: boundary_hit,
             });
         }
     });

@@ -6,7 +6,7 @@ use std::{
 use cranpose_core::{NodeId, current_runtime_handle, internal::FrameCallbackRegistration};
 use cranpose_foundation::{
     DRAG_THRESHOLD, DelegatableNode, MAX_FLING_VELOCITY, ModifierNode, ModifierNodeElement,
-    NodeCapabilities, NodeState, PointerButton, PointerButtons, VelocityTracker1D,
+    NodeCapabilities, NodeState, PointerButton, PointerButtons, ScrollId, VelocityTracker1D,
     lazy::LazyListState, velocity_tracker::ASSUME_STOPPED_MS,
 };
 use cranpose_ui_layout::Axis;
@@ -84,6 +84,9 @@ struct ScrollGestureState {
     settle_animation: Option<SettleAnimation>,
 
     wheel_settle_watcher: Option<WheelSettleWatcher>,
+
+    // The running scroll of the target that the fling or the settle holds.
+    running_scroll: Option<ScrollId>,
 }
 
 impl Default for ScrollGestureState {
@@ -104,6 +107,7 @@ impl Default for ScrollGestureState {
             is_overscrolling: false,
             settle_animation: None,
             wheel_settle_watcher: None,
+            running_scroll: None,
         }
     }
 }
@@ -393,13 +397,6 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
             self.gesture_state.borrow_mut().is_overscrolling = true;
         }
         consumed
-    }
-
-    fn update_motion_active(&self, motion_context: &ScrollMotionContext) {
-        let running = self.gesture_state.borrow().is_active();
-        if !running {
-            motion_context.set_active(false);
-        }
     }
 
     fn on_scroll(&self, axis_delta: f32, event: &PointerEvent) -> bool {

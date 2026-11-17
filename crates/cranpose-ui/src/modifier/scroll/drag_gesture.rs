@@ -1,6 +1,6 @@
-//! The drag gesture of a scroller: the pointer input that feeds its
-//! detector, inside the nested scroll containers around it, and the end of
-//! its motions when the input goes.
+//! The pointer input of a scroller's drag gesture. It feeds the gesture's
+//! detector inside the nested scroll containers around the scroller. Its end
+//! stops the gesture's motions.
 
 use std::{cell::RefCell, rc::Rc};
 
@@ -19,12 +19,13 @@ pub(super) struct DragGesture<S: ScrollTarget> {
     pub(super) guard: Option<Rc<dyn Fn() -> bool>>,
 }
 
-struct ScrollGestureLifetime {
+struct ScrollGestureLifetime<S: ScrollTarget> {
     gesture_state: Rc<RefCell<ScrollGestureState>>,
+    target: S,
     motion_context: ScrollMotionContext,
 }
 
-impl Drop for ScrollGestureLifetime {
+impl<S: ScrollTarget> Drop for ScrollGestureLifetime<S> {
     fn drop(&mut self) {
         let state = std::mem::replace(
             &mut *self.gesture_state.borrow_mut(),
@@ -42,6 +43,9 @@ impl Drop for ScrollGestureLifetime {
         }
         if let Some(watcher) = state.wheel_settle_watcher {
             watcher.cancel();
+        }
+        if let Some(id) = state.running_scroll {
+            self.target.end_scroll(id);
         }
         if was_active {
             self.motion_context.set_active(false);
@@ -109,6 +113,7 @@ where
         let guard = guard.clone();
         let lifetime = ScrollGestureLifetime {
             gesture_state: Rc::clone(&gesture_state),
+            target: target.clone(),
             motion_context: motion_context.clone(),
         };
 
