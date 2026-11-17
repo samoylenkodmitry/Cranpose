@@ -185,8 +185,8 @@ struct RuntimeInner {
     scope_queue: RefCell<Vec<Weak<RecomposeScopeInner>>>,
     /// The storage of the last pass's scope list, for the next pass.
     spare_scopes: RefCell<Vec<RecomposeScope>>,
-    /// The invalid scopes with their depths, while a recomposition sorts them.
-    spare_scopes_by_depth: RefCell<Vec<(usize, RecomposeScope)>>,
+    /// The invalid scopes by depth and queue place, while a pass sorts them.
+    spare_scopes_by_depth: RefCell<Vec<((usize, usize), RecomposeScope)>>,
     frame_callbacks: RefCell<VecDeque<FrameCallbackEntry>>,
     next_frame_callback_id: Cell<u64>,
     last_frame_time_nanos: Cell<Option<u64>>,
@@ -321,11 +321,11 @@ impl RuntimeInner {
         // scope that a recomposing parent removes or composes again does not
         // run first with the arguments it had.
         if scopes.len() > 1 {
-            // A scope's depth walks its ancestors, so each one is found once
-            // rather than at every comparison of the sort.
+            // Depths found once; queue places keep equal ones in order, in place.
             let mut by_depth = std::mem::take(&mut *self.spare_scopes_by_depth.borrow_mut());
-            by_depth.extend(scopes.drain(..).map(|scope| (scope.depth(), scope)));
-            by_depth.sort_by_key(|(depth, _)| *depth);
+            let keyed = scopes.drain(..).enumerate();
+            by_depth.extend(keyed.map(|(place, scope)| ((scope.depth(), place), scope)));
+            by_depth.sort_unstable_by_key(|(key, _)| *key);
             scopes.extend(by_depth.drain(..).map(|(_, scope)| scope));
             *self.spare_scopes_by_depth.borrow_mut() = by_depth;
         }
