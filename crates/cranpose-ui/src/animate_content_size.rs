@@ -19,10 +19,7 @@ use cranpose_foundation::{
 use cranpose_ui_graphics::Size;
 use cranpose_ui_layout::{LayoutDirection, LayoutModifierMeasureResult, round_to_px};
 
-use crate::{
-    modifier::{Modifier, inspector_metadata},
-    modifier_nodes::impl_layout_modifier_node,
-};
+use crate::modifier::{Modifier, inspector_metadata};
 
 impl Modifier {
     /// Animates the size of this modifier when the size of its content
@@ -157,7 +154,25 @@ impl DelegatableNode for SizeAnimationNode {
     }
 }
 
-impl_layout_modifier_node!(SizeAnimationNode, invalidate = InvalidationKind::Layout);
+impl ModifierNode for SizeAnimationNode {
+    fn as_layout_node(&self) -> Option<&dyn LayoutModifierNode> {
+        Some(self)
+    }
+
+    // A node that a recycled item reuses starts at the first size of its new
+    // content.
+    fn on_reset(&mut self) {
+        self.size.get_mut().take();
+    }
+
+    fn as_layout_node_mut(&mut self) -> Option<&mut dyn LayoutModifierNode> {
+        Some(self)
+    }
+
+    fn on_attach(&mut self, context: &mut dyn ModifierNodeContext) {
+        context.invalidate(InvalidationKind::Layout);
+    }
+}
 
 impl LayoutModifierNode for SizeAnimationNode {
     fn measure(

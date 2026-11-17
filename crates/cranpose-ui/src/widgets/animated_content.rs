@@ -739,6 +739,9 @@ fn compose_entry<T: Clone + PartialEq + 'static>(
     } else {
         entry
     };
+    // The layer comes before the size change, so that it bounds the size
+    // that the transition gives and the clip cuts at it.
+    let entry = entry.graphics_layer(move || layer.layer());
     // The size change measures the content at its full size, and the size
     // reporter inside it reports that size.
     let sized = motion.changes_size();
@@ -757,25 +760,21 @@ fn compose_entry<T: Clone + PartialEq + 'static>(
         entry: Rc::clone(&motion.coordinates),
         container: Rc::clone(&state.0.coordinates),
     });
-    Box(
-        entry.graphics_layer(move || layer.layer()),
-        BoxSpec::new(),
-        move || {
-            let compose = || {
-                if let Some(content) = state.0.content.borrow_mut().as_mut() {
-                    content(value.clone());
-                }
-            };
-            let compose = || match shared_entry.clone() {
-                Some(entry) => ProvideSharedEntry(entry, compose),
-                None => compose(),
-            };
-            match &pausable {
-                Some(content) => with_pausable_content(content, compose),
-                None => compose(),
+    Box(entry, BoxSpec::new(), move || {
+        let compose = || {
+            if let Some(content) = state.0.content.borrow_mut().as_mut() {
+                content(value.clone());
             }
-        },
-    );
+        };
+        let compose = || match shared_entry.clone() {
+            Some(entry) => ProvideSharedEntry(entry, compose),
+            None => compose(),
+        };
+        match &pausable {
+            Some(content) => with_pausable_content(content, compose),
+            None => compose(),
+        }
+    });
 }
 
 // Whether `measurable` is content a change brought that is not complete.

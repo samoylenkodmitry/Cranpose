@@ -7,16 +7,17 @@
 use std::{cell::Cell, rc::Rc};
 
 use cranpose_core::{MutableState, rememberMutableStateOf};
+use cranpose_foundation::lazy::{LazyListScope, rememberLazyListState};
 use cranpose_testing::{
     PlacedSemanticsNode, create_headless_robot_test, placed_semantics_from_shell,
     robot::{RobotTestRule, TestRenderer},
 };
 use cranpose_ui::{
     AnimatedVisibility, Box, BoxSpec, Column, ColumnSpec, EnterTransition, ExitTransition,
-    GraphicsLayer, LayoutBox, LayoutDirection, Modifier, ProvideLayoutDirection, Rect, Row,
-    RowSpec, Size, VerticalAlignment, expand_horizontally, expand_vertically,
-    expand_vertically_with, shrink_horizontally, shrink_vertically, shrink_vertically_with,
-    slide_in_vertically,
+    GraphicsLayer, LayoutBox, LayoutDirection, LazyColumn, LazyColumnSpec, Modifier,
+    ProvideLayoutDirection, Rect, Row, RowSpec, Size, VerticalAlignment, expand_horizontally,
+    expand_vertically, expand_vertically_with, shrink_horizontally, shrink_vertically,
+    shrink_vertically_with, slide_in_vertically,
 };
 
 const CONTENT: Size = Size::new(40.0, 60.0);
@@ -26,6 +27,8 @@ const NEIGHBOUR: Size = Size::new(10.0, 10.0);
 enum Axis {
     Vertical,
     Horizontal,
+    // A lazy column, whose items keep the size they measured.
+    Lazy,
 }
 
 struct Screen {
@@ -51,6 +54,35 @@ fn tagged(tag: &'static str, size: Size) {
 
 // A neighbor, the panel that `panel(state)` composes with the tag "panel",
 // and a neighbor, along `axis`, in `direction`.
+fn stack(axis: Axis, state: MutableState<bool>, panel: Rc<dyn Fn(bool)>) {
+    match axis {
+        Axis::Vertical | Axis::Horizontal => {
+            let stacked = move || {
+                tagged("previous", NEIGHBOUR);
+                panel(state.get());
+                tagged("next", NEIGHBOUR);
+            };
+            match axis {
+                Axis::Horizontal => Row(Modifier::empty(), RowSpec::default(), stacked),
+                _ => Column(Modifier::empty(), ColumnSpec::default(), stacked),
+            };
+        }
+        Axis::Lazy => {
+            LazyColumn(
+                Modifier::empty().size(Size::new(300.0, 300.0)),
+                rememberLazyListState(),
+                LazyColumnSpec::default(),
+                move |scope| {
+                    let panel = Rc::clone(&panel);
+                    scope.item_keyed(Some(0), None, || tagged("previous", NEIGHBOUR));
+                    scope.item_keyed(Some(1), None, move || panel(state.get()));
+                    scope.item_keyed(Some(2), None, || tagged("next", NEIGHBOUR));
+                },
+            );
+        }
+    }
+}
+
 fn screen(
     axis: Axis,
     direction: LayoutDirection,
@@ -59,22 +91,12 @@ fn screen(
 ) -> Screen {
     let slot: Rc<Cell<Option<MutableState<bool>>>> = Rc::default();
     let installed = Rc::clone(&slot);
-    let panel = Rc::new(panel);
+    let panel: Rc<dyn Fn(bool)> = Rc::new(panel);
     let mut robot = create_headless_robot_test(300, 300, move || {
         let state = rememberMutableStateOf(|| initial);
         installed.set(Some(state));
         let panel = Rc::clone(&panel);
-        ProvideLayoutDirection(direction, move || {
-            let stacked = move || {
-                tagged("previous", NEIGHBOUR);
-                panel(state.get());
-                tagged("next", NEIGHBOUR);
-            };
-            match axis {
-                Axis::Vertical => Column(Modifier::empty(), ColumnSpec::default(), stacked),
-                Axis::Horizontal => Row(Modifier::empty(), RowSpec::default(), stacked),
-            };
-        });
+        ProvideLayoutDirection(direction, move || stack(axis, state, panel));
     });
     robot.shell_mut().set_semantics_enabled(true);
     Screen {
@@ -94,8 +116,8 @@ fn visibility(axis: Axis, enter: EnterTransition, exit: ExitTransition) -> impl 
         };
         let panel = Modifier::empty().test_tag("panel");
         match axis {
-            Axis::Vertical => Column(panel, ColumnSpec::default(), content),
             Axis::Horizontal => Row(panel, RowSpec::default(), content),
+            _ => Column(panel, ColumnSpec::default(), content),
         };
     }
 }
@@ -523,4 +545,106 @@ fn a_content_change_while_the_size_moves_retargets_from_the_size_that_shows() {
         "it turns from {reached} without a jump: {heights:?}"
     );
     assert_eq!(screen.rest().panel.height, sized(false).height);
+}
+
+#[test]
+fn an_item_of_a_lazy_column_that_expands_moves_the_item_after_it_on_each_frame() {
+    let mut screen = screen(
+        Axis::Lazy,
+        LayoutDirection::Ltr,
+        false,
+        visibility(Axis::Vertical, expand_vertically(), shrink_vertically()),
+    );
+    let frames = screen.run(true, 40);
+    let heights = panel_heights(&frames);
+    assert!(rises(&heights), "{heights:?}");
+    assert!(passes(&heights, 0.0, CONTENT.height), "{heights:?}");
+    // A lazy column keeps an item with no height a pixel from the next.
+    for frame in frames.iter().filter(|frame| frame.panel.height > 0.0) {
+        assert_eq!(frame.next.y, NEIGHBOUR.height + frame.panel.height);
+    }
+    assert_eq!(screen.rest().panel.height, CONTENT.height);
+}
+
+#[test]
+fn an_item_of_a_lazy_column_that_animates_its_content_size_moves_the_item_after_it() {
+    let mut screen = screen(Axis::Lazy, LayoutDirection::Ltr, false, animated);
+    let frames = screen.run(true, 80);
+    let heights = panel_heights(&frames);
+    assert!(rises(&heights), "{heights:?}");
+    assert!(
+        passes(&heights, sized(false).height, CONTENT.height),
+        "{heights:?}"
+    );
+    for frame in &frames {
+        assert_eq!(frame.next.y, NEIGHBOUR.height + frame.panel.height);
+    }
+    assert_eq!(screen.rest().panel.height, CONTENT.height);
+}
+
+// Clicks that the neighbor before the expansion takes, and that the
+// content takes, from a press on the neighbor while the content, which
+// grows from its bottom edge, still reaches over it.
+fn clicks_over_the_neighbor(expand: EnterTransition) -> (u32, u32) {
+    let neighbor = Rc::new(Cell::new(0));
+    let content = Rc::new(Cell::new(0));
+    let slot: Rc<Cell<Option<MutableState<bool>>>> = Rc::default();
+    let (installed, neighbor_taps, content_taps) =
+        (Rc::clone(&slot), Rc::clone(&neighbor), Rc::clone(&content));
+    let mut robot = create_headless_robot_test(300, 300, move || {
+        let visible = rememberMutableStateOf(|| false);
+        installed.set(Some(visible));
+        let (expand, neighbor_taps, content_taps) = (
+            expand.clone(),
+            Rc::clone(&neighbor_taps),
+            Rc::clone(&content_taps),
+        );
+        Column(Modifier::empty(), ColumnSpec::default(), move || {
+            let taps = Rc::clone(&neighbor_taps);
+            Box(
+                Modifier::empty()
+                    .size(Size::new(CONTENT.width, 20.0))
+                    .clickable(move |_| taps.set(taps.get() + 1)),
+                BoxSpec::default(),
+                || {},
+            );
+            let taps = Rc::clone(&content_taps);
+            AnimatedVisibility(
+                visible.get(),
+                expand.clone(),
+                shrink_vertically(),
+                move || {
+                    let taps = Rc::clone(&taps);
+                    Box(
+                        Modifier::empty()
+                            .size(CONTENT)
+                            .clickable(move |_| taps.set(taps.get() + 1)),
+                        BoxSpec::default(),
+                        || {},
+                    );
+                },
+            );
+        });
+    });
+    robot.wait_for_idle();
+    slot.get().expect("composed").set(true);
+    for _ in 0..8 {
+        robot.advance_time(16_666_667);
+    }
+    robot.click_at(CONTENT.width / 2.0, 5.0);
+    (neighbor.get(), content.get())
+}
+
+#[test]
+fn the_clip_of_an_expansion_cuts_the_pointer_hits_of_the_content_over_its_neighbor() {
+    assert_eq!(
+        clicks_over_the_neighbor(expand_vertically()),
+        (1, 0),
+        "the neighbor takes the press: the clip cuts the content that grows over it"
+    );
+    assert_eq!(
+        clicks_over_the_neighbor(expand_vertically().with_clip(false)),
+        (0, 1),
+        "without the clip the content is over the neighbor"
+    );
 }
