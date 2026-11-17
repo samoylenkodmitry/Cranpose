@@ -30,6 +30,12 @@ static GLOBAL: &StatsAlloc<System> = &INSTRUMENTED_SYSTEM;
 
 const PASSES: usize = 10;
 
+// The layout an app runs each frame while no screen reader is connected.
+const FRAME_LAYOUT: MeasureLayoutOptions = MeasureLayoutOptions {
+    collect_semantics: false,
+    build_layout_tree: false,
+};
+
 // The ids of the records directly under the root of `graph`, the cells
 // of the column.
 fn cell_ids(graph: &Scene) -> Vec<NodeId> {
@@ -241,10 +247,6 @@ fn a_row_scrolling_in_reuses_the_row_that_scrolled_out() {
 // while no screen reader is connected and the scene update together.
 fn ticker_frame_allocations(texts: usize, numbers: bool) -> usize {
     const WORDS: [&str; 4] = ["alpha", "bravo", "charlie", "delta"];
-    const FRAME_LAYOUT: MeasureLayoutOptions = MeasureLayoutOptions {
-        collect_semantics: false,
-        build_layout_tree: false,
-    };
     let tick_holder: Rc<RefCell<Option<MutableState<usize>>>> = Rc::default();
     let holder = Rc::clone(&tick_holder);
     let mut composition = cranpose_ui::run_test_composition(move || {
@@ -323,6 +325,43 @@ fn a_text_changing_each_frame_reuses_its_string_and_layout() {
             "{per_text} allocations per changing text a frame, numbers {numbers}"
         );
     }
+}
+
+// The allocations of a first frame of `texts` texts, each a number the app
+// formats from `first` up: composition, the layout an app runs while no
+// screen reader is connected and the scene built.
+fn first_frame_allocations(texts: usize, first: usize) -> usize {
+    let region = Region::new(GLOBAL);
+    let mut composition = cranpose_ui::run_test_composition(move || {
+        Column(Modifier::empty(), ColumnSpec::default(), move || {
+            for index in 0..texts {
+                Text(
+                    format!("{}", first + index),
+                    Modifier::empty(),
+                    TextStyle::default(),
+                );
+            }
+        });
+    });
+    let root = composition.root().expect("a composed root");
+    let handle = composition.runtime_handle();
+    let mut applier = composition.applier_mut();
+    applier.set_runtime_handle(handle);
+    let viewport = Size::new(400.0, 4000.0);
+    measure_layout_with_options(&mut applier, root, viewport, FRAME_LAYOUT).expect("layout");
+    Scene::new().rebuild_from_applier(&applier, root);
+    applier.clear_runtime_handle();
+    region.change().allocations
+}
+
+// A new text allocates its node, its modifier, its string and its layout,
+// besides the string the app formats.
+fn a_new_text_allocates_within_its_budget() {
+    let few = first_frame_allocations(10, 20_000);
+    let many = first_frame_allocations(110, 30_000);
+    let per_text = many.saturating_sub(few) as f64 / 100.0;
+    println!("allocations per new text: {per_text}");
+    assert!(per_text <= 16.15, "{per_text} allocations per new text");
 }
 
 // The recordings the runs under `layer` draw from, as a reader holds them.
@@ -439,6 +478,7 @@ fn scene_rebuilds_stay_within_their_allocation_budgets() {
     updating_one_cell_reuses_the_dirty_node_map();
     a_row_scrolling_in_reuses_the_row_that_scrolled_out();
     a_text_changing_each_frame_reuses_its_string_and_layout();
+    a_new_text_allocates_within_its_budget();
     redraws_reuse_their_recordings(drawn_around_content, "around content");
     redraws_reuse_their_recordings(drawn_inside_a_clip, "inside a clip");
     redraws_reuse_their_recordings(
