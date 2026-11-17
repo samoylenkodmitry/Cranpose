@@ -1066,7 +1066,7 @@ fn recyclable_emit_discards_mismatched_recycled_shell() {
         .entry(key)
         .or_default()
         .warm
-        .push(RecycledNode::from_shell(
+        .push_back(RecycledNode::from_shell(
             NodeId(0),
             Box::new(WrongNode),
             RecycleOrigin::Warm,
@@ -1134,7 +1134,7 @@ fn recyclable_emit_creates_fresh_id_when_recycled_stable_id_is_live() {
         .entry(key)
         .or_default()
         .warm
-        .push(RecycledNode::from_shell(
+        .push_back(RecycledNode::from_shell(
             live_id,
             Box::new(DesiredNode {
                 from_recycled_shell: true,
@@ -1364,6 +1364,48 @@ fn recycled_node_pool_limit_discards_oldest_shells() {
 
     assert_eq!(most_recent.stable_id(), third);
     assert_eq!(next_recent.stable_id(), second);
+}
+
+#[test]
+fn a_full_recycle_pool_keeps_its_newest_shells_over_many_removals() {
+    #[derive(Default)]
+    struct RingNode;
+
+    impl Node for RingNode {
+        fn recycle_key(&self) -> Option<TypeId> {
+            Some(TypeId::of::<Self>())
+        }
+
+        fn recycle_pool_limit(&self) -> Option<usize> {
+            Some(3)
+        }
+    }
+
+    let mut applier = test_applier();
+    let _keep = applier.create(Box::new(RingNode));
+    let removed: Vec<NodeId> = (0..11)
+        .map(|_| {
+            let id = applier.create(Box::new(RingNode));
+            applier.remove(id).expect("remove recyclable node");
+            id
+        })
+        .collect();
+    for _ in 0..3 {
+        applier.record_fresh_recyclable_creation(TypeId::of::<RingNode>());
+    }
+    applier.clear_recycled_nodes();
+
+    let taken: Vec<NodeId> = std::iter::from_fn(|| {
+        applier
+            .take_recycled_node(TypeId::of::<RingNode>())
+            .map(|recycled| recycled.stable_id())
+    })
+    .collect();
+    let newest: Vec<NodeId> = removed.iter().rev().take(3).copied().collect();
+    assert_eq!(
+        taken, newest,
+        "the pool keeps the newest shells, newest first"
+    );
 }
 
 #[test]
