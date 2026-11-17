@@ -57,6 +57,7 @@ mod focus_navigation;
 pub mod focus_order;
 mod focus_within;
 pub mod font_scale;
+mod gesture_velocity;
 mod interaction;
 mod key_event;
 mod keyboard_options;

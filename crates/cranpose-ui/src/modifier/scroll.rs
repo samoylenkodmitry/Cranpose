@@ -5,18 +5,14 @@ use std::{
 
 use cranpose_core::{NodeId, current_runtime_handle, internal::FrameCallbackRegistration};
 use cranpose_foundation::{
-    DRAG_THRESHOLD, DelegatableNode, MAX_FLING_VELOCITY, ModifierNode, ModifierNodeElement,
-    NodeCapabilities, NodeState, PointerButton, PointerButtons, ScrollId, VelocityTracker1D,
-    lazy::LazyListState, velocity_tracker::ASSUME_STOPPED_MS,
+    DRAG_THRESHOLD, DelegatableNode, ModifierNode, ModifierNodeElement, NodeCapabilities,
+    NodeState, PointerButton, PointerButtons, ScrollId, lazy::LazyListState,
 };
 use cranpose_ui_layout::Axis;
-use web_time::Instant;
 
-mod arrival_clock;
 mod drag_gesture;
 mod release_motion;
 mod scroll_target;
-use arrival_clock::ArrivalClock;
 use drag_gesture::{DragGesture, drag_gesture_input, nested_drag_gesture_input};
 use scroll_target::{NestedTarget, ScrollTarget};
 
@@ -27,6 +23,7 @@ use crate::{
     fling_animation::{
         FlingAnimation, MIN_FLING_VELOCITY, SettleAnimation, SpringParams, fling_rest_position,
     },
+    gesture_velocity::GestureVelocity,
     render_state::schedule_modifier_slices_repass,
     scroll::{
         ScrollElement, ScrollMotionContext, ScrollMotionContextKey, ScrollState,
@@ -67,15 +64,7 @@ struct ScrollGestureState {
 
     axis_locked_out: bool,
 
-    velocity_tracker: VelocityTracker1D,
-
-    gesture_start_time: Option<Instant>,
-
-    gesture_start_event_time_ms: Option<i64>,
-
-    last_velocity_sample_ms: Option<i64>,
-
-    arrival_clock: ArrivalClock,
+    velocity: GestureVelocity,
 
     fling_animation: Option<FlingAnimation>,
 
@@ -98,11 +87,7 @@ impl Default for ScrollGestureState {
             is_dragging: false,
             interrupted_animation: false,
             axis_locked_out: false,
-            velocity_tracker: VelocityTracker1D::new(),
-            gesture_start_time: None,
-            gesture_start_event_time_ms: None,
-            last_velocity_sample_ms: None,
-            arrival_clock: ArrivalClock::default(),
+            velocity: GestureVelocity::new(),
             fling_animation: None,
             is_overscrolling: false,
             settle_animation: None,
@@ -128,28 +113,6 @@ impl ScrollGestureState {
                 .wheel_settle_watcher
                 .as_ref()
                 .is_some_and(|watcher| watcher.is_running.get())
-    }
-
-    /// The velocity a gesture ends with, zero when the finger rested before
-    /// it lifted.
-    fn release_velocity(&mut self, release_time_ms: Option<i64>) -> f32 {
-        let Some(start) = self.gesture_start_time else {
-            return 0.0;
-        };
-        let release_sample_ms = release_time_ms
-            .zip(self.gesture_start_event_time_ms)
-            .map_or_else(
-                || start.elapsed().as_millis() as i64,
-                |(release_ms, start_ms)| release_ms - start_ms,
-            );
-        let rested_before_release = self
-            .last_velocity_sample_ms
-            .is_some_and(|last_sample_ms| release_sample_ms - last_sample_ms > ASSUME_STOPPED_MS);
-        if rested_before_release {
-            return 0.0;
-        }
-        self.velocity_tracker
-            .calculate_velocity_with_max(MAX_FLING_VELOCITY)
     }
 }
 
@@ -246,15 +209,9 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
         gs.last_position = Some(position);
         gs.is_dragging = false;
         gs.axis_locked_out = false;
-        gs.velocity_tracker.reset();
-        gs.gesture_start_time = Some(Instant::now());
-        gs.arrival_clock = ArrivalClock::default();
-        gs.gesture_start_event_time_ms = time_ms;
         gs.is_overscrolling = self.overscroll.offset().abs() > 0.001;
-
-        gs.velocity_tracker
-            .add_data_point(0, self.along_axis(event.global_position));
-        gs.last_velocity_sample_ms = Some(0);
+        gs.velocity
+            .begin(time_ms, self.along_axis(event.global_position));
 
         false
     }
@@ -276,10 +233,7 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
             gs.last_position = None;
             gs.is_dragging = false;
             gs.axis_locked_out = false;
-            gs.gesture_start_time = None;
-            gs.gesture_start_event_time_ms = None;
-            gs.last_velocity_sample_ms = None;
-            gs.velocity_tracker.reset();
+            gs.velocity.clear();
             self.motion_context.set_active(false);
             return false;
         }
@@ -319,33 +273,8 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
         gs.last_position = Some(position);
 
         // In the window: an element that follows the finger barely moves under it.
-        let pos = self.along_axis(event.global_position);
-        let event_sample_ms = gs
-            .gesture_start_event_time_ms
-            .zip(time_ms)
-            .map(|(start_ms, now_ms)| now_ms - start_ms);
-        let sample_ms = if let Some(event_sample_ms) = event_sample_ms {
-            Some(match gs.last_velocity_sample_ms {
-                Some(last_sample_ms) => event_sample_ms.max(last_sample_ms),
-                None => event_sample_ms.max(0),
-            })
-        } else if let Some(start_time) = gs.gesture_start_time {
-            let last_sample_ms = gs.last_velocity_sample_ms;
-            Some(
-                gs.arrival_clock
-                    .sample_ms(Instant::now(), start_time, last_sample_ms),
-            )
-        } else {
-            None
-        };
-        if let Some(sample_ms) = sample_ms {
-            log::trace!(
-                target: "cranpose::velocity",
-                "sample t={sample_ms}ms pos={pos:.2} event_time={time_ms:?}"
-            );
-            gs.velocity_tracker.add_data_point(sample_ms, pos);
-            gs.last_velocity_sample_ms = Some(sample_ms);
-        }
+        gs.velocity
+            .add(time_ms, self.along_axis(event.global_position));
 
         if gs.is_dragging {
             drop(gs);
@@ -429,10 +358,7 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
             gs.last_position = None;
             gs.is_dragging = false;
             gs.axis_locked_out = false;
-            gs.gesture_start_time = None;
-            gs.gesture_start_event_time_ms = None;
-            gs.last_velocity_sample_ms = None;
-            gs.velocity_tracker.reset();
+            gs.velocity.clear();
         }
 
         self.motion_context.activate_for_current_frame();
