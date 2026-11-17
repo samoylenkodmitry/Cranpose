@@ -47,10 +47,10 @@ pub(crate) enum RetainedSlotChildren {
 
 pub(crate) type SubcomposePlaceable = cranpose_ui_layout::Placeable;
 
-type RetainedMeasureLookup<'a> = Box<dyn FnMut(NodeId) -> Option<MeasuredNode> + 'a>;
+type RetainedMeasureLookup<'a> = Box<dyn FnMut(NodeId) -> Option<Rc<MeasuredNode>> + 'a>;
 
 // The children a pass that composes measured, by node.
-pub(crate) type MeasuredChildren = RefCell<HashMap<NodeId, MeasuredNode>>;
+pub(crate) type MeasuredChildren = RefCell<HashMap<NodeId, Rc<MeasuredNode>>>;
 
 // A measure scope that lays out lazy items' roots with their measurements:
 // the scope of a pass that composes, and of one that keeps the slots of the
@@ -652,7 +652,7 @@ impl SubcomposeMeasureScopeImpl<'_> {
         &mut self,
         child: SubcomposeChild,
         constraints: Constraints,
-    ) -> (SubcomposePlaceable, Option<MeasuredNode>) {
+    ) -> (SubcomposePlaceable, Option<Rc<MeasuredNode>>) {
         let placeable = self.measure(child, constraints);
         let retained = (self.retained_measure_lookup)(child.node_id());
         (placeable, retained)
@@ -1583,7 +1583,7 @@ struct SubcomposeLayoutNodeInner {
     node_id: Option<NodeId>,
     last_placements: Rc<Vec<NodeId>>,
     measure_scratch: MeasureScratch,
-    measured_children_scratch: Rc<RefCell<HashMap<NodeId, MeasuredNode>>>,
+    measured_children_scratch: Rc<RefCell<HashMap<NodeId, Rc<MeasuredNode>>>>,
     captured_context: Option<CapturedCompositionContext>,
     density: crate::density::Density,
 }

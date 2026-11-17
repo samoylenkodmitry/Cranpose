@@ -299,7 +299,7 @@ impl<'a> LazyListItemMeasureInputs<'a> {
 
 /// The measurements of all an item's roots, in the order of its roots: what
 /// [`LazyItemRoots::measurements`] holds as `dyn Any`.
-pub(crate) type RootMeasurements = SmallVec<[MeasuredNode; 4]>;
+pub(crate) type RootMeasurements = SmallVec<[Rc<MeasuredNode>; 4]>;
 
 /// The measurement of each of `roots`, when the item holds one for each.
 pub(crate) fn root_measurements(roots: &LazyItemRoots) -> Option<&RootMeasurements> {
@@ -518,7 +518,7 @@ fn measure_lazy_list_children(
                 width: placeable.width(),
                 height: placeable.height(),
             },
-            MeasuredNode::size,
+            |measured| measured.size(),
         );
         let (main, cross) = if context.axis.is_vertical() {
             (size.height, size.width)

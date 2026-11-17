@@ -36,7 +36,7 @@ use cranpose_ui_layout::Constraints;
 use smallvec::SmallVec;
 
 use super::{
-    ForParent, LayoutBuilderState, MeasuredChild, MeasuredNode,
+    ForParent, LayoutBuilderState, MeasuredNode,
     live_layout_node::{LiveLayoutNode, read_live_layout_node},
 };
 use crate::widgets::nodes::{LayoutDirt, LayoutNode, NodeCache};
@@ -185,7 +185,7 @@ enum Climb {
     // walk measured an ancestor again on its way there.
     Stopped { measured_ancestor: bool },
     // At the root, which measured again.
-    Root(MeasuredNode),
+    Root(Rc<MeasuredNode>),
     // At a node the walk up cannot measure: the pass walks down.
     WalkDown,
 }
@@ -197,7 +197,7 @@ impl LayoutBuilderState {
         self: &Rc<Self>,
         root: NodeId,
         constraints: Constraints,
-    ) -> Result<MeasuredNode, NodeError> {
+    ) -> Result<Rc<MeasuredNode>, NodeError> {
         // Each measure's state reads are kept for its node.
         self.context.measure_reads.observe(|| {
             match self.measure_dirty_nodes_first(root, constraints)? {
@@ -214,7 +214,7 @@ impl LayoutBuilderState {
         self: &Rc<Self>,
         root: NodeId,
         constraints: Constraints,
-    ) -> Result<Option<MeasuredNode>, NodeError> {
+    ) -> Result<Option<Rc<MeasuredNode>>, NodeError> {
         let mut dirty = std::mem::take(&mut self.frame_arena.borrow_mut().dirty_roots);
         let complete = match self.applier.try_borrow_typed() {
             Ok(mut applier) => applier.take_layout_dirt_roots(&mut dirty),
@@ -238,7 +238,7 @@ impl LayoutBuilderState {
         root: NodeId,
         constraints: Constraints,
         dirty: &[NodeId],
-    ) -> Result<Option<MeasuredNode>, NodeError> {
+    ) -> Result<Option<Rc<MeasuredNode>>, NodeError> {
         if dirty.is_empty() {
             return Ok(None);
         }
@@ -265,9 +265,9 @@ impl LayoutBuilderState {
         root: NodeId,
         constraints: Constraints,
         dirty: &[NodeId],
-        mut root_measured: MeasuredNode,
+        mut root_measured: Rc<MeasuredNode>,
         cleared: &mut Cleared,
-    ) -> Result<Option<MeasuredNode>, NodeError> {
+    ) -> Result<Option<Rc<MeasuredNode>>, NodeError> {
         let mut starts: SmallVec<[Start; 4]> = SmallVec::new();
         for &node in dirty {
             match self.plan(node, root, cleared) {
@@ -317,7 +317,7 @@ impl LayoutBuilderState {
         &self,
         root: NodeId,
         constraints: Constraints,
-    ) -> Option<MeasuredNode> {
+    ) -> Option<Rc<MeasuredNode>> {
         let mut applier = self.applier.try_borrow_typed().ok()?;
         applier
             .with_node::<LayoutNode, _>(root, |node| {
@@ -509,7 +509,7 @@ impl LayoutBuilderState {
         &self,
         child: NodeId,
         parent: NodeId,
-        measured: &MeasuredNode,
+        measured: &Rc<MeasuredNode>,
         changed_itself: bool,
     ) -> Result<(bool, Option<NodeId>), NodeError> {
         let mut applier =
@@ -519,24 +519,18 @@ impl LayoutBuilderState {
                     id: parent,
                     reason: "layout applier borrowed",
                 })?;
-        let (parent_data, in_parent) = read_live_layout_node(&mut applier, child, |child| {
+        let parent_data = read_live_layout_node(&mut applier, child, |child| {
             child.stay_placed(parent, &self.context);
-            (
-                changed_itself.then(|| child.parent_data()),
-                child.in_parent(),
-            )
+            changed_itself.then(|| child.parent_data())
         })?
-        .unwrap_or_default();
+        .flatten();
         let taken = read_live_layout_node(&mut applier, parent, |node| {
             let unaffected = match &node {
                 LiveLayoutNode::Layout(node) => {
                     Self::lays_out_as_before(node, child, measured, parent_data.as_ref())
                 }
                 LiveLayoutNode::Subcompose(node) => {
-                    // The record of a child the last measure did not place
-                    // is from an earlier measure.
-                    let placed = node.with_active_children(|children| children.contains(&child));
-                    keeps_measurement(node.cache(), in_parent.filter(|_| placed), measured)
+                    keeps_measurement(node.cache(), child, measured)
                 }
             };
             if !unaffected {
@@ -565,7 +559,7 @@ impl LayoutBuilderState {
         measured: &MeasuredNode,
         parent_data: Option<&crate::modifier::SharedParentData>,
     ) -> bool {
-        let in_parent = {
+        {
             let runtime_state = parent.layout_runtime_state().borrow();
             let Some(record) = runtime_state
                 .child_states()
@@ -583,9 +577,8 @@ impl LayoutBuilderState {
             {
                 return false;
             }
-            record.in_parent.get()
-        };
-        keeps_measurement(parent.cache(), in_parent, measured)
+        }
+        keeps_measurement(parent.cache(), child, measured)
     }
 }
 
@@ -632,20 +625,15 @@ fn own_constraints(cache: &NodeCache) -> Option<Constraints> {
         .flatten()
 }
 
-// Whether the node whose cache is `cache` keeps its measurement now that a
-// child, of which its last measure kept `in_parent`, measured `measured`:
-// the child reads the same for it, or only its size changed and the
-// measurement ignores its children's sizes. Such a measurement then holds
-// for its own constraints alone, as the other ones its hold names may not
-// take the new size.
-fn keeps_measurement(
-    cache: &NodeCache,
-    in_parent: Option<MeasuredChild>,
-    measured: &MeasuredNode,
-) -> bool {
+// Whether the node whose cache is `cache` keeps its measurement now that
+// `child` measured `measured`: the child reads the same for it, or only
+// its size changed and the measurement ignores its children's sizes. Such
+// a measurement then holds for its own constraints alone, as the other
+// ones its hold names may not take the new size.
+fn keeps_measurement(cache: &NodeCache, child: NodeId, measured: &MeasuredNode) -> bool {
     let now = ForParent::of(measured);
-    let resized = cache.read_measurement(|_, ignores_child_sizes| {
-        let previous = in_parent?;
+    let resized = cache.read_measurement(|held, ignores_child_sizes| {
+        let previous = held.children.iter().find(|entry| entry.node_id == child)?;
         if previous.for_parent.same_as(&now) {
             return Some(false);
         }

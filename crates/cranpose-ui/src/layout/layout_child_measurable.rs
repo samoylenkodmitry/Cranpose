@@ -87,9 +87,11 @@ impl LayoutChildMeasurable {
 
 impl Measurable for LayoutChildMeasurable {
     fn measured_hold(&self) -> Option<(Size, cranpose_ui_layout::ConstraintsHold)> {
-        let measured = self.parts.record().measured.get()?;
-        let (held, hold) = self.parts.cache().held_with_hold()?;
-        (held == measured).then(|| (measured.size_for_parent(), hold))
+        read_cell(&self.parts.record().measured, |measured| {
+            let measured = measured.as_ref()?;
+            let hold = self.parts.cache().hold_of(measured)?;
+            Some((measured.size_for_parent(), hold))
+        })
     }
 
     fn measure(&self, constraints: Constraints) -> Placeable {

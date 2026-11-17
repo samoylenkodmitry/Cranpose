@@ -4,7 +4,6 @@
 use cranpose_core::{Applier, MemoryApplier, Node, NodeError, NodeId};
 use cranpose_foundation::SemanticsConfiguration;
 
-use super::MeasuredChild;
 use crate::{
     render_state::AppContext,
     subcompose_layout::SubcomposeLayoutNode,
@@ -76,16 +75,6 @@ impl LiveLayoutNode<'_> {
 
     pub(super) fn is_placed(&self) -> bool {
         self.parts().layout_state().is_placed()
-    }
-
-    // What the parent's last measure kept of the node.
-    pub(super) fn in_parent(&self) -> Option<MeasuredChild> {
-        self.parts().record().in_parent.get()
-    }
-
-    // Notes what the parent's measure keeps of the node.
-    pub(super) fn keep_in_parent(&self, kept: MeasuredChild) {
-        self.parts().record().in_parent.set(Some(kept));
     }
 
     pub(super) fn parent_data(&self) -> crate::modifier::SharedParentData {

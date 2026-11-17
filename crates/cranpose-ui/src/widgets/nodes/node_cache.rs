@@ -3,6 +3,7 @@
 use std::{
     cell::{Cell, RefCell},
     hash::{Hash, Hasher},
+    rc::Rc,
 };
 
 use cranpose_core::PackedU64;
@@ -11,10 +12,10 @@ use cranpose_ui_layout::Constraints;
 use super::layout_dirt::{DescendantDirt, LayoutDirt};
 use crate::layout::MeasuredNode;
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct MeasurementCacheEntry {
     constraints: Constraints,
-    measured: MeasuredNode,
+    measured: Rc<MeasuredNode>,
     /// The other incoming constraints the measurement holds for.
     hold: Option<cranpose_ui_layout::ConstraintsHold>,
     /// Whether no child's size entered the measurement: see
@@ -74,9 +75,10 @@ impl Hash for IntrinsicKind {
 struct NodeCacheState {
     epoch: PackedU64,
     measurement: Option<MeasurementCacheEntry>,
-    // The measurement the cache last let go of. It is never served for a
-    // measure; it still says how the node last measured.
-    retired: Option<MeasuredNode>,
+    /// The measurement the cache last let go of. It is never served: the
+    /// node's next measure takes it to fill its memory in place of new
+    /// allocations.
+    spare: Option<Rc<MeasuredNode>>,
     // The intrinsic sizes a parent read, `None` until one reads any: most
     // nodes never answer one.
     #[expect(
@@ -97,7 +99,7 @@ impl NodeCacheState {
 
     fn retire_measurement(&mut self) {
         if let Some(entry) = self.measurement.take() {
-            self.retired = Some(entry.measured);
+            self.spare = Some(entry.measured);
         }
     }
 }
@@ -219,21 +221,24 @@ impl NodeCache {
 
     /// The node's last measurement, whatever constraints it was made under:
     /// the one the cache holds, or else the one it last let go of.
-    pub(crate) fn held_measurement(&self) -> Option<MeasuredNode> {
+    pub(crate) fn held_measurement(&self) -> Option<Rc<MeasuredNode>> {
         let state = self.cache.borrow();
         state
             .measurement
-            .map(|entry| entry.measured)
-            .or(state.retired)
+            .as_ref()
+            .map(|entry| &entry.measured)
+            .or(state.spare.as_ref())
+            .cloned()
     }
 
-    /// Lets go of the measurement the cache last let go of, or else of the
-    /// one it holds, for a measure of the node that replaces it.
-    pub(crate) fn clear_measurement(&self) {
+    /// Takes the measurement the cache last let go of, or else the one it
+    /// holds, for a measure of the node that replaces it.
+    pub(crate) fn take_previous_measurement(&self) -> Option<Rc<MeasuredNode>> {
         let mut state = self.cache.borrow_mut();
-        if state.retired.take().is_none() {
-            state.measurement = None;
-        }
+        state
+            .spare
+            .take()
+            .or_else(|| state.measurement.take().map(|entry| entry.measured))
     }
 
     /// Drops the intrinsic sizes, which depend on every node below: one of
@@ -250,15 +255,16 @@ impl NodeCache {
     /// The measurement the cache holds for `constraints`: one made under
     /// them, or one whose hold contains them. A caller asks only while the
     /// node and everything below it are clean.
-    pub(crate) fn get_measurement(&self, constraints: Constraints) -> Option<MeasuredNode> {
-        self.cache
-            .borrow()
+    pub(crate) fn get_measurement(&self, constraints: Constraints) -> Option<Rc<MeasuredNode>> {
+        let state = self.cache.borrow();
+        state
             .measurement
+            .as_ref()
             .filter(|entry| {
                 entry.constraints == constraints
                     || entry.hold.is_some_and(|hold| hold.contains(constraints))
             })
-            .map(|entry| entry.measured)
+            .map(|entry| Rc::clone(&entry.measured))
     }
 
     /// The constraints of the measurement the cache holds.
@@ -266,6 +272,7 @@ impl NodeCache {
         self.cache
             .borrow()
             .measurement
+            .as_ref()
             .map(|entry| entry.constraints)
     }
 
@@ -274,23 +281,28 @@ impl NodeCache {
         self.cache.borrow().intrinsics_read
     }
 
-    /// The measurement the cache holds, with the other constraints it holds
-    /// for.
-    pub(crate) fn held_with_hold(
+    /// The hold of the measurement the cache has, when it is `measured`.
+    pub(crate) fn hold_of(
         &self,
-    ) -> Option<(MeasuredNode, cranpose_ui_layout::ConstraintsHold)> {
-        let entry = self.cache.borrow().measurement?;
-        Some((entry.measured, entry.hold?))
+        measured: &Rc<MeasuredNode>,
+    ) -> Option<cranpose_ui_layout::ConstraintsHold> {
+        self.cache
+            .borrow()
+            .measurement
+            .as_ref()
+            .filter(|entry| Rc::ptr_eq(&entry.measured, measured))
+            .and_then(|entry| entry.hold)
     }
 
-    /// Stores `measured` for `constraints`. When the cache holds the same
-    /// measurement, its hold stays with it, as does whether it ignores its
+    /// Stores `measured` for `constraints`. The hold of a measurement the
+    /// cache already has stays with it, as does whether it ignores its
     /// children's sizes.
-    pub(crate) fn store_measurement(&self, constraints: Constraints, measured: MeasuredNode) {
+    pub(crate) fn store_measurement(&self, constraints: Constraints, measured: Rc<MeasuredNode>) {
         let mut state = self.cache.borrow_mut();
         let (hold, ignores_child_sizes) = state
             .measurement
-            .filter(|entry| entry.measured == measured)
+            .as_ref()
+            .filter(|entry| Rc::ptr_eq(&entry.measured, &measured))
             .map_or((None, false), |entry| {
                 (entry.hold, entry.ignores_child_sizes)
             });
@@ -307,7 +319,7 @@ impl NodeCache {
     pub(crate) fn store_held_measurement(
         &self,
         constraints: Constraints,
-        measured: MeasuredNode,
+        measured: Rc<MeasuredNode>,
         hold: Option<cranpose_ui_layout::ConstraintsHold>,
         ignores_child_sizes: bool,
     ) {
@@ -325,7 +337,7 @@ impl NodeCache {
     pub(crate) fn store_resized_measurement(
         &self,
         constraints: Constraints,
-        measured: MeasuredNode,
+        measured: Rc<MeasuredNode>,
     ) {
         self.store_held_measurement(constraints, measured, None, true);
     }
@@ -343,12 +355,14 @@ impl NodeCache {
             .map(|entry| read(&entry.measured, entry.ignores_child_sizes))
     }
 
-    /// Whether the measurement the cache holds ignores its children's sizes.
-    pub(crate) fn ignores_child_sizes(&self) -> bool {
+    /// Whether `measured`, the measurement the cache has, ignores its
+    /// children's sizes.
+    pub(crate) fn ignores_child_sizes_of(&self, measured: &Rc<MeasuredNode>) -> bool {
         self.cache
             .borrow()
             .measurement
-            .is_some_and(|entry| entry.ignores_child_sizes)
+            .as_ref()
+            .is_some_and(|entry| entry.ignores_child_sizes && Rc::ptr_eq(&entry.measured, measured))
     }
 
     pub(crate) fn get_intrinsic(&self, kind: &IntrinsicKind) -> Option<f32> {
