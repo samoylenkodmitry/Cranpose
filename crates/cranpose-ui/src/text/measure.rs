@@ -502,7 +502,7 @@ impl TextService {
         };
         self.layouts.borrow_mut().begin_pass(idle_passes, headroom);
         self.intrinsics.borrow_mut().begin_pass(idle_passes, drop);
-        self.layouter.borrow_mut().set_memory_headroom(headroom);
+        self.layouter.borrow_mut().begin_pass(headroom);
     }
 
     // Drops the retired layouts and strings: the texts rest.
