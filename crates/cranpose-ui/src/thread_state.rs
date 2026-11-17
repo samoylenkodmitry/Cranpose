@@ -21,6 +21,7 @@ use crate::{
     text::{draw_scope_text::DrawnTextStyles, shared_plain_text::SharedPlainText},
     text_modifier_node::RecentTextStyles,
     unhandled_keys::KeyHandler,
+    widgets::held_policy::RecentPolicies,
 };
 
 // Each static path string with its parse, `None` when the data does not parse.
@@ -96,6 +97,7 @@ pub(crate) struct UiThreadState {
     // whether the chain gives any.
     pub(crate) spare_slices: Cell<Option<ModifierNodeSlices>>,
     pub(crate) empty_measure_policy: OnceCell<Rc<dyn MeasurePolicy>>,
+    pub(crate) recent_policies: RecentPolicies,
     // The parts every layout node shell of the thread shares.
     pub(crate) shell_parts: OnceCell<Rc<crate::widgets::nodes::LayoutParts>>,
     pub(crate) node_densities: RefCell<[Option<Rc<crate::density::Density>>; 2]>,
@@ -126,6 +128,7 @@ impl UiThreadState {
             empty_slices: OnceCell::new(),
             spare_slices: Cell::new(None),
             empty_measure_policy: OnceCell::new(),
+            recent_policies: RecentPolicies::new(),
             shell_parts: OnceCell::new(),
             node_densities: RefCell::new([None, None]),
             draw_text_measurer: OnceCell::new(),
