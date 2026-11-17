@@ -371,10 +371,18 @@ fn composing_a_row_of_boxes_allocates_within_its_budget() {
     assert!(per_row <= 11, "{per_row} allocations a row");
 }
 
-/// A modifier chain built link by link keeps its elements in one shared
-/// allocation it extends in place, so each link costs its element alone.
-fn a_modifier_chain_allocates_its_elements_and_one_shared_box() {
+// A modifier holds a plain element by value: one alone takes no
+// allocation. A chain of them built link by link extends one shared list in
+// place, and a chain built after the last one was let go takes that list
+// again: a body that composes again builds its modifiers with no allocation.
+fn a_modifier_chain_of_plain_elements_takes_the_list_of_the_last_one() {
     drop(Modifier::empty().padding(1.0).background(Color::RED));
+    let region = Region::new(GLOBAL);
+    let modifier = Modifier::empty().padding(1.0);
+    let change = region.change();
+    drop(modifier);
+    assert_eq!(change.allocations, 0, "{change:?}");
+
     let region = Region::new(GLOBAL);
     let modifier = Modifier::empty()
         .padding(1.0)
@@ -382,7 +390,27 @@ fn a_modifier_chain_allocates_its_elements_and_one_shared_box() {
         .rounded_corners(3.0);
     let change = region.change();
     drop(modifier);
-    assert_eq!(change.allocations, 4, "{change:?}");
+    assert_eq!(change.allocations, 0, "{change:?}");
+}
+
+// A node whose chain draws one background keeps that draw in the one block
+// of its slices: collecting them allocates the block alone.
+fn slices_of_one_background_allocate_one_block() {
+    let context = cranpose_ui::AppContext::new();
+    let _scope = context.enter_scope();
+    let node = || {
+        cranpose_ui::LayoutNode::new(
+            Modifier::empty().background(Color::RED).padding(1.0),
+            Rc::new(StackedRows { reversed: false }),
+        )
+    };
+    drop(node().modifier_slices_snapshot());
+    let fresh = node();
+    let region = Region::new(GLOBAL);
+    let slices = fresh.modifier_slices_snapshot();
+    let change = region.change();
+    assert_eq!(slices.draw_commands().len(), 1);
+    assert_eq!(change.allocations, 1, "{change:?}");
 }
 
 fn resolving_text_direction_does_not_allocate() {
@@ -482,8 +510,9 @@ fn layout_and_modifiers_stay_within_their_allocation_budgets() {
     an_animation_frame_allocates_only_its_recomposition();
     composing_a_row_of_boxes_allocates_within_its_budget();
     if !cfg!(feature = "inspection") {
-        a_modifier_chain_allocates_its_elements_and_one_shared_box();
+        a_modifier_chain_of_plain_elements_takes_the_list_of_the_last_one();
     }
+    slices_of_one_background_allocate_one_block();
     resolving_text_direction_does_not_allocate();
     owned_bitmaps_allocate_only_metadata_and_clones_share_storage();
     owned_bitmaps_do_not_retain_spare_pixel_capacity();

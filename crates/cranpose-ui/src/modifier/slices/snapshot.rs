@@ -12,7 +12,7 @@ use smallvec::SmallVec;
 
 use super::{
     super::{ModifierChainHandle, coordinator_rect::CoordinatorRect},
-    DrawSite, FieldText, ModifierNodeSlices, SliceText,
+    DrawSite, FieldText, ModifierNodeSlices, SliceBody, SliceText,
 };
 use crate::{
     draw::DrawCommand,
@@ -116,7 +116,9 @@ fn collect_modifier_slices_into(
     parts: Option<&Rc<LayoutParts>>,
     density: f32,
 ) {
-    slices.clear();
+    let mut draws = slices.body.take_draws();
+    slices.clear_parts();
+    let mut text = None;
 
     let caps = chain.capabilities();
     let has_pointer = caps.intersects(NodeCapabilities::POINTER_INPUT);
@@ -124,6 +126,7 @@ fn collect_modifier_slices_into(
     let has_layout = caps.intersects(NodeCapabilities::LAYOUT);
 
     if !has_pointer && !has_draw && !has_layout {
+        slices.body = SliceBody::collected(draws, text);
         return;
     }
 
@@ -146,7 +149,8 @@ fn collect_modifier_slices_into(
             displaceable: has_layout,
             modifier_index,
         };
-        if let Some(insets) = backgrounds.take_plain(&node_ref, site, density, slices) {
+        if let Some(insets) = backgrounds.take_plain(&node_ref, site, density, (slices, &mut draws))
+        {
             padding += insets;
             layout_ordinal += 1;
         }
@@ -173,7 +177,7 @@ fn collect_modifier_slices_into(
                     displaceable: has_layout,
                     modifier_index,
                 };
-                collect_draw_node(node, &draw, slices);
+                collect_draw_node(node, &draw, slices, &mut draws);
             }
 
             // `InPlaceReach::of` names the layout elements whose values no
@@ -202,34 +206,32 @@ fn collect_modifier_slices_into(
                 }
 
                 if let Some(text_node) = any.downcast_ref::<TextModifierNode>() {
-                    slices.text_coordinator =
-                        Some(CoordinatorRect::new(parts, layout_ordinal, padding));
-                    slices.text = Some(SliceText::Text(text_node.prepared_layout_handle()));
+                    text = Some((
+                        SliceText::Text(text_node.prepared_layout_handle()),
+                        CoordinatorRect::new(parts, layout_ordinal, padding),
+                    ));
                 }
 
                 if let Some(text_field_node) = any.downcast_ref::<TextFieldModifierNode>() {
-                    slices.text = Some(SliceText::Field(Rc::new(FieldText {
+                    let field = SliceText::Field(Rc::new(FieldText {
                         content: text_field_node.shown_text(),
                         style: text_field_node.style().clone(),
                         layout: text_field_node.layout_handle(),
                         pan: text_field_node.text_pan_resolver(),
-                    })));
+                    }));
                     slices.rare_mut().text_window = Some(text_field_node.window_sink());
 
                     let coordinator = CoordinatorRect::new(parts, layout_ordinal, padding);
                     text_field_node.set_content_origin(coordinator.clone());
-                    slices.text_coordinator = Some(coordinator);
+                    text = Some((field, coordinator));
                 }
                 layout_ordinal += 1;
             }
         });
     }
 
-    backgrounds.insert_into(slices);
-    // The slices stay for as long as the chain does, and so would the room
-    // growth left past the commands. A collect into these again pushes as
-    // many commands, mostly, which then fit without growing.
-    slices.draw_commands.shrink_to_fit();
+    backgrounds.insert_into(slices, &mut draws);
+    slices.body = SliceBody::collected(draws, text);
 }
 
 /// The chain's backgrounds as the walk finds them. Each draws at its place in
@@ -274,13 +276,13 @@ impl Backgrounds {
         &mut self,
         color: crate::modifier::Color,
         coordinator: CoordinatorRect,
-        slices: &ModifierNodeSlices,
+        (slices, draws): (&ModifierNodeSlices, &[DrawCommand]),
     ) {
         let corner_shape = self.pending_shape.take();
         self.slots.push(BackgroundSlot {
             color,
             coordinator,
-            insert_index: slices.draw_commands.len(),
+            insert_index: draws.len(),
             precedes_layer: slices.layer.is_none(),
             corner_shape,
         });
@@ -295,20 +297,23 @@ impl Backgrounds {
         node_ref: &cranpose_foundation::ModifierChainNodeRef<'_>,
         site: PlainSite<'_>,
         density: f32,
-        slices: &mut ModifierNodeSlices,
+        (slices, draws): (&mut ModifierNodeSlices, &mut Vec<DrawCommand>),
     ) -> Option<EdgeInsets> {
         let (fns, words) = node_ref.plain_words()?;
         if let Some(background) = fns.read::<BackgroundElement>(words) {
-            self.push(background.color(), site.coordinator(), slices);
+            self.push(background.color(), site.coordinator(), (slices, draws));
         } else if let Some(shape) = fns.read::<CornerShapeElement>(words) {
             self.shape(shape.shape());
         } else if fns.read::<ClipToBoundsElement>(words).is_some() {
-            slices.layer_mut().clip_to_bounds = true;
-            slices.enter_layer(&DrawSite {
-                coordinator: site.coordinator(),
-                displaceable: site.displaceable,
-                modifier_index: site.modifier_index,
-            });
+            slices.layer_mut(draws.len()).clip_to_bounds = true;
+            slices.enter_layer(
+                &DrawSite {
+                    coordinator: site.coordinator(),
+                    displaceable: site.displaceable,
+                    modifier_index: site.modifier_index,
+                },
+                draws.len(),
+            );
         }
         fns.capabilities()
             .contains(NodeCapabilities::LAYOUT)
@@ -328,12 +333,14 @@ impl Backgrounds {
 
     /// Inserts every background at its place, the last first so the places
     /// of those before it still hold.
-    fn insert_into(self, slices: &mut ModifierNodeSlices) {
+    fn insert_into(mut self, slices: &mut ModifierNodeSlices, draws: &mut Vec<DrawCommand>) {
         slices.set_corner_shape(self.last_shape);
         // Room for them all at once: an insert into a full list makes room
-        // for four, which the shrink after the walk gives back.
-        slices.draw_commands.reserve_exact(self.slots.len());
-        for slot in self.slots.into_iter().rev() {
+        // for four.
+        draws.reserve_exact(self.slots.len());
+        // Drained in place: the slots move one at a time, not the whole
+        // inline list into an iterator.
+        for slot in self.slots.drain(..).rev() {
             let BackgroundSlot {
                 color,
                 coordinator,
@@ -342,8 +349,8 @@ impl Backgrounds {
                 corner_shape,
             } = slot;
             slices.insert_background_draw(
-                insert_index,
-                precedes_layer,
+                draws,
+                (insert_index, precedes_layer),
                 DrawCommand::Background(crate::BackgroundDraw::new(
                     color,
                     corner_shape,
@@ -375,6 +382,7 @@ fn collect_draw_node(
     node: &dyn cranpose_foundation::ModifierNode,
     site: &DrawSite,
     slices: &mut ModifierNodeSlices,
+    draws: &mut Vec<DrawCommand>,
 ) {
     let any = node.as_any();
     // The node's type, asked once: each check below compares it, where a
@@ -385,7 +393,7 @@ fn collect_draw_node(
     }
 
     if let Some(commands) = as_kind::<DrawCommandNode>(any, kind) {
-        slices.draw_commands.extend(
+        draws.extend(
             commands
                 .observed_commands(site.modifier_index)
                 .map(|command| placed_draw_command(command, site)),
@@ -393,17 +401,20 @@ fn collect_draw_node(
     }
 
     if let Some(draw_node) = node.as_draw_node() {
-        collect_draw_closures(draw_node, site, slices);
+        collect_draw_closures(draw_node, site, draws);
     }
 
     let layer_node = as_kind::<GraphicsLayerNode>(any, kind)
         .or_else(|| as_kind::<OffsetPxNode>(any, kind).map(OffsetPxNode::layer));
     if let Some(layer_node) = layer_node {
         slices.push_graphics_layer(
-            layer_node.layer_snapshot(),
-            layer_node.layer_resolver(site.modifier_index),
+            (
+                layer_node.layer_snapshot(),
+                layer_node.layer_resolver(site.modifier_index),
+            ),
+            draws.len(),
         );
-        slices.enter_layer(site);
+        slices.enter_layer(site, draws.len());
     }
 }
 
@@ -421,17 +432,13 @@ fn as_kind<T: Any>(any: &dyn Any, kind: TypeId) -> Option<&T> {
 fn collect_draw_closures(
     draw_node: &dyn cranpose_foundation::DrawModifierNode,
     site: &DrawSite,
-    slices: &mut ModifierNodeSlices,
+    draws: &mut Vec<DrawCommand>,
 ) {
     if let Some(closure) = draw_node.create_behind_draw_closure() {
-        slices
-            .draw_commands
-            .push(placed_draw_command(DrawCommand::Behind(closure), site));
+        draws.push(placed_draw_command(DrawCommand::Behind(closure), site));
     }
     if let Some(closure) = draw_node.create_draw_closure() {
-        slices
-            .draw_commands
-            .push(placed_draw_command(DrawCommand::Overlay(closure), site));
+        draws.push(placed_draw_command(DrawCommand::Overlay(closure), site));
     }
 }
 
