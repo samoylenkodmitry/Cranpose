@@ -1113,6 +1113,7 @@ impl LayoutBuilderState {
     ) -> Result<Option<MeasuredNode>, NodeError> {
         let kept = self.remeasure_changed_children(
             node_id,
+            &PlacedChildren::Subcompose(node_id),
             cached,
             false,
             |child_id| self.subcompose_child_change(child_id),
@@ -1589,6 +1590,7 @@ impl LayoutBuilderState {
         let mut next_state = 0;
         let kept = self.remeasure_changed_children(
             node_id,
+            &PlacedChildren::Layout(Rc::clone(&parts)),
             &measured,
             ignores_child_sizes,
             |child_id| self.layout_child_change(parts.runtime_state(), &mut next_state, child_id),
@@ -1611,27 +1613,25 @@ impl LayoutBuilderState {
         Ok(Some(kept))
     }
 
-    /// Walks the children of a kept measurement, measures again each one
-    /// `change` finds changed, at the constraints it last had, and keeps the
-    /// measurement when each of them reads the same for it, or, when the
-    /// measurement `ignores_child_sizes`, the same but for its size. `None`
-    /// as soon as `change` refuses a child or one measures differently for
-    /// its parent.
+    /// Walks the `placed` children of a kept measurement, measures again each
+    /// one `change` finds changed at its last constraints, and keeps the
+    /// measurement while each reads the same for it (but for its size when it
+    /// `ignores_child_sizes`); `None` once a child is refused or differs.
     fn remeasure_changed_children(
         self: &Rc<Self>,
         node_id: NodeId,
+        placed: &PlacedChildren,
         cached: &MeasuredNode,
         ignores_child_sizes: bool,
         mut change: impl FnMut(NodeId) -> Result<ChildChange, NodeError>,
         mut remeasured: impl FnMut(NodeId),
     ) -> Result<Option<KeptChildren>, NodeError> {
         let mut resized = false;
-        let placed =
-            self.with_applier_result(|applier| Ok(PlacedChildren::of(applier, node_id)))?;
         let mut index = 0;
-        while let Some((child_id, previous)) =
-            self.with_applier_result(|applier| placed.get(applier, index))?
-        {
+        while let Some((child_id, previous)) = match placed.listed_child(index) {
+            Some(listed) => listed,
+            None => self.with_applier_result(|applier| placed.get(applier, index))?,
+        } {
             index += 1;
             let Some(previous) = previous else {
                 continue;
