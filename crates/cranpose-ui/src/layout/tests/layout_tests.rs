@@ -1529,7 +1529,7 @@ fn layout_reconciles_child_measurables_by_child_identity() -> Result<(), NodeErr
     measure_layout(&mut applier, root_id, Size::new(100.0, 100.0))?;
 
     applier.with_node::<LayoutNode, _>(root_id, |node| {
-        node.children = vec![second_child, first_child];
+        node.children = smallvec::smallvec![second_child, first_child];
         node.mark_needs_measure();
     })?;
     measure_layout(&mut applier, root_id, Size::new(100.0, 100.0))?;
@@ -1570,14 +1570,14 @@ fn layout_binds_inserted_children_and_drops_removed_and_missing_ones() -> Result
     applier.remove(missing)?;
 
     let mut root = LayoutNode::new(Modifier::empty(), Rc::new(VerticalStackPolicy));
-    root.children = vec![first, second];
+    root.children = smallvec::smallvec![first, second];
     let root_id = applier.create(Box::new(root));
 
     let measured = measure_layout(&mut applier, root_id, Size::new(100.0, 200.0))?;
     assert_eq!(measured.root_size().height, 30.0);
 
     applier.with_node::<LayoutNode, _>(root_id, |node| {
-        node.children = vec![inserted, missing, first];
+        node.children = smallvec::smallvec![inserted, missing, first];
         node.mark_needs_measure();
     })?;
     let measured = measure_layout(&mut applier, root_id, Size::new(100.0, 200.0))?;
