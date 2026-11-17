@@ -9,7 +9,7 @@ use cranpose_ui_graphics::{
 mod body;
 mod snapshot;
 
-use body::SliceBody;
+use body::{Draws, SliceBody};
 pub(crate) use snapshot::SlicesSnapshot;
 pub use snapshot::{collect_modifier_slices, collect_slices_from_modifier};
 
@@ -319,7 +319,7 @@ impl ModifierNodeSlices {
 
     fn insert_background_draw(
         &mut self,
-        draws: &mut Vec<DrawCommand>,
+        draws: &mut Draws,
         (insert_index, precedes_layer): (usize, bool),
         command: DrawCommand,
     ) {

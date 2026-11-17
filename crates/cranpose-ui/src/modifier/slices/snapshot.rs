@@ -12,7 +12,7 @@ use smallvec::SmallVec;
 
 use super::{
     super::{ModifierChainHandle, coordinator_rect::CoordinatorRect},
-    DrawSite, FieldText, ModifierNodeSlices, SliceBody, SliceText,
+    DrawSite, Draws, FieldText, ModifierNodeSlices, SliceBody, SliceText,
 };
 use crate::{
     draw::DrawCommand,
@@ -297,7 +297,7 @@ impl Backgrounds {
         node_ref: &cranpose_foundation::ModifierChainNodeRef<'_>,
         site: PlainSite<'_>,
         density: f32,
-        (slices, draws): (&mut ModifierNodeSlices, &mut Vec<DrawCommand>),
+        (slices, draws): (&mut ModifierNodeSlices, &mut Draws),
     ) -> Option<EdgeInsets> {
         let (fns, words) = node_ref.plain_words()?;
         if let Some(background) = fns.read::<BackgroundElement>(words) {
@@ -333,7 +333,7 @@ impl Backgrounds {
 
     /// Inserts every background at its place, the last first so the places
     /// of those before it still hold.
-    fn insert_into(mut self, slices: &mut ModifierNodeSlices, draws: &mut Vec<DrawCommand>) {
+    fn insert_into(mut self, slices: &mut ModifierNodeSlices, draws: &mut Draws) {
         slices.set_corner_shape(self.last_shape);
         // Room for them all at once: an insert into a full list makes room
         // for four.
@@ -382,7 +382,7 @@ fn collect_draw_node(
     node: &dyn cranpose_foundation::ModifierNode,
     site: &DrawSite,
     slices: &mut ModifierNodeSlices,
-    draws: &mut Vec<DrawCommand>,
+    draws: &mut Draws,
 ) {
     let any = node.as_any();
     // The node's type, asked once: each check below compares it, where a
@@ -432,7 +432,7 @@ fn as_kind<T: Any>(any: &dyn Any, kind: TypeId) -> Option<&T> {
 fn collect_draw_closures(
     draw_node: &dyn cranpose_foundation::DrawModifierNode,
     site: &DrawSite,
-    draws: &mut Vec<DrawCommand>,
+    draws: &mut Draws,
 ) {
     if let Some(closure) = draw_node.create_behind_draw_closure() {
         draws.push(placed_draw_command(DrawCommand::Behind(closure), site));
