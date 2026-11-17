@@ -218,7 +218,10 @@ pub(crate) struct LayoutChildMeasureState {
     pub(super) measured_constraints: Cell<Option<Constraints>>,
     // Whether the parent's last measure read the child's intrinsic sizes.
     pub(super) read_intrinsics: Cell<bool>,
-    pub(super) measured: Cell<Option<Rc<MeasuredNode>>>,
+    pub(super) measured: Cell<Option<MeasuredNode>>,
+    // What the parent's last measure kept of the child, `None` when it did
+    // not measure the child.
+    pub(super) in_parent: Cell<Option<MeasuredChild>>,
     pub(super) last_position: Cell<Option<Point>>,
     // The child's z index, as the record last placed it or, at a bind that
     // read the child, found it.
@@ -238,6 +241,7 @@ impl Default for LayoutChildMeasureState {
             measured_constraints: Cell::new(None),
             read_intrinsics: Cell::new(false),
             measured: Cell::new(None),
+            in_parent: Cell::new(None),
             last_position: Cell::new(None),
             placed_z_index: Cell::new(0.0),
         }
@@ -337,6 +341,7 @@ impl LayoutChildMeasureState {
         self.note_z_index(0.0);
         self.frame.borrow_mut().take();
         self.measured.take();
+        self.in_parent.set(None);
         self.last_position.set(None);
         self.measured_constraints.set(None);
         self.read_intrinsics.set(false);
@@ -478,7 +483,7 @@ impl LayoutParts {
         }
     }
 
-    fn perform_measure(&self, constraints: Constraints) -> Result<Rc<MeasuredNode>, NodeError> {
+    fn perform_measure(&self, constraints: Constraints) -> Result<MeasuredNode, NodeError> {
         let record = self.record();
         let builder = record.builder().ok_or_else(|| NodeError::MissingContext {
             id: record.child_id(),
@@ -487,7 +492,7 @@ impl LayoutParts {
         builder.measure_node(record.child_id(), constraints)
     }
 
-    pub(super) fn measure_cached(&self, constraints: Constraints) -> Option<Rc<MeasuredNode>> {
+    pub(super) fn measure_cached(&self, constraints: Constraints) -> Option<MeasuredNode> {
         let record = self.record();
         let measures = record.measures();
         if measures {
@@ -511,7 +516,7 @@ impl LayoutParts {
         match self.perform_measure(constraints) {
             Ok(measured) => {
                 record.force_remeasure.set(false);
-                cache.store_measurement(constraints, Rc::clone(&measured));
+                cache.store_measurement(constraints, measured);
                 Some(measured)
             }
             Err(err) => {
@@ -572,19 +577,19 @@ impl LayoutRuntimeState {
             .map(|err| *err)
     }
 
-    // Puts the children the last measure measured into `measured_children`.
-    pub(super) fn measured_children(
+    // Places the children the last measure measured and notes in each
+    // child's record what the measure kept of it; a child it did not
+    // measure keeps nothing.
+    pub(super) fn place_measured_children(
         &self,
         placements: &[Placement],
         placement_indices: &[usize],
         content_offset: Point,
-        measured_children: &mut Vec<MeasuredChild>,
     ) {
-        let child_states = self.child_states();
-        measured_children.reserve_exact(child_states.len());
-        for (index, child) in child_states.iter().enumerate() {
+        for (index, child) in self.child_states().iter().enumerate() {
             let record = child.record();
             let Some(measured) = record.measured.take() else {
+                record.in_parent.set(None);
                 continue;
             };
             let child_id = record.child_id();
@@ -597,14 +602,13 @@ impl LayoutRuntimeState {
             if let Some(placement) = placement {
                 child.place_at(position, placement.z_index);
             }
-            measured_children.push(MeasuredChild::new(
-                child_id,
+            record.in_parent.set(Some(MeasuredChild::new(
                 &measured,
                 Point {
                     x: content_offset.x + base_position.x,
                     y: content_offset.y + base_position.y,
                 },
-            ));
+            )));
         }
     }
 }
