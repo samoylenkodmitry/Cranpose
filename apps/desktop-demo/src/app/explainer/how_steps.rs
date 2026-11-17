@@ -14,6 +14,7 @@ use super::{
     figure::Plan,
     lettering::{headline, text, STRONG_FAMILY},
     walk::Walk,
+    whole,
 };
 
 const CREAM: Color = Color(1.0, 0.969, 0.901, 1.0);
@@ -41,7 +42,7 @@ const STEPS: [(&str, &str); 4] = [
 #[composable(no_skip)]
 pub(super) fn HowSteps(size: Size, plan: Plan, walk: Walk) {
     let u = plan.u;
-    let current = derivedStateOf(move || ((walk.progress() * 4.0) as usize).min(3)).get();
+    let current = derivedStateOf(move || whole::count(walk.progress() * 4.0).min(3)).get();
     let left = (size.width * 0.5 - 644.0 * u).max(16.0);
     SelectionContainer(
         Modifier::empty()

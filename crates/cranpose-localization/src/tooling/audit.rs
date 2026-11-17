@@ -152,7 +152,7 @@ struct UiVisitor<'a> {
 }
 
 impl UiVisitor<'_> {
-    fn inspect_call(&mut self, name: String, args: &Punctuated<Expr, Token![,]>) {
+    fn inspect_call(&mut self, name: &str, args: &Punctuated<Expr, Token![,]>) {
         let normalized = name
             .rsplit("::")
             .take(2)
@@ -163,7 +163,7 @@ impl UiVisitor<'_> {
             .join("::");
         let indices = self
             .widgets
-            .get(&name)
+            .get(name)
             .or_else(|| self.widgets.get(&normalized));
         let Some(indices) = indices else { return };
         for index in indices {
@@ -199,14 +199,14 @@ impl<'ast> Visit<'ast> for UiVisitor<'_> {
                 .map(|segment| segment.ident.to_string())
                 .collect::<Vec<_>>()
                 .join("::");
-            self.inspect_call(name, &call.args);
+            self.inspect_call(&name, &call.args);
         }
         syn::visit::visit_expr_call(self, call);
     }
 
     fn visit_expr_method_call(&mut self, call: &'ast ExprMethodCall) {
         let name = call.method.to_string();
-        self.inspect_call(name, &call.args);
+        self.inspect_call(&name, &call.args);
         syn::visit::visit_expr_method_call(self, call);
     }
 }

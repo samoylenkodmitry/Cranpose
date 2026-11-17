@@ -10,7 +10,7 @@ use cranpose_core::location_key;
 use cranpose_testing::{robot::TestRenderer, robot_assertions::find_semantics_node};
 use cranpose_ui::{
     Axis, Box, BoxSpec, HorizontalPager, Modifier, PaddingValues, PageSize, PagerFling, PagerSpec,
-    PagerState, SnapPosition, VerticalPager, composable, rememberPagerState,
+    PagerState, Size, SnapPosition, VerticalPager, composable, rememberPagerState,
 };
 
 /// A composition counter that stays equal to itself while it counts, so it
@@ -93,8 +93,7 @@ impl Pager {
                 SettledReader(pager, settled_reads.clone());
             },
         );
-        shell.set_viewport(WIDTH, HEIGHT);
-        shell.set_buffer_size(WIDTH as u32, HEIGHT as u32);
+        crate::test_window::size_window(&mut shell, Size::new(WIDTH, HEIGHT));
         shell.set_semantics_enabled(true);
         let mut pager = Self {
             axis,

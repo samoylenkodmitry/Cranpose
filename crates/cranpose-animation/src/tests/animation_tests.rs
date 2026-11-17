@@ -94,12 +94,12 @@ fn animate_float_as_state_invalidates_composition_time_readers() {
     fn render_animation_reader(
         composer: &Composer,
         target: MutableState<f32>,
-        rendered_values: Rc<RefCell<Vec<f32>>>,
+        rendered_values: &Rc<RefCell<Vec<f32>>>,
     ) {
         {
-            let rendered_values = Rc::clone(&rendered_values);
+            let rendered_values = Rc::clone(rendered_values);
             composer.set_recompose_callback(move |composer| {
-                render_animation_reader(composer, target, Rc::clone(&rendered_values));
+                render_animation_reader(composer, target, &rendered_values);
             });
         }
 
@@ -124,10 +124,9 @@ fn animate_float_as_state_invalidates_composition_time_readers() {
         let rendered_values = Rc::clone(&rendered_values);
         composition
             .render(root_key, move || {
-                let rendered_values = Rc::clone(&rendered_values);
                 with_current_composer(|composer| {
                     composer.with_group(group_key, |composer| {
-                        render_animation_reader(composer, target, rendered_values);
+                        render_animation_reader(composer, target, &rendered_values);
                     });
                 });
             })

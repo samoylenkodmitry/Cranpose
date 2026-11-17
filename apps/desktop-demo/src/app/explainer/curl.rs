@@ -16,6 +16,8 @@ use cranpose_ui::{
     Size,
 };
 
+use super::{grid_mesh, whole};
+
 // The direction the stamp peels along, of length one: from its top left
 // corner toward its bottom right one, which rises first.
 pub(super) const PEEL: [f32; 2] = [0.83, 0.557_77];
@@ -72,7 +74,7 @@ impl CurlMeshes {
 
     // The level a lift is drawn at.
     pub(super) fn level(lift: f32) -> usize {
-        ((lift.clamp(0.0, 1.0) * LEVELS as f32).round() as usize).min(LEVELS)
+        whole::count((lift.clamp(0.0, 1.0) * LEVELS as f32).round()).min(LEVELS)
     }
 
     // The lift of a level.
@@ -109,7 +111,7 @@ fn curled(size: Size, bend: Bend) -> Mesh {
     }
     let place = |s: f32| {
         let at = (s / step).clamp(0.0, PROFILE_STEPS as f32);
-        let index = (at.floor() as usize).min(PROFILE_STEPS - 1);
+        let index = whole::count(at.floor()).min(PROFILE_STEPS - 1);
         let share = at - index as f32;
         let (a, b) = (profile[index], profile[index + 1]);
         (a.0 + (b.0 - a.0) * share, a.1 + (b.1 - a.1) * share)
@@ -136,10 +138,11 @@ fn curled(size: Size, bend: Bend) -> Mesh {
         }
     }
     let mut indices = Vec::with_capacity((COLUMNS - 1) * (ROWS - 1) * 6);
+    let stride = grid_mesh::vertex(COLUMNS);
     for row in 0..ROWS - 1 {
         for column in 0..COLUMNS - 1 {
-            let at = (row * COLUMNS + column) as u32;
-            let below = at + COLUMNS as u32;
+            let at = grid_mesh::vertex(row * COLUMNS + column);
+            let below = at + stride;
             indices.extend_from_slice(&[at, at + 1, below, below, at + 1, below + 1]);
         }
     }

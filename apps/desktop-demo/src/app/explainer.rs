@@ -12,6 +12,7 @@ mod drawing_board;
 mod drips;
 mod figure;
 mod floor;
+mod grid_mesh;
 mod hover;
 mod how;
 mod how_steps;
@@ -52,5 +53,6 @@ mod tab;
 mod tree;
 mod walk;
 mod water;
+mod whole;
 
 pub(crate) use tab::ExplainerTab;

@@ -349,7 +349,11 @@ fn wait_for_preferences(
         );
         std::thread::yield_now();
     }
-    assert_eq!(controller.error(), None);
+    assert_eq!(
+        controller.error(),
+        None,
+        "the preference request ended with an error"
+    );
 }
 
 #[test]

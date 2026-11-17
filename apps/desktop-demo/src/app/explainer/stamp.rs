@@ -55,7 +55,7 @@ pub(super) struct StampLayout {
     // The radius of a punched hole and how many run along the width and
     // down the height.
     pub hole: f32,
-    pub holes: (u32, u32),
+    pub holes: (usize, usize),
 }
 
 // What makes a stamp lift: its place in the sheet's arrival, read when it

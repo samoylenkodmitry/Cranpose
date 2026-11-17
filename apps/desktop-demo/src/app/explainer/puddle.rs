@@ -16,6 +16,7 @@ use super::{
     drips::DRIP_INK,
     melting::Melting,
     walk::ease,
+    whole,
 };
 
 // In units.
@@ -74,7 +75,7 @@ fn PuddleInk(size: Size, melting: Melting, landings: Rc<[f32]>) {
         }
         let ink = Brush::solid(DRIP_INK);
         let step = RIM_STEP * u;
-        let columns = (size.width / step).ceil() as usize + 1;
+        let columns = whole::count((size.width / step).ceil()) + 1;
         for column in 0..=columns {
             let x = column as f32 * step;
             let amount = pool

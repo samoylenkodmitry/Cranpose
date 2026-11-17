@@ -41,7 +41,7 @@ pub fn catalog_signatures(source: &str) -> Result<BTreeMap<String, MessageSignat
             Entry::Message(message) => {
                 add_entry(
                     &mut entries,
-                    message.id.name.to_owned(),
+                    message.id.name,
                     message.value.as_ref(),
                     &message.attributes,
                 )?;
@@ -57,7 +57,7 @@ pub fn catalog_signatures(source: &str) -> Result<BTreeMap<String, MessageSignat
             }
             Entry::Term(term) => add_entry(
                 &mut entries,
-                format!("-{}", term.id.name),
+                &format!("-{}", term.id.name),
                 Some(&term.value),
                 &term.attributes,
             )?,
@@ -78,17 +78,17 @@ pub fn catalog_signatures(source: &str) -> Result<BTreeMap<String, MessageSignat
 
 fn add_entry<'a>(
     entries: &mut BTreeMap<String, Dependencies>,
-    name: String,
+    name: &str,
     value: Option<&ast::Pattern<&'a str>>,
     attributes: &[ast::Attribute<&'a str>],
 ) -> Result<(), String> {
     if let Some(pattern) = value {
-        insert(entries, name.clone(), dependencies(pattern))?;
+        insert(entries, name, dependencies(pattern))?;
     }
     for attribute in attributes {
         insert(
             entries,
-            format!("{name}.{}", attribute.id.name),
+            &format!("{name}.{}", attribute.id.name),
             dependencies(&attribute.value),
         )?;
     }
@@ -97,10 +97,10 @@ fn add_entry<'a>(
 
 fn insert(
     entries: &mut BTreeMap<String, Dependencies>,
-    name: String,
+    name: &str,
     deps: Dependencies,
 ) -> Result<(), String> {
-    if entries.insert(name.clone(), deps).is_some() {
+    if entries.insert(name.to_owned(), deps).is_some() {
         return Err(format!("duplicate entry `{name}`"));
     }
     Ok(())
