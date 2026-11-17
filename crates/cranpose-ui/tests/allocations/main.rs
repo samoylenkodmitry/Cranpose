@@ -171,6 +171,63 @@ fn remeasuring_deeply_nested_rows_and_columns_allocates_nothing_more() {
     assert_eq!(nested, sibling, "a deep nest of rows and columns allocates");
 }
 
+// A column of `width` rows over `depth` more such columns, nested or side
+// by side.
+fn wide_columns(depth: usize, width: usize, nested: bool) {
+    Column(
+        Modifier::empty().fill_max_width(),
+        ColumnSpec::default(),
+        move || {
+            rows(width);
+            if nested && depth > 0 {
+                wide_columns(depth - 1, width, true);
+            } else if !nested {
+                for _ in 0..depth {
+                    wide_columns(0, width, false);
+                }
+            }
+        },
+    );
+}
+
+// The bytes a fresh thread still holds after it measured `depth` wide
+// columns once and dropped their composition.
+fn bytes_left_by_wide_columns(depth: usize, nested: bool) -> isize {
+    std::thread::spawn(move || {
+        let region = Region::new(GLOBAL);
+        let mut composition = run_test_composition(move || wide_columns(depth, 300, nested));
+        let root = composition.root().expect("a composed root");
+        let handle = composition.runtime_handle();
+        {
+            let mut applier = composition.applier_mut();
+            applier.set_runtime_handle(handle);
+            measure_layout(&mut applier, root, Size::new(100.0, 4000.0))
+                .expect("the columns measure");
+            applier.clear_runtime_handle();
+        }
+        drop(composition);
+        let change = region.change();
+        change.bytes_allocated.cast_signed() - change.bytes_deallocated.cast_signed()
+    })
+    .join()
+    .expect("the measuring thread")
+}
+
+// Rows and columns keep no lists for hundreds of children once their
+// composition is gone: wide columns nested 16 deep leave less than a
+// kilobyte a level more than as many side by side leave, where lists for
+// their 300 children each would take kilobytes.
+fn wide_nested_columns_leave_no_lists_behind() {
+    let sibling = bytes_left_by_wide_columns(15, false);
+    let nested = bytes_left_by_wide_columns(15, true);
+    println!("bytes left by 16 wide columns, siblings: {sibling}, nested: {nested}");
+    assert!(
+        nested - sibling < 16 * 1024,
+        "nested wide columns left {} bytes more",
+        nested - sibling
+    );
+}
+
 /// Measuring a node again fills the memory of its last measurement: a
 /// remeasured row allocates nothing.
 fn remeasuring_a_row_allocates_nothing() {
@@ -621,6 +678,7 @@ fn layout_and_modifiers_stay_within_their_allocation_budgets() {
     a_first_measure_allocates_at_most_one_per_row();
     remeasuring_a_row_allocates_nothing();
     remeasuring_deeply_nested_rows_and_columns_allocates_nothing_more();
+    wide_nested_columns_leave_no_lists_behind();
     placing_children_out_of_order_allocates_nothing();
     a_layout_pass_lends_its_applier_without_rebuilding_it();
     a_kept_column_lets_its_changed_children_fill_their_measurements();
