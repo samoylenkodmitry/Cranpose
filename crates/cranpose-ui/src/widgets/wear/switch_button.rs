@@ -298,10 +298,10 @@ fn stroke_round_capped(scope: &mut dyn DrawScope, a: Point, b: Point, half: f32,
     if half <= 0.0 {
         return;
     }
-    let (dx, dy) = (b.x - a.x, b.y - a.y);
-    let length = (dx * dx + dy * dy).sqrt();
+    let delta = b - a;
+    let length = delta.distance();
     if length > f32::EPSILON {
-        let (nx, ny) = (-dy / length * half, dx / length * half);
+        let (nx, ny) = (-delta.y / length * half, delta.x / length * half);
         let body = format!(
             "M {} {} L {} {} L {} {} L {} {} Z",
             a.x + nx,

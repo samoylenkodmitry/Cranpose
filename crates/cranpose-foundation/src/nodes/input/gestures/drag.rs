@@ -60,9 +60,9 @@ impl DragGesture {
                 DragGestureEvent::None
             }
             PointerEventKind::Move if self.pointer_id == Some(event.id) => {
-                let total = delta(self.start_position, event.position);
+                let total = event.position - self.start_position;
                 if !self.dragging {
-                    if length(total) <= DRAG_THRESHOLD {
+                    if total.distance() <= DRAG_THRESHOLD {
                         return DragGestureEvent::None;
                     }
                     self.dragging = true;
@@ -74,7 +74,7 @@ impl DragGesture {
                     };
                 }
 
-                let event_delta = delta(self.last_position, event.position);
+                let event_delta = event.position - self.last_position;
                 self.last_position = event.position;
                 event.consume();
                 DragGestureEvent::Dragged {
@@ -107,17 +107,6 @@ impl DragGesture {
         self.last_position = Point { x: 0.0, y: 0.0 };
         self.dragging = false;
     }
-}
-
-fn delta(from: Point, to: Point) -> Point {
-    Point {
-        x: to.x - from.x,
-        y: to.y - from.y,
-    }
-}
-
-fn length(delta: Point) -> f32 {
-    (delta.x * delta.x + delta.y * delta.y).sqrt()
 }
 
 #[cfg(test)]

@@ -1,4 +1,4 @@
-//! Geometric primitives: Point, Size, Rect, Insets, Path
+//! Geometric primitives: Size, Rect, Insets, Path
 
 use std::{ops::AddAssign, rc::Rc};
 

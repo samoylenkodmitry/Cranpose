@@ -447,9 +447,7 @@ fn maybe_fire_long_press(
 /// Pure predicate for a handle long-press: held long enough and moved little
 /// enough to be a rest rather than a drag.
 pub(crate) fn is_handle_long_press(held_ms: i64, down_pos: Point, now_pos: Point) -> bool {
-    let dx = now_pos.x - down_pos.x;
-    let dy = now_pos.y - down_pos.y;
-    let moved = (dx * dx + dy * dy).sqrt();
+    let moved = (now_pos - down_pos).distance();
     held_ms >= HANDLE_LONG_PRESS_TIMEOUT_MS && moved <= HANDLE_LONG_PRESS_SLOP_PX
 }
 
