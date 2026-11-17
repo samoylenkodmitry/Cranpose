@@ -25,26 +25,19 @@ fn switch_semantics_exposes_the_committed_value() {
 #[test]
 fn the_track_recolors_on_the_native_spring_after_a_tap() {
     let runtime = cranpose_core::Runtime::new(Arc::new(cranpose_core::DefaultScheduler));
-    let mut fill = cranpose_animation::Animatable::new(0.0_f32, runtime.handle());
+    let mut fill = Animatable::new(0.0_f32, runtime.handle());
     let origin = 1_000_000_000_u64;
-    let release = origin + (0.163_787 * 1e9) as u64;
+    let release = origin + crate::widgets::native_toggle_tap::RELEASE_NANOS;
     runtime.handle().drain_frame_callbacks(release);
     fill.animate_to_at(1.0, toggle_fill_motion(), release);
     let (mut error, mut count) = (0.0, 0);
-    for row in include_str!("../../../tests/fixtures/native_toggle_tap.csv")
-        .lines()
-        .skip(1)
-    {
-        let values = row
-            .split(',')
-            .map(|value| value.parse::<f64>().expect("native sample"))
-            .collect::<Vec<_>>();
-        let time = origin + (values[0] * 1e9) as u64;
+    for frame in crate::widgets::native_toggle_tap::frames() {
+        let time = origin + frame.time_nanos;
         if time < release {
             continue;
         }
         runtime.handle().drain_frame_callbacks(time);
-        error += (f64::from(fill.state().get()) - values[5]).powi(2);
+        error += (f64::from(fill.state().get()) - frame.track_fill).powi(2);
         count += 1;
     }
     assert!(count >= 40);

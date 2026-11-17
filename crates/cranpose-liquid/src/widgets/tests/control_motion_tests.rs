@@ -111,21 +111,14 @@ fn a_quick_tap_keeps_the_native_lift_before_it_settles() {
     ));
     let (geometry, material) = motion.states();
     let origin = 1_000_000_000_u64;
-    let release = (0.163_787 * 1e9) as u64;
+    let release = crate::widgets::native_toggle_tap::RELEASE_NANOS;
     let (rest, held) = ((37.0, 24.0), (58.0, 115.0 / 3.0));
     runtime.handle().drain_frame_callbacks(origin);
     motion.pressed(Press::Down, Some(origin));
     let mut released = false;
     let (mut size_error, mut fill_error, mut count) = (0.0, 0.0, 0);
-    for row in include_str!("../../../tests/fixtures/native_toggle_tap.csv")
-        .lines()
-        .skip(1)
-    {
-        let values = row
-            .split(',')
-            .map(|value| value.parse::<f64>().expect("native sample"))
-            .collect::<Vec<_>>();
-        let time = (values[0] * 1e9) as u64;
+    for frame in crate::widgets::native_toggle_tap::frames() {
+        let time = frame.time_nanos;
         if !released && time >= release {
             runtime.handle().drain_frame_callbacks(origin + release);
             motion.pressed(Press::Up, Some(origin + release));
@@ -134,13 +127,14 @@ fn a_quick_tap_keeps_the_native_lift_before_it_settles() {
         runtime.handle().drain_frame_callbacks(origin + time);
         let progress = f64::from(geometry.get());
         for (actual, expected) in [
-            (rest.0 + (held.0 - rest.0) * progress, values[1]),
-            (rest.1 + (held.1 - rest.1) * progress, values[2]),
+            (rest.0 + (held.0 - rest.0) * progress, frame.width),
+            (rest.1 + (held.1 - rest.1) * progress, frame.height),
         ] {
             size_error += (actual - expected).powi(2);
         }
-        fill_error +=
-            (f64::from((1.0 - material.get()).clamp(0.0, 1.0)) - values[3].clamp(0.0, 1.0)).powi(2);
+        fill_error += (f64::from((1.0 - material.get()).clamp(0.0, 1.0))
+            - frame.white_opacity.clamp(0.0, 1.0))
+        .powi(2);
         count += 1;
     }
     assert!(count >= 50);

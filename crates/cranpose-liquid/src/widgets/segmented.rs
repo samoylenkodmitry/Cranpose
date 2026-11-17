@@ -1,6 +1,6 @@
 use std::{cell::RefCell, rc::Rc};
 
-use cranpose_animation::{Animatable, AnimationSpec, AnimationType, Easing, Lerp, spring};
+use cranpose_animation::{Animatable, AnimationType, Easing, Lerp, spring, tween};
 use cranpose_core::{MutableState, State, mutableStateOf, remember, with_current_composer};
 use cranpose_macros::composable;
 use cranpose_ui::{
@@ -27,7 +27,7 @@ const TAP_SLOP: f32 = 4.0;
 const PRESSED_LABEL_DIM: f32 = 0.35;
 
 fn label_dim_motion() -> AnimationType {
-    AnimationType::Tween(AnimationSpec::tween(150, Easing::EaseInOut))
+    tween(150, Easing::EaseInOut)
 }
 
 // The lens's travel to a tapped segment, fitted to the iOS 27 tap's layer
@@ -39,7 +39,7 @@ fn tap_travel_motion() -> AnimationType {
 // The segment a finger holds down without taking the lens, and how far its
 // label has dimmed.
 struct SegmentHighlight {
-    index: MutableState<usize>,
+    index: MutableState<Option<usize>>,
     dim: RefCell<Animatable<f32>>,
     dim_state: State<f32>,
 }
@@ -47,22 +47,21 @@ struct SegmentHighlight {
 impl SegmentHighlight {
     fn set(&self, index: Option<usize>, time: Option<u64>) {
         if let Some(index) = index {
-            self.index.set(index);
+            self.index.set(Some(index));
         }
-        let target = f32::from(index.is_some());
-        let mut dim = self.dim.borrow_mut();
-        if dim.target() != target {
-            match time {
-                Some(time) => dim.animate_to_at(target, label_dim_motion(), time),
-                None => dim.animateTo(target, label_dim_motion()),
-            }
-        }
+        crate::motion::retarget(
+            &mut self.dim.borrow_mut(),
+            f32::from(index.is_some()),
+            label_dim_motion(),
+            time,
+        );
     }
 
+    // Reads the dim only for the highlighted label, so a dimming label
+    // repaints alone.
     fn label_alpha(&self, index: usize) -> f32 {
-        let dim = self.dim_state.get().clamp(0.0, 1.0);
-        if index == self.index.get() {
-            1.0 - PRESSED_LABEL_DIM * dim
+        if self.index.get() == Some(index) {
+            1.0 - PRESSED_LABEL_DIM * self.dim_state.get()
         } else {
             1.0
         }
@@ -78,7 +77,7 @@ fn remember_segment_highlight() -> Rc<SegmentHighlight> {
                 let dim = Animatable::new(0.0, runtime);
                 let dim_state = dim.state();
                 Rc::new(SegmentHighlight {
-                    index: mutableStateOf(0),
+                    index: mutableStateOf(None),
                     dim: RefCell::new(dim),
                     dim_state,
                 })
@@ -215,12 +214,23 @@ impl SegmentLabels {
     /// reads on the track.
     fn show(&self, label: &SharedText, index: usize, selected: bool, lift: State<f32>) {
         let held = self.held.filter(|_| selected);
+        let text = if selected {
+            &self.selected_text
+        } else {
+            &self.text
+        };
+        // Only a label that can change color carries a layer: the chosen one
+        // under a held lens, and the one the finger last highlighted.
+        if held.is_none() && self.highlight.index.get() != Some(index) {
+            Text(label.clone(), Modifier::empty(), text.clone());
+            return;
+        }
         let highlight = Rc::clone(&self.highlight);
         let modifier = Modifier::empty().graphics_layer(move || {
-            let lift = lift.get().clamp(0.0, 1.0);
             let alpha = highlight.label_alpha(index);
+            let held = held.map(|held| (held, lift.get().clamp(0.0, 1.0)));
             let color_filter = match held {
-                Some((rest, held)) if lift > 0.0 => {
+                Some(((rest, held), lift)) if lift > 0.0 => {
                     let color = rest.lerp(&held, lift);
                     Some(ColorFilter::tint(color.with_alpha(color.a() * alpha)))
                 }
@@ -231,11 +241,6 @@ impl SegmentLabels {
                 ..Default::default()
             }
         });
-        let text = if selected {
-            &self.selected_text
-        } else {
-            &self.text
-        };
         Text(label.clone(), modifier, text.clone());
     }
 }
@@ -244,7 +249,7 @@ impl SegmentLabels {
 struct SegmentGesture {
     axis: Rc<crate::motion::LiquidDragAxis>,
     contact: Rc<super::control_motion::ControlContactMotion>,
-    labels: Rc<SegmentLabels>,
+    highlight: Rc<SegmentHighlight>,
     pressed: MutableState<bool>,
     on_select: Rc<dyn Fn(usize)>,
     segment_width: f32,
@@ -265,7 +270,7 @@ impl SegmentGesture {
     fn lens_gesture(&self) -> crate::motion::LiquidLensGesture {
         let (segment_width, count, pressed) = (self.segment_width, self.count, self.pressed);
         let contact = Rc::clone(&self.contact);
-        let highlight = Rc::clone(&self.labels.highlight);
+        let highlight = Rc::clone(&self.highlight);
         crate::motion::LiquidLensGesture {
             axis: Rc::clone(&self.axis),
             cell_width: segment_width,
@@ -367,7 +372,7 @@ pub fn LiquidSegmentedControl(
             let gesture = SegmentGesture {
                 axis: Rc::clone(&lens_axis),
                 contact: Rc::clone(&contact),
-                labels: Rc::clone(&labels),
+                highlight: Rc::clone(&labels.highlight),
                 pressed,
                 on_select: Rc::clone(&on_select),
                 segment_width,

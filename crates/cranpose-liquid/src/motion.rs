@@ -287,6 +287,23 @@ fn remember_liquid_axis(initial: f32, follow: Option<AnimationType>) -> Rc<Liqui
 }
 
 // Whether a pointer went down on a control or came up.
+// Animates `value` to `target` from `time`, or from now without one. A value
+// already headed to `target` keeps its motion.
+pub(crate) fn retarget(
+    value: &mut Animatable<f32>,
+    target: f32,
+    animation: AnimationType,
+    time: Option<u64>,
+) {
+    if value.target() == target {
+        return;
+    }
+    match time {
+        Some(time) => value.animate_to_at(target, animation, time),
+        None => value.animateTo(target, animation),
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Press {
     Down,
@@ -331,11 +348,29 @@ pub(crate) struct LiquidLensGesture {
 
 // Where the one press a lens gesture follows stands.
 #[derive(Default)]
-struct LensPress {
-    pointer: Option<cranpose_foundation::PointerId>,
-    down_x: f32,
-    moved: bool,
-    highlighting: bool,
+enum LensPress {
+    #[default]
+    Idle,
+    // The lens follows the finger from `down_x`; `moved` once it passed the
+    // tap slop.
+    Lens {
+        pointer: cranpose_foundation::PointerId,
+        down_x: f32,
+        moved: bool,
+    },
+    // The finger highlights the cells it passes and leaves the lens alone.
+    Highlight {
+        pointer: cranpose_foundation::PointerId,
+    },
+}
+
+impl LensPress {
+    fn pointer(&self) -> Option<cranpose_foundation::PointerId> {
+        match self {
+            Self::Idle => None,
+            Self::Lens { pointer, .. } | Self::Highlight { pointer } => Some(*pointer),
+        }
+    }
 }
 
 impl LiquidLensGesture {
@@ -346,9 +381,9 @@ impl LiquidLensGesture {
 
     fn on_event(&self, press: &mut LensPress, event: &cranpose_foundation::PointerEvent) {
         use cranpose_foundation::PointerEventKind;
-        let tracked = press.pointer == Some(event.id);
+        let tracked = press.pointer() == Some(event.id);
         match event.kind {
-            PointerEventKind::Down if press.pointer.is_none() => self.on_down(press, event),
+            PointerEventKind::Down if press.pointer().is_none() => self.on_down(press, event),
             PointerEventKind::Move if tracked => self.on_move(press, event),
             PointerEventKind::Up if tracked => self.on_up(press, event),
             PointerEventKind::Cancel if tracked => self.on_cancel(press, event),
@@ -367,18 +402,16 @@ impl LiquidLensGesture {
     fn on_down(&self, press: &mut LensPress, event: &cranpose_foundation::PointerEvent) {
         let time = event.animation_time_nanos;
         let index = self.commit_index(event.position.x);
-        *press = LensPress {
-            pointer: Some(event.id),
-            down_x: event.position.x,
-            moved: false,
-            highlighting: index != self.selected && self.highlight().is_some(),
-        };
-        if press.highlighting {
-            if let Some((cell, _)) = self.highlight() {
-                cell(Some(index), time);
-            }
+        if let Some((cell, _)) = self.highlight().filter(|_| index != self.selected) {
+            *press = LensPress::Highlight { pointer: event.id };
+            cell(Some(index), time);
             return;
         }
+        *press = LensPress::Lens {
+            pointer: event.id,
+            down_x: event.position.x,
+            moved: false,
+        };
         self.axis
             .settle_to_at((self.rest_left)(index), LiquidMotion::glide(), time);
         (self.on_pressed)(Press::Down, time);
@@ -388,14 +421,14 @@ impl LiquidLensGesture {
 
     fn on_move(&self, press: &mut LensPress, event: &cranpose_foundation::PointerEvent) {
         let time = event.animation_time_nanos;
-        if press.highlighting {
+        let LensPress::Lens { down_x, moved, .. } = press else {
             if let Some((cell, _)) = self.highlight() {
                 cell(Some(self.commit_index(event.position.x)), time);
             }
             return;
-        }
-        press.moved |= (event.position.x - press.down_x).abs() > self.tap_slop;
-        if press.moved {
+        };
+        *moved |= (event.position.x - *down_x).abs() > self.tap_slop;
+        if *moved {
             let target = (self.drag_left)(event.position.x);
             if self.axis.is_dragging() {
                 self.axis.move_to_at(target, event.time_ms, time);
@@ -411,26 +444,22 @@ impl LiquidLensGesture {
 
     fn on_up(&self, press: &mut LensPress, event: &cranpose_foundation::PointerEvent) {
         let time = event.animation_time_nanos;
-        let LensPress {
-            down_x,
-            moved,
-            highlighting,
-            ..
-        } = std::mem::take(press);
-        if let Some((cell, travel)) = self.highlight().filter(|_| highlighting) {
-            cell(None, time);
-            let index = self.commit_index(event.position.x);
-            if index != self.selected {
-                // The lens lifts on its way to a cell picked without it.
-                (self.on_pressed)(Press::Down, time);
-                (self.on_pressed)(Press::Up, time);
-                self.axis
-                    .settle_to_at((self.rest_left)(index), travel, time);
-                default_haptics().perform(HapticFeedback::ImpactLight);
-                (self.on_select)(index);
+        let LensPress::Lens { down_x, moved, .. } = std::mem::take(press) else {
+            if let Some((cell, travel)) = self.highlight() {
+                cell(None, time);
+                let index = self.commit_index(event.position.x);
+                if index != self.selected {
+                    // The lens lifts on its way to a cell picked without it.
+                    (self.on_pressed)(Press::Down, time);
+                    (self.on_pressed)(Press::Up, time);
+                    self.axis
+                        .settle_to_at((self.rest_left)(index), travel, time);
+                    default_haptics().perform(HapticFeedback::ImpactLight);
+                    (self.on_select)(index);
+                }
             }
             return;
-        }
+        };
         (self.on_pressed)(Press::Up, time);
         let index = self.commit_index(if moved { event.position.x } else { down_x });
         self.axis.release_to_at(
@@ -445,9 +474,10 @@ impl LiquidLensGesture {
 
     fn on_cancel(&self, press: &mut LensPress, event: &cranpose_foundation::PointerEvent) {
         let time = event.animation_time_nanos;
-        let highlighting = std::mem::take(press).highlighting;
-        if let Some((cell, _)) = self.highlight().filter(|_| highlighting) {
-            cell(None, time);
+        if !matches!(std::mem::take(press), LensPress::Lens { .. }) {
+            if let Some((cell, _)) = self.highlight() {
+                cell(None, time);
+            }
             return;
         }
         (self.on_pressed)(Press::Up, time);

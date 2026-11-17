@@ -2,34 +2,20 @@ use std::{cell::RefCell, rc::Rc};
 
 use cranpose_core::{mutableStateOf, remember};
 use cranpose_liquid::prelude::*;
-use cranpose_render_common::{
-    scene_store::{ItemRef, LayerRef},
-    text_fonts::TextFonts,
-};
+use cranpose_render_common::text_fonts::TextFonts;
 use cranpose_testing::{RobotTestRule, TestRenderer, create_headless_robot_test_with_fonts};
 use cranpose_ui::Modifier;
 use cranpose_ui_graphics::ColorFilter;
 
-type Robot = RobotTestRule<TestRenderer>;
+use crate::segmented_style::{advance_frames, find_label};
 
-// The color filter on the nearest layer above the text showing `label`.
-fn label_filter<'a>(
-    layer: LayerRef<'a>,
-    label: &str,
-    filter: Option<&'a ColorFilter>,
-) -> Option<Option<&'a ColorFilter>> {
-    let filter = layer.color_filter().or(filter);
-    layer.items().find_map(|item| match item {
-        ItemRef::Text(text) if text.render_text.text() == label => Some(filter),
-        ItemRef::Layer(layer) | ItemRef::Leaf(layer) => label_filter(layer, label, filter),
-        ItemRef::Text(_) | ItemRef::Draw(_) | ItemRef::Run(_) | ItemRef::Shape(_) => None,
-    })
-}
+type Robot = RobotTestRule<TestRenderer>;
 
 fn filter_of(robot: &mut Robot, label: &str) -> Option<ColorFilter> {
     let root = robot.shell_mut().scene().root_layer().expect("a scene");
-    label_filter(root, label, None)
+    find_label(root, label, None)
         .expect("the label is drawn")
+        .1
         .cloned()
 }
 
@@ -63,12 +49,6 @@ fn robot() -> (Robot, Rc<RefCell<Vec<usize>>>) {
     });
     robot.wait_for_idle();
     (robot, committed)
-}
-
-fn advance_frames(robot: &mut Robot, frames: usize) {
-    for _ in 0..frames {
-        robot.advance_time(16_666_667);
-    }
 }
 
 fn press(robot: &mut Robot, label: &str) {

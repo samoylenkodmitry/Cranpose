@@ -61,10 +61,8 @@ impl ControlContactMotion {
                 let release_at = self
                     .lifted_at
                     .take()
-                    .zip(time)
-                    .map(|(lifted, now)| (lifted.saturating_add(MIN_LIFT_NANOS), now))
-                    .filter(|(release_at, now)| release_at > now)
-                    .map(|(release_at, _)| release_at);
+                    .map(|lifted| lifted.saturating_add(MIN_LIFT_NANOS))
+                    .filter(|release_at| time.is_some_and(|now| *release_at > now));
                 match release_at {
                     Some(release_at) => self.release_at(release_at),
                     None => self.animate(Press::Up, time),
@@ -106,14 +104,7 @@ impl ControlContactMotion {
             .iter_mut()
             .zip([geometry, material])
         {
-            let target = f32::from(press.is_down());
-            if channel.target() != target {
-                if let Some(time) = time {
-                    channel.animate_to_at(target, animation, time);
-                } else {
-                    channel.animateTo(target, animation);
-                }
-            }
+            crate::motion::retarget(channel, f32::from(press.is_down()), animation, time);
         }
     }
 }
