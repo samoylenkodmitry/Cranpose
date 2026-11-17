@@ -61,6 +61,10 @@ impl TextSource {
     }
 }
 
+// The most bytes past its text that an owned string keeps in its room once a
+// text shows it: what `format!` and `to_string` leave past a short number.
+const SPARE_ROOM_KEPT: usize = 8;
+
 /// A fixed text as a widget was given it, which the widget compares with the
 /// text its node shows without making a copy, and gives the node when the
 /// node shows another.
@@ -93,14 +97,21 @@ impl StaticText {
     }
 
     // The text as an annotated string, in the room of a string a text gave
-    // up when the app context keeps one.
+    // up when the app context keeps one. An owned string keeps its room for
+    // as long as the text shows it, so a room with more than
+    // `SPARE_ROOM_KEPT` bytes past the text gives the rest back first.
     fn into_annotated(self) -> crate::text::AnnotatedString {
         let context = crate::render_state::current_app_context();
         match self {
-            Self::Owned(text) => match context {
-                Some(context) => context.text.plain_string(text),
-                None => crate::text::AnnotatedString::new(text),
-            },
+            Self::Owned(mut text) => {
+                if text.capacity() - text.len() > SPARE_ROOM_KEPT {
+                    text.shrink_to_fit();
+                }
+                match context {
+                    Some(context) => context.text.plain_string(text),
+                    None => crate::text::AnnotatedString::new(text),
+                }
+            }
             Self::Borrowed(text) => {
                 context.map_or_else(|| text.into(), |context| context.text.plain_text(text))
             }
