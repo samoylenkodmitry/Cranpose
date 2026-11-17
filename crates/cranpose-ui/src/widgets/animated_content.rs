@@ -362,7 +362,7 @@ impl<T: Clone + PartialEq + 'static> ContentState<T> {
                 Some(self.changed_content()),
             );
         }
-        self.aim(target, seeking, change, same);
+        self.aim(target, seeking.as_ref(), change.as_ref(), same);
         true
     }
 
@@ -413,12 +413,10 @@ impl<T: Clone + PartialEq + 'static> ContentState<T> {
     fn aim(
         &self,
         target: &T,
-        seeking: Option<(&ContentSeek<T>, ContentTransform)>,
-        change: Option<ContentTransform>,
+        seeking: Option<&(&ContentSeek<T>, ContentTransform)>,
+        change: Option<&ContentTransform>,
         same: &dyn Fn(&T, &T) -> bool,
     ) {
-        let seeking = seeking.as_ref();
-        let change = change.as_ref();
         let mut entries = self.entries.borrow_mut();
         for entry in entries.iter_mut() {
             let motion = &entry.motion;
