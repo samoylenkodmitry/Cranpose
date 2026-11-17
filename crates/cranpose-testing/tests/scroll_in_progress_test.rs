@@ -8,11 +8,16 @@ use std::{
 };
 
 use cranpose_core::{MutableState, rememberMutableStateOf};
-use cranpose_foundation::lazy::{LazyListScope, LazyListState, rememberLazyListState};
+use cranpose_foundation::lazy::{LazyItems, LazyListScope, LazyListState, rememberLazyListState};
 use cranpose_testing::{RobotTestRule, TestRenderer, create_headless_robot_test};
 use cranpose_ui::{
     AnimateScroll, Box, BoxSpec, Column, ColumnSpec, LazyColumn, LazyColumnSpec, Modifier,
     ScrollState, Size,
+    round_scaling_list::CentreAnchor,
+    widgets::wear::{
+        WearScalingLazyColumn, WearScalingLazyColumnSpec, WearScalingListState,
+        rememberWearScalingListState,
+    },
 };
 
 const FRAME_NANOS: u64 = 16_000_000;
@@ -232,5 +237,87 @@ fn a_list_that_leaves_during_its_fling_leaves_its_state_at_rest() {
     assert!(
         !list.is_scroll_in_progress(),
         "the fling ended with its list"
+    );
+}
+
+// A Wear scaling list of 400 rows, 40 points tall each, in a 200 by 400
+// window.
+fn wear_list() -> (Robot, WearScalingListState) {
+    let captured: Rc<RefCell<Option<WearScalingListState>>> = Rc::default();
+    let installed = Rc::clone(&captured);
+    let robot = create_headless_robot_test(200, 400, move || {
+        let state = rememberWearScalingListState(CentreAnchor::default());
+        *installed.borrow_mut() = Some(state);
+        WearScalingLazyColumn(
+            Modifier::empty().fill_max_size(),
+            state,
+            WearScalingLazyColumnSpec::default(),
+            |scope| {
+                scope.items(LazyItems::new(400), |_| {
+                    Box(
+                        Modifier::empty().fill_max_width().height(40.0),
+                        BoxSpec::default(),
+                        || {},
+                    );
+                });
+            },
+        );
+    });
+    let state = (*captured.borrow()).expect("the list is composed");
+    (robot, state)
+}
+
+// A swipe flings the list on every platform: on watchOS, which gives its
+// moves no event time, the samples take the time of their handling.
+#[test]
+fn a_wear_list_swipe_flings_the_list() {
+    let (mut robot, state) = wear_list();
+    fling_toward_the_end(&mut robot);
+    let released = state.anchor().index;
+    run_frames(&mut robot, 120);
+
+    let rested = state.anchor().index;
+    assert!(
+        rested >= released + 20,
+        "the fling carries the list 20 rows past row {released}, it rests on row {rested}"
+    );
+}
+
+#[test]
+fn a_wear_list_jump_stops_a_fling() {
+    let (mut robot, state) = wear_list();
+    fling_toward_the_end(&mut robot);
+    let flung = state.anchor();
+    run_frames(&mut robot, 1);
+    assert_ne!(state.anchor(), flung, "the fling moves the list");
+
+    state.scroll_to_item(0, 0.0);
+    run_frames(&mut robot, 120);
+
+    assert_eq!(
+        state.anchor(),
+        CentreAnchor {
+            index: 0,
+            offset: 0.0
+        },
+        "the list stays where the jump put it"
+    );
+}
+
+#[test]
+fn a_wear_list_animation_takes_the_list_from_a_fling() {
+    let (mut robot, state) = wear_list();
+    fling_toward_the_end(&mut robot);
+
+    state.animate_scroll_to_item(2, 0.0);
+    run_frames(&mut robot, 240);
+
+    assert_eq!(
+        state.anchor(),
+        CentreAnchor {
+            index: 2,
+            offset: 0.0
+        },
+        "the animation lands on its item"
     );
 }

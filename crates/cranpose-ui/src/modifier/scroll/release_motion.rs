@@ -1,7 +1,7 @@
 //! The motion after the release of a scroller's drag: a fling or a settle.
 
 use cranpose_core::current_runtime_handle;
-use cranpose_foundation::ScrollId;
+use cranpose_foundation::{MAX_FLING_VELOCITY, ScrollId};
 
 use super::{
     FlingAnimation, MIN_FLING_VELOCITY, ScrollGestureDetector, ScrollMotionContext, ScrollTarget,
@@ -24,7 +24,7 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
             let interrupted = std::mem::take(&mut gs.interrupted_animation);
             let gesture_owned = was_dragging || gs.is_overscrolling;
             let velocity = if allow_fling && gesture_owned {
-                gs.release_velocity(release_time_ms)
+                gs.velocity.release(release_time_ms, MAX_FLING_VELOCITY)
             } else {
                 0.0
             };
@@ -45,9 +45,7 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
             gs.is_dragging = false;
             gs.is_overscrolling = false;
             gs.axis_locked_out = false;
-            gs.gesture_start_time = None;
-            gs.gesture_start_event_time_ms = None;
-            gs.last_velocity_sample_ms = None;
+            gs.velocity.clear();
 
             (
                 was_dragging,
