@@ -55,18 +55,26 @@ impl FocusInvalidationManager {
         handles.push(handle);
     }
 
-    fn unregister_focus_target(&mut self, node_id: NodeId, handle: &Rc<dyn FocusTargetHandle>) {
+    // Answers whether `node_id` held focus as `handle` left it. A node whose
+    // last handle leaves gives focus up.
+    fn unregister_focus_target(
+        &mut self,
+        node_id: NodeId,
+        handle: &Rc<dyn FocusTargetHandle>,
+    ) -> bool {
+        let held_focus = self.active_focus_target == Some(node_id);
         let Some(handles) = self.focus_targets.get_mut(&node_id) else {
-            return;
+            return false;
         };
         handles.retain(|existing| !Rc::ptr_eq(existing, handle));
         if handles.is_empty() {
             self.focus_targets.remove(&node_id);
             crate::semantics_dispatch::schedule_semantics_invalidation(node_id);
-            if self.active_focus_target == Some(node_id) {
+            if held_focus {
                 self.set_active_focus_target(None);
             }
         }
+        held_focus
     }
 
     fn has_focus_target(&self, node_id: NodeId) -> bool {
@@ -174,10 +182,18 @@ impl FocusInvalidationState {
             .register_focus_target(node_id, handle);
     }
 
+    // A focused node that leaves loses focus as `clear_active_focus` takes it
+    // away: its handle hears it, so a text field ends its input session and
+    // the software keyboard closes. The registry no longer lists the handle,
+    // so no other path tells it.
     fn unregister_focus_target(&self, node_id: NodeId, handle: &Rc<dyn FocusTargetHandle>) {
-        self.manager
+        let held_focus = self
+            .manager
             .borrow_mut()
             .unregister_focus_target(node_id, handle);
+        if held_focus {
+            handle.set_focus_state(FocusState::Inactive);
+        }
     }
 
     pub(crate) fn has_focus_target(&self, node_id: NodeId) -> bool {

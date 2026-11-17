@@ -12,6 +12,7 @@ mod dialog_test;
 mod directional_focus_test;
 mod dpad_text_field_test;
 mod focus_within_test;
+mod focused_field_leaves_test;
 mod frame_clock_test;
 mod headless_clipboard_test;
 mod integration_modifier_tests;
