@@ -7,7 +7,7 @@ use std::{cell::RefCell, rc::Rc, sync::Arc};
 
 use cranpose_ui::{
     Alignment, Modifier, Point, Size,
-    space::{Material, Mesh, MeshSurface, Scene3d, Vec3},
+    space::{Material, Mesh, MeshSurface, Multisample, Scene3d, Vec3},
     widgets::{Box, BoxSpec},
 };
 
@@ -37,6 +37,7 @@ fn pressed_on_wall(parent: Size, node: Modifier, uv: (f32, f32)) -> Option<Point
                 camera: camera(),
                 light: None,
                 eye: None,
+                multisample: Multisample::Off,
             }),
             BoxSpec::default(),
             move || {

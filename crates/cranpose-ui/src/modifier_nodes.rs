@@ -51,9 +51,9 @@ fn hash_space<H: Hasher>(state: &mut H, space: Option<&cranpose_ui_graphics::spa
     match space {
         None => state.write_u8(0),
         Some(LayerSpace::Scene(_)) => state.write_u8(1),
-        Some(LayerSpace::Surface(surface)) => {
+        Some(LayerSpace::Surface(surfaces)) => {
             state.write_u8(2);
-            state.write_u64(surface.mesh.id());
+            state.write_u64(surfaces.owner().mesh.id());
         }
         Some(LayerSpace::Transform(_)) => state.write_u8(3),
     }

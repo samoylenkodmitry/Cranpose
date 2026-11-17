@@ -19,7 +19,7 @@ use cranpose_render_pixels::{Picture, PixelRect, PixelsRenderer};
 use cranpose_ui::{
     Box, BoxSpec, Column, ColumnSpec, LazyColumn, LazyColumnSpec, LazyListScope, LinearArrangement,
     Modifier, Size, Text, TextStyle, rememberLazyListState,
-    space::{Camera, LayerSpace, Mat4, Material, Mesh, MeshSurface, Scene3d, Vec3},
+    space::{Camera, LayerSpace, Mat4, Material, Mesh, MeshSurface, Multisample, Scene3d, Vec3},
 };
 use cranpose_ui_graphics::{
     Brush, Color, ColorFilter, DrawScope, GraphicsLayer, Point, ProjectiveTransform, Rect, Stroke,
@@ -693,6 +693,7 @@ fn Surfaces(captured: Step) {
             ),
             light: None,
             eye: None,
+            multisample: Multisample::Off,
         }),
         BoxSpec::default(),
         move || {

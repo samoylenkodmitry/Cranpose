@@ -17,6 +17,8 @@ renderer.draw_scaled(&mut rgba, 64, 64, 2.0);
 ```
 
 `AppShell` supplies the scene before each frame. The host presents the image.
+The renderer draws the mesh surfaces of a 3D scene with one sample in each
+pixel. It leaves aside the `multisample` a `Scene3d` asks for.
 The [watchOS host](https://github.com/samoylenkodmitry/Cranpose/blob/main/crates/cranpose/src/watchos.rs)
 shows the complete integration.
 

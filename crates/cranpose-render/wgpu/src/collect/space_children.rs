@@ -5,12 +5,12 @@ use std::sync::Arc;
 
 use cranpose_render_common::{
     scene_store::{ItemRef, LayerRef},
-    space::{EyeView, SpaceTree},
+    space::{EyeView, SeenSurface, SpaceTree},
 };
 
 use super::{
-    LayerMotion, LayerScene, LayerSceneRecycler, MeshChild, SceneDraw, SeenDraw, WalkContext,
-    WalkSettings, collect_child, collect_inline, collect_isolated_child, push_content,
+    LayerMotion, LayerScene, LayerSceneRecycler, MeshChild, MeshChildren, SceneDraw, SeenDraw,
+    WalkContext, WalkSettings, collect_child, collect_inline, collect_isolated_child, push_content,
 };
 use crate::scene::ContentContext;
 
@@ -38,6 +38,8 @@ fn window_scene<'a>(
                 door: seen.door,
             })
             .collect(),
+        // The window's scene, the tree's first, sets how its pass samples.
+        multisample: tree.cells[0].scene.multisample,
     };
     Some((Arc::new(scene), view))
 }
@@ -94,7 +96,8 @@ pub(super) fn collect_space_children(
 }
 
 /// Collects each surface the eye of the scene `draw` sees, for its 3D pass,
-/// placed where the eye sees it.
+// placed where the eye sees it: a layer drawn on several meshes once, with
+// all of them.
 fn collect_seen_surfaces(
     draw: &Arc<SceneDraw>,
     view: EyeView<'_>,
@@ -103,20 +106,22 @@ fn collect_seen_surfaces(
     out: &mut LayerScene,
     recycler: &mut LayerSceneRecycler,
 ) {
-    for seen in view.surfaces {
-        let mesh = MeshChild {
+    let mesh_child = |seen: SeenSurface<'_>| {
+        Arc::new(MeshChild {
             scene: Arc::clone(draw),
             surface: seen.surface,
             content: seen.content,
             seen: seen.seen,
-        };
-        collect_isolated_child(
-            seen.layer,
-            motion,
-            context,
-            Some(Arc::new(mesh)),
-            out,
-            recycler,
-        );
+        })
+    };
+    let mut surfaces = view.surfaces.into_iter().peekable();
+    while let Some(owner) = surfaces.next() {
+        let layer = owner.layer;
+        let mut meshes = MeshChildren::new();
+        meshes.push(mesh_child(owner));
+        while let Some(more) = surfaces.next_if(|next| next.mesh != 0) {
+            meshes.push(mesh_child(more));
+        }
+        collect_isolated_child(layer, motion, context, meshes, out, recycler);
     }
 }

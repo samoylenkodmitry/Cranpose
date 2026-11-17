@@ -1,6 +1,6 @@
 use crate::{
     GraphicsLayer, Point, Rect,
-    space::{LayerSpace, Mat4, MeshSurface, Scene3d},
+    space::{LayerSpace, Mat4, MeshSurfaces, Scene3d},
     transform::{ProjectiveTransform, quad_bounds},
 };
 
@@ -236,6 +236,22 @@ pub fn layer_transform_to_window(
     layer_transform_to_parent(bounds, Point::default(), layer).then(parent)
 }
 
+/// [`layer_transform_to_window`] where the ancestors' mapping may be absent:
+/// `None` from a mesh surface down, as the window shows a surface's content
+/// through its scene's camera, not where it is laid out.
+#[inline]
+pub fn laid_out_transform_to_window(
+    parent: Option<ProjectiveTransform>,
+    origin: Point,
+    bounds: Rect,
+    layer: &GraphicsLayer,
+) -> Option<ProjectiveTransform> {
+    if matches!(layer.space.as_deref(), Some(LayerSpace::Surface(_))) {
+        return None;
+    }
+    parent.map(|parent| layer_transform_to_window(parent, origin, bounds, layer))
+}
+
 /// The scene a layer's graphics layer shows, or `None` for a layer that
 /// shows none.
 pub fn layer_scene(layer: &GraphicsLayer) -> Option<&Scene3d> {
@@ -245,9 +261,9 @@ pub fn layer_scene(layer: &GraphicsLayer) -> Option<&Scene3d> {
     }
 }
 
-/// The mesh a layer's graphics layer draws its content on, or `None` for a
-/// layer drawn flat.
-pub fn layer_surface(layer: &GraphicsLayer) -> Option<&MeshSurface> {
+/// The meshes a layer's graphics layer draws its content on, or `None` for
+/// a layer drawn flat.
+pub fn layer_surface(layer: &GraphicsLayer) -> Option<&MeshSurfaces> {
     match layer.space.as_deref()? {
         LayerSpace::Surface(surface) => Some(surface),
         LayerSpace::Scene(_) | LayerSpace::Transform(_) => None,

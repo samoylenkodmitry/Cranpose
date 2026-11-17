@@ -10,7 +10,7 @@ use cranpose_foundation::PointerId;
 use cranpose_testing::robot::TestRenderer;
 use cranpose_ui::{
     Box, BoxSpec, Modifier, Point, PointerEventKind, Size,
-    space::{Camera, Mat4, Material, Mesh, MeshSurface, Ray, Scene3d, Vec3},
+    space::{Camera, Mat4, Material, Mesh, MeshSurface, Multisample, Ray, Scene3d, Vec3},
 };
 
 const PANEL: Size = Size {
@@ -43,6 +43,7 @@ fn panel_shell() -> (AppShell<TestRenderer>, NodeId, Clicks) {
                     ),
                     light: None,
                     eye: None,
+                    multisample: Multisample::Off,
                 }),
                 BoxSpec::default(),
                 move || {

@@ -12,12 +12,12 @@ use capture::{
     save_exact_robot_keyframe_crops, ActualTiming, CaptureRequest, ComparisonGrid, Crop, Keyframe,
 };
 use cranpose::{
-    widgets::{BasicTextFieldOptions, BasicTextFieldWithOptions, Box, BoxSpec, Text},
+    widgets::{Box, BoxSpec, Text},
     AppLauncher, Color, Modifier, RobotTimelineAction, RobotTimelineStep, Size,
 };
 use cranpose_foundation::text::TextFieldState;
 use cranpose_ui::text::{AnnotatedString, TextStyle, TextUnit};
-use desktop_app::app;
+use desktop_app::{accent_field::AccentField, app};
 
 use crate::text_showcase_external_helpers as x11_helpers;
 
@@ -1313,16 +1313,12 @@ fn TextSelectionFixture() {
             );
             let state = cranpose_core::remember(|| TextFieldState::new(TEXT_CONTENT))
                 .with(TextFieldState::clone);
-            BasicTextFieldWithOptions(
+            AccentField(
                 state,
                 Modifier::empty()
                     .absolute_offset(TEXT_FIELD_X, TEXT_FIELD_Y)
                     .size(Size::new(TEXT_FIELD_WIDTH, 120.0)),
-                BasicTextFieldOptions {
-                    text_style: text_style(),
-                    cursor_color: Color(0.965, 0.208, 0.557, 1.0),
-                    ..BasicTextFieldOptions::default()
-                },
+                (text_style(), Color(0.965, 0.208, 0.557, 1.0)),
             );
         },
     );

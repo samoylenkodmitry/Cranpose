@@ -2,6 +2,11 @@ pub static DEMO_FONTS: &[&[u8]] = &[
     include_bytes!("../assets/NotoSansMerged.ttf"),
     include_bytes!("../assets/NotoSansBold.ttf"),
     include_bytes!("../assets/TwemojiMozilla.ttf"),
+    include_bytes!("../assets/explainer/Caprasimo-Regular.ttf"),
+    include_bytes!("../assets/explainer/FigtreeMedium-Regular.ttf"),
+    include_bytes!("../assets/explainer/Figtree-Bold.ttf"),
+    include_bytes!("../assets/explainer/NotoSansCJKsc-Subset.ttf"),
+    include_bytes!("../assets/explainer/NotoSansArabic-Subset.ttf"),
 ];
 
 /// Registers the system font variations used by the native Liquid comparison fixtures.

@@ -5,7 +5,7 @@ use std::rc::Rc;
 
 use cranpose_ui::{
     Modifier, Point, Size,
-    space::{Camera, Mat4, Scene3d, Vec3},
+    space::{Camera, Mat4, Multisample, Scene3d, Vec3},
     widgets::{Box, BoxSpec, Row, RowSpec},
 };
 
@@ -57,6 +57,7 @@ fn pressed_at(
                 camera: flat_camera(),
                 light: None,
                 eye: None,
+                multisample: Multisample::Off,
             }),
             BoxSpec::default(),
             move || inside(&surface),

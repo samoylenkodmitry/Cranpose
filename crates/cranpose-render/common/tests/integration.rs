@@ -13,6 +13,7 @@ mod layer_and_raster_rules;
 mod layer_property_updates;
 mod lazy_trim_scene;
 mod mesh_surface_hits;
+mod mesh_surfaces_owner;
 mod moved_layers;
 mod multilingual_text;
 mod overlay_layers;

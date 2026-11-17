@@ -1,8 +1,10 @@
 use cranpose_core::{mutableStateOf, remember, rememberMutableStateOf, MutableState};
 use cranpose_ui::{
-    composable, space::Scene3d, Box, BoxSpec, BoxWithConstraints, BoxWithConstraintsScope, Button,
-    ButtonSpec, Color, Column, ColumnSpec, LinearArrangement, Modifier, Point, PointerEventKind,
-    PointerInputScope, Row, RowSpec, Size, Text,
+    composable,
+    space::{Multisample, Scene3d},
+    Box, BoxSpec, BoxWithConstraints, BoxWithConstraintsScope, Button, ButtonSpec, Color, Column,
+    ColumnSpec, LinearArrangement, Modifier, Point, PointerEventKind, PointerInputScope, Row,
+    RowSpec, Size, Text,
 };
 
 use super::{
@@ -208,6 +210,7 @@ fn EyeBox(view: EyeView, side: Option<Side>, scene: SceneState, modifier: Modifi
                     camera: eye.camera(eye.layout(size)),
                     light: None,
                     eye: None,
+                    multisample: Multisample::Off,
                 }
             }),
             BoxSpec::default(),

@@ -6,6 +6,7 @@
 
 use std::process::{ExitCode, Termination};
 
+mod explainer_robot;
 mod external_x11_frame_telemetry;
 mod glass_backdrop_scroll_helpers;
 mod hacker_news_robot_support;
@@ -76,6 +77,14 @@ runners! {
     robot_documentation_links,
     robot_double_click,
     robot_drag_selection,
+    robot_explainer_paint,
+    robot_explainer_lamp,
+    robot_explainer_melt,
+    robot_explainer_how,
+    robot_explainer_page,
+    robot_explainer_pool,
+    robot_explainer_silk,
+    robot_explainer_stamps,
     robot_draw_only_transition_work,
     robot_feed_touched_shadow,
     robot_fling,

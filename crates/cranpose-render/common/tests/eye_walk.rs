@@ -10,7 +10,7 @@ use cranpose_foundation::{PointerEvent, PointerEventKind};
 use cranpose_render_common::{HitTestTarget, RenderScene};
 use cranpose_ui::{
     Modifier, Point,
-    space::{Camera, EyePose, Mat4, Ray, Scene3d, Vec3},
+    space::{Camera, EyePose, Mat4, Multisample, Ray, Scene3d, Vec3},
     widgets::{Box, BoxSpec},
 };
 
@@ -109,6 +109,7 @@ fn an_eye_sees_through_doorways_as_deep_as_they_show() {
                 ),
                 light: None,
                 eye: None,
+                multisample: Multisample::Off,
             }),
             BoxSpec::default(),
             move || {
@@ -148,6 +149,7 @@ fn a_doorway_off_screen_shows_nothing_of_its_space() {
                 ),
                 light: None,
                 eye: None,
+                multisample: Multisample::Off,
             }),
             BoxSpec::default(),
             move || {

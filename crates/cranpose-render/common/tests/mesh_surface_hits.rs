@@ -9,7 +9,7 @@ use cranpose_foundation::{PointerEvent, PointerEventKind};
 use cranpose_render_common::{HitTestTarget, RenderScene, graph_scene::Scene};
 use cranpose_ui::{
     LayoutEngine, Modifier, Point, Rect, Size,
-    space::{Camera, Mat4, Material, Mesh, MeshSurface, Scene3d, Vec3},
+    space::{Camera, Mat4, Material, Mesh, MeshSurface, Multisample, Scene3d, Vec3},
     widgets::{Box, BoxSpec},
 };
 
@@ -89,6 +89,7 @@ fn probe() -> Probe {
                 camera: camera(),
                 light: None,
                 eye: None,
+                multisample: Multisample::Off,
             }),
             BoxSpec::default(),
             move || {
@@ -193,6 +194,7 @@ fn a_camera_that_moves_moves_where_its_surfaces_take_input() {
                 camera: camera_at(eye.get()),
                 light: None,
                 eye: None,
+                multisample: Multisample::Off,
             }),
             BoxSpec::default(),
             move || {
@@ -312,6 +314,7 @@ fn wall_scene(inside: impl Fn(&Pressable) + 'static) -> (Scene, Presses) {
                 camera: camera(),
                 light: None,
                 eye: None,
+                multisample: Multisample::Off,
             }),
             BoxSpec::default(),
             move || {
@@ -500,6 +503,7 @@ pub(crate) fn nested_window() -> Modifier {
             ),
             light: None,
             eye: None,
+            multisample: Multisample::Off,
         })
 }
 

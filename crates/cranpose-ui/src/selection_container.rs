@@ -514,6 +514,9 @@ pub(crate) struct SelectionGesture {
     long_press: RefCell<Option<cranpose_core::internal::FrameCallbackRegistration>>,
     long_press_start: Cell<Option<u64>>,
     menu_open: MutableState<bool>,
+    // The container's own frame in the window, the frame the texts'
+    // geometry is in.
+    window: Rc<Cell<WindowCoordinates>>,
 }
 
 impl SelectionGesture {
@@ -530,7 +533,21 @@ impl SelectionGesture {
             long_press: RefCell::new(None),
             long_press_start: Cell::new(None),
             menu_open,
+            window: Rc::default(),
         }
+    }
+
+    // Where the container publishes its frame in the window.
+    pub(crate) fn window_sink(&self) -> Rc<Cell<WindowCoordinates>> {
+        Rc::clone(&self.window)
+    }
+
+    // The pointer in the frame the texts' geometry is in. On a mesh surface
+    // the window point under the pointer is not the laid-out point of the
+    // words shown there; the event's local position followed the mesh to
+    // them.
+    fn window_point(&self, event: &crate::PointerEvent) -> Point {
+        self.window.get().local_to_window.map_point(event.position)
     }
 
     /// Makes this container the one a copy acts on, clearing the selection of
@@ -563,7 +580,7 @@ impl SelectionGesture {
         crate::text_field_focus::clear_focus();
         self.menu_open.set(false);
         let touch = event.source.is_touch_like();
-        let point = event.global_position;
+        let point = self.window_point(event);
         let mut press = Press {
             start: point,
             touch,
@@ -598,7 +615,7 @@ impl SelectionGesture {
         let Some(mut press) = self.press.get() else {
             return false;
         };
-        let point = event.global_position;
+        let point = self.window_point(event);
         let Some(unit) = press.unit else {
             if press.touch && !press.released_to_scroll {
                 let moved = (point.x - press.start.x)

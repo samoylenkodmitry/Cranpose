@@ -1,5 +1,5 @@
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     sync::{Arc, OnceLock},
 };
 
@@ -8,8 +8,8 @@ use cranpose_macros::composable;
 use cranpose_ui::{
     Alignment, Color, Modifier, Size,
     space::{
-        Camera, EyePose, Glass, Light, Mat4, Material, Mesh, MeshSurface, NEAR_PLANE, Scene3d,
-        Shaded, Vec3, Volume,
+        Camera, EyePose, Glass, Light, Mat4, Material, Mesh, MeshSurface, MeshSurfaces,
+        Multisample, NEAR_PLANE, Scene3d, Shaded, TextureEdges, Vec3, Volume,
     },
     widgets::{Box, BoxSpec, Row, RowSpec},
 };
@@ -118,13 +118,19 @@ fn meshes() -> (Arc<Mesh>, Arc<Mesh>) {
 /// A frame-sized scene seen through [`camera`], lit along `(1, 0, 1)`.
 #[composable]
 fn Scene(light_size: f32, content: impl FnMut() + 'static) {
+    SceneOn(Color::BLACK, light_size, content);
+}
+
+// `Scene` on a page of `page`, taking the samples `SAMPLES` holds.
+#[composable]
+fn SceneOn(page: Color, light_size: f32, content: impl FnMut() + 'static) {
     Box(
         Modifier::empty()
             .size(Size {
                 width: FRAME_WIDTH as f32,
                 height: FRAME_HEIGHT as f32,
             })
-            .background(Color::BLACK)
+            .background(page)
             .scene3d(move || Scene3d {
                 camera: camera(),
                 light: Some(Light {
@@ -134,6 +140,7 @@ fn Scene(light_size: f32, content: impl FnMut() + 'static) {
                     size: light_size,
                 }),
                 eye: None,
+                multisample: SAMPLES.with(Cell::get),
             }),
         BoxSpec::default(),
         content,
@@ -210,7 +217,12 @@ fn red_blue_wall(plane: &Arc<Mesh>, transform: Mat4) {
 
 // A red square on the left, a blue one on the right.
 fn red_blue_halves() {
-    for color in [Color(1.0, 0.0, 0.0, 1.0), Color(0.0, 0.0, 1.0, 1.0)] {
+    halves(RED);
+}
+
+// A square of `left` on the left, a blue one on the right.
+fn halves(left: Color) {
+    for color in [left, Color(0.0, 0.0, 1.0, 1.0)] {
         Box(
             Modifier::empty()
                 .size(Size {
@@ -263,6 +275,76 @@ fn HeldWallScene() {
             },
         );
     });
+}
+
+// Where `TwoMeshScene` shows its one content: the owner and a smaller copy.
+const OWNER_WALL: (Vec3, (f32, f32)) = (Vec3::new(-90.0, -20.0, 0.0), (160.0, 80.0));
+const COPY_WALL: (Vec3, (f32, f32)) = (Vec3::new(100.0, 50.0, 0.0), (120.0, 60.0));
+
+const RED: Color = Color(1.0, 0.0, 0.0, 1.0);
+const GREEN: Color = Color(0.0, 1.0, 0.0, 1.0);
+
+// One content on two meshes, its left half the colour the test sets.
+#[composable]
+fn TwoMeshScene() {
+    let (plane, _) = meshes();
+    let left = rememberMutableStateOf(|| RED);
+    TWO_MESH_LEFT.with(|slot| *slot.borrow_mut() = Some(left));
+    Scene(0.0, move || {
+        let plane = Arc::clone(&plane);
+        Row(
+            Modifier::empty()
+                .size(Size {
+                    width: 256.0,
+                    height: 128.0,
+                })
+                .mesh_surfaces(move || {
+                    let placed = |(at, side)| MeshSurface {
+                        mesh: Arc::clone(&plane),
+                        transform: panel(side, at),
+                        material: Material::Unlit,
+                        casts_shadow: false,
+                        solid: true,
+                    };
+                    MeshSurfaces::new(placed(OWNER_WALL), vec![placed(COPY_WALL)])
+                }),
+            RowSpec::default(),
+            move || halves(left.get()),
+        );
+    });
+}
+
+#[test]
+fn a_layer_on_two_meshes_shows_its_content_on_both() {
+    let Some((_lock, mut shell)) = support::app_shell_for(
+        TwoMeshScene,
+        FRAME_WIDTH,
+        FRAME_HEIGHT,
+        wgpu::TextureFormat::Rgba8Unorm,
+        |_| {},
+    ) else {
+        return;
+    };
+    let (frame, _) = support::warm_shell_frame(&mut shell, FRAME_WIDTH, FRAME_HEIGHT);
+    both_show_left(&frame, ("red", 0));
+    let left = TWO_MESH_LEFT.with(|slot| slot.borrow().expect("the scene composed"));
+    left.set(GREEN);
+    let (_, frame) = support::update_and_capture(&mut shell, FRAME_WIDTH, FRAME_HEIGHT);
+    both_show_left(&frame, ("green", 1));
+}
+
+// Asserts that both meshes of `TwoMeshScene` show the content's left half
+// in the colour `name`, whose `channel` is full, left of its blue half.
+fn both_show_left(frame: &cranpose_render_wgpu::CapturedFrame, (name, channel): (&str, usize)) {
+    for (at, (width, _)) in [OWNER_WALL, COPY_WALL] {
+        let left = pixel_at(frame, at + Vec3::new(-width * 0.25, 0.0, 0.0));
+        let right = pixel_at(frame, at + Vec3::new(width * 0.25, 0.0, 0.0));
+        assert!(
+            left[channel] > 200 && left[1 - channel] < 40 && left[2] < 40 && right[2] > 200,
+            "the mesh at {at:?} shows the content's {name} half left of its blue one: \
+             {left:?}, {right:?}"
+        );
+    }
 }
 
 #[test]
@@ -335,14 +417,27 @@ fn shadow_edge_width(frame: &cranpose_render_wgpu::CapturedFrame) -> usize {
 }
 
 fn capture(page: fn()) -> Option<cranpose_render_wgpu::CapturedFrame> {
-    let (_lock, mut shell) = support::app_shell_for(
+    capture_with(page, Multisample::Off)
+}
+
+// A frame of `page`, whose `Scene` takes `samples` in each pixel.
+fn capture_with(page: fn(), samples: Multisample) -> Option<cranpose_render_wgpu::CapturedFrame> {
+    SAMPLES.with(|cell| cell.set(samples));
+    let frame = support::app_shell_for(
         page,
         FRAME_WIDTH,
         FRAME_HEIGHT,
         wgpu::TextureFormat::Rgba8Unorm,
         |_| {},
-    )?;
-    Some(support::warm_shell_frame(&mut shell, FRAME_WIDTH, FRAME_HEIGHT).0)
+    )
+    .map(|(_lock, mut shell)| support::warm_shell_frame(&mut shell, FRAME_WIDTH, FRAME_HEIGHT).0);
+    SAMPLES.with(|cell| cell.set(Multisample::Off));
+    frame
+}
+
+thread_local! {
+    // The samples a `Scene` the test draws takes in each pixel.
+    static SAMPLES: Cell<Multisample> = const { Cell::new(Multisample::Off) };
 }
 
 /// A side of content whose square at scale one is past the 16M-pixel budget
@@ -481,41 +576,227 @@ fn an_emissive_surface_shows_its_colour_untouched_by_light() {
     );
 }
 
+// An emissive red sphere, which no light changes, on a grey page.
+#[composable]
+fn OutlineScene() {
+    let (_, sphere) = meshes();
+    SceneOn(Color(0.5, 0.5, 0.5, 1.0), 0.0, move || {
+        Surface(
+            Arc::clone(&sphere),
+            ball(),
+            (Material::Emissive, false, Color(1.0, 0.0, 0.0, 1.0)),
+        );
+    });
+}
+
+// The pixels of a frame of `OutlineScene` that are neither the page's grey
+// nor the sphere's red, and how many of those are not a blend of the two on
+// the sphere's outline.
+fn outline_blends(frame: &cranpose_render_wgpu::CapturedFrame) -> (usize, usize) {
+    let page = [frame.pixels[0], frame.pixels[1], frame.pixels[2]];
+    // The sphere lies on the camera's axis, so its outline is a circle about
+    // the frame's middle.
+    let distance = SPHERE.z - EYE_Z;
+    let outline =
+        FOCAL_LENGTH * SPHERE_RADIUS / (distance * distance - SPHERE_RADIUS * SPHERE_RADIUS).sqrt();
+    let near = |a: u8, b: u8| a.abs_diff(b) <= 2;
+    let (mut blends, mut strays) = (0, 0);
+    for (index, pixel) in frame.pixels.as_chunks::<4>().0.iter().enumerate() {
+        let is_page = (0..3).all(|channel| near(pixel[channel], page[channel]));
+        let is_red = pixel[0] == 255 && pixel[1] == 0 && pixel[2] == 0;
+        if is_page || is_red {
+            continue;
+        }
+        blends += 1;
+        let x = (index % frame.width as usize) as f32 + 0.5 - FRAME_WIDTH as f32 * 0.5;
+        let y = (index / frame.width as usize) as f32 + 0.5 - FRAME_HEIGHT as f32 * 0.5;
+        let on_outline = ((x * x + y * y).sqrt() - outline).abs() < 1.5;
+        let red_over_grey = near(pixel[1], pixel[2]) && pixel[0] > pixel[1];
+        if !(on_outline && red_over_grey) {
+            strays += 1;
+        }
+    }
+    (blends, strays)
+}
+
 #[test]
-fn a_glass_ball_shows_the_scene_behind_it_bent_and_glow_adds_to_it() {
-    let Some(frame) = capture(GlassScene) else {
+fn a_sphere_s_outline_blends_into_the_page_with_four_samples_and_steps_with_one() {
+    let Some(single) = capture_with(OutlineScene, Multisample::Off) else {
         return;
     };
-    let left_of_ball = pixel_at(&frame, Vec3::new(-300.0, 0.0, 600.0));
+    let Some(four) = capture_with(OutlineScene, Multisample::X4) else {
+        return;
+    };
+    assert_eq!(
+        outline_blends(&single),
+        (0, 0),
+        "with one sample each pixel shows the sphere or the page"
+    );
+    let (blends, strays) = outline_blends(&four);
     assert!(
-        left_of_ball[0] > 200 && left_of_ball[2] < 40,
-        "the wall's left half is red beside the ball: {left_of_ball:?}"
+        blends > 300,
+        "with four samples the pixels the outline crosses blend the sphere into the page: {blends}"
     );
-    // Through a solid ball the scene shows upside down: the ball's left side
-    // shows the wall's right half, and its right side the left half.
-    let ball_left = pixel_at(
-        &frame,
-        SPHERE + Vec3::new(-0.5, 0.0, -0.866) * SPHERE_RADIUS,
+    assert_eq!(
+        strays, 0,
+        "every blended pixel lies on the outline, red over grey"
     );
-    let ball_right = pixel_at(&frame, SPHERE + Vec3::new(0.5, 0.0, -0.866) * SPHERE_RADIUS);
-    assert!(
-        ball_left[2] > ball_left[0] + 60,
-        "the ball's left side shows the blue right half of the wall: {ball_left:?}"
+    for frame in [&single, &four] {
+        assert_eq!(
+            &frame.pixels[..4],
+            &[128, 128, 128, 255],
+            "the page keeps its grey away from the sphere"
+        );
+    }
+}
+
+// The red sphere of `OutlineScene` in a grey scene of `size` whose node lies
+// at `at` in the frame, on a white page.
+#[composable]
+fn PlacedOutline(at: (f32, f32), size: Size) {
+    let (_, sphere) = meshes();
+    Box(
+        Modifier::empty()
+            .size(Size {
+                width: FRAME_WIDTH as f32,
+                height: FRAME_HEIGHT as f32,
+            })
+            .background(Color::WHITE),
+        BoxSpec::default(),
+        move || {
+            let sphere = Arc::clone(&sphere);
+            Box(
+                Modifier::empty()
+                    .offset(at.0, at.1)
+                    .size(size)
+                    .background(Color(0.5, 0.5, 0.5, 1.0))
+                    .scene3d(|| Scene3d {
+                        camera: camera(),
+                        light: None,
+                        eye: None,
+                        multisample: SAMPLES.with(Cell::get),
+                    }),
+                BoxSpec::default(),
+                move || {
+                    Surface(
+                        Arc::clone(&sphere),
+                        ball(),
+                        (Material::Emissive, false, Color(1.0, 0.0, 0.0, 1.0)),
+                    );
+                },
+            );
+        },
     );
-    assert!(
-        ball_right[0] > ball_right[2] + 60,
-        "the ball's right side shows the red left half of the wall: {ball_right:?}"
+}
+
+// A scene smaller than the frame, inside it.
+#[composable]
+fn SmallOutlineScene() {
+    PlacedOutline((130.0, 100.0), Size::new(200.0, 150.0));
+}
+
+// A scene of the frame's size that hangs past its right and bottom edges.
+#[composable]
+fn HangingOutlineScene() {
+    PlacedOutline(
+        (60.0, 45.0),
+        Size::new(FRAME_WIDTH as f32, FRAME_HEIGHT as f32),
     );
-    let glow = pixel_at(&frame, GLOW_PANEL);
-    assert!(
-        glow[0] > 200 && glow[1] > 100,
-        "the glow panel adds its green to the red wall it hides nothing of: {glow:?}"
-    );
+}
+
+// How many pixels of `four` differ from `one`, and how many of those lie
+// where `one` shows one colour over the pixel and its eight neighbours.
+fn sampled_changes(
+    one: &cranpose_render_wgpu::CapturedFrame,
+    four: &cranpose_render_wgpu::CapturedFrame,
+) -> (usize, usize) {
+    let width = one.width as usize;
+    let height = one.height as usize;
+    let at = |frame: &cranpose_render_wgpu::CapturedFrame, x: usize, y: usize| {
+        let index = (y * width + x) * 4;
+        [
+            frame.pixels[index],
+            frame.pixels[index + 1],
+            frame.pixels[index + 2],
+        ]
+    };
+    let (mut changed, mut misplaced) = (0, 0);
+    for y in 1..height - 1 {
+        for x in 1..width - 1 {
+            if at(one, x, y) == at(four, x, y) {
+                continue;
+            }
+            changed += 1;
+            let flat = (y - 1..=y + 1)
+                .all(|row| (x - 1..=x + 1).all(|column| at(one, column, row) == at(one, x, y)));
+            if flat {
+                misplaced += 1;
+            }
+        }
+    }
+    (changed, misplaced)
+}
+
+#[test]
+fn a_multisampled_scene_lands_where_it_lies_on_the_page() {
+    for scene in [SmallOutlineScene as fn(), HangingOutlineScene] {
+        let (Some(one), Some(four)) = (
+            capture_with(scene, Multisample::Off),
+            capture_with(scene, Multisample::X4),
+        ) else {
+            return;
+        };
+        let (changed, misplaced) = sampled_changes(&one, &four);
+        assert!(
+            changed > 100,
+            "four samples blend the sphere's outline: {changed}"
+        );
+        assert_eq!(
+            misplaced, 0,
+            "four samples change only pixels an edge crosses"
+        );
+    }
+}
+
+#[test]
+fn a_glass_ball_shows_the_scene_behind_it_bent_and_glow_adds_to_it() {
+    // Each pipeline the scene draws with has a variant of four samples.
+    for samples in [Multisample::Off, Multisample::X4] {
+        let Some(frame) = capture_with(GlassScene, samples) else {
+            return;
+        };
+        let left_of_ball = pixel_at(&frame, Vec3::new(-300.0, 0.0, 600.0));
+        assert!(
+            left_of_ball[0] > 200 && left_of_ball[2] < 40,
+            "the wall's left half is red beside the ball: {left_of_ball:?}"
+        );
+        // Through a solid ball the scene shows upside down: the ball's left side
+        // shows the wall's right half, and its right side the left half.
+        let ball_left = pixel_at(
+            &frame,
+            SPHERE + Vec3::new(-0.5, 0.0, -0.866) * SPHERE_RADIUS,
+        );
+        let ball_right = pixel_at(&frame, SPHERE + Vec3::new(0.5, 0.0, -0.866) * SPHERE_RADIUS);
+        assert!(
+            ball_left[2] > ball_left[0] + 60,
+            "the ball's left side shows the blue right half of the wall: {ball_left:?}"
+        );
+        assert!(
+            ball_right[0] > ball_right[2] + 60,
+            "the ball's right side shows the red left half of the wall: {ball_right:?}"
+        );
+        let glow = pixel_at(&frame, GLOW_PANEL);
+        assert!(
+            glow[0] > 200 && glow[1] > 100,
+            "the glow panel adds its green to the red wall it hides nothing of: {glow:?}"
+        );
+    }
 }
 
 thread_local! {
     static SHAPE: RefCell<Option<MutableState<Arc<Mesh>>>> = const { RefCell::new(None) };
     static WALKER: RefCell<Option<cranpose_ui::Eye>> = const { RefCell::new(None) };
+    static TWO_MESH_LEFT: RefCell<Option<MutableState<Color>>> = const { RefCell::new(None) };
 }
 
 /// A sphere of `radius` from its signed distance field.
@@ -634,19 +915,22 @@ fn BrokenShadedScene() {
 
 #[test]
 fn a_shaded_surface_takes_its_colour_from_its_shader() {
-    let Some(frame) = capture(FacingScene) else {
-        return;
-    };
-    let lit = pixel_at(&frame, Vec3::new(-400.0, 300.0, 600.0));
-    assert!(
-        lit[0] > 240 && lit[1] > 200 && lit[2] > 240,
-        "the wall shows its first value, that it faces the eye and that the light reaches it: {lit:?}"
-    );
-    let shadowed = pixel_at(&frame, Vec3::new(400.0, 0.0, 600.0));
-    assert!(
-        shadowed[0] > 240 && shadowed[2] < 40,
-        "in the ball's shadow the light does not reach the wall: {shadowed:?}"
-    );
+    // Each pipeline the scene draws with has a variant of four samples.
+    for samples in [Multisample::Off, Multisample::X4] {
+        let Some(frame) = capture_with(FacingScene, samples) else {
+            return;
+        };
+        let lit = pixel_at(&frame, Vec3::new(-400.0, 300.0, 600.0));
+        assert!(
+            lit[0] > 240 && lit[1] > 200 && lit[2] > 240,
+            "the wall shows its first value, that it faces the eye and that the light reaches it: {lit:?}"
+        );
+        let shadowed = pixel_at(&frame, Vec3::new(400.0, 0.0, 600.0));
+        assert!(
+            shadowed[0] > 240 && shadowed[2] < 40,
+            "in the ball's shadow the light does not reach the wall: {shadowed:?}"
+        );
+    }
 }
 
 // Green where the eye the surface holds lies within a unit of the point
@@ -777,37 +1061,40 @@ fn BrokenVolumeScene() {
 
 #[test]
 fn a_volume_draws_what_its_shader_finds_at_the_depth_it_finds_it() {
-    let Some(frame) = capture(BallVolumeScene) else {
-        return;
-    };
-    let radius = 0.4 * VOLUME_SIDE;
-    let front = pixel_at(&frame, SPHERE - Vec3::new(0.0, 0.0, radius));
-    assert!(
-        front[0] > 200 && front[1] < 40 && front[2] < 40,
-        "the ball shows its content's red, times its first value: {front:?}"
-    );
-    let corner = pixel_at(&frame, SPHERE + Vec3::new(130.0, 130.0, -150.0));
-    assert!(
-        corner[2] > 200 && corner[0] < 40,
-        "the wall shows through the cube where the ball is not: {corner:?}"
-    );
-    let ahead = pixel_at(&frame, Vec3::new(80.0, 0.0, 80.0));
-    assert!(
-        ahead[1] > 200 && ahead[0] < 40,
-        "a panel in the cube in front of the ball hides it: {ahead:?}"
-    );
-    let behind = pixel_at(&frame, Vec3::new(-50.0, 0.0, 170.0));
-    assert!(
-        behind[0] > 200 && behind[1] < 40,
-        "the ball hides a panel behind its front: {behind:?}"
-    );
-    // The light travels along (1, 0, 1): the cube would shade this point of
-    // the wall, beside the ball's shadow.
-    let unshaded = pixel_at(&frame, Vec3::new(300.0, 130.0, 600.0));
-    assert!(
-        unshaded[2] > 200,
-        "a volume casts no shadow, though its surface asks for one: {unshaded:?}"
-    );
+    // Each pipeline the scene draws with has a variant of four samples.
+    for samples in [Multisample::Off, Multisample::X4] {
+        let Some(frame) = capture_with(BallVolumeScene, samples) else {
+            return;
+        };
+        let radius = 0.4 * VOLUME_SIDE;
+        let front = pixel_at(&frame, SPHERE - Vec3::new(0.0, 0.0, radius));
+        assert!(
+            front[0] > 200 && front[1] < 40 && front[2] < 40,
+            "the ball shows its content's red, times its first value: {front:?}"
+        );
+        let corner = pixel_at(&frame, SPHERE + Vec3::new(130.0, 130.0, -150.0));
+        assert!(
+            corner[2] > 200 && corner[0] < 40,
+            "the wall shows through the cube where the ball is not: {corner:?}"
+        );
+        let ahead = pixel_at(&frame, Vec3::new(80.0, 0.0, 80.0));
+        assert!(
+            ahead[1] > 200 && ahead[0] < 40,
+            "a panel in the cube in front of the ball hides it: {ahead:?}"
+        );
+        let behind = pixel_at(&frame, Vec3::new(-50.0, 0.0, 170.0));
+        assert!(
+            behind[0] > 200 && behind[1] < 40,
+            "the ball hides a panel behind its front: {behind:?}"
+        );
+        // The light travels along (1, 0, 1): the cube would shade this point of
+        // the wall, beside the ball's shadow.
+        let unshaded = pixel_at(&frame, Vec3::new(300.0, 130.0, 600.0));
+        assert!(
+            unshaded[2] > 200,
+            "a volume casts no shadow, though its surface asks for one: {unshaded:?}"
+        );
+    }
 }
 
 #[test]
@@ -955,6 +1242,7 @@ fn doorway(content: impl FnMut() + 'static) {
                 ),
                 light: None,
                 eye: None,
+                multisample: Multisample::Off,
             }),
         BoxSpec::default(),
         content,
@@ -963,29 +1251,32 @@ fn doorway(content: impl FnMut() + 'static) {
 
 #[test]
 fn a_scene_inside_a_wall_shows_its_space_behind_the_wall_through_its_doorway() {
-    let Some(frame) = capture(PortalScene) else {
-        return;
-    };
-    // The red ball's front lies at 1400 + 4 * 80. The green ball lies at
-    // 200, in front of the wall, behind the nested camera.
-    let through = pixel_at(&frame, Vec3::new(0.0, 0.0, 1720.0));
-    assert!(
-        through[0] > 200 && through[1] < 40 && through[2] < 40,
-        "the red ball shows through the doorway, and the green one behind the nested camera is \
+    // Each pipeline the scene draws with has a variant of four samples.
+    for samples in [Multisample::Off, Multisample::X4] {
+        let Some(frame) = capture_with(PortalScene, samples) else {
+            return;
+        };
+        // The red ball's front lies at 1400 + 4 * 80. The green ball lies at
+        // 200, in front of the wall, behind the nested camera.
+        let through = pixel_at(&frame, Vec3::new(0.0, 0.0, 1720.0));
+        assert!(
+            through[0] > 200 && through[1] < 40 && through[2] < 40,
+            "the red ball shows through the doorway, and the green one behind the nested camera is \
          cut: {through:?}"
-    );
-    let wall = pixel_at(&frame, Vec3::new(-400.0, 0.0, 600.0));
-    assert!(
-        wall[2] > 200 && wall[0] < 40,
-        "the wall shows beside the window: {wall:?}"
-    );
-    // The yellow ball lies behind the wall below its bottom edge, where the
-    // eye sees past the wall but not through the doorway.
-    let below = pixel_at(&frame, Vec3::new(0.0, 320.0, 800.0));
-    assert!(
-        below[0] < 40 && below[1] < 40,
-        "the space behind the doorway shows only through it: {below:?}"
-    );
+        );
+        let wall = pixel_at(&frame, Vec3::new(-400.0, 0.0, 600.0));
+        assert!(
+            wall[2] > 200 && wall[0] < 40,
+            "the wall shows beside the window: {wall:?}"
+        );
+        // The yellow ball lies behind the wall below its bottom edge, where the
+        // eye sees past the wall but not through the doorway.
+        let below = pixel_at(&frame, Vec3::new(0.0, 320.0, 800.0));
+        assert!(
+            below[0] < 40 && below[1] < 40,
+            "the space behind the doorway shows only through it: {below:?}"
+        );
+    }
 }
 
 /// The red ball of [`PortalScene`] behind its doorway, coloured by
@@ -1015,15 +1306,18 @@ fn ShadedPortalScene() {
 
 #[test]
 fn a_shaded_surface_behind_a_doorway_takes_its_colour_from_its_shader() {
-    let Some(frame) = capture(ShadedPortalScene) else {
-        return;
-    };
-    let through = pixel_at(&frame, Vec3::new(0.0, 0.0, 1720.0));
-    assert!(
-        through[0] > 240 && through[1] > 200 && through[2] > 240,
-        "the ball behind the doorway faces the eye in a space without light, all of which \
+    // Each pipeline the scene draws with has a variant of four samples.
+    for samples in [Multisample::Off, Multisample::X4] {
+        let Some(frame) = capture_with(ShadedPortalScene, samples) else {
+            return;
+        };
+        let through = pixel_at(&frame, Vec3::new(0.0, 0.0, 1720.0));
+        assert!(
+            through[0] > 240 && through[1] > 200 && through[2] > 240,
+            "the ball behind the doorway faces the eye in a space without light, all of which \
          reaches it: {through:?}"
-    );
+        );
+    }
 }
 
 /// [`GlassScene`] behind the doorway of [`PortalScene`]: a clear glass ball
@@ -1063,28 +1357,31 @@ const PORTAL_GLOW: Vec3 = Vec3::new(-300.0, 170.0, 1700.0);
 
 #[test]
 fn glass_and_glow_show_through_a_doorway() {
-    let Some(frame) = capture(PortalGlassScene) else {
-        return;
-    };
-    let middle = Vec3::new(0.0, 0.0, 1400.0);
-    let ball_left = pixel_at(
-        &frame,
-        middle + Vec3::new(-0.5, 0.0, -0.866) * SPHERE_RADIUS,
-    );
-    let ball_right = pixel_at(&frame, middle + Vec3::new(0.5, 0.0, -0.866) * SPHERE_RADIUS);
-    assert!(
-        ball_left[2] > ball_left[0] + 60,
-        "the ball's left side shows the blue right half of the wall behind it: {ball_left:?}"
-    );
-    assert!(
-        ball_right[0] > ball_right[2] + 60,
-        "the ball's right side shows the red left half of the wall behind it: {ball_right:?}"
-    );
-    let glow = pixel_at(&frame, PORTAL_GLOW);
-    assert!(
-        glow[0] > 200 && glow[1] > 100,
-        "the glow panel adds its green to the red wall behind the doorway: {glow:?}"
-    );
+    // Each pipeline the scene draws with has a variant of four samples.
+    for samples in [Multisample::Off, Multisample::X4] {
+        let Some(frame) = capture_with(PortalGlassScene, samples) else {
+            return;
+        };
+        let middle = Vec3::new(0.0, 0.0, 1400.0);
+        let ball_left = pixel_at(
+            &frame,
+            middle + Vec3::new(-0.5, 0.0, -0.866) * SPHERE_RADIUS,
+        );
+        let ball_right = pixel_at(&frame, middle + Vec3::new(0.5, 0.0, -0.866) * SPHERE_RADIUS);
+        assert!(
+            ball_left[2] > ball_left[0] + 60,
+            "the ball's left side shows the blue right half of the wall behind it: {ball_left:?}"
+        );
+        assert!(
+            ball_right[0] > ball_right[2] + 60,
+            "the ball's right side shows the red left half of the wall behind it: {ball_right:?}"
+        );
+        let glow = pixel_at(&frame, PORTAL_GLOW);
+        assert!(
+            glow[0] > 200 && glow[1] > 100,
+            "the glow panel adds its green to the red wall behind the doorway: {glow:?}"
+        );
+    }
 }
 
 /// A camera at `eye` looking along `ahead`, as the walk test's eye.
@@ -1275,5 +1572,68 @@ fn doorways_inside_doorways_show_as_deep_as_they_open_on_screen() {
     assert!(
         middle[0] > 200 && middle[1] < 40 && middle[2] < 40,
         "the red ball behind the fifth doorway shows through all five: {middle:?}"
+    );
+}
+
+// A white sheet turned in its plane on black, its texture's edges given as
+// `edges`.
+#[composable]
+fn SlantedSheet(edges: TextureEdges) {
+    let sheet =
+        remember(move || Arc::new(Mesh::plane().with_texture_edges(edges))).with(Arc::clone);
+    let transform = panel((300.0, 200.0), Vec3::ZERO).then(&Mat4::rotation_z(0.2));
+    Scene(0.0, move || {
+        Surface(
+            Arc::clone(&sheet),
+            transform,
+            (Material::Unlit, false, Color::WHITE),
+        );
+    });
+}
+
+#[composable]
+fn OutlineSheetScene() {
+    SlantedSheet(TextureEdges::Outline);
+}
+
+#[composable]
+fn SeamsSheetScene() {
+    SlantedSheet(TextureEdges::Seams);
+}
+
+// How many pixels of the frame are neither the black around the sheet nor
+// the sheet's white: those an edge covers in part.
+fn partly_covered(frame: &cranpose_render_wgpu::CapturedFrame) -> usize {
+    frame
+        .pixels
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .filter(|pixel| (24..232).contains(&pixel[0]))
+        .count()
+}
+
+#[test]
+fn a_sheet_whose_outline_is_its_texture_edge_draws_a_smooth_outline() {
+    let (Some(outline), Some(seams)) = (capture(OutlineSheetScene), capture(SeamsSheetScene))
+    else {
+        return;
+    };
+    let (smooth, stepped) = (partly_covered(&outline), partly_covered(&seams));
+    assert!(
+        smooth > 300,
+        "the outline's pixels are covered in part along its four slanted edges: {smooth}"
+    );
+    assert!(
+        stepped < smooth / 10,
+        "a mesh of seams draws its triangles' pixels whole: {stepped}"
+    );
+    let Some(sampled) = capture_with(OutlineSheetScene, Multisample::X4) else {
+        return;
+    };
+    let sampled = partly_covered(&sampled);
+    assert!(
+        sampled > 300,
+        "with four samples the outline still fades over its pixels: {sampled}"
     );
 }

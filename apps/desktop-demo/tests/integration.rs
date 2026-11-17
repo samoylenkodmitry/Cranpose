@@ -15,6 +15,7 @@ mod counter_tab_roundtrip_regression;
 mod demo_fonts_parse;
 mod demo_tab_navigation_test;
 mod documentation_home;
+mod explainer_paint;
 mod font_variations;
 mod guide_wheel_drags;
 mod liquid_page_support;

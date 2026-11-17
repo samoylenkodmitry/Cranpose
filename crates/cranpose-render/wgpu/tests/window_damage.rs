@@ -26,7 +26,7 @@ use cranpose_ui::{
     Alignment, Box, BoxSpec, Color, Column, ColumnSpec, ContentScale, GraphicsLayer, Image,
     LayerShape, LazyColumn, LazyColumnSpec, LinearArrangement, Modifier, RenderEffect, Row,
     RowSpec, Size, Text, TextStyle, composable,
-    space::{Camera, Mat4, Material, Mesh, MeshSurface, Scene3d, Vec3},
+    space::{Camera, Mat4, Material, Mesh, MeshSurface, Multisample, Scene3d, Vec3},
     text::{SpanStyle, TextUnit},
 };
 use cranpose_ui_graphics::{
@@ -661,6 +661,7 @@ fn TurningSurface(step: MutableState<u32>) {
                 ),
                 light: None,
                 eye: None,
+                multisample: Multisample::Off,
             }),
         BoxSpec::default(),
         move || {

@@ -219,6 +219,47 @@ pub struct Scene3d {
     /// bump into; `None` for a camera in the scene's own space that walks
     /// through nothing. A scene behind a doorway leaves it out.
     pub eye: Option<EyePlace>,
+    /// How many samples the scene's pass takes in each pixel. A scene behind
+    /// a doorway draws in the pass of the window's scene, whose value counts
+    /// for both.
+    pub multisample: Multisample,
+}
+
+/// How many samples a scene's pass takes in each pixel.
+///
+/// With one sample, each pixel shows the surface its middle falls on, so the
+/// edge of a curved mesh, such as a sphere's or a tube's, steps from pixel to
+/// pixel. With four, the GPU tests coverage and depth at four points in each
+/// pixel and averages the colours they find, so the outline of a mesh and
+/// the line where two surfaces cut through each other show smooth. A
+/// surface's colour is still found once in each pixel: multisampling smooths
+/// the edges of meshes, not the edges of shapes a [`Volume`]'s shader finds
+/// or of transparent parts of a surface's content. A sheet, a mesh whose
+/// outline is its texture's edge, fades over that outline with either count.
+///
+/// A scene with four samples draws into targets of its own, four samples
+/// deep and as large as the scene, then averages them into the page: more
+/// GPU memory and time, which a scene left [`Off`](Self::Off) does not pay.
+/// The GPU renderer takes four samples on every backend, as every GPU format
+/// it draws scenes in supports them. The CPU renderer draws every scene with
+/// one sample.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Multisample {
+    /// One sample in each pixel.
+    #[default]
+    Off,
+    /// Four samples in each pixel.
+    X4,
+}
+
+impl Multisample {
+    /// The samples taken in each pixel.
+    pub const fn samples(self) -> u32 {
+        match self {
+            Self::Off => 1,
+            Self::X4 => 4,
+        }
+    }
 }
 
 /// A composable's content drawn on a mesh placed in a scene.
@@ -282,7 +323,10 @@ pub enum Material {
 ///
 /// and returns the colour, premultiplied. `ShadedSurface` holds, in the
 /// mesh's own coordinates: `color`, the content's colour there,
-/// premultiplied; `position`; `eye`; `normal`, of length one, on the side
+/// premultiplied; `uv`, where the point lies in the content, from `(0, 0)`
+/// at its top left corner to `(1, 1)` at its bottom right, at which
+/// `content_color(uv)` reads the content anywhere; `position`; `eye`;
+/// `normal`, of length one, on the side
 /// the eye sees; `to_eye` and `to_light`, of length one, toward the eye
 /// and toward the light, which is zero without a light; `lit`, how much of
 /// the light reaches the point, from 0 in full shadow to 1; and `ambient`,
@@ -497,6 +541,45 @@ impl MeshSurface {
     }
 }
 
+/// The meshes one composable's content is drawn on: one or more, each
+/// placed in the scene on its own, all showing the same live content.
+///
+/// The content is rendered once and every mesh shows it. A pointer takes
+/// the nearest of the meshes where it points and reaches the content point
+/// that mesh shows there; a drag stays on the mesh it started on. The first
+/// mesh, the owner, places the layer for everything that needs one place:
+/// the 3D frames of the layer's children, the doorways in its content, and
+/// the bounds the window and accessibility services report for the content.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MeshSurfaces {
+    owner: MeshSurface,
+    more: Vec<MeshSurface>,
+}
+
+impl MeshSurfaces {
+    /// The content on `owner`, which places the layer, and on each of
+    /// `more`.
+    pub fn new(owner: MeshSurface, more: Vec<MeshSurface>) -> Self {
+        Self { owner, more }
+    }
+
+    /// The mesh that places the layer: the first.
+    pub fn owner(&self) -> &MeshSurface {
+        &self.owner
+    }
+
+    /// The meshes, the owner first.
+    pub fn iter(&self) -> impl Iterator<Item = &MeshSurface> {
+        std::iter::once(&self.owner).chain(&self.more)
+    }
+}
+
+impl From<MeshSurface> for MeshSurfaces {
+    fn from(owner: MeshSurface) -> Self {
+        Self::new(owner, Vec::new())
+    }
+}
+
 /// Where a ray meets a [`MeshSurface`].
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SurfaceHit {
@@ -533,9 +616,10 @@ pub enum LayerSpace {
     /// The layer shows a scene: its children's frames are the scene's
     /// space. Inside another scene, the layer's rect is a doorway into it.
     Scene(Scene3d),
-    /// The layer's content is drawn on a mesh placed in the layer's frame,
-    /// and its children's frames lie in that content.
-    Surface(MeshSurface),
+    /// The layer's content is drawn on each of its meshes, placed in the
+    /// layer's frame, and its children's frames lie in that content as the
+    /// first mesh shows it.
+    Surface(MeshSurfaces),
     /// Moves the frames of the layer's descendants in its own frame, as a
     /// group of 3D objects moves together. The layer's own draws stay where
     /// they would be without it.
