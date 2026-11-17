@@ -227,6 +227,7 @@ impl Shared {
         let mut pending = self.pending.lock();
         while pending.len() >= MAX_IN_FLIGHT {
             if self.room.wait_until(&mut pending, deadline).timed_out() {
+                self.queue.stats.refused();
                 return Err(DecoderError::Full);
             }
         }
@@ -252,9 +253,11 @@ impl Shared {
                     self.session_lost.store(true, Relaxed);
                 }
             }
+            self.queue.stats.dropped();
             return;
         };
         if info.contains(VTDecodeInfoFlags::FrameDropped) {
+            self.queue.stats.dropped();
             return;
         }
         // SAFETY: the callback's image is valid for the call, and this takes a count of its own.
@@ -309,3 +312,7 @@ unsafe extern "C-unwind" fn on_output(
     let micros = i128::from(pts.value) * i128::from(TIMESCALE) / i128::from(pts.timescale.max(1));
     shared.output(status, info, image, u64::try_from(micros).unwrap_or(0));
 }
+
+#[cfg(test)]
+#[path = "tests/video_toolbox_tests.rs"]
+mod tests;

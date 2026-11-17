@@ -130,7 +130,10 @@ impl Backend {
             .map_err(|error| DecoderError::Failed(error.to_string()))?
         {
             DequeuedInputBufferResult::Buffer(buffer) => buffer,
-            DequeuedInputBufferResult::TryAgainLater => return Err(DecoderError::Full),
+            DequeuedInputBufferResult::TryAgainLater => {
+                self.shared.queue.stats.refused();
+                return Err(DecoderError::Full);
+            }
         };
         let room = buffer.buffer_mut().len();
         // The unit is registered before the codec can output its picture
@@ -259,6 +262,7 @@ impl Output {
         );
         if let Err(error) = self.codec.0.release_output_buffer(buffer, true) {
             log::error!("video decoder: render: {error}");
+            self.shared.queue.stats.dropped();
             return;
         }
         self.shared.queue.stats.decoded(info.decode_time);

@@ -101,7 +101,11 @@ Outside a headset the composable shows an empty box, and the callbacks never run
 `VideoDecoder` of `cranpose-services` decodes H.264, HEVC and AV1 on the headset's hardware. On
 Android it drives `MediaCodec` with the keys for the least delay: no reordering wait, priority
 0 and the top operating rate. The app feeds access units from one thread. A thread of the
-decoder drains the pictures, and no thread sleeps. Each picture returns with the timestamp and
+decoder drains the pictures. The feeding thread waits in `submit` for a free input buffer, up to
+`DecoderConfig::input_wait`, 30 ms by default: a busy Quest 3 refused pictures at 4 ms. The wait
+blocks the feeding thread only. The frame loop reads pictures through `DecodedFrames` and waits
+for no decode. `submit` answers `DecoderError::Full` after the wait and
+`DecoderStats::refused` counts it. Each picture returns with the timestamp and
 the `u64` that the app gave its access unit, and with the decode time.
 
 The app chooses where the pictures go:

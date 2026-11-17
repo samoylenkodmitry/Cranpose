@@ -144,13 +144,14 @@ impl Interval {
         let surface = reports.stats();
         log::info!(
             "xr demo: surface decoder {} pictures, decode {:.2} ms mean {:.2} ms longest, \
-             {} wrong metadata, {} submitted, {} dropped | frames decoder {} decoded, \
+             {} wrong metadata, {} submitted, {} refused, {} dropped | frames decoder {} decoded, \
              {} late, decode {:.2} ms mean, {} dropped",
             self.reports,
             mean.as_secs_f64() * 1000.0,
             self.longest.as_secs_f64() * 1000.0,
             self.wrong_metadata,
             surface.submitted,
+            surface.refused,
             surface.dropped,
             images.decoded,
             images.late,

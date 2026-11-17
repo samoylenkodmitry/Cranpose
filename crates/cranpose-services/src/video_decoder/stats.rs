@@ -7,9 +7,15 @@ use std::time::Duration;
 pub struct DecoderStats {
     /// The access units that the decoder took.
     pub submitted: u64,
+    /// The access units that [`submit`](super::VideoDecoder::submit) refused with
+    /// [`DecoderError::Full`](super::DecoderError::Full) after its wait. The decoder never saw
+    /// them.
+    pub refused: u64,
     /// The pictures that the decoder output.
     pub decoded: u64,
-    /// The pictures that the decoder dropped because the app did not take them in time.
+    /// The pictures that never reached the app after the decoder took their access units. The app
+    /// did not take some in time. The platform decoder lost the others while it decoded or
+    /// rendered them.
     pub dropped: u64,
     /// The pictures that reached the app's reader after the next picture began to decode. Only
     /// Android counts them: a decoder of Apple's has no reader between it and the app.
@@ -38,6 +44,7 @@ mod counters {
     #[derive(Default)]
     pub(crate) struct StatsCounters {
         submitted: AtomicU64,
+        refused: AtomicU64,
         decoded: AtomicU64,
         dropped: AtomicU64,
         late: AtomicU64,
@@ -49,6 +56,10 @@ mod counters {
     impl StatsCounters {
         pub(crate) fn submitted(&self) {
             self.submitted.fetch_add(1, Relaxed);
+        }
+
+        pub(crate) fn refused(&self) {
+            self.refused.fetch_add(1, Relaxed);
         }
 
         pub(crate) fn dropped(&self) {
@@ -79,6 +90,7 @@ mod counters {
             let time = |ns: &AtomicU64| Duration::from_nanos(ns.load(Relaxed));
             DecoderStats {
                 submitted: self.submitted.load(Relaxed),
+                refused: self.refused.load(Relaxed),
                 decoded: self.decoded.load(Relaxed),
                 dropped: self.dropped.load(Relaxed),
                 late: self.late.load(Relaxed),

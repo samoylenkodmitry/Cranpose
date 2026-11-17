@@ -2854,6 +2854,12 @@ answers `DecoderError::NeedsKeyframe` until a keyframe arrives, after a start in
 after the system ends its session. Ask the sender for a keyframe then. `depth` is the number of pictures
 that the decoder, the surface and the GPU hold. Use 6 or more for a stream of 60 pictures a second.
 
+`submit` waits up to `DecoderConfig::input_wait`, 30 milliseconds by default, for the decoder to take a unit,
+and answers `DecoderError::Full` after that. The wait blocks the calling thread, so feed the decoder from a
+thread of its own and never from the frame loop. `DecoderStats::refused` counts the refusals. A unit that the
+decoder never saw breaks the pictures after it until the next keyframe, so send the unit again or ask the
+sender for a keyframe.
+
 `PlayerSurface` draws on macOS and iOS through Metal and on Android through Vulkan. Android needs a
 Vulkan device with the hardware buffer import extensions, which the app's own device has on Android 8
 and later where the driver offers them. It draws nothing where Android renders with OpenGL ES. No other

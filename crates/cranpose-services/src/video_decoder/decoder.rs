@@ -47,7 +47,9 @@ impl VideoDecoder {
 
     /// Gives the decoder one access unit. It waits up to
     /// [`DecoderConfig::input_wait`] for the decoder to take it, and reports
-    /// [`DecoderError::Full`] after that. The unit's data is copied, so the app may reuse it.
+    /// [`DecoderError::Full`] after that, which [`DecoderStats::refused`] counts. The unit's data
+    /// is copied, so the app may reuse it. The wait blocks the calling thread, so the app calls
+    /// this from the thread that feeds the decoder and never from its frame loop.
     pub fn submit(&mut self, unit: AccessUnit<'_>) -> Result<(), DecoderError> {
         self.backend.submit(unit)
     }

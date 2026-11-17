@@ -14,8 +14,10 @@ pub enum DecoderError {
     /// The decoder refused its configuration.
     #[error("the video decoder refused its configuration: {0}")]
     Configure(String),
-    /// The decoder did not take the access unit in time. The app may drop the unit or send it
-    /// again.
+    /// The decoder did not take the access unit in time. It counts the unit as refused. The app
+    /// may send the unit again. A stream with inter pictures decodes wrongly after a unit that
+    /// the decoder never saw, until the next keyframe. An app that drops the unit therefore asks
+    /// the sender for a keyframe.
     #[error("the video decoder is not ready for another access unit")]
     Full,
     /// An access unit is larger than the decoder's input buffer.
