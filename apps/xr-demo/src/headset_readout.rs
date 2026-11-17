@@ -79,13 +79,16 @@ impl Tracker {
         self.frames = 0;
         self.window_start = frame.predicted_display_time;
         log::info!(
-            "xr-demo: {} frame effects in {:?}, period {:?}, head {:?}, left eye {:?}, left profile {:?}, right profile {:?}, recenter {:?}",
+            "xr-demo: {} frame effects in {:?}, period {:?}, predicts {:?} ahead of now, head {:?}, interpupillary distance {:?}, left eye at {:?} from the head, field of view {:?}, profiles {:?} {:?}, recenter {:?}",
             self.frames_per_second,
             elapsed,
             frame.period,
+            frame.predicted_display_time.saturating_sub(frame.now),
             frame
                 .device_pose
                 .map(|pose| pose.position.map(|v| format!("{v:.5}"))),
+            frame.interpupillary_distance(),
+            frame.left_eye.map(|eye| eye.local_pose.position),
             frame.left_eye.map(|eye| eye.field_of_view),
             frame.left_controller.profile,
             frame.right_controller.profile,

@@ -19,6 +19,11 @@ pub struct XrFrame {
     /// and `clock_gettime` read. A runtime without `XR_KHR_convert_timespec_time` gives its own
     /// time, which equals the monotonic clock on Android runtimes.
     pub predicted_display_time: Duration,
+    /// The time at which the backend read the clock for this frame, on the same clock as
+    /// [`predicted_display_time`](Self::predicted_display_time). The difference of the two is how
+    /// far ahead the frame predicts. An app converts between the runtime's times and its own
+    /// readings of `CLOCK_MONOTONIC` with it.
+    pub now: Duration,
     /// The time between two frames at the display's refresh rate.
     pub period: Duration,
     /// Whether the runtime sends this app the headset's input. It does not while a system menu
@@ -40,6 +45,22 @@ pub struct XrFrame {
 }
 
 impl XrFrame {
+    /// The rate in hertz at which the display runs in this frame, from the frame's
+    /// [`period`](Self::period), or `None` while the period is unknown. The rates that the
+    /// runtime offers are in [`HeadsetProperties`](crate::HeadsetProperties).
+    pub fn refresh_rate(&self) -> Option<f32> {
+        let seconds = self.period.as_secs_f32();
+        (seconds > 0.0).then(|| 1.0 / seconds)
+    }
+
+    /// The distance in meters between the two eyes' places, or `None` while the runtime does not
+    /// track the head.
+    pub fn interpupillary_distance(&self) -> Option<f32> {
+        let (left, right) = (self.left_eye?, self.right_eye?);
+        let [x, y, z] = [0, 1, 2].map(|axis| left.pose.position[axis] - right.pose.position[axis]);
+        Some((x * x + y * y + z * z).sqrt())
+    }
+
     /// The controller of `hand`.
     pub const fn controller(&self, hand: Hand) -> &Controller {
         match hand {

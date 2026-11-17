@@ -128,14 +128,17 @@ place: the frame loop allocates nothing for it. An app that sets a state in each
 the panels that read it in each frame, so the callback sets a state only when a rounded value
 changes. An `XrFrame` holds:
 
-- `predicted_display_time` and `period`. The time is a `Duration` on the platform's monotonic
-  clock. On Android that is `CLOCK_MONOTONIC`, which `XR_KHR_convert_timespec_time` maps the
+- `predicted_display_time`, `now` and `period`. The times are `Duration`s on the platform's
+  monotonic clock. `now` is the clock's reading when the backend sampled the frame, so an app sets
+  the runtime's times against its own readings. `refresh_rate()` gives the rate that follows from
+  `period`. On Android that is `CLOCK_MONOTONIC`, which `XR_KHR_convert_timespec_time` maps the
   runtime's time to. A runtime without the extension passes its own time, which Android runtimes
   count in `CLOCK_MONOTONIC` nanoseconds.
 - `device_pose`: the head, the OpenXR VIEW space located in the LOCAL space.
-- `left_eye` and `right_eye`: a `RenderViewpoint` with the eye's pose in LOCAL and its
-  `FieldOfView`, four angles in radians with OpenXR's signs (left and down are negative), from
-  `xrLocateViews`. The call fills a fixed array on the stack.
+- `left_eye` and `right_eye`: a `RenderViewpoint` with the eye's `pose` in LOCAL, its `local_pose`
+  relative to the head (Jetpack's `localPose`) and its `FieldOfView`, four angles in radians with OpenXR's signs (left and down are negative), from
+  `xrLocateViews`. The call fills a fixed array on the stack. `interpupillary_distance()` gives the
+  distance between the eyes.
 - `left_controller` and `right_controller`: a `Controller` with the aim pose and the grip pose,
   each with linear and angular velocity when the runtime gives them, the trigger, squeeze,
   thumbstick, face buttons `primary` (A or X) and `secondary` (B or Y), the menu button, the touch
@@ -144,6 +147,11 @@ changes. An `XrFrame` holds:
 - `recenter`: the runtime's `ReferenceSpaceChangePending` event for the LOCAL space, for one
   frame. Its `change_time` tells from which frame on the poses use the new origin. A streaming app
   tells its host.
+
+`local_headset_properties()` gives the `HeadsetProperties` that the runtime reports once for the
+session: the system name, each eye's recommended and maximum image size
+(`xrEnumerateViewConfigurationViews`) and the refresh rates that `XR_FB_display_refresh_rate`
+offers.
 
 The action set binds the trigger, squeeze, stick, buttons, touches, grip pose and haptic output
 of each interaction profile from the OpenXR specification's profile sections. A runtime rejects a

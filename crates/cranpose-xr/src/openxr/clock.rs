@@ -1,7 +1,7 @@
 //! The platform's monotonic clock, as the runtime's times show it.
 #![expect(
     unsafe_code,
-    reason = "the extension function that converts the runtime's time into a timespec"
+    reason = "the extension function that converts the runtime's time into a timespec, and clock_gettime"
 )]
 
 use std::{mem, time::Duration};
@@ -23,8 +23,31 @@ pub(crate) fn monotonic(instance: &xr::Instance, time: xr::Time) -> Duration {
     // handle is that instance's, and `spec` outlives the call.
     let result =
         unsafe { (convert.convert_time_to_timespec_time)(instance.as_raw(), time, &mut spec) };
-    if result.into_raw() < 0 || spec.tv_sec < 0 || spec.tv_nsec < 0 {
+    if result.into_raw() < 0 {
         return own;
     }
-    Duration::new(spec.tv_sec as u64, spec.tv_nsec as u32)
+    since_start(&spec).unwrap_or(own)
+}
+
+// The time since the start of the monotonic clock, now: `clock_gettime(CLOCK_MONOTONIC)`. It is on
+// the clock of `monotonic`, so an app can set the runtime's times against its own readings.
+// The call cannot fail for this clock, and `Duration::ZERO` stands for the failure that it never
+// reports.
+pub(crate) fn now() -> Duration {
+    // SAFETY: the all-zero bit pattern is a valid `timespec`.
+    let mut spec: libc::timespec = unsafe { mem::zeroed() };
+    // SAFETY: `spec` outlives the call, and CLOCK_MONOTONIC is a clock of every Android kernel.
+    let result = unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut spec) };
+    if result == 0 {
+        since_start(&spec).unwrap_or_default()
+    } else {
+        Duration::ZERO
+    }
+}
+
+fn since_start(spec: &libc::timespec) -> Option<Duration> {
+    Some(Duration::new(
+        u64::try_from(spec.tv_sec).ok()?,
+        u32::try_from(spec.tv_nsec).ok()?,
+    ))
 }

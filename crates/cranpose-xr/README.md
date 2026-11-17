@@ -58,9 +58,10 @@ composable shows an empty box, and the callbacks never run.
 
 `SpatialFrameEffect` runs a callback once in each frame of the headset, before the panels draw. It
 receives an `XrFrame`: the predicted display time on the monotonic clock, the head's pose, each
-eye's pose and field of view, both controllers with their poses, velocities, buttons, sticks and
+eye's pose, pose relative to the head and field of view, both controllers with their poses, velocities, buttons, sticks and
 touches, and the runtime's recenter event. `local_haptics()` gives the `Haptics` handle that plays
-a `Vibration` on a hand's controller. A streaming app sends the state to its host with them.
+a `Vibration` on a hand's controller. `local_headset_properties()` gives the headset's name, its
+eyes' image sizes and its refresh rates. A streaming app sends the state to its host with them.
 Outside a headset the callback never runs.
 
 ```rust,ignore

@@ -20,7 +20,7 @@ use super::{
 use crate::{
     SpatialCapabilities, SpatialEnvironment,
     frame_effects::local_frame_effects,
-    local_haptics, local_spatial_capabilities, local_spatial_environment,
+    local_haptics, local_headset_properties, local_spatial_capabilities, local_spatial_environment,
     pointer::{Pointer, PointerEvent},
     space::{Space, local_space},
 };
@@ -132,7 +132,8 @@ impl Immersive {
         let handles = HandleLayers::new(&xr_session, &gpu, formats)?;
         let capabilities =
             SpatialCapabilities::in_headset(xr_session.passthrough.is_controllable());
-        let (effects, haptics) = (headset.effects(), headset.haptics());
+        let (effects, haptics, properties) =
+            (headset.effects(), headset.haptics(), headset.properties());
         let composed = Rc::new(RefCell::new(None::<(Space, SpatialEnvironment)>));
         let held = Rc::clone(&composed);
         let mut guest = GuestView::new(
@@ -154,6 +155,7 @@ impl Immersive {
                         local_spatial_environment().provides(Some(environment)),
                         local_frame_effects().provides(Some(effects.clone())),
                         local_haptics().provides(Some(haptics.clone())),
+                        local_headset_properties().provides(Some(properties.clone())),
                     ],
                     &mut content,
                 );

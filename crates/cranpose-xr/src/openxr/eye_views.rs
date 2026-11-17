@@ -9,13 +9,15 @@ use std::{array, ptr};
 use openxr as xr;
 
 use super::session::pose_of;
-use crate::{FieldOfView, RenderViewpoint};
+use crate::{FieldOfView, Pose, RenderViewpoint};
 
 const VIEW_COUNT: usize = 2;
 
-// The left and the right eye's viewpoint in `local` at `time`. An eye is `None` while the runtime
-// does not track the head. The views sit in arrays on the stack, so the frame allocates nothing.
+// The left and the right eye's viewpoint in `local` at `time`, with each eye's pose relative to
+// `head`, the head's pose at the same time. An eye is `None` while the runtime does not track the
+// head. The views sit in arrays on the stack, so the frame allocates nothing.
 pub(crate) fn locate(
+    head: Option<&Pose>,
     instance: &xr::Instance,
     session: &xr::Session<xr::OpenGlEs>,
     local: &xr::Space,
@@ -58,19 +60,23 @@ pub(crate) fn locate(
         )
     };
     let tracked = xr::ViewStateFlags::POSITION_VALID | xr::ViewStateFlags::ORIENTATION_VALID;
-    if result.into_raw() < 0 || !state.view_state_flags.contains(tracked) {
+    let Some(head) =
+        head.filter(|_| result.into_raw() >= 0 && state.view_state_flags.contains(tracked))
+    else {
         return [None; VIEW_COUNT];
-    }
+    };
     let located = count as usize;
     array::from_fn(|eye| {
-        (eye < located).then(|| RenderViewpoint {
-            pose: pose_of(&views[eye].pose),
-            field_of_view: FieldOfView {
-                angle_left: views[eye].fov.angle_left,
-                angle_right: views[eye].fov.angle_right,
-                angle_up: views[eye].fov.angle_up,
-                angle_down: views[eye].fov.angle_down,
+        let view = views.get(eye).filter(|_| eye < located)?;
+        Some(RenderViewpoint::seen_from(
+            head,
+            pose_of(&view.pose),
+            FieldOfView {
+                angle_left: view.fov.angle_left,
+                angle_right: view.fov.angle_right,
+                angle_up: view.fov.angle_up,
+                angle_down: view.fov.angle_down,
             },
-        })
+        ))
     })
 }

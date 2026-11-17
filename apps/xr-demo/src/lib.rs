@@ -8,7 +8,8 @@ use cranpose::prelude::*;
 use cranpose_ui::text::{FontWeight, TextUnit};
 use cranpose_xr::{
     ExternalSurface, SpatialCurvedRow, SpatialExternalSurface, SpatialPanel, StereoMode, Subspace,
-    SubspaceModifier, local_spatial_capabilities, local_spatial_environment,
+    SubspaceModifier, local_headset_properties, local_spatial_capabilities,
+    local_spatial_environment,
 };
 
 mod clip_player;
@@ -189,7 +190,14 @@ fn ReadoutLines(readout: MutableState<Readout>) {
         frames_per_second,
     } = readout.get();
     let head = head_cm.map_or_else(|| "not tracked".to_owned(), |cm| format!("{cm} cm"));
+    let system = local_headset_properties()
+        .current()
+        .map_or_else(String::new, |headset| {
+            let [width, height] = headset.eye_image_sizes[0].recommended;
+            format!("{}, eye {width}x{height}", headset.system_name)
+        });
     for line in [
+        system,
         format!("Head y {head}"),
         format!("Right trigger {trigger_percent}%"),
         format!("Frame effect {frames_per_second} Hz"),

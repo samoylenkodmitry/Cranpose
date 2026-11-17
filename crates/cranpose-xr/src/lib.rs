@@ -28,6 +28,7 @@ mod field_of_view;
 mod frame_effects;
 mod hand;
 mod haptics;
+mod headset_properties;
 mod interaction_profile;
 mod locals;
 #[cfg(any(test, all(feature = "openxr", target_os = "android")))]
@@ -59,6 +60,7 @@ pub use cranpose::ExternalSurface;
 pub use field_of_view::FieldOfView;
 pub use hand::Hand;
 pub use haptics::{Haptics, Vibration, local_haptics};
+pub use headset_properties::{EyeImageSize, HeadsetProperties, local_headset_properties};
 pub use interaction_profile::InteractionProfile;
 #[cfg(all(feature = "openxr", target_os = "android"))]
 #[doc(hidden)]

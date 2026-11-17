@@ -18,5 +18,6 @@ mod session;
 mod static_image;
 mod surface_layers;
 mod surface_swapchain;
+mod system_properties;
 
 pub use runner::run;
