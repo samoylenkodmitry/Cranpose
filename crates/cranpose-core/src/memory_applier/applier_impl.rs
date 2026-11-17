@@ -209,13 +209,8 @@ impl Applier for MemoryApplier {
         }
     }
 
-    fn seed_recycled_node_shell(
-        &mut self,
-        key: TypeId,
-        recycle_pool_limit: Option<usize>,
-        shell: Box<dyn Node>,
-    ) {
-        self.seed_recycled_node_shell_impl(key, recycle_pool_limit, shell);
+    fn seed_recycled_node_shell(&mut self, key: TypeId, node: &dyn Node) {
+        self.seed_recycled_node_shell_impl(key, node);
     }
 
     fn record_fresh_recyclable_creation(&mut self, key: TypeId) {

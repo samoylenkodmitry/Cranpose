@@ -90,8 +90,8 @@ impl Facts {
         self.rows.trim_growth_slack();
     }
 
-    pub(super) fn truncate_rows(&mut self, len: usize) {
-        self.rows.truncate(len);
+    pub(super) fn cut_rows(&mut self, len: usize) {
+        super::growth_slack::cut_rows(&mut self.rows, len);
     }
 }
 

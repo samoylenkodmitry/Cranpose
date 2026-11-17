@@ -208,16 +208,25 @@ impl Rewrite {
                     list[slot].as_ref(),
                     item.as_ref(),
                     reach,
-                    self.window,
+                    &self.window,
                     &mut self.areas,
                 );
                 self.next.items.order += 1;
                 *T::count(&mut self.next.items) += 1;
                 return Some(slot);
             }
-            self.spilled_at = Some(self.next);
+            self.start_spill();
         }
         None
+    }
+
+    // The subtree's pushes go on in the spill from where it pushes next. A
+    // spill seldom starts, so its start stays out of line of each item's
+    // push, whose code the ESP32 holds in IRAM.
+    #[cold]
+    #[inline(never)]
+    fn start_spill(&mut self) {
+        self.spilled_at = Some(self.next);
     }
 
     // Pushes `item` into the spill, where `place` sent it.
@@ -246,7 +255,7 @@ impl Rewrite {
                 self.next.records += 1;
                 return index;
             }
-            self.spilled_at = Some(self.next);
+            self.start_spill();
         }
         let index = self.record_count();
         self.rerouted = true;

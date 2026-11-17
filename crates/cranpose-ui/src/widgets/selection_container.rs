@@ -82,9 +82,11 @@ pub fn SelectionContainer(modifier: Modifier, content: impl FnMut() + 'static) {
         move || {
             let content = Rc::clone(&content);
             Box(
-                modifier.pointer_input((), move |scope| {
-                    select_with_pointer(scope, Rc::clone(&pointer))
-                }),
+                modifier
+                    .report_window_coordinates(pointer.window_sink())
+                    .pointer_input((), move |scope| {
+                        select_with_pointer(scope, Rc::clone(&pointer))
+                    }),
                 BoxSpec::default(),
                 move || (content.borrow_mut())(),
             );
@@ -176,13 +178,13 @@ pub(crate) fn selectable_text(
     let reporter = Modifier::from_dyn_element(modifier_element(SelectableTextElement::new(
         Rc::clone(&geometry),
     )));
+    let highlight = crate::local_text_selection_colors()
+        .current()
+        .background_color;
     reporter.draw_behind(move |scope| {
         geometry.set_content_size(scope.size());
         for line in registrar.highlight(key) {
-            scope.draw_rect_at(
-                line,
-                Brush::solid(crate::text_field_modifier_node::DEFAULT_SELECTION_COLOR),
-            );
+            scope.draw_rect_at(line, Brush::solid(highlight));
         }
     })
 }

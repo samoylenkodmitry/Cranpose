@@ -69,7 +69,6 @@ const SPARE_ROOM_KEPT: usize = 8;
 /// text its node shows without making a copy, and gives the node when the
 /// node shows another.
 #[doc(hidden)]
-#[derive(Clone, PartialEq)]
 pub enum StaticText {
     /// Characters with no styles, annotations or links, whose room the
     /// node takes.
@@ -84,6 +83,31 @@ pub enum StaticText {
 impl Default for StaticText {
     fn default() -> Self {
         Self::Borrowed("")
+    }
+}
+
+// Out of line, as the comparison below: a text group compares and keeps its
+// text, and inlined there each would be one more copy in every build.
+impl Clone for StaticText {
+    #[inline(never)]
+    fn clone(&self) -> Self {
+        match self {
+            Self::Owned(text) => Self::Owned(text.clone()),
+            Self::Borrowed(text) => Self::Borrowed(text),
+            Self::Annotated(text) => Self::Annotated(text.clone()),
+        }
+    }
+}
+
+impl PartialEq for StaticText {
+    #[inline(never)]
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Owned(text), Self::Owned(other)) => text == other,
+            (Self::Borrowed(text), Self::Borrowed(other)) => text == other,
+            (Self::Annotated(text), Self::Annotated(other)) => text == other,
+            _ => false,
+        }
     }
 }
 
@@ -132,6 +156,15 @@ pub trait IntoTextSource {
     {
         Err(self)
     }
+
+    /// The text as its widget composes it, in the widget's own group: a
+    /// state or a callback read now, so the read recomposes the widget alone.
+    fn into_composed_text(self) -> crate::text::AnnotatedString
+    where
+        Self: Sized,
+    {
+        self.into_text_source().resolve()
+    }
 }
 
 impl IntoTextSource for StaticText {
@@ -174,32 +207,47 @@ impl IntoTextSource for crate::text::AnnotatedString {
     }
 }
 
-// A state's and a callback's text is read as its widget composes, in the
-// widget's own group, so the read recomposes the widget alone.
-impl<T> IntoTextSource for State<T>
-where
-    T: ToString + Clone + 'static,
-{
-    fn into_text_source(self) -> TextSource {
-        TextSource::Static(StaticText::Owned(self.read(T::to_string)).into_annotated())
-    }
+// A source that reads `text` each time it resolves.
+fn reading(text: impl Fn() -> String + 'static) -> TextSource {
+    TextSource::Dynamic(DynamicTextSource::new(move || {
+        crate::text::AnnotatedString::from(text())
+    }))
 }
 
-impl<T> IntoTextSource for MutableState<T>
-where
-    T: ToString + Clone + 'static,
-{
-    fn into_text_source(self) -> TextSource {
-        TextSource::Static(StaticText::Owned(self.read(T::to_string)).into_annotated())
-    }
+// A state's and a callback's source reads them each time it resolves, so a
+// source made once follows them. Its widget reads them as it composes, in
+// its own group, with no source made. A value formats outside the state's
+// borrow: its `ToString` may write the state.
+macro_rules! state_text_source {
+    ($state:ident) => {
+        impl<T> IntoTextSource for $state<T>
+        where
+            T: ToString + Clone + 'static,
+        {
+            fn into_text_source(self) -> TextSource {
+                reading(move || self.with(T::to_string))
+            }
+
+            fn into_composed_text(self) -> crate::text::AnnotatedString {
+                StaticText::Owned(self.with(T::to_string)).into_annotated()
+            }
+        }
+    };
 }
+
+state_text_source!(State);
+state_text_source!(MutableState);
 
 impl<F> IntoTextSource for F
 where
     F: Fn() -> String + 'static,
 {
     fn into_text_source(self) -> TextSource {
-        TextSource::Static(StaticText::Owned(self()).into_annotated())
+        reading(self)
+    }
+
+    fn into_composed_text(self) -> crate::text::AnnotatedString {
+        StaticText::Owned(self()).into_annotated()
     }
 }
 
@@ -376,7 +424,7 @@ mod text_group {
 
     use cranpose_core::NodeId;
 
-    use super::{IntoTextSource, StaticText, TextNodeModifier, TextSource, text_layout_inputs};
+    use super::{IntoTextSource, StaticText, TextNodeModifier, text_layout_inputs};
     use crate::{
         composable,
         modifier::Modifier,
@@ -397,21 +445,20 @@ mod text_group {
     where
         S: IntoTextSource + Clone + PartialEq + 'static,
     {
-        text_node(text.into_text_source(), modifier, style, options)
+        text_node(text.into_composed_text(), modifier, style, options)
     }
 
     // What the group makes of any text type. Out of line, one copy: the group
     // of each text type would repeat it.
     #[inline(never)]
     fn text_node(
-        source: TextSource,
+        text: crate::text::AnnotatedString,
         modifier: Modifier,
         style: Arc<TextStyle>,
         options: TextLayoutOptions,
     ) -> NodeId {
         let (style, options) = text_layout_inputs(style, options);
         let environment = LayoutEnvironment::current();
-        let text = source.resolve();
         let modifier = match crate::widgets::selection_container::current_selection_registrar() {
             Some(registrar) => modifier.then(crate::widgets::selection_container::selectable_text(
                 registrar,

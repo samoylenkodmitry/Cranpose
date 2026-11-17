@@ -174,8 +174,8 @@ impl Default for TextFieldHandleController {
 }
 
 const DEFAULT_CURSOR_COLOR: Color = Color(1.0, 1.0, 1.0, 1.0);
-
-pub(crate) const DEFAULT_SELECTION_COLOR: Color = Color(0.0, 0.5, 1.0, 0.3);
+const DEFAULT_SELECTION_COLOR: Color =
+    crate::text_selection_colors::DEFAULT_TEXT_SELECTION_COLORS.background_color;
 
 const DEFAULT_LINE_HEIGHT: f32 = 20.0;
 
@@ -803,18 +803,6 @@ impl TextFieldModifierNode {
         })
     }
 
-    /// Creates a node with a custom accent: the caret is drawn solid in
-    /// `color` and the selection highlight is derived from it at
-    /// [`crate::widgets::SELECTION_HIGHLIGHT_ALPHA`] — the reference field
-    /// tints caret, handles and highlight from the one accent.
-    pub fn with_cursor_color(mut self, color: Color) -> Self {
-        self.cursor_brush = Brush::solid(color);
-        self.selection_brush = Brush::solid(
-            color.with_alpha(crate::widgets::basic_text_field::SELECTION_HIGHLIGHT_ALPHA),
-        );
-        self
-    }
-
     /// Sets the focus state.
     pub fn set_focused(&mut self, focused: bool) {
         let current = *self.refs.is_focused.borrow();
@@ -1408,6 +1396,7 @@ pub struct TextFieldElement {
     state: TextFieldState,
     style: TextStyle,
     cursor_color: Color,
+    selection_color: Color,
     line_limits: TextFieldLineLimits,
     show_keyboard_on_focus: bool,
     keyboard_options: crate::KeyboardOptions,
@@ -1431,6 +1420,7 @@ impl TextFieldElement {
             state,
             style,
             cursor_color: DEFAULT_CURSOR_COLOR,
+            selection_color: DEFAULT_SELECTION_COLOR,
             line_limits: TextFieldLineLimits::default(),
             show_keyboard_on_focus: true,
             keyboard_options: crate::KeyboardOptions::default(),
@@ -1454,6 +1444,12 @@ impl TextFieldElement {
     /// Creates an element with custom cursor color.
     pub fn with_cursor_color(mut self, color: Color) -> Self {
         self.cursor_color = color;
+        self
+    }
+
+    /// Creates an element whose selection highlight is drawn in `color`.
+    pub fn with_selection_color(mut self, color: Color) -> Self {
+        self.selection_color = color;
         self
     }
 
@@ -1548,10 +1544,11 @@ impl std::fmt::Debug for TextFieldElement {
 impl Hash for TextFieldElement {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.state.id().hash(state);
-        self.cursor_color.0.to_bits().hash(state);
-        self.cursor_color.1.to_bits().hash(state);
-        self.cursor_color.2.to_bits().hash(state);
-        self.cursor_color.3.to_bits().hash(state);
+        for color in [self.cursor_color, self.selection_color] {
+            [color.0, color.1, color.2, color.3]
+                .map(f32::to_bits)
+                .hash(state);
+        }
         self.style.render_hash().hash(state);
         self.line_limits.hash(state);
         self.show_keyboard_on_focus.hash(state);
@@ -1567,6 +1564,7 @@ impl PartialEq for TextFieldElement {
         self.state == other.state
             && self.style == other.style
             && self.cursor_color == other.cursor_color
+            && self.selection_color == other.selection_color
             && self.line_limits == other.line_limits
             && self.show_keyboard_on_focus == other.show_keyboard_on_focus
             && self.keyboard_options == other.keyboard_options
@@ -1587,8 +1585,9 @@ impl ModifierNodeElement for TextFieldElement {
         let decorated = self.decorator.is_some();
         let mut node =
             TextFieldModifierNode::with_refs(self.state, self.style.clone(), refs, decorated)
-                .with_cursor_color(self.cursor_color)
                 .with_line_limits(self.line_limits);
+        node.cursor_brush = Brush::solid(self.cursor_color);
+        node.selection_brush = Brush::solid(self.selection_color);
         node.modal_depth = self.modal_depth;
         node.refs.focus_options.set(TextFieldFocusOptions {
             modal_depth: self.modal_depth,
@@ -1610,6 +1609,7 @@ impl ModifierNodeElement for TextFieldElement {
             node.style = self.style.clone();
         }
         node.cursor_brush = Brush::solid(self.cursor_color);
+        node.selection_brush = Brush::solid(self.selection_color);
         node.line_limits = self.line_limits;
         node.handle_controller.clone_from(&self.handle_controller);
         node.modal_depth = self.modal_depth;

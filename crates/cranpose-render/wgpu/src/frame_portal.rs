@@ -12,7 +12,7 @@
 //! near part once more, flat on that plane, in front of all the scene holds.
 
 use cranpose_render_common::space::DOORWAY_NEAR;
-use cranpose_ui_graphics::space::{Mat4, Material, Vec3};
+use cranpose_ui_graphics::space::{Mat4, Material, Multisample, TextureEdges, Vec3};
 
 use super::{FrameExecutor, PreparedSurface, ScenePhase};
 use crate::{
@@ -39,6 +39,8 @@ const NEAR_OVERLAP: f32 = 1.0 / 64.0;
 pub(super) struct PreparedWindows {
     buffers: SceneMeshBuffers,
     windows: Vec<PreparedWindow>,
+    // The samples the scene's pass takes in each pixel.
+    samples: Multisample,
 }
 
 /// A doorway, ready to draw: the seen spaces behind it and before it, its
@@ -94,6 +96,7 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
                 &SurfaceShading {
                     transform: lifted,
                     material: &Material::Unlit,
+                    edges: TextureEdges::Seams,
                     alpha: 1.0,
                     source_region: [0.0; 4],
                     light_projection: None,
@@ -116,7 +119,11 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
                 scissor,
             });
         }
-        Some(PreparedWindows { buffers, windows })
+        Some(PreparedWindows {
+            buffers,
+            windows,
+            samples: scene.multisample,
+        })
     }
 
     // Uploads the uniforms of a doorway's square. Out of line: a doorway
@@ -201,7 +208,7 @@ pub(super) fn encode_portals(
         ScenePipeline::WindowClear,
         ScenePipeline::WindowRestore,
     ]
-    .map(|kind| renderer.scene_surface_pipeline(kind));
+    .map(|kind| renderer.scene_surface_pipeline(kind, windows.samples));
     let [Some(mark), Some(clear), Some(restore)] = pipelines else {
         return;
     };
@@ -232,7 +239,13 @@ pub(super) fn encode_portals(
         window.draw(pass, (mark, depth), (texture, buffers));
         window.draw(pass, (clear, depth + 1), (texture, buffers));
         for &step in before {
-            draw_space(pass, renderer, step, (draws, window), (device, backdrop));
+            draw_space(
+                pass,
+                (renderer, windows),
+                step,
+                window,
+                (draws, device, backdrop),
+            );
         }
         encode_portals(
             pass,
@@ -242,20 +255,31 @@ pub(super) fn encode_portals(
             (device, texture, backdrop),
         );
         for &step in after {
-            draw_space(pass, renderer, step, (draws, window), (device, backdrop));
+            draw_space(
+                pass,
+                (renderer, windows),
+                step,
+                window,
+                (draws, device, backdrop),
+            );
         }
         window.draw(pass, (restore, depth + 1), (texture, buffers));
     }
 }
 
-/// Draws the surfaces of the space behind `window` that `step` takes,
-/// inside the window; a step no surface takes asks for no pipeline.
+// Draws the surfaces of the space behind `window`, one of `windows`, that
+// `step` takes, inside the window; a step no surface takes asks for no
+// pipeline.
 fn draw_space(
     pass: &mut wgpu::RenderPass<'_>,
-    renderer: &GpuRenderer,
+    (renderer, windows): (&GpuRenderer, &PreparedWindows),
     step: SpaceStep,
-    (draws, window): (&[PreparedSurface<'_>], &PreparedWindow),
-    (device, backdrop): (&wgpu::Device, Option<&wgpu::BindGroup>),
+    window: &PreparedWindow,
+    (draws, device, backdrop): (
+        &[PreparedSurface<'_>],
+        &wgpu::Device,
+        Option<&wgpu::BindGroup>,
+    ),
 ) {
     let (phase, kind) = match step {
         SpaceStep::Opaque(_, _, kind) => (ScenePhase::Portal, kind),
@@ -269,7 +293,8 @@ fn draw_space(
     if space.peek().is_none() {
         return;
     }
-    let Some(fixed) = renderer.scene_surface_pipeline(kind) else {
+    let samples = windows.samples;
+    let Some(fixed) = renderer.scene_surface_pipeline(kind, samples) else {
         return;
     };
     let backdrop = backdrop.filter(|_| matches!(step, SpaceStep::Glass));
@@ -277,7 +302,7 @@ fn draw_space(
     for draw in space {
         let (pipeline, shaded) = match (&draw.held.mesh.surface.material, step) {
             (Material::Volume(volume), SpaceStep::Opaque(variant, _, _)) => {
-                match renderer.scene_volume_pipeline(&volume.shader, variant) {
+                match renderer.scene_volume_pipeline(&volume.shader, (variant, samples)) {
                     Some(pipeline) => (pipeline, false),
                     None => continue,
                 }

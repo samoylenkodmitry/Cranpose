@@ -134,14 +134,22 @@ impl<'a> RunGlyphs<'a> {
 
 impl LaidGlyphs {
     // Keeps `shaped`, in eight bytes a glyph when every one fits them.
+    // One pass packs the glyphs and checks them: glyphs too wide for eight
+    // bytes, which few fonts have, leave the packed room for storage of
+    // their own.
     pub(crate) fn new(shaped: &ShapedGlyphs) -> Self {
         let offsets = shaped.offsets();
+        let mut fits = true;
+        // Collected from an iterator of known length, in one allocation.
+        let room: Arc<[PackedGlyph]> = shaped
+            .iter()
+            .map(|glyph| {
+                fits &= PackedGlyph::fits(glyph);
+                PackedGlyph::pack(glyph)
+            })
+            .collect();
         let glyphs = match u32::try_from(shaped.len()) {
-            // Collected from an iterator of known length, in one allocation.
-            Ok(len) if shaped.iter().all(PackedGlyph::fits) => Glyphs::Packed {
-                room: shaped.iter().map(PackedGlyph::pack).collect(),
-                len,
-            },
+            Ok(len) if fits => Glyphs::Packed { room, len },
             _ => Glyphs::Full(Arc::from(&shaped[..])),
         };
         Self {

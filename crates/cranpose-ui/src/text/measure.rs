@@ -502,13 +502,15 @@ impl TextService {
         };
         self.layouts.borrow_mut().begin_pass(idle_passes, headroom);
         self.intrinsics.borrow_mut().begin_pass(idle_passes, drop);
-        self.layouter.borrow_mut().set_memory_headroom(headroom);
+        self.layouter.borrow_mut().begin_pass(headroom);
     }
 
-    // Drops the retired layouts and strings: the texts rest.
+    // Drops the retired layouts and strings and the layouter's glyph room a
+    // long text took: the texts rest.
     pub(crate) fn trim(&self) {
         self.retired.borrow_mut().clear();
         self.retired_strings.borrow_mut().clear();
+        self.layouter.borrow_mut().rest();
     }
 
     /// A frame starts: the first use of the service in it outside a layout

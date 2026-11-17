@@ -1,4 +1,7 @@
-use std::cell::Cell;
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+};
 
 use cranpose_core::NodeId;
 use cranpose_ui_graphics::{
@@ -17,7 +20,9 @@ const PAST_DOORWAY: f32 = 1.0e-4;
 /// Finds which mesh surface of a scene a window point, or any ray, shows,
 /// and the point of the surface's content there: the nearest surface along
 /// the ray in the space the window's eye stands in, or behind a doorway the
-/// ray meets first, in the spaces the eye sees.
+/// ray meets first, in the spaces the eye sees. A layer drawn on several
+/// meshes is found by its owner's index, through whichever of its meshes
+/// is nearest.
 pub struct ScenePick {
     scene: Option<NodeId>,
     camera: Camera,
@@ -29,6 +34,79 @@ pub struct ScenePick {
     scenes: Vec<NodeId>,
     seen_scenes: Vec<NodeId>,
     last: Cell<Option<LastPick>>,
+    holds: SurfaceHolds,
+}
+
+/// The mesh and triangle the gesture on each surface layer holds, kept
+/// beside a window's hit targets: the targets are collected again whenever
+/// a surface moves, and a drag stays on the mesh it started on through that.
+/// A clone is a handle to the same holds.
+#[derive(Clone, Default)]
+pub struct SurfaceHolds(Rc<Holds>);
+
+#[derive(Default)]
+struct Holds {
+    holds: RefCell<Vec<Hold>>,
+    collection: Cell<u32>,
+}
+
+#[derive(Clone, Copy)]
+struct Hold {
+    layer: NodeId,
+    mesh: usize,
+    triangle: u32,
+    // The last collection of the hit targets that found the layer.
+    collection: u32,
+}
+
+impl SurfaceHolds {
+    /// Starts a new collection of the hit targets: the holds on layers the
+    /// last one did not find go.
+    pub fn collect_again(&self) {
+        let last = self.0.collection.get();
+        self.0
+            .holds
+            .borrow_mut()
+            .retain(|hold| hold.collection == last);
+        self.0.collection.set(last.wrapping_add(1));
+    }
+
+    // The collection finds `layer`: its hold stays.
+    fn keep(&self, layer: NodeId) {
+        let now = self.0.collection.get();
+        if let Some(hold) = self
+            .0
+            .holds
+            .borrow_mut()
+            .iter_mut()
+            .find(|hold| hold.layer == layer)
+        {
+            hold.collection = now;
+        }
+    }
+
+    fn of(&self, layer: NodeId) -> Option<Hold> {
+        self.0
+            .holds
+            .borrow()
+            .iter()
+            .find(|hold| hold.layer == layer)
+            .copied()
+    }
+
+    fn hold(&self, layer: NodeId, mesh: usize, triangle: u32) {
+        let hold = Hold {
+            layer,
+            mesh,
+            triangle,
+            collection: self.0.collection.get(),
+        };
+        let mut holds = self.0.holds.borrow_mut();
+        match holds.iter_mut().find(|held| held.layer == layer) {
+            Some(held) => *held = hold,
+            None => holds.push(hold),
+        }
+    }
 }
 
 struct PickSpace {
@@ -55,11 +133,12 @@ type LastPick = (Point, Option<(usize, SurfaceHit)>);
 struct PickSurface {
     node_id: Option<NodeId>,
     surface: MeshSurface,
+    // Which of its layer's meshes it is; the owner, 0, comes first.
+    mesh: usize,
     // The rect of its content in its layer, which the mesh's texture
     // spans. The pick's content points lie in the layer.
     content: Rect,
     seen: usize,
-    held: Cell<Option<u32>>,
 }
 
 impl PickSurface {
@@ -80,11 +159,18 @@ impl PickSurface {
 impl ScenePick {
     /// The pick of the scene that `layer` shows, with `to_window` mapping
     /// the layer to the window; `None` when the layer shows no scene. Its
-    /// surfaces are those the window's eye sees.
-    pub fn of(layer: LayerRef<'_>, to_window: ProjectiveTransform) -> Option<Self> {
+    /// surfaces are those the window's eye sees. The gestures on them keep
+    /// the meshes they hold in `holds`, or in the pick's own store when
+    /// `holds` is `None`.
+    pub fn of(
+        layer: LayerRef<'_>,
+        to_window: ProjectiveTransform,
+        holds: Option<&SurfaceHolds>,
+    ) -> Option<Self> {
         // A hit walk asks every layer: one that opens no scene stops here,
         // before any transform work.
         let tree = SpaceTree::of(layer)?;
+        let holds = holds.cloned().unwrap_or_default();
         // The scene fills its layer's bounds.
         let bounds = layer.local_bounds();
         let to_window = ProjectiveTransform::translation(bounds.x, bounds.y).then(to_window);
@@ -109,12 +195,18 @@ impl ScenePick {
         let surfaces = view
             .surfaces
             .into_iter()
-            .map(|seen| PickSurface {
-                node_id: seen.layer.node_id(),
-                surface: seen.surface,
-                content: seen.content,
-                seen: seen.seen,
-                held: Cell::new(None),
+            .map(|seen| {
+                let node_id = seen.layer.node_id();
+                if let Some(layer) = node_id.filter(|_| seen.mesh == 0) {
+                    holds.keep(layer);
+                }
+                PickSurface {
+                    node_id,
+                    surface: seen.surface,
+                    mesh: seen.mesh,
+                    content: seen.content,
+                    seen: seen.seen,
+                }
             })
             .collect();
         Some(Self {
@@ -132,6 +224,7 @@ impl ScenePick {
                 .collect(),
             seen_scenes,
             last: Cell::new(None),
+            holds,
         })
     }
 
@@ -156,7 +249,8 @@ impl ScenePick {
             .is_some_and(|node_id| self.seen_scenes.contains(&node_id))
     }
 
-    /// The index among the scene's surfaces of the surface layer `layer`.
+    /// The index among the scene's surfaces of the surface layer `layer`:
+    /// of its owner mesh, the first of its meshes.
     pub fn index_of(&self, layer: LayerRef<'_>) -> Option<usize> {
         let node_id = layer.node_id()?;
         self.surfaces
@@ -164,22 +258,24 @@ impl ScenePick {
             .position(|surface| surface.node_id == Some(node_id))
     }
 
-    /// The content point of surface `index` that the window point shows,
-    /// when that surface is the nearest one there.
+    /// The content point of the layer of owner `index` that the window
+    /// point shows, when one of its meshes is the nearest surface there.
     pub fn content_point(&self, window: Point, index: usize) -> Option<Point> {
         let (nearest, hit) = self.nearest(window)?;
-        (nearest == index).then_some(hit.point)
+        (self.owner(nearest) == index).then_some(hit.point)
     }
 
-    /// The surface `ray`, in the space the window's eye stands in, meets
-    /// first, by its index, and where.
-    pub fn nearest_along(&self, ray: Ray) -> Option<(usize, SurfaceHit)> {
-        self.nearest_in(ray, 0, f32::NEG_INFINITY)
+    /// [`Self::content_point`] for a ray in the space the window's eye
+    /// stands in.
+    pub fn content_point_along(&self, ray: Ray, index: usize) -> Option<Point> {
+        let (nearest, hit) = self.nearest_along(ray)?;
+        (self.owner(nearest) == index).then_some(hit.point)
     }
 
-    /// The content point of surface `index` under the window point for a
-    /// gesture that surface holds: where the ray meets it, or past its edge,
-    /// where the ray meets the plane of the triangle it last met.
+    /// The content point of the layer of owner `index` under the window
+    /// point for a gesture the layer holds: where the ray meets the mesh the
+    /// gesture started on, or past its edge, where the ray meets the plane
+    /// of the triangle it last met there.
     pub fn drag_point(&self, window: Point, index: usize) -> Option<Point> {
         self.drag_point_along(self.ray(window)?, index)
     }
@@ -187,20 +283,31 @@ impl ScenePick {
     /// [`Self::drag_point`] for a ray in the space the window's eye stands
     /// in.
     pub fn drag_point_along(&self, ray: Ray, index: usize) -> Option<Point> {
-        let target = self.surfaces.get(index)?;
-        if let Some(hit) = target.cast(ray) {
-            target.held.set(Some(hit.triangle));
+        let layer = self.surfaces.get(index)?.node_id;
+        let Some(held) = layer.and_then(|layer| self.holds.of(layer)) else {
+            let (target, hit) = self.nearest_mesh(ray, index)?;
+            self.hold(target, hit.triangle);
+            return Some(hit.point);
+        };
+        let target = index + held.mesh;
+        let surface = self
+            .surfaces
+            .get(target)
+            .filter(|surface| surface.mesh == held.mesh)?;
+        if let Some(hit) = surface.cast(ray) {
+            self.hold(target, hit.triangle);
             return Some(hit.point);
         }
-        target
+        surface
             .surface
-            .cast_plane(ray, target.held.get()?, target.content.size())
-            .map(|point| target.in_layer(point))
+            .cast_plane(ray, held.triangle, surface.content.size())
+            .map(|point| surface.in_layer(point))
     }
 
-    /// Where the content point `content` of surface `index` shows in the
-    /// window, also for a surface behind a doorway; `None` when it lies
-    /// nearer than the camera's near plane or behind the eye.
+    /// Where the content point `content` of the layer of owner `index`
+    /// shows in the window, on its owner mesh, also for a surface behind a
+    /// doorway; `None` when it lies nearer than the camera's near plane or
+    /// behind the eye.
     pub fn window_point(&self, index: usize, content: Point) -> Option<Point> {
         let target = self.surfaces.get(index)?;
         let from_corner = Point::new(content.x - target.content.x, content.y - target.content.y);
@@ -223,6 +330,29 @@ impl ScenePick {
         self.camera.ray(local, self.size)
     }
 
+    // The owner of the layer of surface `index`.
+    fn owner(&self, index: usize) -> usize {
+        index - self.surfaces[index].mesh
+    }
+
+    fn hold(&self, index: usize, triangle: u32) {
+        let surface = &self.surfaces[index];
+        if let Some(layer) = surface.node_id {
+            self.holds.hold(layer, surface.mesh, triangle);
+        }
+    }
+
+    // The mesh of the layer of owner `index` that `ray` meets first, by its
+    // index, and where.
+    fn nearest_mesh(&self, ray: Ray, index: usize) -> Option<(usize, SurfaceHit)> {
+        self.surfaces[index..]
+            .iter()
+            .enumerate()
+            .take_while(|(mesh, surface)| surface.mesh == *mesh)
+            .filter_map(|(mesh, surface)| surface.cast(ray).map(|hit| (index + mesh, hit)))
+            .min_by(|(_, a), (_, b)| a.distance.total_cmp(&b.distance))
+    }
+
     fn nearest(&self, window: Point) -> Option<(usize, SurfaceHit)> {
         if let Some((point, nearest)) = self.last.get()
             && point == window
@@ -230,10 +360,17 @@ impl ScenePick {
             return nearest;
         }
         let nearest = self.ray(window).and_then(|ray| self.nearest_along(ray));
-        if let Some((index, hit)) = nearest {
-            self.surfaces[index].held.set(Some(hit.triangle));
-        }
         self.last.set(Some((window, nearest)));
+        nearest
+    }
+
+    // The surface `ray` meets first, by its index, and where; the gesture
+    // on its layer holds it from there.
+    fn nearest_along(&self, ray: Ray) -> Option<(usize, SurfaceHit)> {
+        let nearest = self.nearest_in(ray, 0, f32::NEG_INFINITY);
+        if let Some((index, hit)) = nearest {
+            self.hold(index, hit.triangle);
+        }
         nearest
     }
 

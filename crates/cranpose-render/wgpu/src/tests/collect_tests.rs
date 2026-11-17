@@ -268,7 +268,8 @@ fn isolated_layers_snap_their_own_text_and_translating_text_descendants() {
                 ..Default::default()
             };
             let store = SceneStore::from_layer(&layer);
-            let (child, _) = isolated_child(
+            let mut parent = LayerScene::new(CompositorScene::new(), Vec::new());
+            push_isolated_child(
                 store.root_layer().expect("the store holds the layer"),
                 &mut LayerMotion::default(),
                 &WalkContext {
@@ -280,11 +281,11 @@ fn isolated_layers_snap_their_own_text_and_translating_text_descendants() {
                     settings: &walk_settings(),
                     cull: None,
                 },
-                (None, None),
-                &mut LayerScene::new(CompositorScene::new(), Vec::new()),
+                (MeshChildren::new(), None),
+                &mut parent,
                 &mut LayerSceneRecycler::default(),
             );
-            assert_eq!(child.snap_anchor.is_some(), expected);
+            assert_eq!(parent.children[0].snap_anchor.is_some(), expected);
         }
     });
 }

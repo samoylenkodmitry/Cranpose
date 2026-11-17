@@ -9,11 +9,12 @@
 
 use std::{cell::Cell, rc::Rc};
 
-use cranpose_core::MutableState;
+use cranpose_core::{MutableState, SlotId};
 use cranpose_foundation::lazy::{LazyItems, LazyListScope, rememberLazyListState};
 use cranpose_ui::{
     Box, BoxSpec, BoxWithConstraints, Column, ColumnSpec, IntrinsicSize, LayoutTree, LazyColumn,
-    LazyColumnSpec, Modifier, Row, RowSpec, Size,
+    LazyColumnSpec, Modifier, Placement, Row, RowSpec, Size, SubcomposeLayout,
+    SubcomposeLayoutScope, SubcomposeMeasureScope,
 };
 
 use crate::{directional_layout::tagged, text_measured_layout_integration::layout_composition};
@@ -419,5 +420,68 @@ fn changes_below_subcompose_nodes_lay_out_as_a_fresh_composition_does() {
         for tag in SLOT_TAGS {
             assert_eq!(rect(&layout, tag), rect(&fresh, tag), "{tag} at {knobs:?}");
         }
+    }
+}
+
+// A subcompose layout as wide as its one child, which it places only
+// while `place` holds. The child wraps a leaf `leaf_width` wide.
+fn measuring_parent(leaf_width: MutableState<f32>, place: bool) {
+    Column(
+        Modifier::empty().fill_max_size(),
+        ColumnSpec::default(),
+        move || {
+            SubcomposeLayout(
+                Modifier::empty().content_description("parent"),
+                move |scope, constraints| {
+                    let children = scope.subcompose(SlotId::new(0), (), move || {
+                        Box(
+                            Modifier::empty().content_description("child"),
+                            BoxSpec::default(),
+                            move || {
+                                tagged_box(
+                                    Modifier::empty().size_points(leaf_width.get(), 10.0),
+                                    "leaf",
+                                );
+                            },
+                        );
+                    });
+                    let child = scope.measure(children[0], constraints);
+                    let placements = place
+                        .then(|| Placement::new(child.node_id(), 0.0, 0.0, 0.0))
+                        .into_iter();
+                    scope.layout(child.width(), child.height(), placements)
+                },
+            );
+        },
+    );
+}
+
+// A subcompose node that measured a child without placing it lays out
+// again when the child resizes, whatever the child's last placement read.
+#[test]
+fn a_subcompose_layout_sizes_itself_by_a_child_it_measured_without_placing() {
+    let slot = Rc::new(Cell::new(None));
+    let states = Rc::clone(&slot);
+    let mut composition = cranpose_ui::run_test_composition(move || {
+        let leaf_width = cranpose_core::rememberMutableStateOf(|| 10.0);
+        let place = cranpose_core::rememberMutableStateOf(|| true);
+        states.set(Some((leaf_width, place)));
+        measuring_parent(leaf_width, place.get());
+    });
+    layout_composition(&mut composition, VIEWPORT);
+    let (leaf_width, place) = slot.take().expect("states");
+    // The parent placed the child at 10, then measures it at 20 without
+    // placing it, then the child goes back to 10.
+    for (width, placed) in [(20.0, false), (10.0, false)] {
+        leaf_width.set(width);
+        place.set(placed);
+        while composition.process_invalid_scopes().expect("recompose") {}
+        let layout = layout_composition(&mut composition, VIEWPORT);
+        assert_no_layout_left(&mut composition, width);
+        assert_eq!(
+            rect(&layout, "parent"),
+            (0.0, 0.0, width, 10.0),
+            "the parent of a child {width} wide"
+        );
     }
 }

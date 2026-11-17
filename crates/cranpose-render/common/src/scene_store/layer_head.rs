@@ -4,7 +4,7 @@
 use std::rc::Rc;
 
 use cranpose_core::{NodeId, RecordId};
-use cranpose_ui::{GraphicsLayer, Point, Rect};
+use cranpose_ui::{GraphicsLayer, ModifierNodeSlices, Point, Rect};
 
 use super::{LayerProps, RecordFlags, RecordKind, SceneStore};
 use crate::graph::{
@@ -28,7 +28,9 @@ impl HeadKind {
     }
 }
 
-pub(crate) struct LayerHead {
+// The head lends the record's graphics layer and pointer handling from
+// their owners. The store copies a layer only when it changed.
+pub(crate) struct LayerHead<'a> {
     pub(crate) kind: HeadKind,
     pub(crate) local_bounds: Rect,
     pub(crate) node_bounds: Option<Rect>,
@@ -38,9 +40,11 @@ pub(crate) struct LayerHead {
     pub(crate) translated_content_context: bool,
     pub(crate) translated_content_offset: Point,
     pub(crate) origin_in_parent: Point,
-    pub(crate) graphics_layer: Option<GraphicsLayer>,
+    pub(crate) graphics_layer: Option<&'a GraphicsLayer>,
     pub(crate) clip_to_bounds: bool,
-    pub(crate) hit_test: Option<HitTestNode>,
+    // The slices whose pointer inputs hit-test the layer; `None` for a
+    // layer that takes no hit.
+    pub(crate) hit_test: Option<&'a Rc<ModifierNodeSlices>>,
     pub(crate) has_origin_sinks: bool,
     pub(crate) isolation: IsolationReasons,
     pub(crate) cache_policy: CachePolicy,
@@ -55,8 +59,8 @@ impl SceneStore {
     // Writes `head` as the head of `record` and notes a property change,
     // unless the head stayed and the update already noted a change of the
     // record.
-    pub(crate) fn write_head(&mut self, record: RecordId, head: LayerHead) {
-        let LayerHead {
+    pub(crate) fn write_head(&mut self, record: RecordId, head: &LayerHead<'_>) {
+        let &LayerHead {
             kind,
             local_bounds,
             node_bounds,
@@ -85,12 +89,14 @@ impl SceneStore {
         changed |= self.set_placement(record, origin_in_parent, Some(transform_to_parent));
         changed |= self.write_graphics_layer(record, graphics_layer);
         let layer_bounds = node_bounds.map(|_| local_bounds);
-        let props = (layer_bounds, translated_content_offset, &hit_test);
+        let props = (layer_bounds, translated_content_offset, hit_test);
         if !props_stay(self.props(record), props, (isolation, cache_policy)) {
             self.edit_props(record, |props| {
                 props.layer_bounds = layer_bounds;
                 props.translated_content_offset = translated_content_offset;
-                props.hit_test = hit_test;
+                props.hit_test = hit_test.map(|handlers| HitTestNode {
+                    handlers: Rc::clone(handlers),
+                });
                 props.isolation = isolation;
                 props.cache_policy = cache_policy;
             });
@@ -122,7 +128,7 @@ impl SceneStore {
 // cache policy. Pointer handling stays while it shares its slices.
 fn props_stay(
     props: Option<&LayerProps>,
-    (layer_bounds, offset, hit_test): (Option<Rect>, Point, &Option<HitTestNode>),
+    (layer_bounds, offset, hit_test): (Option<Rect>, Point, Option<&Rc<ModifierNodeSlices>>),
     (isolation, cache_policy): (IsolationReasons, CachePolicy),
 ) -> bool {
     let bits = |rect: Option<Rect>| {
@@ -139,7 +145,7 @@ fn props_stay(
     bits(props.layer_bounds) == bits(layer_bounds)
         && super::records::same_pair([held.x, held.y], [offset.x, offset.y])
         && match (&props.hit_test, hit_test) {
-            (Some(held), Some(hit_test)) => Rc::ptr_eq(&held.handlers, &hit_test.handlers),
+            (Some(held), Some(handlers)) => Rc::ptr_eq(&held.handlers, handlers),
             (None, None) => true,
             (Some(_), None) | (None, Some(_)) => false,
         }

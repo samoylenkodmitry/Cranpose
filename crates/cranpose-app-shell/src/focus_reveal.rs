@@ -1,6 +1,6 @@
 use cranpose_core::{NodeId, run_in_mutable_snapshot};
 use cranpose_foundation::{ScrollAxisRange, SemanticsScrollBy};
-use cranpose_render_common::Renderer;
+use cranpose_render_common::{RenderScene, Renderer};
 use cranpose_ui::{LayoutBox, SemanticsNode, layout::can_skip_scroll_reveal_from_applier};
 use cranpose_ui_graphics::Rect;
 
@@ -57,7 +57,19 @@ where
                 .semantics_tree_for_input(&mut self.app)
                 .and_then(|tree| scroll_ancestors(tree.root(), focused))
                 .unwrap_or_default();
-            if remeasure_containers && !ancestors.is_empty() {
+            // A node drawn on a mesh surface shows where its scene's camera
+            // shows it. Its layout bounds, which the reveal reads, do not say
+            // where that is: a scroll by them moves the page for nothing.
+            if ancestors.is_empty()
+                || self.surfaces[index]
+                    .renderer
+                    .scene()
+                    .surface_window_bounds(focused)
+                    .is_some()
+            {
+                continue;
+            }
+            if remeasure_containers {
                 for &ancestor in &ancestors {
                     cranpose_ui::schedule_measure_repass(ancestor);
                 }

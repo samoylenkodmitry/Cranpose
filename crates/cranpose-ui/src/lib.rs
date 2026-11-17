@@ -105,6 +105,7 @@ pub mod text_input_session;
 pub mod text_layout_result;
 mod text_modifier_node;
 pub mod text_selection;
+mod text_selection_colors;
 mod thread_state;
 mod two_dimensional_focus_search;
 mod ui_strings;
@@ -319,6 +320,7 @@ pub use text_field_focus::{ImeEditorState, has_focused_field};
 pub use text_field_modifier_node::{TextFieldElement, TextFieldModifierNode, TextPanResolver};
 pub use text_input_session::PlatformTextInputHandler;
 pub use text_modifier_node::{TextModifierElement, TextModifierNode};
+pub use text_selection_colors::{TextSelectionColors, local_text_selection_colors};
 pub use unhandled_keys::{UnhandledKeyEvents, dispatch_unhandled_key_event};
 pub use widgets::{
     clickable_text::ClickableText,

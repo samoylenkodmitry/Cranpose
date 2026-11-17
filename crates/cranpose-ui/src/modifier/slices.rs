@@ -431,19 +431,23 @@ impl ModifierNodeSlices {
     }
 
     /// Publishes geometry in window coordinates through the same transform as
-    /// rendering. Pointer-input sizes stay in the node's local coordinates.
+    /// rendering; none without a `transform`, inside a mesh surface whose
+    /// scene publishes it. Pointer-input sizes stay in the node's local
+    /// coordinates.
     #[doc(hidden)]
     pub fn publish_window_geometry(
         &self,
         origin: Point,
-        transform: cranpose_ui_graphics::ProjectiveTransform,
+        transform: Option<cranpose_ui_graphics::ProjectiveTransform>,
         size: Size,
     ) {
         // Every sink is a rare slice: most nodes have none to publish to.
         let Some(rare) = self.rare() else {
             return;
         };
-        if rare.text_window.is_some() || rare.viewport_window_rect.is_some() {
+        if let Some(transform) = transform
+            && (rare.text_window.is_some() || rare.viewport_window_rect.is_some())
+        {
             let window = cranpose_ui_graphics::WindowCoordinates {
                 size,
                 local_to_window: cranpose_ui_graphics::ProjectiveTransform::translation(

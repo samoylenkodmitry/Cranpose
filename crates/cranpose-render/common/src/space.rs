@@ -19,7 +19,7 @@ use std::sync::Arc;
 use cranpose_core::NodeId;
 use cranpose_ui_graphics::{
     Rect, Size,
-    space::{Camera, EyeWorld, LayerSpace, Light, Mat4, MeshSurface, Scene3d, Vec3},
+    space::{Camera, EyeWorld, LayerSpace, Light, Mat4, MeshSurface, MeshSurfaces, Scene3d, Vec3},
 };
 
 use crate::{graph::ProjectiveTransform, scene_store::LayerRef};
@@ -44,7 +44,8 @@ pub struct Cell<'a> {
     pub parent: Option<usize>,
     /// The surface of the parent space whose content holds the doorway, by
     /// its number among the tree's surfaces, and the doorway's rect in that
-    /// content, when the doorway lies flat in it.
+    /// content, when the doorway lies flat in it. Of a layer drawn on several
+    /// meshes, it is the owner's.
     pub hole: Option<(usize, Rect)>,
     /// Places the unit square on the doorway in the parent space, the space
     /// lying beyond it along its z; the identity for the window's scene.
@@ -59,6 +60,9 @@ pub struct Placed<'a> {
     pub layer: LayerRef<'a>,
     /// The surface, its mesh placed in its space.
     pub surface: MeshSurface,
+    /// Which of the layer's meshes it is: 0 for the owner, which places the
+    /// layer's children and its window geometry.
+    pub mesh: usize,
     /// Its space.
     pub cell: usize,
     /// The rect of its content in its layer: the layer's bounds, which the
@@ -73,7 +77,8 @@ type Host = (usize, ProjectiveTransform);
 pub struct SpaceTree<'a> {
     /// The spaces; the first is the window scene's own.
     pub cells: Vec<Cell<'a>>,
-    /// The mesh surfaces, in draw order.
+    /// The mesh surfaces, in draw order; the meshes of one layer follow
+    /// each other, its owner first.
     pub surfaces: Vec<Placed<'a>>,
 }
 
@@ -90,7 +95,8 @@ pub struct EyeView<'a> {
     /// The spaces the eye sees: its own first, then each through the
     /// doorway it shows through, before the spaces seen through it.
     pub seen: Vec<SeenSpace>,
-    /// The surfaces of the spaces it sees, in draw order.
+    /// The surfaces of the spaces it sees, in draw order; the meshes of one
+    /// layer follow each other, its owner first.
     pub surfaces: Vec<SeenSurface<'a>>,
 }
 
@@ -134,6 +140,8 @@ pub struct SeenSurface<'a> {
     pub layer: LayerRef<'a>,
     /// The surface, its mesh placed in the eye's space.
     pub surface: MeshSurface,
+    /// Which of the layer's meshes it is, as [`Placed::mesh`].
+    pub mesh: usize,
     /// The rect of its content in its layer, as [`Placed::content`].
     pub content: Rect,
     /// The seen space it lies in, by its number among [`EyeView::seen`].
@@ -238,8 +246,8 @@ impl<'a> SpaceTree<'a> {
                 Some(LayerSpace::Scene(scene)) => {
                     self.open(child, scene, Some((cell, child_frame, child_host)));
                 }
-                Some(LayerSpace::Surface(surface)) => {
-                    self.surface(child, surface, &child_frame, cell);
+                Some(LayerSpace::Surface(surfaces)) => {
+                    self.surface(child, surfaces, &child_frame, cell);
                 }
                 Some(LayerSpace::Transform(transform)) => {
                     self.children(child, &transform.then(&child_frame), (cell, None));
@@ -249,18 +257,22 @@ impl<'a> SpaceTree<'a> {
         }
     }
 
-    fn surface(&mut self, layer: LayerRef<'a>, surface: &MeshSurface, frame: &Mat4, cell: usize) {
+    fn surface(&mut self, layer: LayerRef<'a>, surfaces: &MeshSurfaces, frame: &Mat4, cell: usize) {
         let content = layer.local_bounds();
-        let placed = surface.placed_by(frame);
-        let to_scene = placed.content_to_scene(content.size());
         let index = self.surfaces.len();
-        self.surfaces.push(Placed {
-            layer,
-            surface: placed,
-            cell,
-            content,
-        });
-        if let Some(to_scene) = to_scene {
+        for (mesh, surface) in surfaces.iter().enumerate() {
+            self.surfaces.push(Placed {
+                layer,
+                surface: surface.placed_by(frame),
+                mesh,
+                cell,
+                content,
+            });
+        }
+        if let Some(to_scene) = self.surfaces[index]
+            .surface
+            .content_to_scene(content.size())
+        {
             // The children lie in the layer, whose content starts at the
             // corner of its bounds.
             let to_content = ProjectiveTransform::translation(-content.x, -content.y);
@@ -315,6 +327,7 @@ impl<'a> EyeView<'a> {
             view.surfaces.push(SeenSurface {
                 layer: placed.layer,
                 surface: placed.surface.placed_by(&view.seen[seen].to_eye),
+                mesh: placed.mesh,
                 content: placed.content,
                 seen,
             });

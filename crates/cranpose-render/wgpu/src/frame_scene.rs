@@ -10,7 +10,7 @@ use std::{rc::Rc, sync::Arc};
 
 use cranpose_ui_graphics::{
     Rect,
-    space::{Mat4, Material, Vec3},
+    space::{Mat4, Material, Multisample, Vec3},
 };
 
 use super::{DeviceRect, Event, FrameExecutor, LayerPass, SurfaceRender, composites_nothing};
@@ -28,8 +28,13 @@ use crate::{
 
 #[path = "frame_portal.rs"]
 mod portals;
+#[path = "frame_scene_target.rs"]
+mod target;
 
-use self::portals::{PortalPass, PreparedWindows, encode_portals};
+use self::{
+    portals::{PortalPass, PreparedWindows, encode_portals},
+    target::SceneTarget,
+};
 
 /// The surfaces of a scene that draw together, in the order the phases
 /// draw.
@@ -120,32 +125,39 @@ pub(super) struct PendingMesh {
 
 #[expect(clippy::multiple_inherent_impl, reason = "3D steps in their files")]
 impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
-    /// Renders the content of a mesh surface, whole, and holds it for its
-    /// scene's pass.
+    // Renders the content of a mesh surface, whole, once, and holds it
+    // for its scene's pass on each of its meshes.
     pub(super) fn resolve_mesh_child(
         &mut self,
         pass: &mut LayerPass<'_>,
         child: &ChildLayer,
-        mesh: &Arc<MeshChild>,
     ) -> Result<(), String> {
+        let Some(owner) = child.mesh.first() else {
+            return Ok(());
+        };
         // A volume shows what its shader finds, with or without content.
-        let volume = matches!(mesh.surface.material, Material::Volume(_));
+        let volume = child
+            .mesh
+            .iter()
+            .any(|mesh| matches!(mesh.surface.material, Material::Volume(_)));
         if composites_nothing(child) && (child.alpha == 0.0 || !volume) {
             return Ok(());
         }
-        let shown = DeviceRect::from_logical(mesh.scene.rect, pass.scale);
+        let shown = DeviceRect::from_logical(owner.scene.rect, pass.scale);
         let Some(surface) = self.render_child_surface(pass, child, child.z_index, None, shown)?
         else {
             return Ok(());
         };
-        pass.meshes.push(PendingMesh {
-            z: child.z_index,
-            depth: view_depth(&mesh.scene, &mesh.surface),
-            mesh: Arc::clone(mesh),
-            surface,
-            alpha: child.alpha,
-            clip: child.clip,
-        });
+        for mesh in &child.mesh {
+            pass.meshes.push(PendingMesh {
+                z: child.z_index,
+                depth: view_depth(&mesh.scene, &mesh.surface),
+                mesh: Arc::clone(mesh),
+                surface: surface.clone(),
+                alpha: child.alpha,
+                clip: child.clip,
+            });
+        }
         Ok(())
     }
 
@@ -162,7 +174,7 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
         let same_scene = match event {
             Event::Child(index) => pass.layer.children[*index]
                 .mesh
-                .as_ref()
+                .first()
                 .is_some_and(|mesh| Arc::ptr_eq(&mesh.scene, &held.mesh.scene)),
             Event::Backdrop(_) | Event::Effect(_) | Event::Shadow(_) => false,
         };
@@ -197,12 +209,10 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
             return Ok(());
         };
         let scene = Arc::clone(&first.mesh.scene);
-        let page_texture = Rc::clone(&pass.page.texture);
-        let page = ScenePage {
-            scale: pass.scale,
-            offset: pass.page.offset,
-            size: (page_texture.width, page_texture.height),
+        let Some(target) = self.scene_target(pass, &scene, first_z) else {
+            return Ok(());
         };
+        let page = target.page;
         // The space the eye stands in casts shadows, onto itself.
         let shadowing = scene.light.filter(|light| light.shadows);
         let light_projection = shadowing.and_then(|light| {
@@ -230,7 +240,7 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
                 draws.push(draw);
             }
         }
-        let shadows = light_projection.is_some() && self.draw_shadow_map(&draws);
+        let shadows = light_projection.is_some() && self.draw_shadow_map(&draws, target.samples);
         let windows = self.prepare_windows(&draws, (&scene, page, eye));
         let opaque = StepPipeline::Fixed(if shadows {
             ScenePipeline::Shadowed
@@ -241,13 +251,9 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
         let volumes = StepPipeline::Volumes(VolumeVariant::Color);
         let portals = |pass: PortalPass| (StepPipeline::Portals(pass), ScenePhase::Portal);
         let glow = (StepPipeline::Fixed(ScenePipeline::Glow), ScenePhase::Glow);
-        let depth = self
-            .renderer
-            .depth_targets
-            .scene(&self.renderer.device, page.size);
         let Some(backdrop) = backdrop else {
             self.encode_steps(
-                (&page_texture, &depth, shadows),
+                (pass, &target, shadows),
                 &[
                     (opaque, ScenePhase::Opaque),
                     shaded,
@@ -262,7 +268,7 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
         // Glass reads the page the other surfaces left, so draws in a pass
         // of its own after the copy, over their depth drawn again.
         self.encode_steps(
-            (&page_texture, &depth, shadows),
+            (pass, &target, shadows),
             &[
                 (opaque, ScenePhase::Opaque),
                 shaded,
@@ -273,14 +279,15 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
         );
         if self
             .renderer
-            .scene_surface_pipeline(ScenePipeline::Glass)
+            .scene_surface_pipeline(ScenePipeline::Glass, target.samples)
             .is_none()
         {
             return Ok(());
         }
-        let copy = self.capture(pass, first_z, backdrop, "Scene Glass Backdrop")?;
+        let below = target.drawn_below(first_z);
+        let copy = self.capture(pass, below, backdrop, "Scene Glass Backdrop")?;
         self.encode_steps(
-            (&page_texture, &depth, shadows),
+            (pass, &target, shadows),
             &[
                 (
                     StepPipeline::Fixed(ScenePipeline::Depth),
@@ -305,12 +312,12 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
         Ok(())
     }
 
-    /// Draws, in one pass onto the page, each step's surfaces with the
+    // Draws, in one pass into `target`, each step's surfaces with the
     /// step's pipeline; a step whose pipeline still compiles is left out,
     /// and one without surfaces asks for no pipeline.
     fn encode_steps(
         &mut self,
-        (page, depth, shadows): (&OffscreenTarget, &wgpu::TextureView, bool),
+        (pass, target, shadows): (&mut LayerPass<'_>, &SceneTarget, bool),
         steps: &[(StepPipeline, ScenePhase)],
         (draws, windows, backdrop): (
             &[PreparedSurface<'_>],
@@ -327,6 +334,8 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
         if steps.iter().all(empty) {
             return;
         }
+        let resolved = self.scene_resolved(target);
+        let samples = target.samples;
         let renderer = &*self.renderer;
         let shadow_group = match (shadows, &renderer.scene_pass.shadow_map) {
             (true, Some(map)) => &map.group,
@@ -341,9 +350,10 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
                 &effects.effect_linear_sampler,
             )
         });
-        let mut render_pass = self
-            .recorder
-            .begin_scene_pass("Scene Surfaces", &page.view, depth);
+        let colour = target.colour(resolved.as_deref());
+        let mut render_pass =
+            self.recorder
+                .begin_scene_pass("Scene Surfaces", colour, target.depth());
         render_pass.set_bind_group(2, shadow_group, &[]);
         for step in steps {
             // A pipeline no surface takes is not asked for, so never compiles.
@@ -353,7 +363,7 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
             let &(kind, phase) = step;
             let phase_draws = drawn(phase);
             let fixed = match kind {
-                StepPipeline::Fixed(kind) => match renderer.scene_surface_pipeline(kind) {
+                StepPipeline::Fixed(kind) => match renderer.scene_surface_pipeline(kind, samples) {
                     Some(pipeline) => Some(pipeline),
                     None => continue,
                 },
@@ -382,15 +392,17 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
                 (device, backdrop),
             );
         }
+        drop(render_pass);
+        pass.pending.extend(target.composite(resolved));
     }
 
     /// Draws the scene's shadow casters into the shadow map, as the light
     /// sees them; false while the shadow pipelines compile.
-    fn draw_shadow_map(&mut self, draws: &[PreparedSurface<'_>]) -> bool {
+    fn draw_shadow_map(&mut self, draws: &[PreparedSurface<'_>], samples: Multisample) -> bool {
         // Both pipelines are asked for, so both compile side by side.
         let shadowed = self
             .renderer
-            .scene_surface_pipeline(ScenePipeline::Shadowed)
+            .scene_surface_pipeline(ScenePipeline::Shadowed, samples)
             .is_some();
         if !shadowed
             || self
@@ -403,7 +415,7 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
         }
         let renderer = &*self.renderer;
         let (Some(pipeline), Some(map)) = (
-            renderer.scene_surface_pipeline(ScenePipeline::Shadow),
+            renderer.scene_surface_pipeline(ScenePipeline::Shadow, Multisample::Off),
             renderer.scene_pass.shadow_map.as_ref(),
         ) else {
             return false;
@@ -469,6 +481,7 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
                     &SurfaceShading {
                         transform: surface.transform,
                         material,
+                        edges: surface.mesh.texture_edges(),
                         alpha: held.alpha,
                         source_region: source_region(&held.surface, held.mesh.content),
                         light_projection: light_projection.filter(|_| held.mesh.seen == 0),
@@ -537,6 +550,11 @@ impl PreparedSurface<'_> {
         self.held.mesh.seen
     }
 
+    // The samples its scene's pass takes in each pixel.
+    fn samples(&self) -> Multisample {
+        self.held.mesh.scene.multisample
+    }
+
     /// The surface's texture, bound as the scene's shaders read it.
     fn texture(
         &self,
@@ -562,7 +580,7 @@ impl PreparedSurface<'_> {
             return None;
         };
         self.shaded.as_ref()?;
-        renderer.scene_shaded_pipeline(&shaded.shader, variant)
+        renderer.scene_shaded_pipeline(&shaded.shader, (variant, self.samples()))
     }
 
     /// Binds the values a shaded surface's shader reads, in the place of
@@ -605,7 +623,9 @@ fn draw_surfaces<'d>(
         let mut shaded = false;
         match (kind, &draw.held.mesh.surface.material) {
             (StepPipeline::Volumes(variant), Material::Volume(volume)) => {
-                let Some(pipeline) = renderer.scene_volume_pipeline(&volume.shader, variant) else {
+                let pipeline =
+                    renderer.scene_volume_pipeline(&volume.shader, (variant, draw.samples()));
+                let Some(pipeline) = pipeline else {
                     continue;
                 };
                 render_pass.set_pipeline(pipeline);
@@ -613,8 +633,8 @@ fn draw_surfaces<'d>(
             (StepPipeline::Shaded(variant), _) => {
                 let own = draw.shaded_pipeline(renderer, variant);
                 shaded = own.is_some();
-                let Some(pipeline) = own.or_else(|| renderer.scene_surface_pipeline(variant.lit()))
-                else {
+                let lit = || renderer.scene_surface_pipeline(variant.lit(), draw.samples());
+                let Some(pipeline) = own.or_else(lit) else {
                     continue;
                 };
                 render_pass.set_pipeline(pipeline);

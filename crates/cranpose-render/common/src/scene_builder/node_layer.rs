@@ -2,7 +2,7 @@
 // properties, its own draws and text around its child layers, and the
 // wrapper of the draws chained before its graphics layer.
 
-use std::{borrow::Cow, rc::Rc};
+use std::rc::Rc;
 
 use cranpose_core::{MemoryApplier, NodeId, RecordId};
 use cranpose_ui::{ModifierNodeSlices, Point, Rect, Size, widgets::LayoutState};
@@ -17,7 +17,7 @@ use super::{
 use crate::{
     graph::{CachePolicy, HitTestNode, IsolationReasons, PrimitivePhase, ProjectiveTransform},
     layer_transform::{
-        layer_scales_or_rotates, layer_transform_to_parent, layer_transform_to_window,
+        laid_out_transform_to_window, layer_scales_or_rotates, layer_transform_to_parent,
     },
     scene_store::{HeadKind, Item, LayerHead, LayerRef, RecordKind, RecordSeed, SceneStore},
 };
@@ -74,16 +74,16 @@ struct NodeFrame {
     translated_content_offset: Point,
 }
 
-fn node_layer_head(
+fn node_layer_head<'a>(
     node_id: NodeId,
-    slices: &Rc<ModifierNodeSlices>,
+    slices: &'a Rc<ModifierNodeSlices>,
     frame: NodeFrame,
-    graphics_layer: Option<GraphicsLayer>,
+    graphics_layer: Option<&'a GraphicsLayer>,
     context: LowerContext,
-) -> LayerHead {
+) -> LayerHead<'a> {
     let clip_to_bounds = slices.clip_to_bounds();
     let translated_content_context = slices.translated_content_context();
-    let properties = graphics_layer.as_ref().unwrap_or(&GraphicsLayer::DEFAULT);
+    let properties = graphics_layer.unwrap_or(&GraphicsLayer::DEFAULT);
     let isolation = isolation_reasons(properties);
     LayerHead {
         kind: HeadKind::Node(node_id),
@@ -92,7 +92,7 @@ fn node_layer_head(
         transform_to_parent: placed_transform(
             frame.local_bounds,
             frame.placement,
-            graphics_layer.as_ref(),
+            graphics_layer,
             context.inherited.parent_content_offset,
         ),
         content_offset: frame.content_offset,
@@ -109,7 +109,7 @@ fn node_layer_head(
         isolation,
         graphics_layer,
         clip_to_bounds,
-        hit_test: hit_test_from_slices(slices),
+        hit_test: slices_hit_something(slices).then_some(slices),
         has_origin_sinks: modifier_slices_have_origin_sinks(slices),
     }
 }
@@ -122,10 +122,9 @@ fn begin_record(store: &mut SceneStore, record: RecordId, kind: HeadKind, conten
     store.set_content_offset(record, content_offset);
 }
 
-pub(super) fn assign_layer(store: &mut SceneStore, record: RecordId, head: LayerHead) {
+pub(super) fn assign_layer(store: &mut SceneStore, record: RecordId, head: &LayerHead<'_>) {
     let space = head
         .graphics_layer
-        .as_ref()
         .is_some_and(|layer| layer.space.is_some());
     store.write_head(record, head);
     if space {
@@ -312,7 +311,7 @@ pub(super) fn write_node_content(
 fn write_layer_with_outer(
     store: &mut SceneStore,
     target: RecordId,
-    head: LayerHead,
+    head: &LayerHead<'_>,
     outer: Option<(NodeCommands<'_>, DrawTarget<'_>)>,
     parent_content_offset: Point,
     write_content: impl FnOnce(&mut SceneStore, RecordId, &mut Vec<Item>, Option<&GraphicsLayer>),
@@ -320,7 +319,7 @@ fn write_layer_with_outer(
     let Some((outer, draws)) = outer else {
         begin_record(store, target, head.kind, head.content_offset);
         let mut list = store.lists.take();
-        write_content(store, target, &mut list, head.graphics_layer.as_ref());
+        write_content(store, target, &mut list, head.graphics_layer);
         store.write_items(target, &list);
         store.lists.give(list);
         assign_layer(store, target, head);
@@ -339,7 +338,7 @@ fn write_layer_with_outer(
     });
     begin_record(store, layer, head.kind, head.content_offset);
     let mut list = store.lists.take();
-    write_content(store, layer, &mut list, head.graphics_layer.as_ref());
+    write_content(store, layer, &mut list, head.graphics_layer);
     store.write_items(layer, &list);
     store.lists.give(list);
     assign_layer(store, layer, head);
@@ -356,13 +355,15 @@ fn write_layer_with_outer(
 #[derive(Clone, Copy)]
 pub(super) struct AbsOrigin {
     pub(super) content_origin: Point,
-    pub(super) window_transform: ProjectiveTransform,
+    // `None` inside a mesh surface, whose scene publishes its window
+    // geometry.
+    pub(super) window_transform: Option<ProjectiveTransform>,
 }
 
 impl AbsOrigin {
     pub(super) const ROOT: Self = Self {
         content_origin: Point { x: 0.0, y: 0.0 },
-        window_transform: ProjectiveTransform::identity(),
+        window_transform: Some(ProjectiveTransform::identity()),
     };
 
     pub(super) fn children_of(self, layer: LayerRef<'_>) -> Self {
@@ -377,7 +378,7 @@ impl AbsOrigin {
                 x: self.content_origin.x + origin.x + content_offset.x,
                 y: self.content_origin.y + origin.y + content_offset.y,
             },
-            window_transform: layer_transform_to_window(
+            window_transform: laid_out_transform_to_window(
                 self.window_transform,
                 top_left,
                 layer.local_bounds(),
@@ -440,20 +441,27 @@ pub(super) fn slices_hit_something(slices: &ModifierNodeSlices) -> bool {
     !slices.pointer_inputs().is_empty() || slices.pointer_icon().is_some()
 }
 
-pub(super) fn prepare_node_layer(
+// Works out the head of the layer of the node `node_id`, laid out as
+// `layout_state` with `slices` under `context`, publishes the node's window
+// geometry and hands `write` the head and the context its children lower
+// with. The node's graphics layer stays in a slot here, which the head
+// lends: a head returned by value would move the layer with it.
+pub(super) fn with_node_layer<R>(
     node_id: NodeId,
     slices: &Rc<ModifierNodeSlices>,
     layout_state: &LayoutState,
     context: LowerContext,
-) -> (LayerHead, LowerContext) {
+    write: impl FnOnce(&LayerHead<'_>, LowerContext) -> R,
+) -> R {
     let size = layout_state.size();
     let placement = layout_state.position();
     let (local_bounds, node_bounds) = layer_and_node_bounds(slices, size);
-    let graphics_layer = shaped_graphics_layer(slices, local_bounds);
+    let shaped = shaped_graphics_layer(slices, local_bounds);
+    let graphics_layer = shaped.as_deref();
     let geometry = context.parent_abs.map(|parent_abs| {
         TranslateGeometry::new(
             layout_state,
-            graphics_layer.as_deref().unwrap_or(&GraphicsLayer::DEFAULT),
+            graphics_layer.unwrap_or(&GraphicsLayer::DEFAULT),
             local_bounds,
             parent_abs,
         )
@@ -479,10 +487,10 @@ pub(super) fn prepare_node_layer(
             content_offset,
             translated_content_offset: slices.translated_content_offset().unwrap_or(content_offset),
         },
-        graphics_layer.map(Cow::into_owned),
+        graphics_layer,
         context,
     );
-    (head, child_context)
+    write(&head, child_context)
 }
 
 pub(super) fn write_node_layer(
@@ -500,40 +508,47 @@ pub(super) fn write_node_layer(
         window_root: _,
     } = data;
     let size = layout_state.size();
-    let (head, child_context) = prepare_node_layer(node_id, &slices, &layout_state, context);
-    let draws = DrawTarget {
-        size,
-        motion_context_animated: head.motion_context_animated,
-        paint: None,
-    };
-    let outer = outer_commands(node_id, &slices).map(|commands| (commands, draws));
-    write_layer_with_outer(
-        store,
-        target,
-        head,
-        outer,
-        context.inherited.parent_content_offset,
-        |store, record, list, layer| {
+    with_node_layer(
+        node_id,
+        &slices,
+        &layout_state,
+        context,
+        |head, child_context| {
             let draws = DrawTarget {
-                paint: layer.map(GroupPaint::Layer),
-                ..draws
+                size,
+                motion_context_animated: head.motion_context_animated,
+                paint: None,
             };
-            let written = (0, children.len());
-            write_node_content(
+            let outer = outer_commands(node_id, &slices).map(|commands| (commands, draws));
+            write_layer_with_outer(
                 store,
-                record,
-                (list, &mut OwnDraws::none()),
-                &slices,
-                draws,
-                written,
-                |store, list| {
-                    for &child_id in children {
-                        if let Some(child) =
-                            lower_child(applier, store, record, child_id, child_context)
-                        {
-                            list.push(child);
-                        }
-                    }
+                target,
+                head,
+                outer,
+                context.inherited.parent_content_offset,
+                |store, record, list, layer| {
+                    let draws = DrawTarget {
+                        paint: layer.map(GroupPaint::Layer),
+                        ..draws
+                    };
+                    let written = (0, children.len());
+                    write_node_content(
+                        store,
+                        record,
+                        (list, &mut OwnDraws::none()),
+                        &slices,
+                        draws,
+                        written,
+                        |store, list| {
+                            for &child_id in children {
+                                if let Some(child) =
+                                    lower_child(applier, store, record, child_id, child_context)
+                                {
+                                    list.push(child);
+                                }
+                            }
+                        },
+                    );
                 },
             );
         },
@@ -632,7 +647,7 @@ pub(super) fn write_wrapper(
         isolation: IsolationReasons::default(),
         cache_policy: CachePolicy::None,
     };
-    assign_layer(store, wrapper, head);
+    assign_layer(store, wrapper, &head);
 }
 
 pub(super) fn take_wrapped_layer(

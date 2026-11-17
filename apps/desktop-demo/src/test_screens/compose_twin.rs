@@ -9,14 +9,16 @@ use cranpose_core::{rememberMutableStateOf, MutableState};
 use cranpose_foundation::text::{TextFieldState, TextRange};
 use cranpose_ui::{
     composable, text::SpanStyle, BasicTextField, BasicTextFieldDecorated, BasicTextFieldOptions,
-    BasicTextFieldWithOptions, Box, BoxSpec, Color, Column, ColumnSpec, FocusRequester,
-    HorizontalAlignment, LinearArrangement, Modifier, Row, RowSpec, ScrollState, Text, TextStyle,
-    VerticalAlignment,
+    Box, BoxSpec, Color, Column, ColumnSpec, FocusRequester, HorizontalAlignment,
+    LinearArrangement, Modifier, Row, RowSpec, ScrollState, Text, TextStyle, VerticalAlignment,
 };
 
 pub use super::compose_twin_matrix::{MATRIX_FRAMES, MATRIX_GRID};
-use crate::app::modifier_showcase::{
-    complex_chain_showcase, item_list_showcase, positioned_boxes_showcase, simple_card_showcase,
+use crate::{
+    accent_field::AccentField,
+    app::modifier_showcase::{
+        complex_chain_showcase, item_list_showcase, positioned_boxes_showcase, simple_card_showcase,
+    },
 };
 
 /// The frame's size in logical pixels, the Compose twin's `SCENE_WIDTH` and
@@ -359,16 +361,13 @@ pub fn text_selection_probe() {
         Modifier::empty().padding(16.0),
         ColumnSpec::new(),
         move || {
-            BasicTextFieldWithOptions(
+            AccentField(
                 state,
                 Modifier::empty()
                     .focus_requester(&requester)
                     .background(FIELD_FILL)
                     .padding_each(10.0, 4.0, 6.0, 8.0),
-                BasicTextFieldOptions {
-                    cursor_color: FIELD_ACCENT,
-                    ..BasicTextFieldOptions::default()
-                },
+                (TextStyle::default(), FIELD_ACCENT),
             );
         },
     );

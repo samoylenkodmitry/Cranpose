@@ -9,10 +9,10 @@ use super::{
     draw_recording::OwnDraws,
     modifier_slices_have_origin_sinks,
     node_layer::NodeContent,
-    prepare_node_layer, read_placed_node_data, remove_dirty_descendants, slices_hit_something,
+    read_placed_node_data, remove_dirty_descendants, slices_hit_something,
     text_node::{TextNodeParts, drawn_text, refresh_text_node},
     translate_layer::holds_hit_geometry,
-    write_node_layer,
+    with_node_layer, write_node_layer,
 };
 use crate::{
     NodeUpdate,
@@ -212,8 +212,13 @@ fn layer_from_content(
     data: &SnapshotNodeData<'_>,
     context: LowerContext,
 ) {
-    let (head, _) = prepare_node_layer(node_id, &data.modifier_slices, &data.layout_state, context);
-    assign_layer(store, record, head);
+    with_node_layer(
+        node_id,
+        &data.modifier_slices,
+        &data.layout_state,
+        context,
+        |head, _| assign_layer(store, record, head),
+    );
 }
 
 // Updates `record`, the leaf of the dirty node `node_id`, for the change

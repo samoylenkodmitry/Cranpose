@@ -711,6 +711,7 @@ pub(crate) struct GpuRenderer {
     screenshot_converter: OutputConverter,
     pub(crate) pipelines: RendererPipelines,
     pub(crate) depth_targets: DepthTargets,
+    pub(crate) sampled_targets: SampledTargets,
     /// The pipeline and mesh buffers of the 3D scenes; nothing in it is made
     /// until a scene draws.
     pub(crate) scene_pass: crate::scene_pass::ScenePass,
@@ -849,7 +850,6 @@ impl GpuRenderer {
             },
             TEXT_GLYPH_ATLAS_MIN_SIZE,
         );
-        let viewport_uniforms = ViewportUniforms::default();
 
         if cranpose_core::DIAGNOSTICS.glass_material_folds.equals("1") {
             cranpose_ui_graphics::set_glass_material_folds(true);
@@ -997,11 +997,12 @@ impl GpuRenderer {
             },
             device,
             depth_targets: DepthTargets::default(),
+            sampled_targets: SampledTargets::default(),
             scene_pass: crate::scene_pass::ScenePass::default(),
             depth_gate,
             surface_atlas_sizes: crate::frame::SurfaceAtlasSizes::for_backend(adapter_backend),
             text: TextResources::new(text_glyph_atlas, copy_free),
-            viewport_uniforms,
+            viewport_uniforms: ViewportUniforms::default(),
             run_store,
             images: ImageTextures::new(),
             copy_free,
@@ -1237,113 +1238,7 @@ impl GpuRenderer {
                 &|| Box::new(self.pipelines.rrect_shadow_pipeline_job(depth)),
             );
         }
-        for kind in crate::scene_pass::ScenePipeline::ALL {
-            visit(self.scene_pipeline_resource(kind), &|| {
-                Box::new(self.scene_surface_pipeline_job(kind))
-            });
-        }
-    }
-
-    fn scene_pipeline_resource(&self, kind: crate::scene_pass::ScenePipeline) -> &FixedPipeline {
-        self.scene_pass.pipeline(kind)
-    }
-
-    /// A scene pipeline for a scene's pass, or `None` while it compiles:
-    /// the draws it takes are left out, and the frame after it lands draws
-    /// them.
-    pub(crate) fn scene_surface_pipeline(
-        &self,
-        kind: crate::scene_pass::ScenePipeline,
-    ) -> Option<&wgpu::RenderPipeline> {
-        self.pipelines.ready_or_left_out(
-            &self.frame_stats,
-            self.scene_pipeline_resource(kind),
-            || self.scene_surface_pipeline_job(kind),
-        )
-    }
-
-    /// The pipeline of `variant` of a volume shader a frame noted; `None`
-    /// while it compiles, when the frame after it lands draws the volumes,
-    /// or when the shader does not build.
-    pub(crate) fn scene_volume_pipeline(
-        &self,
-        shader: &Arc<str>,
-        variant: crate::scene_pass::VolumeVariant,
-    ) -> Option<&wgpu::RenderPipeline> {
-        let kept = self.scene_pass.volume(shader)?;
-        self.pipelines.app_shader_pipeline(
-            &self.frame_stats,
-            kept.pipeline(variant as usize),
-            || {
-                crate::scene_pass::volume_pipeline_job(
-                    &self.device,
-                    self.pipelines.pipeline_cache.clone(),
-                    (
-                        self.pipelines.composition_format,
-                        self.pipelines.adapter_backend,
-                        variant,
-                    ),
-                    (self.scene_pipeline_parts(), kept),
-                )
-            },
-        )
-    }
-
-    /// The pipeline of `variant` of a shaded surface's shader a frame
-    /// noted; `None` while it compiles, when the frame after it lands draws
-    /// the surfaces with it, or when the shader does not build.
-    pub(crate) fn scene_shaded_pipeline(
-        &self,
-        shader: &Arc<str>,
-        variant: crate::scene_pass::ShadedVariant,
-    ) -> Option<&wgpu::RenderPipeline> {
-        let kept = self.scene_pass.shaded(shader)?;
-        self.pipelines.app_shader_pipeline(
-            &self.frame_stats,
-            kept.pipeline(variant as usize),
-            || {
-                crate::scene_pass::shaded_pipeline_job(
-                    &self.device,
-                    self.pipelines.pipeline_cache.clone(),
-                    (
-                        self.pipelines.composition_format,
-                        self.pipelines.adapter_backend,
-                        variant,
-                    ),
-                    (self.scene_pipeline_parts(), kept),
-                )
-            },
-        )
-    }
-
-    /// The bind group layout of a scene surface's uniforms.
-    pub(crate) fn scene_uniform_layout(&self) -> &wgpu::BindGroupLayout {
-        &self.scene_pipeline_parts().uniform_layout
-    }
-
-    /// What a scene binds in its shadow map's place when it casts none.
-    pub(crate) fn scene_no_shadow(&self) -> &wgpu::BindGroup {
-        &self.scene_pipeline_parts().no_shadow
-    }
-
-    fn scene_pipeline_parts(&self) -> &crate::scene_pass::ScenePipelineParts {
-        self.scene_pass.parts(
-            &self.device,
-            self.pipelines.adapter_backend,
-            &self.effect_renderer.effect_texture_bind_group_layout,
-        )
-    }
-
-    fn scene_surface_pipeline_job(
-        &self,
-        kind: crate::scene_pass::ScenePipeline,
-    ) -> impl FnOnce() -> wgpu::RenderPipeline + CompilerSend + 'static {
-        crate::scene_pass::scene_pipeline_job(
-            &self.device,
-            self.pipelines.pipeline_cache.clone(),
-            (self.pipelines.composition_format, kind),
-            self.scene_pipeline_parts(),
-        )
+        self.for_each_scene_pipeline(visit);
     }
 
     /// Lays out as fallback triangles a stored run's draws in `range` of
@@ -1552,6 +1447,7 @@ impl GpuRenderer {
         self.effect_renderer.end_offscreen_frame();
         executor.end_transient_frame();
         self.depth_targets.end_frame();
+        self.sampled_targets.end_frame();
         self.scene_pass.end_frame();
         self.surface_atlas_sizes.end_frame();
     }
@@ -1567,7 +1463,7 @@ impl GpuRenderer {
     ) -> Result<(), String> {
         let (width, height) = viewport;
         let (output_mode, output_view, image) = (output.mode, output.view, output.image);
-        self.frame_damages.note(packet.frame_id, packet.damage);
+        self.frame_damages.note(packet.frame_id, &packet.damage);
         let cancel_reason = if packet.renderer_epoch != self.renderer_epoch {
             Some(CancelReason::RendererEpoch)
         } else if packet.surface_epoch != surface_epoch {
@@ -3165,9 +3061,12 @@ pub(crate) use image_draws::{
 };
 mod depth_targets;
 mod pass_depth;
+mod sampled_targets;
+mod scene_pipelines;
 mod viewport_uniform;
 use depth_targets::DepthTargets;
 pub(crate) use pass_depth::PassDepth;
+use sampled_targets::SampledTargets;
 use viewport_uniform::Uniforms;
 mod damage_plan;
 mod frame_history;

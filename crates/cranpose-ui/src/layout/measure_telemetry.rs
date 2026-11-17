@@ -59,15 +59,15 @@ pub(super) fn log_node_measure_telemetry(
     kind: &'static str,
     node_id: NodeId,
     constraints: Constraints,
-    measured: &MeasuredNode,
+    (measured, children): (&MeasuredNode, impl FnOnce() -> usize),
     (threshold_ms, start): (f64, Instant),
 ) {
     let size = measured.size;
-    let children = measured.children.len();
     let total_ms = start.elapsed().as_secs_f64() * 1000.0;
     if total_ms < threshold_ms {
         return;
     }
+    let children = children();
 
     log::warn!(
         "[layout-node-telemetry] kind={kind} node={} total_ms={total_ms:.2} constraints=({:.1},{:.1},{:.1},{:.1}) size=({:.1},{:.1}) children={children}",

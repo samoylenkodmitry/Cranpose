@@ -6,7 +6,7 @@ use std::{cell::RefCell, fmt, rc::Rc};
 
 use cranpose_core::{MemoryApplier, NodeError, NodeId};
 use cranpose_foundation::SemanticsConfiguration;
-use cranpose_ui_graphics::{ProjectiveTransform, layer_transform::layer_transform_to_window};
+use cranpose_ui_graphics::{ProjectiveTransform, layer_transform::laid_out_transform_to_window};
 
 use super::{SemanticsRole, SemanticsText};
 #[cfg(feature = "inspection")]
@@ -137,8 +137,8 @@ pub(super) fn snapshot_node_data(
     node_id: NodeId,
     top_left: Point,
     size: Size,
-    parent_transform: ProjectiveTransform,
-) -> Result<(LayoutNodeData, ProjectiveTransform), NodeError> {
+    parent_transform: Option<ProjectiveTransform>,
+) -> Result<(LayoutNodeData, Option<ProjectiveTransform>), NodeError> {
     let info = runtime_metadata_for(applier, node_id).unwrap_or_default();
     let kind = layout_kind_from_metadata(node_id, &info);
     let RuntimeNodeMetadata {
@@ -154,7 +154,7 @@ pub(super) fn snapshot_node_data(
     let window_transform = modifier_slices
         .graphics_layer()
         .map_or(parent_transform, |layer| {
-            layer_transform_to_window(
+            laid_out_transform_to_window(
                 parent_transform,
                 top_left,
                 modifier_slices.layer_bounds(size),

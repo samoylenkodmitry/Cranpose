@@ -53,11 +53,9 @@ fn pressed_at(
         let surface = pressable(Rc::clone(&sink));
         let inside = Rc::clone(&inside);
         Box(
-            Modifier::empty().fill_max_size().scene3d(|| Scene3d {
-                camera: flat_camera(),
-                light: None,
-                eye: None,
-            }),
+            Modifier::empty()
+                .fill_max_size()
+                .scene3d(|| Scene3d::new(flat_camera())),
             BoxSpec::default(),
             move || inside(&surface),
         );
