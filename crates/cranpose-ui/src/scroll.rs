@@ -17,7 +17,8 @@ use std::{
 use cranpose_core::{MutableState, NodeId, RuntimeCell, collections::map::HashMap};
 use cranpose_foundation::{
     Constraints, DelegatableNode, LayoutModifierNode, Measurable, ModifierNode,
-    ModifierNodeContext, ModifierNodeElement, NodeCapabilities, NodeState,
+    ModifierNodeContext, ModifierNodeElement, NodeCapabilities, NodeState, RunningScroll, ScrollId,
+    ScrollStop,
 };
 use cranpose_ui_graphics::Size;
 use cranpose_ui_layout::{Axis, LayoutModifierMeasureResult};
@@ -81,6 +82,8 @@ pub(crate) struct ScrollStateInner {
     invalidate_callbacks: InvalidationCallbacks,
     pending_invalidation: Cell<bool>,
     settle_policy: RefCell<Option<ScrollSettlePolicy>>,
+    // The fling or settle of a drag that moves the content now.
+    running_scroll: RefCell<RunningScroll>,
 }
 
 /// A scroll position and the extents it is measured against, read together.
@@ -302,6 +305,7 @@ impl ScrollState {
                     invalidate_callbacks: InvalidationCallbacks::new(),
                     pending_invalidation: Cell::new(false),
                     settle_policy: RefCell::new(None),
+                    running_scroll: RefCell::new(RunningScroll::default()),
                 },
                 runtime,
             ),
@@ -421,14 +425,39 @@ impl ScrollState {
         *self.inner().viewport_extent.borrow_mut() = extent;
     }
 
-    /// Scrolls to the given position immediately.
+    /// Scrolls to the given position immediately. It stops the fling or
+    /// settle of a drag first, as Compose's `scrollTo` does.
     pub fn scroll_to(&self, position: f32) {
+        self.stop_scroll_animation();
         let max = self.max_value();
         let clamped = position.clamp(0.0, max);
 
         self.value.set(clamped);
 
         self.invalidate();
+    }
+
+    // Makes the motion that `stop` stops the running scroll. The motion that
+    // ran before stops.
+    pub(crate) fn start_scroll_animation(&self, stop: impl FnOnce() + 'static) -> ScrollId {
+        let (id, previous) = self.inner().running_scroll.borrow_mut().start(stop);
+        if let Some(previous) = previous {
+            previous.run();
+        }
+        id
+    }
+
+    // Forgets the running scroll `id` once it ended, while the state lives.
+    pub(crate) fn end_scroll_animation(&self, id: ScrollId) {
+        if let Some(inner) = self.inner.try_get() {
+            inner.running_scroll.borrow_mut().end(id);
+        }
+    }
+
+    // Stops the running scroll and returns whether one ran.
+    pub(crate) fn stop_scroll_animation(&self) -> bool {
+        let running = self.inner().running_scroll.borrow_mut().take();
+        running.map(ScrollStop::run).is_some()
     }
 
     pub(crate) fn add_invalidate_callback(&self, callback: Box<dyn Fn()>) -> u64 {

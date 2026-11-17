@@ -1,8 +1,6 @@
 //! Animated scrolling of lazy lists, and of the grids and pagers built on
 //! them: Compose's `animateScrollBy` and `animateScrollToItem`.
 
-use std::rc::Rc;
-
 use cranpose_foundation::lazy::LazyListState;
 
 use crate::fling_animation::{SettleAnimation, SpringParams};
@@ -64,14 +62,16 @@ fn animate(state: LazyListState, distance: f32, land: Option<(usize, f32)>) {
     };
     let settle = SettleAnimation::new(runtime, SpringParams::SETTLE_POLICY);
     let stop = settle.clone();
-    let id = state.start_scroll_animation(Rc::new(move || stop.cancel()));
+    let id = state.start_scroll_animation(move || stop.cancel());
     settle.start_settle(
         0.0,
         0.0,
         distance,
         move |delta| -state.dispatch_scroll_delta(-delta),
         move |_| {
-            state.end_scroll_animation(id);
+            if let Some(id) = id {
+                state.end_scroll_animation(id);
+            }
             if let Some((index, offset)) = land {
                 state.scroll_to_item(index, offset);
             }

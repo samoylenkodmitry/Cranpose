@@ -555,3 +555,38 @@ fn a_pager_created_on_a_later_page_shows_it_where_pages_rest() {
     assert_eq!(starts(&mut pager, [2, 1]), [Some(50.0), Some(-150.0)]);
     assert_eq!(pager.state().current_page(), 2);
 }
+
+// A jump during the settle after a drag puts the pager on the jump's page.
+// The settle stops there.
+#[test]
+fn a_jump_during_the_settle_rests_on_its_page() {
+    let mut pager = Pager::new(Axis::Horizontal);
+    pager.press_and_move(250.0, 80.0, 1_000);
+    pager.release(80.0);
+    pager.frames(2);
+    assert!(
+        pager.state().is_scroll_in_progress(),
+        "the settle moves the pager"
+    );
+
+    pager.state().scroll_to_page(3);
+    pager.frames(90);
+    assert!(pager.rests_on(3), "the settle stopped at the jump");
+}
+
+// A tap that stops the settle lets go onto a page, as a drag does.
+#[test]
+fn a_tap_that_stops_the_settle_lets_go_onto_a_page() {
+    let mut pager = Pager::new(Axis::Horizontal);
+    pager.press_and_move(250.0, 80.0, 1_000);
+    pager.release(80.0);
+    pager.frames(2);
+
+    pager.press_and_move(150.0, 150.0, 16);
+    pager.release(150.0);
+    pager.frames(90);
+    assert!(
+        pager.rests_on(0) || pager.rests_on(1),
+        "the pager rests on a page, not between two"
+    );
+}
