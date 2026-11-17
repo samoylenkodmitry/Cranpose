@@ -71,8 +71,8 @@ pub(crate) enum HapticCommand {
 /// the vibrations that its host sends as they arrive.
 ///
 /// A vibration reaches the controller in the next frame. A newer one replaces the one that still
-/// runs on the same hand, as in OpenXR's `xrApplyHapticFeedback`. A hand that the runtime does not
-/// track, or a session that has no input focus, drops the request.
+/// runs on the same hand, as in OpenXR's `xrApplyHapticFeedback`. The runtime drops a request that
+/// it rejects, such as one made while the session has no input focus.
 #[derive(Clone)]
 pub struct Haptics {
     pending: Arc<Mutex<[Option<HapticCommand>; 2]>>,
