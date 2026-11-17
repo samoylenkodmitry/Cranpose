@@ -39,7 +39,7 @@ pub(super) type ModifierElements = SmallVec<[DynModifierElement; 4]>;
 // The elements of a modifier that holds several, or one with inspector
 // metadata, in one shared allocation, which the chain's later links extend
 // in place while it is the only owner.
-#[derive(Clone, Default)]
+#[derive(Default)]
 pub(super) struct ManyElements {
     elements: ModifierElements,
     // `None` when no element records inspector metadata, which is always
@@ -58,18 +58,17 @@ impl ManyElements {
             ModifierKind::Many(chain) => (chain, ModifierKind::Empty),
             first => (Rc::default(), first),
         };
-        match Rc::get_mut(&mut chain) {
-            Some(owned) => {
-                owned.push(first);
-                owned.push(more);
-            }
-            None => {
-                let mut copy = Self::clone(&chain);
-                copy.push(more);
-                chain = Rc::new(copy);
-            }
+        if let Some(owned) = Rc::get_mut(&mut chain) {
+            owned.push(first);
+            owned.push(more);
+            return chain;
         }
-        chain
+        // Only a list another modifier holds too comes here, and `first` is
+        // empty then.
+        let mut copy = Self::default();
+        copy.append(chain);
+        copy.push(more);
+        Rc::new(copy)
     }
 
     // Takes in the elements of `more` after its own. Always inline, with the
@@ -100,7 +99,9 @@ impl ManyElements {
                 inspector_slice(&shared.inspector),
             );
         }
-        self.elements.extend(shared.elements.iter().cloned());
+        for element in &shared.elements {
+            self.elements.push(element.clone());
+        }
     }
 }
 
@@ -269,7 +270,11 @@ impl Modifier {
                 chain.push(ModifierKind::One(element));
                 chain
             }
-            ModifierKind::Many(chain) => Rc::unwrap_or_clone(chain),
+            ModifierKind::Many(shared) => {
+                let mut chain = ManyElements::default();
+                chain.append(shared);
+                chain
+            }
         };
         let mut list = chain.inspector.as_deref().cloned().unwrap_or_default();
         list.push(metadata);

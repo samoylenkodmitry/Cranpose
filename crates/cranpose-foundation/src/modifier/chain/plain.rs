@@ -430,9 +430,7 @@ impl PlainWords {
 // would bring each element's formatting into every image.
 impl fmt::Debug for PlainWords {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("PlainWords")
-            .field("type", &self.fns.type_name())
-            .finish()
+        f.write_str(self.fns.type_name())
     }
 }
 
