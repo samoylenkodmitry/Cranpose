@@ -1,0 +1,35 @@
+//! Why a decoder fails.
+
+use super::VideoCodec;
+
+/// Why a video decoder could not start or take an access unit.
+#[derive(Debug, thiserror::Error)]
+pub enum DecoderError {
+    /// This platform has no hardware video decoder that Cranpose drives.
+    #[error("this platform has no hardware video decoder")]
+    Unavailable,
+    /// The device has no decoder for the codec.
+    #[error("no video decoder for {0:?}")]
+    NoDecoder(VideoCodec),
+    /// The decoder refused its configuration.
+    #[error("the video decoder refused its configuration: {0}")]
+    Configure(String),
+    /// The decoder did not take the access unit in time. The app may drop the unit or send it
+    /// again.
+    #[error("the video decoder is not ready for another access unit")]
+    Full,
+    /// An access unit is larger than the decoder's input buffer.
+    #[error("an access unit of {size} bytes does not fit the decoder's input of {limit} bytes")]
+    AccessUnitTooLarge {
+        /// The size of the access unit in bytes.
+        size: usize,
+        /// The largest size that the decoder takes in bytes.
+        limit: usize,
+    },
+    /// An access unit's timestamp does not rise above the one before.
+    #[error("an access unit's timestamp does not rise above the one before")]
+    TimestampNotRising,
+    /// The decoder stopped with an error.
+    #[error("the video decoder failed: {0}")]
+    Failed(String),
+}

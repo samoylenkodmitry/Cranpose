@@ -66,6 +66,7 @@ pub mod theme;
 mod thread_state;
 /// Opening a URI, such as a web link, in the application the platform picks for it.
 pub mod uri_handler;
+pub mod video_decoder;
 pub mod wearable;
 pub mod wearable_framed;
 pub mod writable_folder;
@@ -308,6 +309,10 @@ pub use theme::{
 pub use uri_handler::{
     ProvideUriHandler, UriHandler, UriHandlerError, UriHandlerRef, clear_platform_uri_handler,
     default_uri_handler, local_uri_handler, set_platform_uri_handler,
+};
+pub use video_decoder::{
+    AccessUnit, CropRect, DecodedFrames, DecoderConfig, DecoderError, DecoderOutput, DecoderStats,
+    FrameInfo, VideoCodec, VideoDecoder, VideoFrame,
 };
 pub use wearable::{
     WearableError, WearableEvent, WearableLink, WearablePeer, WearableReceiver, WearableStream,

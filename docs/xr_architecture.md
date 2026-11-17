@@ -90,6 +90,27 @@ without a dependency on `cranpose-xr`. On Android the type holds a reference to 
 `ANativeWindow`, which `as_ptr` returns. The app needs no `ndk`, JNI or GL code of its own.
 Outside a headset the composable shows an empty box, and the callbacks never run.
 
+## Video decoding
+
+`VideoDecoder` of `cranpose-services` decodes H.264, HEVC and AV1 on the headset's hardware. On
+Android it drives `MediaCodec` with the keys for the least delay: no reordering wait, priority
+0 and the top operating rate. The app feeds access units from one thread. A thread of the
+decoder drains the pictures, and no thread sleeps. Each picture returns with the timestamp and
+the `u64` that the app gave its access unit, and with the decode time.
+
+The app chooses where the pictures go:
+
+- `DecoderOutput::Surface(ExternalSurface)`: the pictures go straight into the surface of a
+  `SpatialExternalSurface`. The compositor reads them with no copy. The desktop stream and
+  video players use this output.
+- `DecoderOutput::Frames { depth }`: each picture returns as a `VideoFrame`, which is an
+  `AHardwareBuffer` that an `AImageReader` of the private format and the GPU-sampled usage
+  holds. The headset's backend imports the buffer as an EGL image through
+  `VideoFrame::as_hardware_buffer_ptr`, and applies `VideoFrame::crop`. A frame that drops gives
+  its image back to the decoder.
+
+Platforms without a hardware decoder that Cranpose drives report `DecoderError::Unavailable`.
+
 ## Crates
 
 - `cranpose-xr`: the API above and the spatial tree. It lays out the panels, casts the

@@ -3,8 +3,9 @@
 //! A hardware video decoder or a camera writes its pictures into an [`ExternalSurface`]. The
 //! compositor of the host shows them with no copy through the app. In a headset,
 //! `SpatialExternalSurface` of `cranpose-xr` gives the app one. A service that produces
-//! pictures, such as a decoder, takes the surface and reads its native handle with
-//! [`ExternalSurface::as_ptr`].
+//! pictures takes the surface. [`DecoderOutput::Surface`](crate::DecoderOutput::Surface) sends the
+//! pictures of a [`VideoDecoder`](crate::VideoDecoder) into one. A producer of another kind reads
+//! the native handle with [`ExternalSurface::as_ptr`].
 #![cfg_attr(
     target_os = "android",
     expect(
@@ -47,6 +48,12 @@ impl ExternalSurface {
         }
         #[cfg(not(target_os = "android"))]
         match self.window {}
+    }
+
+    // The surface's native window, for a decoder in this crate that configures its codec with it.
+    #[cfg(target_os = "android")]
+    pub(crate) fn window(&self) -> &ndk::native_window::NativeWindow {
+        &self.window
     }
 
     /// Takes the native window of the Java `android.view.Surface` named by `surface`, or

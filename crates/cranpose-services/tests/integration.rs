@@ -21,6 +21,7 @@ mod persistence_regressions;
 mod saver_forms;
 mod theme_integration;
 mod uri_handler_integration;
+mod video_decoder_integration;
 mod windowless_command;
 
 mod folder_media_reference;

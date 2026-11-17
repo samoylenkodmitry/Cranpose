@@ -23,7 +23,6 @@ use cranpose_xr::ExternalSurface;
 // How the picture divides into tinted halves.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Split {
-    Whole,
     // The left half is red and the right half blue.
     LeftRight,
     // The top half is red and the bottom half blue.
@@ -169,14 +168,13 @@ fn pixel_at(x: u32, y: u32, size: (u32, u32), frame: u32, split: Split) -> [u8; 
         0
     };
     let first_half = match split {
-        Split::Whole => None,
-        Split::LeftRight => Some(x < width / 2),
-        Split::TopBottom => Some(y < height / 2),
+        Split::LeftRight => x < width / 2,
+        Split::TopBottom => y < height / 2,
     };
-    let base = match first_half {
-        None => [20, 30, 70],
-        Some(true) => [120, 20, 20],
-        Some(false) => [20, 20, 120],
+    let base = if first_half {
+        [120, 20, 20]
+    } else {
+        [20, 20, 120]
     };
     let [r, g, b] = base.map(|channel: u8| channel.saturating_add(shade + line));
     [r, g, b, 255]
