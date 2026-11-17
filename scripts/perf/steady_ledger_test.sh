@@ -98,9 +98,13 @@ repo="$work_dir/repo"
 mkdir -p "$repo/a/b/c"
 touch "$repo/Cargo.toml"
 cp "$HERE"/steady_ledger.sh "$HERE"/steady_ledger.py "$repo/a/b/c/"
+# The host's git config stays out: a runner can sign every commit or run
+# hooks.
+export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
 git -C "$repo" init -q
 git -C "$repo" add .
-git -C "$repo" -c user.name=test -c user.email=test@example.com -c core.hooksPath=/dev/null commit -q -m tree
+git -C "$repo" -c commit.gpgsign=false -c tag.gpgsign=false -c user.name=test \
+    -c user.email=test@example.invalid -c core.hooksPath=/dev/null commit -q -m tree
 actual=0
 output=$(cd "$repo/a/b" && STEADY_LEDGER_SHARED="$work_dir/shared" bash c/steady_ledger.sh \
     --dir "$work_dir/run" --base HEAD 2>&1) || actual=$?
