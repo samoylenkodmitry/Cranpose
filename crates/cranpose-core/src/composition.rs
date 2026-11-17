@@ -1,15 +1,17 @@
 use std::rc::Rc;
 
-use smallvec::SmallVec;
 use web_time::Instant;
 
 use crate::{
     Applier, ApplierGuard, ApplierHost, Composer, ConcreteApplierHost, DIAGNOSTICS,
     DefaultScheduler, Key, NodeError, NodeId, PausableContent, RecomposeScope, RetentionPolicy,
     Runtime, RuntimeHandle, ScopeId, SlotDebugSnapshot, SlotTable, SlotTableDebugStats, SlotsHost,
-    collections::map::HashMap, debug_scope_invalidation_sources, debug_scope_label, runtime,
-    scheduler_ref,
+    debug_scope_invalidation_sources, debug_scope_label, runtime, scheduler_ref,
 };
+
+mod scope_groups;
+
+use scope_groups::ScopeGroups;
 
 /// A running composition that turns root content into nodes. `A` is the applier type that creates
 /// and edits those nodes.
@@ -25,6 +27,7 @@ pub struct Composition<A: Applier + 'static> {
     pub(crate) root: Option<NodeId>,
     pub(crate) root_key: Option<Key>,
     pub(crate) root_render_requested: bool,
+    scope_groups: ScopeGroups,
     #[cfg(any(test, feature = "leak-debug"))]
     last_pass_stats: CompositionPassDebugStats,
     teardown: Option<runtime::StateTeardownScope>,
@@ -83,6 +86,7 @@ impl<A: Applier + 'static> Composition<A> {
             root: None,
             root_key: None,
             root_render_requested: false,
+            scope_groups: ScopeGroups::default(),
             #[cfg(any(test, feature = "leak-debug"))]
             last_pass_stats: CompositionPassDebugStats::default(),
             teardown: None,
@@ -397,8 +401,6 @@ impl<A: Applier + 'static> Composition<A> {
             .validate_host_retention(self.slots.as_ref(), &table)
     }
 
-    /// The scopes grouped by the slot host each recomposes in, in the order
-    /// each host first appears.
     /// The slots host `scope` recomposes in.
     fn host_for_scope(&self, scope: &RecomposeScope, root_host: &Rc<SlotsHost>) -> Rc<SlotsHost> {
         scope
@@ -414,49 +416,6 @@ impl<A: Applier + 'static> Composition<A> {
                     .and_then(|storage_key| self.composer_state.host_for_storage_key(storage_key))
             })
             .unwrap_or_else(|| Rc::clone(root_host))
-    }
-
-    /// The slots host of each scope, with its scopes in order.
-    fn group_scopes_by_host(
-        &self,
-        scopes: Vec<RecomposeScope>,
-    ) -> SmallVec<[(Rc<SlotsHost>, Vec<RecomposeScope>); 1]> {
-        let root_host = self.slots_host();
-        // Scopes of one slots identity share a host: the usual frame keeps
-        // its scope list as the one group.
-        let first_identity = scopes.first().map(RecomposeScope::slots_host_identity);
-        if let Some(first) = scopes.first()
-            && scopes
-                .iter()
-                .all(|scope| Some(scope.slots_host_identity()) == first_identity)
-        {
-            let host = self.host_for_scope(first, &root_host);
-            return smallvec::smallvec![(host, scopes)];
-        }
-        let mut scope_groups: SmallVec<[(Rc<SlotsHost>, Vec<RecomposeScope>); 1]> = SmallVec::new();
-        let mut scope_group_index: HashMap<usize, usize> = HashMap::default();
-        let mut previous_host: Option<(_, usize)> = None;
-        for scope in scopes {
-            let identity = scope.slots_host_identity();
-            if let Some((previous_identity, index)) = previous_host
-                && previous_identity == identity
-            {
-                scope_groups[index].1.push(scope);
-                continue;
-            }
-            let host = self.host_for_scope(&scope, &root_host);
-            let host_key = host.storage_key();
-            let index = if let Some(index) = scope_group_index.get(&host_key).copied() {
-                scope_groups[index].1.push(scope);
-                index
-            } else {
-                scope_group_index.insert(host_key, scope_groups.len());
-                scope_groups.push((host, vec![scope]));
-                scope_groups.len() - 1
-            };
-            previous_host = Some((identity, index));
-        }
-        scope_groups
     }
 
     // Recomposes within a frame's budget for pausable content: bodies that
@@ -492,14 +451,19 @@ impl<A: Applier + 'static> Composition<A> {
                     None => break,
                 },
             };
-            let Some(scopes) = self.rerun_derivations(&runtime_handle, scopes) else {
+            let Some(mut scopes) = self.rerun_derivations(&runtime_handle, scopes) else {
                 continue;
             };
             did_recompose = true;
-            let scope_groups = self.group_scopes_by_host(scopes);
-            for (index, (host, scopes)) in scope_groups.iter().enumerate() {
-                let side_effects =
-                    self.recompose_host_scopes(host, scopes, &batch, &runtime_handle)?;
+            let mut groups = std::mem::take(&mut self.scope_groups);
+            groups.group(&mut scopes, |scope| self.host_for_scope(scope, &self.slots));
+            for (host, range) in groups.iter() {
+                let side_effects = self.recompose_host_scopes(
+                    host,
+                    &scopes[range.clone()],
+                    &batch,
+                    &runtime_handle,
+                )?;
                 runtime_handle.drain_ui();
                 for effect in side_effects {
                     effect();
@@ -507,11 +471,13 @@ impl<A: Applier + 'static> Composition<A> {
                 runtime_handle.drain_ui();
                 self.maybe_dump_slot_table("recompose_pass");
                 if self.root_render_requested {
-                    requeue_scopes(&runtime_handle, &batch, &scope_groups[index + 1..]);
+                    requeue_scopes(&runtime_handle, &batch, &scopes[range.end..]);
                     break;
                 }
             }
-            recycle_scope_groups(&runtime_handle, scope_groups);
+            groups.clear();
+            self.scope_groups = groups;
+            runtime_handle.recycle_scopes(scopes);
             if let Batch::Waiting(content) = batch {
                 self.composer_state.pausing.finish_resumed(content);
             }
@@ -707,27 +673,12 @@ enum Batch {
 
 // Leaves the scopes that a root render request cut off for the next pass;
 // bodies of pausable content wait for a later frame.
-fn requeue_scopes(
-    runtime_handle: &RuntimeHandle,
-    batch: &Batch,
-    scope_groups: &[(Rc<SlotsHost>, Vec<RecomposeScope>)],
-) {
-    for scope in scope_groups.iter().flat_map(|(_, scopes)| scopes) {
+fn requeue_scopes(runtime_handle: &RuntimeHandle, batch: &Batch, scopes: &[RecomposeScope]) {
+    for scope in scopes {
         match batch {
             Batch::Invalid => runtime_handle.requeue_invalid_scope(scope),
             Batch::Waiting(content) => content.keep_waiting(scope),
         }
-    }
-}
-
-/// Gives a pass's scope lists back to the runtime, for the next pass to
-/// reuse their storage.
-fn recycle_scope_groups(
-    runtime: &RuntimeHandle,
-    scope_groups: SmallVec<[(Rc<SlotsHost>, Vec<RecomposeScope>); 1]>,
-) {
-    for (_, scopes) in scope_groups {
-        runtime.recycle_scopes(scopes);
     }
 }
 
