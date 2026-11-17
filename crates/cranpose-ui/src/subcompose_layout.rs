@@ -5,7 +5,7 @@ use std::{
 
 use cranpose_core::{
     ApplierHost, CapturedCompositionContext, Composer, NodeError, NodeId, RuntimeHandle, SlotId,
-    SlotTable, SlotsHost, SubcomposeState, collections::map::HashMap,
+    SlotTable, SlotsHost, SubcomposeState,
 };
 use cranpose_foundation::{
     InvalidationKind, ModifierInvalidation, ModifierInvalidations, NodeCapabilities,
@@ -50,7 +50,7 @@ pub(crate) type SubcomposePlaceable = cranpose_ui_layout::Placeable;
 type RetainedMeasureLookup<'a> = Box<dyn FnMut(NodeId) -> Option<MeasuredNode> + 'a>;
 
 // The children a pass that composes measured, by node.
-pub(crate) type MeasuredChildren = RefCell<HashMap<NodeId, MeasuredNode>>;
+pub(crate) type MeasuredChildren = RefCell<measure_scratch::MeasurementsById>;
 
 // A measure scope that lays out lazy items' roots with their measurements:
 // the scope of a pass that composes, and of one that keeps the slots of the
@@ -1583,7 +1583,7 @@ struct SubcomposeLayoutNodeInner {
     node_id: Option<NodeId>,
     last_placements: Rc<Vec<NodeId>>,
     measure_scratch: MeasureScratch,
-    measured_children_scratch: Rc<RefCell<HashMap<NodeId, MeasuredNode>>>,
+    measured_children_scratch: Rc<MeasuredChildren>,
     captured_context: Option<CapturedCompositionContext>,
     density: crate::density::Density,
 }
@@ -1644,7 +1644,7 @@ impl SubcomposeLayoutNodeInner {
             node_id: None,
             last_placements: Rc::new(Vec::new()),
             measure_scratch: MeasureScratch::default(),
-            measured_children_scratch: Rc::new(RefCell::new(HashMap::default())),
+            measured_children_scratch: Rc::default(),
             captured_context: None,
             density: crate::density::Density::default(),
         }

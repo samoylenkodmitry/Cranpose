@@ -5,7 +5,9 @@ use std::rc::Rc;
 
 use cranpose_core::{Applier, MemoryApplier, NodeError, NodeId};
 
-use super::{MeasuredChild, MeasuredNode, live_layout_node::read_live_layout_node};
+use super::{
+    LayoutBuilderState, MeasuredChild, MeasuredNode, live_layout_node::read_live_layout_node,
+};
 use crate::{
     modifier::Point,
     subcompose_layout::SubcomposeLayoutNode,
@@ -21,6 +23,9 @@ pub(super) enum PlacedChildren {
 }
 
 impl PlacedChildren {
+    // Out of line, as each of the walks below reads children through one
+    // copy of these.
+    #[inline(never)]
     pub(super) fn of(applier: &mut MemoryApplier, node_id: NodeId) -> Self {
         let Ok(node) = applier.get_mut(node_id) else {
             return Self::Leaf;
@@ -36,6 +41,7 @@ impl PlacedChildren {
     }
 
     // How many children the list holds, placed or not.
+    #[inline(never)]
     pub(super) fn len(&self, applier: &mut MemoryApplier) -> usize {
         match self {
             Self::Layout(parts) => parts.runtime_state().borrow().child_states().len(),
@@ -52,6 +58,7 @@ impl PlacedChildren {
     // there for a child the measure did not place. A subcompose node placed
     // each of its children; one of another kind, which keeps no record,
     // reads as placed at the origin. `None` past the last child.
+    #[inline(never)]
     pub(super) fn get(
         &self,
         applier: &mut MemoryApplier,
@@ -87,10 +94,16 @@ impl PlacedChildren {
     // Runs `visit` on each placed child in order, with where the measure
     // placed it and the measurement it holds in its cache: a leaf of no size
     // for a child that holds none, as a node of another kind measures.
+    #[inline(never)]
     pub(super) fn visit(
         &self,
         applier: &mut MemoryApplier,
-        mut visit: impl FnMut(&mut MemoryApplier, NodeId, Point, &MeasuredNode) -> Result<(), NodeError>,
+        visit: &mut dyn FnMut(
+            &mut MemoryApplier,
+            NodeId,
+            Point,
+            &MeasuredNode,
+        ) -> Result<(), NodeError>,
     ) -> Result<(), NodeError> {
         let mut index = 0;
         while let Some((child, kept)) = self.get(applier, index)? {
@@ -110,4 +123,13 @@ impl PlacedChildren {
         }
         Ok(())
     }
+}
+
+// How many children `node_id` lists, for the measure telemetry's log alone.
+#[cold]
+#[inline(never)]
+pub(super) fn placed_child_count(builder: &LayoutBuilderState, node_id: NodeId) -> usize {
+    builder
+        .with_applier_result(|applier| Ok(PlacedChildren::of(applier, node_id).len(applier)))
+        .unwrap_or_default()
 }
