@@ -1,4 +1,4 @@
-use cranpose::{request_exit, take_exit_request};
+use cranpose::{exit_requested, request_exit, take_exit_request};
 
 use super::*;
 
@@ -16,12 +16,9 @@ fn an_exit_request_ends_the_session_once_and_stays_until_the_host_closed() {
     assert_eq!(exit.poll(false), ExitStep::Leave);
 
     assert!(!leave(|| false));
-    assert!(
-        cranpose::exit_requested(),
-        "a close that failed keeps the request"
-    );
+    assert!(exit_requested(), "a close that failed keeps the request");
     assert!(leave(|| true));
-    assert!(!cranpose::exit_requested());
+    assert!(!exit_requested());
 
     // A request with no session ends the app at once
     request_exit();

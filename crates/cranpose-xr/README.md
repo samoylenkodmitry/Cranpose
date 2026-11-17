@@ -51,6 +51,10 @@ SpatialPanel(
 `MovePolicy::custom` leaves the pose to the app: the headset reports the steps, and the app feeds
 them into the panel's modifier.
 
+A `Subspace` stands a meter ahead of where the head was when the app started. A
+`UserSubspace(LockingBehavior::Static, ...)` stands a meter ahead of the head as it is when the
+subspace first composes, and again after the user recenters. Its panels stay movable.
+
 A `SpatialCurvedRow` bends the panels inside it around the viewer, as a cylinder layer of the
 compositor. `local_spatial_environment()` gives the app the room around its panels: where the
 headset has passthrough, `set_preferred_passthrough_opacity(Some(1.0))` shows it. Check

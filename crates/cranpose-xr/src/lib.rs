@@ -44,6 +44,7 @@ mod haptics;
 mod headset_properties;
 mod interaction_profile;
 mod locals;
+mod locking_behavior;
 mod move_policy;
 #[cfg(any(test, headset))]
 mod pointer;
@@ -67,6 +68,8 @@ mod streamed_view;
 mod subspace;
 mod subspace_modifier;
 mod surface_input;
+mod user_origin;
+mod user_subspace;
 mod xr_frame;
 
 mod android_main;
@@ -89,6 +92,7 @@ pub use hand::Hand;
 pub use haptics::{Haptics, Vibration, local_haptics};
 pub use headset_properties::{EyeImageSize, HeadsetProperties, local_headset_properties};
 pub use interaction_profile::InteractionProfile;
+pub use locking_behavior::LockingBehavior;
 pub use move_policy::MovePolicy;
 #[cfg(all(headset, target_os = "android"))]
 #[doc(hidden)]
@@ -114,4 +118,5 @@ pub use streamed_scene::StreamedScene;
 pub use streamed_view::{StreamedView, StreamedViews};
 pub use subspace::Subspace;
 pub use subspace_modifier::{DEFAULT_PANEL_SIZE, METERS_PER_DP, SubspaceModifier};
+pub use user_subspace::UserSubspace;
 pub use xr_frame::XrFrame;

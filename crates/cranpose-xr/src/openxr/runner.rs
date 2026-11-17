@@ -161,6 +161,11 @@ impl Immersive {
     fn frame(&mut self, status: SessionStatus) -> Result<(), String> {
         let frame = self.xr_session.begin_frame()?;
         let aims = self.headset.sample(&mut self.xr_session, &frame, status);
+        self.space.track_head(
+            self.headset.device_pose(),
+            self.headset.display_time(),
+            self.headset.recenter(),
+        );
         let shown = status.shows() && frame.should_render;
         let time = Duration::from_nanos(
             frame

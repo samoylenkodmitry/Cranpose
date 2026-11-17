@@ -9,17 +9,19 @@
 use std::{
     cell::{Cell, RefCell},
     rc::Rc,
+    time::Duration,
 };
 
 use cranpose::{ExternalSurface, MutableState, mutableStateOf};
 use cranpose_core::CompositionLocal;
 
 use crate::{
-    METERS_PER_DP, MovePolicy, PanelHit, Pose, Ray, SpatialMoveEvent, SpatialMoveEventType,
-    StereoMode,
+    METERS_PER_DP, MovePolicy, PanelHit, Pose, Ray, Recenter, SpatialMoveEvent,
+    SpatialMoveEventType, StereoMode,
     locals::with_locals,
     stream_source::StreamSource,
     surface_input::{PointerSink, SurfaceGesture, SurfaceInput},
+    user_origin::{UserOrigin, UserOrigins},
 };
 
 // The space between two panels in the atlas, in dp, so the compositor's filter never reaches a
@@ -151,6 +153,8 @@ struct Inner {
     entries: RefCell<Vec<Entry>>,
     // The streamed scenes, which take no place in the room and no part of the atlas
     streams: RefCell<Vec<(u64, Rc<StreamSource>)>>,
+    // Where the user's subspaces stand
+    user_origins: RefCell<UserOrigins>,
     next_id: Cell<u64>,
     // Whether the headset shows curved panels. If not, they show and answer rays as flat ones.
     curves: Cell<bool>,
@@ -194,6 +198,7 @@ impl Space {
             inner: Rc::new(Inner {
                 entries: RefCell::new(Vec::new()),
                 streams: RefCell::new(Vec::new()),
+                user_origins: RefCell::new(UserOrigins::default()),
                 next_id: Cell::new(1),
                 curves: Cell::new(true),
             }),
@@ -231,6 +236,36 @@ impl Space {
     // The streamed scenes, in the order they registered.
     pub(crate) fn streams(&self) -> Vec<(u64, Rc<StreamSource>)> {
         self.inner.streams.borrow().clone()
+    }
+
+    // A new user subspace, placed in front of the head if the head is known.
+    pub(crate) fn new_user_origin(&self) -> UserOrigin {
+        let id = self.inner.next_id.get();
+        self.inner.next_id.set(id + 1);
+        self.inner.user_origins.borrow_mut().add(id)
+    }
+
+    // Forgets the user subspace `id`.
+    pub(crate) fn remove_user_origin(&self, id: u64) {
+        self.inner.user_origins.borrow_mut().remove(id);
+    }
+
+    #[cfg_attr(
+        not(any(test, headset)),
+        expect(dead_code, reason = "the headset backend calls it")
+    )]
+    // Tells the user subspaces where the head is in the frame at `time`, and whether the runtime
+    // recentered the room.
+    pub(crate) fn track_head(
+        &self,
+        head: Option<Pose>,
+        time: Duration,
+        recenter: Option<Recenter>,
+    ) {
+        self.inner
+            .user_origins
+            .borrow_mut()
+            .track(head, time, recenter);
     }
 
     // A new panel with its states. A composable calls it inside a `remember`, so that the states
