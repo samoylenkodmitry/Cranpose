@@ -28,7 +28,14 @@ mod carry;
 mod controller;
 #[cfg(any(test, headset))]
 mod controller_bindings;
+#[cfg(any(test, headset))]
+mod depth_order;
+#[cfg(any(test, headset))]
+mod exit_request;
 mod field_of_view;
+mod follow_mode;
+mod follow_origin;
+mod following_subspace;
 mod foveated_encoding;
 #[cfg(any(test, all(headset, target_os = "android")))]
 mod foveated_unwarp;
@@ -40,6 +47,7 @@ mod haptics;
 mod headset_properties;
 mod interaction_profile;
 mod locals;
+mod move_policy;
 #[cfg(any(test, headset))]
 mod pointer;
 mod pose;
@@ -52,6 +60,7 @@ mod spatial_curved_row;
 mod spatial_environment;
 mod spatial_external_surface;
 mod spatial_frame_effect;
+mod spatial_move_event;
 mod spatial_panel;
 mod stereo_mode;
 mod stream_source;
@@ -60,6 +69,7 @@ mod streamed_scene;
 mod streamed_view;
 mod subspace;
 mod subspace_modifier;
+mod surface_input;
 mod xr_frame;
 
 mod android_main;
@@ -77,11 +87,14 @@ pub use cranpose::ExternalSurface;
 pub use field_of_view::FieldOfView;
 #[cfg(all(desktop_run, not(headset)))]
 pub use flat_run::run;
+pub use follow_mode::{FollowMode, FollowTarget};
+pub use following_subspace::FollowingSubspace;
 pub use foveated_encoding::FoveatedEncoding;
 pub use hand::Hand;
 pub use haptics::{Haptics, Vibration, local_haptics};
 pub use headset_properties::{EyeImageSize, HeadsetProperties, local_headset_properties};
 pub use interaction_profile::InteractionProfile;
+pub use move_policy::MovePolicy;
 #[cfg(all(headset, target_os = "android"))]
 #[doc(hidden)]
 pub use openxr::run;
@@ -98,6 +111,7 @@ pub use spatial_curved_row::SpatialCurvedRow;
 pub use spatial_environment::{SpatialEnvironment, local_spatial_environment};
 pub use spatial_external_surface::{SpatialExternalSurface, SpatialExternalSurfaceScope};
 pub use spatial_frame_effect::SpatialFrameEffect;
+pub use spatial_move_event::{SpatialMoveEvent, SpatialMoveEventType};
 pub use spatial_panel::SpatialPanel;
 pub use stereo_mode::StereoMode;
 pub use stream_stats::{StreamCounts, StreamStats};

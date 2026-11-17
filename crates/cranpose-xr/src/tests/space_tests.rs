@@ -29,11 +29,11 @@ fn panels_take_parts_of_the_atlas_one_under_the_other() {
     with_space(|space| {
         let (first, second) = (space.new_panel(), space.new_panel());
         assert_eq!(
-            space.place(first, [800.0, 500.0], Pose::IDENTITY),
+            space.place(first, [800.0, 500.0], Pose::IDENTITY, Pose::IDENTITY),
             [0.0, 0.0, 800.0, 500.0]
         );
         assert_eq!(
-            space.place(second, [300.0, 200.0], Pose::IDENTITY),
+            space.place(second, [300.0, 200.0], Pose::IDENTITY, Pose::IDENTITY),
             [0.0, 508.0, 300.0, 200.0]
         );
         assert_eq!(space.atlas_size(), [800.0, 708.0]);
@@ -44,10 +44,16 @@ fn panels_take_parts_of_the_atlas_one_under_the_other() {
 fn a_surface_takes_no_room_in_the_atlas() {
     with_space(|space| {
         let (first, video, second) = (space.new_panel(), space.new_panel(), space.new_panel());
-        space.place(first, [800.0, 500.0], Pose::IDENTITY);
-        space.place_surface(video, StereoMode::Mono, [640.0, 360.0], Pose::IDENTITY);
+        space.place(first, [800.0, 500.0], Pose::IDENTITY, Pose::IDENTITY);
+        space.place_surface(
+            video,
+            StereoMode::Mono,
+            [640.0, 360.0],
+            Pose::IDENTITY,
+            Pose::IDENTITY,
+        );
         assert_eq!(
-            space.place(second, [300.0, 200.0], Pose::IDENTITY),
+            space.place(second, [300.0, 200.0], Pose::IDENTITY, Pose::IDENTITY),
             [0.0, 508.0, 300.0, 200.0]
         );
         assert_eq!(space.atlas_size(), [800.0, 708.0]);
@@ -61,16 +67,22 @@ fn a_surface_takes_no_room_in_the_atlas() {
 fn a_panel_keeps_its_part_while_its_size_stays() {
     with_space(|space| {
         let (first, second) = (space.new_panel(), space.new_panel());
-        space.place(first, [400.0, 300.0], Pose::IDENTITY);
-        let part = space.place(second, [400.0, 100.0], Pose::IDENTITY);
+        space.place(first, [400.0, 300.0], Pose::IDENTITY, Pose::IDENTITY);
+        let part = space.place(second, [400.0, 100.0], Pose::IDENTITY, Pose::IDENTITY);
         let moved = Pose::at([0.1, 0.0, -1.0]);
-        assert_eq!(space.place(second, [400.0, 100.0], moved), part);
+        assert_eq!(
+            space.place(second, [400.0, 100.0], Pose::IDENTITY, moved),
+            part
+        );
         assert_eq!(space.panels()[1].pose, moved);
         assert_eq!(
-            space.place(first, [400.0, 300.0], moved),
+            space.place(first, [400.0, 300.0], Pose::IDENTITY, moved),
             [0.0, 0.0, 400.0, 300.0]
         );
-        assert_eq!(space.place(second, [400.0, 100.0], moved), part);
+        assert_eq!(
+            space.place(second, [400.0, 100.0], Pose::IDENTITY, moved),
+            part
+        );
     });
 }
 
@@ -78,10 +90,10 @@ fn a_panel_keeps_its_part_while_its_size_stays() {
 fn a_panel_that_changes_its_size_moves_the_panels_under_it() {
     with_space(|space| {
         let (first, second) = (space.new_panel(), space.new_panel());
-        space.place(first, [400.0, 300.0], Pose::IDENTITY);
-        space.place(second, [400.0, 100.0], Pose::IDENTITY);
+        space.place(first, [400.0, 300.0], Pose::IDENTITY, Pose::IDENTITY);
+        space.place(second, [400.0, 100.0], Pose::IDENTITY, Pose::IDENTITY);
         assert_eq!(
-            space.place(first, [400.0, 320.0], Pose::IDENTITY),
+            space.place(first, [400.0, 320.0], Pose::IDENTITY, Pose::IDENTITY),
             [0.0, 0.0, 400.0, 320.0]
         );
         assert_eq!(part(&space, second.id), [0.0, 328.0, 400.0, 100.0]);
@@ -94,12 +106,17 @@ fn a_panel_that_changes_its_size_moves_the_panels_under_it() {
 fn many_resizes_keep_the_atlas_height_bounded() {
     with_space(|space| {
         let (first, second) = (space.new_panel(), space.new_panel());
-        space.place(first, [400.0, 100.0], Pose::IDENTITY);
-        space.place(second, [400.0, 100.0], Pose::IDENTITY);
+        space.place(first, [400.0, 100.0], Pose::IDENTITY, Pose::IDENTITY);
+        space.place(second, [400.0, 100.0], Pose::IDENTITY, Pose::IDENTITY);
         for step in 0..2000 {
             let height = 100.0 + (step % 50) as f32 * 4.0;
-            space.place(first, [400.0, height], Pose::IDENTITY);
-            space.place(second, [400.0, 100.0 + (step % 7) as f32], Pose::IDENTITY);
+            space.place(first, [400.0, height], Pose::IDENTITY, Pose::IDENTITY);
+            space.place(
+                second,
+                [400.0, 100.0 + (step % 7) as f32],
+                Pose::IDENTITY,
+                Pose::IDENTITY,
+            );
             // The first panel is at most 296 dp tall. The second one is at most 106 dp tall.
             assert!(space.atlas_size()[1] <= 296.0 + ATLAS_GAP + 106.0);
         }
@@ -113,7 +130,7 @@ fn a_removed_panel_leaves_no_gap() {
     with_space(|space| {
         let panels = [space.new_panel(), space.new_panel(), space.new_panel()];
         for (panel, height) in panels.iter().zip([300.0, 200.0, 100.0]) {
-            space.place(*panel, [400.0, height], Pose::IDENTITY);
+            space.place(*panel, [400.0, height], Pose::IDENTITY, Pose::IDENTITY);
         }
         assert_eq!(
             space.atlas_size(),
@@ -130,7 +147,7 @@ fn a_removed_panel_leaves_no_gap() {
         assert_eq!(space.atlas_size(), [0.0, 0.0]);
         let again = space.new_panel();
         assert_eq!(
-            space.place(again, [10.0, 10.0], Pose::IDENTITY),
+            space.place(again, [10.0, 10.0], Pose::IDENTITY, Pose::IDENTITY),
             [0.0, 0.0, 10.0, 10.0]
         );
     });
@@ -140,8 +157,8 @@ fn a_removed_panel_leaves_no_gap() {
 fn the_cursor_shows_on_its_panel_only() {
     with_space(|space| {
         let (first, second) = (space.new_panel(), space.new_panel());
-        space.place(first, [400.0, 300.0], Pose::IDENTITY);
-        space.place(second, [400.0, 300.0], Pose::IDENTITY);
+        space.place(first, [400.0, 300.0], Pose::IDENTITY, Pose::IDENTITY);
+        space.place(second, [400.0, 300.0], Pose::IDENTITY, Pose::IDENTITY);
         let on = |panel: Panel, x: f32, pressed: bool| Cursor {
             panel: panel.id,
             x,
@@ -174,7 +191,7 @@ fn the_cursor_shows_on_its_panel_only() {
 fn the_cursor_moves_in_steps_of_half_a_dp() {
     with_space(|space| {
         let panel = space.new_panel();
-        space.place(panel, [400.0, 300.0], Pose::IDENTITY);
+        space.place(panel, [400.0, 300.0], Pose::IDENTITY, Pose::IDENTITY);
         let at = |x: f32, y: f32| {
             Some(Cursor {
                 panel: panel.id,
@@ -366,22 +383,36 @@ fn a_panel_can_leave_in_the_frame_its_cursor_moves() {
 fn a_carried_panel_keeps_the_pose_the_user_gave() {
     with_space(|space| {
         let panel = space.new_panel();
-        space.place(panel, [400.0, 300.0], Pose::IDENTITY);
-        space.set_mobility(panel.id, Mobility::Movable);
+        space.place(panel, [400.0, 300.0], Pose::IDENTITY, Pose::IDENTITY);
+        space.set_move_policy(panel.id, Some(&MovePolicy::default()));
         assert_eq!(space.panels()[0].mobility, Mobility::Movable);
 
         let carried = Pose::at([0.5, 0.2, -1.0]);
-        space.move_panel(panel.id, carried);
+        space.carry(&PanelMove {
+            panel: panel.id,
+            event_type: SpatialMoveEventType::Moving,
+            pose: carried,
+        });
         assert_eq!(space.panels()[0].pose, carried);
 
-        let part = space.place(panel, [400.0, 300.0], Pose::at([0.0, 0.0, -3.0]));
+        let part = space.place(
+            panel,
+            [400.0, 300.0],
+            Pose::IDENTITY,
+            Pose::at([0.0, 0.0, -3.0]),
+        );
         assert_eq!(part, [0.0, 0.0, 400.0, 300.0]);
         assert_eq!(
             space.panels()[0].pose,
             carried,
             "the modifier's pose yields"
         );
-        space.place(panel, [400.0, 320.0], Pose::at([0.0, 0.0, -3.0]));
+        space.place(
+            panel,
+            [400.0, 320.0],
+            Pose::IDENTITY,
+            Pose::at([0.0, 0.0, -3.0]),
+        );
         assert_eq!(space.panels()[0].pose, carried);
         assert_eq!(space.panels()[0].atlas, [0.0, 0.0, 400.0, 320.0]);
     });

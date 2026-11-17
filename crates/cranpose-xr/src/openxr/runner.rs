@@ -20,10 +20,13 @@ use super::{
 };
 use crate::{
     SpatialCapabilities, SpatialEnvironment,
+    depth_order::sort_back_to_front,
+    exit_request::{ExitRequest, ExitStep, leave},
     frame_effects::local_frame_effects,
     local_haptics, local_headset_properties, local_spatial_capabilities, local_spatial_environment,
-    pointer::{Pointer, PointerEvent},
+    pointer::Pointer,
     space::{Space, local_space},
+    surface_input::Gesture,
 };
 
 // Where the pointer goes when it leaves every panel: far outside the atlas, so no content stays
@@ -40,9 +43,20 @@ pub(crate) fn run_immersive(
     let mut immersive = Immersive::new(runtime, settings, content)?;
     let mut status = SessionStatus::Idle;
     let mut rate = FrameRate::new();
+    let mut exit = ExitRequest::default();
     log::info!("cranpose xr: ready");
     while !host.ended(status) {
         status = immersive.xr_session.poll_events()?;
+        match exit.poll(status.runs()) {
+            ExitStep::Wait => {}
+            ExitStep::EndSession => {
+                if let Err(error) = immersive.xr_session.request_exit() {
+                    log::warn!("cranpose xr: {error}");
+                    break;
+                }
+            }
+            ExitStep::Leave => break,
+        }
         match status {
             SessionStatus::Exit => break,
             SessionStatus::Idle => {}
@@ -52,8 +66,11 @@ pub(crate) fn run_immersive(
             }
         }
     }
-    // The session ends when `immersive` drops, before the device it draws on
     log::info!("cranpose xr: ends in {status:?}");
+    // The session ends when `immersive` drops, before the device it draws on. The host closes
+    // after that, when the app asked for it.
+    drop(immersive);
+    leave(|| host.finish());
     Ok(())
 }
 
@@ -144,6 +161,11 @@ impl Immersive {
     fn frame(&mut self, status: SessionStatus) -> Result<(), String> {
         let frame = self.xr_session.begin_frame()?;
         let aims = self.headset.sample(&mut self.xr_session, &frame, status);
+        self.space.track_head(
+            self.headset.device_pose(),
+            self.headset.display_time(),
+            self.headset.recenter(),
+        );
         let shown = status.shows() && frame.should_render;
         let time = Duration::from_nanos(
             frame
@@ -154,9 +176,12 @@ impl Immersive {
         );
         let (events, cursor) = self.pointer.update(aims, time, &self.space.panels());
         send(&mut self.guest, events);
+        for gesture in self.pointer.surface_events() {
+            self.space.deliver_to_surface(gesture);
+        }
         self.space.set_cursor(cursor);
-        if let Some((panel, pose)) = self.pointer.moved() {
-            self.space.move_panel(panel, pose);
+        for step in self.pointer.moves() {
+            self.space.carry(step);
         }
         self.follow_environment();
         let PanelFrame {
@@ -182,8 +207,14 @@ impl Immersive {
         self.surfaces.sync(&self.xr_session, &self.space, &panels);
         if shown {
             quads.extend(self.surfaces.layers(&panels));
+            let head = self.headset.device_pose();
+            // The compositor draws layers in list order. The panels and the surfaces go back to
+            // front, so a panel in front of a surface shows over it.
+            if let Some(head) = &head {
+                sort_back_to_front(&mut quads, head.position, |quad| &quad.pose);
+            }
             quads.extend(self.handles.layers(&panels, self.pointer.handle()));
-            if let Some(head) = self.headset.device_pose() {
+            if let Some(head) = &head {
                 quads.extend(self.rays.layers(&self.pointer.beams(), head.position));
             }
         }
@@ -209,20 +240,20 @@ impl Immersive {
     }
 }
 
-fn send(guest: &mut GuestView, events: &[PointerEvent]) {
+fn send(guest: &mut GuestView, events: &[Gesture]) {
     let shell = guest.shell();
     for event in events {
         match *event {
-            PointerEvent::Move { x, y } => {
+            Gesture::Move { x, y } => {
                 shell.set_cursor(x, y);
             }
-            PointerEvent::Press => {
+            Gesture::Press => {
                 shell.pointer_pressed();
             }
-            PointerEvent::Release => {
+            Gesture::Release => {
                 shell.pointer_released();
             }
-            PointerEvent::Leave => {
+            Gesture::Leave => {
                 shell.set_cursor(AWAY, AWAY);
             }
         }

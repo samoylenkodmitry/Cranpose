@@ -205,6 +205,14 @@ impl XrSession {
         tracked(stage, &self.local, time).map(|located| located.pose)
     }
 
+    // Asks the runtime to end the running session. The runtime moves it to STOPPING, which
+    // `poll_events` ends.
+    pub(crate) fn request_exit(&self) -> Result<(), String> {
+        self.session
+            .request_exit()
+            .map_err(|error| format!("OpenXR request exit: {error}"))
+    }
+
     // Handles the runtime's events: starts and stops the session as the headset asks, and
     // returns where the session stands.
     pub(crate) fn poll_events(&mut self) -> Result<SessionStatus, String> {

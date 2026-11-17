@@ -12,8 +12,8 @@ use super::{
     system_properties,
 };
 use crate::{
-    Controller, Haptics, HeadsetProperties, Pose, Ray, XrFrame, frame_effects::FrameEffects,
-    pointer::Aim,
+    Controller, Haptics, HeadsetProperties, Pose, Ray, Recenter, XrFrame,
+    frame_effects::FrameEffects, pointer::Aim,
 };
 
 // What the app gets of the headset in a frame, the controllers that it reads, and the callbacks
@@ -58,6 +58,11 @@ impl HeadsetInput {
     // The time at which the frame sampled last reaches the display, on the monotonic clock.
     pub(crate) fn display_time(&self) -> Duration {
         self.frame.predicted_display_time
+    }
+
+    // The runtime's change of the room's origin that the frame sampled last reports.
+    pub(crate) fn recenter(&self) -> Option<Recenter> {
+        self.frame.recenter
     }
 
     // The head's pose in the frame sampled last.

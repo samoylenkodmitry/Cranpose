@@ -7,7 +7,7 @@ use crate::{
     METERS_PER_DP, Pose, SubspaceModifier,
     locals::with_locals,
     pose::turn_degrees,
-    space::{SUBSPACE_ORIGIN, Shape, local_space},
+    space::{Shape, local_space, local_subspace_origin},
     subspace::FlatRow,
 };
 
@@ -33,7 +33,7 @@ pub fn SpatialCurvedRow(
         return;
     }
     let curve = Curve {
-        origin: SUBSPACE_ORIGIN.then(&modifier.pose()),
+        origin: local_subspace_origin().current().then(&modifier.pose()),
         shape: if curve_radius.is_finite() && curve_radius > 0.0 {
             Shape::Curved {
                 radius: curve_radius * METERS_PER_DP,

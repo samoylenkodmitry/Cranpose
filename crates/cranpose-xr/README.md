@@ -27,6 +27,36 @@ pixels once at the display's resolution, so its text stays sharp. A dp is a mill
 room. The controllers point at the panels, and their triggers press. Outside a headset the
 panels draw flat, side by side.
 
+A panel or a surface with `SubspaceModifier::movable()` has a handle under it, which a controller
+grabs and carries. `movable_with(MovePolicy::system(...))` calls back with a `SpatialMoveEvent`
+for the grab (`Start`), each change of the pose (`Moving`) and the release (`End`). The event's
+pose is in meters, relative to the subspace's origin. An app that saves it places the panel there
+at its next start with `SubspaceModifier::with_pose`.
+
+```rust,ignore
+let pose = saved_pose.unwrap_or(Pose::IDENTITY);
+SpatialPanel(
+    SubspaceModifier::new()
+        .size(800.0, 500.0)
+        .with_pose(pose)
+        .movable_with(MovePolicy::system(move |event| {
+            if event.event_type == SpatialMoveEventType::End {
+                save(event.pose);
+            }
+        })),
+    || {},
+);
+```
+
+`MovePolicy::custom` leaves the pose to the app: the headset reports the steps, and the app feeds
+them into the panel's modifier.
+
+A `Subspace` stands a meter ahead of where the head was when the app started. A
+`FollowingSubspace(FollowTarget::View(FollowMode::Snap), ...)` stands a meter ahead of the head as
+it is when the subspace first composes, and again after the user recenters. Its panels stay
+movable. Jetpack XR spells this `Subspace(follow = FollowTarget.view(FollowMode.snap()))`. Rust has
+no overloads, so the composable has its own name.
+
 A `SpatialCurvedRow` bends the panels inside it around the viewer, as a cylinder layer of the
 compositor. `local_spatial_environment()` gives the app the room around its panels: where the
 headset has passthrough, `set_preferred_passthrough_opacity(Some(1.0))` shows it. Check
@@ -53,6 +83,26 @@ SpatialExternalSurface(
 
 The callbacks receive an `ExternalSurface` from `cranpose-services`. Outside a headset the
 composable shows an empty box, and the callbacks never run.
+
+A controller's ray stops on a surface. `scope.on_pointer_event` gives the app Compose's
+`PointerEvent`s for the ray: `Enter`, `Move`, `Down`, `Up` and `Exit`. The `position` is in dp from
+the surface's top left corner, in the units of the surface's `size`, so an app that shows a picture
+of `w` by `h` pixels finds the picture's pixel at `(x / width * w, y / height * h)`. A streamed
+desktop moves its mouse cursor with it.
+
+```rust,ignore
+scope.on_pointer_event(|event| match event.kind {
+    PointerEventKind::Move | PointerEventKind::Enter => send_mouse_move(event.position),
+    PointerEventKind::Down => send_mouse_button(true),
+    PointerEventKind::Up => send_mouse_button(false),
+    _ => {}
+});
+```
+
+## Closing the app
+
+`cranpose_services::request_exit()` closes a headset app as it closes a flat one. The backend ends
+the OpenXR session, then finishes the activity on Android or returns from `run` on a desktop.
 
 ## The headset's state
 

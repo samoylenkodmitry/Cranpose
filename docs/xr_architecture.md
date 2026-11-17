@@ -43,11 +43,19 @@ Cranpose developers too:
 - `Subspace { ... }`: the 3D area of an app. Outside a headset it shows as a 3D view in the
   window.
 - `SpatialPanel(modifier, shape) { ... }`: 2D Cranpose content on a flat panel.
+- `FollowingSubspace(follow) { ... }`: a `Subspace` whose origin is in front of the user's head.
+  Jetpack XR 1.0.0-beta02 spells it `Subspace(follow = FollowTarget.view(FollowMode.snap()))`. It
+  replaced `FollowingSubspace(target, behavior)` and the `UserSubspace(lockingBehavior)` of the
+  alpha releases. Rust has no overloads, so the composable keeps the name `FollowingSubspace`.
+  `FollowTarget::View(FollowMode::Snap)` places it when it first composes and again after a
+  recenter. Jetpack XR's `FollowMode.soft` and `FollowMode.tight`, which follow the head
+  continuously, and `FollowTarget.anchor` are not there yet.
 - `SpatialRow`, `SpatialColumn`, `SpatialBox`, `SpatialCurvedRow`, `SpatialSpacer`: layouts in
   meters.
 - `SpatialExternalSurface(stereo_mode, modifier) { scope }`: hands the app a surface that a
   decoder writes into. The scope's `on_surface_created` and `on_surface_destroyed` receive an
-  `ExternalSurface`.
+  `ExternalSurface`, and its `on_pointer_event` receives the pointer events of a controller's ray
+  on the surface.
 - `StreamedScene(frames, views, stats)`: frames that another machine rendered, shown as a projection
   layer. Jetpack XR has no such composable. It has no `Spatial` prefix, because it is not placed
   in a `Subspace`: it fills the viewer's view.
@@ -62,8 +70,8 @@ Cranpose developers too:
   `XrFrame`, which holds the head, the eyes and the controllers. See "The headset's state".
 - `local_haptics()`: the `Haptics` handle that vibrates a hand's controller.
 - `Orbiter`: content attached to the edge of a panel, such as a handle or a toolbar.
-- `SubspaceModifier`: `width`, `height`, `depth`, `size`, `offset`, `rotate`, `movable`,
-  `resizable`, `fill_max_size`, `padding`.
+- `SubspaceModifier`: `width`, `height`, `depth`, `size`, `offset`, `rotate`, `with_pose`,
+  `movable`, `movable_with`, `resizable`, `fill_max_size`, `padding`.
 - `SpatialRoundedCornerShape`: the shape of a panel.
 
 Jetpack XR Compose shows 3D models through SceneCore entities. Cranpose has its own 3D: a
@@ -82,6 +90,46 @@ on. The backend picks how the runtime shows it:
   `ALPHA_BLEND` while the opacity is above 0 and `OPAQUE` otherwise. This path has no dimming.
 - Neither: the capability is off and the app's own background shows.
 
+## A subspace that follows the user
+
+A `Subspace`'s origin is a meter ahead of where the head was when the app started, in the room's
+LOCAL space. A `FollowingSubspace` puts its origin a meter ahead of the head as it is when the subspace
+composes. The panels read the origin from a composition local, so every panel and surface of the
+subspace uses it, and so does a `SpatialCurvedRow`.
+
+The headset has no head pose at the first composition. The subspace stands at the plain origin until the
+first frame in which the runtime tracks the head. Then the frame loop gives the origin of each user
+subspace a place: one meter ahead of the head along its heading, at its height, facing it. Only the
+head's turn about the vertical axis counts, so the panels stand upright. A subspace that composes
+while the head is tracked takes its place at once. The origin is a state, so a frame writes it only
+when a subspace gets its first place or the runtime has recentered. A recenter takes effect at the
+`change_time` of its event, which can lie after the frame that reports it. The loop places the
+subspaces again in the first frame at or after that time.
+
+A panel that the user carried keeps its pose relative to the origin. A recenter, which moves the
+origin, takes it along. `FollowMode::Snap` tracks the head's place and its turn about the vertical
+axis. Jetpack XR's `TrackedDimensions.All` also tracks the head's pitch and roll.
+
+## Carrying a panel
+
+A `movable` panel or surface has a handle under it. A controller's ray that points at the handle
+grabs the panel when its trigger goes down, and the panel follows the controller until the trigger
+goes up. The thumbstick pushes it away or pulls it near.
+
+`movable_with(MovePolicy)` follows Jetpack XR's `movable(movePolicy = ...)`. `MovePolicy::system`
+lets the headset move the panel and calls `on_move` with each step. `MovePolicy::custom` only
+reports the steps, and the app moves the panel by setting its `SubspaceModifier`. A
+`SpatialMoveEvent` has the phase (`Start`, `Moving` or `End`), the new pose and the pose of the
+event before. The pose is in meters and relative to the origin of the panel's subspace. In the frame
+loop the pointer makes one step for the grab, one for each frame in which the panel's pose changes
+and one for the release. A controller that the runtime stops tracking ends the carry with an `End`
+event at the last pose. The callbacks run on the thread of the composition, with no borrow of the
+space held.
+
+The panel keeps the pose that the user gave it, relative to its subspace's origin, until it leaves
+the composition. `SubspaceModifier::with_pose` takes the pose of an event, so an app that saves the
+last `End` pose places the panel there when it starts again.
+
 ## External surfaces
 
 `SpatialExternalSurface` makes a surface swapchain with `XR_KHR_android_surface_swapchain`. The
@@ -95,6 +143,28 @@ there so that a service that produces pictures, such as a hardware video decoder
 without a dependency on `cranpose-xr`. On Android the type holds a reference to the surface's
 `ANativeWindow`, which `as_ptr` returns. The app needs no `ndk`, JNI or GL code of its own.
 Outside a headset the composable shows an empty box, and the callbacks never run.
+
+A surface has no composable content, so the pointer treats it as a target of its own. The pointer
+finds the nearest hit among the panels and the surfaces and keeps one press state for both: the
+trigger's thresholds, the point that a press takes from before the pull, and the click that holds
+its point against a shaking hand all work as on a panel. Each gesture goes to the target of the hit,
+the app's composition or one surface. A press remembers its target, so its release reaches the
+pressed surface also when the ray left it or the controller was lost. When the ray crosses from a
+panel onto a surface, the composition sees the pointer leave. `on_pointer_event` of the scope
+receives Compose's `PointerEvent` with the position in the surface's dp from its top left corner.
+The events are `Enter` for the first move over the surface, `Move`, `Down`, `Up` and `Exit`.
+Jetpack XR gives such input through the `interactionPolicy` parameter, with `SpatialInputEvent`
+positions relative to the surface's center. Rust has no default arguments, and Compose's pointer
+events carry the same facts, so the scope takes the callback. A surface with no callback takes no
+events and costs nothing for them.
+
+The compositor draws layers in list order, and the last one covers the others. The frame loop
+lists the layers of the room, the streamed scenes and the curved panels first. Then come the flat
+panels and the surfaces, sorted back to front by the distance from the head to each one's plane,
+so a panel in front of a surface shows over it. The plane's distance, not the distance to the
+layer's center, keeps a small panel at the edge of a large surface in front of it. The handles and
+the rays follow, so they show over everything. The sort runs in place on the frame's list and
+allocates nothing. A curved panel still draws under every flat panel and surface.
 
 ## Video decoding
 
@@ -326,7 +396,7 @@ shader per eye does it, and the external sampler turns the decoder's YUV into RG
 eyes become the views of an `XrCompositionLayerProjection`, with the poses and fields of view of
 the frame. The compositor reprojects each picture from the pose it was rendered for to the head's
 newer pose. While no other frame is chosen, the layer shows its last pictures again. The scene lies
-over the room and under the curved panels, the panels, the surfaces, the handles and the rays.
+over the room and under the curved panels, the flat panels and surfaces, the handles and the rays.
 
 A host may send each eye with full density in a center and compressed edges, which lets its encoder
 code a third of the pixels. `StreamedView::foveation` describes ALVR's axis-aligned foveated
@@ -406,6 +476,13 @@ The backend also keeps these rules of every runtime and store:
   input. The pointer sees both controllers lost, which ends a press and drops a carried panel.
   The panels still draw.
 - A session that is not VISIBLE gets frames with no layers and no drawing.
+- An app closes itself with `cranpose_services::request_exit()`, as in a flat app. On each turn the
+  loop reads `exit_requested()`. While the session runs, it calls `xrRequestExitSession` once. The
+  runtime moves the session to STOPPING, the backend ends it, and the loop leaves when the session
+  is no longer running. A request that comes while no session runs makes the loop leave at once.
+  After the session is gone the Android host finishes the activity with `cranpose::finish_activity`,
+  and the desktop host returns from `run`. The loop takes the request with `take_exit_request()`
+  only after that landed, so a failed close leaves the app's request recorded.
 - A session that is not running keeps its state: the composition, the panels' places and the
   swapchains stay until the app ends.
 - After the session begins, the app asks `XR_FB_display_refresh_rate` for the highest rate the

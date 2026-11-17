@@ -3,11 +3,12 @@
 use std::time::Duration;
 
 use crate::{
-    Pose, Ray,
+    Pose, Ray, SpatialMoveEventType,
     aim_filter::{AimFilter, angle_between},
     carry::{Carry, handle_hit},
     ray::Beam,
-    space::{Cursor, Mobility, PanelKind, PanelSlot},
+    space::{Cursor, Mobility, PanelKind, PanelMove, PanelSlot},
+    surface_input::{Gesture, SurfaceGesture},
 };
 
 // A trigger counts as down above PRESS and as up below RELEASE, so a trigger held near one value
@@ -41,16 +42,6 @@ pub(crate) struct Aim {
     pub(crate) stick: f32,
 }
 
-// What the pointer does to the panels' composition, in the atlas's dp.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) enum PointerEvent {
-    Move { x: f32, y: f32 },
-    Press,
-    Release,
-    // The pointer left every panel.
-    Leave,
-}
-
 // A trigger in a frame, compared with the frame before.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Trigger {
@@ -58,6 +49,14 @@ enum Trigger {
     // Down now, up in the frame before.
     Pulled,
     Held,
+}
+
+// Where the pointer's events go: the app's composition, which one atlas holds for every panel with
+// content, or one surface.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Target {
+    Atlas,
+    Surface(u64),
 }
 
 // Where a ray meets a panel.
@@ -75,6 +74,14 @@ impl Hit {
     // Whether the panel has Cranpose content that the pointer can move over and press.
     fn on_content(&self) -> bool {
         self.slot.kind == PanelKind::Content
+    }
+
+    // Where the pointer's events about this hit go.
+    fn target(&self) -> Target {
+        match self.slot.kind {
+            PanelKind::Content => Target::Atlas,
+            PanelKind::Surface(_) => Target::Surface(self.slot.id),
+        }
     }
 
     fn position(&self) -> (f32, f32) {
@@ -102,7 +109,7 @@ struct Hand {
     // that holds no content, such as a video surface, stops the ray as a panel does.
     ray: Option<Ray>,
     hit: Option<Hit>,
-    // The hit, if the panel has content
+    // The hit, if the panel has content, which shows the cursor's dot
     content_hit: Option<Hit>,
     handle: Option<(PanelSlot, f32)>,
     // The controller's own pose and its thumbstick, which carry a panel
@@ -150,9 +157,7 @@ impl Hand {
             .rest
             .filter(|(rest, _)| time.saturating_sub(*rest) <= PULL_TIME)
             .and_then(|(_, ray)| Some((ray, nearest_hit(&ray, panels)?)));
-        before
-            .or_else(|| Some((self.ray?, self.hit?)))
-            .filter(|(_, hit)| hit.on_content())
+        before.or_else(|| Some((self.ray?, self.hit?)))
     }
 
     // Whether the ray meets a panel or a handle.
@@ -183,6 +188,8 @@ impl Hand {
 // A press in progress.
 #[derive(Clone, Copy, Debug)]
 struct Press {
+    // Where the press's events go, also after the ray left the panel
+    target: Target,
     start: Duration,
     // The direction that the press pointed in
     direction: [f32; 3],
@@ -195,6 +202,9 @@ struct Press {
 struct Carried {
     panel: u64,
     carry: Carry,
+    // The panel's pose in the last step, which a step that ends the carry repeats when the
+    // controller is lost
+    pose: Pose,
 }
 
 // The pointer. One controller drives it at a time: the one whose trigger went down last, or
@@ -206,13 +216,16 @@ pub(crate) struct Pointer {
     hands: [Hand; 2],
     press: Option<Press>,
     carried: Option<Carried>,
-    // The carried panel's pose in this frame
-    moved: Option<(u64, Pose)>,
+    // The steps of the carry in this frame, kept so a frame does not allocate
+    moves: Vec<PanelMove>,
     // The time of the frame before
     time: Option<Duration>,
-    position: Option<(f32, f32)>,
-    // The frame's events, kept so a frame does not allocate
-    events: Vec<PointerEvent>,
+    // The target that the pointer is over and its place there, in the target's dp
+    over: Option<(Target, (f32, f32))>,
+    // The frame's events for the composition and for the surfaces, kept so a frame does not
+    // allocate
+    events: Vec<Gesture>,
+    surface_events: Vec<SurfaceGesture>,
 }
 
 impl Pointer {
@@ -222,9 +235,10 @@ impl Pointer {
         aims: [Option<Aim>; 2],
         time: Duration,
         panels: &[PanelSlot],
-    ) -> (&[PointerEvent], Option<Cursor>) {
+    ) -> (&[Gesture], Option<Cursor>) {
         self.events.clear();
-        self.moved = None;
+        self.surface_events.clear();
+        self.moves.clear();
         let dt = self
             .time
             .map_or(0.0, |last| time.saturating_sub(last).as_secs_f32());
@@ -237,28 +251,47 @@ impl Pointer {
                 Some(slot) => self.grab(&hand, &slot),
                 None => self.pull(&hand, time, panels),
             },
-            Trigger::Up if self.carried.take().is_some() => self.hover(hand.content_hit),
-            Trigger::Up if self.press.is_some() => {
-                self.events.push(PointerEvent::Release);
-                self.press = None;
-                self.hover(hand.content_hit);
-            }
+            Trigger::Up if self.carried.is_some() => self.put_down(&hand),
+            Trigger::Up if self.press.is_some() => self.release(&hand),
             _ if self.carried.is_some() => self.carry(&hand, dt),
             _ => self.follow(&hand, time),
         }
-        let cursor = match self.press {
-            Some(Press {
-                held: Some(held), ..
-            }) => Some(held.cursor(true)),
-            _ if self.carried.is_some() => None,
-            press => hand.content_hit.map(|hit| hit.cursor(press.is_some())),
-        };
+        let cursor = self.cursor(&hand);
         (&self.events, cursor)
     }
 
-    // The panel that the user carries in this frame and its new pose.
-    pub(crate) fn moved(&self) -> Option<(u64, Pose)> {
-        self.moved
+    // The cursor to show on a panel with content: the point that a press holds, or where the ray
+    // meets the panel.
+    fn cursor(&self, hand: &Hand) -> Option<Cursor> {
+        match self.press {
+            Some(Press {
+                held: Some(held), ..
+            }) => held.on_content().then(|| held.cursor(true)),
+            _ if self.carried.is_some() => None,
+            press => {
+                let pressed = press.is_some_and(|press| press.target == Target::Atlas);
+                hand.content_hit.map(|hit| hit.cursor(pressed))
+            }
+        }
+    }
+
+    // The trigger went up while a press was on: the release goes to the press's target.
+    fn release(&mut self, hand: &Hand) {
+        if let Some(press) = self.press.take() {
+            self.emit(press.target, Gesture::Release);
+        }
+        self.hover(hand.hit);
+    }
+
+    // The steps of the user's carry in this frame: the grab, the new pose of each frame in which
+    // the panel moved, and the release.
+    pub(crate) fn moves(&self) -> &[PanelMove] {
+        &self.moves
+    }
+
+    // The pointer's gestures on surfaces in this frame.
+    pub(crate) fn surface_events(&self) -> &[SurfaceGesture] {
+        &self.surface_events
     }
 
     // The panel whose handle the pointer carries or would grab.
@@ -293,15 +326,16 @@ impl Pointer {
     fn pull(&mut self, hand: &Hand, time: Duration, panels: &[PanelSlot]) {
         match hand.press_hit(time, panels) {
             Some((ray, hit)) => {
-                self.move_to(hit.position());
-                self.events.push(PointerEvent::Press);
+                self.move_to(hit.target(), hit.position());
+                self.emit(hit.target(), Gesture::Press);
                 self.press = Some(Press {
+                    target: hit.target(),
                     start: time,
                     direction: ray.direction,
                     held: Some(hit),
                 });
             }
-            None => self.hover(hand.content_hit),
+            None => self.hover(hand.hit),
         }
     }
 
@@ -314,7 +348,9 @@ impl Pointer {
         self.carried = Some(Carried {
             panel: slot.id,
             carry: Carry::grab(&aim, &slot.pose),
+            pose: slot.pose,
         });
+        self.step(slot.id, SpatialMoveEventType::Start, slot.pose);
         self.hover(None);
     }
 
@@ -325,13 +361,35 @@ impl Pointer {
         };
         let carry = &mut carried.carry;
         carry.push(hand.stick * PUSH_SPEED * carry.distance() * dt);
-        self.moved = Some((carried.panel, carry.pose(&aim)));
+        let pose = carry.pose(&aim);
+        if pose != carried.pose {
+            carried.pose = pose;
+            let panel = carried.panel;
+            self.step(panel, SpatialMoveEventType::Moving, pose);
+        }
     }
 
-    // Moves with the ray: while no press is on, or once a press drags.
+    // The trigger went up while the user carried a panel, or the controller was lost.
+    fn put_down(&mut self, hand: &Hand) {
+        if let Some(carried) = self.carried.take() {
+            self.step(carried.panel, SpatialMoveEventType::End, carried.pose);
+        }
+        self.hover(hand.hit);
+    }
+
+    fn step(&mut self, panel: u64, event_type: SpatialMoveEventType, pose: Pose) {
+        self.moves.push(PanelMove {
+            panel,
+            event_type,
+            pose,
+        });
+    }
+
+    // Moves with the ray: while no press is on, or once a press drags. A press that drags keeps
+    // its target: it follows the ray over that target only.
     fn follow(&mut self, hand: &Hand, time: Duration) {
         let Some(press) = &mut self.press else {
-            self.hover(hand.content_hit);
+            self.hover(hand.hit);
             return;
         };
         if press.held.is_some()
@@ -348,30 +406,49 @@ impl Pointer {
             }
         }
         if press.held.is_none()
-            && let Some(hit) = hand.content_hit
+            && let Some(hit) = hand.hit.filter(|hit| hit.target() == press.target)
         {
-            self.move_to(hit.position());
+            self.move_to(hit.target(), hit.position());
         }
     }
 
     fn hover(&mut self, hit: Option<Hit>) {
         match hit {
-            Some(hit) => self.move_to(hit.position()),
-            None => {
-                if self.position.take().is_some() {
-                    self.events.push(PointerEvent::Leave);
-                }
-            }
+            Some(hit) => self.move_to(hit.target(), hit.position()),
+            None => self.leave(),
         }
     }
 
-    fn move_to(&mut self, position: (f32, f32)) {
-        if self.position != Some(position) {
-            self.events.push(PointerEvent::Move {
+    // Moves the pointer to `position` on `target`. The target that it was over sees it leave.
+    fn move_to(&mut self, target: Target, position: (f32, f32)) {
+        if self.over == Some((target, position)) {
+            return;
+        }
+        if self.over.is_some_and(|(over, _)| over != target) {
+            self.leave();
+        }
+        self.emit(
+            target,
+            Gesture::Move {
                 x: position.0,
                 y: position.1,
-            });
-            self.position = Some(position);
+            },
+        );
+        self.over = Some((target, position));
+    }
+
+    fn leave(&mut self) {
+        if let Some((target, _)) = self.over.take() {
+            self.emit(target, Gesture::Leave);
+        }
+    }
+
+    fn emit(&mut self, target: Target, gesture: Gesture) {
+        match target {
+            Target::Atlas => self.events.push(gesture),
+            Target::Surface(surface) => self
+                .surface_events
+                .push(SurfaceGesture { surface, gesture }),
         }
     }
 }

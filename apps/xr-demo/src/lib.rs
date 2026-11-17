@@ -60,6 +60,7 @@ pub fn XrDemo() {
             clock.clone(),
             logs.clip.clone(),
         );
+        ClipLabel();
         FoveatedScene(clock.clone(), logs.foveated.clone());
         PatternSurface(
             StereoMode::SideBySide,
@@ -81,6 +82,35 @@ pub fn XrDemo() {
         CurvedStrip();
         PressesPanel(presses, readout);
     });
+}
+
+// A label 2 cm in front of the video surface, at its upper left. The compositor draws it over the
+// video, because the layers go back to front by the distance of their planes from the head.
+#[composable]
+fn ClipLabel() {
+    SpatialPanel(
+        SubspaceModifier::new()
+            .size(260.0, 70.0)
+            .offset(-923.7, 130.0, 148.4)
+            .rotate(0.0, 25.0, 0.0),
+        || {
+            Box(
+                Modifier::empty()
+                    .fill_max_size()
+                    .background(Color(0.9, 0.5, 0.1, 1.0))
+                    .rounded_corners(16.0)
+                    .padding(16.0),
+                BoxSpec::default(),
+                || {
+                    Text(
+                        "In front of the video",
+                        Modifier::empty(),
+                        sized(24.0, None),
+                    );
+                },
+            );
+        },
+    );
 }
 
 // A panel that plays two clips flat in a window: H.264 fitted into a box of its shape, and HEVC
