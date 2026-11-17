@@ -640,9 +640,9 @@ fn a_modifier_chain_of_plain_elements_allocates_one_shared_box() {
     assert_eq!(change.allocations, 1, "{change:?}");
 }
 
-// A node whose chain draws one background keeps that draw in the one block
-// of its slices: collecting them allocates the block alone.
-fn slices_of_one_background_allocate_one_block() {
+// A node whose chain draws one background collects its slices into their
+// block and a list of exactly that draw, with no growth.
+fn slices_of_one_background_allocate_their_block_and_one_list() {
     let context = cranpose_ui::AppContext::new();
     let _scope = context.enter_scope();
     let node = || {
@@ -657,7 +657,8 @@ fn slices_of_one_background_allocate_one_block() {
     let slices = fresh.modifier_slices_snapshot();
     let change = region.change();
     assert_eq!(slices.draw_commands().len(), 1);
-    assert_eq!(change.allocations, 1, "{change:?}");
+    assert_eq!(change.allocations, 2, "{change:?}");
+    assert_eq!(change.reallocations, 0, "{change:?}");
 }
 
 // A text that draws one background keeps that draw in a list of one, made
@@ -807,7 +808,7 @@ fn layout_and_modifiers_stay_within_their_allocation_budgets() {
     if !cfg!(feature = "inspection") {
         a_modifier_chain_of_plain_elements_allocates_one_shared_box();
     }
-    slices_of_one_background_allocate_one_block();
+    slices_of_one_background_allocate_their_block_and_one_list();
     slices_of_a_text_with_a_background_keep_their_list();
     resolving_text_direction_does_not_allocate();
     owned_bitmaps_allocate_only_metadata_and_clones_share_storage();
