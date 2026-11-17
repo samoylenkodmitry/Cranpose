@@ -3,7 +3,6 @@
 // builds only the children that enter.
 
 use std::{
-    borrow::Cow,
     ops::{Range, RangeInclusive},
     rc::Rc,
 };
@@ -142,8 +141,8 @@ pub(super) fn translated_container(
     let resized = local_bounds != layer.local_bounds();
     let mut changed = false;
     if resized {
-        let shaped = shaped_graphics_layer(modifier_slices, local_bounds).map(Cow::into_owned);
-        changed = store.write_graphics_layer(container, shaped);
+        let shaped = shaped_graphics_layer(modifier_slices, local_bounds);
+        changed = store.write_graphics_layer(container, shaped.as_deref());
     }
     changed |= set_bounds(store, container, local_bounds, node_bounds);
     if changed {
