@@ -41,7 +41,7 @@ use layout_child_measure_state::{ChildPass, inherited_alignment_lines, read_cell
 use layout_node_data::{role_from_modifier_slices, snapshot_node_data};
 pub(crate) use layout_runtime_state::LayoutRuntimeState;
 use live_layout_node::{LiveLayoutNode, read_live_layout_node};
-use placed_children::PlacedChildren;
+use placed_children::{PlacedChildren, placed_child_count};
 use placed_root_measurements::PlacedRootMeasurements;
 pub use semantics_tree::{
     SemanticsAction, SemanticsCallback, SemanticsNode, SemanticsPlacement, SemanticsRole,
@@ -1185,6 +1185,9 @@ impl LayoutBuilderState {
         });
     }
 
+    // Out of line: inlined, each of its many callers held a copy of the
+    // telemetry branch and of the measurement it moves out of the pair.
+    #[inline(never)]
     fn measure_node(
         self: &Rc<Self>,
         node_id: NodeId,
@@ -1209,17 +1212,11 @@ impl LayoutBuilderState {
     ) -> Result<MeasuredNode, NodeError> {
         let start = Instant::now();
         let (kind, measured) = self.measure_node_untimed(node_id, constraints)?;
-        let children = || {
-            self.with_applier_result(
-                |applier| Ok(PlacedChildren::of(applier, node_id).len(applier)),
-            )
-            .unwrap_or_default()
-        };
         log_node_measure_telemetry(
             kind,
             node_id,
             constraints,
-            (&measured, children),
+            (&measured, || placed_child_count(self, node_id)),
             (threshold_ms, start),
         );
         Ok(measured)
@@ -1903,7 +1900,7 @@ fn clear_semantics_dirty_flags(
         Err(err) => return Err(err),
     }
 
-    PlacedChildren::of(applier, node_id).visit(applier, |applier, child, _, _| {
+    PlacedChildren::of(applier, node_id).visit(applier, &mut |applier, child, _, _| {
         clear_semantics_dirty_flags(applier, child)
     })
 }
@@ -2031,7 +2028,7 @@ fn build_semantics_node_from_live_nodes(
 
     let placed = PlacedChildren::of(applier, node_id);
     let mut children = Vec::with_capacity(placed.len(applier));
-    placed.visit(applier, |applier, child_id, _, child| {
+    placed.visit(applier, &mut |applier, child_id, _, child| {
         children.push(build_semantics_node_from_live_nodes(
             applier,
             child_id,
@@ -2119,7 +2116,7 @@ fn build_layout_tree(
             snapshot_node_data(applier, node_id, top_left, node.size, parent_transform)?;
         let placed = PlacedChildren::of(applier, node_id);
         let mut children = Vec::with_capacity(placed.len(applier));
-        placed.visit(applier, |applier, child_id, offset, child| {
+        placed.visit(applier, &mut |applier, child_id, offset, child| {
             if crate::modifier::is_window_root(applier, child_id) {
                 return Ok(());
             }

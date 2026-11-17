@@ -5,12 +5,19 @@ use std::rc::Rc;
 
 use cranpose_core::{Applier, MemoryApplier, NodeError, NodeId};
 
-use super::{MeasuredChild, MeasuredNode, live_layout_node::read_live_layout_node};
+use super::{
+    LayoutBuilderState, MeasuredChild, MeasuredNode, live_layout_node::read_live_layout_node,
+};
 use crate::{
     modifier::Point,
     subcompose_layout::SubcomposeLayoutNode,
     widgets::nodes::{LayoutNode, LayoutParts},
 };
+
+// What a walk over placed children runs on each: the child, where the
+// measure placed it and the measurement it holds.
+pub(super) type PlacedChildVisit<'a> =
+    dyn FnMut(&mut MemoryApplier, NodeId, Point, &MeasuredNode) -> Result<(), NodeError> + 'a;
 
 // A layout node lists its children in its records; a subcompose node lists
 // the children its last measure placed.
@@ -86,11 +93,13 @@ impl PlacedChildren {
 
     // Runs `visit` on each placed child in order, with where the measure
     // placed it and the measurement it holds in its cache: a leaf of no size
-    // for a child that holds none, as a node of another kind measures.
+    // for a child that holds none, as a node of another kind measures. Out
+    // of line, so the walks share one copy.
+    #[inline(never)]
     pub(super) fn visit(
         &self,
         applier: &mut MemoryApplier,
-        mut visit: impl FnMut(&mut MemoryApplier, NodeId, Point, &MeasuredNode) -> Result<(), NodeError>,
+        visit: &mut PlacedChildVisit<'_>,
     ) -> Result<(), NodeError> {
         let mut index = 0;
         while let Some((child, kept)) = self.get(applier, index)? {
@@ -110,4 +119,13 @@ impl PlacedChildren {
         }
         Ok(())
     }
+}
+
+// How many children `node_id` lists, for the measure telemetry's log alone.
+#[cold]
+#[inline(never)]
+pub(super) fn placed_child_count(builder: &LayoutBuilderState, node_id: NodeId) -> usize {
+    builder
+        .with_applier_result(|applier| Ok(PlacedChildren::of(applier, node_id).len(applier)))
+        .unwrap_or_default()
 }
