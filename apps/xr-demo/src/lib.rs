@@ -1,10 +1,11 @@
 // A Cranpose app for headsets. In a Meta Quest its panels stand in the room, and a controller's
 // trigger presses the buttons: one counts, the other shows or hides the room around the panels.
-// A strip above them is bent around the viewer. On the desktop the panels draw flat.
+// A strip above them is bent around the viewer. On the desktop the panels draw flat, and a panel
+// plays two clips through the platform's decoder and a player surface.
 
-use std::{cell::RefCell, rc::Rc};
+use std::{cell::RefCell, rc::Rc, time::Duration};
 
-use cranpose::{CropRect, DecodedFrames, prelude::*};
+use cranpose::{CropRect, DecodedFrames, DecoderStats, VideoCodec, prelude::*};
 use cranpose_ui::text::{FontWeight, TextUnit};
 use cranpose_xr::{
     FieldOfView, Pose, SpatialCurvedRow, SpatialExternalSurface, SpatialPanel, StereoMode,
@@ -34,6 +35,9 @@ pub fn XrDemo() {
     let readout = rememberMutableStateOf(Readout::default);
     Subspace(move || {
         HeadsetReadout(presses, readout);
+        // A flat window shows the panels side by side, so the clips come first
+        #[cfg(not(target_os = "android"))]
+        FlatClips();
         ClipSurface(
             StereoMode::Mono,
             SubspaceModifier::new()
@@ -61,6 +65,103 @@ pub fn XrDemo() {
         CurvedStrip();
         PressesPanel(presses, readout);
     });
+}
+
+// A panel that plays two clips flat in a window: H.264 fitted into a box of its shape, and HEVC
+// cropped into a square. A headset plays the clip into a surface instead.
+#[cfg(not(target_os = "android"))]
+#[composable]
+fn FlatClips() {
+    SpatialPanel(SubspaceModifier::new().size(900.0, 480.0), || {
+        Column(
+            Modifier::empty()
+                .fill_max_size()
+                .background(Color(0.08, 0.1, 0.12, 0.94))
+                .rounded_corners(24.0)
+                .padding(24.0),
+            ColumnSpec::default().vertical_arrangement(LinearArrangement::spaced_by(12.0)),
+            || {
+                Text(
+                    "Hardware decoder, then PlayerSurface",
+                    Modifier::empty(),
+                    sized(28.0, Some(FontWeight::BOLD)),
+                );
+                Row(
+                    Modifier::empty(),
+                    RowSpec::default().horizontal_arrangement(LinearArrangement::spaced_by(24.0)),
+                    || {
+                        FlatClip("H.264 fitted", VideoCodec::H264, ContentScale::Fit, 480.0);
+                        FlatClip("HEVC cropped", VideoCodec::Hevc, ContentScale::Crop, 270.0);
+                    },
+                );
+            },
+        );
+    });
+}
+
+// A clip that plays as long as the box is composed, in a player surface `width` points wide and
+// 270 high, with a line of the decoder's counts below it.
+#[cfg(not(target_os = "android"))]
+#[composable]
+fn FlatClip(title: &'static str, codec: VideoCodec, content_scale: ContentScale, width: f32) {
+    let frames = rememberMutableStateOf(|| None::<DecodedFrames>);
+    let stats = rememberMutableStateOf(DecoderStats::default);
+    let failure = rememberMutableStateOf(|| None::<String>);
+    DisposableEffect(codec, move |_| {
+        let player = match ClipPlayer::start_flat(codec) {
+            Ok((player, decoded)) => {
+                frames.set(Some(decoded));
+                Some(player)
+            }
+            Err(error) => {
+                failure.set(Some(error.to_string()));
+                None
+            }
+        };
+        DisposableEffectResult::new(move || drop(player))
+    });
+    LaunchedEffect(frames.value(), async move |_| {
+        let Some(decoded) = frames.value() else {
+            return;
+        };
+        loop {
+            delay(Duration::from_secs(1)).await;
+            stats.set(decoded.stats());
+        }
+    });
+    Column(
+        Modifier::empty(),
+        ColumnSpec::default().vertical_arrangement(LinearArrangement::spaced_by(8.0)),
+        move || {
+            Text(
+                title,
+                Modifier::empty(),
+                sized(22.0, Some(FontWeight::BOLD)),
+            );
+            if let Some(decoded) = frames.value() {
+                PlayerSurface(
+                    decoded,
+                    Modifier::empty()
+                        .size_points(width, 270.0)
+                        .background(Color(0.0, 0.0, 0.0, 1.0)),
+                    content_scale,
+                );
+            }
+            let counts = stats.value();
+            Text(
+                failure.value().unwrap_or_else(|| {
+                    format!(
+                        "{} pictures, decode {:.2} ms, {} dropped",
+                        counts.decoded,
+                        counts.mean_decode.as_secs_f64() * 1000.0,
+                        counts.dropped
+                    )
+                }),
+                Modifier::empty(),
+                sized(18.0, None),
+            );
+        },
+    );
 }
 
 // The panel with the counter and the button for the room. A handle under it carries it.

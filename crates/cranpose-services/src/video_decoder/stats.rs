@@ -11,7 +11,8 @@ pub struct DecoderStats {
     pub decoded: u64,
     /// The pictures that the decoder dropped because the app did not take them in time.
     pub dropped: u64,
-    /// The pictures that reached the app's reader after the next picture began to decode.
+    /// The pictures that reached the app's reader after the next picture began to decode. Only
+    /// Android counts them: a decoder of Apple's has no reader between it and the app.
     pub late: u64,
     /// The decode time of the latest picture.
     pub last_decode: Duration,
@@ -21,10 +22,10 @@ pub struct DecoderStats {
     pub max_decode: Duration,
 }
 
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", target_os = "macos", target_os = "ios"))]
 pub(super) use counters::StatsCounters;
 
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", target_os = "macos", target_os = "ios"))]
 mod counters {
     use std::{
         sync::atomic::{AtomicU64, Ordering::Relaxed},
@@ -54,6 +55,7 @@ mod counters {
             self.dropped.fetch_add(1, Relaxed);
         }
 
+        #[cfg(target_os = "android")]
         pub(crate) fn late(&self) {
             self.late.fetch_add(1, Relaxed);
         }

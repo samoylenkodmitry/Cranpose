@@ -38,8 +38,11 @@ ignores:
   - crates/cranpose-storekit/src/tests/apple_tests.rs
   - apps/xr-demo/src/pattern_writer.rs
   - crates/cranpose-services/src/external_surface.rs
+  - crates/cranpose-services/src/video_decoder/decompression_session.rs
   - crates/cranpose-services/src/video_decoder/image_reader.rs
   - crates/cranpose-services/src/video_decoder/media_codec.rs
+  - crates/cranpose-services/src/video_decoder/pixel_buffer.rs
+  - crates/cranpose-services/src/video_decoder/video_toolbox.rs
   - crates/cranpose-xr/src/android_main.rs
   - crates/cranpose-xr/src/openxr/clock/performance_counter.rs
   - crates/cranpose-xr/src/openxr/clock/timespec.rs
@@ -83,6 +86,7 @@ ignores:
   - crates/cranpose/src/apple/audio_session.rs
   - crates/cranpose/src/apple/camera.rs
   - crates/cranpose/src/apple/media_source.rs
+  - crates/cranpose/src/apple/nv12_converter.rs
   - crates/cranpose/src/apple/microphone.rs
   - crates/cranpose/src/apple/device_auth.rs
   - crates/cranpose/src/apple/network.rs

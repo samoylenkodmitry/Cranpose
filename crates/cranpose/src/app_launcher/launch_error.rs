@@ -65,7 +65,7 @@ pub enum LaunchError {
     any(feature = "desktop-shell", feature = "ios")
 ))]
 #[expect(clippy::print_stderr, reason = "a failed launch is reported")]
-pub(crate) fn exit_after_launch_error(context: &str, error: LaunchError) -> ! {
+pub(crate) fn exit_after_launch_error(context: &str, error: &LaunchError) -> ! {
     eprintln!("{context}: {error}");
     std::process::exit(1)
 }

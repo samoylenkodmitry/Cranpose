@@ -19,8 +19,9 @@ const PRESSED: f32 = 0.5;
 // right trigger in percent and the frames that the effect saw in the last second.
 #[derive(Clone, Copy, Default, PartialEq)]
 pub(crate) struct Readout {
-    pub(crate) head_cm: Option<i32>,
-    pub(crate) trigger_percent: u32,
+    // Whole centimeters and whole percent, rounded so a change below them does not redraw
+    pub(crate) head_cm: Option<f32>,
+    pub(crate) trigger_percent: f32,
     pub(crate) frames_per_second: u32,
 }
 
@@ -57,8 +58,8 @@ impl Tracker {
         let next = Readout {
             head_cm: frame
                 .device_pose
-                .map(|pose| (pose.position[1] * 100.0).round() as i32),
-            trigger_percent: (frame.right_controller.trigger.value * 100.0).round() as u32,
+                .map(|pose| (pose.position[1] * 100.0).round()),
+            trigger_percent: (frame.right_controller.trigger.value * 100.0).round(),
             frames_per_second: self.frames_per_second,
         };
         if readout.get_non_reactive() != next {

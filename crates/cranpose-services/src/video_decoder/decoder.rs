@@ -1,9 +1,13 @@
 //! The decoder and the handle that receives its pictures.
 
+#[cfg(any(target_os = "android", target_os = "macos", target_os = "ios"))]
+use super::frame_queue::Frames;
 #[cfg(target_os = "android")]
-use super::media_codec::{Backend, Frames};
-#[cfg(not(target_os = "android"))]
+use super::media_codec::Backend;
+#[cfg(not(any(target_os = "android", target_os = "macos", target_os = "ios")))]
 use super::unavailable::{Backend, Frames};
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+use super::video_toolbox::Backend;
 use super::{AccessUnit, DecoderConfig, DecoderError, DecoderStats, FrameInfo, VideoFrame};
 
 /// A hardware video decoder for one stream.
@@ -61,6 +65,14 @@ impl DecodedFrames {
     /// It drops the older pictures.
     pub fn latest_frame(&self) -> Option<VideoFrame> {
         self.frames.latest_frame()
+    }
+
+    /// Waits until a picture is ready for [`next_frame`](Self::next_frame) or
+    /// [`latest_frame`](Self::latest_frame), and returns at once if one is. The decoder's thread
+    /// wakes the task, so an app draws a picture in the frame that follows its output with no
+    /// polling. One task at a time waits: a second wait takes the place of the first.
+    pub async fn wait_for_frame(&self) {
+        std::future::poll_fn(|context| self.frames.poll_ready(context)).await;
     }
 
     /// The report of the oldest picture that the decoder sent to the surface, if the output is

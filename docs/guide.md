@@ -2805,6 +2805,46 @@ draws the image another way. `ImageRequest::max_size` sets the decode size.
 
 The image decodes on a worker thread. All images share one memory cache. The bytes of decoded pixels bound it. They also share a disk cache with a size limit in the application's cache folder. `ImageLoader::new` makes a loader with other limits. The requests of one image share one download. A request stops its download when all its composables have left. `ImageRequest::new` also takes `file://` URLs and file paths. `ImageRequest::bytes` decodes bytes that the app holds, such as a picked file.
 
+### Show a video stream
+
+`VideoDecoder` decodes H.264 and HEVC on the platform's hardware: through VideoToolbox on macOS and iOS,
+and through `MediaCodec` on Android. The app feeds it access units from one thread. `PlayerSurface` draws
+the pictures in the layout, scaled by a `ContentScale`.
+
+```rust
+use cranpose::prelude::*;
+
+#[composable]
+fn Stream(frames: DecodedFrames) {
+    PlayerSurface(
+        frames,
+        Modifier::empty().size_points(480.0, 270.0),
+        ContentScale::Fit,
+    );
+}
+
+fn start_decoder(width: u32, height: u32) -> Result<(VideoDecoder, DecodedFrames), DecoderError> {
+    let decoder = VideoDecoder::new(DecoderConfig::new(
+        VideoCodec::Hevc,
+        width,
+        height,
+        DecoderOutput::Frames { depth: 6 },
+    ))?;
+    let frames = decoder.frames();
+    Ok((decoder, frames))
+}
+```
+
+Feed the decoder with `submit(AccessUnit { data, timestamp, metadata })`. `data` is one picture in Annex-B
+form, which may start with the parameter sets. `split_access_units` cuts a stream that the app reads from a
+file. The decoder holds no picture back for reordering, so the stream needs no B-frames. A decoder on Apple
+answers `DecoderError::NeedsKeyframe` until a keyframe arrives, after a start in the middle of a stream and
+after the system ends its session. Ask the sender for a keyframe then. `depth` is the number of pictures
+that the decoder, the surface and the GPU hold. Use 6 or more for a stream of 60 pictures a second.
+
+`PlayerSurface` draws on macOS and iOS. It draws nothing on Android yet, and no other platform has a
+decoder.
+
 ### Use the camera
 
 Android and iOS supply camera backends. macOS needs `cranpose/camera-desktop` and a signed app bundle.

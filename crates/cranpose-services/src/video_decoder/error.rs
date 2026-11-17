@@ -29,6 +29,12 @@ pub enum DecoderError {
     /// An access unit's timestamp does not rise above the one before.
     #[error("an access unit's timestamp does not rise above the one before")]
     TimestampNotRising,
+    /// The decoder cannot decode the access unit yet, and has skipped it. It starts with a
+    /// keyframe that carries the stream's parameter sets, or one that follows them. The decoder
+    /// asks for one again after it ends its session, as an iPhone does when an app goes to the
+    /// background. The app asks the sender for a keyframe.
+    #[error("the video decoder needs a keyframe")]
+    NeedsKeyframe,
     /// The decoder stopped with an error.
     #[error("the video decoder failed: {0}")]
     Failed(String),
