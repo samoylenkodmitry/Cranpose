@@ -35,6 +35,15 @@ pub(crate) struct PanelSlot {
     pub(crate) atlas: [f32; 4],
     // The panel's center and turn in the room.
     pub(crate) pose: Pose,
+    // Whether the user may carry the panel with a controller.
+    pub(crate) mobility: Mobility,
+}
+
+// Whether the user may carry a panel with a controller.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Mobility {
+    Fixed,
+    Movable,
 }
 
 // Where a controller points on a panel.
@@ -86,6 +95,8 @@ struct Entry {
     panel: Panel,
     // What the panel's dot state holds, so that a comparison needs no read of the state.
     dot: Option<Dot>,
+    // Whether the user carried the panel. Its pose then stays the user's.
+    carried: bool,
 }
 
 impl PartialEq for Space {
@@ -127,8 +138,11 @@ impl Space {
         let mut entries = self.inner.entries.borrow_mut();
         let (index, changed) = match entries.iter().position(|entry| entry.slot.id == panel.id) {
             Some(index) => {
-                let slot = &mut entries[index].slot;
-                slot.pose = pose;
+                let entry = &mut entries[index];
+                if !entry.carried {
+                    entry.slot.pose = pose;
+                }
+                let slot = &mut entry.slot;
                 let changed = slot.atlas[2..] != size;
                 slot.atlas = [slot.atlas[0], slot.atlas[1], size[0], size[1]];
                 (index, changed)
@@ -139,9 +153,11 @@ impl Space {
                         id: panel.id,
                         atlas: [0.0, 0.0, size[0], size[1]],
                         pose,
+                        mobility: Mobility::Fixed,
                     },
                     panel,
                     dot: None,
+                    carried: false,
                 });
                 (entries.len() - 1, true)
             }
@@ -150,6 +166,27 @@ impl Space {
             restack(&mut entries);
         }
         entries[index].slot.atlas
+    }
+
+    // Sets whether the user may carry the panel `id`.
+    pub(crate) fn set_mobility(&self, id: u64, mobility: Mobility) {
+        let mut entries = self.inner.entries.borrow_mut();
+        if let Some(entry) = entries.iter_mut().find(|entry| entry.slot.id == id) {
+            entry.slot.mobility = mobility;
+        }
+    }
+
+    #[cfg_attr(
+        not(any(test, all(feature = "openxr", target_os = "android"))),
+        expect(dead_code, reason = "the headset backend calls it")
+    )]
+    // Puts the panel `id` at `pose`, which `place` keeps until the panel leaves.
+    pub(crate) fn move_panel(&self, id: u64, pose: Pose) {
+        let mut entries = self.inner.entries.borrow_mut();
+        if let Some(entry) = entries.iter_mut().find(|entry| entry.slot.id == id) {
+            entry.slot.pose = pose;
+            entry.carried = true;
+        }
     }
 
     // Forgets the panel `id`. The panels below it move up.
@@ -213,7 +250,8 @@ fn restack(entries: &mut [Entry]) {
     let mut top = 0.0;
     for entry in entries {
         let [left, old_top, _, height] = entry.slot.atlas;
-        if old_top != top {
+        // Tops lie on even dp, so a change is always more than half a dp
+        if (old_top - top).abs() > 0.5 {
             entry.slot.atlas[1] = top;
             entry.panel.origin.set([left, top]);
         }

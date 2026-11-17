@@ -47,6 +47,14 @@ impl Ray {
     }
 }
 
+// A ray as shown: from its origin along its direction for `length` meters.
+#[cfg(any(test, all(feature = "openxr", target_os = "android")))]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Beam {
+    pub(crate) ray: Ray,
+    pub(crate) length: f32,
+}
+
 /// A ray's hit on a panel.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PanelHit {

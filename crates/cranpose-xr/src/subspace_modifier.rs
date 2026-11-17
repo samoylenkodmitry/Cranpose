@@ -1,6 +1,6 @@
 //! The size, place and turn of a spatial composable.
 
-use crate::{Pose, pose::turn_degrees};
+use crate::{Pose, pose::turn_degrees, space::Mobility};
 
 /// Meters in one dp. In a subspace one dp is a millimeter, so a panel of 800 by 500 dp is 80 by
 /// 50 centimeters.
@@ -23,6 +23,7 @@ pub struct SubspaceModifier {
     size: [Option<f32>; 2],
     offset: [f32; 3],
     orientation: [f32; 4],
+    mobility: Mobility,
 }
 
 impl Default for SubspaceModifier {
@@ -38,6 +39,7 @@ impl SubspaceModifier {
             size: [None; 2],
             offset: [0.0; 3],
             orientation: [0.0, 0.0, 0.0, 1.0],
+            mobility: Mobility::Fixed,
         }
     }
 
@@ -70,6 +72,19 @@ impl SubspaceModifier {
     pub fn rotate(mut self, pitch: f32, yaw: f32, roll: f32) -> Self {
         self.orientation = turn_degrees(pitch, yaw, roll);
         self
+    }
+
+    /// Lets the user carry the content with a controller. A handle under the content grabs it. The
+    /// place that the user gives replaces the place of this modifier until the content leaves
+    /// the composition. Jetpack XR's `movable`.
+    pub const fn movable(mut self) -> Self {
+        self.mobility = Mobility::Movable;
+        self
+    }
+
+    // Whether the user may carry the content.
+    pub(crate) const fn mobility(&self) -> Mobility {
+        self.mobility
     }
 
     /// The size in dp, with `fallback` for what the modifier leaves out.

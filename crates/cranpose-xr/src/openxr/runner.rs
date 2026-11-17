@@ -11,7 +11,9 @@ use cranpose_core::CompositionLocalProvider;
 use super::{
     controllers::Controllers,
     gl_context::GlContext,
+    handle_layers::HandleLayers,
     panel_layers::{DENSITY, PanelLayers},
+    ray_layers::RayLayers,
     session::{SessionStatus, XrSession},
 };
 use crate::{
@@ -81,6 +83,8 @@ struct Immersive {
     space: Space,
     pointer: Pointer,
     layers: PanelLayers,
+    rays: RayLayers,
+    handles: HandleLayers,
     controllers: Controllers,
     xr_session: XrSession,
     gpu: GpuContext,
@@ -98,6 +102,9 @@ impl Immersive {
         let xr_session = XrSession::new(&gl, app)?;
         let controllers = Controllers::new(&xr_session)?;
         let layers = PanelLayers::new(&xr_session)?;
+        let formats = (layers.gl_format(), layers.format());
+        let rays = RayLayers::new(&xr_session, &gpu, formats)?;
+        let handles = HandleLayers::new(&xr_session, &gpu, formats)?;
         let composed = Rc::new(RefCell::new(None::<Space>));
         let held = Rc::clone(&composed);
         let mut guest = GuestView::new(
@@ -125,6 +132,8 @@ impl Immersive {
             space,
             pointer: Pointer::default(),
             layers,
+            rays,
+            handles,
             controllers,
             xr_session,
             gpu,
@@ -132,21 +141,34 @@ impl Immersive {
         })
     }
 
-    // One frame: the controllers move the pointer, and the panels that changed draw.
+    // One frame: the controllers move the pointer, the panels that changed draw and the rays
+    // follow the controllers.
     fn frame(&mut self) -> Result<(), String> {
         let frame = self.xr_session.begin_frame()?;
         let aims = self
             .controllers
             .aims(&self.xr_session, frame.predicted_display_time);
-        let (events, cursor) = self.pointer.update(aims, &self.space.panels());
-        send(&mut self.guest, &events);
+        let time = Duration::from_nanos(frame.predicted_display_time.as_nanos().max(0) as u64);
+        let (events, cursor) = self.pointer.update(aims, time, &self.space.panels());
+        send(&mut self.guest, events);
         self.space.set_cursor(cursor);
-        let quads = if frame.should_render {
+        if let Some((panel, pose)) = self.pointer.moved() {
+            self.space.move_panel(panel, pose);
+        }
+        let mut quads = if frame.should_render {
             self.layers
                 .draw(&mut self.guest, &self.gpu, &self.xr_session, &self.space)?
         } else {
             Vec::new()
         };
+        // The handles and the rays show over the panels: the rays end on them
+        let panels = self.space.panels();
+        if frame.should_render {
+            quads.extend(self.handles.layers(&panels, self.pointer.handle()));
+            if let Some(head) = self.xr_session.head(frame.predicted_display_time) {
+                quads.extend(self.rays.layers(&self.pointer.beams(), head.position));
+            }
+        }
         self.xr_session
             .end_frame(frame.predicted_display_time, &quads)?;
         drop(quads);

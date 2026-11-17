@@ -36,6 +36,18 @@ impl Pose {
         rotate([-x, -y, -z, w], v)
     }
 
+    /// The pose that undoes this pose: the frame that this pose is given in, given in this
+    /// pose's own frame.
+    pub fn inverse(&self) -> Self {
+        let [x, y, z, w] = self.orientation;
+        let orientation = [-x, -y, -z, w];
+        let back = rotate(orientation, self.position);
+        Self {
+            position: back.map(|v| -v),
+            orientation,
+        }
+    }
+
     /// The pose `child`, given in this pose's frame, in the frame this pose is given in.
     pub fn then(&self, child: &Self) -> Self {
         let moved = self.rotate(child.position);

@@ -63,6 +63,11 @@ impl PanelLayers {
         })
     }
 
+    // The swapchain format in OpenGL's names, which `format` is in wgpu's.
+    pub(crate) fn gl_format(&self) -> u32 {
+        self.gl_format
+    }
+
     // The format the composition draws in.
     pub(crate) fn format(&self) -> wgpu::TextureFormat {
         self.format

@@ -7,61 +7,55 @@ use crate::{Ray, pointer::Aim};
 
 // The input paths of each hand, left then right.
 const HANDS: [&str; 2] = ["/user/hand/left", "/user/hand/right"];
+// Each profile: its trigger, and its thumbstick's forward axis if it has one. Hands tracked by
+// cameras point and pinch through the hand interaction profile.
+const PROFILES: [(&str, &str, Option<&str>); 3] = [
+    (
+        "/interaction_profiles/oculus/touch_controller",
+        "trigger/value",
+        Some("thumbstick/y"),
+    ),
+    (
+        "/interaction_profiles/ext/hand_interaction_ext",
+        "aim_activate_ext/value",
+        None,
+    ),
+    (
+        "/interaction_profiles/khr/simple_controller",
+        "select/click",
+        None,
+    ),
+];
 
-// Where each controller points and whether its trigger is down.
+// Where each controller points and how far its trigger is pulled.
 pub(crate) struct Controllers {
     set: xr::ActionSet,
-    selects: [xr::Action<bool>; 2],
+    triggers: [xr::Action<f32>; 2],
+    sticks: [xr::Action<f32>; 2],
     aims: [xr::Space; 2],
 }
 
 impl Controllers {
     pub(crate) fn new(xr_session: &XrSession) -> Result<Self, String> {
-        let instance = xr_session.instance();
-        let failed = |what: &str| {
-            let what = what.to_owned();
-            move |error: xr::sys::Result| format!("OpenXR {what}: {error}")
-        };
-        let set = instance
+        let set = xr_session
+            .instance()
             .create_action_set("pointer", "Pointer", 0)
             .map_err(failed("action set"))?;
-        let poses = [
-            set.create_action::<xr::Posef>("left_aim", "Left aim", &[])
-                .map_err(failed("action"))?,
-            set.create_action::<xr::Posef>("right_aim", "Right aim", &[])
-                .map_err(failed("action"))?,
-        ];
-        let selects = [
-            set.create_action::<bool>("left_select", "Left select", &[])
-                .map_err(failed("action"))?,
-            set.create_action::<bool>("right_select", "Right select", &[])
-                .map_err(failed("action"))?,
-        ];
-        let path = |path: String| instance.string_to_path(&path).map_err(failed("path"));
-        for (profile, select) in [
-            (
-                "/interaction_profiles/oculus/touch_controller",
-                "trigger/value",
-            ),
-            (
-                "/interaction_profiles/khr/simple_controller",
-                "select/click",
-            ),
-        ] {
-            let mut bindings = Vec::new();
-            for hand in 0..2 {
-                bindings.push(xr::Binding::new(
-                    &poses[hand],
-                    path(format!("{}/input/aim/pose", HANDS[hand]))?,
-                ));
-                bindings.push(xr::Binding::new(
-                    &selects[hand],
-                    path(format!("{}/input/{select}", HANDS[hand]))?,
-                ));
-            }
-            let profile = path(profile.to_owned())?;
-            if let Err(error) = instance.suggest_interaction_profile_bindings(profile, &bindings) {
-                log::warn!("cranpose xr: bindings for a controller: {error}");
+        let poses = pair::<xr::Posef>(&set, "aim", "aim")?;
+        let triggers = pair::<f32>(&set, "trigger", "trigger")?;
+        let sticks = pair::<f32>(&set, "stick", "thumbstick")?;
+        for (profile, select, stick) in PROFILES {
+            if let Err(error) = suggest(xr_session.instance(), profile, |hand, path| {
+                let mut bindings = vec![
+                    xr::Binding::new(&poses[hand], path("aim/pose")?),
+                    xr::Binding::new(&triggers[hand], path(select)?),
+                ];
+                if let Some(stick) = stick {
+                    bindings.push(xr::Binding::new(&sticks[hand], path(stick)?));
+                }
+                Ok(bindings)
+            }) {
+                log::warn!("cranpose xr: bindings for {profile}: {error}");
             }
         }
         xr_session
@@ -73,7 +67,12 @@ impl Controllers {
                 .map_err(failed("aim space"))
         };
         let aims = [space(&poses[0])?, space(&poses[1])?];
-        Ok(Self { set, selects, aims })
+        Ok(Self {
+            set,
+            triggers,
+            sticks,
+            aims,
+        })
     }
 
     // The controllers at `time`, left then right. A controller the runtime does not track has
@@ -94,13 +93,60 @@ impl Controllers {
             if !location.location_flags.contains(tracked) {
                 return None;
             }
-            let select = self.selects[hand]
-                .state(&xr_session.session, xr::Path::NULL)
-                .is_ok_and(|state| state.is_active && state.current_state);
+            let value = |action: &xr::Action<f32>| {
+                action
+                    .state(&xr_session.session, xr::Path::NULL)
+                    .ok()
+                    .filter(|state| state.is_active)
+                    .map_or(0.0, |state| state.current_state)
+            };
+            let pose = pose_of(&location.pose);
             Some(Aim {
-                ray: Ray::of_aim(&pose_of(&location.pose)),
-                select,
+                ray: Ray::of_aim(&pose),
+                pose,
+                trigger: value(&self.triggers[hand]),
+                stick: value(&self.sticks[hand]),
             })
         })
     }
+}
+
+fn failed(what: &str) -> impl Fn(xr::sys::Result) -> String + use<> {
+    let what = what.to_owned();
+    move |error| format!("OpenXR {what}: {error}")
+}
+
+// An action for each hand, named `left_{name}` and `right_{name}`.
+fn pair<T: xr::ActionTy>(
+    set: &xr::ActionSet,
+    name: &str,
+    label: &str,
+) -> Result<[xr::Action<T>; 2], String> {
+    let action = |side: &str, title: &str| {
+        set.create_action::<T>(&format!("{side}_{name}"), &format!("{title} {label}"), &[])
+            .map_err(failed("action"))
+    };
+    Ok([action("left", "Left")?, action("right", "Right")?])
+}
+
+// Suggests the bindings of `profile` that `bindings` gives for each hand, from a function that
+// turns an input's name into its path on that hand.
+fn suggest<'a>(
+    instance: &xr::Instance,
+    profile: &str,
+    bindings: impl Fn(
+        usize,
+        &dyn Fn(&str) -> Result<xr::Path, String>,
+    ) -> Result<Vec<xr::Binding<'a>>, String>,
+) -> Result<(), String> {
+    let path = |path: &str| instance.string_to_path(path).map_err(failed("path"));
+    let mut all = Vec::new();
+    for (hand, side) in HANDS.iter().enumerate() {
+        all.extend(bindings(hand, &|name| {
+            path(&format!("{side}/input/{name}"))
+        })?);
+    }
+    instance
+        .suggest_interaction_profile_bindings(path(profile)?, &all)
+        .map_err(failed("bindings"))
 }

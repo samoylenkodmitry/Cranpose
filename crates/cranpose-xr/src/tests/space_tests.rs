@@ -344,3 +344,28 @@ fn a_panel_can_leave_in_the_frame_its_cursor_moves() {
         assert_eq!(headset.space.panels().len(), 1);
     }
 }
+
+#[test]
+fn a_carried_panel_keeps_the_pose_the_user_gave() {
+    with_space(|space| {
+        let panel = space.new_panel();
+        space.place(panel, [400.0, 300.0], Pose::IDENTITY);
+        space.set_mobility(panel.id, Mobility::Movable);
+        assert_eq!(space.panels()[0].mobility, Mobility::Movable);
+
+        let carried = Pose::at([0.5, 0.2, -1.0]);
+        space.move_panel(panel.id, carried);
+        assert_eq!(space.panels()[0].pose, carried);
+
+        let part = space.place(panel, [400.0, 300.0], Pose::at([0.0, 0.0, -3.0]));
+        assert_eq!(part, [0.0, 0.0, 400.0, 300.0]);
+        assert_eq!(
+            space.panels()[0].pose,
+            carried,
+            "the modifier's pose yields"
+        );
+        space.place(panel, [400.0, 320.0], Pose::at([0.0, 0.0, -3.0]));
+        assert_eq!(space.panels()[0].pose, carried);
+        assert_eq!(space.panels()[0].atlas, [0.0, 0.0, 400.0, 320.0]);
+    });
+}

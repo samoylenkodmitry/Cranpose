@@ -41,6 +41,8 @@ pub(crate) struct XrSession {
     stream: xr::FrameStream<xr::OpenGlEs>,
     // The room as the app sees it: its origin is where the head was when the app started
     pub(crate) local: xr::Space,
+    // The head's own space, which the runtime locates for each frame
+    view: xr::Space,
     blend: xr::EnvironmentBlendMode,
     // Whether layers say their images start with the top row, which is how wgpu writes them
     flips_rows: bool,
@@ -72,6 +74,8 @@ impl XrSession {
         extensions.khr_opengl_es_enable = true;
         extensions.khr_android_create_instance = true;
         extensions.fb_composition_layer_image_layout = available.fb_composition_layer_image_layout;
+        // Hands tracked by cameras point and pinch as controllers do
+        extensions.ext_hand_interaction = available.ext_hand_interaction;
         if !available.fb_composition_layer_image_layout {
             log::warn!("cranpose xr: the runtime cannot flip layers; panels show upside down");
         }
@@ -112,6 +116,9 @@ impl XrSession {
         let local = session
             .create_reference_space(xr::ReferenceSpaceType::LOCAL, xr::Posef::IDENTITY)
             .map_err(|error| format!("OpenXR space: {error}"))?;
+        let view = session
+            .create_reference_space(xr::ReferenceSpaceType::VIEW, xr::Posef::IDENTITY)
+            .map_err(|error| format!("OpenXR view space: {error}"))?;
         let blend = instance
             .enumerate_environment_blend_modes(system, VIEW_CONFIGURATION)
             .ok()
@@ -123,6 +130,7 @@ impl XrSession {
             waiter,
             stream,
             local,
+            view,
             blend,
             flips_rows: available.fb_composition_layer_image_layout,
             running: false,
@@ -131,6 +139,23 @@ impl XrSession {
 
     pub(crate) fn instance(&self) -> &xr::Instance {
         &self.instance
+    }
+
+    // Whether layers show their images from the top row, which is how wgpu writes them. If not,
+    // the first row is the bottom one.
+    pub(crate) fn flips_rows(&self) -> bool {
+        self.flips_rows
+    }
+
+    // The head at `time`, in the `local` space. A head the runtime does not track has none.
+    pub(crate) fn head(&self, time: xr::Time) -> Option<Pose> {
+        let location = self.view.locate(&self.local, time).ok()?;
+        let tracked =
+            xr::SpaceLocationFlags::POSITION_VALID | xr::SpaceLocationFlags::ORIENTATION_VALID;
+        location
+            .location_flags
+            .contains(tracked)
+            .then(|| pose_of(&location.pose))
     }
 
     // Handles the runtime's events: starts and stops the session as the headset asks.

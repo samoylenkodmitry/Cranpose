@@ -12,43 +12,46 @@ cranpose::app_capabilities!();
 pub fn XrDemo() {
     let presses = rememberMutableStateOf(|| 0_u32);
     Subspace(move || {
-        SpatialPanel(SubspaceModifier::new().size(800.0, 500.0), move || {
-            Column(
-                Modifier::empty()
-                    .fill_max_size()
-                    .background(Color(0.1, 0.11, 0.14, 0.94))
-                    .rounded_corners(24.0)
-                    .padding(40.0),
-                ColumnSpec::default().vertical_arrangement(LinearArrangement::spaced_by(24.0)),
-                move || {
-                    Text(
-                        "Cranpose in a headset",
-                        Modifier::empty(),
-                        sized(36.0, Some(FontWeight::BOLD)),
-                    );
-                    Text(
-                        "This panel is a layer of the headset's compositor, which draws its text once at the display's resolution.",
-                        Modifier::empty(),
-                        sized(22.0, None),
-                    );
-                    Button(
-                        Modifier::empty()
-                            .background(Color(0.25, 0.45, 0.95, 1.0))
-                            .rounded_corners(16.0)
-                            .padding_symmetric(32.0, 18.0),
-                        ButtonSpec::default(),
-                        move || presses.set(presses.get() + 1),
-                        move || {
-                            Text(
-                                format!("Pressed {} times", presses.get()),
-                                Modifier::empty(),
-                                sized(24.0, Some(FontWeight::BOLD)),
-                            );
-                        },
-                    );
-                },
-            );
-        });
+        SpatialPanel(
+            SubspaceModifier::new().size(800.0, 500.0).movable(),
+            move || {
+                Column(
+                    Modifier::empty()
+                        .fill_max_size()
+                        .background(Color(0.1, 0.11, 0.14, 0.94))
+                        .rounded_corners(24.0)
+                        .padding(40.0),
+                    ColumnSpec::default().vertical_arrangement(LinearArrangement::spaced_by(24.0)),
+                    move || {
+                        Text(
+                            "Cranpose in a headset",
+                            Modifier::empty(),
+                            sized(36.0, Some(FontWeight::BOLD)),
+                        );
+                        Text(
+                            "This panel is a layer of the headset's compositor, which draws its text once at the display's resolution.",
+                            Modifier::empty(),
+                            sized(22.0, None),
+                        );
+                        Button(
+                            Modifier::empty()
+                                .background(Color(0.25, 0.45, 0.95, 1.0))
+                                .rounded_corners(16.0)
+                                .padding_symmetric(32.0, 18.0),
+                            ButtonSpec::default(),
+                            move || presses.set(presses.get() + 1),
+                            move || {
+                                Text(
+                                    format!("Pressed {} times", presses.get()),
+                                    Modifier::empty(),
+                                    sized(24.0, Some(FontWeight::BOLD)),
+                                );
+                            },
+                        );
+                    },
+                );
+            },
+        );
         SpatialPanel(
             SubspaceModifier::new()
                 .size(320.0, 200.0)

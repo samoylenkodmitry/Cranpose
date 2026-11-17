@@ -47,6 +47,7 @@ fn PlacedPanel(
     .with(|panel| *panel);
     space.place(panel, size, SUBSPACE_ORIGIN.then(&modifier.pose()));
     let id = panel.id;
+    space.set_mobility(id, modifier.mobility());
     DisposableEffect(id, move |_| {
         DisposableEffectResult::new(move || space.remove(id))
     });

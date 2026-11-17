@@ -9,6 +9,12 @@
 //! [`android_main!`] starts the app as an immersive app. Elsewhere the composables draw flat.
 
 #[cfg(any(test, all(feature = "openxr", target_os = "android")))]
+mod aim_filter;
+#[cfg(any(test, all(feature = "openxr", target_os = "android")))]
+mod beam_pose;
+#[cfg(any(test, all(feature = "openxr", target_os = "android")))]
+mod carry;
+#[cfg(any(test, all(feature = "openxr", target_os = "android")))]
 mod pointer;
 mod pose;
 mod ray;
