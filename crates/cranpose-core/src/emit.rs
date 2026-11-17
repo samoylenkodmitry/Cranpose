@@ -251,8 +251,9 @@ impl Composer {
         self.emit_node_box::<N>(source, |_| EmittedNode::Fresh(Box::new(init())))
     }
 
-    /// Emits a node of type `N` as `emit_node` does, reusing a pooled node when one exists. A
-    /// pooled `N` is cleared by `reset`, and otherwise `init` makes a new node.
+    /// Emits a node of type `N` as `emit_node` does, reusing a pooled node when one exists. With
+    /// no pooled `N`, `init` makes a bare one in a new box. `reset` then makes the pooled or bare
+    /// node this emit's node, where it lies.
     #[track_caller]
     pub fn emit_recyclable_node<N: Node + 'static>(
         &self,
@@ -274,11 +275,13 @@ impl Composer {
                 );
             }
 
-            let node = Box::new(init());
+            // The box comes first, so `init` can make the node in it.
+            let mut node = Box::write(Box::new_uninit(), init());
             applier.record_fresh_recyclable_creation(key);
             if let Some(shell) = node.rehouse_for_recycle() {
                 applier.seed_recycled_node_shell(key, node.recycle_pool_limit(), shell);
             }
+            reset(&mut node);
             EmittedNode::Fresh(node)
         })
     }

@@ -12,6 +12,7 @@ use cranpose_ui_layout::MeasurePolicy;
 
 use super::layout_invalidation_diag::log_layout_invalidation_dispatch;
 
+mod shell;
 mod tree_node;
 use crate::{
     layout::LayoutRuntimeState,
@@ -90,17 +91,12 @@ pub(crate) fn empty_measure_policy() -> Rc<dyn MeasurePolicy> {
 impl LayoutNode {
     /// Creates a node with `modifier` whose children `measure_policy` measures and places.
     pub fn new(modifier: Modifier, measure_policy: Rc<dyn MeasurePolicy>) -> Self {
-        Self::new_in(modifier, measure_policy, LayoutEnvironment::default())
-    }
-
-    // A node at the density and in the layout direction of `environment`,
-    // where a composition makes it.
-    pub(crate) fn new_in(
-        modifier: Modifier,
-        measure_policy: Rc<dyn MeasurePolicy>,
-        environment: LayoutEnvironment,
-    ) -> Self {
-        Self::new_with_virtual(modifier, measure_policy, false, environment)
+        Self::new_with_virtual(
+            modifier,
+            measure_policy,
+            false,
+            LayoutEnvironment::default(),
+        )
     }
 
     /// Create a virtual LayoutNode for subcomposition slot containers.

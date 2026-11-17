@@ -135,15 +135,15 @@ pub(crate) fn compose_empty_layout(
 // The steps of emitting a layout node that know its policy's type;
 // `emit_layout_node` takes the rest, compiled once for every policy type.
 trait PolicyUpdate {
-    // A node with `modifier` in `environment`, measured by the policy.
-    fn new_node(&self, modifier: Modifier, environment: LayoutEnvironment) -> LayoutNode;
+    // The policy as a node holds it.
+    fn held(&self) -> Rc<dyn MeasurePolicy>;
     // Gives `node` the policy, unless the one it holds equals it.
     fn update(&self, node: &mut LayoutNode);
 }
 
 impl<P: MeasurePolicy + Clone + PartialEq> PolicyUpdate for P {
-    fn new_node(&self, modifier: Modifier, environment: LayoutEnvironment) -> LayoutNode {
-        LayoutNode::new_in(modifier, held_policy(self), environment)
+    fn held(&self) -> Rc<dyn MeasurePolicy> {
+        held_policy(self)
     }
 
     fn update(&self, node: &mut LayoutNode) {
@@ -210,8 +210,8 @@ fn emit_layout_node(
 ) -> (NodeId, Vec<cranpose_core::ProvidedValue>, HeldChildren) {
     let provided = modifier.provided_locals();
     let emitted = Cell::new(Emitted::Kept);
-    let make = || {
-        let node = policy.new_node(modifier.to_modifier(), environment);
+    let fill = |node: &mut LayoutNode| {
+        node.fill(&modifier.to_modifier(), policy.held(), environment);
         let reads_locals = node
             .modifier_capabilities()
             .contains(NodeCapabilities::MODIFIER_LOCALS);
@@ -220,9 +220,8 @@ fn emit_layout_node(
         } else {
             Emitted::Made
         });
-        node
     };
-    let id = composer.emit_recyclable_node(make, |node| *node = make());
+    let id = composer.emit_recyclable_node(LayoutNode::bare_shell, fill);
     if emitted.get() == Emitted::Made {
         return (id, provided, HeldChildren::Made);
     }
