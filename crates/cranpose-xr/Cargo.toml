@@ -29,6 +29,10 @@ openxr = [
     "dep:android-activity",
 ]
 
+# Times the streamed scenes' passes on the CPU and the GPU, and logs the cost once a second. Off, the
+# passes run with no timing.
+stream-costs = ["openxr"]
+
 [dependencies]
 cranpose = { workspace = true }
 cranpose-core = { workspace = true }

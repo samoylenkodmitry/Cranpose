@@ -12,6 +12,7 @@ mod refresh_rate;
 mod runner;
 mod session;
 mod static_image;
+mod stream_costs;
 mod stream_layers;
 mod surface_layers;
 mod surface_swapchain;

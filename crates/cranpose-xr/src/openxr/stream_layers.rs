@@ -5,8 +5,6 @@
 //! frame was rendered with. The compositor reprojects the pictures from those poses to the
 //! head's newer pose. While no newer frame comes, the layer shows the last pictures again.
 
-use std::time::{Duration, Instant};
-
 use cranpose::{CropRect, VideoFrame};
 use openxr as xr;
 
@@ -14,14 +12,12 @@ use super::{
     external_texture::{ExternalTexture, Pass, Target},
     gl_context::GlContext,
     session::{ProjectionEye, ProjectionLayer, XrSession},
+    stream_costs::Costs,
 };
 use crate::{StreamedView, StreamedViews, space::Space, stream_source::StreamSource};
 
-const GL_RGBA8: u32 = 0x8058;
 const GL_SRGB8_ALPHA8: u32 = 0x8C43;
-
-// How often the log reports the cost of the passes.
-const REPORT_EVERY: Duration = Duration::from_secs(1);
+const GL_RGBA8: u32 = 0x8058;
 
 // One eye's swapchain.
 struct EyeTarget {
@@ -44,16 +40,8 @@ struct Stream {
     views: Option<StreamedViews>,
     // Whether the stream failed and shows nothing
     failed: bool,
-}
-
-// What the passes cost since the last report.
-#[derive(Default)]
-struct Costs {
-    frames: u32,
-    cpu: Duration,
-    gpu: Duration,
-    gpu_frames: u32,
-    since: Option<Instant>,
+    // Whether the latest frame's views were refused, so that the log says it once
+    refused: bool,
 }
 
 pub(crate) struct StreamLayers {
@@ -66,20 +54,24 @@ pub(crate) struct StreamLayers {
 
 impl StreamLayers {
     pub(crate) fn new(gl: &GlContext, xr_session: &XrSession) -> Self {
+        let mut costs = None;
         let importer = match ExternalTexture::new(gl) {
-            Ok(importer) => Some(importer),
+            Ok(mut importer) => {
+                costs = Some(Costs::new(&mut importer));
+                Some(importer)
+            }
             Err(error) => {
                 log::warn!("cranpose xr: no streamed scenes: {error}");
                 None
             }
         };
-        // The pictures are encoded already, as a surface's pictures are. A swapchain of the
-        // plain format shows its bytes as they are.
+        // The shader writes linear light. An sRGB swapchain keeps the picture's own bytes, and
+        // loses no precision in the darks.
         let formats = xr_session
             .session
             .enumerate_swapchain_formats()
             .unwrap_or_default();
-        let format = [GL_RGBA8, GL_SRGB8_ALPHA8]
+        let format = [GL_SRGB8_ALPHA8, GL_RGBA8]
             .into_iter()
             .find(|format| formats.contains(format))
             .unwrap_or(GL_RGBA8);
@@ -87,7 +79,7 @@ impl StreamLayers {
             importer,
             format,
             streams: Vec::new(),
-            costs: Costs::default(),
+            costs: costs.unwrap_or_default(),
         }
     }
 
@@ -124,6 +116,7 @@ impl StreamLayers {
                         eyes: [None, None],
                         views: None,
                         failed: false,
+                        refused: false,
                     });
                     self.streams.len() - 1
                 }
@@ -138,16 +131,12 @@ impl StreamLayers {
             if stream.failed {
                 continue;
             }
-            let started = Instant::now();
-            importer.begin_timer();
+            self.costs.begin(importer);
             let drawn = draw_frame(importer, self.format, xr_session, stream, &source, frame);
-            importer.end_timer();
-            match drawn {
-                Ok(()) => self.costs.record(importer, started),
-                Err(error) => {
-                    log::error!("cranpose xr: the streamed scene {id} ends: {error}");
-                    stream.failed = true;
-                }
+            self.costs.end(importer);
+            if let Err(error) = drawn {
+                log::error!("cranpose xr: the streamed scene {id} ends: {error}");
+                stream.failed = true;
             }
         }
     }
@@ -193,31 +182,6 @@ fn delete_targets(importer: &ExternalTexture, stream: &mut Stream) {
     }
 }
 
-impl Costs {
-    // Counts a drawn frame, and logs the costs once in a while.
-    fn record(&mut self, importer: &mut ExternalTexture, started: Instant) {
-        self.frames += 1;
-        self.cpu += started.elapsed();
-        while let Some(gpu) = importer.gpu_time() {
-            self.gpu += gpu;
-            self.gpu_frames += 1;
-        }
-        let since = *self.since.get_or_insert_with(Instant::now);
-        if since.elapsed() < REPORT_EVERY {
-            return;
-        }
-        let mean =
-            |total: Duration, count: u32| total.as_secs_f64() * 1000.0 / f64::from(count.max(1));
-        log::info!(
-            "cranpose xr: streamed scene drew {} frames, {:.2} ms of CPU and {:.2} ms of GPU for each",
-            self.frames,
-            mean(self.cpu, self.frames),
-            mean(self.gpu, self.gpu_frames),
-        );
-        *self = Self::default();
-    }
-}
-
 // Draws `frame` into the stream's swapchains and remembers its views.
 fn draw_frame(
     importer: &mut ExternalTexture,
@@ -232,10 +196,14 @@ fn draw_frame(
     let views = match (source.views)(frame.info().metadata).checked(picture) {
         Ok(views) => views,
         Err(reason) => {
-            log::warn!("cranpose xr: a frame's views are refused: {reason}");
+            if !stream.refused {
+                log::warn!("cranpose xr: the views of a streamed frame are refused: {reason}");
+            }
+            stream.refused = true;
             return Ok(());
         }
     };
+    stream.refused = false;
     let rects = [views.left.rect, views.right.rect];
     for (slot, rect) in stream.eyes.iter_mut().zip(rects) {
         let size = (rect.width, rect.height);

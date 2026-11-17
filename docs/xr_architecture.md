@@ -132,14 +132,17 @@ newer frame comes, the layer shows its last pictures again. The scene lies over 
 the curved panels, the panels, the surfaces, the handles and the rays.
 
 The backend keeps the drawn frame until the next one is drawn, because the GPU may still read its
-buffer. The swapchains hold the encoded picture bytes as they are, in a plain `RGBA8` format,
-which the compositor shows as it shows a surface's pictures. The pass draws each picture's top
-at its image's last row, and the layer needs no `VERTICAL_FLIP` layout, which a quad of wgpu's
-images and a surface's quad need.
+buffer. The swapchains have the `SRGB8_ALPHA8` format, and the shader turns the picture's encoded
+values into linear light, so that the swapchain keeps the picture's own bytes. A plain `RGBA8`
+swapchain has no such conversion: the compositor reads it as linear light, and a picture written
+into it as it is shows lighter than the same picture in a surface (a gray of 128 shows as
+191). The pass draws each picture's top at its image's last row, and the layer needs no
+`VERTICAL_FLIP` layout, which a quad of wgpu's images and a surface's quad need.
 
 On a Quest 3 the pass costs 0.4 ms of CPU and 0.03 ms of GPU for a frame of two 320 by 360 pixel
 pictures, and 0.4 ms and 0.3 ms for two 1920 by 1080 pixel pictures. A frame comes 30 times a
-second in the demo, and the headset runs at 120 Hz.
+second in the demo, and the headset runs at 120 Hz. The `stream-costs` feature of `cranpose-xr`
+times the passes and logs the costs once a second. Without it the passes run with no timing.
 
 ## Crates
 

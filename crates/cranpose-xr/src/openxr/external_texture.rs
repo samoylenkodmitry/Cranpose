@@ -10,7 +10,9 @@
     reason = "GL and EGL calls, and function pointers that eglGetProcAddress returns"
 )]
 
-use std::{ffi::c_void, mem, num::NonZeroU32, time::Duration};
+#[cfg(feature = "stream-costs")]
+use std::time::Duration;
+use std::{ffi::c_void, mem, num::NonZeroU32};
 
 use glow::HasContext;
 
@@ -24,6 +26,7 @@ const TEXTURE_EXTERNAL_OES: u32 = 0x8D65;
 // the bottom one, so each pass puts the buffer's first row at the target's last row.
 const FLIP_ROWS: bool = true;
 // The queries in flight at once, so that a result is read some frames after its pass.
+#[cfg(feature = "stream-costs")]
 const TIMERS: usize = 3;
 
 type CreateImage = unsafe extern "C" fn(
@@ -54,8 +57,14 @@ precision highp float;
 uniform samplerExternalOES picture;
 in vec2 uv;
 out vec4 color;
+// The picture's values are encoded like an sRGB picture. The swapchain holds linear light:
+// the compositor reads a plain format as linear, and an sRGB format encodes what the pass
+// writes.
+vec3 linear(vec3 encoded) {
+    return mix(encoded / 12.92, pow((encoded + 0.055) / 1.055, vec3(2.4)), step(0.04045, encoded));
+}
 void main() {
-    color = vec4(texture(picture, uv).rgb, 1.0);
+    color = vec4(linear(texture(picture, uv).rgb), 1.0);
 }
 ";
 
@@ -83,10 +92,12 @@ pub(crate) struct ExternalTexture {
     step: Option<glow::UniformLocation>,
     texture: glow::Texture,
     array: glow::VertexArray,
+    #[cfg(feature = "stream-costs")]
     timers: Option<Timers>,
 }
 
 // Queries of the GPU time that the passes take, read without waiting.
+#[cfg(feature = "stream-costs")]
 struct Timers {
     queries: [glow::Query; TIMERS],
     // The next query to begin, and how many are in flight
@@ -147,7 +158,6 @@ impl ExternalTexture {
             }
             gl.bind_texture(TEXTURE_EXTERNAL_OES, None);
             let array = gl.create_vertex_array()?;
-            let timers = Timers::new(&gl);
             Ok(Self {
                 gl,
                 display,
@@ -160,7 +170,8 @@ impl ExternalTexture {
                 step,
                 texture,
                 array,
-                timers,
+                #[cfg(feature = "stream-costs")]
+                timers: None,
             })
         }
     }
@@ -271,6 +282,13 @@ impl ExternalTexture {
         Ok(())
     }
 
+    #[cfg(feature = "stream-costs")]
+    // Times the GPU work of the passes, if the driver can.
+    pub(crate) fn enable_timing(&mut self) {
+        self.timers = Timers::new(&self.gl);
+    }
+
+    #[cfg(feature = "stream-costs")]
     // Starts timing the GPU time of the passes that follow.
     pub(crate) fn begin_timer(&mut self) {
         let Some(timers) = &mut self.timers else {
@@ -286,6 +304,7 @@ impl ExternalTexture {
         }
     }
 
+    #[cfg(feature = "stream-costs")]
     // Stops the timing that `begin_timer` began.
     pub(crate) fn end_timer(&mut self) {
         let Some(timers) = &mut self.timers else {
@@ -300,6 +319,7 @@ impl ExternalTexture {
         timers.pending += 1;
     }
 
+    #[cfg(feature = "stream-costs")]
     // The GPU time of the oldest timed passes, if their result is ready. It never waits.
     pub(crate) fn gpu_time(&mut self) -> Option<Duration> {
         let timers = self.timers.as_mut()?;
@@ -326,8 +346,10 @@ impl ExternalTexture {
 }
 
 // `GL_GPU_DISJOINT_EXT`: set when a timer result is not reliable.
+#[cfg(feature = "stream-costs")]
 const GPU_DISJOINT: u32 = 0x8FBB;
 
+#[cfg(feature = "stream-costs")]
 impl Timers {
     fn new(gl: &glow::Context) -> Option<Self> {
         if !gl
@@ -357,6 +379,7 @@ impl Drop for ExternalTexture {
         // SAFETY: the context is current on this thread until the session's end, and every
         // object is live and owned here.
         unsafe {
+            #[cfg(feature = "stream-costs")]
             if let Some(timers) = self.timers.take() {
                 for query in timers.queries {
                     self.gl.delete_query(query);

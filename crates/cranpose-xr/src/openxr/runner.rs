@@ -231,7 +231,11 @@ impl Immersive {
                 quads.extend(self.rays.layers(&self.pointer.beams(), head.position));
             }
         }
-        let streams = self.streams.layers();
+        let streams = if shown {
+            self.streams.layers()
+        } else {
+            Vec::new()
+        };
         self.xr_session
             .end_frame(frame.predicted_display_time, &streams, &cylinders, &quads)?;
         drop((streams, cylinders, quads));
