@@ -15,7 +15,7 @@
 "clippy::missing_assert_message" = 180
 "clippy::needless_pass_by_value" = 165
 "clippy::ref_option" = 16
-"clippy::significant_drop_tightening" = 198
+"clippy::significant_drop_tightening" = 196
 "clippy::string_slice" = 219
 "clippy::too_many_lines" = 94
 "clippy::trivially_copy_pass_by_ref" = 29

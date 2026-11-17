@@ -3,6 +3,9 @@
 #![cfg(any(target_os = "macos", target_os = "ios"))]
 
 use std::{
+    future::Future,
+    pin::pin,
+    task::{Context, Waker},
     thread,
     time::{Duration, Instant},
 };
@@ -62,12 +65,28 @@ fn play(decoder: &mut VideoDecoder, units: &[&[u8]], expected: usize) -> Vec<Pic
         }
         drain(&frames, &mut out);
     }
-    let deadline = Instant::now() + Duration::from_secs(2);
-    while out.len() < expected && Instant::now() < deadline {
+    wait_until(|| {
         drain(&frames, &mut out);
+        out.len() >= expected
+    });
+    out
+}
+
+// Polls `done` until it is true, for two seconds at most, and tells whether it became true. The
+// decoder's thread outputs the pictures, and the counts that it keeps are the only signal.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test waits for a thread of the decoder, and a poll is the way to see its counts"
+)]
+fn wait_until(mut done: impl FnMut() -> bool) -> bool {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while !done() {
+        if Instant::now() >= deadline {
+            return false;
+        }
         thread::sleep(Duration::from_millis(1));
     }
-    out
+    true
 }
 
 fn drain(frames: &DecodedFrames, out: &mut Vec<Picture>) {
@@ -118,10 +137,7 @@ fn a_decoder_skips_units_until_a_keyframe_brings_the_parameter_sets() {
     decoder.submit(unit(units[0], 2)).expect("the keyframe");
     decoder.submit(unit(units[1], 3)).expect("the next picture");
     let frames = decoder.frames();
-    let deadline = Instant::now() + Duration::from_secs(2);
-    while frames.stats().decoded < 2 && Instant::now() < deadline {
-        thread::sleep(Duration::from_millis(1));
-    }
+    assert!(wait_until(|| frames.stats().decoded >= 2));
     assert_eq!(frames.stats().decoded, 2);
 }
 
@@ -153,16 +169,12 @@ fn an_app_that_holds_every_picture_makes_the_decoder_drop_the_new_ones() {
     let frames = decoder.frames();
     let mut held = Vec::new();
     for (index, data) in units.iter().take(20).enumerate() {
-        while let Err(DecoderError::Full) = decoder.submit(unit(data, index as u64)) {
-            thread::sleep(Duration::from_millis(1));
-        }
+        // A full decoder waits for room in `submit`, so the retry does not spin
+        while let Err(DecoderError::Full) = decoder.submit(unit(data, index as u64)) {}
         // The app takes the oldest picture and keeps it
         held.extend(frames.next_frame());
     }
-    let deadline = Instant::now() + Duration::from_secs(2);
-    while frames.stats().decoded < 20 && Instant::now() < deadline {
-        thread::sleep(Duration::from_millis(1));
-    }
+    assert!(wait_until(|| frames.stats().decoded >= 20));
     assert_eq!(frames.stats().decoded, 20);
     // The pool holds `DEPTH` pictures in all, so the app got that many and no more
     held.extend(frames.next_frame());
@@ -171,10 +183,7 @@ fn an_app_that_holds_every_picture_makes_the_decoder_drop_the_new_ones() {
     // A picture that the app drops frees a place for the next one
     drop(held);
     decoder.submit(unit(units[20], 20)).expect("a unit");
-    let deadline = Instant::now() + Duration::from_secs(2);
-    while frames.stats().decoded < 21 && Instant::now() < deadline {
-        thread::sleep(Duration::from_millis(1));
-    }
+    assert!(wait_until(|| frames.stats().decoded >= 21));
     assert!(frames.next_frame().is_some());
 }
 
@@ -183,30 +192,21 @@ fn a_task_wakes_when_the_decoder_outputs_a_picture() {
     let units = split_access_units(VideoCodec::H264, H264_CLIP);
     let mut decoder = decoder(VideoCodec::H264, DEPTH);
     let frames = decoder.frames();
-    let feeder = thread::spawn(move || {
-        thread::sleep(Duration::from_millis(50));
-        decoder.submit(unit(units[0], 0)).expect("the keyframe");
+    for (index, expected) in [(0, 0), (1, 7)] {
+        // No picture waits, so the first poll leaves the waker of a task that does nothing
+        let mut wait = pin!(frames.wait_for_frame());
+        let mut idle = Context::from_waker(Waker::noop());
+        assert!(wait.as_mut().poll(&mut idle).is_pending());
         decoder
-    });
-    pollster::block_on(frames.wait_for_frame());
-    assert_eq!(
-        frames.next_frame().map(|frame| frame.info().metadata),
-        Some(0)
-    );
-    // With no picture waiting, the wait does not end until one comes
-    let mut decoder = feeder.join().expect("the feeder");
-    let units = split_access_units(VideoCodec::H264, H264_CLIP);
-    let feeder = thread::spawn(move || {
-        thread::sleep(Duration::from_millis(50));
-        decoder.submit(unit(units[1], 1)).expect("the next picture");
-        decoder
-    });
-    pollster::block_on(frames.wait_for_frame());
-    assert_eq!(
-        frames.next_frame().map(|frame| frame.info().metadata),
-        Some(7)
-    );
-    drop(feeder.join().expect("the feeder"));
+            .submit(unit(units[index], index as u64))
+            .expect("a unit");
+        // Another task takes the waker's place, and the decoder's thread wakes it
+        pollster::block_on(wait);
+        assert_eq!(
+            frames.next_frame().map(|frame| frame.info().metadata),
+            Some(expected)
+        );
+    }
 }
 
 #[test]

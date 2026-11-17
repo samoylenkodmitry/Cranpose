@@ -231,6 +231,7 @@ impl Shared {
             }
         }
         pending.push(unit);
+        drop(pending);
         Ok(())
     }
 
