@@ -340,7 +340,7 @@ impl Composer {
                 // to the parent: its node needs no visit.
                 let attached_before = frame.previous.get(frame.new_children.len()) == Some(&id);
                 if matches!(attach_mode, ParentAttachMode::DeferredSync) {
-                    frame.new_children.push(id);
+                    frame.push_new_child(id);
                 }
                 drop(parent_stack);
 
@@ -473,8 +473,10 @@ impl Composer {
         let in_subcompose = !self.core.subcompose_stack.borrow().is_empty();
 
         let children = self.get_node_children(id);
-        let previous = if children.is_empty() {
-            ChildList::new()
+        // A list that left its inline room keeps its block: the frame takes
+        // it whole.
+        let previous = if children.spilled() {
+            ChildList::from_vec(children.into_vec())
         } else {
             ChildList::from_slice(&children)
         };

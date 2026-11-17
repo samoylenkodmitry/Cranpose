@@ -584,6 +584,54 @@ fn composing_a_row_of_boxes_allocates_within_its_budget() {
     }
 }
 
+// Allocations and reallocations a pass of a body that reads a state and
+// composes a column of `count` boxes again, which keeps them all.
+fn column_recomposition_allocations(count: usize) -> usize {
+    let tick_handle = Rc::new(Cell::new(None));
+    let output = Rc::clone(&tick_handle);
+    let mut composition = run_test_composition(move || {
+        let tick = remember(|| mutableStateOf(0_u32)).with(|state| *state);
+        output.set(Some(tick));
+        let value = tick.value();
+        Column(Modifier::empty(), ColumnSpec::default(), move || {
+            let _ = value;
+            for _ in 0..count {
+                Box(Modifier::empty(), BoxSpec::default(), || {});
+            }
+        });
+    });
+    let tick = tick_handle.get().expect("the tick state");
+    let mut pass = |index: u32| {
+        tick.set_value(index);
+        while composition
+            .process_invalid_scopes()
+            .expect("the column composes again")
+        {}
+    };
+    for index in 1..3 {
+        pass(index);
+    }
+    let region = Region::new(GLOBAL);
+    for index in 3..3 + PASSES as u32 {
+        pass(index);
+    }
+    let change = region.change();
+    (change.allocations + change.reallocations) / PASSES
+}
+
+// A pass that composes a parent's children again reads them into one list
+// and gives the children it composes a list of their number at once: a
+// column of 600 boxes allocates and grows no more a pass than one of 20.
+fn composing_a_wide_column_again_allocates_what_a_narrow_one_does() {
+    let narrow = column_recomposition_allocations(20);
+    let wide = column_recomposition_allocations(600);
+    println!("allocations of composing a column again: 20 boxes {narrow}, 600 boxes {wide}");
+    assert!(
+        wide <= narrow,
+        "{wide} allocations a pass for 600 boxes, {narrow} for 20"
+    );
+}
+
 /// A modifier chain built link by link keeps its elements in one shared
 /// allocation it extends in place, so each link costs its element alone.
 fn a_modifier_chain_allocates_its_elements_and_one_shared_box() {
@@ -699,6 +747,7 @@ fn layout_and_modifiers_stay_within_their_allocation_budgets() {
     remeasuring_a_long_paragraph_keeps_its_glyph_storage();
     a_rest_gives_back_a_long_paragraph_glyph_room();
     composing_a_row_of_boxes_allocates_within_its_budget();
+    composing_a_wide_column_again_allocates_what_a_narrow_one_does();
     if !cfg!(feature = "inspection") {
         a_modifier_chain_allocates_its_elements_and_one_shared_box();
     }

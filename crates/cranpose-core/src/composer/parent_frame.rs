@@ -14,6 +14,21 @@ pub(crate) struct ParentFrame {
     pub(crate) last_made: Option<NodeId>,
 }
 
+impl ParentFrame {
+    // Adds `id` to the children the pass composes. A list that outgrows its
+    // room takes the room of the children the node held at once, as a pass
+    // mostly composes as many again, and doubles past them.
+    #[inline]
+    pub(crate) fn push_new_child(&mut self, id: NodeId) {
+        let len = self.new_children.len();
+        if len == self.new_children.capacity() {
+            let room = self.previous.len().saturating_sub(len).max(len).max(1);
+            self.new_children.reserve_exact(room);
+        }
+        self.new_children.push(id);
+    }
+}
+
 #[derive(Clone, Copy)]
 pub(crate) enum InitialParentFrame {
     SyntheticRoot,
