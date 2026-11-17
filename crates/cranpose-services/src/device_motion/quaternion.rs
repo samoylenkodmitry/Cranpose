@@ -83,7 +83,7 @@ impl Quaternion {
     /// tilted device, `rotation.conjugate().rotate([0.0, 0.0, -1.0])` must
     /// equal the `gravity` of the same `CMDeviceMotion`.
     pub fn from_core_motion(x: f64, y: f64, z: f64, w: f64) -> Self {
-        Self::new(-x as f32, -y as f32, -z as f32, w as f32).normalized()
+        Self::new(narrow(-x), narrow(-y), narrow(-z), narrow(w)).normalized()
     }
 
     /// The rotation of the screen frame instead of the device frame, for a
@@ -110,13 +110,26 @@ impl Quaternion {
         let (sin_gamma, cos_gamma) = (gamma.to_radians() / 2.0).sin_cos();
         let (sin_alpha, cos_alpha) = (alpha.to_radians() / 2.0).sin_cos();
         Self::new(
-            (sin_beta * cos_gamma * cos_alpha - cos_beta * sin_gamma * sin_alpha) as f32,
-            (cos_beta * sin_gamma * cos_alpha + sin_beta * cos_gamma * sin_alpha) as f32,
-            (cos_beta * cos_gamma * sin_alpha + sin_beta * sin_gamma * cos_alpha) as f32,
-            (cos_beta * cos_gamma * cos_alpha - sin_beta * sin_gamma * sin_alpha) as f32,
+            narrow(sin_beta * cos_gamma * cos_alpha - cos_beta * sin_gamma * sin_alpha),
+            narrow(cos_beta * sin_gamma * cos_alpha + sin_beta * cos_gamma * sin_alpha),
+            narrow(cos_beta * cos_gamma * sin_alpha + sin_beta * sin_gamma * cos_alpha),
+            narrow(cos_beta * cos_gamma * cos_alpha - sin_beta * sin_gamma * sin_alpha),
         )
         .normalized()
     }
+}
+
+// A component of a unit quaternion as the nearest `f32`: the precision a
+// sample keeps. A component lies within -1 and 1, so the value stays finite.
+fn narrow(component: f64) -> f32 {
+    // Only the lint budget's run turns this lint on, so an `expect` would
+    // go unmet in every other build.
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "a component within -1 and 1 loses only the digits `f32` does not hold"
+    )]
+    let narrow = component as f32;
+    narrow
 }
 
 // `self * other` turns a vector by `other` first, then by `self`.

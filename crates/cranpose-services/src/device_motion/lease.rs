@@ -28,13 +28,17 @@ pub struct DeviceMotionLease {
     id: u64,
 }
 
+// Runs `change` with the lock held and releases the lock when it returns.
+fn locked<R>(change: impl FnOnce(&mut Session) -> R) -> R {
+    change(&mut SESSION.lock())
+}
+
 impl Drop for DeviceMotionLease {
     fn drop(&mut self) {
-        let changed = {
-            let mut session = SESSION.lock();
+        let changed = locked(|session| {
             session.leases.retain(|(id, _)| *id != self.id);
-            reconcile(&mut session)
-        };
+            reconcile(session)
+        });
         announce(changed);
     }
 }
@@ -48,13 +52,12 @@ impl Drop for DeviceMotionLease {
 ///
 /// [`request_device_motion_permission`]: super::request_device_motion_permission
 pub fn start_device_motion(config: MotionConfig) -> DeviceMotionLease {
-    let (id, changed) = {
-        let mut session = SESSION.lock();
+    let (id, changed) = locked(|session| {
         let id = session.next_id;
         session.next_id += 1;
         session.leases.push((id, config));
-        (id, reconcile(&mut session))
-    };
+        (id, reconcile(session))
+    });
     announce(changed);
     DeviceMotionLease { id }
 }
@@ -87,14 +90,13 @@ pub(super) fn forget_running() {
 }
 
 pub(super) fn refresh() {
-    let changed = {
-        let mut session = SESSION.lock();
-        let mut changed = reconcile(&mut session);
+    let changed = locked(|session| {
+        let mut changed = reconcile(session);
         if session.running.is_none() {
             changed |= store_status(resting_status());
         }
         changed
-    };
+    });
     announce(changed);
 }
 

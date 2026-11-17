@@ -302,8 +302,11 @@ fn a_reader_on_another_thread_never_sees_a_torn_sample() {
     while !writer.is_finished() {
         if let Some(sample) = latest_device_motion() {
             let Quaternion { x, y, z, w } = sample.rotation;
+            // The writer stores the number of the sample in all four parts. A
+            // bit pattern compares exactly, without the float `==`.
+            let expected = (sample.timestamp_ns as f32).to_bits();
             assert!(
-                x == y && y == z && z == w && x as u64 == sample.timestamp_ns,
+                [x, y, z, w].iter().all(|part| part.to_bits() == expected),
                 "a torn sample: {sample:?}"
             );
             assert_eq!(sample.index, sample.timestamp_ns, "index of another sample");
@@ -391,22 +394,18 @@ fn a_device_lying_face_up_is_the_identity_and_upright_turns_y_onto_up() {
 
 #[test]
 fn the_angles_of_a_web_page_compose_in_the_order_the_standard_names() {
-    let (alpha, beta, gamma) = (30.0_f64, 50.0_f64, 20.0_f64);
-    let about = |axis: [f32; 3], degrees: f64| {
+    let (alpha, beta, gamma) = (30.0_f32, 50.0_f32, 20.0_f32);
+    let about = |axis: [f32; 3], degrees: f32| {
         let (sin, cos) = (degrees.to_radians() / 2.0).sin_cos();
-        Quaternion::new(
-            axis[0] * sin as f32,
-            axis[1] * sin as f32,
-            axis[2] * sin as f32,
-            cos as f32,
-        )
+        Quaternion::new(axis[0] * sin, axis[1] * sin, axis[2] * sin, cos)
     };
     // z by alpha, then the turned x by beta, then the twice turned y by
     // gamma: each later turn is on the right of the product.
     let composed = about([0.0, 0.0, 1.0], alpha)
         * about([1.0, 0.0, 0.0], beta)
         * about([0.0, 1.0, 0.0], gamma);
-    let reported = Quaternion::from_device_orientation(alpha, beta, gamma);
+    let reported =
+        Quaternion::from_device_orientation(f64::from(alpha), f64::from(beta), f64::from(gamma));
     for vector in [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]] {
         assert!(close(composed.rotate(vector), reported.rotate(vector)));
     }
