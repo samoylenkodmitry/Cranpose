@@ -2,10 +2,10 @@ use cranpose_foundation::PointerEventKind::{Cancel, Down, Move, Up};
 
 use super::*;
 
-type Log = Rc<RefCell<Vec<(PointerId, PointerEventKind)>>>;
+type Log = Rc<RefCell<Vec<(PointerId, PointerEventKind, Option<i64>)>>>;
 
-/// A shell whose whole surface records the id and kind of each press,
-/// release, cancel and pressed move it gets (no hover), and the router
+/// A shell whose whole surface records the id, kind and sample time of each
+/// press, release, cancel and pressed move it gets (no hover), and the router
 /// that feeds it fingers numbered by `u32`.
 fn recording_shell() -> (AppShell<HitGraphRenderer>, TouchRouter<u32>, Log) {
     let log = Log::default();
@@ -33,7 +33,11 @@ fn recording_shell() -> (AppShell<HitGraphRenderer>, TouchRouter<u32>, Log) {
                                             _ => false,
                                         };
                                         if kept {
-                                            sink.borrow_mut().push((event.id, event.kind));
+                                            sink.borrow_mut().push((
+                                                event.id,
+                                                event.kind,
+                                                event.time_ms,
+                                            ));
                                         }
                                     }
                                 })
@@ -55,20 +59,71 @@ fn recording_shell() -> (AppShell<HitGraphRenderer>, TouchRouter<u32>, Log) {
 fn taken(log: &Log) -> Vec<(u64, PointerEventKind)> {
     std::mem::take(&mut *log.borrow_mut())
         .into_iter()
-        .map(|(id, kind)| (id.0, kind))
+        .map(|(id, kind, _)| (id.0, kind))
         .collect()
+}
+
+#[test]
+fn each_finger_carries_its_platform_sample_time_to_the_gesture() {
+    let _guard = test_guard();
+    let (mut shell, mut router, log) = recording_shell();
+    router.press(
+        &mut shell,
+        Some(11),
+        TouchSample::new(100.0, 100.0).with_time_ms(Some(1_000)),
+    );
+    router.press(
+        &mut shell,
+        Some(22),
+        TouchSample::new(200.0, 100.0).with_time_ms(Some(1_004)),
+    );
+    router.moved(
+        &mut shell,
+        Some(11),
+        TouchSample::new(110.0, 100.0).with_time_ms(Some(1_008)),
+    );
+    router.moved(
+        &mut shell,
+        Some(22),
+        TouchSample::new(210.0, 100.0).with_time_ms(Some(1_012)),
+    );
+    router.release(
+        &mut shell,
+        Some(22),
+        TouchSample::new(210.0, 100.0).with_time_ms(Some(1_016)),
+    );
+    router.release(
+        &mut shell,
+        Some(11),
+        TouchSample::new(110.0, 100.0).with_time_ms(Some(1_020)),
+    );
+    let times = std::mem::take(&mut *log.borrow_mut())
+        .into_iter()
+        .map(|(id, kind, time)| (id.0, kind, time))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        times,
+        [
+            (0, Down, Some(1_000)),
+            (1, Down, Some(1_004)),
+            (0, Move, Some(1_008)),
+            (1, Move, Some(1_012)),
+            (1, Up, Some(1_016)),
+            (0, Up, Some(1_020)),
+        ]
+    );
 }
 
 #[test]
 fn each_finger_drives_its_own_pointer_with_a_stable_id() {
     let _guard = test_guard();
     let (mut shell, mut router, log) = recording_shell();
-    router.press(&mut shell, Some(11), 100.0, 100.0);
-    router.press(&mut shell, Some(22), 200.0, 100.0);
-    router.press(&mut shell, Some(33), 300.0, 100.0);
-    router.moved(&mut shell, Some(22), 210.0, 100.0);
-    router.moved(&mut shell, Some(33), 310.0, 100.0);
-    router.moved(&mut shell, Some(11), 110.0, 100.0);
+    router.press(&mut shell, Some(11), TouchSample::new(100.0, 100.0));
+    router.press(&mut shell, Some(22), TouchSample::new(200.0, 100.0));
+    router.press(&mut shell, Some(33), TouchSample::new(300.0, 100.0));
+    router.moved(&mut shell, Some(22), TouchSample::new(210.0, 100.0));
+    router.moved(&mut shell, Some(33), TouchSample::new(310.0, 100.0));
+    router.moved(&mut shell, Some(11), TouchSample::new(110.0, 100.0));
     assert_eq!(
         taken(&log),
         [
@@ -86,8 +141,8 @@ fn each_finger_drives_its_own_pointer_with_a_stable_id() {
 fn a_finger_that_is_not_down_moves_nothing() {
     let _guard = test_guard();
     let (mut shell, mut router, log) = recording_shell();
-    router.press(&mut shell, Some(11), 100.0, 100.0);
-    assert!(!router.moved(&mut shell, Some(99), 150.0, 150.0));
+    router.press(&mut shell, Some(11), TouchSample::new(100.0, 100.0));
+    assert!(!router.moved(&mut shell, Some(99), TouchSample::new(150.0, 150.0)));
     assert_eq!(taken(&log), [(0, Down)]);
 }
 
@@ -95,10 +150,10 @@ fn a_finger_that_is_not_down_moves_nothing() {
 fn lifting_a_secondary_finger_keeps_the_gesture() {
     let _guard = test_guard();
     let (mut shell, mut router, log) = recording_shell();
-    router.press(&mut shell, Some(11), 100.0, 100.0);
-    router.press(&mut shell, Some(22), 200.0, 100.0);
-    router.release(&mut shell, Some(22), 200.0, 100.0);
-    router.moved(&mut shell, Some(11), 120.0, 100.0);
+    router.press(&mut shell, Some(11), TouchSample::new(100.0, 100.0));
+    router.press(&mut shell, Some(22), TouchSample::new(200.0, 100.0));
+    router.release(&mut shell, Some(22), TouchSample::new(200.0, 100.0));
+    router.moved(&mut shell, Some(11), TouchSample::new(120.0, 100.0));
     assert_eq!(taken(&log), [(0, Down), (1, Down), (1, Up), (0, Move)]);
 }
 
@@ -106,15 +161,15 @@ fn lifting_a_secondary_finger_keeps_the_gesture() {
 fn lifting_the_primary_finger_releases_the_others_first_and_ends_the_gesture() {
     let _guard = test_guard();
     let (mut shell, mut router, log) = recording_shell();
-    router.press(&mut shell, Some(11), 100.0, 100.0);
-    router.press(&mut shell, Some(22), 200.0, 100.0);
-    router.press(&mut shell, Some(33), 300.0, 100.0);
-    router.release(&mut shell, Some(11), 100.0, 100.0);
-    assert!(!router.moved(&mut shell, Some(22), 220.0, 100.0));
+    router.press(&mut shell, Some(11), TouchSample::new(100.0, 100.0));
+    router.press(&mut shell, Some(22), TouchSample::new(200.0, 100.0));
+    router.press(&mut shell, Some(33), TouchSample::new(300.0, 100.0));
+    router.release(&mut shell, Some(11), TouchSample::new(100.0, 100.0));
+    assert!(!router.moved(&mut shell, Some(22), TouchSample::new(220.0, 100.0)));
     // The next finger down drives the primary pointer, and secondary ids
     // start over.
-    router.press(&mut shell, Some(44), 100.0, 200.0);
-    router.press(&mut shell, Some(55), 200.0, 200.0);
+    router.press(&mut shell, Some(44), TouchSample::new(100.0, 200.0));
+    router.press(&mut shell, Some(55), TouchSample::new(200.0, 200.0));
     assert_eq!(
         taken(&log),
         [
@@ -134,10 +189,10 @@ fn lifting_the_primary_finger_releases_the_others_first_and_ends_the_gesture() {
 fn a_secondary_finger_that_leaves_is_released_without_ending_the_gesture() {
     let _guard = test_guard();
     let (mut shell, mut router, log) = recording_shell();
-    router.press(&mut shell, Some(11), 100.0, 100.0);
-    router.press(&mut shell, Some(22), 200.0, 100.0);
+    router.press(&mut shell, Some(11), TouchSample::new(100.0, 100.0));
+    router.press(&mut shell, Some(22), TouchSample::new(200.0, 100.0));
     router.cancel(&mut shell, Some(22), Some((200.0, 100.0)));
-    router.moved(&mut shell, Some(11), 120.0, 100.0);
+    router.moved(&mut shell, Some(11), TouchSample::new(120.0, 100.0));
     assert_eq!(taken(&log), [(0, Down), (1, Down), (1, Up), (0, Move)]);
 }
 
@@ -145,10 +200,10 @@ fn a_secondary_finger_that_leaves_is_released_without_ending_the_gesture() {
 fn the_primary_finger_leaving_cancels_the_gesture() {
     let _guard = test_guard();
     let (mut shell, mut router, log) = recording_shell();
-    router.press(&mut shell, Some(11), 100.0, 100.0);
-    router.press(&mut shell, Some(22), 200.0, 100.0);
+    router.press(&mut shell, Some(11), TouchSample::new(100.0, 100.0));
+    router.press(&mut shell, Some(22), TouchSample::new(200.0, 100.0));
     assert!(router.cancel(&mut shell, Some(11), None));
-    assert!(!router.moved(&mut shell, Some(22), 220.0, 100.0));
+    assert!(!router.moved(&mut shell, Some(22), TouchSample::new(220.0, 100.0)));
     assert_eq!(taken(&log), [(0, Down), (1, Down), (0, Cancel)]);
 }
 
@@ -156,14 +211,14 @@ fn the_primary_finger_leaving_cancels_the_gesture() {
 fn a_leave_after_the_last_lift_still_cancels_and_one_mid_gesture_is_ignored() {
     let _guard = test_guard();
     let (mut shell, mut router, _log) = recording_shell();
-    router.press(&mut shell, Some(11), 100.0, 100.0);
-    router.press(&mut shell, Some(22), 200.0, 100.0);
-    router.release(&mut shell, Some(22), 200.0, 100.0);
+    router.press(&mut shell, Some(11), TouchSample::new(100.0, 100.0));
+    router.press(&mut shell, Some(22), TouchSample::new(200.0, 100.0));
+    router.release(&mut shell, Some(22), TouchSample::new(200.0, 100.0));
     assert!(
         !router.cancel(&mut shell, Some(22), None),
         "a lifted secondary finger's leave changes nothing mid-gesture"
     );
-    router.release(&mut shell, Some(11), 100.0, 100.0);
+    router.release(&mut shell, Some(11), TouchSample::new(100.0, 100.0));
     assert!(
         router.cancel(&mut shell, Some(11), None),
         "with no gesture running, a leave cancels as a single finger's does"
@@ -174,9 +229,9 @@ fn a_leave_after_the_last_lift_still_cancels_and_one_mid_gesture_is_ignored() {
 fn the_mouse_always_drives_the_primary_pointer() {
     let _guard = test_guard();
     let (mut shell, mut router, log) = recording_shell();
-    router.press(&mut shell, None, 100.0, 100.0);
-    router.moved(&mut shell, None, 120.0, 100.0);
-    router.release(&mut shell, None, 120.0, 100.0);
+    router.press(&mut shell, None, TouchSample::new(100.0, 100.0));
+    router.moved(&mut shell, None, TouchSample::new(120.0, 100.0));
+    router.release(&mut shell, None, TouchSample::new(120.0, 100.0));
     assert_eq!(taken(&log), [(0, Down), (0, Move), (0, Up)]);
     assert!(router.cancel(&mut shell, None, None));
 }

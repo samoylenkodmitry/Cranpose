@@ -53,6 +53,8 @@ pub(crate) mod share_sheet;
 #[cfg(feature = "storage-space")]
 pub(crate) mod storage;
 #[cfg(feature = "renderer-wgpu")]
+pub(crate) mod touch_clock;
+#[cfg(feature = "renderer-wgpu")]
 pub(crate) mod uri_handler;
 #[cfg(feature = "renderer-wgpu")]
 pub(crate) mod writable_folder;
