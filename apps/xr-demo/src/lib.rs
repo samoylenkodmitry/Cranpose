@@ -1,17 +1,50 @@
 // A Cranpose app for headsets. In a Meta Quest its two panels stand in the room, and a
 // controller's trigger presses the button. On the desktop the panels draw flat.
 
+use std::{cell::RefCell, rc::Rc};
+
 use cranpose::prelude::*;
 use cranpose_ui::text::{FontWeight, TextUnit};
-use cranpose_xr::{SpatialPanel, Subspace, SubspaceModifier};
+use cranpose_xr::{SpatialExternalSurface, SpatialPanel, StereoMode, Subspace, SubspaceModifier};
+
+mod pattern_writer;
+
+use pattern_writer::{PatternWriter, Split};
 
 cranpose::app_capabilities!();
 
-// The app: a panel with a counter and a smaller panel to the right, turned toward the viewer.
+// The app: a panel with a counter, a smaller panel to the right and a 16:9 video surface to the
+// left, both turned toward the viewer. A thread writes a moving test pattern into the surface,
+// as a video decoder would. A small side-by-side surface above the right panel and a small
+// top-bottom surface below it show a different color to each eye.
 #[composable]
 pub fn XrDemo() {
     let presses = rememberMutableStateOf(|| 0_u32);
     Subspace(move || {
+        PatternSurface(
+            StereoMode::Mono,
+            SubspaceModifier::new()
+                .size(640.0, 360.0)
+                .offset(-760.0, 0.0, 50.0)
+                .rotate(0.0, 25.0, 0.0),
+            Split::Whole,
+        );
+        PatternSurface(
+            StereoMode::SideBySide,
+            SubspaceModifier::new()
+                .size(320.0, 180.0)
+                .offset(600.0, 260.0, 100.0)
+                .rotate(0.0, -30.0, 0.0),
+            Split::LeftRight,
+        );
+        PatternSurface(
+            StereoMode::TopBottom,
+            SubspaceModifier::new()
+                .size(320.0, 180.0)
+                .offset(600.0, -260.0, 100.0)
+                .rotate(0.0, -30.0, 0.0),
+            Split::TopBottom,
+        );
         SpatialPanel(
             SubspaceModifier::new().size(800.0, 500.0).movable(),
             move || {
@@ -75,6 +108,24 @@ pub fn XrDemo() {
                 );
             },
         );
+    });
+}
+
+// A surface that a thread fills with the test pattern from its creation to its end.
+#[composable]
+fn PatternSurface(stereo_mode: StereoMode, modifier: SubspaceModifier, split: Split) {
+    let writer = remember(|| Rc::new(RefCell::new(None::<PatternWriter>))).with(Clone::clone);
+    SpatialExternalSurface(stereo_mode, modifier, move |scope| {
+        let started = Rc::clone(&writer);
+        scope.on_surface_created(move |surface| {
+            started
+                .borrow_mut()
+                .replace(PatternWriter::start(surface, split));
+        });
+        let stopped = Rc::clone(&writer);
+        scope.on_surface_destroyed(move |_| {
+            stopped.borrow_mut().take();
+        });
     });
 }
 

@@ -15,6 +15,7 @@ use super::{
     panel_layers::{DENSITY, PanelLayers},
     ray_layers::RayLayers,
     session::{SessionStatus, XrSession},
+    surface_layers::SurfaceLayers,
 };
 use crate::{
     pointer::{Pointer, PointerEvent},
@@ -83,6 +84,7 @@ struct Immersive {
     space: Space,
     pointer: Pointer,
     layers: PanelLayers,
+    surfaces: SurfaceLayers,
     rays: RayLayers,
     handles: HandleLayers,
     controllers: Controllers,
@@ -132,6 +134,7 @@ impl Immersive {
             space,
             pointer: Pointer::default(),
             layers,
+            surfaces: SurfaceLayers::new(),
             rays,
             handles,
             controllers,
@@ -163,7 +166,9 @@ impl Immersive {
         };
         // The handles and the rays show over the panels: the rays end on them
         let panels = self.space.panels();
+        self.surfaces.sync(&self.xr_session, &self.space, &panels);
         if frame.should_render {
+            quads.extend(self.surfaces.layers(&panels));
             quads.extend(self.handles.layers(&panels, self.pointer.handle()));
             if let Some(head) = self.xr_session.head(frame.predicted_display_time) {
                 quads.extend(self.rays.layers(&self.pointer.beams(), head.position));

@@ -10,7 +10,10 @@ use android_activity::AndroidApp;
 use openxr as xr;
 
 use super::gl_context::GlContext;
-use crate::Pose;
+use crate::{
+    Pose,
+    stereo_mode::{Eye, EyeView},
+};
 
 const VIEW_CONFIGURATION: xr::ViewConfigurationType = xr::ViewConfigurationType::PRIMARY_STEREO;
 
@@ -25,10 +28,21 @@ pub(crate) enum SessionStatus {
     Exit,
 }
 
-// A layer that shows a whole swapchain image on a flat panel.
+// What a layer shows of its swapchain.
+#[derive(Clone, Copy)]
+pub(crate) enum LayerSource {
+    // The whole image of this size in pixels, which wgpu drew, to both eyes. The compositor
+    // blends its alpha.
+    Drawn((u32, u32)),
+    // The part of a picture that a decoder or a camera writes into a surface swapchain. The
+    // picture is opaque.
+    Surface(EyeView),
+}
+
+// A layer that shows a swapchain image on a flat panel.
 pub(crate) struct QuadLayer<'a> {
     pub(crate) swapchain: &'a xr::Swapchain<xr::OpenGlEs>,
-    pub(crate) image_size: (u32, u32),
+    pub(crate) source: LayerSource,
     pub(crate) pose: Pose,
     // The panel's width and height in meters.
     pub(crate) size: [f32; 2],
@@ -74,6 +88,8 @@ impl XrSession {
         extensions.khr_opengl_es_enable = true;
         extensions.khr_android_create_instance = true;
         extensions.fb_composition_layer_image_layout = available.fb_composition_layer_image_layout;
+        // A decoder or a camera writes into a surface that the compositor shows with no copy
+        extensions.khr_android_surface_swapchain = available.khr_android_surface_swapchain;
         // Hands tracked by cameras point and pinch as controllers do. The controllers of other
         // makers bind through their own profiles, each behind an extension.
         extensions.ext_hand_interaction = available.ext_hand_interaction;
@@ -241,23 +257,41 @@ impl XrSession {
             .iter()
             .zip(layouts.iter_mut())
             .map(|(layer, layout)| {
+                let (eye_visibility, offset, extent, blends) = match layer.source {
+                    LayerSource::Drawn((width, height)) => {
+                        (xr::EyeVisibility::BOTH, [0, 0], [width, height], true)
+                    }
+                    LayerSource::Surface(view) => {
+                        (eye_visibility(view.eye), view.offset, view.extent, false)
+                    }
+                };
                 let raw = xr::sys::CompositionLayerQuad {
                     ty: xr::sys::CompositionLayerQuad::TYPE,
+                    // The runtime reads the first row of any swapchain as the bottom one. The
+                    // images of wgpu and the pictures of a surface's producer start with the top
+                    // row.
                     next: if self.flips_rows {
                         ptr::from_mut(layout).cast_const().cast()
                     } else {
                         ptr::null()
                     },
-                    layer_flags: xr::CompositionLayerFlags::BLEND_TEXTURE_SOURCE_ALPHA,
+                    layer_flags: if blends {
+                        xr::CompositionLayerFlags::BLEND_TEXTURE_SOURCE_ALPHA
+                    } else {
+                        xr::CompositionLayerFlags::EMPTY
+                    },
                     space: self.local.as_raw(),
-                    eye_visibility: xr::EyeVisibility::BOTH,
+                    eye_visibility,
                     sub_image: xr::sys::SwapchainSubImage {
                         swapchain: layer.swapchain.as_raw(),
                         image_rect: xr::Rect2Di {
-                            offset: xr::Offset2Di { x: 0, y: 0 },
+                            offset: xr::Offset2Di {
+                                x: offset[0] as i32,
+                                y: offset[1] as i32,
+                            },
                             extent: xr::Extent2Di {
-                                width: layer.image_size.0 as i32,
-                                height: layer.image_size.1 as i32,
+                                width: extent[0] as i32,
+                                height: extent[1] as i32,
                             },
                         },
                         image_array_index: 0,
@@ -278,6 +312,14 @@ impl XrSession {
         self.stream
             .end(display_time, self.blend, &references)
             .map_err(|error| format!("OpenXR end frame: {error}"))
+    }
+}
+
+fn eye_visibility(eye: Eye) -> xr::EyeVisibility {
+    match eye {
+        Eye::Both => xr::EyeVisibility::BOTH,
+        Eye::Left => xr::EyeVisibility::LEFT,
+        Eye::Right => xr::EyeVisibility::RIGHT,
     }
 }
 

@@ -1634,6 +1634,7 @@ dependencies = [
  "image",
  "js-sys",
  "log",
+ "ndk",
  "open",
  "parking_lot",
  "pollster",
@@ -8277,6 +8278,8 @@ dependencies = [
  "cranpose-capabilities",
  "cranpose-ui",
  "cranpose-xr",
+ "log",
+ "ndk",
 ]
 
 [[package]]
