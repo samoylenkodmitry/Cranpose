@@ -99,8 +99,6 @@ pub(crate) struct UiThreadState {
     // The list a chain's draws collect into, which slices that keep one draw
     // or none give back.
     pub(crate) spare_draws: Cell<Vec<crate::draw::DrawCommand>>,
-    // Emptied lists of modifiers the thread let go, for its next joins.
-    pub(crate) spare_modifier_lists: RefCell<Vec<Rc<crate::modifier::ManyElements>>>,
     pub(crate) empty_measure_policy: OnceCell<Rc<dyn MeasurePolicy>>,
     pub(crate) recent_policies: RecentPolicies,
     // The parts every layout node shell of the thread shares.
@@ -133,7 +131,6 @@ impl UiThreadState {
             empty_slices: OnceCell::new(),
             spare_slices: Cell::new(None),
             spare_draws: Cell::new(Vec::new()),
-            spare_modifier_lists: RefCell::new(Vec::new()),
             empty_measure_policy: OnceCell::new(),
             recent_policies: RecentPolicies::new(),
             shell_parts: OnceCell::new(),

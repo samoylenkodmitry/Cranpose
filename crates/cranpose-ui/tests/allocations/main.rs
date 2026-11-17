@@ -545,10 +545,9 @@ fn composing_a_row_of_boxes_allocates_within_its_budget() {
 }
 
 // A modifier holds a plain element by value: one alone takes no
-// allocation. A chain of them built link by link extends one shared list in
-// place, and a chain built after the last one was let go takes that list
-// again: a body that composes again builds its modifiers with no allocation.
-fn a_modifier_chain_of_plain_elements_takes_the_list_of_the_last_one() {
+// allocation, and a chain of them built link by link takes one shared
+// allocation it extends in place.
+fn a_modifier_chain_of_plain_elements_allocates_one_shared_box() {
     drop(Modifier::empty().padding(1.0).background(Color::RED));
     let region = Region::new(GLOBAL);
     let modifier = Modifier::empty().padding(1.0);
@@ -563,7 +562,7 @@ fn a_modifier_chain_of_plain_elements_takes_the_list_of_the_last_one() {
         .rounded_corners(3.0);
     let change = region.change();
     drop(modifier);
-    assert_eq!(change.allocations, 0, "{change:?}");
+    assert_eq!(change.allocations, 1, "{change:?}");
 }
 
 // A node whose chain draws one background keeps that draw in the one block
@@ -687,7 +686,7 @@ fn layout_and_modifiers_stay_within_their_allocation_budgets() {
     a_rest_gives_back_a_long_paragraph_glyph_room();
     composing_a_row_of_boxes_allocates_within_its_budget();
     if !cfg!(feature = "inspection") {
-        a_modifier_chain_of_plain_elements_takes_the_list_of_the_last_one();
+        a_modifier_chain_of_plain_elements_allocates_one_shared_box();
     }
     slices_of_one_background_allocate_one_block();
     resolving_text_direction_does_not_allocate();
