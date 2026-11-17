@@ -146,10 +146,11 @@ impl Applier for MemoryApplier {
             .filter(|slot| slot.is_some())
             .count();
         let tombstone_count = self.state.nodes.len().saturating_sub(live_count);
-        if tombstone_count == 0 {
-            return;
-        }
-        if self.state.nodes.len() > Self::EAGER_COMPACT_NODE_LEN && tombstone_count < live_count {
+        if tombstone_count == 0
+            || (self.state.nodes.len() > Self::EAGER_COMPACT_NODE_LEN
+                && tombstone_count < live_count)
+        {
+            self.prune_stable_generations();
             return;
         }
         let rehouse_live_nodes = tombstone_count >= live_count;
@@ -221,12 +222,10 @@ impl Applier for MemoryApplier {
             .fresh_creations += 1;
     }
 
-    fn clear_recycled_nodes(&mut self) {
+    fn end_recycle_pass(&mut self) {
         let next_stable_id = &mut self.state.next_stable_id;
         for pool in self.state.recycle_pools.values_mut() {
             pool.end_pass(next_stable_id);
         }
-        self.prune_stable_generations();
-        self.compact();
     }
 }

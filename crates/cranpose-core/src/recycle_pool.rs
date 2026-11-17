@@ -111,45 +111,47 @@ impl RecyclePool {
         }
     }
 
-    fn compact_warm(&mut self) {
-        if self.warm.capacity() <= self.warm.len().saturating_mul(4).max(64) {
-            return;
+    // Each list keeps a buffer of up to 64 shells, or four times what it
+    // holds, across passes; a larger one goes.
+    fn compact_lists(&mut self) {
+        for list in [&mut self.warm, &mut self.returning, &mut self.cold] {
+            if list.capacity() > list.len().saturating_mul(4).max(64) {
+                list.shrink_to_fit();
+            }
         }
-        self.warm.shrink_to_fit();
     }
 
     // At the end of an apply pass: the returned shells join the warm ones,
     // the cold ones this pass needed fresh shells for turn warm and the rest
-    // go, and the warm pool moves to its target.
+    // go, and the warm pool moves to its target. The returned and cold lists
+    // keep their buffers for the next pass.
     pub(crate) fn end_pass(&mut self, next_stable_id: &mut NodeId) {
-        self.warm.append(&mut std::mem::take(&mut self.returning));
+        self.warm.append(&mut self.returning);
         let needed = std::mem::take(&mut self.fresh_creations);
-        let mut cold = std::mem::take(&mut self.cold);
         if needed > 0 {
             let remaining_limit = self
                 .limit
                 .unwrap_or(usize::MAX)
                 .saturating_sub(self.warm.len());
-            let promote = cold.len().min(needed).min(remaining_limit);
-            let split_at = cold.len().saturating_sub(promote);
-            for mut recycled in cold.split_off(split_at) {
+            let promote = self.cold.len().min(needed).min(remaining_limit);
+            let split_at = self.cold.len() - promote;
+            for mut recycled in self.cold.drain(split_at..) {
                 recycled.set_origin(RecycleOrigin::Warm);
                 self.warm.push_back(recycled);
             }
         }
-        drop(cold);
+        self.cold.clear();
         // A type that only had shells created fresh has nothing to size yet.
-        if self.warm.is_empty()
+        let nothing_to_size = self.warm.is_empty()
             && self.limit.is_none()
             && self.warm_target.is_none()
-            && self.prototype.is_none()
-        {
-            return;
+            && self.prototype.is_none();
+        if !nothing_to_size {
+            let target = self.update_warm_target(needed);
+            self.replenish_warm(target, next_stable_id);
+            drop_oldest_past(&mut self.warm, Some(target));
         }
-        let target = self.update_warm_target(needed);
-        self.replenish_warm(target, next_stable_id);
-        drop_oldest_past(&mut self.warm, Some(target));
-        self.compact_warm();
+        self.compact_lists();
     }
 }
 

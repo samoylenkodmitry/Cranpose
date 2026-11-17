@@ -212,9 +212,9 @@ impl<A: Applier + 'static> Composition<A> {
                 &runtime_handle,
                 &composer,
             )?;
+            self.applier.borrow_dyn().end_recycle_pass();
             if compact_applier {
                 self.applier.compact();
-                self.applier.borrow_dyn().clear_recycled_nodes();
             }
 
             self.root = root;
@@ -540,9 +540,9 @@ impl<A: Applier + 'static> Composition<A> {
         #[cfg(any(test, feature = "leak-debug"))]
         composer.with_commands(|commands| self.last_pass_stats.record(commands, &side_effects));
         self.apply_commands_and_updates_for_host(host, runtime_handle, &composer)?;
+        self.applier.borrow_dyn().end_recycle_pass();
         if compact_applier {
             self.applier.compact();
-            self.applier.borrow_dyn().clear_recycled_nodes();
         }
         if root.is_some() {
             self.root = root;

@@ -559,9 +559,9 @@ impl SubcomposeSite<'_> {
             }
         }
         recycle_commands(commands);
+        self.applier.borrow_dyn().end_recycle_pass();
         if compact_applier {
             self.applier.compact();
-            self.applier.borrow_dyn().clear_recycled_nodes();
         }
         composer_context::without_composer(|| {
             for effect in side_effects {

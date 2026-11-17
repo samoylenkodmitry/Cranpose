@@ -97,7 +97,8 @@ pub trait Applier: Any {
         self
     }
 
-    /// Trim trailing tombstones/unused capacity after structural changes.
+    /// Trim trailing tombstones/unused capacity after structural changes, and forget the ids of
+    /// recycled shells that are gone.
     fn compact(&mut self) {}
 
     /// Returns a previously recycled node shell and its stable ID for the requested concrete type.
@@ -116,6 +117,8 @@ pub trait Applier: Any {
     /// Records that the current apply pass had to allocate a fresh recyclable shell for this type.
     fn record_fresh_recyclable_creation(&mut self, _key: TypeId) {}
 
-    /// Drops any recyclable shells that should not survive beyond the current apply pass.
-    fn clear_recycled_nodes(&mut self) {}
+    /// Ends the current apply pass for the recycle pools: the shells of the nodes it removed
+    /// become reusable by the next pass as far as this pass asked for shells, and the others go.
+    /// Every apply pass ends with this call.
+    fn end_recycle_pass(&mut self) {}
 }

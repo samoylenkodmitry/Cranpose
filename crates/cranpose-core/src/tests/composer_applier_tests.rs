@@ -1208,7 +1208,7 @@ fn recycled_nodes_reuse_stable_ids_without_growing_stable_id_arena() {
 
     applier.remove(stable_id).expect("remove recyclable node");
     applier.record_fresh_recyclable_creation(TypeId::of::<RecyclableTestNode>());
-    applier.clear_recycled_nodes();
+    applier.end_recycle_pass();
 
     let recycled = applier
         .take_recycled_node(TypeId::of::<RecyclableTestNode>())
@@ -1288,7 +1288,7 @@ fn warm_recycled_nodes_can_be_reused_again_in_the_same_frame() {
 
     applier.remove(stable_id).expect("remove recyclable node");
     applier.record_fresh_recyclable_creation(TypeId::of::<RecyclableTestNode>());
-    applier.clear_recycled_nodes();
+    applier.end_recycle_pass();
 
     let recycled = applier
         .take_recycled_node(TypeId::of::<RecyclableTestNode>())
@@ -1348,7 +1348,7 @@ fn recycled_node_pool_limit_discards_oldest_shells() {
 
     applier.record_fresh_recyclable_creation(TypeId::of::<LimitedRecycleNode>());
     applier.record_fresh_recyclable_creation(TypeId::of::<LimitedRecycleNode>());
-    applier.clear_recycled_nodes();
+    applier.end_recycle_pass();
 
     assert_eq!(
         applier.debug_recycled_node_count_for::<LimitedRecycleNode>(),
@@ -1394,7 +1394,7 @@ fn a_full_recycle_pool_keeps_its_newest_shells_over_many_removals() {
     for _ in 0..3 {
         applier.record_fresh_recyclable_creation(TypeId::of::<RingNode>());
     }
-    applier.clear_recycled_nodes();
+    applier.end_recycle_pass();
 
     let taken: Vec<NodeId> = std::iter::from_fn(|| {
         applier
@@ -1410,7 +1410,7 @@ fn a_full_recycle_pool_keeps_its_newest_shells_over_many_removals() {
 }
 
 #[test]
-fn clear_recycled_nodes_trims_warm_pool_without_fresh_demand() {
+fn a_recycle_pass_end_trims_the_warm_pool_without_fresh_demand() {
     #[derive(Default)]
     struct LimitedRecycleNode;
 
@@ -1434,7 +1434,7 @@ fn clear_recycled_nodes_trims_warm_pool_without_fresh_demand() {
         applier.remove(id).expect("remove recyclable node");
     }
 
-    applier.clear_recycled_nodes();
+    applier.end_recycle_pass();
 
     assert_eq!(
         applier.debug_recycled_node_count_for::<LimitedRecycleNode>(),
@@ -1464,7 +1464,7 @@ fn warm_recycled_nodes_survive_idle_frame_after_recent_demand() {
 
     applier.remove(recycled_id).expect("remove recyclable node");
     applier.record_fresh_recyclable_creation(TypeId::of::<LimitedRecycleNode>());
-    applier.clear_recycled_nodes();
+    applier.end_recycle_pass();
 
     assert_eq!(
         applier.debug_recycled_node_count_for::<LimitedRecycleNode>(),
@@ -1472,7 +1472,7 @@ fn warm_recycled_nodes_survive_idle_frame_after_recent_demand() {
         "recent fresh demand should promote one warm shell",
     );
 
-    applier.clear_recycled_nodes();
+    applier.end_recycle_pass();
 
     assert_eq!(
         applier.debug_recycled_node_count_for::<LimitedRecycleNode>(),
@@ -1482,7 +1482,7 @@ fn warm_recycled_nodes_survive_idle_frame_after_recent_demand() {
 }
 
 #[test]
-fn clear_recycled_nodes_rebuilds_warm_pool_from_compact_prototype() {
+fn a_recycle_pass_end_rebuilds_the_warm_pool_from_its_prototype() {
     #[derive(Default)]
     struct PrototypeRecycleNode;
 
@@ -1518,7 +1518,7 @@ fn clear_recycled_nodes_rebuilds_warm_pool_from_compact_prototype() {
     for _ in 0..3 {
         applier.record_fresh_recyclable_creation(key);
     }
-    applier.clear_recycled_nodes();
+    applier.end_recycle_pass();
 
     assert_eq!(
         applier.debug_recycled_node_count_for::<PrototypeRecycleNode>(),
@@ -1562,7 +1562,7 @@ fn large_recycle_pools_converge_to_standing_reserve_on_first_demand() {
     applier.set_recycled_node_origin(reused_id, warm_origin);
 
     applier.record_fresh_recyclable_creation(key);
-    applier.clear_recycled_nodes();
+    applier.end_recycle_pass();
 
     assert_eq!(
         applier.debug_recycled_node_count_for::<LargeReserveNode>(),
@@ -1572,7 +1572,7 @@ fn large_recycle_pools_converge_to_standing_reserve_on_first_demand() {
 }
 
 #[test]
-fn clear_recycled_nodes_releases_excess_warm_id_capacity() {
+fn a_recycle_pass_end_and_compaction_release_excess_warm_id_capacity() {
     #[derive(Default)]
     struct LargeReserveNode;
 
@@ -1618,7 +1618,8 @@ fn clear_recycled_nodes_releases_excess_warm_id_capacity() {
         applier.remove(id).expect("remove recyclable node");
     }
 
-    applier.clear_recycled_nodes();
+    applier.end_recycle_pass();
+    applier.compact();
 
     let stats = applier.debug_stats();
     assert!(
