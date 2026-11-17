@@ -186,6 +186,24 @@ class NativeSliderMotionTests: ReferenceUITests {
     override var bundleIdentifier: String { "io.cranpose.liquid-cranpose" }
 }
 
+@MainActor class NativeToggleTapMotionTests: NativeToggleMotionTests {
+    override var positions: [CGFloat] { [190, 191, 190, 190] }
+    override var offsets: [NSNumber] { [0, 0.02, 0.04, 0.06, 0.08, 0.1] }
+}
+
+@MainActor final class CranposeToggleTapMotionTests: NativeToggleTapMotionTests {
+    override var bundleIdentifier: String { "io.cranpose.liquid-cranpose" }
+}
+
+@MainActor class NativeSegmentedTapMotionTests: NativeSegmentedMotionTests {
+    override var positions: [CGFloat] { [301, 302, 301, 301] }
+    override var offsets: [NSNumber] { [0, 0.02, 0.04, 0.06, 0.08, 0.1] }
+}
+
+@MainActor final class CranposeSegmentedTapMotionTests: NativeSegmentedTapMotionTests {
+    override var bundleIdentifier: String { "io.cranpose.liquid-cranpose" }
+}
+
 @MainActor class NativeSegmentedLabelEdgeMotionTests: NativeSegmentedMotionTests {
     override var positions: [CGFloat] { [101, 149, 149, 301] }
     override var captureMaterial: Bool { true }
