@@ -69,7 +69,6 @@ const SPARE_ROOM_KEPT: usize = 8;
 /// text its node shows without making a copy, and gives the node when the
 /// node shows another.
 #[doc(hidden)]
-#[derive(Clone, PartialEq)]
 pub enum StaticText {
     /// Characters with no styles, annotations or links, whose room the
     /// node takes.
@@ -84,6 +83,31 @@ pub enum StaticText {
 impl Default for StaticText {
     fn default() -> Self {
         Self::Borrowed("")
+    }
+}
+
+// Out of line, as the comparison below: a text group compares and keeps its
+// text, and inlined there each would be one more copy in every build.
+impl Clone for StaticText {
+    #[inline(never)]
+    fn clone(&self) -> Self {
+        match self {
+            Self::Owned(text) => Self::Owned(text.clone()),
+            Self::Borrowed(text) => Self::Borrowed(text),
+            Self::Annotated(text) => Self::Annotated(text.clone()),
+        }
+    }
+}
+
+impl PartialEq for StaticText {
+    #[inline(never)]
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Owned(text), Self::Owned(other)) => text == other,
+            (Self::Borrowed(text), Self::Borrowed(other)) => text == other,
+            (Self::Annotated(text), Self::Annotated(other)) => text == other,
+            _ => false,
+        }
     }
 }
 
