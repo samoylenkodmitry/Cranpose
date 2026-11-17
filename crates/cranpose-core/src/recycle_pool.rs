@@ -64,7 +64,7 @@ impl RecyclePool {
         match self.limit {
             None => usize::MAX,
             Some(limit) if limit <= 8 => limit,
-            Some(limit) => limit / 4,
+            Some(_) => 32,
         }
     }
 
@@ -131,14 +131,12 @@ impl RecyclePool {
         }
         let needed = std::mem::take(&mut self.fresh_creations);
         let mut cold = std::mem::take(&mut self.cold);
-        let promote = if needed > 0 {
+        let promote = {
             let remaining_limit = self
                 .limit
                 .unwrap_or(usize::MAX)
                 .saturating_sub(self.warm.len());
-            cold.len().min(needed).min(remaining_limit)
-        } else {
-            0
+            cold.len().min(remaining_limit)
         };
         drop_oldest(&mut cold, promote);
         for mut recycled in cold {
@@ -155,7 +153,7 @@ impl RecyclePool {
         }
         let target = self.update_warm_target(needed);
         self.replenish_warm(target, next_stable_id);
-        drop_oldest_past(&mut self.warm, Some(target));
+        drop_oldest_past(&mut self.warm, self.limit);
         self.compact_warm();
     }
 }

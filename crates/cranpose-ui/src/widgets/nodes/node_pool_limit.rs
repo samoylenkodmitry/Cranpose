@@ -3,7 +3,7 @@
 use crate::MemoryHeadroom;
 
 // With ample memory, the shells of up to this many removed nodes stay.
-const AMPLE_NODE_POOL_LIMIT: usize = 128;
+const AMPLE_NODE_POOL_LIMIT: usize = 4096;
 
 // The shells of removed layout nodes the recycle pool keeps under the
 // current memory headroom. With little memory left it keeps none: a removed
