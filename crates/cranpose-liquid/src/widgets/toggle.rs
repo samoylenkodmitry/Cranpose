@@ -1,12 +1,14 @@
-use cranpose_animation::{AnimationSpec, AnimationType, Easing, animateColorAsState, spring};
-use cranpose_core::{mutableStateOf, remember};
+use std::sync::Arc;
+
+use cranpose_animation::{AnimationType, animateFloatAsState, spring};
+use cranpose_core::{mutableStateOf, remember, rememberKeyed};
 use cranpose_macros::composable;
 use cranpose_services::{HapticFeedback, default_haptics};
 use cranpose_ui::{
     Modifier, PointerEventKind, PointerInputScope, Size,
     widgets::{Box, BoxSpec},
 };
-use cranpose_ui_graphics::{Brush, CornerRadii, GraphicsLayer};
+use cranpose_ui_graphics::{Brush, Color, CornerRadii, GraphicsLayer, Point, TileMode};
 
 use crate::{
     material::{GlassDynamics, GlassMorph, LiquidModifierExt},
@@ -25,8 +27,38 @@ const LENS_VERTICAL_OFFSET: f32 = 0.0;
 const LENS_PAD: f32 = 18.0;
 const TAP_SLOP: f32 = 4.0;
 
-fn toggle_track_motion() -> AnimationType {
-    AnimationType::Tween(AnimationSpec::tween(260, Easing::EaseOut))
+// The native track recolors on commit by sliding a strip ten tracks wide
+// beneath it: one track of the on color, eight of a linear blend, one of the
+// off color. The strip's travel is a spring fitted to the iOS 27 tap and drag
+// layer traces.
+const FILL_STRIP_TRACKS: f32 = 10.0;
+
+fn toggle_fill_motion() -> AnimationType {
+    spring(1.08, 108.0)
+}
+
+// The on and off track colors, shared by every frame's strip.
+#[composable]
+fn remember_track_colors() -> Arc<[Color]> {
+    let colors = liquid_colors();
+    rememberKeyed((colors.toggle_on, colors.toggle_off), |&(on, off)| {
+        Arc::<[Color]>::from([on, off])
+    })
+}
+
+fn track_brush(fill: f32, colors: &Arc<[Color]>) -> Brush {
+    let blend = FILL_STRIP_TRACKS - 2.0;
+    if fill <= 0.0 || fill >= 1.0 {
+        return Brush::solid(colors[usize::from(fill <= 0.0)]);
+    }
+    let strip_left = -(FILL_STRIP_TRACKS - 1.0) * TRACK_WIDTH * (1.0 - fill);
+    Brush::LinearGradient {
+        colors: Arc::clone(colors),
+        stops: None,
+        start: Point::new(strip_left + TRACK_WIDTH, 0.0),
+        end: Point::new(strip_left + TRACK_WIDTH * (1.0 + blend), 0.0),
+        tile_mode: TileMode::Clamp,
+    }
 }
 
 fn lens_translation_x(thumb_x: f32, node_width: f32) -> f32 {
@@ -45,12 +77,9 @@ fn lens_ride_x(drag_progress: Option<f32>, thumb_x: f32) -> f32 {
 /// the requested new value. The thumb both taps and swipes.
 #[composable]
 pub fn LiquidToggle(modifier: Modifier, checked: bool, on_change: impl Fn(bool) + 'static) {
-    let colors = liquid_colors();
-
     let drag_progress = remember(|| mutableStateOf(Option::<f32>::None)).with(|s| *s);
-    let off_track = colors.toggle_off;
-    let base_track = if checked { colors.toggle_on } else { off_track };
-    let animated_track = animateColorAsState(base_track, toggle_track_motion(), "toggle-track");
+    let track_colors = remember_track_colors();
+    let fill = animateFloatAsState(f32::from(checked), toggle_fill_motion(), "toggle-fill");
 
     let min_x = THUMB_MARGIN;
     let max_x = TRACK_WIDTH - THUMB_MARGIN - THUMB_WIDTH;
@@ -153,7 +182,7 @@ pub fn LiquidToggle(modifier: Modifier, checked: bool, on_change: impl Fn(bool) 
         })
         .draw_behind(move |scope| {
             scope.draw_round_rect(
-                Brush::solid(animated_track.get()),
+                track_brush(fill.get(), &track_colors),
                 CornerRadii::uniform(TRACK_HEIGHT * 0.5),
             );
         });
@@ -189,7 +218,7 @@ pub fn LiquidToggle(modifier: Modifier, checked: bool, on_change: impl Fn(bool) 
                     let material = material_progress.get().max(0.0);
                     GlassDynamics {
                         optical_projection: Some(projection),
-                        resting_tint: Some(cranpose_ui_graphics::Color::WHITE),
+                        resting_tint: Some(Color::WHITE),
                         morph: Some(GlassMorph {
                             node_size: (node_w, node_h),
                             primary: (node_w * 0.5, node_h * 0.5, base_w, base_h, -1.0),

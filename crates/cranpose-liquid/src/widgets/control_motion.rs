@@ -1,10 +1,20 @@
-use std::{cell::RefCell, rc::Rc};
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+};
 
 use cranpose_animation::{Animatable, spring};
-use cranpose_core::{RuntimeHandle, State, with_current_composer};
+use cranpose_core::{
+    RuntimeHandle, State, internal::FrameCallbackRegistration, with_current_composer,
+};
 use cranpose_macros::composable;
 
 use crate::motion::Press;
+
+// iOS holds a touched control's lens up for at least this long, so a quick
+// tap shows the whole lift: its toggle tap starts the release 225 ms after
+// the touch, where a longer hold releases on lift-off.
+const MIN_LIFT_NANOS: u64 = 225_000_000;
 
 #[derive(Clone, Copy, PartialEq)]
 pub(super) enum ControlContactKind {
@@ -16,6 +26,8 @@ pub(super) struct ControlContactMotion {
     channels: RefCell<[Animatable<f32>; 2]>,
     runtime: RuntimeHandle,
     kind: ControlContactKind,
+    lifted_at: Cell<Option<u64>>,
+    pending_release: RefCell<Option<FrameCallbackRegistration>>,
 }
 
 impl ControlContactMotion {
@@ -27,6 +39,8 @@ impl ControlContactMotion {
             ]),
             runtime,
             kind,
+            lifted_at: Cell::new(None),
+            pending_release: RefCell::new(None),
         }
     }
 
@@ -35,7 +49,47 @@ impl ControlContactMotion {
         (channels[0].state(), channels[1].state())
     }
 
-    pub(super) fn pressed(&self, press: Press, event_time: Option<u64>) {
+    pub(super) fn pressed(self: &Rc<Self>, press: Press, event_time: Option<u64>) {
+        let time = event_time.or_else(|| self.runtime.last_frame_time_nanos());
+        drop(self.pending_release.take());
+        match press {
+            Press::Down => {
+                self.lifted_at.set(time);
+                self.animate(Press::Down, time);
+            }
+            Press::Up => {
+                let release_at = self
+                    .lifted_at
+                    .take()
+                    .zip(time)
+                    .map(|(lifted, now)| (lifted.saturating_add(MIN_LIFT_NANOS), now))
+                    .filter(|(release_at, now)| release_at > now)
+                    .map(|(release_at, _)| release_at);
+                match release_at {
+                    Some(release_at) => self.release_at(release_at),
+                    None => self.animate(Press::Up, time),
+                }
+            }
+        }
+    }
+
+    fn release_at(self: &Rc<Self>, release_at: u64) {
+        let motion = Rc::downgrade(self);
+        let registration = self.runtime.frame_clock().with_frame_nanos(move |frame| {
+            let Some(motion) = motion.upgrade() else {
+                return;
+            };
+            if frame >= release_at {
+                drop(motion.pending_release.take());
+                motion.animate(Press::Up, Some(release_at));
+            } else {
+                motion.release_at(release_at);
+            }
+        });
+        drop(self.pending_release.replace(Some(registration)));
+    }
+
+    fn animate(&self, press: Press, time: Option<u64>) {
         let geometry = match (self.kind, press) {
             (ControlContactKind::Thumb, Press::Down) => spring(0.55, 600.0),
             (ControlContactKind::Thumb, Press::Up) => spring(0.7, 170.0),
@@ -46,7 +100,6 @@ impl ControlContactMotion {
             Press::Down => geometry,
             Press::Up => spring(1.0, 250.0),
         };
-        let time = event_time.or_else(|| self.runtime.last_frame_time_nanos());
         for (channel, animation) in self
             .channels
             .borrow_mut()

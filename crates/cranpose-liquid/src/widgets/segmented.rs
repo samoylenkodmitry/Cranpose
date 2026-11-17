@@ -1,7 +1,7 @@
-use std::rc::Rc;
+use std::{cell::RefCell, rc::Rc};
 
-use cranpose_animation::{Lerp, spring};
-use cranpose_core::{State, mutableStateOf, remember};
+use cranpose_animation::{Animatable, AnimationSpec, AnimationType, Easing, Lerp, spring};
+use cranpose_core::{MutableState, State, mutableStateOf, remember, with_current_composer};
 use cranpose_macros::composable;
 use cranpose_ui::{
     Modifier, PointerInputScope, SemanticsWidgetRole, SharedText, Size,
@@ -21,6 +21,71 @@ use crate::{
 const TRACK_PADDING: f32 = 2.0;
 const LENS_PAD: f32 = 10.0;
 const TAP_SLOP: f32 = 4.0;
+
+// iOS 27 dims a pressed segment's label to 65% over about 150 ms and lifts
+// the dim as fast once the finger leaves.
+const PRESSED_LABEL_DIM: f32 = 0.35;
+
+fn label_dim_motion() -> AnimationType {
+    AnimationType::Tween(AnimationSpec::tween(150, Easing::EaseInOut))
+}
+
+// The lens's travel to a tapped segment, fitted to the iOS 27 tap's layer
+// trace: it arrives in about 350 ms with a 3% overshoot.
+fn tap_travel_motion() -> AnimationType {
+    spring(0.86, 207.0)
+}
+
+// The segment a finger holds down without taking the lens, and how far its
+// label has dimmed.
+struct SegmentHighlight {
+    index: MutableState<usize>,
+    dim: RefCell<Animatable<f32>>,
+    dim_state: State<f32>,
+}
+
+impl SegmentHighlight {
+    fn set(&self, index: Option<usize>, time: Option<u64>) {
+        if let Some(index) = index {
+            self.index.set(index);
+        }
+        let target = f32::from(index.is_some());
+        let mut dim = self.dim.borrow_mut();
+        if dim.target() != target {
+            match time {
+                Some(time) => dim.animate_to_at(target, label_dim_motion(), time),
+                None => dim.animateTo(target, label_dim_motion()),
+            }
+        }
+    }
+
+    fn label_alpha(&self, index: usize) -> f32 {
+        let dim = self.dim_state.get().clamp(0.0, 1.0);
+        if index == self.index.get() {
+            1.0 - PRESSED_LABEL_DIM * dim
+        } else {
+            1.0
+        }
+    }
+}
+
+#[composable]
+fn remember_segment_highlight() -> Rc<SegmentHighlight> {
+    with_current_composer(|composer| {
+        let runtime = composer.runtime_handle();
+        composer
+            .remember(move || {
+                let dim = Animatable::new(0.0, runtime);
+                let dim_state = dim.state();
+                Rc::new(SegmentHighlight {
+                    index: mutableStateOf(0),
+                    dim: RefCell::new(dim),
+                    dim_state,
+                })
+            })
+            .with(Rc::clone)
+    })
+}
 
 fn segment_lens_left(pointer_x: f32, segment_width: f32, count: usize) -> f32 {
     (pointer_x - segment_width * 0.5).clamp(0.0, segment_width * (count.saturating_sub(1)) as f32)
@@ -122,10 +187,11 @@ struct SegmentLabels {
     /// The chosen label's color at rest and while the lens is held, when
     /// they differ.
     held: Option<(Color, Color)>,
+    highlight: Rc<SegmentHighlight>,
 }
 
 impl SegmentLabels {
-    fn new(style: &LiquidSegmentedStyle) -> Self {
+    fn new(style: &LiquidSegmentedStyle, highlight: Rc<SegmentHighlight>) -> Self {
         let mut text = style.text.clone();
         text.span_style.color = Some(style.label);
         let mut selected_text = style.text.clone();
@@ -140,29 +206,86 @@ impl SegmentLabels {
             selected_text,
             held: (style.selected_label != style.label)
                 .then_some((style.selected_label, style.label)),
+            highlight,
         }
     }
 
     /// Draws `label`. The chosen label follows the indicator: as a held lens
     /// clears to glass, the label moves to the color of the others, which
     /// reads on the track.
-    fn show(&self, label: &SharedText, selected: bool, lift: State<f32>) {
-        let modifier = match self.held.filter(|_| selected) {
-            Some((rest, held)) => Modifier::empty().graphics_layer(move || {
-                let lift = lift.get().clamp(0.0, 1.0);
-                GraphicsLayer {
-                    color_filter: (lift > 0.0).then(|| ColorFilter::tint(rest.lerp(&held, lift))),
-                    ..Default::default()
+    fn show(&self, label: &SharedText, index: usize, selected: bool, lift: State<f32>) {
+        let held = self.held.filter(|_| selected);
+        let highlight = Rc::clone(&self.highlight);
+        let modifier = Modifier::empty().graphics_layer(move || {
+            let lift = lift.get().clamp(0.0, 1.0);
+            let alpha = highlight.label_alpha(index);
+            let color_filter = match held {
+                Some((rest, held)) if lift > 0.0 => {
+                    let color = rest.lerp(&held, lift);
+                    Some(ColorFilter::tint(color.with_alpha(color.a() * alpha)))
                 }
-            }),
-            None => Modifier::empty(),
-        };
+                _ => (alpha < 1.0).then(|| ColorFilter::modulate(Color::WHITE.with_alpha(alpha))),
+            };
+            GraphicsLayer {
+                color_filter,
+                ..Default::default()
+            }
+        });
         let text = if selected {
             &self.selected_text
         } else {
             &self.text
         };
         Text(label.clone(), modifier, text.clone());
+    }
+}
+
+// What a segmented control's touches drive.
+struct SegmentGesture {
+    axis: Rc<crate::motion::LiquidDragAxis>,
+    contact: Rc<super::control_motion::ControlContactMotion>,
+    labels: Rc<SegmentLabels>,
+    pressed: MutableState<bool>,
+    on_select: Rc<dyn Fn(usize)>,
+    segment_width: f32,
+    count: usize,
+    selected: usize,
+}
+
+impl SegmentGesture {
+    fn modifier(self, size: Size) -> Modifier {
+        Modifier::empty().size(size).pointer_input(
+            self.selected,
+            move |scope: PointerInputScope| {
+                crate::motion::liquid_lens_gesture(scope, self.lens_gesture())
+            },
+        )
+    }
+
+    fn lens_gesture(&self) -> crate::motion::LiquidLensGesture {
+        let (segment_width, count, pressed) = (self.segment_width, self.count, self.pressed);
+        let contact = Rc::clone(&self.contact);
+        let highlight = Rc::clone(&self.labels.highlight);
+        crate::motion::LiquidLensGesture {
+            axis: Rc::clone(&self.axis),
+            cell_width: segment_width,
+            cell_offset: 0.0,
+            count,
+            tap_slop: TAP_SLOP,
+            drag_left: Rc::new(move |x| segment_lens_left(x, segment_width, count)),
+            rest_left: Rc::new(move |index| segment_width * index as f32),
+            selected: self.selected,
+            on_pressed: Rc::new(move |press, time| {
+                pressed.set(press.is_down());
+                contact.pressed(press, time);
+            }),
+            on_touch: Rc::new(|_, _| {}),
+            on_select: Rc::clone(&self.on_select),
+            other_cell_press: crate::motion::OtherCellPress::Highlights {
+                cell: Rc::new(move |index, time| highlight.set(index, time)),
+                travel: tap_travel_motion(),
+            },
+        }
     }
 }
 
@@ -203,7 +326,7 @@ pub fn LiquidSegmentedControl(
     let height = style.height;
     let track_fill = style.track;
     let marker_fill = style.indicator;
-    let labels = Rc::new(SegmentLabels::new(&style));
+    let labels = Rc::new(SegmentLabels::new(&style, remember_segment_highlight()));
     let track = Modifier::empty().height(height).draw_behind(move |scope| {
         scope.draw_round_rect(Brush::solid(track_fill), CornerRadii::uniform(height * 0.5));
     });
@@ -241,39 +364,17 @@ pub fn LiquidSegmentedControl(
                 .get()
             };
 
-            let gesture = Modifier::empty()
-                .size(Size::new(total_width, height))
-                .pointer_input(selected, {
-                    let on_select = Rc::clone(&on_select);
-                    let lens_axis = Rc::clone(&lens_axis);
-                    let contact = Rc::clone(&contact);
-                    move |scope: PointerInputScope| {
-                        let on_select = Rc::clone(&on_select);
-                        let lens_axis = Rc::clone(&lens_axis);
-                        let contact = Rc::clone(&contact);
-                        crate::motion::liquid_lens_gesture(
-                            scope,
-                            crate::motion::LiquidLensGesture {
-                                axis: lens_axis,
-                                cell_width: segment_width,
-                                cell_offset: 0.0,
-                                count,
-                                tap_slop: TAP_SLOP,
-                                drag_left: Rc::new(move |x| {
-                                    segment_lens_left(x, segment_width, count)
-                                }),
-                                rest_left: Rc::new(move |index| segment_width * index as f32),
-                                selected,
-                                on_pressed: Rc::new(move |press, time| {
-                                    pressed.set(press.is_down());
-                                    contact.pressed(press, time);
-                                }),
-                                on_touch: Rc::new(|_, _| {}),
-                                on_select,
-                            },
-                        )
-                    }
-                });
+            let gesture = SegmentGesture {
+                axis: Rc::clone(&lens_axis),
+                contact: Rc::clone(&contact),
+                labels: Rc::clone(&labels),
+                pressed,
+                on_select: Rc::clone(&on_select),
+                segment_width,
+                count,
+                selected,
+            }
+            .modifier(Size::new(total_width, height));
 
             let Size {
                 width: node_w,
@@ -382,7 +483,7 @@ pub fn LiquidSegmentedControl(
                             BoxSpec::default().content_alignment(Alignment::CENTER),
                             move || match &drawn[index] {
                                 LiquidSegment::Label(label) => {
-                                    labels.show(label, is_selected, material_progress);
+                                    labels.show(label, index, is_selected, material_progress);
                                 }
                                 LiquidSegment::Content { content, .. } => content(is_selected),
                             },

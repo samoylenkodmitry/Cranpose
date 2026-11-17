@@ -25,7 +25,7 @@ fn contact_frames_track_native_size_and_white_fill_independently() {
         for press in [Press::Down, Press::Up] {
             let runtime =
                 cranpose_core::Runtime::new(std::sync::Arc::new(cranpose_core::DefaultScheduler));
-            let motion = ControlContactMotion::new(runtime.handle(), kind);
+            let motion = Rc::new(ControlContactMotion::new(runtime.handle(), kind));
             if press == Press::Up {
                 for channel in motion.channels.borrow_mut().iter_mut() {
                     channel.snapTo(1.0);
@@ -83,7 +83,10 @@ fn contact_frames_track_native_size_and_white_fill_independently() {
 #[test]
 fn releasing_during_inflation_preserves_motion_then_settles_without_a_linger() {
     let runtime = cranpose_core::Runtime::new(std::sync::Arc::new(cranpose_core::DefaultScheduler));
-    let motion = ControlContactMotion::new(runtime.handle(), ControlContactKind::Thumb);
+    let motion = Rc::new(ControlContactMotion::new(
+        runtime.handle(),
+        ControlContactKind::Thumb,
+    ));
     motion.pressed(Press::Down, Some(1_000_000_000));
     runtime.handle().drain_frame_callbacks(1_080_000_000);
     let velocity = motion.channels.borrow()[0].velocity();
@@ -97,4 +100,77 @@ fn releasing_during_inflation_preserves_motion_then_settles_without_a_linger() {
     let (geometry, material) = motion.states();
     assert_eq!(geometry.get(), 0.0);
     assert_eq!(material.get(), 0.0);
+}
+
+#[test]
+fn a_quick_tap_keeps_the_native_lift_before_it_settles() {
+    let runtime = cranpose_core::Runtime::new(std::sync::Arc::new(cranpose_core::DefaultScheduler));
+    let motion = Rc::new(ControlContactMotion::new(
+        runtime.handle(),
+        ControlContactKind::Thumb,
+    ));
+    let (geometry, material) = motion.states();
+    let origin = 1_000_000_000_u64;
+    let release = (0.163_787 * 1e9) as u64;
+    let (rest, held) = ((37.0, 24.0), (58.0, 115.0 / 3.0));
+    runtime.handle().drain_frame_callbacks(origin);
+    motion.pressed(Press::Down, Some(origin));
+    let mut released = false;
+    let (mut size_error, mut fill_error, mut count) = (0.0, 0.0, 0);
+    for row in include_str!("../../../tests/fixtures/native_toggle_tap.csv")
+        .lines()
+        .skip(1)
+    {
+        let values = row
+            .split(',')
+            .map(|value| value.parse::<f64>().expect("native sample"))
+            .collect::<Vec<_>>();
+        let time = (values[0] * 1e9) as u64;
+        if !released && time >= release {
+            runtime.handle().drain_frame_callbacks(origin + release);
+            motion.pressed(Press::Up, Some(origin + release));
+            released = true;
+        }
+        runtime.handle().drain_frame_callbacks(origin + time);
+        let progress = f64::from(geometry.get());
+        for (actual, expected) in [
+            (rest.0 + (held.0 - rest.0) * progress, values[1]),
+            (rest.1 + (held.1 - rest.1) * progress, values[2]),
+        ] {
+            size_error += (actual - expected).powi(2);
+        }
+        fill_error +=
+            (f64::from((1.0 - material.get()).clamp(0.0, 1.0)) - values[3].clamp(0.0, 1.0)).powi(2);
+        count += 1;
+    }
+    assert!(count >= 50);
+    let size_rms = (size_error / f64::from(count * 2)).sqrt();
+    let fill_rms = (fill_error / f64::from(count)).sqrt();
+    assert!(size_rms < 1.1, "native tap size RMS: {size_rms}");
+    assert!(fill_rms < 0.06, "native tap fill RMS: {fill_rms}");
+}
+
+#[test]
+fn a_new_press_during_the_minimum_lift_keeps_the_lens_up() {
+    let runtime = cranpose_core::Runtime::new(std::sync::Arc::new(cranpose_core::DefaultScheduler));
+    let motion = Rc::new(ControlContactMotion::new(
+        runtime.handle(),
+        ControlContactKind::Thumb,
+    ));
+    let (geometry, _) = motion.states();
+    motion.pressed(Press::Down, Some(1_000_000_000));
+    runtime.handle().drain_frame_callbacks(1_050_000_000);
+    motion.pressed(Press::Up, Some(1_050_000_000));
+    runtime.handle().drain_frame_callbacks(1_100_000_000);
+    motion.pressed(Press::Down, Some(1_100_000_000));
+    for frame in 1..=60 {
+        runtime
+            .handle()
+            .drain_frame_callbacks(1_100_000_000 + frame * 16_666_667);
+    }
+    assert!(
+        (geometry.get() - 1.0).abs() < 0.01,
+        "lift {}",
+        geometry.get()
+    );
 }

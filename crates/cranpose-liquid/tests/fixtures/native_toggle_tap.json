@@ -1,0 +1,10 @@
+{
+  "release_seconds": 0.163787,
+  "source": {
+    "device": "iPhone 17 Pro simulator, iOS 27.0 (24A434), 402x874 at 3x",
+    "touches_sha256": "acee2cf81321119479004542aa2e89d730e209e2b9a898f92a4696b3f86e307b",
+    "layers_sha256": "efeef15f3335e506d4470619f01ad39ee4f579e8ae228d3b5c17796520c283ed"
+  },
+  "clock": "CADisplayLink timestamp minus application touch-down delivery; release is the touch-up delivery",
+  "track_fill": "position of the 630-point on/off strip behind the 63-point track, 0 off and 1 on"
+}

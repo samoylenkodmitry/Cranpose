@@ -21,3 +21,49 @@ fn switch_semantics_exposes_the_committed_value() {
         assert!(config.is_clickable);
     }
 }
+
+#[test]
+fn the_track_recolors_on_the_native_spring_after_a_tap() {
+    let runtime = cranpose_core::Runtime::new(Arc::new(cranpose_core::DefaultScheduler));
+    let mut fill = cranpose_animation::Animatable::new(0.0_f32, runtime.handle());
+    let origin = 1_000_000_000_u64;
+    let release = origin + (0.163_787 * 1e9) as u64;
+    runtime.handle().drain_frame_callbacks(release);
+    fill.animate_to_at(1.0, toggle_fill_motion(), release);
+    let (mut error, mut count) = (0.0, 0);
+    for row in include_str!("../../../tests/fixtures/native_toggle_tap.csv")
+        .lines()
+        .skip(1)
+    {
+        let values = row
+            .split(',')
+            .map(|value| value.parse::<f64>().expect("native sample"))
+            .collect::<Vec<_>>();
+        let time = origin + (values[0] * 1e9) as u64;
+        if time < release {
+            continue;
+        }
+        runtime.handle().drain_frame_callbacks(time);
+        error += (f64::from(fill.state().get()) - values[5]).powi(2);
+        count += 1;
+    }
+    assert!(count >= 40);
+    let rms = (error / f64::from(count)).sqrt();
+    assert!(rms < 0.02, "native track fill RMS: {rms}");
+}
+
+#[test]
+fn the_track_paints_one_flat_color_at_rest_and_the_strip_while_it_moves() {
+    let colors = Arc::<[Color]>::from([
+        Color::from_rgb_u8(0, 133, 252),
+        Color::from_rgb_u8(198, 198, 201),
+    ]);
+    assert_eq!(track_brush(0.0, &colors), Brush::solid(colors[1]));
+    assert_eq!(track_brush(1.0, &colors), Brush::solid(colors[0]));
+    let Brush::LinearGradient { start, end, .. } = track_brush(0.5, &colors) else {
+        panic!("a moving fill paints the strip");
+    };
+    // Halfway, the blend covers the track, its on side leading from the left.
+    assert!(start.x < 0.0 && end.x > TRACK_WIDTH);
+    assert!((end.x - start.x - 8.0 * TRACK_WIDTH).abs() < 1e-3);
+}
