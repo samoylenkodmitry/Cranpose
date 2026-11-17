@@ -1,7 +1,6 @@
 use super::{
     Capture, Damage, FrameDamages, FrameWindow, Held, PresentedImage, Since,
     captures::{collect, widen},
-    settle,
 };
 use crate::frame_packet::HeldWindow;
 
@@ -166,7 +165,9 @@ impl SwapchainHistory {
         let place = (frame.packet.root_scale, frame.viewport);
         let damage = if collect(&frame.packet.root, place, &mut self.captures) {
             widen(&self.captures, &mut rects);
-            settle(rects, frame.viewport)
+            let mut damage = Damage::Part(rects);
+            damage.settle(frame.viewport);
+            damage
         } else {
             Damage::Full
         };
