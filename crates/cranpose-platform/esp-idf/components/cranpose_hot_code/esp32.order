@@ -261,6 +261,7 @@
   *(.literal._RNvM*NtNtCs*_13cranpose_core8composer16composable_groupNt*8Composer10open_group* .text._RNvM*NtNtCs*_13cranpose_core8composer16composable_groupNt*8Composer10open_group*)
   *(.literal._RINvYINtNtCs*_13cranpose_core5state12MutableStatebEINt*16StateArenaHandlebE14try_with_inneruNCNvM***8is_alive0E* .text._RINvYINtNtCs*_13cranpose_core5state12MutableStatebEINt*16StateArenaHandlebE14try_with_inneruNCNvM***8is_alive0E*)
   *(.literal._RNvM*NtNtCs*_13cranpose_core11composition12scope_groupsNt*11ScopeGroups5group* .text._RNvM*NtNtCs*_13cranpose_core11composition12scope_groupsNt*11ScopeGroups5group*)
+  *(.literal._RINvM*NtCs*_13cranpose_core11scope_orderNt*10ScopeOrder8order_by* .text._RINvM*NtCs*_13cranpose_core11scope_orderNt*10ScopeOrder8order_by*)
   *(.literal._RNvM*NtNtCs*_18cranpose_app_shell11shell_frame12layout_phaseINt*8AppShellNtCs*_22cranpose_render_pixels14PixelsRendererE27run_layout_phase_in_context* .text._RNvM*NtNtCs*_18cranpose_app_shell11shell_frame12layout_phaseINt*8AppShellNtCs*_22cranpose_render_pixels14PixelsRendererE27run_layout_phase_in_context*)
   *(.literal._RNvM*NtNtCs*_13cranpose_core5state14state_watchersNt*13StateWatchers15has_subscribers* .text._RNvM*NtNtCs*_13cranpose_core5state14state_watchersNt*13StateWatchers15has_subscribers*)
   *(.literal._RNvM*NtNtCs*_11cranpose_ui4text7measureNt*12LayoutSource12shared_style* .text._RNvM*NtNtCs*_11cranpose_ui4text7measureNt*12LayoutSource12shared_style*)
