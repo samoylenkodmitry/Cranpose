@@ -44,7 +44,6 @@ limit = 1000
 "crates/cranpose-animation/src/animation.rs" = 1188
 "crates/cranpose-app-shell/src/lib.rs" = 1285
 "crates/cranpose-app-shell/src/shell_input.rs" = 2067
-"crates/cranpose-capabilities/src/lib.rs" = 1069
 "crates/cranpose-core/src/composer.rs" = 1961
 "crates/cranpose-core/src/runtime.rs" = 1631
 "crates/cranpose-core/src/state.rs" = 1853

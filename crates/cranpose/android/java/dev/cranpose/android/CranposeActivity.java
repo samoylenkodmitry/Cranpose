@@ -106,6 +106,11 @@ public class CranposeActivity extends NativeActivity {
     private static native void nativeOnCameraStill(byte[] jpeg, String error);
     private static native void nativeOnCameraLenses(String list, String active);
     private static native void nativeOnPermissionsResult(String results);
+    /**
+     * An activity result this activity did not ask for itself: a service's,
+     * such as the confirm-credential screen of the device unlock.
+     */
+    private static native void nativeOnActivityResult(int requestCode, int resultCode);
 
     /** One preview frame, in the format the sensor produced. */
     static void onCameraFrame(
@@ -2232,6 +2237,8 @@ public class CranposeActivity extends NativeActivity {
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
         if ((requestCode & 0xFFFF0000) != REQUEST_BASE) {
+            // Rust routes it to the service that asked, if one did.
+            nativeOnActivityResult(requestCode, resultCode);
             return;
         }
         final long token = pendingToken;

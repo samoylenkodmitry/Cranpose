@@ -525,7 +525,7 @@ features:
       --exclude desktop-app --exclude desktop-app-platform --exclude xtask \
       --exclude coroflow-demo --exclude coroflow-demo-web --exclude coroflow-demo-android \
       --exclude cranpose-native-demo --exclude perf-compare-cranpose --exclude perf-data \
-      --exclude-features android,ios,watchos,web,cranpose-platform-android,cranpose-platform-web,native-windows,uri-android,uri-web,file-picker-web,preferences-web,system-theme-web,web-http,wearable,heart-rate,storekit,playbilling,aaudio,avaudio
+      --exclude-features android,ios,watchos,web,cranpose-platform-android,cranpose-platform-web,native-windows,uri-android,uri-web,file-picker-web,preferences-web,system-theme-web,web-http,wearable,heart-rate,device-auth,storekit,playbilling,aaudio,avaudio
 
 # The generic functions that copy most LLVM IR into the desktop binary, the
 # 40 largest. A report for the nightly summary.
