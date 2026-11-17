@@ -35,7 +35,13 @@ def documents_public_item(lines: list[str], index: int, public_depths: list[int]
         stripped = lines[index].strip()
         if stripped.startswith("#["):
             exported = exported or stripped.startswith("#[macro_export]")
-            index += 1
+            # An attribute that rustfmt wraps goes on until its brackets close.
+            depth = 0
+            while index < len(lines):
+                depth += lines[index].count("[") - lines[index].count("]")
+                index += 1
+                if depth <= 0:
+                    break
             continue
         if stripped.startswith("pub "):
             return True

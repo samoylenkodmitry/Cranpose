@@ -484,6 +484,10 @@ mod text_group {
 /// Displays `text` in `style` with the given layout `options`. Compose's `BasicText`.
 #[track_caller]
 #[expect(non_snake_case, reason = "names follow Compose's casing")]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Compose's Text takes its style by value; the function shares it without a copy"
+)]
 pub fn BasicTextWithOptions<S>(
     text: S,
     modifier: Modifier,
@@ -500,6 +504,10 @@ where
 /// `BasicText`.
 #[track_caller]
 #[expect(non_snake_case, reason = "names follow Compose's casing")]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Compose's Text takes its style by value; the function shares it without a copy"
+)]
 pub fn BasicText<S>(
     text: S,
     modifier: Modifier,
@@ -528,6 +536,10 @@ where
 /// Displays `value` in `style` with the given text `options`. Compose's `Text`.
 #[track_caller]
 #[expect(non_snake_case, reason = "names follow Compose's casing")]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Compose's Text takes its style by value; the function shares it without a copy"
+)]
 pub fn TextWithOptions<S>(
     value: S,
     modifier: Modifier,
@@ -564,6 +576,10 @@ where
 /// ```
 #[track_caller]
 #[expect(non_snake_case, reason = "names follow Compose's casing")]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Compose's Text takes its style by value; the function shares it without a copy"
+)]
 pub fn Text<S>(value: S, modifier: Modifier, style: TextStyle) -> NodeId
 where
     S: IntoTextSource + Clone + PartialEq + 'static,
