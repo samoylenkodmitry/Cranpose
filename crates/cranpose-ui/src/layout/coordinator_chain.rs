@@ -12,17 +12,19 @@ use cranpose_foundation::{
     InvalidationKind, ModifierNodeContext, NodeCapabilities, PLAIN_WORDS_MAX, PlainIntrinsic,
     PlainLayoutFns, PrepareAt,
 };
-use cranpose_ui_layout::{AlignmentLines, Constraints, MeasurePolicy, Placement};
+use cranpose_ui_layout::{AlignmentLines, Constraints, Measurables, MeasurePolicy, Placement};
 use smallvec::SmallVec;
 
 use super::{
     LayoutNodeContext, ModifierChainInputs,
     core::{Measurable, Placeable},
-    inherited_alignment_lines, policy_intrinsic,
+    inherited_alignment_lines,
+    layout_child_measurable::LayoutChildMeasurable,
+    policy_intrinsic,
 };
 use crate::{
     modifier::{Point, Rect as GeometryRect, Size},
-    widgets::nodes::{IntrinsicKind, LayoutNode, LayoutParts},
+    widgets::nodes::{IntrinsicKind, LayoutNode},
 };
 
 /// The intrinsic size `kind` names, of a measurable.
@@ -62,8 +64,8 @@ fn plain_intrinsic(kind: IntrinsicKind) -> PlainIntrinsic {
 pub(super) struct CoordinatorFrame<'a> {
     measure_policy: &'a Rc<dyn MeasurePolicy>,
     scope: &'a dyn cranpose_ui_layout::MeasureScope,
-    measurables: &'a [Box<dyn Measurable>],
-    child_states: &'a [Rc<LayoutParts>],
+    measurables: Measurables<'a>,
+    child_states: &'a [LayoutChildMeasurable],
     placements: RefCell<&'a mut Vec<Placement>>,
     placement_indices: RefCell<&'a mut Vec<usize>>,
     context: RefCell<LayoutNodeContext>,
@@ -73,8 +75,8 @@ impl<'a> CoordinatorFrame<'a> {
     pub(super) fn new(
         measure_policy: &'a Rc<dyn MeasurePolicy>,
         scope: &'a dyn cranpose_ui_layout::MeasureScope,
-        measurables: &'a [Box<dyn Measurable>],
-        child_states: &'a [Rc<LayoutParts>],
+        measurables: Measurables<'a>,
+        child_states: &'a [LayoutChildMeasurable],
         placements: &'a mut Vec<Placement>,
         placement_indices: &'a mut Vec<usize>,
     ) -> Self {
@@ -421,7 +423,7 @@ impl CoordinatorChain {
         &self,
         density: f32,
         policy: &dyn MeasurePolicy,
-        measurables: &[Box<dyn Measurable>],
+        measurables: Measurables<'_>,
     ) -> Option<cranpose_ui_layout::ConstraintsHold> {
         let inner_size = self.inner_size.get();
         let mut wrapped = cranpose_ui_layout::WrappedHold {
@@ -456,7 +458,7 @@ impl CoordinatorChain {
     pub(super) fn ignores_child_sizes(
         &self,
         policy: &dyn MeasurePolicy,
-        measurables: &[Box<dyn Measurable>],
+        measurables: Measurables<'_>,
     ) -> bool {
         self.inner_constraints
             .get()

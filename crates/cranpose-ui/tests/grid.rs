@@ -315,7 +315,7 @@ impl cranpose_ui_layout::MeasurePolicy for ColumnsPolicy {
     fn measure(
         &self,
         _scope: &dyn cranpose_ui_layout::MeasureScope,
-        measurables: &[Box<dyn cranpose_ui_layout::Measurable>],
+        measurables: cranpose_ui_layout::Measurables<'_>,
         constraints: cranpose_ui::Constraints,
     ) -> cranpose_ui::MeasureResult {
         let placements = measurables
@@ -336,19 +336,19 @@ impl cranpose_ui_layout::MeasurePolicy for ColumnsPolicy {
         )
     }
 
-    fn min_intrinsic_width(&self, _: &[Box<dyn cranpose_ui_layout::Measurable>], _: f32) -> f32 {
+    fn min_intrinsic_width(&self, _: cranpose_ui_layout::Measurables<'_>, _: f32) -> f32 {
         0.0
     }
 
-    fn max_intrinsic_width(&self, _: &[Box<dyn cranpose_ui_layout::Measurable>], _: f32) -> f32 {
+    fn max_intrinsic_width(&self, _: cranpose_ui_layout::Measurables<'_>, _: f32) -> f32 {
         0.0
     }
 
-    fn min_intrinsic_height(&self, _: &[Box<dyn cranpose_ui_layout::Measurable>], _: f32) -> f32 {
+    fn min_intrinsic_height(&self, _: cranpose_ui_layout::Measurables<'_>, _: f32) -> f32 {
         0.0
     }
 
-    fn max_intrinsic_height(&self, _: &[Box<dyn cranpose_ui_layout::Measurable>], _: f32) -> f32 {
+    fn max_intrinsic_height(&self, _: cranpose_ui_layout::Measurables<'_>, _: f32) -> f32 {
         0.0
     }
 }

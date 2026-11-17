@@ -15,7 +15,7 @@ use cranpose_ui::{
     },
 };
 use cranpose_ui_graphics::{Color, Size};
-use cranpose_ui_layout::{Measurable, MeasurePolicy, MeasureScope, Placement};
+use cranpose_ui_layout::{Measurable, Measurables, MeasurePolicy, MeasureScope, Placement};
 use stats_alloc::{INSTRUMENTED_SYSTEM, Region, StatsAlloc};
 
 #[macro_use]
@@ -73,6 +73,39 @@ fn pass_allocations(mut composition: TestComposition) -> usize {
     allocations / PASSES
 }
 
+// Allocations of the first measure of a column of `count` rows.
+fn first_measure_allocations(count: usize) -> usize {
+    let mut composition = run_test_composition(move || {
+        Column(
+            Modifier::empty().fill_max_width(),
+            ColumnSpec::default(),
+            move || rows(count),
+        );
+    });
+    let root = composition.root().expect("a composed root");
+    let handle = composition.runtime_handle();
+    let mut applier = composition.applier_mut();
+    applier.set_runtime_handle(handle);
+    let region = Region::new(GLOBAL);
+    measure_layout(&mut applier, root, Size::new(100.0, 4000.0)).expect("the column measures");
+    let allocations = region.change().allocations;
+    applier.clear_runtime_handle();
+    allocations
+}
+
+// A parent measures a new child through its entry in the parent's one
+// list of children, which takes no allocation of its own.
+fn a_first_measure_allocates_at_most_two_per_row() {
+    let few = first_measure_allocations(10);
+    let many = first_measure_allocations(110);
+    let per_row = many.saturating_sub(few) as f64 / 100.0;
+    println!("allocations per row at a first measure: {per_row}");
+    assert!(
+        per_row <= 2.0,
+        "{per_row} allocations per row at a first measure"
+    );
+}
+
 /// Measuring a node again fills the memory of its last measurement: a
 /// remeasured row allocates nothing.
 fn remeasuring_a_row_allocates_nothing() {
@@ -93,7 +126,7 @@ impl MeasurePolicy for StackedRows {
     fn measure(
         &self,
         _: &dyn MeasureScope,
-        measurables: &[Box<dyn Measurable>],
+        measurables: Measurables<'_>,
         constraints: Constraints,
     ) -> MeasureResult {
         let mut placements = Vec::with_capacity(measurables.len());
@@ -111,31 +144,31 @@ impl MeasurePolicy for StackedRows {
                 .iter()
                 .enumerate()
                 .rev()
-                .for_each(|(index, child)| place(index, child.as_ref()));
+                .for_each(|(index, child)| place(index, child));
         } else {
             measurables
                 .iter()
                 .enumerate()
-                .for_each(|(index, child)| place(index, child.as_ref()));
+                .for_each(|(index, child)| place(index, child));
         }
         let (width, height) =
             constraints.constrain(constraints.max_width, 10.0 * measurables.len() as f32);
         MeasureResult::new(Size::new(width, height), placements)
     }
 
-    fn min_intrinsic_width(&self, _: &[Box<dyn Measurable>], _: f32) -> f32 {
+    fn min_intrinsic_width(&self, _: Measurables<'_>, _: f32) -> f32 {
         0.0
     }
 
-    fn max_intrinsic_width(&self, _: &[Box<dyn Measurable>], _: f32) -> f32 {
+    fn max_intrinsic_width(&self, _: Measurables<'_>, _: f32) -> f32 {
         0.0
     }
 
-    fn min_intrinsic_height(&self, _: &[Box<dyn Measurable>], _: f32) -> f32 {
+    fn min_intrinsic_height(&self, _: Measurables<'_>, _: f32) -> f32 {
         0.0
     }
 
-    fn max_intrinsic_height(&self, _: &[Box<dyn Measurable>], _: f32) -> f32 {
+    fn max_intrinsic_height(&self, _: Measurables<'_>, _: f32) -> f32 {
         0.0
     }
 }
@@ -404,6 +437,7 @@ fn a_thread_that_held_a_composition_frees_its_memory_at_exit() {
 /// One test, so no other test's allocations land in these regions: the
 /// counting allocator counts every thread.
 fn layout_and_modifiers_stay_within_their_allocation_budgets() {
+    a_first_measure_allocates_at_most_two_per_row();
     remeasuring_a_row_allocates_nothing();
     placing_children_out_of_order_allocates_nothing();
     a_layout_pass_lends_its_applier_without_rebuilding_it();

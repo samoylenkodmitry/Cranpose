@@ -2,7 +2,7 @@ use std::rc::Rc;
 
 use cranpose_core::Node;
 use cranpose_ui_graphics::Size as GeometrySize;
-use cranpose_ui_layout::{Constraints, Measurable, MeasureResult, MeasureScope};
+use cranpose_ui_layout::{Constraints, Measurables, MeasureResult, MeasureScope};
 
 use super::*;
 use crate::{
@@ -29,7 +29,7 @@ impl MeasurePolicy for TestMeasurePolicy {
     fn measure(
         &self,
         _scope: &dyn MeasureScope,
-        _measurables: &[Box<dyn Measurable>],
+        _measurables: Measurables<'_>,
         _constraints: Constraints,
     ) -> MeasureResult {
         MeasureResult::new(
@@ -41,19 +41,19 @@ impl MeasurePolicy for TestMeasurePolicy {
         )
     }
 
-    fn min_intrinsic_width(&self, _measurables: &[Box<dyn Measurable>], _height: f32) -> f32 {
+    fn min_intrinsic_width(&self, _measurables: Measurables<'_>, _height: f32) -> f32 {
         0.0
     }
 
-    fn max_intrinsic_width(&self, _measurables: &[Box<dyn Measurable>], _height: f32) -> f32 {
+    fn max_intrinsic_width(&self, _measurables: Measurables<'_>, _height: f32) -> f32 {
         0.0
     }
 
-    fn min_intrinsic_height(&self, _measurables: &[Box<dyn Measurable>], _width: f32) -> f32 {
+    fn min_intrinsic_height(&self, _measurables: Measurables<'_>, _width: f32) -> f32 {
         0.0
     }
 
-    fn max_intrinsic_height(&self, _measurables: &[Box<dyn Measurable>], _width: f32) -> f32 {
+    fn max_intrinsic_height(&self, _measurables: Measurables<'_>, _width: f32) -> f32 {
         0.0
     }
 }

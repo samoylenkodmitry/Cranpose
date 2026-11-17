@@ -8,7 +8,7 @@ use cranpose_ui_layout::{
 use smallvec::SmallVec;
 
 use crate::{
-    layout::core::{Alignment, Measurable},
+    layout::core::{Alignment, Measurables},
     widgets::grid::{GridConfig, GridFlow, GridItem, GridTrackSize, MAX_GRID_INDEX},
 };
 
@@ -124,7 +124,7 @@ impl GridMeasurePolicy {
 
     /// Gives every child a cell: named areas and explicit cells first, then
     /// the next free cell along the flow. Compose's `resolveGridItemIndices`.
-    fn place_cells(&self, measurables: &[Box<dyn Measurable>]) -> Placed {
+    fn place_cells(&self, measurables: Measurables<'_>) -> Placed {
         let explicit_columns = self.config.columns.len();
         let explicit_rows = self.config.rows.len();
         let flow = self.config.flow;
@@ -243,7 +243,7 @@ impl GridMeasurePolicy {
         &self,
         axis: TrackAxis,
         placed: &Placed,
-        measurables: &[Box<dyn Measurable>],
+        measurables: Measurables<'_>,
         columns: Option<&Tracks>,
         available: f32,
     ) -> Tracks {
@@ -265,7 +265,7 @@ impl GridMeasurePolicy {
             f32::INFINITY
         };
         let intrinsic = |cell: &Cell, min: bool| {
-            let measurable = measurables[cell.child].as_ref();
+            let measurable = &measurables[cell.child];
             match (axis, columns) {
                 (TrackAxis::Rows, Some(columns)) => {
                     let width = columns.spanned(cell.column, cell.column_span);
@@ -393,7 +393,7 @@ impl GridMeasurePolicy {
     fn size_grid(
         &self,
         placed: &Placed,
-        measurables: &[Box<dyn Measurable>],
+        measurables: Measurables<'_>,
         constraints: Constraints,
     ) -> (Tracks, Tracks) {
         let columns = self.size_tracks(
@@ -416,7 +416,7 @@ impl GridMeasurePolicy {
     /// The grid's width with no bound on it, or its height when `width`
     /// bounds it: Compose measures a grid's intrinsic sizes this way, the
     /// smallest and the largest alike.
-    fn intrinsic_width(&self, measurables: &[Box<dyn Measurable>]) -> f32 {
+    fn intrinsic_width(&self, measurables: Measurables<'_>) -> f32 {
         let placed = self.place_cells(measurables);
         self.size_tracks(
             TrackAxis::Columns,
@@ -428,7 +428,7 @@ impl GridMeasurePolicy {
         .total()
     }
 
-    fn intrinsic_height(&self, measurables: &[Box<dyn Measurable>], width: f32) -> f32 {
+    fn intrinsic_height(&self, measurables: Measurables<'_>, width: f32) -> f32 {
         let placed = self.place_cells(measurables);
         let constraints = Constraints {
             min_width: 0.0,
@@ -553,7 +553,7 @@ impl MeasurePolicy for GridMeasurePolicy {
     fn measure(
         &self,
         scope: &dyn MeasureScope,
-        measurables: &[Box<dyn Measurable>],
+        measurables: Measurables<'_>,
         constraints: Constraints,
     ) -> MeasureResult {
         let mut placements = Vec::new();
@@ -564,7 +564,7 @@ impl MeasurePolicy for GridMeasurePolicy {
     fn measure_into(
         &self,
         _scope: &dyn MeasureScope,
-        measurables: &[Box<dyn Measurable>],
+        measurables: Measurables<'_>,
         constraints: Constraints,
         placements: &mut Vec<Placement>,
     ) -> cranpose_ui_layout::Measurement {
@@ -606,19 +606,19 @@ impl MeasurePolicy for GridMeasurePolicy {
         crate::modifier::Size { width, height }.into()
     }
 
-    fn min_intrinsic_width(&self, measurables: &[Box<dyn Measurable>], _height: f32) -> f32 {
+    fn min_intrinsic_width(&self, measurables: Measurables<'_>, _height: f32) -> f32 {
         self.intrinsic_width(measurables)
     }
 
-    fn max_intrinsic_width(&self, measurables: &[Box<dyn Measurable>], _height: f32) -> f32 {
+    fn max_intrinsic_width(&self, measurables: Measurables<'_>, _height: f32) -> f32 {
         self.intrinsic_width(measurables)
     }
 
-    fn min_intrinsic_height(&self, measurables: &[Box<dyn Measurable>], width: f32) -> f32 {
+    fn min_intrinsic_height(&self, measurables: Measurables<'_>, width: f32) -> f32 {
         self.intrinsic_height(measurables, width)
     }
 
-    fn max_intrinsic_height(&self, measurables: &[Box<dyn Measurable>], width: f32) -> f32 {
+    fn max_intrinsic_height(&self, measurables: Measurables<'_>, width: f32) -> f32 {
         self.intrinsic_height(measurables, width)
     }
 }

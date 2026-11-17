@@ -7,7 +7,7 @@ use cranpose_core::{Composition, MemoryApplier, MutableState, NodeId, location_k
 use cranpose_foundation::lazy::LazyListScope;
 use cranpose_macros::composable;
 use cranpose_ui_layout::{
-    Constraints, IntrinsicSize, Measurable, MeasurePolicy, MeasureResult, MeasureScope, Placement,
+    Constraints, IntrinsicSize, Measurables, MeasurePolicy, MeasureResult, MeasureScope, Placement,
 };
 
 use crate::{
@@ -194,7 +194,7 @@ impl MeasurePolicy for IntrinsicReader {
     fn measure(
         &self,
         _scope: &dyn MeasureScope,
-        measurables: &[Box<dyn Measurable>],
+        measurables: Measurables<'_>,
         _constraints: Constraints,
     ) -> MeasureResult {
         let Some(child) = measurables.first() else {
@@ -217,19 +217,19 @@ impl MeasurePolicy for IntrinsicReader {
         )
     }
 
-    fn min_intrinsic_width(&self, _: &[Box<dyn Measurable>], _: f32) -> f32 {
+    fn min_intrinsic_width(&self, _: Measurables<'_>, _: f32) -> f32 {
         30.0
     }
 
-    fn max_intrinsic_width(&self, _: &[Box<dyn Measurable>], _: f32) -> f32 {
+    fn max_intrinsic_width(&self, _: Measurables<'_>, _: f32) -> f32 {
         30.0
     }
 
-    fn min_intrinsic_height(&self, _: &[Box<dyn Measurable>], _: f32) -> f32 {
+    fn min_intrinsic_height(&self, _: Measurables<'_>, _: f32) -> f32 {
         0.0
     }
 
-    fn max_intrinsic_height(&self, _: &[Box<dyn Measurable>], _: f32) -> f32 {
+    fn max_intrinsic_height(&self, _: Measurables<'_>, _: f32) -> f32 {
         0.0
     }
 }

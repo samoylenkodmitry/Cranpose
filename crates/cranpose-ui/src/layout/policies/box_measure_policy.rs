@@ -4,7 +4,7 @@ use cranpose_ui_layout::{
 use smallvec::SmallVec;
 
 use super::empty_measure_policy::empty_layout_hold;
-use crate::layout::core::{Alignment, Measurable};
+use crate::layout::core::{Alignment, Measurables};
 
 /// MeasurePolicy for Box layout - overlays children according to alignment.
 #[derive(Clone, Debug, PartialEq)]
@@ -34,7 +34,7 @@ impl MeasurePolicy for BoxMeasurePolicy {
     fn measure(
         &self,
         scope: &dyn MeasureScope,
-        measurables: &[Box<dyn Measurable>],
+        measurables: Measurables<'_>,
         constraints: Constraints,
     ) -> MeasureResult {
         let mut placements = Vec::new();
@@ -46,7 +46,7 @@ impl MeasurePolicy for BoxMeasurePolicy {
     /// on and the largest child, which sizes the box, still fits.
     fn measure_hold(
         &self,
-        measurables: &[Box<dyn Measurable>],
+        measurables: Measurables<'_>,
         constraints: Constraints,
         size: crate::modifier::Size,
     ) -> Option<cranpose_ui_layout::ConstraintsHold> {
@@ -84,11 +84,7 @@ impl MeasurePolicy for BoxMeasurePolicy {
 
     /// A box whose constraints fix its size places a child at its top start
     /// at the origin, whatever the child's size.
-    fn ignores_child_sizes(
-        &self,
-        measurables: &[Box<dyn Measurable>],
-        constraints: Constraints,
-    ) -> bool {
+    fn ignores_child_sizes(&self, measurables: Measurables<'_>, constraints: Constraints) -> bool {
         constraints.min_width == constraints.max_width
             && constraints.min_height == constraints.max_height
             && !self.layout_direction.is_rtl()
@@ -104,7 +100,7 @@ impl MeasurePolicy for BoxMeasurePolicy {
     fn measure_into(
         &self,
         scope: &dyn MeasureScope,
-        measurables: &[Box<dyn Measurable>],
+        measurables: Measurables<'_>,
         constraints: Constraints,
         placements: &mut Vec<Placement>,
     ) -> cranpose_ui_layout::Measurement {
@@ -161,28 +157,28 @@ impl MeasurePolicy for BoxMeasurePolicy {
         crate::modifier::Size { width, height }.into()
     }
 
-    fn min_intrinsic_width(&self, measurables: &[Box<dyn Measurable>], height: f32) -> f32 {
+    fn min_intrinsic_width(&self, measurables: Measurables<'_>, height: f32) -> f32 {
         measurables
             .iter()
             .map(|m| m.min_intrinsic_width(height))
             .fold(0.0, f32::max)
     }
 
-    fn max_intrinsic_width(&self, measurables: &[Box<dyn Measurable>], height: f32) -> f32 {
+    fn max_intrinsic_width(&self, measurables: Measurables<'_>, height: f32) -> f32 {
         measurables
             .iter()
             .map(|m| m.max_intrinsic_width(height))
             .fold(0.0, f32::max)
     }
 
-    fn min_intrinsic_height(&self, measurables: &[Box<dyn Measurable>], width: f32) -> f32 {
+    fn min_intrinsic_height(&self, measurables: Measurables<'_>, width: f32) -> f32 {
         measurables
             .iter()
             .map(|m| m.min_intrinsic_height(width))
             .fold(0.0, f32::max)
     }
 
-    fn max_intrinsic_height(&self, measurables: &[Box<dyn Measurable>], width: f32) -> f32 {
+    fn max_intrinsic_height(&self, measurables: Measurables<'_>, width: f32) -> f32 {
         measurables
             .iter()
             .map(|m| m.max_intrinsic_height(width))

@@ -5,7 +5,9 @@ use std::{any::Any, fmt, rc::Rc};
 use cranpose_core::NodeId;
 use cranpose_ui_graphics::Size;
 
-use crate::{Alignment, HorizontalAlignment, VerticalAlignment, constraints::Constraints};
+use crate::{
+    Alignment, HorizontalAlignment, Measurables, VerticalAlignment, constraints::Constraints,
+};
 
 /// Parent data for flex layouts (Row/Column weights and alignment).
 #[derive(Clone, Copy, Debug, Default)]
@@ -339,7 +341,7 @@ pub trait MeasurePolicy: Any {
     fn measure(
         &self,
         scope: &dyn MeasureScope,
-        measurables: &[Box<dyn Measurable>],
+        measurables: Measurables<'_>,
         constraints: Constraints,
     ) -> MeasureResult;
 
@@ -351,7 +353,7 @@ pub trait MeasurePolicy: Any {
     fn measure_into(
         &self,
         scope: &dyn MeasureScope,
-        measurables: &[Box<dyn Measurable>],
+        measurables: Measurables<'_>,
         constraints: Constraints,
         placements: &mut Vec<Placement>,
     ) -> Measurement {
@@ -370,7 +372,7 @@ pub trait MeasurePolicy: Any {
     /// `constraints` alone.
     fn measure_hold(
         &self,
-        _measurables: &[Box<dyn Measurable>],
+        _measurables: Measurables<'_>,
         _constraints: Constraints,
         _size: Size,
     ) -> Option<crate::ConstraintsHold> {
@@ -391,23 +393,23 @@ pub trait MeasurePolicy: Any {
     /// its measurement. `false`, the default, measures the layout again.
     fn ignores_child_sizes(
         &self,
-        _measurables: &[Box<dyn Measurable>],
+        _measurables: Measurables<'_>,
         _constraints: Constraints,
     ) -> bool {
         false
     }
 
     /// Computes the minimum intrinsic width of this policy.
-    fn min_intrinsic_width(&self, measurables: &[Box<dyn Measurable>], height: f32) -> f32;
+    fn min_intrinsic_width(&self, measurables: Measurables<'_>, height: f32) -> f32;
 
     /// Computes the maximum intrinsic width of this policy.
-    fn max_intrinsic_width(&self, measurables: &[Box<dyn Measurable>], height: f32) -> f32;
+    fn max_intrinsic_width(&self, measurables: Measurables<'_>, height: f32) -> f32;
 
     /// Computes the minimum intrinsic height of this policy.
-    fn min_intrinsic_height(&self, measurables: &[Box<dyn Measurable>], width: f32) -> f32;
+    fn min_intrinsic_height(&self, measurables: Measurables<'_>, width: f32) -> f32;
 
     /// Computes the maximum intrinsic height of this policy.
-    fn max_intrinsic_height(&self, measurables: &[Box<dyn Measurable>], width: f32) -> f32;
+    fn max_intrinsic_height(&self, measurables: Measurables<'_>, width: f32) -> f32;
 }
 
 /// The size and explicit alignment lines produced by a measure policy.

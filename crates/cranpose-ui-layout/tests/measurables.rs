@@ -3,7 +3,8 @@
 use cranpose_core::NodeId;
 use cranpose_ui_graphics::Size;
 use cranpose_ui_layout::{
-    Constraints, ConstraintsHold, FlexParentData, Measurable, Measurables, ParentData, Placeable,
+    Constraints, ConstraintsHold, FlexParentData, Measurable, Measurables, MeasurePolicy,
+    MeasureResult, MeasureScope, ParentData, Placeable, Placement,
 };
 
 // A child of a fixed size that reports a weight and a hold of its last
@@ -174,4 +175,92 @@ fn a_slice_of_children_is_a_list() {
     let tail: &[Fixed] = &list[1..];
     let children = Measurables::new(&tail);
     assert_eq!(ids(children.iter().map(width_of)), [20, 30]);
+}
+
+// Stacks its children one under another.
+struct Stack;
+
+impl MeasurePolicy for Stack {
+    fn measure(
+        &self,
+        _scope: &dyn MeasureScope,
+        measurables: Measurables<'_>,
+        constraints: Constraints,
+    ) -> MeasureResult {
+        let mut y = 0.0;
+        let mut width = 0.0_f32;
+        let placements = measurables
+            .iter()
+            .map(|child| {
+                let placeable = child.measure(constraints);
+                let placement = Placement::new(placeable.node_id(), 0.0, y, 0.0);
+                y += placeable.height();
+                width = width.max(placeable.width());
+                placement
+            })
+            .collect();
+        MeasureResult::new(Size::new(width, y), placements)
+    }
+
+    fn min_intrinsic_width(&self, measurables: Measurables<'_>, height: f32) -> f32 {
+        measurables
+            .iter()
+            .map(|child| child.min_intrinsic_width(height))
+            .fold(0.0, f32::max)
+    }
+
+    fn max_intrinsic_width(&self, measurables: Measurables<'_>, height: f32) -> f32 {
+        measurables
+            .iter()
+            .map(|child| child.max_intrinsic_width(height))
+            .fold(0.0, f32::max)
+    }
+
+    fn min_intrinsic_height(&self, measurables: Measurables<'_>, width: f32) -> f32 {
+        measurables
+            .iter()
+            .map(|child| child.min_intrinsic_height(width))
+            .sum()
+    }
+
+    fn max_intrinsic_height(&self, measurables: Measurables<'_>, width: f32) -> f32 {
+        measurables
+            .iter()
+            .map(|child| child.max_intrinsic_height(width))
+            .sum()
+    }
+}
+
+struct Scope;
+
+impl MeasureScope for Scope {
+    fn density(&self) -> f32 {
+        1.0
+    }
+
+    fn font_scale(&self) -> f32 {
+        1.0
+    }
+}
+
+#[test]
+fn a_policy_measures_its_children_through_a_shared_policy() {
+    let list = [Fixed::new(1, 10.0), Fixed::new(2, 30.0)];
+    let policy: &dyn MeasurePolicy = &Stack;
+    let children = Measurables::new(&list);
+    let mut placements = Vec::new();
+    let measurement = policy.measure_into(
+        &Scope,
+        children,
+        Constraints::loose(100.0, 100.0),
+        &mut placements,
+    );
+    assert_eq!(measurement.size, Size::new(30.0, 20.0));
+    let at: Vec<(NodeId, f32)> = placements
+        .iter()
+        .map(|placement| (placement.node_id, placement.y))
+        .collect();
+    assert_eq!(at, [(NodeId(1), 0.0), (NodeId(2), 10.0)]);
+    assert_eq!(policy.max_intrinsic_width(children, 0.0), 30.0);
+    assert_eq!(policy.min_intrinsic_height(Measurables::empty(), 0.0), 0.0);
 }
