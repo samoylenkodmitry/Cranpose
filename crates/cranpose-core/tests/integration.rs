@@ -17,6 +17,7 @@ mod pausable_content;
 mod process_ids;
 mod recompose_ancestors_first;
 mod recompose_child_order;
+mod recompose_queue_order;
 #[cfg(feature = "inspection")]
 mod recomposition_inspection;
 mod returned_values;
