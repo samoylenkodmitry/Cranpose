@@ -305,9 +305,10 @@ pub fn derivedStateOf<T: 'static + Clone + PartialEq>(
     composer_context::with_composer(|composer| {
         composer.with_group(source, |composer| {
             let derivation = composer.current_recompose_scope();
-            if let Some(scope) = &derivation
-                && !scope.is_derivation()
-            {
+            let marked_now = derivation
+                .as_ref()
+                .is_some_and(|scope| !scope.is_derivation());
+            if let Some(scope) = derivation.as_ref().filter(|_| marked_now) {
                 scope.mark_derivation();
                 // A read subscribes the innermost scope with a callback: the
                 // first derivation's reads would subscribe the reader.
@@ -340,8 +341,11 @@ pub fn derivedStateOf<T: 'static + Clone + PartialEq>(
                         }
                     };
                     let state = derived.state();
-                    // The scope keeps the callback its first composition gave it.
+                    // A scope keeps the callback its first composition gave
+                    // it. A new scope, which holds only the placeholder set
+                    // above, gets the rerun even for a kept derived state.
                     let rerun = (fresh
+                        || marked_now
                         || derivation
                             .as_ref()
                             .is_some_and(|scope| !scope.has_recompose_callback()))
