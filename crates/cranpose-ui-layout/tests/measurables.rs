@@ -167,7 +167,7 @@ fn a_list_of_references_reaches_each_child_whole() {
 
 #[test]
 fn a_slice_of_children_is_a_list() {
-    let list = vec![
+    let list = [
         Fixed::new(1, 10.0),
         Fixed::new(2, 20.0),
         Fixed::new(3, 30.0),
