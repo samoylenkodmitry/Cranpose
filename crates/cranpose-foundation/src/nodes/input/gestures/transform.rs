@@ -155,9 +155,7 @@ fn mean_spread(pointers: &[(PointerId, Point)], centroid: Point) -> f32 {
     let count = pointers.len() as f32;
     let mut sum = 0.0;
     for (_, position) in pointers {
-        let dx = position.x - centroid.x;
-        let dy = position.y - centroid.y;
-        sum += (dx * dx + dy * dy).sqrt();
+        sum += (*position - centroid).distance();
     }
     sum / count
 }

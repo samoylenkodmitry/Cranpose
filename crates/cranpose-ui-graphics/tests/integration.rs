@@ -5,6 +5,7 @@ mod glass_placeholder;
 mod kept_segments;
 mod mesh_space;
 mod path_fill_slices;
+mod point_distance;
 mod record_preparation;
 mod shared_sort;
 mod transform_bounds;

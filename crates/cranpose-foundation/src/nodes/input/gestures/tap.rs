@@ -45,7 +45,7 @@ impl TapGesture {
             }
             PointerEventKind::Move if self.pointer_id == Some(event.id) => {
                 if !self.canceled_by_drag
-                    && distance(self.down_position, event.travelled_to()) > DRAG_THRESHOLD
+                    && (event.travelled_to() - self.down_position).distance() > DRAG_THRESHOLD
                 {
                     self.canceled_by_drag = true;
                     TapGestureEvent::Canceled
@@ -77,12 +77,6 @@ impl TapGesture {
         self.down_position = Point { x: 0.0, y: 0.0 };
         self.canceled_by_drag = false;
     }
-}
-
-fn distance(a: Point, b: Point) -> f32 {
-    let dx = b.x - a.x;
-    let dy = b.y - a.y;
-    (dx * dx + dy * dy).sqrt()
 }
 
 #[cfg(test)]

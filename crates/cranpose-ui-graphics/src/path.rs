@@ -335,13 +335,11 @@ impl DashPathEffect {
         }
         for pair in points.windows(2) {
             let (start, end) = (pair[0], pair[1]);
-            let length = ((end.x - start.x).powi(2) + (end.y - start.y).powi(2)).sqrt();
+            let delta = end - start;
+            let length = delta.distance();
             let at = |distance: f32| {
                 let t = if length > 0.0 { distance / length } else { 0.0 };
-                Point::new(
-                    start.x + (end.x - start.x) * t,
-                    start.y + (end.y - start.y) * t,
-                )
+                Point::new(start.x + delta.x * t, start.y + delta.y * t)
             };
             let mut walked = 0.0;
             while walked < length {
@@ -428,7 +426,8 @@ pub fn for_each_stroke_line(
             continue;
         }
         let half_width = stroke.half_width();
-        let length = ((end.x - start.x).powi(2) + (end.y - start.y).powi(2)).sqrt();
+        let delta = end - start;
+        let length = delta.distance();
         let grow = |cap: StrokeCap| {
             if cap == StrokeCap::Square {
                 half_width / length
@@ -437,10 +436,9 @@ pub fn for_each_stroke_line(
             }
         };
         let (back, ahead) = (grow(start_cap), grow(end_cap));
-        let (dx, dy) = (end.x - start.x, end.y - start.y);
         line(LineGeometry::new(
-            Point::new(start.x - dx * back, start.y - dy * back),
-            Point::new(end.x + dx * ahead, end.y + dy * ahead),
+            Point::new(start.x - delta.x * back, start.y - delta.y * back),
+            Point::new(end.x + delta.x * ahead, end.y + delta.y * ahead),
             with_cap(StrokeCap::Butt),
         ));
         for (point, cap) in [(start, start_cap), (end, end_cap)] {
