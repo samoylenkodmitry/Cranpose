@@ -139,11 +139,11 @@ impl TextPreparedLayoutOwner {
     /// takes the element's style even when it equals the current one, so
     /// the element, the source and the layouts prepared next share one
     /// copy; the old one leaves with the layouts that hold it.
-    fn update(&self, text: &AnnotatedString, style: &Arc<TextStyle>, options: TextLayoutOptions) {
+    fn update(&self, text: AnnotatedString, style: &Arc<TextStyle>, options: TextLayoutOptions) {
         let mut source = self.source.borrow_mut();
         let shared_style = Arc::ptr_eq(&source.style, style);
         let same_style = shared_style || *source.style == **style;
-        if source.text == *text && same_style && source.options == options {
+        if source.text == text && same_style && source.options == options {
             return;
         }
         if !same_style {
@@ -152,7 +152,7 @@ impl TextPreparedLayoutOwner {
         if !shared_style {
             source.style = Arc::clone(style);
         }
-        let replaced = std::mem::replace(&mut source.text, text.clone());
+        let replaced = std::mem::replace(&mut source.text, text);
         source.options = options;
         source.admission = CacheAdmission::Changed;
         drop(source);
@@ -339,7 +339,7 @@ impl TextModifierNode {
     // as a node made from an element of them does.
     pub(crate) fn shows(
         &self,
-        text: crate::widgets::StaticText<'_>,
+        text: &crate::widgets::StaticText,
         style: &Arc<TextStyle>,
         options: TextLayoutOptions,
         density: Density,
@@ -355,7 +355,7 @@ impl TextModifierNode {
     // of what the node showed, as an equal element's update does.
     pub(crate) fn show(
         &mut self,
-        text: &AnnotatedString,
+        text: AnnotatedString,
         style: &Arc<TextStyle>,
         options: TextLayoutOptions,
         density: Density,
@@ -681,7 +681,7 @@ impl ModifierNodeElement for TextModifierElement {
     }
 
     fn update(&self, node: &mut Self::Node) {
-        node.show(&self.text, &self.style, self.options, self.density);
+        node.show(self.text.clone(), &self.style, self.options, self.density);
     }
 
     fn equals_node(&self, node: &TextModifierNode) -> bool {

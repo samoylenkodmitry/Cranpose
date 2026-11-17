@@ -361,7 +361,7 @@ fn a_new_text_allocates_within_its_budget() {
     let many = first_frame_allocations(110, 30_000);
     let per_text = many.saturating_sub(few) as f64 / 100.0;
     println!("allocations per new text: {per_text}");
-    assert!(per_text <= 16.15, "{per_text} allocations per new text");
+    assert!(per_text <= 15.15, "{per_text} allocations per new text");
 }
 
 // The recordings the runs under `layer` draw from, as a reader holds them.

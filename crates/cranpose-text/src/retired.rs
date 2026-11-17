@@ -75,15 +75,25 @@ impl Retired<Arc<RenderString>> {
     /// A plain string of `text`, in the room of a retired string when
     /// nothing holds one any more.
     pub fn plain(&mut self, text: &str) -> AnnotatedString {
+        self.refilled(text)
+            .unwrap_or_else(|| AnnotatedString::from(text))
+    }
+
+    /// [`Self::plain`] of a string the caller gives up: a string that finds
+    /// no retired room keeps `text`'s own.
+    pub fn plain_owned(&mut self, text: String) -> AnnotatedString {
+        self.refilled(&text)
+            .unwrap_or_else(|| AnnotatedString::new(text))
+    }
+
+    // A plain string of `text` in the room of a retired string nothing
+    // holds; `None` when no such room is kept. Empty text takes none.
+    fn refilled(&mut self, text: &str) -> Option<AnnotatedString> {
         if text.is_empty() {
-            return AnnotatedString::default();
+            return Some(AnnotatedString::default());
         }
-        if let Some(mut content) = self.take(|content| Arc::get_mut(content).is_some())
-            && let Some(render) = Arc::get_mut(&mut content)
-        {
-            render.refill_plain(text);
-            return AnnotatedString::from(content);
-        }
-        AnnotatedString::from(text)
+        let mut content = self.take(|content| Arc::get_mut(content).is_some())?;
+        Arc::get_mut(&mut content)?.refill_plain(text);
+        Some(AnnotatedString::from(content))
     }
 }
