@@ -278,9 +278,7 @@ impl Composer {
             // The box comes first, so `init` can make the node in it.
             let mut node = Box::write(Box::new_uninit(), init());
             applier.record_fresh_recyclable_creation(key);
-            if let Some(shell) = node.rehouse_for_recycle() {
-                applier.seed_recycled_node_shell(key, node.recycle_pool_limit(), shell);
-            }
+            applier.seed_recycled_node_shell(key, &*node);
             reset(&mut node);
             EmittedNode::Fresh(node)
         })

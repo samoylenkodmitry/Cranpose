@@ -7,8 +7,9 @@ use cranpose_animation::{
 };
 use cranpose_core::{mutableStateOf, remember};
 use cranpose_ui::{
-    Constraints, Layout, MeasureLayoutOptions, MeasureResult, Modifier, TestComposition,
-    measure_layout, measure_layout_with_options, run_test_composition,
+    Constraints, Layout, MeasureLayoutOptions, MeasureResult, MemoryHeadroom, Modifier,
+    TestComposition, measure_layout, measure_layout_with_options, run_test_composition,
+    set_memory_headroom,
     widgets::{
         box_widget::{Box, BoxSpec},
         column::{Column, ColumnSpec},
@@ -387,10 +388,12 @@ fn an_animation_frame_allocates_only_its_recomposition() {
     assert!(allocations <= 6, "{allocations} allocations a frame");
 }
 
-// Allocations of composing a column of `count` rows of two boxes each.
-fn rows_of_boxes_allocations(count: usize) -> usize {
+// Allocations of composing a column of `count` rows of two boxes each,
+// with `headroom` memory left.
+fn rows_of_boxes_allocations(count: usize, headroom: MemoryHeadroom) -> usize {
     let region = Region::new(GLOBAL);
     let composition = run_test_composition(move || {
+        set_memory_headroom(headroom);
         Column(Modifier::empty(), ColumnSpec::default(), move || {
             for _ in 0..count {
                 Row(Modifier::empty(), RowSpec::default(), || {
@@ -416,11 +419,20 @@ fn rows_of_boxes_allocations(count: usize) -> usize {
 // Composing a row of two boxes makes its three layout nodes, each with its
 // box and parts, the size modifiers of the boxes and the row's list of
 // children. The rows and the boxes share their measure policies.
+// With little memory left the recycle pool keeps no shells, so a node made
+// fresh makes no shell to seed it with either.
 fn composing_a_row_of_boxes_allocates_within_its_budget() {
-    rows_of_boxes_allocations(4);
-    let per_row = (rows_of_boxes_allocations(40) - rows_of_boxes_allocations(20)) / 20;
-    println!("allocations of composing a row of two boxes: {per_row}");
-    assert!(per_row <= 11, "{per_row} allocations a row");
+    for headroom in [MemoryHeadroom::Ample, MemoryHeadroom::Tight] {
+        rows_of_boxes_allocations(4, headroom);
+        let per_row = (rows_of_boxes_allocations(40, headroom)
+            - rows_of_boxes_allocations(20, headroom))
+            / 20;
+        println!("allocations of composing a row of two boxes, {headroom:?} memory: {per_row}");
+        assert!(
+            per_row <= 11,
+            "{per_row} allocations a row, {headroom:?} memory"
+        );
+    }
 }
 
 // A modifier holds a plain element by value: one alone takes no
