@@ -49,16 +49,17 @@ impl ManyElements {
     // `first` followed by `more`. Elements move into the joined chain;
     // only those another modifier also holds are copied.
     fn joined(first: ModifierKind, more: ModifierKind) -> Rc<Self> {
-        let mut chain = match first {
-            ModifierKind::Many(chain) => chain,
-            first => {
-                let mut chain = Self::default();
-                chain.push(first);
-                Rc::new(chain)
-            }
+        // A new chain starts empty in its allocation, so its elements land
+        // there and the list never moves.
+        let (mut chain, first) = match first {
+            ModifierKind::Many(chain) => (chain, ModifierKind::Empty),
+            first => (Rc::default(), first),
         };
         match Rc::get_mut(&mut chain) {
-            Some(owned) => owned.push(more),
+            Some(owned) => {
+                owned.push(first);
+                owned.push(more);
+            }
             None => {
                 let mut copy = Self::clone(&chain);
                 copy.push(more);
@@ -76,7 +77,7 @@ impl ManyElements {
                 self.provides_composition_locals |= element.provides_composition_locals();
                 self.elements.push(element);
             }
-            ModifierKind::Many(shared) => {
+            ModifierKind::Many(mut shared) => {
                 self.provides_composition_locals |= shared.provides_composition_locals;
                 if shared.inspector.is_some() {
                     self.inspector = merged_inspector(
@@ -84,9 +85,9 @@ impl ManyElements {
                         inspector_slice(&shared.inspector),
                     );
                 }
-                match Rc::try_unwrap(shared) {
-                    Ok(owned) => self.elements.extend(owned.elements),
-                    Err(shared) => self.elements.extend(shared.elements.iter().cloned()),
+                match Rc::get_mut(&mut shared) {
+                    Some(owned) => self.elements.append(&mut owned.elements),
+                    None => self.elements.extend(shared.elements.iter().cloned()),
                 }
             }
         }
