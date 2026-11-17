@@ -40,10 +40,35 @@ impl Default for Glyphs {
     }
 }
 
-// Whether glyphs `count` long take a room `room` long: one as long, or one
-// at most twice as long, so a short text keeps no long text's room.
+// The glyphs of a room that any shorter text takes, 128 bytes: a text that
+// changes length keeps one room, and so little slack costs less than a new
+// room.
+const SMALL_ROOM: usize = 16;
+
+// Whether glyphs `count` long take a room `room` long: one at least as
+// long, and at most twice as long or a small room, so a short text keeps no
+// long text's room.
 fn takes_room(room: usize, count: usize) -> bool {
-    count <= room && room <= count.saturating_mul(2)
+    count <= room && (room <= count.saturating_mul(2) || room <= SMALL_ROOM)
+}
+
+// The room a kept layout takes when its text outgrew the room it had: a
+// small room, or half as long again as its glyphs, so a text that grows a
+// little at a time takes a new room once in a while, not each frame.
+fn grown_room(count: usize) -> usize {
+    count.saturating_add(count / 2).max(SMALL_ROOM)
+}
+
+// `shaped` packed into a room of `room` glyphs, at least as many as it has,
+// collected from iterators of known length in one allocation.
+fn packed_room(shaped: &ShapedGlyphs, room: usize) -> Arc<[PackedGlyph]> {
+    let packed = shaped.iter().map(PackedGlyph::pack);
+    match room.saturating_sub(shaped.len()) {
+        0 => packed.collect(),
+        spare => packed
+            .chain(std::iter::repeat_n(PackedGlyph::EMPTY, spare))
+            .collect(),
+    }
 }
 
 // A glyph whose id fits 16 bits and whose advance fits 15.
@@ -57,6 +82,13 @@ pub(crate) struct PackedGlyph {
 }
 
 impl PackedGlyph {
+    // What a room holds past its glyphs.
+    const EMPTY: Self = Self {
+        id: 0,
+        advance: 0,
+        cluster: 0,
+    };
+
     pub(crate) fn id(self) -> GlyphId {
         GlyphId(u32::from(self.id))
     }
@@ -135,11 +167,16 @@ impl<'a> RunGlyphs<'a> {
 impl LaidGlyphs {
     // Keeps `shaped`, in eight bytes a glyph when every one fits them.
     pub(crate) fn new(shaped: &ShapedGlyphs) -> Self {
+        Self::in_room(shaped, shaped.len())
+    }
+
+    // Keeps `shaped` as `new` does, packed into a room of `room` glyphs, at
+    // least as many as it has.
+    fn in_room(shaped: &ShapedGlyphs, room: usize) -> Self {
         let offsets = shaped.offsets();
         let glyphs = match u32::try_from(shaped.len()) {
-            // Collected from an iterator of known length, in one allocation.
             Ok(len) if shaped.iter().all(PackedGlyph::fits) => Glyphs::Packed {
-                room: shaped.iter().map(PackedGlyph::pack).collect(),
+                room: packed_room(shaped, room),
                 len,
             },
             _ => Glyphs::Full(Arc::from(&shaped[..])),
@@ -155,10 +192,13 @@ impl LaidGlyphs {
 
     // Keeps `shaped` in the room of `spare` when nothing else holds that,
     // the room takes the glyphs and every glyph packs and draws at its pen,
-    // as a counter's text keeps its room from one number to the next.
+    // as a counter's text keeps its room from one number to the next. A
+    // text that outgrew the room takes a new one with room to grow.
     pub(crate) fn new_in(shaped: &ShapedGlyphs, spare: Self) -> Self {
-        if let Glyphs::Packed { mut room, .. } = spare.glyphs
-            && takes_room(room.len(), shaped.len())
+        let Glyphs::Packed { mut room, .. } = spare.glyphs else {
+            return Self::new(shaped);
+        };
+        if takes_room(room.len(), shaped.len())
             && let Ok(len) = u32::try_from(shaped.len())
             && shaped
                 .offsets()
@@ -181,7 +221,10 @@ impl LaidGlyphs {
                 };
             }
         }
-        Self::new(shaped)
+        if room.is_empty() || shaped.len() <= room.len() {
+            return Self::new(shaped);
+        }
+        Self::in_room(shaped, grown_room(shaped.len()))
     }
 
     pub(crate) fn len(&self) -> usize {

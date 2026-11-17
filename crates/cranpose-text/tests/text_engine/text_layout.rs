@@ -466,7 +466,9 @@ fn laying_out_into_an_earlier_layout_gives_what_a_new_one_gives() {
 
 // A layout kept across frames takes texts of fewer glyphs in the room of
 // more, as a counter does, and of more, and glyphs too wide to keep in
-// eight bytes (Cranpose Test Wide's `W`), and then narrow ones again.
+// eight bytes (Cranpose Test Wide's `W`), and then narrow ones again, and
+// texts far shorter and longer than the last, in a small room and in one
+// grown past it.
 #[test]
 fn a_kept_layout_takes_shorter_longer_and_wider_glyphs() {
     let resolver = FontFamilyResolver::new([typeface(TEST_WIDE), typeface(ROBOTO)]);
@@ -483,6 +485,11 @@ fn a_kept_layout_takes_shorter_longer_and_wider_glyphs() {
             "ab",
             "aWba",
             "aa",
+            "1",
+            "123456789012345678901234",
+            "1",
+            "1234567890123456789012345",
+            "12",
         ],
     );
 }

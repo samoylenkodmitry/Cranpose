@@ -251,6 +251,11 @@ enum TickerText {
     // A number of three to six digits, one digit longer or shorter than the
     // last, as a price that gains or loses a digit.
     Digits,
+    // A string of one to twelve characters, much longer or shorter than the
+    // last.
+    Lengths,
+    // A string a character longer each frame, as a text being typed.
+    Growing,
     // The frame's number, which each text reads from the state it is given.
     State,
 }
@@ -261,6 +266,7 @@ enum TickerText {
 fn ticker_frame_allocations(texts: usize, shown: TickerText) -> usize {
     const WORDS: [&str; 4] = ["alpha", "bravo", "charlie", "delta"];
     const DIGITS: [usize; 4] = [100, 1_000, 10_000, 100_000];
+    const LENGTHS: [usize; 4] = [1, 12, 2, 9];
     let tick_holder: Rc<RefCell<Option<MutableState<usize>>>> = Rc::default();
     let holder = Rc::clone(&tick_holder);
     let mut composition = cranpose_ui::run_test_composition(move || {
@@ -285,6 +291,14 @@ fn ticker_frame_allocations(texts: usize, shown: TickerText) -> usize {
                         Modifier::empty(),
                         style,
                     ),
+                    TickerText::Lengths => Text(
+                        "7".repeat(LENGTHS[(tick.get() + index) % LENGTHS.len()]),
+                        Modifier::empty(),
+                        style,
+                    ),
+                    TickerText::Growing => {
+                        Text("7".repeat(8 + tick.get()), Modifier::empty(), style)
+                    }
                     TickerText::State => Text(tick, Modifier::empty(), style),
                 };
             }
@@ -334,12 +348,15 @@ fn ticker_frame_allocations(texts: usize, shown: TickerText) -> usize {
 // string and a layout it gave up before: it allocates nothing of its own.
 // A counter's text allocates the string the app formats, one whose digits
 // grow and shrink too, and a text of a state the string of the state's
-// value.
+// value. A text much shorter than the last keeps a small room; a text that
+// grows each frame takes a room with room to grow, once every few frames.
 fn a_text_changing_each_frame_reuses_its_string_and_layout() {
     for (shown, own) in [
         (TickerText::Words, 0.0),
         (TickerText::Numbers, 1.0),
         (TickerText::Digits, 1.0),
+        (TickerText::Lengths, 1.0),
+        (TickerText::Growing, 1.1),
         (TickerText::State, 1.0),
     ] {
         let few = ticker_frame_allocations(10, shown);
