@@ -19,8 +19,9 @@ use cranpose_ui::{
 /// picture again while no newer one comes. It drops the pictures that it did not show. It waits
 /// for the decoder: no work is done in a frame that has no new picture. A picture is converted
 /// once on the GPU, with no copy through the CPU, and the decoder's own buffer is the source.
-/// The surface keeps up to two pictures until the GPU has read them, so a decoder with a `depth`
-/// of 4 or more drops none of its pictures at 60 pictures a second.
+/// The surface keeps each picture until the GPU has read it, which takes up to three frames, so
+/// give the decoder a `depth` of 6 or more for a stream of 60 pictures a second. The decoder
+/// drops its oldest pictures first when the app falls behind, as it does while a window starts.
 ///
 /// Platforms: macOS and iOS draw through Metal. Other platforms draw nothing yet: Android's
 /// `AHardwareBuffer` pictures need a Vulkan import, and no other platform has a hardware decoder

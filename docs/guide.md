@@ -2840,7 +2840,7 @@ form, which may start with the parameter sets. `split_access_units` cuts a strea
 file. The decoder holds no picture back for reordering, so the stream needs no B-frames. A decoder on Apple
 answers `DecoderError::NeedsKeyframe` until a keyframe arrives, after a start in the middle of a stream and
 after the system ends its session. Ask the sender for a keyframe then. `depth` is the number of pictures
-that the decoder, the surface and the GPU hold. Use 4 or more for a stream of 60 pictures a second.
+that the decoder, the surface and the GPU hold. Use 6 or more for a stream of 60 pictures a second.
 
 `PlayerSurface` draws on macOS and iOS. It draws nothing on Android yet, and no other platform has a
 decoder.

@@ -14,6 +14,8 @@ use cranpose_services::{
 
 const H264_CLIP: &[u8] = include_bytes!("../../../apps/xr-demo/assets/test_clip.h264");
 const HEVC_CLIP: &[u8] = include_bytes!("../../../apps/xr-demo/assets/test_clip.h265");
+// Other parameter sets than the clip's, at the same size
+const TONES_CLIP: &[u8] = include_bytes!("../../cranpose/tests/assets/test_tones_709_full.h264");
 const STEP: Duration = Duration::from_micros(16_667);
 const DEPTH: usize = 4;
 // The decoder holds up to 8 units while it starts, and outputs their pictures at once
@@ -205,4 +207,16 @@ fn a_task_wakes_when_the_decoder_outputs_a_picture() {
         Some(7)
     );
     drop(feeder.join().expect("the feeder"));
+}
+
+#[test]
+fn a_stream_that_changes_its_parameter_sets_keeps_decoding() {
+    let first = split_access_units(VideoCodec::H264, H264_CLIP);
+    let second = split_access_units(VideoCodec::H264, TONES_CLIP);
+    let units: Vec<&[u8]> = first[..5].iter().chain(&second[..5]).copied().collect();
+    let mut decoder = decoder(VideoCodec::H264, BURST);
+    let pictures = play(&mut decoder, &units, units.len());
+    assert_eq!(pictures.len(), units.len());
+    assert_eq!(pictures[9].info.metadata, 9 * 7);
+    assert_eq!(pictures[9].size, (640, 360));
 }
