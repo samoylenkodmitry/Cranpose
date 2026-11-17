@@ -1035,6 +1035,15 @@ android-coroflow: _disk-guard
       -PcranposeLabel="Coroflow Notes" -PcranposeApplicationId=io.cranpose.coroflow \
       -PcranposeServices=
 
+# Build the player demo for Android: apps/player-demo through the same Android project. It plays
+# the H.264 and HEVC test clips through the hardware decoder and PlayerSurface.
+android-player: _disk-guard
+    cd apps/android-demo/android && ../../../scripts/ci/with_host_lock.sh --shared \
+      ./gradlew --no-daemon :app:assembleRelease \
+      -PcranposeCargoPackage=player-demo-android -PcranposeLibraryName=player_demo_app \
+      -PcranposeLabel="Player demo" -PcranposeApplicationId=dev.cranpose.playerdemo \
+      -PcranposeServices=
+
 # Build the XR demo for headsets such as a Meta Quest: apps/xr-demo through the
 # same Android project, as an immersive app.
 android-xr: _disk-guard

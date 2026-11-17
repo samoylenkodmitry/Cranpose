@@ -239,8 +239,8 @@ draws nothing: `YcbcrConverter::new` answers `None`. The steps:
    `VK_KHR_sampler_ycbcr_conversion`, `VK_KHR_external_memory`, `VK_KHR_dedicated_allocation`,
    `VK_KHR_bind_memory2` and `VK_KHR_get_memory_requirements2` when the driver lists all of them.
    It chains the `samplerYcbcrConversion` feature, which wgpu-hal leaves off. Any other adapter
-   opens as before. The Android shell now gives the composition its `GpuContext`, and gives it the
-   new one after a device loss.
+   opens as before. The Android shell gives the composition its `GpuContext`, and gives it the new one
+   after a device loss.
 2. `vkGetAndroidHardwareBufferPropertiesANDROID` returns the buffer's memory requirements and its
    `VkAndroidHardwareBufferFormatPropertiesANDROID`. The format of a private buffer is
    `VK_FORMAT_UNDEFINED` with an `externalFormat`, and the properties suggest the model, the range
@@ -267,20 +267,21 @@ draws nothing: `YcbcrConverter::new` answers `None`. The steps:
    sampled and initialized. The render pass leaves the texture in the layout of that state, so wgpu
    inserts no barrier and no clear for it.
 7. The frame stays alive until the GPU has read it. The image, its memory, its view, the
-   framebuffer, the descriptor set and the `VideoFrame` go into the callback of the queue's
-   submission. wgpu runs the callback when it polls the queue's fences, which every submission does.
+   framebuffer, the target texture, the descriptor set and the `VideoFrame` go into the callback
+   of the queue's submission, because wgpu does not see the raw commands. wgpu runs the callback when it polls the queue's fences, which every submission does.
    The `AImageReader` of the decoder has `depth` plus the images in flight.
 
 The shaders are GLSL, because a YCbCr sampler needs a combined image sampler, which WGSL cannot
 write. `scripts/dev/compile_ycbcr_shaders.sh` compiles them with the NDK's `glslc` and checks the
 result with `spirv-val`. The repository keeps the SPIR-V beside its source.
 
-The model and the range come from the driver's suggestion for each buffer. The range follows the
-decoder. The model does not always: on the Galaxy Tab S7+ (Adreno 650) the driver suggests BT.601
-for every buffer, and the decoder labels a BT.709 stream of 640 by 360 pixels as BT.601 as well
-(`color-standard` 75 and a BT.601 data space). That stream shows chroma that differs by up to 9
-levels of 255 from the encoder's colors. The BT.601 test stream with the limited range shows the
-encoder's colors within one level.
+The model and the range come from the driver's suggestion for each buffer, which follows the data
+space that the decoder sets. The range followed the decoder in every stream that the tablet played.
+The model did not for a BT.709 stream of 640 by 360 pixels with the full range: the decoder
+reported `color-standard` 75 and a BT.601 data space, and the driver suggested BT.601. That stream
+shows chroma that differs by up to 9 levels of 255 from the encoder's colors. The BT.601 stream
+with the limited range shows the encoder's colors within one level. A BT.709 stream of 1920 by 1080
+pixels was decoded as BT.709: its colors match a BT.709 decode of the samples within one level.
 
 The cost of one picture on that tablet, with two decoders running at 120 and at 60 pictures a
 second in release builds: the CPU takes 0.85 to 1.0 ms for a picture of 640 by 360 pixels and 1.2

@@ -21,7 +21,7 @@ required-features = ["desktop"]
 [features]
 default = ["renderer-wgpu", "desktop"]
 renderer-wgpu = ["cranpose/renderer-wgpu"]
-desktop = ["cranpose/desktop", "dep:env_logger"]
+desktop = ["renderer-wgpu", "cranpose/desktop", "dep:env_logger"]
 android = ["renderer-wgpu", "cranpose/android"]
 
 [dependencies]

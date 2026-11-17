@@ -23,7 +23,7 @@ use super::{
     raw_device::{COLOR, RawDevice, TARGET_FORMAT},
     ycbcr_pipeline::{SetLease, YcbcrFormat, YcbcrPipeline},
 };
-use crate::{ExternalFrames, FrameWriter, GpuContext, VideoFrame};
+use crate::{ExternalFrames, FrameTexture, FrameWriter, GpuContext, VideoFrame};
 
 // Converts the pictures of one decoder for one GPU context.
 pub(crate) struct YcbcrConverter {
@@ -36,11 +36,14 @@ pub(crate) struct YcbcrConverter {
     pipeline: Option<Arc<YcbcrPipeline>>,
 }
 
-// What the GPU reads while it converts one picture, and drops once it is done. The frame comes
-// last, so the decoder's image is free again only after the objects that name it are gone.
+// What the GPU reads and writes while it converts one picture, and drops once it is done. wgpu
+// does not see the raw commands, so only this struct keeps the target texture alive while the pass
+// runs. The frame comes last, so the decoder's image is free again only after the objects that
+// name it are gone.
 struct InFlight {
-    _image: HardwareBufferImage,
     _framebuffer: Framebuffer,
+    _target: FrameTexture,
+    _image: HardwareBufferImage,
     _set: SetLease,
     _frame: VideoFrame,
 }
@@ -101,15 +104,17 @@ impl YcbcrConverter {
         let commands = self.raw.record(|commands| {
             self.record_pass(commands, &set, &image, &framebuffer, size, &window);
         })?;
+        let number = target.number();
         let work = InFlight {
-            _image: image,
             _framebuffer: framebuffer,
+            _target: target,
+            _image: image,
             _set: set,
             _frame: frame,
         };
         self.gpu.queue.submit([commands]);
         self.gpu.queue.on_submitted_work_done(move || drop(work));
-        self.writer.publish(target.number());
+        self.writer.publish(number);
         self.frames.next_frame()
     }
 
@@ -206,7 +211,7 @@ impl YcbcrConverter {
 
 impl Framebuffer {
     // The framebuffer of the texture that `target` renders into, `size` pixels large.
-    fn new(raw: &Arc<RawDevice>, target: &crate::FrameTexture, size: (u32, u32)) -> Option<Self> {
+    fn new(raw: &Arc<RawDevice>, target: &FrameTexture, size: (u32, u32)) -> Option<Self> {
         // SAFETY: the guard reads the view's handle while this block runs.
         let view = unsafe {
             let hal = target.view().as_hal::<Vulkan>()?;
