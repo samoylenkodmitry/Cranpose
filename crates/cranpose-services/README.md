@@ -1,6 +1,6 @@
 # Cranpose services
 
-`cranpose-services` defines platform service contracts for Cranpose applications. The crate groups APIs for HTTP, files and folders, URI handlers, audio and media, camera, image pickers, haptics, heart rate, the device unlock, accessibility, device and power information, app updates, purchases, navigation, preferences, and shared content.
+`cranpose-services` defines platform service contracts for Cranpose applications. The crate groups APIs for HTTP, files and folders, URI handlers, audio and media, camera, image pickers, haptics, heart rate, the device's rotation, the device unlock, accessibility, device and power information, app updates, purchases, navigation, preferences, and shared content.
 
 Most applications use these APIs through the `cranpose` facade. Add `cranpose-services` directly when an application provides a custom backend or needs a service contract outside the facade. Platform adapters register implementations through each module's `set_platform_*` function. Composition-local services use `local_*` functions and `Provide*` composables; process-wide services use plain functions.
 
@@ -52,6 +52,38 @@ one that was refused sees `Denied`. `live_bpm()` is a reading only while the
 sensor is on the skin. On Android the service is compiled into the app only
 when declared, and the sensor pauses with the activity; other platforms report
 `Unavailable`.
+
+## Example: turn a view with the device
+
+The rotation of the device comes from its motion sensors, as a unit
+quaternion with the sensor's own timestamp. The service is in a build only
+when its build script declares `cranpose_capabilities::Use::device_motion()`;
+on iOS the `cranpose` feature `device-motion` links Core Motion as well.
+
+```rust
+use cranpose_services::{
+    MotionConfig, latest_device_motion, rememberDeviceMotion, rememberDeviceMotionSample,
+};
+
+// The sensor runs while this call is composed. The status is state that
+// changes rarely. The call asks the person for nothing.
+fn tracker() {
+    let motion = rememberDeviceMotion(MotionConfig::default());
+    // State of the newest sample, refreshed once per frame while live.
+    let _sample = rememberDeviceMotionSample(motion);
+}
+
+// Every frame, on any thread: no allocation and no lock.
+fn head_rotation() -> Option<[f32; 4]> {
+    let sample = latest_device_motion()?;
+    let q = sample.rotation;
+    Some([q.x, q.y, q.z, q.w])
+}
+```
+
+The frame of the quaternion, the timestamp clocks and the platform sources are
+in the [`device_motion`](https://docs.rs/cranpose-services/latest/cranpose_services/device_motion/index.html)
+module. Desktop systems report `DeviceMotionStatus::Unavailable`.
 
 ## Example: ask the owner to unlock
 

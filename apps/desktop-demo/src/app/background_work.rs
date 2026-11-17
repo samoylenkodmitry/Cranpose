@@ -6,6 +6,7 @@ use cranpose_ui::{
 
 use super::demo_random_u32;
 
+mod device_motion;
 mod device_unlock;
 pub(super) use device_unlock::WorkAndUnlock;
 

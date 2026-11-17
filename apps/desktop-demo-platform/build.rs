@@ -6,6 +6,7 @@ fn main() {
         Use::overlay(),
         Use::network(),
         Use::device_auth("Unlocks the demo with your face."),
+        Use::device_motion(),
     ])
     .emit();
 }

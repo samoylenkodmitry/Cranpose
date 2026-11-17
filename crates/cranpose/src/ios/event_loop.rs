@@ -723,6 +723,8 @@ pub fn try_run(settings: AppSettings, content: impl FnMut() + 'static) -> Result
     crate::apple::microphone::register();
     #[cfg(feature = "device-auth")]
     crate::apple::device_auth::register();
+    #[cfg(feature = "device-motion")]
+    crate::apple::device_motion::register();
     #[cfg(feature = "wearable")]
     crate::apple::wearable::register();
     super::app_info::register();

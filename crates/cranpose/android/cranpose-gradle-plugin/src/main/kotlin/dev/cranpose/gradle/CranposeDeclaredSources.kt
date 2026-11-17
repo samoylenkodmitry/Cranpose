@@ -30,6 +30,7 @@ internal val DECLARED_SERVICES: Map<String, DeclaredService> = mapOf(
     ),
     "heart-rate" to DeclaredService(javaSource = "java-heart-rate"),
     "device-auth" to DeclaredService(javaSource = "java-device-auth"),
+    "device-motion" to DeclaredService(javaSource = "java-device-motion"),
     "microphone" to DeclaredService(javaSource = "java-microphone"),
     "background" to DeclaredService(manifest = "manifests/background.xml"),
     "media" to DeclaredService(manifest = "manifests/media.xml"),

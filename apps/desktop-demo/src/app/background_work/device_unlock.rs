@@ -5,12 +5,14 @@ use cranpose_services::{
 };
 use cranpose_ui::{composable, Button, ButtonSpec, Color, Modifier, Spacer, Text, TextStyle};
 
-// The background work examples, then the unlock.
+// The background work examples, then the unlock and the device's rotation.
 #[composable]
 pub(in crate::app) fn WorkAndUnlock() {
     super::FetchAsyncValue();
     Spacer(Modifier::empty().size_points(0.0, 20.0));
     DeviceUnlock();
+    Spacer(Modifier::empty().size_points(0.0, 20.0));
+    super::device_motion::DeviceMotionDemo();
 }
 
 // A line that says what the device can ask with and how the last prompt

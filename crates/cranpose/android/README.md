@@ -93,6 +93,10 @@ The Gradle `services` set also supports manually maintained app manifests:
 | `television` | A Leanback launcher entry on `CranposeActivity`; `android.software.leanback` and `android.hardware.touchscreen` optional. The app supplies its 320 by 180 banner as `@drawable/tv_banner` | none |
 | `wearable` | Messages and streams to the app on the paired phone or watch (Wear OS Data Layer, `cranpose_services::wearable`) | none |
 
+`Use::device_motion()` selects `CranposeDeviceMotion`, which reads the rotation
+sensors on a thread of its own, and the normal `HIGH_SAMPLING_RATE_SENSORS`
+permission that lifts the 200 Hz cap of Android 12 and newer.
+
 `Use::update()` also selects the package installer, its receiver and
 `REQUEST_INSTALL_PACKAGES`. The launcher registers the updater when the declared
 capabilities include updates.
