@@ -386,7 +386,7 @@ impl GpuRenderer {
     // Whether `packet` draws what the surface shows, so it takes no image and
     // no present; the frame then closes as drawn for the renderer's warm-up.
     pub(crate) fn shows(&mut self, packet: &FramePacket, viewport: (u32, u32)) -> bool {
-        self.frame_damages.note(packet.frame_id, packet.damage);
+        self.frame_damages.note(packet.frame_id, &packet.damage);
         let frame = self.frame_window(packet, viewport);
         let shown = self.swapchain.shows(&frame, &self.frame_damages);
         if shown {
