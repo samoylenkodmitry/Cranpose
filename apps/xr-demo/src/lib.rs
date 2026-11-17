@@ -149,7 +149,7 @@ fn CurvedStrip() {
 fn PressesPanel(presses: MutableState<u32>, readout: MutableState<Readout>) {
     SpatialPanel(
         SubspaceModifier::new()
-            .size(320.0, 200.0)
+            .size(320.0, 260.0)
             .offset(600.0, 0.0, 100.0)
             .rotate(0.0, -30.0, 0.0),
         move || {
@@ -190,14 +190,16 @@ fn ReadoutLines(readout: MutableState<Readout>) {
         frames_per_second,
     } = readout.get();
     let head = head_cm.map_or_else(|| "not tracked".to_owned(), |cm| format!("{cm} cm"));
-    let system = local_headset_properties()
-        .current()
-        .map_or_else(String::new, |headset| {
+    let (system, eye) = local_headset_properties().current().map_or_else(
+        || (String::new(), String::new()),
+        |headset| {
             let [width, height] = headset.eye_image_sizes[0].recommended;
-            format!("{}, eye {width}x{height}", headset.system_name)
-        });
+            (headset.system_name, format!("Eye image {width}x{height}"))
+        },
+    );
     for line in [
         system,
+        eye,
         format!("Head y {head}"),
         format!("Right trigger {trigger_percent}%"),
         format!("Frame effect {frames_per_second} Hz"),
