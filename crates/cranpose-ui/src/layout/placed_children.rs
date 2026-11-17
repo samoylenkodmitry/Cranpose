@@ -58,15 +58,7 @@ impl PlacedChildren {
         index: usize,
     ) -> Result<Option<(NodeId, Option<MeasuredChild>)>, NodeError> {
         match self {
-            Self::Layout(parts) => Ok(parts
-                .runtime_state()
-                .borrow()
-                .child_states()
-                .get(index)
-                .map(|child| {
-                    let record = child.record();
-                    (record.child_id(), record.in_parent.get())
-                })),
+            Self::Layout(parts) => Ok(Self::listed(parts, index)),
             Self::Subcompose(node_id) => {
                 let child = applier
                     .with_node::<SubcomposeLayoutNode, _>(*node_id, |node| {
@@ -82,6 +74,32 @@ impl PlacedChildren {
             }
             Self::Leaf => Ok(None),
         }
+    }
+
+    // The child at `index` as `get` reads it, for a layout node, which
+    // lists its children itself, so a walk takes and flushes no applier
+    // borrow for each child; `None` for a node of another kind, which `get`
+    // reads through the applier.
+    pub(super) fn listed_child(
+        &self,
+        index: usize,
+    ) -> Option<Option<(NodeId, Option<MeasuredChild>)>> {
+        match self {
+            Self::Layout(parts) => Some(Self::listed(parts, index)),
+            Self::Subcompose(_) | Self::Leaf => None,
+        }
+    }
+
+    fn listed(parts: &LayoutParts, index: usize) -> Option<(NodeId, Option<MeasuredChild>)> {
+        parts
+            .runtime_state()
+            .borrow()
+            .child_states()
+            .get(index)
+            .map(|child| {
+                let record = child.record();
+                (record.child_id(), record.in_parent.get())
+            })
     }
 
     // Runs `visit` on each placed child in order, with where the measure
