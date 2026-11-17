@@ -48,6 +48,9 @@ Cranpose developers too:
 - `SpatialExternalSurface(stereo_mode, modifier) { scope }`: hands the app a surface that a
   decoder writes into. The scope's `on_surface_created` and `on_surface_destroyed` receive an
   `ExternalSurface`.
+- `StreamedScene(frames, views)`: frames that another machine rendered, shown as a projection
+  layer. Jetpack XR has no such composable. It has no `Spatial` prefix, because it is not placed
+  in a `Subspace`: it fills the viewer's view.
 - `SpatialCurvedRow(modifier, curve_radius) { ... }`: panels bent around the viewer at
   `curve_radius` dp. Each panel is a cylinder layer, and a controller's ray follows its curve.
   A runtime without `XR_KHR_composition_layer_cylinder` shows the panels flat.
@@ -110,6 +113,33 @@ The app chooses where the pictures go:
   its image back to the decoder.
 
 Platforms without a hardware decoder that Cranpose drives report `DecoderError::Unavailable`.
+
+## Streamed scenes
+
+A game that a computer renders for both eyes arrives as a stream of frames, and each frame
+belongs to the head pose that it was rendered for. `StreamedScene(frames, views)` takes the
+`DecodedFrames` of a `VideoDecoder` in frames mode. `views` maps the `u64` that the app submitted
+with an access unit to a `StreamedViews`: for each eye, the render pose in the app's room, the
+field of view and the rectangle of the eye's picture in the frame.
+
+At each of the headset's frames the backend takes the newest decoded frame. It imports the
+frame's `AHardwareBuffer` as an EGL image, binds it to an external texture, and draws each eye's
+rectangle into a swapchain of that eye's size. One pass of a small shader per eye does it, and
+the external sampler turns the decoder's YUV into RGB. The frame's two eyes become the views of
+an `XrCompositionLayerProjection`, with the poses and fields of view of the frame. The compositor
+reprojects each picture from the pose it was rendered for to the head's newer pose. While no
+newer frame comes, the layer shows its last pictures again. The scene lies over the room and under
+the curved panels, the panels, the surfaces, the handles and the rays.
+
+The backend keeps the drawn frame until the next one is drawn, because the GPU may still read its
+buffer. The swapchains hold the encoded picture bytes as they are, in a plain `RGBA8` format,
+which the compositor shows as it shows a surface's pictures. The pass draws each picture's top
+at its image's last row, and the layer needs no `VERTICAL_FLIP` layout, which a quad of wgpu's
+images and a surface's quad need.
+
+On a Quest 3 the pass costs 0.4 ms of CPU and 0.03 ms of GPU for a frame of two 320 by 360 pixel
+pictures, and 0.4 ms and 0.3 ms for two 1920 by 1080 pixel pictures. A frame comes 30 times a
+second in the demo, and the headset runs at 120 Hz.
 
 ## Crates
 

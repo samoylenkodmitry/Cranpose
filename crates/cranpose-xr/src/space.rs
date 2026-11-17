@@ -14,7 +14,10 @@ use std::{
 use cranpose::{ExternalSurface, MutableState, mutableStateOf};
 use cranpose_core::CompositionLocal;
 
-use crate::{METERS_PER_DP, PanelHit, Pose, Ray, StereoMode, locals::with_locals};
+use crate::{
+    METERS_PER_DP, PanelHit, Pose, Ray, StereoMode, locals::with_locals,
+    stream_source::StreamSource,
+};
 
 // The space between two panels in the atlas, in dp, so the compositor's filter never reaches a
 // neighbor's pixels.
@@ -135,6 +138,8 @@ pub(crate) struct Space {
 
 struct Inner {
     entries: RefCell<Vec<Entry>>,
+    // The streamed scenes, which take no place in the room and no part of the atlas
+    streams: RefCell<Vec<(u64, Rc<StreamSource>)>>,
     next_id: Cell<u64>,
     // Whether the headset shows curved panels. If not, they show and answer rays as flat ones.
     curves: Cell<bool>,
@@ -166,10 +171,44 @@ impl Space {
         Self {
             inner: Rc::new(Inner {
                 entries: RefCell::new(Vec::new()),
+                streams: RefCell::new(Vec::new()),
                 next_id: Cell::new(1),
                 curves: Cell::new(true),
             }),
         }
+    }
+
+    // A new id for a streamed scene.
+    pub(crate) fn new_stream_id(&self) -> u64 {
+        let id = self.inner.next_id.get();
+        self.inner.next_id.set(id + 1);
+        id
+    }
+
+    // Registers the streamed scene `id`, or replaces its source.
+    pub(crate) fn set_stream(&self, id: u64, source: Rc<StreamSource>) {
+        let mut streams = self.inner.streams.borrow_mut();
+        match streams.iter_mut().find(|(known, _)| *known == id) {
+            Some((_, old)) => *old = source,
+            None => streams.push((id, source)),
+        }
+    }
+
+    // Forgets the streamed scene `id`.
+    pub(crate) fn remove_stream(&self, id: u64) {
+        self.inner
+            .streams
+            .borrow_mut()
+            .retain(|(known, _)| *known != id);
+    }
+
+    #[cfg_attr(
+        not(all(feature = "openxr", target_os = "android")),
+        expect(dead_code, reason = "the headset backend calls it")
+    )]
+    // The streamed scenes, in the order they registered.
+    pub(crate) fn streams(&self) -> Vec<(u64, Rc<StreamSource>)> {
+        self.inner.streams.borrow().clone()
     }
 
     // A new panel with its states. A composable calls it inside a `remember`, so that the states

@@ -6,7 +6,7 @@ use super::{AccessUnit, DecoderConfig, DecoderError, DecoderStats, FrameInfo, Vi
 
 pub(super) struct Backend(Infallible);
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub(super) struct Frames(Infallible);
 
 pub(super) struct Image(Infallible);

@@ -54,6 +54,21 @@ SpatialExternalSurface(
 The callbacks receive an `ExternalSurface` from `cranpose-services`. Outside a headset the
 composable shows an empty box, and the callbacks never run.
 
+## Streamed scenes
+
+`StreamedScene` shows frames that another machine rendered for both eyes. The app decodes the
+stream with a `VideoDecoder` in frames mode, and says for each frame where each eye was and which
+part of the frame is its picture. The headset's compositor shows each picture from the pose it was
+rendered for, and corrects it for the head's newer pose.
+
+```rust,ignore
+use cranpose_xr::{StreamedScene, StreamedViews};
+
+StreamedScene(frames, |metadata: u64| -> StreamedViews { views_of_frame(metadata) });
+```
+
+Outside a headset the composable shows nothing.
+
 ## Android headsets
 
 The `openxr` feature adds the backend for Android headsets such as the Meta Quest. The app's
