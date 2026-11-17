@@ -2142,6 +2142,7 @@ fn plain_elements_compare_as_compose_data_classes() {
         ))
     };
     assert!(padding(f32::NAN).equals_element(&*padding(f32::NAN)));
-    assert!(padding(0.0).equals_element(&*padding(-0.0)));
+    assert!(!padding(0.0).equals_element(&*padding(-0.0)));
+    assert!(padding(1.0).equals_element(&*padding(1.0)));
     assert!(!padding(1.0).equals_element(&*padding(2.0)));
 }
