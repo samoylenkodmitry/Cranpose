@@ -73,7 +73,10 @@ public final class CranposeDeviceMotion implements SensorEventListener {
                     synchronized (LOCK) {
                         release();
                     }
-                    nativeOnDeviceMotionInterrupted();
+                    // Posted to the sensor thread so it runs after the events
+                    // already in flight, which would otherwise bring an old
+                    // sample back.
+                    handler.post(CranposeDeviceMotion::nativeOnDeviceMotionInterrupted);
                 }
             }
 
@@ -110,6 +113,11 @@ public final class CranposeDeviceMotion implements SensorEventListener {
     public static boolean cranposeDeviceMotionAvailable(Context context) {
         SensorManager sensors = (SensorManager) context.getSystemService(Context.SENSOR_SERVICE);
         return sensors != null && rotationSensor(sensors, ARBITRARY_HEADING) != null;
+    }
+
+    /** The rotation of the display, as {@code Surface.ROTATION_0} to {@code ROTATION_270}. */
+    public static int cranposeDeviceMotionDisplayRotation(Activity activity) {
+        return activity.getWindowManager().getDefaultDisplay().getRotation();
     }
 
     /**

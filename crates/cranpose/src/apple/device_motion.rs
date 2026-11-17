@@ -2,8 +2,11 @@
 
 //! The device's rotation on Apple's phones and watches through Core Motion's
 //! device motion, which sensor-fuses the gyroscope and the accelerometer.
-//! Core Motion states the attitude from the reference frame to the device
-//! frame, so every sample goes through `Quaternion::from_core_motion`.
+//! Apple does not state the direction of the attitude quaternion. Every sample
+//! goes through `Quaternion::from_core_motion`, which assumes the rotation from
+//! the reference frame to the device frame. A tilted iPhone checks the
+//! assumption: `rotation.conjugate().rotate([0.0, 0.0, -1.0])` must equal the
+//! `gravity` of the same `CMDeviceMotion`.
 //!
 //! The manager is used on the main thread only. Samples arrive on an
 //! operation queue of their own, so a busy main thread does not delay them.

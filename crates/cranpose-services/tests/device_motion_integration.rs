@@ -11,9 +11,10 @@ use std::{
 use cranpose_core::{Composition, MemoryApplier, location_key};
 use cranpose_services::{
     DeviceMotion, DeviceMotionError, DeviceMotionPermission, DeviceMotionSensor,
-    DeviceMotionStatus, MotionClock, MotionConfig, MotionRate, MotionReference, Quaternion,
-    clear_platform_device_motion, device_motion_available, device_motion_interrupted,
-    device_motion_now_ns, device_motion_permission, device_motion_status, latest_device_motion,
+    DeviceMotionStatus, DisplayRotation, MotionClock, MotionConfig, MotionRate, MotionReference,
+    Quaternion, clear_platform_device_motion, device_motion_available,
+    device_motion_display_rotation, device_motion_interrupted, device_motion_now_ns,
+    device_motion_permission, device_motion_status, latest_device_motion,
     observe_device_motion_status, publish_device_motion, publish_device_motion_permission,
     rememberDeviceMotion, request_device_motion_permission, set_platform_device_motion,
     start_device_motion,
@@ -38,6 +39,7 @@ struct Fake {
     stops: AtomicUsize,
     running: AtomicBool,
     now: AtomicU64,
+    display: Mutex<DisplayRotation>,
 }
 
 impl Fake {
@@ -49,6 +51,7 @@ impl Fake {
             stops: AtomicUsize::new(0),
             running: AtomicBool::new(false),
             now: AtomicU64::new(0),
+            display: Mutex::new(DisplayRotation::Rotation0),
         })
     }
 
@@ -85,6 +88,9 @@ impl DeviceMotionSensor for Fake {
     fn stop(&self) {
         self.stops.fetch_add(1, Ordering::SeqCst);
         self.running.store(false, Ordering::SeqCst);
+    }
+    fn display_rotation(&self) -> DisplayRotation {
+        *held(&self.display)
     }
 }
 
@@ -408,9 +414,10 @@ fn the_angles_of_a_web_page_compose_in_the_order_the_standard_names() {
 
 #[test]
 fn core_motion_states_the_opposite_rotation_and_the_service_reverses_it() {
-    // Apple states the attitude from the reference frame to the device. For
-    // a device held upright the reference up axis lands on the device y
-    // axis, so the stated rotation takes the reference z to the device y.
+    // The service takes Core Motion's attitude as the rotation from the
+    // reference frame to the device. For a device held upright the reference
+    // up axis lands on the device y axis, so that rotation takes the
+    // reference z to the device y.
     let upright = Quaternion::from_device_orientation(0.0, 90.0, 0.0);
     let stated = upright.conjugate();
     assert!(close(stated.rotate([0.0, 0.0, 1.0]), [0.0, 1.0, 0.0]));
@@ -439,4 +446,112 @@ fn a_quaternion_that_is_not_finite_falls_back_to_no_rotation() {
         Quaternion::new(0.0, 0.0, 0.0, 0.0).normalized(),
         Quaternion::IDENTITY
     );
+}
+
+#[test]
+fn a_display_turned_a_quarter_makes_the_screen_top_the_device_side_that_points_up() {
+    // A device stands with its natural x axis up: the person turned a
+    // natural portrait device a quarter turn counter-clockwise.
+    let standing = Quaternion::new(
+        0.0,
+        -std::f32::consts::FRAC_1_SQRT_2,
+        0.0,
+        std::f32::consts::FRAC_1_SQRT_2,
+    );
+    assert!(close(standing.rotate([1.0, 0.0, 0.0]), [0.0, 0.0, 1.0]));
+    assert!(close(
+        standing
+            .in_screen_frame(DisplayRotation::Rotation90)
+            .rotate([0.0, 1.0, 0.0]),
+        [0.0, 0.0, 1.0]
+    ));
+    assert!(
+        close(
+            standing
+                .in_screen_frame(DisplayRotation::Rotation90)
+                .conjugate()
+                .rotate([0.0, 0.0, 1.0]),
+            [0.0, 1.0, 0.0]
+        ),
+        "up in the screen frame is the screen's top"
+    );
+    // The other turns carry the same device to the other sides.
+    assert!(close(
+        standing
+            .in_screen_frame(DisplayRotation::Rotation270)
+            .rotate([0.0, -1.0, 0.0]),
+        [0.0, 0.0, 1.0]
+    ));
+    assert!(close(
+        standing
+            .in_screen_frame(DisplayRotation::Rotation180)
+            .rotate([-1.0, 0.0, 0.0]),
+        [0.0, 0.0, 1.0]
+    ));
+    let natural = standing.in_screen_frame(DisplayRotation::Rotation0);
+    assert!(close(natural.rotate([1.0, 0.0, 0.0]), [0.0, 0.0, 1.0]));
+}
+
+#[test]
+fn a_display_rotation_reads_degrees_and_quarter_turns() {
+    for (degrees, turns, rotation) in [
+        (0, 0, DisplayRotation::Rotation0),
+        (90, 1, DisplayRotation::Rotation90),
+        (180, 2, DisplayRotation::Rotation180),
+        (270, 3, DisplayRotation::Rotation270),
+        (-90, -1, DisplayRotation::Rotation270),
+        (450, 5, DisplayRotation::Rotation90),
+    ] {
+        assert_eq!(DisplayRotation::from_degrees(degrees), rotation);
+        assert_eq!(DisplayRotation::from_quarter_turns(turns), rotation);
+    }
+}
+
+#[test]
+fn the_display_rotation_comes_from_the_platform_and_is_none_without_one() {
+    let _one = one_sensor_at_a_time();
+    clear_platform_device_motion();
+    assert_eq!(device_motion_display_rotation(), DisplayRotation::Rotation0);
+    let sensor = Fake::granted();
+    *held(&sensor.display) = DisplayRotation::Rotation90;
+    set_platform_device_motion(Arc::<Fake>::clone(&sensor));
+    assert_eq!(
+        device_motion_display_rotation(),
+        DisplayRotation::Rotation90
+    );
+    *held(&sensor.display) = DisplayRotation::Rotation270;
+    assert_eq!(
+        device_motion_display_rotation(),
+        DisplayRotation::Rotation270
+    );
+    clear_platform_device_motion();
+}
+
+#[test]
+fn an_observer_may_start_a_lease_while_it_hears_the_status() {
+    let _one = one_sensor_at_a_time();
+    set_platform_device_motion(Fake::granted());
+    let held_leases = Arc::new(Mutex::new(Vec::new()));
+    let keep = Arc::clone(&held_leases);
+    let observer = observe_device_motion_status(move |status| {
+        if status == DeviceMotionStatus::Acquiring {
+            held(&keep).push(start_device_motion(MotionConfig::default()));
+        }
+    });
+    let first = start_device_motion(MotionConfig::default());
+    assert_eq!(
+        held(&held_leases).len(),
+        1,
+        "the observer started its own lease"
+    );
+    drop(first);
+    assert_eq!(
+        device_motion_status(),
+        DeviceMotionStatus::Acquiring,
+        "the observer's lease keeps the sensor on"
+    );
+    drop(observer);
+    held(&held_leases).clear();
+    assert_eq!(device_motion_status(), DeviceMotionStatus::Idle);
+    clear_platform_device_motion();
 }

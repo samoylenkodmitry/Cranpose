@@ -3,7 +3,7 @@ use parking_lot::Mutex;
 use super::{
     sample::MotionConfig,
     sensor::{latest, platform},
-    status::{DeviceMotionPermission, DeviceMotionStatus, set_status},
+    status::{DeviceMotionPermission, DeviceMotionStatus, announce, store_status},
 };
 
 // The leases that want the sensor, and what the sensor runs as.
@@ -30,9 +30,12 @@ pub struct DeviceMotionLease {
 
 impl Drop for DeviceMotionLease {
     fn drop(&mut self) {
-        let mut session = SESSION.lock();
-        session.leases.retain(|(id, _)| *id != self.id);
-        reconcile(&mut session);
+        let changed = {
+            let mut session = SESSION.lock();
+            session.leases.retain(|(id, _)| *id != self.id);
+            reconcile(&mut session)
+        };
+        announce(changed);
     }
 }
 
@@ -45,11 +48,14 @@ impl Drop for DeviceMotionLease {
 ///
 /// [`request_device_motion_permission`]: super::request_device_motion_permission
 pub fn start_device_motion(config: MotionConfig) -> DeviceMotionLease {
-    let mut session = SESSION.lock();
-    let id = session.next_id;
-    session.next_id += 1;
-    session.leases.push((id, config));
-    reconcile(&mut session);
+    let (id, changed) = {
+        let mut session = SESSION.lock();
+        let id = session.next_id;
+        session.next_id += 1;
+        session.leases.push((id, config));
+        (id, reconcile(&mut session))
+    };
+    announce(changed);
     DeviceMotionLease { id }
 }
 
@@ -81,38 +87,41 @@ pub(super) fn forget_running() {
 }
 
 pub(super) fn refresh() {
-    let mut session = SESSION.lock();
-    reconcile(&mut session);
-    if session.running.is_none() {
-        set_status(resting_status());
-    }
+    let changed = {
+        let mut session = SESSION.lock();
+        let mut changed = reconcile(&mut session);
+        if session.running.is_none() {
+            changed |= store_status(resting_status());
+        }
+        changed
+    };
+    announce(changed);
 }
 
-// Brings the sensor to what the leases ask.
-fn reconcile(session: &mut Session) {
+// Brings the sensor to what the leases ask and says whether the status
+// changed.
+fn reconcile(session: &mut Session) -> bool {
     let wanted = wanted(&session.leases);
     if wanted == session.running {
-        return;
+        return false;
     }
     let Some(sensor) = platform() else {
         session.running = None;
-        set_status(DeviceMotionStatus::Unavailable);
-        return;
+        return store_status(DeviceMotionStatus::Unavailable);
     };
     let Some(config) = wanted else {
         sensor.stop();
         latest().end();
         session.running = None;
-        set_status(resting_status());
-        return;
+        return store_status(resting_status());
     };
     if sensor.permission() != DeviceMotionPermission::Granted {
-        set_status(resting_status());
-        return;
+        return store_status(resting_status());
     }
+    let mut changed = false;
     if session.running.is_none() {
         latest().begin();
-        set_status(DeviceMotionStatus::Acquiring);
+        changed |= store_status(DeviceMotionStatus::Acquiring);
     }
     match sensor.start(config) {
         Ok(()) => session.running = Some(config),
@@ -120,7 +129,8 @@ fn reconcile(session: &mut Session) {
             log::warn!("cranpose: the motion sensor did not start: {error:?}");
             latest().end();
             session.running = None;
-            set_status(DeviceMotionStatus::Unavailable);
+            changed |= store_status(DeviceMotionStatus::Unavailable);
         }
     }
+    changed
 }

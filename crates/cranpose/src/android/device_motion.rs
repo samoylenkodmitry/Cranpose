@@ -11,8 +11,9 @@
 use std::sync::Arc;
 
 use cranpose_services::{
-    DeviceMotionError, DeviceMotionPermission, DeviceMotionSensor, MotionClock, MotionConfig,
-    Quaternion, device_motion_interrupted, publish_device_motion, set_platform_device_motion,
+    DeviceMotionError, DeviceMotionPermission, DeviceMotionSensor, DisplayRotation, MotionClock,
+    MotionConfig, Quaternion, device_motion_interrupted, publish_device_motion,
+    set_platform_device_motion,
 };
 use jni::{
     EnvUnowned, jni_sig, jni_str,
@@ -113,6 +114,19 @@ impl DeviceMotionSensor for AndroidDeviceMotion {
             DEVICE_MOTION_CLASS,
             jni_str!("cranposeDeviceMotionStop"),
         );
+    }
+
+    fn display_rotation(&self) -> DisplayRotation {
+        call_cranpose_class(&self.app, DEVICE_MOTION_CLASS, |env, activity, class| {
+            env.call_static_method(
+                class,
+                jni_str!("cranposeDeviceMotionDisplayRotation"),
+                jni_sig!("(Landroid/app/Activity;)I"),
+                &[JValue::Object(activity)],
+            )
+            .and_then(jni::JValueOwned::i)
+        })
+        .map_or_default(DisplayRotation::from_quarter_turns)
     }
 }
 

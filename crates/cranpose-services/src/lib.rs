@@ -149,13 +149,14 @@ pub use device_info::{
 };
 pub use device_motion::{
     DeviceMotion, DeviceMotionError, DeviceMotionLease, DeviceMotionPermission, DeviceMotionSensor,
-    DeviceMotionSensorRef, DeviceMotionStatus, DeviceMotionStatusObserver, MotionClock,
-    MotionConfig, MotionRate, MotionReference, MotionSample, Quaternion,
-    clear_platform_device_motion, device_motion_available, device_motion_interrupted,
-    device_motion_now_ns, device_motion_permission, device_motion_status, latest_device_motion,
-    observe_device_motion_status, publish_device_motion, publish_device_motion_permission,
-    rememberDeviceMotion, rememberDeviceMotionSample, request_device_motion_permission,
-    set_platform_device_motion, start_device_motion,
+    DeviceMotionSensorRef, DeviceMotionStatus, DeviceMotionStatusObserver, DisplayRotation,
+    MotionClock, MotionConfig, MotionRate, MotionReference, MotionSample, Quaternion,
+    clear_platform_device_motion, device_motion_available, device_motion_display_rotation,
+    device_motion_interrupted, device_motion_now_ns, device_motion_permission,
+    device_motion_status, latest_device_motion, observe_device_motion_status,
+    publish_device_motion, publish_device_motion_permission, rememberDeviceMotion,
+    rememberDeviceMotionSample, request_device_motion_permission, set_platform_device_motion,
+    start_device_motion,
 };
 pub use durable_save::SaveableRegistration;
 pub use file_picker::{

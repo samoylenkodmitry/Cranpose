@@ -1,4 +1,6 @@
-use std::ops::Mul;
+use std::{f32::consts::FRAC_1_SQRT_2, ops::Mul};
+
+use super::sample::DisplayRotation;
 
 /// A rotation as a unit quaternion `x*i + y*j + z*k + w`.
 ///
@@ -75,11 +77,29 @@ impl Quaternion {
         Self::new(x, y, z, w).normalized()
     }
 
-    /// The rotation from a Core Motion attitude, which Apple's platforms
-    /// state as the rotation from the reference frame to the device frame.
-    /// The result is its opposite.
+    /// The rotation from a Core Motion attitude. Apple does not state the
+    /// direction of its quaternion. This takes it as the rotation from the
+    /// reference frame to the device frame and returns the opposite. On a
+    /// tilted device, `rotation.conjugate().rotate([0.0, 0.0, -1.0])` must
+    /// equal the `gravity` of the same `CMDeviceMotion`.
     pub fn from_core_motion(x: f64, y: f64, z: f64, w: f64) -> Self {
         Self::new(-x as f32, -y as f32, -z as f32, w as f32).normalized()
+    }
+
+    /// The rotation of the screen frame instead of the device frame, for a
+    /// display turned by `rotation`. The screen frame has x to the right of
+    /// the picture and y to its top. In the natural orientation the result
+    /// equals `self`.
+    pub fn in_screen_frame(self, rotation: DisplayRotation) -> Self {
+        // The screen axes in device coordinates are the device axes turned
+        // about z by minus the rotation of the display.
+        let screen_from_device = match rotation {
+            DisplayRotation::Rotation0 => Self::IDENTITY,
+            DisplayRotation::Rotation90 => Self::new(0.0, 0.0, -FRAC_1_SQRT_2, FRAC_1_SQRT_2),
+            DisplayRotation::Rotation180 => Self::new(0.0, 0.0, -1.0, 0.0),
+            DisplayRotation::Rotation270 => Self::new(0.0, 0.0, FRAC_1_SQRT_2, FRAC_1_SQRT_2),
+        };
+        self * screen_from_device
     }
 
     /// The rotation of the web's `deviceorientation` event from its `alpha`,

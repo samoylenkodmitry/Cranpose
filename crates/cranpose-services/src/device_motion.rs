@@ -36,9 +36,11 @@
 //!   turns its y axis onto the reference z axis. The quaternions `q` and `-q`
 //!   are the same rotation.
 //!
-//! The service does not apply the display rotation. An application on a
-//! rotated display multiplies the rotation by a quarter turn about the device
-//! z axis, one per step of the display's rotation.
+//! The service does not apply the display rotation. [`DisplayRotation`] and
+//! [`device_motion_display_rotation`] tell how far the person has turned the
+//! device. [`Quaternion::in_screen_frame`] gives the rotation of the screen
+//! frame, which a view in a landscape window needs. Apple's platforms report
+//! no display rotation yet.
 //!
 //! # Timestamps
 //!
@@ -74,11 +76,13 @@ mod status;
 pub use lease::{DeviceMotionLease, start_device_motion};
 pub use quaternion::Quaternion;
 pub use remember::{DeviceMotion, rememberDeviceMotion, rememberDeviceMotionSample};
-pub use sample::{MotionClock, MotionConfig, MotionRate, MotionReference, MotionSample};
+pub use sample::{
+    DisplayRotation, MotionClock, MotionConfig, MotionRate, MotionReference, MotionSample,
+};
 pub use sensor::{
     DeviceMotionSensor, DeviceMotionSensorRef, clear_platform_device_motion,
-    device_motion_available, device_motion_interrupted, device_motion_now_ns,
-    device_motion_permission, latest_device_motion, publish_device_motion,
+    device_motion_available, device_motion_display_rotation, device_motion_interrupted,
+    device_motion_now_ns, device_motion_permission, latest_device_motion, publish_device_motion,
     publish_device_motion_permission, request_device_motion_permission, set_platform_device_motion,
 };
 pub use status::{

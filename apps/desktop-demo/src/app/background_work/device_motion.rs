@@ -1,10 +1,12 @@
 use cranpose_core::{rememberMutableStateOf, LaunchedEffect};
 use cranpose_services::{
-    device_motion_now_ns, latest_device_motion, rememberDeviceMotion, rememberDeviceMotionSample,
+    device_motion_display_rotation, device_motion_now_ns, latest_device_motion,
+    rememberDeviceMotion, rememberDeviceMotionSample, request_device_motion_permission,
     DeviceMotionStatus, MotionClock, MotionConfig, MotionSample,
 };
 use cranpose_ui::{
-    composable, Box, BoxSpec, Color, GraphicsLayer, Modifier, Spacer, Text, TextStyle,
+    composable, Box, BoxSpec, Button, ButtonSpec, Color, GraphicsLayer, Modifier, Spacer, Text,
+    TextStyle,
 };
 
 // How long a window of samples is measured before its numbers are shown.
@@ -118,6 +120,24 @@ pub(super) fn DeviceMotionDemo() {
             .padding(10.0),
         TextStyle::default(),
     );
+    if status == DeviceMotionStatus::NeedsPermission {
+        Spacer(Modifier::empty().size_points(0.0, 12.0));
+        Button(
+            Modifier::empty()
+                .rounded_corners(16.0)
+                .background(Color(0.15, 0.35, 0.85, 1.0))
+                .padding(12.0),
+            ButtonSpec::default(),
+            request_device_motion_permission,
+            || {
+                Text(
+                    "Allow motion",
+                    Modifier::empty().padding(6.0),
+                    TextStyle::default(),
+                );
+            },
+        );
+    }
     Spacer(Modifier::empty().size_points(0.0, 12.0));
     let measured = rate.get();
     Text(
@@ -175,8 +195,12 @@ fn sample_line(sample: Option<MotionSample>) -> String {
     };
     let q = sample.rotation;
     let up = q.conjugate().rotate([0.0, 0.0, 1.0]);
+    let screen = q
+        .in_screen_frame(device_motion_display_rotation())
+        .conjugate()
+        .rotate([0.0, 0.0, 1.0]);
     format!(
-        "q ({:+.3}, {:+.3}, {:+.3}, {:+.3}) t {:.3} s on {clock} clock, #{}\nup in the device ({:+.2}, {:+.2}, {:+.2})",
+        "q ({:+.3}, {:+.3}, {:+.3}, {:+.3}) t {:.3} s on {clock} clock, #{}\nup in the device ({:+.2}, {:+.2}, {:+.2})\nup in the screen ({:+.2}, {:+.2}, {:+.2})",
         q.x,
         q.y,
         q.z,
@@ -186,6 +210,9 @@ fn sample_line(sample: Option<MotionSample>) -> String {
         up[0],
         up[1],
         up[2],
+        screen[0],
+        screen[1],
+        screen[2],
     )
 }
 
@@ -195,8 +222,13 @@ fn plate(sample: Option<MotionSample>) -> GraphicsLayer {
     let Some(sample) = sample else {
         return GraphicsLayer::default();
     };
-    let up = sample.rotation.conjugate().rotate([0.0, 0.0, 1.0]);
-    let top = sample.rotation.rotate([0.0, 1.0, 0.0]);
+    // The plate is drawn on the screen, so it follows the screen frame, which
+    // differs from the device frame when the person turned the device.
+    let rotation = sample
+        .rotation
+        .in_screen_frame(device_motion_display_rotation());
+    let up = rotation.conjugate().rotate([0.0, 0.0, 1.0]);
+    let top = rotation.rotate([0.0, 1.0, 0.0]);
     GraphicsLayer {
         rotation_x: up[1].atan2(up[2]).to_degrees(),
         rotation_y: (-up[0]).atan2(up[2]).to_degrees(),

@@ -56,6 +56,41 @@ impl MotionRate {
     }
 }
 
+/// How far the person has turned the device from its natural orientation, as
+/// Android's `Display.getRotation()` counts it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum DisplayRotation {
+    /// The natural orientation: the device frame is the screen frame.
+    #[default]
+    Rotation0,
+    /// A quarter turn counter-clockwise, as seen by the person: the natural
+    /// top edge of the device is at the left.
+    Rotation90,
+    /// A half turn: the natural top edge is at the bottom.
+    Rotation180,
+    /// A quarter turn clockwise: the natural top edge is at the right.
+    Rotation270,
+}
+
+impl DisplayRotation {
+    /// The rotation for an angle in degrees, which is rounded to a quarter
+    /// turn; the web's `screen.orientation.angle` has this form.
+    pub const fn from_degrees(degrees: i32) -> Self {
+        match degrees.rem_euclid(360) / 90 {
+            1 => Self::Rotation90,
+            2 => Self::Rotation180,
+            3 => Self::Rotation270,
+            _ => Self::Rotation0,
+        }
+    }
+
+    /// The rotation for Android's `Surface.ROTATION_*` constants, which
+    /// count quarter turns.
+    pub const fn from_quarter_turns(turns: i32) -> Self {
+        Self::from_degrees(turns.wrapping_mul(90))
+    }
+}
+
 /// What a reader asks of the sensor.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct MotionConfig {

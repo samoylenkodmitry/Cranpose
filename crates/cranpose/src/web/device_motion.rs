@@ -12,9 +12,9 @@ use std::sync::{
 };
 
 use cranpose_services::{
-    DeviceMotionError, DeviceMotionPermission, DeviceMotionSensor, MotionClock, MotionConfig,
-    MotionReference, Quaternion, publish_device_motion, publish_device_motion_permission,
-    set_platform_device_motion,
+    DeviceMotionError, DeviceMotionPermission, DeviceMotionSensor, DisplayRotation, MotionClock,
+    MotionConfig, MotionReference, Quaternion, publish_device_motion,
+    publish_device_motion_permission, set_platform_device_motion,
 };
 use wasm_bindgen::{JsCast, JsValue, closure::Closure};
 use wasm_bindgen_futures::{JsFuture, spawn_local};
@@ -153,6 +153,13 @@ impl DeviceMotionSensor for WebDeviceMotion {
             *state.web.device_motion.borrow_mut() = Some((event, handler));
         });
         Ok(())
+    }
+
+    fn display_rotation(&self) -> DisplayRotation {
+        web_sys::window()
+            .and_then(|window| window.screen().ok())
+            .and_then(|screen| screen.orientation().angle().ok())
+            .map_or_default(|angle| DisplayRotation::from_degrees(i32::from(angle)))
     }
 
     fn stop(&self) {

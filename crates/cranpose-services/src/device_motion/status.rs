@@ -86,10 +86,20 @@ pub fn device_motion_status() -> DeviceMotionStatus {
     DeviceMotionStatus::from_code(STATUS.load(Ordering::Acquire))
 }
 
-pub(super) fn set_status(status: DeviceMotionStatus) {
-    if STATUS.swap(status.code(), Ordering::AcqRel) != status.code() {
-        notify(status);
+// Stores the status and says whether it changed. A caller that holds a lock
+// announces the change after it lets go, so no observer runs under the lock.
+pub(super) fn store_status(status: DeviceMotionStatus) -> bool {
+    STATUS.swap(status.code(), Ordering::AcqRel) != status.code()
+}
+
+pub(super) fn announce(changed: bool) {
+    if changed {
+        notify(device_motion_status());
     }
+}
+
+pub(super) fn set_status(status: DeviceMotionStatus) {
+    announce(store_status(status));
 }
 
 // The first sample of a run, which turns acquiring into live.

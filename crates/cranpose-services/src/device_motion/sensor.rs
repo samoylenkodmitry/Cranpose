@@ -6,7 +6,7 @@ use std::sync::{
 use super::{
     lease::refresh,
     quaternion::Quaternion,
-    sample::{MotionClock, MotionConfig, MotionReference, MotionSample},
+    sample::{DisplayRotation, MotionClock, MotionConfig, MotionReference, MotionSample},
     slot::LatestSample,
     status::{
         DeviceMotionError, DeviceMotionPermission, DeviceMotionStatus, mark_acquiring, mark_live,
@@ -39,6 +39,11 @@ pub trait DeviceMotionSensor: Send + Sync {
     fn start(&self, config: MotionConfig) -> Result<(), DeviceMotionError>;
     /// Stops the sensor. No sample arrives afterwards.
     fn stop(&self);
+    /// How far the display is turned from the natural orientation of the
+    /// device now. A platform that cannot tell reports no rotation.
+    fn display_rotation(&self) -> DisplayRotation {
+        DisplayRotation::Rotation0
+    }
 }
 
 /// Shared handle to a [`DeviceMotionSensor`].
@@ -112,6 +117,15 @@ pub fn request_device_motion_permission() {
 /// of a sample.
 pub fn device_motion_now_ns() -> Option<u64> {
     platform().map(|sensor| sensor.now_ns())
+}
+
+/// How far the display is turned from the natural orientation of the device
+/// now, for [`Quaternion::in_screen_frame`]. Without a sensor, or on a
+/// platform that cannot tell, it is no rotation. The call may cost a call
+/// into the platform, so a view that turns every frame reads it once per
+/// frame.
+pub fn device_motion_display_rotation() -> DisplayRotation {
+    platform().map_or_default(|sensor| sensor.display_rotation())
 }
 
 /// The newest sample, or `None` while the sensor is stopped or has not
