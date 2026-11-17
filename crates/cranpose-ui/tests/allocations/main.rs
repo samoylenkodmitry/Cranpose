@@ -660,6 +660,48 @@ fn slices_of_one_background_allocate_one_block() {
     assert_eq!(change.allocations, 1, "{change:?}");
 }
 
+// A text that draws one background keeps that draw in a list of one, made
+// at its exact length: its first collection grows no list, and collecting
+// its slices again for another color takes no new list.
+fn slices_of_a_text_with_a_background_keep_their_list() {
+    use cranpose_ui::text::{AnnotatedString, TextLayoutOptions, TextStyle};
+
+    let context = cranpose_ui::AppContext::new();
+    let _scope = context.enter_scope();
+    let modifier = |color| {
+        Modifier::empty()
+            .background(color)
+            .then(Modifier::with_element(
+                cranpose_ui::TextModifierElement::new(
+                    AnnotatedString::from("Behind"),
+                    TextStyle::default(),
+                    TextLayoutOptions::default(),
+                    cranpose_ui::Density::new(2.0, 1.0),
+                ),
+            ))
+    };
+    let mut node = cranpose_ui::LayoutNode::new(
+        modifier(Color::RED),
+        Rc::new(StackedRows { reversed: false }),
+    );
+    let region = Region::new(GLOBAL);
+    let slices = node.modifier_slices_snapshot();
+    let first = region.change();
+    assert_eq!(slices.draw_commands().len(), 1);
+    drop(slices);
+
+    let blue = modifier(Color::BLUE);
+    let region = Region::new(GLOBAL);
+    node.set_modifier(blue);
+    let slices = node.modifier_slices_snapshot();
+    let again = region.change();
+    assert_eq!(slices.draw_commands().len(), 1);
+    println!("allocations of a text's slices: first {first:?}, again {again:?}");
+    assert_eq!(first.reallocations, 0, "{first:?}");
+    assert_eq!(again.reallocations, 0, "{again:?}");
+    assert_eq!(again.allocations, 0, "{again:?}");
+}
+
 fn resolving_text_direction_does_not_allocate() {
     use std::hint::black_box;
 
@@ -766,6 +808,7 @@ fn layout_and_modifiers_stay_within_their_allocation_budgets() {
         a_modifier_chain_of_plain_elements_allocates_one_shared_box();
     }
     slices_of_one_background_allocate_one_block();
+    slices_of_a_text_with_a_background_keep_their_list();
     resolving_text_direction_does_not_allocate();
     owned_bitmaps_allocate_only_metadata_and_clones_share_storage();
     owned_bitmaps_do_not_retain_spare_pixel_capacity();

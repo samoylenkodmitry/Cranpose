@@ -116,7 +116,7 @@ fn collect_modifier_slices_into(
     parts: Option<&Rc<LayoutParts>>,
     density: f32,
 ) {
-    let mut draws = slices.body.take_draws();
+    let (mut draws, room) = slices.body.take_draws();
     slices.clear_parts();
     let mut text = None;
 
@@ -126,7 +126,7 @@ fn collect_modifier_slices_into(
     let has_layout = caps.intersects(NodeCapabilities::LAYOUT);
 
     if !has_pointer && !has_draw && !has_layout {
-        slices.body = SliceBody::collected(draws, text);
+        slices.body = SliceBody::collected(draws, room, text);
         return;
     }
 
@@ -231,7 +231,7 @@ fn collect_modifier_slices_into(
     }
 
     backgrounds.insert_into(slices, &mut draws);
-    slices.body = SliceBody::collected(draws, text);
+    slices.body = SliceBody::collected(draws, room, text);
 }
 
 /// The chain's backgrounds as the walk finds them. Each draws at its place in
