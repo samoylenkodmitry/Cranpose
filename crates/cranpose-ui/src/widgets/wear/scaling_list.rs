@@ -101,14 +101,19 @@ use cranpose_core::{
     MutableState, NodeId, RuntimeCell, SlotId, internal::FrameCallbackRegistration, remember,
     rememberMutableStateOf,
 };
-use cranpose_foundation::lazy::{LazyItems, LazyLayoutKey};
+use cranpose_foundation::{
+    RunningScroll, ScrollId,
+    lazy::{LazyItems, LazyLayoutKey},
+};
 use cranpose_ui_graphics::{CompositingStrategy, Point, Rect, Size};
 use cranpose_ui_layout::{
     Constraints, Measurable, MeasurePolicy, MeasureResult, MeasureScope, Placement, round_to_px,
 };
 
 mod input;
+mod item_heights;
 use input::wear_scaling_list_input;
+use item_heights::ItemHeights;
 
 use crate::{
     composable,
@@ -259,6 +264,8 @@ struct WearScalingListInner {
     heights: Rc<RefCell<ItemHeights>>,
     indicator: Rc<RefCell<IndicatorState>>,
     scroll_animation: RefCell<Option<FrameCallbackRegistration>>,
+    // The fling of a swipe that moves the list now and how to stop it.
+    fling: RefCell<RunningScroll>,
     summary: MutableState<WearScalingListSummary>,
 }
 
@@ -364,69 +371,6 @@ impl IndicatorState {
     }
 }
 
-/// Every item height the list has measured so far, and a stand-in for the rest.
-///
-/// A virtualised list cannot know the height of an item it has never composed,
-/// and the scroll indicator's total extent is a sum over all of them. This is
-/// the same bargain `LazyListState` makes with `average_item_size`: remember
-/// what has been measured, and let the mean of it speak for what has not.
-///
-/// The cache is cleared when the item **count** changes and not otherwise. A
-/// row whose content changed is re-measured the next time it is composed, so a
-/// stale entry can only ever bias the estimate for rows that are off screen —
-/// never a placed row's geometry.
-#[derive(Default, Debug)]
-struct ItemHeights {
-    known: Vec<Option<f32>>,
-    sum: f32,
-    count: usize,
-}
-
-impl ItemHeights {
-    fn len(&self) -> usize {
-        self.known.len()
-    }
-
-    fn resize(&mut self, len: usize) {
-        if self.known.len() == len {
-            return;
-        }
-        self.known.clear();
-        self.known.resize(len, None);
-        self.sum = 0.0;
-        self.count = 0;
-    }
-
-    fn record(&mut self, index: usize, height: f32) {
-        let Some(slot) = self.known.get_mut(index) else {
-            return;
-        };
-        match slot.replace(height) {
-            Some(previous) => self.sum += height - previous,
-            None => {
-                self.sum += height;
-                self.count += 1;
-            }
-        }
-    }
-
-    fn estimate(&self) -> f32 {
-        if self.count == 0 {
-            0.0
-        } else {
-            self.sum / self.count as f32
-        }
-    }
-
-    fn height_of(&self, index: usize) -> f32 {
-        self.known
-            .get(index)
-            .copied()
-            .flatten()
-            .unwrap_or_else(|| self.estimate())
-    }
-}
-
 impl WearScalingListState {
     fn inner(&self) -> Rc<WearScalingListInner> {
         self.inner.get()
@@ -450,13 +394,41 @@ impl WearScalingListState {
         self.anchor.set(anchor);
     }
 
-    /// Stops a running [`Self::animate_scroll_to_item`].
+    /// Stops a running [`Self::animate_scroll_to_item`] and the fling of a
+    /// swipe.
     ///
     /// Every other way of moving the list calls this first: a finger, a rotary
     /// crown or a snap always wins against an animation the screen started, so
-    /// the list never fights the user.
+    /// the list never fights the user. A jump stops a fling too, as Compose's
+    /// `scrollToItem` does.
     pub fn cancel_scroll_animation(&self) {
         self.inner().scroll_animation.borrow_mut().take();
+        self.stop_fling();
+    }
+
+    // Makes the fling that `stop` stops the list's running fling. The fling
+    // that ran before stops.
+    fn hold_fling(&self, stop: impl FnOnce() + 'static) -> ScrollId {
+        let (id, previous) = self.inner().fling.borrow_mut().start(stop);
+        if let Some(previous) = previous {
+            previous.run();
+        }
+        id
+    }
+
+    // Forgets the fling `id` once it ended, while the state lives.
+    fn end_fling(&self, id: ScrollId) {
+        if let Some(inner) = self.inner.try_get() {
+            inner.fling.borrow_mut().end(id);
+        }
+    }
+
+    // Stops the list's running fling.
+    fn stop_fling(&self) {
+        let fling = self.inner().fling.borrow_mut().take();
+        if let Some(fling) = fling {
+            fling.run();
+        }
     }
 
     /// Scrolls by a distance in layout points, positive towards the end of the
@@ -752,6 +724,7 @@ pub fn rememberWearScalingListState(initial: CentreAnchor) -> WearScalingListSta
                 heights: Rc::new(RefCell::new(ItemHeights::default())),
                 indicator: Rc::new(RefCell::new(IndicatorState::default())),
                 scroll_animation: RefCell::new(None),
+                fling: RefCell::new(RunningScroll::default()),
                 summary: MutableState::with_runtime(
                     WearScalingListSummary::default(),
                     runtime.clone(),

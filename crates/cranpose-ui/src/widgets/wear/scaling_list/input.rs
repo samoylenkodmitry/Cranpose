@@ -3,12 +3,13 @@
 
 use std::rc::Rc;
 
-use cranpose_foundation::{DRAG_THRESHOLD, MAX_FLING_VELOCITY, PointerId, VelocityTracker1D};
+use cranpose_foundation::{DRAG_THRESHOLD, MAX_FLING_VELOCITY, PointerId};
 use cranpose_ui_graphics::Point;
 
 use super::WearScalingListState;
 use crate::{
     fling_animation::FlingAnimation,
+    gesture_velocity::GestureVelocity,
     modifier::{Modifier, PointerEvent, PointerEventKind, PointerInputScope},
 };
 
@@ -52,7 +53,7 @@ struct Swipe {
     down: Point,
     last: Point,
     dragging: bool,
-    velocity: VelocityTracker1D,
+    velocity: GestureVelocity,
 }
 
 impl Swipe {
@@ -64,7 +65,7 @@ impl Swipe {
             down: Point::new(0.0, 0.0),
             last: Point::new(0.0, 0.0),
             dragging: false,
-            velocity: VelocityTracker1D::new(),
+            velocity: GestureVelocity::new(),
         }
     }
 
@@ -85,15 +86,12 @@ impl Swipe {
     }
 
     fn on_down(&mut self, event: &PointerEvent) {
-        self.fling.cancel();
+        self.state.stop_fling();
         self.pointer = Some(event.id);
         self.down = event.position;
         self.last = event.position;
         self.dragging = false;
-        self.velocity.reset();
-        if let Some(time) = event.time_ms {
-            self.velocity.add_data_point(time, event.position.y);
-        }
+        self.velocity.begin(event.time_ms, event.position.y);
     }
 
     fn on_move(&mut self, event: &PointerEvent) {
@@ -106,8 +104,7 @@ impl Swipe {
         if !self.dragging && dy.abs() > DRAG_THRESHOLD && dy.abs() > dx.abs() {
             self.dragging = true;
         } else if !self.dragging && dx.abs() > DRAG_THRESHOLD && dx.abs() >= dy.abs() {
-            self.pointer = None;
-            self.velocity.reset();
+            self.let_go();
             return;
         }
         if self.dragging {
@@ -115,9 +112,7 @@ impl Swipe {
                 .state
                 .dispatch_raw_delta(self.last.y - event.position.y);
             self.last = event.position;
-            if let Some(time) = event.time_ms {
-                self.velocity.add_data_point(time, event.position.y);
-            }
+            self.velocity.add(event.time_ms, event.position.y);
             if consumed != 0.0 {
                 event.consume();
             }
@@ -126,16 +121,15 @@ impl Swipe {
 
     fn on_up(&mut self, event: &PointerEvent) {
         if self.dragging {
-            let (y, cap) = (event.position.y, MAX_FLING_VELOCITY);
-            let speed = -event
-                .time_ms
-                .map_or(0.0, |at| self.velocity.release_velocity(at, y, cap));
+            let speed = -self.velocity.release(event.time_ms, MAX_FLING_VELOCITY);
             let state = self.state;
+            let stop = Rc::clone(&self.fling);
+            let id = state.hold_fling(move || stop.cancel());
             self.fling.start_fling(
                 0.0,
                 speed,
                 move |delta| state.dispatch_raw_delta(delta),
-                || {},
+                move || state.end_fling(id),
             );
             event.consume();
         }
@@ -146,6 +140,6 @@ impl Swipe {
     fn let_go(&mut self) {
         self.pointer = None;
         self.dragging = false;
-        self.velocity.reset();
+        self.velocity.clear();
     }
 }
