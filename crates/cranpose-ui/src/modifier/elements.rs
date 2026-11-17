@@ -69,7 +69,9 @@ impl ManyElements {
         chain
     }
 
-    // Takes in the elements of `more` after its own.
+    // Takes in the elements of `more` after its own. Inline: a join pushes
+    // two, and a call each cost more than the push.
+    #[inline]
     fn push(&mut self, more: ModifierKind) {
         match more {
             ModifierKind::Empty => {}
@@ -185,7 +187,7 @@ impl Modifier {
             (_, inspector) => ModifierKind::Many(Rc::new(ManyElements {
                 provides_composition_locals: elements
                     .iter()
-                    .any(|element| element.provides_composition_locals()),
+                    .any(DynModifierElement::provides_composition_locals),
                 elements,
                 inspector,
             })),

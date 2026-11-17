@@ -367,6 +367,16 @@ impl DynModifierElement {
         }
     }
 
+    /// Whether this element has composition locals for its content. A plain
+    /// element has none, which this tells without a call.
+    #[inline]
+    pub fn provides_composition_locals(&self) -> bool {
+        match &self.0 {
+            Repr::Plain(_) => false,
+            Repr::Shared(element) => element.provides_composition_locals(),
+        }
+    }
+
     /// Whether `other` is this element itself, not only an equal one: two
     /// plain elements are values, which are never one element.
     pub fn is(&self, other: &Self) -> bool {
