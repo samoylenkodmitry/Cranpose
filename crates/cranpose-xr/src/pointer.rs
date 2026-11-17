@@ -22,12 +22,32 @@ pub(crate) enum PointerEvent {
     Leave,
 }
 
+// A trigger in a frame, compared with the frame before.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Trigger {
+    Up,
+    // Down now, up in the frame before.
+    Pulled,
+    Held,
+}
+
+impl Trigger {
+    fn new(down: bool, was_down: bool) -> Self {
+        match (down, was_down) {
+            (false, _) => Self::Up,
+            (true, false) => Self::Pulled,
+            (true, true) => Self::Held,
+        }
+    }
+}
+
 // The pointer. One controller drives it at a time: the one whose trigger went down last, or
 // the other one while only that one points at a panel.
 #[derive(Debug, Default)]
 pub(crate) struct Pointer {
     // The controller that drives the pointer: 0 for the left hand, 1 for the right
     hand: usize,
+    // The trigger of each controller in the frame before
     selects: [bool; 2],
     pressed: bool,
     position: Option<(f32, f32)>,
@@ -42,9 +62,11 @@ impl Pointer {
     ) -> (Vec<PointerEvent>, Option<Cursor>) {
         let hits = aims.map(|aim| aim.and_then(|aim| nearest_hit(&aim.ray, panels)));
         let selects = aims.map(|aim| aim.is_some_and(|aim| aim.select));
-        self.choose_hand(&hits, selects);
+        let triggers = [0, 1].map(|hand| Trigger::new(selects[hand], self.selects[hand]));
+        self.selects = selects;
+        self.choose_hand(&hits, triggers);
         let hit = hits[self.hand];
-        let events = self.events(hit, selects[self.hand]);
+        let events = self.events(hit, triggers[self.hand]);
         let cursor = hit.map(|(slot, x, y)| Cursor {
             panel: slot.id,
             x,
@@ -54,23 +76,28 @@ impl Pointer {
         (events, cursor)
     }
 
-    // A trigger that goes down takes the pointer to its controller. While no trigger is down, a
-    // controller that points at a panel takes it from one that points at none.
-    fn choose_hand(&mut self, hits: &[Option<(PanelSlot, f32, f32)>; 2], selects: [bool; 2]) {
-        if !self.pressed {
-            let pulled = (0..2)
-                .rev()
-                .find(|&hand| selects[hand] && !self.selects[hand]);
-            if let Some(hand) = pulled {
-                self.hand = hand;
-            } else if hits[self.hand].is_none() && hits[1 - self.hand].is_some() {
-                self.hand = 1 - self.hand;
-            }
+    // A trigger that goes down takes the pointer to its controller. While no press is on, a
+    // controller that points at a panel takes it from one that points at none. A press keeps
+    // its controller until the trigger goes up.
+    fn choose_hand(&mut self, hits: &[Option<(PanelSlot, f32, f32)>; 2], triggers: [Trigger; 2]) {
+        if self.pressed {
+            return;
         }
-        self.selects = selects;
+        let pulled = (0..2).rev().find(|&hand| triggers[hand] == Trigger::Pulled);
+        if let Some(hand) = pulled {
+            self.hand = hand;
+        } else if hits[self.hand].is_none() && hits[1 - self.hand].is_some() {
+            self.hand = 1 - self.hand;
+        }
     }
 
-    fn events(&mut self, hit: Option<(PanelSlot, f32, f32)>, select: bool) -> Vec<PointerEvent> {
+    // A press starts in the frame where the trigger goes down over a panel. A trigger that
+    // was down before the ray reached a panel does not press.
+    fn events(
+        &mut self,
+        hit: Option<(PanelSlot, f32, f32)>,
+        trigger: Trigger,
+    ) -> Vec<PointerEvent> {
         let mut events = Vec::new();
         if let Some((slot, x, y)) = hit {
             let position = (slot.atlas[0] + x, slot.atlas[1] + y);
@@ -82,12 +109,16 @@ impl Pointer {
                 self.position = Some(position);
             }
         }
-        if select && !self.pressed && hit.is_some() {
-            events.push(PointerEvent::Press);
-            self.pressed = true;
-        } else if !select && self.pressed {
-            events.push(PointerEvent::Release);
-            self.pressed = false;
+        match trigger {
+            Trigger::Pulled if hit.is_some() => {
+                events.push(PointerEvent::Press);
+                self.pressed = true;
+            }
+            Trigger::Up if self.pressed => {
+                events.push(PointerEvent::Release);
+                self.pressed = false;
+            }
+            _ => {}
         }
         if hit.is_none() && !self.pressed && self.position.take().is_some() {
             events.push(PointerEvent::Leave);

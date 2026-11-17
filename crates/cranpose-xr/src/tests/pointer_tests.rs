@@ -76,3 +76,43 @@ fn the_other_hand_takes_over_when_only_it_points_at_a_panel() {
         ]
     );
 }
+
+#[test]
+fn a_trigger_held_from_outside_does_not_press_on_entry() {
+    let mut pointer = Pointer::default();
+    let (events, cursor) = pointer.update([None, aim(5.0, true)], &[PANEL]);
+    assert!(events.is_empty());
+    assert_eq!(cursor, None);
+    let (events, cursor) = pointer.update([None, aim(0.0, true)], &[PANEL]);
+    assert_eq!(events, [PointerEvent::Move { x: 400.0, y: 250.0 }]);
+    assert!(cursor.is_some_and(|cursor| !cursor.pressed));
+    let (events, _) = pointer.update([None, aim(0.0, false)], &[PANEL]);
+    assert!(events.is_empty());
+    let (events, cursor) = pointer.update([None, aim(0.0, true)], &[PANEL]);
+    assert_eq!(events, [PointerEvent::Press]);
+    assert!(cursor.is_some_and(|cursor| cursor.pressed));
+}
+
+#[test]
+fn the_pointer_keeps_its_hand_while_pressed() {
+    let mut pointer = Pointer::default();
+    pointer.update([None, aim(0.0, true)], &[PANEL]);
+    let (events, cursor) = pointer.update([aim(0.1, true), aim(0.0, true)], &[PANEL]);
+    assert!(events.is_empty());
+    assert_eq!(
+        cursor.map(|cursor| (cursor.x, cursor.y)),
+        Some((400.0, 250.0))
+    );
+    let (events, _) = pointer.update([aim(0.1, true), aim(0.0, false)], &[PANEL]);
+    assert_eq!(events, [PointerEvent::Release]);
+    let (events, _) = pointer.update([aim(0.1, false), aim(0.0, false)], &[PANEL]);
+    assert!(events.is_empty());
+    let (events, _) = pointer.update([aim(0.1, true), aim(0.0, false)], &[PANEL]);
+    assert_eq!(
+        events,
+        [
+            PointerEvent::Move { x: 500.0, y: 250.0 },
+            PointerEvent::Press
+        ]
+    );
+}

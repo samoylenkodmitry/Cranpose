@@ -77,48 +77,21 @@ impl PanelLayers {
         xr_session: &XrSession,
         space: &Space,
     ) -> Result<Vec<QuadLayer<'a>>, String> {
-        let panels = space.panels();
-        let needed = space
-            .atlas_size()
-            .map(|dp| (dp * DENSITY).ceil() as u32 + 2);
-        if guest.pixel_size() != (needed[0], needed[1]) {
-            guest
-                .resize(needed[0], needed[1], DENSITY)
-                .map_err(|error| error.to_string())?;
-        }
-        let atlas_size = guest.pixel_size();
-        let (texture, view) = match self.atlas.take() {
-            Some((texture, view)) if (texture.width(), texture.height()) == atlas_size => {
-                (texture, view)
-            }
-            _ => {
-                let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
-                    label: Some("cranpose xr atlas"),
-                    size: wgpu::Extent3d {
-                        width: atlas_size.0,
-                        height: atlas_size.1,
-                        depth_or_array_layers: 1,
-                    },
-                    mip_level_count: 1,
-                    sample_count: 1,
-                    dimension: wgpu::TextureDimension::D2,
-                    format: self.format,
-                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-                    view_formats: &[],
-                });
-                let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-                (texture, view)
-            }
-        };
+        fit_atlas(guest, space)?;
+        let (texture, view) = self.atlas_texture(gpu, guest.pixel_size());
         let drawn = guest
             .draw(&texture, &view)
             .map_err(|error| error.to_string())?;
+        // The draw composes, so the panels are read after it: their parts are where it drew them
+        let panels = space.panels();
         self.images
             .retain(|image| panels.iter().any(|slot| slot.id == image.id));
         if drawn {
             self.copy_panels(&panels, &texture, gpu, xr_session)?;
         }
         self.atlas = Some((texture, view));
+        // A panel that grew in this draw gets its room by the next frame
+        fit_atlas(guest, space)?;
         Ok(panels
             .iter()
             .filter_map(|slot| {
@@ -134,6 +107,35 @@ impl PanelLayers {
                 })
             })
             .collect())
+    }
+
+    // The texture the composition draws the atlas into, made anew when the atlas's size changes.
+    fn atlas_texture(
+        &mut self,
+        gpu: &GpuContext,
+        size: (u32, u32),
+    ) -> (wgpu::Texture, wgpu::TextureView) {
+        if let Some((texture, view)) = self.atlas.take()
+            && (texture.width(), texture.height()) == size
+        {
+            return (texture, view);
+        }
+        let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("cranpose xr atlas"),
+            size: wgpu::Extent3d {
+                width: size.0,
+                height: size.1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: self.format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        (texture, view)
     }
 
     fn copy_panels(
@@ -199,11 +201,11 @@ impl PanelLayers {
         gpu: &GpuContext,
         xr_session: &XrSession,
     ) -> Result<usize, String> {
-        if let Some(index) = self.images.iter().position(|image| image.id == id) {
-            if self.images[index].size == size {
-                return Ok(index);
-            }
-            self.images.swap_remove(index);
+        let known = self.images.iter().position(|image| image.id == id);
+        if let Some(index) = known
+            && self.images[index].size == size
+        {
+            return Ok(index);
         }
         let swapchain = xr_session
             .session
@@ -235,13 +237,37 @@ impl PanelLayers {
                 )
             })
             .collect::<Result<_, _>>()?;
-        self.images.push(PanelImage {
+        let image = PanelImage {
             id,
             size,
             swapchain,
             textures,
             shown: false,
-        });
-        Ok(self.images.len() - 1)
+        };
+        // A panel that changed size keeps its index, so the indices of the frame's other images
+        // stay valid
+        Ok(match known {
+            Some(index) => {
+                self.images[index] = image;
+                index
+            }
+            None => {
+                self.images.push(image);
+                self.images.len() - 1
+            }
+        })
     }
+}
+
+// Sizes the composition's view to hold every panel's part of the atlas.
+fn fit_atlas(guest: &mut GuestView, space: &Space) -> Result<(), String> {
+    let needed = space
+        .atlas_size()
+        .map(|dp| (dp * DENSITY).ceil() as u32 + 2);
+    if guest.pixel_size() != (needed[0], needed[1]) {
+        guest
+            .resize(needed[0], needed[1], DENSITY)
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
 }

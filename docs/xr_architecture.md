@@ -69,6 +69,18 @@ projection layer, with a camera made from each eye's view.
 Cranpose owns the GPU context. On the Quest it uses GLES through wgpu, which the cranvr client
 uses today. Vulkan is a later choice.
 
+## What the backend handles for the app
+
+An app on a Quest needs some details right, or the headset keeps its loading screen up and
+shows none of the app's frames. The `xr` service and the backend take care of them:
+
+- The manifest names the app VR only (`com.oculus.intent.category.VR`), so Horizon OS opens it
+  in an immersive window instead of a panel window.
+- The session gets the activity itself. The runtime finds the app's window through it, and the
+  process's NDK context can hold the application context instead.
+- Each panel's swapchain image starts with its top row, as wgpu writes it, and the layer says
+  so with `XR_FB_composition_layer_image_layout`.
+
 ## Steps
 
 | # | Work | Done when |

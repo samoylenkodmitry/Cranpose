@@ -6,6 +6,7 @@
 
 use std::ptr;
 
+use android_activity::AndroidApp;
 use openxr as xr;
 
 use super::gl_context::GlContext;
@@ -49,11 +50,14 @@ pub(crate) struct XrSession {
 impl XrSession {
     // Starts OpenXR for this app's activity and makes a session that draws on `gl`. The
     // session must end before `gl` does.
-    pub(crate) fn new(gl: &GlContext) -> Result<Self, String> {
-        let android = ndk_context::android_context();
-        // SAFETY: ndk_context holds the process's Java VM and the activity that android-activity
-        // set before it called the app's main function.
-        let platform = unsafe { xr::AndroidPlatformInfo::new(android.vm(), android.context()) };
+    pub(crate) fn new(gl: &GlContext, app: &AndroidApp) -> Result<Self, String> {
+        // The runtime finds the app's window through the activity it is given. The process's
+        // NDK context can hold the application context instead, and with it the runtime shows
+        // none of the app's frames.
+        // SAFETY: the Java VM and the global reference to the activity live as long as the
+        // AndroidApp, which outlives the session.
+        let platform =
+            unsafe { xr::AndroidPlatformInfo::new(app.vm_as_ptr(), app.activity_as_ptr()) };
         // SAFETY: the library is the Khronos OpenXR loader, which the `xr` service of the
         // Gradle plugin packs into the APK.
         let entry = unsafe { xr::Entry::load(&platform) }

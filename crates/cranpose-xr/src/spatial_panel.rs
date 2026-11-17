@@ -4,7 +4,7 @@ use cranpose::prelude::*;
 
 use crate::{
     SubspaceModifier,
-    space::{Cursor, SUBSPACE_ORIGIN, Space, local_space},
+    space::{Dot, SUBSPACE_ORIGIN, Space, local_space},
     subspace_modifier::DEFAULT_PANEL_SIZE,
 };
 
@@ -40,41 +40,48 @@ fn PlacedPanel(
     size: [f32; 2],
     content: impl FnMut() + 'static,
 ) {
-    let id = remember({
+    let panel = remember({
         let space = space.clone();
-        move || space.new_panel_id()
+        move || space.new_panel()
     })
-    .with(|id| *id);
-    let atlas = space.place(id, size, SUBSPACE_ORIGIN.then(&modifier.pose()));
-    let cursor = space.cursor().filter(|cursor| cursor.panel == id);
+    .with(|panel| *panel);
+    space.place(panel, size, SUBSPACE_ORIGIN.then(&modifier.pose()));
+    let id = panel.id;
     DisposableEffect(id, move |_| {
         DisposableEffectResult::new(move || space.remove(id))
     });
+    // The offset reads the origin while the scene draws, so a panel that moves in the atlas does
+    // not compose its content again.
     Box(
         Modifier::empty()
-            .offset(atlas[0], atlas[1])
+            .absolute_offset_with(move || {
+                let [x, y] = panel.origin.get();
+                Point::new(x, y)
+            })
             .required_size(Size::new(size[0], size[1]))
             .clip_to_bounds(),
         BoxSpec::default(),
         move || {
             content();
-            if let Some(cursor) = cursor {
-                CursorDot(cursor);
-            }
+            CursorDot(panel.dot);
         },
     );
 }
 
+// The dot reads the cursor's state, so a cursor that moves composes only the dot.
 #[composable]
-fn CursorDot(cursor: Cursor) {
-    let color = if cursor.pressed {
+fn CursorDot(dot: MutableState<Option<Dot>>) {
+    let Some(dot) = dot.get() else {
+        return;
+    };
+    let color = if dot.pressed {
         Color(0.55, 0.75, 1.0, 1.0)
     } else {
         Color(1.0, 1.0, 1.0, 0.95)
     };
     Box(
         Modifier::empty()
-            .offset(cursor.x - CURSOR_DOT / 2.0, cursor.y - CURSOR_DOT / 2.0)
+            .offset(dot.x - CURSOR_DOT / 2.0, dot.y - CURSOR_DOT / 2.0)
             .size_points(CURSOR_DOT, CURSOR_DOT)
             .background(color)
             .rounded_corners(CURSOR_DOT / 2.0)

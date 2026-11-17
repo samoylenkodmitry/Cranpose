@@ -1905,7 +1905,6 @@ dependencies = [
  "cranpose-wgpu",
  "khronos-egl",
  "log",
- "ndk-context",
  "openxr",
  "pollster",
 ]

@@ -66,7 +66,7 @@ impl SubspaceModifier {
 
     /// Turns the content by `pitch` about its horizontal axis, `yaw` about its vertical axis and
     /// `roll` about the axis toward the viewer, in degrees. A positive yaw turns its face to the
-    /// left.
+    /// right.
     pub fn rotate(mut self, pitch: f32, yaw: f32, roll: f32) -> Self {
         self.orientation = turn_degrees(pitch, yaw, roll);
         self

@@ -42,7 +42,7 @@ fn run_session(
     settings: &AppSettings,
     content: impl FnMut() + 'static,
 ) -> Result<(), String> {
-    let mut immersive = Immersive::new(settings, content)?;
+    let mut immersive = Immersive::new(app, settings, content)?;
     let mut status = SessionStatus::Idle;
     log::info!("cranpose xr: ready");
     while !activity_destroyed(app, status) {
@@ -88,10 +88,14 @@ struct Immersive {
 }
 
 impl Immersive {
-    fn new(settings: &AppSettings, mut content: impl FnMut() + 'static) -> Result<Self, String> {
+    fn new(
+        app: &AndroidApp,
+        settings: &AppSettings,
+        mut content: impl FnMut() + 'static,
+    ) -> Result<Self, String> {
         let gl = GlContext::new()?;
         let gpu = gl.gpu()?;
-        let xr_session = XrSession::new(&gl)?;
+        let xr_session = XrSession::new(&gl, app)?;
         let controllers = Controllers::new(&xr_session)?;
         let layers = PanelLayers::new(&xr_session)?;
         let composed = Rc::new(RefCell::new(None::<Space>));
