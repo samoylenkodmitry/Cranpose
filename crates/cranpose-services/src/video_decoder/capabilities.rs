@@ -6,10 +6,9 @@ use super::{DecoderError, VideoCodec};
 use crate::registry::ServiceRegistry;
 
 /// The limits of the hardware decoder that [`VideoDecoder::new`](super::VideoDecoder::new) opens
-/// for one codec. A stream above a limit decodes with errors or not at all: the decoder of a
-/// Meta Quest 3 showed green blocks for a picture wider than it takes. An app reads the limits
-/// with [`VideoDecoder::capabilities`](super::VideoDecoder::capabilities) before it asks its host
-/// for a picture size.
+/// for one codec. A stream above a limit decodes with errors or not at all. An app reads the
+/// limits with [`VideoDecoder::capabilities`](super::VideoDecoder::capabilities) before it asks
+/// its host for a picture size.
 #[derive(Clone, Debug, PartialEq)]
 pub struct DecoderCapabilities {
     /// The codec that these limits belong to.

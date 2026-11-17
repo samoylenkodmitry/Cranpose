@@ -51,7 +51,7 @@ impl StreamStats {
     }
 
     #[cfg_attr(
-        not(all(headset, target_os = "android")),
+        not(any(test, all(headset, target_os = "android"))),
         expect(dead_code, reason = "the headset backend calls it")
     )]
     // Replaces the counts with the scene's totals. The frame loop is the only writer, so each
@@ -70,3 +70,7 @@ impl PartialEq for StreamStats {
         Arc::ptr_eq(&self.shared, &other.shared)
     }
 }
+
+#[cfg(test)]
+#[path = "tests/stream_stats_tests.rs"]
+mod tests;

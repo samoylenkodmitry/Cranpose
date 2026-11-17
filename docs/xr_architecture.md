@@ -240,7 +240,9 @@ into it as it is shows lighter than the same picture in a surface (a gray of 128
 
 On a Quest 3 the pass costs 0.4 ms of CPU and 0.03 ms of GPU for a frame of two 320 by 360 pixel
 pictures, and 0.4 ms and 0.3 ms for two 1920 by 1080 pixel pictures. A frame comes 30 times a
-second in the demo, and the headset runs at 120 Hz. The `stream-costs` feature of `cranpose-xr`
+second in the demo, and the headset runs at 120 Hz. With a second scene that unwarps a foveated
+picture of two 640 by 720 pixel eyes, both scenes together cost 0.45 ms of CPU and 0.08 ms of GPU
+for each frame on average, and the foveated shader compiled in 14 ms when its first frame came. The `stream-costs` feature of `cranpose-xr`
 times the passes and logs the costs once a second. Without it the passes run with no timing.
 
 ## Crates

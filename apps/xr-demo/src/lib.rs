@@ -2,7 +2,11 @@
 // trigger presses the buttons: one counts, the other shows or hides the room around the panels.
 // A strip above them is bent around the viewer. On the desktop the panels draw flat.
 
-use std::{cell::RefCell, rc::Rc, time::Duration};
+use std::{
+    cell::{OnceCell, RefCell},
+    rc::Rc,
+    time::Duration,
+};
 
 use cranpose::{CropRect, DecodedFrames, prelude::*};
 use cranpose_ui::text::{FontWeight, TextUnit};
@@ -315,20 +319,26 @@ fn ClipSurface(
     }
 }
 
-// A streamed scene of a foveated clip, which the headset unwarps. It lies above the panels.
+// A streamed scene of a foveated clip, which the headset unwarps. It lies above the panels. The
+// first frame that the scene asks about anchors the stream on the headset's clock: the frame
+// effect has set the clock by then, which it has not when the scene is composed.
 #[composable]
 fn FoveatedScene(clock: HeadsetClock, stats: StreamStats) {
     let started = remember(|| {
         FoveatedPlayer::start()
-            .map(|(player, frames)| (Rc::new(player), frames, clock.read()))
+            .map(|(player, frames)| (Rc::new(player), frames))
             .map_err(|error| log::error!("xr demo: no foveated clip: {error}"))
             .ok()
     })
     .with(Clone::clone);
-    if let Some((_player, frames, base)) = started {
+    let anchor = remember(|| Rc::new(OnceCell::<(u64, Duration)>::new())).with(Clone::clone);
+    if let Some((_player, frames)) = started {
         StreamedScene(
             frames,
-            move |index| foveated_player::views(index, base),
+            move |index| {
+                let (first, base) = *anchor.get_or_init(|| (index, clock.read()));
+                foveated_player::views(index.saturating_sub(first), base)
+            },
             stats,
         );
     }
