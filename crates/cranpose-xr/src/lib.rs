@@ -28,6 +28,8 @@ mod carry;
 mod controller;
 #[cfg(any(test, headset))]
 mod controller_bindings;
+#[cfg(any(test, headset))]
+mod depth_order;
 mod field_of_view;
 mod foveated_encoding;
 #[cfg(any(test, all(headset, target_os = "android")))]

@@ -96,6 +96,14 @@ without a dependency on `cranpose-xr`. On Android the type holds a reference to 
 `ANativeWindow`, which `as_ptr` returns. The app needs no `ndk`, JNI or GL code of its own.
 Outside a headset the composable shows an empty box, and the callbacks never run.
 
+The compositor draws layers in list order, and the last one covers the others. The frame loop
+lists the layers of the room, the streamed scenes and the curved panels first. Then come the flat
+panels and the surfaces, sorted back to front by the distance from the head to each one's plane,
+so a panel in front of a surface shows over it. The plane's distance, not the distance to the
+layer's center, keeps a small panel at the edge of a large surface in front of it. The handles and
+the rays follow, so they show over everything. The sort runs in place on the frame's list and
+allocates nothing. A curved panel still draws under every flat panel and surface.
+
 ## Video decoding
 
 `VideoDecoder` of `cranpose-services` decodes H.264, HEVC and AV1 on the headset's hardware. On
@@ -322,7 +330,7 @@ shader per eye does it, and the external sampler turns the decoder's YUV into RG
 eyes become the views of an `XrCompositionLayerProjection`, with the poses and fields of view of
 the frame. The compositor reprojects each picture from the pose it was rendered for to the head's
 newer pose. While no other frame is chosen, the layer shows its last pictures again. The scene lies
-over the room and under the curved panels, the panels, the surfaces, the handles and the rays.
+over the room and under the curved panels, the flat panels and surfaces, the handles and the rays.
 
 A host may send each eye with full density in a center and compressed edges, which lets its encoder
 code a third of the pixels. `StreamedView::foveation` describes ALVR's axis-aligned foveated

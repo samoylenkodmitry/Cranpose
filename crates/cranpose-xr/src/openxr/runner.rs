@@ -20,6 +20,7 @@ use super::{
 };
 use crate::{
     SpatialCapabilities, SpatialEnvironment,
+    depth_order::sort_back_to_front,
     frame_effects::local_frame_effects,
     local_haptics, local_headset_properties, local_spatial_capabilities, local_spatial_environment,
     pointer::{Pointer, PointerEvent},
@@ -182,8 +183,14 @@ impl Immersive {
         self.surfaces.sync(&self.xr_session, &self.space, &panels);
         if shown {
             quads.extend(self.surfaces.layers(&panels));
+            let head = self.headset.device_pose();
+            // The compositor draws layers in list order. The panels and the surfaces go back to
+            // front, so a panel in front of a surface shows over it.
+            if let Some(head) = &head {
+                sort_back_to_front(&mut quads, head.position, |quad| &quad.pose);
+            }
             quads.extend(self.handles.layers(&panels, self.pointer.handle()));
-            if let Some(head) = self.headset.device_pose() {
+            if let Some(head) = &head {
                 quads.extend(self.rays.layers(&self.pointer.beams(), head.position));
             }
         }
