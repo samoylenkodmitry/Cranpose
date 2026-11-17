@@ -23,6 +23,7 @@ mod returned_values;
 mod runtimes_on_one_thread;
 mod scene_attachment_scratch;
 mod scopes_on_demand;
+mod shadowed_names;
 mod snapshot_observation;
 mod snapshot_runtime_thread_isolation;
 mod stage_times;
