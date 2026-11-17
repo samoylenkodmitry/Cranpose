@@ -258,6 +258,12 @@ heart-rate = ["dep:objc2-health-kit"]
 # `NSFaceIDUsageDescription`. Android needs only that declaration, and
 # elsewhere it compiles away.
 device-auth = ["dep:objc2-local-authentication"]
+# The rotation of an iPhone from Core Motion, behind
+# `cranpose_services::device_motion`. Off by default because it links
+# CoreMotion. Reading device motion asks the person for nothing and needs no
+# Info.plist entry. Android needs only `cranpose_capabilities::Use::device_motion`
+# in the build script, and elsewhere it compiles away.
+device-motion = ["dep:objc2-core-motion"]
 # Messages and streams between an iPhone app and the same app on its Apple
 # Watch through WatchConnectivity, behind `cranpose_services::wearable`. On
 # Android the Gradle service "wearable" brings the Wear OS link instead.
@@ -337,6 +343,11 @@ web-sys = { version = "0.3", optional = true, features = [
     "FileList",
     # Battery Status API (`web_power`)
     "BatteryManager",
+    # The page's rotation (`web_device_motion`)
+    "DeviceOrientationEvent",
+    "Event",
+    "Screen",
+    "ScreenOrientation",
     # IME composition support (hidden textarea + composition events)
     "CompositionEvent",
     "HtmlInputElement",
@@ -631,6 +642,7 @@ objc2-foundation = { version = "0.3", default-features = false, optional = true,
     "NSError",
     "NSNotification",
     "NSObject",
+    "NSObjCRuntime",
     "NSBundle",
     "NSCoder",
     "NSKeyedArchiver",
@@ -788,6 +800,15 @@ objc2-local-authentication = { version = "0.3.2", default-features = false, opti
     "LAContext",
     "LAError",
 ] }
+# The device's rotation (`apple::device_motion`), under `device-motion`.
+objc2-core-motion = { version = "0.3.2", default-features = false, optional = true, features = [
+    "std",
+    "block2",
+    "CMMotionManager",
+    "CMDeviceMotion",
+    "CMAttitude",
+    "CMLogItem",
+] }
 
 [target.'cfg(target_os = "watchos")'.dependencies]
 # The watchOS host's services (`watchos_services`), with the iOS host's
@@ -801,7 +822,10 @@ objc2-foundation = { version = "0.3", default-features = false, optional = true,
     "NSDate",
     "NSError",
     "NSObject",
+    "NSObjCRuntime",
+    "NSOperation",
     "NSPathUtilities",
+    "NSProcessInfo",
     "NSSet",
     "NSString",
 ] }
@@ -822,6 +846,15 @@ oslog = { version = "0.2", default-features = false, optional = true }
 objc2-watch-kit = { version = "0.3.2", default-features = false, optional = true, features = [
     "std",
     "WKInterfaceDevice",
+] }
+# The device's rotation (`apple::device_motion`), under `device-motion`.
+objc2-core-motion = { version = "0.3.2", default-features = false, optional = true, features = [
+    "std",
+    "block2",
+    "CMMotionManager",
+    "CMDeviceMotion",
+    "CMAttitude",
+    "CMLogItem",
 ] }
 # The heart-rate reader (`watchos_heart_rate`), under `heart-rate`.
 objc2-health-kit = { version = "0.3.2", default-features = false, optional = true, features = [

@@ -1,3 +1,7 @@
+#[expect(
+    clippy::wildcard_imports,
+    reason = "the composable macro names its runtime helpers at the root of the crate it expands in"
+)]
 use cranpose::{liquid::prelude::*, *};
 
 translation_messages!(pub mod messages, "examples/localization/locales/en/cranpose.ftl");

@@ -24,7 +24,8 @@ use cranpose_core::{
 };
 use cranpose_ui_graphics::{Size, WindowCoordinates};
 use cranpose_ui_layout::{
-    Constraints, Measurable, Measurables, MeasurePolicy, MeasureResult, MeasureScope, Placement,
+    Constraints, LayoutDirection, LayoutModifierMeasureResult, Measurable, Measurables,
+    MeasurePolicy, MeasureResult, MeasureScope, Placement,
 };
 
 use crate::{
@@ -46,7 +47,7 @@ const GONE: f32 = 0.001;
 /// Mirrors Jetpack Compose's `ContentTransform`: build one with
 /// `enter.together_with(exit)` and add a size animation with
 /// [`using`](Self::using).
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ContentTransform {
     /// Transition that plays on the content that comes in.
     pub enter: EnterTransition,
@@ -104,7 +105,10 @@ pub(crate) struct EntryMotion {
     size: Rc<Cell<Size>>,
     /// The container that slides across its edge measure from.
     container: Rc<Cell<ContainerFrame>>,
-    effects: Cell<TransitionEffects>,
+    effects: RefCell<TransitionEffects>,
+    // Whether the last composition of the entry gave its content a layout
+    // node for a size change.
+    sized: Cell<bool>,
     animation: Cell<AnimationType>,
     /// Whether the content goes, rather than comes or rests.
     pub(crate) leaving: Cell<bool>,
@@ -120,8 +124,50 @@ impl EntryMotion {
 
     fn layer(&self) -> GraphicsLayer {
         self.effects
-            .get()
+            .borrow()
             .layer(self.progress(), self.size.get(), self.container.get())
+    }
+
+    // Where the content of size `full` lies and how large its box is, as its
+    // size change and its slide put them at the current progress. Reading the
+    // progress makes the layout measure again on each frame the transition
+    // moves.
+    pub(crate) fn fit(
+        &self,
+        full: Size,
+        constraints: Constraints,
+        density: f32,
+        direction: LayoutDirection,
+    ) -> LayoutModifierMeasureResult {
+        let progress = self.progress();
+        let effects = self.effects.borrow();
+        let Some(change) = effects.size_change() else {
+            return LayoutModifierMeasureResult::with_size(full);
+        };
+        let (width, height) = {
+            let size = change.size_at(full, progress, density);
+            constraints.constrain(size.width, size.height)
+        };
+        let size = Size::new(width, height);
+        let (x, y) = change.offset(full, size, direction, density);
+        let (slide_x, slide_y) = effects.slide(progress, full, self.container.get());
+        LayoutModifierMeasureResult::new(size, x + slide_x, y + slide_y)
+    }
+
+    // Whether the entry's transition changes its size, which its content
+    // composes a layout node for.
+    fn changes_size(&self) -> bool {
+        self.effects.borrow().size_change().is_some()
+    }
+
+    // Whether the entry's transition changes its size and its content has
+    // no layout node for that yet.
+    fn lacks_size_node(&self) -> bool {
+        self.changes_size() && !self.sized.get()
+    }
+
+    fn set_effects(&self, effects: &TransitionEffects) {
+        self.effects.borrow_mut().clone_from(effects);
     }
 
     // Animates toward `target` unless it already runs there or rests there;
@@ -244,7 +290,8 @@ impl<T: Clone + PartialEq + 'static> ContentState<T> {
                 progress: RefCell::new(Animatable::new(progress, self.runtime.clone())),
                 size: Rc::new(Cell::new(Size::ZERO)),
                 container: Rc::clone(&self.frame),
-                effects: Cell::new(effects),
+                effects: RefCell::new(effects),
+                sized: Cell::new(false),
                 animation: Cell::new(animation),
                 leaving: Cell::new(false),
                 coordinates: Rc::default(),
@@ -300,11 +347,11 @@ impl<T: Clone + PartialEq + 'static> ContentState<T> {
         let change = previous
             .filter(|previous| !same(previous, target))
             .map(|previous| transition(&previous, target));
-        if let Some(change) = change {
+        if let Some(change) = &change {
             self.size_transform.set(change.size_transform);
         }
         let seeking = seek.map(|seek| (seek, transition(target, &seek.toward)));
-        if let Some((seek, _)) = seeking
+        if let Some((seek, _)) = &seeking
             && !self.show(&seek.toward, same)
         {
             self.push(
@@ -315,7 +362,7 @@ impl<T: Clone + PartialEq + 'static> ContentState<T> {
                 Some(self.changed_content()),
             );
         }
-        self.aim(target, seeking, change, same);
+        self.aim(target, seeking.as_ref(), change.as_ref(), same);
         true
     }
 
@@ -349,7 +396,7 @@ impl<T: Clone + PartialEq + 'static> ContentState<T> {
             self.push(
                 target.clone(),
                 progress,
-                enter.effects(),
+                enter.effects().clone(),
                 enter.animation(),
                 content,
             );
@@ -366,8 +413,8 @@ impl<T: Clone + PartialEq + 'static> ContentState<T> {
     fn aim(
         &self,
         target: &T,
-        seeking: Option<(&ContentSeek<T>, ContentTransform)>,
-        change: Option<ContentTransform>,
+        seeking: Option<&(&ContentSeek<T>, ContentTransform)>,
+        change: Option<&ContentTransform>,
         same: &dyn Fn(&T, &T) -> bool,
     ) {
         let mut entries = self.entries.borrow_mut();
@@ -381,7 +428,7 @@ impl<T: Clone + PartialEq + 'static> ContentState<T> {
                 entry.motion.leaving.set(seeking.is_some());
                 match seeking {
                     Some((seek, seek_change)) => {
-                        motion.effects.set(seek_change.exit.effects());
+                        motion.set_effects(seek_change.exit.effects());
                         motion.snap_to(1.0 - seek.fraction.clamp(0.0, 1.0));
                     }
                     None => motion.animate_to(1.0),
@@ -390,14 +437,14 @@ impl<T: Clone + PartialEq + 'static> ContentState<T> {
                 seeking.filter(|(seek, _)| same(&seek.toward, &entry.value))
             {
                 entry.motion.leaving.set(false);
-                motion.effects.set(seek_change.enter.effects());
+                motion.set_effects(seek_change.enter.effects());
                 motion.animation.set(seek_change.enter.animation());
                 motion.snap_to(seek.fraction.clamp(0.0, 1.0));
             } else {
                 if !entry.motion.leaving.replace(true)
                     && let Some(change) = change.filter(|_| motion.at_rest())
                 {
-                    motion.effects.set(change.exit.effects());
+                    motion.set_effects(change.exit.effects());
                     motion.animation.set(change.exit.animation());
                 }
                 motion.animate_to(0.0);
@@ -430,7 +477,7 @@ impl<T: Clone + PartialEq + 'static> ContentState<T> {
             .entries
             .borrow()
             .iter()
-            .any(|entry| entry.motion.effects.get().uses_direction());
+            .any(|entry| entry.motion.effects.borrow().uses_direction());
         if uses_direction {
             let frame = self.frame.get();
             self.frame.set(ContainerFrame {
@@ -438,6 +485,15 @@ impl<T: Clone + PartialEq + 'static> ContentState<T> {
                 ..frame
             });
         }
+    }
+
+    // Whether an entry took a transition that changes its size after its
+    // content composed, so that the content composes again with a node for it.
+    fn lacks_size_node(&self) -> bool {
+        self.entries
+            .borrow()
+            .iter()
+            .any(|entry| entry.motion.lacks_size_node())
     }
 
     fn animating(&self) -> bool {
@@ -614,7 +670,8 @@ fn animated_content<T, F>(
             .0
             .sync(&target_state, seek.as_ref(), transition_spec, same)
     {
-        if state.0.drop_gone() {
+        let dropped = state.0.drop_gone();
+        if dropped || state.0.lacks_size_node() {
             cranpose_core::recompose_current_scope_again();
         }
         state.0.note_direction();
@@ -673,40 +730,51 @@ fn compose_entry<T: Clone + PartialEq + 'static>(
     shared: bool,
 ) {
     let layer = Rc::clone(motion);
-    let entry = Modifier::empty().report_size(Rc::clone(&motion.size));
     let entry = match &pausable {
-        Some(content) => entry.layout_data(ChangedContent(content.clone())),
-        None => entry,
+        Some(content) => Modifier::empty().layout_data(ChangedContent(content.clone())),
+        None => Modifier::empty(),
     };
     let entry = if shared {
         entry.report_window_coordinates(Rc::clone(&motion.coordinates))
     } else {
         entry
     };
+    // The layer comes before the size change, so that it bounds the size
+    // that the transition gives and the clip cuts at it.
+    let entry = entry.graphics_layer(move || layer.layer());
+    // The size change measures the content at its full size, and the size
+    // reporter inside it reports that size.
+    let sized = motion.changes_size();
+    motion.sized.set(sized);
+    let entry = if sized {
+        entry.size_change(
+            Rc::clone(motion),
+            crate::layout_direction::layout_direction(),
+        )
+    } else {
+        entry
+    };
+    let entry = entry.report_size(Rc::clone(&motion.size));
     let shared_entry = shared.then(|| SharedEntry {
         motion: Rc::clone(motion),
         entry: Rc::clone(&motion.coordinates),
         container: Rc::clone(&state.0.coordinates),
     });
-    Box(
-        entry.graphics_layer(move || layer.layer()),
-        BoxSpec::new(),
-        move || {
-            let compose = || {
-                if let Some(content) = state.0.content.borrow_mut().as_mut() {
-                    content(value.clone());
-                }
-            };
-            let compose = || match shared_entry.clone() {
-                Some(entry) => ProvideSharedEntry(entry, compose),
-                None => compose(),
-            };
-            match &pausable {
-                Some(content) => with_pausable_content(content, compose),
-                None => compose(),
+    Box(entry, BoxSpec::new(), move || {
+        let compose = || {
+            if let Some(content) = state.0.content.borrow_mut().as_mut() {
+                content(value.clone());
             }
-        },
-    );
+        };
+        let compose = || match shared_entry.clone() {
+            Some(entry) => ProvideSharedEntry(entry, compose),
+            None => compose(),
+        };
+        match &pausable {
+            Some(content) => with_pausable_content(content, compose),
+            None => compose(),
+        }
+    });
 }
 
 // Whether `measurable` is content a change brought that is not complete.

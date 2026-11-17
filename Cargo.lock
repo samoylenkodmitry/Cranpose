@@ -1247,6 +1247,7 @@ dependencies = [
  "objc2-avf-audio",
  "objc2-core-foundation",
  "objc2-core-media",
+ "objc2-core-motion",
  "objc2-core-video",
  "objc2-foundation 0.3.2",
  "objc2-health-kit",
@@ -4530,6 +4531,18 @@ dependencies = [
  "objc2-core-audio-types",
  "objc2-core-foundation",
  "objc2-core-video",
+]
+
+[[package]]
+name = "objc2-core-motion"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dcf94da2dcaad7e727ad6a1ea2312293c776f0df8cbc87fde6654d100a24386a"
+dependencies = [
+ "bitflags 2.13.2",
+ "block2 0.6.2",
+ "objc2 0.6.5",
+ "objc2-foundation 0.3.2",
 ]
 
 [[package]]

@@ -70,6 +70,7 @@ ignores:
   - crates/cranpose/src/android/hardware_buffer_image.rs
   - crates/cranpose/src/android/heart_rate.rs
   - crates/cranpose/src/android/device_auth.rs
+  - crates/cranpose/src/android/device_motion.rs
   - crates/cranpose/src/android/host.rs
   - crates/cranpose/src/android/jni.rs
   - crates/cranpose/src/android/media.rs
@@ -95,6 +96,7 @@ ignores:
   - crates/cranpose/src/apple/nv12_converter.rs
   - crates/cranpose/src/apple/microphone.rs
   - crates/cranpose/src/apple/device_auth.rs
+  - crates/cranpose/src/apple/device_motion.rs
   - crates/cranpose/src/apple/network.rs
   - crates/cranpose/src/apple/now_playing.rs
   - crates/cranpose/src/apple/wearable.rs

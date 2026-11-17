@@ -117,6 +117,12 @@ pub(crate) fn register(
     if capabilities.has(cranpose_capabilities::Service::DeviceAuth) {
         super::device_auth::register(app.clone());
     }
+    // Present only when the application declares the rotation sensor, which
+    // brings `CranposeDeviceMotion`; anywhere else the service reports that
+    // there is nothing to read.
+    if capabilities.has(cranpose_capabilities::Service::DeviceMotion) {
+        super::device_motion::register(app.clone());
+    }
     #[cfg(feature = "media-backend")]
     super::media::register(app.clone());
     set_platform_launch_args(Arc::new(read_launch_arguments(&app)));

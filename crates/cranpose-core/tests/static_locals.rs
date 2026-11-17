@@ -36,7 +36,7 @@ fn Wrapper(seen: Seen, runs: Rc<Cell<u32>>) {
 
 #[cranpose_macros::composable]
 fn Root(value: MutableState<i32>, tick: MutableState<u32>, seen: Seen, runs: Rc<Cell<u32>>) {
-    let _ = tick.get();
+    let _: u32 = tick.get();
     Reader("outside", Rc::clone(&seen));
     CompositionLocalProvider([local().provides(value.get())], || {
         Wrapper(Rc::clone(&seen), Rc::clone(&runs));
@@ -87,7 +87,7 @@ fn a_changed_static_value_recomposes_what_its_provider_holds() {
 
 #[cranpose_macros::composable]
 fn TickingReader(label: &'static str, tick: MutableState<u32>, seen: Seen) {
-    let _ = tick.get();
+    let _: u32 = tick.get();
     seen.borrow_mut().push((label, local().current()));
 }
 

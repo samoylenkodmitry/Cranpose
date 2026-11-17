@@ -11,7 +11,7 @@ use cranpose_ui::{
     Point, Rect, Size,
 };
 
-use super::figure::world_to_scene;
+use super::{figure::world_to_scene, grid_mesh};
 
 // A label on `mesh` in a node of size `node`, drawn in its own colours.
 pub(super) fn label_surface(mesh: Mesh, node: Size) -> MeshSurface {
@@ -49,7 +49,7 @@ pub(super) fn sheet_mesh(
         }
     }
     let mut indices = Vec::with_capacity(columns * 6);
-    for column in 0..columns as u32 {
+    for column in 0..grid_mesh::vertex(columns) {
         let (top, bottom) = (column * 2, column * 2 + 1);
         indices.extend_from_slice(&[top, bottom, top + 2, top + 2, bottom, bottom + 2]);
     }

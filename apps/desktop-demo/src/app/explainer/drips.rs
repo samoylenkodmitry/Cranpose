@@ -11,6 +11,7 @@ use super::{
     melting::Melting,
     roots::{Ink, Root},
     walk::ease,
+    whole,
 };
 
 // The chocolate's effect reads black content as a drip.
@@ -69,9 +70,7 @@ impl TypeBlock {
     }
 
     fn line_of(&self, y: f32) -> usize {
-        let line = ((y - self.first_baseline()) / self.pitch())
-            .round()
-            .max(0.0) as usize;
+        let line = whole::count(((y - self.first_baseline()) / self.pitch()).round());
         line.min(self.baselines.len().saturating_sub(1))
     }
 }
@@ -435,13 +434,14 @@ impl Placed {
         let in_head = root.y < split;
         let block = if in_head { head } else { copy };
         let line = block.line_of(root.y);
-        let seed = line as i32 * 7 + if in_head { 1 } else { 2 };
+        let seed = i32::try_from(line).expect("a block has far fewer lines than an i32 counts") * 7
+            + if in_head { 1 } else { 2 };
         Self {
             root,
             in_head,
             line,
             under: root.y - block.baselines.get(line).copied().unwrap_or(root.y),
-            random: std::array::from_fn(|index| hash(root.x / u / 3.0, seed, index as i32)),
+            random: [0, 1, 2, 3, 4].map(|index| hash(root.x / u / 3.0, seed, index)),
         }
     }
 }
@@ -484,11 +484,15 @@ fn thin_out<'a>(roots: &'a [Placed], block: &TypeBlock, in_head: bool) -> Vec<&'
     kept
 }
 
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "the cell of a coordinate is a whole number far inside an i32, and the hash mixes its bits"
+)]
 fn hash(a: f32, b: i32, c: i32) -> f32 {
     let mut h = (a as i32).wrapping_mul(374_761_393)
         ^ b.wrapping_mul(668_265_263)
         ^ c.wrapping_add(11).wrapping_mul(2_147_483_642);
-    h = (h ^ ((h as u32) >> 13) as i32).wrapping_mul(1_274_126_177);
-    h ^= ((h as u32) >> 16) as i32;
-    h as u32 as f32 / 4_294_967_296.0
+    h = (h ^ (h.cast_unsigned() >> 13).cast_signed()).wrapping_mul(1_274_126_177);
+    h ^= (h.cast_unsigned() >> 16).cast_signed();
+    h.cast_unsigned() as f32 / 4_294_967_296.0
 }

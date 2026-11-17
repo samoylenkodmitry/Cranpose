@@ -11,7 +11,10 @@ use cranpose_ui::{
     Box, BoxSpec, Color, Modifier, Size,
 };
 
-use super::figure::{world_to_scene, Plan};
+use super::{
+    figure::{world_to_scene, Plan},
+    grid_mesh,
+};
 
 const PAPER: Color = Color(0.03, 0.42, 0.24, 1.0);
 const SWEEP_WGSL: &str = concat!(
@@ -77,22 +80,13 @@ fn sweep_mesh(plan: &Plan) -> Mesh {
             uvs.push([share, row as f32 / (profile.len() - 1) as f32]);
         }
     }
-    let mut indices = Vec::with_capacity((profile.len() - 1) * COLUMNS * 6);
-    let stride = (COLUMNS + 1) as u32;
-    for row in 0..(profile.len() - 1) as u32 {
-        for column in 0..COLUMNS as u32 {
-            let at = row * stride + column;
-            indices.extend_from_slice(&[
-                at,
-                at + stride,
-                at + 1,
-                at + 1,
-                at + stride,
-                at + stride + 1,
-            ]);
-        }
-    }
-    Mesh::new(positions, uvs, Some(normals), indices).expect("a whole grid of quads")
+    Mesh::new(
+        positions,
+        uvs,
+        Some(normals),
+        grid_mesh::quads(COLUMNS + 1, profile.len()),
+    )
+    .expect("a whole grid of quads")
 }
 
 // The paper lit for a camera that has pulled back `pull` of the way.

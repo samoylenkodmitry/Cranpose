@@ -92,7 +92,7 @@ fn shell_on_two_meshes(
                             .mesh_surfaces(move || {
                                 // A new generation makes both meshes again,
                                 // which collects the hit targets again.
-                                let _ = generation.get();
+                                let _: u32 = generation.get();
                                 MeshSurfaces::new(owner.surface(), vec![other.surface()])
                             }),
                         BoxSpec::default(),
@@ -102,8 +102,7 @@ fn shell_on_two_meshes(
             );
         },
     );
-    shell.set_viewport(WINDOW.width, WINDOW.height);
-    shell.set_buffer_size(WINDOW.width as u32, WINDOW.height as u32);
+    crate::test_window::size_window(&mut shell, WINDOW);
     let generation = slot.borrow().expect("the scene composed");
     (shell, generation)
 }

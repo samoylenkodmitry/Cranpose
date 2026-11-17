@@ -41,6 +41,7 @@ ios = [
     "renderer-wgpu",
     "cranpose/ios",
     "cranpose/device-auth",
+    "cranpose/device-motion",
     "cranpose-audio/cpal-backend",
     "cranpose-services/http-native",
 ]

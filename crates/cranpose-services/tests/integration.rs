@@ -4,6 +4,7 @@ mod capability_state_integration;
 mod composition_support;
 mod content_resolution;
 mod content_work_bounds;
+mod device_motion_integration;
 mod file_preferences_regressions;
 mod hook_caller_identity;
 mod host_messages_delivery;

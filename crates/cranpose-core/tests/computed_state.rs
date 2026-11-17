@@ -15,9 +15,9 @@ fn composition() -> Composition<MemoryApplier> {
 /// A composable reading `computed`, spelled out the way `#[composable]`
 /// expands it: a group whose recompose callback runs the body again.
 fn computed_reader(
-    computed: ComputedState<bool>,
-    reads: Rc<Cell<u32>>,
-    seen: Rc<RefCell<Vec<bool>>>,
+    computed: &ComputedState<bool>,
+    reads: &Rc<Cell<u32>>,
+    seen: &Rc<RefCell<Vec<bool>>>,
 ) {
     fn body(computed: &ComputedState<bool>, reads: &Cell<u32>, seen: &RefCell<Vec<bool>>) {
         reads.set(reads.get() + 1);
@@ -27,9 +27,9 @@ fn computed_reader(
     cranpose_core::with_current_composer(|composer| {
         composer.with_group(key, |composer| {
             let again = computed.clone();
-            let (again_reads, again_seen) = (Rc::clone(&reads), Rc::clone(&seen));
+            let (again_reads, again_seen) = (Rc::clone(reads), Rc::clone(seen));
             composer.set_recompose_callback(move |_| body(&again, &again_reads, &again_seen));
-            body(&computed, &reads, &seen);
+            body(computed, reads, seen);
         });
     });
 }
@@ -71,7 +71,7 @@ fn a_computed_state_recomposes_its_readers_only_when_its_value_changes() {
         composition
             .render(key, move || {
                 for (reads, seen) in &readers {
-                    computed_reader(computed.clone(), Rc::clone(reads), Rc::clone(seen));
+                    computed_reader(&computed, reads, seen);
                 }
             })
             .expect("render succeeds");
@@ -116,7 +116,7 @@ fn a_dropped_computed_state_leaves_writes_to_what_it_read_alone() {
         let (reads, seen) = (Rc::clone(&reads), Rc::clone(&seen));
         composition
             .render(key, move || {
-                computed_reader(computed.clone(), Rc::clone(&reads), Rc::clone(&seen));
+                computed_reader(&computed, &reads, &seen);
             })
             .expect("render succeeds");
     }
@@ -148,7 +148,7 @@ fn a_change_undone_before_the_frame_recomposes_nothing() {
         let (reads, seen) = (Rc::clone(&reads), Rc::clone(&seen));
         composition
             .render(key, move || {
-                computed_reader(computed.clone(), Rc::clone(&reads), Rc::clone(&seen));
+                computed_reader(&computed, &reads, &seen);
             })
             .expect("render succeeds");
     }
@@ -176,7 +176,7 @@ fn a_computed_state_that_reads_another_follows_what_that_one_reads() {
         let (reads, seen) = (Rc::clone(&reads), Rc::clone(&seen));
         composition
             .render(key, move || {
-                computed_reader(outer.clone(), Rc::clone(&reads), Rc::clone(&seen));
+                computed_reader(&outer, &reads, &seen);
             })
             .expect("render succeeds");
     }

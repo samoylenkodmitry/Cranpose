@@ -146,6 +146,16 @@ impl Use {
         }
     }
 
+    /// The rotation of the device, from its motion sensors; see
+    /// `cranpose_services::device_motion`. Reading it asks the person for
+    /// nothing on Android and iOS.
+    pub const fn device_motion() -> Self {
+        Self {
+            service: Service::DeviceMotion,
+            reason: None,
+        }
+    }
+
     /// Which service this is.
     pub const fn service(self) -> Service {
         self.service

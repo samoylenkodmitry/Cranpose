@@ -1764,6 +1764,36 @@ fn SavedMessage(visible: bool) {
 }
 ```
 
+`expand_vertically()` and `shrink_vertically()` change the size of the content. The parent measures the content at each frame of the transition, so the siblings after it move with it. `expand_horizontally()`, `expand_in()` and the `shrink` forms work the same way. Their `_with` forms take the alignment and a function from the full size to the start or end size. Combine them with `+`.
+
+```rust
+#[composable]
+fn Details(open: bool) {
+    AnimatedVisibility(
+        open,
+        expand_vertically() + fade_in(),
+        shrink_vertically() + fade_out(),
+        || {
+            Text("Details", Modifier::empty(), TextStyle::default());
+        },
+    );
+}
+```
+
+`Modifier::animate_content_size()` animates the size of a box when its content changes size.
+
+```rust
+#[composable]
+fn Note(expanded: bool) {
+    Column(Modifier::empty().animate_content_size(), ColumnSpec::default(), move || {
+        Text("Title", Modifier::empty(), TextStyle::default());
+        if expanded {
+            Text("More text", Modifier::empty(), TextStyle::default());
+        }
+    });
+}
+```
+
 #### Crossfade
 
 Blend between two states. Add `cranpose-animation` for the animation spec.

@@ -26,7 +26,7 @@ fn merged(name: &str, capabilities: &Capabilities<'_>) -> String {
         .arg(&info)
         .status()
         .expect("cranpose-plist runs");
-    assert!(status.success());
+    assert!(status.success(), "cranpose-plist exited with {status}");
     fs::read_to_string(&info).expect("the merged list")
 }
 

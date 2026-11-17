@@ -17,7 +17,10 @@ use cranpose_ui::{
     Point, Rect, Size,
 };
 
-use super::walk::{ease_softly, unit};
+use super::{
+    walk::{ease_softly, unit},
+    whole,
+};
 
 // Straight pieces in the print's curve.
 pub(super) const PROFILE_SEGMENTS: usize = 112;
@@ -319,7 +322,7 @@ impl Figure {
         let plan = self.plan;
         let along = ((point.x + plan.margin) / plan.outer_width() * PROFILE_SEGMENTS as f32)
             .clamp(0.0, PROFILE_SEGMENTS as f32 - 1.0e-4);
-        let index = along.floor() as usize;
+        let index = whole::count(along.floor());
         let share = along - index as f32;
         let (a, b) = (self.profile[index], self.profile[index + 1]);
         let mix = |from: f32, to: f32| from + (to - from) * share;

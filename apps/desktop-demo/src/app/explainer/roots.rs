@@ -6,6 +6,8 @@
 use cranpose_text::{GlyphOutline, OutlineSegment, OutlineTransform, TextLayout};
 use cranpose_ui::Point;
 
+use super::whole;
+
 const CURVE_STEPS: usize = 8;
 const LONGEST_ARC: usize = 400;
 
@@ -26,8 +28,8 @@ pub(super) struct Ink {
 
 impl Ink {
     pub(super) fn new(width: f32, height: f32, cell: f32) -> Self {
-        let columns = (width / cell).ceil().max(1.0) as usize;
-        let rows = (height / cell).ceil().max(1.0) as usize;
+        let columns = whole::count((width / cell).ceil()).max(1);
+        let rows = whole::count((height / cell).ceil()).max(1);
         Self {
             columns,
             rows,
@@ -70,12 +72,12 @@ impl Ink {
         if top > bottom {
             return;
         }
-        let first = ((top / self.cell - 0.5).ceil().max(0.0)) as usize;
+        let first = whole::count((top / self.cell - 0.5).ceil());
         let last = ((bottom / self.cell - 0.5).floor()).min(self.rows as f32 - 1.0);
         if last < 0.0 {
             return;
         }
-        for row in first..=last as usize {
+        for row in first..=whole::count(last) {
             let y = (row as f32 + 0.5) * self.cell;
             crossings.clear();
             for [a, b] in edges {
@@ -92,12 +94,12 @@ impl Ink {
                 if winding == 0 {
                     continue;
                 }
-                let from = (pair[0].0 / self.cell - 0.5).ceil().max(0.0) as usize;
+                let from = whole::count((pair[0].0 / self.cell - 0.5).ceil());
                 let to = (pair[1].0 / self.cell - 0.5).floor();
                 if to < 0.0 {
                     continue;
                 }
-                let to = (to as usize).min(self.columns - 1);
+                let to = whole::count(to).min(self.columns - 1);
                 for column in from..=to {
                     self.filled[row * self.columns + column] = true;
                 }
@@ -105,16 +107,22 @@ impl Ink {
         }
     }
 
-    fn ink(&self, column: isize, row: isize) -> bool {
-        column >= 0
-            && row >= 0
-            && (column as usize) < self.columns
-            && (row as usize) < self.rows
-            && self.filled[row as usize * self.columns + column as usize]
+    // The index of the cell at `column` and `row`, none outside the grid.
+    fn index(&self, column: isize, row: isize) -> Option<usize> {
+        let (column, row) = (usize::try_from(column).ok()?, usize::try_from(row).ok()?);
+        (column < self.columns && row < self.rows).then(|| row * self.columns + column)
     }
 
-    fn bottom_edge(&self, column: isize, row: isize) -> bool {
-        self.ink(column, row) && !self.ink(column, row + 1)
+    fn ink(&self, column: isize, row: isize) -> bool {
+        self.index(column, row)
+            .is_some_and(|index| self.filled[index])
+    }
+
+    // The index of the cell at `column` and `row` when ink lies there and
+    // none lies below it.
+    fn bottom_edge(&self, column: isize, row: isize) -> Option<usize> {
+        self.index(column, row)
+            .filter(|&index| self.filled[index] && !self.ink(column, row + 1))
     }
 
     pub(super) fn roots(&self) -> Vec<Root> {
@@ -124,7 +132,7 @@ impl Ink {
         for row in 0..self.rows.saturating_sub(1) {
             for column in 0..self.columns {
                 let index = row * self.columns + column;
-                if taken[index] || !self.bottom_edge(column as isize, row as isize) {
+                if taken[index] || self.bottom_edge(column as isize, row as isize).is_none() {
                     continue;
                 }
                 taken[index] = true;
@@ -151,14 +159,15 @@ impl Ink {
         let (mut column, mut row) = start;
         for _ in 0..LONGEST_ARC {
             let next = column + step;
-            let Some(found) = [0, 1, -1, 2, -2].into_iter().map(|dy| row + dy).find(|&y| {
-                self.bottom_edge(next, y) && !taken[y as usize * self.columns + next as usize]
+            let Some((found, index)) = [0, 1, -1, 2, -2].into_iter().find_map(|dy| {
+                let index = self.bottom_edge(next, row + dy)?;
+                (!taken[index]).then_some((row + dy, index))
             }) else {
                 break;
             };
             column = next;
             row = found;
-            taken[row as usize * self.columns + column as usize] = true;
+            taken[index] = true;
             arc.push((column, row));
         }
     }
@@ -196,8 +205,8 @@ impl Ink {
     }
 
     pub(super) fn clear_below(&self, x: f32, y: f32) -> Option<f32> {
-        let column = (x / self.cell).round() as isize;
-        let first = (y / self.cell).round() as isize + 3;
+        let column = whole::offset((x / self.cell).round());
+        let first = whole::offset((y / self.cell).round()) + 3;
         (first..self.rows as isize)
             .find(|&row| self.ink(column, row))
             .map(|row| row as f32 * self.cell - y)

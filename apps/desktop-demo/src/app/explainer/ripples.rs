@@ -7,6 +7,8 @@
 
 use std::f32::consts::TAU;
 
+use super::whole;
+
 // Steps a second; a frame takes as many as fit.
 const STEPS_PER_SECOND: f32 = 60.0;
 // A late frame does not stall the next one catching up.
@@ -149,7 +151,7 @@ impl Ripples {
             rows,
             cell,
             look,
-            wet_row: ((waterline / cell).ceil() as usize).min(rows.saturating_sub(1)),
+            wet_row: whole::count((waterline / cell).ceil()).min(rows.saturating_sub(1)),
             height: vec![0.0; cells],
             velocity: vec![0.0; cells],
             next_height: vec![0.0; cells],
@@ -244,8 +246,8 @@ impl Ripples {
         for force in &self.forces {
             let reach = force.ring + 3.5 * force.width;
             let cells = |from: f32, to: f32, count: usize| {
-                let first = (from / self.cell).floor().max(0.0) as usize;
-                let last = ((to / self.cell).ceil().max(0.0) as usize).min(count - 1);
+                let first = whole::count((from / self.cell).floor());
+                let last = whole::count((to / self.cell).ceil()).min(count - 1);
                 first..=last
             };
             for row in cells(force.at.1 - reach, force.at.1 + reach, rows) {

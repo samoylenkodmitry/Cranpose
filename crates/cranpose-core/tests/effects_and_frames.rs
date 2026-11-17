@@ -208,7 +208,7 @@ fn two_event_streams_in_one_composable_each_deliver_exactly_once() {
         let pressure_sink = Rc::clone(&seen_pressure);
         composition
             .render(key, move || {
-                let _ = tick.get();
+                let _: u32 = tick.get();
                 let shares = shares.clone();
                 let pressure = pressure.clone();
                 let share_sink = Rc::clone(&share_sink);
@@ -482,8 +482,8 @@ fn produced_state_starts_at_its_initial_value_and_takes_what_the_producer_publis
 /// again.
 fn derived_reader(
     source: cranpose_core::MutableState<u32>,
-    reads: Rc<Cell<u32>>,
-    seen: Rc<RefCell<Vec<bool>>>,
+    reads: &Rc<Cell<u32>>,
+    seen: &Rc<RefCell<Vec<bool>>>,
 ) {
     fn body(
         source: cranpose_core::MutableState<u32>,
@@ -497,9 +497,9 @@ fn derived_reader(
     let key = location_key(file!(), line!(), column!());
     cranpose_core::with_current_composer(|composer| {
         composer.with_group(key, |composer| {
-            let (again_reads, again_seen) = (Rc::clone(&reads), Rc::clone(&seen));
+            let (again_reads, again_seen) = (Rc::clone(reads), Rc::clone(seen));
             composer.set_recompose_callback(move |_| body(source, &again_reads, &again_seen));
-            body(source, &reads, &seen);
+            body(source, reads, seen);
         });
     });
 }
@@ -516,7 +516,7 @@ fn a_derived_state_recomposes_its_readers_only_when_its_value_changes() {
         let seen = Rc::clone(&seen);
         composition
             .render(key, move || {
-                derived_reader(source, Rc::clone(&reads), Rc::clone(&seen));
+                derived_reader(source, &reads, &seen);
             })
             .expect("render succeeds");
     }
@@ -568,7 +568,7 @@ fn held_derived_reader() -> (
         let big = derivedStateOf(move || source.get() >= 10);
         held.set(Some(big));
         reads.set(reads.get() + 1);
-        let _ = big.get();
+        let _: bool = big.get();
     }
     let mut composition = composition();
     let source = mutableStateOf(2u32);

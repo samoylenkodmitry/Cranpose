@@ -107,6 +107,10 @@ picks the values:
 `adb install` reads no feature. The comments of `manifests/xr.xml` cite the
 source of each entry.
 
+`Use::device_motion()` selects `CranposeDeviceMotion`, which reads the rotation
+sensors on a thread of its own, and the normal `HIGH_SAMPLING_RATE_SENSORS`
+permission that lifts the 200 Hz cap of Android 12 and newer.
+
 `Use::update()` also selects the package installer, its receiver and
 `REQUEST_INSTALL_PACKAGES`. The launcher registers the updater when the declared
 capabilities include updates.

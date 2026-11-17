@@ -58,6 +58,10 @@ fn a_leaning_lamp_lights_the_painting_without_painting_it_again() {
     for step in 0..12 {
         let x = 700.0 + 30.0 * step as f32;
         shell.set_cursor(x, 200.0 + 10.0 * step as f32);
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "the shell takes its frame time from the wall clock, so a pointer move needs time before its frame"
+        )]
         std::thread::sleep(std::time::Duration::from_millis(30));
         let (pixels, stats) = frame(&mut shell);
         leaned = pixels;

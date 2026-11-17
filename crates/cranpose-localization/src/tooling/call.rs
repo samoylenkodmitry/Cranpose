@@ -93,18 +93,18 @@ impl TranslationCall {
 
     /// Expands into a static message and a reactive lookup through `ui_path`.
     pub fn expand(&self, ui_path: &TokenStream) -> TokenStream {
-        self.expand_call(ui_path, quote!(#ui_path::localization::localized))
+        self.expand_call(ui_path, &quote!(#ui_path::localization::localized))
     }
 
     /// Expands into a deferred request suitable for event handlers and application state.
     pub fn expand_deferred(&self, ui_path: &TokenStream) -> TokenStream {
         self.expand_call(
             ui_path,
-            quote!(#ui_path::localization::DeferredMessage::new),
+            &quote!(#ui_path::localization::DeferredMessage::new),
         )
     }
 
-    fn expand_call(&self, ui_path: &TokenStream, resolve: TokenStream) -> TokenStream {
+    fn expand_call(&self, ui_path: &TokenStream, resolve: &TokenStream) -> TokenStream {
         let id = &self.id;
         let source_locale = &self.source_locale;
         let resource = self.resource();
@@ -180,14 +180,13 @@ fn source_id(pattern: &str, context: Option<&str>) -> String {
 fn normalize(source: &str) -> String {
     let mut normalized = String::with_capacity(source.len());
     let mut remaining = source;
-    while let Some(start) = remaining.find('{') {
-        normalized.push_str(&remaining[..start]);
-        remaining = &remaining[start + 1..];
-        let Some(end) = remaining.find('}') else {
+    while let Some((before, after_open)) = remaining.split_once('{') {
+        normalized.push_str(before);
+        remaining = after_open;
+        let Some((placeholder, after_close)) = remaining.split_once('}') else {
             normalized.push('{');
             break;
         };
-        let placeholder = &remaining[..end];
         let named = placeholder.starts_with(|ch: char| ch.is_ascii_alphabetic())
             && placeholder
                 .chars()
@@ -196,7 +195,7 @@ fn normalize(source: &str) -> String {
             normalized.push_str("{ $");
             normalized.push_str(placeholder);
             normalized.push_str(" }");
-            remaining = &remaining[end + 1..];
+            remaining = after_close;
         } else {
             normalized.push('{');
         }

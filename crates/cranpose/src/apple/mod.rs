@@ -30,6 +30,14 @@ pub(crate) mod device_auth;
     )
 ))]
 pub(crate) mod device_auth_codes;
+#[cfg(all(
+    feature = "device-motion",
+    any(
+        all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"),
+        all(feature = "watchos", target_os = "watchos")
+    )
+))]
+pub(crate) mod device_motion;
 #[cfg(any(
     all(
         feature = "media-backend",

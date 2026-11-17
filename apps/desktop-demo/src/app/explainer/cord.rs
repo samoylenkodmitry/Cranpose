@@ -19,10 +19,12 @@ use cranpose_ui::{
 
 use super::{
     figure::{timeline, world_to_scene, Figure},
+    grid_mesh,
     paragraph::LayoutNow,
     point_back::PointBack,
     sheet_layout::SheetLayout,
     walk::{ease, Walk},
+    whole,
 };
 
 const BEAD: Color = Color(1.0, 0.36, 0.08, 1.0);
@@ -209,7 +211,7 @@ impl CordEnds {
     fn over_words(&self) -> (usize, usize) {
         let share =
             ((self.words_end - self.start_x) / (self.edge_x - self.start_x)).clamp(0.0, 1.0);
-        let on_print = (share * ALONG as f32).ceil() as usize;
+        let on_print = whole::count((share * ALONG as f32).ceil());
         (on_print, 2 * ALONG + AIR - on_print)
     }
 
@@ -288,21 +290,12 @@ fn tube(points: &[Vec3], radius: f32) -> (Mesh, Vec<f32>) {
             ]);
         }
     }
-    let stride = (ROUND + 1) as u32;
-    let mut indices = Vec::with_capacity((count - 1) * ROUND * 6);
-    for index in 0..(count - 1) as u32 {
-        for round in 0..ROUND as u32 {
-            let at = index * stride + round;
-            indices.extend_from_slice(&[
-                at,
-                at + stride,
-                at + 1,
-                at + 1,
-                at + stride,
-                at + stride + 1,
-            ]);
-        }
-    }
-    let mesh = Mesh::new(positions, uvs, Some(normals), indices).expect("a whole tube");
+    let mesh = Mesh::new(
+        positions,
+        uvs,
+        Some(normals),
+        grid_mesh::quads(ROUND + 1, count),
+    )
+    .expect("a whole tube");
     (mesh, along)
 }
