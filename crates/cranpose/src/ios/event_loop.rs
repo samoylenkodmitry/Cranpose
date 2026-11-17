@@ -721,6 +721,8 @@ pub fn try_run(settings: AppSettings, content: impl FnMut() + 'static) -> Result
     super::notifier::register();
     super::haptics::register();
     crate::apple::microphone::register();
+    #[cfg(feature = "device-auth")]
+    crate::apple::device_auth::register();
     #[cfg(feature = "wearable")]
     crate::apple::wearable::register();
     super::app_info::register();

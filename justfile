@@ -149,7 +149,7 @@ test-emscripten: check-emscripten
 # Lint the iOS simulator binary.
 clippy-ios:
     cargo clippy -p desktop-app --bin cranpose-ios --bin cranpose-liquid-reference --target aarch64-apple-ios-sim --no-default-features --features ios -- -D warnings
-    cargo clippy -p cranpose --target aarch64-apple-ios-sim --no-default-features --features ios,renderer-wgpu,storage-space -- -D warnings
+    cargo clippy -p cranpose --target aarch64-apple-ios-sim --no-default-features --features ios,renderer-wgpu,storage-space,device-auth -- -D warnings
 
 # The feature set `clippy-optional-backends` and `clippy-release` both lint.
 optional_backend_features := "desktop,renderer-wgpu,camera-desktop,robot,audio-desktop,media,storekit,playbilling,embed"
@@ -525,7 +525,7 @@ features:
       --exclude desktop-app --exclude desktop-app-platform --exclude xtask \
       --exclude coroflow-demo --exclude coroflow-demo-web --exclude coroflow-demo-android \
       --exclude cranpose-native-demo --exclude perf-compare-cranpose --exclude perf-data \
-      --exclude-features android,ios,watchos,web,cranpose-platform-android,cranpose-platform-web,native-windows,uri-android,uri-web,file-picker-web,preferences-web,system-theme-web,web-http,wearable,heart-rate,storekit,playbilling,aaudio,avaudio
+      --exclude-features android,ios,watchos,web,cranpose-platform-android,cranpose-platform-web,native-windows,uri-android,uri-web,file-picker-web,preferences-web,system-theme-web,web-http,wearable,heart-rate,device-auth,storekit,playbilling,aaudio,avaudio
 
 # The generic functions that copy most LLVM IR into the desktop binary, the
 # 40 largest. A report for the nightly summary.
