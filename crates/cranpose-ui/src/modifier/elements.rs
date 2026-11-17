@@ -69,9 +69,10 @@ impl ManyElements {
         chain
     }
 
-    // Takes in the elements of `more` after its own. Always inline: a join
-    // pushes two, and the call of each cost more than the push (39 of 50
-    // instructions a push on the feed when it stayed out of line).
+    // Takes in the elements of `more` after its own. Always inline, with the
+    // list case out of line: a join pushes two lone elements mostly, and the
+    // call of each cost more than the push (39 of 50 instructions a push on
+    // the feed when it stayed out of line).
     #[inline(always)]
     fn push(&mut self, more: ModifierKind) {
         match more {
@@ -80,19 +81,23 @@ impl ManyElements {
                 self.provides_composition_locals |= element.provides_composition_locals();
                 self.elements.push(element);
             }
-            ModifierKind::Many(mut shared) => {
-                self.provides_composition_locals |= shared.provides_composition_locals;
-                if shared.inspector.is_some() {
-                    self.inspector = merged_inspector(
-                        inspector_slice(&self.inspector),
-                        inspector_slice(&shared.inspector),
-                    );
-                }
-                match Rc::get_mut(&mut shared) {
-                    Some(owned) => self.elements.append(&mut owned.elements),
-                    None => self.elements.extend(shared.elements.iter().cloned()),
-                }
-            }
+            ModifierKind::Many(shared) => self.append(shared),
+        }
+    }
+
+    // Takes in the elements of the list `shared` after its own.
+    #[inline(never)]
+    fn append(&mut self, mut shared: Rc<Self>) {
+        self.provides_composition_locals |= shared.provides_composition_locals;
+        if shared.inspector.is_some() {
+            self.inspector = merged_inspector(
+                inspector_slice(&self.inspector),
+                inspector_slice(&shared.inspector),
+            );
+        }
+        match Rc::get_mut(&mut shared) {
+            Some(owned) => self.elements.append(&mut owned.elements),
+            None => self.elements.extend(shared.elements.iter().cloned()),
         }
     }
 }
