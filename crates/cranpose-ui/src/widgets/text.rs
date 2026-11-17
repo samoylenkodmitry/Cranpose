@@ -53,9 +53,9 @@ pub enum TextSource {
 }
 
 impl TextSource {
-    fn resolve(&self) -> crate::text::AnnotatedString {
+    fn resolve(self) -> crate::text::AnnotatedString {
         match self {
-            Self::Static(text) => text.clone(),
+            Self::Static(text) => text,
             Self::Dynamic(dynamic) => dynamic.resolve(),
         }
     }
@@ -163,15 +163,14 @@ impl IntoTextSource for crate::text::AnnotatedString {
     }
 }
 
+// A state's and a callback's text is read as its widget composes, in the
+// widget's own group, so the read recomposes the widget alone.
 impl<T> IntoTextSource for State<T>
 where
     T: ToString + Clone + 'static,
 {
     fn into_text_source(self) -> TextSource {
-        let state = self;
-        TextSource::Dynamic(DynamicTextSource::new(move || {
-            crate::text::AnnotatedString::from(state.value().to_string())
-        }))
+        TextSource::Static(StaticText::Owned(self.read(T::to_string)).into_annotated())
     }
 }
 
@@ -180,10 +179,7 @@ where
     T: ToString + Clone + 'static,
 {
     fn into_text_source(self) -> TextSource {
-        let state = self;
-        TextSource::Dynamic(DynamicTextSource::new(move || {
-            crate::text::AnnotatedString::from(state.value().to_string())
-        }))
+        TextSource::Static(StaticText::Owned(self.read(T::to_string)).into_annotated())
     }
 }
 
@@ -192,9 +188,7 @@ where
     F: Fn() -> String + 'static,
 {
     fn into_text_source(self) -> TextSource {
-        TextSource::Dynamic(DynamicTextSource::new(move || {
-            crate::text::AnnotatedString::from(self())
-        }))
+        TextSource::Static(StaticText::Owned(self()).into_annotated())
     }
 }
 
@@ -244,20 +238,20 @@ where
     }
 }
 
-// The modifier of a fixed text's node as a text widget sets it: the
-// caller's modifier, then the text's element, made only when the node does
-// not show them already.
-struct StaticTextModifier {
+// The modifier of a text's node as a text widget sets it: the caller's
+// modifier, then the text's element, made only when the node does not show
+// them already. A node that shows another text takes the text in place.
+struct TextNodeModifier {
     modifier: Modifier,
-    // The text as the widget was given it, until a node takes it: then the
-    // string the node shows.
+    // The text as the widget has it, until a node takes it: then the string
+    // the node shows.
     text: RefCell<StaticText>,
     style: Arc<TextStyle>,
     options: TextLayoutOptions,
     density: Density,
 }
 
-impl StaticTextModifier {
+impl TextNodeModifier {
     // The text as a node shows it, which the modifier compares from then
     // on: a node made for the modifier may take it once more.
     fn shared_text(&self) -> crate::text::AnnotatedString {
@@ -302,7 +296,7 @@ impl StaticTextModifier {
     }
 }
 
-impl NodeModifier for StaticTextModifier {
+impl NodeModifier for TextNodeModifier {
     fn provided_locals(&self) -> Vec<cranpose_core::ProvidedValue> {
         self.modifier.provided_composition_locals()
     }
@@ -329,7 +323,7 @@ mod static_text {
 
     use cranpose_core::NodeId;
 
-    use super::{StaticText, StaticTextModifier, text_layout_inputs};
+    use super::{StaticText, TextNodeModifier, text_layout_inputs};
     use crate::{
         composable,
         modifier::Modifier,
@@ -350,7 +344,7 @@ mod static_text {
         let (style, options) = text_layout_inputs(style, options);
         let environment = LayoutEnvironment::current();
         compose_empty_layout(
-            StaticTextModifier {
+            TextNodeModifier {
                 modifier,
                 text: RefCell::new(text),
                 style,
@@ -367,13 +361,11 @@ mod static_text {
 // read recomposes alone, or one in a selection container, which remembers
 // its place in the container's selection.
 mod text_group {
-    use std::sync::Arc;
+    use std::{cell::RefCell, sync::Arc};
 
     use cranpose_core::NodeId;
 
-    use super::{
-        IntoTextSource, TextModifierElement, TextSource, text_layout_inputs, text_node_modifier,
-    };
+    use super::{IntoTextSource, StaticText, TextNodeModifier, TextSource, text_layout_inputs};
     use crate::{
         composable,
         modifier::Modifier,
@@ -394,14 +386,14 @@ mod text_group {
     where
         S: IntoTextSource + Clone + PartialEq + 'static,
     {
-        text_node(&text.into_text_source(), modifier, style, options)
+        text_node(text.into_text_source(), modifier, style, options)
     }
 
     // What the group makes of any text type. Out of line, one copy: the group
     // of each text type would repeat it.
     #[inline(never)]
     fn text_node(
-        source: &TextSource,
+        source: TextSource,
         modifier: Modifier,
         style: Arc<TextStyle>,
         options: TextLayoutOptions,
@@ -419,10 +411,13 @@ mod text_group {
             None => modifier,
         };
         compose_empty_layout(
-            text_node_modifier(
+            TextNodeModifier {
                 modifier,
-                TextModifierElement::with_shared_style(text, style, options, environment.density),
-            ),
+                text: RefCell::new(StaticText::Annotated(text)),
+                style,
+                options,
+                density: environment.density,
+            },
             environment,
         )
     }

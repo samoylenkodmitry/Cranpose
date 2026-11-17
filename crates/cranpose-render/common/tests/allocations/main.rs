@@ -240,12 +240,22 @@ fn a_row_scrolling_in_reuses_the_row_that_scrolled_out() {
     );
 }
 
-// Allocations a frame of `texts` texts that all change each frame:
-// through four words, as a ticker's do, or to a new number, as a
-// counter's do, when `numbers`: numbers of five digits, as a counter shows
-// between the steps that lengthen it. Composition, the layout an app runs
-// while no screen reader is connected and the scene update together.
-fn ticker_frame_allocations(texts: usize, numbers: bool) -> usize {
+// What the texts of a ticker show each frame.
+#[derive(Clone, Copy, Debug)]
+enum TickerText {
+    // One of four words, as a ticker's texts do.
+    Words,
+    // A new number the app formats, as a counter's text does: numbers of
+    // five digits, as a counter shows between the steps that lengthen it.
+    Numbers,
+    // The frame's number, which each text reads from the state it is given.
+    State,
+}
+
+// Allocations a frame of `texts` texts that all change each frame, showing
+// `shown`. Composition, the layout an app runs while no screen reader is
+// connected and the scene update together.
+fn ticker_frame_allocations(texts: usize, shown: TickerText) -> usize {
     const WORDS: [&str; 4] = ["alpha", "bravo", "charlie", "delta"];
     let tick_holder: Rc<RefCell<Option<MutableState<usize>>>> = Rc::default();
     let holder = Rc::clone(&tick_holder);
@@ -255,19 +265,19 @@ fn ticker_frame_allocations(texts: usize, numbers: bool) -> usize {
         Column(Modifier::empty(), ColumnSpec::default(), move || {
             for index in 0..texts {
                 let style = TextStyle::default();
-                if numbers {
-                    Text(
-                        format!("{}", 10_000 + tick.get() * 1000 + index),
-                        Modifier::empty(),
-                        style,
-                    );
-                } else {
-                    Text(
+                match shown {
+                    TickerText::Words => Text(
                         WORDS[(tick.get() + index) % WORDS.len()],
                         Modifier::empty(),
                         style,
-                    );
-                }
+                    ),
+                    TickerText::Numbers => Text(
+                        format!("{}", 10_000 + tick.get() * 1000 + index),
+                        Modifier::empty(),
+                        style,
+                    ),
+                    TickerText::State => Text(tick, Modifier::empty(), style),
+                };
             }
         });
     });
@@ -313,16 +323,21 @@ fn ticker_frame_allocations(texts: usize, numbers: bool) -> usize {
 
 // A fixed text that shows another string each frame takes the room of a
 // string and a layout it gave up before: it allocates nothing of its own.
-// A counter's text allocates the string the app formats.
+// A counter's text allocates the string the app formats, and a text of a
+// state the string of the state's value.
 fn a_text_changing_each_frame_reuses_its_string_and_layout() {
-    for (numbers, own) in [(false, 0.0), (true, 1.0)] {
-        let few = ticker_frame_allocations(10, numbers);
-        let many = ticker_frame_allocations(110, numbers);
+    for (shown, own) in [
+        (TickerText::Words, 0.0),
+        (TickerText::Numbers, 1.0),
+        (TickerText::State, 1.0),
+    ] {
+        let few = ticker_frame_allocations(10, shown);
+        let many = ticker_frame_allocations(110, shown);
         let per_text = many.saturating_sub(few) as f64 / 100.0;
-        println!("allocations per changing text a frame, numbers {numbers}: {per_text}");
+        println!("allocations per changing text a frame, {shown:?}: {per_text}");
         assert!(
             per_text <= own + 0.1,
-            "{per_text} allocations per changing text a frame, numbers {numbers}"
+            "{per_text} allocations per changing text a frame, {shown:?}"
         );
     }
 }
