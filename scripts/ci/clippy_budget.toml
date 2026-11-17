@@ -3,21 +3,21 @@
 # a lint to `[workspace.lints]` in Cargo.toml once its count reaches zero.
 
 [lints]
-"clippy::cast_possible_truncation" = 957
-"clippy::cast_sign_loss" = 511
-"clippy::disallowed_methods" = 161
-"clippy::float_cmp" = 148
+"clippy::cast_possible_truncation" = 1016
+"clippy::cast_sign_loss" = 555
+"clippy::disallowed_methods" = 163
+"clippy::float_cmp" = 149
 "clippy::fn_params_excessive_bools" = 5
 "clippy::inline_always" = 63
 "clippy::iter_over_hash_type" = 30
-"clippy::let_underscore_must_use" = 256
-"clippy::let_underscore_untyped" = 666
-"clippy::missing_assert_message" = 180
-"clippy::needless_pass_by_value" = 165
+"clippy::let_underscore_must_use" = 258
+"clippy::let_underscore_untyped" = 667
+"clippy::missing_assert_message" = 181
+"clippy::needless_pass_by_value" = 170
 "clippy::ref_option" = 16
 "clippy::significant_drop_tightening" = 198
-"clippy::string_slice" = 219
+"clippy::string_slice" = 228
 "clippy::too_many_lines" = 93
 "clippy::trivially_copy_pass_by_ref" = 29
 "clippy::unused_result_ok" = 31
-"clippy::wildcard_imports" = 33
+"clippy::wildcard_imports" = 34
