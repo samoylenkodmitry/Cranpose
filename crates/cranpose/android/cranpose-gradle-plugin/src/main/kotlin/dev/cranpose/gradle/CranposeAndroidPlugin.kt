@@ -77,6 +77,9 @@ class CranposeAndroidPlugin : Plugin<Project> {
         cranpose.releaseAbiFeatures.convention(emptyMap())
         cranpose.services.convention(emptySet())
         cranpose.requiredFeatures.convention(emptySet())
+        cranpose.xrStore.convention(
+            project.providers.gradleProperty(XR_STORE_PROPERTY).orElse(DEFAULT_XR_STORE)
+        )
         cranpose.environment.convention(emptyMap())
         cranpose.label.convention(project.rootProject.name)
         cranpose.theme.convention("@android:style/Theme.NoTitleBar.Fullscreen")
@@ -276,9 +279,11 @@ class CranposeAndroidPlugin : Plugin<Project> {
         task.configure {
             description = "Checks ${variant.name}'s permissions and the features they carry"
             requiredFeatures.set(
-                cranpose.requiredFeatures.map { named ->
-                    named + requireKnownServices(cranpose).flatMap { service ->
-                        SERVICE_REQUIRED_FEATURES[service].orEmpty()
+                cranpose.requiredFeatures.zip(cranpose.xrStore) { named, store ->
+                    if ("xr" in requireKnownServices(cranpose)) {
+                        named + xrStoreEntries(store).requiredFeatures()
+                    } else {
+                        named
                     }
                 }
             )
@@ -326,6 +331,12 @@ class CranposeAndroidPlugin : Plugin<Project> {
         android.defaultConfig.manifestPlaceholders["cranposeLibName"] = cranpose.libraryName.get()
         android.defaultConfig.manifestPlaceholders["cranposeLabel"] = cranpose.label.get()
         android.defaultConfig.manifestPlaceholders["cranposeTheme"] = cranpose.theme.get()
+        // The `xr` manifest reads these, and nothing else does
+        val store = xrStoreEntries(cranpose.xrStore.get())
+        android.defaultConfig.manifestPlaceholders["cranposeXrHeadtracking"] = store.headtracking
+        android.defaultConfig.manifestPlaceholders["cranposeXrOpenxr"] = store.openxr
+        android.defaultConfig.manifestPlaceholders["cranposeXrExcludeFromRecents"] =
+            store.excludeFromRecents
 
         configureAbis(cranpose, android)
 
@@ -337,6 +348,12 @@ class CranposeAndroidPlugin : Plugin<Project> {
             )
         }
     }
+
+    private fun xrStoreEntries(store: String): XrStoreEntries =
+        XR_STORES[store] ?: throw GradleException(
+            "cranposeXrStore and cranpose { xrStore } name \"$store\"; the stores are " +
+                XR_STORES.keys.joinToString(", ")
+        )
 
     private fun usesDebugSettings(buildType: String?, debuggable: Boolean): Boolean =
         when (buildType) {
@@ -576,6 +593,41 @@ class CranposeAndroidPlugin : Plugin<Project> {
          */
         const val RELEASE_ABIS_PROPERTY = "cranposeReleaseAbis"
 
+        /**
+         * Gradle property naming the store an `xr` build goes to: `meta`,
+         * `android-xr` or `open`.
+         */
+        const val XR_STORE_PROPERTY = "cranposeXrStore"
+
+        /** The store a build goes to when nothing names one. */
+        const val DEFAULT_XR_STORE = "meta"
+
+        /**
+         * What the stores read from the `xr` manifest and disagree on, by
+         * store. The Meta Horizon Store requires `android.hardware.vr.headtracking`
+         * and `android:excludeFromRecents` on the launching activity. Google
+         * Play reads `android.software.xr.api.openxr` as required for the
+         * Android XR release track. The other stores and `adb install` read no
+         * feature, so `open` keeps every feature optional.
+         */
+        val XR_STORES = mapOf(
+            "meta" to XrStoreEntries(
+                headtracking = true,
+                openxr = false,
+                excludeFromRecents = true,
+            ),
+            "android-xr" to XrStoreEntries(
+                headtracking = false,
+                openxr = true,
+                excludeFromRecents = false,
+            ),
+            "open" to XrStoreEntries(
+                headtracking = false,
+                openxr = false,
+                excludeFromRecents = false,
+            ),
+        )
+
         /** Names the directory a build script writes the declaration into. */
         const val CAPABILITIES_DIR_VARIABLE = "CRANPOSE_CAPABILITIES_DIR"
 
@@ -610,15 +662,6 @@ class CranposeAndroidPlugin : Plugin<Project> {
             "billing" to "java-billing",
             "microphone-standby" to "java-microphone-standby",
             "wearable" to "java-wearable",
-        )
-
-        /**
-         * Hardware a service cannot work without, which its manifest
-         * requires: an immersive app has no use on a device that tracks no
-         * head, so the store offers it only to headsets.
-         */
-        val SERVICE_REQUIRED_FEATURES = mapOf(
-            "xr" to listOf("android.hardware.vr.headtracking"),
         )
 
         /** Third-party dependencies a service needs beyond the framework's own. */
@@ -664,4 +707,21 @@ class CranposeAndroidPlugin : Plugin<Project> {
         /** Written by this plugin's build, relative to this class's package. */
         const val ANDROID_ROOT_RESOURCE = "android-root.txt"
     }
+}
+
+/** The values of the `xr` manifest's entries that differ between stores. */
+data class XrStoreEntries(
+    val headtracking: Boolean,
+    val openxr: Boolean,
+    val excludeFromRecents: Boolean,
+) {
+    /**
+     * The features this store's manifest requires. An immersive app has no
+     * use on a device that tracks no head, and Google Play offers the Android
+     * XR track only to devices with the OpenXR feature.
+     */
+    fun requiredFeatures(): List<String> = listOfNotNull(
+        "android.hardware.vr.headtracking".takeIf { headtracking },
+        "android.software.xr.api.openxr".takeIf { openxr },
+    )
 }
