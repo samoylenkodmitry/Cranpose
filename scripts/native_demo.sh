@@ -72,6 +72,7 @@ case "${1:-}" in
             "$build_root/$target/$profile_dir/libcranpose_native_demo.a" \
             -framework UIKit -framework WebKit -framework Metal -framework QuartzCore \
             -framework CoreGraphics -framework CoreText -framework Security -framework SystemConfiguration \
+            -framework CoreMedia -framework VideoToolbox \
             -lc++ -o "$app/CranposeNativeDemo"
         cp "$demo/ios/Info.plist" "$app/Info.plist"
         codesign --force --sign "${CODESIGN_IDENTITY:--}" "$app"
