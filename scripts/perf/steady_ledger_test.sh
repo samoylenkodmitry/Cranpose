@@ -90,6 +90,23 @@ check "the trace sums each phase and keeps other lines" 0 \
     "steady_ledger trace steady fresh=4 realloc=4 free=1 realloc_bytes=562" "$trace" 0
 check "the trace passes valgrind's own lines through" 0 "Total: 99 bytes" "$trace" 0
 
+# An A/B archives the whole repository, from a copy of the script three
+# levels down and run from a subdirectory: the archive holds the top's
+# Cargo.toml and only then lacks the bench app's example, so the base build
+# stops at once.
+repo="$work_dir/repo"
+mkdir -p "$repo/a/b/c"
+touch "$repo/Cargo.toml"
+cp "$HERE"/steady_ledger.sh "$HERE"/steady_ledger.py "$repo/a/b/c/"
+git -C "$repo" init -q
+git -C "$repo" add .
+git -C "$repo" -c user.name=test -c user.email=test@example.com -c core.hooksPath=/dev/null commit -q -m tree
+actual=0
+output=$(cd "$repo/a/b" && STEADY_LEDGER_SHARED="$work_dir/shared" bash c/steady_ledger.sh \
+    --dir "$work_dir/run" --base HEAD 2>&1) || actual=$?
+check "an A/B archives the repository's top from a subdirectory" 2 "holds no steady_frames example" \
+    "$output" "$actual"
+
 if [ "$failures" -gt 0 ]; then
     echo "$failures steady ledger check(s) failed" >&2
     exit 1
