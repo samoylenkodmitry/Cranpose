@@ -165,6 +165,42 @@ pub trait Measurable {
     }
 }
 
+// A reference measures as what it refers to, so a list of
+// `&dyn Measurable` holds children of several types.
+impl<M: Measurable + ?Sized> Measurable for &M {
+    fn measure(&self, constraints: Constraints) -> Placeable {
+        (**self).measure(constraints)
+    }
+
+    fn measured_hold(&self) -> Option<(Size, crate::ConstraintsHold)> {
+        (**self).measured_hold()
+    }
+
+    fn min_intrinsic_width(&self, height: f32) -> f32 {
+        (**self).min_intrinsic_width(height)
+    }
+
+    fn max_intrinsic_width(&self, height: f32) -> f32 {
+        (**self).max_intrinsic_width(height)
+    }
+
+    fn min_intrinsic_height(&self, width: f32) -> f32 {
+        (**self).min_intrinsic_height(width)
+    }
+
+    fn max_intrinsic_height(&self, width: f32) -> f32 {
+        (**self).max_intrinsic_height(width)
+    }
+
+    fn flex_parent_data(&self) -> Option<FlexParentData> {
+        (**self).flex_parent_data()
+    }
+
+    fn parent_data(&self) -> ParentData {
+        (**self).parent_data()
+    }
+}
+
 /// Result of running a measurement pass for a single child.
 ///
 /// Carries measurement and alignment lines without allocating a trait object.
