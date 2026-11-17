@@ -107,7 +107,7 @@ impl PartialEq for Space {
 
 impl Space {
     #[cfg_attr(
-        not(any(test, all(feature = "openxr", target_os = "android"))),
+        not(any(test, headset)),
         expect(dead_code, reason = "the headset backend calls it")
     )]
     // A space with no panels.
@@ -177,7 +177,7 @@ impl Space {
     }
 
     #[cfg_attr(
-        not(any(test, all(feature = "openxr", target_os = "android"))),
+        not(any(test, headset)),
         expect(dead_code, reason = "the headset backend calls it")
     )]
     // Puts the panel `id` at `pose`, which `place` keeps until the panel leaves.
@@ -197,7 +197,7 @@ impl Space {
     }
 
     #[cfg_attr(
-        not(any(test, all(feature = "openxr", target_os = "android"))),
+        not(any(test, headset)),
         expect(dead_code, reason = "the headset backend calls it")
     )]
     pub(crate) fn panels(&self) -> Vec<PanelSlot> {
@@ -210,7 +210,7 @@ impl Space {
     }
 
     #[cfg_attr(
-        not(any(test, all(feature = "openxr", target_os = "android"))),
+        not(any(test, headset)),
         expect(dead_code, reason = "the headset backend calls it")
     )]
     // The width and height in dp that the atlas needs for every panel.
@@ -226,7 +226,7 @@ impl Space {
     }
 
     #[cfg_attr(
-        not(any(test, all(feature = "openxr", target_os = "android"))),
+        not(any(test, headset)),
         expect(dead_code, reason = "the headset backend calls it")
     )]
     // Shows the cursor on its panel and on no other. A panel draws again only when its dot

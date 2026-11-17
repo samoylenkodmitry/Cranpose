@@ -4,6 +4,7 @@ use cranpose::GpuContext;
 use openxr as xr;
 
 use super::{
+    graphics::{Api, SwapchainFormat},
     session::{QuadLayer, XrSession},
     static_image::{premultiplied, static_image},
 };
@@ -20,16 +21,16 @@ const ALPHA: f32 = 0.7;
 const ACTIVE_SCALE: f32 = 1.3;
 
 pub(crate) struct HandleLayers {
-    swapchain: xr::Swapchain<xr::OpenGlEs>,
+    swapchain: xr::Swapchain<Api>,
 }
 
 impl HandleLayers {
     pub(crate) fn new(
         xr_session: &XrSession,
         gpu: &GpuContext,
-        formats: (u32, wgpu::TextureFormat),
+        format: SwapchainFormat,
     ) -> Result<Self, String> {
-        let swapchain = static_image(xr_session, gpu, formats, (WIDTH, HEIGHT), &pill_pixels())?;
+        let swapchain = static_image(xr_session, gpu, format, (WIDTH, HEIGHT), &pill_pixels())?;
         Ok(Self { swapchain })
     }
 

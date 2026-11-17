@@ -3,23 +3,28 @@
 use cranpose::GpuContext;
 use openxr as xr;
 
-use super::{gl_context::wrap_texture, session::XrSession};
+use super::{
+    graphics::{Api, Graphics, SwapchainFormat},
+    session::XrSession,
+};
 
 // Makes a static swapchain of `size` pixels and writes `pixels` into it: rows of RGBA bytes in
-// `formats`, the GL format of the swapchain and the wgpu format that writes it.
+// `format`.
 pub(crate) fn static_image(
     xr_session: &XrSession,
     gpu: &GpuContext,
-    formats: (u32, wgpu::TextureFormat),
+    format: SwapchainFormat,
     size: (u32, u32),
     pixels: &[u8],
-) -> Result<xr::Swapchain<xr::OpenGlEs>, String> {
+) -> Result<xr::Swapchain<Api>, String> {
     let mut swapchain = xr_session
         .session
         .create_swapchain(&xr::SwapchainCreateInfo {
             create_flags: xr::SwapchainCreateFlags::STATIC_IMAGE,
-            usage_flags: xr::SwapchainUsageFlags::TRANSFER_DST | xr::SwapchainUsageFlags::SAMPLED,
-            format: formats.0,
+            usage_flags: xr::SwapchainUsageFlags::COLOR_ATTACHMENT
+                | xr::SwapchainUsageFlags::TRANSFER_DST
+                | xr::SwapchainUsageFlags::SAMPLED,
+            format: format.api,
             sample_count: 1,
             width: size.0,
             height: size.1,
@@ -28,15 +33,15 @@ pub(crate) fn static_image(
             mip_count: 1,
         })
         .map_err(|error| format!("OpenXR static swapchain: {error}"))?;
-    let names = swapchain
+    let images = swapchain
         .enumerate_images()
         .map_err(|error| format!("OpenXR static swapchain images: {error}"))?;
-    let name = *names.first().ok_or("the static swapchain has no image")?;
-    let texture = wrap_texture(
+    let image = *images.first().ok_or("the static swapchain has no image")?;
+    let texture = Graphics::wrap_image(
         &gpu.device,
-        name,
+        image,
         size,
-        formats.1,
+        format.wgpu,
         wgpu::TextureUsages::COPY_DST,
     )?;
     swapchain
@@ -59,7 +64,13 @@ pub(crate) fn static_image(
             depth_or_array_layers: 1,
         },
     );
-    gpu.queue.submit([]);
+    let mut encoder = gpu
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("cranpose xr static image"),
+        });
+    Graphics::ready_for_release(&mut encoder, &texture);
+    gpu.queue.submit([encoder.finish()]);
     // The image is written once, so the write must end before the compositor reads it
     if let Err(error) = gpu.device.poll(wgpu::PollType::wait_indefinitely()) {
         log::warn!("cranpose xr: waiting for a static image: {error}");

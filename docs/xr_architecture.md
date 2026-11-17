@@ -67,7 +67,17 @@ projection layer, with a camera made from each eye's view.
   window, as the desktop demo's XR tab does. The web adds WebXR through the same API.
 
 Cranpose owns the GPU context. On the Quest it uses GLES through wgpu, which the cranvr client
-uses today. Vulkan is a later choice.
+uses today. On Linux and Windows the OpenXR runtime (SteamVR, Monado, Meta Link, Pimax, Varjo)
+creates the Vulkan instance and device through `XR_KHR_vulkan_enable2`, and wgpu wraps them. The
+backend keeps the difference in its `graphics` module: one file for GLES and one for Vulkan make
+the session and the wgpu device and wrap the swapchain images as wgpu textures. The panels, the
+rays and the handles do not change.
+
+The `host` module holds the other difference. An Android activity polls its events between
+frames. A desktop process has none. `cranpose_xr::run` asks the OpenXR loader for a runtime and a
+head-mounted display first. It starts the headset session when both exist and opens the flat
+window when one is missing. The OpenXR loader is found at run time (the `openxr` crate's `loaded`
+feature): the binary links no loader, so a machine without one runs the flat window.
 
 ## What the backend handles for the app
 

@@ -1,15 +1,17 @@
-//! The OpenXR instance and session, their events and the ends of the frames.
+//! The OpenXR session, its events and the ends of the frames.
 #![expect(
     unsafe_code,
-    reason = "OpenXR's loader, a session on a GL context and layers with extension structs"
+    reason = "layers made from raw structs with extension structs in their chain"
 )]
 
 use std::ptr;
 
-use android_activity::AndroidApp;
 use openxr as xr;
 
-use super::gl_context::GlContext;
+use super::{
+    graphics::{Api, Graphics},
+    runtime::Runtime,
+};
 use crate::Pose;
 
 const VIEW_CONFIGURATION: xr::ViewConfigurationType = xr::ViewConfigurationType::PRIMARY_STEREO;
@@ -27,7 +29,7 @@ pub(crate) enum SessionStatus {
 
 // A layer that shows a whole swapchain image on a flat panel.
 pub(crate) struct QuadLayer<'a> {
-    pub(crate) swapchain: &'a xr::Swapchain<xr::OpenGlEs>,
+    pub(crate) swapchain: &'a xr::Swapchain<Api>,
     pub(crate) image_size: (u32, u32),
     pub(crate) pose: Pose,
     // The panel's width and height in meters.
@@ -36,95 +38,32 @@ pub(crate) struct QuadLayer<'a> {
 
 pub(crate) struct XrSession {
     instance: xr::Instance,
-    pub(crate) session: xr::Session<xr::OpenGlEs>,
+    pub(crate) session: xr::Session<Api>,
     waiter: xr::FrameWaiter,
-    stream: xr::FrameStream<xr::OpenGlEs>,
+    stream: xr::FrameStream<Api>,
     // The room as the app sees it: its origin is where the head was when the app started
     pub(crate) local: xr::Space,
     // The head's own space, which the runtime locates for each frame
     view: xr::Space,
     blend: xr::EnvironmentBlendMode,
-    // Whether layers say their images start with the top row, which is how wgpu writes them
-    flips_rows: bool,
+    // Whether layers say that their images start with the top row, because the API's own first
+    // row is the bottom one and the runtime can flip it
+    flips_layers: bool,
     running: bool,
 }
 
 impl XrSession {
-    // Starts OpenXR for this app's activity and makes a session that draws on `gl`. The
-    // session must end before `gl` does.
-    pub(crate) fn new(gl: &GlContext, app: &AndroidApp) -> Result<Self, String> {
-        // The runtime finds the app's window through the activity it is given. The process's
-        // NDK context can hold the application context instead, and with it the runtime shows
-        // none of the app's frames.
-        // SAFETY: the Java VM and the global reference to the activity live as long as the
-        // AndroidApp, which outlives the session.
-        let platform =
-            unsafe { xr::AndroidPlatformInfo::new(app.vm_as_ptr(), app.activity_as_ptr()) };
-        // SAFETY: the library is the Khronos OpenXR loader, which the `xr` service of the
-        // Gradle plugin packs into the APK.
-        let entry = unsafe { xr::Entry::load(&platform) }
-            .map_err(|error| format!("the OpenXR loader: {error}"))?;
-        let available = entry
-            .enumerate_extensions()
-            .map_err(|error| format!("OpenXR extensions: {error}"))?;
-        if !available.khr_opengl_es_enable {
-            return Err("the OpenXR runtime has no OpenGL ES".into());
-        }
-        let mut extensions = xr::ExtensionSet::default();
-        extensions.khr_opengl_es_enable = true;
-        extensions.khr_android_create_instance = true;
-        extensions.fb_composition_layer_image_layout = available.fb_composition_layer_image_layout;
-        // Hands tracked by cameras point and pinch as controllers do. The controllers of other
-        // makers bind through their own profiles, each behind an extension.
-        extensions.ext_hand_interaction = available.ext_hand_interaction;
-        extensions.khr_generic_controller = available.khr_generic_controller;
-        extensions.htc_vive_focus3_controller_interaction =
-            available.htc_vive_focus3_controller_interaction;
-        extensions.htc_vive_cosmos_controller_interaction =
-            available.htc_vive_cosmos_controller_interaction;
-        extensions.ext_hp_mixed_reality_controller = available.ext_hp_mixed_reality_controller;
-        extensions.ext_samsung_odyssey_controller = available.ext_samsung_odyssey_controller;
-        extensions.bd_controller_interaction = available.bd_controller_interaction;
-        extensions.ml_ml2_controller_interaction = available.ml_ml2_controller_interaction;
-        extensions.meta_touch_controller_plus = available.meta_touch_controller_plus;
-        extensions.fb_touch_controller_pro = available.fb_touch_controller_pro;
-        if !available.fb_composition_layer_image_layout {
+    // Makes a session on the device of `graphics`, which must outlive the session.
+    pub(crate) fn new(runtime: Runtime, graphics: &Graphics) -> Result<Self, String> {
+        let Runtime {
+            instance,
+            system,
+            flips_layers,
+        } = runtime;
+        if !Graphics::TOP_ROW_FIRST && !flips_layers {
             log::warn!("cranpose xr: the runtime cannot flip layers; panels show upside down");
         }
-        let instance = entry
-            .create_instance(
-                &xr::ApplicationInfo {
-                    application_name: "cranpose",
-                    application_version: 0,
-                    engine_name: "Cranpose",
-                    engine_version: 0,
-                    api_version: xr::Version::new(1, 0, 0),
-                },
-                &extensions,
-                &[],
-                &platform,
-            )
-            .map_err(|error| format!("OpenXR instance: {error}"))?;
-        let system = instance
-            .system(xr::FormFactor::HEAD_MOUNTED_DISPLAY)
-            .map_err(|error| format!("no headset: {error}"))?;
-        // OpenXR asks for the requirements before a session; GLES 3 meets every runtime's
-        instance
-            .graphics_requirements::<xr::OpenGlEs>(system)
-            .map_err(|error| format!("OpenXR GLES requirements: {error}"))?;
-        let (display, config, context) = gl.handles();
-        // SAFETY: the handles are the current EGL context's, which outlives the session.
-        let (session, waiter, stream) = unsafe {
-            instance.create_session::<xr::OpenGlEs>(
-                system,
-                &xr::opengles::SessionCreateInfo::Android {
-                    display,
-                    config,
-                    context,
-                },
-            )
-        }
-        .map_err(|error| format!("OpenXR session: {error}"))?;
+        let (session, waiter, stream) = graphics.create_session(&instance, system)?;
         let local = session
             .create_reference_space(xr::ReferenceSpaceType::LOCAL, xr::Posef::IDENTITY)
             .map_err(|error| format!("OpenXR space: {error}"))?;
@@ -144,7 +83,7 @@ impl XrSession {
             local,
             view,
             blend,
-            flips_rows: available.fb_composition_layer_image_layout,
+            flips_layers: flips_layers && !Graphics::TOP_ROW_FIRST,
             running: false,
         })
     }
@@ -155,8 +94,8 @@ impl XrSession {
 
     // Whether layers show their images from the top row, which is how wgpu writes them. If not,
     // the first row is the bottom one.
-    pub(crate) fn flips_rows(&self) -> bool {
-        self.flips_rows
+    pub(crate) fn top_row_first(&self) -> bool {
+        Graphics::TOP_ROW_FIRST || self.flips_layers
     }
 
     // The head at `time`, in the `local` space. A head the runtime does not track has none.
@@ -237,13 +176,13 @@ impl XrSession {
                 flags: xr::sys::CompositionLayerImageLayoutFlagsFB::VERTICAL_FLIP,
             })
             .collect();
-        let quads: Vec<xr::CompositionLayerQuad<'_, xr::OpenGlEs>> = layers
+        let quads: Vec<xr::CompositionLayerQuad<'_, Api>> = layers
             .iter()
             .zip(layouts.iter_mut())
             .map(|(layer, layout)| {
                 let raw = xr::sys::CompositionLayerQuad {
                     ty: xr::sys::CompositionLayerQuad::TYPE,
-                    next: if self.flips_rows {
+                    next: if self.flips_layers {
                         ptr::from_mut(layout).cast_const().cast()
                     } else {
                         ptr::null()
@@ -273,7 +212,7 @@ impl XrSession {
                 unsafe { xr::CompositionLayerQuad::from_raw(raw) }
             })
             .collect();
-        let references: Vec<&xr::CompositionLayerBase<'_, xr::OpenGlEs>> =
+        let references: Vec<&xr::CompositionLayerBase<'_, Api>> =
             quads.iter().map(|quad| &**quad).collect();
         self.stream
             .end(display_time, self.blend, &references)

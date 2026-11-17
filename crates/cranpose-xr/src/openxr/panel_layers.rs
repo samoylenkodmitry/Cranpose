@@ -9,7 +9,7 @@ use cranpose::{GpuContext, GuestView};
 use openxr as xr;
 
 use super::{
-    gl_context::wrap_texture,
+    graphics::{Api, Graphics, SwapchainFormat},
     session::{QuadLayer, XrSession},
 };
 use crate::{
@@ -22,54 +22,32 @@ use crate::{
 // image close to one to one.
 pub(crate) const DENSITY: f32 = 1.5;
 
-const GL_SRGB8_ALPHA8: u32 = 0x8C43;
-const GL_RGBA8: u32 = 0x8058;
-
 struct PanelImage {
     id: u64,
     size: (u32, u32),
-    swapchain: xr::Swapchain<xr::OpenGlEs>,
+    swapchain: xr::Swapchain<Api>,
     textures: Vec<wgpu::Texture>,
     // Whether the swapchain has an image to show
     shown: bool,
 }
 
 pub(crate) struct PanelLayers {
-    gl_format: u32,
-    format: wgpu::TextureFormat,
+    format: SwapchainFormat,
     atlas: Option<(wgpu::Texture, wgpu::TextureView)>,
     images: Vec<PanelImage>,
 }
 
 impl PanelLayers {
     pub(crate) fn new(xr_session: &XrSession) -> Result<Self, String> {
-        let formats = xr_session
-            .session
-            .enumerate_swapchain_formats()
-            .map_err(|error| format!("OpenXR swapchain formats: {error}"))?;
-        let (gl_format, format) = if formats.contains(&GL_SRGB8_ALPHA8) {
-            (GL_SRGB8_ALPHA8, wgpu::TextureFormat::Rgba8UnormSrgb)
-        } else if formats.contains(&GL_RGBA8) {
-            log::warn!("cranpose xr: no sRGB swapchains; colors show too dark");
-            (GL_RGBA8, wgpu::TextureFormat::Rgba8Unorm)
-        } else {
-            return Err(format!("no swapchain format Cranpose draws: {formats:x?}"));
-        };
         Ok(Self {
-            gl_format,
-            format,
+            format: SwapchainFormat::choose(&xr_session.session)?,
             atlas: None,
             images: Vec::new(),
         })
     }
 
-    // The swapchain format in OpenGL's names, which `format` is in wgpu's.
-    pub(crate) fn gl_format(&self) -> u32 {
-        self.gl_format
-    }
-
-    // The format the composition draws in.
-    pub(crate) fn format(&self) -> wgpu::TextureFormat {
+    // The format of the swapchains, which the composition draws in too.
+    pub(crate) fn format(&self) -> SwapchainFormat {
         self.format
     }
 
@@ -135,7 +113,7 @@ impl PanelLayers {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: self.format,
+            format: self.format.wgpu,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         });
@@ -184,6 +162,7 @@ impl PanelLayers {
                     depth_or_array_layers: 1,
                 },
             );
+            Graphics::ready_for_release(&mut encoder, &image.textures[next as usize]);
             acquired.push(index);
         }
         gpu.queue.submit([encoder.finish()]);
@@ -219,7 +198,7 @@ impl PanelLayers {
                 usage_flags: xr::SwapchainUsageFlags::COLOR_ATTACHMENT
                     | xr::SwapchainUsageFlags::TRANSFER_DST
                     | xr::SwapchainUsageFlags::SAMPLED,
-                format: self.gl_format,
+                format: self.format.api,
                 sample_count: 1,
                 width: size.0,
                 height: size.1,
@@ -232,12 +211,12 @@ impl PanelLayers {
             .enumerate_images()
             .map_err(|error| format!("OpenXR swapchain images: {error}"))?
             .into_iter()
-            .map(|name| {
-                wrap_texture(
+            .map(|image| {
+                Graphics::wrap_image(
                     &gpu.device,
-                    name,
+                    image,
                     size,
-                    self.format,
+                    self.format.wgpu,
                     wgpu::TextureUsages::COPY_DST,
                 )
             })

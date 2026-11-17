@@ -1031,6 +1031,11 @@ android-xr: _disk-guard
       -PcranposeLabel="Cranpose XR" -PcranposeApplicationId=dev.cranpose.xrdemo \
       -PcranposeServices=xr
 
+# Run apps/xr-demo against Monado's simulated headset with its null compositor and print the
+# frames it ran. Needs `monado-service` and the OpenXR loader on the machine.
+xr-smoke seconds="8":
+    scripts/ci/with_host_lock.sh --shared scripts/dev/xr_monado_smoke.sh {{seconds}}
+
 # Build the shippable Android release artifact: every architecture it carries.
 # `android` above builds the one a development device runs, because each extra
 # architecture is another full native build of the workspace, run in turn.

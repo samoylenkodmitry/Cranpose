@@ -7,6 +7,7 @@ use cranpose::GpuContext;
 use openxr as xr;
 
 use super::{
+    graphics::{Api, SwapchainFormat},
     session::{QuadLayer, XrSession},
     static_image::{premultiplied, static_image},
 };
@@ -24,7 +25,7 @@ const NEAR_ALPHA: f32 = 0.1;
 const FAR_ALPHA: f32 = 0.8;
 
 pub(crate) struct RayLayers {
-    swapchain: xr::Swapchain<xr::OpenGlEs>,
+    swapchain: xr::Swapchain<Api>,
 }
 
 impl RayLayers {
@@ -32,14 +33,14 @@ impl RayLayers {
     pub(crate) fn new(
         xr_session: &XrSession,
         gpu: &GpuContext,
-        formats: (u32, wgpu::TextureFormat),
+        format: SwapchainFormat,
     ) -> Result<Self, String> {
         let swapchain = static_image(
             xr_session,
             gpu,
-            formats,
+            format,
             (ACROSS, ALONG),
-            &beam_pixels(xr_session.flips_rows()),
+            &beam_pixels(xr_session.top_row_first()),
         )?;
         Ok(Self { swapchain })
     }
@@ -68,12 +69,12 @@ impl RayLayers {
 // The beam's picture in rows of RGBA bytes with premultiplied alpha. The format is sRGB, so the
 // color bytes are encoded. Alpha falls from the beam's middle to nothing at its edges and rises
 // from the controller to the far end.
-fn beam_pixels(flips_rows: bool) -> Vec<u8> {
+fn beam_pixels(top_row_first: bool) -> Vec<u8> {
     let mut pixels = Vec::with_capacity((ACROSS * ALONG * 4) as usize);
     for row in 0..ALONG {
-        // The compositor shows the first row at the far end when it flips rows, and at the
-        // controller's end when it does not
-        let from_controller = if flips_rows { ALONG - 1 - row } else { row };
+        // The compositor shows the first row at the far end when the first row is the top one, and
+        // at the controller's end when it is the bottom one
+        let from_controller = if top_row_first { ALONG - 1 - row } else { row };
         let along =
             NEAR_ALPHA + (FAR_ALPHA - NEAR_ALPHA) * from_controller as f32 / (ALONG - 1) as f32;
         for column in 0..ACROSS {

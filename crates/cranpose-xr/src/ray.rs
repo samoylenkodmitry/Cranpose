@@ -48,7 +48,7 @@ impl Ray {
 }
 
 // A ray as shown: from its origin along its direction for `length` meters.
-#[cfg(any(test, all(feature = "openxr", target_os = "android")))]
+#[cfg(any(test, headset))]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Beam {
     pub(crate) ray: Ray,

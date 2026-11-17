@@ -5,16 +5,19 @@
 //! its text sharp. The names follow Jetpack XR Compose. `docs/xr_architecture.md` in the
 //! repository describes the design.
 //!
-//! The `openxr` feature adds the backend for Android headsets such as the Meta Quest. Its
-//! [`android_main!`] starts the app as an immersive app. Elsewhere the composables draw flat.
+//! The `openxr` feature adds the backend for headsets. On Android, as on a Meta Quest, its
+//! [`android_main!`] starts the app as an immersive app. On Linux and Windows its `run` starts
+//! the app in the headset of the machine's OpenXR runtime (SteamVR, Monado, Meta Link) and opens
+//! a flat window when the machine has none. On macOS its `run` opens the flat window. Elsewhere
+//! the composables draw flat.
 
-#[cfg(any(test, all(feature = "openxr", target_os = "android")))]
+#[cfg(any(test, headset))]
 mod aim_filter;
-#[cfg(any(test, all(feature = "openxr", target_os = "android")))]
+#[cfg(any(test, headset))]
 mod beam_pose;
-#[cfg(any(test, all(feature = "openxr", target_os = "android")))]
+#[cfg(any(test, headset))]
 mod carry;
-#[cfg(any(test, all(feature = "openxr", target_os = "android")))]
+#[cfg(any(test, headset))]
 mod pointer;
 mod pose;
 mod ray;
@@ -24,16 +27,26 @@ mod subspace;
 mod subspace_modifier;
 
 mod android_main;
-#[cfg(all(feature = "openxr", target_os = "android"))]
+#[cfg(all(desktop_run, not(headset)))]
+mod flat_run;
+#[cfg(headset)]
 mod openxr;
+#[cfg(desktop_run)]
+mod run_error;
 
 #[doc(hidden)]
 pub use cranpose as __cranpose;
-#[cfg(all(feature = "openxr", target_os = "android"))]
+#[cfg(all(desktop_run, not(headset)))]
+pub use flat_run::run;
+#[cfg(all(headset, target_os = "android"))]
 #[doc(hidden)]
+pub use openxr::run;
+#[cfg(all(headset, not(target_os = "android")))]
 pub use openxr::run;
 pub use pose::Pose;
 pub use ray::{PanelHit, Ray};
+#[cfg(desktop_run)]
+pub use run_error::RunError;
 pub use spatial_panel::SpatialPanel;
 pub use subspace::Subspace;
 pub use subspace_modifier::{DEFAULT_PANEL_SIZE, METERS_PER_DP, SubspaceModifier};

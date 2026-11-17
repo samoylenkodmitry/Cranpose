@@ -1,19 +1,19 @@
-//! The loop of an immersive app: the activity's events, the session's events and the frames.
+//! The loop of an immersive app: the host's events, the session's events and the frames.
 
 use std::{cell::RefCell, rc::Rc, time::Duration};
 
-use android_activity::{MainEvent, PollEvent};
-use cranpose::{
-    AndroidApp, AppLauncher, AppSettings, GpuContext, GuestView, LauncherFonts, remember,
-};
+use cranpose::{AppSettings, GpuContext, GuestView, remember};
 use cranpose_core::CompositionLocalProvider;
 
 use super::{
     controllers::Controllers,
-    gl_context::GlContext,
+    frame_rate::FrameRate,
+    graphics::Graphics,
     handle_layers::HandleLayers,
+    host::Host,
     panel_layers::{DENSITY, PanelLayers},
     ray_layers::RayLayers,
+    runtime::Runtime,
     session::{SessionStatus, XrSession},
 };
 use crate::{
@@ -25,59 +25,34 @@ use crate::{
 // hovered.
 const AWAY: f32 = -100_000.0;
 
-/// Runs `content` as an immersive app on the headset: its subspaces' panels stand in the room
-/// and the controllers point at them. Returns when the headset ends the session or the activity
-/// ends.
-pub fn run<Fonts: LauncherFonts>(
-    launcher: AppLauncher<Fonts>,
-    app: AndroidApp,
-    content: impl FnMut() + 'static,
-) {
-    let settings = launcher.start_android_host(&app);
-    if let Err(error) = run_session(&app, &settings, content) {
-        log::error!("cranpose xr: {error}");
-    }
-}
-
-fn run_session(
-    app: &AndroidApp,
+// Runs `content` on the headset of `runtime` until the headset or the host ends it.
+pub(crate) fn run_immersive(
+    host: &Host,
+    runtime: Runtime,
     settings: &AppSettings,
     content: impl FnMut() + 'static,
 ) -> Result<(), String> {
-    let mut immersive = Immersive::new(app, settings, content)?;
+    let mut immersive = Immersive::new(runtime, settings, content)?;
     let mut status = SessionStatus::Idle;
+    let mut rate = FrameRate::new();
     log::info!("cranpose xr: ready");
-    while !activity_destroyed(app, status) {
+    while !host.ended(status) {
         status = immersive.xr_session.poll_events()?;
         match status {
             SessionStatus::Exit => break,
             SessionStatus::Idle => {}
-            SessionStatus::Running => immersive.frame()?,
+            SessionStatus::Running => {
+                immersive.frame()?;
+                rate.tick();
+            }
         }
     }
     log::info!("cranpose xr: ends");
     Ok(())
 }
 
-// Handles the activity's events and returns whether the activity ended. While the headset shows
-// something else, it waits for them.
-fn activity_destroyed(app: &AndroidApp, status: SessionStatus) -> bool {
-    let timeout = if status == SessionStatus::Running {
-        Duration::ZERO
-    } else {
-        Duration::from_millis(100)
-    };
-    let mut destroyed = false;
-    app.poll_events(Some(timeout), |event| {
-        if let PollEvent::Main(MainEvent::Destroy) = event {
-            destroyed = true;
-        }
-    });
-    destroyed
-}
-
 // The app in the headset. The fields drop in their order: what draws, then the session, then the
-// device and the context it draws on.
+// device and what it draws on.
 struct Immersive {
     guest: GuestView,
     space: Space,
@@ -88,38 +63,29 @@ struct Immersive {
     controllers: Controllers,
     xr_session: XrSession,
     gpu: GpuContext,
-    _gl: GlContext,
+    _graphics: Graphics,
 }
 
 impl Immersive {
     fn new(
-        app: &AndroidApp,
+        runtime: Runtime,
         settings: &AppSettings,
         mut content: impl FnMut() + 'static,
     ) -> Result<Self, String> {
-        let gl = GlContext::new()?;
-        let gpu = gl.gpu()?;
-        let xr_session = XrSession::new(&gl, app)?;
+        let (graphics, gpu) = Graphics::open(&runtime.instance, runtime.system)?;
+        let xr_session = XrSession::new(runtime, &graphics)?;
         let controllers = Controllers::new(&xr_session)?;
         let layers = PanelLayers::new(&xr_session)?;
-        let formats = (layers.gl_format(), layers.format());
-        let rays = RayLayers::new(&xr_session, &gpu, formats)?;
-        let handles = HandleLayers::new(&xr_session, &gpu, formats)?;
+        let format = layers.format();
+        let rays = RayLayers::new(&xr_session, &gpu, format)?;
+        let handles = HandleLayers::new(&xr_session, &gpu, format)?;
         let composed = Rc::new(RefCell::new(None::<Space>));
         let held = Rc::clone(&composed);
-        let mut guest = GuestView::new(
-            settings,
-            &gpu,
-            layers.format(),
-            16,
-            16,
-            DENSITY,
-            move || {
-                let space = remember(Space::new).with(Clone::clone);
-                held.replace(Some(space.clone()));
-                CompositionLocalProvider([local_space().provides(Some(space))], &mut content);
-            },
-        )
+        let mut guest = GuestView::new(settings, &gpu, format.wgpu, 16, 16, DENSITY, move || {
+            let space = remember(Space::new).with(Clone::clone);
+            held.replace(Some(space.clone()));
+            CompositionLocalProvider([local_space().provides(Some(space))], &mut content);
+        })
         .map_err(|error| format!("composition: {error}"))?;
         guest.shell().renderer().set_transparent_background(true);
         // The view composes its content when it is made, and the space stays for the view's life
@@ -137,7 +103,7 @@ impl Immersive {
             controllers,
             xr_session,
             gpu,
-            _gl: gl,
+            _graphics: graphics,
         })
     }
 
@@ -148,7 +114,13 @@ impl Immersive {
         let aims = self
             .controllers
             .aims(&self.xr_session, frame.predicted_display_time);
-        let time = Duration::from_nanos(frame.predicted_display_time.as_nanos().max(0) as u64);
+        let time = Duration::from_nanos(
+            frame
+                .predicted_display_time
+                .as_nanos()
+                .max(0)
+                .cast_unsigned(),
+        );
         let (events, cursor) = self.pointer.update(aims, time, &self.space.panels());
         send(&mut self.guest, events);
         self.space.set_cursor(cursor);
@@ -172,7 +144,9 @@ impl Immersive {
         self.xr_session
             .end_frame(frame.predicted_display_time, &quads)?;
         drop(quads);
-        self.gpu.device.poll(wgpu::PollType::Poll).ok();
+        if let Err(error) = self.gpu.device.poll(wgpu::PollType::Poll) {
+            log::warn!("cranpose xr: device poll: {error}");
+        }
         Ok(())
     }
 }

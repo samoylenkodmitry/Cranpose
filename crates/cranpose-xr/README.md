@@ -41,5 +41,22 @@ cranpose {
 The service makes the APK an immersive app and packs the Khronos OpenXR loader. The app needs
 no other OpenXR code.
 
+## PC headsets
+
+On Linux and Windows the `openxr` feature adds `cranpose_xr::run`, which takes the arguments of
+`android_main!`. It starts the app in the headset of the machine's OpenXR runtime (SteamVR,
+Monado, Meta Link, Pimax, Varjo) and draws through Vulkan. It opens the flat window of
+`AppLauncher::try_run` when the machine has no OpenXR loader, no runtime or no headset.
+
+```rust,ignore
+fn main() -> Result<(), cranpose_xr::RunError> {
+    cranpose_xr::run(cranpose::AppLauncher::new(), App)
+}
+```
+
+The app finds the OpenXR loader (`libopenxr_loader.so.1` or `openxr_loader.dll`) at run time, so
+a build needs no loader and a machine without one gets the flat window. `RUST_LOG=info` with a
+logger such as `env_logger` prints each second's frame count.
+
 `apps/xr-demo` in the repository is a complete app. The names follow Jetpack XR Compose, and
 `docs/xr_architecture.md` describes the design and the steps that follow.

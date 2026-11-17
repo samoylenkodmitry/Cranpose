@@ -1,12 +1,15 @@
-//! The backend for Android headsets through OpenXR.
+//! The backend for headsets through OpenXR.
 
 mod controllers;
-mod gl_context;
+mod frame_rate;
+mod graphics;
 mod handle_layers;
+mod host;
 mod panel_layers;
 mod ray_layers;
 mod runner;
+mod runtime;
 mod session;
 mod static_image;
 
-pub use runner::run;
+pub use host::run;

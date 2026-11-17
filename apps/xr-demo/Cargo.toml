@@ -21,18 +21,20 @@ path = "src/main.rs"
 required-features = ["desktop"]
 
 # The Gradle plugin builds the Android library with `android` and
-# `renderer-wgpu`; there the panels stand in the headset. On the desktop they
-# draw flat.
+# `renderer-wgpu`; there the panels stand in the headset. On a Linux or Windows
+# desktop they stand in the headset of the OpenXR runtime when it has one, and
+# draw flat in a window when it has none.
 [features]
 default = ["renderer-wgpu", "desktop"]
 renderer-wgpu = ["cranpose/renderer-wgpu"]
-desktop = ["cranpose/desktop"]
+desktop = ["cranpose/desktop", "cranpose-xr/openxr", "dep:env_logger"]
 android = ["renderer-wgpu", "cranpose/android", "cranpose-xr/openxr"]
 
 [dependencies]
 cranpose = { workspace = true, features = ["embedded-default-font"] }
 cranpose-xr = { workspace = true }
 cranpose-ui = { workspace = true }
+env_logger = { version = "0.11", optional = true }
 
 [build-dependencies]
 cranpose-capabilities = { path = "../../crates/cranpose-capabilities" }

@@ -498,8 +498,9 @@ impl<Fonts: LauncherFonts> AppLauncher<Fonts> {
         }
     }
 
+    /// The settings and fonts of the launcher, for `GuestView::new` in a host with no application.
     #[cfg(any(test, feature = "renderer-wgpu"))]
-    fn into_settings(self) -> AppSettings {
+    pub fn into_settings(self) -> AppSettings {
         AppSettings {
             default_face: Fonts::default_face,
             ..self.settings
@@ -1364,8 +1365,7 @@ impl<Fonts: LauncherFonts> AppLauncher<Fonts> {
     /// Starts the process for an activity that draws Cranpose itself, with no
     /// window of Cranpose's: the logger, the services and the app's process
     /// start, as [`run`](Self::run) does before its first frame. Returns the
-    /// settings for the activity's [`GuestView`](crate::GuestView), such as
-    /// the one the OpenXR backend of `cranpose-xr` draws.
+    /// settings for the activity's [`GuestView`](crate::GuestView).
     #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
     pub fn start_android_host(self, app: &android_activity::AndroidApp) -> AppSettings {
         let settings = self.into_settings();
