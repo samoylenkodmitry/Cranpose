@@ -600,11 +600,26 @@ impl<A: Applier + 'static> Composition<A> {
         scopes.retain(|scope| !scope.is_derivation());
     }
 
-    /// Keeps the composer of a pass over the root slots for the next pass.
+    // Keeps the composer of a pass for the next pass. After a pass over
+    // another host's slots it is bound to the root's again, so the kept core
+    // holds no other host.
     fn park_composer(&mut self, host: &Rc<SlotsHost>, composer: Composer) {
-        if Rc::ptr_eq(host, &self.slots) {
-            self.parked_composer = composer.park();
-        }
+        let Some(parked) = composer.park() else {
+            return;
+        };
+        self.parked_composer = if Rc::ptr_eq(host, &self.slots) {
+            Some(parked)
+        } else {
+            Composer::for_pass(
+                Some(parked),
+                Rc::clone(&self.composer_state),
+                self.slots_host(),
+                self.applier_host(),
+                self.runtime_handle(),
+                self.root,
+            )
+            .park()
+        };
     }
 
     fn dispose_forgotten_movables(&mut self) -> Result<(), NodeError> {
