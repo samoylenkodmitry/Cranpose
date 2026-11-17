@@ -58,6 +58,7 @@ mod memory_headroom;
 mod path;
 mod path_fill;
 mod path_recording;
+mod point;
 mod pointer_icon;
 mod rare_list;
 mod record;
@@ -98,6 +99,7 @@ pub use liquid_widget_shaders::*;
 pub use memory_headroom::MemoryHeadroom;
 pub use path::*;
 pub use path_fill::*;
+pub use point::Point;
 pub use pointer_icon::*;
 pub use record::*;
 pub use render_effect::*;
@@ -118,11 +120,12 @@ pub mod prelude {
     pub use crate::{
         brush::Brush,
         color::Color,
-        geometry::{CornerRadii, EdgeInsets, Point, Rect, RoundedCornerShape, Size},
+        geometry::{CornerRadii, EdgeInsets, Rect, RoundedCornerShape, Size},
         image::{
             ColorFilter, ExternalTexture, ImageBitmap, ImageBitmapError, ImagePixelFormat,
             ImageSampling,
         },
+        point::Point,
         pointer_icon::{CursorIcon, CustomPointerIcon, PointerIcon, PointerIconError},
         stroke::{ArcGeometry, Stroke, StrokeCap, StrokeJoin},
         unit::{Dp, Sp},
