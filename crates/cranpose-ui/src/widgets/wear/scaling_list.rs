@@ -101,21 +101,21 @@ use cranpose_core::{
     MutableState, NodeId, RuntimeCell, SlotId, internal::FrameCallbackRegistration, remember,
     rememberMutableStateOf,
 };
-use cranpose_foundation::{
-    DRAG_THRESHOLD, MAX_FLING_VELOCITY, VelocityTracker1D,
-    lazy::{LazyItems, LazyLayoutKey},
-};
+use cranpose_foundation::lazy::{LazyItems, LazyLayoutKey};
 use cranpose_ui_graphics::{CompositingStrategy, Point, Rect, Size};
 use cranpose_ui_layout::{
     Constraints, Measurable, MeasurePolicy, MeasureResult, MeasureScope, Placement, round_to_px,
 };
+
+mod input;
+use input::wear_scaling_list_input;
 
 use crate::{
     composable,
     density::Density,
     fling_animation::FlingAnimation,
     layout_direction::LayoutDirection,
-    modifier::{GraphicsLayer, Modifier, PointerEventKind, PointerInputScope, TransformOrigin},
+    modifier::{GraphicsLayer, Modifier, TransformOrigin},
     round_scaling_list::{
         CentreAnchor, PlacedRow, ScaleAlpha, ScalingParams, leading_auto_centring_spacer,
         place_row_with, trailing_auto_centring_spacer,
@@ -950,119 +950,6 @@ impl Default for WearScalingListContent {
             items: Rc::new(Vec::new()),
         }
     }
-}
-
-fn wear_scaling_list_input(
-    modifier: Modifier,
-    state: WearScalingListState,
-    fling: Rc<FlingAnimation>,
-) -> Modifier {
-    let rotary_state = state;
-    let touch_state = state;
-    let touch_fling = Rc::clone(&fling);
-    modifier
-        .on_rotary_scroll_event(move |event| {
-            let delta = if event.vertical_scroll_pixels != 0.0 {
-                event.vertical_scroll_pixels
-            } else {
-                event.horizontal_scroll_pixels
-            };
-            rotary_state.dispatch_raw_delta(delta) != 0.0
-        })
-        .pointer_input(state.id(), move |scope: PointerInputScope| {
-            let fling = Rc::clone(&touch_fling);
-            async move {
-                scope
-                    .await_pointer_event_scope(|events| async move {
-                        let mut pointer = None;
-                        let mut down = Point::new(0.0, 0.0);
-                        let mut last = Point::new(0.0, 0.0);
-                        let mut dragging = false;
-                        let mut velocity = VelocityTracker1D::new();
-                        loop {
-                            let event = events.await_pointer_event().await;
-                            match event.kind {
-                                PointerEventKind::Down if pointer.is_none() => {
-                                    fling.cancel();
-                                    pointer = Some(event.id);
-                                    down = event.position;
-                                    last = event.position;
-                                    dragging = false;
-                                    velocity.reset();
-                                    if let Some(time) = event.time_ms {
-                                        velocity.add_data_point(time, event.position.y);
-                                    }
-                                }
-                                PointerEventKind::Move if pointer == Some(event.id) => {
-                                    if event.is_consumed() {
-                                        pointer = None;
-                                        dragging = false;
-                                        velocity.reset();
-                                        continue;
-                                    }
-                                    let dx = event.position.x - down.x;
-                                    let dy = event.position.y - down.y;
-                                    if !dragging && dy.abs() > DRAG_THRESHOLD && dy.abs() > dx.abs()
-                                    {
-                                        dragging = true;
-                                    } else if !dragging
-                                        && dx.abs() > DRAG_THRESHOLD
-                                        && dx.abs() >= dy.abs()
-                                    {
-                                        pointer = None;
-                                        velocity.reset();
-                                        continue;
-                                    }
-                                    if dragging {
-                                        let consumed = touch_state
-                                            .dispatch_raw_delta(last.y - event.position.y);
-                                        last = event.position;
-                                        if let Some(time) = event.time_ms {
-                                            velocity.add_data_point(time, event.position.y);
-                                        }
-                                        if consumed != 0.0 {
-                                            event.consume();
-                                        }
-                                    }
-                                }
-                                PointerEventKind::Up if pointer == Some(event.id) => {
-                                    if dragging {
-                                        let (y, cap) = (event.position.y, MAX_FLING_VELOCITY);
-                                        let speed = -event.time_ms.map_or(0.0, |at| {
-                                            velocity.release_velocity(at, y, cap)
-                                        });
-                                        let fling_state = touch_state;
-                                        fling.start_fling(
-                                            0.0,
-                                            speed,
-                                            move |delta| fling_state.dispatch_raw_delta(delta),
-                                            || {},
-                                        );
-                                        event.consume();
-                                    }
-                                    pointer = None;
-                                    dragging = false;
-                                    velocity.reset();
-                                }
-                                PointerEventKind::Cancel if pointer == Some(event.id) => {
-                                    pointer = None;
-                                    dragging = false;
-                                    velocity.reset();
-                                }
-                                PointerEventKind::Scroll => {
-                                    let consumed =
-                                        touch_state.dispatch_raw_delta(event.scroll_delta.y);
-                                    if consumed != 0.0 {
-                                        event.consume();
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
-                    })
-                    .await;
-            }
-        })
 }
 
 /// One item of a scaling list, wrapped in the layer that shrinks and fades it.

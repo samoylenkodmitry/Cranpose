@@ -1,0 +1,151 @@
+//! The touch and rotary input of a scaling list: a drag scrolls it, a
+//! release flings it.
+
+use std::rc::Rc;
+
+use cranpose_foundation::{DRAG_THRESHOLD, MAX_FLING_VELOCITY, PointerId, VelocityTracker1D};
+use cranpose_ui_graphics::Point;
+
+use super::WearScalingListState;
+use crate::{
+    fling_animation::FlingAnimation,
+    modifier::{Modifier, PointerEvent, PointerEventKind, PointerInputScope},
+};
+
+pub(super) fn wear_scaling_list_input(
+    modifier: Modifier,
+    state: WearScalingListState,
+    fling: Rc<FlingAnimation>,
+) -> Modifier {
+    let rotary_state = state;
+    modifier
+        .on_rotary_scroll_event(move |event| {
+            let delta = if event.vertical_scroll_pixels != 0.0 {
+                event.vertical_scroll_pixels
+            } else {
+                event.horizontal_scroll_pixels
+            };
+            rotary_state.dispatch_raw_delta(delta) != 0.0
+        })
+        .pointer_input(state.id(), move |scope: PointerInputScope| {
+            let fling = Rc::clone(&fling);
+            async move {
+                scope
+                    .await_pointer_event_scope(|events| async move {
+                        let mut swipe = Swipe::new(state, fling);
+                        loop {
+                            let event = events.await_pointer_event().await;
+                            swipe.handle(&event);
+                        }
+                    })
+                    .await;
+            }
+        })
+}
+
+// A finger on the list: it drags the list along its axis and flings it on
+// release.
+struct Swipe {
+    state: WearScalingListState,
+    fling: Rc<FlingAnimation>,
+    pointer: Option<PointerId>,
+    down: Point,
+    last: Point,
+    dragging: bool,
+    velocity: VelocityTracker1D,
+}
+
+impl Swipe {
+    fn new(state: WearScalingListState, fling: Rc<FlingAnimation>) -> Self {
+        Self {
+            state,
+            fling,
+            pointer: None,
+            down: Point::new(0.0, 0.0),
+            last: Point::new(0.0, 0.0),
+            dragging: false,
+            velocity: VelocityTracker1D::new(),
+        }
+    }
+
+    fn handle(&mut self, event: &PointerEvent) {
+        match event.kind {
+            PointerEventKind::Down if self.pointer.is_none() => self.on_down(event),
+            PointerEventKind::Move if self.pointer == Some(event.id) => self.on_move(event),
+            PointerEventKind::Up if self.pointer == Some(event.id) => self.on_up(event),
+            PointerEventKind::Cancel if self.pointer == Some(event.id) => self.let_go(),
+            PointerEventKind::Scroll => {
+                let consumed = self.state.dispatch_raw_delta(event.scroll_delta.y);
+                if consumed != 0.0 {
+                    event.consume();
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn on_down(&mut self, event: &PointerEvent) {
+        self.fling.cancel();
+        self.pointer = Some(event.id);
+        self.down = event.position;
+        self.last = event.position;
+        self.dragging = false;
+        self.velocity.reset();
+        if let Some(time) = event.time_ms {
+            self.velocity.add_data_point(time, event.position.y);
+        }
+    }
+
+    fn on_move(&mut self, event: &PointerEvent) {
+        if event.is_consumed() {
+            self.let_go();
+            return;
+        }
+        let dx = event.position.x - self.down.x;
+        let dy = event.position.y - self.down.y;
+        if !self.dragging && dy.abs() > DRAG_THRESHOLD && dy.abs() > dx.abs() {
+            self.dragging = true;
+        } else if !self.dragging && dx.abs() > DRAG_THRESHOLD && dx.abs() >= dy.abs() {
+            self.pointer = None;
+            self.velocity.reset();
+            return;
+        }
+        if self.dragging {
+            let consumed = self
+                .state
+                .dispatch_raw_delta(self.last.y - event.position.y);
+            self.last = event.position;
+            if let Some(time) = event.time_ms {
+                self.velocity.add_data_point(time, event.position.y);
+            }
+            if consumed != 0.0 {
+                event.consume();
+            }
+        }
+    }
+
+    fn on_up(&mut self, event: &PointerEvent) {
+        if self.dragging {
+            let (y, cap) = (event.position.y, MAX_FLING_VELOCITY);
+            let speed = -event
+                .time_ms
+                .map_or(0.0, |at| self.velocity.release_velocity(at, y, cap));
+            let state = self.state;
+            self.fling.start_fling(
+                0.0,
+                speed,
+                move |delta| state.dispatch_raw_delta(delta),
+                || {},
+            );
+            event.consume();
+        }
+        self.let_go();
+    }
+
+    // The finger is gone, or it went to another gesture.
+    fn let_go(&mut self) {
+        self.pointer = None;
+        self.dragging = false;
+        self.velocity.reset();
+    }
+}
