@@ -16,7 +16,7 @@ use cranpose_ui_graphics::{Point, Rect};
 
 use crate::{
     collect::{LayerScene, ShownArea},
-    frame::{Capture, Damage, DamageRects, DeviceRect, OwnSake, collect_captures, settle, widen},
+    frame::{Capture, Damage, DamageRects, DeviceRect, OwnSake, collect_captures, widen},
 };
 
 // The pixels a record's area takes in a target, whole pixels from the
@@ -172,7 +172,7 @@ pub(crate) enum Visit {
 // What a window's walk leaves out: the records that did not change and lie
 // outside a region, as the target last drew them.
 pub(crate) struct Cull<'a> {
-    region: DamageRects,
+    region: &'a DamageRects,
     shown: &'a [Shown],
     marks: &'a [(u32, Visit)],
     stamp: u32,
@@ -316,7 +316,7 @@ impl TargetState {
     /// changes since the frame before, and puts the areas the frame before
     /// drew the changed records in into the frame's damage.
     pub(crate) fn begin(&mut self, store: &SceneStore, setting: TargetSetting) {
-        self.damage = DamageRects::default();
+        self.damage.clear();
         self.changed.clear();
         let read = self.read.replace(store.version());
         self.recording = self.skipped == 0;
@@ -349,7 +349,8 @@ impl TargetState {
                 }
             }
         }
-        self.begun = (self.damage, self.whole);
+        self.begun.0.assign(&self.damage);
+        self.begun.1 = self.whole;
     }
 
     // The changes the records keep for the target from the next update on:
@@ -366,49 +367,60 @@ impl TargetState {
     // The damage of the areas the frame before drew the changed records in;
     // `None` when the frame works out no damage or one of them is not
     // known.
-    pub(crate) fn begun(&self) -> Option<DamageRects> {
+    pub(crate) fn begun(&self) -> Option<&DamageRects> {
         let known = self.recording && !self.unknown_before && self.lost_root.is_none();
-        (known && !self.begun.1).then_some(self.begun.0)
+        (known && !self.begun.1).then_some(&self.begun.0)
     }
 
-    // The damage the frame takes when each moved and new record takes the
-    // area the frame before tells for it: its reach, placed at the origin
-    // the frame before drew its parent's space at. The whole window when a
-    // moved record's reach is not known: the walk finds that record's area
-    // unknown too. `None` when the frame works out no damage, an old area is
-    // not known, or a moved record casts an elevation shadow or lies under a
-    // parent the frame before drew through a surface or under a turn: the
-    // walk then works the areas out.
-    pub(crate) fn predicted_damage(&self, store: &SceneStore) -> Option<Damage> {
-        let setting = self.setting?;
-        let mut damage = self.begun()?;
+    // Writes into `damage` the damage the frame takes when each moved and
+    // new record takes the area the frame before tells for it: its reach,
+    // placed at the origin the frame before drew its parent's space at. The
+    // whole window when a moved record's reach is not known: the walk finds
+    // that record's area unknown too. `false` when the frame works out no
+    // damage, an old area is not known, or a moved record casts an
+    // elevation shadow or lies under a parent the frame before drew through
+    // a surface or under a turn: the walk then works the areas out.
+    pub(crate) fn predict_damage(&self, store: &SceneStore, damage: &mut Damage) -> bool {
+        let (Some(setting), Some(begun)) = (self.setting, self.begun()) else {
+            return false;
+        };
+        damage.assign_part(begun);
         for &(record, scope) in &self.changed {
             let (Scope::Placed, Some(id)) = (scope, store.resolve(record)) else {
                 continue;
             };
             let extent = store.layer(id).extent();
             let rect = match (extent.reach, extent.caster) {
-                (Reach::Unknown, _) => return Some(Damage::Full),
+                (Reach::Unknown, _) => {
+                    *damage = Damage::Full;
+                    return true;
+                }
                 (Reach::Finite(rect), None) => rect,
                 (Reach::Empty, None) => continue,
-                (_, Some(_)) => return None,
+                (_, Some(_)) => return false,
             };
-            let origin = store
+            let Some(origin) = store
                 .parent(id)
                 .and_then(|parent| self.shown(store.record_ref(parent)))
-                .and_then(|shown| shown.origin)?;
+                .and_then(|shown| shown.origin)
+            else {
+                return false;
+            };
             let placed = rect.translate(origin.x, origin.y);
-            if let Some(pixels) = PixelBox::of(placed, PixelGrid::of(setting)) {
-                damage.add(pixels.rect());
+            if let (Some(pixels), Damage::Part(rects)) =
+                (PixelBox::of(placed, PixelGrid::of(setting)), &mut *damage)
+            {
+                rects.add(pixels.rect());
             }
         }
-        Some(settle(damage, setting.viewport))
+        damage.settle(setting.viewport);
+        true
     }
 
     // What a walk of the frame leaves out of `region` of the records of
     // `store`: it walks every changed record and its ancestors, and all of
     // a moved or new record's subtree.
-    pub(crate) fn cull(&mut self, store: &SceneStore, region: DamageRects) -> Cull<'_> {
+    pub(crate) fn cull<'a>(&'a mut self, store: &SceneStore, region: &'a DamageRects) -> Cull<'a> {
         self.stamp = self.stamp.wrapping_add(1).max(1);
         for at in 0..self.changed.len() {
             let (record, scope) = self.changed[at];
@@ -465,18 +477,23 @@ impl TargetState {
 
     /// Ends the frame whose collect drew `root`: keeps how it drew each
     /// record, adds the areas the changed records are drawn in now, and
-    /// returns the frame's damage.
-    pub(crate) fn end(&mut self, store: &SceneStore, root: Option<&LayerScene>) -> Damage {
+    /// writes the frame's damage into `damage`.
+    pub(crate) fn end(
+        &mut self,
+        store: &SceneStore,
+        root: Option<&LayerScene>,
+        damage: &mut Damage,
+    ) {
         if !self.recording {
-            return if self.still {
-                Damage::Part(DamageRects::default())
+            if self.still {
+                damage.assign_part(&DamageRects::default());
             } else {
-                Damage::Skipped
-            };
+                *damage = Damage::Skipped;
+            }
+            return;
         }
-        let damage = self.ended(store, root);
+        self.ended(store, root, damage);
         self.last_root = store.root().map(|root| store.record_ref(root));
-        damage
     }
 
     /// Whether the frame in progress knew the frame before it: one that did
@@ -492,12 +509,12 @@ impl TargetState {
     /// [`MAX_SKIPPED`] frames, each such frame in a row quadrupling them;
     /// past [`RELEASE_SKIPS`], the areas go until a frame records them
     /// again.
-    pub(crate) fn drawn(&mut self, drawn: TargetDrawn) {
+    pub(crate) fn drawn(&mut self, drawn: &TargetDrawn) {
         if drawn.skipped {
             self.skipped = self.skipped.saturating_sub(1);
             return;
         }
-        match (drawn.damage, drawn.own_sake) {
+        match (&drawn.damage, drawn.own_sake) {
             // Stand-ins go once their pipelines land: a frame drawn whole
             // over them says nothing of what the page changes.
             (Damage::Full, Some(OwnSake::StandIns)) => return,
@@ -526,11 +543,13 @@ impl TargetState {
         }
     }
 
-    fn ended(&mut self, store: &SceneStore, root: Option<&LayerScene>) -> Damage {
+    fn ended(&mut self, store: &SceneStore, root: Option<&LayerScene>, damage: &mut Damage) {
         let Some(setting) = self.setting else {
-            return Damage::Full;
+            *damage = Damage::Full;
+            return;
         };
-        (self.damage, self.whole) = self.begun;
+        self.damage.assign(&self.begun.0);
+        self.whole = self.begun.1;
         let shown = root.map_or(&[][..], |root| &root.shown);
         let grid = PixelGrid::of(setting);
         for shown in shown {
@@ -558,7 +577,8 @@ impl TargetState {
         self.shown.trim_growth_slack();
         self.marks.trim_growth_slack();
         if self.unknown_before {
-            return Damage::Full;
+            *damage = Damage::Full;
+            return;
         }
         if let Some(before) = self.lost_root {
             let now = store
@@ -579,18 +599,21 @@ impl TargetState {
             }
         }
         if self.whole {
-            return Damage::Full;
+            *damage = Damage::Full;
+            return;
         }
         if let Some(root) = root.filter(|root| !self.damage.is_empty() && root.contains_backdrop())
         {
             self.captures.clear();
             let place = (setting.root_scale, setting.viewport);
             if !collect_captures(root, place, &mut self.captures) {
-                return Damage::Full;
+                *damage = Damage::Full;
+                return;
             }
             widen(&self.captures, &mut self.damage);
         }
-        settle(self.damage, setting.viewport)
+        damage.assign_part(&self.damage);
+        damage.settle(setting.viewport);
     }
 
     // The area the target drew `record` in, as the target's areas say: that
