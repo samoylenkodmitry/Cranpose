@@ -79,9 +79,9 @@ const OFF_SCREEN_RENDER_PERIOD: Duration = Duration::from_millis(16);
 fn touch_sample(
     clock: Option<&super::touch_clock::TouchClock>,
     finger: Option<winit::event::FingerId>,
-    (x, y): (f32, f32),
+    position: cranpose_ui::Point,
 ) -> cranpose_app_shell::TouchSample {
-    cranpose_app_shell::TouchSample::new(x, y).with_time_ms(
+    cranpose_app_shell::TouchSample::new(position.x, position.y).with_time_ms(
         clock
             .zip(finger)
             .and_then(|(clock, finger)| clock.time_ms(finger)),
@@ -121,7 +121,7 @@ impl<F: FnMut() + 'static> IosApp<F> {
             };
         }
         let finger = button_finger(button);
-        let sample = touch_sample(self.touch_clock.as_deref(), finger, (logical.x, logical.y));
+        let sample = touch_sample(self.touch_clock.as_deref(), finger, logical);
         match state {
             ElementState::Pressed => self.touch_router.press(shell, finger, sample),
             ElementState::Released => self.touch_router.release(shell, finger, sample),
@@ -634,8 +634,7 @@ impl<F: FnMut() + 'static> ApplicationHandler for IosApp<F> {
             } => {
                 let logical = self.platform.pointer_position(position);
                 let finger = source_finger(&source);
-                let sample =
-                    touch_sample(self.touch_clock.as_deref(), finger, (logical.x, logical.y));
+                let sample = touch_sample(self.touch_clock.as_deref(), finger, logical);
                 if let Some(shell) = self.shell.as_mut() {
                     shell.set_pointer_source(pointer_source_from_winit(&source));
                     if self.touch_router.moved(shell, finger, sample) {

@@ -444,7 +444,7 @@ impl TextDraw {
     // Hashes the colors of the glyphs: `color` and the paint over it.
     pub(crate) fn hash_glyph_paint<H: Hasher>(&self, state: &mut H) {
         self.color.render_hash().hash(state);
-        self.layer_paint.render_hash().hash(state);
+        self.layer_paint.hash(state);
     }
 
     // The part of `rect`, where the text draws from its top left corner at

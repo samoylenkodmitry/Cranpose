@@ -17,14 +17,10 @@ use winit::{event::FingerId, window::Window};
 // The latest sample of one touch, keyed by the `UITouch` address winit
 // names its finger by.
 #[derive(Clone, Copy)]
-struct Sample {
+pub(crate) struct Sample {
     touch: usize,
     uptime_ms: i64,
     ended: bool,
-}
-
-pub(crate) struct TouchClockSamples {
-    samples: RefCell<Vec<Sample>>,
 }
 
 define_class!(
@@ -35,7 +31,7 @@ define_class!(
     #[unsafe(super(UIGestureRecognizer))]
     #[thread_kind = MainThreadOnly]
     #[name = "CranposeTouchClock"]
-    #[ivars = TouchClockSamples]
+    #[ivars = RefCell<Vec<Sample>>]
     pub(crate) struct TouchClock;
 
     unsafe impl NSObjectProtocol for TouchClock {}
@@ -43,7 +39,7 @@ define_class!(
     impl TouchClock {
         #[unsafe(method(touchesBegan:withEvent:))]
         fn touches_began(&self, touches: &NSSet<UITouch>, event: &UIEvent) {
-            self.ivars().samples.borrow_mut().retain(|sample| !sample.ended);
+            self.ivars().borrow_mut().retain(|sample| !sample.ended);
             self.record(touches);
             unsafe { msg_send![super(self), touchesBegan: touches, withEvent: event] }
         }
@@ -82,14 +78,12 @@ define_class!(
 
 impl TouchClock {
     fn new(mtm: MainThreadMarker) -> Retained<Self> {
-        let this = Self::alloc(mtm).set_ivars(TouchClockSamples {
-            samples: RefCell::new(Vec::new()),
-        });
+        let this = Self::alloc(mtm).set_ivars(RefCell::new(Vec::new()));
         unsafe { msg_send![super(this), initWithTarget: None::<&AnyObject>, action: None::<Sel>] }
     }
 
     fn record(&self, touches: &NSSet<UITouch>) {
-        let mut samples = self.ivars().samples.borrow_mut();
+        let mut samples = self.ivars().borrow_mut();
         for touch in touches {
             let phase = touch.phase();
             let sample = Sample {
@@ -108,13 +102,7 @@ impl TouchClock {
     // it follows has ended, it steps aside for the next touch sequence. The
     // samples stay for the view, which takes the same touches after it.
     fn fail_when_all_ended(&self) {
-        if self
-            .ivars()
-            .samples
-            .borrow()
-            .iter()
-            .all(|sample| sample.ended)
-        {
+        if self.ivars().borrow().iter().all(|sample| sample.ended) {
             self.setState(UIGestureRecognizerState::Failed);
         }
     }
@@ -122,7 +110,6 @@ impl TouchClock {
     pub(crate) fn time_ms(&self, finger: FingerId) -> Option<i64> {
         let touch = finger.into_raw();
         self.ivars()
-            .samples
             .borrow()
             .iter()
             .find(|sample| sample.touch == touch)

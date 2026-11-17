@@ -1,10 +1,10 @@
 //! The alpha and color filter that a layer drawn in place lays over the
 //! colors of its content.
 
-use std::hash::Hasher;
+use std::hash::{Hash, Hasher};
 
 use cranpose_ui::Brush;
-use cranpose_ui_graphics::{Color, ColorFilter, FxHasher, GraphicsLayer, RenderHash};
+use cranpose_ui_graphics::{Color, ColorFilter, GraphicsLayer, RenderHash};
 
 use crate::style_shared::apply_paint_to_color;
 
@@ -61,15 +61,13 @@ impl LayerPaint {
     }
 }
 
-impl RenderHash for LayerPaint {
-    fn render_hash(&self) -> u64 {
-        let mut state = FxHasher::default();
+impl Hash for LayerPaint {
+    fn hash<H: Hasher>(&self, state: &mut H) {
         state.write_u32(self.alpha.to_bits());
         state.write_u64(
             self.color_filter
                 .as_ref()
                 .map_or(0, RenderHash::render_hash),
         );
-        state.finish()
     }
 }

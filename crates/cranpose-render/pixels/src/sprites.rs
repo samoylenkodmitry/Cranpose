@@ -12,7 +12,10 @@
 //! A sprite is [`SPRITE_FLOATS`] numbers; [`field`] names where each part
 //! starts. Positions are device pixels with the origin at the top left.
 
-use std::{fmt::Write as _, hash::Hasher};
+use std::{
+    fmt::Write as _,
+    hash::{Hash, Hasher},
+};
 
 use cranpose_render_common::{
     brush_sampling::color_to_rgba,
@@ -20,8 +23,8 @@ use cranpose_render_common::{
     layer_shadow::{ShadowHole, ShadowRRect},
 };
 use cranpose_ui_graphics::{
-    BlendMode, Brush, Color, FxHashMap, FxHasher, Point, Rect, RenderHash, StrokeCap, StrokeJoin,
-    TileMode, whole,
+    BlendMode, Brush, Color, FxHashMap, FxHasher, Point, Rect, StrokeCap, StrokeJoin, TileMode,
+    whole,
 };
 
 use crate::{
@@ -618,7 +621,7 @@ fn hash_text(hasher: &mut FxHasher, draw: &TextDraw) {
     hash_point(hasher, *snap_anchor);
     hasher.write_u64(text.render_hash());
     hash_color(hasher, *color);
-    hasher.write_u64(layer_paint.render_hash());
+    layer_paint.hash(hasher);
     hasher.write_u64(text_style.render_hash());
     hash_floats(hasher, &[*font_size, *scale]);
     hash_clip(hasher, *clip);
