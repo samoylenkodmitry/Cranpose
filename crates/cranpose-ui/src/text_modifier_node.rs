@@ -591,7 +591,7 @@ impl TextModifierElement {
         options: TextLayoutOptions,
         density: Density,
     ) -> Self {
-        Self::with_shared_style(text, shared_text_style(style), options, density)
+        Self::with_shared_style(text, shared_text_style(&style), options, density)
     }
 
     /// [`Self::new`] for a style [`shared_text_style`] already shared.
@@ -636,18 +636,19 @@ const SHARED_TEXT_STYLES: usize = 16;
 // The text styles recently composed, which [`shared_text_style`] shares.
 pub(crate) type RecentTextStyles = RecentValues<Arc<TextStyle>, SHARED_TEXT_STYLES>;
 
-/// `style` shared with the texts recently composed with an equal one, so a
-/// screen of texts in a few styles keeps a few copies, not one a text, and
-/// a node updated to an element of the same style compares pointers. A
-/// style none of the kept [`SHARED_TEXT_STYLES`] equals gets a copy of its
-/// own, kept first; the last kept one goes.
-pub(crate) fn shared_text_style(style: TextStyle) -> Arc<TextStyle> {
+// `style` shared with the texts recently composed with an equal one, so a
+// screen of texts in a few styles keeps a few copies, not one a text, and
+// a node updated to an element of the same style compares pointers. A
+// style none of the kept `SHARED_TEXT_STYLES` equals gets a copy of its
+// own, kept first; the last kept one goes. Read by reference: a style is
+// some 300 bytes, which a move would copy at each text composed.
+pub(crate) fn shared_text_style(style: &TextStyle) -> Arc<TextStyle> {
     crate::thread_state::with(|state| {
         let mut recent = state.recent_text_styles.borrow_mut();
-        if let Some(kept) = recent.find(|kept| **kept == style) {
+        if let Some(kept) = recent.find(|kept| **kept == *style) {
             return Arc::clone(kept);
         }
-        Arc::clone(recent.keep(Arc::new(style)))
+        Arc::clone(recent.keep(Arc::new(style.clone())))
     })
 }
 

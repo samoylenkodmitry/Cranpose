@@ -440,7 +440,7 @@ pub fn BasicTextWithOptions<S>(
 where
     S: IntoTextSource + Clone + PartialEq + 'static,
 {
-    compose_text(text, modifier, shared_text_style(style), options)
+    compose_text(text, modifier, shared_text_style(&style), options)
 }
 
 /// Displays `text` in `style` with the given overflow, wrapping and line limits. Compose's
@@ -462,7 +462,7 @@ where
     compose_text(
         text,
         modifier,
-        shared_text_style(style),
+        shared_text_style(&style),
         TextLayoutOptions {
             overflow,
             soft_wrap,
@@ -487,7 +487,7 @@ where
     compose_text(
         value,
         modifier,
-        shared_text_style(style),
+        shared_text_style(&style),
         TextLayoutOptions::from(options),
     )
 }
@@ -518,7 +518,7 @@ where
     compose_text(
         value,
         modifier,
-        shared_text_style(style),
+        shared_text_style(&style),
         TextLayoutOptions::from(TextOptions::default()),
     )
 }
