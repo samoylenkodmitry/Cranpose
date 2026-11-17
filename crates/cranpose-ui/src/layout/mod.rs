@@ -1124,7 +1124,7 @@ impl LayoutBuilderState {
         };
         self.with_applier_result(|applier| {
             applier.with_node::<SubcomposeLayoutNode, _>(node_id, |node| {
-                node.cache().store_measurement(constraints, kept);
+                node.cache().store_kept_measurement(constraints);
                 node.clear_needs_layout();
             })
         })?;
@@ -1607,7 +1607,7 @@ impl LayoutBuilderState {
         if resized {
             cache.store_resized_measurement(constraints, kept);
         } else {
-            cache.store_measurement(constraints, kept);
+            cache.store_kept_measurement(constraints);
         }
         cache.clear_layout_dirt();
         Ok(Some(kept))
