@@ -8,8 +8,9 @@ use cranpose_animation::{
 use cranpose_core::{mutableStateOf, remember};
 use cranpose_ui::{
     Constraints, Layout, MeasureLayoutOptions, MeasureResult, MemoryHeadroom, Modifier,
-    TestComposition, Text, TextStyle, measure_layout, measure_layout_with_options,
-    run_test_composition, set_memory_headroom,
+    TestComposition, Text, TextLayoutOptions, TextStyle, measure_layout,
+    measure_layout_with_options, prepare_text_layout, run_test_composition, set_memory_headroom,
+    text::AnnotatedString,
     widgets::{
         box_widget::{Box, BoxSpec},
         column::{Column, ColumnSpec},
@@ -415,6 +416,30 @@ fn remeasuring_a_long_paragraph_keeps_its_glyph_storage() {
     );
 }
 
+// A long paragraph's glyph room stays from one frame's layout to the next
+// frame's, and goes when the texts rest: the next long paragraph takes it
+// anew.
+fn a_rest_gives_back_a_long_paragraph_glyph_room() {
+    let text = AnnotatedString::from("word ".repeat(2_000).as_str());
+    let style = TextStyle::default();
+    let context = cranpose_ui::AppContext::new();
+    context.enter(|| {
+        let layout_at = |width: f32| {
+            context.start_text_frame();
+            let region = Region::new(GLOBAL);
+            let options = TextLayoutOptions::default();
+            drop(prepare_text_layout(&text, &style, options, Some(width)));
+            region.change().allocations
+        };
+        layout_at(200.0);
+        let kept = layout_at(260.0);
+        context.trim();
+        let after_rest = layout_at(320.0);
+        println!("allocations of a long paragraph's layout: {kept}, after a rest: {after_rest}");
+        assert!(after_rest > kept, "the rest kept the glyph room");
+    });
+}
+
 // Allocations of composing a column of `count` rows of two boxes each,
 // with `headroom` memory left.
 fn rows_of_boxes_allocations(count: usize, headroom: MemoryHeadroom) -> usize {
@@ -601,6 +626,7 @@ fn layout_and_modifiers_stay_within_their_allocation_budgets() {
     a_kept_column_lets_its_changed_children_fill_their_measurements();
     an_animation_frame_allocates_only_its_recomposition();
     remeasuring_a_long_paragraph_keeps_its_glyph_storage();
+    a_rest_gives_back_a_long_paragraph_glyph_room();
     composing_a_row_of_boxes_allocates_within_its_budget();
     if !cfg!(feature = "inspection") {
         a_modifier_chain_of_plain_elements_takes_the_list_of_the_last_one();
