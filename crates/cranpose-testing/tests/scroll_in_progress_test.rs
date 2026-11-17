@@ -24,6 +24,25 @@ const FRAME_NANOS: u64 = 16_000_000;
 
 type Robot = RobotTestRule<TestRenderer>;
 
+// `rows` rows, 40 points tall each, in a column that `scroll` scrolls.
+fn scrolling_rows(scroll: ScrollState, rows: usize) {
+    Column(
+        Modifier::empty()
+            .fill_max_size()
+            .vertical_scroll(scroll, false),
+        ColumnSpec::default(),
+        move || {
+            for _ in 0..rows {
+                Box(
+                    Modifier::empty().size(Size::new(200.0, 40.0)),
+                    BoxSpec::default(),
+                    || {},
+                );
+            }
+        },
+    );
+}
+
 // A column of `rows` rows, 40 points tall each, that scrolls in a 200 by 400
 // window.
 fn scrolling_column(rows: usize) -> (Robot, ScrollState) {
@@ -32,21 +51,7 @@ fn scrolling_column(rows: usize) -> (Robot, ScrollState) {
     let robot = create_headless_robot_test(200, 400, move || {
         let scroll = cranpose_ui::rememberScrollState!(0.0);
         *installed.borrow_mut() = Some(scroll);
-        Column(
-            Modifier::empty()
-                .fill_max_size()
-                .vertical_scroll(scroll, false),
-            ColumnSpec::default(),
-            move || {
-                for _ in 0..rows {
-                    Box(
-                        Modifier::empty().size(Size::new(200.0, 40.0)),
-                        BoxSpec::default(),
-                        || {},
-                    );
-                }
-            },
-        );
+        scrolling_rows(scroll, rows);
     });
     let scroll = (*captured.borrow()).expect("the column is composed");
     (robot, scroll)
@@ -334,41 +339,54 @@ fn an_animated_scroll_takes_the_column_from_a_fling() {
     assert!(!scroll.is_scroll_in_progress(), "nothing moves the column");
 }
 
-// The state outlives its column: a column that leaves the screen during an
-// animation leaves the state at rest.
+// A scrolling column's state and whether the column shows.
+#[derive(Clone, Copy)]
+struct Leaving {
+    scroll: ScrollState,
+    shown: MutableState<bool>,
+}
+
+// The state outlives its column: a column that leaves the screen during its
+// fling leaves the state at rest.
 #[test]
-fn a_column_that_leaves_during_an_animation_leaves_its_state_at_rest() {
-    // The column's state and whether the column shows, both kept above it.
-    #[derive(Clone, Copy)]
-    struct Above {
-        scroll: ScrollState,
-        shown: MutableState<bool>,
-    }
-    let captured: Rc<Cell<Option<Above>>> = Rc::default();
+fn a_column_that_leaves_during_its_fling_leaves_its_state_at_rest() {
+    let captured: Rc<Cell<Option<Leaving>>> = Rc::default();
+    let installed = Rc::clone(&captured);
+    let mut robot = create_headless_robot_test(200, 400, move || {
+        let scroll = cranpose_ui::rememberScrollState!(0.0);
+        let shown = rememberMutableStateOf(|| true);
+        installed.set(Some(Leaving { scroll, shown }));
+        if shown.get() {
+            scrolling_rows(scroll, 400);
+        }
+    });
+    let Leaving { scroll, shown } = captured.get().expect("the column is composed");
+    fling_toward_the_end(&mut robot);
+    assert!(scroll.is_scroll_in_progress(), "the fling moves the column");
+
+    shown.set(false);
+    run_frames(&mut robot, 2);
+    assert!(
+        !scroll.is_scroll_in_progress(),
+        "the fling ended with its column"
+    );
+}
+
+// The state leaves with its column: the frames after an animation that the
+// column's departure cuts short do not touch the released state.
+#[test]
+fn an_animation_ends_quietly_when_its_state_leaves_with_its_column() {
+    let captured: Rc<Cell<Option<Leaving>>> = Rc::default();
     let installed = Rc::clone(&captured);
     let mut robot = create_headless_robot_test(200, 400, move || {
         let shown = rememberMutableStateOf(|| true);
         if shown.get() {
             let scroll = cranpose_ui::rememberScrollState!(0.0);
-            installed.set(Some(Above { scroll, shown }));
-            Column(
-                Modifier::empty()
-                    .fill_max_size()
-                    .vertical_scroll(scroll, false),
-                ColumnSpec::default(),
-                || {
-                    for _ in 0..40 {
-                        Box(
-                            Modifier::empty().size(Size::new(200.0, 40.0)),
-                            BoxSpec::default(),
-                            || {},
-                        );
-                    }
-                },
-            );
+            installed.set(Some(Leaving { scroll, shown }));
+            scrolling_rows(scroll, 40);
         }
     });
-    let Above { scroll, shown } = captured.get().expect("the column is composed");
+    let Leaving { scroll, shown } = captured.get().expect("the column is composed");
     scroll.animate_scroll_to(800.0);
     run_frames(&mut robot, 4);
     assert!(
@@ -379,8 +397,8 @@ fn a_column_that_leaves_during_an_animation_leaves_its_state_at_rest() {
     shown.set(false);
     run_frames(&mut robot, 120);
     assert!(
-        !scroll.is_scroll_in_progress(),
-        "the animation ended with its column"
+        scroll.try_value().is_none(),
+        "the state left with its column"
     );
 }
 

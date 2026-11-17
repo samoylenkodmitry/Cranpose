@@ -82,7 +82,7 @@ pub(crate) struct ScrollStateInner {
     invalidate_callbacks: InvalidationCallbacks,
     pending_invalidation: Cell<bool>,
     settle_policy: RefCell<Option<ScrollSettlePolicy>>,
-    // The fling or settle of a drag that moves the content now.
+    // The fling, settle or animation that moves the content now.
     running_scroll: RefCell<RunningScroll>,
     // Whether a drag, a fling or a settle of the scroll modifier moves the
     // content. An animation that the app started counts as a running scroll.
@@ -440,8 +440,8 @@ impl ScrollState {
         *self.inner().viewport_extent.borrow_mut() = extent;
     }
 
-    /// Scrolls to the given position immediately. It stops the fling or
-    /// settle of a drag first, as Compose's `scrollTo` does.
+    /// Scrolls to the given position immediately. It stops a running fling,
+    /// settle or animation first, as Compose's `scrollTo` does.
     pub fn scroll_to(&self, position: f32) {
         self.stop_scroll_animation();
         let max = self.max_value();
