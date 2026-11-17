@@ -107,7 +107,7 @@ use cranpose_foundation::{
 };
 use cranpose_ui_graphics::{CompositingStrategy, Point, Rect, Size};
 use cranpose_ui_layout::{
-    Constraints, Measurable, MeasurePolicy, MeasureResult, MeasureScope, Placement, round_to_px,
+    Constraints, Measurables, MeasurePolicy, MeasureResult, MeasureScope, Placement, round_to_px,
 };
 
 mod input;
@@ -964,7 +964,7 @@ impl MeasurePolicy for WearItemMeasurePolicy {
     fn measure(
         &self,
         scope: &dyn MeasureScope,
-        measurables: &[Box<dyn Measurable>],
+        measurables: Measurables<'_>,
         constraints: Constraints,
     ) -> MeasureResult {
         let mut placements = Vec::new();
@@ -975,7 +975,7 @@ impl MeasurePolicy for WearItemMeasurePolicy {
     fn measure_into(
         &self,
         _scope: &dyn MeasureScope,
-        measurables: &[Box<dyn Measurable>],
+        measurables: Measurables<'_>,
         constraints: Constraints,
         placements: &mut Vec<Placement>,
     ) -> cranpose_ui_layout::Measurement {
@@ -995,28 +995,28 @@ impl MeasurePolicy for WearItemMeasurePolicy {
         .into()
     }
 
-    fn min_intrinsic_width(&self, measurables: &[Box<dyn Measurable>], height: f32) -> f32 {
+    fn min_intrinsic_width(&self, measurables: Measurables<'_>, height: f32) -> f32 {
         measurables
             .iter()
             .map(|m| m.min_intrinsic_width(height))
             .fold(0.0, f32::max)
     }
 
-    fn max_intrinsic_width(&self, measurables: &[Box<dyn Measurable>], height: f32) -> f32 {
+    fn max_intrinsic_width(&self, measurables: Measurables<'_>, height: f32) -> f32 {
         measurables
             .iter()
             .map(|m| m.max_intrinsic_width(height))
             .fold(0.0, f32::max)
     }
 
-    fn min_intrinsic_height(&self, measurables: &[Box<dyn Measurable>], width: f32) -> f32 {
+    fn min_intrinsic_height(&self, measurables: Measurables<'_>, width: f32) -> f32 {
         measurables
             .iter()
             .map(|m| m.min_intrinsic_height(width))
             .fold(0.0, f32::max)
     }
 
-    fn max_intrinsic_height(&self, measurables: &[Box<dyn Measurable>], width: f32) -> f32 {
+    fn max_intrinsic_height(&self, measurables: Measurables<'_>, width: f32) -> f32 {
         measurables
             .iter()
             .map(|m| m.max_intrinsic_height(width))

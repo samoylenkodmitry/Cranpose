@@ -33,7 +33,7 @@ use cranpose_foundation::{
     InvalidationKind, ModifierNodeContext, SemanticsConfiguration, SemanticsWidgetRole,
 };
 use cranpose_ui_graphics::ProjectiveTransform;
-use cranpose_ui_layout::{AlignmentLines, Constraints, MeasurePolicy, PlaceTarget};
+use cranpose_ui_layout::{AlignmentLines, Constraints, Measurables, MeasurePolicy};
 pub(crate) use frame_layout_arena::FrameLayoutArena;
 use frame_layout_arena::VecPools;
 pub(crate) use layout_child_measure_state::LayoutChildMeasureState;
@@ -55,7 +55,6 @@ use web_time::Instant;
 use self::core::{HorizontalAlignment, VerticalAlignment};
 use self::{
     coordinator_chain::CoordinatorFrame,
-    core::Measurable,
     measure_telemetry::{
         LayoutStages, layout_measure_telemetry_threshold_ms, log_layout_measure_telemetry,
         log_node_measure_telemetry,
@@ -1900,7 +1899,7 @@ impl ForParent {
 /// The intrinsic size `kind` names, of a measure policy over `measurables`.
 fn policy_intrinsic(
     policy: &dyn MeasurePolicy,
-    measurables: &[Box<dyn Measurable>],
+    measurables: Measurables<'_>,
     kind: IntrinsicKind,
 ) -> f32 {
     match kind {
@@ -1908,19 +1907,6 @@ fn policy_intrinsic(
         IntrinsicKind::MaxWidth(height) => policy.max_intrinsic_width(measurables, height),
         IntrinsicKind::MinHeight(width) => policy.min_intrinsic_height(measurables, width),
         IntrinsicKind::MaxHeight(width) => policy.max_intrinsic_height(measurables, width),
-    }
-}
-
-// A child's parts take the place its parent's policy gives the child.
-impl PlaceTarget for LayoutParts {
-    fn place(&self, x: f32, y: f32) {
-        let internal_offset = read_cell(&self.record().measured, |measured| {
-            measured.as_ref().map_or_default(|measured| measured.offset)
-        });
-        self.place_retained(Point {
-            x: x + internal_offset.x,
-            y: y + internal_offset.y,
-        });
     }
 }
 

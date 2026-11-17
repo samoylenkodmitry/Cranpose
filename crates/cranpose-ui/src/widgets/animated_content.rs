@@ -24,7 +24,7 @@ use cranpose_core::{
 };
 use cranpose_ui_graphics::{Size, WindowCoordinates};
 use cranpose_ui_layout::{
-    Constraints, Measurable, MeasurePolicy, MeasureResult, MeasureScope, Placement,
+    Constraints, Measurable, Measurables, MeasurePolicy, MeasureResult, MeasureScope, Placement,
 };
 
 use crate::{
@@ -738,7 +738,7 @@ impl<T: Clone + PartialEq + 'static> MeasurePolicy for ContentMeasurePolicy<T> {
     fn measure(
         &self,
         _scope: &dyn MeasureScope,
-        measurables: &[Box<dyn Measurable>],
+        measurables: Measurables<'_>,
         constraints: Constraints,
     ) -> MeasureResult {
         let state = &self.0.0;
@@ -752,7 +752,7 @@ impl<T: Clone + PartialEq + 'static> MeasurePolicy for ContentMeasurePolicy<T> {
         let mut placements = Vec::with_capacity(measurables.len());
         for measurable in measurables
             .iter()
-            .filter(|measurable| !is_composing(measurable.as_ref()))
+            .filter(|measurable| !is_composing(*measurable))
         {
             let placeable = measurable.measure(loose);
             let size = Size::new(placeable.width(), placeable.height());
@@ -762,7 +762,6 @@ impl<T: Clone + PartialEq + 'static> MeasurePolicy for ContentMeasurePolicy<T> {
             );
             // The current content is the last.
             current = size;
-            placeable.place(0.0, 0.0);
             placements.push(Placement::new(placeable.node_id(), 0.0, 0.0, 0.0));
         }
         let size = match state.size_transform.get() {
@@ -794,34 +793,34 @@ impl<T: Clone + PartialEq + 'static> MeasurePolicy for ContentMeasurePolicy<T> {
         MeasureResult::new(size, placements)
     }
 
-    fn min_intrinsic_width(&self, measurables: &[Box<dyn Measurable>], height: f32) -> f32 {
+    fn min_intrinsic_width(&self, measurables: Measurables<'_>, height: f32) -> f32 {
         measurables
             .iter()
-            .filter(|measurable| !is_composing(measurable.as_ref()))
+            .filter(|measurable| !is_composing(*measurable))
             .map(|measurable| measurable.min_intrinsic_width(height))
             .fold(0.0, f32::max)
     }
 
-    fn max_intrinsic_width(&self, measurables: &[Box<dyn Measurable>], height: f32) -> f32 {
+    fn max_intrinsic_width(&self, measurables: Measurables<'_>, height: f32) -> f32 {
         measurables
             .iter()
-            .filter(|measurable| !is_composing(measurable.as_ref()))
+            .filter(|measurable| !is_composing(*measurable))
             .map(|measurable| measurable.max_intrinsic_width(height))
             .fold(0.0, f32::max)
     }
 
-    fn min_intrinsic_height(&self, measurables: &[Box<dyn Measurable>], width: f32) -> f32 {
+    fn min_intrinsic_height(&self, measurables: Measurables<'_>, width: f32) -> f32 {
         measurables
             .iter()
-            .filter(|measurable| !is_composing(measurable.as_ref()))
+            .filter(|measurable| !is_composing(*measurable))
             .map(|measurable| measurable.min_intrinsic_height(width))
             .fold(0.0, f32::max)
     }
 
-    fn max_intrinsic_height(&self, measurables: &[Box<dyn Measurable>], width: f32) -> f32 {
+    fn max_intrinsic_height(&self, measurables: Measurables<'_>, width: f32) -> f32 {
         measurables
             .iter()
-            .filter(|measurable| !is_composing(measurable.as_ref()))
+            .filter(|measurable| !is_composing(*measurable))
             .map(|measurable| measurable.max_intrinsic_height(width))
             .fold(0.0, f32::max)
     }

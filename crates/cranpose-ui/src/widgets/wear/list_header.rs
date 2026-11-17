@@ -24,7 +24,7 @@
 use cranpose_core::NodeId;
 use cranpose_ui_graphics::Size;
 use cranpose_ui_layout::{
-    Constraints, Measurable, MeasurePolicy, MeasureResult, MeasureScope, Placement,
+    Constraints, Measurables, MeasurePolicy, MeasureResult, MeasureScope, Placement,
 };
 
 use crate::{
@@ -124,7 +124,7 @@ impl MeasurePolicy for ListHeaderMeasurePolicy {
     fn measure(
         &self,
         scope: &dyn MeasureScope,
-        measurables: &[Box<dyn Measurable>],
+        measurables: Measurables<'_>,
         constraints: Constraints,
     ) -> MeasureResult {
         let mut placements = Vec::new();
@@ -135,7 +135,7 @@ impl MeasurePolicy for ListHeaderMeasurePolicy {
     fn measure_into(
         &self,
         _scope: &dyn MeasureScope,
-        measurables: &[Box<dyn Measurable>],
+        measurables: Measurables<'_>,
         constraints: Constraints,
         placements: &mut Vec<Placement>,
     ) -> cranpose_ui_layout::Measurement {
@@ -178,7 +178,7 @@ impl MeasurePolicy for ListHeaderMeasurePolicy {
         Size::new(width, height).into()
     }
 
-    fn min_intrinsic_width(&self, measurables: &[Box<dyn Measurable>], height: f32) -> f32 {
+    fn min_intrinsic_width(&self, measurables: Measurables<'_>, height: f32) -> f32 {
         let density = Density::new(self.density, 1.0);
         measurables
             .iter()
@@ -187,7 +187,7 @@ impl MeasurePolicy for ListHeaderMeasurePolicy {
             + self.horizontal(density)
     }
 
-    fn max_intrinsic_width(&self, measurables: &[Box<dyn Measurable>], height: f32) -> f32 {
+    fn max_intrinsic_width(&self, measurables: Measurables<'_>, height: f32) -> f32 {
         let density = Density::new(self.density, 1.0);
         measurables
             .iter()
@@ -196,7 +196,7 @@ impl MeasurePolicy for ListHeaderMeasurePolicy {
             + self.horizontal(density)
     }
 
-    fn min_intrinsic_height(&self, measurables: &[Box<dyn Measurable>], width: f32) -> f32 {
+    fn min_intrinsic_height(&self, measurables: Measurables<'_>, width: f32) -> f32 {
         let density = Density::new(self.density, 1.0);
         let content = measurables
             .iter()
@@ -207,7 +207,7 @@ impl MeasurePolicy for ListHeaderMeasurePolicy {
             .max(density.ceil(content) + self.vertical(density))
     }
 
-    fn max_intrinsic_height(&self, measurables: &[Box<dyn Measurable>], width: f32) -> f32 {
+    fn max_intrinsic_height(&self, measurables: Measurables<'_>, width: f32) -> f32 {
         self.min_intrinsic_height(measurables, width)
     }
 }

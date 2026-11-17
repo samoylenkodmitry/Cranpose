@@ -31,7 +31,7 @@ use cranpose_core::{
     with_current_composer,
 };
 use cranpose_foundation::{DRAG_THRESHOLD, PointerId};
-use cranpose_ui_layout::{Measurable, MeasurePolicy, MeasureResult, MeasureScope, Placement};
+use cranpose_ui_layout::{Measurables, MeasurePolicy, MeasureResult, MeasureScope, Placement};
 use portable_atomic::AtomicU64;
 
 use crate::{
@@ -757,7 +757,7 @@ impl MeasurePolicy for SwipeMeasurePolicy {
     fn measure(
         &self,
         scope: &dyn MeasureScope,
-        measurables: &[Box<dyn Measurable>],
+        measurables: Measurables<'_>,
         constraints: Constraints,
     ) -> MeasureResult {
         if self.phase == SwipeLayoutPhase::Row {
@@ -779,7 +779,6 @@ impl MeasurePolicy for SwipeMeasurePolicy {
             let placeable = measurable.measure(child_constraints);
             width = width.max(placeable.width());
             natural_height = natural_height.max(placeable.height());
-            placeable.place(0.0, 0.0);
             placements.push(Placement::new(placeable.node_id(), 0.0, 0.0, 0.0));
         }
         let width = width.clamp(constraints.min_width, constraints.max_width);
@@ -788,22 +787,22 @@ impl MeasurePolicy for SwipeMeasurePolicy {
         MeasureResult::new(crate::modifier::Size { width, height }, placements)
     }
 
-    fn min_intrinsic_width(&self, measurables: &[Box<dyn Measurable>], height: f32) -> f32 {
+    fn min_intrinsic_width(&self, measurables: Measurables<'_>, height: f32) -> f32 {
         BoxMeasurePolicy::new(crate::Alignment::TOP_START, false)
             .min_intrinsic_width(measurables, height)
     }
 
-    fn max_intrinsic_width(&self, measurables: &[Box<dyn Measurable>], height: f32) -> f32 {
+    fn max_intrinsic_width(&self, measurables: Measurables<'_>, height: f32) -> f32 {
         BoxMeasurePolicy::new(crate::Alignment::TOP_START, false)
             .max_intrinsic_width(measurables, height)
     }
 
-    fn min_intrinsic_height(&self, measurables: &[Box<dyn Measurable>], width: f32) -> f32 {
+    fn min_intrinsic_height(&self, measurables: Measurables<'_>, width: f32) -> f32 {
         BoxMeasurePolicy::new(crate::Alignment::TOP_START, false)
             .min_intrinsic_height(measurables, width)
     }
 
-    fn max_intrinsic_height(&self, measurables: &[Box<dyn Measurable>], width: f32) -> f32 {
+    fn max_intrinsic_height(&self, measurables: Measurables<'_>, width: f32) -> f32 {
         BoxMeasurePolicy::new(crate::Alignment::TOP_START, false)
             .max_intrinsic_height(measurables, width)
     }

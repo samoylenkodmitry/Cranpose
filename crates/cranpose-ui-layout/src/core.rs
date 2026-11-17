@@ -5,7 +5,9 @@ use std::{any::Any, fmt, rc::Rc};
 use cranpose_core::NodeId;
 use cranpose_ui_graphics::Size;
 
-use crate::{Alignment, HorizontalAlignment, VerticalAlignment, constraints::Constraints};
+use crate::{
+    Alignment, HorizontalAlignment, Measurables, VerticalAlignment, constraints::Constraints,
+};
 
 /// Parent data for flex layouts (Row/Column weights and alignment).
 #[derive(Clone, Copy, Debug, Default)]
@@ -165,9 +167,46 @@ pub trait Measurable {
     }
 }
 
-/// Result of running a measurement pass for a single child.
-///
-/// Carries measurement and alignment lines without allocating a trait object.
+// A reference measures as what it refers to, so a list of
+// `&dyn Measurable` holds children of several types.
+impl<M: Measurable + ?Sized> Measurable for &M {
+    fn measure(&self, constraints: Constraints) -> Placeable {
+        (**self).measure(constraints)
+    }
+
+    fn measured_hold(&self) -> Option<(Size, crate::ConstraintsHold)> {
+        (**self).measured_hold()
+    }
+
+    fn min_intrinsic_width(&self, height: f32) -> f32 {
+        (**self).min_intrinsic_width(height)
+    }
+
+    fn max_intrinsic_width(&self, height: f32) -> f32 {
+        (**self).max_intrinsic_width(height)
+    }
+
+    fn min_intrinsic_height(&self, width: f32) -> f32 {
+        (**self).min_intrinsic_height(width)
+    }
+
+    fn max_intrinsic_height(&self, width: f32) -> f32 {
+        (**self).max_intrinsic_height(width)
+    }
+
+    fn flex_parent_data(&self) -> Option<FlexParentData> {
+        (**self).flex_parent_data()
+    }
+
+    fn parent_data(&self) -> ParentData {
+        (**self).parent_data()
+    }
+}
+
+/// Result of running a measurement pass for a single child: its size, node
+/// and alignment lines. A policy places the child with a [`Placement`] of
+/// that node in its [`MeasureResult`], where Compose calls
+/// `Placeable.place` in its `layout` block.
 pub struct Placeable {
     width: f32,
     height: f32,
@@ -175,23 +214,10 @@ pub struct Placeable {
     content_offset_x: f32,
     content_offset_y: f32,
     alignment_lines: crate::AlignmentLines,
-    place_target: Option<Rc<dyn PlaceTarget>>,
-}
-
-/// What a node-backed [`Placeable`] tells when its parent places it.
-pub trait PlaceTarget {
-    /// Places the node at `(x, y)` in its parent.
-    fn place(&self, x: f32, y: f32);
-}
-
-impl<F: Fn(f32, f32)> PlaceTarget for F {
-    fn place(&self, x: f32, y: f32) {
-        self(x, y);
-    }
 }
 
 impl Placeable {
-    /// Creates a pure-value placeable with no side effects on `place()`.
+    /// A placeable of `width` by `height` for the node `node_id`.
     pub fn value(width: f32, height: f32, node_id: NodeId) -> Self {
         Self {
             width,
@@ -200,7 +226,6 @@ impl Placeable {
             content_offset_x: 0.0,
             content_offset_y: 0.0,
             alignment_lines: crate::AlignmentLines::default(),
-            place_target: None,
         }
     }
 
@@ -218,34 +243,6 @@ impl Placeable {
             content_offset_x: content_offset.0,
             content_offset_y: content_offset.1,
             alignment_lines: crate::AlignmentLines::default(),
-            place_target: None,
-        }
-    }
-
-    /// Creates a node-backed placeable whose `place()` tells `target`. The
-    /// target is shared, so a node's own measure state can be it without an
-    /// allocation per measure.
-    pub fn with_place_target(
-        width: f32,
-        height: f32,
-        node_id: NodeId,
-        target: Rc<dyn PlaceTarget>,
-    ) -> Self {
-        Self {
-            width,
-            height,
-            node_id,
-            content_offset_x: 0.0,
-            content_offset_y: 0.0,
-            alignment_lines: crate::AlignmentLines::default(),
-            place_target: Some(target),
-        }
-    }
-
-    /// Places the child at the provided coordinates relative to its parent.
-    pub fn place(&self, x: f32, y: f32) {
-        if let Some(target) = &self.place_target {
-            target.place(x, y);
         }
     }
 
@@ -303,7 +300,7 @@ pub trait MeasurePolicy: Any {
     fn measure(
         &self,
         scope: &dyn MeasureScope,
-        measurables: &[Box<dyn Measurable>],
+        measurables: Measurables<'_>,
         constraints: Constraints,
     ) -> MeasureResult;
 
@@ -315,7 +312,7 @@ pub trait MeasurePolicy: Any {
     fn measure_into(
         &self,
         scope: &dyn MeasureScope,
-        measurables: &[Box<dyn Measurable>],
+        measurables: Measurables<'_>,
         constraints: Constraints,
         placements: &mut Vec<Placement>,
     ) -> Measurement {
@@ -334,7 +331,7 @@ pub trait MeasurePolicy: Any {
     /// `constraints` alone.
     fn measure_hold(
         &self,
-        _measurables: &[Box<dyn Measurable>],
+        _measurables: Measurables<'_>,
         _constraints: Constraints,
         _size: Size,
     ) -> Option<crate::ConstraintsHold> {
@@ -355,23 +352,23 @@ pub trait MeasurePolicy: Any {
     /// its measurement. `false`, the default, measures the layout again.
     fn ignores_child_sizes(
         &self,
-        _measurables: &[Box<dyn Measurable>],
+        _measurables: Measurables<'_>,
         _constraints: Constraints,
     ) -> bool {
         false
     }
 
     /// Computes the minimum intrinsic width of this policy.
-    fn min_intrinsic_width(&self, measurables: &[Box<dyn Measurable>], height: f32) -> f32;
+    fn min_intrinsic_width(&self, measurables: Measurables<'_>, height: f32) -> f32;
 
     /// Computes the maximum intrinsic width of this policy.
-    fn max_intrinsic_width(&self, measurables: &[Box<dyn Measurable>], height: f32) -> f32;
+    fn max_intrinsic_width(&self, measurables: Measurables<'_>, height: f32) -> f32;
 
     /// Computes the minimum intrinsic height of this policy.
-    fn min_intrinsic_height(&self, measurables: &[Box<dyn Measurable>], width: f32) -> f32;
+    fn min_intrinsic_height(&self, measurables: Measurables<'_>, width: f32) -> f32;
 
     /// Computes the maximum intrinsic height of this policy.
-    fn max_intrinsic_height(&self, measurables: &[Box<dyn Measurable>], width: f32) -> f32;
+    fn max_intrinsic_height(&self, measurables: Measurables<'_>, width: f32) -> f32;
 }
 
 /// The size and explicit alignment lines produced by a measure policy.
@@ -495,7 +492,3 @@ impl LayoutModifierMeasureResult {
         self
     }
 }
-
-#[cfg(test)]
-#[path = "tests/core_tests.rs"]
-mod tests;

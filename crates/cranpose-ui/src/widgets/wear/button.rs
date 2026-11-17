@@ -21,7 +21,7 @@ use cranpose_core::NodeId;
 use cranpose_foundation::SemanticsConfiguration;
 use cranpose_ui_graphics::{DrawScope, Size};
 use cranpose_ui_layout::{
-    Constraints, Measurable, MeasurePolicy, MeasureResult, MeasureScope, Placement,
+    Constraints, Measurables, MeasurePolicy, MeasureResult, MeasureScope, Placement,
 };
 
 use crate::{
@@ -144,7 +144,7 @@ impl MeasurePolicy for WearButtonMeasurePolicy {
     fn measure(
         &self,
         scope: &dyn MeasureScope,
-        measurables: &[Box<dyn Measurable>],
+        measurables: Measurables<'_>,
         constraints: Constraints,
     ) -> MeasureResult {
         let mut placements = Vec::new();
@@ -155,7 +155,7 @@ impl MeasurePolicy for WearButtonMeasurePolicy {
     fn measure_into(
         &self,
         _scope: &dyn MeasureScope,
-        measurables: &[Box<dyn Measurable>],
+        measurables: Measurables<'_>,
         constraints: Constraints,
         placements: &mut Vec<Placement>,
     ) -> cranpose_ui_layout::Measurement {
@@ -203,7 +203,7 @@ impl MeasurePolicy for WearButtonMeasurePolicy {
         Size::new(width, height).into()
     }
 
-    fn min_intrinsic_width(&self, measurables: &[Box<dyn Measurable>], height: f32) -> f32 {
+    fn min_intrinsic_width(&self, measurables: Measurables<'_>, height: f32) -> f32 {
         let density = Density::new(self.density, 1.0);
         measurables
             .iter()
@@ -212,7 +212,7 @@ impl MeasurePolicy for WearButtonMeasurePolicy {
             + density.dp(self.spec.padding_horizontal) * 2.0
     }
 
-    fn max_intrinsic_width(&self, measurables: &[Box<dyn Measurable>], height: f32) -> f32 {
+    fn max_intrinsic_width(&self, measurables: Measurables<'_>, height: f32) -> f32 {
         let density = Density::new(self.density, 1.0);
         measurables
             .iter()
@@ -221,7 +221,7 @@ impl MeasurePolicy for WearButtonMeasurePolicy {
             + density.dp(self.spec.padding_horizontal) * 2.0
     }
 
-    fn min_intrinsic_height(&self, measurables: &[Box<dyn Measurable>], width: f32) -> f32 {
+    fn min_intrinsic_height(&self, measurables: Measurables<'_>, width: f32) -> f32 {
         let density = Density::new(self.density, 1.0);
         let spacing =
             density.dp(self.spec.label_spacing) * measurables.len().saturating_sub(1) as f32;
@@ -235,7 +235,7 @@ impl MeasurePolicy for WearButtonMeasurePolicy {
             .max(density.ceil(column) + density.dp(self.spec.padding_vertical) * 2.0)
     }
 
-    fn max_intrinsic_height(&self, measurables: &[Box<dyn Measurable>], width: f32) -> f32 {
+    fn max_intrinsic_height(&self, measurables: Measurables<'_>, width: f32) -> f32 {
         self.min_intrinsic_height(measurables, width)
     }
 }

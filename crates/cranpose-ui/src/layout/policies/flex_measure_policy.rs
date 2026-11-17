@@ -10,7 +10,8 @@ use smallvec::SmallVec;
 use super::empty_measure_policy::empty_layout_hold;
 use crate::{
     layout::core::{
-        Arrangement, HorizontalAlignment, LinearArrangement, Measurable, VerticalAlignment,
+        Arrangement, HorizontalAlignment, LinearArrangement, Measurable, Measurables,
+        VerticalAlignment,
     },
     thread_state,
 };
@@ -268,7 +269,7 @@ impl FlexMeasurePolicy {
     /// never runs past the main axis.
     fn measure_fixed_children(
         &self,
-        measurables: &[Box<dyn Measurable>],
+        measurables: Measurables<'_>,
         children: &mut [FlexChild],
         (max_main, max_cross): (f32, f32),
         spacing: f32,
@@ -306,7 +307,7 @@ impl FlexMeasurePolicy {
     /// child gets its own size, and the spacing.
     fn intrinsic_main_size(
         &self,
-        measurables: &[Box<dyn Measurable>],
+        measurables: Measurables<'_>,
         main_size: impl Fn(&dyn Measurable) -> f32,
     ) -> f32 {
         if measurables.is_empty() {
@@ -316,8 +317,8 @@ impl FlexMeasurePolicy {
         let mut weight_unit = 0.0_f32;
         let mut total_weight = 0.0_f32;
         for measurable in measurables {
-            let size = main_size(measurable.as_ref());
-            match child_weight(measurable.as_ref()) {
+            let size = main_size(measurable);
+            match child_weight(measurable) {
                 Some(weight) => {
                     total_weight += weight;
                     weight_unit = weight_unit.max(round_to_px(size / weight, self.density));
@@ -337,7 +338,7 @@ impl FlexMeasurePolicy {
     /// cross size in the main-axis space it gets.
     fn intrinsic_cross_size(
         &self,
-        measurables: &[Box<dyn Measurable>],
+        measurables: Measurables<'_>,
         main_available: f32,
         main_size: impl Fn(&dyn Measurable, f32) -> f32,
         cross_size: impl Fn(&dyn Measurable, f32) -> f32,
@@ -350,7 +351,6 @@ impl FlexMeasurePolicy {
         let mut cross = 0.0_f32;
         let mut total_weight = 0.0_f32;
         for measurable in measurables {
-            let measurable = measurable.as_ref();
             if let Some(weight) = child_weight(measurable) {
                 total_weight += weight;
                 continue;
@@ -372,7 +372,6 @@ impl FlexMeasurePolicy {
             f32::INFINITY
         };
         for measurable in measurables {
-            let measurable = measurable.as_ref();
             if let Some(weight) = child_weight(measurable) {
                 cross = cross.max(cross_size(
                     measurable,
@@ -389,7 +388,7 @@ impl FlexMeasurePolicy {
 
     fn measure_weighted_children(
         &self,
-        measurables: &[Box<dyn Measurable>],
+        measurables: Measurables<'_>,
         children: &mut [FlexChild],
         (max_main, max_cross): (f32, f32),
         (fixed_space, spacing): (f32, f32),
@@ -551,7 +550,7 @@ impl MeasurePolicy for FlexMeasurePolicy {
     fn measure(
         &self,
         scope: &dyn MeasureScope,
-        measurables: &[Box<dyn Measurable>],
+        measurables: Measurables<'_>,
         constraints: Constraints,
     ) -> MeasureResult {
         let mut placements = Vec::new();
@@ -564,7 +563,7 @@ impl MeasurePolicy for FlexMeasurePolicy {
     /// after each keeps its full width, and the bounds still fit the sum.
     fn measure_hold(
         &self,
-        measurables: &[Box<dyn Measurable>],
+        measurables: Measurables<'_>,
         constraints: Constraints,
         size: crate::modifier::Size,
     ) -> Option<cranpose_ui_layout::ConstraintsHold> {
@@ -634,7 +633,7 @@ impl MeasurePolicy for FlexMeasurePolicy {
     fn measure_into(
         &self,
         _scope: &dyn MeasureScope,
-        measurables: &[Box<dyn Measurable>],
+        measurables: Measurables<'_>,
         constraints: Constraints,
         placements: &mut Vec<Placement>,
     ) -> cranpose_ui_layout::Measurement {
@@ -712,7 +711,6 @@ impl MeasurePolicy for FlexMeasurePolicy {
             };
             let x = self.layout_direction.place_x(x, width, placeable.width());
 
-            placeable.place(x, y);
             placements.push(Placement::new(placeable.node_id(), x, y, 0.0));
         }
         SpareFlexChildren::give(children);
@@ -725,7 +723,7 @@ impl MeasurePolicy for FlexMeasurePolicy {
         crate::modifier::Size { width, height }.into()
     }
 
-    fn min_intrinsic_width(&self, measurables: &[Box<dyn Measurable>], height: f32) -> f32 {
+    fn min_intrinsic_width(&self, measurables: Measurables<'_>, height: f32) -> f32 {
         match self.axis {
             Axis::Horizontal => {
                 self.intrinsic_main_size(measurables, |m| m.min_intrinsic_width(height))
@@ -739,7 +737,7 @@ impl MeasurePolicy for FlexMeasurePolicy {
         }
     }
 
-    fn max_intrinsic_width(&self, measurables: &[Box<dyn Measurable>], height: f32) -> f32 {
+    fn max_intrinsic_width(&self, measurables: Measurables<'_>, height: f32) -> f32 {
         match self.axis {
             Axis::Horizontal => {
                 self.intrinsic_main_size(measurables, |m| m.max_intrinsic_width(height))
@@ -753,7 +751,7 @@ impl MeasurePolicy for FlexMeasurePolicy {
         }
     }
 
-    fn min_intrinsic_height(&self, measurables: &[Box<dyn Measurable>], width: f32) -> f32 {
+    fn min_intrinsic_height(&self, measurables: Measurables<'_>, width: f32) -> f32 {
         match self.axis {
             Axis::Horizontal => self.intrinsic_cross_size(
                 measurables,
@@ -767,7 +765,7 @@ impl MeasurePolicy for FlexMeasurePolicy {
         }
     }
 
-    fn max_intrinsic_height(&self, measurables: &[Box<dyn Measurable>], width: f32) -> f32 {
+    fn max_intrinsic_height(&self, measurables: Measurables<'_>, width: f32) -> f32 {
         match self.axis {
             Axis::Horizontal => self.intrinsic_cross_size(
                 measurables,
