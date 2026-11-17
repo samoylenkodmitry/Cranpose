@@ -76,6 +76,12 @@ impl Facts {
         self.rows.clear();
     }
 
+    // Makes room for `rows` rows in all.
+    pub(super) fn reserve_rows(&mut self, rows: usize) {
+        self.rows
+            .reserve_exact(rows.saturating_sub(self.rows.len()));
+    }
+
     pub(super) fn heap_bytes(&self) -> usize {
         self.rows.capacity() * size_of::<Cell<RowFacts>>()
     }

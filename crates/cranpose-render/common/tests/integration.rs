@@ -31,3 +31,4 @@ mod text_decorations;
 mod text_glyph_fallback;
 mod text_updates;
 mod wear_faded_row_composite;
+mod window_root_build;
