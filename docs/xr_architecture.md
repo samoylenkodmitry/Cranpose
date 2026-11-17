@@ -1,70 +1,84 @@
-# XR architecture
+# Cranpose XR
 
-This note describes how Cranpose shows a scene in a headset today. It also describes the
-structure planned for apps on the Meta Horizon store and on Steam.
+Cranpose apps should run in headsets with the same composable API as on every other platform
+([tracking issue](https://github.com/samoylenkodmitry/Cranpose/issues/2242)).
+A developer writes a `Subspace` of panels and 3D content. Cranpose turns it into what the
+headset's runtime takes. The first target is the Meta Quest through OpenXR. The app goes to the
+Meta Horizon Store as an ordinary APK. Other OpenXR runtimes follow: SteamVR, Pico and Android
+XR. The developer never touches OpenXR, a runtime's extensions or a streaming library.
 
-## What exists
+## Why the picture stays sharp
 
-A `scene3d` modifier turns a node into a window on a 3D scene. Its `Camera` is a pinhole with a
-view matrix and a focal length in pixels. The camera looks through the middle of the node's box.
-The renderer clips each scene to its node's box with a scissor, so two scenes side by side show two
-eyes. Mesh surfaces (`mesh_surface`) carry live composables. Pointer input reaches them where they
-show on the mesh.
+A headset's compositor draws the displays. It corrects the lenses and moves each layer to the
+newest head pose. Everything an app shows reaches the display through one of its layers.
 
-The desktop demo's XR tab (`apps/desktop-demo/src/app/xr`) uses these parts:
+A picture drawn inside a 3D scene is sampled twice: into the eye picture, then again by the
+compositor. The eye picture that runtimes recommend has fewer pixels than the display: 1680 by
+1760 per eye on a Quest 3, whose display has 2064 by 2208. Text in a 3D scene is therefore soft
+in every engine.
 
-- `eye_view.rs` turns a WebXR eye (position, orientation, view tangents) into a camera. A headset
-  eye's view is off center. The camera shears x and y by depth to move the image center.
-- `scene.rs` builds the scene in meters. The camera cuts away points nearer than a 64th of its
-  focal length, so the scene scales meters to millimeters.
-- `tab.rs` shows the scene through one camera or through two eyes.
-- `page.rs` holds what the page sends. The eyes for each frame live in a state. A scene reads them when it is drawn, so a new pose
-  draws the scene again without a new composition.
+A layer of its own is sampled once, by the compositor, at the display's resolution, with its
+supersampling and sharpening. So Cranpose gives each kind of content the layer that keeps it
+sharp. Each composable maps to one compositor primitive:
 
-## The browser path
+| Composable | Compositor primitive | OpenXR |
+|---|---|---|
+| `SpatialPanel`: a flat panel of 2D Cranpose content | quad layer | core |
+| `SpatialCurvedRow`: panels on a curve | cylinder layer for each panel | `XR_KHR_composition_layer_cylinder` |
+| `SpatialExternalSurface`: a surface for a video decoder or another engine | swapchain backed by an Android `Surface` | `XR_KHR_android_surface_swapchain` |
+| 3D content: `scene3d` and `mesh_surface` | projection layer with depth | core, `XR_KHR_composition_layer_depth` |
 
-The page script in `apps/desktop-demo/index.html` owns the WebXR session:
+A panel draws only when its content changes. The compositor shows the last image of a layer
+until a new one comes, so a still panel costs no GPU time at all.
 
-1. It asks `navigator.xr` for `immersive-vr` support and tells the app through `xr_supported`.
-   The tab then shows "Enter VR".
-2. The button calls `cranposeXr.enter`. The page starts the session and makes an `XRWebGLLayer`
-   on its own WebGL2 context. It sizes the app's canvas to the layer's framebuffer.
-3. The page sets `window.cranposeFrameSource`. The web event loop then asks the session for frames
-   instead of the window. A browser stops the window's frames during an immersive session.
-4. In each session frame the page sends both eyes through `xr_views`. It runs the app's frame. The
-   app draws the left eye in the left half of its canvas and the right eye in the right half.
-5. The page uploads the canvas to a texture in the same task. It draws each half into its eye's
-   viewport of the layer.
+The cranvr Quest client proved each primitive on a Quest 3 by hand. Its desktop is a surface
+swapchain fed straight by the hardware decoder. Its console is a quad layer of Cranpose content.
+Its controllers, rays and handles are a Cranpose 3D scene in a projection layer.
 
-`?xr=mock` replaces the headset with a script that turns a head on the window's frames. The page
-shows the layer's picture in the bottom right corner. A desktop browser can test the whole path
-this way.
+## The API
 
-The copy costs one canvas upload per frame. The app's canvas uses WebGPU or WebGL2. The copy reads
-either one.
+Names follow Jetpack XR Compose (`androidx.xr.compose`), so Google's documentation serves
+Cranpose developers too:
 
-## The planned structure
+- `Subspace { ... }`: the 3D area of an app. Outside a headset it shows as a 3D view in the
+  window.
+- `SpatialPanel(modifier, shape) { ... }`: 2D Cranpose content on a flat panel.
+- `SpatialRow`, `SpatialColumn`, `SpatialBox`, `SpatialCurvedRow`, `SpatialSpacer`: layouts in
+  meters.
+- `SpatialExternalSurface(stereo_mode, modifier) { surface -> ... }`: hands the app a surface
+  that a decoder writes into.
+- `Orbiter`: content attached to the edge of a panel, such as a handle or a toolbar.
+- `SubspaceModifier`: `width`, `height`, `depth`, `size`, `offset`, `rotate`, `movable`,
+  `resizable`, `fill_max_size`, `padding`.
+- `SpatialRoundedCornerShape`: the shape of a panel.
 
-An XR app needs the same composables on three targets. One crate, `cranpose-xr`, should own the
-parts that do not depend on the target:
+Jetpack XR Compose shows 3D models through SceneCore entities. Cranpose has its own 3D: a
+`scene3d` box and `mesh_surface` content. In a `Subspace` such content draws into the
+projection layer, with a camera made from each eye's view.
 
-- an `XrSession` state with the eyes and the input sources for the frame;
-- a `rememberXrSession()` composable that gives the state to the app;
-- `ImmersiveScene(content)`, which draws `content` once for each eye of the session;
-- controller rays as pointer input on mesh surfaces.
+## Crates
 
-Each target gets a backend:
+- `cranpose-xr`: the API above and the spatial tree. It lays out the panels, casts the
+  controllers' rays at them and sends pointer events into each panel's composition. `movable`
+  and `resizable` handle grabs.
+- Its OpenXR backend: the session, the frame loop, the swapchains, the input actions and the
+  extensions. The OpenXR calls sit in a reviewed boundary module.
+- A flat backend for every other platform: the `Subspace` draws as a 3D scene in an ordinary
+  window, as the desktop demo's XR tab does. The web adds WebXR through the same API.
 
-| Backend | Target | Frame source | Output |
-| --- | --- | --- | --- |
-| WebXR | Browsers, including the Meta Quest browser | `XRSession.requestAnimationFrame` | the canvas copy described above; later an `XRWebGLLayer` or a WebGPU XR binding as the render target |
-| OpenXR | Quest native apps (Android) and SteamVR (Windows, Linux) | `xrWaitFrame` | wgpu renders into the OpenXR swapchain images, one array layer per eye |
-| Stream | a Mac with cranvr | the headset's tracking from the ALVR client | cranvr's compositor takes the eye textures through IOSurfaces and encodes them |
+Cranpose owns the GPU context. On the Quest it uses GLES through wgpu, which the cranvr client
+uses today. Vulkan is a later choice.
 
-The OpenXR backend makes a store app possible. wgpu has no OpenXR binding. The backend has to
-create the Vulkan instance and device through `XR_KHR_vulkan_enable2` and wrap them for wgpu with
-its hal API. The Meta store takes an Android APK with the OpenXR loader. Steam takes a Windows or
-Linux build with the same backend.
+## Steps
 
-The browser copy stays the simplest path. It works today on any WebXR browser. The OpenXR
-backend removes the copy and the browser's frame overhead.
+| # | Work | Done when |
+|---|---|---|
+| 1 | `cranpose-xr` with an OpenXR session, one `SpatialPanel` on a quad layer and a controller ray that presses its button | an APK built from this repository runs on a Quest 3, with no streaming library in its dependencies |
+| 2 | `SpatialCurvedRow` on cylinder layers | a curved panel shows text as sharp as a flat one |
+| 3 | `SpatialExternalSurface` | a hardware decoder writes into a panel with no copy |
+| 4 | 3D content, `movable`, `resizable`, `Orbiter`, passthrough | a 3D scene, handles and the room around the panels |
+| 5 | cranvr's Quest client on `cranpose-xr` | its desktop, console and overlay use the API |
+| 6 | Store readiness: focus and pause, the entitlement check behind a feature, other runtimes | an app passes the Meta store's checks |
+
+The cranvr client still uses a streaming library for games. Its own protocol replaces it after
+step 5, outside this repository.
