@@ -5,7 +5,7 @@ use std::{alloc::System, cell::Cell, rc::Rc};
 use cranpose_animation::{
     AnimationSpec, RepeatMode, StartOffset, infiniteRepeatable, rememberInfiniteTransition,
 };
-use cranpose_core::{mutableStateOf, remember};
+use cranpose_core::{key, mutableStateOf, remember};
 use cranpose_ui::{
     Constraints, Layout, MeasureLayoutOptions, MeasureResult, MemoryHeadroom, Modifier,
     TestComposition, measure_layout, measure_layout_with_options, run_test_composition,
@@ -436,6 +436,64 @@ fn composing_a_row_of_boxes_allocates_within_its_budget() {
     }
 }
 
+const REPLACED_BOXES: usize = 20;
+
+// Allocations a frame of a column of 20 boxes whose keys all change every
+// frame, with `headroom` memory left: each frame removes the boxes of the
+// frame before and makes as many new ones.
+fn replaced_boxes_frame_allocations(headroom: MemoryHeadroom) -> usize {
+    let first_handle = Rc::new(Cell::new(None));
+    let output = Rc::clone(&first_handle);
+    let mut composition = run_test_composition(move || {
+        set_memory_headroom(headroom);
+        let first = remember(|| mutableStateOf(0_usize)).with(|state| *state);
+        output.set(Some(first));
+        Column(Modifier::empty(), ColumnSpec::default(), move || {
+            let start = first.value();
+            for index in start..start + REPLACED_BOXES {
+                key(index, || {
+                    Box(
+                        Modifier::empty().size_points(10.0, 10.0),
+                        BoxSpec::default(),
+                        || {},
+                    );
+                });
+            }
+        });
+    });
+    let first = first_handle.get().expect("the first key state");
+    let mut frame = |index: usize| {
+        first.set_value(index * REPLACED_BOXES);
+        while composition
+            .process_invalid_scopes()
+            .expect("the column recomposes")
+        {}
+    };
+    for index in 1..4 {
+        frame(index);
+    }
+    let region = Region::new(GLOBAL);
+    for index in 4..4 + PASSES {
+        frame(index);
+    }
+    region.change().allocations / PASSES
+}
+
+// A box made in place of a removed one takes the node the removed box left:
+// with ample memory a frame allocates a block a box fewer than with no
+// memory to spare, where every new box makes its node.
+fn boxes_made_in_place_of_removed_ones_take_their_nodes() {
+    let ample = replaced_boxes_frame_allocations(MemoryHeadroom::Ample);
+    let tight = replaced_boxes_frame_allocations(MemoryHeadroom::Tight);
+    println!(
+        "allocations of a frame that replaces {REPLACED_BOXES} boxes: {ample}, {tight} with tight memory"
+    );
+    assert!(
+        ample + REPLACED_BOXES <= tight,
+        "{ample} allocations a frame with ample memory, {tight} with tight memory"
+    );
+}
+
 // A modifier holds a plain element by value: one alone takes no
 // allocation. A chain of them built link by link extends one shared list in
 // place, and a chain built after the last one was let go takes that list
@@ -575,6 +633,7 @@ fn layout_and_modifiers_stay_within_their_allocation_budgets() {
     a_kept_column_lets_its_changed_children_fill_their_measurements();
     an_animation_frame_allocates_only_its_recomposition();
     composing_a_row_of_boxes_allocates_within_its_budget();
+    boxes_made_in_place_of_removed_ones_take_their_nodes();
     if !cfg!(feature = "inspection") {
         a_modifier_chain_of_plain_elements_takes_the_list_of_the_last_one();
     }
