@@ -10,7 +10,7 @@ use cranpose_foundation::NodeCapabilities;
 use cranpose_ui_graphics::Size;
 use cranpose_ui_layout::{MeasurePolicy, Placement};
 
-use super::{nodes::LayoutNode, scopes::BoxWithConstraintsScopeImpl};
+use super::{held_policy::held_policy, nodes::LayoutNode, scopes::BoxWithConstraintsScopeImpl};
 use crate::{
     composable,
     modifier::Modifier,
@@ -156,17 +156,6 @@ impl<P: MeasurePolicy + Clone + PartialEq> PolicyUpdate for P {
             node.set_measure_policy(held_policy(self));
         }
     }
-}
-
-// `policy` in an allocation of its own, or the thread's one empty policy,
-// which every leaf shares.
-fn held_policy<P: MeasurePolicy + Clone>(policy: &P) -> Rc<dyn MeasurePolicy> {
-    if std::any::TypeId::of::<P>()
-        == std::any::TypeId::of::<crate::layout::policies::EmptyMeasurePolicy>()
-    {
-        return crate::widgets::nodes::layout_node::empty_measure_policy();
-    }
-    Rc::new(policy.clone())
 }
 
 // What a layout node's modifier is set from: a modifier, or what makes one

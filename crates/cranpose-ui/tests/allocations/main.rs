@@ -12,6 +12,7 @@ use cranpose_ui::{
     widgets::{
         box_widget::{Box, BoxSpec},
         column::{Column, ColumnSpec},
+        row::{Row, RowSpec},
     },
 };
 use cranpose_ui_graphics::{Color, Size};
@@ -301,6 +302,42 @@ fn an_animation_frame_allocates_only_its_recomposition() {
     assert!(allocations <= 6, "{allocations} allocations a frame");
 }
 
+// Allocations of composing a column of `count` rows of two boxes each.
+fn rows_of_boxes_allocations(count: usize) -> usize {
+    let region = Region::new(GLOBAL);
+    let composition = run_test_composition(move || {
+        Column(Modifier::empty(), ColumnSpec::default(), move || {
+            for _ in 0..count {
+                Row(Modifier::empty(), RowSpec::default(), || {
+                    Box(
+                        Modifier::empty().size_points(10.0, 10.0),
+                        BoxSpec::default(),
+                        || {},
+                    );
+                    Box(
+                        Modifier::empty().size_points(10.0, 10.0),
+                        BoxSpec::default(),
+                        || {},
+                    );
+                });
+            }
+        });
+    });
+    let allocations = region.change().allocations;
+    drop(composition);
+    allocations
+}
+
+// Composing a row of two boxes makes its three layout nodes, each with its
+// box and parts, the size modifiers of the boxes and the row's list of
+// children. The rows and the boxes share their measure policies.
+fn composing_a_row_of_boxes_allocates_within_its_budget() {
+    rows_of_boxes_allocations(4);
+    let per_row = (rows_of_boxes_allocations(40) - rows_of_boxes_allocations(20)) / 20;
+    println!("allocations of composing a row of two boxes: {per_row}");
+    assert!(per_row <= 11, "{per_row} allocations a row");
+}
+
 /// A modifier chain built link by link keeps its elements in one shared
 /// allocation it extends in place, so each link costs its element alone.
 fn a_modifier_chain_allocates_its_elements_and_one_shared_box() {
@@ -409,6 +446,7 @@ fn layout_and_modifiers_stay_within_their_allocation_budgets() {
     a_layout_pass_lends_its_applier_without_rebuilding_it();
     a_kept_column_lets_its_changed_children_fill_their_measurements();
     an_animation_frame_allocates_only_its_recomposition();
+    composing_a_row_of_boxes_allocates_within_its_budget();
     if !cfg!(feature = "inspection") {
         a_modifier_chain_allocates_its_elements_and_one_shared_box();
     }
