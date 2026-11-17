@@ -107,6 +107,58 @@ fn a_first_measure_allocates_at_most_two_per_row() {
     );
 }
 
+// A column over a row of three boxes.
+fn column_over_a_row(below: impl Fn() + 'static) {
+    Column(
+        Modifier::empty().fill_max_width(),
+        ColumnSpec::default(),
+        move || {
+            Row(
+                Modifier::empty().fill_max_width(),
+                RowSpec::default(),
+                || {
+                    for _ in 0..3 {
+                        Box(
+                            Modifier::empty().weight(1.0).height(10.0),
+                            BoxSpec::default(),
+                            || {},
+                        );
+                    }
+                },
+            );
+            below();
+        },
+    );
+}
+
+// `depth` more such columns nested inside one another.
+fn nested_columns(depth: usize) {
+    column_over_a_row(move || {
+        if depth > 0 {
+            nested_columns(depth - 1);
+        }
+    });
+}
+
+// As many columns, side by side under the first.
+fn sibling_columns(count: usize) {
+    column_over_a_row(move || {
+        for _ in 0..count {
+            column_over_a_row(|| {});
+        }
+    });
+}
+
+// Rows and columns nested deeper than any fixed count of spare lists
+// measure again with the lists of the measures before: a pass over 64
+// nested columns allocates what a pass over 64 sibling columns does.
+fn remeasuring_deeply_nested_rows_and_columns_allocates_nothing_more() {
+    let sibling = pass_allocations(run_test_composition(|| sibling_columns(63)));
+    let nested = pass_allocations(run_test_composition(|| nested_columns(63)));
+    println!("allocations a pass of 64 columns, siblings: {sibling}, nested: {nested}");
+    assert_eq!(nested, sibling, "a deep nest of rows and columns allocates");
+}
+
 /// Measuring a node again fills the memory of its last measurement: a
 /// remeasured row allocates nothing.
 fn remeasuring_a_row_allocates_nothing() {
@@ -504,6 +556,7 @@ fn a_thread_that_held_a_composition_frees_its_memory_at_exit() {
 fn layout_and_modifiers_stay_within_their_allocation_budgets() {
     a_first_measure_allocates_at_most_two_per_row();
     remeasuring_a_row_allocates_nothing();
+    remeasuring_deeply_nested_rows_and_columns_allocates_nothing_more();
     placing_children_out_of_order_allocates_nothing();
     a_layout_pass_lends_its_applier_without_rebuilding_it();
     a_kept_column_lets_its_changed_children_fill_their_measurements();
