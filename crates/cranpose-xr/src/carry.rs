@@ -20,7 +20,7 @@ const LEVEL_SNAP: f32 = 4.0;
 
 // The center pose and the size in meters of the handle under `slot`'s panel.
 pub(crate) fn handle_pose(slot: &PanelSlot) -> (Pose, [f32; 2]) {
-    let height = slot.atlas[3] * METERS_PER_DP;
+    let height = slot.size()[1] * METERS_PER_DP;
     let below = Pose::at([0.0, -(height + HANDLE_SIZE[1]) / 2.0 - HANDLE_GAP, 0.0]);
     (slot.pose.then(&below), HANDLE_SIZE)
 }

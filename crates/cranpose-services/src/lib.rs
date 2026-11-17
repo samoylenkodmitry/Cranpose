@@ -20,6 +20,7 @@ mod webdav;
 pub use webdav::WebDavFolder;
 pub mod device_info;
 mod durable_save;
+pub mod external_surface;
 pub mod file_picker;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod github_release_updater;
@@ -141,6 +142,7 @@ pub use device_info::{
     set_platform_device_info,
 };
 pub use durable_save::SaveableRegistration;
+pub use external_surface::ExternalSurface;
 pub use file_picker::{
     FileFilter, FilePicker, FilePickerError, FilePickerOptions, FilePickerRef, PickerFuture,
     ProvideFilePicker, RecoveredPick, SaveDocumentRequest, clear_platform_file_picker,

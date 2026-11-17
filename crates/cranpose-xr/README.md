@@ -32,6 +32,28 @@ compositor. `local_spatial_environment()` gives the app the room around its pane
 headset has passthrough, `set_preferred_passthrough_opacity(Some(1.0))` shows it. Check
 `local_spatial_capabilities().current().is_passthrough_control_enabled()` first.
 
+## Video and camera surfaces
+
+`SpatialExternalSurface` gives the app a surface that a hardware video decoder or a camera
+writes into. The headset's compositor shows the pictures directly as a layer, with no copy through
+Cranpose. `StereoMode` tells how a picture divides between the eyes.
+
+```rust,ignore
+use cranpose_xr::{SpatialExternalSurface, StereoMode, SubspaceModifier};
+
+SpatialExternalSurface(
+    StereoMode::SideBySide,
+    SubspaceModifier::new().size(960.0, 540.0),
+    |scope| {
+        scope.on_surface_created(|surface| start_decoder(surface));
+        scope.on_surface_destroyed(|_| stop_decoder());
+    },
+);
+```
+
+The callbacks receive an `ExternalSurface` from `cranpose-services`. Outside a headset the
+composable shows an empty box, and the callbacks never run.
+
 ## Android headsets
 
 The `openxr` feature adds the backend for Android headsets such as the Meta Quest. The app's

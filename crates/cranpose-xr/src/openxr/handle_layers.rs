@@ -4,7 +4,7 @@ use cranpose::GpuContext;
 use openxr as xr;
 
 use super::{
-    session::{QuadLayer, XrSession},
+    session::{LayerSource, QuadLayer, XrSession},
     static_image::{premultiplied, static_image},
 };
 use crate::{
@@ -51,7 +51,7 @@ impl HandleLayers {
                 };
                 QuadLayer {
                     swapchain: &self.swapchain,
-                    image_size: (WIDTH, HEIGHT),
+                    source: LayerSource::Drawn((WIDTH, HEIGHT)),
                     pose,
                     size: size.map(|side| side * scale),
                 }

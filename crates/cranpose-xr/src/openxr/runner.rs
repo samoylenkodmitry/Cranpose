@@ -2,7 +2,7 @@
 
 use std::{cell::RefCell, rc::Rc, time::Duration};
 
-use android_activity::{MainEvent, PollEvent};
+use android_activity::{InputStatus, MainEvent, PollEvent};
 use cranpose::{
     AndroidApp, AppLauncher, AppSettings, GpuContext, GuestView, LauncherFonts, remember,
 };
@@ -15,12 +15,16 @@ use super::{
     panel_layers::{DENSITY, PanelFrame, PanelLayers},
     ray_layers::RayLayers,
     session::{SessionStatus, XrSession},
+    surface_layers::SurfaceLayers,
 };
 use crate::{
     SpatialCapabilities, SpatialEnvironment, local_spatial_capabilities, local_spatial_environment,
     pointer::{Pointer, PointerEvent},
     space::{Space, local_space},
 };
+
+// The most events that one pass of the loop takes from the activity's queue
+const MAX_INPUT_EVENTS_PER_LOOP: usize = 16;
 
 // Where the pointer goes when it leaves every panel: far outside the atlas, so no content stays
 // hovered.
@@ -49,21 +53,23 @@ fn run_session(
     let mut status = SessionStatus::Idle;
     log::info!("cranpose xr: ready");
     while !activity_destroyed(app, status) {
+        leave_input_unhandled(app);
         status = immersive.xr_session.poll_events()?;
         match status {
             SessionStatus::Exit => break,
             SessionStatus::Idle => {}
-            SessionStatus::Running => immersive.frame()?,
+            running => immersive.frame(running)?,
         }
     }
-    log::info!("cranpose xr: ends");
+    // The session ends when `immersive` drops, before the context it draws on
+    log::info!("cranpose xr: ends in {status:?}");
     Ok(())
 }
 
 // Handles the activity's events and returns whether the activity ended. While the headset shows
 // something else, it waits for them.
 fn activity_destroyed(app: &AndroidApp, status: SessionStatus) -> bool {
-    let timeout = if status == SessionStatus::Running {
+    let timeout = if status.runs() {
         Duration::ZERO
     } else {
         Duration::from_millis(100)
@@ -77,6 +83,20 @@ fn activity_destroyed(app: &AndroidApp, status: SessionStatus) -> bool {
     destroyed
 }
 
+// Takes the activity's queued key and touch events and leaves them unhandled. The controllers
+// reach the app through OpenXR. An event that nobody takes from the queue stops the activity from
+// answering Android, which shows an "app is not responding" dialog five seconds later.
+fn leave_input_unhandled(app: &AndroidApp) {
+    let Ok(mut events) = app.input_events_iter() else {
+        return;
+    };
+    for _ in 0..MAX_INPUT_EVENTS_PER_LOOP {
+        if !events.next(|_| InputStatus::Unhandled) {
+            break;
+        }
+    }
+}
+
 // The app in the headset. The fields drop in their order: what draws, then the session, then the
 // device and the context it draws on.
 struct Immersive {
@@ -85,6 +105,7 @@ struct Immersive {
     environment: SpatialEnvironment,
     pointer: Pointer,
     layers: PanelLayers,
+    surfaces: SurfaceLayers,
     rays: RayLayers,
     handles: HandleLayers,
     controllers: Controllers,
@@ -147,6 +168,7 @@ impl Immersive {
             environment,
             pointer: Pointer::default(),
             layers,
+            surfaces: SurfaceLayers::new(),
             rays,
             handles,
             controllers,
@@ -156,13 +178,20 @@ impl Immersive {
         })
     }
 
-    // One frame: the controllers move the pointer, the panels that changed draw and the rays
-    // follow the controllers.
-    fn frame(&mut self) -> Result<(), String> {
+    // One frame of a running session. The controllers move the pointer, the panels that changed
+    // draw and the rays follow the controllers. While the headset shows something over the app
+    // the controllers give no input: the pointer sees them lost, which ends a press. While the
+    // runtime shows none of the app's layers the app draws none and ends the frame empty. The
+    // app's state stays as it was.
+    fn frame(&mut self, status: SessionStatus) -> Result<(), String> {
         let frame = self.xr_session.begin_frame()?;
-        let aims = self
-            .controllers
-            .aims(&self.xr_session, frame.predicted_display_time);
+        let aims = if status.listens() {
+            self.controllers
+                .aims(&self.xr_session, frame.predicted_display_time)
+        } else {
+            [None, None]
+        };
+        let shown = status.shows() && frame.should_render;
         let time = Duration::from_nanos(frame.predicted_display_time.as_nanos().max(0) as u64);
         let (events, cursor) = self.pointer.update(aims, time, &self.space.panels());
         send(&mut self.guest, events);
@@ -174,7 +203,7 @@ impl Immersive {
         let PanelFrame {
             mut quads,
             cylinders,
-        } = if frame.should_render {
+        } = if shown {
             self.layers
                 .draw(&mut self.guest, &self.gpu, &self.xr_session, &self.space)?
         } else {
@@ -185,7 +214,9 @@ impl Immersive {
         };
         // The handles and the rays show over the panels: the rays end on them
         let panels = self.space.panels();
-        if frame.should_render {
+        self.surfaces.sync(&self.xr_session, &self.space, &panels);
+        if shown {
+            quads.extend(self.surfaces.layers(&panels));
             quads.extend(self.handles.layers(&panels, self.pointer.handle()));
             if let Some(head) = self.xr_session.head(frame.predicted_display_time) {
                 quads.extend(self.rays.layers(&self.pointer.beams(), head.position));

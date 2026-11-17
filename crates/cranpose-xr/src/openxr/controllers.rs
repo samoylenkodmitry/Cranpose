@@ -139,7 +139,6 @@ impl Controllers {
             .session
             .sync_actions(&[xr::ActiveActionSet::new(&self.set)])
         {
-            // The session syncs nothing while it is not focused, such as under the system menu
             log::debug!("cranpose xr: actions: {error}");
             return [None, None];
         }

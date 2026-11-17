@@ -112,10 +112,28 @@ abstract class CranposeExtension @Inject constructor(objects: ObjectFactory) {
      * permissions and components that service needs and nothing else, so an
      * application that does not record video never asks for the camera.
      *
-     * Valid names: `background`, `billing`, `camera`, `haptics`, `media`,
-     * `notifications`, `overlay`, `update`.
+     * Valid names: `billing`, `camera`, `haptics`, `microphone-standby`,
+     * `network`, `notifications`, `overlay`, `television`, `wearable`, `xr`.
+     * The `xr` service makes an immersive app for headsets: Meta Quest, Pico,
+     * HTC Vive, Android XR and Steam Frame (see `xrStore`).
      */
     val services: SetProperty<String> = objects.setProperty(String::class.java)
+
+    /**
+     * The store an `xr` build goes to. Two entries of the `xr` manifest differ
+     * between stores, and this picks their values:
+     *
+     * - `meta` (the default): the Meta Horizon Store. The headset must track
+     *   the head, and the launching activity stays out of the recent list.
+     * - `android-xr`: Google Play for Android XR, which reads the OpenXR
+     *   feature as required.
+     * - `open`: Pico, HTC, Steam Frame and sideloading. Every feature stays
+     *   optional.
+     *
+     * The Gradle property `cranposeXrStore` sets the default, so one
+     * application builds for each store from the command line.
+     */
+    val xrStore: Property<String> = objects.property(String::class.java)
 
     /**
      * The hardware features this application demands of a device.

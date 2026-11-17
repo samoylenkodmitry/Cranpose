@@ -7,7 +7,7 @@ use crate::{
     METERS_PER_DP, Pose, SubspaceModifier,
     locals::with_locals,
     pose::turn_degrees,
-    space::{SUBSPACE_ORIGIN, Surface, local_space},
+    space::{SUBSPACE_ORIGIN, Shape, local_space},
     subspace::FlatRow,
 };
 
@@ -34,12 +34,12 @@ pub fn SpatialCurvedRow(
     }
     let curve = Curve {
         origin: SUBSPACE_ORIGIN.then(&modifier.pose()),
-        surface: if curve_radius.is_finite() && curve_radius > 0.0 {
-            Surface::Curved {
+        shape: if curve_radius.is_finite() && curve_radius > 0.0 {
+            Shape::Curved {
                 radius: curve_radius * METERS_PER_DP,
             }
         } else {
-            Surface::Flat
+            Shape::Flat
         },
     };
     CompositionLocalProvider([local_curve().provides(Some(curve))], content);
@@ -50,17 +50,17 @@ pub fn SpatialCurvedRow(
 pub(crate) struct Curve {
     // The row's middle, where its curve faces the viewer.
     origin: Pose,
-    surface: Surface,
+    shape: Shape,
 }
 
 impl Curve {
-    // The pose and surface of a panel that `modifier` places in the row. The panel's offset to
+    // The pose and shape of a panel that `modifier` places in the row. The panel's offset to
     // the right is a distance along the curve. Its other offsets and its turn apply at that
     // place.
-    pub(crate) fn place(&self, modifier: &SubspaceModifier) -> (Pose, Surface) {
+    pub(crate) fn place(&self, modifier: &SubspaceModifier) -> (Pose, Shape) {
         let own = modifier.pose();
-        let Surface::Curved { radius } = self.surface else {
-            return (self.origin.then(&own), Surface::Flat);
+        let Shape::Curved { radius } = self.shape else {
+            return (self.origin.then(&own), Shape::Flat);
         };
         let angle = own.position[0] / radius;
         let on_curve = Pose {
@@ -72,7 +72,7 @@ impl Curve {
             position: [0.0, own.position[1], own.position[2]],
             orientation: own.orientation,
         };
-        (self.origin.then(&on_curve).then(&at_place), self.surface)
+        (self.origin.then(&on_curve).then(&at_place), self.shape)
     }
 }
 

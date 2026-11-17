@@ -7,7 +7,7 @@ use crate::{
     aim_filter::{AimFilter, angle_between},
     carry::{Carry, handle_hit},
     ray::Beam,
-    space::{Cursor, Mobility, PanelSlot},
+    space::{Cursor, Mobility, PanelKind, PanelSlot},
 };
 
 // A trigger counts as down above PRESS and as up below RELEASE, so a trigger held near one value
@@ -72,6 +72,11 @@ struct Hit {
 }
 
 impl Hit {
+    // Whether the panel has Cranpose content that the pointer can move over and press.
+    fn on_content(&self) -> bool {
+        self.slot.kind == PanelKind::Content
+    }
+
     fn position(&self) -> (f32, f32) {
         (self.slot.atlas[0] + self.x, self.slot.atlas[1] + self.y)
     }
@@ -93,9 +98,12 @@ struct Hand {
     down: bool,
     // The ray in the last frame where the trigger rested, and that frame's time
     rest: Option<(Duration, Ray)>,
-    // This frame's ray, the panel it meets and the movable panel whose handle it meets
+    // This frame's ray, the panel it meets and the movable panel whose handle it meets. A panel
+    // that holds no content, such as a video surface, stops the ray as a panel does.
     ray: Option<Ray>,
     hit: Option<Hit>,
+    // The hit, if the panel has content
+    content_hit: Option<Hit>,
     handle: Option<(PanelSlot, f32)>,
     // The controller's own pose and its thumbstick, which carry a panel
     pose: Option<Pose>,
@@ -112,6 +120,7 @@ impl Hand {
         let ray = self.filter.apply(aim.ray, time);
         self.ray = Some(ray);
         self.hit = nearest_hit(&ray, panels);
+        self.content_hit = self.hit.filter(Hit::on_content);
         self.handle = nearest_handle(&ray, panels);
         self.pose = Some(aim.pose);
         self.stick = if aim.stick.abs() > DEAD_ZONE {
@@ -141,7 +150,9 @@ impl Hand {
             .rest
             .filter(|(rest, _)| time.saturating_sub(*rest) <= PULL_TIME)
             .and_then(|(_, ray)| Some((ray, nearest_hit(&ray, panels)?)));
-        before.or_else(|| Some((self.ray?, self.hit?)))
+        before
+            .or_else(|| Some((self.ray?, self.hit?)))
+            .filter(|(_, hit)| hit.on_content())
     }
 
     // Whether the ray meets a panel or a handle.
@@ -226,11 +237,11 @@ impl Pointer {
                 Some(slot) => self.grab(&hand, &slot),
                 None => self.pull(&hand, time, panels),
             },
-            Trigger::Up if self.carried.take().is_some() => self.hover(hand.hit),
+            Trigger::Up if self.carried.take().is_some() => self.hover(hand.content_hit),
             Trigger::Up if self.press.is_some() => {
                 self.events.push(PointerEvent::Release);
                 self.press = None;
-                self.hover(hand.hit);
+                self.hover(hand.content_hit);
             }
             _ if self.carried.is_some() => self.carry(&hand, dt),
             _ => self.follow(&hand, time),
@@ -240,7 +251,7 @@ impl Pointer {
                 held: Some(held), ..
             }) => Some(held.cursor(true)),
             _ if self.carried.is_some() => None,
-            press => hand.hit.map(|hit| hit.cursor(press.is_some())),
+            press => hand.content_hit.map(|hit| hit.cursor(press.is_some())),
         };
         (&self.events, cursor)
     }
@@ -290,7 +301,7 @@ impl Pointer {
                     held: Some(hit),
                 });
             }
-            None => self.hover(hand.hit),
+            None => self.hover(hand.content_hit),
         }
     }
 
@@ -320,7 +331,7 @@ impl Pointer {
     // Moves with the ray: while no press is on, or once a press drags.
     fn follow(&mut self, hand: &Hand, time: Duration) {
         let Some(press) = &mut self.press else {
-            self.hover(hand.hit);
+            self.hover(hand.content_hit);
             return;
         };
         if press.held.is_some()
@@ -337,7 +348,7 @@ impl Pointer {
             }
         }
         if press.held.is_none()
-            && let Some(hit) = hand.hit
+            && let Some(hit) = hand.content_hit
         {
             self.move_to(hit.position());
         }
@@ -379,11 +390,12 @@ fn nearest_hit(ray: &Ray, panels: &[PanelSlot]) -> Option<Hit> {
     panels
         .iter()
         .filter_map(|slot| {
+            let size = slot.size();
             let hit = slot.hit(ray)?;
             Some(Hit {
                 slot: *slot,
-                x: hit.u * slot.atlas[2],
-                y: hit.v * slot.atlas[3],
+                x: hit.u * size[0],
+                y: hit.v * size[1],
                 distance: hit.distance,
             })
         })

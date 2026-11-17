@@ -11,10 +11,10 @@ use std::{
     rc::Rc,
 };
 
-use cranpose::{MutableState, mutableStateOf};
+use cranpose::{ExternalSurface, MutableState, mutableStateOf};
 use cranpose_core::CompositionLocal;
 
-use crate::{METERS_PER_DP, PanelHit, Pose, Ray, locals::with_locals};
+use crate::{METERS_PER_DP, PanelHit, Pose, Ray, StereoMode, locals::with_locals};
 
 // The space between two panels in the atlas, in dp, so the compositor's filter never reaches a
 // neighbor's pixels.
@@ -27,18 +27,30 @@ const CURSOR_STEP: f32 = 0.5;
 // started, at the same height.
 pub(crate) const SUBSPACE_ORIGIN: Pose = Pose::at([0.0, 0.0, -1.0]);
 
+// What a panel shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PanelKind {
+    // Cranpose content, drawn into the atlas.
+    Content,
+    // A surface that another producer writes into. It has no part of the atlas, and no
+    // composition: a ray stops on it and presses nothing.
+    Surface(StereoMode),
+}
+
 // A panel as the backend sees it.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct PanelSlot {
     pub(crate) id: u64,
-    // The panel's part of the atlas: left, top, width and height in dp.
+    pub(crate) kind: PanelKind,
+    // The panel's part of the atlas: left, top, width and height in dp. A surface holds its size
+    // here and no room in the atlas.
     pub(crate) atlas: [f32; 4],
     // The panel's center and turn in the room.
     pub(crate) pose: Pose,
     // Whether the user may carry the panel with a controller.
     pub(crate) mobility: Mobility,
-    // The shape the panel's pixels show on.
-    pub(crate) surface: Surface,
+    // The shape the panel shows on. A surface panel is flat.
+    pub(crate) shape: Shape,
 }
 
 impl PanelSlot {
@@ -46,19 +58,28 @@ impl PanelSlot {
         not(any(test, all(feature = "openxr", target_os = "android"))),
         expect(dead_code, reason = "the headset backend calls it")
     )]
+    // The panel's width and height in dp.
+    pub(crate) fn size(&self) -> [f32; 2] {
+        [self.atlas[2], self.atlas[3]]
+    }
+
+    #[cfg_attr(
+        not(any(test, all(feature = "openxr", target_os = "android"))),
+        expect(dead_code, reason = "the headset backend calls it")
+    )]
     // Where `ray` meets the panel as it shows: flat or on its curve.
     pub(crate) fn hit(&self, ray: &Ray) -> Option<PanelHit> {
-        let size = [self.atlas[2], self.atlas[3]].map(|dp| dp * METERS_PER_DP);
-        match self.surface {
-            Surface::Flat => ray.hit_panel(&self.pose, size),
-            Surface::Curved { radius } => ray.hit_cylinder(&self.pose, size, radius),
+        let size = self.size().map(|dp| dp * METERS_PER_DP);
+        match self.shape {
+            Shape::Flat => ray.hit_panel(&self.pose, size),
+            Shape::Curved { radius } => ray.hit_cylinder(&self.pose, size, radius),
         }
     }
 }
 
-// The shape a panel's pixels show on.
+// The shape a panel shows on.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) enum Surface {
+pub(crate) enum Shape {
     Flat,
     // A cylinder of `radius` meters. Its upright axis stands that far from the panel's center
     // along the panel's +z, and the panel's width is arc length.
@@ -100,6 +121,8 @@ pub(crate) struct Panel {
     pub(crate) origin: MutableState<[f32; 2]>,
     // The dot of the cursor on the panel, or `None` while no controller points at it.
     pub(crate) dot: MutableState<Option<Dot>>,
+    // The surface of a surface panel once the backend has made it.
+    pub(crate) surface: MutableState<Option<ExternalSurface>>,
 }
 
 // The panels of the app in a headset. The headset's backend provides it around the app's
@@ -158,12 +181,28 @@ impl Space {
             id,
             origin: mutableStateOf([0.0, 0.0]),
             dot: mutableStateOf(None),
+            surface: mutableStateOf(None),
         }
     }
 
     // Registers `panel` of `size` dp at `pose` and returns its part of the atlas. A new panel and
     // a panel of a new size stack every panel again.
     pub(crate) fn place(&self, panel: Panel, size: [f32; 2], pose: Pose) -> [f32; 4] {
+        self.place_kind(panel, PanelKind::Content, size, pose)
+    }
+
+    // Registers the surface `panel` of `size` dp at `pose`. It takes no room in the atlas.
+    pub(crate) fn place_surface(
+        &self,
+        panel: Panel,
+        stereo_mode: StereoMode,
+        size: [f32; 2],
+        pose: Pose,
+    ) {
+        self.place_kind(panel, PanelKind::Surface(stereo_mode), size, pose);
+    }
+
+    fn place_kind(&self, panel: Panel, kind: PanelKind, size: [f32; 2], pose: Pose) -> [f32; 4] {
         let mut entries = self.inner.entries.borrow_mut();
         let (index, changed) = match entries.iter().position(|entry| entry.slot.id == panel.id) {
             Some(index) => {
@@ -180,10 +219,11 @@ impl Space {
                 entries.push(Entry {
                     slot: PanelSlot {
                         id: panel.id,
+                        kind,
                         atlas: [0.0, 0.0, size[0], size[1]],
                         pose,
                         mobility: Mobility::Fixed,
-                        surface: Surface::Flat,
+                        shape: Shape::Flat,
                     },
                     panel,
                     dot: None,
@@ -207,10 +247,10 @@ impl Space {
     }
 
     // Sets the shape of the panel `id`.
-    pub(crate) fn set_surface(&self, id: u64, surface: Surface) {
+    pub(crate) fn set_shape(&self, id: u64, shape: Shape) {
         let mut entries = self.inner.entries.borrow_mut();
         if let Some(entry) = entries.iter_mut().find(|entry| entry.slot.id == id) {
-            entry.slot.surface = surface;
+            entry.slot.shape = shape;
         }
     }
 
@@ -237,6 +277,18 @@ impl Space {
         }
     }
 
+    #[cfg_attr(
+        not(all(feature = "openxr", target_os = "android")),
+        expect(dead_code, reason = "the headset backend calls it")
+    )]
+    // Gives the surface panel `id` the surface that the backend made for it.
+    pub(crate) fn publish_surface(&self, id: u64, surface: ExternalSurface) {
+        let entries = self.inner.entries.borrow();
+        if let Some(entry) = entries.iter().find(|entry| entry.slot.id == id) {
+            entry.panel.surface.set(Some(surface));
+        }
+    }
+
     // Forgets the panel `id`. The panels below it move up.
     pub(crate) fn remove(&self, id: u64) {
         let mut entries = self.inner.entries.borrow_mut();
@@ -255,10 +307,10 @@ impl Space {
             .borrow()
             .iter()
             .map(|entry| PanelSlot {
-                surface: if curves {
-                    entry.slot.surface
+                shape: if curves {
+                    entry.slot.shape
                 } else {
-                    Surface::Flat
+                    Shape::Flat
                 },
                 ..entry.slot
             })
@@ -275,6 +327,7 @@ impl Space {
             .entries
             .borrow()
             .iter()
+            .filter(|entry| entry.slot.kind == PanelKind::Content)
             .fold([0.0, 0.0], |size, entry| {
                 let [x, y, width, height] = entry.slot.atlas;
                 [size[0].max(x + width), size[1].max(y + height)]
@@ -304,7 +357,10 @@ impl Space {
 // gets its new origin in its state.
 fn restack(entries: &mut [Entry]) {
     let mut top = 0.0;
-    for entry in entries {
+    for entry in entries
+        .iter_mut()
+        .filter(|entry| entry.slot.kind == PanelKind::Content)
+    {
         let [left, old_top, _, height] = entry.slot.atlas;
         // Tops lie on even dp, so a change is always more than half a dp
         if (old_top - top).abs() > 0.5 {

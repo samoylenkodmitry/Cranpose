@@ -10,7 +10,7 @@ use cranpose_testing::{
 use super::*;
 use crate::{
     SpatialPanel, SubspaceModifier,
-    space::{Space, Surface, local_space},
+    space::{Shape, Space, local_space},
 };
 
 // The space of a headset that shows `content`, and the composition that keeps its panels.
@@ -54,7 +54,7 @@ fn the_panels_of_a_row_stand_on_one_cylinder_around_the_viewer() {
     let panels = space.panels();
     assert_eq!(panels.len(), 3);
     for slot in &panels[..2] {
-        assert_eq!(slot.surface, Surface::Curved { radius: 1.0 });
+        assert_eq!(slot.shape, Shape::Curved { radius: 1.0 });
         // The cylinder's axis is the viewer's upright line through the origin
         let along = slot.pose.rotate([0.0, 0.0, 1.0]);
         let axis = [0, 1, 2].map(|i| slot.pose.position[i] + along[i]);
@@ -64,20 +64,15 @@ fn the_panels_of_a_row_stand_on_one_cylinder_around_the_viewer() {
     let [x, _, z] = panels[1].pose.position;
     let side = std::f32::consts::FRAC_1_SQRT_2;
     assert!((x - side).abs() < 1e-3 && (z + side).abs() < 1e-3);
-    assert_eq!(panels[2].surface, Surface::Flat, "outside the row");
+    assert_eq!(panels[2].shape, Shape::Flat, "outside the row");
 }
 
 #[test]
 fn a_runtime_without_cylinder_layers_shows_the_row_flat() {
     let (space, _robot) = headset(false, row(1000.0));
-    assert!(
-        space
-            .panels()
-            .iter()
-            .all(|slot| slot.surface == Surface::Flat)
-    );
+    assert!(space.panels().iter().all(|slot| slot.shape == Shape::Flat));
     space.set_curves_shown(true);
-    assert_eq!(space.panels()[0].surface, Surface::Curved { radius: 1.0 });
+    assert_eq!(space.panels()[0].shape, Shape::Curved { radius: 1.0 });
 }
 
 #[test]
@@ -85,7 +80,7 @@ fn a_row_without_a_radius_is_straight() {
     for radius in [0.0, -5.0, f32::INFINITY] {
         let (space, _robot) = headset(true, row(radius));
         let panels = space.panels();
-        assert!(panels.iter().all(|slot| slot.surface == Surface::Flat));
+        assert!(panels.iter().all(|slot| slot.shape == Shape::Flat));
         let [x, _, z] = panels[1].pose.position;
         assert!(
             (x - std::f32::consts::FRAC_PI_4).abs() < 1e-3 && (z + 1.0).abs() < 1e-5,
