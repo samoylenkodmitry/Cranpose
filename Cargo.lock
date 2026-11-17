@@ -5124,6 +5124,25 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
 
 [[package]]
+name = "player-demo"
+version = "0.25.0"
+dependencies = [
+ "cranpose",
+ "cranpose-ui",
+ "env_logger",
+ "log",
+]
+
+[[package]]
+name = "player-demo-android"
+version = "0.25.0"
+dependencies = [
+ "cranpose",
+ "cranpose-capabilities",
+ "player-demo",
+]
+
+[[package]]
 name = "plotters"
 version = "0.3.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8320,6 +8339,7 @@ dependencies = [
  "env_logger",
  "log",
  "ndk",
+ "player-demo",
 ]
 
 [[package]]

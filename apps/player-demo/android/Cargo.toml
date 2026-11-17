@@ -1,0 +1,27 @@
+[package]
+name = "player-demo-android"
+description = "Android entry point of the player demo."
+publish = false
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[lib]
+name = "player_demo_app"
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+[features]
+android = ["cranpose/android", "player-demo/android"]
+renderer-wgpu = ["cranpose/renderer-wgpu", "player-demo/renderer-wgpu"]
+
+[dependencies]
+cranpose = { workspace = true, features = ["embedded-default-font"] }
+player-demo = { path = "..", default-features = false }
+
+[build-dependencies]
+cranpose-capabilities = { path = "../../../crates/cranpose-capabilities" }
