@@ -32,6 +32,7 @@ pub use language_preferences::{
 };
 pub use ui_strings::UiString;
 
+mod animate_content_size;
 /// Screen reader announcements for events that have no control on screen.
 pub mod announce;
 mod arrow_focus;
@@ -266,9 +267,12 @@ pub use primitives::{
     SecureTextFieldOptions, SeekableAnimatedContent, SeekableCrossfade, SharedBounds,
     SharedElement, SharedTransitionLayout, SizeTransform, SlideDirection, SnapPosition, Spacer,
     SubcomposeLayout, SvgPainter, SvgPainterError, Text, TextObfuscationMode, TextWithOptions,
-    VerticalPager, fade_in, fade_out, rememberPagerState, rememberSvg, scale_in, scale_out,
-    slide_in_horizontally, slide_in_vertically, slide_into_container, slide_out_horizontally,
-    slide_out_of_container, slide_out_vertically,
+    VerticalPager, expand_horizontally, expand_horizontally_with, expand_in, expand_in_with,
+    expand_vertically, expand_vertically_with, fade_in, fade_out, rememberPagerState, rememberSvg,
+    scale_in, scale_out, shrink_horizontally, shrink_horizontally_with, shrink_out,
+    shrink_out_with, shrink_vertically, shrink_vertically_with, slide_in_horizontally,
+    slide_in_vertically, slide_into_container, slide_out_horizontally, slide_out_of_container,
+    slide_out_vertically,
 };
 #[cfg(any(test, feature = "test-helpers"))]
 #[doc(hidden)]
