@@ -204,11 +204,7 @@ fn EyeBox(view: EyeView, side: Option<Side>, scene: SceneState, modifier: Modifi
                 let eye = side
                     .and_then(|side| headset_views().map(|eyes| eyes[side as usize]))
                     .unwrap_or(view);
-                Scene3d {
-                    camera: eye.camera(eye.layout(size)),
-                    light: None,
-                    eye: None,
-                }
+                Scene3d::new(eye.camera(eye.layout(size)))
             }),
             BoxSpec::default(),
             move || Scene(scene, meshes.clone()),

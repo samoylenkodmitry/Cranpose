@@ -228,11 +228,20 @@ impl RendererFrontend {
         }
         self.scene.root_layer()?;
         self.returned_scenes = self.returned_scenes.saturating_sub(1);
-        let (overlay, overlay_damage) = self.collect_overlays(root_scale, purpose);
-        let (root, damage, cull) = self.collect_scene(
+        let mut overlay_damage = Damage::Full;
+        let overlay = self.collect_overlays(root_scale, purpose, &mut overlay_damage);
+        // Built field by field: a constant of the whole packet damage would
+        // be copied in.
+        let mut damage = PacketDamage {
+            since: None,
+            damage: Damage::Full,
+        };
+        let mut cull = None;
+        let root = self.collect_scene(
             (width, height, root_scale),
             purpose,
-            (overlay.as_deref(), overlay_damage),
+            (overlay.as_deref(), &overlay_damage),
+            (&mut damage, &mut cull),
         );
         let after_root_collect = Instant::now();
         self.scene_recyclers[self.returned_scenes].clear();
@@ -245,11 +254,11 @@ impl RendererFrontend {
             root_scale: root_scale.to_bits(),
             transparent: self.transparent_background,
         };
-        let damage = if window {
-            self.window_packet_damage(damage, draws)
+        if window {
+            self.window_packet_damage(&mut damage, draws);
         } else {
-            self.window.capture_damage(draws)
-        };
+            damage = self.window.capture_damage(draws);
+        }
         let packet = FramePacket {
             frame_id: self.frame_sequence,
             viewport: (width, height),
@@ -276,13 +285,14 @@ impl RendererFrontend {
         Some(packet)
     }
 
-    // The overlays' scene for a frame at `root_scale` for `purpose`, and
-    // what a window frame changes of them.
+    // The overlays' scene for a frame at `root_scale` for `purpose`; writes
+    // into `damage` what a window frame changes of them.
     fn collect_overlays(
         &mut self,
         root_scale: f32,
         purpose: PacketFor,
-    ) -> (Option<Box<LayerScene>>, Damage) {
+        damage: &mut Damage,
+    ) -> Option<Box<LayerScene>> {
         let window = purpose == PacketFor::Window;
         let records = window && self.overlay_target.records();
         let recycler = &mut self.scene_recyclers[self.returned_scenes];
@@ -290,52 +300,52 @@ impl RendererFrontend {
         let mut overlay = self.dev_overlay.root_layer().map(|overlay| {
             collect_overlay(overlay, (root_scale, records.then_some(shown)), recycler)
         });
-        let damage = if window {
+        if window {
             self.overlay_target
-                .end(&self.dev_overlay, overlay.as_deref())
+                .end(&self.dev_overlay, overlay.as_deref(), damage);
         } else {
-            Damage::Full
-        };
+            *damage = Damage::Full;
+        }
         if let Some(overlay) = overlay.as_mut().filter(|_| records) {
             self.overlay_shown = std::mem::take(&mut overlay.shown);
         }
-        (overlay, damage)
+        overlay
     }
 
     // The scene's root scene for a frame of `viewport` at `root_scale` for
-    // `purpose`, over
-    // `overlay` that changes `overlay_damage`: what a window frame changes,
-    // and the region a window walk culled the root to. A culled walk an
-    // image repaints past is taken again over what it repaints once, and
+    // `purpose`, over `overlay` that changes `overlay_damage`. Writes into
+    // `damage` what a window frame changes against the packet before, and
+    // into `cull` the region a window walk culled the root to. A culled walk
+    // an image repaints past is taken again over what it repaints once, and
     // then over every record.
     fn collect_scene(
         &mut self,
         (width, height, root_scale): (u32, u32, f32),
         purpose: PacketFor,
-        (overlay, overlay_damage): (Option<&LayerScene>, Damage),
-    ) -> (Box<LayerScene>, Damage, Option<DamageRects>) {
+        (overlay, overlay_damage): (Option<&LayerScene>, &Damage),
+        (damage, cull): (&mut PacketDamage, &mut Option<DamageRects>),
+    ) -> Box<LayerScene> {
         let window = purpose == PacketFor::Window;
-        let since = self.since();
+        let viewport = (width, height);
+        damage.since = self.since();
         let next = self.frame_sequence.wrapping_add(1);
-        let mut cull = window
-            .then(|| self.cull_region())
-            .flatten()
-            .and_then(|region| {
-                self.widen_by_predicted_repaint(
-                    region,
-                    (since, next),
-                    overlay_damage,
-                    (width, height),
-                )
-            });
+        if window {
+            let region = cull.insert(DamageRects::default());
+            if !self.cull_region(region)
+                || !self.widen_by_predicted_repaint(region, next, overlay_damage, viewport, damage)
+            {
+                *cull = None;
+            }
+        }
         let store = self.scene.store();
         let root_layer = store.root_layer().expect("the scene has a root");
         let recycler = &mut self.scene_recyclers[self.returned_scenes];
         let overlay_backdrops = overlay.is_some_and(LayerScene::contains_backdrop);
         let records = window && self.target.records();
         let mut widened = false;
-        let (root, damage) = loop {
-            let culled = cull.map(|region| self.target.cull(store, region));
+        let mut repaint = DamageRects::default();
+        let root = loop {
+            let culled = cull.as_ref().map(|region| self.target.cull(store, region));
             let shown = records.then_some(&mut self.root_shown);
             let mut root = collect_root(
                 root_layer,
@@ -347,60 +357,68 @@ impl RendererFrontend {
                 recycler,
             );
             if !window {
-                break (root, Damage::Full);
+                break root;
             }
-            let damage = self
-                .target
-                .end(store, Some(&root))
-                .union(overlay_damage, (width, height));
+            self.target.end(store, Some(&root), &mut damage.damage);
+            damage.damage.add(overlay_damage, viewport);
             if records {
                 self.root_shown = std::mem::take(&mut root.shown);
             }
-            let Some(region) = cull else {
-                break (root, damage);
+            let Some(region) = cull.as_mut() else {
+                break root;
             };
-            let repaint = if overlay_backdrops || root.contains_backdrop() {
-                None
-            } else {
-                let packet = self.window.next_damage(damage, since, (width, height));
-                self.window.repaint(next, packet, self.landings)
-            };
-            if repaint.is_some_and(|repaint| region.covers(&repaint)) {
-                break (root, damage);
+            let repainted = !(overlay_backdrops || root.contains_backdrop())
+                && self
+                    .window
+                    .repaint(next, damage, viewport, self.landings, &mut repaint);
+            if repainted && region.covers(&repaint) {
+                break root;
             }
             recycler.recycle(root);
-            cull = repaint.filter(|_| !widened).map(|repaint| {
-                let mut wider = region;
-                wider.add_all(&repaint);
-                wider
-            });
+            if repainted && !widened {
+                region.add_all(&repaint);
+            } else {
+                *cull = None;
+            }
             widened = true;
         };
         if cull.is_none() {
             self.root_scene_capacity = root.scene.capacity_hint();
             self.backdrops = window && (overlay_backdrops || root.contains_backdrop());
         }
-        (root, damage, cull)
+        root
     }
 
-    // `region`, which a window walk culls to, widened by what the next image
+    // Widens `region`, which a window walk culls to, by what the next image
     // repaints when the frame changes what the target predicts, so the walk
-    // takes in the repaint without walking again; `None`, a walk of every
-    // record, when that image repaints whole.
+    // takes in the repaint without walking again; `false`, a walk of every
+    // record, when that image repaints whole. The predicted damage goes into
+    // `packet`, the damage of the packet `next`, which the frame's own
+    // damage replaces after its walk.
     fn widen_by_predicted_repaint(
         &mut self,
-        mut region: DamageRects,
-        (since, next): (Option<u64>, u64),
-        overlay_damage: Damage,
+        region: &mut DamageRects,
+        next: u64,
+        overlay_damage: &Damage,
         viewport: (u32, u32),
-    ) -> Option<DamageRects> {
-        let Some(predicted) = self.target.predicted_damage(self.scene.store()) else {
-            return Some(region);
-        };
-        let damage = predicted.union(overlay_damage, viewport);
-        let packet = self.window.next_damage(damage, since, viewport);
-        region.add_all(&self.window.repaint(next, packet, self.landings)?);
-        Some(region)
+        packet: &mut PacketDamage,
+    ) -> bool {
+        if !self
+            .target
+            .predict_damage(self.scene.store(), &mut packet.damage)
+        {
+            return true;
+        }
+        packet.damage.add(overlay_damage, viewport);
+        let mut repaint = DamageRects::default();
+        if !self
+            .window
+            .repaint(next, packet, viewport, self.landings, &mut repaint)
+        {
+            return false;
+        }
+        region.add_all(&repaint);
+        true
     }
 
     // Gives back at rest the room the kept layer scenes took, and the
@@ -430,15 +448,20 @@ impl RendererFrontend {
         }
     }
 
-    // The region a window walk may cull to: the damages since the oldest
-    // packet the window's targets hold, and the areas the targets drew the
-    // changed records in; `None` when the walk takes every record.
-    fn cull_region(&mut self) -> Option<DamageRects> {
+    // Writes into `region` the region a window walk may cull to: the damages
+    // since the oldest packet the window's targets hold, and the areas the
+    // targets drew the changed records in; `false` when the walk takes every
+    // record.
+    fn cull_region(&mut self, region: &mut DamageRects) -> bool {
         if std::mem::take(&mut self.uncull_next) || self.backdrops {
-            return None;
+            return false;
         }
-        let begun = [self.target.begun()?, self.overlay_target.begun()?];
-        self.window.cull_region(begun, self.landings)
+        let (Some(target), Some(overlay)) = (self.target.begun(), self.overlay_target.begun())
+        else {
+            return false;
+        };
+        self.window
+            .cull_region([target, overlay], self.landings, region)
     }
 
     // The last window packet, when the targets knew what the images held
@@ -449,12 +472,12 @@ impl RendererFrontend {
             .filter(|_| self.target.knew_before() && self.overlay_target.knew_before())
     }
 
-    // The damage of the window packet that draws `draws` with `damage`.
-    fn window_packet_damage(&mut self, damage: Damage, draws: PacketDraws) -> PacketDamage {
-        let since = self.since();
-        let damage = self.window.next_damage(damage, since, draws.viewport);
+    // Makes `damage`, what the frame changes, the damage of the window
+    // packet that draws `draws`, and notes the packet built.
+    fn window_packet_damage(&mut self, damage: &mut PacketDamage, draws: PacketDraws) {
+        damage.since = self.since();
+        self.window.carry(damage, draws.viewport);
         self.window.built(self.frame_sequence, damage, draws);
-        damage
     }
 
     // Takes the window packet at `width` by `height` and draws it with
@@ -532,9 +555,9 @@ impl RendererFrontend {
     }
 
     pub(crate) fn apply_returns(&mut self, returns: RenderReturns) {
-        if let Some(drawn) = returns.target {
+        if let Some(drawn) = &returns.target {
             self.target.drawn(drawn);
-            self.window.hold(returns.held);
+            self.window.hold(returns.held.as_ref());
         }
         if returns.outcome == PresentOutcome::Cancelled(CancelReason::NeedsWhole) {
             self.uncull_next = true;

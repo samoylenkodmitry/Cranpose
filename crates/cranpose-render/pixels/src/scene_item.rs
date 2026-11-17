@@ -31,10 +31,21 @@ pub(crate) trait SceneItem: Sized {
     // `anchor`, lands on it.
     fn snap_to(&mut self, anchor: Point);
     fn as_ref(&self) -> ItemRef<'_>;
+    // Puts the item in place of `old`, which drops.
+    fn take_place(self, old: &mut Self);
+}
+
+// An assignment would also copy the new item aside while the old one drops;
+// a replace moves out of the old item only the fields its drop reads.
+fn replace<T>(item: T, old: &mut T) {
+    drop(std::mem::replace(old, item));
 }
 
 macro_rules! scene_item {
     ($item:ident, $variant:ident, $list:ident) => {
+        scene_item!($item, $variant, $list, replace);
+    };
+    ($item:ident, $variant:ident, $list:ident, $take_place:path) => {
         impl SceneItem for $item {
             fn item(index: usize) -> RenderItem {
                 RenderItem::$variant(index)
@@ -62,11 +73,15 @@ macro_rules! scene_item {
             fn as_ref(&self) -> ItemRef<'_> {
                 ItemRef::$variant(self)
             }
+
+            fn take_place(self, old: &mut Self) {
+                $take_place(self, old);
+            }
         }
     };
 }
 
-scene_item!(DrawShape, Shape, shapes);
+scene_item!(DrawShape, Shape, shapes, DrawShape::take_place);
 scene_item!(ImageDraw, Image, images);
 scene_item!(TextDraw, Text, texts);
 scene_item!(ShadowDraw, Shadow, shadows);

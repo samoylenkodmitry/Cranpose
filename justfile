@@ -478,7 +478,7 @@ _size-ceiling path max what:
     fi
     echo "size budget: the {{what}} is $size bytes, within {{max}}"
 
-# The web demo's wasm after `just web`: 14.7 MiB. It was 13.3 MiB and 13.25 MiB
+# The web demo's wasm after `just web`: 16.1 MiB. It was 13.3 MiB and 13.25 MiB
 # before, the size of 2026-10-29 (13,784,385 bytes) and about 0.8%; the
 # Backrooms tab of #2118 took the demo to about 13,923,000 bytes with its
 # rooms, shader and HUD. The Performance tab of #2162 (hover, pick and
@@ -499,8 +499,16 @@ _size-ceiling path max what:
 # specs, layer references, reach and content hashes. The owner allowed that
 # growth of 30 KB. The XR tab of #2240 took the module to 15,494,505 bytes:
 # its scene, its eye cameras and the WebXR frame source. The owner asked for
-# the XR tab.
-web-size-budget: (_size-ceiling "apps/desktop-demo/pkg/desktop_app_bg.wasm" "15500000" "web demo wasm")
+# the XR tab. On 2026-11-17 two shares took the module to 16,870,975 bytes, as
+# samarch builds it with wasm-opt 130, the version of CI. The merges of the
+# hot path program (#2254 to #2307) and the device unlock of #2263 took it
+# from 15,491,984 bytes (CI at 00019ff3e) to 15,509,856 bytes just
+# before #2284. From there to the release candidate e80419469 it grew
+# 1,361,119 bytes: the Explainer tab of #2284, its screens and shaders, and
+# `cranpose/localization`, which #2284 turned on in the web demo, with the
+# program's merges after it. The release owner allowed both shares on
+# 2026-11-17 for the v0.26.0 release.
+web-size-budget: (_size-ceiling "apps/desktop-demo/pkg/desktop_app_bg.wasm" "16955000" "web demo wasm")
 
 # Fail when a built wasm module needs a WebAssembly feature past Safari 15.
 # WebKit rejects such a module whole, in Safari and in every other iOS browser.
@@ -600,9 +608,10 @@ bench-app-check:
 # and the still wall's start a layout node, against
 # scripts/perf/steady_ledger_budget.txt. It fails when a row rises past its
 # budget plus its spread (and 2% for bytes). Linux with valgrind; nightly
-# runs it. `--ab BASE HEAD` prints the difference a row between two commits,
-# `--host H` runs that on H, `--repeats 3` measures the spread for the budget
-# file.
+# runs it. `--ab BASE HEAD` prints the difference a row between two commits
+# with the callgrind instructions of five windows, reusing BASE when the host
+# measured it before (`--base BASE` measures it alone); `--host H` runs that
+# on H; `--repeats 3` measures the spread for the budget file.
 steady-ledger *args:
     scripts/perf/steady_ledger.sh {{args}}
 

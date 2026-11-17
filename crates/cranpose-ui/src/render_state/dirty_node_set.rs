@@ -44,9 +44,10 @@ impl DirtyNodeSet {
         self.dirty_nodes.trim_growth_slack();
     }
 
-    pub(super) fn dirty_nodes_snapshot(&self) -> Vec<NodeId> {
-        let mut nodes = self.dirty_nodes.iter().copied().collect::<Vec<_>>();
-        nodes.sort_unstable();
-        nodes
+    // Appends the nodes, sorted, to `nodes`; they stay in the set.
+    pub(super) fn append_sorted(&self, nodes: &mut Vec<NodeId>) {
+        let start = nodes.len();
+        nodes.extend(self.dirty_nodes.iter().copied());
+        nodes[start..].sort_unstable();
     }
 }

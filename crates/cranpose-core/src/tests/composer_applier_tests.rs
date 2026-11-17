@@ -1032,9 +1032,7 @@ fn fresh_recyclable_nodes_seed_same_frame_shell_reuse() {
     let fresh = Box::new(SeedableNode);
 
     applier.record_fresh_recyclable_creation(key);
-    if let Some(shell) = fresh.rehouse_for_recycle() {
-        applier.seed_recycled_node_shell(key, fresh.recycle_pool_limit(), shell);
-    }
+    applier.seed_recycled_node_shell(key, &*fresh);
 
     let recycled = applier
         .take_recycled_node(key)
@@ -1066,7 +1064,7 @@ fn recyclable_emit_discards_mismatched_recycled_shell() {
         .entry(key)
         .or_default()
         .warm
-        .push(RecycledNode::from_shell(
+        .push_back(RecycledNode::from_shell(
             NodeId(0),
             Box::new(WrongNode),
             RecycleOrigin::Warm,
@@ -1105,7 +1103,10 @@ fn recyclable_emit_discards_mismatched_recycled_shell() {
         .downcast_mut::<DesiredNode>()
         .expect("fallback node should use the requested node type");
     assert!(node.initialized);
-    assert_eq!(node.reset_calls, 0);
+    assert_eq!(
+        node.reset_calls, 1,
+        "a node made new is filled in its box as a pooled one is"
+    );
     assert_eq!(applier.debug_recycled_node_count_for::<DesiredNode>(), 0);
 }
 
@@ -1134,7 +1135,7 @@ fn recyclable_emit_creates_fresh_id_when_recycled_stable_id_is_live() {
         .entry(key)
         .or_default()
         .warm
-        .push(RecycledNode::from_shell(
+        .push_back(RecycledNode::from_shell(
             live_id,
             Box::new(DesiredNode {
                 from_recycled_shell: true,
@@ -1367,6 +1368,48 @@ fn recycled_node_pool_limit_discards_oldest_shells() {
 }
 
 #[test]
+fn a_full_recycle_pool_keeps_its_newest_shells_over_many_removals() {
+    #[derive(Default)]
+    struct RingNode;
+
+    impl Node for RingNode {
+        fn recycle_key(&self) -> Option<TypeId> {
+            Some(TypeId::of::<Self>())
+        }
+
+        fn recycle_pool_limit(&self) -> Option<usize> {
+            Some(3)
+        }
+    }
+
+    let mut applier = test_applier();
+    let _keep = applier.create(Box::new(RingNode));
+    let removed: Vec<NodeId> = (0..11)
+        .map(|_| {
+            let id = applier.create(Box::new(RingNode));
+            applier.remove(id).expect("remove recyclable node");
+            id
+        })
+        .collect();
+    for _ in 0..3 {
+        applier.record_fresh_recyclable_creation(TypeId::of::<RingNode>());
+    }
+    applier.clear_recycled_nodes();
+
+    let taken: Vec<NodeId> = std::iter::from_fn(|| {
+        applier
+            .take_recycled_node(TypeId::of::<RingNode>())
+            .map(|recycled| recycled.stable_id())
+    })
+    .collect();
+    let newest: Vec<NodeId> = removed.iter().rev().take(3).copied().collect();
+    assert_eq!(
+        taken, newest,
+        "the pool keeps the newest shells, newest first"
+    );
+}
+
+#[test]
 fn clear_recycled_nodes_trims_warm_pool_without_fresh_demand() {
     #[derive(Default)]
     struct LimitedRecycleNode;
@@ -1439,6 +1482,53 @@ fn warm_recycled_nodes_survive_idle_frame_after_recent_demand() {
 }
 
 #[test]
+fn a_pass_end_warms_the_newest_cold_shells_its_demand_asks_for() {
+    #[derive(Default)]
+    struct LimitedRecycleNode;
+
+    impl Node for LimitedRecycleNode {
+        fn recycle_key(&self) -> Option<TypeId> {
+            Some(TypeId::of::<Self>())
+        }
+
+        fn recycle_pool_limit(&self) -> Option<usize> {
+            Some(4)
+        }
+    }
+
+    let mut applier = test_applier();
+    let key = TypeId::of::<LimitedRecycleNode>();
+    let _keep_live = applier.create(Box::new(LimitedRecycleNode));
+    let removed: Vec<_> = (0..3)
+        .map(|_| applier.create(Box::new(LimitedRecycleNode)))
+        .collect();
+    for &id in &removed {
+        applier.remove(id).expect("remove recyclable node");
+    }
+    applier.record_fresh_recyclable_creation(key);
+    applier.record_fresh_recyclable_creation(key);
+    applier.clear_recycled_nodes();
+
+    assert_eq!(
+        applier.debug_recycled_node_count_for::<LimitedRecycleNode>(),
+        2
+    );
+    let taken: Vec<_> = (0..2)
+        .map(|_| {
+            applier
+                .take_recycled_node(key)
+                .expect("a warm shell")
+                .stable_id()
+        })
+        .collect();
+    assert_eq!(
+        taken,
+        [removed[2], removed[1]],
+        "the two newest removed shells turn warm and the oldest goes",
+    );
+}
+
+#[test]
 fn clear_recycled_nodes_rebuilds_warm_pool_from_compact_prototype() {
     #[derive(Default)]
     struct PrototypeRecycleNode;
@@ -1459,12 +1549,7 @@ fn clear_recycled_nodes_rebuilds_warm_pool_from_compact_prototype() {
 
     let mut applier = test_applier();
     let key = TypeId::of::<PrototypeRecycleNode>();
-    let seed = PrototypeRecycleNode;
-    let shell = seed
-        .rehouse_for_recycle()
-        .expect("seed node should provide a compact shell");
-
-    applier.seed_recycled_node_shell(key, seed.recycle_pool_limit(), shell);
+    applier.seed_recycled_node_shell(key, &PrototypeRecycleNode);
     let recycled = applier
         .take_recycled_node(key)
         .expect("seeded shell should be immediately available");
@@ -1510,10 +1595,7 @@ fn large_recycle_pools_converge_to_standing_reserve_on_first_demand() {
 
     let mut applier = test_applier();
     let key = TypeId::of::<LargeReserveNode>();
-    let shell = LargeReserveNode
-        .rehouse_for_recycle()
-        .expect("large reserve node should provide a compact shell");
-    applier.seed_recycled_node_shell(key, Some(128), shell);
+    applier.seed_recycled_node_shell(key, &LargeReserveNode);
     let recycled = applier
         .take_recycled_node(key)
         .expect("seeded shell should be immediately available");
@@ -1573,9 +1655,7 @@ fn clear_recycled_nodes_releases_excess_warm_id_capacity() {
         } else {
             let node = Box::new(LargeReserveNode);
             applier.record_fresh_recyclable_creation(key);
-            if let Some(shell) = node.rehouse_for_recycle() {
-                applier.seed_recycled_node_shell(key, node.recycle_pool_limit(), shell);
-            }
+            applier.seed_recycled_node_shell(key, &*node);
             let id = applier.create(node);
             live_ids.push(id);
         }

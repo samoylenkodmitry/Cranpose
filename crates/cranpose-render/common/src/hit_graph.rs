@@ -10,7 +10,7 @@ use crate::{
         HitClip, HitGeometry, HitTargetSpec, HitTargets, Scene, SurfaceGeometry, SurfaceTarget,
     },
     primitive_emit::resolve_clip,
-    scene_pick::ScenePick,
+    scene_pick::{ScenePick, SurfaceHolds},
     scene_store::LayerRef,
 };
 
@@ -25,6 +25,13 @@ pub trait HitGraphSink {
         geometry: HitGeometry<'_>,
         hit: &HitTestNode,
     );
+
+    /// Where the gestures on mesh surfaces keep the meshes they hold from
+    /// one collection of the targets to the next; `None` for a sink that
+    /// sends no gestures, where each scene's pick keeps its own.
+    fn surface_holds(&self) -> Option<&SurfaceHolds> {
+        None
+    }
 }
 
 impl HitGraphSink for Scene {
@@ -37,6 +44,10 @@ impl HitGraphSink for Scene {
     ) {
         Self::push_hit(self, node_id, capture_path, geometry, hit_spec(hit));
     }
+
+    fn surface_holds(&self) -> Option<&SurfaceHolds> {
+        Some(&self.holds)
+    }
 }
 
 impl HitGraphSink for HitTargets<'_> {
@@ -48,6 +59,10 @@ impl HitGraphSink for HitTargets<'_> {
         hit: &HitTestNode,
     ) {
         self.push(node_id, capture_path, geometry, hit_spec(hit));
+    }
+
+    fn surface_holds(&self) -> Option<&SurfaceHolds> {
+        Some(self.holds)
     }
 }
 
@@ -71,8 +86,10 @@ pub fn collect_hits_from_graph<S: HitGraphSink>(
     if !layer.has_hit_targets() {
         return;
     }
+    let holds = sink.surface_holds().cloned();
     let mut walk = HitWalk {
         sink,
+        holds,
         hit_clips: Vec::new(),
         pointer_input_ancestors: Vec::new(),
         capture_path: SmallVec::new(),
@@ -88,6 +105,7 @@ pub fn collect_hits_from_graph<S: HitGraphSink>(
 
 struct HitWalk<'s, S> {
     sink: &'s mut S,
+    holds: Option<SurfaceHolds>,
     hit_clips: Vec<HitClip>,
     pointer_input_ancestors: Vec<NodeId>,
     capture_path: SmallVec<[NodeId; 8]>,
@@ -242,7 +260,7 @@ impl<S: HitGraphSink> HitWalk<'_, S> {
             .as_ref()
             .is_some_and(|scene| scene.holds_scene(layer));
         let shown = match (layer.wraps(), through_portal) {
-            (None, false) => ScenePick::of(layer, transform).map(Rc::new),
+            (None, false) => ScenePick::of(layer, transform, self.holds.as_ref()).map(Rc::new),
             _ => None,
         };
         let (scene, scene_clips) = match shown {

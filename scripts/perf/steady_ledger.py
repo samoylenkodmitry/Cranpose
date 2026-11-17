@@ -14,6 +14,7 @@ budget a line, `ROW METRIC BUDGET SPREAD`.
 """
 
 import json
+import os
 import re
 import sys
 from collections import Counter, defaultdict, deque, namedtuple
@@ -239,6 +240,24 @@ def group_calls(path, groups, tree):
     return calls
 
 
+# The instructions that an A/B counts under callgrind; the nightly does not.
+INSTRUCTIONS = "instructions"
+TOTALS = re.compile(r"^(?:totals|summary): (\d+)")
+
+
+def instructions(row, path, count):
+    """ROW's instructions a frame or a node from the callgrind profile at
+    PATH, when the run made one."""
+    if not os.path.exists(path):
+        return []
+    with open(path) as handle:
+        for line in handle:
+            total = TOTALS.match(line)
+            if total:
+                return [(row, INSTRUCTIONS, int(total.group(1)) / count)]
+    raise SystemExit(f"steady_ledger: no totals in {path}")
+
+
 def rows(run, frames, start_row, groups_path, tree):
     """The rows of a run: every steady row, the start row and its groups, and
     the dashboard. TREE is the source tree of the build."""
@@ -260,6 +279,7 @@ def rows(run, frames, start_row, groups_path, tree):
                 "realloc_bytes": full["realloc_bytes"] - zero["realloc_bytes"] + inside,
             }
             out.extend((row, metric, values[metric] / frames) for metric in METRICS)
+            out.extend(instructions(row, f"{base}.fb-instr.out", frames))
             continue
         counts = bench_counts(f"{base}.count")
         traced = trace(f"{base}.copy")
@@ -273,6 +293,7 @@ def rows(run, frames, start_row, groups_path, tree):
             "realloc_bytes": traced["steady"]["realloc_bytes"] + inside,
         }
         out.extend((row, metric, values[metric] / steady) for metric in METRICS)
+        out.extend(instructions(row, f"{base}.instr.out", steady))
         if row == start_row:
             nodes = counts["nodes"]
             started = copies(f"{base}.copy.json", START)
@@ -287,6 +308,7 @@ def rows(run, frames, start_row, groups_path, tree):
                 "realloc_bytes": traced["start"]["realloc_bytes"] + started.inside,
             }
             out.extend((f"{row}-start", metric, values[metric] / nodes) for metric in METRICS)
+            out.extend(instructions(f"{row}-start", f"{base}.instr-start.out", nodes))
             groups = load_groups(groups_path)
             calls = group_calls(f"{base}.heap.json", groups, tree)
             for name in list(groups) + ["other"]:
@@ -404,6 +426,15 @@ def diff(budget_path, groups_path, base_path, head_path):
                 delta, past = change(row, GROUP + name)
                 return f" ({delta:+.2f}{'*' if past else ''})"
             print("  " + group_line(row, values, groups, extra))
+    measured = [row for row, values in head.items() if INSTRUCTIONS in values]
+    if measured:
+        print("instructions (callgrind), a frame; the start a node")
+        print(f"{'row':<16} {'base':>14} {'head':>14} {'diff':>9}")
+        for row in measured:
+            after = head[row][INSTRUCTIONS]
+            before = base.get(row, {}).get(INSTRUCTIONS, 0)
+            share = f"{100 * (after - before) / before:+.2f}%" if before else "new"
+            print(f"{row:<16} {before:>14,.0f} {after:>14,.0f} {share:>9}")
     return 0
 
 

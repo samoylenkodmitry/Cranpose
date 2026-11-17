@@ -192,7 +192,7 @@ where
     pub(crate) surfaces: Vec<RootSurface<R>>,
     pub(crate) routing_scratch: surface::SurfaceRoutingScratch,
     pub(crate) pending_dirty_nodes: Vec<NodeId>,
-    pub(crate) pending_layer_property_nodes: Vec<NodeId>,
+    pub(crate) pending_lane_nodes: Vec<NodeId>,
     pub(crate) geometry_scene_nodes: cranpose_ui::GeometrySceneNodes,
     pub(crate) rest: shell_frame::RestTrim,
 }
@@ -535,7 +535,7 @@ where
             )],
             routing_scratch: surface::SurfaceRoutingScratch::default(),
             pending_dirty_nodes: Vec::new(),
-            pending_layer_property_nodes: Vec::new(),
+            pending_lane_nodes: Vec::new(),
             geometry_scene_nodes: cranpose_ui::GeometrySceneNodes::default(),
             rest: shell_frame::RestTrim::begun(),
         };

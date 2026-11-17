@@ -17,7 +17,7 @@ use crate::{
     HitTestTarget, RenderScene, SceneUpdates,
     graph::ProjectiveTransform,
     left_nodes::LeftNodes,
-    scene_pick::ScenePick,
+    scene_pick::{ScenePick, SurfaceHolds},
     scene_store::{LayerRef, RecordEvents, SceneStore},
 };
 
@@ -78,7 +78,7 @@ pub struct HitClip {
 pub struct SurfaceTarget {
     /// Finds the surface and content point a window point shows.
     pub pick: Rc<ScenePick>,
-    /// The surface's index in `pick`.
+    /// The surface's index in `pick`: of its layer's owner mesh.
     pub index: usize,
     /// Axis-aligned bounds of the clips above the surface, in window space.
     pub outer_clip_bounds: Option<Rect>,
@@ -228,10 +228,8 @@ impl SurfaceRegion {
     }
 
     fn local_point_along(&self, ray: Ray) -> Option<Point> {
-        let (index, hit) = self.target.pick.nearest_along(ray)?;
-        (index == self.target.index)
-            .then(|| self.local_in(hit.point))
-            .flatten()
+        let target = &self.target;
+        self.local_in(target.pick.content_point_along(ray, target.index)?)
     }
 
     fn local_in(&self, content: Point) -> Option<Point> {
@@ -533,6 +531,7 @@ impl HitList {
 pub(crate) struct HitTargets<'a> {
     list: &'a mut HitList,
     diagnostics: &'a Rc<RenderDiagnostics>,
+    pub(crate) holds: &'a SurfaceHolds,
 }
 
 impl HitTargets<'_> {
@@ -575,6 +574,8 @@ pub struct Scene {
     // changed: a frame that moves a target and takes no pointer input does
     // not walk the store for targets.
     hits: RefCell<HitList>,
+    // Kept through collections of the hit targets.
+    pub(crate) holds: SurfaceHolds,
     diagnostics: Rc<RenderDiagnostics>,
     // The updates that moved a layer with no layout pass, and the rebuilds,
     // which may have.
@@ -605,6 +606,7 @@ impl Scene {
             left_nodes: LeftNodes::default(),
             store,
             hits: RefCell::default(),
+            holds: SurfaceHolds::default(),
             diagnostics: Rc::new(RenderDiagnostics::new()),
             layer_moves: 0,
         }
@@ -675,6 +677,7 @@ impl Scene {
             let mut list = self.hits.borrow_mut();
             list.clear();
             list.stale = false;
+            self.holds.collect_again();
             if let Some(root) = self.store.root_layer() {
                 crate::hit_graph::collect_hits_from_graph(
                     root,
@@ -682,6 +685,7 @@ impl Scene {
                     &mut HitTargets {
                         list: &mut list,
                         diagnostics: &self.diagnostics,
+                        holds: &self.holds,
                     },
                     None,
                 );
@@ -744,6 +748,7 @@ impl Scene {
         HitTargets {
             list: self.hits.get_mut(),
             diagnostics: &self.diagnostics,
+            holds: &self.holds,
         }
         .push(node_id, capture_path, geometry, target);
     }
@@ -843,7 +848,8 @@ impl RenderScene for Scene {
         };
         let root = ProjectiveTransform::identity();
         crate::space::for_each_window_eye(root_layer, root, &mut |_, view, to_window| {
-            for seen in &view.surfaces {
+            // The owner of a layer drawn on several meshes places it.
+            for seen in view.surfaces.iter().filter(|seen| seen.mesh == 0) {
                 if let (Some(node_id), Some(content)) = (
                     seen.layer.node_id(),
                     view.content_to_window(seen, to_window),

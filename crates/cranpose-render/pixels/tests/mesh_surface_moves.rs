@@ -1,12 +1,13 @@
 //! A mesh surface that moves alone, update after update, as an animation
-//! moves it, draws where the scene's camera shows it after each move.
+// moves it, draws where the scene's camera shows it after each move; so
+// does a layer drawn on two meshes whose owner moves.
 
 use std::{cell::Cell, rc::Rc, sync::Arc};
 
 use cranpose_render_pixels::{Scene, draw_scene};
 use cranpose_ui::{
     Color, LayoutEngine, Modifier, Size,
-    space::{Camera, Mat4, Material, Mesh, MeshSurface, Scene3d, Vec3},
+    space::{Camera, Mat4, Material, Mesh, MeshSurface, MeshSurfaces, Scene3d, Vec3},
     widgets::{Box, BoxSpec},
 };
 
@@ -29,6 +30,25 @@ fn panel_at(x: f32) -> Mat4 {
 
 #[test]
 fn a_surface_that_moves_again_and_again_draws_where_the_camera_shows_it() {
+    assert_eq!(
+        red_where_the_owner_moves(None),
+        [true; 3],
+        "the panel draws where the camera shows it after each move"
+    );
+}
+
+#[test]
+fn a_layer_on_two_meshes_draws_where_its_moving_owner_shows() {
+    assert_eq!(
+        red_where_the_owner_moves(Some(-160.0)),
+        [true; 3],
+        "the owner draws where the camera shows it after each move"
+    );
+}
+
+// Whether the panel's middle shows red after each of three moves, with a
+// second mesh standing still at `second` when one is given.
+fn red_where_the_owner_moves(second: Option<f32>) -> [bool; 3] {
     let center_x = Rc::new(Cell::new(0.0f32));
     let panel_node = Rc::new(Cell::new(None));
     let (x, node) = (Rc::clone(&center_x), Rc::clone(&panel_node));
@@ -41,15 +61,13 @@ fn a_surface_that_moves_again_and_again_draws_where_the_camera_shows_it() {
                     width: WIDTH as f32,
                     height: HEIGHT as f32,
                 })
-                .scene3d(|| Scene3d {
-                    camera: Camera::look_at(
+                .scene3d(|| {
+                    Scene3d::new(Camera::look_at(
                         Vec3::new(0.0, 0.0, -FOCAL_LENGTH),
                         Vec3::ZERO,
                         Vec3::new(0.0, 1.0, 0.0),
                         FOCAL_LENGTH,
-                    ),
-                    light: None,
-                    eye: None,
+                    ))
                 }),
             BoxSpec::default(),
             move || {
@@ -57,12 +75,16 @@ fn a_surface_that_moves_again_and_again_draws_where_the_camera_shows_it() {
                 let id = Box(
                     Modifier::empty()
                         .required_size(PANEL)
-                        .mesh_surface(move || MeshSurface {
-                            mesh: Arc::clone(&plane),
-                            transform: panel_at(x.get()),
-                            material: Material::Unlit,
-                            casts_shadow: false,
-                            solid: true,
+                        .mesh_surfaces(move || {
+                            let placed = |transform| MeshSurface {
+                                mesh: Arc::clone(&plane),
+                                transform,
+                                material: Material::Unlit,
+                                casts_shadow: false,
+                                solid: true,
+                            };
+                            let more = second.map(|at| placed(panel_at(at))).into_iter();
+                            MeshSurfaces::new(placed(panel_at(x.get())), more.collect())
                         }),
                     BoxSpec::default(),
                     || {
@@ -111,8 +133,5 @@ fn a_surface_that_moves_again_and_again_draws_where_the_camera_shows_it() {
         frame[index] > 200 && frame[index + 1] < 40
     });
     applier.clear_runtime_handle();
-    assert_eq!(
-        red_at_middle, [true; 3],
-        "the panel draws where the camera shows it after each move"
-    );
+    red_at_middle
 }

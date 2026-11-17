@@ -12,8 +12,9 @@ use cranpose_render_common::{
 };
 use cranpose_ui_graphics::{
     BlendMode, CompositingStrategy, GraphicsLayer, Point, Rect, RenderEffect,
-    space::{Camera, Light, MeshSurface},
+    space::{Camera, Light, MeshSurface, Multisample},
 };
+use smallvec::SmallVec;
 
 use crate::{
     pipeline::{layer_casts_shadow, push_layer_shadow},
@@ -33,7 +34,7 @@ mod rigid_snap;
 mod rounded_clip_corners;
 mod shown;
 mod space_children;
-use backdrop_space::{detach_flat_backdrop, with_backdrop_in_own_space};
+use backdrop_space::{detach_flat_backdrop, wrap_backdrop_in_own_space};
 pub(crate) use layer_motion::LayerMotion;
 pub(crate) use layer_scene_recycler::LayerSceneRecycler;
 use push_content::{assign_shadow_anchor, push_content};
@@ -110,10 +111,12 @@ pub(crate) struct ChildLayer {
     pub(crate) cache_policy: CachePolicy,
     pub(crate) in_place: bool,
     pub(crate) content: Box<LayerScene>,
-    /// For a mesh surface in a scene: the mesh its surface is drawn on in
-    /// the scene's 3D pass, in place of a composite.
-    pub(crate) mesh: Option<Arc<MeshChild>>,
+    // For a mesh surface in a scene: its meshes, its owner first, in the
+    // scene's 3D pass in place of a composite; empty for a flat layer.
+    pub(crate) mesh: MeshChildren,
 }
+
+pub(crate) type MeshChildren = SmallVec<[Arc<MeshChild>; 1]>;
 
 /// A scene the window shows, as the 3D pass of its surfaces draws it, all in
 /// the space its eye stands in.
@@ -129,6 +132,8 @@ pub(crate) struct SceneDraw {
     /// The spaces the eye sees: its own first, each before the spaces seen
     /// through it.
     pub(crate) seen: Vec<SeenDraw>,
+    // The samples the scene's pass takes in each pixel.
+    pub(crate) multisample: Multisample,
 }
 
 /// A space a scene's eye sees, as its pass draws it.
@@ -548,14 +553,16 @@ fn surface_content(
 // The child that draws `layer` through a surface of its own, and whether
 // its content draws text or an image. The walk of its content records how
 // it draws each record into `parent`'s list when `shown` places it.
-fn isolated_child(
+// Pushes `layer` onto the children of `parent` as an isolated child, built
+// where it stays. Returns whether its subtree draws a pixel-sensitive draw.
+fn push_isolated_child(
     layer: LayerRef<'_>,
     motion: &mut LayerMotion,
     context: &WalkContext<'_>,
-    (mesh, shown): (Option<Arc<MeshChild>>, Option<ShownSpace>),
+    (mesh, shown): (MeshChildren, Option<ShownSpace>),
     parent: &mut LayerScene,
     recycler: &mut LayerSceneRecycler,
-) -> (ChildLayer, bool) {
+) -> bool {
     let visit = Visit::of(layer);
     let graphics = visit.graphics;
     let local_layer = local_content_layer_for(graphics);
@@ -581,7 +588,7 @@ fn isolated_child(
         wants_pixel_sensitive: context.settings.wants_pixel_sensitive
             || (!context.translated && context.snap_anchor.is_none()),
         update: context.settings.update,
-        in_space: context.settings.in_space || mesh.is_some(),
+        in_space: context.settings.in_space || !mesh.is_empty(),
         shown,
     };
     let translated = context.translated || layer.translated_content_context();
@@ -617,30 +624,28 @@ fn isolated_child(
         nominal_scale
     };
     motion.record_scale(layer, surface_scale, content_hash);
-    let in_place = mesh.is_none() && can_draw_in_place(layer, transform, surface_scale, &content);
-    (
-        ChildLayer {
-            z_index: parent.scene.next_z(),
-            node_id: layer.node_id(),
-            local_bounds: visit.bounds,
-            transform,
-            clip: context.visual_clip,
-            rounded_clip: rounded_clip_for_layer(layer),
-            alpha,
-            blend_mode: graphics.blend_mode,
-            effect: graphics.render_effect.clone(),
-            backdrop: graphics.backdrop_effect.clone(),
-            backdrop_alpha: local_layer.alpha,
-            snap_anchor,
-            surface_scale,
-            content_hash,
-            cache_policy: layer.cache_policy(),
-            in_place,
-            content,
-            mesh,
-        },
-        has_pixel_sensitive_subtree,
-    )
+    let in_place = mesh.is_empty() && can_draw_in_place(layer, transform, surface_scale, &content);
+    parent.children.push(ChildLayer {
+        z_index: parent.scene.next_z(),
+        node_id: layer.node_id(),
+        local_bounds: visit.bounds,
+        transform,
+        clip: context.visual_clip,
+        rounded_clip: rounded_clip_for_layer(layer),
+        alpha,
+        blend_mode: graphics.blend_mode,
+        effect: graphics.render_effect.clone(),
+        backdrop: graphics.backdrop_effect.clone(),
+        backdrop_alpha: local_layer.alpha,
+        snap_anchor,
+        surface_scale,
+        content_hash,
+        cache_policy: layer.cache_policy(),
+        in_place,
+        content,
+        mesh,
+    });
+    has_pixel_sensitive_subtree
 }
 
 fn collect_into(
@@ -756,7 +761,14 @@ fn collect_child(
         Placement::Direct(translation) => (translation, None),
         Placement::DirectRounded(translation, radius) => (translation, Some(radius)),
         Placement::Isolated => {
-            return collect_isolated_child(child, motion, context, None, out, recycler);
+            return collect_isolated_child(
+                child,
+                motion,
+                context,
+                MeshChildren::new(),
+                out,
+                recycler,
+            );
         }
     };
     let child_offset = Point::new(
@@ -898,7 +910,7 @@ fn collect_isolated_child(
     child: LayerRef<'_>,
     motion: &mut LayerMotion,
     context: &WalkContext<'_>,
-    mesh: Option<Arc<MeshChild>>,
+    mesh: MeshChildren,
     out: &mut LayerScene,
     recycler: &mut LayerSceneRecycler,
 ) -> bool {
@@ -925,12 +937,12 @@ fn collect_isolated_child(
         context.settings.light,
     );
     let shown = surface_space(child, transform, context);
-    let (isolated, has_pixel_sensitive_subtree) =
-        isolated_child(child, motion, context, (mesh, shown), out, recycler);
-    let mut isolated = with_backdrop_in_own_space(isolated, recycler);
+    let has_pixel_sensitive_subtree =
+        push_isolated_child(child, motion, context, (mesh, shown), out, recycler);
+    let isolated = out.children.last_mut().expect("the child just pushed");
+    wrap_backdrop_in_own_space(isolated, recycler);
     assign_shadow_anchor(&mut out.scene, shadows_before, isolated.snap_anchor);
-    detach_flat_backdrop(&mut isolated, &mut out.scene);
-    out.children.push(isolated);
+    detach_flat_backdrop(isolated, &mut out.scene);
     out.scene.next_z += 1;
     // A surface whose content's walk recorded how it drew each record draws
     // as in place does: a change beneath it changes what it changes there.

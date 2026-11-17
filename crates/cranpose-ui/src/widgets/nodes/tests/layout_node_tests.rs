@@ -592,3 +592,22 @@ fn a_node_its_pass_clears_and_never_places_is_left_unplaced() {
         "placing a node an earlier pass left unplaced reports it, where it was or not"
     );
 }
+
+// A removed slot container's shell shares the pool of the layout nodes: a
+// node an emit fills from it is a plain node, as a node made new is.
+#[test]
+fn a_filled_shell_of_a_virtual_node_is_a_plain_node() {
+    let mut shell = LayoutNode::new_virtual();
+    shell.prepare_for_recycle();
+    assert!(shell.is_virtual(), "a shell keeps the kind of its node");
+    shell.fill(
+        &Modifier::empty(),
+        Rc::new(TestMeasurePolicy),
+        LayoutEnvironment::default(),
+    );
+    let made = fresh_node();
+    assert!(!shell.is_virtual());
+    assert_eq!(shell.needs_semantics(), made.needs_semantics());
+    assert_eq!(shell.needs_redraw(), made.needs_redraw());
+    assert_eq!(shell.needs_measure(), made.needs_measure());
+}

@@ -62,7 +62,7 @@ robot-app = ["logging", "cranpose-ui/test-helpers", "cranpose/desktop-menus"]
 logging = ["dep:env_logger"]
 
 [dependencies]
-cranpose = { path = "../../crates/cranpose", default-features = false, features = ["webview"] }
+cranpose = { path = "../../crates/cranpose", default-features = false, features = ["webview", "localization"] }
 cranpose-animation = { path = "../../crates/cranpose-animation" }
 cranpose-core = { path = "../../crates/cranpose-core" }
 cranpose-ui = { path = "../../crates/cranpose-ui" }
@@ -84,6 +84,7 @@ pulldown-cmark = { version = "0.13.6", default-features = false }
 # song from a MIDI file.
 cranpose-audio = { path = "../../crates/cranpose-audio", default-features = false }
 midly = { version = "0.5.3", default-features = false, features = ["alloc"] }
+cranpose-text = { path = "../../crates/cranpose-text" }
 
 # Non-WASM dependencies
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
@@ -95,7 +96,6 @@ cranpose-app-shell = { path = "../../crates/cranpose-app-shell", features = ["te
 cranpose-core = { path = "../../crates/cranpose-core", features = ["diagnostics"] }
 cranpose-macros = { path = "../../crates/cranpose-macros" }
 cranpose-render-common = { path = "../../crates/cranpose-render/common" }
-cranpose-text = { path = "../../crates/cranpose-text" }
 cranpose-render-wgpu = { path = "../../crates/cranpose-render/wgpu" }
 cranpose-navigation = { path = "../../crates/cranpose-navigation" }
 cranpose-testing = { path = "../../crates/cranpose-testing", features = ["desktop-robot"] }

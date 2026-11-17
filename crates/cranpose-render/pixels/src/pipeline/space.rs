@@ -46,10 +46,12 @@ pub(super) fn seen_surfaces<'a>(
     let bounds = layer.local_bounds();
     let view = EyeView::of(&tree, bounds.size());
     let to_device = ProjectiveTransform::translation(bounds.x, bounds.y).then(*transform);
+    // A layer drawn on several meshes draws its content once, on its
+    // owner's stand-in: the in-place updates find each layer in one place.
     let mut surfaces: Vec<(f32, LayerRef<'a>, ProjectiveTransform)> = view
         .surfaces
         .iter()
-        .filter(|seen| seen.seen == 0)
+        .filter(|seen| seen.seen == 0 && seen.mesh == 0)
         .filter_map(|seen| {
             let parent = seen
                 .layer

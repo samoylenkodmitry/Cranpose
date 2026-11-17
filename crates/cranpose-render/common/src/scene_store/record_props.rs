@@ -88,8 +88,8 @@ impl SceneStore {
     /// Sets the graphics layer of `id`; `None` reads as the default. A record
     /// that keeps one keeps its slot. A changed layer notes a property
     /// change.
-    pub fn set_graphics_layer(&mut self, id: RecordId, layer: Option<GraphicsLayer>) {
-        if self.graphics_layer(id) != layer.as_ref() {
+    pub fn set_graphics_layer(&mut self, id: RecordId, layer: Option<&GraphicsLayer>) {
+        if self.graphics_layer(id) != layer {
             self.write_graphics_layer(id, layer);
             self.note_property_change(id);
         }
@@ -101,7 +101,7 @@ impl SceneStore {
     pub(crate) fn write_graphics_layer(
         &mut self,
         id: RecordId,
-        layer: Option<GraphicsLayer>,
+        layer: Option<&GraphicsLayer>,
     ) -> bool {
         // Most records keep no graphics layer.
         (layer.is_some() || self.warm[id.index()].graphics_layer.is_some())
@@ -109,24 +109,24 @@ impl SceneStore {
     }
 
     #[inline(never)]
-    fn replace_graphics_layer(&mut self, id: RecordId, layer: Option<GraphicsLayer>) -> bool {
+    fn replace_graphics_layer(&mut self, id: RecordId, layer: Option<&GraphicsLayer>) -> bool {
         let index = id.index();
         let slot = self.warm[index].graphics_layer;
         let space =
             |layer: Option<&GraphicsLayer>| layer.is_some_and(|layer| layer.space.is_some());
-        if space(slot.map(|slot| &self.graphics_layers[slot.index()])) != space(layer.as_ref()) {
+        if space(slot.map(|slot| &self.graphics_layers[slot.index()])) != space(layer) {
             super::facts::forget_children(self, id.index());
         }
         match (slot, layer) {
             (Some(slot), Some(layer)) => {
                 let current = &self.graphics_layers[slot.index()];
-                if *current == layer {
+                if current == layer {
                     return false;
                 }
-                if super::facts::layer_inputs(current) != super::facts::layer_inputs(&layer) {
+                if super::facts::layer_inputs(current) != super::facts::layer_inputs(layer) {
                     self.stale_with_parent(id.index());
                 }
-                self.graphics_layers[slot.index()] = layer;
+                self.graphics_layers[slot.index()].clone_from(layer);
             }
             (Some(slot), None) => {
                 self.graphics_layers.remove(slot.index());
@@ -136,7 +136,7 @@ impl SceneStore {
                 self.stale_with_parent(index);
             }
             (None, Some(layer)) => {
-                let slot = GraphicsLayerId::from_index(self.graphics_layers.insert(layer));
+                let slot = GraphicsLayerId::from_index(self.graphics_layers.insert(layer.clone()));
                 self.warm[index].graphics_layer = Some(slot);
                 let flags = &mut self.tree[index].flags;
                 *flags = flags.with(RecordFlags::HAS_GRAPHICS_LAYER);

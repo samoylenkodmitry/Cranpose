@@ -183,6 +183,16 @@ pub(crate) struct HeldWindow {
     pub(crate) landings: Option<u64>,
 }
 
+impl HeldWindow {
+    // Takes the value of `other`; its stand-ins copy only the rects they
+    // hold.
+    pub(crate) fn assign(&mut self, other: &Self) {
+        self.oldest = other.oldest;
+        self.stand_ins.assign(&other.stand_ins);
+        self.landings = other.landings;
+    }
+}
+
 #[derive(Default)]
 pub(crate) struct RenderReturns {
     pub(crate) scene: Option<FrameSceneStorage>,

@@ -158,7 +158,11 @@ impl Node for LayoutNode {
     }
 
     fn rehouse_for_recycle(&self) -> Option<Box<dyn Node>> {
-        Some(Box::new(Self::new_recycled_shell(self.is_virtual)))
+        // The box comes first, so the shell is made in it.
+        Some(Box::write(
+            Box::new_uninit(),
+            Self::new_recycled_shell(self.is_virtual),
+        ))
     }
 
     fn rehouse_for_live_compaction(&mut self) -> Option<Box<dyn Node>> {

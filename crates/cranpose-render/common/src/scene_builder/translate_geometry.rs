@@ -9,14 +9,14 @@ use super::{
 use crate::{
     NodeUpdate,
     graph::ProjectiveTransform,
-    layer_transform::layer_transform_to_window,
+    layer_transform::laid_out_transform_to_window,
     scene_store::{LayerRef, RecordKind, SceneStore},
 };
 
 #[derive(Clone, Copy)]
 pub(super) struct TranslateGeometry {
     pub(super) content_offset: Point,
-    pub(super) window_transform: ProjectiveTransform,
+    pub(super) window_transform: Option<ProjectiveTransform>,
     pub(super) top_left: Point,
     child_origin: Point,
 }
@@ -33,7 +33,7 @@ impl TranslateGeometry {
             x: parent_abs.content_origin.x + layout_state.position().x,
             y: parent_abs.content_origin.y + layout_state.position().y,
         };
-        let window_transform = layer_transform_to_window(
+        let window_transform = laid_out_transform_to_window(
             parent_abs.window_transform,
             top_left,
             local_bounds,

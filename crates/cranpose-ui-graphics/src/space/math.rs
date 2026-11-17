@@ -18,26 +18,31 @@ impl Vec3 {
     pub const ZERO: Self = Self::new(0.0, 0.0, 0.0);
 
     /// A vector from its three coordinates.
+    #[inline]
     pub const fn new(x: f32, y: f32, z: f32) -> Self {
         Self { x, y, z }
     }
 
     /// The vector as an array of its coordinates.
+    #[inline]
     pub const fn to_array(self) -> [f32; 3] {
         [self.x, self.y, self.z]
     }
 
     /// The vector from an array of its coordinates.
+    #[inline]
     pub const fn from_array([x, y, z]: [f32; 3]) -> Self {
         Self { x, y, z }
     }
 
     /// The dot product.
+    #[inline]
     pub fn dot(self, other: Self) -> f32 {
         self.x * other.x + self.y * other.y + self.z * other.z
     }
 
     /// The cross product. In scene space x cross y is z.
+    #[inline]
     pub fn cross(self, other: Self) -> Self {
         Self::new(
             self.y * other.z - self.z * other.y,
@@ -47,22 +52,26 @@ impl Vec3 {
     }
 
     /// The vector's length.
+    #[inline]
     pub fn length(self) -> f32 {
         self.dot(self).sqrt()
     }
 
     /// The vector scaled to length one, or `None` for a vector of no length.
+    #[inline]
     pub fn normalized(self) -> Option<Self> {
         let length = self.length();
         (length.is_normal()).then(|| self * (1.0 / length))
     }
 
     /// The point `t` of the way from `self` to `other`.
+    #[inline]
     pub fn lerp(self, other: Self, t: f32) -> Self {
         self + (other - self) * t
     }
 
     /// The lower of each coordinate of `self` and `other`.
+    #[inline]
     pub fn min(self, other: Self) -> Self {
         Self::new(
             self.x.min(other.x),
@@ -72,6 +81,7 @@ impl Vec3 {
     }
 
     /// The higher of each coordinate of `self` and `other`.
+    #[inline]
     pub fn max(self, other: Self) -> Self {
         Self::new(
             self.x.max(other.x),
@@ -84,6 +94,7 @@ impl Vec3 {
 impl Add for Vec3 {
     type Output = Self;
 
+    #[inline]
     fn add(self, other: Self) -> Self {
         Self::new(self.x + other.x, self.y + other.y, self.z + other.z)
     }
@@ -92,6 +103,7 @@ impl Add for Vec3 {
 impl Sub for Vec3 {
     type Output = Self;
 
+    #[inline]
     fn sub(self, other: Self) -> Self {
         Self::new(self.x - other.x, self.y - other.y, self.z - other.z)
     }
@@ -100,6 +112,7 @@ impl Sub for Vec3 {
 impl Mul<f32> for Vec3 {
     type Output = Self;
 
+    #[inline]
     fn mul(self, factor: f32) -> Self {
         Self::new(self.x * factor, self.y * factor, self.z * factor)
     }
@@ -108,6 +121,7 @@ impl Mul<f32> for Vec3 {
 impl Neg for Vec3 {
     type Output = Self;
 
+    #[inline]
     fn neg(self) -> Self {
         Self::new(-self.x, -self.y, -self.z)
     }

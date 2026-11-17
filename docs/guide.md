@@ -1852,7 +1852,9 @@ or a surface that follows a state read in them moves without recomposition.
 ```rust
 use std::sync::Arc;
 
-use cranpose::space::{Camera, Light, Mat4, Material, Mesh, MeshSurface, Scene3d, Vec3};
+use cranpose::space::{
+    Camera, Light, Mat4, Material, Mesh, MeshSurface, Multisample, Scene3d, Vec3,
+};
 
 #[composable]
 fn Globe(spin: MutableState<f32>) {
@@ -1872,6 +1874,7 @@ fn Globe(spin: MutableState<f32>) {
                 size: 0.05,
             }),
             eye: None,
+            multisample: Multisample::X4,
         }),
         BoxSpec::default(),
         move || {
@@ -1902,6 +1905,14 @@ A light with `shadows` set casts the shadows of the surfaces with
 spans. A light with a size casts soft shadows. Such a shadow is sharp where an
 object meets a surface. It grows wider farther from the object. A 3D object in
 front of flat UI drops its shadow on the UI.
+
+A scene's `multisample` sets how many samples its pass takes in each pixel.
+With `Multisample::Off`, the edge of a sphere or a tube steps from pixel to
+pixel. `Multisample::X4` tests four points in each pixel and averages them, so
+the edges of meshes show smooth. Such a scene draws into targets of its own,
+four samples deep, which costs GPU memory and time. A scene with
+`Multisample::Off` makes none of them. The CPU renderer draws every scene with
+one sample.
 
 A surface's `material` sets how its content meets the light:
 

@@ -652,15 +652,13 @@ fn TurningSurface(step: MutableState<u32>) {
     Box(
         rect_modifier(TURNING_SCENE)
             .background(Color(0.1, 0.1, 0.16, 1.0))
-            .scene3d(|| Scene3d {
-                camera: Camera::look_at(
+            .scene3d(|| {
+                Scene3d::new(Camera::look_at(
                     Vec3::new(0.0, 0.0, -300.0),
                     Vec3::ZERO,
                     Vec3::new(0.0, 1.0, 0.0),
                     300.0,
-                ),
-                light: None,
-                eye: None,
+                ))
             }),
         BoxSpec::default(),
         move || {

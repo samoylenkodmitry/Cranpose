@@ -7,19 +7,21 @@ use cranpose_ui_graphics::BlendMode;
 use super::{ChildLayer, LayerSceneRecycler, direct_translation, uniform_scale_translation};
 use crate::scene::{BackdropLayer, CompositorScene, LayerRoundedClip, SceneCapacityHint};
 
-pub(super) fn with_backdrop_in_own_space(
-    mut child: ChildLayer,
+// Wraps `child` in place in a layer of its own space when its backdrop must
+// read beneath it there: the child goes into the wrapper's content.
+pub(super) fn wrap_backdrop_in_own_space(
+    child: &mut ChildLayer,
     recycler: &mut LayerSceneRecycler,
-) -> ChildLayer {
+) {
     if child.backdrop.is_none()
         || (uniform_scale_translation(child.transform).is_some()
             && child.alpha == 1.0
             && child.blend_mode == BlendMode::SrcOver)
     {
-        return child;
+        return;
     }
     let content = recycler.take(SceneCapacityHint::default());
-    let mut outer = ChildLayer {
+    let outer = ChildLayer {
         z_index: child.z_index,
         node_id: child.node_id,
         local_bounds: child.local_bounds,
@@ -37,24 +39,22 @@ pub(super) fn with_backdrop_in_own_space(
         cache_policy: child.cache_policy,
         in_place: false,
         content,
-        mesh: child.mesh.take(),
+        mesh: std::mem::take(&mut child.mesh),
     };
-    let mut inner = ChildLayer {
-        z_index: outer.content.scene.next_z(),
-        transform: ProjectiveTransform::identity(),
-        clip: None,
-        alpha: 1.0,
-        blend_mode: BlendMode::SrcOver,
-        snap_anchor: None,
-        surface_scale: 1.0,
-        in_place: false,
-        ..child
-    };
+    let mut inner = std::mem::replace(child, outer);
+    let outer = child;
+    inner.z_index = outer.content.scene.next_z();
+    inner.transform = ProjectiveTransform::identity();
+    inner.clip = None;
+    inner.alpha = 1.0;
+    inner.blend_mode = BlendMode::SrcOver;
+    inner.snap_anchor = None;
+    inner.surface_scale = 1.0;
+    inner.in_place = false;
     detach_flat_backdrop(&mut inner, &mut outer.content.scene);
     outer.content.scene.next_z += 1;
     outer.content.children.push(inner);
     outer.content.refresh_backdrop_summary();
-    outer
 }
 
 pub(super) fn detach_flat_backdrop(child: &mut ChildLayer, scene: &mut CompositorScene) {

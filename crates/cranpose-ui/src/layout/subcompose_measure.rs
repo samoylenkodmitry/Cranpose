@@ -52,9 +52,7 @@ impl LayoutBuilderState {
                 measurer: Box::new(|child_id: NodeId, child_constraints: Constraints| {
                     match self.measure_node(child_id, child_constraints) {
                         Ok(measured) => {
-                            measured_children
-                                .borrow_mut()
-                                .insert(child_id, Rc::clone(&measured));
+                            measured_children.borrow_mut().insert(child_id, measured);
                             let size = measured.size_for_parent();
                             Placeable::value(size.width, size.height, child_id)
                                 .with_alignment_lines(measured.alignment_lines_for_parent())
@@ -69,7 +67,7 @@ impl LayoutBuilderState {
                     }
                 }),
                 retained_measure_lookup: Box::new(|child_id| {
-                    measured_children.borrow().get(&child_id).cloned()
+                    measured_children.borrow().get(&child_id).copied()
                 }),
                 error: measure_error,
             },

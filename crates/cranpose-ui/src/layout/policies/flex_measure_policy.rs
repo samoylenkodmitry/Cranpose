@@ -5,7 +5,6 @@ use cranpose_ui_layout::{
     Axis, Constraints, MeasurePolicy, MeasureResult, MeasureScope, ParentData, Placement,
     bias_offset, round_to_px,
 };
-use smallvec::SmallVec;
 
 use super::empty_measure_policy::empty_layout_hold;
 use crate::{
@@ -506,33 +505,84 @@ struct FlexChild {
     placeable: Option<cranpose_ui_layout::Placeable>,
 }
 
-// The child lists of a thread's rows and columns, kept between measures. A
-// list on the stack took 548 bytes on the ESP32 at every nesting level a
-// measure passes through, eight children inline.
-pub(crate) struct SpareFlexChildren(RefCell<Vec<Vec<FlexChild>>>);
+// The lists a row or column measures with: its children, then their sizes
+// and positions along its main axis.
+#[derive(Default)]
+struct FlexLists {
+    children: Vec<FlexChild>,
+    main_sizes: Vec<f32>,
+    main_positions: Vec<f32>,
+}
 
-// Nested rows and columns each hold one list while they measure; a list over
-// this many spares goes back to the heap.
-const SPARE_LISTS: usize = 32;
+impl FlexLists {
+    // The heap bytes the lists hold.
+    fn bytes(&self) -> usize {
+        self.children.capacity() * size_of::<FlexChild>()
+            + (self.main_sizes.capacity() + self.main_positions.capacity()) * size_of::<f32>()
+    }
+}
 
-impl SpareFlexChildren {
+// The lists of a thread's rows and columns, kept between measures: one for
+// each row or column that measures at once, as deep as they nest, so each
+// nesting level takes back lists of its own size. Lists on the stack took
+// 548 bytes on the ESP32 at every nesting level a measure passes through,
+// eight children inline.
+pub(crate) struct SpareFlexLists(RefCell<Spares>);
+
+struct Spares {
+    // The last set given back is on top, for the next measure to take.
+    sets: Vec<FlexLists>,
+    // The heap bytes of the sets.
+    bytes: usize,
+}
+
+impl Spares {
+    // At most this many sets: the gauntlet nests columns 48 deep, the
+    // allocation test 65 rows and columns.
+    const SETS: usize = 128;
+    // At most this many bytes in the sets below the top one.
+    const IDLE_BYTES: usize = 64 * 1024;
+
+    // Keeps `lists` whole on top, so a row or column that measures again
+    // takes back lists of its own size, and drops the largest of the other
+    // sets while there are too many or they hold too many bytes.
+    fn keep(&mut self, lists: FlexLists) {
+        let top = lists.bytes();
+        self.bytes += top;
+        self.sets.push(lists);
+        while self.sets.len() > Self::SETS || self.bytes - top > Self::IDLE_BYTES {
+            let idle = &self.sets[..self.sets.len() - 1];
+            let Some(largest) = (0..idle.len()).max_by_key(|&at| idle[at].bytes()) else {
+                break;
+            };
+            self.bytes -= self.sets.remove(largest).bytes();
+        }
+    }
+
+    fn take(&mut self) -> Option<FlexLists> {
+        let lists = self.sets.pop()?;
+        self.bytes -= lists.bytes();
+        Some(lists)
+    }
+}
+
+impl SpareFlexLists {
     pub(crate) const fn new() -> Self {
-        Self(RefCell::new(Vec::new()))
+        Self(RefCell::new(Spares {
+            sets: Vec::new(),
+            bytes: 0,
+        }))
     }
 
-    fn take() -> Vec<FlexChild> {
-        thread_state::with(|state| state.spare_flex_children.0.borrow_mut().pop())
-            .unwrap_or_default()
+    fn take() -> FlexLists {
+        thread_state::with(|state| state.spare_flex_lists.0.borrow_mut().take()).unwrap_or_default()
     }
 
-    fn give(mut children: Vec<FlexChild>) {
-        children.clear();
-        thread_state::with(|state| {
-            let mut spares = state.spare_flex_children.0.borrow_mut();
-            if spares.len() < SPARE_LISTS {
-                spares.push(children);
-            }
-        });
+    fn give(mut lists: FlexLists) {
+        lists.children.clear();
+        lists.main_sizes.clear();
+        lists.main_positions.clear();
+        thread_state::with(|state| state.spare_flex_lists.0.borrow_mut().keep(lists));
     }
 }
 
@@ -646,13 +696,18 @@ impl MeasurePolicy for FlexMeasurePolicy {
         let (min_main, max_main, min_cross, max_cross) = self.get_axis_constraints(constraints);
         let spacing = self.get_spacing();
 
-        let mut children = SpareFlexChildren::take();
+        let mut lists = SpareFlexLists::take();
+        let FlexLists {
+            children,
+            main_sizes,
+            main_positions,
+        } = &mut lists;
         children.extend(measurables.iter().map(|child| FlexChild {
             data: child.parent_data(),
             placeable: None,
         }));
         let (fixed_space, mut max_cross_size) =
-            self.measure_fixed_children(measurables, &mut children, (max_main, max_cross), spacing);
+            self.measure_fixed_children(measurables, children, (max_main, max_cross), spacing);
 
         let num_children = measurables.len();
         let total_spacing = if num_children > 1 {
@@ -663,25 +718,22 @@ impl MeasurePolicy for FlexMeasurePolicy {
 
         max_cross_size = max_cross_size.max(self.measure_weighted_children(
             measurables,
-            &mut children,
+            children,
             (max_main, max_cross),
             (fixed_space, spacing),
         ));
 
-        let (total_main, before_baseline, after_baseline) = self.measured_extents(&children);
+        let (total_main, before_baseline, after_baseline) = self.measured_extents(children);
         let total_main = total_main + total_spacing;
         max_cross_size = max_cross_size.max(before_baseline + after_baseline);
 
         let container_main = total_main.clamp(min_main, max_main);
         let container_cross = max_cross_size.clamp(min_cross, max_cross);
 
-        let child_main_sizes: SmallVec<[f32; 8]> = measured(&children)
-            .map(|(p, _)| self.get_main_axis_size(p.width(), p.height()))
-            .collect();
-
-        let mut main_positions: SmallVec<[f32; 8]> =
-            SmallVec::with_capacity(child_main_sizes.len());
-        main_positions.resize(child_main_sizes.len(), 0.0);
+        main_sizes.extend(
+            measured(children).map(|(p, _)| self.get_main_axis_size(p.width(), p.height())),
+        );
+        main_positions.resize(main_sizes.len(), 0.0);
 
         let arrangement = if total_main > container_main && !self.main_axis_arrangement.is_spaced()
         {
@@ -689,15 +741,10 @@ impl MeasurePolicy for FlexMeasurePolicy {
         } else {
             self.main_axis_arrangement
         };
-        arrangement.arrange(
-            self.density,
-            container_main,
-            &child_main_sizes,
-            &mut main_positions,
-        );
+        arrangement.arrange(self.density, container_main, main_sizes, main_positions);
 
         placements.reserve(children.len());
-        for ((placeable, data), &main_pos) in measured(&children).zip(&main_positions) {
+        for ((placeable, data), &main_pos) in measured(children).zip(main_positions.iter()) {
             let cross_pos =
                 self.cross_axis_position(placeable, data, container_cross, before_baseline);
 
@@ -713,7 +760,7 @@ impl MeasurePolicy for FlexMeasurePolicy {
 
             placements.push(Placement::new(placeable.node_id(), x, y, 0.0));
         }
-        SpareFlexChildren::give(children);
+        SpareFlexLists::give(lists);
 
         let (width, height) = match self.axis {
             Axis::Horizontal => (container_main, container_cross),

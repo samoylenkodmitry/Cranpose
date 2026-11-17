@@ -7,8 +7,10 @@ use cranpose_animation::{
 };
 use cranpose_core::{mutableStateOf, remember};
 use cranpose_ui::{
-    Constraints, Layout, MeasureLayoutOptions, MeasureResult, Modifier, TestComposition,
-    measure_layout, measure_layout_with_options, run_test_composition,
+    Constraints, Layout, MeasureLayoutOptions, MeasureResult, MemoryHeadroom, Modifier,
+    TestComposition, Text, TextLayoutOptions, TextStyle, measure_layout,
+    measure_layout_with_options, prepare_text_layout, run_test_composition, set_memory_headroom,
+    text::AnnotatedString,
     widgets::{
         box_widget::{Box, BoxSpec},
         column::{Column, ColumnSpec},
@@ -30,6 +32,8 @@ mod thread_exit;
 static GLOBAL: &StatsAlloc<System> = &INSTRUMENTED_SYSTEM;
 
 const PASSES: usize = 10;
+// The allocations of a pass that lays a long paragraph out at a new width.
+const LONG_PARAGRAPH_ALLOCATIONS: usize = 10;
 
 // Rows of 10 points as tall as their parent is wide.
 fn rows(count: usize) {
@@ -55,19 +59,26 @@ fn remeasure_allocations(count: usize) -> usize {
 }
 
 // Allocations per pass of measuring `composition` at a new width.
-fn pass_allocations(mut composition: TestComposition) -> usize {
+fn pass_allocations(composition: TestComposition) -> usize {
+    pass_allocations_at(composition, |pass| 100.0 + pass as f32)
+}
+
+// Allocations per pass of measuring `composition` at `width(pass)`, after
+// two passes that warm it up.
+fn pass_allocations_at(mut composition: TestComposition, width: impl Fn(usize) -> f32) -> usize {
     let root = composition.root().expect("a composed root");
     let handle = composition.runtime_handle();
     let mut applier = composition.applier_mut();
     applier.set_runtime_handle(handle);
-    let mut measure = |width: f32| {
-        measure_layout(&mut applier, root, Size::new(width, 4000.0)).expect("the column measures");
+    let mut measure = |pass: usize| {
+        let size = Size::new(width(pass), 4000.0);
+        measure_layout(&mut applier, root, size).expect("the column measures");
     };
-    measure(100.0);
-    measure(101.0);
+    measure(0);
+    measure(1);
     let region = Region::new(GLOBAL);
-    for pass in 0..PASSES {
-        measure(102.0 + pass as f32);
+    for pass in 2..2 + PASSES {
+        measure(pass);
     }
     let allocations = region.change().allocations;
     applier.clear_runtime_handle();
@@ -95,15 +106,164 @@ fn first_measure_allocations(count: usize) -> usize {
 }
 
 // A parent measures a new child through its entry in the parent's one
-// list of children, which takes no allocation of its own.
-fn a_first_measure_allocates_at_most_two_per_row() {
+// list of children, which takes no allocation of its own, and the child's
+// measurement sits in its cache.
+fn a_first_measure_allocates_at_most_one_per_row() {
     let few = first_measure_allocations(10);
     let many = first_measure_allocations(110);
     let per_row = many.saturating_sub(few) as f64 / 100.0;
     println!("allocations per row at a first measure: {per_row}");
     assert!(
-        per_row <= 2.0,
+        per_row <= 1.0,
         "{per_row} allocations per row at a first measure"
+    );
+}
+
+// A column over a row of three boxes.
+fn column_over_a_row(below: impl Fn() + 'static) {
+    Column(
+        Modifier::empty().fill_max_width(),
+        ColumnSpec::default(),
+        move || {
+            Row(
+                Modifier::empty().fill_max_width(),
+                RowSpec::default(),
+                || {
+                    for _ in 0..3 {
+                        Box(
+                            Modifier::empty().weight(1.0).height(10.0),
+                            BoxSpec::default(),
+                            || {},
+                        );
+                    }
+                },
+            );
+            below();
+        },
+    );
+}
+
+// `depth` more such columns nested inside one another.
+fn nested_columns(depth: usize) {
+    column_over_a_row(move || {
+        if depth > 0 {
+            nested_columns(depth - 1);
+        }
+    });
+}
+
+// As many columns, side by side under the first.
+fn sibling_columns(count: usize) {
+    column_over_a_row(move || {
+        for _ in 0..count {
+            column_over_a_row(|| {});
+        }
+    });
+}
+
+// Rows and columns nested deeper than any fixed count of spare lists
+// measure again with the lists of the measures before: a pass over 64
+// nested columns allocates what a pass over 64 sibling columns does.
+fn remeasuring_deeply_nested_rows_and_columns_allocates_nothing_more() {
+    let sibling = pass_allocations(run_test_composition(|| sibling_columns(63)));
+    let nested = pass_allocations(run_test_composition(|| nested_columns(63)));
+    println!("allocations a pass of 64 columns, siblings: {sibling}, nested: {nested}");
+    assert_eq!(nested, sibling, "a deep nest of rows and columns allocates");
+}
+
+// A column of `width` rows over `depth` more such columns, nested or side
+// by side.
+fn wide_columns(depth: usize, width: usize, nested: bool) {
+    Column(
+        Modifier::empty().fill_max_width(),
+        ColumnSpec::default(),
+        move || {
+            rows(width);
+            if nested && depth > 0 {
+                wide_columns(depth - 1, width, true);
+            } else if !nested {
+                for _ in 0..depth {
+                    wide_columns(0, width, false);
+                }
+            }
+        },
+    );
+}
+
+// The bytes a fresh thread still holds after it measured `depth` wide
+// columns once and dropped their composition.
+fn bytes_left_by_wide_columns(depth: usize, nested: bool) -> isize {
+    std::thread::spawn(move || {
+        let region = Region::new(GLOBAL);
+        let mut composition = run_test_composition(move || wide_columns(depth, 300, nested));
+        let root = composition.root().expect("a composed root");
+        let handle = composition.runtime_handle();
+        {
+            let mut applier = composition.applier_mut();
+            applier.set_runtime_handle(handle);
+            measure_layout(&mut applier, root, Size::new(100.0, 4000.0))
+                .expect("the columns measure");
+            applier.clear_runtime_handle();
+        }
+        drop(composition);
+        let change = region.change();
+        change.bytes_allocated.cast_signed() - change.bytes_deallocated.cast_signed()
+    })
+    .join()
+    .expect("the measuring thread")
+}
+
+// Rows and columns keep the lists of their last measure whole and at most
+// 64 KiB in the others once their composition is gone: wide columns nested
+// 16 deep, whose lists for 300 children take about 25 KiB a level, leave at
+// most 64 KiB more than as many side by side leave.
+fn wide_nested_columns_leave_a_bounded_set_of_lists() {
+    let sibling = bytes_left_by_wide_columns(15, false);
+    let nested = bytes_left_by_wide_columns(15, true);
+    println!("bytes left by 16 wide columns, siblings: {sibling}, nested: {nested}");
+    assert!(
+        nested - sibling <= 64 * 1024,
+        "nested wide columns left {} bytes more",
+        nested - sibling
+    );
+}
+
+// Allocations per pass of a column of `count` rows that share its height by
+// weight, so the column's policy measures them again at each new width.
+fn weighted_remeasure_allocations(count: usize) -> usize {
+    pass_allocations(run_test_composition(move || {
+        Column(
+            Modifier::empty().fill_max_width(),
+            ColumnSpec::default(),
+            move || {
+                for _ in 0..count {
+                    Box(
+                        Modifier::empty().fill_max_width().weight(1.0),
+                        BoxSpec::default(),
+                        || {},
+                    );
+                }
+            },
+        );
+    }))
+}
+
+// A column of 300 rows measures again with the lists of its last measure:
+// a pass allocates no more than a pass over a column of 10 rows. Each runs
+// on a fresh thread, whose rows and columns hold no spare lists of earlier
+// measures to grow.
+fn remeasuring_a_wide_column_allocates_nothing_more() {
+    let on_fresh_thread = |count| {
+        std::thread::spawn(move || weighted_remeasure_allocations(count))
+            .join()
+            .expect("the measuring thread")
+    };
+    let narrow = on_fresh_thread(10);
+    let wide = on_fresh_thread(300);
+    println!("allocations a pass of a column of 300 rows: {wide}, of 10 rows: {narrow}");
+    assert_eq!(
+        wide, narrow,
+        "a column of 300 rows allocates as it measures again"
     );
 }
 
@@ -335,10 +495,53 @@ fn an_animation_frame_allocates_only_its_recomposition() {
     assert!(allocations <= 6, "{allocations} allocations a frame");
 }
 
-// Allocations of composing a column of `count` rows of two boxes each.
-fn rows_of_boxes_allocations(count: usize) -> usize {
+// A paragraph of 10,000 characters, far more glyphs than the layouter keeps
+// room for between short texts, measured at a width a few words wider each
+// pass, so it breaks its lines anew: it shapes in the glyph storage of the
+// pass before.
+fn remeasuring_a_long_paragraph_keeps_its_glyph_storage() {
+    let text = "word ".repeat(2_000);
+    let composition = run_test_composition(move || {
+        Text(text.clone(), Modifier::empty(), TextStyle::default());
+    });
+    let allocations = pass_allocations_at(composition, |pass| 200.0 + 60.0 * pass as f32);
+    println!("allocations of remeasuring a long paragraph: {allocations}");
+    assert!(
+        allocations <= LONG_PARAGRAPH_ALLOCATIONS,
+        "{allocations} allocations a pass"
+    );
+}
+
+// A long paragraph's glyph room stays from one frame's layout to the next
+// frame's, and goes when the texts rest: the next long paragraph takes it
+// anew.
+fn a_rest_gives_back_a_long_paragraph_glyph_room() {
+    let text = AnnotatedString::from("word ".repeat(2_000).as_str());
+    let style = TextStyle::default();
+    let context = cranpose_ui::AppContext::new();
+    context.enter(|| {
+        let layout_at = |width: f32| {
+            context.start_text_frame();
+            let region = Region::new(GLOBAL);
+            let options = TextLayoutOptions::default();
+            drop(prepare_text_layout(&text, &style, options, Some(width)));
+            region.change().allocations
+        };
+        layout_at(200.0);
+        let kept = layout_at(260.0);
+        context.trim();
+        let after_rest = layout_at(320.0);
+        println!("allocations of a long paragraph's layout: {kept}, after a rest: {after_rest}");
+        assert!(after_rest > kept, "the rest kept the glyph room");
+    });
+}
+
+// Allocations of composing a column of `count` rows of two boxes each,
+// with `headroom` memory left.
+fn rows_of_boxes_allocations(count: usize, headroom: MemoryHeadroom) -> usize {
     let region = Region::new(GLOBAL);
     let composition = run_test_composition(move || {
+        set_memory_headroom(headroom);
         Column(Modifier::empty(), ColumnSpec::default(), move || {
             for _ in 0..count {
                 Row(Modifier::empty(), RowSpec::default(), || {
@@ -362,13 +565,23 @@ fn rows_of_boxes_allocations(count: usize) -> usize {
 }
 
 // Composing a row of two boxes makes its three layout nodes, each with its
-// box and parts, the size modifiers of the boxes and the row's list of
-// children. The rows and the boxes share their measure policies.
+// box and parts, the size modifiers of the boxes, one allocation each, and
+// the row's list of children. The rows and the boxes share their measure
+// policies.
+// With little memory left the recycle pool keeps no shells, so a node made
+// fresh makes no shell to seed it with either.
 fn composing_a_row_of_boxes_allocates_within_its_budget() {
-    rows_of_boxes_allocations(4);
-    let per_row = (rows_of_boxes_allocations(40) - rows_of_boxes_allocations(20)) / 20;
-    println!("allocations of composing a row of two boxes: {per_row}");
-    assert!(per_row <= 11, "{per_row} allocations a row");
+    for headroom in [MemoryHeadroom::Ample, MemoryHeadroom::Tight] {
+        rows_of_boxes_allocations(4, headroom);
+        let per_row = (rows_of_boxes_allocations(40, headroom)
+            - rows_of_boxes_allocations(20, headroom))
+            / 20;
+        println!("allocations of composing a row of two boxes, {headroom:?} memory: {per_row}");
+        assert!(
+            per_row <= 11,
+            "{per_row} allocations a row, {headroom:?} memory"
+        );
+    }
 }
 
 /// A modifier chain built link by link keeps its elements in one shared
@@ -474,12 +687,17 @@ fn a_thread_that_held_a_composition_frees_its_memory_at_exit() {
 /// One test, so no other test's allocations land in these regions: the
 /// counting allocator counts every thread.
 fn layout_and_modifiers_stay_within_their_allocation_budgets() {
-    a_first_measure_allocates_at_most_two_per_row();
+    a_first_measure_allocates_at_most_one_per_row();
     remeasuring_a_row_allocates_nothing();
+    remeasuring_deeply_nested_rows_and_columns_allocates_nothing_more();
+    wide_nested_columns_leave_a_bounded_set_of_lists();
+    remeasuring_a_wide_column_allocates_nothing_more();
     placing_children_out_of_order_allocates_nothing();
     a_layout_pass_lends_its_applier_without_rebuilding_it();
     a_kept_column_lets_its_changed_children_fill_their_measurements();
     an_animation_frame_allocates_only_its_recomposition();
+    remeasuring_a_long_paragraph_keeps_its_glyph_storage();
+    a_rest_gives_back_a_long_paragraph_glyph_room();
     composing_a_row_of_boxes_allocates_within_its_budget();
     if !cfg!(feature = "inspection") {
         a_modifier_chain_allocates_its_elements_and_one_shared_box();

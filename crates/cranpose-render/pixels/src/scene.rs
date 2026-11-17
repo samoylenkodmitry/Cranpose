@@ -116,6 +116,27 @@ impl DrawShape {
         self.outline = self.outline.shifted(shift);
     }
 
+    // Takes the place of `old`. A shape with a solid brush owns nothing, so
+    // the old one skips its drop: the brush's drop runs out of line, and a
+    // replace moves the whole old shape out for it. The pattern names every
+    // field, so a new field that owns memory has to be handled here.
+    pub(crate) fn take_place(self, old: &mut Self) {
+        let Self {
+            rect: _,
+            snap_anchor: _,
+            snap_to_pixel_grid: _,
+            brush,
+            outline: _,
+            clip: _,
+            blend_mode: _,
+        } = &*old;
+        if matches!(brush, Brush::Solid(_)) {
+            std::mem::forget(std::mem::replace(old, self));
+        } else {
+            drop(std::mem::replace(old, self));
+        }
+    }
+
     pub(crate) fn of_params(params: ShapeDrawParams) -> Self {
         Self {
             rect: params.rect,
@@ -679,13 +700,9 @@ impl RasterScene {
         }
         if let Some(mut rewrite) = self.rewrite.take() {
             // The old item in the place stays until the new one is compared
-            // with it; then the new one moves there once. An assignment
-            // would also copy the new item aside while the old one drops.
-            // A replace moves the old item out for its drop: a shape whole,
-            // as its brush drops out of line, another kind only the fields
-            // its drop reads.
+            // with it; then the new one takes its place.
             match rewrite.place(self, &item) {
-                Some(slot) => drop(std::mem::replace(&mut T::lists(self).0[slot], item)),
+                Some(slot) => item.take_place(&mut T::lists(self).0[slot]),
                 None => rewrite.spill(item),
             }
             self.rewrite = Some(rewrite);

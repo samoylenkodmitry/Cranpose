@@ -3,6 +3,8 @@ mod blocking_work;
 mod callback_parameters;
 mod computed_locals;
 mod computed_state;
+mod derived_state_closure;
+mod derived_state_return;
 mod effect_cancellation;
 mod effects_and_frames;
 mod global_writes;
@@ -17,6 +19,7 @@ mod pausable_content;
 mod process_ids;
 mod recompose_ancestors_first;
 mod recompose_child_order;
+mod recompose_queue_order;
 #[cfg(feature = "inspection")]
 mod recomposition_inspection;
 mod returned_values;

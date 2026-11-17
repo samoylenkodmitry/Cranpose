@@ -19,7 +19,7 @@ pub(super) fn draws_nothing(content: &LayerScene) -> bool {
 pub(super) fn composites_nothing(child: &ChildLayer) -> bool {
     child.blend_mode == BlendMode::SrcOver
         && (child.alpha == 0.0
-            || (child.mesh.is_none()
+            || (child.mesh.is_empty()
                 && draws_nothing(&child.content)
                 && child
                     .effect

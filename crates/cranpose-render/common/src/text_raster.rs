@@ -121,7 +121,8 @@ pub fn rasterize_text(
     if request.is_degenerate() {
         return None;
     }
-    let paints = SpanPaints::of(request.text, request.style, request.fallback_color);
+    let mut paints = SpanPaints::default();
+    paints.fill(request.text, request.style, request.fallback_color);
     let solid = request.ink == GlyphInk::Painted
         && paints.all(|paint| paint.solid_color().is_some() && paint.shadow.is_none());
     let width = whole::to_i32(whole::ceil(request.rect.width)).max(1);
@@ -148,7 +149,8 @@ pub fn paint_text(
     if request.is_degenerate() {
         return true;
     }
-    let paints = SpanPaints::of(request.text, request.style, request.fallback_color);
+    let mut paints = SpanPaints::default();
+    paints.fill(request.text, request.style, request.fallback_color);
     if request.motion() != TextMotion::Static
         || request.ink == GlyphInk::Hidden
         || !paints.all(|paint| paint.solid_color().is_some() && paint.shadow.is_none())

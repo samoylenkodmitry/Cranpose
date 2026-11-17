@@ -2,6 +2,8 @@ use cranpose::{AppLauncher, Robot};
 use desktop_app::app::{DemoTab, TEST_ACTIVE_TAB_STATE};
 
 pub(crate) const SET_TAB: &str = "set-tab";
+// The hook that answers with the slug of the tab the demo shows.
+pub(crate) const ACTIVE_TAB: &str = "active-tab";
 
 pub(crate) fn launch(title: &str, width: u32, height: u32) -> AppLauncher {
     AppLauncher::new()
@@ -15,10 +17,13 @@ pub(crate) fn counter_demo() {
 }
 
 pub(crate) fn set_tab_hook(name: String, argument: String) -> Result<Option<String>, String> {
-    if name != SET_TAB {
-        return Err(format!("unsupported robot app hook {name}({argument})"));
+    match name.as_str() {
+        SET_TAB => set_tab(&argument),
+        ACTIVE_TAB => Ok(TEST_ACTIVE_TAB_STATE
+            .with(|cell| cell.borrow().as_ref().copied())
+            .map(|tab| tab.get().slug().to_owned())),
+        _ => Err(format!("unsupported robot app hook {name}({argument})")),
     }
-    set_tab(&argument)
 }
 
 pub(crate) fn set_tab(name: &str) -> Result<Option<String>, String> {

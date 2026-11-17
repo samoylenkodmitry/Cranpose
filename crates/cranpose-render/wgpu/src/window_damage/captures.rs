@@ -119,7 +119,7 @@ fn child(child: &ChildLayer, place: &Place, captures: &mut Vec<Capture>) -> bool
     if !child.reads_backdrop() || composites_nothing(child) {
         return true;
     }
-    if child.mesh.is_some() {
+    if !child.mesh.is_empty() {
         return false;
     }
     let Some(clip) = child.clip.map_or(Some(place.clip), |clip| {

@@ -42,9 +42,23 @@ pub enum DemoTab {
     Backrooms,
     Tv,
     Music,
+    Explainer,
 }
 
 pub const DEFAULT_INITIAL_TAB: DemoTab = DemoTab::Guide;
+
+// The state of the tab a demo app shows, for a page that opens another tab;
+// `None` outside a demo app. An app provides its one state and never
+// replaces it, so the local is static: reading it subscribes nothing.
+pub(crate) fn local_active_tab(
+) -> cranpose_core::StaticCompositionLocal<Option<cranpose_core::MutableState<DemoTab>>> {
+    thread_local! {
+        static ACTIVE_TAB: cranpose_core::StaticCompositionLocal<
+            Option<cranpose_core::MutableState<DemoTab>>,
+        > = cranpose_core::staticCompositionLocalOf(|| None);
+    }
+    ACTIVE_TAB.with(Clone::clone)
+}
 
 // The tab a launch that names none opens: the TV screen on a TV, where a
 // remote drives the demo, and the guide elsewhere. Read in composition.
@@ -65,7 +79,7 @@ pub struct DemoTabInfo {
     pub startup_aliases: &'static [&'static str],
 }
 
-pub const DEMO_TAB_INFO: [DemoTabInfo; 39] = [
+pub const DEMO_TAB_INFO: [DemoTabInfo; 40] = [
     DemoTabInfo {
         tab: DemoTab::Guide,
         label: "Cranpose Guide",
@@ -339,6 +353,13 @@ pub const DEMO_TAB_INFO: [DemoTabInfo; 39] = [
         source_path: "apps/desktop-demo/src/app/music/tab.rs",
         startup_aliases: &["clairdelune", "piano"],
     },
+    DemoTabInfo {
+        tab: DemoTab::Explainer,
+        label: "Explainer",
+        slug: "explainer",
+        source_path: "apps/desktop-demo/src/app/explainer/tab.rs",
+        startup_aliases: &["silk", "htmlincanvas"],
+    },
 ];
 
 impl DemoTab {
@@ -406,7 +427,7 @@ pub fn startup_tab_from_args(args: impl IntoIterator<Item = String>) -> DemoTab 
         .unwrap_or(DEFAULT_INITIAL_TAB)
 }
 
-pub const DEMO_TABS: [DemoTab; 39] = [
+pub const DEMO_TABS: [DemoTab; 40] = [
     DemoTab::Guide,
     DemoTab::Performance,
     DemoTab::Liquid,
@@ -419,6 +440,7 @@ pub const DEMO_TABS: [DemoTab; 39] = [
     DemoTab::StillWall,
     DemoTab::Patchwork,
     DemoTab::Counter,
+    DemoTab::Explainer,
     DemoTab::CompositionLocal,
     DemoTab::Async,
     DemoTab::Animations,

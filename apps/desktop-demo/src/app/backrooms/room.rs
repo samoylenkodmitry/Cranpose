@@ -18,7 +18,7 @@ use std::sync::Arc;
 use cranpose_core::{key, rememberMutableStateOf, LaunchedEffect};
 use cranpose_ui::{
     composable, local_eye,
-    space::{Camera, Light, Mat4, Material, MeshSurface, Scene3d, Vec3},
+    space::{Camera, Light, Mat4, Material, MeshSurface, Multisample, Scene3d, Vec3},
     text::{FontWeight, TextAlign, TextUnit},
     Alignment, Box, BoxSpec, Color, Modifier, Rect, Size, Text, TextStyle,
 };
@@ -217,6 +217,7 @@ fn Doorway(inner: Visit, frame: Mat4, place: Place) {
                         camera,
                         light: Some(LIGHT),
                         eye: None,
+                        multisample: Multisample::Off,
                     }),
                 BoxSpec::default(),
                 move || Room(inner, behind),

@@ -4,6 +4,7 @@
     reason = "the demo application reports launch failures and its traces on the terminal"
 )]
 
+pub mod accent_field;
 pub mod app;
 pub mod fonts;
 

@@ -302,13 +302,13 @@ pub fn derivedStateOf<T: 'static + Clone + PartialEq>(
     compute: impl Fn() -> T + 'static,
 ) -> State<T> {
     let source = crate::caller_location_key();
-    let compute: Rc<dyn Fn() -> T> = Rc::new(compute);
     composer_context::with_composer(|composer| {
         composer.with_group(source, |composer| {
             let derivation = composer.current_recompose_scope();
-            if let Some(scope) = &derivation
-                && !scope.is_derivation()
-            {
+            let marked_now = derivation
+                .as_ref()
+                .is_some_and(|scope| !scope.is_derivation());
+            if let Some(scope) = derivation.as_ref().filter(|_| marked_now) {
                 scope.mark_derivation();
                 // A read subscribes the innermost scope with a callback: the
                 // first derivation's reads would subscribe the reader.
@@ -318,27 +318,46 @@ pub fn derivedStateOf<T: 'static + Clone + PartialEq>(
             let (state, rerun) = composer
                 .remember_at(source, || None::<DerivedState<T>>)
                 .update(|slot| {
-                    let derived = match slot.take() {
-                        Some(derived) => {
-                            derived.set_compute(compute);
-                            if restarted_for(composer, &derived) {
-                                // The derivation keeps the states it read.
-                                if let Some(scope) = &derivation {
-                                    scope.keep_reads();
-                                }
-                            } else {
-                                derived.recompute();
+                    let (derived, fresh) = match slot.take() {
+                        // The value stays and the derivation keeps the states
+                        // it read; the next change runs the new closure, which
+                        // can hold values the old one did not.
+                        Some(derived) if restarted_for(composer, &derived) => {
+                            derived.set_compute(Rc::new(compute));
+                            if let Some(scope) = &derivation {
+                                scope.keep_reads();
                             }
-                            derived
+                            (derived, false)
                         }
-                        None => DerivedState::new(runtime, compute, derivation.as_ref()),
+                        Some(derived) => {
+                            derived.set_compute(Rc::new(compute));
+                            derived.recompute();
+                            (derived, false)
+                        }
+                        None => {
+                            let compute = Rc::new(compute);
+                            (
+                                DerivedState::new(runtime, compute, derivation.as_ref()),
+                                true,
+                            )
+                        }
                     };
                     let state = derived.state();
-                    let rerun = derived.rerun();
+                    // A scope keeps the callback its first composition gave
+                    // it. A new scope, which holds only the placeholder set
+                    // above, gets the rerun even for a kept derived state.
+                    let rerun = (fresh
+                        || marked_now
+                        || derivation
+                            .as_ref()
+                            .is_some_and(|scope| !scope.has_recompose_callback()))
+                    .then(|| derived.rerun());
                     *slot = Some(derived);
                     (state, rerun)
                 });
-            composer.set_recompose_callback(rerun);
+            if let Some(rerun) = rerun {
+                composer.set_recompose_callback(rerun);
+            }
             state
         })
     })
