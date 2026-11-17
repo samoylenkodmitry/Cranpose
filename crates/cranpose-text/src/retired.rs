@@ -75,34 +75,50 @@ impl Retired<Arc<RenderString>> {
     /// A plain string of `text`, in the room of a retired string when
     /// nothing holds one any more.
     pub fn plain(&mut self, text: &str) -> AnnotatedString {
-        self.plain_in(text, RenderString::refill_plain, AnnotatedString::from)
+        self.plain_of(Plain::Borrowed(text))
     }
 
     /// [`Self::plain`] of a string the caller gives up, whose room the
     /// string keeps: a retired string nothing holds gives its shared block
     /// and lets its own room go.
     pub fn plain_owned(&mut self, text: String) -> AnnotatedString {
-        self.plain_in(text, RenderString::replace_plain, AnnotatedString::new)
+        self.plain_of(Plain::Owned(text))
     }
 
-    // A plain string of `text`: `fill` puts `text` into a retired string
-    // nothing holds any more, and `fresh` makes a new one when no such
-    // string is kept. Empty text takes none.
-    fn plain_in<S: AsRef<str>>(
-        &mut self,
-        text: S,
-        fill: impl FnOnce(&mut RenderString, S),
-        fresh: impl FnOnce(S) -> AnnotatedString,
-    ) -> AnnotatedString {
-        if text.as_ref().is_empty() {
+    // A plain string of `text`, in a retired string nothing holds any more
+    // when one is kept. Empty text takes none. One body for both kinds of
+    // text, so a build holds one copy of the search.
+    fn plain_of(&mut self, text: Plain<'_>) -> AnnotatedString {
+        if text.as_str().is_empty() {
             return AnnotatedString::default();
         }
         if let Some(mut content) = self.take(|content| Arc::get_mut(content).is_some())
             && let Some(render) = Arc::get_mut(&mut content)
         {
-            fill(render, text);
+            match text {
+                Plain::Borrowed(text) => render.refill_plain(text),
+                Plain::Owned(text) => render.replace_plain(text),
+            }
             return AnnotatedString::from(content);
         }
-        fresh(text)
+        match text {
+            Plain::Borrowed(text) => AnnotatedString::from(text),
+            Plain::Owned(text) => AnnotatedString::new(text),
+        }
+    }
+}
+
+// A plain text a retired string takes: copied, or given up with its room.
+enum Plain<'a> {
+    Borrowed(&'a str),
+    Owned(String),
+}
+
+impl Plain<'_> {
+    fn as_str(&self) -> &str {
+        match self {
+            Self::Borrowed(text) => text,
+            Self::Owned(text) => text,
+        }
     }
 }

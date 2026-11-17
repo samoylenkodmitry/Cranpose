@@ -122,22 +122,29 @@ impl RecyclePool {
     // the cold ones this pass needed fresh shells for turn warm and the rest
     // go, and the warm pool moves to its target.
     pub(crate) fn end_pass(&mut self, next_stable_id: &mut NodeId) {
-        self.warm.append(&mut std::mem::take(&mut self.returning));
+        // Shell by shell, as below: `VecDeque::append` and `split_off` bring
+        // code of their own for a ring that wraps.
+        let returning = std::mem::take(&mut self.returning);
+        self.warm.reserve(returning.len());
+        for recycled in returning {
+            self.warm.push_back(recycled);
+        }
         let needed = std::mem::take(&mut self.fresh_creations);
         let mut cold = std::mem::take(&mut self.cold);
-        if needed > 0 {
+        let promote = if needed > 0 {
             let remaining_limit = self
                 .limit
                 .unwrap_or(usize::MAX)
                 .saturating_sub(self.warm.len());
-            let promote = cold.len().min(needed).min(remaining_limit);
-            let split_at = cold.len().saturating_sub(promote);
-            for mut recycled in cold.split_off(split_at) {
-                recycled.set_origin(RecycleOrigin::Warm);
-                self.warm.push_back(recycled);
-            }
+            cold.len().min(needed).min(remaining_limit)
+        } else {
+            0
+        };
+        drop_oldest(&mut cold, promote);
+        for mut recycled in cold {
+            recycled.set_origin(RecycleOrigin::Warm);
+            self.warm.push_back(recycled);
         }
-        drop(cold);
         // A type that only had shells created fresh has nothing to size yet.
         if self.warm.is_empty()
             && self.limit.is_none()
@@ -155,10 +162,15 @@ impl RecyclePool {
 
 // Drops the oldest shells of `pool` past `limit`, oldest first.
 fn drop_oldest_past(pool: &mut VecDeque<RecycledNode>, limit: Option<usize>) {
-    if let Some(limit) = limit
-        && pool.len() > limit
-    {
-        let excess = pool.len() - limit;
-        pool.drain(..excess);
+    if let Some(limit) = limit {
+        drop_oldest(pool, limit);
+    }
+}
+
+// Drops the oldest shells of `pool` until it holds `kept`. One at a time:
+// `VecDeque::drain` brings code of its own for a ring that wraps.
+fn drop_oldest(pool: &mut VecDeque<RecycledNode>, kept: usize) {
+    while pool.len() > kept {
+        pool.pop_front();
     }
 }

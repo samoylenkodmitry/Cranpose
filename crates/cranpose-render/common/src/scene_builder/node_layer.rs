@@ -17,7 +17,7 @@ use super::{
 use crate::{
     graph::{CachePolicy, HitTestNode, IsolationReasons, PrimitivePhase, ProjectiveTransform},
     layer_transform::{
-        layer_scales_or_rotates, layer_transform_to_parent, layer_transform_to_window,
+        laid_out_transform_to_window, layer_scales_or_rotates, layer_transform_to_parent,
     },
     scene_store::{HeadKind, Item, LayerHead, LayerRef, RecordKind, RecordSeed, SceneStore},
 };
@@ -355,13 +355,15 @@ fn write_layer_with_outer(
 #[derive(Clone, Copy)]
 pub(super) struct AbsOrigin {
     pub(super) content_origin: Point,
-    pub(super) window_transform: ProjectiveTransform,
+    // `None` inside a mesh surface, whose scene publishes its window
+    // geometry.
+    pub(super) window_transform: Option<ProjectiveTransform>,
 }
 
 impl AbsOrigin {
     pub(super) const ROOT: Self = Self {
         content_origin: Point { x: 0.0, y: 0.0 },
-        window_transform: ProjectiveTransform::identity(),
+        window_transform: Some(ProjectiveTransform::identity()),
     };
 
     pub(super) fn children_of(self, layer: LayerRef<'_>) -> Self {
@@ -376,7 +378,7 @@ impl AbsOrigin {
                 x: self.content_origin.x + origin.x + content_offset.x,
                 y: self.content_origin.y + origin.y + content_offset.y,
             },
-            window_transform: layer_transform_to_window(
+            window_transform: laid_out_transform_to_window(
                 self.window_transform,
                 top_left,
                 layer.local_bounds(),

@@ -178,14 +178,18 @@ fn fake_bold_ratio(size: f32) -> f32 {
 }
 
 /// The paints of a text's spans, by the text they cover.
+#[derive(Default)]
 pub(crate) struct SpanPaints {
     paints: SmallVec<[(Range<usize>, SpanPaint); 2]>,
 }
 
 impl SpanPaints {
-    // The paints of `text` in `style`, a span's style over the text's.
-    pub(crate) fn of(text: StyledTextRef<'_>, style: &TextStyle, fallback: Color) -> Self {
-        let mut paints: SmallVec<[(Range<usize>, SpanPaint); 2]> = SmallVec::new();
+    // Holds the paints of `text` in `style`, a span's style over the text's.
+    // The caller's list fills in place: one built here would move out whole,
+    // as the visit borrows it.
+    pub(crate) fn fill(&mut self, text: StyledTextRef<'_>, style: &TextStyle, fallback: Color) {
+        let paints = &mut self.paints;
+        paints.clear();
         visit_span_styles(text, style, |range, merged| {
             let paint = SpanPaint::of(merged, fallback);
             match paints.last_mut() {
@@ -193,7 +197,6 @@ impl SpanPaints {
                 _ => paints.push((range, paint)),
             }
         });
-        Self { paints }
     }
 
     // The span of the character at `offset` and its paint.

@@ -9,7 +9,6 @@ use cranpose_foundation::{
     SemanticsConfiguration,
 };
 use cranpose_ui_layout::MeasurePolicy;
-use smallvec::SmallVec;
 
 use super::layout_invalidation_diag::log_layout_invalidation_dispatch;
 
@@ -42,10 +41,8 @@ use crate::{
 #[repr(C)]
 pub struct LayoutNode {
     parts: Rc<LayoutParts>,
-    // The node's children, virtual nodes as they are. Two fit in the node:
-    // most parents hold one or two, and those take no allocation of their
-    // own.
-    pub(crate) children: SmallVec<[NodeId; 2]>,
+    // The actual children of this node (folded view - includes virtual nodes as-is)
+    pub(crate) children: Vec<NodeId>,
 
     /// Where the chain's layout modifiers put their content, written by
     /// layout and read by the draws and text the slices collect.
@@ -216,7 +213,7 @@ impl LayoutNode {
             source_trace: cranpose_core::source_trace::current_source_trace(),
             modifier_chain: ModifierChainHandle::detached(environment.direction),
             density: crate::density::shared_density(environment.density),
-            children: SmallVec::new(),
+            children: Vec::new(),
             needs_semantics: Cell::new(true),
             descendant_needs_semantics: Cell::new(false),
             semantics_reach: Cell::new(None),

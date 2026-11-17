@@ -41,12 +41,26 @@ pub(crate) fn held_policy<P: MeasurePolicy + Clone>(policy: &P) -> Rc<dyn Measur
         return crate::widgets::nodes::layout_node::empty_measure_policy();
     }
     if let Some(flex) = any.downcast_ref::<FlexMeasurePolicy>() {
-        return crate::thread_state::with(|state| shared(&state.recent_policies.flex, flex));
+        return shared_flex(flex);
     }
     if let Some(boxed) = any.downcast_ref::<BoxMeasurePolicy>() {
-        return crate::thread_state::with(|state| shared(&state.recent_policies.boxes, boxed));
+        return shared_box(boxed);
     }
     Rc::new(policy.clone())
+}
+
+// Each crate that composes a row, a column or a box instantiates
+// `held_policy` for its policy. These two read the thread's state in this
+// crate alone: read from `held_policy`, the state's initializer took a copy
+// in each such crate, 5 KB of code on an ESP32.
+#[inline(never)]
+fn shared_flex(policy: &FlexMeasurePolicy) -> Rc<dyn MeasurePolicy> {
+    crate::thread_state::with(|state| shared(&state.recent_policies.flex, policy))
+}
+
+#[inline(never)]
+fn shared_box(policy: &BoxMeasurePolicy) -> Rc<dyn MeasurePolicy> {
+    crate::thread_state::with(|state| shared(&state.recent_policies.boxes, policy))
 }
 
 // The kept policy equal to `policy`, or a new one kept first.

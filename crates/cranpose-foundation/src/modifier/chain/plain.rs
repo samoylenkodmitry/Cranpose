@@ -6,6 +6,7 @@ use std::{
     fmt,
     hash::Hasher,
     marker::PhantomData,
+    rc::Rc,
 };
 
 use cranpose_core::{ProvidedValue, hash::default};
@@ -271,12 +272,9 @@ pub struct PlainFns {
     element_type: fn() -> TypeId,
     words: u8,
     capabilities: NodeCapabilities,
-    update_invalidation: Option<InvalidationKind>,
     layout: Option<&'static PlainLayoutFns>,
     type_name: fn() -> &'static str,
-    equals: fn(&[u32], &[u32]) -> bool,
-    inspector_name: fn(&[u32]) -> &'static str,
-    inspector_properties: fn(&[u32], &mut dyn FnMut(&'static str, String)),
+    element: fn(&[u32]) -> DynModifierElement,
 }
 
 impl fmt::Debug for PlainFns {
@@ -315,8 +313,8 @@ impl PlainFns {
         hash_words(words)
     }
 
-    pub(in super::super) fn element(&'static self, words: &[u32]) -> DynModifierElement {
-        DynModifierElement::plain(PlainWords::new(self, words))
+    pub(in super::super) fn element(&self, words: &[u32]) -> DynModifierElement {
+        (self.element)(words)
     }
 
     /// The element `words` hold, when it is an `E`.
@@ -338,14 +336,9 @@ impl<E: PlainElement> FnsOf<E> {
         element_type: TypeId::of::<E>,
         words: Self::WORDS,
         capabilities: E::CAPABILITIES,
-        update_invalidation: E::UPDATE_INVALIDATION,
         layout: E::LAYOUT,
         type_name: type_name::<E>,
-        equals: |a, b| E::from_words(a) == E::from_words(b),
-        inspector_name: |words| E::from_words(words).inspector_name(),
-        inspector_properties: |words, inspector| {
-            E::from_words(words).inspector_properties(inspector);
-        },
+        element: |words| plain_element(E::from_words(words)),
     };
 }
 
@@ -375,80 +368,35 @@ pub trait PlainValue {
     fn equals_words(&self, words: &[u32]) -> bool;
 }
 
-// A plain element's value as a modifier holds it in place of an
-// allocation: its type's table and its words, those past the value's own
-// zero.
-#[derive(Clone, Copy)]
-pub(crate) struct PlainWords {
-    fns: &'static PlainFns,
-    words: [u32; PLAIN_WORDS_MAX],
-    // A byte that holds one value, in the room after the words: the enums
-    // around the value, a modifier's element and a modifier of one element
-    // or of several, keep their tags in the values it never holds and stay
-    // as large as the value.
-    #[expect(dead_code, reason = "its use is the values it never holds")]
-    room: Room,
-}
-
-#[derive(Clone, Copy)]
-#[repr(u8)]
-enum Room {
-    Zero = 0,
-}
-
-impl PlainWords {
-    pub(crate) fn new(fns: &'static PlainFns, words: &[u32]) -> Self {
-        let mut held = [0; PLAIN_WORDS_MAX];
-        held[..words.len()].copy_from_slice(words);
-        Self {
-            fns,
-            words: held,
-            room: Room::Zero,
-        }
-    }
-
-    fn of<E: PlainElement>(element: &E) -> Self {
-        let mut words = [0; PLAIN_WORDS_MAX];
-        element.to_words(&mut words[..E::WORDS]);
-        Self {
-            fns: &FnsOf::<E>::FNS,
-            words,
-            room: Room::Zero,
-        }
-    }
-
-    pub(crate) fn words(&self) -> &[u32] {
-        &self.words[..self.fns.words()]
-    }
-}
+struct TypedPlainElement<E: PlainElement>(E);
 
 // The type alone, as the wrapper of a node's element prints: the values
 // would bring each element's formatting into every image.
-impl fmt::Debug for PlainWords {
+impl<E: PlainElement> fmt::Debug for TypedPlainElement<E> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("PlainWords")
-            .field("type", &self.fns.type_name())
+        f.debug_struct("TypedPlainElement")
+            .field("type", &type_name::<E>())
             .finish()
     }
 }
 
-impl PlainValue for PlainWords {
+impl<E: PlainElement> PlainValue for TypedPlainElement<E> {
     fn fns(&self) -> &'static PlainFns {
-        self.fns
+        &FnsOf::<E>::FNS
     }
 
     fn write_words(&self, words: &mut [u32]) {
-        words.copy_from_slice(self.words());
+        self.0.to_words(words);
     }
 
     fn equals_words(&self, words: &[u32]) -> bool {
-        (self.fns.equals)(self.words(), words)
+        E::from_words(words) == self.0
     }
 }
 
-impl AnyModifierElement for PlainWords {
+impl<E: PlainElement> AnyModifierElement for TypedPlainElement<E> {
     fn element_type(&self) -> TypeId {
-        self.fns.element_type()
+        TypeId::of::<E>()
     }
 
     fn maker(&self) -> ElementMaker<'_> {
@@ -460,23 +408,29 @@ impl AnyModifierElement for PlainWords {
     }
 
     fn capabilities(&self) -> NodeCapabilities {
-        self.fns.capabilities
+        E::CAPABILITIES
     }
 
     fn hash_code(&self) -> u64 {
-        hash_words(self.words())
+        let mut words = [0; PLAIN_WORDS_MAX];
+        let words = &mut words[..E::WORDS];
+        self.0.to_words(words);
+        hash_words(words)
     }
 
     fn equals_element(&self, other: &dyn AnyModifierElement) -> bool {
-        other.equals_plain(self.fns, self.words())
+        other
+            .as_any()
+            .downcast_ref::<Self>()
+            .is_some_and(|typed| typed.0 == self.0)
     }
 
     fn inspector_name(&self) -> &'static str {
-        (self.fns.inspector_name)(self.words())
+        self.0.inspector_name()
     }
 
     fn record_inspector_properties(&self, visitor: &mut dyn FnMut(&'static str, String)) {
-        (self.fns.inspector_properties)(self.words(), visitor);
+        self.0.inspector_properties(visitor);
     }
 
     fn requires_update(&self) -> bool {
@@ -488,7 +442,7 @@ impl AnyModifierElement for PlainWords {
     }
 
     fn update_invalidation_kind(&self) -> Option<InvalidationKind> {
-        self.fns.update_invalidation
+        E::UPDATE_INVALIDATION
     }
 
     fn provided_composition_locals(&self) -> Vec<ProvidedValue> {
@@ -502,12 +456,12 @@ impl AnyModifierElement for PlainWords {
     fn equals_plain(&self, fns: &PlainFns, words: &[u32]) -> bool {
         // The same table tells the same type without a call; two tables of
         // one type may still differ in address.
-        (std::ptr::eq(fns, self.fns) || fns.element_type() == self.fns.element_type())
-            && (self.fns.equals)(self.words(), words)
+        (std::ptr::eq(fns, self.fns()) || fns.element_type() == TypeId::of::<E>())
+            && E::from_words(words) == self.0
     }
 }
 
 /// The type-erased element of a plain `element`.
 pub fn plain_element<E: PlainElement>(element: E) -> DynModifierElement {
-    DynModifierElement::plain(PlainWords::of(&element))
+    Rc::new(TypedPlainElement(element))
 }

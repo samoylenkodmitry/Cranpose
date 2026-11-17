@@ -10,7 +10,9 @@ use super::{
     async_runtime_example,
     backrooms::BackroomsTab,
     bench_tab::{BenchScreen, BenchTab},
-    composition_local_example, counter_app, documentation, file_picker_tab,
+    composition_local_example, counter_app,
+    demo_tab::local_active_tab,
+    documentation, file_picker_tab,
     floating_windows::FloatingWindowsTab,
     glass_feed::GlassFeedTab,
     glass_tiles::GlassTilesTab,
@@ -55,7 +57,10 @@ pub(super) fn TabContent(
         move || {
             if showing_source.get() {
                 SourcePanel(active);
-            } else {
+                return;
+            }
+            let provided = local_active_tab().provides(Some(active_tab));
+            cranpose_core::CompositionLocalProvider([provided], move || {
                 cranpose_core::with_key(&active, || {
                     if tab_requires_scroll(active) {
                         ScrollableTab(move || {
@@ -65,7 +70,7 @@ pub(super) fn TabContent(
                         render_active_tab(active, startup, wsz_tab_state);
                     }
                 });
-            }
+            });
         },
     );
 }
@@ -106,6 +111,7 @@ pub(super) fn tab_requires_scroll(tab: DemoTab) -> bool {
             | DemoTab::Backrooms
             | DemoTab::Tv
             | DemoTab::Music
+            | DemoTab::Explainer
     )
 }
 
@@ -154,7 +160,8 @@ pub(super) fn render_active_tab(
         | DemoTab::Xr
         | DemoTab::Backrooms
         | DemoTab::Tv
-        | DemoTab::Music => render_showcase_tab(active, startup, wsz_tab_state),
+        | DemoTab::Music
+        | DemoTab::Explainer => render_showcase_tab(active, startup, wsz_tab_state),
     }
 }
 
@@ -179,7 +186,12 @@ fn render_showcase_tab(active: DemoTab, startup: StartupSelection, wsz_tab_state
         DemoTab::Liquid => LiquidUiTab(),
         DemoTab::GlassFeed => GlassFeedTab(),
         DemoTab::GlassTiles => GlassTilesTab(),
-        DemoTab::Room | DemoTab::Xr | DemoTab::Backrooms | DemoTab::Tv | DemoTab::Music => {
+        DemoTab::Room
+        | DemoTab::Xr
+        | DemoTab::Backrooms
+        | DemoTab::Tv
+        | DemoTab::Music
+        | DemoTab::Explainer => {
             render_scene_tab(active);
         }
         DemoTab::Guide
@@ -212,6 +224,7 @@ fn render_scene_tab(active: DemoTab) {
         DemoTab::Backrooms => BackroomsTab(),
         DemoTab::Tv => super::tv::TvTab(),
         DemoTab::Music => super::music::MusicTab(),
+        DemoTab::Explainer => super::explainer::ExplainerTab(),
         _ => {}
     }
 }

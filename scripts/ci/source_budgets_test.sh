@@ -26,6 +26,14 @@ pub fn flag() -> bool {
     std::env::var("CRANPOSE_FLAG").is_ok()
 }
 RUST
+cat > "$repo/crates/a/src/wrapped.rs" <<'RUST'
+/// A public function behind an attribute that rustfmt wraps.
+#[cfg(all(
+    feature = "wrapped",
+    not(target_os = "none")
+))]
+pub fn wrapped() {}
+RUST
 seq 1 12 | sed 's/.*/const _: u8 = 0;/' > "$repo/crates/a/src/long.rs"
 cat > "$repo/crates/a/tests/source.rs" <<'RUST'
 #[test]

@@ -1991,8 +1991,7 @@ pub(crate) struct FrameExecutor<'r, 'c, C: FrameCommandRecorder> {
     prefix_admitted_pixels: u64,
 }
 
-// Where a frame records its commands and keeps the transient surfaces it
-// releases at its end.
+// Where a frame records its commands and keeps the transients it frees at its end.
 pub(crate) struct FrameRecording<'a, C> {
     pub(crate) recorder: &'a mut C,
     pub(crate) transients: &'a mut Vec<(FrameTextureDescriptor, Rc<OffscreenTarget>)>,
@@ -2005,6 +2004,7 @@ struct CompositeSource {
     content: SourceContent,
 }
 
+#[derive(Clone)]
 struct SurfaceRender {
     source: CompositeSource,
     rect: DeviceRect,
@@ -2272,7 +2272,7 @@ impl SurfacePlan {
         // A mesh samples its surface through its texture coordinates, at
         // whatever scale it rastered: past the budget, it rasters at the
         // largest scale that fits, softer, rather than not at all.
-        let surface_scale = match child.mesh {
+        let surface_scale = match child.mesh.first() {
             Some(_) => scale_within_budget(surface_logical, surface_scale),
             None => surface_scale,
         };
@@ -2789,8 +2789,8 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
     ) -> Result<(), String> {
         let layer = pass.layer;
         let child = &layer.children[index];
-        if let Some(mesh) = &child.mesh {
-            return self.resolve_mesh_child(pass, child, mesh);
+        if !child.mesh.is_empty() {
+            return self.resolve_mesh_child(pass, child);
         }
         let in_place = match pass.resolved_at(index) {
             Some(Resolved::InPlace) => true,
@@ -4602,7 +4602,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             .collect();
         let mut batch: Vec<BatchMember> = Vec::new();
         for (index, child) in layer.children.iter().enumerate() {
-            if !renders_flat(child) || child.mesh.is_some() {
+            if !renders_flat(child) || !child.mesh.is_empty() {
                 continue;
             }
             let frame = ChildFrame::of(child, scale, &target);

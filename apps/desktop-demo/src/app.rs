@@ -12,11 +12,10 @@ use cranpose_foundation::{
     lazy::LazyListState, text::TextFieldState, PointerEventKind, SemanticsConfiguration,
 };
 use cranpose_ui::{
-    composable, Axis, BasicTextField, BasicTextFieldOptions, BasicTextFieldWithOptions, BoxSpec,
-    Brush, Button, ButtonSpec, Color, Column, ColumnSpec, CornerRadii, FocusRequester,
-    GraphicsLayer, IntrinsicSize, LinearArrangement, Modifier, Point, PointerInputScope,
-    RoundedCornerShape, Row, RowSpec, ScrollState, Size, Spacer, Text, TextStyle,
-    VerticalAlignment,
+    composable, Axis, BasicTextField, BoxSpec, Brush, Button, ButtonSpec, Color, Column,
+    ColumnSpec, CornerRadii, FocusRequester, GraphicsLayer, IntrinsicSize, LinearArrangement,
+    Modifier, Point, PointerInputScope, RoundedCornerShape, Row, RowSpec, ScrollState, Size,
+    Spacer, Text, TextStyle, VerticalAlignment,
 };
 
 mod animations;
@@ -30,6 +29,7 @@ mod demo_text;
 mod demo_theme;
 mod demo_trace;
 mod documentation;
+mod explainer;
 pub mod flame_window;
 mod floating_input;
 mod floating_windows;
@@ -70,6 +70,7 @@ pub mod wear;
 mod web_fetch;
 mod webview;
 mod window_snap;
+mod wrapped_field;
 mod wsz;
 mod xkcd;
 pub mod xr;
@@ -971,31 +972,7 @@ fn text_input_example() {
 
             Spacer(Modifier::empty().size_points(0.0, 8.0));
 
-            {
-                let state = cranpose_core::remember(|| {
-                    TextFieldState::new(
-                        "Silence. Melody. Then beats. Subtle electronics                          weave through mantra trance, pulsing, catching                          melodies that rise and dissolve like glass.",
-                    )
-                })
-                .with(|state| *state);
-                let mut style = TextStyle::default();
-                style.span_style.font_size = cranpose_ui::text::TextUnit::Sp(16.0);
-                style.paragraph_style.line_height = cranpose_ui::text::TextUnit::Sp(24.0);
-                BasicTextFieldWithOptions(
-                    state,
-                    Modifier::empty()
-                        .fill_max_width()
-                        .background(Color(0.149, 0.129, 0.125, 1.0))
-                        .rounded_corners(10.0)
-                        .padding(14.0)
-                        .content_description("Wrapped text field"),
-                    BasicTextFieldOptions {
-                        text_style: style,
-                        cursor_color: Color(0.965, 0.208, 0.557, 1.0),
-                        ..BasicTextFieldOptions::default()
-                    },
-                );
-            }
+            wrapped_field::WrappedField(wrapped_field::Surface::Dark);
 
             Spacer(Modifier::empty().size_points(0.0, 16.0));
 
@@ -1007,35 +984,7 @@ fn text_input_example() {
 
             Spacer(Modifier::empty().size_points(0.0, 8.0));
 
-            CompositionLocalProvider(
-                [cranpose_ui::local_on_light_surface().provides(true)],
-                || {
-                    let state = cranpose_core::remember(|| {
-                        TextFieldState::new(
-                            "Silence. Melody. Then beats. Subtle electronics                          weave through mantra trance, pulsing, catching                          melodies that rise and dissolve like glass.",
-                        )
-                    })
-                    .with(|state| *state);
-                    let mut style = TextStyle::default();
-                    style.span_style.font_size = cranpose_ui::text::TextUnit::Sp(16.0);
-                    style.span_style.color = Some(Color(0.1, 0.1, 0.12, 1.0));
-                    style.paragraph_style.line_height = cranpose_ui::text::TextUnit::Sp(24.0);
-                    BasicTextFieldWithOptions(
-                        state,
-                        Modifier::empty()
-                            .fill_max_width()
-                            .background(Color(1.0, 1.0, 1.0, 1.0))
-                            .rounded_corners(10.0)
-                            .padding(14.0)
-                            .content_description("Wrapped text field on a light surface"),
-                        BasicTextFieldOptions {
-                            text_style: style,
-                            cursor_color: Color(0.965, 0.208, 0.557, 1.0),
-                            ..BasicTextFieldOptions::default()
-                        },
-                    );
-                },
-            );
+            wrapped_field::WrappedField(wrapped_field::Surface::Light);
 
             Spacer(Modifier::empty().size_points(0.0, 16.0));
         },

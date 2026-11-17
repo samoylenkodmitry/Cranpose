@@ -6,14 +6,16 @@
 //! added onto the page.
 
 use std::{
-    cell::{Cell, OnceCell},
+    cell::OnceCell,
     sync::{Arc, Weak},
 };
 
 use bytemuck::{Pod, Zeroable};
 use cranpose_ui_graphics::{
     Rect,
-    space::{Light, Mat4, Material, Mesh, MeshSurface, Shaded, Vec3, Volume},
+    space::{
+        Light, Mat4, Material, Mesh, MeshSurface, Multisample, Shaded, TextureEdges, Vec3, Volume,
+    },
 };
 
 use crate::{
@@ -21,14 +23,29 @@ use crate::{
     fixed_pipeline::FixedPipeline,
     frame_graph::{FrameCommandRecorder, FrameCommandStats, UploadAllocatorSpec},
     idle_pool::{IDLE_FRAMES, IdlePool},
-    lazy_resource::LazyGpuResource,
-    pipeline_compiler::{CompileLane, CompilerSend, PipelineCompiler},
-    pipeline_recorder::PipelineRecorder,
+    pipeline_compiler::CompilerSend,
     render::{DEPTH_FORMAT, create_render_pipeline_logged},
     shader_cache::{create_shaded_shader_module, create_volume_shader_module},
     shaders,
     shared_shader::SharedShader,
 };
+
+mod app_shader;
+
+use app_shader::kept_shader;
+pub(crate) use app_shader::{AppShader, ShadedShader, ShaderPipeline, VolumeShader};
+
+// The sample counts a scene's pass draws with, each with pipelines of its
+// own.
+pub(crate) const SAMPLES: [Multisample; 2] = [Multisample::Off, Multisample::X4];
+
+// The place of `samples` in `SAMPLES`.
+fn sample_slot(samples: Multisample) -> usize {
+    match samples {
+        Multisample::Off => 0,
+        Multisample::X4 => 1,
+    }
+}
 
 /// The meshes whose buffers stay on the GPU between frames.
 const KEPT_MESHES: usize = 64;
@@ -129,86 +146,6 @@ pub(crate) struct ScenePipelineParts {
     shaded_layout: wgpu::PipelineLayout,
 }
 
-/// The pipelines of one app shader, kept while anyone holds the shader, one
-/// for each of its `N` variants.
-pub(crate) struct AppShader<const N: usize> {
-    source: Weak<str>,
-    module: LazyGpuResource<Option<wgpu::ShaderModule>>,
-    pipelines: [ShaderPipeline; N],
-}
-
-/// A volume shader's pipelines, one for each [`VolumeVariant`].
-pub(crate) type VolumeShader = AppShader<4>;
-/// A shaded surface's shader's pipelines, one for each [`ShadedVariant`].
-pub(crate) type ShadedShader = AppShader<3>;
-
-impl<const N: usize> AppShader<N> {
-    fn new(shader: &Arc<str>, module: &'static str, pipelines: [&'static str; N]) -> Self {
-        Self {
-            source: Arc::downgrade(shader),
-            module: LazyGpuResource::new(module),
-            pipelines: pipelines.map(ShaderPipeline::new),
-        }
-    }
-
-    /// The pipeline of the variant numbered `variant`.
-    pub(crate) fn pipeline(&self, variant: usize) -> &ShaderPipeline {
-        &self.pipelines[variant]
-    }
-}
-
-/// The kept pipelines of `shader` among `kept`.
-fn kept_shader<'k, const N: usize>(
-    kept: &'k [AppShader<N>],
-    shader: &Arc<str>,
-) -> Option<&'k AppShader<N>> {
-    // A weak handle keeps the shader's memory, so no other shader takes its
-    // address while the pipelines are kept.
-    kept.iter()
-        .find(|kept| std::ptr::addr_eq(kept.source.as_ptr(), Arc::as_ptr(shader)))
-}
-
-/// One of an app shader's pipelines; `None` once built when the shader
-/// does not build.
-pub(crate) struct ShaderPipeline {
-    resource: LazyGpuResource<Option<wgpu::RenderPipeline>>,
-    /// Whether its build is queued, so it is queued once.
-    queued: Cell<bool>,
-}
-
-impl ShaderPipeline {
-    fn new(label: &'static str) -> Self {
-        Self {
-            resource: LazyGpuResource::new(label),
-            queued: Cell::new(false),
-        }
-    }
-
-    /// The pipeline once built, or `None` while it compiles: a missing one
-    /// is queued on the demand lane, and built here when nothing else can
-    /// build it.
-    pub(crate) fn when_ready<J>(
-        &self,
-        (recorder, compiler, backend): (&PipelineRecorder, &PipelineCompiler, wgpu::Backend),
-        job: impl FnOnce() -> J,
-    ) -> Option<&Option<wgpu::RenderPipeline>>
-    where
-        J: FnOnce() -> Option<wgpu::RenderPipeline> + CompilerSend + 'static,
-    {
-        if let Some(built) = self.resource.get() {
-            return Some(built);
-        }
-        if !compiler.is_active() {
-            return Some(self.resource.for_draw(recorder, backend, job()));
-        }
-        if !self.queued.replace(true) {
-            self.resource
-                .queue(compiler, CompileLane::Demanded, backend, job());
-        }
-        None
-    }
-}
-
 /// The two ways a surface reads the shadow map: compared with its own depth
 /// and filtered, and as the depth of the nearest caster, which the search
 /// for a soft shadow's casters reads. The map is bound once for each, as
@@ -228,8 +165,9 @@ pub(crate) struct ShadowMap {
 /// the shadow map.
 pub(crate) struct ScenePass {
     parts: OnceCell<ScenePipelineParts>,
-    /// The scene pipelines, in the order of [`ScenePipeline::ALL`].
-    pipelines: [FixedPipeline; ScenePipeline::ALL.len()],
+    // The scene pipelines of each of `SAMPLES`, in the order of
+    // `ScenePipeline::ALL`.
+    pipelines: [[FixedPipeline; ScenePipeline::ALL.len()]; SAMPLES.len()],
     /// The unit square portals' windows are drawn on, made when a scene
     /// first shows a portal.
     window: OnceCell<Arc<Mesh>>,
@@ -245,7 +183,9 @@ impl Default for ScenePass {
     fn default() -> Self {
         Self {
             parts: OnceCell::new(),
-            pipelines: ScenePipeline::ALL.map(|kind| FixedPipeline::new(kind.record_label())),
+            pipelines: SAMPLES.map(|samples| {
+                ScenePipeline::ALL.map(|kind| FixedPipeline::new(kind.record_label(samples)))
+            }),
             window: OnceCell::new(),
             meshes: IdlePool::default(),
             volumes: Vec::new(),
@@ -307,26 +247,31 @@ impl ScenePipeline {
         Self::PortalGlass,
     ];
 
-    /// The label a launch records the pipeline under.
-    fn record_label(self) -> &'static str {
-        match self {
-            Self::Plain => "scene/mesh-surface",
-            Self::Shadowed => "scene/mesh-surface-shadowed",
-            Self::Shadow => "scene/mesh-shadow",
-            Self::Glass => "scene/mesh-glass",
-            Self::Glow => "scene/mesh-glow",
-            Self::Depth => "scene/mesh-depth",
-            Self::WindowMark => "scene/window-mark",
-            Self::WindowClear => "scene/window-clear",
-            Self::WindowRestore => "scene/window-restore",
-            Self::Portal => "scene/mesh-portal",
-            Self::PortalGlow => "scene/mesh-portal-glow",
-            Self::PortalDepth => "scene/mesh-portal-depth",
-            Self::PortalGlass => "scene/mesh-portal-glass",
-        }
+    // The label a launch records the pipeline of `samples` under. The
+    // shadow map takes one sample, so no pass asks for its pipeline of four.
+    fn record_label(self, samples: Multisample) -> &'static str {
+        let labels = match self {
+            Self::Plain => ["scene/mesh-surface", "scene/mesh-surface-x4"],
+            Self::Shadowed => [
+                "scene/mesh-surface-shadowed",
+                "scene/mesh-surface-shadowed-x4",
+            ],
+            Self::Shadow => ["scene/mesh-shadow", "scene/mesh-shadow-x4"],
+            Self::Glass => ["scene/mesh-glass", "scene/mesh-glass-x4"],
+            Self::Glow => ["scene/mesh-glow", "scene/mesh-glow-x4"],
+            Self::Depth => ["scene/mesh-depth", "scene/mesh-depth-x4"],
+            Self::WindowMark => ["scene/window-mark", "scene/window-mark-x4"],
+            Self::WindowClear => ["scene/window-clear", "scene/window-clear-x4"],
+            Self::WindowRestore => ["scene/window-restore", "scene/window-restore-x4"],
+            Self::Portal => ["scene/mesh-portal", "scene/mesh-portal-x4"],
+            Self::PortalGlow => ["scene/mesh-portal-glow", "scene/mesh-portal-glow-x4"],
+            Self::PortalDepth => ["scene/mesh-portal-depth", "scene/mesh-portal-depth-x4"],
+            Self::PortalGlass => ["scene/mesh-portal-glass", "scene/mesh-portal-glass-x4"],
+        };
+        labels[sample_slot(samples)]
     }
 
-    fn spec(self) -> PipelineSpec {
+    fn spec(self, samples: Multisample) -> PipelineSpec {
         let (label, entry_points) = self.shader();
         let (color, depth, stencil) = self.targets();
         PipelineSpec {
@@ -335,6 +280,7 @@ impl ScenePipeline {
             color,
             depth,
             stencil,
+            samples,
         }
     }
 
@@ -418,13 +364,14 @@ impl ScenePipeline {
 }
 
 /// How a scene pipeline draws: its entry points, how it blends colour, if it
-/// writes any, and how it uses depth and the stencil.
+// writes any, how it uses depth and the stencil, and the samples it takes.
 struct PipelineSpec {
     label: &'static str,
     entry_points: (&'static str, &'static str),
     color: Option<Blend>,
     depth: Depth,
     stencil: Stencil,
+    samples: Multisample,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -497,6 +444,8 @@ pub(crate) struct ScenePage {
 pub(crate) struct SurfaceShading<'m> {
     pub(crate) transform: Mat4,
     pub(crate) material: &'m Material,
+    // What the mesh's texture's edges are: an outline is drawn smooth.
+    pub(crate) edges: TextureEdges,
     pub(crate) alpha: f32,
     /// The content's top left texel and its size in texels.
     pub(crate) source_region: [f32; 4],
@@ -518,9 +467,9 @@ pub(crate) struct SpaceShading {
 }
 
 impl ScenePass {
-    /// The fixed pipeline of `kind`.
-    pub(crate) fn pipeline(&self, kind: ScenePipeline) -> &FixedPipeline {
-        &self.pipelines[kind as usize]
+    // The fixed pipeline of `kind` that takes `samples`.
+    pub(crate) fn pipeline(&self, kind: ScenePipeline, samples: Multisample) -> &FixedPipeline {
+        &self.pipelines[sample_slot(samples)][kind as usize]
     }
 
     /// The buffers of the unit square doorways are drawn on, as
@@ -573,10 +522,18 @@ impl ScenePass {
                 shader,
                 "scene/volume-module",
                 [
-                    "scene/volume",
-                    "scene/volume-depth",
-                    "scene/volume-portal",
-                    "scene/volume-portal-depth",
+                    [
+                        "scene/volume",
+                        "scene/volume-depth",
+                        "scene/volume-portal",
+                        "scene/volume-portal-depth",
+                    ],
+                    [
+                        "scene/volume-x4",
+                        "scene/volume-depth-x4",
+                        "scene/volume-portal-x4",
+                        "scene/volume-portal-depth-x4",
+                    ],
                 ],
             ));
         }
@@ -594,9 +551,16 @@ impl ScenePass {
                 shader,
                 "scene/shaded-module",
                 [
-                    "scene/shaded",
-                    "scene/shaded-shadowed",
-                    "scene/shaded-portal",
+                    [
+                        "scene/shaded",
+                        "scene/shaded-shadowed",
+                        "scene/shaded-portal",
+                    ],
+                    [
+                        "scene/shaded-x4",
+                        "scene/shaded-shadowed-x4",
+                        "scene/shaded-portal-x4",
+                    ],
                 ],
             ));
         }
@@ -1013,7 +977,12 @@ pub(crate) fn surface_uniforms(
         eye: [eye.x, eye.y, eye.z, 1.0],
         light,
         source_region: surface.source_region,
-        params: [surface.alpha.clamp(0.0, 1.0), mode, 0.0, 0.0],
+        params: [
+            surface.alpha.clamp(0.0, 1.0),
+            mode,
+            f32::from(u8::from(surface.edges == TextureEdges::Outline)),
+            0.0,
+        ],
         shadow: [1.0 / SHADOW_MAP_SIZE as f32, SHADOW_DEPTH_BIAS, 0.0, 0.0],
         shadow_soft: penumbra_scale(scene, surface.light_projection),
         glass: [
@@ -1159,18 +1128,18 @@ pub(crate) fn scene_scissor(
     ))
 }
 
-/// The build of one scene pipeline for targets of `format`.
+// The build of one scene pipeline for targets of `format` and `samples`.
 pub(crate) fn scene_pipeline_job(
     device: &Arc<wgpu::Device>,
     cache: Option<wgpu::PipelineCache>,
-    (format, kind): (wgpu::TextureFormat, ScenePipeline),
+    (format, kind, samples): (wgpu::TextureFormat, ScenePipeline, Multisample),
     parts: &ScenePipelineParts,
 ) -> impl FnOnce() -> wgpu::RenderPipeline + CompilerSend + 'static {
     let device = Arc::clone(device);
     let shader = parts.shader.clone();
     move || {
         let module = shader.module();
-        let spec = kind.spec();
+        let spec = kind.spec(samples);
         let color_target = color_target(format, spec.color);
         let shadow = kind == ScenePipeline::Shadow;
         let targets: &[Option<wgpu::ColorTargetState>] = if shadow { &[] } else { &color_target };
@@ -1179,7 +1148,7 @@ pub(crate) fn scene_pipeline_job(
             cache.as_ref(),
             spec.label,
             (shader.layout(), module, spec.entry_points),
-            (targets, depth_state(&spec, shadow)),
+            (targets, depth_state(&spec, shadow), spec.samples),
         )
     }
 }
@@ -1215,35 +1184,37 @@ fn depth_state(spec: &PipelineSpec, shadow: bool) -> wgpu::DepthStencilState {
 }
 
 /// The build of one volume shader's pipeline for targets of `format`, of
-/// `variant`; `None` when the shader does not build or nobody holds it any
-/// more.
+// `variant` and `samples`; `None` when the shader does not build or nobody
+// holds it any more.
 pub(crate) fn volume_pipeline_job(
     device: &Arc<wgpu::Device>,
     cache: Option<wgpu::PipelineCache>,
-    (format, backend, variant): (wgpu::TextureFormat, wgpu::Backend, VolumeVariant),
+    (format, backend): (wgpu::TextureFormat, wgpu::Backend),
+    (variant, samples): (VolumeVariant, Multisample),
     (parts, kept): (&ScenePipelineParts, &VolumeShader),
 ) -> impl FnOnce() -> Option<wgpu::RenderPipeline> + CompilerSend + 'static {
     app_pipeline_job(
         device,
         cache,
-        (format, backend, variant.spec()),
+        (format, backend, variant.spec(samples)),
         (&parts.volume_layout, kept, create_volume_shader_module),
     )
 }
 
 /// The build of one shaded surface's shader's pipeline for targets of
-/// `format`, of `variant`; `None` when the shader does not build or nobody
-/// holds it any more.
+// `format`, of `variant` and `samples`; `None` when the shader does not
+// build or nobody holds it any more.
 pub(crate) fn shaded_pipeline_job(
     device: &Arc<wgpu::Device>,
     cache: Option<wgpu::PipelineCache>,
-    (format, backend, variant): (wgpu::TextureFormat, wgpu::Backend, ShadedVariant),
+    (format, backend): (wgpu::TextureFormat, wgpu::Backend),
+    (variant, samples): (ShadedVariant, Multisample),
     (parts, kept): (&ScenePipelineParts, &ShadedShader),
 ) -> impl FnOnce() -> Option<wgpu::RenderPipeline> + CompilerSend + 'static {
     app_pipeline_job(
         device,
         cache,
-        (format, backend, variant.spec()),
+        (format, backend, variant.spec(samples)),
         (&parts.shaded_layout, kept, create_shaded_shader_module),
     )
 }
@@ -1274,7 +1245,11 @@ fn app_pipeline_job<const N: usize>(
             cache.as_ref(),
             spec.label,
             (&layout, module, spec.entry_points),
-            (&color_target(format, spec.color), depth_state(&spec, false)),
+            (
+                &color_target(format, spec.color),
+                depth_state(&spec, false),
+                spec.samples,
+            ),
         ))
     }
 }
@@ -1302,7 +1277,7 @@ impl ShadedVariant {
     }
 
     /// The lit pipeline's targets, with the shader's own entry points.
-    fn spec(self) -> PipelineSpec {
+    fn spec(self, samples: Multisample) -> PipelineSpec {
         let fragment = match self {
             Self::Plain => "mesh_shaded_fs",
             Self::Shadowed => "mesh_shaded_shadowed_fs",
@@ -1311,7 +1286,7 @@ impl ShadedVariant {
         PipelineSpec {
             label: "Scene Shaded Surface Pipeline",
             entry_points: ("mesh_shaded_vs", fragment),
-            ..self.lit().spec()
+            ..self.lit().spec(samples)
         }
     }
 }
@@ -1331,7 +1306,7 @@ pub(crate) enum VolumeVariant {
 }
 
 impl VolumeVariant {
-    fn spec(self) -> PipelineSpec {
+    fn spec(self, samples: Multisample) -> PipelineSpec {
         let (label, fragment, color, stencil) = match self {
             Self::Color => (
                 "Scene Volume Pipeline",
@@ -1364,6 +1339,7 @@ impl VolumeVariant {
             color,
             depth: Depth::Tested,
             stencil,
+            samples,
         }
     }
 }
@@ -1401,7 +1377,7 @@ fn color_target(
 }
 
 /// A pipeline that draws the scene's meshes from `module`'s `entry_points`
-/// onto `targets`, against `depth_stencil`.
+// onto `targets` of `samples`, against `depth_stencil`.
 fn create_scene_pipeline(
     device: &wgpu::Device,
     cache: Option<&wgpu::PipelineCache>,
@@ -1411,7 +1387,11 @@ fn create_scene_pipeline(
         &wgpu::ShaderModule,
         (&'static str, &'static str),
     ),
-    (targets, depth_stencil): (&[Option<wgpu::ColorTargetState>], wgpu::DepthStencilState),
+    (targets, depth_stencil, samples): (
+        &[Option<wgpu::ColorTargetState>],
+        wgpu::DepthStencilState,
+        Multisample,
+    ),
 ) -> wgpu::RenderPipeline {
     create_render_pipeline_logged(
         device,
@@ -1450,7 +1430,10 @@ fn create_scene_pipeline(
                 conservative: false,
             },
             depth_stencil: Some(depth_stencil),
-            multisample: wgpu::MultisampleState::default(),
+            multisample: wgpu::MultisampleState {
+                count: samples.samples(),
+                ..wgpu::MultisampleState::default()
+            },
             multiview_mask: None,
             cache: None,
         },

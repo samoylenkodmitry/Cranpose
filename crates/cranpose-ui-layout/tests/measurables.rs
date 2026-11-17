@@ -89,8 +89,8 @@ fn ids(children: impl Iterator<Item = usize>) -> Vec<usize> {
     children.collect()
 }
 
-fn width_of(child: &dyn Measurable) -> usize {
-    child.max_intrinsic_width(0.0) as usize
+fn id_of(child: &dyn Measurable) -> usize {
+    child.measure(Constraints::loose(100.0, 100.0)).node_id().0
 }
 
 #[test]
@@ -103,18 +103,18 @@ fn a_list_reads_its_children_in_order_from_either_end() {
     let children = Measurables::new(&list);
     assert_eq!(children.len(), 3);
     assert!(!children.is_empty());
-    assert_eq!(children.first().map(width_of), Some(10));
-    assert_eq!(children.last().map(width_of), Some(30));
-    assert_eq!(width_of(&children[1]), 20);
+    assert_eq!(children.first().map(id_of), Some(1));
+    assert_eq!(children.last().map(id_of), Some(3));
+    assert_eq!(id_of(&children[1]), 2);
     assert!(children.get(3).is_none());
-    assert_eq!(ids(children.iter().map(width_of)), [10, 20, 30]);
-    assert_eq!(ids(children.iter().rev().map(width_of)), [30, 20, 10]);
+    assert_eq!(ids(children.iter().map(id_of)), [1, 2, 3]);
+    assert_eq!(ids(children.iter().rev().map(id_of)), [3, 2, 1]);
     assert_eq!(children.iter().len(), 3);
     let mut iter = children.iter();
-    assert_eq!(iter.next().map(width_of), Some(10));
-    assert_eq!(iter.next_back().map(width_of), Some(30));
+    assert_eq!(iter.next().map(id_of), Some(1));
+    assert_eq!(iter.next_back().map(id_of), Some(3));
     assert_eq!(iter.len(), 1);
-    assert_eq!(ids(iter.map(width_of)), [20]);
+    assert_eq!(ids(iter.map(id_of)), [2]);
 }
 
 #[test]
@@ -174,7 +174,7 @@ fn a_slice_of_children_is_a_list() {
     ];
     let tail: &[Fixed] = &list[1..];
     let children = Measurables::new(&tail);
-    assert_eq!(ids(children.iter().map(width_of)), [20, 30]);
+    assert_eq!(ids(children.iter().map(id_of)), [2, 3]);
 }
 
 // Stacks its children one under another.

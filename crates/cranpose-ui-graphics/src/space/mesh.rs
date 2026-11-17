@@ -39,6 +39,21 @@ impl fmt::Display for MeshError {
 
 impl std::error::Error for MeshError {}
 
+/// What the edges of a mesh's texture are on the mesh, which decides how
+/// its outline is drawn.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum TextureEdges {
+    /// Seams, or no edges at all: the texture wraps a closed shape, as on a
+    /// sphere, or each face shows it whole, as on a cube. The renderer
+    /// draws the mesh's outline as its triangles cover pixels.
+    #[default]
+    Seams,
+    /// The mesh's outline: the mesh is an open sheet, as a plane or a cloth,
+    /// whose edges are the texture's edges. The renderer covers a pixel the
+    /// outline crosses in part, so the outline shows smooth at any angle.
+    Outline,
+}
+
 /// Where a ray meets a mesh.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MeshHit {
@@ -87,6 +102,7 @@ pub struct Mesh {
     normals: Vec<[f32; 3]>,
     uvs: Vec<[f32; 2]>,
     indices: Vec<u32>,
+    texture_edges: TextureEdges,
     texture_plane: OnceLock<Option<TexturePlane>>,
     bounds: OnceLock<(Vec3, Vec3)>,
 }
@@ -163,7 +179,23 @@ impl Mesh {
             Vec3::new(1.0, 0.0, 0.0),
             Vec3::new(0.0, 1.0, 0.0),
         );
-        parts.into_mesh()
+        parts.into_mesh().with_texture_edges(TextureEdges::Outline)
+    }
+
+    /// The mesh with `edges` as what its texture's edges are on it: an open
+    /// sheet whose outline is the texture's edge, as a cloth, takes
+    /// [`TextureEdges::Outline`] and shows a smooth outline. A mesh is
+    /// [`TextureEdges::Seams`] unless made otherwise; [`plane`](Self::plane)
+    /// is an outline.
+    #[must_use]
+    pub fn with_texture_edges(mut self, edges: TextureEdges) -> Self {
+        self.texture_edges = edges;
+        self
+    }
+
+    /// What the edges of the mesh's texture are on the mesh.
+    pub fn texture_edges(&self) -> TextureEdges {
+        self.texture_edges
     }
 
     /// The unit cube from `(-0.5, -0.5, -0.5)` to `(0.5, 0.5, 0.5)`. Each
@@ -205,22 +237,42 @@ impl Mesh {
                 uvs.push([u, v]);
             }
         }
-        let mut indices = Vec::with_capacity((segments * rings * 6) as usize);
-        for ring in 0..rings {
-            for segment in 0..segments {
-                let top_left = ring * columns + segment;
-                let bottom_left = top_left + columns;
-                indices.extend([
-                    top_left,
-                    top_left + 1,
-                    bottom_left,
-                    bottom_left,
-                    top_left + 1,
-                    bottom_left + 1,
-                ]);
+        let indices = wrapped_grid_indices(segments, rings);
+        let normals = positions.clone();
+        Self::assembled(positions, uvs, normals, indices)
+    }
+
+    /// The tube of radius one about the y axis from `y = -0.5` to `0.5`,
+    /// open at both ends, with `segments` slices around. The texture wraps
+    /// around it once as it does around [`sphere`](Self::sphere): its left
+    /// and right edges meet at the back, its top edge is the end at
+    /// `y = -0.5`, and its middle faces the viewer.
+    ///
+    /// ```
+    /// use cranpose_ui_graphics::space::{Mesh, Vec3};
+    ///
+    /// let tube = Mesh::cylinder(24);
+    /// let front = tube
+    ///     .point_at([0.5, 0.5])
+    ///     .expect("the tube covers its texture");
+    /// assert!((front - Vec3::new(0.0, 0.0, -1.0)).length() < 1e-3);
+    /// ```
+    pub fn cylinder(segments: u32) -> Self {
+        let segments = segments.max(3);
+        let columns = segments + 1;
+        let mut positions = Vec::with_capacity((columns * 2) as usize);
+        let mut normals = Vec::with_capacity(positions.capacity());
+        let mut uvs = Vec::with_capacity(positions.capacity());
+        for v in [0.0, 1.0] {
+            for segment in 0..=segments {
+                let u = segment as f32 / segments as f32;
+                let (sin_around, cos_around) = ((u - 0.5) * 2.0 * PI).sin_cos();
+                positions.push([sin_around, v - 0.5, -cos_around]);
+                normals.push([sin_around, 0.0, -cos_around]);
+                uvs.push([u, v]);
             }
         }
-        let normals = positions.clone();
+        let indices = wrapped_grid_indices(segments, 1);
         Self::assembled(positions, uvs, normals, indices)
     }
 
@@ -444,6 +496,7 @@ impl Mesh {
             normals,
             uvs,
             indices,
+            texture_edges: TextureEdges::Seams,
             texture_plane: OnceLock::new(),
             bounds: OnceLock::new(),
         }
@@ -514,6 +567,29 @@ pub(super) fn smooth_normals(positions: &[[f32; 3]], indices: &[u32]) -> Vec<[f3
                 .to_array()
         })
         .collect()
+}
+
+// The triangles of a grid of `rows + 1` rows of `segments + 1` vertices
+// that wraps around an axis: two to each cell, the first column repeated
+// as the last so the texture's seam has vertices of its own on each side.
+fn wrapped_grid_indices(segments: u32, rows: u32) -> Vec<u32> {
+    let columns = segments + 1;
+    let mut indices = Vec::with_capacity((segments * rows * 6) as usize);
+    for row in 0..rows {
+        for segment in 0..segments {
+            let top_left = row * columns + segment;
+            let bottom_left = top_left + columns;
+            indices.extend([
+                top_left,
+                top_left + 1,
+                bottom_left,
+                bottom_left,
+                top_left + 1,
+                bottom_left + 1,
+            ]);
+        }
+    }
+    indices
 }
 
 /// Where the ray meets the triangle, from either side: the distance along

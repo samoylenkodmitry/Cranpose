@@ -1,7 +1,8 @@
 use std::{path::PathBuf, process::ExitCode, time::Duration};
 
+use desktop_app::accent_field::AccentField;
 use cranpose::{
-    widgets::{BasicTextFieldOptions, BasicTextFieldWithOptions, Box as CBox, BoxSpec},
+    widgets::{Box as CBox, BoxSpec},
     AppLauncher, Color, Modifier, Size,
 };
 use cranpose_foundation::text::TextFieldState;
@@ -100,20 +101,14 @@ fn content() {
                 || {
                     let state = cranpose_core::remember(|| TextFieldState::new(TEXT))
                         .with(TextFieldState::clone);
-                    BasicTextFieldWithOptions(
+                    AccentField(
                         state,
                         Modifier::empty()
                             .absolute_offset(FIELD_X, FIELD_Y)
                             .size(Size {
                                 width: 420.0,
                                 height: 60.0,
-                            }),
-                        BasicTextFieldOptions {
-                            text_style: text_style(),
-                            cursor_color: Color(0.965, 0.208, 0.557, 1.0),
-                            ..BasicTextFieldOptions::default()
-                        },
-                    );
+                            }), (text_style(), Color(0.965, 0.208, 0.557, 1.0)));
                 },
             );
         },

@@ -314,12 +314,13 @@ pub(crate) fn add_changed_pair(
     old: ItemRef<'_>,
     new: ItemRef<'_>,
     reach: ItemReach<'_>,
-    window: ClipBounds,
+    window: &ClipBounds,
     areas: &mut Vec<ClipBounds>,
 ) {
     if same_item(old, new) {
         return;
     }
+    let window = *window;
     // A moved fill and a swept arc add only the areas their change reaches.
     let narrowing = add_narrowed_areas(old, new, window, areas);
     let narrowed = !matches!(narrowing, Narrowing::Not);
@@ -513,7 +514,7 @@ pub(crate) fn add_changed_runs(
     let paired = old_items.len().min(new_items.len());
     for (index, (&old_item, &new_item)) in old_items.iter().zip(new_items).enumerate() {
         let held = reach.map_or(ItemReach::Unknown, |reach| ItemReach::Kept(reach[index]));
-        add_changed_pair(old.item(old_item), new.item(new_item), held, window, areas);
+        add_changed_pair(old.item(old_item), new.item(new_item), held, &window, areas);
     }
     for (index, &item) in old_items.iter().enumerate().skip(paired) {
         let old_bounds = reach.map_or_else(|| old.item_bounds(item, window), |reach| reach[index]);

@@ -43,12 +43,6 @@ use crate::{
     },
 };
 
-/// Alpha of the selection highlight relative to the field's accent
-/// (`TextFieldOptions::cursor_color`): the reference highlight is the tint
-/// at ~0.32 opacity, while the caret and both selection handles carry it
-/// solid — one accent drives all three.
-pub const SELECTION_HIGHLIGHT_ALPHA: f32 = 0.32;
-
 /// Hold duration before a stationary touch press on the text claims the
 /// gesture (word-select + menu while the finger is still down).
 const TEXT_LONG_PRESS_MS: u64 = 500;
@@ -240,7 +234,8 @@ pub fn BasicTextField(state: TextFieldState, modifier: Modifier, style: TextStyl
 pub struct BasicTextFieldOptions {
     /// Text style
     pub text_style: TextStyle,
-    /// Cursor color
+    /// The caret's color. The selection's highlight and handles take
+    /// [`crate::local_text_selection_colors`].
     pub cursor_color: Color,
     /// Line limits: SingleLine or MultiLine with optional min/max
     pub line_limits: TextFieldLineLimits,
@@ -383,8 +378,10 @@ pub(crate) fn TextFieldNode(
         remember(TextFieldHandleController::new).with(TextFieldHandleController::clone);
 
     let modal_depth = crate::modal::local_modal_depth().current();
+    let selection_colors = crate::local_text_selection_colors().current();
     let mut text_field_element = TextFieldElement::new(state, options.text_style.clone())
         .with_cursor_color(options.cursor_color)
+        .with_selection_color(selection_colors.background_color)
         .with_line_limits(options.line_limits)
         .with_show_keyboard_on_focus(options.show_keyboard_on_focus)
         .with_keyboard(options.keyboard_options, options.on_keyboard_action)
@@ -409,7 +406,7 @@ pub(crate) fn TextFieldNode(
         state,
         options.text_style,
         controller,
-        options.cursor_color,
+        selection_colors.handle_color,
         secure,
     );
 
@@ -492,14 +489,13 @@ fn BringCaretIntoView(
 
 /// Emits selection/cursor handles for a focused field entered through any
 /// primary pointer. Keyboard-only focus keeps a clean caret.
-/// `accent` is the field's tint (its cursor color): handles are drawn solid in
-/// it, matching the caret and the highlight derived from it.
+// The handles are drawn in `handle_color`.
 #[composable]
 fn SelectionHandles(
     state: TextFieldState,
     style: TextStyle,
     controller: TextFieldHandleController,
-    accent: Color,
+    handle_color: Color,
     secure: bool,
 ) {
     let selection = state.selection();
@@ -630,7 +626,7 @@ fn SelectionHandles(
             tip,
             caret_rect.height,
             HANDLE_RADIUS,
-            accent,
+            handle_color,
             move |pos| {
                 track_handle_grab(&grab_bias, HandleKind::Cursor, tip_y.get(), pos.y);
                 drag_pos.set(Some(pos));
@@ -706,7 +702,7 @@ fn SelectionHandles(
             start_tip,
             start_rect.height,
             HANDLE_RADIUS,
-            accent,
+            handle_color,
             move |pos| {
                 track_handle_grab(
                     &grab_bias,
@@ -742,7 +738,7 @@ fn SelectionHandles(
             end_tip,
             end_rect.height,
             HANDLE_RADIUS,
-            accent,
+            handle_color,
             move |pos| {
                 track_handle_grab(
                     &grab_bias,

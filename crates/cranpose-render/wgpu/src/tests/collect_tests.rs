@@ -281,7 +281,7 @@ fn isolated_layers_snap_their_own_text_and_translating_text_descendants() {
                     settings: &walk_settings(),
                     cull: None,
                 },
-                (None, None),
+                (MeshChildren::new(), None),
                 &mut parent,
                 &mut LayerSceneRecycler::default(),
             );
