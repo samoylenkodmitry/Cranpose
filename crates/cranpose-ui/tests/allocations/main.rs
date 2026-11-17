@@ -632,6 +632,68 @@ fn composing_a_wide_column_again_allocates_what_a_narrow_one_does() {
     );
 }
 
+// Allocations and reallocations a frame of a column whose eight rows of
+// `boxes` boxes take new keys each frame: a frame composes them as new
+// nodes, removes the rows of the frame before and lays the column out.
+fn swapped_rows_allocations(boxes: usize) -> usize {
+    let round_handle = Rc::new(Cell::new(None));
+    let output = Rc::clone(&round_handle);
+    let mut composition = run_test_composition(move || {
+        let round = remember(|| mutableStateOf(0_u32)).with(|state| *state);
+        output.set(Some(round));
+        let value = round.value();
+        Column(Modifier::empty(), ColumnSpec::default(), move || {
+            for index in 0..8 {
+                cranpose_core::key((value, index), || {
+                    Row(Modifier::empty(), RowSpec::default(), move || {
+                        for _ in 0..boxes {
+                            Box(Modifier::empty(), BoxSpec::default(), || {});
+                        }
+                    });
+                });
+            }
+        });
+    });
+    let round = round_handle.get().expect("the round state");
+    let root = composition.root().expect("a composed root");
+    let handle = composition.runtime_handle();
+    let mut frame = |index: u32| {
+        round.set_value(index);
+        while composition
+            .process_invalid_scopes()
+            .expect("the column composes again")
+        {}
+        let mut applier = composition.applier_mut();
+        applier.set_runtime_handle(handle.clone());
+        measure_layout(&mut applier, root, Size::new(100.0, 4000.0)).expect("the column measures");
+        applier.clear_runtime_handle();
+    };
+    // The recycle pool fills over the first frames.
+    for index in 1..16 {
+        frame(index);
+    }
+    let region = Region::new(GLOBAL);
+    for index in 16..16 + PASSES as u32 {
+        frame(index);
+    }
+    let change = region.change();
+    (change.allocations + change.reallocations) / PASSES
+}
+
+// A node that leaves the tree goes to the recycle pool whole, and the node
+// that takes its place in the next frame takes its box, its parts and its
+// lists: a frame that swaps rows of two boxes for new ones allocates what a
+// frame that swaps rows of one box does.
+fn a_frame_that_swaps_nodes_for_new_ones_allocates_nothing_for_them() {
+    let one = swapped_rows_allocations(1);
+    let two = swapped_rows_allocations(2);
+    println!("allocations of a frame that swaps eight rows: of one box {one}, of two boxes {two}");
+    assert!(
+        two <= one,
+        "{two} allocations for rows of two boxes, {one} for one"
+    );
+}
+
 /// A modifier chain built link by link keeps its elements in one shared
 /// allocation it extends in place, so each link costs its element alone.
 fn a_modifier_chain_allocates_its_elements_and_one_shared_box() {
@@ -748,6 +810,7 @@ fn layout_and_modifiers_stay_within_their_allocation_budgets() {
     a_rest_gives_back_a_long_paragraph_glyph_room();
     composing_a_row_of_boxes_allocates_within_its_budget();
     composing_a_wide_column_again_allocates_what_a_narrow_one_does();
+    a_frame_that_swaps_nodes_for_new_ones_allocates_nothing_for_them();
     if !cfg!(feature = "inspection") {
         a_modifier_chain_allocates_its_elements_and_one_shared_box();
     }

@@ -29,6 +29,7 @@ mod lazy_scroll_from_retained;
 mod localization;
 mod modifier_local_inheritance;
 mod parent_data_order;
+mod recycled_nodes;
 mod round_scaling_list_integration;
 mod round_scroll_indicator_integration;
 mod semantics_hint;
