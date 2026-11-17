@@ -84,6 +84,9 @@ pub(crate) struct ScrollStateInner {
     settle_policy: RefCell<Option<ScrollSettlePolicy>>,
     // The fling or settle of a drag that moves the content now.
     running_scroll: RefCell<RunningScroll>,
+    // Whether a drag, a fling or a settle of the scroll modifier moves the
+    // content. An animation that the app started counts as a running scroll.
+    gesture_scrolling: Cell<bool>,
 }
 
 /// A scroll position and the extents it is measured against, read together.
@@ -306,6 +309,7 @@ impl ScrollState {
                     pending_invalidation: Cell::new(false),
                     settle_policy: RefCell::new(None),
                     running_scroll: RefCell::new(RunningScroll::default()),
+                    gesture_scrolling: Cell::new(false),
                 },
                 runtime,
             ),
@@ -326,16 +330,27 @@ impl ScrollState {
         self.inner().settle_policy.borrow().clone()
     }
 
-    /// Whether a drag, a fling or a settle moves the content now: Compose's
-    /// `isScrollInProgress`. A composable that reads it recomposes when a
-    /// scroll starts and when it ends.
+    /// Whether a drag, a fling, a settle or a scroll animation moves the
+    /// content now: Compose's `isScrollInProgress`. A composable that reads it
+    /// recomposes when a scroll starts and when it ends.
     pub fn is_scroll_in_progress(&self) -> bool {
         self.in_progress.is_alive() && self.in_progress.get()
     }
 
     pub(crate) fn set_scroll_in_progress(&self, active: bool) {
-        if self.in_progress.is_alive() && self.in_progress.get_non_reactive() != active {
-            self.in_progress.set(active);
+        if let Some(inner) = self.inner.try_get() {
+            inner.gesture_scrolling.set(active);
+        }
+        self.refresh_scroll_in_progress();
+    }
+
+    fn refresh_scroll_in_progress(&self) {
+        let Some(inner) = self.inner.try_get() else {
+            return;
+        };
+        let moving = inner.gesture_scrolling.get() || inner.running_scroll.borrow().is_running();
+        if self.in_progress.is_alive() && self.in_progress.get_non_reactive() != moving {
+            self.in_progress.set(moving);
         }
     }
 
@@ -437,6 +452,23 @@ impl ScrollState {
         self.invalidate();
     }
 
+    /// Scrolls to `value` with a spring, clamped to `0..=max_value`:
+    /// Compose's `ScrollState.animateScrollTo`. A fling that runs now stops.
+    /// A drag, a fling, [`Self::scroll_to`] or another animation that starts
+    /// later stops the animation where it is.
+    pub fn animate_scroll_to(&self, value: f32) {
+        let target = value.clamp(0.0, self.max_value());
+        crate::widgets::animate_scroll::animate_scroll_state_to(*self, target);
+    }
+
+    /// Scrolls by `value` pixels with a spring, positive toward the end:
+    /// Compose's `ScrollState.animateScrollBy`. It stops at the start or
+    /// the end of the content. Starting and stopping work as for
+    /// [`Self::animate_scroll_to`].
+    pub fn animate_scroll_by(&self, value: f32) {
+        self.animate_scroll_to(self.value_non_reactive() + value);
+    }
+
     // Makes the motion that `stop` stops the running scroll. The motion that
     // ran before stops.
     pub(crate) fn start_scroll_animation(&self, stop: impl FnOnce() + 'static) -> ScrollId {
@@ -444,6 +476,7 @@ impl ScrollState {
         if let Some(previous) = previous {
             previous.run();
         }
+        self.refresh_scroll_in_progress();
         id
     }
 
@@ -452,12 +485,15 @@ impl ScrollState {
         if let Some(inner) = self.inner.try_get() {
             inner.running_scroll.borrow_mut().end(id);
         }
+        self.refresh_scroll_in_progress();
     }
 
     // Stops the running scroll and returns whether one ran.
     pub(crate) fn stop_scroll_animation(&self) -> bool {
         let running = self.inner().running_scroll.borrow_mut().take();
-        running.map(ScrollStop::run).is_some()
+        let stopped = running.map(ScrollStop::run).is_some();
+        self.refresh_scroll_in_progress();
+        stopped
     }
 
     pub(crate) fn add_invalidate_callback(&self, callback: Box<dyn Fn()>) -> u64 {
