@@ -55,7 +55,7 @@ fn a_source_made_once_from_a_state_follows_the_state() {
 #[derive(Clone)]
 struct SelfWriting {
     value: u32,
-    holder: Rc<Cell<Option<MutableState<SelfWriting>>>>,
+    holder: Rc<Cell<Option<MutableState<Self>>>>,
 }
 
 impl PartialEq for SelfWriting {
