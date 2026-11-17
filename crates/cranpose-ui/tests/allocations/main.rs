@@ -228,11 +228,38 @@ fn wide_nested_columns_leave_a_bounded_set_of_lists() {
     );
 }
 
+// Allocations per pass of a column of `count` rows that share its height by
+// weight, so the column's policy measures them again at each new width.
+fn weighted_remeasure_allocations(count: usize) -> usize {
+    pass_allocations(run_test_composition(move || {
+        Column(
+            Modifier::empty().fill_max_width(),
+            ColumnSpec::default(),
+            move || {
+                for _ in 0..count {
+                    Box(
+                        Modifier::empty().fill_max_width().weight(1.0),
+                        BoxSpec::default(),
+                        || {},
+                    );
+                }
+            },
+        );
+    }))
+}
+
 // A column of 300 rows measures again with the lists of its last measure:
-// a pass allocates no more than a pass over a column of 10 rows.
+// a pass allocates no more than a pass over a column of 10 rows. Each runs
+// on a fresh thread, whose rows and columns hold no spare lists of earlier
+// measures to grow.
 fn remeasuring_a_wide_column_allocates_nothing_more() {
-    let narrow = remeasure_allocations(10);
-    let wide = remeasure_allocations(300);
+    let on_fresh_thread = |count| {
+        std::thread::spawn(move || weighted_remeasure_allocations(count))
+            .join()
+            .expect("the measuring thread")
+    };
+    let narrow = on_fresh_thread(10);
+    let wide = on_fresh_thread(300);
     println!("allocations a pass of a column of 300 rows: {wide}, of 10 rows: {narrow}");
     assert_eq!(
         wide, narrow,
