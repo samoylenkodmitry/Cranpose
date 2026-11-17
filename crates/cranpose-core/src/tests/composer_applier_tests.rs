@@ -1032,9 +1032,7 @@ fn fresh_recyclable_nodes_seed_same_frame_shell_reuse() {
     let fresh = Box::new(SeedableNode);
 
     applier.record_fresh_recyclable_creation(key);
-    if let Some(shell) = fresh.rehouse_for_recycle() {
-        applier.seed_recycled_node_shell(key, fresh.recycle_pool_limit(), shell);
-    }
+    applier.seed_recycled_node_shell(key, &*fresh);
 
     let recycled = applier
         .take_recycled_node(key)
@@ -1504,12 +1502,7 @@ fn clear_recycled_nodes_rebuilds_warm_pool_from_compact_prototype() {
 
     let mut applier = test_applier();
     let key = TypeId::of::<PrototypeRecycleNode>();
-    let seed = PrototypeRecycleNode;
-    let shell = seed
-        .rehouse_for_recycle()
-        .expect("seed node should provide a compact shell");
-
-    applier.seed_recycled_node_shell(key, seed.recycle_pool_limit(), shell);
+    applier.seed_recycled_node_shell(key, &PrototypeRecycleNode);
     let recycled = applier
         .take_recycled_node(key)
         .expect("seeded shell should be immediately available");
@@ -1555,10 +1548,7 @@ fn large_recycle_pools_converge_to_standing_reserve_on_first_demand() {
 
     let mut applier = test_applier();
     let key = TypeId::of::<LargeReserveNode>();
-    let shell = LargeReserveNode
-        .rehouse_for_recycle()
-        .expect("large reserve node should provide a compact shell");
-    applier.seed_recycled_node_shell(key, Some(128), shell);
+    applier.seed_recycled_node_shell(key, &LargeReserveNode);
     let recycled = applier
         .take_recycled_node(key)
         .expect("seeded shell should be immediately available");
@@ -1618,9 +1608,7 @@ fn clear_recycled_nodes_releases_excess_warm_id_capacity() {
         } else {
             let node = Box::new(LargeReserveNode);
             applier.record_fresh_recyclable_creation(key);
-            if let Some(shell) = node.rehouse_for_recycle() {
-                applier.seed_recycled_node_shell(key, node.recycle_pool_limit(), shell);
-            }
+            applier.seed_recycled_node_shell(key, &*node);
             let id = applier.create(node);
             live_ids.push(id);
         }
