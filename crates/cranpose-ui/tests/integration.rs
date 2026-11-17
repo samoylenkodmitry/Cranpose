@@ -31,6 +31,7 @@ mod lazy_width_change;
 mod localization;
 mod modifier_local_inheritance;
 mod parent_data_order;
+mod recycled_nodes;
 mod round_scaling_list_integration;
 mod round_scroll_indicator_integration;
 mod semantics_hint;

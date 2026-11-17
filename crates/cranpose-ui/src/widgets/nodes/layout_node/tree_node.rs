@@ -2,7 +2,7 @@ use std::any::TypeId;
 
 use cranpose_core::{Node, NodeId};
 
-use super::LayoutNode;
+use super::{LayoutEnvironment, LayoutNode, ModifierChainHandle, unregister_layout_node};
 
 impl Node for LayoutNode {
     fn mount(&mut self) {
@@ -153,8 +153,49 @@ impl Node for LayoutNode {
         Some(super::super::node_pool_limit::node_pool_limit())
     }
 
+    // The node leaves the tree whole: it lets go of what a drop would let go
+    // of and keeps the room of its parts and its lists for the node that
+    // takes its place.
     fn prepare_for_recycle(&mut self) {
-        *self = Self::new_recycled_shell(self.is_virtual);
+        let Self {
+            parts,
+            children,
+            density: _,
+            is_virtual: _,
+            needs_semantics,
+            descendant_needs_semantics,
+            needs_redraw,
+            needs_pointer_pass,
+            needs_focus_sync,
+            modifier_slices_dirty,
+            debug_modifiers,
+            id,
+            parent,
+            folded_parent,
+            modifier_slices_snapshot,
+            semantics_reach,
+            owner_context_id,
+            modifier_chain,
+            #[cfg(feature = "inspection")]
+                source_trace: _,
+        } = self;
+        if let (Some(id), Some(owner_context_id)) = (id.replace(None), owner_context_id.take()) {
+            unregister_layout_node(owner_context_id, id);
+        }
+        parts.release_for_recycle();
+        children.clear();
+        *modifier_chain = ModifierChainHandle::detached(LayoutEnvironment::default().direction);
+        *modifier_slices_snapshot = crate::modifier::SlicesSnapshot::default();
+        parent.set(None);
+        folded_parent.set(None);
+        semantics_reach.set(None);
+        needs_semantics.set(false);
+        descendant_needs_semantics.set(false);
+        needs_redraw.set(false);
+        needs_pointer_pass.set(false);
+        needs_focus_sync.set(false);
+        debug_modifiers.set(false);
+        modifier_slices_dirty.set(true);
     }
 
     fn rehouse_for_recycle(&self) -> Option<Box<dyn Node>> {

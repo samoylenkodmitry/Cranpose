@@ -1,11 +1,11 @@
 //! What a node's layout shares: its layout state, measurement cache and
 //! runtime state, in one allocation.
 
-use std::cell::RefCell;
+use std::{cell::RefCell, rc::Rc};
 
 use cranpose_core::NodeId;
 use cranpose_ui_graphics::{Rect, Size};
-use cranpose_ui_layout::Placement;
+use cranpose_ui_layout::{MeasurePolicy, Placement};
 
 use super::{ChildPlacement, LayoutCells, NodeCache};
 use crate::{
@@ -40,6 +40,49 @@ impl LayoutParts {
         Self::new(LayoutRuntimeState::new(
             super::layout_node::empty_measure_policy(),
         ))
+    }
+
+    // Lets go of what the node held, as it leaves the tree for the recycle
+    // pool: its parent's record of it, its children and its measure policy.
+    // A record that matched the node's revision matches it no more. The
+    // block keeps its room for the node that takes it.
+    pub(crate) fn release_for_recycle(&self) {
+        self.cache.advance_revision();
+        self.record.start_over();
+        self.runtime_state.borrow_mut().release_for_recycle();
+    }
+
+    // Makes `parts`, which `release_for_recycle` let go of, the parts of a
+    // new node that `policy` measures, in place. Only parts that no one else
+    // reaches refill: no parent's list, no draw's coordinator rect and no
+    // child's record holds them. Gives `policy` back otherwise. Inlined: a
+    // shell made fresh shares its parts, and its fill reads the count alone.
+    #[inline]
+    pub(crate) fn refill(
+        parts: &Rc<Self>,
+        policy: Rc<dyn MeasurePolicy>,
+    ) -> Result<(), Rc<dyn MeasurePolicy>> {
+        // Another holder of the parts may be in a borrow of them: the count
+        // of holders comes before the borrow.
+        if Rc::strong_count(parts) != 1 {
+            return Err(policy);
+        }
+        Self::refill_held(parts, policy)
+    }
+
+    #[inline(never)]
+    fn refill_held(
+        parts: &Rc<Self>,
+        policy: Rc<dyn MeasurePolicy>,
+    ) -> Result<(), Rc<dyn MeasurePolicy>> {
+        let mut runtime_state = parts.runtime_state.borrow_mut();
+        if Rc::weak_count(parts) != runtime_state.own_parts_handles() {
+            return Err(policy);
+        }
+        runtime_state.refill(policy)?;
+        parts.cache.start_over();
+        parts.layout_state.start_over();
+        Ok(())
     }
 
     pub(crate) fn cache(&self) -> &NodeCache {

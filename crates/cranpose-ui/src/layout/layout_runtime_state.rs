@@ -30,6 +30,35 @@ impl LayoutRuntimeState {
         }
     }
 
+    // Lets go of what the node held, as it leaves the tree for the recycle
+    // pool: its children, its coordinators and its measure policy. The
+    // children's list and frame keep their room for the node that comes in.
+    pub(crate) fn release_for_recycle(&mut self) {
+        self.release_children();
+        self.coordinator_chain = CoordinatorChain::default();
+        self.measure_policy = crate::widgets::nodes::layout_node::empty_measure_policy();
+    }
+
+    // Makes the state, which `release_for_recycle` let go of, the state of a
+    // new node that `policy` measures. Gives `policy` back while a child's
+    // record still holds the children's frame.
+    pub(crate) fn refill(
+        &mut self,
+        policy: Rc<dyn MeasurePolicy>,
+    ) -> Result<(), Rc<dyn MeasurePolicy>> {
+        if !self.restart_child_frame() {
+            return Err(policy);
+        }
+        self.measure_policy = policy;
+        Ok(())
+    }
+
+    // How many weak handles of the node's parts the state holds: the
+    // children's frame holds one.
+    pub(crate) fn own_parts_handles(&self) -> usize {
+        usize::from(self.children.is_some())
+    }
+
     pub(super) fn bind_node(&mut self, node: &LayoutNode) -> ModifierChainInputs {
         self.coordinator_chain.sync(node)
     }
