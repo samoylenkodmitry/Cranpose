@@ -7,7 +7,8 @@ use crate::{Node, NodeId, RecycleOrigin, RecycledNode};
 // The recycled shells of one node type, and what sizes its pool: the shells
 // warm from the last pass, the ones returned this pass by a node that came
 // warm or cold, the limit its nodes ask for, the warm count it keeps, the
-// shells this pass had to create fresh and a prototype to make more from.
+// shells this pass took and the ones it had to create fresh, and a
+// prototype to make more from.
 // Each list keeps its oldest shell first and drops it first: a ring, so a
 // full list drops one without moving the others.
 #[derive(Default)]
@@ -17,6 +18,7 @@ pub(crate) struct RecyclePool {
     cold: VecDeque<RecycledNode>,
     pub(crate) limit: Option<usize>,
     warm_target: Option<usize>,
+    taken: usize,
     pub(crate) fresh_creations: usize,
     prototype: Option<Box<dyn Node>>,
 }
@@ -57,7 +59,9 @@ impl RecyclePool {
     }
 
     pub(crate) fn take(&mut self) -> Option<RecycledNode> {
-        self.returning.pop_back().or_else(|| self.warm.pop_back())
+        let taken = self.returning.pop_back().or_else(|| self.warm.pop_back());
+        self.taken += usize::from(taken.is_some());
+        taken
     }
 
     fn warm_target_limit(&self) -> usize {
@@ -123,11 +127,15 @@ impl RecyclePool {
 
     // At the end of an apply pass: the returned shells join the warm ones,
     // the cold ones this pass needed fresh shells for turn warm and the rest
-    // go, and the warm pool moves to its target. The returned and cold lists
-    // keep their buffers for the next pass.
+    // go, and the warm pool moves to its target. It keeps more warm shells
+    // than its target, up to its limit, while the pass used them all, so a
+    // next pass of the same size makes none; it makes new ones only up to
+    // its target. The returned and cold lists keep their buffers for the
+    // next pass.
     pub(crate) fn end_pass(&mut self, next_stable_id: &mut NodeId) {
         self.warm.append(&mut self.returning);
         let needed = std::mem::take(&mut self.fresh_creations);
+        let used = std::mem::take(&mut self.taken) + needed;
         if needed > 0 {
             let remaining_limit = self
                 .limit
@@ -149,7 +157,8 @@ impl RecyclePool {
         if !nothing_to_size {
             let target = self.update_warm_target(needed);
             self.replenish_warm(target, next_stable_id);
-            drop_oldest_past(&mut self.warm, Some(target));
+            let kept = target.max(self.limit.map_or(used, |limit| used.min(limit)));
+            drop_oldest_past(&mut self.warm, Some(kept));
         }
         self.compact_lists();
     }

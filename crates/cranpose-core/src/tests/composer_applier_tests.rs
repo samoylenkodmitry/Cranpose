@@ -1623,6 +1623,15 @@ fn a_recycle_pass_end_and_compaction_release_excess_warm_id_capacity() {
 
     let stats = applier.debug_stats();
     assert!(
+        stats.warm_recycled_node_id_count <= 128,
+        "a pass that used every shell keeps at most the limit of them: {stats:?}",
+    );
+
+    // The next pass asks for no shell: the tree shrank for good.
+    applier.end_recycle_pass();
+
+    let stats = applier.debug_stats();
+    assert!(
         stats.warm_recycled_node_id_count <= 32,
         "warm id bookkeeping should converge to the standing reserve instead of keeping spike-era ids live: {stats:?}",
     );
