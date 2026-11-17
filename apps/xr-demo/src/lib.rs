@@ -12,9 +12,11 @@ use cranpose_xr::{
 };
 
 mod clip_player;
+mod headset_readout;
 mod pattern_writer;
 
 use clip_player::ClipPlayer;
+use headset_readout::{HeadsetReadout, Readout};
 use pattern_writer::{PatternWriter, Split};
 
 cranpose::app_capabilities!();
@@ -27,7 +29,9 @@ cranpose::app_capabilities!();
 #[composable]
 pub fn XrDemo() {
     let presses = rememberMutableStateOf(|| 0_u32);
+    let readout = rememberMutableStateOf(Readout::default);
     Subspace(move || {
+        HeadsetReadout(presses, readout);
         PlayedSurface(
             StereoMode::Mono,
             SubspaceModifier::new()
@@ -54,7 +58,7 @@ pub fn XrDemo() {
         );
         CounterPanel(presses);
         CurvedStrip();
-        PressesPanel(presses);
+        PressesPanel(presses, readout);
     });
 }
 
@@ -138,9 +142,10 @@ fn CurvedStrip() {
     });
 }
 
-// A smaller panel to the right, turned toward the viewer, that counts the presses too.
+// A smaller panel to the right, turned toward the viewer, that counts the presses too and shows
+// what the frame effect reads of the headset.
 #[composable]
-fn PressesPanel(presses: MutableState<u32>) {
+fn PressesPanel(presses: MutableState<u32>, readout: MutableState<Readout>) {
     SpatialPanel(
         SubspaceModifier::new()
             .size(320.0, 200.0)
@@ -155,15 +160,42 @@ fn PressesPanel(presses: MutableState<u32>) {
                     .padding(24.0),
                 BoxSpec::default(),
                 move || {
-                    Text(
-                        format!("{} presses", presses.get()),
+                    Column(
                         Modifier::empty(),
-                        sized(28.0, Some(FontWeight::BOLD)),
+                        ColumnSpec::default()
+                            .vertical_arrangement(LinearArrangement::spaced_by(6.0)),
+                        move || {
+                            Text(
+                                format!("{} presses", presses.get()),
+                                Modifier::empty(),
+                                sized(28.0, Some(FontWeight::BOLD)),
+                            );
+                            ReadoutLines(readout);
+                        },
                     );
                 },
             );
         },
     );
+}
+
+// The lines of the headset's readout. Outside a headset the frame effect never runs, and they
+// stay at their start.
+#[composable]
+fn ReadoutLines(readout: MutableState<Readout>) {
+    let Readout {
+        head_cm,
+        trigger_percent,
+        frames_per_second,
+    } = readout.get();
+    let head = head_cm.map_or_else(|| "not tracked".to_owned(), |cm| format!("{cm} cm"));
+    for line in [
+        format!("Head y {head}"),
+        format!("Right trigger {trigger_percent}%"),
+        format!("Frame effect {frames_per_second} Hz"),
+    ] {
+        Text(line, Modifier::empty(), sized(18.0, None));
+    }
 }
 
 // A button that shows or hides the room around the panels, or a note where the headset cannot.

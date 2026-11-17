@@ -26,6 +26,7 @@ openxr = [
     "dep:wgpu",
     "dep:pollster",
     "dep:android-activity",
+    "dep:libc",
 ]
 
 [dependencies]
@@ -39,6 +40,7 @@ khronos-egl = { version = "6", features = ["dynamic"], optional = true }
 wgpu = { workspace = true, optional = true, features = ["gles", "std"] }
 pollster = { version = "1.0.1", optional = true }
 android-activity = { workspace = true, optional = true }
+libc = { version = "0.2", optional = true }
 
 [dev-dependencies]
 cranpose-testing = { path = "../cranpose-testing" }

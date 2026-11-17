@@ -1907,6 +1907,7 @@ dependencies = [
  "cranpose-testing",
  "cranpose-wgpu",
  "khronos-egl",
+ "libc",
  "log",
  "openxr",
  "pollster",

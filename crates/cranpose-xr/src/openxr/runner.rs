@@ -9,16 +9,18 @@ use cranpose::{
 use cranpose_core::CompositionLocalProvider;
 
 use super::{
-    controllers::Controllers,
     gl_context::GlContext,
     handle_layers::HandleLayers,
+    headset_input::HeadsetInput,
     panel_layers::{DENSITY, PanelFrame, PanelLayers},
     ray_layers::RayLayers,
     session::{SessionStatus, XrSession},
     surface_layers::SurfaceLayers,
 };
 use crate::{
-    SpatialCapabilities, SpatialEnvironment, local_spatial_capabilities, local_spatial_environment,
+    SpatialCapabilities, SpatialEnvironment,
+    frame_effects::local_frame_effects,
+    local_haptics, local_spatial_capabilities, local_spatial_environment,
     pointer::{Pointer, PointerEvent},
     space::{Space, local_space},
 };
@@ -108,7 +110,7 @@ struct Immersive {
     surfaces: SurfaceLayers,
     rays: RayLayers,
     handles: HandleLayers,
-    controllers: Controllers,
+    headset: HeadsetInput,
     xr_session: XrSession,
     gpu: GpuContext,
     _gl: GlContext,
@@ -123,13 +125,14 @@ impl Immersive {
         let gl = GlContext::new()?;
         let gpu = gl.gpu()?;
         let xr_session = XrSession::new(&gl, app)?;
-        let controllers = Controllers::new(&xr_session)?;
+        let headset = HeadsetInput::new(&xr_session)?;
         let layers = PanelLayers::new(&xr_session)?;
         let formats = (layers.gl_format(), layers.format());
         let rays = RayLayers::new(&xr_session, &gpu, formats)?;
         let handles = HandleLayers::new(&xr_session, &gpu, formats)?;
         let capabilities =
             SpatialCapabilities::in_headset(xr_session.passthrough.is_controllable());
+        let (effects, haptics) = (headset.effects(), headset.haptics());
         let composed = Rc::new(RefCell::new(None::<(Space, SpatialEnvironment)>));
         let held = Rc::clone(&composed);
         let mut guest = GuestView::new(
@@ -149,6 +152,8 @@ impl Immersive {
                         local_space().provides(Some(space)),
                         local_spatial_capabilities().provides(capabilities),
                         local_spatial_environment().provides(Some(environment)),
+                        local_frame_effects().provides(Some(effects.clone())),
+                        local_haptics().provides(Some(haptics.clone())),
                     ],
                     &mut content,
                 );
@@ -171,7 +176,7 @@ impl Immersive {
             surfaces: SurfaceLayers::new(),
             rays,
             handles,
-            controllers,
+            headset,
             xr_session,
             gpu,
             _gl: gl,
@@ -185,12 +190,7 @@ impl Immersive {
     // app's state stays as it was.
     fn frame(&mut self, status: SessionStatus) -> Result<(), String> {
         let frame = self.xr_session.begin_frame()?;
-        let aims = if status.listens() {
-            self.controllers
-                .aims(&self.xr_session, frame.predicted_display_time)
-        } else {
-            [None, None]
-        };
+        let aims = self.headset.sample(&mut self.xr_session, &frame, status);
         let shown = status.shows() && frame.should_render;
         let time = Duration::from_nanos(frame.predicted_display_time.as_nanos().max(0) as u64);
         let (events, cursor) = self.pointer.update(aims, time, &self.space.panels());
@@ -218,7 +218,7 @@ impl Immersive {
         if shown {
             quads.extend(self.surfaces.layers(&panels));
             quads.extend(self.handles.layers(&panels, self.pointer.handle()));
-            if let Some(head) = self.xr_session.head(frame.predicted_display_time) {
+            if let Some(head) = self.headset.device_pose() {
                 quads.extend(self.rays.layers(&self.pointer.beams(), head.position));
             }
         }

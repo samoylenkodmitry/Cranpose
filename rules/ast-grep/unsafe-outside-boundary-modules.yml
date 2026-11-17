@@ -41,7 +41,9 @@ ignores:
   - crates/cranpose-services/src/video_decoder/image_reader.rs
   - crates/cranpose-services/src/video_decoder/media_codec.rs
   - crates/cranpose-xr/src/android_main.rs
+  - crates/cranpose-xr/src/openxr/clock.rs
   - crates/cranpose-xr/src/openxr/cylinder_layers.rs
+  - crates/cranpose-xr/src/openxr/eye_views.rs
   - crates/cranpose-xr/src/openxr/gl_context.rs
   - crates/cranpose-xr/src/openxr/passthrough.rs
   - crates/cranpose-xr/src/openxr/session.rs
