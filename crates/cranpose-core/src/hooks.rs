@@ -319,9 +319,11 @@ pub fn derivedStateOf<T: 'static + Clone + PartialEq>(
                 .remember_at(source, || None::<DerivedState<T>>)
                 .update(|slot| {
                     let (derived, fresh) = match slot.take() {
-                        // The closure derives what the kept one does, and the
-                        // derivation keeps the states it read.
+                        // The value stays and the derivation keeps the states
+                        // it read; the next change runs the new closure, which
+                        // can hold values the old one did not.
                         Some(derived) if restarted_for(composer, &derived) => {
+                            derived.set_compute(Rc::new(compute));
                             if let Some(scope) = &derivation {
                                 scope.keep_reads();
                             }
