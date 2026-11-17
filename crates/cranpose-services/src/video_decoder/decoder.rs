@@ -1,9 +1,13 @@
 //! The decoder and the handle that receives its pictures.
 
+#[cfg(any(target_os = "android", target_os = "macos", target_os = "ios"))]
+use super::frame_queue::Frames;
 #[cfg(target_os = "android")]
-use super::media_codec::{Backend, Frames};
-#[cfg(not(target_os = "android"))]
+use super::media_codec::Backend;
+#[cfg(not(any(target_os = "android", target_os = "macos", target_os = "ios")))]
 use super::unavailable::{Backend, Frames};
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+use super::video_toolbox::Backend;
 use super::{AccessUnit, DecoderConfig, DecoderError, DecoderStats, FrameInfo, VideoFrame};
 
 /// A hardware video decoder for one stream.

@@ -4,7 +4,9 @@ use std::{ffi::c_void, time::Duration};
 
 #[cfg(target_os = "android")]
 use super::image_reader::Image;
-#[cfg(not(target_os = "android"))]
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+use super::pixel_buffer::Image;
+#[cfg(not(any(target_os = "android", target_os = "macos", target_os = "ios")))]
 use super::unavailable::Image;
 
 /// What the decoder reports about one decoded picture.
@@ -33,11 +35,11 @@ pub struct CropRect {
 }
 
 /// A decoded picture as a GPU image. On Android it is a hardware buffer that a renderer samples
+/// without a copy. On macOS and iOS it is a `CVPixelBuffer` in an IOSurface that Metal samples
 /// without a copy.
 ///
-/// The picture's image stays with the decoder's reader until the frame drops. A frame that lives
-/// long keeps the decoder from using the image again, so an app drops each frame once it has
-/// drawn it.
+/// The picture's image stays with the decoder until the frame drops. A frame that lives long
+/// keeps the decoder from using the image again, so an app drops each frame once it has drawn it.
 pub struct VideoFrame {
     info: FrameInfo,
     size: (u32, u32),
@@ -46,7 +48,7 @@ pub struct VideoFrame {
 }
 
 impl VideoFrame {
-    #[cfg(target_os = "android")]
+    #[cfg(any(target_os = "android", target_os = "macos", target_os = "ios"))]
     pub(super) fn new(info: FrameInfo, size: (u32, u32), crop: CropRect, image: Image) -> Self {
         Self {
             info,
@@ -71,11 +73,22 @@ impl VideoFrame {
         self.crop
     }
 
-    /// The picture's native buffer as a pointer: on Android an `AHardwareBuffer*`, which a
-    /// renderer imports as a GPU image. The pointer stays valid while this frame lives. Apps do
-    /// not call this: the headset's backend does.
+    /// The picture's native buffer as a pointer: an `AHardwareBuffer*`, which a renderer imports
+    /// as a GPU image. The pointer stays valid while this frame lives. Apps do not call this:
+    /// the headset's backend does.
+    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
     pub fn as_hardware_buffer_ptr(&self) -> *mut c_void {
         self.image.hardware_buffer()
+    }
+
+    /// The picture's native buffer as a pointer: a `CVPixelBufferRef` in NV12, backed by an
+    /// IOSurface that Metal samples. Its format is
+    /// `kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange`, or the full-range format if the
+    /// stream uses that range. The pointer stays valid while this frame lives. Apps do not call
+    /// this: `PlayerSurface` of the `cranpose` crate imports it.
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    pub fn as_pixel_buffer_ptr(&self) -> *mut c_void {
+        self.image.pixel_buffer()
     }
 }
 

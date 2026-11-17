@@ -38,8 +38,11 @@ ignores:
   - crates/cranpose-storekit/src/tests/apple_tests.rs
   - apps/xr-demo/src/pattern_writer.rs
   - crates/cranpose-services/src/external_surface.rs
+  - crates/cranpose-services/src/video_decoder/decompression_session.rs
   - crates/cranpose-services/src/video_decoder/image_reader.rs
   - crates/cranpose-services/src/video_decoder/media_codec.rs
+  - crates/cranpose-services/src/video_decoder/pixel_buffer.rs
+  - crates/cranpose-services/src/video_decoder/video_toolbox.rs
   - crates/cranpose-xr/src/android_main.rs
   - crates/cranpose-xr/src/openxr/cylinder_layers.rs
   - crates/cranpose-xr/src/openxr/external_texture.rs

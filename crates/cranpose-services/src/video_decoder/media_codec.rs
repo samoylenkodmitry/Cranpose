@@ -32,11 +32,11 @@ use ndk::{
 use parking_lot::Mutex;
 
 use super::{
-    AccessUnit, DecoderConfig, DecoderError, DecoderOutput, DecoderStats, FrameInfo, VideoCodec,
-    VideoFrame,
+    AccessUnit, DecoderConfig, DecoderError, DecoderOutput, FrameInfo, VideoCodec, VideoFrame,
+    admission::Admission,
+    frame_queue::{FrameQueue, Frames},
     image_reader::{Acquired, Reader},
     pending_units::{PendingUnit, PendingUnits},
-    stats::StatsCounters,
 };
 
 // How long the draining thread waits for an output before it checks that the decoder is still
@@ -61,9 +61,7 @@ unsafe impl Sync for Codec {}
 // What the feeding thread, the draining thread and the app's handles share.
 struct Shared {
     pending: Mutex<PendingUnits>,
-    frames: Mutex<VecDeque<VideoFrame>>,
-    reports: Mutex<VecDeque<FrameInfo>>,
-    stats: StatsCounters,
+    queue: Arc<FrameQueue>,
     stop: AtomicBool,
     // The most pictures that wait for the app
     depth: usize,
@@ -73,20 +71,8 @@ struct Shared {
 pub(super) struct Backend {
     codec: Arc<Codec>,
     shared: Arc<Shared>,
-    last_pts_us: Option<u64>,
+    admission: Admission,
     input_wait: Duration,
-    // The largest access unit that the codec's input takes
-    input_limit: usize,
-}
-
-// The receiving side of a decoder.
-#[derive(Clone)]
-pub(super) struct Frames(Arc<Shared>);
-
-impl PartialEq for Frames {
-    fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.0, &other.0)
-    }
 }
 
 impl Backend {
@@ -114,9 +100,7 @@ impl Backend {
         let codec = Arc::new(Codec(configure(kind, width, height, input_limit, window)?));
         let shared = Arc::new(Shared {
             pending: Mutex::new(PendingUnits::new()),
-            frames: Mutex::new(VecDeque::with_capacity(depth)),
-            reports: Mutex::new(VecDeque::with_capacity(REPORTS)),
-            stats: StatsCounters::default(),
+            queue: Arc::new(FrameQueue::new(depth, REPORTS)),
             stop: AtomicBool::new(false),
             depth,
         });
@@ -132,23 +116,13 @@ impl Backend {
         Ok(Self {
             codec,
             shared,
-            last_pts_us: None,
+            admission: Admission::new(input_limit),
             input_wait,
-            input_limit,
         })
     }
 
     pub(super) fn submit(&mut self, unit: AccessUnit<'_>) -> Result<(), DecoderError> {
-        let pts_us = u64::try_from(unit.timestamp.as_micros()).unwrap_or(u64::MAX);
-        if self.last_pts_us.is_some_and(|last| pts_us <= last) {
-            return Err(DecoderError::TimestampNotRising);
-        }
-        if unit.data.len() > self.input_limit {
-            return Err(DecoderError::AccessUnitTooLarge {
-                size: unit.data.len(),
-                limit: self.input_limit,
-            });
-        }
+        let pts_us = self.admission.check(&unit)?;
         let mut buffer = match self
             .codec
             .0
@@ -182,13 +156,13 @@ impl Backend {
                 limit: room,
             });
         }
-        self.last_pts_us = Some(pts_us);
-        self.shared.stats.submitted();
+        self.admission.accept(pts_us);
+        self.shared.queue.stats.submitted();
         Ok(())
     }
 
     pub(super) fn frames(&self) -> Frames {
-        Frames(Arc::clone(&self.shared))
+        Frames(Arc::clone(&self.shared.queue))
     }
 }
 
@@ -197,29 +171,6 @@ impl Drop for Backend {
         // The draining thread stops the codec when it sees the flag, and ends. The drop does
         // not wait for it.
         self.shared.stop.store(true, Ordering::Release);
-    }
-}
-
-impl Frames {
-    pub(super) fn next_frame(&self) -> Option<VideoFrame> {
-        self.0.frames.lock().pop_front()
-    }
-
-    pub(super) fn latest_frame(&self) -> Option<VideoFrame> {
-        let mut frames = self.0.frames.lock();
-        while frames.len() > 1 {
-            frames.pop_front();
-            self.0.stats.dropped();
-        }
-        frames.pop_front()
-    }
-
-    pub(super) fn next_report(&self) -> Option<FrameInfo> {
-        self.0.reports.lock().pop_front()
-    }
-
-    pub(super) fn stats(&self) -> DecoderStats {
-        self.0.stats.snapshot()
     }
 }
 
@@ -310,9 +261,9 @@ impl Output {
             log::error!("video decoder: render: {error}");
             return;
         }
-        self.shared.stats.decoded(info.decode_time);
+        self.shared.queue.stats.decoded(info.decode_time);
         if self.reader.is_none() {
-            let mut reports = self.shared.reports.lock();
+            let mut reports = self.shared.queue.reports.lock();
             if reports.len() == REPORTS {
                 reports.pop_front();
             }
@@ -326,7 +277,7 @@ impl Output {
         self.collect(released);
         // A picture whose image has not come yet reaches the app one picture late
         if released.iter().any(|(pts, _)| *pts == pts_us) {
-            self.shared.stats.late();
+            self.shared.queue.stats.late();
         }
     }
 
@@ -341,10 +292,10 @@ impl Output {
                 Acquired::Image(image) => {
                     let info = take_info(released, image.timestamp_ns());
                     let frame = VideoFrame::new(info, image.size(), image.crop(), image);
-                    let mut frames = self.shared.frames.lock();
+                    let mut frames = self.shared.queue.frames.lock();
                     if frames.len() >= self.shared.depth {
                         frames.pop_front();
-                        self.shared.stats.dropped();
+                        self.shared.queue.stats.dropped();
                     }
                     frames.push_back(frame);
                 }
@@ -352,11 +303,11 @@ impl Output {
                 Acquired::Full => {
                     // The app and the queue hold every image. The oldest queued picture goes, so
                     // the newest comes in.
-                    let mut frames = self.shared.frames.lock();
+                    let mut frames = self.shared.queue.frames.lock();
                     if frames.pop_front().is_none() {
                         break;
                     }
-                    self.shared.stats.dropped();
+                    self.shared.queue.stats.dropped();
                 }
                 Acquired::Failed(status) => {
                     log::error!("video decoder: image reader status {status}");

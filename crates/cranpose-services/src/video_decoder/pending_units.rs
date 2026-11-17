@@ -43,10 +43,25 @@ impl PendingUnits {
     // Takes the unit that the picture at `pts_us` came from. The units before it produced no
     // picture, such as a unit of parameter sets, so they go too. A timestamp that no unit has
     // takes nothing.
+    #[cfg(any(test, target_os = "android"))]
     pub(super) fn take(&mut self, pts_us: u64) -> Option<PendingUnit> {
         let index = self.units.iter().position(|unit| unit.pts_us == pts_us)?;
         self.units.drain(..index);
         self.units.pop_front()
+    }
+
+    // Takes the unit at `pts_us` and leaves the others, for a decoder that answers each unit
+    // alone and may answer out of order.
+    #[cfg(any(test, target_os = "macos", target_os = "ios"))]
+    pub(super) fn remove(&mut self, pts_us: u64) -> Option<PendingUnit> {
+        let index = self.units.iter().position(|unit| unit.pts_us == pts_us)?;
+        self.units.remove(index)
+    }
+
+    // The units that wait for their pictures.
+    #[cfg(any(test, target_os = "macos", target_os = "ios"))]
+    pub(super) fn len(&self) -> usize {
+        self.units.len()
     }
 }
 
