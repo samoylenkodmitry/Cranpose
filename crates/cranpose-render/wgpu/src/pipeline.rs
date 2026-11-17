@@ -32,6 +32,8 @@ use crate::scene::{
 };
 
 mod style;
+#[cfg(test)]
+mod text_bounds;
 mod text_effect;
 use cranpose_render_common::{
     style_shared::resolve_layer_brush,
@@ -42,6 +44,8 @@ use cranpose_render_common::{
     },
 };
 use style::{apply_layer_to_brush, apply_layer_to_color, scale_corner_radii};
+#[cfg(test)]
+pub(crate) use text_bounds::estimate_text_style_draw_bounds;
 use text_effect::{mask_style, push_text_effect};
 
 const GPU_TEXT_BRUSH_EFFECT_MAX_STOPS: usize = 16;
@@ -548,51 +552,6 @@ impl TextStyleDrawSink for CompositorScene {
     }
 }
 
-#[cfg(test)]
-#[derive(Default)]
-struct TextBoundsCollector {
-    bounds: Option<Rect>,
-    next_z: usize,
-}
-
-#[cfg(test)]
-impl TextStyleDrawSink for TextBoundsCollector {
-    fn current_z(&mut self) -> usize {
-        self.next_z
-    }
-
-    fn push_shape(
-        &mut self,
-        primitive: DrawPrimitive,
-        _clip: Option<Rect>,
-        _anchor: Option<SnapAnchor>,
-    ) {
-        let (DrawPrimitive::Rect { rect, .. } | DrawPrimitive::RoundRect { rect, .. }) = primitive
-        else {
-            unreachable!("text decorations are rects");
-        };
-        self.bounds = union_rect(self.bounds, rect);
-        self.next_z += 1;
-    }
-
-    fn push_text(&mut self, draw: TextDraw) {
-        self.bounds = union_rect(self.bounds, draw.rect);
-        self.next_z += 1;
-    }
-
-    fn push_shadow_text(&mut self, draw: TextDraw, blur_radius: f32) {
-        let shadow_bounds = expand_blurred_rect(draw.rect, blur_radius, draw.scale, draw.clip);
-        if let Some(shadow_bounds) = shadow_bounds {
-            self.bounds = union_rect(self.bounds, shadow_bounds);
-        }
-        self.next_z += 1;
-    }
-
-    fn push_effect_layer(&mut self, layer: EffectLayer) {
-        self.bounds = union_rect(self.bounds, layer.rect);
-    }
-}
-
 // `text_rect` is the text's box after the layer's transform, and
 // `transformed_text_style` its style with the layer's paint applied.
 fn push_span_gpu_text_material_draws<S: TextStyleDrawSink>(
@@ -837,16 +796,6 @@ pub(crate) fn push_text_style_draws(
     let counts = crate::collect::scene_counts(scene);
     emit_text_style_draws(scene, node, placement);
     crate::collect::assign_snap_anchor_since(scene, counts, placement.snap_anchor);
-}
-
-#[cfg(test)]
-pub(crate) fn estimate_text_style_draw_bounds(
-    node: &TextPrimitiveNode,
-    placement: TextPlacement<'_>,
-) -> Option<Rect> {
-    let mut collector = TextBoundsCollector::default();
-    emit_text_style_draws(&mut collector, node, placement);
-    collector.bounds
 }
 
 const DRAW_PRIMITIVE_TEXT_NODE_ID: NodeId = NodeId(0);
