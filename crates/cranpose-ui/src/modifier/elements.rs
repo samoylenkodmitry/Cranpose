@@ -19,6 +19,9 @@ fn inspector_slice_of(inspector: Option<&Rc<Vec<InspectorMetadata>>>) -> &[Inspe
 
 /// The inspector metadata of two modifiers joined, first `first`'s, or
 /// `None` when neither has any.
+// Cold: only a build that records inspector metadata reaches it.
+#[cold]
+#[inline(never)]
 fn merged_inspector(
     first: &[InspectorMetadata],
     second: &[InspectorMetadata],
@@ -85,9 +88,11 @@ impl ManyElements {
         }
     }
 
-    // Takes in the elements of the list `shared` after its own.
+    // Takes in the elements of the list `shared` after its own, as copies:
+    // a plain element's copy is its value, and one way to take them in keeps
+    // the code of the join small.
     #[inline(never)]
-    fn append(&mut self, mut shared: Rc<Self>) {
+    fn append(&mut self, shared: Rc<Self>) {
         self.provides_composition_locals |= shared.provides_composition_locals;
         if shared.inspector.is_some() {
             self.inspector = merged_inspector(
@@ -95,10 +100,7 @@ impl ManyElements {
                 inspector_slice(&shared.inspector),
             );
         }
-        match Rc::get_mut(&mut shared) {
-            Some(owned) => self.elements.append(&mut owned.elements),
-            None => self.elements.extend(shared.elements.iter().cloned()),
-        }
+        self.elements.extend(shared.elements.iter().cloned());
     }
 }
 
