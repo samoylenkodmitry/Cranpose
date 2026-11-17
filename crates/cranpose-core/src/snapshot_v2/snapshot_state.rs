@@ -85,6 +85,39 @@ impl SnapshotState {
         }
     }
 
+    // Becomes the state `new_with_pinning` makes for an untracked, unpinned
+    // snapshot, in place. The modified map keeps its storage.
+    pub(crate) fn restart_unpinned(
+        &mut self,
+        id: SnapshotId,
+        invalid: SnapshotIdSet,
+        read_observer: Option<ReadObserver>,
+        write_observer: Option<WriteObserver>,
+    ) {
+        let Self {
+            id: own_id,
+            invalid: own_invalid,
+            pin_handle,
+            disposed,
+            read_observer: own_read_observer,
+            write_observer: own_write_observer,
+            modified,
+            on_dispose,
+            runtime_tracking,
+            pending_children,
+        } = self;
+        own_id.set(id);
+        *own_invalid.get_mut() = invalid;
+        pin_handle.set(PinHandle::INVALID);
+        disposed.set(false);
+        *own_read_observer.get_mut() = read_observer;
+        *own_write_observer.get_mut() = write_observer;
+        modified.get_mut().clear();
+        *on_dispose.get_mut() = None;
+        *runtime_tracking = RuntimeTracking::Untracked;
+        pending_children.get_mut().clear();
+    }
+
     pub(crate) fn record_read(&self, state: &dyn StateObject) {
         if let Some(observer) = self.read_observer.borrow().as_ref() {
             observer(state);
