@@ -70,6 +70,7 @@ pub use drag_and_drop::{
     DragAndDropTargetElement, DragAndDropTargetNode,
 };
 pub(crate) use element_match::ElementMatch;
+pub(crate) use elements::ManyElements;
 use elements::ModifierKind;
 #[cfg(test)]
 pub(crate) use focus::FocusRequesterElement;

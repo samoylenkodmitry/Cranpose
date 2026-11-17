@@ -33,11 +33,16 @@ fn merged_inspector(
 // lives inline in its one shared allocation.
 pub(super) type ModifierElements = SmallVec<[DynModifierElement; 4]>;
 
+// How many emptied lists of let-go modifiers a thread keeps for its next
+// joins: a body that composes again builds its modifiers again and drops
+// each once its node took it in, so a few cover the nesting of bodies.
+const SPARE_LISTS: usize = 4;
+
 // The elements of a modifier that holds several, or one with inspector
 // metadata, in one shared allocation, which the chain's later links extend
 // in place while it is the only owner.
 #[derive(Clone, Default)]
-pub(super) struct ManyElements {
+pub(crate) struct ManyElements {
     elements: ModifierElements,
     // `None` when no element records inspector metadata, which is always
     // outside tests and modifier debugging: no allocation.
@@ -47,20 +52,21 @@ pub(super) struct ManyElements {
 
 impl ManyElements {
     // `first` followed by `more`. Elements move into the joined chain;
-    // only those another modifier also holds are copied.
+    // only those another modifier also holds are copied. A chain started
+    // here takes a list another modifier let go when the thread has one.
     fn joined(first: ModifierKind, more: ModifierKind) -> Rc<Self> {
-        let mut chain = match first {
-            ModifierKind::Many(chain) => chain,
-            first => {
-                let mut chain = Self::default();
-                chain.push(first);
-                Rc::new(chain)
-            }
+        let (mut chain, first) = match first {
+            ModifierKind::Many(chain) => (chain, ModifierKind::Empty),
+            first => (spare_list(), first),
         };
         match Rc::get_mut(&mut chain) {
-            Some(owned) => owned.push(more),
+            Some(owned) => {
+                owned.push(first);
+                owned.push(more);
+            }
             None => {
                 let mut copy = Self::clone(&chain);
+                copy.push(first);
                 copy.push(more);
                 chain = Rc::new(copy);
             }
@@ -76,7 +82,7 @@ impl ManyElements {
                 self.provides_composition_locals |= element.provides_composition_locals();
                 self.elements.push(element);
             }
-            ModifierKind::Many(shared) => {
+            ModifierKind::Many(mut shared) => {
                 self.provides_composition_locals |= shared.provides_composition_locals;
                 if shared.inspector.is_some() {
                     self.inspector = merged_inspector(
@@ -84,13 +90,43 @@ impl ManyElements {
                         inspector_slice(&shared.inspector),
                     );
                 }
-                match Rc::try_unwrap(shared) {
-                    Ok(owned) => self.elements.extend(owned.elements),
-                    Err(shared) => self.elements.extend(shared.elements.iter().cloned()),
+                match Rc::get_mut(&mut shared) {
+                    Some(owned) => self.elements.append(&mut owned.elements),
+                    None => self.elements.extend(shared.elements.iter().cloned()),
                 }
+                release(shared);
             }
         }
     }
+}
+
+// A list for a new chain: one another modifier let go, or a new one.
+fn spare_list() -> Rc<ManyElements> {
+    crate::thread_state::with(|state| state.spare_modifier_lists.borrow_mut().pop())
+        .unwrap_or_default()
+}
+
+// Lets `list` go: the last holder of a list that kept its elements inline
+// empties it for the thread's next join, while the thread keeps fewer than
+// `SPARE_LISTS`. Out of line, so a drop of a modifier stays small.
+#[inline(never)]
+fn release(mut list: Rc<ManyElements>) {
+    let Some(owned) = Rc::get_mut(&mut list) else {
+        return;
+    };
+    if owned.elements.spilled() {
+        return;
+    }
+    owned.elements.clear();
+    owned.inspector = None;
+    owned.provides_composition_locals = false;
+    // A thread that ends keeps none.
+    let _ = crate::thread_state::try_with(|state| {
+        let mut spare = state.spare_modifier_lists.borrow_mut();
+        if spare.len() < SPARE_LISTS {
+            spare.push(list);
+        }
+    });
 }
 
 // What a modifier holds.
@@ -160,8 +196,8 @@ impl Modifier {
     /// It takes `self`: a modifier built link by link owns its elements
     /// alone, so each link joins them in place instead of copying the chain.
     /// Clone a modifier first to keep using it; the join then copies it.
-    pub fn then(self, next: Self) -> Self {
-        let kind = match (self.kind, next.kind) {
+    pub fn then(mut self, mut next: Self) -> Self {
+        let kind = match (self.take_kind(), next.take_kind()) {
             (ModifierKind::Empty, kind) | (kind, ModifierKind::Empty) => kind,
             (first, more) => ModifierKind::Many(ManyElements::joined(first, more)),
         };
@@ -245,11 +281,11 @@ impl Modifier {
         }
     }
 
-    pub(crate) fn with_inspector_metadata(self, metadata: InspectorMetadata) -> Self {
+    pub(crate) fn with_inspector_metadata(mut self, metadata: InspectorMetadata) -> Self {
         if metadata.is_empty() {
             return self;
         }
-        let mut chain = match self.kind {
+        let mut chain = match self.take_kind() {
             ModifierKind::Empty => return self,
             ModifierKind::One(element) => {
                 let mut chain = ManyElements::default();
@@ -266,11 +302,24 @@ impl Modifier {
         }
     }
 
+    // What the modifier holds, leaving it empty.
+    fn take_kind(&mut self) -> ModifierKind {
+        std::mem::replace(&mut self.kind, ModifierKind::Empty)
+    }
+
     pub(super) fn as_elements(&self) -> &[DynModifierElement] {
         match &self.kind {
             ModifierKind::Empty => &[],
             ModifierKind::One(element) => std::slice::from_ref(element),
             ModifierKind::Many(chain) => &chain.elements,
+        }
+    }
+}
+
+impl Drop for Modifier {
+    fn drop(&mut self) {
+        if let ModifierKind::Many(list) = self.take_kind() {
+            release(list);
         }
     }
 }
