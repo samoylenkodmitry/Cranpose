@@ -76,7 +76,12 @@ impl LazyScreen {
 
     // Each text the screen draws, with its top.
     pub(crate) fn texts(&mut self) -> Vec<(String, f32)> {
-        let (composition, viewport) = (&mut self.composition, self.viewport);
+        self.texts_at(self.viewport)
+    }
+
+    // Each text the screen draws laid out in `viewport`, with its top.
+    pub(crate) fn texts_at(&mut self, viewport: Size) -> Vec<(String, f32)> {
+        let composition = &mut self.composition;
         self.context.enter(|| {
             let root = composition.root().expect("lazy list root");
             let runtime = composition.runtime_handle();

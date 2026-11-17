@@ -3,7 +3,9 @@
 use std::{cell::RefCell, rc::Rc};
 
 use cranpose_core::{SlotId, collections::map::HashMap};
-use cranpose_foundation::lazy::{LazyListMeasureResult, LazyListMeasuredItem, SmallNodeVec};
+use cranpose_foundation::lazy::{
+    LazyItemRoots, LazyListMeasureResult, LazyListMeasuredItem, SmallNodeVec,
+};
 use cranpose_ui_layout::Axis;
 
 use super::LazyItemMeasureContext;
@@ -15,6 +17,9 @@ pub(super) struct LazyMeasuredItemCache {
     telemetry: LazyCacheTelemetry,
     pub(super) entries: HashMap<usize, CachedLazyMeasuredItem>,
     focused: Option<(u64, usize)>,
+    // The roots of the items that the pass let go of, which the items it
+    // measures fill again; empty between passes.
+    rooms: Vec<Rc<LazyItemRoots>>,
 }
 
 pub(super) struct CachedLazyMeasuredItem {
@@ -74,7 +79,9 @@ impl LazyMeasuredItemCache {
     }
 
     pub(super) fn clear(&mut self) {
-        self.entries.clear();
+        for (_, cached) in self.entries.drain() {
+            keep_room(&mut self.rooms, cached.item.roots);
+        }
     }
 
     /// Drops what a new measure pass cannot reuse: everything, when the
@@ -95,8 +102,12 @@ impl LazyMeasuredItemCache {
     /// entry would keep the item's whole measured tree alive: an endless list
     /// scrolled past thousands of items kept them all.
     pub(super) fn retain_retained_slots(&mut self, is_retained: impl Fn(SlotId) -> bool) {
-        self.entries
-            .retain(|_, cached| is_retained(SlotId(cached.item.key)));
+        let gone = self
+            .entries
+            .extract_if(|_, cached| !is_retained(SlotId(cached.item.key)));
+        for (_, cached) in gone {
+            keep_room(&mut self.rooms, cached.item.roots);
+        }
     }
 
     pub(super) fn get(
@@ -128,7 +139,9 @@ impl LazyMeasuredItemCache {
     }
 
     pub(super) fn remove(&mut self, index: usize) {
-        self.entries.remove(&index);
+        if let Some(cached) = self.entries.remove(&index) {
+            keep_room(&mut self.rooms, cached.item.roots);
+        }
     }
 
     pub(super) fn insert(&mut self, item: LazyListMeasuredItem, cross_axis_size: f32) {
@@ -137,7 +150,14 @@ impl LazyMeasuredItemCache {
             item,
             cross_axis_bits: normalized_axis_bits(cross_axis_size),
         };
-        self.entries.insert(index, cached);
+        if let Some(replaced) = self.entries.insert(index, cached) {
+            keep_room(&mut self.rooms, replaced.item.roots);
+        }
+    }
+
+    // The roots of an item the pass let go of, for an item it measures.
+    pub(super) fn take_room(&mut self) -> Option<Rc<LazyItemRoots>> {
+        self.rooms.pop()
     }
 
     pub(super) fn record_candidate_hit(&mut self) {
@@ -176,10 +196,13 @@ impl LazyMeasuredItemCache {
     }
 }
 
-pub(super) fn log_lazy_cache_telemetry(
+// Ends a measure pass of the list: lets go of the roots no item took again
+// and logs what the pass found in the cache.
+pub(super) fn end_lazy_cache_pass(
     result: &LazyListMeasureResult,
     measured_item_cache: &Rc<RefCell<LazyMeasuredItemCache>>,
 ) {
+    measured_item_cache.borrow_mut().rooms.clear();
     if !cranpose_core::DIAGNOSTICS.lazy_cache_telemetry.is_set() {
         return;
     }
@@ -203,6 +226,13 @@ pub(super) fn log_lazy_cache_telemetry(
         measured_item_cache.borrow().entries.len(),
     );
     log::warn!("{message}");
+}
+
+// Keeps `roots` for an item to fill again when nothing else holds them.
+fn keep_room(rooms: &mut Vec<Rc<LazyItemRoots>>, mut roots: Rc<LazyItemRoots>) {
+    if Rc::get_mut(&mut roots).is_some() {
+        rooms.push(roots);
+    }
 }
 
 fn normalized_axis_bits(size: f32) -> u32 {

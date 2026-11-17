@@ -35,10 +35,10 @@ static GLOBAL: &StatsAlloc<System> = &INSTRUMENTED_SYSTEM;
 const PASSES: usize = 10;
 // The allocations of a pass that lays a long paragraph out at a new width.
 const LONG_PARAGRAPH_ALLOCATIONS: usize = 10;
-// The allocations of a lazy row measured again at a new width: its root
-// measurements, and what a debug build allocates to compose its kept slot
-// again for the check of `SubcomposeMeasureScope::subcompose`.
-const LAZY_ROW_ALLOCATIONS: f64 = 12.0;
+// The allocations of a lazy row measured again at a new width: what a debug
+// build allocates to compose its kept slot again for the check of
+// `SubcomposeMeasureScope::subcompose`.
+const LAZY_ROW_ALLOCATIONS: f64 = 10.0;
 
 // Rows of 10 points as tall as their parent is wide.
 fn rows(count: usize) {
