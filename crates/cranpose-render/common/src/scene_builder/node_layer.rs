@@ -393,6 +393,14 @@ pub(super) fn lower_root_into(
     node_id: NodeId,
 ) -> bool {
     read_placed_node_data(applier, node_id, Level::Root, |data| {
+        // Each placed node takes a record. Under the main window's root lie
+        // all the nodes of the applier but those of other windows: room for
+        // all of them spares the record arrays every doubling. Another
+        // window's root holds a part of the nodes, so its arrays grow as
+        // they go.
+        if !data.window_root {
+            store.reserve_records(applier.len());
+        }
         let root = root_record(store, node_id);
         write_node_layer(applier, store, node_id, data, LowerContext::ROOT, root);
     })

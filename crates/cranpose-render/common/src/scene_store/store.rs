@@ -491,6 +491,19 @@ impl SceneStore {
         self.journal.clear(self.update);
     }
 
+    // Makes room for `records` records past the rows free to take, so a
+    // build that makes them moves none of the record arrays to a larger
+    // block on the way.
+    pub(crate) fn reserve_records(&mut self, records: usize) {
+        let more = records.saturating_sub(self.free_rows.len());
+        self.tree.reserve_exact(more);
+        self.geo.reserve_exact(more);
+        self.warm.reserve_exact(more);
+        self.generations.reserve_exact(more);
+        self.facts.reserve_rows(self.tree.len() + more);
+        self.node_records.reserve(more);
+    }
+
     /// Makes a record from `seed`, changed in the update in progress, with no
     /// items, at the origin of its parent and of zero size. Its ancestors
     /// take the update as their subtree's; the caller adds it to its
