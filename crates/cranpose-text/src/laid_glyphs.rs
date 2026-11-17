@@ -164,16 +164,22 @@ impl LaidGlyphs {
                 .offsets()
                 .iter()
                 .all(|offset| *offset == GlyphOffset::default())
-            && shaped.iter().all(PackedGlyph::fits)
             && let Some(slots) = Arc::get_mut(&mut room)
         {
-            for (slot, glyph) in slots.iter_mut().zip(shaped.iter()) {
+            // One pass packs the glyphs and checks them: glyphs that do not
+            // all fit leave the room, which costs no allocation, for new
+            // storage of their own.
+            let mut fits = true;
+            for (slot, glyph) in slots[..shaped.len()].iter_mut().zip(shaped.iter()) {
+                fits &= PackedGlyph::fits(glyph);
                 *slot = PackedGlyph::pack(glyph);
             }
-            return Self {
-                glyphs: Glyphs::Packed { room, len },
-                offsets: None,
-            };
+            if fits {
+                return Self {
+                    glyphs: Glyphs::Packed { room, len },
+                    offsets: None,
+                };
+            }
         }
         Self::new(shaped)
     }
