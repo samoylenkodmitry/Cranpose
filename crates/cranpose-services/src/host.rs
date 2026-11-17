@@ -406,13 +406,19 @@ pub fn advance_lifecycle(target: LifecycleState) {
 
 /// The `CompositionLocal` carrying the host's current lifecycle state.
 ///
-/// [`ProvideLifecycle`] installs it; descendants read it and recompose on every
-/// transition, so a screen can pause its own work without registering an
-/// observer of its own.
+/// Where no [`ProvideLifecycle`] is in scope, it follows the host: a screen
+/// that reads it composes again on every transition, so it can pause its own
+/// work without registering an observer of its own. The first read in a
+/// runtime registers the one observer that serves the runtime. An app that
+/// never reads the local pays nothing.
 pub fn local_lifecycle_state() -> cranpose_core::CompositionLocal<LifecycleState> {
     crate::composition_locals::cached_local(
         |locals| &locals.lifecycle,
-        || cranpose_core::compositionLocalOf(current_lifecycle_state),
+        || {
+            cranpose_core::compositionLocalWithComputedDefaultOf(|_| {
+                crate::lifecycle_source::observed_lifecycle_state()
+            })
+        },
     )
 }
 
@@ -441,17 +447,20 @@ pub fn rememberLifecycleEvents() -> cranpose_core::EventStream<LifecycleEvent> {
     })
 }
 
-/// Provides the host's lifecycle state to descendant composables.
+/// Provides the host's lifecycle state to descendant composables from a
+/// subscription of its own.
 ///
-/// The application shell wraps its content in this once; screens then read
-/// [`local_lifecycle_state`].
+/// [`local_lifecycle_state`] follows the host without it, so no shell wraps its
+/// content in this. A transition composes the screens that read the local
+/// again, not the content around them.
 #[cranpose_macros::composable]
 pub fn ProvideLifecycle(content: impl FnOnce()) {
     let state = rememberLifecycleState();
     let local = local_lifecycle_state();
-    cranpose_core::CompositionLocalProvider([local.provides(state.get())], move || {
-        content();
-    });
+    cranpose_core::CompositionLocalProvider(
+        [local.provides_computed(move |_| state.get())],
+        content,
+    );
 }
 
 #[cfg(test)]

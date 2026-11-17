@@ -40,6 +40,7 @@ mod inbox;
 pub mod incoming_share;
 pub mod launch_args;
 pub mod launcher;
+mod lifecycle_source;
 pub mod media;
 mod media_source;
 mod media_uri;
