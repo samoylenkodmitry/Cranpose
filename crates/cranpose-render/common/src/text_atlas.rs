@@ -40,7 +40,8 @@ pub fn collect_solid_text_atlas_run(
     if request.is_degenerate() {
         return Some(());
     }
-    let paints = SpanPaints::of(request.text, request.style, request.fallback_color);
+    let mut paints = SpanPaints::default();
+    paints.fill(request.text, request.style, request.fallback_color);
     if request.motion() != TextMotion::Static
         || !paints.all(|paint| {
             paint.solid_color().is_some() && paint.shadow.is_none() && paint.stroke.is_none()
