@@ -2133,3 +2133,15 @@ fn modifiers_without_inspector_metadata_carry_no_inspector_list() {
     let rejoined = Modifier::with_element(TestDelegatingElement).then(recorded);
     assert_eq!(rejoined.iter_inspector_metadata().count(), 1);
 }
+
+#[test]
+fn plain_elements_compare_as_compose_data_classes() {
+    let padding = |value: f32| {
+        cranpose_foundation::plain_element(crate::modifier_nodes::PaddingElement::new(
+            EdgeInsets::uniform(value),
+        ))
+    };
+    assert!(padding(f32::NAN).equals_element(&*padding(f32::NAN)));
+    assert!(padding(0.0).equals_element(&*padding(-0.0)));
+    assert!(!padding(1.0).equals_element(&*padding(2.0)));
+}
