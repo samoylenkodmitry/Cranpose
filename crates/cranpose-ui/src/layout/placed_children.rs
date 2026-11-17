@@ -12,6 +12,14 @@ use crate::{
     widgets::nodes::{LayoutNode, LayoutParts},
 };
 
+// What the last measure kept of a child: read at once, or, from a layout
+// node's own list, read at its place there once a walk asks.
+#[derive(Clone, Copy)]
+pub(super) enum Kept {
+    Read(Option<MeasuredChild>),
+    Listed(usize),
+}
+
 // A layout node lists its children in its records; a subcompose node lists
 // the children its last measure placed.
 pub(super) enum PlacedChildren {
@@ -48,15 +56,15 @@ impl PlacedChildren {
         }
     }
 
-    // The child at `index`, with what the last measure kept of it: `None`
-    // there for a child the measure did not place. A subcompose node placed
-    // each of its children; one of another kind, which keeps no record,
-    // reads as placed at the origin. `None` past the last child.
+    // The child at `index`, with what the last measure kept of it, which
+    // `kept` reads. A subcompose node placed each of its children; one of
+    // another kind, which keeps no record, reads as placed at the origin.
+    // `None` past the last child.
     pub(super) fn get(
         &self,
         applier: &mut MemoryApplier,
         index: usize,
-    ) -> Result<Option<(NodeId, Option<MeasuredChild>)>, NodeError> {
+    ) -> Result<Option<(NodeId, Kept)>, NodeError> {
         match self {
             Self::Layout(parts) => Ok(Self::listed(parts, index)),
             Self::Subcompose(node_id) => {
@@ -70,7 +78,10 @@ impl PlacedChildren {
                     return Ok(None);
                 };
                 let kept = read_live_layout_node(applier, child, |node| node.in_parent())?;
-                Ok(Some((child, Some(kept.flatten().unwrap_or_default()))))
+                Ok(Some((
+                    child,
+                    Kept::Read(Some(kept.flatten().unwrap_or_default())),
+                )))
             }
             Self::Leaf => Ok(None),
         }
@@ -80,26 +91,35 @@ impl PlacedChildren {
     // lists its children itself, so a walk takes and flushes no applier
     // borrow for each child; `None` for a node of another kind, which `get`
     // reads through the applier.
-    pub(super) fn listed_child(
-        &self,
-        index: usize,
-    ) -> Option<Option<(NodeId, Option<MeasuredChild>)>> {
+    pub(super) fn listed_child(&self, index: usize) -> Option<Option<(NodeId, Kept)>> {
         match self {
             Self::Layout(parts) => Some(Self::listed(parts, index)),
             Self::Subcompose(_) | Self::Leaf => None,
         }
     }
 
-    fn listed(parts: &LayoutParts, index: usize) -> Option<(NodeId, Option<MeasuredChild>)> {
-        parts
-            .runtime_state()
-            .borrow()
-            .child_states()
-            .get(index)
-            .map(|child| {
-                let record = child.record();
-                (record.child_id(), record.in_parent.get())
-            })
+    fn listed(parts: &LayoutParts, index: usize) -> Option<(NodeId, Kept)> {
+        let runtime_state = parts.runtime_state().borrow();
+        let child = runtime_state.child_states().get(index)?;
+        Some((child.record().child_id(), Kept::Listed(index)))
+    }
+
+    // What the last measure kept of a child that `get` or `listed_child`
+    // found: `None` for a child it did not place.
+    pub(super) fn kept(&self, kept: Kept) -> Option<MeasuredChild> {
+        match (kept, self) {
+            (Kept::Read(kept), _) => kept,
+            (Kept::Listed(index), Self::Layout(parts)) => {
+                let runtime_state = parts.runtime_state().borrow();
+                runtime_state
+                    .child_states()
+                    .get(index)?
+                    .record()
+                    .in_parent
+                    .get()
+            }
+            (Kept::Listed(_), Self::Subcompose(_) | Self::Leaf) => None,
+        }
     }
 
     // Runs `visit` on each placed child in order, with where the measure
@@ -113,7 +133,7 @@ impl PlacedChildren {
         let mut index = 0;
         while let Some((child, kept)) = self.get(applier, index)? {
             index += 1;
-            let Some(kept) = kept else {
+            let Some(kept) = self.kept(kept) else {
                 continue;
             };
             let held =

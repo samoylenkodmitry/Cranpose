@@ -1614,9 +1614,8 @@ impl LayoutBuilderState {
     }
 
     /// Walks the `placed` children of a kept measurement, measures again each
-    /// one `change` finds changed at its last constraints, and keeps the
-    /// measurement while each reads the same for it (but for its size when it
-    /// `ignores_child_sizes`); `None` once a child is refused or differs.
+    /// one `change` finds changed, and keeps the measurement while each reads
+    /// the same (or the same but its size, if it `ignores_child_sizes`).
     fn remeasure_changed_children(
         self: &Rc<Self>,
         node_id: NodeId,
@@ -1628,18 +1627,19 @@ impl LayoutBuilderState {
     ) -> Result<Option<KeptChildren>, NodeError> {
         let mut resized = false;
         let mut index = 0;
-        while let Some((child_id, previous)) = match placed.listed_child(index) {
+        while let Some((child_id, kept)) = match placed.listed_child(index) {
             Some(listed) => listed,
             None => self.with_applier_result(|applier| placed.get(applier, index))?,
         } {
             index += 1;
-            let Some(previous) = previous else {
-                continue;
-            };
             let child = match change(child_id)? {
                 ChildChange::Unchanged => continue,
+                ChildChange::Refuse if placed.kept(kept).is_none() => continue,
                 ChildChange::Refuse => return Ok(None),
                 ChildChange::Changed(child) => child,
+            };
+            let Some(previous) = placed.kept(kept) else {
+                continue;
             };
             let measured = self.measure_node(child_id, child.constraints)?;
             remeasured(child_id);
