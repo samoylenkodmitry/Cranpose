@@ -404,48 +404,66 @@ fn a_new_text_allocates_within_its_budget() {
     assert!(per_text <= 15.15, "{per_text} allocations per new text");
 }
 
-// A paragraph of 2,000 words, one of which changes each frame, under 120
-// counters of one to six digits that change in turn, a third of them each
-// frame. The texts lay out into layouts other texts gave up: one that takes
-// the paragraph's keeps no more room than a few times what its own text
-// needs, so once the pools settle, in 120 frames, the bytes the texts hold
-// grow by less than one paragraph's glyph room over 260 more frames.
+const PARAGRAPH_WORDS: usize = 2_000;
+
+// `COUNTERS` counters of one to six digits that change in turn, a third of
+// them each frame, above a paragraph of `PARAGRAPH_WORDS` words one of which
+// changes each frame, as a screen of numbers around a long text shows.
+fn counters_around_a_paragraph<const COUNTERS: usize>(tick: MutableState<usize>) {
+    let frame = tick.get();
+    for index in 0..COUNTERS {
+        let turn = (frame + index) / 3;
+        let digits = u32::try_from(turn % 6).unwrap_or(0);
+        Text(
+            format!("{}", 10usize.pow(digits) + index),
+            Modifier::empty(),
+            TextStyle::default(),
+        );
+    }
+    let mut paragraph = String::with_capacity(PARAGRAPH_WORDS * 6);
+    for word in 0..PARAGRAPH_WORDS {
+        if word == PARAGRAPH_WORDS / 2 {
+            write!(paragraph, "f{frame:05} ").expect("a String takes any text");
+        } else {
+            paragraph.push_str("word ");
+        }
+    }
+    Text(paragraph, Modifier::empty(), TextStyle::default());
+}
+
+// The glyph room of the paragraph: eight bytes a glyph, five glyphs a word.
+const PARAGRAPH_GLYPH_ROOM: usize = PARAGRAPH_WORDS * 5 * 8;
+
+// 120 counters and the paragraph lay out into layouts other texts gave up:
+// one that takes the paragraph's keeps no more room than a few times what
+// its own text needs, so once the pools settle, in 120 frames, the bytes the
+// texts hold grow by less than the paragraph's glyph room over 260 more
+// frames.
 fn texts_around_a_long_paragraph_hold_bounded_room() {
-    const COUNTERS: usize = 120;
-    const WORDS: usize = 2_000;
-    let texts = |tick: MutableState<usize>| {
-        let frame = tick.get();
-        for index in 0..COUNTERS {
-            let turn = (frame + index) / 3;
-            let digits = u32::try_from(turn % 6).unwrap_or(0);
-            Text(
-                format!("{}", 10usize.pow(digits) + index),
-                Modifier::empty(),
-                TextStyle::default(),
-            );
-        }
-        let mut paragraph = String::with_capacity(WORDS * 6);
-        for word in 0..WORDS {
-            if word == WORDS / 2 {
-                write!(paragraph, "f{frame:05} ").expect("a String takes any text");
-            } else {
-                paragraph.push_str("word ");
-            }
-        }
-        Text(paragraph, Modifier::empty(), TextStyle::default());
-    };
     let held = |frames: usize| {
-        let stats = changing_frames(texts, frames);
+        let stats = changing_frames(counters_around_a_paragraph::<120>, frames);
         stats.bytes_allocated.cast_signed() - stats.bytes_deallocated.cast_signed()
     };
     let (settled, late) = (140, 400);
     let growth = held(late) - held(settled);
-    // Eight bytes a glyph, five glyphs a word.
-    let glyph_room = (WORDS * 5 * 8).cast_signed();
     println!("bytes the texts hold more from frame {settled} to {late}: {growth}");
     assert!(
-        growth < glyph_room,
+        growth < PARAGRAPH_GLYPH_ROOM.cast_signed(),
         "the texts hold {growth} more bytes from frame {settled} to {late}: room long texts left"
+    );
+}
+
+// With 30 counters, each text lays out into the layout it gave up before, so
+// the paragraph keeps its glyph room and its lines, and a frame allocates far
+// less than that room.
+fn a_paragraph_among_counters_keeps_its_glyph_room() {
+    let stats = changing_frames(counters_around_a_paragraph::<30>, PASSES);
+    let bytes = stats.bytes_allocated / PASSES;
+    let allocations = stats.allocations / PASSES;
+    println!("a frame of a paragraph among counters: {allocations} allocations, {bytes} bytes");
+    assert!(
+        bytes < PARAGRAPH_GLYPH_ROOM / 2,
+        "{bytes} bytes a frame: the paragraph lays out into new glyph room"
     );
 }
 
@@ -565,6 +583,7 @@ fn scene_rebuilds_stay_within_their_allocation_budgets() {
     a_text_changing_each_frame_reuses_its_string_and_layout();
     a_new_text_allocates_within_its_budget();
     texts_around_a_long_paragraph_hold_bounded_room();
+    a_paragraph_among_counters_keeps_its_glyph_room();
     redraws_reuse_their_recordings(drawn_around_content, "around content");
     redraws_reuse_their_recordings(drawn_inside_a_clip, "inside a clip");
     redraws_reuse_their_recordings(
