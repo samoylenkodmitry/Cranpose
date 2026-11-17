@@ -26,6 +26,7 @@ mod scene_stamps;
 mod shrunk_scene;
 mod size_updates;
 mod space_frames;
+mod state_text;
 mod surface_layer_bounds;
 mod teardown_survivors;
 mod text_decorations;
