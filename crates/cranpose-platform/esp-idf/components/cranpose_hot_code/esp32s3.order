@@ -506,7 +506,7 @@
   *(.literal._RNvM*NtCs*_13cranpose_core4emitNtNt*8composer8Composer19planned_node_parent* .text._RNvM*NtCs*_13cranpose_core4emitNtNt*8composer8Composer19planned_node_parent*)
   *(.literal._RINvNtCs*_4core3ptr9drop_glueNtNtCs*_13cranpose_core13command_queue12CommandQueueE* .text._RINvNtCs*_4core3ptr9drop_glueNtNtCs*_13cranpose_core13command_queue12CommandQueueE*)
   *(.literal._RNCNvNtCs*_20cranpose_ui_graphics14text_primitive15shared_text_str0* .text._RNCNvNtCs*_20cranpose_ui_graphics14text_primitive15shared_text_str0*)
-  *(.literal._RNvM*NtNtCs*_11cranpose_ui12render_state14dirty_node_setNt*12DirtyNodeSet20dirty_nodes_snapshot* .text._RNvM*NtNtCs*_11cranpose_ui12render_state14dirty_node_setNt*12DirtyNodeSet20dirty_nodes_snapshot*)
+  *(.literal._RNvM*NtNtCs*_11cranpose_ui12render_state14dirty_node_setNt*12DirtyNodeSet13append_sorted* .text._RNvM*NtNtCs*_11cranpose_ui12render_state14dirty_node_setNt*12DirtyNodeSet13append_sorted*)
   *(.literal._RNvNtCs*_22cranpose_render_common14primitive_emit22resolve_primitive_clip* .text._RNvNtCs*_22cranpose_render_common14primitive_emit22resolve_primitive_clip*)
   *(.literal._RNvNtCs*_22cranpose_render_common14primitive_emit17line_shape_params* .text._RNvNtCs*_22cranpose_render_common14primitive_emit17line_shape_params*)
   *(.literal._RNvNtCs*_13cranpose_text9paragraph25resolve_content_direction* .text._RNvNtCs*_13cranpose_text9paragraph25resolve_content_direction*)
