@@ -258,7 +258,8 @@ if [ -n "$host" ]; then
     git -C "$root" archive "$head_sha" > "$tmp/head.tar"
     ssh "$host" "mkdir -p '$dir'"
     scp -q "$tmp/base.tar" "$tmp/head.tar" "${TOOL_FILES[@]/#/$tools/}" "$host:$dir/"
-    ssh "$host" "bash '$dir/steady_ledger.sh' --dir '$dir' --ab-tars '$dir/base.tar' '$dir/head.tar'"
+    # At a low priority, as the host can be a desktop in use.
+    ssh "$host" "nice -n 10 bash '$dir/steady_ledger.sh' --dir '$dir' --ab-tars '$dir/base.tar' '$dir/head.tar'"
 else
     dir=${dir:-$root/target/steady-ledger}
     mkdir -p "$dir"
