@@ -161,6 +161,8 @@ impl Modifier {
     /// It takes `self`: a modifier built link by link owns its elements
     /// alone, so each link joins them in place instead of copying the chain.
     /// Clone a modifier first to keep using it; the join then copies it.
+    // One copy: every builder call of an app's bodies joins through it.
+    #[inline(never)]
     pub fn then(self, next: Self) -> Self {
         let kind = match (self.kind, next.kind) {
             (ModifierKind::Empty, kind) | (kind, ModifierKind::Empty) => kind,
