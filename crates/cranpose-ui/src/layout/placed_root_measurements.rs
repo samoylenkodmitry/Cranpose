@@ -12,7 +12,7 @@ pub(super) struct PlacedRootMeasurements<'a> {
     items: std::slice::Iter<'a, Rc<LazyItemRoots>>,
     /// The measurements of the item being placed, one a root; empty for an
     /// item that holds none.
-    measured: &'a [Rc<MeasuredNode>],
+    measured: &'a [MeasuredNode],
     /// The item's next root, and how many roots it has.
     root: usize,
     roots: usize,
@@ -40,6 +40,6 @@ impl<'a> PlacedRootMeasurements<'a> {
         }
         let measured = self.measured.get(self.root);
         self.root += 1;
-        measured.map(|measured| &**measured)
+        measured
     }
 }

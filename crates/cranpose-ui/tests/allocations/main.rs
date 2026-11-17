@@ -96,14 +96,15 @@ fn first_measure_allocations(count: usize) -> usize {
 }
 
 // A parent measures a new child through its entry in the parent's one
-// list of children, which takes no allocation of its own.
-fn a_first_measure_allocates_at_most_two_per_row() {
+// list of children, which takes no allocation of its own, and the child's
+// measurement sits in its cache.
+fn a_first_measure_allocates_at_most_one_per_row() {
     let few = first_measure_allocations(10);
     let many = first_measure_allocations(110);
     let per_row = many.saturating_sub(few) as f64 / 100.0;
     println!("allocations per row at a first measure: {per_row}");
     assert!(
-        per_row <= 2.0,
+        per_row <= 1.0,
         "{per_row} allocations per row at a first measure"
     );
 }
@@ -566,7 +567,7 @@ fn a_thread_that_held_a_composition_frees_its_memory_at_exit() {
 /// One test, so no other test's allocations land in these regions: the
 /// counting allocator counts every thread.
 fn layout_and_modifiers_stay_within_their_allocation_budgets() {
-    a_first_measure_allocates_at_most_two_per_row();
+    a_first_measure_allocates_at_most_one_per_row();
     remeasuring_a_row_allocates_nothing();
     remeasuring_deeply_nested_rows_and_columns_allocates_nothing_more();
     placing_children_out_of_order_allocates_nothing();

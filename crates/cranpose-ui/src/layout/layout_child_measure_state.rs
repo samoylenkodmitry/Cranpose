@@ -218,7 +218,7 @@ pub(crate) struct LayoutChildMeasureState {
     pub(super) measured_constraints: Cell<Option<Constraints>>,
     // Whether the parent's last measure read the child's intrinsic sizes.
     pub(super) read_intrinsics: Cell<bool>,
-    pub(super) measured: Cell<Option<Rc<MeasuredNode>>>,
+    pub(super) measured: Cell<Option<MeasuredNode>>,
     // What the parent's last measure kept of the child, `None` when it did
     // not measure the child.
     pub(super) in_parent: Cell<Option<MeasuredChild>>,
@@ -483,7 +483,7 @@ impl LayoutParts {
         }
     }
 
-    fn perform_measure(&self, constraints: Constraints) -> Result<Rc<MeasuredNode>, NodeError> {
+    fn perform_measure(&self, constraints: Constraints) -> Result<MeasuredNode, NodeError> {
         let record = self.record();
         let builder = record.builder().ok_or_else(|| NodeError::MissingContext {
             id: record.child_id(),
@@ -492,7 +492,7 @@ impl LayoutParts {
         builder.measure_node(record.child_id(), constraints)
     }
 
-    pub(super) fn measure_cached(&self, constraints: Constraints) -> Option<Rc<MeasuredNode>> {
+    pub(super) fn measure_cached(&self, constraints: Constraints) -> Option<MeasuredNode> {
         let record = self.record();
         let measures = record.measures();
         if measures {
@@ -516,7 +516,7 @@ impl LayoutParts {
         match self.perform_measure(constraints) {
             Ok(measured) => {
                 record.force_remeasure.set(false);
-                cache.store_measurement(constraints, Rc::clone(&measured));
+                cache.store_measurement(constraints, measured);
                 Some(measured)
             }
             Err(err) => {

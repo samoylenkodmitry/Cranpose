@@ -185,7 +185,7 @@ enum Climb {
     // walk measured an ancestor again on its way there.
     Stopped { measured_ancestor: bool },
     // At the root, which measured again.
-    Root(Rc<MeasuredNode>),
+    Root(MeasuredNode),
     // At a node the walk up cannot measure: the pass walks down.
     WalkDown,
 }
@@ -197,7 +197,7 @@ impl LayoutBuilderState {
         self: &Rc<Self>,
         root: NodeId,
         constraints: Constraints,
-    ) -> Result<Rc<MeasuredNode>, NodeError> {
+    ) -> Result<MeasuredNode, NodeError> {
         // Each measure's state reads are kept for its node.
         self.context.measure_reads.observe(|| {
             match self.measure_dirty_nodes_first(root, constraints)? {
@@ -214,7 +214,7 @@ impl LayoutBuilderState {
         self: &Rc<Self>,
         root: NodeId,
         constraints: Constraints,
-    ) -> Result<Option<Rc<MeasuredNode>>, NodeError> {
+    ) -> Result<Option<MeasuredNode>, NodeError> {
         let mut dirty = std::mem::take(&mut self.frame_arena.borrow_mut().dirty_roots);
         let complete = match self.applier.try_borrow_typed() {
             Ok(mut applier) => applier.take_layout_dirt_roots(&mut dirty),
@@ -238,7 +238,7 @@ impl LayoutBuilderState {
         root: NodeId,
         constraints: Constraints,
         dirty: &[NodeId],
-    ) -> Result<Option<Rc<MeasuredNode>>, NodeError> {
+    ) -> Result<Option<MeasuredNode>, NodeError> {
         if dirty.is_empty() {
             return Ok(None);
         }
@@ -265,9 +265,9 @@ impl LayoutBuilderState {
         root: NodeId,
         constraints: Constraints,
         dirty: &[NodeId],
-        mut root_measured: Rc<MeasuredNode>,
+        mut root_measured: MeasuredNode,
         cleared: &mut Cleared,
-    ) -> Result<Option<Rc<MeasuredNode>>, NodeError> {
+    ) -> Result<Option<MeasuredNode>, NodeError> {
         let mut starts: SmallVec<[Start; 4]> = SmallVec::new();
         for &node in dirty {
             match self.plan(node, root, cleared) {
@@ -317,7 +317,7 @@ impl LayoutBuilderState {
         &self,
         root: NodeId,
         constraints: Constraints,
-    ) -> Option<Rc<MeasuredNode>> {
+    ) -> Option<MeasuredNode> {
         let mut applier = self.applier.try_borrow_typed().ok()?;
         applier
             .with_node::<LayoutNode, _>(root, |node| {
@@ -509,7 +509,7 @@ impl LayoutBuilderState {
         &self,
         child: NodeId,
         parent: NodeId,
-        measured: &Rc<MeasuredNode>,
+        measured: &MeasuredNode,
         changed_itself: bool,
     ) -> Result<(bool, Option<NodeId>), NodeError> {
         let mut applier =

@@ -682,7 +682,7 @@ impl LazyGridLines<'_, '_, '_> {
             cross_axis_size = cross + item.cross_axis_size;
             let cell_roots = &item.roots;
             match root_measurements(cell_roots) {
-                Some(cell_measurements) => measurements.extend(cell_measurements.iter().cloned()),
+                Some(cell_measurements) => measurements.extend(cell_measurements.iter().copied()),
                 None => measured_cells = false,
             }
             for (root, &node_id) in cell_roots.node_ids.iter().enumerate() {
