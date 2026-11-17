@@ -18,10 +18,10 @@ use cranpose_core::CompositionLocal;
 use crate::{
     METERS_PER_DP, MovePolicy, PanelHit, Pose, Ray, Recenter, SpatialMoveEvent,
     SpatialMoveEventType, StereoMode,
+    follow_origin::{FollowOrigin, FollowOrigins},
     locals::with_locals,
     stream_source::StreamSource,
     surface_input::{PointerSink, SurfaceGesture, SurfaceInput},
-    user_origin::{UserOrigin, UserOrigins},
 };
 
 // The space between two panels in the atlas, in dp, so the compositor's filter never reaches a
@@ -153,8 +153,8 @@ struct Inner {
     entries: RefCell<Vec<Entry>>,
     // The streamed scenes, which take no place in the room and no part of the atlas
     streams: RefCell<Vec<(u64, Rc<StreamSource>)>>,
-    // Where the user's subspaces stand
-    user_origins: RefCell<UserOrigins>,
+    // Where following subspaces stand
+    follow_origins: RefCell<FollowOrigins>,
     next_id: Cell<u64>,
     // Whether the headset shows curved panels. If not, they show and answer rays as flat ones.
     curves: Cell<bool>,
@@ -198,7 +198,7 @@ impl Space {
             inner: Rc::new(Inner {
                 entries: RefCell::new(Vec::new()),
                 streams: RefCell::new(Vec::new()),
-                user_origins: RefCell::new(UserOrigins::default()),
+                follow_origins: RefCell::new(FollowOrigins::default()),
                 next_id: Cell::new(1),
                 curves: Cell::new(true),
             }),
@@ -238,23 +238,23 @@ impl Space {
         self.inner.streams.borrow().clone()
     }
 
-    // A new user subspace, placed in front of the head if the head is known.
-    pub(crate) fn new_user_origin(&self) -> UserOrigin {
+    // A new following subspace, placed in front of the head if the head is known.
+    pub(crate) fn new_follow_origin(&self) -> FollowOrigin {
         let id = self.inner.next_id.get();
         self.inner.next_id.set(id + 1);
-        self.inner.user_origins.borrow_mut().add(id)
+        self.inner.follow_origins.borrow_mut().add(id)
     }
 
-    // Forgets the user subspace `id`.
-    pub(crate) fn remove_user_origin(&self, id: u64) {
-        self.inner.user_origins.borrow_mut().remove(id);
+    // Forgets the following subspace `id`.
+    pub(crate) fn remove_follow_origin(&self, id: u64) {
+        self.inner.follow_origins.borrow_mut().remove(id);
     }
 
     #[cfg_attr(
         not(any(test, headset)),
         expect(dead_code, reason = "the headset backend calls it")
     )]
-    // Tells the user subspaces where the head is in the frame at `time`, and whether the runtime
+    // Tells the following subspaces where the head is in the frame at `time`, and whether the runtime
     // recentered the room.
     pub(crate) fn track_head(
         &self,
@@ -263,7 +263,7 @@ impl Space {
         recenter: Option<Recenter>,
     ) {
         self.inner
-            .user_origins
+            .follow_origins
             .borrow_mut()
             .track(head, time, recenter);
     }

@@ -43,15 +43,19 @@ Cranpose developers too:
 - `Subspace { ... }`: the 3D area of an app. Outside a headset it shows as a 3D view in the
   window.
 - `SpatialPanel(modifier, shape) { ... }`: 2D Cranpose content on a flat panel.
-- `UserSubspace(locking_behavior) { ... }`: a `Subspace` whose origin is in front of the user's head.
-  `LockingBehavior::Static` places it when it first composes and again after a recenter. Jetpack
-  XR's `LockingBehavior.soft`, which follows the head, is not there yet. Jetpack XR renamed its
-  `lazy` locking to `soft` in 1.0.0-alpha10.
+- `FollowingSubspace(follow) { ... }`: a `Subspace` whose origin is in front of the user's head.
+  Jetpack XR 1.0.0-beta02 spells it `Subspace(follow = FollowTarget.view(FollowMode.snap()))`. It
+  replaced `FollowingSubspace(target, behavior)` and the `UserSubspace(lockingBehavior)` of the
+  alpha releases. Rust has no overloads, so the composable keeps the name `FollowingSubspace`.
+  `FollowTarget::View(FollowMode::Snap)` places it when it first composes and again after a
+  recenter. Jetpack XR's `FollowMode.soft` and `FollowMode.tight`, which follow the head
+  continuously, and `FollowTarget.anchor` are not there yet.
 - `SpatialRow`, `SpatialColumn`, `SpatialBox`, `SpatialCurvedRow`, `SpatialSpacer`: layouts in
   meters.
 - `SpatialExternalSurface(stereo_mode, modifier) { scope }`: hands the app a surface that a
   decoder writes into. The scope's `on_surface_created` and `on_surface_destroyed` receive an
-  `ExternalSurface`.
+  `ExternalSurface`, and its `on_pointer_event` receives the pointer events of a controller's ray
+  on the surface.
 - `StreamedScene(frames, views, stats)`: frames that another machine rendered, shown as a projection
   layer. Jetpack XR has no such composable. It has no `Spatial` prefix, because it is not placed
   in a `Subspace`: it fills the viewer's view.
@@ -86,10 +90,10 @@ on. The backend picks how the runtime shows it:
   `ALPHA_BLEND` while the opacity is above 0 and `OPAQUE` otherwise. This path has no dimming.
 - Neither: the capability is off and the app's own background shows.
 
-## A subspace at the user
+## A subspace that follows the user
 
 A `Subspace`'s origin is a meter ahead of where the head was when the app started, in the room's
-LOCAL space. A `UserSubspace` puts its origin a meter ahead of the head as it is when the subspace
+LOCAL space. A `FollowingSubspace` puts its origin a meter ahead of the head as it is when the subspace
 composes. The panels read the origin from a composition local, so every panel and surface of the
 subspace uses it, and so does a `SpatialCurvedRow`.
 
@@ -103,7 +107,8 @@ when a subspace gets its first place or the runtime has recentered. A recenter t
 subspaces again in the first frame at or after that time.
 
 A panel that the user carried keeps its pose relative to the origin. A recenter, which moves the
-origin, takes it along.
+origin, takes it along. `FollowMode::Snap` tracks the head's place and its turn about the vertical
+axis. Jetpack XR's `TrackedDimensions.All` also tracks the head's pitch and roll.
 
 ## Carrying a panel
 

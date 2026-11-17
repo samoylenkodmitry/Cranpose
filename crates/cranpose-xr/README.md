@@ -52,8 +52,10 @@ SpatialPanel(
 them into the panel's modifier.
 
 A `Subspace` stands a meter ahead of where the head was when the app started. A
-`UserSubspace(LockingBehavior::Static, ...)` stands a meter ahead of the head as it is when the
-subspace first composes, and again after the user recenters. Its panels stay movable.
+`FollowingSubspace(FollowTarget::View(FollowMode::Snap), ...)` stands a meter ahead of the head as
+it is when the subspace first composes, and again after the user recenters. Its panels stay
+movable. Jetpack XR spells this `Subspace(follow = FollowTarget.view(FollowMode.snap()))`. Rust has
+no overloads, so the composable has its own name.
 
 A `SpatialCurvedRow` bends the panels inside it around the viewer, as a cylinder layer of the
 compositor. `local_spatial_environment()` gives the app the room around its panels: where the

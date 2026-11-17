@@ -1,4 +1,4 @@
-//! Where the user's subspaces stand in the room: each in front of the head at the moment it was
+//! Where following subspaces stand in the room: each in front of the head at the moment it was
 //! placed.
 
 use std::time::Duration;
@@ -7,34 +7,34 @@ use cranpose::{MutableState, mutableStateOf};
 
 use crate::{Pose, Recenter, pose::turn_degrees, space::SUBSPACE_ORIGIN};
 
-// The origin of one user subspace. The pose is `None` until the headset has tracked the head.
+// The origin of one following subspace. The pose is `None` until the headset has tracked the head.
 #[derive(Clone, Copy)]
-pub(crate) struct UserOrigin {
+pub(crate) struct FollowOrigin {
     pub(crate) id: u64,
     pub(crate) pose: MutableState<Option<Pose>>,
 }
 
 struct Anchor {
-    origin: UserOrigin,
+    origin: FollowOrigin,
     // What the origin's state holds, so that a frame needs no read of the state
     at: Option<Pose>,
 }
 
-// The user subspaces of an app, and what places them.
+// The following subspaces of an app, and what places them.
 #[derive(Default)]
-pub(crate) struct UserOrigins {
+pub(crate) struct FollowOrigins {
     anchors: Vec<Anchor>,
     head: Option<Pose>,
     // The time at which the runtime's recenter takes effect, until a frame at or after it came
     recentering: Option<Duration>,
 }
 
-impl UserOrigins {
-    // Adds the user subspace `id`. A head that the headset has tracked already places it at
+impl FollowOrigins {
+    // Adds the following subspace `id`. A head that the headset has tracked already places it at
     // once. Otherwise the first tracked frame does.
-    pub(crate) fn add(&mut self, id: u64) -> UserOrigin {
+    pub(crate) fn add(&mut self, id: u64) -> FollowOrigin {
         let at = self.head.as_ref().map(origin_in_front_of);
-        let origin = UserOrigin {
+        let origin = FollowOrigin {
             id,
             pose: mutableStateOf(at),
         };

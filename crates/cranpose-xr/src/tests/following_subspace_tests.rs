@@ -8,13 +8,13 @@ use cranpose_testing::{
 };
 
 use crate::{
-    LockingBehavior, Pose, Recenter, SpatialMoveEventType, SpatialPanel, SubspaceModifier,
-    UserSubspace,
+    FollowMode, FollowTarget, FollowingSubspace, Pose, Recenter, SpatialMoveEventType,
+    SpatialPanel, SubspaceModifier,
     pose::turn_degrees,
     space::{PanelMove, SUBSPACE_ORIGIN, Space, local_space},
 };
 
-// A headset with a user subspace that holds a movable panel, and a second one that an app shows
+// A headset with a following subspace that holds a movable panel, and a second one that an app shows
 // later.
 struct Headset {
     robot: RobotTestRule<TestRenderer>,
@@ -25,7 +25,7 @@ struct Headset {
 #[composable]
 fn Later(shown: MutableState<bool>) {
     if shown.get() {
-        UserSubspace(LockingBehavior::Static, || {
+        FollowingSubspace(FollowTarget::View(FollowMode::Snap), || {
             SpatialPanel(SubspaceModifier::new().size(200.0, 100.0), || {});
         });
     }
@@ -39,7 +39,7 @@ fn headset() -> Headset {
         let second = rememberMutableStateOf(|| false);
         keep.replace(Some((space.clone(), second)));
         CompositionLocalProvider([local_space().provides(Some(space))], move || {
-            UserSubspace(LockingBehavior::Static, || {
+            FollowingSubspace(FollowTarget::View(FollowMode::Snap), || {
                 SpatialPanel(SubspaceModifier::new().size(400.0, 300.0).movable(), || {});
             });
             Later(second);
@@ -83,7 +83,7 @@ fn seconds(seconds: u64) -> Duration {
 }
 
 #[test]
-fn a_user_subspace_stands_in_front_of_the_head_and_again_after_a_recenter() {
+fn a_following_subspace_stands_in_front_of_the_head_and_again_after_a_recenter() {
     let mut headset = headset();
     // The headset tracks no head yet: the panel stands where a subspace puts it
     assert!(same(&headset.poses()[0], &SUBSPACE_ORIGIN));

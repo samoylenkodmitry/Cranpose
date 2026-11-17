@@ -312,6 +312,18 @@ fn headset(modifier: SubspaceModifier) -> (RobotTestRule<TestRenderer>, Space) {
     (robot, space)
 }
 
+// The phases of the carry that `carry_right` makes: the grab, two moves and the release.
+const CARRY_PHASES: [SpatialMoveEventType; 4] = [
+    SpatialMoveEventType::Start,
+    SpatialMoveEventType::Moving,
+    SpatialMoveEventType::Moving,
+    SpatialMoveEventType::End,
+];
+
+fn phases(events: &[SpatialMoveEvent]) -> Vec<SpatialMoveEventType> {
+    events.iter().map(|event| event.event_type).collect()
+}
+
 // The user grabs the handle, carries the panel 10 cm to the right in two frames and lets go, as
 // the frame loop of the headset runs it.
 fn carry_right(space: &Space) {
@@ -347,16 +359,7 @@ fn a_carried_panel_tells_the_app_its_pose_and_takes_it_back_at_the_next_start() 
     carry_right(&space);
 
     let events = events.borrow();
-    let types: Vec<_> = events.iter().map(|event| event.event_type).collect();
-    assert_eq!(
-        types,
-        [
-            SpatialMoveEventType::Start,
-            SpatialMoveEventType::Moving,
-            SpatialMoveEventType::Moving,
-            SpatialMoveEventType::End,
-        ]
-    );
+    assert_eq!(phases(&events), CARRY_PHASES);
     // The poses are relative to the subspace's origin, where the panel started
     assert!(close(&events[0].pose, &Pose::IDENTITY));
     assert_eq!(events[0].previous_pose, events[0].pose);
@@ -401,29 +404,28 @@ fn a_custom_policy_leaves_the_pose_to_the_app() {
 // primary button is down.
 type Seen = (PointerEventKind, [f32; 2], bool);
 
-// A headset whose content is a surface of 960 by 540 dp, a meter ahead. Its pointer callback
-// writes the events into `seen`.
-fn surface_headset(seen: &Rc<RefCell<Vec<Seen>>>) -> (RobotTestRule<TestRenderer>, Space) {
+// A headset whose content is a surface that `modifier` places. Its pointer callback writes the
+// events into `seen`.
+fn surface_headset(
+    modifier: SubspaceModifier,
+    seen: &Rc<RefCell<Vec<Seen>>>,
+) -> (RobotTestRule<TestRenderer>, Space) {
     let held = Rc::new(RefCell::new(None));
     let (keep, seen) = (Rc::clone(&held), Rc::clone(seen));
     let mut robot = create_headless_robot_test(500, 400, move || {
         let space = remember(Space::new).with(Clone::clone);
         keep.replace(Some(space.clone()));
-        let seen = Rc::clone(&seen);
+        let (seen, modifier) = (Rc::clone(&seen), modifier.clone());
         CompositionLocalProvider([local_space().provides(Some(space))], move || {
             let seen = Rc::clone(&seen);
-            SpatialExternalSurface(
-                StereoMode::Mono,
-                SubspaceModifier::new().size(960.0, 540.0),
-                move |scope| {
-                    let seen = Rc::clone(&seen);
-                    scope.on_pointer_event(move |event| {
-                        let primary = event.buttons.contains(PointerButton::Primary);
-                        let place = [event.position.x, event.position.y];
-                        seen.borrow_mut().push((event.kind, place, primary));
-                    });
-                },
-            );
+            SpatialExternalSurface(StereoMode::Mono, modifier, move |scope| {
+                let seen = Rc::clone(&seen);
+                scope.on_pointer_event(move |event| {
+                    let primary = event.buttons.contains(PointerButton::Primary);
+                    let place = [event.position.x, event.position.y];
+                    seen.borrow_mut().push((event.kind, place, primary));
+                });
+            });
         });
     });
     robot.wait_for_idle();
@@ -434,7 +436,7 @@ fn surface_headset(seen: &Rc<RefCell<Vec<Seen>>>) -> (RobotTestRule<TestRenderer
 #[test]
 fn a_ray_on_a_surface_gives_the_app_pointer_events_in_the_surfaces_dp() {
     let seen = Rc::new(RefCell::new(Vec::new()));
-    let (_robot, space) = surface_headset(&seen);
+    let (_robot, space) = surface_headset(SubspaceModifier::new().size(960.0, 540.0), &seen);
     let mut frames = Frames::default();
     // The frame loop's way: the pointer's gestures reach the surface through the space
     let mut frame = |x: f32, yaw: f32, trigger: f32| {
@@ -486,4 +488,22 @@ fn a_ray_on_a_surface_gives_the_app_pointer_events_in_the_surfaces_dp() {
             (PointerEventKind::Exit, [580.0, 270.0], false),
         ],
     );
+}
+
+#[test]
+fn a_movable_surface_is_carried_and_reports_its_pose_like_a_panel() {
+    let events = Rc::new(RefCell::new(Vec::<SpatialMoveEvent>::new()));
+    let heard = Rc::clone(&events);
+    let policy = MovePolicy::system(move |event| heard.borrow_mut().push(event));
+    let modifier = SubspaceModifier::new()
+        .size(960.0, 540.0)
+        .movable_with(policy);
+    let (_robot, space) = surface_headset(modifier, &Rc::default());
+    carry_right(&space);
+
+    let events = events.borrow();
+    assert_eq!(phases(&events), CARRY_PHASES);
+    assert!((events[3].pose.position[0] - 0.1).abs() < 1e-4);
+    let carried = space.panels()[0].pose;
+    assert!((carried.position[0] - 0.1).abs() < 1e-4);
 }
