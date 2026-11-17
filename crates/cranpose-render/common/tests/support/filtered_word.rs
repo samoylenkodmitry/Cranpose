@@ -89,21 +89,21 @@ impl<F: FilteredFrames> FilteredWord<F> {
     }
 }
 
-fn channel_sum(pixel: &[u8; 3]) -> u32 {
+fn channel_sum(pixel: [u8; 3]) -> u32 {
     pixel.iter().map(|&channel| u32::from(channel)).sum()
 }
 
 fn darkest(pixels: &[[u8; 3]]) -> [u8; 3] {
     *pixels
         .iter()
-        .min_by_key(|pixel| channel_sum(pixel))
+        .min_by_key(|pixel| channel_sum(**pixel))
         .expect("pixels")
 }
 
 fn brightest(pixels: &[[u8; 3]]) -> [u8; 3] {
     *pixels
         .iter()
-        .max_by_key(|pixel| channel_sum(pixel))
+        .max_by_key(|pixel| channel_sum(**pixel))
         .expect("pixels")
 }
 

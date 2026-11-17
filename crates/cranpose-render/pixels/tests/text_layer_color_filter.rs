@@ -75,7 +75,10 @@ fn a_kept_frame_takes_each_new_layer_color_filter_of_a_text() {
     let filter = word.filter;
     KeptFrames::new((WIDTH, HEIGHT), 1.0).check(
         &mut word.frames.0,
-        (filters.len() as u32, 1),
+        (
+            u32::try_from(filters.len()).expect("a step for each filter"),
+            1,
+        ),
         |step| filter.set(filters[step as usize].clone()),
     );
 }

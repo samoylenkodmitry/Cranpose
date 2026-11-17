@@ -1,6 +1,8 @@
 // The native iOS 27 toggle tap of tests/fixtures/native_toggle_tap.csv: one
 // row per display-link frame, timed from the touch-down delivery.
 
+use std::time::Duration;
+
 pub(crate) const RELEASE_NANOS: u64 = 163_787_000;
 
 pub(crate) struct NativeTapFrame {
@@ -21,7 +23,8 @@ pub(crate) fn frames() -> impl Iterator<Item = NativeTapFrame> {
                 .map(|value| value.parse::<f64>().expect("native sample"))
                 .collect::<Vec<_>>();
             NativeTapFrame {
-                time_nanos: (values[0] * 1e9) as u64,
+                time_nanos: u64::try_from(Duration::from_secs_f64(values[0]).as_nanos())
+                    .expect("a time within the tap"),
                 width: values[1],
                 height: values[2],
                 white_opacity: values[3],
