@@ -213,18 +213,30 @@ fn bytes_left_by_wide_columns(depth: usize, nested: bool) -> isize {
     .expect("the measuring thread")
 }
 
-// Rows and columns keep no lists for hundreds of children once their
-// composition is gone: wide columns nested 16 deep leave less than a
-// kilobyte a level more than as many side by side leave, where lists for
-// their 300 children each would take kilobytes.
-fn wide_nested_columns_leave_no_lists_behind() {
+// Rows and columns keep the lists of their last measure whole and at most
+// 64 KiB in the others once their composition is gone: wide columns nested
+// 16 deep, whose lists for 300 children take about 25 KiB a level, leave at
+// most 64 KiB more than as many side by side leave.
+fn wide_nested_columns_leave_a_bounded_set_of_lists() {
     let sibling = bytes_left_by_wide_columns(15, false);
     let nested = bytes_left_by_wide_columns(15, true);
     println!("bytes left by 16 wide columns, siblings: {sibling}, nested: {nested}");
     assert!(
-        nested - sibling < 16 * 1024,
+        nested - sibling <= 64 * 1024,
         "nested wide columns left {} bytes more",
         nested - sibling
+    );
+}
+
+// A column of 300 rows measures again with the lists of its last measure:
+// a pass allocates no more than a pass over a column of 10 rows.
+fn remeasuring_a_wide_column_allocates_nothing_more() {
+    let narrow = remeasure_allocations(10);
+    let wide = remeasure_allocations(300);
+    println!("allocations a pass of a column of 300 rows: {wide}, of 10 rows: {narrow}");
+    assert_eq!(
+        wide, narrow,
+        "a column of 300 rows allocates as it measures again"
     );
 }
 
@@ -650,7 +662,8 @@ fn layout_and_modifiers_stay_within_their_allocation_budgets() {
     a_first_measure_allocates_at_most_one_per_row();
     remeasuring_a_row_allocates_nothing();
     remeasuring_deeply_nested_rows_and_columns_allocates_nothing_more();
-    wide_nested_columns_leave_no_lists_behind();
+    wide_nested_columns_leave_a_bounded_set_of_lists();
+    remeasuring_a_wide_column_allocates_nothing_more();
     placing_children_out_of_order_allocates_nothing();
     a_layout_pass_lends_its_applier_without_rebuilding_it();
     a_kept_column_lets_its_changed_children_fill_their_measurements();
