@@ -7,24 +7,80 @@ use crate::{Ray, pointer::Aim};
 
 // The input paths of each hand, left then right.
 const HANDS: [&str; 2] = ["/user/hand/left", "/user/hand/right"];
-// Each profile: its trigger, and its thumbstick's forward axis if it has one. Hands tracked by
-// cameras point and pinch through the hand interaction profile.
-const PROFILES: [(&str, &str, Option<&str>); 3] = [
+// Each profile: its trigger, and its thumbstick's or trackpad's forward axis if it has one.
+// Hands tracked by cameras point and pinch through the hand interaction profile. A runtime that
+// lacks a profile's extension rejects its bindings, and the others still bind.
+const PROFILES: [(&str, &str, Option<&str>); 18] = [
     (
-        "/interaction_profiles/oculus/touch_controller",
+        "oculus/touch_controller",
         "trigger/value",
         Some("thumbstick/y"),
     ),
     (
-        "/interaction_profiles/ext/hand_interaction_ext",
-        "aim_activate_ext/value",
-        None,
+        "meta/touch_controller_plus",
+        "trigger/value",
+        Some("thumbstick/y"),
     ),
     (
-        "/interaction_profiles/khr/simple_controller",
-        "select/click",
-        None,
+        "facebook/touch_controller_pro",
+        "trigger/value",
+        Some("thumbstick/y"),
     ),
+    (
+        "valve/index_controller",
+        "trigger/value",
+        Some("thumbstick/y"),
+    ),
+    ("htc/vive_controller", "trigger/value", Some("trackpad/y")),
+    (
+        "htc/vive_cosmos_controller",
+        "trigger/value",
+        Some("thumbstick/y"),
+    ),
+    (
+        "htc/vive_focus3_controller",
+        "trigger/value",
+        Some("thumbstick/y"),
+    ),
+    (
+        "microsoft/motion_controller",
+        "trigger/value",
+        Some("thumbstick/y"),
+    ),
+    (
+        "hp/mixed_reality_controller",
+        "trigger/value",
+        Some("thumbstick/y"),
+    ),
+    (
+        "samsung/odyssey_controller",
+        "trigger/value",
+        Some("thumbstick/y"),
+    ),
+    (
+        "bytedance/pico4_controller",
+        "trigger/value",
+        Some("thumbstick/y"),
+    ),
+    (
+        "bytedance/pico4s_controller",
+        "trigger/value",
+        Some("thumbstick/y"),
+    ),
+    (
+        "bytedance/pico_neo3_controller",
+        "trigger/value",
+        Some("thumbstick/y"),
+    ),
+    ("ml/ml2_controller", "trigger/value", Some("trackpad/y")),
+    (
+        "khr/generic_controller",
+        "trigger/value",
+        Some("thumbstick/y"),
+    ),
+    ("ext/hand_interaction_ext", "aim_activate_ext/value", None),
+    ("microsoft/hand_interaction", "select/value", None),
+    ("khr/simple_controller", "select/click", None),
 ];
 
 // Where each controller points and how far its trigger is pulled.
@@ -45,7 +101,8 @@ impl Controllers {
         let triggers = pair::<f32>(&set, "trigger", "trigger")?;
         let sticks = pair::<f32>(&set, "stick", "thumbstick")?;
         for (profile, select, stick) in PROFILES {
-            if let Err(error) = suggest(xr_session.instance(), profile, |hand, path| {
+            let profile = format!("/interaction_profiles/{profile}");
+            if let Err(error) = suggest(xr_session.instance(), &profile, |hand, path| {
                 let mut bindings = vec![
                     xr::Binding::new(&poses[hand], path("aim/pose")?),
                     xr::Binding::new(&triggers[hand], path(select)?),
@@ -55,7 +112,7 @@ impl Controllers {
                 }
                 Ok(bindings)
             }) {
-                log::warn!("cranpose xr: bindings for {profile}: {error}");
+                log::debug!("cranpose xr: no bindings for {profile}: {error}");
             }
         }
         xr_session

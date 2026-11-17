@@ -74,8 +74,20 @@ impl XrSession {
         extensions.khr_opengl_es_enable = true;
         extensions.khr_android_create_instance = true;
         extensions.fb_composition_layer_image_layout = available.fb_composition_layer_image_layout;
-        // Hands tracked by cameras point and pinch as controllers do
+        // Hands tracked by cameras point and pinch as controllers do. The controllers of other
+        // makers bind through their own profiles, each behind an extension.
         extensions.ext_hand_interaction = available.ext_hand_interaction;
+        extensions.khr_generic_controller = available.khr_generic_controller;
+        extensions.htc_vive_focus3_controller_interaction =
+            available.htc_vive_focus3_controller_interaction;
+        extensions.htc_vive_cosmos_controller_interaction =
+            available.htc_vive_cosmos_controller_interaction;
+        extensions.ext_hp_mixed_reality_controller = available.ext_hp_mixed_reality_controller;
+        extensions.ext_samsung_odyssey_controller = available.ext_samsung_odyssey_controller;
+        extensions.bd_controller_interaction = available.bd_controller_interaction;
+        extensions.ml_ml2_controller_interaction = available.ml_ml2_controller_interaction;
+        extensions.meta_touch_controller_plus = available.meta_touch_controller_plus;
+        extensions.fb_touch_controller_pro = available.fb_touch_controller_pro;
         if !available.fb_composition_layer_image_layout {
             log::warn!("cranpose xr: the runtime cannot flip layers; panels show upside down");
         }
