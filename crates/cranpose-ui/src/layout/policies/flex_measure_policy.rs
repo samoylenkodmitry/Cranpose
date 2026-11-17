@@ -530,11 +530,25 @@ impl SpareFlexLists {
         thread_state::with(|state| state.spare_flex_lists.0.borrow_mut().pop()).unwrap_or_default()
     }
 
+    // A set for more children than this goes back to the heap, and so does
+    // a set past this many: the gauntlet nests columns 48 deep, the allocation
+    // test 65 rows and columns.
+    const LARGE_LIST: usize = 256;
+    const SPARE_SETS: usize = 128;
+
     fn give(mut lists: FlexLists) {
+        if lists.children.capacity() > Self::LARGE_LIST {
+            return;
+        }
         lists.children.clear();
         lists.main_sizes.clear();
         lists.main_positions.clear();
-        thread_state::with(|state| state.spare_flex_lists.0.borrow_mut().push(lists));
+        thread_state::with(|state| {
+            let mut spares = state.spare_flex_lists.0.borrow_mut();
+            if spares.len() < Self::SPARE_SETS {
+                spares.push(lists);
+            }
+        });
     }
 }
 
