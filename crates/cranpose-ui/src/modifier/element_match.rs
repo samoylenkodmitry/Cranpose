@@ -3,7 +3,7 @@
 
 use cranpose_foundation::{DynModifierElement, HeldElement, NodeCapabilities};
 
-use super::{InPlaceReach, InPlaceUpdate, Modifier};
+use super::{InPlaceReach, InPlaceUpdate, Modifier, ModifierKind};
 
 // Which differences between two elements a comparison passes over.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -46,8 +46,14 @@ pub(crate) fn elements_match_but_last<'a>(
 // Whether `a` and `b` hold equal elements as `rule` compares them: those of
 // one shared list without comparing them.
 pub(crate) fn modifiers_match(a: &Modifier, b: &Modifier, rule: ElementMatch) -> bool {
-    a.kind.shares_storage(&b.kind)
-        || elements_match(a.as_elements().iter().map(HeldElement::from), b, rule)
+    match (&a.kind, &b.kind) {
+        (ModifierKind::Single { elements: a, .. }, ModifierKind::Single { elements: b, .. })
+            if a.shares_storage(b) =>
+        {
+            true
+        }
+        _ => elements_match(a.as_elements().iter().map(HeldElement::from), b, rule),
+    }
 }
 
 fn element_matches(a: HeldElement<'_>, b: &DynModifierElement, rule: ElementMatch) -> bool {
