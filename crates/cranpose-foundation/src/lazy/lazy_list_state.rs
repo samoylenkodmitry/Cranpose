@@ -1018,9 +1018,9 @@ impl LazyListState {
     }
 
     /// Runs the invalidation callbacks `cell` holds, from a copy of the
-    /// list: a callback may register or remove callbacks.
+    /// list: a callback may register or remove callbacks. A list has one or two.
     fn run_invalidate_callbacks(cell: &RefCell<LazyListStateInner>) {
-        let callbacks: Vec<_> = cell
+        let callbacks: smallvec::SmallVec<[_; 2]> = cell
             .borrow()
             .invalidate_callbacks
             .iter()
