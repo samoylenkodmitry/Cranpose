@@ -232,13 +232,18 @@ impl NodeCache {
     }
 
     /// Takes the measurement the cache last let go of, or else the one it
-    /// holds, for a measure of the node that replaces it.
-    pub(crate) fn take_previous_measurement(&self) -> Option<Rc<MeasuredNode>> {
-        let mut state = self.cache.borrow_mut();
-        state
-            .spare
-            .take()
-            .or_else(|| state.measurement.take().map(|entry| entry.measured))
+    /// holds, for a measure of the node that replaces it to fill in place;
+    /// `None` when something else holds it too.
+    pub(crate) fn take_spare_measurement(&self) -> Option<Rc<MeasuredNode>> {
+        let mut spare = {
+            let mut state = self.cache.borrow_mut();
+            state
+                .spare
+                .take()
+                .or_else(|| state.measurement.take().map(|entry| entry.measured))
+        }?;
+        Rc::get_mut(&mut spare)?;
+        Some(spare)
     }
 
     /// Drops the intrinsic sizes, which depend on every node below: one of

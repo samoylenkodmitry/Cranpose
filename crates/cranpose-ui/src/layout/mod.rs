@@ -11,8 +11,8 @@ mod layout_node_data;
 mod layout_runtime_state;
 mod live_layout_node;
 mod measure_telemetry;
-mod measured_spare;
 mod modifier_chain_measure;
+mod placed_children;
 mod placed_root_measurements;
 /// Measure policies behind the built-in layout widgets such as `Box`, `Row` and `Column`.
 pub mod policies;
@@ -41,7 +41,7 @@ use layout_child_measure_state::{ChildPass, inherited_alignment_lines, read_cell
 use layout_node_data::{role_from_modifier_slices, snapshot_node_data};
 pub(crate) use layout_runtime_state::LayoutRuntimeState;
 use live_layout_node::{LiveLayoutNode, read_live_layout_node};
-use measured_spare::MeasuredSpare;
+use placed_children::PlacedChildren;
 use placed_root_measurements::PlacedRootMeasurements;
 pub use semantics_tree::{
     SemanticsAction, SemanticsCallback, SemanticsNode, SemanticsPlacement, SemanticsRole,
@@ -827,7 +827,7 @@ pub fn measure_layout_with_options(
         };
         let semantics = if options.collect_semantics {
             let semantics_tree = if let Some(layout_tree) = layout_tree.as_ref() {
-                clear_semantics_dirty_flags(&mut applier_ref, root, &measured)?;
+                clear_semantics_dirty_flags(&mut applier_ref, root)?;
                 build_semantics_tree_from_layout_tree(layout_tree)
             } else {
                 build_semantics_tree_from_live_nodes(&mut applier_ref, root, &measured)?
@@ -1018,7 +1018,7 @@ struct LayoutNodeMeasure<'a> {
     parts: Rc<LayoutParts>,
     chain: ModifierChainInputs,
     pools: VecPools<'a>,
-    spare: MeasuredSpare,
+    spare: Option<Rc<MeasuredNode>>,
 }
 
 #[expect(
@@ -1073,15 +1073,7 @@ impl LayoutBuilderState {
                 self.store_subcompose_measurement(node_id, constraints, &measured);
                 ("subcompose", measured)
             }
-            None => (
-                "fallback",
-                Rc::new(MeasuredNode::new(
-                    Size::default(),
-                    Point { x: 0.0, y: 0.0 },
-                    Point::default(),
-                    Vec::new(),
-                )),
-            ),
+            None => ("fallback", Rc::new(MeasuredNode::default())),
         })
     }
 
@@ -1219,7 +1211,19 @@ impl LayoutBuilderState {
     ) -> Result<Rc<MeasuredNode>, NodeError> {
         let start = Instant::now();
         let (kind, measured) = self.measure_node_untimed(node_id, constraints)?;
-        log_node_measure_telemetry(kind, node_id, constraints, &measured, (threshold_ms, start));
+        let children = || {
+            self.with_applier_result(
+                |applier| Ok(PlacedChildren::of(applier, node_id).len(applier)),
+            )
+            .unwrap_or_default()
+        };
+        log_node_measure_telemetry(
+            kind,
+            node_id,
+            constraints,
+            (&measured, children),
+            (threshold_ms, start),
+        );
         Ok(measured)
     }
 
@@ -1255,7 +1259,7 @@ impl LayoutBuilderState {
                 let resolved_modifiers = handle
                     .resolved_modifiers()
                     .on_device_grid(subcompose.density().density());
-                let spare = MeasuredSpare::take(subcompose.cache());
+                let spare = subcompose.cache().take_spare_measurement();
                 (handle, resolved_modifiers, spare)
             } else {
                 return Ok(None);
@@ -1318,11 +1322,6 @@ impl LayoutBuilderState {
             constraints.max_height,
         );
 
-        let MeasuredSpare {
-            node: spare,
-            mut children,
-        } = spare;
-        children.reserve_exact(placements.len());
         let mut alignment_lines = AlignmentLines::default();
         let mut measured_children_by_id = measured_children.borrow_mut();
 
@@ -1378,14 +1377,9 @@ impl LayoutBuilderState {
             if let Some(applier) = applier.as_mut() {
                 let _ = read_live_layout_node(applier, placement.node_id, |node| {
                     node.place(retained, node_id, &self.context);
+                    node.keep_in_parent(MeasuredChild::new(child, policy_position));
                 });
             }
-
-            children.push(MeasuredChild::new(
-                placement.node_id,
-                child,
-                policy_position,
-            ));
         }
         drop(applier);
 
@@ -1393,7 +1387,7 @@ impl LayoutBuilderState {
         node_handle.recycle_placement_scratch(placements);
 
         Ok(Some(
-            MeasuredNode::new(Size { width, height }, offset, Point::default(), children)
+            MeasuredNode::new(Size { width, height }, offset, Point::default())
                 .with_alignment_lines(
                     alignment_lines
                         .with_overrides(explicit_lines.translated(padding.top))
@@ -1468,21 +1462,15 @@ impl LayoutBuilderState {
             return Err(err);
         }
 
-        let MeasuredSpare {
-            node: spare,
-            mut children,
-        } = spare;
-        runtime_state.measured_children(
+        runtime_state.place_measured_children(
             &pools.placements,
             &pools.placement_indices,
             measurement.content_offset,
-            &mut children,
         );
         let measured = MeasuredNode::new(
             measurement.size,
             measurement.offset,
             measurement.content_offset,
-            children,
         )
         .with_alignment_lines(measurement.alignment_lines)
         .with_window_root(measurement.window_root)
@@ -1643,14 +1631,23 @@ impl LayoutBuilderState {
         mut remeasured: impl FnMut(NodeId),
     ) -> Result<Option<KeptChildren>, NodeError> {
         let mut resized = false;
-        for previous in &cached.children {
-            let child = match change(previous.node_id)? {
+        let placed =
+            self.with_applier_result(|applier| Ok(PlacedChildren::of(applier, node_id)))?;
+        let mut index = 0;
+        while let Some((child_id, previous)) =
+            self.with_applier_result(|applier| placed.get(applier, index))?
+        {
+            index += 1;
+            let Some(previous) = previous else {
+                continue;
+            };
+            let child = match change(child_id)? {
                 ChildChange::Unchanged => continue,
                 ChildChange::Refuse => return Ok(None),
                 ChildChange::Changed(child) => child,
             };
-            let measured = self.measure_node(previous.node_id, child.constraints)?;
-            remeasured(previous.node_id);
+            let measured = self.measure_node(child_id, child.constraints)?;
+            remeasured(child_id);
             let now = ForParent::of(&measured);
             if !previous.for_parent.same_as(&now) {
                 if !(ignores_child_sizes && previous.for_parent.same_but_size(&now)) {
@@ -1659,7 +1656,7 @@ impl LayoutBuilderState {
                 resized = true;
             }
             if child.placed {
-                self.place_where_it_was(node_id, previous.node_id);
+                self.place_where_it_was(node_id, child_id);
             }
         }
         Ok(Some(KeptChildren {
@@ -1763,7 +1760,7 @@ impl LayoutBuilderState {
             return LayoutNodeVisit::Cached(cached);
         }
 
-        let spare = MeasuredSpare::take(cache);
+        let spare = cache.take_spare_measurement();
         let parts = Rc::clone(node.layout_parts());
         let chain = parts.runtime_state().borrow_mut().bind_node(node);
         let mut pools = VecPools::acquire(&self.frame_arena);
@@ -1777,24 +1774,22 @@ impl LayoutBuilderState {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub(crate) struct MeasuredNode {
     size: Size,
     offset: Point,
     content_offset: Point,
     alignment_lines: AlignmentLines,
-    children: Vec<MeasuredChild>,
     window_root: bool,
 }
 
 impl MeasuredNode {
-    fn new(size: Size, offset: Point, content_offset: Point, children: Vec<MeasuredChild>) -> Self {
+    fn new(size: Size, offset: Point, content_offset: Point) -> Self {
         Self {
             size,
             offset,
             content_offset,
             alignment_lines: AlignmentLines::default(),
-            children,
             window_root: false,
         }
     }
@@ -1843,21 +1838,19 @@ impl MeasuredNode {
     }
 }
 
-/// What a parent's measurement keeps of a child: which child, where the
-/// policy placed it, and what of the child's measurement the policy read.
-/// The measurement itself stays with the child's cache, its one holder, so
-/// the child's next measure can fill it in place.
-#[derive(Debug, Clone, Copy)]
+/// What a parent's last measure kept of a child: where the policy placed
+/// it, and what of the child's measurement the policy read. It sits in the
+/// child's record, as a node has one parent; the measurement itself stays
+/// with the child's cache, so the child's next measure can fill it in place.
+#[derive(Debug, Clone, Copy, Default)]
 struct MeasuredChild {
-    node_id: NodeId,
     offset: Point,
     for_parent: ForParent,
 }
 
 impl MeasuredChild {
-    fn new(node_id: NodeId, measured: &MeasuredNode, offset: Point) -> Self {
+    fn new(measured: &MeasuredNode, offset: Point) -> Self {
         Self {
-            node_id,
             offset,
             for_parent: ForParent::of(measured),
         }
@@ -1866,7 +1859,7 @@ impl MeasuredChild {
 
 /// What a parent's policy reads of a child's measurement: the size and the
 /// baselines, and the offset it places the child by.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 struct ForParent {
     size: Size,
     offset: Point,
@@ -1910,41 +1903,9 @@ fn policy_intrinsic(
     }
 }
 
-/// Runs `visit` on the measurement `child` holds in its cache, or on a leaf
-/// of no size for a child that holds none, as a node of another kind
-/// measures.
-fn visit_child<R>(
-    applier: &mut MemoryApplier,
-    child: &MeasuredChild,
-    visit: impl FnOnce(&mut MemoryApplier, NodeId, &MeasuredNode) -> R,
-) -> R {
-    let held = applier.get_mut(child.node_id).ok().and_then(|node| {
-        let any = node.as_any_mut();
-        if let Some(layout) = any.downcast_ref::<LayoutNode>() {
-            return layout.cache().held_measurement();
-        }
-        any.downcast_ref::<SubcomposeLayoutNode>()
-            .and_then(|subcompose| subcompose.cache().held_measurement())
-    });
-    match held {
-        Some(held) => visit(applier, child.node_id, &held),
-        None => visit(
-            applier,
-            child.node_id,
-            &MeasuredNode::new(
-                Size::default(),
-                Point::default(),
-                Point::default(),
-                Vec::new(),
-            ),
-        ),
-    }
-}
-
 fn clear_semantics_dirty_flags(
     applier: &mut MemoryApplier,
     node_id: NodeId,
-    node: &MeasuredNode,
 ) -> Result<(), NodeError> {
     match applier.with_node::<LayoutNode, _>(node_id, |layout| {
         layout.clear_needs_semantics();
@@ -1962,11 +1923,9 @@ fn clear_semantics_dirty_flags(
         Err(err) => return Err(err),
     }
 
-    for child in &node.children {
-        visit_child(applier, child, clear_semantics_dirty_flags)?;
-    }
-
-    Ok(())
+    PlacedChildren::of(applier, node_id).visit(applier, |applier, child, _, _| {
+        clear_semantics_dirty_flags(applier, child)
+    })
 }
 
 fn build_semantics_tree_from_live_nodes(
@@ -2090,12 +2049,17 @@ fn build_semantics_node_from_live_nodes(
             Err(err) => return Err(err),
         };
 
-    let mut children = Vec::with_capacity(node.children.len());
-    for child in &node.children {
-        children.push(visit_child(applier, child, |applier, child_id, child| {
-            build_semantics_node_from_live_nodes(applier, child_id, child, Some(content))
-        })?);
-    }
+    let placed = PlacedChildren::of(applier, node_id);
+    let mut children = Vec::with_capacity(placed.len(applier));
+    placed.visit(applier, |applier, child_id, _, child| {
+        children.push(build_semantics_node_from_live_nodes(
+            applier,
+            child_id,
+            child,
+            Some(content),
+        )?);
+        Ok(())
+    })?;
 
     Ok(SemanticsNode {
         placement,
@@ -2173,19 +2137,25 @@ fn build_layout_tree(
         };
         let (data, window_transform) =
             snapshot_node_data(applier, node_id, top_left, node.size, parent_transform)?;
-        let mut children = Vec::with_capacity(node.children.len());
-        for child in &node.children {
-            if crate::modifier::is_window_root(applier, child.node_id) {
-                continue;
+        let placed = PlacedChildren::of(applier, node_id);
+        let mut children = Vec::with_capacity(placed.len(applier));
+        placed.visit(applier, |applier, child_id, offset, child| {
+            if crate::modifier::is_window_root(applier, child_id) {
+                return Ok(());
             }
             let child_origin = Point {
-                x: top_left.x + child.offset.x,
-                y: top_left.y + child.offset.y,
+                x: top_left.x + offset.x,
+                y: top_left.y + offset.y,
             };
-            children.push(visit_child(applier, child, |applier, child_id, child| {
-                place(applier, child_id, child, child_origin, window_transform)
-            })?);
-        }
+            children.push(place(
+                applier,
+                child_id,
+                child,
+                child_origin,
+                window_transform,
+            )?);
+            Ok(())
+        })?;
         Ok(LayoutBox {
             node_generation: applier.node_generation(node_id),
             ..LayoutBox::new(node_id, rect, node.content_offset, data, children)
