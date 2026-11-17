@@ -306,6 +306,14 @@ impl NodeCache {
         });
     }
 
+    // Keeps the measurement the cache holds, with its hold, for
+    // `constraints`: a walk over its children found it the same.
+    pub(crate) fn store_kept_measurement(&self, constraints: Constraints) {
+        if let Some(entry) = self.cache.borrow_mut().measurement.as_mut() {
+            entry.constraints = constraints;
+        }
+    }
+
     /// Stores `measured` for `constraints` and the other constraints `hold`
     /// says it holds for.
     pub(crate) fn store_held_measurement(
