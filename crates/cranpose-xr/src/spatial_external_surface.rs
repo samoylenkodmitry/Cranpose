@@ -2,22 +2,24 @@
 
 use std::{cell::RefCell, rc::Rc};
 
-use cranpose::{ExternalSurface, prelude::*};
+use cranpose::{ExternalSurface, PointerEvent, prelude::*};
 
 use crate::{
     StereoMode, SubspaceModifier,
     space::{Space, local_space, local_subspace_origin},
     subspace_modifier::DEFAULT_PANEL_SIZE,
+    surface_input::PointerSink,
 };
 
-type Callback = Box<dyn FnMut(ExternalSurface)>;
+type Callback<Argument> = Box<dyn FnMut(Argument)>;
 
 // The callbacks that the content registered. The scope's methods set them, and the surface's
 // effect calls them.
 #[derive(Default)]
 struct CallbackSlots {
-    created: RefCell<Option<Callback>>,
-    destroyed: RefCell<Option<Callback>>,
+    created: RefCell<Option<Callback<ExternalSurface>>>,
+    destroyed: RefCell<Option<Callback<ExternalSurface>>>,
+    pointer: RefCell<Option<Callback<PointerEvent>>>,
 }
 
 #[derive(Clone, Default)]
@@ -29,12 +31,12 @@ impl PartialEq for Callbacks {
     }
 }
 
-// Calls the callback in `slot` with `surface`. The callback runs with no borrow held, so it may
+// Calls the callback in `slot` with `argument`. The callback runs with no borrow held, so it may
 // set a new callback.
-fn invoke(slot: &RefCell<Option<Callback>>, surface: ExternalSurface) {
+fn invoke<Argument>(slot: &RefCell<Option<Callback<Argument>>>, argument: Argument) {
     let taken = slot.borrow_mut().take();
     if let Some(mut callback) = taken {
-        callback(surface);
+        callback(argument);
         let mut slot = slot.borrow_mut();
         if slot.is_none() {
             *slot = Some(callback);
@@ -62,6 +64,19 @@ impl SpatialExternalSurfaceScope {
     pub fn on_surface_destroyed(&self, callback: impl FnMut(ExternalSurface) + 'static) {
         *self.callbacks.0.destroyed.borrow_mut() = Some(Box::new(callback));
     }
+
+    /// Sets the callback that receives the pointer events of a controller's ray on the surface, as
+    /// Compose's pointer input gives them to a composable. The positions are in dp from the
+    /// surface's top left corner, in the units of the surface's size. A surface of `width` by
+    /// `height` dp that shows a picture of `w` by `h` pixels maps a position to the picture's
+    /// pixel `(x / width * w, y / height * h)`. The events are `Enter` when the ray first meets
+    /// the surface, `Move` while it moves over it, `Down` when the trigger goes down and `Up`
+    /// when it goes up, and `Exit` when the ray leaves. An `Up` comes also when the ray left the
+    /// surface during the press, or the controller was lost, at the last place on the surface.
+    /// Jetpack XR's `InteractionPolicy.onInputEvent`.
+    pub fn on_pointer_event(&self, callback: impl FnMut(PointerEvent) + 'static) {
+        *self.callbacks.0.pointer.borrow_mut() = Some(Box::new(callback));
+    }
 }
 
 /// A surface of the size that `modifier` gives, into which a video decoder or a camera writes
@@ -71,12 +86,14 @@ impl SpatialExternalSurfaceScope {
 /// app's own composition and the GPU never copy them. `content` receives the scope that
 /// delivers the [`ExternalSurface`] through [`on_surface_created`] and
 /// [`on_surface_destroyed`]. `stereo_mode` tells how the picture divides between the eyes. A
-/// controller's ray stops on the surface, and its trigger does nothing there.
+/// controller's ray stops on the surface. Its trigger does nothing there, unless the content sets
+/// [`on_pointer_event`].
 ///
 /// Outside a headset the surface draws as an empty box of its size, and the callbacks never run.
 ///
 /// [`on_surface_created`]: SpatialExternalSurfaceScope::on_surface_created
 /// [`on_surface_destroyed`]: SpatialExternalSurfaceScope::on_surface_destroyed
+/// [`on_pointer_event`]: SpatialExternalSurfaceScope::on_pointer_event
 #[composable]
 pub fn SpatialExternalSurface(
     stereo_mode: StereoMode,
@@ -119,13 +136,25 @@ fn PlacedSurface(
     );
     let id = panel.id;
     space.set_move_policy(id, modifier.move_policy());
-    DisposableEffect(id, move |_| {
-        DisposableEffectResult::new(move || space.remove(id))
-    });
     let callbacks = remember(Callbacks::default).with(Clone::clone);
     let mut content = content;
     content(&SpatialExternalSurfaceScope {
         callbacks: callbacks.clone(),
+    });
+    // The sink is made once and stays while the content sets a pointer callback. A surface with
+    // no callback takes no pointer events.
+    let sink = remember({
+        let callbacks = callbacks.clone();
+        move || {
+            let sink: PointerSink = Rc::new(move |event| invoke(&callbacks.0.pointer, event));
+            sink
+        }
+    })
+    .with(Clone::clone);
+    let listens = callbacks.0.pointer.borrow().is_some();
+    space.set_surface_sink(id, listens.then_some(sink));
+    DisposableEffect(id, move |_| {
+        DisposableEffectResult::new(move || space.remove(id))
     });
     SurfaceEvents(panel.surface, callbacks);
 }

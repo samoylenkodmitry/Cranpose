@@ -1,5 +1,6 @@
 use std::{cell::RefCell, rc::Rc};
 
+use cranpose::{PointerButton, PointerEventKind};
 use cranpose_core::{CompositionLocalProvider, remember};
 use cranpose_testing::{
     create_headless_robot_test,
@@ -8,8 +9,8 @@ use cranpose_testing::{
 
 use super::*;
 use crate::{
-    MovePolicy, Pose, SpatialMoveEvent, SpatialMoveEventType, SpatialPanel, StereoMode,
-    SubspaceModifier,
+    MovePolicy, Pose, SpatialExternalSurface, SpatialMoveEvent, SpatialMoveEventType, SpatialPanel,
+    StereoMode, SubspaceModifier,
     space::{SUBSPACE_ORIGIN, Shape, Space, local_space},
 };
 
@@ -76,14 +77,14 @@ impl Frames {
         &mut self,
         aims: [Option<Aim>; 2],
         panels: &[PanelSlot],
-    ) -> (Vec<PointerEvent>, Option<Cursor>) {
+    ) -> (Vec<Gesture>, Option<Cursor>) {
         self.frame += 1;
         let time = Duration::from_millis(10 * self.frame);
         let (events, cursor) = self.pointer.update(aims, time, panels);
         (events.to_vec(), cursor)
     }
 
-    fn right(&mut self, x: f32, yaw: f32, trigger: f32) -> (Vec<PointerEvent>, Option<Cursor>) {
+    fn right(&mut self, x: f32, yaw: f32, trigger: f32) -> (Vec<Gesture>, Option<Cursor>) {
         self.update([None, aim(x, yaw, trigger)], &[PANEL])
     }
 }
@@ -92,16 +93,16 @@ impl Frames {
 fn a_trigger_over_a_panel_moves_presses_and_releases() {
     let mut frames = Frames::default();
     let (events, cursor) = frames.right(0.0, 0.0, 0.0);
-    assert_eq!(events, [PointerEvent::Move { x: 400.0, y: 250.0 }]);
+    assert_eq!(events, [Gesture::Move { x: 400.0, y: 250.0 }]);
     assert_eq!(
         cursor.map(|cursor| (cursor.panel, cursor.x, cursor.y)),
         Some((1, 400.0, 250.0))
     );
     let (events, cursor) = frames.right(0.0, 0.0, 1.0);
-    assert_eq!(events, [PointerEvent::Press]);
+    assert_eq!(events, [Gesture::Press]);
     assert!(cursor.is_some_and(|cursor| cursor.pressed));
     let (events, _) = frames.right(0.0, 0.0, 0.0);
-    assert_eq!(events, [PointerEvent::Release]);
+    assert_eq!(events, [Gesture::Release]);
 }
 
 #[test]
@@ -109,9 +110,9 @@ fn a_half_pulled_trigger_neither_presses_nor_releases() {
     let mut frames = Frames::default();
     frames.right(0.0, 0.0, 0.0);
     assert!(frames.right(0.0, 0.0, 0.5).0.is_empty());
-    assert_eq!(frames.right(0.0, 0.0, 0.7).0, [PointerEvent::Press]);
+    assert_eq!(frames.right(0.0, 0.0, 0.7).0, [Gesture::Press]);
     assert!(frames.right(0.0, 0.0, 0.5).0.is_empty());
-    assert_eq!(frames.right(0.0, 0.0, 0.3).0, [PointerEvent::Release]);
+    assert_eq!(frames.right(0.0, 0.0, 0.3).0, [Gesture::Release]);
 }
 
 #[test]
@@ -122,10 +123,7 @@ fn a_press_takes_the_point_from_before_the_pull() {
     let (events, cursor) = frames.right(0.1, 0.0, 0.8);
     assert_eq!(
         events,
-        [
-            PointerEvent::Move { x: 400.0, y: 250.0 },
-            PointerEvent::Press
-        ]
+        [Gesture::Move { x: 400.0, y: 250.0 }, Gesture::Press]
     );
     assert_eq!(cursor.map(|cursor| cursor.x), Some(400.0));
 }
@@ -143,12 +141,12 @@ fn a_shaking_press_clicks_and_a_turning_press_drags() {
     }
     // The release lets go at the held point before the pointer follows the ray again
     let (events, _) = frames.right(0.0, 0.0, 0.0);
-    assert_eq!(events.first(), Some(&PointerEvent::Release));
+    assert_eq!(events.first(), Some(&Gesture::Release));
 
     frames.right(0.0, 0.0, 1.0);
     let moved = (0..60).any(|_| {
         let (events, _) = frames.right(0.0, 15.0, 1.0);
-        matches!(events.first(), Some(PointerEvent::Move { x, .. }) if *x > 400.0)
+        matches!(events.first(), Some(Gesture::Move { x, .. }) if *x > 400.0)
     });
     assert!(moved);
 }
@@ -157,7 +155,7 @@ fn a_shaking_press_clicks_and_a_turning_press_drags() {
 fn the_nearest_panel_takes_the_pointer() {
     let mut frames = Frames::default();
     let (events, cursor) = frames.update([None, aim(0.0, 0.0, 0.0)], &[BEHIND, PANEL]);
-    assert_eq!(events, [PointerEvent::Move { x: 400.0, y: 250.0 }]);
+    assert_eq!(events, [Gesture::Move { x: 400.0, y: 250.0 }]);
     assert_eq!(cursor.map(|cursor| cursor.panel), Some(1));
 }
 
@@ -168,10 +166,10 @@ fn a_trigger_held_from_outside_does_not_press_on_entry() {
     assert!(events.is_empty());
     assert_eq!(cursor, None);
     let (events, cursor) = frames.right(0.0, 0.0, 1.0);
-    assert_eq!(events, [PointerEvent::Move { x: 400.0, y: 250.0 }]);
+    assert_eq!(events, [Gesture::Move { x: 400.0, y: 250.0 }]);
     assert!(cursor.is_some_and(|cursor| !cursor.pressed));
     assert!(frames.right(0.0, 0.0, 0.0).0.is_empty());
-    assert_eq!(frames.right(0.0, 0.0, 1.0).0, [PointerEvent::Press]);
+    assert_eq!(frames.right(0.0, 0.0, 1.0).0, [Gesture::Press]);
 }
 
 #[test]
@@ -184,15 +182,12 @@ fn the_pointer_keeps_its_hand_while_pressed() {
     assert_eq!(cursor.map(|cursor| cursor.x), Some(400.0));
     assert_eq!(
         frames.update(both(1.0, 0.0), &[PANEL]).0,
-        [PointerEvent::Release]
+        [Gesture::Release]
     );
     assert!(frames.update(both(0.0, 0.0), &[PANEL]).0.is_empty());
     assert_eq!(
         frames.update(both(1.0, 0.0), &[PANEL]).0,
-        [
-            PointerEvent::Move { x: 500.0, y: 250.0 },
-            PointerEvent::Press
-        ]
+        [Gesture::Move { x: 500.0, y: 250.0 }, Gesture::Press]
     );
 }
 
@@ -202,7 +197,7 @@ fn a_lost_controller_releases_its_press() {
     frames.right(0.0, 0.0, 0.0);
     frames.right(0.0, 0.0, 1.0);
     let (events, _) = frames.update([None, None], &[PANEL]);
-    assert_eq!(events, [PointerEvent::Release, PointerEvent::Leave]);
+    assert_eq!(events, [Gesture::Release, Gesture::Leave]);
 }
 
 #[test]
@@ -269,7 +264,7 @@ fn a_ray_moves_the_pointer_along_the_curve_of_a_curved_panel() {
     };
     let mut frames = Frames::default();
     let (events, _) = frames.update([None, aim(0.0, 20.0, 0.0)], &[curved]);
-    let Some(PointerEvent::Move { x, y }) = events.first() else {
+    let Some(Gesture::Move { x, y }) = events.first() else {
         panic!("the ray meets the curved panel: {events:?}");
     };
     assert!((x - (400.0 + 349.07)).abs() < 0.1, "x {x}");
@@ -399,5 +394,96 @@ fn a_custom_policy_leaves_the_pose_to_the_app() {
         space.panels()[0].pose,
         start,
         "the modifier still places the panel"
+    );
+}
+
+// A pointer event of a surface as the test sees it: its kind, its place in dp and whether the
+// primary button is down.
+type Seen = (PointerEventKind, [f32; 2], bool);
+
+// A headset whose content is a surface of 960 by 540 dp, a meter ahead. Its pointer callback
+// writes the events into `seen`.
+fn surface_headset(seen: &Rc<RefCell<Vec<Seen>>>) -> (RobotTestRule<TestRenderer>, Space) {
+    let held = Rc::new(RefCell::new(None));
+    let (keep, seen) = (Rc::clone(&held), Rc::clone(seen));
+    let mut robot = create_headless_robot_test(500, 400, move || {
+        let space = remember(Space::new).with(Clone::clone);
+        keep.replace(Some(space.clone()));
+        let seen = Rc::clone(&seen);
+        CompositionLocalProvider([local_space().provides(Some(space))], move || {
+            let seen = Rc::clone(&seen);
+            SpatialExternalSurface(
+                StereoMode::Mono,
+                SubspaceModifier::new().size(960.0, 540.0),
+                move |scope| {
+                    let seen = Rc::clone(&seen);
+                    scope.on_pointer_event(move |event| {
+                        let primary = event.buttons.contains(PointerButton::Primary);
+                        let place = [event.position.x, event.position.y];
+                        seen.borrow_mut().push((event.kind, place, primary));
+                    });
+                },
+            );
+        });
+    });
+    robot.wait_for_idle();
+    let space = held.take().expect("the content composed");
+    (robot, space)
+}
+
+#[test]
+fn a_ray_on_a_surface_gives_the_app_pointer_events_in_the_surfaces_dp() {
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let (_robot, space) = surface_headset(&seen);
+    let mut frames = Frames::default();
+    // The frame loop's way: the pointer's gestures reach the surface through the space
+    let mut frame = |x: f32, yaw: f32, trigger: f32| {
+        let (atlas, _) = frames.update([None, aim(x, yaw, trigger)], &space.panels());
+        assert!(
+            atlas.is_empty(),
+            "the composition hears nothing of a surface"
+        );
+        for gesture in frames.pointer.surface_events() {
+            space.deliver_to_surface(gesture);
+        }
+        seen.take()
+    };
+    let at = |kind, x, y, down| vec![(kind, [x, y], down)];
+    let close = |seen: &[Seen], expected: &[Seen]| {
+        assert_eq!(seen.len(), expected.len(), "{seen:?}");
+        for (seen, expected) in seen.iter().zip(expected) {
+            assert_eq!((seen.0, seen.2), (expected.0, expected.2));
+            assert!(
+                seen.1
+                    .iter()
+                    .zip(expected.1)
+                    .all(|(a, b)| (a - b).abs() < 0.1)
+            );
+        }
+    };
+
+    // The surface is a meter ahead, and a dp is a millimeter: the middle is at 480 by 270 dp
+    close(
+        &frame(0.0, 0.0, 0.0),
+        &at(PointerEventKind::Enter, 480.0, 270.0, false),
+    );
+    close(
+        &frame(0.1, 0.0, 0.0),
+        &at(PointerEventKind::Move, 580.0, 270.0, false),
+    );
+    close(
+        &frame(0.1, 0.0, 1.0),
+        &at(PointerEventKind::Down, 580.0, 270.0, true),
+    );
+    // The ray leaves the surface during the press. The release still reaches the surface, at the
+    // last place on it.
+    assert!(frame(0.1, 90.0, 1.0).is_empty());
+    let released = frame(0.1, 90.0, 0.0);
+    close(
+        &released,
+        &[
+            (PointerEventKind::Up, [580.0, 270.0], false),
+            (PointerEventKind::Exit, [580.0, 270.0], false),
+        ],
     );
 }

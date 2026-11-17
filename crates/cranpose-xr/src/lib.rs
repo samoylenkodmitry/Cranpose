@@ -64,6 +64,7 @@ mod streamed_scene;
 mod streamed_view;
 mod subspace;
 mod subspace_modifier;
+mod surface_input;
 mod xr_frame;
 
 mod android_main;

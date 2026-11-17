@@ -78,6 +78,21 @@ SpatialExternalSurface(
 The callbacks receive an `ExternalSurface` from `cranpose-services`. Outside a headset the
 composable shows an empty box, and the callbacks never run.
 
+A controller's ray stops on a surface. `scope.on_pointer_event` gives the app Compose's
+`PointerEvent`s for the ray: `Enter`, `Move`, `Down`, `Up` and `Exit`. The `position` is in dp from
+the surface's top left corner, in the units of the surface's `size`, so an app that shows a picture
+of `w` by `h` pixels finds the picture's pixel at `(x / width * w, y / height * h)`. A streamed
+desktop moves its mouse cursor with it.
+
+```rust,ignore
+scope.on_pointer_event(|event| match event.kind {
+    PointerEventKind::Move | PointerEventKind::Enter => send_mouse_move(event.position),
+    PointerEventKind::Down => send_mouse_button(true),
+    PointerEventKind::Up => send_mouse_button(false),
+    _ => {}
+});
+```
+
 ## The headset's state
 
 `SpatialFrameEffect` runs a callback once in each frame of the headset, before the panels draw. It

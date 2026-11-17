@@ -23,8 +23,9 @@ use crate::{
     depth_order::sort_back_to_front,
     frame_effects::local_frame_effects,
     local_haptics, local_headset_properties, local_spatial_capabilities, local_spatial_environment,
-    pointer::{Pointer, PointerEvent},
+    pointer::Pointer,
     space::{Space, local_space},
+    surface_input::Gesture,
 };
 
 // Where the pointer goes when it leaves every panel: far outside the atlas, so no content stays
@@ -155,6 +156,9 @@ impl Immersive {
         );
         let (events, cursor) = self.pointer.update(aims, time, &self.space.panels());
         send(&mut self.guest, events);
+        for gesture in self.pointer.surface_events() {
+            self.space.deliver_to_surface(gesture);
+        }
         self.space.set_cursor(cursor);
         for step in self.pointer.moves() {
             self.space.carry(step);
@@ -216,20 +220,20 @@ impl Immersive {
     }
 }
 
-fn send(guest: &mut GuestView, events: &[PointerEvent]) {
+fn send(guest: &mut GuestView, events: &[Gesture]) {
     let shell = guest.shell();
     for event in events {
         match *event {
-            PointerEvent::Move { x, y } => {
+            Gesture::Move { x, y } => {
                 shell.set_cursor(x, y);
             }
-            PointerEvent::Press => {
+            Gesture::Press => {
                 shell.pointer_pressed();
             }
-            PointerEvent::Release => {
+            Gesture::Release => {
                 shell.pointer_released();
             }
-            PointerEvent::Leave => {
+            Gesture::Leave => {
                 shell.set_cursor(AWAY, AWAY);
             }
         }

@@ -16,7 +16,10 @@ use cranpose_core::CompositionLocal;
 
 use crate::{
     METERS_PER_DP, MovePolicy, PanelHit, Pose, Ray, SpatialMoveEvent, SpatialMoveEventType,
-    StereoMode, locals::with_locals, stream_source::StreamSource,
+    StereoMode,
+    locals::with_locals,
+    stream_source::StreamSource,
+    surface_input::{PointerSink, SurfaceGesture, SurfaceInput},
 };
 
 // The space between two panels in the atlas, in dp, so the compositor's filter never reaches a
@@ -168,6 +171,10 @@ struct Entry {
     moving: Option<Pose>,
     // What the panel does when the user carries it, or `None` for a panel that stays
     policy: Option<MovePolicy>,
+    // For a surface: where the app takes the pointer's events, and what the surface knows of
+    // the pointer
+    sink: Option<PointerSink>,
+    input: SurfaceInput,
 }
 
 impl PartialEq for Space {
@@ -294,6 +301,8 @@ impl Space {
                     carried: None,
                     moving: None,
                     policy: None,
+                    sink: None,
+                    input: SurfaceInput::default(),
                 });
                 (entries.len() - 1, true)
             }
@@ -314,6 +323,15 @@ impl Space {
                 Mobility::Fixed
             };
             entry.policy = policy.cloned();
+        }
+    }
+
+    // Sets where the surface `id` sends the pointer's events, or `None` for a surface that takes
+    // none.
+    pub(crate) fn set_surface_sink(&self, id: u64, sink: Option<PointerSink>) {
+        let mut entries = self.inner.entries.borrow_mut();
+        if let Some(entry) = entries.iter_mut().find(|entry| entry.slot.id == id) {
+            entry.sink = sink;
         }
     }
 
@@ -373,6 +391,29 @@ impl Space {
         // The callback runs with no borrow held, so that it may call the space
         if let Some((listener, event)) = heard {
             listener(event);
+        }
+    }
+
+    #[cfg_attr(
+        not(any(test, headset)),
+        expect(dead_code, reason = "the headset backend calls it")
+    )]
+    // Tells the surface that `gesture` names what the pointer did on it, as Compose's pointer
+    // event. A surface that takes no pointer events sees nothing.
+    pub(crate) fn deliver_to_surface(&self, gesture: &SurfaceGesture) {
+        let heard = {
+            let mut entries = self.inner.entries.borrow_mut();
+            entries
+                .iter_mut()
+                .find(|entry| entry.slot.id == gesture.surface)
+                .and_then(|entry| {
+                    let sink = entry.sink.clone()?;
+                    Some((sink, entry.input.event(gesture.gesture)?))
+                })
+        };
+        // The callback runs with no borrow held, so that it may call the space
+        if let Some((sink, event)) = heard {
+            sink(event);
         }
     }
 

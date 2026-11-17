@@ -116,6 +116,20 @@ without a dependency on `cranpose-xr`. On Android the type holds a reference to 
 `ANativeWindow`, which `as_ptr` returns. The app needs no `ndk`, JNI or GL code of its own.
 Outside a headset the composable shows an empty box, and the callbacks never run.
 
+A surface has no composable content, so the pointer treats it as a target of its own. The pointer
+finds the nearest hit among the panels and the surfaces and keeps one press state for both: the
+trigger's thresholds, the point that a press takes from before the pull, and the click that holds
+its point against a shaking hand all work as on a panel. Each gesture goes to the target of the hit,
+the app's composition or one surface. A press remembers its target, so its release reaches the
+pressed surface also when the ray left it or the controller was lost. When the ray crosses from a
+panel onto a surface, the composition sees the pointer leave. `on_pointer_event` of the scope
+receives Compose's `PointerEvent` with the position in the surface's dp from its top left corner.
+The events are `Enter` for the first move over the surface, `Move`, `Down`, `Up` and `Exit`.
+Jetpack XR gives such input through the `interactionPolicy` parameter, with `SpatialInputEvent`
+positions relative to the surface's center. Rust has no default arguments, and Compose's pointer
+events carry the same facts, so the scope takes the callback. A surface with no callback takes no
+events and costs nothing for them.
+
 The compositor draws layers in list order, and the last one covers the others. The frame loop
 lists the layers of the room, the streamed scenes and the curved panels first. Then come the flat
 panels and the surfaces, sorted back to front by the distance from the head to each one's plane,
