@@ -385,3 +385,31 @@ The native segmented tap leaves the lens in place while the finger is down on an
 The iOS touch router had no sample time, so drag velocity on iOS came from frame times. A gesture recognizer on winit's view now records `UITouch.timestamp` for every touch before the view takes it. The forward slider capture settles with its fill ending at 277.67 pt, against 276.67 natively; before the change it stopped at 273.67. The reversed holdout path settles at 173.67 pt in both apps, where this file earlier recorded 0.49645 against 0.469973.
 
 The renderer dropped a layer's color filter on text with its own span color: the segmented label dim reached the scene, never the pixels. `text_layer_color_filter` reproduces it with black text under a half-alpha modulation and a red tint.
+
+## System Tint Amount, 2026-11-17
+
+iOS 27 sets the Liquid Glass tint in Settings > Appearance > Liquid Glass > Tint Amount. The simulator default is 50%; the setting is stored only once edited. The iPhoneOS 27.2 SDK has no public API that reports it: `UIGlassEffect` offers the regular and clear styles only. `capture_controls_at_tint.sh` captured the 41 native control states at 0%, 25%, 50% and 100%.
+
+Native at each tint against native at 50%, mean RGB difference:
+
+| State | 0% | 25% | 100% |
+| --- | --- | --- | --- |
+| Dark card on the checkerboard | 6.77 | 3.38 | 17.79 |
+| Light card on the checkerboard | 6.08 | 2.98 | 4.85 |
+| Dark button on the checkerboard | 1.01 | 0.48 | 2.42 |
+| Light button on the checkerboard | 0.89 | 0.44 | 0.74 |
+
+Every state over a plain background stays within 2 levels at every tint, with no visible pixel. The menus change by the same amount between any two captures, including 0% against 100% where the grouped menu differs by 0.17 and no visible pixel; that difference is capture timing, not tint.
+
+Cranpose's cards, buttons, search fields and menus ignore `LiquidThemeSpec::glass_tint_amount`; only the tab bar reads it. Cranpose against native at each tint, mean RGB difference:
+
+| State | 0% | 25% | 50% | 100% |
+| --- | --- | --- | --- | --- |
+| Dark card on the checkerboard | 15.97 | 17.29 | 19.17 | 26.83 |
+| Light card on the checkerboard | 4.99 | 4.42 | 5.65 | 8.52 |
+| Dark button on the checkerboard | 1.08 | 0.62 | 0.59 | 2.69 |
+| Light button on the checkerboard | 1.04 | 0.61 | 0.33 | 1.00 |
+
+The dark card is far from iOS at every tint, so its excess color is no setting artifact. The light card matches best at 25%, the buttons at 50%. The light card face on white now draws 254 as iOS does (247 before); the GPU tone test holds every neutral sample within 5 levels.
+
+Two captures of the same Cranpose build give 11.5 and 13.5 for the mean difference after the release, with the frames aligned on the release. In the second, the touch-down reached the app 25 ms late: UIKit stamped the release 167 ms after the touch-down, while the app received it 142 ms after. The motions start from the delivery time, so the 225 ms minimum lift ended 20 ms later. One toggle tap capture cannot resolve a change smaller than 2 levels.
