@@ -423,12 +423,9 @@ impl AppContext {
         self.state.layout_repasses.borrow_mut().has_pending_repass()
     }
 
-    /// The nodes waiting for a layout repass, which stay waiting.
-    pub fn pending_layout_repass_nodes_snapshot(&self) -> Vec<NodeId> {
-        self.state
-            .layout_repasses
-            .borrow_mut()
-            .dirty_nodes_snapshot()
+    /// Appends the nodes waiting for a layout repass, sorted, to `nodes`.
+    pub fn pending_layout_repass_nodes_into(&self, nodes: &mut Vec<NodeId>) {
+        self.state.layout_repasses.borrow().append_sorted(nodes);
     }
 
     /// Whether a measure repass waits, as [`has_pending_measure_repasses`]
@@ -440,12 +437,9 @@ impl AppContext {
             .has_pending_repass()
     }
 
-    /// The nodes waiting for a measure repass, which stay waiting.
-    pub fn pending_measure_repass_nodes_snapshot(&self) -> Vec<NodeId> {
-        self.state
-            .measure_repasses
-            .borrow_mut()
-            .dirty_nodes_snapshot()
+    /// Appends the nodes waiting for a measure repass, sorted, to `nodes`.
+    pub fn pending_measure_repass_nodes_into(&self, nodes: &mut Vec<NodeId>) {
+        self.state.measure_repasses.borrow().append_sorted(nodes);
     }
 
     /// Moves the nodes whose geometry the last layout pass changed into
@@ -1071,7 +1065,9 @@ pub fn has_pending_layout_repasses() -> bool {
 
 /// Returns a stable snapshot of pending layout repass node IDs without consuming them.
 pub fn pending_layout_repass_nodes_snapshot() -> Vec<NodeId> {
-    require_current_app_context("render state access").pending_layout_repass_nodes_snapshot()
+    let mut nodes = Vec::new();
+    with_render_state(|state| state.layout_repasses.borrow().append_sorted(&mut nodes));
+    nodes
 }
 
 /// Takes all pending layout repass node IDs.
@@ -1110,7 +1106,9 @@ pub fn has_pending_measure_repasses() -> bool {
 /// phase as "something changed, but nothing says where", which is
 /// indistinguishable from a full invalidation.
 pub fn pending_measure_repass_nodes_snapshot() -> Vec<NodeId> {
-    require_current_app_context("render state access").pending_measure_repass_nodes_snapshot()
+    let mut nodes = Vec::new();
+    with_render_state(|state| state.measure_repasses.borrow().append_sorted(&mut nodes));
+    nodes
 }
 
 /// Takes all pending measure repass node IDs.

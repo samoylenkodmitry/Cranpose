@@ -32,20 +32,26 @@ fn reshape_unplaced_parents<R: Renderer>(
     }
 }
 
-fn pending_repass_nodes(context: &cranpose_ui::AppContext) -> Vec<NodeId> {
-    let mut nodes = if context.has_pending_layout_repasses() {
-        context.pending_layout_repass_nodes_snapshot()
-    } else {
-        Vec::new()
-    };
+// The nodes waiting for a layout repass, sorted, then the others waiting for
+// a measure repass, sorted: they stay waiting.
+fn pending_repass_nodes(context: &cranpose_ui::AppContext, nodes: &mut Vec<NodeId>) {
+    nodes.clear();
+    if context.has_pending_layout_repasses() {
+        context.pending_layout_repass_nodes_into(nodes);
+    }
     if context.has_pending_measure_repasses() {
-        for node in context.pending_measure_repass_nodes_snapshot() {
-            if !nodes.contains(&node) {
-                nodes.push(node);
+        let layout = nodes.len();
+        context.pending_measure_repass_nodes_into(nodes);
+        let mut kept = layout;
+        for read in layout..nodes.len() {
+            let node = nodes[read];
+            if !nodes[..layout].contains(&node) {
+                nodes[kept] = node;
+                kept += 1;
             }
         }
+        nodes.truncate(kept);
     }
-    nodes
 }
 
 fn mark_root_for_layout(applier: &mut MemoryApplier, root: NodeId) {
@@ -80,7 +86,7 @@ where
         let context = &self.app.app_context;
         let has_scoped_repasses =
             context.has_pending_layout_repasses() || context.has_pending_measure_repasses();
-        let scoped_layout_nodes = pending_repass_nodes(context);
+        pending_repass_nodes(context, &mut self.pending_lane_nodes);
         let global_layout_invalidation = context.take_layout_invalidation();
         let force_layout_pass = self.app.force_layout_pass;
 
@@ -143,7 +149,6 @@ where
                 self.record_layout_scene_nodes(
                     global_layout_invalidation || force_layout_pass,
                     has_scoped_repasses,
-                    scoped_layout_nodes,
                 );
             }
             Err(err) => {
@@ -170,12 +175,7 @@ where
         self.app.force_layout_pass = false;
     }
 
-    fn record_layout_scene_nodes(
-        &mut self,
-        global: bool,
-        has_scoped_repasses: bool,
-        scoped_layout_nodes: Vec<NodeId>,
-    ) {
+    fn record_layout_scene_nodes(&mut self, global: bool, has_scoped_repasses: bool) {
         self.app
             .app_context
             .take_geometry_scene_nodes_into(&mut self.geometry_scene_nodes);
@@ -193,9 +193,10 @@ where
         // scene too: a padding that grew moves its node's children although
         // no child moved in its parent.
         let scoped = (has_scoped_repasses && !global)
-            .then_some(scoped_layout_nodes)
+            .then_some(&self.pending_lane_nodes)
             .into_iter()
-            .flatten();
+            .flatten()
+            .copied();
         route_geometry_scene_nodes(
             &mut self.app,
             &mut self.surfaces,

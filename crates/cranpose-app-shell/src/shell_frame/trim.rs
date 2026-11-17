@@ -79,7 +79,7 @@ where
         self.app.app_context.trim();
         self.routing_scratch.trim();
         self.pending_dirty_nodes.trim_growth_slack();
-        self.pending_layer_property_nodes.trim_growth_slack();
+        self.pending_lane_nodes.trim_growth_slack();
         let geometry = &mut self.geometry_scene_nodes;
         geometry.reshaped.trim_growth_slack();
         geometry.moved.trim_growth_slack();
