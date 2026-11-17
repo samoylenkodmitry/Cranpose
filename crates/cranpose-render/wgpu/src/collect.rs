@@ -33,7 +33,7 @@ mod rigid_snap;
 mod rounded_clip_corners;
 mod shown;
 mod space_children;
-use backdrop_space::{detach_flat_backdrop, with_backdrop_in_own_space};
+use backdrop_space::{detach_flat_backdrop, wrap_backdrop_in_own_space};
 pub(crate) use layer_motion::LayerMotion;
 pub(crate) use layer_scene_recycler::LayerSceneRecycler;
 use push_content::{assign_shadow_anchor, push_content};
@@ -548,14 +548,16 @@ fn surface_content(
 // The child that draws `layer` through a surface of its own, and whether
 // its content draws text or an image. The walk of its content records how
 // it draws each record into `parent`'s list when `shown` places it.
-fn isolated_child(
+// Pushes `layer` onto the children of `parent` as an isolated child, built
+// where it stays. Returns whether its subtree draws a pixel-sensitive draw.
+fn push_isolated_child(
     layer: LayerRef<'_>,
     motion: &mut LayerMotion,
     context: &WalkContext<'_>,
     (mesh, shown): (Option<Arc<MeshChild>>, Option<ShownSpace>),
     parent: &mut LayerScene,
     recycler: &mut LayerSceneRecycler,
-) -> (ChildLayer, bool) {
+) -> bool {
     let visit = Visit::of(layer);
     let graphics = visit.graphics;
     let local_layer = local_content_layer_for(graphics);
@@ -618,29 +620,27 @@ fn isolated_child(
     };
     motion.record_scale(layer, surface_scale, content_hash);
     let in_place = mesh.is_none() && can_draw_in_place(layer, transform, surface_scale, &content);
-    (
-        ChildLayer {
-            z_index: parent.scene.next_z(),
-            node_id: layer.node_id(),
-            local_bounds: visit.bounds,
-            transform,
-            clip: context.visual_clip,
-            rounded_clip: rounded_clip_for_layer(layer),
-            alpha,
-            blend_mode: graphics.blend_mode,
-            effect: graphics.render_effect.clone(),
-            backdrop: graphics.backdrop_effect.clone(),
-            backdrop_alpha: local_layer.alpha,
-            snap_anchor,
-            surface_scale,
-            content_hash,
-            cache_policy: layer.cache_policy(),
-            in_place,
-            content,
-            mesh,
-        },
-        has_pixel_sensitive_subtree,
-    )
+    parent.children.push(ChildLayer {
+        z_index: parent.scene.next_z(),
+        node_id: layer.node_id(),
+        local_bounds: visit.bounds,
+        transform,
+        clip: context.visual_clip,
+        rounded_clip: rounded_clip_for_layer(layer),
+        alpha,
+        blend_mode: graphics.blend_mode,
+        effect: graphics.render_effect.clone(),
+        backdrop: graphics.backdrop_effect.clone(),
+        backdrop_alpha: local_layer.alpha,
+        snap_anchor,
+        surface_scale,
+        content_hash,
+        cache_policy: layer.cache_policy(),
+        in_place,
+        content,
+        mesh,
+    });
+    has_pixel_sensitive_subtree
 }
 
 fn collect_into(
@@ -925,12 +925,12 @@ fn collect_isolated_child(
         context.settings.light,
     );
     let shown = surface_space(child, transform, context);
-    let (isolated, has_pixel_sensitive_subtree) =
-        isolated_child(child, motion, context, (mesh, shown), out, recycler);
-    let mut isolated = with_backdrop_in_own_space(isolated, recycler);
+    let has_pixel_sensitive_subtree =
+        push_isolated_child(child, motion, context, (mesh, shown), out, recycler);
+    let isolated = out.children.last_mut().expect("the child just pushed");
+    wrap_backdrop_in_own_space(isolated, recycler);
     assign_shadow_anchor(&mut out.scene, shadows_before, isolated.snap_anchor);
-    detach_flat_backdrop(&mut isolated, &mut out.scene);
-    out.children.push(isolated);
+    detach_flat_backdrop(isolated, &mut out.scene);
     out.scene.next_z += 1;
     // A surface whose content's walk recorded how it drew each record draws
     // as in place does: a change beneath it changes what it changes there.
