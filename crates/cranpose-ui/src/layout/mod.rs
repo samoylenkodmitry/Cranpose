@@ -435,7 +435,7 @@ pub fn build_layout_tree_from_applier(
         applier,
         root,
         origin,
-        ProjectiveTransform::identity(),
+        Some(ProjectiveTransform::identity()),
         &mut child_stack,
     )
     .map(|root| root.map(LayoutTree::new))
@@ -561,7 +561,7 @@ fn place_layout_box(
     applier: &mut MemoryApplier,
     node_id: NodeId,
     parent_content_origin: Point,
-    parent_transform: ProjectiveTransform,
+    parent_transform: Option<ProjectiveTransform>,
     child_stack: &mut Vec<NodeId>,
 ) -> Result<Option<LayoutBox>, NodeError> {
     let first_child = child_stack.len();
@@ -2103,7 +2103,7 @@ fn build_layout_tree(
         node_id: NodeId,
         node: &MeasuredNode,
         origin: Point,
-        parent_transform: ProjectiveTransform,
+        parent_transform: Option<ProjectiveTransform>,
     ) -> Result<LayoutBox, NodeError> {
         let top_left = Point {
             x: origin.x + node.offset.x,
@@ -2147,7 +2147,7 @@ fn build_layout_tree(
         node_id,
         node,
         Point { x: 0.0, y: 0.0 },
-        ProjectiveTransform::identity(),
+        Some(ProjectiveTransform::identity()),
     )?))
 }
 

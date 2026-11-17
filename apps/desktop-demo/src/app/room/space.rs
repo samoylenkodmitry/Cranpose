@@ -6,7 +6,7 @@ use std::{cell::Cell, f32::consts::FRAC_PI_3, rc::Rc};
 use cranpose_core::{mutableStateOf, remember, MutableState, NodeId};
 use cranpose_ui::{
     composable,
-    space::{Camera, EyePose, Light, Mat4, Scene3d, Vec3},
+    space::{Camera, EyePose, Light, Mat4, Multisample, Scene3d, Vec3},
     Eye, FocusRequester, Key, KeyEvent, KeyEventType, Point, PointerButton, PointerEventKind,
     PointerInputScope, Size,
 };
@@ -289,6 +289,7 @@ impl RoomState {
                 camera,
                 light,
                 eye: None,
+                multisample: Multisample::Off,
             };
         }
         let t = self.progress.get();
@@ -305,6 +306,7 @@ impl RoomState {
             camera: Camera::look_at(at, at + forward, down, shape.focal_length),
             light,
             eye: None,
+            multisample: Multisample::Off,
         }
     }
 

@@ -684,15 +684,13 @@ fn Surfaces(captured: Step) {
     let n = step.value();
     let plane = Arc::new(Mesh::plane());
     Box(
-        Modifier::empty().fill_max_size().scene3d(|| Scene3d {
-            camera: Camera::look_at(
+        Modifier::empty().fill_max_size().scene3d(|| {
+            Scene3d::new(Camera::look_at(
                 Vec3::new(0.0, 0.0, -400.0),
                 Vec3::ZERO,
                 Vec3::new(0.0, 1.0, 0.0),
                 400.0,
-            ),
-            light: None,
-            eye: None,
+            ))
         }),
         BoxSpec::default(),
         move || {

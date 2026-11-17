@@ -33,11 +33,9 @@ fn pressed_on_wall(parent: Size, node: Modifier, uv: (f32, f32)) -> Option<Point
     let mut composition = cranpose_ui::run_test_composition(move || {
         let (wall, content) = (wall.clone(), content.clone());
         Box(
-            Modifier::empty().fill_max_size().scene3d(|| Scene3d {
-                camera: camera(),
-                light: None,
-                eye: None,
-            }),
+            Modifier::empty()
+                .fill_max_size()
+                .scene3d(|| Scene3d::new(camera())),
             BoxSpec::default(),
             move || {
                 let (wall, content) = (wall.clone(), content.clone());

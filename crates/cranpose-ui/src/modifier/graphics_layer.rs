@@ -5,7 +5,7 @@ use cranpose_ui_graphics::{
     GradientCutMaskSpec, GradientFadeMaskSpec, LayerShape, Px, RenderEffect, RoundedCornerShape,
     RuntimeShader, TransformOrigin, gradient_blur_effect, gradient_cut_mask_effect,
     gradient_fade_dst_out_effect, rounded_alpha_mask_effect,
-    space::{LayerSpace, Mat4, MeshSurface, Scene3d},
+    space::{LayerSpace, Mat4, MeshSurface, MeshSurfaces, Scene3d},
 };
 
 use super::{GraphicsLayer, Modifier, inspector_metadata};
@@ -117,7 +117,9 @@ impl Modifier {
     /// use std::sync::Arc;
     ///
     /// use cranpose_ui::Modifier;
-    /// use cranpose_ui_graphics::space::{Camera, Mat4, Material, Mesh, MeshSurface, Scene3d, Vec3};
+    /// use cranpose_ui_graphics::space::{
+    ///     Camera, Mat4, Material, Mesh, MeshSurface, Multisample, Scene3d, Vec3,
+    /// };
     ///
     /// let camera = Camera::look_at(
     ///     Vec3::new(0.0, 0.0, -800.0),
@@ -129,6 +131,7 @@ impl Modifier {
     ///     camera,
     ///     light: None,
     ///     eye: None,
+    ///     multisample: Multisample::Off,
     /// });
     /// let sphere = Arc::new(Mesh::sphere(48, 24));
     /// let globe = Modifier::empty().mesh_surface(move || MeshSurface {
@@ -168,8 +171,48 @@ impl Modifier {
     /// The closure runs when the scene is drawn, as a lazy
     /// [`graphics_layer`](Self::graphics_layer)'s does.
     pub fn mesh_surface(self, surface: impl Fn() -> MeshSurface + 'static) -> Self {
+        self.mesh_surfaces(move || MeshSurfaces::from(surface()))
+    }
+
+    /// Draws this node's content on several meshes in its scene at once,
+    /// each placed in the node's 3D frame as
+    /// [`mesh_surface`](Self::mesh_surface) places its one: one live content
+    /// shown more than once, as a page and a photograph of it.
+    ///
+    /// The content is laid out and drawn once, and every mesh shows the same
+    /// picture of it. A pointer reaches the content where the nearest of the
+    /// meshes shows it, so a click on either copy of a word clicks that
+    /// word, and a drag stays on the mesh it started on, also past its edge.
+    /// The first mesh, [`MeshSurfaces::owner`], places the node for all that
+    /// takes one place: its children's 3D frames lie in its content as the
+    /// first mesh shows it, and the window and accessibility bounds of the
+    /// content are where the first mesh shows it.
+    ///
+    /// The closure runs when the scene is drawn, as a lazy
+    /// [`graphics_layer`](Self::graphics_layer)'s does.
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    ///
+    /// use cranpose_ui::Modifier;
+    /// use cranpose_ui_graphics::space::{Mat4, Material, Mesh, MeshSurface, MeshSurfaces, Vec3};
+    ///
+    /// let plane = Arc::new(Mesh::plane());
+    /// let placed = move |x: f32| MeshSurface {
+    ///     mesh: Arc::clone(&plane),
+    ///     transform: Mat4::scaling(Vec3::new(300.0, 200.0, 1.0))
+    ///         .then(&Mat4::translation(Vec3::new(x, 0.0, 0.0))),
+    ///     material: Material::Unlit,
+    ///     casts_shadow: false,
+    ///     solid: true,
+    /// };
+    /// let twice = Modifier::empty()
+    ///     .mesh_surfaces(move || MeshSurfaces::new(placed(0.0), vec![placed(400.0)]));
+    /// # let _ = twice;
+    /// ```
+    pub fn mesh_surfaces(self, surfaces: impl Fn() -> MeshSurfaces + 'static) -> Self {
         self.graphics_layer(move || GraphicsLayer {
-            space: Some(Arc::new(LayerSpace::Surface(surface()))),
+            space: Some(Arc::new(LayerSpace::Surface(surfaces()))),
             clip: true,
             ..GraphicsLayer::DEFAULT
         })

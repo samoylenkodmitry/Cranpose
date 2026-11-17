@@ -4,7 +4,7 @@
 
 [counts]
 too_many_arguments = 10
-private_docs = 12218
+private_docs = 12172
 for_test_fns = 38
 cranpose_env_names = 76
 source_text_checks = 324
@@ -27,13 +27,13 @@ half_state_words = 0
 limit = 1000
 
 [file_lines.over]
-"apps/desktop-demo/robot-runners/liquid_cheatsheets/mod.rs" = 1381
+"apps/desktop-demo/robot-runners/liquid_cheatsheets/mod.rs" = 1377
 "apps/desktop-demo/robot-runners/robot_leetcodedaily_full_layout_scroll_stability.rs" = 9152
 "apps/desktop-demo/robot-runners/robot_markdown_full_demo_code_block_visual_contract.rs" = 1095
 "apps/desktop-demo/robot-runners/robot_perf_harness.rs" = 1642
 "apps/desktop-demo/robot-runners/robot_wsz_native_window_geometry.rs" = 1811
 "apps/desktop-demo/robot-runners/scroll_stability_external_helpers.rs" = 1086
-"apps/desktop-demo/src/app.rs" = 1881
+"apps/desktop-demo/src/app.rs" = 1830
 "apps/desktop-demo/src/app/hacker_news.rs" = 2019
 "apps/desktop-demo/src/app/highlight.rs" = 1095
 "apps/desktop-demo/src/app/liquid_ui.rs" = 2330
@@ -57,12 +57,12 @@ limit = 1000
 "crates/cranpose-render/wgpu/src/draw_pass.rs" = 1636
 "crates/cranpose-render/wgpu/src/effect_renderer.rs" = 2921
 "crates/cranpose-render/wgpu/src/frame.rs" = 5416
-"crates/cranpose-render/wgpu/src/frame_graph.rs" = 2354
+"crates/cranpose-render/wgpu/src/frame_graph.rs" = 2346
 "crates/cranpose-render/wgpu/src/mesh_fallback.rs" = 1189
 "crates/cranpose-render/wgpu/src/pipeline.rs" = 1143
-"crates/cranpose-render/wgpu/src/render.rs" = 3226
+"crates/cranpose-render/wgpu/src/render.rs" = 3125
 "crates/cranpose-render/wgpu/src/run_store.rs" = 1574
-"crates/cranpose-render/wgpu/src/scene_pass.rs" = 1458
+"crates/cranpose-render/wgpu/src/scene_pass.rs" = 1441
 "crates/cranpose-services/src/http.rs" = 1348
 "crates/cranpose-services/src/media.rs" = 1299
 "crates/cranpose-testing/src/robot_helpers.rs" = 1430

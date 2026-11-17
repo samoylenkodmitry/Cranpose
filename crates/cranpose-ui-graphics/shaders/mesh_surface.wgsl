@@ -63,7 +63,7 @@ fn shaded(color: vec4<f32>, shade: f32) -> vec4<f32> {
 
 @fragment
 fn mesh_surface_fs(input: VertexOutput) -> @location(0) vec4<f32> {
-    let color = content_color(input.uv);
+    let color = content_color(input.uv) * outline_coverage(input.uv);
     if (color.a < 1.0 / 255.0) {
         discard;
     }
@@ -74,10 +74,11 @@ fn mesh_surface_fs(input: VertexOutput) -> @location(0) vec4<f32> {
 // plane.
 @fragment
 fn mesh_portal_surface_fs(input: VertexOutput) -> @location(0) vec4<f32> {
+    let coverage = outline_coverage(input.uv);
     if (before_window(input.scene_position)) {
         discard;
     }
-    let color = content_color(input.uv);
+    let color = content_color(input.uv) * coverage;
     if (color.a < 1.0 / 255.0) {
         discard;
     }
@@ -99,7 +100,7 @@ fn mesh_window_far_fs() -> FarDepth {
 
 @fragment
 fn mesh_surface_shadowed_fs(input: VertexOutput) -> @location(0) vec4<f32> {
-    let color = content_color(input.uv);
+    let color = content_color(input.uv) * outline_coverage(input.uv);
     if (color.a < 1.0 / 255.0) {
         discard;
     }

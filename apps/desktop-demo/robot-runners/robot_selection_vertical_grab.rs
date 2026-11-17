@@ -1,5 +1,6 @@
 use crate::robot_handle_probe;
 
+use desktop_app::accent_field::AccentField;
 use std::{
     path::{Path, PathBuf},
     process::ExitCode,
@@ -7,7 +8,7 @@ use std::{
 };
 
 use cranpose::{
-    widgets::{BasicTextFieldOptions, BasicTextFieldWithOptions, Box as CBox, BoxSpec},
+    widgets::{Box as CBox, BoxSpec},
     AppLauncher, Color, Modifier, RobotScreenshot, SemanticElement, Size,
 };
 use cranpose_core::remember;
@@ -158,20 +159,14 @@ fn content() {
         BoxSpec::default(),
         || {
             let state = remember(|| TextFieldState::new(TEXT)).with(TextFieldState::clone);
-            BasicTextFieldWithOptions(
+            AccentField(
                 state,
                 Modifier::empty()
                     .absolute_offset(FIELD_X, FIELD_Y)
                     .size(Size {
                         width: FIELD_WIDTH,
                         height: 124.0,
-                    }),
-                BasicTextFieldOptions {
-                    text_style: text_style(),
-                    cursor_color: ACCENT,
-                    ..BasicTextFieldOptions::default()
-                },
-            );
+                    }), (text_style(), ACCENT));
         },
     );
 }
