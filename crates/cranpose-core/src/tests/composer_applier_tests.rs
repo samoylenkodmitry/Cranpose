@@ -1105,7 +1105,10 @@ fn recyclable_emit_discards_mismatched_recycled_shell() {
         .downcast_mut::<DesiredNode>()
         .expect("fallback node should use the requested node type");
     assert!(node.initialized);
-    assert_eq!(node.reset_calls, 0);
+    assert_eq!(
+        node.reset_calls, 1,
+        "a node made new is filled in its box as a pooled one is"
+    );
     assert_eq!(applier.debug_recycled_node_count_for::<DesiredNode>(), 0);
 }
 
